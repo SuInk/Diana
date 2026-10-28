@@ -513,6 +513,11 @@ type replyAuditNeed struct {
 	candidate botReplyLoopCandidate
 }
 
+// blocksSend 报告这一轮有没有决定当前这条发不发的判断。
+func (need replyAuditNeed) blocksSend() bool {
+	return need.Quality || need.AccountSafety || need.Closing
+}
+
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
 	proactive = proactive && !explicitlyRepliesToBot(event, cfg)
 	// 发送前审核只有开和关两档：开着就覆盖主动和直接回复，群配置可单独覆盖。
@@ -565,9 +570,11 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 // 插话是例外——那条路径本来就以「拿不准就别说」为准，失败即沉默。
 // preparedReplyAudit 保存审核结论；应用结论时统一执行计数和收尾等副作用。
 type preparedReplyAudit struct {
-	reply    string
-	input    string
-	skip     bool
+	reply string
+	input string
+	skip  bool
+	// deferred 表示这一轮没有要拦当前这条的判断，审核挪到发送之后（runDeferredReplyAudit）。
+	deferred bool
 	need     replyAuditNeed
 	decision proactiveReplyQualityDecision
 	err      error
@@ -579,6 +586,33 @@ func (r *Runtime) auditReplyBeforeSend(ctx context.Context, event MessageEvent, 
 
 // prepareReplyAudit 只调用审核模型，不修改任何状态，可以提前并发执行。
 func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) preparedReplyAudit {
+	prepared := r.planReplyAudit(ctx, event, input, reply, cfg, proactive)
+	if prepared.skip {
+		return prepared
+	}
+	return r.runPreparedReplyAudit(ctx, event, cfg, prepared)
+}
+
+// prepareReplyAuditOrDefer 和 prepareReplyAudit 一样，只是这一轮没有要拦当前这条的
+// 判断时不在发送前等审核：返回 deferred，由调用方发出之后调 runDeferredReplyAudit。
+//
+// 账号安全、主动插话、私聊收尾决定这一条发不发，必须先判；空转、疲劳、群叫停和
+// 拒答计数的结论都作用在之后的消息上（空转判到了是暂停接下来的回复），发出之后再
+// 判效果一样。以前关掉账号安全审核，连着聊时疲劳打分照样让每条回复先等一次审核。
+func (r *Runtime) prepareReplyAuditOrDefer(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive, allowDefer bool) preparedReplyAudit {
+	prepared := r.planReplyAudit(ctx, event, input, reply, cfg, proactive)
+	if prepared.skip {
+		return prepared
+	}
+	if allowDefer && !prepared.need.blocksSend() {
+		prepared.skip, prepared.deferred = true, true
+		return prepared
+	}
+	return r.runPreparedReplyAudit(ctx, event, cfg, prepared)
+}
+
+// planReplyAudit 算出这一轮要判哪几项；一项都不用判时 skip。
+func (r *Runtime) planReplyAudit(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig, proactive bool) preparedReplyAudit {
 	prepared := preparedReplyAudit{reply: reply, input: input}
 	if strings.TrimSpace(reply) == "" {
 		prepared.skip = true
@@ -595,8 +629,13 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 	// 管理员把审核全关了，就不为这一项额外花钱。
 	if !need.Quality && !need.AccountSafety && !need.Loop && !need.Closing && !need.Fatigue {
 		prepared.skip = true
-		return prepared
 	}
+	return prepared
+}
+
+// runPreparedReplyAudit 发起审核调用。
+func (r *Runtime) runPreparedReplyAudit(ctx context.Context, event MessageEvent, cfg BotConfig, prepared preparedReplyAudit) preparedReplyAudit {
+	need, input, reply := prepared.need, prepared.input, prepared.reply
 	ctx = withLLMUsagePurpose(ctx, PurposeReplySendAudit)
 	evidence := botReplyLoopEvidence{}
 	if need.Loop || need.Fatigue {
@@ -606,6 +645,24 @@ func (r *Runtime) prepareReplyAudit(ctx context.Context, event MessageEvent, inp
 	prepared.decision, prepared.err = r.runReplyAudit(ctx, event, input, reply, cfg, evidence, need)
 	markReplyStage(ctx, replyStageAuditDone, time.Now())
 	return prepared
+}
+
+// runDeferredReplyAudit 在回复发出之后补跑挪后的审核，把结论落到之后的消息上：
+// 空转够了就暂停并发提示，群叫停记静默窗口，疲劳和拒答计数补记一次。refused 表示
+// 发送时已经按拒答计过，这里不再重复计。
+func (r *Runtime) runDeferredReplyAudit(ctx context.Context, event MessageEvent, cfg BotConfig, prepared preparedReplyAudit, reply string, refused bool) {
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		defer recoverGoroutinePanic("runtime.runDeferredReplyAudit")
+		prepared.skip, prepared.deferred, prepared.reply = false, false, reply
+		prepared = r.runPreparedReplyAudit(ctx, event, cfg, prepared)
+		// 空转判到时这里返回 errReplyLoopDetected：这一条已经发出去了，暂停只管之后。
+		intent, _ := r.applyReplyAudit(ctx, event, cfg, prepared)
+		intent.RefuseCurrent = intent.RefuseCurrent && !refused
+		if intent.fatigue.Scored || intent.RefuseCurrent {
+			r.applyReplyControlAfterSend(withReplySuppressionSendGuard(ctx), event, reply, replyControlIntent{RefuseCurrent: intent.RefuseCurrent, fatigue: intent.fatigue})
+		}
+	}()
 }
 
 // applyReplyAudit 把审核结论落到会话状态上，并决定这条回复能不能发。

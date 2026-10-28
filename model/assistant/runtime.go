@@ -4669,7 +4669,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
 	ctx = withReplyFatigueAudit(ctx)
 	// maibot 的语气改写此时在后台跑着，审核拿草稿同时进行，放行后再换上改写稿。
-	prepared := r.prepareReplyAudit(ctx, event, cleanText, reply, cfg, proactiveTriggered)
+	// 没有要拦当前这条的判断时（关了账号安全审核），审核挪到发送之后，见
+	// prepareReplyAuditOrDefer。转发卡片那条路自己收尾，不挪。
+	prepared := r.prepareReplyAuditOrDefer(ctx, event, cleanText, reply, cfg, proactiveTriggered, nestedForwardPluginResponse(pluginResponses) == nil)
 	// 叫停可能是这条还在生成时到的：发送前再看一眼窗口，在路上的接话回复不发。
 	if err := r.groupStopDropsReply(event, proactiveTriggered, time.Now()); err != nil {
 		return "", err
@@ -4687,6 +4689,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	controlIntent.RefuseCurrent = controlIntent.RefuseCurrent || auditIntent.RefuseCurrent
 	controlIntent.fatigue = auditIntent.fatigue
+	// 挪后的审核要审语气改写之后、转语音之前的这一版文字。
+	deferredAuditReply := reply
 	if ruleMatched && ruleDecision.Rule.Action == ReplyRuleActionVoice {
 		voiceReply, voiceErr := r.replyRuleVoiceCQ(ctx, event, ruleDecision.Rule, reply)
 		if voiceErr != nil {
@@ -4741,6 +4745,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	})
 	if err != nil {
 		return "", err
+	}
+	if prepared.deferred {
+		r.runDeferredReplyAudit(ctx, event, cfg, prepared, deferredAuditReply, controlIntent.RefuseCurrent)
 	}
 	imageAnnouncements.startPending()
 	if recallReplyShouldAutoDelete(cfg, pluginResponses) {
