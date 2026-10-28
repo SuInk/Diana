@@ -1553,30 +1553,6 @@ func TestForcedToolChoiceReachesEveryProvider(t *testing.T) {
 	}
 }
 
-// ToolChoiceRequired 只要求必须调用工具、不限哪一个，每个供应商都要翻成各自的「任意工具」。
-func TestRequiredToolChoiceReachesEveryProvider(t *testing.T) {
-	req := GenerateRequest{Tools: []ToolDefinition{{Name: "send", Parameters: map[string]any{"type": "object"}}}, ToolChoice: ToolChoiceRequired}
-
-	if choice := anthropicToolChoice(req); choice.OfAny == nil || choice.OfTool != nil {
-		t.Fatalf("anthropic tool choice=%#v", choice)
-	}
-	config := geminiToolConfig(req)
-	if config == nil || config.FunctionCallingConfig == nil || config.FunctionCallingConfig.Mode != "ANY" ||
-		len(config.FunctionCallingConfig.AllowedFunctionNames) != 0 {
-		t.Fatalf("gemini tool config=%#v", config)
-	}
-	if choice := openAIResponseToolChoice(req); choice.OfToolChoiceMode.Value != "required" || choice.OfFunctionTool != nil {
-		t.Fatalf("responses tool choice=%#v", choice)
-	}
-	if choice := openAIChatToolChoice(req); choice != "required" {
-		t.Fatalf("chat tool choice=%#v", choice)
-	}
-	// 没有工具时不发 tool_choice，否则供应商会拒绝请求。
-	if choice := openAIChatToolChoice(GenerateRequest{ToolChoice: ToolChoiceRequired}); choice != nil {
-		t.Fatalf("chat tool choice without tools=%#v", choice)
-	}
-}
-
 func TestAnthropicCachesStablePrefix(t *testing.T) {
 	tools := anthropicTools([]ToolDefinition{
 		{Name: "lookup", Parameters: map[string]any{"type": "object"}},

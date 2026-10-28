@@ -430,9 +430,6 @@ func stickerReplayVariant(req llm.GenerateRequest, variant string) llm.GenerateR
 		}
 		req.Tools = tools
 		return req
-	case "required":
-		req.ToolChoice = llm.ToolChoiceRequired
-		return req
 	case "plain_hint":
 		messages := append([]llm.Message(nil), req.Messages...)
 		messages[0].Content += "\n" + stickerReplayPlainTextHint

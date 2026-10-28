@@ -164,9 +164,6 @@ type ContentPart struct {
 	AudioFormat string          `json:"audio_format,omitempty"`
 }
 
-// ToolChoiceRequired 填进 ToolChoice 时要求模型必须调用某个工具，不限哪一个。
-const ToolChoiceRequired = "required"
-
 type GenerateRequest struct {
 	// PromptCacheKey is an opaque stable routing/accounting key, not conversation state.
 	PromptCacheKey  string           `json:"prompt_cache_key,omitempty"`
@@ -176,9 +173,8 @@ type GenerateRequest struct {
 	ReasoningEffort string           `json:"reasoning_effort,omitempty"`
 	MaxOutputTokens int64            `json:"max_output_tokens,omitempty"`
 	Tools           []ToolDefinition `json:"tools,omitempty"`
-	// ToolChoice 强制本轮只能调用指定名字的工具；填 ToolChoiceRequired 时必须调用
-	// 某个工具、不限哪个。为空时保持供应商默认的自动选择；不支持强制选择的供应商
-	// 按自动处理。
+	// ToolChoice 强制本轮只能调用指定名字的工具。为空时保持供应商默认的自动
+	// 选择；不支持强制选择的供应商按自动处理。
 	ToolChoice string `json:"tool_choice,omitempty"`
 	// MaxContextTokens 覆盖配置档的请求上下文上限。上游只在「上一次请求被供应商
 	// 判为超出上下文」后重试时设置它，用来把请求收缩到更保守的预算；为 0 时按

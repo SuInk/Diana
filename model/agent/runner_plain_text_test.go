@@ -177,3 +177,67 @@ func TestRunnerPlainTextRetryOnlyForPlaceholders(t *testing.T) {
 		}
 	}
 }
+
+// plainThenSendClient 先按 replies 依次回纯文本，用完后回一个 send 调用。
+type plainThenSendClient struct {
+	replies  []string
+	send     map[string]any
+	requests []llm.GenerateRequest
+}
+
+func (c *plainThenSendClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if index := len(c.requests) - 1; index < len(c.replies) {
+		return &llm.GenerateResponse{Text: c.replies[index]}, nil
+	}
+	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "call-send", Name: finalizeToolName, Arguments: c.send}}}, nil
+}
+
+// send 带附加字段时纯文本收尾会丢掉这些字段，所以打回一次让模型改用 send。
+func TestRunnerPlainTextRepairedOnceWhenSendHasExtraFields(t *testing.T) {
+	sticker := FinalizeField{Name: "sticker", Description: "配表情包的关键词"}
+	client := &plainThenSendClient{replies: []string{"好耶"}, send: map[string]any{"text": "好耶", "sticker": "得意 叉腰"}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, FinalizeFields: []FinalizeField{sticker}}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "夸夸我"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 || resp.Text != "好耶" || resp.FinalizeFields["sticker"] != "得意 叉腰" {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
+	}
+	retry := client.requests[1].Messages
+	if last := retry[len(retry)-1].Content; !strings.Contains(last, "send") || !strings.Contains(last, "sticker") {
+		t.Fatalf("repair message=%q", last)
+	}
+}
+
+// 打回只有一次：模型还写纯文本就照旧当最终回复，不会来回打转；没有附加字段时不打回。
+func TestRunnerPlainTextAcceptedWithoutExtraFieldsOrAfterOneRepair(t *testing.T) {
+	sticker := FinalizeField{Name: "sticker", Description: "配表情包的关键词"}
+	for name, tc := range map[string]struct {
+		fields   []FinalizeField
+		replies  []string
+		requests int
+	}{
+		"no extra fields": {replies: []string{"好耶"}, requests: 1},
+		"plain again":     {fields: []FinalizeField{sticker}, replies: []string{"好耶", "好耶"}, requests: 2},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &plainThenSendClient{replies: tc.replies}
+			runner, err := NewRunner(client, Config{MaxSteps: 4, FinalizeFields: tc.fields}, NewToolRegistry())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "夸夸我"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(client.requests) != tc.requests || resp.Text != "好耶" || resp.FinishReason != "plain_text" {
+				t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
+			}
+		})
+	}
+}

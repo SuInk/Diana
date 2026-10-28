@@ -388,11 +388,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planning := llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions}
-		if r.cfg.RequireToolCall && len(definitions) > 0 {
-			planning.ToolChoice = llm.ToolChoiceRequired
-		}
-		planningRequest, prepareErr := hooks.prepare(planningCtx, planning)
+		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions})
 		if prepareErr != nil {
 			cancel()
 			return fail(prepareErr)
@@ -588,9 +584,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
-		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && plainTextNeedsRepair(lastText) {
+		// send 带了 FinalizeFields（表情包、按钮）时纯文本也打回一次：纯文本收尾带不上
+		// 这些字段。#1218 起纯文本直接放行后，swe-2、deepseek-flash 九成回合写纯文本，
+		// 收尾配表情包几乎消失。没有附加字段的调用方仍按 plainTextNeedsRepair 放行。
+		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && (plainTextNeedsRepair(lastText) || len(r.cfg.FinalizeFields) > 0) {
 			plainTextRepaired = true
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
+			if !plainTextNeedsRepair(lastText) {
+				reason = "本次只返回了普通文本，普通文本不会发给对方。已经答完就把要说的话放进 send 的 text 发出，" + finalizeFieldNames(r.cfg.FinalizeFields) + " 这些字段按需一起填；还有没做完的就直接调用工具继续。"
+			}
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			continue
@@ -1771,6 +1773,15 @@ func decodeLenientJSONString(content string) string {
 		return decoded
 	}
 	return content
+}
+
+// finalizeFieldNames 列出 send 上的附加字段名，打回纯文本时提醒模型这些字段还能填。
+func finalizeFieldNames(fields []FinalizeField) string {
+	names := make([]string, 0, len(fields))
+	for _, field := range fields {
+		names = append(names, field.Name)
+	}
+	return strings.Join(names, "、")
 }
 
 // plainTextNeedsRepair 判断没走工具调用的普通文本要不要再给模型一次机会。

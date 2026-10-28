@@ -2357,15 +2357,11 @@ func openAIResponseToolCalls(output []responses.ResponseOutputItemUnion, definit
 	return calls
 }
 
-// openAIResponseToolChoice 强制 Responses API 调用指定函数工具，ToolChoiceRequired
-// 只要求必须调用某个工具；为空保持自动。
+// openAIResponseToolChoice 强制 Responses API 调用指定函数工具；为空保持自动。
 func openAIResponseToolChoice(req GenerateRequest) responses.ResponseNewParamsToolChoiceUnion {
 	name := strings.TrimSpace(req.ToolChoice)
 	if len(req.Tools) == 0 || name == "" {
 		return responses.ResponseNewParamsToolChoiceUnion{}
-	}
-	if name == ToolChoiceRequired {
-		return responses.ResponseNewParamsToolChoiceUnion{OfToolChoiceMode: param.NewOpt(responses.ToolChoiceOptionsRequired)}
 	}
 	return responses.ResponseNewParamsToolChoiceUnion{
 		OfFunctionTool: &responses.ToolChoiceFunctionParam{Name: wireToolName(name)},
@@ -2378,9 +2374,6 @@ func openAIChatToolChoice(req GenerateRequest) any {
 	name := strings.TrimSpace(req.ToolChoice)
 	if len(req.Tools) == 0 || name == "" {
 		return nil
-	}
-	if name == ToolChoiceRequired {
-		return ToolChoiceRequired
 	}
 	return map[string]any{"type": "function", "function": map[string]any{"name": wireToolName(name)}}
 }

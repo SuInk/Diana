@@ -539,15 +539,11 @@ func geminiTools(definitions []ToolDefinition) []*genai.Tool {
 }
 
 // geminiToolConfig 在指定 ToolChoice 时把函数调用模式收紧到该工具，Gemini 因此
-// 只能返回这一个函数调用；ToolChoiceRequired 只要求必须调用函数、不限哪个；为空时
-// 保持默认的自动选择。
+// 只能返回这一个函数调用；为空时保持默认的自动选择。
 func geminiToolConfig(req GenerateRequest) *genai.ToolConfig {
 	name := strings.TrimSpace(req.ToolChoice)
 	if len(req.Tools) == 0 || name == "" {
 		return nil
-	}
-	if name == ToolChoiceRequired {
-		return &genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{Mode: genai.FunctionCallingConfigModeAny}}
 	}
 	return &genai.ToolConfig{FunctionCallingConfig: &genai.FunctionCallingConfig{
 		Mode:                 genai.FunctionCallingConfigModeAny,
