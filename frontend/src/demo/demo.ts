@@ -47,7 +47,9 @@ import type {
   UserStructuredMemory,
   AssistantMemorySource,
   AssistantMemorySourceMessage,
-  WorldBookNode
+  WorldBookNode,
+  RuntimeConfigItem,
+  RuntimeConfigSnapshot,
 } from "../api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -980,6 +982,33 @@ let demoBrowserControlTokens: BrowserControlToken[] = [
 ];
 
 let demoMediaCachePolicy = { retention_days: 7, max_mb: 0 };
+// 演示用的启动配置：字段与 cmd/webui/runtime_config.go 的清单保持同一套。
+const demoRuntimeItem = (key: string, label: string, kind: RuntimeConfigItem["kind"], def: string, value: string | null, extra: Partial<RuntimeConfigItem> = {}): RuntimeConfigItem => ({
+  key, label, kind, default: def, editable: false, bot_editable: false, section: key.split(".")[0],
+  value: value ?? def, file_value: value ?? def, file_set: value !== null, source: value !== null ? "config_file" : "default", pending: false, ...extra
+});
+const demoRuntimeConfig: RuntimeConfigSnapshot = {
+  config_path: "data/config.yaml", config_exists: true, args: [], restart_needed: false,
+  items: [
+    demoRuntimeItem("server.host", "监听地址", "string", "", null, { editable: true, bot_editable: true, risky: true, hint: "留空监听所有地址；填 127.0.0.1 后只有本机能打开控制台。" }),
+    demoRuntimeItem("server.port", "端口", "port", "18080", "18080", { editable: true, bot_editable: true, risky: true, hint: "重启后控制台换到新端口；Docker 部署还要同步改端口映射，OneBot 反连地址也要跟着改。" }),
+    demoRuntimeItem("server.trusted_proxies", "信任的反向代理", "list", "", null, { editable: true, bot_editable: true, hint: "只有这些地址转发来的 X-Forwarded-For 才会被采信，每行一个 IP 或网段。" }),
+    demoRuntimeItem("storage.db_path", "数据库路径", "string", "data/diana.db", null, { editable: true, bot_editable: true, risky: true, hint: "不会搬旧数据：新路径没有库时重启后是一份空数据，要先把旧库文件复制过去。" }),
+    demoRuntimeItem("storage.debug_log_retention_days", "调试记录保留天数", "int", "0", "14", { editable: true, bot_editable: true, hint: "0 用内置默认值，-1 永久保留。" }),
+    demoRuntimeItem("storage.log_retention_days", "操作日志保留天数", "int", "0", null, { editable: true, bot_editable: true, hint: "0 用内置默认值，-1 永久保留。" }),
+    demoRuntimeItem("storage.log_path", "日志文件", "string", "", "data/logs/diana.log", { editable: true, bot_editable: true, hint: "留空只写标准输出；Docker 部署默认写到数据目录。" }),
+    demoRuntimeItem("storage.media_max_mb", "单个媒体大小上限（MB）", "int", "0", null, { editable: true, bot_editable: true, hint: "0 用内置默认值。" }),
+    demoRuntimeItem("admin.password", "初始管理员密码", "string", "", "已设置", { secret: true, hint: "只在第一次启动时使用。" }),
+    demoRuntimeItem("update.release_enabled", "允许 Release 更新", "bool", "true", null, { editable: true, bot_editable: true, hint: "关掉后控制台不能下载安装新版本。" }),
+    demoRuntimeItem("llm_runtime.output_token_max", "默认最大输出 token", "int", "0", null, { editable: true, bot_editable: true, hint: "Anthropic 协议没填最大输出时代发的值，0 用 32000。" })
+  ],
+  env: [
+    { name: "DIANA_DEPLOYMENT", label: "部署方式", set: false },
+    { name: "TZ", label: "时区", set: true, value: "Asia/Shanghai" },
+    { name: "DIANA_GITHUB_TOKEN", label: "GitHub Token", secret: true, set: true },
+    { name: "DIANA_RESOLVER_PROXY", label: "解析代理", set: false }
+  ]
+};
 let demoHistoryMediaPolicy = { retention_days: 180, max_mb: 10240 };
 
 let demoMediaBaseURL = { base_url: "", source: "auto" };
@@ -1251,6 +1280,33 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     demoSearchProviders = demoSearchProviders.filter(provider => provider.id !== id);
     delete demoSearchKeys[id];
     return json(demoSearchConfiguration());
+  }
+
+  if (path === "/api/system/runtime-config") {
+    if (method === "PUT") {
+      for (const [key, value] of Object.entries((body.values ?? {}) as Record<string, string>)) {
+        const item = demoRuntimeConfig.items.find((entry) => entry.key === key);
+        if (!item || !item.editable) return json({ error: `${key} 不能修改` }, 403);
+        item.file_set = value.trim() !== "";
+        item.file_value = item.file_set ? value.trim() : item.default;
+        item.pending = item.file_value !== item.value;
+      }
+      demoRuntimeConfig.restart_needed = demoRuntimeConfig.items.some((item) => item.pending);
+    }
+    return json(demoRuntimeConfig);
+  }
+  if (path === "/api/system/network") {
+    return json({
+      listen_host: "", port: "18080", hostname: "diana-demo", container: false,
+      addresses: [
+        { interface: "lo0", ip: "127.0.0.1", family: "ipv4", scope: "loopback", url: "http://127.0.0.1:18080" },
+        { interface: "lo0", ip: "::1", family: "ipv6", scope: "loopback", url: "http://[::1]:18080" },
+        { interface: "en0", ip: "192.168.1.23", family: "ipv4", scope: "lan", url: "http://192.168.1.23:18080" },
+        { interface: "utun3", ip: "100.88.1.4", family: "ipv4", scope: "lan", url: "http://100.88.1.4:18080" },
+        { interface: "en0", ip: "fe80::1c2a:3bff:fe4d:5e6f", family: "ipv6", scope: "link_local" }
+      ],
+      ...(url.searchParams.get("public") === "1" ? { public: { ip: "203.0.113.7", source: "https://api.ipify.org", checked_at: new Date().toISOString(), url: "http://203.0.113.7:18080" } } : {})
+    });
   }
 
   if (path === "/api/system/media-cache") {

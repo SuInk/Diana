@@ -366,6 +366,15 @@
       },
       {
         "category": "self_modify",
+        "tool": "runtime_config",
+        "field": "operation",
+        "operations": [
+          "update"
+        ],
+        "reason": "改写 config.yaml 启动配置；查看照常"
+      },
+      {
+        "category": "self_modify",
         "tool": "llm_config",
         "field": "operation",
         "operations": [

@@ -44,6 +44,8 @@ type appConfig struct {
 
 	// path 记录这份配置从哪读来的，日志和错误信息里要说清楚。
 	path string
+	// raw 是启动时读到的原文，运行配置页拿它和文件现状比对，判断改了没生效。
+	raw []byte
 }
 
 type serverConfig struct {
@@ -208,6 +210,7 @@ func loadAppConfig(path string) (appConfig, error) {
 		return cfg, fmt.Errorf("storage download_cache_max_mb must be between 0 and 1048576")
 	}
 	cfg.path = path
+	cfg.raw = data
 	cfg.applyDeploymentDefaults()
 	return cfg, nil
 }

@@ -236,6 +236,10 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if boolValue(cfg.OwnerLLMConfigEnabled, true) {
 			extraTools = append(extraTools, newDianaLLMConfigTool(r, event))
 		}
+		// 启动配置只在主人私聊里挂：查看结果有路径和部署信息，群里有旁人。
+		if relationship.Owner && event.Kind == EventKindPrivate && r.runtimeConfigManager() != nil {
+			extraTools = append(extraTools, newDianaRuntimeConfigTool(r, event))
+		}
 		extraTools = append(extraTools, pluginTools...)
 		var err error
 		agentRegistry, err = r.newAgentRegistry(ctx, cfg, event, relationship, extraTools...)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/SuInk/diana/model/runtimeconfig"
 	"hash/fnv"
 	"io"
 	"log"
@@ -401,9 +402,11 @@ type Runtime struct {
 	// replyFatigueStore 落盘回复疲劳，重启后接着算，见 reply_fatigue_store.go。
 	replyFatigueStore ReplyFatigueStore
 
-	modelLister  LLMModelLister
-	appLogs      applog.Writer
-	messageStore MessageHistoryStore
+	modelLister LLMModelLister
+	appLogs     applog.Writer
+	// runtimeConfig 是启动配置管理器，主人私聊的 runtime_config 工具用。
+	runtimeConfig *runtimeconfig.Manager
+	messageStore  MessageHistoryStore
 	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
 	aliasSalt        string
 	inboundStore     InboundEventStore

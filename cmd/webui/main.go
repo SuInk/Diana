@@ -549,6 +549,11 @@ func main() {
 	}
 	botRuntime.SetLLMModelLister(modelListFactory)
 	botRuntime.SetAppLogWriter(sqliteStore)
+	runtimeConfigManager, err := newRuntimeConfigManager(appCfg, host, port)
+	if err != nil {
+		log.Fatalf("runtime config: %v", err)
+	}
+	botRuntime.SetRuntimeConfig(runtimeConfigManager)
 	oneBotServer.SetAppLogWriter(sqliteStore)
 	configuredMediaBaseURL := strings.TrimSpace(appCfg.Storage.LocalMediaBaseURL)
 	localMediaBaseURL := stringOr(
@@ -832,6 +837,9 @@ func main() {
 	})
 	restartHandler.SetLogStore(sqliteStore)
 	restartHandler.Register(router)
+	runtimeConfigHandler := webui.NewRuntimeConfigHandler(runtimeConfigManager)
+	runtimeConfigHandler.SetLogStore(sqliteStore)
+	runtimeConfigHandler.Register(router)
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)

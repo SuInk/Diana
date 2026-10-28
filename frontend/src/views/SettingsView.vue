@@ -40,6 +40,7 @@
 
       <TrustedLoginSettings v-if="activePage === 'app-login'" />
       <DesktopControlSettings v-if="activePage === 'desktop'" />
+      <RuntimeConfigSettings v-if="activePage === 'runtime'" />
       <div v-show="activePage === 'security'" class="settings-section-body">
           <!-- 访问安全 -->
           <section class="card">
@@ -492,6 +493,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import TrustedLoginSettings from "../components/TrustedLoginSettings.vue";
+import RuntimeConfigSettings from "../components/RuntimeConfigSettings.vue";
 import DesktopControlSettings from "../components/DesktopControlSettings.vue";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -500,7 +502,7 @@ import CapacityInput from "../components/CapacityInput.vue";
 import StorageCleanupDialog from "../components/StorageCleanupDialog.vue";
 import { navigate } from "../router";
 import StorageDonut from "../components/StorageDonut.vue";
-import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Palette, PieChart, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
+import { Activity, Download, Eye, EyeOff, HardDriveDownload, Images, KeyRound, LogOut, MonitorSmartphone, Network, Palette, PieChart, RefreshCw, RotateCw, Save, ShieldCheck } from "@lucide/vue";
 import {
   changeCredentials,
   getAuthStatus,
@@ -549,6 +551,7 @@ const settingsPages = [
   { key: "cache", label: "下载缓存", hint: "控制下载的媒体缓存按闲置天数或容量清理。", icon: HardDriveDownload },
   { key: "media", label: "媒体与文件", hint: "历史媒体原件的保留策略。", icon: Images },
   { key: "update", label: "系统更新", hint: "检查、下载并安装新版本。", icon: Download },
+  { key: "runtime", label: "启动配置", hint: "本机访问地址与端口、配置文件里的基础设施项、环境变量和启动参数。", icon: Network },
   { key: "status", label: "运行状态", hint: "当前服务的启动时间与运行时长，以及原地重启服务。", icon: Activity },
   { key: "theme", label: "界面主题", hint: "只存在你当前这个浏览器里，不会同步到其它设备，也不影响别的登录用户。", icon: Palette }
 ] as const;
@@ -558,7 +561,7 @@ const settingsGroups = (
   [
     { label: "个性化", keys: ["theme"] },
     { label: "账号与安全", keys: ["security", "sessions", "app-login"] },
-    { label: "系统", keys: ["storage", "cache", "media", "desktop", "update", "status"] }
+    { label: "系统", keys: ["storage", "cache", "media", "desktop", "update", "runtime", "status"] }
   ] as const
 ).map((group) => ({
   label: group.label,

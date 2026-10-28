@@ -2331,6 +2331,81 @@ export function restartSystem(): Promise<{ ok: boolean }> {
   });
 }
 
+/** 启动配置页：config.yaml 基础设施项、环境变量和命令行参数。 */
+export interface RuntimeConfigItem {
+  key: string;
+  label: string;
+  kind: "string" | "int" | "bool" | "list" | "port";
+  default: string;
+  hint?: string;
+  editable: boolean;
+  bot_editable: boolean;
+  secret?: boolean;
+  risky?: boolean;
+  min?: number;
+  max?: number;
+  section: string;
+  value: string;
+  file_value: string;
+  file_set: boolean;
+  source: "default" | "config_file" | "env" | "arg";
+  pending: boolean;
+}
+
+export interface RuntimeConfigEnvItem {
+  name: string;
+  label: string;
+  secret?: boolean;
+  set: boolean;
+  value?: string;
+}
+
+export interface RuntimeConfigSnapshot {
+  config_path: string;
+  config_exists: boolean;
+  args: string[];
+  items: RuntimeConfigItem[];
+  env: RuntimeConfigEnvItem[];
+  restart_needed: boolean;
+}
+
+export function getRuntimeConfig(): Promise<RuntimeConfigSnapshot> {
+  return requestJSON<RuntimeConfigSnapshot>("/api/system/runtime-config");
+}
+
+export function saveRuntimeConfig(values: Record<string, string>): Promise<RuntimeConfigSnapshot> {
+  return requestJSON<RuntimeConfigSnapshot>("/api/system/runtime-config", {
+    method: "PUT",
+    body: JSON.stringify({ values })
+  });
+}
+
+export interface NetworkAddress {
+  interface: string;
+  ip: string;
+  family: "ipv4" | "ipv6";
+  scope: "loopback" | "lan" | "public" | "link_local";
+  url?: string;
+}
+
+export interface NetworkSnapshot {
+  listen_host: string;
+  port: string;
+  hostname: string;
+  addresses: NetworkAddress[];
+  public?: { ip?: string; source?: string; error?: string; checked_at: string; url?: string };
+  container: boolean;
+}
+
+/** public 为 true 时后端会访问外部服务查公网出口地址。 */
+export function getNetworkInfo(options: { public?: boolean; force?: boolean } = {}): Promise<NetworkSnapshot> {
+  const params = new URLSearchParams();
+  if (options.public) params.set("public", "1");
+  if (options.force) params.set("force", "1");
+  const query = params.toString();
+  return requestJSON<NetworkSnapshot>(`/api/system/network${query ? `?${query}` : ""}`);
+}
+
 export interface MediaCachePolicy {
   retention_days: number;
   max_mb: number;
