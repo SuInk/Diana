@@ -71,35 +71,8 @@ func (s *SQLiteStore) RecordWalletEntry(ctx context.Context, request assistant.W
 	}
 	defer observeTransaction("RecordWalletEntry")()
 	defer func() { _ = tx.Rollback() }()
-
-	var seq, balance int64
-	err = tx.QueryRowContext(ctx, `
-SELECT seq, balance_after_cents FROM wallet_ledger WHERE profile_id = ? ORDER BY seq DESC LIMIT 1
-`, request.ProfileID).Scan(&seq, &balance)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return assistant.WalletEntry{}, err
-	}
-	next := balance + request.AmountCents
-	if next < 0 {
-		return assistant.WalletEntry{}, assistant.ErrWalletInsufficient
-	}
-	entry := assistant.WalletEntry{
-		ID:           uuid.NewString(),
-		ProfileID:    request.ProfileID,
-		Kind:         request.Kind,
-		AmountCents:  request.AmountCents,
-		BalanceAfter: next,
-		Reason:       request.Reason,
-		ActorUserID:  strings.TrimSpace(request.ActorUserID),
-		ActorName:    strings.TrimSpace(request.ActorName),
-		CreatedAt:    request.Now,
-	}
-	if _, err := tx.ExecContext(ctx, `
-INSERT INTO wallet_ledger (
-  id, profile_id, seq, kind, amount_cents, balance_after_cents, reason, actor_user_id, actor_name, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-`, entry.ID, entry.ProfileID, seq+1, string(entry.Kind), entry.AmountCents, entry.BalanceAfter,
-		entry.Reason, entry.ActorUserID, entry.ActorName, request.Now.UnixNano()); err != nil {
+	entry, err := appendWalletEntryTx(ctx, tx, request)
+	if err != nil {
 		return assistant.WalletEntry{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -140,4 +113,40 @@ FROM wallet_ledger WHERE profile_id = ? ORDER BY seq DESC LIMIT ?`, strings.Trim
 		summary.BalanceCents = summary.Recent[0].BalanceAfter
 	}
 	return summary, nil
+}
+
+// appendWalletEntryTx 在调用方的写事务里记一笔。余额检查和插入必须在同一个事务里，
+// 购买提议成交时也要和改提议状态放进同一个事务，所以单独拆出来。
+func appendWalletEntryTx(ctx context.Context, tx *sql.Tx, request assistant.WalletWriteRequest) (assistant.WalletEntry, error) {
+	var seq, balance int64
+	err := tx.QueryRowContext(ctx, `
+SELECT seq, balance_after_cents FROM wallet_ledger WHERE profile_id = ? ORDER BY seq DESC LIMIT 1
+`, request.ProfileID).Scan(&seq, &balance)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return assistant.WalletEntry{}, err
+	}
+	next := balance + request.AmountCents
+	if next < 0 {
+		return assistant.WalletEntry{}, assistant.ErrWalletInsufficient
+	}
+	entry := assistant.WalletEntry{
+		ID:           uuid.NewString(),
+		ProfileID:    request.ProfileID,
+		Kind:         request.Kind,
+		AmountCents:  request.AmountCents,
+		BalanceAfter: next,
+		Reason:       request.Reason,
+		ActorUserID:  strings.TrimSpace(request.ActorUserID),
+		ActorName:    strings.TrimSpace(request.ActorName),
+		CreatedAt:    request.Now,
+	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO wallet_ledger (
+  id, profile_id, seq, kind, amount_cents, balance_after_cents, reason, actor_user_id, actor_name, created_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, entry.ID, entry.ProfileID, seq+1, string(entry.Kind), entry.AmountCents, entry.BalanceAfter,
+		entry.Reason, entry.ActorUserID, entry.ActorName, request.Now.UnixNano()); err != nil {
+		return assistant.WalletEntry{}, err
+	}
+	return entry, nil
 }

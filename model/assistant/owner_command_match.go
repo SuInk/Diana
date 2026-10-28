@@ -111,6 +111,10 @@ func (r *Runtime) handleOwnerCommand(event MessageEvent, text string) (string, b
 	if reply, handled := r.handleCodingApprovalReply(event, command); handled {
 		return reply, true
 	}
+	// 购买提议的确认码，同理要在进模型之前认出来：码只认主人本人这条消息。
+	if reply, handled := r.handleWalletApprovalReply(event, command); handled {
+		return reply, true
+	}
 	for _, owner := range ownerCommands {
 		if arg, ok := owner.match(command); ok {
 			return owner.run(r, event, arg), true
@@ -130,7 +134,8 @@ func (r *Runtime) wouldHandleOwnerCommand(event MessageEvent, text string) bool 
 		return false
 	}
 	command := strings.TrimSpace(r.cleanInput(event, text))
-	if replySuppressionOwnerCommandKind(command) != "" || r.codingApprovalCodePending(event, command) {
+	if replySuppressionOwnerCommandKind(command) != "" || r.codingApprovalCodePending(event, command) ||
+		r.walletApprovalCodePending(event, command) {
 		return true
 	}
 	for _, owner := range ownerCommands {

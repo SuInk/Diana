@@ -132,6 +132,8 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 主人在场时存在。清空全部是主人专属，由工具自己判身份。
 		dianaSelfNoteToolName: true,
 		dianaStickerToolName:  true,
+		// 钱包查余额和发提议都不动钱，成交要主人回确认码。
+		dianaWalletToolName: true,
 		// VRChat 工具只在插件启用时挂；操控类默认只挂给主人，插件里放开后才给成员，
 		// 所以这里不必再按身份挡一次。
 		dianaVRChatStatusToolName:     true,

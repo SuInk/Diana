@@ -109,7 +109,7 @@ const (
 // walletContextPrefix 声明这段是运行时给的事实账本，不是谁在提要求。少了这句，
 // 模型会把「余额 50 元」读成有人在提醒她花钱或在讨钱。
 const walletContextPrefix = "【你的零花钱】下面是你小窝里零花钱账本的当前情况，由系统记账，不是用户消息。" +
-	"全是虚拟的数字，不能转账、发红包或真的付款；你现在也还没有自己花钱的办法，有人要你掏钱或打钱时照实说。" +
+	"全是虚拟的数字，不能转账、发红包或真的付款给任何人；你自己真想买什么时可以用 wallet 工具向主人提议，主人回确认码才算买下。" +
 	"聊到相关话题时自然地知道自己有多少钱即可，不要主动报账，也不要因为它就把话题转到钱上。\n"
 
 // WalletSummaryStore 读钱包概况。没有它时注入为空。
@@ -117,7 +117,7 @@ type WalletSummaryStore interface {
 	WalletSummary(ctx context.Context, profileID string, limit int) (WalletSummary, error)
 }
 
-// SetWalletStore 注入钱包存储。
+// SetWalletStore 注入钱包存储。只给 WalletSummaryStore 时只注入余额，不注册钱包工具。
 func (r *Runtime) SetWalletStore(store WalletSummaryStore) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -148,7 +148,18 @@ func (r *Runtime) walletContext(ctx context.Context, event MessageEvent) string 
 	if err != nil || len(summary.Recent) == 0 {
 		return ""
 	}
-	return formatWalletContext(summary, profileLocation(profileID))
+	block := formatWalletContext(summary, profileLocation(profileID))
+	if proposals := r.walletProposalStore(); proposals != nil {
+		pending, err := proposals.ListWalletProposals(loadCtx, profileID, true, r.clock(), MaximumPendingWalletProposals)
+		if err == nil && len(pending) > 0 {
+			items := make([]string, 0, len(pending))
+			for _, proposal := range pending {
+				items = append(items, proposal.Item+" "+formatWalletYuan(proposal.PriceCents, false))
+			}
+			block += "\n在等主人点头：" + strings.Join(items, "、")
+		}
+	}
+	return block
 }
 
 // formatWalletContext 拼出段落：一行余额，加最近几笔，新的在前。

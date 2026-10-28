@@ -110,6 +110,10 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if r.selfNoteEnabled(event) {
 			extraTools = append(extraTools, newDianaSelfNoteTool(r, event, relationship))
 		}
+		// 钱包挂在小窝开关下。成员也能用：查余额、发提议都不动钱，花钱要主人回码。
+		if r.walletEnabled(event) && r.walletProposalStore() != nil {
+			extraTools = append(extraTools, newDianaWalletTool(r, event))
+		}
 		// 动态只给主人：发在控制台里的内容不该由群里任何人一句话就能塞进去。
 		if relationship.Owner && r.feedStore() != nil {
 			extraTools = append(extraTools, newDianaFeedTool(r, event))
