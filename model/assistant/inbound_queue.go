@@ -812,6 +812,8 @@ func nextInboundPollDelay(current time.Duration) time.Duration {
 
 func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueueItem) (string, error) {
 	item.Event.durableSession = strings.TrimSpace(item.Session)
+	// 未导出的关联主人标记不进持久化队列，取出时按当前关联重新判一次。
+	item.Event = r.withLinkedOwner(item.Event)
 	// 断线回补里没排上回复名额的消息在这里就收住，只补进上下文历史。它们不能走下面的
 	// 语音转写、图片处理、插件观察、消息中继和回复：回补设条数上限防的就是
 	// 一批积压消息同时开出一堆媒体任务，这些消息要是也走完整流程，上限等于没设。

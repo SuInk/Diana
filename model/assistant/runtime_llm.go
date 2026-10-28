@@ -1069,6 +1069,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && tools.Owner && hasTool(dianaOneBotRequestsToolName) {
 		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
+	if agentEnabled && tools.Owner && hasTool(dianaIdentityLinksToolName) {
+		tail.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
+	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
 	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
 		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
@@ -1266,6 +1269,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
 	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
+	// 关联账号紧跟身份那一行：同一个人在别的平台上是谁，随发言者变，只进尾部。
+	appendPromptSection(&tail, r.linkedIdentityPrompt(event, cfg))
 	// github 工具对全群一份定义，谁有授权、授权到哪些仓库按发言者在这里说。
 	if agentEnabled && registry != nil {
 		if tool, ok := registry.Get(dianaGitHubToolName); ok {

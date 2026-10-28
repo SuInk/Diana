@@ -272,6 +272,10 @@ func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "user")
 	scope.register(event.GroupID, "group")
+	// 尾部会写出关联账号，它们和发言者一样按账号别名发给模型。
+	for _, account := range r.linkedIdentityAccounts(event) {
+		scope.register(account.UserID, "user")
+	}
 	scope.registerEvent(event)
 	for _, item := range history {
 		scope.registerEvent(item)

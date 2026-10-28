@@ -133,6 +133,11 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if r.oneBotRequestStore() != nil && platformSupportsJoinRequests(r.currentPlatform(event)) && r.platformInterfaceEnabled(event) {
 			extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
 		}
+		// 账号关联只给真正的主人：relationship 在这里已经按 toolScope 把管理员算成主人，
+		// 而管理员能关联就能把自己升成主人，所以按配置重新判一次。
+		if r.identityLinkStore() != nil && (cfg.IsOwnerEvent(event) || isAdminChatRun(ctx)) {
+			extraTools = append(extraTools, newDianaIdentityLinksTool(r, event))
+		}
 		// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
 		// 无头浏览器。插件停用时模型看不到这个工具。
 		if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {

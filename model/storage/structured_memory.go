@@ -699,6 +699,18 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 			AND (source_session LIKE ? ESCAPE '\' OR source_session LIKE ? ESCAPE '\')))`
 		prefix := memorySessionNamespace(query.Session)
 		args = append(args, subjectUserID, escapeMessageHistoryLike(prefix+"group:")+"%", escapeMessageHistoryLike(prefix+"private:")+"%")
+		// 关联账号（已核实是同一个人）的个人记忆，各按各自机器人的命名空间读。只放开
+		// visibility=user 这一类：别的群、别的机器人的会话记忆照旧隔离。
+		for _, linked := range query.LinkedSubjects {
+			linkedUserID := strings.TrimSpace(linked.UserID)
+			if linkedUserID == "" {
+				continue
+			}
+			namespace := strings.TrimSpace(linked.Namespace)
+			scopeClause = `(` + scopeClause + ` OR (subject_user_id = ? AND visibility = 'user'
+			AND (source_session LIKE ? ESCAPE '\' OR source_session LIKE ? ESCAPE '\')))`
+			args = append(args, linkedUserID, escapeMessageHistoryLike(namespace+"group:")+"%", escapeMessageHistoryLike(namespace+"private:")+"%")
+		}
 	}
 	if query.CrossGroup && strings.TrimSpace(query.GroupSessionPrefix) != "" {
 		scopeClause = `(` + scopeClause + ` OR (

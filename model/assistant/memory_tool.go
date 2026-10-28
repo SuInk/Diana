@@ -98,6 +98,7 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 			}
 		}
 		items = r.expandMemoryAssociations(loadCtx, store, query, t.event, items)
+		markLinkedMemorySubjects(query, items)
 		items = rankStructuredMemories(items, t.event, text, query.Now)
 	}
 	result := struct {

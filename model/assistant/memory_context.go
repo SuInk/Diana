@@ -136,6 +136,7 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 			}
 		}
 	}
+	markLinkedMemorySubjects(query, items)
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
 	text, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, ranked, memoryBudget)
@@ -257,7 +258,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		} else if strongestField != "" && lexical > 0 {
 			reasons = append(reasons, strongestField+"相关")
 		}
-		if item.SubjectUserID != "" && item.SubjectUserID == event.UserID {
+		if item.SubjectUserID != "" && (item.SubjectUserID == event.UserID || item.LinkedSubject) {
 			score += 0.05
 			reasons = append(reasons, "当前用户")
 		}
@@ -309,7 +310,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		if recollection && !relatedEpisode {
 			continue
 		}
-		coreCurrentMemory := item.SubjectUserID == event.UserID && item.Confidence >= 0.9 &&
+		coreCurrentMemory := (item.SubjectUserID == event.UserID || item.LinkedSubject) && item.Confidence >= 0.9 &&
 			((item.Kind != MemoryKindEpisode && item.Kind != MemoryKindSummary && item.Importance >= 0.9) ||
 				(item.Kind == MemoryKindInstruction && item.Importance >= 0.55))
 		threshold := 0.38

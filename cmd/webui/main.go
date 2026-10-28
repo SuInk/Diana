@@ -528,6 +528,7 @@ func main() {
 	botRuntime.SetStructuredMemoryStore(sqliteStore)
 	botRuntime.SetThreadStateStore(sqliteStore)
 	botRuntime.SetOneBotRequestStore(sqliteStore)
+	botRuntime.SetIdentityLinkStore(sqliteStore)
 	botRuntime.SetPendingDirectMessageStore(sqliteStore)
 	botRuntime.SetNotebookStore(sqliteStore)
 	botRuntime.SetWorldBookStore(sqliteStore)

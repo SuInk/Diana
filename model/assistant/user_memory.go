@@ -9,6 +9,9 @@ import "time"
 const (
 	MinimumFavorability = -100
 	MaximumFavorability = 1000
+	// DefaultUserFavorability 是新人的起始分，存储层建档时用，合并关联账号的好感度时
+	// 也按它扣掉每个账号自带的那份起始分，见 mergeLinkedUserProfiles。
+	DefaultUserFavorability = 10
 )
 
 type UserMemoryUpdate struct {

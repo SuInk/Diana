@@ -463,6 +463,11 @@ type Runtime struct {
 	telegramOwnerIDs sync.Map
 	// ownerBind 是 QQ 官方机器人绑定主人的验证码和提醒记录，见 qq_official_owner_bind.go。
 	ownerBind ownerBindState
+	// identityLinks 是跨平台账号关联，identityLinkCache 是它的内存副本，identityBind
+	// 是自助绑定的验证码，见 identity_links.go、identity_bind.go。
+	identityLinks     IdentityLinkStore
+	identityLinkCache identityLinkCache
+	identityBind      identityBindState
 	// pluginStatePersister 把插件开关落盘，聊天里改开关时用，见 plugin_toggle.go。
 	pluginStatePersister func(context.Context) error
 	// hostReviewBreaker 是宿主命令审核的熔断，见 host_command_review.go。

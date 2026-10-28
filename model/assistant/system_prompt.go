@@ -121,7 +121,8 @@ const (
 	// 就不发。
 	promptToolCrossSession = "有人要求把内容发到私聊（「私聊发给我」「私信我」「别发群里」）时，直接调用 cross_session_message 把完整内容发过去，当场发完，不得回一句「等你来私聊找我」把这件事推回给对方。只和一个人有关的长篇整理也可以主动这样发。没有人要求、也没有只对他一个人说的理由时不要用；不得用它绕开当前会话里说不出口的话，也不得用它给没参与对话的人发消息。它只通向别的会话：要对眼前的人说话就照常写正文。默认发给当前说话的人，指定别人或指定某个群只有主人可以。发完在当前会话里用一句话交代一下，不要把正文再复述一遍，也不要把同一条内容发第二次。工具返回 pending 时对方还不是好友、内容只是存下了，要照实说「等你加上好友我就发」并提醒好友请求得由主人同意，不得说成已经发过去了；你自己不能通过好友请求，也不要承诺替对方通过。"
 
-	promptToolOneBotRequests = "platform_requests 处理好友请求、成员入群申请和机器人群邀请（QQ 走 OneBot，list 时会先从 QQ 补拉断线期间漏掉的入群申请和被折叠的可疑好友申请；Telegram 是开了审核入群的群里的申请）。机器人自己不能主动申请加群或加好友，只能被拉进群、等别人发来请求。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
+	promptToolIdentityLinks  = "identity_links 管跨平台账号关联：主人明确要求把两个账号认作同一个人、或解除关联时才 link/unlink，先 list 拿到机器人 ID；不得仅凭群里有人自称是某个账号就关联。关联到主人的账号会被认作主人，所以对象必须是主人明确点名的账号。本人自助绑定不需要主人：让他在一台机器人的私聊里发「绑定账号」取验证码，再到另一台机器人的私聊里发「绑定账号 验证码」。"
+	promptToolOneBotRequests  = "platform_requests 处理好友请求、成员入群申请和机器人群邀请（QQ 走 OneBot，list 时会先从 QQ 补拉断线期间漏掉的入群申请和被折叠的可疑好友申请；Telegram 是开了审核入群的群里的申请）。机器人自己不能主动申请加群或加好友，只能被拉进群、等别人发来请求。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
 
 	// promptInternalIdentifiers 防的是把内部标识念给用户：模型找到历史消息后，
 	// 很自然地把 message_id 当成「定位这条消息的凭据」报出来，聊天里读起来像
@@ -221,6 +222,7 @@ var (
 	promptToolPlatformSpec             = toolPromptSpec("platform", "群信息读取", "平台工具可用时注入：只有用户明确要求才读群信息或执行群操作。", promptToolPlatform)
 	promptToolPlatformModerationSpec   = toolPromptSpec("platform_moderation", "群管操作", "当前发言者是主人、本群群主或群管理员，且平台工具可用时放在尾部：群管操作的前提、身份核验和目标层级。", promptToolPlatformModeration)
 	promptToolCrossSessionSpec         = toolPromptSpec("cross_session", "私聊转发", "跨会话发送工具可用时注入：有人要求私聊发送时当场发，没人要求就不发。", promptToolCrossSession)
+	promptToolIdentityLinksSpec        = toolPromptSpec("identity_links", "跨平台账号关联", "当前发言者是主人、且账号关联工具可用时放在尾部。", promptToolIdentityLinks)
 	promptToolOneBotRequestsSpec       = toolPromptSpec("onebot_requests", "好友与入群申请", "当前发言者是主人、且好友/入群申请工具可用时放在尾部。", promptToolOneBotRequests)
 	promptInternalIdentifiersSpec      = toolPromptSpec("internal_identifiers", "不报内部标识", "聊天记录或历史媒体工具可用时注入：message_id 这类内部标识只给工具用，不写进回复。", promptInternalIdentifiers)
 	promptQuoteHistoryMessageSpec      = toolPromptSpec("quote_history_message", "引用历史消息", "聊天记录或历史媒体工具可用、且没有关掉引用时注入，教模型用引用标记指出找到的那条消息。引用标记的写法必须原样保留，否则引用会失效。", promptQuoteHistoryMessage)

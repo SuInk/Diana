@@ -438,6 +438,16 @@
           "reject"
         ],
         "reason": "同意或拒绝好友、加群请求；查看照常"
+      },
+      {
+        "category": "self_modify",
+        "tool": "identity_links",
+        "field": "operation",
+        "operations": [
+          "link",
+          "unlink"
+        ],
+        "reason": "关联或解除跨平台账号（关联到主人的账号会被认作主人）；查看照常"
       }
     ]
   }

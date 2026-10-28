@@ -641,6 +641,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 	if err := s.migrateIdentityBodyAccounts(); err != nil {
 		return err
 	}
+	if err := s.migrateIdentityLinks(); err != nil {
+		return err
+	}
 	if err := s.migrateMediaGenerationUsage(); err != nil {
 		return err
 	}

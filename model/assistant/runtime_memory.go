@@ -227,8 +227,18 @@ func (r *Runtime) loadUserMemoryProfile(ctx context.Context, event MessageEvent)
 		log.Printf("diana user memory load failed: %v", err)
 		return UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}, false
 	}
+	// 关联账号（已核实是同一个人）的画像读进来合并，写入仍只落当前账号，见
+	// identity_link_context.go。
+	linked := r.loadLinkedUserMemoryProfiles(loadCtx, store, event)
 	if !ok {
-		return UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}, false
+		profile = UserMemoryProfile{UserID: userID, DisplayName: event.SenderNameOrID()}
+	}
+	if len(linked) > 0 {
+		profile = mergeLinkedUserProfiles(profile, ok, linked)
+		ok = true
+	}
+	if !ok {
+		return profile, false
 	}
 	if profile.DisplayName == "" {
 		profile.DisplayName = event.SenderNameOrID()

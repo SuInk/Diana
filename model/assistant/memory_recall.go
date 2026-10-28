@@ -12,7 +12,7 @@ import (
 func (r *Runtime) memoryQueryForEvent(event MessageEvent, text string, limit int) StructuredMemoryQuery {
 	cfg := r.effectiveConfigForEvent(event)
 	return StructuredMemoryQuery{
-		SubjectUserID: event.UserID, Session: sessionKey(event), GroupID: event.GroupID,
+		SubjectUserID: event.UserID, LinkedSubjects: r.linkedMemorySubjects(event), Session: sessionKey(event), GroupID: event.GroupID,
 		Text: text, SearchTerms: structuredMemorySearchTerms(text, 48), Now: time.Now(), MaxCandidates: limit,
 		ExcludeKinds:       []MemoryKind{MemoryKindThread},
 		CrossGroup:         boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup,

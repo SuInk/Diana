@@ -316,6 +316,9 @@ type MessageEvent struct {
 	userProfile            UserMemoryProfile
 	userProfileLoaded      bool
 	oneBotRequest          *OneBotRequestEvent
+	// linkedOwner 标记发送者因为账号关联而在这台机器人上算主人，只由入站时的
+	// withLinkedOwner 打上，平台消息伪造不了，见 identity_links.go。
+	linkedOwner bool
 }
 
 // ExternalEvent is trusted host-generated context. It is persisted in the

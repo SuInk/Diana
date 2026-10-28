@@ -44,6 +44,8 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	event = r.bindInboundEventIdentity(event)
+	// 账号关联到主人的判定在进门时做一次，之后所有主人判定都走 OwnerIDForEvent。
+	event = r.withLinkedOwner(event)
 	if event.Kind == EventKindRequest {
 		return r.handleOneBotRequest(ctx, event)
 	}
@@ -130,6 +132,10 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	r.rememberTelegramOwnerID(event)
 	// 绑定主人在私聊准入之前：没主人时 owner_only 模式会把主人自己也挡在外面。
 	if r.handleOwnerBind(ctx, event) {
+		return nil
+	}
+	// 跨平台绑定账号同理放在准入之前：要关联的正是准入还不认识的那个号。
+	if r.handleIdentityBind(ctx, event) {
 		return nil
 	}
 	if event.Kind == EventKindPrivate {

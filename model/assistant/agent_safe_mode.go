@@ -283,6 +283,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Operations: platformModerationOperations,
 		Reason:     "禁言、踢人、群公告、精华、名片头衔、全员禁言、撤回成员消息等群管操作；查群资料、撤回自己的消息照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaOneBotRequestsToolName, Field: "operation", Operations: []string{"approve", "reject"}, Reason: "同意或拒绝好友、加群请求；查看照常"},
+	{Category: safeModeCategorySelfModify, Tool: dianaIdentityLinksToolName, Field: "operation", Operations: []string{"link", "unlink"}, Reason: "关联或解除跨平台账号（关联到主人的账号会被认作主人）；查看照常"},
 }
 
 // restrictAgentConfigForMode 在安全模式下从源头上不构造高风险工具：命令开关关掉

@@ -32,6 +32,12 @@ func (cfg BotConfig) OwnerIDForEvent(event MessageEvent) string {
 	if owner == "" && event.webChat {
 		return strings.TrimSpace(event.UserID)
 	}
+	// 账号关联到主人：标记只由入站时的 withLinkedOwner 按这台机器人的配置打上（规则见
+	// linkedOwnerFor），平台消息伪造不了；机器人、自己发出的消息和别的机器人的配置一律不认。
+	if event.linkedOwner && !event.SenderIsBot && !event.Outbound && strings.TrimSpace(event.UserID) != "" &&
+		(cfg.ID == "" || event.ProfileID == "" || cfg.ID == event.ProfileID) {
+		return strings.TrimSpace(event.UserID)
+	}
 	if cfg.Platform != PlatformTelegram || event.Platform != PlatformTelegram || event.SenderIsBot || event.Outbound || (cfg.ID != "" && event.ProfileID != "" && cfg.ID != event.ProfileID) {
 		return owner
 	}
@@ -147,6 +153,8 @@ func (r *Runtime) rememberTelegramOwnerID(event MessageEvent) {
 		return
 	}
 	cfg := r.effectiveConfigForEvent(event)
+	// 只记配置里那个主人的号：因关联算主人的是他的另一个账号，不能顶掉私聊通知的去处。
+	event.linkedOwner = false
 	if TelegramOwnerUsername(cfg.OwnerID) == "" || !cfg.IsOwnerEvent(event) || !allASCIIDigits(strings.TrimSpace(event.UserID)) {
 		return
 	}

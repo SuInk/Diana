@@ -148,6 +148,8 @@ type StructuredMemoryItem struct {
 	AssociationScore float64          `json:"-"`
 	AssociationLabel string           `json:"-"`
 	CompactRecall    bool             `json:"-"`
+	// LinkedSubject 表示这是当前发言者关联账号的个人记忆，排序时和本人的记忆同等对待。
+	LinkedSubject bool `json:"-"`
 }
 
 type MemoryWriteRequest struct {
@@ -190,6 +192,16 @@ type StructuredMemoryQuery struct {
 	CurrentSessionOnly bool
 	// GroupRulesOnly 只取本群约定（见 IsGroupRule）。
 	GroupRulesOnly bool
+	// LinkedSubjects 是和当前发言者同属一个人的其他账号。它们的 visibility=user
+	// 记忆只按各自机器人的命名空间读出来，别的记忆一概不放开，见 identity_link_context.go。
+	LinkedSubjects []StructuredMemorySubject
+}
+
+// StructuredMemorySubject 是一个账号的个人记忆所在：Namespace 是会话前缀
+// （多机器人时是「机器人 ID:」，单机器人时为空），UserID 是账号。
+type StructuredMemorySubject struct {
+	Namespace string
+	UserID    string
 }
 
 type MemoryJobKind string
