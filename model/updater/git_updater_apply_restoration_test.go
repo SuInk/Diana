@@ -302,7 +302,7 @@ chmod 700 "$out"
 		"DIANA_UPDATE_ROOT="+sourceRoot,
 		"DIANA_UPDATE_TARGET_COMMIT=0123456789abcdef",
 		"DIANA_RUNNING_EXECUTABLE="+executable,
-		"FRONTEND_DIST="+frontend,
+		"DIANA_UPDATE_FRONTEND_DIR="+frontend,
 		"GO="+filepath.Join(binDir, "go"),
 		"NPM="+filepath.Join(binDir, "npm"),
 	)

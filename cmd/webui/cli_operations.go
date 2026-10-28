@@ -89,17 +89,15 @@ func runDoctorCommand(args []string, output io.Writer) error {
 		directory := filepath.Dir(resolveConfigRelative(path, config.Storage.LogPath))
 		check(directoryWritable(directory), "log directory writable: "+directory, "log directory is not writable: "+directory)
 	}
-	frontendSetting := strings.TrimSpace(config.Server.FrontendDist)
-	if frontendSetting != "" {
-		frontendSetting = resolveConfigRelative(path, frontendSetting)
+	frontend := selectFrontend(path, config.Server.FrontendDist)
+	if frontend.ready && frontend.note != "" {
+		_, _ = fmt.Fprintln(output, "[warn] "+frontend.note)
 	}
-	if _, embedded := embeddedFrontend(); embedded {
-		check(true, "frontend assets: embedded", "")
-	} else {
-		frontend := frontendDistDir(frontendSetting)
-		_, frontendErr := os.Stat(filepath.Join(frontend, "index.html"))
-		check(frontendErr == nil, "frontend assets: "+frontend, "frontend assets are missing: "+frontend)
+	failure := "frontend assets are missing: " + frontend.source
+	if frontend.note != "" {
+		failure = frontend.note
 	}
+	check(frontend.ready, "frontend assets: "+frontend.source, failure)
 	address := healthAddress(config)
 	health, healthErr := fetchHealth(context.Background(), address)
 	if healthErr == nil {
@@ -219,7 +217,7 @@ func fetchHealth(parent context.Context, address string) (healthResponse, error)
 	return health, nil
 }
 
-// resolveConfigRelative 解析配置里的相对路径，供命令行工具使用。命令行在用户自己
+// resolveConfigRelative 解析配置里的相对路径，供命令行工具和前端目录使用。命令行在用户自己
 // 的 shell 里跑，工作目录不一定是服务的，所以按配置文件所在目录算——一键安装和
 // 旧版 Docker 布局里它就是服务的工作目录。官方 Docker 镜像例外：docker exec 的
 // 工作目录就是镜像 WORKDIR，和主程序一致，而配置文件可能放在 data/config.yaml，

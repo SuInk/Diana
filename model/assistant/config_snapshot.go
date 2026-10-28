@@ -205,7 +205,6 @@ type dianaPluginSkillState struct {
 type dianaRuntimePathSnapshot struct {
 	AppDBPath       string `json:"app_db_path,omitempty"`
 	LogPath         string `json:"log_path,omitempty"`
-	FrontendDist    string `json:"frontend_dist,omitempty"`
 	AgentWorkDir    string `json:"agent_work_dir,omitempty"`
 	AgentSkillRoots string `json:"agent_skill_roots,omitempty"`
 	AgentMCPConfig  string `json:"agent_mcp_config,omitempty"`
@@ -473,7 +472,6 @@ func dianaRuntimePathsFromEnv() dianaRuntimePathSnapshot {
 	return dianaRuntimePathSnapshot{
 		AppDBPath:       os.Getenv("APP_DB_PATH"),
 		LogPath:         os.Getenv("LOG_PATH"),
-		FrontendDist:    os.Getenv("FRONTEND_DIST"),
 		AgentWorkDir:    AgentWorkspaceDir(),
 		AgentSkillRoots: os.Getenv("DIANA_AGENT_SKILL_ROOTS"),
 		AgentMCPConfig:  os.Getenv("DIANA_AGENT_MCP_CONFIG"),

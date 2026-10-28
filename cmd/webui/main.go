@@ -413,7 +413,8 @@ func main() {
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
 	handler.SetOAuthManager(oauthManager)
-	systemUpdater, err := newSystemUpdater(appCfg.Update)
+	frontend := selectFrontend(appCfg.path, appCfg.Server.FrontendDist)
+	systemUpdater, err := newSystemUpdater(appCfg.Update, frontend)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -843,9 +844,11 @@ func main() {
 	// OneBot 路由必须在 SPA fallback 之前注册，否则接入端会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
-	frontendRoot, frontendSource := frontendFileSystem(appCfg.Server.FrontendDist)
-	log.Printf("webui frontend: %s", frontendSource)
-	router.NoRoute(spaHandler(frontendRoot))
+	if frontend.note != "" {
+		log.Printf("webui frontend warning: %s", frontend.note)
+	}
+	log.Printf("webui frontend: %s", frontend.source)
+	router.NoRoute(spaHandler(frontend.root))
 
 	log.Printf("webui listening on http://%s (监听地址；Docker 请使用宿主机地址和映射端口访问)", listener.Addr())
 	logStartupDone()
@@ -881,7 +884,7 @@ func main() {
 	}
 }
 
-func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
+func newSystemUpdater(cfg updateConfig, frontend frontendChoice) (*updater.GitUpdater, error) {
 	root := stringOr(cfg.Root, ".")
 	runningExecutable, _ := os.Executable()
 	runningCommit := strings.TrimSpace(buildVersion)
@@ -891,6 +894,13 @@ func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
 	options := updater.Options{
 		RunningCommit:     runningCommit,
 		RunningExecutable: runningExecutable,
+	}
+	// 源码更新要把新前端写到服务正在读的目录；用内嵌前端时交给脚本的默认目录。
+	// 脚本在更新根目录下跑，相对路径要先按服务的工作目录转成绝对路径。
+	if frontend.source != "embedded" {
+		if absolute, err := filepath.Abs(frontend.source); err == nil {
+			options.FrontendDir = absolute
+		}
 	}
 	applyScript := filepath.Join(root, "scripts", "apply-update.sh")
 	if runtime.GOOS != "windows" && boolOr(cfg.ApplyEnabled, true) {
@@ -989,8 +999,8 @@ func setupLogging(logPath string) (io.Writer, func(), func()) {
 	}, startupDone
 }
 
-// frontendDistDir 查找生产前端静态文件目录。
-func frontendDistDir(custom string) string {
+// frontendDistDir 在没有显式配置、也没有内嵌前端时查找生产前端静态文件目录。
+func frontendDistDir() string {
 	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
 	// 源码目录是 frontend/；发布包和已安装实例仍使用 frontend-next/dist，两种布局都要认。
 	candidates := []string{
@@ -1007,10 +1017,6 @@ func frontendDistDir(custom string) string {
 	}
 	if configDir, err := os.UserConfigDir(); err == nil {
 		candidates = append(candidates, filepath.Join(configDir, "diana", "frontend-next", "dist"))
-	}
-	if custom = strings.TrimSpace(custom); custom != "" {
-		// 显式指定的目录永远最优先，即使暂时不存在也按它返回，方便部署脚本预创建。
-		candidates = append([]string{custom}, candidates...)
 	}
 	for _, candidate := range candidates {
 		if stat, err := os.Stat(candidate); err == nil && stat.IsDir() {

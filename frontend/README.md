@@ -31,7 +31,7 @@ make frontend  # 终端 2：Vite 前端
 
 ```sh
 cd frontend && npm run build && cd ..
-FRONTEND_DIST=frontend/dist ./dist/diana-webui
+./dist/diana-webui
 ```
 
 或：
@@ -40,7 +40,7 @@ FRONTEND_DIST=frontend/dist ./dist/diana-webui
 make run-next
 ```
 
-不设置 `FRONTEND_DIST` 时，后端会自动使用 `frontend/dist`。
+没有内嵌前端的源码构建会自动使用 `frontend/dist`。要换目录就在 `config.yaml` 里设 `server.frontend_dist`，相对路径按配置文件所在目录解析，设了就优先于内嵌前端。
 
 ## 依赖的新后端接口
 

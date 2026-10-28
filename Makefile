@@ -106,7 +106,7 @@ build-web:
 build-web-next: build-web
 
 run: build-web
-	FRONTEND_DIST=frontend/dist $(GO) run ./cmd/webui
+	$(GO) run ./cmd/webui
 
 run-next: run
 
