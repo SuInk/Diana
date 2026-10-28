@@ -88,6 +88,10 @@ type QQOfficialChannel struct {
 	seqMu      sync.Mutex
 	passiveSeq map[string]qqPassiveSeq
 
+	// streams 是私聊里按入站 msg_id 进行中的流式消息，见 qq_official_stream.go。
+	streamMu sync.Mutex
+	streams  map[string]*qqStream
+
 	// sent 记着最近发出的群消息，用来认出全量模式下平台回推的自发消息。
 	sent qqSentLedger
 	// refs 是 REFIDX_ 引用索引：入站按 message_scene.ext 的 msg_idx 登记，出站按
@@ -578,6 +582,21 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	}
 
 	var firstID string
+	if text != "" && !isGroup {
+		// 这一轮的正文已经以流式消息推出去了：发结束帧把预览替换成定稿，不另发一条。
+		// 结束帧失败就退回普通发送，宁可多一条也不能让回复停在半截。
+		if id, streamed, err := c.finishQQStream(ctx, strings.TrimSpace(msg.PassiveReplyMessageID), target, text); streamed {
+			if err == nil {
+				if len(msg.Buttons) > 0 {
+					log.Printf("qq: 流式消息不支持按钮，本条按钮未挂上")
+				}
+				firstID = id
+				text = ""
+			} else {
+				log.Printf("qq: 流式消息收尾失败，改为普通发送: %v", err)
+			}
+		}
+	}
 	if text != "" {
 		// msg_type 0 是纯文本、2 是原生 Markdown；频道消息没有这个字段。
 		body := map[string]any{"content": text}

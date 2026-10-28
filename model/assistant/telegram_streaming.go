@@ -25,6 +25,8 @@ type telegramReplyDraft struct {
 	draftID  int64
 	maxRunes int
 	prepare  func(OutgoingMessage) OutgoingMessage
+	// qqStream 表示这是 QQ 官方私聊的流式消息：帧一旦发出就是正式消息的一部分。
+	qqStream bool
 
 	mu       sync.Mutex
 	lastSent time.Time
@@ -33,7 +35,16 @@ type telegramReplyDraft struct {
 }
 
 func (r *Runtime) telegramReplyDraft(event MessageEvent, cfg BotConfig) *telegramReplyDraft {
-	if event.webChat || NormalizePlatformID(event.Platform) != PlatformTelegram || event.Kind != EventKindPrivate || !boolValue(cfg.LLMStreamingEnabled, true) {
+	if event.webChat || event.Kind != EventKindPrivate || !boolValue(cfg.LLMStreamingEnabled, true) {
+		return nil
+	}
+	platform := NormalizePlatformID(event.Platform)
+	qqStream := platform == PlatformQQOfficial
+	if platform != PlatformTelegram && !qqStream {
+		return nil
+	}
+	// QQ 的流式消息收尾后不会消失，等于先发后审；这一轮可能要过发送前审核就不流。
+	if qqStream && (strings.TrimSpace(event.MessageID) == "" || r.replyAuditMayRun(event, cfg)) {
 		return nil
 	}
 	r.mu.RLock()
@@ -58,7 +69,21 @@ func (r *Runtime) telegramReplyDraft(event MessageEvent, cfg BotConfig) *telegra
 		prepare: func(msg OutgoingMessage) OutgoingMessage {
 			return r.resolveOutgoingMentionNames(event, r.normalizeOutgoingMentions(event, msg))
 		},
+		qqStream: qqStream,
 	}
+}
+
+// replyAuditMayRun 估计这一轮私聊回复会不会走发送前审核（见 prepareReplyAudit）。
+// 疲劳打分要等回复出来才知道，这里只要最近回过这个人就按会审处理。
+func (r *Runtime) replyAuditMayRun(event MessageEvent, cfg BotConfig) bool {
+	need := r.replyAuditNeed(event, event.RawMessage, cfg, false)
+	if need.Quality || need.AccountSafety || need.Loop || need.Closing {
+		return true
+	}
+	if _, blocked := r.activeReplySuppression(event, time.Now()); blocked {
+		return true
+	}
+	return r.replyDensityApplies(event) && r.replyDensityRecent(event, time.Now()) > 0
 }
 
 // Drafts may expand beyond the source rune budget when usernames or tables are
@@ -154,6 +179,10 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 		// Drafts are best effort. A Bot API server that has not implemented
 		// sendMessageDraft must not make the final reply fail.
 		d.disabled = true
+		if d.qqStream {
+			// 帧发过就已经是对方看得到的消息；首帧就失败则照常生成、照常发送。
+			return d.lastText != ""
+		}
 		// A definite Bot API rejection did not publish a preview. Transport
 		// failures may happen after delivery, so do not restart generation.
 		var apiErr *telegramAPIError
