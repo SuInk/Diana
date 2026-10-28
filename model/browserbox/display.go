@@ -6,6 +6,7 @@ package browserbox
 import (
 	"errors"
 
+	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/internal/xvfb"
 )
 
@@ -41,6 +42,16 @@ func DisplayStatus() (available bool, detail string) {
 }
 
 // checkHeadful 在启动和保存配置前挡住注定失败的有头模式。
+// termuxHeadless 在 Termux 里凑不出屏幕时把有头换成无头：手机上没有 Xvfb 可拉，
+// 报 ErrNoDisplay 只会让人去装一个装上也用不了的东西。实时画面走 screencast，
+// 无头一样看得见、能接管。
+func termuxHeadless(settings Settings) Settings {
+	if settings.Headful && termux.Detected() && !systemDisplayAvailable() {
+		settings.Headful = false
+	}
+	return settings
+}
+
 func checkHeadful(settings Settings) error {
 	if !settings.Headful || systemDisplayAvailable() || xvfbAvailable() {
 		return nil

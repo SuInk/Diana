@@ -51,6 +51,8 @@ Docker 默认的 `/dev/shm` 只有 64MB，Chrome 渲染重页面时容易写满�
 - **读网页**（群里发的链接自动读取、模型的 `browser_render`）：插件「窗口」设置默认「自动」，有头运行但看不见。Chrome 以 `--no-startup-window` 启动，页面用 CDP 在后台另开，窗口放在屏幕外，macOS 上也不抢前台；Linux 没有图形会话时在 Xvfb 虚拟屏上开，多次渲染共用同一块按需拉起的虚拟屏。凑不出屏幕时（Linux 既没有 `DISPLAY` 也没装 `xvfb`）自动退回无头，照常可用。「始终无头」最省资源但更容易被拦；「显示窗口（排查用）」会在运行 Diana 的机器上弹出窗口。
 - **本地渲染**（HTML、SVG 出图、截图、字体探测）：只渲染 Diana 自己生成的内容，不会被任何网站风控，一律无头。
 
+安卓 Termux 里没有进程沙盒、也拉不起 Xvfb，启动方式另有一套，见 [在 Termux 里用浏览器](termux.md)。
+
 Docker：完整版镜像预装 `xvfb`，读网页直接有头；slim 镜像没有 `xvfb`，读网页退回无头，要有头可以 `docker exec -u root <容器名> sh -c 'apt-get update && apt-get install -y xvfb'`。
 
 ## 隔离、并发与超时

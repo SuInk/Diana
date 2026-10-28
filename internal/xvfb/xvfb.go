@@ -18,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/SuInk/diana/internal/termux"
 )
 
 // x11SocketDir 是 X 服务端放 socket 的地方。
@@ -36,7 +38,8 @@ const (
 // 问题：macOS 和 Windows 的窗口系统跟着登录会话走，没有对应的环境变量可看，
 // 在那里一律当作有。
 func SystemDisplayAvailable() bool {
-	if runtime.GOOS != "linux" {
+	// Termux 里自己编译出来的 GOOS 是 android，图形会话的规矩跟 Linux 一样看环境变量。
+	if runtime.GOOS != "linux" && runtime.GOOS != "android" {
 		return true
 	}
 	for _, key := range []string{"DISPLAY", "WAYLAND_DISPLAY"} {
@@ -49,7 +52,9 @@ func SystemDisplayAvailable() bool {
 
 // Available 判断能不能自己拉一块虚拟屏。
 func Available() bool {
-	if runtime.GOOS != "linux" {
+	// Termux 装得上 Xvfb，可它的 socket 落在 $PREFIX/tmp/.X11-unix，这里按 /tmp 等不到，
+	// 当作没有，让调用方走无头。
+	if runtime.GOOS != "linux" || termux.Detected() {
 		return false
 	}
 	_, err := exec.LookPath("Xvfb")

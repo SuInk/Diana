@@ -789,6 +789,7 @@ func (m *Manager) start(ctx context.Context, id string) error {
 }
 
 func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings, generation uint64) error {
+	settings = termuxHeadless(settings)
 	if err := checkHeadful(settings); err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
+	"github.com/SuInk/diana/internal/termux"
 	"github.com/chromedp/cdproto/cdp"
 	"github.com/chromedp/cdproto/fetch"
 	"github.com/chromedp/cdproto/network"
@@ -325,11 +326,20 @@ func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, ca
 
 func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig, extraEnv []string) (*sandboxedChromeProcess, error) {
 	env, err := resolveBrowserDisplay()
+	// 别处坚持只用有头；Termux 里凑不出屏幕是常态（见 internal/termux），只能退回无头，
+	// 否则手机上网页渲染整个不能用。
+	headless := false
 	if err != nil {
-		return nil, err
+		if !termux.Detected() {
+			return nil, err
+		}
+		env, headless = nil, true
 	}
 	env = append(env, extraEnv...)
 	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
+	if headless {
+		args = append([]string{"--headless=new"}, args...)
+	}
 	args = append(args, cfg.ExtraArgs...)
 	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
 	if err != nil {

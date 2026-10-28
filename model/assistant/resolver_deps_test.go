@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -190,5 +191,37 @@ func TestRunDependencyInstallPlanSurfacesManualCommandOnPermissionDenied(t *test
 	}
 	if !strings.Contains(err.Error(), "/bin/sh -c") {
 		t.Fatalf("错误里缺少手动执行命令：%v", err)
+	}
+}
+
+func TestResolverDependencyInstallPlanUsesTermuxPkg(t *testing.T) {
+	original := detectTermux
+	detectTermux = func() bool { return true }
+	t.Cleanup(func() { detectTermux = original })
+	const pkgPath = "/data/data/com.termux/files/usr/bin/pkg"
+	// Termux 里 apt-get 也在，不能挑它：主仓库没有 chromium。
+	lookPath := func(name string) (string, error) {
+		switch name {
+		case "pkg":
+			return pkgPath, nil
+		case "apt-get":
+			return "/data/data/com.termux/files/usr/bin/apt-get", nil
+		}
+		return "", errors.New("not found")
+	}
+	for _, goos := range []string{"linux", "android"} {
+		plan, err := resolverDependencyInstallPlan(browserDependencyName, goos, lookPath)
+		if err != nil {
+			t.Fatalf("%s：%v", goos, err)
+		}
+		if plan.installer != "Termux pkg" || len(plan.commands) != 2 {
+			t.Fatalf("%s：安装计划不对：%+v", goos, plan)
+		}
+		if got := plan.commands[0].args; !slices.Equal(got, []string{"install", "-y", "tur-repo"}) {
+			t.Fatalf("%s：没先装 tur-repo：%v", goos, got)
+		}
+		if got := plan.commands[1]; got.path != pkgPath || !slices.Equal(got.args, []string{"install", "-y", "chromium"}) {
+			t.Fatalf("%s：装 chromium 的命令不对：%+v", goos, got)
+		}
 	}
 }

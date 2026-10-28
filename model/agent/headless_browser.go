@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/internal/xvfb"
 	"net/url"
 	"os"
@@ -466,7 +467,8 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 		return "", fmt.Errorf("configured headless browser executable not found: %s", configured)
 	}
 
-	var paths []string
+	// Termux 的程序都在 $PREFIX/bin，服务管理器起的进程 PATH 里未必有它。
+	paths := termux.ChromiumPaths()
 	switch runtime.GOOS {
 	case "darwin":
 		paths = append(paths,
@@ -630,6 +632,11 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 	}
 	if headless {
 		args = append([]string{"--headless=new"}, args...)
+	}
+	// 安卓不给普通 App 开用户命名空间，Chromium 的进程沙盒在 Termux 里起不来，
+	// 不关掉连启动都失败。页面隔离靠 Termux 自己的 App 沙盒和上面的内网屏蔽。
+	if termux.Detected() {
+		args = append(args, "--no-sandbox")
 	}
 	return args
 }
