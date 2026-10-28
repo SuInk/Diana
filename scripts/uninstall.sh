@@ -123,9 +123,15 @@ if [ "$install_scope" = "system" ]; then
 else
   command_link="$service_home/.local/bin/diana"
 fi
-if [ -L "$command_link" ]; then
-  link_target=$(readlink "$command_link" 2>/dev/null || true)
-  case "$link_target" in "$install_dir/"*) rm -f -- "$command_link" ;; esac
+for link in "$command_link" "${PREFIX:-/nonexistent}/bin/diana"; do
+  if [ -L "$link" ]; then
+    link_target=$(readlink "$link" 2>/dev/null || true)
+    case "$link_target" in "$install_dir/"*) rm -f -- "$link" ;; esac
+  fi
+done
+# Termux 安装写的 Termux:Boot 开机脚本。
+if [ -f "$service_home/.termux/boot/diana" ] && grep -Fq "$install_dir/start-installed.sh" "$service_home/.termux/boot/diana" 2>/dev/null; then
+  rm -f -- "$service_home/.termux/boot/diana"
 fi
 
 if [ "$purge" = true ]; then
