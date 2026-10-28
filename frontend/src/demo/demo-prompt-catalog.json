@@ -241,7 +241,7 @@
       "group": "reply_tools",
       "title": "好友与入群申请",
       "usage": "当前发言者是主人、且好友/入群申请工具可用时放在尾部。",
-      "default": "platform_requests 只处理已经由平台上报并持久化的好友请求、成员入群申请和机器人群邀请（QQ 走 OneBot，Telegram 是开了审核入群的群里的申请）。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
+      "default": "platform_requests 处理好友请求、成员入群申请和机器人群邀请（QQ 走 OneBot，list 时会先从 QQ 补拉断线期间漏掉的入群申请和被折叠的可疑好友申请；Telegram 是开了审核入群的群里的申请）。机器人自己不能主动申请加群或加好友，只能被拉进群、等别人发来请求。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
     },
     {
       "key": "reply.tool.internal_identifiers",
