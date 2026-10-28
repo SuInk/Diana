@@ -640,6 +640,8 @@ type Runtime struct {
 	proactiveBatches      map[string]*proactiveReplyBatch
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
+	// proactiveRouteDebounce 是接话评分前的防抖窗口，见 proactive_route_debounce.go。
+	proactiveRouteDebounce time.Duration
 	// 连续失败时的错误提示节流状态，见 error_notice_burst.go。
 	errorNoticeMu          sync.Mutex
 	errorNoticeBursts      map[string]*errorNoticeBurst
@@ -900,6 +902,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		activeDirectReplies:     map[string]*activeDirectReply{},
 		proactiveBatchWindow:    defaultProactiveReplyBatchWindow,
 		proactiveBatchMaxWait:   defaultProactiveReplyBatchMaxWait,
+		proactiveRouteDebounce:  defaultProactiveRouteDebounce,
 		errorNoticeBursts:       map[string]*errorNoticeBurst{},
 		errorNoticeQuiet:        defaultErrorNoticeBurstQuiet,
 		errorNoticeMaxWait:      defaultErrorNoticeBurstMaxWait,
@@ -2145,6 +2148,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {
 		proactiveCandidates = append(proactiveCandidates, proactiveReplyCandidate{Event: event, Text: text})
+	}
+	if !handled && considerProactive && r.deferProactiveRouteToNewer(ctx, event) {
+		r.holdProactiveRouteForNewer(event, text, time.Now())
+		event.routingReason = "群里几秒内又有新消息，这条交给后面那条一起做接话评分"
+		r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
+		return finishWithoutReply("merged_into_backlog_turn")
 	}
 	if !handled && len(proactiveCandidates) > 0 {
 		// Judge each candidate immediately. The semantic router already receives

@@ -38,6 +38,16 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		lines = append(lines, "机器人的称呼："+strings.Join(payload.BotAliases, "、"))
 	}
 	lines = append(lines, "对话按时间从早到晚：")
+	// 防抖合并进来的候选（见 proactive_route_debounce.go）和当前消息是几秒内连着发的，
+	// 评分只问当前这条的话，前面那句真在叫机器人就丢了，所以标出来一并判断。
+	burst := map[string]bool{}
+	for _, candidate := range payload.Candidates {
+		if !candidate.IsCurrent && candidate.MessageID != "" {
+			burst[candidate.MessageID] = true
+		}
+	}
+	const burstMark = "（连发，一并判断）"
+	marked := false
 	// RecentMessages 是从新到旧攒的，倒着读回来。
 	seen := map[string]bool{}
 	for i := len(payload.RecentMessages) - 1; i >= 0; i-- {
@@ -45,7 +55,12 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if item.MessageID != "" {
 			seen[item.MessageID] = true
 		}
-		lines = append(lines, transcriptAge(item.AgeSeconds)+transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName))
+		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName)
+		if burst[item.MessageID] && !item.IsBot {
+			line += burstMark
+			marked = true
+		}
+		lines = append(lines, line)
 	}
 	// 同一批攒进来的其它消息通常到达时就进了历史；没进的补在当前消息前面，它们各自
 	// 回复了谁、@ 了谁不能丢。最后一条候选就是当前消息，不在这里重复。
@@ -54,7 +69,8 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if candidate.IsCurrent || (candidate.MessageID != "" && seen[candidate.MessageID]) {
 			continue
 		}
-		lines = append(lines, transcriptAge(candidate.AgeSeconds)+transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName))
+		lines = append(lines, transcriptAge(candidate.AgeSeconds)+transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName)+burstMark)
+		marked = true
 	}
 	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
@@ -65,6 +81,9 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		current += fmt.Sprintf("（引用 %s：%s）", firstNonEmpty(who, "某人"), truncateRunes(strings.Join(strings.Fields(quoted), " "), 80))
 	}
 	lines = append(lines, "【当前消息】[刚刚] "+current)
+	if marked {
+		lines = append(lines, "（标「连发」的几条和当前消息几秒内接连发出，这次一起评：其中任何一条在跟"+botName+"说话，directed 就填 true）")
+	}
 	// 机器人之后有别人插进来时不写这条：评分判据里「紧接着它刚才的话」要求中间没有别人，
 	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
 	if payload.LastBotAddressedCurrentSender && !payload.OthersSpokeAfterLastBot {
