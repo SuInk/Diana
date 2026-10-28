@@ -523,8 +523,8 @@ func TestDianaImageToolEditsEachSourceSeparately(t *testing.T) {
 	if firstImage < 0 {
 		t.Fatal("没有逐张发出的图片消息")
 	}
-	if sent[firstImage].ReplyMessageID != "batch-edit" {
-		t.Fatalf("第一张应引用原消息:%#v", sent[firstImage])
+	if sent[firstImage].ReplyMessageID != "" {
+		t.Fatalf("成图不该引用原消息:%#v", sent[firstImage])
 	}
 	// 全部成功时安静收尾:最后不再补一条「共 N 张」汇总。
 	for _, message := range sent {

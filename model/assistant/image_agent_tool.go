@@ -426,10 +426,8 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 				}
 				return result, nil
 			}
+			// 成图不引用原消息：像真人画完直接甩图，引用框反倒显得像工单回执。
 			message := OutgoingMessage{Text: output.Caption, ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models}
-			if t.event.Kind == EventKindGroup {
-				message.ReplyMessageID = t.event.MessageID
-			}
 			return PluginTaskResult{Messages: []OutgoingMessage{message}}, nil
 		},
 	}
@@ -617,10 +615,6 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 						outgoing.Text = label
 					} else if streamed == 0 {
 						outgoing.Text = request.Caption
-					}
-					if streamed == 0 && t.event.Kind == EventKindGroup {
-						// 第一张引用原消息,后面的直接发图。
-						outgoing.ReplyMessageID = t.event.MessageID
 					}
 					if sendErr := services.Send(ctx, outgoing); sendErr == nil {
 						streamed++
