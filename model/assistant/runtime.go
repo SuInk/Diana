@@ -378,6 +378,8 @@ type Runtime struct {
 	// crossGroupResults 短时记住每条消息的跨群检索结果，见 cross_group_context.go。
 	// 自带锁，不受 mu 保护。
 	crossGroupResults crossGroupResultCache
+	// slangResearch 防止同一个黑话候选在查证途中被重复排队。
+	slangResearch slangResearchState
 	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
 	// 自带锁，不受 mu 保护。
 	botAvatars     botAvatarMemory

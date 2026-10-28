@@ -808,6 +808,9 @@ type BotConfig struct {
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
 	NotebookSharedScopeEnabled *bool `json:"notebook_shared_scope_enabled,omitempty"`
+	// SlangLearningEnabled 让记忆门控顺带标出看不懂的群内说法，攒够次数后后台联网
+	// 查证，查实的写进笔记本。默认关：查证要花搜索和模型调用。
+	SlangLearningEnabled       *bool `json:"slang_learning_enabled,omitempty"`
 	PromptInjectTime           *bool `json:"prompt_inject_time,omitempty"`
 	PromptInjectPlaintextRules *bool `json:"prompt_inject_plaintext_rules,omitempty"`
 	PromptInjectGroupSender    *bool `json:"prompt_inject_group_sender,omitempty"`
@@ -1503,6 +1506,7 @@ type ConfigPayload struct {
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
 	NotebookSharedScopeEnabled  *bool           `json:"notebook_shared_scope_enabled,omitempty"`
+	SlangLearningEnabled        *bool           `json:"slang_learning_enabled,omitempty"`
 	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
 	PromptOverrides             PromptOverrides `json:"prompt_overrides,omitempty"`
 	MaxInputChars               int             `json:"max_input_chars,omitempty"`
@@ -2866,6 +2870,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		ReplyAccountSafetyAuditDefault:    DefaultReplyAccountSafetyAuditPrompt,
 		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
+		SlangLearningEnabled:              copyBoolPointer(cfg.SlangLearningEnabled),
 		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
 		PromptOverrides:                   normalizePromptOverrides(cfg.PromptOverrides),
 		MaxInputChars:                     cfg.MaxInputChars,
@@ -3127,6 +3132,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplySafetyPrivateEnabled:       copyBoolPointer(payload.ReplySafetyPrivateEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
+		SlangLearningEnabled:            copyBoolPointer(payload.SlangLearningEnabled),
 		ProactiveReplyExtraCriteria:     strings.TrimSpace(payload.ProactiveReplyExtraCriteria),
 		PromptOverrides:                 normalizePromptOverrides(payload.PromptOverrides),
 		MaxInputChars:                   payload.MaxInputChars,

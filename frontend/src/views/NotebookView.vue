@@ -65,6 +65,7 @@
                 <strong>{{ entry.term }}</strong>
                 <span v-for="alias in entry.aliases ?? []" :key="alias" class="badge">{{ alias }}</span>
                 <span v-if="entry.status === 'deleted'" class="badge err">已作废</span>
+                <span v-if="entry.author_user_id === SLANG_AUTO_AUTHOR" class="badge accent" title="黑话自动学习联网查证后写入，可以照常修改或作废">自动</span>
               </div>
               <p class="log-detail" style="white-space: normal">{{ entry.meaning }}</p>
               <p class="log-detail">
@@ -172,6 +173,8 @@
 </template>
 
 <script setup lang="ts">
+// 黑话自动学习写入的条目，记录人账号固定为这个（见 model/assistant/slang_research.go）。
+const SLANG_AUTO_AUTHOR = "diana:slang-learning";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ChevronRight, Plus, RefreshCw } from "@lucide/vue";

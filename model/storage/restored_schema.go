@@ -349,6 +349,9 @@ CREATE INDEX IF NOT EXISTS idx_repository_issue_drafts_group_status_time ON repo
 	if err := s.addMessageSearchExtraColumn(); err != nil {
 		return err
 	}
+	if err := s.migrateSlang(); err != nil {
+		return err
+	}
 	if err := s.migrateNotebook(); err != nil {
 		return err
 	}

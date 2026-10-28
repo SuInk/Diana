@@ -548,6 +548,14 @@ const demoNotebook: NotebookEntry[] = [
     usage_count: 4, last_used_at: before(400),
     version: 1, status: "active", created_at: before(4200), updated_at: before(4200), revisions: []
   },
+  // 黑话自动学习联网查证后写入的词条。
+  {
+    id: "notebook-auto-1", scope_key: "bot:bot-onebot", kind: "term", term: "开盒", aliases: [],
+    meaning: "把别人的真实身份、住址等隐私信息扒出来公开，多带贬义", example: "小号冲浪被当场开盒了",
+    note: "自动学习：群里 3 人说过 4 次，联网查证", author_user_id: "diana:slang-learning", author_name: "自动学习",
+    editor_user_id: "diana:slang-learning", editor_name: "自动学习", usage_count: 2, last_used_at: before(30),
+    version: 1, status: "active", created_at: before(300), updated_at: before(300), revisions: []
+  },
   // 以下几条是词典升级成笔记本之后才记得下的东西：标题不会原样出现在聊天里，
   // 靠触发词命中。
   {

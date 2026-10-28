@@ -545,10 +545,16 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	if len(sources) > 1 {
 		instruction = "请对 current_batch 里的每一条消息执行记忆门控，每条候选用 source_index 标明出自第几条（从 0 开始）。上下文 JSON：\n"
 	}
+	gateCfg := r.effectiveConfigForEvent(last.event)
+	slang := slangLearningActive(gateCfg, last.event)
+	systemPrompt := gateCfg.prompt(promptMemoryGateSpec)
+	if slang {
+		systemPrompt += slangGateRule
+	}
 	messages := []llm.Message{
 		{
 			Role:    llm.RoleSystem,
-			Content: r.effectiveConfigForEvent(last.event).prompt(promptMemoryGateSpec),
+			Content: systemPrompt,
 		},
 		{
 			Role:    llm.RoleUser,
@@ -556,7 +562,7 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 		},
 	}
 	raw, err := r.runLLMMemoryProvider(ctx, func(client LLMProvider) (string, error) {
-		return generateMemoryCandidates(ctx, client, messages, memoryGateSubmitTool())
+		return generateMemoryCandidates(ctx, client, messages, memoryGateSubmitToolFor(slang))
 	})
 	if err != nil {
 		return fmt.Errorf("memory gate llm: %w", err)
@@ -564,6 +570,14 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	candidates, speakerAI, err := parseMemoryGateResponse(raw)
 	if err != nil {
 		return err
+	}
+	if slang {
+		events := make([]MessageEvent, len(sources))
+		texts := make([]string, len(sources))
+		for index, source := range sources {
+			events[index], texts[index] = source.event, source.text
+		}
+		r.observeSlangTerms(ctx, events, texts, parseSlangGateTerms(raw))
 	}
 	// 一批里只有一个发言者时这份判断才说得清是谁的。
 	if memorySourcesSingleSpeaker(sources, func(source gateSource) string { return source.event.UserID }) {
