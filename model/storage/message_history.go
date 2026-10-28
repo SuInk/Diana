@@ -474,7 +474,13 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	query.Session = strings.TrimSpace(query.Session)
 	query.SessionPrefix = strings.TrimSpace(query.SessionPrefix)
 	query.Text = strings.TrimSpace(query.Text)
-	if query.Text == "" || (!query.CrossSession && query.Session == "") || (query.CrossSession && query.SessionPrefix == "") {
+	senders := make([]string, 0, len(query.SenderUserIDs))
+	for _, id := range query.SenderUserIDs {
+		if id = strings.TrimSpace(id); id != "" {
+			senders = append(senders, id)
+		}
+	}
+	if (query.Text == "" && len(senders) == 0) || (!query.CrossSession && query.Session == "") || (query.CrossSession && query.SessionPrefix == "") {
 		return nil, 0, nil
 	}
 	if query.FromTime < 0 {
@@ -498,11 +504,21 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 		where += ` AND session = ?`
 		args = append(args, query.Session)
 	}
-	terms := historySearchTerms(query)
 	if strings.TrimSpace(query.ExcludeSession) != "" {
 		where += ` AND session != ?`
 		args = append(args, strings.TrimSpace(query.ExcludeSession))
 	}
+	if len(senders) > 0 {
+		where += ` AND user_id IN (?` + strings.Repeat(`, ?`, len(senders)-1) + `)`
+		for _, id := range senders {
+			args = append(args, id)
+		}
+	}
+	// 只按发言人查、不带关键词：直接按时间翻这些人的消息，走 user_id+event_time 索引。
+	if query.Text == "" {
+		return s.listMessageEventsWhere(ctx, where, args, limit, query.Sort, query.Offset)
+	}
+	terms := historySearchTerms(query)
 	// 多个词按时间排序时，只按时间排会让只提到其中一个常见词的消息把真正同时
 	// 提到几个词的那条埋没：「DeepSeek harness」按 OR 命中五百多条，逐页翻时间线
 	// 翻不到。这里先按命中了几个词分档，档内仍按时间，总数和翻页口径不变。
@@ -557,6 +573,35 @@ FROM message_events
 WHERE `+where+`
 ORDER BY `+order+`
 LIMIT ? OFFSET ?`, rowArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = rows.Close() }()
+	events := make([]assistant.MessageEvent, 0, min(limit, total))
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, 0, err
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(raw), &event); err != nil {
+			return nil, 0, fmt.Errorf("decode message event: %w", err)
+		}
+		events = append(events, event)
+	}
+	return events, total, rows.Err()
+}
+
+func (s *SQLiteStore) listMessageEventsWhere(ctx context.Context, where string, args []any, limit int, sort string, offset int) ([]assistant.MessageEvent, int, error) {
+	var total int
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM message_events WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if sort != "oldest" {
+		sort = "newest"
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT payload FROM message_events WHERE `+where+` ORDER BY `+historyChronologicalOrder(sort, "")+` LIMIT ? OFFSET ?`,
+		append(append([]any(nil), args...), limit, max(0, offset))...)
 	if err != nil {
 		return nil, 0, err
 	}

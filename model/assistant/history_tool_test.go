@@ -690,3 +690,65 @@ func TestCrossGroupSearchRecognizesTelegramUsernameOwner(t *testing.T) {
 		t.Fatalf("captured query = %#v calls=%d", store.query, store.calls)
 	}
 }
+
+// 私聊里问「记得我在群里说了什么吗」：没有关键词，只能按发言人跨群翻。
+// 以前跨群必须带 query，模型只好退回去查私聊最近消息。
+func TestCrossGroupSearchBySenderWithoutQuery(t *testing.T) {
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &capturingHistorySearchStore{}
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: "owner", ContextNamespace: "bot-a"}
+	raw, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{
+		"operation": "search", "scope": "all_groups", "sender_user_id": "self", "days": 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.calls != 1 || store.query.Text != "" || !store.query.CrossSession || len(store.query.SenderUserIDs) != 1 || store.query.SenderUserIDs[0] != "owner" {
+		t.Fatalf("captured query = %#v calls=%d", store.query, store.calls)
+	}
+	var result dianaChatHistoryResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Sender != "owner" || len(result.Items) != 1 || !strings.Contains(result.Message, "列出该账号的发言") {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+type slowThenFastHistoryStore struct {
+	capturingHistorySearchStore
+	froms []int64
+}
+
+func (s *slowThenFastHistoryStore) SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.froms = append(s.froms, query.FromTime)
+	if len(s.froms) == 1 {
+		<-ctx.Done()
+		return nil, 0, ctx.Err()
+	}
+	return s.capturingHistorySearchStore.SearchMessageEvents(ctx, query)
+}
+
+// 「Diana」这种高频词查 7 天会超时；缩到最近一天再查一次，而不是直接报错。
+func TestHistorySearchNarrowsWindowAfterTimeout(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := &slowThenFastHistoryStore{}
+	runtime.SetMessageHistoryStore(store)
+	event := MessageEvent{Kind: EventKindGroup, Time: 1_000_000, GroupID: "g", UserID: "u"}
+	raw, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{
+		"operation": "search", "query": "Diana", "days": 7,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.froms) != 2 || store.froms[1] <= store.froms[0] {
+		t.Fatalf("froms = %v", store.froms)
+	}
+	if store.query.ThroughTime-store.query.FromTime != chatHistoryNarrowedWindow {
+		t.Fatalf("retry window = %d..%d", store.query.FromTime, store.query.ThroughTime)
+	}
+	if !strings.Contains(raw, "已缩到结束时间前 24 小时") {
+		t.Fatalf("raw = %s", raw)
+	}
+}

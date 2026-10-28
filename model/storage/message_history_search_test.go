@@ -276,3 +276,53 @@ func TestSaveMessageSearchExtraIfMediaCurrentUsesCurrentCaption(t *testing.T) {
 		t.Fatalf("current media search: events=%#v total=%d err=%v", events, total, err)
 	}
 }
+
+// 不带关键词、只给发言人：跨群按时间列出这个人的发言，别的人和别的机器人的群不混进来。
+func TestSearchMessageEventsBySenderWithoutText(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "history.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	alice := func(at int64, group, id, text string) assistant.MessageEvent {
+		event := historySearchEvent(at, group, id, "Alice", text)
+		event.UserID = "10001"
+		return event
+	}
+	items := []struct {
+		session string
+		event   assistant.MessageEvent
+	}{
+		{"onebot-main:group:one", alice(10, "one", "a1", "第一句")},
+		{"onebot-main:group:two", alice(20, "two", "a2", "第二句")},
+		{"onebot-main:group:two", historySearchEvent(30, "two", "b1", "Bob", "别人说的")},
+		{"onebot-other:group:three", alice(40, "three", "a3", "别的机器人的群")},
+	}
+	for _, item := range items {
+		item.event.ContextNamespace = item.session[:7]
+		if err := store.AppendMessageEvent(ctx, item.session, item.event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
+		SessionPrefix: "onebot-main:group:", CrossSession: true, SenderUserIDs: []string{"10001"},
+		ThroughTime: 100, Limit: 20, Sort: "newest",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(events) != 2 || events[0].MessageID != "a2" || events[1].MessageID != "a1" {
+		t.Fatalf("total=%d events=%#v", total, events)
+	}
+	withText, total, err := store.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
+		SessionPrefix: "onebot-main:group:", CrossSession: true, SenderUserIDs: []string{"10001"},
+		Text: "第一", ThroughTime: 100, Limit: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(withText) != 1 || withText[0].MessageID != "a1" {
+		t.Fatalf("total=%d events=%#v", total, withText)
+	}
+}

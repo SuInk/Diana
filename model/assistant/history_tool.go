@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -14,21 +15,22 @@ import (
 )
 
 const (
-	dianaChatHistoryToolName        = "chat_history"
-	defaultChatHistoryRecentLimit   = 20
-	maximumChatHistoryResultLimit   = 50
-	defaultChatHistoryBefore        = 10
-	defaultChatHistoryAfter         = 10
-	maximumChatHistoryAroundRadius  = 10
-	defaultChatHistorySearchHours   = 24
-	maximumChatHistorySearchHours   = 24 * 365 * 100
-	defaultChatHistoryRangeLimit    = 60
-	maximumChatHistoryRangeLimit    = 200
-	defaultChatHistoryOverviewLimit = 24
-	maximumChatHistoryOverviewLimit = 40
-	chatHistoryOverviewTextRunes    = 140
-	maximumChatHistoryOutputRunes   = 7600
-	chatHistoryLookupTimeout        = 3 * time.Second
+	dianaChatHistoryToolName              = "chat_history"
+	defaultChatHistoryRecentLimit         = 20
+	maximumChatHistoryResultLimit         = 50
+	defaultChatHistoryBefore              = 10
+	defaultChatHistoryAfter               = 10
+	maximumChatHistoryAroundRadius        = 10
+	defaultChatHistorySearchHours         = 24
+	maximumChatHistorySearchHours         = 24 * 365 * 100
+	defaultChatHistoryRangeLimit          = 60
+	maximumChatHistoryRangeLimit          = 200
+	defaultChatHistoryOverviewLimit       = 24
+	maximumChatHistoryOverviewLimit       = 40
+	chatHistoryOverviewTextRunes          = 140
+	maximumChatHistoryOutputRunes         = 7600
+	chatHistoryLookupTimeout              = 3 * time.Second
+	chatHistoryNarrowedWindow       int64 = 24 * 60 * 60
 )
 
 type dianaChatHistoryTool struct {
@@ -40,6 +42,7 @@ type dianaChatHistoryTool struct {
 
 type dianaChatHistoryResult struct {
 	Scope             string   `json:"scope,omitempty"`
+	Sender            string   `json:"sender_user_id,omitempty"`
 	GroupID           string   `json:"group_id,omitempty"`
 	ReturnedCount     int      `json:"returned_count"`
 	OmittedCount      int      `json:"omitted_count"`
@@ -237,6 +240,7 @@ func (t *dianaChatHistoryTool) Description() string {
 	// 「别说看不到」防模型不查记录就回「看不到之前的消息」。
 	// speakers/reactions 分开写：曾拿发言排行冒充点赞名单（#553）。
 	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到。` +
+		`问某人说过什么用 search 填 sender_user_id，可不带关键词，跨群加 scope=all_groups。` +
 		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充。`
 }
 
@@ -247,10 +251,11 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("overview 长时段抽样供总结；range 按时段逐条；recalls 近24h撤回",
 			"around", "recent", "overview", "range", "search", "recalls", "speakers", "reactions"),
-		"message_id": toolStringParam("around 的中心消息，默认当前；reactions 查单条"),
-		"before":     toolIntParam("around：锚点前条数", 0, maximumChatHistoryAroundRadius),
-		"after":      toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
-		"query":      toolStringParam("search 必填：关键词"),
+		"message_id":     toolStringParam("around 的中心消息，默认当前；reactions 查单条"),
+		"before":         toolIntParam("around：锚点前条数", 0, maximumChatHistoryAroundRadius),
+		"after":          toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
+		"query":          toolStringParam("search：关键词；设了 sender_user_id 时可省略，按时间列出此人发言"),
+		"sender_user_id": toolStringParam(`search：只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
 		// relevance 曾被拿来断言「最早一条」，见 #457。
 		"order":        toolEnumParam("search 排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
@@ -515,9 +520,10 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		}
 	}
 	query := strings.TrimSpace(configToolString(input, "query"))
-	if query == "" {
+	sender := t.historySenderFilter(input)
+	if query == "" && sender == "" {
 		if scope := strings.TrimSpace(configToolString(input, "scope")); scope != "" && scope != "current" {
-			return dianaChatHistoryResult{}, fmt.Errorf("跨群 search 必须提供 query；不能改查当前会话时间线")
+			return dianaChatHistoryResult{}, fmt.Errorf("跨群 search 必须提供 query 或 sender_user_id；不能改查当前会话时间线")
 		}
 		result, err := t.window(ctx, input)
 		result.Scope, result.GroupID = "current", t.event.GroupID
@@ -530,6 +536,9 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	order := firstNonEmpty(strings.TrimSpace(configToolString(input, "order")), "newest")
 	if order != "newest" && order != "oldest" && order != "relevance" {
 		return dianaChatHistoryResult{}, fmt.Errorf("order 必须是 newest、oldest 或 relevance")
+	}
+	if query == "" && order == "relevance" {
+		order = "newest"
 	}
 	if order == "relevance" && configToolString(input, "cursor") != "" {
 		return dianaChatHistoryResult{}, fmt.Errorf("相关性召回不能精确分页，请使用 oldest 或 newest")
@@ -550,7 +559,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	if order == "oldest" && !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
 		from = 0
 	}
-	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), query, scope, order), From: from, Through: through}
+	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), query+"\x00"+sender, scope, order), From: from, Through: through}
 	if cursor := configToolString(input, "cursor"); cursor != "" {
 		decoded, err := decodeHistorySearchCursor(cursor)
 		if err != nil || decoded.Scope != page.Scope {
@@ -566,16 +575,32 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	t.runtime.mu.RUnlock()
 	var matched []MessageEvent
 	total := 0
+	narrowed := false
 	if searchStore, ok := store.(MessageHistorySearchStore); ok {
-		loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
-		var err error
-		matched, total, err = searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
-			Session: sessionKey(t.event), SessionPrefix: groupHistorySessionPrefix(t.event),
-			Text: query, Terms: structuredMemorySearchTerms(query, 48),
-			FromTime: page.From, ThroughTime: page.Through, Limit: limit,
-			CrossSession: crossGroup, Sort: order, Offset: page.Offset,
-		})
-		cancel()
+		var senders []string
+		if sender != "" {
+			senders = []string{sender}
+		}
+		run := func() error {
+			loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
+			defer cancel()
+			var err error
+			matched, total, err = searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
+				Session: sessionKey(t.event), SessionPrefix: groupHistorySessionPrefix(t.event),
+				Text: query, Terms: structuredMemorySearchTerms(query, 48),
+				FromTime: page.From, ThroughTime: page.Through, Limit: limit,
+				CrossSession: crossGroup, Sort: order, Offset: page.Offset, SenderUserIDs: senders,
+			})
+			return err
+		}
+		err := run()
+		// 高频词（机器人名字这类）在长时段里要逐行回表，3 秒内扫不完。不直接报错，
+		// 缩到结束时间前的一天再查一次，结果里说明范围缩过，模型可以按需换词或分段续查。
+		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && page.Offset == 0 && page.Through-page.From > chatHistoryNarrowedWindow {
+			page.From = page.Through - chatHistoryNarrowedWindow
+			narrowed = true
+			err = run()
+		}
 		if err != nil {
 			return dianaChatHistoryResult{}, fmt.Errorf("检索持久化聊天记录失败: %w", err)
 		}
@@ -600,6 +625,9 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			return timeline[i].Time > timeline[j].Time
 		})
 		for _, event := range timeline {
+			if sender != "" && event.UserID != sender {
+				continue
+			}
 			searchable := strings.Join([]string{event.MessageID, event.UserID, event.SenderNameOrID(), historyToolEventText(event), quotedPlainText(event.Quoted), t.runtime.messageImageDescriptionText(ctx, event)}, "\n")
 			if !strings.Contains(strings.ToLower(searchable), strings.ToLower(query)) {
 				continue
@@ -641,11 +669,19 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		Scope: scope,
 		OK:    true, Action: "search", Query: query, Order: order, Items: items, Total: total,
 		Message: "已在" + label + "内按指定时间顺序进行关键词检索，返回精简命中；图片仅保留相关片段。",
+		Sender:  sender,
 		Window:  chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page,
 		Guidance: "需要原文或前后文时调用 around，传 message_id；跨群命中同时传 group_id。has_more=true 时继续使用 next_cursor，保持 query、scope、order 相同。search_complete 仅表示当前关键词与范围已枚举完，不等于事件事实完整；未核对原文和完整范围时只能说目前查到最早，不能断言最早就是。时间分页采用关键词匹配，不混入不具备完整总数的语义候选。",
 	}
 	if !crossGroup {
 		result.GroupID = t.event.GroupID
+	}
+	if query == "" {
+		result.Message = "已在" + label + "内按时间列出该账号的发言，返回精简内容。"
+	}
+	if narrowed {
+		result.Limited = true
+		result.Message += "原时间范围内命中太多、查询超时，已缩到结束时间前 24 小时；更早的部分换更具体的词，或用 from_time/through_time 分段再查。"
 	}
 	if order != "relevance" && len(uniqueLowerFields(query)) > 1 {
 		result.Message += "多个词时先列同时含全部词的消息，再列只含部分词的，每档内按指定时间顺序。"
@@ -1227,4 +1263,14 @@ func uniqueLowerFields(text string) []string {
 		}
 	}
 	return words
+}
+
+// historySenderFilter 读 sender_user_id；"self"/"me" 指当前发言者。
+func (t *dianaChatHistoryTool) historySenderFilter(input map[string]any) string {
+	sender := strings.TrimSpace(configToolString(input, "sender_user_id"))
+	switch strings.ToLower(sender) {
+	case "self", "me", "current", "当前发言者", "我":
+		return strings.TrimSpace(t.event.UserID)
+	}
+	return sender
 }

@@ -150,6 +150,8 @@ type MessageHistorySearchQuery struct {
 	ThroughTime    int64
 	Limit          int
 	CrossSession   bool
+	// SenderUserIDs 只留这些账号发的消息。设了它 Text 可以为空：按时间列出这些人的发言。
+	SenderUserIDs []string
 }
 
 type MessageHistorySearchStore interface {
