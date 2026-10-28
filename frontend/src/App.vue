@@ -652,8 +652,12 @@ watch(currentView, (next, previous) => {
   }
 }, { flush: "sync" });
 
+// 首次建连不算重连：bootApp 刚取过版本，2.5 秒后也会查更新，别再各多发一遍。
+let streamConnectedBefore = false;
 watch(() => stream.connected, (connected, previous) => {
-  if (connected && previous === false && !locked.value && !booting.value && !backendDown.value && scopeReady.value) {
+  const reconnected = connected && previous === false && streamConnectedBefore;
+  if (connected) streamConnectedBefore = true;
+  if (reconnected &&!locked.value && !booting.value && !backendDown.value && scopeReady.value) {
     void refreshRuntimeVersion();
     void refreshUpdateIndicator();
   }

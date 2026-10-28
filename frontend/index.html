@@ -30,6 +30,17 @@
         <noscript>请启用 JavaScript 后使用 Diana 控制台。</noscript>
       </div>
     </div>
+    <script>
+      // 首屏要等的只读接口跟 JS 包同时发出去：否则得等 JS 下完、问完登录态、再取完
+      // 机器人配置才轮到总览数据，远程访问每跳一秒多，串起来要好几秒。api.ts 只认成功
+      // 的响应，没登录或出错就照常重新请求。
+      if ("%VITE_DEMO_MODE%" !== "true") {
+        window.__dianaStartup = {};
+        ["/api/auth/status", "/api/assistant/config", "/api/assistant/status", "/api/stats", "/api/llm/config"].forEach(function (url) {
+          window.__dianaStartup[url] = fetch(url, { headers: { "Content-Type": "application/json" } }).catch(function () { return null; });
+        });
+      }
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

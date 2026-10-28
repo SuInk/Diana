@@ -1218,6 +1218,7 @@ function invalidateAPICache(): void {
   cacheGeneration++;
   responseCache.clear();
   inflightRequests.clear();
+  dropStartupPrefetch();
 }
 
 // ApiError 把「后端根本没答话」和「后端答了但不同意」分开。两者混在一起时，
@@ -1258,9 +1259,40 @@ function apiErrorForStatus(status: number, message: string, responseBody = ""): 
   return new ApiError(message || `HTTP ${status}`, "request", status, responseBody);
 }
 
+// index.html 里随 JS 包一起发出的首屏请求。页面刚打开的这段时间里，同一接口的
+// 调用方（bootApp 和总览都要 /api/llm/config）共用这一份；过了这个窗口才第一次用到
+// 的数据已经旧了，任何写操作之后也作废，都改为重新请求。
+const startupPrefetch = (window as { __dianaStartup?: Record<string, Promise<Response | null>> }).__dianaStartup ?? {};
+const startupPrefetchParsed = new Map<string, Promise<unknown>>();
+const STARTUP_PREFETCH_MAX_AGE_MS = 15_000;
+
+function dropStartupPrefetch(): void {
+  for (const url of Object.keys(startupPrefetch)) delete startupPrefetch[url];
+  startupPrefetchParsed.clear();
+}
+
+async function takeStartupPrefetch<T>(url: string, init?: RequestInit): Promise<T | undefined> {
+  if (init?.method && init.method.toUpperCase() !== "GET") return undefined;
+  if (!startupPrefetchParsed.has(url) && !startupPrefetch[url]) return undefined;
+  if (performance.now() > STARTUP_PREFETCH_MAX_AGE_MS) {
+    dropStartupPrefetch();
+    return undefined;
+  }
+  let parsed = startupPrefetchParsed.get(url);
+  if (!parsed) {
+    const pending = startupPrefetch[url];
+    if (!pending) return undefined;
+    parsed = pending.then((response) => (response?.ok ? response.json() : undefined)).catch(() => undefined);
+    startupPrefetchParsed.set(url, parsed);
+  }
+  return (await parsed) as T | undefined;
+}
+
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const finish = trackScopeRequest();
   try {
+    const prefetched = await takeStartupPrefetch<T>(url, init);
+    if (prefetched !== undefined) return prefetched;
     return await performRequestJSON<T>(url, init);
   } finally {
     finish();
