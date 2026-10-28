@@ -388,7 +388,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions})
+		planning := llm.GenerateRequest{Messages: withToolResultReminder(messages, r.cfg.ToolResultReminder), Tools: definitions}
+		if r.cfg.RequireToolCall && len(definitions) > 0 {
+			planning.ToolChoice = llm.ToolChoiceRequired
+		}
+		planningRequest, prepareErr := hooks.prepare(planningCtx, planning)
 		if prepareErr != nil {
 			cancel()
 			return fail(prepareErr)

@@ -4895,6 +4895,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
 		}
+		agentCfg.RequireToolCall = true
 		if offersButtonsFinalizeField(cfg, event) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField())
 		}

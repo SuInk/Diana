@@ -1070,6 +1070,30 @@ func TestRunnerForcesFinalizeToolOnFinalizationTurn(t *testing.T) {
 	}
 }
 
+// RequireToolCall 打开时规划步一律要求调工具，纯文本不再是出口；预留的收尾步照旧点名 send。
+func TestRunnerRequireToolCallOnPlanningTurns(t *testing.T) {
+	for _, require := range []bool{true, false} {
+		client := &nativeBudgetClient{}
+		runner, err := NewRunner(client, Config{MaxSteps: 1, RequireToolCall: require}, NewToolRegistry(&countingTool{name: "lookup"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "look it up"}}}); err != nil {
+			t.Fatal(err)
+		}
+		want := ""
+		if require {
+			want = llm.ToolChoiceRequired
+		}
+		if got := client.requests[0].ToolChoice; got != want {
+			t.Fatalf("require=%v planning tool choice=%q, want %q", require, got, want)
+		}
+		if got := client.requests[len(client.requests)-1].ToolChoice; got != finalizeToolName {
+			t.Fatalf("require=%v finalization tool choice=%q", require, got)
+		}
+	}
+}
+
 // 调用方在历史之后还会放记忆块、发言者身份和时钟这类逐轮变化的消息。它标出的
 // 稳定前缀末尾必须被沿用，否则断点落在易变消息上，前缀缓存每轮都要重写。
 func TestRunnerHonorsCallerCacheBreakpoint(t *testing.T) {

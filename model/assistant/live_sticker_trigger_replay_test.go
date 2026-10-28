@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -81,12 +82,19 @@ func TestLiveStickerTriggerReplay(t *testing.T) {
 	jobs := make(chan job)
 	var mu sync.Mutex
 	var results []result
+	// DIANA_STICKER_REPLAY_STOP_ON_429=1：回放和生产共用账号池时，一遇限流就停，不重试，
+	// 免得把生产也拖进限流。
+	stopOn429 := os.Getenv("DIANA_STICKER_REPLAY_STOP_ON_429") == "1"
+	var limited atomic.Bool
 	var workers sync.WaitGroup
 	for range envInt("DIANA_STICKER_REPLAY_CONCURRENCY", 4) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for item := range jobs {
+				if limited.Load() {
+					continue
+				}
 				req := stickerReplayVariant(item.sample.request, item.variant)
 				var response *llm.GenerateResponse
 				var err error
@@ -98,7 +106,20 @@ func TestLiveStickerTriggerReplay(t *testing.T) {
 					if err == nil || !(strings.Contains(err.Error(), " 503 ") || strings.Contains(err.Error(), " 429 ")) {
 						break
 					}
+					if stopOn429 && strings.Contains(err.Error(), " 429 ") {
+						limited.Store(true)
+						break
+					}
 					time.Sleep(stickerReplayBackoff(err, attempt))
+				}
+				// repair 复现 #1218 之前的行为：纯文本先打回一次，看模型改用 send 时配不配图。
+				if err == nil && item.variant == "repair" && len(response.ToolCalls) == 0 && strings.TrimSpace(response.Text) != "" {
+					req.Messages = append(append([]llm.Message(nil), req.Messages...),
+						llm.Message{Role: llm.RoleAssistant, Content: response.Text},
+						llm.Message{Role: llm.RoleUser, Content: stickerReplayPlainTextRepair})
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					response, err = client.Generate(ctx, req)
+					cancel()
 				}
 				out := result{ID: item.sample.id, Variant: item.variant, Run: item.run, Label: labels[item.sample.id]}
 				if err != nil {
@@ -186,7 +207,7 @@ func loadStickerReplaySamples(t *testing.T, dir string, tail int) []stickerRepla
 			Purpose string              `json:"purpose"`
 			Request llm.GenerateRequest `json:"request"`
 		}
-		if json.Unmarshal(body, &metadata) != nil || metadata.Purpose != "unlabeled" {
+		if json.Unmarshal(body, &metadata) != nil || (metadata.Purpose != "unlabeled" && metadata.Purpose != "reply") {
 			return
 		}
 		req := metadata.Request
@@ -293,8 +314,132 @@ func trimStickerReplayRequest(req llm.GenerateRequest, tail int) llm.GenerateReq
 }
 
 func stickerReplayVariant(req llm.GenerateRequest, variant string) llm.GenerateRequest {
-	if variant == "baseline" {
+	switch variant {
+	case "baseline":
 		return req
+	case "nostrict", "nostrict_0927":
+		// strict 下可选字段被改写成「必填、可为 null」，模型几乎总填 null；关掉后 sticker 才真正可选。
+		if variant == "nostrict_0927" {
+			req = stickerReplayVariant(req, "field_0927")
+		}
+		tools := append([]llm.ToolDefinition(nil), req.Tools...)
+		for index := range tools {
+			if tools[index].Name == "send" {
+				tools[index].Strict = false
+			}
+		}
+		req.Tools = tools
+		return req
+	case "field_0927", "full_0927":
+		// 9-27 回放（67/179）时的字段说明和表情包提示词，按 send 协议改写。
+		tools := append([]llm.ToolDefinition(nil), req.Tools...)
+		for index := range tools {
+			if tools[index].Name != "send" {
+				continue
+			}
+			parameters := map[string]any{}
+			for key, value := range tools[index].Parameters {
+				parameters[key] = value
+			}
+			properties := map[string]any{}
+			if existing, ok := parameters["properties"].(map[string]any); ok {
+				for key, value := range existing {
+					properties[key] = value
+				}
+			}
+			properties[stickerFinalizeFieldName] = toolStringParam(stickerReplayField0927)
+			parameters["properties"] = properties
+			tools[index].Parameters = parameters
+		}
+		req.Tools = tools
+		if variant == "full_0927" {
+			pattern := regexp.MustCompile(`表情包：你可以像群友一样用表情包说话。[^\n]*`)
+			messages := append([]llm.Message(nil), req.Messages...)
+			for index := range messages {
+				if messages[index].Role == llm.RoleSystem {
+					messages[index].Content = pattern.ReplaceAllLiteralString(messages[index].Content, "")
+				}
+			}
+			messages[0].Content += "\n" + stickerReplayPrompt0927
+			req.Messages = messages
+		}
+		return req
+	case "move_end":
+		// 表情包段落原样挪到首条 system 末尾，和 9-27 回放（new 变体）的摆法一致。
+		pattern := regexp.MustCompile(`表情包：你可以像群友一样用表情包说话。[^\n]*`)
+		messages := append([]llm.Message(nil), req.Messages...)
+		paragraph := ""
+		for index := range messages {
+			if messages[index].Role != llm.RoleSystem {
+				continue
+			}
+			if found := pattern.FindString(messages[index].Content); found != "" && paragraph == "" {
+				paragraph = found
+				messages[index].Content = strings.Replace(messages[index].Content, found, "", 1)
+			}
+		}
+		if paragraph != "" {
+			messages[0].Content += "\n" + paragraph
+		}
+		req.Messages = messages
+		return req
+	case "no_emoji_ban":
+		// 去掉「不要用 emoji」那条：怀疑 gpt 把它理解成情绪表达一律克制，连表情包也不配。
+		messages := append([]llm.Message(nil), req.Messages...)
+		for index := range messages {
+			if messages[index].Role == llm.RoleSystem {
+				messages[index].Content = strings.ReplaceAll(messages[index].Content, replyEmojiRule, "")
+			}
+		}
+		req.Messages = messages
+		return req
+	case "scenario_prompt":
+		// 9-27 版写明适合场合的表情包提示词（#874 之前），按 send 协议改写。
+		// 录制时的表情包段落和当前常量不一定逐字相同，按段首认出整行替换。
+		pattern := regexp.MustCompile(`表情包：你可以像群友一样用表情包说话。[^\n]*`)
+		messages := append([]llm.Message(nil), req.Messages...)
+		for index := range messages {
+			if messages[index].Role == llm.RoleSystem {
+				messages[index].Content = pattern.ReplaceAllLiteralString(messages[index].Content, stickerReplayScenarioPrompt)
+			}
+		}
+		req.Messages = messages
+		return req
+	case "sticker_required":
+		// sticker 改成必填、不配填「无」：可选字段 gpt-6.1 几乎不碰，必填逼它每轮想一下。
+		tools := append([]llm.ToolDefinition(nil), req.Tools...)
+		for index := range tools {
+			if tools[index].Name != "send" {
+				continue
+			}
+			parameters := map[string]any{}
+			for key, value := range tools[index].Parameters {
+				parameters[key] = value
+			}
+			properties := map[string]any{}
+			if existing, ok := parameters["properties"].(map[string]any); ok {
+				for key, value := range existing {
+					properties[key] = value
+				}
+			}
+			properties[stickerFinalizeFieldName] = toolStringParam("这句话配不配表情包：想配就填 2～6 个空格分隔的短关键词，如「得意 叉腰」；不配填「无」。有正文时一起发；只回图就 text 留空。配不配由你按聊天判断，挑不到合适的就填「无」。")
+			parameters["properties"] = properties
+			required, _ := parameters["required"].([]any)
+			parameters["required"] = append(append([]any(nil), required...), stickerFinalizeFieldName)
+			tools[index].Parameters = parameters
+		}
+		req.Tools = tools
+		return req
+	case "required":
+		req.ToolChoice = llm.ToolChoiceRequired
+		return req
+	case "plain_hint":
+		messages := append([]llm.Message(nil), req.Messages...)
+		messages[0].Content += "\n" + stickerReplayPlainTextHint
+		req.Messages = messages
+		return req
+	case "legacy_name", "send_desc", "prompt_finish", "send_desc+prompt_finish":
+		return stickerReplaySendVariant(req, variant)
 	}
 	messages := append([]llm.Message(nil), req.Messages...)
 	system := messages[0].Content
@@ -340,6 +485,47 @@ func stickerReplayVariant(req llm.GenerateRequest, variant string) llm.GenerateR
 	return req
 }
 
+const (
+	stickerReplayField0927  = "想在这句回复后面配一张表情包时，填 2 到 6 个空格分隔的短关键词（情绪、动作、场景和同义说法），例如“得意 叉腰”“晚安 摸头”。正文发出后会自动挑一张贴切的跟在后面，挑不到就不发。只在闲聊、接梗、调侃、吐槽、安慰、庆祝、道谢、道晚安这类以情绪为主的接话里填；认真回答问题、做任务时留空。"
+	stickerReplayPrompt0927 = "表情包：群友闲聊、接梗、调侃、吐槽、无语、害羞、委屈、安慰、撒娇、庆祝、道谢、道晚安这类以情绪为主的接话，是配表情包的好时机——send 时在 sticker 里填几个关键词，正文发出后会自动跟一张贴切的，挑不到就不发。不必每次都配，大约每三四次这类接话用一次；认真的提问、求助、任务、长解释，以及严肃、难过到需要认真回应的话题不填。有人点名要表情包时用 sticker 工具亲自挑一张。"
+)
+
+const stickerReplayScenarioPrompt = "表情包：群友闲聊、接梗、调侃、吐槽、无语、害羞、委屈、安慰、撒娇、庆祝、道谢、道晚安这类以情绪为主的接话，是配表情包的好时机——send 时在 sticker 里填几个关键词，自动配一张贴切的。一张图就够表达、不必再说话时（互道晚安、斗图、被夸），text 留空、只填 sticker，就只回一张表情包。挑不到就不发。不必每次都配，大约每三四次这类接话用一次；认真的提问、求助、任务、长解释，以及严肃、难过到需要认真回应的话题不填。表情包发出去就算说完了，之后别回头描述或解释自己发的是哪张、什么意思。有人点名要表情包时用 sticker 工具亲自挑一张。表情包只通过 sticker 发，正文里不要写（doge）、[狗头] 这类文字版表情代替。"
+
+const (
+	stickerReplayPlainTextRepair = "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
+	stickerReplayPlainTextHint   = "直接写纯文本也会作为回复发出，但纯文本带不了表情包：想配表情包时用 send，把关键词填进 sticker。"
+)
+
+// stickerReplaySendVariant 是 #1223 之后表情包触发率暴跌的对照：legacy_name 只把
+// send 改回 agent_finalize 和旧说明，验证是不是工具名和「发消息」的定位让模型不再
+// 顺手填 sticker；其余是候选修法。
+func stickerReplaySendVariant(req llm.GenerateRequest, variant string) llm.GenerateRequest {
+	const legacyDescription = "提交最终答复。"
+	const sendHint = "本轮最后一次 send 是收尾：适合时顺手在 sticker 里配一张表情包。"
+	tools := append([]llm.ToolDefinition(nil), req.Tools...)
+	for index := range tools {
+		if tools[index].Name != "send" {
+			continue
+		}
+		switch variant {
+		case "legacy_name":
+			tools[index].Name = "agent_finalize"
+			tools[index].Description = legacyDescription + tools[index].Description[strings.Index(tools[index].Description, "联网调研"):]
+		case "send_desc", "send_desc+prompt_finish":
+			tools[index].Description = sendHint + tools[index].Description
+		}
+	}
+	req.Tools = tools
+	if strings.Contains(variant, "prompt_finish") {
+		messages := append([]llm.Message(nil), req.Messages...)
+		messages[0].Content = strings.Replace(messages[0].Content, "send 时在 sticker 里填几个关键词，就会配一张贴切的；",
+			"收尾那次 send 上有个 sticker 字段，填几个关键词就会配一张贴切的；接梗、调侃、吐槽、得意、安慰这类带情绪的接话，先想想要不要配一张；", 1)
+		req.Messages = messages
+	}
+	return req
+}
+
 func stickerReplayTriggered(response *llm.GenerateResponse) (bool, string) {
 	var calls []string
 	triggered := false
@@ -349,8 +535,8 @@ func stickerReplayTriggered(response *llm.GenerateResponse) (bool, string) {
 		switch call.Name {
 		case dianaStickerToolName:
 			triggered = true
-		case "send":
-			if keywords, _ := call.Arguments[stickerFinalizeFieldName].(string); strings.TrimSpace(keywords) != "" {
+		case "send", "agent_finalize":
+			if keywords, _ := call.Arguments[stickerFinalizeFieldName].(string); strings.TrimSpace(keywords) != "" && strings.TrimSpace(keywords) != "无" {
 				triggered = true
 			}
 		case agent.ToolsLoadToolName, "tools_execute":

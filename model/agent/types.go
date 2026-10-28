@@ -142,6 +142,11 @@ type Config struct {
 	// 表情包）。让模型「多填一个字段」比让它先加载、再调用一个工具容易得多。
 	// 字段集合要在同一个会话里保持稳定：它是工具定义的一部分，变了就打断前缀缓存。
 	FinalizeFields []FinalizeField
+	// RequireToolCall 让每个规划步都要求模型必须调用工具（ToolChoiceRequired）。
+	// 纯文本会被直接当成最终回复（见 plainTextNeedsRepair），可那样 send 上的
+	// FinalizeFields 就没机会填：#1218 之后 swe-2、deepseek-flash 九成回合写纯文本，
+	// 收尾配表情包几乎消失。强制调工具后最后一步只能是 send。
+	RequireToolCall bool
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string

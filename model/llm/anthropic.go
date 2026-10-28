@@ -361,10 +361,13 @@ func anthropicTools(definitions []ToolDefinition) []anthropic.ToolUnionParam {
 }
 
 // anthropicToolChoice 把统一的 ToolChoice 语义翻译成 Anthropic 参数：空值保持
-// auto，指定工具名时强制本轮只调用该工具。
+// auto，指定工具名时强制本轮只调用该工具，ToolChoiceRequired 要求必须调用某个工具。
 func anthropicToolChoice(req GenerateRequest) anthropic.ToolChoiceUnionParam {
 	if len(req.Tools) == 0 {
 		return anthropic.ToolChoiceUnionParam{}
+	}
+	if strings.TrimSpace(req.ToolChoice) == ToolChoiceRequired {
+		return anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{DisableParallelToolUse: param.NewOpt(true)}}
 	}
 	if name := strings.TrimSpace(req.ToolChoice); name != "" {
 		return anthropic.ToolChoiceUnionParam{OfTool: &anthropic.ToolChoiceToolParam{

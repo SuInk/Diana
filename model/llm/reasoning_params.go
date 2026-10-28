@@ -102,7 +102,7 @@ func anthropicThinkingBudget(effort string, maxTokens int64) int64 {
 	return budget
 }
 
-// applyAnthropicReasoning 把思考强度写进请求参数。强制调用指定工具时 Anthropic 不许
+// applyAnthropicReasoning 把思考强度写进请求参数。强制调用工具（指定或任意）时 Anthropic 不许
 // 开思考，这时只调 effort、不动 thinking。开了预算式思考的老模型不接受改过的
 // temperature，一并去掉。
 func applyAnthropicReasoning(params *anthropic.MessageNewParams, req GenerateRequest) {
@@ -110,7 +110,7 @@ func applyAnthropicReasoning(params *anthropic.MessageNewParams, req GenerateReq
 	if effort == "" {
 		return
 	}
-	forcedTool := params.ToolChoice.OfTool != nil
+	forcedTool := params.ToolChoice.OfTool != nil || params.ToolChoice.OfAny != nil
 	model := string(params.Model)
 	switch anthropicFamilyOf(model) {
 	case anthropicFamilyLegacy:

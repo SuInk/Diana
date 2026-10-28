@@ -23,6 +23,7 @@ func TestApplyAnthropicReasoning(t *testing.T) {
 		effort     string
 		maxTokens  int64
 		forcedTool bool
+		anyTool    bool
 		wantThink  string // "", adaptive, disabled, enabled:<budget>
 		wantEffort anthropic.OutputConfigEffort
 		keepTemp   bool
@@ -31,6 +32,7 @@ func TestApplyAnthropicReasoning(t *testing.T) {
 		{name: "current medium", model: "claude-opus-4-8", effort: "medium", maxTokens: 16000, wantThink: "adaptive", wantEffort: "medium", keepTemp: true},
 		{name: "current none disables", model: "claude-sonnet-5", effort: "none", maxTokens: 16000, wantThink: "disabled", keepTemp: true},
 		{name: "current forced tool keeps effort only", model: "claude-opus-5", effort: "high", maxTokens: 16000, forcedTool: true, wantEffort: "high", keepTemp: true},
+		{name: "current any tool keeps effort only", model: "claude-opus-5", effort: "high", maxTokens: 16000, anyTool: true, wantEffort: "high", keepTemp: true},
 		{name: "4.6 has no xhigh", model: "claude-opus-4-6", effort: "xhigh", maxTokens: 16000, wantThink: "adaptive", wantEffort: "high", keepTemp: true},
 		{name: "minimal and ultra fold", model: "us.anthropic.claude-opus-4-7", effort: "ultra", maxTokens: 16000, wantThink: "adaptive", wantEffort: "max", keepTemp: true},
 		{name: "always thinking none goes low", model: "claude-fable-5-1", effort: "none", maxTokens: 16000, wantEffort: "low", keepTemp: true},
@@ -45,6 +47,9 @@ func TestApplyAnthropicReasoning(t *testing.T) {
 			params := anthropic.MessageNewParams{Model: anthropic.Model(tc.model), MaxTokens: tc.maxTokens, Temperature: param.NewOpt(0.3)}
 			if tc.forcedTool {
 				params.ToolChoice = anthropic.ToolChoiceUnionParam{OfTool: &anthropic.ToolChoiceToolParam{Name: "lookup"}}
+			}
+			if tc.anyTool {
+				params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
 			}
 			applyAnthropicReasoning(&params, GenerateRequest{ReasoningEffort: tc.effort})
 			got := ""
