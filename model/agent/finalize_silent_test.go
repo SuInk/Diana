@@ -216,7 +216,8 @@ func TestSilentFinalizeRefusedWhileImageTaskPending(t *testing.T) {
 	}
 }
 
-// 工具定义和 Agent 系统消息都要讲清楚这条出路：空 send 就是不说话。
+// 工具定义和 Agent 系统消息都要讲清楚这条出路：send silent=true 就是不说话。只留
+// 空 text、不给 silent 和理由时，线上主动接话的静默涨了约十倍。
 func TestFinalizeToolDefinitionIsSend(t *testing.T) {
 	definition := finalizeToolDefinition(false)
 	properties, ok := definition.Parameters["properties"].(map[string]any)
@@ -226,9 +227,12 @@ func TestFinalizeToolDefinitionIsSend(t *testing.T) {
 	if definition.Name != "send" {
 		t.Fatalf("name = %q", definition.Name)
 	}
-	for _, gone := range []string{"silent", "silent_reason", "content"} {
-		if _, ok := properties[gone]; ok {
-			t.Fatalf("send still declares %s: %#v", gone, properties)
+	if _, ok := properties["content"]; ok {
+		t.Fatalf("send still declares the legacy content field: %#v", properties)
+	}
+	for _, want := range []string{"silent", "silent_reason"} {
+		if _, ok := properties[want]; !ok {
+			t.Fatalf("send must declare %s: %#v", want, properties)
 		}
 	}
 	required := map[string]bool{}
@@ -246,7 +250,7 @@ func TestAgentSystemMessageExplainsSilentFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	message := runner.systemPrompt()
-	for _, want := range []string{"最后一步必须是 send", "text 留空", "不是拒答"} {
+	for _, want := range []string{"最后一步必须是 send", "silent=true", "text 留空", "不是拒答"} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("agent system message missing %q:\n%s", want, message)
 		}

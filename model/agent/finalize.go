@@ -13,12 +13,17 @@ import (
 
 // finalizeToolName 是模型说话的唯一出口。一步里只有 send 时这几条就是本轮的
 // 回复，本轮结束；和别的工具同一步发来时，它是动手前那句「我去查一下」，立刻发出、
-// 本轮继续（Config.Interim）。正文留空就是这一轮不说话。
+// 本轮继续（Config.Interim）。silent=true、正文留空就是这一轮不说话。
 //
 // 以前说话分成 say（中途一句）和 agent_finalize（收尾，带 silent/silent_reason）。
 // 10-27 用 gpt-6.1-sol 回放 36 条生产首步：把收尾改成「纯文本即结束、只有静默才调
 // agent_finalize」时静默从 3 翻到 6——提示词把「静默」单独摆出来，模型一调收尾工具
 // 就倾向于选它；合成一个 send、空正文即静默后是 2 对 1，工具调用 11 对 14。
+//
+// 合并时一并删掉了 silent/silent_reason，「不说话」只剩留空 text 这一步。上线后
+// 模型自选静默从 0.9% 涨到 8%～10%，几乎全是主动接话；把 silent 和一句理由加回来，
+// 再配合续接历史里把上一轮的回复记成普通发言（见 transcriptAfter），回放里同一批
+// 线上静默样本从 16～19/21 降到 10/23，正常回复的样本没有一条转成静默。
 const finalizeToolName = "send"
 
 // legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
@@ -74,7 +79,9 @@ func sendText(call llm.ToolCall) string {
 // （#912）；「拒绝要说出来」防把拒答伪装成不说话（8c693bbd）。
 func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
-		"text": toolStringParam("正文，按会话要求附链接；勿写JSON。这一轮不说话就留空，拒绝要说出来"),
+		"text":          toolStringParam("正文，按会话要求附链接；勿写JSON。拒绝要说出来"),
+		"silent":        toolBoolParam("true 则本轮不发消息、text 留空。仅无话可说或已道别时用，拒绝要说出来"),
+		"silent_reason": toolStringParam("不回复的原因，只进日志"),
 	}
 	required := []string{"text"}
 	// Runtime guards enforce conditional requirements without mutating schemas.
@@ -99,7 +106,8 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
 
 // finalizeAction 把一步里的 send 调用合成内部的 final 动作：几次 send 各成一条消息，
-// 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话。调用里根本没有
+// 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话：silent=true
+// 是正路，只留空 text 没填 silent 的也照样按不说话处理。调用里根本没有
 // text 键时用调用之外的文本——供应商在同一轮里既输出正文又调用工具时就是这个形态。
 func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}

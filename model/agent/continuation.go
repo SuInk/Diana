@@ -63,6 +63,12 @@ func continuationMessages(continuation *Continuation, volatile []llm.Message) ([
 
 // transcriptAfter 是下一轮的前缀：这一轮最后一次实际发出的请求，接上模型的回复；
 // 回复里的每个工具调用都配一条结果，否则供应商会拒绝不成对的调用。
+//
+// 只调了 send 的收尾例外：每次 send 记成一条普通 assistant 发言，不说话的一轮什么
+// 都不记。原样留下 send 调用和「已发送」时，模型到下一轮会把它读成这一轮刚说过，
+// 新消息明明没人接也判「刚才已经回应过」而静默；回放里把它还原成普通发言，同一批
+// 线上静默样本从 16/21 降到 9～11/21。缓存不受影响：gpt 只在上一次完整请求的末尾
+// 复用，模型的回复本来就在断点之后。
 func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse, text string) []llm.Message {
 	if len(request.Messages) == 0 {
 		return nil
@@ -73,6 +79,14 @@ func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse
 		transcript[index].CacheBreakpoint = false
 	}
 	if response == nil {
+		return transcript
+	}
+	if onlySendCalls(response.ToolCalls) {
+		for _, call := range response.ToolCalls {
+			if body := sendText(call); body != "" {
+				transcript = append(transcript, llm.Message{Role: llm.RoleAssistant, Content: body})
+			}
+		}
 		return transcript
 	}
 	assistant := llm.Message{

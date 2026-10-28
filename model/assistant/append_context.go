@@ -320,7 +320,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		switch {
 		case isHistoryLine(content):
 		case message.Role == llm.RoleAssistant && log.sent[strings.TrimSpace(content)]:
-			// 机器人自己的回复已经以 send 调用的形式在记录里了。
+			// 机器人自己的回复已经在记录里了（普通发言，或老记录里的 send 调用）。
 			continue
 		case message.Role == llm.RoleAssistant:
 		default:

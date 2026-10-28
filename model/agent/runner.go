@@ -653,7 +653,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				reason := "收尾没有携带任何正文"
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 				messages = appendAssistantEcho(messages, lastText)
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请用 send 把给用户看的完整回复写进 text；这一轮不说话就 send 空正文。"})
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: reason + "。请用 send 把给用户看的完整回复写进 text；这一轮不说话就 send silent=true。"})
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -1392,7 +1392,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	if r.cfg.Interim != nil {
 		// 中途说一句：send 和其他工具同一步调用，把「说」和「结束」分开。上面那条禁止
 		// 未执行承诺的规则管的是最终答复；这句发的是「正在做」，说完必须接着做。
-		rules = append(rules, "- 要先查、先做几步才能回答时，可以在调用工具的同一步里 send 一句正在做什么（比如「我去查一下」），这句立刻发出、本轮继续；长任务每完成一个阶段可以再这样报一句进度。说了「去做」就必须真的调用工具。中途这句不是分条发答案用的，一轮最多 3 次、每次一句短话；对方已经看到的话最后不要重复，全都说完了就 send 空正文。")
+		rules = append(rules, "- 要先查、先做几步才能回答时，可以在调用工具的同一步里 send 一句正在做什么（比如「我去查一下」），这句立刻发出、本轮继续；长任务每完成一个阶段可以再这样报一句进度。说了「去做」就必须真的调用工具。中途这句不是分条发答案用的，一轮最多 3 次、每次一句短话；对方已经看到的话最后不要重复，全都说完了就 send silent=true。")
 	}
 	// 线上出过：主人让把生成的图存进工作目录，模型手里只有 write_file，就存了一份
 	// 文字描述，然后在没有任何成功调用的情况下回了一句「存好了」。
@@ -1483,7 +1483,7 @@ func (r *Runner) systemPrompt() string {
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
 		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
 		"本轮最后一步必须是 send：只调 send 就把消息发出并结束本轮，给用户看的完整正文写进 text，task_state 等元数据按需一并携带，正文不要写成 JSON。工具调用旁边写的正文不会发给任何人。",
-		"这一轮确实不需要说话时，send 的 text 留空，本轮就不发任何消息。它不是拒答：要拒绝就正常把话说出来。",
+		"这一轮确实不需要说话时，send 填 silent=true、text 留空，本轮就不发任何消息，silent_reason 写一句原因。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
 	}
 	if hasAnyTool(webSearchToolName, "browser_render", "browser_open") {

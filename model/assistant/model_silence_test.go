@@ -302,7 +302,7 @@ func TestDescribeEventOutcomeExplainsModelSilence(t *testing.T) {
 	if decision != "not_replied" || handled {
 		t.Fatalf("decision=%q handled=%v", decision, handled)
 	}
-	if !strings.Contains(reason, "send 正文为空") {
+	if !strings.Contains(reason, "send 的 silent") {
 		t.Fatalf("reason = %q", reason)
 	}
 }

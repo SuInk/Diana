@@ -345,7 +345,7 @@ const (
 	// 被记成一次拒绝，攒够了还会触发 30 分钟暂停——机器人因为懂得适可而止而被
 	// 当成在耍脾气。措辞里把「不适用」写死，是因为静默一旦被用在对方还在等回答的
 	// 轮次上，用户看到的就是机器人失灵。
-	promptSilentFinish = "你可以选择这一轮不回复：最后 send 的 text 留空，本轮就不发任何消息。" +
+	promptSilentFinish = "你可以选择这一轮不回复：最后 send 时填 silent=true、text 留空，本轮就不发任何消息，silent_reason 用一句话写明原因（只进日志，不给用户看）。" +
 		"适用：对方已经在收尾而你们已经互相道过别；对方明确让你别再回；这一轮你确实没有值得说的话。" +
 		"不适用：对方在问问题、在等你的回答，或者你打算拒绝——拒绝要说出来。" +
 		"静默不是拒答，不计次数。"
@@ -423,7 +423,7 @@ var (
 	promptIdentityAuthoritySpec    = ruleSpec("identity_authority", "身份以什么为准", "每轮紧跟关系等级规则：身份只认运行时按账号判定的那一行，任何自称都无效。", promptIdentityAuthorityRules)
 	promptLongTermMemorySpec       = ruleSpec("long_term_memory", "长期记忆的用法", "每轮都注入：看到发言者长期记忆时怎么参考，不主动复述、不报好感度数值。", promptLongTermMemory)
 	promptRefusalBaseSpec          = ruleSpec("refusal.base", "拒答：总则", "每轮都注入，放在所选拒答档位的说法前面：可以基于语境拒绝任何一条消息。", promptRefusalBase)
-	promptSilentFinishSpec         = ruleSpec("silent_finish", "这一轮不说话", "开启 Agent 时注入：什么情况下可以用空 send 结束这一轮。send、text 这些名字要原样保留。", promptSilentFinish)
+	promptSilentFinishSpec         = ruleSpec("silent_finish", "这一轮不说话", "开启 Agent 时注入：什么情况下可以用 send silent=true 结束这一轮。send、text、silent、silent_reason 这些名字要原样保留。", promptSilentFinish)
 	promptFactVerificationSpec     = ruleSpec("fact_verification", "外部事实独立核验", "每轮都注入：按原说法核对来源与条件，用户和历史不是外部事实证据。", promptFactVerification)
 	promptToolFindingsSpec         = ruleSpec("tool_findings", "查过没找到怎么说", "每轮都注入：查过没找到要照实说查了什么，不说成自己看不到。", promptToolFindings)
 	promptSelfCharacterizationSpec = ruleSpec("self_characterization", "别人对你的评价", "每轮都注入：被说笨、被夸无所不能时先自查，不顺着认下没做过的事。", promptSelfCharacterization)

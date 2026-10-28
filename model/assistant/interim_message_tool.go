@@ -93,7 +93,7 @@ func (t *dianaInterimMessageTool) Description() string {
 	// 模型 say 完「我去查」就直接收尾，或把工具调用旁的正文当成已发出。
 	return fmt.Sprintf(`立刻发一句话且本轮不结束，用于动手前说「我去查一下」或长任务报进度。`+
 		`说了去做就必须接着调工具真的做，不能说完就收工。不用来拆分答案：每轮最多 %d 次，每次≤%d 字。`+
-		`说过的话最后不要重复，都说完就 send 空正文。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
+		`说过的话最后不要重复，都说完就 send silent=true。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
 }
 
 func (t *dianaInterimMessageTool) InputSchema() map[string]any {
@@ -152,7 +152,7 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 		OK:        true,
 		Sent:      text,
 		Remaining: remaining,
-		Message:   "已经发出去了，对方看得到。接着调用工具把事情做完；最后单独 send 还没说过的内容，都说完了就 send 空正文。",
+		Message:   "已经发出去了，对方看得到。接着调用工具把事情做完；最后单独 send 还没说过的内容，都说完了就 send silent=true。",
 	})
 }
 

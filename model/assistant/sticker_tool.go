@@ -206,7 +206,7 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 			return marshalStickerResult(stickerToolResult{Action: "limited", Message: reason, Query: query})
 		}
 		item := stickerSearchItems([]stickerCandidate{*selected})[0]
-		return marshalStickerResult(stickerToolResult{OK: true, Action: "sent", Message: "表情包已经发出去了，在聊天里排在你收尾的文字前面：收尾别再写「来啦」「接好」「给你」这类预告，要说就接一句承接它的话，没什么要补的就 send 空正文。", Query: query, Sent: &item})
+		return marshalStickerResult(stickerToolResult{OK: true, Action: "sent", Message: "表情包已经发出去了，在聊天里排在你收尾的文字前面：收尾别再写「来啦」「接好」「给你」这类预告，要说就接一句承接它的话，没什么要补的就 send silent=true。", Query: query, Sent: &item})
 	default:
 		return "", fmt.Errorf("operation 必须是 search 或 send")
 	}

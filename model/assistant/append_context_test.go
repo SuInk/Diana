@@ -129,8 +129,10 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 			t.Fatalf("prefix differs at %d:\n got %s: %.200q\nwant %s: %.200q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
 		}
 	}
-	if call := after[len(before)]; call.Role != llm.RoleAssistant || len(call.ToolCalls) != 1 || call.ToolCalls[0].ID != "s1" {
-		t.Fatalf("first reply missing after the prefix: %#v", call)
+	// 上一轮只调 send 的收尾记成普通发言，不留 send 调用和「已发送」：留着的话模型会
+	// 把下一轮读成刚说过，新消息没人接也判「已经回应过」而静默。
+	if reply := after[len(before)]; reply.Role != llm.RoleAssistant || len(reply.ToolCalls) != 0 || reply.Content != "在的" {
+		t.Fatalf("first reply missing after the prefix: %#v", reply)
 	}
 	if !strings.Contains(appendContextText(after[len(after)-1]), "吃了吗") {
 		t.Fatalf("current message is not last: %q", appendContextText(after[len(after)-1]))

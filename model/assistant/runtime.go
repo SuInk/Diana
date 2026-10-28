@@ -297,7 +297,7 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 	case "ignored_bot_message":
 		return "not_replied", "其他机器人消息未被语义判断为提到本机器人，已保持静默", false
 	case "ignored_model_silent":
-		return "not_replied", "模型在这一轮自己选择了不回复（send 正文为空），没有发送任何消息；这不是拒答，也不触发暂停", false
+		return "not_replied", "模型在这一轮自己选择了不回复（send 的 silent，或正文留空），没有发送任何消息；这不是拒答，也不触发暂停", false
 	case "ignored_conversation_closed":
 		return "not_replied", "对方已经在收尾，双方互相道别的次数达到设定上限，这条回复只是又一句告别，没有发送", false
 	case "ignored_stop_requested":

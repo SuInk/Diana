@@ -781,8 +781,8 @@
       "key": "reply.silent_finish",
       "group": "reply_rules",
       "title": "这一轮不说话",
-      "usage": "开启 Agent 时注入：什么情况下可以用空 send 结束这一轮。send、text 这些名字要原样保留。",
-      "default": "你可以选择这一轮不回复：最后 send 的 text 留空，本轮就不发任何消息。适用：对方已经在收尾而你们已经互相道过别；对方明确让你别再回；这一轮你确实没有值得说的话。不适用：对方在问问题、在等你的回答，或者你打算拒绝——拒绝要说出来。静默不是拒答，不计次数。"
+      "usage": "开启 Agent 时注入：什么情况下可以用 send silent=true 结束这一轮。send、text、silent、silent_reason 这些名字要原样保留。",
+      "default": "你可以选择这一轮不回复：最后 send 时填 silent=true、text 留空，本轮就不发任何消息，silent_reason 用一句话写明原因（只进日志，不给用户看）。适用：对方已经在收尾而你们已经互相道过别；对方明确让你别再回；这一轮你确实没有值得说的话。不适用：对方在问问题、在等你的回答，或者你打算拒绝——拒绝要说出来。静默不是拒答，不计次数。"
     },
     {
       "key": "reply.fact_verification",
