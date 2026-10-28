@@ -716,7 +716,7 @@ func (r *Runtime) platformInterfaceBuiltinSkills(event MessageEvent) []agent.Ski
 	}
 	return []agent.SkillMetadata{{
 		Name:             "platform",
-		Description:      "Read group info and members, recall the bot's own recent messages, and let the bot owner and group admins moderate (mute, kick, announcements, essence, card/title, whole-group mute, recalling members' messages, group name, invite links, appointing admins) when the bot is a group admin; the bot owner can also make the bot leave a group or list its friends.",
+		Description:      "Read group info and members, recall the bot's own messages, and let the owner and group admins moderate (mute, kick, notices, essence, card/title, group name, invite links, admins) when the bot is a group admin; the owner can also leave groups or list friends.",
 		ShortDescription: "跨平台群资料读取、撤回自己发出的消息与主人及群管理员的群管",
 		Path:             "builtin://platform/SKILL.md",
 		Source:           platformInterfaceSkillSource,
