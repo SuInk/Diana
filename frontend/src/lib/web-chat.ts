@@ -21,6 +21,7 @@ export interface WebChatInfo {
   bot_name: string;
   platform: string;
   problem?: string;
+  owner_avatar_url?: string;
 }
 
 export type WebChatFrame =

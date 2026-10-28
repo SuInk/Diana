@@ -58,6 +58,7 @@ func (h *BotHandler) webChatHistory(c *gin.Context) {
 	}
 	profile := strings.TrimSpace(c.Query("profile"))
 	info := runtime.WebChatInfo(profile)
+	info.OwnerAvatarURL = h.consoleProfileAvatarURL(info.BotID, info.OwnerUserID)
 	messages := []assistant.WebChatMessage{}
 	if info.Problem == "" {
 		history, err := runtime.WebChatHistory(c.Request.Context(), profile, 0)

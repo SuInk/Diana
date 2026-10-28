@@ -44,6 +44,9 @@ type WebChatInfo struct {
 	Platform string `json:"platform"`
 	// Problem 非空时聊不了，内容是原因。
 	Problem string `json:"problem,omitempty"`
+	// OwnerAvatarURL 是主人账号的头像，由控制台按 OwnerUserID 拼好；没填主人时为空。
+	OwnerAvatarURL string `json:"owner_avatar_url,omitempty"`
+	OwnerUserID    string `json:"-"`
 }
 
 type webChatSinkKey struct{}
@@ -82,10 +85,12 @@ func deliverToWebChat(ctx context.Context, msg OutgoingMessage) (map[string]any,
 
 // WebChatInfo 检查这台机器人能不能在聊天页里聊：存在、没停用就行。
 func (r *Runtime) WebChatInfo(profileID string) WebChatInfo {
-	cfg, _, err := r.ownerChatEvent(profileID)
+	cfg, event, err := r.ownerChatEvent(profileID)
 	info := WebChatInfo{BotID: cfg.ID, BotName: cfg.Name, Platform: cfg.Platform}
 	if err != nil {
 		info.Problem = err.Error()
+	} else if event.UserID != webChatOwnerID && !strings.HasPrefix(event.UserID, "@") {
+		info.OwnerUserID = event.UserID
 	}
 	return info
 }

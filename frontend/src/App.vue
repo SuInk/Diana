@@ -176,7 +176,7 @@
         </div>
       </header>
 
-      <main class="app-content">
+      <main class="app-content" :class="{ 'app-content-fill': fillViews.has(currentView) }">
         <section v-if="scopeReady && !unscopedViews.has(currentView)" class="scope-context" aria-label="当前平台与机器人">
           <div class="scope-identity">
             <span class="badge">{{ scopePlatform }}</span>
@@ -422,6 +422,8 @@ const botProfiles = ref<BotProfileConfig[]>([]);
 // 这几页的内容不分机器人（管理员对话、全局一本的世界书），顶上的作用域条会让人
 // 以为改的是当前那台的，所以不显示。
 const unscopedViews = new Set<ViewID>(["admin-chat", "chat", "world-book"]);
+// 这两页自己占满一屏、输入框贴底，内容区底部不再留白，否则高度对不上会多出滚动条。
+const fillViews = new Set<ViewID>(["admin-chat", "chat"]);
 const scopeProfile = computed(() => botProfiles.value.find((profile) => profile.id === botScope.value));
 const scopePlatform = computed(() => {
   const platform = scopeProfile.value?.platform;

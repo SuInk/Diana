@@ -494,3 +494,57 @@ func TestAdminChatNewConversationsRespectCapacityAndActiveSessions(t *testing.T)
 		t.Fatal("idle eviction removed active conversation")
 	}
 }
+
+func TestAdminChatGroupHistoryResolvesGroupNames(t *testing.T) {
+	_, h, _, _ := newAdminChatTest(t, nil)
+	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "names.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	h.SetSQLiteStore(db)
+	ctx := context.Background()
+	// OneBot 群消息事件不带群名，名字只能从群列表或群名缓存补。
+	for i, group := range []string{"10001", "10002", "10003"} {
+		e := assistant.MessageEvent{Kind: assistant.EventKindGroup, ProfileID: "bot", GroupID: group, MessageID: fmt.Sprint(i), Time: time.Now().Unix(), UserID: "member", RawMessage: "你好"}
+		if err := db.AppendMessageEvent(ctx, "bot:group:"+group, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.groupNameCache = map[string]groupNameCacheEntry{
+		"bot\x0010001":   {name: "Diana种子用户", fetchedAt: time.Now()},
+		"bot\x0010002":   {name: "Diana 开发群", fetchedAt: time.Now()},
+		"bot\x0010003":   {name: "Diana 开发二群", fetchedAt: time.Now()},
+		"other\x0010004": {name: "别的机器人的群", fetchedAt: time.Now()},
+	}
+	tool := &adminGroupHistoryTool{handler: h, profile: "bot", redact: h.adminChatRedactor()}
+	var page struct {
+		GroupID string                             `json:"group_id"`
+		Items   []storage.AdminGroupHistoryMessage `json:"items"`
+	}
+	output, err := tool.Run(ctx, map[string]any{"group_name": "种子用户"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(output), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.GroupID != "10001" || len(page.Items) != 1 || page.Items[0].GroupName != "Diana种子用户" {
+		t.Fatalf("group name not resolved: %s", output)
+	}
+	output, err = tool.Run(ctx, map[string]any{})
+	if err != nil || json.Unmarshal([]byte(output), &page) != nil || len(page.Items) != 3 {
+		t.Fatalf("listing failed: %v %s", err, output)
+	}
+	for _, item := range page.Items {
+		if item.GroupName == "" {
+			t.Fatalf("group name missing: %s", output)
+		}
+	}
+	if _, err := tool.Run(ctx, map[string]any{"group_name": "开发"}); err == nil || !strings.Contains(err.Error(), "10002") || !strings.Contains(err.Error(), "10003") {
+		t.Fatalf("ambiguous name should list candidates: %v", err)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"group_name": "别的机器人"}); err == nil {
+		t.Fatal("matched a group outside the selected bot")
+	}
+}

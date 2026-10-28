@@ -58,7 +58,10 @@
                 <div v-if="message.text" class="qq-bubble">{{ message.text }}</div>
                 <a v-for="image in message.images ?? []" :key="image" class="qq-image" :href="image" target="_blank" rel="noopener noreferrer"><img :src="image" alt="图片" loading="lazy" /></a>
               </div>
-              <span v-if="message.role === 'user'" class="qq-self" aria-hidden="true">我</span>
+              <template v-if="message.role === 'user'">
+                <BotAvatar v-if="info?.owner_avatar_url" class="qq-self-avatar" name="我" :src="info.owner_avatar_url" :size="38" aria-hidden="true" />
+                <span v-else class="qq-self" aria-hidden="true">我</span>
+              </template>
               <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
               <button v-else-if="message.failed" class="qq-state err" type="button" aria-label="重新发送" title="重新发送" @click="resend(message)"><CircleAlert :size="16" aria-hidden="true" /></button>
             </article>
@@ -317,7 +320,7 @@ onBeforeUnmount(() => {
 .qq-chat {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  height: calc(100dvh - 148px);
+  height: calc(100dvh - 86px);
   min-height: 420px;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -773,7 +776,7 @@ onBeforeUnmount(() => {
 @media (max-width: 720px) {
   .qq-chat {
     grid-template-columns: minmax(0, 1fr);
-    height: calc(100dvh - 132px);
+    height: calc(100dvh - 90px);
     border-radius: 12px;
   }
 

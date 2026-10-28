@@ -222,6 +222,10 @@ code {
   padding: 14px clamp(16px, 3vw, 32px) 64px;
 }
 
+.app-content.app-content-fill {
+  padding-bottom: 0;
+}
+
 .scope-context {
   position: relative;
   display: flex;
