@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -114,6 +115,10 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			}
 		}
 		if len(requests) == 0 {
+			if segment.Type == "image" && appendQQEmojiCDNSource(data) {
+				out[index].Data = data
+				continue
+			}
 			if segment.Type == "image" {
 				failures = append(failures, fmt.Errorf("message %s image %d: OneBot get_image has no file token", firstNonEmpty(event.MessageID, "unknown"), index+1))
 			}
@@ -129,6 +134,7 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
 		var resolutionErrors []error
 		resolvedImageSource := false
+		sourcesBefore := resolvedImageSourceCount(data)
 		directImageToken := ""
 		for _, request := range requests {
 			response, err := r.callOneBotAPIForEvent(callCtx, event, request.action, request.params)
@@ -189,6 +195,10 @@ func (r *Runtime) enrichMediaSegmentsDetailed(ctx context.Context, event Message
 			}
 		}
 		cancel()
+		if segment.Type == "image" && resolvedImageSourceCount(data) == sourcesBefore && appendQQEmojiCDNSource(data) {
+			// OneBot had nothing new; the emoji CDN is a usable last resort.
+			resolvedImageSource = true
+		}
 		if segment.Type == "image" && !resolvedImageSource {
 			cause := errors.Join(resolutionErrors...)
 			if cause == nil {
@@ -220,6 +230,47 @@ func appendResolvedImageSource(data map[string]string, source, sourceKey string)
 		}
 	}
 	return false
+}
+
+// Store stickers often miss the OneBot media cache ("image not found in cache"),
+// yet their emoji_id maps to a static preview on QQ's sticker CDN.
+var qqEmojiIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+func qqEmojiID(data map[string]string) string {
+	if id := strings.ToLower(strings.TrimSpace(data["emoji_id"])); qqEmojiIDPattern.MatchString(id) {
+		return id
+	}
+	// Some clients omit emoji_id but name the file "<id[:2]>-<id>.gif". A bare
+	// hex name is an ordinary image's MD5 and must not be guessed into a URL.
+	name := strings.ToLower(strings.TrimSpace(data["file"]))
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	prefix, id, ok := strings.Cut(name, "-")
+	if ok && qqEmojiIDPattern.MatchString(id) && prefix == id[:2] {
+		return id
+	}
+	return ""
+}
+
+func qqEmojiCDNURL(data map[string]string) string {
+	id := qqEmojiID(data)
+	if id == "" {
+		return ""
+	}
+	// raw300.gif 404s for current store packs; 200x200.png is what the CDN serves.
+	return "https://gxh.vip.qq.com/club/item/parcel/item/" + id[:2] + "/" + id + "/200x200.png"
+}
+
+func appendQQEmojiCDNSource(data map[string]string) bool {
+	source := qqEmojiCDNURL(data)
+	if source == "" {
+		return false
+	}
+	for index := 1; index <= 8; index++ {
+		if data[fmt.Sprintf("%s%d", imageResolvedSourceKey, index)] == source {
+			return false
+		}
+	}
+	return appendResolvedImageSource(data, source, "")
 }
 
 func resolvedImageSourceCount(data map[string]string) int {
