@@ -60,9 +60,14 @@ func TestTTSToolFollowsSpeechSlotAndPlatform(t *testing.T) {
 	if settings.SendMode != voiceTTSSendModeOnDemand || settings.MaxChars != defaultVoiceTTSMaxChars {
 		t.Fatalf("settings = %#v", settings)
 	}
-	// QQ 语音只有 OneBot 发得出去。
-	if _, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate, Platform: PlatformTelegram}); ok {
-		t.Fatal("tts tool must not be offered on Telegram")
+	// OneBot、Telegram、QQ 官方都发得出语音；其他平台没有发语音的通道。
+	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial} {
+		if _, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate, Platform: platform}); !ok {
+			t.Fatalf("tts tool should be offered on %s", platform)
+		}
+	}
+	if _, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate, Platform: PlatformFeishu}); ok {
+		t.Fatal("tts tool must not be offered where voice cannot be sent")
 	}
 }
 

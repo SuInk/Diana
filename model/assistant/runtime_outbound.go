@@ -146,7 +146,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	msg = routeOutgoingToEvent(event, msg)
 	msg = maskOutgoingSecrets(msg)
 	var audioErr error
-	msg, audioErr = r.prepareTelegramAudio(msg)
+	msg, audioErr = r.prepareChannelAudio(msg)
 	if audioErr != nil {
 		return nil, audioErr
 	}

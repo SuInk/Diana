@@ -32,6 +32,18 @@ const (
 
 var ownerBindCommandPattern = regexp.MustCompile(`^/?绑定主人$`)
 
+// qqNumberPattern 认 QQ 号：QQ 官方机器人收到的发送者是 openid（32 位十六进制，带字母），
+// 主人字段里是纯数字的 QQ 号时永远对不上人。
+var qqNumberPattern = regexp.MustCompile(`^[0-9]{5,12}$`)
+
+// qqOfficialOwnerBound 判断 QQ 官方机器人的主人是不是已经绑到 openid 上。照着 OneBot
+// 机器人的习惯填了 QQ 号的不算：主人专用的工具（工作目录、发文件）会一直挂不上，
+// 也收不到绑定提醒、发「绑定主人」没反应，只能在这里放过去让他重新绑。
+func qqOfficialOwnerBound(ownerID string) bool {
+	ownerID = strings.TrimSpace(ownerID)
+	return ownerID != "" && !qqNumberPattern.MatchString(ownerID)
+}
+
 // OwnerIDSaver 只落盘一台机器人的主人字段，绑定时用。
 type OwnerIDSaver interface {
 	SaveOwnerID(profileID, ownerID string) error
@@ -78,7 +90,7 @@ func (r *Runtime) handleOwnerBind(ctx context.Context, event MessageEvent) bool 
 	}
 	profileID := r.eventProfileID(event)
 	cfg := r.profileConfig(profileID)
-	if !ownerBindSupported(cfg) || strings.TrimSpace(cfg.OwnerID) != "" {
+	if !ownerBindSupported(cfg) || qqOfficialOwnerBound(cfg.OwnerID) {
 		return false
 	}
 	text := strings.TrimSpace(PlainText(event.Segments))
@@ -162,7 +174,7 @@ func (r *Runtime) BindOwnerByCode(profileID, code string) (string, error) {
 	if !ownerBindSupported(cfg) {
 		return "", fmt.Errorf("只有 QQ 官方机器人需要绑定主人，其他平台直接填主人账号")
 	}
-	if strings.TrimSpace(cfg.OwnerID) != "" {
+	if qqOfficialOwnerBound(cfg.OwnerID) {
 		return "", fmt.Errorf("这台机器人已经有主人了，要换人先清空主人并保存")
 	}
 	if saver == nil {
@@ -179,7 +191,7 @@ func (r *Runtime) BindOwnerByCode(profileID, code string) (string, error) {
 		return "", fmt.Errorf("验证码不对或已过期，请给机器人发「绑定主人」重新获取")
 	}
 	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
-		if strings.TrimSpace(profile.OwnerID) != "" {
+		if qqOfficialOwnerBound(profile.OwnerID) {
 			return fmt.Errorf("这台机器人已经有主人了")
 		}
 		profile.OwnerID = pending.userID

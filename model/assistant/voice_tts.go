@@ -66,12 +66,13 @@ func voiceTTSSettingsFromParams(params map[string]string) voiceTTSSettings {
 	return settings
 }
 
-// voiceTTSToolForEvent 取这条消息能用的语音合成工具。只在 OneBot 上发得出 QQ 语音，
-// 其他平台和插槽没配时都没有。
+// voiceTTSToolForEvent 取这条消息能用的语音合成工具。OneBot 直接发 CQ 语音，
+// Telegram 和 QQ 官方在发送前由 prepareChannelAudio 换成音频文件；其他平台发不出
+// 语音，插槽没配时也没有。
 func (r *Runtime) voiceTTSToolForEvent(ctx context.Context, event MessageEvent) (*dianaTTSTool, voiceTTSSettings, bool) {
 	// 通话里回复本来就会被念出来，再挂 tts 工具只会多发一条语音文件；聊天页只显示
 	// 文字和图片，放不了语音文件。
-	if event.webChat || !IsOneBotPlatform(r.currentPlatform(event)) {
+	if event.webChat || !voiceTTSPlatformSupported(r.currentPlatform(event)) {
 		return nil, voiceTTSSettings{}, false
 	}
 	routes := r.mediaSlotRoutes(withModelConfigEvent(ctx, event), mediaSlotTTS)
@@ -79,6 +80,11 @@ func (r *Runtime) voiceTTSToolForEvent(ctx context.Context, event MessageEvent) 
 		return nil, voiceTTSSettings{}, false
 	}
 	return &dianaTTSTool{runtime: r, event: event}, voiceTTSSettingsFromParams(routes[0].Params), true
+}
+
+func voiceTTSPlatformSupported(platform string) bool {
+	platform = NormalizePlatformID(platform)
+	return IsOneBotPlatform(platform) || platform == PlatformTelegram || platform == PlatformQQOfficial
 }
 
 func (t *dianaTTSTool) Name() string {
@@ -118,12 +124,12 @@ func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, e
 	t.runtime.mu.RUnlock()
 	if sharer == nil {
 		_ = os.Remove(path)
-		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给 OneBot v11 客户端")
+		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给聊天渠道")
 	}
 	sharedURL, ok := sharer.Share(path, defaultVoiceTTSMediaTTL)
 	if !ok {
 		_ = os.Remove(path)
-		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给 OneBot v11 客户端")
+		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给聊天渠道")
 	}
 	cleanupLocalMediaFilesLater([]string{path}, defaultVoiceTTSMediaTTL)
 	body, err := json.Marshal(voiceTTSResult{

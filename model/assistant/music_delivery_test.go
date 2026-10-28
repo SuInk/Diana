@@ -109,7 +109,7 @@ func TestTelegramMusicUploadsLocalMediaInsteadOfCQOrInternalURL(t *testing.T) {
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, channel, NewPluginManager(), nil, nil, nil, nil)
 	r.SetLocalMediaSharer(store)
 	msg := OutgoingMessage{Platform: PlatformTelegram, GroupID: "-1001", MessageThreadID: "7", ReplyMessageID: "9", Text: "歌名\n[CQ:record,file=" + escapeCQParameter(shared) + "]"}
-	prepared, err := r.prepareTelegramAudio(msg)
+	prepared, err := r.prepareChannelAudio(msg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestTelegramMusicUploadsLocalMediaInsteadOfCQOrInternalURL(t *testing.T) {
 	}
 	for _, raw := range []string{"[CQ:record,file=/etc/passwd]", "[CQ:record,file=http://host.docker.internal/media/resolver/expired]"} {
 		msg.Text = raw
-		if _, err := r.prepareTelegramAudio(msg); err == nil {
+		if _, err := r.prepareChannelAudio(msg); err == nil {
 			t.Fatal("unregistered audio accepted")
 		}
 		if _, err := channel.SendWithResult(context.Background(), msg); err == nil {
@@ -232,5 +232,38 @@ func TestMusicSilkEncodingPreservesWidebandAtHigherBitrate(t *testing.T) {
 	got, err = plugin.encodeSilkIfConfigured(context.Background(), cfg, path)
 	if err != nil || got != path || calls != 2 {
 		t.Fatal("unconfigured encoder must preserve source")
+	}
+}
+
+// QQ 官方渠道不认 CQ 码：语音合成交来的 [CQ:record] 要在发送前换成本机音频文件，
+// 由渠道走富媒体上传（file_type=3）发成语音条。
+func TestQQOfficialAudioConvertsCQRecordToLocalFile(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "voice.wav")
+	if err := os.WriteFile(file, []byte("RIFFaudio"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := NewLocalMediaStore("http://host.docker.internal:18080/media/resolver")
+	shared, ok := store.Share(file, time.Hour)
+	if !ok {
+		t.Fatal("share failed")
+	}
+	r := NewRuntime(BotConfig{Platform: PlatformQQOfficial}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetLocalMediaSharer(store)
+	msg := OutgoingMessage{Platform: PlatformQQOfficial, UserID: "openid-1", Text: "[CQ:record,file=" + escapeCQParameter(shared) + "]"}
+	prepared, err := r.prepareChannelAudio(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.Text != "" || len(prepared.AudioURLs) != 1 || prepared.AudioURLs[0] != file {
+		t.Fatalf("prepared = %#v", prepared)
+	}
+	msg.Text = "[CQ:record,file=/etc/passwd]"
+	if _, err := r.prepareChannelAudio(msg); err == nil {
+		t.Fatal("unregistered audio accepted")
+	}
+	// OneBot 照旧原样发 CQ 码。
+	onebot := OutgoingMessage{Platform: "onebot-v11", Text: "[CQ:record,file=" + escapeCQParameter(shared) + "]"}
+	if got, _ := r.prepareChannelAudio(onebot); got.Text != onebot.Text || len(got.AudioURLs) != 0 {
+		t.Fatalf("onebot message changed: %#v", got)
 	}
 }

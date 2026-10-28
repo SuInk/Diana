@@ -577,3 +577,27 @@ func markdownContentOf(markdown map[string]any) string {
 	content, _ := markdown["content"].(string)
 	return content
 }
+
+// 语音合成交来的本机音频按 file_type=3 上传，用富媒体消息发成语音条（官方文档：
+// 语音支持 silk/mp3/wav/ogg）。
+func TestQQOfficialSendsVoiceAudio(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	audio := filepath.Join(t.TempDir(), "voice.wav")
+	if err := os.WriteFile(audio, append([]byte("RIFF\x00\x00\x00\x00WAVEfmt "), make([]byte, 4096)...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{UserID: "U", AudioURLs: []string{audio}, ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 || len(api.prepares) != 1 {
+		t.Fatalf("messages = %#v prepares = %#v, want one voice message", api.messages, api.prepares)
+	}
+	if prepare := api.prepares[0]; prepare["file_type"].(float64) != 3 {
+		t.Fatalf("voice prepare = %#v, want file_type 3", prepare)
+	}
+	media, _ := api.messages[0]["media"].(map[string]any)
+	if api.messages[0]["msg_type"].(float64) != 7 || media["file_info"] != "FILEINFO" {
+		t.Fatalf("voice message = %#v", api.messages[0])
+	}
+}

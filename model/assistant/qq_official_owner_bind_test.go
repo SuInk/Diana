@@ -173,3 +173,29 @@ func TestOwnerBindOnlyForQQOfficial(t *testing.T) {
 		t.Fatal("OneBot message consumed")
 	}
 }
+
+// 照着 OneBot 的习惯在主人字段填了 QQ 号：QQ 官方机器人只看得到 openid，永远认不出主人，
+// 主人专用的工具一直挂不上。这种情况要照样提醒，并允许用「绑定主人」换成 openid。
+func TestOwnerBindTreatsQQNumberOwnerAsUnbound(t *testing.T) {
+	ctx := context.Background()
+	saver := &testOwnerIDSaver{}
+	channel := &recordingChannel{}
+	cfg := BotConfig{ID: "qq", Platform: PlatformQQOfficial, Enabled: true, OwnerID: "12345678"}
+	r := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, saver, nil)
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+
+	r.handleOwnerBind(ctx, ownerBindEvent(EventKindPrivate, testOwnerOpenID, "你好"))
+	if sent := channel.sentSnapshot(); len(sent) != 1 || !strings.Contains(sent[0].Text, "绑定主人") {
+		t.Fatalf("QQ-number owner should still get the bind reminder, sent = %+v", sent)
+	}
+	if !r.handleOwnerBind(ctx, ownerBindEvent(EventKindPrivate, testOwnerOpenID, "绑定主人")) {
+		t.Fatal("bind command ignored while owner is a QQ number")
+	}
+	ownerID, err := r.BindOwnerByCode("qq", replyCode(t, channel))
+	if err != nil || ownerID != testOwnerOpenID || saver.owners["qq"] != testOwnerOpenID {
+		t.Fatalf("bind = %q, %v, persisted %q", ownerID, err, saver.owners["qq"])
+	}
+	if !qqOfficialOwnerBound(testOwnerOpenID) || qqOfficialOwnerBound("12345678") || qqOfficialOwnerBound("") {
+		t.Fatal("qqOfficialOwnerBound misjudges owner ids")
+	}
+}
