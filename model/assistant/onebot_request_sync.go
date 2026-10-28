@@ -92,7 +92,7 @@ func (r *Runtime) syncOneBotPendingRequests(ctx context.Context, event MessageEv
 			record := base
 			record.RequestType, record.SubType = "friend", oneBotRequestSubTypeDoubt
 			record.Comment = strings.Join(parts, "；")
-			record.Flag = uid
+			record.Flag = doubtRequestFlag(uid, stringFromAny(item["reqTime"]))
 			save(record)
 		}
 	}
@@ -114,4 +114,18 @@ func oneBotResultItems(data map[string]any) []map[string]any {
 		}
 	}
 	return out
+}
+
+// doubtRequestFlag 把申请时间拼进存储用的句柄。请求表按句柄去重，只用 uid 的话，
+// 同一个人被拒后再申请就会被当成旧记录吞掉；审批时用 doubtRequestUID 拆回 uid。
+func doubtRequestFlag(uid, requestTime string) string {
+	if requestTime = strings.TrimSpace(requestTime); requestTime != "" {
+		return uid + "|" + requestTime
+	}
+	return uid
+}
+
+func doubtRequestUID(flag string) string {
+	uid, _, _ := strings.Cut(flag, "|")
+	return uid
 }

@@ -10,8 +10,21 @@ import (
 	"testing"
 )
 
-// crossPlatformFixture 是一个实例里同时跑 QQ 和 Telegram 两台机器人的运行时。
+// crossPlatformFixture 是一个实例里同时跑 QQ 和 Telegram 两台机器人的运行时，
+// 两台的主人是同一个人：QQ 号 owner 和 Telegram 号 77777 已关联。
 func crossPlatformFixture(t *testing.T) (*Runtime, *moderationTestChannel, *moderationTestChannel) {
+	t.Helper()
+	r, qq, tg := crossPlatformRuntime(t)
+	r.SetIdentityLinkStore(newMemoryIdentityLinkStore())
+	if _, err := r.LinkIdentityAccounts(context.Background(),
+		IdentityAccount{ProfileID: "qq", Platform: PlatformOneBotV11, UserID: "owner"},
+		IdentityAccount{ProfileID: "tg", Platform: PlatformTelegram, UserID: "77777"}); err != nil {
+		t.Fatal(err)
+	}
+	return r, qq, tg
+}
+
+func crossPlatformRuntime(t *testing.T) (*Runtime, *moderationTestChannel, *moderationTestChannel) {
 	t.Helper()
 	qq := newModerationTestChannel("owner")
 	tg := newModerationTestChannel("administrator")
@@ -144,5 +157,35 @@ func TestResolvePrivateDeliveryOnlyBorrowsSameProfileGroup(t *testing.T) {
 	delivered, _ := r.resolvePrivateDelivery(context.Background(), source, target)
 	if delivered.tempSessionGroupID != "" {
 		t.Fatalf("borrowed cross-profile group %q", delivered.tempSessionGroupID)
+	}
+}
+
+// 一个实例里两台机器人各有各的主人：QQ 的主人不能借 profile_id 动 Telegram 那台。
+func TestCrossBotOperationsRequireTargetOwnership(t *testing.T) {
+	r, _, tg := crossPlatformRuntime(t)
+	r.SetIdentityLinkStore(newMemoryIdentityLinkStore())
+	owner := qqOwnerPrivateEvent()
+
+	crossTool := newDianaCrossPlatformTool(r, owner)
+	for _, input := range []map[string]any{
+		{"operation": "send", "profile_id": "tg", "group_id": "-1001", "message": "x"},
+		{"operation": "recent", "profile_id": "tg", "user_id": "31415"},
+		{"operation": "groups", "profile_id": "tg"},
+	} {
+		if _, err := crossTool.Run(context.Background(), input); err == nil || !strings.Contains(err.Error(), "不是机器人 tg 的主人") {
+			t.Fatalf("%v error = %v", input["operation"], err)
+		}
+	}
+	platformTool := newDianaPlatformTool(context.Background(), r, owner)
+	if _, err := platformTool.Run(context.Background(), map[string]any{"operation": "mute", "profile_id": "tg", "group_id": "-1001", "user_id": "31415", "duration": 60}); err == nil || !strings.Contains(err.Error(), "不是机器人 tg 的主人") {
+		t.Fatalf("cross mute error = %v", err)
+	}
+	if sent, calls := tg.sentSnapshot(), tg.callsSnapshot(); len(sent) != 0 || len(calls) != 0 {
+		t.Fatalf("other owner's bot was touched: sent=%#v calls=%#v", sent, calls)
+	}
+
+	output, err := crossTool.Run(context.Background(), map[string]any{"operation": "bots"})
+	if err != nil || !strings.Contains(output, `"profile_id":"tg"`) || !strings.Contains(output, `"owned":false`) {
+		t.Fatalf("bots output=%s err=%v", output, err)
 	}
 }

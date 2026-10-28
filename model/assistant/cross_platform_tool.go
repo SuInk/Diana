@@ -68,6 +68,8 @@ type dianaCrossPlatformBot struct {
 	Account   string `json:"account,omitempty"`
 	Connected bool   `json:"connected"`
 	Current   bool   `json:"current,omitempty"`
+	// Owned 为假的机器人属于别的主人，只列出来让人知道它存在，读写都会被拒。
+	Owned bool `json:"owned"`
 }
 
 func (t *dianaCrossPlatformTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -101,6 +103,7 @@ func (t *dianaCrossPlatformTool) bots() (string, error) {
 			Platform:  NormalizePlatformID(cfg.Platform),
 			Account:   strings.TrimSpace(cfg.BotAccount),
 			Current:   cfg.ID == strings.TrimSpace(t.event.ProfileID),
+			Owned:     t.runtime.requesterOwnsProfile(t.event, cfg),
 		}
 		if status, ok := t.runtime.profileChannelStatus(cfg); ok {
 			bot.Connected = status.Connected
@@ -114,10 +117,11 @@ func (t *dianaCrossPlatformTool) bots() (string, error) {
 // groups 列出一台机器人所在的群。OneBot 能实时拉群列表；别的平台没有这个接口，
 // 只能列出控制台里有配置的群（机器人在群里说过话或被配置过才会有）。
 func (t *dianaCrossPlatformTool) groups(ctx context.Context, input map[string]any) (string, error) {
-	cfg, err := t.runtime.runnableProfile(configToolString(input, "profile_id"))
+	target, err := t.runtime.ownedCrossBotTarget(t.event, configToolString(input, "profile_id"), "", "")
 	if err != nil {
 		return "", err
 	}
+	cfg := target.profile
 	var groups []dianaPlatformGroupItem
 	source := "group_configs"
 	if IsOneBotPlatform(cfg.Platform) {
@@ -169,9 +173,9 @@ func (t *dianaCrossPlatformTool) target(input map[string]any) (crossBotTarget, e
 	case groupID != "" && userID != "":
 		return crossBotTarget{}, fmt.Errorf("group_id 和 user_id 只能填一个")
 	case groupID != "":
-		return t.runtime.crossBotEvent(configToolString(input, "profile_id"), EventKindGroup, groupID)
+		return t.runtime.ownedCrossBotTarget(t.event, configToolString(input, "profile_id"), EventKindGroup, groupID)
 	case userID != "":
-		return t.runtime.crossBotEvent(configToolString(input, "profile_id"), EventKindPrivate, userID)
+		return t.runtime.ownedCrossBotTarget(t.event, configToolString(input, "profile_id"), EventKindPrivate, userID)
 	}
 	return crossBotTarget{}, fmt.Errorf("需要 group_id 或 user_id 指明是哪个会话")
 }

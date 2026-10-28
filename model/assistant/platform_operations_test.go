@@ -370,6 +370,14 @@ func TestPlatformRequestsListSyncsMissedOneBotRequests(t *testing.T) {
 	if len(got) != 1 || got[0].params["flag"] != "u_abc" || got[0].params["approve"] != true {
 		t.Fatalf("doubt approval calls = %#v", got)
 	}
+
+	// 同一个人之后再申请一次，是一条新的待处理请求，不能被旧记录去重吞掉。
+	channel.apiResponses["get_doubt_friends_add_request"] = map[string]any{"items": []any{
+		map[string]any{"uid": "u_abc", "nick": "乙", "msg": "再试一次", "reqTime": 1700090000},
+	}}
+	if output, err := tool.Run(context.Background(), map[string]any{"operation": "list"}); err != nil || !strings.Contains(output, "再试一次") {
+		t.Fatalf("re-application list output=%s err=%v", output, err)
+	}
 }
 
 // 两个收件箱都拉不到才算补拉失败；list 照常列出已存的请求。

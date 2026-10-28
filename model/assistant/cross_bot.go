@@ -124,3 +124,64 @@ func (r *Runtime) crossBotEvent(profileID string, kind EventKind, targetID strin
 	target.event = event
 	return target, nil
 }
+
+// requesterOwnsProfile 判断发起人是不是目标机器人的主人。一个实例里的几台机器人
+// 可能各有各的主人：在 A 上是主人，不等于能动 B 的群、读 B 的私聊。规则和
+// linkedOwnerFor 一致：
+//
+//   - 目标配了主人：发起人自己的号，或和他关联的号里有目标的主人账号。
+//   - 目标没配主人：实例里所有配了主人的机器人，主人账号都在发起人这组号里。
+//
+// WebUI 聊天页是控制台管理员，本来就能看、改所有机器人。
+func (r *Runtime) requesterOwnsProfile(event MessageEvent, target BotConfig) bool {
+	if event.webChat {
+		return true
+	}
+	self := r.identityAccountForEvent(event)
+	accounts := []IdentityAccount{self}
+	for _, account := range r.identityGroup(self) {
+		if account.key() != self.key() {
+			accounts = append(accounts, account)
+		}
+	}
+	owns := func(profile BotConfig) bool {
+		for _, account := range accounts {
+			if r.accountIsProfileOwner(profile, account) {
+				return true
+			}
+		}
+		return false
+	}
+	if strings.TrimSpace(target.OwnerID) != "" {
+		return owns(target)
+	}
+	owned := 0
+	for _, profile := range r.ProfileConfigs() {
+		if strings.TrimSpace(profile.OwnerID) == "" {
+			continue
+		}
+		owned++
+		if !owns(profile) {
+			return false
+		}
+	}
+	return owned > 0
+}
+
+// ownedCrossBotTarget 是 crossBotEvent 加上主人核对，跨机器人读写都走它。
+func (r *Runtime) ownedCrossBotTarget(requester MessageEvent, profileID string, kind EventKind, targetID string) (crossBotTarget, error) {
+	var target crossBotTarget
+	var err error
+	if targetID == "" && kind == "" {
+		target, err = r.crossBotBaseEvent(profileID)
+	} else {
+		target, err = r.crossBotEvent(profileID, kind, targetID)
+	}
+	if err != nil {
+		return crossBotTarget{}, err
+	}
+	if !r.requesterOwnsProfile(requester, target.profile) {
+		return crossBotTarget{}, fmt.Errorf("你不是机器人 %s 的主人，不能操作它那边的会话", target.profile.ID)
+	}
+	return target, nil
+}

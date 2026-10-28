@@ -347,6 +347,7 @@ func oneBotRequestAction(item OneBotRequestRecord, approve bool, input map[strin
 	case "friend":
 		// 被 QQ 折叠的可疑好友申请走另一组接口，flag 是申请人的 uid，不能带备注。
 		if item.SubType == oneBotRequestSubTypeDoubt {
+			params["flag"] = doubtRequestUID(item.Flag)
 			return "set_doubt_friends_add_request", params, nil
 		}
 		if approve {

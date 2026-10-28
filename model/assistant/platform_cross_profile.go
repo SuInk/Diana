@@ -36,9 +36,9 @@ func (t *dianaPlatformTool) runCrossProfile(ctx context.Context, profileID strin
 	var err error
 	switch {
 	case groupID != "":
-		target, err = t.runtime.crossBotEvent(profileID, EventKindGroup, groupID)
+		target, err = t.runtime.ownedCrossBotTarget(t.event, profileID, EventKindGroup, groupID)
 	case operation == platformOpGroupList || operation == platformOpFriendList:
-		target, err = t.runtime.crossBotBaseEvent(profileID)
+		target, err = t.runtime.ownedCrossBotTarget(t.event, profileID, "", "")
 	default:
 		err = fmt.Errorf("跨机器人操作需要 group_id：先用 cross_platform 的 groups 查那台机器人在哪些群")
 	}
