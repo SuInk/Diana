@@ -36,7 +36,7 @@
           <span><i class="stop"></i>Stopped / silent</span><span><i class="go"></i>Continues elsewhere</span><span><i class="loop"></i>Goes back to an earlier step</span>
         </div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>Platform message</strong><p>OneBot / Telegram / QQ / DingTalk / Feishu / WeCom, normalised into a <code>MessageEvent</code>.</p></div></li>
+          <li><div class="flow-node"><strong>Platform message</strong><p>OneBot / Telegram / QQ / WeChat / iMessage, normalised into a <code>MessageEvent</code>.</p></div></li>
           <li><div class="flow-node"><strong>Durable inbound queue</strong><p>Backfill after disconnects, gap detection and retries; survives a restart.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Reply trigger</strong><p>Deterministic gates → direct triggers → reply rating.</p></div><div class="flow-exits"><span class="flow-exit"><b>No reply</b>reason recorded</span></div></li>
           <li><div class="flow-node"><strong>Assemble context</strong><p>SOUL.md, history, memory, media; the stable part first so the prefix cache hits.</p></div></li>
@@ -347,7 +347,7 @@
       <nav class="page-nav" aria-label="Pagination"><a href="./implementation"><small>Previous</small><strong>← Internals</strong></a><a href="./operations"><small>Next</small><strong>Operate →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
-    <script src="../icons.js?v=20260847"></script>
+    <script src="../icons.js?v=20261028"></script>
     <script src="../app.js?v=20261015" defer></script>
   </body>
 </html>

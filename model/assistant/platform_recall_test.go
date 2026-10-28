@@ -140,22 +140,6 @@ func TestPlatformRecallReportsFailureInsteadOfClaimingSuccess(t *testing.T) {
 	}
 }
 
-func TestPlatformRecallUnsupportedPlatformSaysSo(t *testing.T) {
-	channel := newModerationTestChannel("member")
-	event := recallTestEvent()
-	event.Platform = PlatformFeishu
-	tool, runtime, _ := platformToolFor(t, BotConfig{BotAccount: "10000", Platform: PlatformFeishu}, channel, event)
-	seedRecallHistory(runtime, event)
-
-	_, err := tool.Run(context.Background(), map[string]any{"operation": "recall"})
-	if err == nil || !strings.Contains(err.Error(), "不支持撤回") {
-		t.Fatalf("不支持撤回的平台错误 = %v", err)
-	}
-	if calls := recordedCallsByAction(channel.callsSnapshot(), "delete_msg"); len(calls) != 0 {
-		t.Fatalf("不支持的平台仍然调用了接口：%#v", calls)
-	}
-}
-
 // TestPlatformRecallIsNotOwnerOnly 撤回自己的话不该要主人身份：说错的是机器人，
 // 让它改口的可以是任何人。
 func TestPlatformRecallIsNotOwnerOnly(t *testing.T) {

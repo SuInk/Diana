@@ -525,7 +525,7 @@ func (h *BotHandler) eventGroupNames(ctx context.Context, profileID string) map[
 	return names
 }
 
-// localConsoleGroups 从本地事件历史里聚合群列表。Telegram、钉钉这类平台的 Bot
+// localConsoleGroups 从本地事件历史里聚合群列表。Telegram 这类平台的 Bot
 // API 没有「列出我加入的群」，机器人只有在群里收到过消息才知道自己在那儿。
 // profileID 为空表示不限机器人。
 func (h *BotHandler) localConsoleGroups(ctx context.Context, profileID string) ([]botAutoGroupInfo, bool, string) {

@@ -32,7 +32,7 @@ type channelWatchState struct {
 // runChannelWatch 把每条连接的上线、掉线、账号异常和连接错误写进运行日志。
 //
 // 入站协调器里那套断线回补状态机只盯第一个 OneBot 连接（回补本身只对它有意义），
-// 它记下的连接日志也就只有这一条。多开几个 OneBot 账号，或者接了 Telegram、钉钉
+// 它记下的连接日志也就只有这一条。多开几个 OneBot 账号，或者接了 Telegram、QQ 官方
 // 这些平台，其余连接掉线在界面上一个字都看不到。这里补上其余的连接；有入站队列时
 // 第一个 OneBot 连接仍归协调器记，免得同一次掉线出现两条。
 func (r *Runtime) runChannelWatch(ctx context.Context) {

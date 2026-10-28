@@ -4,7 +4,7 @@
 
 **住在群聊里、会主动搭话的 AI Agent —— 不用 @ 也能自然插话，还会搜索、点歌、发表情包、记住群里的约定；自托管单二进制，数据不出你的机器。**
 
-<sub>OneBot v11 · Telegram · QQ 官方机器人 · 钉钉 · 飞书 · 企业微信 —— 一个实例，同时在线</sub>
+<sub>OneBot v11 · Telegram · QQ 官方机器人 · 微信 · iMessage —— 一个实例，同时在线</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -23,7 +23,7 @@
 
 ## Diana 是什么
 
-你有一个想接进群聊的 AI：让它在 QQ 群里搭话、在 Telegram 里点歌、在飞书里回答同事的问题。Diana 就是中间这一层——一个 Go 写成的单二进制服务，一头对接大模型（OpenAI 兼容接口、Gemini、Anthropic 都行），另一头同时对接六种聊天平台，中间有一个网页控制台管理一切。
+你有一个想接进群聊的 AI：让它在 QQ 群里搭话、在 Telegram 里点歌、替你回答群友的问题。Diana 就是中间这一层——一个 Go 写成的单二进制服务，一头对接大模型（OpenAI 兼容接口、Gemini、Anthropic 都行），另一头同时对接五种聊天平台，中间有一个网页控制台管理一切。
 
 它为「自己养一个机器人」的人设计：
 
@@ -86,9 +86,8 @@ Telegram 的图片/表情包发送格式及群消息撤回边界，参见[Telegr
 | **OneBot v11**（推荐 SnowLuma） | 支持正向 WS、反向 WS、HTTP API + HTTP 事件上报，在机器人页选择连接方式 | 连接方向取决于所选方式，可在局域网使用 |
 | **Telegram** | BotFather 的 Bot Token（国内网络通常还要代理地址） | Diana 主动出站，无需公网 |
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
-| **钉钉** | 应用的 Client ID + Client Secret（Stream 模式） | Diana 主动出站，无需公网 |
-| **飞书** | App ID + App Secret + Verification Token（加密推送再加 Encrypt Key） | 平台回调 → Diana，**需要公网地址** |
-| **企业微信** | 企业 ID + AgentId + Secret + 回调 Token/EncodingAESKey | 平台回调 → Diana，**需要公网地址** |
+| **微信** | 不用填：保存机器人后在「接入」里扫码登录（腾讯 iLink Bot，只有私聊） | Diana 主动出站，无需公网 |
+| **iMessage** | 常开 Mac 上 BlueBubbles Server 的地址与密码，详见 [iMessage 接入说明](docs/imessage.md) | BlueBubbles webhook → Diana，Mac 能访问到 Diana 即可，可选轮询兜底 |
 
 QQ 个人号推荐用 SnowLuma 作 OneBot 接入端，Diana 的群历史、成员信息等接口按它的行为做过适配。
 
@@ -100,17 +99,17 @@ OneBot v11 连接方式：
 
 固定的反向 WS 入口和 HTTP 上报入口各支持一个启用中的配置档（同类取第一个）；正向 WS 可配置多个机器人。Docker 中 `127.0.0.1` 指容器自身，服务地址须按实际网络调整。这里支持的是 OneBot v11 的三种连接方式，不包含 OneBot v12 的不同事件/API 格式。
 
-飞书和企业微信要填到对方后台的回调地址，机器人页会直接显示出来。各平台功能上的细微差异（比如 QQ 官方机器人默认只收得到 @ 消息，需要群主修改机器人可获取的群聊消息范围）见[配置文档](https://suink.github.io/Diana/configuration.html)。
+iMessage 要填到 BlueBubbles Server 的回调地址，机器人页会直接显示出来。各平台功能上的细微差异（比如 QQ 官方机器人默认只收得到 @ 消息，需要群主修改机器人可获取的群聊消息范围）见[配置文档](https://suink.github.io/Diana/configuration.html)。
 
 ## 内置能力
 
 这些能力随程序自带，在控制台里按需开关和配置，不需要安装插件：
 
-- **主动搭话** —— 不用 @ 也能自己判断什么时候插话、什么时候保持安静，回不回、为什么，事件中心都有记录（依赖平台推送全量群消息：QQ 官方机器人要群主在群聊设置里改成获取群内全部消息，钉钉只推 @ 消息，不适用）。
+- **主动搭话** —— 不用 @ 也能自己判断什么时候插话、什么时候保持安静，回不回、为什么，事件中心都有记录（依赖平台推送全量群消息：QQ 官方机器人要群主在群聊设置里改成获取群内全部消息）。
 - **联网搜索** —— 时效性问题先检索再回答，默认用沙盒浏览器搜索；多个查询可并行执行，模型选择相关官网页面继续读取。 在「提供商 → 搜索提供商」全局统一设置开关、主备来源、地址与密钥，机器人不再单独覆盖；历史机器人搜索配置不会自动迁移密钥，升级后请检查全局设置。详见 [搜索提供商配置](docs/search-providers.md)。
 - **链接解析** —— B 站 / YouTube / X / 小红书 / 抖音的视频图片直接解析发到群里；X / Twitter 用户主页展示昵称、简介及可见统计，不再误走视频下载。详情见 [Twitter 主页解析](docs/twitter-profiles.md)。
 - **文件解析** —— 群文件、PDF、Office、EPUB 的内容提取后交给模型理解。
-- **点歌** —— 网易云、QQ 音乐多曲库自动切换。OneBot QQ 发语音；Telegram 将歌曲转为带歌名和歌手信息的 MP3 后直接上传，显示原生音乐播放器，无需 QQ 音乐卡片签名服务。音频不可用或准备失败时明确提示失败。QQ 官方机器人、钉钉、飞书和企业微信目前只提供歌曲来源页链接，并非聊天内播放器。
+- **点歌** —— 网易云、QQ 音乐多曲库自动切换。OneBot QQ 发语音；Telegram 将歌曲转为带歌名和歌手信息的 MP3 后直接上传，显示原生音乐播放器，无需 QQ 音乐卡片签名服务。音频不可用或准备失败时明确提示失败。QQ 官方机器人目前只提供歌曲来源页链接，并非聊天内播放器。
 - **表情包** —— 从群里见过的表情包中挑一张合适的发出去。
 - **图片识别** —— 视觉模型 + OCR（支持完全离线的本地方案），纯文本模型也能「看」图。 支持关闭图片自动描述、视频自动下载抽帧；默认只把图片描述交给对话模型，要看细节时带着问题问视觉模型，见[媒体预处理](docs/media-preprocessing.md)。
 - **画图出图** —— 表格、流程图、时序图这类纯文本讲不清的东西，模型自己判断该出图时渲染成图片发出来（Markdown / Mermaid / SVG，需要「网页渲染」插件提供的无头浏览器）。 缺失字体会按实际文字自动下载，支持[多语言出图](docs/fonts.md)。

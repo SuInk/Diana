@@ -144,8 +144,8 @@ func llmIdentityBodyAccountMappingEnabled(cfg BotConfig) bool {
 }
 
 // bodyAccountDigitsAllowed 按平台给出正文里「长得像账号」的数字长度，以及数字前面
-// 能不能紧贴 QQ 字样。只认账号本来就是数字的平台；飞书、钉钉、企微的账号是字母串，
-// 正文里的数字不可能是它们的账号。
+// 能不能紧贴 QQ 字样。只认账号本来就是数字的平台；账号是字母串的平台（如 QQ 官方
+// 机器人的 openid、微信的 xxx@im.wechat），正文里的数字不可能是它们的账号。
 func bodyAccountDigitsAllowed(platform string) (minLen, maxLen int, qqPrefix bool, ok bool) {
 	switch NormalizePlatformID(platform) {
 	case PlatformOneBotV11:

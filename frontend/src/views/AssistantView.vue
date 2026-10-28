@@ -114,6 +114,7 @@
             <span class="bot-profile-name">{{ profile.name || "未命名机器人" }}</span>
             <span class="bot-profile-meta">
               <span class="platform-chip">{{ platformName(profile.platform) }}</span>
+              <span v-if="isRetiredPlatform(profile.platform)" class="badge warn">已暂时下线</span>
               <span class="bot-profile-account">{{ connectionAccount(profile) || accountPlaceholder(profile) }}</span>
               <span v-if="profile.connection_profile_id" class="platform-chip bot-profile-connection">复用 · {{ connectionSourceName(profile) }}</span>
               <span v-else-if="connectionUsers(profile).length" class="platform-chip bot-profile-connection">连接被 {{ connectionUsers(profile).length }} 台复用</span>
@@ -206,7 +207,8 @@
                   :options="platformOptions"
                   @update:model-value="changeFormPlatform"
                 />
-                <span class="hint">{{ platformDescription(form.platform) }}<template v-if="platformDefinition(form.platform)?.untested">（未测试：适配器还没在真实账号上验证过收发）</template></span>
+                <span v-if="!isRetiredPlatform(form.platform)" class="hint">{{ platformDescription(form.platform) }}<template v-if="platformDefinition(form.platform)?.untested">（未测试：适配器还没在真实账号上验证过收发）</template></span>
+                <span v-else class="hint warn-text">该平台已暂时下线：这台机器人的其余配置仍保留，但当前版本无法连接。改选上面列出的平台并重新填写接入凭据即可继续使用。</span>
               </div>
               <!-- 按平台和传输方式展示连接地址与鉴权凭据。 -->
               <template v-if="isOneBotPlatform">
@@ -391,119 +393,6 @@
                 <span class="hint">机器人尚未发布上架时勾选，走沙箱接口联调。</span>
               </template>
 
-              <template v-else-if="currentPlatform === 'dingtalk'">
-                <div class="field">
-                  <label for="bot-ding-id">Client ID</label>
-                  <input id="bot-ding-id" v-model="form.dingtalk_client_id" class="input mono" placeholder="应用的 AppKey / Client ID" autocomplete="off" />
-                  <span class="hint">钉钉开放平台的应用凭证页可以看到。</span>
-                </div>
-                <SecretField
-                  id="bot-ding-secret"
-                  v-model="dingTalkSecretDraft"
-                  label="Client Secret"
-                  placeholder="应用的 AppSecret / Client Secret"
-                  hint="用 Stream 模式出站长连接接入，不需要公网地址，也不用在后台配 HTTP 回调。"
-                  :configured="form.dingtalk_client_secret_configured"
-                  :revealed="tokenRevealed.dingtalk_client_secret"
-                  :busy="tokenRevealBusy === 'dingtalk_client_secret'"
-                  @toggle-reveal="toggleTokenReveal('dingtalk_client_secret')"
-                />
-                <div class="field">
-                  <label for="bot-ding-robot">机器人 RobotCode（可选）</label>
-                  <input id="bot-ding-robot" v-model="form.dingtalk_robot_code" class="input mono" placeholder="留空则与 Client ID 相同" autocomplete="off" />
-                  <span class="hint">企业内部机器人单独分配了 robotCode 时才需要填。</span>
-                </div>
-              </template>
-
-              <template v-else-if="currentPlatform === 'feishu'">
-                <div class="field">
-                  <label for="bot-feishu-appid">App ID</label>
-                  <input id="bot-feishu-appid" v-model="form.feishu_app_id" class="input mono" placeholder="cli_ 开头的自建应用 App ID" autocomplete="off" />
-                  <span class="hint">飞书开放平台的「凭证与基础信息」页。</span>
-                </div>
-                <SecretField
-                  id="bot-feishu-secret"
-                  v-model="feishuSecretDraft"
-                  label="App Secret"
-                  placeholder="自建应用的 App Secret"
-                  :configured="form.feishu_app_secret_configured"
-                  :revealed="tokenRevealed.feishu_app_secret"
-                  :busy="tokenRevealBusy === 'feishu_app_secret'"
-                  @toggle-reveal="toggleTokenReveal('feishu_app_secret')"
-                />
-                <SecretField
-                  id="bot-feishu-verify"
-                  v-model="feishuVerificationDraft"
-                  label="Verification Token"
-                  placeholder="事件订阅页的 Verification Token"
-                  hint="用于核验回调来源。强烈建议填写——回调地址本身是公开的，不能当凭据用。"
-                  :configured="form.feishu_verification_token_configured"
-                  :revealed="tokenRevealed.feishu_verification_token"
-                  :busy="tokenRevealBusy === 'feishu_verification_token'"
-                  @toggle-reveal="toggleTokenReveal('feishu_verification_token')"
-                />
-                <SecretField
-                  id="bot-feishu-encrypt"
-                  v-model="feishuEncryptDraft"
-                  label="Encrypt Key（可选）"
-                  placeholder="后台开启了加密推送才填"
-                  hint="填了这里就必须在飞书后台同步开启加密推送，否则明文回调会被拒绝。"
-                  :configured="form.feishu_encrypt_key_configured"
-                  :revealed="tokenRevealed.feishu_encrypt_key"
-                  :busy="tokenRevealBusy === 'feishu_encrypt_key'"
-                  @toggle-reveal="toggleTokenReveal('feishu_encrypt_key')"
-                />
-                <div class="field">
-                  <label for="bot-feishu-base">开放平台地址</label>
-                  <input id="bot-feishu-base" v-model="form.feishu_api_base_url" class="input mono" placeholder="留空使用 https://open.feishu.cn" autocomplete="off" />
-                  <span class="hint">Lark 国际版填 https://open.larksuite.com。</span>
-                </div>
-              </template>
-
-              <template v-else-if="currentPlatform === 'wecom'">
-                <div class="field">
-                  <label for="bot-wecom-corp">企业 ID</label>
-                  <input id="bot-wecom-corp" v-model="form.wecom_corp_id" class="input mono" placeholder="ww 开头的 CorpID" autocomplete="off" />
-                  <span class="hint">企业微信管理后台「我的企业」页底部。</span>
-                </div>
-                <div class="field">
-                  <label for="bot-wecom-agent">AgentId</label>
-                  <input id="bot-wecom-agent" v-model="form.wecom_agent_id" class="input mono" placeholder="自建应用的 AgentId，纯数字" autocomplete="off" />
-                  <span class="hint">在「应用管理」里打开自建应用即可看到。</span>
-                </div>
-                <SecretField
-                  id="bot-wecom-secret"
-                  v-model="weComSecretDraft"
-                  label="应用 Secret"
-                  placeholder="自建应用的 Secret"
-                  :configured="form.wecom_secret_configured"
-                  :revealed="tokenRevealed.wecom_secret"
-                  :busy="tokenRevealBusy === 'wecom_secret'"
-                  @toggle-reveal="toggleTokenReveal('wecom_secret')"
-                />
-                <SecretField
-                  id="bot-wecom-token"
-                  v-model="weComTokenDraft"
-                  label="Token"
-                  placeholder="「接收消息」配置里的 Token"
-                  :configured="form.wecom_token_configured"
-                  :revealed="tokenRevealed.wecom_token"
-                  :busy="tokenRevealBusy === 'wecom_token'"
-                  @toggle-reveal="toggleTokenReveal('wecom_token')"
-                />
-                <SecretField
-                  id="bot-wecom-aes"
-                  v-model="weComAESDraft"
-                  label="EncodingAESKey"
-                  placeholder="43 位的 EncodingAESKey"
-                  hint="Token 和 EncodingAESKey 用于回调验签和解密，缺一个就只能发不能收。"
-                  :configured="form.wecom_encoding_aes_key_configured"
-                  :revealed="tokenRevealed.wecom_encoding_aes_key"
-                  :busy="tokenRevealBusy === 'wecom_encoding_aes_key'"
-                  @toggle-reveal="toggleTokenReveal('wecom_encoding_aes_key')"
-                />
-              </template>
-
               <template v-else-if="currentPlatform === 'weixin'">
                 <WeixinLoginPanel
                   :profile-id="weixinLoginProfileID"
@@ -552,7 +441,7 @@
                 </div>
               </template>
 
-              <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
+              <!-- 回调型平台（iMessage）只能靠平台回调收消息，地址要填到对方那边。 -->
               <div v-if="callbackURL" class="field">
                 <label for="bot-callback-url">回调地址</label>
                 <div class="input-group">
@@ -2577,13 +2466,6 @@ const privateAllowedUsers = ref<string[]>([]);
 const oneBotHTTPSecretDraft = ref("");
 const telegramTokenDraft = ref("");
 const qqSecretDraft = ref("");
-const dingTalkSecretDraft = ref("");
-const feishuSecretDraft = ref("");
-const feishuVerificationDraft = ref("");
-const feishuEncryptDraft = ref("");
-const weComSecretDraft = ref("");
-const weComTokenDraft = ref("");
-const weComAESDraft = ref("");
 const iMessagePasswordDraft = ref("");
 const iMessageWebhookDraft = ref("");
 const iMessageTesting = ref(false);
@@ -2618,13 +2500,6 @@ const tokenDrafts = {
   onebot_http_secret: oneBotHTTPSecretDraft,
   telegram_bot_token: telegramTokenDraft,
   qq_app_secret: qqSecretDraft,
-  dingtalk_client_secret: dingTalkSecretDraft,
-  feishu_app_secret: feishuSecretDraft,
-  feishu_verification_token: feishuVerificationDraft,
-  feishu_encrypt_key: feishuEncryptDraft,
-  wecom_secret: weComSecretDraft,
-  wecom_token: weComTokenDraft,
-  wecom_encoding_aes_key: weComAESDraft,
   imessage_password: iMessagePasswordDraft,
   imessage_webhook_token: iMessageWebhookDraft
 } satisfies Record<string, Ref<string>>;
@@ -2757,6 +2632,7 @@ function onForwardReplyToggle(): void {
 const isOneBotPlatform = computed(() => {
   const id = form.value?.platform ?? "";
   const def = platforms.value.find((item) => item.id === id);
+  if (!def && isRetiredPlatform(id)) return false;
   return def ? def.protocol.startsWith("onebot") : true;
 });
 
@@ -3186,16 +3062,28 @@ const visibleChannels = computed(() => {
   return channelStatuses.value.filter((channel) => channel.profile_id === profileID);
 });
 const failedChannels = computed(() => visibleChannels.value.filter((channel) => Boolean(channel.last_error) || channelAccountUnhealthy(channel)));
-const platformOptions = computed<AppSelectOption[]>(() =>
-  platforms.value.map((platform) => ({
+const platformOptions = computed<AppSelectOption[]>(() => {
+  const options: AppSelectOption[] = platforms.value.map((platform) => ({
     value: platform.id,
     label: platform.untested ? `${platform.name}（未测试）` : platform.name,
     hint: platform.protocol
-  }))
-);
+  }));
+  // 老配置里的已下线平台不在注册表里，留一个禁用项让下拉框仍显示原始平台 ID。
+  const current = form.value?.platform ?? "";
+  if (isRetiredPlatform(current)) options.push({ value: current, label: `${current}（已暂时下线）`, disabled: true });
+  return options;
+});
 
 function platformDefinition(id?: string): BotPlatform | undefined {
   return platforms.value.find((platform) => platform.id === id);
+}
+
+/**
+ * 注册表里查不到的平台：老版本配过、现在已暂时下线的那几个（例如飞书）。后端仍会
+ * 原样列出这些机器人，界面退回显示原始平台 ID 并提示已下线。注册表还没加载时不算。
+ */
+function isRetiredPlatform(id?: string): boolean {
+  return Boolean(id) && platforms.value.length > 0 && !platformDefinition(id);
 }
 
 function platformName(id?: string): string {

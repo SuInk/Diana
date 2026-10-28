@@ -184,9 +184,9 @@ func TestBodyAccountCandidates(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("候选 = %v, want %v", got, want)
 	}
-	// 微信的账号是 xxx@im.wechat，也不是数字。iMessage 的账号是 +86… 手机号或邮箱：
-	// 正文里的裸数字不去平台查，手机号账号由 E.164 规则直接换别名。
-	for _, platform := range []string{PlatformFeishu, PlatformWeixin, PlatformIMessage} {
+	// QQ 官方机器人的账号是 openid、微信的账号是 xxx@im.wechat，都不是数字。iMessage 的
+	// 账号是 +86… 手机号或邮箱：正文里的裸数字不去平台查，手机号账号由 E.164 规则直接换别名。
+	for _, platform := range []string{PlatformQQOfficial, PlatformWeixin, PlatformIMessage} {
 		if _, _, _, ok := bodyAccountDigitsAllowed(platform); ok {
 			t.Fatalf("%s 账号不是数字，不应扫描正文数字", platform)
 		}

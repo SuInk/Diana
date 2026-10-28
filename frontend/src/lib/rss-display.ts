@@ -15,7 +15,7 @@ export function rssSourceLabel(source: RSSWatchSource): string {
 }
 
 export function subscriptionPlatformLabel(platform?: string): string {
-  return ({ "onebot-v11": "QQ / OneBot", telegram: "Telegram", "qq-official": "QQ 官方", dingtalk: "钉钉" } as Record<string, string>)[platform ?? ""] || platform || "平台未记录";
+  return ({ "onebot-v11": "QQ / OneBot", telegram: "Telegram", "qq-official": "QQ 官方" } as Record<string, string>)[platform ?? ""] || platform || "平台未记录";
 }
 
 // An explicit empty prompt means original text, including previously generated watches.

@@ -23,18 +23,15 @@
       <header class="page-intro"><p class="eyebrow">Configure</p><h1>Channels, models and group policy</h1><p class="lead">Establish a working model connection first, then assign model roles and platform channels, and finally narrow triggers, hours, users and tool boundaries per group.</p></header>
 
       <section class="section searchable" id="channels">
-        <div class="section-heading"><p class="eyebrow">Platforms</p><h2>Eight platforms can be online at once</h2></div>
+        <div class="section-heading"><p class="eyebrow">Platforms</p><h2>Five platforms can be online at once</h2></div>
         <p>Every enabled bot profile runs in parallel, and replies always return to the channel they came from. Credentials are entered per platform on the Bots page; leaving a secret field blank keeps the stored value, and filling it in replaces it.</p>
 
         <h3>How messages arrive decides your deployment</h3>
-        <p>What actually shapes deployment is not the platform itself but how messages reach you. The first four connect outbound from Diana, so a home connection or an internal network works as-is. Feishu and WeCom can only POST events to you, which means a publicly reachable HTTPS address.</p>
+        <p>What actually shapes deployment is not the platform itself but how messages reach you. OneBot, Telegram, the QQ official bot and WeChat connect outbound from Diana or from a local adapter, so a home connection or an internal network works as-is. iMessage has BlueBubbles Server on your Mac push events to a Diana callback URL; the Mac only needs to reach Diana, no public address required.</p>
         <div class="table-wrap"><table><thead><tr><th>Platform</th><th>How it connects</th><th>Public address</th></tr></thead><tbody>
           <tr><td>OneBot v11</td><td>Reverse WebSocket, the adapter connects to Diana</td><td>No</td></tr>
           <tr><td>Telegram</td><td>Bot API long polling, outbound from Diana</td><td>No</td></tr>
           <tr><td>QQ official bot</td><td>Open Platform WebSocket gateway, outbound from Diana</td><td>No</td></tr>
-          <tr><td>DingTalk</td><td>Stream mode connection, outbound from Diana</td><td>No</td></tr>
-          <tr><td>Feishu / Lark</td><td>Event subscription callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
-          <tr><td>WeCom</td><td>Custom-app callback, pushed to Diana</td><td><strong>Yes</strong></td></tr>
           <tr><td>WeChat</td><td>Tencent iLink Bot QR login and long polling, outbound from Diana</td><td>No</td></tr>
           <tr><td>iMessage</td><td>BlueBubbles Server on a Mac pushes webhooks; optional polling fallback</td><td>No, the Mac only needs to reach Diana</td></tr>
         </tbody></table></div>
@@ -60,24 +57,6 @@
             <div><dt>Capabilities</dt><dd>Receives text, images, video, voice (transcribed by the platform) and files, including media inside merged chat records. Sends text, images, video and voice</dd></div>
             <div><dt>Scope</dt><dd>Group chats push only messages that mention the bot by default; the group owner can widen the bot's group message scope to all messages</dd></div>
           </dl></article>
-          <article><h3>DingTalk</h3><dl>
-            <div><dt>Credentials</dt><dd>Client ID and Client Secret of the app</dd></div>
-            <div><dt>Connection</dt><dd>Stream mode; no HTTP callback to configure</dd></div>
-            <div><dt>Replies</dt><dd>Prefers the session webhook, which costs no quota</dd></div>
-            <div><dt>Scope</dt><dd>Only group messages that mention the bot</dd></div>
-          </dl></article>
-          <article><h3>Feishu / Lark</h3><dl>
-            <div><dt>Credentials</dt><dd>App ID and App Secret of the custom app</dd></div>
-            <div><dt>Verification</dt><dd>Verification Token from the event subscription page</dd></div>
-            <div><dt>Encryption</dt><dd>Encrypt Key, when encrypted delivery is enabled</dd></div>
-            <div><dt>Endpoint</dt><dd>Lark uses <code>open.larksuite.com</code></dd></div>
-          </dl></article>
-          <article><h3>WeCom</h3><dl>
-            <div><dt>Credentials</dt><dd>Corp ID, AgentId and app Secret</dd></div>
-            <div><dt>Verification</dt><dd>Token and EncodingAESKey from "receive messages"</dd></div>
-            <div><dt>Required</dt><dd>Without both, it can send but not receive</dd></div>
-            <div><dt>Format</dt><dd>AgentId must be numeric</dd></div>
-          </dl></article>
           <article><h3>WeChat</h3><dl>
             <div><dt>Credentials</dt><dd>Nothing to type: save the bot, then scan the QR code under Connection; the credentials are written after you confirm</dd></div>
             <div><dt>Connection</dt><dd>Tencent iLink Bot API (<code>ilinkai.weixin.qq.com</code>) long polling; the cursor and per-contact context_token live under <code>weixin/</code> in the data directory, so a restart picks up where it left off</dd></div>
@@ -94,19 +73,17 @@
         </div>
 
         <h3 id="callbacks">Callback URLs</h3>
-        <p>Feishu and WeCom need the addresses below entered in their own consoles. <code>HOST</code> must be reachable from the platform's servers, over HTTPS.</p>
-        <pre><code>https://HOST/api/channels/feishu/callback
-https://HOST/api/channels/wecom/callback</code></pre>
-        <p>With more than one bot on the same platform, append the profile id to tell them apart, for example <code>/api/channels/feishu/callback/&lt;profile-id&gt;</code>. With a single bot the short address is enough.</p>
-        <div class="callout"><strong>These paths bypass console login</strong><p>Platform servers cannot carry your session, so each is verified by its own scheme instead: WeCom checks <code>msg_signature</code>, decrypts with WXBizMsgCrypt and confirms the corp id inside the payload; Feishu checks the Verification Token and, when an Encrypt Key is set, also verifies <code>X-Lark-Signature</code> before decrypting. The callback URL itself is public information and is not a credential, so do fill in the verification secrets.</p></div>
+        <p>For iMessage, enter Diana's webhook address in BlueBubbles Server; the Bots page shows the full address, token included. <code>HOST</code> only has to be reachable from the Mac, not from the internet.</p>
+        <pre><code>http(s)://HOST/api/channels/imessage/callback?token=…</code></pre>
+        <p>With more than one bot on the same platform, append the profile id to tell them apart, for example <code>/api/channels/imessage/callback/&lt;profile-id&gt;</code>. With a single bot the short address is enough.</p>
+        <div class="callout"><strong>This path bypasses console login</strong><p>BlueBubbles Server cannot carry your session, so the webhook secret in the address is what authenticates it. The secret is generated when you save the bot; do not share the full address.</p></div>
 
         <h3>Platform differences</h3>
         <ul class="check-list">
           <li><strong>Member-level thresholds only apply to OneBot v11.</strong> Other platforms have no such concept and the option is hidden for them.</li>
           <li><strong>Voice messages and mentions</strong> rely on OneBot CQ codes and degrade gracefully elsewhere: the text is still sent, but nobody is pinged.</li>
           <li><strong>Local media</strong> is fetched by the adapter from Diana's <code>/media/resolver</code> on OneBot; Telegram cannot reach a local address, so files are uploaded directly as multipart instead.</li>
-          <li><strong>QQ official bots push only messages that mention the bot by default.</strong> Once the group owner sets the bot's group message scope to all messages under the group settings, unprompted participation works there too. DingTalk pushes only messages that mention the bot, so those features never trigger there.</li>
-          <li><strong>Feishu, WeCom and DingTalk currently handle text only.</strong> Images and files arrive as download credentials that have to be exchanged separately, which is not wired up yet.</li>
+          <li><strong>QQ official bots push only messages that mention the bot by default.</strong> Once the group owner sets the bot's group message scope to all messages under the group settings, unprompted participation works there too.</li>
         </ul>
 
         <h3>Context across channels</h3>
@@ -281,7 +258,7 @@ Bash：git push origin main
       <nav class="page-nav" aria-label="Pagination"><a href="./deploy"><small>Previous</small><strong>← Deploy</strong></a><a href="./implementation"><small>Next</small><strong>Internals →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
-    <script src="../icons.js?v=20260847"></script>
+    <script src="../icons.js?v=20261028"></script>
     <script src="../app.js?v=20261015" defer></script>
   </body>
 </html>

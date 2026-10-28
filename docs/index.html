@@ -5,7 +5,7 @@
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Diana — 可自托管的多平台 AI 助手</title>
-<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11、Telegram、QQ 官方机器人、钉钉、飞书与企业微信同时在线，单二进制部署，数据留在自己的机器上。" />
+<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11、Telegram、QQ 官方机器人、微信与 iMessage 同时在线，单二进制部署，数据留在自己的机器上。" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
@@ -39,7 +39,7 @@
     <h1>可自托管的多平台 AI 助手</h1>
     <p class="hero-sub">
       Diana 用 Go 编写，编译成单个二进制运行。OneBot v11、Telegram、QQ 官方机器人、
-      钉钉、飞书、企业微信可以同时在线，内置 WebUI、插件系统与 Agent；
+      微信、iMessage 可以同时在线，内置 WebUI、插件系统与 Agent；
       配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
     </p>
     <div class="hero-cta">
@@ -103,7 +103,7 @@
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
         <h3>多通道同时在线</h3>
-        <p>八个平台并行运行，回复、图片和提醒始终回到来源通道；会话上下文固定按机器人隔离。</p>
+        <p>五个平台并行运行，回复、图片和提醒始终回到来源通道；会话上下文固定按机器人隔离。</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
@@ -179,7 +179,7 @@ docker run -d --name diana --restart unless-stopped \
     <div class="qs-steps">
       <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>
       <div class="qs-step"><h4><span>2</span>打开控制台</h4><p>访问 <code>127.0.0.1:18080</code>，用终端里显示的管理员账号登录。</p></div>
-      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里按平台填写凭据，六个通道可同时启用，并为各职责绑定模型。</p></div>
+      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里按平台填写凭据，五个通道可同时启用，并为各职责绑定模型。</p></div>
       <div class="qs-step"><h4><span>4</span>后续升级</h4><p>控制台可直接升级，也可以重复执行安装命令；失败自动恢复。</p></div>
     </div>
   </div>
@@ -213,30 +213,23 @@ docker run -d --name diana --restart unless-stopped \
         </div>
       </div>
       <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="briefcase"></i></div>
+        <div class="chan-logo"><i data-size="20" data-lucide="scan-text"></i></div>
         <div>
-          <h3>钉钉</h3>
-          <p>Stream 模式出站长连接，同样不需要公网地址或 HTTP 回调。</p>
+          <h3>微信</h3>
+          <p>腾讯 iLink Bot 扫码登录，长轮询出站，只支持私聊。</p>
         </div>
       </div>
       <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="bird"></i></div>
+        <div class="chan-logo"><i data-size="20" data-lucide="smartphone"></i></div>
         <div>
-          <h3>飞书</h3>
-          <p>事件订阅回调，支持加密推送与签名校验；需要一个公网可达的回调地址。</p>
-        </div>
-      </div>
-      <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="building-2"></i></div>
-        <div>
-          <h3>企业微信</h3>
-          <p>自建应用回调，按 WXBizMsgCrypt 验签解密；需要一个公网可达的回调地址。</p>
+          <h3>iMessage</h3>
+          <p>通过 Mac 上的 BlueBubbles Server 收发，webhook 回调，可选轮询兜底。</p>
         </div>
       </div>
     </div>
     <p class="chan-note">
-      前四个平台都是本机主动出站连接，家庭或内网部署可以直接用；
-      飞书和企业微信只能由平台回调，需要把控制台暴露到公网。
+      前四个平台由本机主动出站连接，家庭或内网部署可以直接用；
+      iMessage 由 Mac 上的 BlueBubbles 推送回调，Mac 能访问到 Diana 即可，不要求公网。
     </p>
   </div>
 </section>
@@ -282,7 +275,7 @@ docker run -d --name diana --restart unless-stopped \
   </div>
 </footer>
 
-<script src="./icons.js?v=20260847"></script>
+<script src="./icons.js?v=20261028"></script>
 <script src="./landing.js?v=20260847"></script>
 
 </body>

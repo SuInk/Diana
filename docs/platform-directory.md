@@ -5,10 +5,7 @@
 | 平台 | 已接入 | 必须保留的边界 |
 | --- | --- | --- |
 | Telegram | 群资料/人数、单成员、管理员与已知候选、用户/群头像 | Bot API 名单不完整，完整枚举仍需另接 MTProto |
-| 飞书 | 群资料、分页人类成员、按群列表核验成员、群头像、授权用户头像 | 成员列表不含机器人；自身机器人用调用者在群接口核验；非 open_id 入站标识不混用于查询；内部群与应用通讯录可见范围受权限限制 |
-| 钉钉 | 企业内部群资料与分页、成员在群核验、可读取的用户及群头像、自定义角色展示 | 需要当前企业 userId 与授权；外部联系人 senderId 不当作企业 userId；自定义角色名不授予管理员权限，未核验管理权限时仅机器人主人可配置群策略 |
 | QQ 官方 | 保留普通群/频道类型及 guild_id；公开子频道所属频道成员、角色与头像 | 普通 QQ 群不能套用 guild API；私密子频道不能凭父频道名单证明可见性；频道接口权限由平台审核决定 |
-| 企业微信 | 本应用获授权的应用群资料、成员、群主、通讯录用户头像与应用头像 | 不代表任意普通群或客户群；应用群头像暂无对应实现；通讯录可见范围和应用权限不足时明确报错 |
 | 微信（iLink） | 无 | iLink Bot 接口只有私聊，没有群资料、成员或头像接口；不挂载 `platform` 工具，群管写操作一律不支持 |
 | iMessage（BlueBubbles） | 群名（入站消息里的 displayName） | 不挂载 `platform` 工具，群管写操作一律不支持（iMessage 本身没有踢人、禁言、公告）；没有 @ 的结构化提及，群里是否接话靠群触发词和主动回复判断；成员身份只有手机号或邮箱 handle，没有群主或管理员概念 |
 
@@ -35,15 +32,12 @@ OneBot 的 `member_info` 和 `identity_check` 群身份核验使用 `get_group_m
 | 全员禁言开关 | `set_group_whole_ban` | `setChatPermissions`；禁言前用 `getChat` 保存原权限，解除时按快照还原，没有快照才按默认成员权限并在结果里说明 | 不支持 |
 | 撤回成员消息（单条或某人最近 N 条） | `delete_msg` | `deleteMessage`（48 小时内） | 不支持 |
 
-「其他平台」指 QQ 官方、飞书、钉钉、企业微信、微信（iLink）和 iMessage。微信 iLink 只有私聊，群管和规则防御都用不上；iMessage 群聊没有管理员体系，规则防御判出违规也无法处罚。
+「其他平台」指 QQ 官方、微信（iLink）和 iMessage。微信 iLink 只有私聊，群管和规则防御都用不上；iMessage 群聊没有管理员体系，规则防御判出违规也无法处罚。
 
 规则防御在群配置的「规则防御」里逐群开启，默认全部关闭：刷屏检测（时间窗内条数、重复内容）、违规词拦截（子串或 `re:` 正则，命中即撤回）、阶梯处罚（第一次警告，之后按阶梯禁言）和退群/踢人审计（私聊通知主人）。主人、群主和群管理员不受约束（Telegram 群消息不带身份，判出违规时查一次并缓存 5 分钟）；机器人不是管理员时只记日志不处罚；重连回填的旧消息不处罚。违规消息照常进历史、给插件观察，只是不进回复流程。一次违规后进入冷却（至少一个时间窗），冷却期内不再计新违规、只撤回违规词消息，同一人同时只有一个处罚在执行。违规计数只在内存里，重启后从零算。退群审计在 Telegram 主人配成 @用户名时，发往主人发过消息后记下的数字 ID；还不知道时在事件记录里写明原因。
 
 ## 接口依据
 
-- 飞书：官方 oapi-sdk-go 的 im/v1 Chat、ChatMembers 和 contact/v3 User；`https://github.com/larksuite/oapi-sdk-go`。
-- 钉钉：官方 im_1.0 的 QueryOpenGroupBaseInfo、QueryInnerGroupMemberList、CheckUserIsGroupMember、QueryUserGroupRoles，及企业用户资料接口；`https://github.com/alibabacloud-go/dingtalk`。
 - QQ 官方：botgo 的 GuildMembers、GuildMember、Channel 和 User；`https://github.com/tencent-connect/botgo`。
-- 企业微信：自建应用 appchat/get、user/get、agent/get；`https://developer.work.weixin.qq.com/document/path/90247`。
 
 这些适配不会自动申请平台权限、升级群类型或把未知身份猜成管理员。接口存在和当前应用已获授权是两回事，生产部署仍需按平台配置权限。

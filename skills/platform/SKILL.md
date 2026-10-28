@@ -1,11 +1,11 @@
 ---
 name: platform
-description: Read group information and members across platforms, recall the bot's own recently sent messages, and perform moderation for the bot owner, the group owner and group administrators (mute, unmute, kick, group announcements, essence/pinned messages, member card and title, whole-group mute, recalling members' messages) through the current platform. Use when a user explicitly asks to read group state, when the bot must take back something it just sent, or to moderate the group.
+description: Read group information and members across platforms, recall the bot's own recently sent messages, and perform moderation for the bot owner, the group owner and group administrators (mute, unmute, kick, group announcements, essence/pinned messages, member card and title, whole-group mute, recalling members' messages, renaming the group, invite links, appointing administrators) through the current platform; let the bot owner make the bot leave a group or list its friends. Use when a user explicitly asks to read group state, when the bot must take back something it just sent, or to moderate the group.
 ---
 
 # Platform Interface
 
-Use `platform` as the single cross-platform entry point for group information and moderation. Do not emulate an operation in prose and do not call it for ordinary conversation. The operations are platform-neutral verbs; the Go tool maps each to the current platform's native API (OneBot v11 or Telegram Bot API).
+Use `platform` as the single cross-platform entry point for group information and moderation. Do not emulate an operation in prose and do not call it for ordinary conversation. The operations are platform-neutral verbs; the Go tool maps each to the current platform's native API (OneBot v11, Telegram Bot API or the QQ official bot open platform).
 
 ## Operations
 
@@ -24,6 +24,14 @@ Use `platform` as the single cross-platform entry point for group information an
 - `set_title` — change a member's special title; empty `title` clears it. On QQ only the group owner can do this. Moderators only.
 - `mute_all` / `unmute_all` — turn whole-group mute on or off. Moderators only.
 - `recall_messages` — recall members' messages to clean up floods or ads: one `message_id` from history (or the quoted message), or a `user_id` plus `count` (default 10, max 50) to recall that account's most recent messages seen in this session. Reports how many were recalled and how many failed. Moderators only.
+- `set_group_name` — rename the group to `name`. Moderators only.
+- `invite_link` — create an additional invite link (Telegram; existing links stay valid). Moderators only.
+- `set_admin` / `unset_admin` — appoint or remove a group administrator by `user_id`. Bot owner and group owner only; group administrators cannot appoint each other.
+- `group_list` — count the groups the bot has joined; only the bot owner sees names.
+- `friend_list` — list the bot account's friends. Bot owner only.
+- `leave_group` — make the bot leave `group_id` (default: the current group). Bot owner only; works from a private chat. It never dissolves a group the bot owns.
+
+Friend requests, join requests and group invitations are handled by the separate `platform_requests` tool (bot owner only), not by `platform`.
 
 ## Recalling Your Own Message
 
@@ -36,7 +44,8 @@ Saying "当我没说" or "收回刚才那句" deletes nothing — the wrong mess
 
 ## Access Boundary
 
-- Reads (`group_info`, `member_info`, `member_list`, `announce_list`) are available to ordinary members.
+- Reads (`group_info`, `member_info`, `member_list`, `announce_list`) are available to ordinary members. `group_list` details and `friend_list` are for the bot owner only.
+- `leave_group` is for the bot owner only. `set_admin` / `unset_admin` are for the bot owner and the group owner.
 - `recall` is available to ordinary members, because it only affects the bot's own output.
 - Every moderation operation (`mute`, `unmute`, `kick`, announcements, essence, card, title, whole-group mute, `recall_messages`) is available to moderators: the bot owner, and the group owner or group administrators of the current group. The tool checks the caller's role live with the platform; a role claimed in the message text, or a stale sender role, does not count. Group owners and administrators can only act on the group they are in, and never from a private chat. The Go tool enforces this in `Run`; these instructions explain it but do not replace it.
 - Target hierarchy for non-owner callers: never the bot owner or the bot itself; a group administrator cannot act on the group owner or on another administrator; the group owner can act on administrators. Non-personal operations (announcements, essence, whole-group mute) have no target restriction.
@@ -51,8 +60,9 @@ Take `user_id` from an @ segment, from the quoted message's sender, or from a `m
 ## Platform Support
 
 - OneBot v11 (SnowLuma): `group_info`, `member_info`, `member_list`, `recall` (`delete_msg`; QQ only allows this within a short window after sending), `mute` (`set_group_ban`, cap 2592000s / 30 days), `unmute`, `kick` (`set_group_kick`), `announce_list` / `announce` / `announce_delete` (`_get_group_notice` / `_send_group_notice` / `_del_group_notice`), `essence_set` / `essence_unset` (`set_essence_msg` / `delete_essence_msg`), `set_card` (`set_group_card`), `set_title` (`set_group_special_title`, group owner only), `mute_all` / `unmute_all` (`set_group_whole_ban`), `recall_messages` (`delete_msg` per message; admins can recall members' messages but not the group owner's or other admins').
-- Telegram: `group_info`, `member_info`, `member_list`, `announce_list` (`getChat.pinned_message`, current latest pin only; no history), `recall` (`deleteMessage`, 48 hours for the bot's own messages), `mute` (`restrictChatMember` + `until_date`), `unmute`, `kick` (`banChatMember`, plus `unbanChatMember` when `reject_add_request` is false), `essence_set` / `essence_unset` (`pinChatMessage` / `unpinChatMessage`), `set_title` (`setChatAdministratorCustomTitle`, only for administrators the bot promoted), `mute_all` / `unmute_all` (`setChatPermissions`; the chat's previous permissions are saved before muting and restored on unmute — if the result says it fell back to default member permissions, tell the user), `recall_messages` (`deleteMessage`, 48 hours). Telegram has no publishable group-announcement object and no per-group member card, so `announce`, `announce_delete` and `set_card` are unsupported.
-- Other platforms: reads use the platform's read-only adapter where available; `recall` and moderation return a clear "当前平台暂不支持此操作".
+- OneBot v11 also: `set_group_name` (`set_group_name`), `set_admin` / `unset_admin` (`set_group_admin`; only when the bot is the group owner), `group_list` (`get_group_list`), `friend_list` (`get_friend_list`), `leave_group` (`set_group_leave`). No invite link API.
+- Telegram: `group_info`, `member_info`, `member_list`, `announce_list` (`getChat.pinned_message`, current latest pin only; no history), `recall` (`deleteMessage`, 48 hours for the bot's own messages), `mute` (`restrictChatMember` + `until_date`), `unmute`, `kick` (`banChatMember`, plus `unbanChatMember` when `reject_add_request` is false), `essence_set` / `essence_unset` (`pinChatMessage` / `unpinChatMessage`), `set_title` (`setChatAdministratorCustomTitle`, only for administrators the bot promoted), `mute_all` / `unmute_all` (`setChatPermissions`; the chat's previous permissions are saved before muting and restored on unmute — if the result says it fell back to default member permissions, tell the user), `recall_messages` (`deleteMessage`, 48 hours). Telegram has no publishable group-announcement object and no per-group member card, so `announce`, `announce_delete` and `set_card` are unsupported. Also `set_group_name` (`setChatTitle`), `invite_link` (`createChatInviteLink`), `set_admin` / `unset_admin` (`promoteChatMember`; the bot needs the right to add administrators, and appointed administrators get day-to-day moderation rights but not changing group info or promoting others), `leave_group` (`leaveChat`). There is no group list or friend list.
+- QQ official bot: in QQ groups and private chats only `recall` of the bot's own messages works (within about two minutes); the open platform offers no moderation or member list for QQ groups, so everything else returns a clear refusal. In QQ guild channels (频道) the bot, when it has management rights, also supports `mute` / `unmute` (`PATCH /guilds/{guild_id}/members/{user_id}/mute`), `kick` (`DELETE /guilds/{guild_id}/members/{user_id}`, `reject_add_request` maps to `add_blacklist`), `mute_all` / `unmute_all` (`PATCH /guilds/{guild_id}/mute`, at most 30 days), `essence_set` / `essence_unset` (channel pins) and `recall_messages`. `group_list` lists guilds only, never QQ groups. There are no join requests to approve: QQ group admins add the bot directly.
 
 ## Diana's Own Reply Behavior
 

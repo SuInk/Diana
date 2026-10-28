@@ -421,7 +421,6 @@ func TestSystemPromptInjectsOnlyCurrentPlatformOutputRules(t *testing.T) {
 		{name: "telegram", platform: PlatformTelegram, want: "当前聊天平台是 Telegram，回复里的 Markdown 会渲染成富文本", unwanted: "消息不渲染 Markdown"},
 		{name: "telegram-links", platform: PlatformTelegram, want: "贴网址尽量写成 [标题](网址)", unwanted: "消息不渲染 Markdown"},
 		{name: "qq-official", platform: PlatformQQOfficial, want: "不认行内代码和表格", unwanted: "消息不渲染 Markdown"},
-		{name: "dingtalk", platform: PlatformDingTalk, want: "当前聊天平台是 钉钉", unwanted: "消息不渲染 Markdown"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -200,16 +200,13 @@ func relayPlatformLabel(platform string) string {
 		return "QQ"
 	case PlatformQQOfficial:
 		return "QQ 官方"
-	case PlatformFeishu:
-		return "飞书"
-	case PlatformDingTalk:
-		return "钉钉"
-	case PlatformWeCom:
-		return "企业微信"
 	case PlatformWeixin:
 		return "微信"
 	case PlatformIMessage:
 		return "iMessage"
+	}
+	if name, ok := RetiredPlatformName(platform); ok {
+		return name
 	}
 	return strings.TrimSpace(platform)
 }

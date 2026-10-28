@@ -124,7 +124,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if memoryAvailable {
 			extraTools = append(extraTools, &dianaMemoryTool{runtime: r, event: event})
 		}
-		if r.oneBotRequestStore() != nil && IsOneBotPlatform(r.currentPlatform(event)) && r.platformInterfaceEnabled(event) {
+		if r.oneBotRequestStore() != nil && platformSupportsJoinRequests(r.currentPlatform(event)) && r.platformInterfaceEnabled(event) {
 			extraTools = append(extraTools, newDianaOneBotRequestsTool(r, event))
 		}
 		// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次

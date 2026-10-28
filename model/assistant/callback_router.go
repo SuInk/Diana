@@ -9,16 +9,9 @@ import (
 	"sync"
 )
 
-// 飞书和企业微信没有出站长连接模式，事件只能由平台 POST 到本机。通道实例是配置
+// iMessage（BlueBubbles）的事件只能由 Mac 上的服务端 POST 到本机。通道实例是配置
 // 工厂按需重建的，而 HTTP 路由在进程启动时就挂好了——中间需要一层注册表，把
 // 「当前生效的那个通道」和固定的回调路径对上。
-
-const (
-	// FeishuCallbackPath 是飞书事件订阅的回调路径。
-	FeishuCallbackPath = "/api/channels/feishu/callback"
-	// WeComCallbackPath 是企业微信应用回调的路径。
-	WeComCallbackPath = "/api/channels/wecom/callback"
-)
 
 var callbackRegistry = struct {
 	mu       sync.RWMutex

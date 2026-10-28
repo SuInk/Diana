@@ -1211,7 +1211,7 @@ func metadataGroupID(meta map[string]any) string {
 type InboundEventGroup struct {
 	GroupID string `json:"group_id"`
 	// GroupName 取自最近一条事件里平台给出的群名。没有「列出我加入的群」接口的
-	// 平台（Telegram、钉钉等）只能这样拿到名字，否则控制台只能显示一串 ID。
+	// 平台（Telegram 等）只能这样拿到名字，否则控制台只能显示一串 ID。
 	GroupName string `json:"group_name,omitempty"`
 	// BotProfileID 是最近一条事件所属的机器人配置档。控制台靠它判断这个群属于
 	// 哪个平台——比如该不该按 QQ 的规则去拼群头像地址。

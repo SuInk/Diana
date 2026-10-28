@@ -573,9 +573,9 @@ func authExemptPath(path string) bool {
 		// 群管理页有自己的一次性群验证码 token 流程。
 		return true
 	case strings.HasPrefix(path, "/api/channels/"):
-		// 飞书和企业微信的事件回调由平台服务器直接 POST 过来，带不了 WebUI 的
-		// 登录 cookie。它们各自按平台规范验签（企业微信 msg_signature、飞书
-		// Verification Token 与 X-Lark-Signature），不依赖这里的会话鉴权。
+		// iMessage（BlueBubbles）的事件回调由 Mac 上的服务端直接 POST 过来，带不了
+		// WebUI 的登录 cookie。它按回调地址里独立的 webhook token 鉴权，不依赖这里的
+		// 会话鉴权。
 		return true
 	default:
 		return false

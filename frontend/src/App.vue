@@ -428,7 +428,7 @@ const scopeProfile = computed(() => botProfiles.value.find((profile) => profile.
 const scopePlatform = computed(() => {
   const platform = scopeProfile.value?.platform;
   if (!platform) return botScope.value ? "未知平台" : "全部平台";
-  return ({ "onebot-v11": "OneBot v11", telegram: "Telegram", qq: "QQ", dingtalk: "钉钉", feishu: "飞书", discord: "Discord" } as Record<string, string>)[platform] || platform;
+  return ({ "onebot-v11": "OneBot v11", telegram: "Telegram", qq: "QQ", weixin: "微信", imessage: "iMessage", discord: "Discord" } as Record<string, string>)[platform] || platform;
 });
 const scopeAccount = computed(() => {
   const channel = stream.status?.channels?.find((channel) => channel.profile_id === botScope.value);

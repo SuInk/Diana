@@ -8,7 +8,7 @@ import "strings"
 // GroupRole 是「这个人在群里是什么身份」，取值与平台无关。
 //
 // 各家协议的说法本来就不一样：OneBot 用 owner/admin/member，Telegram 用
-// creator/administrator/member，钉钉只给一个 isAdmin 布尔。把它们收敛成同一套词
+// creator/administrator/member，QQ 官方频道给的是数字角色 ID。把它们收敛成同一套词
 // 有两个理由。
 //
 // 一是这些值会进提示词和工具结果。原样透传的话，模型在 QQ 群里看到 owner、在

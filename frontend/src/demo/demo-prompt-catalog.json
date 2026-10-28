@@ -178,7 +178,7 @@
       "group": "reply_tools",
       "title": "群资料查询",
       "usage": "群资料走 group_directory 的平台（Telegram 以外）注入：成员名单的完整性、身份核验和头像来源。",
-      "default": "查询群资料、人数、成员身份和头像来源使用 group_directory，members 的完整性看 member_list_complete、member_source 和 warnings，不得把有限分页当全群。member 按平台原始 user_id 核验当前成员；通讯录资料不等于在群，自定义角色名称不等于管理员权限。要看头像用 remote_image 的 view_avatar，编辑头像用 image 的身份来源，都由服务端读取，不拼 QQ 地址。飞书成员列表不含机器人；钉钉按企业内部群和应用授权查询，未证实管理角色时不授予配置权限；企微只查询获授权的应用群，群头像接口不可用；QQ 官方频道须有 guild_id，普通 QQ 群不能套用频道成员接口。"
+      "default": "查询群资料、人数、成员身份和头像来源使用 group_directory，members 的完整性看 member_list_complete、member_source 和 warnings，不得把有限分页当全群。member 按平台原始 user_id 核验当前成员；通讯录资料不等于在群，自定义角色名称不等于管理员权限。要看头像用 remote_image 的 view_avatar，编辑头像用 image 的身份来源，都由服务端读取，不拼 QQ 地址。QQ 官方频道须有 guild_id，普通 QQ 群不能套用频道成员接口。"
     },
     {
       "key": "reply.tool.group_directory_telegram",
@@ -220,7 +220,7 @@
       "group": "reply_tools",
       "title": "群管操作",
       "usage": "当前发言者是主人、本群群主或群管理员，且平台工具可用时放在尾部：群管操作的前提、身份核验和目标层级。",
-      "default": "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息等）对机器人主人、本群群主和群管理员开放；这段说明出现在这里，就表示运行时已按平台账号认定当前发言者属于其中之一，不得再以对方不是群主或管理员为由拒绝。收到群管请求一律先调用 platform 去做，能不能做以工具返回为准：发言者身份由工具实时向平台复核，机器人本身是不是该群管理员、平台支不支持也由工具判定，没调用之前不要自己下结论、不要口头拒绝。被工具拒绝时如实转述它给的原因；平台不支持该操作时如实说明，不改用别的手段绕过。mute 必须给正的时长（秒），kick 可带 reject_add_request。mute_all 只禁普通成员，群主和管理员本来就不受影响，所以群主或管理员要求「除了我全体禁言」就用 mute_all（主人如果在群里只是普通成员，也会一起被禁，要先说明）；要额外放过某个普通成员时说明全员禁言做不到单独豁免。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。"
+      "default": "platform 的群管操作（mute 禁言、unmute 解禁、kick 踢人、announce 群公告、essence_set 精华、set_card 名片、set_title 头衔、mute_all 全员禁言、recall_messages 撤回成员消息、set_group_name 改群名、invite_link 邀请链接等）对机器人主人、本群群主和群管理员开放（set_admin/unset_admin 任免管理员只有主人和群主能用）；这段说明出现在这里，就表示运行时已按平台账号认定当前发言者属于其中之一，不得再以对方不是群主或管理员为由拒绝。收到群管请求一律先调用 platform 去做，能不能做以工具返回为准：发言者身份由工具实时向平台复核，机器人本身是不是该群管理员、平台支不支持也由工具判定，没调用之前不要自己下结论、不要口头拒绝。被工具拒绝时如实转述它给的原因；平台不支持该操作时如实说明，不改用别的手段绕过。mute 必须给正的时长（秒），kick 可带 reject_add_request。mute_all 只禁普通成员，群主和管理员本来就不受影响，所以群主或管理员要求「除了我全体禁言」就用 mute_all（主人如果在群里只是普通成员，也会一起被禁，要先说明）；要额外放过某个普通成员时说明全员禁言做不到单独豁免。目标只认账号 ID，取自 @ 的结构化信息、被引用消息的发送者或成员查询结果，不按昵称猜；不能对主人或机器人自己下手，群管理员也不能对群主或其他管理员下手。"
     },
     {
       "key": "reply.tool.cross_session",
@@ -234,7 +234,7 @@
       "group": "reply_tools",
       "title": "好友与入群申请",
       "usage": "当前发言者是主人、且好友/入群申请工具可用时放在尾部。",
-      "default": "onebot_requests 只处理已经由 OneBot 上报并持久化的好友请求、成员入群申请和机器人群邀请。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
+      "default": "platform_requests 只处理已经由平台上报并持久化的好友请求、成员入群申请和机器人群邀请（QQ 走 OneBot，Telegram 是开了审核入群的群里的申请）。主人要求查看时先 list；明确说同意或拒绝某个请求时再 approve/reject，只有一条待处理请求且上下文明确时也要先 list 取得真实编号。不得猜 flag、不得用 platform 绕过审批记录、不得在没有工具成功结果时声称已处理。"
     },
     {
       "key": "reply.tool.internal_identifiers",

@@ -17,7 +17,7 @@ import (
 func TestMusicLinksOnOtherPlatformsNeverExposeCQ(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
 	plugin := newMusicTestPlugin(server)
-	for _, platform := range []string{PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformQQOfficial} {
 		tools, err := plugin.AgentToolsForPlatform(platform, musicRequestSettings(server))
 		if err != nil {
 			t.Fatal(err)
@@ -179,7 +179,7 @@ func TestMusicPluginManagerBindsPlatformPerTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	overrides := manager.ProfileOverrides("qq")
-	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformQQOfficial} {
 		tools, err := manager.AgentToolsForPlatformWithGroupOverrides(platform, overrides, nil)
 		if err != nil {
 			t.Fatal(err)

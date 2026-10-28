@@ -260,7 +260,7 @@ func TestMusicPluginFallsBackToTextOffOneBot(t *testing.T) {
 	plugin := newMusicTestPlugin(server)
 	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/netease-token"})
 
-	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformFeishu))
+	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformQQOfficial))
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}

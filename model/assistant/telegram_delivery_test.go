@@ -121,8 +121,8 @@ func TestOtherPlatformsDoNotAttemptOneBotForward(t *testing.T) {
 	withFastSendTiming(t)
 	channel := &recordingChannel{}
 	provider := &qualityTestProvider{}
-	rt := NewRuntime(BotConfig{Platform: PlatformFeishu, ForwardReplyThreshold: 1, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	if _, err := rt.sendDecorated(context.Background(), MessageEvent{Platform: PlatformFeishu, Kind: EventKindGroup, GroupID: "group"}, "第一段"+notificationSplitMarker+"第二段", outboundDecoration{}); err != nil {
+	rt := NewRuntime(BotConfig{Platform: PlatformQQOfficial, ForwardReplyThreshold: 1, SendChunkIntervalMS: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	if _, err := rt.sendDecorated(context.Background(), MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindGroup, GroupID: "group"}, "第一段"+notificationSplitMarker+"第二段", outboundDecoration{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(channel.sentSnapshot()) != 2 || len(channel.callsSnapshot()) != 0 || len(provider.requests) != 0 {

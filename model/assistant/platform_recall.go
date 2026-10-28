@@ -126,6 +126,12 @@ func (r *Runtime) deletePlatformMessage(ctx context.Context, event MessageEvent,
 			"chat_id":    chatID,
 			"message_id": oneBotIDParam(messageID),
 		})
+	case PlatformQQOfficial:
+		path, err := qqOfficialDeleteMessagePath(event, messageID)
+		if err != nil {
+			return nil, err
+		}
+		return r.callPlatformAPIForEvent(ctx, event, "DELETE "+path, nil)
 	}
 	return nil, fmt.Errorf("当前平台不支持撤回")
 }

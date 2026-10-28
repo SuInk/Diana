@@ -219,8 +219,9 @@ func (c *TelegramChannel) fetchUpdates(ctx context.Context) ([]telegramUpdate, e
 	params := map[string]any{
 		"timeout": telegramPollTimeoutSeconds,
 		// 只订阅消息类更新，避免拉回大量无关事件。message_reaction 是群友给消息挂的表情，
-		// 群统计要用；Telegram 只在机器人是群管理员时推送它。
-		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post", "chat_member", "my_chat_member", "message_reaction"},
+		// 群统计要用；Telegram 只在机器人是群管理员时推送它。chat_join_request 是开了
+		// 「审核入群」的群里的入群申请，同样只推给有邀请权限的管理员机器人。
+		"allowed_updates": []string{"message", "edited_message", "channel_post", "edited_channel_post", "chat_member", "my_chat_member", "message_reaction", "chat_join_request"},
 	}
 	c.mu.RLock()
 	offset := c.offset
@@ -265,6 +266,20 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) e
 				log.Printf("telegram: handle mute change failed: update_id=%d chat_id=%s err=%v", update.UpdateID, event.GroupID, err)
 			}
 		}
+	}
+	if update.ChatJoinRequest != nil {
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if handler == nil {
+			return nil
+		}
+		if event, ok := telegramJoinRequestEvent(update.ChatJoinRequest, c.Status().SelfID); ok {
+			if err := handler(ctx, event); err != nil {
+				log.Printf("telegram: handle join request failed: update_id=%d chat_id=%s err=%v", update.UpdateID, event.GroupID, err)
+			}
+		}
+		return nil
 	}
 	if update.MessageReaction != nil {
 		c.mu.RLock()
@@ -571,7 +586,7 @@ func materializeTelegramInlineMedia(msg OutgoingMessage) (OutgoingMessage, func(
 					return nil, err
 				}
 			}
-			path := filepath.Join(dir, fmt.Sprintf("%s-%d%s", kind, index, imessageExtensionFor(http.DetectContentType(body))))
+			path := filepath.Join(dir, fmt.Sprintf("%s-%d%s", kind, index, mediaExtensionFor(http.DetectContentType(body))))
 			if err := os.WriteFile(path, body, 0o600); err != nil {
 				return nil, err
 			}
@@ -830,6 +845,7 @@ type telegramUpdate struct {
 	ChannelPost       *telegramMessage      `json:"channel_post,omitempty"`
 	EditedChannelPost *telegramMessage      `json:"edited_channel_post,omitempty"`
 	MessageReaction   *telegramReaction     `json:"message_reaction,omitempty"`
+	ChatJoinRequest   *telegramJoinRequest  `json:"chat_join_request,omitempty"`
 }
 
 // telegramReaction 是 Bot API 的 MessageReactionUpdated：某人对某条消息挂着的表情变了。

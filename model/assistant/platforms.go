@@ -12,28 +12,19 @@ const (
 	PlatformOneBotV11  = "onebot-v11"
 	PlatformTelegram   = "telegram"
 	PlatformQQOfficial = "qq-official"
-	PlatformDingTalk   = "dingtalk"
-	PlatformFeishu     = "feishu"
-	PlatformWeCom      = "wecom"
 	PlatformWeixin     = "weixin"
 	PlatformIMessage   = "imessage"
 
-	ProtocolOneBotV11     = "onebot-v11"
-	ProtocolTelegramBot   = "telegram-bot-api"
-	ProtocolQQOfficialWS  = "qq-official-gateway-ws"
-	ProtocolDingTalkWS    = "dingtalk-stream-ws"
-	ProtocolFeishuWebhook = "feishu-event-callback"
-	ProtocolWeComWebhook  = "wecom-event-callback"
-	ProtocolWeixinILink   = "weixin-ilink-longpoll"
-	ProtocolBlueBubbles   = "bluebubbles"
+	ProtocolOneBotV11    = "onebot-v11"
+	ProtocolTelegramBot  = "telegram-bot-api"
+	ProtocolQQOfficialWS = "qq-official-gateway-ws"
+	ProtocolWeixinILink  = "weixin-ilink-longpoll"
+	ProtocolBlueBubbles  = "bluebubbles"
 
 	// PlatformCategory* 用于在 WebUI 里按聊天平台分组。
 	PlatformCategoryOneBotV11  = "onebot_v11"
 	PlatformCategoryTelegram   = "telegram"
 	PlatformCategoryQQOfficial = "qq_official"
-	PlatformCategoryDingTalk   = "dingtalk"
-	PlatformCategoryFeishu     = "feishu"
-	PlatformCategoryWeCom      = "wecom"
 	PlatformCategoryWeixin     = "weixin"
 	PlatformCategoryIMessage   = "imessage"
 )
@@ -70,8 +61,8 @@ type PlatformDefinition struct {
 	// 适配器还在发纯文本 msgtype，只会让 ** 和 # 以字面量漏进聊天窗口。所以新增
 	// 平台时先把出站改成发富文本，再来翻这个字段。
 	//
-	// 各家认的 Markdown 子集并不一样（钉钉不认代码块、企业微信不认斜体、飞书不认
-	// 标题、QQ 官方机器人不认行内代码，都不认表格），差异由各自适配器的 platformMarkdownFeatures 抹平。
+	// 各家认的 Markdown 子集并不一样（QQ 官方机器人不认行内代码，都不认表格），
+	// 差异由各自适配器的 platformMarkdownFeatures 抹平。
 	RichText bool `json:"rich_text,omitempty"`
 	// Untested 表示适配器只按协议文档实现，还没在真实账号上跑通收发。WebUI 据此
 	// 给平台打「未测试」标记，提醒用户出问题时先怀疑适配器本身。
@@ -82,9 +73,6 @@ var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformOneBotV11, Name: "OneBot v11", Protocol: ProtocolOneBotV11, Category: PlatformCategoryOneBotV11, CategoryLabel: "OneBot v11", Description: "OneBot v11 正向 WebSocket、反向 WebSocket 和 HTTP 接入", Inbound: InboundReverseWS},
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
-	{ID: PlatformDingTalk, Name: "钉钉", Protocol: ProtocolDingTalkWS, Category: PlatformCategoryDingTalk, CategoryLabel: "钉钉", Description: "Stream 模式出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true, Untested: true},
-	{ID: PlatformFeishu, Name: "飞书", Protocol: ProtocolFeishuWebhook, Category: PlatformCategoryFeishu, CategoryLabel: "飞书", Description: "事件订阅回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: FeishuCallbackPath, RichText: true, Untested: true},
-	{ID: PlatformWeCom, Name: "企业微信", Protocol: ProtocolWeComWebhook, Category: PlatformCategoryWeCom, CategoryLabel: "企业微信", Description: "应用回调，需要一个公网可达的回调地址", Inbound: InboundCallback, CallbackPath: WeComCallbackPath, RichText: true, Untested: true},
 	{ID: PlatformWeixin, Name: "微信", Protocol: ProtocolWeixinILink, Category: PlatformCategoryWeixin, CategoryLabel: "微信", Description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", Inbound: InboundOutbound, Untested: true},
 	{ID: PlatformIMessage, Name: "iMessage", Protocol: ProtocolBlueBubbles, Category: PlatformCategoryIMessage, CategoryLabel: "iMessage", Description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", Inbound: InboundCallback, CallbackPath: IMessageCallbackPath, Untested: true},
 }
@@ -156,12 +144,13 @@ func NormalizePlatformID(value string) string {
 		return PlatformTelegram
 	case "qq-official", "qq_official", "qqbot", "qq bot", "qq official":
 		return PlatformQQOfficial
+	// 下面几家已暂时下线，别名仍收敛到原来的 ID，老配置才能被认出来并提示下线。
 	case "dingtalk", "ding", "ding-talk", "钉钉":
-		return PlatformDingTalk
+		return "dingtalk"
 	case "feishu", "lark", "飞书":
-		return PlatformFeishu
+		return "feishu"
 	case "wecom", "wework", "work-weixin", "企业微信":
-		return PlatformWeCom
+		return "wecom"
 	case "weixin", "wechat", "ilink", "微信":
 		return PlatformWeixin
 	case "imessage", "i-message", "bluebubbles", "apple-messages":
@@ -219,30 +208,6 @@ func NewChannelForConfig(cfg BotConfig) Channel {
 			AppSecret: cfg.QQAppSecret,
 			Sandbox:   cfg.QQSandbox,
 		})
-	case PlatformDingTalk:
-		return NewDingTalkChannel(DingTalkConfig{
-			ClientID:     cfg.DingTalkClientID,
-			ClientSecret: cfg.DingTalkClientSecret,
-			RobotCode:    cfg.DingTalkRobotCode,
-		})
-	case PlatformFeishu:
-		return NewFeishuChannel(FeishuConfig{
-			ProfileID:         cfg.ID,
-			AppID:             cfg.FeishuAppID,
-			AppSecret:         cfg.FeishuAppSecret,
-			VerificationToken: cfg.FeishuVerificationToken,
-			EncryptKey:        cfg.FeishuEncryptKey,
-			APIBaseURL:        cfg.FeishuAPIBaseURL,
-		})
-	case PlatformWeCom:
-		return NewWeComChannel(WeComConfig{
-			ProfileID:      cfg.ID,
-			CorpID:         cfg.WeComCorpID,
-			AgentID:        cfg.WeComAgentID,
-			Secret:         cfg.WeComSecret,
-			Token:          cfg.WeComToken,
-			EncodingAESKey: cfg.WeComEncodingAESKey,
-		})
 	case PlatformWeixin:
 		return NewWeixinChannel(WeixinConfig{
 			ProfileID: cfg.ID,
@@ -258,6 +223,9 @@ func NewChannelForConfig(cfg BotConfig) Channel {
 			WebhookToken: cfg.IMessageWebhookToken,
 			PollSeconds:  cfg.IMessagePollSeconds,
 		})
+	default:
+		// 不在注册表里的平台（老配置里已下线的平台）给一个只报告原因的占位通道。
+		return newUnsupportedPlatformChannel(cfg)
 	}
 	return nil
 }
@@ -273,9 +241,34 @@ func PlatformByID(id string) (PlatformDefinition, bool) {
 	return PlatformDefinition{}, false
 }
 
+// retiredPlatformNames 是暂时下线的接入平台（ID → 展示名）。老配置里可能还留着
+// 这些平台的机器人：它们照常加载和列出，只是不启动通道，状态里说明已下线。
+var retiredPlatformNames = map[string]string{
+	"dingtalk": "钉钉",
+	"feishu":   "飞书",
+	"wecom":    "企业微信",
+}
+
+// RetiredPlatformName 判断平台是否已暂时下线，是的话返回它的展示名。
+func RetiredPlatformName(id string) (string, bool) {
+	name, ok := retiredPlatformNames[NormalizePlatformID(id)]
+	return name, ok
+}
+
+// UnsupportedPlatformMessage 给不受支持的平台一句面向用户的说明。
+func UnsupportedPlatformMessage(id string) string {
+	if name, ok := RetiredPlatformName(id); ok {
+		return fmt.Sprintf("%s 平台已暂时下线，这个机器人不会启动", name)
+	}
+	return fmt.Sprintf("不支持的平台 %q，这个机器人不会启动", strings.TrimSpace(id))
+}
+
 // ValidatePlatform 校验平台是否有可用适配器。
 func ValidatePlatform(id string) error {
 	if _, ok := PlatformByID(id); !ok {
+		if name, retired := RetiredPlatformName(id); retired {
+			return fmt.Errorf("diana: %s 平台已暂时下线", name)
+		}
 		return fmt.Errorf("diana: unsupported platform %q", id)
 	}
 	return nil

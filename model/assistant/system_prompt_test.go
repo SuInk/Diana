@@ -74,7 +74,7 @@ func TestDefaultSystemPromptTeachesHowToSpeak(t *testing.T) {
 // 而场景说明（promptGroupScope、群聊发言者模板）和平台输出规则
 // （platformOutputRulesForConfig）本来就由运行时按当轮实际情况注入。
 func TestDefaultSystemPromptAssumesNoVenueOrPlatform(t *testing.T) {
-	for _, venue := range []string{"群里", "群聊", "本群", "群友", "QQ", "Telegram", "飞书", "企业微信", "OneBot"} {
+	for _, venue := range []string{"群里", "群聊", "本群", "群友", "QQ", "Telegram", "OneBot"} {
 		if strings.Contains(defaultSystemPrompt, venue) {
 			t.Fatalf("默认人设写了 %q：人设要能跨机器人、跨平台、跨群聊和私聊复用，场合和平台由运行时注入，正文里提到别人就写「对方」「别人」「大家」：%q", venue, defaultSystemPrompt)
 		}

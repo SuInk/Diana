@@ -4,7 +4,7 @@
 
 **An AI agent that lives in your group chats — it chimes in without being @-mentioned, and it can search the web, play song requests, send stickers, and remember what your group agreed on. Self-hosted, single binary, your data never leaves your machine.**
 
-<sub>OneBot v11 · Telegram · QQ Official Bot · DingTalk · Feishu · WeCom — one instance, all online at once</sub>
+<sub>OneBot v11 · Telegram · QQ Official Bot · WeChat · iMessage — one instance, all online at once</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
@@ -23,7 +23,7 @@
 
 ## What is Diana
 
-You have an AI you want in your group chats: joining the conversation in a QQ group, taking song requests on Telegram, answering coworkers on Feishu. Diana is the layer in between — a single Go binary that talks to LLMs on one side (OpenAI-compatible APIs, Gemini, Anthropic) and to six chat platforms on the other, with a web console managing everything in the middle.
+You have an AI you want in your group chats: joining the conversation in a QQ group, taking song requests on Telegram, answering questions for your group. Diana is the layer in between — a single Go binary that talks to LLMs on one side (OpenAI-compatible APIs, Gemini, Anthropic) and to five chat platforms on the other, with a web console managing everything in the middle.
 
 It's built for people who want to run their own bot:
 
@@ -82,21 +82,20 @@ Every enabled bot profile is online at the same time, and replies always go back
 | **OneBot v11** (SnowLuma recommended) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
 | **Telegram** | Bot Token from BotFather (a proxy address is often needed from mainland China) | Diana connects outbound, no public address needed |
 | **QQ Official Bot** | AppID + AppSecret from the open platform (sandbox available before listing) | Diana connects outbound, no public address needed |
-| **DingTalk** | App Client ID + Client Secret (Stream mode) | Diana connects outbound, no public address needed |
-| **Feishu** | App ID + App Secret + Verification Token (plus Encrypt Key if encrypted push is on) | Platform callback → Diana, **public address required** |
-| **WeCom** | Corp ID + AgentId + Secret + callback Token/EncodingAESKey | Platform callback → Diana, **public address required** |
+| **WeChat** | Nothing to fill in: save the bot, then scan the QR code under Connect (Tencent iLink Bot, private chats only) | Diana connects outbound, no public address needed |
+| **iMessage** | Address and password of BlueBubbles Server on an always-on Mac; see the [iMessage setup guide](docs/imessage.md) (Chinese) | BlueBubbles webhook → Diana, the Mac only needs to reach Diana; optional polling fallback |
 
-For Feishu and WeCom, the Bots page shows the exact callback URLs to paste into the platform's admin console. Platform-specific quirks (e.g. QQ Official Bot only receives @-mentions by default; the group owner has to change the bot's group message scope) are covered in the [configuration docs](https://suink.github.io/Diana/configuration.html).
+For iMessage, the Bots page shows the exact callback URL to paste into BlueBubbles Server. Platform-specific quirks (e.g. QQ Official Bot only receives @-mentions by default; the group owner has to change the bot's group message scope) are covered in the [configuration docs](https://suink.github.io/Diana/configuration.html).
 
 ## Built-in abilities
 
 These ship with the binary — toggle and configure them in the console, no plugin installation needed:
 
-- **Proactive chatting** — it decides on its own when to chime in and when to stay quiet, no @-mention required; every reply-or-not decision is logged in the event center (requires the platform to deliver all group messages — on QQ Official Bot the group owner has to widen the bot's group message scope first, while DingTalk only pushes @-mentions so it never applies there).
+- **Proactive chatting** — it decides on its own when to chime in and when to stay quiet, no @-mention required; every reply-or-not decision is logged in the event center (requires the platform to deliver all group messages — on QQ Official Bot the group owner has to widen the bot's group message scope first).
 - **Web search** — time-sensitive questions get researched before answering; Exa first, Tavily as fallback.
 - **Link parsing** — videos and images from Bilibili / YouTube / X / Xiaohongshu / Douyin are resolved and posted right into the chat.
 - **File parsing** — group files, PDF, Office, and EPUB content is extracted and handed to the model.
-- **Song requests** — NetEase Cloud Music and QQ Music are tried in turn. OneBot QQ sends voice messages. Telegram uploads MP3 files with title and artist metadata for its native music player; no QQ music-card signing service is needed. Unavailable audio or preparation errors are reported as failures. QQ Official Bot, DingTalk, Feishu, and WeCom currently provide song-page links, not an in-chat player.
+- **Song requests** — NetEase Cloud Music and QQ Music are tried in turn. OneBot QQ sends voice messages. Telegram uploads MP3 files with title and artist metadata for its native music player; no QQ music-card signing service is needed. Unavailable audio or preparation errors are reported as failures. QQ Official Bot currently provides song-page links, not an in-chat player.
 - **Stickers** — picks a fitting sticker from the ones it has seen in the chat.
 - **Image understanding** — vision model + OCR (fully offline local options available), so even text-only models can "see" images.
 - **Rendered images** — tables, flowcharts, and sequence diagrams that plain text mangles get rendered to a picture when the model judges it worth it (Markdown / Mermaid / SVG; needs the headless browser from the "web rendering" plugin).

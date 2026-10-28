@@ -118,8 +118,8 @@ func TestFileAttachmentOneBotTransportUnchanged(t *testing.T) {
 
 func TestFileAttachmentRejectsUnsupportedPlatform(t *testing.T) {
 	channel := &scriptedChannel{}
-	r := NewRuntime(BotConfig{Platform: PlatformFeishu}, channel, NewPluginManager(), nil, nil, nil, nil)
-	err := r.sendFileAttachment(context.Background(), MessageEvent{Platform: PlatformFeishu}, "notes.md", []byte("hello"))
+	r := NewRuntime(BotConfig{Platform: "example-platform"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	err := r.sendFileAttachment(context.Background(), MessageEvent{Platform: "example-platform"}, "notes.md", []byte("hello"))
 	if err == nil || !strings.Contains(err.Error(), "file attachment sending is unavailable") {
 		t.Fatalf("error = %v", err)
 	}

@@ -176,9 +176,7 @@ func TestAdminChatConcurrentRunAndCancellation(t *testing.T) {
 func TestAdminChatDiagnosticsRedactsEvidenceAndCannotMutateExtensions(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	_, h, _, _ := newAdminChatTest(t, nil, assistant.BotConfig{ID: "bot", OneBotAccessToken: "bot-secret",
-		TelegramBotToken: "telegram-credential", QQAppSecret: "qq-credential", DingTalkClientSecret: "dingtalk-credential",
-		FeishuAppSecret: "feishu-credential", FeishuVerificationToken: "feishu-verification", FeishuEncryptKey: "feishu-encryption",
-		WeComSecret: "wecom-credential", WeComToken: "wecom-token", WeComEncodingAESKey: "wecom-encryption", WeixinBotToken: "weixin-credential"})
+		TelegramBotToken: "telegram-credential", QQAppSecret: "qq-credential", WeixinBotToken: "weixin-credential"})
 	h.runtime = h.runtime.(*adminChatStubRuntime).BotRuntime
 	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
 	if err != nil {
@@ -207,7 +205,7 @@ func TestAdminChatDiagnosticsRedactsEvidenceAndCannotMutateExtensions(t *testing
 	if !json.Valid([]byte(output)) {
 		t.Fatal("redaction corrupted JSON")
 	}
-	for _, secret := range []string{"telegram-credential", "qq-credential", "dingtalk-credential", "feishu-credential", "feishu-verification", "feishu-encryption", "wecom-credential", "wecom-token", "wecom-encryption", "weixin-credential"} {
+	for _, secret := range []string{"telegram-credential", "qq-credential", "weixin-credential"} {
 		if got := h.adminChatRedactor()("request failed: " + secret); strings.Contains(got, secret) {
 			t.Fatalf("platform credential remained in diagnostic text: %s", got)
 		}

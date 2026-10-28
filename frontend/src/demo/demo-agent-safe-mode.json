@@ -411,13 +411,18 @@
           "set_title",
           "mute_all",
           "unmute_all",
-          "recall_messages"
+          "recall_messages",
+          "set_group_name",
+          "invite_link",
+          "set_admin",
+          "unset_admin",
+          "leave_group"
         ],
         "reason": "禁言、踢人、群公告、精华、名片头衔、全员禁言、撤回成员消息等群管操作；查群资料、撤回自己的消息照常"
       },
       {
         "category": "self_modify",
-        "tool": "onebot_requests",
+        "tool": "platform_requests",
         "field": "operation",
         "operations": [
           "approve",

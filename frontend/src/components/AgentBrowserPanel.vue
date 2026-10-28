@@ -116,7 +116,7 @@ const screenshotUsersWithoutOperation = computed(() => {
 });
 // 个人浏览器按平台用户 ID 隔离，目前只在这几个平台上实测过。
 const testedPlatforms: Record<string, true> = { '': true, 'onebot-v11': true, 'qq-official': true, telegram: true };
-const platformNames: Record<string, string> = { dingtalk: '钉钉', feishu: '飞书', wecom: '企业微信', weixin: '微信', imessage: 'iMessage', discord: 'Discord' };
+const platformNames: Record<string, string> = { weixin: '微信', imessage: 'iMessage', discord: 'Discord' };
 const platform = ref('');
 const untestedPlatform = computed(() => testedPlatforms[platform.value] ? '' : (platformNames[platform.value] ?? platform.value));
 async function loadPlatform(profile: string) {

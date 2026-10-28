@@ -34,7 +34,7 @@
           <span><i class="stop"></i>拦下 / 沉默</span><span><i class="go"></i>转到别处继续</span><span><i class="loop"></i>回到前面某一步</span>
         </div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>平台消息</strong><p>OneBot / Telegram / QQ / 钉钉 / 飞书 / 企业微信，归一化为 <code>MessageEvent</code>。</p></div></li>
+          <li><div class="flow-node"><strong>平台消息</strong><p>OneBot / Telegram / QQ / 微信 / iMessage，归一化为 <code>MessageEvent</code>。</p></div></li>
           <li><div class="flow-node"><strong>持久化入站队列</strong><p>断线补拉、缺口检测、失败重试，进程重启也不丢。</p></div></li>
           <li class="q"><div class="flow-node"><strong>回复触发</strong><p>确定性门禁 → 直接触发 → 接话评分。</p></div><div class="flow-exits"><span class="flow-exit"><b>不回</b>记录原因</span></div></li>
           <li><div class="flow-node"><strong>组装上下文</strong><p>SOUL.md、历史、记忆、媒体，稳定部分在前以命中前缀缓存。</p></div></li>
@@ -343,7 +343,7 @@
       <nav class="page-nav" aria-label="文档分页"><a href="./implementation"><small>上一页</small><strong>← 实现</strong></a><a href="./operations"><small>下一页</small><strong>运维 →</strong></a></nav>
       <div data-docs-footer></div>
     </main></div>
-    <script src="./icons.js?v=20260847"></script>
+    <script src="./icons.js?v=20261028"></script>
     <script src="./app.js?v=20261015" defer></script>
   </body>
 </html>

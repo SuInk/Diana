@@ -332,9 +332,10 @@ func TestPlatformToolMuteDurationValidation(t *testing.T) {
 
 func TestPlatformToolUnsupportedPlatformForModeration(t *testing.T) {
 	channel := &recordingChannel{}
-	event := MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "123", SelfID: "bot", Platform: PlatformFeishu}
-	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "bot", Platform: PlatformFeishu}, channel, event)
-	_, err := tool.Run(context.Background(), map[string]any{"operation": "kick", "user_id": "555"})
+	// Telegram 没有群名片，set_card 在门口就该拒掉。
+	event := MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "123", SelfID: "bot", Platform: PlatformTelegram}
+	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "bot", Platform: PlatformTelegram}, channel, event)
+	_, err := tool.Run(context.Background(), map[string]any{"operation": "set_card", "user_id": "555", "card": "x"})
 	if err == nil || !strings.Contains(err.Error(), "当前平台暂不支持此操作") {
 		t.Fatalf("unsupported platform error = %v", err)
 	}

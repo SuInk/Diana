@@ -18,14 +18,14 @@ import (
 	"github.com/SuInk/diana/model/netguard"
 )
 
-// 四个国内平台（QQ 官方、钉钉、飞书、企业微信）都是同一套模式：拿 appid/secret
-// 换一个有时效的 access token，之后所有 API 调用带着它走。这里放它们共用的部分，
-// 各自的适配器只描述自己的端点和报文格式。
+// 开放平台类接入（目前是 QQ 官方机器人）的通用模式：拿 appid/secret 换一个有时效的
+// access token，之后所有 API 调用带着它走。这里放与具体平台无关的部分，适配器只
+// 描述自己的端点和报文格式。
 
 // platformTokenCache 缓存有时效的 access token。
 //
-// 每次调用都重新换 token 会很快撞上平台的频控（企业微信和飞书都对 token 接口
-// 单独限流），而 token 过期后继续用又会让所有消息发送失败。这里按平台返回的
+// 每次调用都重新换 token 会很快撞上平台的频控（开放平台普遍对 token 接口单独
+// 限流），而 token 过期后继续用又会让所有消息发送失败。这里按平台返回的
 // expires_in 缓存，并提前一段时间刷新，避免踩在过期边界上。
 type platformTokenCache struct {
 	mu        sync.Mutex
@@ -78,7 +78,7 @@ const platformHTTPResponseLimit = 8 << 20
 // platformJSONRequest 发一个 JSON 请求并把响应体读回来。
 //
 // 只负责传输：HTTP 层失败返回 error，业务错误码由各平台自己的解析函数判断，
-// 因为四家的错误信封字段名各不相同。
+// 因为各家的错误信封字段名各不相同。
 func platformJSONRequest(ctx context.Context, client *http.Client, method, endpoint string, headers map[string]string, payload any) ([]byte, error) {
 	var body io.Reader
 	if payload != nil {
@@ -130,7 +130,7 @@ func truncateForError(value string) string {
 
 // platformOutboundText 把出站消息压成一段纯文本。
 //
-// 这四个平台都不支持 OneBot 那种富消息段数组，能稳定投递的只有文本；提及标记
+// 开放平台接口不支持 OneBot 那种富消息段数组，能稳定投递的只有文本；提及标记
 // 在这里按各平台的规则还原成可见文字，不能原样留着 [diana-at:ID] 漏给用户。
 func platformOutboundText(msg OutgoingMessage) string {
 	text, _ := renderDianaMentions(msg.Text, msg.MentionNames)
@@ -147,8 +147,8 @@ func platformChatTarget(msg OutgoingMessage) (id string, isGroup bool) {
 
 // platformEventTime 归一化平台下发的时间戳到秒。
 //
-// 各家单位不一致：钉钉和企业微信给毫秒，QQ 官方给 RFC3339 字符串，飞书给的是
-// 字符串形式的毫秒。统一成秒，事件时间轴才对得上。
+// 平台给的单位不一致：可能是秒、毫秒、字符串形式的毫秒，QQ 官方给 RFC3339 字符串。
+// 统一成秒，事件时间轴才对得上。
 func platformEventTime(value any) int64 {
 	switch v := value.(type) {
 	case int64:

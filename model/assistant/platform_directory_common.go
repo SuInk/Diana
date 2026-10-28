@@ -151,17 +151,6 @@ func requireDirectoryID(id string) error {
 	}
 	return nil
 }
-func directoryRole(userID, owner string, admins []string) string {
-	if userID == owner && owner != "" {
-		return "owner"
-	}
-	for _, id := range admins {
-		if id == userID {
-			return "admin"
-		}
-	}
-	return "member"
-}
 func directoryInt(v any) int {
 	if text, ok := v.(string); ok {
 		n, _ := strconv.Atoi(text)

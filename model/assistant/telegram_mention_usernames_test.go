@@ -308,7 +308,7 @@ func TestTelegramMentionUsernamesCannotAuthenticateOwner(t *testing.T) {
 
 func TestRuntimeClearsReusedTelegramMentionUsernames(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformFeishu} {
+	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformQQOfficial} {
 		for _, text := range []string{"plain text", "[diana-at:10001]"} {
 			event := telegramMentionTestEvent("10001", 20, nil)
 			event.Platform = platform

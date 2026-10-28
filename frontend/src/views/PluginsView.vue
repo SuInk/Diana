@@ -1639,9 +1639,6 @@ const pluginPlatformLabels: Record<string, string> = {
   "onebot-v11": "OneBot",
   telegram: "Telegram",
   "qq-official": "QQ 官方",
-  dingtalk: "钉钉",
-  feishu: "飞书",
-  wecom: "企业微信",
   weixin: "微信",
   imessage: "iMessage"
 };

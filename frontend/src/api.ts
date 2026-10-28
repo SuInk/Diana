@@ -228,29 +228,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   qq_app_secret?: string;
   qq_app_secret_configured?: boolean;
   qq_sandbox?: boolean;
-  /** 钉钉 Stream 模式，出站长连接。 */
-  dingtalk_client_id?: string;
-  dingtalk_client_secret?: string;
-  dingtalk_client_secret_configured?: boolean;
-  dingtalk_robot_code?: string;
-  /** 飞书事件订阅，需要公网回调地址。 */
-  feishu_app_id?: string;
-  feishu_app_secret?: string;
-  feishu_app_secret_configured?: boolean;
-  feishu_verification_token?: string;
-  feishu_verification_token_configured?: boolean;
-  feishu_encrypt_key?: string;
-  feishu_encrypt_key_configured?: boolean;
-  feishu_api_base_url?: string;
-  /** 企业微信应用回调，需要公网回调地址。 */
-  wecom_corp_id?: string;
-  wecom_agent_id?: string;
-  wecom_secret?: string;
-  wecom_secret_configured?: boolean;
-  wecom_token?: string;
-  wecom_token_configured?: boolean;
-  wecom_encoding_aes_key?: string;
-  wecom_encoding_aes_key_configured?: boolean;
   /** 微信 iLink：凭据只能扫码写入，这里只读。 */
   weixin_bot_id?: string;
   weixin_user_id?: string;

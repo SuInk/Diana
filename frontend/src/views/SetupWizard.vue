@@ -179,6 +179,7 @@
               @update:model-value="(value) => (botForm.platform = value)"
             />
             <span class="hint">{{ platformDescription }}</span>
+            <span v-if="retiredPlatform" class="hint warn-text">之前保存的平台「{{ retiredPlatform }}」已暂时下线，请改选上面列出的平台。</span>
           </div>
           <template v-if="isOneBotPlatform">
             <div class="field wide">
@@ -271,84 +272,6 @@
             </div>
           </template>
 
-          <template v-else-if="botForm.platform === 'dingtalk'">
-            <div class="field wide">
-              <label for="wizard-ding-id">Client ID</label>
-              <input id="wizard-ding-id" v-model="botForm.dingtalk_client_id" class="input mono" autocomplete="off" placeholder="应用的 AppKey / Client ID" />
-              <span class="hint">钉钉开放平台的应用凭证页可以看到。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-ding-secret">Client Secret</label>
-              <input id="wizard-ding-secret" v-model="botForm.dingtalk_client_secret" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('dingtalk_client_secret_configured') ? '留空表示沿用已保存的 Secret' : '应用的 AppSecret / Client Secret'" />
-              <span class="hint">用 Stream 模式出站长连接接入，不需要公网地址，也不用在后台配 HTTP 回调。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-ding-robot">机器人 RobotCode（可选）</label>
-              <input id="wizard-ding-robot" v-model="botForm.dingtalk_robot_code" class="input mono" autocomplete="off" placeholder="留空则与 Client ID 相同" />
-              <span class="hint">企业内部机器人单独分配了 robotCode 时才需要填。</span>
-            </div>
-          </template>
-
-          <template v-else-if="botForm.platform === 'feishu'">
-            <div class="field wide">
-              <label for="wizard-feishu-appid">App ID</label>
-              <input id="wizard-feishu-appid" v-model="botForm.feishu_app_id" class="input mono" autocomplete="off" placeholder="cli_ 开头的自建应用 App ID" />
-              <span class="hint">飞书开放平台的「凭证与基础信息」页。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-feishu-secret">App Secret</label>
-              <input id="wizard-feishu-secret" v-model="botForm.feishu_app_secret" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('feishu_app_secret_configured') ? '留空表示沿用已保存的 Secret' : '自建应用的 App Secret'" />
-            </div>
-            <div class="field wide">
-              <label for="wizard-feishu-verify">Verification Token</label>
-              <input id="wizard-feishu-verify" v-model="botForm.feishu_verification_token" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('feishu_verification_token_configured') ? '留空表示沿用已保存的 Token' : '事件订阅页的 Verification Token'" />
-              <span class="hint">用于核验回调来源。强烈建议填写——回调地址本身是公开的，不能当凭据用。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-feishu-encrypt">Encrypt Key（可选）</label>
-              <input id="wizard-feishu-encrypt" v-model="botForm.feishu_encrypt_key" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('feishu_encrypt_key_configured') ? '留空表示沿用已保存的 Key' : '后台开启了加密推送才填'" />
-              <span class="hint">填了这里就必须在飞书后台同步开启加密推送，否则明文回调会被拒绝。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-feishu-base">开放平台地址（可选）</label>
-              <input id="wizard-feishu-base" v-model="botForm.feishu_api_base_url" class="input mono" autocomplete="off" placeholder="留空使用 https://open.feishu.cn" />
-              <span class="hint">Lark 国际版填 https://open.larksuite.com。</span>
-            </div>
-          </template>
-
-          <template v-else-if="botForm.platform === 'wecom'">
-            <div class="field wide">
-              <label for="wizard-wecom-corp">企业 ID</label>
-              <input id="wizard-wecom-corp" v-model="botForm.wecom_corp_id" class="input mono" autocomplete="off" placeholder="ww 开头的 CorpID" />
-              <span class="hint">企业微信管理后台「我的企业」页底部。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-wecom-agent">AgentId</label>
-              <input id="wizard-wecom-agent" v-model="botForm.wecom_agent_id" class="input mono" inputmode="numeric" autocomplete="off" placeholder="自建应用的 AgentId，纯数字" />
-              <span class="hint">在「应用管理」里打开自建应用即可看到。</span>
-            </div>
-            <div class="field wide">
-              <label for="wizard-wecom-secret">应用 Secret</label>
-              <input id="wizard-wecom-secret" v-model="botForm.wecom_secret" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('wecom_secret_configured') ? '留空表示沿用已保存的 Secret' : '自建应用的 Secret'" />
-            </div>
-            <div class="field wide">
-              <label for="wizard-wecom-token">Token</label>
-              <input id="wizard-wecom-token" v-model="botForm.wecom_token" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('wecom_token_configured') ? '留空表示沿用已保存的 Token' : '「接收消息」配置里的 Token'" />
-            </div>
-            <div class="field wide">
-              <label for="wizard-wecom-aes">EncodingAESKey</label>
-              <input id="wizard-wecom-aes" v-model="botForm.wecom_encoding_aes_key" class="input" type="password" autocomplete="off"
-                :placeholder="secretConfigured('wecom_encoding_aes_key_configured') ? '留空表示沿用已保存的 Key' : '43 位的 EncodingAESKey'" />
-              <span class="hint">Token 和 EncodingAESKey 用于回调验签和解密，缺一个就只能发不能收。</span>
-            </div>
-          </template>
-
           <template v-else-if="botForm.platform === 'weixin'">
             <WeixinLoginPanel
               v-if="savedBot?.platform === 'weixin' && savedBot.id"
@@ -382,7 +305,7 @@
             </div>
           </template>
 
-          <!-- 飞书和企业微信只能靠平台回调收消息，地址要填到对方后台。 -->
+          <!-- 回调型平台（iMessage）只能靠平台回调收消息，地址要填到对方那边。 -->
           <div v-if="callbackURL" class="field wide">
             <label for="wizard-callback-url">回调地址</label>
             <div class="input-group">
@@ -391,7 +314,7 @@
                 <Copy :size="14" aria-hidden="true" />
               </button>
             </div>
-            <span class="hint">填到该平台后台的事件接收配置里。这里按你当前访问控制台的地址拼出，必须换成平台服务器能访问到的公网 HTTPS 地址才收得到消息。</span>
+            <span class="hint">这里按你当前访问控制台的地址拼出，域名要换成平台那边访问得到的 Diana 地址。iMessage 需要带 Webhook 密钥的完整地址，保存后到「机器人」页复制。</span>
           </div>
           <div class="field">
             <label for="wizard-owner">{{ ownerLabel }}（可选）</label>
@@ -653,19 +576,6 @@ const botForm = ref({
   qq_app_id: "",
   qq_app_secret: "",
   qq_sandbox: false,
-  dingtalk_client_id: "",
-  dingtalk_client_secret: "",
-  dingtalk_robot_code: "",
-  feishu_app_id: "",
-  feishu_app_secret: "",
-  feishu_verification_token: "",
-  feishu_encrypt_key: "",
-  feishu_api_base_url: "",
-  wecom_corp_id: "",
-  wecom_agent_id: "",
-  wecom_secret: "",
-  wecom_token: "",
-  wecom_encoding_aes_key: "",
   imessage_server_url: "",
   imessage_password: "",
   imessage_webhook_token: ""
@@ -684,6 +594,10 @@ const platforms = ref<BotPlatform[]>([
     inbound: "reverse_ws"
   }
 ]);
+
+// 老配置里可能是已下线的平台（例如飞书），注册表查不到它；记下原始 ID 提示用户，
+// 表单退回 OneBot，免得按一个不存在的平台保存。
+const retiredPlatform = ref("");
 
 const platformOptions = computed(() =>
   platforms.value.map((platform) => ({ value: platform.id, label: platform.name, hint: platform.description }))
@@ -913,24 +827,6 @@ function credentialError(): string {
     case "qq-official":
       if (form.qq_app_id.trim() === "") return "请填写 QQ 开放平台的 AppID";
       return filled(form.qq_app_secret, "qq_app_secret_configured") ? "" : "请填写 QQ 开放平台的 AppSecret";
-    case "dingtalk":
-      if (form.dingtalk_client_id.trim() === "") return "请填写钉钉应用的 Client ID";
-      return filled(form.dingtalk_client_secret, "dingtalk_client_secret_configured")
-        ? ""
-        : "请填写钉钉应用的 Client Secret";
-    case "feishu":
-      if (form.feishu_app_id.trim() === "") return "请填写飞书自建应用的 App ID";
-      return filled(form.feishu_app_secret, "feishu_app_secret_configured") ? "" : "请填写飞书自建应用的 App Secret";
-    case "wecom":
-      if (form.wecom_corp_id.trim() === "") return "请填写企业微信的企业 ID";
-      if (!/^\d+$/.test(form.wecom_agent_id.trim())) return "请填写自建应用的 AgentId，为纯数字";
-      if (!filled(form.wecom_secret, "wecom_secret_configured")) return "请填写自建应用的 Secret";
-      // 回调验签缺任何一项都是「只能发不能收」，这种半可用状态先说清楚。
-      if (!filled(form.wecom_token, "wecom_token_configured")
-        || !filled(form.wecom_encoding_aes_key, "wecom_encoding_aes_key_configured")) {
-        return "请填写企业微信「接收消息」里的 Token 和 EncodingAESKey，缺一个就只能发不能收";
-      }
-      return "";
     case "imessage":
       if (!/^https?:\/\/\S+$/.test(form.imessage_server_url.trim())) return "请填写 BlueBubbles 服务器地址，以 http:// 或 https:// 开头";
       return filled(form.imessage_password, "imessage_password_configured") ? "" : "请填写 BlueBubbles 服务器密码";
@@ -957,28 +853,6 @@ function platformPayload(): Partial<BotProfileConfig> {
         qq_app_id: form.qq_app_id.trim(),
         qq_app_secret: form.qq_app_secret.trim() || undefined,
         qq_sandbox: form.qq_sandbox
-      };
-    case "dingtalk":
-      return {
-        dingtalk_client_id: form.dingtalk_client_id.trim(),
-        dingtalk_client_secret: form.dingtalk_client_secret.trim() || undefined,
-        dingtalk_robot_code: form.dingtalk_robot_code.trim()
-      };
-    case "feishu":
-      return {
-        feishu_app_id: form.feishu_app_id.trim(),
-        feishu_app_secret: form.feishu_app_secret.trim() || undefined,
-        feishu_verification_token: form.feishu_verification_token.trim() || undefined,
-        feishu_encrypt_key: form.feishu_encrypt_key.trim() || undefined,
-        feishu_api_base_url: form.feishu_api_base_url.trim()
-      };
-    case "wecom":
-      return {
-        wecom_corp_id: form.wecom_corp_id.trim(),
-        wecom_agent_id: form.wecom_agent_id.trim(),
-        wecom_secret: form.wecom_secret.trim() || undefined,
-        wecom_token: form.wecom_token.trim() || undefined,
-        wecom_encoding_aes_key: form.wecom_encoding_aes_key.trim() || undefined
       };
     case "weixin":
       // 微信凭据只能扫码写入，保存时没有要提交的接入字段。
@@ -1013,13 +887,6 @@ function clearSecretDrafts(): void {
   form.onebot_http_secret = "";
   form.telegram_bot_token = "";
   form.qq_app_secret = "";
-  form.dingtalk_client_secret = "";
-  form.feishu_app_secret = "";
-  form.feishu_verification_token = "";
-  form.feishu_encrypt_key = "";
-  form.wecom_secret = "";
-  form.wecom_token = "";
-  form.wecom_encoding_aes_key = "";
   form.imessage_password = "";
   form.imessage_webhook_token = "";
 }
@@ -1056,11 +923,12 @@ async function saveBotAndStart(): Promise<void> {
 
 onMounted(async () => {
   // 平台列表失败不该挡住整个向导：兜底的 OneBot 一条仍然可用。
-  void getBotPlatforms()
+  const platformsReady = getBotPlatforms()
     .then((result) => {
       if (result.platforms.length > 0) platforms.value = result.platforms;
+      return result.platforms.length > 0;
     })
-    .catch(() => undefined);
+    .catch(() => false);
   try {
     const [llm, bot] = await Promise.all([getConfig(), getBotProfileConfig()]);
     savedLLM.value = llm;
@@ -1077,6 +945,13 @@ onMounted(async () => {
     selectedService.value = detectLLMService(llm.base_url, llm.provider);
     // 老配置可能压根没存 platform，按 OneBot 处理，和后端的归一化一致。
     botForm.value.platform = bot.platform || PlatformOneBotV11;
+    const savedPlatform = botForm.value.platform;
+    void platformsReady.then((loaded) => {
+      if (!loaded || botForm.value.platform !== savedPlatform) return;
+      if (platforms.value.some((platform) => platform.id === savedPlatform)) return;
+      retiredPlatform.value = savedPlatform;
+      botForm.value.platform = PlatformOneBotV11;
+    });
     botForm.value.onebot_transport = bot.onebot_transport || "reverse_ws";
     botForm.value.onebot_ws_endpoint = bot.onebot_ws_endpoint || "";
     botForm.value.onebot_http_url = bot.onebot_http_url || "";
@@ -1087,12 +962,6 @@ onMounted(async () => {
     botForm.value.telegram_proxy_url = bot.telegram_proxy_url || "";
     botForm.value.qq_app_id = bot.qq_app_id || "";
     botForm.value.qq_sandbox = Boolean(bot.qq_sandbox);
-    botForm.value.dingtalk_client_id = bot.dingtalk_client_id || "";
-    botForm.value.dingtalk_robot_code = bot.dingtalk_robot_code || "";
-    botForm.value.feishu_app_id = bot.feishu_app_id || "";
-    botForm.value.feishu_api_base_url = bot.feishu_api_base_url || "";
-    botForm.value.wecom_corp_id = bot.wecom_corp_id || "";
-    botForm.value.wecom_agent_id = bot.wecom_agent_id || "";
     botForm.value.imessage_server_url = bot.imessage_server_url || "";
     // 10001 was used by early demo data and should not appear as a real default.
     botForm.value.owner_id = bot.owner_id === "10001" ? "" : (bot.owner_id ?? "");

@@ -21,9 +21,6 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	existing.OneBotHTTPSecret = "original-http-secret"
 	existing.TelegramBotToken = "original-telegram-token"
 	existing.QQAppSecret = "original-qq-secret"
-	existing.DingTalkClientSecret = "original-dingtalk-secret"
-	existing.FeishuAppSecret = "original-feishu-secret"
-	existing.WeComSecret = "original-wecom-secret"
 	existing.GroupTriggers = []string{"old trigger"}
 	existing.PrivateAdmission.Mode = assistant.PrivateAdmissionAll
 	ctx, cancel := context.WithCancel(context.Background())
@@ -86,7 +83,7 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	}
 	for field, value := range map[string]string{
 		"onebot": fresh.OneBotAccessToken, "http": fresh.OneBotHTTPSecret, "telegram": fresh.TelegramBotToken,
-		"qq": fresh.QQAppSecret, "dingtalk": fresh.DingTalkClientSecret, "feishu": fresh.FeishuAppSecret, "wecom": fresh.WeComSecret,
+		"qq": fresh.QQAppSecret,
 	} {
 		if value != "" {
 			t.Errorf("new profile inherited %s credential", field)

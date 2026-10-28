@@ -85,8 +85,8 @@ func encodeExplicitMarkdownLayout(text string) string {
 // markdownToPlainForConfig 决定这台机器人要不要把 Markdown 降级成纯文本。
 //
 // 默认值随平台走：出站适配器能发富文本的平台（Telegram 转 entities，QQ 官方机器人
-// 发 msg_type 2，钉钉、飞书、企业微信发各自的 markdown 消息）默认保留标记，其余平台
-// 默认降级——OneBot、微信、iMessage 只有纯文本，留着 ** 和 # 只会以字面量漏出来。
+// 发 msg_type 2）默认保留标记，其余平台默认降级——OneBot、微信、iMessage 只有纯文本，
+// 留着 ** 和 # 只会以字面量漏出来。
 //
 // 用户在配置里显式设过就以设置为准：有人偏好在 Telegram 里也看纯文本，也有人自建的
 // OneBot 客户端能渲染 Markdown，这两种都得让得出来。
@@ -121,19 +121,13 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 }
 
 // platformMarkdownSyntaxNote 告诉模型这个平台实际渲染得出哪些写法。不认的写法适配器
-// 也会降级，但模型知道边界才会挑对排版：比如在钉钉里就别指望表格对齐。
+// 也会降级，但模型知道边界才会挑对排版：比如在 QQ 官方机器人里就别指望表格对齐。
 func platformMarkdownSyntaxNote(platform string) string {
 	switch NormalizePlatformID(platform) {
 	case PlatformTelegram:
 		return "加粗、斜体、删除线、行内代码、代码块、链接、引用和列表都能显示，表格会转成等宽块"
 	case PlatformQQOfficial:
 		return "标题、加粗、斜体、删除线、代码块、链接、引用和列表都能显示，公式、算式用 $…$ 或 $$…$$ 写 LaTeX 会排成数学公式；不认行内代码和表格，表格会转成对齐的文字行"
-	case PlatformDingTalk:
-		return "标题、加粗、斜体、链接、引用和列表都能显示；不认代码块和表格"
-	case PlatformFeishu:
-		return "加粗、斜体、删除线、行内代码、代码块、链接和列表都能显示；不认标题、引用和表格，标题会变成加粗"
-	case PlatformWeCom:
-		return "标题、加粗、行内代码、代码块、链接、引用和列表都能显示；不认斜体和表格"
 	default:
 		return "常见 Markdown 都能显示，不兼容的写法会自动降级"
 	}

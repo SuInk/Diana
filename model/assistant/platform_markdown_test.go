@@ -4,7 +4,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -62,7 +61,7 @@ func TestDowngradeMarkdownFlattensLinksWhenUnsupported(t *testing.T) {
 
 // 三家都不认表格，一律转成等宽对齐的行；认代码块的顺便裹一层保住等宽。
 func TestDowngradeMarkdownConvertsTables(t *testing.T) {
-	table := "| 平台 | 状态 |\n|---|---|\n| 钉钉 | 待办 |"
+	table := "| 平台 | 状态 |\n|---|---|\n| Telegram | 待办 |"
 
 	fenced := downgradeMarkdownFor(table, platformMarkdownFeatures{CodeFence: true})
 	if !strings.HasPrefix(strings.TrimSpace(fenced), "```") {
@@ -72,7 +71,7 @@ func TestDowngradeMarkdownConvertsTables(t *testing.T) {
 	if strings.Contains(plain, "|") || strings.Contains(plain, "```") {
 		t.Fatalf("表格标记没清干净：%q", plain)
 	}
-	if !strings.Contains(plain, "钉钉") || !strings.Contains(plain, "待办") {
+	if !strings.Contains(plain, "Telegram") || !strings.Contains(plain, "待办") {
 		t.Fatalf("表格内容丢了：%q", plain)
 	}
 }
@@ -83,72 +82,5 @@ func TestDowngradeMarkdownKeepsSupportedMarkup(t *testing.T) {
 	full := platformMarkdownFeatures{Bold: true, Strike: true, CodeFence: true, Lists: true}
 	if out := downgradeMarkdownFor(source, full); out != source {
 		t.Fatalf("支持的标记被改写了：%q", out)
-	}
-}
-
-func TestDingTalkMarkdownPayload(t *testing.T) {
-	if _, ok := dingTalkMarkdownPayload("今天天气不错"); ok {
-		t.Fatal("纯文本不该走 markdown 消息")
-	}
-	payload, ok := dingTalkMarkdownPayload("## 小结\n**重点**在这里")
-	if !ok {
-		t.Fatal("带标记的文本应当走 markdown 消息")
-	}
-	if payload["msgtype"] != "markdown" {
-		t.Fatalf("msgtype = %v", payload["msgtype"])
-	}
-	markdown, _ := payload["markdown"].(map[string]string)
-	// 钉钉要求 markdown 消息必须带 title，缺了会被接口拒收。
-	if markdown == nil || strings.TrimSpace(markdown["title"]) == "" {
-		t.Fatalf("title 不能为空：%#v", payload)
-	}
-	if !strings.Contains(markdown["text"], "**重点**") {
-		t.Fatalf("正文丢了标记：%q", markdown["text"])
-	}
-}
-
-// 标题取正文开头，而且不能带着 # 和 - 这些标记进通知栏。
-func TestDingTalkMarkdownTitle(t *testing.T) {
-	if title := dingTalkMarkdownTitle("## 今日小结\n正文"); title != "今日小结" {
-		t.Fatalf("title = %q", title)
-	}
-	if title := dingTalkMarkdownTitle(""); title == "" {
-		t.Fatal("空正文也得给个标题，否则钉钉拒收")
-	}
-}
-
-func TestFeishuMarkdownCard(t *testing.T) {
-	if _, ok := feishuMarkdownCard("今天天气不错"); ok {
-		t.Fatal("纯文本不该包成卡片")
-	}
-	raw, ok := feishuMarkdownCard("**重点**在这里")
-	if !ok {
-		t.Fatal("带标记的文本应当包成卡片")
-	}
-	var card struct {
-		Elements []struct {
-			Tag     string `json:"tag"`
-			Content string `json:"content"`
-		} `json:"elements"`
-	}
-	if err := json.Unmarshal([]byte(raw), &card); err != nil {
-		t.Fatalf("卡片不是合法 JSON：%v", err)
-	}
-	if len(card.Elements) != 1 || card.Elements[0].Tag != "markdown" {
-		t.Fatalf("卡片结构不对：%s", raw)
-	}
-	if !strings.Contains(card.Elements[0].Content, "**重点**") {
-		t.Fatalf("正文丢了标记：%q", card.Elements[0].Content)
-	}
-}
-
-// 飞书卡片不认 # 标题，得先降成粗体再进卡片。
-func TestFeishuMarkdownCardDowngradesHeadings(t *testing.T) {
-	raw, ok := feishuMarkdownCard("## 小结\n正文")
-	if !ok {
-		t.Fatal("应当包成卡片")
-	}
-	if strings.Contains(raw, "## ") {
-		t.Fatalf("标题没降级：%s", raw)
 	}
 }

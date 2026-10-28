@@ -245,7 +245,7 @@ func TestPersonaGenerateModeHintsCoverEveryResponseMode(t *testing.T) {
 // platformOutputRulesForConfig），运行时会自己补，人设抢着写只会写错。
 // 同一条道理见 assistant.identityAliasPrefix 那段注释。
 var personaVenueForbiddenTerms = []string{
-	"QQ", "Telegram", "飞书", "企业微信", "微信", "OneBot",
+	"QQ", "Telegram", "微信", "OneBot",
 	"群里", "群聊", "本群", "群友",
 }
 

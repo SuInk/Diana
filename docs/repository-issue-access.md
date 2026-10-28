@@ -39,7 +39,7 @@
 
 ## 身份怎么取，取不到怎么办
 
-先看事件自带的 `SenderRole`（OneBot 每条群消息都带 `sender.role`，Telegram 的 `creator`/`administrator`、钉钉的 isAdmin 都由 `NormalizeGroupRole` 收敛成同一套取值），拿不到再回查一次群成员信息。
+先看事件自带的 `SenderRole`（OneBot 每条群消息都带 `sender.role`，Telegram 的 `creator`/`administrator` 都由 `NormalizeGroupRole` 收敛成同一套取值），拿不到再回查一次群成员信息。
 
 查不到身份时按最严处理：除「所有成员」外一律拒绝，并在回复里说明是平台没提供群身份，而不是仓库没配。身份够不上时同样明确拒绝，提示里写清这条授权要求什么身份、当前身份是什么，以及"想在本群单独放行某个人，用「群聊草稿审批人（按群）」"。
 

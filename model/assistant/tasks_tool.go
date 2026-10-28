@@ -236,7 +236,7 @@ func taskTargetsElsewhere(event MessageEvent, input map[string]any, anyConversat
 	if raw == "" {
 		return false
 	}
-	// 按账号原文比，非数字账号（飞书 ou_xxx 等）也比得出来，见 sameAccountID。
+	// 按账号原文比，非数字账号（QQ 官方 openid 等）也比得出来，见 sameAccountID。
 	if sameAccountID(raw, event.UserID) {
 		return false
 	}

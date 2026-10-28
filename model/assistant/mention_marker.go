@@ -210,7 +210,7 @@ func isMentionCodeSpan(token string) bool {
 // mentionIDAcceptable 判断这个 id 能不能当成 platform 上的账号发出去。
 //
 // OneBot 和 Telegram 的用户 ID 都是纯数字，卡死数字最省事。其余平台的 ID 形态各
-// 不相同（飞书是 ou_ 开头的 open_id，企业微信是字母数字的账号名），没法统一断言，
+// 不相同（QQ 官方机器人是 32 位十六进制的 openid），没法统一断言，
 // 只排掉两种确定不是账号的：把标记名写进 id 的，和没还原成功的脱敏别名——别名能
 // 对上就一定在 restoreText 那步换成真 ID 了，还留着 im_ 前缀说明这个 id 是编的。
 func mentionIDAcceptable(platform, id string) bool {

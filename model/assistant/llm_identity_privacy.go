@@ -530,7 +530,7 @@ func isLikelyChatIdentifier(value string) bool {
 	return true
 }
 
-// Opaque platform IDs (for example Feishu open_id and DingTalk staff IDs)
+// Opaque platform IDs (for example QQ official openids and Telegram usernames)
 // are trusted when supplied by an event or an explicit identity field. Keep
 // the existing numeric-ID heuristic and never register an already masked ID.
 func isOpaqueChatIdentifier(value string) bool {

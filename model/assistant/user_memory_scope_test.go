@@ -128,15 +128,13 @@ func TestUserMemoryWritesGoThroughSaveUserMemory(t *testing.T) {
 func TestMessageEventLiteralsCarryProfileID(t *testing.T) {
 	exemptFiles := map[string]string{
 		"bot_mute.go":               "适配器事件，经 MultiChannel 补身份",
-		"dingtalk.go":               "平台适配器",
-		"feishu.go":                 "平台适配器",
-		"imessage.go":               "平台适配器",
 		"onebot.go":                 "平台适配器",
 		"onebot_request.go":         "平台适配器",
 		"qq_official.go":            "平台适配器",
 		"telegram.go":               "平台适配器",
-		"wecom.go":                  "平台适配器",
+		"telegram_join_request.go":  "平台适配器",
 		"weixin.go":                 "平台适配器",
+		"imessage.go":               "平台适配器",
 		"history_identity.go":       "只用来算角色标签，配置显式传入",
 		"repository_publish_web.go": "只做 GitHub 写权限检查，不碰按机器人分的存储",
 	}

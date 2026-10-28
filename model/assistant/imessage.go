@@ -747,7 +747,7 @@ func (c *IMessageChannel) loadOutgoingMedia(ctx context.Context, source string) 
 		if err != nil {
 			return nil, "", err
 		}
-		return body, "image" + imessageExtensionFor(contentType), nil
+		return body, "image" + mediaExtensionFor(contentType), nil
 	}
 	if path := telegramLocalPath(source); path != "" {
 		info, err := os.Stat(path)
@@ -787,29 +787,9 @@ func (c *IMessageChannel) loadOutgoingMedia(ctx context.Context, source string) 
 	}
 	name := filepath.Base(resp.Request.URL.Path)
 	if name == "" || name == "." || name == "/" || !strings.Contains(name, ".") {
-		name = "attachment" + imessageExtensionFor(resp.Header.Get("Content-Type"))
+		name = "attachment" + mediaExtensionFor(resp.Header.Get("Content-Type"))
 	}
 	return body, name, nil
-}
-
-// imessageExtensionFor 给没有文件名的媒体补扩展名：Messages.app 按扩展名决定
-// 显示成图片还是文件图标。
-func imessageExtensionFor(contentType string) string {
-	switch strings.ToLower(strings.TrimSpace(strings.SplitN(contentType, ";", 2)[0])) {
-	case "image/png":
-		return ".png"
-	case "image/gif":
-		return ".gif"
-	case "image/webp":
-		return ".webp"
-	case "image/jpeg", "image/jpg":
-		return ".jpg"
-	case "video/mp4":
-		return ".mp4"
-	case "audio/mpeg":
-		return ".mp3"
-	}
-	return ""
 }
 
 func imessageSentGUID(raw json.RawMessage) string {

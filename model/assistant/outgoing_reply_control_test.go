@@ -187,7 +187,7 @@ func TestOutgoingReplyControlAcceptsQQOfficialMarker(t *testing.T) {
 // 平台感知只给 QQ 官方开口子：其余平台（含没有 Platform 的旧事件，按 OneBot
 // 语义处理）仍走纯数字校验，数字尾巴、别名、编造的 id 照旧全部拒绝。
 func TestReplyMarkerIDAcceptableKeepsOtherPlatformsNumeric(t *testing.T) {
-	for _, platform := range []string{"", PlatformOneBotV11, PlatformTelegram, PlatformFeishu} {
+	for _, platform := range []string{"", PlatformOneBotV11, PlatformTelegram} {
 		if replyMarkerIDAcceptable(platform, qqOfficialProbeID) {
 			t.Fatalf("platform %q must not accept the qq official id", platform)
 		}

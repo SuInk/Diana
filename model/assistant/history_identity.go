@@ -78,7 +78,7 @@ func neutralizeIdentityMarkers(text string) string {
 //
 // 摘要比它的原始事件活得久，落进提示词时隐私 scope 里往往没有对应的注册记录。
 // 脱敏靠 identityPrivacyJSONIDPattern 匹配 "…user_id": "…" 来发现待替换的标识，
-// 非数字账号（飞书的 ou_xxx、staff-1 这类）在「昵称（ID）」这种写法里没有任何模式
+// 非数字账号（QQ 官方 openid、staff-1 这类）在「昵称（ID）」这种写法里没有任何模式
 // 可匹配——去掉这段 JSON，真实 ID 就会原样发给模型。
 //
 // 历史行没有这个问题：它们的事件都注册过，所以那边只留短角色标记。摘要每轮只有

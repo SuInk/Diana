@@ -546,8 +546,8 @@ func stripAccountIDMarkup(raw string) string {
 
 // sameAccountID 判断两个账号 ID 是不是同一个人。
 //
-// normalizeRelationshipUserID 只认纯数字账号，飞书 ou_xxx、QQ 官方 openid、钉钉和
-// 企业微信的 userid 都会被它变成空串——拿它比身份，两个不同的非数字账号就成了
+// normalizeRelationshipUserID 只认纯数字账号，QQ 官方 openid 这类
+// 非数字账号都会被它变成空串——拿它比身份，两个不同的非数字账号就成了
 // 「"" == ""」。所以先比去掉标记后的原文，两边都是数字账号时再按数字比；空 ID 不和
 // 任何人相同。
 func sameAccountID(a, b string) bool {

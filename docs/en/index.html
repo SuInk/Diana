@@ -7,7 +7,7 @@
 <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Diana — Self-hosted multi-platform AI assistant</title>
-<meta name="description" content="Diana is a self-hosted multi-platform AI assistant written in Go: OneBot v11, Telegram, QQ official bots, DingTalk, Feishu and WeCom online at once, a single binary, and your data stays on your own machine." />
+<meta name="description" content="Diana is a self-hosted multi-platform AI assistant written in Go: OneBot v11, Telegram, QQ official bots, WeChat and iMessage online at once, a single binary, and your data stays on your own machine." />
 <link rel="alternate" hreflang="zh" href="../" />
 <link rel="alternate" hreflang="en" href="./" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -39,7 +39,7 @@
     <h1>A self-hosted multi-platform AI assistant</h1>
     <p class="hero-sub">
       Diana is written in Go and compiles to a single binary. OneBot v11, Telegram, QQ official bots,
-      DingTalk, Feishu and WeCom can all be online at once, with a built-in web console, plugin system
+      WeChat and iMessage can all be online at once, with a built-in web console, plugin system
       and agent. Configuration, memory and logs live in SQLite on your own machine — no hosted service involved.
     </p>
     <div class="hero-cta">
@@ -97,7 +97,7 @@
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
-        <h3>Eight platforms at once</h3>
+        <h3>Five platforms at once</h3>
         <p>All enabled bots run in parallel and replies, images and reminders always return to the channel they came from. Conversation context is always isolated by bot profile.</p>
       </div>
       <div class="feat">
@@ -174,7 +174,7 @@ docker run -d --name diana --restart unless-stopped \
     <div class="qs-steps">
       <div class="qs-step"><h4><span>1</span>Run the installer</h4><p>The generated admin username and password are printed to the terminal and saved to <code>config.yaml</code> in the install directory.</p></div>
       <div class="qs-step"><h4><span>2</span>Open the console</h4><p>Visit <code>127.0.0.1:18080</code> and sign in with the admin account shown in the terminal.</p></div>
-      <div class="qs-step"><h4><span>3</span>Connect channels and models</h4><p>Fill in the credentials for each platform in the web console — all six channels can run at once — and bind a model to each role.</p></div>
+      <div class="qs-step"><h4><span>3</span>Connect channels and models</h4><p>Fill in the credentials for each platform in the web console — all five channels can run at once — and bind a model to each role.</p></div>
       <div class="qs-step"><h4><span>4</span>Upgrading later</h4><p>Upgrade from the console, or simply run the install command again; a failed upgrade restores itself.</p></div>
     </div>
   </div>
@@ -208,30 +208,23 @@ docker run -d --name diana --restart unless-stopped \
         </div>
       </div>
       <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="briefcase"></i></div>
+        <div class="chan-logo"><i data-size="20" data-lucide="scan-text"></i></div>
         <div>
-          <h3>DingTalk</h3>
-          <p>Stream mode over an outbound connection — again no public address and no HTTP callback to configure.</p>
+          <h3>WeChat</h3>
+          <p>Tencent iLink Bot with QR-code login and outbound long polling; private chats only.</p>
         </div>
       </div>
       <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="bird"></i></div>
+        <div class="chan-logo"><i data-size="20" data-lucide="smartphone"></i></div>
         <div>
-          <h3>Feishu / Lark</h3>
-          <p>Event subscription callbacks with encrypted delivery and signature checks; needs a publicly reachable callback URL.</p>
-        </div>
-      </div>
-      <div class="chan">
-        <div class="chan-logo"><i data-size="20" data-lucide="building-2"></i></div>
-        <div>
-          <h3>WeCom</h3>
-          <p>Custom-app callbacks verified and decrypted with WXBizMsgCrypt; needs a publicly reachable callback URL.</p>
+          <h3>iMessage</h3>
+          <p>Sent and received through BlueBubbles Server on a Mac, via webhook callbacks with optional polling fallback.</p>
         </div>
       </div>
     </div>
     <p class="chan-note">
       The first four connect outbound from your machine, so a home or internal network works as-is.
-      Feishu and WeCom can only push events to you, so the console has to be reachable from the internet.
+      iMessage is pushed by BlueBubbles on your Mac; the Mac only needs to reach Diana, no public address required.
     </p>
   </div>
 </section>
@@ -277,7 +270,7 @@ docker run -d --name diana --restart unless-stopped \
   </div>
 </footer>
 
-<script src="../icons.js?v=20260847"></script>
+<script src="../icons.js?v=20261028"></script>
 <script src="../landing.js?v=20260847"></script>
 
 </body>

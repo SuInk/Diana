@@ -283,7 +283,7 @@ func TestMentionNormalizationSkipsCodeSpans(t *testing.T) {
 	}
 }
 
-// 非数字 ID 的平台不能按 OneBot 的规矩卡：飞书的 open_id 本来就是 ou_ 开头。
+// 非数字 ID 的平台不能按 OneBot 的规矩卡：QQ 官方机器人的 openid 本来就是十六进制串。
 func TestMentionIDAcceptableByPlatform(t *testing.T) {
 	cases := []struct {
 		platform string
@@ -294,8 +294,8 @@ func TestMentionIDAcceptableByPlatform(t *testing.T) {
 		{PlatformOneBotV11, "diana-at-30007", false},
 		{PlatformTelegram, "10001", true},
 		{PlatformTelegram, "user_id", false},
-		{PlatformFeishu, "ou_9a8b7c", true},
-		{PlatformFeishu, "im_user_9a8b", false},
+		{PlatformQQOfficial, "E5A1B2C3D4E5F60718293A4B5C6D7E8F", true},
+		{PlatformQQOfficial, "im_user_9a8b", false},
 	}
 	for _, item := range cases {
 		if got := mentionIDAcceptable(item.platform, item.id); got != item.want {

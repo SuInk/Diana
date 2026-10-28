@@ -112,9 +112,6 @@ func withBuiltinPlatformSupport(manifest PluginManifest) PluginManifest {
 			PlatformOneBotV11:  "发送 QQ 语音。",
 			PlatformTelegram:   "上传 MP3，使用 Telegram 原生音乐播放器；音频准备失败时明确报错。",
 			PlatformQQOfficial: "发送歌曲来源链接。",
-			PlatformDingTalk:   "发送歌曲来源链接。",
-			PlatformFeishu:     "发送歌曲来源链接。",
-			PlatformWeCom:      "发送歌曲来源链接。",
 			PlatformWeixin:     "发送歌曲来源链接。",
 			PlatformIMessage:   "发送歌曲来源链接。",
 		}

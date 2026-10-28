@@ -209,6 +209,9 @@ func TestTelegramDoesNotTreatAnonymousSenderAsUserAndSubscribesMembership(t *tes
 	if !strings.Contains(string(body), "chat_member") || !strings.Contains(string(body), "my_chat_member") {
 		t.Fatal("membership updates not subscribed")
 	}
+	if !strings.Contains(string(body), "chat_join_request") {
+		t.Fatal("join requests not subscribed")
+	}
 }
 
 func TestTelegramGroupToolPromptAndPermissionsAreRegistered(t *testing.T) {

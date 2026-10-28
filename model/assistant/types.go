@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -203,7 +202,7 @@ type MessageEvent struct {
 	OperatorRole string `json:"operator_role,omitempty"`
 	GroupID      string `json:"group_id,omitempty"`
 	// GroupName 是收到这条消息时平台给出的群名称。OneBot 可以随时用
-	// get_group_list 问到群名，Telegram、钉钉这些没有「列出我加入的群」的平台
+	// get_group_list 问到群名，Telegram、QQ 官方机器人这些没有「列出我加入的群」的平台
 	// 只能靠消息自带的标题；控制台的群管理页要靠它显示名字而不是一串 ID。
 	GroupName       string `json:"group_name,omitempty"`
 	MessageThreadID string `json:"message_thread_id,omitempty"`
@@ -688,19 +687,6 @@ type BotConfig struct {
 	QQAppID                     string `json:"qq_app_id,omitempty"`
 	QQAppSecret                 string `json:"qq_app_secret,omitempty"`
 	QQSandbox                   bool   `json:"qq_sandbox,omitempty"`
-	DingTalkClientID            string `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret        string `json:"dingtalk_client_secret,omitempty"`
-	DingTalkRobotCode           string `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                 string `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret             string `json:"feishu_app_secret,omitempty"`
-	FeishuVerificationToken     string `json:"feishu_verification_token,omitempty"`
-	FeishuEncryptKey            string `json:"feishu_encrypt_key,omitempty"`
-	FeishuAPIBaseURL            string `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                 string `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                string `json:"wecom_agent_id,omitempty"`
-	WeComSecret                 string `json:"wecom_secret,omitempty"`
-	WeComToken                  string `json:"wecom_token,omitempty"`
-	WeComEncodingAESKey         string `json:"wecom_encoding_aes_key,omitempty"`
 	BotAccount                  string `json:"bot_account,omitempty"`
 	OwnerID                     string `json:"owner_id,omitempty"`
 	// AdminIDs 是主人另外指定的管理员账号：拿到全部管理权限（宿主命令、插件、配置、
@@ -1393,47 +1379,27 @@ type ConfigPayload struct {
 	AvatarURL                   string          `json:"avatar_url,omitempty"`
 	Profiles                    []ConfigPayload `json:"profiles,omitempty"`
 	// MessageRelays 是跨机器人的消息互通链路，读接口一并回传给 WebUI。
-	MessageRelays                     []MessageRelayPair `json:"message_relays,omitempty"`
-	Enabled                           bool               `json:"enabled"`
-	OneBotTransport                   string             `json:"onebot_transport,omitempty"`
-	OneBotWSEndpoint                  string             `json:"onebot_ws_endpoint,omitempty"`
-	OneBotHTTPURL                     string             `json:"onebot_http_url,omitempty"`
-	OneBotHTTPSecret                  string             `json:"onebot_http_secret,omitempty"`
-	OneBotReverseWSEndpoint           string             `json:"onebot_reverse_ws_endpoint"`
-	OneBotAccessToken                 string             `json:"onebot_access_token,omitempty"`
-	OneBotHTTPSecretConfigured        bool               `json:"onebot_http_secret_configured,omitempty"`
-	OneBotAccessTokenConfigured       bool               `json:"onebot_access_token_configured,omitempty"`
-	OneBotAccessTokenPreview          string             `json:"onebot_access_token_preview,omitempty"`
-	TelegramBotToken                  string             `json:"telegram_bot_token,omitempty"`
-	TelegramBotTokenConfigured        bool               `json:"telegram_bot_token_configured,omitempty"`
-	TelegramAPIBaseURL                string             `json:"telegram_api_base_url,omitempty"`
-	TelegramProxyURL                  string             `json:"telegram_proxy_url,omitempty"`
-	TelegramSuppressBotMessages       *bool              `json:"telegram_suppress_bot_messages,omitempty"`
-	QQTypingEnabled                   *bool              `json:"qq_typing_enabled,omitempty"`
-	QQAppID                           string             `json:"qq_app_id,omitempty"`
-	QQAppSecret                       string             `json:"qq_app_secret,omitempty"`
-	QQAppSecretConfigured             bool               `json:"qq_app_secret_configured,omitempty"`
-	QQSandbox                         bool               `json:"qq_sandbox,omitempty"`
-	DingTalkClientID                  string             `json:"dingtalk_client_id,omitempty"`
-	DingTalkClientSecret              string             `json:"dingtalk_client_secret,omitempty"`
-	DingTalkClientSecretConfigured    bool               `json:"dingtalk_client_secret_configured,omitempty"`
-	DingTalkRobotCode                 string             `json:"dingtalk_robot_code,omitempty"`
-	FeishuAppID                       string             `json:"feishu_app_id,omitempty"`
-	FeishuAppSecret                   string             `json:"feishu_app_secret,omitempty"`
-	FeishuAppSecretConfigured         bool               `json:"feishu_app_secret_configured,omitempty"`
-	FeishuVerificationToken           string             `json:"feishu_verification_token,omitempty"`
-	FeishuVerificationTokenConfigured bool               `json:"feishu_verification_token_configured,omitempty"`
-	FeishuEncryptKey                  string             `json:"feishu_encrypt_key,omitempty"`
-	FeishuEncryptKeyConfigured        bool               `json:"feishu_encrypt_key_configured,omitempty"`
-	FeishuAPIBaseURL                  string             `json:"feishu_api_base_url,omitempty"`
-	WeComCorpID                       string             `json:"wecom_corp_id,omitempty"`
-	WeComAgentID                      string             `json:"wecom_agent_id,omitempty"`
-	WeComSecret                       string             `json:"wecom_secret,omitempty"`
-	WeComSecretConfigured             bool               `json:"wecom_secret_configured,omitempty"`
-	WeComToken                        string             `json:"wecom_token,omitempty"`
-	WeComTokenConfigured              bool               `json:"wecom_token_configured,omitempty"`
-	WeComEncodingAESKey               string             `json:"wecom_encoding_aes_key,omitempty"`
-	WeComEncodingAESKeyConfigured     bool               `json:"wecom_encoding_aes_key_configured,omitempty"`
+	MessageRelays               []MessageRelayPair `json:"message_relays,omitempty"`
+	Enabled                     bool               `json:"enabled"`
+	OneBotTransport             string             `json:"onebot_transport,omitempty"`
+	OneBotWSEndpoint            string             `json:"onebot_ws_endpoint,omitempty"`
+	OneBotHTTPURL               string             `json:"onebot_http_url,omitempty"`
+	OneBotHTTPSecret            string             `json:"onebot_http_secret,omitempty"`
+	OneBotReverseWSEndpoint     string             `json:"onebot_reverse_ws_endpoint"`
+	OneBotAccessToken           string             `json:"onebot_access_token,omitempty"`
+	OneBotHTTPSecretConfigured  bool               `json:"onebot_http_secret_configured,omitempty"`
+	OneBotAccessTokenConfigured bool               `json:"onebot_access_token_configured,omitempty"`
+	OneBotAccessTokenPreview    string             `json:"onebot_access_token_preview,omitempty"`
+	TelegramBotToken            string             `json:"telegram_bot_token,omitempty"`
+	TelegramBotTokenConfigured  bool               `json:"telegram_bot_token_configured,omitempty"`
+	TelegramAPIBaseURL          string             `json:"telegram_api_base_url,omitempty"`
+	TelegramProxyURL            string             `json:"telegram_proxy_url,omitempty"`
+	TelegramSuppressBotMessages *bool              `json:"telegram_suppress_bot_messages,omitempty"`
+	QQTypingEnabled             *bool              `json:"qq_typing_enabled,omitempty"`
+	QQAppID                     string             `json:"qq_app_id,omitempty"`
+	QQAppSecret                 string             `json:"qq_app_secret,omitempty"`
+	QQAppSecretConfigured       bool               `json:"qq_app_secret_configured,omitempty"`
+	QQSandbox                   bool               `json:"qq_sandbox,omitempty"`
 	// CallbackPath 是回调型平台要填到对方后台的路径，只读，供 WebUI 拼完整地址。
 	CallbackPath                   string               `json:"callback_path,omitempty"`
 	BotAccount                     string               `json:"bot_account,omitempty"`
@@ -1995,12 +1961,6 @@ var (
 	ErrBotDisabled            = errors.New("diana: bot is disabled")
 
 	ErrMissingQQCredentials       = errors.New("assistant: qq official bot app id and app secret are required")
-	ErrMissingDingTalkCredentials = errors.New("assistant: dingtalk client id and client secret are required")
-	ErrMissingFeishuCredentials   = errors.New("assistant: feishu app id and app secret are required")
-	ErrMissingWeComCredentials    = errors.New("assistant: wecom corp id, agent id and secret are required")
-	ErrInvalidWeComAgentID        = errors.New("assistant: wecom agent id must be numeric")
-	ErrMissingWeComCallbackKeys   = errors.New("assistant: wecom token and encoding aes key are required to receive messages")
-	ErrInvalidFeishuAPIBase       = errors.New("assistant: feishu api base url must be http(s)")
 	ErrInvalidWeixinBaseURL       = errors.New("assistant: weixin base url must be an https weixin.qq.com address")
 	ErrMissingIMessageCredentials = errors.New("assistant: bluebubbles server url and password are required")
 	ErrInvalidIMessageServerURL   = errors.New("assistant: bluebubbles server url must be http(s)")
@@ -2616,7 +2576,7 @@ func (cfg BotConfig) Validate() error {
 		return nil
 	}
 	// 每个平台的必填凭据都不一样，按平台分支校验。这里不能写成「不是 OneBot
-	// 就当 Telegram」——新增平台后那种写法会拿 Telegram 的规则去校验飞书。
+	// 就当 Telegram」——新增平台后那种写法会拿 Telegram 的规则去校验别的平台。
 	switch NormalizePlatformID(cfg.Platform) {
 	case PlatformTelegram:
 		if cfg.Enabled && strings.TrimSpace(cfg.TelegramBotToken) == "" {
@@ -2631,37 +2591,6 @@ func (cfg BotConfig) Validate() error {
 	case PlatformQQOfficial:
 		if cfg.Enabled && (strings.TrimSpace(cfg.QQAppID) == "" || strings.TrimSpace(cfg.QQAppSecret) == "") {
 			return ErrMissingQQCredentials
-		}
-		return nil
-	case PlatformDingTalk:
-		if cfg.Enabled && (strings.TrimSpace(cfg.DingTalkClientID) == "" || strings.TrimSpace(cfg.DingTalkClientSecret) == "") {
-			return ErrMissingDingTalkCredentials
-		}
-		return nil
-	case PlatformFeishu:
-		if cfg.Enabled && (strings.TrimSpace(cfg.FeishuAppID) == "" || strings.TrimSpace(cfg.FeishuAppSecret) == "") {
-			return ErrMissingFeishuCredentials
-		}
-		if base := strings.TrimSpace(cfg.FeishuAPIBaseURL); base != "" {
-			if !isHTTPURL(base) {
-				return ErrInvalidFeishuAPIBase
-			}
-		}
-		return nil
-	case PlatformWeCom:
-		if !cfg.Enabled {
-			return nil
-		}
-		if strings.TrimSpace(cfg.WeComCorpID) == "" || strings.TrimSpace(cfg.WeComAgentID) == "" || strings.TrimSpace(cfg.WeComSecret) == "" {
-			return ErrMissingWeComCredentials
-		}
-		if _, err := strconv.Atoi(strings.TrimSpace(cfg.WeComAgentID)); err != nil {
-			return ErrInvalidWeComAgentID
-		}
-		// 企业微信只能靠回调收消息，缺了验签凭据就是「只能发不能收」，
-		// 这种半可用状态不如直接拦下来说清楚。
-		if strings.TrimSpace(cfg.WeComToken) == "" || strings.TrimSpace(cfg.WeComEncodingAESKey) == "" {
-			return ErrMissingWeComCallbackKeys
 		}
 		return nil
 	case PlatformWeixin:
@@ -2786,163 +2715,150 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		// 密钥一律只回 configured 标志或掩码预览（见 OneBotAccessTokenPreview），
 		// 不回明文。AppID/CorpID 这类公开标识可以回显，
 		// 方便用户核对填的是不是同一个应用。
-		QQAppID:                           cfg.QQAppID,
-		QQAppSecretConfigured:             cfg.QQAppSecret != "",
-		QQSandbox:                         cfg.QQSandbox,
-		DingTalkClientID:                  cfg.DingTalkClientID,
-		DingTalkClientSecretConfigured:    cfg.DingTalkClientSecret != "",
-		DingTalkRobotCode:                 cfg.DingTalkRobotCode,
-		FeishuAppID:                       cfg.FeishuAppID,
-		FeishuAppSecretConfigured:         cfg.FeishuAppSecret != "",
-		FeishuVerificationTokenConfigured: cfg.FeishuVerificationToken != "",
-		FeishuEncryptKeyConfigured:        cfg.FeishuEncryptKey != "",
-		FeishuAPIBaseURL:                  cfg.FeishuAPIBaseURL,
-		WeComCorpID:                       cfg.WeComCorpID,
-		WeComAgentID:                      cfg.WeComAgentID,
-		WeComSecretConfigured:             cfg.WeComSecret != "",
-		WeComTokenConfigured:              cfg.WeComToken != "",
-		WeComEncodingAESKeyConfigured:     cfg.WeComEncodingAESKey != "",
-		CallbackPath:                      CallbackPathFor(cfg.Platform),
-		BotAccount:                        cfg.BotAccount,
-		OwnerID:                           cfg.OwnerID,
-		AdminIDs:                          append([]string(nil), cfg.AdminIDs...),
-		OwnerLoginEnabled:                 cfg.OwnerLoginEnabled,
-		OwnerLLMConfigEnabled:             copyBoolPointer(cfg.OwnerLLMConfigEnabled),
-		GroupTriggers:                     append([]string(nil), cfg.GroupTriggers...),
-		GroupTriggerMode:                  cfg.GroupTriggerMode,
-		DisabledGroups:                    append([]string(nil), cfg.DisabledGroups...),
-		DisabledUsers:                     append([]string(nil), cfg.DisabledUsers...),
-		MarkedBotIDs:                      append([]string(nil), cfg.MarkedBotIDs...),
-		GroupAdmission:                    cfg.GroupAdmission.WithDefaults(),
-		PrivateAdmission:                  cfg.PrivateAdmission.WithDefaults(),
-		ReplyGate:                         cfg.ReplyGate.Clone(),
-		WelcomeEnabled:                    cfg.WelcomeEnabled,
-		WelcomeMessage:                    cfg.WelcomeMessage,
-		WelcomeMode:                       cfg.WelcomeMode,
-		WelcomeTemplates:                  append([]string(nil), cfg.WelcomeTemplates...),
-		WelcomeLLMCooldownSeconds:         cfg.WelcomeLLMCooldownSeconds,
-		SystemPrompt:                      cfg.SystemPrompt,
-		ReplyComposer:                     cfg.ReplyComposer,
-		MaiBotReplyStyle:                  cfg.MaiBotReplyStyle,
-		ReplyFilterRules:                  append([]string(nil), cfg.ReplyFilterRules...),
-		ReplyToneDefault:                  DefaultReplyTone,
-		ResponseMode:                      cfg.ResponseMode,
-		ReplyStyle:                        cfg.ReplyStyle,
-		DebugModeEnabled:                  copyBoolPointer(cfg.DebugModeEnabled),
-		ReplyReferenceMode:                cfg.ReplyReferenceMode,
-		ModelDisclosure:                   cfg.ModelDisclosure,
-		RepositoryDisclosure:              cfg.RepositoryDisclosure,
-		MentionUserMode:                   cfg.MentionUserMode,
-		MarkdownToPlain:                   copyBoolPointer(cfg.MarkdownToPlain),
-		ErrorNotifyEnabled:                copyBoolPointer(cfg.ErrorNotifyEnabled),
-		MutedReplyPauseEnabled:            copyBoolPointer(cfg.MutedReplyPauseEnabled),
-		MutedVoiceTranscriptionEnabled:    copyBoolPointer(cfg.MutedVoiceTranscriptionEnabled),
-		MutedImageDescriptionEnabled:      copyBoolPointer(cfg.MutedImageDescriptionEnabled),
-		MutedReplyJudgmentEnabled:         copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
-		ErrorPersonaReplyEnabled:          copyBoolPointer(cfg.ErrorPersonaReplyEnabled),
-		ErrorReplyPrefix:                  cfg.ErrorReplyPrefix,
-		SendRetryAttempts:                 cfg.SendRetryAttempts,
-		sendRetrySettings:                 cfg.sendRetrySettings,
-		SendChunkIntervalMS:               cfg.SendChunkIntervalMS,
-		PrivateClosingGrace:               cfg.PrivateClosingGrace,
-		ReplySuppressionEnabled:           copyBoolPointer(cfg.ReplySuppressionEnabled),
-		ReplySuppressionMinMinutes:        cfg.ReplySuppressionMinMinutes,
-		ReplySuppressionMaxMinutes:        cfg.ReplySuppressionMaxMinutes,
-		BotReplyLoopThreshold:             cfg.BotReplyLoopThreshold,
-		ReplyRefusalThreshold:             cfg.ReplyRefusalThreshold,
-		InboundGroupConcurrency:           cfg.InboundGroupConcurrency,
-		InboundPrivateConcurrency:         cfg.InboundPrivateConcurrency,
-		PromptInjectTime:                  copyBoolPointer(cfg.PromptInjectTime),
-		PromptInjectPlaintextRules:        copyBoolPointer(cfg.PromptInjectPlaintextRules),
-		PromptInjectGroupSender:           copyBoolPointer(cfg.PromptInjectGroupSender),
-		PromptChineseSlangHint:            copyBoolPointer(cfg.PromptChineseSlangHint),
-		AutoImageDescription:              copyBoolPointer(cfg.AutoImageDescription),
-		AutoVideoPreprocess:               copyBoolPointer(cfg.AutoVideoPreprocess),
-		ImageInputMode:                    cfg.ImageInputMode,
-		ModelRoles:                        normalizeModelRoles(cfg.ModelRoles),
-		ModelRecoveryPolicy:               normalizeModelRecoveryPolicy(cfg.ModelRecoveryPolicy),
-		WebSearch:                         normalizeWebSearchAssignment(cfg.WebSearch),
-		WebSearchOverride:                 normalizeWebSearchAssignment(cfg.WebSearchOverride),
-		BotReplyLoopDetectionEnabled:      copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
-		ReplySemanticDedupEnabled:         copyBoolPointer(cfg.ReplySemanticDedupEnabled),
-		ReplySafetyMasterEnabled:          copyBoolPointer(cfg.ReplySafetyMasterEnabled),
-		ReplySafetyPrivateEnabled:         copyBoolPointer(cfg.ReplySafetyPrivateEnabled),
-		ReplyAccountSafetyAuditPrompt:     strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
-		ReplyAccountSafetyAuditDefault:    DefaultReplyAccountSafetyAuditPrompt,
-		NotebookSharedScopeEnabled:        copyBoolPointer(cfg.NotebookSharedScopeEnabled),
-		SlangLearningEnabled:              copyBoolPointer(cfg.SlangLearningEnabled),
-		ProactiveReplyExtraCriteria:       cfg.ProactiveReplyExtraCriteria,
-		PromptOverrides:                   normalizePromptOverrides(cfg.PromptOverrides),
-		MaxInputChars:                     cfg.MaxInputChars,
-		MaxReplyChars:                     cfg.MaxReplyChars,
-		NaturalReplySplitEnabled:          copyBoolPointer(cfg.NaturalReplySplitEnabled),
-		ReplyMergeConfidencePercent:       cfg.ReplyMergeConfidencePercent,
-		ReplyPreserveLineBreaks:           copyBoolPointer(cfg.ReplyPreserveLineBreaks),
-		ReplyLineSplitEnabled:             copyBoolPointer(cfg.ReplyLineSplitEnabled),
-		TypingDelayEnabled:                copyBoolPointer(cfg.TypingDelayEnabled),
-		TypingDelayPerCharMS:              cfg.TypingDelayPerCharMS,
-		SocialReplyEnabled:                copyBoolPointer(cfg.SocialReplyEnabled),
-		ReplyMaxBubbles:                   cfg.ReplyMaxBubbles,
-		ForwardReplyChunkThreshold:        cfg.ForwardReplyChunkThreshold,
-		ForwardReplyEnabled:               copyBoolPointer(cfg.ForwardReplyEnabled),
-		DirectReplyChunkSize:              cfg.DirectReplyChunkSize,
-		ForwardReplyThreshold:             cfg.ForwardReplyThreshold,
-		RecallReplyMode:                   cfg.RecallReplyMode,
-		RefusalStrategy:                   cfg.RefusalStrategy,
-		LLMStreamingEnabled:               copyBoolPointer(cfg.LLMStreamingEnabled),
-		RecallReplyAutoDeleteEnabled:      copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
-		RecallReplyTTLSeconds:             cfg.RecallReplyTTLSeconds,
-		LLMIdentityMaskingEnabled:         copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
-		LLMIdentityBodyAccounts:           copyBoolPointer(cfg.LLMIdentityBodyAccounts),
-		MaxContextTokens:                  cfg.MaxContextTokens,
-		RecentHistoryTokenBudget:          cfg.RecentHistoryTokenBudget,
-		RecentContextLimit:                cfg.RecentContextLimit,
-		HistoryBackfillMessageLimit:       cfg.HistoryBackfillMessageLimit,
-		ContextSummaryThreshold:           cfg.ContextSummaryThreshold,
-		CrossGroupMemoryEnabled:           copyBoolPointer(cfg.CrossGroupMemoryEnabled),
-		CrossPlatformMemoryEnabled:        copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
-		WorldBookEnabled:                  copyBoolPointer(cfg.WorldBookEnabled),
-		SelfNoteEnabled:                   copyBoolPointer(cfg.SelfNoteEnabled),
-		OwnSpaceEnabled:                   copyBoolPointer(cfg.OwnSpaceEnabled),
-		FeedAutoReplyEnabled:              copyBoolPointer(cfg.FeedAutoReplyEnabled),
-		MoodEnabled:                       copyBoolPointer(cfg.MoodEnabled),
-		PokeReplyEnabled:                  copyBoolPointer(cfg.PokeReplyEnabled),
-		ExpressionLearningEnabled:         copyBoolPointer(cfg.ExpressionLearningEnabled),
-		StyleFilterEnabled:                copyBoolPointer(cfg.StyleFilterEnabled),
-		StyleFilterRules:                  cfg.StyleFilterRules,
-		DictSegmentEnabled:                copyBoolPointer(cfg.DictSegmentEnabled),
-		SemanticSearchEnabled:             copyBoolPointer(cfg.SemanticSearchEnabled),
-		ProactiveReplyChance:              cfg.ProactiveReplyChance,
-		ProactiveReplyThreshold:           cfg.ProactiveReplyThreshold,
-		RandomRepeat:                      copyRandomRepeat(cfg.RandomRepeat),
-		ChatInEnabled:                     copyBoolPointer(cfg.ChatInEnabled),
-		ChatInLevel:                       cfg.ChatInLevel,
-		Participation:                     copyParticipation(cfg.Participation),
-		ChatInThreshold:                   cfg.ChatInThreshold,
-		ChatInChance:                      cfg.ChatInChance,
-		ChatInCooldownSeconds:             cfg.ChatInCooldownSeconds,
-		NaturalInterjectionEnabled:        copyBoolPointer(cfg.NaturalInterjectionEnabled),
-		ReplyRules:                        append([]ReplyRule(nil), cfg.ReplyRules...),
-		MaxBotConcurrency:                 cfg.MaxBotConcurrency,
-		RequestTimeoutMS:                  cfg.RequestTimeout.Milliseconds(),
-		ModelRequestTimeoutMS:             cfg.ModelRequestTimeout.Milliseconds(),
-		AgentEnabled:                      cfg.AgentEnabled,
-		AgentMode:                         cfg.AgentMode,
-		SubtaskMaxTasks:                   cfg.SubtaskMaxTasks,
-		SubtaskMaxConcurrency:             cfg.SubtaskMaxConcurrency,
-		AgentSkillRoots:                   append([]string(nil), cfg.AgentSkillRoots...),
-		AgentMCPConfigPath:                cfg.AgentMCPConfigPath,
-		AgentCommandTimeoutMS:             cfg.AgentCommandTimeoutMS,
-		AgentCommandSandbox:               cfg.AgentCommandSandbox,
-		AgentCommandSandboxAllowNetwork:   cfg.AgentCommandSandboxAllowNetwork,
-		AgentFileWriteEnabled:             cfg.AgentFileWriteEnabled,
-		AgentBrowserCDPURL:                cfg.AgentBrowserCDPURL,
-		AgentBrowserTimeoutMS:             cfg.AgentBrowserTimeoutMS,
-		AgentBrowserScreenshotAccess:      &cfg.AgentBrowserScreenshotAccess,
-		AgentBrowserOperationAccess:       &cfg.AgentBrowserOperationAccess,
-		AgentBrowserControlEnabled:        cfg.AgentBrowserControlEnabled,
-		AgentDesktopControlEnabled:        cfg.AgentDesktopControlEnabled,
-		AgentBrowserBoxDisabled:           cfg.AgentBrowserBoxDisabled,
+		QQAppID:                         cfg.QQAppID,
+		QQAppSecretConfigured:           cfg.QQAppSecret != "",
+		QQSandbox:                       cfg.QQSandbox,
+		CallbackPath:                    CallbackPathFor(cfg.Platform),
+		BotAccount:                      cfg.BotAccount,
+		OwnerID:                         cfg.OwnerID,
+		AdminIDs:                        append([]string(nil), cfg.AdminIDs...),
+		OwnerLoginEnabled:               cfg.OwnerLoginEnabled,
+		OwnerLLMConfigEnabled:           copyBoolPointer(cfg.OwnerLLMConfigEnabled),
+		GroupTriggers:                   append([]string(nil), cfg.GroupTriggers...),
+		GroupTriggerMode:                cfg.GroupTriggerMode,
+		DisabledGroups:                  append([]string(nil), cfg.DisabledGroups...),
+		DisabledUsers:                   append([]string(nil), cfg.DisabledUsers...),
+		MarkedBotIDs:                    append([]string(nil), cfg.MarkedBotIDs...),
+		GroupAdmission:                  cfg.GroupAdmission.WithDefaults(),
+		PrivateAdmission:                cfg.PrivateAdmission.WithDefaults(),
+		ReplyGate:                       cfg.ReplyGate.Clone(),
+		WelcomeEnabled:                  cfg.WelcomeEnabled,
+		WelcomeMessage:                  cfg.WelcomeMessage,
+		WelcomeMode:                     cfg.WelcomeMode,
+		WelcomeTemplates:                append([]string(nil), cfg.WelcomeTemplates...),
+		WelcomeLLMCooldownSeconds:       cfg.WelcomeLLMCooldownSeconds,
+		SystemPrompt:                    cfg.SystemPrompt,
+		ReplyComposer:                   cfg.ReplyComposer,
+		MaiBotReplyStyle:                cfg.MaiBotReplyStyle,
+		ReplyFilterRules:                append([]string(nil), cfg.ReplyFilterRules...),
+		ReplyToneDefault:                DefaultReplyTone,
+		ResponseMode:                    cfg.ResponseMode,
+		ReplyStyle:                      cfg.ReplyStyle,
+		DebugModeEnabled:                copyBoolPointer(cfg.DebugModeEnabled),
+		ReplyReferenceMode:              cfg.ReplyReferenceMode,
+		ModelDisclosure:                 cfg.ModelDisclosure,
+		RepositoryDisclosure:            cfg.RepositoryDisclosure,
+		MentionUserMode:                 cfg.MentionUserMode,
+		MarkdownToPlain:                 copyBoolPointer(cfg.MarkdownToPlain),
+		ErrorNotifyEnabled:              copyBoolPointer(cfg.ErrorNotifyEnabled),
+		MutedReplyPauseEnabled:          copyBoolPointer(cfg.MutedReplyPauseEnabled),
+		MutedVoiceTranscriptionEnabled:  copyBoolPointer(cfg.MutedVoiceTranscriptionEnabled),
+		MutedImageDescriptionEnabled:    copyBoolPointer(cfg.MutedImageDescriptionEnabled),
+		MutedReplyJudgmentEnabled:       copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
+		ErrorPersonaReplyEnabled:        copyBoolPointer(cfg.ErrorPersonaReplyEnabled),
+		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
+		SendRetryAttempts:               cfg.SendRetryAttempts,
+		sendRetrySettings:               cfg.sendRetrySettings,
+		SendChunkIntervalMS:             cfg.SendChunkIntervalMS,
+		PrivateClosingGrace:             cfg.PrivateClosingGrace,
+		ReplySuppressionEnabled:         copyBoolPointer(cfg.ReplySuppressionEnabled),
+		ReplySuppressionMinMinutes:      cfg.ReplySuppressionMinMinutes,
+		ReplySuppressionMaxMinutes:      cfg.ReplySuppressionMaxMinutes,
+		BotReplyLoopThreshold:           cfg.BotReplyLoopThreshold,
+		ReplyRefusalThreshold:           cfg.ReplyRefusalThreshold,
+		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
+		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
+		PromptInjectTime:                copyBoolPointer(cfg.PromptInjectTime),
+		PromptInjectPlaintextRules:      copyBoolPointer(cfg.PromptInjectPlaintextRules),
+		PromptInjectGroupSender:         copyBoolPointer(cfg.PromptInjectGroupSender),
+		PromptChineseSlangHint:          copyBoolPointer(cfg.PromptChineseSlangHint),
+		AutoImageDescription:            copyBoolPointer(cfg.AutoImageDescription),
+		AutoVideoPreprocess:             copyBoolPointer(cfg.AutoVideoPreprocess),
+		ImageInputMode:                  cfg.ImageInputMode,
+		ModelRoles:                      normalizeModelRoles(cfg.ModelRoles),
+		ModelRecoveryPolicy:             normalizeModelRecoveryPolicy(cfg.ModelRecoveryPolicy),
+		WebSearch:                       normalizeWebSearchAssignment(cfg.WebSearch),
+		WebSearchOverride:               normalizeWebSearchAssignment(cfg.WebSearchOverride),
+		BotReplyLoopDetectionEnabled:    copyBoolPointer(cfg.BotReplyLoopDetectionEnabled),
+		ReplySemanticDedupEnabled:       copyBoolPointer(cfg.ReplySemanticDedupEnabled),
+		ReplySafetyMasterEnabled:        copyBoolPointer(cfg.ReplySafetyMasterEnabled),
+		ReplySafetyPrivateEnabled:       copyBoolPointer(cfg.ReplySafetyPrivateEnabled),
+		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
+		ReplyAccountSafetyAuditDefault:  DefaultReplyAccountSafetyAuditPrompt,
+		NotebookSharedScopeEnabled:      copyBoolPointer(cfg.NotebookSharedScopeEnabled),
+		SlangLearningEnabled:            copyBoolPointer(cfg.SlangLearningEnabled),
+		ProactiveReplyExtraCriteria:     cfg.ProactiveReplyExtraCriteria,
+		PromptOverrides:                 normalizePromptOverrides(cfg.PromptOverrides),
+		MaxInputChars:                   cfg.MaxInputChars,
+		MaxReplyChars:                   cfg.MaxReplyChars,
+		NaturalReplySplitEnabled:        copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		ReplyMergeConfidencePercent:     cfg.ReplyMergeConfidencePercent,
+		ReplyPreserveLineBreaks:         copyBoolPointer(cfg.ReplyPreserveLineBreaks),
+		ReplyLineSplitEnabled:           copyBoolPointer(cfg.ReplyLineSplitEnabled),
+		TypingDelayEnabled:              copyBoolPointer(cfg.TypingDelayEnabled),
+		TypingDelayPerCharMS:            cfg.TypingDelayPerCharMS,
+		SocialReplyEnabled:              copyBoolPointer(cfg.SocialReplyEnabled),
+		ReplyMaxBubbles:                 cfg.ReplyMaxBubbles,
+		ForwardReplyChunkThreshold:      cfg.ForwardReplyChunkThreshold,
+		ForwardReplyEnabled:             copyBoolPointer(cfg.ForwardReplyEnabled),
+		DirectReplyChunkSize:            cfg.DirectReplyChunkSize,
+		ForwardReplyThreshold:           cfg.ForwardReplyThreshold,
+		RecallReplyMode:                 cfg.RecallReplyMode,
+		RefusalStrategy:                 cfg.RefusalStrategy,
+		LLMStreamingEnabled:             copyBoolPointer(cfg.LLMStreamingEnabled),
+		RecallReplyAutoDeleteEnabled:    copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
+		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
+		LLMIdentityMaskingEnabled:       copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
+		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
+		MaxContextTokens:                cfg.MaxContextTokens,
+		RecentHistoryTokenBudget:        cfg.RecentHistoryTokenBudget,
+		RecentContextLimit:              cfg.RecentContextLimit,
+		HistoryBackfillMessageLimit:     cfg.HistoryBackfillMessageLimit,
+		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
+		CrossGroupMemoryEnabled:         copyBoolPointer(cfg.CrossGroupMemoryEnabled),
+		CrossPlatformMemoryEnabled:      copyBoolPointer(cfg.CrossPlatformMemoryEnabled),
+		WorldBookEnabled:                copyBoolPointer(cfg.WorldBookEnabled),
+		SelfNoteEnabled:                 copyBoolPointer(cfg.SelfNoteEnabled),
+		OwnSpaceEnabled:                 copyBoolPointer(cfg.OwnSpaceEnabled),
+		FeedAutoReplyEnabled:            copyBoolPointer(cfg.FeedAutoReplyEnabled),
+		MoodEnabled:                     copyBoolPointer(cfg.MoodEnabled),
+		PokeReplyEnabled:                copyBoolPointer(cfg.PokeReplyEnabled),
+		ExpressionLearningEnabled:       copyBoolPointer(cfg.ExpressionLearningEnabled),
+		StyleFilterEnabled:              copyBoolPointer(cfg.StyleFilterEnabled),
+		StyleFilterRules:                cfg.StyleFilterRules,
+		DictSegmentEnabled:              copyBoolPointer(cfg.DictSegmentEnabled),
+		SemanticSearchEnabled:           copyBoolPointer(cfg.SemanticSearchEnabled),
+		ProactiveReplyChance:            cfg.ProactiveReplyChance,
+		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
+		RandomRepeat:                    copyRandomRepeat(cfg.RandomRepeat),
+		ChatInEnabled:                   copyBoolPointer(cfg.ChatInEnabled),
+		ChatInLevel:                     cfg.ChatInLevel,
+		Participation:                   copyParticipation(cfg.Participation),
+		ChatInThreshold:                 cfg.ChatInThreshold,
+		ChatInChance:                    cfg.ChatInChance,
+		ChatInCooldownSeconds:           cfg.ChatInCooldownSeconds,
+		NaturalInterjectionEnabled:      copyBoolPointer(cfg.NaturalInterjectionEnabled),
+		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
+		MaxBotConcurrency:               cfg.MaxBotConcurrency,
+		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
+		ModelRequestTimeoutMS:           cfg.ModelRequestTimeout.Milliseconds(),
+		AgentEnabled:                    cfg.AgentEnabled,
+		AgentMode:                       cfg.AgentMode,
+		SubtaskMaxTasks:                 cfg.SubtaskMaxTasks,
+		SubtaskMaxConcurrency:           cfg.SubtaskMaxConcurrency,
+		AgentSkillRoots:                 append([]string(nil), cfg.AgentSkillRoots...),
+		AgentMCPConfigPath:              cfg.AgentMCPConfigPath,
+		AgentCommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
+		AgentCommandSandbox:             cfg.AgentCommandSandbox,
+		AgentCommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
+		AgentFileWriteEnabled:           cfg.AgentFileWriteEnabled,
+		AgentBrowserCDPURL:              cfg.AgentBrowserCDPURL,
+		AgentBrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
+		AgentBrowserScreenshotAccess:    &cfg.AgentBrowserScreenshotAccess,
+		AgentBrowserOperationAccess:     &cfg.AgentBrowserOperationAccess,
+		AgentBrowserControlEnabled:      cfg.AgentBrowserControlEnabled,
+		AgentDesktopControlEnabled:      cfg.AgentDesktopControlEnabled,
+		AgentBrowserBoxDisabled:         cfg.AgentBrowserBoxDisabled,
 
 		// 微信只回显绑定的是哪个号，token 只在显式索取时回传。
 		WeixinBotID:              cfg.WeixinBotID,
@@ -2967,13 +2883,6 @@ func PayloadFromConfigWithSecrets(cfg BotConfig) ConfigPayload {
 	payload.OneBotAccessToken = cfg.OneBotAccessToken
 	payload.TelegramBotToken = cfg.TelegramBotToken
 	payload.QQAppSecret = cfg.QQAppSecret
-	payload.DingTalkClientSecret = cfg.DingTalkClientSecret
-	payload.FeishuAppSecret = cfg.FeishuAppSecret
-	payload.FeishuVerificationToken = cfg.FeishuVerificationToken
-	payload.FeishuEncryptKey = cfg.FeishuEncryptKey
-	payload.WeComSecret = cfg.WeComSecret
-	payload.WeComToken = cfg.WeComToken
-	payload.WeComEncodingAESKey = cfg.WeComEncodingAESKey
 	payload.WeixinBotToken = cfg.WeixinBotToken
 	payload.IMessagePassword = cfg.IMessagePassword
 	payload.IMessageWebhookToken = cfg.IMessageWebhookToken
@@ -3053,19 +2962,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		QQAppID:                     payload.QQAppID,
 		QQAppSecret:                 payload.QQAppSecret,
 		QQSandbox:                   payload.QQSandbox,
-		DingTalkClientID:            payload.DingTalkClientID,
-		DingTalkClientSecret:        payload.DingTalkClientSecret,
-		DingTalkRobotCode:           payload.DingTalkRobotCode,
-		FeishuAppID:                 payload.FeishuAppID,
-		FeishuAppSecret:             payload.FeishuAppSecret,
-		FeishuVerificationToken:     payload.FeishuVerificationToken,
-		FeishuEncryptKey:            payload.FeishuEncryptKey,
-		FeishuAPIBaseURL:            payload.FeishuAPIBaseURL,
-		WeComCorpID:                 payload.WeComCorpID,
-		WeComAgentID:                payload.WeComAgentID,
-		WeComSecret:                 payload.WeComSecret,
-		WeComToken:                  payload.WeComToken,
-		WeComEncodingAESKey:         payload.WeComEncodingAESKey,
 		BotAccount:                  payload.BotAccount,
 		OwnerID:                     payload.OwnerID,
 		AdminIDs:                    append([]string(nil), payload.AdminIDs...),
@@ -3220,27 +3116,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	// 漏掉任何一个,用户改个无关设置就会把凭据清空,机器人随之掉线。
 	if cfg.QQAppSecret == "" {
 		cfg.QQAppSecret = existing.QQAppSecret
-	}
-	if cfg.DingTalkClientSecret == "" {
-		cfg.DingTalkClientSecret = existing.DingTalkClientSecret
-	}
-	if cfg.FeishuAppSecret == "" {
-		cfg.FeishuAppSecret = existing.FeishuAppSecret
-	}
-	if cfg.FeishuVerificationToken == "" {
-		cfg.FeishuVerificationToken = existing.FeishuVerificationToken
-	}
-	if cfg.FeishuEncryptKey == "" {
-		cfg.FeishuEncryptKey = existing.FeishuEncryptKey
-	}
-	if cfg.WeComSecret == "" {
-		cfg.WeComSecret = existing.WeComSecret
-	}
-	if cfg.WeComToken == "" {
-		cfg.WeComToken = existing.WeComToken
-	}
-	if cfg.WeComEncodingAESKey == "" {
-		cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
 	}
 	// 微信凭据只认扫码结果：payload 里就算带了也不采信，免得前端回传的旧值或
 	// 空值把刚扫出来的登录覆盖掉。解绑走单独的接口。

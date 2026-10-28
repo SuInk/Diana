@@ -11,7 +11,7 @@ import (
 )
 
 func TestPluginDeliveryUsesTargetPlatform(t *testing.T) {
-	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial} {
 		t.Run(platform, func(t *testing.T) {
 			qq := &failingOutboundChannel{groupIDs: []string{"qq-other-group"}}
 			target := &recordingChannel{}
@@ -54,7 +54,7 @@ func TestPluginDeliveryUsesTargetPlatform(t *testing.T) {
 }
 
 func TestNonOneBotFailureDoesNotUseQQMembership(t *testing.T) {
-	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial} {
 		t.Run(platform, func(t *testing.T) {
 			qq := &failingOutboundChannel{groupIDs: []string{"other"}}
 			failure := errors.New("native send failed")

@@ -214,7 +214,7 @@ func TestTelegramRichTextLeavesPlainTextAlone(t *testing.T) {
 
 // 默认值随平台走：能渲染的保留标记，不能渲染的降级。
 func TestMarkdownToPlainDefaultsByPlatform(t *testing.T) {
-	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial, PlatformDingTalk, PlatformFeishu, PlatformWeCom} {
+	for _, platform := range []string{PlatformTelegram, PlatformQQOfficial} {
 		if markdownToPlainForConfig(BotConfig{Platform: platform}) {
 			t.Fatalf("%s 出站发富文本，默认应当保留 Markdown", platform)
 		}

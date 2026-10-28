@@ -1183,7 +1183,8 @@ func (r *Runtime) Stop() error {
 func (r *Runtime) ApplyProfiles(ctx context.Context, set ProfileSet, channel Channel) error {
 	if channel == nil {
 		for _, profile := range set.WithDefaults().Profiles {
-			if resolved, err := set.ResolveConnection(profile); err == nil && resolved.Enabled {
+			// 平台已下线的机器人不建连，也不拦其它机器人的配置改动。
+			if resolved, err := set.ResolveConnection(profile); err == nil && resolved.Enabled && profileRunnable(resolved) {
 				if err := resolved.Validate(); err != nil {
 					return fmt.Errorf("机器人「%s」配置无效：%w", profile.Name, err)
 				}

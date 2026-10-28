@@ -19,7 +19,7 @@ import (
 // 让他记得回头再要一次；或者把内容存下来，等关系建立了自己发出去。前者把已经
 // 做完的活儿又丢回给人，正是这个工具本来要解决的事。
 //
-// 好友关系怎么建立不归它管：请求仍然要主人在 onebot_requests 里同意，这里只负责
+// 好友关系怎么建立不归它管：请求仍然要主人在 platform_requests 里同意，这里只负责
 // 在关系建立的那一刻把欠着的话补上。自动发的是内容，不是好友请求——机器人不会
 // 因为有东西要发就替主人放人进来。
 const (
@@ -110,7 +110,7 @@ func (r *Runtime) parkPendingDirectMessage(ctx context.Context, source MessageEv
 
 // flushPendingDirectMessages 把某个人名下欠着的私聊补发出去。
 //
-// 触发点有两个：OneBot 的 friend_add 通知，以及主人在 onebot_requests 里同意好友
+// 触发点有两个：OneBot 的 friend_add 通知，以及主人在 platform_requests 里同意好友
 // 请求。两个都留着——通知覆盖「主人在手机上直接同意」，审批覆盖「实现不报这条
 // 通知」。取出即删除，所以两条路谁先到都只发一次。
 func (r *Runtime) flushPendingDirectMessages(ctx context.Context, event MessageEvent) {

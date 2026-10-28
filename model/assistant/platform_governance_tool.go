@@ -17,6 +17,8 @@ const (
 	maxGroupAnnounceRunes  = 1000
 	maxGroupCardRunes      = 60
 	maxGroupTitleRunes     = 30
+	// maxGroupNameRunes 取 Telegram 群名上限；QQ 群名更短，超了由接入端拒绝。
+	maxGroupNameRunes = 128
 )
 
 // platformWriteOperationSupport 是各平台真正实现了的写操作。读操作走跨平台只读层，
@@ -32,6 +34,8 @@ var platformWriteOperationSupport = map[string]map[string]bool{
 		platformOpSetCard: true, platformOpSetTitle: true,
 		platformOpMuteAll: true, platformOpUnmuteAll: true,
 		platformOpRecallMessages: true,
+		platformOpSetGroupName:   true, platformOpSetAdmin: true, platformOpUnsetAdmin: true,
+		platformOpLeaveGroup: true, platformOpFriendList: true,
 	},
 	PlatformTelegram: {
 		platformOpRecall: true, platformOpMute: true, platformOpUnmute: true, platformOpKick: true,
@@ -39,6 +43,17 @@ var platformWriteOperationSupport = map[string]map[string]bool{
 		platformOpEssenceSet:   true, platformOpEssenceUnset: true,
 		platformOpSetTitle: true,
 		platformOpMuteAll:  true, platformOpUnmuteAll: true,
+		platformOpRecallMessages: true,
+		platformOpSetGroupName:   true, platformOpInviteLink: true,
+		platformOpSetAdmin: true, platformOpUnsetAdmin: true,
+		platformOpLeaveGroup: true,
+	},
+	// QQ 官方机器人：QQ 群（group_openid）只开放撤回自己的消息，其余群管接口只在
+	// 频道里有，见 qq_official_governance.go 里按场景的二次判断。
+	PlatformQQOfficial: {
+		platformOpRecall: true, platformOpMute: true, platformOpUnmute: true, platformOpKick: true,
+		platformOpEssenceSet: true, platformOpEssenceUnset: true,
+		platformOpMuteAll: true, platformOpUnmuteAll: true,
 		platformOpRecallMessages: true,
 	},
 }
@@ -93,6 +108,13 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 	if !platformSupportsOperation(platform, operation) {
 		return refuse("", fmt.Errorf("当前平台暂不支持此操作"))
 	}
+	if err := t.qqOfficialSceneSupports(platform, operation); err != nil {
+		return refuse("", err)
+	}
+	// 管理员任免是群主的权力，群管理员不能借机器人互相提拔或拉下马。
+	if (operation == platformOpSetAdmin || operation == platformOpUnsetAdmin) && !actor.owner && actor.role != GroupRoleOwner {
+		return refuse("", fmt.Errorf("设置或取消管理员只有机器人主人和群主能用"))
+	}
 
 	req, err := t.governanceRequest(input, operation)
 	if err != nil {
@@ -109,6 +131,10 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 	// QQ 的专属头衔只有群主能发，管理员调接口会被静默忽略，先说清楚。
 	if operation == platformOpSetTitle && role != GroupRoleOwner && NormalizePlatformID(platform) == PlatformOneBotV11 {
 		return refuse(req.target, fmt.Errorf("QQ 群的专属头衔只有群主能设置，我在这个群只是管理员"))
+	}
+	// QQ 群的管理员也只有群主能任免；Telegram 由 can_promote_members 决定，交给接口判。
+	if (operation == platformOpSetAdmin || operation == platformOpUnsetAdmin) && role != GroupRoleOwner && NormalizePlatformID(platform) == PlatformOneBotV11 {
+		return refuse(req.target, fmt.Errorf("QQ 群的管理员只有群主能设置，我在这个群只是管理员"))
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -184,6 +210,22 @@ func (t *dianaPlatformTool) governanceRequest(input map[string]any, operation st
 		}
 	case platformOpRecallMessages:
 		return t.recallMessagesRequest(input)
+	case platformOpSetGroupName:
+		req.text = strings.TrimSpace(configToolString(input, "name"))
+		if req.text == "" {
+			return req, fmt.Errorf("set_group_name 需要新群名 name")
+		}
+		if len([]rune(req.text)) > maxGroupNameRunes {
+			return req, fmt.Errorf("群名不能超过 %d 字", maxGroupNameRunes)
+		}
+	case platformOpSetAdmin, platformOpUnsetAdmin:
+		req.target = t.resolveTarget(input)
+		if req.target == "" {
+			return req, fmt.Errorf("请指定目标账号 ID，或引用对方的消息")
+		}
+		if err := validatePlatformTargetID(req.target); err != nil {
+			return req, err
+		}
 	}
 	return req, nil
 }
@@ -224,6 +266,10 @@ func (t *dianaPlatformTool) dispatchGovernance(ctx context.Context, platform, op
 			return call("set_group_special_title", map[string]any{"group_id": group, "user_id": oneBotIDParam(req.target), "special_title": req.text, "duration": -1})
 		case platformOpMuteAll, platformOpUnmuteAll:
 			return call("set_group_whole_ban", map[string]any{"group_id": group, "enable": operation == platformOpMuteAll})
+		case platformOpSetGroupName:
+			return call("set_group_name", map[string]any{"group_id": group, "group_name": req.text})
+		case platformOpSetAdmin, platformOpUnsetAdmin:
+			return call("set_group_admin", map[string]any{"group_id": group, "user_id": oneBotIDParam(req.target), "enable": operation == platformOpSetAdmin})
 		}
 	case PlatformTelegram:
 		switch operation {
@@ -237,7 +283,17 @@ func (t *dianaPlatformTool) dispatchGovernance(ctx context.Context, platform, op
 			return t.telegramMuteAll(ctx, groupID)
 		case platformOpUnmuteAll:
 			return t.telegramUnmuteAll(ctx, groupID)
+		case platformOpSetGroupName:
+			return call("setChatTitle", map[string]any{"chat_id": groupID, "title": req.text})
+		case platformOpInviteLink:
+			return t.telegramInviteLink(ctx, groupID)
+		case platformOpSetAdmin:
+			return call("promoteChatMember", telegramPromoteParams(groupID, req.target, true))
+		case platformOpUnsetAdmin:
+			return call("promoteChatMember", telegramPromoteParams(groupID, req.target, false))
 		}
+	case PlatformQQOfficial:
+		return t.dispatchQQOfficialGovernance(ctx, operation, groupID, req)
 	}
 	return nil, fmt.Errorf("当前平台暂不支持此操作")
 }
@@ -277,6 +333,14 @@ func governanceSuccessMessage(operation string, req governanceRequest) string {
 		return "已开启全员禁言。"
 	case platformOpUnmuteAll:
 		return "已关闭全员禁言。"
+	case platformOpSetGroupName:
+		return "群名已改为「" + req.text + "」。"
+	case platformOpInviteLink:
+		return "已生成邀请链接。"
+	case platformOpSetAdmin:
+		return "已将该成员设为管理员。"
+	case platformOpUnsetAdmin:
+		return "已取消该成员的管理员。"
 	}
 	return "操作已完成。"
 }
@@ -389,4 +453,37 @@ func (r *Runtime) sessionHistorySnapshot(event MessageEvent) []MessageEvent {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return append([]MessageEvent(nil), r.history[session]...)
+}
+
+// telegramInviteLink 生成一条附加邀请链接。不用 exportChatInviteLink：它会作废群里
+// 现有的主链接，已经发出去的链接全部失效。
+func (t *dianaPlatformTool) telegramInviteLink(ctx context.Context, groupID string) (map[string]any, error) {
+	data, err := t.runtime.callPlatformAPIForEvent(ctx, t.event, "createChatInviteLink", map[string]any{"chat_id": groupID})
+	if err != nil {
+		return nil, err
+	}
+	link := strings.TrimSpace(stringFromAny(data["invite_link"]))
+	if link == "" {
+		return nil, fmt.Errorf("Telegram 没有返回邀请链接")
+	}
+	return map[string]any{"invite_link": link}, nil
+}
+
+// telegramPromoteParams 给 promoteChatMember 的权限。提拔只给日常管群用得上的几项，
+// 不给改群资料和再提拔别人：那两项等于把群交出去，要给就让群主自己在客户端里给。
+// 取消管理员把所有权限置 false，Telegram 据此把对方降回普通成员。
+func telegramPromoteParams(groupID, target string, promote bool) map[string]any {
+	params := map[string]any{"chat_id": groupID, "user_id": oneBotIDParam(target)}
+	for _, right := range []string{
+		"can_manage_chat", "can_delete_messages", "can_restrict_members",
+		"can_invite_users", "can_pin_messages", "can_manage_video_chats",
+	} {
+		params[right] = promote
+	}
+	if !promote {
+		for _, right := range []string{"can_change_info", "can_promote_members", "can_post_messages", "can_edit_messages", "can_manage_topics", "is_anonymous"} {
+			params[right] = false
+		}
+	}
+	return params
 }

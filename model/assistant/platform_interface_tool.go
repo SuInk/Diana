@@ -65,6 +65,16 @@ const (
 	platformOpMuteAll        = "mute_all"
 	platformOpUnmuteAll      = "unmute_all"
 	platformOpRecallMessages = "recall_messages"
+
+	// 群资料与成员层级：改群名、生成邀请链接、设置或取消管理员。
+	platformOpSetGroupName = "set_group_name"
+	platformOpInviteLink   = "invite_link"
+	platformOpSetAdmin     = "set_admin"
+	platformOpUnsetAdmin   = "unset_admin"
+
+	// 账号层面的操作只给主人：让机器人退群、看机器人的好友列表。
+	platformOpLeaveGroup = "leave_group"
+	platformOpFriendList = "friend_list"
 )
 
 // 撤回自成一类：不是只读，但也不是对别人动手的群管理操作，所以不归主人专属。
@@ -79,6 +89,14 @@ var platformReadOperations = map[string]bool{
 	platformOpMemberList:   true,
 	platformOpGroupList:    true,
 	platformOpAnnounceList: true,
+	platformOpFriendList:   true,
+}
+
+// platformOwnerOnlyOperations 只认机器人主人，群主和群管理员也不行：退群和好友列表
+// 是机器人账号自己的事，不属于任何一个群的管理权。
+var platformOwnerOnlyOperations = map[string]bool{
+	platformOpLeaveGroup: true,
+	platformOpFriendList: true,
 }
 
 var platformDestructiveOperations = map[string]bool{
@@ -94,6 +112,11 @@ var platformDestructiveOperations = map[string]bool{
 	platformOpMuteAll:        true,
 	platformOpUnmuteAll:      true,
 	platformOpRecallMessages: true,
+	platformOpSetGroupName:   true,
+	platformOpInviteLink:     true,
+	platformOpSetAdmin:       true,
+	platformOpUnsetAdmin:     true,
+	platformOpLeaveGroup:     true,
 }
 
 // platformModerationOperations 按固定顺序列出群管操作，工具 schema 和安全模式规则共用。
@@ -104,6 +127,9 @@ var platformModerationOperations = []string{
 	platformOpSetCard, platformOpSetTitle,
 	platformOpMuteAll, platformOpUnmuteAll,
 	platformOpRecallMessages,
+	platformOpSetGroupName, platformOpInviteLink,
+	platformOpSetAdmin, platformOpUnsetAdmin,
+	platformOpLeaveGroup,
 }
 
 // PlatformInterfacePlugin 把「平台接口」这项内置能力挂进插件目录，供 WebUI 展示和
@@ -118,8 +144,8 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
-		Version:     "0.1.3",
-		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、开关全员禁言、撤回成员消息。支持 OneBot v11 与 Telegram，平台做不到的操作会明确说明。",
+		Version:     "0.1.4",
+		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、改群名、生成邀请链接、开关全员禁言、撤回成员消息；主人和群主可任免管理员；主人可让机器人退群、查看好友列表，并审批好友与入群申请。支持 OneBot v11、Telegram 与 QQ 官方机器人（QQ 群只能撤回自己的消息，群管在 QQ 频道里可用），平台做不到的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"platform:group:read", "platform:group:moderate:owner"},
@@ -163,12 +189,13 @@ func (t *dianaPlatformTool) Description() string {
 	base += "OneBot 的 member_info 在当前群未查到成员时继续查 QQ 个人资料；profile 只说明账号资料，不能据此断言在群或自动 @。"
 	base += "group_list 查机器人加了几个群，明细只有主人能看，别人问只报群数。"
 	base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
+	base += "set_admin/unset_admin 仅主人和群主；leave_group 让机器人退群、friend_list 看好友列表，仅主人。"
 	return base
 }
 
 func (t *dianaPlatformTool) InputSchema() map[string]any {
 	// 群管操作对谁都列出来，理由见 moderator 字段。
-	operations := append([]string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpGroupList, platformOpAnnounceList, platformOpRecall}, platformModerationOperations...)
+	operations := append([]string{platformOpGroupInfo, platformOpMemberInfo, platformOpMemberList, platformOpGroupList, platformOpAnnounceList, platformOpFriendList, platformOpRecall}, platformModerationOperations...)
 	properties := map[string]any{
 		"message_id":         toolStringParam("目标消息 ID，取自历史，勿编；recall 默认我最近一条，其余默认被引用消息"),
 		"group_id":           toolStringParam("目标群 ID，默认当前群"),
@@ -180,6 +207,7 @@ func (t *dianaPlatformTool) InputSchema() map[string]any {
 		"card":               toolStringParam("set_card：新群名片，空串清除"),
 		"title":              toolStringParam("set_title：新头衔，空串清除"),
 		"count":              toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount),
+		"name":               toolStringParam("set_group_name：新群名"),
 	}
 	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤成员消息（清刷屏）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
@@ -211,6 +239,9 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 
 	if platformSelfOperations[operation] {
 		return t.runRecall(ctx, input, access, owner)
+	}
+	if platformOwnerOnlyOperations[operation] {
+		return t.runOwnerOperation(ctx, input, operation, owner, access)
 	}
 	switch operation {
 	case platformOpMute, platformOpUnmute, platformOpKick:
@@ -351,8 +382,12 @@ type dianaPlatformGroupItem struct {
 }
 
 func (t *dianaPlatformTool) runGroupList(ctx context.Context, operation string, owner bool, access string) (string, error) {
-	if !IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
-		// Telegram Bot API 没有「列出已加入的群」，飞书、钉钉等也没接这一项。
+	platform := t.runtime.currentPlatform(t.event)
+	if NormalizePlatformID(platform) == PlatformQQOfficial {
+		return t.runQQOfficialGuildList(ctx, operation, owner, access)
+	}
+	if !IsOneBotPlatform(platform) {
+		// Telegram Bot API 没有「列出已加入的群」。
 		err := fmt.Errorf("当前平台的接口不提供机器人已加入的群列表，暂不支持此操作")
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", platformRefusal(err))
 		return "", err
@@ -387,7 +422,15 @@ func (t *dianaPlatformTool) runGroupList(ctx context.Context, operation string, 
 		})
 	}
 	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
+	return t.marshalGroupList(operation, access, owner, groups, nil)
+}
+
+// marshalGroupList 给群列表结果套上可见性规则：群数谁都能看，明细只给主人。
+func (t *dianaPlatformTool) marshalGroupList(operation, access string, owner bool, groups []dianaPlatformGroupItem, extra map[string]any) (string, error) {
 	payload := map[string]any{"group_count": len(groups)}
+	for key, value := range extra {
+		payload[key] = value
+	}
 	if !owner {
 		payload["groups_hidden"] = "群明细只有主人能看，这里只报群数。"
 		return t.marshal(operation, access, payload)
@@ -429,6 +472,10 @@ func (t *dianaPlatformTool) runModeration(ctx context.Context, input map[string]
 	platform := t.runtime.currentPlatform(t.event)
 	if !platformSupportsOperation(platform, operation) {
 		err := fmt.Errorf("当前平台暂不支持此操作")
+		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
+		return "", err
+	}
+	if err := t.qqOfficialSceneSupports(platform, operation); err != nil {
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, target, platformRefusal(err))
 		return "", err
 	}
@@ -545,6 +592,8 @@ func (t *dianaPlatformTool) dispatchModeration(ctx context.Context, platform, op
 			}
 			return data, nil
 		}
+	case PlatformQQOfficial:
+		return t.dispatchQQOfficialModeration(ctx, operation, groupID, target, duration, rejectAdd)
 	}
 	return nil, fmt.Errorf("当前平台暂不支持此操作")
 }
@@ -623,11 +672,11 @@ func telegramFullPermissions() map[string]any {
 	return perms
 }
 
-// platformSupportsInterfaceTool 判断某平台是否挂载 platform 工具。读操作走跨平台
-// 只读层，破坏性操作只有 OneBot 和 Telegram 真正实现，其余平台会返回明确的不支持说明。
+// platformSupportsInterfaceTool 判断某平台是否挂载 platform 工具。各平台做不到的
+// 操作由 platformWriteOperationSupport 挡下，返回明确的不支持说明。
 func platformSupportsInterfaceTool(platform string) bool {
 	switch NormalizePlatformID(platform) {
-	case PlatformOneBotV11, PlatformTelegram, PlatformFeishu, PlatformDingTalk, PlatformWeCom, PlatformQQOfficial:
+	case PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial:
 		return true
 	}
 	return false
@@ -659,7 +708,7 @@ func (r *Runtime) platformInterfaceBuiltinSkills(event MessageEvent) []agent.Ski
 	}
 	return []agent.SkillMetadata{{
 		Name:             "platform",
-		Description:      "Read group info and members, recall the bot's own recent messages, and let the bot owner and group admins moderate (mute, kick, announcements, essence, card/title, whole-group mute, recalling members' messages) when the bot is a group admin.",
+		Description:      "Read group info and members, recall the bot's own recent messages, and let the bot owner and group admins moderate (mute, kick, announcements, essence, card/title, whole-group mute, recalling members' messages, group name, invite links, appointing admins) when the bot is a group admin; the bot owner can also make the bot leave a group or list its friends.",
 		ShortDescription: "跨平台群资料读取、撤回自己发出的消息与主人及群管理员的群管",
 		Path:             "builtin://platform/SKILL.md",
 		Source:           platformInterfaceSkillSource,

@@ -208,19 +208,24 @@ var expectedPlatformWriteOperations = map[string][]string{
 		platformOpAnnounce, platformOpAnnounceList, platformOpAnnounceDelete,
 		platformOpEssenceSet, platformOpEssenceUnset, platformOpSetCard, platformOpSetTitle,
 		platformOpMuteAll, platformOpUnmuteAll, platformOpRecallMessages,
+		platformOpSetGroupName, platformOpSetAdmin, platformOpUnsetAdmin,
+		platformOpLeaveGroup, platformOpFriendList,
 	},
-	// 没有群公告、没有群名片；精华对应置顶，头衔对应管理员自定义头衔。
+	// 没有群公告、没有群名片、没有好友列表；精华对应置顶，头衔对应管理员自定义头衔。
 	PlatformTelegram: {
 		platformOpRecall, platformOpMute, platformOpUnmute, platformOpKick,
 		platformOpAnnounceList,
 		platformOpEssenceSet, platformOpEssenceUnset, platformOpSetTitle,
 		platformOpMuteAll, platformOpUnmuteAll, platformOpRecallMessages,
+		platformOpSetGroupName, platformOpInviteLink, platformOpSetAdmin, platformOpUnsetAdmin,
+		platformOpLeaveGroup,
 	},
-	// 以下平台只接了只读适配层，群管写操作一律如实回「不支持」。
-	PlatformQQOfficial: nil,
-	PlatformFeishu:     nil,
-	PlatformDingTalk:   nil,
-	PlatformWeCom:      nil,
+	// 频道能做的全集；QQ 群里只剩 recall，由 qqOfficialSceneSupports 再挡一次。
+	PlatformQQOfficial: {
+		platformOpRecall, platformOpMute, platformOpUnmute, platformOpKick,
+		platformOpEssenceSet, platformOpEssenceUnset,
+		platformOpMuteAll, platformOpUnmuteAll, platformOpRecallMessages,
+	},
 	// 微信 iLink 只有私聊，没有群，群管写操作无从谈起。
 	PlatformWeixin: nil,
 	// iMessage 本身没有群管理（踢人、禁言、公告、置顶都没有），BlueBubbles 也没有对应接口。
@@ -228,7 +233,7 @@ var expectedPlatformWriteOperations = map[string][]string{
 }
 
 func TestPlatformWriteOperationMatrix(t *testing.T) {
-	all := append([]string{platformOpRecall, platformOpAnnounceList}, platformModerationOperations...)
+	all := append([]string{platformOpRecall, platformOpAnnounceList, platformOpFriendList}, platformModerationOperations...)
 	for _, def := range SupportedPlatforms() {
 		declared, ok := expectedPlatformWriteOperations[def.ID]
 		if !ok {

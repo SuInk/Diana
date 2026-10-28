@@ -104,7 +104,7 @@ func TestGroupRoleVocabularyIsPlatformNeutral(t *testing.T) {
 		if !strings.HasPrefix(string(role), "group_") {
 			t.Errorf("身份取值 %q 没带 group_ 前缀，和主人的 %s 分不开", role, RelationshipOwnerRole)
 		}
-		for _, platform := range []string{"qq", "onebot", "telegram", "dingtalk", "feishu", "wecom"} {
+		for _, platform := range []string{"qq", "onebot", "telegram", "official"} {
 			if strings.Contains(string(role), platform) {
 				t.Errorf("身份取值 %q 里带了平台名 %q", role, platform)
 			}

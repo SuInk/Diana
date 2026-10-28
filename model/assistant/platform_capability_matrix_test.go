@@ -10,7 +10,7 @@ import (
 
 // 这个文件盯的是「某个平台悄悄少实现了一样东西」。
 //
-// 测试一直是按平台切的：telegram_test.go 测 Telegram、feishu_test.go 测飞书，
+// 测试一直是按平台切的：telegram_test.go 测 Telegram、qq_official_test.go 测 QQ 官方机器人，
 // 各测各的。这种切法测得出「我实现的那部分对不对」，测不出「我压根没实现」——
 // 一个平台漏掉某项能力时，没有任何一个用例会红。Telegram 缺 ResultChannel 就是
 // 这么一路漏到线上的：出站消息以空 message_id 入库，别人引用 Diana 时回查落空，
@@ -42,20 +42,6 @@ var expectedPlatformCapabilities = map[string]platformCapabilities{
 		// 索引，入站 ref_msg_idx（REFIDX_ 键空间）靠它对上；两者不共空间。
 		// 带 Markdown 的文本走 msg_type 2 原生 Markdown。
 		ResultChannel: true, RichText: true, InboundQuote: true,
-	},
-	PlatformFeishu: {
-		// 发送返回 data.message_id，入站的 ParentID 与之同属 om_ 空间。
-		ResultChannel: true, RichText: true, InboundQuote: true,
-	},
-	PlatformDingTalk: {
-		// 钉钉的入站回调里没有引用关系，主动推送也只返回 processQueryKey，
-		// 那不是消息 ID。记下来只会往历史里塞一个对不上的值，所以不实现。
-		ResultChannel: false, RichText: true, InboundQuote: false,
-	},
-	PlatformWeCom: {
-		// 企业微信入站同样没有引用概念；message/send 返回的 msgid 是撤回句柄，
-		// 和入站 MsgID 不是一个空间。
-		ResultChannel: false, RichText: true, InboundQuote: false,
 	},
 	PlatformWeixin: {
 		// iLink 的 sendmessage 会回 message_id，但入站引用只给 ref_msg.svr_id，
@@ -136,12 +122,6 @@ func newCapabilityProbeChannel(t *testing.T, platform string) Channel {
 		return NewChannelForConfig(BotConfig{Platform: platform, TelegramBotToken: "t"})
 	case PlatformQQOfficial:
 		return NewChannelForConfig(BotConfig{Platform: platform, QQAppID: "a", QQAppSecret: "s"})
-	case PlatformDingTalk:
-		return NewChannelForConfig(BotConfig{Platform: platform, DingTalkClientID: "a", DingTalkClientSecret: "s"})
-	case PlatformFeishu:
-		return NewChannelForConfig(BotConfig{Platform: platform, FeishuAppID: "a", FeishuAppSecret: "s"})
-	case PlatformWeCom:
-		return NewChannelForConfig(BotConfig{Platform: platform, WeComCorpID: "c", WeComAgentID: "1", WeComSecret: "s"})
 	case PlatformWeixin:
 		return NewChannelForConfig(BotConfig{Platform: platform, WeixinBotToken: "t", WeixinBotID: "b"})
 	case PlatformIMessage:

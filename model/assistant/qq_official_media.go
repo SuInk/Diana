@@ -180,7 +180,7 @@ func qqMediaPayload(ctx context.Context, source string, fileType int, maxBytes i
 		if int64(len(data)) > maxBytes {
 			return nil, "", fmt.Errorf("qq: 图片 %d 字节超过上限 %d", len(data), maxBytes)
 		}
-		return data, "image" + imessageExtensionFor(contentType), nil
+		return data, "image" + mediaExtensionFor(contentType), nil
 	}
 	kind, defaultName := "视频", "video.mp4"
 	switch fileType {

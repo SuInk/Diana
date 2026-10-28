@@ -77,10 +77,12 @@ func (r *Runtime) orderedProfilesLocked() []BotConfig {
 	return out
 }
 
+// enabledProfilesLocked 返回启用且在当前版本能跑的机器人。平台已下线的机器人即使
+// 开关开着也不算：它启动校验必然失败，算进来会让整个运行时起不来。
 func (r *Runtime) enabledProfilesLocked() []BotConfig {
 	var out []BotConfig
 	for _, profile := range r.orderedProfilesLocked() {
-		if profile.Enabled {
+		if profile.Enabled && profileRunnable(profile) {
 			out = append(out, profile)
 		}
 	}
