@@ -215,6 +215,17 @@
             <Minimize2 v-if="fullscreen" :size="15" aria-hidden="true" />
             <Maximize2 v-else :size="15" aria-hidden="true" />
           </button>
+          <button
+            v-if="touchDevice"
+            class="browser-tool"
+            type="button"
+            title="键盘"
+            aria-label="弹出键盘，往页面里打字"
+            :disabled="!interactive"
+            @click="openKeyboard"
+          >
+            <Keyboard :size="16" aria-hidden="true" />
+          </button>
         </div>
         <div class="browser-progress" :class="{ active: pageLoading }" aria-hidden="true"></div>
 
@@ -232,6 +243,21 @@
             @wheel="onWheel"
             @keydown="onKey($event, 'keyDown')"
             @keyup="onKey($event, 'keyUp')"
+            @touchstart="onTouchStart"
+            @touchmove="onTouchMove"
+            @touchend="onTouchEnd"
+            @touchcancel="onTouchCancel"
+          />
+          <!-- 手机上画布拿不到软键盘：点「键盘」聚焦这个看不见的输入框，打的字转发给页面。 -->
+          <textarea
+            ref="touchKeyboard"
+            class="browser-touch-keyboard"
+            aria-label="往页面里打字"
+            autocapitalize="off"
+            autocomplete="off"
+            spellcheck="false"
+            @beforeinput="onTouchKeyboardInput"
+            @compositionend="onTouchKeyboardCompose"
           />
           <div v-if="!hasFrame && liveNotice" class="browser-live-notice">
             <p style="margin: 0; font-size: 13px">{{ liveNotice }}</p>
@@ -368,7 +394,7 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMoun
 import { botScope } from "../lib/bot-scope";
 import { formatTime } from "../lib/format";
 import { navigate as navigateToView } from "../router";
-import { ArrowLeft, ArrowUp, ChevronDown, Globe, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
+import { ArrowLeft, ArrowUp, ChevronDown, Globe, Keyboard, Lock, Maximize2, Minimize2, Plus, RotateCw, Search, UserRound, X } from "@lucide/vue";
 import AgentBrowserPanel from "../components/AgentBrowserPanel.vue";
 import ExternalCDPDialog from "../components/ExternalCDPDialog.vue";
 import Modal from "../components/Modal.vue";
@@ -569,6 +595,9 @@ let frameMeta: LiveFrameMeta | null = null;
 const screen = ref<HTMLCanvasElement | null>(null);
 const addressInput = ref("");
 const addressField = ref<HTMLInputElement | null>(null);
+const touchKeyboard = ref<HTMLTextAreaElement | null>(null);
+// 粗指针（手机、平板）才显示键盘按钮：桌面上画布本身就能收键盘。
+const touchDevice = typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches === true;
 const currentTitle = ref("");
 const pageLoading = ref(false);
 const liveWindow = ref<HTMLElement | null>(null);
@@ -1179,6 +1208,100 @@ function onWheel(event: WheelEvent): void {
   });
 }
 
+// 触屏：轻点当一次左键单击，单指拖动当滚轮滚页面，跟手机上用浏览器的习惯一样。
+// 没接管时不拦，手指照常滚 WebUI 这一页。
+const tapSlopPX = 8;
+let touchStart: { x: number; y: number } | null = null;
+let touchLast: { x: number; y: number } | null = null;
+let touchScrolling = false;
+let touchDeltaX = 0;
+let touchDeltaY = 0;
+let touchFrame = 0;
+
+function touchPoint(touch: Touch): { x: number; y: number } {
+  return pagePoint({ clientX: touch.clientX, clientY: touch.clientY } as MouseEvent);
+}
+
+function onTouchStart(event: TouchEvent): void {
+  if (!interactive.value) {
+    nudgeTakeover();
+    return;
+  }
+  // 双指留给系统缩放 WebUI，看清小字。
+  if (event.touches.length !== 1) {
+    touchStart = null;
+    return;
+  }
+  const touch = event.touches[0];
+  touchStart = touchLast = { x: touch.clientX, y: touch.clientY };
+  touchScrolling = false;
+}
+
+function onTouchMove(event: TouchEvent): void {
+  if (!interactive.value || !touchStart || !touchLast || event.touches.length !== 1) return;
+  event.preventDefault();
+  const touch = event.touches[0];
+  if (!touchScrolling && Math.hypot(touch.clientX - touchStart.x, touch.clientY - touchStart.y) < tapSlopPX) return;
+  touchScrolling = true;
+  // 画面被缩小显示，手指挪一像素对应页面里更多像素，按比例放大才跟手。
+  const rect = screen.value?.getBoundingClientRect();
+  const scale = rect && frameMeta ? frameMeta.width / rect.width : 1;
+  touchDeltaX += (touchLast.x - touch.clientX) * scale;
+  touchDeltaY += (touchLast.y - touch.clientY) * scale;
+  touchLast = { x: touch.clientX, y: touch.clientY };
+  if (touchFrame) return;
+  touchFrame = window.requestAnimationFrame(() => {
+    touchFrame = 0;
+    const point = touchPoint(touch);
+    send({ type: "mouse", mouse: { type: "mouseWheel", x: point.x, y: point.y, delta_x: -touchDeltaX, delta_y: -touchDeltaY } });
+    touchDeltaX = 0;
+    touchDeltaY = 0;
+  });
+}
+
+function onTouchEnd(event: TouchEvent): void {
+  if (!interactive.value || !touchStart) return;
+  // 拦掉系统随后补发的模拟鼠标事件，否则一次轻点会点两下。
+  event.preventDefault();
+  const start = touchStart;
+  touchStart = touchLast = null;
+  if (touchScrolling) return;
+  const point = pagePoint({ clientX: start.x, clientY: start.y } as MouseEvent);
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    send({ type: "mouse", mouse: { type, x: point.x, y: point.y, button: "left", buttons: type === "mousePressed" ? 1 : 0, click_count: 1 } });
+  }
+}
+
+function onTouchCancel(): void {
+  touchStart = touchLast = null;
+}
+
+function openKeyboard(): void {
+  touchKeyboard.value?.focus();
+}
+
+function sendKeyPress(key: string, code: string, keyCode: number): void {
+  for (const type of ["keyDown", "keyUp"]) {
+    send({ type: "key", key: { type, key, code, windows_virtual_key_code: keyCode, modifiers: 0 } });
+  }
+}
+
+// 软键盘大多不发可靠的 keydown（安卓输入法一律报 229），只能看 beforeinput 的类型。
+function onTouchKeyboardInput(event: InputEvent): void {
+  if (!interactive.value) return;
+  // 拼音选字还没上屏，等 compositionend 拿整段。
+  if (event.isComposing || event.inputType === "insertCompositionText") return;
+  event.preventDefault();
+  if (event.inputType === "deleteContentBackward") sendKeyPress("Backspace", "Backspace", 8);
+  else if (event.inputType === "insertLineBreak" || event.inputType === "insertParagraph") sendKeyPress("Enter", "Enter", 13);
+  else if (event.data) send({ type: "text", text: event.data });
+}
+
+function onTouchKeyboardCompose(event: CompositionEvent): void {
+  if (interactive.value && event.data) send({ type: "text", text: event.data });
+  if (touchKeyboard.value) touchKeyboard.value.value = "";
+}
+
 function onKey(event: KeyboardEvent, type: "keyDown" | "keyUp"): void {
   // 没接管时按键不碰也不拦：焦点留在画面上时 Cmd+Tab、Cmd+C、Tab 照常归 WebUI，
   // 也不会因此把浏览器抢过来。
@@ -1707,6 +1830,25 @@ onBeforeUnmount(() => {
   display: block;
   cursor: default;
   outline: none;
+}
+
+/* 接管后单指归页面，双指缩放仍归系统。 */
+.browser-window.is-takeover .browser-screen {
+  touch-action: pinch-zoom;
+}
+
+.browser-touch-keyboard {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+  /* 低于 16px 时 iOS 聚焦会自动放大整页。 */
+  font-size: 16px;
 }
 
 .browser-statusbar {
