@@ -416,6 +416,7 @@ type Runtime struct {
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	selfNotes        SelfNoteStore
+	wallet           WalletSummaryStore
 	feed             FeedStore
 	feedReply        feedReplyState
 	groupStyles      groupStyleState
@@ -4282,6 +4283,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    selfNoteContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		// 零花钱是关于她自己的事实，和自述同级，按记忆优先级让位。
+		if walletContext := contextPreload.walletContext; walletContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    walletContext,
 				Priority:   llm.MessagePriorityMemory,
 				AtomicText: true,
 			})

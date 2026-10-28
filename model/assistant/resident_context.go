@@ -26,6 +26,7 @@ const (
 	ResidentBlockPromptRules = "prompt_rules"
 	ResidentBlockWorldBook   = "world_book"
 	ResidentBlockSelfNotes   = "self_notes"
+	ResidentBlockWallet      = "wallet"
 	ResidentBlockSessionNote = "session_thread"
 	ResidentBlockAgentPrompt = "agent_protocol"
 	ResidentBlockAgentTools  = "agent_tools"
@@ -99,6 +100,10 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockSelfNotes, Label: "自述", Content: selfNotes, Budget: selfNoteBudget(window),
 		Note: "机器人自己写的自我认知，默认关闭。",
+	})
+	snapshot.appendBlock(ResidentContextBlock{
+		Key: ResidentBlockWallet, Label: "零花钱", Content: r.walletContext(ctx, event),
+		Note: "开了小窝且记过账时注入余额和最近几笔。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockSessionNote, Label: "会话便签", Content: r.sessionThreadNote(ctx, event), Budget: sessionThreadBudget(window),

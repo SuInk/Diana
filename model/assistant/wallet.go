@@ -4,7 +4,9 @@
 package assistant
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -94,4 +96,106 @@ func NormalizeWalletReason(reason string) string {
 // OwnSpaceEnabled 报告这份配置有没有开小窝。
 func OwnSpaceEnabled(cfg BotConfig) bool {
 	return boolValue(cfg.OwnSpaceEnabled, false)
+}
+
+const (
+	// walletContextRecentEntries 是注入提示词的最近几笔。余额本身才是她要知道的事，
+	// 这几笔只用来让「上周刚发了零花钱」「前两天调过账」这类话有据可依。
+	walletContextRecentEntries = 5
+	// walletLoadTimeout 是加载超时。查不到就当没有钱包，绝不拖回复。
+	walletLoadTimeout = 2 * time.Second
+)
+
+// walletContextPrefix 声明这段是运行时给的事实账本，不是谁在提要求。少了这句，
+// 模型会把「余额 50 元」读成有人在提醒她花钱或在讨钱。
+const walletContextPrefix = "【你的零花钱】下面是你小窝里零花钱账本的当前情况，由系统记账，不是用户消息。" +
+	"全是虚拟的数字，不能转账、发红包或真的付款；你现在也还没有自己花钱的办法，有人要你掏钱或打钱时照实说。" +
+	"聊到相关话题时自然地知道自己有多少钱即可，不要主动报账，也不要因为它就把话题转到钱上。\n"
+
+// WalletSummaryStore 读钱包概况。没有它时注入为空。
+type WalletSummaryStore interface {
+	WalletSummary(ctx context.Context, profileID string, limit int) (WalletSummary, error)
+}
+
+// SetWalletStore 注入钱包存储。
+func (r *Runtime) SetWalletStore(store WalletSummaryStore) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.wallet = store
+}
+
+func (r *Runtime) walletStore() WalletSummaryStore {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.wallet
+}
+
+// walletContext 渲染本轮要注入的零花钱段落。只在开了小窝时注入；拿不到机器人
+// 身份时不注入，理由同自述：没有 profile_id 就读不到属于这台机器人的那本账。
+// 一笔账都没有时也不注入，免得没发过零花钱的机器人每轮都被告知「余额 0 元」。
+func (r *Runtime) walletContext(ctx context.Context, event MessageEvent) string {
+	store := r.walletStore()
+	profileID := strings.TrimSpace(event.ProfileID)
+	if store == nil || profileID == "" || !OwnSpaceEnabled(r.effectiveConfigForEvent(event)) {
+		return ""
+	}
+	loadCtx, cancel := context.WithTimeout(ctx, walletLoadTimeout)
+	defer cancel()
+	summary, err := store.WalletSummary(loadCtx, profileID, walletContextRecentEntries)
+	if err != nil || len(summary.Recent) == 0 {
+		return ""
+	}
+	return formatWalletContext(summary, profileLocation(profileID))
+}
+
+// formatWalletContext 拼出段落：一行余额，加最近几笔，新的在前。
+func formatWalletContext(summary WalletSummary, loc *time.Location) string {
+	var builder strings.Builder
+	builder.WriteString(walletContextPrefix)
+	builder.WriteString("余额：")
+	builder.WriteString(formatWalletYuan(summary.BalanceCents, false))
+	builder.WriteString("\n最近几笔：")
+	for _, entry := range summary.Recent {
+		builder.WriteString("\n- ")
+		builder.WriteString(entry.CreatedAt.In(loc).Format("01-02"))
+		builder.WriteString(" ")
+		builder.WriteString(walletEntryKindLabel(entry.Kind))
+		builder.WriteString(" ")
+		builder.WriteString(formatWalletYuan(entry.AmountCents, true))
+		if reason := NormalizeWalletReason(entry.Reason); reason != "" {
+			builder.WriteString("（")
+			builder.WriteString(reason)
+			builder.WriteString("）")
+		}
+	}
+	return builder.String()
+}
+
+func walletEntryKindLabel(kind WalletEntryKind) string {
+	switch kind {
+	case WalletEntryAllowance:
+		return "主人发零花钱"
+	case WalletEntryAdjust:
+		return "主人调账"
+	case WalletEntrySpend:
+		return "花掉"
+	case WalletEntryRefund:
+		return "退回"
+	}
+	return string(kind)
+}
+
+// formatWalletYuan 把分写成「12.50 元」。signed 为真时正数带加号，用在流水上。
+func formatWalletYuan(cents int64, signed bool) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	} else if signed {
+		sign = "+"
+	}
+	return fmt.Sprintf("%s%d.%02d 元", sign, cents/100, cents%100)
 }

@@ -528,6 +528,7 @@ func main() {
 	botRuntime.SetNotebookStore(sqliteStore)
 	botRuntime.SetWorldBookStore(sqliteStore)
 	botRuntime.SetSelfNoteStore(sqliteStore)
+	botRuntime.SetWalletStore(sqliteStore)
 	botRuntime.SetFeedStore(sqliteStore)
 	botRuntime.SetGroupStyleStore(sqliteStore)
 	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
