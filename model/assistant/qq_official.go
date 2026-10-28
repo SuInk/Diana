@@ -68,9 +68,11 @@ type QQOfficialChannel struct {
 	cfg           QQOfficialConfig
 	// apiBaseOverride 只给测试指向本地服务。
 	apiBaseOverride string
-	handler         EventHandler
-	client          *http.Client
-	cancel          context.CancelFunc
+	// readTimeoutOverride 只给测试缩短半开连接的判定时限。
+	readTimeoutOverride time.Duration
+	handler             EventHandler
+	client              *http.Client
+	cancel              context.CancelFunc
 
 	statusMu sync.RWMutex
 	status   ChannelStatus
@@ -213,6 +215,11 @@ func (c *QQOfficialChannel) Connect(ctx context.Context, handler EventHandler) e
 		if runCtx.Err() != nil {
 			break
 		}
+		// 这一轮连上过（READY/RESUMED）说明不是持续故障，退避从头算，
+		// 否则稳定跑了很久后的一次闪断也要等满 30 秒才重连。
+		if c.Status().Connected {
+			backoff = time.Second
+		}
 		if err != nil {
 			c.setStatus(false, c.Status().SelfID, err.Error())
 		}
@@ -253,7 +260,7 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 	if err := conn.ReadJSON(&hello); err != nil {
 		return fmt.Errorf("qq: 读取 Hello 失败: %w", err)
 	}
-	interval := 30 * time.Second
+	interval := time.Duration(0)
 	if hello.Op == qqOpHello {
 		var data struct {
 			HeartbeatInterval int64 `json:"heartbeat_interval"`
@@ -261,6 +268,11 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 		if err := json.Unmarshal(hello.Data, &data); err == nil && data.HeartbeatInterval > 0 {
 			interval = time.Duration(data.HeartbeatInterval) * time.Millisecond
 		}
+	}
+	interval = qqOfficialHeartbeatInterval(interval)
+	readTimeout := qqOfficialReadTimeout(interval)
+	if c.readTimeoutOverride > 0 {
+		readTimeout = c.readTimeoutOverride
 	}
 
 	// 有 session 就 RESUME 续上，否则 IDENTIFY 开新会话。
@@ -293,6 +305,11 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		// 网关每次心跳都会回 OP 11，读超时兜住半开连接：网络断了但 TCP 没收到
+		// 关闭时，写心跳仍可能成功，不设超时 ReadJSON 会一直卡住、机器人静默掉线。
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			return fmt.Errorf("qq: 设置读超时失败: %w", err)
+		}
 		var payload qqGatewayPayload
 		if err := conn.ReadJSON(&payload); err != nil {
 			return fmt.Errorf("qq: 网关连接中断: %w", err)
@@ -318,11 +335,21 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 	}
 }
 
+// qqOfficialHeartbeatInterval 校正网关给的心跳间隔，缺失或过小时按 30 秒。
+func qqOfficialHeartbeatInterval(interval time.Duration) time.Duration {
+	if interval <= qqOfficialHeartbeatSlop {
+		return 30 * time.Second
+	}
+	return interval
+}
+
+// qqOfficialReadTimeout 是两次心跳都没收到任何报文（含 OP 11 心跳回执）就判定断线的时限。
+func qqOfficialReadTimeout(interval time.Duration) time.Duration {
+	return 2*interval + qqOfficialHeartbeatSlop
+}
+
 // heartbeatLoop 按网关给的间隔上报心跳，附带最后处理的 seq。
 func (c *QQOfficialChannel) heartbeatLoop(ctx context.Context, conn *websocket.Conn, interval time.Duration) {
-	if interval <= qqOfficialHeartbeatSlop {
-		interval = 30 * time.Second
-	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
