@@ -2370,9 +2370,9 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-toggle {
-  min-height: 44px;
-  padding: 10px 16px;
-  font-size: 14px;
+  min-height: 32px;
+  padding: 5px 12px;
+  font-size: 12.5px;
   background: var(--surface-2);
 }
 
@@ -2387,8 +2387,8 @@ onBeforeUnmount(() => {
 }
 
 .event-debug-toggle svg {
-  width: 20px;
-  height: 20px;
+  width: 15px;
+  height: 15px;
   flex-shrink: 0;
   transition: transform 160ms ease;
 }
