@@ -221,7 +221,7 @@ func (p *scriptedReplyProvider) Generate(_ context.Context, req llm.GenerateRequ
 			return nil, p.describeErr
 		}
 		return &llm.GenerateResponse{Model: "test", Text: p.description}, nil
-	case strings.Contains(body, "send_confidence"):
+	case strings.Contains(body, "发送前审核器"):
 		return &llm.GenerateResponse{Model: "test", Text: `{"send_confidence":0.99,"reason":"ok"}`}, nil
 	}
 	p.mu.Lock()

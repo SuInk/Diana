@@ -32,7 +32,7 @@ func (p *blindVisionProvider) Generate(_ context.Context, req llm.GenerateReques
 	switch {
 	case strings.Contains(body.String(), "请为这张图片生成可复用的客观中文描述"):
 		return &llm.GenerateResponse{Model: "blind", Text: "未收到图片内容，无法生成描述。请重新发送需要记录的图片。"}, nil
-	case strings.Contains(body.String(), "send_confidence"):
+	case strings.Contains(body.String(), "发送前审核器"):
 		return &llm.GenerateResponse{Model: "blind", Text: `{"send_confidence":0.99,"reason":"ok"}`}, nil
 	}
 	return &llm.GenerateResponse{Model: "blind", Text: "好的喵"}, nil

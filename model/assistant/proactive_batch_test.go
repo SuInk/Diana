@@ -619,7 +619,7 @@ type proactiveReplyRerouteProvider struct {
 
 func (p *proactiveReplyRerouteProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	switch {
-	case requestMessagesContain(req.Messages, "send_confidence"):
+	case requestMessagesContain(req.Messages, "发送前审核器"):
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 	case requestMessagesContain(req.Messages, "Intent Recognition"):
 		p.routeCalls++

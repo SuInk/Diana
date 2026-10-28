@@ -288,14 +288,14 @@ func TestParseProactiveReplyQualityDecisionReadsClosingFields(t *testing.T) {
 
 func TestReplyAuditPromptDescribesClosingContract(t *testing.T) {
 	for _, want := range []string{
-		"closing_check=true",
+		"closing_check",
 		"conversation_closing",
 		"stop_requested",
 		"closing_confidence",
 		"累计几次由运行时自己数",
 	} {
-		if !strings.Contains(proactiveReplyQualityPrompt, want) {
-			t.Fatalf("send audit prompt missing %q", want)
+		if !strings.Contains(promptReplyAuditClosingSpec.Default, want) {
+			t.Fatalf("send audit closing appendix missing %q", want)
 		}
 	}
 }

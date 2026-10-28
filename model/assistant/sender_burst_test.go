@@ -22,7 +22,7 @@ type burstReplyProvider struct {
 
 func (p *burstReplyProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	body := requestText(req)
-	if strings.Contains(body, "send_confidence") {
+	if strings.Contains(body, "发送前审核器") {
 		return &llm.GenerateResponse{Model: "test", Text: `{"send_confidence":0.99,"account_safe":true,"reason":"ok"}`}, nil
 	}
 	p.mu.Lock()

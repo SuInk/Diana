@@ -35,8 +35,9 @@ func TestReplyAuditOnlyIncludesQuoteForLoopCheck(t *testing.T) {
 		}
 		request := p.requests[len(p.requests)-1]
 		content := request.Messages[len(request.Messages)-1].Content
+		// 审核数据后面可能接着附加判断的说明，只取开头那个 JSON。
 		var payload map[string]json.RawMessage
-		if err := json.Unmarshal([]byte(strings.TrimPrefix(content, "请审核以下回复：\n")), &payload); err != nil {
+		if err := json.NewDecoder(strings.NewReader(strings.TrimPrefix(content, "请审核以下回复：\n"))).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
 		if _, exists := payload["original_request_context"]; exists != loop {

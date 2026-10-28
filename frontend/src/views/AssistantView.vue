@@ -2288,7 +2288,7 @@ import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 
 // 发送前审核的提示词和判断表，放在行为页「安全与审核」里，各合成一个框改。
-const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing"];
+const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing", "audit.loop", "audit.loop_purposeless", "audit.closing", "audit.exchange"];
 const auditDecisionPromptKeys = [
   "audit.decision.send_confidence",
   "audit.decision.account_safe",

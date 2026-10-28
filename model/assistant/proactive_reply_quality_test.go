@@ -102,7 +102,7 @@ func TestNormalizeReplyFallsBackToHardTruncation(t *testing.T) {
 // 只留下看得见的表达维度。
 func TestProactiveReplyQualityPromptOmitsAccuracyChecks(t *testing.T) {
 	prompt := proactiveReplyQualityPrompt
-	for _, must := range []string{"不做准确度或答非所问审核", "账号安全", "空转"} {
+	for _, must := range []string{"准确与否、答没答对题都不归你管", "账号安全", "拒答"} {
 		if !strings.Contains(prompt, must) {
 			t.Fatalf("提示词缺少 %q", must)
 		}
@@ -455,8 +455,7 @@ func TestLowSendConfidenceDoesNotBlockDirectReply(t *testing.T) {
 // 提示词必须把置信度协议和放行线讲清楚，否则模型会继续输出布尔。
 func TestReplyAuditPromptDeclaresAccountSafeConfidence(t *testing.T) {
 	for _, want := range []string{
-		"account_safe 必须是 0 到 1 的数字", "禁止输出 true/false",
-		"0.10 为放行线", "拿不准\n时倾向放行", `"account_safe":0.98`,
+		"account_safe 是 0 到 1 的数字", "0.10 为放行线", "拿不准倾向放行", `{"account_safe":0.98}`,
 	} {
 		want = strings.ReplaceAll(want, "\\n", "\n")
 		if !strings.Contains(proactiveReplyQualityPrompt, want) {
@@ -485,5 +484,35 @@ func TestPrivateRepliesSkipAccountSafetyByDefault(t *testing.T) {
 	cfg.ReplySafetyMasterEnabled = boolPointer(false)
 	if runtime.replyAuditNeed(private, "在吗", cfg, false).AccountSafety {
 		t.Fatal("总开关关着时私聊也不审")
+	}
+}
+
+// 精简后的审核只回本轮需要的字段：只有 account_safe 也是完整结论，缺的各项按「没问题」。
+func TestReplyAuditParsesMinimalAnswer(t *testing.T) {
+	decision, ok := parseProactiveReplyQualityDecision(`{"account_safe":0.98}`)
+	if !ok || !decision.accountSafe() || decision.CountRefusal || decision.ReplyLoopMeaningless || decision.ConversationClosing || decision.StopRequested || decision.ExchangeScored {
+		t.Fatalf("minimal answer = %#v ok=%v", decision, ok)
+	}
+	if _, ok := parseProactiveReplyQualityDecision(`{"exchange_novelty":0.5}`); ok {
+		t.Fatal("没有 account_safe 也没有 send_confidence 的 JSON 不算审核结论")
+	}
+}
+
+// 附加判断只在本轮需要时接上：系统提示词逐字不变，不需要的说明和字段不进请求。
+func TestReplyAuditAppendixFollowsNeed(t *testing.T) {
+	var cfg BotConfig
+	if got := replyAuditAppendix(cfg, replyAuditNeed{AccountSafety: true}); got != "" {
+		t.Fatalf("只审账号安全时不该附加判断：%q", got)
+	}
+	got := replyAuditAppendix(cfg, replyAuditNeed{AccountSafety: true, Fatigue: true, GroupStop: true})
+	if !strings.Contains(got, "exchange_novelty") || !strings.Contains(got, "stop_requested") || strings.Contains(got, "reply_loop_meaningless") {
+		t.Fatalf("疲劳和叫停应当附加、空转不该：%q", got)
+	}
+	loop := replyAuditAppendix(cfg, replyAuditNeed{Loop: true})
+	if !strings.Contains(loop, "reply_loop_meaningless") || strings.Contains(loop, "exchange_density 表示") {
+		t.Fatalf("空转说明应当附加，没有密度证据时不附加目的判断：%q", loop)
+	}
+	if dense := replyAuditAppendix(cfg, replyAuditNeed{Loop: true, Density: &replyDensity{}}); !strings.Contains(dense, "exchange_density 表示") {
+		t.Fatalf("有密度证据时要附加目的判断：%q", dense)
 	}
 }

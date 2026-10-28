@@ -40,7 +40,7 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 	switch {
 	case strings.Contains(body, directReplyTopicPrompt):
 		return &llm.GenerateResponse{Text: `{"relation":"` + p.relation + `","confidence":0.9}`}, nil
-	case strings.Contains(body, "send_confidence"):
+	case strings.Contains(body, "发送前审核器"):
 		return &llm.GenerateResponse{Text: `{"send_confidence":0.99,"account_safe":true,"count_refusal":false}`}, nil
 	case len(req.Tools) == 0:
 		return &llm.GenerateResponse{Text: `{}`}, nil

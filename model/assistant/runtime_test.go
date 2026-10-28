@@ -5206,7 +5206,7 @@ type capturingLLMProvider struct {
 // Generate 记录请求并返回固定回复。
 func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "send_confidence") {
+		if strings.Contains(message.Content, "发送前审核器") {
 			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"测试回复通过准确度审核"}`}, nil
 		}
 	}
@@ -5243,7 +5243,7 @@ const testReplyAuditPass = `{"send_confidence":0.99,"reason":"测试回复通过
 // isReplyAuditRequest 判断这是不是发送前审核的调用。
 func isReplyAuditRequest(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "send_confidence") {
+		if strings.Contains(message.Content, "发送前审核器") {
 			return true
 		}
 	}
@@ -5268,7 +5268,7 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
 	for _, message := range req.Messages {
-		if strings.Contains(message.Content, "send_confidence") {
+		if strings.Contains(message.Content, "发送前审核器") {
 			// 发送前审核默认自动放行，不消耗 replies——绝大多数用例不关心它。
 			// 需要控制审核结论（例如空转判断）的用例填 auditReplies。
 			if len(p.auditReplies) > 0 {

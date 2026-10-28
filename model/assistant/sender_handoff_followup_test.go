@@ -31,7 +31,7 @@ func (p *silentSideEffectProvider) Generate(ctx context.Context, req llm.Generat
 	switch {
 	case strings.Contains(body, "请为这张图片生成可复用的客观中文描述"):
 		return &llm.GenerateResponse{Model: "test", Text: "一只橘猫"}, nil
-	case strings.Contains(body, "send_confidence"):
+	case strings.Contains(body, "发送前审核器"):
 		return &llm.GenerateResponse{Model: "test", Text: `{"send_confidence":0.99,"reason":"ok"}`}, nil
 	case strings.Contains(body, "【同一发言者稍早发的图"):
 		p.questionOnce.Do(func() { close(p.questionReady) })

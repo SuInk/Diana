@@ -75,14 +75,14 @@ func TestRefusalPromptLeavesSilenceToRuntime(t *testing.T) {
 // 拒答的常态。审核器原先的定义是「拒绝并给出拒绝说明」——照那个定义，风险最高
 // 的那类拒答恰好一条都数不到，三次暂停响应也就永远不会触发。
 func TestAuditCountsRefusalWithoutStatedReason(t *testing.T) {
-	if !strings.Contains(proactiveReplyQualityPrompt, "不说原因的模糊拒答同样算 true") {
+	if !strings.Contains(proactiveReplyQualityPrompt, "不说原因的回避") {
 		t.Fatal("审核提示词没有把模糊拒答算成拒答，三次阈值会数不到")
 	}
-	if !strings.Contains(proactiveReplyQualityPrompt, "不能因此判成 false") {
+	if !strings.Contains(proactiveReplyQualityPrompt, "没给理由恰恰是这类拒答的常态") {
 		t.Fatal("审核提示词没有说明「没给理由」不是判 false 的理由")
 	}
 	// 按①改写后发出去的回复不是拒答：它给了对方能用的东西，不该占用暂停响应的额度。
-	if !strings.Contains(proactiveReplyQualityPrompt, "换个说法后给出的回答") {
+	if !strings.Contains(proactiveReplyQualityPrompt, "换个说法给出的回答") {
 		t.Fatal("审核提示词没有把「改写后回答」排除出拒答")
 	}
 }

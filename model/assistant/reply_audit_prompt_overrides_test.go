@@ -24,7 +24,7 @@ func TestAuditPromptDefaultsAreUnchanged(t *testing.T) {
 			t.Fatalf("%s 默认提示词变了", tc.name)
 		}
 	}
-	if !strings.HasPrefix(proactiveReplyQualityContract, "\n\n只输出一个合法 JSON 对象") {
+	if !strings.HasPrefix(proactiveReplyQualityContract, "\n\n只输出一个 JSON 对象") {
 		t.Fatal("审核的输出格式应当从 JSON 说明开始锁定")
 	}
 	if !strings.HasPrefix(replyQualityPromptForConfig(cfg), proactiveReplyQualityPrompt+"\n正常的寒暄") {
@@ -45,7 +45,7 @@ func TestAuditQualityOverrideKeepsContractAndPolicyOrder(t *testing.T) {
 	if strings.Contains(prompt, "你是机器人回复的发送前审核器") {
 		t.Fatal("默认正文不该留在覆盖后的提示词里")
 	}
-	contractAt := strings.Index(prompt, "只输出一个合法 JSON 对象")
+	contractAt := strings.Index(prompt, "只输出一个 JSON 对象")
 	policyAt := strings.Index(prompt, "自定义安全规则")
 	if contractAt < 0 || policyAt < contractAt {
 		t.Fatalf("账号安全规则应当接在输出格式之后：contract=%d policy=%d", contractAt, policyAt)

@@ -45,13 +45,12 @@ func TestDeepsleepFutureJokeUsesSendConfidence(t *testing.T) {
 		t.Fatal("audit must run once")
 	}
 	prompt := provider.requests[0].Messages[0].Content
-	for _, expected := range []string{"send_confidence", "旧版本兼容字段", "不再参与发送决定"} {
-		if !strings.Contains(prompt, expected) {
-			t.Fatalf("missing audit contract: %s", expected)
-		}
+	// send_confidence 不再参与发送决定，精简后的提示词不再要它，旧回答照样能解析。
+	if !strings.Contains(prompt, `{"account_safe":0.98}`) {
+		t.Fatal("missing audit contract")
 	}
-	if strings.Contains(prompt, "should_send") {
-		t.Fatal("old boolean protocol still advertised")
+	if strings.Contains(prompt, "should_send") || strings.Contains(prompt, "send_confidence") {
+		t.Fatal("retired fields still advertised")
 	}
 	decision, ok := parseProactiveReplyQualityDecision(`{"send_confidence":1,"account_safe":false,"account_risk":"explicit"}`)
 	if !ok || accountSafetyError(decision) == nil {
@@ -100,7 +99,7 @@ func TestReplyAuditPromptOmitsAccuracyAudit(t *testing.T) {
 			t.Fatalf("accuracy audit still present: %q", unwanted)
 		}
 	}
-	if !strings.Contains(proactiveReplyQualityPrompt, "不做准确度或答非所问审核") {
+	if !strings.Contains(proactiveReplyQualityPrompt, "准确与否、答没答对题都不归你管") {
 		t.Fatal("prompt does not document removed accuracy audit")
 	}
 }
