@@ -398,6 +398,43 @@ func TestQuickFollowUpRuleLeavesOthersToTheJudge(t *testing.T) {
 	}
 }
 
+// 2026-10-28 线上：「嘉然」→「@远野 打电话吗」→「陪你谈谈心」，第三句接的是远野，
+// 却凭快速追发规则并进了叫嘉然的那一轮，嘉然以为是对自己说的。中间夹着一条没并进
+// 这一轮的话时，后面那句得交给话题判断。
+func TestQuickFollowUpYieldsAfterLineToSomeoneElse(t *testing.T) {
+	asked := 0
+	p := &topicTestProvider{result: `{"relation":"independent","confidence":0.99}`}
+	p.onTopic = func(llm.GenerateRequest) { asked++ }
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "嘉然")
+	root.Time = 1_800_000_000
+	r.noteSenderTurnArrival(root)
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	defer finish()
+
+	mention := MessageEvent{
+		Kind: EventKindGroup, GroupID: root.GroupID, UserID: "user", MessageID: "mention", Time: root.Time + 8,
+		RawMessage: "[CQ:at,qq=10002] 打电话吗",
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "10002"}},
+			{Type: "text", Data: map[string]string{"text": " 打电话吗"}},
+		},
+	}
+	follow := textEvent("follow", "user", "陪你谈谈心", root.Time+11)
+	r.noteSenderTurnArrival(mention)
+	r.noteSenderTurnArrival(follow)
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, mention, mention.RawMessage); merged {
+		t.Fatal("a line @-ing someone else must not merge")
+	}
+	asked = 0
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); merged {
+		t.Fatal("a line after one to someone else must not merge by the quick rule")
+	}
+	if asked != 1 {
+		t.Fatalf("the follow-up should go to the topic classifier, asked=%d", asked)
+	}
+}
+
 // 紧跟着的追发不问判断器：判断器平均要十来秒，等它说完旧版早生成完了。2026-10-28
 // 「发个md表哥」4 秒后补「表格」，判断用了 6.9 秒，第一版白白生成完才被扔掉。
 func TestQuickFollowUpSkipsTopicClassifier(t *testing.T) {

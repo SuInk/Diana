@@ -1100,6 +1100,28 @@ func (r *Runtime) quickFollowUpBySameSender(root MessageEvent, rootArrived time.
 	return r.burstChatMessage(event, text) && !r.followUpAddressesOthers(event, turnMessageIDs...)
 }
 
+// senderSpokeOutsideTurnLocked 报告同一个人在这一轮开头之后、这条之前，还说过一条
+// 没并进这一轮的话。那条多半是对别人说的（线上「嘉然」→「@远野 打电话吗」→「陪你
+// 谈谈心」，第三句接的是远野），这条就不能凭「紧跟着说」当成补充，交给话题判断。
+// 调用方持有 replyInterruptMu。
+func (r *Runtime) senderSpokeOutsideTurnLocked(key string, root MessageEvent, supplements []proactiveReplyCandidate, event MessageEvent) bool {
+	rootTurn := r.senderTurnLocked(key, strings.TrimSpace(root.MessageID))
+	current := r.senderTurnLocked(key, strings.TrimSpace(event.MessageID))
+	if rootTurn == nil || current == nil {
+		return false
+	}
+	inTurn := map[string]bool{strings.TrimSpace(root.MessageID): true}
+	for _, item := range supplements {
+		inTurn[strings.TrimSpace(item.Event.MessageID)] = true
+	}
+	for _, turn := range r.senderTurns[key] {
+		if turn.seq > rootTurn.seq && turn.seq < current.seq && !inTurn[strings.TrimSpace(turn.event.MessageID)] {
+			return true
+		}
+	}
+	return false
+}
+
 // senderQuickRepeatRule 是快速追发里认成「重复」的那一类：和这一轮里说过的话一样、
 // 只是附和或催一句、只有表情。重复并进这一轮但不打断正在生成的那一版。
 const senderQuickRepeatRule = "same_sender_quick_repeat"

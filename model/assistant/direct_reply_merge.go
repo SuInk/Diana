@@ -311,12 +311,13 @@ func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageE
 	if turn := r.senderTurnLocked(key, strings.TrimSpace(event.MessageID)); turn != nil {
 		eventArrived = turn.arrivedAt
 	}
+	interleaved := r.senderSpokeOutsideTurnLocked(key, root, supplements, event)
 	r.replyInterruptMu.Unlock()
 	var relation string
 	if rule, ok := r.imageFollowUpBySameSender(root, rootArrived, event, eventArrived, text); ok {
 		relation = "supplement"
 		r.recordDirectReplyTopicRule(ctx, root, event, relation, rule)
-	} else if r.quickFollowUpBySameSender(root, rootArrived, supplements, event, eventArrived, text) {
+	} else if !interleaved && r.quickFollowUpBySameSender(root, rootArrived, supplements, event, eventArrived, text) {
 		// 人紧接着说的话不再先问判断器：它平均要十来秒，等它说「补充」时旧版往往已经
 		// 生成完，只能整轮重来。规则当场认定，补充立刻打断旧版，重复则不打断。
 		relation = "supplement"
