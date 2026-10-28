@@ -4019,7 +4019,7 @@ func TestRuntimeImageGenerationRepliesWhileImageRunsInBackground(t *testing.T) {
 	if !strings.Contains(gotPrompt, "一张异步测试海报") {
 		t.Fatalf("image prompt = %q", gotPrompt)
 	}
-	if len(channel.sent) != 2 || channel.sent[1].Text != "图片生成完成。" || len(channel.sent[1].ImageURLs) != 1 || channel.sent[1].ImageURLs[0] != sharer.url {
+	if len(channel.sent) != 2 || channel.sent[1].Text != "" || len(channel.sent[1].ImageURLs) != 1 || channel.sent[1].ImageURLs[0] != sharer.url {
 		t.Fatalf("messages sent after image completion = %#v", channel.sent)
 	}
 }
