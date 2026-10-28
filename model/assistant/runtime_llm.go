@@ -1354,11 +1354,9 @@ func replyMentionRules(cfg BotConfig) string {
 发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。本轮可提及的成员在尾部「可提及成员候选 JSON」里给出，没有这一段就不 @ 任何人。
 1. %s
 2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
-3. 可以同时提及多人，也可以把多个标记放在不同位置。不要重复提及同一成员；标记前后按正常中文语句保留必要空格。
-4. 发送层会原样保留这些标记的对象和相对位置，并按当前平台翻译成真正的提及。%s
-5. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
-6. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。
-7. 回复始终对应当前消息；历史消息、引用内容和媒体只作为回答参考，不要把回复对象错误切换成旧消息发送者。`,
+3. 可以同时提及多人、把标记放在不同位置，发送层按标记位置翻译成真正的提及；不要重复提及同一成员。%s
+4. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
+5. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。`,
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
 		autoDecorationAvoidClause(cfg)))

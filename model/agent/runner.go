@@ -1309,13 +1309,10 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	}
 	if hasTool(webSearchToolName) {
 		rules = append(rules,
-			"- 「当前上下文已经足够」只在答案本身就写在上下文里时成立。聊天记录里讨论过这个话题不等于其中的事实已经核实：别人的说法、你自己先前的回复和记忆摘要都只是线索，不能拿来替代检索。同样，熟悉一个项目的设计或原理，不代表你知道它此刻有哪些实现、插件、版本或生态现状——讲原理可以直接答，断言「有没有」「支不支持」「有哪些」必须先搜。",
-			"- 搜索词围绕一个信息缺口，用简短自然关键词：实体名称加定义、文档、源码、价格或所需能力。query 放一个清晰问题，queries 仅补充确有区别的查证角度；不要把完整聊天记录、用户身份或无关字段塞进搜索词；不要堆 OR、近义词和整句问话，不要无依据地混入相邻概念。用户给出的产品、模型名称和版本号原样保留，这同样适用于每个候选查询；没有证据不得改名、降版本或把别的型号价格当成目标型号价格。",
-			"- 先宽搜找到可信来源和准确实体，再读来源原文；只在确认域名确属目标官方项目后才用 site: 限定。找到相关页面后用网页工具打开、用 find 定位缺口，不要反复用 site: 去搜同一篇文章里的词。优先确认并读取官网、官方文档、官方仓库和发布记录；第三方文章用于追踪官方出处。已找到相关官方页面时不能只读转载就收尾；官方无法访问或未覆盖时才采用其他可信来源并说明限制。缺少这些证据时只说本次未确认，不能断言项目没有该能力。",
-			"- web_search 原样执行你提供的查询；不同 queries 会并行搜索，每个查询独立回退配置的搜索引擎。没查到就接着查；不要重复相同 query 或只机械替换一个词。",
-			"- 工具返回 no_results、provider_error、timeout、budget_exhausted 或 insufficient_evidence 时，不要立即断言资料不存在。仍有工具预算时，根据已尝试的 query hash、结果中的新实体和未覆盖的信息缺口生成下一轮候选；结果已经有权威来源直接支持答案时立即停止搜索。",
-			"- 最终回答要附来源，并明确区分来源直接支持的事实、多来源推导的结论和仍未验证的假设。金融、新闻及其他时效性问题应优先核对官方或法定披露来源，并区分不同事件日期。",
-			"- web_search 的全部 provider 都失败（provider_error、timeout）时，如果还有浏览器工具，按下面「用浏览器搜索」的办法接着查；浏览器也没有或也失败，才在最终回复里说明这次没能联网查到。",
+			"- 聊天记录里讨论过这个话题不等于其中的事实已经核实，别人的说法、你先前的回复和记忆摘要都不能拿来替代检索。讲原理可以直接答，断言此刻「有没有」「支不支持」「有哪些」必须先搜。",
+			"- 搜索词围绕一个信息缺口，用简短自然关键词（实体名加文档、源码、价格或所需能力），不堆 OR、近义词和整句问话，不混入无依据的相邻概念，不要把完整聊天记录或用户身份塞进搜索词；用户给的产品名和版本号原样保留，不改名、不降版本。query 放一个清晰问题，queries 仅补充确有区别的查证角度。先宽搜确认实体和官方域名，再用 site: 限定；找到页面就打开用 find 定位，不要反复 site: 搜同一篇文章。",
+			"- 没查到或返回 no_results、provider_error、timeout、insufficient_evidence 时，不要断言资料不存在：换查询（别重复相同 query 或只换一个词）接着查，已有权威来源直接支持答案就停。全部 provider 都失败时，有浏览器就按下面「用浏览器搜索」接着查；浏览器也没有或也失败，才说明这次没能联网查到。",
+			"- 最终回答附来源，分清来源直接支持的事实、推导的结论和未验证的假设；金融、新闻等时效性问题优先核对官方或法定披露来源，并区分不同事件日期。",
 		)
 	}
 	// 搜索插件关掉、或者这一轮所有 provider 都挂了，浏览器还在：一样能查，只是换一条路。
@@ -1335,10 +1332,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 		rules = append(rules, prefix+"：用 "+browserSearchTool+" 打开搜索引擎的结果页，查询词做 URL 编码，优先 https://www.google.com/search?q=查询词；落到人机验证页（Google 的 /sorry/、「异常流量」、DuckDuckGo 的 challenge）就换下一家：https://www.bing.com/search?q=查询词、https://duckduckgo.com/?q=查询词（不要用 html.duckduckgo.com，它每次都弹验证），不要试图通过验证。结果页只有标题和摘要，关键事实要再打开一两个来源页面核实，最终回答附上实际打开过的来源链接。一次搜不到先换关键词或换引擎，不要因为一页结果为空就断言不存在。")
 	}
 	if hasTool("browser_render") {
-		rules = append(rules, "- 需要读取或渲染网页时优先使用 browser_render；普通页面在一次性沙盒浏览器中运行，GitHub Release 地址优先读取官方 API，不使用用户浏览器登录态。查询 GitHub 最新版本时读取 /owner/repo/releases/latest；核验用户给出的版本时读取 /owner/repo/releases/tag/<tag>，不能以精确 site: 搜索为空替代核验。浏览器失败不等于站点拦截，更不等于版本不存在；来源查询时间与发布时间必须分开。")
-		// 10-01 问 DimAgent 价格：只读了英文首页，首页没列价格就答「没有付费套餐」。
-		// 规则参照 Codex 的 web.run：技术问题只认一手来源，顺着官网链接找到对应页面再下结论。
-		rules = append(rules, "- 问价格、套餐、额度、版本、是否支持这类事实，以官方的定价、文档、更新日志页为准：从 browser_render 返回的 links 里找到对应页面打开读，或用 find 在页内查关键词；要比对几个来源时用 urls 一次并行打开。只看了首页或搜索摘要时，没写不等于没有，不能据此断言「没有」；技术问题只认官方文档等一手来源。")
+		rules = append(rules, "- 读网页优先用 browser_render（一次性沙盒浏览器，不带用户登录态）。价格、套餐、额度、版本、是否支持，以官方定价、文档、更新日志页为准：从返回的 links 找对应页面打开，或用 find 页内定位，多个来源用 urls 一次并行打开；只看了首页或摘要时，没写不等于没有。GitHub 最新版本读 /owner/repo/releases/latest，核验指定版本读 /owner/repo/releases/tag/<tag>，不能拿 site: 搜索为空代替。浏览器失败不等于站点拦截或版本不存在。")
 	}
 	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
 		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
