@@ -193,6 +193,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 			return nil, errProactiveReplySuperseded
 		}
 	}
+	if r.chatInPreempted(ctx, event) {
+		return nil, errChatInPreemptedByOwnReply
+	}
 	action := "send_private_msg"
 	if event.Kind == EventKindGroup {
 		action = "send_group_msg"
@@ -243,6 +246,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.rememberImageModels(event, msg, messageID)
 	}
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
+	r.groupOwnSends.note(event, time.Now())
 	// 连发交接据此落定（见 sender_burst.go）。结果不明的发送经回推或历史确认送达后
 	// 也走到这里（confirmOutboundOutcome 返回成功）；确认不了的是
 	// errOutboundOutcomeUnconfirmed 另记为结果不明，不能通过补充消息重排而重发。

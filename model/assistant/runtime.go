@@ -331,6 +331,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "本群的模型额度在当前窗口内已用完，到点自动恢复；期间消息照常进历史和长期记忆", false
 	case "superseded_proactive":
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
+	case "superseded_proactive_own_reply":
+		return "not_replied", chatInPreemptedReason, false
 	case inboundOutcomeSupersededReplyTurn:
 		return "not_replied", "这条消息已并入同一个人正在等待的那轮回复，不再单独发送", false
 	case inboundOutcomeLegacySupersededMediaTurn:
@@ -380,6 +382,8 @@ type Runtime struct {
 	crossGroupResults crossGroupResultCache
 	// slangResearch 防止同一个黑话候选在查证途中被重复排队。
 	slangResearch slangResearchState
+	// groupOwnSends 记每个群最近一次自己发话的时间，见 chat_in_preempt.go。自带锁。
+	groupOwnSends groupOwnSendClock
 	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
 	// 自带锁，不受 mu 保护。
 	botAvatars     botAvatarMemory
@@ -2378,6 +2382,12 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			setEventRecordOutcome(&record, "superseded_proactive")
 			r.record(record)
 			return "superseded_proactive", err
+		}
+		if errors.Is(err, errChatInPreemptedByOwnReply) {
+			setEventRecordOutcome(&record, "superseded_proactive_own_reply")
+			record.Reason = chatInPreemptedReason
+			r.record(record)
+			return "superseded_proactive_own_reply", nil
 		}
 		if errors.Is(err, errInboundTurnSuperseded) {
 			setEventRecordOutcome(&record, inboundOutcomeSupersededReplyTurn)
@@ -7900,6 +7910,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 		return nil, err
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
+	r.groupOwnSends.note(event, time.Now())
 	// 和逐条发送一样：确认送达（含结果不明后确认到的）才算回出去。
 	r.noteSenderTurnDelivered(ctx, event)
 	return result, nil
