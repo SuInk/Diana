@@ -156,8 +156,8 @@ func TestDisabledGroupKeepsBookkeepingSkipsModelCalls(t *testing.T) {
 	if got := h.provider.callCount(); got != 0 {
 		t.Fatalf("disabled group made %d model calls, want 0", got)
 	}
-	if h.history.searches != 0 {
-		t.Fatalf("disabled group ran %d cross-group searches, want 0", h.history.searches)
+	if h.history.searches.Load() != 0 {
+		t.Fatalf("disabled group ran %d cross-group searches, want 0", h.history.searches.Load())
 	}
 	// 仍然进历史。
 	if got := len(h.runtime.history[sessionKey(event)]); got == 0 {
@@ -185,14 +185,14 @@ func TestEnabledGroupRunsCrossGroupSearchAndRouter(t *testing.T) {
 	if handled {
 		t.Fatal("router returned {} but the message was still handled")
 	}
-	if h.history.searches != 0 {
-		t.Fatalf("路由判了不回，不该再跑跨群检索，实际 %d 次", h.history.searches)
+	if h.history.searches.Load() != 0 {
+		t.Fatalf("路由判了不回，不该再跑跨群检索，实际 %d 次", h.history.searches.Load())
 	}
 	if h.provider.callCount() == 0 {
 		t.Fatal("enabled group never reached the proactive reply router")
 	}
 	h.runtime.loadDeferredCrossGroupContext(prepared)
-	if h.history.searches == 0 {
+	if h.history.searches.Load() == 0 {
 		t.Fatal("enabled group skipped the cross-group search at reply time")
 	}
 }
@@ -215,8 +215,8 @@ func TestDisabledGroupIgnoresDirectMention(t *testing.T) {
 	if got := h.provider.callCount(); got != 0 {
 		t.Fatalf("mention in a disabled group made %d model calls, want 0", got)
 	}
-	if h.history.searches != 0 {
-		t.Fatalf("mention in a disabled group ran %d cross-group searches, want 0", h.history.searches)
+	if h.history.searches.Load() != 0 {
+		t.Fatalf("mention in a disabled group ran %d cross-group searches, want 0", h.history.searches.Load())
 	}
 }
 
@@ -237,8 +237,8 @@ func TestNotAdmittedGroupSkipsModelCalls(t *testing.T) {
 	if got := h.provider.callCount(); got != 0 {
 		t.Fatalf("non-admitted group made %d model calls, want 0", got)
 	}
-	if h.history.searches != 0 {
-		t.Fatalf("non-admitted group ran %d cross-group searches, want 0", h.history.searches)
+	if h.history.searches.Load() != 0 {
+		t.Fatalf("non-admitted group ran %d cross-group searches, want 0", h.history.searches.Load())
 	}
 	// 没有群配置就没处选档位，按休眠算。
 	if got := len(h.memory.enqueued); got != 0 {

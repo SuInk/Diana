@@ -40,8 +40,8 @@ func TestReplyClosedUndirectedMessageSkipsCrossGroupRetrieval(t *testing.T) {
 	if handled {
 		t.Fatalf("两个开关都关、没点名的消息不该进回复，outcome = %s", outcome)
 	}
-	if store.searches != 0 {
-		t.Fatalf("注定不回的消息不该跑跨群检索，实际 %d 次", store.searches)
+	if store.searches.Load() != 0 {
+		t.Fatalf("注定不回的消息不该跑跨群检索，实际 %d 次", store.searches.Load())
 	}
 
 	directed := atBotEvent(crossGroupProbeEvent(), "90001")
@@ -50,17 +50,14 @@ func TestReplyClosedUndirectedMessageSkipsCrossGroupRetrieval(t *testing.T) {
 	if !handled {
 		t.Fatalf("@ 机器人的消息应进回复，outcome = %s", outcome)
 	}
-	// 跨群检索在 replyTo 开头做，路由阶段不查。
-	if store.searches != 0 {
-		t.Fatalf("路由阶段不该跑跨群检索，实际 %d 次", store.searches)
-	}
+	// 决定回复时已在后台预取；loadDeferredCrossGroupContext 会等预取结束再取结果。
 	prepared = runtime.loadDeferredCrossGroupContext(prepared)
-	if store.searches != 1 {
-		t.Fatalf("@ 机器人的消息应在回复时检索一次跨群上下文，实际 %d 次", store.searches)
+	if store.searches.Load() != 1 {
+		t.Fatalf("@ 机器人的消息应在回复时检索一次跨群上下文，实际 %d 次", store.searches.Load())
 	}
 	runtime.loadDeferredCrossGroupContext(prepared)
-	if store.searches != 1 {
-		t.Fatalf("同一轮回复不该重复检索，实际 %d 次", store.searches)
+	if store.searches.Load() != 1 {
+		t.Fatalf("同一轮回复不该重复检索，实际 %d 次", store.searches.Load())
 	}
 }
 
