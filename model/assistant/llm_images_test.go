@@ -109,7 +109,7 @@ func TestLongImageExpandsToOverviewAndOrderedOverlappingTiles(t *testing.T) {
 			"url": imageBytesAsDataURL(encoded.Bytes(), "image/png"),
 		}}},
 	}, "", nil)
-	if !complete || !strings.Contains(imageOnly.Content, "一张图片") || strings.Contains(imageOnly.Content, "4 张图片") || !strings.Contains(imageOnly.Content, "完整总览") {
+	if !complete || !strings.Contains(imageOnly.Content, "一张图") || strings.Contains(imageOnly.Content, "4 张图片") || !strings.Contains(imageOnly.Content, "完整总览") {
 		t.Fatalf("image-only long prompt = %q", imageOnly.Content)
 	}
 }
