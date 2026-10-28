@@ -166,8 +166,8 @@ func TestPrivateStopRequestWithholdsAndSuppresses(t *testing.T) {
 	}
 }
 
-// TestPrivateStopRequestFromOwnerSkipsSuppression 主人说「别回了」照样收声，
-// 但绝不能把主人锁在自己的机器人外面——解除限制的命令恰恰要主人发。
+// TestPrivateStopRequestFromOwnerSkipsSuppression 主人和管理员的消息不过发送前审核：
+// 不判收尾，也绝不会被暂停锁在自己的机器人外面——解除限制的命令恰恰要主人发。
 func TestPrivateStopRequestFromOwnerSkipsSuppression(t *testing.T) {
 	provider := &privateClosingProvider{audits: []string{auditStop}}
 	channel := &recordingChannel{}
@@ -180,11 +180,11 @@ func TestPrivateStopRequestFromOwnerSkipsSuppression(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome != "ignored_stop_requested" {
-		t.Fatalf("outcome = %q, want ignored_stop_requested", outcome)
+	if outcome == "ignored_stop_requested" {
+		t.Fatalf("主人的消息不该过收尾审核：outcome = %q", outcome)
 	}
-	if len(channel.sent) != 0 {
-		t.Fatalf("owner stop request still sent a reply: %#v", channel.sent)
+	if audits, _ := provider.counts(); audits != 0 {
+		t.Fatalf("主人的消息不该调审核模型：%d 次", audits)
 	}
 	if _, blocked := runtime.activeReplySuppression(event, time.Now()); blocked {
 		t.Fatal("owner must never be locked out by a 30 minute suppression")

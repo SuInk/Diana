@@ -727,8 +727,8 @@ func TestBotReplyLoopJudgementCostsNoExtraCall(t *testing.T) {
 	}
 }
 
-// 主人同样进入空转判断，但永远不暂停：暂停会把操作员锁在自己的机器人外面，
-// 而解除暂停的命令恰恰要主人发。
+// 主人和管理员的消息不过发送前审核，空转也不判，更不会被暂停：暂停会把操作员锁在
+// 自己的机器人外面，而解除暂停的命令恰恰要主人发。
 func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 	loopVerdict := `{"send_confidence":0.9,"account_safe":true,"count_refusal":false,` +
 		`"reply_loop_meaningless":true,"reply_loop_confidence":0.98,"reply_loop_reason":"一直在空转"}`
@@ -742,11 +742,8 @@ func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 		event := botReplyLoopEvent(runtime, "owner-loop", "10001", i, start.Add(time.Duration(i)*5*time.Minute), time.Minute, "在吗")
 		cfg := runtime.effectiveConfigForEvent(event)
 		need := runtime.replyAuditNeed(event, "在吗", cfg, false)
-		if !need.Loop {
-			t.Fatalf("owner round %d was not judged at all", i)
-		}
-		if need.LoopSuppress {
-			t.Fatalf("owner round %d would suppress the operator", i)
+		if need != (replyAuditNeed{}) {
+			t.Fatalf("owner round %d should skip the send audit: %+v", i, need)
 		}
 		if _, err := runtime.auditReplyBeforeSend(context.Background(), event, "在吗", "在的", cfg, false); err != nil {
 			t.Fatalf("owner round %d blocked: %v", i, err)
@@ -758,8 +755,8 @@ func TestBotReplyLoopJudgesOwnerButNeverSuppresses(t *testing.T) {
 	if len(channel.sentSnapshot()) != 0 {
 		t.Fatalf("owner got a suppression notice: %#v", channel.sentSnapshot())
 	}
-	if len(provider.requestsSnapshot()) != defaultBotReplyLoopThreshold+1 {
-		t.Fatalf("owner audits = %d, want one per round", len(provider.requestsSnapshot()))
+	if len(provider.requestsSnapshot()) != 0 {
+		t.Fatalf("owner audits = %d, want none", len(provider.requestsSnapshot()))
 	}
 
 	// 同一台机器人对普通成员仍然照常暂停。

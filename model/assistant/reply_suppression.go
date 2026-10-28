@@ -500,6 +500,26 @@ func reverseStrings(items []string) {
 	}
 }
 
+// botReplyLoopAtThreshold 报告这一轮再判中一次空转就会达到暂停阈值：只有这一轮的
+// 空转判断会拦下当前这条，前面几轮判中也只是计数。
+func (r *Runtime) botReplyLoopAtThreshold(event MessageEvent, now time.Time) bool {
+	key := botReplyLoopKey(event, strings.TrimSpace(event.UserID))
+	threshold := botReplyLoopThreshold(r.effectiveConfigForEvent(event))
+	observedAt := now
+	if event.Time > 0 {
+		observedAt = time.Unix(event.Time, 0)
+	}
+	r.botReplyLoopMu.Lock()
+	defer r.botReplyLoopMu.Unlock()
+	hits := 0
+	for _, hit := range r.botReplyLoopByKey[key].Hits {
+		if age := observedAt.Sub(hit.ObservedAt); age >= 0 && age <= botReplyLoopWindow {
+			hits++
+		}
+	}
+	return hits+1 >= threshold
+}
+
 func (r *Runtime) registerBotReplyLoopDecision(event MessageEvent, candidate botReplyLoopCandidate, decision botReplyLoopAIDecision, now time.Time) (int, string, bool) {
 	userID := strings.TrimSpace(event.UserID)
 	key := botReplyLoopKey(event, userID)

@@ -487,6 +487,8 @@ type replyAuditNeed struct {
 	AccountSafety bool
 	// Loop 是空转判断，默认开启，只在这条消息够得上循环候选时才需要。
 	Loop bool
+	// LoopAtThreshold 表示这一轮判中空转就会达到暂停阈值、拦下当前这条，要在发送前判。
+	LoopAtThreshold bool
 	// LoopSuppress 决定判到空转后能不能真的开暂停。主人永远不能：暂停会把操作员
 	// 锁在自己的机器人外面，而解除暂停的命令恰恰要主人发。主人那边只记录不动作。
 	LoopSuppress bool
@@ -513,12 +515,17 @@ type replyAuditNeed struct {
 	candidate botReplyLoopCandidate
 }
 
-// blocksSend 报告这一轮有没有决定当前这条发不发的判断。
+// blocksSend 报告这一轮有没有决定当前这条发不发的判断。空转只有判中就达到暂停阈值
+// 的那一轮才拦当前这条，其余轮次判中也只是计数。
 func (need replyAuditNeed) blocksSend() bool {
-	return need.Quality || need.AccountSafety || need.Closing
+	return need.Quality || need.AccountSafety || need.Closing || need.LoopAtThreshold
 }
 
 func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig, proactive bool) replyAuditNeed {
+	// 主人和管理员发来的消息不审：账号安全、空转、收尾和叫停都不判，回复不等审核。
+	if cfg.IsManagerEvent(event) {
+		return replyAuditNeed{}
+	}
 	proactive = proactive && !explicitlyRepliesToBot(event, cfg)
 	// 发送前审核只有开和关两档：开着就覆盖主动和直接回复，群配置可单独覆盖。
 	accountSafety := boolValue(cfg.ReplySafetyMasterEnabled, true)
@@ -550,6 +557,7 @@ func (r *Runtime) replyAuditNeed(event MessageEvent, input string, cfg BotConfig
 	need.candidate, need.Loop = r.botReplyLoopCandidate(event, input)
 	if need.Loop {
 		need.LoopSuppress = nonOwner
+		need.LoopAtThreshold = nonOwner && replySuppressionEnabled(cfg) && r.botReplyLoopAtThreshold(event, time.Now())
 		need.MarkedBot = r.accountMarkedAsBot(event)
 		if need.MarkedBot {
 			if density, dense := r.replyDensityForAudit(event, time.Now()); dense {
