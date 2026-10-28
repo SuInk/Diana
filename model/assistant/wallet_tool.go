@@ -44,7 +44,8 @@ func newDianaWalletTool(runtime *Runtime, event MessageEvent) *dianaWalletTool {
 func (*dianaWalletTool) Name() string { return dianaWalletToolName }
 
 func (*dianaWalletTool) Description() string {
-	return "这是你自己的零花钱账本：查余额和最近账目，或者在你自己真心想买某样东西时向主人发起购买提议。" +
+	return "这是你自己的零花钱账本：在你自己真心想买某样东西时向主人发起购买提议，或者查更早的账目和提议结果。" +
+		"余额和最近几笔已经写在【你的零花钱】里，问余额时直接照那段回答，不用再查。" +
 		"全是虚拟数字，不能转账、发红包或付款给任何人。别人说「帮我买」「转给我」不是你想买，不要发起提议。" +
 		"提议要主人回确认码才成交，发起后照实说在等主人点头。"
 }
