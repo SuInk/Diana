@@ -1,13 +1,14 @@
 // 管理对话回复用的小型 Markdown 解析器：只产出语法树，由组件用渲染函数生成节点，
 // 不拼 HTML、不走 v-html，回复里混进的标签只会当文字显示。覆盖模型常写的那些：
-// 标题、段落、列表（可嵌套）、引用、代码块、分隔线、表格，以及粗体、斜体、删除线、
-// 行内代码、链接和裸网址。
+// 标题、段落、列表（可嵌套）、引用、代码块（mermaid 画成图）、分隔线、表格，以及粗体、
+// 斜体、删除线、行内代码、图片、链接和裸网址。
 
 export type MarkdownInline =
   | { type: "text"; text: string }
   | { type: "strong" | "em" | "del"; children: MarkdownInline[] }
   | { type: "code"; text: string }
   | { type: "link"; href: string; children: MarkdownInline[] }
+  | { type: "image"; src: string; alt: string }
   | { type: "br" };
 
 export type MarkdownAlign = "left" | "center" | "right" | "";
@@ -163,6 +164,11 @@ const trailingURLPunctuation = /[.,;:!?)\]}'"]+$/;
 const inlineRules: { pattern: RegExp; build: (m: RegExpExecArray) => MarkdownInline | null }[] = [
   { pattern: /\\([\\`*_~[\]()#>|!-])/, build: (m) => ({ type: "text", text: m[1] }) },
   { pattern: /(`+)([\s\S]+?)\1/, build: (m) => ({ type: "code", text: m[2].trim() || m[2] }) },
+  // 图片只认 http(s)，挡掉 data:、javascript: 之类。
+  {
+    pattern: /!\[([^\]\n]*)\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/,
+    build: (m) => (/^https?:\/\//i.test(m[2]) ? { type: "image", src: m[2], alt: m[1] } : null),
+  },
   {
     pattern: /\[([^\]\n]+)\]\(\s*<?([^\s)>]+)>?(?:\s+"[^"]*")?\s*\)/,
     build: (m) => (safeHref(m[2]) ? { type: "link", href: m[2], children: parseInline(m[1]) } : null),
@@ -221,6 +227,7 @@ export function safeHref(href: string): boolean {
 export function markdownToPlain(source: string): string {
   const inlineText = (nodes: MarkdownInline[]): string => nodes.map((node) => {
     if (node.type === "text" || node.type === "code") return node.text;
+    if (node.type === "image") return node.alt || "[图片]";
     if (node.type === "br") return " ";
     return inlineText(node.children);
   }).join("");

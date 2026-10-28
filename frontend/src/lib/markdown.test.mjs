@@ -75,3 +75,11 @@ test("list numbering keeps its start and HTML stays text", () => {
 test("plain preview drops markup", () => {
   assert.equal(markdownToPlain("好耶，**番茄牛腩**炖一锅\n- `a`\n- [链接](https://example.com)"), "好耶，番茄牛腩炖一锅 a 链接");
 });
+
+test("images only load from http(s) and mermaid stays a code block for the renderer", () => {
+  assert.deepEqual(parseInline("![架构](https://example.com/a.png)"), [{ type: "image", src: "https://example.com/a.png", alt: "架构" }]);
+  assert.equal(parseInline("![x](data:image/png;base64,AAAA)").some((n) => n.type === "image"), false);
+  const [diagram] = parseMarkdown("```mermaid\ngraph TD\n  A-->B\n```");
+  assert.deepEqual(diagram, { type: "code", lang: "mermaid", text: "graph TD\n  A-->B" });
+  assert.equal(markdownToPlain("看图 ![架构](https://example.com/a.png)"), "看图 架构");
+});

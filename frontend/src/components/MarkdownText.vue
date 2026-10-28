@@ -1,6 +1,7 @@
 <script lang="ts">
 import { computed, defineComponent, h, ref, type VNode } from "vue";
 import { Check, Copy } from "@lucide/vue";
+import MermaidDiagram from "./MermaidDiagram.vue";
 import { parseMarkdown, safeHref, type MarkdownBlock, type MarkdownInline } from "../lib/markdown";
 
 // 用渲染函数把语法树变成节点：内容始终是文本节点，不经过 innerHTML。
@@ -29,6 +30,9 @@ export default defineComponent({
           case "strong": return h("strong", inline(node.children));
           case "em": return h("em", inline(node.children));
           case "del": return h("del", inline(node.children));
+          case "image":
+            return h("a", { class: "md-image", href: node.src, target: "_blank", rel: "noopener noreferrer" },
+              h("img", { src: node.src, alt: node.alt, loading: "lazy", referrerpolicy: "no-referrer" }));
           case "link":
             return safeHref(node.href)
               ? h("a", { href: node.href, target: "_blank", rel: "noopener noreferrer" }, inline(node.children))
@@ -49,6 +53,7 @@ export default defineComponent({
           return node.ordered ? h("ol", node.start !== 1 ? { start: node.start } : {}, items) : h("ul", items);
         }
         case "code": {
+          if (node.lang.toLowerCase() === "mermaid") return h(MermaidDiagram, { source: node.text });
           const index = codeIndex++;
           const done = copied.value === index;
           return h("div", { class: "md-code" }, [
@@ -98,6 +103,8 @@ export default defineComponent({
 .markdown-text :deep(.md-code-copy:hover) { background: var(--surface); color: var(--text); }
 .markdown-text :deep(pre) { margin: 0; padding: 10px 12px; overflow-x: auto; line-height: 1.6; }
 .markdown-text :deep(pre code) { padding: 0; background: transparent; white-space: pre; overflow-wrap: normal; }
+.markdown-text :deep(.md-image) { display: inline-block; max-width: 100%; vertical-align: top; }
+.markdown-text :deep(.md-image img) { display: block; max-width: min(100%, 420px); max-height: 360px; border-radius: 8px; object-fit: contain; }
 .markdown-text :deep(.md-table) { margin: 0 0 .75em; overflow-x: auto; }
 .markdown-text :deep(table) { border-collapse: collapse; font-size: .92em; }
 .markdown-text :deep(th), .markdown-text :deep(td) { padding: 6px 10px; border: 1px solid var(--border); text-align: left; vertical-align: top; }
