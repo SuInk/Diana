@@ -27,6 +27,8 @@ type participationRelevance struct {
 type participationRatings struct {
 	Relevance participationRelevance `json:"relevance"`
 	ChatIn    participationRating    `json:"chat_in"`
+	// Burst 是合并评分时对【连发k】逐条的判断，键是 k（见 proactiveReplyTranscript）。
+	Burst map[int]participationRelevance `json:"-"`
 }
 
 // parseParticipationRatings 宽松解析接话评分。线上 7.8% 的评分被整条丢弃，原因是模型
@@ -42,6 +44,22 @@ func parseParticipationRatings(raw string) (participationRatings, error) {
 	if err := json.Unmarshal([]byte(text), &p); err != nil {
 		return p, err
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &fields); err == nil {
+		for key, value := range fields {
+			var k int
+			if _, err := fmt.Sscanf(key, "burst_%d", &k); err != nil || k <= 0 || key != fmt.Sprintf("burst_%d", k) {
+				continue
+			}
+			var verdict participationRelevance
+			if json.Unmarshal(value, &verdict) == nil && verdict.Directed != nil {
+				if p.Burst == nil {
+					p.Burst = map[int]participationRelevance{}
+				}
+				p.Burst[k] = verdict
+			}
+		}
+	}
 	if p.Relevance.Directed == nil || strings.TrimSpace(p.Relevance.Reason) == "" {
 		return p, fmt.Errorf("relevance needs directed true/false and a reason")
 	}
@@ -49,6 +67,17 @@ func parseParticipationRatings(raw string) (participationRatings, error) {
 		return p, fmt.Errorf("chat_in needs a score from 0 to 1 and a reason")
 	}
 	return p, nil
+}
+
+// requireBurst 要求【连发1】到【连发n】每条都有判断。缺一条就按格式无效处理、重问一次：
+// 合并评分省的是调用，不能拿漏判来换。
+func (p participationRatings) requireBurst(n int) error {
+	for k := 1; k <= n; k++ {
+		if v, ok := p.Burst[k]; !ok || v.Directed == nil {
+			return fmt.Errorf("burst_%d needs directed true/false", k)
+		}
+	}
+	return nil
 }
 
 // participationRatingsJSON 取出输出里第一个配平的顶层 JSON 对象，忽略它后面的任何字符。

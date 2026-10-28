@@ -12,7 +12,7 @@ import (
 )
 
 func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
-	spec := participationDecisionSpec(nil)
+	spec := participationDecisionSpec(nil, 0)
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("spec is invalid: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestParticipationDecisionSpecRendersParsableRatings(t *testing.T) {
 // Jev 对叫停消息稳定把绝大部分概率压在最低档，但总有一点散到别档，加权档位落在
 // 0.05 左右；插值成 0.01 的话 ratingsAllow 认不出叫停，always 档照样接话。
 func TestParticipationDecisionStopSnapsToZero(t *testing.T) {
-	raw, err := participationDecisionSpec(nil).RenderDecisionAnswers(map[string]llm.DecisionAnswer{
+	raw, err := participationDecisionSpec(nil, 0).RenderDecisionAnswers(map[string]llm.DecisionAnswer{
 		"relevance": {Kind: llm.DecisionNoul, Noul: 0.12},
 		"chat_in":   {Kind: llm.DecisionScore, Score: 0.05, Confidence: 0.95},
 	})
@@ -68,7 +68,7 @@ func TestParticipationWillingnessReachesBothModels(t *testing.T) {
 	custom := PromptOverrides{promptParticipationWillingnessSpec.Key: "愿意接：\n- 有人聊猫\n不接：\n- 其他一切"}
 	for name, text := range map[string]string{
 		"评分提示词": participationScorePromptWith(custom),
-		"判断模型":  participationDecisionSpec(custom).Questions[1].Instructions,
+		"判断模型":  participationDecisionSpec(custom, 0).Questions[1].Instructions,
 	} {
 		for _, want := range []string{"有人聊猫", participationWillingnessScale} {
 			if !strings.Contains(text, want) {
@@ -89,8 +89,8 @@ func TestForeignCommandRuleReachesEveryRouter(t *testing.T) {
 	}
 	for name, text := range map[string]string{
 		"评分模型":    participationScorePromptWith(overrides),
-		"判断模型相关度": participationDecisionSpec(overrides).Questions[0].Instructions,
-		"判断模型闲聊":  participationDecisionSpec(overrides).Questions[1].Instructions,
+		"判断模型相关度": participationDecisionSpec(overrides, 0).Questions[0].Instructions,
+		"判断模型闲聊":  participationDecisionSpec(overrides, 0).Questions[1].Instructions,
 		"旧版对话路由":  proactiveReplyRouterSystemPrompt("", BotConfig{PromptOverrides: overrides}),
 		"旧版判断路由":  proactiveReplyDecisionSpec(nil, overrides).Questions[0].Instructions,
 	} {
@@ -218,7 +218,7 @@ func TestParticipationChatInLevelsAreEditable(t *testing.T) {
 		t.Fatalf("default levels drifted from the registered prompt: %v %v", levels, values)
 	}
 	custom := PromptOverrides{promptParticipationChatInLevelsSpec.Key: "0.00 叫停\n\n0.40 普通闲聊\n0.90 有人聊猫"}
-	spec := participationDecisionSpec(custom)
+	spec := participationDecisionSpec(custom, 0)
 	if err := spec.Validate(); err != nil {
 		t.Fatalf("spec is invalid: %v", err)
 	}

@@ -44,7 +44,7 @@ func TestAnswerabilityNoLongerGatesReplies(t *testing.T) {
 	}
 }
 func testRatings(directed bool, c float64) participationRatings {
-	return participationRatings{participationRelevance{&directed, "相关度原因"}, participationRating{&c, "闲聊原因"}}
+	return participationRatings{Relevance: participationRelevance{&directed, "相关度原因"}, ChatIn: participationRating{&c, "闲聊原因"}}
 }
 func TestParticipationRatingsORAndOff(t *testing.T) {
 	for _, tc := range []struct {

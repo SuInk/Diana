@@ -273,6 +273,10 @@ type MessageEvent struct {
 	// 还要交给主动回复路由一起判断的候选。
 	backlogTurn      []proactiveReplyCandidate
 	backlogProactive []proactiveReplyCandidate
+	// burstSplit 表示这一轮的对象是合并评分逐条判出来的：同批里只有判为该回的那几条
+	// （burstTargets）跟着这一轮，话题各自独立，回复按话题分开发送，见 backlogReplyRequestText。
+	burstSplit   bool
+	burstTargets []proactiveReplyCandidate
 	// backlogHeld 表示这条消息是从积压包里取出来当回复对象的，进包时已经记过长期记忆和用户画像。
 	backlogHeld    bool
 	proactiveReply bool

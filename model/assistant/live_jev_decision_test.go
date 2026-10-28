@@ -71,7 +71,7 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 		},
 	}
 	prefs := ParticipationPreferences{RelevanceLevel: "on", ChatLevel: "medium", Desire: 50}
-	spec := participationDecisionSpec(nil)
+	spec := participationDecisionSpec(nil, 0)
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			// 和线上一样喂对话稿；机器人的称呼要在，缺了它「叫没叫它」这道题无从判起。

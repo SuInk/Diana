@@ -51,7 +51,7 @@ func PreviewParticipationPrompt(cfg BotConfig) (ParticipationPromptPreview, erro
 		User:  strings.TrimSpace(cfg.prompt(promptParticipationRouteInstructionSpec) + proactiveReplyTranscript(participationPreviewPayload(cfg))),
 		Retry: cfg.prompt(promptParticipationRetrySpec),
 	}
-	for _, question := range participationDecisionSpec(cfg.PromptOverrides).Questions {
+	for _, question := range participationDecisionSpec(cfg.PromptOverrides, 0).Questions {
 		preview.Decision = append(preview.Decision, ParticipationDecisionPreview{
 			Label:         question.Label,
 			Instructions:  question.Instructions,

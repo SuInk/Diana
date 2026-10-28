@@ -105,9 +105,8 @@ func TestProactiveRouterPayloadKeepsEarlierCandidateText(t *testing.T) {
 	if strings.Count(payload, "前面那句先说的话") != 1 || strings.Count(payload, "后面这句才是当前") != 1 {
 		t.Fatalf("each candidate text should appear exactly once: %s", payload)
 	}
-	// 同批更早的候选并进当前消息一起判断（见 proactive_route_debounce.go），当前这条排在最后。
-	if strings.Count(payload, "【当前消息】") != 1 || !strings.Contains(payload, "user-1：前面那句先说的话\n[刚刚] user-2：后面这句才是当前") {
-		t.Fatalf("earlier candidate should be judged together, latest last: %s", payload)
+	if strings.Count(payload, "【当前消息】") != 1 || !strings.Contains(payload, "【当前消息】[刚刚] user-2：后面这句才是当前") {
+		t.Fatalf("only the latest candidate is current: %s", payload)
 	}
 }
 

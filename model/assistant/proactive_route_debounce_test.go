@@ -88,9 +88,8 @@ func TestProactiveRouteDebounceRoutesWhenQuiet(t *testing.T) {
 	}
 }
 
-// 合并进来的消息已经进了历史，对话稿要把它们挪进当前消息一起列出、逐条判断，否则只问
-// 当前那句，前面那句真在叫机器人就丢了。
-func TestProactiveReplyTranscriptMarksDebouncedBurst(t *testing.T) {
+// 合并进来的消息原地标【连发k】、逐条判断；机器人已经回过的标「已回」。
+func TestProactiveReplyTranscriptNumbersBurst(t *testing.T) {
 	age := func(v int64) *int64 { return &v }
 	payload := proactiveReplyPayload{
 		Addressing:    messageAddressing{ReplyTarget: "none"},
@@ -98,56 +97,86 @@ func TestProactiveReplyTranscriptMarksDebouncedBurst(t *testing.T) {
 		CurrentSender: "Carol",
 		BotAliases:    []string{"嘉然"},
 		RecentMessages: []proactiveReplyHistoryItem{
-			{MessageID: "m2", Sender: "Bob", Text: "那你帮我看看", AgeSeconds: age(8), Addressing: messageAddressing{ReplyTarget: "none"}},
-			{MessageID: "m1", Sender: "Alice", Text: "早", AgeSeconds: age(60), Addressing: messageAddressing{ReplyTarget: "none"}},
+			{Sender: "嘉然", IsBot: true, Text: "好，你说", AgeSeconds: age(6), Addressing: messageAddressing{ReplyTarget: "other", ReplyMessageID: "m1"}},
+			{MessageID: "m2", UserID: "u2", Sender: "Bob", Text: "那你帮我看看", AgeSeconds: age(8), Addressing: messageAddressing{ReplyTarget: "none"}},
+			{MessageID: "m1", UserID: "u1", Sender: "Alice", Text: "我给你举个例子", AgeSeconds: age(12), Addressing: messageAddressing{ReplyTarget: "none"}},
+			{Sender: "嘉然", IsBot: true, Text: "你说说看", AgeSeconds: age(20), Addressing: messageAddressing{ReplyTarget: "none", Mentions: []MessageMention{{UserID: "u1"}}}},
 		},
-		Candidates: []proactiveReplyCandidatePayload{{MessageID: "m2"}, {MessageID: "m3", IsCurrent: true}},
+		Candidates: []proactiveReplyCandidatePayload{{MessageID: "m1", UserID: "u1"}, {MessageID: "m2", UserID: "u2"}, {MessageID: "m3", IsCurrent: true}},
 	}
 	got := proactiveReplyTranscript(payload)
-	want := strings.Join([]string{
-		"[1分钟前] Alice：早",
-		"【当前消息】以下几条是几秒内接连发出的，合并成一次评分，每条都按当前消息判断：",
-		"[8秒前] Bob：那你帮我看看",
-		"[刚刚] Carol：重启试试",
-		"（其中任何一条在跟嘉然说话，directed 就填 true，reason 写明是哪一条）",
-	}, "\n")
-	if !strings.Contains(got, want) {
-		t.Fatalf("连发没有并进当前消息：\n%s", got)
+	for _, want := range []string{
+		"【连发1】（嘉然已回）[12秒前] Alice：我给你举个例子",
+		"【连发2】[8秒前] Bob：那你帮我看看\n",
+		"【当前消息】[刚刚] Carol：重启试试",
+		"burst_k",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("对话稿缺 %q：\n%s", want, got)
+		}
 	}
 	payload.Candidates = nil
-	if strings.Contains(proactiveReplyTranscript(payload), "接连发出") {
+	if strings.Contains(proactiveReplyTranscript(payload), "连发") {
 		t.Fatal("没有合并时对话稿不该变")
 	}
 }
 
-// 机器人刚参与过的对话不合并：前一句可能是在接它的话，合并后容易漏判。
-func TestProactiveRouteNearBot(t *testing.T) {
+// 合并评分每条连发都要有判断，缺一条按格式无效处理。
+func TestParticipationRatingsBurstVerdicts(t *testing.T) {
+	raw := `{"relevance":{"directed":false,"reason":"群友之间"},"chat_in":{"score":0.1,"reason":"不接"},"burst_1":{"directed":true,"reason":"在接嘉然的话"}}`
+	ratings, err := parseParticipationRatings(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ratings.requireBurst(1); err != nil {
+		t.Fatalf("burst_1 应该齐了：%v", err)
+	}
+	if v := ratings.Burst[1]; v.Directed == nil || !*v.Directed {
+		t.Fatalf("burst_1=%#v", v)
+	}
+	if err := ratings.requireBurst(2); err == nil {
+		t.Fatal("缺 burst_2 应该报错")
+	}
+}
+
+// 两个话题一轮回、分开发：判为在叫机器人的连发跟着当前消息这一轮，判否的不跟；回复请求
+// 要求按话题分条发送、各自引用原消息。
+func TestSplitBurstRepliesSendsTopicsSeparately(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	now := time.Now()
-	event := debounceTestEvent("current", "user-1", "看完了", now)
-	withHistory := func(history ...MessageEvent) MessageEvent {
-		e := event
-		e.replyHistory, e.replyHistoryLoaded = history, true
-		return e
+	burst := []proactiveReplyCandidate{
+		{Event: debounceTestEvent("m1", "u1", "攻击面管理", now.Add(-2*time.Second)), Text: "攻击面管理"},
+		{Event: debounceTestEvent("m2", "u2", "晚上吃啥", now.Add(-time.Second)), Text: "晚上吃啥"},
 	}
-	bot := debounceTestEvent("bot", "42", "缓存的关键是前缀稳定", now.Add(-5*time.Minute))
-	oldBot := debounceTestEvent("old-bot", "42", "早", now.Add(-30*time.Minute))
-	mention := debounceTestEvent("mention", "user-1", "你的缓存怎么做的", now.Add(-40*time.Minute))
-	mention.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, mention.Segments...)
-	other := debounceTestEvent("other", "user-2", "晚上吃啥", now.Add(-time.Minute))
-	cases := []struct {
-		name  string
-		event MessageEvent
-		want  bool
-	}{
-		{"机器人 5 分钟前说过话", withHistory(other, bot), true},
-		{"发送者 40 分钟前 @ 过机器人", withHistory(oldBot, mention, other), true},
-		{"机器人半小时前说过、没跟发送者来回", withHistory(oldBot, other), false},
-		{"机器人没参与", withHistory(other), false},
+	current := debounceTestEvent("m3", "u3", "嘉然你觉得呢", now)
+	yes, no := true, false
+	ratings := participationRatings{Burst: map[int]participationRelevance{1: {Directed: &yes, Reason: "接嘉然的话"}, 2: {Directed: &no, Reason: "问别人"}}}
+
+	primary, _, _, allowed := runtime.splitBurstReplies(current, "嘉然你觉得呢", burst, ratings, true)
+	if !allowed || primary.MessageID != "m3" || !primary.burstSplit {
+		t.Fatalf("primary=%s allowed=%v split=%v", primary.MessageID, allowed, primary.burstSplit)
 	}
-	for _, tc := range cases {
-		if got := runtime.proactiveRouteNearBot(tc.event); got != tc.want {
-			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+	if len(primary.burstTargets) != 1 || primary.burstTargets[0].Event.MessageID != "m1" {
+		t.Fatalf("跟着这一轮的应只有判为在叫的 m1：%#v", primary.burstTargets)
+	}
+	request := backlogReplyRequestText("嘉然你觉得呢", primary, primary.burstTargets)
+	for _, want := range []string{"按话题分开发送", notificationSplitMarker, replyMarkerPrefix, "攻击面管理"} {
+		if !strings.Contains(request, want) {
+			t.Fatalf("回复请求缺 %q：%s", want, request)
 		}
+	}
+	if strings.Contains(request, "晚上吃啥") {
+		t.Fatal("判否的连发不该跟进这一轮")
+	}
+
+	// 当前消息不放行时，判为在叫的连发自己当回复对象。
+	primary, _, _, allowed = runtime.splitBurstReplies(current, "嘉然你觉得呢", burst, ratings, false)
+	if !allowed || primary.MessageID != "m1" || !primary.routingDirected || len(primary.burstTargets) != 0 {
+		t.Fatalf("primary=%s allowed=%v directed=%v", primary.MessageID, allowed, primary.routingDirected)
+	}
+
+	_, _, _, allowed = runtime.splitBurstReplies(current, "嘉然你觉得呢", burst[1:], participationRatings{Burst: map[int]participationRelevance{1: {Directed: &no, Reason: "问别人"}}}, false)
+	if allowed {
+		t.Fatal("都判否时不该回")
 	}
 }

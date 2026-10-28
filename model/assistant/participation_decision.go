@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
@@ -15,9 +16,9 @@ import (
 // 和日志一行都不用改。对话模型看不到这两张表，走的仍是提示词里的契约。判据取自
 // 同一份提示词覆盖，改了哪段两种模型都跟着变。
 
-func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
+func participationDecisionSpec(overrides PromptOverrides, burst int) *llm.DecisionSpec {
 	chatInLevels, chatInLevelValues := participationChatInLevelsFor(overrides)
-	return &llm.DecisionSpec{Questions: []llm.DecisionQuestion{
+	spec := &llm.DecisionSpec{Questions: []llm.DecisionQuestion{
 		{
 			Key:           "relevance",
 			Kind:          llm.DecisionNoul,
@@ -44,6 +45,20 @@ func participationDecisionSpec(overrides PromptOverrides) *llm.DecisionSpec {
 			ReasonPath:   "chat_in.reason",
 		},
 	}}
+	// 合并评分时【连发k】逐条一道是非题，和 relevance 同一套判据，见 proactiveReplyTranscript。
+	for k := 1; k <= burst; k++ {
+		spec.Questions = append(spec.Questions, llm.DecisionQuestion{
+			Key:           fmt.Sprintf("burst_%d", k),
+			Kind:          llm.DecisionNoul,
+			Label:         fmt.Sprintf("【连发%d】在跟本人说话", k),
+			Instructions:  fmt.Sprintf("只看对话稿里标【连发%d】的那一条，判断它是不是明确在跟本人说话；不看当前消息和其它连发。已标「已回」的填否。\n", k) + overrides.text(promptParticipationRelevanceIntroSpec),
+			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
+			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
+			Path:          fmt.Sprintf("burst_%d.directed", k),
+			ReasonPath:    fmt.Sprintf("burst_%d.reason", k),
+		})
+	}
+	return spec
 }
 
 // proactiveReplyDecisionSpec 是旧的 should_reply 契约。target_message_id 是一道单选，

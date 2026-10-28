@@ -28,7 +28,7 @@ func TestParticipationCriteriaOverrideReachesBothConsumers(t *testing.T) {
 		t.Fatalf("开关与档位那行变了：%s", prompt)
 	}
 
-	relevance := participationDecisionSpec(overrides).Questions[0]
+	relevance := participationDecisionSpec(overrides, 0).Questions[0]
 	if relevance.TrueCriteria != custom {
 		t.Fatalf("判断模型读到的判据和评分提示词不一致：%q", relevance.TrueCriteria)
 	}

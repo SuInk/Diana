@@ -39,7 +39,7 @@ func TestEveryIntentPurposeCanRunOnDecisionModel(t *testing.T) {
 
 // 参与判定（是不是在跟机器人说话）同样要能回填成路由解析器读得懂的形状。
 func TestParticipationDecisionRoundTrips(t *testing.T) {
-	spec := participationDecisionSpec(nil)
+	spec := participationDecisionSpec(nil, 0)
 	answers := map[string]llm.DecisionAnswer{}
 	for _, question := range spec.Questions {
 		switch question.Kind {

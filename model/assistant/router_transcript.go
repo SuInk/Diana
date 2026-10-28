@@ -38,16 +38,18 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		lines = append(lines, "机器人的称呼："+strings.Join(payload.BotAliases, "、"))
 	}
 	lines = append(lines, "对话按时间从早到晚：")
-	// 防抖合并进来的候选（见 proactive_route_debounce.go）和当前消息是几秒内连着发的，
-	// 挪进「当前消息」一起列出、逐条判断。只在旁边标一句的写法，模型注意力仍在最后
-	// 那条上，回放里漏判更多。
-	burst := map[string]bool{}
-	for _, candidate := range payload.Candidates {
-		if !candidate.IsCurrent && candidate.MessageID != "" {
-			burst[candidate.MessageID] = true
+	// 防抖、积压合并进来的候选（见 proactive_route_debounce.go）和当前消息挨着发，但话题
+	// 可能各不相同。每条原地标上【连发N】、各判各的：整组只给一个结论时，最后那条在跟
+	// 谁说话会把前面的一起带偏，回放里漏判就出在这。机器人已经回过的标「已回」。
+	burst := burstCandidateNumbers(payload)
+	replied := burstRepliedByBot(payload, burst)
+	label := func(id string) string {
+		mark := fmt.Sprintf("【连发%d】", burst[id])
+		if replied[id] {
+			mark += "（" + botName + "已回）"
 		}
+		return mark
 	}
-	var burstLines []string
 	// RecentMessages 是从新到旧攒的，倒着读回来。
 	seen := map[string]bool{}
 	for i := len(payload.RecentMessages) - 1; i >= 0; i-- {
@@ -56,9 +58,8 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 			seen[item.MessageID] = true
 		}
 		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName)
-		if burst[item.MessageID] && !item.IsBot {
-			burstLines = append(burstLines, line)
-			continue
+		if burst[item.MessageID] > 0 && !item.IsBot {
+			line = label(item.MessageID) + line
 		}
 		lines = append(lines, line)
 	}
@@ -69,7 +70,11 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if candidate.IsCurrent || (candidate.MessageID != "" && seen[candidate.MessageID]) {
 			continue
 		}
-		burstLines = append(burstLines, transcriptAge(candidate.AgeSeconds)+transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName))
+		line := transcriptAge(candidate.AgeSeconds) + transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName)
+		if burst[candidate.MessageID] > 0 {
+			line = label(candidate.MessageID) + line
+		}
+		lines = append(lines, line)
 	}
 	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
@@ -79,12 +84,9 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		}
 		current += fmt.Sprintf("（引用 %s：%s）", firstNonEmpty(who, "某人"), truncateRunes(strings.Join(strings.Fields(quoted), " "), 80))
 	}
-	if len(burstLines) > 0 {
-		lines = append(lines, "【当前消息】以下几条是几秒内接连发出的，合并成一次评分，每条都按当前消息判断：")
-		lines = append(lines, burstLines...)
-		lines = append(lines, "[刚刚] "+current, "（其中任何一条在跟"+botName+"说话，directed 就填 true，reason 写明是哪一条）")
-	} else {
-		lines = append(lines, "【当前消息】[刚刚] "+current)
+	lines = append(lines, "【当前消息】[刚刚] "+current)
+	if n := len(burst); n > 0 {
+		lines = append(lines, fmt.Sprintf("（【连发1】到【连发%d】和当前消息是几秒内接连发出的，合并成一次评分，但话题可能不同，要逐条分开判断：relevance 和 chat_in 只评【当前消息】；每条【连发k】另外输出 burst_k: {\"directed\": true 或 false, \"reason\": \"…\"}，按同样的判据只看这一条自己在跟谁说话，不要被前后几条带偏。标了「%s已回」的已经回过，directed 填 false）", n, botName))
 	}
 	// 机器人之后有别人插进来时不写这条：评分判据里「紧接着它刚才的话」要求中间没有别人，
 	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
@@ -95,6 +97,55 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		lines = append(lines, "", "群内术语：", notebook)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// burstCandidateNumbers 给当前消息以外的候选按先后编号，从 1 开始；接话评分按这个
+// 编号逐条回 burst_k。
+func burstCandidateNumbers(payload proactiveReplyPayload) map[string]int {
+	numbers := map[string]int{}
+	for _, candidate := range payload.Candidates {
+		if candidate.IsCurrent || candidate.MessageID == "" || numbers[candidate.MessageID] > 0 {
+			continue
+		}
+		numbers[candidate.MessageID] = len(numbers) + 1
+	}
+	return numbers
+}
+
+// burstRepliedByBot 找出机器人已经回过的连发：之后有机器人的发言引用了它，或 @ 了它的发送者。
+func burstRepliedByBot(payload proactiveReplyPayload, burst map[string]int) map[string]bool {
+	replied := map[string]bool{}
+	if len(burst) == 0 {
+		return replied
+	}
+	senders := map[string]string{}
+	for _, candidate := range payload.Candidates {
+		if burst[candidate.MessageID] > 0 {
+			senders[candidate.MessageID] = strings.TrimSpace(candidate.UserID)
+		}
+	}
+	// RecentMessages 从新到旧：先见到的机器人发言都在后面那几条连发之后。
+	var laterBot []proactiveReplyHistoryItem
+	for _, item := range payload.RecentMessages {
+		if item.IsBot {
+			laterBot = append(laterBot, item)
+			continue
+		}
+		if burst[item.MessageID] == 0 {
+			continue
+		}
+		for _, bot := range laterBot {
+			if bot.Addressing.ReplyMessageID != "" && bot.Addressing.ReplyMessageID == item.MessageID {
+				replied[item.MessageID] = true
+			}
+			for _, mention := range bot.Addressing.Mentions {
+				if sender := senders[item.MessageID]; sender != "" && mention.UserID == sender {
+					replied[item.MessageID] = true
+				}
+			}
+		}
+	}
+	return replied
 }
 
 // transcriptAge 把离现在的秒数写成行首的「[25秒前] 」，没有时间就不写。

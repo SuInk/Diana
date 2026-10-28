@@ -175,7 +175,7 @@ func TestLiveParticipationScoreAccuracy(t *testing.T) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 				// 和线上一样带着题目表：对话模型照提示词写 JSON，判断模型按题作答。
-				resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: system}, {Role: llm.RoleUser, Content: user}}, Decision: participationDecisionSpec(cfg.PromptOverrides)})
+				resp, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: system}, {Role: llm.RoleUser, Content: user}}, Decision: participationDecisionSpec(cfg.PromptOverrides, 0)})
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
