@@ -95,7 +95,7 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 			}
 		} else {
 			var err error
-			ids, err = r.updateMarkedBotID(base.ID, t.event.UserID, id, op == "mark")
+			ids, err = r.updateMarkedBotID(base.ID, t.event, id, op == "mark")
 			if err != nil {
 				return "", err
 			}
@@ -107,14 +107,14 @@ func (t *dianaBotMarkersTool) Run(ctx context.Context, input map[string]any) (st
 	return string(encoded), err
 }
 
-func (r *Runtime) updateMarkedBotID(profileID, actorID, userID string, marked bool) ([]string, error) {
+func (r *Runtime) updateMarkedBotID(profileID string, actor MessageEvent, userID string, marked bool) ([]string, error) {
 	saver, ok := r.configSaver.(botMarkersSaver)
 	if !ok {
 		return nil, fmt.Errorf("当前未接入可确认持久化结果的机器人配置存储")
 	}
 	var ids []string
 	_, err := r.commitProfileChange(profileID, func(profile *BotConfig) error {
-		if !profile.managesUserID(actorID) {
+		if !profile.managesEvent(actor) {
 			return fmt.Errorf("只有本机主人或管理员可以修改机器人标记")
 		}
 		if ids == nil {

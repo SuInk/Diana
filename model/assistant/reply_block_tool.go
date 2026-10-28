@@ -175,7 +175,7 @@ func (t *dianaReplyBlockTool) Run(ctx context.Context, input map[string]any) (st
 			if saved.ReplyGate != nil {
 				next = append([]string(nil), saved.ReplyGate.BlockedUsers...)
 			}
-		} else if err := t.runtime.saveBotBlockedUsers(base, t.event.UserID, next); err != nil {
+		} else if err := t.runtime.saveBotBlockedUsers(base, t.event, next); err != nil {
 			return "", err
 		}
 		// 走到这里保存已经落库并返回成功，下面这句话才敢说。
@@ -213,14 +213,14 @@ func replyBlockScopeWord(scope string) string {
 }
 
 // saveBotBlockedUsers 落库机器人级屏蔽名单，成功后同步运行时里的那几份配置。
-func (r *Runtime) saveBotBlockedUsers(expected BotConfig, actorID string, userIDs []string) error {
+func (r *Runtime) saveBotBlockedUsers(expected BotConfig, actor MessageEvent, userIDs []string) error {
 	saver, ok := r.configSaver.(replyBlockSaver)
 	if !ok {
 		return fmt.Errorf("配置存储不支持机器人级屏蔽名单更新")
 	}
 	_, err := r.commitProfileChange(expected.ID, func(profile *BotConfig) error {
 		// 保存前再核一次主人：工具入口已经判过一遍，这里防的是以后有别的调用方接进来。
-		if !profile.managesUserID(actorID) {
+		if !profile.managesEvent(actor) {
 			return fmt.Errorf("只有机器人主人或管理员可以修改机器人级屏蔽名单")
 		}
 		gate := profile.ReplyGate.WithBlockedUsers(userIDs)

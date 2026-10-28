@@ -3730,6 +3730,33 @@ export function setAssistantUserAI(userID: string, profile: string, override: Us
   });
 }
 
+/** 跨平台账号关联里的一个账号；判定只认 user_id，用户名和昵称只用于展示。 */
+export interface IdentityAccount {
+  person_id?: string;
+  profile_id: string;
+  platform: string;
+  user_id: string;
+  username?: string;
+  display_name?: string;
+  source?: string;
+  created_at?: string;
+}
+
+export interface IdentityPerson {
+  person_id: string;
+  accounts: IdentityAccount[];
+}
+
+export function listIdentityLinks(): Promise<{ people: IdentityPerson[] }> {
+  return requestJSON("/api/assistant/identity-links");
+}
+
+export function unlinkIdentityAccount(account: Pick<IdentityAccount, "profile_id" | "platform" | "user_id">): Promise<{ removed: boolean }> {
+  return requestJSON("/api/assistant/identity-links/unlink", {
+    method: "POST", body: JSON.stringify({ profile_id: account.profile_id, platform: account.platform, user_id: account.user_id })
+  });
+}
+
 export function deleteBotGroup(groupID: string, profile = ""): Promise<{ ok: boolean }> {
   return requestJSON(`/api/assistant/groups/${encodeURIComponent(groupID)}?profile=${encodeURIComponent(profile)}`, { method: "DELETE" });
 }

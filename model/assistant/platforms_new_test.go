@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -206,6 +207,29 @@ func TestConfigFromPayloadPreservesBlankSecrets(t *testing.T) {
 	payload.QQAppSecret = "rotated"
 	if merged := ConfigFromPayload(payload, existing); merged.QQAppSecret != "rotated" {
 		t.Fatalf("a supplied secret was not applied: %q", merged.QQAppSecret)
+	}
+}
+
+// 老配置里已下线平台的凭据界面上已经看不到，改任何设置都不能把它们清掉：
+// 存储往返和保存合并都要原样带着。
+func TestRetiredPlatformCredentialsSurviveSave(t *testing.T) {
+	var existing BotConfig
+	raw := `{"id":"ding","platform":"dingtalk","dingtalk_client_id":"cid","dingtalk_client_secret":"csecret","feishu_app_secret":"fsecret","wecom_encoding_aes_key":"aes"}`
+	if err := json.Unmarshal([]byte(raw), &existing); err != nil {
+		t.Fatal(err)
+	}
+	merged := ConfigFromPayload(ConfigPayload{Platform: "dingtalk", Name: "改个名字"}, existing)
+	encoded, err := json.Marshal(merged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"dingtalk_client_id":"cid"`, `"dingtalk_client_secret":"csecret"`, `"feishu_app_secret":"fsecret"`, `"wecom_encoding_aes_key":"aes"`} {
+		if !strings.Contains(string(encoded), want) {
+			t.Fatalf("saved config lost %s: %s", want, encoded)
+		}
+	}
+	if payload, _ := json.Marshal(PayloadFromConfig(merged)); strings.Contains(string(payload), "csecret") {
+		t.Fatalf("retired credentials must not reach the WebUI: %s", payload)
 	}
 }
 

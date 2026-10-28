@@ -18,6 +18,7 @@ import type {
   AppLogEntry,
   AssistantEventDetail,
   AssistantTask,
+  IdentityPerson,
   BrowserBoxSettings,
   BrowserControlToken,
   LLMConfig,
@@ -449,6 +450,17 @@ function demoMemorySource(memory: UserStructuredMemory): AssistantMemorySource {
   };
 }
 
+
+// 青禾在 QQ 和 Telegram 上各有一个号，用「绑定账号」验证码自助关联过。
+const demoIdentityPeople: IdentityPerson[] = [
+  {
+    person_id: "demo-person-qinghe",
+    accounts: [
+      { person_id: "demo-person-qinghe", profile_id: "bot-onebot", platform: "onebot-v11", user_id: "100200711", display_name: "青禾", source: "self_bind", created_at: before(4300) },
+      { person_id: "demo-person-qinghe", profile_id: "bot-telegram", platform: "telegram", user_id: "880024", username: "qinghe_dev", display_name: "青禾", source: "self_bind", created_at: before(4300) }
+    ]
+  }
+];
 
 const demoUsers: UserMemoryProfile[] = [
   {
@@ -2103,6 +2115,20 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       portrait_count: user.portrait?.length ?? 0
     }));
     return json({ users, total: matched.length, query: keyword || undefined, sort, order, limit: 50, offset: 0 });
+  }
+  if (path === "/api/assistant/identity-links") {
+    return json({ people: demoIdentityPeople.filter((person) => person.accounts.length > 1) });
+  }
+  if (path === "/api/assistant/identity-links/unlink" && method === "POST") {
+    for (const person of demoIdentityPeople) {
+      const index = person.accounts.findIndex((account) =>
+        account.profile_id === body.profile_id && account.platform === body.platform && account.user_id === body.user_id);
+      if (index >= 0) {
+        person.accounts.splice(index, 1);
+        return json({ removed: true });
+      }
+    }
+    return json({ error: "这个账号没有关联" }, 404);
   }
   // 演示里没有真人去发「绑定主人」，任意 6 位数字都当作那个人拿到的验证码。
   if (path === "/api/assistant/owner-bind" && method === "POST") {

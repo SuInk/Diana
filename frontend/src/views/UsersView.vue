@@ -148,6 +148,27 @@
         </div>
 
         <section>
+          <h3 class="detail-section-title">跨平台关联账号</h3>
+          <p class="muted" style="font-size: 12.5px; margin: 0 0 8px">
+            同一个人在不同机器人上的号。关联后好感度合并计算、个人记忆互通；关联到主人的号也算主人。本人在一台机器人私聊发「绑定账号」取验证码，再到另一台机器人私聊发「绑定账号 验证码」即可关联。
+          </p>
+          <div v-if="linkedAccounts.length > 0" class="linked-accounts">
+            <div v-for="account in linkedAccounts" :key="`${account.profile_id}:${account.platform}:${account.user_id}`" class="linked-account">
+              <span class="badge">{{ subscriptionPlatformLabel(account.platform) }}</span>
+              <span>{{ account.display_name || account.user_id }}</span>
+              <span class="muted" style="font-size: 12.5px">
+                {{ account.username ? `@${account.username} · ` : "" }}{{ account.user_id }} · 机器人 {{ account.profile_id }}
+              </span>
+              <span v-if="isCurrentAccount(account)" class="badge">当前</span>
+              <button class="btn ghost" type="button" :disabled="unlinking !== ''" @click="confirmUnlink = account">
+                <Unlink :size="14" />解除
+              </button>
+            </div>
+          </div>
+          <p v-else class="muted" style="font-size: 12.5px; margin: 0">{{ linksLoading ? "正在加载…" : "还没有关联别的账号" }}</p>
+        </section>
+
+        <section>
           <h3 class="detail-section-title">真人还是机器人</h3>
           <p class="muted" style="font-size: 12.5px; margin: 0 0 8px">
             长期记忆生成时顺带判断，攒够 3 次、AI 率到 80% 才算机器人。算作机器人的人不作为学说话的参照，不影响回不回复。
@@ -355,6 +376,18 @@
         </button>
       </template>
     </Modal>
+    <Modal v-if="confirmUnlink" title="解除账号关联" @close="unlinking === '' && (confirmUnlink = null)">
+      <p>
+        把 {{ subscriptionPlatformLabel(confirmUnlink.platform) }} 账号 {{ confirmUnlink.display_name || confirmUnlink.user_id }}（{{ confirmUnlink.user_id }}）从这组关联里移出？
+        之后它的好感度和个人记忆不再和其余账号合并；如果是靠关联才算主人，也不再算主人。各账号自己的记录都保留。
+      </p>
+      <template #footer>
+        <button class="btn ghost" :disabled="unlinking !== ''" @click="confirmUnlink = null">取消</button>
+        <button class="btn" :disabled="unlinking !== ''" @click="unlinkAccount(confirmUnlink)">
+          <Unlink :size="15" />{{ unlinking !== "" ? "解除中…" : "解除" }}
+        </button>
+      </template>
+    </Modal>
     <Modal v-if="confirmDelete && detail" title="删除人员记录" @close="!saving && (confirmDelete = false)">
       <p>删除 {{ detail.profile.display_name || detail.profile.user_id }} 在此机器人下的画像、最近发言缓冲、好感度历史和结构化长期记忆？聊天记录会保留，不会踢出群聊。后续互动可能重新建立人员记录，机器人也会重新记住新说的事。</p>
       <template #footer>
@@ -369,10 +402,13 @@
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { botScope } from "../lib/bot-scope";
 import { navigate, viewQuery } from "../router";
-import { ChevronDown, ChevronRight, ChevronUp, MessageSquareQuote, Pencil, RefreshCw, Save, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronRight, ChevronUp, MessageSquareQuote, Pencil, RefreshCw, Save, Trash2, Unlink } from "@lucide/vue";
 import {
   getAssistantUser,
   getAssistantUserMemorySource,
+  listIdentityLinks,
+  unlinkIdentityAccount,
+  type IdentityAccount,
   listAssistantUsers,
   clearAssistantUserMemories,
   saveAssistantUser,
@@ -387,6 +423,7 @@ import {
   type UserStructuredMemory
 } from "../api";
 import { formatNumber, formatRelative, formatTime } from "../lib/format";
+import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -607,12 +644,54 @@ function loadMore(): void {
   void fetchUsers(users.value.length);
 }
 
+// 跨平台关联按人存，详情页只取包含当前这个号的那一组。
+const linkedAccounts = ref<IdentityAccount[]>([]);
+const linksLoading = ref(false);
+const confirmUnlink = ref<IdentityAccount | null>(null);
+const unlinking = ref("");
+
+function isCurrentAccount(account: IdentityAccount): boolean {
+  const profile = selected.value;
+  if (!profile || account.user_id !== profile.user_id) return false;
+  return !profile.bot_profile_id || account.profile_id === profile.bot_profile_id;
+}
+
+async function loadLinkedAccounts(user: UserMemoryProfile): Promise<void> {
+  linkedAccounts.value = [];
+  linksLoading.value = true;
+  try {
+    const { people } = await listIdentityLinks();
+    if (selected.value !== user) return;
+    linkedAccounts.value = people.find((person) => person.accounts.some(isCurrentAccount))?.accounts ?? [];
+  } catch {
+    // 关联是附加信息，取不到不影响看详情。
+  } finally {
+    if (selected.value === user) linksLoading.value = false;
+  }
+}
+
+async function unlinkAccount(account: IdentityAccount): Promise<void> {
+  const user = selected.value;
+  unlinking.value = `${account.profile_id}:${account.user_id}`;
+  try {
+    await unlinkIdentityAccount(account);
+    toastSuccess("已解除关联");
+    confirmUnlink.value = null;
+    if (user) await loadLinkedAccounts(user);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "解除关联失败");
+  } finally {
+    unlinking.value = "";
+  }
+}
+
 async function openDetail(user: UserMemoryProfile): Promise<void> {
   draft.value = null;
   selected.value = user;
   detail.value = null;
   recentOpen.value = false;
   detailLoading.value = true;
+  void loadLinkedAccounts(user);
   try {
     const response = await getAssistantUser(user.user_id, user.bot_profile_id ?? "");
     if (selected.value !== user) return;
@@ -632,6 +711,8 @@ function closeDetail(): void {
   confirmDelete.value = false;
   confirmClearMemories.value = false;
   confirmForget.value = null;
+  confirmUnlink.value = null;
+  linkedAccounts.value = [];
   selected.value = null;
   detail.value = null;
 }
@@ -862,6 +943,22 @@ onMounted(() => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+
+.linked-accounts {
+  display: grid;
+  gap: 6px;
+}
+
+.linked-account {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.linked-account .btn {
+  margin-left: auto;
 }
 
 .memory-item {

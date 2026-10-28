@@ -232,7 +232,7 @@ func TestReviewRepro12_ConfigSaveDoesNotBlockMessageHandling(t *testing.T) {
 	saver := &blockingMarkersSaver{entered: make(chan struct{}), release: make(chan struct{})}
 	r := NewRuntime(BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{{ID: "a", OwnerID: "900", BotAccount: "42"}}})
-	go func() { _, _ = r.updateMarkedBotID("a", "900", "200", true) }()
+	go func() { _, _ = r.updateMarkedBotID("a", MessageEvent{ProfileID: "a", UserID: "900"}, "200", true) }()
 	<-saver.entered
 	defer close(saver.release)
 	done := make(chan struct{})

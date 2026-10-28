@@ -28,6 +28,13 @@ func registerBotConfigSecrets(cfg BotConfig) {
 		cfg.WeixinBotToken,
 		cfg.IMessagePassword,
 		cfg.IMessageWebhookToken,
+		cfg.DingTalkClientSecret,
+		cfg.FeishuAppSecret,
+		cfg.FeishuVerificationToken,
+		cfg.FeishuEncryptKey,
+		cfg.WeComSecret,
+		cfg.WeComToken,
+		cfg.WeComEncodingAESKey,
 	)
 	secretmask.RegisterURL(
 		cfg.OneBotWSEndpoint,

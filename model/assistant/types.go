@@ -690,8 +690,23 @@ type BotConfig struct {
 	QQAppID                     string `json:"qq_app_id,omitempty"`
 	QQAppSecret                 string `json:"qq_app_secret,omitempty"`
 	QQSandbox                   bool   `json:"qq_sandbox,omitempty"`
-	BotAccount                  string `json:"bot_account,omitempty"`
-	OwnerID                     string `json:"owner_id,omitempty"`
+	// 钉钉、飞书、企业微信暂时下线，老配置里的凭据原样留着：不读、不回显，只是
+	// 保存时跟着旧值走，平台恢复后机器人不用重新配。
+	DingTalkClientID        string `json:"dingtalk_client_id,omitempty"`
+	DingTalkClientSecret    string `json:"dingtalk_client_secret,omitempty"`
+	DingTalkRobotCode       string `json:"dingtalk_robot_code,omitempty"`
+	FeishuAppID             string `json:"feishu_app_id,omitempty"`
+	FeishuAppSecret         string `json:"feishu_app_secret,omitempty"`
+	FeishuVerificationToken string `json:"feishu_verification_token,omitempty"`
+	FeishuEncryptKey        string `json:"feishu_encrypt_key,omitempty"`
+	FeishuAPIBaseURL        string `json:"feishu_api_base_url,omitempty"`
+	WeComCorpID             string `json:"wecom_corp_id,omitempty"`
+	WeComAgentID            string `json:"wecom_agent_id,omitempty"`
+	WeComSecret             string `json:"wecom_secret,omitempty"`
+	WeComToken              string `json:"wecom_token,omitempty"`
+	WeComEncodingAESKey     string `json:"wecom_encoding_aes_key,omitempty"`
+	BotAccount              string `json:"bot_account,omitempty"`
+	OwnerID                 string `json:"owner_id,omitempty"`
 	// AdminIDs 是主人另外指定的管理员账号：拿到全部管理权限（宿主命令、插件、配置、
 	// 扩展等），但不继承好感度、人设、通知和额度这些主人关系，也不能增减管理员。
 	AdminIDs              []string         `json:"admin_ids,omitempty"`
@@ -3120,6 +3135,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 	if cfg.QQAppSecret == "" {
 		cfg.QQAppSecret = existing.QQAppSecret
 	}
+	cfg.preserveRetiredPlatformCredentials(existing)
 	// 微信凭据只认扫码结果：payload 里就算带了也不采信，免得前端回传的旧值或
 	// 空值把刚扫出来的登录覆盖掉。解绑走单独的接口。
 	cfg.WeixinBotToken = existing.WeixinBotToken
@@ -3363,4 +3379,22 @@ func (cfg BotConfig) migrateDisabledUsers() BotConfig {
 	}
 	cfg.ReplyGate = cfg.ReplyGate.WithBlockedUsers(unionStrings(existing, blocked))
 	return cfg
+}
+
+// preserveRetiredPlatformCredentials 把已下线平台的凭据从旧配置带过来：界面里
+// 已经没有这些字段，不带就会在用户改任何设置时被清空。
+func (cfg *BotConfig) preserveRetiredPlatformCredentials(existing BotConfig) {
+	cfg.DingTalkClientID = existing.DingTalkClientID
+	cfg.DingTalkClientSecret = existing.DingTalkClientSecret
+	cfg.DingTalkRobotCode = existing.DingTalkRobotCode
+	cfg.FeishuAppID = existing.FeishuAppID
+	cfg.FeishuAppSecret = existing.FeishuAppSecret
+	cfg.FeishuVerificationToken = existing.FeishuVerificationToken
+	cfg.FeishuEncryptKey = existing.FeishuEncryptKey
+	cfg.FeishuAPIBaseURL = existing.FeishuAPIBaseURL
+	cfg.WeComCorpID = existing.WeComCorpID
+	cfg.WeComAgentID = existing.WeComAgentID
+	cfg.WeComSecret = existing.WeComSecret
+	cfg.WeComToken = existing.WeComToken
+	cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
 }

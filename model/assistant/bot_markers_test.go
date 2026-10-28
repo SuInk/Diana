@@ -136,3 +136,23 @@ func TestLiveBotMarkerNaturalLanguage(t *testing.T) {
 		})
 	}
 }
+
+// 落库前的二次核对和工具入口用同一套主人判定：因账号关联算主人的人能改，
+// 只是账号 ID 对不上配置里的主人号不等于没权限；普通成员照样被拒。
+func TestMarkedBotSaveRecheckHonorsLinkedOwner(t *testing.T) {
+	saver := &testBotMarkersSaver{}
+	cfg := BotConfig{ID: "a", OwnerID: "900", BotAccount: "42"}
+	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+
+	linked := MessageEvent{ProfileID: "a", UserID: "31415", linkedOwner: true}
+	if _, err := r.updateMarkedBotID("a", linked, "200", true); err != nil {
+		t.Fatalf("linked owner refused: %v", err)
+	}
+	if _, err := r.updateMarkedBotID("a", MessageEvent{ProfileID: "a", UserID: "31415"}, "201", true); err == nil {
+		t.Fatal("plain member must be refused")
+	}
+	if got := saver.ids["a"]; len(got) != 1 || got[0] != "200" {
+		t.Fatalf("saved marked ids = %#v", got)
+	}
+}
