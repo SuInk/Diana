@@ -230,7 +230,7 @@ func TestFinalizeToolDefinitionIsSend(t *testing.T) {
 	if _, ok := properties["content"]; ok {
 		t.Fatalf("send still declares the legacy content field: %#v", properties)
 	}
-	for _, want := range []string{"silent", "silent_reason"} {
+	for _, want := range []string{"silent", "silent_reason", "continue"} {
 		if _, ok := properties[want]; !ok {
 			t.Fatalf("send must declare %s: %#v", want, properties)
 		}

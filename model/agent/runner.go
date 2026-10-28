@@ -258,6 +258,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
+	continueOnlySends := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
@@ -439,6 +440,18 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			DurationMS:   modelDuration.Milliseconds(),
 			Usage:        usage,
 		})
+		// 只调 send 却填了 continue：这句是动手前的「我去查一下」，模型以为说完还能接着
+		// 做。按收尾处理的话这一轮就停在这句上，承诺的事从没发生（10-27/28 线上「我查
+		// 一下今天的新闻」「我查一下数字人民币最近的官方消息」都是这样收的工）。照中途
+		// 发言发出去，再给模型一步；连续两次只说不做就不再续，按收尾处理。
+		if onlySendCalls(resp.ToolCalls) && sendContinues(resp.ToolCalls) && r.cfg.Interim != nil && continueOnlySends < maxContinueOnlySends {
+			continueOnlySends++
+			var sent map[int]string
+			sent, steps = r.sendInterim(ctx, resp.ToolCalls, sendCallIndices(resp.ToolCalls), steps)
+			nativeProtocol = true
+			messages = appendToolRepair(messages, resp, sent, lastText, "")
+			continue
+		}
 		action, ok := parseAction(lastText, r.cfg.FinalizeFields...)
 		nativeToolCall := len(resp.ToolCalls) > 0
 		var nativeCall llm.ToolCall
@@ -1973,6 +1986,19 @@ func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices 
 		done[index] = output
 	}
 	return done, steps
+}
+
+// maxContinueOnlySends 是一轮里「只调 send + continue」最多续几次。
+const maxContinueOnlySends = 2
+
+// sendContinues 报告这一步的 send 里有没有填 continue=true。
+func sendContinues(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if continues, _ := call.Arguments["continue"].(bool); continues {
+			return true
+		}
+	}
+	return false
 }
 
 // sendCallIndices 返回一步里 send 调用的下标。
