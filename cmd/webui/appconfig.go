@@ -50,7 +50,6 @@ type serverConfig struct {
 	Host           string   `yaml:"host"`
 	Port           string   `yaml:"port"`
 	TrustedProxies []string `yaml:"trusted_proxies"`
-	FrontendDist   string   `yaml:"frontend_dist"`
 }
 
 type storageConfig struct {

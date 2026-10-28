@@ -100,6 +100,7 @@ docker compose logs -f diana</code></pre>
 cd Diana
 go mod download
 cd frontend && npm ci && npm run build && cd ..
+sh scripts/embed-frontend.sh
 mkdir -p dist
 go build -trimpath -o dist/diana-webui ./cmd/webui
 ./dist/diana-webui</code></pre>

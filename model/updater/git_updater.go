@@ -98,8 +98,6 @@ type Options struct {
 	ApplyCommand      []string
 	RunningCommit     string
 	RunningExecutable string
-	// FrontendDir 是服务正在读的前端目录，apply 脚本把新构建的前端写到这里。
-	FrontendDir string
 }
 
 type GitUpdater struct {
@@ -107,7 +105,6 @@ type GitUpdater struct {
 	applyCommand      []string
 	runningCommit     string
 	runningExecutable string
-	frontendDir       string
 
 	operationMu     sync.Mutex
 	stateMu         sync.RWMutex
@@ -136,7 +133,6 @@ func NewGitUpdaterWithOptions(root string, options Options) (*GitUpdater, error)
 		applyCommand:      applyCommand,
 		runningCommit:     strings.TrimSpace(options.RunningCommit),
 		runningExecutable: strings.TrimSpace(options.RunningExecutable),
-		frontendDir:       strings.TrimSpace(options.FrontendDir),
 	}, nil
 }
 
@@ -565,7 +561,6 @@ func (u *GitUpdater) runApply(ctx context.Context, targetCommit string) (string,
 		"DIANA_UPDATE_TARGET_COMMIT="+targetCommit,
 		"DIANA_RUNNING_COMMIT="+u.runningCommit,
 		"DIANA_RUNNING_EXECUTABLE="+u.runningExecutable,
-		"DIANA_UPDATE_FRONTEND_DIR="+u.frontendDir,
 	)
 	var out bytes.Buffer
 	cmd.Stdout = &out

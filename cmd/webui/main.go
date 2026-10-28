@@ -413,8 +413,7 @@ func main() {
 	handler.SetModelListFactory(modelListFactory)
 	handler.SetLogStore(sqliteStore)
 	handler.SetOAuthManager(oauthManager)
-	frontend := selectFrontend(appCfg.path, appCfg.Server.FrontendDist)
-	systemUpdater, err := newSystemUpdater(appCfg.Update, frontend)
+	systemUpdater, err := newSystemUpdater(appCfg.Update)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -844,11 +843,11 @@ func main() {
 	// OneBot 路由必须在 SPA fallback 之前注册，否则接入端会拿到前端 HTML 而不是 WebSocket。
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
-	if frontend.note != "" {
-		log.Printf("webui frontend warning: %s", frontend.note)
+	frontendRoot, frontendEmbedded := frontendFileSystem()
+	if !frontendEmbedded {
+		log.Printf("webui frontend warning: this build has no embedded frontend; build it with `make build` (copies frontend/dist into cmd/webui/webdist)")
 	}
-	log.Printf("webui frontend: %s", frontend.source)
-	router.NoRoute(spaHandler(frontend.root))
+	router.NoRoute(spaHandler(frontendRoot))
 
 	log.Printf("webui listening on http://%s (监听地址；Docker 请使用宿主机地址和映射端口访问)", listener.Addr())
 	logStartupDone()
@@ -884,7 +883,7 @@ func main() {
 	}
 }
 
-func newSystemUpdater(cfg updateConfig, frontend frontendChoice) (*updater.GitUpdater, error) {
+func newSystemUpdater(cfg updateConfig) (*updater.GitUpdater, error) {
 	root := stringOr(cfg.Root, ".")
 	runningExecutable, _ := os.Executable()
 	runningCommit := strings.TrimSpace(buildVersion)
@@ -894,13 +893,6 @@ func newSystemUpdater(cfg updateConfig, frontend frontendChoice) (*updater.GitUp
 	options := updater.Options{
 		RunningCommit:     runningCommit,
 		RunningExecutable: runningExecutable,
-	}
-	// 源码更新要把新前端写到服务正在读的目录；用内嵌前端时交给脚本的默认目录。
-	// 脚本在更新根目录下跑，相对路径要先按服务的工作目录转成绝对路径。
-	if frontend.source != "embedded" {
-		if absolute, err := filepath.Abs(frontend.source); err == nil {
-			options.FrontendDir = absolute
-		}
 	}
 	applyScript := filepath.Join(root, "scripts", "apply-update.sh")
 	if runtime.GOOS != "windows" && boolOr(cfg.ApplyEnabled, true) {
@@ -997,33 +989,6 @@ func setupLogging(logPath string) (io.Writer, func(), func()) {
 		dlog.Init(nil)
 		_ = file.Close()
 	}, startupDone
-}
-
-// frontendDistDir 在没有显式配置、也没有内嵌前端时查找生产前端静态文件目录。
-func frontendDistDir() string {
-	// 同时兼容源码目录运行、打包后从二进制旁边运行、以及测试工作目录切换。
-	// 源码目录是 frontend/；发布包和已安装实例仍使用 frontend-next/dist，两种布局都要认。
-	candidates := []string{
-		"frontend/dist",
-		"../../frontend/dist",
-		"frontend-next/dist",
-		"../../frontend-next/dist",
-	}
-	if executable, err := os.Executable(); err == nil {
-		executableDir := filepath.Dir(executable)
-		candidates = append([]string{
-			filepath.Clean(filepath.Join(executableDir, "..", "Resources", "frontend-next", "dist")),
-		}, candidates...)
-	}
-	if configDir, err := os.UserConfigDir(); err == nil {
-		candidates = append(candidates, filepath.Join(configDir, "diana", "frontend-next", "dist"))
-	}
-	for _, candidate := range candidates {
-		if stat, err := os.Stat(candidate); err == nil && stat.IsDir() {
-			return candidate
-		}
-	}
-	return candidates[0]
 }
 
 // spaHandler 返回前端单页应用的兜底路由处理器。

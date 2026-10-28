@@ -87,15 +87,15 @@ build: build-web build-go
 
 build-go:
 	GO="$(GO)" sh scripts/sync-models-dev.sh
+	sh scripts/embed-frontend.sh
 	$(NODE) -e "require('fs').mkdirSync('dist', { recursive: true })"
 	$(GO) build -ldflags "$(GO_LDFLAGS)" -o $(DIST_BIN) ./cmd/webui
 
-build-local-mac:
+build-local-mac: build-web
 	GO="$(GO)" ./scripts/build-local-mac.sh "$(CURDIR)/dist/diana-webui"
 
 install-local-mac-app: build-web
 	GO="$(GO)" ./scripts/build-local-mac.sh "$(HOME)/Applications/Diana.app"
-	$(NODE) -e "const fs=require('fs'); const src='$(CURDIR)/frontend/dist'; const dst='$(HOME)/Library/Application Support/diana/frontend-next/dist'; fs.rmSync(dst,{recursive:true,force:true}); fs.mkdirSync(require('path').dirname(dst),{recursive:true}); fs.cpSync(src,dst,{recursive:true})"
 
 start-local-mac:
 	./scripts/start-local-mac.sh
@@ -106,6 +106,7 @@ build-web:
 build-web-next: build-web
 
 run: build-web
+	sh scripts/embed-frontend.sh
 	$(GO) run ./cmd/webui
 
 run-next: run
@@ -114,7 +115,7 @@ preview:
 	cd frontend && $(NPM) run preview -- --host $(FRONTEND_HOST)
 
 clean:
-	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend/dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true})"
+	$(NODE) -e "const fs=require('fs'); for (const p of ['dist','frontend/dist','frontend-next/dist']) fs.rmSync(p,{recursive:true,force:true}); for (const f of fs.readdirSync('cmd/webui/webdist')) if (f !== 'README.md') fs.rmSync('cmd/webui/webdist/'+f,{recursive:true,force:true})"
 
 docker-build:
 	$(DOCKER) build -t diana:local .

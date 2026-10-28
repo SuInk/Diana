@@ -30,7 +30,7 @@ make frontend  # 终端 2：Vite 前端
 ## 生产构建与切换
 
 ```sh
-cd frontend && npm run build && cd ..
+make build
 ./dist/diana-webui
 ```
 
@@ -40,7 +40,7 @@ cd frontend && npm run build && cd ..
 make run-next
 ```
 
-没有内嵌前端的源码构建会自动使用 `frontend/dist`。要换目录就在 `config.yaml` 里设 `server.frontend_dist`，相对路径按配置文件所在目录解析，设了就优先于内嵌前端。
+前端只以内嵌方式提供：`make build` 先构建 `frontend/dist`，再用 `scripts/embed-frontend.sh` 复制进 `cmd/webui/webdist`，由 `go:embed` 编进 `diana-webui`。直接 `go build` 而没复制前端时，程序打不开页面，启动日志和 `diana doctor` 会提示。
 
 ## 依赖的新后端接口
 

@@ -243,7 +243,7 @@ func TestGitUpdaterRejectsConcurrentUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
+func TestApplyUpdateScriptEmbedsFrontendAndRemovesBackups(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash is unavailable")
 	}
@@ -256,10 +256,10 @@ func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
 	fixtureRoot := t.TempDir()
 	sourceRoot := filepath.Join(fixtureRoot, "source")
 	frontendBin := filepath.Join(sourceRoot, "frontend", "node_modules", ".bin")
+	webdist := filepath.Join(sourceRoot, "cmd", "webui", "webdist")
 	binDir := filepath.Join(fixtureRoot, "bin")
 	executable := filepath.Join(fixtureRoot, "application", "diana-webui")
-	frontend := filepath.Join(fixtureRoot, "web", "dist")
-	for _, path := range []string{sourceRoot, frontendBin, binDir, filepath.Dir(executable), frontend} {
+	for _, path := range []string{sourceRoot, frontendBin, webdist, binDir, filepath.Dir(executable)} {
 		if err := os.MkdirAll(path, 0o700); err != nil {
 			t.Fatal(err)
 		}
@@ -271,8 +271,10 @@ func TestApplyUpdateScriptBuildsFrontendNextAndRemovesBackups(t *testing.T) {
 	if err := os.WriteFile(executable, []byte("old-binary"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("old-frontend"), 0o600); err != nil {
-		t.Fatal(err)
+	for name, content := range map[string]string{"README.md": "readme", "stale.js": "old-frontend"} {
+		if err := os.WriteFile(filepath.Join(webdist, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	writeRestoredExecutable(t, filepath.Join(binDir, "npm"), "#!/bin/sh\nexit 0\n")
 	writeRestoredExecutable(t, filepath.Join(binDir, "uname"), "#!/bin/sh\nprintf 'Linux\\n'\n")
@@ -286,13 +288,14 @@ done
 mkdir -p "$out"
 printf 'new-frontend' > "$out/index.html"
 `)
+	// 假 go 把编进去的前端写进产物，用来确认构建时 webdist 里已经是新前端。
 	writeRestoredExecutable(t, filepath.Join(binDir, "go"), `#!/bin/sh
 out=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "-o" ]; then shift; out="$1"; fi
   shift
 done
-printf 'new-binary' > "$out"
+printf 'new-binary:%s' "$(cat cmd/webui/webdist/index.html)" > "$out"
 chmod 700 "$out"
 `)
 
@@ -302,42 +305,38 @@ chmod 700 "$out"
 		"DIANA_UPDATE_ROOT="+sourceRoot,
 		"DIANA_UPDATE_TARGET_COMMIT=0123456789abcdef",
 		"DIANA_RUNNING_EXECUTABLE="+executable,
-		"DIANA_UPDATE_FRONTEND_DIR="+frontend,
 		"GO="+filepath.Join(binDir, "go"),
 		"NPM="+filepath.Join(binDir, "npm"),
 	)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("apply-update.sh: %v\n%s", err, output)
 	}
-	assertRestoredFileContent(t, executable, "new-binary")
-	assertRestoredFileContent(t, filepath.Join(frontend, "index.html"), "new-frontend")
-	for _, backup := range []string{executable + ".backup", frontend + ".backup"} {
-		if _, err := os.Stat(backup); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("successful source update left backup %s: %v", backup, err)
-		}
+	assertRestoredFileContent(t, executable, "new-binary:new-frontend")
+	assertRestoredFileContent(t, filepath.Join(webdist, "README.md"), "readme")
+	if _, err := os.Stat(filepath.Join(webdist, "stale.js")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("embed left a stale frontend file: %v", err)
+	}
+	if _, err := os.Stat(executable + ".backup"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful source update left a backup: %v", err)
 	}
 
-	// Force the next attempt to fail during the frontend switch, after the
-	// executable has already been replaced. Backups must still support rollback.
+	// Force the next attempt to fail while swapping in the new executable.
+	// The backup must restore the previous binary.
 	if err := os.WriteFile(executable, []byte("previous-binary"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(frontend, "index.html"), []byte("previous-frontend"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeRestoredExecutable(t, filepath.Join(binDir, "mv"), `#!/bin/sh
 case "$1" in
-  */.diana-frontend.new.*) exit 99 ;;
+  */.diana-webui.update.*) exit 99 ;;
 esac
 exec /bin/mv "$@"
 `)
 	failed := exec.Command("bash", script)
 	failed.Env = cmd.Env
 	if output, err := failed.CombinedOutput(); err == nil {
-		t.Fatalf("expected frontend replacement failure: %s", output)
+		t.Fatalf("expected executable replacement failure: %s", output)
 	}
 	assertRestoredFileContent(t, executable, "previous-binary")
-	assertRestoredFileContent(t, filepath.Join(frontend, "index.html"), "previous-frontend")
 }
 
 func TestGitUpdaterRestoredApplyHelper(t *testing.T) {

@@ -4,11 +4,11 @@
 
 set -euo pipefail
 
-ROOT="${DIANA_UPDATE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${DIANA_UPDATE_ROOT:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET_COMMIT="${DIANA_UPDATE_TARGET_COMMIT:-$(git -C "$ROOT" rev-parse HEAD)}"
 BUILD_VERSION="${DIANA_BUILD_VERSION:-}"
 RUNNING_EXECUTABLE="${DIANA_RUNNING_EXECUTABLE:-}"
-FRONTEND_TARGET="${DIANA_UPDATE_FRONTEND_DIR:-$ROOT/frontend/dist}"
 GO_BIN="${GO:-go}"
 NPM_BIN="${NPM:-npm}"
 
@@ -30,12 +30,6 @@ if [[ "$BUILD_VERSION" != "dev" && ! "$BUILD_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]
 	echo "DIANA_BUILD_VERSION must be dev or a semantic version such as v0.8.7: $BUILD_VERSION" >&2
 	exit 1
 fi
-case "$FRONTEND_TARGET" in
-	""|"/"|"$HOME")
-		echo "Unsafe frontend target: $FRONTEND_TARGET" >&2
-		exit 1
-		;;
-esac
 
 TARGET_APP=""
 TARGET_EXECUTABLE="${DIANA_APP_EXECUTABLE:-$RUNNING_EXECUTABLE}"
@@ -47,25 +41,22 @@ if [[ -z "$TARGET_EXECUTABLE" || "$TARGET_EXECUTABLE" == *"/go-build"* ]]; then
 	TARGET_APP=""
 fi
 
-FRONTEND_PARENT="$(dirname "$FRONTEND_TARGET")"
-mkdir -p "$FRONTEND_PARENT"
-STAGED_FRONTEND="$(mktemp -d "$FRONTEND_PARENT/.diana-frontend.new.XXXXXX")"
 STAGED_APP=""
 STAGED_EXECUTABLE=""
 
 cleanup() {
-	[[ -z "$STAGED_FRONTEND" || ! -e "$STAGED_FRONTEND" ]] || rm -rf "$STAGED_FRONTEND"
 	[[ -z "$STAGED_APP" || ! -e "$STAGED_APP" ]] || rm -rf "$STAGED_APP"
 	[[ -z "$STAGED_EXECUTABLE" || ! -e "$STAGED_EXECUTABLE" ]] || rm -f "$STAGED_EXECUTABLE"
 }
 trap cleanup EXIT
 
+# 前端编进程序：先构建到 frontend/dist，下面的构建步骤把它复制进 cmd/webui/webdist。
 echo "Installing frontend-next dependencies..."
 (
 	cd "$ROOT/frontend"
 	"$NPM_BIN" ci
 	./node_modules/.bin/vue-tsc -b
-	./node_modules/.bin/vite build --outDir "$STAGED_FRONTEND" --emptyOutDir
+	./node_modules/.bin/vite build --outDir "$ROOT/frontend/dist" --emptyOutDir
 )
 
 echo "Building Diana at $TARGET_COMMIT (version $BUILD_VERSION)..."
@@ -74,7 +65,7 @@ if [[ -n "$TARGET_APP" ]]; then
 	APP_NAME="$(basename "$TARGET_APP")"
 	mkdir -p "$APP_PARENT"
 	STAGED_APP="$APP_PARENT/.${APP_NAME%.app}.update.$$.app"
-	DIANA_BUILD_VERSION="$BUILD_VERSION" DIANA_BUNDLED_FRONTEND_SOURCE="$STAGED_FRONTEND" GO="$GO_BIN" \
+	DIANA_BUILD_VERSION="$BUILD_VERSION" GO="$GO_BIN" \
 		"$ROOT/scripts/build-local-mac.sh" "$STAGED_APP"
 else
 	EXECUTABLE_PARENT="$(dirname "$TARGET_EXECUTABLE")"
@@ -86,6 +77,7 @@ else
 	else
 		(
 			cd "$ROOT"
+			sh "$SCRIPT_DIR/embed-frontend.sh" "$ROOT"
 			"$GO_BIN" build -trimpath -ldflags "-X main.buildVersion=$BUILD_VERSION" -o "$STAGED_EXECUTABLE" ./cmd/webui
 		)
 	fi
@@ -93,19 +85,13 @@ fi
 
 APP_BACKUP=""
 EXECUTABLE_BACKUP=""
-FRONTEND_BACKUP="$FRONTEND_TARGET.backup"
 app_swapped=false
 executable_swapped=false
-frontend_swapped=false
 
 rollback() {
 	status=$?
 	trap - ERR
 	set +e
-	if [[ "$frontend_swapped" == "true" ]]; then
-		rm -rf "$FRONTEND_TARGET"
-		[[ ! -e "$FRONTEND_BACKUP" ]] || mv "$FRONTEND_BACKUP" "$FRONTEND_TARGET"
-	fi
 	if [[ "$app_swapped" == "true" ]]; then
 		rm -rf "$TARGET_APP"
 		[[ -z "$APP_BACKUP" || ! -e "$APP_BACKUP" ]] || mv "$APP_BACKUP" "$TARGET_APP"
@@ -138,18 +124,10 @@ else
 	STAGED_EXECUTABLE=""
 fi
 
-rm -rf "$FRONTEND_BACKUP"
-if [[ -e "$FRONTEND_TARGET" ]]; then
-	mv "$FRONTEND_TARGET" "$FRONTEND_BACKUP"
-fi
-frontend_swapped=true
-mv "$STAGED_FRONTEND" "$FRONTEND_TARGET"
-STAGED_FRONTEND=""
-
 trap - ERR
 # File replacement has completed. Cleanup errors must not trigger a rollback
 # after part of the backup set has already been removed.
-for backup in "$APP_BACKUP" "$EXECUTABLE_BACKUP" "$FRONTEND_BACKUP"; do
+for backup in "$APP_BACKUP" "$EXECUTABLE_BACKUP"; do
 	[[ -n "$backup" ]] || continue
 	if ! rm -rf -- "$backup"; then
 		echo "Warning: update applied, but backup cleanup failed: $backup" >&2

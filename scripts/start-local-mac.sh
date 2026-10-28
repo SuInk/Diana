@@ -91,7 +91,6 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
 server:
   host: '127.0.0.1'
   port: '18080'
-  frontend_dist: '$ROOT/frontend/dist'
 storage:
   db_path: '$ROOT/data/diana.db'
   log_path: '$ROOT/logs/diana.log'
