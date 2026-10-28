@@ -531,8 +531,25 @@ type browserSandboxDirs struct {
 	crash   string
 }
 
+// chromeSingletonSocketSuffix 是 Chrome 在 TMPDIR 下建单实例套接字的路径尾巴。
+// Unix 套接字路径上限 108 字节（macOS 104），超了 Chrome 报「Socket path too long」直接 abort。
+const chromeSingletonSocketSuffix = "/org.chromium.Chromium.XXXXXX/SingletonSocket"
+
+// shortBrowserTempPrefix 是临时目录太深时换用的前缀。
+const shortBrowserTempPrefix = "dhb-"
+
+// browserSandboxPrefix 在系统临时目录太深时把前缀换短：根目录同时是 Chrome 的 TMPDIR，
+// 安卓 Termux 的临时目录是 /data/data/com.termux/files/usr/tmp，拼上长前缀就超出套接字
+// 路径上限，浏览器起不来。MkdirTemp 在前缀后面补 10 位随机数。
+func browserSandboxPrefix(tempDir, prefix string) string {
+	if len(filepath.Join(tempDir, prefix))+10+len(chromeSingletonSocketSuffix) > 103 {
+		return shortBrowserTempPrefix
+	}
+	return prefix
+}
+
 func newBrowserSandboxDirs(prefix string) (browserSandboxDirs, error) {
-	root, err := os.MkdirTemp("", prefix)
+	root, err := os.MkdirTemp("", browserSandboxPrefix(os.TempDir(), prefix))
 	if err != nil {
 		return browserSandboxDirs{}, err
 	}

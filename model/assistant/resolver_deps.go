@@ -346,9 +346,13 @@ func resolverDependencyInstallPlan(name, goos string, lookPath func(string) (str
 	// Termux 也带 apt-get，但走它会去装主仓库里没有的 chromium 和 fonts-noto-cjk。
 	termuxPkg := managerSpec{command: "pkg", label: "Termux pkg", build: func(path, dependency string) []resolverInstallCommand {
 		if dependency == browserDependencyName {
-			// Chromium 不在 Termux 主仓库，在 tur-repo 里，先把这个源装上。
+			// Chromium 不在 Termux 主仓库，在 tur-repo 里；它依赖的 gtk3 等又在 x11-repo 里，
+			// 只装 tur-repo 会报 gtk3 not installable。两个源都先装上。tur-repo 的 Chromium
+			// 跟着最新 libc++ 编译，没升级过的 Termux 装完一启动就报 cannot locate symbol，
+			// 所以先整体升级；后台没有终端可答配置文件冲突，一律保留用户改过的版本。
 			return []resolverInstallCommand{
-				{path: path, args: []string{"install", "-y", "tur-repo"}},
+				{path: path, args: []string{"upgrade", "-y", "-o", "Dpkg::Options::=--force-confold"}},
+				{path: path, args: []string{"install", "-y", "x11-repo", "tur-repo"}},
 				{path: path, args: []string{"install", "-y", "chromium"}},
 			}
 		}

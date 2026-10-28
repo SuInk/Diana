@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/model/agent"
 )
 
@@ -75,7 +76,7 @@ func browserDependenciesFromStatus(status agent.HeadlessBrowserStatus, goos stri
 	if plan, err := resolverDependencyInstallPlan(browserDependencyName, goos, lookPath); err == nil {
 		dep.Installable = true
 		dep.Installer = plan.installer
-	} else if goos == "linux" && !runningOnMusl() {
+	} else if goos == "linux" && !runningOnMusl() && !termux.Detected() {
 		// 没有系统包管理器的 Linux（极小容器）也可以一键装：install 会退到
 		// Chrome for Testing 无 root 下载。musl（Alpine）上 CfT 二进制跑不起来，
 		// 保持手动安装提示。
@@ -108,8 +109,8 @@ func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallRes
 
 	// 系统包管理器这条路没走通。Linux 上还有一条不依赖 root 的路：把
 	// Chrome for Testing 下载进 data 目录，浏览器查找逻辑认得那里。
-	// 只限 glibc：CfT 二进制在 musl（Alpine）上无法执行，见 runningOnMusl。
-	if runtime.GOOS == "linux" && !runningOnMusl() {
+	// 只限 glibc：CfT 二进制在 musl（Alpine）和安卓 Termux（bionic）上都无法执行。
+	if runtime.GOOS == "linux" && !runningOnMusl() && !termux.Detected() {
 		path, err := downloadChromeForTesting(ctx)
 		if err == nil {
 			status := agent.ProbeHeadlessBrowserRendering(ctx, path)

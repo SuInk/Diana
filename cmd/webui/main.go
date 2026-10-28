@@ -30,6 +30,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/SuInk/diana/internal/dlog"
+	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/browserbox"
@@ -223,6 +224,9 @@ func newBotChannelSetFactory(oneBotServer *assistant.OneBotReverseServer, forwar
 }
 
 func main() {
+	// 安卓 Termux 里没有 /etc/resolv.conf，纯 Go 解析器会去问 [::1]:53，全部域名解析失败。
+	// 必须赶在任何联网之前改好，子命令也一样要联网。
+	termux.ConfigureDNS()
 	// 编码任务的审批 hook：编码 CLI 以这个子命令回调 Diana 自己，问一句「这一步
 	// 能不能做」。它必须在任何配置加载之前处理掉——这是个短命的一问一答进程，
 	// 不该去连数据库，也不该往日志里写启动信息。

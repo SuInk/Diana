@@ -214,13 +214,16 @@ func TestResolverDependencyInstallPlanUsesTermuxPkg(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s：%v", goos, err)
 		}
-		if plan.installer != "Termux pkg" || len(plan.commands) != 2 {
+		if plan.installer != "Termux pkg" || len(plan.commands) != 3 {
 			t.Fatalf("%s：安装计划不对：%+v", goos, plan)
 		}
-		if got := plan.commands[0].args; !slices.Equal(got, []string{"install", "-y", "tur-repo"}) {
-			t.Fatalf("%s：没先装 tur-repo：%v", goos, got)
+		if got := plan.commands[0].args; len(got) == 0 || got[0] != "upgrade" {
+			t.Fatalf("%s：没先升级，旧 libc++ 上 Chromium 起不来：%v", goos, got)
 		}
-		if got := plan.commands[1]; got.path != pkgPath || !slices.Equal(got.args, []string{"install", "-y", "chromium"}) {
+		if got := plan.commands[1].args; !slices.Equal(got, []string{"install", "-y", "x11-repo", "tur-repo"}) {
+			t.Fatalf("%s：没先装 x11-repo 和 tur-repo：%v", goos, got)
+		}
+		if got := plan.commands[2]; got.path != pkgPath || !slices.Equal(got.args, []string{"install", "-y", "chromium"}) {
 			t.Fatalf("%s：装 chromium 的命令不对：%+v", goos, got)
 		}
 	}

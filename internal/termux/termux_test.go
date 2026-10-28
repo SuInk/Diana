@@ -43,3 +43,18 @@ func TestPrefixOutsideTermux(t *testing.T) {
 		t.Fatal("普通 Linux 被当成了 Termux")
 	}
 }
+
+func TestReadNameservers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "resolv.conf")
+	content := "# Termux\nnameserver 8.8.8.8\nnameserver  2001:4860:4860::8888\nnameserver not-an-ip\nsearch lan\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := readNameservers(path)
+	if len(got) != 2 || got[0] != "8.8.8.8" || got[1] != "2001:4860:4860::8888" {
+		t.Fatalf("nameserver 解析不对：%v", got)
+	}
+	if readNameservers(filepath.Join(t.TempDir(), "missing")) != nil {
+		t.Fatal("文件不存在时应该返回空")
+	}
+}

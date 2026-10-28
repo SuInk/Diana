@@ -26,3 +26,13 @@ func TestSandboxedChromeArgsKeepSandboxElsewhere(t *testing.T) {
 		t.Fatal("不在 Termux 时把沙盒关掉了")
 	}
 }
+
+func TestBrowserSandboxPrefixShortensDeepTempDir(t *testing.T) {
+	// Termux 的临时目录拼上长前缀，Chrome 单实例套接字会超出 108 字节上限。
+	if got := browserSandboxPrefix("/data/data/com.termux/files/usr/tmp", "diana-headless-browser-"); got != shortBrowserTempPrefix {
+		t.Fatalf("Termux 临时目录下没换短前缀：%q", got)
+	}
+	if got := browserSandboxPrefix("/tmp", "diana-headless-browser-"); got != "diana-headless-browser-" {
+		t.Fatalf("普通临时目录不该改前缀：%q", got)
+	}
+}

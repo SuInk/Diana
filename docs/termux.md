@@ -1,14 +1,16 @@
 # 在 Termux 里用浏览器
 
 在安卓手机的 Termux 里跑 Diana 时，网页读取（`browser_render`）、HTML 出图和内置浏览器都要一个
-Chromium。Termux 主仓库没有它，要从 tur-repo 装：
+Chromium。Termux 主仓库没有它，要从 tur-repo 装；它依赖的 gtk3 在 x11-repo 里，两个源都要加：
 
 ```sh
-pkg install -y tur-repo
+pkg install -y x11-repo tur-repo
 pkg install -y chromium
 ```
 
-WebUI「依赖」页的一键安装在 Termux 里执行的就是这两条。装完不用配路径：Diana 认出 Termux 后先找
+WebUI「依赖」页的一键安装在 Termux 里执行的就是这两条。Termux 装了一段时间没升级的话，先跑一次
+`pkg upgrade`：tur-repo 的 Chromium 跟着最新的 libc++ 编译，旧 libc++ 上启动会报
+`CANNOT LINK EXECUTABLE ... cannot locate symbol`。装完不用配路径：Diana 认出 Termux 后先找
 `$PREFIX/bin/chromium-browser` 和 `$PREFIX/bin/chromium`，再按 `PATH` 找；装在别处时用
 `DIANA_HEADLESS_BROWSER_EXECUTABLE` 指过去。
 
@@ -21,6 +23,11 @@ WebUI「依赖」页的一键安装在 Termux 里执行的就是这两条。装�
   图形会话时，网页读取和内置浏览器都改成无头运行。无头更容易被搜索引擎和部分站点认出来、弹验证码。
   内置浏览器的实时画面走 CDP screencast，无头一样能在 WebUI 里看、能接管。
 - **有图形会话就有头。** 用 termux-x11 之类开了桌面、并设好 `DISPLAY` 再启动 Diana，就照常开有头。
+
+- **DNS 用 Termux 的配置。** 发布包是纯 Go 程序，解析器只读 `/etc/resolv.conf`，安卓上没有这个文件，
+  所有域名都会解析失败。Diana 启动时认出 Termux 就改读 `$PREFIX/etc/resolv.conf`。
+- **临时目录短前缀。** Termux 的临时目录很深，Chrome 单实例套接字的路径会超出 108 字节上限，
+  报 `Socket path too long` 后退出。一次性浏览器的临时目录在路径过长时改用短前缀。
 
 ## 怎么认出 Termux
 
