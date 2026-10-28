@@ -206,7 +206,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	properties := map[string]any{
 		"operation": toolEnumParam("generate 凭文字出新图；edit 以图或头像为底修改。省略时有原图来源按 edit", operations...),
 		"prompt":    toolStringParam("给图片模型的完整自包含提示词，不用对话口吻和上下文指代"),
-		"caption":   toolStringParam("随图发送的一句话，用你平时聊天的口吻接对方的请求（如「给你画好啦，鹈鹕骑得还挺稳」），别写「图片生成完成」这类系统提示；不想说话可留空，只发图"),
+		"caption":   toolStringParam("随图的一句话，用平时聊天口吻，别写「图片生成完成」这类系统提示；可留空只发图"),
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
 	// 头像地址，并核对这个人在当前会话里确实存在。
