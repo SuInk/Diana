@@ -55,7 +55,8 @@
             </div>
           </div>
           <article v-for="message in messages" :key="message.id" class="chat-message" :class="[message.role, { failed: message.error }]" :aria-label="message.role === 'user' ? '你的消息' : '管理助手回复'">
-            <div class="chat-message-content">{{ message.content }}</div>
+            <MarkdownText v-if="message.role === 'assistant' && !message.error" class="chat-message-content chat-markdown" :source="message.content" />
+            <div v-else class="chat-message-content">{{ message.content }}</div>
             <details v-if="message.steps?.length" class="chat-steps"><summary>执行记录 · {{ message.steps.length }} 次工具调用</summary><div v-for="(step, i) in message.steps" :key="i" class="chat-step"><span class="mono">{{ step.tool }}</span><div class="cluster"><span class="badge" :class="step.failed ? 'err' : 'ok'">{{ step.failed ? '未完成' : '已完成' }}</span><span class="muted">{{ step.duration_ms || 0 }} ms</span></div></div></details>
             <div class="chat-message-meta">
               <button v-if="message.role === 'assistant'" class="chat-icon chat-copy" type="button" :aria-label="copiedID === message.id ? '回复已复制' : '复制回复'" :title="copiedID === message.id ? '已复制' : '复制回复'" @click="copyReply(message)"><Check v-if="copiedID === message.id" :size="14" aria-hidden="true" /><Copy v-else :size="14" aria-hidden="true" /></button>
@@ -122,6 +123,7 @@ import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, w
 import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
 import { botScope } from '../lib/bot-scope';
 import AppSelect from '../components/AppSelect.vue';
+import MarkdownText from '../components/MarkdownText.vue';
 import Modal from '../components/Modal.vue';
 import SkeletonBlock from '../components/SkeletonBlock.vue';
 import { getBotProfileConfig, getConfig, type BotProfileConfig, type LLMConfig } from '../api';
@@ -168,7 +170,9 @@ const historyGroup = ref(''), historySearch = ref(''), historyDays = ref('7');
 const historyDayOptions = [{ value: '1', label: '最近 24 小时' }, { value: '7', label: '最近 7 天' }, { value: '30', label: '最近 30 天' }];
 const progress = ref<AdminChatProgress | null>(null), transcript = ref<HTMLElement | null>(null), composer = ref<HTMLTextAreaElement | null>(null);
 const busy = computed(() => sending.value || remoteRunning.value);
-const progressLabel = computed(() => progress.value?.phase === 'tool_started' ? `正在执行 ${progress.value.tool}…` : '管理助手正在处理…');
+// 常用工具显示成在做什么，其余（扩展、MCP 等）照旧显示工具名。
+const toolLabels: Record<string, string> = { admin_diagnostics: '正在查询运行状态和日志…', admin_group_history: '正在搜索群聊记录…' };
+const progressLabel = computed(() => progress.value?.phase === 'tool_started' ? toolLabels[progress.value.tool || ''] || `正在执行 ${progress.value.tool}…` : '管理助手正在处理…');
 const lastUserMessage = computed(() => [...messages.value].reverse().find(m => m.role === 'user')?.content || '');
 const suggestions = [
     { label: '搜索群聊记录', prompt: '搜索最近 7 天群聊中提到「MCP」的消息，列出群号和时间' },
@@ -622,6 +626,7 @@ onBeforeUnmount(deactivate);
 .chat-message.user { display: flex; flex-direction: column; align-items: flex-end; }
 .chat-message.user .chat-message-content { max-width: min(85%, 580px); padding: 10px 15px; border-radius: 16px; background: var(--surface-2); }
 .chat-message.failed .chat-message-content { color: var(--danger); }
+.chat-markdown { white-space: normal; }
 .chat-message-meta { display: flex; align-items: center; gap: 7px; margin-top: 4px; min-height: 26px; font-size: 10px; color: var(--muted); }
 .chat-message-meta time { opacity: 0; transition: opacity .15s; }
 .chat-message:hover time, .chat-message:focus-within time { opacity: 1; }

@@ -26,7 +26,7 @@
           <BotAvatar :name="contact.name" :src="contact.avatar" :size="46" />
           <span class="qq-contact-text">
             <span class="qq-contact-top"><strong>{{ contact.name }}</strong><time v-if="lastOf(contact.id)">{{ shortTime(lastOf(contact.id)!.at) }}</time></span>
-            <small>{{ inFlight[contact.id] ? "正在输入…" : lastOf(contact.id)?.text || contact.platform }}</small>
+            <small>{{ inFlight[contact.id] ? "正在输入…" : previewOf(contact.id) || contact.platform }}</small>
           </span>
         </button>
         <p v-if="search && contacts.length && !filteredContacts.length" class="qq-empty">没有匹配的机器人</p>
@@ -55,7 +55,10 @@
             <article class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : `${current.name} 说`">
               <BotAvatar v-if="message.role === 'assistant'" :name="current.name" :src="current.avatar" :size="38" />
               <div class="qq-bubble-wrap">
-                <div v-if="message.text" class="qq-bubble">{{ message.text }}</div>
+                <template v-if="message.text">
+                  <MarkdownText v-if="message.role === 'assistant'" class="qq-bubble qq-markdown" :source="message.text" />
+                  <div v-else class="qq-bubble">{{ message.text }}</div>
+                </template>
                 <a v-for="image in message.images ?? []" :key="image" class="qq-image" :href="image" target="_blank" rel="noopener noreferrer"><img :src="image" alt="图片" loading="lazy" /></a>
               </div>
               <template v-if="message.role === 'user'">
@@ -89,12 +92,14 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { ChevronLeft, CircleAlert, LoaderCircle, MessagesSquare, Phone, Search } from "@lucide/vue";
 import BotAvatar from "../components/BotAvatar.vue";
+import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import VoiceCallScreen from "../components/VoiceCallScreen.vue";
 import { getBotProfileConfig, type BotProfileConfig } from "../api";
 import { botScope } from "../lib/bot-scope";
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
+import { markdownToPlain } from "../lib/markdown";
 import { chatTimeLabel, getWebChat, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage } from "../lib/web-chat";
 
 interface Contact {
@@ -152,6 +157,13 @@ function readSelected(): string {
 
 function lastOf(id: string): WebChatMessage | undefined {
   return lastMessages.value[id];
+}
+
+// 列表里一行预览，机器人回复里的 Markdown 标记去掉再显示。
+function previewOf(id: string): string {
+  const last = lastOf(id);
+  if (!last?.text) return "";
+  return last.role === "assistant" ? markdownToPlain(last.text) : last.text;
 }
 
 function shortTime(at: number): string {
@@ -617,6 +629,17 @@ onBeforeUnmount(() => {
   line-height: 1.6;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.qq-markdown {
+  white-space: normal;
+}
+
+/* 气泡本身是 surface-2，代码块和表头换成更深一档，才分得出层次。 */
+.qq-markdown :deep(code),
+.qq-markdown :deep(.md-code),
+.qq-markdown :deep(th) {
+  background: var(--surface);
 }
 
 .qq-msg.user .qq-bubble {

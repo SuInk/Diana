@@ -1173,7 +1173,7 @@ function demoWebChat(profile: string): { id: string; role: string; text: string;
       { id: "demo-2", role: "assistant", text: "辛苦啦，先喝口水歇一会儿", at: base + 20 },
       { id: "demo-3", role: "assistant", text: "晚上想吃点什么？我帮你想想", at: base + 25 },
       { id: "demo-4", role: "user", text: "番茄牛腩吧", at: base + 25 * 3600 },
-      { id: "demo-5", role: "assistant", text: "好耶，炖一锅能吃两顿", at: base + 25 * 3600 + 30 }
+      { id: "demo-5", role: "assistant", text: "好耶，**番茄牛腩**炖一锅能吃两顿", at: base + 25 * 3600 + 30 }
     ];
     demoWebChats.set(profile, history);
   }

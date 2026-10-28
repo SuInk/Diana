@@ -3,6 +3,28 @@ import type {AdminChatFrame, AdminChatMessage, AdminChatSession, AdminChatSummar
 const sessions = new Map<string, AdminChatSession>();
 // 演示回复分几秒流出来，好在界面上看到排队、打断和停止。
 const stopRequested = new Set<string>();
+// 回复按 Markdown 显示，演示内容把常见写法都带上。
+const demoReply = [
+  '**演示模式**：这段对话只用于预览界面，不会执行真实安装，也不会访问你的服务器。',
+  '',
+  '### 实际部署能做什么',
+  '1. **搜索群聊记录**：按群名、群号、关键词和日期筛选，例如「产品讨论（演示）」群最近 7 天。',
+  '2. **排查问题**：查询配置、错误日志和消息处理事件。',
+  '   - 不回复时先看 `decision_reason`',
+  '   - 连接错误看 OneBot 状态',
+  '3. **管理扩展**：通过确认码完成 Skill/MCP 变更。',
+  '',
+  '| 群 | 消息数 |',
+  '|---|--:|',
+  '| 产品讨论（演示） | 186 |',
+  '| 日常交流（演示） | 74 |',
+  '',
+  '```bash',
+  'docker logs diana --since 1h | grep ERROR',
+  '```',
+  '',
+  '> 群聊内容只供分析，不会当作操作指令。详见 https://github.com/SuInk/diana。',
+].join('\n');
 function newSession(profile: string): AdminChatSession {
   const now = new Date().toISOString();
   const session: AdminChatSession = {session_id:crypto.randomUUID(),profile_id:profile,title:'新的管理会话',created_at:now,updated_at:now,messages:[],running:false,command_enabled:true,file_write_enabled:false,sandbox:'auto',network_enabled:false};
@@ -35,7 +57,7 @@ export function adminChatDemoResponse(url: URL, method: string, body: Record<str
   if (method === 'DELETE') {session.messages=[];session.title='新的管理会话';session.updated_at=new Date().toISOString();return json({ok:true});}
   if (url.pathname.endsWith('/stop')) {if (session.running) stopRequested.add(session.session_id);return json({ok:true});}
   const user: AdminChatMessage = {id:crypto.randomUUID(),role:'user',content:String(body.message || ''),created_at:new Date().toISOString()};
-  const reply: AdminChatMessage = {id:crypto.randomUUID(),role:'assistant',created_at:new Date().toISOString(),content:'演示模式：这段对话用于预览界面，不会执行真实安装或访问你的服务器。\n\n实际部署可以搜索所选机器人已保存的群聊记录，按群号、关键词和日期筛选；也会查询配置与错误日志，并通过确认码完成 Skill/MCP 变更。',steps:[{phase:'tool_completed',tool:'admin_diagnostics',duration_ms:8}]};
+  const reply: AdminChatMessage = {id:crypto.randomUUID(),role:'assistant',created_at:new Date().toISOString(),content:demoReply,steps:[{phase:'tool_completed',tool:'admin_diagnostics',duration_ms:8}]};
   if (!session.messages?.length) session.title=user.content.slice(0,36);
   session.messages = [...(session.messages || []), user].slice(-40);
   session.running = true;
