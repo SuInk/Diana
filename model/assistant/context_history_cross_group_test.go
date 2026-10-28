@@ -6,19 +6,30 @@ package assistant
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
+// crossGroupSearchCounter 记检索次数。预取在后台协程里检索，计数要加锁读写。
 type crossGroupSearchCounter struct {
 	*memoryMessageHistoryStore
+	mu       sync.Mutex
 	searches int
 }
 
 func (s *crossGroupSearchCounter) SearchMessageEvents(context.Context, MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.mu.Lock()
 	s.searches++
+	s.mu.Unlock()
 	return nil, 0, nil
+}
+
+func (s *crossGroupSearchCounter) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.searches
 }
 
 func crossGroupProbeEvent() MessageEvent {
@@ -45,8 +56,8 @@ func TestContextHistorySkipsCrossGroupSearchOnCachedHistory(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		runtime.contextHistory(event)
 	}
-	if store.searches != 0 {
-		t.Fatalf("缓存历史上不该发起跨群检索，实际 %d 次", store.searches)
+	if store.count() != 0 {
+		t.Fatalf("缓存历史上不该发起跨群检索，实际 %d 次", store.count())
 	}
 }
 
@@ -57,8 +68,8 @@ func TestContextHistoryStillSearchesCrossGroupOnFirstLoad(t *testing.T) {
 	runtime.SetMessageHistoryStore(store)
 
 	runtime.contextHistory(crossGroupProbeEvent())
-	if store.searches != 1 {
-		t.Fatalf("首次加载应当检索一次跨群上下文，实际 %d 次", store.searches)
+	if store.count() != 1 {
+		t.Fatalf("首次加载应当检索一次跨群上下文，实际 %d 次", store.count())
 	}
 }
 
@@ -71,8 +82,8 @@ func TestPromptHistoryPreservesCachedCrossGroupIdentityWithoutSearching(t *testi
 	event.replyHistoryLoaded = true
 	event.replyHistory = []MessageEvent{{Kind: EventKindGroup, GroupID: "other", UserID: "100001", SenderName: "old owner card", RawMessage: "相关历史", Time: 100, crossGroupContext: true}}
 	history := runtime.promptContextHistory(event, cfg)
-	if len(history) != 1 || !history[0].crossGroupContext || history[0].UserID != cfg.OwnerID || store.searches != 0 {
-		t.Fatalf("cached reference lost or searched again: history=%+v searches=%d", history, store.searches)
+	if len(history) != 1 || !history[0].crossGroupContext || history[0].UserID != cfg.OwnerID || store.count() != 0 {
+		t.Fatalf("cached reference lost or searched again: history=%+v searches=%d", history, store.count())
 	}
 	cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	if history := runtime.promptContextHistory(event, cfg); len(history) != 0 {

@@ -53,8 +53,8 @@ func TestCrossGroupTraceReportsWeakQuerySignal(t *testing.T) {
 	if !strings.Contains(reason, "信号不足") {
 		t.Fatalf("应当记录词信号不足，实际 skip_reason=%q", reason)
 	}
-	if store.searches != 0 {
-		t.Fatalf("信号不足时不该真的去检索，实际 %d 次", store.searches)
+	if store.count() != 0 {
+		t.Fatalf("信号不足时不该真的去检索，实际 %d 次", store.count())
 	}
 }
 

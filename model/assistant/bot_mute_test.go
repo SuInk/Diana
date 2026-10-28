@@ -59,8 +59,8 @@ func TestMutedGroupRecordsContextButSkipsModelCalls(t *testing.T) {
 	if got := h.provider.callCount(); got != 0 {
 		t.Fatalf("muted group made %d model calls, want 0", got)
 	}
-	if h.history.searches != 0 {
-		t.Fatalf("muted group ran %d cross-group searches, want 0", h.history.searches)
+	if h.history.count() != 0 {
+		t.Fatalf("muted group ran %d cross-group searches, want 0", h.history.count())
 	}
 	if got := len(h.runtime.history[sessionKey(event)]); got == 0 {
 		t.Fatal("muted group message was not kept in history")
