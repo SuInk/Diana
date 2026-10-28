@@ -3233,7 +3233,7 @@ type MediaRoleKey = (typeof mediaRoleKeys)[number];
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
-// reasoning_effort 同样只在主路由上有，后备沿用；空表示跟随提供商配置。
+// reasoning_effort 同样只在主路由上有，后备沿用；空表示不发，交给模型默认。
 type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
@@ -3530,7 +3530,7 @@ function roleReasoningOptions(role: RoleKey): AppSelectOption[] {
   // possible primary provider has metadata and none supports it.
   const supported = metadata.length && metadata.every(values => values?.length)
     ? [...new Set(metadata.flatMap(values => values ?? []))] : undefined;
-  return reasoningOptions(route?.reasoning_effort ?? "", supported, "", "跟随提供商配置");
+  return reasoningOptions(route?.reasoning_effort ?? "", supported, "", "模型默认（不发）");
 }
 
 function setRoleReasoning(role: RoleKey, value: string): void {

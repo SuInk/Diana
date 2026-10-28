@@ -31,6 +31,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		UserAgent:       "codex-cli/0.142.0",
 		Headers:         map[string]string{"X-Relay": "earlyso"},
 		MaxOutputTokens: 512,
+		ReasoningEffort: "high",
 	}
 	if err := store.SaveLLMProfiles(ctx, llm.NewProfileSet(llmCfg)); err != nil {
 		t.Fatal(err)
@@ -44,7 +45,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("llm profile set is empty: %#v", llmSet)
 	}
 	gotLLM := gotProfile.Config
-	if gotLLM.APIKey != "secret-key" || gotLLM.Model != "gp5.5" || gotLLM.UserAgent != "codex-cli/0.142.0" || gotLLM.Headers["X-Relay"] != "earlyso" {
+	if gotLLM.APIKey != "secret-key" || gotLLM.Model != "gp5.5" || gotLLM.UserAgent != "codex-cli/0.142.0" || gotLLM.Headers["X-Relay"] != "earlyso" || gotLLM.ReasoningEffort != "" {
 		t.Fatalf("gotLLM = %#v", gotLLM)
 	}
 

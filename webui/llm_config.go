@@ -71,7 +71,6 @@ type llmConfigPayload struct {
 	UserAgent        string             `json:"user_agent,omitempty"`
 	Headers          map[string]string  `json:"headers,omitempty"`
 	Temperature      *float64           `json:"temperature,omitempty"`
-	ReasoningEffort  string             `json:"reasoning_effort,omitempty"`
 	// 这两个是「用户手填的覆盖值」，不是当前生效值：指针类型才分得清「没提交这个
 	// 字段」（nil，保留旧值）和「清空了这个输入框」（0，改回自动）。以前它们是 int64，
 	// 清空输入框和没提交长得一样，于是填过的值永远删不掉。
@@ -573,7 +572,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 
 	cfg := h.store.Current()
 	// 连通测试允许直接使用表单里的临时配置，成功与否不影响当前已保存配置。
-	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || tokenLimitValue(payload.ContextWindowTokens) != 0 || tokenLimitValue(payload.MaxContextTokens) != 0 || tokenLimitValue(payload.MaxOutputTokens) != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil || payload.ReasoningEffort != "" {
+	if payload.Provider != "" || payload.Model != "" || payload.BaseURL != "" || payload.APIStyle != "" || payload.APIFormat != "" || payload.APIKey != "" || payload.UserAgent != "" || payload.ImageModel != "" || payload.ImageBaseURL != "" || payload.ImageOrigin != "" || payload.ImageTimeoutMS != 0 || tokenLimitValue(payload.ContextWindowTokens) != 0 || tokenLimitValue(payload.MaxContextTokens) != 0 || tokenLimitValue(payload.MaxOutputTokens) != 0 || payload.TimeoutMS != 0 || payload.Temperature != nil {
 		cfg = configFromPayload(payload.llmConfigPayload)
 		existing := existingProfileConfig(h.store.Profiles(), payload.llmConfigPayload)
 		cfg = mergeUnsubmittedLLMConfig(payload.llmConfigPayload, cfg, existing)
@@ -672,7 +671,6 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		UserAgent:        cfg.UserAgentWithDefault(),
 		Headers:          maskLLMHeaders(cfg.NormalizedHeaders()),
 		Temperature:      cfg.Temperature,
-		ReasoningEffort:  cfg.ReasoningEffort,
 		MaxOutputTokens:  optionalTokenLimit(cfg.MaxOutputTokens),
 		TimeoutMS:        cfg.Timeout.Milliseconds(),
 	}
@@ -914,7 +912,6 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		UserAgent:           payload.UserAgent,
 		Headers:             payload.Headers,
 		Temperature:         payload.Temperature,
-		ReasoningEffort:     payload.ReasoningEffort,
 		ContextWindowTokens: tokenLimitValue(payload.ContextWindowTokens),
 		MaxContextTokens:    tokenLimitValue(payload.MaxContextTokens),
 		MaxOutputTokens:     tokenLimitValue(payload.MaxOutputTokens),
@@ -925,10 +922,6 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 	}
 	if payload.MaxRPS != nil {
 		cfg.MaxRPS = *payload.MaxRPS
-	}
-	// 空串已经表示「没提交、沿用旧值」，想改回跟随模型只能靠显式的 default。
-	if strings.EqualFold(strings.TrimSpace(payload.ReasoningEffort), "default") {
-		cfg.ReasoningEffort = ""
 	}
 	// An explicitly empty model asks the save handler to discover the provider's
 	// model list before choosing the first available model.
@@ -968,9 +961,6 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 		cfg.ImageTimeout = existing.ImageTimeout
 	}
 	cfg.Headers = mergeLLMHeaders(existing.Headers, payload.Headers)
-	if strings.TrimSpace(payload.ReasoningEffort) == "" {
-		cfg.ReasoningEffort = existing.ReasoningEffort
-	}
 	// nil 才是「这个客户端没提交这个字段」；提交了 0 就是明确要求改回自动推断。
 	if payload.ContextWindowTokens == nil {
 		cfg.ContextWindowTokens = existing.ContextWindowTokens

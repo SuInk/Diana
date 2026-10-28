@@ -134,14 +134,13 @@ func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
 		ImageOrigin:         "203.0.113.10:443",
 		ImageTimeout:        10 * time.Minute,
 		Headers:             map[string]string{"X-Relay": "preserve-me"},
-		ReasoningEffort:     "high",
 		ContextWindowTokens: 200000,
 		MaxContextTokens:    12000,
 		Timeout:             45 * time.Second,
 	}
 	payload := payloadFromConfig(advanced)
 	roundTrip := configFromPayload(payload)
-	if roundTrip.ImageBaseURL != advanced.ImageBaseURL || roundTrip.ImageOrigin != advanced.ImageOrigin || roundTrip.ImageTimeout != advanced.ImageTimeout || roundTrip.APIFormat != advanced.APIFormat || roundTrip.ReasoningEffort != "high" || roundTrip.ContextWindowTokens != 200000 || roundTrip.MaxContextTokens != 12000 || roundTrip.Timeout != advanced.Timeout {
+	if roundTrip.ImageBaseURL != advanced.ImageBaseURL || roundTrip.ImageOrigin != advanced.ImageOrigin || roundTrip.ImageTimeout != advanced.ImageTimeout || roundTrip.APIFormat != advanced.APIFormat || roundTrip.ContextWindowTokens != 200000 || roundTrip.MaxContextTokens != 12000 || roundTrip.Timeout != advanced.Timeout {
 		t.Fatalf("advanced round trip = %#v", roundTrip)
 	}
 
@@ -156,7 +155,7 @@ func TestLLMAdvancedConfigRoundTripAndCompactEditorPreservation(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 	got := store.Current()
-	if got.ImageModel != advanced.ImageModel || got.ImageBaseURL != advanced.ImageBaseURL || got.ImageOrigin != advanced.ImageOrigin || got.ImageTimeout != advanced.ImageTimeout || got.Headers["X-Relay"] != "preserve-me" || got.ReasoningEffort != "high" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != 12000 || got.Timeout != advanced.Timeout {
+	if got.ImageModel != advanced.ImageModel || got.ImageBaseURL != advanced.ImageBaseURL || got.ImageOrigin != advanced.ImageOrigin || got.ImageTimeout != advanced.ImageTimeout || got.Headers["X-Relay"] != "preserve-me" || got.ContextWindowTokens != 200000 || got.MaxContextTokens != 12000 || got.Timeout != advanced.Timeout {
 		t.Fatalf("compact editor dropped advanced settings: %#v", got)
 	}
 }
@@ -840,16 +839,11 @@ func TestLLMPayloadDistinguishesClearedFromUnsubmitted(t *testing.T) {
 	}
 }
 
-func TestReasoningEffortDefaultClearsSavedValue(t *testing.T) {
+func TestProviderSaveDropsReasoningEffort(t *testing.T) {
 	existing := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash", ReasoningEffort: "none"}
-
-	reset := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash", ReasoningEffort: "default"}
-	if got := mergeUnsubmittedLLMConfig(reset, configFromPayload(reset), existing).ReasoningEffort; got != "" {
-		t.Fatalf("default 应清回跟随模型, got %q", got)
-	}
-	untouched := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash"}
-	if got := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing).ReasoningEffort; got != "none" {
-		t.Fatalf("没提交应保留旧值, got %q", got)
+	payload := llmConfigPayload{Provider: llm.ProviderOpenAICompatible, Model: "deepseek-v4-flash"}
+	if got := mergeUnsubmittedLLMConfig(payload, configFromPayload(payload), existing).ReasoningEffort; got != "" {
+		t.Fatalf("提供商不再保存思考强度, got %q", got)
 	}
 }
 

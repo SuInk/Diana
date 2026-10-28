@@ -198,11 +198,6 @@
           />
           <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
         </div>
-        <div v-if="supportsReasoningEffort" class="field">
-          <label for="llm-reasoning-effort">思考强度</label>
-          <AppSelect id="llm-reasoning-effort" v-model="form.reasoning_effort" :options="reasoningEffortOptions" />
-          <span class="hint">越低回得越快、越省 token。各家档位不同，会按模型折算：DeepSeek 只有低、高、最高三档，其余就近取；新款 Claude（Fable、Opus 5.5）和 Gemini 3 Pro 关不掉思考，「关闭思考」按最低一档发。模型不认这个参数时会自动去掉重发，并记住以后不再发。</span>
-        </div>
         <div class="field wide">
           <label for="llm-baseurl">API 地址</label>
           <input
@@ -411,7 +406,6 @@
 </template>
 
 <script setup lang="ts">
-import { reasoningOptions } from "../lib/reasoning-options";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onActivated, onMounted, ref, watch } from "vue";
 import { viewQuery } from "../router";
@@ -475,7 +469,6 @@ interface LLMFormState {
   description: string;
   context_window_tokens: string;
   /** default 表示跟随模型，保存时显式提交，好把之前设过的值清掉。 */
-  reasoning_effort: string;
 }
 
 // 和后端 llm.DefaultContextWindowTokens 一致：没填过窗口时默认填这个。
@@ -495,18 +488,7 @@ const emptyForm: LLMFormState = {
   user_agent: "",
   description: "",
   context_window_tokens: "",
-  reasoning_effort: "default",
 };
-
-// 对话类协议都能调思考强度；TypeSafe 是只做判断的模型，没有这个概念。
-const supportsReasoningEffort = computed(() => ["openai_compatible", "anthropic", "gemini"].includes(form.value.provider));
-
-const reasoningEffortOptions = computed(() => {
-  const models = modelOptions.value.filter(model => !model.disabled && (!model.output_modalities?.length || model.output_modalities.includes("text")));
-  const supported = models.length && models.every(model => model.reasoning_efforts?.length)
-    ? [...new Set(models.flatMap(model => model.reasoning_efforts ?? []))] : undefined;
-  return reasoningOptions(form.value.reasoning_effort, supported, "default", "跟随模型");
-});
 
 const profileSet = ref<LLMConfig | null>(null);
 const loading = ref(true);
@@ -803,7 +785,6 @@ function startEdit(profile: LLMConfig): void {
     description: profile.description ?? "",
     // 老配置没填窗口时先填上默认值（清单里有就用清单的），保存前人能看到、能改。
     context_window_tokens: profile.context_window_tokens ? String(profile.context_window_tokens) : "",
-    reasoning_effort: profile.reasoning_effort || "default",
   };
   // 凭据方式跟着这份配置走：绑了提供商就停在「授权登录」，否则回到 API Key。
   credentialMode.value = profile.oauth_provider ? "oauth" : "api_key";
@@ -924,8 +905,6 @@ function formToPayload(): LLMConfig {
     // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
     // 省略掉的话清空输入框永远删不掉已经填过的头。
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
-    // TypeSafe 判断模型没有思考档位，不提交，沿用旧值。
-    reasoning_effort: supportsReasoningEffort.value ? form.value.reasoning_effort : undefined,
     description: form.value.description.trim() || undefined
   };
   // 窗口保存前已校验必填，这里照常提交。

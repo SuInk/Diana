@@ -39,8 +39,6 @@ export interface LLMConfig {
   user_agent?: string;
   headers?: Record<string, string>;
   temperature?: number | null;
-  /** 思考强度；空表示跟随模型。提交 default 可把已保存的值清回跟随模型。 */
-  reasoning_effort?: string;
   /** 提供商统一覆盖值；0 或缺省表示使用单个模型的手动窗口或兜底值。 */
   context_window_tokens?: number;
   max_context_tokens?: number;
@@ -361,7 +359,7 @@ export interface BotProfileConfig extends SendRetrySettings {
     fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; weight?: number; disabled?: boolean; standby?: boolean }>;
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
-    /** 这个用途的思考强度，覆盖提供商配置；空表示跟随提供商。后备路由沿用。 */
+    /** 这个用途的思考强度；空表示不发，交给模型默认。后备路由沿用。 */
     reasoning_effort?: string;
   }>;
   model_recovery_policy?: ModelRecoveryPolicy;

@@ -5791,9 +5791,8 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 				continue
 			}
 			seen[key] = true
-			if role.ReasoningEffort != "" {
-				profile.Config.ReasoningEffort = role.ReasoningEffort
-			}
+			// 思考强度只认机器人插槽；空表示不发，交给模型默认。
+			profile.Config.ReasoningEffort = role.ReasoningEffort
 			profiles = append(profiles, profile)
 		}
 	}

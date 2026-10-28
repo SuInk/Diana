@@ -184,6 +184,10 @@ func (s *SQLiteStore) Close() error {
 func (s *SQLiteStore) LoadLLMProfiles(ctx context.Context) (llm.ProfileSet, bool, error) {
 	var set llm.ProfileSet
 	ok, err := s.loadJSON(ctx, llmProfilesKey, &set)
+	// 思考强度改由机器人的用途插槽单独设置，旧版存在提供商上的值不再生效。
+	for i := range set.Profiles {
+		set.Profiles[i].Config.ReasoningEffort = ""
+	}
 	return set, ok, err
 }
 

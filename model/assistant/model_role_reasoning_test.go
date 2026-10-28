@@ -30,7 +30,7 @@ func TestModelRoleReasoningEffortNormalize(t *testing.T) {
 	}
 }
 
-// 用途上设了思考强度，主路由和后备路由的候选都换成它；没设就沿用提供商配置。
+// 用途上设了思考强度，主路由和后备路由的候选都换成它；没设就不发，不看提供商上的旧值。
 // 没单独绑的细分用途继承分组那一档的设置。
 func TestRoleBoundProfilesApplyReasoningEffort(t *testing.T) {
 	set := llm.ProfileSet{Profiles: []llm.Profile{
@@ -58,8 +58,8 @@ func TestRoleBoundProfilesApplyReasoningEffort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chat) != 1 || chat[0].Config.ReasoningEffort != "high" {
-		t.Fatalf("chat should keep provider effort: %+v", chat)
+	if len(chat) != 1 || chat[0].Config.ReasoningEffort != "" {
+		t.Fatalf("unset role must not send provider effort: %+v", chat)
 	}
 	if set.Profiles[0].Config.ReasoningEffort != "high" {
 		t.Fatal("override leaked into the stored profile set")

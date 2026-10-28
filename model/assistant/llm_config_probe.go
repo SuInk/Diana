@@ -76,7 +76,7 @@ func (r *Runtime) probeModelSwitch(ctx context.Context, registry *llm.ProviderRe
 		message.Parts = []llm.ContentPart{{Type: llm.ContentPartText, Text: message.Content}, {Type: llm.ContentPartImageURL, ImageURL: modelSwitchProbeImage}}
 	}
 	started := time.Now()
-	response, err := client.Generate(ctx, llm.GenerateRequest{Model: cfg.Model, Messages: []llm.Message{message}, MaxOutputTokens: cfg.MaxOutputTokens, ReasoningEffort: cfg.ReasoningEffort})
+	response, err := client.Generate(ctx, llm.GenerateRequest{Model: cfg.Model, Messages: []llm.Message{message}, MaxOutputTokens: cfg.MaxOutputTokens})
 	if err != nil {
 		return err
 	}
