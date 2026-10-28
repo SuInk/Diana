@@ -86,7 +86,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	}
 	lines = append(lines, "【当前消息】[刚刚] "+current)
 	if n := len(burst); n > 0 {
-		lines = append(lines, fmt.Sprintf("（【连发1】到【连发%d】和当前消息是几秒内接连发出的，合并成一次评分，但话题可能不同，要逐条分开判断：relevance 和 chat_in 只评【当前消息】；每条【连发k】另外输出 burst_k: {\"directed\": true 或 false, \"reason\": \"…\"}，按同样的判据只看这一条自己在跟谁说话，不要被前后几条带偏。标了「%s已回」的已经回过，directed 填 false）", n, botName))
+		lines = append(lines, fmt.Sprintf("（【连发1】到【连发%d】和当前消息是几秒内接连发出的，合并成一次评分，但话题可能不同，要逐条分开判断：relevance 和 chat_in 只评最后那条当前消息；每条【连发k】另外输出 burst_k: {\"directed\": true 或 false, \"reason\": \"…\"}，按同样的判据只看这一条自己在跟谁说话，不要被前后几条带偏。标了「%s已回」的已经回过，directed 填 false）", n, botName))
 	}
 	// 机器人之后有别人插进来时不写这条：评分判据里「紧接着它刚才的话」要求中间没有别人，
 	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
