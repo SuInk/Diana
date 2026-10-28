@@ -3281,7 +3281,7 @@ export type StickerLibraryFilter = {
   /** 只看这么多天既没人发、机器人也没发过的。 */
   idle_days?: number;
   never_sent?: boolean;
-  sort?: "recent" | "idle" | "most_sent";
+  sort?: "recent" | "oldest" | "recent_used" | "idle" | "most_sent" | "least_sent";
 };
 
 export type StickerFacetCount = { value: string; count: number };

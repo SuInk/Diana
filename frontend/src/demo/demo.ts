@@ -1595,9 +1595,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const items = demoFilterStickers(url.searchParams);
     const sort = url.searchParams.get("sort");
     const activity = (item: DemoSticker) => Math.max(Date.parse(item.last_seen), item.last_sent ? Date.parse(item.last_sent) : 0);
-    if (sort === "idle") items.sort((a, b) => activity(a) - activity(b));
-    else if (sort === "most_sent") items.sort((a, b) => b.sent_count - a.sent_count);
-    else items.sort((a, b) => Date.parse(b.last_seen) - Date.parse(a.last_seen));
+    const recent = (a: DemoSticker, b: DemoSticker) => Date.parse(b.last_seen) - Date.parse(a.last_seen);
+    const sent = (item: DemoSticker) => item.last_sent ? Date.parse(item.last_sent) : 0;
+    items.sort((a, b) => {
+      let order = recent(a, b);
+      if (sort === "idle") order = activity(a) - activity(b);
+      else if (sort === "oldest") order = -recent(a, b);
+      else if (sort === "recent_used") order = sent(b) - sent(a) || recent(a, b);
+      else if (sort === "most_sent") order = b.sent_count - a.sent_count || recent(a, b);
+      else if (sort === "least_sent") order = a.sent_count - b.sent_count || recent(a, b);
+      return order || a.hash.localeCompare(b.hash);
+    });
     const offset = Number(url.searchParams.get("offset") ?? 0);
     const limit = Number(url.searchParams.get("limit") ?? 48);
     return json({ items: items.slice(offset, offset + limit), total: items.length });

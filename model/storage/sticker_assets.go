@@ -514,7 +514,8 @@ type StickerLibraryQuery struct {
 	IdleDays int
 	// NeverSent 只看机器人从没发过的。
 	NeverSent bool
-	// Sort：recent（默认，最近出现在前）、idle（最久没用在前）、most_sent（机器人发得多的在前）。
+	// Sort：recent（默认，最近出现）、oldest（最早出现）、recent_used（机器人最近发送，未发送的在后）、
+	// idle（最久没用）、most_sent（发送次数降序）、least_sent（发送次数升序）。
 	Sort   string
 	Limit  int
 	Offset int
@@ -632,6 +633,12 @@ func (s *SQLiteStore) ListStickerLibrary(ctx context.Context, query StickerLibra
 	}
 	order := "m.last_seen DESC, m.content_sha256"
 	switch query.Sort {
+	case "oldest":
+		order = "m.last_seen ASC, m.content_sha256"
+	case "recent_used":
+		order = "m.last_sent_at DESC, m.last_seen DESC, m.content_sha256"
+	case "least_sent":
+		order = "m.sent_count ASC, m.last_seen DESC, m.content_sha256"
 	case "idle":
 		order = "MAX(m.last_seen, m.last_sent_at) ASC, m.content_sha256"
 	case "most_sent":

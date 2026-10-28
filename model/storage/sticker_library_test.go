@@ -369,7 +369,19 @@ func TestStickerLibraryFacetsAndFilters(t *testing.T) {
 	check("never sent", list(StickerLibraryQuery{NeverSent: true}), "acd")
 	// b 三天前收的，但机器人昨天发过，和 a 一样算昨天用过。
 	check("idle first", list(StickerLibraryQuery{Sort: "idle"}), "dcab")
-	check("most sent", list(StickerLibraryQuery{Sort: "most_sent"})[:1], "b")
+	check("most sent", list(StickerLibraryQuery{Sort: "most_sent"}), "bacd")
+	check("least sent", list(StickerLibraryQuery{Sort: "least_sent"}), "acdb")
+	check("recent used", list(StickerLibraryQuery{Sort: "recent_used"}), "bacd")
+	check("oldest", list(StickerLibraryQuery{Sort: "oldest"}), "dcba")
+	check("unknown sort", list(StickerLibraryQuery{Sort: "unknown"}), "abcd")
+	for _, sort := range []string{"recent", "oldest", "recent_used", "idle", "most_sent", "least_sent"} {
+		want := list(StickerLibraryQuery{Sort: sort})
+		page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Sort: sort, Offset: 1, Limit: 2})
+		if err != nil || page.Total != 4 || len(page.Items) != 2 {
+			t.Fatalf("sort %s page=%+v err=%v", sort, page, err)
+		}
+		check(sort+" pagination", []string{page.Items[0].Hash[:1], page.Items[1].Hash[:1]}, strings.Join(want[1:3], ""))
+	}
 
 	page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Category: "动物"})
 	if err != nil || page.Items[0].Category != "动物" || page.Items[0].SentCount != 1 || page.Items[0].LastSent == nil {
@@ -508,5 +520,49 @@ func TestDeleteStickerAssetBlocksReindex(t *testing.T) {
 	}
 	if page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{}); err != nil || page.Total != 0 {
 		t.Fatalf("globally blocked sticker came back = %#v err=%v", page, err)
+	}
+}
+
+// 使用时间和次数分别排序；同值时保持稳定，且聚合多个会话的发送记录。
+func TestStickerLibraryUsageSort(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "sticker-sort.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	for _, key := range []string{"a", "b", "c", "d"} {
+		hash := strings.Repeat(key, 64)
+		if err := store.indexStickerAssets(ctx, "group:g1", stickerLibraryEvent("bot", "g1", key, 100, hash, key, "/cache/"+key+".gif")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, sent := range []struct {
+		key, session string
+		at           int64
+	}{
+		{"a", "group:g1", 200}, {"a", "group:g2", 300},
+		{"b", "group:g1", 400}, {"c", "group:g1", 400},
+	} {
+		if err := store.RecordStickerSent(ctx, sent.session, strings.Repeat(sent.key, 64), sent.at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct{ sort, want string }{
+		{"recent_used", "bcad"}, {"most_sent", "abcd"}, {"least_sent", "dbca"},
+	} {
+		t.Run(tc.sort, func(t *testing.T) {
+			page, err := store.ListStickerLibrary(ctx, StickerLibraryQuery{ProfileID: "bot", Sort: tc.sort})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got string
+			for _, item := range page.Items {
+				got += item.Hash[:1]
+			}
+			if got != tc.want {
+				t.Fatalf("got %s, want %s", got, tc.want)
+			}
+		})
 	}
 }

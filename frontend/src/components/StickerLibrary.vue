@@ -13,7 +13,7 @@
       />
       <AppSelect v-model="sourceValue" class="sticker-toolbar-select" :options="sourceOptions" searchable search-placeholder="按群名或群号找…" />
       <AppSelect v-model="idleValue" class="sticker-toolbar-select" :options="idleOptions" />
-      <AppSelect v-model="sortValue" class="sticker-toolbar-select" :options="sortOptions" />
+      <AppSelect v-model="sortValue" class="sticker-toolbar-select sticker-sort-select" :options="sortOptions" aria-label="表情包排序" />
     </div>
 
     <div class="sticker-bar">
@@ -205,8 +205,11 @@ const filtering = computed(() => {
 });
 const sortOptions: AppSelectOption[] = [
   { value: "recent", label: "最近出现" },
+  { value: "oldest", label: "最早出现" },
+  { value: "recent_used", label: "最近使用" },
   { value: "idle", label: "最久没用" },
-  { value: "most_sent", label: "发得最多" }
+  { value: "most_sent", label: "发送次数：多到少" },
+  { value: "least_sent", label: "发送次数：少到多" }
 ];
 const idleOptions: AppSelectOption[] = [
   { value: "0", label: "不限时间" },
@@ -463,6 +466,10 @@ onBeforeUnmount(() => {
 .sticker-toolbar-select {
   width: 124px;
   flex-shrink: 0;
+}
+
+.sticker-toolbar .sticker-sort-select {
+  min-width: 170px;
 }
 
 .sticker-bar {
