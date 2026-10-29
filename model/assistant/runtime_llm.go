@@ -1257,6 +1257,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
 		tail.WriteString("\n" + cfg.prompt(promptImageReplySpec))
 	}
+	if eventHasNameOnlyFace(event) {
+		tail.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
+	}
 	// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {

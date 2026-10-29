@@ -211,3 +211,29 @@ func TestAliasPromptReachesPrivateChatToo(t *testing.T) {
 		t.Fatal("空触发词列表不该拼出别名")
 	}
 }
+
+// QQ 官方的商城表情只给名字：这一轮要教模型按名字当语气接，不去解释看不到画面。
+// 带图的表情包、其他平台的同样文字都不注入。
+func TestSystemPromptTeachesNameOnlyFaceReply(t *testing.T) {
+	base := BotConfig{}.WithDefaults()
+	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	relationship := RelationshipPolicyFor(UserMemoryProfile{}, base.OwnerID, "1")
+	faceText := []MessageSegment{{Type: "text", Data: map[string]string{"text": "[表情:[m4]]"}}}
+
+	nameOnly := MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindPrivate, UserID: "1", RawMessage: "[表情:[m4]]", Segments: faceText}
+	if prompt := runtime.systemPromptWithRelationshipAndAgentTools(nameOnly, nil, false, relationship, true, nil); !strings.Contains(prompt, promptFaceNameOnly) {
+		t.Fatalf("name-only face turn is missing the face rule: %q", prompt)
+	}
+
+	withImage := nameOnly
+	withImage.Segments = append(append([]MessageSegment(nil), faceText...), MessageSegment{Type: "image", Data: map[string]string{"url": "https://example.com/a.png"}})
+	if prompt := runtime.systemPromptWithRelationshipAndAgentTools(withImage, nil, false, relationship, true, nil); strings.Contains(prompt, promptFaceNameOnly) {
+		t.Fatalf("sticker with image should use the image rule only: %q", prompt)
+	}
+
+	otherPlatform := nameOnly
+	otherPlatform.Platform = ""
+	if prompt := runtime.systemPromptWithRelationshipAndAgentTools(otherPlatform, nil, false, relationship, true, nil); strings.Contains(prompt, promptFaceNameOnly) {
+		t.Fatalf("non-QQ-official turn should not carry the face rule: %q", prompt)
+	}
+}

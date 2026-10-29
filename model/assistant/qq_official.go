@@ -1257,6 +1257,16 @@ func qqOfficialFaceText(content string) string {
 	})
 }
 
+// eventHasNameOnlyFace 判断当前消息是不是带了只有名字、没有图的表情：QQ 官方的
+// 商城表情和原生 emoji 只给名字，翻成 [表情:名字] 后不跟图片段。带图的表情包走
+// 看图那条规则，这里不重复。
+func eventHasNameOnlyFace(event MessageEvent) bool {
+	if event.Platform != PlatformQQOfficial || hasImageSegment(event.Segments) {
+		return false
+	}
+	return strings.Contains(event.RawMessage, "[表情:")
+}
+
 // qqOfficialFaceTagName 解出表情标签里的名字，取不到返回空串。
 func qqOfficialFaceTagName(tag string) string {
 	match := qqFaceExtPattern.FindStringSubmatch(tag)
