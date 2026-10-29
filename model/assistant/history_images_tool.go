@@ -113,7 +113,7 @@ func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 		"detail": toolEnumParam("细节档位，认小字用 high", "auto", "low", "high"),
 	}
 	if t.asksVision() {
-		properties["question"] = toolStringParam("要看哪里、问什么；省略则返回完整描述")
+		properties["question"] = toolStringParam("要看哪里、问什么，只问画面本身（谁、什么字、什么状态），群聊里在聊什么不用它解读；省略则返回完整描述")
 	}
 	return toolObjectSchema(nil, properties)
 }
@@ -328,7 +328,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			return "", fmt.Errorf("历史媒体看图失败：%w", err)
 		}
 		result.Answer = answer
-		result.Message = fmt.Sprintf("视觉模型看了 %d 张历史图片或视频关键帧，回答在 answer 里；它也可能看错，不确定的地方照实说。", result.Loaded)
+		result.Message = historyMediaVisionAnswerMessage(result.Loaded)
 		if result.Failed > 0 {
 			result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
 		}
@@ -864,4 +864,10 @@ func normalizeHistoryImageDetail(detail string) string {
 	default:
 		return "auto"
 	}
+}
+
+// historyMediaVisionAnswerMessage 提醒模型 answer 只是帮它看懂图：群友都看过原图，
+// 照着 answer 复述画面、再给玩笑话下结论，回复就成了看图报告。
+func historyMediaVisionAnswerMessage(loaded int) string {
+	return fmt.Sprintf("视觉模型看了 %d 张历史图片或视频关键帧，回答在 answer 里，只是帮你看懂图，也可能看错。群友都看过这些图：别把画面复述一遍、也别逐张交代看到了什么，接住他们在聊的那件事和语气来回；有人半开玩笑地问，就顺着聊，不用一本正经地核实下结论。只有对方明确要你认字、描述画面或核对细节时才照答。", loaded)
 }
