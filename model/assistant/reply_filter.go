@@ -18,6 +18,21 @@ const (
 	maxReplyFilterRuleRunes = 200
 )
 
+// 默认带一条规则，删掉行尾「（接一段话」没闭合的那截；行尾单独一个「（」是
+// 语气，照发。它只是预填进列表，主人可以改也可以删；只认全角括号，代码和
+// Markdown 链接里的半角括号不受影响。
+func defaultReplyFilterRules() []string {
+	return []string{`（[^）\n]+$`}
+}
+
+// cloneReplyFilterRules 保留 nil 和空列表的区别：空列表是主人清空了默认规则。
+func cloneReplyFilterRules(rules []string) []string {
+	if rules == nil {
+		return nil
+	}
+	return append([]string{}, rules...)
+}
+
 var replyFilterCache sync.Map // pattern -> *regexp.Regexp
 
 func compileReplyFilterRule(rule string) (*regexp.Regexp, error) {

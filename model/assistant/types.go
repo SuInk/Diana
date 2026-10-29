@@ -736,7 +736,8 @@ type BotConfig struct {
 	ReplyComposer    string `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle string `json:"maibot_reply_style,omitempty"`
 	// ReplyFilterRules 是主人写的正则，命中的内容在发送前从回复里删掉，见 reply_filter.go。
-	ReplyFilterRules []string     `json:"reply_filter_rules,omitempty"`
+	// 不带 omitempty：nil 表示没设置过、补上默认规则，空列表表示主人清空了，要原样存住。
+	ReplyFilterRules []string     `json:"reply_filter_rules"`
 	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
 	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
@@ -1445,7 +1446,7 @@ type ConfigPayload struct {
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
 	ReplyComposer                  string               `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
-	ReplyFilterRules               []string             `json:"reply_filter_rules,omitempty"`
+	ReplyFilterRules               []string             `json:"reply_filter_rules"`
 	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
@@ -2136,6 +2137,7 @@ func DefaultBotConfig() BotConfig {
 	// 默认不开启机器人，避免首次启动服务就暴露 OneBot 连接面。
 	return BotConfig{
 		StickerReplyOrder:       StickerReplyOrderBefore,
+		ReplyFilterRules:        defaultReplyFilterRules(),
 		Name:                    DefaultProfileName,
 		Platform:                DefaultPlatform,
 		Enabled:                 false,
@@ -2275,7 +2277,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplyComposer = ""
 	}
 	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
-	cfg.ReplyFilterRules = cleanStrings(append([]string(nil), cfg.ReplyFilterRules...))
+	if cfg.ReplyFilterRules == nil {
+		cfg.ReplyFilterRules = defaults.ReplyFilterRules
+	} else {
+		cfg.ReplyFilterRules = cleanStrings(cfg.ReplyFilterRules)
+	}
 	if hasResponseMode {
 		cfg.ResponseMode = cfg.ResponseMode.Normalized()
 	} else {
@@ -2762,7 +2768,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SystemPrompt:                    cfg.SystemPrompt,
 		ReplyComposer:                   cfg.ReplyComposer,
 		MaiBotReplyStyle:                cfg.MaiBotReplyStyle,
-		ReplyFilterRules:                append([]string(nil), cfg.ReplyFilterRules...),
+		ReplyFilterRules:                cloneReplyFilterRules(cfg.ReplyFilterRules),
 		ReplyToneDefault:                DefaultReplyTone,
 		ResponseMode:                    cfg.ResponseMode,
 		ReplyStyle:                      cfg.ReplyStyle,
@@ -3006,7 +3012,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SystemPrompt:                    payload.SystemPrompt,
 		ReplyComposer:                   payload.ReplyComposer,
 		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
-		ReplyFilterRules:                append([]string(nil), payload.ReplyFilterRules...),
+		ReplyFilterRules:                cloneReplyFilterRules(payload.ReplyFilterRules),
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -58,5 +59,34 @@ func TestPrepareGeneratedReplyAppliesReplyFilters(t *testing.T) {
 	cfg.ReplyFilterRules = []string{`^.*$`}
 	if _, err := r.prepareGeneratedReply(context.Background(), cfg, "整句都会被删"); !errors.Is(err, errModelSilentFinish) {
 		t.Fatalf("fully filtered reply error = %v, want silent finish", err)
+	}
+}
+
+func TestReplyFilterRulesDefaultIsEditable(t *testing.T) {
+	var unset BotConfig
+	if got := unset.WithDefaults().ReplyFilterRules; len(got) != 1 || got[0] != defaultReplyFilterRules()[0] {
+		t.Fatalf("unset rules = %#v, want default", got)
+	}
+	cleared := BotConfig{ReplyFilterRules: []string{}}
+	if got := cleared.WithDefaults().ReplyFilterRules; got == nil || len(got) != 0 {
+		t.Fatalf("cleared rules = %#v, want empty list kept", got)
+	}
+	data, err := json.Marshal(cleared.WithDefaults())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reloaded BotConfig
+	if err := json.Unmarshal(data, &reloaded); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloaded.WithDefaults().ReplyFilterRules; got == nil || len(got) != 0 {
+		t.Fatalf("cleared rules after reload = %#v", got)
+	}
+	got := applyReplyFilters(defaultReplyFilterRules(), "全平台都卡（历史一多就掉帧\n看 [文档](https://x.test/a_(b 吧")
+	if got != "全平台都卡\n看 [文档](https://x.test/a_(b 吧" {
+		t.Fatalf("default rule filtered = %q", got)
+	}
+	if kept := applyReplyFilters(defaultReplyFilterRules(), "这也行（"); kept != "这也行（" {
+		t.Fatalf("lone trailing bracket must stay, got %q", kept)
 	}
 }
