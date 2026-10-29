@@ -173,12 +173,12 @@
                     />
                     <span v-else class="event-avatar event-avatar-fallback" aria-hidden="true">{{ senderInitial(event) }}</span>
                     <span class="event-sender-name">{{ senderDisplayName(event) }}</span>
-                    <span v-if="event.sender_name && event.user_id" class="event-sender-id mono">{{ event.user_id }}</span>
+                    <span v-if="event.sender_name && event.user_id" class="event-sender-id mono" :title="event.user_id">{{ compactID(event.user_id) }}</span>
                   </span>
                   <span v-if="senderLevelLabel(event)" class="badge" :title="senderLevelTitle(event)">{{ senderLevelLabel(event) }}</span>
                   <template v-if="event.group_id">
                     <span class="event-meta-sep" aria-hidden="true">·</span>
-                    <span class="muted event-meta-group" :title="displayEventGroup(event.group_id, event.group_name)">{{ groupShortName(event) }}</span>
+                    <span class="muted event-meta-group" :title="[event.group_name, event.group_id].filter(Boolean).join(' · ')">{{ groupShortName(event) }}</span>
                   </template>
                 </div>
               </div>
@@ -372,9 +372,9 @@
               <p v-if="event.delivery_error" class="event-error">{{ event.delivery_error }}</p>
 
               <div class="event-technical muted mono">
-                <span v-if="event.message_id">消息 {{ event.message_id }}</span>
+                <span v-if="event.message_id" :title="event.message_id">消息 {{ compactID(event.message_id) }}</span>
                 <span>结果 {{ event.outcome || event.status }}</span>
-                <span v-if="event.outbound_message_id">出站 {{ event.outbound_message_id }}</span>
+                <span v-if="event.outbound_message_id" :title="event.outbound_message_id">出站 {{ compactID(event.outbound_message_id) }}</span>
                 <span v-if="event.reply_models?.length">主对话模型 {{ event.reply_models.join(" → ") }}</span>
                 <span v-if="eventOtherModelsText(event)">调用模型 {{ eventOtherModelsText(event) }}</span>
                 <span v-if="event.tool_calls">工具调用 {{ formatNumber(event.tool_calls) }} 次</span>
@@ -431,7 +431,7 @@
                         <div class="event-memory-meta muted mono">
                           <span v-if="memory.source_type">来源 {{ memory.source_type }}</span>
                           <span v-if="memory.visibility">可见性 {{ memory.visibility }}</span>
-                          <span v-if="memory.source_group_id">来源群 {{ memory.source_group_id }}</span>
+                          <span v-if="memory.source_group_id" :title="memory.source_group_id">来源群 {{ compactID(memory.source_group_id) }}</span>
                           <span v-if="memory.confidence">置信度 {{ formatMemoryScore(memory.confidence) }}</span>
                           <span v-if="memory.retrieval_score">召回分 {{ memory.retrieval_score.toFixed(3) }}</span>
                         </div>
@@ -460,7 +460,7 @@
                         <pre>{{ temporaryMemoryContent(memory.content) }}</pre>
                         <div class="event-memory-meta muted mono">
                           <span v-if="memory.expires_at">到期 {{ formatDate(memory.expires_at) }}</span>
-                          <span v-if="memory.source_message_id">来源消息 {{ memory.source_message_id }}</span>
+                          <span v-if="memory.source_message_id" :title="memory.source_message_id">来源消息 {{ compactID(memory.source_message_id) }}</span>
                         </div>
                       </article>
                     </div>
@@ -699,7 +699,7 @@ import {
 import { formatClock, formatNumber, formatTime } from "../lib/format";
 import { cacheUtilization, groupCacheByPurpose } from "../lib/llm-usage";
 import { askConfirm } from "../lib/confirm";
-import { displayMessageText, displayChatIdentity } from "../lib/message-display";
+import { compactID, displayMessageText, displayChatIdentity } from "../lib/message-display";
 import { currentView, navigate } from "../router";
 import { recordsActionsHost } from "../lib/records-actions";
 import { stream, type BotEvent } from "../lib/stream";
@@ -919,6 +919,7 @@ function eventCacheHitText(event: AssistantEventDetail): string {
 
 function platformLabel(platform: string): string {
   if (platform === "telegram") return "Telegram";
+  if (platform === "qq-official") return "QQ 官方";
   if (["onebot-v11", "onebot", "lagrange", "go-cqhttp"].includes(platform)) return "OneBot v11";
   return platform;
 }
@@ -1287,8 +1288,9 @@ function senderTitle(event: AssistantEventDetail): string {
 function groupShortName(event: AssistantEventDetail): string {
   const id = (event.group_id ?? "").trim();
   const full = displayEventGroup(id, event.group_name);
-  const name = full.endsWith(`（${id}）`) ? full.slice(0, -(id.length + 2)) : full;
-  return name.trim() || `群 ${id}`;
+  const suffix = `（${compactID(id)}）`;
+  const name = full.endsWith(suffix) ? full.slice(0, -suffix.length) : full;
+  return name.trim() || `群 ${compactID(id)}`;
 }
 
 // 同一天的日期没必要每行重复，只在换天的地方插一条分隔。
@@ -1306,7 +1308,7 @@ function displayEventGroup(groupID?: string, eventName?: string): string {
   const id = (groupID ?? "").trim();
   const option = groupOptions.value.find((item) => item.value === id);
   const name = (eventName ?? (option?.label.startsWith("群 ") ? "" : option?.label) ?? "").trim();
-  return name ? `${name}（${id}）` : `群 ${id}`;
+  return name ? `${name}（${compactID(id)}）` : `群 ${compactID(id)}`;
 }
 
 // 群名当主标题、群号退到副行：一串纯数字认不出是哪个群，而名字可能重复或为空，
@@ -1315,8 +1317,8 @@ function groupOption(groupID: string, events: number, name?: string, avatar?: st
   const label = (name ?? "").trim();
   return {
     value: GROUP_PREFIX + groupID,
-    label: label || `群 ${groupID}`,
-    hint: label ? `${groupID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`,
+    label: label || `群 ${compactID(groupID)}`,
+    hint: label ? `${compactID(groupID)} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`,
     avatar
   };
 }
@@ -1325,8 +1327,8 @@ function privateChatOption(userID: string, events: number, name?: string): AppSe
   const label = (name ?? "").trim();
   return {
     value: USER_PREFIX + userID,
-    label: label || `私聊 ${userID}`,
-    hint: label ? `${userID} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`
+    label: label || `私聊 ${compactID(userID)}`,
+    hint: label ? `${compactID(userID)} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`
   };
 }
 

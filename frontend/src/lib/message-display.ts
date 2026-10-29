@@ -67,9 +67,16 @@ export function displayMessageText(value?: string): string {
     .trim();
 }
 
+// QQ 官方的 openid、群 openid 是 32 位十六进制，消息 ID 上百字符，原样显示会撑满一整行。
+// 超过 16 个字符就只留头尾，完整值放进悬浮提示（title）里。
+export function compactID(id?: string): string {
+  const value = id?.trim() ?? "";
+  return value.length > 16 ? `${value.slice(0, 6)}…${value.slice(-4)}` : value;
+}
+
 export function displayChatIdentity(name?: string, qq?: string): string {
   const normalizedName = name?.trim() ?? "";
-  const normalizedAccount = qq?.trim() ?? "";
+  const normalizedAccount = compactID(qq);
   if (normalizedName && normalizedAccount) return `${normalizedName}（${normalizedAccount}）`;
   return normalizedName || normalizedAccount;
 }
