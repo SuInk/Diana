@@ -244,6 +244,7 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	}
 	var builder strings.Builder
 	builder.WriteString(pendingEarlierMessagesPrompt(cfg, event, history))
+	appendPromptSection(&builder, elsewherePartnerPrompt(cfg, event, history))
 	justAnswered := botJustAnsweredSender(history, event)
 	if justAnswered {
 		appendPromptSection(&builder, "你上一条回的就是这个人,这一轮是同一段对话的下一句:接着上一条往下说,"+

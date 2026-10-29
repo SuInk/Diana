@@ -27,15 +27,36 @@ import (
 // proactiveReplyTranscript 把评分上下文排成从早到晚的对话，当前消息放最后并单独标出。
 func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	botName := "机器人"
+	var otherAliases []string
 	for _, alias := range payload.BotAliases {
-		if alias = strings.TrimSpace(alias); alias != "" {
+		if alias = strings.TrimSpace(alias); alias == "" {
+			continue
+		}
+		if botName == "机器人" {
 			botName = alias
-			break
+		} else {
+			otherAliases = append(otherAliases, alias)
 		}
 	}
+	// 开头点明「机器人就是本人」，自己的发言带上全部称呼。判断模型（jev）靠「机器人」
+	// 二字认出哪几行是本人说的：把它换成「你」或只写别名，本人刚说完、群友接着回的
+	// 话就大面积漏判。按这个写法，53 条盲标分歧里判对从 17 条升到 35 条，漏判 26→7，
+	// 误唤醒持平。
+	aliasTail := ""
+	if len(otherAliases) > 0 {
+		aliasTail = "也叫" + strings.Join(otherAliases, "、")
+	}
+	botLabel := botName + "（机器人）"
+	if aliasTail != "" {
+		botLabel = botName + "（机器人，" + aliasTail + "）"
+	}
 	lines := make([]string, 0, len(payload.RecentMessages)+4)
-	if len(payload.BotAliases) > 0 {
-		lines = append(lines, "机器人的称呼："+strings.Join(payload.BotAliases, "、"))
+	if botName != "机器人" {
+		header := "机器人（即本人）叫" + botName
+		if aliasTail != "" {
+			header += "，" + aliasTail
+		}
+		lines = append(lines, header)
 	}
 	lines = append(lines, "对话按时间从早到晚：")
 	// 防抖、积压合并进来的候选（见 proactive_route_debounce.go）和当前消息挨着发，但话题
@@ -57,7 +78,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if item.MessageID != "" {
 			seen[item.MessageID] = true
 		}
-		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName)
+		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName, botLabel)
 		if burst[item.MessageID] > 0 && !item.IsBot {
 			line = label(item.MessageID) + line
 		}
@@ -70,13 +91,13 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if candidate.IsCurrent || (candidate.MessageID != "" && seen[candidate.MessageID]) {
 			continue
 		}
-		line := transcriptAge(candidate.AgeSeconds) + transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName)
+		line := transcriptAge(candidate.AgeSeconds) + transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName, botLabel)
 		if burst[candidate.MessageID] > 0 {
 			line = label(candidate.MessageID) + line
 		}
 		lines = append(lines, line)
 	}
-	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName)
+	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName, botLabel)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
 		who := strings.TrimSpace(payload.QuotedSender)
 		if payload.QuotedIsBot {
@@ -92,6 +113,11 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
 	if payload.LastBotAddressedCurrentSender && !payload.OthersSpokeAfterLastBot {
 		lines = append(lines, "（"+botName+"最近一条发言是冲着当前发送者说的）")
+	}
+	// 判断模型（jev）读不出「你」指的是谁，提示词和判据怎么写都只差几个百分点；
+	// 把谁在跟谁往来写成一行事实，生产那条误判才翻过来。见 elsewhere_partner.go。
+	if partner := strings.TrimSpace(payload.ElsewherePartner); partner != "" {
+		lines = append(lines, "（当前发送者最近一直在跟 "+partner+" 来回说话，这句没有叫"+botName+"、没有 @ "+botName+"，也没有引用"+botName+"）")
 	}
 	if notebook := strings.TrimSpace(payload.NotebookContext); notebook != "" {
 		lines = append(lines, "", "群内术语：", notebook)
@@ -166,11 +192,11 @@ func transcriptAge(seconds *int64) string {
 }
 
 // transcriptLine 渲染一行：「发送者（回复谁，@谁）：正文」。机器人自己的发言标成
-// 「<称呼>（机器人）」，指向机器人的回复和 @ 也写成它的称呼，模型不用再对账号。
-func transcriptLine(sender string, isBot bool, addressing messageAddressing, text string, images int, botName string) string {
+// botLabel（「<称呼>（机器人，也叫…）」），指向机器人的回复和 @ 也写成它的称呼，模型不用再对账号。
+func transcriptLine(sender string, isBot bool, addressing messageAddressing, text string, images int, botName, botLabel string) string {
 	name := strings.TrimSpace(sender)
 	if isBot {
-		name = botName + "（机器人）"
+		name = botLabel
 	}
 	var targets []string
 	switch addressing.ReplyTarget {

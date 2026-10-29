@@ -32,11 +32,11 @@ func TestProactiveReplyTranscriptReadsOldestFirst(t *testing.T) {
 	}
 	got := proactiveReplyTranscript(payload)
 	want := []string{
-		"机器人的称呼：嘉然、Diana",
+		"机器人（即本人）叫嘉然，也叫Diana",
 		"对话按时间从早到晚：",
 		"[1分钟前] Bob（回复Alice）：晚上吃啥 [图片×1]",
 		"[40秒前] Alice（@嘉然）：测距仪多少钱",
-		"[5秒前] 嘉然（机器人）（@Alice）：大概两三百块",
+		"[5秒前] 嘉然（机器人，也叫Diana）（@Alice）：大概两三百块",
 		"【当前消息】[刚刚] Alice：这么贵",
 		"（嘉然最近一条发言是冲着当前发送者说的）",
 		"",
@@ -61,7 +61,7 @@ func TestProactiveReplyTranscriptMarksQuotedBot(t *testing.T) {
 	if !strings.HasSuffix(got, "【当前消息】[刚刚] Carol（回复机器人）：真的吗（引用 机器人：白洲梓是《蔚蓝档案》里的角色）") {
 		t.Fatalf("quoted bot message not rendered as the bot:\n%s", got)
 	}
-	if strings.Contains(got, "机器人的称呼") {
+	if strings.Contains(got, "机器人（即本人）") {
 		t.Fatalf("no aliases configured, the alias line must be omitted:\n%s", got)
 	}
 }
@@ -122,5 +122,19 @@ func TestPendingEarlierMessagesStopsAtChatWithOthers(t *testing.T) {
 	history[1] = msg("m2", 105, text("说起来宇树不是开源了机器人模型吗"))
 	if got := pendingEarlierMessages(history, history[2], pendingEarlierMessagesLimit); len(got) != 2 {
 		t.Fatalf("earlier messages = %d, want 2", len(got))
+	}
+}
+
+// 发送者一直在跟别人往来、这句又没点本人时，对话稿末尾写出这件事。判断模型靠这一行
+// 才分得清「你」指谁，提示词里怎么写都不管用。
+func TestProactiveReplyTranscriptNotesElsewherePartner(t *testing.T) {
+	payload := proactiveReplyPayload{CurrentText: "你回复还是短一点", CurrentSender: "黑蛋", BotAliases: []string{"嘉然"}, ElsewherePartner: "简（zero）"}
+	got := proactiveReplyTranscript(payload)
+	if !strings.Contains(got, "（当前发送者最近一直在跟 简（zero） 来回说话，这句没有叫嘉然、没有 @ 嘉然，也没有引用嘉然）") {
+		t.Fatalf("transcript missing elsewhere note:\n%s", got)
+	}
+	payload.ElsewherePartner = ""
+	if got := proactiveReplyTranscript(payload); strings.Contains(got, "来回说话") {
+		t.Fatalf("no partner, no note:\n%s", got)
 	}
 }

@@ -3248,6 +3248,9 @@ type proactiveReplyPayload struct {
 	// 只给接话评分的对话稿用：这时「机器人最近一条是冲着当前发送者说的」那条提示不再
 	// 成立为「紧接着它的话」，不能再写给模型。
 	OthersSpokeAfterLastBot bool `json:"-"`
+	// ElsewherePartner 是当前发送者最近一直在来回说话的那个人（或别的机器人），
+	// 当前这句又没点本人时才有值，见 elsewherePartner。同样只给对话稿用。
+	ElsewherePartner string `json:"-"`
 	// MentionNames 是会话历史里的账号→昵称，用来给 @ 别人的提及补名，见 fillMentionNames。
 	MentionNames        map[string]string                `json:"-"`
 	RecentImageCount    int                              `json:"recent_image_count"`
@@ -3379,6 +3382,7 @@ func (r *Runtime) proactiveReplyPayload(event MessageEvent, text string) proacti
 	}
 	payload.MentionNames = mentionNamesFromHistory(history)
 	payload.fillMentionNames()
+	payload.ElsewherePartner = elsewherePartner(cfg, event, history)
 	return payload
 }
 

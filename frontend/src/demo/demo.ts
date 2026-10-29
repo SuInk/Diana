@@ -2589,11 +2589,13 @@ function demoParticipationPreview(body: Record<string, unknown>) {
   // 和后端 proactiveReplyTranscript 一样：按时间从早到晚的对话稿，行首是离现在多久。
   const aliases = ((body.group_triggers as string[] | undefined) ?? []).map((alias) => alias.trim()).filter(Boolean);
   const botName = aliases[0] ?? "机器人";
+  const aliasTail = aliases.length > 1 ? "也叫" + aliases.slice(1).join("、") : "";
+  const botLabel = aliasTail ? `${botName}（机器人，${aliasTail}）` : `${botName}（机器人）`;
   const transcript = [
-    ...(aliases.length ? ["机器人的称呼：" + aliases.join("、")] : []),
+    ...(aliases.length ? ["机器人（即本人）叫" + botName + (aliasTail ? "，" + aliasTail : "")] : []),
     "对话按时间从早到晚：",
     "[1分钟前] 小林：周末有人去看展吗",
-    `[1分钟前] ${botName}（机器人）：上次说的那个展好像延期了`,
+    `[1分钟前] ${botLabel}：上次说的那个展好像延期了`,
     "[25秒前] 阿杰：啊？那我票白买了",
     "【当前消息】[刚刚] 小林：有人知道改到哪天了吗"
   ].join("\n");

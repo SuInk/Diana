@@ -80,7 +80,7 @@ func sendText(call llm.ToolCall) string {
 func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolDefinition {
 	properties := map[string]any{
 		"text":          toolStringParam("正文，按会话要求附链接；勿写JSON。拒绝要说出来"),
-		"silent":        toolBoolParam("true 则本轮不发消息、text 留空。仅无话可说或已道别时用，拒绝要说出来"),
+		"silent":        toolBoolParam("true 则本轮不发消息、text 留空。仅无话可说、已道别或当前消息不是对你说的时用，拒绝要说出来"),
 		"silent_reason": toolStringParam("不回复的原因，只进日志"),
 		"continue":      toolBoolParam("还要接着调用工具时填 true：这句先发出去，本轮继续，下一步必须真的调用工具；不填就是本轮的最终回复，发完就结束"),
 	}
