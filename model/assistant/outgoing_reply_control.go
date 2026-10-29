@@ -52,8 +52,23 @@ var (
 		`[\[<({【][^\[\]<>(){}【】\n]{0,80}?[Dd]iana[-_ ]?reply[^\[\]<>(){}【】\n]{0,200}?[\]>)}】]`)
 )
 
+// 模型还会把前缀整个丢掉，写成「[reply:...]」——连 ID 都是照抄的占位省略号，
+// 2026-10-29 群里有人贴出过这样一条。没有 diana 字样，上面的变体认不出来。
+// 只认回复最开头这一个位置：正文中间的「[reply:」可能是用户真在讨论这个写法。
+// ID 像样就扶正成引用标记，交给后面按会话历史校验；不像样（省略号、空）就丢掉。
+var bareReplyMarkerPattern = regexp.MustCompile(`^[ \t\r\n]*[\[【][ \t]*[Rr]eply[ \t]*[:：=][ \t]*([^\]】\n]{0,200}?)[ \t]*[\]】][ \t]*`)
+
 // normalizeDianaReplyVariants 把写歪的引用标记改回正规形态。
 func normalizeDianaReplyVariants(text string) string {
+	if match := bareReplyMarkerPattern.FindStringSubmatchIndex(text); match != nil {
+		id := text[match[2]:match[3]]
+		rest := text[match[1]:]
+		if full := dianaReplyVariantIDPattern.FindStringSubmatch("diana-reply:" + id); full != nil && full[1] == id {
+			text = replyMarkerPrefix + id + "]" + rest
+		} else {
+			text = rest
+		}
+	}
 	if !strings.Contains(strings.ToLower(text), "diana") {
 		return text
 	}

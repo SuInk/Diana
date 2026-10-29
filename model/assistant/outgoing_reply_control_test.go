@@ -276,3 +276,17 @@ func TestOutgoingReplyDiscardDiagnostics(t *testing.T) {
 		})
 	}
 }
+
+func TestNormalizeDianaReplyVariantsBarePrefix(t *testing.T) {
+	cases := map[string]string{
+		"[reply:...] 念旧说的应该是我那句回得慢": "念旧说的应该是我那句回得慢",
+		"[reply:12345]好":        "[diana-reply:12345]好",
+		"【reply：】嗯":             "嗯",
+		"正文里聊 [reply:...] 这种写法": "正文里聊 [reply:...] 这种写法",
+	}
+	for in, want := range cases {
+		if got := normalizeDianaReplyVariants(in); got != want {
+			t.Errorf("normalizeDianaReplyVariants(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -7216,6 +7216,7 @@ func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMess
 	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
 	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
 	text = dropResidualDianaReplyMarkers(text)
+	text = stripLeakedControlMarkers(text)
 	if text == msg.Text {
 		return msg
 	}
