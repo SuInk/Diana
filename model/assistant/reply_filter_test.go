@@ -82,11 +82,8 @@ func TestReplyFilterRulesDefaultIsEditable(t *testing.T) {
 	if got := reloaded.WithDefaults().ReplyFilterRules; got == nil || len(got) != 0 {
 		t.Fatalf("cleared rules after reload = %#v", got)
 	}
-	got := applyReplyFilters(defaultReplyFilterRules(), "全平台都卡（历史一多就掉帧\n看 [文档](https://x.test/a_(b 吧")
-	if got != "全平台都卡\n看 [文档](https://x.test/a_(b 吧" {
+	got := applyReplyFilters(defaultReplyFilterRules(), "嗯，那就好 [DIANA_REPLY_SINGLE]\n分开发[[DAIAN_LINES_COMPACT]]吧\n括号照发（")
+	if got != "嗯，那就好\n分开发吧\n括号照发（" {
 		t.Fatalf("default rule filtered = %q", got)
-	}
-	if kept := applyReplyFilters(defaultReplyFilterRules(), "这也行（"); kept != "这也行（" {
-		t.Fatalf("lone trailing bracket must stay, got %q", kept)
 	}
 }
