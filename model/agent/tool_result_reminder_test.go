@@ -28,3 +28,20 @@ func TestWithToolResultReminder(t *testing.T) {
 		t.Fatal("reminder added after assistant turn")
 	}
 }
+
+func TestToolResultReminderSwitchesAfterSubtask(t *testing.T) {
+	runner := &Runner{cfg: Config{ToolResultReminder: "brief", SubtaskResultReminder: "full"}}
+	if got := runner.toolResultReminder([]Step{{Tool: webSearchToolName}}); got != "brief" {
+		t.Fatalf("web search only = %q, want brief", got)
+	}
+	if got := runner.toolResultReminder([]Step{{Tool: subtaskToolName, Error: "boom"}}); got != "brief" {
+		t.Fatalf("failed subtask = %q, want brief", got)
+	}
+	if got := runner.toolResultReminder([]Step{{Tool: webSearchToolName}, {Tool: subtaskToolName}}); got != "full" {
+		t.Fatalf("subtask = %q, want full", got)
+	}
+	runner.cfg.SubtaskResultReminder = ""
+	if got := runner.toolResultReminder([]Step{{Tool: subtaskToolName}}); got != "brief" {
+		t.Fatalf("no subtask reminder = %q, want brief", got)
+	}
+}

@@ -229,4 +229,12 @@ const replyToolResultBrevityRule = "【写最终回复前】上面的工具结�
 
 var promptReplyToolResultBrevitySpec = styleSpec("tool_result_brevity", "工具结果后：只挑要点", "群聊里工具跑完后的那一步临时接在请求末尾，不进上下文：工具结果只是素材，只写这一问需要的一两点。", replyToolResultBrevityRule)
 
+// replySubtaskResultRule 在群聊里跑过 subtask 调研之后代替上面那条。委派调研的问题本来
+// 就要一份整理过的答案，上面的「一两句、几十个字」会把它压成一句「先别信」：线上问
+// 一封 NVIDIA 招聘邮件真假，Worker 查回四条核验要点，最终只发出 143 字。闲聊和普通
+// 搜索仍走上面那条，群聊篇幅规则不放宽。
+const replySubtaskResultRule = "【写最终回复前】上面是委派调研查回来的结果。这一问值得认真查，就把结论和支撑它的要点完整写给对方：先一句结论，再按需要分条写清依据、怎么核实或怎么做，附来源链接；篇幅够讲清楚就行，不要为了简短删掉对方用得上的要点。只写和这一问有关的，不照抄 Worker 的措辞和免责声明，不用「根据资料」这类话开头。"
+
+var promptReplySubtaskResultSpec = styleSpec("subtask_result", "调研结果后：完整整理", "群聊里跑过 subtask 调研后，代替「工具结果后：只挑要点」临时接在请求末尾：把调研结论和要点完整写出来。", replySubtaskResultRule)
+
 var promptReplyDepthAnchorSpec = styleSpec("depth_anchor", "收尾：只答问到的", "每轮放在尾部最后、紧跟人设收尾提醒：输出前检查这次究竟问了什么，别展开成攻略。", replyDepthClosingAnchor)

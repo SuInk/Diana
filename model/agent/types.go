@@ -156,6 +156,9 @@ type Config struct {
 	// ToolResultReminder 非空时，工具跑完后的那一步规划在请求末尾临时带上这段提醒，
 	// 不写进上下文：离生成位置最近，多步之后也不会叠加。
 	ToolResultReminder string
+	// SubtaskResultReminder 非空时，本轮成功跑过 subtask 调研后用它代替 ToolResultReminder：
+	// 委派调研的人要的是整理好的结果，按闲聊篇幅压成一两句就白查了。
+	SubtaskResultReminder string
 }
 
 type Request struct {
