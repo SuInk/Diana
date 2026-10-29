@@ -2283,6 +2283,14 @@ onBeforeUnmount(() => {
   gap: 8px 12px;
 }
 
+/* 消息 ID、模型名等可能是一长串不带断点的字符（QQ 官方的 ROBOT1.0_… 上百字符），
+   不让单项折行就会把整张卡片乃至页面撑出横向滚动。 */
+.event-technical > span {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
 /* token 数偏少时要显眼一点，不然会被当成「这些调用没花钱」。 */
 .event-technical .usage-missing {
   color: var(--warn);
