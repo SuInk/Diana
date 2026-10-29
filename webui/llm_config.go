@@ -181,6 +181,8 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.POST("/api/llm/test", h.test)
 	router.POST("/api/llm/persona", h.personaGenerate)
 	router.POST("/api/llm/rss-assist", h.rssAssist)
+	router.POST("/api/llm/reply-filter-assist", h.replyFilterAssist)
+	router.POST("/api/assistant/reply-filter/test", h.replyFilterTest)
 	router.GET("/api/llm/providers", h.providers)
 	router.POST("/api/llm/providers/models", h.providerModels)
 	router.POST("/api/llm/providers/test", h.providerTest)

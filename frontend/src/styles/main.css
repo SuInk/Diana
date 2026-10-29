@@ -2087,6 +2087,62 @@ code {
   }
 }
 
+/* 回复过滤规则：一条一行，测试结果紧跟在列表下面。 */
+.reply-filter-list {
+  display: grid;
+  gap: 6px;
+}
+
+.reply-filter-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.reply-filter-empty {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.reply-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.reply-filter-test {
+  display: grid;
+  gap: 8px;
+}
+
+.reply-filter-steps {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.reply-filter-steps code {
+  margin-right: 6px;
+}
+
+.reply-filter-error {
+  color: var(--danger, #e5484d);
+}
+
+.reply-filter-result {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+
 /* 人设 YAML 有十几万字，编辑框占满弹窗高度，等宽字体让缩进看得清。 */
 .persona-yaml-hint {
   margin: 0;

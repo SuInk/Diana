@@ -906,16 +906,53 @@
                 <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
               </div>
               <div class="field wide">
-                <label for="bot-reply-filters">回复过滤正则</label>
-                <textarea
-                  id="bot-reply-filters"
-                  v-model="replyFilterRulesDraft"
-                  class="textarea mono"
-                  rows="3"
-                  spellcheck="false"
-                  placeholder="每行一条正则，例如 （[^）]*$ 删掉行尾没闭合的括号和后面那段话"
-                ></textarea>
-                <span class="hint">发送前把命中的内容从回复里删掉，每行按单独一行匹配（^ $ 对应行首行尾），不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认带一条删漏出来的内部控制标记（如 [DIANA_REPLY_SINGLE]）的规则，可以改也可以删，清空后不会再补回来。</span>
+                <label>回复过滤正则</label>
+                <div class="reply-filter-list">
+                  <div v-for="(_, index) in replyFilterRulesDraft" :key="index" class="reply-filter-row">
+                    <input
+                      v-model="replyFilterRulesDraft[index]"
+                      class="input mono"
+                      type="text"
+                      spellcheck="false"
+                      :aria-label="`回复过滤正则第 ${index + 1} 条`"
+                      placeholder="一条 Go 正则，例如 ～+$"
+                    />
+                    <button class="btn small" type="button" :aria-label="`删除第 ${index + 1} 条`" @click="removeReplyFilterRule(index)">删除</button>
+                  </div>
+                  <p v-if="!replyFilterRulesDraft.length" class="muted reply-filter-empty">还没有规则，回复原样发送。</p>
+                </div>
+                <div class="reply-filter-actions">
+                  <button class="btn small" type="button" @click="addReplyFilterRule('')">添加规则</button>
+                  <button class="btn small" type="button" @click="openReplyFilterAssist">AI 帮写</button>
+                  <button class="btn small" type="button" @click="replyFilterTestOpen = !replyFilterTestOpen">{{ replyFilterTestOpen ? "收起测试" : "测试" }}</button>
+                </div>
+                <div v-if="replyFilterTestOpen" class="reply-filter-test">
+                  <textarea
+                    v-model="replyFilterSample"
+                    class="textarea"
+                    rows="3"
+                    aria-label="测试用的回复样例"
+                    placeholder="贴一段回复样例，看看上面的规则会删掉什么"
+                  ></textarea>
+                  <div class="reply-filter-actions">
+                    <button class="btn small primary" type="button" :disabled="replyFilterTestBusy || !replyFilterSample.trim()" @click="runReplyFilterTest">
+                      {{ replyFilterTestBusy ? "测试中…" : "用当前规则测试" }}
+                    </button>
+                  </div>
+                  <template v-if="replyFilterTestResult">
+                    <ul class="reply-filter-steps">
+                      <li v-for="(step, index) in replyFilterTestResult.steps" :key="index">
+                        <code>{{ step.rule }}</code>
+                        <span v-if="step.error" class="reply-filter-error">{{ step.error }}</span>
+                        <span v-else-if="step.removed.length">删掉 {{ step.removed.map((item) => `「${item}」`).join("、") }}</span>
+                        <span v-else class="muted">没命中</span>
+                      </li>
+                    </ul>
+                    <span class="hint">发出去的样子</span>
+                    <pre class="reply-filter-result">{{ replyFilterTestResult.result || "（整条被删光，这一轮不发送）" }}</pre>
+                  </template>
+                </div>
+                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾），不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认带一条删漏出来的内部控制标记（如 [DIANA_REPLY_SINGLE]）的规则，可以改也可以删，清空后不会再补回来。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2063,6 +2100,60 @@
       @saved="onMessageRelaysSaved"
     />
 
+    <Modal v-if="replyFilterAssistOpen" title="AI 帮写过滤规则" @close="closeReplyFilterAssist">
+      <div class="stack" style="gap: 12px">
+        <div class="field">
+          <label for="reply-filter-request">想删掉什么</label>
+          <textarea
+            id="reply-filter-request"
+            ref="replyFilterRequestInput"
+            v-model="replyFilterRequest"
+            class="textarea"
+            rows="3"
+            placeholder="例如：删掉回复开头的 [reply:xxx] 这种标记"
+            @keydown.ctrl.enter.prevent="runReplyFilterAssist"
+            @keydown.meta.enter.prevent="runReplyFilterAssist"
+          ></textarea>
+        </div>
+        <div class="field">
+          <label for="reply-filter-assist-sample">示例回复（可选）</label>
+          <textarea
+            id="reply-filter-assist-sample"
+            v-model="replyFilterAssistSample"
+            class="textarea"
+            rows="2"
+            placeholder="贴一段真的漏出来的回复，写出来的规则会更准"
+          ></textarea>
+        </div>
+        <div class="field">
+          <label>用哪个模型写</label>
+          <div class="persona-composer-route">
+            <AppSelect
+              :model-value="personaChannelValue"
+              :options="personaChannelOptions"
+              placeholder="请选择提供商 / 分组"
+              @update:model-value="setPersonaChannel"
+            />
+            <AppSelect
+              :model-value="personaModelValue"
+              :options="personaModelOptions"
+              :disabled="!personaRoute"
+              :placeholder="personaRoute ? '请选择模型' : '跟随对话模型'"
+              @update:model-value="setPersonaModel"
+            />
+          </div>
+          <span class="hint">和「AI 生成人设」用同一个选择，默认跟随对话模型。</span>
+        </div>
+        <p class="muted" style="margin: 0; font-size: 12.5px">写好的规则会先检查能不能用，再加到列表末尾，有示例时顺便跑一遍测试；保存配置后才生效。</p>
+      </div>
+      <template #footer>
+        <button class="btn small" type="button" :disabled="replyFilterAssistBusy" @click="closeReplyFilterAssist">取消</button>
+        <button class="btn primary small" type="button" :disabled="replyFilterAssistBusy || !replyFilterRequest.trim()" @click="runReplyFilterAssist">
+          {{ replyFilterAssistBusy ? "生成中…" : "生成规则" }}
+        </button>
+      </template>
+    </Modal>
+
     <Modal
       v-if="personaComposerOpen"
       :title="form?.system_prompt?.trim() ? '按需求改写人设' : 'AI 生成人设'"
@@ -2135,6 +2226,9 @@ import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, media
 import {
   deleteBotProfile,
   generatePersona,
+  assistReplyFilterRule,
+  testReplyFilters,
+  type ReplyFilterTestResponse,
   exportPromptFile,
   importPromptFile,
   getConfig,
@@ -2378,7 +2472,16 @@ const busy = ref(false);
 const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
-const replyFilterRulesDraft = ref("");
+const replyFilterRulesDraft = ref<string[]>([]);
+const replyFilterTestOpen = ref(false);
+const replyFilterSample = ref("");
+const replyFilterTestBusy = ref(false);
+const replyFilterTestResult = ref<ReplyFilterTestResponse | null>(null);
+const replyFilterAssistOpen = ref(false);
+const replyFilterRequest = ref("");
+const replyFilterAssistSample = ref("");
+const replyFilterRequestInput = ref<HTMLTextAreaElement | null>(null);
+const replyFilterAssistBusy = ref(false);
 // AppSelect 要一个确定的值，而配置里这一项是可选的：留空按 auto。
 // 推荐默认值从后端要，不在前端抄一份——抄一份迟早和 DefaultBotConfig 对不上。
 const applyingAgentDefaults = ref(false);
@@ -4606,7 +4709,8 @@ function setForm(config: BotProfileConfig): void {
   };
   triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
-  replyFilterRulesDraft.value = (config.reply_filter_rules ?? []).join("\n");
+  replyFilterRulesDraft.value = [...(config.reply_filter_rules ?? [])];
+  replyFilterTestResult.value = null;
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
     draft.value = "";
@@ -4636,6 +4740,71 @@ function onWeixinLoginUpdated(config: BotProfileConfig): void {
 
 // 人设变量取配置里的机器人名称，不取触发别名。
 const personaDisplayName = computed(() => form.value?.name?.trim() || "");
+
+function addReplyFilterRule(rule: string): void {
+  replyFilterRulesDraft.value.push(rule);
+  if (rule) return;
+  // 手动加的空行直接把光标放进去，不用再点一次。
+  void nextTick(() => {
+    const inputs = document.querySelectorAll<HTMLInputElement>(".reply-filter-row input");
+    inputs[inputs.length - 1]?.focus();
+  });
+}
+
+function removeReplyFilterRule(index: number): void {
+  replyFilterRulesDraft.value.splice(index, 1);
+}
+
+async function runReplyFilterTest(): Promise<void> {
+  if (replyFilterTestBusy.value || !replyFilterSample.value.trim()) return;
+  replyFilterTestBusy.value = true;
+  try {
+    replyFilterTestResult.value = await testReplyFilters(replyFilterRulesDraft.value, replyFilterSample.value);
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "测试失败");
+  } finally {
+    replyFilterTestBusy.value = false;
+  }
+}
+
+function openReplyFilterAssist(): void {
+  replyFilterAssistOpen.value = true;
+  void nextTick(() => replyFilterRequestInput.value?.focus());
+}
+
+function closeReplyFilterAssist(): void {
+  if (replyFilterAssistBusy.value) return;
+  replyFilterAssistOpen.value = false;
+}
+
+async function runReplyFilterAssist(): Promise<void> {
+  const request = replyFilterRequest.value.trim();
+  if (!request || replyFilterAssistBusy.value) return;
+  replyFilterAssistBusy.value = true;
+  try {
+    const route = personaRoute.value ?? roleForm.value.chat;
+    const sample = replyFilterAssistSample.value.trim();
+    const result = await assistReplyFilterRule(request, sample, {
+      profile_id: route?.profile_id || route?.provider_id,
+      group: route?.group,
+      model: route?.model_id || route?.model
+    });
+    addReplyFilterRule(result.rule);
+    replyFilterAssistOpen.value = false;
+    replyFilterRequest.value = "";
+    replyFilterAssistSample.value = "";
+    if (sample) {
+      replyFilterSample.value = sample;
+      replyFilterTestOpen.value = true;
+      await runReplyFilterTest();
+    }
+    toastSuccess("规则已加到列表末尾，确认后记得保存配置");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "生成失败");
+  } finally {
+    replyFilterAssistBusy.value = false;
+  }
+}
 
 function openPersonaComposer(): void {
   personaComposerOpen.value = true;
@@ -4839,10 +5008,7 @@ async function save(): Promise<void> {
         .split("\n")
         .map((item) => item.trim())
         .filter((item) => item !== ""),
-      reply_filter_rules: replyFilterRulesDraft.value
-        .split("\n")
-        .map((item) => item.trim())
-        .filter((item) => item !== ""),
+      reply_filter_rules: replyFilterRulesDraft.value.map((item) => item.trim()).filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       // 清空的输入框是空字符串，后端的整数字段读不了；0 表示用默认值。
       reply_suppression_min_minutes: Math.trunc(Number(current.reply_suppression_min_minutes)) || 0,

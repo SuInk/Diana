@@ -1612,6 +1612,43 @@ export function generatePersona(
   });
 }
 
+export interface ReplyFilterAssistResponse {
+  rule: string;
+  model?: string;
+  provider?: string;
+}
+
+/** 用对话模型把一句需求写成一条回复过滤正则，后端已校验能用，不保存。 */
+export function assistReplyFilterRule(
+  request: string,
+  sample?: string,
+  options?: { profile_id?: string; group?: string; model?: string }
+): Promise<ReplyFilterAssistResponse> {
+  return requestJSON<ReplyFilterAssistResponse>("/api/llm/reply-filter-assist", {
+    method: "POST",
+    body: JSON.stringify({ request, sample, ...(options ?? {}) })
+  });
+}
+
+export interface ReplyFilterTestStep {
+  rule: string;
+  removed: string[];
+  error?: string;
+}
+
+export interface ReplyFilterTestResponse {
+  result: string;
+  steps: ReplyFilterTestStep[];
+}
+
+/** 用发送时同一套 Go 正则跑一遍样例，不保存规则。 */
+export function testReplyFilters(rules: string[], text: string): Promise<ReplyFilterTestResponse> {
+  return requestJSON<ReplyFilterTestResponse>("/api/assistant/reply-filter/test", {
+    method: "POST",
+    body: JSON.stringify({ rules, text })
+  });
+}
+
 export interface RSSAssistResponse {
   text: string;
   model?: string;

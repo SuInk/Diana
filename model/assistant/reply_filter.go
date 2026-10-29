@@ -86,3 +86,37 @@ func applyReplyFilters(rules []string, text string) string {
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
+
+// ValidateReplyFilterRules 给 WebUI 的帮写和测试用，规则同保存时的校验。
+func ValidateReplyFilterRules(rules []string) error {
+	return validateReplyFilterRules(rules)
+}
+
+// ReplyFilterStep 是测试面板里一条规则的效果：删掉了哪些片段，或者规则本身不合法。
+type ReplyFilterStep struct {
+	Rule    string   `json:"rule"`
+	Removed []string `json:"removed"`
+	Error   string   `json:"error,omitempty"`
+}
+
+// PreviewReplyFilters 按发送时的顺序逐条跑规则，返回最终文本和每条删掉的内容。
+// 不合法的规则和发送时一样跳过，只在结果里标出原因。
+func PreviewReplyFilters(rules []string, text string) (string, []ReplyFilterStep) {
+	steps := make([]ReplyFilterStep, 0, len(rules))
+	valid := make([]string, 0, len(rules))
+	current := text
+	for _, rule := range rules {
+		step := ReplyFilterStep{Rule: rule, Removed: []string{}}
+		if err := validateReplyFilterRules([]string{rule}); err != nil {
+			step.Error = err.Error()
+			steps = append(steps, step)
+			continue
+		}
+		valid = append(valid, rule)
+		compiled, _ := compileReplyFilterRule("(?m)" + rule)
+		step.Removed = append(step.Removed, compiled.FindAllString(current, -1)...)
+		current = compiled.ReplaceAllString(current, "")
+		steps = append(steps, step)
+	}
+	return applyReplyFilters(valid, text), steps
+}

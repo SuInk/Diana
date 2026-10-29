@@ -2169,6 +2169,27 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const text = kind === "regex" ? "(?i)release|正式版|稳定版" : kind === "judge" ? `只通知符合“${request}”的条目；排除重复、预告和无关内容。` : `将标题和正文${request}，表达准确简洁，不添加原文没有的信息。`;
     return json({ text, model: "demo", provider: "demo" });
   }
+  if (path === "/api/llm/reply-filter-assist" && method === "POST") {
+    if (!String(body.request ?? "").trim()) return json({ error: "请先写一句想删掉什么" }, 400);
+    return json({ rule: String.raw`^\[[A-Za-z_-]+:[^\]\s]*\]\s*`, model: "demo", provider: "demo" });
+  }
+  if (path === "/api/assistant/reply-filter/test" && method === "POST") {
+    // 演示模式没有 Go 后端，用浏览器正则近似；真实环境由后端按 RE2 计算。
+    let text = String(body.text ?? "");
+    const steps = (Array.isArray(body.rules) ? body.rules : []).map((rule) => {
+      const source = String(rule);
+      try {
+        const pattern = new RegExp(source, "gm");
+        const removed = text.match(pattern) ?? [];
+        text = text.replace(pattern, "");
+        return { rule: source, removed };
+      } catch (error) {
+        return { rule: source, removed: [], error: `回复过滤规则 "${source}" 不是合法的正则` };
+      }
+    });
+    const result = text.split("\n").map((line) => line.trimEnd()).join("\n").trim();
+    return json({ result, steps });
+  }
   if (path === "/api/assistant/personas" && method === "GET") {
     return json({ personas: demoPersonas, limit: 50 });
   }

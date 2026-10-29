@@ -87,3 +87,16 @@ func TestReplyFilterRulesDefaultIsEditable(t *testing.T) {
 		t.Fatalf("default rule filtered = %q", got)
 	}
 }
+
+func TestPreviewReplyFiltersReportsEachRule(t *testing.T) {
+	got, steps := PreviewReplyFilters([]string{`喵$`, "(", `^\[x\]`}, "[x]好耶喵\n再见")
+	if got != "好耶\n再见" {
+		t.Fatalf("result = %q", got)
+	}
+	if len(steps) != 3 || len(steps[0].Removed) != 1 || steps[0].Removed[0] != "喵" {
+		t.Fatalf("steps = %#v", steps)
+	}
+	if steps[1].Error == "" || len(steps[2].Removed) != 1 || steps[2].Removed[0] != "[x]" {
+		t.Fatalf("steps = %#v", steps)
+	}
+}

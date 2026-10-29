@@ -330,7 +330,7 @@ test("timeout saves keep newer drafts, failed edits and a different bot intact",
       sendRetryValidationError: () => "", sendRetryPayload: () => ({}),
       botImageGenerationLimitsPayload: () => ({}), botVideoGenerationLimitsPayload: () => ({}), mediaGenerationCooldownPayload: () => ({}),
       isOneBotPlatform: { value: false }, busy: { value: false }, creating: { value: false }, page: { value: "edit" },
-      tokenDrafts: {}, triggersDraft: { value: "" }, welcomeTemplatesDraft: { value: "" }, replyFilterRulesDraft: { value: "" }, allowlistDraft: { value: "" }, splitList: () => [], parseTriggerWords,
+      tokenDrafts: {}, triggersDraft: { value: "" }, welcomeTemplatesDraft: { value: "" }, replyFilterRulesDraft: { value: [] }, allowlistDraft: { value: "" }, splitList: () => [], parseTriggerWords,
       defaultRecallReplyAutoDeleteDelaySeconds: 60, admissionMode: { value: "disabled" }, privateAdmissionMode: { value: "disabled" }, privateAllowedUsers: { value: [] },
       toastError: error => errors.push(error), toastSuccess() {}, profileSet: { value: {} }, residencyPanel: { value: null }, saveMediaBaseURLIfChanged: async () => {},
       saveBotProfileConfig: value => { payload = value; return new Promise((resolve, reject) => { complete = () => outcome === "failure" ? reject(new Error("failed")) : resolve(value); }); }
