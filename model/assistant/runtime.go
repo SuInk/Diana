@@ -3993,9 +3993,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
 	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
-	if cfg.MaxInputChars > 0 && len([]rune(cleanText)) > cfg.MaxInputChars {
-		cleanText = string([]rune(cleanText)[:cfg.MaxInputChars])
-	}
+	cleanText = truncateInputText(cleanText, event.MessageID, cfg.MaxInputChars)
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
 		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {

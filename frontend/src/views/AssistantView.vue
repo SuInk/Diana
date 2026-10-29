@@ -875,6 +875,7 @@
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
+                <span class="hint">-1 不限制（默认），或填 1000 以上。超长消息模型只读到开头，并被告知可以按需读全文。</span>
               </div>
               <div class="field">
                 <label for="bot-maxreply">单条回复上限（字符）</label>

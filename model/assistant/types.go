@@ -2169,7 +2169,6 @@ func DefaultBotConfig() BotConfig {
 		ChatInEnabled:                boolPointer(true),
 		ChatInLevel:                  defaultChatInLevel,
 		NaturalInterjectionEnabled:   boolPointer(false),
-		MaxInputChars:                2000,
 		ReplyMergeConfidencePercent:  defaultReplyMergeConfidencePercent,
 		MaxReplyChars:                3500,
 		ReplyMaxBubbles:              replyMaxChatBubbles,
@@ -2370,8 +2369,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.InboundPrivateConcurrency > maxInboundSessionConcurrency {
 		cfg.InboundPrivateConcurrency = maxInboundSessionConcurrency
 	}
+	// 单次输入默认不设上限，-1 表示不限制；填了正数才截，太小会把正常消息也截掉，最少 MinMaxInputChars。
 	if cfg.MaxInputChars <= 0 {
-		cfg.MaxInputChars = defaults.MaxInputChars
+		cfg.MaxInputChars = MaxInputCharsUnlimited
+	} else {
+		cfg.MaxInputChars = max(cfg.MaxInputChars, MinMaxInputChars)
 	}
 	if cfg.MaxReplyChars <= 0 {
 		cfg.MaxReplyChars = defaults.MaxReplyChars
