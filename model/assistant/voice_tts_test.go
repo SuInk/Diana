@@ -66,7 +66,7 @@ func TestTTSToolFollowsSpeechSlotAndPlatform(t *testing.T) {
 			t.Fatalf("tts tool should be offered on %s", platform)
 		}
 	}
-	if _, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate, Platform: PlatformFeishu}); ok {
+	if _, _, ok := r.voiceTTSToolForEvent(context.Background(), MessageEvent{Kind: EventKindPrivate, Platform: PlatformIMessage}); ok {
 		t.Fatal("tts tool must not be offered where voice cannot be sent")
 	}
 }
