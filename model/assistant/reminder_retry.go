@@ -125,7 +125,7 @@ func (r *Runtime) notifyReminderFailure(ctx context.Context, item Reminder, caus
 		return ctx.Err()
 	}
 	notice := reminderFailureNotice(item, cause)
-	target := reminderSourceEvent(item)
+	target := r.sourceEventForReminder(item)
 	if target.Kind == EventKindGroup && errors.Is(cause, errOutboundSend) {
 		target = reminderPrivateFallbackTarget(item)
 	}

@@ -134,7 +134,8 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 	if r.handleOwnerBind(ctx, event) {
 		return nil
 	}
-	// 跨平台绑定账号同理放在准入之前：要关联的正是准入还不认识的那个号。
+	// 跨平台绑定账号同理放在准入之前：要关联的正是准入还不认识的那个号。准入怎么管
+	// 这两条命令见 handleIdentityBind。
 	if r.handleIdentityBind(ctx, event) {
 		return nil
 	}

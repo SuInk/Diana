@@ -1361,7 +1361,7 @@ func (r *Runtime) deliverOneTimeReminder(ctx context.Context, item Reminder, con
 				reminderLocalTime(item, due).Format("01-02 15:04"), formatReminderLateness(late), body)
 		}
 	}
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	// 提醒到点先戳一下设提醒的人，像人叫人一样；戳不出去不影响提醒本身。
 	if !missed && strings.TrimSpace(item.UserID) != "" && IsOneBotPlatform(r.currentPlatform(source)) {
 		_, _ = r.sendPoke(ctx, source, item.UserID, pokeSceneReminder)
@@ -1381,7 +1381,7 @@ func (r *Runtime) runOneTimeReminderQuery(ctx context.Context, item Reminder) (s
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		return pending, nil
 	}
-	if !r.effectiveConfigForEvent(reminderSourceEvent(item)).AgentEnabled {
+	if !r.effectiveConfigForEvent(r.sourceEventForReminder(item)).AgentEnabled {
 		return "提醒你：" + item.Message, nil
 	}
 	reply, err := r.runTaskQueryWithSlot(ctx, func(ctx context.Context) (string, error) {
@@ -1398,7 +1398,7 @@ func (r *Runtime) runOneTimeReminderQuery(ctx context.Context, item Reminder) (s
 
 func (r *Runtime) runClaimedScheduledQuery(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		return startedAt, r.sendSubscriberNotice(ctx, source, pending)
 	}
@@ -1431,7 +1431,7 @@ func repositoryWatchRoundBudget(item Reminder) time.Duration {
 
 func (r *Runtime) runClaimedRepositoryWatch(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		if err := r.sendRepositoryWatch(ctx, item, pending); err != nil {
 			return startedAt, repositoryWatchStageFailure(repositoryWatchFailureStageDelivery, err)
@@ -1693,7 +1693,7 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	if strings.TrimSpace(notification) == "" || !repositoryWatchHasDeliveryTarget(item) {
 		return
 	}
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	if !r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)) {
 		return
 	}
@@ -2405,7 +2405,7 @@ func (r *Runtime) runTaskQueryWithSlot(ctx context.Context, run func(context.Con
 }
 
 func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Reminder) (string, error) {
-	if !r.effectiveConfigForEvent(reminderSourceEvent(item)).AgentEnabled {
+	if !r.effectiveConfigForEvent(r.sourceEventForReminder(item)).AgentEnabled {
 		return "", fmt.Errorf("Agent 已禁用，无法执行周期查询")
 	}
 	reply, err := r.runTaskQuery(ctx, item, promptScheduledQuerySystemSpec, promptScheduledQueryRequestSpec)
@@ -2421,7 +2421,7 @@ type scheduledQueryRunContextKey struct{}
 // runTaskQuery 让 Agent 按任务内容实际执行一次（可以调工具），返回模型的最终回复。
 // 定时订阅和一次性提醒共用，只是提示词不同。
 func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, requestSpec *PromptSpec) (string, error) {
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()
@@ -2458,6 +2458,12 @@ func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, r
 		return "", fmt.Errorf("任务没有生成有效结果")
 	}
 	return reply, nil
+}
+
+// sourceEventForReminder 是定时任务、订阅、提醒到点时用的来源事件。记录里存不下
+// 「因关联算主人」的标记，取出时按当前关联重算一次，和入站消息同一套规则。
+func (r *Runtime) sourceEventForReminder(item Reminder) MessageEvent {
+	return r.withLinkedOwner(reminderSourceEvent(item))
 }
 
 func reminderSourceEvent(item Reminder) MessageEvent {

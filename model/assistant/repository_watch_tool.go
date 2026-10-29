@@ -362,7 +362,7 @@ func (r *Runtime) UpdateRepositoryWatch(ctx context.Context, ownerID, id string,
 	if err != nil {
 		return Reminder{}, err
 	}
-	event := reminderSourceEvent(current)
+	event := r.sourceEventForReminder(current)
 	if input.Delivery {
 		event.Platform = strings.TrimSpace(input.Platform)
 		event.ProfileID = strings.TrimSpace(input.ProfileID)

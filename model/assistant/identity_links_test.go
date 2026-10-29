@@ -135,6 +135,7 @@ func newIdentityLinkTestRuntime(t *testing.T, mutate func(qq, tg *BotConfig)) (*
 	channel := &recordingChannel{}
 	qq := BotConfig{ID: "qq", Platform: PlatformOneBotV11, Enabled: true, OwnerID: identityTestQQOwner, BotAccount: identityTestQQBot, MarkedBotIDs: []string{identityTestMarkedBot}}
 	tg := BotConfig{ID: "tg", Platform: PlatformTelegram, Enabled: true, BotAccount: identityTestTGBot}
+	qq.PrivateAdmission.Mode, tg.PrivateAdmission.Mode = PrivateAdmissionAll, PrivateAdmissionAll
 	if mutate != nil {
 		mutate(&qq, &tg)
 	}
@@ -169,7 +170,7 @@ func lastIdentityReply(t *testing.T, channel *recordingChannel) string {
 
 func identityBindCodeFrom(t *testing.T, reply string) string {
 	t.Helper()
-	code := regexp.MustCompile(`\d{6}`).FindString(reply)
+	code := regexp.MustCompile(`\d{8}`).FindString(reply)
 	if code == "" {
 		t.Fatalf("no code in reply %q", reply)
 	}
@@ -296,16 +297,78 @@ func TestIdentityBindRateLimitsWrongCodes(t *testing.T) {
 	ctx := context.Background()
 	r.handleIdentityBind(ctx, identityTestEvent("qq", PlatformOneBotV11, EventKindPrivate, identityTestQQOwner, "绑定账号"))
 	code := identityBindCodeFrom(t, lastIdentityReply(t, channel))
-	wrong := "000000"
-	if code == wrong {
-		wrong = "000001"
-	}
+	wrong := identityBindWrongCode(code)
 	for range identityBindAccountFailureLimit {
 		r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestStranger, "绑定账号 "+wrong))
 	}
 	r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestStranger, "绑定账号 "+code))
 	if reply := lastIdentityReply(t, channel); !strings.Contains(reply, "次数太多") {
 		t.Fatalf("guessing account should be locked out, reply %q", reply)
+	}
+}
+
+func identityBindWrongCode(code string) string {
+	if code == "00000000" {
+		return "00000001"
+	}
+	return "00000000"
+}
+
+// 很多账号一起输错，也不能让别人十分钟里都绑不了。
+func TestIdentityBindWrongCodesFromManyAccountsDoNotLockOthers(t *testing.T) {
+	r, channel, store := newIdentityLinkTestRuntime(t, nil)
+	ctx := context.Background()
+	for i := range 300 {
+		guesser := fmt.Sprintf("%d", 70000+i)
+		r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, guesser, "绑定账号 00000000"))
+	}
+	if reply := bindQQOwnerToTelegram(t, r, channel); !strings.Contains(reply, "已关联") {
+		t.Fatalf("bind after others' wrong guesses reply %q", reply)
+	}
+	if rows, _ := store.ListIdentityLinks(ctx); len(rows) != 2 {
+		t.Fatalf("want 2 linked rows, got %#v", rows)
+	}
+}
+
+// 私聊准入照常生效：关了私聊就不理；准入没放行的人拿不到码、输错不回话，但能兑别处拿到的码。
+func TestIdentityBindHonorsPrivateAdmission(t *testing.T) {
+	ctx := context.Background()
+	r, channel, _ := newIdentityLinkTestRuntime(t, func(qq, tg *BotConfig) {
+		tg.PrivateAdmission.Mode = PrivateAdmissionDisabled
+	})
+	if r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "绑定账号")) {
+		t.Fatal("bot with private chat disabled must not handle the issue command")
+	}
+	if r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "绑定账号 00000000")) {
+		t.Fatal("bot with private chat disabled must not handle the redeem command")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("disabled private chat must stay silent, sent %#v", sent)
+	}
+
+	r, channel, store := newIdentityLinkTestRuntime(t, func(qq, tg *BotConfig) {
+		tg.PrivateAdmission.Mode = PrivateAdmissionOwnerOnly
+	})
+	if r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "绑定账号")) {
+		t.Fatal("non-admitted user must not get a code")
+	}
+	r.handleIdentityBind(ctx, identityTestEvent("qq", PlatformOneBotV11, EventKindPrivate, identityTestQQOwner, "绑定账号"))
+	code := identityBindCodeFrom(t, lastIdentityReply(t, channel))
+	before := len(channel.sentSnapshot())
+	if !r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "绑定账号 "+identityBindWrongCode(code))) {
+		t.Fatal("wrong code from non-admitted user should be consumed")
+	}
+	if len(channel.sentSnapshot()) != before {
+		t.Fatal("wrong code from non-admitted user must not get a reply")
+	}
+	if !r.handleIdentityBind(ctx, identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "绑定账号 "+code)) {
+		t.Fatal("valid code from non-admitted user should be redeemed")
+	}
+	if reply := lastIdentityReply(t, channel); !strings.Contains(reply, "已关联") || !strings.Contains(reply, "主人") {
+		t.Fatalf("valid code reply %q", reply)
+	}
+	if rows, _ := store.ListIdentityLinks(ctx); len(rows) != 2 {
+		t.Fatalf("want 2 linked rows, got %#v", rows)
 	}
 }
 
@@ -507,5 +570,24 @@ func TestIdentityLinksPersonalMemoryQueryAndRanking(t *testing.T) {
 	ranked := rankStructuredMemories(items[:1], event, "喝什么", time.Now())
 	if len(ranked) != 1 {
 		t.Fatalf("linked core memory should be kept as the speaker's own, got %#v", ranked)
+	}
+}
+
+// 提醒、定时任务到点时的来源事件是从记录重建的，关联算主人的人照样算主人。
+func TestReminderSourceEventKeepsLinkedOwner(t *testing.T) {
+	r, channel, _ := newIdentityLinkTestRuntime(t, nil)
+	item := Reminder{ProfileID: "tg", ContextNamespace: "tg", Platform: PlatformTelegram, UserID: identityTestTGUser, Message: "查一下天气"}
+	cfg := r.effectiveConfigForEvent(reminderSourceEvent(item))
+	if cfg.IsOwnerEvent(r.sourceEventForReminder(item)) {
+		t.Fatal("unlinked account must not be owner")
+	}
+	if reply := bindQQOwnerToTelegram(t, r, channel); !strings.Contains(reply, "已关联") {
+		t.Fatalf("bind reply %q", reply)
+	}
+	if !cfg.IsOwnerEvent(r.sourceEventForReminder(item)) {
+		t.Fatal("reminder from linked owner account must count as owner")
+	}
+	if cfg.IsOwnerEvent(reminderSourceEvent(item)) {
+		t.Fatal("bare rebuilt event carries no link flag; callers must use sourceEventForReminder")
 	}
 }

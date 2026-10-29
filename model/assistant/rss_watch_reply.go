@@ -112,7 +112,7 @@ func (r *Runtime) renderRSSWatchItem(ctx context.Context, item Reminder, entry r
 	if mode != "translated" && mode != "custom" {
 		return rssWatchUnfilteredText(entry), nil
 	}
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	cfg := r.effectiveConfigForEvent(source)
 	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()

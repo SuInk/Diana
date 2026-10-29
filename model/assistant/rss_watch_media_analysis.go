@@ -49,7 +49,7 @@ func (r *Runtime) prepareRSSMedia(ctx context.Context, item Reminder, change rss
 	}
 	original := change
 	change.Items = append([]rssWatchItem(nil), change.Items...)
-	event := reminderSourceEvent(item)
+	event := r.sourceEventForReminder(item)
 	budget := r.effectiveConfigForEvent(event).RequestTimeout
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()

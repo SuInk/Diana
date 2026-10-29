@@ -16,14 +16,20 @@ import (
 )
 
 // 自助绑定账号：本人在一台机器人的私聊里发「绑定账号」拿到验证码，再到另一台机器人
-// 的私聊里发「绑定账号 123456」。两条消息都是平台认证过的发送者发来的，验证码又只
+// 的私聊里发「绑定账号 12345678」。两条消息都是平台认证过的发送者发来的，验证码又只
 // 回在第一个账号的私聊里，能在第二个账号上念出它，就证明两个账号在同一个人手里。
 //
-// 群里一律不发码：验证码出现在群里就等于公开了。群里有人发「绑定账号 123456」时，
+// 私聊准入照常生效：关了私聊的机器人不理这两条命令；准入没放行的人可以兑码（要关联
+// 的往往正是准入还不认识的那个号，念得出码就证明是本人），但拿不到码，输错也不回话，
+// 不给陌生人一个能让机器人开口的入口。
+//
+// 群里一律不发码：验证码出现在群里就等于公开了。群里有人发「绑定账号 12345678」时，
 // 那个码当场作废。
 //
-// 兑码失败有次数上限（每个账号、全局各一个窗口），六位数验证码不能靠换号硬猜：
-// 猜中别人的码等于把别人的账号关联到自己名下，对方若是主人，后果就是主人权限。
+// 猜中别人的码等于把别人的账号关联到自己名下，对方若是主人，后果就是主人权限。所以
+// 验证码是八位，每个账号一个窗口内只能输错几次：一亿种组合、十分钟有效，换号硬猜要
+// 上万个账号才有一成把握。不设全实例的输错上限：那样一个人连错几十次就能让所有人
+// 十分钟内都绑不了。
 
 const (
 	identityBindCodeTTL = 10 * time.Minute
@@ -31,14 +37,12 @@ const (
 	identityBindStateLimit = 4096
 	// identityBindAccountFailureLimit 是一个账号在一个窗口内最多输错几次。
 	identityBindAccountFailureLimit = 5
-	// identityBindGlobalFailureLimit 是全实例一个窗口内最多输错几次，挡换号硬猜。
-	// 触顶后这个窗口里谁都兑不了码，代价只是稍等一会儿再试。
-	identityBindGlobalFailureLimit = 100
+	identityBindCodeSpace           = 100_000_000
 )
 
 var (
 	identityBindIssuePattern  = regexp.MustCompile(`^/?绑定账号$`)
-	identityBindRedeemPattern = regexp.MustCompile(`^/?绑定账号\s*(\d{6})$`)
+	identityBindRedeemPattern = regexp.MustCompile(`^/?绑定账号\s*(\d{8})$`)
 )
 
 type identityBindCode struct {
@@ -49,10 +53,9 @@ type identityBindCode struct {
 type identityBindState struct {
 	mu    sync.Mutex
 	codes map[string]identityBindCode
-	// failures 按账号记输错次数，globalFailures 是全实例的；窗口从第一次输错起算。
-	failures       map[string]int
-	globalFailures int
-	windowStart    time.Time
+	// failures 按账号记输错次数，窗口从第一次输错起算。
+	failures    map[string]int
+	windowStart time.Time
 }
 
 func identityBindText(event MessageEvent) string {
@@ -63,7 +66,7 @@ func identityBindText(event MessageEvent) string {
 	return text
 }
 
-// handleIdentityBind 处理「绑定账号」和「绑定账号 123456」两条命令，处理了就返回 true。
+// handleIdentityBind 处理「绑定账号」和「绑定账号 12345678」两条命令，处理了就返回 true。
 func (r *Runtime) handleIdentityBind(ctx context.Context, event MessageEvent) bool {
 	if r == nil || event.webChat || event.SenderIsBot || event.Outbound || strings.TrimSpace(event.UserID) == "" {
 		return false
@@ -80,10 +83,11 @@ func (r *Runtime) handleIdentityBind(ctx context.Context, event MessageEvent) bo
 	if r.identityLinkStore() == nil {
 		return false
 	}
+	cfg := r.effectiveConfigForEvent(event)
 	if event.Kind == EventKindGroup {
 		revoked := redeem != nil && r.revokeIdentityBindCode(redeem[1])
-		// 没冲机器人说的群消息不回话，码照样作废。
-		if !event.ToMe {
+		// 没冲机器人说的、或机器人在这个群里关着的群消息不回话，码照样作废。
+		if !event.ToMe || !r.admitsGroupScope(cfg, event) {
 			return false
 		}
 		reply := "账号绑定只能在私聊里进行：请私聊我发「绑定账号」。"
@@ -93,8 +97,18 @@ func (r *Runtime) handleIdentityBind(ctx context.Context, event MessageEvent) bo
 		r.replyIdentityBind(ctx, event, "群里不发绑定验证码", reply)
 		return true
 	}
+	if cfg.PrivateAdmission.WithDefaults().Mode == PrivateAdmissionDisabled {
+		return false
+	}
+	admitted := privateAdmissionAllowsConfig(cfg, event)
+	if issue && !admitted {
+		return false
+	}
 	self := r.identityAccountForEvent(event)
 	if r.identityAccountIsBot(self) {
+		if !admitted {
+			return false
+		}
 		r.replyIdentityBind(ctx, event, "机器人账号不能关联", "机器人账号不能关联到别的账号。")
 		return true
 	}
@@ -106,7 +120,19 @@ func (r *Runtime) handleIdentityBind(ctx context.Context, event MessageEvent) bo
 		r.replyIdentityBind(ctx, event, "跨平台账号绑定验证码", reply)
 		return true
 	}
-	reply := r.redeemIdentityBindCode(ctx, event, self, redeem[1])
+	issuer, err := r.takeIdentityBindCode(self, redeem[1])
+	if err != nil && !admitted {
+		record := r.decisionEventRecord(event, "[绑定账号]", "ignored_private_admission")
+		record.Reason = "私聊准入没放行的用户兑码失败，不回话"
+		r.record(record)
+		return true
+	}
+	var reply string
+	if err != nil {
+		reply = err.Error()
+	} else {
+		reply = r.redeemIdentityBindCode(ctx, event, self, issuer, redeem[1])
+	}
 	r.replyIdentityBind(ctx, event, "跨平台账号绑定", reply)
 	return true
 }
@@ -132,11 +158,11 @@ func (r *Runtime) issueIdentityBindCode(account IdentityAccount) (string, error)
 		}
 	}
 	for {
-		n, err := rand.Int(rand.Reader, big.NewInt(1_000_000))
+		n, err := rand.Int(rand.Reader, big.NewInt(identityBindCodeSpace))
 		if err != nil {
 			return "", err
 		}
-		code := fmt.Sprintf("%06d", n.Int64())
+		code := fmt.Sprintf("%08d", n.Int64())
 		if _, taken := state.codes[code]; taken {
 			continue
 		}
@@ -164,9 +190,8 @@ func (r *Runtime) takeIdentityBindCode(redeemer IdentityAccount, code string) (I
 	if state.windowStart.IsZero() || !now.Before(state.windowStart.Add(identityBindCodeTTL)) {
 		state.windowStart = now
 		state.failures = map[string]int{}
-		state.globalFailures = 0
 	}
-	if state.failures[redeemer.key()] >= identityBindAccountFailureLimit || state.globalFailures >= identityBindGlobalFailureLimit {
+	if state.failures[redeemer.key()] >= identityBindAccountFailureLimit {
 		return IdentityAccount{}, errors.New("验证码输错次数太多，请过十分钟再试")
 	}
 	pending, ok := state.codes[code]
@@ -176,18 +201,13 @@ func (r *Runtime) takeIdentityBindCode(redeemer IdentityAccount, code string) (I
 			state.failures = map[string]int{}
 		}
 		state.failures[redeemer.key()]++
-		state.globalFailures++
 		return IdentityAccount{}, errors.New("验证码不对或已过期，请在另一台机器人的私聊里重新发「绑定账号」获取")
 	}
 	delete(state.codes, code)
 	return pending.account, nil
 }
 
-func (r *Runtime) redeemIdentityBindCode(ctx context.Context, event MessageEvent, self IdentityAccount, code string) string {
-	issuer, err := r.takeIdentityBindCode(self, code)
-	if err != nil {
-		return err.Error()
-	}
+func (r *Runtime) redeemIdentityBindCode(ctx context.Context, event MessageEvent, self, issuer IdentityAccount, code string) string {
 	if issuer.key() == self.key() {
 		return "这个验证码是发给这个账号的，要用你在另一个平台上的账号私聊那边的机器人发「绑定账号 " + code + "」。验证码已作废，请重新获取。"
 	}

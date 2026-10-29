@@ -8495,7 +8495,7 @@ type rssJudgeDecision struct {
 
 func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.Time, error) {
 	startedAt := time.Now()
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	if pending := strings.TrimSpace(item.PendingDelivery); pending != "" {
 		return startedAt, r.sendRSSWatchTargets(ctx, item, pending)
 	}
@@ -8680,7 +8680,7 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	if err != nil {
 		return rssJudgeDecision{}, err
 	}
-	source := reminderSourceEvent(item)
+	source := r.sourceEventForReminder(item)
 	cfg := r.effectiveConfigForEvent(source)
 	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
 	defer cancel()

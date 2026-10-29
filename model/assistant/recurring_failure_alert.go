@@ -29,7 +29,7 @@ const recurringFailureAlertSettingKey = "failure_alert_threshold"
 // 连续失败几次才报是订阅自己的事，在各自插件的设置里改，可以按群覆盖；定时查询
 // 没有插件，用默认值。
 func (r *Runtime) recurringFailureAlertThreshold(item Reminder) int {
-	event := reminderSourceEvent(item)
+	event := r.sourceEventForReminder(item)
 	pluginID := reminderDiagnosticPluginID(item)
 	// 和发送出口用同一道判断：机器人的「错误提示」和插件的「发送错误通知」任一关着，
 	// 就不计数也不告警，免得记下「报过警」却什么也没发，恢复时凭空冒出一句「好了」。
@@ -112,7 +112,7 @@ func (r *Runtime) notifyRecurringFailureRecovery(ctx context.Context, item Remin
 		return ctx.Err()
 	}
 	notice := fmt.Sprintf("%s已恢复，后续结果会继续正常发送。", recurringSubscriptionKindLabel(item))
-	return r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), reminderDiagnosticPluginID(item), notice)
+	return r.sendDiagnosticNotice(ctx, r.sourceEventForReminder(item), reminderDiagnosticPluginID(item), notice)
 }
 
 // clearReminderRecoveryNotice 把「待发恢复通知」标记落下去，避免重复通知。

@@ -302,7 +302,7 @@ func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessi
 		}
 		// 事件触发也是创建它的群的任务。群发送开关关闭后不点燃、
 		// 不记触发次数，重新开启后再继续匹配新事件。
-		source := reminderSourceEvent(*item)
+		source := r.sourceEventForReminder(*item)
 		if source.Kind == EventKindGroup && groupDisabled(source.ProfileID, source.GroupID) {
 			continue
 		}
@@ -369,7 +369,7 @@ func (r *Runtime) deliverEventTrigger(ctx context.Context, item Reminder, spec E
 		return fmt.Errorf("事件触发任务没有生成可发送的内容")
 	}
 	if spec.DeliverTo == eventTriggerDeliverOrigin {
-		return r.sendSubscriberNotice(ctx, reminderSourceEvent(item), eventTriggerOriginNotice(spec, event, text, body))
+		return r.sendSubscriberNotice(ctx, r.sourceEventForReminder(item), eventTriggerOriginNotice(spec, event, text, body))
 	}
 	target := eventTriggerDeliveryEvent(event)
 	decoration := outboundDecoration{ReplyToCurrent: strings.TrimSpace(target.MessageID) != ""}
@@ -414,7 +414,7 @@ func eventTriggerOriginNotice(spec EventTrigger, event MessageEvent, text, body 
 func (r *Runtime) generateEventTriggerReply(ctx context.Context, item Reminder, spec EventTrigger, event MessageEvent, text string) (string, error) {
 	source := eventTriggerDeliveryEvent(event)
 	if spec.DeliverTo == eventTriggerDeliverOrigin {
-		source = reminderSourceEvent(item)
+		source = r.sourceEventForReminder(item)
 	}
 	cfg := r.effectiveConfigForEvent(source)
 	if !cfg.AgentEnabled {
@@ -535,7 +535,7 @@ func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) time.T
 	}
 	for _, item := range notices {
 		text := fmt.Sprintf("你设的触发任务 %s 到期了，一次都没触发，已自动收掉：%s", item.ID, truncateRunes(item.Message, eventTriggerContextRunes))
-		if err := r.sendSubscriberNotice(ctx, reminderSourceEvent(item), text); err != nil {
+		if err := r.sendSubscriberNotice(ctx, r.sourceEventForReminder(item), text); err != nil {
 			log.Printf("diana event trigger %s expiry notice failed: %v", item.ID, err)
 		}
 	}

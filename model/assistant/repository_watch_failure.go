@@ -137,7 +137,7 @@ func (r *Runtime) notifyRepositoryWatchFailure(ctx context.Context, item Reminde
 	if !acknowledged {
 		// 开关关闭时这里也拿不到确认，但那是「不必发」而不是「没发出去」：
 		// 照常返回 nil，调用方才会记下「已告警」，不再每个周期重试一次。
-		if !r.diagnosticAllowed(reminderSourceEvent(item), repositoryWatchPluginID) {
+		if !r.diagnosticAllowed(r.sourceEventForReminder(item), repositoryWatchPluginID) {
 			return nil
 		}
 		return fmt.Errorf("仓库订阅失败告警未取得发送确认")
@@ -176,7 +176,7 @@ func (r *Runtime) notifyRepositoryWatchRecovery(ctx context.Context, item Remind
 		return nil
 	}
 	notice := fmt.Sprintf("仓库订阅 %s 已恢复，后续更新将继续正常推送。", repositoryWatchLabel(item))
-	if err := r.sendDiagnosticNotice(ctx, reminderSourceEvent(item), repositoryWatchPluginID, notice); err != nil {
+	if err := r.sendDiagnosticNotice(ctx, r.sourceEventForReminder(item), repositoryWatchPluginID, notice); err != nil {
 		return err
 	}
 	return nil

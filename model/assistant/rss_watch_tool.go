@@ -489,7 +489,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	if err != nil {
 		return Reminder{}, err
 	}
-	event := reminderSourceEvent(current)
+	event := r.sourceEventForReminder(current)
 	pluginValue, settings, enabled := r.plugins.PluginWithSettingsForGroup(
 		rssWatchPluginID,
 		r.pluginOverridesForEvent(event),
