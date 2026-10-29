@@ -2026,6 +2026,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ config });
   }
 
+  const relationsMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/relations$/);
+  if (relationsMatch && method === "GET") return json({ range: "7d", graph: demoGroupRelationGraph(decodeURIComponent(relationsMatch[1])) });
   if (path === "/api/assistant/groups/switches" && method === "POST") {
     if (typeof body.min_group_level === "number" || typeof body.level_unknown_policy === "string") {
       const gate = { ...(assistantConfig.reply_gate ?? {}) };
@@ -2683,4 +2685,21 @@ function demoParsePromptFile(source: string): { overrides: Record<string, string
     if (value && value !== defaults.get(key)!.trim()) overrides[key] = value;
   }
   return { overrides, changed: Object.keys(overrides).length, unknown: unknown.sort(), diana_version: /^diana_version:\s*(.+)$/m.exec(source)?.[1]?.trim() };
+}
+
+function demoGroupRelationGraph(groupID: string) {
+  const botID = "10000";
+  const names = ["阿星", "小鹿", "白桃乌龙", "鱼丸", "今天也想睡觉", "Kuro", "柚子", "南瓜", "七七", "老陈", "Mio", "葡萄冻", "一只猫猫", "阿泽"];
+  const nodes = [
+    { user_id: botID, display_name: "Diana", messages: 120, favorability: 0, is_bot: true },
+    ...names.map((name, index) => ({ user_id: String(20001 + index), display_name: name, messages: Math.round(160 / (index + 1.4)) + 3, favorability: 40 - index * 6 }))
+  ];
+  const edges: { source: string; target: string; weight: number }[] = [];
+  names.forEach((_, index) => { if (index % 5 !== 4) edges.push({ source: botID, target: String(20001 + index), weight: Math.max(1, 30 - index * 3) }); });
+  for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j += 3) {
+    const weight = Math.max(1, 14 - i - j);
+    if ((i + j) % 2 === 0) edges.push({ source: String(20001 + i), target: String(20001 + j), weight });
+  }
+  edges.sort((a, b) => b.weight - a.weight);
+  return { group_id: groupID, bot_id: botID, messages: 980, participants: 23, nodes, edges };
 }
