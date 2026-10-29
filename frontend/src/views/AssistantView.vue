@@ -875,7 +875,7 @@
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
-                <span class="hint">-1 不限制（默认），或填 1000 以上。超长消息模型只读到开头，并被告知可以按需读全文。</span>
+                <span class="hint">留空或 -1 不限制（默认），或填 1000 以上。超长消息模型只读到开头，并被告知可以按需读全文。</span>
               </div>
               <div class="field">
                 <label for="bot-maxreply">单条回复上限（字符）</label>
@@ -4810,6 +4810,8 @@ async function save(): Promise<void> {
     }
     const payload: BotProfileConfig = {
       ...current,
+      // 输入框清空时 v-model.number 给的是 ""，原样发出去后端解析不了；留空就是没填，按默认不限制。
+      max_input_chars: typeof current.max_input_chars === "number" ? current.max_input_chars : undefined,
       model_request_timeout_ms: modelRequestTimeoutMS,
       maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
       reply_account_safety_audit_prompt: accountSafetyRulesOverride(accountSafetyRulesDraft.value, accountSafetyRulesDefault.value),
