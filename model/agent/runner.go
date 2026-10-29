@@ -261,6 +261,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	continueOnlySends := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
+	// repairFallbackText 是只因 send 附加字段被打回的那段纯文本。打回后重写那一步
+	// 模型请求失败（例如工具参数不是合法 JSON）时，照打回前的行为把它发出去，
+	// 不让一句本来能发的话变成报错。下一次模型请求成功就作废。
+	repairFallbackText := ""
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
 	detailReviewed := false
 	lastToolSignature := ""
@@ -423,8 +427,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				break
 			}
+			if repairFallbackText != "" && ctx.Err() == nil && !errors.Is(err, llm.ErrOutputCommitted) {
+				if feedback, reviewErr := reviewFinish(repairFallbackText, "candidate", false); reviewErr == nil && feedback == "" {
+					return finish(repairFallbackText, "plain_text")
+				}
+			}
 			return fail(err)
 		}
+		repairFallbackText = ""
 		resp.ToolCalls = r.normalizeLegacySendCalls(resp.ToolCalls)
 		lastProvider = resp.Provider
 		lastModel = resp.Model
@@ -592,6 +602,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
 			if !plainTextNeedsRepair(lastText) {
 				reason = "本次只返回了普通文本，普通文本不会发给对方。已经答完就把要说的话放进 send 的 text 发出，" + finalizeFieldNames(r.cfg.FinalizeFields) + " 这些字段按需一起填；还有没做完的就直接调用工具继续。"
+				repairFallbackText = lastText
 			}
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)

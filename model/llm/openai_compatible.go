@@ -307,7 +307,8 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 			}
 			if strings.TrimSpace(raw.arguments) != "" {
 				if err := json.Unmarshal([]byte(raw.arguments), &args); err != nil || args == nil {
-					fail("llm: invalid tool arguments")
+					// 带上函数名和原始参数片段：调试记录只存这条错误，不存原始输出。
+					fail(fmt.Sprintf("llm: invalid tool arguments for %s: %s", raw.name, truncateForError([]byte(raw.arguments))))
 					return
 				}
 			}

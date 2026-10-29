@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -183,12 +184,16 @@ type plainThenSendClient struct {
 	replies  []string
 	send     map[string]any
 	requests []llm.GenerateRequest
+	sendErr  error
 }
 
 func (c *plainThenSendClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, req)
 	if index := len(c.requests) - 1; index < len(c.replies) {
 		return &llm.GenerateResponse{Text: c.replies[index]}, nil
+	}
+	if c.sendErr != nil {
+		return nil, c.sendErr
 	}
 	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "call-send", Name: finalizeToolName, Arguments: c.send}}}, nil
 }
@@ -239,5 +244,23 @@ func TestRunnerPlainTextAcceptedWithoutExtraFieldsOrAfterOneRepair(t *testing.T)
 				t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
 			}
 		})
+	}
+}
+
+// 打回后重写 send 那一步失败（生产上 deepseek-flash 吐了不合法的工具参数 JSON），
+// 发第一次的纯文本，而不是整轮报错。
+func TestRunnerPlainTextRepairFallsBackWhenRetryFails(t *testing.T) {
+	sticker := FinalizeField{Name: "sticker", Description: "配表情包的关键词"}
+	client := &plainThenSendClient{replies: []string{"好耶"}, sendErr: errors.New("llm: invalid tool arguments")}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, FinalizeFields: []FinalizeField{sticker}}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "夸夸我"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 || resp.Text != "好耶" {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
 	}
 }
