@@ -590,7 +590,16 @@ func (r *Runtime) subagentTaskStatuses() []SubagentTaskStatus {
 
 func (r *Runtime) sendSubagentFollowup(ctx context.Context, event MessageEvent, reply string) error {
 	cfg := r.effectiveConfigForEvent(event)
-	reply = normalizeReply(reply, cfg.MaxReplyChars, markdownToPlainForConfig(cfg))
+	// 和主回复一样先按自然边界拆条、放不下再压缩，不硬截：截掉的是任务跑完的结论。
+	// 压缩失败也不能把结果丢了，退回原文照拆照发。
+	if prepared, err := r.prepareGeneratedReply(ctx, cfg, reply, event); err == nil {
+		reply = prepared
+	} else if errors.Is(err, errModelSilentFinish) {
+		return nil
+	} else {
+		log.Printf("diana subagent followup: reply preparation failed, sending uncompressed (platform=%s profile=%s): %v", event.Platform, cfg.ID, err)
+	}
+	reply = normalizeReply(reply, 0, markdownToPlainForConfig(cfg))
 	chunks := splitChatReply(reply, chatSplitLimitsFrom(cfg))
 	if shouldUseForwardReplyFor(cfg, reply, chunks) {
 		return r.sendForwardReply(ctx, event, reply, cfg)

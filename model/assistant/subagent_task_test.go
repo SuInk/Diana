@@ -290,3 +290,27 @@ func (c *concurrentRecordingChannel) messages() []OutgoingMessage {
 	defer c.mu.Unlock()
 	return append([]OutgoingMessage(nil), c.sent...)
 }
+
+func TestSubagentFollowupSplitsLongResultInsteadOfTruncating(t *testing.T) {
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42", MaxReplyChars: 40}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "message-1"}
+	sentences := []string{
+		"第一段结论在这里写清楚了，后面还有内容。",
+		"第二段补充了关键的数据和来源说明。",
+		"第三段是最后的建议，千万别被截掉。",
+	}
+	if err := runtime.sendSubagentFollowup(context.Background(), event, strings.Join(sentences, "")); err != nil {
+		t.Fatal(err)
+	}
+	var joined strings.Builder
+	for _, message := range channel.sent {
+		if n := len([]rune(message.Text)); n > 40 {
+			t.Fatalf("message over per-message limit (%d): %q", n, message.Text)
+		}
+		joined.WriteString(message.Text)
+	}
+	if len(channel.sent) < 2 || !strings.Contains(joined.String(), "千万别被截掉") {
+		t.Fatalf("long result truncated instead of split: %#v", channel.sent)
+	}
+}
