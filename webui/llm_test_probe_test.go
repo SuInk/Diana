@@ -126,3 +126,44 @@ func TestLLMTestKeepsTextModeForTextModel(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestLLMTestOpenAIDecisionsAdapter(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.URL.Path != "/v1/decisions" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		var payload struct {
+			Questions []struct {
+				Name string `json:"name"`
+				Type string `json:"type"`
+			} `json:"questions"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if len(payload.Questions) != 1 || payload.Questions[0].Type != "predicate" {
+			t.Errorf("questions = %+v", payload.Questions)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"model":"gpt-6-luna","answers":[{"name":"addressed","type":"predicate","probability":0.93}],"usage":{"input_tokens":100}}`))
+	}))
+	defer upstream.Close()
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAIDecisions, APIKey: "test-key", BaseURL: upstream.URL, Model: "gpt-6-luna"})
+	handler := NewLLMConfigHandlerWithFactory(store, func(cfg llm.ProviderConfig) (llm.LLMClient, error) {
+		return llm.NewClient(cfg, llm.WithHTTPClient(upstream.Client()))
+	})
+	rec := httptest.NewRecorder()
+	testRouter(handler).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewBufferString(`{"message":"Diana在吗"}`)))
+	if rec.Code != http.StatusOK || calls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", rec.Code, calls, rec.Body.String())
+	}
+	var resp llm.GenerateResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Provider != llm.ProviderOpenAIDecisions || resp.Text == "" {
+		t.Fatalf("response=%+v", resp)
+	}
+}

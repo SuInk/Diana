@@ -46,7 +46,8 @@ const (
 	ProviderAnthropic        Provider = "anthropic"
 	// ProviderTypeSafe 是 TypeSafe 的 System One 模型（Jev）：只回答有类型的判断题，
 	// 不生成文本。它只能服务判断类用途，配到需要出文本的用途上会被直接拒绝。
-	ProviderTypeSafe Provider = "typesafe"
+	ProviderTypeSafe        Provider = "typesafe"
+	ProviderOpenAIDecisions Provider = "openai_decisions"
 )
 
 type APIFormat string
@@ -335,6 +336,8 @@ func NewClient(cfg ProviderConfig, opts ...ClientOption) (LLMClient, error) {
 		return newGeminiClient(cfg, options.httpClient)
 	case ProviderAnthropic:
 		return newAnthropicClient(cfg, options.httpClient), nil
+	case ProviderOpenAIDecisions:
+		return newOpenAIDecisionsClient(cfg, options.httpClient), nil
 	case ProviderTypeSafe:
 		return newTypeSafeClient(cfg, options.httpClient), nil
 	default:
@@ -483,7 +486,7 @@ func (cfg ProviderConfig) ValidateChannel() error {
 // Supported 判断 provider 是否被当前项目支持。
 func (provider Provider) Supported() bool {
 	switch provider {
-	case ProviderOpenAICompatible, ProviderGemini, ProviderAnthropic, ProviderTypeSafe:
+	case ProviderOpenAICompatible, ProviderGemini, ProviderAnthropic, ProviderTypeSafe, ProviderOpenAIDecisions:
 		return true
 	default:
 		return false

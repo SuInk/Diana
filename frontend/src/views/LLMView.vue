@@ -631,6 +631,7 @@ function providerLabel(provider: Provider): string {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
     anthropic: "Anthropic",
+    openai_decisions: "OpenAI Decisions 判断模型",
     typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];

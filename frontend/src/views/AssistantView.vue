@@ -3262,7 +3262,7 @@ const modelRoleRows: ModelRoleRow[] = [
     label: "意图识别",
     description:
       "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、回复疲劳判断和发送前审核。问的都是是非、单选和打分，" +
-      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev 这类只做判断的模型——更快更便宜。写字的活在「回复辅助」和「后台生成」两档。"
+      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev、OpenAI Decisions 这类只做判断的模型。写字的活在「回复辅助」和「后台生成」两档。"
   }
 ];
 // 生图和其余几档不是一类活——那些都在读和写文字，它只出图——排在最后，不夹在
@@ -4111,6 +4111,7 @@ function llmProviderLabel(provider: LLMConfig["provider"]): string {
     openai_compatible: "OpenAI 兼容",
     gemini: "Gemini",
     anthropic: "Anthropic",
+    openai_decisions: "OpenAI Decisions 判断模型",
     typesafe: "TypeSafe 判断模型"
   };
   return labels[provider];

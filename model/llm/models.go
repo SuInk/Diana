@@ -81,6 +81,8 @@ func DefaultModel(provider Provider) string {
 		return DefaultGeminiModel
 	case ProviderAnthropic:
 		return DefaultAnthropicModel
+	case ProviderOpenAIDecisions:
+		return openAIDecisionsDefaultModel
 	case ProviderTypeSafe:
 		return DefaultTypeSafeModel
 	default:
@@ -116,6 +118,19 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 		return listGeminiModels(ctx, cfg, options.httpClient)
 	case ProviderAnthropic:
 		return listAnthropicModels(ctx, cfg, options.httpClient)
+	case ProviderOpenAIDecisions:
+		cfg.BaseURL = strings.TrimSuffix(openAIDecisionsEndpoint(cfg.BaseURL), "/decisions")
+		models, err := requestOpenAICompatibleModels(ctx, options.httpClient, cfg.BaseURL, "models", cfg.APIKey, cfg.UserAgentWithDefault(), cfg.NormalizedHeaders())
+		if err != nil {
+			return nil, err
+		}
+		var supported []ModelInfo
+		for _, model := range models {
+			if model.ID == openAIDecisionsDefaultModel {
+				supported = append(supported, model)
+			}
+		}
+		return supported, nil
 	case ProviderTypeSafe:
 		// System One 接口没有模型列表端点。jev-latest 会跟着上游滚动，固定版本号
 		// 需要时在界面里手填。

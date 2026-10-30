@@ -39,7 +39,7 @@ func (t *dianaLLMConfigTool) InputSchema() map[string]any {
 		"scope":     toolEnumParam("group 仅当前群（仅 chat）；bot 整个机器人（默认）。", "group", "bot"),
 		"role": toolEnumParam("chat 对话（默认）、vision 识图、intent 意图识别、image 生图。",
 			"chat", "vision", "intent", "image"),
-		"provider":      toolEnumParam("目标 provider 类型，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe"),
+		"provider":      toolEnumParam("目标 provider 类型，不改则省略。", "openai_compatible", "gemini", "anthropic", "typesafe", "openai_decisions"),
 		"provider_id":   toolStringParam("供应商 ID（不是机器人 ID），取自 list。"),
 		"provider_name": toolStringParam("供应商准确名称；重名时改用 provider_id。"),
 		"model":         toolStringParam("目标模型 ID，不改则省略。"),
@@ -164,6 +164,8 @@ func structuredLLMProvider(raw string) (llm.Provider, error) {
 		return llm.ProviderGemini, nil
 	case "anthropic", "claude":
 		return llm.ProviderAnthropic, nil
+	case "openai_decisions", "openai-decisions":
+		return llm.ProviderOpenAIDecisions, nil
 	case "typesafe", "jev", "typesafe_systemone":
 		return llm.ProviderTypeSafe, nil
 	default:

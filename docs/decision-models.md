@@ -1,4 +1,4 @@
-# 判断模型（Jev）
+# 判断模型（Jev / OpenAI Decisions）
 
 意图识别问的本来就是「是不是在跟机器人说话」「这句插得自不自然」「哪一条值得回」。以前只能让对话模型把答案写成一段 JSON，程序再解析回来——上游多吐几个字符、输出被截断，整条判断就作废。TypeSafe 的 System One 模型 Jev 只回答有类型的题目并返回校准概率，不生成文本，正好对上这类用途。
 
@@ -29,3 +29,15 @@ WebUI 的模型配置里，接入类型选「TypeSafe 判断模型（Jev）」�
 - **看不到图片。** Jev 只吃文本，消息里的图片在 state 里变成一条 `[图片 ×N，判断模型看不到画面]` 标记。依赖看图判断的场景仍应绑对话模型。
 - **没有工具调用。** 带工具的请求会被直接拒绝。
 - **多选拆成多题。** `turn_message_ids` 这种数组答案由逐条候选各问一次是非题拼出来，候选越多题目越多。
+
+## OpenAI Decisions
+
+WebUI 的模型配置新增渠道时，接入类型选「OpenAI Decisions 判断模型」，服务商选「OpenAI 官方」。地址填 `https://api.openai.com/v1`，模型填 `gpt-6-luna`，使用 OpenAI API Key，保存后点测试连接。同步模型只保留当前 Decisions 接口支持的 `gpt-6-luna`；模型可见不代表余额和调用权限已经验证。
+
+在机器人模型绑定中，将需要的判断用途（例如 `proactive_reply_router`）绑定到这个渠道。聊天、摘要和其他需要生成文字的用途继续使用对话模型。无需替换现有聊天渠道，也不要把 Decisions 配成 Responses 或 Chat Completions。
+
+适配器调用 `POST /v1/decisions`，复用现有判断题、评分映射和阈值；是非题映射为 `predicate`，单选为 `choice`，评分为 `score`。保留系统提示词，并支持用户消息中的图片。当前适配器明确拒绝工具历史、音频等未支持的输入，以及文本生成和工具调用请求。上游拒答、缺题、重复题或非法概率会报错，不当成否定答案。
+
+请求会传递缓存分区键，统计上游返回的输入 token 和缓存命中 token。Decisions 不生成文字，性能应比较端到端判断延迟，而非输出 TPS；实际速度取决于网络、输入长度和服务端负载。
+
+官方协议和价格见 [OpenAI Decisions 文档](https://developers.openai.com/api/docs/guides/decisions)。本地真实接口回放可用 `DIANA_LIVE_LLM=1 DIANA_TEST_DECISIONS_API_KEY=... scripts/test-serial.sh -v -run TestLiveOpenAIDecisionsParticipationRatings ./model/assistant`，覆盖点名、群友聊天、纯反应、追问和叫停场景，输出每次延迟。

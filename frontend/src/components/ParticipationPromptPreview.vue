@@ -82,7 +82,7 @@ function runeCount(text: string): number {
         </section>
       </template>
       <template v-else-if="preview">
-        <p class="prompt-preview-note">绑只做判断的模型（如 Jev）时，它按题作答：每道题收到下面的说明、判据或分档，后面再附上「对话模型」里那整条系统消息；用户消息摊平成纯文本作为对话内容。改上面的提示词，两种模型一起变。</p>
+        <p class="prompt-preview-note">绑判断模型时，它按题作答，使用下面的说明、判据或分档，并保留系统提示词。TypeSafe Jev 把用户消息摊平成纯文本；OpenAI Decisions 保留消息角色和用户图片。改上面的提示词，对话模型和判断模型一起变。</p>
         <section v-for="question in preview.decision" :key="question.label" class="prompt-preview-block">
           <h4>{{ question.label }}</h4>
           <pre>{{ question.instructions }}</pre>

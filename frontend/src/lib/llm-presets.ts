@@ -38,6 +38,12 @@ export const llmProviderKinds: LLMProviderKind[] = [
     supportsAPIStyle: false
   },
   {
+    id: "openai_decisions",
+    label: "OpenAI Decisions 判断模型",
+    hint: "只回答是非、单选和打分，可理解图片；仅用于判断类用途",
+    supportsAPIStyle: false
+  },
+  {
     id: "typesafe",
     label: "TypeSafe 判断模型（Jev）",
     hint: "只回答是非、单选和打分，不生成文本；只能绑给意图识别里的判断类用途",
@@ -154,6 +160,26 @@ export const llmServicePresets: LLMServicePreset[] = [
     baseURL: "",
     model: "",
     hint: "走代理或自建网关时填写"
+  },
+
+  // —— OpenAI Decisions 判断模型 ——
+  {
+    id: "openai-decisions",
+    label: "OpenAI 官方",
+    provider: "openai_decisions",
+    apiStyle: "",
+    baseURL: "https://api.openai.com/v1",
+    model: "gpt-6-luna",
+    hint: "使用 OpenAI API Key 调用 Decisions API，仅用于判断类用途"
+  },
+  {
+    id: "openai-decisions-custom",
+    label: "自定义地址",
+    provider: "openai_decisions",
+    apiStyle: "",
+    baseURL: "",
+    model: "gpt-6-luna",
+    hint: "需支持 /v1/decisions 协议"
   },
 
   // —— TypeSafe 判断模型 ——

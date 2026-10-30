@@ -21,7 +21,10 @@ import (
 //	DIANA_TEST_JEV_BASE_URL  可选，默认 https://api.typesafe.ai
 //	DIANA_TEST_JEV_MODEL     可选，默认 jev-latest
 func TestLiveJevParticipationRatings(t *testing.T) {
-	client := liveJevClient(t)
+	runLiveDecisionParticipationRatings(t, liveJevClient(t))
+}
+
+func runLiveDecisionParticipationRatings(t *testing.T, client llm.LLMClient) {
 	cases := []struct {
 		name         string
 		current      string
@@ -83,6 +86,7 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
+			started := time.Now()
 			resp, err := client.Generate(ctx, llm.GenerateRequest{
 				Messages: []llm.Message{
 					{Role: llm.RoleSystem, Content: prefs.prompt()},
@@ -97,6 +101,7 @@ func TestLiveJevParticipationRatings(t *testing.T) {
 			if err != nil {
 				t.Fatalf("live output did not parse: %v (%s)", err, resp.Text)
 			}
+			t.Logf("latency=%s", time.Since(started))
 			t.Logf("directed=%v chat_in=%.2f reason=%s usage=%+v", *ratings.Relevance.Directed, *ratings.ChatIn.Score, strings.TrimSpace(ratings.Relevance.Reason), resp.Usage)
 			if !tc.wantStop && *ratings.Relevance.Directed != tc.wantDirected {
 				t.Errorf("directed = %v, want %v (%s)", *ratings.Relevance.Directed, tc.wantDirected, resp.Text)
@@ -155,4 +160,20 @@ func liveJevClient(t *testing.T) llm.LLMClient {
 		t.Fatalf("live client: %v", err)
 	}
 	return client
+}
+
+// Uses the production participation prompt, question specification and parser.
+func TestLiveOpenAIDecisionsParticipationRatings(t *testing.T) {
+	if os.Getenv("DIANA_LIVE_LLM") != "1" {
+		t.Skip("set DIANA_LIVE_LLM=1")
+	}
+	key := os.Getenv("DIANA_TEST_DECISIONS_API_KEY")
+	if key == "" {
+		t.Skip("set DIANA_TEST_DECISIONS_API_KEY")
+	}
+	client, err := llm.NewClient(llm.ProviderConfig{Provider: llm.ProviderOpenAIDecisions, APIKey: key, Model: "gpt-6-luna"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runLiveDecisionParticipationRatings(t, client)
 }

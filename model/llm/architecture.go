@@ -23,6 +23,7 @@ const (
 	ProtocolGemini            Protocol = "gemini"
 	// ProtocolTypeSafeSystemOne 是 TypeSafe 的 System One 接口，不是 OpenAI 兼容的。
 	ProtocolTypeSafeSystemOne Protocol = "typesafe-systemone"
+	ProtocolOpenAIDecisions   Protocol = "openai-decisions"
 )
 
 type ProviderDefinition struct {
@@ -214,6 +215,8 @@ func RegistryFromDocument(document ProviderRegistryDocument) (*ProviderRegistry,
 			cfg.Provider = ProviderAnthropic
 		case ProtocolGemini:
 			cfg.Provider = ProviderGemini
+		case ProtocolOpenAIDecisions:
+			cfg.Provider = ProviderOpenAIDecisions
 		case ProtocolTypeSafeSystemOne:
 			cfg.Provider = ProviderTypeSafe
 		case ProtocolOpenAICompletions:
@@ -452,6 +455,8 @@ func protocolForConfig(cfg ProviderConfig) Protocol {
 		return ProtocolAnthropicMessages
 	case ProviderGemini:
 		return ProtocolGemini
+	case ProviderOpenAIDecisions:
+		return ProtocolOpenAIDecisions
 	case ProviderTypeSafe:
 		return ProtocolTypeSafeSystemOne
 	}

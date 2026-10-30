@@ -8,7 +8,7 @@ import { describeServerFailure } from "./lib/gateway-error";
 import type { SendRetrySettings } from "./lib/send-retry-settings";
 import type { AgentSafeModeCategory } from "./lib/agent-mode";
 
-export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe";
+export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe" | "openai_decisions";
 
 export interface LLMRoleBinding {
   bot_id?: string;
