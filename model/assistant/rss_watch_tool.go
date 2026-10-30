@@ -92,7 +92,6 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 
 func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id string) (string, error) {
 	if !requesterIsOwner {
-		// 群里的订阅群友只共享可见，改、停、删仍只限创建人：别人订的东西不能被随手取消。
 		return fallbackOwner, nil
 	}
 	item, err := t.runtime.rssWatchByID(id)
@@ -182,12 +181,6 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		stored := t.runtime.rssWatches(targetID)
 		if policy.Owner {
 			stored = t.runtime.allRSSWatches()
-		} else if strings.TrimSpace(t.event.GroupID) != "" {
-			for _, item := range t.runtime.allRSSWatches() {
-				if item.OwnerID != targetID && t.runtime.rssWatchSharedWithGroup(item, t.event) {
-					stored = append(stored, item)
-				}
-			}
 		}
 		items := make([]dianaRSSWatch, 0, len(stored))
 		for _, item := range stored {
@@ -897,23 +890,4 @@ func normalizeRSSWatchRule(mode, rule string) (string, string, error) {
 		}
 	}
 	return mode, rule, nil
-}
-
-// rssWatchSharedWithGroup 报告这条订阅是不是「当前群的订阅」：同一台机器人上，
-// 在本群创建的，或者通知目标里有本群。私聊里不共享任何人的订阅。
-func (r *Runtime) rssWatchSharedWithGroup(item Reminder, event MessageEvent) bool {
-	group := strings.TrimSpace(event.GroupID)
-	if group == "" || !r.sameProfileAsEvent(item.ProfileID, event) || item.Platform != event.Platform {
-		return false
-	}
-	targets := decodeReminderDeliveryTargets(item.NotificationTargetsJSON)
-	if len(targets) == 0 {
-		return item.GroupID == group
-	}
-	for _, target := range targets {
-		if target.GroupID == group && (target.ProfileID == "" || r.sameProfileAsEvent(target.ProfileID, event)) {
-			return true
-		}
-	}
-	return false
 }
