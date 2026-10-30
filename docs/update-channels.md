@@ -42,7 +42,25 @@ Canary 标签由 CI 在合并提交上创建，标记为 GitHub Prerelease，不
 2. 后续测试版使用 `v0.8.127-beta.2` 等标签。需要候选阶段时可用 `v0.8.127-rc.1`。
 3. 发布正式版时将源码版本改为 `v0.8.127`，按相同的验证和合并流程发布。每次标签必须与源码 VERSION 完全相同。
 
-CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
+CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS.txt 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
+
+### latest.json 的平台规则
+
+每个版本的 `packages` 写明各平台怎么更新，WebUI 里的更新器照着走，不再从包名推：
+
+```json
+{"os": "windows", "arch": "amd64", "asset": "diana-windows-amd64.exe", "format": "exe",
+ "install_as": "diana-webui.exe", "checksums": "SHA256SUMS.txt"}
+{"os": "linux", "arch": "amd64", "asset": "diana-linux-amd64.tar.gz", "format": "tar.gz",
+ "binary": "diana-linux-amd64/diana-webui", "install_as": "diana-webui", "checksums": "SHA256SUMS.txt"}
+```
+
+- `asset`：要下载的文件，必须出现在同一版本的资产列表里，下载地址取自资产列表，不拿规则拼。
+- `checksums`：校验文件名，格式同 `sha256sum` 输出，`asset` 必须在里面。
+- `format`：`exe` 是程序本身，下载后直接改名替换；`tar.gz` 解压后取 `binary` 指的文件，同目录的 `run.sh`、`README.txt` 一并更新。
+- `install_as`：装好后的程序名。和当前安装的程序名不同时更新器拒绝，提示重跑一键安装，因为改名要连带改服务和命令入口。
+
+清单没有本平台的规则（较早的版本）时，按 `diana-<系统>-<架构>` 的命名约定找包。以后改包名或格式，只改 CI 里生成清单的那一段，已装好的更新器不用跟着改。
 
 Docker 保留每个完整版本标签（及对应的 `-slim` 标签）。正式版更新 `latest` / `latest-slim`，Beta 和 RC 更新 `beta` / `beta-slim`，Canary 更新 `canary` / `canary-slim`；预发布不会覆盖 latest。需要修正或回退 `latest` / `latest-slim` 时，手动运行 `Docker Retag Latest` 工作流并填入已发布的正式版标签，它会把两个标签重新指向该版本的完整版和 slim 镜像，不重新构建。默认安装脚本仍安装正式版，完整包用户安装后可在版本面板切换 Beta；Docker 用户使用 `ghcr.io/suink/diana:beta`、`ghcr.io/suink/diana:canary` 或具体版本标签。启用更新助手后，镜像由宿主机侧助手拉取并重建；否则仍由原部署环境更新。
 

@@ -368,7 +368,7 @@ archive_name="$package_name.tar.gz"
 base_url="https://github.com/$repo/releases/download/$version"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/diana-install.XXXXXX")
 archive_path="$temp_dir/$archive_name"
-sums_path="$temp_dir/SHA256SUMS"
+sums_path="$temp_dir/SHA256SUMS.txt"
 stage_dir="$temp_dir/stage"
 
 cleanup() {
@@ -376,7 +376,7 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-download "Download → SHA256SUMS" "$base_url/SHA256SUMS" "$sums_path"
+download "Download → SHA256SUMS.txt" "$base_url/SHA256SUMS.txt" "$sums_path"
 
 expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
 case "$expected" in

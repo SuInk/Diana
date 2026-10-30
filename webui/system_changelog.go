@@ -36,6 +36,8 @@ type ReleaseEntry struct {
 	ChecksumAvailable bool           `json:"checksum_available"`
 	ChecksumURL       string         `json:"checksum_url,omitempty"`
 	Assets            []ReleaseAsset `json:"-"`
+	// Packages 是静态清单 latest.json 里的平台更新规则；GitHub API 不给，为空。
+	Packages []ReleasePackageRule `json:"-"`
 }
 
 // ReleaseAsset is retained internally so the updater can select the exact
@@ -160,7 +162,7 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		assets := make([]ReleaseAsset, 0, len(item.Assets))
 		for _, asset := range item.Assets {
 			assets = append(assets, ReleaseAsset{Name: asset.Name, URL: asset.BrowserDownloadURL, Size: asset.Size})
-			if asset.Name == "SHA256SUMS" {
+			if isChecksumsAsset(asset.Name) && checksumURL == "" {
 				checksumURL = asset.BrowserDownloadURL
 			}
 		}

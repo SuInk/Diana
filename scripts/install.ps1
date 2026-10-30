@@ -172,11 +172,11 @@ $archiveName = "diana-windows-amd64.exe"
 $baseUrl = "https://github.com/$repository/releases/download/$version"
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("diana-install-" + [guid]::NewGuid().ToString("N"))
 $archivePath = Join-Path $tempDir $archiveName
-$sumsPath = Join-Path $tempDir "SHA256SUMS"
+$sumsPath = Join-Path $tempDir "SHA256SUMS.txt"
 
 try {
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-    Get-DianaDownload "$baseUrl/SHA256SUMS" $sumsPath "SHA256SUMS"
+    Get-DianaDownload "$baseUrl/SHA256SUMS.txt" $sumsPath "SHA256SUMS.txt"
 
     $checksumLine = Get-Content $sumsPath | Where-Object {
         $parts = $_ -split '\s+', 2

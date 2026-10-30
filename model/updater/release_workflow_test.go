@@ -98,10 +98,10 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 	if strings.Contains(buildScript, "frontend-next/dist") {
 		t.Error("packages must not ship a frontend directory")
 	}
-	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS") {
+	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS.txt") {
 		t.Fatal("checksums must cover only complete packages")
 	}
-	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS; do") {
+	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS.txt; do") {
 		t.Fatal("update manifest must list only packages and checksums")
 	}
 }

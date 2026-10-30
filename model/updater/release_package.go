@@ -56,6 +56,56 @@ type ReleasePackage struct {
 	Tag       string
 	Archive   ReleaseAsset
 	Checksums ReleaseAsset
+	// Format、Binary、InstallAs 来自 latest.json 的平台规则：包是什么格式（exe 或
+	// tar.gz）、程序在包里的路径、装好后叫什么。都为空时按 ExpectedReleaseAssetName
+	// 的命名约定推，所以只要清单写对，以后换包名、换格式不用再改更新器。
+	Format    string
+	Binary    string
+	InstallAs string
+}
+
+// resolvedReleasePackage 是按清单规则或命名约定补齐后的下载规则。
+type resolvedReleasePackage struct {
+	format string
+	binary string
+}
+
+func (u *ReleasePackageUpdater) resolvePackage(release ReleasePackage) (resolvedReleasePackage, error) {
+	assetName := release.Archive.Name
+	if !safeReleaseFileName(assetName) || strings.TrimSpace(release.Archive.URL) == "" {
+		return resolvedReleasePackage{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
+	}
+	if !safeReleaseFileName(release.Checksums.Name) || strings.TrimSpace(release.Checksums.URL) == "" {
+		return resolvedReleasePackage{}, ErrChecksumMissing
+	}
+	if release.Format == "" {
+		if assetName != u.assetName {
+			return resolvedReleasePackage{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
+		}
+		if strings.HasSuffix(assetName, ".exe") {
+			return resolvedReleasePackage{format: "exe"}, nil
+		}
+		return resolvedReleasePackage{format: "tar.gz", binary: releasePackageDirectory(assetName) + "/" + u.binaryName}, nil
+	}
+	if installAs := strings.TrimSpace(release.InstallAs); installAs != "" && installAs != u.binaryName {
+		return resolvedReleasePackage{}, fmt.Errorf("updater: %s renames the program to %s but this installation runs %s; rerun the one-click installer", release.Tag, installAs, u.binaryName)
+	}
+	switch release.Format {
+	case "exe":
+		return resolvedReleasePackage{format: "exe"}, nil
+	case "tar.gz":
+		if _, err := safeArchiveDestination(string(filepath.Separator), release.Binary); err != nil {
+			return resolvedReleasePackage{}, err
+		}
+		return resolvedReleasePackage{format: "tar.gz", binary: release.Binary}, nil
+	default:
+		return resolvedReleasePackage{}, fmt.Errorf("%w: unsupported package format %q", ErrInvalidReleaseArchive, release.Format)
+	}
+}
+
+func safeReleaseFileName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, `/\`)
 }
 
 type UpdatePolicy struct {
@@ -415,11 +465,9 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		return Result{}, fmt.Errorf("updater: invalid release tag %q", release.Tag)
 	}
 	assetName := release.Archive.Name
-	if assetName != u.assetName || strings.TrimSpace(release.Archive.URL) == "" {
-		return Result{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
-	}
-	if release.Checksums.Name != "SHA256SUMS" || strings.TrimSpace(release.Checksums.URL) == "" {
-		return Result{}, ErrChecksumMissing
+	rule, err := u.resolvePackage(release)
+	if err != nil {
+		return Result{}, err
 	}
 	if !validReleaseDownloadURL(release.Archive.URL) || !validReleaseDownloadURL(release.Checksums.URL) {
 		return Result{}, errors.New("updater: release asset URL must use HTTPS")
@@ -457,12 +505,12 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		mirrorBase = u.mirror.Base(ctx, release.Archive.URL)
 	}
 
-	checksumPath := filepath.Join(workRoot, "SHA256SUMS")
+	checksumPath := filepath.Join(workRoot, "checksums")
 	u.setProgress("checksum", 0, release.Archive.Size)
 	// 校验清单优先直连：它是整个下载的信任锚，而且只有几 KB，加不加速都一样快。
 	// 镜像只是直连不通时的兜底——套了镜像的包也得先对得上这份清单里的摘要。
 	if _, err := downloadReleaseFile(ctx, u.httpClient, checksumSources(release.Checksums.URL, mirrorBase), checksumPath, maxChecksumBytes, nil); err != nil {
-		return Result{}, fmt.Errorf("download SHA256SUMS: %w", err)
+		return Result{}, fmt.Errorf("download %s: %w", release.Checksums.Name, err)
 	}
 	manifest, err := os.ReadFile(checksumPath)
 	if err != nil {
@@ -494,19 +542,23 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err := os.Mkdir(extractRoot, 0o700); err != nil {
 		return Result{}, err
 	}
-	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
-	if strings.HasSuffix(assetName, ".exe") {
-		// Windows 发布的就是程序本身，没有包可解，改名放进暂存目录即可。
-		if err := os.Mkdir(packageRoot, 0o700); err != nil {
+	var stagedExecutable string
+	if rule.format == "exe" {
+		// 发布的就是程序本身，没有包可解，改名放进暂存目录即可。
+		stagedExecutable = filepath.Join(extractRoot, u.binaryName)
+		if err := os.Rename(archivePath, stagedExecutable); err != nil {
 			return Result{}, err
 		}
-		if err := os.Rename(archivePath, filepath.Join(packageRoot, u.binaryName)); err != nil {
+	} else {
+		if err := extractTarGZ(archivePath, extractRoot); err != nil {
 			return Result{}, err
 		}
-	} else if err := extractReleaseArchive(archivePath, extractRoot); err != nil {
-		return Result{}, err
+		if stagedExecutable, err = safeArchiveDestination(extractRoot, rule.binary); err != nil {
+			return Result{}, err
+		}
 	}
-	stagedExecutable := filepath.Join(packageRoot, u.binaryName)
+	// run.sh、README.txt 这些随包文件和程序放在同一层。
+	packageRoot := filepath.Dir(stagedExecutable)
 	if !regularFileExists(stagedExecutable) {
 		return Result{}, fmt.Errorf("%w: expected binary is missing", ErrInvalidReleaseArchive)
 	}
@@ -909,13 +961,6 @@ func checksumForAsset(manifest []byte, assetName string) (string, error) {
 		return digest, nil
 	}
 	return "", fmt.Errorf("%w: %s is not listed", ErrChecksumMissing, assetName)
-}
-
-func extractReleaseArchive(archivePath, target string) error {
-	if strings.HasSuffix(archivePath, ".tar.gz") {
-		return extractTarGZ(archivePath, target)
-	}
-	return fmt.Errorf("%w: unsupported archive type", ErrInvalidReleaseArchive)
 }
 
 func extractTarGZ(archivePath, target string) error {

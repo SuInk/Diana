@@ -482,7 +482,7 @@ jobs:
 
       - name: Generate SHA-256 checksums
         working-directory: release
-        run: sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS
+        run: sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS.txt
 
       - name: Generate static update manifest
         working-directory: release
@@ -492,8 +492,26 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
-          for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS; do
+          for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS.txt; do
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
+          done
+          # 每个平台的更新规则：下哪个文件、拿哪个文件校验、包的格式、程序在包里的
+          # 位置、装好后叫什么。更新器照这里走，以后改包名或格式只改这一段。
+          packages='[]'
+          for file in diana-*.tar.gz diana-windows-*.exe; do
+            name="${file%.tar.gz}"
+            name="${name%.exe}"
+            platform="${name#diana-}"
+            os="${platform%-*}"
+            arch="${platform##*-}"
+            [ "$os" != macos ] || os=darwin
+            if [[ "$file" == *.exe ]]; then
+              format=exe binary="" install_as=diana-webui.exe
+            else
+              format=tar.gz binary="${name}/diana-webui" install_as=diana-webui
+            fi
+            packages=$(jq --arg os "$os" --arg arch "$arch" --arg asset "$file" --arg format "$format" --arg binary "$binary" --arg install_as "$install_as" \
+              '. + [{os: $os, arch: $arch, asset: $asset, format: $format, binary: $binary, install_as: $install_as, checksums: "SHA256SUMS.txt"} | with_entries(select(.value != ""))]' <<<"$packages")
           done
           jq -n \
             --argjson prerelease "$([[ "$RELEASE_CHANNEL" == release ]] && echo false || echo true)" \
@@ -502,7 +520,8 @@ jobs:
             --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/tag/${RELEASE_TAG}" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --argjson assets "$assets" \
-            '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS") | .url), assets: $assets}]}' \
+            --argjson packages "$packages" \
+            '{schema: 1, releases: [{prerelease: $prerelease, tag: $tag, name: $name, date: $date, url: $url, checksum_available: true, checksum_url: ($assets[] | select(.name == "SHA256SUMS.txt") | .url), assets: $assets, packages: $packages}]}' \
             > latest.json
 
       # 正式版、Beta/RC 和 Canary 共用简洁的安装与下载模板，避免各版本重复堆叠部署细节。
@@ -613,7 +632,7 @@ jobs:
             echo "| Linux ARM64 | [diana-linux-arm64.tar.gz](${download}/diana-linux-arm64.tar.gz) | 解压后运行 \`./run.sh\` |"
             echo "| 安卓（Termux） | [diana-android-arm64.tar.gz](${download}/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 \`./run.sh\`，不是安卓 App |"
             echo
-            echo "WebUI 已编进程序，不需要安装 Node.js。启动后浏览器打开 \`http://127.0.0.1:18080\`，首次启动时终端会打印管理员账号密码，只显示一次。下载后可对照 [SHA256SUMS](${download}/SHA256SUMS) 校验。"
+            echo "WebUI 已编进程序，不需要安装 Node.js。启动后浏览器打开 \`http://127.0.0.1:18080\`，首次启动时终端会打印管理员账号密码，只显示一次。下载后可对照 [SHA256SUMS.txt](${download}/SHA256SUMS.txt) 校验。"
             echo
             echo "自定义目录、权限、源码部署及旧版迁移见[部署文档](https://suink.github.io/Diana/deploy.html)。"
             if [ -n "${previous_tag}" ]; then
@@ -635,7 +654,7 @@ jobs:
           files: |
             release/*.tar.gz
             release/diana-windows-*.exe
-            release/SHA256SUMS
+            release/SHA256SUMS.txt
             release/latest.json
 
       - name: Prune superseded canary releases

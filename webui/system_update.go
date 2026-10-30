@@ -121,6 +121,7 @@ type SystemUpdateHandler struct {
 	releaseCachePersistMu sync.Mutex
 	releaseCache          persistedReleaseCache
 	releaseFetch          singleflight.Group
+	packageRules          sync.Map // 版本标签 → 该版本 latest.json 里的平台规则
 	mirror                GitHubMirrorSelector
 	now                   func() time.Time
 }
@@ -359,7 +360,8 @@ func (h *SystemUpdateHandler) runReleaseCheck(requestCtx context.Context) (syste
 	}
 	packageReady := false
 	if releaseAvailable && latest.ChecksumAvailable {
-		_, packageReady = latest.asset(h.releaseUpdater.ExpectedAssetName())
+		_, packageErr := h.releasePackage(requestCtx, latest)
+		packageReady = packageErr == nil
 	}
 	updateAvailable, versionErr := updateAvailableAgainst(current, latest.Tag)
 	if versionErr != nil {
@@ -700,19 +702,11 @@ func (h *SystemUpdateHandler) applyLatestUpdate(ctx context.Context, force bool)
 		}
 	}
 	if releaseAvailable {
-		archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
-		if !ok {
-			return updater.Result{}, fmt.Errorf("%w: %s", updater.ErrReleaseAssetMissing, h.releaseUpdater.ExpectedAssetName())
+		release, err := h.releasePackage(ctx, latest)
+		if err != nil {
+			return updater.Result{}, err
 		}
-		checksums, ok := latest.asset("SHA256SUMS")
-		if !ok {
-			return updater.Result{}, updater.ErrChecksumMissing
-		}
-		return h.releaseUpdater.Download(ctx, updater.ReleasePackage{
-			Tag:       latest.Tag,
-			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
-			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
-		}, force)
+		return h.releaseUpdater.Download(ctx, release, force)
 	}
 	if force {
 		return h.updater.ForceUpdateToRelease(ctx, latest.Tag)
@@ -747,19 +741,11 @@ func (h *SystemUpdateHandler) downloadLatestRelease(ctx context.Context, force b
 	if !force && status.DownloadReady && status.DownloadedVersion == latest.Tag {
 		return updater.Result{Status: status, Downloaded: true, TargetCommit: latest.Tag, Output: "Release package is already downloaded and verified.", At: time.Now()}, nil
 	}
-	archive, ok := latest.asset(h.releaseUpdater.ExpectedAssetName())
-	if !ok {
-		return updater.Result{}, fmt.Errorf("%w: %s", updater.ErrReleaseAssetMissing, h.releaseUpdater.ExpectedAssetName())
+	release, err := h.releasePackage(ctx, latest)
+	if err != nil {
+		return updater.Result{}, err
 	}
-	checksums, ok := latest.asset("SHA256SUMS")
-	if !ok {
-		return updater.Result{}, updater.ErrChecksumMissing
-	}
-	result, err := h.releaseUpdater.Download(ctx, updater.ReleasePackage{
-		Tag:       latest.Tag,
-		Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
-		Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
-	}, force)
+	result, err := h.releaseUpdater.Download(ctx, release, force)
 	if errors.Is(err, updater.ErrUpdateInProgress) {
 		current, statusErr := h.releaseUpdater.Status(ctx)
 		if statusErr == nil && current.Updating {
@@ -1014,21 +1000,16 @@ func (h *SystemUpdateHandler) rollback(c *gin.Context) {
 	}
 
 	if releaseAvailable {
-		archive, ok := target.asset(h.releaseUpdater.ExpectedAssetName())
-		if !ok {
-			writeError(c, http.StatusBadRequest, fmt.Errorf("目标版本缺少完整 Release 包：%s", h.releaseUpdater.ExpectedAssetName()))
+		release, err := h.releasePackage(c.Request.Context(), target)
+		if errors.Is(err, updater.ErrReleaseAssetMissing) {
+			writeError(c, http.StatusBadRequest, fmt.Errorf("目标版本缺少完整 Release 包：%w", err))
 			return
 		}
-		checksums, ok := target.asset("SHA256SUMS")
-		if !ok {
-			writeError(c, http.StatusBadRequest, updater.ErrChecksumMissing)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, err)
 			return
 		}
-		if _, err := h.releaseUpdater.Download(c.Request.Context(), updater.ReleasePackage{
-			Tag:       target.Tag,
-			Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
-			Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
-		}, true); err != nil {
+		if _, err := h.releaseUpdater.Download(c.Request.Context(), release, true); err != nil {
 			h.writeUpdateError(c, "system_update_rollback", err)
 			return
 		}

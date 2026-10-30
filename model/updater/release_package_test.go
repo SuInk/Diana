@@ -183,6 +183,80 @@ func TestReleasePackageUpdaterStagesWindowsExecutable(t *testing.T) {
 	assertUpdaterTestContent(t, plan.StagedExecutable, string(program))
 }
 
+func TestReleasePackageUpdaterFollowsManifestRule(t *testing.T) {
+	// 清单里的包名、校验文件名都和命名约定不同，更新器照清单走。
+	assetName := "diana-next-linux-amd64.tar.gz"
+	archive := releaseTarFixture(t, assetName, "diana-webui")
+	digest := sha256.Sum256(archive)
+	manifest := []byte(hex.EncodeToString(digest[:]) + "  " + assetName + "\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/" + assetName:
+			_, _ = w.Write(archive)
+		case "/CHECKSUMS.txt":
+			_, _ = w.Write(manifest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	installRoot := t.TempDir()
+	executable := filepath.Join(installRoot, "diana-webui")
+	database := filepath.Join(installRoot, "data", "diana.db")
+	writeUpdaterTestFile(t, executable, "old-binary", 0o700)
+	writeUpdaterTestFile(t, database, "database", 0o600)
+	var planPath string
+	u, err := NewReleasePackageUpdater(ReleasePackageOptions{
+		CurrentVersion: "v0.4.0",
+		Executable:     executable,
+		DatabasePath:   database,
+		HealthURL:      server.URL + "/api/health",
+		HTTPClient:     server.Client(),
+		PlatformOS:     "linux",
+		PlatformArch:   "amd64",
+		HelperStarter: func(_, path, _ string) error {
+			planPath = path
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := ReleasePackage{
+		Tag:       "v0.5.0",
+		Archive:   ReleaseAsset{Name: assetName, URL: server.URL + "/" + assetName},
+		Checksums: ReleaseAsset{Name: "CHECKSUMS.txt", URL: server.URL + "/CHECKSUMS.txt"},
+		Format:    "tar.gz",
+		Binary:    "diana-next-linux-amd64/diana-webui",
+		InstallAs: "diana-webui",
+	}
+	renamed := release
+	renamed.InstallAs = "diana"
+	if _, err := u.Download(context.Background(), renamed, false); err == nil || !strings.Contains(err.Error(), "rerun the one-click installer") {
+		t.Fatalf("Download() with a renamed program error = %v", err)
+	}
+	escaping := release
+	escaping.Binary = "../diana-webui"
+	if _, err := u.Download(context.Background(), escaping, false); !errors.Is(err, ErrInvalidReleaseArchive) {
+		t.Fatalf("Download() with an escaping binary path error = %v", err)
+	}
+	if _, err := u.Download(context.Background(), release, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.InstallDownloaded(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := readReleaseApplyPlan(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertUpdaterTestContent(t, plan.StagedExecutable, "new-binary")
+	if len(plan.OptionalFiles) != 1 || filepath.Base(plan.OptionalFiles[0].Target) != "run.sh" {
+		t.Fatalf("optional files = %#v", plan.OptionalFiles)
+	}
+}
+
 func TestReleasePackageUpdaterReportsActiveOperation(t *testing.T) {
 	u := &ReleasePackageUpdater{
 		currentVersion: "v0.8.16",
@@ -300,8 +374,8 @@ func TestExtractReleaseArchiveRejectsTraversal(t *testing.T) {
 	if err := os.WriteFile(archivePath, buffer.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := extractReleaseArchive(archivePath, t.TempDir()); !errors.Is(err, ErrInvalidReleaseArchive) {
-		t.Fatalf("extractReleaseArchive() error = %v", err)
+	if err := extractTarGZ(archivePath, t.TempDir()); !errors.Is(err, ErrInvalidReleaseArchive) {
+		t.Fatalf("extractTarGZ() error = %v", err)
 	}
 }
 

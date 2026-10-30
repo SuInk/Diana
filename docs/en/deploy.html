@@ -43,7 +43,7 @@
         </div>
         <ol class="steps compact">
           <li><span>1</span><div><h3>Detect the platform</h3><p>Picks the right full archive for your OS and CPU, and refuses platforms it does not support.</p></div></li>
-          <li><span>2</span><div><h3>Download and verify</h3><p>Fetches the release's <code>SHA256SUMS</code> alongside it and only extracts once the checksum matches.</p></div></li>
+          <li><span>2</span><div><h3>Download and verify</h3><p>Fetches the release's <code>SHA256SUMS.txt</code> alongside it and only extracts once the checksum matches.</p></div></li>
           <li><span>3</span><div><h3>Back up, then switch</h3><p>Backs up the database, WAL/SHM files, frontend, old binary and launch script, keeping any existing <code>config.yaml</code>.</p></div></li>
           <li><span>4</span><div><h3>Start and probe</h3><p>Polls <code>/api/health</code> for up to 45 seconds. On Unix a failed upgrade restores the previous set of files.</p></div></li>
         </ol>
@@ -69,7 +69,7 @@
 
       <section class="section searchable" id="manual-release">
         <div class="section-heading"><p class="eyebrow">Alternative</p><h2>Install a full release archive by hand</h2></div>
-        <p>For offline environments or where changes need manual approval, download the file for your platform plus <code>SHA256SUMS</code> from the same release. Windows gets a single <code>diana-windows-amd64.exe</code>: put it in a folder of its own and double-click it. macOS, Linux and Android Termux get a <code>.tar.gz</code> archive with the program and its launch scripts. The WebUI is built into the program, so there is no separate WebUI deployment and no Node.js to install.</p>
+        <p>For offline environments or where changes need manual approval, download the file for your platform plus <code>SHA256SUMS.txt</code> from the same release. Windows gets a single <code>diana-windows-amd64.exe</code>: put it in a folder of its own and double-click it. macOS, Linux and Android Termux get a <code>.tar.gz</code> archive with the program and its launch scripts. The WebUI is built into the program, so there is no separate WebUI deployment and no Node.js to install.</p>
         <pre><code># macOS Apple Silicon example
 shasum -a 256 diana-macos-arm64.tar.gz
 tar -xzf diana-macos-arm64.tar.gz

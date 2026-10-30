@@ -39,6 +39,8 @@ type persistedReleaseEntry struct {
 	ChecksumAvailable bool           `json:"checksum_available"`
 	ChecksumURL       string         `json:"checksum_url,omitempty"`
 	Assets            []ReleaseAsset `json:"assets,omitempty"`
+	// Packages 只有静态清单 latest.json 才有，见 ReleasePackageRule。
+	Packages []ReleasePackageRule `json:"packages,omitempty"`
 }
 
 func persistedReleaseFromEntry(entry ReleaseEntry) persistedReleaseEntry {
@@ -52,6 +54,7 @@ func persistedReleaseFromEntry(entry ReleaseEntry) persistedReleaseEntry {
 		ChecksumAvailable: entry.ChecksumAvailable,
 		ChecksumURL:       entry.ChecksumURL,
 		Assets:            append([]ReleaseAsset(nil), entry.Assets...),
+		Packages:          append([]ReleasePackageRule(nil), entry.Packages...),
 	}
 }
 
@@ -66,6 +69,7 @@ func (entry persistedReleaseEntry) releaseEntry() ReleaseEntry {
 		ChecksumAvailable: entry.ChecksumAvailable,
 		ChecksumURL:       entry.ChecksumURL,
 		Assets:            append([]ReleaseAsset(nil), entry.Assets...),
+		Packages:          append([]ReleasePackageRule(nil), entry.Packages...),
 	}
 }
 
@@ -306,6 +310,7 @@ func cloneReleaseEntries(entries []ReleaseEntry) []ReleaseEntry {
 	cloned := append([]ReleaseEntry(nil), entries...)
 	for index := range cloned {
 		cloned[index].Assets = append([]ReleaseAsset(nil), cloned[index].Assets...)
+		cloned[index].Packages = append([]ReleasePackageRule(nil), cloned[index].Packages...)
 	}
 	return cloned
 }
