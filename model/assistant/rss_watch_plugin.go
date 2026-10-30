@@ -337,7 +337,14 @@ func (p *RSSWatchPlugin) fetch(ctx context.Context, feedURL string, settings Set
 	if p.client.Jar != nil {
 		key = ""
 	}
-	cached, err := p.feeds.load(ctx, key, 30*time.Second, 60*time.Second, nil, func(loadCtx context.Context) (rssFeedCache, error) {
+	ttl := 30 * time.Second
+	// 多个群订了同一个 UP 主或番剧时，各自的检查时刻错开，30 秒缓存几乎接不住；
+	// B 站接口频繁请求容易触发风控，所以放宽到 2 分钟，让它们共用同一次抓取。
+	// 仍短于最短检查间隔 5 分钟，开播提醒最多晚 2 分钟。
+	if isBilibiliFeedURL(url) {
+		ttl = bilibiliFeedShareTTL
+	}
+	cached, err := p.feeds.load(ctx, key, ttl, 60*time.Second, nil, func(loadCtx context.Context) (rssFeedCache, error) {
 		feed, err := p.fetchFresh(loadCtx, url, settings)
 		return cacheRSSFeed(feed), err
 	})

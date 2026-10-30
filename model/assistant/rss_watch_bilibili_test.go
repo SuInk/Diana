@@ -169,3 +169,20 @@ func TestBilibiliDynamicEmptyWithoutLoginIsError(t *testing.T) {
 		t.Fatalf("feed=%+v err=%v", feed, err)
 	}
 }
+
+func TestBilibiliFeedSharedAcrossSubscriptions(t *testing.T) {
+	requests := 0
+	plugin := newBilibiliTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"code":0,"result":{"title":"测试番","episodes":[{"id":101,"title":"1"}]}}`))
+	})
+	feedURL := bilibiliSeasonAPI + "?season_id=11111"
+	for range 3 {
+		if _, err := plugin.fetch(context.Background(), feedURL, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("同一番剧被不同订阅检查时应共用一次抓取，实际请求 %d 次", requests)
+	}
+}
