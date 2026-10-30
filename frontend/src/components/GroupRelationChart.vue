@@ -6,7 +6,7 @@
     <p v-if="placed.length > 0" class="relation-legend muted">
       {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ ordered.length }} 人</template><template v-if="overflow > 0">，其中 {{ overflow }} 人圈里放不下</template>
       <template v-if="graph.truncated">（只统计了最近这批消息）</template>
-      · 越靠里和{{ centerIsBot ? "机器人" : centerName }}互动越多，悬停看名字，点头像换成以 TA 为中心
+      · 越靠里和{{ centerName }}互动越多，悬停看名字，点头像换成以 TA 为中心
     </p>
     <svg
       v-if="placed.length > 0"
@@ -171,7 +171,7 @@ function clipID(userID: string) {
 const centerID = computed(() => props.graph.center_id || props.graph.bot_id || "");
 const centerNode = computed(() => props.graph.nodes.find((node) => node.user_id === centerID.value) ?? props.graph.nodes.find((node) => node.is_bot) ?? null);
 const centerIsBot = computed(() => !centerNode.value || !!centerNode.value.is_bot);
-const centerName = computed(() => centerIsBot.value ? "机器人" : centerNode.value?.display_name?.trim() || centerID.value);
+const centerName = computed(() => centerNode.value?.display_name?.trim() || (centerIsBot.value ? "机器人" : centerID.value));
 const centerLabel = computed(() => centerNode.value?.display_name?.slice(0, 4) || (centerIsBot.value ? "Diana" : centerID.value.slice(0, 4)));
 const centerAvatar = computed(() => {
   const node = centerNode.value;

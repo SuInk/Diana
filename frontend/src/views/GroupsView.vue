@@ -880,8 +880,9 @@ const relationsLoading = ref(false);
 const relationsCenter = ref("");
 const relationCenterOptions = computed(() => {
   const nodes = relationsGraph.value?.nodes ?? [];
+  const bot = nodes.find((node) => node.is_bot);
   return [
-    { value: "", label: "以机器人为中心" },
+    { value: "", label: `以 ${bot?.display_name?.trim() || "机器人"} 为中心`, avatar: bot?.avatar_url },
     ...nodes.filter((node) => !node.is_bot).map((node) => ({ value: node.user_id, label: `以 ${node.display_name?.trim() || node.user_id} 为中心`, hint: node.user_id, avatar: node.avatar_url }))
   ];
 });
