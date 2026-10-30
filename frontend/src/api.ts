@@ -4495,6 +4495,27 @@ export interface GroupRelationResponse {
   graph: GroupRelationGraph;
 }
 
+export interface GroupWordCloudWord {
+  text: string;
+  count: number;
+}
+
+export interface GroupWordCloud {
+  group_id: string;
+  since?: string;
+  messages: number;
+  speakers: number;
+  words: GroupWordCloudWord[];
+  /** dict 是词典分词；ngram 是没开词典时的启发式切法。 */
+  segmenter: "dict" | "ngram";
+  truncated?: boolean;
+}
+
+export interface GroupWordCloudResponse {
+  range: AssistantEventRange;
+  cloud: GroupWordCloud;
+}
+
 /** 新建机器人时用的 Agent 推荐默认值。只读，不改任何东西。 */
 export interface AgentRecommendedDefaults {
   agent_file_write_enabled: boolean;
@@ -4519,6 +4540,11 @@ export function getGroupRelations(groupID: string, range: AssistantEventRange = 
   const params = new URLSearchParams({ range });
   if (center) params.set("center", center);
   return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
+}
+
+export function getGroupWordCloud(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupWordCloudResponse> {
+  const params = new URLSearchParams({ range });
+  return requestJSON<GroupWordCloudResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/wordcloud?${params.toString()}`);
 }
 
 

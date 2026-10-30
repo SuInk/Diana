@@ -152,6 +152,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 第三方图库，这正是它的插件开关要管的事。
 		dianaRenderToolName:         true,
 		dianaGroupRelationsToolName: true,
+		dianaGroupWordCloudToolName: true,
 		dianaImageSourceToolName:    true,
 		// 核实账号身份。只读运行时判定、不改任何状态，而它要挡的恰恰是非主人的
 		// 身份声称——只给主人用就等于没用。

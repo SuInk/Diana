@@ -69,6 +69,7 @@ func (h *BotHandler) registerConsoleGroupRoutes(router gin.IRouter) {
 	router.POST("/api/assistant/groups/switches", h.saveConsoleGroupSwitches)
 	router.DELETE("/api/assistant/groups/:id", h.deleteConsoleGroup)
 	router.GET("/api/assistant/groups/:id/relations", h.groupRelationGraph)
+	router.GET("/api/assistant/groups/:id/wordcloud", h.groupWordCloud)
 	router.GET("/api/assistant/groups/:id/avatar", h.groupAvatar)
 	h.registerGroupStyleRoutes(router)
 	h.registerAvatarRoutes(router)
@@ -348,6 +349,32 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 		graph.Nodes[index].AvatarURL = h.consoleAvatarURL(avatarKindMember, profileID, graph.Nodes[index].UserID)
 	}
 	c.JSON(http.StatusOK, gin.H{"range": rangeID, "graph": graph})
+}
+
+// groupWordCloud 返回群友一段时间内的高频词，机器人自己的发言不算。
+func (h *BotHandler) groupWordCloud(c *gin.Context) {
+	if h.sqlite == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "消息存储未配置"})
+		return
+	}
+	groupID := strings.TrimSpace(c.Param("id"))
+	if groupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少群号"})
+		return
+	}
+	rangeID := strings.TrimSpace(c.DefaultQuery("range", "7d"))
+	since, ok := assistantEventsSince(rangeID, time.Now())
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 1h、24h、7d、30d、all"})
+		return
+	}
+	botID := strings.TrimSpace(h.botConfigForProfile(botProfileScope(c)).BotAccount)
+	cloud, err := h.sqlite.GroupWordCloudFor(c.Request.Context(), groupID, since, botID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"range": rangeID, "cloud": cloud})
 }
 
 // listConsoleGroups 返回机器人已加入的群、已保存群配置与插件清单。

@@ -112,6 +112,7 @@ var adminChatSessionBoundTools = []string{
 	dianaBrowserHandoffToolName, "relationship", dianaMemoryToolName,
 	// 出图的结果要随回复发进会话，WebUI 这边只收文字，生成了也看不到。
 	dianaImageToolName, dianaVideoToolName, dianaRenderToolName, dianaGroupRelationsToolName,
+	dianaGroupWordCloudToolName,
 	"reminder", dianaEventTriggerToolName, dianaSubscriptionToolName, dianaBackgroundTaskToolName,
 	replyBlockToolName,
 }

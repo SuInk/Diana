@@ -835,6 +835,23 @@ function demoActivity(groupID: string) {
   };
 }
 
+// 词云的演示数据：一份固定词表，按区间放大计数，再按群号错开一点，换群换区间都看得出变化。
+const demoWordCloudVocabulary = ["哈哈哈", "下班", "火锅", "周末", "原神", "摸鱼", "老板", "奶茶", "加班", "草", "睡觉", "开黑", "抽卡", "上分",
+  "外卖", "猫猫", "早安", "晚安", "表情包", "电影", "考试", "复习", "红包", "旅游", "天气", "空调", "咖啡", "健身", "减肥", "烧烤",
+  "Diana", "版本", "更新", "截图", "群主", "管理", "生日", "蛋糕", "地铁", "迟到", "相机", "Switch", "显卡", "键盘", "番剧", "追更"];
+
+function demoWordCloud(groupID: string, range: string) {
+  const scale = ({ "1h": 0.05, "24h": 0.3, "7d": 1, "30d": 3.2, all: 6 } as Record<string, number>)[range] ?? 1;
+  const seed = [...groupID].reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  const words = demoWordCloudVocabulary
+    .map((text, index) => ({ text, count: Math.max(2, Math.round((180 / (1 + index * 0.35) + ((seed + index * 7) % 13)) * scale)) }))
+    .sort((left, right) => right.count - left.count);
+  return {
+    range,
+    cloud: { group_id: groupID, messages: Math.round(4200 * scale), speakers: Math.max(3, Math.round(36 * Math.min(scale, 2))), words, segmenter: "dict" }
+  };
+}
+
 function demoLatency() {
   const until = new Date().toISOString();
   const dist = (samples: number, avg: number, p50: number, p90: number, p99: number, min: number, max: number) => ({
@@ -2028,6 +2045,9 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   const relationsMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/relations$/);
   if (relationsMatch && method === "GET") return json({ range: "7d", graph: demoGroupRelationGraph(decodeURIComponent(relationsMatch[1]), url.searchParams.get("center") ?? "") });
+  const wordCloudMatch = path.match(/^\/api\/assistant\/groups\/([^/]+)\/wordcloud$/);
+  if (wordCloudMatch && method === "GET") return json(demoWordCloud(decodeURIComponent(wordCloudMatch[1]), url.searchParams.get("range") || "7d"));
+
   if (path === "/api/assistant/groups/switches" && method === "POST") {
     if (typeof body.min_group_level === "number" || typeof body.level_unknown_policy === "string") {
       const gate = { ...(assistantConfig.reply_gate ?? {}) };

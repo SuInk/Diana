@@ -200,6 +200,10 @@
                 <Share2 :size="13" aria-hidden="true" />
                 关系图
               </button>
+              <button class="btn small ghost" type="button" @click="openWordCloud(group, group.group_name)">
+                <Cloud :size="13" aria-hidden="true" />
+                词云
+              </button>
               <button class="btn small" type="button" @click="openEditor(group, group.group_name)">
                 <SlidersHorizontal :size="13" aria-hidden="true" />
                 配置
@@ -223,6 +227,31 @@
         <button class="btn ghost" :disabled="deleting" @click="pendingDelete = null">取消</button>
         <button class="btn" :disabled="deleting" @click="removeGroup"><Trash2 :size="15" />{{ deleting ? "删除中…" : "删除配置" }}</button>
       </template>
+    </Modal>
+
+    <Modal
+      v-if="wordCloudGroupID"
+      :title="`${wordCloudGroupName || `群 ${wordCloudGroupID}`} · 词云`"
+      wide
+      @close="closeWordCloud"
+    >
+      <div class="stack" style="gap: 12px">
+        <div class="segmented" role="radiogroup" aria-label="按时间范围统计词频">
+          <button
+            v-for="option in relationRangeOptions"
+            :key="option.value"
+            type="button"
+            role="radio"
+            :aria-checked="wordCloudRange === option.value"
+            :class="{ active: wordCloudRange === option.value }"
+            @click="selectWordCloudRange(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+        <p v-if="wordCloudLoading" class="muted">正在统计…</p>
+        <GroupWordCloudChart v-else-if="wordCloud" :cloud="wordCloud" />
+      </div>
     </Modal>
 
     <!-- 群配置编辑弹窗 -->
@@ -721,7 +750,7 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { askConfirm } from "../lib/confirm";
 import { botScope } from "../lib/bot-scope";
-import { Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
+import { Cloud, Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
 import {
   type ConnectionPeer,
   getBotProfileConfig,
@@ -733,6 +762,7 @@ import {
   saveBotGroupSwitches,
   deleteBotGroup,
   getGroupRelations,
+  getGroupWordCloud,
   fetchAssistantUserNames,
   listManagedExtensions,
   listPersonas,
@@ -744,11 +774,13 @@ import {
   type BotGroupSummary,
   type GroupDisabledMode,
   type AssistantEventRange,
-  type GroupRelationGraph
+  type GroupRelationGraph,
+  type GroupWordCloud
 } from "../api";
 import EmptyState from "../components/EmptyState.vue";
 import IdChipInput from "../components/IdChipInput.vue";
 import GroupRelationChart from "../components/GroupRelationChart.vue";
+import GroupWordCloudChart from "../components/GroupWordCloudChart.vue";
 import GroupPluginSettings from "../components/GroupPluginSettings.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import RandomRepeatControls from "../components/RandomRepeatControls.vue";
@@ -930,6 +962,46 @@ async function loadRelations(): Promise<void> {
     toastError(error instanceof Error ? error.message : "关系图加载失败");
   } finally {
     relationsLoading.value = false;
+  }
+}
+
+const wordCloudGroupID = ref("");
+const wordCloudGroupName = ref("");
+const wordCloudRange = ref<AssistantEventRange>("7d");
+const wordCloud = ref<GroupWordCloud | null>(null);
+const wordCloudLoading = ref(false);
+
+function openWordCloud(group: BotGroupConfig, groupName = ""): void {
+  wordCloudGroupID.value = group.group_id;
+  wordCloudGroupName.value = groupName;
+  wordCloud.value = null;
+  void loadWordCloud();
+}
+
+function closeWordCloud(): void {
+  wordCloudGroupID.value = "";
+  wordCloud.value = null;
+}
+
+function selectWordCloudRange(value: AssistantEventRange): void {
+  if (wordCloudRange.value === value) return;
+  wordCloudRange.value = value;
+  wordCloud.value = null;
+  void loadWordCloud();
+}
+
+async function loadWordCloud(): Promise<void> {
+  const groupID = wordCloudGroupID.value;
+  if (!groupID) return;
+  wordCloudLoading.value = true;
+  try {
+    const response = await getGroupWordCloud(groupID, wordCloudRange.value);
+    if (wordCloudGroupID.value !== groupID) return;
+    wordCloud.value = response.cloud;
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "词云加载失败");
+  } finally {
+    wordCloudLoading.value = false;
   }
 }
 
