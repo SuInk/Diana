@@ -331,3 +331,38 @@ func TestSilentFinishPromptSitsInTheStableHead(t *testing.T) {
 		t.Fatal("silent finish rule was injected without the Agent")
 	}
 }
+
+// TestSilentFinishRefusedForPluginContextSendsNoPlaceholder：内置插件只给了上下文，
+// 模型照样选了静默。静默因插件结果被否决后模型也没补出正文，这时回到静默，
+// 不能把「我这边没有生成有效回复」当回复发进群里。
+func TestSilentFinishRefusedForPluginContextSendsNoPlaceholder(t *testing.T) {
+	provider := &silentFinishProvider{finals: []string{silentFinal("另一位机器人在回答，不是对我说的")}}
+	channel := &recordingChannel{}
+	plugins := NewPluginManager()
+	if err := plugins.RegisterPlugin(testPlugin{}); err != nil {
+		t.Fatal(err)
+	}
+	cfg := BotConfig{BotAccount: "42", OwnerID: "owner", AgentEnabled: true}
+	runtime := NewRuntime(cfg, channel, plugins, nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+
+	event := MessageEvent{
+		Kind: EventKindGroup, GroupID: "900", UserID: "30004", MessageID: "g-plugin-silent", ToMe: true,
+		Time: time.Now().Unix(), RawMessage: "@Diana 更新说明",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "@Diana 更新说明"}}},
+	}
+	outcome, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "ignored_model_silent" {
+		t.Fatalf("outcome = %q, want ignored_model_silent", outcome)
+	}
+	for _, msg := range channel.sentSnapshot() {
+		if strings.Contains(msg.Text, "没有生成有效回复") {
+			t.Fatalf("placeholder fallback was sent: %#v", msg)
+		}
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("a silent turn refused only for plugin context still sent %#v", sent)
+	}
+}

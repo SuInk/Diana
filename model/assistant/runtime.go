@@ -4630,8 +4630,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	var silentFinish *modelSilentFinishError
+	// 静默只因为插件结果被否决：模型补不出正文时，回到静默，不发空洞的兜底句。
+	silenceRefusedForPlugin := false
 	if errors.As(err, &silentFinish) {
 		if refused := modelSilenceRefusedReason(ctx, pluginResponses, imageAnnouncements); refused != "" {
+			silenceRefusedForPlugin = refused == silenceRefusedPluginReason
 			// 这一轮有必须交代的东西，静默不作数：当成「模型没给正文」，交给
 			// 下面那套既有的空回复兜底（图片开场白优先）把话补上。
 			log.Printf("diana model silent finish refused: %s", refused)
@@ -4701,6 +4704,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 该说的已经在中途说过了（和工具同一步的 send），收尾没有新内容是正常的，
 			// 不要再补一句「没有生成有效回复」。
 			return "", newModelSilentFinishError("中途已经说过了")
+		} else if silenceRefusedForPlugin && nestedForwardPluginResponse(pluginResponses) == nil {
+			// 插件结果只是给模型的上下文，模型既选了静默又没写出正文，硬补
+			// 「没有生成有效回复」等于把一句系统提示发进群里，什么也没交代。
+			return "", silentFinish
 		} else {
 			reply = "我这边没有生成有效回复。"
 		}

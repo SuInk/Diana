@@ -75,12 +75,14 @@ func trimModelSilentReason(reason string) string {
 //
 // 主人的响应限制命令（「响应限制 解除 …」这类）不在这张单子上，因为它们根本走
 // 不到模型：handleOwnerCommand 在生成之前就把它们处理掉并直接回话了。
+const silenceRefusedPluginReason = "本轮带着必须交代的插件结果"
+
 func modelSilenceRefusedReason(ctx context.Context, pluginResponses []PluginResponse, images *imageAnnouncementSink) string {
 	if hasExternalSideEffect(ctx) {
 		return "本轮已经产生了不可撤销的外部副作用"
 	}
 	if hasFactualPluginResponse(pluginResponses) {
-		return "本轮带着必须交代的插件结果"
+		return silenceRefusedPluginReason
 	}
 	if images.hasPendingWork() {
 		return "本轮已经受理了图片任务"
