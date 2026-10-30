@@ -73,7 +73,14 @@ func (r *Runtime) avatarSourceURL(ctx context.Context, event MessageEvent, id st
 		return OneBotMemberAvatarURL(id)
 	}
 	if !group && r.currentPlatform(event) == PlatformQQOfficial {
-		return r.qqOfficialMemberAvatarURL(event, id)
+		// 成员头像按 openid 拼；机器人自己的 ID 不是 openid 拼不出来，交给通道走 /users/@me。
+		if url := r.qqOfficialMemberAvatarURL(event, id); url != "" {
+			return url
+		}
+		// 配置里的机器人账号可能填的是别的写法，通道只认 AppID 和网关给的 ID。
+		if id == r.avatarBotID(event) {
+			id = firstNonEmpty(r.profileConfig(r.eventProfileID(event)).QQAppID, id)
+		}
 	}
 	var avatar GroupAvatar
 	var err error

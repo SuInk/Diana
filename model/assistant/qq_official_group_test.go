@@ -330,3 +330,63 @@ func TestQQOfficialJoinApprovalStrategy(t *testing.T) {
 		t.Fatalf("invalid requests reached platform: %v", api.requests[before:])
 	}
 }
+
+// 入群自动审批是默认关闭的插件：没启用就不碰平台。
+func TestQQOfficialJoinStrategyRequiresPlugin(t *testing.T) {
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{}}
+	runtime := NewRuntime(BotConfig{Platform: PlatformQQOfficial}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
+	if _, err := runtime.QQOfficialJoinStrategy(context.Background(), "", QQJoinStrategyRequest{Op: "list"}); err == nil || !strings.Contains(err.Error(), "没有启用") {
+		t.Fatalf("disabled plugin error = %v", err)
+	}
+	if calls := channel.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("disabled plugin reached platform: %#v", calls)
+	}
+}
+
+// 机器人自己的 ID 不是 32 位 openid，拼不出成员头像地址，要走 /users/@me。
+func TestQQOfficialBotAvatarUsesUsersMe(t *testing.T) {
+	var avatarServer *httptest.Server
+	avatarServer = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte("\x89PNG\r\n\x1a\nfake"))
+	}))
+	t.Cleanup(avatarServer.Close)
+	api := newQQGroupFakeAPI(t, map[string]any{"GET /users/@me": map[string]any{"avatar": avatarServer.URL + "/a.png"}})
+	channel := api.channel()
+	ctx := withDirectoryEvent(context.Background(), MessageEvent{Platform: PlatformQQOfficial, PlatformScope: "qq_group", GroupID: "GOPENID"})
+	if _, err := channel.MemberAvatar(ctx, "app"); err != nil && !strings.Contains(err.Error(), "地址") {
+		t.Fatalf("self avatar: %v", err)
+	}
+	found := false
+	for _, req := range api.requests {
+		found = found || req == "GET /users/@me"
+	}
+	if !found {
+		t.Fatalf("self avatar should ask /users/@me, requests=%v", api.requests)
+	}
+}
+
+// 成员接口没开白名单时，用群消息里平台给的 member_role 核验身份；没说过话的仍然拒绝。
+func TestQQOfficialGroupMemberFallsBackToMessageRole(t *testing.T) {
+	api := newQQGroupFakeAPI(t, map[string]any{
+		"GET /v2/groups/GOPENID/members/M1": nil,
+		"GET /v2/groups/GOPENID/members/M2": nil,
+	})
+	channel := api.channel()
+	event, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", json.RawMessage(`{"id":"m1","group_openid":"GOPENID","content":"禁言我","author":{"member_openid":"M1","member_role":"admin"}}`), "self")
+	if !ok || event.SenderRole != "admin" {
+		t.Fatalf("event = %#v", event)
+	}
+	channel.rememberQQGroupRole("GOPENID", "M1", event.SenderRole, time.Now())
+	member, err := channel.GroupMember(qqGroupCtx(), "GOPENID", "M1")
+	if err != nil || member.Role != "admin" {
+		t.Fatalf("member = %#v err=%v", member, err)
+	}
+	if _, err := channel.GroupMember(qqGroupCtx(), "GOPENID", "M2"); !errors.Is(err, errQQGroupNoPermission) {
+		t.Fatalf("unseen member err = %v", err)
+	}
+	channel.rememberQQGroupRole("GOPENID", "M1", "admin", time.Now().Add(-qqGroupRoleTTL-time.Minute))
+	if _, err := channel.GroupMember(qqGroupCtx(), "GOPENID", "M1"); err == nil {
+		t.Fatal("stale role must not be trusted")
+	}
+}

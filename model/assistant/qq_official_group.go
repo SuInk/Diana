@@ -130,6 +130,33 @@ func (c *QQOfficialChannel) isQQGroupSelf(gid, uid string) bool {
 	return uid == appID || uid == c.Status().SelfID || (openID != "" && uid == openID)
 }
 
+// qqGroupRoleTTL 是从消息里看到的身份能用多久。身份变动不推事件，放久了会过时。
+const qqGroupRoleTTL = 30 * time.Minute
+
+type qqGroupSeenRole struct {
+	role string
+	at   time.Time
+}
+
+func (c *QQOfficialChannel) rememberQQGroupRole(gid, uid, role string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.groupRoles == nil {
+		c.groupRoles = map[string]qqGroupSeenRole{}
+	}
+	c.groupRoles[gid+"\x00"+uid] = qqGroupSeenRole{role: role, at: now}
+}
+
+func (c *QQOfficialChannel) seenQQGroupRole(gid, uid string, now time.Time) (string, bool) {
+	c.mu.RLock()
+	seen, ok := c.groupRoles[gid+"\x00"+uid]
+	c.mu.RUnlock()
+	if !ok || now.Sub(seen.at) > qqGroupRoleTTL {
+		return "", false
+	}
+	return seen.role, true
+}
+
 func qqGroupMemberInfo(gid string, row map[string]any) OneBotGroupMemberInfo {
 	uid := stringFromAny(row["member_openid"])
 	bot, _ := row["bot"].(bool)
@@ -150,8 +177,14 @@ func (c *QQOfficialChannel) qqGroupMember(ctx context.Context, gid, uid string) 
 		return OneBotGroupMemberInfo{GroupID: gid, UserID: uid, Role: firstNonEmpty(state.MemberRole, "member"), IsBot: true, MembershipVerified: true}, nil
 	}
 	d, err := qqGroupAPIError(c.CallAPI(ctx, "GET "+qqGroupPath(gid)+"/members/"+url.PathEscape(uid), nil))
+	if errors.Is(err, errQQGroupNoPermission) {
+		// 没开白名单时，用这个人最近一条群消息里平台给的 member_role。没说过话的
+		// 仍按「无法确认」拒绝，不能猜成普通成员。
+		if role, ok := c.seenQQGroupRole(gid, uid, time.Now()); ok {
+			return OneBotGroupMemberInfo{GroupID: gid, UserID: uid, Role: role, MembershipVerified: true}, nil
+		}
+	}
 	if err != nil {
-		// 没开白名单就查不到别人的身份；返回错误让门禁按「无法确认」拒绝，不能猜成普通成员。
 		return OneBotGroupMemberInfo{}, err
 	}
 	member := qqGroupMemberInfo(gid, d)

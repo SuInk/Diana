@@ -183,7 +183,7 @@
           <footer v-if="showFooter(plugin)" class="plugin-card-foot">
             <template v-if="plugin.installed">
               <button
-                v-if="plugin.manifest.settings?.length"
+                v-if="hasSettingsDialog(plugin)"
                 class="btn small"
                 type="button"
                 :disabled="busyID === plugin.manifest.id"
@@ -236,12 +236,12 @@
     <Modal
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
-      :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
+      :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === qqJoinApprovalPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
       :fixed-height="isStickerSettings"
       @pointerdown="onSettingsPointerDown"
       @close="closeSettings"
     >
-      <p class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
+      <p v-if="settingsSpecs.length" class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
       <!-- Dependencies expand only when attention is needed. -->
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
@@ -264,7 +264,7 @@
         />
       </details>
 
-      <p class="hint">所有机器人共用此插件配置，启用状态各自独立。</p>
+      <p v-if="settingsSpecs.length" class="hint">所有机器人共用此插件配置，启用状态各自独立。</p>
       <p v-if="settingsTarget.shared_config_source" class="hint">当前共享配置迁移自机器人 {{ settingsTarget.shared_config_source }}，旧的独立配置仍保留在存储中。</p>
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'config'" :class="{ active: githubSettingsTab === 'config' }" @click="githubSettingsTab = 'config'">配置信息</button>
@@ -506,6 +506,7 @@
       </div>
       <StickerLibrary v-if="isStickerSettings && stickerSettingsTab === 'library'" :profile="botScope" />
       <VRChatStatusPanel v-if="settingsTarget.manifest.id === vrchatPluginID" />
+      <QQJoinStrategyPanel v-if="settingsTarget.manifest.id === qqJoinApprovalPluginID" :profile="botScope" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :default-profile-id="botScope"
@@ -513,11 +514,14 @@
         :prepare-access="saveSettingsForSubscription"
       />
       <template #footer>
-        <button class="btn ghost small plugin-settings-reset" type="button" data-settings-action :disabled="settingsBusy" @click="resetSettings">
-          恢复默认
-        </button>
-        <button class="btn" type="button" data-settings-action :disabled="settingsBusy" @click="closeSettings">取消</button>
-        <button class="btn primary" type="button" data-settings-action :disabled="settingsBusy" @click="saveSettings">保存</button>
+        <template v-if="settingsSpecs.length">
+          <button class="btn ghost small plugin-settings-reset" type="button" data-settings-action :disabled="settingsBusy" @click="resetSettings">
+            恢复默认
+          </button>
+          <button class="btn" type="button" data-settings-action :disabled="settingsBusy" @click="closeSettings">取消</button>
+          <button class="btn primary" type="button" data-settings-action :disabled="settingsBusy" @click="saveSettings">保存</button>
+        </template>
+        <button v-else class="btn" type="button" data-settings-action @click="closeSettings">关闭</button>
       </template>
     </Modal>
 
@@ -862,6 +866,7 @@ import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import StickerLibrary from "../components/StickerLibrary.vue";
 import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
+import QQJoinStrategyPanel from "../components/QQJoinStrategyPanel.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 import { botScope } from "../lib/bot-scope";
@@ -880,6 +885,8 @@ const groupRelationsPluginID = "group_relations";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
+// 入群自动审批没有设置项，弹窗里只放策略面板。
+const qqJoinApprovalPluginID = "official.qq-join-approval";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";
 const vrchatPluginID = "official.vrchat-osc";
@@ -1326,7 +1333,7 @@ async function reload(): Promise<void> {
     const requestedSettings = viewQuery().get("settings");
     if (!settingsTarget.value && requestedSettings) {
       const target = plugins.value.find((plugin) => plugin.manifest.id === requestedSettings && plugin.installed);
-      if (target?.manifest.settings?.length) {
+      if (target && hasSettingsDialog(target)) {
         openSettings(target);
       }
     }
@@ -1529,6 +1536,10 @@ async function confirmRepoInstall(): Promise<void> {
   }
 }
 
+function hasSettingsDialog(plugin: PluginState): boolean {
+  return Boolean(plugin.manifest.settings?.length) || plugin.manifest.id === qqJoinApprovalPluginID;
+}
+
 function openSettings(plugin: PluginState): void {
   if (plugin.manifest.id === repositoryPublishPluginID) {
     plugin = plugins.value.find((candidate) => candidate.manifest.id === repositoryWatchPluginID) ?? plugin;
@@ -1666,7 +1677,7 @@ function showFooter(plugin: PluginState): boolean {
   if (!plugin.installed) {
     return true;
   }
-  return (plugin.manifest.settings?.length ?? 0) > 0 || !plugin.manifest.built_in;
+  return hasSettingsDialog(plugin) || !plugin.manifest.built_in;
 }
 
 function secretConfigured(key: string): boolean {

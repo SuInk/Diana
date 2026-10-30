@@ -70,9 +70,11 @@ type QQOfficialChannel struct {
 	guildChannels map[string]string
 	// groupBotOpenIDs 是 bot_state 回的机器人在各 QQ 群里的 member_openid。
 	groupBotOpenIDs map[string]string
-	avatarURLs      map[string]string
-	mu              sync.RWMutex
-	cfg             QQOfficialConfig
+	// groupRoles 是群消息 author.member_role 带来的身份，成员接口没开白名单时靠它核验。
+	groupRoles map[string]qqGroupSeenRole
+	avatarURLs map[string]string
+	mu         sync.RWMutex
+	cfg        QQOfficialConfig
 	// apiBaseOverride 只给测试指向本地服务。
 	apiBaseOverride string
 	// readTimeoutOverride 只给测试缩短半开连接的判定时限。
@@ -466,6 +468,9 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 			c.guildChannels = map[string]string{}
 		}
 		c.guildChannels[event.GroupID] = event.GuildID
+	}
+	if event.PlatformScope == "qq_group" && event.SenderRole != "" {
+		c.rememberQQGroupRole(event.GroupID, event.UserID, event.SenderRole, time.Now())
 	}
 	if source.Author.Avatar != "" {
 		if c.avatarURLs == nil {
@@ -1170,6 +1175,8 @@ type qqOfficialMessage struct {
 		UserOpenID   string `json:"user_openid"`
 		MemberOpenID string `json:"member_openid"`
 		Username     string `json:"username"`
+		// MemberRole 是群消息发送者在群里的身份：owner、admin、member。
+		MemberRole string `json:"member_role"`
 	} `json:"author"`
 	Member struct {
 		Nick  string   `json:"nick"`
@@ -1673,12 +1680,14 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		event.MessageType = "group"
 		event.GroupID = msg.GroupOpenID
 		event.UserID = firstNonEmpty(msg.Author.MemberOpenID, msg.Author.ID)
+		event.SenderRole = msg.Author.MemberRole
 	case "GROUP_MESSAGE_CREATE":
 		event.PlatformScope = "qq_group"
 		event.Kind = EventKindGroup
 		event.MessageType = "group"
 		event.GroupID = firstNonEmpty(msg.GroupOpenID, msg.GroupID)
 		event.UserID = firstNonEmpty(msg.Author.MemberOpenID, msg.Author.ID)
+		event.SenderRole = msg.Author.MemberRole
 		// 机器人自己的发言也会回推；归到 SelfID 让运行时按自发消息处理。
 		if msg.Author.Bot && selfID != "" && msg.Author.ID == selfID {
 			event.UserID = selfID

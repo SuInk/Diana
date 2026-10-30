@@ -156,7 +156,7 @@ func (c *QQOfficialChannel) MemberAvatar(ctx context.Context, uid string) (Group
 	source := c.avatarURLs[e.GroupID+"\x00"+uid]
 	appID := c.cfg.AppID
 	c.mu.RUnlock()
-	if source == "" && (uid == appID || uid == c.Status().SelfID) {
+	if source == "" && (uid == appID || uid == c.Status().SelfID || (e.PlatformScope == "qq_group" && c.isQQGroupSelf(e.GroupID, uid))) {
 		d, err := directoryData(c.CallAPI(ctx, "GET /users/@me", nil))
 		if err != nil {
 			return GroupAvatar{}, err

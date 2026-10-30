@@ -13,9 +13,12 @@ import (
 
 // 入群自动审批策略（/v2/groups/join_approval_strategy）：关联群里命中白名单 QQ 号的
 // 入群申请由平台直接通过。一个机器人最多 20 个策略，机器人得是关联群的管理员才生效。
-// 这是主人在控制台维护的配置，不给模型工具用。
+// 这是主人在控制台维护的配置，不给模型工具用，做成默认关闭的内置插件：策略存在
+// 平台那边，插件只是遥控器，界面在插件设置里（QQJoinStrategyPanel.vue）。
 
 const (
+	qqJoinApprovalPluginID = "official.qq-join-approval"
+
 	qqJoinStrategyPath          = "/v2/groups/join_approval_strategy"
 	qqJoinStrategyGroupLimit    = 100
 	qqJoinStrategyWhitelistOnce = 10000
@@ -128,8 +131,35 @@ func (c *QQOfficialChannel) JoinApprovalStrategy(ctx context.Context, req QQJoin
 	return nil, fmt.Errorf("不支持的策略操作 %q", req.Op)
 }
 
+// QQJoinApprovalPlugin 只有清单：开关决定控制台能不能管理这台机器人的策略。
+type QQJoinApprovalPlugin struct{}
+
+func NewQQJoinApprovalPlugin() *QQJoinApprovalPlugin { return &QQJoinApprovalPlugin{} }
+
+func (*QQJoinApprovalPlugin) Manifest() PluginManifest {
+	return PluginManifest{
+		ID:              qqJoinApprovalPluginID,
+		Name:            "QQ 入群自动审批",
+		Version:         "0.1.0",
+		Description:     "按白名单 QQ 号自动通过 QQ 群的入群申请。策略保存在 QQ 开放平台，在插件设置里新建、编辑、立即执行或删除；机器人需是关联群的管理员，一个机器人最多 20 个策略。",
+		Official:        true,
+		BuiltIn:         true,
+		DefaultDisabled: true,
+		Platforms:       []string{PlatformQQOfficial},
+		Permissions:     []string{"qq_official:join_approval_strategy"},
+	}
+}
+
+// Handle 不处理消息：审批由平台按策略完成。
+func (*QQJoinApprovalPlugin) Handle(context.Context, PluginRequest) (*PluginResponse, error) {
+	return nil, nil
+}
+
 // QQOfficialJoinStrategy 供控制台按机器人管理入群自动审批策略。
 func (r *Runtime) QQOfficialJoinStrategy(ctx context.Context, profileID string, req QQJoinStrategyRequest) (map[string]any, error) {
+	if r.profileDisabled(profileID) || !r.plugins.EnabledWithOverrides(qqJoinApprovalPluginID, r.plugins.ProfileOverrides(profileID)) {
+		return nil, fmt.Errorf("这台机器人没有启用「QQ 入群自动审批」插件")
+	}
 	channel, ok := channelFor[QQJoinStrategyChannel](r, profileID)
 	if !ok {
 		return nil, fmt.Errorf("只有已连接的 QQ 官方机器人能管理入群自动审批策略")

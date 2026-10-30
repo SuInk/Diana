@@ -3,7 +3,7 @@
 
 <template>
   <div class="join-strategy">
-    <span v-if="!profile" class="hint">先保存机器人并连上，再回这里配置入群自动审批。</span>
+    <span v-if="!profile" class="hint">策略按机器人保存在 QQ 开放平台：先在左侧选一台 QQ 官方机器人。</span>
     <template v-else>
       <span class="hint">关联群里，白名单 QQ 号的入群申请由平台直接通过。机器人需是这些群的管理员；一个机器人最多 {{ maxStrategies }} 个策略，不填过期时间默认一年后过期。</span>
       <span v-if="loadError" class="hint join-strategy-error">{{ loadError }}</span>
