@@ -46,9 +46,11 @@ func TestDirectoryGETParametersAcrossPlatforms(t *testing.T) {
 func TestQQOfficialDirectorySeparatesGroupsAndChannels(t *testing.T) {
 	c := NewQQOfficialChannel(QQOfficialConfig{})
 	c.tokens = directoryTestToken()
-	calls := 0
+	guildCalls := 0
 	c.client = directoryTestClient(func(r *http.Request) any {
-		calls++
+		if strings.HasPrefix(r.URL.Path, "/guilds/") || strings.HasPrefix(r.URL.Path, "/channels/") {
+			guildCalls++
+		}
 		switch r.URL.Path {
 		case "/channels/channel":
 			return map[string]any{"guild_id": "guild", "private_type": 0}
@@ -61,7 +63,8 @@ func TestQQOfficialDirectorySeparatesGroupsAndChannels(t *testing.T) {
 		}
 	})
 	ctx := withDirectoryEvent(context.Background(), MessageEvent{PlatformScope: "qq_group", GroupID: "channel"})
-	if _, err := c.GroupMembers(ctx, "channel"); err == nil || calls != 0 {
+	// 普通 QQ 群走 /v2/groups，不能套频道接口。
+	if _, _ = c.GroupMembers(ctx, "channel"); guildCalls != 0 {
 		t.Fatal("ordinary group used guild API")
 	}
 	ctx = withDirectoryEvent(context.Background(), MessageEvent{PlatformScope: "qq_guild", GroupID: "channel", GuildID: "guild"})
