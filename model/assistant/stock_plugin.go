@@ -5,8 +5,8 @@ package assistant
 
 import "context"
 
-// 股票行情做成插件而不是常开的工具：它要连外网的行情接口，不是每个群都想让机器人
-// 聊股票，默认关着，部署方在插件页打开。和关系图一样，插件只声明开关与设置，
+// 股票行情做成插件而不是常开的工具：它要连外网的行情接口，不想让机器人聊股票的
+// 部署方可以在插件页关掉。默认开着，行情源不要 Key，开箱即用。和关系图一样，插件只声明开关与设置，
 // 干活的是 stock_quote 工具，本群启用时才注册给模型。
 const (
 	stockPluginID = "official.stock-quote"
@@ -22,14 +22,13 @@ func NewStockPlugin() *StockPlugin { return &StockPlugin{} }
 
 func (p *StockPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID:              stockPluginID,
-		Name:            "股票行情",
-		Version:         "0.1.0",
-		Description:     "群友让机器人查股票时，按代码或名称查 A 股、港股、美股的现价、涨跌幅、成交量等行情，可附一张近期日线走势图。行情来自腾讯财经公开接口，无需 API Key；美股有延迟，仅供参考。",
-		Official:        true,
-		BuiltIn:         true,
-		DefaultDisabled: true,
-		Permissions:     []string{"network:outbound", "message:send"},
+		ID:          stockPluginID,
+		Name:        "股票行情",
+		Version:     "0.1.0",
+		Description: "群友让机器人查股票时，按代码或名称查 A 股、港股、美股的现价、涨跌幅、成交量等行情，可附一张近期日线走势图。行情来自腾讯财经公开接口，无需 API Key；美股有延迟，仅供参考。",
+		Official:    true,
+		BuiltIn:     true,
+		Permissions: []string{"network:outbound", "message:send"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         stockSettingChart,

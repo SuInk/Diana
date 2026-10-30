@@ -150,7 +150,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 				extraTools = append(extraTools, newDianaBrowserHandoffTool(r, event, cfg))
 			}
 		}
-		// 股票行情要连外网，默认关着；插件启用时群聊私聊都能查。
+		// 股票行情要连外网，插件页可关；启用时群聊私聊都能查。
 		if _, settings, enabled := r.pluginWithSettingsForEvent(stockPluginID, event); enabled {
 			extraTools = append(extraTools, newDianaStockTool(r, event, settings))
 		}
