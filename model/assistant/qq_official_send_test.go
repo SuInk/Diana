@@ -37,7 +37,11 @@ type qqFakeAPI struct {
 	rejectKeyboard bool
 	// rejectGallery 让带 mqqapi 图集节点的消息被拒收，和生产实测的回包一致。
 	rejectGallery bool
-	server        *httptest.Server
+	// material 是素材管理接口的假实现，见 qq_official_material_test.go。
+	material qqFakeMaterial
+	// rejectVerify 让带 force_verify_image_resource 的消息被拒，模拟素材图转存失败。
+	rejectVerify bool
+	server       *httptest.Server
 }
 
 func newQQFakeAPI(t *testing.T) *qqFakeAPI {
@@ -51,6 +55,7 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 		api.paths = append(api.paths, "PUT "+r.URL.Path)
 		api.mu.Unlock()
 	})
+	mux.HandleFunc("/put/material", api.serveMaterialPut)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -58,6 +63,8 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 		api.paths = append(api.paths, r.Method+" "+r.URL.Path)
 		api.mu.Unlock()
 		switch {
+		case strings.HasPrefix(r.URL.Path, "/v2/media-images"):
+			api.serveMaterial(w, r, body)
 		case strings.HasSuffix(r.URL.Path, "/upload_prepare"):
 			api.mu.Lock()
 			api.prepares = append(api.prepares, body)
@@ -86,6 +93,12 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 				api.mu.Unlock()
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "请求参数不允许包含url mqqapi://markdown/node", "code": 40034028})
+				return
+			}
+			if _, verify := body["force_verify_image_resource"]; api.rejectVerify && verify {
+				api.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "图片转存失败", "code": 40035009})
 				return
 			}
 			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) {

@@ -110,6 +110,8 @@ type QQOfficialChannel struct {
 	refs qqRefLedger
 	// galleryRefused 记着平台拒过图集节点，之后多图直接逐张上传，不再白发一次。
 	galleryRefused atomic.Bool
+	// material 是 Markdown 图片已上传的素材，见 qq_official_material.go。
+	material qqMaterialCache
 }
 
 type qqPassiveSeq struct {
@@ -664,12 +666,17 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if !isGuild {
 			body["msg_type"] = 0
 			if markdown {
+				markdownContent = c.qqMaterializeMarkdownImages(ctx, auth, markdownContent)
 				body = map[string]any{
 					"msg_type": 2,
 					"markdown": map[string]any{"content": markdownContent},
 				}
 				if keyboard {
 					body["keyboard"] = qqOfficialKeyboard(msg.Buttons)
+				}
+				if strings.Contains(markdownContent, "qqbot-media://") {
+					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。
+					body["force_verify_image_resource"] = true
 				}
 			}
 			// 出站引用与被动回复正交：message_reference 渲染引用卡片，msg_id 永远指向
@@ -702,6 +709,12 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			// 正文的排版还能保住。
 			log.Printf("qq: 带按钮的消息被拒，去掉按钮重发: %v", err)
 			delete(body, "keyboard")
+			id, err = post(body)
+		}
+		if _, verify := body["force_verify_image_resource"]; err != nil && verify && !qqOfficialRetryUseless(err) {
+			// 素材图校验没过：去掉校验照旧发一次，平台会尽力而为，至少正文能到。
+			log.Printf("qq: 素材图校验失败，去掉校验重发: %v", err)
+			delete(body, "force_verify_image_resource")
 			id, err = post(body)
 		}
 		if err != nil && markdown && !qqOfficialRetryUseless(err) {
