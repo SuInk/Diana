@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -80,18 +81,20 @@ func (t *dianaCrossSessionTool) Description() string {
 	} else {
 		base += "只能发给当前说话的人。"
 	}
+	base += "要转发图片、视频、语音、文件时填 forward_media=true，当前消息和它引用的那条里的附件会一并发过去；只转附件时 message 可留空。"
 	return base + "被拒绝就照实说，不要换工具绕过。"
 }
 
 func (t *dianaCrossSessionTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"message": toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 [diana-msg]"),
+		"message":       toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 [diana-msg]；只转附件时可留空"),
+		"forward_media": toolBoolParam("把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	}
 	if t.owner {
 		properties["user_id"] = toolStringParam("私聊目标账号，取自 @ 或成员查询，勿按昵称猜；与 group_id 二选一")
 		properties["group_id"] = toolStringParam("目标群 ID，须是机器人在的其他群；与 user_id 二选一")
 	}
-	return toolObjectSchema([]string{"message"}, properties)
+	return toolObjectSchema(nil, properties)
 }
 
 type dianaCrossSessionResult struct {
@@ -102,6 +105,7 @@ type dianaCrossSessionResult struct {
 	Pending   bool   `json:"pending,omitempty"`
 	Target    string `json:"target"`
 	Runes     int    `json:"runes"`
+	Media     int    `json:"media,omitempty"`
 	Message   string `json:"message"`
 }
 
@@ -117,18 +121,15 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("跨会话发送：运行时不可用")
 	}
-	message := strings.TrimSpace(configToolString(input, "message"))
-	if message == "" {
-		return "", fmt.Errorf("message 不能为空：要发什么，在这里写完整")
-	}
-	if count := len([]rune(message)); count > crossSessionMaxRunes {
-		return "", fmt.Errorf("正文 %d 个字符，超过上限 %d，自己先精简或分几次发", count, crossSessionMaxRunes)
+	message, media, err := crossSessionSendInput(input, t.event, false)
+	if err != nil {
+		return "", err
 	}
 	target, err := t.resolveTarget(ctx, input)
 	if err != nil {
 		return "", err
 	}
-	outcome, err := t.runtime.sendCrossSessionMessage(ctx, t.event, target, message)
+	outcome, err := t.runtime.sendCrossSessionMessage(ctx, t.event, target, message, media)
 	if err != nil {
 		return "", err
 	}
@@ -142,6 +143,7 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 		Pending:   outcome.Pending,
 		Target:    target.label,
 		Runes:     len([]rune(message)),
+		Media:     media.count(),
 		Message: "已经发到" + target.label + "了。在当前会话里只说一句交代，" +
 			"不要把正文复述出来，也不要再调一次这个工具。",
 	}
@@ -260,7 +262,103 @@ func crossSessionGroupEvent(source MessageEvent, groupID string, now time.Time) 
 // 私聊有三条路，按「对方是不是好友」分：是好友就普通私聊；不是好友就借共同群走
 // 临时会话；临时会话也走不通时把内容存下来，等加上好友再自动发（见
 // pending_direct_message.go）。发群没有这些分支。
-func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEvent, target crossSessionTarget, message string) (crossSessionOutcome, error) {
+// crossSessionMedia 是要随正文一起转过去的附件。来源是当前消息和它引用的那条：
+// 「把这张图发到群里」时图要么就在这条里，要么在被引用的那条里。合并转发展开出的
+// 媒体在入站时已经补进了消息段，这里一并带上。
+type crossSessionMedia struct {
+	images, videos, audios []string
+	files                  []MessageSegment
+}
+
+// crossSessionSendInput 读出正文和要转发的附件，两个发送工具共用同一套校验。
+// portable 为真时目的地在另一个平台，只留链接和本机文件：Telegram 的 file_id
+// 这类平台内部引用换了平台就认不出来。
+func crossSessionSendInput(input map[string]any, event MessageEvent, portable bool) (string, crossSessionMedia, error) {
+	message := strings.TrimSpace(configToolString(input, "message"))
+	var media crossSessionMedia
+	if toolInputBool(input, "forward_media") {
+		media = crossSessionMediaFromEvent(event, portable)
+		if media.empty() && message == "" {
+			return "", media, fmt.Errorf("当前消息和它引用的消息里都没有能转发的图片、视频、语音或文件")
+		}
+	}
+	if message == "" && media.empty() {
+		return "", media, fmt.Errorf("message 不能为空：要发什么，在这里写完整")
+	}
+	if count := len([]rune(message)); count > crossSessionMaxRunes {
+		return "", media, fmt.Errorf("正文 %d 个字符，超过上限 %d，自己先精简或分几次发", count, crossSessionMaxRunes)
+	}
+	return message, media, nil
+}
+
+func crossSessionMediaFromEvent(event MessageEvent, portable bool) crossSessionMedia {
+	segments := append([]MessageSegment(nil), event.Segments...)
+	if event.Quoted != nil {
+		segments = append(segments, event.Quoted.Segments...)
+	}
+	return crossSessionMediaFromSegments(segments, portable)
+}
+
+func crossSessionMediaFromSegments(segments []MessageSegment, portable bool) crossSessionMedia {
+	_, images, videos, audios, files := nativeRecallMessageParts(OutgoingMessage{Segments: segments})
+	media := crossSessionMedia{images: images, videos: videos, audios: audios, files: files}
+	if portable {
+		media.images = filterStrings(media.images, portableMediaSource)
+		media.videos = filterStrings(media.videos, portableMediaSource)
+		media.audios = filterStrings(media.audios, portableMediaSource)
+		kept := media.files[:0]
+		for _, file := range media.files {
+			if portableMediaSource(file.Data["file"]) {
+				kept = append(kept, file)
+			}
+		}
+		media.files = kept
+	}
+	return media
+}
+
+func portableMediaSource(source string) bool {
+	source = strings.TrimSpace(source)
+	lower := strings.ToLower(source)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") ||
+		strings.HasPrefix(lower, "base64://") || strings.HasPrefix(lower, "file://") || filepath.IsAbs(source)
+}
+
+func filterStrings(values []string, keep func(string) bool) []string {
+	out := values[:0]
+	for _, value := range values {
+		if keep(value) {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func (m crossSessionMedia) count() int {
+	return len(m.images) + len(m.videos) + len(m.audios) + len(m.files)
+}
+
+func (m crossSessionMedia) empty() bool { return m.count() == 0 }
+
+// messages 拆成一条条单独发：多数平台一条消息只能带一种媒体，混在一起发会整条被拒。
+func (m crossSessionMedia) messages() []OutgoingMessage {
+	out := make([]OutgoingMessage, 0, m.count())
+	for _, image := range m.images {
+		out = append(out, OutgoingMessage{ImageURLs: []string{image}})
+	}
+	for _, video := range m.videos {
+		out = append(out, OutgoingMessage{VideoURLs: []string{video}})
+	}
+	for _, audio := range m.audios {
+		out = append(out, OutgoingMessage{AudioURLs: []string{audio}})
+	}
+	for _, file := range m.files {
+		out = append(out, OutgoingMessage{Segments: []MessageSegment{file}})
+	}
+	return out
+}
+
+func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEvent, target crossSessionTarget, message string, media crossSessionMedia) (crossSessionOutcome, error) {
 	now := time.Now()
 	event := target.event
 	platform, err := r.outboundPlatformForEvent(event)
@@ -276,22 +374,22 @@ func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEve
 		event, stranger = r.resolvePrivateDelivery(ctx, source, event)
 	}
 	if !r.claimCrossSessionSend(source, target.key, now) {
-		r.recordCrossSessionSent(ctx, source, event, target, message, errCrossSessionRateLimited)
+		r.recordCrossSessionSent(ctx, source, event, target, message, media, errCrossSessionRateLimited)
 		return crossSessionOutcome{}, errCrossSessionRateLimited
 	}
 	// 不是好友、又没有共同群可借：临时会话根本开不了，不必先白发一次再失败。
 	if stranger && event.tempSessionGroupID == "" {
-		return r.parkOrFail(ctx, source, event, message, nil)
+		return r.parkOrFail(ctx, source, event, message, media, nil)
 	}
-	_, sendErr := r.sendDecorated(ctx, event, message, outboundDecoration{})
-	r.recordCrossSessionSent(ctx, source, event, target, message, sendErr)
+	sendErr := r.deliverCrossSession(ctx, event, message, media)
+	r.recordCrossSessionSent(ctx, source, event, target, message, media, sendErr)
 	if sendErr == nil {
 		return crossSessionOutcome{}, nil
 	}
 	// 临时会话可以被对方的隐私设置关掉，也不是每个 OneBot 实现都支持。这一步失败
 	// 不代表这条话没救了，存下来等加好友即可；对好友的失败是真失败。
 	if stranger {
-		return r.parkOrFail(ctx, source, event, message, sendErr)
+		return r.parkOrFail(ctx, source, event, message, media, sendErr)
 	}
 	// 平台自己的拒绝原因要原样带回去：Telegram 的「机器人不能主动找没聊过的人」
 	// 和 QQ 的「不是好友」是两件事，含糊成一句「发不出去」就没法跟用户交代。
@@ -320,11 +418,39 @@ func (r *Runtime) resolvePrivateDelivery(ctx context.Context, source, event Mess
 	return event, true
 }
 
-// parkOrFail 把发不出去的私聊交给托管；托管也不成才算真的失败。
-func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, message string, cause error) (crossSessionOutcome, error) {
+// deliverCrossSession 先发正文再逐个发附件。附件中途失败时已经发出的不撤回，
+// 错误里说清楚发到了第几个，模型才能照实交代。
+func (r *Runtime) deliverCrossSession(ctx context.Context, event MessageEvent, message string, media crossSessionMedia) error {
+	if message != "" {
+		if _, err := r.sendDecorated(ctx, event, message, outboundDecoration{}); err != nil {
+			return err
+		}
+	}
+	items := media.messages()
+	if len(items) == 0 {
+		return nil
+	}
+	sendCtx := withContinuousOutboundDelivery(ctx)
+	for index, item := range items {
+		if err := r.sendOutgoing(sendCtx, event, item); err != nil {
+			if message == "" && index == 0 {
+				return err
+			}
+			return fmt.Errorf("附件发到第 %d/%d 个时失败（之前的已经发出）：%w", index+1, len(items), err)
+		}
+	}
+	return nil
+}
+
+// parkOrFail 把发不出去的私聊交给托管；托管也不成才算真的失败。托管只存文字，
+// 附件存不下来，要如实告诉模型。
+func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, message string, media crossSessionMedia, cause error) (crossSessionOutcome, error) {
 	reason := "对方不是好友，这里也没有共同群可以借临时会话"
 	if cause != nil {
 		reason = "临时会话发不出去（" + cause.Error() + "）"
+	}
+	if message == "" {
+		return crossSessionOutcome{}, fmt.Errorf("%s，附件没法存下来等加好友", reason)
 	}
 	if err := r.parkPendingDirectMessage(ctx, source, event, message); err != nil {
 		return crossSessionOutcome{}, fmt.Errorf("%s，内容也存不下来：%w", reason, err)
@@ -333,9 +459,17 @@ func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, me
 		Pending: true,
 		Note: reason + "。内容已经存下来了：对方加上好友之后会自动发出去，" +
 			itoa(int(pendingDirectMessageTTL/(24*time.Hour))) + " 天内有效。" +
+			mediaParkNote(media) +
 			"现在要在当前会话里告诉对方来加机器人好友，并且说清楚好友请求要等机器人主人同意——" +
 			"你自己不能通过好友请求。不要把正文复述出来，也不要再调一次这个工具。",
 	}, nil
+}
+
+func mediaParkNote(media crossSessionMedia) string {
+	if media.empty() {
+		return ""
+	}
+	return "附件（" + itoa(media.count()) + " 个）存不下来，加好友后只会收到文字，要跟对方说明。"
 }
 
 // claimCrossSessionSend 同时检查单个目标的冷却和来源会话总量，通过才占用额度。
@@ -377,7 +511,7 @@ func (r *Runtime) claimCrossSessionSend(source MessageEvent, targetKey string, n
 //
 // 它是机器人在一条会话里替另一条会话做的事：不记的话，那边那条消息凭空出现，
 // 管理员既查不到是谁要求的，也查不到是从哪条会话发起的。
-func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event MessageEvent, target crossSessionTarget, message string, err error) {
+func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event MessageEvent, target crossSessionTarget, message string, media crossSessionMedia, err error) {
 	if err == nil {
 		r.record(EventRecord{
 			At:        time.Now(),
@@ -410,6 +544,7 @@ func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event Mess
 			"target":       target.key,
 			"temp_session": event.tempSessionGroupID != "",
 			"runes":        len([]rune(message)),
+			"media":        media.count(),
 			"preview":      truncateRunesFromStart(message, 200),
 		},
 		CreatedAt: time.Now(),

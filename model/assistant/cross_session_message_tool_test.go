@@ -358,18 +358,18 @@ func TestCrossSessionSendRespectsCooldownAndSessionLimit(t *testing.T) {
 			label: "账号 " + id + " 的私聊",
 		}
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "第一条"); err != nil {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "第一条", crossSessionMedia{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "再来一条"); !errors.Is(err, errCrossSessionRateLimited) {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "再来一条", crossSessionMedia{}); !errors.Is(err, errCrossSessionRateLimited) {
 		t.Fatalf("同一个目标的冷却没生效：%v", err)
 	}
 	for _, id := range []string{"2", "3", "4", "5"} {
-		if _, err := runtime.sendCrossSessionMessage(ctx, source, target(id), "第一条"); err != nil {
+		if _, err := runtime.sendCrossSessionMessage(ctx, source, target(id), "第一条", crossSessionMedia{}); err != nil {
 			t.Fatalf("发给 %s：%v", id, err)
 		}
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("6"), "第一条"); !errors.Is(err, errCrossSessionRateLimited) {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("6"), "第一条", crossSessionMedia{}); !errors.Is(err, errCrossSessionRateLimited) {
 		t.Fatalf("会话总量上限没生效：%v", err)
 	}
 	if got := len(channel.sentSnapshot()); got != crossSessionLimit {
@@ -423,5 +423,84 @@ func TestCrossSessionToolAvailableToNonOwnersWithNarrowerSchema(t *testing.T) {
 	ownerProperties, _ := ownerSchema["properties"].(map[string]any)
 	if _, exists := ownerProperties["group_id"]; !exists {
 		t.Fatal("主人的 schema 里应当有 group_id")
+	}
+}
+
+// 主人在私聊里发图、引用一个文件、再带一段语音，说「转到群里」：附件要一个不落地
+// 发进目标群，只转附件时正文可以留空。
+func TestCrossSessionToolForwardsMediaFromPrivateToGroup(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	source := MessageEvent{
+		Kind: EventKindPrivate, UserID: "555", SelfID: "10000", Platform: PlatformOneBotV11, MessageID: "9002",
+		Segments: []MessageSegment{
+			{Type: "text", Data: map[string]string{"text": "转到群里"}},
+			{Type: "image", Data: map[string]string{"url": "https://example.test/a.png"}},
+			{Type: "video", Data: map[string]string{"url": "https://example.test/b.mp4"}},
+		},
+		Quoted: &QuotedMessage{MessageID: "9001", Segments: []MessageSegment{
+			{Type: "file", Data: map[string]string{"file": "/tmp/report.pdf", "name": "report.pdf"}},
+		}},
+	}
+	tool := newDianaCrossSessionTool(runtime, source, true)
+	out, err := tool.Run(context.Background(), map[string]any{"group_id": "456", "forward_media": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"media":3`) {
+		t.Fatalf("tool result = %s", out)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 3 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	for _, msg := range sent {
+		if msg.GroupID != "456" || msg.UserID != "" {
+			t.Fatalf("附件没发进目标群：%#v", msg)
+		}
+	}
+	if len(sent[0].ImageURLs) != 1 || len(sent[1].VideoURLs) != 1 {
+		t.Fatalf("图片、视频没发出：%#v", sent)
+	}
+	if len(sent[2].Segments) != 1 || sent[2].Segments[0].Type != "file" || sent[2].Segments[0].Data["name"] != "report.pdf" {
+		t.Fatalf("引用里的文件没发出：%#v", sent[2])
+	}
+}
+
+// 不要求转附件时，消息里带的图不会被顺手发出去。
+func TestCrossSessionToolDoesNotForwardMediaUnlessAsked(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{})
+	source := crossSessionGroupSource("555")
+	source.Segments = []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.test/a.png"}}}
+	tool := newDianaCrossSessionTool(runtime, source, false)
+	if _, err := tool.Run(context.Background(), map[string]any{"message": "整理好了"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || len(sent[0].ImageURLs) != 0 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	empty := newDianaCrossSessionTool(runtime, crossSessionGroupSource("556"), false)
+	if _, err := empty.Run(context.Background(), map[string]any{"forward_media": true}); err == nil || !strings.Contains(err.Error(), "没有能转发") {
+		t.Fatalf("没有附件也没有正文应当被拒绝：%v", err)
+	}
+}
+
+// 换平台转发时只留链接和本机文件，Telegram file_id 这种平台内引用要丢掉。
+func TestCrossSessionMediaPortableDropsPlatformRefs(t *testing.T) {
+	event := MessageEvent{Segments: []MessageSegment{
+		{Type: "image", Data: map[string]string{"file_id": "AgACAgUAAx"}},
+		{Type: "image", Data: map[string]string{"cached_file": "/data/media/a.png", "file_id": "AgACAgUAAy"}},
+		{Type: "record", Data: map[string]string{"url": "https://example.test/v.ogg"}},
+		{Type: "file", Data: map[string]string{"file_id": "BQACAgUAAz", "name": "a.zip"}},
+	}}
+	same := crossSessionMediaFromEvent(event, false)
+	if same.count() != 4 {
+		t.Fatalf("同平台应当全部保留：%#v", same)
+	}
+	portable := crossSessionMediaFromEvent(event, true)
+	if len(portable.images) != 1 || portable.images[0] != "/data/media/a.png" || len(portable.audios) != 1 || len(portable.files) != 0 {
+		t.Fatalf("portable = %#v", portable)
 	}
 }

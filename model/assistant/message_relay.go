@@ -160,36 +160,23 @@ func messageRelayTargets(pairs []MessageRelayPair, event MessageEvent) []Message
 
 // messageRelayText 拼转发正文。带上来源平台和发言人，否则那边看到的是一句
 // 没头没尾的话。
-func messageRelayText(event MessageEvent) (text string, images, videos []string) {
+//
+// 附件和跨会话发送走同一套提取（图片、视频、语音、文件都带），目的地换了平台
+// 时只留链接和本机文件。
+func messageRelayText(event MessageEvent, portable bool) (text string, media crossSessionMedia) {
 	text = strings.TrimSpace(PlainText(event.Segments))
 	if text == "" {
 		text = strings.TrimSpace(event.RawMessage)
 	}
-	images, videos = relayMedia(event.Segments)
-	if text == "" && len(images) == 0 && len(videos) == 0 {
-		return "", nil, nil
+	media = crossSessionMediaFromSegments(event.Segments, portable)
+	if text == "" && media.empty() {
+		return "", media
 	}
 	prefix := "【" + relayPlatformLabel(event.Platform) + " · " + event.SenderNameOrID() + "】"
 	if text == "" {
-		return prefix, images, videos
+		return prefix, media
 	}
-	return prefix + "\n" + text, images, videos
-}
-
-func relayMedia(segments []MessageSegment) (images, videos []string) {
-	for _, segment := range segments {
-		source := firstNonEmpty(segment.Data["cached_file"], segment.Data["url"], segment.Data["file"])
-		if strings.TrimSpace(source) == "" {
-			continue
-		}
-		switch segment.Type {
-		case "image":
-			images = append(images, source)
-		case "video":
-			videos = append(videos, source)
-		}
-	}
-	return
+	return prefix + "\n" + text, media
 }
 
 func relayPlatformLabel(platform string) string {
@@ -234,10 +221,6 @@ func (r *Runtime) relayInboundEvent(ctx context.Context, event MessageEvent) {
 	if len(targets) == 0 {
 		return
 	}
-	text, images, videos := messageRelayText(event)
-	if text == "" {
-		return
-	}
 	r.mu.RLock()
 	channel := r.channel
 	r.mu.RUnlock()
@@ -245,14 +228,25 @@ func (r *Runtime) relayInboundEvent(ctx context.Context, event MessageEvent) {
 		return
 	}
 	for _, target := range targets {
-		msg := OutgoingMessage{Platform: target.Platform, ProfileID: target.ProfileID, Text: text, ImageURLs: images, VideoURLs: videos}
-		if target.Kind == MessageRelayKindGroup {
-			msg.GroupID = target.TargetID
-		} else {
-			msg.UserID = target.TargetID
+		text, media := messageRelayText(event, target.Platform != NormalizePlatformID(event.Platform))
+		if text == "" {
+			continue
 		}
-		if err := channel.Send(ctx, msg); err != nil {
-			r.recordMessageRelayFailure(event, target, err)
+		// 正文和图片、视频合成一条，语音和文件多数平台只能单独发。
+		messages := []OutgoingMessage{{Text: text, ImageURLs: media.images, VideoURLs: media.videos}}
+		media.images, media.videos = nil, nil
+		messages = append(messages, media.messages()...)
+		for _, msg := range messages {
+			msg.Platform, msg.ProfileID = target.Platform, target.ProfileID
+			if target.Kind == MessageRelayKindGroup {
+				msg.GroupID = target.TargetID
+			} else {
+				msg.UserID = target.TargetID
+			}
+			if err := channel.Send(ctx, msg); err != nil {
+				r.recordMessageRelayFailure(event, target, err)
+				break
+			}
 		}
 	}
 }

@@ -52,7 +52,8 @@ func (t *dianaCrossPlatformTool) InputSchema() map[string]any {
 		"sender_user_id": toolStringParam("search：只看这个账号发的消息"),
 		"days":           toolIntParam("search：只看最近多少天", 1, 365),
 		"limit":          toolIntParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
-		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 [diana-msg]"),
+		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 [diana-msg]；只转附件时可留空"),
+		"forward_media":  toolBoolParam("send：把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	})
 }
 
@@ -214,14 +215,12 @@ func (t *dianaCrossPlatformTool) read(ctx context.Context, operation string, inp
 // send 用 cross_session_message 的投递链路发到另一台机器人的会话。目的地的准入、
 // 群开关、屏蔽名单按那台机器人的配置判，不因为是主人从别处要求就绕过。
 func (t *dianaCrossPlatformTool) send(ctx context.Context, input map[string]any) (string, error) {
-	message := strings.TrimSpace(configToolString(input, "message"))
-	if message == "" {
-		return "", fmt.Errorf("message 不能为空：要发什么，在这里写完整")
-	}
-	if count := len([]rune(message)); count > crossSessionMaxRunes {
-		return "", fmt.Errorf("正文 %d 个字符，超过上限 %d，自己先精简或分几次发", count, crossSessionMaxRunes)
-	}
 	target, err := t.target(input)
+	if err != nil {
+		return "", err
+	}
+	portable := NormalizePlatformID(target.profile.Platform) != NormalizePlatformID(t.event.Platform)
+	message, media, err := crossSessionSendInput(input, t.event, portable)
 	if err != nil {
 		return "", err
 	}
@@ -252,14 +251,14 @@ func (t *dianaCrossPlatformTool) send(ctx context.Context, input map[string]any)
 		event: event,
 		key:   "profile|" + target.profile.ID + "|" + strings.TrimPrefix(sessionKey(event), event.ContextNamespace+":"),
 		label: label,
-	}, message)
+	}, message, media)
 	if err != nil {
 		return "", err
 	}
 	markExternalSideEffect(ctx)
 	result := dianaCrossSessionResult{
 		OK: true, Delivered: !outcome.Pending, Pending: outcome.Pending,
-		Target: label, Runes: len([]rune(message)),
+		Target: label, Runes: len([]rune(message)), Media: media.count(),
 		Message: "已经发到" + label + "了。在当前会话里只说一句交代，不要把正文复述出来，也不要再调一次这个工具。",
 	}
 	if outcome.Pending {

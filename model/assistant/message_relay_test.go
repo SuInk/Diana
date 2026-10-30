@@ -145,20 +145,32 @@ func TestMessageRelayTextCarriesSource(t *testing.T) {
 		UserID:     "10001",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "晚上吃什么"}}},
 	}
-	text, images, videos := messageRelayText(event)
+	text, media := messageRelayText(event, false)
 	if text != "【QQ · 阿白】\n晚上吃什么" {
 		t.Fatalf("text=%q", text)
 	}
-	if len(images) != 0 || len(videos) != 0 {
-		t.Fatalf("images=%v videos=%v", images, videos)
+	if !media.empty() {
+		t.Fatalf("media=%#v", media)
 	}
 	// 纯图片消息没有正文，也得转过去，只是正文只剩来源标记。
 	imageEvent := MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, SenderName: "阿白", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "https://example.test/a.png"}}}}
-	if text, images, _ := messageRelayText(imageEvent); text != "【Telegram · 阿白】" || len(images) != 1 {
-		t.Fatalf("text=%q images=%v", text, images)
+	if text, media := messageRelayText(imageEvent, false); text != "【Telegram · 阿白】" || len(media.images) != 1 {
+		t.Fatalf("text=%q media=%#v", text, media)
 	}
 	// 什么内容都没有就不必转发了。
-	if text, _, _ := messageRelayText(MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11}); text != "" {
+	if text, _ := messageRelayText(MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11}, false); text != "" {
 		t.Fatalf("empty event text=%q", text)
+	}
+}
+
+// 互通也不只搬图片视频：语音、文件同样带过去。
+func TestMessageRelayTextCarriesVoiceAndFiles(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, SenderName: "阿白", Segments: []MessageSegment{
+		{Type: "record", Data: map[string]string{"url": "https://example.test/v.amr"}},
+		{Type: "file", Data: map[string]string{"url": "https://example.test/a.zip", "name": "a.zip"}},
+	}}
+	text, media := messageRelayText(event, true)
+	if !strings.HasPrefix(text, "【QQ · 阿白】") || len(media.audios) != 1 || len(media.files) != 1 {
+		t.Fatalf("text=%q media=%#v", text, media)
 	}
 }
