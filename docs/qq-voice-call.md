@@ -13,7 +13,7 @@ QQ 的语音是闭源的音视频 SDK，协议不开放，没法自己写一个�
 机器人说话 ← QQ 麦克风 ← bot_mic（虚拟）← qqcall-agent 播放 ← Diana
 ```
 
-`qqcall-agent` 在容器里管窗口和声卡，和镜像一起在单独的仓库 [SuInk/snowluma-voice](https://github.com/SuInk/snowluma-voice) 维护，Diana 的「QQ 语音通话」插件（`model/assistant/qq_voice_call_plugin.go`）连着它决定接不接、对话。两者之间的协议在 `model/qqcall`。
+`qqcall-agent` 在容器里管窗口和声卡，Diana 的「QQ 语音通话」插件（`model/assistant/qq_voice_call_plugin.go`）连着它决定接不接、对话。两者之间的协议在 `model/qqcall`。
 
 ## 一通电话的流程
 
@@ -29,15 +29,13 @@ QQ 的语音是闭源的音视频 SDK，协议不开放，没法自己写一个�
 
 ## 部署
 
-### 1. 换用带语音组件的 SnowLuma 镜像
+### 1. 准备带语音组件的 SnowLuma 容器
 
-```bash
-docker pull ghcr.io/suink/snowluma-voice:latest
-```
+SnowLuma 容器里要额外装上 PulseAudio、QQ 语音插件缺的 `libpulse-mainloop-glib0`（缺了它点「语音通话」不报错，过一会儿显示「已取消」，对方根本没响铃）、xdotool、tesseract 简体中文和 `qqcall-agent`，并让 agent 和 QQ 以同一个用户跑在同一个 X 屏幕上。
 
-它在原版 SnowLuma 上加了 PulseAudio、QQ 语音插件缺的 `libpulse-mainloop-glib0`、xdotool、tesseract 和 `qqcall-agent`，标签和上游 SnowLuma 版本一致。容器参数照旧，再加环境变量 `QQCALL_TOKEN`（和下面插件里的令牌一致）和端口 6190（只给 Diana 访问）。详细参数、按钮坐标等 agent 环境变量见 [snowluma-voice 的 README](https://github.com/SuInk/snowluma-voice#readme)。
+这个镜像目前不公开分发：SnowLuma 的许可协议规定，把它的专有组件并入第三方 Docker 镜像需要作者书面授权。在拿到授权或上游直接支持之前，只能自己在 SnowLuma 镜像上构建、自己用。
 
-**换镜像要重建容器，QQ 会重新登录**；数据卷保留时一般能快速登录，不行就扫码。
+容器参数照旧，再加环境变量 `QQCALL_TOKEN`（和下面插件里的令牌一致）和端口 6190（只给 Diana 访问）。**换镜像要重建容器，QQ 会重新登录**；数据卷保留时一般能快速登录，不行就扫码。
 
 ### 2. 打开插件
 

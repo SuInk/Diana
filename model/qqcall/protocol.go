@@ -2,7 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 // Package qqcall 是 QQ 语音通话桥的线上协议：Diana 的插件和 SnowLuma 容器里的
-// qqcall-agent（github.com/SuInk/snowluma-voice，那边有一份相同的 qqcall 包）之间
+// qqcall-agent（另一个仓库里有一份相同的 qqcall 包）之间
 // 的约定，改动要两边一起改。设计见 docs/qq-voice-call.md。
 //
 // 一条 WebSocket：文本帧是 JSON 控制消息，二进制帧是 16kHz 单声道 s16le 裸 PCM。
