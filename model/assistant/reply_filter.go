@@ -67,24 +67,91 @@ func validateReplyFilterRules(rules []string) error {
 	return nil
 }
 
-// applyReplyFilters 把每条规则的匹配内容从回复里删掉。规则按行生效：多条消息
-// 用换行分开，`$` 这类锚点要对每一行都起作用，所以统一按多行模式匹配。
+// applyReplyFilters 把每条规则的匹配内容从回复里删掉。多条消息用换行分开，
+// `$` 这类锚点要对每一行都起作用，所以统一按多行模式匹配。只删不改写：没被删到
+// 的地方一个字符都不动，Markdown 的加粗、列表、链接和行尾硬换行空格都原样保留。
 func applyReplyFilters(rules []string, text string) string {
 	if len(rules) == 0 || text == "" {
 		return text
 	}
+	compiled := make([]*regexp.Regexp, 0, len(rules))
 	for _, rule := range rules {
-		compiled, err := compileReplyFilterRule("(?m)" + rule)
-		if err != nil {
-			continue
+		if re, err := compileReplyFilterRule("(?m)" + rule); err == nil {
+			compiled = append(compiled, re)
 		}
-		text = compiled.ReplaceAllString(text, "")
 	}
-	lines := strings.Split(text, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " \t")
+	return runReplyFilters(compiled, text, nil)
+}
+
+// replyFilterProtected 是过滤规则不能碰的片段：代码块、行内代码，以及发送层要认的
+// 分条、换行、引用、@ 标记和 CQ 码。规则匹配跨过它们时，它们的原字节照样留下。
+// 漏进正文的 [[DIANA_…]] 控制标记不在其中，默认规则删的就是它们。
+var replyFilterProtected = regexp.MustCompile("(?s:```.*?(?:```|$))|(?s:~~~.*?(?:~~~|$))|`[^`\n]+`|\\[(?:CQ:[^\\]\\n]+|diana-(?:msg|line|reply:[^\\]\\n]+|at:[^\\]\\n]+))\\]" +
+	`|\[[ \t]*@?[ \t]*` + dianaMentionVariantCore + `[ \t]*\]|\[[ \t]*` + dianaReplyVariantCore + `[ \t]*\]`)
+
+var replyFilterMessageBreak = regexp.MustCompile(`\[diana-(?:msg|line)\]`)
+
+// runReplyFilters 按顺序跑规则；removed 不为空时报告每条规则删掉的片段。
+// 分条标记两边是两条消息，`$` 要在标记前停住，不然一条里没闭合的括号会把下一条也删掉。
+func runReplyFilters(rules []*regexp.Regexp, text string, removed func(rule int, fragment string)) string {
+	var out strings.Builder
+	changed, cursor := false, 0
+	for _, marker := range append(replyFilterMessageBreak.FindAllStringIndex(text, -1), []int{len(text), len(text)}) {
+		segment := text[cursor:marker[0]]
+		for i, re := range rules {
+			next := removeReplyFilterMatches(segment, re, func(fragment string) {
+				if removed != nil {
+					removed(i, fragment)
+				}
+			})
+			changed = changed || next != segment
+			segment = next
+		}
+		out.WriteString(segment)
+		out.WriteString(text[marker[0]:marker[1]])
+		cursor = marker[1]
 	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
+	if !changed {
+		return text
+	}
+	return strings.TrimSpace(out.String())
+}
+
+func removeReplyFilterMatches(text string, pattern *regexp.Regexp, removed func(fragment string)) string {
+	matches := pattern.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	protected := replyFilterProtected.FindAllStringIndex(text, -1)
+	var out strings.Builder
+	cursor, p := 0, 0
+	for _, match := range matches {
+		out.WriteString(text[cursor:match[0]])
+		for p < len(protected) && protected[p][1] <= match[0] {
+			p++
+		}
+		kept, from := false, match[0]
+		for i := p; i < len(protected) && protected[i][0] < match[1]; i++ {
+			start, end := max(match[0], protected[i][0]), min(match[1], protected[i][1])
+			if from < start {
+				removed(text[from:start])
+			}
+			out.WriteString(text[start:end])
+			kept, from = true, end
+		}
+		if from < match[1] {
+			removed(text[from:match[1]])
+		}
+		// 删到行尾时把删除点前面的空白一起收掉，别留下「先重启 」这种尾巴。
+		if !kept && (match[1] == len(text) || text[match[1]] == '\n') {
+			trimmed := strings.TrimRight(out.String(), " \t")
+			out.Reset()
+			out.WriteString(trimmed)
+		}
+		cursor = match[1]
+	}
+	out.WriteString(text[cursor:])
+	return out.String()
 }
 
 // ValidateReplyFilterRules 给 WebUI 的帮写和测试用，规则同保存时的校验。
@@ -103,20 +170,22 @@ type ReplyFilterStep struct {
 // 不合法的规则和发送时一样跳过，只在结果里标出原因。
 func PreviewReplyFilters(rules []string, text string) (string, []ReplyFilterStep) {
 	steps := make([]ReplyFilterStep, 0, len(rules))
-	valid := make([]string, 0, len(rules))
-	current := text
+	compiled := make([]*regexp.Regexp, 0, len(rules))
+	stepOf := make([]int, 0, len(rules))
 	for _, rule := range rules {
 		step := ReplyFilterStep{Rule: rule, Removed: []string{}}
 		if err := validateReplyFilterRules([]string{rule}); err != nil {
 			step.Error = err.Error()
-			steps = append(steps, step)
-			continue
+		} else {
+			re, _ := compileReplyFilterRule("(?m)" + rule)
+			compiled = append(compiled, re)
+			stepOf = append(stepOf, len(steps))
 		}
-		valid = append(valid, rule)
-		compiled, _ := compileReplyFilterRule("(?m)" + rule)
-		step.Removed = append(step.Removed, compiled.FindAllString(current, -1)...)
-		current = compiled.ReplaceAllString(current, "")
 		steps = append(steps, step)
 	}
-	return applyReplyFilters(valid, text), steps
+	result := runReplyFilters(compiled, text, func(rule int, fragment string) {
+		step := &steps[stepOf[rule]]
+		step.Removed = append(step.Removed, fragment)
+	})
+	return result, steps
 }

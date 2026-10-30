@@ -100,3 +100,24 @@ func TestPreviewReplyFiltersReportsEachRule(t *testing.T) {
 		t.Fatalf("steps = %#v", steps)
 	}
 }
+
+func TestApplyReplyFiltersKeepsMarkdown(t *testing.T) {
+	rules := []string{`（[^（）\n]*$`}
+	reply := "## 结论\n\n- **先重启**（试过了  \n- 看 [文档](https://example.com/a_(b))\n\n```go\nfmt.Println(\"（没闭合\")\n```\n用 `echo （` 测（顺手"
+	want := "## 结论\n\n- **先重启**\n- 看 [文档](https://example.com/a_(b))\n\n```go\nfmt.Println(\"（没闭合\")\n```\n用 `echo （` 测"
+	if got := applyReplyFilters(rules, reply); got != want {
+		t.Fatalf("filtered =\n%q\nwant\n%q", got, want)
+	}
+	// 没被规则删到的行，连行尾表示硬换行的两个空格都不动。
+	if got := applyReplyFilters(rules, "第一行  \n第二行（没闭合"); got != "第一行  \n第二行" {
+		t.Fatalf("untouched line changed: %q", got)
+	}
+	// 规则跨过行内代码时只删普通文字；分条标记两边各算一条，`$` 不会吞掉下一条。
+	if got := applyReplyFilters(rules, "跑一下（`make test` 看看[diana-msg]下一条"); got != "跑一下`make test`[diana-msg]下一条" {
+		t.Fatalf("protected spans changed: %q", got)
+	}
+	got, steps := PreviewReplyFilters(rules, "跑一下（`make test` 看看")
+	if got != "跑一下`make test`" || len(steps) != 1 || strings.Join(steps[0].Removed, "|") != "（| 看看" {
+		t.Fatalf("preview = %q, %#v", got, steps)
+	}
+}
