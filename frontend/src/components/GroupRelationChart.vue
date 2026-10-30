@@ -143,9 +143,9 @@ const centerRadius = 46;
 // 三圈从里到外：圈越外半径越大、头像越小，所以外圈能放的人反而多。
 // 每圈的人数上限按周长和头像直径算，再压一点，保证相邻头像不贴在一起。
 const rings = [
-  { name: "内圈", radius: 104, node: 27 },
-  { name: "中圈", radius: 182, node: 20 },
-  { name: "外圈", radius: 254, node: 15 }
+  { name: "内圈", radius: 98, node: 27 },
+  { name: "中圈", radius: 166, node: 20 },
+  { name: "外圈", radius: 228, node: 15 }
 ].map((ring) => ({
   ...ring,
   capacity: Math.floor((2 * Math.PI * ring.radius) / (ring.node * 2 + 6))
@@ -217,6 +217,8 @@ const placed = computed<PlacedMember[]>(() => {
     cursor += slice.length;
     // 每圈错开半格起点，相邻两圈的头像不会正好排成一条射线。
     const offset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(slice.length, 1);
+    // 人少的圈头像放大到把一圈铺满，不然稀稀拉拉的，最多放大到 1.4 倍。
+    const nodeRadius = Math.min(ring.node * 1.4, (Math.PI * ring.radius) / Math.max(slice.length, 1) - 3);
     slice.forEach(({ node, weight }, index) => {
       const angle = -Math.PI / 2 + offset + (index * 2 * Math.PI) / slice.length;
       const name = node.display_name?.trim() || node.user_id;
@@ -226,7 +228,7 @@ const placed = computed<PlacedMember[]>(() => {
         ring: ringIndex,
         x: center + ring.radius * Math.cos(angle),
         y: center + ring.radius * Math.sin(angle),
-        radius: ring.node,
+        radius: nodeRadius,
         weight,
         strength,
         name,
