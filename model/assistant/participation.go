@@ -242,7 +242,7 @@ const participationScoreContract = `
 // 会各自演化，同一个群的判断口径就跟着绑的模型变了。覆盖也按块登记而不是整段：
 // 管理员改的是判据本身，两个消费者读到的就还是同一份。
 
-const participationRelevanceTrue = `@ 或引用当前角色本人；叫本人的名字或称呼；承接本人之前的话，冲着本人回应、追问、反驳或调侃（中间有人插话也没关系，只要对话对象仍明确是本人）；话里的「你」明确指本人。称呼和指代须结合当前角色身份与消息对象核对，找其他机器人不算找本人。`
+const participationRelevanceTrue = `@ 或引用当前角色本人；叫本人的名字或称呼；承接本人之前的话，冲着本人回应、追问、反驳或调侃（中间有人插话也没关系，只要对话对象仍明确是本人）；话里的「你」明确指本人。称呼和指代须结合当前角色身份与消息对象核对，找其他机器人不算找本人。判为 true 时 reason 写出依据是哪一种；说「在接本人的话」，对话里得找得到本人标着「机器人」的那句发言。`
 
 var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_true",
@@ -252,7 +252,7 @@ var promptParticipationRelevanceTrueSpec = registerPrompt(PromptSpec{
 	Default: participationRelevanceTrue,
 })
 
-const participationRelevanceFalse = `群友之间聊天；找其他机器人或其他角色；只提到本人会的话题、没在叫本人；在讨论本人（本人的功能、配置、刚才说的话）而不是对本人说——本人说完之后别人接过话，且当前这句实际是在回应那个人；不能仅因中间有人插话就判为 false；几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了本人以外的对象来回答——即使是「@其他机器人 Iwasawa 理论是什么」这种本人也能答的知识问题，也不算在找本人；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
+const participationRelevanceFalse = `群友之间聊天；找其他机器人或其他角色；只提到本人会的话题、没在叫本人；在讨论本人（本人的功能、配置、刚才说的话）而不是对本人说——本人说完之后别人接过话，且当前这句实际是在回应那个人；不能仅因中间有人插话就判为 false；几个人正你来我往时，「你」「你这里」默认指正在对话的那个人；当前消息没 @、没引用、没点名本人，本人最近也没在跟他说话时，一句没指明对象的「你」不算在叫本人，他可能在对自己的 AI、别的机器人或别人说；问某个具体群友本人才知道的事（去不去、做没做、在哪、什么时候），或指定了本人以外的对象来回答——即使是「@其他机器人 Iwasawa 理论是什么」这种本人也能答的知识问题，也不算在找本人；叫它停、嫌它吵或多嘴。拿不准就填 false，交给闲聊判断。`
 
 var promptParticipationRelevanceFalseSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.relevance_false",

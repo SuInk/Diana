@@ -138,3 +138,64 @@ func TestProactiveReplyTranscriptNotesElsewherePartner(t *testing.T) {
 		t.Fatalf("no partner, no note:\n%s", got)
 	}
 }
+
+// TestProactiveReplyTranscriptMarksSameNamedOthers 来自生产：群里另一台机器人就叫「小汐」，
+// 正好是本人的别名之一。不标出来，模型把它的发言当成自己的，编出「本人刚接了他的话」，
+// 把群友对自己 AI 说的「你帮我上学吧」判成在叫本人。
+func TestProactiveReplyTranscriptMarksSameNamedOthers(t *testing.T) {
+	age := func(v int64) *int64 { return &v }
+	payload := proactiveReplyPayload{
+		Addressing:    messageAddressing{ReplyTarget: "none"},
+		CurrentText:   "你帮我上学吧",
+		CurrentSender: "雨夹雪",
+		BotAliases:    []string{"miku", "嘉然", "小汐"},
+		RecentMessages: []proactiveReplyHistoryItem{
+			{Sender: "雨夹雪", Text: "agent呀", AgeSeconds: age(3)},
+			{Sender: "小汐", Text: "是空间快塞满了吗", AgeSeconds: age(600),
+				Addressing: messageAddressing{ReplyTarget: "other", ReplySender: "雨夹雪"}},
+			{Sender: "Bob", Text: "顶一下", AgeSeconds: age(700),
+				Addressing: messageAddressing{ReplyTarget: "other", ReplySender: "小汐"}},
+		},
+	}
+	got := proactiveReplyTranscript(payload)
+	want := []string{
+		"机器人（即本人）叫miku，也叫嘉然、小汐",
+		"（群里另有账号也叫小汐，那是别人，不是本人；本人的发言都标着「机器人」）",
+		"对话按时间从早到晚：",
+		"[11分钟前] Bob（回复小汐（另一个账号，不是本人））：顶一下",
+		"[10分钟前] 小汐（另一个账号，不是本人）（回复雨夹雪）：是空间快塞满了吗",
+		"[刚刚] 雨夹雪：agent呀",
+		"【当前消息】[刚刚] 雨夹雪：你帮我上学吧",
+		"（这段记录里miku没有发过言）",
+	}
+	if got != strings.Join(want, "\n") {
+		t.Fatalf("transcript mismatch:\n%s", got)
+	}
+}
+
+// TestProactiveReplyTranscriptStatesLastBotTurn 当前消息没点本人时写明本人上次发言在多久前，
+// 模型不用自己在对话里找、也就编不出「本人刚接了他的话」。@ 了本人时不写。
+func TestProactiveReplyTranscriptStatesLastBotTurn(t *testing.T) {
+	age := func(v int64) *int64 { return &v }
+	bot := proactiveReplyHistoryItem{Sender: "Diana", IsBot: true, Text: "晚安", AgeSeconds: age(300)}
+	payload := proactiveReplyPayload{
+		Addressing:              messageAddressing{ReplyTarget: "none"},
+		CurrentText:             "你也是",
+		CurrentSender:           "Alice",
+		BotAliases:              []string{"嘉然"},
+		LastBotMessage:          &bot,
+		OthersSpokeAfterLastBot: true,
+		RecentMessages: []proactiveReplyHistoryItem{
+			{Sender: "Bob", Text: "睡了", AgeSeconds: age(60)},
+			bot,
+		},
+	}
+	got := proactiveReplyTranscript(payload)
+	if !strings.HasSuffix(got, "【当前消息】[刚刚] Alice：你也是\n（嘉然最近一次发言在5分钟前，之后已有别人说话）") {
+		t.Fatalf("last bot turn not stated:\n%s", got)
+	}
+	payload.Addressing.Mentions = []MessageMention{{Target: "self"}}
+	if got := proactiveReplyTranscript(payload); strings.Contains(got, "最近一次发言") {
+		t.Fatalf("message @ the bot needs no last-turn fact:\n%s", got)
+	}
+}

@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -50,6 +51,10 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	if aliasTail != "" {
 		botLabel = botName + "（机器人，" + aliasTail + "）"
 	}
+	// 群里别的账号可能恰好叫本人的某个别名（生产上另一台机器人就叫「小汐」，正是本人的
+	// 别名之一）。开头写了「本人也叫小汐」，模型就把那个账号的发言全认成自己的，编出
+	// 「本人刚接了他的话」，把下一句没点名的「你」判成在叫本人。撞名的账号原地标出来。
+	others := sameNamedOthers(payload)
 	lines := make([]string, 0, len(payload.RecentMessages)+4)
 	if botName != "机器人" {
 		header := "机器人（即本人）叫" + botName
@@ -57,6 +62,14 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 			header += "，" + aliasTail
 		}
 		lines = append(lines, header)
+	}
+	if len(others) > 0 {
+		names := make([]string, 0, len(others))
+		for name := range others {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		lines = append(lines, "（群里另有账号也叫"+strings.Join(names, "、")+"，那是别人，不是本人；本人的发言都标着「机器人」）")
 	}
 	lines = append(lines, "对话按时间从早到晚：")
 	// 防抖、积压合并进来的候选（见 proactive_route_debounce.go）和当前消息挨着发，但话题
@@ -78,7 +91,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if item.MessageID != "" {
 			seen[item.MessageID] = true
 		}
-		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName, botLabel)
+		line := transcriptAge(item.AgeSeconds) + transcriptLine(item.Sender, item.IsBot, item.Addressing, item.Text, item.Images, botName, botLabel, others)
 		if burst[item.MessageID] > 0 && !item.IsBot {
 			line = label(item.MessageID) + line
 		}
@@ -91,13 +104,13 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		if candidate.IsCurrent || (candidate.MessageID != "" && seen[candidate.MessageID]) {
 			continue
 		}
-		line := transcriptAge(candidate.AgeSeconds) + transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName, botLabel)
+		line := transcriptAge(candidate.AgeSeconds) + transcriptLine(candidate.Sender, false, candidate.Addressing, candidate.Text, candidate.Images, botName, botLabel, others)
 		if burst[candidate.MessageID] > 0 {
 			line = label(candidate.MessageID) + line
 		}
 		lines = append(lines, line)
 	}
-	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName, botLabel)
+	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName, botLabel, others)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
 		who := strings.TrimSpace(payload.QuotedSender)
 		if payload.QuotedIsBot {
@@ -113,6 +126,8 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	// 这条提示会让模型跳过中间那几句，把「你复现了」这种问别人的话认成在问机器人。
 	if payload.LastBotAddressedCurrentSender && !payload.OthersSpokeAfterLastBot {
 		lines = append(lines, "（"+botName+"最近一条发言是冲着当前发送者说的）")
+	} else if fact := lastBotFact(payload, botName); fact != "" {
+		lines = append(lines, fact)
 	}
 	// 判断模型（jev）读不出「你」指的是谁，提示词和判据怎么写都只差几个百分点；
 	// 把谁在跟谁往来写成一行事实，生产那条误判才翻过来。见 elsewhere_partner.go。
@@ -193,8 +208,14 @@ func transcriptAge(seconds *int64) string {
 
 // transcriptLine 渲染一行：「发送者（回复谁，@谁）：正文」。机器人自己的发言标成
 // botLabel（「<称呼>（机器人，也叫…）」），指向机器人的回复和 @ 也写成它的称呼，模型不用再对账号。
-func transcriptLine(sender string, isBot bool, addressing messageAddressing, text string, images int, botName, botLabel string) string {
-	name := strings.TrimSpace(sender)
+func transcriptLine(sender string, isBot bool, addressing messageAddressing, text string, images int, botName, botLabel string, others map[string]bool) string {
+	other := func(name string) string {
+		if others[name] {
+			return name + "（另一个账号，不是本人）"
+		}
+		return name
+	}
+	name := other(strings.TrimSpace(sender))
 	if isBot {
 		name = botLabel
 	}
@@ -203,14 +224,14 @@ func transcriptLine(sender string, isBot bool, addressing messageAddressing, tex
 	case "self":
 		targets = append(targets, "回复"+botName)
 	case "other":
-		targets = append(targets, "回复"+firstNonEmpty(strings.TrimSpace(addressing.ReplySender), "别人"))
+		targets = append(targets, "回复"+other(firstNonEmpty(strings.TrimSpace(addressing.ReplySender), "别人")))
 	}
 	for _, mention := range addressing.Mentions {
 		if mention.Target == "self" {
 			targets = append(targets, "@"+botName)
 			continue
 		}
-		targets = append(targets, "@"+firstNonEmpty(strings.TrimSpace(mention.Username), "别人"))
+		targets = append(targets, "@"+other(firstNonEmpty(strings.TrimSpace(mention.Username), "别人")))
 	}
 	if len(targets) > 0 {
 		name += "（" + strings.Join(targets, "，") + "）"
@@ -220,4 +241,65 @@ func transcriptLine(sender string, isBot bool, addressing messageAddressing, tex
 		body = strings.TrimSpace(body + fmt.Sprintf(" [图片×%d]", images))
 	}
 	return name + "：" + body
+}
+
+// sameNamedOthers 找出对话里叫本人某个别名、却不是本人的账号称呼。
+func sameNamedOthers(payload proactiveReplyPayload) map[string]bool {
+	aliases := map[string]bool{}
+	for _, alias := range payload.BotAliases {
+		if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
+			aliases[alias] = true
+		}
+	}
+	found := map[string]bool{}
+	check := func(name string) {
+		if name = strings.TrimSpace(name); name != "" && aliases[strings.ToLower(name)] {
+			found[name] = true
+		}
+	}
+	for _, item := range payload.RecentMessages {
+		if !item.IsBot {
+			check(item.Sender)
+		}
+		if item.Addressing.ReplyTarget == "other" {
+			check(item.Addressing.ReplySender)
+		}
+	}
+	for _, candidate := range payload.Candidates {
+		check(candidate.Sender)
+	}
+	check(payload.CurrentSender)
+	if payload.Addressing.ReplyTarget == "other" {
+		check(payload.Addressing.ReplySender)
+	}
+	return found
+}
+
+// lastBotFact 在当前消息没 @、没引用本人时，写明本人最近一次发言在多久以前。
+//
+// 没有这行时，模型只能自己从对话稿里找本人说过什么，找错了就会编出「本人刚接了他的
+// 话」，再把一句没点名的「你」判成在叫本人。本人最近一条正好冲着当前发送者、中间
+// 没人插话的那种情况另有一行，这里不写。
+func lastBotFact(payload proactiveReplyPayload, botName string) string {
+	if payload.Addressing.ReplyTarget == "self" {
+		return ""
+	}
+	for _, mention := range payload.Addressing.Mentions {
+		if mention.Target == "self" {
+			return ""
+		}
+	}
+	last := payload.LastBotMessage
+	if last == nil {
+		return "（这段记录里" + botName + "没有发过言）"
+	}
+	age := strings.Trim(strings.TrimSpace(transcriptAge(last.AgeSeconds)), "[]")
+	fact := "（" + botName + "最近一次发言"
+	if age != "" {
+		fact += "在" + age
+	}
+	if payload.OthersSpokeAfterLastBot {
+		fact += "，之后已有别人说话"
+	}
+	return fact + "）"
 }
