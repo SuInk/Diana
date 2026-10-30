@@ -73,7 +73,7 @@ shasum -a 256 diana-macos-arm64.tar.gz
 tar -xzf diana-macos-arm64.tar.gz
 cd diana-macos-arm64
 ./run.sh</code></pre>
-        <div class="callout"><strong>旧版首次迁移</strong><p>Windows 改发 exe 后，v0.9.0 及更早的 Windows 控制台只认 <code>.zip</code> 包；完整包也不再附带 <code>frontend-next</code> 前端副本，v0.8.153 及更早的控制台会因此校验失败。这些版本都不能在 WebUI 里直接升级，首次请重跑上方一键安装命令或手工下载安装。</p></div>
+        <div class="callout"><strong>旧版首次迁移</strong><p>Windows 改发 exe 后，过渡期内 Release 仍附带旧版控制台要用的 <code>diana-windows-amd64.zip</code> 和 <code>SHA256SUMS</code>，v0.8.91 起的控制台可以在 WebUI 里直接升级。v0.8.90 及更早只认 <code>diana-webui-…</code> 包名，首次请重跑上方一键安装命令或手工下载安装。</p></div>
       </section>
 
       <section class="section searchable" id="docker">

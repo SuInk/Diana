@@ -91,12 +91,9 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 	if strings.Contains(buildScript, "diana-webui-${{ matrix.suffix }}") {
 		t.Error("packages must not ship a second platform-suffixed binary")
 	}
-	// 前端已编进程序，包里再放一份前端目录只是旧版自更新器的兼容负担。
-	if strings.Contains(buildScript, "frontend-next/dist") {
-		t.Error("packages must not ship a frontend directory")
-	}
+
 	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe; do") {
-		t.Fatal("update manifest must list only the platform downloads")
+		t.Fatal("update rules must cover only the platform downloads")
 	}
 	// 摘要只写进 latest.json，更新器和安装脚本都从这里取。
 	if !strings.Contains(manifestScript, `sha256=$(sha256sum "$file" | cut -d ' ' -f 1)`) {

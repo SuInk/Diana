@@ -75,7 +75,7 @@ shasum -a 256 diana-macos-arm64.tar.gz
 tar -xzf diana-macos-arm64.tar.gz
 cd diana-macos-arm64
 ./run.sh</code></pre>
-        <div class="callout"><strong>First migration from an older release</strong><p>Windows now ships an .exe, and Windows consoles from v0.9.0 and earlier only recognize the <code>.zip</code> archive. Archives also no longer carry a <code>frontend-next</code> copy, which consoles from v0.8.153 and earlier require. None of these versions can update from the WebUI; rerun the one-click installer above or install the download by hand the first time.</p></div>
+        <div class="callout"><strong>First migration from an older release</strong><p>Windows now ships an .exe. For a transition period releases still carry the <code>diana-windows-amd64.zip</code> and <code>SHA256SUMS</code> that older consoles need, so consoles from v0.8.91 on can still update from the WebUI. v0.8.90 and earlier only recognize <code>diana-webui-…</code> archives; rerun the one-click installer above or install the download by hand the first time.</p></div>
       </section>
 
       <section class="section searchable" id="docker">

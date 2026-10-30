@@ -295,9 +295,23 @@ jobs:
           test -f cmd/webui/webdist/index.html
           ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}"
 
+          # 过渡期兼容（LEGACY，几个版本后删）：v0.9.0 及更早的自更新器 Windows 只认 .zip、
+          # 必须有 SHA256SUMS，v0.8.153 及更早还要求包里有 frontend-next/dist。新程序只看
+          # latest.json 的 packages，不读这些。删的时候连同 release 任务里的 SHA256SUMS 一起删。
+          legacy_frontend() {
+            mkdir -p "$1/frontend-next/dist"
+            cp -R release/frontend-next-dist/. "$1/frontend-next/dist/"
+          }
+
           # Windows 直接发 exe：端口默认就是 18080，run.bat 没有可做的；卸载脚本编在程序里。
           if [[ "${{ matrix.goos }}" == "windows" ]]; then
             go build -trimpath -ldflags="${ldflags}" -o "dist/${package_name}.exe" ./cmd/webui
+            mkdir -p "${package_dir}"
+            cp "dist/${package_name}.exe" "${package_dir}/diana-webui.exe"
+            cp scripts/uninstall.ps1 "${package_dir}/uninstall.ps1"
+            printf '%s\r\n' '@echo off' 'if "%PORT%"=="" set PORT=18080' '"%~dp0diana-webui.exe" %*' > "${package_dir}/run.bat"
+            legacy_frontend "${package_dir}"
+            (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
             exit 0
           fi
 
@@ -328,6 +342,7 @@ jobs:
             'export PORT="${PORT:-18080}"' \
             'exec "$SCRIPT_DIR/diana-webui" "$@"' > "${package_dir}/run.sh"
           chmod +x "${package_dir}/run.sh"
+          legacy_frontend "${package_dir}"
           tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
 
       - name: Upload release artifacts
@@ -337,6 +352,7 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/diana-windows-*.exe
+            dist/diana-windows-*.zip
           if-no-files-found: error
 
   # PR 上只验「Dockerfile 还能编过」，不推镜像，所以不必排在 Go Test 之后，
@@ -480,6 +496,11 @@ jobs:
           path: release
           merge-multiple: true
 
+      # LEGACY：只给 v0.9.0 及更早的自更新器用，和构建里的 .zip、frontend-next 一起删。
+      - name: Generate legacy checksums
+        working-directory: release
+        run: sha256sum diana-*.tar.gz diana-windows-*.exe diana-windows-*.zip > SHA256SUMS
+
       - name: Generate static update manifest
         working-directory: release
         env:
@@ -488,7 +509,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
-          for file in diana-*.tar.gz diana-windows-*.exe; do
+          for file in diana-*.tar.gz diana-windows-*.exe diana-windows-*.zip SHA256SUMS; do
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
           done
           # 每个平台的更新规则：下哪个文件、它的 sha256、包的格式、程序在包里的
@@ -653,6 +674,8 @@ jobs:
           files: |
             release/*.tar.gz
             release/diana-windows-*.exe
+            release/diana-windows-*.zip
+            release/SHA256SUMS
             release/latest.json
 
       - name: Prune superseded canary releases
