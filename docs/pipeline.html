@@ -105,6 +105,7 @@
         <p>没有直接触发的普通群消息，先过群的随机采样比例（主人豁免），再交给接话模型。模型对每条候选只回答两件事：<code>relevance.directed</code>（是不是明确在跟机器人说话，只有是或否）和 <code>chat_in.score</code>（0–1 的闲聊适合度），各附一句理由。</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>两个开关都关，或群里 10 分钟内有人叫停？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，不调用模型</span></div></li>
+          <li class="q"><div class="flow-node"><strong>闲聊关闭，且机器人 30 分钟内没在本群说过话？</strong><p>只开回应提问时，久未开口的群里没点名的消息几乎不是在找它。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，不调用模型</span></div></li>
           <li><div class="flow-node"><strong>组装评分输入</strong><p>寻址信息、按时间排的对话稿、本群补充判据。</p></div></li>
           <li class="q"><div class="flow-node"><strong>调用接话模型</strong><p>用途 <code>proactive_reply_router</code>，可绑对话模型或判断模型 Jev，最多等 60 秒。</p></div><div class="flow-exits"><span class="flow-exit"><b>超时 / 出错</b>沉默</span><span class="flow-exit loop"><b>解析失败</b>带提醒重问一次，仍失败则沉默</span></div></li>
           <li class="q"><div class="flow-node"><strong>directed = false 且 chat_in = 0？</strong><p>表示对方在叫停或正在机械循环。</p></div><div class="flow-exits"><span class="flow-exit"><b>是</b>沉默，「完全不限制」档也不越过</span></div></li>

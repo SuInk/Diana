@@ -26,7 +26,7 @@ const settings = [
     label: "主动闲聊",
     description: "没人叫你时，多愿意插话。",
     options: levelOptions([
-      { value: "off", label: "从不闲聊", hint: "不主动插话，回应提问仍可独立生效。" },
+      { value: "off", label: "从不闲聊", hint: "不主动插话。回应提问只在机器人上次说话后 30 分钟内判断，之后只认 @、引用和点名。" },
       { value: "minimal", label: "很少插话", hint: "非常适合参与时才开口。" },
       { value: "low", label: "偶尔接话", hint: "比较适合参与时才接一句。" },
       { value: "medium", label: "适度参与", hint: "有合适的话就自然加入。" },

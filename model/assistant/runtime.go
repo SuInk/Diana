@@ -561,6 +561,8 @@ type Runtime struct {
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	chatInLastReplyAt   map[string]time.Time
+	// groupLastReplyAt 记各群机器人最后一次发出回复的时间，见 relevance_only_window.go。
+	groupLastReplyAt map[string]time.Time
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
@@ -891,6 +893,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		history:                 map[string][]MessageEvent{},
 		semanticRefCache:        map[string]SemanticReferenceCacheRecord{},
 		chatInLastReplyAt:       map[string]time.Time{},
+		groupLastReplyAt:        map[string]time.Time{},
 		recentClaimSources:      map[string][]claimSourceRecord{},
 		contextSummaries:        map[string]string{},
 		contextSummaryMarks:     map[string]int64{},
@@ -2551,6 +2554,7 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	record.Reply = reply
 	r.setError("")
 	r.record(record)
+	r.markGroupReplied(event)
 	if event.chatInReply {
 		// 这条闲聊插话确实发出去了，现在才开始算本群的插话冷却。
 		r.markChatInReplied(event)
@@ -2935,6 +2939,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	chatIn := cfg.chatInSettings()
 	if participationClosed(cfg) {
 		event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
+		return event, text, nil, false
+	}
+	if r.relevanceOnlyDormant(event, cfg, time.Now()) {
+		event.routingReason = "闲聊已关闭，机器人 30 分钟内没在这里说过话，回应提问只等 @、引用或点名，未调用接话评分"
 		return event, text, nil, false
 	}
 	// 群里刚有人叫停：不跑模型，直接沉默。靠提示词让评分自己记住「刚被要求闭嘴」
