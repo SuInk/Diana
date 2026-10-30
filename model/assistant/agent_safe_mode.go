@@ -270,7 +270,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 		Reason:     "挪动、复制、删除文件或建目录；stat 照常"},
 
 	// 改机器人设置和群管：被带偏的模型改掉自己的设置，主人未必马上察觉。
-	{Category: safeModeCategorySelfModify, Tool: botConfigToolName, Field: "operation", Operations: []string{"update"}, Reason: "修改机器人的接话和入群欢迎设置；脱敏读取照常"},
+	{Category: safeModeCategorySelfModify, Tool: botConfigToolName, Field: "operation", Operations: []string{"update", "confirm"}, Reason: "修改机器人的接话和入群欢迎设置；脱敏读取照常"},
 	{Category: safeModeCategorySelfModify, Tool: replyBlockToolName, Field: "operation", Operations: []string{"block", "unblock"}, Reason: "修改回复屏蔽名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: "bot_markers", Field: "operation", Operations: []string{"mark", "unmark"}, Reason: "修改机器人标记名单；查看照常"},
 	{Category: safeModeCategorySelfModify, Tool: dianaStickerRemoveToolName, Reason: "删除表情包并拉黑"},

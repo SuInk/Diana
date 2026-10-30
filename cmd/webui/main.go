@@ -658,6 +658,8 @@ func main() {
 	// 机器人多半用的是模型分配里另选的模型，只按配置默认模型说话会误导。
 	handler.SetBotProfileSource(botProfileStore)
 	botHandler.SetGroupConfigStore(botGroupConfigStore)
+	// 聊天里 bot_config 改设置走和 WebUI 设置页同一套校验与重连。
+	botRuntime.SetConfigFieldsSaver(botHandler)
 	botHandler.SetSQLiteStore(sqliteStore)
 	repoPluginInstaller := assistant.NewRepoPluginInstaller(dataDir, &http.Client{Timeout: 3 * time.Minute})
 	repoPluginInstaller.MirrorBase = func(ctx context.Context) string {

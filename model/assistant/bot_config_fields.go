@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -13,53 +14,45 @@ import (
 // 机器人级是 ConfigPayload（WebUI 机器人设置页提交的同一份结构）。这样 WebUI 能改的
 // 普通设置，聊天里也都能改，新增字段不用再逐个手写。
 //
-// 拒绝的只有三类：标识和内部状态、连接与凭据、安全边界（主人身份、Agent 权限、
-// 账号安全审核总开关等）。安全边界不放开，是因为聊天内容可能带提示注入，被诱导关掉
-// 这些开关的代价远大于去一趟 WebUI。
+// 拒绝的只有：标识和内部状态、主人与管理员名单及主人权限、Agent 权限、账号安全
+// 审核。这几项不放开，是因为聊天内容可能带提示注入，被诱导改掉它们的代价远大于去
+// 一趟 WebUI。连接与凭据可以改，经 ConfigFieldsSaver 走 WebUI 的校验和重连。
 
 const fieldsPreviewRunes = 300
 
 var groupFieldRedirects = map[string]string{
-	"bot_profile_id":                 "是标识，不能修改",
-	"group_id":                       "是标识，不能修改",
-	"enabled_set":                    "是内部状态",
-	"inheritance_migrated":           "是内部状态",
-	"updated_at":                     "是内部状态",
-	"whole_mute_restore_permissions": "是全员禁言的运行时快照",
-	"extension_access":               "要按机器人上限核对，请在 WebUI 群设置修改",
-	"chat_model":                     "请用 llm_config 的 scope=group 切换",
-	"enabled":                        "请用 group_settings.enabled",
-	"group_triggers":                 "请用 group_settings.triggers",
-	"group_trigger_mode":             "请用 group_settings.trigger_mode",
-	"plugin_overrides":               "请用 group_settings.plugins",
-	"plugin_setting_overrides":       "请用 plugin_settings",
+	"bot_profile_id":                     "是标识，不能修改",
+	"group_id":                           "是标识，不能修改",
+	"enabled_set":                        "是内部状态",
+	"inheritance_migrated":               "是内部状态",
+	"updated_at":                         "是内部状态",
+	"whole_mute_restore_permissions":     "是全员禁言的运行时快照",
+	"reply_account_safety_audit_enabled": "是账号安全审核设置，只能在 WebUI 修改",
+	"reply_account_safety_audit_prompt":  "是账号安全审核设置，只能在 WebUI 修改",
+	"chat_model":                         "请用 llm_config 的 scope=group 切换",
+	"enabled":                            "请用 group_settings.enabled",
+	"group_triggers":                     "请用 group_settings.triggers",
+	"group_trigger_mode":                 "请用 group_settings.trigger_mode",
+	"plugin_overrides":                   "请用 group_settings.plugins",
+	"plugin_setting_overrides":           "请用 plugin_settings",
 }
 
 var botFieldRedirects = map[string]string{
 	"id":                       "是标识，不能修改",
-	"platform":                 "是连接配置，请在 WebUI 修改",
-	"profiles":                 "是机器人列表，请在 WebUI 修改",
-	"message_relays":           "是跨机器人转发，请在 WebUI 修改",
-	"enabled":                  "停用机器人会让聊天入口失效，请在 WebUI 修改",
-	"callback_path":            "是连接配置，请在 WebUI 修改",
-	"bot_account":              "是连接配置，请在 WebUI 修改",
-	"connection_profile_id":    "是连接配置，请在 WebUI 修改",
+	"profiles":                 "是机器人列表，请在 WebUI 增删机器人",
 	"owner_id":                 "是主人身份，只能在 WebUI 修改",
-	"admin_ids":                "是管理员身份，只能在 WebUI 修改",
-	"owner_login_enabled":      "是登录权限，只能在 WebUI 修改",
-	"owner_llm_config_enabled": "是模型配置权限，只能在 WebUI 修改",
+	"admin_ids":                "是管理员名单，只能在 WebUI 修改",
+	"owner_login_enabled":      "是主人登录权限，只能在 WebUI 修改",
+	"owner_llm_config_enabled": "是主人改模型的权限，只能在 WebUI 修改",
 	"model_roles":              "请用 llm_config 修改模型分配",
-	"web_search":               "请在 WebUI 统一搜索配置修改",
-	"web_search_override":      "请在 WebUI 统一搜索配置修改",
-	"reply_account_safety_audit_master_enabled":  "是账号安全审核总开关，只能在 WebUI 修改",
-	"reply_account_safety_audit_private_enabled": "是账号安全审核开关，只能在 WebUI 修改",
-	"llm_identity_masking_enabled":               "是隐私保护开关，只能在 WebUI 修改",
-	"llm_identity_body_account_mapping_enabled":  "是隐私保护开关，只能在 WebUI 修改",
 }
 
-// botFieldDeniedPrefixes 覆盖各平台连接参数和 Agent 权限；botFieldAllowed 是前缀里
+// botFieldDeniedPrefixes 覆盖 Agent 权限和账号安全审核；botFieldAllowed 是前缀里
 // 不涉及权限的例外。
-var botFieldDeniedPrefixes = []string{"onebot_", "telegram_", "qq_app", "qq_sandbox", "weixin_", "imessage_", "agent_"}
+var botFieldDeniedPrefixes = map[string]string{
+	"agent_":                      "是 Agent 权限，只能在 WebUI 修改",
+	"reply_account_safety_audit_": "是账号安全审核设置，只能在 WebUI 修改",
+}
 
 var botFieldAllowed = map[string]bool{"agent_command_timeout_ms": true, "agent_browser_timeout_ms": true}
 
@@ -73,12 +66,9 @@ func botFieldRejection(key string) (string, bool) {
 	if botFieldAllowed[key] {
 		return "", false
 	}
-	for _, prefix := range botFieldDeniedPrefixes {
+	for prefix, reason := range botFieldDeniedPrefixes {
 		if strings.HasPrefix(key, prefix) {
-			if prefix == "agent_" {
-				return "是 Agent 权限，只能在 WebUI 修改", true
-			}
-			return "是连接配置或凭据，请在 WebUI 修改", true
+			return reason, true
 		}
 	}
 	return "", false
@@ -245,4 +235,25 @@ func editableFieldsView(value any, reject func(string) (string, bool)) map[strin
 		out[key] = item
 	}
 	return out
+}
+
+// ConfigFieldsSaver 由 WebUI 实现，让 fields 走 WebUI 保存设置的完整链路：连接冲突、
+// 令牌强度、搜索覆盖、扩展权限上限等校验，以及连接参数变化后的重连。未接入时
+// 退回运行时自己的保存，只适合不涉及连接的字段。
+type ConfigFieldsSaver interface {
+	SaveBotFields(ctx context.Context, profileID string, patch func(BotConfig) (BotConfig, error)) (BotConfig, error)
+	SaveGroupFields(ctx context.Context, cfg GroupConfig, previous GroupConfig, base BotConfig, byOwner bool) (GroupConfig, error)
+}
+
+// SetConfigFieldsSaver 接入 WebUI 的设置保存链路。
+func (r *Runtime) SetConfigFieldsSaver(saver ConfigFieldsSaver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.configFieldsSaver = saver
+}
+
+func (r *Runtime) currentConfigFieldsSaver() ConfigFieldsSaver {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.configFieldsSaver
 }

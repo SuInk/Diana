@@ -490,6 +490,9 @@ type Runtime struct {
 	codingJobRegistry     *codingJobRegistry
 	groupConfigs          GroupConfigStore
 	configSaver           ConfigSaver
+	configFieldsSaver     ConfigFieldsSaver
+	// pendingBotFields 是聊天里改连接参数时等待主人确认的暂存，见 bot_config_pending.go。
+	pendingBotFields map[string]pendingBotFields
 	replySuppressions     ReplySuppressionStore
 	localMedia            LocalMediaSharer
 	voiceSTT              voiceSTTLimiter

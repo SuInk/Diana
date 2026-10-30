@@ -31,7 +31,7 @@ func (*dianaBotConfigTool) Description() string {
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation":                    toolEnumParam("update 局部修改，保存成功才算已改。", "get", "update"),
+		"operation":                    toolEnumParam("update 局部修改；连接类改动先暂存，主人下条消息确认后 confirm，discard 放弃。", "get", "update", "confirm", "discard"),
 		"scope":                        toolEnumParam("settings 默认群聊 group、私聊 bot；诊断省略或传 bot。不支持跨机器人或群。", "group", "bot"),
 		"section":                      toolEnumParam("默认 settings：接话和欢迎设置，可局部 update；其他部分仅主人 get 脱敏诊断。", "settings", "all", "bot", "llm", "skills", "runtime", "paths"),
 		"desire_level":                 toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
@@ -58,14 +58,17 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		return "", fmt.Errorf("机器人运行时不可用")
 	}
 	op := t.CanonicalOperation(input)
-	if op != "get" && op != "update" {
-		return "", fmt.Errorf("operation 必须为 get 或 update")
+	if op != "get" && op != "update" && op != "confirm" && op != "discard" {
+		return "", fmt.Errorf("operation 必须为 get、update、confirm 或 discard")
 	}
 	base, err := t.runtime.modelConfigForEvent(t.event)
 	if err != nil {
 		return "", err
 	}
 	owner := t.admin || base.IsManagerEvent(t.event)
+	if op == "confirm" || op == "discard" {
+		return t.resolvePendingBotFields(ctx, op, owner, base)
+	}
 	section := strings.TrimSpace(configToolString(input, "section"))
 	if section == "" {
 		section = "settings"
@@ -125,6 +128,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	}
 	prefs := effective.participationPreferences()
 	minimum := group.MinimumReplyMemberLevel
+	var stagedKeys []string
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
@@ -242,6 +246,14 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			if err != nil {
 				return "", err
 			}
+			if scope != "group" {
+				var staged map[string]any
+				fieldPatch, staged = splitStagedBotFields(fieldPatch)
+				if staged != nil {
+					t.runtime.stageBotFields(base.ID, t.event, staged)
+					stagedKeys = fieldKeys(staged)
+				}
+			}
 			changed = true
 		}
 		if raw, ok := input["minimum_reply_member_level"]; ok {
@@ -270,7 +282,8 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		if participationChanged {
 			update.Participation = copyParticipation(&prefs)
 		}
-		if scope != "group" {
+		fieldsSaver := t.runtime.currentConfigFieldsSaver()
+		if scope != "group" && fieldsSaver == nil {
 			update.Fields = fieldPatch
 		}
 		if !changed && !update.UpdatesWelcome() {
@@ -289,13 +302,21 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			group.MinimumReplyMemberLevel = minimum
 			group = update.applyToGroup(group)
 			group = applyBehaviorToGroup(group, effective, behavior)
-			t.runtime.mu.RLock()
-			writer, ok := t.runtime.groupConfigs.(GroupConfigWriter)
-			t.runtime.mu.RUnlock()
-			if !ok {
-				return "", fmt.Errorf("当前未接入可写的群配置存储")
+			var saved GroupConfig
+			var e error
+			if fieldPatch != nil && fieldsSaver != nil {
+				// 改了任意字段就走 WebUI 群设置的完整校验（扩展权限上限、本群模型等）。
+				previous, _ := t.runtime.groupConfigForEvent(t.event)
+				saved, e = fieldsSaver.SaveGroupFields(ctx, group, previous, base, owner)
+			} else {
+				t.runtime.mu.RLock()
+				writer, ok := t.runtime.groupConfigs.(GroupConfigWriter)
+				t.runtime.mu.RUnlock()
+				if !ok {
+					return "", fmt.Errorf("当前未接入可写的群配置存储")
+				}
+				saved, e = writer.SaveGroupConfig(group, base)
 			}
-			saved, e := writer.SaveGroupConfig(group, base)
 			if e != nil {
 				return "", e
 			}
@@ -306,6 +327,13 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		} else {
 			if botSettingsChanged {
 				if err := t.runtime.saveBotSettings(base, update); err != nil {
+					return "", err
+				}
+			}
+			if fieldPatch != nil && fieldsSaver != nil {
+				if _, err := fieldsSaver.SaveBotFields(ctx, base.ID, func(cfg BotConfig) (BotConfig, error) {
+					return applyBotFields(cfg, fieldPatch)
+				}); err != nil {
 					return "", err
 				}
 			}
@@ -341,6 +369,15 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	}
 	if op == "update" {
 		message = "已保存并应用机器人设置"
+		if len(stagedKeys) > 0 {
+			message = fmt.Sprintf("连接类改动 %s 已暂存，未生效；请主人在下一条消息里确认，确认后用 operation=confirm 应用（%d 分钟内有效）", strings.Join(stagedKeys, "、"), int(pendingBotFieldsTTL/time.Minute))
+		}
+	}
+	var pendingView any
+	if scope != "group" && owner {
+		if view := t.runtime.pendingBotFieldsView(base.ID); view != nil {
+			pendingView = view
+		}
 	}
 	var pluginView any
 	if id := strings.TrimSpace(configToolString(input, "plugin")); id != "" {
@@ -357,7 +394,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			fieldsView = editableFieldsView(PayloadFromConfig(effective), botFieldRejection)
 		}
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
+	data, err := json.Marshal(map[string]any{"ok": true, "pending_fields": pendingView, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 
@@ -395,4 +432,38 @@ func behaviorKeys(values []behaviorValue) []string {
 		keys = append(keys, value.setting.key)
 	}
 	return keys
+}
+
+// resolvePendingBotFields 应用或放弃暂存的连接类改动，仅主人。
+func (t *dianaBotConfigTool) resolvePendingBotFields(ctx context.Context, op string, owner bool, base BotConfig) (string, error) {
+	if !owner {
+		return "", fmt.Errorf("只有机器人主人可以确认或放弃暂存的改动")
+	}
+	if op == "discard" {
+		message := "没有待确认的改动"
+		if t.runtime.discardPendingBotFields(base.ID) {
+			message = "已放弃暂存的改动"
+		}
+		data, err := json.Marshal(map[string]any{"ok": true, "action": op, "message": message})
+		return string(data), err
+	}
+	patch, err := t.runtime.takePendingBotFields(base.ID, t.event)
+	if err != nil {
+		return "", err
+	}
+	if saver := t.runtime.currentConfigFieldsSaver(); saver != nil {
+		_, err = saver.SaveBotFields(ctx, base.ID, func(cfg BotConfig) (BotConfig, error) {
+			return applyBotFields(cfg, patch)
+		})
+	} else {
+		err = t.runtime.saveBotSettings(base, BotSettingsUpdate{Fields: patch})
+	}
+	if err != nil {
+		return "", fmt.Errorf("应用失败，暂存已清空，配置保持原样：%w", err)
+	}
+	if writer := t.runtime.appLogWriter(); writer != nil {
+		_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_confirm", Message: "暂存的连接类设置已确认生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"bot_profile_id": base.ID, "field_keys": fieldKeys(patch)}})
+	}
+	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "applied": redactedPendingPatch(patch), "message": "已确认，连接类设置已生效，连接可能短暂重连"})
+	return string(data), err
 }
