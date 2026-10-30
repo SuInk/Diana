@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # 本机跑 Go 测试的统一入口：全机排队、限并发、降优先级。
 #
-# 同一台机器上常有好几个会话、好几个 worktree 同时跑 `go test -race ./...`，
-# 每个都按核数并发编译和测试，-race 还让 CPU 和内存翻几倍，整机卡死。
+# 同一台机器上常有好几个会话、好几个 worktree 同时跑 `go test ./...`，
+# 每个都按核数并发编译和测试，整机卡死。
 # 这个脚本让所有 worktree 排同一条队，同一时间只有一组测试在跑，按先来后到轮转；
 # 同一 worktree 再提交请求时，它还在排队的旧请求会被取代（以退出码 3 结束）。
 # 跑的时候用 nice 降优先级，并把并发限在 DIANA_TEST_PROCS（默认 4）；单包超时
@@ -13,12 +13,15 @@
 #   scripts/test-serial.sh ./model/agent   指定包，参数原样交给 go test
 #   scripts/test-serial.sh ./...           全仓库（发版前用）
 #
-# 只跑一遍 -race（本机时区）。CI 不开 -race，跑在 UTC，两边合起来覆盖竞态和两种时区。
+# 默认跑一遍普通测试（本机时区）。-race 让 CPU 和内存翻几倍，本地默认不开，设 DIANA_TEST_RACE=1 才开；
+# CI 在 UTC 下跑普通测试，另有一个任务跑全仓库 -race。
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
 procs="${DIANA_TEST_PROCS:-4}"
+race=()
+if [ "${DIANA_TEST_RACE:-0}" = 1 ]; then race=(-race); fi
 # 限了并发以后大包跑得更慢（model/assistant 的 -race 超过 go test 默认的 10 分钟），超时放宽。
 timeout="${DIANA_TEST_TIMEOUT:-40m}"
 queue_dir="${DIANA_TEST_QUEUE:-$HOME/.cache/diana-go-test.queue}"
@@ -118,5 +121,5 @@ echo $$ >"$legacy_lock/pid"
 echo "$worktree ${packages[*]}" >"$legacy_lock/what"
 
 export GOMAXPROCS="$procs"
-echo "== go test -race -p $procs ${packages[*]}"
-nice -n 15 go test -race -p "$procs" -timeout "$timeout" "${packages[@]}"
+echo "== go test ${race[*]:+${race[*]} }-p $procs ${packages[*]}"
+nice -n 15 go test ${race[@]+"${race[@]}"} -p "$procs" -timeout "$timeout" "${packages[@]}"

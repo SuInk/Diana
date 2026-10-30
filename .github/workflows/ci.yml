@@ -140,6 +140,25 @@ jobs:
       - name: Test
         run: go test ./...
 
+  # 和 Go Test 并行，不挡构建和发布链；PR 合并前照样要等它绿。
+  # 本地脚本默认不开 -race（太吃内存），全仓库的竞态检查只在这里做。
+  backend-race:
+    name: Go Race Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Test with race detector
+        run: go test -race -timeout 40m ./...
+
   frontend-next:
     name: Vue Next Typecheck Build
     runs-on: ubuntu-latest
