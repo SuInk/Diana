@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/llm"
@@ -183,6 +184,7 @@ const (
 	qqJoinSettingApproveInvited = "approve_invited"
 	qqJoinSettingUnmatched      = "unmatched"
 	qqJoinSettingRejectReason   = "reject_reason"
+	qqJoinSettingRejectDelay    = "reject_delay_minutes"
 	qqJoinSettingLLMReview      = "llm_review"
 	qqJoinSettingLLMModel       = "llm_model"
 	qqJoinSettingLLMRequirement = "llm_requirement"
@@ -205,6 +207,7 @@ func qqJoinApprovalSettings() []PluginSettingSpec {
 		{Key: qqJoinSettingLLMModel, Label: "判断用的模型", Description: "留空跟随这台机器人的对话模型。", Type: PluginSettingTypeLLMProfile, Default: "", Scopes: scopes},
 		{Key: qqJoinSettingLLMRequirement, Label: "入群要求", Description: "写给模型看的放行标准，例如「只收本校学生，验证消息要写学院和年级；广告号拒绝」。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes},
 		{Key: qqJoinSettingUnmatched, Label: "都没命中时", Type: PluginSettingTypeSelect, Default: "pending", Options: []PluginSettingOption{{Value: "pending", Label: "留给主人处理"}, {Value: "decline", Label: "拒绝"}}, Scopes: scopes},
+		{Key: qqJoinSettingRejectDelay, Label: "拒绝前等待", Description: "命中拒绝后等这么久再拒，期间群管理员可以先手动处理；0 表示立即拒绝。等待期间重启机器人，这条申请会留给主人。通过不等待。", Type: PluginSettingTypeNumber, Default: 0, Min: settingRange(0), Max: settingRange(1440), Step: 1, Unit: "分钟", Scopes: scopes},
 		{Key: qqJoinSettingRejectReason, Label: "拒绝理由", Description: "拒绝时发给申请人，留空不带。", Type: PluginSettingTypeString, Default: "", Scopes: scopes},
 	}
 }
@@ -358,6 +361,33 @@ func (r *Runtime) autoReviewQQJoinRequest(ctx context.Context, event MessageEven
 	reason := ""
 	if !approve {
 		reason = truncateForChat(settings.String(qqJoinSettingRejectReason, ""), oneBotRequestTextLimit)
+		if delay := time.Duration(settings.Int(qqJoinSettingRejectDelay, 0)) * time.Minute; delay > 0 {
+			// 先照常记成待办，到点仍待处理才拒；期间主人或群管理员处理过就不再动。
+			go func() {
+				defer recoverGoroutinePanic("qqJoin.delayedReject")
+				timer := time.NewTimer(delay)
+				defer timer.Stop()
+				<-timer.C
+				if store := r.oneBotRequestStore(); store != nil {
+					current, found, err := store.GetOneBotRequest(context.Background(), record.ProfileID, record.ID)
+					if err != nil || !found || current.Status != OneBotRequestPending {
+						return
+					}
+				}
+				r.applyQQJoinDecision(context.Background(), event, record, false, why, reason)
+			}()
+			return false
+		}
+	}
+	return r.applyQQJoinDecision(ctx, event, record, approve, why, reason)
+}
+
+// applyQQJoinDecision 调审批接口并落结果；失败留成待办。
+func (r *Runtime) applyQQJoinDecision(ctx context.Context, event MessageEvent, record OneBotRequestRecord, approve bool, why, reason string) bool {
+	request := event.oneBotRequest
+	decision := "decline"
+	if approve {
+		decision = "approve"
 	}
 	action, params, err := qqOfficialJoinRequestAction(record, approve, reason)
 	if err == nil {

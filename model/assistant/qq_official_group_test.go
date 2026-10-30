@@ -443,9 +443,9 @@ func TestQQJoinLLMReview(t *testing.T) {
 		t.Fatalf("unmatched with llm review = %q", decision)
 	}
 	for reply, want := range map[string]string{
-		`{"decision":"approve","reason":"写了学院和年级"}`: "approve",
+		`{"decision":"approve","reason":"写了学院和年级"}`:                     "approve",
 		"判断：```json\n{\"decision\":\"decline\",\"reason\":\"广告\"}\n```": "decline",
-		`{"decision":"pending","reason":"拿不准"}`:       "",
+		`{"decision":"pending","reason":"拿不准"}`:                         "",
 	} {
 		provider := &countingRouterProvider{reply: reply}
 		runtime := NewRuntime(BotConfig{RequestTimeout: time.Second}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
