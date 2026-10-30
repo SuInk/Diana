@@ -506,7 +506,7 @@
       </div>
       <StickerLibrary v-if="isStickerSettings && stickerSettingsTab === 'library'" :profile="botScope" />
       <VRChatStatusPanel v-if="settingsTarget.manifest.id === vrchatPluginID" />
-      <QQJoinStrategyPanel v-if="settingsTarget.manifest.id === qqJoinApprovalPluginID" :profile="botScope" />
+      <QQJoinStrategyPanel v-if="settingsTarget.manifest.id === qqJoinApprovalPluginID" :default-profile="botScope" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
         :default-profile-id="botScope"
@@ -885,7 +885,7 @@ const groupRelationsPluginID = "group_relations";
 const repositoryWatchPluginID = "official.repository-watch";
 const repositoryPublishPluginID = "official.repository-publish";
 const rssWatchPluginID = "official.rss-watch";
-// 入群自动审批没有设置项，弹窗里只放策略面板。
+// 入群自动审批的弹窗在规则设置下面再挂平台白名单策略面板。
 const qqJoinApprovalPluginID = "official.qq-join-approval";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";

@@ -3,7 +3,11 @@
 
 <template>
   <div class="join-strategy">
-    <span v-if="!profile" class="hint">策略按机器人保存在 QQ 开放平台：先在左侧选一台 QQ 官方机器人。</span>
+    <h3 class="join-strategy-title">平台白名单策略</h3>
+    <label v-if="bots.length > 1 || (bots.length && !bots.some(bot => bot.id === profile))" class="join-strategy-bot">机器人
+      <AppSelect v-model="profile" :options="bots.map(bot => ({ value: bot.id, label: bot.name }))" placeholder="选择 QQ 官方机器人" aria-label="管理哪台机器人的策略" />
+    </label>
+    <span v-if="!profile" class="hint">{{ bots.length ? "选一台 QQ 官方机器人。" : "还没有 QQ 官方机器人。" }}</span>
     <template v-else>
       <span class="hint">关联群里，白名单 QQ 号的入群申请由平台直接通过。机器人需是这些群的管理员；一个机器人最多 {{ maxStrategies }} 个策略，不填过期时间默认一年后过期。</span>
       <span v-if="loadError" class="hint join-strategy-error">{{ loadError }}</span>
@@ -59,7 +63,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref, watch } from "vue";
 import { Plus } from "@lucide/vue";
-import { listBotGroups, qqJoinStrategy, type QQJoinStrategy } from "../api";
+import { getBotProfileConfig, listBotGroups, qqJoinStrategy, type QQJoinStrategy } from "../api";
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 import AppSelect from "./AppSelect.vue";
@@ -67,7 +71,10 @@ import AppSwitch from "./AppSwitch.vue";
 import IdChipInput from "./IdChipInput.vue";
 
 // 入群自动审批策略存在平台那边，这里只是遥控器：每次打开都现拉，不在本地留副本。
-const props = defineProps<{ profile?: string }>();
+// 默认管当前作用域的机器人；作用域是「全部」或不是 QQ 官方机器人时可以另选。
+const props = defineProps<{ defaultProfile?: string }>();
+const bots = ref<{ id: string; name: string }[]>([]);
+const profile = ref("");
 
 const maxStrategies = 20;
 const strategies = ref<QQJoinStrategy[]>([]);
@@ -108,10 +115,10 @@ async function groupNames(ids: string[]): Promise<Record<string, string>> {
 }
 
 async function call<T>(op: Parameters<typeof qqJoinStrategy>[1], id = "", body?: Record<string, unknown>): Promise<T | null> {
-  if (!props.profile) return null;
+  if (!profile.value) return null;
   busy.value = true;
   try {
-    return await qqJoinStrategy<T>(props.profile, op, id, body);
+    return await qqJoinStrategy<T>(profile.value, op, id, body);
   } catch (err) {
     toastError(err instanceof Error ? err.message : String(err));
     return null;
@@ -123,15 +130,15 @@ async function call<T>(op: Parameters<typeof qqJoinStrategy>[1], id = "", body?:
 async function load(): Promise<void> {
   strategies.value = [];
   loadError.value = "";
-  if (!props.profile) return;
+  if (!profile.value) return;
   try {
-    const data = await qqJoinStrategy<{ strategies: QQJoinStrategy[] }>(props.profile, "list");
+    const data = await qqJoinStrategy<{ strategies: QQJoinStrategy[] }>(profile.value, "list");
     strategies.value = data.strategies ?? [];
   } catch (err) {
     loadError.value = `拉取策略失败：${err instanceof Error ? err.message : String(err)}`;
   }
   try {
-    const data = await listBotGroups(false, props.profile);
+    const data = await listBotGroups(false, profile.value);
     knownGroups.value = data.groups.map(group => ({ id: group.group_id, name: group.group_name || group.group_id }));
   } catch {
     knownGroups.value = [];
@@ -205,8 +212,20 @@ async function remove(item: QQJoinStrategy): Promise<void> {
   }
 }
 
-onMounted(load);
-watch(() => props.profile, () => {
+async function loadBots(): Promise<void> {
+  try {
+    const config = await getBotProfileConfig();
+    bots.value = (config.profiles ?? []).filter(bot => bot.platform === "qq-official" && bot.id).map(bot => ({ id: bot.id!, name: bot.name || bot.id! }));
+  } catch {
+    bots.value = [];
+  }
+  const preferred = bots.value.find(bot => bot.id === props.defaultProfile) ?? (bots.value.length === 1 ? bots.value[0] : undefined);
+  profile.value = preferred?.id ?? "";
+}
+
+onMounted(loadBots);
+watch(() => props.defaultProfile, () => void loadBots());
+watch(profile, () => {
   creating.value = false;
   editing.value = "";
   void load();
@@ -251,6 +270,15 @@ watch(() => props.profile, () => {
 .join-strategy-form label {
   display: grid;
   gap: 4px;
+}
+.join-strategy-title {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+.join-strategy-bot {
+  display: grid;
+  gap: 4px;
+  max-width: 320px;
 }
 .join-strategy-error {
   color: var(--err);

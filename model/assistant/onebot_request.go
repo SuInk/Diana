@@ -37,6 +37,8 @@ type OneBotRequestEvent struct {
 	GroupID     string
 	Comment     string
 	Flag        string
+	// qqJoin 是 QQ 官方群入群申请的原始字段，入群自动审批插件按它判规则。
+	qqJoin *qqOfficialGroupEvent
 }
 
 type OneBotRequestRecord struct {
@@ -155,6 +157,9 @@ func (r *Runtime) handleOneBotRequest(ctx context.Context, event MessageEvent) e
 		return fmt.Errorf("persist platform request: %w", err)
 	}
 	if !inserted {
+		return nil
+	}
+	if r.autoReviewQQJoinRequest(ctx, event, record) {
 		return nil
 	}
 	r.record(EventRecord{

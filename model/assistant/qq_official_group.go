@@ -515,6 +515,7 @@ func qqOfficialJoinRequestEvent(raw qqOfficialGroupEvent, selfID string) (Messag
 		Segments:    []MessageSegment{{Type: "request", Data: data}},
 		oneBotRequest: &OneBotRequestEvent{
 			RequestType: "group", SubType: "add", UserID: mid, GroupID: gid, Comment: comment, Flag: flag,
+			qqJoin: &raw,
 		},
 	}, true
 }

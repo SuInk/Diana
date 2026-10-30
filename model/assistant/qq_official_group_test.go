@@ -390,3 +390,40 @@ func TestQQOfficialGroupMemberFallsBackToMessageRole(t *testing.T) {
 		t.Fatal("stale role must not be trusted")
 	}
 }
+
+func TestQQJoinDecisionRules(t *testing.T) {
+	settings := SettingValues{
+		qqJoinSettingMode: qqJoinModeRules, qqJoinSettingApproveWords: "校友\n2024级", qqJoinSettingNicknameWords: "测试组",
+		qqJoinSettingRejectWords: "广告", qqJoinSettingRejectBots: true, qqJoinSettingUnmatched: "pending",
+	}
+	request := func(body string) qqOfficialGroupEvent {
+		var raw qqOfficialGroupEvent
+		if err := json.Unmarshal([]byte(body), &raw); err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	cases := []struct {
+		name, body, want string
+	}{
+		{"验证消息命中", `{"verify_info":{"verify_message":"我是校友"}}`, "approve"},
+		{"问答答案命中", `{"verify_info":{"review_qa_list":[{"question":"届别","answer":"2024级"}]}}`, "approve"},
+		{"昵称命中", `{"username":"测试组小王"}`, "approve"},
+		{"拒绝词优先", `{"username":"校友广告号","verify_info":{"verify_message":"校友"}}`, "decline"},
+		{"机器人", `{"bot":true,"verify_info":{"verify_message":"校友"}}`, "decline"},
+		{"都没命中留待办", `{"username":"路人"}`, ""},
+	}
+	for _, c := range cases {
+		if got, _ := qqJoinDecision(request(c.body), settings); got != c.want {
+			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
+		}
+	}
+	settings[qqJoinSettingUnmatched] = "decline"
+	if got, _ := qqJoinDecision(request(`{"username":"路人"}`), settings); got != "decline" {
+		t.Fatalf("unmatched decline got %q", got)
+	}
+	settings[qqJoinSettingMode] = qqJoinModeOff
+	if got, _ := qqJoinDecision(request(`{"verify_info":{"verify_message":"校友"}}`), settings); got != "" {
+		t.Fatalf("mode off got %q", got)
+	}
+}

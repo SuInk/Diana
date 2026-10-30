@@ -141,12 +141,13 @@ func (*QQJoinApprovalPlugin) Manifest() PluginManifest {
 		ID:              qqJoinApprovalPluginID,
 		Name:            "QQ 入群自动审批",
 		Version:         "0.1.0",
-		Description:     "按白名单 QQ 号自动通过 QQ 群的入群申请。策略保存在 QQ 开放平台，在插件设置里新建、编辑、立即执行或删除；机器人需是关联群的管理员，一个机器人最多 20 个策略。",
+		Description:     "自动处理 QQ 群的入群申请：按验证消息、问答答案、昵称等规则直接通过或拒绝，也可以管理 QQ 开放平台的白名单 QQ 号策略。机器人需是群管理员；平台不提供申请人等级。",
 		Official:        true,
 		BuiltIn:         true,
 		DefaultDisabled: true,
 		Platforms:       []string{PlatformQQOfficial},
-		Permissions:     []string{"qq_official:join_approval_strategy"},
+		Permissions:     []string{"qq_official:join_approval_strategy", "qq_official:join_request_approve"},
+		Settings:        qqJoinApprovalSettings(),
 	}
 }
 
@@ -165,4 +166,131 @@ func (r *Runtime) QQOfficialJoinStrategy(ctx context.Context, profileID string, 
 		return nil, fmt.Errorf("只有已连接的 QQ 官方机器人能管理入群自动审批策略")
 	}
 	return channel.JoinApprovalStrategy(ctx, req)
+}
+
+// 入群自动审批插件的本地规则：平台策略只认白名单 QQ 号，这里按申请里能看到的字段判。
+// 文档给的字段只有验证消息、问答、昵称、来源、是否机器人和安全提示，没有等级。
+const (
+	qqJoinSettingMode           = "mode"
+	qqJoinSettingApproveWords   = "approve_keywords"
+	qqJoinSettingNicknameWords  = "nickname_keywords"
+	qqJoinSettingRejectWords    = "reject_keywords"
+	qqJoinSettingRejectBots     = "reject_bots"
+	qqJoinSettingRejectRisky    = "reject_risky"
+	qqJoinSettingApproveInvited = "approve_invited"
+	qqJoinSettingUnmatched      = "unmatched"
+	qqJoinSettingRejectReason   = "reject_reason"
+
+	qqJoinModeOff   = "off"
+	qqJoinModeRules = "rules"
+)
+
+func qqJoinApprovalSettings() []PluginSettingSpec {
+	scopes := []string{PluginSettingScopeBot, PluginSettingScopeGroup}
+	return []PluginSettingSpec{
+		{Key: qqJoinSettingMode, Label: "按规则审批", Description: "收到入群申请时按下面的规则自动通过或拒绝；关闭时申请只记成待办，由主人用 platform_requests 处理。平台白名单策略在下方单独管理，两者互不影响。", Type: PluginSettingTypeSelect, Default: qqJoinModeOff, Options: []PluginSettingOption{{Value: qqJoinModeOff, Label: "关闭"}, {Value: qqJoinModeRules, Label: "按规则"}}, Scopes: scopes},
+		{Key: qqJoinSettingApproveWords, Label: "验证消息关键词", Description: "验证消息或问答答案里含其中任一词就通过，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes},
+		{Key: qqJoinSettingNicknameWords, Label: "昵称关键词", Description: "申请人昵称含其中任一词就通过，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 2, Scopes: scopes},
+		{Key: qqJoinSettingRejectWords, Label: "拒绝关键词", Description: "验证消息、问答答案或昵称含其中任一词就拒绝，优先于通过规则，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 2, Scopes: scopes},
+		{Key: qqJoinSettingApproveInvited, Label: "群成员邀请的直接通过", Type: PluginSettingTypeBool, Default: false, Scopes: scopes},
+		{Key: qqJoinSettingRejectBots, Label: "拒绝机器人账号", Type: PluginSettingTypeBool, Default: true, Scopes: scopes},
+		{Key: qqJoinSettingRejectRisky, Label: "拒绝平台标记的可疑申请", Description: "平台给出 warning_tips（可疑）时拒绝。", Type: PluginSettingTypeBool, Default: false, Scopes: scopes},
+		{Key: qqJoinSettingUnmatched, Label: "都没命中时", Type: PluginSettingTypeSelect, Default: "pending", Options: []PluginSettingOption{{Value: "pending", Label: "留给主人处理"}, {Value: "decline", Label: "拒绝"}}, Scopes: scopes},
+		{Key: qqJoinSettingRejectReason, Label: "拒绝理由", Description: "拒绝时发给申请人，留空不带。", Type: PluginSettingTypeString, Default: "", Scopes: scopes},
+	}
+}
+
+func qqJoinKeywords(text string) []string {
+	var out []string
+	for _, line := range strings.FieldsFunc(text, func(r rune) bool { return r == '\n' || r == ',' || r == '，' }) {
+		if word := strings.ToLower(strings.TrimSpace(line)); word != "" {
+			out = append(out, word)
+		}
+	}
+	return out
+}
+
+func qqJoinContainsAny(text string, words []string) bool {
+	text = strings.ToLower(text)
+	for _, word := range words {
+		if strings.Contains(text, word) {
+			return true
+		}
+	}
+	return false
+}
+
+// qqJoinDecision 按规则判一条申请：approve、decline，或空串表示留待主人处理。
+func qqJoinDecision(raw qqOfficialGroupEvent, settings SettingValues) (string, string) {
+	if settings.String(qqJoinSettingMode, qqJoinModeOff) != qqJoinModeRules {
+		return "", ""
+	}
+	answers := []string{raw.VerifyInfo.VerifyMessage}
+	for _, qa := range raw.VerifyInfo.ReviewQAList {
+		answers = append(answers, qa.Answer)
+	}
+	message := strings.Join(answers, "\n")
+	switch {
+	case qqJoinContainsAny(message+"\n"+raw.Username, qqJoinKeywords(settings.String(qqJoinSettingRejectWords, ""))):
+		return "decline", "命中拒绝关键词"
+	case raw.Bot && settings.Bool(qqJoinSettingRejectBots, true):
+		return "decline", "申请人是机器人账号"
+	case raw.RiskTips == "warning_tips" && settings.Bool(qqJoinSettingRejectRisky, false):
+		return "decline", "平台标记为可疑申请"
+	case raw.ApplySource == "invited" && settings.Bool(qqJoinSettingApproveInvited, false):
+		return "approve", "群成员邀请"
+	case qqJoinContainsAny(message, qqJoinKeywords(settings.String(qqJoinSettingApproveWords, ""))):
+		return "approve", "验证消息命中关键词"
+	case qqJoinContainsAny(raw.Username, qqJoinKeywords(settings.String(qqJoinSettingNicknameWords, ""))):
+		return "approve", "昵称命中关键词"
+	case settings.String(qqJoinSettingUnmatched, "pending") == "decline":
+		return "decline", "没有命中任何通过规则"
+	}
+	return "", ""
+}
+
+// autoReviewQQJoinRequest 在插件启用且规则给出结论时直接审批，返回是否已处理。
+// 调接口失败就留成待办，不吞掉申请。
+func (r *Runtime) autoReviewQQJoinRequest(ctx context.Context, event MessageEvent, record OneBotRequestRecord) bool {
+	request := event.oneBotRequest
+	if request == nil || request.qqJoin == nil || NormalizePlatformID(record.Platform) != PlatformQQOfficial {
+		return false
+	}
+	_, settings, enabled := r.plugins.PluginWithSettingsForGroup(qqJoinApprovalPluginID, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
+	if !enabled {
+		return false
+	}
+	decision, why := qqJoinDecision(*request.qqJoin, settings)
+	if decision == "" {
+		return false
+	}
+	approve := decision == "approve"
+	reason := ""
+	if !approve {
+		reason = truncateForChat(settings.String(qqJoinSettingRejectReason, ""), oneBotRequestTextLimit)
+	}
+	action, params, err := qqOfficialJoinRequestAction(record, approve, reason)
+	if err == nil {
+		_, err = r.callPlatformAPIForEvent(ctx, event, action, params)
+	}
+	outcome := EventRecord{
+		At: r.clock(), Kind: EventKindRequest, Platform: event.Platform, ProfileID: event.ProfileID,
+		UserID: event.UserID, GroupID: event.GroupID, MessageID: event.MessageID,
+		Text: oneBotRequestSummary(request.RequestType, request.SubType), Handled: true,
+	}
+	if err != nil {
+		outcome.Outcome, outcome.Decision, outcome.Reason = "qq_join_auto_review_failed", "pending", "自动审批调用失败，留给主人处理："+err.Error()
+		r.record(outcome)
+		return false
+	}
+	status := OneBotRequestApproved
+	if !approve {
+		status = OneBotRequestRejected
+	}
+	if store := r.oneBotRequestStore(); store != nil {
+		_, _ = store.ResolveOneBotRequest(ctx, record.ProfileID, record.ID, status, "入群自动审批："+why, r.clock())
+	}
+	outcome.Outcome, outcome.Decision, outcome.Reason = "qq_join_auto_"+decision, decision, "入群自动审批："+why
+	r.record(outcome)
+	return true
 }
