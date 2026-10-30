@@ -28,7 +28,7 @@ func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateReque
 // TestRunnerSilentFinalizeViaNativeToolCall：模型 send 了空正文时，这一轮不产出
 // 任何正文，也不算生成失败。
 func TestRunnerSilentFinalizeViaNativeToolCall(t *testing.T) {
-	client := &silentFinalizeClient{arguments: map[string]any{"text": ""}}
+	client := &silentFinalizeClient{arguments: map[string]any{"text": "", "silent": true}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)

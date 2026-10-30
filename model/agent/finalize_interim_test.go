@@ -235,3 +235,56 @@ func TestSendOnlyWithoutContinueStillFinishes(t *testing.T) {
 		t.Fatalf("text = %q, requests = %d, interim = %q", resp.Text, len(client.requests), events)
 	}
 }
+
+func TestEmptySendWithoutSilentIsSentBackOnce(t *testing.T) {
+	client := &stepsClient{steps: [][]llm.ToolCall{
+		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": ""}}},
+		{{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": "早上好"}}},
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "早"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Silent || resp.Text != "早上好" || len(client.requests) != 2 {
+		t.Fatalf("silent = %v, text = %q, requests = %d", resp.Silent, resp.Text, len(client.requests))
+	}
+}
+
+func TestEmptySendTwiceEndsSilent(t *testing.T) {
+	client := &stepsClient{steps: [][]llm.ToolCall{
+		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": ""}}},
+		{{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": ""}}},
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "早"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || len(client.requests) != 2 {
+		t.Fatalf("silent = %v, requests = %d", resp.Silent, len(client.requests))
+	}
+}
+
+func TestExplicitSilentSendFinishesImmediately(t *testing.T) {
+	client := &stepsClient{steps: [][]llm.ToolCall{
+		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "", "silent": true, "silent_reason": "不是对我说的"}}},
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "早"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || resp.SilentReason != "不是对我说的" || len(client.requests) != 1 {
+		t.Fatalf("silent = %v, reason = %q, requests = %d", resp.Silent, resp.SilentReason, len(client.requests))
+	}
+}

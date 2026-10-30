@@ -108,7 +108,7 @@ var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task
 
 // finalizeAction 把一步里的 send 调用合成内部的 final 动作：几次 send 各成一条消息，
 // 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话：silent=true
-// 是正路，只留空 text 没填 silent 的也照样按不说话处理。调用里根本没有
+// 是正路；只留空 text 没填 silent 的记为 emptySend，主循环会先让模型补正文或表态一次。调用里根本没有
 // text 键时用调用之外的文本——供应商在同一轮里既输出正文又调用工具时就是这个形态。
 func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 	action := llmAction{Action: "final"}
@@ -158,6 +158,7 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 		action.Content = strings.TrimSpace(text)
 	}
 	action.Silent = action.Content == "" && action.TaskState == ""
+	action.emptySend = action.Silent && !silentHint
 	return action
 }
 

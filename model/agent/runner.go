@@ -262,6 +262,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	continueOnlySends := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
+	emptySendRepaired := false
 	// repairFallbackText 是只因 send 附加字段被打回的那段纯文本。打回后重写那一步
 	// 模型请求失败（例如工具参数不是合法 JSON）时，照打回前的行为把它发出去，
 	// 不让一句本来能发的话变成报错。下一次模型请求成功就作废。
@@ -650,6 +651,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 						finishReason = "protocol_repair_exhausted"
 						break
 					}
+					continue
+				}
+				// 空正文但没填 silent=true：先退回去一次，要么补上正文，要么明确表态不回复。
+				// 只退一次，再空就按不说话收尾，不会来回转圈。本轮已经发过中途发言时空 send
+				// 就是「该说的都说了」，照常收尾。
+				if action.emptySend && !emptySendRepaired && !sentInterimThisRun(steps) {
+					emptySendRepaired = true
+					reason := "send 的 text 是空的，空正文不会发出任何消息。要回复就把话写进 text 重新 send；确实不该回复就重新 send，填 silent=true 并在 silent_reason 写一句原因。"
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "send 正文为空且未填 silent")
+					messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 					continue
 				}
 				// 模型 send 了空正文，这一轮不说话：没有正文，也就没有排版、证据账本和
@@ -1669,6 +1680,8 @@ type llmAction struct {
 	// 这个词只是一个词，不是一次决定。
 	Silent       bool   `json:"silent,omitempty"`
 	SilentReason string `json:"silent_reason,omitempty"`
+	// emptySend 是 send 正文为空却没填 silent=true：多半是忘了写，不是决定不说话。
+	emptySend bool
 	// Fields 是原生 send 调用里信封以外的非空字符串字段，按 Config.FinalizeFields 过滤后交给调用方。
 	Fields map[string]string `json:"-"`
 }
@@ -2089,4 +2102,14 @@ func (r *Runner) normalizeLegacySendCalls(calls []llm.ToolCall) []llm.ToolCall {
 		return calls
 	}
 	return out
+}
+
+// sentInterimThisRun 判断本轮是否已经有中途发言真的发出去了。
+func sentInterimThisRun(steps []Step) bool {
+	for _, step := range steps {
+		if step.Tool == finalizeToolName && !step.Skipped && step.Error == "" {
+			return true
+		}
+	}
+	return false
 }
