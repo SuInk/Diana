@@ -86,8 +86,13 @@
         <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node-ring" />
       </g>
 
-      <g class="relation-member">
-        <title>{{ centerLabel }}</title>
+      <!-- 中心是群友时点中间回到机器人；本来就是机器人就没什么可换的。 -->
+      <g
+        class="relation-member"
+        :class="{ 'relation-center-static': centerIsBot }"
+        @click="!centerIsBot && emit('select', graph.bot_id || '')"
+      >
+        <title>{{ centerIsBot ? centerName : `${centerName} · 点一下回到以 ${botName} 为中心` }}</title>
         <circle :cx="center" :cy="center" :r="centerRadius" class="relation-center" />
         <image
           v-if="centerAvatar"
@@ -170,6 +175,7 @@ function clipID(userID: string) {
 // 中心默认是机器人；后端按 center 参数换过中心时以 center_id 为准。
 const centerID = computed(() => props.graph.center_id || props.graph.bot_id || "");
 const centerNode = computed(() => props.graph.nodes.find((node) => node.user_id === centerID.value) ?? props.graph.nodes.find((node) => node.is_bot) ?? null);
+const botName = computed(() => props.graph.nodes.find((node) => node.is_bot)?.display_name?.trim() || "机器人");
 const centerIsBot = computed(() => !centerNode.value || !!centerNode.value.is_bot);
 const centerName = computed(() => centerNode.value?.display_name?.trim() || (centerIsBot.value ? "机器人" : centerID.value));
 const centerLabel = computed(() => centerNode.value?.display_name?.slice(0, 4) || (centerIsBot.value ? "Diana" : centerID.value.slice(0, 4)));
@@ -452,5 +458,9 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
 .relation-legend {
   font-size: 12px;
   margin: 0;
+}
+
+.relation-center-static {
+  cursor: default;
 }
 </style>
