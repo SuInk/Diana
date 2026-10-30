@@ -9,8 +9,8 @@ import (
 func TestParseFinalizeButtons(t *testing.T) {
 	got := parseFinalizeButtons("继续讲 | 换个话题\n官方文档=https://bot.q.qq.com/wiki/|来一局=开始游戏\n\n|  |")
 	want := [][]OutgoingButton{
-		{{Label: "继续讲", Data: "继续讲"}, {Label: "换个话题", Data: "换个话题"}},
-		{{Label: "官方文档", Data: "https://bot.q.qq.com/wiki/", Link: true}, {Label: "来一局", Data: "开始游戏"}},
+		{{Label: "继续讲", Data: "继续讲", Group: 1}, {Label: "换个话题", Data: "换个话题", Group: 1}},
+		{{Label: "官方文档", Data: "https://bot.q.qq.com/wiki/", Link: true, Group: 2}, {Label: "来一局", Data: "开始游戏", Group: 2}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("parseFinalizeButtons = %#v", got)
@@ -20,6 +20,46 @@ func TestParseFinalizeButtons(t *testing.T) {
 	}
 	if rows := parseFinalizeButtons("  "); rows != nil {
 		t.Fatalf("空值不该产生按钮：%#v", rows)
+	}
+}
+
+// 模型把长标签塞进一排时按字数拆排：QQ 平分一排的宽度，放不下的字会被截成「…」。
+func TestParseFinalizeButtonsSplitsCrowdedRows(t *testing.T) {
+	shape := func(rows [][]OutgoingButton) []int {
+		var sizes []int
+		for _, row := range rows {
+			sizes = append(sizes, len(row))
+		}
+		return sizes
+	}
+	for _, tc := range []struct {
+		value string
+		want  []int
+	}{
+		{"是 | 否 | 随便", []int{3}},
+		{"太哲学了 | 再来一个 | 换个话题", []int{3}},
+		{"那你会选哪个 | 太哲学了 | 换个说法问问", []int{2, 1}},
+		{"展开讲讲 | 那B呢 | 再来一个 | 换个话题 | 算了", []int{3, 2}},
+		{"一二三四五六七八 | 八七六五四三二一", []int{1, 1}},
+		{"a | b | c | d | e", []int{5}},
+		{"一二三四五六七八|一二三四五六七八|一二三四五六七八\n一二三四五六七八|一二三四五六七八|一二三四五六七八", []int{1, 1, 1, 1, 1}},
+	} {
+		got := parseFinalizeButtons(tc.value)
+		if !reflect.DeepEqual(shape(got), tc.want) {
+			t.Errorf("%q 分排 = %v，想要 %v", tc.value, shape(got), tc.want)
+		}
+	}
+	rows := parseFinalizeButtons("那你会选哪个 | 太哲学了 | 换个说法问问\n继续")
+	if rows[0][0].Group != 1 || rows[1][0].Group != 1 || rows[2][0].Group != 2 {
+		t.Fatalf("拆开的几排应当同组：%#v", rows)
+	}
+}
+
+func TestButtonLabelWidth(t *testing.T) {
+	for label, want := range map[string]int{"abc": 3, "太哲学了": 8, "那B呢": 5, "好！": 4, "😂": 2} {
+		if got := buttonLabelWidth(label); got != want {
+			t.Errorf("buttonLabelWidth(%q) = %d，想要 %d", label, got, want)
+		}
 	}
 }
 
@@ -45,6 +85,13 @@ func TestQQOfficialKeyboardGroupsCommandRows(t *testing.T) {
 	single := rows[1].(map[string]any)["buttons"].([]any)[0].(map[string]any)
 	if _, has := single["group_id"]; has {
 		t.Fatalf("单个按钮不该分组：%#v", single)
+	}
+
+	split := qqOfficialKeyboard(parseFinalizeButtons("那你会选哪个 | 太哲学了 | 换个说法问问"))
+	splitRows := split["content"].(map[string]any)["rows"].([]any)
+	last := splitRows[1].(map[string]any)["buttons"].([]any)[0].(map[string]any)
+	if len(splitRows) != 2 || last["group_id"] != "row1" {
+		t.Fatalf("同一组拆成两排后仍应互斥：%#v", splitRows)
 	}
 }
 

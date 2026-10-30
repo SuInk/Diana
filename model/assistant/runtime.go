@@ -4015,7 +4015,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if strings.TrimSpace(reply) == "" {
 			return "", nil
 		}
-		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
+		// 卡片是固定格式，整条原样发：开着「换行分条」时，标题行不像列表项，会被
+		// 单独拆成一条，剩下几行「版本: …」才留在一起。
+		cardEvent := event
+		cardEvent.replyDeliveryMode = replyDeliverySingle
+		cardEvent.replyLineBreakMode = replyLinesPreserve
+		if err := r.send(withoutReplyTriggerGate(ctx), cardEvent, reply); err != nil {
 			return "", err
 		}
 		return reply, nil

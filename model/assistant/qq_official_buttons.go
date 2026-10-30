@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"unicode"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -30,14 +31,23 @@ const (
 	qqButtonPermissionAll  = 2
 	qqButtonStyleBlue      = 1
 	qqButtonUnsupportedTip = "当前 QQ 版本不支持按钮，请升级后再试"
+
+	// QQ 把一排的宽度平分给这排的按钮，字放不下就截成「…」。宽度按半角计（汉字
+	// 算 2）：一排约 36 个半角宽，每个按钮的边框和内边距再吃掉约 4 个。对着桌面 QQ
+	// 截图量的：三个一排时四个字的「太哲学了」放得下，再长就截成「那你会选…」；手机更窄，
+	// 所以取偏紧的值。
+	qqKeyboardRowWidth   = 36
+	qqButtonPaddingWidth = 4
 )
 
 // OutgoingButton 是挂在消息底下的一个按钮。Link 为 true 时 Data 是要打开的网址，
-// 否则是点了以后替用户发出的那句话。
+// 否则是点了以后替用户发出的那句话。Group 相同的指令按钮互斥（见 qqOfficialKeyboard），
+// 为 0 时按所在的排分组。
 type OutgoingButton struct {
 	Label string
 	Data  string
 	Link  bool
+	Group int
 }
 
 func buttonsFinalizeField() agent.FinalizeField {
@@ -64,9 +74,12 @@ func offersButtonsFinalizeField(cfg BotConfig, event MessageEvent) bool {
 
 // parseFinalizeButtons 把模型填的按钮文本解析成按钮行。写坏的项跳过，不让一个
 // 格式错误连累整条回复。
+//
+// 模型写的一行是一组选项，但它不管字数，常把三四个长标签塞进一排；这里按标签
+// 长度把放不下的那组拆成几排（见 fitButtonRow），同组仍然互斥。
 func parseFinalizeButtons(value string) [][]OutgoingButton {
 	var rows [][]OutgoingButton
-	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+	for lineIndex, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
 		if len(rows) == qqKeyboardMaxRows {
 			break
 		}
@@ -83,16 +96,56 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 			if label == "" {
 				continue
 			}
-			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes)}
+			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes), Group: lineIndex + 1}
 			lower := strings.ToLower(button.Data)
 			button.Link = strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
 			row = append(row, button)
 		}
-		if len(row) > 0 {
-			rows = append(rows, row)
+		for _, fitted := range fitButtonRow(row) {
+			if len(rows) == qqKeyboardMaxRows {
+				break
+			}
+			rows = append(rows, fitted)
 		}
 	}
 	return rows
+}
+
+// fitButtonRow 把一组按钮按最长的标签分成几排：每排放尽量多的按钮，但要让最长的
+// 那个也放得下，各排个数尽量均匀（5 个放不下时拆成 3+2，而不是 4+1）。
+func fitButtonRow(row []OutgoingButton) [][]OutgoingButton {
+	if len(row) == 0 {
+		return nil
+	}
+	widest := 0
+	for _, button := range row {
+		widest = max(widest, buttonLabelWidth(button.Label))
+	}
+	perRow := len(row)
+	for perRow > 1 && widest > (qqKeyboardRowWidth-perRow*qqButtonPaddingWidth)/perRow {
+		perRow--
+	}
+	count := (len(row) + perRow - 1) / perRow
+	out := make([][]OutgoingButton, 0, count)
+	for start := 0; count > 0; count-- {
+		size := (len(row) - start + count - 1) / count
+		out = append(out, row[start:start+size])
+		start += size
+	}
+	return out
+}
+
+// buttonLabelWidth 按半角宽度计标签长度：汉字、全角符号和 emoji 算 2。
+func buttonLabelWidth(label string) int {
+	width := 0
+	for _, r := range label {
+		if r < 0x1100 || unicode.Is(unicode.Mn, r) {
+			width++
+			continue
+		}
+		width += 2
+	}
+	return width
 }
 
 // cutButtonText 按字数截断按钮文字，不加省略号：按钮放不下多余的字。
@@ -106,17 +159,26 @@ func cutButtonText(value string, limit int) string {
 
 // qqOfficialKeyboard 把按钮行转成开放平台的自定义 keyboard 结构。
 //
-// 一排里有两个以上指令按钮时，它们共用一个 group_id：群友实测同组按钮互斥，点了
+// 同一组有两个以上指令按钮时，它们共用一个 group_id：群友实测同组按钮互斥，点了
 // 一个其余就灰掉，正好是「选一个」的语义；链接按钮不参与。官方文档没写这个字段。
+// 一组因为太长被拆成几排时，几排仍是同一组。
 func qqOfficialKeyboard(rows [][]OutgoingButton) map[string]any {
-	payloadRows := make([]any, 0, len(rows))
+	group := func(rowIndex int, button OutgoingButton) string {
+		if button.Group > 0 {
+			return fmt.Sprintf("row%d", button.Group)
+		}
+		return fmt.Sprintf("row%d", rowIndex+1)
+	}
+	commands := map[string]int{}
 	for rowIndex, row := range rows {
-		commands := 0
 		for _, button := range row {
 			if !button.Link {
-				commands++
+				commands[group(rowIndex, button)]++
 			}
 		}
+	}
+	payloadRows := make([]any, 0, len(rows))
+	for rowIndex, row := range rows {
 		buttons := make([]any, 0, len(row))
 		for index, button := range row {
 			action := map[string]any{
@@ -139,8 +201,8 @@ func qqOfficialKeyboard(rows [][]OutgoingButton) map[string]any {
 				"render_data": map[string]any{"label": button.Label, "visited_label": button.Label, "style": qqButtonStyleBlue},
 				"action":      action,
 			}
-			if !button.Link && commands > 1 {
-				payload["group_id"] = fmt.Sprintf("row%d", rowIndex+1)
+			if id := group(rowIndex, button); !button.Link && commands[id] > 1 {
+				payload["group_id"] = id
 			}
 			buttons = append(buttons, payload)
 		}

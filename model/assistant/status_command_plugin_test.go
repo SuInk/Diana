@@ -307,6 +307,36 @@ func TestRuntimeStatusCommandRepliesWithoutLLM(t *testing.T) {
 	}
 }
 
+// 开着「换行分条」时卡片也整条发：标题行「Diana 状态」不像列表项，曾被单独拆成一条。
+func TestRuntimeStatusCommandSendsCardAsOneMessageWithLineSplit(t *testing.T) {
+	manager := NewPluginManager(NewStatusCommandPlugin())
+	if _, err := manager.SetEnabledForProfile(statusCommandPluginID, "qq", true); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{}
+	cfg := BotConfig{ID: "qq", GroupTriggers: []string{"Diana"}, BotAccount: "42", ReplyLineSplitEnabled: boolPointer(true)}
+	botRuntime := NewRuntime(cfg, channel, manager, nil, nil, nil, func() (LLMProvider, error) {
+		return &capturingLLMProvider{reply: "不应该调用"}, nil
+	})
+	botRuntime.SetBuildInfo(BuildInfo{Version: "v0.9.1", StartedAt: time.Now().Add(-time.Hour)})
+	event := MessageEvent{
+		Kind: EventKindGroup, Platform: PlatformOneBotV11, ProfileID: "qq", SelfID: "42",
+		GroupID: "123456", UserID: "10001", MessageID: "status-split",
+		RawMessage: statusCommandTrigger,
+		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": statusCommandTrigger}}},
+	}
+	if err := botRuntime.HandleEvent(context.Background(), event); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, time.Second, func() bool {
+		return len(channel.sentSnapshot()) > 0
+	})
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || !strings.HasPrefix(sent[0].Text, "Diana 状态\n版本: 0.9.1\n平台: ") {
+		t.Fatalf("状态卡片应整条发出：%#v", sent)
+	}
+}
+
 // 插件关着的时候，#diana 就是一条普通的、没有触发词的群消息：不发任何东西，
 // 走的路径也和随便一句闲聊完全一样。
 //
