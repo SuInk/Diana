@@ -107,7 +107,7 @@ func TestParseStockKlineSortsAndTrims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bars) != 2 || bars[0].Date != "2026-10-28" || bars[1].Close != 348.91 {
+	if len(bars) != 2 || bars[0].Date != "2026-10-28" || bars[1].Close != 348.91 || bars[1].High != 1 || bars[1].Volume != 1 {
 		t.Fatalf("unexpected bars %+v", bars)
 	}
 	aShare := `{"code":0,"data":{"sh600519":{"qfqday":[["2026-10-30","1","1392.05","1","1","1"]]}}}`
@@ -179,7 +179,11 @@ func TestRenderStockChartPNG(t *testing.T) {
 		t.Skip("没有中文字体：", err)
 	}
 	quote := StockQuote{Symbol: "sh600519", Name: "贵州茅台", Market: "A股", Currency: "CNY", Price: 1392.05, Change: 38.05, ChangePct: 2.81}
-	bars := []StockBar{{Date: "2026-10-28", Close: 1350}, {Date: "2026-10-29", Close: 1354}, {Date: "2026-10-30", Close: 1392.05}}
+	bars := []StockBar{
+		{Date: "2026-10-28", Open: 1360, Close: 1350, High: 1365, Low: 1345, Volume: 50000},
+		{Date: "2026-10-29", Open: 1350, Close: 1354, High: 1358, Low: 1349, Volume: 42000},
+		{Date: "2026-10-30", Open: 1363, Close: 1392.05, High: 1393.37, Low: 1352.98, Volume: 59927},
+	}
 	png, err := RenderStockChartPNG(quote, bars)
 	if err != nil {
 		t.Fatal(err)

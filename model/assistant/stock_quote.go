@@ -69,8 +69,9 @@ type StockQuote struct {
 
 // StockBar 是一根日线。
 type StockBar struct {
-	Date  string
-	Close float64
+	Date                   string
+	Open, Close, High, Low float64
+	Volume                 float64
 }
 
 var (
@@ -288,16 +289,26 @@ func parseStockKline(symbol string, body []byte, days int) ([]StockBar, error) {
 	}
 	bars := make([]StockBar, 0, len(rows))
 	for _, row := range rows {
-		if len(row) < 3 {
+		// 每行是 [日期, 开, 收, 高, 低, 量, ...]，数值是字符串。
+		if len(row) < 6 {
 			continue
 		}
 		date, _ := row[0].(string)
-		closeText, _ := row[2].(string)
-		closeValue, err := strconv.ParseFloat(closeText, 64)
-		if date == "" || err != nil {
+		values := [5]float64{}
+		valid := date != ""
+		for index := range values {
+			text, _ := row[index+1].(string)
+			value, err := strconv.ParseFloat(text, 64)
+			if err != nil {
+				valid = false
+				break
+			}
+			values[index] = value
+		}
+		if !valid {
 			continue
 		}
-		bars = append(bars, StockBar{Date: date, Close: closeValue})
+		bars = append(bars, StockBar{Date: date, Open: values[0], Close: values[1], High: values[2], Low: values[3], Volume: values[4]})
 	}
 	// 美股偶尔会在开头混进一根很多年前的老数据，按日期排好再截尾。
 	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Date < bars[j].Date })
