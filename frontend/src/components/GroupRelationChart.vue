@@ -3,83 +3,81 @@
 
 <template>
   <div class="relation-chart">
-    <p v-if="members.length > 0" class="relation-legend muted">
-      {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ members.length }} 人</template>
+    <p v-if="placed.length > 0" class="relation-legend muted">
+      {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ graph.nodes.filter((node) => !node.is_bot).length }} 人</template><template v-if="overflow > 0">，其中 {{ overflow }} 人圈里放不下</template>
       <template v-if="graph.truncated">（只统计了最近这批消息）</template>
-      · 圆点大小是发言量，颜色越深和机器人互动越多，悬停看单人
+      · 越靠里和机器人互动越多，悬停看单人
     </p>
     <svg
-      v-if="members.length > 0"
-      :viewBox="`0 0 ${width} ${height}`"
+      v-if="placed.length > 0"
+      :viewBox="`0 0 ${size} ${size}`"
       class="relation-svg"
-      :class="{ 'relation-focusing': focusedID }"
+      :class="{ 'relation-focusing': focused }"
       role="img"
-      :aria-label="`群聊关系图：${members.length} 人围绕机器人，连线粗细表示互动次数`"
+      :aria-label="`群聊互动圈：${placed.length} 人按和机器人的互动次数分成内圈、中圈、外圈`"
       @mouseleave="focusedID = ''"
     >
-      <!-- 成员之间的边先画，压在中心边下面：中心边是这张图的主线。 -->
-      <path
-        v-for="edge in peerEdges"
-        :key="`peer-${edge.source}-${edge.target}`"
-        :d="edge.path"
-        class="relation-peer-edge"
-        :class="{ 'relation-active': isActive(edge.source) || isActive(edge.target) }"
-        :style="{ strokeWidth: edge.strokeWidth, opacity: edge.opacity }"
-      >
-        <title>{{ edge.label }}</title>
-      </path>
+      <!-- 圈层参考线：只是背景，让人一眼看出谁在第几圈。 -->
+      <g v-for="ring in usedRings" :key="ring.name">
+        <circle :cx="center" :cy="center" :r="ring.radius" class="relation-ring" />
+        <text :x="center" :y="center - ring.radius - ring.node - 6" class="relation-ring-label" text-anchor="middle">{{ ring.name }}</text>
+      </g>
 
-      <!-- 垫一圈背景色：接近对径的弦中点正好落在圆心，会从中心节点上划过去。 -->
-      <circle :cx="center.x" :cy="center.y" :r="centerRadius + 10" class="relation-center-halo" />
-
-      <line
-        v-for="edge in centerEdges"
-        :key="`center-${edge.userID}`"
-        :x1="center.x"
-        :y1="center.y"
-        :x2="edge.x"
-        :y2="edge.y"
-        class="relation-center-edge"
-        :class="{ 'relation-active': isActive(edge.userID) }"
-        :style="{ strokeWidth: edge.strokeWidth, opacity: edge.opacity }"
-      >
-        <title>{{ edge.label }}</title>
-      </line>
+      <!-- 连线只在悬停时画：平时全画出来就又挤成一团了。 -->
+      <template v-if="focused">
+        <path
+          v-for="edge in focusedPeerEdges"
+          :key="`peer-${edge.target}`"
+          :d="edge.path"
+          class="relation-peer-edge"
+          :style="{ strokeWidth: edge.strokeWidth }"
+        />
+        <line
+          v-if="focused.weight > 0"
+          :x1="center"
+          :y1="center"
+          :x2="focused.x"
+          :y2="focused.y"
+          class="relation-center-edge"
+        />
+      </template>
 
       <g
-        v-for="member in members"
+        v-for="member in placed"
         :key="member.userID"
         class="relation-member"
-        :class="{ 'relation-active': isActive(member.userID) }"
+        :class="{ 'relation-active': focusedID === member.userID || focusedNeighbors.has(member.userID) }"
         @mouseenter="focusedID = member.userID"
       >
-        <circle
-          :cx="member.x"
-          :cy="member.y"
-          :r="member.radius"
-          class="relation-node"
-          :style="{ fill: member.fill }"
-        >
+        <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node" :style="{ fill: member.fill }">
           <title>{{ member.tooltip }}</title>
         </circle>
         <text
-          v-if="member.radius >= 11"
           :x="member.x"
-          :y="member.y + 4"
+          :y="member.y + member.radius * 0.36"
           class="relation-initial"
-          :class="{ 'relation-initial-strong': member.strength > 0.45 }"
+          :class="{ 'relation-initial-strong': member.ring < 2 && member.weight > 0 }"
+          :style="{ fontSize: `${Math.round(member.radius * 0.95)}px` }"
           text-anchor="middle"
         >{{ member.initial }}</text>
         <text
-          :x="member.labelX"
-          :y="member.labelY"
+          v-if="member.ring === 0"
+          :x="member.x"
+          :y="member.y + member.radius + 14"
           class="relation-label"
-          :text-anchor="member.anchor"
+          text-anchor="middle"
         >{{ member.label }}</text>
       </g>
 
-      <circle :cx="center.x" :cy="center.y" :r="centerRadius" class="relation-center" />
-      <text :x="center.x" :y="center.y + 5" class="relation-center-label" text-anchor="middle">{{ centerLabel }}</text>
+      <circle :cx="center" :cy="center" :r="centerRadius + 6" class="relation-center-halo" />
+      <circle :cx="center" :cy="center" :r="centerRadius" class="relation-center" />
+      <text :x="center" :y="center + 5" class="relation-center-label" text-anchor="middle">{{ centerLabel }}</text>
+
+      <!-- 悬停的人不在内圈时名字不常驻，这里补一个浮签。 -->
+      <g v-if="focused && focused.ring > 0" class="relation-tag">
+        <rect :x="focused.x - tagWidth / 2" :y="focused.y + focused.radius + 4" :width="tagWidth" height="20" rx="6" />
+        <text :x="focused.x" :y="focused.y + focused.radius + 18" text-anchor="middle">{{ focused.label }}</text>
+      </g>
     </svg>
 
     <ol v-if="ranking.length > 0" class="relation-ranking">
@@ -97,7 +95,7 @@
       </li>
     </ol>
 
-    <p v-else-if="members.length === 0" class="relation-empty muted">这段时间群里没有发言记录，先聊几句再看。</p>
+    <p v-if="placed.length === 0" class="relation-empty muted">这段时间群里没有发言记录，先聊几句再看。</p>
   </div>
 </template>
 
@@ -107,25 +105,28 @@ import type { GroupRelationGraph } from "../api";
 
 const props = defineProps<{ graph: GroupRelationGraph }>();
 
-const width = 760;
-const height = 460;
-const centerRadius = 32;
-const center = { x: width / 2, y: height / 2 };
-// 弹窗比较矮，环压成椭圆；两侧留出标签位置，名字写在圆点外侧，贴边会被 viewBox 切掉。
-const ringRadiusX = width / 2 - 130;
-const ringRadiusY = height / 2 - 36;
+const size = 620;
+const center = size / 2;
+const centerRadius = 34;
 
-// 悬停的成员：只亮他自己的连线，其余压暗。
+// 三圈从里到外：圈越外半径越大、头像越小，所以外圈能放的人反而多。
+// 每圈的人数上限按周长和头像直径算，再压一点，保证相邻头像不贴在一起。
+const rings = [
+  { name: "内圈", radius: 108, node: 25 },
+  { name: "中圈", radius: 190, node: 18 },
+  { name: "外圈", radius: 268, node: 13 }
+].map((ring) => ({
+  ...ring,
+  capacity: Math.floor((2 * Math.PI * ring.radius) / (ring.node * 2 + 12))
+}));
+// 内圈只留最亲近的几个人，挤满了就不算「内圈」了。
+rings[0].capacity = Math.min(rings[0].capacity, 8);
+
 const focusedID = ref("");
-
-function isActive(userID: string): boolean {
-  return focusedID.value === userID;
-}
 
 const botNode = computed(() => props.graph.nodes.find((node) => node.is_bot) ?? null);
 const centerLabel = computed(() => botNode.value?.display_name?.slice(0, 4) || "Diana");
 
-// 每个成员和机器人的互动次数，决定他在环上的位置：强的排在正上方，依次顺时针。
 const weightToBot = computed(() => {
   const botID = props.graph.bot_id;
   const weights = new Map<string, number>();
@@ -137,98 +138,113 @@ const weightToBot = computed(() => {
   return weights;
 });
 
-const members = computed(() => {
-  const list = props.graph.nodes.filter((node) => !node.is_bot);
+const ordered = computed(() => {
   const weights = weightToBot.value;
-  const ordered = [...list].sort((left, right) => {
-    const delta = (weights.get(right.user_id) ?? 0) - (weights.get(left.user_id) ?? 0);
-    return delta !== 0 ? delta : right.messages - left.messages;
-  });
-  const maxMessages = Math.max(1, ...ordered.map((node) => node.messages));
-  const maxWeight = Math.max(1, ...ordered.map((node) => weights.get(node.user_id) ?? 0));
-  return ordered.map((node, index) => {
-    // 从正上方起顺时针铺开。
-    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / ordered.length;
-    const x = center.x + ringRadiusX * Math.cos(angle);
-    const y = center.y + ringRadiusY * Math.sin(angle);
-    // 面积随发言量走，所以半径开方——直接按半径线性缩放会把话痨画得夸张得多。
-    const radius = 7 + 13 * Math.sqrt(node.messages / maxMessages);
-    const onRight = Math.cos(angle) >= 0;
-    const weight = weights.get(node.user_id) ?? 0;
-    const name = node.display_name?.trim() || node.user_id;
-    const strength = weight / maxWeight;
-    return {
-      userID: node.user_id,
-      x,
-      y,
-      radius,
-      weight,
-      strength,
-      name,
-      initial: Array.from(name)[0] ?? "",
-      // 没跟机器人说过话的人用中性底色，有来往的按强度往主题色里调。
-      fill: weight > 0
-        ? `color-mix(in srgb, var(--accent) ${Math.round(28 + 72 * strength)}%, var(--surface-2))`
-        : "var(--surface-2)",
-      label: name.length > 7 ? `${name.slice(0, 7)}…` : name,
-      anchor: onRight ? "start" : "end",
-      labelX: x + (onRight ? radius + 8 : -(radius + 8)),
-      labelY: y + 4,
-      tooltip: `${name} · 发言 ${node.messages} 条 · 与机器人互动 ${weight} 次 · 好感度 ${node.favorability}`
-    };
-  });
+  return props.graph.nodes
+    .filter((node) => !node.is_bot)
+    .map((node) => ({ node, weight: weights.get(node.user_id) ?? 0 }))
+    .sort((left, right) => right.weight - left.weight || right.node.messages - left.node.messages);
 });
 
-// 和机器人互动最多的几个人，图上圆点挤在一起时这里能直接读数。
-const ranking = computed(() => members.value.filter((member) => member.weight > 0).slice(0, 8));
+interface PlacedMember {
+  userID: string;
+  ring: number;
+  x: number;
+  y: number;
+  radius: number;
+  weight: number;
+  strength: number;
+  name: string;
+  initial: string;
+  label: string;
+  fill: string;
+  tooltip: string;
+}
+
+const placed = computed<PlacedMember[]>(() => {
+  const list = ordered.value;
+  const maxWeight = Math.max(1, ...list.map((item) => item.weight));
+  const out: PlacedMember[] = [];
+  let cursor = 0;
+  for (let ringIndex = 0; ringIndex < rings.length && cursor < list.length; ringIndex++) {
+    const ring = rings[ringIndex];
+    const slice = list.slice(cursor, cursor + ring.capacity);
+    cursor += slice.length;
+    // 每圈错开半格起点，相邻两圈的头像不会正好排成一条射线。
+    const offset = ringIndex % 2 === 0 ? 0 : Math.PI / Math.max(slice.length, 1);
+    slice.forEach(({ node, weight }, index) => {
+      const angle = -Math.PI / 2 + offset + (index * 2 * Math.PI) / slice.length;
+      const name = node.display_name?.trim() || node.user_id;
+      const strength = weight / maxWeight;
+      out.push({
+        userID: node.user_id,
+        ring: ringIndex,
+        x: center + ring.radius * Math.cos(angle),
+        y: center + ring.radius * Math.sin(angle),
+        radius: ring.node,
+        weight,
+        strength,
+        name,
+        initial: Array.from(name)[0] ?? "",
+        label: name.length > 6 ? `${name.slice(0, 6)}…` : name,
+        // 没跟机器人说过话的人用中性底色，有来往的越往里颜色越深。
+        fill: weight > 0
+          ? `color-mix(in srgb, var(--accent) ${[100, 62, 34][ringIndex]}%, var(--surface-2))`
+          : "var(--surface-2)",
+        tooltip: `${name} · ${ring.name} · 发言 ${node.messages} 条 · 与机器人互动 ${weight} 次 · 好感度 ${node.favorability}`
+      });
+    });
+  }
+  return out;
+});
 
 const trimmed = computed(() => props.graph.participants > props.graph.nodes.length);
+// 三圈都排满后剩下的人：按互动排在最后，不画。
+const overflow = computed(() => ordered.value.length - placed.value.length);
 
-const centerEdges = computed(() => {
-  const maxWeight = Math.max(1, ...members.value.map((member) => member.weight));
-  return members.value
-    .filter((member) => member.weight > 0)
-    .map((member) => ({
-      userID: member.userID,
-      x: member.x,
-      y: member.y,
-      strokeWidth: 0.8 + 3 * (member.weight / maxWeight),
-      opacity: 0.25 + 0.45 * (member.weight / maxWeight),
-      label: `${member.label} ↔ ${centerLabel.value}：${member.weight} 次`
-    }));
+const usedRings = computed(() => {
+  const deepest = Math.max(-1, ...placed.value.map((member) => member.ring));
+  return rings.slice(0, deepest + 1);
 });
 
-// 成员之间的边只画最强的一批。四十个人两两之间可以有几百条线；画三十条时
-// 灰线已经糊成一片，把中心那圈主线压住了——这张图的主语是机器人，成员之间
-// 的往来是背景信息，宁可少画。
-const maxPeerEdges = 12;
+const focused = computed(() => placed.value.find((member) => member.userID === focusedID.value) ?? null);
 
-const peerEdges = computed(() => {
+// 悬停某人时，他和其他成员之间的往来也画出来，只画他的。
+const focusedPeerEdges = computed(() => {
+  const current = focused.value;
+  if (!current) return [];
   const botID = props.graph.bot_id;
-  const positions = new Map(members.value.map((member) => [member.userID, member]));
-  const candidates = props.graph.edges
-    .filter((edge) => edge.source !== botID && edge.target !== botID)
-    .filter((edge) => positions.has(edge.source) && positions.has(edge.target))
-    .slice(0, maxPeerEdges);
-  const maxWeight = Math.max(1, ...candidates.map((edge) => edge.weight));
-  return candidates.map((edge) => {
-    const from = positions.get(edge.source)!;
-    const to = positions.get(edge.target)!;
-    // 控制点往圆心方向拉，边成为弦而不是直穿中心的直线——直线会和中心边混在一起。
-    const midX = (from.x + to.x) / 2;
-    const midY = (from.y + to.y) / 2;
-    const controlX = midX + (center.x - midX) * 0.55;
-    const controlY = midY + (center.y - midY) * 0.55;
-    return {
-      source: edge.source,
-      target: edge.target,
-      path: `M ${from.x} ${from.y} Q ${controlX} ${controlY} ${to.x} ${to.y}`,
-      strokeWidth: 0.6 + 1.2 * (edge.weight / maxWeight),
-      opacity: 0.1 + 0.18 * (edge.weight / maxWeight),
-      label: `${from.label} ↔ ${to.label}：${edge.weight} 次`
-    };
+  const positions = new Map(placed.value.map((member) => [member.userID, member]));
+  const edges = props.graph.edges.filter((edge) =>
+    edge.source !== botID && edge.target !== botID && (edge.source === current.userID || edge.target === current.userID)
+  );
+  const maxWeight = Math.max(1, ...edges.map((edge) => edge.weight));
+  return edges.flatMap((edge) => {
+    const other = positions.get(edge.source === current.userID ? edge.target : edge.source);
+    if (!other) return [];
+    // 往圆心方向弯一点，不和中心那条线叠在一起。
+    const midX = (current.x + other.x) / 2;
+    const midY = (current.y + other.y) / 2;
+    const controlX = midX + (center - midX) * 0.4;
+    const controlY = midY + (center - midY) * 0.4;
+    return [{
+      target: other.userID,
+      path: `M ${current.x} ${current.y} Q ${controlX} ${controlY} ${other.x} ${other.y}`,
+      strokeWidth: 1 + 2 * (edge.weight / maxWeight)
+    }];
   });
 });
+
+const focusedNeighbors = computed(() => new Set(focusedPeerEdges.value.map((edge) => edge.target)));
+
+const tagWidth = computed(() => {
+  const label = focused.value?.label ?? "";
+  // 中文按一个字 12px、其余按 7px 估宽，够放就行。
+  const width = Array.from(label).reduce((sum: number, char: string) => sum + (char.charCodeAt(0) > 0x2e7f ? 12 : 7), 0);
+  return width + 16;
+});
+
+const ranking = computed(() => placed.value.filter((member) => member.weight > 0).slice(0, 8));
 </script>
 
 <style scoped>
@@ -240,23 +256,35 @@ const peerEdges = computed(() => {
 
 .relation-svg {
   width: 100%;
-  max-height: 60vh;
+  max-height: 62vh;
   height: auto;
   overflow: visible;
 }
 
-/* 中心边是主线，用主题色；成员之间的边是背景信息，用中性色压下去。 */
+.relation-ring {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 3 5;
+}
+
+.relation-ring-label {
+  fill: var(--text-secondary);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
 .relation-center-edge {
   stroke: var(--accent);
+  stroke-width: 2.5;
   stroke-linecap: round;
-  transition: opacity 0.15s;
+  opacity: 0.85;
 }
 
 .relation-peer-edge {
   fill: none;
   stroke: var(--text-secondary);
   stroke-linecap: round;
-  transition: opacity 0.15s;
+  opacity: 0.55;
 }
 
 .relation-member {
@@ -266,25 +294,12 @@ const peerEdges = computed(() => {
 
 .relation-node {
   stroke: var(--surface);
-  stroke-width: 2;
+  stroke-width: 2.5;
 }
 
-/* 悬停某人时其余压暗，只留他的连线。用 !important 盖过按权重算的内联透明度。 */
-.relation-focusing .relation-center-edge,
-.relation-focusing .relation-peer-edge {
-  opacity: 0.05 !important;
-}
-
+/* 悬停时其余人压暗，只留他本人和跟他有来往的人。 */
 .relation-focusing .relation-member {
-  opacity: 0.35;
-}
-
-.relation-focusing .relation-center-edge.relation-active {
-  opacity: 0.9 !important;
-}
-
-.relation-focusing .relation-peer-edge.relation-active {
-  opacity: 0.6 !important;
+  opacity: 0.3;
 }
 
 .relation-focusing .relation-member.relation-active {
@@ -292,7 +307,7 @@ const peerEdges = computed(() => {
 }
 
 .relation-center-halo {
-  fill: color-mix(in srgb, var(--accent) 14%, var(--surface));
+  fill: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
 .relation-center {
@@ -307,7 +322,6 @@ const peerEdges = computed(() => {
 
 .relation-initial {
   fill: var(--text);
-  font-size: 11px;
   font-weight: 600;
   pointer-events: none;
 }
@@ -319,11 +333,21 @@ const peerEdges = computed(() => {
 .relation-label {
   fill: var(--text-secondary);
   font-size: 12px;
+  pointer-events: none;
 }
 
-.relation-member.relation-active .relation-label {
+.relation-tag {
+  pointer-events: none;
+}
+
+.relation-tag rect {
   fill: var(--text);
-  font-weight: 600;
+  opacity: 0.9;
+}
+
+.relation-tag text {
+  fill: var(--surface);
+  font-size: 12px;
 }
 
 .relation-ranking {

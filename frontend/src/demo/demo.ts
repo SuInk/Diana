@@ -2689,7 +2689,7 @@ function demoParsePromptFile(source: string): { overrides: Record<string, string
 
 function demoGroupRelationGraph(groupID: string) {
   const botID = "10000";
-  const names = ["阿星", "小鹿", "白桃乌龙", "鱼丸", "今天也想睡觉", "Kuro", "柚子", "南瓜", "七七", "老陈", "Mio", "葡萄冻", "一只猫猫", "阿泽"];
+  const names = ["阿星", "小鹿", "白桃乌龙", "鱼丸", "今天也想睡觉", "Kuro", "柚子", "南瓜", "七七", "老陈", "Mio", "葡萄冻", "一只猫猫", "阿泽", "星野", "小林", "汤圆", "Nana", "橘子汽水", "阿木", "雪碧", "豆豆", "Leo", "芋圆", "青柠", "可乐", "小周", "Ray", "布丁", "山竹"];
   const nodes = [
     { user_id: botID, display_name: "Diana", messages: 120, favorability: 0, is_bot: true },
     ...names.map((name, index) => ({ user_id: String(20001 + index), display_name: name, messages: Math.round(160 / (index + 1.4)) + 3, favorability: 40 - index * 6 }))
@@ -2701,5 +2701,5 @@ function demoGroupRelationGraph(groupID: string) {
     if ((i + j) % 2 === 0) edges.push({ source: String(20001 + i), target: String(20001 + j), weight });
   }
   edges.sort((a, b) => b.weight - a.weight);
-  return { group_id: groupID, bot_id: botID, messages: 980, participants: 23, nodes, edges };
+  return { group_id: groupID, bot_id: botID, messages: 1860, participants: 42, nodes, edges };
 }
