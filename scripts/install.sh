@@ -368,7 +368,7 @@ archive_name="$package_name.tar.gz"
 base_url="https://github.com/$repo/releases/download/$version"
 temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/diana-install.XXXXXX")
 archive_path="$temp_dir/$archive_name"
-sums_path="$temp_dir/SHA256SUMS.txt"
+manifest_path="$temp_dir/latest.json"
 stage_dir="$temp_dir/stage"
 
 cleanup() {
@@ -376,9 +376,12 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-download "Download → SHA256SUMS.txt" "$base_url/SHA256SUMS.txt" "$sums_path"
+download "Download → latest.json" "$base_url/latest.json" "$manifest_path"
 
-expected=$(awk -v name="$archive_name" '$2 == name || $2 == "*" name { print $1; exit }' "$sums_path")
+# 摘要写在 latest.json 的 packages 里。不依赖 jq：去掉空白后按 } 切成对象，
+# 找 asset 是本平台包的那一个，取它的 sha256。
+expected=$(tr -d ' \t\r\n' <"$manifest_path" |
+  awk -v RS='}' -v key="\"asset\":\"$archive_name\"" 'index($0, key) && match($0, /"sha256":"[0-9a-fA-F]*"/) { print substr($0, RSTART + 10, RLENGTH - 11); exit }')
 case "$expected" in
   ""|*[!0-9a-fA-F]*) fail "SHA-256 entry for $archive_name was not found" ;;
 esac

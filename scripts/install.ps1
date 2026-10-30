@@ -172,18 +172,17 @@ $archiveName = "diana-windows-amd64.exe"
 $baseUrl = "https://github.com/$repository/releases/download/$version"
 $tempDir = Join-Path ([IO.Path]::GetTempPath()) ("diana-install-" + [guid]::NewGuid().ToString("N"))
 $archivePath = Join-Path $tempDir $archiveName
-$sumsPath = Join-Path $tempDir "SHA256SUMS.txt"
+$manifestPath = Join-Path $tempDir "latest.json"
 
 try {
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-    Get-DianaDownload "$baseUrl/SHA256SUMS.txt" $sumsPath "SHA256SUMS.txt"
+    Get-DianaDownload "$baseUrl/latest.json" $manifestPath "latest.json"
 
-    $checksumLine = Get-Content $sumsPath | Where-Object {
-        $parts = $_ -split '\s+', 2
-        $parts.Count -eq 2 -and $parts[1].TrimStart('*') -eq $archiveName
-    } | Select-Object -First 1
-    if (-not $checksumLine) { throw "SHA-256 entry for $archiveName was not found." }
-    $expected = ($checksumLine -split '\s+')[0].ToLowerInvariant()
+    # 摘要写在 latest.json 的 packages 里，取 asset 是本平台包的那一条。
+    $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $rule = @($manifest.releases | ForEach-Object { $_.packages } | Where-Object { $_.asset -eq $archiveName }) | Select-Object -First 1
+    if (-not $rule -or -not $rule.sha256) { throw "SHA-256 entry for $archiveName was not found." }
+    $expected = ([string]$rule.sha256).ToLowerInvariant()
     if ($expected -notmatch '^[0-9a-f]{64}$') { throw "Invalid SHA-256 entry for $archiveName." }
     Get-DianaDownload "$baseUrl/$archiveName" $archivePath "Diana $version for windows/amd64"
     $actual = (Get-FileHash -Algorithm SHA256 -Path $archivePath).Hash.ToLowerInvariant()

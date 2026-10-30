@@ -35,7 +35,7 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 		t.Fatal("missing platform matrix")
 	}
 	var uploadPatterns, publishPatterns []string
-	var buildScript, checksumScript, manifestScript string
+	var buildScript, manifestScript string
 	for _, step := range build.Steps {
 		if strings.HasPrefix(step.Uses, "actions/upload-artifact@") {
 			uploadPatterns = strings.Fields(step.With["path"])
@@ -48,9 +48,6 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 		for _, step := range job.Steps {
 			if strings.HasPrefix(step.Uses, "softprops/action-gh-release@") {
 				publishPatterns = strings.Fields(step.With["files"])
-			}
-			if step.Name == "Generate SHA-256 checksums" {
-				checksumScript = step.Run
 			}
 			if step.Name == "Generate static update manifest" {
 				manifestScript = step.Run
@@ -98,11 +95,12 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 	if strings.Contains(buildScript, "frontend-next/dist") {
 		t.Error("packages must not ship a frontend directory")
 	}
-	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS.txt") {
-		t.Fatal("checksums must cover only complete packages")
+	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe; do") {
+		t.Fatal("update manifest must list only the platform downloads")
 	}
-	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS.txt; do") {
-		t.Fatal("update manifest must list only packages and checksums")
+	// 摘要只写进 latest.json，更新器和安装脚本都从这里取。
+	if !strings.Contains(manifestScript, `sha256=$(sha256sum "$file" | cut -d ' ' -f 1)`) {
+		t.Fatal("update manifest must carry each package's SHA-256")
 	}
 }
 

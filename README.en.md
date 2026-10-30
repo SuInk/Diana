@@ -70,7 +70,7 @@ Help me install the latest stable release of Diana on this machine. First read t
 | Linux ARM64 | [diana-linux-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-arm64.tar.gz) | Extract, then run `./run.sh` |
 | Android (Termux) | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | Extract inside Termux and run `./run.sh`. It is the server running on your phone, not an Android app; the Linux one-click command above also works in Termux |
 
-The WebUI is built into the program, so no Node.js is needed. Verify downloads against [`SHA256SUMS.txt`](https://github.com/SuInk/Diana/releases/latest/download/SHA256SUMS.txt) from the same release; older versions are on the [Releases](https://github.com/SuInk/Diana/releases) page. A manual download does not register the `diana` command; use `./diana-webui <command>` (Windows: `diana-webui.exe <command>`) instead.
+The WebUI is built into the program, so no Node.js is needed. Each file's SHA-256 is listed in the same release's [`latest.json`](https://github.com/SuInk/Diana/releases/latest/download/latest.json) and shown next to the file on the Releases page; older versions are on the [Releases](https://github.com/SuInk/Diana/releases) page. A manual download does not register the `diana` command; use `./diana-webui <command>` (Windows: `diana-webui.exe <command>`) instead.
 
 **② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output and shown only once, so save them right away (for Docker, check `docker logs diana`). The password is stored only as a hash in the database, not in `config.yaml`; if you forget it, reset it with `diana passwd` (see below).
 

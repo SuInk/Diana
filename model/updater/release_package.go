@@ -51,10 +51,13 @@ type ReleaseAsset struct {
 	Size int64
 }
 
-// ReleasePackage contains the platform package and its checksum manifest.
+// ReleasePackage contains the platform package and how to verify it.
 type ReleasePackage struct {
-	Tag       string
-	Archive   ReleaseAsset
+	Tag     string
+	Archive ReleaseAsset
+	// SHA256 是 latest.json 里写好的包摘要。为空时（较早的版本）下载 Checksums
+	// 指向的 sha256sum 格式清单再从里面查。
+	SHA256    string
 	Checksums ReleaseAsset
 	// Format、Binary、InstallAs 来自 latest.json 的平台规则：包是什么格式（exe 或
 	// tar.gz）、程序在包里的路径、装好后叫什么。都为空时按 ExpectedReleaseAssetName
@@ -68,6 +71,7 @@ type ReleasePackage struct {
 type resolvedReleasePackage struct {
 	format string
 	binary string
+	digest string // 清单直接给的摘要；为空时去校验文件里查
 }
 
 func (u *ReleasePackageUpdater) resolvePackage(release ReleasePackage) (resolvedReleasePackage, error) {
@@ -75,9 +79,25 @@ func (u *ReleasePackageUpdater) resolvePackage(release ReleasePackage) (resolved
 	if !safeReleaseFileName(assetName) || strings.TrimSpace(release.Archive.URL) == "" {
 		return resolvedReleasePackage{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
 	}
-	if !safeReleaseFileName(release.Checksums.Name) || strings.TrimSpace(release.Checksums.URL) == "" {
+	rule, err := u.resolvePackageFormat(release)
+	if err != nil {
+		return resolvedReleasePackage{}, err
+	}
+	if digest := strings.ToLower(strings.TrimSpace(release.SHA256)); digest != "" {
+		if decoded, err := hex.DecodeString(digest); err != nil || len(decoded) != sha256.Size {
+			return resolvedReleasePackage{}, fmt.Errorf("%w: invalid digest for %s", ErrChecksumMissing, assetName)
+		}
+		rule.digest = digest
+		return rule, nil
+	}
+	if !safeReleaseFileName(release.Checksums.Name) || !validReleaseDownloadURL(release.Checksums.URL) {
 		return resolvedReleasePackage{}, ErrChecksumMissing
 	}
+	return rule, nil
+}
+
+func (u *ReleasePackageUpdater) resolvePackageFormat(release ReleasePackage) (resolvedReleasePackage, error) {
+	assetName := release.Archive.Name
 	if release.Format == "" {
 		if assetName != u.assetName {
 			return resolvedReleasePackage{}, fmt.Errorf("%w: %s", ErrReleaseAssetMissing, u.assetName)
@@ -469,7 +489,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err != nil {
 		return Result{}, err
 	}
-	if !validReleaseDownloadURL(release.Archive.URL) || !validReleaseDownloadURL(release.Checksums.URL) {
+	if !validReleaseDownloadURL(release.Archive.URL) {
 		return Result{}, errors.New("updater: release asset URL must use HTTPS")
 	}
 	if pending, ok := u.pendingUpdate(); ok && pending.TargetVersion == release.Tag && !force {
@@ -505,20 +525,22 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		mirrorBase = u.mirror.Base(ctx, release.Archive.URL)
 	}
 
-	checksumPath := filepath.Join(workRoot, "checksums")
-	u.setProgress("checksum", 0, release.Archive.Size)
-	// 校验清单优先直连：它是整个下载的信任锚，而且只有几 KB，加不加速都一样快。
-	// 镜像只是直连不通时的兜底——套了镜像的包也得先对得上这份清单里的摘要。
-	if _, err := downloadReleaseFile(ctx, u.httpClient, checksumSources(release.Checksums.URL, mirrorBase), checksumPath, maxChecksumBytes, nil); err != nil {
-		return Result{}, fmt.Errorf("download %s: %w", release.Checksums.Name, err)
-	}
-	manifest, err := os.ReadFile(checksumPath)
-	if err != nil {
-		return Result{}, err
-	}
-	wantDigest, err := checksumForAsset(manifest, assetName)
-	if err != nil {
-		return Result{}, err
+	wantDigest := rule.digest
+	if wantDigest == "" {
+		checksumPath := filepath.Join(workRoot, "checksums")
+		u.setProgress("checksum", 0, release.Archive.Size)
+		// 校验清单优先直连：它是整个下载的信任锚，而且只有几 KB，加不加速都一样快。
+		// 镜像只是直连不通时的兜底——套了镜像的包也得先对得上这份清单里的摘要。
+		if _, err := downloadReleaseFile(ctx, u.httpClient, checksumSources(release.Checksums.URL, mirrorBase), checksumPath, maxChecksumBytes, nil); err != nil {
+			return Result{}, fmt.Errorf("download %s: %w", release.Checksums.Name, err)
+		}
+		manifest, err := os.ReadFile(checksumPath)
+		if err != nil {
+			return Result{}, err
+		}
+		if wantDigest, err = checksumForAsset(manifest, assetName); err != nil {
+			return Result{}, err
+		}
 	}
 	archivePath := filepath.Join(workRoot, assetName)
 	u.setProgress("downloading", 0, release.Archive.Size)

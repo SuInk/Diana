@@ -184,20 +184,16 @@ func TestReleasePackageUpdaterStagesWindowsExecutable(t *testing.T) {
 }
 
 func TestReleasePackageUpdaterFollowsManifestRule(t *testing.T) {
-	// 清单里的包名、校验文件名都和命名约定不同，更新器照清单走。
+	// 包名和命名约定不同、摘要直接写在清单里，更新器照清单走，不下载校验文件。
 	assetName := "diana-next-linux-amd64.tar.gz"
 	archive := releaseTarFixture(t, assetName, "diana-webui")
 	digest := sha256.Sum256(archive)
-	manifest := []byte(hex.EncodeToString(digest[:]) + "  " + assetName + "\n")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/" + assetName:
-			_, _ = w.Write(archive)
-		case "/CHECKSUMS.txt":
-			_, _ = w.Write(manifest)
-		default:
+		if r.URL.Path != "/"+assetName {
 			http.NotFound(w, r)
+			return
 		}
+		_, _ = w.Write(archive)
 	}))
 	defer server.Close()
 
@@ -226,7 +222,7 @@ func TestReleasePackageUpdaterFollowsManifestRule(t *testing.T) {
 	release := ReleasePackage{
 		Tag:       "v0.5.0",
 		Archive:   ReleaseAsset{Name: assetName, URL: server.URL + "/" + assetName},
-		Checksums: ReleaseAsset{Name: "CHECKSUMS.txt", URL: server.URL + "/CHECKSUMS.txt"},
+		SHA256:    hex.EncodeToString(digest[:]),
 		Format:    "tar.gz",
 		Binary:    "diana-next-linux-amd64/diana-webui",
 		InstallAs: "diana-webui",
@@ -235,6 +231,11 @@ func TestReleasePackageUpdaterFollowsManifestRule(t *testing.T) {
 	renamed.InstallAs = "diana"
 	if _, err := u.Download(context.Background(), renamed, false); err == nil || !strings.Contains(err.Error(), "rerun the one-click installer") {
 		t.Fatalf("Download() with a renamed program error = %v", err)
+	}
+	wrongDigest := release
+	wrongDigest.SHA256 = strings.Repeat("0", 64)
+	if _, err := u.Download(context.Background(), wrongDigest, false); !errors.Is(err, ErrChecksumMismatch) {
+		t.Fatalf("Download() with a wrong digest error = %v", err)
 	}
 	escaping := release
 	escaping.Binary = "../diana-webui"

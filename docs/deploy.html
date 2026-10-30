@@ -41,7 +41,7 @@
         </div>
         <ol class="steps compact">
           <li><span>1</span><div><h3>识别平台</h3><p>根据 OS 和 CPU 选择正确的完整归档，拒绝不受支持的平台。</p></div></li>
-          <li><span>2</span><div><h3>下载并校验</h3><p>同时下载 Release 的 <code>SHA256SUMS.txt</code>，校验成功后才解压。</p></div></li>
+          <li><span>2</span><div><h3>下载并校验</h3><p>同时下载 Release 的 <code>latest.json</code>，SHA-256 对上后才安装。</p></div></li>
           <li><span>3</span><div><h3>备份再切换</h3><p>备份数据库、WAL/SHM、前端、旧二进制和启动脚本；保留已有 <code>config.yaml</code>。</p></div></li>
           <li><span>4</span><div><h3>启动并探活</h3><p>最多等待 45 秒访问 <code>/api/health</code>。Unix 更新失败时恢复上一套运行文件。</p></div></li>
         </ol>
@@ -67,7 +67,7 @@
 
       <section class="section searchable" id="manual-release">
         <div class="section-heading"><p class="eyebrow">备用方式</p><h2>手工安装完整 Release 包</h2></div>
-        <p>离线环境或需要人工变更审批时，手动下载匹配平台的文件和同一 Release 的 <code>SHA256SUMS.txt</code>。Windows 是单个 <code>diana-windows-amd64.exe</code>，放进单独的文件夹双击即可运行；macOS、Linux 和安卓 Termux 是 <code>.tar.gz</code> 完整包，含程序和启动脚本。WebUI 已编进程序，无需单独部署或安装 Node.js。</p>
+        <p>离线环境或需要人工变更审批时，手动下载匹配平台的文件，对照同一 Release 的 <code>latest.json</code> 或 Release 页面显示的 SHA-256 校验。Windows 是单个 <code>diana-windows-amd64.exe</code>，放进单独的文件夹双击即可运行；macOS、Linux 和安卓 Termux 是 <code>.tar.gz</code> 完整包，含程序和启动脚本。WebUI 已编进程序，无需单独部署或安装 Node.js。</p>
         <pre><code># macOS Apple Silicon 示例
 shasum -a 256 diana-macos-arm64.tar.gz
 tar -xzf diana-macos-arm64.tar.gz

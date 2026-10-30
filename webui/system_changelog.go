@@ -158,13 +158,20 @@ func fetchGitHubReleases(ctx context.Context, client *http.Client, apiBase, owne
 		if runes := []rune(notes); len(runes) > releaseNotesMaxRunes {
 			notes = string(runes[:releaseNotesMaxRunes]) + "…"
 		}
-		checksumURL := ""
+		// 较早的版本另发校验文件；新版本只把摘要写进 latest.json。
+		checksumURL, manifestURL := "", ""
 		assets := make([]ReleaseAsset, 0, len(item.Assets))
 		for _, asset := range item.Assets {
 			assets = append(assets, ReleaseAsset{Name: asset.Name, URL: asset.BrowserDownloadURL, Size: asset.Size})
-			if isChecksumsAsset(asset.Name) && checksumURL == "" {
+			switch {
+			case isChecksumsAsset(asset.Name):
 				checksumURL = asset.BrowserDownloadURL
+			case asset.Name == releaseManifestAsset:
+				manifestURL = asset.BrowserDownloadURL
 			}
+		}
+		if checksumURL == "" {
+			checksumURL = manifestURL
 		}
 		entries = append(entries, ReleaseEntry{
 			Tag:               item.TagName,

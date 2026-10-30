@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/SuInk/diana/model/updater"
@@ -21,21 +20,22 @@ const (
 	releaseManifestMaxBytes = 1 << 20
 )
 
-// checksumsAssetNames 是规则没写 checksums 时依次找的校验文件。SHA256SUMS 是
-// v0.9.0 及更早版本的名字，回退到这些版本、显示版本历史时还要认。
-var checksumsAssetNames = []string{"SHA256SUMS.txt", "SHA256SUMS"}
+// legacyChecksumsAsset 是 v0.9.0 及更早单独发的校验文件。新版本的摘要写在
+// latest.json 里；回退到旧版本、显示版本历史时还要认它。
+const legacyChecksumsAsset = "SHA256SUMS"
 
 func isChecksumsAsset(name string) bool {
-	return slices.Contains(checksumsAssetNames, name)
+	return name == legacyChecksumsAsset
 }
 
-// ReleasePackageRule 是 latest.json 里一个平台的更新规则：下哪个文件、拿哪个文件
-// 校验、包是什么格式、程序在包里的位置、装好后叫什么。发布流程改包名或格式时只
+// ReleasePackageRule 是 latest.json 里一个平台的更新规则：下哪个文件、它的 sha256、
+// 包是什么格式、程序在包里的位置、装好后叫什么。发布流程改包名或格式时只
 // 改清单，已装好的更新器照着走，不用再在代码里留兼容。
 type ReleasePackageRule struct {
 	OS        string `json:"os"`
 	Arch      string `json:"arch"`
 	Asset     string `json:"asset"`
+	SHA256    string `json:"sha256,omitempty"`
 	Format    string `json:"format"`
 	Binary    string `json:"binary,omitempty"`
 	InstallAs string `json:"install_as,omitempty"`
@@ -67,27 +67,27 @@ func (h *SystemUpdateHandler) releasePackage(ctx context.Context, entry ReleaseE
 	if !ok {
 		return updater.ReleasePackage{}, fmt.Errorf("%w: %s", updater.ErrReleaseAssetMissing, rule.Asset)
 	}
-	checksumsNames := checksumsAssetNames
-	if name := strings.TrimSpace(rule.Checksums); name != "" {
-		checksumsNames = []string{name}
-	}
-	var checksums ReleaseAsset
-	for _, name := range checksumsNames {
-		if checksums, ok = entry.asset(name); ok {
-			break
-		}
-	}
-	if !ok {
-		return updater.ReleasePackage{}, updater.ErrChecksumMissing
-	}
-	return updater.ReleasePackage{
+	release := updater.ReleasePackage{
 		Tag:       entry.Tag,
 		Archive:   updater.ReleaseAsset{Name: archive.Name, URL: archive.URL, Size: archive.Size},
-		Checksums: updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size},
+		SHA256:    rule.SHA256,
 		Format:    rule.Format,
 		Binary:    rule.Binary,
 		InstallAs: rule.InstallAs,
-	}, nil
+	}
+	if strings.TrimSpace(rule.SHA256) != "" {
+		return release, nil
+	}
+	checksumsName := strings.TrimSpace(rule.Checksums)
+	if checksumsName == "" {
+		checksumsName = legacyChecksumsAsset
+	}
+	checksums, ok := entry.asset(checksumsName)
+	if !ok {
+		return updater.ReleasePackage{}, updater.ErrChecksumMissing
+	}
+	release.Checksums = updater.ReleaseAsset{Name: checksums.Name, URL: checksums.URL, Size: checksums.Size}
+	return release, nil
 }
 
 // publishedPackageRules 读某个版本自带的 latest.json，按标签缓存。读不到就当没有

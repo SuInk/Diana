@@ -42,21 +42,21 @@ Canary 标签由 CI 在合并提交上创建，标记为 GitHub Prerelease，不
 2. 后续测试版使用 `v0.8.127-beta.2` 等标签。需要候选阶段时可用 `v0.8.127-rc.1`。
 3. 发布正式版时将源码版本改为 `v0.8.127`，按相同的验证和合并流程发布。每次标签必须与源码 VERSION 完全相同。
 
-CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包、SHA256SUMS.txt 和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
+CI 自动将 Beta/RC 标记为 GitHub Prerelease，不设置为最新正式 Release；完整包和 latest.json 与正式版使用相同的构建和校验流程。latest.json 包含 prerelease 标记。中文更新说明、平台产物检查和下载校验仍按 AGENTS.md 发布要求完成。
 
 ### latest.json 的平台规则
 
 每个版本的 `packages` 写明各平台怎么更新，WebUI 里的更新器照着走，不再从包名推：
 
 ```json
-{"os": "windows", "arch": "amd64", "asset": "diana-windows-amd64.exe", "format": "exe",
- "install_as": "diana-webui.exe", "checksums": "SHA256SUMS.txt"}
-{"os": "linux", "arch": "amd64", "asset": "diana-linux-amd64.tar.gz", "format": "tar.gz",
- "binary": "diana-linux-amd64/diana-webui", "install_as": "diana-webui", "checksums": "SHA256SUMS.txt"}
+{"os": "windows", "arch": "amd64", "asset": "diana-windows-amd64.exe", "sha256": "e703…e227",
+ "format": "exe", "install_as": "diana-webui.exe"}
+{"os": "linux", "arch": "amd64", "asset": "diana-linux-amd64.tar.gz", "sha256": "b13f…ce8f",
+ "format": "tar.gz", "binary": "diana-linux-amd64/diana-webui", "install_as": "diana-webui"}
 ```
 
 - `asset`：要下载的文件，必须出现在同一版本的资产列表里，下载地址取自资产列表，不拿规则拼。
-- `checksums`：校验文件名，格式同 `sha256sum` 输出，`asset` 必须在里面。
+- `sha256`：包的摘要。Release 不另发校验文件，一键安装脚本也从这里取；GitHub 的 Release 页面也会给每个文件显示 sha256，手动下载可以对照。较早的版本没有这个字段，更新器退回去读当时发的 `SHA256SUMS`。
 - `format`：`exe` 是程序本身，下载后直接改名替换；`tar.gz` 解压后取 `binary` 指的文件，同目录的 `run.sh`、`README.txt` 一并更新。
 - `install_as`：装好后的程序名。和当前安装的程序名不同时更新器拒绝，提示重跑一键安装，因为改名要连带改服务和命令入口。
 

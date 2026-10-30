@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -56,6 +57,7 @@ func TestReleasePackageReadsPublishedManifestForAPIReleases(t *testing.T) {
 			"tag": "v1.2.3",
 			"packages": []map[string]string{{
 				"os": runtime.GOOS, "arch": runtime.GOARCH, "asset": "diana-new-name.bin", "format": "exe",
+				"sha256": strings.Repeat("ab", 32),
 			}},
 		}}})
 	}))
@@ -65,7 +67,6 @@ func TestReleasePackageReadsPublishedManifestForAPIReleases(t *testing.T) {
 	h.SetReleasePackageUpdater(&recordingReleasePackageUpdater{expected: "diana-old-name.tar.gz"})
 	entry := ReleaseEntry{Tag: "v1.2.3", Assets: []ReleaseAsset{
 		{Name: "diana-new-name.bin", URL: "https://example.test/new"},
-		{Name: "SHA256SUMS.txt", URL: "https://example.test/sums"},
 		{Name: "latest.json", URL: server.URL + "/latest.json"},
 	}}
 	for range 2 {
@@ -73,7 +74,7 @@ func TestReleasePackageReadsPublishedManifestForAPIReleases(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if release.Archive.Name != "diana-new-name.bin" || release.Format != "exe" || release.Checksums.Name != "SHA256SUMS.txt" {
+		if release.Archive.Name != "diana-new-name.bin" || release.Format != "exe" || release.SHA256 != strings.Repeat("ab", 32) || release.Checksums.URL != "" {
 			t.Fatalf("releasePackage() = %#v", release)
 		}
 	}

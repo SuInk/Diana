@@ -70,7 +70,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 | Linux ARM64 | [diana-linux-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-arm64.tar.gz) | 解压后运行 `./run.sh` |
 | 安卓（Termux） | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 `./run.sh`；它是跑在手机上的服务端，不是安卓 App。Termux 里也能直接用上面的 Linux 一键命令 |
 
-WebUI 已编进程序，不需要装 Node.js。校验用同一 Release 的 [`SHA256SUMS.txt`](https://github.com/SuInk/Diana/releases/latest/download/SHA256SUMS.txt)，历史版本见 [Releases](https://github.com/SuInk/Diana/releases)。手动下载的不会注册 `diana` 命令，管理命令用 `./diana-webui <命令>`（Windows：`diana-webui.exe <命令>`）。
+WebUI 已编进程序，不需要装 Node.js。每个文件的 SHA-256 写在同一 Release 的 [`latest.json`](https://github.com/SuInk/Diana/releases/latest/download/latest.json) 里，Release 页面每个文件旁也有显示；历史版本见 [Releases](https://github.com/SuInk/Diana/releases)。手动下载的不会注册 `diana` 命令，管理命令用 `./diana-webui <命令>`（Windows：`diana-webui.exe <命令>`）。
 
 **② 登录控制台。** 浏览器打开 `http://127.0.0.1:18080`（从别的设备访问就换成这台机器的 IP）。管理员账号密码在安装结束时显示在终端里，**只显示一次，请当场保存**；Docker 可用 `docker logs diana` 查看。忘了密码运行 `diana passwd` 重置。
 
