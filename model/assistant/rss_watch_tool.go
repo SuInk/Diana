@@ -17,7 +17,7 @@ import (
 )
 
 // bilibiliSourcesDescription 是 B 站来源参数的说明，rss 工具和 subscription 共用。
-var bilibiliSourcesDescription = "B 站订阅：dynamic:UID 订阅 UP 主动态（含新投稿），live:UID 或 live.bilibili.com/房间号 订阅开播，bangumi:ss编号/ep编号 或番剧播放页链接 订阅新集；空间链接 space.bilibili.com/UID 视为动态；与其他来源合计最多 " + itoa(maximumRSSWatchSources) + " 个"
+var bilibiliSourcesDescription = "B 站：dynamic:UID 动态，live:UID 开播，bangumi:ss号 番剧；也认页面链接"
 
 const (
 	minimumRSSWatchInterval = 5 * time.Minute
