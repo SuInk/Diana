@@ -24,14 +24,11 @@ import (
 // 片段按零长度算，所以量出来的是下限。
 const (
 	toolMainDescriptionMaxRunes  = 300
-	toolParamDescriptionMaxRunes = 60
+	toolParamDescriptionMaxRunes = 120
 )
 
 // 确实需要超长的写在这里并写明原因。行号会随编辑漂移，所以键用「文件名:描述开头十个字」。
-var toolDescriptionBudgetExemptions = map[string]string{
-	// 五种头像来源写法本身就占 70 多字，不能改成 enum（带 <user_id> 占位）。
-	"image_agent_tool.go:点名头像，优先于当前": "头像来源取值清单",
-}
+var toolDescriptionBudgetExemptions = map[string]string{}
 
 var toolParamHelper = regexp.MustCompile(`^tool[A-Za-z]*Param$`)
 
