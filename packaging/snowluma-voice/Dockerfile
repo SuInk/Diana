@@ -5,13 +5,14 @@
 #
 # 说明见 docs/qq-voice-call.md。
 
-FROM golang:1.25-bookworm AS build
+FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm AS build
+ARG TARGETOS TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY model/qqcall model/qqcall
 COPY cmd/qqcall-agent cmd/qqcall-agent
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /qqcall-agent ./cmd/qqcall-agent
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /qqcall-agent ./cmd/qqcall-agent
 
 ARG SNOWLUMA_IMAGE=motricseven7/snowluma:v1.14.10
 FROM ${SNOWLUMA_IMAGE}

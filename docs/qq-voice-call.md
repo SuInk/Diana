@@ -31,7 +31,13 @@ QQ 的语音是闭源的音视频 SDK，协议不开放，没法自己写一个�
 
 ### 1. 换用带语音组件的 SnowLuma 镜像
 
-在仓库根目录构建：
+直接拉现成的（amd64、arm64 都有），标签和 SnowLuma 版本一致：
+
+```bash
+docker pull ghcr.io/suink/snowluma-voice:latest
+```
+
+镜像由 `.github/workflows/snowluma-voice.yml` 构建：相关代码合进 main 时自动发布；SnowLuma 出新版时，到 Actions 手动运行它并填上游版本号（如 `v1.14.11`），或者改 Dockerfile 里的 `SNOWLUMA_IMAGE` 默认值。也可以在仓库根目录自己构建：
 
 ```bash
 docker build -f packaging/snowluma-voice/Dockerfile -t snowluma-voice .
