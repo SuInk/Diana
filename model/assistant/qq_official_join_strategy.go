@@ -265,7 +265,8 @@ func (r *Runtime) qqJoinLLMReview(ctx context.Context, event MessageEvent, raw q
 	defer cancel()
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeQQJoinReview)
 	group := llm.GroupChat
-	if id := strings.TrimSpace(settings.String(qqJoinSettingLLMModel, "")); id != "" {
+	id, model := parseLLMProfileSetting(settings.String(qqJoinSettingLLMModel, ""))
+	if id != "" {
 		if err := r.validateRSSModel(id); err != nil {
 			return "", "", fmt.Errorf("入群审批指定的模型 %q 不可用，请重新选择", id)
 		}
@@ -292,7 +293,7 @@ func (r *Runtime) qqJoinLLMReview(ctx context.Context, event MessageEvent, raw q
 		"入群要求：" + requirement + "\n" +
 		`只输出一行 JSON：{"decision":"approve|decline|pending","reason":"一句话理由"}。拿不准就 pending。`
 	text, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+		resp, err := client.Generate(ctx, llm.GenerateRequest{Model: model, Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: system},
 			{Role: llm.RoleUser, Content: "申请内容：" + string(application)},
 		}})

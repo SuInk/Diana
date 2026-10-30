@@ -62,3 +62,15 @@ func TestEveryDeclaredPluginSettingTypeIsSupported(t *testing.T) {
 		}
 	}
 }
+
+func TestParseLLMProfileSetting(t *testing.T) {
+	for value, want := range map[string][2]string{
+		`["provider-a","model-x"]`: {"provider-a", "model-x"},
+		"provider-a":               {"provider-a", ""},
+		"":                         {"", ""},
+	} {
+		if id, model := parseLLMProfileSetting(value); id != want[0] || model != want[1] {
+			t.Fatalf("%q -> %q %q", value, id, model)
+		}
+	}
+}

@@ -25,13 +25,16 @@ const emit = defineEmits<{
 const controlID = computed(() => props.fieldID ?? `setting-${props.spec.key}`);
 const labelID = computed(() => `${controlID.value}-label`);
 
-// llm_profile：选一个文本模型配置，空串跟随对话模型。只在出现这种设置时才拉配置。
+// llm_profile：任选一个提供商和它目录里的模型，存成 JSON 的 [提供商ID, 模型]；空串跟随对话模型。
+// 只在出现这种设置时才拉配置。写法和群管理页的群聊模型一致。
 const llmChannels = ref<LLMConfig[]>([]);
 const llmProfileOptions = computed(() => {
   const options = [{ value: "", label: "跟随对话模型" }];
   for (const channel of llmChannels.value) {
     if (!channel.id || ["image", "embedding", "tts", "stt", "video"].includes(channel.group || "")) continue;
-    options.push({ value: channel.id, label: `${channel.name || channel.id} · ${channel.model || "默认模型"}` });
+    const disabled = new Set((channel.models ?? []).filter(model => model.disabled).map(model => model.id));
+    const models = new Set([channel.model, ...(channel.models ?? []).map(model => model.id)].filter(model => model && !disabled.has(model)));
+    for (const model of models) options.push({ value: JSON.stringify([channel.id, model]), label: `${channel.name || channel.id} · ${model}` });
   }
   const selected = props.form[props.spec.key];
   if (selected && !options.some(option => option.value === selected)) options.push({ value: selected, label: `配置已不可用：${selected}` });

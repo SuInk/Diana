@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
@@ -64,6 +65,17 @@ type PluginSettingSpec struct {
 	ConfigureBy []string `json:"configure_by,omitempty"`
 	// ShowWhen 让设置项只在另一个设置取某些值时显示，减少用不到的输入框。只影响界面。
 	ShowWhen *PluginSettingCondition `json:"show_when,omitempty"`
+}
+
+// parseLLMProfileSetting 拆开 llm_profile 设置：JSON 的 [提供商ID, 模型]；只填了
+// 提供商 ID 的旧写法按它的默认模型。
+func parseLLMProfileSetting(value string) (profileID, model string) {
+	value = strings.TrimSpace(value)
+	var pair []string
+	if strings.HasPrefix(value, "[") && json.Unmarshal([]byte(value), &pair) == nil && len(pair) == 2 {
+		return strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
+	}
+	return value, ""
 }
 
 // PluginSettingCondition 是「Key 的当前值在 Values 里」。
