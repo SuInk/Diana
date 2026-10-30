@@ -62,6 +62,14 @@ type PluginSettingSpec struct {
 	// administrators may edit group overrides, and members cannot edit shared
 	// settings. Values are owner, group_admin and member.
 	ConfigureBy []string `json:"configure_by,omitempty"`
+	// ShowWhen 让设置项只在另一个设置取某些值时显示，减少用不到的输入框。只影响界面。
+	ShowWhen *PluginSettingCondition `json:"show_when,omitempty"`
+}
+
+// PluginSettingCondition 是「Key 的当前值在 Values 里」。
+type PluginSettingCondition struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values"`
 }
 
 const (

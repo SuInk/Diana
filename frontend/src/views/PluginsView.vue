@@ -1230,7 +1230,7 @@ const repositoryPublishStarSpec = computed(() => repositoryPublishSpecs.value.fi
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() =>
-  isGitHubSettings.value ? [] : settingsSpecs.value
+  isGitHubSettings.value ? [] : settingsSpecs.value.filter(spec => !spec.show_when || spec.show_when.values.includes(String(settingsForm.value[spec.show_when.key] ?? "")))
 );
 // 这些键要么由仓库管理和凭据编辑器维护，要么是不该渲染成裸文本框的内部存档。
 const repositoryManagedKeys = new Set([

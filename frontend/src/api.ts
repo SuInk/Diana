@@ -580,6 +580,8 @@ export interface PluginSettingSpec {
   label: string;
   description?: string;
   type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents" | "llm_profile";
+  /** 只在另一个设置取这些值时显示。 */
+  show_when?: { key: string; values: string[] };
   default: unknown;
   min?: number;
   max?: number;

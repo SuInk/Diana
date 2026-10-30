@@ -392,10 +392,7 @@ func TestQQOfficialGroupMemberFallsBackToMessageRole(t *testing.T) {
 }
 
 func TestQQJoinDecisionRules(t *testing.T) {
-	settings := SettingValues{
-		qqJoinSettingMode: qqJoinModeKeywords, qqJoinSettingApproveWords: "校友\n2024级", qqJoinSettingNicknameWords: "测试组",
-		qqJoinSettingRejectWords: "广告", qqJoinSettingRejectBots: true, qqJoinSettingUnmatched: "pending",
-	}
+	settings := SettingValues{qqJoinSettingMode: qqJoinModeKeywords, qqJoinSettingApproveWords: "校友\n2024级\n测试组", qqJoinSettingRejectWords: "广告"}
 	request := func(body string) qqOfficialGroupEvent {
 		var raw qqOfficialGroupEvent
 		if err := json.Unmarshal([]byte(body), &raw); err != nil {
@@ -410,7 +407,7 @@ func TestQQJoinDecisionRules(t *testing.T) {
 		{"问答答案命中", `{"verify_info":{"review_qa_list":[{"question":"届别","answer":"2024级"}]}}`, "approve"},
 		{"昵称命中", `{"username":"测试组小王"}`, "approve"},
 		{"拒绝词优先", `{"username":"校友广告号","verify_info":{"verify_message":"校友"}}`, "decline"},
-		{"机器人", `{"bot":true,"verify_info":{"verify_message":"校友"}}`, "decline"},
+		{"机器人一律拒绝", `{"bot":true,"verify_info":{"verify_message":"校友"}}`, "decline"},
 		{"都没命中留待办", `{"username":"路人"}`, ""},
 	}
 	for _, c := range cases {
@@ -418,11 +415,7 @@ func TestQQJoinDecisionRules(t *testing.T) {
 			t.Fatalf("%s: got %q want %q", c.name, got, c.want)
 		}
 	}
-	settings[qqJoinSettingUnmatched] = "decline"
-	if got, _ := qqJoinDecision(request(`{"username":"路人"}`), settings); got != "decline" {
-		t.Fatalf("unmatched decline got %q", got)
-	}
-	// 只交给模型时关键词不参与，但拒绝机器人账号照样先生效。
+	// 只交给模型时关键词不参与，但机器人账号照样先拒。
 	settings[qqJoinSettingMode] = qqJoinModeLLM
 	if got, _ := qqJoinDecision(request(`{"verify_info":{"verify_message":"校友"}}`), settings); got != qqJoinDecisionLLM {
 		t.Fatalf("llm mode should skip keywords, got %q", got)

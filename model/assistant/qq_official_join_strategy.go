@@ -177,13 +177,7 @@ func (r *Runtime) QQOfficialJoinStrategy(ctx context.Context, profileID string, 
 const (
 	qqJoinSettingMode           = "mode"
 	qqJoinSettingApproveWords   = "approve_keywords"
-	qqJoinSettingNicknameWords  = "nickname_keywords"
 	qqJoinSettingRejectWords    = "reject_keywords"
-	qqJoinSettingRejectBots     = "reject_bots"
-	qqJoinSettingRejectRisky    = "reject_risky"
-	qqJoinSettingApproveInvited = "approve_invited"
-	qqJoinSettingUnmatched      = "unmatched"
-	qqJoinSettingRejectReason   = "reject_reason"
 	qqJoinSettingRejectDelay    = "reject_delay_minutes"
 	qqJoinSettingLLMModel       = "llm_model"
 	qqJoinSettingLLMRequirement = "llm_requirement"
@@ -196,24 +190,21 @@ const (
 
 func qqJoinApprovalSettings() []PluginSettingSpec {
 	scopes := []string{PluginSettingScopeBot, PluginSettingScopeGroup}
+	when := func(modes ...string) *PluginSettingCondition {
+		return &PluginSettingCondition{Key: qqJoinSettingMode, Values: modes}
+	}
 	return []PluginSettingSpec{
-		{Key: qqJoinSettingMode, Label: "审批方式", Description: "收到入群申请时怎么判。关闭时申请只记成待办，由主人用 platform_requests 处理。「拒绝机器人账号」「拒绝可疑申请」在每种方式下都先生效。平台白名单策略在下方单独管理，两者互不影响。", Type: PluginSettingTypeSelect, Default: qqJoinModeOff, Options: []PluginSettingOption{
+		{Key: qqJoinSettingMode, Label: "审批方式", Description: "关闭时申请只记成待办，由主人处理。机器人账号一律拒绝；拿不准的都留给主人。", Type: PluginSettingTypeSelect, Default: qqJoinModeOff, Options: []PluginSettingOption{
 			{Value: qqJoinModeOff, Label: "关闭"},
 			{Value: qqJoinModeKeywords, Label: "按关键词"},
 			{Value: qqJoinModeLLM, Label: "交给模型判断"},
 			{Value: qqJoinModeBoth, Label: "先按关键词，没命中再交给模型"},
 		}, Scopes: scopes},
-		{Key: qqJoinSettingApproveWords, Label: "验证消息关键词", Description: "验证消息或问答答案里含其中任一词就通过，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes},
-		{Key: qqJoinSettingNicknameWords, Label: "昵称关键词", Description: "申请人昵称含其中任一词就通过，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 2, Scopes: scopes},
-		{Key: qqJoinSettingRejectWords, Label: "拒绝关键词", Description: "验证消息、问答答案或昵称含其中任一词就拒绝，优先于通过规则，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 2, Scopes: scopes},
-		{Key: qqJoinSettingApproveInvited, Label: "群成员邀请的直接通过", Type: PluginSettingTypeBool, Default: false, Scopes: scopes},
-		{Key: qqJoinSettingRejectBots, Label: "拒绝机器人账号", Type: PluginSettingTypeBool, Default: true, Scopes: scopes},
-		{Key: qqJoinSettingRejectRisky, Label: "拒绝平台标记的可疑申请", Description: "平台给出 warning_tips（可疑）时拒绝。", Type: PluginSettingTypeBool, Default: false, Scopes: scopes},
-		{Key: qqJoinSettingLLMModel, Label: "判断用的模型", Description: "留空跟随这台机器人的对话模型。", Type: PluginSettingTypeLLMProfile, Default: "", Scopes: scopes},
-		{Key: qqJoinSettingLLMRequirement, Label: "入群要求", Description: "写给模型看的放行标准，例如「只收本校学生，验证消息要写学院和年级；广告号拒绝」。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes},
-		{Key: qqJoinSettingUnmatched, Label: "关键词都没命中时", Description: "只在「按关键词」方式下用；交给模型的方式由模型决定，拿不准的留给主人。", Type: PluginSettingTypeSelect, Default: "pending", Options: []PluginSettingOption{{Value: "pending", Label: "留给主人处理"}, {Value: "decline", Label: "拒绝"}}, Scopes: scopes},
-		{Key: qqJoinSettingRejectDelay, Label: "拒绝前等待", Description: "命中拒绝后等这么久再拒，期间群管理员可以先手动处理；0 表示立即拒绝。等待期间重启机器人，这条申请会留给主人。通过不等待。", Type: PluginSettingTypeNumber, Default: 0, Min: settingRange(0), Max: settingRange(1440), Step: 1, Unit: "分钟", Scopes: scopes},
-		{Key: qqJoinSettingRejectReason, Label: "拒绝理由", Description: "拒绝时发给申请人，留空不带。", Type: PluginSettingTypeString, Default: "", Scopes: scopes},
+		{Key: qqJoinSettingApproveWords, Label: "通过关键词", Description: "验证消息、问答答案或昵称含其中任一词就通过，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes, ShowWhen: when(qqJoinModeKeywords, qqJoinModeBoth)},
+		{Key: qqJoinSettingRejectWords, Label: "拒绝关键词", Description: "含其中任一词就拒绝，优先于通过关键词，每行一个。", Type: PluginSettingTypeText, Default: "", Rows: 2, Scopes: scopes, ShowWhen: when(qqJoinModeKeywords, qqJoinModeBoth)},
+		{Key: qqJoinSettingLLMRequirement, Label: "入群要求", Description: "写给模型看的放行标准，例如「只收本校学生，验证消息要写学院和年级；广告号拒绝」。", Type: PluginSettingTypeText, Default: "", Rows: 3, Scopes: scopes, ShowWhen: when(qqJoinModeLLM, qqJoinModeBoth)},
+		{Key: qqJoinSettingLLMModel, Label: "判断用的模型", Type: PluginSettingTypeLLMProfile, Default: "", Scopes: scopes, ShowWhen: when(qqJoinModeLLM, qqJoinModeBoth)},
+		{Key: qqJoinSettingRejectDelay, Label: "拒绝前等待", Description: "0 表示立即拒绝；期间有人手动处理过就不再动。", Type: PluginSettingTypeNumber, Default: 0, Min: settingRange(0), Max: settingRange(1440), Step: 1, Unit: "分钟", Scopes: scopes, ShowWhen: when(qqJoinModeKeywords, qqJoinModeLLM, qqJoinModeBoth)},
 	}
 }
 
@@ -251,22 +242,14 @@ func qqJoinDecision(raw qqOfficialGroupEvent, settings SettingValues) (string, s
 	}
 	message := strings.Join(answers, "\n")
 	switch {
+	case raw.Bot:
+		return "decline", "申请人是机器人账号"
 	case keywords && qqJoinContainsAny(message+"\n"+raw.Username, qqJoinKeywords(settings.String(qqJoinSettingRejectWords, ""))):
 		return "decline", "命中拒绝关键词"
-	case raw.Bot && settings.Bool(qqJoinSettingRejectBots, true):
-		return "decline", "申请人是机器人账号"
-	case raw.RiskTips == "warning_tips" && settings.Bool(qqJoinSettingRejectRisky, false):
-		return "decline", "平台标记为可疑申请"
-	case keywords && raw.ApplySource == "invited" && settings.Bool(qqJoinSettingApproveInvited, false):
-		return "approve", "群成员邀请"
-	case keywords && qqJoinContainsAny(message, qqJoinKeywords(settings.String(qqJoinSettingApproveWords, ""))):
-		return "approve", "验证消息命中关键词"
-	case keywords && qqJoinContainsAny(raw.Username, qqJoinKeywords(settings.String(qqJoinSettingNicknameWords, ""))):
-		return "approve", "昵称命中关键词"
+	case keywords && qqJoinContainsAny(message+"\n"+raw.Username, qqJoinKeywords(settings.String(qqJoinSettingApproveWords, ""))):
+		return "approve", "命中通过关键词"
 	case useLLM:
 		return qqJoinDecisionLLM, ""
-	case settings.String(qqJoinSettingUnmatched, "pending") == "decline":
-		return "decline", "没有命中任何通过规则"
 	}
 	return "", ""
 }
@@ -368,7 +351,6 @@ func (r *Runtime) autoReviewQQJoinRequest(ctx context.Context, event MessageEven
 	approve := decision == "approve"
 	reason := ""
 	if !approve {
-		reason = truncateForChat(settings.String(qqJoinSettingRejectReason, ""), oneBotRequestTextLimit)
 		if delay := time.Duration(settings.Int(qqJoinSettingRejectDelay, 0)) * time.Minute; delay > 0 {
 			// 先照常记成待办，到点仍待处理才拒；期间主人或群管理员处理过就不再动。
 			go func() {
