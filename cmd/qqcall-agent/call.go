@@ -162,6 +162,7 @@ func (a *agent) connect(ctx context.Context, c *call) {
 		a.emit(qqcall.Message{Type: qqcall.TypeError, Call: c.id, Error: "音频没接上: " + err.Error()})
 	}
 	go func() {
+		defer recoverGoroutinePanic("peer")
 		peer := waitPeer(ctx, c.logPath, c.logOffset, peerWait)
 		a.mu.Lock()
 		c.peer = peer

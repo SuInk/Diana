@@ -113,8 +113,14 @@ func (a *agent) startAudio(ctx context.Context) error {
 	a.mu.Lock()
 	a.audio = link
 	a.mu.Unlock()
-	go a.uplink(link, stdout)
-	go link.drain()
+	go func() {
+		defer recoverGoroutinePanic("uplink")
+		a.uplink(link, stdout)
+	}()
+	go func() {
+		defer recoverGoroutinePanic("playback")
+		link.drain()
+	}()
 	return nil
 }
 

@@ -91,12 +91,16 @@ func main() {
 		log.Fatalf("虚拟声卡没建好: %v", err)
 	}
 	a := newAgent(cfg)
-	go a.watch(ctx)
+	go func() {
+		defer recoverGoroutinePanic("watch")
+		a.watch(ctx)
+	}()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", a.serveWS)
 	srv := &http.Server{Addr: cfg.Listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
+		defer recoverGoroutinePanic("shutdown")
 		<-ctx.Done()
 		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -126,7 +130,10 @@ func (a *agent) serveWS(w http.ResponseWriter, r *http.Request) {
 	c := &client{conn: conn}
 	a.attach(c)
 	defer a.detach(c)
-	go c.keepAlive(r.Context())
+	go func() {
+		defer recoverGoroutinePanic("keepalive")
+		c.keepAlive(r.Context())
+	}()
 	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
 	conn.SetPongHandler(func(string) error { return conn.SetReadDeadline(time.Now().Add(60 * time.Second)) })
 	for {

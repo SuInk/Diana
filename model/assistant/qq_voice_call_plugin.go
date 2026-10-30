@@ -268,10 +268,14 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
 	link := &qqCallLink{conn: conn}
 	p.setStatus(func(s *QQVoiceCallStatus) { s.Connected, s.LastError = true, "" })
 	go func() {
+		defer recoverGoroutinePanic("qq_voice_call.close")
 		<-ctx.Done()
 		_ = conn.Close()
 	}()
-	go link.keepAlive(ctx)
+	go func() {
+		defer recoverGoroutinePanic("qq_voice_call.keepalive")
+		link.keepAlive(ctx)
+	}()
 
 	calls := newQQCallSet(p, link)
 	defer calls.closeAll()
@@ -367,10 +371,16 @@ func (s *qqCallSet) handle(ctx context.Context, msg qqcall.Message) {
 	switch msg.Type {
 	case qqcall.TypeHello:
 		if msg.State == qqcall.StateRinging && msg.Call != "" {
-			go s.screen(ctx, msg)
+			go func() {
+				defer recoverGoroutinePanic("qq_voice_call.screen")
+				s.screen(ctx, msg)
+			}()
 		}
 	case qqcall.TypeRinging:
-		go s.screen(ctx, msg)
+		go func() {
+			defer recoverGoroutinePanic("qq_voice_call.screen")
+			s.screen(ctx, msg)
+		}()
 	case qqcall.TypeConnected:
 		s.connected(ctx, msg)
 	case qqcall.TypeEnded:
@@ -480,6 +490,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 
 	maxDuration := time.Duration(change.Settings.Int(qqVoiceCallSettingMaxMinutes, 30)) * time.Minute
 	go func() {
+		defer recoverGoroutinePanic("qq_voice_call.max-duration")
 		select {
 		case <-callCtx.Done():
 		case <-time.After(maxDuration):

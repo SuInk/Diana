@@ -5,6 +5,9 @@
 #
 # 说明见 docs/qq-voice-call.md。
 
+# 用在下面的 FROM 里，必须声明在第一个 FROM 之前。
+ARG SNOWLUMA_IMAGE=motricseven7/snowluma:v1.14.10
+
 FROM --platform=$BUILDPLATFORM golang:1.26.6-bookworm AS build
 ARG TARGETOS TARGETARCH
 WORKDIR /src
@@ -14,7 +17,6 @@ COPY model/qqcall model/qqcall
 COPY cmd/qqcall-agent cmd/qqcall-agent
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags="-s -w" -o /qqcall-agent ./cmd/qqcall-agent
 
-ARG SNOWLUMA_IMAGE=motricseven7/snowluma:v1.14.10
 FROM ${SNOWLUMA_IMAGE}
 # libpulse-mainloop-glib0 是 QQ 语音插件 libAVSDKPlugin.so 的依赖，原镜像里没有：
 # 缺了它点「语音通话」不报错，过一会儿显示「已取消」，对方根本没响铃。
