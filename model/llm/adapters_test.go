@@ -2136,3 +2136,71 @@ func TestOpenAIImageBackgroundOnlyForGPTImageModels(t *testing.T) {
 		}
 	}
 }
+
+func TestResponsesInputBoundsToolCallIDs(t *testing.T) {
+	// 生产历史中的 Devin ID：dv_ + Base64(tools_execute:0#<32 位标识>)。
+	const productionID = "dv_dG9vbHNfZXhlY3V0ZTowIzNlYTNlMTg2NzRjNTQ2NGU5MDAzMTVjMjM1NzMyOGYy"
+	for _, id := range []string{"call_short", strings.Repeat("x", 48), strings.Repeat("x", 49), strings.Repeat("x", 64), productionID, strings.Repeat("x", 64) + "a", strings.Repeat("x", 64) + "b"} {
+		for _, mode := range []string{"tool_calls", "native", "item_alias", "missing_call_id"} {
+			t.Run(fmt.Sprintf("%s/%s", mode, id), func(t *testing.T) {
+				call := Message{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: id, Name: "lookup", Arguments: map[string]any{}}}}
+				resultID := id
+				if mode != "tool_calls" {
+					itemID := "fc_example"
+					raw := map[string]any{"type": "function_call", "id": itemID, "call_id": id, "name": "lookup", "arguments": "{}", "status": "completed"}
+					if mode == "item_alias" {
+						resultID = itemID
+					}
+					if mode == "missing_call_id" {
+						delete(raw, "call_id")
+						raw["id"] = id
+					}
+					encoded, err := json.Marshal(raw)
+					if err != nil {
+						t.Fatal(err)
+					}
+					call.ResponsesOutput = []json.RawMessage{encoded}
+				}
+				messages := []Message{call, {Role: RoleTool, ToolCallID: resultID, Content: "result"}}
+				original, _ := json.Marshal(messages)
+				input := openAIResponsesInput(messages, nil)
+				if len(input) != 2 {
+					t.Fatalf("lost pair: %#v", input)
+				}
+				var ids []string
+				for _, item := range input {
+					b, err := json.Marshal(item)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var v map[string]any
+					if err := json.Unmarshal(b, &v); err != nil {
+						t.Fatal(err)
+					}
+					ids = append(ids, v["call_id"].(string))
+				}
+				if ids[0] != ids[1] || len(ids[0]) > 48 || ids[0] == "" {
+					t.Fatalf("invalid pair IDs: %v", ids)
+				}
+				if len(id) <= 48 && ids[0] != id {
+					t.Fatalf("short ID changed: %q", ids[0])
+				}
+				if len(id) > 48 && len(ids[0]) != 48 {
+					t.Fatalf("mapped ID length = %d, want 48", len(ids[0]))
+				}
+				again, _ := json.Marshal(openAIResponsesInput(messages, nil))
+				first, _ := json.Marshal(input)
+				if string(again) != string(first) {
+					t.Fatal("mapping is not stable")
+				}
+				after, _ := json.Marshal(messages)
+				if string(after) != string(original) {
+					t.Fatal("input history was mutated")
+				}
+			})
+		}
+	}
+	if responsesFunctionCallID(strings.Repeat("x", 64)+"a") == responsesFunctionCallID(strings.Repeat("x", 64)+"b") {
+		t.Fatal("IDs sharing a long prefix collided")
+	}
+}

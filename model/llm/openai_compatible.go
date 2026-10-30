@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2161,7 +2162,7 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 			outputIDs[strings.TrimSpace(msg.ToolCallID)] = true
 		}
 	}
-	callIDs := map[string]bool{}
+	callIDs := map[string]string{}
 	itemToCall := map[string]string{}
 	repaired := make([]Message, 0, len(messages))
 	for _, msg := range messages {
@@ -2182,20 +2183,23 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 				itemID := strings.TrimSpace(head.ID)
 				if callID == "" && itemID != "" && outputIDs[itemID] {
 					callID = itemID
+				}
+				if callID == "" || (!outputIDs[callID] && !outputIDs[itemID]) {
+					continue
+				}
+				wireID := responsesFunctionCallID(callID)
+				if wireID != head.CallID {
 					var decoded map[string]any
 					if json.Unmarshal(raw, &decoded) == nil {
-						decoded["call_id"] = callID
+						decoded["call_id"] = wireID
 						if encoded, err := json.Marshal(decoded); err == nil {
 							raw = encoded
 						}
 					}
 				}
-				if callID == "" || (!outputIDs[callID] && !outputIDs[itemID]) {
-					continue
-				}
-				callIDs[callID] = true
+				callIDs[callID] = wireID
 				if itemID != "" {
-					itemToCall[itemID] = callID
+					itemToCall[itemID] = wireID
 				}
 				items = append(items, raw)
 			}
@@ -2215,7 +2219,8 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 				if id == "" || !outputIDs[id] {
 					continue
 				}
-				callIDs[id] = true
+				call.ID = responsesFunctionCallID(id)
+				callIDs[id] = call.ID
 				kept = append(kept, call)
 			}
 			msg.ToolCalls = kept
@@ -2234,7 +2239,8 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 			continue
 		}
 		id := strings.TrimSpace(msg.ToolCallID)
-		if callIDs[id] {
+		if mapped := callIDs[id]; mapped != "" {
+			msg.ToolCallID = mapped
 			out = append(out, msg)
 			continue
 		}
@@ -2246,6 +2252,16 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 		// 找不到调用方的结果只能丢弃：单条结果缺失模型可以恢复，整轮 400 恢复不了。
 	}
 	return out
+}
+
+// 出站 call_id 统一限制为 48 字符，为 Responses 的 64 字符上限留出余量。
+// 调用和结果共用稳定映射，不修改持久化历史。
+func responsesFunctionCallID(id string) string {
+	if len(id) <= 48 {
+		return id
+	}
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%x", sum[:24])
 }
 
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {

@@ -5,6 +5,9 @@ package assistant
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -253,5 +256,59 @@ func TestResolverFailuresDoNotClaimDedupeKeys(t *testing.T) {
 		if len(resp.ResolverResourceKeys) != 0 {
 			t.Fatalf("Handle(%s) failure claimed dedupe keys %v", link, resp.ResolverResourceKeys)
 		}
+	}
+}
+
+func TestTwitterFailureReportsTechnicalErrors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "yt-dlp"), []byte("#!/bin/sh\necho 'ERROR: [twitter] 2115726834834837644: No video could be found in this tweet' >&2\nexit 1\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	plugin := NewResolverPlugin(nil)
+	plugin.twitterPostFetcher = func(ctx context.Context, raw string) (twitterPost, bool) {
+		recordResolverFailure(ctx, "元数据请求", "host resolution failed: lookup api.fxtwitter.com: i/o timeout")
+		return twitterPost{}, false
+	}
+	result := plugin.resolveTwitterMedia(context.Background(), PluginRequest{}, "https://x.com/performaiEN/status/2115726834834837644")
+	for _, want := range []string{"host resolution failed", "i/o timeout", "No video could be found in this tweet"} {
+		if !strings.Contains(result.Context, want) {
+			t.Fatalf("missing %q in %s", want, result.Context)
+		}
+	}
+	if !result.Failed || validSharedSocialResult(result) {
+		t.Fatal("failed result must not be cached")
+	}
+	for _, unwanted := range []string{"未配置代理", "可能", "上限"} {
+		if strings.Contains(result.Context, unwanted) {
+			t.Fatalf("guessed cause: %s", result.Context)
+		}
+	}
+}
+
+func TestResolverFailureIsolationAndRedaction(t *testing.T) {
+	first := withResolverFailures(context.Background())
+	second := withResolverFailures(context.Background())
+	recordResolverFailure(first, "请求", "HTTP 403 https://example.com/private?token=secret-token Authorization: Bearer secret-bearer")
+	got := resolverFailureDetail(first)
+	if !strings.Contains(got, "HTTP 403") {
+		t.Fatalf("lost technical error: %s", got)
+	}
+	for _, secret := range []string{"secret-token", "secret-bearer"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("leaked %s", secret)
+		}
+	}
+	if got := resolverFailureDetail(second); got != "" {
+		t.Fatalf("cross-request error: %s", got)
+	}
+	plugin := NewResolverPlugin(nil)
+	plugin.mediaDownloader = func(context.Context, string) string { return "/tmp/video.mp4" }
+	result := plugin.attachDownloadedVideo(first, PluginRequest{}, "https://youtu.be/example", "YouTube", resolverSocialResult{Handled: true, Context: "video"})
+	if result.Failed || result.Context != "video" {
+		t.Fatalf("successful fallback leaked errors: %#v", result)
 	}
 }

@@ -12,10 +12,56 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/applog"
 )
+
+// 每次解析独立收集实际失败信息，供回退耗尽后的用户提示使用。
+// 不改变旧下载器签名，也不让并发解析互相覆盖错误。
+type resolverFailuresKey struct{}
+type resolverFailures struct {
+	mu      sync.Mutex
+	details []string
+}
+
+func withResolverFailures(ctx context.Context) context.Context {
+	if _, ok := ctx.Value(resolverFailuresKey{}).(*resolverFailures); ok {
+		return ctx
+	}
+	return context.WithValue(ctx, resolverFailuresKey{}, &resolverFailures{})
+}
+
+func recordResolverFailure(ctx context.Context, stage, detail string) {
+	failures, ok := ctx.Value(resolverFailuresKey{}).(*resolverFailures)
+	if !ok || strings.TrimSpace(detail) == "" {
+		return
+	}
+	detail = stage + "：" + truncateRunes(sanitizePublicErrorDetail(detail), 400)
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	for _, previous := range failures.details {
+		if previous == detail {
+			return
+		}
+	}
+	if len(failures.details) < 3 {
+		failures.details = append(failures.details, detail)
+	} else {
+		failures.details[2] = detail
+	}
+}
+
+func resolverFailureDetail(ctx context.Context) string {
+	failures, ok := ctx.Value(resolverFailuresKey{}).(*resolverFailures)
+	if !ok {
+		return ""
+	}
+	failures.mu.Lock()
+	defer failures.mu.Unlock()
+	return strings.Join(failures.details, "；")
+}
 
 type resolverSocialResult struct {
 	Handled         bool
@@ -147,6 +193,7 @@ func validSharedSocialResult(result resolverSocialResult) bool {
 }
 
 func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
+	ctx = withResolverFailures(ctx)
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		return resolverSocialResult{}
@@ -269,6 +316,7 @@ func youtubeVideoID(raw string) string {
 }
 
 func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
+	ctx = withResolverFailures(ctx)
 	// 长文直链（x.com/i/article/<id>）既不是推文也不是主页，必须先分流出去，
 	// 否则会一路掉到 yt-dlp，最后只回一句「媒体下载失败」。
 	if id := twitterArticleID(raw); id != "" {
@@ -396,6 +444,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 		return result
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
+	result.Failed = true
 	result.Context += "\n媒体下载失败：" + reason
 	recordResolverMediaLog(ctx, req, raw, "douyin", false, reason)
 	return result
@@ -450,6 +499,7 @@ func xiaohongshuSocialContext(note map[string]any) string {
 }
 
 func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginRequest, raw, platform string) resolverSocialResult {
+	ctx = withResolverFailures(ctx)
 	result := resolverSocialResult{Handled: true, Context: "[" + platform + "] 已识别链接"}
 	if info, ok := ytdlpDumpInfo(ctx, raw); ok {
 		if id := strings.TrimSpace(info.ID); id != "" {
@@ -472,6 +522,7 @@ func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginReques
 }
 
 func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRequest, raw, platform string, result resolverSocialResult) resolverSocialResult {
+	ctx = withResolverFailures(ctx)
 	download := p.mediaDownloader
 	if p.videoDownloader != nil {
 		download = p.videoDownloader
@@ -486,6 +537,7 @@ func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRe
 		return result
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
+	result.Failed = true
 	result.Context += "\n媒体下载失败：" + reason
 	recordResolverMediaLog(ctx, req, raw, platform, false, reason)
 	return result
@@ -619,46 +671,12 @@ func xiaohongshuMediaImageURLs(note map[string]any) []string {
 	return dedupeMediaURLs(out)
 }
 
-// resolverDownloadFailureHint 给出尽量具体的失败原因。
-//
-// 原先无论什么情况都回一句「平台限制、Cookie 失效或媒体超过大小限制」，
-// 而 Cookie 过期恰恰是最高频的故障，用户从那句话里根本排查不出来。
-// 这里按「缺依赖 → 缺凭据 → 超限 → 兜底」的顺序逐层缩小范围。
+// 只呈现实际捕获的技术错误；没有细节时明确说明，不根据配置猜原因。
 func resolverDownloadFailureHint(ctx context.Context, raw string) string {
-	if _, err := lookResolverCommand("yt-dlp"); err != nil {
-		return "运行环境未安装 yt-dlp"
+	if detail := resolverFailureDetail(ctx); detail != "" {
+		return detail
 	}
-	if isBilibiliURL(raw) {
-		if _, err := lookResolverCommand("ffmpeg"); err != nil {
-			return "运行环境未安装 ffmpeg（B 站音视频需要合流）"
-		}
-	}
-	return resolverCredentialFailureHint(ctx, raw)
-}
-
-// resolverCredentialFailureHint 在外部依赖齐全的前提下，按平台给出凭据或限额相关的原因。
-// 和依赖检查拆开，既让判断逻辑清晰，也让这部分能在没装 yt-dlp 的环境里独立测试。
-func resolverCredentialFailureHint(ctx context.Context, raw string) string {
-	switch {
-	case isDouyinURL(raw):
-		// 抖音的解析和下载都不依赖 Cookie（配了只是少被风控盯上），而且 Cookie 真失效时
-		// 前面的 detail 接口就已经失败、根本走不到下载。再提示去换 Cookie 只会把排查带偏。
-		return "抖音接口没有返回可下载的地址，或视频超过大小/时长上限"
-	case isXiaohongshuURL(raw):
-		if resolverXHSCookie(ctx) == "" {
-			return "未配置小红书 Cookie，请在插件设置里填写"
-		}
-		return "小红书 Cookie 可能已失效，或视频超过大小/时长上限"
-	case isBilibiliURL(raw):
-		if _, err := lookResolverCommand("node"); err != nil && bilibiliSessdata(ctx) == "" {
-			return "B 站未配置 SESSDATA，大会员或需登录内容无法下载"
-		}
-		return "B 站限流、SESSDATA 失效，或视频超过大小/时长上限"
-	}
-	if resolverProxyURL(ctx) == "" && (isTwitterURL(raw) || strings.Contains(strings.ToLower(raw), "youtu")) {
-		return "未配置代理，境外平台可能无法访问；也可能超过大小/时长上限"
-	}
-	return "平台限制、凭据失效或媒体超过大小/时长上限"
+	return "下载器未返回媒体文件，未提供具体错误"
 }
 
 func recordResolverMediaLog(ctx context.Context, req PluginRequest, raw, platform string, success bool, detail string) {

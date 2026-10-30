@@ -168,10 +168,12 @@ func downloadPlatformVideoFile(ctx context.Context, raw string) string {
 func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
 	ytDLPPath, err := lookResolverCommand("yt-dlp")
 	if err != nil {
+		recordResolverFailure(ctx, "yt-dlp", err.Error())
 		return ""
 	}
 	workDir, err := os.MkdirTemp("", "diana-resolver-video-*")
 	if err != nil {
+		recordResolverFailure(ctx, "创建下载目录", err.Error())
 		return ""
 	}
 	outputPattern := filepath.Join(workDir, "video.%(ext)s")
@@ -181,12 +183,14 @@ func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
 	// yt-dlp 会自己去调 ffmpeg，子进程也得能找到这些目录。
 	cmd.Env = resolverCommandEnv()
 	if output, err := cmd.CombinedOutput(); err != nil {
+		recordResolverFailure(ctx, "yt-dlp 下载", fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(output))))
 		log.Printf("resolver yt-dlp video download failed for %s: %v: %s", raw, err, strings.TrimSpace(string(output)))
 		_ = os.RemoveAll(workDir)
 		return ""
 	}
 	matches, err := filepath.Glob(filepath.Join(workDir, "video.*"))
 	if err != nil || len(matches) == 0 {
+		recordResolverFailure(ctx, "yt-dlp 下载", "进程结束后未生成媒体文件")
 		_ = os.RemoveAll(workDir)
 		return ""
 	}
@@ -737,6 +741,7 @@ func downloadBilibiliCandidateURLs(ctx context.Context, urls []string, path stri
 func ytdlpDumpInfo(ctx context.Context, raw string) (ytdlpInfo, bool) {
 	ytDLPPath, err := lookResolverCommand("yt-dlp")
 	if err != nil {
+		recordResolverFailure(ctx, "yt-dlp", err.Error())
 		return ytdlpInfo{}, false
 	}
 	cmdCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -749,14 +754,17 @@ func ytdlpDumpInfo(ctx context.Context, raw string) (ytdlpInfo, bool) {
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
+			recordResolverFailure(ctx, "yt-dlp 元数据", fmt.Sprintf("%v: %s", err, strings.TrimSpace(string(exitErr.Stderr))))
 			log.Printf("resolver yt-dlp dump failed for %s: %v: %s", raw, err, strings.TrimSpace(string(exitErr.Stderr)))
 		} else {
+			recordResolverFailure(ctx, "yt-dlp 元数据", err.Error())
 			log.Printf("resolver yt-dlp dump failed for %s: %v", raw, err)
 		}
 		return ytdlpInfo{}, false
 	}
 	var info ytdlpInfo
 	if err := json.Unmarshal(output, &info); err != nil {
+		recordResolverFailure(ctx, "yt-dlp JSON 解码", err.Error())
 		log.Printf("resolver yt-dlp dump json parse failed for %s: %v", raw, err)
 		return ytdlpInfo{}, false
 	}
@@ -914,16 +922,23 @@ func fetchResolverBody(ctx context.Context, raw string, headers map[string]strin
 	client := netguard.NewPublicHTTPClient(defaultPlatformTimeout)
 	resp, err := client.Do(req)
 	if err != nil {
+		recordResolverFailure(ctx, "元数据请求", err.Error())
 		log.Printf("resolver request failed for %s: %v", redactURLQuery(raw), err)
 		return "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		recordResolverFailure(ctx, "元数据请求", resp.Status)
 		log.Printf("resolver request bad status for %s: %s", redactURLQuery(raw), resp.Status)
 		return "", false
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
 	if err != nil || len(data) == 0 {
+		if err != nil {
+			recordResolverFailure(ctx, "元数据读取", err.Error())
+		} else {
+			recordResolverFailure(ctx, "元数据读取", "响应正文为空")
+		}
 		return "", false
 	}
 	return string(data), true
@@ -1241,7 +1256,16 @@ func mergeMediaToMP4(ctx context.Context, videoPath string, audioPath string, ou
 
 func videoFileAllowed(ctx context.Context, path string) bool {
 	info, err := os.Stat(path)
-	if err != nil || info.IsDir() || info.Size() == 0 || info.Size() > resolverVideoMaxBytes(ctx) {
+	if err != nil {
+		recordResolverFailure(ctx, "媒体文件校验", err.Error())
+		return false
+	}
+	if info.IsDir() || info.Size() == 0 {
+		recordResolverFailure(ctx, "媒体文件校验", "下载结果不是非空文件")
+		return false
+	}
+	if info.Size() > resolverVideoMaxBytes(ctx) {
+		recordResolverFailure(ctx, "媒体文件校验", fmt.Sprintf("文件大小 %d 字节超过限制 %d 字节", info.Size(), resolverVideoMaxBytes(ctx)))
 		return false
 	}
 	return true

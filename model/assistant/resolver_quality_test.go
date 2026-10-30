@@ -67,24 +67,11 @@ func TestSelectBilibiliDashMediaHonoursMaxHeight(t *testing.T) {
 	}
 }
 
-// Cookie 过期是最高频的故障，提示必须能指向具体平台的凭据。
-func TestDownloadFailureHintNamesMissingCredential(t *testing.T) {
-	t.Setenv("DIANA_DOUYIN_CK", "")
-	t.Setenv("DOUYIN_CK", "")
-	t.Setenv("douyin_ck", "")
-	t.Setenv("DIANA_XHS_CK", "")
-	t.Setenv("XHS_CK", "")
-	t.Setenv("xhs_ck", "")
-
-	ctx := context.Background()
-	if got := resolverCredentialFailureHint(ctx, "https://www.xiaohongshu.com/explore/abc"); !strings.Contains(got, "小红书 Cookie") {
-		t.Fatalf("小红书缺 Cookie 时应明确指出，实际：%s", got)
-	}
-
-	// 抖音不靠 Cookie 解析，下载失败提 Cookie 只会让人白换一轮。
-	for _, hintCtx := range []context.Context{ctx, withResolverCredentials(ctx, resolverCredentials{DouyinCookie: "x"})} {
-		if got := resolverCredentialFailureHint(hintCtx, "https://www.douyin.com/video/123"); strings.Contains(got, "Cookie") {
-			t.Fatalf("抖音下载失败不该甩锅 Cookie，实际：%s", got)
+func TestDownloadFailureHintDoesNotGuessCause(t *testing.T) {
+	for _, raw := range []string{"https://x.com/example/status/1", "https://youtu.be/example", "https://www.xiaohongshu.com/explore/abc", "https://www.douyin.com/video/123"} {
+		got := resolverDownloadFailureHint(context.Background(), raw)
+		if got != "下载器未返回媒体文件，未提供具体错误" {
+			t.Fatalf("unexpected failure hint: %s", got)
 		}
 	}
 }
