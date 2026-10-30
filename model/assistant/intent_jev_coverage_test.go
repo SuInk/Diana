@@ -65,6 +65,7 @@ func TestParticipationDecisionRoundTrips(t *testing.T) {
 func TestTextPurposesStayOffIntent(t *testing.T) {
 	writers := map[string]string{
 		PurposeRSSWatchJudge:        llm.GroupBackground,
+		PurposeQQJoinReview:         llm.GroupBackground,
 		PurposeMemoryExtract:        llm.GroupBackground,
 		PurposeMemorySummary:        llm.GroupBackground,
 		PurposeRelationshipEvaluate: llm.GroupBackground,

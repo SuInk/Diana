@@ -63,6 +63,8 @@ const (
 	PurposeWelcomeGenerator = "welcome_generator"
 	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
 	PurposeImageFixGate = "image_fix_gate"
+	// PurposeQQJoinReview 是入群自动审批插件让模型判断一条入群申请。
+	PurposeQQJoinReview = "qq_join_review"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -117,6 +119,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeMemoryExtract:        llm.GroupBackground,
 	PurposeMemorySummary:        llm.GroupBackground,
 	PurposeRSSWatchJudge:        llm.GroupBackground,
+	// 入群审批在申请到达后异步判，没人在等回复，和 RSS 判定一样归后台。
+	PurposeQQJoinReview: llm.GroupBackground,
 }
 
 // modelBindingGroups 是所有分组。它们就是「用途的归属地」，缺一个就有一批用途没有

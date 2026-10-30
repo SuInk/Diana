@@ -579,7 +579,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents" | "llm_profile";
   default: unknown;
   min?: number;
   max?: number;

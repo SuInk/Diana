@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
 import CodingAgentsField from "./CodingAgentsField.vue";
 import AppSelect from "./AppSelect.vue";
 import PluginSizeInput from "./PluginSizeInput.vue";
-import type { PluginSettingSpec } from "../api";
+import { getConfig, type LLMConfig, type PluginSettingSpec } from "../api";
 
 // 插件设置项的单个控件。抽出来是为了让 GitHub 仓库这类需要把设置项
 // 分组重排的弹窗能复用同一套渲染，而不是把整段模板复制几份。
@@ -24,6 +24,28 @@ const emit = defineEmits<{
 
 const controlID = computed(() => props.fieldID ?? `setting-${props.spec.key}`);
 const labelID = computed(() => `${controlID.value}-label`);
+
+// llm_profile：选一个文本模型配置，空串跟随对话模型。只在出现这种设置时才拉配置。
+const llmChannels = ref<LLMConfig[]>([]);
+const llmProfileOptions = computed(() => {
+  const options = [{ value: "", label: "跟随对话模型" }];
+  for (const channel of llmChannels.value) {
+    if (!channel.id || ["image", "embedding", "tts", "stt", "video"].includes(channel.group || "")) continue;
+    options.push({ value: channel.id, label: `${channel.name || channel.id} · ${channel.model || "默认模型"}` });
+  }
+  const selected = props.form[props.spec.key];
+  if (selected && !options.some(option => option.value === selected)) options.push({ value: selected, label: `配置已不可用：${selected}` });
+  return options;
+});
+onMounted(async () => {
+  if (props.spec.type !== "llm_profile") return;
+  try {
+    const config = await getConfig();
+    llmChannels.value = config.profiles?.length ? config.profiles : [config];
+  } catch {
+    llmChannels.value = [];
+  }
+});
 
 function multiSelected(option: string): boolean {
   const value = props.form[props.spec.key];
@@ -98,6 +120,14 @@ function toggleMultiSelect(option: string, event: Event): void {
         v-model="form[spec.key] as number"
         :min="spec.min"
         :max="spec.max"
+      />
+      <AppSelect
+        v-else-if="spec.type === 'llm_profile'"
+        :id="controlID"
+        v-model="form[spec.key]"
+        :options="llmProfileOptions"
+        searchable
+        search-placeholder="搜索模型"
       />
       <AppSelect
         v-else-if="spec.type === 'select'"
