@@ -440,6 +440,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
 		NewVRChatPlugin(),
+		NewQQVoiceCallPlugin(),
 		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),
 		NewStatusCommandPlugin(),
@@ -1335,6 +1336,29 @@ func (m *PluginManager) AgentToolOwners(platform string, enabledOverrides map[st
 		}
 	}
 	return owners
+}
+
+// runtimeBoundPlugin 是要反过来调用运行时的插件：比如电话打进来时自己发起一轮
+// 回复。插件比运行时先建好，所以等运行时建好后再交给它。
+type runtimeBoundPlugin interface {
+	bindRuntime(*Runtime)
+}
+
+func (m *PluginManager) bindRuntime(runtime *Runtime) {
+	if m == nil {
+		return
+	}
+	m.mu.RLock()
+	plugins := make([]runtimeBoundPlugin, 0)
+	for _, plugin := range m.catalog {
+		if bound, ok := plugin.(runtimeBoundPlugin); ok {
+			plugins = append(plugins, bound)
+		}
+	}
+	m.mu.RUnlock()
+	for _, plugin := range plugins {
+		plugin.bindRuntime(runtime)
+	}
 }
 
 func (m *PluginManager) SetLocalMediaSharer(sharer LocalMediaSharer) {
