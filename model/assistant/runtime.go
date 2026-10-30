@@ -425,6 +425,7 @@ type Runtime struct {
 	notebook         NotebookStore
 	worldBook        WorldBookStore
 	selfNotes        SelfNoteStore
+	qqFormatStore    QQFormatTemplateStore
 	wallet           WalletSummaryStore
 	feed             FeedStore
 	feedReply        feedReplyState
@@ -4629,6 +4630,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx, finalizeSticker := withFinalizeSticker(ctx)
 	// QQ 官方机器人收尾时填了按钮的话，挂在这一轮最后一条文字消息上，见 qq_official_buttons.go。
 	ctx, _ = withFinalizeButtons(ctx)
+	// 收尾时填的自定义格式同样挂在最后一条文字上，见 qq_official_format.go。
+	ctx, _ = withFinalizeQQFormat(ctx)
 	// 本轮调过的工具挂到随后发出的第一条消息上，见 tool_call_memory.go。
 	ctx = withReplyToolTrace(ctx)
 	// maibot 回复器的语气改写和发送前审核并行，见 reply_tone_parallel.go。
@@ -4964,6 +4967,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		if offersButtonsFinalizeField(cfg, event) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField())
+			templates, _ := r.loadQQFormatTemplates(ctx, event.ProfileID)
+			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, qqFormatFinalizeField(templates))
 		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.toolScope().Owner)
 		// 用途只挂在模型调用上（见 runtimeAgentLLMProvider.Generate），不挂在整个 ctx 上：
@@ -5039,6 +5044,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		replyToolTraceFromContext(ctx).add(resp.Steps)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
 		finalizeButtonsFromContext(ctx).set(resp.FinalizeFields[buttonsFinalizeFieldName])
+		if value := resp.FinalizeFields[qqFormatFinalizeFieldName]; strings.TrimSpace(value) != "" {
+			if holder := finalizeQQFormatFromContext(ctx); holder != nil {
+				holder.put(r.resolveQQFormat(ctx, event, value))
+			}
+		}
 		text := resp.Text
 		if resp.Silent {
 			// 模型 send 了空正文，自己选择这一轮不说话。没有正文可整理，也不该被

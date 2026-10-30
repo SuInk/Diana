@@ -533,6 +533,7 @@ func main() {
 	botRuntime.SetNotebookStore(sqliteStore)
 	botRuntime.SetWorldBookStore(sqliteStore)
 	botRuntime.SetSelfNoteStore(sqliteStore)
+	botRuntime.SetQQFormatTemplateStore(sqliteStore)
 	botRuntime.SetWalletStore(sqliteStore)
 	botRuntime.SetFeedStore(sqliteStore)
 	botRuntime.SetGroupStyleStore(sqliteStore)

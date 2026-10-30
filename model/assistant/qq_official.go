@@ -602,9 +602,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		body := map[string]any{"content": text}
 		markdownContent, markdown := "", false
 		keyboard := !isGuild && len(msg.Buttons) > 0
+		format := msg.QQFormat
+		if isGuild || (format != nil && len(format.Patch) == 0) {
+			format = nil
+		}
 		if !isGuild {
 			markdownContent, markdown = qqOfficialMarkdownContent(text)
-			if keyboard && !markdown {
+			if (keyboard || format != nil) && !markdown {
 				// 按钮只能挂在 Markdown 消息上，大白话也得换成 Markdown 发。
 				markdownContent, markdown = qqMarkdownLineBreaks(text), true
 			}
@@ -628,7 +632,23 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				body["message_reference"] = map[string]any{"message_id": quoteRef}
 			}
 		}
-		id, err := post(body)
+		var id string
+		var err error
+		if format != nil {
+			id, err = post(applyQQFormatPatch(body, format.Patch))
+			if err == nil || !qqOfficialRetryUseless(err) {
+				if format.Report != nil {
+					format.Report(err == nil, err)
+				}
+			}
+			if err != nil && !qqOfficialRetryUseless(err) {
+				// 模型写的格式平台不认：退回默认格式重发，下面按钮和 Markdown 的降级照旧接着走。
+				log.Printf("qq: 自定义格式被拒，退回默认格式重发: %v", err)
+				id, err = post(body)
+			}
+		} else {
+			id, err = post(body)
+		}
 		if err != nil && keyboard && !qqOfficialRetryUseless(err) {
 			// 自定义按钮官方写的是邀请开通，没开的账号整条会被拒：先去掉按钮重发，
 			// 正文的排版还能保住。

@@ -391,6 +391,8 @@ type OutgoingMessage struct {
 	TempSessionGroupID string
 	// Buttons 是挂在这条消息底下的按钮行，目前只有 QQ 官方机器人能发，其他平台忽略。
 	Buttons [][]OutgoingButton
+	// QQFormat 是模型自定义的消息格式，只有 QQ 官方机器人认，见 qq_official_format.go。
+	QQFormat *QQFormat
 }
 
 type ReminderKind string

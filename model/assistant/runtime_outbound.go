@@ -85,6 +85,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
 		if index == lastTextChunk && !decoration.LiteralText {
 			msg.Buttons = finalizeButtonsFromContext(ctx).take()
+			msg.QQFormat = finalizeQQFormatFromContext(ctx).take()
 		}
 		if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !msg.LiteralText {
 			msg = rssWatchOutgoingImages(msg)
