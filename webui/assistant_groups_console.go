@@ -336,11 +336,15 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	}
 	// 中心节点优先用配置里的机器人账号：新群可能还没有机器人自己的发言，
 	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
-	botID := strings.TrimSpace(h.botConfigForProfile(botProfileScope(c)).BotAccount)
+	profileID := botProfileScope(c)
+	botID := strings.TrimSpace(h.botConfigForProfile(profileID).BotAccount)
 	graph, err := h.sqlite.GroupRelationGraphFor(c.Request.Context(), groupID, since, botID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	for index := range graph.Nodes {
+		graph.Nodes[index].AvatarURL = h.consoleAvatarURL(avatarKindMember, profileID, graph.Nodes[index].UserID)
 	}
 	c.JSON(http.StatusOK, gin.H{"range": rangeID, "graph": graph})
 }

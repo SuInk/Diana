@@ -18,6 +18,8 @@ type GroupRelationNode struct {
 	Favorability int `json:"favorability"`
 	// IsBot 标记中心节点。
 	IsBot bool `json:"is_bot,omitempty"`
+	// AvatarURL 由 WebUI 填成控制台头像代理地址，存储层不管。
+	AvatarURL string `json:"avatar_url,omitempty"`
 }
 
 // GroupRelationEdge 是一条互动边，无向：Source 恒小于 Target，避免同一对人

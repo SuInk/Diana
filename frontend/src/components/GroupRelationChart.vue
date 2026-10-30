@@ -6,7 +6,7 @@
     <p v-if="placed.length > 0" class="relation-legend muted">
       {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ graph.nodes.filter((node) => !node.is_bot).length }} 人</template><template v-if="overflow > 0">，其中 {{ overflow }} 人圈里放不下</template>
       <template v-if="graph.truncated">（只统计了最近这批消息）</template>
-      · 越靠里和机器人互动越多，悬停看单人
+      · 越靠里和机器人互动越多，悬停看名字
     </p>
     <svg
       v-if="placed.length > 0"
@@ -17,11 +17,22 @@
       :aria-label="`群聊互动圈：${placed.length} 人按和机器人的互动次数分成内圈、中圈、外圈`"
       @mouseleave="focusedID = ''"
     >
-      <!-- 圈层参考线：只是背景，让人一眼看出谁在第几圈。 -->
-      <g v-for="ring in usedRings" :key="ring.name">
-        <circle :cx="center" :cy="center" :r="ring.radius" class="relation-ring" />
-        <text :x="center" :y="center - ring.radius - ring.node - 6" class="relation-ring-label" text-anchor="middle">{{ ring.name }}</text>
-      </g>
+      <defs>
+        <clipPath v-for="member in avatarMembers" :id="clipID(member.userID)" :key="member.userID">
+          <circle :cx="member.x" :cy="member.y" :r="member.radius" />
+        </clipPath>
+      </defs>
+
+      <!-- 圈层用由外到内渐深的底盘区分，不画虚线和文字，跟推特互动圈一样只靠位置说话。 -->
+      <circle
+        v-for="(ring, index) in [...usedRings].reverse()"
+        :key="ring.name"
+        :cx="center"
+        :cy="center"
+        :r="ring.radius + ring.node + 8"
+        class="relation-band"
+        :style="{ opacity: 0.35 + 0.2 * index }"
+      />
 
       <!-- 连线只在悬停时画：平时全画出来就又挤成一团了。 -->
       <template v-if="focused">
@@ -49,10 +60,21 @@
         :class="{ 'relation-active': focusedID === member.userID || focusedNeighbors.has(member.userID) }"
         @mouseenter="focusedID = member.userID"
       >
-        <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node" :style="{ fill: member.fill }">
-          <title>{{ member.tooltip }}</title>
-        </circle>
+        <title>{{ member.tooltip }}</title>
+        <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node" :style="{ fill: member.fill }" />
+        <image
+          v-if="member.avatar"
+          :href="member.avatar"
+          :x="member.x - member.radius"
+          :y="member.y - member.radius"
+          :width="member.radius * 2"
+          :height="member.radius * 2"
+          :clip-path="`url(#${clipID(member.userID)})`"
+          preserveAspectRatio="xMidYMid slice"
+          @error="markBroken(member.userID)"
+        />
         <text
+          v-else
           :x="member.x"
           :y="member.y + member.radius * 0.36"
           class="relation-initial"
@@ -60,21 +82,30 @@
           :style="{ fontSize: `${Math.round(member.radius * 0.95)}px` }"
           text-anchor="middle"
         >{{ member.initial }}</text>
-        <text
-          v-if="member.ring === 0"
-          :x="member.x"
-          :y="member.y + member.radius + 14"
-          class="relation-label"
-          text-anchor="middle"
-        >{{ member.label }}</text>
+        <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node-ring" />
       </g>
 
-      <circle :cx="center" :cy="center" :r="centerRadius + 6" class="relation-center-halo" />
-      <circle :cx="center" :cy="center" :r="centerRadius" class="relation-center" />
-      <text :x="center" :y="center + 5" class="relation-center-label" text-anchor="middle">{{ centerLabel }}</text>
+      <g class="relation-member">
+        <title>{{ centerLabel }}</title>
+        <circle :cx="center" :cy="center" :r="centerRadius" class="relation-center" />
+        <image
+          v-if="centerAvatar"
+          :href="centerAvatar"
+          :x="center - centerRadius"
+          :y="center - centerRadius"
+          :width="centerRadius * 2"
+          :height="centerRadius * 2"
+          clip-path="url(#relation-center-clip)"
+          preserveAspectRatio="xMidYMid slice"
+          @error="markBroken(graph.bot_id || '')"
+        />
+        <text v-else :x="center" :y="center + 5" class="relation-center-label" text-anchor="middle">{{ centerLabel }}</text>
+        <circle :cx="center" :cy="center" :r="centerRadius" class="relation-node-ring relation-center-ring" />
+        <clipPath id="relation-center-clip"><circle :cx="center" :cy="center" :r="centerRadius" /></clipPath>
+      </g>
 
-      <!-- 悬停的人不在内圈时名字不常驻，这里补一个浮签。 -->
-      <g v-if="focused && focused.ring > 0" class="relation-tag">
+      <!-- 名字不常驻，悬停时浮签显示。 -->
+      <g v-if="focused" class="relation-tag">
         <rect :x="focused.x - tagWidth / 2" :y="focused.y + focused.radius + 4" :width="tagWidth" height="20" rx="6" />
         <text :x="focused.x" :y="focused.y + focused.radius + 18" text-anchor="middle">{{ focused.label }}</text>
       </g>
@@ -107,25 +138,38 @@ const props = defineProps<{ graph: GroupRelationGraph }>();
 
 const size = 620;
 const center = size / 2;
-const centerRadius = 34;
+const centerRadius = 46;
 
 // 三圈从里到外：圈越外半径越大、头像越小，所以外圈能放的人反而多。
 // 每圈的人数上限按周长和头像直径算，再压一点，保证相邻头像不贴在一起。
 const rings = [
-  { name: "内圈", radius: 108, node: 25 },
-  { name: "中圈", radius: 190, node: 18 },
-  { name: "外圈", radius: 268, node: 13 }
+  { name: "内圈", radius: 104, node: 27 },
+  { name: "中圈", radius: 182, node: 20 },
+  { name: "外圈", radius: 254, node: 15 }
 ].map((ring) => ({
   ...ring,
-  capacity: Math.floor((2 * Math.PI * ring.radius) / (ring.node * 2 + 12))
+  capacity: Math.floor((2 * Math.PI * ring.radius) / (ring.node * 2 + 6))
 }));
 // 内圈只留最亲近的几个人，挤满了就不算「内圈」了。
 rings[0].capacity = Math.min(rings[0].capacity, 8);
 
 const focusedID = ref("");
+// 外链头像经常加载失败，坏掉的记下来退回首字，跟 AppSelect 的做法一样。
+const brokenAvatars = ref(new Set<string>());
+function markBroken(userID: string) {
+  if (!userID || brokenAvatars.value.has(userID)) return;
+  brokenAvatars.value = new Set([...brokenAvatars.value, userID]);
+}
+function clipID(userID: string) {
+  return `relation-clip-${userID.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
 
 const botNode = computed(() => props.graph.nodes.find((node) => node.is_bot) ?? null);
 const centerLabel = computed(() => botNode.value?.display_name?.slice(0, 4) || "Diana");
+const centerAvatar = computed(() => {
+  const node = botNode.value;
+  return node?.avatar_url && !brokenAvatars.value.has(node.user_id) ? node.avatar_url : "";
+});
 
 const weightToBot = computed(() => {
   const botID = props.graph.bot_id;
@@ -155,6 +199,7 @@ interface PlacedMember {
   weight: number;
   strength: number;
   name: string;
+  avatar: string;
   initial: string;
   label: string;
   fill: string;
@@ -185,6 +230,7 @@ const placed = computed<PlacedMember[]>(() => {
         weight,
         strength,
         name,
+        avatar: node.avatar_url && !brokenAvatars.value.has(node.user_id) ? node.avatar_url : "",
         initial: Array.from(name)[0] ?? "",
         label: name.length > 6 ? `${name.slice(0, 6)}…` : name,
         // 没跟机器人说过话的人用中性底色，有来往的越往里颜色越深。
@@ -206,6 +252,8 @@ const usedRings = computed(() => {
   const deepest = Math.max(-1, ...placed.value.map((member) => member.ring));
   return rings.slice(0, deepest + 1);
 });
+
+const avatarMembers = computed(() => placed.value.filter((member) => member.avatar));
 
 const focused = computed(() => placed.value.find((member) => member.userID === focusedID.value) ?? null);
 
@@ -261,16 +309,8 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
   overflow: visible;
 }
 
-.relation-ring {
-  fill: none;
-  stroke: var(--border);
-  stroke-dasharray: 3 5;
-}
-
-.relation-ring-label {
-  fill: var(--text-secondary);
-  font-size: 11px;
-  opacity: 0.8;
+.relation-band {
+  fill: color-mix(in srgb, var(--accent) 18%, var(--surface));
 }
 
 .relation-center-edge {
@@ -292,9 +332,15 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
   transition: opacity 0.15s;
 }
 
-.relation-node {
+.relation-node-ring {
+  fill: none;
   stroke: var(--surface);
   stroke-width: 2.5;
+  pointer-events: none;
+}
+
+.relation-center-ring {
+  stroke-width: 4;
 }
 
 /* 悬停时其余人压暗，只留他本人和跟他有来往的人。 */
@@ -304,10 +350,6 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
 
 .relation-focusing .relation-member.relation-active {
   opacity: 1;
-}
-
-.relation-center-halo {
-  fill: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 
 .relation-center {
@@ -328,12 +370,6 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
 
 .relation-initial-strong {
   fill: var(--accent-contrast);
-}
-
-.relation-label {
-  fill: var(--text-secondary);
-  font-size: 12px;
-  pointer-events: none;
 }
 
 .relation-tag {

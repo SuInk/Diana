@@ -2687,12 +2687,20 @@ function demoParsePromptFile(source: string): { overrides: Record<string, string
   return { overrides, changed: Object.keys(overrides).length, unknown: unknown.sort(), diana_version: /^diana_version:\s*(.+)$/m.exec(source)?.[1]?.trim() };
 }
 
+// 演示头像：不能用真实 QQ 头像，就按序号画一张有底色和表情的小图，看起来像头像就行。
+function demoRelationAvatar(seed: number): string {
+  const hue = (seed * 47) % 360;
+  const mouth = seed % 3 === 0 ? "M24 41 Q32 47 40 41" : seed % 3 === 1 ? "M25 42 L39 42" : "M24 43 Q32 37 40 43";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${hue},70%,72%)"/><stop offset="1" stop-color="hsl(${(hue + 40) % 360},65%,52%)"/></linearGradient></defs><rect width="64" height="64" fill="url(#g)"/><circle cx="32" cy="34" r="17" fill="hsl(${hue},40%,93%)"/><circle cx="26" cy="32" r="2.4" fill="#333"/><circle cx="38" cy="32" r="2.4" fill="#333"/><path d="${mouth}" stroke="#333" stroke-width="2.2" fill="none" stroke-linecap="round"/></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 function demoGroupRelationGraph(groupID: string) {
   const botID = "10000";
   const names = ["阿星", "小鹿", "白桃乌龙", "鱼丸", "今天也想睡觉", "Kuro", "柚子", "南瓜", "七七", "老陈", "Mio", "葡萄冻", "一只猫猫", "阿泽", "星野", "小林", "汤圆", "Nana", "橘子汽水", "阿木", "雪碧", "豆豆", "Leo", "芋圆", "青柠", "可乐", "小周", "Ray", "布丁", "山竹"];
   const nodes = [
-    { user_id: botID, display_name: "Diana", messages: 120, favorability: 0, is_bot: true },
-    ...names.map((name, index) => ({ user_id: String(20001 + index), display_name: name, messages: Math.round(160 / (index + 1.4)) + 3, favorability: 40 - index * 6 }))
+    { user_id: botID, display_name: "Diana", messages: 120, favorability: 0, is_bot: true, avatar_url: demoRelationAvatar(7) },
+    ...names.map((name, index) => ({ user_id: String(20001 + index), display_name: name, messages: Math.round(160 / (index + 1.4)) + 3, favorability: 40 - index * 6, avatar_url: demoRelationAvatar(index + 11) }))
   ];
   const edges: { source: string; target: string; weight: number }[] = [];
   names.forEach((_, index) => { if (index % 5 !== 4) edges.push({ source: botID, target: String(20001 + index), weight: Math.max(1, 30 - index * 3) }); });

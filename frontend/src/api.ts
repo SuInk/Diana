@@ -4468,6 +4468,7 @@ export interface GroupRelationNode {
   messages: number;
   favorability: number;
   is_bot?: boolean;
+  avatar_url?: string;
 }
 
 export interface GroupRelationEdge {
