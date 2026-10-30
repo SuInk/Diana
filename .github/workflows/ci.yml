@@ -140,25 +140,28 @@ jobs:
       - name: Test
         run: go test ./...
 
-  # 和 Go Test 并行，不挡构建和发布链；PR 合并前照样要等它绿。
-  # 本地脚本默认不开 -race（太吃内存），全仓库的竞态检查只在这里做。
-  # 只在 PR 上跑：合进 main 的代码 PR 上已经验过，Canary 和发版不再重跑。
+  # 全仓库竞态检查只在打 v* 标签发版时跑一次，挡在 Docker 发布前面（release 经由 docker 一起挡住）。
+  # PR 和 Canary 不跑：-race 一轮十来分钟，本地脚本默认也不开。
+  # 非 PR 事件里这个 job 照样起，只是步骤全跳过、直接成功，docker 的 needs 不用为它写条件。
   backend-race:
     name: Go Race Test
-    if: github.event_name == 'pull_request'
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - name: Checkout
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/checkout@v4
 
       - name: Setup Go
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
       - name: Test with race detector
+        if: startsWith(github.ref, 'refs/tags/v')
         run: go test -race -timeout 40m ./...
 
   frontend-next:
@@ -389,6 +392,7 @@ jobs:
     needs:
       - build-version
       - backend
+      - backend-race
       - frontend-next
     permissions:
       contents: read
