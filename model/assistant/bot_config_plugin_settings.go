@@ -15,7 +15,7 @@ import (
 func pluginSettingsSchema() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "插件详细设置：{插件ID: {设置键: 值}}，值传 null 恢复继承（群级跟随机器人，机器人级恢复默认）。先用 get 带 plugin 查看可改的键、类型和选项；凭据类设置（Cookie、密钥）不能在聊天里改。",
+		"description": "插件详细设置 {插件ID:{键:值}}，null 恢复继承；先 get 带 plugin 查键，凭据不可改。",
 		"additionalProperties": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{},
