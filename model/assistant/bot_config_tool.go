@@ -27,7 +27,7 @@ func newDianaBotConfigTool(r *Runtime, event MessageEvent) *dianaBotConfigTool {
 }
 func (*dianaBotConfigTool) Name() string { return botConfigToolName }
 func (*dianaBotConfigTool) Description() string {
-	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎、回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）和插件详细设置（plugin_settings：如链接解析平台、翻译开关）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
+	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎、回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）、插件详细设置（plugin_settings）和其余 WebUI 设置（fields）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -48,6 +48,8 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"group_settings":               groupSettingsSchema(),
 		"plugin":                       toolStringParam("get 时查看该插件 ID 的详细设置：可改的键、类型、选项和当前生效值。"),
 		"plugin_settings":              pluginSettingsSchema(),
+		"fields":                       fieldsSchema(),
+		"list_fields":                  toolBoolParam("get 时列出本层可在聊天里改的配置键和当前值。"),
 	})
 }
 
@@ -126,7 +128,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
-			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true}
+			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true, "fields": true, "list_fields": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -226,6 +228,22 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			}
 			changed = true
 		}
+		var fieldPatch map[string]any
+		if raw, exists := input["fields"]; exists {
+			fieldPatch, err = parseFieldsPatch(raw)
+			if err != nil {
+				return "", err
+			}
+			if scope == "group" {
+				group, err = applyGroupFields(group, fieldPatch)
+			} else {
+				_, err = applyBotFields(base, fieldPatch)
+			}
+			if err != nil {
+				return "", err
+			}
+			changed = true
+		}
 		if raw, ok := input["minimum_reply_member_level"]; ok {
 			if scope != "group" || !IsOneBotPlatform(base.Platform) {
 				return "", fmt.Errorf("最低成员等级仅适用于 OneBot 群")
@@ -252,11 +270,14 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		if participationChanged {
 			update.Participation = copyParticipation(&prefs)
 		}
+		if scope != "group" {
+			update.Fields = fieldPatch
+		}
 		if !changed && !update.UpdatesWelcome() {
 			return "", fmt.Errorf("至少提供一项要修改的机器人设置")
 		}
 		// 机器人级只改了插件设置时，不必重写机器人配置。
-		botSettingsChanged := participationChanged || len(behavior) > 0 || update.UpdatesWelcome()
+		botSettingsChanged := participationChanged || len(behavior) > 0 || update.UpdatesWelcome() || len(update.Fields) > 0
 		if scope == "group" {
 			if participationChanged {
 				group.Participation = copyParticipation(&prefs)
@@ -304,7 +325,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		}
 		prefs = effective.participationPreferences()
 		if writer := t.runtime.appLogWriter(); writer != nil {
-			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior_keys": behaviorKeys(behavior), "plugin_ids": pluginSettingIDs}})
+			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior_keys": behaviorKeys(behavior), "plugin_ids": pluginSettingIDs, "field_keys": fieldKeys(fieldPatch)}})
 		}
 	}
 	groupID, message := "", "已读取实际生效机器人设置"
@@ -328,7 +349,15 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			return "", err
 		}
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "plugin_settings": pluginView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
+	var fieldsView any
+	if listFields, _ := input["list_fields"].(bool); listFields {
+		if scope == "group" {
+			fieldsView = editableFieldsView(group, groupFieldRejection)
+		} else {
+			fieldsView = editableFieldsView(PayloadFromConfig(effective), botFieldRejection)
+		}
+	}
+	data, err := json.Marshal(map[string]any{"ok": true, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 

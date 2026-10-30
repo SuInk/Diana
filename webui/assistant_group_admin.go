@@ -473,30 +473,9 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 		}
 	}
 	cfg.GroupID = strings.TrimSpace(groupID)
-	cfg.GroupTriggers = trimStringSlice(cfg.GroupTriggers)
-	cfg.WelcomeMessage = strings.TrimSpace(cfg.WelcomeMessage)
-	cfg.WelcomeTemplates = trimStringSlice(cfg.WelcomeTemplates)
-	if len(cfg.WelcomeTemplates) > 50 {
-		return assistant.GroupConfig{}, fmt.Errorf("欢迎词模板最多 50 条")
-	}
-	for _, template := range cfg.WelcomeTemplates {
-		if len([]rune(template)) > 200 {
-			return assistant.GroupConfig{}, fmt.Errorf("欢迎词模板不能超过 200 字")
-		}
-	}
-	if cfg.WelcomeLLMCooldownSeconds < 0 {
-		cfg.WelcomeLLMCooldownSeconds = 0
-	}
-	if cfg.WelcomeLLMCooldownSeconds > 24*60*60 {
-		return assistant.GroupConfig{}, fmt.Errorf("欢迎词 LLM 冷却不能超过 86400 秒")
-	}
-	cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt)
-	if len([]rune(cfg.ReplyAccountSafetyAuditPrompt)) > assistant.AccountSafetyRulesMaxRunes {
-		return assistant.GroupConfig{}, fmt.Errorf("账号安全审核规则不能超过 8000 字")
-	}
-	cfg.ProactiveReplyExtraCriteria = strings.TrimSpace(cfg.ProactiveReplyExtraCriteria)
-	if len([]rune(cfg.ProactiveReplyExtraCriteria)) > assistant.ProactiveReplyExtraCriteriaMaxRunes {
-		return assistant.GroupConfig{}, fmt.Errorf("接话补充判据不能超过 %d 字", assistant.ProactiveReplyExtraCriteriaMaxRunes)
+	cfg, err := assistant.NormalizeGroupConfigFields(cfg)
+	if err != nil {
+		return assistant.GroupConfig{}, err
 	}
 	// 规则防御同理：不认识这个字段的旧页面保存时不能把它冲掉，关闭靠显式的开关。
 	if cfg.Governance == nil {

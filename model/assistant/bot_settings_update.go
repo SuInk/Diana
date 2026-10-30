@@ -16,6 +16,8 @@ type BotSettingsUpdate struct {
 	WelcomeLLMCooldownSeconds *int
 	// Behavior 是 bot_config behavior 参数里校验过的回复行为设置。
 	Behavior []behaviorValue
+	// Fields 是 bot_config fields 参数里按 WebUI 配置键提交、已预校验的补丁。
+	Fields map[string]any
 }
 
 func (u BotSettingsUpdate) UpdatesWelcome() bool {
@@ -23,6 +25,11 @@ func (u BotSettingsUpdate) UpdatesWelcome() bool {
 }
 
 func (u BotSettingsUpdate) Apply(cfg BotConfig) BotConfig {
+	if len(u.Fields) > 0 {
+		if next, err := applyBotFields(cfg, u.Fields); err == nil {
+			cfg = next
+		}
+	}
 	cfg = applyBehaviorToBot(cfg, u.Behavior)
 	if u.Participation != nil {
 		cfg.Participation = copyParticipation(u.Participation)
