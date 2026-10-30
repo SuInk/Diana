@@ -13,7 +13,7 @@ QQ 的语音是闭源的音视频 SDK，协议不开放，没法自己写一个�
 机器人说话 ← QQ 麦克风 ← bot_mic（虚拟）← qqcall-agent 播放 ← Diana
 ```
 
-`qqcall-agent`（`cmd/qqcall-agent`）在容器里管窗口和声卡，Diana 的「QQ 语音通话」插件（`model/assistant/qq_voice_call_plugin.go`）连着它决定接不接、对话。两者之间的协议在 `model/qqcall`。
+`qqcall-agent` 在容器里管窗口和声卡，和镜像一起在单独的仓库 [SuInk/snowluma-voice](https://github.com/SuInk/snowluma-voice) 维护，Diana 的「QQ 语音通话」插件（`model/assistant/qq_voice_call_plugin.go`）连着它决定接不接、对话。两者之间的协议在 `model/qqcall`。
 
 ## 一通电话的流程
 
@@ -31,24 +31,11 @@ QQ 的语音是闭源的音视频 SDK，协议不开放，没法自己写一个�
 
 ### 1. 换用带语音组件的 SnowLuma 镜像
 
-直接拉现成的（amd64、arm64 都有），标签和 SnowLuma 版本一致：
-
 ```bash
 docker pull ghcr.io/suink/snowluma-voice:latest
 ```
 
-镜像由 `.github/workflows/snowluma-voice.yml` 构建：相关代码合进 main 时自动发布；SnowLuma 出新版时，到 Actions 手动运行它并填上游版本号（如 `v1.14.11`），或者改 Dockerfile 里的 `SNOWLUMA_IMAGE` 默认值。也可以在仓库根目录自己构建：
-
-```bash
-docker build -f packaging/snowluma-voice/Dockerfile -t snowluma-voice .
-```
-
-它在 SnowLuma 镜像上加了 PulseAudio、`libpulse-mainloop-glib0`、xdotool、ImageMagick、tesseract（含简体中文）和 `qqcall-agent`。`libpulse-mainloop-glib0` 是 QQ 语音插件的依赖，原镜像没有：缺了它点「语音通话」不报错，只是过一会儿显示「已取消」，对方根本没响铃。
-
-容器启动参数和原来一样（`--cap-add SYS_PTRACE --security-opt seccomp=unconfined`、原来的数据卷），再加：
-
-- 环境变量 `QQCALL_TOKEN`：随便一串足够长的随机字符，和 Diana 插件设置里的令牌一致。不设时 agent 不启动，镜像的其余部分照常工作。
-- 端口 6190：只给 Diana 访问，例如 `-p 127.0.0.1:6190:6190`；同一个 compose 里就不用映射。
+它在原版 SnowLuma 上加了 PulseAudio、QQ 语音插件缺的 `libpulse-mainloop-glib0`、xdotool、tesseract 和 `qqcall-agent`，标签和上游 SnowLuma 版本一致。容器参数照旧，再加环境变量 `QQCALL_TOKEN`（和下面插件里的令牌一致）和端口 6190（只给 Diana 访问）。详细参数、按钮坐标等 agent 环境变量见 [snowluma-voice 的 README](https://github.com/SuInk/snowluma-voice#readme)。
 
 **换镜像要重建容器，QQ 会重新登录**；数据卷保留时一般能快速登录，不行就扫码。
 
@@ -66,21 +53,6 @@ docker build -f packaging/snowluma-voice/Dockerfile -t snowluma-voice .
 | 允许打断 | 默认关，见下 |
 
 机器人要填好主人账号，模型分配里要配好「语音识别」和「语音合成」，和 WebUI 打电话的前提一样。
-
-## agent 的环境变量
-
-窗口里的按钮位置写死在坐标上（相对通话窗口左上角，窗口 360×640）。QQ 改版挪了按钮时改这些变量，不用重新编译：
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `QQCALL_TOKEN` | 无 | 必填，不填不启动 |
-| `QQCALL_LISTEN` | `:6190` | 监听地址 |
-| `QQCALL_WINDOW_TITLE` | `语音通话` | 通话窗口标题 |
-| `QQCALL_ANSWER_POS` | `112,508` | 来电时的「接听」 |
-| `QQCALL_REJECT_POS` | `244,508` | 来电时的「拒绝」 |
-| `QQCALL_HANGUP_POS` | `287,508` | 通话中的「挂断」 |
-| `QQCALL_NAME_AREA` | `20,255,320,75` | 昵称和「邀请你语音通话」那块，`x,y,宽,高` |
-| `QQCALL_LOG_DIR` | `/app/data/logs` | SnowLuma 日志目录，读对方 QQ 号用 |
 
 ## 已知限制
 
