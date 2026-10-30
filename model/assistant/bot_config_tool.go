@@ -249,6 +249,12 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			if scope != "group" {
 				var staged map[string]any
 				fieldPatch, staged = splitStagedBotFields(fieldPatch)
+				// 拆开后立即生效的那一半要单独成立，不能依赖还在暂存里的字段。
+				if fieldPatch != nil {
+					if _, err := applyBotFields(base, fieldPatch); err != nil {
+						return "", fmt.Errorf("不含暂存项时无法单独生效：%w", err)
+					}
+				}
 				if staged != nil {
 					t.runtime.stageBotFields(base.ID, t.event, staged)
 					stagedKeys = fieldKeys(staged)

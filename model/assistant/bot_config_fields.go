@@ -161,6 +161,10 @@ func unchangedOutsidePatch(before, after map[string]any, patch map[string]any) e
 		if _, patched := patch[key]; patched {
 			continue
 		}
+		// 凭据的「已配置」「预览」是从凭据派生的只读状态，跟着凭据变是正常的。
+		if strings.HasSuffix(key, "_configured") || strings.HasSuffix(key, "_preview") {
+			continue
+		}
 		if !reflect.DeepEqual(before[key], after[key]) {
 			return fmt.Errorf("修改会连带改变 %q，已取消；请在 WebUI 修改", key)
 		}

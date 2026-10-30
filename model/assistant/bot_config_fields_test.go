@@ -125,7 +125,7 @@ func TestBotConfigFieldsBotScope(t *testing.T) {
 
 func TestBotConfigConnectionFieldsNeedConfirmation(t *testing.T) {
 	b := DefaultBotConfig()
-	b.ID, b.Enabled, b.OwnerID = "b", true, "b-owner"
+	b.ID, b.Enabled, b.OwnerID, b.OneBotAccessToken = "b", true, "b-owner", "old-token-1234567890-abcdefgh"
 	saver := &participationToolSaver{cfg: b}
 	r := NewRuntime(b, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{b}})
@@ -140,7 +140,7 @@ func TestBotConfigConnectionFieldsNeedConfirmation(t *testing.T) {
 	if saver.cfg.SystemPrompt != "立即生效" {
 		t.Fatal("non-connection field should apply immediately")
 	}
-	if saver.cfg.OneBotAccessToken != "" {
+	if saver.cfg.OneBotAccessToken != "old-token-1234567890-abcdefgh" {
 		t.Fatal("connection field applied before confirmation")
 	}
 	if strings.Contains(raw, "a-long-enough-token") || !strings.Contains(raw, "pending_fields") {
