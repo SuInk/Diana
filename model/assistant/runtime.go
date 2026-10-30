@@ -5035,10 +5035,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		stopInterjections()
 		stopProgress()
 		if appendKey != "" {
-			// 失败的一轮不留记录：下一轮从完整组装重新开始，免得续上一份残缺的请求。
-			if err != nil {
-				r.appendContexts.put(appendKey, nil)
-			} else {
+			// 失败的一轮不覆盖记录：残缺的请求不能续，但上一次成功的那份还完整，下一轮
+			// 接着它续，失败那条消息会作为新历史追加进去。以前直接清空，下一轮只能整段
+			// 重新组装（10-29～30 线上 56 次失败，每次都让下一轮多付一整份未命中）。
+			if err == nil {
 				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey))
 			}
 			r.recordAppendContextDecision(ctx, appendDecision, continuation, resp, err)

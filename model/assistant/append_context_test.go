@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -209,5 +210,50 @@ func TestSplitContextBlocksRoundTrips(t *testing.T) {
 	blocks := splitContextBlocks(content)
 	if len(blocks) != 3 || strings.Join(blocks, "\n") != content {
 		t.Fatalf("blocks = %q", blocks)
+	}
+}
+
+// 中间一轮失败不清空记录：下一轮接着上一次成功的请求续，不用整段重新组装。
+func TestReplyTurnContinuesFromLastSuccessAfterFailure(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{
+		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"在的"}}]`,
+		`tool_calls:[{"id":"s3","name":"send","arguments":{"text":"好"}}]`,
+	}}
+	failing := false
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		if failing {
+			return failingLLMProvider{err: errors.New("upstream down")}, nil
+		}
+		return provider, nil
+	})
+	turn := func(id, text string, at int64) {
+		event := interimTestEvent()
+		event.MessageID, event.RawMessage, event.Time = id, text, at
+		event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
+		_, _ = runtime.replyTo(t.Context(), event, text)
+	}
+	base := interimTestEvent().Time
+	turn("keep-1", "在吗", base)
+	failing = true
+	turn("keep-2", "失败这条", base+30)
+	failing = false
+	turn("keep-3", "继续", base+60)
+
+	var replies []llm.GenerateRequest
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Tools) > 0 {
+			replies = append(replies, request)
+		}
+	}
+	if len(replies) != 2 {
+		t.Fatalf("reply requests = %d, want 2", len(replies))
+	}
+	before, after := replies[0].Messages, replies[1].Messages
+	for index, message := range before {
+		got, want := after[index], message
+		if got.Role != want.Role || appendContextText(got) != appendContextText(want) {
+			t.Fatalf("third turn did not continue the first at %d", index)
+		}
 	}
 }

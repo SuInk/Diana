@@ -277,7 +277,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		decision.reason = "empty"
 		return nil, decision
 	case log == nil:
-		// 进程刚启动、上一轮失败或这个会话第一次回复。
+		// 进程刚启动，或这个会话第一次回复。
 		decision.reason = "no_log"
 		return nil, decision
 	case appendContextHeadKey(messages) != log.headKey:
