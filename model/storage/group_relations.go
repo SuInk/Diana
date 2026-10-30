@@ -45,8 +45,15 @@ type relationEventPayload struct {
 	} `json:"quoted"`
 }
 
-// GroupRelationGraphFor 统计一个群的关系图。
+// GroupRelationGraphFor 统计一个群以机器人为中心的关系图。
 func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (assistant.GroupRelationGraph, error) {
+	return s.GroupRelationGraphCenteredOn(ctx, groupID, since, botID, "")
+}
+
+// GroupRelationGraphCenteredOn 统计关系图并以 centerID 为中心；centerID 为空时
+// 中心就是机器人。边还是全群的边，换中心只换「从谁的角度看」，所以中心这个人
+// 必须留在节点里——他发言再少也不能被人数上限截掉，否则他的边全被丢了。
+func (s *SQLiteStore) GroupRelationGraphCenteredOn(ctx context.Context, groupID string, since time.Time, botID, centerID string) (assistant.GroupRelationGraph, error) {
 	graph := assistant.GroupRelationGraph{
 		GroupID: strings.TrimSpace(groupID),
 		BotID:   strings.TrimSpace(botID),
@@ -148,21 +155,30 @@ LIMIT ?
 	}
 
 	graph.Participants = len(messages)
-	graph.Nodes = s.buildRelationNodes(ctx, messages, names, graph.BotID)
+	graph.CenterID = graph.BotID
+	if centerID = strings.TrimSpace(centerID); centerID != "" {
+		if _, spoke := messages[centerID]; spoke || centerID == graph.BotID {
+			graph.CenterID = centerID
+		}
+	}
+	graph.Nodes = s.buildRelationNodes(ctx, messages, names, graph.BotID, graph.CenterID)
 	graph.Edges = relationEdgesAmong(graph.Nodes, weights)
 	return graph, nil
 }
 
-// buildRelationNodes 按发言数取前 N 个人，并补上好感度。中心节点无论发言多少
-// 都要在——它是这张图的原点。
-func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[string]int, names map[string]string, botID string) []assistant.GroupRelationNode {
+// buildRelationNodes 按发言数取前 N 个人，并补上好感度。机器人和选中的中心无论
+// 发言多少都要在——一个是默认原点，一个是这次的原点。
+func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[string]int, names map[string]string, botID, centerID string) []assistant.GroupRelationNode {
 	nodes := make([]assistant.GroupRelationNode, 0, len(messages))
 	for userID, count := range messages {
 		nodes = append(nodes, assistant.GroupRelationNode{UserID: userID, DisplayName: names[userID], Messages: count, IsBot: userID == botID && botID != ""})
 	}
+	pinned := func(node assistant.GroupRelationNode) bool {
+		return node.IsBot || (centerID != "" && node.UserID == centerID)
+	}
 	sort.Slice(nodes, func(left, right int) bool {
-		if nodes[left].IsBot != nodes[right].IsBot {
-			return nodes[left].IsBot
+		if pinned(nodes[left]) != pinned(nodes[right]) {
+			return pinned(nodes[left])
 		}
 		if nodes[left].Messages == nodes[right].Messages {
 			return nodes[left].UserID < nodes[right].UserID

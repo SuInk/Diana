@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -214,5 +215,50 @@ VALUES ('', '1001', 'Alice', 37, 1, '[]', '2026-01-01T00:00:00Z')`); err != nil 
 	}
 	if favorability != 37 {
 		t.Fatalf("favorability = %d, want 37; nodes=%#v", favorability, graph.Nodes)
+	}
+}
+
+// 换中心时，中心这个人就算发言最少也要留在图上，没发过言的人则退回机器人。
+func TestGroupRelationGraphCenteredOnMember(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "relations-center.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	now := time.Now()
+
+	seeds := []relationSeed{}
+	for index := 0; index < groupRelationMaxNodes+5; index++ {
+		userID := fmt.Sprintf("%d", 20000+index)
+		seeds = append(seeds, relationSeed{userID: userID, name: userID}, relationSeed{userID: userID, name: userID})
+	}
+	// 只说过一句的人，@ 了第一个话痨。
+	seeds = append(seeds, relationSeed{userID: "19999", name: "Quiet", mentions: []string{"20000"}})
+	seedRelationEvents(t, store, "g5", now, seeds)
+
+	graph, err := store.GroupRelationGraphCenteredOn(context.Background(), "g5", now.Add(-time.Hour), "42", "19999")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if graph.CenterID != "19999" {
+		t.Fatalf("center = %q, want 19999", graph.CenterID)
+	}
+	found := false
+	for _, node := range graph.Nodes {
+		found = found || node.UserID == "19999"
+	}
+	if !found {
+		t.Fatalf("中心被人数上限截掉了：%d 个节点", len(graph.Nodes))
+	}
+	if len(graph.Edges) == 0 || graph.Edges[0].Source != "19999" && graph.Edges[0].Target != "19999" {
+		t.Fatalf("中心的边丢了：%#v", graph.Edges)
+	}
+
+	fallback, err := store.GroupRelationGraphCenteredOn(context.Background(), "g5", now.Add(-time.Hour), "42", "88888")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fallback.CenterID != "42" {
+		t.Fatalf("没发过言的人不该当中心：center = %q", fallback.CenterID)
 	}
 }

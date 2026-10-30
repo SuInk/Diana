@@ -317,7 +317,8 @@ func (h *BotHandler) groupAvatar(c *gin.Context) {
 	c.Data(http.StatusOK, contentType, avatar.Data)
 }
 
-// groupRelationGraph 返回以机器人为中心的群聊关系图。
+// groupRelationGraph 返回群聊关系图。默认以机器人为中心，center 传群友 QQ 号时
+// 换成以他为中心；这个人在区间内没发过言就退回机器人。
 func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	if h.sqlite == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "消息存储未配置"})
@@ -338,7 +339,7 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
 	profileID := botProfileScope(c)
 	botID := strings.TrimSpace(h.botConfigForProfile(profileID).BotAccount)
-	graph, err := h.sqlite.GroupRelationGraphFor(c.Request.Context(), groupID, since, botID)
+	graph, err := h.sqlite.GroupRelationGraphCenteredOn(c.Request.Context(), groupID, since, botID, c.Query("center"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

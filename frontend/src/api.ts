@@ -4480,6 +4480,8 @@ export interface GroupRelationEdge {
 export interface GroupRelationGraph {
   group_id: string;
   bot_id?: string;
+  /** 这张图的中心，默认等于 bot_id。 */
+  center_id?: string;
   since?: string;
   messages: number;
   participants: number;
@@ -4513,8 +4515,9 @@ export function getAgentModeImpact(profile: string): Promise<{ running_coding_jo
   return requestJSON(`/api/assistant/agent-mode/impact?profile=${encodeURIComponent(profile)}`);
 }
 
-export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupRelationResponse> {
+export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d", center = ""): Promise<GroupRelationResponse> {
   const params = new URLSearchParams({ range });
+  if (center) params.set("center", center);
   return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
 }
 

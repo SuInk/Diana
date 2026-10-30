@@ -32,8 +32,10 @@ type GroupRelationEdge struct {
 
 // GroupRelationGraph 是一个群在某段时间内的关系图。
 type GroupRelationGraph struct {
-	GroupID  string     `json:"group_id"`
-	BotID    string     `json:"bot_id,omitempty"`
+	GroupID string `json:"group_id"`
+	BotID   string `json:"bot_id,omitempty"`
+	// CenterID 是这张图的中心：默认是机器人，WebUI 可以换成某个群友。
+	CenterID string     `json:"center_id,omitempty"`
 	Since    *time.Time `json:"since,omitempty"`
 	Messages int        `json:"messages"`
 	// Participants 是这段时间实际发过言的人数，Nodes 可能因为上限少于它。

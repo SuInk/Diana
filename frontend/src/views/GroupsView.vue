@@ -233,21 +233,32 @@
       @close="closeRelations"
     >
       <div class="stack" style="gap: 12px">
-        <div class="segmented" role="radiogroup" aria-label="按时间范围统计关系">
-          <button
-            v-for="option in relationRangeOptions"
-            :key="option.value"
-            type="button"
-            role="radio"
-            :aria-checked="relationsRange === option.value"
-            :class="{ active: relationsRange === option.value }"
-            @click="selectRelationsRange(option.value)"
-          >
-            {{ option.label }}
-          </button>
+        <div class="cluster" style="gap: 12px; justify-content: space-between">
+          <div class="segmented" role="radiogroup" aria-label="按时间范围统计关系">
+            <button
+              v-for="option in relationRangeOptions"
+              :key="option.value"
+              type="button"
+              role="radio"
+              :aria-checked="relationsRange === option.value"
+              :class="{ active: relationsRange === option.value }"
+              @click="selectRelationsRange(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <AppSelect
+            v-if="relationCenterOptions.length > 1"
+            style="min-width: 200px"
+            aria-label="以谁为中心"
+            searchable
+            :model-value="relationsCenter"
+            :options="relationCenterOptions"
+            @update:model-value="selectRelationsCenter"
+          />
         </div>
         <p v-if="relationsLoading" class="muted">正在统计…</p>
-        <GroupRelationChart v-else-if="relationsGraph" :graph="relationsGraph" />
+        <GroupRelationChart v-else-if="relationsGraph" :graph="relationsGraph" @select="selectRelationsCenter" />
       </div>
     </Modal>
 
@@ -865,9 +876,28 @@ const relationsRange = ref<AssistantEventRange>("7d");
 const relationsGraph = ref<GroupRelationGraph | null>(null);
 const relationsLoading = ref(false);
 
+// 中心留空就是机器人。候选人取自上一次拉到的图：发言前几十名加上机器人和当前中心。
+const relationsCenter = ref("");
+const relationCenterOptions = computed(() => {
+  const nodes = relationsGraph.value?.nodes ?? [];
+  return [
+    { value: "", label: "以机器人为中心" },
+    ...nodes.filter((node) => !node.is_bot).map((node) => ({ value: node.user_id, label: `以 ${node.display_name?.trim() || node.user_id} 为中心`, hint: node.user_id, avatar: node.avatar_url }))
+  ];
+});
+
+function selectRelationsCenter(value: string): void {
+  const bot = relationsGraph.value?.nodes.find((node) => node.is_bot)?.user_id;
+  const next = value === bot ? "" : value;
+  if (relationsCenter.value === next) return;
+  relationsCenter.value = next;
+  void loadRelations();
+}
+
 function openRelations(group: BotGroupConfig, groupName = ""): void {
   relationsGroupID.value = group.group_id;
   relationsGroupName.value = groupName;
+  relationsCenter.value = "";
   relationsGraph.value = null;
   void loadRelations();
 }
@@ -889,10 +919,12 @@ async function loadRelations(): Promise<void> {
   if (!groupID) return;
   relationsLoading.value = true;
   try {
-    const response = await getGroupRelations(groupID, relationsRange.value);
+    const response = await getGroupRelations(groupID, relationsRange.value, relationsCenter.value);
     // 期间可能已经关掉弹窗或换了群，回来的结果不该覆盖当前状态。
     if (relationsGroupID.value !== groupID) return;
     relationsGraph.value = response.graph;
+    // 选的人这段时间没发过言，后端会退回机器人，选择框跟着回去。
+    if (response.graph.center_id === response.graph.bot_id) relationsCenter.value = "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "关系图加载失败");
   } finally {

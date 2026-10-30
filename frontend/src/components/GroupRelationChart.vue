@@ -4,9 +4,9 @@
 <template>
   <div class="relation-chart">
     <p v-if="placed.length > 0" class="relation-legend muted">
-      {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ graph.nodes.filter((node) => !node.is_bot).length }} 人</template><template v-if="overflow > 0">，其中 {{ overflow }} 人圈里放不下</template>
+      {{ graph.messages }} 条发言 · {{ graph.participants }} 人发过言<template v-if="trimmed">，只画发言最多的 {{ ordered.length }} 人</template><template v-if="overflow > 0">，其中 {{ overflow }} 人圈里放不下</template>
       <template v-if="graph.truncated">（只统计了最近这批消息）</template>
-      · 越靠里和机器人互动越多，悬停看名字
+      · 越靠里和{{ centerIsBot ? "机器人" : centerName }}互动越多，悬停看名字，点头像换成以 TA 为中心
     </p>
     <svg
       v-if="placed.length > 0"
@@ -14,7 +14,7 @@
       class="relation-svg"
       :class="{ 'relation-focusing': focused }"
       role="img"
-      :aria-label="`群聊互动圈：${placed.length} 人按和机器人的互动次数分成内圈、中圈、外圈`"
+      :aria-label="`群聊互动圈：${placed.length} 人按和${centerName}的互动次数分成内圈、中圈、外圈`"
       @mouseleave="focusedID = ''"
     >
       <defs>
@@ -59,6 +59,7 @@
         class="relation-member"
         :class="{ 'relation-active': focusedID === member.userID || focusedNeighbors.has(member.userID) }"
         @mouseenter="focusedID = member.userID"
+        @click="emit('select', member.userID)"
       >
         <title>{{ member.tooltip }}</title>
         <circle :cx="member.x" :cy="member.y" :r="member.radius" class="relation-node" :style="{ fill: member.fill }" />
@@ -97,7 +98,7 @@
           :height="centerRadius * 2"
           clip-path="url(#relation-center-clip)"
           preserveAspectRatio="xMidYMid slice"
-          @error="markBroken(graph.bot_id || '')"
+          @error="markBroken(centerID)"
         />
         <text v-else :x="center" :y="center + 5" class="relation-center-label" text-anchor="middle">{{ centerLabel }}</text>
         <circle :cx="center" :cy="center" :r="centerRadius" class="relation-node-ring relation-center-ring" />
@@ -135,6 +136,8 @@ import { computed, ref } from "vue";
 import type { GroupRelationGraph } from "../api";
 
 const props = defineProps<{ graph: GroupRelationGraph }>();
+// 点圈里的人时把他的号码交给外面，由弹窗决定要不要换中心重新拉图。
+const emit = defineEmits<{ select: [userID: string] }>();
 
 const size = 620;
 const center = size / 2;
@@ -164,15 +167,19 @@ function clipID(userID: string) {
   return `relation-clip-${userID.replace(/[^A-Za-z0-9_-]/g, "_")}`;
 }
 
-const botNode = computed(() => props.graph.nodes.find((node) => node.is_bot) ?? null);
-const centerLabel = computed(() => botNode.value?.display_name?.slice(0, 4) || "Diana");
+// 中心默认是机器人；后端按 center 参数换过中心时以 center_id 为准。
+const centerID = computed(() => props.graph.center_id || props.graph.bot_id || "");
+const centerNode = computed(() => props.graph.nodes.find((node) => node.user_id === centerID.value) ?? props.graph.nodes.find((node) => node.is_bot) ?? null);
+const centerIsBot = computed(() => !centerNode.value || !!centerNode.value.is_bot);
+const centerName = computed(() => centerIsBot.value ? "机器人" : centerNode.value?.display_name?.trim() || centerID.value);
+const centerLabel = computed(() => centerNode.value?.display_name?.slice(0, 4) || (centerIsBot.value ? "Diana" : centerID.value.slice(0, 4)));
 const centerAvatar = computed(() => {
-  const node = botNode.value;
+  const node = centerNode.value;
   return node?.avatar_url && !brokenAvatars.value.has(node.user_id) ? node.avatar_url : "";
 });
 
-const weightToBot = computed(() => {
-  const botID = props.graph.bot_id;
+const weightToCenter = computed(() => {
+  const botID = centerID.value;
   const weights = new Map<string, number>();
   if (!botID) return weights;
   for (const edge of props.graph.edges) {
@@ -183,9 +190,9 @@ const weightToBot = computed(() => {
 });
 
 const ordered = computed(() => {
-  const weights = weightToBot.value;
+  const weights = weightToCenter.value;
   return props.graph.nodes
-    .filter((node) => !node.is_bot)
+    .filter((node) => node.user_id !== centerNode.value?.user_id)
     .map((node) => ({ node, weight: weights.get(node.user_id) ?? 0 }))
     .sort((left, right) => right.weight - left.weight || right.node.messages - left.node.messages);
 });
@@ -235,11 +242,11 @@ const placed = computed<PlacedMember[]>(() => {
         avatar: node.avatar_url && !brokenAvatars.value.has(node.user_id) ? node.avatar_url : "",
         initial: Array.from(name)[0] ?? "",
         label: name.length > 6 ? `${name.slice(0, 6)}…` : name,
-        // 没跟机器人说过话的人用中性底色，有来往的越往里颜色越深。
+        // 没跟中心说过话的人用中性底色，有来往的越往里颜色越深。
         fill: weight > 0
           ? `color-mix(in srgb, var(--accent) ${[100, 62, 34][ringIndex]}%, var(--surface-2))`
           : "var(--surface-2)",
-        tooltip: `${name} · ${ring.name} · 发言 ${node.messages} 条 · 与机器人互动 ${weight} 次 · 好感度 ${node.favorability}`
+        tooltip: `${name} · ${ring.name} · 发言 ${node.messages} 条 · 与${centerName.value}互动 ${weight} 次 · 好感度 ${node.favorability}`
       });
     });
   }
@@ -263,7 +270,7 @@ const focused = computed(() => placed.value.find((member) => member.userID === f
 const focusedPeerEdges = computed(() => {
   const current = focused.value;
   if (!current) return [];
-  const botID = props.graph.bot_id;
+  const botID = centerID.value;
   const positions = new Map(placed.value.map((member) => [member.userID, member]));
   const edges = props.graph.edges.filter((edge) =>
     edge.source !== botID && edge.target !== botID && (edge.source === current.userID || edge.target === current.userID)
@@ -330,7 +337,7 @@ const ranking = computed(() => placed.value.filter((member) => member.weight > 0
 }
 
 .relation-member {
-  cursor: default;
+  cursor: pointer;
   transition: opacity 0.15s;
 }
 
