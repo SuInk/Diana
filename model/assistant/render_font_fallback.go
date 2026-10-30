@@ -165,11 +165,17 @@ func findSystemRenderFont(hints []string, chars []rune) string {
 	}
 	return ""
 }
+
+// ensureRenderScriptFont 只按字体自带的样例字形认文件，不要求它覆盖页面上的
+// 每个字符：符号这类分组是按 Unicode 类别粗分的，Symbols2 本来就不全，花体昵
+// 称里随便一个它没有的字符就会让下载校验失败、整张图出不来。文件身份已经由
+// SHA-256 保证，缺的字由调用方另找字体。
 func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []rune) (string, bool, error) {
 	root, err := os.UserCacheDir()
 	if err != nil {
 		return "", false, err
 	}
+	probe := []rune(asset.sample)
 	destination := filepath.Join(root, "diana", "fonts", asset.name+"-"+asset.sha[:8], asset.name+".ttf")
 	key := destination
 	renderFontMu.Lock()
@@ -189,6 +195,10 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 		renderFontMu.Unlock()
 		return path, false, nil
 	}
+	// 系统里也没有全覆盖的，已下载的那份能补多少补多少。
+	if _, err := loadFontForGlyphs(destination, probe); err == nil {
+		return destination, true, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, cjkFontInstallTimeout)
 	defer cancel()
 	select {
@@ -197,7 +207,7 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 	case <-ctx.Done():
 		return "", false, ctx.Err()
 	}
-	if _, err := loadFontForGlyphs(destination, chars); err == nil {
+	if _, err := loadFontForGlyphs(destination, probe); err == nil {
 		return destination, true, nil
 	}
 	source := "https://raw.githubusercontent.com/notofonts/noto-fonts/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/" + asset.name + "/" + asset.name + "-Regular.ttf"
@@ -206,7 +216,7 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 		source = "https://raw.githubusercontent.com/google/fonts/1edf95b4328bc5997ca93d2c0c7205272ec7347f/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
 		license = notoEmojiLicense
 	}
-	if err := downloadVerifiedFont(ctx, netguard.NewPublicHTTPClient(2*time.Minute), source, destination, asset.sha, chars, license); err != nil {
+	if err := downloadVerifiedFont(ctx, netguard.NewPublicHTTPClient(2*time.Minute), source, destination, asset.sha, probe, license); err != nil {
 		return "", false, fmt.Errorf("补齐 %s 字体失败：%w", asset.name, err)
 	}
 	return destination, true, nil
@@ -262,11 +272,17 @@ func prepareRenderFonts(ctx context.Context, page string, forced bool) (string, 
 		if err != nil {
 			return "", nil, err
 		}
-		font, err := loadFontForGlyphs(path, chars)
+		font, err := loadFontForGlyphs(path, []rune(asset.sample))
 		if err != nil {
 			return "", nil, err
 		}
 		covered = append(covered, font)
+		// 这套字体没有的字符留给下面按系统字体逐个找。
+		for _, r := range chars {
+			if !fontCoversGlyphs(font, []rune{r}) {
+				unknown = append(unknown, r)
+			}
+		}
 		if embed {
 			files = append(files, path)
 		} else {
@@ -293,7 +309,9 @@ func prepareRenderFonts(ctx context.Context, page string, forced bool) (string, 
 		for len(missing) > 0 {
 			path := findSystemRenderFont([]string{""}, []rune{missing[0]})
 			if path == "" {
-				return "", nil, fmt.Errorf("尚未覆盖文字 U+%04X 的字体，请提供含对应字形的字体", missing[0])
+				// 找不到就让这个字显示成方框：为一个罕见字符整张图不出，比缺一个字糟得多。
+				missing = missing[1:]
+				continue
 			}
 			font, err := loadFontForGlyphs(path, []rune{missing[0]})
 			if err != nil {

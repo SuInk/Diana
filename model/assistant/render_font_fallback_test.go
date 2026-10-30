@@ -119,3 +119,36 @@ func TestRenderMarkdownHighDensityIntegration(t *testing.T) {
 		}
 	}
 }
+
+// 下载过的回退字体只缺页面上个别字符时要直接复用，不能再去下载一遍、然后因为
+// 「缺少所需字形」让整张图失败——花体群昵称里的符号经常不在 Symbols2 里。
+func TestRenderScriptFontReusesPartialDownload(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	raw, err := os.ReadFile("testdata/fonts/diana-cjk-test.otf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	asset := renderFontAsset{name: "DianaPartialTest", sha: "0123456789abcdef", sample: "关", hints: []string{"dianapartialtestnohint"}}
+	root, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(root, "diana", "fonts", asset.name+"-"+asset.sha[:8], asset.name+".ttf")
+	if err := os.MkdirAll(filepath.Dir(destination), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(destination, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // 一旦走到下载就会因为 ctx 已取消而失败
+	path, embed, err := ensureRenderScriptFont(ctx, asset, []rune("关𓀀"))
+	if err != nil {
+		t.Fatalf("partial font should be reused, got %v", err)
+	}
+	if path != destination || !embed {
+		t.Fatalf("got path=%s embed=%v", path, embed)
+	}
+}
