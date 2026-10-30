@@ -27,7 +27,7 @@ func newDianaBotConfigTool(r *Runtime, event MessageEvent) *dianaBotConfigTool {
 }
 func (*dianaBotConfigTool) Name() string { return botConfigToolName }
 func (*dianaBotConfigTool) Description() string {
-	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎和回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
+	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎、回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）和插件详细设置（plugin_settings：如链接解析平台、翻译开关）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -46,6 +46,8 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"welcome_llm_cooldown_seconds": toolIntParam("每群 LLM 欢迎冷却秒数；0 使用机器人或系统默认值，冷却期间回落文本。", 0, 86400),
 		"behavior":                     behaviorSettingsSchema(),
 		"group_settings":               groupSettingsSchema(),
+		"plugin":                       toolStringParam("get 时查看该插件 ID 的详细设置：可改的键、类型、选项和当前生效值。"),
+		"plugin_settings":              pluginSettingsSchema(),
 	})
 }
 
@@ -124,7 +126,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
-			"behavior": true, "group_settings": true}
+			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -197,6 +199,26 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 			changed = true
 		}
 		participationChanged := changed
+		var botPluginSettings map[string]map[string]any
+		var pluginSettingIDs []string
+		if raw, exists := input["plugin_settings"]; exists {
+			patch, e := parsePluginSettingsPatch(raw)
+			if e != nil {
+				return "", e
+			}
+			for id := range patch {
+				pluginSettingIDs = append(pluginSettingIDs, id)
+			}
+			if scope == "group" {
+				group, err = t.applyGroupPluginSettings(patch, owner, group)
+			} else {
+				botPluginSettings, err = t.prepareBotPluginSettings(patch)
+			}
+			if err != nil {
+				return "", err
+			}
+			changed = true
+		}
 		if raw, exists := input["group_settings"]; exists {
 			group, err = t.parseGroupSettings(raw, scope, group)
 			if err != nil {
@@ -233,6 +255,8 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		if !changed && !update.UpdatesWelcome() {
 			return "", fmt.Errorf("至少提供一项要修改的机器人设置")
 		}
+		// 机器人级只改了插件设置时，不必重写机器人配置。
+		botSettingsChanged := participationChanged || len(behavior) > 0 || update.UpdatesWelcome()
 		if scope == "group" {
 			if participationChanged {
 				group.Participation = copyParticipation(&prefs)
@@ -259,8 +283,15 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 				t.runtime.recordGroupReplyPolicyChanged(ctx, t.event, role, saved)
 			}
 		} else {
-			if err := t.runtime.saveBotSettings(base, update); err != nil {
-				return "", err
+			if botSettingsChanged {
+				if err := t.runtime.saveBotSettings(base, update); err != nil {
+					return "", err
+				}
+			}
+			if len(botPluginSettings) > 0 {
+				if err := t.saveBotPluginSettings(ctx, botPluginSettings); err != nil {
+					return "", err
+				}
 			}
 		}
 		if scope == "group" {
@@ -273,7 +304,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 		}
 		prefs = effective.participationPreferences()
 		if writer := t.runtime.appLogWriter(); writer != nil {
-			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior_keys": behaviorKeys(behavior)}})
+			_ = writer.AppendLog(ctx, applog.Entry{Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "bot_config_update", Message: "机器人设置已保存并生效", Actor: oneBotEventActor(t.event), Target: base.ID, Metadata: map[string]any{"scope": scope, "group_id": t.event.GroupID, "bot_profile_id": base.ID, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior_keys": behaviorKeys(behavior), "plugin_ids": pluginSettingIDs}})
 		}
 	}
 	groupID, message := "", "已读取实际生效机器人设置"
@@ -290,7 +321,14 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (str
 	if op == "update" {
 		message = "已保存并应用机器人设置"
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
+	var pluginView any
+	if id := strings.TrimSpace(configToolString(input, "plugin")); id != "" {
+		pluginView, err = t.pluginSettingsView(id, scope, owner, group)
+		if err != nil {
+			return "", err
+		}
+	}
+	data, err := json.Marshal(map[string]any{"ok": true, "plugin_settings": pluginView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": welcomeSettingsFromConfig(effective), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 
