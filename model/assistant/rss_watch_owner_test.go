@@ -76,7 +76,7 @@ func TestRSSWatchRegularUserRemainsOwnerScoped(t *testing.T) {
 	}
 }
 
-func TestRSSWatchGroupMembersShareGroupSubscriptions(t *testing.T) {
+func TestRSSWatchGroupMembersSeeButCannotManageOthers(t *testing.T) {
 	runtime, store := rssOwnerToolFixture()
 	other := newDianaRSSWatchTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "200", UserID: "member"})
 	listed := runRSSOwnerTool(t, other, map[string]any{"operation": "list"})
@@ -92,8 +92,13 @@ func TestRSSWatchGroupMembersShareGroupSubscriptions(t *testing.T) {
 	if len(listed.Items) != 2 {
 		t.Fatalf("群友应看到自己的和本群的订阅: %#v", listed.Items)
 	}
-	cancelled := runRSSOwnerTool(t, tool, map[string]any{"operation": "cancel", "id": "webui"})
-	if cancelled.Watch == nil || cancelled.Watch.OwnerID != "webui:profile" || store.items[2].CancelledAt.IsZero() {
-		t.Fatalf("群友取消本群订阅失败: %#v", cancelled)
+	// 看得到不等于能动：别人建的订阅群友不能改、停、删。
+	for _, operation := range []string{"update", "cancel", "delete"} {
+		if _, err := tool.Run(context.Background(), map[string]any{"operation": operation, "id": "webui", "interval": "1h"}); err == nil {
+			t.Fatalf("群友不该能 %s 别人的订阅", operation)
+		}
+	}
+	if !store.items[2].CancelledAt.IsZero() || len(store.items) != 3 {
+		t.Fatalf("别人的订阅被改动了: %#v", store.items)
 	}
 }

@@ -92,11 +92,7 @@ func newDianaRSSWatchTool(runtime *Runtime, event MessageEvent) *dianaRSSWatchTo
 
 func (t *dianaRSSWatchTool) targetOwner(requesterIsOwner bool, fallbackOwner, id string) (string, error) {
 	if !requesterIsOwner {
-		// 群里的订阅群友共用：在群里可以改、停、删推送到本群的订阅，不限创建人。
-		// 归属和额度仍记在创建人头上，这里只是把操作落到创建人的那条记录上。
-		if item, err := t.runtime.rssWatchByID(id); err == nil && t.runtime.rssWatchSharedWithGroup(item, t.event) {
-			return item.OwnerID, nil
-		}
+		// 群里的订阅群友只共享可见，改、停、删仍只限创建人：别人订的东西不能被随手取消。
 		return fallbackOwner, nil
 	}
 	item, err := t.runtime.rssWatchByID(id)
