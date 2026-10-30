@@ -13,6 +13,8 @@ on:
       - packaging/snowluma-voice/**
       - cmd/qqcall-agent/**
       - model/qqcall/**
+      - internal/safego/**
+      - internal/dlog/**
       - .github/workflows/snowluma-voice.yml
   pull_request:
     branches:
@@ -21,6 +23,8 @@ on:
       - packaging/snowluma-voice/**
       - cmd/qqcall-agent/**
       - model/qqcall/**
+      - internal/safego/**
+      - internal/dlog/**
       - .github/workflows/snowluma-voice.yml
   workflow_dispatch:
     inputs:
