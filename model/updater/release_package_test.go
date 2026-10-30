@@ -121,6 +121,68 @@ func TestReleasePackageUpdaterStagesVerifiedArchive(t *testing.T) {
 	}
 }
 
+func TestReleasePackageUpdaterStagesWindowsExecutable(t *testing.T) {
+	assetName := ExpectedReleaseAssetName("windows", "amd64")
+	program := []byte("new-windows-binary")
+	digest := sha256.Sum256(program)
+	manifest := []byte(hex.EncodeToString(digest[:]) + "  " + assetName + "\n")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/" + assetName:
+			_, _ = w.Write(program)
+		case "/SHA256SUMS":
+			_, _ = w.Write(manifest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	installRoot := t.TempDir()
+	executable := filepath.Join(installRoot, "diana-webui.exe")
+	database := filepath.Join(installRoot, "data", "diana.db")
+	writeUpdaterTestFile(t, executable, "old-binary", 0o700)
+	writeUpdaterTestFile(t, database, "database", 0o600)
+	var planPath string
+	u, err := NewReleasePackageUpdater(ReleasePackageOptions{
+		CurrentVersion: "v0.4.0",
+		Executable:     executable,
+		DatabasePath:   database,
+		HealthURL:      server.URL + "/api/health",
+		HTTPClient:     server.Client(),
+		PlatformOS:     "windows",
+		PlatformArch:   "amd64",
+		HelperStarter: func(_, path, _ string) error {
+			planPath = path
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !u.Supported() || u.ExpectedAssetName() != "diana-windows-amd64.exe" {
+		t.Fatalf("updater supported=%v asset=%q: %s", u.Supported(), u.ExpectedAssetName(), u.unsupportedWhy)
+	}
+	if _, err := u.Download(context.Background(), ReleasePackage{
+		Tag:       "v0.5.0",
+		Archive:   ReleaseAsset{Name: assetName, URL: server.URL + "/" + assetName},
+		Checksums: ReleaseAsset{Name: "SHA256SUMS", URL: server.URL + "/SHA256SUMS"},
+	}, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := u.InstallDownloaded(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := readReleaseApplyPlan(planPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(plan.StagedExecutable) != "diana-webui.exe" || len(plan.OptionalFiles) != 0 {
+		t.Fatalf("apply plan = %#v", plan)
+	}
+	assertUpdaterTestContent(t, plan.StagedExecutable, string(program))
+}
+
 func TestReleasePackageUpdaterReportsActiveOperation(t *testing.T) {
 	u := &ReleasePackageUpdater{
 		currentVersion: "v0.8.16",

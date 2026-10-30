@@ -59,6 +59,19 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 请帮我在当前机器安装 Diana 最新稳定版。先阅读 https://github.com/SuInk/Diana 的 README 和仓库里的 scripts/install.sh（Linux/macOS）或 scripts/install.ps1（Windows），识别系统与架构，使用官方一键安装脚本安装。默认使用当前用户权限、仅监听 127.0.0.1；如果已有安装，保留现有配置和数据并按官方流程升级。完成后运行 diana doctor 检查健康状态，告诉我控制台地址、管理员账号和安装时首次生成的密码，并提醒我妥善保存；如果是已有安装且没有生成新密码，说明继续使用原密码，不要自动重置。需要我提供的模型 API Key 和机器人凭据，等我在控制台填写。
 ```
 
+**或者手动下载。** 不想跑脚本就直接下载对应平台的文件（总是最新稳定版）：
+
+| 平台 | 下载 | 用法 |
+| --- | --- | --- |
+| Windows x64 | [diana-windows-amd64.exe](https://github.com/SuInk/Diana/releases/latest/download/diana-windows-amd64.exe) | 放进单独的文件夹后双击运行，数据存在旁边的 `data` 目录 |
+| macOS Apple 芯片 | [diana-macos-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-macos-arm64.tar.gz) | 解压后运行 `./run.sh` |
+| macOS Intel | [diana-macos-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-macos-amd64.tar.gz) | 解压后运行 `./run.sh` |
+| Linux x64 | [diana-linux-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-amd64.tar.gz) | 解压后运行 `./run.sh` |
+| Linux ARM64 | [diana-linux-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-arm64.tar.gz) | 解压后运行 `./run.sh` |
+| 安卓（Termux） | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 `./run.sh`；它是跑在手机上的服务端，不是安卓 App。Termux 里也能直接用上面的 Linux 一键命令 |
+
+WebUI 已编进程序，不需要装 Node.js。校验用同一 Release 的 [`SHA256SUMS`](https://github.com/SuInk/Diana/releases/latest/download/SHA256SUMS)，历史版本见 [Releases](https://github.com/SuInk/Diana/releases)。手动下载的不会注册 `diana` 命令，管理命令用 `./diana-webui <命令>`（Windows：`diana-webui.exe <命令>`）。
+
 **② 登录控制台。** 浏览器打开 `http://127.0.0.1:18080`（从别的设备访问就换成这台机器的 IP）。管理员账号密码在安装结束时显示在终端里，**只显示一次，请当场保存**；Docker 可用 `docker logs diana` 查看。忘了密码运行 `diana passwd` 重置。
 
 **③ 配置。** 控制台里依次完成三件事：
@@ -160,7 +173,7 @@ docker compose run --rm diana passwd
 docker compose start diana
 ```
 
-手动运行（`run.sh` / `run.bat`）的进程 `diana passwd` 不会去动，先自己停掉再执行。
+手动运行（`run.sh` 或双击 exe）的进程 `diana passwd` 不会去动，先自己停掉再执行。
 
 **升级**：重跑一遍安装命令，或直接在控制台里点升级。两条路都会先备份数据、校验新版本，健康检查不过自动回滚。Docker 部署则是拉新镜像重建容器。
 

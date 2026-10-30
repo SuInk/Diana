@@ -5,7 +5,6 @@ package updater
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -172,7 +171,9 @@ func (u *ReleasePackageUpdater) endOperation() {
 	u.operationMu.Unlock()
 }
 
-// ExpectedReleaseAssetName returns the complete-package asset for a platform.
+// ExpectedReleaseAssetName returns the release asset for a platform. Windows
+// ships the program itself as an .exe; the other platforms ship a .tar.gz with
+// run.sh and uninstall.sh beside it.
 func ExpectedReleaseAssetName(goos, goarch string) string {
 	packageOS := strings.TrimSpace(goos)
 	if packageOS == "darwin" {
@@ -180,7 +181,7 @@ func ExpectedReleaseAssetName(goos, goarch string) string {
 	}
 	base := "diana-" + packageOS + "-" + strings.TrimSpace(goarch)
 	if goos == "windows" {
-		return base + ".zip"
+		return base + ".exe"
 	}
 	return base + ".tar.gz"
 }
@@ -493,10 +494,18 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	if err := os.Mkdir(extractRoot, 0o700); err != nil {
 		return Result{}, err
 	}
-	if err := extractReleaseArchive(archivePath, extractRoot); err != nil {
+	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
+	if strings.HasSuffix(assetName, ".exe") {
+		// Windows 发布的就是程序本身，没有包可解，改名放进暂存目录即可。
+		if err := os.Mkdir(packageRoot, 0o700); err != nil {
+			return Result{}, err
+		}
+		if err := os.Rename(archivePath, filepath.Join(packageRoot, u.binaryName)); err != nil {
+			return Result{}, err
+		}
+	} else if err := extractReleaseArchive(archivePath, extractRoot); err != nil {
 		return Result{}, err
 	}
-	packageRoot := filepath.Join(extractRoot, releasePackageDirectory(assetName))
 	stagedExecutable := filepath.Join(packageRoot, u.binaryName)
 	if !regularFileExists(stagedExecutable) {
 		return Result{}, fmt.Errorf("%w: expected binary is missing", ErrInvalidReleaseArchive)
@@ -536,7 +545,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		Supervisor: detectServiceSupervisor(),
 		LogPath:    filepath.Join(updatesRoot, "last-update.log"),
 	}
-	optionalNames := []string{"run.sh", "run.bat", "README.txt"}
+	optionalNames := []string{"run.sh", "README.txt"}
 	if runtime.GOOS == "darwin" {
 		optionalNames = append(optionalNames, "desktopctl-helper")
 	}
@@ -906,9 +915,6 @@ func extractReleaseArchive(archivePath, target string) error {
 	if strings.HasSuffix(archivePath, ".tar.gz") {
 		return extractTarGZ(archivePath, target)
 	}
-	if strings.HasSuffix(archivePath, ".zip") {
-		return extractZIP(archivePath, target)
-	}
 	return fmt.Errorf("%w: unsupported archive type", ErrInvalidReleaseArchive)
 }
 
@@ -978,66 +984,6 @@ func extractTarGZ(archivePath, target string) error {
 	return nil
 }
 
-func extractZIP(archivePath, target string) error {
-	reader, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidReleaseArchive, err)
-	}
-	defer reader.Close()
-	if len(reader.File) > maxExtractedPackageFiles {
-		return fmt.Errorf("%w: too many files", ErrInvalidReleaseArchive)
-	}
-	var total uint64
-	for _, entry := range reader.File {
-		destination, err := safeArchiveDestination(target, entry.Name)
-		if err != nil {
-			return err
-		}
-		if entry.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("%w: archive symlink %q is not allowed", ErrInvalidReleaseArchive, entry.Name)
-		}
-		if entry.FileInfo().IsDir() {
-			if err := os.MkdirAll(destination, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if entry.UncompressedSize64 > uint64(maxExtractedPackageBytes)-total {
-			return fmt.Errorf("%w: extracted content is too large", ErrInvalidReleaseArchive)
-		}
-		total += entry.UncompressedSize64
-		if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-			return err
-		}
-		input, err := entry.Open()
-		if err != nil {
-			return err
-		}
-		mode := entry.Mode().Perm() & 0o755
-		if mode&0o400 == 0 {
-			mode |= 0o600
-		}
-		out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-		if err != nil {
-			_ = input.Close()
-			return err
-		}
-		_, copyErr := io.Copy(out, io.LimitReader(input, int64(entry.UncompressedSize64)+1))
-		inputCloseErr := input.Close()
-		outputCloseErr := out.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if inputCloseErr != nil {
-			return inputCloseErr
-		}
-		if outputCloseErr != nil {
-			return outputCloseErr
-		}
-	}
-	return nil
-}
-
 func safeArchiveDestination(root, name string) (string, error) {
 	name = filepath.FromSlash(strings.TrimSpace(name))
 	if name == "" || filepath.IsAbs(name) {
@@ -1056,7 +1002,7 @@ func safeArchiveDestination(root, name string) (string, error) {
 
 func releasePackageDirectory(assetName string) string {
 	name := strings.TrimSuffix(assetName, ".tar.gz")
-	return strings.TrimSuffix(name, ".zip")
+	return strings.TrimSuffix(name, ".exe")
 }
 
 func validReleaseDownloadURL(raw string) bool {

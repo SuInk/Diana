@@ -284,26 +284,25 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist release/package
-          runtime_name="diana-webui"
           package_suffix="${{ matrix.suffix }}"
           package_suffix="${package_suffix%.exe}"
           package_suffix="${package_suffix/darwin-/macos-}"
           package_name="diana-${package_suffix}"
           package_dir="release/package/${package_name}"
 
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
-            runtime_name="diana-webui.exe"
-          fi
-
-          # 前端编进 diana-webui，包里只有一个程序，下载后不需要 Go、Node 或源码。
-          mkdir -p "${package_dir}"
+          # 前端编进 diana-webui，下载后不需要 Go、Node 或源码。
           cp -R release/frontend-next-dist/. cmd/webui/webdist/
           test -f cmd/webui/webdist/index.html
-          go build -trimpath -ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}" -o "${package_dir}/${runtime_name}" ./cmd/webui
-          # 兼容副本：v0.8.91 起的旧自更新器要求包里有 frontend-next/dist/index.html，
-          # 留一份它们才能在 WebUI 里直接升上来。新程序只用内嵌前端，不读这个目录。
-          mkdir -p "${package_dir}/frontend-next/dist"
-          cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"
+          ldflags="-s -w -X main.buildVersion=${BUILD_VERSION}"
+
+          # Windows 直接发 exe：端口默认就是 18080，run.bat 没有可做的；卸载脚本编在程序里。
+          if [[ "${{ matrix.goos }}" == "windows" ]]; then
+            go build -trimpath -ldflags="${ldflags}" -o "dist/${package_name}.exe" ./cmd/webui
+            exit 0
+          fi
+
+          mkdir -p "${package_dir}"
+          go build -trimpath -ldflags="${ldflags}" -o "${package_dir}/diana-webui" ./cmd/webui
           if [ "${{ matrix.goos }}" = darwin ]; then
             cp release/desktop/desktopctl-helper "${package_dir}/desktopctl-helper"
             chmod +x "${package_dir}/desktopctl-helper"
@@ -311,34 +310,25 @@ jobs:
           printf '%s\n' \
             "Diana ${BUILD_VERSION}" \
             '' \
-            'Run ./run.sh on Linux/macOS or run.bat on Windows.' \
+            'Run ./run.sh to start Diana.' \
             'Default WebUI port: 18080' \
             'On first start Diana prints a generated administrator username and password once; save them.' \
             'To choose them instead, set admin.username and admin.password (at least 8 characters) in a config.yaml next to the program.' \
-            'Forgot the password? Stop Diana, then run ./diana-webui passwd (diana-webui.exe passwd on Windows).' \
-            'The WebUI is built into the diana-webui program; frontend-next/ only lets older versions self-update.' \
+            'Forgot the password? Stop Diana, then run ./diana-webui passwd.' \
+            'The WebUI is built into the diana-webui program.' \
             'One-click installations expose `diana uninstall`; this package also includes an uninstall script.' \
             'Future stable Releases can be installed from the WebUI with SHA-256 verification, backup, restart, and health-check rollback.' > "${package_dir}/README.txt"
 
-          if [[ "${{ matrix.goos }}" == "windows" ]]; then
-            cp scripts/uninstall.ps1 "${package_dir}/uninstall.ps1"
-            printf '%s\n' \
-              '@echo off' \
-              'if "%PORT%"=="" set PORT=18080' \
-              '"%~dp0diana-webui.exe" %*' > "${package_dir}/run.bat"
-            (cd release/package && zip -qr "../../dist/${package_name}.zip" "${package_name}")
-          else
-            cp scripts/uninstall.sh "${package_dir}/uninstall.sh"
-            chmod +x "${package_dir}/uninstall.sh"
-            printf '%s\n' \
-              '#!/usr/bin/env sh' \
-              'set -eu' \
-              'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
-              'export PORT="${PORT:-18080}"' \
-              'exec "$SCRIPT_DIR/diana-webui" "$@"' > "${package_dir}/run.sh"
-            chmod +x "${package_dir}/run.sh"
-            tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
-          fi
+          cp scripts/uninstall.sh "${package_dir}/uninstall.sh"
+          chmod +x "${package_dir}/uninstall.sh"
+          printf '%s\n' \
+            '#!/usr/bin/env sh' \
+            'set -eu' \
+            'SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)' \
+            'export PORT="${PORT:-18080}"' \
+            'exec "$SCRIPT_DIR/diana-webui" "$@"' > "${package_dir}/run.sh"
+          chmod +x "${package_dir}/run.sh"
+          tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
 
       - name: Upload release artifacts
         uses: actions/upload-artifact@v4
@@ -346,7 +336,7 @@ jobs:
           name: diana-package-${{ matrix.suffix }}
           path: |
             dist/*.tar.gz
-            dist/*.zip
+            dist/diana-windows-*.exe
           if-no-files-found: error
 
   # PR 上只验「Dockerfile 还能编过」，不推镜像，所以不必排在 Go Test 之后，
@@ -492,7 +482,7 @@ jobs:
 
       - name: Generate SHA-256 checksums
         working-directory: release
-        run: sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS
+        run: sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS
 
       - name: Generate static update manifest
         working-directory: release
@@ -502,7 +492,7 @@ jobs:
           RELEASE_REPOSITORY: ${{ github.repository }}
         run: |
           assets='[]'
-          for file in diana-*.tar.gz diana-*.zip SHA256SUMS; do
+          for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS; do
             assets=$(jq --arg name "$file" --arg url "https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}/${file}" --argjson size "$(stat -c %s "$file")" '. + [{name: $name, url: $url, size: $size}]' <<<"$assets")
           done
           jq -n \
@@ -611,7 +601,19 @@ jobs:
             echo
             echo "安装和升级使用同一条命令；Docker 在原部署目录执行。脚本默认安装稳定版，预发布通道见[更新通道说明](https://suink.github.io/Diana/update-channels)。"
             echo
-            echo "手动下载：选择下方对应平台的完整包（含后端、WebUI 和启动脚本），对照 \`SHA256SUMS\` 校验后解压，运行 \`run.sh\` / \`run.bat\`，无需安装 Node.js。"
+            download="https://github.com/${RELEASE_REPOSITORY}/releases/download/${RELEASE_TAG}"
+            echo "**手动下载**"
+            echo
+            echo "| 平台 | 文件 | 用法 |"
+            echo "| --- | --- | --- |"
+            echo "| Windows x64 | [diana-windows-amd64.exe](${download}/diana-windows-amd64.exe) | 放进单独的文件夹后双击运行，数据存在旁边的 \`data\` 目录 |"
+            echo "| macOS Apple 芯片 | [diana-macos-arm64.tar.gz](${download}/diana-macos-arm64.tar.gz) | 解压后运行 \`./run.sh\` |"
+            echo "| macOS Intel | [diana-macos-amd64.tar.gz](${download}/diana-macos-amd64.tar.gz) | 解压后运行 \`./run.sh\` |"
+            echo "| Linux x64 | [diana-linux-amd64.tar.gz](${download}/diana-linux-amd64.tar.gz) | 解压后运行 \`./run.sh\` |"
+            echo "| Linux ARM64 | [diana-linux-arm64.tar.gz](${download}/diana-linux-arm64.tar.gz) | 解压后运行 \`./run.sh\` |"
+            echo "| 安卓（Termux） | [diana-android-arm64.tar.gz](${download}/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 \`./run.sh\`，不是安卓 App |"
+            echo
+            echo "WebUI 已编进程序，不需要安装 Node.js。启动后浏览器打开 \`http://127.0.0.1:18080\`，首次启动时终端会打印管理员账号密码，只显示一次。下载后可对照 [SHA256SUMS](${download}/SHA256SUMS) 校验。"
             echo
             echo "自定义目录、权限、源码部署及旧版迁移见[部署文档](https://suink.github.io/Diana/deploy.html)。"
             if [ -n "${previous_tag}" ]; then
@@ -632,7 +634,7 @@ jobs:
           make_latest: ${{ needs.build-version.outputs.channel == 'release' }}
           files: |
             release/*.tar.gz
-            release/*.zip
+            release/diana-windows-*.exe
             release/SHA256SUMS
             release/latest.json
 

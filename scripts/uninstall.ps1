@@ -4,13 +4,15 @@
 #Requires -Version 5.1
 
 param(
+    [string]$InstallDir,
     [switch]$Purge,
     [switch]$Yes
 )
 
+# `diana uninstall` 把编进程序的这份脚本写到临时目录再运行，并用 -InstallDir 指明安装目录。
 $ErrorActionPreference = "Stop"
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$installDir = [IO.Path]::GetFullPath($scriptDir)
+$scriptPath = $MyInvocation.MyCommand.Path
+$installDir = if ($InstallDir) { [IO.Path]::GetFullPath($InstallDir) } else { [IO.Path]::GetFullPath((Split-Path -Parent $scriptPath)) }
 $localAppData = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
 if ($installDir -eq [IO.Path]::GetPathRoot($installDir) -or $installDir -eq $localAppData) {
     throw "Unsafe Diana install directory: $installDir"
@@ -59,6 +61,7 @@ Remove-Item -LiteralPath `$MyInvocation.MyCommand.Path -Force -ErrorAction Silen
 "@ | Set-Content -Encoding UTF8 $temporaryScript
     Start-Process powershell.exe -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $temporaryScript) | Out-Null
     Write-Host "Diana and its data are being removed from $installDir"
+    if ($InstallDir) { Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue }
     exit 0
 }
 
@@ -69,6 +72,7 @@ Remove-Item -LiteralPath `$MyInvocation.MyCommand.Path -Force -ErrorAction Silen
     "gitea-mcp.exe",
     "gitea-mcp.LICENSE",
     "run.bat",
+    "uninstall.ps1",
     ".installed-version",
     ".diana.pid",
     ".diana-updates"
@@ -78,4 +82,4 @@ Remove-Item -LiteralPath `$MyInvocation.MyCommand.Path -Force -ErrorAction Silen
 }
 
 Write-Host "Diana was removed. Configuration and data remain in $installDir"
-Write-Host "You may delete uninstall.ps1 after this window closes."
+if ($InstallDir) { Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue }

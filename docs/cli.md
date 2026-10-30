@@ -16,7 +16,7 @@
 | `diana version` | 打印版本号 |
 | `diana help` | 列出全部子命令 |
 
-Docker 部署在宿主机用 `docker exec diana diana <命令>`，例如 `docker exec diana diana logs -f`。`passwd` 没法从容器里停掉自己，要在部署目录依次执行 `docker compose stop diana`、`docker compose run --rm diana passwd`、`docker compose start diana`。手动运行（`run.sh` / `run.bat`）的进程 `passwd` 不会去动，先自己停掉再执行。
+Docker 部署在宿主机用 `docker exec diana diana <命令>`，例如 `docker exec diana diana logs -f`。`passwd` 没法从容器里停掉自己，要在部署目录依次执行 `docker compose stop diana`、`docker compose run --rm diana passwd`、`docker compose start diana`。手动运行（`run.sh` 或双击 exe）的进程 `passwd` 不会去动，先自己停掉再执行。
 
 `uninstall` 只在一键安装的部署里可用。
 

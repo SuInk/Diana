@@ -59,6 +59,19 @@ The native installer needs no administrator privileges. **To upgrade, rerun the 
 Help me install the latest stable release of Diana on this machine. First read the README at https://github.com/SuInk/Diana and scripts/install.sh (Linux/macOS) or scripts/install.ps1 (Windows) in that repository. Detect the OS and architecture, then use the official one-click installer. Default to current-user permissions and listen only on 127.0.0.1. If Diana is already installed, preserve its configuration and data and follow the official upgrade procedure. Run diana doctor afterward to check its health, tell me the console URL, administrator username, and password initially generated during installation, and remind me to store them securely. For an existing installation with no newly generated password, explain that the original password still applies and do not reset it automatically. Leave model API keys and bot credentials for me to enter in the console.
 ```
 
+**Or download it yourself.** If you'd rather not run a script, grab the file for your platform (always the latest stable release):
+
+| Platform | Download | How to run |
+| --- | --- | --- |
+| Windows x64 | [diana-windows-amd64.exe](https://github.com/SuInk/Diana/releases/latest/download/diana-windows-amd64.exe) | Put it in a folder of its own and double-click it; data goes in the `data` folder beside it |
+| macOS Apple silicon | [diana-macos-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-macos-arm64.tar.gz) | Extract, then run `./run.sh` |
+| macOS Intel | [diana-macos-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-macos-amd64.tar.gz) | Extract, then run `./run.sh` |
+| Linux x64 | [diana-linux-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-amd64.tar.gz) | Extract, then run `./run.sh` |
+| Linux ARM64 | [diana-linux-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-arm64.tar.gz) | Extract, then run `./run.sh` |
+| Android (Termux) | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | Extract inside Termux and run `./run.sh`. It is the server running on your phone, not an Android app; the Linux one-click command above also works in Termux |
+
+The WebUI is built into the program, so no Node.js is needed. Verify downloads against [`SHA256SUMS`](https://github.com/SuInk/Diana/releases/latest/download/SHA256SUMS) from the same release; older versions are on the [Releases](https://github.com/SuInk/Diana/releases) page. A manual download does not register the `diana` command; use `./diana-webui <command>` (Windows: `diana-webui.exe <command>`) instead.
+
 **② Log in to the console.** Open `http://127.0.0.1:18080`. The admin username and password are in the terminal output and shown only once, so save them right away (for Docker, check `docker logs diana`). The password is stored only as a hash in the database, not in `config.yaml`; if you forget it, reset it with `diana passwd` (see below).
 
 **③ Configure.** Three things in the console:
@@ -135,7 +148,7 @@ docker compose run --rm diana passwd
 docker compose start diana
 ```
 
-A process you started by hand (`run.sh` / `run.bat`) is left alone: stop it yourself, then run `diana passwd`.
+A process you started by hand (`run.sh`, or double-clicking the .exe) is left alone: stop it yourself, then run `diana passwd`.
 
 **Upgrading**: for complete Release packages, re-run the install command or click upgrade in the console; both paths back up data, verify the package and roll back if the health check fails. Docker deployments pull and recreate the container, either on the host or through the optional updater. Docker image updates do not automatically roll back after a failed health check; restore a known version tag on the host if needed.
 

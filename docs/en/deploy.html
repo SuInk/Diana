@@ -69,13 +69,13 @@
 
       <section class="section searchable" id="manual-release">
         <div class="section-heading"><p class="eyebrow">Alternative</p><h2>Install a full release archive by hand</h2></div>
-        <p>For offline environments or where changes need manual approval, download the full archive matching your platform: the <code>.tar.gz</code> or <code>.zip</code> plus <code>SHA256SUMS</code> from the same release. It includes the backend, prebuilt WebUI and launch scripts, with no separate WebUI deployment or Node.js installation needed. Releases no longer provide standalone binaries; custom deployments can extract the executable and frontend assets from the full package.</p>
+        <p>For offline environments or where changes need manual approval, download the file for your platform plus <code>SHA256SUMS</code> from the same release. Windows gets a single <code>diana-windows-amd64.exe</code>: put it in a folder of its own and double-click it. macOS, Linux and Android Termux get a <code>.tar.gz</code> archive with the program and its launch scripts. The WebUI is built into the program, so there is no separate WebUI deployment and no Node.js to install.</p>
         <pre><code># macOS Apple Silicon example
 shasum -a 256 diana-macos-arm64.tar.gz
 tar -xzf diana-macos-arm64.tar.gz
 cd diana-macos-arm64
 ./run.sh</code></pre>
-        <div class="callout"><strong>First migration from an older release</strong><p>Full archives now use the <code>diana-&lt;os&gt;-&lt;arch&gt;</code> naming scheme. Older consoles that only recognize <code>diana-webui-…</code> archives cannot self-update directly; rerun the one-click installer above or install a full package manually the first time.</p></div>
+        <div class="callout"><strong>First migration from an older release</strong><p>Windows now ships an .exe, and Windows consoles from v0.9.0 and earlier only recognize the <code>.zip</code> archive. Archives also no longer carry a <code>frontend-next</code> copy, which consoles from v0.8.153 and earlier require. None of these versions can update from the WebUI; rerun the one-click installer above or install the download by hand the first time.</p></div>
       </section>
 
       <section class="section searchable" id="docker">

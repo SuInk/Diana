@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+
+	"github.com/SuInk/diana/scripts"
 )
 
 func handleCLI(args []string) (bool, error) {
@@ -54,11 +56,15 @@ func handleCLI(args []string) (bool, error) {
 			return true, fmt.Errorf("unknown uninstall option: %s", arg)
 		}
 	}
-	script, err := uninstallScriptPath()
+	root, err := installationRoot()
 	if err != nil {
 		return true, err
 	}
-	return true, runUninstallScript(script, args[1:])
+	script, err := uninstallScriptPath(root)
+	if err != nil {
+		return true, err
+	}
+	return true, runUninstallScript(script, root, args[1:])
 }
 
 func printCLIHelp(output io.Writer) {
@@ -85,16 +91,11 @@ Run Diana without a command to start the WebUI service.
 `)
 }
 
-func uninstallScriptPath() (string, error) {
-	root, err := installationRoot()
-	if err != nil {
-		return "", err
-	}
-	name := "uninstall.sh"
+func uninstallScriptPath(root string) (string, error) {
 	if runtime.GOOS == "windows" {
-		name = "uninstall.ps1"
+		return windowsUninstallScript(root)
 	}
-	script := filepath.Join(root, name)
+	script := filepath.Join(root, "uninstall.sh")
 	info, err := os.Stat(script)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -106,6 +107,30 @@ func uninstallScriptPath() (string, error) {
 		return "", fmt.Errorf("uninstall tool is not a regular file: %s", script)
 	}
 	return script, nil
+}
+
+// windowsUninstallScript 把编进程序的卸载脚本写到临时目录。Windows 只发一个 exe，
+// 安装目录里没有脚本；用安装器写下的版本标记确认这是一键安装，免得在下载目录里
+// 直接双击运行的程序把旁边的文件当安装删掉。
+func windowsUninstallScript(root string) (string, error) {
+	marker := filepath.Join(root, ".installed-version")
+	if _, err := os.Stat(marker); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("no installation marker at %s; this command is available in one-click installations", marker)
+		}
+		return "", fmt.Errorf("inspect installation marker: %w", err)
+	}
+	file, err := os.CreateTemp("", "diana-uninstall-*.ps1")
+	if err != nil {
+		return "", fmt.Errorf("stage uninstall tool: %w", err)
+	}
+	_, writeErr := file.Write(scripts.UninstallPowerShell)
+	closeErr := file.Close()
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(file.Name())
+		return "", fmt.Errorf("stage uninstall tool: %w", err)
+	}
+	return file.Name(), nil
 }
 
 func installationRoot() (string, error) {
@@ -124,10 +149,10 @@ func installationRoot() (string, error) {
 	return root, nil
 }
 
-func uninstallCommand(script string, args []string) *exec.Cmd {
+func uninstallCommand(script, root string, args []string) *exec.Cmd {
 	var commandArgs []string
 	if runtime.GOOS == "windows" {
-		commandArgs = append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script}, windowsUninstallArgs(args)...)
+		commandArgs = append([]string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-InstallDir", root}, windowsUninstallArgs(args)...)
 		return exec.Command("powershell.exe", commandArgs...)
 	}
 	commandArgs = append([]string{script}, args...)

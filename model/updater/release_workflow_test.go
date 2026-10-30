@@ -82,11 +82,10 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 	for _, fragment := range []string{
 		`package_suffix="${package_suffix/darwin-/macos-}"`,
 		`package_name="diana-${package_suffix}"`,
-		`-o "${package_dir}/${runtime_name}"`,
+		`-o "dist/${package_name}.exe"`,
+		`-o "${package_dir}/diana-webui"`,
 		`cp -R release/frontend-next-dist/. cmd/webui/webdist/`,
-		// v0.8.91 起的旧自更新器要求包里有前端目录，删掉它旧版就没法在 WebUI 里升级。
-		`cp -R release/frontend-next-dist/. "${package_dir}/frontend-next/dist/"`,
-		`"${package_dir}/run.sh"`, `"${package_dir}/run.bat"`,
+		`"${package_dir}/run.sh"`, `"${package_dir}/uninstall.sh"`,
 	} {
 		if !strings.Contains(buildScript, fragment) {
 			t.Errorf("missing package requirement: %s", fragment)
@@ -95,10 +94,14 @@ func TestReleaseWorkflowPublishesOnlyCompletePackages(t *testing.T) {
 	if strings.Contains(buildScript, "diana-webui-${{ matrix.suffix }}") {
 		t.Error("packages must not ship a second platform-suffixed binary")
 	}
-	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-*.zip > SHA256SUMS") {
+	// 前端已编进程序，包里再放一份前端目录只是旧版自更新器的兼容负担。
+	if strings.Contains(buildScript, "frontend-next/dist") {
+		t.Error("packages must not ship a frontend directory")
+	}
+	if !strings.Contains(checksumScript, "sha256sum diana-*.tar.gz diana-windows-*.exe > SHA256SUMS") {
 		t.Fatal("checksums must cover only complete packages")
 	}
-	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-*.zip SHA256SUMS; do") {
+	if !strings.Contains(manifestScript, "for file in diana-*.tar.gz diana-windows-*.exe SHA256SUMS; do") {
 		t.Fatal("update manifest must list only packages and checksums")
 	}
 }
@@ -110,7 +113,7 @@ func TestReleaseAssetNames(t *testing.T) {
 		{"android", "arm64", "diana-android-arm64.tar.gz"},
 		{"darwin", "amd64", "diana-macos-amd64.tar.gz"},
 		{"darwin", "arm64", "diana-macos-arm64.tar.gz"},
-		{"windows", "amd64", "diana-windows-amd64.zip"},
+		{"windows", "amd64", "diana-windows-amd64.exe"},
 	} {
 		if got := ExpectedReleaseAssetName(tc.os, tc.arch); got != tc.name {
 			t.Errorf("got %s, want %s", got, tc.name)

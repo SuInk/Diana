@@ -89,7 +89,7 @@
 - 如果存在升级前置条件或首次手动升级边界，必须明确说明。例如旧版本尚未包含 Release 自更新器时，不能暗示它可以通过 WebUI 自更新。
 - 升级指南必须分别覆盖适用的部署方式：完整 Release 包、Docker、源码部署。
 - Release 的 `安装与下载` 和 `升级指南` 必须以发布基线的 README 为准，直接提供与 README 一致、可执行的一键安装命令（macOS/Linux Shell、Windows PowerShell），并保持 Docker 命令、权限要求及升级方式一致。发布前逐项核对，不得只写手动下载解压步骤或仅放 README 链接代替命令；README 没有提供的一键方式不得自行编造。
-- 手动下载只提供完整包（`.tar.gz` / `.zip`），含内嵌了 WebUI 的单个程序（`diana-webui`）及启动脚本，校验 `SHA256SUMS` 并解压后运行 `run.sh` / `run.bat`，无需单独部署 WebUI 或安装 Node.js。不再单独发布裸二进制；自定义部署从完整包提取 `diana-webui` 即可。不修改历史 Release 资产。发布前以实际产物核对这些说明。
+- 手动下载：Windows 是单个 `diana-windows-amd64.exe`，双击运行；macOS、Linux、Termux 是 `.tar.gz` 完整包，含内嵌了 WebUI 的单个程序（`diana-webui`）及启动脚本，解压后运行 `run.sh`。都无需单独部署 WebUI 或安装 Node.js。`安装与下载` 必须给出按平台的下载直链表，并写明安卓包是 Termux 里跑的服务端、不是 App。不修改历史 Release 资产。发布前以实际产物核对这些说明。
 - PR 链接只能作为补充，不能代替更新点；引用时必须带标题或摘要，不能在相关链接中只写裸 PR 编号。
 - Release 正文末尾应提供完整版本对比链接，例如 `vX.Y.Z...vA.B.C`。
 
@@ -98,9 +98,9 @@
 - 发布前至少运行并通过：`gofmt -l .`、`git diff --check`、`scripts/test-serial.sh ./...`（全仓库）、前端依赖安装与生产构建。涉及依赖变化时还要执行安全审计。
 - 发布 PR 的 CI 必须验证 Go 测试、Vue 构建、Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker 镜像。
 - 标签构建完成后，确认 GitHub Release 不是 Draft；正式版不得是 Prerelease，Beta/RC 标签必须标记为 Prerelease，并检查所有预期资产均已上传。
-- Release 必须包含各支持平台的完整包、`SHA256SUMS` 和自更新清单 `latest.json`，不得上传独立裸二进制。当前 CI 的预期资产数量为 8（6 个平台完整包，含 Termux 用的 `diana-android-arm64.tar.gz`，和 2 个元数据文件）；若工作流调整了产物矩阵，应按工作流重新计算。
-- 完整包统一使用 `diana-<系统>-<架构>.tar.gz`（Windows 为 `.zip`），包内只放一个 `diana-webui`（Windows 为 `diana-webui.exe`），不再附带 `diana-webui-<系统>-<架构>` 兼容副本。v0.8.90 及更早的自更新器只认 `diana-webui-…` 包名，首次迁移必须重跑一键安装或手动安装完整包；v0.8.91 起可在 WebUI 直接升级，前提是包里保留 `frontend-next/dist` 兼容副本（新程序不读它）；发布说明必须明确此边界，不能暗示旧版 WebUI 可直接完成迁移。安装器与自更新器不再回落读取历史旧包名。
-- 发布后必须实际下载 Darwin ARM64 完整包及 `SHA256SUMS`，独立计算 SHA-256 并确认一致，同时检查归档内只有一个 `diana-webui` 程序（前端已内嵌）、启动脚本，以及供 v0.8.91 起旧自更新器校验用的 `frontend-next/dist` 兼容副本。
+- Release 必须包含各支持平台的下载文件、`SHA256SUMS` 和自更新清单 `latest.json`。当前 CI 的预期资产数量为 8（5 个 `.tar.gz` 完整包，含 Termux 用的 `diana-android-arm64.tar.gz`；1 个 `diana-windows-amd64.exe`；2 个元数据文件）；若工作流调整了产物矩阵，应按工作流重新计算。
+- 完整包统一使用 `diana-<系统>-<架构>.tar.gz`，包内只放一个 `diana-webui`，不附带前端目录或 `diana-webui-<系统>-<架构>` 兼容副本；Windows 直接发布 `diana-windows-amd64.exe`，卸载脚本编在程序里。不再为旧版自更新器保留兼容：v0.9.0 及更早的 Windows 控制台只认 `.zip`，v0.8.153 及更早的控制台要求包里有 `frontend-next/dist`，这些版本首次升级必须重跑一键安装或手动安装；发布说明必须明确此边界，不能暗示旧版 WebUI 可直接完成迁移。
+- 发布后必须实际下载 Darwin ARM64 完整包、`diana-windows-amd64.exe` 及 `SHA256SUMS`，独立计算 SHA-256 并确认一致，同时检查归档内只有一个 `diana-webui` 程序（前端已内嵌）和启动脚本。
 - 面向用户的 macOS 完整包使用 `macos` 而非 `darwin`，例如 `diana-macos-arm64.tar.gz`；内部 Go 交叉编译继续使用 `GOOS=darwin`。
 - Docker 发布需要确认版本标签成功生成；正式版更新 `latest`，Beta/RC 更新 `beta`，Canary 更新 `canary`，预发布不得覆盖 `latest`（包括对应的 `-slim` 标签）。
 - 在 CI、Release 资产和校验全部完成前，不得向用户宣称版本已经发布成功。

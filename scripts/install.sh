@@ -507,8 +507,6 @@ for suffix in "" -wal -shm; do
 done
 
 cp -R "$package_dir/." "$install_dir/"
-# 包里的 frontend-next 只给旧版自更新器过校验，前端已编进程序，安装目录不留它。
-rm -rf "$install_dir/frontend-next"
 chmod +x "$install_dir/run.sh" "$install_dir/$binary_name"
 if [ -f "$install_dir/uninstall.sh" ]; then
   chmod +x "$install_dir/uninstall.sh"
