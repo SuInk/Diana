@@ -25,21 +25,44 @@ const emit = defineEmits<{
 const controlID = computed(() => props.fieldID ?? `setting-${props.spec.key}`);
 const labelID = computed(() => `${controlID.value}-label`);
 
-// llm_profile：任选一个提供商和它目录里的模型，存成 JSON 的 [提供商ID, 模型]；空串跟随对话模型。
-// 只在出现这种设置时才拉配置。写法和群管理页的群聊模型一致。
+// llm_profile：先选提供商，再选它目录里的模型，存成 JSON 的 [提供商ID, 模型]；空串跟随对话模型。
+// 只在出现这种设置时才拉配置。
 const llmChannels = ref<LLMConfig[]>([]);
-const llmProfileOptions = computed(() => {
-  const options = [{ value: "", label: "跟随对话模型" }];
-  for (const channel of llmChannels.value) {
-    if (!channel.id || ["image", "embedding", "tts", "stt", "video"].includes(channel.group || "")) continue;
-    const disabled = new Set((channel.models ?? []).filter(model => model.disabled).map(model => model.id));
-    const models = new Set([channel.model, ...(channel.models ?? []).map(model => model.id)].filter(model => model && !disabled.has(model)));
-    for (const model of models) options.push({ value: JSON.stringify([channel.id, model]), label: `${channel.name || channel.id} · ${model}` });
+const textChannels = computed(() => llmChannels.value.filter(channel => channel.id && !["image", "embedding", "tts", "stt", "video"].includes(channel.group || "")));
+const llmPair = computed<[string, string]>(() => {
+  const raw = String(props.form[props.spec.key] ?? "");
+  if (raw.startsWith("[")) {
+    try {
+      const [provider, model] = JSON.parse(raw) as [string, string];
+      return [provider ?? "", model ?? ""];
+    } catch {
+      return ["", ""];
+    }
   }
-  const selected = props.form[props.spec.key];
-  if (selected && !options.some(option => option.value === selected)) options.push({ value: selected, label: `配置已不可用：${selected}` });
+  return [raw, ""];
+});
+const llmProviderOptions = computed(() => {
+  const options = [{ value: "", label: "跟随对话模型" }];
+  for (const channel of textChannels.value) options.push({ value: channel.id!, label: channel.name || channel.id! });
+  const [provider] = llmPair.value;
+  if (provider && !options.some(option => option.value === provider)) options.push({ value: provider, label: `配置已不可用：${provider}` });
   return options;
 });
+const llmModelOptions = computed(() => {
+  const [provider, current] = llmPair.value;
+  const channel = textChannels.value.find(item => item.id === provider);
+  const disabled = new Set((channel?.models ?? []).filter(model => model.disabled).map(model => model.id));
+  const models = [...new Set([channel?.model, ...(channel?.models ?? []).map(model => model.id)].filter((model): model is string => Boolean(model) && !disabled.has(model!)))];
+  if (current && !models.includes(current)) models.push(current);
+  return models.map(model => ({ value: model, label: model }));
+});
+function setLLMProvider(provider: string): void {
+  const channel = textChannels.value.find(item => item.id === provider);
+  props.form[props.spec.key] = provider ? JSON.stringify([provider, channel?.model || ""]) : "";
+}
+function setLLMModel(model: string): void {
+  props.form[props.spec.key] = JSON.stringify([llmPair.value[0], model]);
+}
 onMounted(async () => {
   if (props.spec.type !== "llm_profile") return;
   try {
@@ -124,14 +147,18 @@ function toggleMultiSelect(option: string, event: Event): void {
         :min="spec.min"
         :max="spec.max"
       />
-      <AppSelect
-        v-else-if="spec.type === 'llm_profile'"
-        :id="controlID"
-        v-model="form[spec.key]"
-        :options="llmProfileOptions"
-        searchable
-        search-placeholder="搜索模型"
-      />
+      <div v-else-if="spec.type === 'llm_profile'" class="plugin-setting-llm">
+        <AppSelect :id="controlID" :model-value="llmPair[0]" :options="llmProviderOptions" aria-label="提供商" @update:model-value="setLLMProvider" />
+        <AppSelect
+          v-if="llmPair[0]"
+          :model-value="llmPair[1]"
+          :options="llmModelOptions"
+          searchable
+          search-placeholder="搜索模型"
+          aria-label="模型"
+          @update:model-value="setLLMModel"
+        />
+      </div>
       <AppSelect
         v-else-if="spec.type === 'select'"
         :id="controlID"
@@ -172,3 +199,11 @@ function toggleMultiSelect(option: string, event: Event): void {
     </template>
   </div>
 </template>
+
+<style scoped>
+.plugin-setting-llm {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+</style>
