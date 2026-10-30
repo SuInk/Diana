@@ -16,6 +16,9 @@ import (
 	"github.com/SuInk/diana/internal/secretmask"
 )
 
+// bilibiliSourcesDescription 是 B 站来源参数的说明，rss 工具和 subscription 共用。
+var bilibiliSourcesDescription = "B 站订阅：dynamic:UID 订阅 UP 主动态（含新投稿），live:UID 或 live.bilibili.com/房间号 订阅开播，bangumi:ss编号/ep编号 或番剧播放页链接 订阅新集；空间链接 space.bilibili.com/UID 视为动态；与其他来源合计最多 " + itoa(maximumRSSWatchSources) + " 个"
+
 const (
 	minimumRSSWatchInterval = 5 * time.Minute
 	defaultRSSWatchInterval = 15 * time.Minute
@@ -118,6 +121,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"twitter_handles":      toolStringArrayParam("多个 X 用户名；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
 		"feed_url":             toolStringParam("单个 RSS/Atom 地址"),
 		"feed_urls":            toolStringArrayParam("多个 RSS/Atom 地址，共用 judge_prompt"),
+		"bilibili":             toolStringArrayParam(bilibiliSourcesDescription),
 		"interval":             toolStringParam("检查间隔，最短 " + formatDurationUnits(minimumRSSWatchInterval) + "，默认 " + formatDurationUnits(defaultRSSWatchInterval)),
 		"media_mode":           toolStringParam("LLM 判断范围：text、images、video、video_audio；默认 text"),
 		"reply_prompt":         toolStringParam("自然语言回复要求，如翻译成日语、总结三点；空字符串直接发原文"),
@@ -164,7 +168,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		}
 		item, err := t.runtime.CreateRSSWatch(ctx, RSSWatchCreateInput{
 			FeedURL: configToolString(input, "feed_url"), TwitterHandle: configToolString(input, "twitter_handle"),
-			FeedURLs: configToolStringSlice(input, "feed_urls"), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
+			FeedURLs: append(configToolStringSlice(input, "feed_urls"), configToolStringSlice(input, "bilibili")...), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
 			ReplyPrompt: rssReplyPromptFromTool(input), ReplyMode: configToolString(input, "reply_mode"), JudgeModelID: configToolString(input, "judge_model_id"), TranslationModelID: configToolString(input, "translation_model_id"), MediaMode: configToolString(input, "media_mode"), MediaFailure: configToolString(input, "media_failure"), RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
 			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID, RequestedBy: t.event.UserID,
@@ -320,6 +324,7 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	if !enabled || !ok {
 		return Reminder{}, fmt.Errorf("RSS 与社交订阅插件未启用")
 	}
+	ctx = r.withBilibiliFeedCredentials(ctx, event)
 	interval := input.Interval
 	if interval == 0 {
 		interval = defaultRSSWatchInterval
@@ -390,6 +395,13 @@ func resolveRSSWatchSources(rawURLs, rawHandles []string) ([]ReminderFeedSource,
 		if strings.TrimSpace(raw) == "" {
 			continue
 		}
+		if source, ok, err := bilibiliSourceFromInput(raw); ok {
+			if err != nil {
+				return nil, err
+			}
+			appendSource(source)
+			continue
+		}
 		if strings.Contains(raw, secretmask.Marker) {
 			return nil, fmt.Errorf("feed_url 里带着掩码（%s），不是令牌原文：要沿用已保存的订阅地址就在修改时原样交回它，要换令牌请让订阅者提供完整地址", secretmask.Marker)
 		}
@@ -400,7 +412,7 @@ func resolveRSSWatchSources(rawURLs, rawHandles []string) ([]ReminderFeedSource,
 		appendSource(ReminderFeedSource{FeedURL: feedURL, Source: "rss"})
 	}
 	if len(sources) == 0 {
-		return nil, fmt.Errorf("至少要填写一个 twitter_handle(s) 或 feed_url(s)")
+		return nil, fmt.Errorf("至少要填写一个 twitter_handle(s)、bilibili 或 feed_url(s)")
 	}
 	if len(sources) > maximumRSSWatchSources {
 		return nil, fmt.Errorf("一条订阅最多盯 %d 个来源，当前填了 %d 个，请拆成多条", maximumRSSWatchSources, len(sources))
@@ -411,6 +423,9 @@ func resolveRSSWatchSources(rawURLs, rawHandles []string) ([]ReminderFeedSource,
 // rssWatchSourceLabel 是来源在提示、抬头和错误里的短名字：推特用 @handle，
 // 普通 Feed 优先用标题，最后才退回地址。
 func rssWatchSourceLabel(source ReminderFeedSource) string {
+	if label := bilibiliSourceLabel(source); label != "" {
+		return label
+	}
 	if handle := strings.TrimSpace(source.Handle); source.Source == "twitter" && handle != "" {
 		return "@" + handle
 	}
@@ -499,6 +514,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	if !enabled || !ok {
 		return Reminder{}, fmt.Errorf("RSS 与社交订阅插件未启用")
 	}
+	ctx = r.withBilibiliFeedCredentials(ctx, event)
 	if !current.CancelledAt.IsZero() {
 		return Reminder{}, fmt.Errorf("RSS 订阅 %s 已取消，不能修改", id)
 	}
@@ -757,8 +773,10 @@ func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 		raw := strings.TrimSpace(fmt.Sprint(value))
 		result.TwitterHandle = &raw
 	}
-	if _, present := input["feed_urls"]; present {
-		values := configToolStringSlice(input, "feed_urls")
+	_, hasFeeds := input["feed_urls"]
+	_, hasBilibili := input["bilibili"]
+	if hasFeeds || hasBilibili {
+		values := append(configToolStringSlice(input, "feed_urls"), configToolStringSlice(input, "bilibili")...)
 		result.FeedURLs = &values
 	}
 	if _, present := input["twitter_handles"]; present {

@@ -162,6 +162,7 @@ func subscriptionKindFields() map[string]any {
 		"twitter_handles":      toolStringArrayParam("rss：多个 X 用户名，同一条件合成一条订阅；与 feed_urls 合计最多 " + itoa(maximumRSSWatchSources) + " 个"),
 		"feed_url":             toolStringParam("rss：单个 RSS/Atom 地址"),
 		"feed_urls":            toolStringArrayParam("rss：多个 RSS/Atom 地址，共用 judge_prompt"),
+		"bilibili":             toolStringArrayParam("rss：" + bilibiliSourcesDescription),
 		"media_mode":           toolStringParam("LLM 判断范围：text、images、video、video_audio；默认 text"),
 		"reply_prompt":         toolStringParam("自然语言回复要求，如翻译成日语、总结三点；空字符串直接发原文"),
 		"reply_mode":           toolStringParam("发送内容：decision 规则决定；original 原文；translated 中译；generated 生成"),

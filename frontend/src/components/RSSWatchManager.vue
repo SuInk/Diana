@@ -18,6 +18,7 @@
           <div class="segmented repository-watch-destination" role="radiogroup" aria-label="订阅来源">
             <button type="button" role="radio" :aria-checked="form.source === 'twitter'" :class="{ active: form.source === 'twitter' }" @click="form.source = 'twitter'">Twitter / X 用户</button>
             <button type="button" role="radio" :aria-checked="form.source === 'rss'" :class="{ active: form.source === 'rss' }" @click="form.source = 'rss'">RSS / Atom</button>
+            <button type="button" role="radio" :aria-checked="form.source === 'bilibili'" :class="{ active: form.source === 'bilibili' }" @click="form.source = 'bilibili'">B 站</button>
           </div>
         </div>
         <div v-if="form.source === 'twitter'" class="field wide">
@@ -30,6 +31,17 @@
             <button v-if="form.twitter_handles.length < maximumSources" class="btn small ghost" type="button" @click="addSource('twitter')"><Plus :size="14" aria-hidden="true" />添加账号</button>
           </div>
           <span class="hint">直接填就行，默认读取 X 的公开时间线，不需要额外部署。可以一次填多个账号，它们共用下面这一套规则，命中的内容会合成一条通知发出，最多 {{ maximumSources }} 个。</span>
+        </div>
+        <div v-else-if="form.source === 'bilibili'" class="field wide">
+          <label for="rss-watch-bili-0">B 站来源</label>
+          <div class="target-list">
+            <div v-for="(_, index) in form.bilibili" :key="`bili-${index}`" class="rss-source-row">
+              <input :id="`rss-watch-bili-${index}`" v-model.trim="form.bilibili[index]" class="input" type="text" placeholder="dynamic:UID、live:UID 或 bangumi:ss12345" :aria-label="`B 站来源 ${index + 1}`" />
+              <button v-if="form.bilibili.length > 1" class="btn small ghost danger icon-only" type="button" title="移除这个来源" aria-label="移除这个来源" @click="removeSource('bilibili', index)"><Trash2 :size="14" aria-hidden="true" /></button>
+            </div>
+            <button v-if="form.bilibili.length < maximumSources" class="btn small ghost" type="button" @click="addSource('bilibili')"><Plus :size="14" aria-hidden="true" />添加来源</button>
+          </div>
+          <span class="hint">动态填 dynamic:UID 或空间链接，包括新投稿；直播填 live:UID 或直播间链接，开播时通知一次；番剧填 bangumi:ss/ep 编号或播放页链接，新集上线时通知。动态接口容易被风控，建议在链接解析插件里配置 B 站 SESSDATA。最多 {{ maximumSources }} 个。</span>
         </div>
         <div v-else class="field wide">
           <label for="rss-watch-url-0">Feed URL</label>
@@ -80,7 +92,7 @@
         <div class="repository-watch-manager-main">
           <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
           <p class="rss-watch-rule-summary">{{ task.feed_rule_mode === "regex" ? "正则匹配 · " + task.feed_judge_prompt : task.feed_judge_prompt || "全部新条目 · 不筛选" }}</p>
-          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ profile_id: task.profile_id, platform: task.platform, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="source.feed_url" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
+          <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ profile_id: task.profile_id, platform: task.platform, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="sourceHref(source)" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
         </div>
         <div class="repository-watch-manager-actions">
@@ -141,7 +153,7 @@ const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
 const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "regex", label: "正则匹配" }, { value: "llm", label: "LLM 判断" }];
-const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as "twitter" | "rss", twitter_handles: [""], feed_urls: [""], delivery_mode: "llm", judge_prompt: "", judge_model_id: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
+const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as SourceKind, twitter_handles: [""], feed_urls: [""], bilibili: [""], delivery_mode: "llm", judge_prompt: "", judge_model_id: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const llmChannels = ref<LLMConfig[]>([]);
@@ -194,10 +206,30 @@ function taskSources(task: AssistantTask): RSSWatchSource[] {
   return task.feed_url ? [{ feed_url: task.feed_url, source: task.feed_source, handle: task.feed_handle }] : [];
 }
 function sourceCount(task: AssistantTask): number { return taskSources(task).length; }
+type SourceKind = "twitter" | "rss" | "bilibili";
+function isBilibiliSource(source?: string): boolean { return (source ?? "").startsWith("bilibili_"); }
+// 编辑框里显示用户填过的短写法，不显示接口地址；后端两种都认。
+function bilibiliInputValue(source: RSSWatchSource): string {
+  const handle = (source.handle ?? "").trim();
+  if (source.source === "bilibili_dynamic") return `dynamic:${handle}`;
+  if (source.source === "bilibili_bangumi") return `bangumi:${handle}`;
+  if (handle.startsWith("UID ")) return `live:${handle.slice(4)}`;
+  if (handle.startsWith("直播间 ")) return `https://live.bilibili.com/${handle.slice(4)}`;
+  return source.feed_url;
+}
+function sourceHref(source: RSSWatchSource): string {
+  const handle = (source.handle ?? "").trim();
+  if (source.source === "bilibili_dynamic") return `https://space.bilibili.com/${handle}/dynamic`;
+  if (source.source === "bilibili_bangumi") return `https://www.bilibili.com/bangumi/play/${handle}`;
+  if (handle.startsWith("UID ")) return `https://space.bilibili.com/${handle.slice(4)}`;
+  if (handle.startsWith("直播间 ")) return `https://live.bilibili.com/${handle.slice(4)}`;
+  return source.feed_url;
+}
 function sourceLabel(source: RSSWatchSource): string { return rssSourceLabel(source); }
 function watchTitle(task: AssistantTask): string { const sources = taskSources(task); return sources.length > 1 ? sources.map(sourceLabel).join("、") : sources.length === 1 ? sourceLabel(sources[0]) : task.message; }
-function addSource(kind: "twitter" | "rss"): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length < maximumSources) list.push(""); }
-function removeSource(kind: "twitter" | "rss", index: number): void { const list = kind === "twitter" ? form.value.twitter_handles : form.value.feed_urls; if (list.length > 1) list.splice(index, 1); }
+function sourceList(kind: SourceKind): string[] { return kind === "twitter" ? form.value.twitter_handles : kind === "bilibili" ? form.value.bilibili : form.value.feed_urls; }
+function addSource(kind: SourceKind): void { const list = sourceList(kind); if (list.length < maximumSources) list.push(""); }
+function removeSource(kind: SourceKind, index: number): void { const list = sourceList(kind); if (list.length > 1) list.splice(index, 1); }
 function filledSources(values: string[]): string[] { return values.map((value) => value.trim()).filter((value) => value !== ""); }
 
 const assistTitle = computed(() => assistComposer.value?.kind === "regex" ? "AI 帮写正则表达式" : "AI 帮写判断与回复规则");
@@ -268,10 +300,12 @@ function startEdit(task: AssistantTask): void {
   const sources = taskSources(task);
   // 编辑框按订阅来源的类型决定看到哪一栏：混着填两种来源的订阅极少见，
   // 以第一个来源为准，另一栏留一个空行。
-  const kind = sources[0]?.source === "twitter" ? "twitter" : "rss";
+  const first = sources[0]?.source ?? "";
+  const kind: SourceKind = first === "twitter" ? "twitter" : isBilibiliSource(first) ? "bilibili" : "rss";
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
-  const urls = sources.filter((source) => source.source !== "twitter").map((source) => source.feed_url);
-  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", judge_model_id: task.feed_judge_model_id ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
+  const urls = sources.filter((source) => source.source !== "twitter" && !isBilibiliSource(source.source)).map((source) => source.feed_url);
+  const bilibili = sources.filter((source) => isBilibiliSource(source.source)).map(bilibiliInputValue);
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], bilibili: bilibili.length ? bilibili : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", judge_model_id: task.feed_judge_model_id ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -285,6 +319,8 @@ async function stopEditing(): Promise<void> {
 async function saveEditor(): Promise<boolean> {
   const handles = filledSources(form.value.twitter_handles);
   const urls = filledSources(form.value.feed_urls);
+  const bilibili = filledSources(form.value.bilibili);
+  if (form.value.source === "bilibili" && !bilibili.length) return rejectEditor("请填写 B 站来源");
   if (form.value.source === "twitter" && !handles.length) return rejectEditor("请填写 Twitter 用户");
   if (form.value.source === "rss" && !urls.length) return rejectEditor("请填写 Feed URL");
   if (form.value.delivery_mode !== "all" && !form.value.judge_prompt.trim()) return rejectEditor("请填写筛选与回复规则，或选择全部推送");
@@ -295,7 +331,7 @@ async function saveEditor(): Promise<boolean> {
   saving.value = true;
   try {
     await props.prepareAccess?.();
-    const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: urls, twitter_handles: [] };
+    const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: form.value.source === "bilibili" ? bilibili : urls, twitter_handles: [] };
     const common = { notification_targets: form.value.notification_targets, ...source, reply_mode: "decision", judge_model_id: form.value.delivery_mode === "llm" ? form.value.judge_model_id : "", media_mode: "video_audio", media_failure: "text", rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();

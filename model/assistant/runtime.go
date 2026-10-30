@@ -8516,6 +8516,7 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 	if !enabled || !ok {
 		return startedAt, fmt.Errorf("RSS 与社交订阅插件已停用，无法检查 %s", item.FeedURL)
 	}
+	ctx = r.withBilibiliFeedCredentials(ctx, source)
 	sources := ReminderFeedSources(item)
 	if len(sources) == 0 {
 		return startedAt, fmt.Errorf("RSS 订阅 %s 没有可检查的来源", item.ID)

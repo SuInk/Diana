@@ -11,6 +11,12 @@ export function rssSourceLabel(source: RSSWatchSource): string {
     const handle = `@${source.handle.replace(/^@/, "")}`;
     return name && name !== handle && name !== handle.slice(1) ? `X · ${name}（${handle}）` : `X · ${handle}`;
   }
+  if (source.source?.startsWith("bilibili_")) {
+    const handle = source.handle ?? "";
+    if (source.source === "bilibili_live") return `B 站 · 直播 ${handle}`;
+    if (source.source === "bilibili_bangumi") return `B 站 · 番剧 ${name || handle}`;
+    return `B 站 · ${name || `UID ${handle} 的动态`}`;
+  }
   return name && name !== source.feed_url ? `RSS · ${name}（${source.feed_url}）` : `RSS · ${source.feed_url}`;
 }
 

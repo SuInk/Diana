@@ -4314,7 +4314,7 @@ export interface AssistantTask {
   last_star_count?: number;
   last_notified_star_count?: number;
   feed_url?: string;
-  feed_source?: "rss" | "twitter";
+  feed_source?: "rss" | "twitter" | "bilibili_dynamic" | "bilibili_live" | "bilibili_bangumi";
   feed_handle?: string;
   feed_sources?: RSSWatchSource[];
   feed_judge_prompt?: string;
@@ -4378,7 +4378,7 @@ export interface RepositoryWatchInput {
 // 一条订阅可以盯多个来源，它们共用同一套判断规则。
 export interface RSSWatchSource {
   feed_url: string;
-  source?: "rss" | "twitter";
+  source?: "rss" | "twitter" | "bilibili_dynamic" | "bilibili_live" | "bilibili_bangumi";
   handle?: string;
   name?: string;
 }

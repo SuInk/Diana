@@ -132,7 +132,7 @@ func (p *RSSWatchPlugin) Manifest() PluginManifest {
 		ID:            rssWatchPluginID,
 		Name:          "RSS 订阅",
 		Version:       "0.2.13",
-		Description:   "订阅 RSS/Atom 或指定 X (Twitter) 用户，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；规则留空时直接推送全部新条目；填写规则后由 LLM 筛选并生成回复。",
+		Description:   "订阅 RSS/Atom、指定 X (Twitter) 用户，或 B 站 UP 主动态、直播开播与番剧更新，一条订阅可以同时盯多个账号或 Feed 并共用一套规则；规则留空时直接推送全部新条目；填写规则后由 LLM 筛选并生成回复。",
 		Official:      true,
 		BuiltIn:       true,
 		ReportsErrors: true,
@@ -364,6 +364,9 @@ func (p *RSSWatchPlugin) fetchFeed(ctx context.Context, feedURL string, settings
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if isBilibiliFeedURL(feedURL) {
+		return p.fetchBilibiliFeed(requestCtx, feedURL)
+	}
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, feedURL, nil)
 	if err != nil {
 		return parsedFeed{}, err
