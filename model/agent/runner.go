@@ -263,10 +263,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
 	emptySendRepaired := false
-	// repairFallbackText 是只因 send 附加字段被打回的那段纯文本。打回后重写那一步
-	// 模型请求失败（例如工具参数不是合法 JSON）时，照打回前的行为把它发出去，
-	// 不让一句本来能发的话变成报错。下一次模型请求成功就作废。
-	repairFallbackText := ""
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
 	detailReviewed := false
 	lastToolSignature := ""
@@ -429,14 +425,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				})
 				break
 			}
-			if repairFallbackText != "" && ctx.Err() == nil && !errors.Is(err, llm.ErrOutputCommitted) {
-				if feedback, reviewErr := reviewFinish(repairFallbackText, "candidate", false); reviewErr == nil && feedback == "" {
-					return finish(repairFallbackText, "plain_text")
-				}
-			}
 			return fail(err)
 		}
-		repairFallbackText = ""
 		resp.ToolCalls = r.normalizeLegacySendCalls(resp.ToolCalls)
 		lastProvider = resp.Provider
 		lastModel = resp.Model
@@ -596,16 +586,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			continue
 		}
-		// send 带了 FinalizeFields（表情包、按钮）时纯文本也打回一次：纯文本收尾带不上
-		// 这些字段。#1218 起纯文本直接放行后，swe-2、deepseek-flash 九成回合写纯文本，
-		// 收尾配表情包几乎消失。没有附加字段的调用方仍按 plainTextNeedsRepair 放行。
-		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && (plainTextNeedsRepair(lastText) || len(r.cfg.FinalizeFields) > 0) {
+		// send 带 FinalizeFields（表情包、按钮）时纯文本也照样放行，不为补这些字段打回：
+		// #1274 曾打回一次，生产两天 135 次打回只有 4 次补上了表情包，65 次仍写纯文本，
+		// 每次多一整轮请求（中位 5.5 秒、p90 18 秒），重写的正文还常常偏离原意。
+		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && plainTextNeedsRepair(lastText) {
 			plainTextRepaired = true
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
-			if !plainTextNeedsRepair(lastText) {
-				reason = "本次只返回了普通文本，普通文本不会发给对方。已经答完就把要说的话放进 send 的 text 发出，" + finalizeFieldNames(r.cfg.FinalizeFields) + " 这些字段按需一起填；还有没做完的就直接调用工具继续。"
-				repairFallbackText = lastText
-			}
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			continue
@@ -1798,15 +1784,6 @@ func decodeLenientJSONString(content string) string {
 		return decoded
 	}
 	return content
-}
-
-// finalizeFieldNames 列出 send 上的附加字段名，打回纯文本时提醒模型这些字段还能填。
-func finalizeFieldNames(fields []FinalizeField) string {
-	names := make([]string, 0, len(fields))
-	for _, field := range fields {
-		names = append(names, field.Name)
-	}
-	return strings.Join(names, "、")
 }
 
 // plainTextNeedsRepair 判断没走工具调用的普通文本要不要再给模型一次机会。
