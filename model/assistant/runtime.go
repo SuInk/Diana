@@ -486,13 +486,13 @@ type Runtime struct {
 	codingJobsOnce   sync.Once
 	// safeModeHeldLogged 记着哪些任务已经因为安全模式停发过、日志写过一次，免得每轮
 	// 调度都刷一条。键是任务 ID。
-	safeModeHeldLogged    sync.Map
-	codingJobRegistry     *codingJobRegistry
-	groupConfigs          GroupConfigStore
-	configSaver           ConfigSaver
-	configFieldsSaver     ConfigFieldsSaver
+	safeModeHeldLogged sync.Map
+	codingJobRegistry  *codingJobRegistry
+	groupConfigs       GroupConfigStore
+	configSaver        ConfigSaver
+	configFieldsSaver  ConfigFieldsSaver
 	// pendingBotFields 是聊天里改连接参数时等待主人确认的暂存，见 bot_config_pending.go。
-	pendingBotFields map[string]pendingBotFields
+	pendingBotFields      map[string]pendingBotFields
 	replySuppressions     ReplySuppressionStore
 	localMedia            LocalMediaSharer
 	voiceSTT              voiceSTTLimiter
