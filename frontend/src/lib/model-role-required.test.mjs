@@ -326,7 +326,7 @@ test("timeout saves keep newer drafts, failed edits and a different bot intact",
     const context = vm.createContext({
       connectionConflict: { value: undefined }, form: { value: { id: "bot-a", platform: "telegram", request_timeout_ms: 180000 } },
       roleForm: { value: {} }, visibleModelRoleRows: [], orderedRoleKeys: Object.keys,
-      modelRequestTimeoutDraft: { value: 1.25 }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
+      modelRequestTimeoutDraft: { value: 1.25 }, walletQuickApproveDraft: { value: "" }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
       sendRetryValidationError: () => "", sendRetryPayload: () => ({}),
       botImageGenerationLimitsPayload: () => ({}), botVideoGenerationLimitsPayload: () => ({}), mediaGenerationCooldownPayload: () => ({}),
       isOneBotPlatform: { value: false }, busy: { value: false }, creating: { value: false }, page: { value: "edit" },
