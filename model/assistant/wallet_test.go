@@ -150,3 +150,53 @@ func TestWalletPriceCents(t *testing.T) {
 		}
 	}
 }
+
+func TestWalletQuickApproveWithinQuota(t *testing.T) {
+	store := &memoryWalletStore{}
+	runtime := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "10001", WalletQuickApproveCents: intPointer(2000)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetWalletStore(store)
+	big, _ := store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "画集", PriceCents: 3900, Now: runtime.clock()})
+	small, _ := store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "奶茶", PriceCents: 1500, Now: runtime.clock()})
+	owner := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10001"}
+
+	// 群里说、别人说、话夹在句子里都不算。
+	for _, attempt := range []struct {
+		event MessageEvent
+		text  string
+	}{
+		{MessageEvent{Kind: EventKindGroup, ProfileID: "bot-1", GroupID: "20001", UserID: "10001"}, "同意"},
+		{MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10003"}, "同意"},
+		{owner, "同意，不过明天再说"},
+		{owner, "好"},
+	} {
+		if _, handled := runtime.handleWalletApprovalReply(attempt.event, attempt.text); handled {
+			t.Fatalf("%s %q should not approve", attempt.event.UserID, attempt.text)
+		}
+	}
+	reply, handled := runtime.handleWalletApprovalReply(owner, "同意！")
+	if !handled || !strings.Contains(reply, "奶茶") || len(store.decisions) != 1 || !store.decisions[0] {
+		t.Fatalf("quick approve reply=%q decisions=%v", reply, store.decisions)
+	}
+	// 额度外的那份不能被一句「同意」买下，只认码。
+	if _, handled := runtime.handleWalletApprovalReply(owner, "同意"); handled {
+		t.Fatal("over-quota proposal approved without code")
+	}
+	allowCode, _ := walletProposalCodes(big)
+	if _, handled := runtime.handleWalletApprovalReply(owner, allowCode); !handled {
+		t.Fatal("over-quota code not recognized")
+	}
+	if small.Status != WalletProposalPending || big.Status != WalletProposalPending {
+		t.Fatal("test fixtures mutated unexpectedly")
+	}
+}
+
+func TestWalletQuickApproveOffByDefault(t *testing.T) {
+	store := &memoryWalletStore{}
+	runtime := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetWalletStore(store)
+	store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "奶茶", PriceCents: 100, Now: runtime.clock()})
+	owner := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10001"}
+	if _, handled := runtime.handleWalletApprovalReply(owner, "同意"); handled {
+		t.Fatal("quick approve active without quota")
+	}
+}

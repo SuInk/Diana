@@ -150,9 +150,13 @@ func (r *Runtime) askWalletApproval(ctx context.Context, event MessageEvent, pro
 	if who != "" {
 		where += "，和 " + who + " 聊天时"
 	}
-	message := fmt.Sprintf("我想用零花钱买：%s，%s。\n理由：%s\n（%s提的）\n\n同意就回 %s，不同意回 %s。%d 小时内没回就作废，钱不动。",
+	answer := fmt.Sprintf("同意就回 %s，不同意回 %s", allowCode, denyCode)
+	if walletQuickApprovable(cfg, proposal) {
+		answer = "同意就回「同意」，不同意回「不要」"
+	}
+	message := fmt.Sprintf("我想用零花钱买：%s，%s。\n理由：%s\n（%s提的）\n\n%s。%d 小时内没回就作废，钱不动。",
 		proposal.Item, formatWalletYuan(proposal.PriceCents, false), firstNonEmpty(proposal.Reason, "没写"),
-		where, allowCode, denyCode, int(WalletProposalTTL/time.Hour))
+		where, answer, int(WalletProposalTTL/time.Hour))
 	target := MessageEvent{Kind: EventKindPrivate, ProfileID: event.ProfileID, Platform: event.Platform, SelfID: event.SelfID, UserID: ownerID}
 	return r.sendSubscriberNotice(ctx, target, message)
 }
@@ -202,6 +206,23 @@ func (r *Runtime) matchWalletApprovalCode(event MessageEvent, text string) (Wall
 	if store == nil {
 		return WalletProposal{}, false, false
 	}
+	cfg := r.effectiveConfigForEvent(event)
+	if approve, ok := walletQuickReply(text); ok && event.Kind == EventKindPrivate && WalletQuickApproveCents(cfg) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), walletLoadTimeout)
+		defer cancel()
+		pending, err := store.ListWalletProposals(ctx, strings.TrimSpace(event.ProfileID), true, r.clock(), MaximumPendingWalletProposals)
+		if err != nil {
+			return WalletProposal{}, false, false
+		}
+		// 新的在前：主人回「同意」时说的是刚收到的那一条。额度外的提议跳过，
+		// 那些只认确认码。
+		for _, proposal := range pending {
+			if walletQuickApprovable(cfg, proposal) {
+				return proposal, approve, true
+			}
+		}
+		return WalletProposal{}, false, false
+	}
 	lowered := strings.ToLower(text)
 	// 码是 6 位十六进制，消息里连一段都没有就别去查库：主人的每条消息都会走到这里。
 	if !containsHexRun(lowered, walletProposalCodeLength) {
@@ -223,6 +244,25 @@ func (r *Runtime) matchWalletApprovalCode(event MessageEvent, text string) (Wall
 		}
 	}
 	return WalletProposal{}, false, false
+}
+
+// walletQuickApprovable 报告这份提议在不在「点一下就买」的额度内。
+func walletQuickApprovable(cfg BotConfig, proposal WalletProposal) bool {
+	quick := WalletQuickApproveCents(cfg)
+	return quick > 0 && proposal.PriceCents > 0 && proposal.PriceCents <= quick
+}
+
+// walletQuickReply 认主人私聊里回的一句话。整条消息就是这几个词之一才算：
+// 「好的，不过明天再说」这种夹在句子里的不认，免得聊着天顺手把钱花了。
+func walletQuickReply(text string) (approve bool, ok bool) {
+	word := strings.Trim(strings.TrimSpace(text), "。.!！~～ ")
+	switch word {
+	case "同意", "买", "买吧", "可以", "批准":
+		return true, true
+	case "不要", "不同意", "不买", "算了", "拒绝", "不行":
+		return false, true
+	}
+	return false, false
 }
 
 func containsHexRun(lowered string, length int) bool {

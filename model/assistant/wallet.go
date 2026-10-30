@@ -93,6 +93,15 @@ func NormalizeWalletReason(reason string) string {
 	return string([]rune(reason)[:MaximumWalletReasonRunes])
 }
 
+// WalletQuickApproveCents 返回「点一下就买」的额度（分），没配或配了负数都按 0。
+func WalletQuickApproveCents(cfg BotConfig) int64 {
+	cents := intValue(cfg.WalletQuickApproveCents, 0)
+	if cents < 0 {
+		return 0
+	}
+	return int64(cents)
+}
+
 // OwnSpaceEnabled 报告这份配置有没有开小窝。
 func OwnSpaceEnabled(cfg BotConfig) bool {
 	return boolValue(cfg.OwnSpaceEnabled, false)
@@ -109,7 +118,7 @@ const (
 // walletContextPrefix 声明这段是运行时给的事实账本，不是谁在提要求。少了这句，
 // 模型会把「余额 50 元」读成有人在提醒她花钱或在讨钱。
 const walletContextPrefix = "【你的零花钱】下面是你小窝里零花钱账本的当前情况，由系统记账，不是用户消息；余额就以这里为准，有人问时直接回答，不用再查。" +
-	"全是虚拟的数字，不能转账、发红包或真的付款给任何人；你自己真想买什么时可以用 wallet 工具向主人提议，主人回确认码才算买下。" +
+	"全是虚拟的数字，不能转账、发红包或真的付款给任何人；你自己真想买什么时可以用 wallet 工具向主人提议，主人点头才算买下。" +
 	"聊到相关话题时自然地知道自己有多少钱即可，不要主动报账，也不要因为它就把话题转到钱上。\n"
 
 // WalletSummaryStore 读钱包概况。没有它时注入为空。

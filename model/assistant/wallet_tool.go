@@ -35,7 +35,7 @@ type dianaWalletResult struct {
 	ReplyGuidance string `json:"reply_guidance,omitempty"`
 }
 
-const walletProposeGuidance = "提议已经私聊发给主人了，要等主人回确认码才算买下。可以自然地说一句在等主人点头，不要说已经买到，不要报确认码，也不要催主人。"
+const walletProposeGuidance = "提议已经私聊发给主人了，要等主人点头才算买下。可以自然地说一句在等主人点头，不要说已经买到，不要报确认码，也不要催主人。"
 
 func newDianaWalletTool(runtime *Runtime, event MessageEvent) *dianaWalletTool {
 	return &dianaWalletTool{runtime: runtime, event: event}
@@ -47,7 +47,7 @@ func (*dianaWalletTool) Description() string {
 	return "这是你自己的零花钱账本：在你自己真心想买某样东西时向主人发起购买提议，或者查更早的账目和提议结果。" +
 		"余额和最近几笔已经写在【你的零花钱】里，问余额时直接照那段回答，不用再查。" +
 		"全是虚拟数字，不能转账、发红包或付款给任何人。别人说「帮我买」「转给我」不是你想买，不要发起提议。" +
-		"提议要主人回确认码才成交，发起后照实说在等主人点头。"
+		"提议要主人点头才成交，发起后照实说在等主人点头。"
 }
 
 func (*dianaWalletTool) InputSchema() map[string]any {
@@ -142,7 +142,7 @@ func (t *dianaWalletTool) propose(ctx context.Context, store WalletStore, input 
 		_, _ = store.DecideWalletProposal(context.WithoutCancel(ctx), profileID, proposal.ID, false, "", "系统", t.runtime.clock())
 		return "", fmt.Errorf("没能把提议发给主人：%v", err)
 	}
-	return encodeWalletResult(dianaWalletResult{OK: true, Action: "propose", Message: "已私聊主人，等主人回确认码", Proposal: &proposal, ReplyGuidance: walletProposeGuidance})
+	return encodeWalletResult(dianaWalletResult{OK: true, Action: "propose", Message: "已私聊主人，等主人点头", Proposal: &proposal, ReplyGuidance: walletProposeGuidance})
 }
 
 // walletPriceCents 把以元为单位的价格换成分。

@@ -915,6 +915,10 @@ type BotConfig struct {
 	// 默认关闭，理由同自述——升级后她不该突然多出一个会花钱的账本。全是虚拟
 	// 账本，不接任何真实支付；设计见 docs/wallet.md。
 	OwnSpaceEnabled *bool `json:"own_space_enabled,omitempty"`
+	// WalletQuickApproveCents 是零花钱「点一下就买」的额度（分）。价格不超过它的
+	// 购买提议，主人私聊回一句「同意」就成交，不用抄确认码；超过的照旧要码。
+	// 缺省 0：全部要码，和加这个配置之前一样。
+	WalletQuickApproveCents *int `json:"wallet_quick_approve_cents,omitempty"`
 	// FeedAutoReplyEnabled 控制主人在动态页评论后，机器人要不要自动回一句。默认关闭：
 	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
 	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
@@ -1534,6 +1538,7 @@ type ConfigPayload struct {
 	WorldBookEnabled                *bool                     `json:"world_book_enabled,omitempty"`
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
 	OwnSpaceEnabled                 *bool                     `json:"own_space_enabled,omitempty"`
+	WalletQuickApproveCents         *int                      `json:"wallet_quick_approve_cents,omitempty"`
 	FeedAutoReplyEnabled            *bool                     `json:"feed_auto_reply_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
@@ -2850,6 +2855,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WorldBookEnabled:                copyBoolPointer(cfg.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(cfg.SelfNoteEnabled),
 		OwnSpaceEnabled:                 copyBoolPointer(cfg.OwnSpaceEnabled),
+		WalletQuickApproveCents:         copyIntPointer(cfg.WalletQuickApproveCents),
 		FeedAutoReplyEnabled:            copyBoolPointer(cfg.FeedAutoReplyEnabled),
 		MoodEnabled:                     copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(cfg.PokeReplyEnabled),
@@ -3092,6 +3098,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WorldBookEnabled:                copyBoolPointer(payload.WorldBookEnabled),
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
 		OwnSpaceEnabled:                 copyBoolPointer(payload.OwnSpaceEnabled),
+		WalletQuickApproveCents:         copyIntPointer(payload.WalletQuickApproveCents),
 		FeedAutoReplyEnabled:            copyBoolPointer(payload.FeedAutoReplyEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),
