@@ -439,6 +439,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewRSSWatchPlugin(nil),
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
+		NewStockPlugin(),
 		NewVRChatPlugin(),
 		NewQQVoiceCallPlugin(),
 		NewFileDeliveryPlugin(),
