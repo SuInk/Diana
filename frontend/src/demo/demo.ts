@@ -380,6 +380,9 @@ const groups: BotGroupSummary[] = [
 const demoLearnedStyle = "这个群说话很碎，一条消息大多十来个字，想到哪说到哪，连着发好几条很常见，基本不打句号。口头禅是「绷不住了」「哥几个」「这么强」，震惊时发「啊？」，捧场用「确实」「可以」。爱用 QQ 表情「吃瓜」「坐牢」代替表态。调侃很直接，互相叫外号、阴阳两句都不算事，但不会真骂人。聊代码和部署时会突然正经，贴报错、给链接，说完又回到玩梗。";
 const demoGroupStyles = new Map<string, import("../api").GroupStyle>([["100200301", { profile_id: "bot-onebot", group_id: "100200301", text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date(Date.now() - 5 * 3600_000).toISOString() }]]);
 
+const demoJoinStrategies: { strategy_id: string; group_openids?: string[]; group_ids?: string[]; whitelist_user_count: number; is_enable: "on" | "off"; expire_at: string; remark: string }[] = [
+  { strategy_id: "st_demo1", group_openids: ["D7A4E09C3B2F48A1965C0E7B13F2A8D4"], whitelist_user_count: 128, is_enable: "on", expire_at: "2027-06-30T00:00:00+08:00", remark: "老成员回群白名单" },
+];
 const demoAccountNames: Record<string, string> = { "100200001": "阿墨", "880024": "小林（演示）" };
 
 // 内置人设在真实后端里是编译进程序的几份 SOUL.md；演示模式读 Go 测试生成的那份 JSON
@@ -2157,6 +2160,36 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/owner-bind" && method === "POST") {
     if (!/^\d{6}$/.test(String(body.code ?? "").trim())) return json({ error: "验证码不对或已过期，请给机器人发「绑定主人」重新获取" }, 400);
     return json({ owner_id: "0D3CA1B2C3D4E5F60718293A4B5C6D7E" });
+  }
+  // 入群自动审批策略在演示里只存在内存，刷新即复原。
+  if (path === "/api/assistant/qq-join-strategy" && method === "POST") {
+    const id = String(body.strategy_id ?? "");
+    const req = (body.body ?? {}) as Record<string, unknown>;
+    const found = demoJoinStrategies.find((item) => item.strategy_id === id);
+    switch (body.op) {
+      case "list":
+        return json({ strategies: demoJoinStrategies });
+      case "create": {
+        const item = { strategy_id: `st_demo${demoJoinStrategies.length + 1}`, group_openids: (req.group_openids as string[]) ?? undefined, group_ids: (req.group_ids as string[]) ?? undefined, whitelist_user_count: 0, is_enable: "on" as const, expire_at: String(req.expire_at || new Date(Date.now() + 365 * 86400000).toISOString()), remark: String(req.remark ?? "") };
+        demoJoinStrategies.push(item);
+        return json({ strategy_id: item.strategy_id, is_enable: "on", expire_at: item.expire_at });
+      }
+      case "update":
+        if (!found) return json({ error: "策略不存在" }, 400);
+        if (req.is_enable) found.is_enable = req.is_enable as "on" | "off";
+        if (typeof req.remark === "string") found.remark = req.remark;
+        if (req.expire_at) found.expire_at = String(req.expire_at);
+        return json({});
+      case "whitelist":
+        if (!found) return json({ error: "策略不存在" }, 400);
+        found.whitelist_user_count = Math.max(0, found.whitelist_user_count + ((req.op === "add" ? 1 : -1) * ((req.whitelist_users as string[]) ?? []).length));
+        return json({ strategy_id: id, whitelist_user_count: found.whitelist_user_count });
+      case "delete":
+        demoJoinStrategies.splice(demoJoinStrategies.indexOf(found!), found ? 1 : 0);
+        return json({});
+      case "execute":
+        return json({});
+    }
   }
   if (path === "/api/assistant/user-names") {
     const ids = (url.searchParams.get("ids") ?? "").split(",").map((id) => id.trim()).filter(Boolean);

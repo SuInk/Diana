@@ -30,6 +30,9 @@ func (c *QQOfficialChannel) guildDetails(ctx context.Context, channelID string) 
 	return directoryData(c.CallAPI(ctx, "GET /guilds/"+url.PathEscape(guild), nil))
 }
 func (c *QQOfficialChannel) GroupInfo(ctx context.Context, id string) (GroupInfo, error) {
+	if c.isQQGroupDirectory(ctx, id) {
+		return c.qqGroupInfo(ctx, id)
+	}
 	d, err := c.guildDetails(ctx, id)
 	if err != nil {
 		return GroupInfo{}, err
@@ -81,6 +84,9 @@ func (c *QQOfficialChannel) GroupMember(ctx context.Context, gid, uid string) (O
 	if err := requireDirectoryID(uid); err != nil {
 		return OneBotGroupMemberInfo{}, err
 	}
+	if c.isQQGroupDirectory(ctx, gid) {
+		return c.qqGroupMember(ctx, gid, uid)
+	}
 	guild, err := c.publicGuild(ctx, gid)
 	if err != nil {
 		return OneBotGroupMemberInfo{}, err
@@ -96,6 +102,9 @@ func (c *QQOfficialChannel) GroupMember(ctx context.Context, gid, uid string) (O
 	return member, nil
 }
 func (c *QQOfficialChannel) GroupMembers(ctx context.Context, gid string) (GroupMemberDirectory, error) {
+	if c.isQQGroupDirectory(ctx, gid) {
+		return c.qqGroupMembers(ctx, gid)
+	}
 	guild, err := c.publicGuild(ctx, gid)
 	if err != nil {
 		return GroupMemberDirectory{}, err

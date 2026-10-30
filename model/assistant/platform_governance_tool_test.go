@@ -220,7 +220,7 @@ var expectedPlatformWriteOperations = map[string][]string{
 		platformOpSetGroupName, platformOpInviteLink, platformOpSetAdmin, platformOpUnsetAdmin,
 		platformOpLeaveGroup,
 	},
-	// 频道能做的全集；QQ 群里只剩 recall，由 qqOfficialSceneSupports 再挡一次。
+	// 频道能做的全集；QQ 群里只有 recall、mute、unmute、kick，由 qqOfficialSceneSupports 再挡一次。
 	PlatformQQOfficial: {
 		platformOpRecall, platformOpMute, platformOpUnmute, platformOpKick,
 		platformOpEssenceSet, platformOpEssenceUnset,

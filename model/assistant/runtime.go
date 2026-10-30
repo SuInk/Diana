@@ -1335,12 +1335,15 @@ func (r *Runtime) callOneBotAPIForEvent(ctx context.Context, event MessageEvent,
 type oneBotAPICaller func(context.Context, string, map[string]any) (map[string]any, error)
 
 type OneBotGroupInfo struct {
-	MemberCountKnown *bool  `json:"member_count_known,omitempty"`
-	GroupID          string `json:"group_id"`
-	GroupName        string `json:"group_name,omitempty"`
-	AvatarURL        string `json:"avatar_url,omitempty"`
-	MemberCount      int    `json:"member_count,omitempty"`
-	MaxMemberCount   int    `json:"max_member_count,omitempty"`
+	MemberCountKnown *bool    `json:"member_count_known,omitempty"`
+	GroupID          string   `json:"group_id"`
+	GroupName        string   `json:"group_name,omitempty"`
+	AvatarURL        string   `json:"avatar_url,omitempty"`
+	MemberCount      int      `json:"member_count,omitempty"`
+	MaxMemberCount   int      `json:"max_member_count,omitempty"`
+	Description      string   `json:"description,omitempty"`
+	Category         string   `json:"category,omitempty"`
+	Tags             []string `json:"tags,omitempty"`
 }
 
 type OneBotGroupMemberInfo struct {
@@ -1378,7 +1381,7 @@ func (r *Runtime) getGroupInfoForEvent(ctx context.Context, event MessageEvent, 
 		ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
 		defer cancel()
 		info, err := provider.GroupInfo(ctx, groupID)
-		return OneBotGroupInfo{GroupID: info.GroupID, GroupName: info.GroupName, MemberCount: info.MemberCount, MemberCountKnown: &info.MemberCountKnown}, err
+		return OneBotGroupInfo{GroupID: info.GroupID, GroupName: info.GroupName, MemberCount: info.MemberCount, MemberCountKnown: &info.MemberCountKnown, Description: info.Description, Category: info.Category, Tags: info.Tags}, err
 	}
 	if !IsOneBotPlatform(r.currentPlatform(event)) {
 		return OneBotGroupInfo{}, fmt.Errorf("当前平台未提供群资料查询能力")

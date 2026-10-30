@@ -17,6 +17,10 @@ type GroupInfo struct {
 	GroupID          string
 	GroupName        string
 	MemberCount      int
+	// Description、Category、Tags 只有 QQ 官方群的 /info 给：群简介、分类和标签。
+	Description string
+	Category    string
+	Tags        []string
 }
 
 // GroupInfoChannel 由「知道自己在哪个群里、但没有『列出全部群』接口」的通道实现。

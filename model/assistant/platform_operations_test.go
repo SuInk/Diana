@@ -180,12 +180,10 @@ func qqOfficialToolFor(t *testing.T, event MessageEvent) (*dianaPlatformTool, *m
 	return tool, channel
 }
 
-// QQ 群里开放平台只给撤回自己消息的接口，群管操作一律如实拒绝，不碰接口。
-func TestPlatformToolQQOfficialGroupOnlyRecalls(t *testing.T) {
+// QQ 群里能禁言、解禁、踢人；全员禁言和精华开放平台只在频道里有，如实拒绝，不碰接口。
+func TestPlatformToolQQOfficialGroupModeration(t *testing.T) {
 	tool, channel := qqOfficialToolFor(t, MessageEvent{Kind: EventKindGroup, PlatformScope: "qq_group", UserID: "owner", GroupID: "GROUPOPENID"})
 	for _, input := range []map[string]any{
-		{"operation": "mute", "user_id": "member1", "duration": 60},
-		{"operation": "kick", "user_id": "member1"},
 		{"operation": "mute_all"},
 		{"operation": "essence_set", "message_id": "m1"},
 	} {
@@ -194,7 +192,45 @@ func TestPlatformToolQQOfficialGroupOnlyRecalls(t *testing.T) {
 		}
 	}
 	if calls := channel.callsSnapshot(); len(calls) != 0 {
-		t.Fatalf("qq group moderation reached platform: %#v", calls)
+		t.Fatalf("unsupported qq group operation reached platform: %#v", calls)
+	}
+	for _, input := range []map[string]any{
+		{"operation": "mute", "user_id": "member1", "duration": 60},
+		{"operation": "unmute", "user_id": "member1"},
+		{"operation": "kick", "user_id": "member1", "reject_add_request": true},
+	} {
+		if _, err := tool.Run(context.Background(), input); err != nil {
+			t.Fatalf("%v error = %v", input["operation"], err)
+		}
+	}
+	calls := channel.callsSnapshot()
+	var actions []string
+	for _, call := range calls {
+		actions = append(actions, call.action)
+	}
+	want := []string{
+		"GET /v2/groups/GROUPOPENID/restrict_chat_setting",
+		"POST /v2/groups/GROUPOPENID/restrict_chat_setting",
+		"POST /v2/groups/GROUPOPENID/restrict_chat_setting",
+		"POST /v2/groups/GROUPOPENID/batch_remove_members",
+	}
+	if strings.Join(actions, "|") != strings.Join(want, "|") {
+		t.Fatalf("actions = %v", actions)
+	}
+	mute := calls[1].params["members"].([]any)[0].(map[string]any)
+	if mute["op"] != "add" || mute["member_openid"] != "member1" {
+		t.Fatalf("mute params = %#v", mute)
+	}
+	if _, err := time.Parse(time.RFC3339, mute["mute_expire_at"].(string)); err != nil {
+		t.Fatalf("mute_expire_at = %v", mute["mute_expire_at"])
+	}
+	unmute := calls[2].params["members"].([]any)[0].(map[string]any)
+	if unmute["op"] != "del" || unmute["mute_expire_at"] != "" {
+		t.Fatalf("unmute params = %#v", unmute)
+	}
+	kick := calls[3].params
+	if ids, _ := kick["member_openids"].([]string); len(ids) != 1 || ids[0] != "member1" || kick["add_to_member_blacklist"] != true {
+		t.Fatalf("kick params = %#v", kick)
 	}
 }
 
@@ -320,7 +356,7 @@ func TestPlatformRequestsToolApprovesTelegramJoinRequest(t *testing.T) {
 }
 
 func TestPlatformRequestsToolOnlyWhereRequestsExist(t *testing.T) {
-	for platform, want := range map[string]bool{PlatformOneBotV11: true, PlatformTelegram: true, PlatformQQOfficial: false} {
+	for platform, want := range map[string]bool{PlatformOneBotV11: true, PlatformTelegram: true, PlatformQQOfficial: true, PlatformWeixin: false} {
 		if got := platformSupportsJoinRequests(platform); got != want {
 			t.Fatalf("platformSupportsJoinRequests(%s) = %v", platform, got)
 		}

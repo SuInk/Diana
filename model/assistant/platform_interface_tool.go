@@ -145,7 +145,7 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
 		Version:     "0.1.4",
-		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、改群名、生成邀请链接、开关全员禁言、撤回成员消息；主人和群主可任免管理员；主人可让机器人退群、查看好友列表，并审批好友与入群申请。支持 OneBot v11、Telegram 与 QQ 官方机器人（QQ 群只能撤回自己的消息，群管在 QQ 频道里可用），平台做不到的操作会明确说明。",
+		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、改群名、生成邀请链接、开关全员禁言、撤回成员消息；主人和群主可任免管理员；主人可让机器人退群、查看好友列表，并审批好友与入群申请。支持 OneBot v11、Telegram 与 QQ 官方机器人（QQ 群可撤回自己的消息、禁言和踢人，其余群管在 QQ 频道里可用），平台做不到的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"platform:group:read", "platform:group:moderate:owner"},

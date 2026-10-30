@@ -131,6 +131,7 @@ func TestMessageEventLiteralsCarryProfileID(t *testing.T) {
 		"onebot.go":                 "平台适配器",
 		"onebot_request.go":         "平台适配器",
 		"qq_official.go":            "平台适配器",
+		"qq_official_group.go":      "平台适配器",
 		"telegram.go":               "平台适配器",
 		"telegram_join_request.go":  "平台适配器",
 		"weixin.go":                 "平台适配器",

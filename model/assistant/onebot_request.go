@@ -210,10 +210,10 @@ func oneBotRequestOwnerNotice(item OneBotRequestRecord) string {
 }
 
 // platformSupportsJoinRequests 判断平台有没有可审批的好友/入群请求。QQ 官方机器人
-// 是被群管理员直接拉进群的，没有申请这一步，也没有替群审批入群的接口。
+// 当上 QQ 群管理员后能收到并审批入群申请（GROUP_JOIN_REQUEST）。
 func platformSupportsJoinRequests(platform string) bool {
 	switch NormalizePlatformID(platform) {
-	case PlatformOneBotV11, PlatformTelegram:
+	case PlatformOneBotV11, PlatformTelegram, PlatformQQOfficial:
 		return true
 	}
 	return false
@@ -255,8 +255,13 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 	store := t.runtime.oneBotRequestStore()
 	if operation == "list" || operation == "sync" {
 		message := ""
-		if IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
-			found, syncErr := t.runtime.syncOneBotPendingRequests(ctx, t.event)
+		syncPending := t.runtime.syncOneBotPendingRequests
+		canSync := IsOneBotPlatform(t.runtime.currentPlatform(t.event))
+		if NormalizePlatformID(t.runtime.currentPlatform(t.event)) == PlatformQQOfficial && t.event.PlatformScope == "qq_group" {
+			syncPending, canSync = t.runtime.syncQQOfficialJoinRequests, true
+		}
+		if canSync {
+			found, syncErr := syncPending(ctx, t.event)
 			switch {
 			case syncErr != nil && operation == "sync":
 				return "", fmt.Errorf("从平台补拉请求失败：%w", syncErr)
@@ -341,6 +346,13 @@ func oneBotRequestAction(item OneBotRequestRecord, approve bool, input map[strin
 			action = "declineChatJoinRequest"
 		}
 		return action, map[string]any{"chat_id": chatID, "user_id": oneBotIDParam(userID)}, nil
+	}
+	if NormalizePlatformID(item.Platform) == PlatformQQOfficial {
+		reason := ""
+		if !approve {
+			reason = truncateForChat(configToolString(input, "reason"), oneBotRequestTextLimit)
+		}
+		return qqOfficialJoinRequestAction(item, approve, reason)
 	}
 	params := map[string]any{"flag": item.Flag, "approve": approve}
 	switch item.RequestType {

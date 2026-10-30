@@ -3824,6 +3824,29 @@ export function bindOwnerByCode(profile: string, code: string): Promise<{ owner_
   });
 }
 
+/** QQ 官方机器人的入群自动审批策略，字段照开放平台原样。 */
+export interface QQJoinStrategy {
+  strategy_id: string;
+  group_openids?: string[];
+  group_ids?: string[];
+  whitelist_user_count?: number;
+  is_enable?: "on" | "off";
+  expire_at?: string;
+  created_at?: string;
+  updated_at?: string;
+  remark?: string;
+}
+
+export type QQJoinStrategyOp = "list" | "create" | "update" | "delete" | "execute" | "whitelist";
+
+/** 管理入群自动审批策略：一个入口按 op 分派，body 字段名照平台文档。 */
+export function qqJoinStrategy<T = Record<string, unknown>>(profile: string, op: QQJoinStrategyOp, strategyID = "", body?: Record<string, unknown>): Promise<T> {
+  return requestJSON<T>(`/api/assistant/qq-join-strategy?${new URLSearchParams({ profile }).toString()}`, {
+    method: "POST",
+    body: JSON.stringify({ op, strategy_id: strategyID, body }),
+  });
+}
+
 /** 人设库里的一份人设，正文就是一份 SOUL.md。builtin 的是编译在程序里的内置人设，只读。 */
 export interface Persona {
   id: string;

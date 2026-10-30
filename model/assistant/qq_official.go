@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -52,6 +53,10 @@ const (
 	// qqIntentGroupAndC2C 订阅群聊 @ 消息和单聊消息，这是「QQ 机器人」这个形态
 	// 的主场景；频道相关意图另算，没开通频道能力时订阅了会被网关拒绝。
 	qqIntentGroupAndC2C = 1 << 25
+	// qqIntentGroupMembers 订阅 QQ 群成员进出（GROUP_MEMBER_ADD/REMOVE）。没开通的
+	// 机器人鉴权会被拒，被拒一次后本进程不再带它。机器人进退群、主动消息开关和入群
+	// 申请都在 1<<25 里。
+	qqIntentGroupMembers = 1 << 24
 	// qqIntentPublicGuildMessages 订阅频道内的 @ 消息。
 	qqIntentPublicGuildMessages = 1 << 30
 )
@@ -63,9 +68,11 @@ const (
 // 部署可以直接用。
 type QQOfficialChannel struct {
 	guildChannels map[string]string
-	avatarURLs    map[string]string
-	mu            sync.RWMutex
-	cfg           QQOfficialConfig
+	// groupBotOpenIDs 是 bot_state 回的机器人在各 QQ 群里的 member_openid。
+	groupBotOpenIDs map[string]string
+	avatarURLs      map[string]string
+	mu              sync.RWMutex
+	cfg             QQOfficialConfig
 	// apiBaseOverride 只给测试指向本地服务。
 	apiBaseOverride string
 	// readTimeoutOverride 只给测试缩短半开连接的判定时限。
@@ -84,6 +91,8 @@ type QQOfficialChannel struct {
 	conn      *websocket.Conn
 	sessionID string
 	lastSeq   int64
+	// memberIntentDenied 记下网关拒过群成员事件意图，之后鉴权不再带它。
+	memberIntentDenied bool
 
 	seqMu      sync.Mutex
 	passiveSeq map[string]qqPassiveSeq
@@ -289,7 +298,7 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 	} else {
 		err = conn.WriteJSON(qqGatewayPayload{Op: qqOpIdentify, D: map[string]any{
 			"token":      auth,
-			"intents":    qqIntentGroupAndC2C | qqIntentPublicGuildMessages,
+			"intents":    c.identifyIntents(),
 			"shard":      []int{0, 1},
 			"properties": map[string]string{},
 		}})
@@ -316,6 +325,7 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 		}
 		var payload qqGatewayPayload
 		if err := conn.ReadJSON(&payload); err != nil {
+			c.noteIntentRejected(err)
 			return fmt.Errorf("qq: 网关连接中断: %w", err)
 		}
 		if payload.S > 0 {
@@ -337,6 +347,30 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 			return fmt.Errorf("qq: 网关要求重连")
 		}
 	}
+}
+
+// identifyIntents 是 IDENTIFY 订阅的事件意图。
+func (c *QQOfficialChannel) identifyIntents() int {
+	intents := qqIntentGroupAndC2C | qqIntentPublicGuildMessages
+	c.connMu.Lock()
+	denied := c.memberIntentDenied
+	c.connMu.Unlock()
+	if !denied {
+		intents |= qqIntentGroupMembers
+	}
+	return intents
+}
+
+// noteIntentRejected 在网关以 4013（无效 intent）或 4014（无权限 intent）断开时，
+// 去掉群成员意图，下一轮重连照常收消息。
+func (c *QQOfficialChannel) noteIntentRejected(err error) {
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) || (closeErr.Code != 4013 && closeErr.Code != 4014) {
+		return
+	}
+	c.connMu.Lock()
+	c.memberIntentDenied = true
+	c.connMu.Unlock()
 }
 
 // qqOfficialHeartbeatInterval 校正网关给的心跳间隔，缺失或过小时按 30 秒。
@@ -402,6 +436,15 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		return
 	}
 
+	if groupEvent, ok, handled := qqOfficialGroupEventFromDispatch(payload.T, payload.Data, c.Status().SelfID); handled {
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if ok && handler != nil {
+			_ = handler(ctx, groupEvent)
+		}
+		return
+	}
 	event, ok := qqOfficialEventFromDispatch(payload.T, payload.Data, c.Status().SelfID)
 	if !ok {
 		return

@@ -372,6 +372,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/favorability/evaluations", h.listRelationshipEvaluations)
 	router.GET(base+"/user-names", h.lookupAssistantUserNames)
 	router.POST(base+"/owner-bind", h.bindOwnerByCode)
+	router.POST(base+"/qq-join-strategy", h.qqJoinStrategy)
 	router.GET(base+"/identity-links", h.listIdentityLinks)
 	router.POST(base+"/identity-links/unlink", h.unlinkIdentityAccount)
 	router.GET(base+"/users/:id", h.getAssistantUser)
