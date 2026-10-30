@@ -37,7 +37,7 @@
 
 ## 测试
 
-- Go：本地用 `scripts/test-serial.sh` 跑改动涉及的包（不传参数时自动按相对 `origin/main` 的改动挑包，也可以传包路径），默认跑一遍普通测试（本机时区），改了并发代码时用 `DIANA_TEST_RACE=1` 打开 `-race`。PR 的 CI 跑全仓库 `go test ./...`（UTC），另有并行的 Go Race Test 任务跑全仓库 `go test -race ./...`，本地不再每次跑全量。
+- Go：本地用 `scripts/test-serial.sh` 跑改动涉及的包（不传参数时自动按相对 `origin/main` 的改动挑包，也可以传包路径），默认跑一遍普通测试（本机时区），改了并发代码时用 `DIANA_TEST_RACE=1` 打开 `-race`。PR 的 CI 跑全仓库 `go test ./...`（UTC），另有并行的 Go Race Test 任务跑全仓库 `go test -race ./...`（只在 PR 上跑，合进 main 后的 Canary 和发版不跑），本地不再每次跑全量。
 - 不要直接起 `go test`：同一台机器上常有多个会话同时跑测试，脚本让它们全机按先来后到排队、限并发（默认 4，`DIANA_TEST_PROCS` 可调）并降优先级，避免整机卡死。排队等待时不要另开测试绕过。同一 worktree 再次调用时，还在排队的上一次调用会以退出码 3 结束，表示被新请求取代，不算测试失败。
 - 前端：改了常量或草稿/配置键后，运行沙箱内的单元测试。
 - 新建测试文件前先确认文件是否已存在，避免覆盖。

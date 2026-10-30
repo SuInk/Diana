@@ -142,8 +142,10 @@ jobs:
 
   # 和 Go Test 并行，不挡构建和发布链；PR 合并前照样要等它绿。
   # 本地脚本默认不开 -race（太吃内存），全仓库的竞态检查只在这里做。
+  # 只在 PR 上跑：合进 main 的代码 PR 上已经验过，Canary 和发版不再重跑。
   backend-race:
     name: Go Race Test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
