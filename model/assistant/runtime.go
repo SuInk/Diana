@@ -2942,7 +2942,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		return event, text, nil, false
 	}
 	if r.relevanceOnlyDormant(event, cfg, time.Now()) {
-		event.routingReason = "闲聊已关闭，机器人 30 分钟内没在这里说过话，回应提问只等 @、引用或点名，未调用接话评分"
+		event.routingReason = "闲聊已关闭，机器人上次在这里说话已超过 30 分钟、之后也过了 3 条消息，回应提问只等 @、引用或点名，未调用接话评分"
 		return event, text, nil, false
 	}
 	// 群里刚有人叫停：不跑模型，直接沉默。靠提示词让评分自己记住「刚被要求闭嘴」

@@ -27,8 +27,8 @@ func routeCalls(t *testing.T, runtime *Runtime, provider *privateClosingProvider
 	return after - before, routed.routingReason
 }
 
-// TestRelevanceOnlyRoutingNeedsRecentBotReply 闲聊关、回应提问开时，机器人 30 分钟
-// 内没在本群说过话就不调接话评分；说过话照常评分。
+// TestRelevanceOnlyRoutingNeedsRecentBotReply 闲聊关、回应提问开时，机器人说话超过
+// 30 分钟、之后又过了 3 条消息才不调接话评分；两个条件有一个没到就照常评分。
 func TestRelevanceOnlyRoutingNeedsRecentBotReply(t *testing.T) {
 	provider := &privateClosingProvider{}
 	runtime := newRelevanceOnlyRuntime(provider, "off")
@@ -36,13 +36,24 @@ func TestRelevanceOnlyRoutingNeedsRecentBotReply(t *testing.T) {
 		t.Fatalf("bot never spoke: calls=%d reason=%q, want no model call", calls, reason)
 	}
 
-	rememberGroupBotReply(runtime, "bot-old", time.Now().Add(-relevanceOnlyActiveWindow-time.Minute))
-	if calls, _ := routeCalls(t, runtime, provider, "m2"); calls != 0 {
-		t.Fatalf("bot spoke over 30 minutes ago: calls=%d, want no model call", calls)
+	// 两小时前说的话，群里一直没人接：后面头 3 条消息还要评分。
+	rememberGroupBotReply(runtime, "bot-old", time.Now().Add(-2*time.Hour))
+	for i, id := range []string{"q1", "q2", "q3"} {
+		if calls, _ := routeCalls(t, runtime, provider, id); calls == 0 {
+			t.Fatalf("message %d after a quiet bot reply must still be rated", i+1)
+		}
+		runtime.remember(groupPlainEvent("30001", id, "那这个怎么弄"))
+	}
+	if calls, _ := routeCalls(t, runtime, provider, "q4"); calls != 0 {
+		t.Fatalf("over 30 minutes and 3 messages since the bot spoke: calls=%d, want no model call", calls)
 	}
 
+	// 10 分钟前说的话，中间隔再多条也照常评分。
 	rememberGroupBotReply(runtime, "bot-recent", time.Now().Add(-10*time.Minute))
-	if calls, _ := routeCalls(t, runtime, provider, "m3"); calls == 0 {
+	for _, id := range []string{"r1", "r2", "r3", "r4"} {
+		runtime.remember(groupPlainEvent("30001", id, "聊别的"))
+	}
+	if calls, _ := routeCalls(t, runtime, provider, "r5"); calls == 0 {
 		t.Fatal("bot spoke 10 minutes ago: the router must still judge follow-up questions")
 	}
 }
