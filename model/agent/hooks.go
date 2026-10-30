@@ -8,6 +8,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -62,6 +63,10 @@ type runHookState struct {
 
 func (h *runHookState) before(ctx context.Context, tool string, input map[string]any) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// 串行和并行两条执行路径都经过这里，隐私代理的占位符在这一处兜底。
+	if err := secretmask.UnresolvedPlaceholderError(input); err != nil {
 		return err
 	}
 	if h.hooks.BeforeToolCall == nil {

@@ -484,6 +484,15 @@
       "format_key": "reply.identity_privacy.format"
     },
     {
+      "key": "reply.secret_privacy",
+      "group": "reply_rules",
+      "title": "敏感信息隐私代理",
+      "usage": "开启「对模型隐藏密钥和个人信息」时，加在每次请求第一条 system 消息最前面，说明这些值已换成占位符。末尾「逐字照抄占位符」那句是锁定的，代理靠它把占位符换回原值。",
+      "default": "【敏感信息隐私代理】消息和工具结果里的密钥、令牌、密码、身份证号、银行卡号、手机号和邮箱，已由本地代理换成 pv_api_key_…、pv_phone_… 这类占位符。相同占位符始终代表同一个值，它就是那个值本身，不是拿不到。",
+      "contract": "命令、请求头和工具参数要用这些值时，必须逐字照抄占位符，不要改写、截断、拼接或猜测原文；本地代理会在执行前换回原值。回复里写出占位符时，密钥只会显示成掩码，不要为了让对方看到原文而拆开或转述占位符。",
+      "format_key": "reply.secret_privacy.format"
+    },
+    {
       "key": "reply.message_addressing",
       "group": "reply_rules",
       "title": "引用与提及关系说明",

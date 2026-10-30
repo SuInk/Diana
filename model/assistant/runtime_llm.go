@@ -376,6 +376,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = withEmojiSemanticsRun(run)
 	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withLLMSecretPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
@@ -401,6 +402,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 		group = llm.GroupChat
 	}
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withLLMSecretPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
@@ -659,6 +661,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = withEmojiSemanticsRun(run)
 	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = r.withLLMSecretPrivacyRun(ctx, run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)

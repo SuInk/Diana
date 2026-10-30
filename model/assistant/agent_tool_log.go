@@ -147,6 +147,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			if runError != "" && strings.TrimSpace(toolOutput) == "" {
 				toolOutput = "ERROR: " + runError
 			}
+			toolInput, toolOutput = r.maskSecretsForTrace(ctx, toolInput, toolOutput)
 			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
 				"trace_id":        runEvent.TraceID,

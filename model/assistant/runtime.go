@@ -364,7 +364,9 @@ type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
 	// identityAliases 记住换过别名的号码，见 identityAliasRegistry。
-	identityAliases     identityAliasRegistry
+	identityAliases identityAliasRegistry
+	// secretContextValues 记住只能靠上下文认出来的敏感值，见 secretContextRegistry。
+	secretContextValues secretContextRegistry
 	mu                  sync.RWMutex
 	modelConfigMu       sync.Mutex
 	modelRoutingMu      sync.Mutex

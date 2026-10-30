@@ -1691,13 +1691,13 @@
             </div>
           </section>
 
-          <!-- 账号隐私：发给模型的上下文中，账号、群号和消息 ID 要不要换成别名。 -->
+          <!-- 隐私代理：发给模型的上下文中，账号 ID 换成别名、密钥和个人信息换成占位符。 -->
           <section class="card">
             <div class="card-header">
               <div>
-                <h2>账号隐私</h2>
+                <h2>隐私代理</h2>
               </div>
-              <span class="badge" :class="form.llm_identity_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled ? "已启用" : "已关闭" }}</span>
+              <span class="badge" :class="form.llm_identity_masking_enabled || form.llm_secret_masking_enabled ? 'accent' : ''">{{ form.llm_identity_masking_enabled || form.llm_secret_masking_enabled ? "已启用" : "已关闭" }}</span>
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
@@ -1718,8 +1718,19 @@
                   <span class="switch-label">正文里的账号也换成别名（默认开启）</span>
                 </label>
                 <span class="hint">
-                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号、手机号等其他数字原样保留。
+                  有人在消息里直接写 QQ 号时，先向平台核实是不是本群成员，是就换成同一个别名，模型能认出是谁、也能拿去查；订单号等其他数字原样保留，手机号由下面的开关处理。
                   关闭后正文里没在聊天记录中出现过的号码按原样发给模型。只在上面的隐私开关打开时生效。
+                </span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.llm_secret_masking_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">对模型隐藏密钥和个人信息（默认开启）</span>
+                </label>
+                <span class="hint">
+                  开启时，消息和工具结果里的密钥、令牌、密码、身份证号、银行卡号、手机号和邮箱在发给模型前换成 pv_api_key_xxx 这类占位符，执行命令或调用工具时再换回原值，模型不用逐字重抄长串，也拿不到原文。
+                  回复里密钥只显示掩码；个人信息只有本会话里出现过的才显示原文。关闭后模型直接看到原文。
                 </span>
               </div>
             </div>
@@ -4709,6 +4720,7 @@ function setForm(config: BotProfileConfig): void {
     llm_streaming_enabled: config.llm_streaming_enabled ?? true,
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
+    llm_secret_masking_enabled: config.llm_secret_masking_enabled ?? true,
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,

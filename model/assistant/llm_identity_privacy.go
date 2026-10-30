@@ -254,6 +254,8 @@ func (r *Runtime) withReplyIdentityPrivacyContext(ctx context.Context, event Mes
 }
 
 func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event MessageEvent, history []MessageEvent, verify bool) context.Context {
+	// 敏感值隐私代理要知道哪些值是本会话里出现过的，和账号别名在同一处登记。
+	ctx = withSecretPrivacyLocal(ctx, event, history)
 	cfg := r.effectiveConfigForEvent(event)
 	if !llmIdentityMaskingEnabled(cfg) {
 		if ctx == nil {

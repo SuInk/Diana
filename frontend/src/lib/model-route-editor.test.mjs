@@ -14,10 +14,10 @@ test("media preprocessing lives only in context settings", () => {
   assert.match(source, /「模型分配」的「媒体解析」/);
 });
 
-test("account privacy lives only in context settings", () => {
-  assert.equal(source.match(/<h2>账号隐私<\/h2>/g)?.length, 1);
-  assert.ok(source.indexOf("<h2>账号隐私</h2>") > source.indexOf("editorTab === 'context'"));
-  assert.ok(source.indexOf("<h2>账号隐私</h2>") < source.indexOf("editorTab === 'advanced'"));
+test("privacy proxy lives only in context settings", () => {
+  assert.equal(source.match(/<h2>隐私代理<\/h2>/g)?.length, 1);
+  assert.ok(source.indexOf("<h2>隐私代理</h2>") > source.indexOf("editorTab === 'context'"));
+  assert.ok(source.indexOf("<h2>隐私代理</h2>") < source.indexOf("editorTab === 'advanced'"));
 });
 
 test("model scheduling keeps purpose help concise and points to shared recovery settings", () => {

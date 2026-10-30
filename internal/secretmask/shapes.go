@@ -47,4 +47,94 @@ var (
 	// PhonePattern 认出中国大陆手机号，允许 +86 前缀和数字间的空格或横杠。前后必须
 	// 是边界，长串数字（消息 ID、QQ 号）中间恰好有一段 1[3-9] 开头的不算。
 	PhonePattern = regexp.MustCompile(`(?:\+86[\s-]?|\b86[\s-]?|\b)1[3-9](?:[\s-]?[0-9]){9}\b`)
+
+	// IDCardPattern 认出 18 位居民身份证号的形态：地区码、出生日期、顺序码和校验位。
+	// 只看形态会把同样长的订单号也认进来，用的时候再过一遍 ValidIDCard。
+	//
+	// 下面两条都不带边界：前后紧挨字母数字的是更长编号里的一段，由调用方核对。
+	// 把边界字符写进正则会吃掉它，逗号隔开的第二个号就认不出来了。
+	IDCardPattern = regexp.MustCompile(`[1-9][0-9]{5}(?:18|19|20)[0-9]{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12][0-9]|3[01])[0-9]{3}[0-9Xx]`)
+
+	// BankCardPattern 认出 16 到 19 位的银行卡号，允许每四位一组用空格或横杠隔开。
+	// 随便一串长数字也长这样，用的时候再过一遍 ValidLuhn。末尾不足四位的那截不许再
+	// 隔开：「6222 … 0005 12 元」会把金额并进卡号，校验不过，整张卡就漏了。
+	BankCardPattern = regexp.MustCompile(`[3-6][0-9]{3}(?:[ -]?[0-9]{4}){2,3}[0-9]{0,3}`)
+
+	// ConnectionPasswordPattern 认出连接串里的密码：postgres://user:pass@host。
+	// 第 1 组是密码。用户名不算秘密，留着便于认出连的是哪个账号。
+	ConnectionPasswordPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]{1,15}://[^\s:@/?#"'<>]*:([^\s@/?#"'<>]{3,})@`)
 )
+
+// ValidIDCard 按 GB 11643 的加权校验位核对身份证号，顺带确认出生日期在日历上存在。
+func ValidIDCard(value string) bool {
+	if len(value) != 18 {
+		return false
+	}
+	weights := [17]int{7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2}
+	sum := 0
+	for i := 0; i < 17; i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+		sum += int(value[i]-'0') * weights[i]
+	}
+	if !validDate(value[6:14]) {
+		return false
+	}
+	check := "10X98765432"[sum%11]
+	last := value[17]
+	if last == 'x' {
+		last = 'X'
+	}
+	return last == check
+}
+
+// validDate 核对 YYYYMMDD 是不是真实存在的日期（2 月 30 日这种不算）。
+func validDate(value string) bool {
+	year, month, day := atoi(value[0:4]), atoi(value[4:6]), atoi(value[6:8])
+	if month < 1 || month > 12 || day < 1 {
+		return false
+	}
+	days := [13]int{0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
+	if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+		days[2] = 29
+	}
+	return day <= days[month]
+}
+
+func atoi(value string) int {
+	n := 0
+	for i := 0; i < len(value); i++ {
+		n = n*10 + int(value[i]-'0')
+	}
+	return n
+}
+
+// ValidLuhn 用 Luhn 校验核对银行卡号，分隔用的空格和横杠先去掉。
+func ValidLuhn(value string) bool {
+	digits := make([]byte, 0, len(value))
+	for i := 0; i < len(value); i++ {
+		switch c := value[i]; {
+		case c >= '0' && c <= '9':
+			digits = append(digits, c)
+		case c == ' ' || c == '-':
+		default:
+			return false
+		}
+	}
+	if len(digits) < 16 || len(digits) > 19 {
+		return false
+	}
+	sum := 0
+	for i := len(digits) - 1; i >= 0; i-- {
+		d := int(digits[i] - '0')
+		if (len(digits)-1-i)%2 == 1 {
+			d *= 2
+			if d > 9 {
+				d -= 9
+			}
+		}
+		sum += d
+	}
+	return sum%10 == 0
+}
