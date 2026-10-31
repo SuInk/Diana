@@ -40,7 +40,7 @@ func TestRenderFontsMultilingualIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	page := `<!doctype html><html><head><meta charset="utf-8"><style>body{background:white;color:#132435;font-size:24px;margin:22px}p{margin:10px 0}</style></head><body><p>中文 日本語 한국어</p><p>English · Ελληνικά · Русский</p><p dir="auto">العربية: مرحبا بالعالم</p><p dir="auto">עברית: שלום עולם</p><p>ไทย: สวัสดี</p><p>हिन्दी: नमस्ते</p><p>বাংলা: বাংলা</p><p>தமிழ்: வணக்கம்</p><p>Emoji: 😀 👍🏽 🇨🇳 👩‍💻</p></body></html>`
+	page := `<!doctype html><html><head><meta charset="utf-8"><style>body{background:white;color:#132435;font-size:24px;margin:22px}p{margin:10px 0}</style></head><body><p>中文 日本語 한국어</p><p>English · Ελληνικά · Русский</p><p dir="auto">العربية: مرحبا بالعالم</p><p dir="auto">עברית: שלום עולם</p><p>ไทย: สวัสดี</p><p>हिन्दी: नमस्ते</p><p>বাংলা: বাংলা</p><p>தமிழ்: வணக்கம்</p><p>Emoji: 😀 👍🏽 🇨🇳 👩‍💻</p><p>Symbols: ⮕ ⬛ → ✓</p></body></html>`
 	page, files, err := prepareRenderFontHTML(ctx, page)
 	if err != nil {
 		t.Fatal(err)
@@ -120,9 +120,9 @@ func TestRenderMarkdownHighDensityIntegration(t *testing.T) {
 	}
 }
 
-// 下载过的回退字体只缺页面上个别字符时要直接复用，不能再去下载一遍、然后因为
-// 「缺少所需字形」让整张图失败——花体群昵称里的符号经常不在 Symbols2 里。
-func TestRenderScriptFontReusesPartialDownload(t *testing.T) {
+// 下载过的回退字体直接复用，不能拿某个字去验它、验不过就再下一遍然后整张图失
+// 败——Symbols2 连当初的样例字 → 都没有。
+func TestRenderScriptFontReusesDownload(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
@@ -130,7 +130,7 @@ func TestRenderScriptFontReusesPartialDownload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	asset := renderFontAsset{name: "DianaPartialTest", sha: "0123456789abcdef", sample: "关", hints: []string{"dianapartialtestnohint"}}
+	asset := renderFontAsset{name: "DianaCachedTest", sha: "0123456789abcdef", hints: []string{"dianacachedtestnohint"}}
 	root, err := os.UserCacheDir()
 	if err != nil {
 		t.Fatal(err)
@@ -144,11 +144,11 @@ func TestRenderScriptFontReusesPartialDownload(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // 一旦走到下载就会因为 ctx 已取消而失败
-	path, embed, err := ensureRenderScriptFont(ctx, asset, []rune("关𓀀"))
+	path, err := ensureRenderScriptFont(ctx, asset)
 	if err != nil {
-		t.Fatalf("partial font should be reused, got %v", err)
+		t.Fatalf("cached font should be reused, got %v", err)
 	}
-	if path != destination || !embed {
-		t.Fatalf("got path=%s embed=%v", path, embed)
+	if path != destination {
+		t.Fatalf("got path=%s", path)
 	}
 }

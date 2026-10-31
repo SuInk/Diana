@@ -43,7 +43,7 @@ func TestRenderGroupRelationPNGWithoutBrowser(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			graph := relationTestGraph()
 			graph.Nodes[0].DisplayName = name
-			raw, err := RenderGroupRelationPNG(graph, "群 20003 · 关系图", "近 7 天", relationImageDefaultSeats)
+			raw, err := RenderGroupRelationPNG(graph, "群 20003 · 关系图", "近 7 天", relationImageDefaultSeats, nil)
 			if err != nil {
 				t.Fatalf("RenderGroupRelationPNG() error = %v", err)
 			}
@@ -78,11 +78,11 @@ func TestRenderGroupRelationPNGDrawsCJKGlyphs(t *testing.T) {
 	if _, _, err := LoadCJKFont(); err != nil {
 		t.Skipf("这台机器上没有能画中文的字体：%v", err)
 	}
-	withTitle, err := RenderGroupRelationPNG(relationTestGraph(), "关系图标题", "近 7 天", relationImageDefaultSeats)
+	withTitle, err := RenderGroupRelationPNG(relationTestGraph(), "关系图标题", "近 7 天", relationImageDefaultSeats, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	blank, err := RenderGroupRelationPNG(relationTestGraph(), "", "", relationImageDefaultSeats)
+	blank, err := RenderGroupRelationPNG(relationTestGraph(), "", "", relationImageDefaultSeats, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,6 +99,29 @@ func decodePNG(t *testing.T, raw []byte) image.Image {
 		t.Fatalf("解码 PNG：%v", err)
 	}
 	return img
+}
+
+// 有头像的人要把头像贴在他的位置上，而不是只画底色圆点。
+func TestRenderGroupRelationPNGDrawsAvatars(t *testing.T) {
+	if _, _, err := LoadCJKFont(); err != nil {
+		t.Skipf("这台机器上没有能画中文的字体：%v", err)
+	}
+	graph := relationTestGraph()
+	avatar := image.NewNRGBA(image.Rect(0, 0, 64, 48))
+	draw.Draw(avatar, avatar.Bounds(), image.NewUniform(color.NRGBA{R: 0x20, G: 0x80, B: 0x30, A: 0xff}), image.Point{}, draw.Src)
+	raw, err := RenderGroupRelationPNG(graph, "t", "", relationImageDefaultSeats, map[string]image.Image{"Winter": avatar})
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := decodePNG(t, raw)
+	layout := layoutRelationCircle(graph, relationImageDefaultSeats)
+	for _, member := range layout.members {
+		r, g, b, _ := img.At(int(member.x), int(member.y)).RGBA()
+		green := r>>8 == 0x20 && g>>8 == 0x80 && b>>8 == 0x30
+		if green != (member.node.UserID == "Winter") {
+			t.Fatalf("%s 的位置颜色是 %02x%02x%02x", member.node.UserID, r>>8, g>>8, b>>8)
+		}
+	}
 }
 
 // inkInHeader 数标题区里有多少非背景像素。

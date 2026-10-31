@@ -140,7 +140,7 @@ func TestCJKFontInstallAndScreenshotIntegration(t *testing.T) {
 	if inkInHeader(decodePNG(t, raw)) < 100 {
 		t.Fatal("font screenshot contains no rendered text")
 	}
-	raster, err := RenderGroupRelationPNG(relationTestGraph(), "中文字体下载验证成功", "近 7 天", 12)
+	raster, err := RenderGroupRelationPNG(relationTestGraph(), "中文字体下载验证成功", "近 7 天", 12, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

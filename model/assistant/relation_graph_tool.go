@@ -45,7 +45,7 @@ func (t *dianaGroupRelationsTool) defaultRange() string {
 func (t *dianaGroupRelationsTool) Name() string { return dianaGroupRelationsToolName }
 
 func (t *dianaGroupRelationsTool) Description() string {
-	return `画本群关系图并直接发到群里：你在中间，连线粗细是互动次数，圆点大小是发言量。` +
+	return `画本群关系图并直接发到群里：你在中间，群友头像按和你的互动次数排成三圈，越靠里越亲近。` +
 		`图由运行时发送，调用后一句话交代即可；你看不到图，不要描述里面的数字。`
 }
 
@@ -115,18 +115,19 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	// 先在进程里直接画。它不需要浏览器，也就不用等一次冷启动——一台机器上装不装
 	// 得起 Chrome，和有没有中文字体，是两件独立的事，两条路都试才不至于一个环境
 	// 缺件就彻底没图。
+	avatars := t.loadRelationAvatars(ctx, relationAvatarIDs(graph, maxSeats))
 	var png []byte
 	_, _, fontErr := ensureCJKFont(ctx)
 	rasterErr := fontErr
 	if rasterErr == nil {
-		png, rasterErr = RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats)
+		png, rasterErr = RenderGroupRelationPNG(graph, title, rangeLabel, maxSeats, avatars)
 	}
 	var browserErr error
 	if rasterErr != nil {
 		if fontErr != nil {
 			browserErr = fontErr
 		} else {
-			page := RenderGroupRelationHTML(graph, title, rangeLabel, maxSeats)
+			page := RenderGroupRelationHTML(graph, title, rangeLabel, maxSeats, avatars)
 			var fontFiles []string
 			page, fontFiles, browserErr = prepareRenderFontHTML(ctx, page)
 			if browserErr == nil {

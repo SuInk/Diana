@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 	"unicode"
 
@@ -25,23 +24,20 @@ var notoEmojiLicense []byte
 type renderFontAsset struct {
 	name, sha string
 	script    *unicode.RangeTable
-	sample    string
 	hints     []string
 }
 
 var renderFontAssets = []renderFontAsset{
-	{"NotoSans", "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5", nil, "AΩЖ", []string{"notosans", "arial", "dejavusans", "liberationsans", "segoe"}},
-	{"NotoSansArabic", "ceea25b464a656dc3b26849bab9356740401af62aedf1bfa8b7f0d9b75925b1b", unicode.Arabic, "مرحبا", []string{"notosansarabic", "geeza", "arial", "tahoma", "segoe"}},
-	{"NotoSansHebrew", "a7fa16fffb27bedb060a0866267c29e9859aeb9c21cc33f5b3aaf6eb062eca85", unicode.Hebrew, "שלום", []string{"notosanshebrew", "arial", "tahoma", "segoe"}},
-	{"NotoSansThai", "404ddfb5ed0aaa6b6ec8a85700d682978992062d67da93903967b56cbd9a4acc", unicode.Thai, "ไทย", []string{"notosansthai", "thonburi", "leelawadee", "tahoma"}},
-	{"NotoSansDevanagari", "385e78e6359a9d88a0f243d53b1209d7548361ba2194e2b9ec779bcaa7e8949d", unicode.Devanagari, "नमस्ते", []string{"notosansdevanagari", "devanagari", "kohinoor", "nirmala"}},
-	{"NotoSansBengali", "6300c5370cd688b0641343de4c786de6d412bb6c578d129dae75e93a0322dcab", unicode.Bengali, "বাংলা", []string{"notosansbengali", "bangla", "bengali", "nirmala"}},
-	{"NotoSansTamil", "6532db33b8b264abe3a098a40619feb489b5ddf5ab1d2b46e72b51eeb548001b", unicode.Tamil, "தமிழ்", []string{"notosanstamil", "tamil", "nirmala"}},
-	{"NotoSansSymbols2", "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6", nil, "→", []string{"notosanssymbols", "symbol", "seguisym"}},
-	{"NotoEmoji", "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551", nil, "😀", []string{"notoemoji", "notocoloremoji", "applecoloremoji", "seguiemj"}},
+	{"NotoSans", "b85c38ecea8a7cfb39c24e395a4007474fa5a4fc864f6ee33309eb4948d232d5", nil, []string{"notosans", "arial", "dejavusans", "liberationsans", "segoe"}},
+	{"NotoSansArabic", "ceea25b464a656dc3b26849bab9356740401af62aedf1bfa8b7f0d9b75925b1b", unicode.Arabic, []string{"notosansarabic", "geeza", "arial", "tahoma", "segoe"}},
+	{"NotoSansHebrew", "a7fa16fffb27bedb060a0866267c29e9859aeb9c21cc33f5b3aaf6eb062eca85", unicode.Hebrew, []string{"notosanshebrew", "arial", "tahoma", "segoe"}},
+	{"NotoSansThai", "404ddfb5ed0aaa6b6ec8a85700d682978992062d67da93903967b56cbd9a4acc", unicode.Thai, []string{"notosansthai", "thonburi", "leelawadee", "tahoma"}},
+	{"NotoSansDevanagari", "385e78e6359a9d88a0f243d53b1209d7548361ba2194e2b9ec779bcaa7e8949d", unicode.Devanagari, []string{"notosansdevanagari", "devanagari", "kohinoor", "nirmala"}},
+	{"NotoSansBengali", "6300c5370cd688b0641343de4c786de6d412bb6c578d129dae75e93a0322dcab", unicode.Bengali, []string{"notosansbengali", "bangla", "bengali", "nirmala"}},
+	{"NotoSansTamil", "6532db33b8b264abe3a098a40619feb489b5ddf5ab1d2b46e72b51eeb548001b", unicode.Tamil, []string{"notosanstamil", "tamil", "nirmala"}},
+	{"NotoSansSymbols2", "630846d528dbe4c4981370a4d0a9475a1fd1491a129bb411f8e157cdb5de13c6", nil, []string{"notosanssymbols", "symbol", "seguisym"}},
+	{"NotoEmoji", "de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551", nil, []string{"notoemoji", "notocoloremoji", "applecoloremoji", "seguiemj"}},
 }
-var renderFontMu sync.Mutex
-var renderFontCache = map[string]string{}
 
 func fontCoversGlyphs(font *sfnt.Font, chars []rune) bool {
 	if font == nil {
@@ -166,38 +162,17 @@ func findSystemRenderFont(hints []string, chars []rune) string {
 	return ""
 }
 
-// ensureRenderScriptFont 只按字体自带的样例字形认文件，不要求它覆盖页面上的
-// 每个字符：符号这类分组是按 Unicode 类别粗分的，Symbols2 本来就不全，花体昵
-// 称里随便一个它没有的字符就会让下载校验失败、整张图出不来。文件身份已经由
-// SHA-256 保证，缺的字由调用方另找字体。
-func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []rune) (string, bool, error) {
+// ensureRenderScriptFont 返回这套回退字体的下载副本，没有就现下。只在系统字体
+// 补不齐时才调用。文件身份由 SHA-256 保证，不再拿某个字去验它：符号这类分组按
+// Unicode 类别粗分，字体本来就不全，挑哪个字当样例都可能挑到它没有的。
+func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset) (string, error) {
 	root, err := os.UserCacheDir()
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
-	probe := []rune(asset.sample)
 	destination := filepath.Join(root, "diana", "fonts", asset.name+"-"+asset.sha[:8], asset.name+".ttf")
-	key := destination
-	renderFontMu.Lock()
-	cached := renderFontCache[key]
-	renderFontMu.Unlock()
-	if cached != "" {
-		if _, err := loadFontForGlyphs(cached, chars); err == nil {
-			return cached, cached == destination, nil
-		}
-	}
-	if _, err := loadFontForGlyphs(destination, chars); err == nil {
-		return destination, true, nil
-	}
-	if path := findSystemRenderFont(asset.hints, chars); path != "" {
-		renderFontMu.Lock()
-		renderFontCache[key] = path
-		renderFontMu.Unlock()
-		return path, false, nil
-	}
-	// 系统里也没有全覆盖的，已下载的那份能补多少补多少。
-	if _, err := loadFontForGlyphs(destination, probe); err == nil {
-		return destination, true, nil
+	if _, err := loadFontForGlyphs(destination, nil); err == nil {
+		return destination, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, cjkFontInstallTimeout)
 	defer cancel()
@@ -205,10 +180,10 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 	case cjkFontInstallGate <- struct{}{}:
 		defer func() { <-cjkFontInstallGate }()
 	case <-ctx.Done():
-		return "", false, ctx.Err()
+		return "", ctx.Err()
 	}
-	if _, err := loadFontForGlyphs(destination, probe); err == nil {
-		return destination, true, nil
+	if _, err := loadFontForGlyphs(destination, nil); err == nil {
+		return destination, nil
 	}
 	source := "https://raw.githubusercontent.com/notofonts/noto-fonts/ffebf8c1ee449e544955a7e813c54f9b73848eac/hinted/ttf/" + asset.name + "/" + asset.name + "-Regular.ttf"
 	license := notoSansLicense
@@ -216,10 +191,10 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset, chars []
 		source = "https://raw.githubusercontent.com/google/fonts/1edf95b4328bc5997ca93d2c0c7205272ec7347f/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
 		license = notoEmojiLicense
 	}
-	if err := downloadVerifiedFont(ctx, netguard.NewPublicHTTPClient(2*time.Minute), source, destination, asset.sha, probe, license); err != nil {
-		return "", false, fmt.Errorf("补齐 %s 字体失败：%w", asset.name, err)
+	if err := downloadVerifiedFont(ctx, netguard.NewPublicHTTPClient(2*time.Minute), source, destination, asset.sha, nil, license); err != nil {
+		return "", fmt.Errorf("补齐 %s 字体失败：%w", asset.name, err)
 	}
-	return destination, true, nil
+	return destination, nil
 }
 
 // Download only fonts required by visible text. System faces remain the first
@@ -252,83 +227,51 @@ func prepareRenderFonts(ctx context.Context, page string, forced bool) (string, 
 			files = append(files, path)
 		}
 	}
+	// 系统字体优先：先按提示找一份整组都能画的，剩下的逐字在系统里找，系统里实
+	// 在没有的字才去下载对应的回退字体。
 	var families []string
+	addSystem := func(path string, chars []rune) bool {
+		font, err := loadFontForGlyphs(path, chars)
+		if err != nil {
+			return false
+		}
+		covered = append(covered, font)
+		var b sfnt.Buffer
+		if family, err := font.Name(&b, sfnt.NameIDFamily); err == nil {
+			families = append(families, fmt.Sprintf("%q", family))
+		}
+		return true
+	}
+	missing := uncoveredRunes(covered, unknown)
 	for _, asset := range renderFontAssets {
-		chars := groups[asset.name]
+		chars := uncoveredRunes(covered, groups[asset.name])
 		if len(chars) == 0 {
 			continue
 		}
-		already := false
-		for _, font := range covered {
-			if fontCoversGlyphs(font, chars) {
-				already = true
-				break
-			}
-		}
-		if already {
+		if path := findSystemRenderFont(asset.hints, chars); path != "" && addSystem(path, chars) {
 			continue
 		}
-		path, embed, err := ensureRenderScriptFont(ctx, asset, chars)
-		if err != nil {
-			return "", nil, err
-		}
-		font, err := loadFontForGlyphs(path, []rune(asset.sample))
-		if err != nil {
-			return "", nil, err
-		}
-		covered = append(covered, font)
-		// 这套字体没有的字符留给下面按系统字体逐个找。
-		for _, r := range chars {
-			if !fontCoversGlyphs(font, []rune{r}) {
-				unknown = append(unknown, r)
-			}
-		}
-		if embed {
-			files = append(files, path)
-		} else {
-			var b sfnt.Buffer
-			if family, err := font.Name(&b, sfnt.NameIDFamily); err == nil {
-				families = append(families, fmt.Sprintf("%q", family))
-			}
+		missing = append(missing, chars...)
+	}
+	var absent []rune
+	for missing = uncoveredRunes(covered, missing); len(missing) > 0; missing = uncoveredRunes(covered, missing) {
+		path := findSystemRenderFont([]string{""}, missing[:1])
+		if path == "" || !addSystem(path, missing[:1]) {
+			absent = append(absent, missing[0])
+			missing = missing[1:]
 		}
 	}
-	if len(unknown) > 0 {
-		missing := []rune{}
-		for _, r := range unknown {
-			found := false
-			for _, font := range covered {
-				if fontCoversGlyphs(font, []rune{r}) {
-					found = true
-					break
-				}
-			}
-			if !found {
-				missing = append(missing, r)
-			}
+	need, _ := renderFontNeeds(string(absent))
+	for _, asset := range renderFontAssets {
+		if len(need[asset.name]) == 0 {
+			continue
 		}
-		for len(missing) > 0 {
-			path := findSystemRenderFont([]string{""}, []rune{missing[0]})
-			if path == "" {
-				// 找不到就让这个字显示成方框：为一个罕见字符整张图不出，比缺一个字糟得多。
-				missing = missing[1:]
-				continue
-			}
-			font, err := loadFontForGlyphs(path, []rune{missing[0]})
-			if err != nil {
-				return "", nil, err
-			}
-			var b sfnt.Buffer
-			if family, err := font.Name(&b, sfnt.NameIDFamily); err == nil {
-				families = append(families, fmt.Sprintf("%q", family))
-			}
-			var rest []rune
-			for _, r := range missing {
-				if !fontCoversGlyphs(font, []rune{r}) {
-					rest = append(rest, r)
-				}
-			}
-			missing = rest
+		path, err := ensureRenderScriptFont(ctx, asset)
+		if err != nil {
+			return "", nil, err
 		}
+		// 下载的字体也没有的字就显示成方框：为一个罕见字符整张图不出，比缺一个字糟得多。
+		files = append(files, path)
 	}
 	if len(files) == 0 {
 		return page, nil, nil
@@ -348,6 +291,24 @@ func prepareRenderFonts(ctx context.Context, page string, forced bool) (string, 
 	}
 	fmt.Fprintf(&css, `body,.render-root,svg text,svg tspan,svg foreignObject *{font-family:%s!important}code,pre,kbd,samp{font-family:"SFMono-Regular",Menlo,Consolas,%s,monospace!important}</style>`, stack, strings.Join(families, ","))
 	return insertHeadHTML(page, css.String()), files, nil
+}
+
+// uncoveredRunes 返回 fonts 里谁都画不了的字。
+func uncoveredRunes(fonts []*sfnt.Font, chars []rune) []rune {
+	var out []rune
+	for _, r := range chars {
+		found := false
+		for _, font := range fonts {
+			if fontCoversGlyphs(font, []rune{r}) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func insertHeadHTML(page, css string) string {

@@ -4,47 +4,183 @@
 package assistant
 
 import (
+	"bytes"
+	"encoding/base64"
 	"fmt"
 	"html"
+	"image"
+	"image/color"
+	"image/png"
 	"math"
 	"sort"
 	"strings"
 )
 
-// 关系图的聊天版渲染。
+// 关系图的聊天版渲染：照 WebUI 的 GroupRelationChart.vue 画「互动圈」——中心是
+// 机器人，成员按和它的互动次数从里往外排进三圈，越靠里越亲近，只画头像不写名字。
 //
-// 这份布局和 WebUI 里那个 Vue 组件是两套实现，共用的是数据层（GroupRelationGraphFor）。
-// 看起来像重复，但两边的约束不一样：网页版能悬停看明细、能缩放，所以敢画细线和小字；
-// 发到群里的是一张定死的位图，没有悬停，字必须更大、连线必须更粗、还得自带标题说明
-// 这是哪个群哪段时间。把网页那份直接截图会得到一张给鼠标看的图。
+// 网页版靠悬停看名字和连线，位图没有悬停，所以这两样都不画；圈层、头像大小和配色
+// 跟网页版一致，改了一边记得对齐另一边。
 //
 // 真正不能有两份的是「谁和谁算一次互动」，那一份在存储层，两边都从它取数。
 const (
 	relationImageWidth  = 1000
 	relationImageHeight = 860
-	// relationImageDefaultSeats 是没配置时画多少人。位图没有悬停也不能缩放，
-	// 收得比网页版紧。
+	// relationImageDefaultSeats 是没配置时画多少人。
 	relationImageDefaultSeats = 24
 	relationImageMinSeats     = 6
 	relationImageMaxSeats     = 40
 )
 
+// relationRings 从里到外三圈，数值照抄网页版：圈越外半径越大、头像越小。
+var relationRings = []struct {
+	radius, node float64
+	capacity     int
+}{
+	{98, 27, 8}, // 内圈只留最亲近的几个人
+	{166, 20, 0},
+	{228, 15, 0},
+}
+
+// relationRingFillPercent 是有来往的人在各圈的底色深浅，和网页版的 color-mix 一致。
+var relationRingFillPercent = []float64{100, 62, 34}
+
+func relationRingCapacity(ring int) int {
+	spec := relationRings[ring]
+	capacity := int(math.Floor(2 * math.Pi * spec.radius / (spec.node*2 + 6)))
+	if spec.capacity > 0 && spec.capacity < capacity {
+		capacity = spec.capacity
+	}
+	return capacity
+}
+
+type relationMember struct {
+	node   GroupRelationNode
+	x, y   float64
+	radius float64
+	ring   int
+	weight int
+	fill   color.NRGBA
+}
+
+type relationBand struct {
+	radius  float64
+	opacity float64
+}
+
+// relationCircle 是一张互动圈的完整布局，HTML 和位图两条路都照它画。
+type relationCircle struct {
+	scale                          float64
+	centerX, centerY, centerRadius float64
+	center                         GroupRelationNode
+	// bands 由外到内，先画外圈底盘。
+	bands   []relationBand
+	members []relationMember
+}
+
+func layoutRelationCircle(graph GroupRelationGraph, maxSeats int) relationCircle {
+	area := float64(relationImageHeight - relationHeaderHeight)
+	layout := relationCircle{
+		centerX: float64(relationImageWidth) / 2,
+		centerY: float64(relationHeaderHeight) + area/2,
+		center:  relationCenterNode(graph),
+	}
+	weights := relationWeightsTo(graph, layout.center.UserID)
+	members := make([]GroupRelationNode, 0, len(graph.Nodes))
+	for _, node := range graph.Nodes {
+		if node.UserID != layout.center.UserID && !(layout.center.UserID == "" && node.IsBot) {
+			members = append(members, node)
+		}
+	}
+	sort.SliceStable(members, func(left, right int) bool {
+		if weights[members[left].UserID] != weights[members[right].UserID] {
+			return weights[members[left].UserID] > weights[members[right].UserID]
+		}
+		return members[left].Messages > members[right].Messages
+	})
+	if len(members) > maxSeats {
+		members = members[:maxSeats]
+	}
+	var slices [][]GroupRelationNode
+	for ring, cursor := 0, 0; ring < len(relationRings) && cursor < len(members); ring++ {
+		end := min(len(members), cursor+relationRingCapacity(ring))
+		slices = append(slices, members[cursor:end])
+		cursor = end
+	}
+	// 网页版能缩放，位图不能：按实际用到的最外圈把整个圈放大到占满画面，人少时
+	// 也不至于缩在中间一小团，但最多放大两倍，免得一两个人的头像大得离谱。
+	layout.scale = 2
+	if deepest := len(slices) - 1; deepest >= 0 {
+		spec := relationRings[deepest]
+		layout.scale = math.Min(2, (area/2-16)/(spec.radius+spec.node+8))
+	}
+	scale := layout.scale
+	layout.centerRadius = 46 * scale
+	for ring, slice := range slices {
+		spec := relationRings[ring]
+		// 每圈错开半格起点，相邻两圈的头像不会正好排成一条射线。
+		offset := 0.0
+		if ring%2 == 1 {
+			offset = math.Pi / float64(len(slice))
+		}
+		// 人少的圈头像放大到把一圈铺满，最多放大到 1.4 倍。
+		nodeRadius := math.Min(spec.node*1.4, math.Pi*spec.radius/float64(len(slice))-3)
+		for index, node := range slice {
+			angle := -math.Pi/2 + offset + float64(index)*2*math.Pi/float64(len(slice))
+			weight := weights[node.UserID]
+			fill := relationColorSeatFill
+			if weight > 0 {
+				fill = mixRelationColor(relationColorCenter, relationColorSeatFill, relationRingFillPercent[ring]/100)
+			}
+			layout.members = append(layout.members, relationMember{
+				node:   node,
+				x:      layout.centerX + spec.radius*scale*math.Cos(angle),
+				y:      layout.centerY + spec.radius*scale*math.Sin(angle),
+				radius: nodeRadius * scale,
+				ring:   ring,
+				weight: weight,
+				fill:   fill,
+			})
+		}
+	}
+	for index := len(slices) - 1; index >= 0; index-- {
+		spec := relationRings[index]
+		layout.bands = append(layout.bands, relationBand{
+			radius:  (spec.radius + spec.node + 8) * scale,
+			opacity: 0.35 + 0.2*float64(len(slices)-1-index),
+		})
+	}
+	return layout
+}
+
+// relationAvatarIDs 是这张图上要画头像的人：中心和排进圈里的成员。
+func relationAvatarIDs(graph GroupRelationGraph, maxSeats int) []string {
+	layout := layoutRelationCircle(graph, clampRelationSeats(maxSeats))
+	ids := make([]string, 0, len(layout.members)+1)
+	if layout.center.UserID != "" {
+		ids = append(ids, layout.center.UserID)
+	}
+	for _, member := range layout.members {
+		ids = append(ids, member.node.UserID)
+	}
+	return ids
+}
+
 // RenderGroupRelationHTML 把关系图渲染成一张自包含的 HTML，交给无头浏览器截图。
-//
-// 用 HTML+SVG 而不是在 Go 里直接画位图：位图要自己做字体光栅化，中文名字第一个
-// 就过不去；SVG 的文字交给浏览器排版，中文、emoji、生僻字都不用操心。
-func RenderGroupRelationHTML(graph GroupRelationGraph, title string, rangeLabel string, maxSeats int) string {
+// avatars 是解码好的头像，按账号索引；没有的人画成纯色圆点。
+func RenderGroupRelationHTML(graph GroupRelationGraph, title string, rangeLabel string, maxSeats int, avatars map[string]image.Image) string {
 	var body strings.Builder
 	body.WriteString(`<!doctype html><meta charset="utf-8"><style>
 html,body{margin:0;padding:0;background:#ffffff}
-.wrap{width:` + fmt.Sprint(relationImageWidth) + `px;height:` + fmt.Sprint(relationImageHeight) + `px;
+.wrap{position:relative;display:flow-root;width:` + fmt.Sprint(relationImageWidth) + `px;height:` + fmt.Sprint(relationImageHeight) + `px;
   font-family:"Noto Sans CJK SC","Source Han Sans SC","Microsoft YaHei","PingFang SC",sans-serif;color:#251d23}
 h1{font-size:30px;margin:32px 40px 4px}
 .sub{font-size:17px;color:#857982;margin:0 40px 8px}
+svg{position:absolute;left:0;top:0}
 </style><div class="wrap">`)
 	body.WriteString(`<h1>` + html.EscapeString(strings.TrimSpace(title)) + `</h1>`)
 	body.WriteString(`<p class="sub">` + html.EscapeString(relationSubtitle(graph, rangeLabel)) + `</p>`)
-	body.WriteString(renderGroupRelationSVG(graph, clampRelationSeats(maxSeats)))
+	body.WriteString(renderGroupRelationSVG(graph, clampRelationSeats(maxSeats), avatars))
 	body.WriteString(`</div>`)
 	return body.String()
 }
@@ -55,111 +191,86 @@ func relationSubtitle(graph GroupRelationGraph, rangeLabel string) string {
 		parts = append(parts, label)
 	}
 	parts = append(parts, fmt.Sprintf("%d 条发言 · %d 人发过言", graph.Messages, graph.Participants))
-	parts = append(parts, "圆点大小是发言量，连线粗细是互动次数")
+	parts = append(parts, "越靠里互动越多")
 	return strings.Join(parts, " · ")
 }
 
-type relationSeat struct {
-	node   GroupRelationNode
-	x, y   float64
-	radius float64
-	weight int
-	label  string
-	anchor string
-	labelX float64
-}
-
-// renderGroupRelationSVG 画环形图：机器人在圆心，成员按与它的互动次数从正上方
-// 顺时针铺开。
-func renderGroupRelationSVG(graph GroupRelationGraph, maxSeats int) string {
-	const (
-		width        = relationImageWidth
-		height       = relationImageHeight - 110
-		centerRadius = 44
-	)
-	centerX, centerY := float64(width)/2, float64(height)/2
-	ringRadius := math.Min(width, height)/2 - 140
-
-	weights := relationWeightsToBot(graph)
-	seats := relationSeats(graph, weights, centerX, centerY, ringRadius, maxSeats)
-
+// renderGroupRelationSVG 画整张画布大小的互动圈，标题区留空给 HTML 的标题。
+func renderGroupRelationSVG(graph GroupRelationGraph, maxSeats int, avatars map[string]image.Image) string {
+	layout := layoutRelationCircle(graph, maxSeats)
 	var svg strings.Builder
-	fmt.Fprintf(&svg, `<svg width="%d" height="%d" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg">`, width, height, width, height)
-
-	// 成员之间的弦先画，压在中心边下面。
-	maxPeer := 1
-	peers := relationPeerEdges(graph, seats)
-	for _, edge := range peers {
-		if edge.weight > maxPeer {
-			maxPeer = edge.weight
-		}
+	fmt.Fprintf(&svg, `<svg width="%d" height="%d" viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg">`,
+		relationImageWidth, relationImageHeight, relationImageWidth, relationImageHeight)
+	band := relationBandColor()
+	for _, ring := range layout.bands {
+		fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s" fill-opacity="%.2f"/>`,
+			layout.centerX, layout.centerY, ring.radius, hexRelationColor(band), ring.opacity)
 	}
-	for _, edge := range peers {
-		ratio := float64(edge.weight) / float64(maxPeer)
-		midX, midY := (edge.from.x+edge.to.x)/2, (edge.from.y+edge.to.y)/2
-		controlX := midX + (centerX-midX)*0.55
-		controlY := midY + (centerY-midY)*0.55
-		fmt.Fprintf(&svg, `<path d="M %.1f %.1f Q %.1f %.1f %.1f %.1f" fill="none" stroke="#857982" stroke-width="%.2f" stroke-opacity="%.2f" stroke-linecap="round"/>`,
-			edge.from.x, edge.from.y, controlX, controlY, edge.to.x, edge.to.y, 1.0+2.0*ratio, 0.16+0.24*ratio)
+	stroke := 2.5 * layout.scale
+	for _, member := range layout.members {
+		fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s"/>`, member.x, member.y, member.radius, hexRelationColor(member.fill))
+		svg.WriteString(relationAvatarSVG(avatars[member.node.UserID], member.x, member.y, member.radius))
+		fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="#ffffff" stroke-width="%.1f"/>`, member.x, member.y, member.radius, stroke)
 	}
-
-	// 中心光环：接近对径的弦中点落在圆心，会从中心节点上划过去。
-	fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%d" fill="#ffffff"/>`, centerX, centerY, centerRadius+16)
-
-	maxCenter := 1
-	for _, seat := range seats {
-		if seat.weight > maxCenter {
-			maxCenter = seat.weight
-		}
+	fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="%s"/>`, layout.centerX, layout.centerY, layout.centerRadius, hexRelationColor(relationColorCenter))
+	if avatar := avatars[layout.center.UserID]; avatar != nil {
+		svg.WriteString(relationAvatarSVG(avatar, layout.centerX, layout.centerY, layout.centerRadius))
+	} else {
+		fmt.Fprintf(&svg, `<text x="%.1f" y="%.1f" font-size="%.0f" font-weight="600" fill="#ffffff" text-anchor="middle">%s</text>`,
+			layout.centerX, layout.centerY+6*layout.scale, 15*layout.scale, html.EscapeString(relationCenterLabel(layout.center)))
 	}
-	for _, seat := range seats {
-		if seat.weight <= 0 {
-			continue
-		}
-		ratio := float64(seat.weight) / float64(maxCenter)
-		fmt.Fprintf(&svg, `<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="#e0578f" stroke-width="%.2f" stroke-opacity="%.2f" stroke-linecap="round"/>`,
-			centerX, centerY, seat.x, seat.y, 2.0+8.0*ratio, 0.35+0.5*ratio)
-	}
-
-	for _, seat := range seats {
-		stroke := "#d9d2d7"
-		strokeWidth := "2"
-		if seat.weight > 0 {
-			stroke = "#e0578f"
-			strokeWidth = "3"
-		}
-		fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="#f4eff2" stroke="%s" stroke-width="%s"/>`,
-			seat.x, seat.y, seat.radius, stroke, strokeWidth)
-		fmt.Fprintf(&svg, `<text x="%.1f" y="%.1f" font-size="19" fill="#574d55" text-anchor="%s">%s</text>`,
-			seat.labelX, seat.y+7, seat.anchor, html.EscapeString(seat.label))
-	}
-
-	fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%d" fill="#e0578f"/>`, centerX, centerY, centerRadius)
-	fmt.Fprintf(&svg, `<text x="%.1f" y="%.1f" font-size="21" font-weight="600" fill="#ffffff" text-anchor="middle">%s</text>`,
-		centerX, centerY+8, html.EscapeString(relationCenterLabel(graph)))
+	fmt.Fprintf(&svg, `<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="#ffffff" stroke-width="%.1f"/>`,
+		layout.centerX, layout.centerY, layout.centerRadius, 4*layout.scale)
 	svg.WriteString(`</svg>`)
 	return svg.String()
 }
 
-func relationCenterLabel(graph GroupRelationGraph) string {
+// relationAvatarSVG 把头像裁成圆、内联成 data URI，页面不发任何外部请求。
+func relationAvatarSVG(avatar image.Image, x, y, radius float64) string {
+	if avatar == nil {
+		return ""
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, circleAvatar(avatar, int(math.Round(radius*2)))); err != nil {
+		return ""
+	}
+	return fmt.Sprintf(`<image href="data:image/png;base64,%s" x="%.1f" y="%.1f" width="%.1f" height="%.1f"/>`,
+		base64.StdEncoding.EncodeToString(buffer.Bytes()), x-radius, y-radius, radius*2, radius*2)
+}
+
+// relationCenterNode 找中心：默认是机器人，WebUI 换过中心时以 center_id 为准。
+func relationCenterNode(graph GroupRelationGraph) GroupRelationNode {
+	id := firstNonEmpty(strings.TrimSpace(graph.CenterID), strings.TrimSpace(graph.BotID))
+	for _, node := range graph.Nodes {
+		if id != "" && node.UserID == id {
+			return node
+		}
+	}
 	for _, node := range graph.Nodes {
 		if node.IsBot {
-			if name := strings.TrimSpace(node.DisplayName); name != "" {
-				return truncateRelationLabel(name, 6)
-			}
+			return node
 		}
+	}
+	return GroupRelationNode{UserID: id, IsBot: true}
+}
+
+// relationCenterLabel 是中心没有头像时圆里写的字，和网页版一样只留四个字。
+func relationCenterLabel(center GroupRelationNode) string {
+	if name := strings.TrimSpace(center.DisplayName); name != "" {
+		runes := []rune(name)
+		return string(runes[:min(4, len(runes))])
 	}
 	return "Diana"
 }
 
-func relationWeightsToBot(graph GroupRelationGraph) map[string]int {
+func relationWeightsTo(graph GroupRelationGraph, centerID string) map[string]int {
 	weights := map[string]int{}
-	botID := strings.TrimSpace(graph.BotID)
-	if botID == "" {
+	centerID = strings.TrimSpace(centerID)
+	if centerID == "" {
 		return weights
 	}
 	for _, edge := range graph.Edges {
-		switch botID {
+		switch centerID {
 		case edge.Source:
 			weights[edge.Target] = edge.Weight
 		case edge.Target:
@@ -169,94 +280,19 @@ func relationWeightsToBot(graph GroupRelationGraph) map[string]int {
 	return weights
 }
 
-func relationSeats(graph GroupRelationGraph, weights map[string]int, centerX, centerY, ringRadius float64, maxSeats int) []relationSeat {
-	members := make([]GroupRelationNode, 0, len(graph.Nodes))
-	for _, node := range graph.Nodes {
-		if !node.IsBot {
-			members = append(members, node)
-		}
-	}
-	sort.SliceStable(members, func(left, right int) bool {
-		if weights[members[left].UserID] != weights[members[right].UserID] {
-			return weights[members[left].UserID] > weights[members[right].UserID]
-		}
-		return members[left].Messages > members[right].Messages
-	})
-	// 位图没有悬停也不能缩放，人太多就只剩一圈看不清的小字，比网页版收得更紧。
-	if len(members) > maxSeats {
-		members = members[:maxSeats]
-	}
-	if len(members) == 0 {
-		return nil
-	}
-	maxMessages := 1
-	for _, node := range members {
-		if node.Messages > maxMessages {
-			maxMessages = node.Messages
-		}
-	}
-	seats := make([]relationSeat, 0, len(members))
-	for index, node := range members {
-		angle := -math.Pi/2 + float64(index)*2*math.Pi/float64(len(members))
-		x := centerX + ringRadius*math.Cos(angle)
-		y := centerY + ringRadius*math.Sin(angle)
-		// 面积随发言量走，所以半径开方；线性缩放会把话痨画得夸张。
-		radius := 9 + 20*math.Sqrt(float64(node.Messages)/float64(maxMessages))
-		anchor, labelX := "start", x+radius+10
-		if math.Cos(angle) < 0 {
-			anchor, labelX = "end", x-radius-10
-		}
-		name := strings.TrimSpace(node.DisplayName)
-		if name == "" {
-			name = node.UserID
-		}
-		seats = append(seats, relationSeat{
-			node: node, x: x, y: y, radius: radius,
-			weight: weights[node.UserID], label: truncateRelationLabel(name, 8),
-			anchor: anchor, labelX: labelX,
-		})
-	}
-	return seats
+// mixRelationColor 对应 CSS 的 color-mix(in srgb, a p%, b)。
+func mixRelationColor(a, b color.NRGBA, p float64) color.NRGBA {
+	mix := func(x, y uint8) uint8 { return uint8(math.Round(float64(x)*p + float64(y)*(1-p))) }
+	return color.NRGBA{R: mix(a.R, b.R), G: mix(a.G, b.G), B: mix(a.B, b.B), A: 0xff}
 }
 
-type relationPeerEdge struct {
-	from, to relationSeat
-	weight   int
+// relationBandColor 是圈层底盘色：网页版的 color-mix(accent 18%, surface)。
+func relationBandColor() color.NRGBA {
+	return mixRelationColor(relationColorCenter, relationColorBackground, 0.18)
 }
 
-// relationPeerEdges 只保留最强的一批成员间连线。全画出来是一团毛线，中心那圈
-// 主线反而看不见——这张图的主语是机器人。
-func relationPeerEdges(graph GroupRelationGraph, seats []relationSeat) []relationPeerEdge {
-	const maxPeerEdges = 12
-	positions := make(map[string]relationSeat, len(seats))
-	for _, seat := range seats {
-		positions[seat.node.UserID] = seat
-	}
-	botID := strings.TrimSpace(graph.BotID)
-	edges := make([]relationPeerEdge, 0, maxPeerEdges)
-	for _, edge := range graph.Edges {
-		if edge.Source == botID || edge.Target == botID {
-			continue
-		}
-		from, okFrom := positions[edge.Source]
-		to, okTo := positions[edge.Target]
-		if !okFrom || !okTo {
-			continue
-		}
-		edges = append(edges, relationPeerEdge{from: from, to: to, weight: edge.Weight})
-		if len(edges) >= maxPeerEdges {
-			break
-		}
-	}
-	return edges
-}
-
-func truncateRelationLabel(value string, limit int) string {
-	runes := []rune(value)
-	if len(runes) <= limit {
-		return value
-	}
-	return string(runes[:limit]) + "…"
+func hexRelationColor(c color.NRGBA) string {
+	return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B)
 }
 
 // clampRelationSeats 把配置里的人数上限收进可画的范围。配置层已经限过一遍，
