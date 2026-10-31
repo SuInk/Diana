@@ -147,6 +147,7 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 	}
 	body = normalizeReply(body, 0)
 	body = normalizeExplicitReplyLayout(body)
+	body = formatInlineReplyLists(body)
 	if intent.DeliveryMode == replyDeliverySingle {
 		body = strings.ReplaceAll(body, notificationSplitMarker, notificationLineMarker)
 	}
@@ -235,6 +236,7 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 			if issue != "" {
 				continue
 			}
+			candidate = formatInlineReplyLists(candidate)
 			candidateParts := r.replyLengthPlan(cfg, event, candidate)
 			if len(candidateParts) == 0 {
 				issue = "压缩结果没有可发送正文"

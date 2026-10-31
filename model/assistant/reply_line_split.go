@@ -107,7 +107,7 @@ func replyLineSplitPrompt(limits chatSplitLimits) string {
 	if !limits.LineSplit || limits.SingleMessage || limits.MarkerOnly {
 		return ""
 	}
-	return "当前开启换行分条：同一条消息里的每个 " + notificationLineMarker + " 都会拆成单独一条发出。列表、表格和代码块内部的换行不拆，整块连同引出它的那一行作为一条发送；想让两句留在同一条里，就写在同一行。"
+	return "当前开启换行分条：同一条消息里的每个 " + notificationLineMarker + " 都会拆成单独一条发出。列表、表格和代码块内部的换行不拆，整块连同引出它的那一行作为一条发送。"
 }
 
 // isReplyBlockLeadIn 认出引出列表或代码块的那一行。

@@ -7,8 +7,8 @@ import (
 )
 
 func promptTeachesSegmentation(prompt string) bool {
-	// 「换行就是分条」只由 replyBlankLineRule 说一次，分条规则不再重复一遍。
-	for _, want := range []string{notificationSplitMarker, notificationLineMarker, "换行就是分条"} {
+	// 排版和发送协议由 replyBlankLineRule 统一说明。
+	for _, want := range []string{notificationSplitMarker, notificationLineMarker, replyBlankLineRule} {
 		if !strings.Contains(prompt, want) {
 			return false
 		}
