@@ -65,6 +65,9 @@ const (
 	PurposeImageFixGate = "image_fix_gate"
 	// PurposeQQJoinReview 是入群自动审批插件让模型判断一条入群申请。
 	PurposeQQJoinReview = "qq_join_review"
+	// PurposeOutboundImageSafety 是出站图片审核：发图前让识图模型逐张判账号风险，
+	// 见 outbound_media_audit.go。
+	PurposeOutboundImageSafety = "outbound_image_safety"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -85,6 +88,9 @@ var llmPurposeGroup = map[string]string{
 	PurposeProactiveReplyQuality: llm.GroupIntent,
 	PurposeReplySendAudit:        llm.GroupIntent,
 	PurposeReplyFatigueGate:      llm.GroupIntent,
+
+	// 出站图片审核要看图，意图识别那档可能绑着看不了图的判断模型，所以跟识图走。
+	PurposeOutboundImageSafety: llm.GroupVision,
 
 	// 回复辅助：这一轮回复发出之前同步跑的旁路调用，模型慢，回复就跟着慢。
 	// 语义指代、话题合并、语义去重和上下文摘要要写出文字；提示改写的结果直接

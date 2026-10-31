@@ -1238,6 +1238,18 @@
                 </span>
               </div>
               <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_image_audit_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">审核发出的图片</span>
+                </label>
+                <span class="hint">
+                  机器人发出的表情包、生成图、插件和转发卡片里的图片，发出前先交给识图模型按账号安全规则逐张检查。没通过的图不发，原位置写一句说明，说法跟着下面的「拒答话术」，同条文字照常发出。
+                  每条带图的消息要多等一次识图调用，同一张图 24 小时内只审一次；审核失败时放行。主人触发的不审，私聊跟随上面的私聊开关。
+                  语音不另审：发出的语音都由已经审过的文字合成。
+                </span>
+              </div>
+              <div class="field wide">
                 <label for="bot-account-safety-prompt">账号安全审核规则</label>
                 <textarea
                   id="bot-account-safety-prompt"
@@ -1271,6 +1283,7 @@
                   机器人决定不正面回答时说什么。说明为什么不能答，本身可能就是那句会出事的话——
                   一句「这个话题涉及敏感政治，我不方便讲」把触发点原样复述了一遍，风险比闭嘴还大。
                   除「说明原因」外的档位都不会点名或影射触发拒答的具体内容。模型拒答标志不向用户展示。
+                  图片没通过审核时那句说明也按这一档：说明原因写风险类别，智能和尽量改写只说未通过账号安全审核，模糊拒答只说图片发不了。
                 </span>
               </div>
               <div class="field wide">
@@ -2299,7 +2312,7 @@ import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 
 // 发送前审核的提示词和判断表，放在行为页「安全与审核」里，各合成一个框改。
-const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing", "audit.loop", "audit.loop_purposeless", "audit.closing", "audit.exchange"];
+const auditPromptKeys = ["audit.quality", "audit.safety_rules_wrapper", "audit.quality_closing", "audit.loop", "audit.loop_purposeless", "audit.closing", "audit.exchange", "audit.image"];
 const auditDecisionPromptKeys = [
   "audit.decision.send_confidence",
   "audit.decision.account_safe",
@@ -4662,6 +4675,7 @@ function setForm(config: BotProfileConfig): void {
     reply_refusal_threshold: config.reply_refusal_threshold || defaultReplyRefusalThreshold,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     reply_account_safety_audit_private_enabled: config.reply_account_safety_audit_private_enabled ?? false,
+    reply_image_audit_enabled: config.reply_image_audit_enabled ?? false,
     natural_reply_split_enabled: config.natural_reply_split_enabled ?? true,
     reply_preserve_line_breaks: config.reply_preserve_line_breaks ?? true,
     reply_line_split_enabled: config.reply_line_split_enabled ?? false,

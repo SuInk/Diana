@@ -178,6 +178,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 			return nil, errReplySuppressedBeforeSend
 		}
 	}
+	// 图片审核放在抑制分支之后：那个分支会带着新 ctx 重进本函数一次，放在前面就会
+	// 为同一组图跑两遍模型（和 sendForwardNodesWithResult 的文字审核同理）。
+	msg = r.auditOutgoingImages(ctx, event, msg)
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}

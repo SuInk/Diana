@@ -363,7 +363,7 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	fields := map[string]any{
 		"original_message":        original,
 		"original_text_available": original != "",
-		"candidate_reply":         strings.TrimSpace(reply),
+		"candidate_reply":         strings.TrimSpace(auditableReplyText(reply)),
 	}
 	imageContext := strings.TrimSpace(event.replyAuditImageContext)
 	if imageContext == "" {

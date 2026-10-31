@@ -7953,6 +7953,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	if auditErr := r.auditForwardNodesSafety(ctx, event, nodes); auditErr != nil {
 		return nil, auditErr
 	}
+	nodes = r.auditForwardNodeImages(ctx, event, nodes)
 	if err := r.interruptedReplyError(ctx, event); err != nil {
 		return nil, err
 	}

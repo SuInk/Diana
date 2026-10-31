@@ -132,6 +132,8 @@ func (t *dianaTTSTool) Run(ctx context.Context, input map[string]any) (string, e
 		return "", fmt.Errorf("本地媒体共享未配置，无法把语音交给聊天渠道")
 	}
 	cleanupLocalMediaFilesLater([]string{path}, defaultVoiceTTSMediaTTL)
+	// 回复只剩这个语音段，审核要靠它找回念的是什么，见 auditableReplyText。
+	voiceSpokenTexts.remember(sharedURL, text, defaultVoiceTTSMediaTTL)
 	body, err := json.Marshal(voiceTTSResult{
 		OK:       true,
 		Action:   "voice_ready",

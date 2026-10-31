@@ -18,6 +18,7 @@ const purposeLabels: Record<string, string> = {
   reply_send_audit: "发送前审核",
   reply_fatigue_gate: "回复疲劳判断",
   reply_account_safety: "账号安全审核",
+  outbound_image_safety: "图片发送前审核",
   bot_reply_loop_detection: "机器人循环检测",
   reply_semantic_dedup: "回复语义去重",
   reply_compression: "回复压缩",
@@ -141,7 +142,7 @@ export function cacheUtilization(cachedInputTokens: number, inputTokens: number)
 // 规则，请求短、前缀几乎不复用，调用次数却和主回复一个量级，混在一起会把真正要
 // 看的主回复、记忆这些长请求的命中率拉低一截。各自的命中率仍在「按使用方式」明细里。
 const replyJudgePurposes = ["proactive_reply_router", "reply_intent_router", "reply_rule_router", "reply_fatigue_gate"];
-const sendAuditPurposes = ["reply_send_audit", "reply_account_safety", "proactive_reply_quality"];
+const sendAuditPurposes = ["reply_send_audit", "reply_account_safety", "proactive_reply_quality", "outbound_image_safety"];
 
 export const cacheExcludedPurposes: ReadonlySet<string> = new Set([...replyJudgePurposes, ...sendAuditPurposes]);
 

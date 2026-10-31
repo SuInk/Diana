@@ -811,6 +811,10 @@ type BotConfig struct {
 	// 私聊量很小（生产 7 天 2792 次审核里只有 15 次）、从没判出风险，却每条都要多等
 	// 一次审核。私聊收尾和空转判断不受它影响。
 	ReplySafetyPrivateEnabled *bool `json:"reply_account_safety_audit_private_enabled,omitempty"`
+	// ReplyImageAuditEnabled 让机器人发出的图片先过一次识图模型的账号安全审核，
+	// 没过的图拿掉、换成一句说明（说法跟着拒答话术走），同条文字照发。默认关：每条带图的消息都要多等一次
+	// 识图调用。语音不另审：发出的语音都是审过的文字合成的，见 outbound_media_audit.go。
+	ReplyImageAuditEnabled *bool `json:"reply_image_audit_enabled,omitempty"`
 	// ReplyAccountSafetyAuditPrompt 是账号安全判断的自定义规则。留空使用内置范围；
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
@@ -1498,6 +1502,7 @@ type ConfigPayload struct {
 	ReplyRefusalThreshold          int                  `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	ReplySafetyPrivateEnabled      *bool                `json:"reply_account_safety_audit_private_enabled,omitempty"`
+	ReplyImageAuditEnabled         *bool                `json:"reply_image_audit_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string               `json:"reply_account_safety_audit_prompt,omitempty"`
 	ReplyAccountSafetyAuditDefault string               `json:"reply_account_safety_audit_default,omitempty"`
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
@@ -2828,6 +2833,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplySemanticDedupEnabled:       copyBoolPointer(cfg.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(cfg.ReplySafetyMasterEnabled),
 		ReplySafetyPrivateEnabled:       copyBoolPointer(cfg.ReplySafetyPrivateEnabled),
+		ReplyImageAuditEnabled:          copyBoolPointer(cfg.ReplyImageAuditEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(cfg.ReplyAccountSafetyAuditPrompt),
 		ReplyAccountSafetyAuditDefault:  DefaultReplyAccountSafetyAuditPrompt,
 		NotebookSharedScopeEnabled:      copyBoolPointer(cfg.NotebookSharedScopeEnabled),
@@ -3073,6 +3079,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplySemanticDedupEnabled:       copyBoolPointer(payload.ReplySemanticDedupEnabled),
 		ReplySafetyMasterEnabled:        copyBoolPointer(payload.ReplySafetyMasterEnabled),
 		ReplySafetyPrivateEnabled:       copyBoolPointer(payload.ReplySafetyPrivateEnabled),
+		ReplyImageAuditEnabled:          copyBoolPointer(payload.ReplyImageAuditEnabled),
 		ReplyAccountSafetyAuditPrompt:   strings.TrimSpace(payload.ReplyAccountSafetyAuditPrompt),
 		NotebookSharedScopeEnabled:      copyBoolPointer(payload.NotebookSharedScopeEnabled),
 		SlangLearningEnabled:            copyBoolPointer(payload.SlangLearningEnabled),
