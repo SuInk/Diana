@@ -649,3 +649,25 @@ func TestQQOfficialSendsVoiceAudio(t *testing.T) {
 		t.Fatalf("voice message = %#v", api.messages[0])
 	}
 }
+
+// 回复按钮回调：被动回复填 event_id（网关报文外层的完整 id），不带 msg_id。
+func TestQQOfficialRepliesToInteractionWithEventID(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	eventID := "INTERACTION_CREATE:b395ee17-c4a5-4bcf-8cf6-c87678d07601"
+	if _, err := channel.SendWithResult(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "收到", PassiveReplyMessageID: eventID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 {
+		t.Fatalf("messages = %#v", api.messages)
+	}
+	sent := api.messages[0]
+	if sent["event_id"] != eventID || sent["msg_seq"].(float64) != 1 {
+		t.Fatalf("message = %#v, want event_id %q", sent, eventID)
+	}
+	if _, has := sent["msg_id"]; has {
+		t.Fatalf("message = %#v, must not carry msg_id", sent)
+	}
+}

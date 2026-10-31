@@ -144,9 +144,11 @@ func (c *QQOfficialChannel) sendQQStreamFrame(ctx context.Context, replyID strin
 			"content_type": "markdown",
 			"content_raw":  content,
 			"event_id":     replyID,
-			"msg_id":       replyID,
 			"msg_seq":      stream.msgSeq,
 			"index":        stream.index,
+		}
+		if !strings.HasPrefix(replyID, qqInteractionEventPrefix) {
+			body["msg_id"] = replyID
 		}
 		if stream.streamMsgID != "" {
 			body["stream_msg_id"] = stream.streamMsgID

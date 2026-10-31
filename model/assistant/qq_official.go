@@ -59,6 +59,13 @@ const (
 	qqIntentGroupMembers = 1 << 24
 	// qqIntentPublicGuildMessages 订阅频道内的 @ 消息。
 	qqIntentPublicGuildMessages = 1 << 30
+	// qqIntentInteraction 订阅回调按钮的 INTERACTION_CREATE。被拒时和群成员意图
+	// 一样降级不带。
+	qqIntentInteraction = 1 << 26
+
+	// qqInteractionEventPrefix 是网关报文外层 id 的前缀。回复按钮回调时 event_id
+	// 要填这整个字段（INTERACTION_CREATE:<uuid>），不能只填 d.id。
+	qqInteractionEventPrefix = "INTERACTION_CREATE:"
 )
 
 // QQOfficialChannel 通过 QQ 开放平台的 WebSocket 网关接入官方机器人。
@@ -97,6 +104,8 @@ type QQOfficialChannel struct {
 	memberIntentDenied bool
 	// live 记录网关报文最近一次读到的时间，读循环卡住时据此改报离线。
 	live receiveLiveness
+	// interactionIntentDenied 记下网关拒过按钮回调意图。
+	interactionIntentDenied bool
 
 	seqMu      sync.Mutex
 	passiveSeq map[string]qqPassiveSeq
@@ -367,21 +376,28 @@ func (c *QQOfficialChannel) identifyIntents() int {
 	intents := qqIntentGroupAndC2C | qqIntentPublicGuildMessages
 	c.connMu.Lock()
 	denied := c.memberIntentDenied
+	interactionDenied := c.interactionIntentDenied
 	c.connMu.Unlock()
 	if !denied {
 		intents |= qqIntentGroupMembers
+	}
+	if !interactionDenied {
+		intents |= qqIntentInteraction
 	}
 	return intents
 }
 
 // noteIntentRejected 在网关以 4013（无效 intent）或 4014（无权限 intent）断开时，
-// 去掉群成员意图，下一轮重连照常收消息。
+// 先去掉群成员意图，再被拒就连按钮回调意图也去掉，下一轮重连照常收消息。
 func (c *QQOfficialChannel) noteIntentRejected(err error) {
 	var closeErr *websocket.CloseError
 	if !errors.As(err, &closeErr) || (closeErr.Code != 4013 && closeErr.Code != 4014) {
 		return
 	}
 	c.connMu.Lock()
+	if c.memberIntentDenied {
+		c.interactionIntentDenied = true
+	}
 	c.memberIntentDenied = true
 	c.connMu.Unlock()
 }
@@ -450,6 +466,9 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		return
 	case "RESUMED":
 		c.setStatus(true, c.Status().SelfID, "")
+		return
+	case "INTERACTION_CREATE":
+		c.handleInteraction(ctx, payload)
 		return
 	}
 
@@ -600,7 +619,11 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	// post 发一条消息。同一个 msg_id 下的多条回复要靠递增的 msg_seq 区分，否则第二条起被去重拒收。
 	post := func(body map[string]any) (string, error) {
 		if replyID != "" {
-			body["msg_id"] = replyID
+			if strings.HasPrefix(replyID, qqInteractionEventPrefix) {
+				body["event_id"] = replyID
+			} else {
+				body["msg_id"] = replyID
+			}
 			if !isGuild {
 				body["msg_seq"] = c.nextPassiveSeq(replyID)
 			}
@@ -1160,6 +1183,8 @@ const (
 )
 
 type qqGatewayPayload struct {
+	// ID 是事件 ID，形如 INTERACTION_CREATE:<uuid>；被动回复事件时原样填进 event_id。
+	ID   string          `json:"id,omitempty"`
 	Op   int             `json:"op"`
 	S    int64           `json:"s,omitempty"`
 	T    string          `json:"t,omitempty"`

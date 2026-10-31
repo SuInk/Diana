@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -103,9 +104,9 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 					var calls []string
 					for _, call := range response.ToolCalls {
 						calls = append(calls, call.Name)
-						if call.Name == "agent_finalize" {
+						if call.Name == agent.FinalizeToolName {
 							out.Buttons, _ = call.Arguments[buttonsFinalizeFieldName].(string)
-							out.Content, _ = call.Arguments["content"].(string)
+							out.Content, _ = call.Arguments["text"].(string)
 						}
 					}
 					out.Calls = strings.Join(calls, ",")
@@ -144,7 +145,7 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 		switch {
 		case item.Error != "":
 			failed++
-		case strings.Contains(item.Calls, "agent_finalize"):
+		case strings.Contains(item.Calls, agent.FinalizeToolName):
 			finalized++
 			if strings.TrimSpace(item.Buttons) != "" {
 				filled++
@@ -156,7 +157,7 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 
 func buttonsReplayHasFinalize(req llm.GenerateRequest) bool {
 	for _, tool := range req.Tools {
-		if tool.Name == "agent_finalize" {
+		if tool.Name == agent.FinalizeToolName {
 			return true
 		}
 	}
@@ -167,7 +168,7 @@ func buttonsReplayHasFinalize(req llm.GenerateRequest) bool {
 func buttonsReplayWithField(req llm.GenerateRequest) llm.GenerateRequest {
 	tools := append([]llm.ToolDefinition(nil), req.Tools...)
 	for index := range tools {
-		if tools[index].Name != "agent_finalize" {
+		if tools[index].Name != agent.FinalizeToolName {
 			continue
 		}
 		parameters := map[string]any{}
@@ -189,6 +190,11 @@ func buttonsReplayWithField(req llm.GenerateRequest) llm.GenerateRequest {
 		}
 		properties[field.Name] = toolStringParam(field.Description)
 		parameters["properties"] = properties
+		// DIANA_BUTTONS_REPLAY_REQUIRED=1 把按钮字段列进 required，看必答能不能让模型想起它。
+		if os.Getenv("DIANA_BUTTONS_REPLAY_REQUIRED") == "1" {
+			required, _ := parameters["required"].([]any)
+			parameters["required"] = append(append([]any(nil), required...), field.Name)
+		}
 		tools[index].Parameters = parameters
 	}
 	req.Tools = tools

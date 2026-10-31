@@ -127,17 +127,18 @@ func TestUserMemoryWritesGoThroughSaveUserMemory(t *testing.T) {
 // 补身份）和只拿来解析、不进任何存储的临时事件。
 func TestMessageEventLiteralsCarryProfileID(t *testing.T) {
 	exemptFiles := map[string]string{
-		"bot_mute.go":               "适配器事件，经 MultiChannel 补身份",
-		"onebot.go":                 "平台适配器",
-		"onebot_request.go":         "平台适配器",
-		"qq_official.go":            "平台适配器",
-		"qq_official_group.go":      "平台适配器",
-		"telegram.go":               "平台适配器",
-		"telegram_join_request.go":  "平台适配器",
-		"weixin.go":                 "平台适配器",
-		"imessage.go":               "平台适配器",
-		"history_identity.go":       "只用来算角色标签，配置显式传入",
-		"repository_publish_web.go": "只做 GitHub 写权限检查，不碰按机器人分的存储",
+		"bot_mute.go":                "适配器事件，经 MultiChannel 补身份",
+		"onebot.go":                  "平台适配器",
+		"onebot_request.go":          "平台适配器",
+		"qq_official.go":             "平台适配器",
+		"qq_official_group.go":       "平台适配器",
+		"qq_official_interaction.go": "平台适配器",
+		"telegram.go":                "平台适配器",
+		"telegram_join_request.go":   "平台适配器",
+		"weixin.go":                  "平台适配器",
+		"imessage.go":                "平台适配器",
+		"history_identity.go":        "只用来算角色标签，配置显式传入",
+		"repository_publish_web.go":  "只做 GitHub 写权限检查，不碰按机器人分的存储",
 	}
 	parseOnlyKeys := map[string]bool{"Segments": true, "RawMessage": true}
 	files, err := filepath.Glob("*.go")

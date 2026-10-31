@@ -168,3 +168,26 @@ func TestDeliverChunksAttachesButtonsToLastText(t *testing.T) {
 		t.Fatalf("按钮应当已被取走：%#v", rows)
 	}
 }
+
+func TestParseFinalizeButtonsCallback(t *testing.T) {
+	rows := parseFinalizeButtons("下一页=回调: 翻到下一页 | 展开讲讲 | 官网=回调:https://example.com")
+	if len(rows) != 1 || len(rows[0]) != 3 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	next, plain, link := rows[0][0], rows[0][1], rows[0][2]
+	if !next.Callback || next.Data != "翻到下一页" || plain.Callback || !link.Link || link.Callback {
+		t.Fatalf("buttons = %#v", rows[0])
+	}
+	keyboard := qqOfficialKeyboard(rows)
+	buttons := keyboard["content"].(map[string]any)["rows"].([]any)[0].(map[string]any)["buttons"].([]any)
+	action := buttons[0].(map[string]any)["action"].(map[string]any)
+	if action["type"] != qqButtonActionCallback || action["data"] != "翻到下一页" {
+		t.Fatalf("callback action = %#v", action)
+	}
+	if _, has := action["enter"]; has {
+		t.Fatalf("callback action must not carry enter: %#v", action)
+	}
+	if buttons[1].(map[string]any)["action"].(map[string]any)["type"] != qqButtonActionCommand {
+		t.Fatal("plain button should stay a command")
+	}
+}
