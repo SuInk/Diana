@@ -1715,7 +1715,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
-    group_triggers: ["Diana", "diana"], private_admission: { mode: "disabled" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard",
+    group_triggers: ["Diana", "diana"], private_admission: { mode: "owner_only" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard",
     sticker_reply_order: "before"
   });
   if (path === "/api/assistant/config" && method === "GET") return json(assistantConfig);

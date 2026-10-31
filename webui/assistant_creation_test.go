@@ -42,8 +42,8 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	if !draft.Enabled || !draft.OwnerLoginEnabled {
 		t.Fatal("new bot switches must default on")
 	}
-	if draft.PrivateAdmission.Mode != assistant.PrivateAdmissionDisabled {
-		t.Fatalf("new bot private admission = %q, want disabled", draft.PrivateAdmission.Mode)
+	if draft.PrivateAdmission.Mode != assistant.PrivateAdmissionOwnerOnly {
+		t.Fatalf("new bot private admission = %q, want owner_only", draft.PrivateAdmission.Mode)
 	}
 	if draft.Platform != "telegram" || draft.ID != "" || draft.OwnerID != "" || draft.SystemPrompt == existing.SystemPrompt || draft.TelegramBotTokenConfigured || draft.OneBotAccessTokenConfigured || draft.OneBotHTTPSecretConfigured {
 		t.Fatalf("defaults contain existing profile settings: %+v", draft)
@@ -78,8 +78,8 @@ func TestNewBotUsesFreshDefaultsAndDoesNotInheritSecrets(t *testing.T) {
 	if fresh.ID == existing.ID || fresh.Enabled || fresh.OwnerLoginEnabled {
 		t.Fatalf("incorrect new identity or switches: %s", fresh.ID)
 	}
-	if fresh.PrivateAdmission.Mode != assistant.PrivateAdmissionDisabled {
-		t.Fatalf("created bot private admission = %q, want disabled", fresh.PrivateAdmission.Mode)
+	if fresh.PrivateAdmission.Mode != assistant.PrivateAdmissionOwnerOnly {
+		t.Fatalf("created bot private admission = %q, want owner_only", fresh.PrivateAdmission.Mode)
 	}
 	for field, value := range map[string]string{
 		"onebot": fresh.OneBotAccessToken, "http": fresh.OneBotHTTPSecret, "telegram": fresh.TelegramBotToken,

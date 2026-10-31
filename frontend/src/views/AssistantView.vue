@@ -1067,7 +1067,7 @@
                   :options="privateAdmissionModeOptions"
                   @update:model-value="setPrivateAdmissionMode($event as 'disabled' | 'all' | 'owner_only' | 'whitelist')"
                 />
-                <span class="hint">私聊默认关闭，主人也不响应；可按需启用所有人、仅主人或白名单。被拦截的私聊和私聊通知静默忽略，不排队、不预处理、不调模型；群聊和控制台登录配对不受影响。</span>
+                <span class="hint">私聊默认仅主人，可按需启用所有人或白名单。旧配置若显示“关闭”，主人也会被拦截，请切换到“仅主人”恢复私聊；切换后不能在这里重新关闭。QQ 官方机器人尚未绑定主人时，仅“绑定主人”流程可用，绑定后才会放行主人私聊；其他平台请先填写主人用户 ID。被拦截的私聊和私聊通知静默忽略，不排队、不预处理、不调模型。</span>
               </div>
               <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
                 <label for="bot-private-allowed-users">私聊白名单</label>
@@ -3070,20 +3070,25 @@ function setParticipation(value: ParticipationPreferences | undefined): void {
 // 顺手把它重置成默认的「新群照常工作」。
 const admissionMode = computed(() => form.value?.group_admission?.mode ?? "blacklist");
 
-const privateAdmissionModeOptions: AppSelectOption[] = [
-  { value: "disabled", label: "关闭（默认）", hint: "所有用户的私聊静默忽略，包括主人" },
-  { value: "all", label: "所有人", hint: "任何用户的私聊都会响应" },
+const privateAdmissionModeOptions = computed<AppSelectOption[]>(() => [
+  ...(form.value?.private_admission?.mode === "disabled"
+    ? [{ value: "disabled", label: "关闭（旧配置）", hint: "主人也被拦截，请切换到仅主人以恢复私聊" }]
+    : []),
   { value: "owner_only", label: "仅主人", hint: "非主人的私聊静默忽略" },
+  { value: "all", label: "所有人", hint: "任何用户的私聊都会响应" },
   { value: "whitelist", label: "白名单", hint: "仅主人与白名单用户的私聊响应" }
-];
+]);
 
-const privateAdmissionMode = computed(() => form.value?.private_admission?.mode ?? "disabled");
+const privateAdmissionMode = computed(() => {
+  const mode = form.value?.private_admission?.mode;
+  return mode === "disabled" || mode === "all" || mode === "whitelist" ? mode : "owner_only";
+});
 
 function setPrivateAdmissionMode(mode: "disabled" | "all" | "owner_only" | "whitelist"): void {
   if (!form.value) {
     return;
   }
-  form.value.private_admission = { ...(form.value.private_admission ?? {}), mode };
+  form.value.private_admission = { ...(form.value.private_admission ?? {}), mode: mode === "disabled" ? "owner_only" : mode };
 }
 
 // 全局门槛用 null 表示「不设门槛」，和群级的「跟随全局」是不同语义，
