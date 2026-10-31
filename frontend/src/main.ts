@@ -6,6 +6,9 @@ import App from "./App.vue";
 import { setupTheme } from "./lib/theme";
 import { setupRouter } from "./router";
 import "./styles/main.css";
+import { setupPageLoadRecovery } from "./lib/page-load";
+
+setupPageLoadRecovery();
 
 async function bootstrap(): Promise<void> {
   if (import.meta.env.VITE_DEMO_MODE === "true") {

@@ -1418,6 +1418,14 @@ func (r *Runtime) GetGroupMemberInfo(ctx context.Context, groupID string, userID
 	return r.getGroupMemberInfoForEvent(ctx, MessageEvent{ProfileID: profile.ID, Platform: profile.Platform}, groupID, userID)
 }
 
+// GetGroupMemberInfoForProfile 查询所选机器人平台上的群名片和昵称。
+func (r *Runtime) GetGroupMemberInfoForProfile(ctx context.Context, profileID, groupID, userID string) (OneBotGroupMemberInfo, error) {
+	if strings.TrimSpace(profileID) == "" {
+		return r.GetGroupMemberInfo(ctx, groupID, userID)
+	}
+	return r.getGroupMemberInfoForEvent(ctx, MessageEvent{ProfileID: profileID}, groupID, userID)
+}
+
 func (r *Runtime) getGroupMemberInfoForEvent(ctx context.Context, event MessageEvent, groupID string, userID string) (OneBotGroupMemberInfo, error) {
 	ctx = withDirectoryEvent(ctx, event)
 	if provider, ok := eventChannelFor[GroupMemberChannel](r, event); ok {

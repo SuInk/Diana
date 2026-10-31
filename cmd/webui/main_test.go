@@ -474,3 +474,21 @@ func TestBotSeedConfigMapsLegacyAgentSwitchToMode(t *testing.T) {
 		t.Fatalf("写错的 agent_mode 应当报错：%v", err)
 	}
 }
+
+func TestSPAHandlerMissingAssetsDoNotReturnHTML(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.NoRoute(spaHandler(http.FS(fstest.MapFS{
+		"index.html": {Data: []byte("<html>app</html>")},
+	})))
+	for _, path := range []string{"/assets/RecordsView-old.js", "/assets/RecordsView-old.css"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "<html>") {
+			t.Fatalf("%s: status=%d body=%q", path, rec.Code, rec.Body.String())
+		}
+		if rec.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s: missing asset must not be cached", path)
+		}
+	}
+}

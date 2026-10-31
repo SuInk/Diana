@@ -282,6 +282,7 @@
             aria-label="以谁为中心"
             searchable
             :model-value="relationsCenter"
+            :disabled="relationsLoading"
             :options="relationCenterOptions"
             @update:model-value="selectRelationsCenter"
           />
@@ -920,11 +921,16 @@ const relationCenterOptions = computed(() => {
 });
 
 function selectRelationsCenter(value: string): void {
-  const bot = relationsGraph.value?.nodes.find((node) => node.is_bot)?.user_id;
+  const graph = relationsGraph.value;
+  if (!graph || relationsLoading.value) return;
+  const bot = graph.bot_id || graph.nodes.find((node) => node.is_bot)?.user_id || "";
   const next = value === bot ? "" : value;
   if (relationsCenter.value === next) return;
+  if (next && !graph.nodes.some((node) => node.user_id === next)) return;
+  // 候选人和全图的边都已在当前响应中，换中心只需重新布局。
+  // 保留节点及头像 URL，避免重新请求、卸载图表和将无哈希地址换成另一条 URL。
   relationsCenter.value = next;
-  void loadRelations();
+  relationsGraph.value = { ...graph, center_id: next || bot };
 }
 
 function openRelations(group: BotGroupConfig, groupName = ""): void {
