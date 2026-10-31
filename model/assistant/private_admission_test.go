@@ -30,6 +30,7 @@ func TestDisabledPrivateAdmissionIgnoresMessagesAndPokes(t *testing.T) {
 			store := newMemoryInboundEventStore()
 			runtime := NewRuntime(BotConfig{
 				BotAccount: "10000", OwnerID: "owner", PokeReplyEnabled: boolPointer(true),
+				PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionDisabled},
 			}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 				t.Fatal("disabled private chat must not request a model")
 				return nil, nil
@@ -66,7 +67,7 @@ func TestDisabledPrivateAdmissionStopsQueuedMessagesBeforePreprocessing(t *testi
 }
 
 func TestDisabledPrivateAdmissionDoesNotExemptTelegramUsernameOwner(t *testing.T) {
-	cfg := BotConfig{Platform: PlatformTelegram, OwnerID: "@owner"}
+	cfg := BotConfig{Platform: PlatformTelegram, OwnerID: "@owner", PrivateAdmission: PrivateAdmission{Mode: PrivateAdmissionDisabled}}
 	owner := MessageEvent{Kind: EventKindPrivate, Platform: PlatformTelegram, UserID: "123", SenderUsername: "owner"}
 	if privateAdmissionAllowsConfig(cfg, owner) {
 		t.Fatal("disabled private chat must also ignore Telegram username owners")
