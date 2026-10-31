@@ -339,13 +339,30 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	// 中心节点优先用配置里的机器人账号：新群可能还没有机器人自己的发言，
 	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
 	profileID := botProfileScope(c)
-	botID := strings.TrimSpace(h.botConfigForProfile(profileID).BotAccount)
+	config := h.botConfigForProfile(profileID)
+	botID := strings.TrimSpace(config.BotAccount)
 	graph, err := h.sqlite.GroupRelationGraphCenteredOn(c.Request.Context(), groupID, since, botID, c.Query("center"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	// 群内显示平台名片/昵称，不使用控制台配置名称或跨配置的历史用户画像。
+	botName := graph.BotID
+	if directory, ok := h.runtime.(interface {
+		GetGroupMemberInfoForProfile(context.Context, string, string, string) (assistant.OneBotGroupMemberInfo, error)
+	}); ok && graph.BotID != "" {
+		if member, err := directory.GetGroupMemberInfoForProfile(c.Request.Context(), profileID, groupID, graph.BotID); err == nil {
+			if name := strings.TrimSpace(member.Card); name != "" {
+				botName = name
+			} else if name := strings.TrimSpace(member.Nickname); name != "" {
+				botName = name
+			}
+		}
+	}
 	for index := range graph.Nodes {
+		if graph.Nodes[index].IsBot {
+			graph.Nodes[index].DisplayName = botName
+		}
 		graph.Nodes[index].AvatarURL = h.consoleAvatarURL(avatarKindMember, profileID, graph.Nodes[index].UserID)
 	}
 	c.JSON(http.StatusOK, gin.H{"range": rangeID, "graph": graph})

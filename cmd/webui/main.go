@@ -1006,6 +1006,12 @@ func spaHandler(root http.FileSystem) gin.HandlerFunc {
 
 		file, err := root.Open(path)
 		if err != nil {
+			// 旧版本标签页可能请求已替换的哈希资源；不能把 HTML 入口当 JS 返回。
+			if strings.HasPrefix(path, "assets/") {
+				c.Header("Cache-Control", "no-store")
+				c.Status(http.StatusNotFound)
+				return
+			}
 			serveFile(c, root, "index.html")
 			return
 		}

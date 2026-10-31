@@ -257,10 +257,11 @@ import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import BrandLogo from "./components/BrandLogo.vue";
 import ViewSkeleton from "./components/ViewSkeleton.vue";
+import ViewLoadError from "./components/ViewLoadError.vue";
 
 // 页面代码首次下载期间显示整页骨架；120ms 内下完的不画，免得缓存命中时也闪一下。
 function lazyView(loader: () => Promise<{ default: Component }>): Component {
-  return defineAsyncComponent({ loader, loadingComponent: ViewSkeleton, delay: 120 });
+  return defineAsyncComponent({ loader, loadingComponent: ViewSkeleton, errorComponent: ViewLoadError, delay: 120, timeout: 30_000 });
 }
 
 // 总览是默认首屏，保持同步加载；其它页面首次打开时才下载代码。异步组件引用

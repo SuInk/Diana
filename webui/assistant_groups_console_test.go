@@ -411,6 +411,19 @@ func TestConsoleGroupsFallBackToLegacyRecords(t *testing.T) {
 	}
 }
 
+type relationMemberChannel struct {
+	fakeChannel
+	card, nickname string
+}
+
+func (c relationMemberChannel) GroupMember(_ context.Context, groupID, userID string) (assistant.OneBotGroupMemberInfo, error) {
+	return assistant.OneBotGroupMemberInfo{GroupID: groupID, UserID: userID, Card: c.card, Nickname: c.nickname}, nil
+}
+
+func (c relationMemberChannel) GroupMembers(context.Context, string) (assistant.GroupMemberDirectory, error) {
+	return assistant.GroupMemberDirectory{}, nil
+}
+
 // 关系图接口：按群取数、range 参数校验、没有消息存储时明确报错。
 func TestGroupRelationGraphEndpoint(t *testing.T) {
 	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "relations-api.db"))
@@ -421,7 +434,7 @@ func TestGroupRelationGraphEndpoint(t *testing.T) {
 
 	ctx := context.Background()
 	now := time.Now()
-	for index, seed := range []struct{ userID, name string }{{"1001", "Alice"}, {"1001", "Alice"}, {"1002", "Bob"}} {
+	for index, seed := range []struct{ userID, name string }{{"1001", "Alice"}, {"1001", "Alice"}, {"1002", "Bob"}, {"42", "美海（bot）"}} {
 		event := assistant.MessageEvent{
 			Kind: assistant.EventKindGroup, GroupID: "555", UserID: seed.userID,
 			MessageID: fmt.Sprintf("m%d", index), SenderName: seed.name,
@@ -435,7 +448,7 @@ func TestGroupRelationGraphEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 	handler := &BotHandler{sqlite: store, runtime: assistant.NewRuntime(
-		assistant.BotConfig{BotAccount: "42"}, fakeChannel{}, assistant.NewPluginManager(), nil, nil, nil, nil)}
+		assistant.BotConfig{Name: "配置名称", BotAccount: "42"}, relationMemberChannel{card: "平台群名片", nickname: "平台昵称"}, assistant.NewPluginManager(), nil, nil, nil, nil)}
 	handler.registerConsoleGroupRoutes(router)
 
 	rec := httptest.NewRecorder()
@@ -457,8 +470,46 @@ func TestGroupRelationGraphEndpoint(t *testing.T) {
 	if payload.Graph.BotID != "42" {
 		t.Fatalf("bot = %q, want 42", payload.Graph.BotID)
 	}
-	if payload.Graph.Messages != 3 || payload.Graph.Participants != 2 {
+	if payload.Graph.Messages != 4 || payload.Graph.Participants != 3 {
 		t.Fatalf("messages = %d, participants = %d", payload.Graph.Messages, payload.Graph.Participants)
+	}
+
+	for _, node := range payload.Graph.Nodes {
+		if node.IsBot && node.DisplayName != "平台群名片" {
+			t.Fatalf("bot display name = %q, want platform group card", node.DisplayName)
+		}
+		if node.UserID == "1001" && node.DisplayName != "Alice" {
+			t.Fatalf("member display name changed: %q", node.DisplayName)
+		}
+	}
+
+	for _, tc := range []struct {
+		name, card, nickname, want string
+	}{
+		{"nickname", "", "平台昵称", "平台昵称"},
+		{"no_platform_name", "", "", "42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			handler.runtime = assistant.NewRuntime(assistant.BotConfig{Name: "配置名称", BotAccount: "42"},
+				relationMemberChannel{card: tc.card, nickname: tc.nickname}, assistant.NewPluginManager(), nil, nil, nil, nil)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/groups/555/relations?range=24h", nil))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			for _, node := range payload.Graph.Nodes {
+				if node.IsBot {
+					if node.DisplayName != tc.want {
+						t.Fatalf("name=%q want=%q", node.DisplayName, tc.want)
+					}
+					return
+				}
+			}
+			t.Fatal("missing bot node")
+		})
 	}
 
 	bad := httptest.NewRecorder()
