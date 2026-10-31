@@ -3348,7 +3348,7 @@ const (
 	// defaultPromptPlaintextRules 只管排版：聊天窗口不渲染 Markdown。
 	// 「什么时候分成几条消息发」是投递机制，归 replySegmentationRule 这条内置规则，
 	// 不放在这个可编辑文本框里——挂在用户文案上的开关，改一次就再也没人打开了。
-	defaultPromptPlaintextRules      = "当前聊天平台是 {platform}，消息不渲染 Markdown，默认按纯文本显示，不要使用 Markdown 语法，例如 **加粗**、# 标题、表格或代码围栏；需要列点时用简短中文句子或普通序号。"
+	defaultPromptPlaintextRules      = "主动使用 Markdown 组织回复。技术说明、阶段演进、方案对比和操作步骤，用列表逐项展开，每项独占一行；关键概念可以加粗。即使是在群聊接话或回应截图，只要谈到多个要点，也按这个格式写，不把各项串成一长段。只回应当前问题，说清就结束；简短闲聊不用强加列表。当前聊天平台是 {platform}，消息不渲染 Markdown，发送层会把 Markdown 转为纯文本并保留换行。对比用列表，不用表格。"
 	defaultPromptTimeTemplate        = "当前时间：{datetime} {weekday}"
 	defaultPromptGroupSenderTemplate = "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。"
 	defaultPromptImageOnly           = "（对方只发了图，没配文字）"

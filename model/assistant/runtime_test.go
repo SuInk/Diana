@@ -1389,7 +1389,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
 		t.Fatalf("system prompt missing adjacent-message merge guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "纯文本") || !strings.Contains(prompt, "不要使用 Markdown") {
+	if !strings.Contains(prompt, "Markdown 转为纯文本并保留换行") || strings.Contains(prompt, "不要使用 Markdown") {
 		t.Fatalf("system prompt missing QQ plain-text guidance: %q", prompt)
 	}
 	// 分条规则来自内置的 replySegmentationRule，不再依赖可编辑的纯文本规则文本框。

@@ -96,7 +96,7 @@ const replyUnclosedBracketRule = "不要用只开不合的「（」接一段补�
 // 以前在下面五条子规则里各写了一遍，措辞还各不相同；模型读到的是同一件事被
 // 反复叮嘱，占了篇幅还稀释注意力。现在只在这里说一次，其余子规则只讲自己那份
 // 独有的内容（什么时候另起一条、长文怎么分组、本轮用户要求怎么覆盖）。
-const replyBlankLineRule = "换行就是分条：两句普通的话之间换行，会作为两条消息发出；想留在同一条就写在同一行。列表、步骤、代码、表格、链接逐行写，整块留在同一条。不要用空行排版。也可以用 " + notificationSplitMarker + " 明确另起一条。"
+const replyBlankLineRule = "正文按内容排版：一个要点一行，多个要点用列表；一个段落说清一件事。用真实换行，简短回答不必凑列表。说清就结束。需要明确另起一条消息时，可以写 " + notificationSplitMarker + "。"
 
 // 以前这里写的是「尽量少发几条、相关的放在一起、不逐句拆分」，结果是一条回复塞进
 // 结论、理由、保留意见和补充，群友十几个字一条，机器人一条上百字。真人发消息是一条
@@ -118,7 +118,7 @@ const replyConversationalIntentRule = "先判断对方是在聊天还是求助�
 // 规则写得具体，而且给一个真实例子。运行时不再自己推断句子边界之后，一条回复分不
 // 分得开只剩「模型肯不肯换行」这一个杠杆；抽象地说「按意群分段」模型照样会写成一
 // 整段，示例比形容词管用——各档的语气也都是靠示例教会的。
-const replySegmentationRule = "当前开启自然分条：一条消息说一件事，说完另起一条；不要把好几件事挤进一条，也不要把一句话拆成几截。代码、步骤、列表这种要连着看的才在同一条里换行。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
+const replySegmentationRule = "当前开启自然分条：一条消息说一件事，说完另起一条；不要把好几件事挤进一条，也不要把一句话拆成几截。相关内容可以在同一条里自然排版。示例：结论" + notificationSplitMarker + "配置如下：" + notificationLineMarker + "1. 第一项" + notificationLineMarker + "2. 第二项" + notificationSplitMarker + "最后补充。"
 
 // replyDocumentDeliveryRule 只讲长文怎么分组。示例收到两行：分组规律一行就看得
 // 出来，原来那份把第一天拆到「上午 / 下午和晚上」再加一段共用准备，例子本身比
@@ -149,7 +149,7 @@ var (
 	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
 	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
 	promptReplyUnclosedBracketSpec      = styleSpec("unclosed_bracket", "不写半截括号", "每轮注入：不用只开不合的「（」接一段话。", replyUnclosedBracketRule)
-	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：换行即分条，列表代码成块留在同一条。"+replyMarkerUsage, replyBlankLineRule)
+	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：自然排版与显式另起消息的标记。"+replyMarkerUsage, replyBlankLineRule)
 	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
 	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
 	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
