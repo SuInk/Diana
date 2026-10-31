@@ -222,7 +222,7 @@ func TestWakeGuidanceReplacesGenericMentionOnlyNotice(t *testing.T) {
 	// 只有引用、没有 @ 的消息走不到唤醒指引，那句仍然要留着。
 	quoted := event
 	quoted.Segments = []MessageSegment{{Type: "reply", Data: map[string]string{"id": "abc"}}}
-	got = currentPromptTextWithSemanticContext(quoted, "[diana-reply:abc]", semanticReferenceContext{}, annotation)
+	got = currentPromptTextWithSemanticContext(quoted, "<diana-quote id=\"abc\"/>", semanticReferenceContext{}, annotation)
 	if !strings.Contains(got, "主要由 @ 或引用组成") {
 		t.Fatalf("纯引用的消息丢了提示：%q", got)
 	}

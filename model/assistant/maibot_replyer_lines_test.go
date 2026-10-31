@@ -32,7 +32,7 @@ func TestMaiBotReplyLinesKeepsListLines(t *testing.T) {
 	}
 }
 
-// 改写稿转成 [diana-line] 后，发送前的版式整理不能再把列表压成一行。
+// 改写稿转成 <diana-br/> 后，发送前的版式整理不能再把列表压成一行。
 func TestMaiBotReplyLinesSurvivePrepare(t *testing.T) {
 	cfg := DefaultBotConfig()
 	r := &Runtime{}

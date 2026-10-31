@@ -80,8 +80,8 @@ func TestFinalizeEnvelopeUnwrappedOnOutboundPath(t *testing.T) {
 	p := &compressionTestProvider{err: errors.New("must not call")}
 	rt := compressionTestRuntime(p)
 	for _, leaked := range []string{
-		`[agent_finalize]{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
-		`{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "sticker": "", "sticker_order": ""}`,
+		`[agent_finalize]{"content": "早上好呀<diana-message/>今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
+		`{"content": "早上好呀<diana-message/>今天也要加油", "silent": false, "sticker": "", "sticker_order": ""}`,
 	} {
 		got, err := rt.prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 8000}, leaked)
 		if err != nil || strings.Contains(got, "content") || !strings.Contains(got, "早上好呀") || !strings.Contains(got, "今天也要加油") {

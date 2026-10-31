@@ -18,7 +18,7 @@ const (
 	maxReplyFilterRuleRunes = 200
 )
 
-// 默认带一条规则，兜住漏进正文的内部控制标记（[[DIANA_REPLY_SINGLE]] 这类）。
+// 默认带一条规则，兜住漏进正文的内部控制标记（<diana-single/> 这类）。
 // 开头结尾写对或写歪的标记发送层已经剥掉，这条管的是夹在正文中间、或者写歪到
 // 发送层认不出的那些。它只是预填进列表，主人可以改也可以删。
 func defaultReplyFilterRules() []string {
@@ -86,10 +86,10 @@ func applyReplyFilters(rules []string, text string) string {
 // replyFilterProtected 是过滤规则不能碰的片段：代码块、行内代码，以及发送层要认的
 // 分条、换行、引用、@ 标记和 CQ 码。规则匹配跨过它们时，它们的原字节照样留下。
 // 漏进正文的 [[DIANA_…]] 控制标记不在其中，默认规则删的就是它们。
-var replyFilterProtected = regexp.MustCompile("(?s:```.*?(?:```|$))|(?s:~~~.*?(?:~~~|$))|`[^`\n]+`|\\[(?:CQ:[^\\]\\n]+|diana-(?:msg|line|reply:[^\\]\\n]+|at:[^\\]\\n]+))\\]" +
+var replyFilterProtected = regexp.MustCompile("(?s:```.*?(?:```|$))|(?s:~~~.*?(?:~~~|$))|`[^`\n]+`|\\[CQ:[^\\]\\n]+\\]|<diana-(?:message|br|quote id=\"[^\"\\n]+\"|at id=\"[^\"\\n]+\")/>" +
 	`|\[[ \t]*@?[ \t]*` + dianaMentionVariantCore + `[ \t]*\]|\[[ \t]*` + dianaReplyVariantCore + `[ \t]*\]`)
 
-var replyFilterMessageBreak = regexp.MustCompile(`\[diana-(?:msg|line)\]`)
+var replyFilterMessageBreak = regexp.MustCompile(`<diana-(?:message|br)/>`)
 
 // runReplyFilters 按顺序跑规则；removed 不为空时报告每条规则删掉的片段。
 // 分条标记两边是两条消息，`$` 要在标记前停住，不然一条里没闭合的括号会把下一条也删掉。

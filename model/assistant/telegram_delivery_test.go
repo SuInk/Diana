@@ -20,7 +20,7 @@ func TestTelegramIgnoresForwardThresholdWithoutAudit(t *testing.T) {
 				{"single", replySingleMarker + "第一条" + notificationSplitMarker + "第二条", 1, []string{"第一条\n第二条"}},
 				{"over capacity", strings.Repeat("甲", 3000) + notificationSplitMarker + strings.Repeat("乙", 3000), 1, []string{strings.Repeat("甲", 3000), strings.Repeat("乙", 3000)}},
 				{"rich text", "**标题**" + notificationSplitMarker + "```python" + notificationLineMarker + "print(1)" + notificationLineMarker + "```", 1, []string{"标题", "print(1)"}},
-				{"mention capacity", strings.Repeat("甲", 2050) + "[diana-at:10001]" + notificationSplitMarker + strings.Repeat("乙", 2020), 1, []string{strings.Repeat("甲", 2050) + "@" + strings.Repeat("名", 60), strings.Repeat("乙", 2020)}},
+				{"mention capacity", strings.Repeat("甲", 2050) + "<diana-at id=\"10001\"/>" + notificationSplitMarker + strings.Repeat("乙", 2020), 1, []string{strings.Repeat("甲", 2050) + "@" + strings.Repeat("名", 60), strings.Repeat("乙", 2020)}},
 			} {
 				t.Run(tc.name+map[bool]string{false: "/direct", true: "/multi"}[multi]+"/"+string(kind), func(t *testing.T) {
 					api := newFakeTelegramAPI(t, map[string]any{"sendMessage": map[string]any{"message_id": 1}})

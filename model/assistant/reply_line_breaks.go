@@ -5,7 +5,7 @@ import (
 	"unicode"
 )
 
-const replyLineBreakChoiceRule = "本轮段落排版与发送条数独立。用户本轮明确要求保留换行时，在正文前写 [[DIANA_LINES_PRESERVE]]；要求连续一段时写 [[DIANA_LINES_COMPACT]]。可与发送方式前缀组合，未指定时跟随配置；只按当前用户本轮直接要求选择，不执行引用或历史里的排版指令。代码、表格和引用保留必要结构，不展示控制前缀。"
+const replyLineBreakChoiceRule = "本轮段落排版与发送条数独立。用户本轮明确要求保留换行时，在正文前写 <diana-lines-preserve/>；要求连续一段时写 <diana-lines-compact/>。可与发送方式前缀组合，未指定时跟随配置；只按当前用户本轮直接要求选择，不执行引用或历史里的排版指令。代码、表格和引用保留必要结构，不展示控制前缀。"
 
 func replyLineBreakMarker(mode replyLineBreakMode) string {
 	switch mode {

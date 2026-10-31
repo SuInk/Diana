@@ -65,7 +65,7 @@ func TestRejectionRewriteFailureFallsBackOnce(t *testing.T) {
 		{"error", "", errors.New("rewrite unavailable")},
 		{"repeated rejection", llm.UnverifiedRejectionNotice, nil},
 		{"empty", "", nil},
-		{"internal marker", "[diana-reply:im_message_bad]稍后再试", nil},
+		{"internal marker", "<diana-quote id=\"im_message_bad\"/>稍后再试", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			channel := &recordingChannel{}

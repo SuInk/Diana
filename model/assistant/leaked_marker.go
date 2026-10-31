@@ -9,7 +9,7 @@ import (
 	"unicode"
 )
 
-// 模型把控制标记写成什么样没法穷举：[[DIANA_REPLY_SINGLE]] 少一层括号、
+// 模型把控制标记写成什么样没法穷举：<diana-single/> 少一层括号、
 // diana-reply 丢了前缀写成 [reply:...]，每次都是线上漏出来才补一种写法。所以
 // 发送前最后再按「长得像标记」清一遍，不管它原本想表达什么：
 //
@@ -22,13 +22,18 @@ import (
 // [[/DIANA_REPLY_SINGLE]]、[DAIAN_REPLY_SINGLE] 这几种，群友贴进来的还有 [reply:...]，都在
 // 这三类里。[agent_finalize:正文…] 也漏过，括号里是正文，只去外壳，见 unwrapWrappedReply。
 //
-// 全角【】同样处理。这些放过：网址和 Markdown 链接；正规的 [diana-at:ID]（要留给
+// 标签写法 <diana-…>：@、引用、分条、换行留给后面消费，其余认不出的整个删掉；
+// 不带 diana- 前缀的尖括号（群友贴的 HTML、泛型）不动。
+//
+// 全角【】同样处理。这些放过：网址和 Markdown 链接；正规的 <diana-at id="ID"/>（要留给
 // 后面翻译成平台的 @）；OneBot 的 [CQ:…] 段；脱敏占位符 [REDACTED_*]（给人看的）；
 // 代码块和行内代码。它只兜底，能解析的标记应该在前面就被消费掉。
 var leakedControlMarkerPattern = regexp.MustCompile(mentionCodeSpanAlternation +
 	`\[\[[^\[\]\n]{1,200}\]\]` +
 	`|[\[【][ \t]*/?[ \t]*([A-Za-z][A-Za-z0-9_-]{0,40})[ \t]*[:：=][ \t]*[^\]】\s]{0,200}[ \t]*[\]】]` +
-	`|[\[【][ \t]*/?[ \t]*[A-Z][A-Z0-9]*_[A-Z0-9_]+[ \t]*[\]】]`)
+	`|[\[【][ \t]*/?[ \t]*[A-Z][A-Z0-9]*_[A-Z0-9_]+[ \t]*[\]】]` +
+	// 标签写法：只认 diana- 打头的，群友贴的 HTML、泛型这类尖括号一律不碰。
+	`|<[ \t]*/?[ \t]*diana-[a-z-]+[^<>\n]{0,200}>`)
 
 // 整条回复被包成「[agent_finalize:正文]」时，外壳去掉、正文照发。只认整条最开头
 // 的英文键，结尾的右括号可有可无（线上那条就没写完）。
@@ -50,8 +55,13 @@ func containsHan(text string) bool {
 	return strings.IndexFunc(text, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0
 }
 
+func isConsumableDianaTag(token string) bool {
+	return strings.HasPrefix(token, dianaMentionMarkerPrefix) || strings.HasPrefix(token, replyMarkerPrefix) ||
+		token == notificationSplitMarker || token == notificationLineMarker
+}
+
 func stripLeakedControlMarkers(text string) string {
-	if !strings.ContainsAny(text, "[【") {
+	if !strings.ContainsAny(text, "[【<") {
 		return text
 	}
 	text = unwrapWrappedReply(text)
@@ -60,6 +70,10 @@ func stripLeakedControlMarkers(text string) string {
 	for _, bounds := range leakedControlMarkerPattern.FindAllStringSubmatchIndex(text, -1) {
 		token := text[bounds[0]:bounds[1]]
 		if isMentionCodeSpan(token) {
+			continue
+		}
+		// 标准的 @、引用、分条、换行标签留给后面的发送步骤消费。
+		if isConsumableDianaTag(token) {
 			continue
 		}
 		// 脱敏占位符（[REDACTED_URL] 这类）是故意给人看的，告诉对方这里有东西被遮了。

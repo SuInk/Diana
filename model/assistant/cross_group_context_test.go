@@ -239,7 +239,7 @@ func countString(items []string, target string) int {
 	return count
 }
 
-// 引用段渲染成 [diana-reply:ID]，不能进检索词：「diana」「reply」是全库最高频的词，
+// 引用段渲染成 <diana-quote id="ID"/>，不能进检索词：「diana」「reply」是全库最高频的词，
 // 一条只有引用和 @ 的消息会因此每次跑满检索超时。
 func TestCrossGroupContextIgnoresReplyMarkerInQuery(t *testing.T) {
 	event := crossGroupTestEvent(200, "current", "speaker", "m1", "")
@@ -254,7 +254,7 @@ func TestCrossGroupContextIgnoresReplyMarkerInQuery(t *testing.T) {
 	}
 	raw := crossGroupTestEvent(200, "current", "speaker", "m2", "")
 	raw.Segments = nil
-	raw.RawMessage = "[diana-reply:20334]你好"
+	raw.RawMessage = "<diana-quote id=\"20334\"/>你好"
 	if text := crossGroupContextQueryText(raw); text != "你好" {
 		t.Fatalf("raw query text = %q", text)
 	}

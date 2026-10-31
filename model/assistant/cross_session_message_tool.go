@@ -87,7 +87,7 @@ func (t *dianaCrossSessionTool) Description() string {
 
 func (t *dianaCrossSessionTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"message":       toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 [diana-msg]；只转附件时可留空"),
+		"message":       toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 <diana-message/>；只转附件时可留空"),
 		"forward_media": toolBoolParam("把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	}
 	if t.owner {

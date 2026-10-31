@@ -251,7 +251,7 @@ func TestMessageHistoryFTSKeepsASCIIPrefixRecall(t *testing.T) {
 // 引用标记和 CQ 码不进索引：它们切出来的「diana」「reply」「multimedia」是超高频词，
 // 搜一个 diana 就要回表十几万行。@ 段留号码，正文照常能搜到。
 func TestMessageHistoryFTSSkipsControlMarkers(t *testing.T) {
-	text := "[diana-reply:12345][CQ:at,qq=10086] 转发合并修好了 [CQ:image,file=a.png,url=https://multimedia.nt.qq.com.cn/download?appid=1407&amp;fileid=Eh]"
+	text := "<diana-quote id=\"12345\"/>[CQ:at,qq=10086] 转发合并修好了 [CQ:image,file=a.png,url=https://multimedia.nt.qq.com.cn/download?appid=1407&amp;fileid=Eh]"
 	got := messageHistoryRowTokens("Alice", "10010", text, "")
 	for _, noise := range []string{"diana", "reply", "12345", "cq", "multimedia", "https", "appid"} {
 		for _, token := range strings.Fields(got) {

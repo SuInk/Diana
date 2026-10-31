@@ -122,7 +122,7 @@ func TestTelegramMentionUsernamesEditedMessageMapping(t *testing.T) {
 			session := sessionKey(current)
 			runtime := &Runtime{history: map[string][]MessageEvent{session: {original, later}}}
 			runtime.refreshRememberedMessageEdit(edited, session)
-			message := runtime.resolveOutgoingMentionNames(current, OutgoingMessage{Text: "[diana-at:10002]"})
+			message := runtime.resolveOutgoingMentionNames(current, OutgoingMessage{Text: "<diana-at id=\"10002\"/>"})
 			if got := message.MentionUsernames["10002"]; got != username {
 				t.Fatalf("mapped edited username = %q, want %q", got, username)
 			}
@@ -309,7 +309,7 @@ func TestTelegramMentionUsernamesCannotAuthenticateOwner(t *testing.T) {
 func TestRuntimeClearsReusedTelegramMentionUsernames(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11, PlatformQQOfficial} {
-		for _, text := range []string{"plain text", "[diana-at:10001]"} {
+		for _, text := range []string{"plain text", "<diana-at id=\"10001\"/>"} {
 			event := telegramMentionTestEvent("10001", 20, nil)
 			event.Platform = platform
 			msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{
@@ -326,7 +326,7 @@ func TestRuntimeResolvesTelegramMentionUsernamesWithoutDisplayName(t *testing.T)
 	runtime := NewRuntime(BotConfig{Platform: PlatformTelegram, BotAccount: "90001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := telegramMentionTestEvent("10001", 20, telegramMentionTestUsername("CurrentName"))
 	runtime.history[sessionKey(event)] = []MessageEvent{telegramMentionTestEvent("10002", 10, telegramMentionTestUsername("HistoryName"))}
-	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{Text: "[diana-at:10001] [diana-at:10002] [diana-at:10003]", MentionUsernames: map[string]string{"10003": "UnverifiedName"}})
+	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{Text: "<diana-at id=\"10001\"/> <diana-at id=\"10002\"/> <diana-at id=\"10003\"/>", MentionUsernames: map[string]string{"10003": "UnverifiedName"}})
 	want := map[string]string{"10001": "CurrentName", "10002": "HistoryName"}
 	if !reflect.DeepEqual(msg.MentionUsernames, want) {
 		t.Fatalf("outgoing usernames = %#v, want %#v", msg.MentionUsernames, want)

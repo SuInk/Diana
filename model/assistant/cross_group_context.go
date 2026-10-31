@@ -411,7 +411,7 @@ func crossGroupContextQueryText(event MessageEvent) string {
 // crossGroupQueryPlainText 去掉 @ 段和引用段后取纯文本。有消息段时不回退到
 // RawMessage，否则只有 @ 的消息会从原始 CQ 码里把账号又带回来。
 //
-// 引用段会被渲染成 [diana-reply:ID]，切出来的「diana」「reply」是全库最高频的词：
+// 引用段会被渲染成 <diana-quote id="ID"/>，切出来的「diana」「reply」是全库最高频的词：
 // 生产上一条只有引用和 @ 的消息，检索词就只剩这几个，每次都跑满 2 秒超时。
 func crossGroupQueryPlainText(segments []MessageSegment, raw string) string {
 	if len(segments) == 0 {

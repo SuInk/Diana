@@ -131,7 +131,7 @@ func truncateForError(value string) string {
 // platformOutboundText 把出站消息压成一段纯文本。
 //
 // 开放平台接口不支持 OneBot 那种富消息段数组，能稳定投递的只有文本；提及标记
-// 在这里按各平台的规则还原成可见文字，不能原样留着 [diana-at:ID] 漏给用户。
+// 在这里按各平台的规则还原成可见文字，不能原样留着 <diana-at id="ID"/> 漏给用户。
 func platformOutboundText(msg OutgoingMessage) string {
 	text, _ := renderDianaMentions(msg.Text, msg.MentionNames)
 	return strings.TrimSpace(text)

@@ -102,7 +102,7 @@ func TestSendAutoModeKeepsModelWrittenReplyMarker(t *testing.T) {
 	}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "1244393238"}
 
-	if err := runtime.send(context.Background(), event, replyMarkerPrefix+"1244393238] 你好"); err != nil {
+	if err := runtime.send(context.Background(), event, replyMarkerFor("1244393238")+" 你好"); err != nil {
 		t.Fatalf("send() error = %v", err)
 	}
 	if len(channel.sent) != 1 {
@@ -132,10 +132,10 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 
 	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}.WithDefaults()
 	prompt := replyDecorationPrompt(cfg, event, nil)
-	if !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
+	if !strings.Contains(prompt, replyMarkerFor("1244393238")+"") {
 		t.Fatalf("auto prompt is missing the current message marker: %q", prompt)
 	}
-	if !strings.Contains(prompt, "[diana-at:10001]") {
+	if !strings.Contains(prompt, "<diana-at id=\"10001\"/>") {
 		t.Fatalf("auto prompt is missing the sender mention hint: %q", prompt)
 	}
 	// 私聊没有引用和 @ 的概念，不该占用上下文。
@@ -158,7 +158,7 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 		t.Fatalf("连发未回时应点出上一条:%s", prompt)
 	}
 	// 承接靠措辞完成,不建议引用——引用框太重,连发场景里真人也只是接着说。
-	if strings.Contains(prompt, replyMarkerPrefix+"111]") {
+	if strings.Contains(prompt, replyMarkerFor("111")+"") {
 		t.Fatalf("不该建议引用更早那条消息:%s", prompt)
 	}
 
@@ -281,7 +281,7 @@ func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
 	busy := mentionDecorationRule("123456", 3, false)
 	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
 	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
-	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "[diana-at:123456]") {
+	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "<diana-at id=\"123456\"/>") {
 		t.Fatalf("热闹时应当给出人数并要求用提及标记点名：%s", busy)
 	}
 	for _, unwanted := range []string{"写 @123456", "[CQ:at"} {
@@ -527,13 +527,13 @@ func TestReplyDecorationPromptGuidesQQOfficialAutoMode(t *testing.T) {
 		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
 	}
 	prompt := replyDecorationPrompt(cfg, event, nil)
-	if !strings.Contains(prompt, replyMarkerPrefix+qqOfficialProbeID+"]") {
+	if !strings.Contains(prompt, replyMarkerFor(qqOfficialProbeID)+"") {
 		t.Fatalf("auto prompt is missing the qq official message marker: %q", prompt)
 	}
 	// 同一条消息在 OneBot 语义下（无平台标记的旧事件）行为不变：提示词照旧按
 	// 数字校验给出或拦截。
 	numeric := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "10001", MessageID: "1244393238"}
-	if prompt := replyDecorationPrompt(cfg, numeric, nil); !strings.Contains(prompt, replyMarkerPrefix+"1244393238]") {
+	if prompt := replyDecorationPrompt(cfg, numeric, nil); !strings.Contains(prompt, replyMarkerFor("1244393238")+"") {
 		t.Fatalf("numeric prompt regressed: %q", prompt)
 	}
 }

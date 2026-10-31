@@ -169,11 +169,11 @@
       <section class="section searchable" id="delivery">
         <div class="section-heading"><p class="eyebrow">02 回复流程</p><h2>分条发送</h2></div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>分条</strong><p>按 <code>[diana-msg]</code> / <code>[diana-line]</code> 分条，去句尾句号；同会话的回复排队，不交错。</p></div></li>
+          <li><div class="flow-node"><strong>分条</strong><p>按 <code>&lt;diana-message/&gt;</code> / <code>&lt;diana-br/&gt;</code> 分条，去句尾句号；同会话的回复排队，不交错。</p></div></li>
           <li class="q"><div class="flow-node"><strong>OneBot 且超过合并转发阈值？</strong></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>发合并转发卡片（卡片文字另过账号安全审核）；被审核拦下就不发，其他失败且未超时则退回逐条发送</span></div></li>
           <li><div class="flow-node"><strong>逐条发</strong><p>只有第一条带引用和 @；触发消息被撤回时不引用，回复针对另一位参与者时不引用当前消息。</p></div></li>
           <li><div class="flow-node"><strong>节奏</strong><p>第二条起等 max(分条间隔 300 毫秒, 每字 100 毫秒)，最多 6 秒；等待时保持「正在输入」。</p></div></li>
-          <li><div class="flow-node"><strong>单条出口 sendOutgoingWithResult</strong><p>凭据打码 → 本地图片与语音准备 → 解析 <code>[diana-reply]</code> / <code>[diana-at]</code> → 发送时守卫。</p></div></li>
+          <li><div class="flow-node"><strong>单条出口 sendOutgoingWithResult</strong><p>凭据打码 → 本地图片与语音准备 → 解析 <code>&lt;diana-quote/&gt;</code> / <code>&lt;diana-at/&gt;</code> → 发送时守卫。</p></div></li>
           <li class="q"><div class="flow-node"><strong>这一步已经发过？</strong><p>按指纹记在本轮的投递账本里。</p></div><div class="flow-exits"><span class="flow-exit go"><b>是</b>跳过，复用原消息 ID</span></div></li>
           <li><div class="flow-node"><strong>租用媒体分享链接</strong><p>每次重试前续期到至少十分钟以后。</p></div></li>
           <li class="q"><div class="flow-node"><strong>executeOutboundCall</strong></div><div class="flow-exits"><span class="flow-exit"><b>被踢 / 被禁言</b>放弃</span><span class="flow-exit loop"><b>连接离线</b>快速失败，入站队列稍后整轮重试</span><span class="flow-exit loop"><b>群发送失败</b>文字、媒体两条通道各自指数退避，窗口用尽后丢弃冷却</span></div></li>
@@ -199,7 +199,7 @@
         <h3>收尾校验</h3>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>send 正文为空？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是，没有出图任务排队</b>这轮不回</span><span class="flow-exit loop"><b>有出图任务排队</b>拒绝静默，计一次修复</span></div></li>
-          <li class="q"><div class="flow-node"><strong>只有纯文本？</strong><p>纯文本直接当最终回复；只有空文本或整段是一对括号包住的动作描述（如「[搜索 …]」）才补试一次。真实换行不打回，发送层当 <code>[diana-line]</code> 处理：普通话之间拆成几条，列表、代码整块一条。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>空或括号动作</b>补试一次</span></div></li>
+          <li class="q"><div class="flow-node"><strong>只有纯文本？</strong><p>纯文本直接当最终回复；只有空文本或整段是一对括号包住的动作描述（如「[搜索 …]」）才补试一次。真实换行不打回，发送层当 <code>&lt;diana-br/&gt;</code> 处理：普通话之间拆成几条，列表、代码整块一条。</p></div><div class="flow-exits"><span class="flow-exit loop"><b>空或括号动作</b>补试一次</span></div></li>
           <li class="q"><div class="flow-node"><strong>要求证据却没搜？出现本轮没取回、对话里也没出现过的链接？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="q"><div class="flow-node"><strong>泄露内部协议词？正文为空？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是</b>计一次修复</span></div></li>
           <li class="end"><div class="flow-node"><strong>返回回复</strong></div></li>
@@ -282,7 +282,7 @@
           <li class="q"><div class="flow-node"><strong>带了依赖图，模型却说看不到图？</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>是，且还没产生外部副作用</b>改用图片描述重新生成一次</span></div></li>
           <li class="q"><div class="flow-node"><strong>模型选择沉默？</strong></div><div class="flow-exits"><span class="flow-exit"><b>可以沉默</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>已有副作用 / 插件事实结果 / 出图排队</b>不许沉默，按空回复兜底</span></div></li>
           <li class="q"><div class="flow-node"><strong>闲聊回复为空或被标记拒答？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b><code>ignored_no_natural_reply</code></span></div></li>
-          <li class="q"><div class="flow-node"><strong>暂停响应 / 拒答标记？</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>暂停且正文为空</b>发一句人设内提示后沉默</span><span class="flow-exit go"><b>拒答且正文为空</b>换成固定拒答文本</span></div></li>
+          <li class="q"><div class="flow-node"><strong>暂停响应 / 拒答标记？</strong><p><code>&lt;diana-ignore-user/&gt;</code> / <code>&lt;diana-refuse/&gt;</code></p></div><div class="flow-exits"><span class="flow-exit"><b>暂停且正文为空</b>发一句人设内提示后沉默</span><span class="flow-exit go"><b>拒答且正文为空</b>换成固定拒答文本</span></div></li>
           <li class="q"><div class="flow-node"><strong>和本轮中途 send 过的某句相同？</strong></div><div class="flow-exits"><span class="flow-exit"><b>是</b>不发第二次</span></div></li>
           <li><div class="flow-node"><strong>审核模型</strong><p>对最终候选回复执行一次审核，不再另行调用语义去重模型丢弃或改写正文。</p></div></li>
           <li class="q"><div class="flow-node"><strong>应用审核结论</strong><p>见下一节。</p></div><div class="flow-exits"><span class="flow-exit"><b>拦下</b>对应的 <code>ignored_*</code> 或公开提示</span></div></li>
@@ -307,7 +307,7 @@
         <h3>发送时守卫</h3>
         <div class="table-wrap"><table><thead><tr><th>守卫</th><th>条件</th><th>结果</th></tr></thead><tbody>
           <tr><td>凭据打码</td><td>文本里出现已登记的凭据</td><td>替换成打码后的文本</td></tr>
-          <tr><td>提及与引用标记</td><td><code>[diana-at]</code> / <code>[diana-reply]</code> 格式不对或指向不存在的消息</td><td>改写或去掉</td></tr>
+          <tr><td>提及与引用标记</td><td><code>&lt;diana-at/&gt;</code> / <code>&lt;diana-quote/&gt;</code> 格式不对或指向不存在的消息</td><td>改写或去掉</td></tr>
           <tr><td>群不可用</td><td>已确认退群或群被禁用</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>暂停响应</td><td>对这个人的暂停期内</td><td><code>ignored_response_suppression</code></td></tr>
           <tr><td>补充消息</td><td>同一轮里对方补了一句，被合并进来</td><td>Agent 规划中接进本轮；否则这一版作废，重新生成</td></tr>

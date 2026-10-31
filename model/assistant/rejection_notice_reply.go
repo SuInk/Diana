@@ -132,7 +132,7 @@ func (r *Runtime) rewriteRejectionNotice(ctx context.Context, event MessageEvent
 		return "", false
 	}
 	lower := strings.ToLower(raw)
-	for _, marker := range []string{"[diana", "[[diana", "[cq:"} {
+	for _, marker := range []string{"<diana", "[diana", "[[diana", "[cq:"} {
 		if strings.Contains(lower, marker) {
 			return "", false
 		}

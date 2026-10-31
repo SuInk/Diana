@@ -150,7 +150,7 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 			}
 		}
 	}
-	action.Content = strings.Join(parts, "[diana-msg]")
+	action.Content = strings.Join(parts, "<diana-message/>")
 	// 老协议的 silent=true 不捡信封之外的正文：模型同一轮里随手写的思考不是回复。
 	// send 明确填了 text（哪怕是空串）也不捡：空 text 就是这一轮不说话，协议里也
 	// 告诉了模型调用旁边的正文不会发出，捡回来会把它随手写的判断发进群里。

@@ -531,7 +531,7 @@ func normalizeRelationshipUserID(raw string) string {
 }
 
 // stripAccountIDMarkup 去掉账号 ID 外面的空白、@ 和提及标记，不管 ID 本身长什么样。
-// 参数里带着提及标记照样认。工具返回给模型的是 [diana-at:ID]，它可能原样抄回来；
+// 参数里带着提及标记照样认。工具返回给模型的是 <diana-at id="ID"/>，它可能原样抄回来；
 // 群消息原文里则是 CQ 码，同样可能被抄进参数。两种都剥掉。
 func stripAccountIDMarkup(raw string) string {
 	raw = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(raw), "@"))

@@ -947,7 +947,7 @@ func AtMentionText(qq, name string) string {
 type AtMentionNameResolver func(userID string) string
 
 // plainTextOptions 调整两处标记的渲染方式。零值等于 PlainText 的原行为：at 段只有
-// 号码时就写号码，引用段写成给模型看的 [diana-reply:ID]。
+// 号码时就写号码，引用段写成给模型看的 <diana-quote id="ID"/>。
 type plainTextOptions struct {
 	// resolveName 只在 at 段自己没带昵称时被调用。
 	resolveName AtMentionNameResolver
@@ -1004,9 +1004,7 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 					builder.WriteString(options.renderReply(id))
 					break
 				}
-				builder.WriteString(replyMarkerPrefix)
-				builder.WriteString(id)
-				builder.WriteString("]")
+				builder.WriteString(replyMarkerFor(id))
 			}
 		case "forward":
 			if options.renderForward != nil {
@@ -1089,7 +1087,12 @@ func expandMarkdownImages(segments []MessageSegment) []MessageSegment {
 // 回复关系渲染成它交给模型，出站再解析回 OutgoingMessage.ReplyMessageID，由各
 // 平台适配器落成自己的形式（OneBot 的 reply 段、Telegram 的 reply_to_message_id）。
 // 用带前缀的自有词而不是平台原生说法，既跨平台统一，也不会和正文里的自然表达撞车。
-const replyMarkerPrefix = "[diana-reply:"
+const replyMarkerPrefix = `<diana-quote id="`
+
+// replyMarkerFor 生成一个引用标记。
+func replyMarkerFor(messageID string) string {
+	return replyMarkerPrefix + strings.TrimSpace(messageID) + dianaMarkerIDSuffix
+}
 
 // extractOutgoingReplyMarker 解析模型写在正文开头的引用标记。
 // 出站若不解析回来，标记就会作为纯文本发出去。只认开头，且 ID 形态可辨识——
@@ -1102,7 +1105,7 @@ func extractOutgoingReplyMarker(text string) (string, string, bool) {
 		return "", text, false
 	}
 	prefix := replyMarkerPrefix
-	end := strings.Index(text, "]")
+	end := strings.Index(text, dianaMarkerIDSuffix)
 	if end < 0 {
 		return "", text, false
 	}
@@ -1110,7 +1113,7 @@ func extractOutgoingReplyMarker(text string) (string, string, bool) {
 	if !validReplyMarkerPayload(id) {
 		return "", text, false
 	}
-	return id, strings.TrimLeft(text[end+1:], " \t\r\n"), true
+	return id, strings.TrimLeft(text[end+len(dianaMarkerIDSuffix):], " \t\r\n"), true
 }
 
 // stripReplyMarkers 去掉正文里 Diana 自己渲染的引用标记。标记表达的是回复关系，
@@ -1125,7 +1128,7 @@ func stripReplyMarkers(text string) string {
 				break
 			}
 			start := offset + relative
-			relativeEnd := strings.Index(text[start:], "]")
+			relativeEnd := strings.Index(text[start:], dianaMarkerIDSuffix)
 			if relativeEnd < 0 {
 				break
 			}
@@ -1137,7 +1140,7 @@ func stripReplyMarkers(text string) string {
 				offset = start + len(prefix)
 				continue
 			}
-			text = text[:start] + text[end+1:]
+			text = text[:start] + text[end+len(dianaMarkerIDSuffix):]
 			offset = start
 		}
 	}
@@ -1315,7 +1318,7 @@ func normalizedHTTPURL(value string) string {
 // TextToOneBotSegments 将文本转换为 OneBot segment 列表。
 func TextToOneBotSegments(text string) []MessageSegment {
 	// 平台中立的提及标记先翻成 CQ at 码，后面照原路走。模型写的是
-	// [diana-at:ID]，OneBot 这边它就是一个 at 段。
+	// <diana-at id="ID"/>，OneBot 这边它就是一个 at 段。
 	parsed := CQToSegments(dianaMentionsToCQ(text))
 	segments := make([]MessageSegment, 0, len(parsed)+2)
 	for index, segment := range parsed {

@@ -242,7 +242,7 @@ func (b *telegramSpanBuffer) applyLink(pattern *regexp.Regexp) {
 		}
 		label := b.text[bounds[2]:bounds[3]]
 		target := b.text[bounds[4]:bounds[5]]
-		// Diana 自己的标记不是链接：[diana-at:10002] 后面正好跟着括号时会被这条
+		// Diana 自己的标记不是链接：<diana-at id="10002"/> 后面正好跟着括号时会被这条
 		// 规则拆掉方括号，出站就认不出提及了。
 		if dianaMarkerLabelPattern.MatchString(label) || normalizedHTTPURL(target) == "" {
 			search = bounds[1]

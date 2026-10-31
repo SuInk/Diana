@@ -35,7 +35,7 @@ const messageHistoryFTSTable = "message_events_fts"
 
 // 正文里的控制标记不是给人搜的内容，进索引只会制造超高频词：
 //
-//   - [diana-reply:ID] 是引用标记，生产上 32 万条消息里 6.9 万条带着它，切出来的
+//   - <diana-quote id="ID"/> 是引用标记，生产上 32 万条消息里 6.9 万条带着它，切出来的
 //     「diana」「reply」让搜任何含 diana 的词都命中 11.6 万行。跨群检索要逐行回表
 //     判会话，冷缓存下实测 3.3 秒，撞上 3 秒的检索超时。
 //   - [CQ:image,...url=https://multimedia.nt.qq.com.cn/...] 把图片 URL 和 fileid
@@ -44,7 +44,7 @@ const messageHistoryFTSTable = "message_events_fts"
 //
 // @ 段留下对方号码，按账号还能搜到「谁 @ 了谁」。
 var (
-	historyReplyMarkerPattern = regexp.MustCompile(`\[diana-reply:[^\]]*\]`)
+	historyReplyMarkerPattern = regexp.MustCompile(`<diana-quote id="[^"]*"/>|\[diana-reply:[^\]]*\]`)
 	historyCQAtPattern        = regexp.MustCompile(`\[CQ:at,qq=([^,\]]*)[^\]]*\]`)
 	historyCQPattern          = regexp.MustCompile(`\[CQ:[^\]]*\]`)
 )

@@ -69,7 +69,7 @@ func TestSendOnlyStepJoinsMessages(t *testing.T) {
 		{Name: finalizeToolName, Arguments: map[string]any{"text": "第一条", "sticker": "得意"}},
 		{Name: finalizeToolName, Arguments: map[string]any{"text": "第二条", "sticker": "叉腰"}},
 	}, "")
-	if action.Silent || action.Content != "第一条[diana-msg]第二条" || action.Fields["sticker"] != "得意" {
+	if action.Silent || action.Content != "第一条<diana-message/>第二条" || action.Fields["sticker"] != "得意" {
 		t.Fatalf("action = %#v", action)
 	}
 	// 只配表情包：正文为空就是不说话，sticker 照样带出去。

@@ -19,7 +19,7 @@ func TestIdentityPrivacyPromptRendersUnchanged(t *testing.T) {
 	const want = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。" +
 		"相同别名始终表示同一对象；im_bot、im_user、im_group、im_message 前缀仅区分机器人、账号、群和消息，不表示主人或群管理权限。" +
 		"按相同账号标识关联消息，身份以当前配置或查询结果为准，不要猜测真实数字。调用工具或在回复中需要引用标识时，必须原样复制别名——" +
-		"包括 [diana-reply:im_message_xxx]、[diana-at:im_user_xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
+		"包括 <diana-quote id=\"im_message_xxx\"/>、<diana-at id=\"im_user_xxx\"/> 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
 		"别名就代表真实号码：用户问群号、QQ 号时，直接在回复里写出对应别名，发出去就是真实号码，不要说获取不到；" +
 		"工具需要当前群或某个人时，照抄 im_group_、im_user_ 这类别名填进参数。"
 	if llmIdentityPrivacyPrompt != want {

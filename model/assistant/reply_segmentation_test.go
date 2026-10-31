@@ -40,7 +40,7 @@ func TestExplicitReplyLayoutMarkers(t *testing.T) {
 	}
 }
 
-// 真实换行等同 [diana-line]：空行只算一次换行；混着列表的整条按排版留着。
+// 真实换行等同 <diana-br/>：空行只算一次换行；混着列表的整条按排版留着。
 func TestLiteralNewlinesActAsLineMarkers(t *testing.T) {
 	input := "第一段\r\n第二段\n\n1. 项目"
 	want := []string{"第一段\n第二段\n1. 项目"}

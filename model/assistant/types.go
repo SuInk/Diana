@@ -375,7 +375,7 @@ type OutgoingMessage struct {
 	// （QQ 官方机器人）当 msg_id 用；它不产生引用，和 ReplyMessageID 互不影响。
 	PassiveReplyMessageID string
 	MentionUserID         string
-	// MentionNames 是要 @ 的人（正文里 [diana-at:ID] 标记和 MentionUserID）的
+	// MentionNames 是要 @ 的人（正文里 <diana-at id="ID"/> 标记和 MentionUserID）的
 	// 显示昵称，按 id 索引。Telegram 的 text_mention 需要一段可见文字，光有 id
 	// 显示不出来；查不到的 id 退回显示 @<id>。OneBot 的 at 段有它就带上 name，
 	// 接入端缓存里还没有的新成员才不会被渲染成 @QQ号。

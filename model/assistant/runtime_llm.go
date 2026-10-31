@@ -377,6 +377,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withLLMSecretPrivacyRun(ctx, run)
+	run = withDianaMarkupRun(run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
@@ -403,6 +404,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	}
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withLLMSecretPrivacyRun(ctx, run)
+	run = withDianaMarkupRun(run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
@@ -662,6 +664,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = withDecisionOnlyNoticeRun(ctx, run)
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
 	run = r.withLLMSecretPrivacyRun(ctx, run)
+	run = withDianaMarkupRun(run)
 	run = r.withContextBudgetCapRun(ctx, run)
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
@@ -1364,10 +1367,10 @@ func replyMentionRules(cfg BotConfig) string {
 	return strings.TrimSpace(fmt.Sprintf(`【群聊真实提及规则】
 发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。本轮可提及的成员在尾部「可提及成员候选 JSON」里给出，没有这一段就不 @ 任何人。
 1. %s
-2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 [diana-at:成员user_id] 提及实际对象。%s
+2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 <diana-at id="成员user_id"/> 提及实际对象。%s
 3. 可以同时提及多人、把标记放在不同位置，发送层按标记位置翻译成真正的提及；不要重复提及同一成员。%s
 4. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
-5. 标记只有 [diana-at:user_id] 这一种写法：半角方括号加半角冒号，中间不加空格。写成 @diana-at-user_id、<diana-at:user_id>、(diana-at:user_id) 都不是提及。`,
+5. 标记只有 <diana-at id="user_id"/> 这一种写法：半角尖括号，id 用半角双引号，以 /> 结尾。写成 @diana-at-user_id、[diana-at:user_id]、<diana-at:user_id> 都不是提及。`,
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
 		autoDecorationAvoidClause(cfg)))

@@ -58,7 +58,7 @@ func TestDianaRelationshipToolUsesMentionedMemberAsTarget(t *testing.T) {
 	if result.Target.ScheduleLimit != 10 || !result.Target.CanGenerateImage || !result.Target.CanEditImage || !result.Target.CanDocumentOCR {
 		t.Fatalf("permissions = %#v", result.Target)
 	}
-	if result.Target.Mention != "[diana-at:10005]" || !result.Target.HasHistory {
+	if result.Target.Mention != "<diana-at id=\"10005\"/>" || !result.Target.HasHistory {
 		t.Fatalf("mention/history = %#v", result.Target)
 	}
 }

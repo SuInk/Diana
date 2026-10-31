@@ -28,7 +28,7 @@ func TestTelegramMentionFallsBackToChannelDirectory(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := telegramMentionTestEvent("10001", 20, nil)
-	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{Text: "[diana-at:10002] [diana-at:10003] [diana-at:10004]"})
+	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{Text: "<diana-at id=\"10002\"/> <diana-at id=\"10003\"/> <diana-at id=\"10004\"/>"})
 	text, _ := renderTelegramOutgoingText(msg.Text, msg.MentionNames, msg.MentionUsernames)
 	if text != "@xiaoxi_dev @雨夹雪 @10004" {
 		t.Fatalf("rendered %q (names=%v usernames=%v)", text, msg.MentionNames, msg.MentionUsernames)
@@ -42,13 +42,13 @@ func TestTelegramMentionDirectorySkipsKnownUsernamesAndPrivateChats(t *testing.T
 	channel := &mentionDirectoryStubChannel{identities: map[string][2]string{"10002": {"别人", "other_name"}}}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 	current := telegramMentionTestEvent("10002", 20, telegramMentionTestUsername("recent_name"))
-	msg := runtime.resolveOutgoingMentionNames(current, OutgoingMessage{Text: "[diana-at:10002]"})
+	msg := runtime.resolveOutgoingMentionNames(current, OutgoingMessage{Text: "<diana-at id=\"10002\"/>"})
 	if msg.MentionUsernames["10002"] != "recent_name" || len(channel.asked) != 0 {
 		t.Fatalf("usernames=%v asked=%v", msg.MentionUsernames, channel.asked)
 	}
 	private := telegramMentionTestEvent("10001", 20, nil)
 	private.Kind, private.GroupID = EventKindPrivate, ""
-	runtime.resolveOutgoingMentionNames(private, OutgoingMessage{Text: "[diana-at:10002]"})
+	runtime.resolveOutgoingMentionNames(private, OutgoingMessage{Text: "<diana-at id=\"10002\"/>"})
 	if len(channel.asked) != 0 {
 		t.Fatalf("private chat asked directory: %v", channel.asked)
 	}

@@ -65,7 +65,7 @@ func renderFinalizeRuntime(t *testing.T, provider *renderFinalizeLLMProvider, br
 func TestReplyFinalizeDoesNotOfferRenderField(t *testing.T) {
 	withFastSendTiming(t)
 	for _, browser := range []bool{true, false} {
-		provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "前几名如下[diana-line]1. A：100%[diana-line]2. B：96%"}}
+		provider := &renderFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "前几名如下<diana-br/>1. A：100%<diana-br/>2. B：96%"}}
 		rt, channel := renderFinalizeRuntime(t, provider, browser)
 		event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "rank", RawMessage: "来个榜单看看"}
 		if _, err := rt.replyTo(context.Background(), event, event.RawMessage); err != nil {

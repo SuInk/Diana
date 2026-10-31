@@ -166,7 +166,7 @@ func TestOneBotMemberLookupRequiresFreshRoster(t *testing.T) {
 				if toolErr != nil || !strings.Contains(output, `"membership_verified":true`) {
 					t.Fatalf("output=%s err=%v", output, toolErr)
 				}
-			} else if toolErr == nil || strings.Contains(output, "[diana-at:") {
+			} else if toolErr == nil || strings.Contains(output, dianaMentionMarkerPrefix) {
 				t.Fatalf("unverified member exposed: %s %v", output, toolErr)
 			}
 		})
@@ -219,7 +219,7 @@ func TestLiveProductionNonMemberLookupReplay(t *testing.T) {
 	if err := json.Unmarshal([]byte(response.Text), &answer); err != nil {
 		t.Fatalf("invalid model output: %v", err)
 	}
-	if answer.Reply == "" || (answer.Membership != "absent" && answer.Membership != "unknown") || answer.Mention || strings.Contains(answer.Reply, "[diana-at:") || strings.Contains(answer.Reply, "@41001") {
+	if answer.Reply == "" || (answer.Membership != "absent" && answer.Membership != "unknown") || answer.Mention || strings.Contains(answer.Reply, dianaMentionMarkerPrefix) || strings.Contains(answer.Reply, "@41001") {
 		t.Fatalf("false membership or mention: %+v", answer)
 	}
 	t.Logf("model=%s membership=%s mention=%v reply=%s", response.Model, answer.Membership, answer.Mention, answer.Reply)
@@ -272,7 +272,7 @@ func TestOneBotNonMemberFallsBackToAccountProfile(t *testing.T) {
 		output, err := tool.Run(context.Background(), map[string]any{"operation": "member_info", "user_id": "41001"})
 		valid := profile["user_id"] == "41001" && profile["nickname"] == "T"
 		if valid {
-			if err != nil || !strings.Contains(output, `"nickname":"T"`) || !strings.Contains(output, `"membership_verified":false`) || strings.Contains(output, "[diana-at:") || strings.Contains(output, "must-not-leak") || strings.Contains(output, `"role":"owner"`) {
+			if err != nil || !strings.Contains(output, `"nickname":"T"`) || !strings.Contains(output, `"membership_verified":false`) || strings.Contains(output, dianaMentionMarkerPrefix) || strings.Contains(output, "must-not-leak") || strings.Contains(output, `"role":"owner"`) {
 				t.Fatalf("profile mistaken for membership: %s %v", output, err)
 			}
 		} else if err == nil {

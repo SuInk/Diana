@@ -50,7 +50,7 @@ func TestDianaOneBotGroupToolListsOtherMembersWithMentions(t *testing.T) {
 	if result.Total != 2 || result.GroupTotal != 4 {
 		t.Fatalf("counts = matched %d group %d", result.Total, result.GroupTotal)
 	}
-	if result.Members[0].Mention != "[diana-at:10002]" || result.Members[0].DisplayName != "Alice Card" {
+	if result.Members[0].Mention != "<diana-at id=\"10002\"/>" || result.Members[0].DisplayName != "Alice Card" {
 		t.Fatalf("Alice = %#v", result.Members[0])
 	}
 }

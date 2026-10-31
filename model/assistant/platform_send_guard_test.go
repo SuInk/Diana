@@ -177,7 +177,7 @@ func TestTelegramNestedRecallSendsFullCachedTextAndMedia(t *testing.T) {
 		UserID:    "42",
 	}
 
-	const controlMarkers = "[diana-reply:123] [diana-at:10002] [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
+	const controlMarkers = "<diana-quote id=\"123\"/> <diana-at id=\"10002\"/> [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
 	longOriginal := controlMarkers + strings.Repeat("这是必须完整送达的缓存原文。", 40)
 	if len([]rune(longOriginal)) <= 420 {
 		t.Fatal("test fixture must exceed the chat-history item preview limit")
@@ -247,7 +247,7 @@ func TestTelegramNestedRecallSendsFullCachedTextAndMedia(t *testing.T) {
 }
 
 func TestLiteralOutgoingTextStaysLiteralInHistoryAndConfirmation(t *testing.T) {
-	const original = "[diana-reply:123] [diana-at:10002] [CQ:at,qq=10003] [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
+	const original = "<diana-quote id=\"123\"/> <diana-at id=\"10002\"/> [CQ:at,qq=10003] [CQ:record,file=/not-a-real-file.mp3] **原样保留**"
 	msg := OutgoingMessage{Text: original, LiteralText: true}
 
 	transport := buildOutgoingSegments(msg)

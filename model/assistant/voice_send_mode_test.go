@@ -143,7 +143,7 @@ func TestPersistentVoiceConsumesLayoutMarkers(t *testing.T) {
 }
 
 func TestPersistentVoiceKeepsQuotedReplyAsText(t *testing.T) {
-	fixture := newPersistentVoiceFixture(t, replyMarkerPrefix+"30003]就是这条", http.StatusOK, voiceTTSSendModeAlways)
+	fixture := newPersistentVoiceFixture(t, replyMarkerFor("30003")+"就是这条", http.StatusOK, voiceTTSSendModeAlways)
 	message := fixture.reply(t)
 	if fixture.ttsCalls.Load() != 0 || !strings.Contains(message.Text, "就是这条") {
 		t.Fatalf("带引用的回复应发文字：%#v calls=%d", message, fixture.ttsCalls.Load())

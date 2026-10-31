@@ -733,7 +733,7 @@ func TestGroupSocialReplyOverridesAndInherits(t *testing.T) {
 
 // 换行协议只说一次。
 //
-// 「不许真实换行、另起消息写 [diana-msg]、消息内换行写 [diana-line]」这三句以前在
+// 「不许真实换行、另起消息写 <diana-message/>、消息内换行写 <diana-br/>」这三句以前在
 // 分条、单条、长文几条子规则里各写了一遍，措辞还各不相同：模型读到的是同一件事被
 // 反复叮嘱，占篇幅还稀释注意力。现在只由 replyBlankLineRule 说，其余子规则只讲
 // 自己那份独有的内容。
@@ -757,7 +757,7 @@ func TestLayoutProtocolIsStatedOnce(t *testing.T) {
 		t.Fatalf("长文示例不是两行（%d 处分条标记）：%q", got, replyDocumentDeliveryRule)
 	}
 	// 标记本身和它们的语义一个字都不许动：发送层只认这两串。
-	if notificationSplitMarker != "[diana-msg]" || notificationLineMarker != "[diana-line]" {
+	if notificationSplitMarker != "<diana-message/>" || notificationLineMarker != "<diana-br/>" {
 		t.Fatalf("投递标记被改了：%q %q", notificationSplitMarker, notificationLineMarker)
 	}
 }

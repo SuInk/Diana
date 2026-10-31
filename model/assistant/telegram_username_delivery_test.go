@@ -21,10 +21,10 @@ func TestTelegramDraftResolvesUsernameOnEveryUpdate(t *testing.T) {
 	if draft == nil {
 		t.Fatal("missing private draft")
 	}
-	draft.ObserveTextDelta(context.Background(), "[diana-at:10002] hello")
+	draft.ObserveTextDelta(context.Background(), "<diana-at id=\"10002\"/> hello")
 	r.history[sessionKey(event)] = []MessageEvent{{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "Alice", SenderUsername: "alice_new", Time: 11}}
 	draft.lastSent = draft.lastSent.Add(-telegramDraftUpdateInterval)
-	draft.ObserveTextDelta(context.Background(), "[diana-at:10002] hello [diana-at:10003]")
+	draft.ObserveTextDelta(context.Background(), "<diana-at id=\"10002\"/> hello <diana-at id=\"10003\"/>")
 	calls := api.callsOf("sendMessageDraft")
 	if len(calls) != 2 {
 		t.Fatalf("draft calls = %#v", calls)
@@ -48,13 +48,13 @@ func TestTelegramDraftRestoresIdentityAliasesFromProviderScope(t *testing.T) {
 			draft := r.telegramReplyDraft(event, BotConfig{})
 			scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
 			alias := scope.register("10002", "user")
-			marker := "[diana-at:" + alias + "]"
+			marker := mentionMarkerFor(alias)
 			// Every incomplete marker is observed before the completed mention.
 			events := make([]llm.ChatEvent, 0, len(marker)+2)
 			for _, char := range marker[:len(marker)-1] {
 				events = append(events, textDelta(string(char)))
 			}
-			events = append(events, textDelta("] hello"), llm.ChatEvent{Type: llm.ChatEventDone})
+			events = append(events, textDelta(marker[len(marker)-1:]+" hello"), llm.ChatEvent{Type: llm.ChatEventDone})
 			provider := &identityPrivacyProvider{scope: scope, provider: &streamingLLMProvider{provider: &stubStreamer{events: events}}}
 			// The caller has no privacy scope: the provider must pass its own complete mapping down.
 			ctx := withTextDeltaObserver(context.Background(), draft)
@@ -62,7 +62,7 @@ func TestTelegramDraftRestoresIdentityAliasesFromProviderScope(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if response.Text != "[diana-at:10002] hello" {
+			if response.Text != "<diana-at id=\"10002\"/> hello" {
 				t.Fatalf("final response = %q", response.Text)
 			}
 			calls := api.callsOf("sendMessageDraft")
@@ -90,10 +90,10 @@ func TestTelegramDraftWithholdsUnresolvedIdentityAliases(t *testing.T) {
 	alias := scope.register("10002", "user")
 	ctx := withIdentityPrivacyScope(context.Background(), scope)
 	for _, text := range []string{
-		"[diana-at:" + alias + "0] hello",
+		mentionMarkerFor(alias+"0") + " hello",
 		"hello im_user_unknown",
-		"hello [diana-at:" + alias[:len(alias)-1],
-		"hello [diana-at:",
+		"hello " + dianaMentionMarkerPrefix + alias[:len(alias)-1],
+		"hello <diana-at id=",
 	} {
 		if draft.ObserveTextDelta(ctx, text) {
 			t.Fatal("withheld updates must not commit the stream")
@@ -102,7 +102,7 @@ func TestTelegramDraftWithholdsUnresolvedIdentityAliases(t *testing.T) {
 			t.Fatalf("unresolved alias reached draft API: %#v", calls)
 		}
 	}
-	draft.ObserveTextDelta(ctx, "[diana-at:"+alias+"] hello")
+	draft.ObserveTextDelta(ctx, mentionMarkerFor(alias)+" hello")
 	if calls := api.callsOf("sendMessageDraft"); len(calls) != 1 || calls[0].Params["text"] != "@alice_name hello" {
 		t.Fatalf("resolved update did not recover: %#v", calls)
 	}
@@ -117,9 +117,9 @@ func TestTelegramDraftRestoresAliasesBeforeRuneBudget(t *testing.T) {
 	r := &Runtime{channel: api.channel()}
 	scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
 	alias := scope.register("10002", "user")
-	wantSource := "[diana-at:10002] hello"
+	wantSource := "<diana-at id=\"10002\"/> hello"
 	draft := r.telegramReplyDraft(event, BotConfig{MaxReplyChars: len([]rune(wantSource))})
-	draft.ObserveTextDelta(withIdentityPrivacyScope(context.Background(), scope), "[diana-at:"+alias+"] hello")
+	draft.ObserveTextDelta(withIdentityPrivacyScope(context.Background(), scope), mentionMarkerFor(alias)+" hello")
 	if calls := api.callsOf("sendMessageDraft"); len(calls) != 1 || calls[0].Params["text"] != "@alice_name hello" {
 		t.Fatalf("alias was truncated before restoration: %#v", calls)
 	}
@@ -130,7 +130,7 @@ func TestTelegramUsernameDeliveryEntities(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			api := newFakeTelegramAPI(t, nil)
 			msg := OutgoingMessage{
-				UserID: "10002", Text: "🎉 **[diana-at:10002]** [diana-at:10003]",
+				UserID: "10002", Text: "🎉 **<diana-at id=\"10002\"/>** <diana-at id=\"10003\"/>",
 				MentionNames:     map[string]string{"10002": "Alice", "10003": "小😀_*"},
 				MentionUsernames: map[string]string{"10002": "some_user_name"},
 			}
@@ -250,7 +250,7 @@ func TestTelegramDraftTruncatesExpandedUsernamesWithoutDisabling(t *testing.T) {
 	event.Kind, event.GroupID = EventKindPrivate, ""
 	r := &Runtime{channel: api.channel(), history: map[string][]MessageEvent{}}
 	draft := r.telegramReplyDraft(event, BotConfig{})
-	source := strings.Repeat("[diana-at:10002]", 125)
+	source := strings.Repeat("<diana-at id=\"10002\"/>", 125)
 	draft.ObserveTextDelta(context.Background(), source)
 	if draft.disabled {
 		t.Fatal("expanded username draft disabled streaming")
@@ -285,11 +285,11 @@ func TestTelegramDraftTruncationPreservesUTF16Entities(t *testing.T) {
 	}{
 		{"emoji at boundary", strings.Repeat("😀", 2047) + "x😀end", strings.Repeat("😀", 2047) + "x", nil, "", 0},
 		{"format crosses boundary", strings.Repeat("😀", 2047) + "**😀end**", strings.Repeat("😀", 2048), nil, "bold", 2},
-		{"username crosses boundary", prefix + "[diana-at:10002]", prefix, map[string]string{"10002": "long_username"}, "", 0},
-		{"fallback crosses boundary", prefix + "[diana-at:10002]", prefix, nil, "", 0},
+		{"username crosses boundary", prefix + "<diana-at id=\"10002\"/>", prefix, map[string]string{"10002": "long_username"}, "", 0},
+		{"fallback crosses boundary", prefix + "<diana-at id=\"10002\"/>", prefix, nil, "", 0},
 		{"link crosses boundary", prefix + "[abcdefghij](https://example.com)", prefix, nil, "", 0},
-		{"mention ends at boundary", prefix + "[diana-at:10002]😀", prefix + "@alice", map[string]string{"10002": "alice"}, "mention", 6},
-		{"entities after boundary", strings.Repeat("😀", 2048) + " **later** [diana-at:10002]", strings.Repeat("😀", 2048), nil, "", 0},
+		{"mention ends at boundary", prefix + "<diana-at id=\"10002\"/>😀", prefix + "@alice", map[string]string{"10002": "alice"}, "mention", 6},
+		{"entities after boundary", strings.Repeat("😀", 2048) + " **later** <diana-at id=\"10002\"/>", strings.Repeat("😀", 2048), nil, "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newFakeTelegramAPI(t, nil)
@@ -325,7 +325,7 @@ func TestTelegramLengthBudgetUsesUsername(t *testing.T) {
 	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "A", SenderUsername: "long_username", Time: 10}
 	r := &Runtime{}
 	cfg := BotConfig{Platform: PlatformTelegram}
-	part := strings.Repeat("x", telegramTextLimit-5) + "[diana-at:10002]"
+	part := strings.Repeat("x", telegramTextLimit-5) + "<diana-at id=\"10002\"/>"
 	if issue := r.replyPartLimitIssue(cfg, event, part); issue == "" {
 		t.Fatal("rendered username must count toward the Telegram limit")
 	}

@@ -1229,7 +1229,7 @@ func truncateChatHistoryText(text string, limit int) string {
 const chatHistoryIDNotice = "message_id 只用于继续调用历史工具，不得写进给用户的回复；指认某条消息时用时间、发送者和内容描述。" + historyIdentityNotice
 
 // chatHistoryQuoteNotice 在禁令之外给出真正该做的动作：把那条消息引用出来。
-const chatHistoryQuoteNotice = "要让用户直接定位到某条消息，在回复最开头写 " + replyMarkerPrefix + "该消息的 message_id]，客户端会渲染成引用框。"
+const chatHistoryQuoteNotice = "要让用户直接定位到某条消息，在回复最开头写 " + replyMarkerPrefix + "该消息的 message_id" + dianaMarkerIDSuffix + "，客户端会渲染成引用框。"
 
 const chatHistoryEvidenceNotice = " 历史里的机器人回复只证明机器人说过这些话，不是其中人物资料、统计或已执行操作的独立证据；需要回查原始消息或工具结果，不能用旧回答给旧回答作证。"
 

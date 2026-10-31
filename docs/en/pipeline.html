@@ -172,11 +172,11 @@
       <section class="section searchable" id="delivery">
         <div class="section-heading"><p class="eyebrow">02 Reply flow</p><h2>Sending in chunks</h2></div>
         <ol class="flow">
-          <li><div class="flow-node"><strong>Split</strong><p>On <code>[diana-msg]</code> / <code>[diana-line]</code>, trailing full stops removed; replies in the same session queue instead of interleaving.</p></div></li>
+          <li><div class="flow-node"><strong>Split</strong><p>On <code>&lt;diana-message/&gt;</code> / <code>&lt;diana-br/&gt;</code>, trailing full stops removed; replies in the same session queue instead of interleaving.</p></div></li>
           <li class="q"><div class="flow-node"><strong>OneBot and over the forward threshold?</strong></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>send a merged-forward card (its text gets its own account-safety check); if that check stops it nothing is sent, other failures before the timeout fall back to chunks</span></div></li>
           <li><div class="flow-node"><strong>Chunk by chunk</strong><p>Only the first chunk quotes and mentions; no quote if the trigger was recalled or the reply targets another participant.</p></div></li>
           <li><div class="flow-node"><strong>Pacing</strong><p>From the second chunk: max(300 ms interval, 100 ms per character), capped at 6 seconds, with the typing indicator kept on.</p></div></li>
-          <li><div class="flow-node"><strong>Single exit: sendOutgoingWithResult</strong><p>Mask secrets → prepare local images and audio → resolve <code>[diana-reply]</code> / <code>[diana-at]</code> → send-time guards.</p></div></li>
+          <li><div class="flow-node"><strong>Single exit: sendOutgoingWithResult</strong><p>Mask secrets → prepare local images and audio → resolve <code>&lt;diana-quote/&gt;</code> / <code>&lt;diana-at/&gt;</code> → send-time guards.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Already sent this step?</strong><p>Fingerprints are kept in the turn's delivery ledger.</p></div><div class="flow-exits"><span class="flow-exit go"><b>Yes</b>skip, reuse the message ID</span></div></li>
           <li><div class="flow-node"><strong>Lease the media share link</strong><p>Renewed to at least ten minutes ahead before every retry.</p></div></li>
           <li class="q"><div class="flow-node"><strong>executeOutboundCall</strong></div><div class="flow-exits"><span class="flow-exit"><b>Kicked / muted</b>give up</span><span class="flow-exit loop"><b>Connection offline</b>fail fast; the queue retries the whole turn later</span><span class="flow-exit loop"><b>Group send fails</b>separate text and media lanes back off exponentially, then a drop cooldown</span></div></li>
@@ -202,7 +202,7 @@
         <h3>Finish checks</h3>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>Empty send text?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes, no image job queued</b>no reply this turn</span><span class="flow-exit loop"><b>Image job queued</b>silence refused, one repair</span></div></li>
-          <li class="q"><div class="flow-node"><strong>Real line breaks in the text?</strong><p>Chunks must use <code>[diana-msg]</code> / <code>[diana-line]</code>.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Real line breaks in the text?</strong><p>Chunks must use <code>&lt;diana-message/&gt;</code> / <code>&lt;diana-br/&gt;</code>.</p></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="q"><div class="flow-node"><strong>Evidence required but no search? A link never fetched this run nor seen in the conversation?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="q"><div class="flow-node"><strong>Internal protocol words leaked? Empty text?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes</b>one repair</span></div></li>
           <li class="end"><div class="flow-node"><strong>Return the reply</strong></div></li>
@@ -284,7 +284,7 @@
           <li class="q"><div class="flow-node"><strong>Dependency images attached, but the model says it cannot see them?</strong></div><div class="flow-exits"><span class="flow-exit loop"><b>Yes, no side effect yet</b>regenerate once from image descriptions</span></div></li>
           <li class="q"><div class="flow-node"><strong>The model chose silence?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Allowed</b><code>ignored_model_silent</code></span><span class="flow-exit go"><b>Side effect / factual plugin result / image queued</b>silence refused, empty-reply fallback</span></div></li>
           <li class="q"><div class="flow-node"><strong>Chat reply empty or marked as a refusal?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b><code>ignored_no_natural_reply</code></span></div></li>
-          <li class="q"><div class="flow-node"><strong>Pause or refusal marker?</strong><p><code>[[DIANA_IGNORE_CURRENT_USER_30M]]</code> / <code>[[DIANA_REFUSE_CURRENT]]</code></p></div><div class="flow-exits"><span class="flow-exit"><b>Pause, empty body</b>one in-character line, then silence</span><span class="flow-exit go"><b>Refusal, empty body</b>fixed refusal text</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Pause or refusal marker?</strong><p><code>&lt;diana-ignore-user/&gt;</code> / <code>&lt;diana-refuse/&gt;</code></p></div><div class="flow-exits"><span class="flow-exit"><b>Pause, empty body</b>one in-character line, then silence</span><span class="flow-exit go"><b>Refusal, empty body</b>fixed refusal text</span></div></li>
           <li class="q"><div class="flow-node"><strong>Same as an interim send already said this turn?</strong></div><div class="flow-exits"><span class="flow-exit"><b>Yes</b>not sent twice</span></div></li>
           <li><div class="flow-node"><strong>In parallel: semantic dedup + audit model</strong><p>Their inputs are nearly the same, so starting both saves seconds; if dedup rewrites the reply, the audit runs again on the new text.</p></div></li>
           <li class="q"><div class="flow-node"><strong>Semantic dedup</strong><p>Runs only if the session replied within 2 minutes; confidence below 0.9, errors and timeouts all pass.</p></div><div class="flow-exits"><span class="flow-exit"><b>drop, unprompted reply</b><code>ignored_duplicate_reply</code></span><span class="flow-exit go"><b>drop, direct reply</b>sent anyway (being addressed means you answer)</span><span class="flow-exit loop"><b>rewrite</b>reshaped and formatted again</span></div></li>
@@ -310,7 +310,7 @@
         <h3>Send-time guards</h3>
         <div class="table-wrap"><table><thead><tr><th>Guard</th><th>Condition</th><th>Result</th></tr></thead><tbody>
           <tr><td>Secret masking</td><td>A registered credential appears in the text</td><td>Replaced with a masked value</td></tr>
-          <tr><td>Mention and quote markers</td><td><code>[diana-at]</code> / <code>[diana-reply]</code> malformed or pointing at a missing message</td><td>Rewritten or removed</td></tr>
+          <tr><td>Mention and quote markers</td><td><code>&lt;diana-at/&gt;</code> / <code>&lt;diana-quote/&gt;</code> malformed or pointing at a missing message</td><td>Rewritten or removed</td></tr>
           <tr><td>Group unavailable</td><td>Confirmed left or disabled</td><td><code>ignored_unavailable_group</code></td></tr>
           <tr><td>Paused</td><td>Within a pause for this person</td><td><code>ignored_response_suppression</code></td></tr>
           <tr><td>Supplement</td><td>The person added a message that was merged into this turn</td><td>This draft is discarded and regenerated</td></tr>

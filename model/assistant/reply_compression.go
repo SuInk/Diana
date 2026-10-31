@@ -33,7 +33,7 @@ max_characters 为正数时，全部正文合计不得超过该 Unicode 字符�
 
 // replyCompressionContract 是输出格式：分条和换行标记、原样保留的代码块与消息段、
 // 只输出正文。compressionCandidateIssue 逐项核对这些，改坏了压缩结果会全部被退回。
-const replyCompressionContract = "\n" + `保留原文语气；消息边界使用 [diana-msg]，同一消息内换行使用 [diana-line]，不得输出真实换行符或其他控制标记。可按压缩后的内容调整边界。
+const replyCompressionContract = "\n" + `保留原文语气；消息边界使用 <diana-message/>，同一消息内换行使用 <diana-br/>，不得输出真实换行符或其他控制标记。可按压缩后的内容调整边界。
 代码围栏及其内容、CQ 消息段和提及必须原样保留，不得新增或丢弃。
 只输出压缩后的正文，不要输出解释或额外的 JSON 包装。无法在上限内保留必要内容时返回空字符串。`
 

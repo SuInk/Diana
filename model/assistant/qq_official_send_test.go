@@ -560,7 +560,7 @@ func TestQQOfficialGroupMentionUsesNativeAtTag(t *testing.T) {
 	api := newQQFakeAPI(t)
 	channel := api.channel()
 	const openid = "0A1B2C3D4E5F60718293A4B5C6D7E8F9"
-	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: "[diana-at:" + openid + "] 撤回挺稳的\n下次再说", ReplyMessageID: "in1"}); err != nil {
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: mentionMarkerFor(openid) + " 撤回挺稳的\n下次再说", ReplyMessageID: "in1"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(api.messages) != 1 {
@@ -580,7 +580,7 @@ func TestQQOfficialMentionPlainFallbackHidesOpenID(t *testing.T) {
 	api.rejectMarkdown = true
 	channel := api.channel()
 	const known, unknown = "0A1B2C3D4E5F60718293A4B5C6D7E8F9", "F9E8D7C6B5A4938271605F4E3D2C1B0A"
-	text := "[diana-at:" + unknown + "] 撤回挺稳的，[diana-at:" + known + "] 也看看"
+	text := mentionMarkerFor(unknown) + " 撤回挺稳的，" + mentionMarkerFor(known) + " 也看看"
 	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: text, MentionNames: map[string]string{known: "Winter"}, ReplyMessageID: "in1"}); err != nil {
 		t.Fatal(err)
 	}

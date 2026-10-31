@@ -52,7 +52,7 @@ func (t *dianaCrossPlatformTool) InputSchema() map[string]any {
 		"sender_user_id": toolStringParam("search：只看这个账号发的消息"),
 		"days":           toolIntParam("search：只看最近多少天", 1, 365),
 		"limit":          toolIntParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
-		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 [diana-msg]；只转附件时可留空"),
+		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 <diana-message/>；只转附件时可留空"),
 		"forward_media":  toolBoolParam("send：把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	})
 }

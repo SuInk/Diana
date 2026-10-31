@@ -22,7 +22,7 @@ const maxDisplayQuoteBlockRunes = 120
 // DisplayEventText 把一条消息渲染成控制台上给人看的一行。
 //
 // 和 PlainText 的区别只在两处标记：at 段没带昵称时向 resolve 要一个，引用段渲染成
-// 「回复 某人：原话」而不是 [diana-reply:数字ID]。那两种写法是给模型和出站适配器看
+// 「回复 某人：原话」而不是 <diana-quote id="数字ID"/>。那两种写法是给模型和出站适配器看
 // 的中间产物，人翻记录时只会看见一串号码，认不出提到了谁、回的是哪条。
 func DisplayEventText(event MessageEvent, resolve AtMentionNameResolver) string {
 	text := DisplaySegmentsText(event.Segments, event.Quoted, resolve)

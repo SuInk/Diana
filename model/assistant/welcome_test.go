@@ -332,7 +332,7 @@ func TestWelcomeRecordedAsGroupMessage(t *testing.T) {
 	t.Fatalf("welcome missing from group history: %#v", history)
 }
 
-// 模型用 [diana-msg] 分了条就按条发，只有第一条 @ 新人；要求一条发完时合成一条。
+// 模型用 <diana-message/> 分了条就按条发，只有第一条 @ 新人；要求一条发完时合成一条。
 // 两种情况下排版标记都不会原样发出去。
 func TestWelcomeLLMModeFollowsReplyLayout(t *testing.T) {
 	cases := []struct {

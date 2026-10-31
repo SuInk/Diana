@@ -685,10 +685,10 @@ func TestExtractOutgoingReplyMarkerParsesLeadingMarker(t *testing.T) {
 		wantID   string
 		wantRest string
 	}{
-		{name: "negative id", input: "[diana-reply:-797497448]就是这张，我喜欢的第 3 个房间。", wantID: "-797497448", wantRest: "就是这张，我喜欢的第 3 个房间。"},
-		{name: "positive id", input: "[diana-reply:30006]收到", wantID: "30006", wantRest: "收到"},
-		{name: "space after marker", input: "[diana-reply:30006]  收到", wantID: "30006", wantRest: "收到"},
-		{name: "marker only", input: "[diana-reply:30006]", wantID: "30006", wantRest: ""},
+		{name: "negative id", input: "<diana-quote id=\"-797497448\"/>就是这张，我喜欢的第 3 个房间。", wantID: "-797497448", wantRest: "就是这张，我喜欢的第 3 个房间。"},
+		{name: "positive id", input: "<diana-quote id=\"30006\"/>收到", wantID: "30006", wantRest: "收到"},
+		{name: "space after marker", input: "<diana-quote id=\"30006\"/>  收到", wantID: "30006", wantRest: "收到"},
+		{name: "marker only", input: "<diana-quote id=\"30006\"/>", wantID: "30006", wantRest: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id, rest, ok := extractOutgoingReplyMarker(tc.input)
@@ -702,11 +702,11 @@ func TestExtractOutgoingReplyMarkerParsesLeadingMarker(t *testing.T) {
 func TestExtractOutgoingReplyMarkerKeepsNonMarkerText(t *testing.T) {
 	// 只认开头且 ID 是数字的写法，正文里提到的字样必须原样留在文本里。
 	for _, input := range []string{
-		"我刚才[diana-reply:30006]过了",
-		"[diana-reply:谁]",
+		"我刚才<diana-quote id=\"30006\"/>过了",
+		"<diana-quote id=\"谁\"/>",
 		"[diana-reply:]",
 		"[diana-reply:30006",
-		"[diana-reply:12ab]",
+		"<diana-quote id=\"12ab\"/>",
 		"没有标记",
 	} {
 		id, rest, ok := extractOutgoingReplyMarker(input)
@@ -723,7 +723,7 @@ func TestApplyOutgoingReplyMarkerOverridesDefaultTarget(t *testing.T) {
 	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "-797497448", RawMessage: "第 3 个房间"})
 
 	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
-		Text:           "[diana-reply:-797497448]就是这张。",
+		Text:           "<diana-quote id=\"-797497448\"/>就是这张。",
 		ReplyMessageID: "current-message",
 	})
 	if msg.ReplyMessageID != "-797497448" {
@@ -748,7 +748,7 @@ func TestApplyOutgoingReplyMarkerIgnoresUnknownMessageID(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1", MessageID: "current-message"}
 
 	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
-		Text:           "[diana-reply:123456]原样发这句",
+		Text:           "<diana-quote id=\"123456\"/>原样发这句",
 		ReplyMessageID: "current-message",
 	})
 	if msg.ReplyMessageID != "" {
@@ -774,7 +774,7 @@ func TestPlainTextRendersNeutralReplyMarker(t *testing.T) {
 		{Type: "reply", Data: map[string]string{"id": "-797497448"}},
 		{Type: "text", Data: map[string]string{"text": "这张不错"}},
 	})
-	if got != "[diana-reply:-797497448]这张不错" {
+	if got != "<diana-quote id=\"-797497448\"/>这张不错" {
 		t.Fatalf("PlainText = %q", got)
 	}
 }
@@ -855,24 +855,24 @@ func TestReverseServerRejectsHandshakeWithoutRunningBot(t *testing.T) {
 // QQ 官方的 ROBOT1.0_ 长 ID 也要认得出：分条识别在标记消费之前，认不出的整行
 // 会被误判成「短标签：内容」的结构化行，自然分条就堵死了。
 func TestExtractOutgoingReplyMarkerParsesQQOfficialLongID(t *testing.T) {
-	input := replyMarkerPrefix + qqOfficialProbeID + "]就是这张，我喜欢的第 3 个房间。"
+	input := replyMarkerFor(qqOfficialProbeID) + "就是这张，我喜欢的第 3 个房间。"
 	id, rest, ok := extractOutgoingReplyMarker(input)
 	if !ok || id != qqOfficialProbeID || rest != "就是这张，我喜欢的第 3 个房间。" {
 		t.Fatalf("extractOutgoingReplyMarker(qq official) = (%q, %q, %t)", id, rest, ok)
 	}
 	// 伪装成标记的字样仍要原样留在文本里。
 	for _, nonMarker := range []string{
-		"[diana-reply:12ab]",
-		"[diana-reply:谁]",
+		"<diana-quote id=\"12ab\"/>",
+		"<diana-quote id=\"谁\"/>",
 		"[diana-reply:]",
-		"[diana-reply:" + qqOfficialProbeID + " 尾巴带空格]",
+		replyMarkerPrefix + qqOfficialProbeID + " 尾巴带空格" + dianaMarkerIDSuffix,
 	} {
 		if _, rest, ok := extractOutgoingReplyMarker(nonMarker); ok || rest != nonMarker {
 			t.Fatalf("extractOutgoingReplyMarker(%q) = (%q, %t), want untouched", nonMarker, rest, ok)
 		}
 	}
 	// stripReplyMarkers 同样要清得掉正文中间的 QQ 官方长标记。
-	if got := stripReplyMarkers("我刚才[" + replyMarkerPrefix[1:] + qqOfficialProbeID + "]过了"); got != "我刚才过了" {
+	if got := stripReplyMarkers("我刚才" + replyMarkerFor(qqOfficialProbeID) + "过了"); got != "我刚才过了" {
 		t.Fatalf("stripReplyMarkers(qq official) = %q", got)
 	}
 }

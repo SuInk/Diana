@@ -1028,6 +1028,7 @@ func (r *Runtime) wakeMemoryWorkers() {
 
 func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
 	run = r.withLLMIdentityPrivacyRun(ctx, run)
+	run = withDianaMarkupRun(run)
 	// 记忆抽取和归纳各自打了用途标签，却一直没挂记账：这两类调用的 token 从来
 	// 没进过统计。
 	run = r.withDebugTraceRun(ctx, run)

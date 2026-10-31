@@ -979,7 +979,7 @@ func (c *nativeFinalizeClient) Generate(_ context.Context, req llm.GenerateReque
 		}, nil
 	}
 	return &llm.GenerateResponse{
-		Text:      "文件内容是[diana-line]第二行「带引号」的正文",
+		Text:      "文件内容是<diana-br/>第二行「带引号」的正文",
 		ToolCalls: []llm.ToolCall{{ID: "call-2", Name: finalizeToolName, Arguments: map[string]any{}}},
 	}, nil
 }
@@ -995,7 +995,7 @@ func TestRunnerTakesFinalReplyFromTextWhenFinalizeCarriesNoContent(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Text != "文件内容是[diana-line]第二行「带引号」的正文" || response.FinishReason != "final" {
+	if response.Text != "文件内容是<diana-br/>第二行「带引号」的正文" || response.FinishReason != "final" {
 		t.Fatalf("response=%#v", response)
 	}
 	if tool.calls != 1 || len(client.requests) != 2 {
@@ -1009,14 +1009,14 @@ func (c *finalizeNewlineClient) Generate(_ context.Context, _ llm.GenerateReques
 	c.calls++
 	content := "第一行\n第二行"
 	if c.calls > 1 {
-		content = "第一行[diana-line]第二行"
+		content = "第一行<diana-br/>第二行"
 	}
 	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{
 		ID: "final", Name: finalizeToolName, Arguments: map[string]any{"content": content},
 	}}}, nil
 }
 
-// 真实换行不再打回：发送层把它当 [diana-line] 处理（见 assistant.normalizeExplicitReplyLayout）。
+// 真实换行不再打回：发送层把它当 <diana-br/> 处理（见 assistant.normalizeExplicitReplyLayout）。
 func TestRunnerKeepsLiteralNewlinesInFinalizeContent(t *testing.T) {
 	client := &finalizeNewlineClient{}
 	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(&countingTool{name: "unused"}))

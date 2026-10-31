@@ -118,14 +118,14 @@ func (c *plainTextReplayClient) Generate(ctx context.Context, req llm.GenerateRe
 
 func TestPlainTextNeedsRepairOnlyForBareActions(t *testing.T) {
 	for text, want := range map[string]bool{
-		"":                             true,
-		"[搜索 WePlay 2026 参展商名单]":       true,
-		"【查询天气】":                       true,
-		"腿子不发，想要图自己找去~":                false,
-		"我查一下":                         false,
-		"[diana-reply:im_message_1]好呀": false,
-		"[1] 第一条 [2] 第二条":              false,
-		"（笑）这个还行":                      false,
+		"":                       true,
+		"[搜索 WePlay 2026 参展商名单]": true,
+		"【查询天气】":                 true,
+		"腿子不发，想要图自己找去~":          false,
+		"我查一下":                   false,
+		"<diana-quote id=\"im_message_1\"/>好呀": false,
+		"[1] 第一条 [2] 第二条":                      false,
+		"（笑）这个还行":                              false,
 	} {
 		if got := plainTextNeedsRepair(text); got != want {
 			t.Errorf("plainTextNeedsRepair(%q) = %v, want %v", text, got, want)

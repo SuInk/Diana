@@ -153,12 +153,12 @@ func (r *Runtime) composeMaiBotReply(ctx context.Context, cfg BotConfig, event M
 		rendered = strings.Join(markers, " ") + " " + rendered
 	}
 	if quoted {
-		rendered = replyMarkerPrefix + replyID + "]" + rendered
+		rendered = replyMarkerFor(replyID) + rendered
 	}
 	return restoreReplyControlIntent(rendered, intent)
 }
 
-// maiBotReplyLines 把改写稿里的真实换行转成 [diana-line]。改写提示词沿用 MaiBot
+// maiBotReplyLines 把改写稿里的真实换行转成 <diana-br/>。改写提示词沿用 MaiBot
 // 原文，不认识 Diana 的换行标记，分点总结会直接写真实换行；后面的版式整理把真实
 // 换行当随手折行压成空格，列表就挤成一行。保留换行时（本轮要求优先，其次是这条
 // 消息的设置，最后是机器人配置，默认保留）才转换；收拢模式照旧交给后面压平。

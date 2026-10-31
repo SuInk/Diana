@@ -62,7 +62,7 @@ func TestProactiveRepliesHonorExplicitMarkers(t *testing.T) {
 	}
 }
 
-// 真实换行等同 [diana-line]：两句普通话之间的换行和标记一样拆成两条。
+// 真实换行等同 <diana-br/>：两句普通话之间的换行和标记一样拆成两条。
 func TestRoutedRequestRawNewlineActsAsLineMarker(t *testing.T) {
 	for _, natural := range []bool{true, false} {
 		cfg := BotConfig{NaturalReplySplitEnabled: boolPointer(natural), ReplyMaxBubbles: 4}.WithDefaults()

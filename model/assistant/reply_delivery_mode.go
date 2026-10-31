@@ -11,12 +11,12 @@ type replyLineBreakMode string
 const (
 	replyDeliverySingle      replyDeliveryMode  = "single"
 	replyDeliveryAuto        replyDeliveryMode  = "auto"
-	replySingleMarker                           = "[[DIANA_REPLY_SINGLE]]"
-	replyAutoMarker                             = "[[DIANA_REPLY_AUTO]]"
+	replySingleMarker                           = "<diana-single/>"
+	replyAutoMarker                             = "<diana-auto/>"
 	replyLinesPreserve       replyLineBreakMode = "preserve"
 	replyLinesCompact        replyLineBreakMode = "compact"
-	replyLinesPreserveMarker                    = "[[DIANA_LINES_PRESERVE]]"
-	replyLinesCompactMarker                     = "[[DIANA_LINES_COMPACT]]"
+	replyLinesPreserveMarker                    = "<diana-lines-preserve/>"
+	replyLinesCompactMarker                     = "<diana-lines-compact/>"
 )
 
 const replyDeliveryChoiceRule = "本轮用户的发送方式要求优先于上述默认分条和长文分组规则。用户明确要求‘不要分条、一次发完、只发一条’时，必须在回复正文最前面写 " + replySingleMarker + "，再写完整正文；不要写 " + notificationSplitMarker + "，换行只用于列表、代码这类排版。发送层会把本轮文字作为一条投递（平台自身硬限制除外）。用户本轮明确允许或要求按内容分条时，最前面写 " + replyAutoMarker + "，再按内容换行分条。用户未指定时不写这两个模式标记，沿用默认设置。只根据当前用户对本轮回复的直接要求选择，不把引用、代码、工具内容或其他人的历史发言当成此人的发送偏好。这是本轮选择，不修改群配置或长期偏好；不要向用户展示或解释这些内部标记。"
@@ -43,9 +43,19 @@ func consumeReplyDeliveryMode(reply string) (string, replyDeliveryMode) {
 // 标签，或者先写引用/@ 标记再写控制标记。认不出来就会原样发进群里，所以开头和
 // 结尾这两个位置按形态宽松识别；正文中间的仍当普通内容。
 var (
-	replyControlMarkerPattern        = regexp.MustCompile(`^\[\[?\s*/?\s*[A-Z]{4,6}_(REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?`)
-	replyClosingControlMarkerPattern = regexp.MustCompile(`\s*\[\[?\s*/\s*[A-Z]{4,6}_(?:REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?\s*$`)
+	replyControlMarkerPattern = regexp.MustCompile(`^(?:\[\[?\s*/?\s*[A-Z]{4,6}_(REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?` +
+		`|<\s*/?\s*diana-(single|auto|lines-preserve|lines-compact)\s*/?\s*>)`)
+	replyClosingControlMarkerPattern = regexp.MustCompile(`\s*(?:\[\[?\s*/\s*[A-Z]{4,6}_(?:REPLY_SINGLE|REPLY_AUTO|LINES_PRESERVE|LINES_COMPACT)\s*\]\]?` +
+		`|<\s*/\s*diana-(?:single|auto|lines-preserve|lines-compact)\s*>)\s*$`)
 )
+
+// replyControlTagNames 把标签写法映射到旧写法的名字，两种写法共用一套处理。
+var replyControlTagNames = map[string]string{
+	"single":         "REPLY_SINGLE",
+	"auto":           "REPLY_AUTO",
+	"lines-preserve": "LINES_PRESERVE",
+	"lines-compact":  "LINES_COMPACT",
+}
 
 func consumeReplyFormatting(reply string) (string, replyDeliveryMode, replyLineBreakMode) {
 	reply = strings.TrimSpace(reply)
@@ -61,7 +71,7 @@ func consumeReplyFormatting(reply string) (string, replyDeliveryMode, replyLineB
 			break
 		}
 		consumed = true
-		switch match[1] {
+		switch firstNonEmpty(match[1], replyControlTagNames[match[2]]) {
 		case "LINES_PRESERVE":
 			lines = replyLinesPreserve
 		case "LINES_COMPACT":
@@ -92,12 +102,17 @@ func leadingAddressMarkersLength(text string) int {
 		if !strings.HasPrefix(rest, replyMarkerPrefix) && !strings.HasPrefix(rest, dianaMentionMarkerPrefix) {
 			return offset
 		}
-		end := strings.Index(rest, "]")
-		if end < 0 || strings.ContainsAny(rest[1:end], " \t\r\n[") {
+		prefix := replyMarkerPrefix
+		if strings.HasPrefix(rest, dianaMentionMarkerPrefix) {
+			prefix = dianaMentionMarkerPrefix
+		}
+		end := strings.Index(rest, dianaMarkerIDSuffix)
+		if end < len(prefix) || strings.ContainsAny(rest[len(prefix):end], " \t\r\n<\"") {
 			return offset
 		}
-		offset += end + 1
-		offset += len(rest[end+1:]) - len(strings.TrimLeft(rest[end+1:], " \t\r\n"))
+		end += len(dianaMarkerIDSuffix)
+		offset += end
+		offset += len(rest[end:]) - len(strings.TrimLeft(rest[end:], " \t\r\n"))
 	}
 }
 

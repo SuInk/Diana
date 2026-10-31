@@ -117,7 +117,7 @@ func TestIdentityPrivacyProtectsReplayedToolCallArguments(t *testing.T) {
 }
 
 // 消息 ID 也要脱敏，否则模型手里握着一批真实 ID。难点在于它可以是负数，而且必须能
-// 原路还原——不然模型写的 [diana-reply:别名] 会因为不是纯数字而被丢弃，引用悄悄失效。
+// 原路还原——不然模型写的 <diana-quote id="别名"/> 会因为不是纯数字而被丢弃，引用悄悄失效。
 func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 	scope := newIdentityPrivacyScope()
 	scope.registerEvent(MessageEvent{
@@ -126,11 +126,11 @@ func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 	})
 
 	for _, sample := range []string{
-		"[diana-reply:1145141919] 收到",
-		"[diana-reply:-810975] 负数 ID",
+		"<diana-quote id=\"1145141919\"/> 收到",
+		"<diana-quote id=\"-810975\"/> 负数 ID",
 		`{"message_id":"1145141919","quoted_message_id":"-810975"}`,
 		// 事件里没登记、只在历史文本里出现过的也要认出来。
-		"[diana-reply:2233445566] 旧消息",
+		"<diana-quote id=\"2233445566\"/> 旧消息",
 	} {
 		masked := scope.protectText(sample)
 		if strings.Contains(masked, "1145141919") || strings.Contains(masked, "810975") || strings.Contains(masked, "2233445566") {
@@ -153,10 +153,10 @@ func TestIdentityPrivacyReplyMarkerSurvivesMasking(t *testing.T) {
 		t.Fatal("message id should have been aliased")
 	}
 	// 别名直接交给出站解析会被拒（不是纯数字），这正是必须先还原的原因。
-	if _, _, ok := extractOutgoingReplyMarker("[diana-reply:" + alias + "] 看到了"); ok {
+	if _, _, ok := extractOutgoingReplyMarker(replyMarkerFor(alias) + " 看到了"); ok {
 		t.Fatal("alias should not parse as a reply target before restoration")
 	}
-	id, rest, ok := extractOutgoingReplyMarker(scope.restoreText("[diana-reply:" + alias + "] 看到了"))
+	id, rest, ok := extractOutgoingReplyMarker(scope.restoreText(replyMarkerFor(alias) + " 看到了"))
 	if !ok || id != "1145141919" || rest != "看到了" {
 		t.Fatalf("reply marker broken after restoration: id=%q rest=%q ok=%v", id, rest, ok)
 	}

@@ -125,8 +125,8 @@ func StripInlineFinalizeTags(text string) (body string, attrs map[string]string,
 // 只有标签外什么都没有时才看标签里的 content 和 silent。
 //
 // 标签里包的也可能是整个信封：线上 10-27 swe-2 写出
-// 「[agent_finalize]{"content":"…[diana-msg]…","silent":false,"sticker":"",…}[/agent_finalize]」，
-// 剥完标签剩下的正好是 JSON，原来被当成正文，再按 [diana-msg] 拆成两条半截 JSON 发进了群。
+// 「[agent_finalize]{"content":"…<diana-message/>…","silent":false,"sticker":"",…}[/agent_finalize]」，
+// 剥完标签剩下的正好是 JSON，原来被当成正文，再按 <diana-message/> 拆成两条半截 JSON 发进了群。
 // 这时按信封解码，判据和 finalizeEnvelopeFromText 一致，所以要带上调用方声明的字段。
 func inlineFinalizeAction(text string, declared ...FinalizeField) (llmAction, bool) {
 	body, attrs, ok := StripInlineFinalizeTags(text)

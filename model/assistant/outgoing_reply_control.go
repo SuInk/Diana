@@ -12,12 +12,12 @@ func consumeOutgoingReplyControl(text string) (string, string, bool) {
 	var id string
 	count := 0
 	for strings.HasPrefix(rest, replyMarkerPrefix) {
-		end := strings.IndexByte(rest, ']')
+		end := strings.Index(rest, dianaMarkerIDSuffix)
 		if end < 0 {
 			break
 		}
 		id = rest[len(replyMarkerPrefix):end]
-		rest = strings.TrimLeft(rest[end+1:], " \t\r\n")
+		rest = strings.TrimLeft(rest[end+len(dianaMarkerIDSuffix):], " \t\r\n")
 		count++
 	}
 	if count == 0 {
@@ -46,9 +46,11 @@ var (
 	// 出前几位截断长 ID（「106020oops」被提取成「106020」）。长分支要求至少
 	// 9 个字符，短数字 ID 在它上面匹配不上，会落到第二分支，两边都能取到完整载荷。
 	dianaReplyVariantCore      = `[Dd]iana[-_ ]?reply[ \t]*[:：=][ \t]*([0-9A-Za-z][0-9A-Za-z_.+=/!-]{8,199}|-?[0-9]{1,19})`
-	dianaReplyVariantPattern   = regexp.MustCompile(mentionCodeSpanAlternation + `[\[<({【][ \t]*` + dianaReplyVariantCore + `[ \t]*[\]>)}】]`)
+	dianaReplyVariantPattern   = regexp.MustCompile(mentionCodeSpanAlternation + dianaCanonicalIDTagAlternation + `[\[<({【][ \t]*` + dianaReplyVariantCore + `[ \t]*[\]>)}】]`)
 	dianaReplyVariantIDPattern = regexp.MustCompile(dianaReplyVariantCore)
-	dianaReplyResiduePattern   = regexp.MustCompile(mentionCodeSpanAlternation +
+	// 标准引用标签只认开头那一个，正文中间的同样是残留。
+	dianaReplyResiduePattern = regexp.MustCompile(mentionCodeSpanAlternation +
+		`<diana-quote id="[^"\n]{1,200}"/>|` +
 		`[\[<({【][^\[\]<>(){}【】\n]{0,80}?[Dd]iana[-_ ]?reply[^\[\]<>(){}【】\n]{0,200}?[\]>)}】]`)
 )
 
@@ -64,7 +66,7 @@ func normalizeDianaReplyVariants(text string) string {
 		id := text[match[2]:match[3]]
 		rest := text[match[1]:]
 		if full := dianaReplyVariantIDPattern.FindStringSubmatch("diana-reply:" + id); full != nil && full[1] == id {
-			text = replyMarkerPrefix + id + "]" + rest
+			text = replyMarkerFor(id) + rest
 		} else {
 			text = rest
 		}
@@ -73,14 +75,14 @@ func normalizeDianaReplyVariants(text string) string {
 		return text
 	}
 	return dianaReplyVariantPattern.ReplaceAllStringFunc(text, func(token string) string {
-		if isMentionCodeSpan(token) {
+		if isMentionCodeSpan(token) || isCanonicalDianaIDTag(token) {
 			return token
 		}
 		match := dianaReplyVariantIDPattern.FindStringSubmatch(token)
 		if match == nil {
 			return token
 		}
-		return replyMarkerPrefix + match[1] + "]"
+		return replyMarkerFor(match[1])
 	})
 }
 

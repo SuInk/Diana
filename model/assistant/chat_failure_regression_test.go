@@ -25,12 +25,12 @@ func TestUnverifiedRejectionUsesFailoverWithoutPolicyClassification(t *testing.T
 }
 
 func TestMalformedLayoutMarkersDoNotLeak(t *testing.T) {
-	for _, marker := range []string{"[diana-line]", "[ diana-line]", "[diana-line ]", "[\tdiana - line\t]"} {
+	for _, marker := range []string{"<diana-br/>", "[ diana-line]", "[diana-line ]", "[\tdiana - line\t]"} {
 		if got := normalizeReply("第一行"+marker+"第二行", 0); got != "第一行"+notificationLineMarker+"第二行" {
 			t.Fatalf("%q => %q", marker, got)
 		}
 	}
-	code := "`[ diana-line]`\n```text\n[diana-line]\n```"
+	code := "`[ diana-line]`\n```text\n<diana-br/>\n```"
 	if got := normalizeLegacyLayoutMarkers(code); got != code {
 		t.Fatalf("code changed: %q", got)
 	}

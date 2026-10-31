@@ -66,7 +66,7 @@ func TestTelegramPersistedHistoryReply(t *testing.T) {
 				target = scope.registerMessageID(result.Items[0].MessageID)
 				ctx = withIdentityPrivacyScope(ctx, scope)
 			}
-			_, err = runtime.sendOutgoingWithResult(ctx, event, OutgoingMessage{GroupID: event.GroupID, ReplyMessageID: event.MessageID, Text: fmt.Sprintf("[diana-reply:%s]就是这条", target)})
+			_, err = runtime.sendOutgoingWithResult(ctx, event, OutgoingMessage{GroupID: event.GroupID, ReplyMessageID: event.MessageID, Text: fmt.Sprintf("<diana-quote id=\"%s\"/>就是这条", target)})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -90,15 +90,15 @@ func TestOutgoingReplyControlModesAndInvalidTargets(t *testing.T) {
 		prefix string
 		wantID string
 	}{
-		{"auto historical target", ReplyDecorationAuto, "[diana-reply:106019]", "106019"},
-		{"on ignores historical target", ReplyDecorationOn, "[diana-reply:106019]", "106020"},
-		{"off ignores valid target", ReplyDecorationOff, "[diana-reply:106019]", ""},
-		{"unknown alias", ReplyDecorationAuto, "[diana-reply:im_message_702fc1baad94]", ""},
-		{"missing target", ReplyDecorationAuto, "[diana-reply:999999]", ""},
-		{"cross session target", ReplyDecorationAuto, "[diana-reply:106018]", ""},
-		{"invalid numeric target", ReplyDecorationAuto, "[diana-reply:106020oops]", ""},
-		{"multiple targets", ReplyDecorationAuto, "[diana-reply:106019][diana-reply:106020]", ""},
-		{"whitespace", ReplyDecorationAuto, " \n[diana-reply:106019] ", "106019"},
+		{"auto historical target", ReplyDecorationAuto, "<diana-quote id=\"106019\"/>", "106019"},
+		{"on ignores historical target", ReplyDecorationOn, "<diana-quote id=\"106019\"/>", "106020"},
+		{"off ignores valid target", ReplyDecorationOff, "<diana-quote id=\"106019\"/>", ""},
+		{"unknown alias", ReplyDecorationAuto, "<diana-quote id=\"im_message_702fc1baad94\"/>", ""},
+		{"missing target", ReplyDecorationAuto, "<diana-quote id=\"999999\"/>", ""},
+		{"cross session target", ReplyDecorationAuto, "<diana-quote id=\"106018\"/>", ""},
+		{"invalid numeric target", ReplyDecorationAuto, "<diana-quote id=\"106020oops\"/>", ""},
+		{"multiple targets", ReplyDecorationAuto, "<diana-quote id=\"106019\"/><diana-quote id=\"106020\"/>", ""},
+		{"whitespace", ReplyDecorationAuto, " \n<diana-quote id=\"106019\"/> ", "106019"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := NewRuntime(BotConfig{ReplyReferenceMode: tc.mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -119,12 +119,12 @@ func TestReplyAliasRestorationRequiresExactIdentifier(t *testing.T) {
 	scope := newIdentityPrivacyScope()
 	alias := scope.registerMessageID("106020")
 	for _, text := range []string{alias + "7", alias + "_stale", "im_message_702fc1baad94"} {
-		input := replyMarkerPrefix + text + "]正文"
+		input := replyMarkerFor(text) + "正文"
 		if got := scope.restoreText(input); got != input {
 			t.Fatalf("unknown alias partially restored: %q -> %q", input, got)
 		}
 	}
-	if got := scope.restoreText(replyMarkerPrefix + alias + "]正文"); got != "[diana-reply:106020]正文" {
+	if got := scope.restoreText(replyMarkerFor(alias) + "正文"); got != "<diana-quote id=\"106020\"/>正文" {
 		t.Fatalf("known alias not restored: %q", got)
 	}
 	// A late sending path can still resolve a known alias from the same scope.
@@ -132,7 +132,7 @@ func TestReplyAliasRestorationRequiresExactIdentifier(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "10001", MessageID: "106020"}
 	for _, value := range []string{alias, alias + "7"} {
 		msg := runtime.applyOutgoingReplyMarker(withIdentityPrivacyScope(context.Background(), scope), event,
-			OutgoingMessage{Text: replyMarkerPrefix + value + "]正文"})
+			OutgoingMessage{Text: replyMarkerFor(value) + "正文"})
 		want := ""
 		if value == alias {
 			want = event.MessageID
@@ -156,7 +156,7 @@ func TestOutgoingReplyControlAcceptsQQOfficialMarker(t *testing.T) {
 		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
 	}
 	msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
-		Text:           replyMarkerPrefix + qqOfficialProbeID + "]就是这条",
+		Text:           replyMarkerFor(qqOfficialProbeID) + "就是这条",
 		ReplyMessageID: qqOfficialProbeID,
 	})
 	if msg.ReplyMessageID != qqOfficialProbeID || msg.Text != "就是这条" {
@@ -167,7 +167,7 @@ func TestOutgoingReplyControlAcceptsQQOfficialMarker(t *testing.T) {
 	old := "ROBOT1.0_0wt33G5adbvP5OLbYGAoW.OLDMSG-ID!"
 	runtime.remember(MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindGroup, GroupID: "g-qq", UserID: "member-1", MessageID: old, RawMessage: "旧消息"})
 	msg = runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
-		Text:           replyMarkerPrefix + old + "]翻到这条了",
+		Text:           replyMarkerFor(old) + "翻到这条了",
 		ReplyMessageID: qqOfficialProbeID,
 	})
 	if msg.ReplyMessageID != old || msg.Text != "翻到这条了" {
@@ -176,7 +176,7 @@ func TestOutgoingReplyControlAcceptsQQOfficialMarker(t *testing.T) {
 
 	// 本会话查不到的目标只剥标记照发，不指向空消息。
 	msg = runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{
-		Text:           replyMarkerPrefix + "ROBOT1.0_not-in-history!]找不到就算了",
+		Text:           replyMarkerFor("ROBOT1.0_not-in-history!") + "找不到就算了",
 		ReplyMessageID: qqOfficialProbeID,
 	})
 	if msg.ReplyMessageID != "" || msg.Text != "找不到就算了" {
@@ -195,7 +195,7 @@ func TestReplyMarkerIDAcceptableKeepsOtherPlatformsNumeric(t *testing.T) {
 			t.Fatalf("platform %q must accept numeric ids as before", platform)
 		}
 	}
-	for _, id := range []string{"im_message_702fc1baad94", "[diana-reply:30006]", "who am i"} {
+	for _, id := range []string{"im_message_702fc1baad94", "<diana-quote id=\"30006\"/>", "who am i"} {
 		if replyMarkerIDAcceptable(PlatformQQOfficial, id) {
 			t.Fatalf("qq official must reject unusable payload %q", id)
 		}
@@ -214,7 +214,7 @@ func TestReplyMarkerIDAcceptableKeepsOtherPlatformsNumeric(t *testing.T) {
 // 模型写歪的 QQ 官方标记（外壳、分隔符不对）也要能扶正，残骸要能清掉。
 func TestOutgoingNormalizesQQOfficialReplyMarkerVariants(t *testing.T) {
 	got := normalizeDianaReplyVariants("[ diana-reply : " + qqOfficialProbeID + " ]喵？这张图这次没送进我眼里")
-	if want := replyMarkerPrefix + qqOfficialProbeID + "]喵？这张图这次没送进我眼里"; got != want {
+	if want := replyMarkerFor(qqOfficialProbeID) + "喵？这张图这次没送进我眼里"; got != want {
 		t.Fatalf("输入 %q\n得到 %q\n期望 %q", "[ diana-reply : "+qqOfficialProbeID+" ]喵？", got, want)
 	}
 	if id, _, ok := consumeOutgoingReplyControl(got); !ok || id != qqOfficialProbeID {
@@ -222,12 +222,12 @@ func TestOutgoingNormalizesQQOfficialReplyMarkerVariants(t *testing.T) {
 	}
 
 	// 数字尾巴不能被截成前几位：长分支在前，纯数字落第二分支，两边都取完整载荷。
-	if id, _, ok := consumeOutgoingReplyControl(normalizeDianaReplyVariants("[diana-reply:106020oops]")); !ok || id != "106020oops" {
+	if id, _, ok := consumeOutgoingReplyControl(normalizeDianaReplyVariants("<diana-quote id=\"106020oops\"/>")); !ok || id != "106020oops" {
 		t.Fatalf("mixed payload must be kept whole, got id=%q ok=%v", id, ok)
 	}
 
 	// 正文中间的 QQ 官方长标记残骸（发送层只认开头那一个）要整段清掉。
-	residue := "这句话里 [diana-reply:" + qqOfficialProbeID + "] 混了个引用标记"
+	residue := "这句话里 " + replyMarkerFor(qqOfficialProbeID) + " 混了个引用标记"
 	if got := dropResidualDianaReplyMarkers(residue); got != "这句话里 混了个引用标记" {
 		t.Fatalf("residue survived: %q", got)
 	}
@@ -258,7 +258,7 @@ func TestOutgoingReplyDiscardDiagnostics(t *testing.T) {
 			logs := &captureAppLogs{}
 			runtime.SetAppLogWriter(logs)
 			event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-10001", MessageID: "9"}
-			msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{Text: "[diana-reply:" + tc.target + "]private-test-body"})
+			msg := runtime.applyOutgoingReplyMarker(context.Background(), event, OutgoingMessage{Text: replyMarkerFor(tc.target) + "private-test-body"})
 			if msg.Text != "private-test-body" || msg.ReplyMessageID != "" {
 				t.Fatalf("message=%#v", msg)
 			}
@@ -280,7 +280,7 @@ func TestOutgoingReplyDiscardDiagnostics(t *testing.T) {
 func TestNormalizeDianaReplyVariantsBarePrefix(t *testing.T) {
 	cases := map[string]string{
 		"[reply:...] 念旧说的应该是我那句回得慢": "念旧说的应该是我那句回得慢",
-		"[reply:12345]好":        "[diana-reply:12345]好",
+		"[reply:12345]好":        "<diana-quote id=\"12345\"/>好",
 		"【reply：】嗯":             "嗯",
 		"正文里聊 [reply:...] 这种写法": "正文里聊 [reply:...] 这种写法",
 	}

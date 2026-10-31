@@ -2596,7 +2596,7 @@ func (r *Runtime) decisionEventRecord(event MessageEvent, text string, outcome s
 }
 
 // eventRecordDisplayText 把首页实时事件流和状态快照里的正文换成给人看的写法：@ 补
-// 昵称，引用写成「回复 某人：原话」，而不是 [diana-reply:数字ID]。事件页是读的时候
+// 昵称，引用写成「回复 某人：原话」，而不是 <diana-quote id="数字ID"/>。事件页是读的时候
 // 重新渲染的（见 storage.ListInboundEventDetails），首页这两处只有 EventRecord 这
 // 一份文本，所以要在记录的时候就渲染好。
 //
@@ -6002,7 +6002,7 @@ func currentSenderMentionRule(cfg BotConfig) string {
 	case ReplyDecorationOn:
 		return "当前发言者是在直接询问你时，发送层会在第一条回复开头引用当前消息并 @ 当前发言者，这部分不需要你输出 CQ at。"
 	case ReplyDecorationOff:
-		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 [diana-at:成员user_id]。"
+		return "发送层不会自动 @ 任何人。当前发言者这一位按本群习惯通常不用 @，需要点名时自己写 <diana-at id=\"成员user_id\"/>。"
 	default:
 		return "发送层不会自动 @ 任何人，包括当前发言者。这一轮要不要 @ 当前发言者，按本轮单独给出的那条规则判断；判断为要，就自己在回复最开头写出来。"
 	}
@@ -7078,7 +7078,7 @@ func dedupeStrings(values []string) []string {
 	return out
 }
 
-// applyOutgoingReplyMarker 把模型写在正文开头的 [diana-reply:ID] 变成真正的 reply 段。
+// applyOutgoingReplyMarker 把模型写在正文开头的 <diana-quote id="ID"/> 变成真正的 reply 段。
 // auto 模式接受模型指定的目标，on/off 模式由程序控制，不让模型覆盖。
 // 标记与入站渲染同形，所以模型也可能是在照抄用户原话或干脆编了个 ID；只有本
 // 会话里确实存在这条消息才生成 reply 段，否则只把标记去掉按普通文本发出去。
@@ -7159,7 +7159,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 	return msg
 }
 
-// resolveOutgoingMentionNames 给正文里的 [diana-at:ID] 标记配上显示用的昵称。
+// resolveOutgoingMentionNames 给正文里的 <diana-at id="ID"/> 标记配上显示用的昵称。
 //
 // 标记里只有 id——昵称会改、会重名，不能当标识。但 Telegram 的 text_mention 需要
 // 一段可见文字，所以在这里按 id 查一次昵称。先查本会话内存里的近期消息加当前
@@ -7394,7 +7394,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
-// 与 [diana-msg] 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
+// 与 <diana-message/> 在这里只是排版，不是分条信号；人格预设的短句切分（群友风格把每条压到
 // 160 字）会把一张卡片拦腰截断，把链接甩到下一条里。所以这里只按平台长度兜底。
 func (r *Runtime) sendNotification(ctx context.Context, event MessageEvent, text string) error {
 	_, err := r.sendNotificationWithIDs(ctx, event, text)
@@ -7633,7 +7633,7 @@ func (r *Runtime) outgoingHistoryEvent(source MessageEvent, msg OutgoingMessage)
 	raw := strings.TrimSpace(msg.Text)
 	// 提及标记不能原样留在历史里。它是给发送层看的中间形式，发出去的那一份已经
 	// 按平台翻译过了（OneBot 是 at 段，Telegram 是 text_mention），历史却还留着
-	// [diana-at:10002] 的话，事件页显示的就不是群里实际看到的样子，模型下一轮读
+	// <diana-at id="10002"/> 的话，事件页显示的就不是群里实际看到的样子，模型下一轮读
 	// 自己的发言也会读到一个没渲染的标记。segments 这时已经翻好了，从它取。
 	if raw == "" || strings.Contains(raw, dianaMentionMarkerPrefix) {
 		raw = firstNonEmpty(strings.TrimSpace(PlainText(segments)), raw)
@@ -8117,7 +8117,7 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	// 按群消息发：拿通知事件当来源，发出去的欢迎会被记成一条没有群号的私聊，
 	// 群上下文里就没有它，机器人不知道自己欢迎过谁。
 	//
-	// 模型生成的欢迎和普通回复一样可能带排版标记、用 [diana-msg] 分成几条，按同一套
+	// 模型生成的欢迎和普通回复一样可能带排版标记、用 <diana-message/> 分成几条，按同一套
 	// 规则消费和拆开；只有第一条 @ 新人。
 	welcome, target := prepareReplyDelivery(welcome, eventTriggerDeliveryEvent(event))
 	sent := 0
@@ -9211,19 +9211,19 @@ const chunkOrphanTolerance = 12
 // notificationSplitMarker 是模型显式要求「这里换一条消息发」的标记。
 //
 // 用方括号而不是尖括号：尖括号标记会把模型带进 HTML 语境，它写到一半常先冒出一个
-// [diana-msg] 再补上标记，或者整个转义成实体。方括号和 [diana-at:ID] 是同一家族的标记，
+// <diana-message/> 再补上标记，或者整个转义成实体。方括号和 <diana-at id="ID"/> 是同一家族的标记，
 // 模型已经在按字面写它们。不兼容更早的写法：旧标记只会原样发出去，不再归一化。
 const (
-	notificationSplitMarker = "[diana-msg]"
-	notificationLineMarker  = "[diana-line]"
+	notificationSplitMarker = "<diana-message/>"
+	notificationLineMarker  = "<diana-br/>"
 )
 
 // normalizeExplicitReplyLayout 把模型写的真实换行并进标记协议：每个真实换行等同
-// [diana-line]，空行同样只算一次换行。之后 splitChatReply 按现有规则处理——几句
+// <diana-br/>，空行同样只算一次换行。之后 splitChatReply 按现有规则处理——几句
 // 普通话之间的换行拆成几条发（QQ 气泡里断行不好看），列表、代码、表格整块留在一条。
 //
 // 以前真实换行是协议错误：收尾里带 CR/LF 就整轮打回重写，线上约 7% 的回合因此多等
-// 一次请求，而重写的结果几乎都是把换行原样换成 [diana-msg]。模型写换行的本意就是
+// 一次请求，而重写的结果几乎都是把换行原样换成 <diana-message/>。模型写换行的本意就是
 // 分开说，这里直接按这个意思发。
 func normalizeExplicitReplyLayout(text string) string {
 	text = normalizeLegacyLayoutMarkers(text)
@@ -9253,14 +9253,14 @@ func restoreExplicitReplyLines(text string) string {
 	return strings.ReplaceAll(text, notificationLineMarker, "\n")
 }
 
-// splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 [diana-msg]，
+// splitReply 把一段要发出去的文本切成若干条消息：只认模型显式写的 <diana-message/>，
 // 再按长度兜底。错误提示和结构化通知走这一套——它们是一条完整的诊断或一张事实
 // 卡片，换行是卡片自己的排版（仓库订阅那张就是紧凑两行），拆开就没法读了。
 // 聊天发言另走 splitChatReply。
 //
 // 空行不是分条信号。模型按 Markdown 习惯用空行做段落间距，运行时却曾把它当成消息
 // 边界——同一个符号两边理解不一样，分条位置就全看模型的排版习惯。提示词已经从源头
-// 要求「不要出现空行，要分条就写 [diana-msg]」（见 replyBlankLineRule），这里把残留的
+// 要求「不要出现空行，要分条就写 <diana-message/>」（见 replyBlankLineRule），这里把残留的
 // 空行按排版收掉，不再据此分条。
 //
 // 这一版之前还有一套「清单识别」：扫到三行以上的项目符号、编号或「短标签：内容」
@@ -9301,7 +9301,7 @@ func splitVerbatimReply(reply string) []string {
 
 // splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
-// 消息边界是 [diana-msg]；真实换行等同 [diana-line]（见 normalizeExplicitReplyLayout），
+// 消息边界是 <diana-message/>；真实换行等同 <diana-br/>（见 normalizeExplicitReplyLayout），
 // 普通话之间的换行再由 splitPlainProseLines 拆成几条。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
@@ -9379,7 +9379,7 @@ type chatSplitLimits struct {
 	SingleMessage bool // 本轮用户要求一条发送，优先于自然分条和显式分条标记。
 	ChunkSize     int  // 单条消息的硬上限，撞上了在最近的标点处切开
 	MaxBubbles    int  // 分出来最多几条，超了就退回粗一档
-	// MarkerOnly 关掉自然分条：只认模型显式写的 [diana-msg]，换行只当排版。
+	// MarkerOnly 关掉自然分条：只认模型显式写的 <diana-message/>，换行只当排版。
 	// 取反着写（默认值是「开」）：自然分条是默认行为，零值应该等于默认行为。
 	MarkerOnly bool
 	// PreserveSoftNewlines 关闭发送层的软换行整理。它跟自然分条开关一起变化，
@@ -9532,7 +9532,7 @@ func isStructuredReplyLine(line string) bool {
 }
 
 // stripLeadingReplyDecorationsForStructure 去掉行首只负责投递的引用和提及标记。
-// 结构化识别看的是用户最终读到的正文；把 [diana-at:...] 或 [CQ:at,...] 里的冒号
+// 结构化识别看的是用户最终读到的正文；把 <diana-at id="..."/> 或 [CQ:at,...] 里的冒号
 // 当成「短标签：内容」，会让一段普通的多行回复误判成清单，从而堵掉自然分条。
 func stripLeadingReplyDecorationsForStructure(line string) string {
 	for {

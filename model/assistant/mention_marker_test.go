@@ -11,7 +11,7 @@ import (
 )
 
 func TestDianaMentionsToCQ(t *testing.T) {
-	got := dianaMentionsToCQ("[diana-at:10002] 你看下这个，还有 [diana-at:10008]")
+	got := dianaMentionsToCQ("<diana-at id=\"10002\"/> 你看下这个，还有 <diana-at id=\"10008\"/>")
 	want := "[CQ:at,qq=10002] 你看下这个，还有 [CQ:at,qq=10008]"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
@@ -24,7 +24,7 @@ func TestDianaMentionsToCQ(t *testing.T) {
 
 // OneBot 侧走完整条出站链路：标记必须变成真正的 at 段。
 func TestOneBotSegmentsRenderMentionMarker(t *testing.T) {
-	segments := TextToOneBotSegments("[diana-at:10002] 看下")
+	segments := TextToOneBotSegments("<diana-at id=\"10002\"/> 看下")
 	if len(segments) == 0 || segments[0].Type != "at" || segments[0].Data["qq"] != "10002" {
 		t.Fatalf("segments = %#v, want a leading at segment", segments)
 	}
@@ -34,7 +34,7 @@ func TestOneBotSegmentsRenderMentionMarker(t *testing.T) {
 }
 
 func TestRenderDianaMentionsUsesDisplayNamesAndFallsBackToID(t *testing.T) {
-	text, spans := renderDianaMentions("[diana-at:10002] 和 [diana-at:10008] 都看下",
+	text, spans := renderDianaMentions("<diana-at id=\"10002\"/> 和 <diana-at id=\"10008\"/> 都看下",
 		map[string]string{"10002": "Alice"})
 	if text != "@Alice 和 @10008 都看下" {
 		t.Fatalf("text = %q", text)
@@ -57,7 +57,7 @@ func TestRenderDianaMentionsUsesDisplayNamesAndFallsBackToID(t *testing.T) {
 
 // Telegram 的偏移量按 UTF-16 码元算：一个 emoji 占两个，按 rune 数会整体错位。
 func TestRenderDianaMentionsCountsUTF16Units(t *testing.T) {
-	text, spans := renderDianaMentions("🎉🎉 [diana-at:10002]", map[string]string{"10002": "Alice"})
+	text, spans := renderDianaMentions("🎉🎉 <diana-at id=\"10002\"/>", map[string]string{"10002": "Alice"})
 	if len(spans) != 1 {
 		t.Fatalf("spans = %#v", spans)
 	}
@@ -93,7 +93,7 @@ func TestTelegramMentionEntities(t *testing.T) {
 }
 
 func TestMentionedIDsInText(t *testing.T) {
-	got := mentionedIDsInText("[diana-at:10002] 和 [diana-at:10008]，再叫一次 [diana-at:10002]")
+	got := mentionedIDsInText("<diana-at id=\"10002\"/> 和 <diana-at id=\"10008\"/>，再叫一次 <diana-at id=\"10002\"/>")
 	if !reflect.DeepEqual(got, []string{"10002", "10008"}) {
 		t.Fatalf("got %#v", got)
 	}
@@ -124,7 +124,7 @@ func TestPromptsAndToolsUseNeutralMentionMarker(t *testing.T) {
 			t.Fatalf("mode %s 的提及规则没给出标记写法：%s", mode, prompt)
 		}
 	}
-	if got := mentionMarkerFor("10002"); got != "[diana-at:10002]" {
+	if got := mentionMarkerFor("10002"); got != "<diana-at id=\"10002\"/>" {
 		t.Fatalf("mentionMarkerFor = %q", got)
 	}
 }
@@ -153,7 +153,7 @@ func TestRuntimeResolvesMentionDisplayNames(t *testing.T) {
 
 	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{
 		GroupID: "123456",
-		Text:    "[diana-at:10002] 和 [diana-at:10001] 都看下，还有 [diana-at:19999]",
+		Text:    "<diana-at id=\"10002\"/> 和 <diana-at id=\"10001\"/> 都看下，还有 <diana-at id=\"19999\"/>",
 	})
 	if msg.MentionNames["10002"] != "Alice" {
 		t.Fatalf("历史里的昵称没查到：%#v", msg.MentionNames)
@@ -173,21 +173,21 @@ func TestRuntimeResolvesMentionDisplayNames(t *testing.T) {
 	}
 }
 
-// Markdown 降级不能把 Diana 自己的标记吃掉。[diana-at:10002] 后面正好跟一个
+// Markdown 降级不能把 Diana 自己的标记吃掉。<diana-at id="10002"/> 后面正好跟一个
 // 半角括号时，链接规则会把它当成 [文字](目标) 拆掉方括号，标记就废了——出站
 // 认不出来，字面量直接发进群。
 func TestMarkdownDowngradeKeepsDianaMarkers(t *testing.T) {
 	cases := []string{
-		"[diana-at:10002] 看下 **这个**",
-		"- [diana-at:10002] 项目",
-		"[diana-at:10002](顺便说一句)",
-		"[diana-reply:12345](顺便说一句)",
+		"<diana-at id=\"10002\"/> 看下 **这个**",
+		"- <diana-at id=\"10002\"/> 项目",
+		"<diana-at id=\"10002\"/>(顺便说一句)",
+		"<diana-quote id=\"12345\"/>(顺便说一句)",
 	}
 	for _, input := range cases {
 		got := normalizeReply(input, 3500, true)
-		marker := "[diana-at:10002]"
-		if strings.HasPrefix(input, "[diana-reply") {
-			marker = "[diana-reply:12345]"
+		marker := "<diana-at id=\"10002\"/>"
+		if strings.HasPrefix(input, replyMarkerPrefix) {
+			marker = "<diana-quote id=\"12345\"/>"
 		}
 		if !strings.Contains(got, marker) {
 			t.Fatalf("normalizeReply(%q) 吃掉了标记：%q", input, got)
@@ -208,7 +208,7 @@ func TestOutgoingHistoryRendersMentionMarker(t *testing.T) {
 	}
 	event := runtime.outgoingHistoryEvent(source, OutgoingMessage{
 		GroupID: "123456",
-		Text:    "[diana-at:10002] 看下这个",
+		Text:    "<diana-at id=\"10002\"/> 看下这个",
 	})
 	if strings.Contains(event.RawMessage, dianaMentionMarkerPrefix) {
 		t.Fatalf("历史里留下了未翻译的标记：%q", event.RawMessage)
@@ -241,17 +241,17 @@ func TestOutgoingNormalizesMentionVariantsFromProduction(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "20005", UserID: "30007"}
 	cases := []struct{ in, want string }{
-		{"@diana-at-30007 撤啥呀，那两单早就撤过了", "[diana-at:30007]撤啥呀，那两单早就撤过了"},
-		{"<diana-at:30003>半真半假。官方文档里", "[diana-at:30003]半真半假。官方文档里"},
-		{"(diana-at:3135003586)没事没事，一整杯都糊脸上了", "[diana-at:3135003586]没事没事，一整杯都糊脸上了"},
-		{"[ diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了", "[diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了"},
-		{"[ diana-at:3135003586 ]嘿嘿，第三分收下", "[diana-at:3135003586]嘿嘿，第三分收下"},
-		{"[diana-at:30007] 撤啥呀", "[diana-at:30007] 撤啥呀"},
+		{"@diana-at-30007 撤啥呀，那两单早就撤过了", "<diana-at id=\"30007\"/>撤啥呀，那两单早就撤过了"},
+		{"<diana-at:30003>半真半假。官方文档里", "<diana-at id=\"30003\"/>半真半假。官方文档里"},
+		{"(diana-at:3135003586)没事没事，一整杯都糊脸上了", "<diana-at id=\"3135003586\"/>没事没事，一整杯都糊脸上了"},
+		{"[ diana-at:1368248340]（揉了揉眼睛）三天就把 GPT 额度干完了", "<diana-at id=\"1368248340\"/>（揉了揉眼睛）三天就把 GPT 额度干完了"},
+		{"[ diana-at:3135003586 ]嘿嘿，第三分收下", "<diana-at id=\"3135003586\"/>嘿嘿，第三分收下"},
+		{"<diana-at id=\"30007\"/> 撤啥呀", "<diana-at id=\"30007\"/> 撤啥呀"},
 		// id 认不出来的整个丢掉，不留半个标记，也不降级成纯文本。
 		{"@diana-at 不难，这仓库还没 CONTRIBUTING.md", "不难，这仓库还没 CONTRIBUTING.md"},
-		{"[diana-at:成员user_id] 撤啥呀", "撤啥呀"},
-		{"[diana-at:im_user_abc] 撤啥呀", "撤啥呀"},
-		{"[diana-at:diana-at-30007] 撤啥呀", "撤啥呀"},
+		{"<diana-at id=\"成员user_id\"/> 撤啥呀", "撤啥呀"},
+		{"<diana-at id=\"im_user_abc\"/> 撤啥呀", "撤啥呀"},
+		{"<diana-at id=\"diana-at-30007\"/> 撤啥呀", "撤啥呀"},
 	}
 	for _, item := range cases {
 		got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: item.in}).Text
@@ -274,8 +274,8 @@ func TestMentionNormalizationSkipsCodeSpans(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1", UserID: "10001"}
 	for _, text := range []string{
-		"提及写成 `[diana-at:<user_id>]`，发送前再翻译喵",
-		"```\n[diana-at:10001]\n```",
+		"提及写成 `<diana-at id=\"<user_id>\"/>`，发送前再翻译喵",
+		"```\n<diana-at id=\"10001\"/>\n```",
 	} {
 		if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: text}).Text; got != text {
 			t.Fatalf("代码块被改写了：%q -> %q", text, got)
@@ -306,8 +306,8 @@ func TestMentionIDAcceptableByPlatform(t *testing.T) {
 
 // 标记夹在句中时丢掉不能留下两个空格。
 func TestDropUnusableMentionTidiesSpacing(t *testing.T) {
-	got := dropUnusableDianaMentions("那就 [diana-at:成员user_id] 你来说 [diana-at:10002] 呢", numericChatID)
-	if want := "那就 你来说 [diana-at:10002] 呢"; got != want {
+	got := dropUnusableDianaMentions("那就 <diana-at id=\"成员user_id\"/> 你来说 <diana-at id=\"10002\"/> 呢", numericChatID)
+	if want := "那就 你来说 <diana-at id=\"10002\"/> 呢"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
 }
@@ -316,10 +316,10 @@ func TestDropUnusableMentionTidiesSpacing(t *testing.T) {
 // consumeOutgoingReplyControl 要严格前缀，整条标记当正文发进了群。
 func TestOutgoingNormalizesReplyMarkerVariants(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"[ diana-reply : 1447664451 ]喵？这张图这次没送进我眼里", "[diana-reply:1447664451]喵？这张图这次没送进我眼里"},
-		{"<diana-reply:-1687981517>都没分？", "[diana-reply:-1687981517]都没分？"},
-		{"(diana-reply:1231219659)碑先不刻", "[diana-reply:1231219659]碑先不刻"},
-		{"[diana-reply:1231219659]碑先不刻", "[diana-reply:1231219659]碑先不刻"},
+		{"[ diana-reply : 1447664451 ]喵？这张图这次没送进我眼里", "<diana-quote id=\"1447664451\"/>喵？这张图这次没送进我眼里"},
+		{"<diana-reply:-1687981517>都没分？", "<diana-quote id=\"-1687981517\"/>都没分？"},
+		{"(diana-reply:1231219659)碑先不刻", "<diana-quote id=\"1231219659\"/>碑先不刻"},
+		{"<diana-quote id=\"1231219659\"/>碑先不刻", "<diana-quote id=\"1231219659\"/>碑先不刻"},
 	}
 	for _, item := range cases {
 		got := normalizeDianaReplyVariants(item.in)
@@ -336,11 +336,11 @@ func TestOutgoingNormalizesReplyMarkerVariants(t *testing.T) {
 func TestOutgoingDropsResidualReplyMarkers(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, SelfID: "42", GroupID: "1", UserID: "10001"}
-	got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: "这句话里 [diana-reply:123] 混了个引用标记"}).Text
+	got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: "这句话里 <diana-quote id=\"123\"/> 混了个引用标记"}).Text
 	if want := "这句话里 混了个引用标记"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	code := "标记写成 `[diana-reply:123]` 这样喵"
+	code := "标记写成 `<diana-quote id=\"123\"/>` 这样喵"
 	if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: code}).Text; got != code {
 		t.Fatalf("代码块被改写了：%q", got)
 	}

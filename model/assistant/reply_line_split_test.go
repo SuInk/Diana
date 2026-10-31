@@ -104,8 +104,8 @@ func TestPlainProseLineBreaksBecomeSeparateMessages(t *testing.T) {
 	group := MessageEvent{Kind: EventKindGroup}
 	chatIn := MessageEvent{Kind: EventKindGroup, proactiveReply: true, chatInReply: true}
 	for _, event := range []MessageEvent{group, chatIn} {
-		got := splitEventChatReply("[diana-at:10002] 你问的是 Ice 吧……"+line+"不过真别再翻这些了", cfg, event)
-		if len(got) != 2 || got[0] != "[diana-at:10002] 你问的是 Ice 吧……" || got[1] != "不过真别再翻这些了" {
+		got := splitEventChatReply("<diana-at id=\"10002\"/> 你问的是 Ice 吧……"+line+"不过真别再翻这些了", cfg, event)
+		if len(got) != 2 || got[0] != "<diana-at id=\"10002\"/> 你问的是 Ice 吧……" || got[1] != "不过真别再翻这些了" {
 			t.Fatalf("chatIn=%v prose lines stayed in one bubble: %q", event.chatInReply, got)
 		}
 	}

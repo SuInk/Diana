@@ -113,7 +113,7 @@ func TestApplyReplyFiltersKeepsMarkdown(t *testing.T) {
 		t.Fatalf("untouched line changed: %q", got)
 	}
 	// 规则跨过行内代码时只删普通文字；分条标记两边各算一条，`$` 不会吞掉下一条。
-	if got := applyReplyFilters(rules, "跑一下（`make test` 看看[diana-msg]下一条"); got != "跑一下`make test`[diana-msg]下一条" {
+	if got := applyReplyFilters(rules, "跑一下（`make test` 看看<diana-message/>下一条"); got != "跑一下`make test`<diana-message/>下一条" {
 		t.Fatalf("protected spans changed: %q", got)
 	}
 	got, steps := PreviewReplyFilters(rules, "跑一下（`make test` 看看")

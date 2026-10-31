@@ -14,7 +14,7 @@ import (
 // 整段 JSON 被原样发到群里。这里锁住「信封在正文位置也要按收尾解码」。
 func TestRunnerDecodesFinalizeEnvelopeEmittedAsPlainText(t *testing.T) {
 	client := &scriptedClient{responses: []string{
-		`{"content":"主人是然然最亲近的人呀。[diana-msg]你的好感度是 100。","silent":false,"silent_reason":null,"task_state":null,"claims":null}`,
+		`{"content":"主人是然然最亲近的人呀。<diana-message/>你的好感度是 100。","silent":false,"silent_reason":null,"task_state":null,"claims":null}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, nil)
 	if err != nil {
@@ -24,7 +24,7 @@ func TestRunnerDecodesFinalizeEnvelopeEmittedAsPlainText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "主人是然然最亲近的人呀。[diana-msg]你的好感度是 100。" {
+	if resp.Text != "主人是然然最亲近的人呀。<diana-message/>你的好感度是 100。" {
 		t.Fatalf("Text = %q", resp.Text)
 	}
 }
@@ -133,7 +133,7 @@ func TestInlineFinalizeAction(t *testing.T) {
 		silent        bool
 	}{
 		{"懂，GPT那直给风格写代码确实省心[agent_finalize][/agent_finalize]", "懂，GPT那直给风格写代码确实省心", false},
-		{`<agent_finalize content="好的[diana-msg]马上" silent="false"/>`, "好的[diana-msg]马上", false},
+		{`<agent_finalize content="好的<diana-message/>马上" silent="false"/>`, "好的<diana-message/>马上", false},
 		{`[agent_finalize content="" silent="true" silent_reason="没人叫我"/>]`, "", true},
 		// 标签外有正文时不听标签里的 silent：正文已经写出来了，吞掉才是丢回复。
 		{`收到[agent_finalize silent="true"/>]`, "收到", false},
@@ -156,10 +156,10 @@ func TestInlineFinalizeAction(t *testing.T) {
 }
 
 // 线上 10-27 swe-2：收尾标签成对包着整个信封。剥完标签剩下的 JSON 原来被当正文，
-// 再按 [diana-msg] 拆成「{"content": "第一段」和「第二段", "silent": false, …}」两条发进群里。
+// 再按 <diana-message/> 拆成「{"content": "第一段」和「第二段", "silent": false, …}」两条发进群里。
 func TestRunnerDecodesFinalizeEnvelopeWrappedInInlineTags(t *testing.T) {
 	client := &scriptedClient{responses: []string{
-		`[agent_finalize]{"content": "早上好呀[diana-msg]今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
+		`[agent_finalize]{"content": "早上好呀<diana-message/>今天也要加油", "silent": false, "silent_reason": "", "sticker": "", "task_state": null}[/agent_finalize]`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3, FinalizeFields: []FinalizeField{{Name: "sticker"}}}, nil)
 	if err != nil {
@@ -169,7 +169,7 @@ func TestRunnerDecodesFinalizeEnvelopeWrappedInInlineTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.Text != "早上好呀[diana-msg]今天也要加油" || resp.Silent {
+	if resp.Text != "早上好呀<diana-message/>今天也要加油" || resp.Silent {
 		t.Fatalf("Text = %q silent = %v", resp.Text, resp.Silent)
 	}
 }

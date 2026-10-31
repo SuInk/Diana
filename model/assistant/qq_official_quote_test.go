@@ -144,7 +144,7 @@ func TestQQOfficialQuoteUsesPlatformIDForHistoryAndOutboundReference(t *testing.
 				t.Fatalf("history anchor = %q, err = %v", history.AnchorMessageID, err)
 			}
 			if _, err := runtime.sendOutgoingWithResult(ctx, quote, OutgoingMessage{
-				Text: replyMarkerPrefix + quote.Quoted.MessageID + "]回答",
+				Text: replyMarkerFor(quote.Quoted.MessageID) + "回答",
 			}); err != nil {
 				t.Fatal(err)
 			}

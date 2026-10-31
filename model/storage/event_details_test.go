@@ -1069,7 +1069,7 @@ VALUES (?, ?, 0, 0, '[]', ?)
 	if _, err := store.db.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
 VALUES ('markers', 'group:20001', 'group', '20001', '10003', 'message-1', '阿强', ?, ?, ?, ?)
-`, now.Unix(), "[diana-reply:message-0]@90001 你也去吗", string(payload), now.Format(time.RFC3339Nano)); err != nil {
+`, now.Unix(), "<diana-quote id=\"message-0\"/>@90001 你也去吗", string(payload), now.Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.db.ExecContext(ctx, `

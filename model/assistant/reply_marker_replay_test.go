@@ -27,7 +27,7 @@ func (p *replyMarkerReplayProvider) Generate(_ context.Context, req llm.Generate
 func TestReplayTelegramReplyMarkerIncident(t *testing.T) {
 	withFastSendTiming(t)
 	const badAlias = "im_message_702fc1baad94"
-	const body = "收到你的问题[diana-line]这是补充说明"
+	const body = "收到你的问题<diana-br/>这是补充说明"
 	for _, tc := range []struct {
 		name      string
 		mode      ReplyDecorationMode
@@ -59,7 +59,7 @@ func TestReplayTelegramReplyMarkerIncident(t *testing.T) {
 			if tc.known {
 				alias = scope.registerMessageID(event.MessageID)
 			}
-			provider := &replyMarkerReplayProvider{content: replyMarkerPrefix + alias + "]" + body}
+			provider := &replyMarkerReplayProvider{content: replyMarkerFor(alias) + "" + body}
 			client := &identityPrivacyProvider{provider: provider, scope: scope}
 			response, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{
 				Role: llm.RoleUser, Content: `{"message_id":"106020","text":"你觉得呢"}`,

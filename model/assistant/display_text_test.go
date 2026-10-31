@@ -148,7 +148,7 @@ func TestDisplayEventTextResolvesMentionsAndReplies(t *testing.T) {
 	}
 }
 
-// 没有解析器时行为要和改动前一样，只是引用不再写成 [diana-reply:ID]。
+// 没有解析器时行为要和改动前一样，只是引用不再写成 <diana-quote id="ID"/>。
 func TestDisplayEventTextWithoutResolver(t *testing.T) {
 	event := MessageEvent{Segments: []MessageSegment{
 		atSegment("90001", ""), textSegment("在吗"),
@@ -158,13 +158,13 @@ func TestDisplayEventTextWithoutResolver(t *testing.T) {
 	}
 }
 
-// 给模型看的 PlainText 不受影响：出站适配器要靠 [diana-reply:ID] 还原引用关系。
+// 给模型看的 PlainText 不受影响：出站适配器要靠 <diana-quote id="ID"/> 还原引用关系。
 func TestPlainTextKeepsReplyMarkerForTheModel(t *testing.T) {
 	event := MessageEvent{Segments: []MessageSegment{
 		{Type: "reply", Data: map[string]string{"id": "m1"}},
 		textSegment("收到"),
 	}}
-	if got := PlainText(event.Segments); got != "[diana-reply:m1]收到" {
+	if got := PlainText(event.Segments); got != "<diana-quote id=\"m1\"/>收到" {
 		t.Fatalf("plain text = %q", got)
 	}
 }

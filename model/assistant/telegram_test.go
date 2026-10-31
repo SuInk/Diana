@@ -1164,7 +1164,7 @@ func TestTelegramMessageToEventMapsReplyToNeutralSegment(t *testing.T) {
 	if event.Segments[0].Data["id"] != "199" {
 		t.Fatalf("reply segment = %#v", event.Segments[0])
 	}
-	if got := PlainText(event.Segments); got != "[diana-reply:199]就是这张" {
+	if got := PlainText(event.Segments); got != "<diana-quote id=\"199\"/>就是这张" {
 		t.Fatalf("PlainText = %q", got)
 	}
 }
@@ -1187,7 +1187,7 @@ func TestTelegramRendersMentionMarkerAsTextMention(t *testing.T) {
 	api := newFakeTelegramAPI(t, nil)
 	msg := OutgoingMessage{
 		GroupID:      "-100123",
-		Text:         "[diana-at:10002] 看下这个",
+		Text:         "<diana-at id=\"10002\"/> 看下这个",
 		MentionNames: map[string]string{"10002": "Alice"},
 	}
 	if err := api.channel().Send(context.Background(), msg); err != nil {

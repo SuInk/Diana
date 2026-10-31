@@ -11,13 +11,13 @@ import (
 
 // 提及用平台中立的标记，不再让模型直接写 OneBot 的 CQ 码。
 //
-// Diana 自己的另外两个标记早就是中立的：[diana-msg] 在 splitReply 里就消化掉了，
-// [diana-reply:ID] 由 applyOutgoingReplyMarker 抽成 ReplyMessageID，两个平台各自
+// Diana 自己的另外两个标记早就是中立的：<diana-message/> 在 splitReply 里就消化掉了，
+// <diana-quote id="ID"/> 由 applyOutgoingReplyMarker 抽成 ReplyMessageID，两个平台各自
 // 映射。只有 @ 还在教方言——而 replyMentionPrompt 只看 event.Kind 是不是群聊、
 // 不看平台，于是 Telegram 群里它同样教模型写 [CQ:at,qq=…]，而 TelegramChannel.Send
 // 是把正文原样发出去的：那边的人看到的就是字面量 [CQ:at,qq=10001]。
 //
-// 现在统一成 [diana-at:<用户ID>]，出站时按平台翻译：
+// 现在统一成 <diana-at id="<用户ID>"/>，出站时按平台翻译：
 //
 //   - OneBot：换成 CQ at 码，后续照原路进 at 段。
 //   - Telegram：换成「@昵称」文本，同时给 sendMessage 传一条 text_mention entity
@@ -26,11 +26,14 @@ import (
 //
 // 标记里放 id 而不是昵称：昵称会改、会重名，而 id 是 replyMentionCandidates 里
 // 给模型的那份候选名单的键。显示用的昵称在出站时按 id 查（见 MentionNames）。
-const dianaMentionMarkerPrefix = "[diana-at:"
+const dianaMentionMarkerPrefix = `<diana-at id="`
+
+// dianaMarkerIDSuffix 收住带 id 的标记：<diana-at id="…"/>、<diana-quote id="…"/>。
+const dianaMarkerIDSuffix = `"/>`
 
 // dianaMentionMarkerPattern 里的 id 允许字母数字下划线和负号：脱敏开启时模型
 // 复制回来的是 im_user_xxx 这种别名，还原成真实 id 之前也要能匹配上。
-var dianaMentionMarkerPattern = regexp.MustCompile(`\[diana-at:([A-Za-z0-9_-]{1,64})\]`)
+var dianaMentionMarkerPattern = regexp.MustCompile(`<diana-at id="([A-Za-z0-9_-]{1,64})"/>`)
 
 // dianaMentionSpan 是一次提及在渲染结果里的位置，偏移量按 UTF-16 码元计
 // ——Telegram 的 entity 就是这么算的，一个 emoji 占两个。
@@ -43,7 +46,7 @@ type dianaMentionSpan struct {
 
 // mentionMarkerFor 生成一个提及标记。提示词和工具返回值都用它，避免各处手写。
 func mentionMarkerFor(userID string) string {
-	return dianaMentionMarkerPrefix + strings.TrimSpace(userID) + "]"
+	return dianaMentionMarkerPrefix + strings.TrimSpace(userID) + dianaMarkerIDSuffix
 }
 
 // mentionedIDsInText 列出正文里被提及的 id，顺序与出现顺序一致，不去重之外的加工。
@@ -138,11 +141,20 @@ func utf16Length(text string) int {
 // 那是在展示写法，不是要提及谁。
 const mentionCodeSpanAlternation = "(?s)```.*?```|~~~.*?~~~|`[^`\n]*`|"
 
+// dianaCanonicalIDTagAlternation 匹配一个完整的标准 @ 或引用标签，接在正则开头的
+// 分支里，让写歪标记的兜底规则把它当整块跳过。
+const dianaCanonicalIDTagAlternation = `<diana-(?:at|quote) id="[^"\n]{1,200}"/>|`
+
+func isCanonicalDianaIDTag(token string) bool {
+	return strings.HasPrefix(token, dianaMentionMarkerPrefix) || strings.HasPrefix(token, replyMarkerPrefix)
+}
+
 var (
 	// 变体的核心：diana-at 后面跟一个分隔符和一个还认得出的 id。
 	dianaMentionVariantCore = `[Dd]iana[-_ ]?at[ \t]*[:：=-][ \t]*([A-Za-z0-9_-]{1,64})`
 	// 连同外壳一起吃掉：方括号、尖括号、圆括号、花括号、中文方括号，或者一个 @。
-	dianaMentionVariantPattern = regexp.MustCompile(mentionCodeSpanAlternation +
+	// 标准标签整块先吃掉、原样放回，免得 id 里恰好带着 diana-at 字样时被拆开改写。
+	dianaMentionVariantPattern = regexp.MustCompile(mentionCodeSpanAlternation + dianaCanonicalIDTagAlternation +
 		`[\[<({【]?[ \t]*@?[ \t]*` + dianaMentionVariantCore + `[ \t]*[\]>)}】]?`)
 	dianaMentionVariantIDPattern = regexp.MustCompile(dianaMentionVariantCore)
 	// 归一之后还剩下的标记残骸：括号里裹着 diana-at 的任何东西，以及没带 id 的裸写。
@@ -157,7 +169,7 @@ func normalizeDianaMentionVariants(text string) string {
 		return text
 	}
 	return dianaMentionVariantPattern.ReplaceAllStringFunc(text, func(token string) string {
-		if isMentionCodeSpan(token) {
+		if isMentionCodeSpan(token) || isCanonicalDianaIDTag(token) {
 			return token
 		}
 		match := dianaMentionVariantIDPattern.FindStringSubmatch(token)

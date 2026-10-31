@@ -136,6 +136,11 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	if d == nil || d.channel == nil || ctx.Err() != nil {
 		return false
 	}
+	// 预览看到的是模型原文，还没经过标记扶正；半截标签先不发。
+	if pendingDianaMarkupTail(text) {
+		return false
+	}
+	text = normalizeDianaMarkup(text)
 	text, _ = consumeReplyControlIntent(text)
 	text = strings.TrimSpace(text)
 	// Hold an incomplete metadata prefix until it can be stripped safely.
@@ -149,12 +154,6 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 	}
 	if strings.Contains(text, identityAliasPrefix) {
 		return false
-	}
-	if start := strings.LastIndex(text, "["); start >= 0 {
-		pending := text[start:]
-		if strings.HasPrefix(dianaMentionMarkerPrefix, pending) || (strings.HasPrefix(pending, dianaMentionMarkerPrefix) && !strings.Contains(pending, "]")) {
-			return false
-		}
 	}
 	runes := []rune(text)
 	limit := d.maxRunes

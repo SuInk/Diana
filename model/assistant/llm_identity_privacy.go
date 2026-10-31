@@ -52,8 +52,8 @@ var llmIdentityPrivacyPrompt = llmIdentityPrivacyIntro + llmIdentityPrivacyContr
 var (
 	llmIdentityPrivacyIntro = "【会话标识隐私代理】消息中的真实用户 ID、群 ID 和消息 ID 已由本地代理替换为不透明别名。相同别名始终表示同一对象；" +
 		identityAliasRoleList() + " 前缀仅区分机器人、账号、群和消息，不表示主人或群管理权限。按相同账号标识关联消息，身份以当前配置或查询结果为准，不要猜测真实数字。"
-	llmIdentityPrivacyContract = "调用工具或在回复中需要引用标识时，必须原样复制别名——包括 [diana-reply:" + identityAlias("message") + "xxx]、" +
-		"[diana-at:" + identityAlias("user") + "xxx] 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
+	llmIdentityPrivacyContract = "调用工具或在回复中需要引用标识时，必须原样复制别名——包括 " + replyMarkerPrefix + identityAlias("message") + "xxx" + dianaMarkerIDSuffix + "、" +
+		dianaMentionMarkerPrefix + identityAlias("user") + "xxx" + dianaMarkerIDSuffix + " 这类标记；本地代理会在执行工具或发送消息前自动恢复真实标识。" +
 		"别名就代表真实号码：用户问群号、QQ 号时，直接在回复里写出对应别名，发出去就是真实号码，不要说获取不到；" +
 		"工具需要当前群或某个人时，照抄 " + identityAlias("group") + "、" + identityAlias("user") + " 这类别名填进参数。"
 )
@@ -88,10 +88,10 @@ var (
 	identityPrivacyLabelPattern      = regexp.MustCompile(`(?i)(?:QQ号|QQ群号|QQ|UIN)\s*[:：=为]?\s*([1-9][0-9]{4,13})`)
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
 	identityPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
-	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`\[(?:diana-reply|回复):(-?[0-9]{4,19})\]`)
+	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`<diana-quote id="(-?[0-9]{4,19})"/>|\[回复:(-?[0-9]{4,19})\]`)
 	// 提及标记里的 id 也要脱敏。它通常在候选 JSON 里已经登记过，但提示词里
 	// 只出现在标记中的那一个（当前发言者）不该漏网。
-	identityPrivacyMentionMarkerPattern = regexp.MustCompile(`\[diana-at:([1-9][0-9]{4,13})\]`)
+	identityPrivacyMentionMarkerPattern = regexp.MustCompile(`<diana-at id="([1-9][0-9]{4,13})"/>`)
 )
 
 type identityPrivacyContextKey struct{}
@@ -685,7 +685,7 @@ func (s *identityPrivacyScope) discoverStructuredIDs(text string) {
 		s.registerMessageID(firstNonEmpty(match[2], match[3]))
 	}
 	for _, match := range identityPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
-		s.registerMessageID(match[1])
+		s.registerMessageID(firstNonEmpty(match[1], match[2]))
 	}
 	for _, match := range identityPrivacyMentionMarkerPattern.FindAllStringSubmatch(text, -1) {
 		s.register(match[1], "user")

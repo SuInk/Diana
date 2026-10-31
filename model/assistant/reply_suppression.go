@@ -22,8 +22,8 @@ const (
 	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
 	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
 	replySuppressionNoticeTimeout     = 60 * time.Second
-	replySuppressionMarker            = "[[DIANA_IGNORE_CURRENT_USER_30M]]"
-	replyRefusalMarker                = "[[DIANA_REFUSE_CURRENT]]"
+	replySuppressionMarker            = "<diana-ignore-user/>"
+	replyRefusalMarker                = "<diana-refuse/>"
 	replyRefusalWindow                = 30 * time.Minute
 	botReplyLoopWindow                = 30 * time.Minute
 	botReplyLoopAIConfidenceThreshold = 0.90

@@ -14,9 +14,9 @@ import (
 
 func TestRunnerUnwrapsReplyCompatibilityJSONAfterSearch(t *testing.T) {
 	tool := &recordingSearchTool{output: "湖南和江西米粉资料"}
-	completeReply := "简单说：湖南米粉更突出汤和码子，江西米粉更突出粉本身和拌炒风味。[diana-line]" +
-		"1. 湖南常见汤粉、盖码粉。[diana-line]" +
-		"2. 江西常见拌粉、炒粉和汤粉。[diana-line]" +
+	completeReply := "简单说：湖南米粉更突出汤和码子，江西米粉更突出粉本身和拌炒风味。<diana-br/>" +
+		"1. 湖南常见汤粉、盖码粉。<diana-br/>" +
+		"2. 江西常见拌粉、炒粉和汤粉。<diana-br/>" +
 		"3. 两省内部都有很多地方流派，不能用单一口味概括。"
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"web_search","input":{"query":"湖南米粉 江西米粉 区别"}}`,

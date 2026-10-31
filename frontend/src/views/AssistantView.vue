@@ -952,7 +952,7 @@
                     <pre class="reply-filter-result">{{ replyFilterTestResult.result || "（整条被删光，这一轮不发送）" }}</pre>
                   </template>
                 </div>
-                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认带一条删漏出来的内部控制标记（如 [DIANA_REPLY_SINGLE]）的规则，可以改也可以删，清空后不会再补回来。</span>
+                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认带一条删漏出来的内部控制标记（如 [DIANA_REPLY_SINGLE] 这类旧写法）的规则，可以改也可以删，清空后不会再补回来。</span>
               </div>
               <div class="field wide">
                 <label class="switch">

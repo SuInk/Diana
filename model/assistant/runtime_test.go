@@ -41,7 +41,7 @@ func TestRuntimeShouldHandleGroupMentionAndTrigger(t *testing.T) {
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "Diana 帮我看看") {
 		t.Fatal("group trigger should trigger directly")
 	}
-	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "[diana-reply:30006]Diana你怎么看") {
+	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "<diana-quote id=\"30006\"/>Diana你怎么看") {
 		t.Fatal("group trigger after reply marker should trigger directly")
 	}
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "我觉得Diana这事得看上下文") {
@@ -869,7 +869,7 @@ func TestRuntimeEnrichesReplyReferenceFromOneBot(t *testing.T) {
 	if event.Quoted == nil || event.Quoted.RawMessage != "被引用内容" || event.Quoted.SenderName != "Alice" {
 		t.Fatalf("quoted = %#v", event.Quoted)
 	}
-	prompt := currentPromptText(event, "[diana-reply:abc] 这是什么意思")
+	prompt := currentPromptText(event, "<diana-quote id=\"abc\"/> 这是什么意思")
 	if !strings.Contains(prompt, "【被引用的消息】Alice（20002）: 被引用内容") {
 		t.Fatalf("prompt = %q", prompt)
 	}
@@ -1752,7 +1752,7 @@ func TestSplitReplyKeepsStructuredListInOneMessage(t *testing.T) {
 	}
 }
 
-// 空行只是排版：收掉，不分条。分条只认模型显式写的 [diana-msg]。
+// 空行只是排版：收掉，不分条。分条只认模型显式写的 <diana-message/>。
 func TestSplitReplyTreatsBlankLinesAsLayout(t *testing.T) {
 	got := splitReply("第一段\n仍是第一段\n\n第二段", 100)
 	want := []string{"第一段\n仍是第一段\n第二段"}
@@ -2354,13 +2354,13 @@ func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 			{Type: "reply", Data: map[string]string{"id": "abc"}},
 			{Type: "at", Data: map[string]string{"qq": "42"}},
 		},
-	}, "[diana-reply:abc]@42")
+	}, "<diana-quote id=\"abc\"/>@42")
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
 	got := provider.request.Messages[len(provider.request.Messages)-1].Content
 	// 引用标记和 @ 都是原话的一部分，一并留着；注解只负责说明它们各指什么。
-	for _, want := range []string{"【当前需要回复的消息】", "[diana-reply:abc]", "@42", "那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
+	for _, want := range []string{"【当前需要回复的消息】", "<diana-quote id=\"abc\"/>", "@42", "那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("last message content = %q, missing %q", got, want)
 		}
@@ -5443,12 +5443,12 @@ func TestReplyMarkerDoesNotTriggerGroupAlias(t *testing.T) {
 
 func TestStripReplyMarkersKeepsSenderText(t *testing.T) {
 	cases := []struct{ in, want string }{
-		{"[diana-reply:1244393238]@1907257915 必然不可能", "@1907257915 必然不可能"},
-		{"[diana-reply:-797497448]就是这张", "就是这张"},
-		{"[diana-reply:谁]还在吗", "[diana-reply:谁]还在吗"},
+		{"<diana-quote id=\"1244393238\"/>@1907257915 必然不可能", "@1907257915 必然不可能"},
+		{"<diana-quote id=\"-797497448\"/>就是这张", "就是这张"},
+		{"<diana-quote id=\"谁\"/>还在吗", "<diana-quote id=\"谁\"/>还在吗"},
 		{"[diana-reply:30006", "[diana-reply:30006"},
-		{"我刚才[diana-reply:30006]过了", "我刚才过了"},
-		{"[diana-reply:谁][diana-reply:30006]收到", "[diana-reply:谁]收到"},
+		{"我刚才<diana-quote id=\"30006\"/>过了", "我刚才过了"},
+		{"<diana-quote id=\"谁\"/><diana-quote id=\"30006\"/>收到", "<diana-quote id=\"谁\"/>收到"},
 		{"没有标记", "没有标记"},
 	}
 	for _, item := range cases {

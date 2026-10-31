@@ -70,7 +70,7 @@ func (r *Runtime) persistentVoiceReply(ctx context.Context, event MessageEvent, 
 }
 
 // persistentVoiceText 按发送层的规则还原这条回复真正会发出去的文字：发送方式前缀、
-// [diana-msg] / [diana-line] 这些排版标记都在这里消费掉，不然会被原样念出来。分条
+// <diana-message/> / <diana-br/> 这些排版标记都在这里消费掉，不然会被原样念出来。分条
 // 之间补一个句号，念的时候有停顿。开头带引用标记的回复不转：语音发出去是单独一条，
 // 引用框会丢。
 func (r *Runtime) persistentVoiceText(event MessageEvent, reply string) (string, bool) {

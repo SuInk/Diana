@@ -267,7 +267,7 @@ func TestOutgoingMarkerQuotesHistoryMessage(t *testing.T) {
 	runtime.mu.Unlock()
 
 	msg := runtime.applyOutgoingReplyMarker(context.Background(), event,
-		OutgoingMessage{Text: replyMarkerPrefix + "-1659533658] 就是这张喵", ReplyMessageID: event.MessageID})
+		OutgoingMessage{Text: replyMarkerFor("-1659533658") + " 就是这张喵", ReplyMessageID: event.MessageID})
 	if msg.ReplyMessageID != "-1659533658" {
 		t.Fatalf("reply target = %q, want the history message", msg.ReplyMessageID)
 	}
@@ -277,7 +277,7 @@ func TestOutgoingMarkerQuotesHistoryMessage(t *testing.T) {
 
 	// 指向本会话里不存在的消息时只去掉标记，正文照发，不会发送失败。
 	missing := runtime.applyOutgoingReplyMarker(context.Background(), event,
-		OutgoingMessage{Text: replyMarkerPrefix + "999999] 找不到了", ReplyMessageID: event.MessageID})
+		OutgoingMessage{Text: replyMarkerFor("999999") + " 找不到了", ReplyMessageID: event.MessageID})
 	if missing.ReplyMessageID != "" || missing.Text != "找不到了" {
 		t.Fatalf("missing target = %#v", missing)
 	}
