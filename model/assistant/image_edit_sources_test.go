@@ -79,9 +79,8 @@ func TestImageEditSourcesFollowQuoteChain(t *testing.T) {
 	}
 }
 
-// 引用机器人那条失败通知（纯文字、不再引用任何消息）说「重试」：原图只能从
-// 上一次改图任务记下的来源里找回来。
-func TestImageEditSourcesRetryFromFailureNoticeUsesLastTaskSources(t *testing.T) {
+// 纯文字失败通知没有来源关联时不能套用全会话最后一次任务；找到明确的原消息后才能重试。
+func TestImageEditSourcesRetryRequiresSourceProvenance(t *testing.T) {
 	runtime := newEditSourceRuntime()
 	runtime.remember(editSourceImage("original", editSourceOriginal))
 	previous := editSourceText("request", editSourceUserID, "改一下", replySegment("original"))
@@ -93,15 +92,19 @@ func TestImageEditSourcesRetryFromFailureNoticeUsesLastTaskSources(t *testing.T)
 
 	event := editSourceText("retry", editSourceUserID, "重试", replySegment("notice"))
 	event.Quoted = quotedFrom(notice)
-	got := runtime.imageEditSourceImages(context.Background(), event, nil)
-	if strings.Join(got, ",") != editSourceOriginal {
-		t.Fatalf("sources = %#v, want last task source", got)
+	got, _, err := runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("unproven retry reused source: %v %v", got, err)
+	}
+	setEventSemanticSourceMessageIDs(&event, []string{"original"})
+	got, _, err = runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{})
+	if err != nil || strings.Join(got, ",") != editSourceOriginal {
+		t.Fatalf("resolved retry source: %v %v", got, err)
 	}
 }
 
-// 没有引用机器人的消息时，最近聊天里的新图优先于上一次任务的原图；
-// 上一次任务的原图只是最后兜底，并且过期作废。
-func TestImageEditSourcesLastTaskIsFallbackOnly(t *testing.T) {
+// 上一次任务的原图不能作为未确认来源的兜底，避免跨请求串图。
+func TestImageEditSourcesLastTaskIsNotAnImplicitSource(t *testing.T) {
 	runtime := newEditSourceRuntime()
 	event := editSourceText("ask", editSourceUserID, "把这张改成黑白")
 	runtime.imageEditSources.remember(sessionKey(event), []string{editSourceOriginal}, time.Now())
@@ -112,8 +115,8 @@ func TestImageEditSourcesLastTaskIsFallbackOnly(t *testing.T) {
 
 	empty := newEditSourceRuntime()
 	empty.imageEditSources.remember(sessionKey(event), []string{editSourceOriginal}, time.Now())
-	if got := empty.imageEditSourceImages(context.Background(), event, nil); strings.Join(got, ",") != editSourceOriginal {
-		t.Fatalf("sources = %#v, want last task fallback", got)
+	if got := empty.imageEditSourceImages(context.Background(), event, nil); len(got) != 0 {
+		t.Fatalf("sources = %#v, must not reuse another task", got)
 	}
 
 	expired := newEditSourceRuntime()
@@ -239,5 +242,81 @@ func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
 	}
 	if count := runtime.activeSubagentTaskCount(); count != queuedBefore {
 		t.Fatalf("queued %d extra tasks with wrong source messages", count-queuedBefore)
+	}
+}
+
+func TestRoutedEditUsesNamedNonAdjacentImage(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, &recordingChannel{}, NewPluginManager(), &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "test", BaseURL: "http://127.0.0.1:1/v1", Model: "test", ImageModel: "gpt-image-2",
+	})}, nil, nil, nil)
+	old := editSourceImage("old-photo", editSourceOriginal)
+	old.Time = 1000
+	old.UserID = "someone-else"
+	runtime.remember(old)
+	padEditSourceChatter(runtime, 5)
+	newer := editSourceImage("new-photo", editSourceNewer)
+	newer.Time = 1010
+	runtime.remember(newer)
+	current := editSourceText("question", editSourceUserID, "把之前那个人发的照片改成黑白")
+	current.Time = 1015
+	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", current.UserID)
+	decision, ok := parseVisualIntentDecision(`{"action":"edit_image","prompt":"将原图变为黑白","source_message_ids":["old-photo"]}`)
+	if !ok {
+		t.Fatal("intent parse failed")
+	}
+	ctx, _ := withImageAnnouncementSink(context.Background())
+	result, err := runtime.enqueueImageReplyTask(ctx, current, policy, "edit", decision.Prompt, "", decision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.SourcesUsed) != 1 || result.SourcesUsed[0].MessageID != "old-photo" {
+		t.Fatalf("wrong source: %+v", result.SourcesUsed)
+	}
+	// 没有选定来源时，不能悄悄拿同一人的最近图片开始画。
+	_, err = runtime.enqueueImageReplyTask(ctx, current, policy, "edit", "改成黑白", "")
+	if !errors.Is(err, errImageEditSourceNotFound) {
+		t.Fatalf("unresolved source should not enqueue: %v", err)
+	}
+	// 点名失败也不能退回较新的图。
+	_, err = runtime.enqueueImageReplyTask(ctx, current, policy, "edit", "改成黑白", "", visualIntentDecision{SourceMessageIDs: []string{"missing"}})
+	if err == nil {
+		t.Fatal("invalid selected source silently replaced")
+	}
+}
+
+func TestExplicitCurrentImageDoesNotNeedHistory(t *testing.T) {
+	runtime := newEditSourceRuntime()
+	current := editSourceImage("current", editSourceOriginal)
+	urls, used, err := runtime.imageEditSourcesFromMessagesDetailed(context.Background(), current, []string{"current"})
+	if err != nil || len(urls) != 1 || urls[0] != editSourceOriginal || len(used) != 1 {
+		t.Fatalf("current source: %v %v %v", urls, used, err)
+	}
+}
+
+func TestVisualIntentPayloadKeepsOlderImageContent(t *testing.T) {
+	old := gateImageEvent("target", 9000)
+	old.Segments[0].Data[recallImageDescriptionKey] = "红色跑车停在桥边"
+	events := []MessageEvent{old}
+	for i := 0; i < 8; i++ {
+		events = append(events, gateImageEvent("newer-"+strconv.Itoa(i), 9010+int64(i)))
+	}
+	runtime := mediaGateRuntime(t, events...)
+	current := gateCurrentEvent()
+	current.Quoted = quotedFrom(old)
+	payload := runtime.visualIntentPayload(current, "把桥边那辆红色跑车改成蓝色")
+	if payload.CurrentMessageID != current.MessageID || payload.QuotedMessageID != "target" {
+		t.Fatalf("missing explicit IDs: %+v", payload)
+	}
+	found := false
+	for _, item := range payload.RecentImages {
+		if item.MessageID == "target" {
+			found = true
+			if !strings.Contains(strings.Join(item.ImageDescriptions, " "), "红色跑车") {
+				t.Fatal("router lacks image content")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("non-adjacent target disappeared behind newer images")
 	}
 }

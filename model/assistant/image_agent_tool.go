@@ -31,11 +31,11 @@ const (
 
 // errImageEditSourceNotFound 在受理时返回给模型，模型据此让用户补图，
 // 不会先答应「在画了」。
-var errImageEditSourceNotFound = errors.New("没有找到可编辑的图片：当前消息、引用链和上一次改图任务里都没有图。这次没有开始画，不要对用户说「在画了」；要改的图在聊天记录或「稍早发的图」里的话，把它的 message_id 填进 source_message_ids 重新调用，否则请让用户重新发送图片，或直接引用那张图片再说要怎么改")
+var errImageEditSourceNotFound = errors.New("没有找到可编辑的图片：当前消息、引用链和明确指定的历史消息里都没有可用原图。这次没有开始画，不要对用户说「在画了」；要改的图在聊天记录或「稍早发的图」里的话，把它的 message_id 填进 source_message_ids 重新调用，否则请让用户重新发送图片，或直接引用那张图片再说要怎么改")
 
 // imageEditSourceMissingInstruction 是意图路由判定要改图、却找不到原图时给正文
 // 生成的提示。
-const imageEditSourceMissingInstruction = "【本轮图片任务】用户想改图，但当前消息、引用链、最近聊天记录和上一次改图任务里都没有找到原图，这次没有开始画。不要说「在画了」「马上发出来」，也不要假装已经受理；用一句话请用户重新发送图片，或直接引用那张图片再说要怎么改。"
+const imageEditSourceMissingInstruction = "【本轮图片任务】用户想改图，但当前消息、引用链和明确指定的历史消息里都没有找到原图，这次没有开始画。不要说「在画了」「马上发出来」，也不要假装已经受理；用一句话请用户重新发送图片，或直接引用那张图片再说要怎么改。"
 
 const (
 	dianaImageToolName       = "image"
@@ -224,7 +224,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		properties["identity_sources"] = toolStringArrayParam(
 			`点名头像，优先于当前消息里的图：` + avatarSourceSender + `、` + avatarSourceBot + `、` + avatarSourceGroup + `、` +
 				avatarSourceGroupPrefix + `<群号>、` + avatarSourceMemberPrefix + `<user_id>（当前平台账号，按名字指人先查出 id）`)
-		properties["source_message_ids"] = toolStringArrayParam(`原图所在消息 ID，整条的图都用；稍早的候选图要在此点名，重试填最初原图所在消息`)
+		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 identity_sources，重试填最初原图所在消息`)
 		properties["source_labels"] = toolStringArrayParam(`与 identity_sources 一一对应、数量相同，逐张发送时作该图说明`)
 		properties["source_mode"] = toolEnumParam(`多张参考图：combine 合成一张（默认）；each 逐张各出一张`, "combine", "each")
 	}
@@ -754,22 +754,22 @@ func asyncImageReplyInstruction(result dianaImageToolResult, configs ...BotConfi
 	return overrides.render(promptAsyncImageReplySpec, map[string]string{"status": status, "announced": announced})
 }
 
-func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string) (dianaImageToolResult, error) {
+func (r *Runtime) enqueueImageReplyTask(ctx context.Context, event MessageEvent, relationship RelationshipPolicy, operation string, prompt string, caption string, selections ...visualIntentDecision) (dianaImageToolResult, error) {
 	tool := &dianaImageTool{runtime: r, event: event, relationship: relationship}
 	if err := ctx.Err(); err != nil {
 		return dianaImageToolResult{}, err
 	}
-	request, err := tool.prepareRequest(map[string]any{
-		"operation": operation,
-		"prompt":    prompt,
-		"caption":   caption,
-	})
+	input := map[string]any{"operation": operation, "prompt": prompt, "caption": caption}
+	if len(selections) > 0 {
+		input["source_message_ids"] = selections[0].SourceMessageIDs
+		input["identity_sources"] = selections[0].IdentitySources
+	}
+	request, err := tool.prepareRequest(input)
 	if err != nil {
 		return dianaImageToolResult{}, err
 	}
-	// 意图路由这条路没有模型点名原图，「先发图、隔几秒说改成黑白」只能靠同一个人
-	// 刚发的那批图兜底。
-	request.AllowRecentSenderImages = true
+	// 路由选择的来源原样交给工具；未点名时仅保留当前图片、明确引用和头像等来源，
+	// 不按发送者或相邻位置找一张历史图替代。
 	return tool.enqueue(ctx, request)
 }
 

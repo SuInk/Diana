@@ -12,8 +12,7 @@ import (
 )
 
 const (
-	// imageEditSourceMemoryTTL 是「重试」「继续」还能找回上一次原图的时间窗。
-	// 超过这个时间，用户多半已经在聊别的，再拿旧图去改反而会改错。
+	// imageEditSourceMemoryTTL 是最近原图诊断记录的保留时间。
 	imageEditSourceMemoryTTL = 30 * time.Minute
 	// imageEditSourceMemoryLimit 限制记住的会话数，超出时丢最旧的。
 	imageEditSourceMemoryLimit = 256
@@ -23,9 +22,7 @@ const (
 
 // imageEditSourceMemory 按会话记住最近一次改图任务用的原图。
 //
-// 改图失败后，用户通常引用机器人那条失败通知或「在画了」回一句「重试」「继续」。
-// 被引用的是纯文字，原图在更早的消息里，最近聊天记录又早被群聊刷过去了，
-// 这时唯一可靠的线索就是上一次任务自己用过的原图。
+// 仅保留诊断记录；没有任务来源关联时，不得把它当作「重试」「继续」的原图。
 type imageEditSourceMemory struct {
 	mu      sync.Mutex
 	entries map[string]imageEditSourceEntry
@@ -149,6 +146,9 @@ func (r *Runtime) imageEditSourcesFromMessagesDetailed(ctx context.Context, even
 			continue
 		}
 		source, ok := r.findSemanticReferenceEvent(ctx, event, messageID)
+		if messageID == strings.TrimSpace(event.MessageID) {
+			source, ok = event, true
+		}
 		if !ok && event.Quoted != nil && strings.TrimSpace(event.Quoted.MessageID) == messageID {
 			source = MessageEvent{
 				Platform: event.Platform, ProfileID: event.ProfileID, ContextNamespace: event.ContextNamespace,

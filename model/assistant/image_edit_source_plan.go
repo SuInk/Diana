@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // 改图的原图从哪来。
@@ -23,8 +22,7 @@ import (
 //     上下文里每张图、每个人，比运行时按位置猜准；解析不出来就报错让它改，不悄悄
 //     换成别的图。
 //   - 隐式：模型什么都没点名时才按老顺序找——当前消息、引用（含引用链）、指代解析
-//     选中的来源、被 @ 的成员头像，最后是同一个人刚发的那批图（只在意图路由那条
-//     没有模型点名能力的路径上用，见 allowRecentSenderImages）。
+//     选中的来源、被 @ 的成员头像。正式回复和意图路由不按相邻位置或上次任务猜图。
 //
 // 不管哪一层，最后实际用了哪几张都写进工具结果的 sources_used。
 
@@ -57,10 +55,7 @@ type imageEditSourcePlan struct {
 	DefaultIdentitySources []string
 	// AllowRecentSenderImages 允许在隐式来源都落空时，拿同一个人刚发的那批图兜底。
 	//
-	// 只给意图路由那条路（enqueueImageReplyTask）：那里没有模型能填 source_message_ids，
-	// 「先发图、隔几秒说改成黑白」全靠它。Agent 调工具时不开：同一个人刚发的图会以
-	// 「候选依赖图」带着 message_id 附在这一轮里，模型要用就显式点名；运行时替它挑，
-	// 挑中的往往是一张表情（上面那起事故）。
+	// 只供旧的图片查询辅助函数使用；正式 Agent 和意图路由均要求明确来源，不开启它。
 	AllowRecentSenderImages bool
 }
 
@@ -130,13 +125,6 @@ func (r *Runtime) resolveImplicitImageEditSources(ctx context.Context, event Mes
 	if len(out) > 0 {
 		return out, used
 	}
-	// 引用的是机器人自己的失败通知或「在画了」：用户是在接着上一次改图说话，
-	// 上一次的原图比头像和最近聊天记录都更贴近他指的那张。
-	if r.quotedBotTextWithoutImage(event) {
-		if remembered := r.imageEditSources.recall(sessionKey(event), time.Now()); len(remembered) > 0 {
-			return remembered, []imageEditSourceUsed{{Kind: imageSourceKindPreviousEditTask, Images: len(remembered)}}
-		}
-	}
 	avatars, _ := r.avatarIdentitySources(ctx, event, plan.DefaultIdentitySources)
 	for _, avatar := range avatars {
 		out = appendImageEditSourceImages(out, avatar.URL)
@@ -152,9 +140,6 @@ func (r *Runtime) resolveImplicitImageEditSources(ctx context.Context, event Mes
 		if len(out) > 0 {
 			return out, used
 		}
-	}
-	if remembered := r.imageEditSources.recall(sessionKey(event), time.Now()); len(remembered) > 0 {
-		return remembered, []imageEditSourceUsed{{Kind: imageSourceKindPreviousEditTask, Images: len(remembered)}}
 	}
 	return nil, nil
 }

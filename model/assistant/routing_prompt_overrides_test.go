@@ -75,12 +75,12 @@ func TestReplyIntentPromptsUseOverrides(t *testing.T) {
 		promptReplyIntentToolsSpec.Key: "工具一律不选。",
 	}
 	system, _ := replyIntentPrompts(agent.NewToolRegistry(), overrides)
-	want := "只在用户说「画」时出图。工具一律不选。\n\n输出格式：\n" + `{"action":"none","prompt":"","tools":[],"context_message_ids":[],"keep_older_summary":false}`
+	want := "只在用户说「画」时出图。工具一律不选。\n\n输出格式：\n" + `{"action":"none","prompt":"","source_message_ids":[],"identity_sources":[],"tools":[],"context_message_ids":[],"keep_older_summary":false}`
 	if system != want {
 		t.Fatalf("system = %q", system)
 	}
 	system, _ = replyIntentPrompts(nil, overrides)
-	if system != "只在用户说「画」时出图。\n\n输出格式：\n"+`{"action":"none","prompt":""}` {
+	if system != "只在用户说「画」时出图。\n\n输出格式：\n"+`{"action":"none","prompt":"","source_message_ids":[],"identity_sources":[]}` {
 		t.Fatalf("没有工具目录时只该带图片规则：%q", system)
 	}
 }

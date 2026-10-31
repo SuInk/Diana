@@ -27,6 +27,10 @@ import (
 // 正文判断。它们不进当前消息的 Segments，改图也不会隐式拿它们当原图（见
 // image_edit_source_plan.go），要用就按 message_id 点名。
 //
+// 回复阶段使用 replyDependencyImages：加载最近 3 分钟内所有发言者的普通图片，
+// 也收取判断期间新到的图，最多 24 张；排除已标记的表情和重复刷屏图。当前图、引用图
+// 和已合并补充不重复加载。下面的同发送者选择器保留给缺失事件时间的回退路径。
+//
 // 怎么附取决于对话模型能不能看图：
 //   - 能看（默认）：直接附原图，60 秒内下完就开始回复，不等识图描述；描述照常在
 //     后台补，给历史和检索用。
@@ -35,7 +39,7 @@ import (
 //   - 附了原图、模型却回「没收到图片」：这一轮按「看不了」的办法重来一次。
 
 const (
-	// senderDependencyImageMaxImages 是一轮最多附几张候选图，从新到旧取。
+	// senderDependencyImageMaxImages 是同发送者回退路径最多附几张候选图。
 	senderDependencyImageMaxImages = 4
 	// senderDependencyImageDownloadBudget 是下载原图的总时限。
 	senderDependencyImageDownloadBudget = 60 * time.Second
@@ -141,6 +145,51 @@ func senderDependencyImages(history []MessageEvent, event MessageEvent, skip map
 		}
 		messages++
 		if messages >= recentSenderImageMessages || len(picked) >= senderDependencyImageMaxImages {
+			break
+		}
+	}
+	for left, right := 0, len(picked)-1; left < right; left, right = left+1, right-1 {
+		picked[left], picked[right] = picked[right], picked[left]
+	}
+	return picked
+}
+
+// replyDependencyImages 在已触发回复时加载最近上下文中的普通图片，包括其他发言者
+// 以及判断期间新到的图。逐张标明来源，不修改当前消息，也不替模型决定指代关系。
+func (r *Runtime) replyDependencyImages(history []MessageEvent, event MessageEvent, skip map[string]bool, botID string) []senderDependencyImage {
+	if event.Time <= 0 {
+		return senderDependencyImages(history, event, skip, botID)
+	}
+	windowStart := event.Time - int64(recentSenderImageWindow/time.Second)
+	repeated := repeatedImageKeys(history, windowStart)
+	var picked []senderDependencyImage
+	for index := len(history) - 1; index >= 0; index-- {
+		item := history[index]
+		if item.Time < windowStart {
+			break
+		}
+		if item.Time > event.Time+int64(senderImageFollowUpWindow/time.Second) || item.crossGroupContext || isPokeHistoryEvent(item) {
+			continue
+		}
+		if event.Kind == EventKindGroup && !samePromptGroupScope(event, item) {
+			continue
+		}
+		id := strings.TrimSpace(item.MessageID)
+		if id == strings.TrimSpace(event.MessageID) || skip[id] || (event.Quoted != nil && hasImageSegment(event.Quoted.Segments) && id == event.Quoted.MessageID) {
+			continue
+		}
+		if assistantHistoryEvent(item, botID) || strings.TrimSpace(item.botReply) != "" {
+			continue
+		}
+		for segmentIndex := len(item.Segments) - 1; segmentIndex >= 0; segmentIndex-- {
+			if dependencyImageCandidate(item.Segments[segmentIndex], repeated) {
+				picked = append(picked, senderDependencyImage{Source: item, SegmentIndex: segmentIndex})
+				if len(picked) >= replyImageDescriptionMaxImages {
+					break
+				}
+			}
+		}
+		if len(picked) >= replyImageDescriptionMaxImages {
 			break
 		}
 	}
@@ -287,6 +336,13 @@ func (r *Runtime) senderDependencyMessage(ctx context.Context, current MessageEv
 	images := r.prepareSenderDependencyImages(ctx, dependency.images)
 	dependency.images = images
 	header := senderDependencyHeader(current, dependency.toolHint)
+	for _, image := range images {
+		if image.Source.Time >= current.Time || image.Source.UserID != current.UserID {
+			header = strings.Replace(header, "同一发言者稍早发的图", "最近上下文中的图片", 1)
+			header = strings.Replace(header, promptSenderIdentity(current)+" 在这条消息之前单独发了下面这些图", "下面是最近上下文中的普通图片，可能来自不同发言者，也可能在本条消息之后补发；作者、时间和来源消息逐张标明", 1)
+			break
+		}
+	}
 	if dependency.pixels {
 		return r.senderDependencyPixelMessage(ctx, current, images, header)
 	}
