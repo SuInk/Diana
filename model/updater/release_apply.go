@@ -107,7 +107,7 @@ type releaseApplyHooks struct {
 
 func defaultReleaseApplyHooks() releaseApplyHooks {
 	return releaseApplyHooks{
-		waitForParent:  waitForProcessExit,
+		waitForParent:  waitForUpdateParentExit,
 		launch:         launchReleaseProcess,
 		health:         waitForReleaseHealth,
 		restartService: restartSupervisedService,
@@ -230,7 +230,7 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 	if hooks.waitForParent == nil || hooks.launch == nil || hooks.health == nil {
 		return errors.New("updater: incomplete release apply hooks")
 	}
-	if err := hooks.waitForParent(plan.ParentPID, 45*time.Second); err != nil {
+	if err := hooks.waitForParent(plan.ParentPID, 15*time.Second); err != nil {
 		return fmt.Errorf("wait for old Diana process: %w", err)
 	}
 	backupsRoot := filepath.Dir(plan.BackupRoot)

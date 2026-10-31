@@ -29,5 +29,5 @@ func waitForProcessExit(pid int, timeout time.Duration) error {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return fmt.Errorf("process %d did not exit within %s", pid, timeout)
+	return fmt.Errorf("%w: process %d did not exit within %s", errProcessExitTimeout, pid, timeout)
 }

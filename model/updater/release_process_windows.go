@@ -35,8 +35,11 @@ func waitForProcessExit(pid int, timeout time.Duration) error {
 	if err != nil {
 		return err
 	}
+	if result == windows.WAIT_TIMEOUT {
+		return fmt.Errorf("%w: process %d did not exit within %s", errProcessExitTimeout, pid, timeout)
+	}
 	if result != windows.WAIT_OBJECT_0 {
-		return fmt.Errorf("process %d did not exit within %s", pid, timeout)
+		return fmt.Errorf("wait for process %d: unexpected result %d", pid, result)
 	}
 	return nil
 }
