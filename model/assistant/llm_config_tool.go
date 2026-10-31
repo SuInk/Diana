@@ -27,12 +27,11 @@ func (t *dianaLLMConfigTool) Name() string {
 }
 
 func (t *dianaLLMConfigTool) Description() string {
-	return `管理 Diana 模型：切换、启用、停用和调度策略（role 默认对话），不动供应商地址和密钥。` +
-		`仅在主人明确要求改机器人自身配置时调用；讨论或推荐模型、用户说「我用某模型」都不调用。` +
-		`用户说本群、这个群时必须用 scope=group；说整个机器人时用 scope=bot。恢复本群跟随机器人用 operation=reset、scope=group。` +
-		`启用/停用已有路由用 enable/disable，必须先 list 确认 model 和 provider_id（分组路由用 group）；同名时不要猜。切换调度策略用 set_strategy 和 routing_strategy。这三项仅支持 scope=bot，不调整模型顺序，也不测试上游。` +
-		`切换只将目标模型排到首位，保留其他模型与后备；不在列表的目标添加到首位。` +
-		`跨供应商先 list，再用 provider_id 精确选，别猜同名供应商。更新前实测目标模型，失败保留原配置；image 会生成一张不发送的测试图。`
+	return `管理 Diana 模型切换、启停与调度策略，不改供应商地址和密钥。` +
+		`仅主人明确要求修改机器人配置时调用，讨论或推荐模型不调用。` +
+		`本群用 scope=group，整个机器人用 bot；reset 恢复本群继承。` +
+		`先 list 获取准确供应商和模型，同名不猜。enable/disable/set_strategy 仅支持 bot，不调顺序、不测试上游。` +
+		`切换将目标置首并保留其他后备；更新前实测，失败保留原配置，image 会生成不发送的测试图。`
 }
 
 func (t *dianaLLMConfigTool) InputSchema() map[string]any {
