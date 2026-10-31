@@ -112,6 +112,11 @@ func pendingDianaMarkupTail(text string) bool {
 }
 
 // dianaMarkupProvider 在模型回复一进来时扶正标记，正文和工具参数都过一遍。
+//
+// 发出去的请求也要处理一件事：工具返回值和提示词里的 JSON 多半是 json.Marshal
+// 编的，它默认把 < > & 转成 \u003c \u003e \u0026，标签就变成了
+// \u003cdiana-at id=\"1\"/\u003e 交给模型，模型照着抄就成了乱码。这里统一还原，
+// 结果仍是合法 JSON。
 type dianaMarkupProvider struct {
 	provider LLMProvider
 }
@@ -126,7 +131,7 @@ func withDianaMarkupRun(run llmProviderRunFunc) llmProviderRunFunc {
 }
 
 func (p *dianaMarkupProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	response, err := p.provider.Generate(ctx, req)
+	response, err := p.provider.Generate(ctx, unescapeRequestHTMLEscapes(req))
 	if err != nil || response == nil {
 		return response, err
 	}
@@ -162,4 +167,70 @@ func normalizeDianaMarkupValue(value any) any {
 		return out
 	}
 	return value
+}
+
+func unescapeRequestHTMLEscapes(req llm.GenerateRequest) llm.GenerateRequest {
+	var messages []llm.Message
+	for index, message := range req.Messages {
+		content := unescapeJSONHTMLEscapes(message.Content)
+		var parts []llm.ContentPart
+		for partIndex, part := range message.Parts {
+			if text := unescapeJSONHTMLEscapes(part.Text); text != part.Text {
+				if parts == nil {
+					parts = append([]llm.ContentPart(nil), message.Parts...)
+				}
+				parts[partIndex].Text = text
+			}
+		}
+		if content == message.Content && parts == nil {
+			continue
+		}
+		if messages == nil {
+			messages = append([]llm.Message(nil), req.Messages...)
+		}
+		messages[index].Content = content
+		if parts != nil {
+			messages[index].Parts = parts
+		}
+	}
+	if messages != nil {
+		req.Messages = messages
+	}
+	return req
+}
+
+// unescapeJSONHTMLEscapes 把 \u003c \u003e \u0026 换回字面字符。成对的反斜杠
+// 原样跳过：\\u003c 是转义过的反斜杠后面跟着普通文字，不是要还原的字符。
+func unescapeJSONHTMLEscapes(text string) string {
+	if !strings.Contains(text, `\u00`) {
+		return text
+	}
+	var builder strings.Builder
+	builder.Grow(len(text))
+	for index := 0; index < len(text); index++ {
+		if text[index] != '\\' || index+1 >= len(text) {
+			builder.WriteByte(text[index])
+			continue
+		}
+		if text[index+1] == 'u' && index+6 <= len(text) {
+			switch strings.ToLower(text[index+2 : index+6]) {
+			case "003c":
+				builder.WriteByte('<')
+				index += 5
+				continue
+			case "003e":
+				builder.WriteByte('>')
+				index += 5
+				continue
+			case "0026":
+				builder.WriteByte('&')
+				index += 5
+				continue
+			}
+		}
+		builder.WriteByte(text[index])
+		builder.WriteByte(text[index+1])
+		index++
+	}
+	return builder.String()
 }

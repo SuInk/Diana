@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -117,5 +118,40 @@ func TestStripLeakedControlMarkersKeepsConsumableTagsAndForeignBrackets(t *testi
 		if !strings.Contains(got, keep) {
 			t.Fatalf("%s must stay: %q", keep, got)
 		}
+	}
+}
+
+func TestUnescapeJSONHTMLEscapesKeepsJSONValid(t *testing.T) {
+	payload, _ := json.Marshal(map[string]string{"mention": mentionMarkerFor("10002"), "note": `a<b & 字面反斜杠\\u003c`})
+	got := unescapeJSONHTMLEscapes(string(payload))
+	if !strings.Contains(got, `"mention":"<diana-at id=\"10002\"/>"`) {
+		t.Fatalf("tag still escaped: %s", got)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(got), &decoded); err != nil {
+		t.Fatalf("no longer JSON: %v\n%s", err, got)
+	}
+	if decoded["mention"] != mentionMarkerFor("10002") || decoded["note"] != `a<b & 字面反斜杠\\u003c` {
+		t.Fatalf("decoded = %#v", decoded)
+	}
+}
+
+type capturingMarkupProvider struct{ got llm.GenerateRequest }
+
+func (p *capturingMarkupProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.got = req
+	return &llm.GenerateResponse{}, nil
+}
+
+func TestDianaMarkupProviderUnescapesToolResults(t *testing.T) {
+	payload, _ := json.Marshal(map[string]string{"mention": mentionMarkerFor("1")})
+	inner := &capturingMarkupProvider{}
+	original := []llm.Message{{Role: llm.RoleTool, Content: string(payload)}}
+	_, _ = (&dianaMarkupProvider{provider: inner}).Generate(context.Background(), llm.GenerateRequest{Messages: original})
+	if inner.got.Messages[0].Content != `{"mention":"<diana-at id=\"1\"/>"}` {
+		t.Fatalf("tool result sent = %s", inner.got.Messages[0].Content)
+	}
+	if original[0].Content != string(payload) {
+		t.Fatal("caller's history must not be mutated")
 	}
 }
