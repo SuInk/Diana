@@ -44,30 +44,31 @@ type LLMClientFactory func(llm.ProviderConfig) (llm.LLMClient, error)
 type LLMModelListFactory func(context.Context, llm.ProviderConfig) ([]llm.ModelInfo, error)
 
 type llmConfigPayload struct {
-	MaxConcurrency   *int               `json:"max_concurrency"`
-	MaxRPS           *float64           `json:"max_rps"`
-	ID               string             `json:"id,omitempty"`
-	Name             string             `json:"name,omitempty"`
-	Group            string             `json:"group,omitempty"`
-	Description      string             `json:"description,omitempty"`
-	UpdatedAt        string             `json:"updated_at,omitempty"`
-	Profiles         []llmConfigPayload `json:"profiles,omitempty"`
-	Provider         llm.Provider       `json:"provider"`
-	APIStyle         llm.APIStyle       `json:"api_style,omitempty"`
-	APIFormat        llm.APIFormat      `json:"api_format,omitempty"`
-	APIKey           string             `json:"api_key,omitempty"`
-	APIKeyConfigured bool               `json:"api_key_configured,omitempty"`
-	APIKeyPreview    string             `json:"api_key_preview,omitempty"`
-	BaseURL          string             `json:"base_url,omitempty"`
-	Models           []llm.ModelInfo    `json:"models,omitempty"`
-	Model            string             `json:"model"`
-	ImageModel       string             `json:"image_model,omitempty"`
-	ImageBaseURL     string             `json:"image_base_url,omitempty"`
-	ImageOrigin      string             `json:"image_origin,omitempty"`
-	ImageTimeoutMS   int64              `json:"image_timeout_ms,omitempty"`
-	UserAgent        string             `json:"user_agent,omitempty"`
-	Headers          map[string]string  `json:"headers,omitempty"`
-	Temperature      *float64           `json:"temperature,omitempty"`
+	SpeechParams     map[string]map[string]string `json:"speech_params,omitempty"`
+	MaxConcurrency   *int                         `json:"max_concurrency"`
+	MaxRPS           *float64                     `json:"max_rps"`
+	ID               string                       `json:"id,omitempty"`
+	Name             string                       `json:"name,omitempty"`
+	Group            string                       `json:"group,omitempty"`
+	Description      string                       `json:"description,omitempty"`
+	UpdatedAt        string                       `json:"updated_at,omitempty"`
+	Profiles         []llmConfigPayload           `json:"profiles,omitempty"`
+	Provider         llm.Provider                 `json:"provider"`
+	APIStyle         llm.APIStyle                 `json:"api_style,omitempty"`
+	APIFormat        llm.APIFormat                `json:"api_format,omitempty"`
+	APIKey           string                       `json:"api_key,omitempty"`
+	APIKeyConfigured bool                         `json:"api_key_configured,omitempty"`
+	APIKeyPreview    string                       `json:"api_key_preview,omitempty"`
+	BaseURL          string                       `json:"base_url,omitempty"`
+	Models           []llm.ModelInfo              `json:"models,omitempty"`
+	Model            string                       `json:"model"`
+	ImageModel       string                       `json:"image_model,omitempty"`
+	ImageBaseURL     string                       `json:"image_base_url,omitempty"`
+	ImageOrigin      string                       `json:"image_origin,omitempty"`
+	ImageTimeoutMS   int64                        `json:"image_timeout_ms,omitempty"`
+	UserAgent        string                       `json:"user_agent,omitempty"`
+	Headers          map[string]string            `json:"headers,omitempty"`
+	Temperature      *float64                     `json:"temperature,omitempty"`
 	// 这两个是「用户手填的覆盖值」，不是当前生效值：指针类型才分得清「没提交这个
 	// 字段」（nil，保留旧值）和「清空了这个输入框」（0，改回自动）。以前它们是 int64，
 	// 清空输入框和没提交长得一样，于是填过的值永远删不掉。
@@ -653,6 +654,7 @@ func payloadFromConfig(cfg llm.ProviderConfig) llmConfigPayload {
 		ImageTimeoutMS:   cfg.ImageTimeout.Milliseconds(),
 		UserAgent:        cfg.UserAgentWithDefault(),
 		Headers:          maskLLMHeaders(cfg.NormalizedHeaders()),
+		SpeechParams:     cfg.SpeechParams,
 		Temperature:      cfg.Temperature,
 		MaxOutputTokens:  optionalTokenLimit(cfg.MaxOutputTokens),
 		TimeoutMS:        cfg.Timeout.Milliseconds(),
@@ -894,6 +896,7 @@ func configFromPayload(payload llmConfigPayload) llm.ProviderConfig {
 		ImageTimeout:        time.Duration(payload.ImageTimeoutMS) * time.Millisecond,
 		UserAgent:           payload.UserAgent,
 		Headers:             payload.Headers,
+		SpeechParams:        payload.SpeechParams,
 		Temperature:         payload.Temperature,
 		ContextWindowTokens: tokenLimitValue(payload.ContextWindowTokens),
 		MaxContextTokens:    tokenLimitValue(payload.MaxContextTokens),
@@ -944,6 +947,9 @@ func mergeUnsubmittedLLMConfig(payload llmConfigPayload, cfg, existing llm.Provi
 		cfg.ImageTimeout = existing.ImageTimeout
 	}
 	cfg.Headers = mergeLLMHeaders(existing.Headers, payload.Headers)
+	if payload.SpeechParams == nil {
+		cfg.SpeechParams = existing.SpeechParams
+	}
 	// nil 才是「这个客户端没提交这个字段」；提交了 0 就是明确要求改回自动推断。
 	if payload.ContextWindowTokens == nil {
 		cfg.ContextWindowTokens = existing.ContextWindowTokens

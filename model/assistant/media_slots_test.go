@@ -464,3 +464,48 @@ func TestVideoSlotFailsOverWhenSubmitIsRejected(t *testing.T) {
 		t.Fatalf("usage = %v", got)
 	}
 }
+
+func TestMediaSlotProviderSpeechParamsFollowEachRoute(t *testing.T) {
+	primary := mediaSlotProfile("p1", "http://one")
+	primary.Config.SpeechParams = map[string]map[string]string{
+		"tts": {"api": "openai", "voice": "alloy", "format": "wav", "send_mode": "ignored"},
+		"stt": {"language": "en"},
+	}
+	backup := mediaSlotProfile("p2", "http://two")
+	backup.Config.SpeechParams = map[string]map[string]string{"tts": {"api": "breeze", "voice": "voc_backup"}}
+	roles := map[string]ModelRole{
+		"tts": {ProfileID: "p1", Model: "tts-1", Params: map[string]string{"api": "elevenlabs", "voice": "legacy", "format": "opus", "send_mode": "always", "max_chars": "400"}, Fallbacks: []ModelRole{{ProfileID: "p2", Model: "breeze-tts-2"}}},
+		"stt": {ProfileID: "p1", Model: "whisper-1", Params: map[string]string{"language": "zh", "private_enabled": "false", "max_duration_seconds": "40"}},
+	}
+	runtime := mediaSlotTestRuntime(t, roles, primary, backup)
+	for _, schedule := range []bool{false, true} {
+		routes := runtime.resolveMediaSlotRoutes(context.Background(), "tts", schedule)
+		if len(routes) != 2 {
+			t.Fatalf("schedule=%v routes=%#v", schedule, routes)
+		}
+		if routes[0].speechAPI() != llm.SpeechAPIOpenAI || routes[0].param("voice") != "alloy" || routes[0].param("format") != "wav" {
+			t.Fatalf("primary=%#v", routes[0])
+		}
+		if routes[1].speechAPI() != llm.SpeechAPIBreeze || routes[1].param("voice") != "voc_backup" || routes[1].param("format") != "" {
+			t.Fatalf("backup inherited wrong params: %#v", routes[1])
+		}
+		for _, route := range routes {
+			if route.param("send_mode") != "always" || route.param("max_chars") != "400" {
+				t.Fatalf("robot behavior lost: %#v", route.Params)
+			}
+		}
+	}
+	stt := runtime.mediaSlotRoutes(context.Background(), "stt")[0]
+	if stt.param("language") != "en" || stt.param("private_enabled") != "false" || stt.param("max_duration_seconds") != "40" {
+		t.Fatalf("STT params=%#v", stt.Params)
+	}
+	// 配置为服务默认值时，旧音色和协议不能重新出现。
+	primary.Config.SpeechParams["tts"] = map[string]string{}
+	route := newMediaSlotRoute(primary, "tts-1", "tts", roles["tts"].Params)
+	if route.param("voice") != "" || route.param("api") != "" || route.param("send_mode") != "always" {
+		t.Fatalf("empty provider settings not respected: %#v", route.Params)
+	}
+	if roles["tts"].Params["voice"] != "legacy" {
+		t.Fatal("legacy robot settings mutated")
+	}
+}

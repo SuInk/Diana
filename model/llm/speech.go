@@ -27,6 +27,7 @@ const (
 	// 以及硅基流动、Kokoro-FastAPI、Xinference、faster-whisper 这类兼容层。
 	SpeechAPIOpenAI     SpeechAPI = "openai"
 	SpeechAPIElevenLabs SpeechAPI = "elevenlabs"
+	SpeechAPIBreeze     SpeechAPI = "breeze"
 	// 下面是各家私有协议，名单对照 AstrBot 和 SillyTavern 的 TTS 提供商取并集。
 	// 只能在浏览器或 Python 进程里跑的（系统朗读、transformers 本地模型）不在内。
 	SpeechAPIGPTSoVITS       SpeechAPI = "gpt_sovits"
@@ -55,6 +56,7 @@ var speechAPIHosts = []struct {
 	api    SpeechAPI
 }{
 	{"elevenlabs.io", SpeechAPIElevenLabs},
+	{"breeze.blue", SpeechAPIBreeze},
 	{"xiaomimimo.com", SpeechAPIMiMo},
 	{"minimax.io", SpeechAPIMiniMax},
 	{"minimax.chat", SpeechAPIMiniMax},
@@ -74,7 +76,7 @@ var speechAPIHosts = []struct {
 // KnownSpeechAPI 报告名字是不是认得的接口形态。
 func KnownSpeechAPI(name string) bool {
 	switch SpeechAPI(name) {
-	case SpeechAPIOpenAI, SpeechAPIElevenLabs, SpeechAPIGPTSoVITS, SpeechAPIGSVI, SpeechAPIAzure, SpeechAPIEdge,
+	case SpeechAPIOpenAI, SpeechAPIElevenLabs, SpeechAPIBreeze, SpeechAPIGPTSoVITS, SpeechAPIGSVI, SpeechAPIAzure, SpeechAPIEdge,
 		SpeechAPIGemini, SpeechAPIDashScope, SpeechAPIFishAudio, SpeechAPIMiniMax, SpeechAPIVolcengine, SpeechAPIMiMo,
 		SpeechAPIGoogleTranslate, SpeechAPINovelAI, SpeechAPICustomHTTP, SpeechAPIWhisperCLI:
 		return true
@@ -159,7 +161,7 @@ type SpeechStream struct {
 // SynthesizeSpeech 调用配置档上的语音合成接口，返回完整音频。
 func SynthesizeSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest, opts ...ClientOption) (*SpeechResponse, error) {
 	req.API = ResolveSpeechAPI(string(req.API), cfg)
-	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs {
+	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs && req.API != SpeechAPIBreeze {
 		return synthesizeVendorSpeech(ctx, cfg, req, opts)
 	}
 	client, spec, format, err := newSpeechCall(cfg, req, false, opts)
@@ -189,7 +191,7 @@ func SynthesizeSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest
 // 只在拿到响应头之前重试；之后断流由调用方处理。
 func StreamSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest, opts ...ClientOption) (*SpeechStream, error) {
 	req.API = ResolveSpeechAPI(string(req.API), cfg)
-	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs {
+	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs && req.API != SpeechAPIBreeze {
 		return nil, fmt.Errorf("llm: speech api %q does not support streaming", req.API)
 	}
 	client, spec, format, err := newSpeechCall(cfg, req, true, opts)
@@ -239,6 +241,14 @@ func newSpeechCall(cfg ProviderConfig, req SpeechRequest, stream bool, opts []Cl
 		timeout = defaultSpeechTimeout
 	}
 	switch req.API {
+	case SpeechAPIBreeze:
+		client, err := newXIKeySpeechHTTP(cfg, "https://api.breeze.blue/v1", opts)
+		if err != nil {
+			return nil, mediaRequestSpec{}, "", err
+		}
+		client.policy.AttemptTimeout = timeout
+		spec, err := breezeSpeechSpec(req, format)
+		return client, spec, format, err
 	case SpeechAPIElevenLabs:
 		client, err := newElevenLabsHTTP(cfg, opts)
 		if err != nil {
@@ -279,7 +289,11 @@ func newSpeechCall(cfg ProviderConfig, req SpeechRequest, stream bool, opts []Cl
 }
 
 func newElevenLabsHTTP(cfg ProviderConfig, opts []ClientOption) (*mediaHTTP, error) {
-	client, err := newMediaHTTP(cfg, defaultElevenLabsBaseURL, opts)
+	return newXIKeySpeechHTTP(cfg, defaultElevenLabsBaseURL, opts)
+}
+
+func newXIKeySpeechHTTP(cfg ProviderConfig, defaultBaseURL string, opts []ClientOption) (*mediaHTTP, error) {
+	client, err := newMediaHTTP(cfg, defaultBaseURL, opts)
 	if err != nil {
 		return nil, err
 	}

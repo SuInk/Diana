@@ -1010,3 +1010,41 @@ func TestLLMConfigDecoratesSavedReasoningCapabilities(t *testing.T) {
 		t.Fatal("read mutated saved config")
 	}
 }
+
+func TestLLMSpeechParamsRoundTripAndPartialUpdates(t *testing.T) {
+	existing := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "breeze-tts-2", SpeechParams: map[string]map[string]string{
+		"tts": {"api": "breeze", "voice": "voc_test", "language": "zh"}, "stt": {},
+	}}
+	payload := payloadFromConfig(existing)
+	roundTrip := configFromPayload(payload)
+	if roundTrip.SpeechParams["tts"]["voice"] != "voc_test" {
+		t.Fatalf("lost speech params: %#v", roundTrip.SpeechParams)
+	}
+	// 空服务对象必须落库，表示使用提供商默认值，而不是重新继承旧机器人参数。
+	data, err := json.Marshal(roundTrip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored llm.ProviderConfig
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := restored.SpeechParams["stt"]; !ok {
+		t.Fatal("empty configured STT lost after serialization")
+	}
+	untouched := llmConfigPayload{Provider: existing.Provider, Model: existing.Model}
+	kept := mergeUnsubmittedLLMConfig(untouched, configFromPayload(untouched), existing)
+	if kept.SpeechParams["tts"]["voice"] != "voc_test" {
+		t.Fatal("old client erased speech settings")
+	}
+	cleared := untouched
+	cleared.SpeechParams = map[string]map[string]string{}
+	got := mergeUnsubmittedLLMConfig(cleared, configFromPayload(cleared), existing)
+	if len(got.SpeechParams) != 0 {
+		t.Fatal("explicit clear was ignored")
+	}
+	roundTrip.SpeechParams["tts"]["voice"] = "changed"
+	if existing.SpeechParams["tts"]["voice"] != "voc_test" {
+		t.Fatal("editing config mutated stored speech params")
+	}
+}

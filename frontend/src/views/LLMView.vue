@@ -237,6 +237,23 @@
             </button>
           </div>
         </div>
+        <details class="field wide" :open="Object.keys(form.speech_params).length > 0">
+          <summary>语音服务</summary>
+          <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
+          <div v-for="role in speechRoles" :key="role.key" class="stack">
+            <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
+            <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
+              <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
+                <span>{{ field.label }}</span>
+                <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
+                <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
+                <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
+                <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+              </label>
+            </div>
+          </div>
+          <p class="hint">未启用此处参数时沿用已有机器人语音配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
+        </details>
         <div class="field wide model-config-field">
           <div class="model-sync-row">
             <div class="model-sync-copy">
@@ -393,6 +410,8 @@ import {
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 import Modal from "../components/Modal.vue";
+import { speechServiceFields, updateSpeechParam } from "../lib/speech-params";
+import AppSwitch from "../components/AppSwitch.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
@@ -411,6 +430,7 @@ const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'sear
 onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });
 
 interface LLMFormState {
+  speech_params: NonNullable<LLMConfig["speech_params"]>;
   max_concurrency: string;
   max_rps: string;
   name: string;
@@ -430,6 +450,7 @@ interface LLMFormState {
 const defaultContextWindowTokens = 128000;
 
 const emptyForm: LLMFormState = {
+  speech_params: {},
   max_concurrency: "0",
   max_rps: "0",
   name: "",
@@ -688,6 +709,7 @@ function startEdit(profile: LLMConfig): void {
   editingKeyPreview.value = profile.api_key_preview ?? "";
   editingProfile.value = profile;
   form.value = {
+    speech_params: Object.fromEntries(Object.entries(profile.speech_params ?? {}).map(([key, params]) => [key, { ...params }])),
     max_concurrency: String(profile.max_concurrency ?? 0),
     max_rps: String(profile.max_rps ?? 0),
     name: profile.name ?? "",
@@ -818,6 +840,7 @@ function formToPayload(): LLMConfig {
     user_agent: form.value.user_agent.trim() || undefined,
     // 必须每次都提交：后端把缺省的 headers 当成「这个客户端没提交」而保留旧值，
     // 省略掉的话清空输入框永远删不掉已经填过的头。
+    speech_params: form.value.speech_params,
     headers: form.value.provider === "openai_compatible" ? headersFromRows() : {},
     description: form.value.description.trim() || undefined
   };
@@ -829,6 +852,19 @@ function formToPayload(): LLMConfig {
   // llm_runtime.output_token_max 发。
   payload.context_window_tokens = optionalTokenInput(form.value.context_window_tokens);
   return payload;
+}
+
+const speechRoles = [{ key: "tts", label: "语音合成" }, { key: "stt", label: "语音识别" }] as const;
+
+function setProviderSpeechEnabled(role: "tts" | "stt", enabled: boolean): void {
+  const params = { ...form.value.speech_params };
+  if (enabled) params[role] = {};
+  else delete params[role];
+  form.value.speech_params = params;
+}
+
+function setProviderSpeechParam(role: "tts" | "stt", key: string, value: string): void {
+  form.value.speech_params = { ...form.value.speech_params, [role]: updateSpeechParam(form.value.speech_params[role] ?? {}, key, value) };
 }
 
 // closeEditor 关闭编辑弹窗，并把「正在编辑哪一条」一起复位。
@@ -878,7 +914,9 @@ async function save(): Promise<void> {
         : saved.profiles?.find((profile) => profile.id && !knownIDs.has(profile.id))) ??
       saved.profiles?.[0] ??
       saved;
-    if (testModelIDs(savedProfile).length) {
+    if (Object.keys(savedProfile.speech_params ?? {}).length) {
+      toastSuccess("配置已保存，语音参数将用于引用此提供商的机器人");
+    } else if (testModelIDs(savedProfile).length) {
       openTest(savedProfile);
       toastSuccess("配置已保存，请完成连通测试");
     } else {

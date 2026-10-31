@@ -19,6 +19,7 @@ export interface LLMRoleBinding {
 }
 
 export interface LLMConfig {
+  speech_params?: Partial<Record<"tts" | "stt", Record<string, string>>>;
   id?: string;
   name?: string;
   group?: string;

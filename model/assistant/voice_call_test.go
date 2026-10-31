@@ -5,9 +5,13 @@ package assistant
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -92,5 +96,36 @@ func TestVoiceCallSpeechFormatAvoidsUnplayableFormats(t *testing.T) {
 		if got := voiceCallSpeechFormat(in); got != want {
 			t.Fatalf("voiceCallSpeechFormat(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Breeze 必须在上游结束之前交出音频，不能退回整段合成。
+func TestVoiceCallBreezeStreamsBeforeCompletion(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/text-to-speech/voc_test/stream" || r.URL.Query().Get("output_format") != "mp3" {
+			t.Errorf("request = %s", r.URL)
+		}
+		w.Header().Set("Content-Type", "audio/mpeg")
+		_, _ = w.Write([]byte("first audio"))
+		w.(http.Flusher).Flush()
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	runtime, _, _ := newVoiceCallTestRuntime(t, "")
+	stopped := errors.New("playback stopped")
+	err := runtime.synthesizeCallSpeech(ctx, mediaSlotRoute{
+		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, BaseURL: server.URL, APIKey: "test"},
+		Model:  "breeze-tts-2",
+		Params: map[string]string{"api": "breeze", "voice": "voc_test", "format": "pcm"},
+	}, "你好", func(mime string, data []byte) error {
+		if mime != "audio/mpeg" || len(data) == 0 {
+			t.Errorf("mime=%s data=%q", mime, data)
+		}
+		return stopped
+	})
+	if !errors.Is(err, stopped) {
+		t.Fatalf("expected early playback callback, got %v", err)
 	}
 }

@@ -43,7 +43,7 @@ type mediaSlotRoute struct {
 	Name   string
 	Config llm.ProviderConfig
 	Model  string
-	// Params 是主路由上配的参数，后备路由沿用同一份。
+	// Params 合并机器人行为参数与当前提供商的服务参数，旧配置仍兼容插槽参数。
 	Params map[string]string
 	// API 是内置语音服务固定的接口形态；普通提供商留空，按参数和地址判断。
 	API llm.SpeechAPI
@@ -160,7 +160,7 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 		}
 		routes := make([]mediaSlotRoute, 0, len(profiles))
 		for _, profile := range profiles {
-			routes = append(routes, newMediaSlotRoute(profile, profile.Config.Model, role.Params))
+			routes = append(routes, newMediaSlotRoute(profile, profile.Config.Model, slot, role.Params))
 		}
 		return routes
 	}
@@ -177,14 +177,31 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 				continue
 			}
 			seen[key] = true
-			routes = append(routes, newMediaSlotRoute(profile, model, role.Params))
+			routes = append(routes, newMediaSlotRoute(profile, model, slot, role.Params))
 		}
 	}
 	return routes
 }
 
-func newMediaSlotRoute(profile llm.Profile, model string, params map[string]string) mediaSlotRoute {
-	route := mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: params}
+func newMediaSlotRoute(profile llm.Profile, model, slot string, params map[string]string) mediaSlotRoute {
+	merged := make(map[string]string)
+	for key, value := range params {
+		merged[key] = value
+	}
+	if service, configured := profile.Config.SpeechParams[slot]; configured && (slot == mediaSlotTTS || slot == mediaSlotSTT) {
+		// 提供商是完整的服务配置，不能泄漏主路由或旧插槽的协议、音色到后备。
+		clear(merged)
+		for key, value := range service {
+			merged[key] = value
+		}
+		for _, key := range []string{mediaParamSendMode, mediaParamMaxChars, "private_enabled", "max_duration_seconds"} {
+			delete(merged, key)
+			if value, ok := params[key]; ok {
+				merged[key] = value
+			}
+		}
+	}
+	route := mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: merged}
 	if builtin, ok := builtinSpeechProfileByID(profile.ID); ok {
 		route.API = builtin.API
 	}

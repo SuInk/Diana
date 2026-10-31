@@ -248,6 +248,8 @@ type ImageGenerateResponse struct {
 }
 
 type ProviderConfig struct {
+	// SpeechParams 按 tts/stt 保存提供商自己的语音参数；存在的空对象表示使用服务默认值。
+	SpeechParams map[string]map[string]string `json:"speech_params,omitempty"`
 	// RequestLimitID is the provider profile identity, shared by all robots.
 	RequestLimitID      string            `json:"-"`
 	MaxConcurrency      int               `json:"max_concurrency,omitempty"`
@@ -498,6 +500,16 @@ func (format APIFormat) Supported() bool {
 
 // WithDefaults 补齐 provider 配置默认值。
 func (cfg ProviderConfig) WithDefaults() ProviderConfig {
+	if cfg.SpeechParams != nil {
+		params := make(map[string]map[string]string, len(cfg.SpeechParams))
+		for role, values := range cfg.SpeechParams {
+			params[role] = make(map[string]string, len(values))
+			for key, value := range values {
+				params[role][key] = value
+			}
+		}
+		cfg.SpeechParams = params
+	}
 	// WithDefaults 只补配置默认值，不校验密钥；这样 WebUI 可以展示未填 key 的草稿配置。
 	cfg.Provider = Provider(strings.TrimSpace(string(cfg.Provider)))
 	cfg.APIKey = strings.TrimSpace(cfg.APIKey)

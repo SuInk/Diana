@@ -51,6 +51,8 @@ func synthesize(t *testing.T, cfg ProviderConfig, req SpeechRequest) *SpeechResp
 
 func TestResolveSpeechAPIDetectsVendorHosts(t *testing.T) {
 	for base, want := range map[string]SpeechAPI{
+		"https://api.breeze.blue/v1":                          SpeechAPIBreeze,
+		"https://api.breeze.blue.evil.example/v1":             SpeechAPIOpenAI,
 		"https://api.xiaomimimo.com/v1":                       SpeechAPIMiMo,
 		"https://api.minimax.io/v1":                           SpeechAPIMiniMax,
 		"https://openspeech.bytedance.com/api/v1/tts":         SpeechAPIVolcengine,

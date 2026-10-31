@@ -147,7 +147,7 @@ func (c *VoiceCall) Reply(ctx context.Context, text string, emit func(string)) e
 	})
 }
 
-// Synthesize 用语音合成插槽念一句话。OpenAI 兼容和 ElevenLabs 边合成边交出音频，
+// Synthesize 用语音合成插槽念一句话。OpenAI 兼容、ElevenLabs 和 Breeze 边合成边交出音频，
 // 其余各家整句合成完再交出。一条路由失败换下一条，但已经交出过音频就不换：
 // 换了会从头再念一遍。
 func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime string, data []byte) error) error {
@@ -199,7 +199,7 @@ func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute
 		Timeout:      route.paramSeconds(mediaParamTimeout),
 		Options:      route.Params,
 	}
-	if api := llm.ResolveSpeechAPI(string(req.API), route.Config); api == llm.SpeechAPIOpenAI || api == llm.SpeechAPIElevenLabs {
+	if api := llm.ResolveSpeechAPI(string(req.API), route.Config); api == llm.SpeechAPIOpenAI || api == llm.SpeechAPIElevenLabs || api == llm.SpeechAPIBreeze {
 		stream, err := llm.StreamSpeech(ctx, route.Config, req)
 		if err != nil {
 			return err
