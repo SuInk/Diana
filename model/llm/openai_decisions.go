@@ -72,7 +72,7 @@ func (c *openAIDecisionsClient) Generate(ctx context.Context, req GenerateReques
 	if req.Model == "" {
 		req.Model = openAIDecisionsDefaultModel
 	}
-	if strings.TrimSpace(c.cfg.APIKey) == "" && c.cfg.OAuthProvider == "" {
+	if strings.TrimSpace(c.cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	input, err := openAIDecisionInput(req.Messages)

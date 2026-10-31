@@ -185,7 +185,7 @@ func newMediaHTTPWithKey(cfg ProviderConfig, defaultBaseURL string, opts []Clien
 	}
 	cfg = cfg.WithDefaults()
 	RegisterProviderSecrets(cfg)
-	if requireKey && strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+	if requireKey && strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	if err := validateBaseURL(cfg.BaseURL); err != nil {
@@ -206,7 +206,7 @@ func newMediaHTTPWithKey(cfg ProviderConfig, defaultBaseURL string, opts []Clien
 	}
 	m := &mediaHTTP{
 		cfg:     cfg,
-		client:  httpClientWithConfigCredentials(options.httpClient, options.credentials, cfg),
+		client:  httpClientWithRequestLimits(options.httpClient, cfg),
 		baseURL: baseURL,
 		policy:  DefaultMediaRetryPolicy,
 		sleep:   mediaRetrySleep,

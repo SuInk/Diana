@@ -199,9 +199,8 @@ func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute
 		Timeout:      route.paramSeconds(mediaParamTimeout),
 		Options:      route.Params,
 	}
-	opts := r.llmClientOptionsFor(route.Config)
 	if api := llm.ResolveSpeechAPI(string(req.API), route.Config); api == llm.SpeechAPIOpenAI || api == llm.SpeechAPIElevenLabs {
-		stream, err := llm.StreamSpeech(ctx, route.Config, req, opts...)
+		stream, err := llm.StreamSpeech(ctx, route.Config, req)
 		if err != nil {
 			return err
 		}
@@ -225,7 +224,7 @@ func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute
 		r.recordMediaSlotUsage(ctx, route, "tts", started)
 		return nil
 	}
-	resp, err := llm.SynthesizeSpeech(ctx, route.Config, req, opts...)
+	resp, err := llm.SynthesizeSpeech(ctx, route.Config, req)
 	if err != nil {
 		return err
 	}

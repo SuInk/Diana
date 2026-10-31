@@ -339,8 +339,7 @@ func (c *openAICompatibleClient) ManagesAttemptTimeout() bool {
 }
 
 // GenerateImage 调用 OpenAI-compatible 图片生成接口。
-func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (_ *ImageGenerateResponse, err error) {
-	defer func() { err = oauthImageError(c.cfg, "生图", err) }()
+func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (*ImageGenerateResponse, error) {
 	req = imageRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image prompt is required")
@@ -381,8 +380,7 @@ func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGen
 }
 
 // EditImage 调用 OpenAI-compatible 图片编辑接口。
-func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditRequest) (_ *ImageGenerateResponse, err error) {
-	defer func() { err = oauthImageError(c.cfg, "改图", err) }()
+func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditRequest) (*ImageGenerateResponse, error) {
 	req = imageEditRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image edit prompt is required")
@@ -554,7 +552,7 @@ func rawImageEditInputFrom(ctx context.Context, source imageEditSource, value st
 		return localImageEditInput(value, index)
 	}
 	if parsed, err := url.Parse(value); err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" {
-		return remoteImageEditInput(ctx, source.clientFor(parsed), value, parsed, index)
+		return remoteImageEditInput(ctx, source, value, parsed, index)
 	}
 	return imageEditInputData{}, fmt.Errorf("llm: unsupported image edit input %q", value)
 }
@@ -583,15 +581,18 @@ func localImageEditInput(path string, index int) (imageEditInputData, error) {
 	}, nil
 }
 
-func remoteImageEditInput(ctx context.Context, httpClient *http.Client, value string, parsed *url.URL, index int) (imageEditInputData, error) {
+func remoteImageEditInput(ctx context.Context, source imageEditSource, value string, parsed *url.URL, index int) (imageEditInputData, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, value, nil)
 	if err != nil {
 		return imageEditInputData{}, err
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
-	if httpClient == nil {
-		httpClient = http.DefaultClient
+	if source.sameOrigin(parsed) {
+		for name, values := range source.headers {
+			req.Header[name] = append([]string(nil), values...)
+		}
 	}
+	httpClient := source.clientFor(parsed)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return imageEditInputData{}, err
@@ -1185,13 +1186,7 @@ func newImageHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 		return &client
 	}
 
-	// 凭据注入包在最外层：直接拿它去 clone 会因为它不是 *http.Transport 而退回
-	// 默认传输层，OAuth 令牌跟着整层丢掉。先剥出底下那层改拨号，再原样包回去。
-	credentials, _ := base.Transport.(*credentialTransport)
 	inner := base.Transport
-	if credentials != nil {
-		inner = credentials.base
-	}
 	limits, _ := inner.(*requestLimitTransport)
 	if limits != nil {
 		inner = limits.base
@@ -1206,11 +1201,6 @@ func newImageHTTPClient(base *http.Client, cfg ProviderConfig) *http.Client {
 	if limits != nil {
 		rewrapped := *limits
 		rewrapped.base = transport
-		client.Transport = &rewrapped
-	}
-	if credentials != nil {
-		rewrapped := *credentials
-		rewrapped.base = client.Transport
 		client.Transport = &rewrapped
 	}
 	return &client

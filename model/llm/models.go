@@ -36,8 +36,7 @@ const DefaultTypeSafeModel = typeSafeDefaultModel
 // 拒绝只有单因子的配置），只伪装 UA 本来就是半套。
 //
 // 改成自报家门，格式跟 pi 一致（它发的是 "pi (darwin 24.6.0; arm64)"）：产品名加
-// 平台和架构，不带版本号，所以不存在过期。pi 和 OpenCode 走的都是 Codex 的 OAuth
-// 流程，但在授权时就声明 originator 是自己，没有一个假装成 codex-cli。
+// 平台和架构，不带版本号，所以不存在过期。
 //
 // 确实需要冒充特定客户端的部署，在配置档里填 User-Agent 覆盖它即可；配套的
 // originator 之类走自定义请求头。两者都不需要改代码。
@@ -108,7 +107,7 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 		opt(&options)
 	}
 	// 拉模型列表和发请求走同一套凭据，否则「测试连接通了但列不出模型」。
-	options.httpClient = httpClientWithConfigCredentials(options.httpClient, options.credentials, cfg)
+	options.httpClient = httpClientWithRequestLimits(options.httpClient, cfg)
 
 	switch cfg.Provider {
 	case ProviderOpenAICompatible:
@@ -141,8 +140,7 @@ func ListModels(ctx context.Context, cfg ProviderConfig, opts ...ClientOption) (
 }
 
 func listGeminiModels(ctx context.Context, cfg ProviderConfig, client *http.Client) ([]ModelInfo, error) {
-	// 和 OpenAI-compatible 一样：绑了 OAuth 的配置档没有 API Key 是正常状态。
-	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	baseURL := normalizeGeminiBaseURL(cfg.BaseURL)
@@ -225,8 +223,7 @@ const anthropicModelListMaxPages = 20
 //
 // 路径跟 SDK 拼 /v1/messages 的方式一致：BaseURL 是不带 /v1 的根地址。
 func listAnthropicModels(ctx context.Context, cfg ProviderConfig, httpClient *http.Client) ([]ModelInfo, error) {
-	// OAuth 登录的配置档没有 API Key，鉴权头由凭据传输层补上。
-	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)
@@ -303,8 +300,7 @@ func listAnthropicModels(ctx context.Context, cfg ProviderConfig, httpClient *ht
 
 // listOpenAICompatibleModels 从 OpenAI-compatible 后端读取模型列表。
 func listOpenAICompatibleModels(ctx context.Context, cfg ProviderConfig, httpClient *http.Client) ([]ModelInfo, error) {
-	// 绑了 OAuth 的配置档没有 API Key 是正常状态，鉴权头在传输层补上。
-	if strings.TrimSpace(cfg.APIKey) == "" && strings.TrimSpace(cfg.OAuthProvider) == "" {
+	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 	baseURL := strings.TrimSpace(cfg.BaseURL)

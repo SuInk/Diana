@@ -8,8 +8,7 @@ import (
 )
 
 // Hash the complete configured route, including credentials and fallbacks.
-// An opaque factory or dynamically supplied OAuth credential cannot prove
-// equivalent authorization, so those paths deliberately skip result reuse.
+// The configured route and runtime epoch separate different credentials and factories.
 func (r *Runtime) rssJudgeIdentity(ctx context.Context, event MessageEvent) string {
 	r.mu.RLock()
 	store, registry, factory, epoch := r.llmStore, r.llmRegistry, r.llmCfgFactory, r.llmReuseEpoch
@@ -18,11 +17,6 @@ func (r *Runtime) rssJudgeIdentity(ctx context.Context, event MessageEvent) stri
 		return ""
 	}
 	profiles := store.Profiles()
-	for _, profile := range profiles.Profiles {
-		if profile.Config.OAuthProvider != "" {
-			return ""
-		}
-	}
 	if registry == nil {
 		if provider, ok := store.(LLMProviderRegistryStore); ok {
 			registry, _ = provider.ProviderRegistry()

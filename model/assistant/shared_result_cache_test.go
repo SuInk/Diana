@@ -328,20 +328,3 @@ func TestSharedSocialCacheDoesNotBypassGroupPermission(t *testing.T) {
 		t.Fatal("blocked requester performed a fetch")
 	}
 }
-
-func TestRSSDynamicOAuthJudgmentsAreNotReused(t *testing.T) {
-	p := &sharedJudgeProvider{}
-	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{ID: "model", Group: llm.GroupChat, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "one", APIKey: "key", OAuthProvider: "dynamic-login"}}}}}
-	r := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(NewRSSWatchPlugin(nil)), store, nil, nil, nil)
-	r.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return p, nil })
-	item := Reminder{FeedJudgePrompt: "notify"}
-	change := rssWatchChange{FeedURL: "https://example.com/feed", Items: []rssWatchItem{{ID: "1", Content: "new"}}}
-	for i := 0; i < 2; i++ {
-		if _, err := r.judgeRSSWatch(context.Background(), item, change); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if p.calls.Load() != 2 {
-		t.Fatal("dynamic credentials shared model result")
-	}
-}

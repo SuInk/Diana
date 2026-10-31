@@ -165,7 +165,7 @@ Every field is documented in [`config.example.yaml`](./config.example.yaml).
 ## Security notes
 
 - The console requires login from first startup; there are no anonymous endpoints. Failed logins back off and lock per source IP to resist brute force.
-- API keys, tokens, and OAuth credentials are never returned in plaintext once stored — read endpoints only say "configured".
+- API keys and tokens are never returned in plaintext once stored — read endpoints only say "configured".
 - Behind a reverse proxy you must declare `trusted_proxies` in `config.yaml` (or set the `DIANA_TRUSTED_PROXIES` environment variable for the process); otherwise rate limiting and logs will see the proxy's address as every client's IP.
 - With an owner account configured, "quick login" is available: grab a 6-digit one-time code from the login page and DM it to the bot; the bot replies with the source IP and device, so a hijacked code is spotted immediately.
 

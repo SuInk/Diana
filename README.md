@@ -196,7 +196,7 @@ docker compose start diana
 ## 安全须知
 
 - 控制台强制登录，无匿名接口；密码错误按来源 IP 退避锁定，防爆破。
-- API Key、token、OAuth 令牌落库后不再回传明文，读接口只说「已配置」。
+- API Key、token 落库后不再回传明文，读接口只说「已配置」。
 - 套了反向代理必须在 `config.yaml` 里声明 `trusted_proxies`（或给进程设环境变量 `DIANA_TRUSTED_PROXIES`），否则限流和日志里的来源 IP 都会变成代理地址。
 - 配好主人账号后可用「快速登录」：登录页取一个 6 位验证码，私聊发给机器人即登录，机器人会回执来源 IP 和设备，被冒用能当场发现。
 

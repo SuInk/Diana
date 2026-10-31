@@ -152,8 +152,8 @@ func TestLiveStableTailCache(t *testing.T) {
 		cfg.Model = strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_MODEL"))
 		cfg.APIStyle = llm.APIStyle(strings.TrimSpace(os.Getenv("DIANA_TEST_LLM_API_STYLE")))
 	}
-	if cfg.APIKey == "" || cfg.Model == "" || cfg.OAuthProvider != "" {
-		t.Fatal("explicit API key and model required; OAuth refresh is outside this experiment's request budget")
+	if cfg.APIKey == "" || cfg.Model == "" {
+		t.Fatal("explicit API key and model required")
 	}
 	cfg.Timeout, cfg.MaxOutputTokens = 90*time.Second, 64
 	transport := http.DefaultTransport.(*http.Transport).Clone()

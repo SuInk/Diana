@@ -95,6 +95,7 @@
       <section class="section searchable" id="models">
         <div class="section-heading"><p class="eyebrow">模型配置</p><h2>统一接入，按用途分配模型</h2></div>
         <p>“提供商”页管理 Base URL、API Key 和协议，可同步模型目录，也可添加自定义模型 ID；机器人配置再将不同职责绑定到具体模型。</p>
+        <p>模型提供商统一使用 API Key 鉴权。旧版模型账号登录功能已移除，升级时会清理本地保存的登录凭据及绑定；此前只依赖账号登录的提供商需要填写 API Key。</p>
         <p>所有模型都可以点击编辑上下文窗口和输入、输出能力，包含同步的模型与自定义 ID。手动设置与目录信息独立保存，重新同步不会覆盖；关闭“手动设置模型能力”可恢复跟随目录。输入图片、输出文字表示视觉理解，输出图片表示图片生成。能力标注仅用于提示和排序，机器人仍可选择并保存能力不匹配的模型。</p>
         <p>实际上下文窗口按“提供商统一覆盖 → 当前模型的手动窗口 → 128,000 Token 兜底值”取值；同步目录中的窗口只作参考。模型窗口随实际选中的模型切换，单次请求上限仍不能超过窗口。模型编辑先应用到草稿，再保存提供商配置。</p>
         <div class="table-wrap"><table><thead><tr><th>角色</th><th>用途</th><th>测试要求</th></tr></thead><tbody>
@@ -104,12 +105,6 @@
           <tr><td>图片生成</td><td>文生图与图片编辑</td><td>必须实际生成并返回图片，不能只测文本连通性。</td></tr>
         </tbody></table></div>
         <div class="callout recommended"><strong>默认启用</strong><p>“识别机器人并自动不回复”默认打开，用于避免机器人之间循环对话；有明确业务需要时再关闭。</p></div>
-        <h3>授权登录（OAuth）</h3>
-        <p>配置档的“凭据方式”可以用 OAuth 代替 API Key。控制台常跑在服务器上、浏览器未必同机，所以回调不强求落回本机：点“登录”后在自己的浏览器里完成授权，把地址栏那条回调地址整条粘回来即可（只粘其中的 <code>code</code> 也认）。令牌在过期前自动续期；同时填了 API Key 的话，续期失败会回落到它，不至于整个配置档一起哑掉。</p>
-        <p>提供商是配置而不是代码。内置 OpenRouter，其余在“自定义提供商”里填授权地址、令牌地址、Client ID 和 Scope 自行接入，适合自建网关或未内置的服务。两个地址必须是 https，本机回环地址（<code>127.0.0.1</code>）可以用 http。</p>
-        <p>拿到令牌之后怎么带给模型接口，同样是配置项。默认 <code>Authorization: Bearer &lt;token&gt;</code> 适用于绝大多数提供商；个别家不吃这一套——Anthropic 收到 <code>Authorization</code> 里的 OAuth 令牌会直接回 401“OAuth authentication is currently not supported.”，它要求令牌放在 <code>x-api-key</code> 里且不带前缀。所以自定义提供商的“高级”里可以指定令牌请求头、令牌前缀和一组附加请求头。换用非默认落点时，各家 SDK 自己写上的鉴权头会被摘掉，避免同一个请求带两种鉴权。</p>
-        <p>换令牌那一步的<strong>请求体格式</strong>同样在“高级”里选。RFC 6749 §4.1.3 规定令牌接口用 <code>application/x-www-form-urlencoded</code>，所以那是默认值；JSON 是部分服务自己的方言，内置的 OpenRouter 就只收 JSON。发错格式时对方通常只回一句“参数缺失”，不会说是整包没解析出来，排查方向容易被带到 Client ID 上去。<strong>在这个选项出现之前存下来的自定义提供商会继续按 JSON 发</strong>，免得本来配通的配置突然换不到令牌；新建的按规范走 form。</p>
-        <div class="callout"><strong>不预置需要冒用第一方 Client ID 的提供商</strong><p>那类用法要向授权服务器谎报客户端身份，也超出消费级订阅本身的授权范围，是否使用属于部署者自己的判断；需要的话可以在“自定义提供商”里自行填写。</p></div>
         <h3>上下文与超时</h3>
         <pre><code>llm:
   context_window_tokens: 65536

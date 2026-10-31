@@ -17,7 +17,7 @@ import (
 // protectRuntimeSecrets 在启动时把凭据的落脚点告诉 Agent 和 secretmask。
 //
 // 文件：config.yaml 有管理员密码和首启播种的 API Key；SQLite 数据库（连同 WAL）
-// 存着全部插件凭据、LLM 密钥和 OAuth 令牌；日志文件里有历史报错。它们都在 Agent
+// 存着全部插件凭据、LLM 密钥；日志文件里有历史报错。它们都在 Agent
 // 工作目录外面，文件工具够不着，但 run_command 的沙箱只限写不限读，命令能跑 cat、
 // strings、sqlite3，一句 `cat ../diana.db` 就能读出来。
 //

@@ -21,8 +21,8 @@ func TestProviderRequestLimitsShareConcurrencyUntilBodyClosed(t *testing.T) {
 	}))
 	defer server.Close()
 	cfg := ProviderConfig{RequestLimitID: t.Name(), MaxConcurrency: 1}
-	first := httpClientWithConfigCredentials(server.Client(), nil, cfg)
-	second := httpClientWithConfigCredentials(server.Client(), nil, cfg)
+	first := httpClientWithRequestLimits(server.Client(), cfg)
+	second := httpClientWithRequestLimits(server.Client(), cfg)
 	resp, err := first.Get(server.URL)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +81,7 @@ func TestProviderRequestLimitsPaceIndependentClientsAndReleaseEOF(t *testing.T) 
 	defer server.Close()
 	cfg := ProviderConfig{RequestLimitID: t.Name(), MaxConcurrency: 1, MaxRPS: 25}
 	for i := 0; i < 3; i++ {
-		client := httpClientWithConfigCredentials(server.Client(), nil, cfg)
+		client := httpClientWithRequestLimits(server.Client(), cfg)
 		resp, err := client.Get(server.URL)
 		if err != nil {
 			t.Fatal(err)

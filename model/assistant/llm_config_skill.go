@@ -125,7 +125,6 @@ func (r *Runtime) applyLLMConfigCommand(ctx context.Context, event MessageEvent,
 		}
 	}
 	// 切换前的探测也走注册表，凭据要和机器人真正发请求时一致。
-	registry = r.bindLLMRegistry(registry)
 	bindingRoles := normalizeModelRoles(roles)
 	if registry != nil {
 		for key, role := range bindingRoles {

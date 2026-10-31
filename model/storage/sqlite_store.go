@@ -22,7 +22,6 @@ import (
 	"github.com/SuInk/diana/model/browsersource"
 	"github.com/SuInk/diana/model/desktopctl"
 	"github.com/SuInk/diana/model/llm"
-	"github.com/SuInk/diana/model/llmauth"
 	"github.com/SuInk/diana/model/updater"
 
 	_ "modernc.org/sqlite"
@@ -32,7 +31,6 @@ const (
 	defaultDatabasePath   = "data/diana.db"
 	llmProfilesKey        = "llm_profiles"
 	llmRegistryKey        = "llm_provider_registry"
-	llmAuthKey            = "llm_oauth"
 	botProfilesKey        = "bot_profiles"
 	botSeedProfileKey     = "bot_seed_profile"
 	llmSeedProfileKey     = "llm_seed_profile"
@@ -206,22 +204,6 @@ func (s *SQLiteStore) LoadLLMProviderRegistry(ctx context.Context) (llm.Provider
 // SaveLLMProviderRegistry persists the provider/model document.
 func (s *SQLiteStore) SaveLLMProviderRegistry(ctx context.Context, document llm.ProviderRegistryDocument) error {
 	return s.saveJSON(ctx, llmRegistryKey, document)
-}
-
-// LoadLLMAuth 读取 OAuth 提供商与令牌。
-//
-// 和 API Key 同库同待遇：这份文档里是明文凭据，任何对外接口都必须先脱敏再返回。
-func (s *SQLiteStore) LoadLLMAuth(ctx context.Context) (llmauth.Document, error) {
-	var document llmauth.Document
-	if _, err := s.loadJSON(ctx, llmAuthKey, &document); err != nil {
-		return llmauth.Document{}, err
-	}
-	return document, nil
-}
-
-// SaveLLMAuth 保存 OAuth 提供商与令牌。
-func (s *SQLiteStore) SaveLLMAuth(ctx context.Context, document llmauth.Document) error {
-	return s.saveJSON(ctx, llmAuthKey, document)
 }
 
 // LoadBotProfiles 读取 OneBot v11 机器人配置集。
@@ -609,6 +591,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_action_created_at ON app_logs(action, cr
 CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, target, created_at ASC);
 `)
 	if err != nil {
+		return err
+	}
+	if err := s.removeLLMOAuthState(); err != nil {
 		return err
 	}
 	if err := s.migrateRestoredFeatures(); err != nil {

@@ -504,7 +504,6 @@ type Runtime struct {
 	llmFactory            LLMProviderFactory
 	llmCfgFactory         LLMProviderConfigFactory
 	llmRegistry           *llm.ProviderRegistry
-	llmClientOptions      func(llm.ProviderConfig) []llm.ClientOption
 	llmReuseEpoch         uint64
 	rssJudgments          sharedResultCache[rssJudgeDecision]
 	replyInterruptMu      sync.Mutex

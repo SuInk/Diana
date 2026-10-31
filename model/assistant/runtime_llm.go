@@ -27,48 +27,6 @@ func (r *Runtime) SetLLMProviderConfigFactory(factory LLMProviderConfigFactory) 
 	r.llmReuseEpoch++
 }
 
-// SetLLMClientOptions 注入「按配置档取客户端选项」的钩子，和聊天工厂同源（部署时就是
-// llm.ClientOptionsFor(cfg, oauthManager)）。
-//
-// 聊天走的是注入进来的工厂，可生图改图、embedding、拉模型列表、注册表路由这些是
-// 运行时自己按配置档直接调 llm 包的，以前一律不带选项：只用 OAuth 登录（没填 API
-// Key）的配置档在这些路上拿不到凭据。image 用途没单独配置时沿用 chat 的配置档，于是
-// 「能聊天、不能生图」。现在这些调用点统一从这里取选项；没绑 OAuth 的配置档拿到的是
-// 空选项，行为和以前完全一致。
-func (r *Runtime) SetLLMClientOptions(options func(llm.ProviderConfig) []llm.ClientOption) {
-	r.mu.Lock()
-	r.llmClientOptions = options
-	r.llmReuseEpoch++
-	r.mu.Unlock()
-}
-
-// llmClientOptionsHook 取当前的选项钩子，可能为 nil。
-func (r *Runtime) llmClientOptionsHook() func(llm.ProviderConfig) []llm.ClientOption {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.llmClientOptions
-}
-
-// llmClientOptionsFor 按配置档给出建客户端要带的选项。没注入钩子时返回空。
-func (r *Runtime) llmClientOptionsFor(cfg llm.ProviderConfig) []llm.ClientOption {
-	if hook := r.llmClientOptionsHook(); hook != nil {
-		return hook(cfg)
-	}
-	return nil
-}
-
-// bindLLMRegistry 让注册表里由配置档迁移来的提供商也用同一个选项钩子。
-// 注册表多半是每次从存储现建的，钉在它身上不会影响别处。
-func (r *Runtime) bindLLMRegistry(registry *llm.ProviderRegistry) *llm.ProviderRegistry {
-	if registry == nil {
-		return nil
-	}
-	if hook := r.llmClientOptionsHook(); hook != nil {
-		registry.SetClientOptions(hook)
-	}
-	return registry
-}
-
 // SetLLMProviderRegistry enables the providerId/modelId architecture while
 // leaving legacy profile routing available for bots that have not migrated.
 func (r *Runtime) SetLLMProviderRegistry(registry *llm.ProviderRegistry) {
@@ -130,7 +88,7 @@ func (r *Runtime) llmModelLister() LLMModelLister {
 		return lister
 	}
 	return func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
-		return defaultLLMModelLister(ctx, cfg, r.llmClientOptionsFor(cfg)...)
+		return defaultLLMModelLister(ctx, cfg)
 	}
 }
 
@@ -437,7 +395,6 @@ func (r *Runtime) runRawLLMProviderForGroup(ctx context.Context, group string, r
 			registry, _ = registryStore.ProviderRegistry()
 		}
 	}
-	registry = r.bindLLMRegistry(registry)
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		var profiles []llm.Profile
@@ -687,7 +644,6 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 			registry, _ = registryStore.ProviderRegistry()
 		}
 	}
-	registry = r.bindLLMRegistry(registry)
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()
 		// 判定链路和对话链路走同一套降级：先把角色绑定连同它的 fallbacks 展开成候选，

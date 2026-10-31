@@ -180,7 +180,7 @@ go test ./model/assistant -run '^TestLiveGroup(PromptCache|ToolSession)$' -v -co
 DIANA_LIVE_LLM=1 DIANA_LIVE_STABLE_TAIL_CACHE=1 go test ./model/assistant -run '^TestLiveStableTailCache$' -v -count=1
 ```
 
-三因素 × 两臂 × 三轮，最多 18 个出网请求，每次输出上限 64 token；不额外预热、不做收费保活，并阻断同一次 Generate 的再次出网和重定向。不使用 OAuth 刷新。测试日志输出逐样本 JSON 和按因素、实验臂、冷暖分组的全样本原始 token 总数；`cached=0` 标为 `unknown_or_zero`，不推断缓存未命中，也不从不完整的 usage 推导命中率。这个实验采集数据而不保证供应商缓存必然生效，不使用 `DIANA_CACHE_REPORT` 写报告。
+三因素 × 两臂 × 三轮，最多 18 个出网请求，每次输出上限 64 token；不额外预热、不做收费保活，并阻断同一次 Generate 的再次出网和重定向。测试日志输出逐样本 JSON 和按因素、实验臂、冷暖分组的全样本原始 token 总数；`cached=0` 标为 `unknown_or_zero`，不推断缓存未命中，也不从不完整的 usage 推导命中率。这个实验采集数据而不保证供应商缓存必然生效，不使用 `DIANA_CACHE_REPORT` 写报告。
 
 不调用收费模型的 fixture、统计与请求上限检查：
 

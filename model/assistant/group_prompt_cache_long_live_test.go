@@ -262,7 +262,7 @@ func TestLiveStableTailCacheLongHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal("long-history configuration invalid")
 	}
-	if cfg.Provider != llm.ProviderGemini || cfg.OAuthProvider != "" {
+	if cfg.Provider != llm.ProviderGemini {
 		t.Fatal("long-history experiment requires explicit Gemini API-key configuration")
 	}
 	cfg.MaxOutputTokens = 1024

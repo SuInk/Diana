@@ -83,7 +83,7 @@ func (c *typeSafeClient) Generate(ctx context.Context, req GenerateRequest) (*Ge
 	if err := req.Decision.Validate(); err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(c.cfg.APIKey) == "" && strings.TrimSpace(c.cfg.OAuthProvider) == "" {
+	if strings.TrimSpace(c.cfg.APIKey) == "" {
 		return nil, ErrMissingAPIKey
 	}
 

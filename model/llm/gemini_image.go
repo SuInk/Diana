@@ -25,8 +25,7 @@ import (
 // 这个字段，让模型用自己的默认值，而不是把请求打回去。
 
 // GenerateImage 用 Gemini 的图片模型按提示词生成图片。
-func (c *geminiClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (_ *ImageGenerateResponse, err error) {
-	defer func() { err = oauthImageError(c.cfg, "生图", err) }()
+func (c *geminiClient) GenerateImage(ctx context.Context, req ImageGenerateRequest) (*ImageGenerateResponse, error) {
 	req = imageRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image prompt is required")
@@ -40,8 +39,7 @@ func (c *geminiClient) GenerateImage(ctx context.Context, req ImageGenerateReque
 }
 
 // EditImage 把源图和修改要求一起交给 Gemini 的图片模型。
-func (c *geminiClient) EditImage(ctx context.Context, req ImageEditRequest) (_ *ImageGenerateResponse, err error) {
-	defer func() { err = oauthImageError(c.cfg, "改图", err) }()
+func (c *geminiClient) EditImage(ctx context.Context, req ImageEditRequest) (*ImageGenerateResponse, error) {
 	req = imageEditRequestWithDefaults(req, c.cfg)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image edit prompt is required")

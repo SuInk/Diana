@@ -205,8 +205,8 @@ func TestImageDebugTraceTaskAndRedaction(t *testing.T) {
 }
 
 func TestImageTaskPreservesDebugTraceAcrossBackgroundContext(t *testing.T) {
-	server := newOAuthRuntimeServer(t)
-	runtime := newOAuthOptionsRuntime(t, oauthRuntimeProfile(server.URL), &oauthRuntimeResolver{token: "test-token"})
+	server := newAPIKeyRuntimeServer(t)
+	runtime := newAPIKeyRuntime(t, apiKeyRuntimeProfile(server.URL))
 	logs := &captureAppLogs{}
 	runtime.SetAppLogWriter(logs)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "image-group", MessageID: "image-event"}

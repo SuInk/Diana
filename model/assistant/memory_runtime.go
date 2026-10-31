@@ -1044,7 +1044,6 @@ func (r *Runtime) runLLMMemoryProvider(ctx context.Context, run llmProviderRunFu
 			registry, _ = registryStore.ProviderRegistry()
 		}
 	}
-	registry = r.bindLLMRegistry(registry)
 	roles := r.modelRolesForContext(ctx)
 	if registry != nil && store != nil {
 		set := store.Profiles().WithDefaults()

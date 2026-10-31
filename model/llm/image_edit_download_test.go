@@ -45,19 +45,15 @@ func (s *imageServer) received() []string {
 	return append([]string(nil), s.auths...)
 }
 
-// oauthImageSource 是配了 OAuth 的提供商客户端：令牌在传输层注入，每个请求都带。
-func oauthImageSource(baseURL, token string) imageEditSource {
-	credentials := CredentialSourceFunc(func(context.Context) (Credential, error) {
-		return Credential{Kind: CredentialKindOAuth, Token: token}, nil
-	})
-	return newImageEditSource(ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: baseURL + "/v1"}, httpClientWithCredentials(http.DefaultClient, credentials))
+func apiKeyImageSource(baseURL, key string) imageEditSource {
+	return newImageEditSource(ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: baseURL + "/v1", APIKey: key}, http.DefaultClient)
 }
 
 // 提供商自己的文件（上一轮生成的图）照样带令牌取。
-func TestImageEditDownloadSendsTokenToProviderHost(t *testing.T) {
-	token := "oauth-" + "provider0123456789"
+func TestImageEditDownloadSendsAPIKeyToProviderHost(t *testing.T) {
+	token := "sk-" + "provider0123456789"
 	provider := newImageServer(t, nil)
-	source := oauthImageSource(provider.URL, token)
+	source := apiKeyImageSource(provider.URL, token)
 	got, err := imageEditInputFrom(context.Background(), source, provider.URL+"/files/out.png", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -70,13 +66,45 @@ func TestImageEditDownloadSendsTokenToProviderHost(t *testing.T) {
 	}
 }
 
-// 用户或模型给的别处链接：不带令牌。这里放开私有地址，只看凭据。
-func TestImageEditDownloadDoesNotSendTokenToOtherHost(t *testing.T) {
+func TestImageEditDownloadGeminiUsesAPIKeyAndCustomHeadersOnlyOnProvider(t *testing.T) {
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
-	token := "oauth-" + "other0123456789ab"
+	key := "gemini-key-0123456789"
+	provider := newImageServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Goog-Api-Key") != key || r.Header.Get("X-Gateway-Key") != "custom-secret" {
+			t.Errorf("provider request headers = %v", r.Header)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNG)
+	})
+	other := newImageServer(t, func(w http.ResponseWriter, r *http.Request) {
+		for _, name := range []string{"Authorization", "X-Goog-Api-Key", "X-Gateway-Key"} {
+			if r.Header.Get(name) != "" {
+				t.Errorf("external host received %s", name)
+			}
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(testPNG)
+	})
+	source := newImageEditSource(ProviderConfig{
+		Provider: ProviderGemini,
+		BaseURL:  provider.URL,
+		APIKey:   key,
+		Headers:  map[string]string{"X-Gateway-Key": "custom-secret"},
+	}, nil)
+	for _, endpoint := range []string{provider.URL, other.URL} {
+		if _, err := imageEditInputFrom(context.Background(), source, endpoint+"/image.png", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// 用户或模型给的别处链接：不带令牌。这里放开私有地址，只看凭据。
+func TestImageEditDownloadDoesNotSendAPIKeyToOtherHost(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	token := "sk-" + "other0123456789ab"
 	provider := newImageServer(t, nil)
 	other := newImageServer(t, nil)
-	source := oauthImageSource(provider.URL, token)
+	source := apiKeyImageSource(provider.URL, token)
 	if _, err := imageEditInputFrom(context.Background(), source, other.URL+"/cat.png", 0); err != nil {
 		t.Fatal(err)
 	}
@@ -88,15 +116,15 @@ func TestImageEditDownloadDoesNotSendTokenToOtherHost(t *testing.T) {
 	}
 }
 
-// 提供商那边跳到别处的重定向不跟：令牌是在每一跳上重新注入的。
+// 提供商那边跳到别处的重定向不跟，避免转发 API Key 和自定义请求头。
 func TestImageEditDownloadDoesNotFollowProviderRedirectOffHost(t *testing.T) {
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
-	token := "oauth-" + "redirect0123456789"
+	token := "sk-" + "redirect0123456789"
 	other := newImageServer(t, nil)
 	provider := newImageServer(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, other.URL+"/stolen.png", http.StatusFound)
 	})
-	source := oauthImageSource(provider.URL, token)
+	source := apiKeyImageSource(provider.URL, token)
 	if _, err := imageEditInputFrom(context.Background(), source, provider.URL+"/files/out.png", 0); err == nil {
 		t.Fatal("跳出提供商主机的重定向应当报错")
 	}
@@ -112,7 +140,7 @@ func TestImageEditDownloadRejectsPrivateAddresses(t *testing.T) {
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "")
 	provider := newImageServer(t, nil)
 	internal := newImageServer(t, nil)
-	source := oauthImageSource(provider.URL, "oauth-"+"private0123456789")
+	source := apiKeyImageSource(provider.URL, "sk-"+"private0123456789")
 	for _, target := range []string{
 		internal.URL + "/secret.png",
 		"http://169.254.169.254/latest/meta-data/iam/security-credentials/",

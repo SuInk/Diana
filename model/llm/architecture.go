@@ -36,9 +36,6 @@ type ProviderDefinition struct {
 	APIKey         string            `json:"apiKey,omitempty"`
 	Headers        map[string]string `json:"headers,omitempty"`
 	Enabled        bool              `json:"enabled"`
-	// OAuthProvider 是配置档绑定的 OAuth 提供商标识，凭据在发请求时由
-	// SetClientOptions 注入的选项现取。它只是个名字，不是秘密，公开视图里保留。
-	OAuthProvider string `json:"oauthProvider,omitempty"`
 }
 
 type ModelDefinition struct {
@@ -150,32 +147,6 @@ type ProviderRegistry struct {
 	providers map[string]ProviderDefinition
 	models    map[string]ModelDefinition
 	adapters  map[string]LLMAdapter
-	// clientOptions 按配置档给出建客户端时的附加选项（目前就是 OAuth 凭据），
-	// 和机器人其他调用点用的是同一个钩子。没设时行为和以前完全一致。
-	clientOptions func(ProviderConfig) []ClientOption
-}
-
-// SetClientOptions 注入「按配置档取客户端选项」的钩子。注册表里由配置档迁移来的
-// 提供商（clientAdapter）每次建客户端、拉模型列表都会先问它一遍；自定义适配器不受影响。
-func (r *ProviderRegistry) SetClientOptions(options func(ProviderConfig) []ClientOption) {
-	if r == nil {
-		return
-	}
-	r.mu.Lock()
-	r.clientOptions = options
-	r.mu.Unlock()
-}
-
-// withClientOptions 把注册表当前的选项钩子交给由配置档迁移来的适配器。
-func withClientOptions(adapter LLMAdapter, options func(ProviderConfig) []ClientOption) LLMAdapter {
-	if options == nil {
-		return adapter
-	}
-	if bound, ok := adapter.(clientAdapter); ok {
-		bound.options = options
-		return bound
-	}
-	return adapter
 }
 
 // ProviderRegistryDocument is the versioned on-disk representation. API keys
@@ -209,7 +180,7 @@ func RegistryFromDocument(document ProviderRegistryDocument) (*ProviderRegistry,
 	}
 	r := NewProviderRegistry()
 	for _, provider := range document.Providers {
-		cfg := ProviderConfig{RequestLimitID: provider.ID, MaxConcurrency: provider.MaxConcurrency, MaxRPS: provider.MaxRPS, APIKey: provider.APIKey, BaseURL: provider.BaseURL, Headers: provider.Headers, OAuthProvider: provider.OAuthProvider}
+		cfg := ProviderConfig{RequestLimitID: provider.ID, MaxConcurrency: provider.MaxConcurrency, MaxRPS: provider.MaxRPS, APIKey: provider.APIKey, BaseURL: provider.BaseURL, Headers: provider.Headers}
 		switch provider.Protocol {
 		case ProtocolAnthropicMessages:
 			cfg.Provider = ProviderAnthropic
@@ -306,7 +277,7 @@ func (r *ProviderRegistry) Generate(ctx context.Context, selection AgentModelCon
 	r.mu.RLock()
 	model, modelOK := r.models[strings.TrimSpace(selection.ModelID)]
 	provider, providerOK := r.providers[strings.TrimSpace(selection.ProviderID)]
-	adapter := withClientOptions(r.adapters[strings.TrimSpace(selection.ProviderID)], r.clientOptions)
+	adapter := r.adapters[strings.TrimSpace(selection.ProviderID)]
 	r.mu.RUnlock()
 	if !providerOK || !modelOK || model.ProviderID != provider.ID {
 		return ChatResponse{}, fmt.Errorf("llm: model selection %q/%q is not registered", selection.ProviderID, selection.ModelID)
@@ -323,7 +294,7 @@ func (r *ProviderRegistry) Stream(ctx context.Context, selection AgentModelConfi
 	r.mu.RLock()
 	model, modelOK := r.models[strings.TrimSpace(selection.ModelID)]
 	provider, providerOK := r.providers[strings.TrimSpace(selection.ProviderID)]
-	adapter := withClientOptions(r.adapters[strings.TrimSpace(selection.ProviderID)], r.clientOptions)
+	adapter := r.adapters[strings.TrimSpace(selection.ProviderID)]
 	r.mu.RUnlock()
 	if !providerOK || !modelOK || model.ProviderID != provider.ID {
 		return nil, fmt.Errorf("llm: model selection %q/%q is not registered", selection.ProviderID, selection.ModelID)
@@ -337,7 +308,7 @@ func (r *ProviderRegistry) Stream(ctx context.Context, selection AgentModelConfi
 func (r *ProviderRegistry) ListModels(ctx context.Context, providerID string) ([]ModelInfo, error) {
 	r.mu.RLock()
 	provider, ok := r.providers[strings.TrimSpace(providerID)]
-	adapter := withClientOptions(r.adapters[strings.TrimSpace(providerID)], r.clientOptions)
+	adapter := r.adapters[strings.TrimSpace(providerID)]
 	r.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("llm: provider %q is not registered", providerID)
@@ -350,26 +321,18 @@ func (r *ProviderRegistry) ListModels(ctx context.Context, providerID string) ([
 }
 
 type clientAdapter struct {
-	cfg     ProviderConfig
-	options func(ProviderConfig) []ClientOption
-}
-
-func (a clientAdapter) optionsFor(cfg ProviderConfig) []ClientOption {
-	if a.options == nil {
-		return nil
-	}
-	return a.options(cfg)
+	cfg ProviderConfig
 }
 
 func (a clientAdapter) newClient(model ModelDefinition) (LLMClient, error) {
 	cfg := a.cfgForModel(model)
-	return NewClient(cfg, a.optionsFor(cfg)...)
+	return NewClient(cfg)
 }
 
 func (a clientAdapter) ListModels(ctx context.Context, provider ProviderDefinition) ([]ModelInfo, error) {
 	cfg := a.cfg
-	cfg.BaseURL, cfg.APIKey, cfg.Headers, cfg.OAuthProvider = provider.BaseURL, provider.APIKey, provider.Headers, provider.OAuthProvider
-	return ListModels(ctx, cfg, a.optionsFor(cfg)...)
+	cfg.BaseURL, cfg.APIKey, cfg.Headers = provider.BaseURL, provider.APIKey, provider.Headers
+	return ListModels(ctx, cfg)
 }
 
 func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req ChatRequest) (ChatResponse, error) {
@@ -485,7 +448,7 @@ func NewProviderRegistryFromProfiles(set ProfileSet) (*ProviderRegistry, AgentMo
 			continue
 		}
 		cfg.RequestLimitID = providerID
-		provider := ProviderDefinition{MaxConcurrency: cfg.MaxConcurrency, MaxRPS: cfg.MaxRPS, ID: providerID, Name: profile.Name, Protocol: protocolForConfig(cfg), BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Headers: cfg.Headers, OAuthProvider: cfg.OAuthProvider, Enabled: true}
+		provider := ProviderDefinition{MaxConcurrency: cfg.MaxConcurrency, MaxRPS: cfg.MaxRPS, ID: providerID, Name: profile.Name, Protocol: protocolForConfig(cfg), BaseURL: cfg.BaseURL, APIKey: cfg.APIKey, Headers: cfg.Headers, Enabled: true}
 		if provider.Name == "" {
 			provider.Name = providerID
 		}
@@ -557,7 +520,7 @@ func (c RegistryClient) ManagesAttemptTimeout() bool {
 	r.mu.RLock()
 	model, modelOK := r.models[strings.TrimSpace(c.Selection.ModelID)]
 	provider, providerOK := r.providers[strings.TrimSpace(c.Selection.ProviderID)]
-	adapter := withClientOptions(r.adapters[strings.TrimSpace(c.Selection.ProviderID)], r.clientOptions)
+	adapter := r.adapters[strings.TrimSpace(c.Selection.ProviderID)]
 	r.mu.RUnlock()
 	if !modelOK || !providerOK || !provider.Enabled || model.ProviderID != provider.ID {
 		return false

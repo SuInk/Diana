@@ -13,16 +13,9 @@ import (
 	"github.com/SuInk/diana/model/netguard"
 )
 
-// 改图时源图可以是一条 http(s) 链接，链接来自用户或模型，指向哪里都有可能。
-//
-// 提供商的 HTTP 客户端在传输层自动带上 OAuth 令牌（见 credentials.go），拿它去下载
-// 任意链接，令牌就跟着发给了链接背后的那台主机；它也不拦内网地址，一条指向
-// 127.0.0.1、云厂商元数据服务的链接照样能取回来。所以分两种：
-//
-//   - 链接和配置档里的服务地址同源：这是提供商自己的文件（上一轮生成的图），用带
-//     凭据的客户端取，但不跟随跳到别处的重定向——令牌是在每一跳上重新注入的。
-//   - 其余一律走 netguard 的公网客户端：不带任何凭据，拦私有地址、每一跳重定向都
-//     重新校验，和其他插件下载图片用的是同一道防线。
+// 改图时源图可以是用户或模型给出的任意 http(s) 链接。
+// 提供商自己的同源文件使用配置的 API Key 和请求头，并拒绝跳出服务地址的重定向；
+// 其余链接使用不带授权的公网客户端，逐跳校验并阻止访问私有地址。
 
 // imageEditDownloadTimeout 是下载一张源图的上限，和其他下载器的量级一致；调用方的
 // ctx 期限更短时以 ctx 为准。
@@ -30,14 +23,29 @@ const imageEditDownloadTimeout = 30 * time.Second
 
 // imageEditSource 决定一次源图下载用哪个客户端。
 type imageEditSource struct {
-	// credentialed 是提供商自己的客户端，只用于同源链接。
-	credentialed *http.Client
+	// providerClient 只用于提供商的同源链接。
+	providerClient *http.Client
+	headers        http.Header
 	// origins 是配置档里服务地址的源（协议、主机、端口）。
 	origins []*url.URL
 }
 
-func newImageEditSource(cfg ProviderConfig, credentialed *http.Client) imageEditSource {
-	source := imageEditSource{credentialed: credentialed}
+func newImageEditSource(cfg ProviderConfig, providerClient *http.Client) imageEditSource {
+	if providerClient == nil {
+		providerClient = http.DefaultClient
+	}
+	source := imageEditSource{providerClient: providerClient, headers: make(http.Header)}
+	if key := strings.TrimSpace(cfg.APIKey); key != "" {
+		switch cfg.Provider {
+		case ProviderGemini:
+			source.headers.Set("X-Goog-Api-Key", key)
+		case ProviderOpenAICompatible:
+			source.headers.Set("Authorization", "Bearer "+key)
+		}
+	}
+	for name, value := range cfg.NormalizedHeaders() {
+		source.headers.Set(name, value)
+	}
 	for _, raw := range []string{cfg.BaseURL, cfg.ImageBaseURL, defaultProviderBaseURL(cfg.Provider)} {
 		parsed, err := url.Parse(strings.TrimSpace(raw))
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
@@ -70,8 +78,8 @@ func (s imageEditSource) sameOrigin(target *url.URL) bool {
 
 // clientFor 给一条源图链接挑客户端。
 func (s imageEditSource) clientFor(target *url.URL) *http.Client {
-	if s.credentialed != nil && s.sameOrigin(target) {
-		client := *s.credentialed
+	if s.providerClient != nil && s.sameOrigin(target) {
+		client := *s.providerClient
 		if client.Timeout == 0 || client.Timeout > imageEditDownloadTimeout {
 			client.Timeout = imageEditDownloadTimeout
 		}

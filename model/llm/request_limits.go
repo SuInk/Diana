@@ -125,7 +125,7 @@ func httpClientWithRequestLimits(client *http.Client, cfg ProviderConfig) *http.
 	if key == "" {
 		// Direct API users have no profile ID. Share clients for the same credentials
 		// and endpoint without retaining the secret in the scheduler's map key.
-		key = fmt.Sprintf("direct:%x", sha256.Sum256([]byte(string(cfg.Provider)+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey+"\x00"+cfg.OAuthProvider)))
+		key = fmt.Sprintf("direct:%x", sha256.Sum256([]byte(string(cfg.Provider)+"\x00"+cfg.BaseURL+"\x00"+cfg.APIKey)))
 	}
 	stored, found := providerRequestLimits.Load(key)
 	if cfg.MaxConcurrency == 0 && cfg.MaxRPS == 0 && !found {

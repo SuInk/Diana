@@ -849,7 +849,7 @@ func TestGroupPromptTraceReplayConfig(t *testing.T) {
 	} {
 		t.Setenv(key, value)
 	}
-	if cfg, err := traceReplayConfig(); err != nil || cfg.MaxOutputTokens != 512 || cfg.OAuthProvider != "" {
+	if cfg, err := traceReplayConfig(); err != nil || cfg.MaxOutputTokens != 512 {
 		t.Fatal("explicit Gemini configuration failed or exceeded default output cap")
 	}
 	live, err := traceReplayConfig()
@@ -857,7 +857,7 @@ func TestGroupPromptTraceReplayConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	offline, err := traceReplayBudgetConfig()
-	if err != nil || offline.APIKey != "" || offline.OAuthProvider != "" {
+	if err != nil || offline.APIKey != "" {
 		t.Fatal("offline config loaded credentials")
 	}
 	if live.MaxContextTokensWithDefault() != offline.MaxContextTokensWithDefault() || live.MaxOutputTokens != offline.MaxOutputTokens || live.Model != offline.Model {

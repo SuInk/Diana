@@ -269,7 +269,7 @@ func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*l
 			Instructions: route.param(mediaParamInstructions),
 			Timeout:      route.paramSeconds(mediaParamTimeout),
 			Options:      route.Params,
-		}, r.llmClientOptionsFor(route.Config)...)
+		})
 		if err == nil {
 			r.recordMediaSlotUsage(ctx, route, "tts", started)
 		}
@@ -294,7 +294,7 @@ func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, l
 			Language: firstNonEmpty(language, route.param(mediaParamLanguage)),
 			Prompt:   route.param(mediaParamPrompt),
 			Timeout:  route.paramSeconds(mediaParamTimeout),
-		}, r.llmClientOptionsFor(route.Config)...)
+		})
 		if err == nil {
 			r.recordMediaSlotUsage(ctx, route, "stt", started)
 		}
@@ -315,7 +315,7 @@ func (route mediaSlotRoute) videoJobTimeout() time.Duration {
 // generateVideo 用视频生成插槽跑完一个异步任务，返回成品和实际用到的路由。
 func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateRequest, onProgress func(llm.VideoJob)) (*llm.VideoResult, mediaSlotRoute, error) {
 	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotVideo, true), "视频生成", func(route mediaSlotRoute) (*llm.VideoResult, error) {
-		generator, err := llm.NewVideoGenerator(route.Config, llm.VideoAPI(route.param(mediaParamAPI)), 0, r.llmClientOptionsFor(route.Config)...)
+		generator, err := llm.NewVideoGenerator(route.Config, llm.VideoAPI(route.param(mediaParamAPI)), 0)
 		if err != nil {
 			return nil, err
 		}
