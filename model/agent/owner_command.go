@@ -7,6 +7,7 @@ import (
 	"github.com/SuInk/diana/internal/procgroup"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -131,9 +132,35 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 		}
 		result["exit_code"] = code
 		result["error"] = err.Error()
+		if guidance := ownerCommandPermissionGuidance(runtime.GOOS, string(out.data)); guidance != nil {
+			guidance["host"], _ = os.Hostname()
+			guidance["executable"], _ = os.Executable()
+			result["permission_guidance"] = guidance
+		}
 	}
 	body, err := json.Marshal(result)
 	return string(body), err
+}
+
+// These are diagnostic hints from command output, not an OS permission probe.
+// In particular, a missing display can produce the same error as denied capture.
+func ownerCommandPermissionGuidance(goos, output string) map[string]any {
+	output = strings.ToLower(output)
+	if strings.Contains(output, "sudo: a password is required") ||
+		strings.Contains(output, "sudo: a terminal is required") ||
+		strings.Contains(output, "must be run as root") {
+		return map[string]any{
+			"kind": "administrator", "status": "manual_action_required",
+			"message": "命令报告需要管理员权限。请告诉用户在运行 Diana 的主机上手动执行所需诊断；不要索取或接收 sudo 密码，也不要自动配置免密 sudo。授权或人工诊断完成前不要反复重试，不要声称已取得数据。",
+		}
+	}
+	if goos == "darwin" && strings.Contains(output, "could not create image from display") {
+		return map[string]any{
+			"kind": "screen_recording", "status": "needs_verification",
+			"message": "屏幕捕获失败，可能缺少录屏权限，也可能没有可捕获的登录桌面；此错误本身不能确认权限被拒绝。请明确告诉用户：在运行 Diana 的 Mac 上检查系统设置 → 隐私与安全 → 录屏与系统录音，为实际启动 Diana 的程序授权（后台部署通常为 executable，终端启动可能归属终端），并确认已登录桌面。授权后可能需要重启 Diana；用户确认完成后再重试，不能自动授予权限或承诺已授权。截图不需要完全磁盘访问权限。",
+		}
+	}
+	return nil
 }
 func ownerCommandsEqual(a, b OwnerCommand) bool {
 	aa, _ := json.Marshal(a)

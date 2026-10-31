@@ -22,7 +22,7 @@ type hostAccessTool struct {
 
 func (t *hostAccessTool) Name() string { return hostAccessToolName }
 func (t *hostAccessTool) Description() string {
-	return `主人专用宿主机读取和执行。标准模式下默认可用，无需额外开启或逐条批准；支持任意程序、shell/脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。每条 exec 执行前由审核模型对照用户原话自动审核，未通过不执行，结果会给出理由；purpose 写清为什么执行。cleanup 立即清理 Diana 自己的缓存、临时文件和过期媒体并报告释放空间。任务未明确授权的不可逆或重大影响操作先说明具体影响并确认。禁止整机毁坏、绕过身份校验和向无关方泄露凭据。总体硬件状态用 host_stats，主人账号用 bot_config。`
+	return `主人专用宿主机读取和执行，标准模式默认可用。支持程序、脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。exec 按用户原话自动审核，purpose 写明目的；拒绝时返回理由。cleanup 清理 Diana 自身缓存并报告释放空间。未授权的重大或不可逆操作先确认；禁止整机毁坏、绕过身份校验和泄露凭据。失败时按 permission_guidance 提示宿主机上的手动操作；needs_verification 不是确认缺权限。不要索取密码、自动提权或反复重试。硬件状态用 host_stats，主人账号用 bot_config。`
 }
 func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{

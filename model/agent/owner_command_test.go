@@ -89,3 +89,55 @@ func TestOwnerCommandOutputIsBounded(t *testing.T) {
 		t.Fatal("output limit failed")
 	}
 }
+
+func TestOwnerCommandPermissionGuidance(t *testing.T) {
+	for _, tc := range []struct{ name, goos, output, kind, status string }{
+		{"capture", "darwin", "could not create image from display\n", "screen_recording", "needs_verification"},
+		{"sudo", "darwin", "sudo: a password is required\n", "administrator", "manual_action_required"},
+		{"noninteractive", "linux", "sudo: a terminal is required to read the password", "administrator", "manual_action_required"},
+		{"root", "darwin", "powermetrics must be run as root", "administrator", "manual_action_required"},
+		{"generic denial", "darwin", "Permission denied", "", ""},
+		{"unsupported sensor", "darwin", "unrecognized sampler: smc", "", ""},
+		{"other platform", "linux", "could not create image from display", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ownerCommandPermissionGuidance(tc.goos, tc.output)
+			if tc.kind == "" {
+				if got != nil {
+					t.Fatalf("unexpected guidance: %v", got)
+				}
+				return
+			}
+			if got["kind"] != tc.kind || got["status"] != tc.status {
+				t.Fatalf("guidance: %v", got)
+			}
+		})
+	}
+}
+
+func TestOwnerCommandPermissionGuidanceOnlyOnFailure(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("Unix shell fixture")
+	}
+	for _, exit := range []string{"0", "1"} {
+		request, err := ValidateOwnerCommand(Config{}, OwnerCommand{Command: "/bin/sh", CWD: t.TempDir(), Args: []string{"-c", "printf 'sudo: a password is required\\n'; exit " + exit}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := RunOwnerCommand(context.Background(), Config{}, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]any
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		guidance, found := result["permission_guidance"].(map[string]any)
+		if found != (exit == "1") {
+			t.Fatalf("exit %s: %s", exit, raw)
+		}
+		if found && (guidance["host"] == "" || guidance["executable"] == "") {
+			t.Fatalf("missing host context: %s", raw)
+		}
+	}
+}
