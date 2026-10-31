@@ -140,7 +140,7 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	message, media, err := crossSessionSendInputAllowEmpty(input, t.event, false, len(forwards) > 0)
+	message, media, err := crossSessionSendInputAllowEmpty(input, crossSessionEventWithoutForwarded(t.event, forwards), false, len(forwards) > 0)
 	if err != nil {
 		return "", err
 	}
@@ -458,6 +458,20 @@ func (r *Runtime) crossSessionForwardSource(ctx context.Context, event MessageEv
 		return crossSessionForward{}, false, err
 	}
 	return crossSessionForward{messageID: id, segments: found.Segments, raw: found.RawMessage}, true, nil
+}
+
+// crossSessionEventWithoutForwarded 去掉已经要整条转发的当前消息或引用消息，
+// 免得 forward_media 再把它们的附件单独发一遍。
+func crossSessionEventWithoutForwarded(event MessageEvent, forwards []crossSessionForward) MessageEvent {
+	for _, forward := range forwards {
+		if forward.messageID == strings.TrimSpace(event.MessageID) {
+			event.Segments = nil
+		}
+		if event.Quoted != nil && forward.messageID == strings.TrimSpace(event.Quoted.MessageID) {
+			event.Quoted = nil
+		}
+	}
+	return event
 }
 
 // crossSessionMessageIDs 兼容字符串数组、单个字符串和数字：模型常把消息 ID 写成

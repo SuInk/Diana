@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // friendRosterChannel 让测试决定 get_friend_list 回答什么：名册里有谁，或者根本
@@ -737,5 +739,40 @@ func TestCrossSessionToolRejectsForwardOutsideSession(t *testing.T) {
 		if sent := channel.sentSnapshot(); len(sent) != 0 {
 			t.Fatalf("%s 被拒绝后仍发出了消息：%#v", id, sent)
 		}
+	}
+}
+
+// 被引用的那条已经整条转发时，forward_media 不该把它的图再单独发一遍。
+func TestCrossSessionToolForwardMediaSkipsForwardedMessage(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), true)
+	out, err := tool.Run(context.Background(), map[string]any{
+		"group_id": "456", "message_ids": []any{"70001"}, "forward_media": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, `"media"`) {
+		t.Fatalf("附件被重复计入：%s", out)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("原生转发之外又单独发了附件：%#v", sent)
+	}
+}
+
+// 隐私代理给消息 ID 起的别名放在数组里也要还原成真实 ID。
+func TestIdentityPrivacyRestoresMessageIDArray(t *testing.T) {
+	scope := newIdentityPrivacyScopeWithSalt("test")
+	alias := scope.registerMessageID("70001")
+	if alias == "70001" {
+		t.Fatal("消息 ID 没有起别名")
+	}
+	calls := scope.restoreToolCalls([]llm.ToolCall{{Name: dianaCrossSessionToolName, Arguments: map[string]any{
+		"message_ids": []any{alias},
+	}}})
+	ids, _ := calls[0].Arguments["message_ids"].([]any)
+	if len(ids) != 1 || ids[0] != "70001" {
+		t.Fatalf("别名没有还原：%#v", calls[0].Arguments)
 	}
 }
