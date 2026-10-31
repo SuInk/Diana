@@ -557,6 +557,11 @@ func (h *BotHandler) eventGroupNames(ctx context.Context, profileID string) map[
 	return names
 }
 
+// AllGroupNames 是所有机器人的群名，给日志页这类不分机器人的地方补群名用。
+func (h *BotHandler) AllGroupNames(ctx context.Context) map[string]string {
+	return h.eventGroupNames(ctx, "")
+}
+
 // localConsoleGroups 从本地事件历史里聚合群列表。Telegram 这类平台的 Bot
 // API 没有「列出我加入的群」，机器人只有在群里收到过消息才知道自己在那儿。
 // profileID 为空表示不限机器人。

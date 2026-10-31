@@ -786,6 +786,8 @@ let updatePolicy = { channel: "release", auto_download: true, auto_install: fals
 let demoUpdateTokenConfigured = false;
 
 const logs: AppLogEntry[] = [
+  { id: "log-0", kind: "operation", level: "info", action: "llm_usage", message: "LLM 调用用量已记录", actor: "qq:100200711", actor_name: "青禾", actor_card: "青禾｜周末摸鱼", group_id: "100200301", group_name: "周末摸鱼群", target: "272291", metadata: { group_id: "100200301", message_id: "272291" }, created_at: before(1) },
+  { id: "log-0b", kind: "operation", level: "info", action: "proactive_reply_route", message: "模型已完成接话评分", actor: "qq:100200712", actor_name: "阿树", group_id: "100200418", target: "272292", metadata: { group_id: "100200418" }, created_at: before(1) },
   { id: "log-1", kind: "operation", level: "info", action: "message_reply", message: "群聊消息已回复并收到发送回显", actor: "bot-onebot", target: "group:100200301", created_at: before(2) },
   { id: "log-2", kind: "operation", level: "info", action: "repository_watch", message: "仓库检查完成，未发现新 Commit 或 Release", actor: "scheduler", target: "SuInk/Diana", created_at: before(4) },
   { id: "log-3", kind: "operation", level: "info", action: "memory_compress", message: "已更新群聊压缩摘要与长期事实索引", actor: "memory", target: "group:100200418", created_at: before(16) }

@@ -34,7 +34,7 @@
       <div class="card-body" style="padding-top: 8px">
         <div class="cluster" style="padding: 8px 0 12px">
           <div class="input-group" style="flex: 1; max-width: 360px">
-            <input v-model="query" class="input" placeholder="按内容 / 操作人过滤…" />
+            <input v-model="query" class="input" placeholder="按内容 / 操作人 / 群过滤…" />
           </div>
           <SkeletonBlock v-if="loading && !logs.length" width="48px" height="18px" />
           <span v-else class="muted" style="font-size: 12.5px">{{ filteredLogs.length }} 条</span>
@@ -44,8 +44,9 @@
           <article v-for="log in filteredLogs" :key="log.id" class="log-row">
             <span class="log-time">{{ formatTime(log.created_at) }}</span>
             <div class="log-main">
-              <div v-if="log.actor || log.target" class="cluster" style="gap: 6px; margin-bottom: 2px">
-                <span v-if="log.actor" class="muted" style="font-size: 11.5px" :title="log.actor">{{ actorLabel(log) }}</span>
+              <div v-if="log.actor || log.group_id || log.target" class="cluster" style="gap: 6px; margin-bottom: 2px">
+                <span v-if="log.actor" class="muted" style="font-size: 11.5px" :title="actorTitle(log)">{{ actorLabel(log) }}</span>
+                <span v-if="log.group_id" class="muted" style="font-size: 11.5px">@ {{ groupLabel(log) }}</span>
                 <span v-if="log.target" class="muted mono" style="font-size: 11.5px">→ {{ log.target }}</span>
               </div>
               <p class="log-message">{{ log.message }}</p>
@@ -85,13 +86,25 @@ const autoRefresh = ref(false);
 
 let timer: number | undefined;
 
-// 日志里的 actor 形如 qq:30001，光一串号码认不出是谁。查到昵称就显示
-// 「昵称（账号）」，原样的 actor 退到悬浮提示里。
+// 日志里的 actor 形如 qq:30001，光一串号码认不出是谁。有群名片先用群名片，
+// 没有再用昵称，显示成「名字（账号）」；原样的 actor 和昵称退到悬浮提示里。
 function actorLabel(log: AppLogEntry): string {
   const actor = (log.actor ?? "").trim();
-  const name = (log.actor_name ?? "").trim();
+  const name = (log.actor_card ?? "").trim() || (log.actor_name ?? "").trim();
   if (!name) return actor;
   return displayChatIdentity(name, actorAccount(actor)) || actor;
+}
+
+function actorTitle(log: AppLogEntry): string {
+  const nickname = (log.actor_name ?? "").trim();
+  const card = (log.actor_card ?? "").trim();
+  return nickname && card && nickname !== card ? `${log.actor} · 昵称：${nickname}` : (log.actor ?? "");
+}
+
+function groupLabel(log: AppLogEntry): string {
+  const groupID = (log.group_id ?? "").trim();
+  const name = (log.group_name ?? "").trim();
+  return name ? displayChatIdentity(name, groupID) || groupID : `群 ${groupID}`;
 }
 
 function actorAccount(actor: string): string {
@@ -106,7 +119,7 @@ const filteredLogs = computed<AppLogEntry[]>(() => {
   }
   return logs.value.filter((log) => {
     // 昵称也要能搜到：日志页上显示的是昵称，搜不到会让人以为没这条记录。
-    return [log.action, log.message, log.detail, log.actor, log.actor_name, log.target]
+    return [log.action, log.message, log.detail, log.actor, log.actor_name, log.actor_card, log.group_id, log.group_name, log.target]
       .filter((field): field is string => Boolean(field))
       .some((field) => field.toLowerCase().includes(keyword));
   });

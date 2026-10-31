@@ -1420,6 +1420,68 @@ func (s *SQLiteStore) ResolveUserDisplayNames(ctx context.Context, userIDs []str
 	return resolved, nil
 }
 
+// GroupMemberRef 指某个群里的某个人。
+type GroupMemberRef struct {
+	GroupID string
+	UserID  string
+}
+
+// ResolveGroupMemberNames 批量取每个人在指定群里最近用的名字：OneBot 存的 sender_name
+// 是群名片，没设名片才退回昵称。ResolveUserDisplayNames 给的是跨群的名字，同一个人在
+// 不同群里名片不一样，日志按群显示时得用这个。查不到的不出现在结果里。
+func (s *SQLiteStore) ResolveGroupMemberNames(ctx context.Context, refs []GroupMemberRef) (map[GroupMemberRef]string, error) {
+	defer s.observeStorage(ctx, "ResolveGroupMemberNames", "read")()
+	resolved := map[GroupMemberRef]string{}
+	if s == nil || s.db == nil || len(refs) == 0 {
+		return resolved, nil
+	}
+	seen := make(map[GroupMemberRef]struct{}, len(refs))
+	args := make([]any, 0, len(refs)*2)
+	for _, ref := range refs {
+		ref = GroupMemberRef{GroupID: strings.TrimSpace(ref.GroupID), UserID: strings.TrimSpace(ref.UserID)}
+		if ref.GroupID == "" || ref.UserID == "" {
+			continue
+		}
+		if _, ok := seen[ref]; ok {
+			continue
+		}
+		seen[ref] = struct{}{}
+		args = append(args, ref.GroupID, ref.UserID)
+	}
+	if len(args) == 0 {
+		return resolved, nil
+	}
+	// 和 resolveMentionNames 一样沿 (user_id, event_time DESC) 索引从新往旧找，
+	// 只多一个群号条件。
+	values := strings.TrimSuffix(strings.Repeat("(?,?),", len(args)/2), ",")
+	rows, err := s.eventReader().QueryContext(ctx, `
+WITH refs(group_id, user_id) AS (VALUES `+values+`)
+SELECT refs.group_id, refs.user_id, COALESCE((
+  SELECT m.sender_name FROM message_events AS m
+  WHERE m.user_id = refs.user_id AND m.group_id = refs.group_id AND TRIM(COALESCE(m.sender_name, '')) <> ''
+  ORDER BY m.event_time DESC
+  LIMIT 1
+), '')
+FROM refs
+`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("resolve group member names: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var ref GroupMemberRef
+		var name string
+		if err := rows.Scan(&ref.GroupID, &ref.UserID, &name); err != nil {
+			return nil, fmt.Errorf("scan group member name: %w", err)
+		}
+		// 名字等于账号本身的也当查不到，理由同 ResolveUserDisplayNames。
+		if name = strings.TrimSpace(name); name != "" && name != ref.UserID {
+			resolved[ref] = name
+		}
+	}
+	return resolved, rows.Err()
+}
+
 func applyEventUsageSummary(page *InboundEventDetailPage, usage inboundEventTokenTotals) {
 	page.LLMCalls = usage.LLMCalls
 	page.InputTokens = usage.InputTokens

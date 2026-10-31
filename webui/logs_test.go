@@ -253,6 +253,62 @@ func TestAppLogsResolveActorNames(t *testing.T) {
 	}
 }
 
+// 同一个人在不同群里名片不一样，日志按群显示时要用那个群的名片，并带上群名。
+func TestAppLogsResolveGroupCardAndGroupName(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "logs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	for _, event := range []assistant.MessageEvent{
+		{Kind: assistant.EventKindGroup, GroupID: "20001", UserID: "30001", SenderName: "甲群名片", MessageID: "m1", RawMessage: "在的", Time: 1_700_000_000},
+		{Kind: assistant.EventKindGroup, GroupID: "20002", UserID: "30001", SenderName: "乙群名片", MessageID: "m2", RawMessage: "在的", Time: 1_700_000_100},
+	} {
+		if _, _, err := store.AppendMessageEventRevision(ctx, "group:"+event.GroupID, event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, entry := range []storage.AppLogEntry{
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "in_first", Message: "甲群", Actor: "qq:30001", Target: "m1", Metadata: map[string]any{"group_id": "20001"}},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "in_unnamed", Message: "没群名的群", Actor: "qq:30001", Metadata: map[string]any{"group_id": "20003"}},
+		{Kind: storage.LogKindOperation, Level: storage.LogLevelInfo, Action: "private", Message: "私聊", Actor: "qq:30001"},
+	} {
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	router := gin.New()
+	NewAppLogHandler(store).WithGroupNames(func(context.Context) map[string]string {
+		return map[string]string{"20001": "甲群", "20002": "乙群"}
+	}).Register(router)
+	req := httptest.NewRequest(http.MethodGet, "/api/logs?kind=operation&limit=10", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp appLogsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]appLogEntry{}
+	for _, entry := range resp.Logs {
+		got[entry.Action] = entry
+	}
+	if entry := got["in_first"]; entry.GroupID != "20001" || entry.GroupName != "甲群" || entry.ActorCard != "甲群名片" {
+		t.Fatalf("in_first = %+v", entry)
+	}
+	if entry := got["in_unnamed"]; entry.GroupID != "20003" || entry.GroupName != "" || entry.ActorCard != "" {
+		t.Fatalf("in_unnamed = %+v", entry)
+	}
+	if entry := got["private"]; entry.GroupID != "" || entry.ActorCard != "" || entry.ActorName == "" {
+		t.Fatalf("private = %+v", entry)
+	}
+}
+
 func TestAppLogActorUserID(t *testing.T) {
 	cases := map[string]string{
 		"qq:30001":    "30001",

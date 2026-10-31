@@ -30,7 +30,8 @@ type AppLogWriter interface {
 }
 
 type AppLogHandler struct {
-	store AppLogStore
+	store      AppLogStore
+	groupNames func(context.Context) map[string]string
 }
 
 // appLogActorNamer 是日志存储的可选能力：把账号换成昵称。测试里的内存实现没有它，
@@ -39,11 +40,21 @@ type appLogActorNamer interface {
 	ResolveUserDisplayNames(ctx context.Context, userIDs []string) (map[string]string, error)
 }
 
-// appLogEntry 在存储行之外补一个昵称。日志里的 actor 形如 "qq:30001"，
-// 光一串号码认不出是谁——和事件列表是同一个问题。
+// appLogGroupMemberNamer 是日志存储的可选能力：取某人在某个群里的群名片。
+type appLogGroupMemberNamer interface {
+	ResolveGroupMemberNames(ctx context.Context, refs []storage.GroupMemberRef) (map[storage.GroupMemberRef]string, error)
+}
+
+// appLogEntry 在存储行之外补上能认出人和群的名字。日志里的 actor 形如 "qq:30001"、
+// 群号藏在 metadata 里，光一串号码认不出是谁、在哪个群——和事件列表是同一个问题。
 type appLogEntry struct {
 	storage.AppLogEntry
 	ActorName string `json:"actor_name,omitempty"`
+	// ActorCard 是 actor 在这条日志所在群里的群名片，和 ActorName（跨群的名字）分开给，
+	// 同一个人在不同群里叫法不一样。
+	ActorCard string `json:"actor_card,omitempty"`
+	GroupID   string `json:"group_id,omitempty"`
+	GroupName string `json:"group_name,omitempty"`
 }
 
 type appLogsResponse struct {
@@ -53,6 +64,13 @@ type appLogsResponse struct {
 // NewAppLogHandler 创建 AppLogHandler 实例。
 func NewAppLogHandler(store AppLogStore) *AppLogHandler {
 	return &AppLogHandler{store: store}
+}
+
+// WithGroupNames 接上群号到群名的查询。QQ 的消息事件里不带群名，只能问机器人的实时群列表，
+// 这份能力在 BotHandler 那边，所以由装配处传进来；不传就只显示群号。
+func (h *AppLogHandler) WithGroupNames(lookup func(context.Context) map[string]string) *AppLogHandler {
+	h.groupNames = lookup
+	return h
 }
 
 // Register 注册当前模块的路由或能力。
@@ -105,35 +123,67 @@ func (h *AppLogHandler) list(c *gin.Context) {
 	c.JSON(http.StatusOK, appLogsResponse{Logs: h.namedAppLogs(c.Request.Context(), logs)})
 }
 
-// namedAppLogs 给日志行补上 actor 的昵称。一次查完整页，不逐行查库。查不到昵称、
-// 或者存储不支持这次查询，都只是少一个名字，日志照常返回。
+// namedAppLogs 给日志行补上 actor 的昵称、群名片和群名。一次查完整页，不逐行查库。
+// 查不到名字、或者存储不支持这次查询，都只是少一个名字，日志照常返回。
 func (h *AppLogHandler) namedAppLogs(ctx context.Context, logs []storage.AppLogEntry) []appLogEntry {
 	entries := make([]appLogEntry, 0, len(logs))
+	userIDs := make([]string, 0, len(logs))
+	members := make([]storage.GroupMemberRef, 0, len(logs))
 	for _, entry := range logs {
-		entries = append(entries, appLogEntry{AppLogEntry: entry})
-	}
-	namer, ok := h.store.(appLogActorNamer)
-	if !ok {
-		return entries
-	}
-	userIDs := make([]string, 0, len(entries))
-	for _, entry := range entries {
+		item := appLogEntry{AppLogEntry: entry, GroupID: appLogGroupID(entry.Metadata)}
 		if userID := appLogActorUserID(entry.Actor); userID != "" {
 			userIDs = append(userIDs, userID)
+			if item.GroupID != "" {
+				members = append(members, storage.GroupMemberRef{GroupID: item.GroupID, UserID: userID})
+			}
+		}
+		entries = append(entries, item)
+	}
+	var names map[string]string
+	if namer, ok := h.store.(appLogActorNamer); ok && len(userIDs) > 0 {
+		var err error
+		if names, err = namer.ResolveUserDisplayNames(ctx, userIDs); err != nil {
+			log.Printf("resolve app log actor names failed: %v", err)
 		}
 	}
-	if len(userIDs) == 0 {
-		return entries
+	var cards map[storage.GroupMemberRef]string
+	if namer, ok := h.store.(appLogGroupMemberNamer); ok && len(members) > 0 {
+		var err error
+		if cards, err = namer.ResolveGroupMemberNames(ctx, members); err != nil {
+			log.Printf("resolve app log group member names failed: %v", err)
+		}
 	}
-	names, err := namer.ResolveUserDisplayNames(ctx, userIDs)
-	if err != nil {
-		log.Printf("resolve app log actor names failed: %v", err)
-		return entries
+	var groupNames map[string]string
+	if h.groupNames != nil {
+		for _, entry := range entries {
+			if entry.GroupID != "" {
+				groupNames = h.groupNames(ctx)
+				break
+			}
+		}
 	}
 	for index := range entries {
-		entries[index].ActorName = names[appLogActorUserID(entries[index].Actor)]
+		entry := &entries[index]
+		userID := appLogActorUserID(entry.Actor)
+		entry.ActorName = names[userID]
+		entry.ActorCard = cards[storage.GroupMemberRef{GroupID: entry.GroupID, UserID: userID}]
+		entry.GroupName = groupNames[entry.GroupID]
 	}
 	return entries
+}
+
+// appLogGroupID 取日志 metadata 里的群号。各处写日志时群号都放在 group_id 下，
+// 私聊和后台任务没有群号，这里就是空。
+func appLogGroupID(metadata map[string]any) string {
+	switch value := metadata["group_id"].(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case float64:
+		if value > 0 {
+			return strconv.FormatInt(int64(value), 10)
+		}
+	}
+	return ""
 }
 
 // appLogActorUserID 从 actor 里取出聊天账号。写法有两种：带命名空间的 "qq:123456"

@@ -973,6 +973,11 @@ export interface AppLogEntry {
   actor?: string;
   /** actor 对应的昵称；形如 qq:123456 的 actor 才查得到，查不到时缺省。 */
   actor_name?: string;
+  /** actor 在这条日志所在群里的群名片；私聊、后台任务或查不到时缺省。 */
+  actor_card?: string;
+  /** 日志 metadata 里的群号，和 group_name 一起给日志行显示「在哪个群」。 */
+  group_id?: string;
+  group_name?: string;
   target?: string;
   metadata?: Record<string, unknown>;
   created_at: string;
