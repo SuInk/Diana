@@ -170,7 +170,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 		ID:          musicPluginID,
 		Name:        "音乐增强",
 		Version:     "0.3.1",
-		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
+		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 和 QQ 官方机器人发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
@@ -349,7 +349,7 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		// 连歌名都拿不到就别抢这条消息，让链接解析去抓标题。
 		return nil, nil
 	}
-	if !IsOneBotPlatform(req.Event.Platform) && NormalizePlatformID(req.Event.Platform) != PlatformTelegram {
+	if !musicPlatformSendsAudio(req.Event.Platform) {
 		return &PluginResponse{Handled: true, Reply: musicLinkReply(found)}, nil
 	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
@@ -433,6 +433,17 @@ func (p *MusicPlugin) pickSongWithStatus(ctx context.Context, cfg musicConfig, q
 		return found, true, true
 	}
 	return song{}, false, matched
+}
+
+// musicPlatformSendsAudio 判断平台能不能把歌发成音频：OneBot 认 record 段；Telegram 和
+// QQ 官方由 prepareChannelAudio 把 [CQ:record] 换成本机文件，各自上传（QQ 官方按语音
+// file_type 3 上传，平台转码）。其余平台原样发 CQ 码会变成乱字符，只发链接。
+func musicPlatformSendsAudio(platform string) bool {
+	switch NormalizePlatformID(platform) {
+	case PlatformTelegram, PlatformQQOfficial:
+		return true
+	}
+	return IsOneBotPlatform(platform)
 }
 
 // musicVoiceReply 把歌名和语音拼成一条待分条的回复。
@@ -632,7 +643,7 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 		}
 		return "", fmt.Errorf("各家曲库都没搜到能放的《%s》，换个歌名或补上歌手再试", query)
 	}
-	if !IsOneBotPlatform(t.platform) && NormalizePlatformID(t.platform) != PlatformTelegram {
+	if !musicPlatformSendsAudio(t.platform) {
 		body, err := json.Marshal(musicToolResult{OK: true, Action: "song_link", Song: found.Title(), Source: found.Source, Reply: musicLinkReply(found)})
 		return string(body), err
 	}

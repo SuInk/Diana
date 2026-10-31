@@ -253,14 +253,13 @@ func TestMusicPluginSendsVoiceForSharedSong(t *testing.T) {
 	}
 }
 
-// 只有 OneBot v11 有 record 段。别的平台原样发 CQ 码会变成一行乱字符，
-// 所以那里只发歌曲信息，并说清楚为什么没有语音。
+// 发不了音频的平台（微信 iLink 等）原样发 CQ 码会变成一行乱字符，只发歌曲信息和链接。
 func TestMusicPluginFallsBackToTextOffOneBot(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
 	plugin := newMusicTestPlugin(server)
 	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/netease-token"})
 
-	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformQQOfficial))
+	resp, err := plugin.Handle(context.Background(), musicTestRequest(server, PlatformWeixin))
 	if err != nil {
 		t.Fatalf("Handle() error = %v", err)
 	}

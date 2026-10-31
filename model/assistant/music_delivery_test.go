@@ -17,7 +17,7 @@ import (
 func TestMusicLinksOnOtherPlatformsNeverExposeCQ(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte("audio"))
 	plugin := newMusicTestPlugin(server)
-	for _, platform := range []string{PlatformQQOfficial} {
+	for _, platform := range []string{PlatformWeixin} {
 		tools, err := plugin.AgentToolsForPlatform(platform, musicRequestSettings(server))
 		if err != nil {
 			t.Fatal(err)
@@ -265,5 +265,26 @@ func TestQQOfficialAudioConvertsCQRecordToLocalFile(t *testing.T) {
 	onebot := OutgoingMessage{Platform: "onebot-v11", Text: "[CQ:record,file=" + escapeCQParameter(shared) + "]"}
 	if got, _ := r.prepareChannelAudio(onebot); got.Text != onebot.Text || len(got.AudioURLs) != 0 {
 		t.Fatalf("onebot message changed: %#v", got)
+	}
+}
+
+// QQ 官方机器人点歌发语音：工具产出 [CQ:record]，由通道换成本机文件按语音上传，
+// 不再退回一行歌曲链接。
+func TestMusicToolSendsVoiceOnQQOfficial(t *testing.T) {
+	server := musicTestServer(t, 213000, []byte("audio"))
+	plugin := newMusicTestPlugin(server)
+	plugin.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/netease-token"})
+	tools, err := plugin.AgentToolsForPlatform(PlatformQQOfficial, musicRequestSettings(server))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := tools[0].(*dianaMusicTool)
+	output, err := tool.Run(context.Background(), map[string]any{"query": "雾里"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, done := tool.TerminalResult(output)
+	if !done || !strings.Contains(reply, "[CQ:record") || strings.Contains(reply, "https://music.163.com/song?id=") {
+		t.Fatalf("qq official reply=%q", reply)
 	}
 }
