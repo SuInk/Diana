@@ -18,8 +18,9 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-// QQ 官方机器人的消息结构平台一直在加东西，很多还不进文档，每发现一个就改代码
-// 发版太慢，所以让模型自己写格式：收尾时填 qq_format，可以现写一段 JSON 合并进请求体，也可以存成命名
+// QQ 官方机器人的消息结构平台一直在加东西，很多还不进文档（比如群友实测的
+// keyboard.content.style.font_size=small）。每发现一个就改代码发版太慢，所以让模型
+// 自己写格式：收尾时填 qq_format，可以现写一段 JSON 合并进请求体，也可以存成命名
 // 模板，下次直接报名字复用。
 //
 // 模型只能碰 markdown 和 keyboard 两块；msg_id、msg_seq、引用这些决定消息发给谁、
