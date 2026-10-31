@@ -191,3 +191,26 @@ func TestParseFinalizeButtonsCallback(t *testing.T) {
 		t.Fatal("plain button should stay a command")
 	}
 }
+
+func TestParseFinalizeButtonsStyle(t *testing.T) {
+	rows := parseFinalizeButtons("灰:算了 | 蓝：展开讲讲 | 灰：下一页=回调:翻页 | 继续")
+	if len(rows) != 2 {
+		t.Fatalf("rows = %#v", rows)
+	}
+	all := append(append([]OutgoingButton{}, rows[0]...), rows[1]...)
+	want := []OutgoingButton{
+		{Label: "算了", Data: "算了", Gray: true, Group: 1},
+		{Label: "展开讲讲", Data: "展开讲讲", Group: 1},
+		{Label: "下一页", Data: "翻页", Callback: true, Gray: true, Group: 1},
+		{Label: "继续", Data: "继续", Group: 1},
+	}
+	if !reflect.DeepEqual(all, want) {
+		t.Fatalf("buttons = %#v", all)
+	}
+	keyboard := qqOfficialKeyboard(rows)
+	first := keyboard["content"].(map[string]any)["rows"].([]any)[0].(map[string]any)["buttons"].([]any)
+	style := func(button any) any { return button.(map[string]any)["render_data"].(map[string]any)["style"] }
+	if style(first[0]) != qqButtonStyleGray || style(first[1]) != qqButtonStyleBlue {
+		t.Fatalf("styles = %v %v", style(first[0]), style(first[1]))
+	}
+}

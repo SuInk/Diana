@@ -30,6 +30,7 @@ const (
 	qqButtonActionCallback = 1
 	qqButtonActionCommand  = 2
 	qqButtonPermissionAll  = 2
+	qqButtonStyleGray      = 0
 	qqButtonStyleBlue      = 1
 	qqButtonUnsupportedTip = "当前 QQ 版本不支持按钮，请升级后再试"
 
@@ -45,14 +46,20 @@ const (
 	qqButtonCallbackPrefix = "回调:"
 )
 
+// qqButtonStylePrefixes 写在一项最前面选按钮颜色，不写是蓝色。平台的按钮样式只有
+// 灰色线框和蓝色线框两种，没有字号或尺寸：按钮多宽由一排放几个决定。
+var qqButtonStylePrefixes = map[string]bool{"灰:": true, "灰：": true, "蓝:": false, "蓝：": false}
+
 // OutgoingButton 是挂在消息底下的一个按钮。Link 为 true 时 Data 是要打开的网址，
 // 否则是点了以后替用户发出的那句话；Callback 为 true 时不替用户发话，Data 随回调
 // 事件送回来。Group 相同的指令按钮互斥（见 qqOfficialKeyboard），为 0 时按所在的排分组。
+// Gray 为 true 时画成灰色线框，否则是蓝色线框。
 type OutgoingButton struct {
 	Label    string
 	Data     string
 	Link     bool
 	Callback bool
+	Gray     bool
 	Group    int
 }
 
@@ -66,6 +73,7 @@ func buttonsFinalizeField() agent.FinalizeField {
 			"比如「展开讲讲」「那 B 呢」「再来一个」、你给出的几个选项、是/否。" +
 			"每行一排，同一排用 | 分隔，每个写「显示文字」或「显示文字=点了替对方发的话」，打开网页写「显示文字=https://…」；" +
 			"翻页、换一批、确认、投票这类不必让群里看到对方说了什么的，写成「显示文字=回调:要交给你的话」，点了只悄悄通知你；" +
+			"默认蓝色线框，一项前面加「灰:」变灰色线框，只有这两种颜色，按钮大小改不了，一排放得越多越窄；" +
 			"显示文字 2～8 个字。只有纯附和、发表情、对方明确在结束话题时才不填。",
 	}
 }
@@ -95,7 +103,8 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 			if len(row) == qqKeyboardMaxPerRow {
 				break
 			}
-			label, data, hasData := strings.Cut(strings.TrimSpace(item), "=")
+			item, gray := cutButtonStylePrefix(strings.TrimSpace(item))
+			label, data, hasData := strings.Cut(item, "=")
 			label, data = strings.TrimSpace(label), strings.TrimSpace(data)
 			callback := false
 			if rest, ok := strings.CutPrefix(data, qqButtonCallbackPrefix); ok {
@@ -107,7 +116,7 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 			if label == "" {
 				continue
 			}
-			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes), Group: lineIndex + 1}
+			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes), Gray: gray, Group: lineIndex + 1}
 			lower := strings.ToLower(button.Data)
 			button.Link = strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
 			button.Callback = callback && !button.Link
@@ -121,6 +130,16 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 		}
 	}
 	return rows
+}
+
+// cutButtonStylePrefix 拿掉一项最前面的颜色标记，返回剩下的部分和是不是灰色。
+func cutButtonStylePrefix(item string) (string, bool) {
+	for prefix, gray := range qqButtonStylePrefixes {
+		if rest, ok := strings.CutPrefix(item, prefix); ok {
+			return strings.TrimSpace(rest), gray
+		}
+	}
+	return item, false
 }
 
 // fitButtonRow 把一组按钮按最长的标签分成几排：每排放尽量多的按钮，但要让最长的
@@ -212,9 +231,13 @@ func qqOfficialKeyboard(rows [][]OutgoingButton) map[string]any {
 					"permission":     map[string]any{"type": qqButtonPermissionAll},
 				}
 			}
+			style := qqButtonStyleBlue
+			if button.Gray {
+				style = qqButtonStyleGray
+			}
 			payload := map[string]any{
 				"id":          fmt.Sprintf("%d-%d", rowIndex+1, index+1),
-				"render_data": map[string]any{"label": button.Label, "visited_label": button.Label, "style": qqButtonStyleBlue},
+				"render_data": map[string]any{"label": button.Label, "visited_label": button.Label, "style": style},
 				"action":      action,
 			}
 			if id := group(rowIndex, button); !button.Link && commands[id] > 1 {
