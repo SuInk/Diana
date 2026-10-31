@@ -7361,6 +7361,9 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	reply, event = prepareReplyDelivery(reply, event)
 	cfg := r.effectiveConfigForEvent(event)
 	chunks := splitEventChatReply(reply, cfg, event)
+	if decoration.Verbatim {
+		chunks = splitVerbatimReply(reply)
+	}
 	if strings.TrimSpace(reply) != "" {
 		typingIndicatorFromContext(ctx).resume()
 	}
@@ -7368,7 +7371,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	defer releaseBatch()
 
 	if !event.webChat && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
-		messageID, err := r.sendForwardReplyWithResult(ctx, event, reply, cfg)
+		messageID, err := r.sendForwardChunksWithResult(ctx, event, reply, cfg, decoration.Verbatim)
 		if err == nil {
 			if messageID == "" {
 				return nil, nil
@@ -7426,6 +7429,10 @@ type outboundDecoration struct {
 	// LiteralText 表示正文是缓存的用户原文，不能把其中碰巧出现的 Diana 控制标记
 	// 或 Markdown 当成新的发送指令。
 	LiteralText bool
+	// Verbatim 表示正文是要原样送到的成品（跨会话转发一段帖子、一份长文），不是
+	// 一句聊天发言：只在 [diana-msg] 处分条，换行、空行和句号都照原文，见
+	// splitVerbatimReply。@ 和引用标记照常解析，这一点和 LiteralText 不同。
+	Verbatim bool
 }
 
 // mentionEnabled 判断本次投递该不该挂 @。
@@ -8014,13 +8021,24 @@ func (r *Runtime) sendForwardReply(ctx context.Context, event MessageEvent, repl
 }
 
 func (r *Runtime) sendForwardReplyWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig) (string, error) {
+	return r.sendForwardChunksWithResult(ctx, event, reply, cfg, false)
+}
+
+// sendForwardChunksWithResult 把回复打包成合并转发卡片。verbatim 时节点按原样分条
+// （splitVerbatimReply），否则按聊天分条，一句话一个节点。
+func (r *Runtime) sendForwardChunksWithResult(ctx context.Context, event MessageEvent, reply string, cfg BotConfig, verbatim bool) (string, error) {
 	original := reply
 	reply, event = prepareReplyDelivery(reply, event)
 	// 合并转发的节点承载不了 reply 段，标记只能剥掉，免得作为文本进转发卡片。
 	if _, rest, ok := consumeOutgoingReplyControl(reply); ok {
 		reply = rest
 	}
-	chunks := splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event))
+	var chunks []string
+	if verbatim {
+		chunks = splitVerbatimReply(reply)
+	} else {
+		chunks = splitForwardReply(reply, chatSplitLimitsForEvent(cfg, event))
+	}
 	if len(chunks) == 0 {
 		return "", nil
 	}
@@ -9262,6 +9280,21 @@ func splitReply(reply string, chunkSize int) []string {
 	var out []string
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		out = append(out, chunkTextByLength(restoreExplicitReplyLines(part), chunkSize)...)
+	}
+	return out
+}
+
+// splitVerbatimReply 是原样投递的分条：只在模型显式写的 [diana-msg] 处分开，超出平台
+// 长度再兜底切。段内的换行、空行和句号一律不动。
+//
+// 跨会话转发曾经走聊天分条，一段帖子到了那边每行一个气泡、段落空行和句号全没了，
+// 再被行数推进合并转发卡片，看上去就是「转发多出了一堆分行」。splitReply 也不合用：
+// 它收空行，帖子的段落就挤成一团。
+func splitVerbatimReply(reply string) []string {
+	reply = strings.ReplaceAll(strings.ReplaceAll(reply, "\r\n", "\n"), "\r", "\n")
+	var out []string
+	for _, part := range strings.Split(reply, notificationSplitMarker) {
+		out = append(out, chunkTextByLength(restoreExplicitReplyLines(part), notificationChunkSize)...)
 	}
 	return out
 }

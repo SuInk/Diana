@@ -504,3 +504,85 @@ func TestCrossSessionMediaPortableDropsPlatformRefs(t *testing.T) {
 		t.Fatalf("portable = %#v", portable)
 	}
 }
+
+// 转发的是一段成品（帖子、整理好的长文），对面收到的必须和原文逐字一致。它曾经走
+// 聊天分条：每行拆成一个气泡、句号被删、段落空行被收掉，行数一多又被打包成合并
+// 转发卡片，看上去就是「转发多出了一堆分行」。
+func TestCrossSessionToolDeliversMessageVerbatim(t *testing.T) {
+	message := "识别：示例帖子\n作者：示例作者 (@example)\n文案：今天整理了三步。\n\n" +
+		"第一步：拿码\n登录后等邮件，里面有专属链接。\n\n" +
+		"第二步：改设置\n先加一个，再减一个。\n动作要快。\n\n" +
+		"第三步：付款\n大部分卡过不去。\n链接：https://example.com/post/1"
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{})
+	tool := newDianaCrossSessionTool(runtime, crossSessionGroupSource("555"), false)
+	if _, err := tool.Run(context.Background(), map[string]any{"message": message}); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range channel.callsSnapshot() {
+		if strings.Contains(call.action, "forward") {
+			t.Fatalf("一条正文不该被打包成合并转发：%#v", call)
+		}
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 {
+		t.Fatalf("正文被拆成了 %d 条：%#v", len(sent), sent)
+	}
+	if sent[0].Text != message {
+		t.Fatalf("转发内容和原文不一致：\n got: %q\nwant: %q", sent[0].Text, message)
+	}
+}
+
+// 模型显式写的 [diana-msg] 仍是分条信号，分出来的每条同样保留原文排版。
+func TestCrossSessionToolSplitsOnlyOnExplicitMarker(t *testing.T) {
+	first := "第一篇：标题\n\n正文第一段。\n正文第二段。"
+	second := "第二篇：标题\n只有一段。"
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{})
+	tool := newDianaCrossSessionTool(runtime, crossSessionGroupSource("555"), false)
+	if _, err := tool.Run(context.Background(), map[string]any{"message": first + notificationSplitMarker + second}); err != nil {
+		t.Fatal(err)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 || sent[0].Text != first || sent[1].Text != second {
+		t.Fatalf("应当按 [diana-msg] 原样分成两条：%#v", sent)
+	}
+}
+
+func TestSplitVerbatimReplyKeepsLayout(t *testing.T) {
+	text := "第一行。\r\n\r\n第二行[diana-line]第三行。"
+	got := splitVerbatimReply(text)
+	want := "第一行。\n\n第二行\n第三行。"
+	if len(got) != 1 || got[0] != want {
+		t.Fatalf("splitVerbatimReply = %q, want %q", got, want)
+	}
+	long := strings.Repeat("长", notificationChunkSize*2)
+	if chunks := splitVerbatimReply(long); len(chunks) < 2 || strings.Join(chunks, "") != long {
+		t.Fatalf("超长正文应按平台长度兜底切开且不丢字：%d 段", len(chunks))
+	}
+}
+
+// 正文超过合并转发字数阈值时仍打包成卡片，但卡片里同样是原文：一个节点装完整段，
+// 而不是一行一个节点。
+func TestCrossSessionToolForwardCardKeepsMessageVerbatim(t *testing.T) {
+	message := "标题：示例\n\n第一段，句号要留着。\n第二行。\n\n第三段。"
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{ForwardReplyThreshold: 10})
+	tool := newDianaCrossSessionTool(runtime, crossSessionGroupSource("555"), false)
+	if _, err := tool.Run(context.Background(), map[string]any{"message": message}); err != nil {
+		t.Fatal(err)
+	}
+	var nodes []map[string]any
+	for _, call := range channel.callsSnapshot() {
+		if strings.Contains(call.action, "forward_msg") {
+			nodes, _ = call.params["messages"].([]map[string]any)
+		}
+	}
+	if len(nodes) != 1 {
+		t.Fatalf("卡片应当只有一个节点，实际 %d 个；已发 %#v", len(nodes), channel.sentSnapshot())
+	}
+	data, _ := nodes[0]["data"].(map[string]any)
+	if got := forwardNodeContentText(data["content"]); got != message {
+		t.Fatalf("卡片节点和原文不一致：\n got: %q\nwant: %q", got, message)
+	}
+}

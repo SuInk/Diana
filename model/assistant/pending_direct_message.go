@@ -149,7 +149,8 @@ func (r *Runtime) deliverPendingDirectMessage(ctx context.Context, trigger Messa
 		Time:             r.clock().Unix(),
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, pendingDirectMessageTimeout)
-	_, err := r.sendDecorated(sendCtx, event, item.Message, outboundDecoration{})
+	// 存下的是跨会话转发的正文，补发时同样原样送达。
+	_, err := r.sendDecorated(sendCtx, event, item.Message, outboundDecoration{Verbatim: true})
 	cancel()
 	if err == nil {
 		r.record(EventRecord{

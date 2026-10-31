@@ -422,7 +422,7 @@ func (r *Runtime) resolvePrivateDelivery(ctx context.Context, source, event Mess
 // 错误里说清楚发到了第几个，模型才能照实交代。
 func (r *Runtime) deliverCrossSession(ctx context.Context, event MessageEvent, message string, media crossSessionMedia) error {
 	if message != "" {
-		if _, err := r.sendDecorated(ctx, event, message, outboundDecoration{}); err != nil {
+		if _, err := r.sendDecorated(ctx, event, message, outboundDecoration{Verbatim: true}); err != nil {
 			return err
 		}
 	}
