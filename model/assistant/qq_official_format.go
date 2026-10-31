@@ -179,13 +179,12 @@ func (r *Runtime) recordQQFormatResult(ctx context.Context, profileID, name stri
 
 // qqFormatFinalizeField 生成收尾字段，把能用的模板名列进说明里，模型才知道有哪些。
 func qqFormatFinalizeField(templates []QQFormatTemplate) agent.FinalizeField {
-	// 以前拿 keyboard.content.style.font_size=small 当例子，模型照抄去做「小按钮」：
-	// 平台收下却不生效（10-31 线上三次，对方都说不小），官方文档也没有字号字段。
-	description := "QQ 官方机器人消息的自定义格式，平时不填。确知平台支持、但 Diana 默认没开的 markdown 或 keyboard 字段才填，不确定的别试：" +
+	// 小号按钮的 font_size 官方文档没写，Yunzai 的 QQBot-Plugin 等社区插件都这么发。
+	description := "QQ 官方机器人消息的自定义格式，平时不填。想要按钮、Markdown 用上平台支持但默认没开的样式时填：" +
 		"写已存模板的名字直接复用；写一段 JSON 只用这一次；写「名字={JSON}」存成模板并立即使用，下次报名字即可。" +
-		"JSON 会深度合并进发送请求体，只能有 markdown 和 keyboard 两个顶层键，数组整段替换。" +
-		"按钮照 buttons 字段写，颜色也在那里选；按钮没有字号或尺寸可调。" +
-		"平台拒收会自动退回默认格式，连续被拒的模板会停用；平台收下但不生效的字段不会报错，别对人说已经改好了。"
+		"JSON 会深度合并进发送请求体，只能有 markdown 和 keyboard 两个顶层键，数组整段替换，例如小号按钮 " +
+		`{"keyboard":{"content":{"style":{"font_size":"small"}}}}` + "。" +
+		"按钮还是照 buttons 字段写，颜色也在那里选；平台拒收会自动退回默认格式，连续被拒的模板会停用。"
 	names := make([]string, 0, len(templates))
 	for _, entry := range templates {
 		if !entry.Disabled {

@@ -106,8 +106,12 @@ func TestQQOfficialSendsButtonsOnMarkdownMessage(t *testing.T) {
 	}
 	msg := api.messages[0]
 	markdown, _ := msg["markdown"].(map[string]any)
-	if msg["msg_type"] != float64(2) || markdown["content"] != "想听哪个" || msg["keyboard"] == nil {
+	keyboard, _ := msg["keyboard"].(map[string]any)
+	if msg["msg_type"] != float64(2) || markdown["content"] != "想听哪个" || keyboard == nil {
 		t.Fatalf("message = %#v", msg)
+	}
+	if keyboard["bot_appid"] != "app" {
+		t.Fatalf("keyboard 应当带上 bot_appid：%#v", keyboard)
 	}
 }
 

@@ -736,7 +736,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 					"markdown": map[string]any{"content": markdownContent},
 				}
 				if keyboard {
-					body["keyboard"] = qqOfficialKeyboard(msg.Buttons)
+					// 社区插件用的 qq-official-bot SDK 都给自定义键盘带上 bot_appid，
+					// 小号字这类没进文档的样式是照着它们实测的，请求体跟它们对齐。
+					keyboardPayload := qqOfficialKeyboard(msg.Buttons)
+					if appID := strings.TrimSpace(c.cfg.AppID); appID != "" {
+						keyboardPayload["bot_appid"] = appID
+					}
+					body["keyboard"] = keyboardPayload
 				}
 				if strings.Contains(markdownContent, "qqbot-media://") {
 					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。

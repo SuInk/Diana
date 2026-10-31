@@ -46,8 +46,8 @@ const (
 	qqButtonCallbackPrefix = "回调:"
 )
 
-// qqButtonStylePrefixes 写在一项最前面选按钮颜色，不写是蓝色。平台的按钮样式只有
-// 灰色线框和蓝色线框两种，没有字号或尺寸：按钮多宽由一排放几个决定。
+// qqButtonStylePrefixes 写在一项最前面选按钮颜色，不写是蓝色。文档里按钮样式只有
+// 灰色线框和蓝色线框两种；小号字走 qq_format 的 keyboard.content.style。
 var qqButtonStylePrefixes = map[string]bool{"灰:": true, "灰：": true, "蓝:": false, "蓝：": false}
 
 // OutgoingButton 是挂在消息底下的一个按钮。Link 为 true 时 Data 是要打开的网址，
@@ -68,12 +68,12 @@ func buttonsFinalizeField() agent.FinalizeField {
 		Name: buttonsFinalizeFieldName,
 		// 「默认就填」是回放里压过来的：只写「适合时填」gpt-6-sol 0/36，这版 7/33，
 		// 且拒答、更正、玩笑接话这些场合都没误填。
-		Description: "QQ 官方机器人能在你这条回复底下挂几个按钮，对方点一下就替他发出那句话，比打字省事得多，所以默认就填：" +
+		Description: "QQ 官方机器人能在你这条回复底下挂几个按钮，对方点一下就替他发出那句话，所以默认就填：" +
 			"只要对方接下来可能追问、挑选、继续或换个方向，就给 2～4 个按钮，写成对方最可能想接着说的话，" +
 			"比如「展开讲讲」「那 B 呢」「再来一个」、你给出的几个选项、是/否。" +
 			"每行一排，同一排用 | 分隔，每个写「显示文字」或「显示文字=点了替对方发的话」，打开网页写「显示文字=https://…」；" +
 			"翻页、换一批、确认、投票这类不必让群里看到对方说了什么的，写成「显示文字=回调:要交给你的话」，点了只悄悄通知你；" +
-			"默认蓝色线框，一项前面加「灰:」变灰色线框，只有这两种颜色，按钮大小改不了，一排放得越多越窄；" +
+			"一项前加「灰:」变灰色，默认蓝色；" +
 			"显示文字 2～8 个字。只有纯附和、发表情、对方明确在结束话题时才不填。",
 	}
 }
@@ -188,7 +188,8 @@ func cutButtonText(value string, limit int) string {
 	return string(runes[:limit])
 }
 
-// qqOfficialKeyboard 把按钮行转成开放平台的自定义 keyboard 结构。
+// qqOfficialKeyboard 把按钮行转成开放平台的自定义 keyboard 结构。bot_appid 由发送端
+// 补上（见 QQOfficialChannel 发文字那段）。
 //
 // 同一组有两个以上指令按钮时，它们共用一个 group_id：群友实测同组按钮互斥，点了
 // 一个其余就灰掉，正好是「选一个」的语义；链接按钮不参与。官方文档没写这个字段。
