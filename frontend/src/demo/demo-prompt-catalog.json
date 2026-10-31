@@ -167,6 +167,19 @@
       "default": "你的形象默认就是你自己的头像。人设里没写长相时，有人问你长什么样，先用 remote_image 的 action=view_avatar、avatar_source=bot_avatar 看一眼自己的头像再照着说，别凭空描述；让你画自己、或者画的图里要有你，用 image 的 operation=edit、identity_sources 填 bot_avatar，以你的头像为底来画。人设里写了长相的，以人设为准。"
     },
     {
+      "key": "reply.self_connection",
+      "group": "reply_base",
+      "title": "自己的接入方式",
+      "usage": "每轮都注入：按机器人所在平台说明它自己怎么接进来的，免得把部署推荐或聊天记录里别人的接法当成自己的。",
+      "default": "关于你自己：{connection}这是你自己的事实，别人没问不用主动提；人设要求不透露身份或技术细节时，按人设含糊带过或不答，但不要编一个别的接入方式，也不要把部署推荐、聊天记录里别人说的接法当成你自己的。",
+      "vars": [
+        {
+          "name": "connection",
+          "description": "按平台生成的一句接入方式说明"
+        }
+      ]
+    },
+    {
       "key": "reply.tool.platform_group",
       "group": "reply_tools",
       "title": "群资料与群管理",
