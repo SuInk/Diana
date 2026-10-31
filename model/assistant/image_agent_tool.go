@@ -224,7 +224,7 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		properties["identity_sources"] = toolStringArrayParam(
 			`点名头像，优先于当前消息里的图：` + avatarSourceSender + `、` + avatarSourceBot + `、` + avatarSourceGroup + `、` +
 				avatarSourceGroupPrefix + `<群号>、` + avatarSourceMemberPrefix + `<user_id>（当前平台账号，按名字指人先查出 id）`)
-		properties["source_message_ids"] = toolStringArrayParam(`原图所在消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 identity_sources，重试填最初原图所在消息`)
+		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 identity_sources，重试填最初原图所在消息`)
 		properties["source_labels"] = toolStringArrayParam(`与 identity_sources 一一对应、数量相同，逐张发送时作该图说明`)
 		properties["source_mode"] = toolEnumParam(`多张参考图：combine 合成一张（默认）；each 逐张各出一张`, "combine", "each")
 	}
