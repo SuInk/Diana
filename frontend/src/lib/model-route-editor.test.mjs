@@ -259,7 +259,7 @@ test("unsupported media has no smart option and smart retains explicit standby",
   for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.effectiveModelRoutingStrategy(role), "failover");
   assert.equal(context.modelRouteIsStandby("chat", 1), false);
   assert.equal(context.modelRouteIsStandby("chat", 2), true);
-  assert.match(context.modelRoutingDescription("chat"), /同分/);
+  assert.match(context.modelRoutingDescription("chat"), /按配置顺序/);
   assert.match(source, /v-if="roleForm\[role.key\]\?\.routing_strategy === 'weighted'"/);
   assert.doesNotMatch(source, /model-purpose-search|current\.web_search(?!_override)/);
   assert.match(source, /const payload[\s\S]*?\.\.\.current|const saved[\s\S]*?\.\.\.current|\.\.\.current,/);
