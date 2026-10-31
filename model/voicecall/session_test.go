@@ -162,23 +162,38 @@ func startSession(t *testing.T, backend Backend, start ClientMessage) (*Session,
 func TestSessionSpeaksReplySentenceBySentenceWhileReplying(t *testing.T) {
 	firstAudio := make(chan struct{})
 	backend := &fakeBackend{}
-	var out *recorder
 	backend.reply = func(ctx context.Context, text string, emit func(string)) error {
 		emit("第一句话已经说完了。第二句话还在")
 		// 第二句还没写完，第一句就该已经念出来了：这是「边合成边发」。
-		<-firstAudio
+		select {
+		case <-firstAudio:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 		emit("后面接着说呢！")
 		return nil
 	}
+	var audioOnce sync.Once
+	backend.synthesize = func(ctx context.Context, text string, chunk func(string, []byte) error) error {
+		if err := chunk("audio/mpeg", []byte("<"+text+">")); err != nil {
+			return err
+		}
+		// 直接从音频写入完成处通知，避免两个 waitFor 消费同一个 recorder.notify。
+		audioOnce.Do(func() { close(firstAudio) })
+		return nil
+	}
 	session, out := startSession(t, backend, ClientMessage{Segmentation: SegmentByCmd})
-	go func() {
-		out.waitFor(t, "第一句音频", func(msg ServerMessage) bool { return msg.Type == "binary" })
-		close(firstAudio)
-	}()
 	if err := session.HandleControl(ClientMessage{Type: ClientText, Text: "你好"}); err != nil {
 		t.Fatal(err)
 	}
-	out.waitFor(t, "turn_end done", turnEnd(1, TurnDone))
+	out.waitFor(t, "turn_end done and listening", func(msg ServerMessage) bool {
+		if !turnEnd(1, TurnDone)(msg) {
+			return false
+		}
+		frames := out.snapshot()
+		last := frames[len(frames)-1]
+		return last.Type == ServerState && last.State == StateListening
+	})
 	got := describe(out.snapshot())
 	want := "ready state:listening state:thinking transcript:你好 " +
 		"reply:1.1 state:speaking audio_start:1.1 binary:<第一句话已经说完了。> audio_end:1.1 " +
