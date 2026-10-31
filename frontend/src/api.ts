@@ -263,7 +263,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
-  /** 私聊准入；不设等同 disabled，关闭私聊。 */
+  /** 私聊准入；不设默认仅主人。 */
   private_admission?: PrivateAdmission;
   /** 全局回复门槛（等级/时段/用户名单）；不设表示无门槛。 */
   reply_gate?: ReplyGate | null;
@@ -875,7 +875,7 @@ export interface GroupAdmission {
   allowed_groups?: string[];
 }
 
-/** 私聊准入模式：disabled 默认关闭，all 不限制，owner_only 只响应主人，whitelist 只响应主人与白名单。 */
+/** 私聊准入模式：owner_only 默认仅主人，all 不限制，disabled 关闭，whitelist 只响应主人与白名单。 */
 export type PrivateAdmissionMode = "disabled" | "all" | "owner_only" | "whitelist";
 
 export interface PrivateAdmission {

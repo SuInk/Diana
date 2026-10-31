@@ -10,8 +10,8 @@ import (
 
 func TestPrivateAdmissionDefaultsAndPayloadRoundTrip(t *testing.T) {
 	for _, cfg := range []BotConfig{DefaultBotConfig(), (BotConfig{}).WithDefaults()} {
-		if cfg.PrivateAdmission.Mode != PrivateAdmissionDisabled {
-			t.Fatalf("default private admission = %q, want disabled", cfg.PrivateAdmission.Mode)
+		if cfg.PrivateAdmission.Mode != PrivateAdmissionOwnerOnly {
+			t.Fatalf("default private admission = %q, want owner_only", cfg.PrivateAdmission.Mode)
 		}
 	}
 	for _, mode := range []string{PrivateAdmissionDisabled, PrivateAdmissionAll, PrivateAdmissionOwnerOnly, PrivateAdmissionWhitelist} {

@@ -104,6 +104,12 @@ func TestOwnerBindRemindsOncePerConversationUntilBound(t *testing.T) {
 	}
 
 	before := len(channel.sentSnapshot())
+	if r.handleOwnerBind(ctx, ownerBindEvent(EventKindPrivate, testOwnerOpenID, "绑定主人")) {
+		t.Fatal("bound owner triggered the bind flow again")
+	}
+	if len(channel.sentSnapshot()) != before {
+		t.Fatal("bound owner unexpectedly received another verification message")
+	}
 	for _, text := range []string{"你好", "绑定主人"} {
 		other := ownerBindEvent(EventKindPrivate, testStrangerOpenID, text)
 		if r.handleOwnerBind(ctx, other) || len(channel.sentSnapshot()) != before {

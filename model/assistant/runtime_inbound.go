@@ -17,8 +17,9 @@ func (r *Runtime) SetInboundEventStore(store InboundEventStore) {
 	r.inboundStore = store
 }
 
-// privateAdmissionAllows 判断用户的私聊是否准入。disabled（默认）拦截所有人；all 直接放行；
-// owner_only 只放行主人；whitelist 放行主人与白名单。空用户 ID 只在 all 下放行。
+// privateAdmissionAllows 判断用户的私聊是否准入。未设置时默认 owner_only；disabled
+// 拦截所有人；all 直接放行；owner_only 只放行主人；whitelist 放行主人与白名单。
+// 空用户 ID 只在 all 下放行。
 func (r *Runtime) privateAdmissionAllows(event MessageEvent) bool {
 	return privateAdmissionAllowsConfig(r.effectiveConfigForEvent(event), event)
 }

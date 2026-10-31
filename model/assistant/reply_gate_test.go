@@ -500,10 +500,10 @@ func TestPrivateAdmissionAllows(t *testing.T) {
 		userID    string
 		want      bool
 	}{
-		{"默认关闭普通人私聊", PrivateAdmission{}, "42", false},
-		{"默认关闭主人私聊", PrivateAdmission{}, owner, false},
-		{"默认关闭空 ID 私聊", PrivateAdmission{}, "", false},
-		{"非法模式退回关闭", PrivateAdmission{Mode: "nonsense"}, "42", false},
+		{"默认仅主人拦截普通人私聊", PrivateAdmission{}, "42", false},
+		{"默认仅主人放行主人私聊", PrivateAdmission{}, owner, true},
+		{"默认仅主人拦截空 ID 私聊", PrivateAdmission{}, "", false},
+		{"非法模式退回仅主人", PrivateAdmission{Mode: "nonsense"}, owner, true},
 		{"disabled 拦截主人", PrivateAdmission{Mode: PrivateAdmissionDisabled}, owner, false},
 		{"disabled 拦截白名单", PrivateAdmission{Mode: PrivateAdmissionDisabled, AllowedUsers: []string{"42"}}, "42", false},
 		{"all 放行普通人", PrivateAdmission{Mode: PrivateAdmissionAll}, "42", true},
