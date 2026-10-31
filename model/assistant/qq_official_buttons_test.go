@@ -68,7 +68,7 @@ func TestQQOfficialKeyboardGroupsCommandRows(t *testing.T) {
 	keyboard := qqOfficialKeyboard([][]OutgoingButton{
 		{{Label: "A", Data: "A"}, {Label: "B", Data: "B"}, {Label: "文档", Data: "https://x.test", Link: true}},
 		{{Label: "继续", Data: "继续"}},
-	})
+	}, "")
 	rows := keyboard["content"].(map[string]any)["rows"].([]any)
 	first := rows[0].(map[string]any)["buttons"].([]any)
 	a, link := first[0].(map[string]any), first[2].(map[string]any)
@@ -87,7 +87,7 @@ func TestQQOfficialKeyboardGroupsCommandRows(t *testing.T) {
 		t.Fatalf("单个按钮不该分组：%#v", single)
 	}
 
-	split := qqOfficialKeyboard(parseFinalizeButtons("那你会选哪个 | 太哲学了 | 换个说法问问"))
+	split := qqOfficialKeyboard(parseFinalizeButtons("那你会选哪个 | 太哲学了 | 换个说法问问"), "")
 	splitRows := split["content"].(map[string]any)["rows"].([]any)
 	last := splitRows[1].(map[string]any)["buttons"].([]any)[0].(map[string]any)
 	if len(splitRows) != 2 || last["group_id"] != "row1" {
@@ -112,6 +112,66 @@ func TestQQOfficialSendsButtonsOnMarkdownMessage(t *testing.T) {
 	}
 	if keyboard["bot_appid"] != "app" {
 		t.Fatalf("keyboard 应当带上 bot_appid：%#v", keyboard)
+	}
+	if _, has := keyboard["content"].(map[string]any)["style"]; has {
+		t.Fatalf("没选字号时不该带 style：%#v", keyboard)
+	}
+}
+
+// 模型按用途挑样式、按名字挑字号，Diana 拼成 render_data.style 和 content.style.font_size。
+func TestFinalizeButtonsStylesAndFontSize(t *testing.T) {
+	_, holder := withFinalizeButtons(context.Background())
+	holder.set("小号\n次要:算了 | 展开 | 危险：删除\n主要:确定=回调:确定 | 继续")
+	rows, fontSize := holder.take()
+	if fontSize != "small" || len(rows) != 2 {
+		t.Fatalf("rows = %#v, fontSize = %q", rows, fontSize)
+	}
+	keyboard := qqOfficialKeyboard(rows, fontSize)
+	content := keyboard["content"].(map[string]any)
+	if content["style"].(map[string]any)["font_size"] != "small" {
+		t.Fatalf("content = %#v", content)
+	}
+	var styles [][]any
+	var labels []string
+	for _, row := range content["rows"].([]any) {
+		var line []any
+		for _, button := range row.(map[string]any)["buttons"].([]any) {
+			render := button.(map[string]any)["render_data"].(map[string]any)
+			line = append(line, render["style"])
+			labels = append(labels, render["label"].(string))
+		}
+		styles = append(styles, line)
+	}
+	want := [][]any{{qqButtonStyleGray, qqButtonStyleBlue, qqButtonStyleRed}, {qqButtonStyleBlueFill, qqButtonStyleBlue}}
+	if !reflect.DeepEqual(styles, want) || !reflect.DeepEqual(labels, []string{"算了", "展开", "删除", "确定", "继续"}) {
+		t.Fatalf("styles = %v, labels = %v", styles, labels)
+	}
+	if !rows[1][0].Callback || rows[1][0].Data != "确定" {
+		t.Fatalf("样式前缀不该影响回调：%#v", rows[1][0])
+	}
+	holder.set("大号")
+	if rows, fontSize := holder.take(); rows != nil || fontSize != "" {
+		t.Fatalf("只有字号没有按钮时什么都不挂：%#v %q", rows, fontSize)
+	}
+}
+
+// 文档外的样式被拒时先换回默认样式重发，按钮还能保住。
+func TestQQOfficialRetriesWithPlainStyleWhenStyleRejected(t *testing.T) {
+	api := newQQFakeAPI(t)
+	api.rejectKeyboardStyle = true
+	if err := api.channel().Send(context.Background(), OutgoingMessage{
+		GroupID: "G", Text: "选一个", ReplyMessageID: "in1",
+		Buttons:        parseFinalizeButtons("主要:好 | 危险:不好"),
+		ButtonFontSize: "small",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messagePosts) != 2 || len(api.messages) != 1 {
+		t.Fatalf("posts = %#v", api.messagePosts)
+	}
+	keyboard, _ := api.messages[0]["keyboard"].(map[string]any)
+	if keyboard == nil || qqFakeKeyboardStyled(api.messages[0]) {
+		t.Fatalf("retried message = %#v", api.messages[0])
 	}
 }
 
@@ -168,7 +228,7 @@ func TestDeliverChunksAttachesButtonsToLastText(t *testing.T) {
 	if len(sent) != 2 || len(sent[0].Buttons) != 0 || len(sent[1].Buttons) != 1 || len(sent[1].Buttons[0]) != 2 {
 		t.Fatalf("sent = %#v", sent)
 	}
-	if rows := holder.take(); rows != nil {
+	if rows, _ := holder.take(); rows != nil {
 		t.Fatalf("按钮应当已被取走：%#v", rows)
 	}
 }
@@ -182,7 +242,7 @@ func TestParseFinalizeButtonsCallback(t *testing.T) {
 	if !next.Callback || next.Data != "翻到下一页" || plain.Callback || !link.Link || link.Callback {
 		t.Fatalf("buttons = %#v", rows[0])
 	}
-	keyboard := qqOfficialKeyboard(rows)
+	keyboard := qqOfficialKeyboard(rows, "")
 	buttons := keyboard["content"].(map[string]any)["rows"].([]any)[0].(map[string]any)["buttons"].([]any)
 	action := buttons[0].(map[string]any)["action"].(map[string]any)
 	if action["type"] != qqButtonActionCallback || action["data"] != "翻到下一页" {
@@ -193,28 +253,5 @@ func TestParseFinalizeButtonsCallback(t *testing.T) {
 	}
 	if buttons[1].(map[string]any)["action"].(map[string]any)["type"] != qqButtonActionCommand {
 		t.Fatal("plain button should stay a command")
-	}
-}
-
-func TestParseFinalizeButtonsStyle(t *testing.T) {
-	rows := parseFinalizeButtons("灰:算了 | 蓝：展开讲讲 | 灰：下一页=回调:翻页 | 继续")
-	if len(rows) != 2 {
-		t.Fatalf("rows = %#v", rows)
-	}
-	all := append(append([]OutgoingButton{}, rows[0]...), rows[1]...)
-	want := []OutgoingButton{
-		{Label: "算了", Data: "算了", Gray: true, Group: 1},
-		{Label: "展开讲讲", Data: "展开讲讲", Group: 1},
-		{Label: "下一页", Data: "翻页", Callback: true, Gray: true, Group: 1},
-		{Label: "继续", Data: "继续", Group: 1},
-	}
-	if !reflect.DeepEqual(all, want) {
-		t.Fatalf("buttons = %#v", all)
-	}
-	keyboard := qqOfficialKeyboard(rows)
-	first := keyboard["content"].(map[string]any)["rows"].([]any)[0].(map[string]any)["buttons"].([]any)
-	style := func(button any) any { return button.(map[string]any)["render_data"].(map[string]any)["style"] }
-	if style(first[0]) != qqButtonStyleGray || style(first[1]) != qqButtonStyleBlue {
-		t.Fatalf("styles = %v %v", style(first[0]), style(first[1]))
 	}
 }

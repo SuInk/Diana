@@ -239,6 +239,9 @@ func outgoingMessageFingerprint(msg OutgoingMessage) string {
 		}
 		parts = append(parts, "buttons="+strings.Join(labels, "|"))
 	}
+	if msg.ButtonFontSize != "" {
+		parts = append(parts, "button_font_size="+msg.ButtonFontSize)
+	}
 	for _, segment := range msg.Segments {
 		parts = append(parts, "segment="+segment.Type+":"+segmentFingerprint(segment))
 	}

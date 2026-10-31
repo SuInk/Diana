@@ -35,6 +35,8 @@ type qqFakeAPI struct {
 	rejectMarkdown bool
 	// rejectKeyboard 让带 keyboard 的消息被拒收，模拟没开通自定义按钮。
 	rejectKeyboard bool
+	// rejectKeyboardStyle 让带字号或非蓝框按钮的 keyboard 被拒收，模拟平台不认文档外的样式。
+	rejectKeyboardStyle bool
 	// rejectGallery 让带 mqqapi 图集节点的消息被拒收，和生产实测的回包一致。
 	rejectGallery bool
 	// material 是素材管理接口的假实现，见 qq_official_material_test.go。
@@ -101,7 +103,7 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "图片转存失败", "code": 40035009})
 				return
 			}
-			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) {
+			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) || (api.rejectKeyboardStyle && qqFakeKeyboardStyled(body)) {
 				api.mu.Unlock()
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 304003})
@@ -670,4 +672,23 @@ func TestQQOfficialRepliesToInteractionWithEventID(t *testing.T) {
 	if _, has := sent["msg_id"]; has {
 		t.Fatalf("message = %#v, must not carry msg_id", sent)
 	}
+}
+
+func qqFakeKeyboardStyled(body map[string]any) bool {
+	keyboard, _ := body["keyboard"].(map[string]any)
+	content, _ := keyboard["content"].(map[string]any)
+	if _, has := content["style"]; has {
+		return true
+	}
+	rows, _ := content["rows"].([]any)
+	for _, row := range rows {
+		buttons, _ := row.(map[string]any)["buttons"].([]any)
+		for _, button := range buttons {
+			render, _ := button.(map[string]any)["render_data"].(map[string]any)
+			if render["style"] != float64(qqButtonStyleBlue) {
+				return true
+			}
+		}
+	}
+	return false
 }

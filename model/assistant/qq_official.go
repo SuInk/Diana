@@ -711,17 +711,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		body := map[string]any{"content": text}
 		markdownContent, markdown := "", false
 		keyboard := !isGuild && len(msg.Buttons) > 0
-		format := msg.QQFormat
-		if isGuild || (format != nil && len(format.Patch) == 0) {
-			format = nil
-		}
 		if !isGuild {
 			source, mentionIDs := text, []string(nil)
 			if isGroup {
 				source, mentionIDs = qqOfficialMentionPlaceholders(msg.Text)
 			}
 			markdownContent, markdown = qqOfficialMarkdownContent(source)
-			if (keyboard || format != nil || len(mentionIDs) > 0) && !markdown {
+			if (keyboard || len(mentionIDs) > 0) && !markdown {
 				// 按钮和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
 				markdownContent, markdown = qqMarkdownLineBreaks(source), true
 			}
@@ -736,13 +732,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 					"markdown": map[string]any{"content": markdownContent},
 				}
 				if keyboard {
-					// 社区插件用的 qq-official-bot SDK 都给自定义键盘带上 bot_appid，
-					// 小号字这类没进文档的样式是照着它们实测的，请求体跟它们对齐。
-					keyboardPayload := qqOfficialKeyboard(msg.Buttons)
-					if appID := strings.TrimSpace(c.cfg.AppID); appID != "" {
-						keyboardPayload["bot_appid"] = appID
-					}
-					body["keyboard"] = keyboardPayload
+					body["keyboard"] = c.qqOfficialKeyboardPayload(msg.Buttons, msg.ButtonFontSize)
 				}
 				if strings.Contains(markdownContent, "qqbot-media://") {
 					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。
@@ -757,21 +747,12 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				body["message_reference"] = map[string]any{"message_id": quoteRef}
 			}
 		}
-		var id string
-		var err error
-		if format != nil {
-			id, err = post(applyQQFormatPatch(body, format.Patch))
-			if err == nil || !qqOfficialRetryUseless(err) {
-				if format.Report != nil {
-					format.Report(err == nil, err)
-				}
-			}
-			if err != nil && !qqOfficialRetryUseless(err) {
-				// 模型写的格式平台不认：退回默认格式重发，下面按钮和 Markdown 的降级照旧接着走。
-				log.Printf("qq: 自定义格式被拒，退回默认格式重发: %v", err)
-				id, err = post(body)
-			}
-		} else {
+		id, err := post(body)
+		if _, has := body["keyboard"]; err != nil && has && qqButtonsStyled(msg.Buttons, msg.ButtonFontSize) && !qqOfficialRetryUseless(err) {
+			// 文档外的样式（红色字体、蓝色背景、字号）万一不被认：先换回默认样式重发，
+			// 按钮还能保住。
+			log.Printf("qq: 带样式的按钮被拒，换回默认样式重发: %v", err)
+			body["keyboard"] = c.qqOfficialKeyboardPayload(plainQQButtons(msg.Buttons), "")
 			id, err = post(body)
 		}
 		if err != nil && keyboard && !qqOfficialRetryUseless(err) {
