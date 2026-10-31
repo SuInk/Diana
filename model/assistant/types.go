@@ -634,6 +634,12 @@ type TextDraftChannel interface {
 	SendTextDraft(ctx context.Context, msg OutgoingMessage, draftID int64) error
 }
 
+// TextDraftAbandoner 是预览会变成正式消息的平台（QQ 官方私聊流式消息）额外实现的
+// 收尾：这一轮没有定稿去替换预览时，把已经发出的半截预览收掉。
+type TextDraftAbandoner interface {
+	AbandonTextDraft(ctx context.Context, msg OutgoingMessage) error
+}
+
 // ChatActionChannel exposes short-lived platform status such as Telegram's
 // "typing" indicator while a reply is being prepared.
 type ChatActionChannel interface {

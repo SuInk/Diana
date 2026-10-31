@@ -162,6 +162,17 @@ func (c *MultiChannel) SendTextDraft(ctx context.Context, msg OutgoingMessage, d
 	return channel.SendTextDraft(ctx, msg, draftID)
 }
 
+func (c *MultiChannel) AbandonTextDraft(ctx context.Context, msg OutgoingMessage) error {
+	binding, err := c.bindingFor(msg.ProfileID, msg.Platform)
+	if err != nil {
+		return err
+	}
+	if channel, ok := binding.Channel.(TextDraftAbandoner); ok {
+		return channel.AbandonTextDraft(ctx, msg)
+	}
+	return nil
+}
+
 func (c *MultiChannel) SendChatAction(ctx context.Context, msg OutgoingMessage, action string) error {
 	binding, err := c.bindingFor(msg.ProfileID, msg.Platform)
 	if err != nil {

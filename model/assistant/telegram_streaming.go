@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,11 @@ import (
 const (
 	telegramDraftUpdateInterval = 750 * time.Millisecond
 	telegramDraftMaxRunes       = 4000
+	// qqStreamFirstFrameMinRunes：QQ 流式消息的帧发出去就是对方看得到的正式消息，
+	// 首帧攒够几个字再发，请求刚出一个字就被打断时不会只留下一个字。
+	qqStreamFirstFrameMinRunes = 8
+	// qqStreamAbandonTimeout 是轮次结束后收尾半截流（结束帧加撤回）的时限。
+	qqStreamAbandonTimeout = 10 * time.Second
 )
 
 var telegramDraftSequence atomic.Int64
@@ -70,6 +76,28 @@ func (r *Runtime) telegramReplyDraft(event MessageEvent, cfg BotConfig) *telegra
 			return r.resolveOutgoingMentionNames(event, r.normalizeOutgoingMentions(event, msg))
 		},
 		qqStream: qqStream,
+	}
+}
+
+// abandonReplyStream 在一轮回复结束后收掉还没定稿的 QQ 私聊流式消息。正常出了
+// 正文时首条文字已经发结束帧替换预览、流也已移除，这里什么都不做；静默、出错或
+// 被连发打断后没再出正文时，流停在半截，交给通道发结束帧并撤回。
+func (r *Runtime) abandonReplyStream(ctx context.Context, event MessageEvent) {
+	if event.webChat || event.Kind != EventKindPrivate || NormalizePlatformID(event.Platform) != PlatformQQOfficial || strings.TrimSpace(event.MessageID) == "" {
+		return
+	}
+	r.mu.RLock()
+	channel, ok := r.channel.(TextDraftAbandoner)
+	r.mu.RUnlock()
+	if !ok {
+		return
+	}
+	// 轮次可能是被取消才结束的，收尾不能跟着一起取消。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), qqStreamAbandonTimeout)
+	defer cancel()
+	msg := routeOutgoingToEvent(event, OutgoingMessage{UserID: event.UserID})
+	if err := channel.AbandonTextDraft(ctx, msg); err != nil {
+		log.Printf("diana qq stream abandon failed: message_id=%s err=%v", event.MessageID, err)
 	}
 }
 
@@ -166,6 +194,9 @@ func (d *telegramReplyDraft) ObserveTextDelta(ctx context.Context, text string) 
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.qqStream && d.lastText == "" && len([]rune(text)) < qqStreamFirstFrameMinRunes {
+		return false
+	}
 	if d.disabled || text == d.lastText || (!d.lastSent.IsZero() && time.Since(d.lastSent) < telegramDraftUpdateInterval) {
 		return false
 	}

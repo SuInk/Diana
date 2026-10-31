@@ -6,8 +6,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -36,9 +38,11 @@ type qqStream struct {
 	msgSeq      int
 	index       int
 	streamMsgID string
-	started     bool
-	done        bool
-	at          time.Time
+	// content 是最近一帧成功发出的全文，收不了尾时拿它发结束帧。
+	content string
+	started bool
+	done    bool
+	at      time.Time
 }
 
 func (c *QQOfficialChannel) qqStreamFor(replyID, openid string, create bool) *qqStream {
@@ -114,6 +118,39 @@ func (c *QQOfficialChannel) finishQQStream(ctx context.Context, replyID, target,
 	return firstNonEmpty(id, stream.streamMsgID), true, err
 }
 
+// AbandonTextDraft 收掉这一轮没等到定稿的流：模型静默、出错，或者被连发打断后
+// 不再出正文时，已经发出的帧就停在半截（比如只有一个字）挂在聊天里。先发结束帧
+// 把流关掉，再按 stream_msg_id 撤回。撤回只在发出 2 分钟内有效，失败只记日志。
+func (c *QQOfficialChannel) AbandonTextDraft(ctx context.Context, msg OutgoingMessage) error {
+	target, isGroup := platformChatTarget(msg)
+	replyID := strings.TrimSpace(msg.PassiveReplyMessageID)
+	if isGroup || target == "" || replyID == "" {
+		return nil
+	}
+	stream := c.qqStreamFor(replyID, target, false)
+	if stream == nil {
+		return nil
+	}
+	stream.mu.Lock()
+	defer stream.mu.Unlock()
+	defer c.dropQQStream(replyID, stream)
+	if !stream.started || stream.done || stream.openid != target {
+		return nil
+	}
+	stream.done = true
+	var errs []error
+	if _, err := c.sendQQStreamFrame(ctx, replyID, stream, stream.content, qqStreamStateDone); err != nil {
+		errs = append(errs, err)
+	}
+	if stream.streamMsgID == "" {
+		return errors.Join(append(errs, fmt.Errorf("qq: 流式消息没有拿到 id，无法撤回"))...)
+	}
+	if _, err := c.CallAPI(ctx, http.MethodDelete+" /v2/users/"+url.PathEscape(stream.openid)+"/messages/"+url.PathEscape(stream.streamMsgID), nil); err != nil {
+		errs = append(errs, fmt.Errorf("qq: 撤回流式消息失败: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
 // qqStreamContent 流式消息只收 Markdown；大白话按 Markdown 的换行规则补齐，免得
 // 单个换行被吞掉。
 func qqStreamContent(text string) string {
@@ -181,6 +218,7 @@ func (c *QQOfficialChannel) sendQQStreamFrame(ctx context.Context, replyID strin
 			return "", fmt.Errorf("qq: 流式消息发送失败: %w", err)
 		}
 		stream.started = true
+		stream.content = content
 		stream.at = time.Now()
 		id := strings.TrimSpace(envelope.ID)
 		if stream.streamMsgID == "" {

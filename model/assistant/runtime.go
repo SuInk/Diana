@@ -2331,6 +2331,7 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		}
 		err = errDirectReplySupplemented
 	}
+	r.abandonReplyStream(ctx, event)
 	timelineOutcome := "replied"
 	if err != nil {
 		timelineOutcome = "not_replied"

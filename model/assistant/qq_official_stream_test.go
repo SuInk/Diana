@@ -15,6 +15,7 @@ type qqStreamFakeAPI struct {
 	mu       sync.Mutex
 	frames   []map[string]any
 	messages []map[string]any
+	deletes  []string
 	// rateLimit 让前 N 帧回 429。
 	rateLimit int
 	// reject 让所有帧被拒收，模拟账号没开流式能力。
@@ -31,6 +32,8 @@ func newQQStreamFakeAPI(t *testing.T) *qqStreamFakeAPI {
 		api.mu.Lock()
 		defer api.mu.Unlock()
 		switch {
+		case r.Method == http.MethodDelete:
+			api.deletes = append(api.deletes, r.URL.Path)
 		case strings.HasSuffix(r.URL.Path, "/stream_messages"):
 			api.frames = append(api.frames, body)
 			if api.reject {
@@ -173,5 +176,82 @@ func TestQQReplyDraftOnlyForUnauditedPrivateChats(t *testing.T) {
 	off.LLMStreamingEnabled = boolPointer(false)
 	if runtime.telegramReplyDraft(event, off) != nil {
 		t.Fatal("streaming switch off must disable QQ stream")
+	}
+}
+
+func TestQQOfficialStreamAbandonClosesAndRecallsHalfFrame(t *testing.T) {
+	api := newQQStreamFakeAPI(t)
+	channel := api.channel()
+	ctx := context.Background()
+	msg := OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1"}
+	draft := msg
+	draft.Text = "蓝发的那个是星街"
+	if err := channel.SendTextDraft(ctx, draft, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.AbandonTextDraft(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.frames) != 2 || len(api.messages) != 0 {
+		t.Fatalf("frames = %#v, messages = %#v", api.frames, api.messages)
+	}
+	done := api.frames[1]
+	if done["input_state"] != float64(qqStreamStateDone) || done["content_raw"] != "蓝发的那个是星街" || done["stream_msg_id"] != "s1" {
+		t.Fatalf("done frame = %#v", done)
+	}
+	if len(api.deletes) != 1 || api.deletes[0] != "/v2/users/U2345/messages/s1" {
+		t.Fatalf("deletes = %#v", api.deletes)
+	}
+	// 收过一次就不在了，再收是空操作；之后同一条入站消息的回复走普通发送。
+	if err := channel.AbandonTextDraft(ctx, msg); err != nil || len(api.frames) != 2 || len(api.deletes) != 1 {
+		t.Fatalf("second abandon: err = %v, frames = %d, deletes = %d", err, len(api.frames), len(api.deletes))
+	}
+}
+
+func TestQQOfficialStreamAbandonLeavesFinishedStreamAlone(t *testing.T) {
+	api := newQQStreamFakeAPI(t)
+	channel := api.channel()
+	ctx := context.Background()
+	if err := channel.SendTextDraft(ctx, OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1", Text: "你好呀，今天过得"}, 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := channel.SendWithResult(ctx, OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1", Text: "你好呀，今天过得怎么样"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := channel.AbandonTextDraft(ctx, OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.frames) != 2 || len(api.deletes) != 0 {
+		t.Fatalf("frames = %d, deletes = %#v", len(api.frames), api.deletes)
+	}
+}
+
+func TestQQReplyDraftHoldsShortFirstFrameAndTurnEndRecallsIt(t *testing.T) {
+	api := newQQStreamFakeAPI(t)
+	runtime := &Runtime{channel: api.channel()}
+	event := MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindPrivate, UserID: "U2345", MessageID: "in1"}
+	cfg := BotConfig{ReplySafetyPrivateEnabled: boolPointer(false), BotReplyLoopDetectionEnabled: boolPointer(false)}
+	draft := runtime.telegramReplyDraft(event, cfg)
+	if draft == nil {
+		t.Fatal("private QQ chat without audit should stream")
+	}
+	ctx := context.Background()
+	// 刚出一个字就被打断时什么都不发，避免聊天里只剩一个「蓝」。
+	if draft.ObserveTextDelta(ctx, "蓝") || len(api.frames) != 0 {
+		t.Fatalf("one-rune first frame was sent: %#v", api.frames)
+	}
+	runtime.abandonReplyStream(ctx, event)
+	if len(api.frames) != 0 || len(api.deletes) != 0 {
+		t.Fatalf("nothing streamed, nothing to recall: frames = %d, deletes = %#v", len(api.frames), api.deletes)
+	}
+	if !draft.ObserveTextDelta(ctx, "蓝发的那个是星街彗星") || len(api.frames) != 1 {
+		t.Fatalf("long enough first frame should stream: %#v", api.frames)
+	}
+	// 这一轮随后静默结束：轮次收尾时关流并撤回，取消了的上下文也不影响收尾。
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	runtime.abandonReplyStream(canceled, event)
+	if len(api.frames) != 2 || len(api.deletes) != 1 {
+		t.Fatalf("frames = %d, deletes = %#v", len(api.frames), api.deletes)
 	}
 }
