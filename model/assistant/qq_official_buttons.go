@@ -22,9 +22,10 @@ import (
 const (
 	buttonsFinalizeFieldName = "buttons"
 
-	qqKeyboardMaxRows      = 5
-	qqKeyboardMaxPerRow    = 5
-	qqButtonLabelMaxRunes  = 16
+	qqKeyboardMaxRows   = 5
+	qqKeyboardMaxPerRow = 5
+	// 开放平台文档写按钮文字最多 10 个字符，截到这个长度再发。
+	qqButtonLabelMaxRunes  = 10
 	qqButtonDataMaxRunes   = 100
 	qqButtonActionLink     = 0
 	qqButtonActionCallback = 1

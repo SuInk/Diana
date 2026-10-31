@@ -33,8 +33,10 @@ type QQOfficialConfig struct {
 }
 
 const (
-	qqOfficialTokenURL      = "https://bots.qq.com/app/getAppAccessToken"
-	qqOfficialAPIBase       = "https://api.sgroup.qq.com"
+	qqOfficialTokenURL = "https://bots.qq.com/app/getAppAccessToken"
+	// 开放平台 2026-08-10 起把接口调用域名统一成 api.bot.qq.com，旧的 api.sgroup.qq.com
+	// 目前还通。沙箱的新域名文档没写，沿用旧的。
+	qqOfficialAPIBase       = "https://api.bot.qq.com"
 	qqOfficialSandboxAPI    = "https://sandbox.api.sgroup.qq.com"
 	qqOfficialHeartbeatSlop = 5 * time.Second
 

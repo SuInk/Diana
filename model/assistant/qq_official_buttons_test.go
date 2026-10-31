@@ -255,3 +255,11 @@ func TestParseFinalizeButtonsCallback(t *testing.T) {
 		t.Fatal("plain button should stay a command")
 	}
 }
+
+// 按钮文字按开放平台的上限截到 10 个字，点了发出的话不受影响。
+func TestParseFinalizeButtonsCutsLongLabel(t *testing.T) {
+	rows := parseFinalizeButtons("一二三四五六七八九十十一十二=完整的话")
+	if len(rows) != 1 || rows[0][0].Label != "一二三四五六七八九十" || rows[0][0].Data != "完整的话" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
