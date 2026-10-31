@@ -116,7 +116,10 @@ func (c *avatarCache) load(ctx context.Context, key string, fetch func(ctx conte
 	if !busy {
 		done = make(chan struct{})
 		c.inflight[key] = done
-		go c.refresh(ctx, key, entry, fetch, done)
+		go func() {
+			defer recoverGoroutinePanic("avatar_cache.refresh")
+			c.refresh(ctx, key, entry, fetch, done)
+		}()
 	}
 	c.mu.Unlock()
 
@@ -133,7 +136,6 @@ func (c *avatarCache) load(ctx context.Context, key string, fetch func(ctx conte
 
 // refresh 回源一次并写回结果，完事关掉 done。
 func (c *avatarCache) refresh(parent context.Context, key string, previous *avatarEntry, fetch func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error), done chan struct{}) {
-	defer recoverGoroutinePanic("avatar_cache.refresh")
 	result := make(chan *avatarEntry, 1)
 	go func() {
 		defer recoverGoroutinePanic("avatar_cache.fetch")
