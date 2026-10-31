@@ -69,6 +69,7 @@ func (c *QQOfficialChannel) qqUploadMedia(ctx context.Context, auth, prefix, sou
 	call := func(path string, body any, out any) error {
 		raw, err := platformJSONRequest(ctx, client, http.MethodPost, prefix+path, headers, body)
 		if err != nil {
+			c.noteTokenRejected(err)
 			return err
 		}
 		return qqDecodeAPIResponse(raw, out)

@@ -211,6 +211,16 @@ func (c *QQOfficialChannel) fetchAccessToken(ctx context.Context) (string, time.
 	return payload.AccessToken, ttl, nil
 }
 
+// noteTokenRejected 在开放平台以 401 拒绝 token 时丢掉缓存，让下一次请求重新换。
+// 返回是否属于这种情况。
+func (c *QQOfficialChannel) noteTokenRejected(err error) bool {
+	if err == nil || !strings.Contains(err.Error(), "http 401") {
+		return false
+	}
+	c.tokens.Invalidate()
+	return true
+}
+
 // authHeader 组装开放平台要求的 Authorization 头。
 func (c *QQOfficialChannel) authHeader(ctx context.Context) (string, error) {
 	token, err := c.tokens.Get(ctx)
@@ -347,6 +357,11 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 		var payload qqGatewayPayload
 		if err := conn.ReadJSON(&payload); err != nil {
 			c.noteIntentRejected(err)
+			var closeErr *websocket.CloseError
+			if errors.As(err, &closeErr) && closeErr.Code == qqCloseInvalidToken {
+				// 4004：鉴权 token 无效，下一轮重连前换新的。
+				c.tokens.Invalidate()
+			}
 			return fmt.Errorf("qq: 网关连接中断: %w", err)
 		}
 		c.live.mark(time.Now())
@@ -386,6 +401,9 @@ func (c *QQOfficialChannel) identifyIntents() int {
 	}
 	return intents
 }
+
+// qqCloseInvalidToken 是网关因鉴权 token 无效断开时的关闭码。
+const qqCloseInvalidToken = 4004
 
 // noteIntentRejected 在网关以 4013（无效 intent）或 4014（无权限 intent）断开时，
 // 先去掉群成员意图，再被拒就连按钮回调意图也去掉，下一轮重连照常收消息。
@@ -545,18 +563,26 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 
 // gatewayURL 取网关地址。
 func (c *QQOfficialChannel) gatewayURL(ctx context.Context) (string, error) {
-	auth, err := c.authHeader(ctx)
-	if err != nil {
-		return "", err
-	}
 	c.mu.RLock()
 	client := c.client
 	c.mu.RUnlock()
-	raw, err := platformJSONRequest(ctx, client, http.MethodGet, c.apiBase()+"/gateway", map[string]string{
-		"Authorization": auth,
-	}, nil)
-	if err != nil {
-		return "", fmt.Errorf("qq: 获取网关地址失败: %w", err)
+	var raw []byte
+	// 缓存的 token 可能已被平台作废（休眠醒来、别处换过新 token），
+	// 401 时丢掉缓存立刻换新的再试一次，不必等下一轮重连。
+	for attempt := 0; ; attempt++ {
+		auth, err := c.authHeader(ctx)
+		if err != nil {
+			return "", err
+		}
+		raw, err = platformJSONRequest(ctx, client, http.MethodGet, c.apiBase()+"/gateway", map[string]string{
+			"Authorization": auth,
+		}, nil)
+		if err == nil {
+			break
+		}
+		if !c.noteTokenRejected(err) || attempt > 0 {
+			return "", fmt.Errorf("qq: 获取网关地址失败: %w", err)
+		}
 	}
 	var payload struct {
 		URL string `json:"url"`
@@ -634,18 +660,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}, body)
 		}
 		raw, err := request()
-		if err != nil && strings.Contains(err.Error(), "http 401") {
-			// token 过期时开放平台返回 401；丢掉缓存让下一次重新换。
-			c.tokens.Invalidate()
-		}
+		c.noteTokenRejected(err)
 		if err != nil && strings.Contains(err.Error(), qqDedupErrorCode) && replyID != "" && !isGuild {
 			// 40054005「消息被去重」：换一个 msg_seq 重发一次可通过，原样重发
 			// 只会再次被拒。
 			body["msg_seq"] = c.nextPassiveSeq(replyID)
 			raw, err = request()
-			if err != nil && strings.Contains(err.Error(), "http 401") {
-				c.tokens.Invalidate()
-			}
+			c.noteTokenRejected(err)
 		}
 		if err != nil {
 			return "", fmt.Errorf("qq: 发送失败: %w", err)
@@ -1120,6 +1141,7 @@ func (c *QQOfficialChannel) CallAPI(ctx context.Context, action string, params m
 		"Authorization": auth,
 	}, payload)
 	if err != nil {
+		c.noteTokenRejected(err)
 		return nil, err
 	}
 	out := map[string]any{}

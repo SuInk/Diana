@@ -41,7 +41,9 @@ const tokenRefreshMargin = 2 * time.Minute
 func (c *platformTokenCache) Get(ctx context.Context) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.token != "" && time.Now().Before(c.expiresAt) {
+	// 用墙上时钟比较：单调时钟在系统休眠期间不走，睡醒后已过期的 token
+	// 会被当成还有效，平台却早已作废它。
+	if c.token != "" && time.Now().Round(0).Before(c.expiresAt) {
 		return c.token, nil
 	}
 	if c.fetch == nil {
@@ -59,7 +61,7 @@ func (c *platformTokenCache) Get(ctx context.Context) (string, error) {
 		ttl -= tokenRefreshMargin
 	}
 	c.token = token
-	c.expiresAt = time.Now().Add(ttl)
+	c.expiresAt = time.Now().Round(0).Add(ttl)
 	return token, nil
 }
 

@@ -68,6 +68,39 @@ func TestQQOfficialRunSessionExitsOnSilentGateway(t *testing.T) {
 	}
 }
 
+// 缓存的 token 被平台作废后，获取网关地址遇到 401 要换新 token 重试，
+// 不能拿着同一个失效 token 一直重连。
+func TestQQOfficialGatewayRefreshesRejectedToken(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "QQBot fresh" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"message":"AccessToken无效或过期","code":11244}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"url":"wss://gateway.example/ws"}`))
+	}))
+	defer server.Close()
+
+	channel := NewQQOfficialChannel(QQOfficialConfig{AppID: "app", AppSecret: "secret"})
+	channel.apiBaseOverride = server.URL
+	fetches := 0
+	channel.tokens = &platformTokenCache{fetch: func(context.Context) (string, time.Duration, error) {
+		fetches++
+		if fetches == 1 {
+			return "stale", time.Hour, nil
+		}
+		return "fresh", time.Hour, nil
+	}}
+
+	got, err := channel.gatewayURL(context.Background())
+	if err != nil {
+		t.Fatalf("gatewayURL error = %v", err)
+	}
+	if got != "wss://gateway.example/ws" || fetches != 2 {
+		t.Fatalf("gatewayURL = %q after %d fetches, want refreshed token on retry", got, fetches)
+	}
+}
+
 // 读循环卡在某次处理里时，网关早断了也不会出错返回；状态要按收消息停滞
 // 改报离线，不能一直停在 READY 时设的「已连接」。
 func TestQQOfficialStuckReadLoopReportsOffline(t *testing.T) {

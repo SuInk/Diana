@@ -169,9 +169,7 @@ func (c *QQOfficialChannel) sendQQStreamFrame(ctx context.Context, replyID strin
 			err = fmt.Errorf("qq: 流式消息被拒绝: %s (code %d)", envelope.Message, envelope.Code)
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "http 401") {
-				c.tokens.Invalidate()
-			}
+			c.noteTokenRejected(err)
 			if qqStreamRateLimited(err, envelope.Code) && attempt < qqStreamMaxRetries {
 				select {
 				case <-ctx.Done():

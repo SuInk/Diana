@@ -60,9 +60,7 @@ func (c *QQOfficialChannel) ackInteraction(ctx context.Context, id string) {
 	c.mu.RUnlock()
 	_, err = platformJSONRequest(ctx, client, http.MethodPut, c.apiBase()+"/interactions/"+url.PathEscape(id),
 		map[string]string{"Authorization": auth}, map[string]any{"code": 0})
-	if err != nil && strings.Contains(err.Error(), "http 401") {
-		c.tokens.Invalidate()
-	}
+	c.noteTokenRejected(err)
 }
 
 // qqOfficialEventFromInteraction 把按钮回调映射成统一事件。MessageID 用外层事件 ID，

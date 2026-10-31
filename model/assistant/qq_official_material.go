@@ -174,6 +174,7 @@ func (c *QQOfficialChannel) qqMaterialCall(ctx context.Context, auth, method, pa
 	c.mu.RUnlock()
 	raw, err := platformJSONRequest(ctx, client, method, c.apiBase()+path, map[string]string{"Authorization": auth}, body)
 	if err != nil {
+		c.noteTokenRejected(err)
 		return err
 	}
 	return qqDecodeAPIResponse(raw, out)
