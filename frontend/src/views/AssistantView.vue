@@ -872,6 +872,29 @@
                 </label>
                 <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认开启；关闭后去掉标记，改发纯文本。" : "当前平台只发纯文本，默认关闭，标记会先转成纯文本再发。" }}<template v-if="!richTextPlatform && !form.markdown_to_plain">当前已开启，回复里的 ** 和 # 会原样发出。</template></span>
               </div>
+              <template v-if="currentPlatform === 'qq-official'">
+                <div class="field">
+                  <label class="switch">
+                    <input v-model="form.qq_official_feedback" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">单聊回复下显示赞踩</span>
+                  </label>
+                  <span class="hint">默认开启。对方点赞或点踩会记进运行日志；平台不认时自动去掉再发，不影响回复。</span>
+                </div>
+                <div class="field">
+                  <label class="switch">
+                    <input v-model="form.qq_official_input_notify" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">单聊显示「对方正在输入」</span>
+                  </label>
+                  <span class="hint">默认关闭。每条消息只发一次，最长显示 60 秒；平台没说明它占不占同一条消息的回复次数，回复条数多时可能先用完额度。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-qq-keyboard-template">按钮模板 ID</label>
+                  <input id="bot-qq-keyboard-template" v-model.trim="form.qq_official_keyboard_template" class="input mono" placeholder="留空不挂" autocomplete="off" />
+                  <span class="hint">在 q.qq.com 申请通过的按钮模板。模型这条回复没填按钮时，挂上这组固定按钮；没开通自定义按钮的机器人可以用它。</span>
+                </div>
+              </template>
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
@@ -4700,6 +4723,9 @@ function setForm(config: BotProfileConfig): void {
     mention_user_mode: config.mention_user_mode ?? "auto",
     sticker_reply_order: config.sticker_reply_order ?? "before",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
+    qq_official_input_notify: config.qq_official_input_notify ?? false,
+    qq_official_feedback: config.qq_official_feedback ?? true,
+    qq_official_keyboard_template: config.qq_official_keyboard_template ?? "",
     error_notify_enabled: config.error_notify_enabled ?? true,
     muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,
     muted_voice_transcription_enabled: config.muted_voice_transcription_enabled ?? true,

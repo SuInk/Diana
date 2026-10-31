@@ -121,7 +121,7 @@ func TestQQOfficialSendsButtonsOnMarkdownMessage(t *testing.T) {
 // 模型按用途挑样式、按名字挑字号，Diana 拼成 render_data.style 和 content.style.font_size。
 func TestFinalizeButtonsStylesAndFontSize(t *testing.T) {
 	_, holder := withFinalizeButtons(context.Background())
-	holder.set("小号\n次要:算了 | 展开 | 危险：删除\n主要:确定=回调:确定 | 继续")
+	holder.set("小号\n次要:算了 | 展开 | 危险：删除\n主要:确定=回调:确定 | 继续", "")
 	rows, fontSize := holder.take()
 	if fontSize != "small" || len(rows) != 2 {
 		t.Fatalf("rows = %#v, fontSize = %q", rows, fontSize)
@@ -149,7 +149,7 @@ func TestFinalizeButtonsStylesAndFontSize(t *testing.T) {
 	if !rows[1][0].Callback || rows[1][0].Data != "确定" {
 		t.Fatalf("样式前缀不该影响回调：%#v", rows[1][0])
 	}
-	holder.set("大号")
+	holder.set("大号", "")
 	if rows, fontSize := holder.take(); rows != nil || fontSize != "" {
 		t.Fatalf("只有字号没有按钮时什么都不挂：%#v %q", rows, fontSize)
 	}
@@ -218,7 +218,7 @@ func TestDeliverChunksAttachesButtonsToLastText(t *testing.T) {
 	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformQQOfficial, UserID: "u1"}
 	ctx, holder := withFinalizeButtons(context.Background())
-	holder.set("继续|换一个")
+	holder.set("继续|换一个", "")
 	if _, err := runtime.deliverChunks(ctx, event, []string{"第一段", "第二段", ""}, cfg.WithDefaults(), outboundDecoration{}); err != nil {
 		t.Fatal(err)
 	}

@@ -76,6 +76,12 @@ func (r *Runtime) startTypingIndicatorState(ctx context.Context, event MessageEv
 		}
 		interval = oneBotTypingRenewInterval
 		maxFailures = oneBotTypingMaxFailures
+	case PlatformQQOfficial:
+		// 只有单聊有输入状态；一条入站消息只发一次，见 qq_official_input.go。
+		if event.Kind != EventKindPrivate || !boolValue(cfg.QQOfficialInputNotify, false) {
+			return nil
+		}
+		interval = qqInputNotifySeconds * time.Second
 	default:
 		return nil
 	}

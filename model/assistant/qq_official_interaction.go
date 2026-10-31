@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,9 +18,13 @@ type qqOfficialInteraction struct {
 	GroupMemberOpenID string `json:"group_member_openid"`
 	UserOpenID        string `json:"user_openid"`
 	Data              struct {
+		Type     int `json:"type"`
 		Resolved struct {
-			ButtonData string `json:"button_data"`
-			ButtonID   string `json:"button_id"`
+			ButtonData  string `json:"button_data"`
+			ButtonID    string `json:"button_id"`
+			MessageID   string `json:"message_id"`
+			FeedbackOpt string `json:"feedback_opt"`
+			Checked     int    `json:"checked"`
 		} `json:"resolved"`
 	} `json:"data"`
 }
@@ -27,6 +32,10 @@ type qqOfficialInteraction struct {
 const (
 	qqInteractionChatGroup = 1
 	qqInteractionChatC2C   = 2
+
+	// data.type：11 消息按钮、12 单聊快捷菜单要应答；13 是赞踩栏的反馈，不用应答，
+	// 也不是对方说的话。14 起是清空会话、切换模型这类智能体操作，Diana 不处理。
+	qqInteractionTypeFeedback = 13
 )
 
 // handleInteraction 应答按钮回调，再把按钮数据当成用户发来的一句话交给运行时。
@@ -34,6 +43,14 @@ const (
 func (c *QQOfficialChannel) handleInteraction(ctx context.Context, payload qqGatewayPayload) {
 	var interaction qqOfficialInteraction
 	if err := json.Unmarshal(payload.Data, &interaction); err != nil || interaction.ID == "" {
+		return
+	}
+	if interaction.Data.Type == qqInteractionTypeFeedback {
+		resolved := interaction.Data.Resolved
+		log.Printf("qq: 收到回复反馈 message=%s opt=%s checked=%d user=%s", resolved.MessageID, resolved.FeedbackOpt, resolved.Checked, firstNonEmpty(interaction.UserOpenID, interaction.GroupMemberOpenID))
+		return
+	}
+	if interaction.Data.Type > qqInteractionTypeFeedback {
 		return
 	}
 	// 不应答的话客户端会一直转圈并提示操作失败。

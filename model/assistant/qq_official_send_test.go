@@ -37,6 +37,10 @@ type qqFakeAPI struct {
 	rejectKeyboard bool
 	// rejectKeyboardStyle 让带字号或非蓝框按钮的 keyboard 被拒收，模拟平台不认文档外的样式。
 	rejectKeyboardStyle bool
+	// rejectExtras 让带推荐回复、赞踩栏或正文版式的消息被拒收。
+	rejectExtras bool
+	// rejectWakeup 让带 is_wakeup 的消息回 40034123，模拟不支持互动召回。
+	rejectWakeup bool
 	// rejectGallery 让带 mqqapi 图集节点的消息被拒收，和生产实测的回包一致。
 	rejectGallery bool
 	// material 是素材管理接口的假实现，见 qq_official_material_test.go。
@@ -103,7 +107,13 @@ func newQQFakeAPI(t *testing.T) *qqFakeAPI {
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "图片转存失败", "code": 40035009})
 				return
 			}
-			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) || (api.rejectKeyboardStyle && qqFakeKeyboardStyled(body)) {
+			if _, wakeup := body["is_wakeup"]; api.rejectWakeup && wakeup {
+				api.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{"message": "不支持召回", "code": 40034123})
+				return
+			}
+			if (api.rejectMarkdown && body["msg_type"] == float64(2)) || (api.rejectKeyboard && hasKeyboard) || (api.rejectKeyboardStyle && qqFakeKeyboardStyled(body)) || (api.rejectExtras && qqFakeHasExtras(body)) {
 				api.mu.Unlock()
 				w.WriteHeader(http.StatusBadRequest)
 				_ = json.NewEncoder(w).Encode(map[string]any{"message": "不允许发送原生 markdown", "code": 304003})
@@ -691,4 +701,12 @@ func qqFakeKeyboardStyled(body map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func qqFakeHasExtras(body map[string]any) bool {
+	_, prompt := body["prompt_keyboard"]
+	_, action := body["action_button"]
+	markdown, _ := body["markdown"].(map[string]any)
+	_, style := markdown["style"]
+	return prompt || action || style
 }

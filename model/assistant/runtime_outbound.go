@@ -87,8 +87,16 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			chunk = qqOfficialDropLeadingSenderMention(chunk, event.UserID)
 		}
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
+		if !decoration.LiteralText && !isStandaloneRecordReply(chunk) {
+			msg.MarkdownStyle = finalizeQQExtrasFromContext(ctx).markdownStyle()
+		}
 		if index == lastTextChunk && !decoration.LiteralText {
 			msg.Buttons, msg.ButtonFontSize = finalizeButtonsFromContext(ctx).take()
+			msg.Suggestions, msg.Card = finalizeQQExtrasFromContext(ctx).takeLast()
+			if event.Platform == PlatformQQOfficial {
+				msg.QQFeedback = event.Kind == EventKindPrivate && boolValue(cfg.QQOfficialFeedback, true)
+				msg.QQKeyboardTemplate = cfg.QQOfficialKeyboardTemplate
+			}
 		}
 		if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !msg.LiteralText {
 			msg = rssWatchOutgoingImages(msg)

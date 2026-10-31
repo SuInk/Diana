@@ -29,6 +29,7 @@ const (
 	qqButtonActionLink     = 0
 	qqButtonActionCallback = 1
 	qqButtonActionCommand  = 2
+	qqButtonPermissionUser = 0
 	qqButtonPermissionAll  = 2
 	qqButtonStyleGray      = 0
 	qqButtonStyleBlue      = 1
@@ -61,6 +62,8 @@ var (
 		"危险:": qqButtonStyleRed, "危险：": qqButtonStyleRed,
 		"次要:": qqButtonStyleGray, "次要：": qqButtonStyleGray,
 	}
+	// qqButtonOnlyAskerPrefixes 写在一项最前面表示只有发起这轮的人能点。
+	qqButtonOnlyAskerPrefixes = []string{"仅他:", "仅他："}
 	// qqKeyboardFontSizes 是单独一行写的整组字号，不写是平台默认大小。
 	qqKeyboardFontSizes = map[string]string{"小号": "small", "中号": "middle", "大号": "large"}
 )
@@ -68,14 +71,18 @@ var (
 // OutgoingButton 是挂在消息底下的一个按钮。Link 为 true 时 Data 是要打开的网址，
 // 否则是点了以后替用户发出的那句话；Callback 为 true 时不替用户发话，Data 随回调
 // 事件送回来。Group 相同的指令按钮互斥（见 qqOfficialKeyboard），为 0 时按所在的排分组。
-// Style 是开放平台的 render_data.style，nil 是蓝色线框。
+// Style 是开放平台的 render_data.style，nil 是蓝色线框。OnlyUserIDs 非空时只有这些人
+// 能点（permission.type 0），其余人点了会提示没有权限。
 type OutgoingButton struct {
-	Label    string
-	Data     string
-	Link     bool
-	Callback bool
-	Style    *int
-	Group    int
+	Label       string
+	Data        string
+	Link        bool
+	Callback    bool
+	Style       *int
+	OnlyUserIDs []string
+	Group       int
+	// onlyAsker 是模型写了「仅他:」，收尾时换成这轮发起人的 ID 填进 OnlyUserIDs。
+	onlyAsker bool
 }
 
 func buttonsFinalizeField() agent.FinalizeField {
@@ -86,10 +93,10 @@ func buttonsFinalizeField() agent.FinalizeField {
 		Description: "QQ 官方机器人能在你这条回复底下挂几个按钮，对方点一下就替他发出那句话，所以默认就填：" +
 			"只要对方接下来可能追问、挑选、继续或换个方向，就给 2～4 个按钮，写成对方最可能想接着说的话，" +
 			"比如「展开讲讲」「那 B 呢」「再来一个」、你给的选项、是/否。" +
-			"每行一排，同排用 | 分隔，每个写「显示文字」或「显示文字=点了替对方发的话」，网页写「显示文字=https://…」；" +
+			"每行一排，同排用 | 分隔，每个写「文字」或「文字=点了替对方发的话」，网页写「文字=https://…」；" +
 			"翻页、确认、投票等不必让群里看到的写「显示文字=回调:要交给你的话」，点了只悄悄通知你；" +
-			"项前可加「主要:」「危险:」「次要:」，单独一行「小号」「大号」调字号；" +
-			"显示文字 2～8 个字。只有纯附和、发表情、对方明确在结束话题时才不填。",
+			"项前可加「主要:」「危险:」「次要:」「仅他:」，单独一行「小号」「大号」调字号；" +
+			"文字 2～8 个字。只有纯附和、发表情、对方明确在结束话题时才不填。",
 	}
 }
 
@@ -118,7 +125,7 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 			if len(row) == qqKeyboardMaxPerRow {
 				break
 			}
-			item, style := cutButtonStylePrefix(strings.TrimSpace(item))
+			item, style, onlyAsker := cutButtonPrefixes(strings.TrimSpace(item))
 			label, data, hasData := strings.Cut(item, "=")
 			label, data = strings.TrimSpace(label), strings.TrimSpace(data)
 			callback := false
@@ -131,7 +138,7 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 			if label == "" {
 				continue
 			}
-			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes), Style: style, Group: lineIndex + 1}
+			button := OutgoingButton{Label: cutButtonText(label, qqButtonLabelMaxRunes), Data: cutButtonText(data, qqButtonDataMaxRunes), Style: style, Group: lineIndex + 1, onlyAsker: onlyAsker}
 			lower := strings.ToLower(button.Data)
 			button.Link = strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
 			button.Callback = callback && !button.Link
@@ -147,14 +154,31 @@ func parseFinalizeButtons(value string) [][]OutgoingButton {
 	return rows
 }
 
-// cutButtonStylePrefix 拿掉一项最前面的用途名，返回剩下的部分和对应样式。
-func cutButtonStylePrefix(item string) (string, *int) {
-	for prefix, style := range qqButtonStylePrefixes {
-		if rest, ok := strings.CutPrefix(item, prefix); ok {
-			return strings.TrimSpace(rest), &style
+// cutButtonPrefixes 拿掉一项最前面的用途名和「仅他:」，两种可以叠着写，先后不限。
+func cutButtonPrefixes(item string) (rest string, style *int, onlyAsker bool) {
+	rest = item
+	for changed := true; changed; {
+		changed = false
+		for prefix, value := range qqButtonStylePrefixes {
+			if cut, ok := strings.CutPrefix(rest, prefix); ok && style == nil {
+				rest, style, changed = strings.TrimSpace(cut), &value, true
+			}
+		}
+		for _, prefix := range qqButtonOnlyAskerPrefixes {
+			if cut, ok := strings.CutPrefix(rest, prefix); ok && !onlyAsker {
+				rest, onlyAsker, changed = strings.TrimSpace(cut), true, true
+			}
 		}
 	}
-	return item, nil
+	return rest, style, onlyAsker
+}
+
+// qqButtonPermission 是按钮的 permission：指定了人就只给这些人点。
+func qqButtonPermission(button OutgoingButton) map[string]any {
+	if len(button.OnlyUserIDs) > 0 {
+		return map[string]any{"type": qqButtonPermissionUser, "specify_user_ids": append([]string(nil), button.OnlyUserIDs...)}
+	}
+	return map[string]any{"type": qqButtonPermissionAll}
 }
 
 // cutKeyboardFontSize 拿掉单独写字号的那行，返回剩下的按钮文本和字号。
@@ -275,7 +299,7 @@ func qqOfficialKeyboard(rows [][]OutgoingButton, fontSize string) map[string]any
 				"data":           button.Data,
 				"enter":          true,
 				"unsupport_tips": qqButtonUnsupportedTip,
-				"permission":     map[string]any{"type": qqButtonPermissionAll},
+				"permission":     qqButtonPermission(button),
 			}
 			if button.Callback {
 				action["type"] = qqButtonActionCallback
@@ -286,7 +310,7 @@ func qqOfficialKeyboard(rows [][]OutgoingButton, fontSize string) map[string]any
 					"type":           qqButtonActionLink,
 					"data":           button.Data,
 					"unsupport_tips": qqButtonUnsupportedTip,
-					"permission":     map[string]any{"type": qqButtonPermissionAll},
+					"permission":     qqButtonPermission(button),
 				}
 			}
 			style := qqButtonStyleBlue
@@ -342,13 +366,23 @@ func finalizeButtonsFromContext(ctx context.Context) *finalizeButtons {
 	return holder
 }
 
-func (f *finalizeButtons) set(value string) {
+// set 解析收尾时填的按钮；askerID 是这轮发起人的 ID，写了「仅他:」的按钮只给他点。
+func (f *finalizeButtons) set(value, askerID string) {
 	if f == nil {
 		return
 	}
 	value, fontSize := cutKeyboardFontSize(value)
+	rows := parseFinalizeButtons(value)
+	askerID = strings.TrimSpace(askerID)
+	for _, row := range rows {
+		for index := range row {
+			if row[index].onlyAsker && askerID != "" {
+				row[index].OnlyUserIDs = []string{askerID}
+			}
+		}
+	}
 	f.mu.Lock()
-	f.rows, f.fontSize = parseFinalizeButtons(value), fontSize
+	f.rows, f.fontSize = rows, fontSize
 	f.mu.Unlock()
 }
 

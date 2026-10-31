@@ -113,6 +113,9 @@ type QQOfficialChannel struct {
 	// streams 是私聊里按入站 msg_id 进行中的流式消息，见 qq_official_stream.go。
 	streamMu sync.Mutex
 	streams  map[string]*qqStream
+	// inputNotified 记哪些入站消息已经发过「正在输入」，见 qq_official_input.go。
+	inputNotifyMu sync.Mutex
+	inputNotified map[string]time.Time
 
 	// sent 记着最近发出的群消息，用来认出全量模式下平台回推的自发消息。
 	sent qqSentLedger
@@ -644,6 +647,12 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	c.mu.RUnlock()
 	// post 发一条消息。同一个 msg_id 下的多条回复要靠递增的 msg_seq 区分，否则第二条起被去重拒收。
 	post := func(body map[string]any) (string, error) {
+		// 单聊没有被动回复可用时（提醒、定时推送这类主动消息）按互动召回发：用户主动
+		// 对话后 30 天内分四个周期各能召回一条。不能召回或额度用完就按普通主动消息再发一次。
+		wakeup := replyID == "" && !isGroup && !isGuild
+		if wakeup {
+			body["is_wakeup"] = true
+		}
 		if replyID != "" {
 			if strings.HasPrefix(replyID, qqInteractionEventPrefix) {
 				body["event_id"] = replyID
@@ -661,6 +670,12 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 		raw, err := request()
 		c.noteTokenRejected(err)
+		if err != nil && wakeup && qqWakeupRefused(err) {
+			log.Printf("qq: 互动召回不可用，改发普通主动消息: %v", err)
+			delete(body, "is_wakeup")
+			raw, err = request()
+			c.noteTokenRejected(err)
+		}
 		if err != nil && strings.Contains(err.Error(), qqDedupErrorCode) && replyID != "" && !isGuild {
 			// 40054005「消息被去重」：换一个 msg_seq 重发一次可通过，原样重发
 			// 只会再次被拒。
@@ -711,14 +726,25 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		body := map[string]any{"content": text}
 		markdownContent, markdown := "", false
 		keyboard := !isGuild && len(msg.Buttons) > 0
+		// 没有模型填的按钮时，配置了按钮模板就挂模板（需在开放平台申请，内容固定）。
+		keyboardTemplate := ""
+		if !isGuild && !keyboard {
+			keyboardTemplate = strings.TrimSpace(msg.QQKeyboardTemplate)
+		}
+		// 推荐回复和赞踩栏只有单聊有；版式群和单聊都能用。见 qq_official_extras.go。
+		c2c := !isGroup && !isGuild
+		suggestions := c2c && len(msg.Suggestions) > 0
+		feedback := c2c && msg.QQFeedback
+		markdownStyle := !isGuild && !msg.MarkdownStyle.isZero()
+		extras := suggestions || feedback || markdownStyle
 		if !isGuild {
 			source, mentionIDs := text, []string(nil)
 			if isGroup {
 				source, mentionIDs = qqOfficialMentionPlaceholders(msg.Text)
 			}
 			markdownContent, markdown = qqOfficialMarkdownContent(source)
-			if (keyboard || len(mentionIDs) > 0) && !markdown {
-				// 按钮和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
+			if (keyboard || keyboardTemplate != "" || extras || len(mentionIDs) > 0) && !markdown {
+				// 按钮、推荐回复、赞踩栏、版式和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
 				markdownContent, markdown = qqMarkdownLineBreaks(source), true
 			}
 			markdownContent = qqOfficialRestoreMentions(markdownContent, mentionIDs)
@@ -733,6 +759,17 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				}
 				if keyboard {
 					body["keyboard"] = c.qqOfficialKeyboardPayload(msg.Buttons, msg.ButtonFontSize)
+				} else if keyboardTemplate != "" {
+					body["keyboard"] = map[string]any{"id": keyboardTemplate}
+				}
+				if markdownStyle {
+					body["markdown"].(map[string]any)["style"] = msg.MarkdownStyle.payload()
+				}
+				if suggestions {
+					body["prompt_keyboard"] = qqPromptKeyboard(msg.Suggestions)
+				}
+				if feedback {
+					body["action_button"] = map[string]any{"feedback": true}
 				}
 				if strings.Contains(markdownContent, "qqbot-media://") {
 					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。
@@ -748,6 +785,14 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}
 		}
 		id, err := post(body)
+		if err != nil && extras && markdown && !qqOfficialRetryUseless(err) {
+			// 推荐回复、赞踩栏和版式都是文档外的字段，被拒就去掉重发，正文和按钮照旧。
+			log.Printf("qq: 带推荐回复/赞踩/版式的消息被拒，去掉后重发: %v", err)
+			delete(body, "prompt_keyboard")
+			delete(body, "action_button")
+			delete(body["markdown"].(map[string]any), "style")
+			id, err = post(body)
+		}
 		if _, has := body["keyboard"]; err != nil && has && qqButtonsStyled(msg.Buttons, msg.ButtonFontSize) && !qqOfficialRetryUseless(err) {
 			// 文档外的样式（红色字体、蓝色背景、字号）万一不被认：先换回默认样式重发，
 			// 按钮还能保住。
@@ -755,7 +800,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			body["keyboard"] = c.qqOfficialKeyboardPayload(plainQQButtons(msg.Buttons), "")
 			id, err = post(body)
 		}
-		if err != nil && keyboard && !qqOfficialRetryUseless(err) {
+		if _, has := body["keyboard"]; err != nil && has && !qqOfficialRetryUseless(err) {
 			// 自定义按钮官方写的是邀请开通，没开的账号整条会被拒：先去掉按钮重发，
 			// 正文的排版还能保住。
 			log.Printf("qq: 带按钮的消息被拒，去掉按钮重发: %v", err)
@@ -784,6 +829,13 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			c.sent.record(target, id, text, time.Now())
 		}
 		firstID = id
+	}
+	if msg.Card != nil && !isGuild && firstID != "" {
+		// 图文卡片是单独一条消息，跟在正文后面；发不出去（没开通、链接没报备）只记日志，
+		// 正文已经到了。
+		if _, err := post(msg.Card.payload()); err != nil {
+			log.Printf("qq: 图文卡片发送失败: %v", err)
+		}
 	}
 	if isGuild && (len(msg.ImageURLs) > 0 || len(msg.VideoURLs) > 0 || len(msg.AudioURLs) > 0 || len(files) > 0) {
 		return nil, fmt.Errorf("qq: 频道消息暂不支持发送富媒体")
@@ -1831,4 +1883,11 @@ func qqOfficialRetryUseless(err error) bool {
 		strings.Contains(message, qqQuotaExhaustedErrorCode) ||
 		strings.Contains(message, context.Canceled.Error()) ||
 		strings.Contains(message, context.DeadlineExceeded.Error())
+}
+
+// qqWakeupRefused 判断互动召回是不是被平台拒了：40034122 本周期召回已用完，
+// 40034123 这个用户或机器人不支持召回。
+func qqWakeupRefused(err error) bool {
+	message := err.Error()
+	return strings.Contains(message, "40034122") || strings.Contains(message, "40034123")
 }

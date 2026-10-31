@@ -297,6 +297,12 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 自动配图发送顺序：before 先发表情（默认）、after 后发表情、auto 由模型决定；不改变是否配图。 */
   sticker_reply_order?: "before" | "after" | "auto";
   markdown_to_plain?: boolean;
+  /** QQ 官方机器人单聊准备回复时显示「对方正在输入」；缺省关闭。 */
+  qq_official_input_notify?: boolean;
+  /** QQ 官方机器人单聊回复下挂赞踩栏；缺省开启。 */
+  qq_official_feedback?: boolean;
+  /** QQ 官方机器人的按钮模板 ID，模型没填按钮时挂它；留空不挂。 */
+  qq_official_keyboard_template?: string;
   error_notify_enabled?: boolean;
   /** 机器人在群里被禁言时暂停回复（只记上下文）；缺省开启。 */
   muted_reply_pause_enabled?: boolean;
