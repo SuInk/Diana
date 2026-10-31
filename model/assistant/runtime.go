@@ -4450,9 +4450,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				turnMessageIDs[messageID] = true
 			}
 		}
-		// 先发图、隔一会儿再单独问「这是啥」：这个人刚发、还没人接的图作为候选单独
-		// 附上（agent 和非 agent 都一样），见 sender_dependency_images.go。
-		if images := senderDependencyImages(replyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
+		// 已触发回复就先加载最近上下文里的普通图片，不限发送者；
+		// 逐张标明来源作为候选（agent 和非 agent 都一样）。
+		// 接话判断和回复准备期间可能又收到补图，不能沿用入站时的旧快照。
+		latestEvent := event
+		latestEvent.replyHistoryLoaded = false
+		latestHistory, _ := r.sessionContextHistory(latestEvent)
+		dependencyHistory := mergeMessageHistory(replyHistory, latestHistory, len(replyHistory)+len(latestHistory))
+		if images := r.replyDependencyImages(dependencyHistory, event, turnMessageIDs, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))); len(images) > 0 {
 			dependency = &senderDependencyContext{images: images, toolHint: directAgentDecision, pixels: r.chatModelReceivesImages(event) && imageTextModeFromContext(ctx) == nil}
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
 			r.supersedeDependencyImageTurns(ctx, event, images)

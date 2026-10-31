@@ -5,6 +5,8 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -128,4 +130,59 @@ func liveIdentifyImageClaim(t *testing.T, client llm.LLMClient, message llm.Mess
 	topic := strings.TrimSpace(configToolString(response.ToolCalls[0].Arguments, "topic"))
 	summary := strings.TrimSpace(configToolString(response.ToolCalls[0].Arguments, "summary"))
 	return topic, summary
+}
+
+// 回放真实的先文字后图片事件，只调用模型，不向生产群发送消息。
+func TestLiveFollowUpImageGrounding(t *testing.T) {
+	path := os.Getenv("DIANA_LIVE_FOLLOWUP_SAMPLE")
+	if path == "" {
+		t.Skip("DIANA_LIVE_FOLLOWUP_SAMPLE is required")
+	}
+	client := liveLLMClient(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []MessageEvent
+	if err := json.Unmarshal(data, &events); err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatal("expected text and image events")
+	}
+	for _, otherSender := range []bool{false, true} {
+		t.Run(fmt.Sprintf("other_sender=%v", otherSender), func(t *testing.T) {
+			current := events[0]
+			if otherSender {
+				current.UserID = "replay-user"
+				current.SenderName = "回放提问者"
+			}
+			runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
+			runtime.SetMessageHistoryStore(newRecallImageTestStore())
+			images := runtime.replyDependencyImages([]MessageEvent{current, events[1]}, current, nil, current.SelfID)
+			if len(images) != 1 {
+				t.Fatalf("follow-up images=%d", len(images))
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			defer cancel()
+			runtime.beginHistoryImageDescriptionForeground()
+			defer runtime.endHistoryImageDescriptionForeground()
+			message := runtime.senderDependencyMessage(ctx, current, &senderDependencyContext{images: images})
+			if strings.Contains(message.Content, "【还没读到的图】") {
+				t.Fatal("image description unavailable")
+			}
+			response, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+				{Role: llm.RoleSystem, Content: "根据提供的图片描述，简短回答用户。不要假装认识图中具体人物。"},
+				message, {Role: llm.RoleUser, Content: historyPlainText(current)},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(response.Text) == "" || strings.Contains(response.Text, "没看到图") || strings.Contains(response.Text, "没收到图") {
+				t.Fatalf("ungrounded reply: %s", response.Text)
+			}
+			t.Logf("model=%s description=%s reply=%s", response.Model, message.Content, response.Text)
+
+		})
+	}
 }

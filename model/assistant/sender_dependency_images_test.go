@@ -588,3 +588,83 @@ func TestImageToolResultReportsSourcesUsed(t *testing.T) {
 		t.Fatalf("current-message sticker was used: %s", body)
 	}
 }
+
+func TestReplyDependencyImagesIncludeFollowUpBeforeReplyStarts(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	root := textEvent("root", "user", "大家族合照来啦，看看认不认得全", 1000)
+	photo := photoEvent("followup", "user", 1004)
+	otherProfile := photo
+	otherProfile.ProfileID = "another-bot"
+	quotedOther := photo
+	quotedOther.Quoted = &QuotedMessage{MessageID: "unrelated"}
+	repeated := photo
+	repeated.MessageID = "repeat"
+	for _, tc := range []struct {
+		name string
+		tail []MessageEvent
+		skip map[string]bool
+		want string
+	}{
+		{name: "same second", tail: []MessageEvent{photoEvent("same-second", "user", 1000)}, want: "same-second#0"},
+		{name: "routing gap", tail: []MessageEvent{photo}, want: "followup#0"},
+		{name: "already merged", tail: []MessageEvent{photo}, skip: map[string]bool{"followup": true}},
+		{name: "other profile", tail: []MessageEvent{otherProfile}},
+		{name: "quotes another message", tail: []MessageEvent{quotedOther}, want: "followup#0"},
+		{name: "other sender", tail: []MessageEvent{photoEvent("other", "other", 1004)}, want: "other#0"},
+		{name: "new topic", tail: []MessageEvent{textEvent("new", "user", "换个话题", 1002), photo}, want: "followup#0"},
+		{name: "interruption", tail: []MessageEvent{textEvent("other", "other", "这是另一个问题", 1002), photo}, want: "followup#0"},
+		{name: "too late", tail: []MessageEvent{photoEvent("late", "user", 1100)}},
+		{name: "repeated image", tail: []MessageEvent{photo, repeated}},
+		{name: "other sender before question", tail: []MessageEvent{photoEvent("before", "other", 996)}, want: "before#0"},
+		{name: "expired image", tail: []MessageEvent{photoEvent("expired", "other", 800)}},
+		{name: "sticker", tail: []MessageEvent{stickerEvent("sticker", "user", 1004)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			history := append([]MessageEvent{root}, tc.tail...)
+			if got := dependencyIDs(runtime.replyDependencyImages(history, root, tc.skip, "bot")); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// 生产故障顺序：先文字、四秒后纯图、文字的接话判断结束后才开始回复。
+// 即使图片自己的主动回复未触发，auto 模式也必须先完成识图再调用回复模型。
+func TestReplyWaitsForFollowUpImageDescription(t *testing.T) {
+	for _, otherSender := range []bool{false, true} {
+		t.Run(fmt.Sprintf("other_sender=%v", otherSender), func(t *testing.T) {
+			provider := &scriptedReplyProvider{description: "七个动漫人物在室内合照"}
+			runtime, question := dependencyTestRuntime(t, provider, false, nil)
+			photo := runtime.contextHistory(question)[0]
+			question.Time = photo.Time - 4
+			if otherSender {
+				question.UserID = "another-person"
+			}
+			question.RawMessage = "大家族合照来啦，看看认不认得全"
+			question.Segments[0].Data["text"] = question.RawMessage
+			// 固定旧快照模拟判断开始时尚未收到图；回复阶段必须读取新历史。
+			question.replyHistory = []MessageEvent{question}
+			question.replyHistoryLoaded = true
+			checked := false
+			provider.reply = func(req llm.GenerateRequest) string {
+				body := requestText(req)
+				if strings.Contains(body, "【当前需要回复的消息】") {
+					checked = true
+					if !strings.Contains(body, "七个动漫人物在室内合照") || !strings.Contains(body, "最近上下文中的图片") {
+						t.Error("reply started without follow-up description")
+					}
+				}
+				return "合照里有七个人"
+			}
+			if _, err := runtime.replyTo(withImageTextMode(context.Background(), runtime, question), question, question.RawMessage); err != nil {
+				t.Fatal(err)
+			}
+			provider.mu.Lock()
+			defer provider.mu.Unlock()
+			if !checked || len(provider.replies) == 0 {
+				t.Fatal("no reply request")
+			}
+
+		})
+	}
+}
