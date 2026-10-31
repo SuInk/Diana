@@ -3611,7 +3611,7 @@ const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; dr
 const modelRouteEditorError = ref("");
 watch(selectedModelRole, clearModelRouteFilters);
 const modelRoutingStrategies = [
-  { value: "smart", label: "智能切换", hint: "健康故障较少的渠道优先", icon: GitBranch },
+  { value: "smart", label: "智能切换", hint: "按顺序使用，冷却中的渠道暂时让后", icon: GitBranch },
   { value: "failover", label: "主备切换", hint: "失败时按顺序切换", icon: GitBranch },
   { value: "round_robin", label: "轮询", hint: "请求依次均匀分配", icon: RotateCcw },
   { value: "weighted", label: "加权轮询", hint: "按渠道权重分配", icon: SlidersHorizontal }
@@ -3700,7 +3700,7 @@ function modelRoleRouteSummary(role: RoleKey): string {
 
 function modelRoutingDescription(role: RoleKey): string {
   const strategy = effectiveModelRoutingStrategy(role);
-  return strategy === "smart" ? "健康故障较少的渠道优先，同分按配置顺序" : strategy === "weighted" ? "权重越大，分配请求越多" : strategy === "round_robin" ? "在参与渠道间均匀分配请求" : "主模型失败后，按顺序尝试后备";
+  return strategy === "smart" ? "按配置顺序使用，出错冷却的渠道暂时让后，冷却结束即回切" : strategy === "weighted" ? "权重越大，分配请求越多" : strategy === "round_robin" ? "在参与渠道间均匀分配请求" : "主模型失败后，按顺序尝试后备";
 }
 
 function modelRouteProviderLabel(route: RoleRoute): string {

@@ -112,15 +112,11 @@ func (r *Runtime) scheduledRoleProfiles(ctx context.Context, purpose string, set
 		for index, profile := range profiles {
 			byKey[modelRouteProfileKey(profile)] = health[index]
 		}
+		// 只把冷却中的候选往后挪，其余保持配置顺序：主模型冷却一结束就回到首位，
+		// 不按残留的失败次数压在备用后面——不被调用就清不掉计数，会一压 24 小时。
 		less := func(a, b llm.Profile) bool {
 			left, right := byKey[modelRouteProfileKey(a)], byKey[modelRouteProfileKey(b)]
-			if (left.remaining > 0) != (right.remaining > 0) {
-				return left.remaining == 0
-			}
-			if left.remaining > 0 {
-				return false
-			}
-			return left.failures < right.failures
+			return left.remaining == 0 && right.remaining > 0
 		}
 		sort.SliceStable(pool, func(i, j int) bool { return less(pool[i], pool[j]) })
 		sort.SliceStable(standby, func(i, j int) bool { return less(standby[i], standby[j]) })

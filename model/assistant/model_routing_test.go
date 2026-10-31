@@ -371,10 +371,11 @@ func TestModelRoutingSmartHealthAndRetention(t *testing.T) {
 		}
 	}
 	check("a", "b", "c")
-	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("429 Too Many Requests: quota exceeded"))
 	check("b", "a", "c")
 	now = now.Add(time.Minute)
-	check("b", "a", "c")
+	// 冷却已过但失败计数还在：仍按配置顺序先试主模型。
+	check("a", "b", "c")
 	static, err := r.roleBoundProfiles(PurposeReply, set, llm.GroupChat, roles)
 	if err != nil || static[0].ID != "a" {
 		t.Fatalf("static profiles=%v err=%v", static, err)
@@ -382,6 +383,8 @@ func TestModelRoutingSmartHealthAndRetention(t *testing.T) {
 	r.llmCooldowns.clear(set.Profiles[0])
 	check("a", "b", "c")
 	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	// 偶发一次 500 只记数、未进冷却：主模型照样排第一，不被备用顶掉。
+	check("a", "b", "c")
 	now = now.Add(24 * time.Hour)
 	check("a", "b", "c")
 	if len(r.llmCooldowns.entries) != 1 {
@@ -389,7 +392,7 @@ func TestModelRoutingSmartHealthAndRetention(t *testing.T) {
 	}
 }
 
-func TestModelRoutingSmartGroupRanksFailureCountsStably(t *testing.T) {
+func TestModelRoutingSmartGroupKeepsConfigOrderAfterCooldown(t *testing.T) {
 	r, _, set := routingTestRuntime(t, ModelRole{ProfileID: "a", Model: "m"})
 	now := time.Unix(100, 0)
 	r.llmCooldowns.now = func() time.Time { return now }
@@ -407,7 +410,7 @@ func TestModelRoutingSmartGroupRanksFailureCountsStably(t *testing.T) {
 	for _, profile := range profiles {
 		got = append(got, profile.ID)
 	}
-	if !reflect.DeepEqual(got, []string{"d", "b", "c", "a"}) {
+	if !reflect.DeepEqual(got, []string{"a", "b", "c", "d"}) {
 		t.Fatalf("smart group=%v", got)
 	}
 }
@@ -484,7 +487,7 @@ func TestModelRoutingSmartNormalizationAndUnsupportedMedia(t *testing.T) {
 		})
 	}
 	r, _, set := routingTestRuntime(t, role)
-	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
+	r.llmCooldowns.markFailure(set.Profiles[0], errors.New("429 Too Many Requests: quota exceeded"))
 	profiles, err := r.scheduledRoleProfiles(context.Background(), PurposeMediaParse, set, llm.GroupVision, map[string]ModelRole{"chat": role, "vision": {FollowChat: true}})
 	if err != nil || profiles[0].ID != "b" {
 		t.Fatalf("vision inherited smart: %v %v", profiles, err)
@@ -520,8 +523,8 @@ func TestModelRoutingDefaultSmartAndExplicitFailover(t *testing.T) {
 			r, _, set := routingTestRuntime(t, role)
 			now := time.Unix(100, 0)
 			r.llmCooldowns.now = func() time.Time { return now }
-			r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
-			now = now.Add(time.Minute)
+			// 主模型仍在冷却：智能先排备用，主备保持原列表、交给调用层跳过。
+			r.llmCooldowns.markFailure(set.Profiles[0], errors.New("429 Too Many Requests: quota exceeded"))
 			for _, normalized := range []bool{false, true} {
 				roles := map[string]ModelRole{"chat": role, "vision": {FollowChat: true}}
 				if normalized {
