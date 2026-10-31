@@ -251,7 +251,7 @@ func (t *dianaCrossPlatformTool) send(ctx context.Context, input map[string]any)
 		event: event,
 		key:   "profile|" + target.profile.ID + "|" + strings.TrimPrefix(sessionKey(event), event.ContextNamespace+":"),
 		label: label,
-	}, message, media)
+	}, crossSessionPayload{message: message, media: media})
 	if err != nil {
 		return "", err
 	}

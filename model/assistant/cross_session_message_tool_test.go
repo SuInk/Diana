@@ -23,6 +23,8 @@ type friendRosterChannel struct {
 	// sendFailure 非空时每次发送都失败。recordingChannel 自带的 sendErr 是
 	// 「失败一次就自愈」的，测不了「这条通道一直发不出去」。
 	sendFailure error
+	// forwardErr 非空时原生单条转发失败，用来测退回照原文重发。
+	forwardErr error
 }
 
 func newFriendRosterChannel(friends ...string) *friendRosterChannel {
@@ -57,6 +59,10 @@ func (c *friendRosterChannel) CallAPI(ctx context.Context, action string, params
 		return oneBotDataMap(oneBotIDListItems("user_id", c.friends)), nil
 	case "get_group_list":
 		return oneBotDataMap(oneBotIDListItems("group_id", c.groups)), nil
+	case "forward_group_single_msg", "forward_friend_single_msg":
+		if c.forwardErr != nil {
+			return nil, c.forwardErr
+		}
 	}
 	return response, err
 }
@@ -358,18 +364,18 @@ func TestCrossSessionSendRespectsCooldownAndSessionLimit(t *testing.T) {
 			label: "账号 " + id + " 的私聊",
 		}
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "第一条", crossSessionMedia{}); err != nil {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), crossSessionPayload{message: "第一条"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), "再来一条", crossSessionMedia{}); !errors.Is(err, errCrossSessionRateLimited) {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("1"), crossSessionPayload{message: "再来一条"}); !errors.Is(err, errCrossSessionRateLimited) {
 		t.Fatalf("同一个目标的冷却没生效：%v", err)
 	}
 	for _, id := range []string{"2", "3", "4", "5"} {
-		if _, err := runtime.sendCrossSessionMessage(ctx, source, target(id), "第一条", crossSessionMedia{}); err != nil {
+		if _, err := runtime.sendCrossSessionMessage(ctx, source, target(id), crossSessionPayload{message: "第一条"}); err != nil {
 			t.Fatalf("发给 %s：%v", id, err)
 		}
 	}
-	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("6"), "第一条", crossSessionMedia{}); !errors.Is(err, errCrossSessionRateLimited) {
+	if _, err := runtime.sendCrossSessionMessage(ctx, source, target("6"), crossSessionPayload{message: "第一条"}); !errors.Is(err, errCrossSessionRateLimited) {
 		t.Fatalf("会话总量上限没生效：%v", err)
 	}
 	if got := len(channel.sentSnapshot()); got != crossSessionLimit {
@@ -584,5 +590,152 @@ func TestCrossSessionToolForwardCardKeepsMessageVerbatim(t *testing.T) {
 	data, _ := nodes[0]["data"].(map[string]any)
 	if got := forwardNodeContentText(data["content"]); got != message {
 		t.Fatalf("卡片节点和原文不一致：\n got: %q\nwant: %q", got, message)
+	}
+}
+
+// crossSessionForwardSource 是主人引用自己发的一条链接说「转到 456 群」的那一轮。
+func crossSessionForwardSource() MessageEvent {
+	source := crossSessionGroupSource("555")
+	source.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "转到 456 群里"}}}
+	source.Quoted = &QuotedMessage{MessageID: "70001", UserID: "555", Segments: []MessageSegment{
+		{Type: "reply", Data: map[string]string{"id": "69999"}},
+		{Type: "text", Data: map[string]string{"text": "http://x.com/example/status/1 看这个。"}},
+		{Type: "image", Data: map[string]string{"url": "https://example.test/c.png"}},
+	}}
+	return source
+}
+
+func crossSessionNativeForwardCalls(channel *friendRosterChannel) []recordingAPICall {
+	var calls []recordingAPICall
+	for _, call := range channel.callsSnapshot() {
+		if strings.HasPrefix(call.action, "forward_") && strings.HasSuffix(call.action, "_single_msg") {
+			calls = append(calls, call)
+		}
+	}
+	return calls
+}
+
+// 按 ID 转发时同一台 OneBot 机器人走接入端原生转发：发出去的就是原消息，模型一个
+// 字都不经手。
+func TestCrossSessionToolForwardsExistingMessageNatively(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), true)
+	out, err := tool.Run(context.Background(), map[string]any{"group_id": "456", "message_ids": []any{"70001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"forwarded":1`) || strings.Contains(out, `"replayed"`) {
+		t.Fatalf("tool result = %s", out)
+	}
+	calls := crossSessionNativeForwardCalls(channel)
+	if len(calls) != 1 || calls[0].action != "forward_group_single_msg" {
+		t.Fatalf("没有走原生转发：%#v", channel.callsSnapshot())
+	}
+	if calls[0].params["message_id"] != int64(70001) || calls[0].params["group_id"] != int64(456) {
+		t.Fatalf("原生转发参数不对：%#v", calls[0].params)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("原生转发之外不该再自己发一遍：%#v", sent)
+	}
+}
+
+// 私聊目的地用好友转发接口。
+func TestCrossSessionToolForwardsExistingMessageToFriend(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{})
+	tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), false)
+	if _, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"70001"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := crossSessionNativeForwardCalls(channel)
+	if len(calls) != 1 || calls[0].action != "forward_friend_single_msg" || calls[0].params["user_id"] != int64(555) {
+		t.Fatalf("私聊没有走好友转发：%#v", calls)
+	}
+}
+
+// 接入端转不了时退回照原文重发：链接一字不差、配图跟着同一条发，回复引用丢掉，
+// 并且在工具结果里说清楚退回了。
+func TestCrossSessionToolReplaysExistingMessageWhenNativeForwardFails(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	channel.forwardErr = errors.New("message not found: 70001")
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), true)
+	out, err := tool.Run(context.Background(), map[string]any{
+		"group_id": "456", "message_ids": []any{"70001"}, "message": "主人让我转过来的",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"replayed":1`) || !strings.Contains(out, "照原文重发") {
+		t.Fatalf("工具结果没说退回了：%s", out)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 {
+		t.Fatalf("sent = %#v", sent)
+	}
+	original := sent[0]
+	if original.GroupID != "456" || original.Text != "http://x.com/example/status/1 看这个。" || !original.LiteralText {
+		t.Fatalf("原消息没有照原文发出：%#v", original)
+	}
+	if len(original.ImageURLs) != 1 || original.ImageURLs[0] != "https://example.test/c.png" {
+		t.Fatalf("原消息的图片没跟着发：%#v", original)
+	}
+	if original.ReplyMessageID != "" {
+		t.Fatalf("原会话里的回复引用不该带过去：%q", original.ReplyMessageID)
+	}
+	if sent[1].Text != "主人让我转过来的" {
+		t.Fatalf("附言应当在原消息之后：%#v", sent[1])
+	}
+}
+
+// 原生转发结果不明时可能已经发出去了，再照原文发一遍就是重复。
+func TestCrossSessionToolDoesNotReplayWhenForwardOutcomeUnknown(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	channel.forwardErr = &outboundOutcomeUnknownError{action: "forward_group_single_msg", cause: context.DeadlineExceeded}
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), true)
+	if _, err := tool.Run(context.Background(), map[string]any{"group_id": "456", "message_ids": []any{"70001"}}); err == nil {
+		t.Fatal("结果不明应当报错")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 0 {
+		t.Fatalf("结果不明时不该照原文重发：%#v", sent)
+	}
+}
+
+// 历史里的消息也能按 ID 转；模型把 ID 写成数字时照样认。
+func TestCrossSessionToolForwardsMessageFromHistory(t *testing.T) {
+	channel := newFriendRosterChannel("555")
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	source := crossSessionGroupSource("555")
+	runtime.history[sessionKey(source)] = []MessageEvent{{
+		Kind: EventKindGroup, GroupID: "123", UserID: "10000", MessageID: "70002",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "机器人之前发的"}}},
+	}}
+	tool := newDianaCrossSessionTool(runtime, source, true)
+	if _, err := tool.Run(context.Background(), map[string]any{"group_id": "456", "message_ids": []any{float64(70002)}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := crossSessionNativeForwardCalls(channel)
+	if len(calls) != 1 || calls[0].params["message_id"] != int64(70002) {
+		t.Fatalf("历史消息没有被转发：%#v", calls)
+	}
+}
+
+// 只能转当前会话里的消息：找不到的 ID、还原不出来的别名都不交给接入端去别处翻。
+func TestCrossSessionToolRejectsForwardOutsideSession(t *testing.T) {
+	for _, id := range []string{"70009", "im_msg_deadbeef"} {
+		channel := newFriendRosterChannel("555")
+		runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+		tool := newDianaCrossSessionTool(runtime, crossSessionForwardSource(), true)
+		if _, err := tool.Run(context.Background(), map[string]any{"group_id": "456", "message_ids": []any{id}}); err == nil {
+			t.Fatalf("%s 应当被拒绝", id)
+		}
+		if calls := crossSessionNativeForwardCalls(channel); len(calls) != 0 {
+			t.Fatalf("%s 被拒绝后仍调用了转发：%#v", id, calls)
+		}
+		if sent := channel.sentSnapshot(); len(sent) != 0 {
+			t.Fatalf("%s 被拒绝后仍发出了消息：%#v", id, sent)
+		}
 	}
 }

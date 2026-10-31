@@ -6,8 +6,10 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -44,6 +46,9 @@ const (
 	// crossSessionWindow 内同一个来源会话最多发 crossSessionLimit 条。
 	crossSessionWindow = 10 * time.Minute
 	crossSessionLimit  = 5
+	// crossSessionMaxForwards 是一次最多原样转发几条已有消息。「把刚才那几条转过去」
+	// 很少超过这个数，再多就该用合并转发。
+	crossSessionMaxForwards = 5
 )
 
 var errCrossSessionRateLimited = fmt.Errorf("刚给这个目标发过，或者这个会话最近发得太多了，这条先不发")
@@ -81,6 +86,8 @@ func (t *dianaCrossSessionTool) Description() string {
 	} else {
 		base += "只能发给当前说话的人。"
 	}
+	base += "要把已有的消息（别人的或你自己的，含链接、图片）转过去时填 message_ids，原消息会原样发出，" +
+		"不要自己把正文复述或改写进 message；当前消息引用的那条可以直接用它的 ID。只转原消息时 message 留空。"
 	base += "要转发图片、视频、语音、文件时填 forward_media=true，当前消息和它引用的那条里的附件会一并发过去；只转附件时 message 可留空。"
 	return base + "被拒绝就照实说，不要换工具绕过。"
 }
@@ -89,6 +96,8 @@ func (t *dianaCrossSessionTool) InputSchema() map[string]any {
 	properties := map[string]any{
 		"message":       toolStringParam("完整正文，≤" + itoa(crossSessionMaxRunes) + " 字，勿写「见私聊」占位；分条用 <diana-message/>；只转附件时可留空"),
 		"forward_media": toolBoolParam("把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
+		"message_ids": toolStringArrayParam("要原样转发的消息 ID，按发送顺序，≤" + itoa(crossSessionMaxForwards) +
+			" 条；只能是当前会话里的消息，从上下文逐字复制，勿猜。填了这里就不要再把原文写进 message"),
 	}
 	if t.owner {
 		properties["user_id"] = toolStringParam("私聊目标账号，取自 @ 或成员查询，勿按昵称猜；与 group_id 二选一")
@@ -106,6 +115,10 @@ type dianaCrossSessionResult struct {
 	Target    string `json:"target"`
 	Runes     int    `json:"runes"`
 	Media     int    `json:"media,omitempty"`
+	// Forwarded 是原样转发出去的已有消息条数，Replayed 是其中接入端转不了、
+	// 改成照原文重发的条数。
+	Forwarded int    `json:"forwarded,omitempty"`
+	Replayed  int    `json:"replayed,omitempty"`
 	Message   string `json:"message"`
 }
 
@@ -115,13 +128,19 @@ type crossSessionOutcome struct {
 	Pending bool
 	// Note 是给模型看的补充说明，直接进工具结果。
 	Note string
+	// Replayed 是没能原生转发、改成照原文重发的已有消息条数。
+	Replayed int
 }
 
 func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("跨会话发送：运行时不可用")
 	}
-	message, media, err := crossSessionSendInput(input, t.event, false)
+	forwards, err := t.runtime.crossSessionForwardsFromInput(ctx, t.event, input)
+	if err != nil {
+		return "", err
+	}
+	message, media, err := crossSessionSendInputAllowEmpty(input, t.event, false, len(forwards) > 0)
 	if err != nil {
 		return "", err
 	}
@@ -129,7 +148,8 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return "", err
 	}
-	outcome, err := t.runtime.sendCrossSessionMessage(ctx, t.event, target, message, media)
+	payload := crossSessionPayload{message: message, media: media, forwards: forwards}
+	outcome, err := t.runtime.sendCrossSessionMessage(ctx, t.event, target, payload)
 	if err != nil {
 		return "", err
 	}
@@ -144,8 +164,15 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 		Target:    target.label,
 		Runes:     len([]rune(message)),
 		Media:     media.count(),
+		Forwarded: len(forwards),
+		Replayed:  outcome.Replayed,
 		Message: "已经发到" + target.label + "了。在当前会话里只说一句交代，" +
 			"不要把正文复述出来，也不要再调一次这个工具。",
+	}
+	if outcome.Replayed > 0 {
+		result.Message = "已经发到" + target.label + "了。其中 " + itoa(outcome.Replayed) + " 条接入端没法原生转发，" +
+			"改成了照原文重发（文字和附件都是原样的，但表情、回复引用这类可能丢了）。" +
+			"在当前会话里只说一句交代，如实提一下这点，不要把正文复述出来，也不要再调一次这个工具。"
 	}
 	if outcome.Pending {
 		result.Message = outcome.Note
@@ -274,15 +301,21 @@ type crossSessionMedia struct {
 // portable 为真时目的地在另一个平台，只留链接和本机文件：Telegram 的 file_id
 // 这类平台内部引用换了平台就认不出来。
 func crossSessionSendInput(input map[string]any, event MessageEvent, portable bool) (string, crossSessionMedia, error) {
+	return crossSessionSendInputAllowEmpty(input, event, portable, false)
+}
+
+// crossSessionSendInputAllowEmpty 在 allowEmpty 为真时放行空正文：这一次还有
+// 要原样转发的已有消息，正文和附件都可以不填。
+func crossSessionSendInputAllowEmpty(input map[string]any, event MessageEvent, portable, allowEmpty bool) (string, crossSessionMedia, error) {
 	message := strings.TrimSpace(configToolString(input, "message"))
 	var media crossSessionMedia
 	if toolInputBool(input, "forward_media") {
 		media = crossSessionMediaFromEvent(event, portable)
-		if media.empty() && message == "" {
+		if media.empty() && message == "" && !allowEmpty {
 			return "", media, fmt.Errorf("当前消息和它引用的消息里都没有能转发的图片、视频、语音或文件")
 		}
 	}
-	if message == "" && media.empty() {
+	if message == "" && media.empty() && !allowEmpty {
 		return "", media, fmt.Errorf("message 不能为空：要发什么，在这里写完整")
 	}
 	if count := len([]rune(message)); count > crossSessionMaxRunes {
@@ -358,7 +391,146 @@ func (m crossSessionMedia) messages() []OutgoingMessage {
 	return out
 }
 
-func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEvent, target crossSessionTarget, message string, media crossSessionMedia) (crossSessionOutcome, error) {
+// crossSessionForward 是一条要原样转发的已有消息。
+//
+// 以前这个工具只收模型自己写的正文：主人说「把这条转到种子群」，模型就把原消息
+// 重写一遍发过去，链接被改、配图丢掉；说「还有你发的三个」，它还会猜错是哪三条。
+// 按 ID 转发让发出去的就是原消息本身，模型只负责指认是哪一条。
+type crossSessionForward struct {
+	messageID string
+	segments  []MessageSegment
+	raw       string
+}
+
+// crossSessionPayload 是一次跨会话投递的全部内容，按 forwards、message、media 的
+// 顺序发出：先是被转的原消息，再是附言和附件。
+type crossSessionPayload struct {
+	message  string
+	media    crossSessionMedia
+	forwards []crossSessionForward
+}
+
+// crossSessionForwardsFromInput 读出 message_ids 并逐条找到原消息。
+//
+// 只认当前会话里的消息：当前这条、它引用的那条，或者这条会话历史里的。按 ID 去
+// 接入端取消息能取到机器人见过的任何一条，放开了就能把别的群、别人私聊里的话
+// 搬出来——找不到就拒绝，不替模型去别处翻。
+func (r *Runtime) crossSessionForwardsFromInput(ctx context.Context, event MessageEvent, input map[string]any) ([]crossSessionForward, error) {
+	ids := crossSessionMessageIDs(input["message_ids"])
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if len(ids) > crossSessionMaxForwards {
+		return nil, fmt.Errorf("一次最多原样转发 %d 条消息，这次填了 %d 条", crossSessionMaxForwards, len(ids))
+	}
+	forwards := make([]crossSessionForward, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		// 隐私代理还原不出来的别名会原样留在这里，它不可能是真的消息 ID。
+		if strings.HasPrefix(id, "im_") {
+			return nil, fmt.Errorf("消息 ID %q 不是本轮上下文里的 ID，要从上下文逐字复制", id)
+		}
+		forward, ok, err := r.crossSessionForwardSource(ctx, event, id)
+		if err != nil {
+			return nil, fmt.Errorf("读取消息 %s 失败：%w", id, err)
+		}
+		if !ok {
+			return nil, fmt.Errorf("当前会话里找不到消息 %s：只能转发这条会话里的消息，ID 要从上下文逐字复制", id)
+		}
+		forwards = append(forwards, forward)
+	}
+	return forwards, nil
+}
+
+func (r *Runtime) crossSessionForwardSource(ctx context.Context, event MessageEvent, id string) (crossSessionForward, bool, error) {
+	if id == strings.TrimSpace(event.MessageID) {
+		return crossSessionForward{messageID: id, segments: event.Segments, raw: event.RawMessage}, true, nil
+	}
+	if quoted := event.Quoted; quoted != nil && id == strings.TrimSpace(quoted.MessageID) {
+		return crossSessionForward{messageID: id, segments: quoted.Segments, raw: quoted.RawMessage}, true, nil
+	}
+	found, err := r.lookupQuotedMessageWithError(ctx, event, id)
+	if err != nil || found == nil {
+		return crossSessionForward{}, false, err
+	}
+	return crossSessionForward{messageID: id, segments: found.Segments, raw: found.RawMessage}, true, nil
+}
+
+// crossSessionMessageIDs 兼容字符串数组、单个字符串和数字：模型常把消息 ID 写成
+// 数字，丢掉它们就等于让「转这条」静默变成什么都没转。
+func crossSessionMessageIDs(value any) []string {
+	var raw []any
+	switch typed := value.(type) {
+	case nil:
+		return nil
+	case []any:
+		raw = typed
+	case []string:
+		for _, item := range typed {
+			raw = append(raw, item)
+		}
+	default:
+		raw = []any{typed}
+	}
+	ids := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if id := strings.TrimSpace(stringifyID(item)); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// literal 把原消息拆成照原文重发用的文字和附件。文字只取正文和 @，不经过任何
+// 改写；表情、回复引用这类离开原会话就没有意义的段落丢掉。
+func (f crossSessionForward) literal(portable bool) (string, crossSessionMedia) {
+	var text strings.Builder
+	for _, segment := range f.segments {
+		switch segment.Type {
+		case "text":
+			text.WriteString(segment.Data["text"])
+		case "at":
+			if qq := segment.Data["qq"]; qq != "" && qq != "all" {
+				text.WriteString(AtMentionText(qq, AtMentionName(segment)))
+				text.WriteString(" ")
+			}
+		}
+	}
+	body := strings.TrimSpace(text.String())
+	if body == "" && len(f.segments) == 0 {
+		body = strings.TrimSpace(f.raw)
+	}
+	return body, crossSessionMediaFromSegments(f.segments, portable)
+}
+
+// parkText 是托管能存下的部分：被转原消息的文字加上附言，附件存不下。
+func (p crossSessionPayload) parkText() string {
+	parts := make([]string, 0, len(p.forwards)+1)
+	for _, forward := range p.forwards {
+		if text, _ := forward.literal(false); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if p.message != "" {
+		parts = append(parts, p.message)
+	}
+	return strings.Join(parts, "\n\n")
+}
+
+func (p crossSessionPayload) mediaCount() int {
+	count := p.media.count()
+	for _, forward := range p.forwards {
+		_, media := forward.literal(false)
+		count += media.count()
+	}
+	return count
+}
+
+func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEvent, target crossSessionTarget, payload crossSessionPayload) (crossSessionOutcome, error) {
 	now := time.Now()
 	event := target.event
 	platform, err := r.outboundPlatformForEvent(event)
@@ -374,22 +546,22 @@ func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEve
 		event, stranger = r.resolvePrivateDelivery(ctx, source, event)
 	}
 	if !r.claimCrossSessionSend(source, target.key, now) {
-		r.recordCrossSessionSent(ctx, source, event, target, message, media, errCrossSessionRateLimited)
+		r.recordCrossSessionSent(ctx, source, event, target, payload, 0, errCrossSessionRateLimited)
 		return crossSessionOutcome{}, errCrossSessionRateLimited
 	}
 	// 不是好友、又没有共同群可借：临时会话根本开不了，不必先白发一次再失败。
 	if stranger && event.tempSessionGroupID == "" {
-		return r.parkOrFail(ctx, source, event, message, media, nil)
+		return r.parkOrFail(ctx, source, event, payload, nil)
 	}
-	sendErr := r.deliverCrossSession(ctx, event, message, media)
-	r.recordCrossSessionSent(ctx, source, event, target, message, media, sendErr)
+	replayed, sendErr := r.deliverCrossSession(ctx, source, event, payload)
+	r.recordCrossSessionSent(ctx, source, event, target, payload, replayed, sendErr)
 	if sendErr == nil {
-		return crossSessionOutcome{}, nil
+		return crossSessionOutcome{Replayed: replayed}, nil
 	}
 	// 临时会话可以被对方的隐私设置关掉，也不是每个 OneBot 实现都支持。这一步失败
 	// 不代表这条话没救了，存下来等加好友即可；对好友的失败是真失败。
 	if stranger {
-		return r.parkOrFail(ctx, source, event, message, media, sendErr)
+		return r.parkOrFail(ctx, source, event, payload, sendErr)
 	}
 	// 平台自己的拒绝原因要原样带回去：Telegram 的「机器人不能主动找没聊过的人」
 	// 和 QQ 的「不是好友」是两件事，含糊成一句「发不出去」就没法跟用户交代。
@@ -418,25 +590,155 @@ func (r *Runtime) resolvePrivateDelivery(ctx context.Context, source, event Mess
 	return event, true
 }
 
-// deliverCrossSession 先发正文再逐个发附件。附件中途失败时已经发出的不撤回，
-// 错误里说清楚发到了第几个，模型才能照实交代。
-func (r *Runtime) deliverCrossSession(ctx context.Context, event MessageEvent, message string, media crossSessionMedia) error {
+// deliverCrossSession 先发被转的原消息，再发正文，最后逐个发附件。中途失败时
+// 已经发出的不撤回，错误里说清楚发到了哪，模型才能照实交代。返回值是改成照原文
+// 重发的原消息条数。
+func (r *Runtime) deliverCrossSession(ctx context.Context, source, event MessageEvent, payload crossSessionPayload) (int, error) {
+	replayed, err := r.deliverCrossSessionForwards(ctx, source, event, payload.forwards)
+	if err != nil {
+		return replayed, err
+	}
+	sentBefore := len(payload.forwards) > 0
+	message := payload.message
 	if message != "" {
 		if _, err := r.sendDecorated(ctx, event, message, outboundDecoration{Verbatim: true}); err != nil {
-			return err
+			if sentBefore {
+				return replayed, fmt.Errorf("原消息已经转过去了，附言没发出去：%w", err)
+			}
+			return replayed, err
 		}
+		sentBefore = true
 	}
-	items := media.messages()
+	items := payload.media.messages()
 	if len(items) == 0 {
-		return nil
+		return replayed, nil
 	}
 	sendCtx := withContinuousOutboundDelivery(ctx)
 	for index, item := range items {
 		if err := r.sendOutgoing(sendCtx, event, item); err != nil {
-			if message == "" && index == 0 {
-				return err
+			if !sentBefore && index == 0 {
+				return replayed, err
 			}
-			return fmt.Errorf("附件发到第 %d/%d 个时失败（之前的已经发出）：%w", index+1, len(items), err)
+			return replayed, fmt.Errorf("附件发到第 %d/%d 个时失败（之前的已经发出）：%w", index+1, len(items), err)
+		}
+	}
+	return replayed, nil
+}
+
+// deliverCrossSessionForwards 逐条转发已有消息。
+//
+// 同一台 OneBot 机器人上走接入端的原生单条转发（forward_group_single_msg /
+// forward_friend_single_msg）：接入端拿自己存的原消息重发，链接、图片、表情都
+// 一字不差。换了机器人或平台、借临时会话、或者接入端转不了（不支持这个接口、
+// 消息已经不在它的缓存里、图片指纹过期）时，退回照原文重发：文字按 LiteralText
+// 发，不经过任何改写和控制标记解析，附件逐个跟上。
+//
+// 原生转发结果不明（超时）时不退回：那条很可能已经发出去了，再照原文发一遍就成
+// 了重复。
+func (r *Runtime) deliverCrossSessionForwards(ctx context.Context, source, event MessageEvent, forwards []crossSessionForward) (int, error) {
+	if len(forwards) == 0 {
+		return 0, nil
+	}
+	native := r.crossSessionNativeForwardAvailable(source, event)
+	if native {
+		// 群被拉黑或机器人被禁言时原生转发和照原文重发都会失败，不必两条路都试一遍。
+		if err := r.blockedGroupSendError(event); err != nil {
+			return 0, err
+		}
+		if err := r.botMutedSendError(event); err != nil {
+			return 0, err
+		}
+	}
+	portable := NormalizePlatformID(event.Platform) != NormalizePlatformID(source.Platform)
+	replayed := 0
+	for index, forward := range forwards {
+		var err error
+		if native {
+			err = r.forwardSingleMessageNative(ctx, event, forward.messageID)
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, ErrOutboundOutcomeUnknown) || ctx.Err() != nil {
+				return replayed, fmt.Errorf("第 %d/%d 条原样转发结果不明，可能已经发出去了，没有再重发：%w", index+1, len(forwards), err)
+			}
+		}
+		if replayErr := r.replayCrossSessionForward(ctx, event, forward, portable); replayErr != nil {
+			if err != nil {
+				replayErr = fmt.Errorf("%w（原生转发也失败：%v）", replayErr, err)
+			}
+			if index == 0 {
+				return replayed, replayErr
+			}
+			return replayed, fmt.Errorf("第 %d/%d 条转发失败（之前的已经发出）：%w", index+1, len(forwards), replayErr)
+		}
+		replayed++
+	}
+	return replayed, nil
+}
+
+// crossSessionNativeForwardAvailable 判断能不能让接入端原生转发：消息 ID 只在
+// 同一台机器人的接入端里有意义，临时会话也没有对应的转发接口。
+func (r *Runtime) crossSessionNativeForwardAvailable(source, event MessageEvent) bool {
+	if strings.TrimSpace(source.ProfileID) != strings.TrimSpace(event.ProfileID) || event.tempSessionGroupID != "" {
+		return false
+	}
+	if NormalizePlatformID(source.Platform) != NormalizePlatformID(event.Platform) {
+		return false
+	}
+	return IsOneBotPlatform(event.Platform)
+}
+
+// forwardSingleMessageNative 让接入端把 messageID 那条消息原样发到 event 的会话。
+func (r *Runtime) forwardSingleMessageNative(ctx context.Context, event MessageEvent, messageID string) error {
+	id, err := strconv.ParseInt(strings.TrimSpace(messageID), 10, 64)
+	if err != nil {
+		return fmt.Errorf("消息 ID %q 不是接入端认得的数字 ID", messageID)
+	}
+	action := "forward_friend_single_msg"
+	params := map[string]any{"message_id": id}
+	if event.Kind == EventKindGroup {
+		groupID, err := strconv.ParseInt(event.GroupID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("diana: invalid group id %q", event.GroupID)
+		}
+		action = "forward_group_single_msg"
+		params["group_id"] = groupID
+	} else {
+		userID, err := strconv.ParseInt(event.UserID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("diana: invalid user id %q", event.UserID)
+		}
+		params["user_id"] = userID
+	}
+	callCtx, cancel := context.WithTimeout(ctx, oneBotMediaActionTimeout)
+	defer cancel()
+	result, err := r.callOneBotAPIForEvent(callCtx, event, action, params)
+	if err != nil {
+		return err
+	}
+	// 回推里会出现这条机器人自己的消息，认领掉才不会被当成别人发的新消息。
+	r.outboundEchoes.claim(event, apiMessageID(result))
+	r.groupOwnSends.note(event, time.Now())
+	return nil
+}
+
+// replayCrossSessionForward 照原文重发一条已有消息：文字和图片合成一条，语音、
+// 视频、文件各自单独发。
+func (r *Runtime) replayCrossSessionForward(ctx context.Context, event MessageEvent, forward crossSessionForward, portable bool) error {
+	text, media := forward.literal(portable)
+	if text == "" && media.empty() {
+		return fmt.Errorf("消息 %s 里没有能照原样发出的文字或附件", forward.messageID)
+	}
+	items := make([]OutgoingMessage, 0, media.count()+1)
+	if text != "" || len(media.images) > 0 {
+		items = append(items, OutgoingMessage{Text: text, LiteralText: true, ImageURLs: media.images})
+		media.images = nil
+	}
+	items = append(items, media.messages()...)
+	sendCtx := withContinuousOutboundDelivery(ctx)
+	for _, item := range items {
+		if err := r.sendOutgoing(sendCtx, event, item); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -444,11 +746,12 @@ func (r *Runtime) deliverCrossSession(ctx context.Context, event MessageEvent, m
 
 // parkOrFail 把发不出去的私聊交给托管；托管也不成才算真的失败。托管只存文字，
 // 附件存不下来，要如实告诉模型。
-func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, message string, media crossSessionMedia, cause error) (crossSessionOutcome, error) {
+func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, payload crossSessionPayload, cause error) (crossSessionOutcome, error) {
 	reason := "对方不是好友，这里也没有共同群可以借临时会话"
 	if cause != nil {
 		reason = "临时会话发不出去（" + cause.Error() + "）"
 	}
+	message := payload.parkText()
 	if message == "" {
 		return crossSessionOutcome{}, fmt.Errorf("%s，附件没法存下来等加好友", reason)
 	}
@@ -459,17 +762,17 @@ func (r *Runtime) parkOrFail(ctx context.Context, source, event MessageEvent, me
 		Pending: true,
 		Note: reason + "。内容已经存下来了：对方加上好友之后会自动发出去，" +
 			itoa(int(pendingDirectMessageTTL/(24*time.Hour))) + " 天内有效。" +
-			mediaParkNote(media) +
+			mediaParkNote(payload.mediaCount()) +
 			"现在要在当前会话里告诉对方来加机器人好友，并且说清楚好友请求要等机器人主人同意——" +
 			"你自己不能通过好友请求。不要把正文复述出来，也不要再调一次这个工具。",
 	}, nil
 }
 
-func mediaParkNote(media crossSessionMedia) string {
-	if media.empty() {
+func mediaParkNote(count int) string {
+	if count == 0 {
 		return ""
 	}
-	return "附件（" + itoa(media.count()) + " 个）存不下来，加好友后只会收到文字，要跟对方说明。"
+	return "附件（" + itoa(count) + " 个）存不下来，加好友后只会收到文字，要跟对方说明。"
 }
 
 // claimCrossSessionSend 同时检查单个目标的冷却和来源会话总量，通过才占用额度。
@@ -511,7 +814,16 @@ func (r *Runtime) claimCrossSessionSend(source MessageEvent, targetKey string, n
 //
 // 它是机器人在一条会话里替另一条会话做的事：不记的话，那边那条消息凭空出现，
 // 管理员既查不到是谁要求的，也查不到是从哪条会话发起的。
-func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event MessageEvent, target crossSessionTarget, message string, media crossSessionMedia, err error) {
+func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event MessageEvent, target crossSessionTarget, payload crossSessionPayload, replayed int, err error) {
+	message := payload.message
+	forwardedIDs := make([]string, 0, len(payload.forwards))
+	for _, forward := range payload.forwards {
+		forwardedIDs = append(forwardedIDs, forward.messageID)
+	}
+	reply := message
+	if len(forwardedIDs) > 0 {
+		reply = strings.TrimSpace("[原样转发 " + strings.Join(forwardedIDs, ",") + "]\n" + message)
+	}
 	if err == nil {
 		r.record(EventRecord{
 			At:        time.Now(),
@@ -521,7 +833,7 @@ func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event Mess
 			UserID:    event.UserID,
 			GroupID:   event.GroupID,
 			Text:      "[cross_session_message] " + sessionKey(source),
-			Reply:     message,
+			Reply:     reply,
 			Handled:   true,
 			Outcome:   "cross_session_message",
 			Decision:  "replied",
@@ -544,10 +856,14 @@ func (r *Runtime) recordCrossSessionSent(ctx context.Context, source, event Mess
 			"target":       target.key,
 			"temp_session": event.tempSessionGroupID != "",
 			"runes":        len([]rune(message)),
-			"media":        media.count(),
+			"media":        payload.media.count(),
 			"preview":      truncateRunesFromStart(message, 200),
 		},
 		CreatedAt: time.Now(),
+	}
+	if len(forwardedIDs) > 0 {
+		entry.Metadata["forwarded_message_ids"] = forwardedIDs
+		entry.Metadata["replayed"] = replayed
 	}
 	if err != nil {
 		entry.Message = "跨会话消息没有发出"
