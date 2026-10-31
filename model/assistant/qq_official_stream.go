@@ -77,7 +77,7 @@ func (c *QQOfficialChannel) SendTextDraft(ctx context.Context, msg OutgoingMessa
 	if isGroup || target == "" || replyID == "" {
 		return fmt.Errorf("qq: 流式消息只支持私聊被动回复")
 	}
-	text := platformOutboundText(msg)
+	text := qqOfficialPlainText(msg)
 	if text == "" {
 		return nil
 	}

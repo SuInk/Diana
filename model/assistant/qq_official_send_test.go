@@ -554,6 +554,41 @@ func TestQQOfficialFallsBackToPlainWhenMarkdownRejected(t *testing.T) {
 	}
 }
 
+// 群里的提及换成 Markdown 的原生 @ 标签：大白话也改走 msg_type 2，标签不被
+// 补空行或降级加工；之前这里退回「@<openid>」，把一串十六进制发进了群里。
+func TestQQOfficialGroupMentionUsesNativeAtTag(t *testing.T) {
+	api := newQQFakeAPI(t)
+	channel := api.channel()
+	const openid = "0A1B2C3D4E5F60718293A4B5C6D7E8F9"
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: "[diana-at:" + openid + "] 撤回挺稳的\n下次再说", ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 {
+		t.Fatalf("messages = %#v", api.messages)
+	}
+	msg := api.messages[0]
+	markdown, _ := msg["markdown"].(map[string]any)
+	want := `<qqbot-at-user id="` + openid + `" /> 撤回挺稳的` + "\n\n下次再说"
+	if msg["msg_type"].(float64) != 2 || markdown["content"] != want {
+		t.Fatalf("mention message = %#v", msg)
+	}
+}
+
+// Markdown 被拒降成纯文本时，查得到昵称写「@昵称」，查不到就去掉，不显示 openid。
+func TestQQOfficialMentionPlainFallbackHidesOpenID(t *testing.T) {
+	api := newQQFakeAPI(t)
+	api.rejectMarkdown = true
+	channel := api.channel()
+	const known, unknown = "0A1B2C3D4E5F60718293A4B5C6D7E8F9", "F9E8D7C6B5A4938271605F4E3D2C1B0A"
+	text := "[diana-at:" + unknown + "] 撤回挺稳的，[diana-at:" + known + "] 也看看"
+	if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "G", Text: text, MentionNames: map[string]string{known: "Winter"}, ReplyMessageID: "in1"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.messages) != 1 || api.messages[0]["msg_type"].(float64) != 0 || api.messages[0]["content"] != "撤回挺稳的，@Winter 也看看" {
+		t.Fatalf("messages = %#v", api.messages)
+	}
+}
+
 // send_attachment 的 mode=file 交来的是 file 段。此前 QQ 官方在 sendFileAttachment
 // 的平台白名单前就报 unavailable；现在按 file_type=4 上传，文件名原样保留（含无扩展名）。
 func TestQQOfficialSendsFileSegment(t *testing.T) {

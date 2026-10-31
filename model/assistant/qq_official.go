@@ -568,7 +568,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 	if target == "" {
 		return nil, fmt.Errorf("qq: 缺少会话标识")
 	}
-	text := platformOutboundText(msg)
+	text := qqOfficialPlainText(msg)
 	files, err := qqOutgoingFiles(msg)
 	if err != nil {
 		return nil, err
@@ -672,11 +672,16 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			format = nil
 		}
 		if !isGuild {
-			markdownContent, markdown = qqOfficialMarkdownContent(text)
-			if (keyboard || format != nil) && !markdown {
-				// 按钮只能挂在 Markdown 消息上，大白话也得换成 Markdown 发。
-				markdownContent, markdown = qqMarkdownLineBreaks(text), true
+			source, mentionIDs := text, []string(nil)
+			if isGroup {
+				source, mentionIDs = qqOfficialMentionPlaceholders(msg.Text)
 			}
+			markdownContent, markdown = qqOfficialMarkdownContent(source)
+			if (keyboard || format != nil || len(mentionIDs) > 0) && !markdown {
+				// 按钮和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
+				markdownContent, markdown = qqMarkdownLineBreaks(source), true
+			}
+			markdownContent = qqOfficialRestoreMentions(markdownContent, mentionIDs)
 		}
 		if !isGuild {
 			body["msg_type"] = 0
