@@ -263,8 +263,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	interjectionRedos := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
-	// asideSent 记这一轮已经当中途发言发过的旁白，同一句不再发第二遍。
-	asideSent := map[string]bool{}
 	emptySendRepaired := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
 	detailReviewed := false
@@ -474,15 +472,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				interimDone, steps = r.sendInterim(ctx, resp.ToolCalls, sendIndices, steps)
 			} else if r.cfg.Interim != nil {
 				interimHeld = sendIndices
-			}
-		}
-		// 没调 send、只在检索工具旁边写了一句「我去查一下」「这页被挡了，换个来源」：
-		// swe-2、deepseek-flash 常这样开头和报进度，以前这些话被丢掉，群里要等整段调研
-		// 跑完才看到第一句。一轮能说几次和 send 的中途发言共用 Config.Interim 那边的上限。
-		if nativeToolCall && r.cfg.Interim != nil && len(sendCallIndices(resp.ToolCalls)) == 0 && searchOnlyCalls(resp.ToolCalls) {
-			if text, sendable := asideInterimText(lastText); sendable && !asideSent[text] {
-				asideSent[text] = true
-				steps = r.sendAsideInterim(ctx, text, steps)
 			}
 		}
 		if nativeToolCall {
@@ -1976,6 +1965,13 @@ func withToolResultReminder(messages []llm.Message, reminder string) []llm.Messa
 	for i := len(messages) - 1; i >= 0; i-- {
 		switch messages[i].Role {
 		case llm.RoleTool:
+			// 协议修复和执行失败不是查到的素材。此时催模型写最终回复会让它
+			// 跳过纠错，甚至把无关历史当作查询结果。优先提示处理本次失败。
+			for j := i; j >= 0 && messages[j].Role == llm.RoleTool; j-- {
+				if messages[j].ToolError {
+					return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: "【工具调用失败】本步有工具未执行或执行失败，错误信息不是查询结果。若仍需这项结果才能回答，请按错误说明修正参数或换用可用方法继续；权限不足或明确不可重试时不要重试。不能把历史中的无关内容当成本次查到的资料，也不能声称已经查到。无法继续时如实说明限制，只回答已有依据的部分。"})
+				}
+			}
 			return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: reminder})
 		case llm.RoleAssistant, llm.RoleUser:
 			// 最后一条是用户消息（续接时上一轮的工具结果还在更前面）就不是「刚执行过工具」。
@@ -2090,58 +2086,6 @@ func (r *Runner) normalizeLegacySendCalls(calls []llm.ToolCall) []llm.ToolCall {
 		return calls
 	}
 	return out
-}
-
-// asideInterimMaxRunes 是工具调用旁的短话当中途发言的长度上限。线上这类开场白
-// p90 约 45 字；更长的多是 deepseek 在复盘自己上一句，不该发给对方。
-const asideInterimMaxRunes = 60
-
-// asideInterimText 判断工具调用旁写的正文能不能当中途发言发出：单行短话，不像动作
-// 描述、Agent JSON 或内部标记（带括号、链接语法的一律不发）。
-func asideInterimText(text string) (string, bool) {
-	text = strings.TrimSpace(text)
-	if plainTextNeedsRepair(text) || looksLikeAgentAction(text) {
-		return "", false
-	}
-	if strings.ContainsAny(text, "\r\n[]{}<>`") || len([]rune(text)) > asideInterimMaxRunes {
-		return "", false
-	}
-	if lower := strings.ToLower(text); strings.Contains(lower, "finalize") || strings.Contains(lower, "diana-") {
-		return "", false
-	}
-	return text, true
-}
-
-// searchOnlyCalls 报告一步里的调用是不是全是检索（含经 tools_execute 调检索、加载工具），
-// 且至少有一个真检索。检索失败也只是没查到，先说的「我去查一下」不会变成假话。
-func searchOnlyCalls(calls []llm.ToolCall) bool {
-	searched := false
-	for _, call := range calls {
-		name := call.Name
-		if name == ToolsExecuteToolName {
-			name, _ = call.Arguments["name"].(string)
-		}
-		switch {
-		case parallelReadTools[name]:
-			searched = true
-		case name == ToolsLoadToolName:
-		default:
-			return false
-		}
-	}
-	return searched
-}
-
-// sendAsideInterim 把工具调用旁的短话当中途发言发出，记成一次 send 步骤。
-func (r *Runner) sendAsideInterim(ctx context.Context, text string, steps []Step) []Step {
-	record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: map[string]any{"text": text}}
-	output, err := r.cfg.Interim(ctx, text)
-	if err != nil {
-		record.Error = err.Error()
-	} else {
-		record.Output = output
-	}
-	return append(steps, record)
 }
 
 // sentInterimThisRun 判断本轮是否已经有中途发言真的发出去了。

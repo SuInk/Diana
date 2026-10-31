@@ -31,9 +31,8 @@ func searchCall(id, query string) llm.ToolCall {
 	return llm.ToolCall{ID: id, Name: WebSearchToolName, Arguments: map[string]any{"query": query}}
 }
 
-// 检索工具旁边写的短话先当中途发言发出，再跑检索；后面换个说法报进度也照发，
-// 同一句不发第二遍。
-func TestAsideTextBesideSearchSentAsInterim(t *testing.T) {
+// 检索调用旁的正文不代表发送授权，无论是否重复都不自动发送。
+func TestAsideTextBesideSearchRequiresSend(t *testing.T) {
 	var events []string
 	client := &asideClient{
 		texts: []string{"我去查一下", "我去查一下", "这页被挡了，换个来源"},
@@ -48,20 +47,26 @@ func TestAsideTextBesideSearchSentAsInterim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "send:我去查一下|run:web_search|run:web_search|send:这页被挡了，换个来源|run:web_search"
+	for _, step := range resp.Steps {
+		if step.Tool == finalizeToolName {
+			t.Fatalf("implicit send recorded: %#v", step)
+		}
+	}
+	want := "run:web_search|run:web_search|run:web_search"
 	if got := strings.Join(events, "|"); got != want || resp.Text != "好了" {
 		t.Fatalf("events = %q, text = %q", got, resp.Text)
 	}
 }
 
-// 不发的情况：带副作用的工具、同一步已经调了 send、长段复盘、括号动作描述、内部标记。
-func TestAsideTextNotSentWhenUnsafe(t *testing.T) {
+// 只有显式 send 的正文会发出；短旁白、长正文和标记都不会隐式发送。
+func TestToolAsideOnlyExplicitSendIsSent(t *testing.T) {
 	long := strings.Repeat("上一条我凭印象断言了", 7)
 	for name, tc := range map[string]struct {
 		text  string
 		calls []llm.ToolCall
 		want  string
 	}{
+		"short search": {text: "先查证下这件事本身的来龙去脉再回答", calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},
 		"side effect":  {text: "我去定个提醒", calls: []llm.ToolCall{{ID: "r1", Name: "remind", Arguments: map[string]any{}}}, want: "run:remind"},
 		"send present": {text: "旁白", calls: []llm.ToolCall{{ID: "x", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查"}}, searchCall("s1", "a")}, want: "send:我去查|run:web_search"},
 		"long":         {text: long, calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},

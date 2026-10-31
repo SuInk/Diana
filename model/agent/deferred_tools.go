@@ -326,6 +326,15 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		if l == nil {
 			return action, fmt.Errorf("当前未启用延迟工具，不能调用 tools_execute")
 		}
+		// 有的模型把 input 对象额外 JSON 编码了一次。只拆这一层封装，随后
+		// 仍校验分发信封、工具权限和目标 schema；保留原调用供协议续接。
+		if raw, ok := action.Input["input"].(string); ok && json.Valid([]byte(raw)) {
+			var input map[string]any
+			if err := decoderFromString(raw).Decode(&input); err == nil && input != nil {
+				action.Input = cloneDeferredInput(action.Input).(map[string]any)
+				action.Input["input"] = input
+			}
+		}
 		if err := validateToolInput(executeInputSchema(), action.Input); err != nil {
 			return action, err
 		}

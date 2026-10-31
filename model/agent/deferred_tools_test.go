@@ -159,12 +159,44 @@ type schemaDispatchTool struct {
 
 func (t *schemaDispatchTool) InputSchema() map[string]any { return t.schema }
 
+func TestDeferredEncodedInputPreservesIntegersAndPolicy(t *testing.T) {
+	tool := &schemaDispatchTool{countingTool: countingTool{name: "lookup"}, schema: toolObjectSchema([]string{"id"}, map[string]any{"id": map[string]any{"type": "integer"}})}
+	registry := NewToolRegistry(tool)
+	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil, nil)
+	input := map[string]any{"name": "lookup", "input": `{"id":9007199254740993}`}
+	action, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: input})
+	if err != nil || action.Input["id"] != json.Number("9007199254740993") {
+		t.Fatalf("integer changed: %#v, %v", action.Input, err)
+	}
+	if input["input"] != `{"id":9007199254740993}` {
+		t.Fatal("provider envelope mutated")
+	}
+	registry.DisableTools(testDisableReason, "lookup")
+	if _, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: input}); err == nil {
+		t.Fatal("encoded input bypassed tool policy")
+	}
+}
+
+// 2026-10-31 生产 ETH 问题中 swe-2 返回的参数形状；首次调用和纠错回放
+// 都把 input 写成字符串。用真实搜索 schema 确认拆封后能进入执行流程。
+func TestDeferredEncodedSearchInput(t *testing.T) {
+	loader := newDeferredToolLoader(NewToolRegistry(&WebSearchTool{}), []string{finalizeToolName}, nil, nil)
+	input := map[string]any{
+		"name":  WebSearchToolName,
+		"input": `{"query":"OpenAI 推翻 指数时间假设 ETH","queries":["OpenAI model disproves exponential time hypothesis","ETH hypothesis disproved AI proof 2026"]}`,
+	}
+	action, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: input})
+	if err != nil || action.Tool != WebSearchToolName || action.Input["query"] != "OpenAI 推翻 指数时间假设 ETH" {
+		t.Fatalf("production search call rejected: %#v, %v", action, err)
+	}
+}
+
 // 按需工具不必先 tool_search：直接点名或直接 tools_execute，参数合法就执行；参数不合法、
 // 工具已移除或不存在时照旧拒绝，且报错不回显非法值。
 func TestDeferredDispatchRunsValidCallsAndRejectsInvalidInput(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		for _, name := range []string{"diana.rare", "mcp__demo__rare"} {
-			for _, kind := range []string{"direct", "direct_after_load", "unloaded", "missing", "type", "enum", "extra", "removed", "changed", "empty", "no_input", "array_input", "unknown", "valid"} {
+			for _, kind := range []string{"direct", "direct_after_load", "unloaded", "missing", "type", "enum", "extra", "removed", "changed", "empty", "no_input", "array_input", "encoded", "encoded_invalid", "encoded_array", "encoded_null", "encoded_broken", "encoded_trailing", "unknown", "valid"} {
 				t.Run(fmt.Sprintf("native=%v/%s/%s", native, name, kind), func(t *testing.T) {
 					tool := &schemaDispatchTool{countingTool: countingTool{name: name}, schema: toolObjectSchema([]string{"count"}, map[string]any{"count": map[string]any{"type": "integer", "enum": []int{1, 2}}})}
 					registry := NewToolRegistry(&countingTool{name: "common"}, tool)
@@ -203,6 +235,9 @@ func TestDeferredDispatchRunsValidCallsAndRejectsInvalidInput(t *testing.T) {
 						reply = executeReply(native, "unknown", input)
 					case "no_input":
 						reply = dispatchReply(native, ToolsExecuteToolName, map[string]any{"name": name})
+					case "encoded", "encoded_invalid", "encoded_array", "encoded_null", "encoded_broken", "encoded_trailing":
+						raw := map[string]string{"encoded": `{"count":1}`, "encoded_invalid": `{"count":"PRIVATE-SECRET"}`, "encoded_array": `[]`, "encoded_null": `null`, "encoded_broken": `{"count":`, "encoded_trailing": `{"count":1} {"count":2}`}[kind]
+						reply = dispatchReply(native, ToolsExecuteToolName, map[string]any{"name": name, "input": raw})
 					case "array_input":
 						reply = dispatchReply(native, ToolsExecuteToolName, map[string]any{"name": name, "input": []any{}})
 					}
@@ -217,7 +252,7 @@ func TestDeferredDispatchRunsValidCallsAndRejectsInvalidInput(t *testing.T) {
 						t.Fatal(err)
 					}
 					want := 0
-					if kind == "valid" || kind == "direct_after_load" || kind == "direct" || kind == "unloaded" {
+					if kind == "valid" || kind == "encoded" || kind == "direct_after_load" || kind == "direct" || kind == "unloaded" {
 						want = 1
 					}
 					if tool.calls != want {
