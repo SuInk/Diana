@@ -82,6 +82,10 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			continue
 		}
 		typingIndicatorFromContext(ctx).resume()
+		if sentChunks == 0 && event.Kind == EventKindGroup && !decoration.LiteralText &&
+			NormalizePlatformID(firstNonEmpty(event.Platform, cfg.Platform)) == PlatformQQOfficial {
+			chunk = qqOfficialDropLeadingSenderMention(chunk, event.UserID)
+		}
 		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
 		if index == lastTextChunk && !decoration.LiteralText {
 			msg.Buttons = finalizeButtonsFromContext(ctx).take()

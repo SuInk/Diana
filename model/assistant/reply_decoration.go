@@ -264,7 +264,10 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		}
 	}
 	if mentionUserMode(cfg) == ReplyDecorationAuto {
-		if userID := strings.TrimSpace(event.UserID); userID != "" {
+		if NormalizePlatformID(firstNonEmpty(event.Platform, cfg.Platform)) == PlatformQQOfficial {
+			// 官方群里的 @ 点不开对方资料，回复又已经挂在对方消息下面，点名没有用处。
+			appendPromptSection(&builder, "本次不要 @ 发送者：QQ 官方机器人的回复已经关联在对方那条消息下面，@ 也点不开对方资料，开头再写一个名字只会显得生硬。")
+		} else if userID := strings.TrimSpace(event.UserID); userID != "" {
 			appendPromptSection(&builder, mentionDecorationRule(userID, otherSpeakersBefore(history, event), justAnswered))
 		}
 	}

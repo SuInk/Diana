@@ -53,3 +53,33 @@ func qqOfficialRestoreMentions(content string, ids []string) string {
 	}
 	return content
 }
+
+// qqOfficialDropLeadingSenderMention 去掉回复开头对当前发言者的 @。
+//
+// 官方群里的 @ 渲染成蓝字，却点不开对方资料；被动回复本身已经挂在对方那条消息
+// 下面，群里人多时运行时还会自动挂引用卡片。开头再 @ 一次只是多一个名字，读着生硬。
+// 提示词已经让模型别写，这里兜住模型照写的情况。只动开头那一个：正文中间点名
+// 别人、或者 @ 的不是发言者本人，都是有意的，原样保留。
+func qqOfficialDropLeadingSenderMention(text, senderID string) string {
+	senderID = strings.TrimSpace(senderID)
+	if senderID == "" {
+		return text
+	}
+	quote := ""
+	rest := text
+	if _, body, ok := extractOutgoingReplyMarker(strings.TrimLeft(text, " \t")); ok {
+		trimmed := strings.TrimLeft(text, " \t")
+		quote = trimmed[:len(trimmed)-len(body)]
+		rest = body
+	}
+	trimmed := strings.TrimLeft(rest, " \t")
+	match := dianaMentionMarkerPattern.FindStringSubmatchIndex(trimmed)
+	if match == nil || match[0] != 0 || trimmed[match[2]:match[3]] != senderID {
+		return text
+	}
+	body := strings.TrimLeft(trimmed[match[1]:], " \t")
+	if strings.TrimSpace(body) == "" {
+		return text
+	}
+	return quote + body
+}

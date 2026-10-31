@@ -537,3 +537,57 @@ func TestReplyDecorationPromptGuidesQQOfficialAutoMode(t *testing.T) {
 		t.Fatalf("numeric prompt regressed: %q", prompt)
 	}
 }
+
+// QQ 官方群里的 @ 点不开对方资料，回复又挂在对方消息下面：10-31 那条回复开头
+// 「@金玉」读着只是多一个名字。auto 档不再让模型 @ 发送者，模型照写也在发送前去掉。
+func TestQQOfficialReplyDropsLeadingSenderMention(t *testing.T) {
+	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}
+	event := MessageEvent{
+		Platform: PlatformQQOfficial, Kind: EventKindGroup,
+		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
+	}
+	history := []MessageEvent{{Platform: PlatformQQOfficial, GroupID: "g-qq", UserID: "member-2", MessageID: "m1"}, event}
+	prompt := replyDecorationPrompt(cfg, event, history)
+	if !strings.Contains(prompt, "本次不要 @ 发送者") || strings.Contains(prompt, mentionMarkerFor("member-1")) {
+		t.Fatalf("QQ 官方不该再教模型 @ 发送者：%s", prompt)
+	}
+
+	withFastSendTiming(t)
+	channel := &scriptedChannel{}
+	runtime := NewRuntime(BotConfig{Platform: PlatformQQOfficial, ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto},
+		channel, NewPluginManager(), nil, nil, nil, nil)
+	if err := runtime.send(context.Background(), event, mentionMarkerFor("member-1")+" 有这个可能"); err != nil {
+		t.Fatal(err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].Text != "有这个可能" {
+		t.Fatalf("开头对发送者的 @ 没去掉：%#v", channel.sent)
+	}
+}
+
+func TestQQOfficialDropLeadingSenderMentionKeepsOthers(t *testing.T) {
+	sender := mentionMarkerFor("member-1")
+	other := mentionMarkerFor("member-2")
+	quote := replyMarkerFor(qqOfficialProbeID)
+	for _, tc := range []struct{ in, want string }{
+		{sender + " 有这个可能", "有这个可能"},
+		{quote + sender + "有这个可能", quote + "有这个可能"},
+		{other + " 你看看", other + " 你看看"},
+		{"刚才 " + sender + " 说的对", "刚才 " + sender + " 说的对"},
+		{sender, sender},
+	} {
+		if got := qqOfficialDropLeadingSenderMention(tc.in, "member-1"); got != tc.want {
+			t.Fatalf("%q -> %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// OneBot 群照旧按插话人数让模型决定要不要 @。
+func TestOneBotReplyStillOffersSenderMention(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
+	history := []MessageEvent{{GroupID: "g", UserID: "2", MessageID: "m1", Time: now - 30}, event}
+	prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}, event, history)
+	if !strings.Contains(prompt, mentionMarkerFor("1")) {
+		t.Fatalf("OneBot 群不该受影响：%s", prompt)
+	}
+}
