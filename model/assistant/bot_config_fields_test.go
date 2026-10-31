@@ -157,6 +157,7 @@ func TestBotConfigConnectionFieldsNeedConfirmation(t *testing.T) {
 	}
 	next := event
 	next.MessageID = "m3"
+	next.RawMessage = "确认"
 	if _, err := run(next, map[string]any{"operation": "confirm"}); err != nil {
 		t.Fatal(err)
 	}

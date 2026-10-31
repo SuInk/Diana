@@ -825,6 +825,7 @@ func main() {
 	runtimeConfigHandler := webui.NewRuntimeConfigHandler(runtimeConfigManager)
 	runtimeConfigHandler.SetLogStore(sqliteStore)
 	runtimeConfigHandler.Register(router)
+	botRuntime.SetConsoleConfigManager(webui.NewConsoleConfigManager(botHandler, handler, mediaCacheHandler, historyMediaHandler, authHandler, trustedLoginHandler))
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)

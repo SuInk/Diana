@@ -376,6 +376,16 @@
       },
       {
         "category": "self_modify",
+        "tool": "console_config",
+        "field": "operation",
+        "operations": [
+          "stage",
+          "confirm"
+        ],
+        "reason": "控制台配置写入；查看照常"
+      },
+      {
+        "category": "self_modify",
         "tool": "runtime_config",
         "field": "operation",
         "operations": [
@@ -389,9 +399,12 @@
         "field": "operation",
         "operations": [
           "update",
-          "reset"
+          "reset",
+          "enable",
+          "disable",
+          "set_strategy"
         ],
-        "reason": "切换这台机器人用的模型；查看照常"
+        "reason": "修改这台机器人的模型和调度；查看照常"
       },
       {
         "category": "self_modify",

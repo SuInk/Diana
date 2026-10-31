@@ -1359,7 +1359,10 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 		h.writePluginError(c, "plugin_settings", err, c.Param("id"))
 		return
 	}
-	h.persistState()
+	if err := h.persistState(); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "plugin_settings", fmt.Errorf("插件设置已在内存生效，但保存失败：%w", err), c.Param("id"), nil)
+		return
+	}
 	metadata := pluginLogMetadata(state)
 	metadata["profile_id"] = profileID
 	recordRequestOperation(c, h.logs, "plugin_settings", "机器人插件设置已更新", state.Manifest.ID, metadata)

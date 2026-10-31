@@ -104,7 +104,7 @@ var promptMatchedAliasSpec = registerPrompt(PromptSpec{
 // 工具调用规则。每条都只在对应工具真的注册给本轮时才注入，未启用的工具不会
 // 出现在提示词里（见 systemPromptWithRelationshipAndAgentTools 的 hasTool）。
 const (
-	promptToolLLMConfig = "只有主人明确要求更改你自己正在使用的模型时才调用 llm_config；它切换的是模型分配里对话、视觉理解、意图识别、图片生成四档之一（用 role 指定，默认对话），不改 provider 的地址和密钥（那些在 WebUI 里改）。讨论模型、比较模型、推荐中转项目、分析别人的模型配置、用户说自己在用某模型，都不是要改你的配置，一律不得调用。"
+	promptToolLLMConfig = "只有主人明确要求切换、启用、停用你自己的模型或修改调度策略时才调用 llm_config；它切换的是模型分配里对话、视觉理解、意图识别、图片生成四档之一（用 role 指定，默认对话）。启停已有路由先 list 再用 enable/disable 和准确的模型、提供商或分组；切换策略用 set_strategy、routing_strategy（smart/failover/round_robin/weighted）。启停和策略仅支持整个机器人 scope=bot，不得把仅限本群的请求扩大范围。提供商地址、密钥及完整模型路由改用 console_config：catalog/get 查字段，stage 展示脱敏预览，后续用户回复确认后 confirm；不要索要确认码。讨论模型、比较模型、推荐中转项目、分析别人的模型配置、用户说自己在用某模型，都不是要改你的配置，一律不得调用。"
 
 	promptToolRender = "回复默认用文字。只有用户明确要求图片、图表、效果图、视频或 GIF 等视觉成品时才调用 render / render_media；表格、榜单、参数对比本身不是出图请求，不为排版美观自行配渲染图。用户要修改实际界面、代码或配色时完成修改，不拿渲染效果图冒充已修改；需要澄清对象时先问清楚。"
 
@@ -199,7 +199,7 @@ const (
 	// 下面三条原来是 builder 里的行内字面量，挪成常量才能登记覆盖。
 	promptCrossGroupMore = "标着「跨群历史」的行是其他群里和当前话题相关的发言，只带了最相关的几条；需要更多其他群的相关发言时，用 chat_history 的 search 并设 scope=all_groups 去查。"
 	promptToolMemory     = "长期记忆摘要不够时，先用 memory search 查索引，再按 id read 核对全文与证据；可按实体或主题改写关键词继续查，不得凭空补全旧事。"
-	promptToolBotConfig  = "读取 Diana 配置和诊断、修改接话、入群欢迎或回复行为（换行分条、打字延迟、回复字数、随机复读、禁言期间处理等，写在 behavior 里）时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。本群启停、触发词和插件开关用 group_settings；插件 ID 不确定时先 get 查看，null 恢复插件继承。只提交用户要求的字段，成功保存后才报告生效。"
+	promptToolBotConfig  = "读取 Diana 配置和诊断、修改接话、入群欢迎或回复行为（换行分条、打字延迟、回复字数、随机复读、禁言期间处理等，写在 behavior 里）时按 bot-protocol skill 使用 bot_config。开启或关闭入群欢迎设置 welcome_enabled，修改欢迎词使用 welcome_message、welcome_mode 等字段；操作已有欢迎功能不创建 event_trigger。关闭话痨用 desire_level=off，降低活跃度用 low。群管理员只改当前群；机器人默认设置及完整脱敏诊断仅主人可用。本群启停、触发词和插件开关用 group_settings；插件 ID 不确定时先 get 查看，null 恢复插件继承。只提交用户要求的字段，成功保存后才报告生效。更完整的机器人设置、提供商、插件凭据、存储与控制台安全使用 console_config；必须先展示脱敏预览，后续用户回复确认后再保存，无需确认码。"
 	promptToolReplyBlock = "主人或群管理员要求以后别理某个人、把某人屏蔽或把谁放出来时，用 reply_block，目标账号 ID 取自 @ 的结构化信息、被引用消息的发送者或群成员查询结果，不要按昵称猜。群管理员只能改当前群，机器人级名单仅主人可改。成功保存后才报告生效，不用平台禁言或口头答应代替；它只影响回不回复，不禁言也不撤消息。"
 )
 
@@ -216,7 +216,7 @@ func toolPromptSpec(key, title, condition, text string) *PromptSpec {
 }
 
 var (
-	promptToolLLMConfigSpec            = toolPromptSpec("llm_config", "切换模型", "当前发言者是主人、且 llm_config 工具可用时放在尾部，限定只有主人明确要求才切换模型。", promptToolLLMConfig)
+	promptToolLLMConfigSpec            = toolPromptSpec("llm_config", "模型管理", "当前发言者是主人、且 llm_config 工具可用时放在尾部，限定只有主人明确要求才切换、启停模型或修改调度策略。", promptToolLLMConfig)
 	promptToolRenderSpec               = toolPromptSpec("render", "渲染成品交付", "render 或 render_media 工具可用时注入：普通回复默认文字，只有明确要求视觉成品时才渲染。", promptToolRender)
 	promptToolRepositoryIssuesSpec     = toolPromptSpec("github", "GitHub 草稿与审阅", "GitHub 工具可用时注入：草稿、审批、PR 审阅的流程和权限边界。", promptToolRepositoryIssues)
 	promptToolPlatformSpec             = toolPromptSpec("platform", "群信息读取", "平台工具可用时注入：只有用户明确要求才读群信息或执行群操作。", promptToolPlatform)

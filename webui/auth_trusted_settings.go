@@ -202,6 +202,7 @@ func (h *TrustedLoginHandler) saveEnabled(c *gin.Context) {
 func (h *TrustedLoginHandler) saveApp(c *gin.Context) {
 	var b struct {
 		ID        string `json:"id"`
+		Secret    string `json:"secret"`
 		Name      string `json:"name"`
 		ProfileID string `json:"profile_id"`
 		Disabled  bool   `json:"disabled"`
@@ -232,6 +233,13 @@ func (h *TrustedLoginHandler) saveApp(c *gin.Context) {
 		if err != nil {
 			c.Status(500)
 			return
+		}
+		if chat, _ := c.Request.Context().Value(consoleConfigContextKey{}).(bool); chat {
+			if len(b.Secret) < 32 {
+				c.JSON(400, gin.H{"error": "应用密钥至少需要 32 字符"})
+				return
+			}
+			secret = b.Secret
 		}
 		a = TrustedLoginApp{ID: id, SecretSHA256: hashToken(secret)}
 	} else {
@@ -295,6 +303,16 @@ func (h *TrustedLoginHandler) rotateApp(c *gin.Context) {
 	if err != nil {
 		c.Status(500)
 		return
+	}
+	if chat, _ := c.Request.Context().Value(consoleConfigContextKey{}).(bool); chat {
+		var body struct {
+			Secret string `json:"secret"`
+		}
+		if trustedDecode(c, &body) != nil || len(body.Secret) < 32 {
+			c.JSON(400, gin.H{"error": "应用密钥至少需要 32 字符"})
+			return
+		}
+		secret = body.Secret
 	}
 	for i := range p.Apps {
 		if p.Apps[i].ID == id {

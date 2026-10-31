@@ -340,3 +340,25 @@ func TestGroupChatModelSaveFailureDoesNotReportSuccess(t *testing.T) {
 		t.Fatal("failed save changed runtime")
 	}
 }
+
+func TestGroupChatCompleteRoutePreservesEffortAndIsolation(t *testing.T) {
+	r, _, _, _ := modelSwitchTestRuntime(t)
+	store := &testWritableGroupConfigStore{}
+	r.SetGroupConfigStore(store)
+	base := r.ProfileConfig("b")
+	route := ModelRole{ProfileID: "two", Model: "other", ReasoningEffort: "low", RoutingStrategy: "weighted", Weight: 3, Fallbacks: []ModelRole{{ProfileID: "one", Model: "shared", ReasoningEffort: "high", Disabled: true}}}
+	if err := r.ValidateGroupChatModel(GroupChatModel{Route: &route}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveGroupConfig(GroupConfig{BotProfileID: "b", GroupID: "g", ChatModel: &GroupChatModel{Route: &route}}, base); err != nil {
+		t.Fatal(err)
+	}
+	got := r.effectiveConfigForEvent(MessageEvent{ProfileID: "b", GroupID: "g", Kind: EventKindGroup}).ModelRoles["chat"]
+	if got.Model != "other" || got.ReasoningEffort != "low" || got.RoutingStrategy != "weighted" || len(got.Fallbacks) != 1 || !got.Fallbacks[0].Disabled || got.Fallbacks[0].ReasoningEffort != "high" {
+		t.Fatalf("route lost: %+v", got)
+	}
+	other := r.effectiveConfigForEvent(MessageEvent{ProfileID: "b", GroupID: "other", Kind: EventKindGroup}).ModelRoles["chat"]
+	if other.Model == "other" {
+		t.Fatal("group route changed other group")
+	}
+}

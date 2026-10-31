@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
@@ -28,7 +29,7 @@ func (p *LLMConfigPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          llmConfigPluginID,
 		Name:        "提供商配置",
-		Version:     "0.1.2",
+		Version:     "0.1.3",
 		Description: "官方内置提供商配置能力；自然语言由主 Agent 理解，配置修改仅通过主人专属结构化工具执行。",
 		Official:    true,
 		BuiltIn:     true,
@@ -437,18 +438,27 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	}
 	role, replacedRoute := nextModelRole(next[roleKey], target, model, explicitProvider)
 	next[roleKey] = role
-	botCfg.ModelRoles = normalizeModelRoles(next)
+	return replacedRoute, r.saveModelRoleAssignmentLocked(botCfg, roleKey, next[roleKey])
+}
+
+// Caller holds modelConfigMu. Persist before updating the runtime cache.
+func (r *Runtime) saveModelRoleAssignmentLocked(botCfg BotConfig, roleKey string, assignment ModelRole) error {
+	botCfg.ModelRoles = normalizeModelRoles(botCfg.ModelRoles)
+	if botCfg.ModelRoles == nil {
+		botCfg.ModelRoles = map[string]ModelRole{}
+	}
+	botCfg.ModelRoles[roleKey] = assignment
 	botCfg = botCfg.WithDefaults()
 	r.mu.RLock()
 	saver := r.configSaver
 	r.mu.RUnlock()
 	if saver == nil {
-		return false, fmt.Errorf("当前部署没有接入机器人配置存储")
+		return fmt.Errorf("当前部署没有接入机器人配置存储")
 	}
 	if scoped, ok := saver.(ModelRoleConfigSaver); ok {
-		saved, err := scoped.SaveModelRole(botCfg, roleKey, next[roleKey])
+		saved, err := scoped.SaveModelRole(botCfg, roleKey, assignment)
 		if err != nil {
-			return false, err
+			return err
 		}
 		botCfg = saved
 	} else {
@@ -458,16 +468,16 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 		current := sole.WithDefaults()
 		r.mu.RUnlock()
 		if !single {
-			return false, fmt.Errorf("配置存储不支持按机器人保存模型分配")
+			return fmt.Errorf("配置存储不支持按机器人保存模型分配")
 		}
 		if current.OwnerID != botCfg.OwnerID || !boolValue(current.OwnerLLMConfigEnabled, true) {
-			return false, fmt.Errorf("主人权限或配置开关已变化，请重新请求")
+			return fmt.Errorf("主人权限或配置开关已变化，请重新请求")
 		}
 		currentRoles := normalizeModelRoles(current.ModelRoles)
 		if currentRoles == nil {
 			currentRoles = map[string]ModelRole{}
 		}
-		currentRoles[roleKey] = next[roleKey]
+		currentRoles[roleKey] = assignment
 		current.ModelRoles = currentRoles
 		botCfg = current
 		saver.SaveBotConfig(botCfg)
@@ -479,7 +489,7 @@ func (r *Runtime) saveModelRole(botCfg BotConfig, roles map[string]ModelRole, ro
 	r.profileConfigs[botCfg.ID] = botCfg
 	r.updatedAt = time.Now()
 	r.mu.Unlock()
-	return replacedRoute, nil
+	return nil
 }
 
 // nextModelRole moves the selected route to the front without removing other routes.
@@ -515,7 +525,6 @@ func prioritizeModelRole(role, selected ModelRole) ModelRole {
 	selected.FollowChat = false
 	selected.Fallbacks = rest
 	selected.Params = role.Params
-	selected.ReasoningEffort = role.ReasoningEffort
 	selected.RoutingStrategy = role.RoutingStrategy
 	selected.RecoveryPolicy = role.RecoveryPolicy
 	return normalizeModelRole(selected)
@@ -569,7 +578,7 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		"bot_profile_id": req.Event.ProfileID,
 		"user_id":        req.Event.UserID,
 		"kind":           string(req.Event.Kind),
-		"command":        req.Text,
+		"command":        "[配置指令原文已省略]",
 	}
 	if req.Event.GroupID != "" {
 		metadata["group_id"] = req.Event.GroupID
@@ -604,11 +613,11 @@ func recordLLMConfigSkillLog(ctx context.Context, req PluginRequest, result llmC
 		Kind:     kind,
 		Level:    level,
 		Action:   "llm_config_command",
-		Message:  message,
-		Detail:   detail,
+		Message:  secretmask.ChatConfigText(message),
+		Detail:   secretmask.ChatConfigText(detail),
 		Actor:    oneBotEventActor(req.Event),
-		Target:   firstNonEmpty(result.ProfileID, result.NewModel, result.OldModel),
-		Metadata: metadata,
+		Target:   secretmask.ChatConfigText(firstNonEmpty(result.ProfileID, result.NewModel, result.OldModel)),
+		Metadata: secretmask.ChatConfigValue(metadata).(map[string]any),
 	})
 }
 

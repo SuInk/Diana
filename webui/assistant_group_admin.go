@@ -457,12 +457,17 @@ func (h *BotHandler) sanitizeGroupConfigPayload(cfg assistant.GroupConfig, group
 			cfg.ChatModel = existing.ChatModel
 		}
 	} else {
-		cfg.ChatModel = &assistant.GroupChatModel{ProfileID: strings.TrimSpace(cfg.ChatModel.ProfileID), Model: strings.TrimSpace(cfg.ChatModel.Model)}
+		if cfg.ChatModel.Route == nil {
+			if existing, ok := h.groupConfigs.ConfigForGroup(cfg.BotProfileID, groupID); ok && existing.ChatModel != nil && cfg.ChatModel.ProfileID != "" && cfg.ChatModel.ProfileID == existing.ChatModel.ProfileID && cfg.ChatModel.Model == existing.ChatModel.Model {
+				cfg.ChatModel.Route = existing.ChatModel.Route
+			}
+		}
+		cfg.ChatModel = assistant.NormalizeGroupChatModel(cfg.ChatModel)
 		if (cfg.ChatModel.ProfileID == "") != (cfg.ChatModel.Model == "") {
 			return assistant.GroupConfig{}, fmt.Errorf("请选择本群聊天模型的提供商和模型")
 		}
 
-		if cfg.ChatModel.ProfileID != "" {
+		if cfg.ChatModel.ProfileID != "" || cfg.ChatModel.Route != nil {
 			if validator, ok := h.runtime.(interface {
 				ValidateGroupChatModel(assistant.GroupChatModel) error
 			}); ok {

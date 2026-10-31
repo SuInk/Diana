@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
@@ -26,7 +27,8 @@ func (r *Runtime) RunAdminChat(ctx context.Context, profileID string, req agent.
 	cfg := r.profileConfig(profileID).WithDefaults()
 	// 发言人记成主人：llm_config、bot_markers 这类主人工具在执行时还会再核一次身份。
 	// 不带群号也不标私聊，发消息的工具下面全部摘掉，不会因此发到主人私聊里。
-	event := MessageEvent{ProfileID: cfg.ID, Platform: cfg.Platform, MessageID: req.TraceID, UserID: strings.TrimSpace(cfg.OwnerID)}
+	session, _ := ctx.Value(adminChatSessionKey{}).(string)
+	event := MessageEvent{ContextNamespace: session, ProfileID: cfg.ID, Platform: cfg.Platform, MessageID: req.TraceID, UserID: strings.TrimSpace(cfg.OwnerID)}
 	ctx = withModelConfigEvent(ctx, event)
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "admin_chat")
 	ctx = context.WithValue(ctx, adminChatRunKey{}, true)
@@ -94,7 +96,7 @@ func adminChatRelationship() RelationshipPolicy {
 // 文件、命令和扩展管理照旧常驻，后来补齐的插件工具和 Diana 工具按需加载。
 // WebUI 按会话记着已加载的工具（Request.LoadedTools），下一轮不用再加载。
 var adminChatCoreTools = []string{
-	"admin_diagnostics", "admin_group_history", "bot_config", "runtime_model",
+	"admin_diagnostics", "admin_group_history", "bot_config", consoleConfigToolName, "runtime_model",
 	agent.WebSearchToolName, "list_capabilities", "capabilities", "read_skill",
 	"install_skill", "uninstall_skill", "mcp_install", "mcp_uninstall", "mcp_set_enabled",
 	hostAccessToolName, "run_command", "read_file", "list_files", "find_files", "grep", "write_file", "edit_file",
@@ -180,7 +182,7 @@ func (r *Runtime) AdminChatRedactor() func(string) string {
 	}
 	secrets = filtered
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
-	return func(text string) string { return redactBundleText(text, secrets) }
+	return func(text string) string { return secretmask.ChatConfigText(redactBundleText(text, secrets)) }
 }
 
 // lastUserMessageText 取本轮最后一条用户消息，作为宿主命令审核对照的用户原话。
@@ -216,4 +218,12 @@ func adminChatReviewTranscript(messages []llm.Message) []hostReviewTurn {
 		}
 	}
 	return lastHostReviewTurns(turns)
+}
+
+// WithAdminChatSession binds pending configuration changes to the authenticated
+// console conversation rather than the model-generated trace or tool arguments.
+type adminChatSessionKey struct{}
+
+func WithAdminChatSession(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, adminChatSessionKey{}, sessionID)
 }

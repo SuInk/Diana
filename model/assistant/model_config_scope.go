@@ -85,6 +85,30 @@ func (r *Runtime) baseModelRolesForContext(ctx context.Context) map[string]Model
 
 // ValidateGroupChatModel checks the saved provider catalog without making a paid request.
 func (r *Runtime) ValidateGroupChatModel(model GroupChatModel) error {
+	if model.Route != nil {
+		role := *model.Route
+		if role.FollowChat {
+			return fmt.Errorf("群对话路由不能跟随自身；清空 chat_model 恢复机器人继承")
+		}
+		switch role.RoutingStrategy {
+		case "", "smart", "failover", "round_robin", "weighted":
+		default:
+			return fmt.Errorf("调度策略无效")
+		}
+		for i, route := range append([]ModelRole{role}, role.Fallbacks...) {
+			if i > 0 && len(route.Fallbacks) > 0 {
+				return fmt.Errorf("后备路由不能嵌套")
+			}
+			if route.Group != "" {
+				return fmt.Errorf("群独立路由请使用具体提供商和模型")
+			}
+			if err := r.ValidateGroupChatModel(GroupChatModel{ProfileID: route.ProfileID, Model: route.Model}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
 	r.mu.RLock()
 	store := r.llmStore
 	r.mu.RUnlock()

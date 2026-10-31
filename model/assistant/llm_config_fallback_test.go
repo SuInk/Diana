@@ -63,17 +63,17 @@ func TestChatModelSwitchKeepsFallbackRoutes(t *testing.T) {
 }
 
 func TestCrossProviderSwitchPreservesModels(t *testing.T) {
-	fallbacks := []ModelRole{{ProfileID: "two", Model: "other", Weight: 3}, {ProfileID: "two", Model: "shared", Standby: true}}
+	fallbacks := []ModelRole{{ProfileID: "two", Model: "other", Weight: 3, ReasoningEffort: "low"}, {ProfileID: "two", Model: "shared", Standby: true}}
 	r, saver, event := modelSwitchRuntimeWithFallbacks(t, ModelRole{ProfileID: "one", Model: "shared", Fallbacks: fallbacks, RoutingStrategy: "weighted", ReasoningEffort: "high", Weight: 2})
 	reply, err := newDianaLLMConfigTool(r, event).Run(context.Background(), map[string]any{"provider_id": "two", "model": "other"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	saved := saver.configs["b"].ModelRoles["chat"]
-	if saved.ProfileID != "two" || saved.Model != "other" || saved.Weight != 3 || saved.RoutingStrategy != "weighted" || saved.ReasoningEffort != "high" {
+	if saved.ProfileID != "two" || saved.Model != "other" || saved.Weight != 3 || saved.RoutingStrategy != "weighted" || saved.ReasoningEffort != "low" {
 		t.Fatalf("lost selected route or policy: %+v", saved)
 	}
-	if len(saved.Fallbacks) != 2 || saved.Fallbacks[0].ProfileID != "one" || saved.Fallbacks[0].Weight != 2 || saved.Fallbacks[1].ProfileID != "two" || saved.Fallbacks[1].Model != "shared" || !saved.Fallbacks[1].Standby {
+	if len(saved.Fallbacks) != 2 || saved.Fallbacks[0].ProfileID != "one" || saved.Fallbacks[0].Weight != 2 || saved.Fallbacks[0].ReasoningEffort != "high" || saved.Fallbacks[1].ProfileID != "two" || saved.Fallbacks[1].Model != "shared" || !saved.Fallbacks[1].Standby {
 		t.Fatalf("lost routes: %+v", saved.Fallbacks)
 	}
 	if strings.Contains(reply, "已被这次绑定替换") {

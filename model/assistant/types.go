@@ -1060,8 +1060,8 @@ type ModelRole struct {
 	// 换一个 TTS 模型照样要指定音色。对话类用途用不上，保存时原样丢掉也无妨。
 	// 后备路由不单独带，沿用主路由这一份。
 	Params map[string]string `json:"params,omitempty"`
-	// ReasoningEffort 覆盖这个用途的思考强度，空表示跟随提供商配置。后备路由
-	// 不单独带，沿用主路由的偏好；发送时再按实际模型支持的档位适配。
+	// ReasoningEffort 是这条模型路由的思考强度，空表示交给模型默认。
+	// 主路由和后备路由分别保存；发送时按实际模型支持的档位适配。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
@@ -1152,7 +1152,6 @@ func normalizeModelRole(role ModelRole) ModelRole {
 		fallback.FollowChat = false
 		fallback.Fallbacks = nil
 		fallback.Params = nil
-		fallback.ReasoningEffort = ""
 		fallback.RecoveryPolicy = nil
 		fallback.RoutingStrategy = ""
 		fallback = normalizeModelRole(fallback)
@@ -1237,8 +1236,10 @@ type ReplyRule struct {
 
 // GroupChatModel prioritizes a chat provider for one group without removing bot routes. Empty values inherit the bot.
 type GroupChatModel struct {
-	ProfileID string `json:"profile_id"`
-	Model     string `json:"model"`
+	// Route, when present, replaces the complete chat route for this group.
+	Route     *ModelRole `json:"route,omitempty"`
+	ProfileID string     `json:"profile_id"`
+	Model     string     `json:"model"`
 }
 
 type GroupConfig struct {
@@ -1762,7 +1763,7 @@ func positiveOptionalCount(value *int) *int {
 // WithDefaults 补齐群配置的空值，避免旧数据或局部提交破坏运行时默认行为。
 func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig {
 	if cfg.ChatModel != nil {
-		cfg.ChatModel = &GroupChatModel{ProfileID: strings.TrimSpace(cfg.ChatModel.ProfileID), Model: strings.TrimSpace(cfg.ChatModel.Model)}
+		cfg.ChatModel = NormalizeGroupChatModel(cfg.ChatModel)
 	}
 	cfg.ReplyMergeConfidencePercent = max(0, min(100, cfg.ReplyMergeConfidencePercent))
 	cfg.sendRetrySettings = cfg.sendRetrySettings.clamped()
@@ -3449,4 +3450,20 @@ func (cfg *BotConfig) preserveRetiredPlatformCredentials(existing BotConfig) {
 	cfg.WeComSecret = existing.WeComSecret
 	cfg.WeComToken = existing.WeComToken
 	cfg.WeComEncodingAESKey = existing.WeComEncodingAESKey
+}
+
+// NormalizeGroupChatModel keeps independent group routing detached from the
+// stored payload; older two-field overrides still only prioritize one model.
+func NormalizeGroupChatModel(model *GroupChatModel) *GroupChatModel {
+	if model == nil {
+		return nil
+	}
+	copy := *model
+	copy.ProfileID = strings.TrimSpace(copy.ProfileID)
+	copy.Model = strings.TrimSpace(copy.Model)
+	if copy.Route != nil {
+		route := normalizeModelRole(*copy.Route)
+		copy.Route = &route
+	}
+	return &copy
 }

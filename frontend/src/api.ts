@@ -338,10 +338,10 @@ export interface BotProfileConfig extends SendRetrySettings {
     weight?: number;
     disabled?: boolean;
     standby?: boolean;
-    fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; weight?: number; disabled?: boolean; standby?: boolean }>;
+    fallbacks?: Array<{ profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; weight?: number; disabled?: boolean; standby?: boolean; reasoning_effort?: string }>;
     /** 音视频插槽（tts/stt/video）的参数：音色、格式、语速、语言、分辨率等。 */
     params?: Record<string, string>;
-    /** 这个用途的思考强度；空表示不发，交给模型默认。后备路由沿用。 */
+    /** 这条模型路由的思考强度；空表示不发，交给模型默认。 */
     reasoning_effort?: string;
   }>;
   model_recovery_policy?: ModelRecoveryPolicy;

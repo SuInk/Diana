@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/runtimeconfig"
 )
@@ -60,7 +61,15 @@ func (t *dianaRuntimeConfigTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *dianaRuntimeConfigTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *dianaRuntimeConfigTool) Run(ctx context.Context, input map[string]any) (out string, runErr error) {
+	ctx = secretmask.WithChatConfig(ctx)
+	defer func() {
+		out = secretmask.ChatConfigJSON(out)
+		if runErr != nil {
+			runErr = secretmask.ChatConfigError(runErr)
+		}
+	}()
+
 	manager := t.runtime.runtimeConfigManager()
 	if manager == nil {
 		return "", errors.New("当前部署没有接入启动配置")

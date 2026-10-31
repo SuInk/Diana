@@ -204,6 +204,6 @@ func (h *BotHandler) adminChatRedactor() func(string) string {
 		text = secretmask.PrivateKeyPattern.ReplaceAllString(text, "[REDACTED]")
 		text = secretmask.TokenPattern.ReplaceAllString(text, "[REDACTED]")
 		text = secretmask.BearerPattern.ReplaceAllString(text, "$1 [REDACTED]")
-		return secretmask.QuotedCredentialPattern.ReplaceAllString(text, `${1}"[REDACTED]"`)
+		return secretmask.ChatConfigText(secretmask.QuotedCredentialPattern.ReplaceAllString(text, `${1}"[REDACTED]"`))
 	}
 }

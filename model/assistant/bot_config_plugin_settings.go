@@ -10,12 +10,12 @@ import (
 
 // 插件详细设置（链接解析平台、翻译开关、音乐源……）和 WebUI 插件页是同一份数据：
 // 群级写 GroupConfig.PluginSettingOverrides，机器人级写插件全局设置。凭据类设置
-// 永远不经聊天读写，只能在 WebUI 填。
+// 经 console_config 暂存确认，不从这个即时保存入口修改。
 
 func pluginSettingsSchema() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "插件详细设置 {插件ID:{键:值}}，null 恢复继承；先 get 带 plugin 查键，凭据不可改。",
+		"description": "插件详细设置 {插件ID:{键:值}}，null 恢复继承；先 get 带 plugin 查键，凭据通过 console_config 暂存确认。",
 		"additionalProperties": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{},
@@ -26,7 +26,7 @@ func pluginSettingsSchema() map[string]any {
 // pluginSettingEditable 拒绝凭据和不允许按该层级/身份修改的键。
 func pluginSettingEditable(spec PluginSettingSpec, scope string, owner bool) error {
 	if spec.Secret {
-		return fmt.Errorf("设置 %q 是凭据，只能在 WebUI 插件页填写", spec.Key)
+		return fmt.Errorf("设置 %q 是凭据，请用 console_config 暂存并确认", spec.Key)
 	}
 	if scope == PluginSettingScopeGroup && !spec.allowsScope(PluginSettingScopeGroup) {
 		return fmt.Errorf("设置 %q 只能在机器人级修改", spec.Key)

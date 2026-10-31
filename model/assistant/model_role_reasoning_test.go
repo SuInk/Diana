@@ -9,7 +9,7 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 思考强度按用途覆盖：存盘时归一化、认不出的档位丢掉，后备路由不单独带。
+// 思考强度按路由保存，主路由和后备路由都归一化。
 func TestModelRoleReasoningEffortNormalize(t *testing.T) {
 	roles := normalizeModelRoles(map[string]ModelRole{
 		"intent": {ProfileID: "p", Model: "m", ReasoningEffort: " None ", Fallbacks: []ModelRole{{ProfileID: "b", Model: "m2", ReasoningEffort: "high"}}},
@@ -18,8 +18,8 @@ func TestModelRoleReasoningEffortNormalize(t *testing.T) {
 	if got := roles["intent"].ReasoningEffort; got != "none" {
 		t.Fatalf("intent effort = %q, want none", got)
 	}
-	if got := roles["intent"].Fallbacks[0].ReasoningEffort; got != "" {
-		t.Fatalf("fallback effort = %q, want empty", got)
+	if got := roles["intent"].Fallbacks[0].ReasoningEffort; got != "high" {
+		t.Fatalf("fallback effort = %q, want high", got)
 	}
 	if got := roles["chat"].ReasoningEffort; got != "" {
 		t.Fatalf("invalid effort kept: %q", got)
@@ -28,9 +28,12 @@ func TestModelRoleReasoningEffortNormalize(t *testing.T) {
 	if got := cfg.ModelRoles["intent"].ReasoningEffort; got != "none" {
 		t.Fatalf("round trip effort = %q", got)
 	}
+	if got := cfg.ModelRoles["intent"].Fallbacks[0].ReasoningEffort; got != "high" {
+		t.Fatalf("fallback round trip effort = %q", got)
+	}
 }
 
-// 用途上设了思考强度，主路由和后备路由的候选都换成它；没设就不发，不看提供商上的旧值。
+// 主路由和后备路由使用各自的思考强度；没设就不发，不看提供商上的旧值。
 // 没单独绑的细分用途继承分组那一档的设置。
 func TestRoleBoundProfilesApplyReasoningEffort(t *testing.T) {
 	set := llm.ProfileSet{Profiles: []llm.Profile{
@@ -39,7 +42,7 @@ func TestRoleBoundProfilesApplyReasoningEffort(t *testing.T) {
 	}}
 	r := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
 		"chat":   {ProfileID: "main", Model: "m"},
-		"intent": {ProfileID: "main", Model: "m", ReasoningEffort: "none", Fallbacks: []ModelRole{{ProfileID: "backup", Model: "m2"}}},
+		"intent": {ProfileID: "main", Model: "m", ReasoningEffort: "none", Fallbacks: []ModelRole{{ProfileID: "backup", Model: "m2", ReasoningEffort: "low"}}},
 	}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 
 	profiles, err := r.roleBoundProfiles(PurposeProactiveReplyRouter, set, llm.GroupIntent)
@@ -49,10 +52,17 @@ func TestRoleBoundProfilesApplyReasoningEffort(t *testing.T) {
 	if len(profiles) != 2 {
 		t.Fatalf("profiles = %+v", profiles)
 	}
-	for _, profile := range profiles {
-		if profile.Config.ReasoningEffort != "none" {
-			t.Fatalf("%s effort = %q, want none", profile.ID, profile.Config.ReasoningEffort)
+	for i, profile := range profiles {
+		want := []string{"none", "low"}[i]
+		if profile.Config.ReasoningEffort != want {
+			t.Fatalf("%s effort = %q, want %q", profile.ID, profile.Config.ReasoningEffort, want)
 		}
+	}
+	unset, err := r.roleBoundProfiles(PurposeProactiveReplyRouter, set, llm.GroupIntent, map[string]ModelRole{
+		"intent": {ProfileID: "main", Model: "m", ReasoningEffort: "high", Fallbacks: []ModelRole{{ProfileID: "backup", Model: "m2"}}},
+	})
+	if err != nil || len(unset) != 2 || unset[1].Config.ReasoningEffort != "" {
+		t.Fatalf("unset fallback inherited effort: profiles=%+v err=%v", unset, err)
 	}
 	chat, err := r.roleBoundProfiles(PurposeReply, set, llm.GroupChat)
 	if err != nil {

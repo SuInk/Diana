@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/storage"
 
@@ -311,6 +312,14 @@ func logAndWriteMaskedError(c *gin.Context, logger AppLogWriter, status int, act
 func recordAppLog(ctx context.Context, logger AppLogWriter, entry storage.AppLogEntry) {
 	if logger == nil {
 		return
+	}
+	if enabled, _ := ctx.Value(consoleConfigContextKey{}).(bool); enabled || secretmask.IsChatConfig(ctx) {
+		entry.Message = secretmask.ChatConfigText(entry.Message)
+		entry.Detail = secretmask.ChatConfigText(entry.Detail)
+		entry.Target = secretmask.ChatConfigText(entry.Target)
+		if entry.Metadata != nil {
+			entry.Metadata = secretmask.ChatConfigValue(entry.Metadata).(map[string]any)
+		}
 	}
 	if err := logger.AppendLog(ctx, entry); err != nil {
 		log.Printf("app log skipped: %v", err)

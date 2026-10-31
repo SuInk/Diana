@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 )
@@ -28,6 +29,10 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			return
 		}
 		runError := runEvent.Error
+		configTool := runEvent.Tool == consoleConfigToolName || runEvent.Tool == botConfigToolName || runEvent.Tool == dianaRuntimeConfigToolName || runEvent.Tool == "llm_config"
+		if configTool {
+			runError = secretmask.ChatConfigText(runError)
+		}
 		if runError != "" {
 			switch runEvent.Tool {
 			case dianaPlatformToolName:
@@ -97,6 +102,9 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		}
 		if len(runEvent.Metadata) > 0 {
 			metadata["tool_metadata"] = runEvent.Metadata
+			if configTool {
+				metadata["tool_metadata"] = secretmask.ChatConfigValue(runEvent.Metadata)
+			}
 		}
 		if runEvent.Phase == agent.RunPhaseCompleted || runEvent.Phase == agent.RunPhaseFailed {
 			// 运行记录按消息汇总工具次数靠这一条：单次工具日志的 target 是工具名，
@@ -131,6 +139,10 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 		if runEvent.Phase != agent.RunPhaseModelCompleted {
 			toolOutput := runEvent.ToolOutput
 			toolInput := runEvent.ToolInput
+			if configTool {
+				toolInput = map[string]any{"operation": configToolString(toolInput, "operation"), "input_keys": sortedMapKeys(toolInput)}
+				toolOutput = secretmask.ChatConfigJSON(toolOutput)
+			}
 			if runEvent.Tool == dianaPlatformToolName {
 				toolInput, toolOutput = sanitizePlatformDebugToolCall(toolInput, toolOutput)
 			} else if runEvent.Tool == dianaGitHubToolName {

@@ -5,6 +5,8 @@ import (
 	"maps"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 // 连接参数（平台地址、Token、AppSecret……）和停用机器人在聊天里改错了，机器人当场
@@ -17,6 +19,7 @@ type pendingBotFields struct {
 	patch     map[string]any
 	messageID string
 	userID    string
+	session   string
 	expires   time.Time
 }
 
@@ -55,17 +58,19 @@ func splitStagedBotFields(patch map[string]any) (immediate, staged map[string]an
 }
 
 func (r *Runtime) stageBotFields(profileID string, event MessageEvent, patch map[string]any) map[string]any {
+	secretmask.RegisterChatConfigSecrets(patch)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.pendingBotFields == nil {
 		r.pendingBotFields = map[string]pendingBotFields{}
 	}
+	delete(r.pendingConsoleConfig, configPendingKey(event))
 	merged := map[string]any{}
-	if current, ok := r.pendingBotFields[profileID]; ok && time.Now().Before(current.expires) {
+	if current, ok := r.pendingBotFields[configPendingKey(event)]; ok && current.userID == event.UserID && current.session == configConfirmationSession(event) && time.Now().Before(current.expires) {
 		maps.Copy(merged, current.patch)
 	}
 	maps.Copy(merged, patch)
-	r.pendingBotFields[profileID] = pendingBotFields{patch: merged, messageID: event.MessageID, userID: event.UserID, expires: time.Now().Add(pendingBotFieldsTTL)}
+	r.pendingBotFields[configPendingKey(event)] = pendingBotFields{patch: merged, messageID: event.MessageID, userID: event.UserID, session: configConfirmationSession(event), expires: time.Now().Add(pendingBotFieldsTTL)}
 	return redactedPendingPatch(merged)
 }
 
@@ -73,30 +78,33 @@ func (r *Runtime) stageBotFields(profileID string, event MessageEvent, patch map
 func (r *Runtime) takePendingBotFields(profileID string, event MessageEvent) (map[string]any, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	pending, ok := r.pendingBotFields[profileID]
+	pending, ok := r.pendingBotFields[configPendingKey(event)]
 	if !ok || time.Now().After(pending.expires) {
-		delete(r.pendingBotFields, profileID)
+		delete(r.pendingBotFields, configPendingKey(event))
 		return nil, fmt.Errorf("没有待确认的改动（暂存 %d 分钟后失效）", int(pendingBotFieldsTTL/time.Minute))
 	}
-	if event.MessageID != "" && event.MessageID == pending.messageID {
+	if event.UserID == "" || event.UserID != pending.userID || pending.session != configConfirmationSession(event) {
+		return nil, fmt.Errorf("请由发起改动的用户在原会话里确认")
+	}
+	if event.MessageID == "" || event.MessageID == pending.messageID {
 		return nil, fmt.Errorf("暂存的改动要主人在下一条消息里明确确认后才能生效")
 	}
-	delete(r.pendingBotFields, profileID)
+	delete(r.pendingBotFields, configPendingKey(event))
 	return pending.patch, nil
 }
 
-func (r *Runtime) discardPendingBotFields(profileID string) bool {
+func (r *Runtime) discardPendingBotFields(profileID string, event MessageEvent) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, ok := r.pendingBotFields[profileID]
-	delete(r.pendingBotFields, profileID)
+	_, ok := r.pendingBotFields[configPendingKey(event)]
+	delete(r.pendingBotFields, configPendingKey(event))
 	return ok
 }
 
-func (r *Runtime) pendingBotFieldsView(profileID string) map[string]any {
+func (r *Runtime) pendingBotFieldsView(profileID string, event MessageEvent) map[string]any {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	pending, ok := r.pendingBotFields[profileID]
+	pending, ok := r.pendingBotFields[configPendingKey(event)]
 	if !ok || time.Now().After(pending.expires) {
 		return nil
 	}
@@ -105,14 +113,24 @@ func (r *Runtime) pendingBotFieldsView(profileID string) map[string]any {
 
 // redactedPendingPatch 回显暂存内容时遮住凭据，只说改了哪些键。
 func redactedPendingPatch(patch map[string]any) map[string]any {
-	out := make(map[string]any, len(patch))
-	for key, value := range patch {
-		lower := strings.ToLower(key)
-		if value != nil && (strings.Contains(lower, "token") || strings.Contains(lower, "secret") || strings.Contains(lower, "password")) {
-			out[key] = "（已填写，内容不回显）"
-			continue
-		}
-		out[key] = value
+	return secretmask.ChatConfigValue(patch).(map[string]any)
+}
+
+func configConfirmationSession(event MessageEvent) string {
+	return strings.Join([]string{event.ProfileID, event.Platform, event.PlatformScope, event.ContextNamespace, string(event.Kind), event.GroupID, event.MessageThreadID}, "\x00")
+}
+
+// Only an explicit standalone response is confirmation; quoted text and tool
+// arguments cannot authorize a pending change. No confirmation code is needed.
+func isConfigConfirmation(text string) bool {
+	text = strings.Trim(strings.TrimSpace(text), "。！! .\n\t")
+	switch strings.ToLower(text) {
+	case "确认", "确认修改", "确认更改", "确认执行", "确认应用", "确认保存", "确定", "同意", "confirm", "yes":
+		return true
 	}
-	return out
+	return false
+}
+
+func configPendingKey(event MessageEvent) string {
+	return configConfirmationSession(event) + "\x00" + event.UserID
 }

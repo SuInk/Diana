@@ -615,7 +615,7 @@
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
                             <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" title="测试调用：发一条短消息，看这条路由能不能用" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button v-if="item.index > 0" class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleFallback(role.key, item.index - 1)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" title="测试调用：发一条短消息，看这条路由能不能用" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
                         </tbody>
@@ -651,16 +651,6 @@
                     <span v-if="field.hint" class="hint">{{ field.hint }}</span>
                   </label>
                   <button type="button" class="btn ghost small" @click="clearRole(role.key)">停用这个插槽</button>
-                </div>
-                <div v-if="roleSupportsReasoning(role.key) && roleForm[role.key] && !roleForm[role.key]?.follow_chat" class="model-role-params">
-                  <label class="field">
-                    <span>思考强度</span>
-                    <AppSelect
-                      :model-value="roleForm[role.key]?.reasoning_effort ?? ''"
-                      :options="roleReasoningOptions(role.key)"
-                      @update:model-value="(value) => setRoleReasoning(role.key, value)"
-                    />
-                  </label>
                 </div>
                 <div v-if="role.key === 'chat'" class="model-role-params model-request-timeout">
                   <div class="field">
@@ -2136,6 +2126,7 @@
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
         <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="channelOptionsFor(modelRouteEditor.role).filter((option) => option.value !== FOLLOW_CHAT && option.value !== FOLLOW_VISION)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
         <div class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
+        <div v-if="roleSupportsReasoning(modelRouteEditor.role)" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
         <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
         <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy === 'weighted' && !modelRouteEditor.draft.standby" class="field"><label for="model-route-editor-weight">调度权重</label><AppNumberInput id="model-route-editor-weight" v-model="modelRouteEditor.draft.weight" :min="1" :max="1000" label="调度权重" :disabled="modelRouteEditor.draft.disabled" /><span class="hint">权重越大，分配到的请求越多，范围 1–1000。</span></div>
         <div class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
@@ -3288,10 +3279,10 @@ const mediaRoleKeys = ["tts", "stt", "video"] as const;
 type MediaRoleKey = (typeof mediaRoleKeys)[number];
 
 type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
-type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean };
+type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean; reasoning_effort?: string };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
-// reasoning_effort 同样只在主路由上有，后备沿用；空表示不发，交给模型默认。
-type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string>; reasoning_effort?: string };
+// reasoning_effort 随每条模型路由保存；空表示不发，交给模型默认。
+type RoleAssignment = RoleRoute & { routing_strategy?: "smart" | "failover" | "round_robin" | "weighted"; fallbacks?: RoleRoute[]; params?: Record<string, string> };
 type ModelRoleRow = { key: RoleKey; label: string; sublabel?: string; description: string };
 const modelRoleRows: ModelRoleRow[] = [
   {
@@ -3579,8 +3570,7 @@ function roleSupportsReasoning(role: RoleKey): boolean {
   return role !== "image" && !isMediaRole(role);
 }
 
-function roleReasoningOptions(role: RoleKey): AppSelectOption[] {
-  const route = roleForm.value[role];
+function roleReasoningOptions(role: RoleKey, route: RoleRoute): AppSelectOption[] {
   const profiles = selectedRoleProfiles(role, route);
   const metadata = profiles.map(profile => profileModels(profile).find(model => model.id === route?.model)?.reasoning_efforts);
   // Group routes can select multiple providers: only disable a level if every
@@ -3588,12 +3578,6 @@ function roleReasoningOptions(role: RoleKey): AppSelectOption[] {
   const supported = metadata.length && metadata.every(values => values?.length)
     ? [...new Set(metadata.flatMap(values => values ?? []))] : undefined;
   return reasoningOptions(route?.reasoning_effort ?? "", supported, "", "模型默认（不发）");
-}
-
-function setRoleReasoning(role: RoleKey, value: string): void {
-  const assignment = roleForm.value[role];
-  if (!assignment) return;
-  assignment.reasoning_effort = value || undefined;
 }
 
 function clearRole(role: RoleKey): void {
@@ -3977,7 +3961,7 @@ function applyModelRouteEditor(): void {
   const current = roleForm.value[editor.role];
   if (editor.index === 0) {
     route.standby = undefined;
-    roleForm.value[editor.role] = { ...route, params: current?.params, reasoning_effort: current?.reasoning_effort, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
+    roleForm.value[editor.role] = { ...route, params: current?.params, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
   } else if (current && !current.follow_chat) {
     current.fallbacks ??= [];
     if (editor.adding) current.fallbacks.push(route);
@@ -4046,7 +4030,7 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
   const implicit = (key: string, role?: RoleAssignment): boolean => role?.follow_chat === true && defaultFollowChatRoles.includes(key as RoleKey);
-  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true, item.weight || 1, item.disabled === true, item.standby === true];
+  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true, item.weight || 1, item.disabled === true, item.standby === true, item.reasoning_effort ?? ""];
   const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
@@ -4054,7 +4038,7 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role), role.reasoning_effort ?? ""] : [key];
+        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role)] : [key];
       })
   );
 }
@@ -4476,7 +4460,7 @@ function setRoleChannel(role: RoleKey, value: string): void {
   const model = current?.follow_chat ? "" : (current?.model ?? "");
   const fallbacks = current?.follow_chat ? undefined : current?.fallbacks;
   const params = current?.params;
-  // 思考强度是这个用途的设置，不跟某家提供商绑定，换提供商时保留。
+  // 更换渠道时保留当前路由的思考强度。
   const reasoning_effort = current?.reasoning_effort;
   const routing = current?.follow_chat ? {} : { routing_strategy: current?.routing_strategy, weight: current?.weight, disabled: current?.disabled };
   if (value.startsWith(GROUP_PREFIX)) {
@@ -4497,8 +4481,19 @@ function addRoleFallback(role: RoleKey): void {
   assignment.fallbacks.push({ model: "" });
 }
 
-function removeRoleFallback(role: RoleKey, index: number): void {
-  roleForm.value[role]?.fallbacks?.splice(index, 1);
+function removeRoleRoute(role: RoleKey, index: number): void {
+  const assignment = roleForm.value[role];
+  if (!assignment || assignment.follow_chat) return;
+  const { fallbacks = [], params, routing_strategy, ...primary } = assignment;
+  const routes: RoleRoute[] = [primary, ...fallbacks];
+  if (index < 0 || index >= routes.length) return;
+  routes.splice(index, 1);
+  const [first, ...rest] = routes;
+  if (!first) {
+    delete roleForm.value[role];
+    return;
+  }
+  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params };
 }
 
 // 主路由和后备路由是同一张有序列表：下标 0 是主路由，i 是后备 i。
@@ -4514,15 +4509,15 @@ function routeReorderable(role: RoleKey): boolean {
 function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   const assignment = roleForm.value[role];
   if (!assignment || assignment.follow_chat) return;
-  // params 和思考强度属于这个用途而不是某一条路由，换主路由时留在原地，
+  // params 属于这个用途而不是某一条路由，换主路由时留在原地，
   // 不能跟着原来的主路由一起挪进后备。
-  const { fallbacks = [], params, reasoning_effort, routing_strategy, ...primary } = assignment;
+  const { fallbacks = [], params, routing_strategy, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (from === to || from < 0 || to < 0 || from >= routes.length || to >= routes.length) return;
   const [moved] = routes.splice(from, 1);
   routes.splice(to, 0, moved);
   const [first, ...rest] = routes;
-  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params, reasoning_effort };
+  roleForm.value[role] = { ...first, standby: undefined, routing_strategy, fallbacks: rest, params };
 }
 
 function routeDragClasses(role: RoleKey, index: number): Record<string, boolean> {

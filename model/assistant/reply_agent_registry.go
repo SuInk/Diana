@@ -259,6 +259,9 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if relationship.Owner && event.Kind == EventKindPrivate && r.runtimeConfigManager() != nil {
 			extraTools = append(extraTools, newDianaRuntimeConfigTool(r, event))
 		}
+		if (relationship.Owner && event.Kind == EventKindPrivate || isAdminChatRun(ctx)) && r.consoleConfigManager() != nil {
+			extraTools = append(extraTools, &dianaConsoleConfigTool{runtime: r, event: event})
+		}
 		extraTools = append(extraTools, pluginTools...)
 		var err error
 		agentRegistry, err = r.newAgentRegistry(ctx, cfg, event, relationship, extraTools...)

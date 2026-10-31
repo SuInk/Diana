@@ -66,7 +66,7 @@ function editorContext(roles) {
     profileCanRouteRoleModel: (_, __, model) => model === "m1" || model === "m2",
     modelOptionsFor: (_, route) => [{ value: route.profile_id === "p2" ? "m2" : "m1" }]
   });
-  for (const name of ["effectiveModelRoutingStrategy", "roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor"]) {
+  for (const name of ["effectiveModelRoutingStrategy", "roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor", "removeRoleRoute", "moveRoleRoute"]) {
     const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(fn, name);
     vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -301,4 +301,62 @@ test("touch route dragging commits on release and cancels without changing order
   assert.equal(context.roleForm.value.chat.model, "second");
   assert.equal(context.routeDrag.value, null);
   assert.equal(listeners.size, 0);
+});
+
+
+test("deleting the first route promotes its successor and preserves purpose settings", () => {
+  const roles = { chat: { profile_id: "p1", model: "m1", weight: 9, routing_strategy: "weighted", reasoning_effort: "high", params: { temperature: 0.5 }, fallbacks: [{ group: "shared", model: "m2", standby: true, disabled: true, weight: 3, reasoning_effort: "low" }, { profile_id: "p3", model: "m3" }] } };
+  const context = editorContext(roles);
+  context.removeRoleRoute("chat", 0);
+  assert.equal(roles.chat.model, "m2");
+  assert.equal(roles.chat.group, "shared");
+  assert.equal(roles.chat.profile_id, undefined);
+  assert.equal(roles.chat.standby, undefined);
+  assert.equal(roles.chat.disabled, true);
+  assert.equal(roles.chat.weight, 3);
+  assert.equal(roles.chat.routing_strategy, "weighted");
+  assert.equal(roles.chat.reasoning_effort, "low");
+  assert.equal(roles.chat.params.temperature, 0.5);
+  assert.equal(roles.chat.fallbacks[0].model, "m3");
+  context.removeRoleRoute("chat", 1);
+  assert.equal(roles.chat.model, "m2");
+  assert.equal(roles.chat.fallbacks.length, 0);
+  context.removeRoleRoute("chat", 0);
+  assert.equal(roles.chat, undefined);
+  assert.equal(context.modelRoleRoutes("chat").length, 0);
+  context.openModelRouteEditor("chat");
+  context.setModelRouteEditorChannel("p1");
+  context.applyModelRouteEditor();
+  assert.ok(roles.chat.model);
+});
+
+test("route deletion ignores invalid indices and inherited roles", () => {
+  const roles = { chat: { model: "m1" }, vision: { model: "", follow_chat: true } };
+  const context = editorContext(roles);
+  const before = JSON.stringify(roles);
+  context.removeRoleRoute("chat", -1);
+  context.removeRoleRoute("chat", 1);
+  context.removeRoleRoute("vision", 0);
+  context.removeRoleRoute("image", 0);
+  assert.equal(JSON.stringify(roles), before);
+});
+
+
+test("reasoning effort follows each route through edits reordering and snapshot changes", () => {
+  const roles = { chat: { profile_id: "p1", model: "m1", reasoning_effort: "high", fallbacks: [{ profile_id: "p2", model: "m2", reasoning_effort: "low" }] } };
+  const context = editorContext(roles);
+  const before = context.roleSnapshot(roles);
+  context.openModelRouteEditor("chat", 1);
+  context.modelRouteEditor.value.draft.reasoning_effort = "medium";
+  context.applyModelRouteEditor();
+  assert.notEqual(context.roleSnapshot(roles), before);
+  assert.equal(roles.chat.reasoning_effort, "high");
+  assert.equal(roles.chat.fallbacks[0].reasoning_effort, "medium");
+  context.moveRoleRoute("chat", 1, 0);
+  assert.equal(roles.chat.reasoning_effort, "medium");
+  assert.equal(roles.chat.fallbacks[0].reasoning_effort, "high");
+  context.openModelRouteEditor("chat", 0);
+  context.modelRouteEditor.value.draft.reasoning_effort = "low";
+  context.applyModelRouteEditor();
+  assert.equal(roles.chat.reasoning_effort, "low");
 });

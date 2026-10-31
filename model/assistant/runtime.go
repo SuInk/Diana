@@ -490,11 +490,13 @@ type Runtime struct {
 	codingJobsOnce   sync.Once
 	// safeModeHeldLogged 记着哪些任务已经因为安全模式停发过、日志写过一次，免得每轮
 	// 调度都刷一条。键是任务 ID。
-	safeModeHeldLogged sync.Map
-	codingJobRegistry  *codingJobRegistry
-	groupConfigs       GroupConfigStore
-	configSaver        ConfigSaver
-	configFieldsSaver  ConfigFieldsSaver
+	safeModeHeldLogged   sync.Map
+	codingJobRegistry    *codingJobRegistry
+	groupConfigs         GroupConfigStore
+	configSaver          ConfigSaver
+	configFieldsSaver    ConfigFieldsSaver
+	consoleConfig        ConsoleConfigManager
+	pendingConsoleConfig map[string]pendingConsoleConfig
 	// pendingBotFields 是聊天里改连接参数时等待主人确认的暂存，见 bot_config_pending.go。
 	pendingBotFields      map[string]pendingBotFields
 	replySuppressions     ReplySuppressionStore
@@ -1684,14 +1686,17 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		return cfg
 	}
 	groupCfg = groupCfg.WithDefaults(event.GroupID, cfg)
-	if model := groupCfg.ChatModel; model != nil && model.ProfileID != "" && model.Model != "" {
+	if model := groupCfg.ChatModel; model != nil && (model.Route != nil || model.ProfileID != "" && model.Model != "") {
 		roles := normalizeModelRoles(cfg.ModelRoles)
 		if roles == nil {
 			roles = map[string]ModelRole{}
 		}
 		selected := ModelRole{ProfileID: model.ProfileID, Model: model.Model}
 		roles["chat"] = prioritizeModelRole(roles["chat"], selected)
-		if reply, ok := roles[PurposeReply]; ok && !reply.FollowChat {
+		if model.Route != nil {
+			roles["chat"] = normalizeModelRole(*model.Route)
+		}
+		if reply, ok := roles[PurposeReply]; ok && !reply.FollowChat && model.Route == nil {
 			roles[PurposeReply] = prioritizeModelRole(reply, selected)
 		} else {
 			roles[PurposeReply] = roles["chat"]
@@ -5868,8 +5873,8 @@ func (r *Runtime) roleBoundProfiles(purpose string, set llm.ProfileSet, group st
 				continue
 			}
 			seen[key] = true
-			// 思考强度只认机器人插槽；空表示不发，交给模型默认。
-			profile.Config.ReasoningEffort = role.ReasoningEffort
+			// 思考强度只认当前模型路由；空表示不发，交给模型默认。
+			profile.Config.ReasoningEffort = route.ReasoningEffort
 			profiles = append(profiles, profile)
 		}
 	}
