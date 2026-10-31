@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -183,6 +184,52 @@ func TestLiveFollowUpImageGrounding(t *testing.T) {
 			}
 			t.Logf("model=%s description=%s reply=%s", response.Model, message.Content, response.Text)
 
+		})
+	}
+}
+
+// 仅回放原图选择，不生成图片、不向群里发送消息。
+func TestLiveEditSourceSelection(t *testing.T) {
+	path := os.Getenv("DIANA_LIVE_EDIT_SAMPLE")
+	if path == "" {
+		t.Skip("DIANA_LIVE_EDIT_SAMPLE is required")
+	}
+	client := liveLLMClient(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sample struct {
+		Current  MessageEvent
+		History  []MessageEvent
+		Expected string
+	}
+	if err := json.Unmarshal(data, &sample); err != nil {
+		t.Fatal(err)
+	}
+	// 生产请求本身有引用；第二种扰动去掉引用、插入较近的无关图片，用真实图片摘要中的特征指认旧图。
+	for _, quoted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("quoted=%v", quoted), func(t *testing.T) {
+			current := sample.Current
+			text := historyPlainText(current)
+			history := append([]MessageEvent(nil), sample.History...)
+			if !quoted && len(history) > 1 {
+				history[len(history)-1].Time = current.Time - 1
+			}
+			runtime := NewRuntime(BotConfig{BotAccount: current.SelfID}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
+			for _, event := range history {
+				runtime.remember(event)
+			}
+			if !quoted {
+				current.Quoted = nil
+				current.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "把临雀发的那张被窝里的女孩图改成黑白，保留原来的字。不是最近那张。"}}}
+				text = historyPlainText(current)
+			}
+			decision, ok := runtime.classifyVisualIntent(context.Background(), current, text)
+			if !ok || decision.Action != visualIntentEditImage || (!slices.Contains(decision.SourceMessageIDs, sample.Expected) || (!quoted && len(decision.SourceMessageIDs) != 1)) {
+				t.Fatalf("incorrect source: %+v", decision)
+			}
+			t.Logf("selected=%s action=%s", sample.Expected, decision.Action)
 		})
 	}
 }
