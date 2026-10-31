@@ -1064,3 +1064,36 @@ func TestQQOfficialMergedForwardMediaKeepsUnknownAttachmentKind(t *testing.T) {
 		t.Fatalf("cleaned = %q, want the line kept verbatim", cleaned)
 	}
 }
+
+// 群消息带 member_role 时 handleDispatch 要记下发言者身份。它持着 c.mu 时
+// 再调自带加锁的 rememberQQGroupRole 会自锁，收消息协程就此卡死；线上 v0.9.1
+// 就是这样，第一条群消息之后机器人再没收过消息，状态却一直显示已连接。
+func TestQQOfficialDispatchGroupMessageWithMemberRoleDoesNotDeadlock(t *testing.T) {
+	c := &QQOfficialChannel{}
+	c.setStatus(true, "bot-1", "")
+	got := make(chan MessageEvent, 1)
+	c.handler = func(_ context.Context, event MessageEvent) error {
+		got <- event
+		return nil
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		c.handleDispatch(context.Background(), qqGatewayPayload{T: "GROUP_AT_MESSAGE_CREATE", Data: json.RawMessage(`{
+		  "id":"m-1","content":"在吗","group_openid":"grp-1",
+		  "author":{"member_openid":"member-1","member_role":"admin"}
+		}`)})
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("handleDispatch blocked on a group message carrying member_role")
+	}
+	event := <-got
+	if event.SenderRole != "admin" {
+		t.Fatalf("SenderRole = %q, want admin", event.SenderRole)
+	}
+	if role, ok := c.seenQQGroupRole("grp-1", "member-1", time.Now()); !ok || role != "admin" {
+		t.Fatalf("seen role = %q, %v; want admin remembered", role, ok)
+	}
+}

@@ -53,6 +53,8 @@ const (
 // 联系人最近一次的 context_token 落在本地，重启后接着收、接着回。iLink 目前只有
 // 私聊：消息里没有可回发的群会话，带 group_id 的消息直接丢弃，不假装支持。
 type WeixinChannel struct {
+	// live 记录最近一次轮询完成的时间，轮询循环卡住时据此改报离线。
+	live    receiveLiveness
 	mu      sync.RWMutex
 	cfg     WeixinConfig
 	handler EventHandler
@@ -139,8 +141,13 @@ func (c *WeixinChannel) Connect(ctx context.Context, handler EventHandler) error
 func (c *WeixinChannel) pollLoop(ctx context.Context, api weixinAPI) {
 	backoff := c.retryInitial
 	timeout := weixinLongPollTimeout
+	c.live.mark(time.Now())
+	defer c.live.reset()
 	for ctx.Err() == nil {
+		// 时限跟着服务端给的长轮询时长走，两轮加重试退避都没回来才算卡住。
+		c.live.setLimit(2*timeout + c.retryMax + time.Minute)
 		if wait := c.pauseRemaining(); wait > 0 {
+			c.live.mark(time.Now())
 			if !sleepContext(ctx, wait) {
 				return
 			}
@@ -151,6 +158,7 @@ func (c *WeixinChannel) pollLoop(ctx context.Context, api weixinAPI) {
 		c.stateMu.Unlock()
 
 		resp, err := api.getUpdates(ctx, cursor, timeout)
+		c.live.mark(time.Now())
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -551,8 +559,9 @@ func (c *WeixinChannel) CallAPI(ctx context.Context, action string, params map[s
 // Status 返回通道状态。
 func (c *WeixinChannel) Status() ChannelStatus {
 	c.statusMu.RLock()
-	defer c.statusMu.RUnlock()
-	return c.status
+	status := c.status
+	c.statusMu.RUnlock()
+	return c.live.apply("weixin", status, time.Now())
 }
 
 func (c *WeixinChannel) setStatus(connected bool, selfID, lastErr string) {

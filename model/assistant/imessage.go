@@ -59,6 +59,8 @@ const (
 // 收消息靠它把 new-message 事件 POST 到 Diana；发消息默认走 AppleScript，
 // 只有「回复某条消息」这类能力需要 Mac 上开了 Private API。
 type IMessageChannel struct {
+	// live 记录最近一次轮询完成的时间，轮询循环卡住时据此改报离线。
+	live    receiveLiveness
 	mu      sync.RWMutex
 	cfg     IMessageConfig
 	handler EventHandler
@@ -392,6 +394,10 @@ func (c *IMessageChannel) pollLoop(ctx context.Context, cfg IMessageConfig) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	failures := 0
+	// 三个周期都没轮完一次才算卡住，单次慢请求不误判。
+	c.live.setLimit(3*interval + time.Minute)
+	c.live.mark(time.Now())
+	defer c.live.reset()
 	for {
 		select {
 		case <-ctx.Done():
@@ -399,6 +405,7 @@ func (c *IMessageChannel) pollLoop(ctx context.Context, cfg IMessageConfig) {
 		case <-ticker.C:
 		}
 		err := c.pollOnce(ctx)
+		c.live.mark(time.Now())
 		if ctx.Err() != nil {
 			return
 		}
@@ -855,8 +862,9 @@ func (c *IMessageChannel) CallAPI(ctx context.Context, action string, params map
 // Status 返回通道状态。
 func (c *IMessageChannel) Status() ChannelStatus {
 	c.statusMu.RLock()
-	defer c.statusMu.RUnlock()
-	return c.status
+	status := c.status
+	c.statusMu.RUnlock()
+	return c.live.apply("imessage", status, time.Now())
 }
 
 func (c *IMessageChannel) setStatus(connected bool, selfID, lastErr string) {

@@ -1278,3 +1278,45 @@ func TestTelegramReplyParametersAcrossTransports(t *testing.T) {
 		}
 	}
 }
+
+// 轮询循环卡在某批消息的处理里时不会再拉更新，状态要按停滞改报离线。
+func TestTelegramStuckPollLoopReportsOffline(t *testing.T) {
+	api := newFakeTelegramAPI(t, map[string]any{
+		"getMe": map[string]any{"id": 42, "username": "diana_bot"},
+		"getUpdates": []map[string]any{{
+			"update_id": 1,
+			"message":   map[string]any{"message_id": 1, "date": 1, "text": "hi", "chat": map[string]any{"id": 7, "type": "private"}, "from": map[string]any{"id": 7, "first_name": "A"}},
+		}},
+	})
+	channel := api.channel()
+	stuck := make(chan struct{})
+	release := make(chan struct{})
+	defer close(release)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	var once sync.Once
+	go func() {
+		_ = channel.Connect(ctx, func(context.Context, MessageEvent) error {
+			once.Do(func() { close(stuck) })
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-stuck:
+	case <-time.After(3 * time.Second):
+		t.Fatal("update was never dispatched")
+	}
+	if !channel.Status().Connected {
+		t.Fatal("status should still be connected right after a successful poll")
+	}
+	channel.live.setLimit(200 * time.Millisecond)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if !channel.Status().Connected {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("status stayed connected while the poll loop was stuck")
+}

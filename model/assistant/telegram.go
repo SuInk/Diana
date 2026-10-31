@@ -50,6 +50,8 @@ const (
 // 选长轮询而不是 webhook：webhook 需要一个带证书的公网地址，家庭或内网
 // 部署基本用不了；长轮询只要能出站访问 api.telegram.org 就行。
 type TelegramChannel struct {
+	// live 记录最近一次轮询完成的时间，轮询循环卡住时据此改报离线。
+	live    receiveLiveness
 	mu      sync.RWMutex
 	cfg     TelegramConfig
 	handler EventHandler
@@ -170,11 +172,16 @@ func (c *TelegramChannel) Connect(ctx context.Context, handler EventHandler) err
 // pollLoop 持续拉取更新；失败时退避重试，不因为一次网络抖动就断开。
 func (c *TelegramChannel) pollLoop(ctx context.Context) {
 	backoff := time.Second
+	// 一次长轮询最多占 HTTP 超时那么久，两轮都没回来才算卡住。
+	c.live.setLimit(2 * (telegramPollTimeoutSeconds + 20) * time.Second)
+	c.live.mark(time.Now())
+	defer c.live.reset()
 	for {
 		if ctx.Err() != nil {
 			return
 		}
 		updates, err := c.fetchUpdates(ctx)
+		c.live.mark(time.Now())
 		if err != nil {
 			if ctx.Err() != nil {
 				return
@@ -804,8 +811,9 @@ func (c *TelegramChannel) methodURL(method string) (string, error) {
 // Status 返回通道状态。
 func (c *TelegramChannel) Status() ChannelStatus {
 	c.statusMu.RLock()
-	defer c.statusMu.RUnlock()
-	return c.status
+	status := c.status
+	c.statusMu.RUnlock()
+	return c.live.apply("telegram", status, time.Now())
 }
 
 func (c *TelegramChannel) setStatus(connected bool, selfID, lastErr string) {

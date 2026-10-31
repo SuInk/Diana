@@ -95,6 +95,8 @@ type QQOfficialChannel struct {
 	lastSeq   int64
 	// memberIntentDenied 记下网关拒过群成员事件意图，之后鉴权不再带它。
 	memberIntentDenied bool
+	// live 记录网关报文最近一次读到的时间，读循环卡住时据此改报离线。
+	live receiveLiveness
 
 	seqMu      sync.Mutex
 	passiveSeq map[string]qqPassiveSeq
@@ -239,6 +241,7 @@ func (c *QQOfficialChannel) Connect(ctx context.Context, handler EventHandler) e
 		}
 		if err != nil {
 			c.setStatus(false, c.Status().SelfID, err.Error())
+			log.Printf("qq: 网关会话结束，%s 后重连: %v", backoff, err)
 		}
 		select {
 		case <-runCtx.Done():
@@ -291,6 +294,11 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 	if c.readTimeoutOverride > 0 {
 		readTimeout = c.readTimeoutOverride
 	}
+	// 读超时只在等下一帧时生效；读循环卡在处理里时靠 live 兜底报离线，
+	// 时限比读超时多留一个心跳周期，正常的慢处理不会被误判。
+	c.live.setLimit(readTimeout + interval)
+	c.live.mark(time.Now())
+	defer c.live.reset()
 
 	// 有 session 就 RESUME 续上，否则 IDENTIFY 开新会话。
 	if session != "" {
@@ -332,6 +340,7 @@ func (c *QQOfficialChannel) runSession(ctx context.Context) error {
 			c.noteIntentRejected(err)
 			return fmt.Errorf("qq: 网关连接中断: %w", err)
 		}
+		c.live.mark(time.Now())
 		if payload.S > 0 {
 			c.connMu.Lock()
 			c.lastSeq = payload.S
@@ -411,6 +420,10 @@ func (c *QQOfficialChannel) heartbeatLoop(ctx context.Context, conn *websocket.C
 				return
 			}
 			if err := conn.WriteMessage(websocket.TextMessage, encoded); err != nil {
+				// 心跳发不出去说明连接已坏；关掉它让读循环立刻出错重连，
+				// 不必等读超时。
+				log.Printf("qq: 心跳发送失败，关闭连接重连: %v", err)
+				_ = conn.Close()
 				return
 			}
 		}
@@ -471,9 +484,6 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		}
 		c.guildChannels[event.GroupID] = event.GuildID
 	}
-	if event.PlatformScope == "qq_group" && event.SenderRole != "" {
-		c.rememberQQGroupRole(event.GroupID, event.UserID, event.SenderRole, time.Now())
-	}
 	if source.Author.Avatar != "" {
 		if c.avatarURLs == nil {
 			c.avatarURLs = map[string]string{}
@@ -481,6 +491,11 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		c.avatarURLs[event.GroupID+"\x00"+event.UserID] = source.Author.Avatar
 	}
 	c.mu.Unlock()
+	// rememberQQGroupRole 自己拿 c.mu，必须放在解锁之后：持锁调用会自锁，
+	// 收消息协程卡死，网关断了状态也还停在「已连接」。
+	if event.PlatformScope == "qq_group" && event.SenderRole != "" {
+		c.rememberQQGroupRole(event.GroupID, event.UserID, event.SenderRole, time.Now())
+	}
 
 	// 入站登记：本条消息的 msg_idx 到发言者，以及出站 ref_idx 到自己，都进引用
 	// 索引；随后用 ref_msg_idx 反查被引用者，回填到事件里。晚一步登记就查不到
@@ -1092,8 +1107,9 @@ func (c *QQOfficialChannel) CallAPI(ctx context.Context, action string, params m
 // Status 返回通道状态。
 func (c *QQOfficialChannel) Status() ChannelStatus {
 	c.statusMu.RLock()
-	defer c.statusMu.RUnlock()
-	return c.status
+	status := c.status
+	c.statusMu.RUnlock()
+	return c.live.apply("qq", status, time.Now())
 }
 
 func (c *QQOfficialChannel) setStatus(connected bool, selfID, lastErr string) {
