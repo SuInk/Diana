@@ -548,6 +548,18 @@ func historyMediaDir() (string, error) {
 	return filepath.Join(cacheDir, "diana", "history-media"), nil
 }
 
+// stickerImportDirName 是控制台导入的表情包原图目录，放在历史媒体目录下但不受保留期清理。
+const stickerImportDirName = "sticker-imports"
+
+// StickerImportDir 返回控制台导入的表情包原图存放的目录。
+func StickerImportDir() (string, error) {
+	dir, err := historyMediaDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, stickerImportDirName), nil
+}
+
 func historyMediaSession(targetKind, groupID, userID string) string {
 	if targetKind == string(EventKindGroup) || groupID != "" {
 		return "group_" + safeHistoryPart(firstNonEmpty(groupID, "unknown"))

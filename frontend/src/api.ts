@@ -3409,7 +3409,7 @@ export type StickerLibraryFilter = {
   /** 画风大类，stickerUncategorized 表示没判出大类的。 */
   category?: string;
   tag?: string;
-  /** group:<群号> 或 private。 */
+  /** group:<群号>、private 或 imported（控制台导入的）。 */
   source?: string;
   /** 只看这么多天既没人发、机器人也没发过的。 */
   idle_days?: number;
@@ -3465,6 +3465,37 @@ export function cleanupStickers(profile: string, filter: StickerLibraryFilter, o
   if (options.block) params.set("block", "true");
   if (options.dryRun) params.set("dry_run", "true");
   return requestJSON<StickerCleanupResult>(`/api/assistant/stickers/cleanup?${params.toString()}`, { method: "POST" });
+}
+
+/** 导出按当前筛选条件打包的 zip 下载地址，原图和标注一起带走。 */
+export function stickerExportURL(profile: string, filter: StickerLibraryFilter): string {
+  const suffix = stickerLibraryParams(profile, filter).toString();
+  return `/api/assistant/stickers/export${suffix ? `?${suffix}` : ""}`;
+}
+
+export interface StickerImportResult {
+  /** 包里收下了几张不同的图。 */
+  images: number;
+  /** 新收进池子的条数，按「图 × 机器人」计。 */
+  imported: number;
+  /** 这台机器人已经导入过的。 */
+  duplicate: number;
+  /** 不是图片、太大或读不出来的文件。 */
+  skipped: number;
+  profiles: string[];
+  errors?: string[];
+}
+
+/** 导入表情包 zip：Diana 导出的包连标注一起导入，别处的图片包按文件名当表情名。profile 为空时导给全部机器人。 */
+export function importStickers(profile: string, file: File): Promise<StickerImportResult> {
+  const params = new URLSearchParams();
+  if (profile) params.set("profile", profile);
+  const suffix = params.toString();
+  return requestJSON<StickerImportResult>(`/api/assistant/stickers/import${suffix ? `?${suffix}` : ""}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/octet-stream" },
+    body: file
+  });
 }
 
 /** 移出表情包池，之后再有人发同一张也不收录；聊天记录里的图片不受影响。 */

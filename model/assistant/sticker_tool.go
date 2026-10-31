@@ -98,6 +98,8 @@ type stickerCandidate struct {
 	SourceEvent   MessageEvent
 	SharedGroup   bool
 	SharedPrivate bool
+	// Imported 表示是控制台导入的，不来自哪个会话。
+	Imported bool
 }
 
 type stickerSearchItem struct {
@@ -576,6 +578,7 @@ func stickerCandidatesFromAssets(assets []StickerAsset, currentSession string, i
 			SemanticScore: semanticScores[stickerCandidateEventKey(source)], SourceEvent: source,
 			SharedGroup:   asset.Kind == EventKindGroup && asset.Session != currentSession,
 			SharedPrivate: asset.Kind == EventKindPrivate && asset.Session != currentSession,
+			Imported:      asset.Kind == StickerImportKind,
 		})
 	}
 	return candidates
@@ -1062,6 +1065,8 @@ func stickerSearchItems(candidates []stickerCandidate) []stickerSearchItem {
 			scope = "shared_group"
 		} else if candidate.SharedPrivate {
 			scope = "shared_private"
+		} else if candidate.Imported {
+			scope = "imported"
 		}
 		items = append(items, stickerSearchItem{
 			ID: candidate.ID, Name: candidate.Summary, Tags: candidate.Tags, Category: candidate.Category,

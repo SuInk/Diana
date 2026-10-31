@@ -39,6 +39,15 @@ type StickerAsset struct {
 	ElsewhereLastSentAt int64
 }
 
+// StickerImportKind 是控制台导入的表情包在库里的来源类型。导入的图不属于哪个会话，
+// 记在 StickerImportSession 这个虚拟会话下，这台机器人在所有会话里都能挑到它们。
+const StickerImportKind EventKind = "imported"
+
+// StickerImportSession 是某台机器人导入的表情包挂的虚拟会话键。
+func StickerImportSession(profileID string) string {
+	return "imported:" + strings.TrimSpace(profileID)
+}
+
 type StickerAssetStore interface {
 	ListStickerAssets(context.Context, StickerHistoryQuery) ([]StickerAsset, error)
 }

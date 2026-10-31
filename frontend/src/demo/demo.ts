@@ -326,6 +326,7 @@ let demoStickers: DemoSticker[] = [
   { hash: demoStickerHash("e5"), summary: "害羞", description: "少女捂脸偷看，表示被夸得不好意思。", tags: ["害羞", "捂脸", "可爱"], category: "二次元", kind: "group", group_id: "100200519", sessions: 2, last_seen: before(90), sent_count: 1, last_sent: before(1440), sources: ["group:100200519", "group:100200301"] },
   { hash: demoStickerHash("f6"), summary: "收到", description: "大字「收到」，确认信息时用。", tags: ["收到", "确认"], category: "文字", kind: "group", group_id: "100200301", sessions: 1, last_seen: before(60 * 24 * 40), sent_count: 0, sources: ["group:100200301"] },
   { hash: demoStickerHash("07"), summary: "震惊", description: "演员瞪大眼睛后仰，表示难以置信。", tags: ["震惊", "离谱"], category: "真人", kind: "group", group_id: "100200418", sessions: 1, last_seen: before(60 * 24 * 12), sent_count: 0, sources: ["group:100200418"] },
+  { hash: demoStickerHash("29"), summary: "好耶", description: "小人举起双手欢呼，庆祝好消息。", tags: ["开心", "庆祝"], category: "二次元", kind: "imported", sessions: 1, last_seen: before(60 * 24 * 5), sent_count: 1, last_sent: before(60 * 24), sources: ["imported"] },
   { hash: demoStickerHash("18"), summary: "摸鱼", description: "Q 版角色趴在桌上，表示在偷懒。", tags: ["摸鱼", "躺平", "可爱"], category: "二次元", kind: "private", user_id: "880031", sessions: 1, last_seen: before(60 * 24 * 3), sent_count: 4, last_sent: before(60 * 24 * 2), sources: ["private"] }
 ];
 
@@ -1681,6 +1682,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       demoStickers = demoStickers.filter((item) => !hashes.has(item.hash));
     }
     return json(result);
+  }
+  if (path === "/api/assistant/stickers/import" && method === "POST") {
+    const added: DemoSticker = { hash: demoStickerHash("3a"), summary: "冲鸭", description: "小鸭子迈步向前冲，给人打气。", tags: ["加油", "冲"], category: "动物", kind: "imported", sessions: 1, last_seen: new Date().toISOString(), sent_count: 0, sources: ["imported"] };
+    const duplicate = demoStickers.some((item) => item.hash === added.hash);
+    if (!duplicate) demoStickers = [added, ...demoStickers];
+    return json({ images: 1, imported: duplicate ? 0 : 1, duplicate: duplicate ? 1 : 0, skipped: 0, profiles: [url.searchParams.get("profile") || "demo"] });
   }
   const stickerHash = path.match(/^\/api\/assistant\/stickers\/([0-9a-f]{64})$/)?.[1];
   if (stickerHash && method === "DELETE") {

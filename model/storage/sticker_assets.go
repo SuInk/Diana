@@ -241,8 +241,19 @@ func (s *SQLiteStore) ListStickerAssets(ctx context.Context, query assistant.Sti
 	for index := range current {
 		current[index].Session = query.Session
 	}
-	if err != nil || (!query.ShareGroups && !query.SharePrivate) {
-		return current, err
+	if err != nil {
+		return nil, err
+	}
+	// 控制台导入的表情包不属于哪个会话，这台机器人在哪都能用，不受跨会话共享开关管。
+	if query.ProfileID != "" {
+		imported, err := s.queryStickerAssets(ctx, query.Session, "a.session = ?", []any{assistant.StickerImportSession(query.ProfileID)}, limit)
+		if err != nil {
+			return nil, err
+		}
+		current = append(current, imported...)
+	}
+	if !query.ShareGroups && !query.SharePrivate {
+		return current, nil
 	}
 
 	boundary := ""
@@ -508,7 +519,8 @@ type StickerLibraryQuery struct {
 	Category string
 	// Tag 按关键词整词匹配。
 	Tag string
-	// Source 是来源会话：group:<群号> 或 private（全部私聊）。按来源清理时只移出这个来源的记录。
+	// Source 是来源会话：group:<群号>、private（全部私聊）或 imported（控制台导入的）。
+	// 按来源清理时只移出这个来源的记录。
 	Source string
 	// IdleDays 只看最近这么多天既没人发、机器人也没发过的。
 	IdleDays int
@@ -578,6 +590,9 @@ func stickerLibraryCTE(query StickerLibraryQuery, now time.Time) (string, []any)
 	case source == "private":
 		conditions = append(conditions, `a.kind = ?`)
 		args = append(args, string(assistant.EventKindPrivate))
+	case source == "imported":
+		conditions = append(conditions, `a.kind = ?`)
+		args = append(args, string(assistant.StickerImportKind))
 	case strings.HasPrefix(source, "group:"):
 		conditions = append(conditions, `a.kind = ? AND a.group_id = ?`)
 		args = append(args, string(assistant.EventKindGroup), strings.TrimPrefix(source, "group:"))
@@ -758,7 +773,8 @@ GROUP BY 1`, args)
 	withoutSource.Source = ""
 	base, args = stickerLibraryCTE(withoutSource, now)
 	if facets.Sources, err = s.stickerFacetCounts(ctx, base+`
-SELECT CASE WHEN s.kind = '`+string(assistant.EventKindPrivate)+`' THEN 'private' ELSE 'group:' || s.group_id END AS source,
+SELECT CASE s.kind WHEN '`+string(assistant.EventKindPrivate)+`' THEN 'private'
+         WHEN '`+string(assistant.StickerImportKind)+`' THEN 'imported' ELSE 'group:' || s.group_id END AS source,
        COUNT(DISTINCT s.content_sha256) AS total
 FROM scoped AS s JOIN matched AS m ON m.content_sha256 = s.content_sha256
 GROUP BY source

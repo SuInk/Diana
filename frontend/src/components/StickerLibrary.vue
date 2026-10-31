@@ -36,6 +36,19 @@
       <div class="sticker-bar-end">
         <span class="sticker-count">{{ total }} 张</span>
         <button v-if="filtering" class="btn small ghost" type="button" @click="resetFilters">清空筛选</button>
+        <input ref="importInput" type="file" accept=".zip,application/zip" hidden @change="importPack" />
+        <button
+          class="btn small ghost"
+          type="button"
+          :disabled="importing"
+          :title="props.profile ? '导入表情包 zip，这台机器人在所有会话里都能用' : '导入表情包 zip，导给全部机器人'"
+          @click="importInput?.click()"
+        >
+          <Upload :size="14" aria-hidden="true" />{{ importing ? "导入中…" : "导入" }}
+        </button>
+        <button class="btn small ghost" type="button" :disabled="!total" :title="filtering ? '把筛出来的这些打包下载' : '把整个表情包池打包下载'" @click="exportPack">
+          <Download :size="14" aria-hidden="true" />{{ filtering ? "导出这些" : "导出" }}
+        </button>
         <button class="btn small ghost danger-text" type="button" :disabled="!total || cleaning" :title="filtering ? '把筛出来的这些移出表情包池' : '清空整个表情包池'" @click="cleanup">
           <Trash2 :size="14" aria-hidden="true" />{{ cleaning ? "清理中…" : filtering ? "清理这些" : "清空" }}
         </button>
@@ -49,7 +62,7 @@
     <EmptyState
       v-else-if="items.length === 0"
       :title="filtering ? '没有匹配的表情包' : '池子里还没有表情包'"
-      :hint="filtering ? '换个条件试试。' : '群里有人发表情包后会自动收录。'"
+      :hint="filtering ? '换个条件试试。' : '群里有人发表情包后会自动收录，也可以导入表情包 zip。'"
     />
     <ul v-else class="sticker-library-grid">
       <li v-for="(item, index) in items" :key="item.hash" class="sticker-tile">
@@ -159,7 +172,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ChevronLeft, ChevronRight, ImageOff, Trash2, X } from "@lucide/vue";
+import { ChevronLeft, ChevronRight, Download, ImageOff, Trash2, Upload, X } from "@lucide/vue";
 import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
 import EmptyState from "./EmptyState.vue";
 import SkeletonBlock from "./SkeletonBlock.vue";
@@ -169,9 +182,11 @@ import { toastError, toastSuccess } from "../lib/toast";
 import {
   cleanupStickers,
   deleteSticker,
+  importStickers,
   listBotGroups,
   listStickerFacets,
   listStickerLibrary,
+  stickerExportURL,
   stickerImageURL,
   stickerUncategorized,
   type StickerLibraryFacets,
@@ -190,6 +205,8 @@ const facets = ref<StickerLibraryFacets>({ categories: [], sources: [], tags: []
 const groupNames = ref<Record<string, string>>({});
 const loading = ref(false);
 const cleaning = ref(false);
+const importing = ref(false);
+const importInput = ref<HTMLInputElement | null>(null);
 const error = ref("");
 const failed = ref<Record<string, boolean>>({});
 const activeIndex = ref(-1);
@@ -383,6 +400,39 @@ async function cleanup(): Promise<void> {
   }
 }
 
+// 导出走浏览器自己的下载，几百 MB 的包也不经过页面内存。
+function exportPack(): void {
+  if (demoImages) {
+    toastError("演示模式没有真实图片，不能导出");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = stickerExportURL(props.profile, currentFilter.value);
+  link.download = "";
+  link.click();
+}
+
+async function importPack(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file || importing.value) return;
+  importing.value = true;
+  try {
+    const result = await importStickers(props.profile, file);
+    const parts = [`新收录 ${result.imported} 张`];
+    if (result.duplicate) parts.push(`${result.duplicate} 张已经有了`);
+    if (result.skipped) parts.push(`跳过 ${result.skipped} 个不是图片或读不出来的文件`);
+    const scope = props.profile ? "" : `（导给了全部 ${result.profiles.length} 个机器人）`;
+    toastSuccess(`导入完成：${parts.join("，")}${scope}`);
+    await load(true);
+  } catch (err) {
+    toastError(err instanceof Error ? err.message : "导入表情包失败");
+  } finally {
+    importing.value = false;
+  }
+}
+
 function describeFilter(value: StickerLibraryFilter): string {
   const parts: string[] = [];
   if (value.category) parts.push(`画风「${categoryLabel(value.category)}」`);
@@ -400,12 +450,13 @@ function categoryLabel(value: string): string {
 
 function sourceLabel(value: string): string {
   if (value === "private") return "私聊";
+  if (value === "imported") return "导入";
   const groupID = value.replace(/^group:/, "");
   return groupNames.value[groupID] ? `${groupNames.value[groupID]}（${groupID}）` : `群 ${groupID}`;
 }
 
 function origin(item: StickerLibraryItem): string {
-  const where = item.kind === "private" ? "私聊" : sourceLabel(`group:${item.group_id || ""}`);
+  const where = item.kind === "private" ? "私聊" : item.kind === "imported" ? "导入" : sourceLabel(`group:${item.group_id || ""}`);
   return item.sessions > 1 ? `${where} 等 ${item.sessions} 个会话` : where;
 }
 

@@ -62,7 +62,8 @@ type HistoryMediaCleanupResult struct {
 }
 
 // CleanupHistoryMedia removes persisted history originals by last-use time and
-// capacity. The independently managed download-cache and source indices are excluded.
+// capacity. The independently managed download-cache and source indices are excluded,
+// and so are stickers imported from the console, which have no chat history behind them.
 func CleanupHistoryMedia() (HistoryMediaCleanupResult, error) {
 	policy := CurrentHistoryMediaRetentionPolicy()
 	if policy.RetentionDays < 0 && policy.MaxMB == 0 {
@@ -87,7 +88,7 @@ func CleanupHistoryMedia() (HistoryMediaCleanupResult, error) {
 		}
 		if entry.IsDir() {
 			name := entry.Name()
-			if path != dir && (name == "download-cache" || name == ".sources") {
+			if path != dir && (name == "download-cache" || name == ".sources" || name == stickerImportDirName) {
 				return filepath.SkipDir
 			}
 			return nil

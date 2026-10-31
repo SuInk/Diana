@@ -366,6 +366,8 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.GET(base+"/stickers", h.listStickers)
 	router.GET(base+"/stickers/facets", h.stickerFacets)
 	router.POST(base+"/stickers/cleanup", h.cleanupStickers)
+	router.GET(base+"/stickers/export", h.exportStickers)
+	router.POST(base+"/stickers/import", h.importStickers)
 	router.GET(base+"/stickers/:hash/image", h.stickerImage)
 	router.DELETE(base+"/stickers/:hash", h.deleteSticker)
 	router.GET(base+"/users", h.listAssistantUsers)
