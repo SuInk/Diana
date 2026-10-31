@@ -41,6 +41,9 @@ func RenderStockChartPNG(quote StockQuote, bars []StockBar) ([]byte, error) {
 	if len(bars) < 2 {
 		return nil, fmt.Errorf("日线不足，画不了走势")
 	}
+	if err := validateStockBars(bars); err != nil {
+		return nil, err
+	}
 	sfntFont, _, err := LoadCJKFont()
 	if err != nil {
 		return nil, err
@@ -72,7 +75,7 @@ func RenderStockChartPNG(quote StockQuote, bars []StockBar) ([]byte, error) {
 	canvas.text(fmt.Sprintf("%s  %s", quote.Name, quote.Symbol), stockChartPadLeft, 56, titleFace, relationColorTitle, textAlignLeft)
 	canvas.text(fmt.Sprintf("%s %s  %+.2f  %+.2f%%", formatStockPrice(quote.Price), quote.Currency, quote.Change, quote.ChangePct),
 		stockChartPadLeft, 90, titleFace, lineColor, textAlignLeft)
-	canvas.text(fmt.Sprintf("%s · 近 %d 个交易日日 K（前复权） · %s", quote.Market, len(bars), quote.Time),
+	canvas.text(fmt.Sprintf("%s · 近 %d 个交易日日 K%s · %s", quote.Market, len(bars), stockAdjustmentLabel(bars), quote.Time),
 		stockChartPadLeft, 116, subtitleFace, relationColorSubtitle, textAlignLeft)
 
 	low, high, maxVolume := bars[0].Low, bars[0].High, 0.0
@@ -145,4 +148,17 @@ func (c *rasterCanvas) fillRect(x1, y1, x2, y2 float64, fill color.NRGBA) {
 		r.LineTo(float32(x1), float32(y2))
 		r.ClosePath()
 	}, fill)
+}
+
+// day 字段并不证明前复权，只有全部日线都明确来自 qfqday 才标注。
+func stockAdjustmentLabel(bars []StockBar) string {
+	if len(bars) == 0 {
+		return ""
+	}
+	for _, bar := range bars {
+		if bar.Adjustment != "qfq" {
+			return ""
+		}
+	}
+	return "（前复权）"
 }

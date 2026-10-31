@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -62,8 +63,8 @@ type StockQuote struct {
 	Amount     float64 `json:"amount,omitempty"`
 	AmountUnit string  `json:"amount_unit,omitempty"`
 	Time       string  `json:"time"`
-	// klineSymbol 是拉日线用的代码。美股指数报价认 usIXIC，日线却要 us.IXIC，
-	// 用 usIXIC 只回一根。
+	// klineSymbol 保留报价接口返回的完整证券代码：普通美股带交易所后缀，
+	// 指数以点开头。报价请求代码不能直接用于美股日线。
 	klineSymbol string
 }
 
@@ -72,6 +73,8 @@ type StockBar struct {
 	Date                   string
 	Open, Close, High, Low float64
 	Volume                 float64
+	// Adjustment 只记录接口确认的复权方式；空串表示未确认。
+	Adjustment string
 }
 
 var (
@@ -178,9 +181,7 @@ func pickStockSearch(body string, accept func(kind string) bool) string {
 		market, code := fields[0], fields[1]
 		if market == "us" {
 			// 美股搜索结果形如 tme.n、tcehy.ps，后缀是交易所，报价接口不要。
-			if dot := strings.IndexByte(code, '.'); dot > 0 {
-				code = code[:dot]
-			}
+			code = stripUSExchangeSuffix(code)
 			return "us" + strings.ToUpper(code)
 		}
 		if market == "sh" || market == "sz" || market == "bj" || market == "hk" {
@@ -188,6 +189,17 @@ func pickStockSearch(body string, accept func(kind string) bool) string {
 		}
 	}
 	return ""
+}
+
+// 只移除腾讯的交易所后缀，保留 BRK.B 这样的股份类别和 .IXIC 指数代码。
+func stripUSExchangeSuffix(code string) string {
+	if dot := strings.LastIndexByte(code, '.'); dot > 0 {
+		switch strings.ToUpper(code[dot+1:]) {
+		case "OQ", "N", "A", "PS":
+			return code[:dot]
+		}
+	}
+	return code
 }
 
 // Quote 拉实时报价。
@@ -231,7 +243,7 @@ func parseStockQuote(symbol, body string) (StockQuote, error) {
 
 		klineSymbol: symbol,
 	}
-	if code := strings.TrimSpace(fields[2]); strings.HasPrefix(symbol, "us") && strings.HasPrefix(code, ".") {
+	if code := strings.TrimSpace(fields[2]); strings.HasPrefix(symbol, "us") && code != "" {
 		quote.klineSymbol = "us" + code
 	}
 	switch symbol[:2] {
@@ -260,7 +272,8 @@ func formatStockTime(raw string) string {
 	return strings.ReplaceAll(raw, "/", "-")
 }
 
-// History 拉最近 days 个交易日的前复权日线，按日期升序。
+// History 请求最近 days 个交易日的前复权日线，按日期升序。
+// 是否确实返回前复权数据由响应字段记录到 Adjustment。
 func (c *stockClient) History(ctx context.Context, quote StockQuote, days int) ([]StockBar, error) {
 	symbol := firstNonEmpty(quote.klineSymbol, quote.Symbol)
 	body, err := c.get(ctx, fmt.Sprintf("%s%s,day,,,%d,qfq", c.klineURL, symbol, days))
@@ -278,10 +291,15 @@ func parseStockKline(symbol string, body []byte, days int) ([]StockBar, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, fmt.Errorf("解析 K 线：%w", err)
 	}
+	if payload.Code != 0 {
+		return nil, fmt.Errorf("K 线接口返回错误码 %d", payload.Code)
+	}
 	series := payload.Data[symbol]
+	adjustment := "qfq"
 	raw, ok := series["qfqday"]
 	if !ok {
 		raw = series["day"]
+		adjustment = ""
 	}
 	var rows [][]any
 	if len(raw) == 0 || json.Unmarshal(raw, &rows) != nil {
@@ -291,7 +309,7 @@ func parseStockKline(symbol string, body []byte, days int) ([]StockBar, error) {
 	for _, row := range rows {
 		// 每行是 [日期, 开, 收, 高, 低, 量, ...]，数值是字符串。
 		if len(row) < 6 {
-			continue
+			return nil, fmt.Errorf("K 线字段不完整")
 		}
 		date, _ := row[0].(string)
 		values := [5]float64{}
@@ -306,16 +324,56 @@ func parseStockKline(symbol string, body []byte, days int) ([]StockBar, error) {
 			values[index] = value
 		}
 		if !valid {
+			return nil, fmt.Errorf("K 线日期或价格无法解析")
+		}
+		bars = append(bars, StockBar{Date: date, Open: values[0], Close: values[1], High: values[2], Low: values[3], Volume: values[4], Adjustment: adjustment})
+	}
+	// 先校验和去重再截尾，不能靠截断掩盖错误代码返回的陈旧占位数据。
+	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Date < bars[j].Date })
+	unique := bars[:0]
+	for _, bar := range bars {
+		if len(unique) > 0 && unique[len(unique)-1].Date == bar.Date {
+			if unique[len(unique)-1] != bar {
+				return nil, fmt.Errorf("K 线同一天存在冲突数据：%s", bar.Date)
+			}
 			continue
 		}
-		bars = append(bars, StockBar{Date: date, Open: values[0], Close: values[1], High: values[2], Low: values[3], Volume: values[4]})
+		unique = append(unique, bar)
 	}
-	// 美股偶尔会在开头混进一根很多年前的老数据，按日期排好再截尾。
-	sort.SliceStable(bars, func(i, j int) bool { return bars[i].Date < bars[j].Date })
+	bars = unique
+	if err := validateStockBars(bars); err != nil {
+		return nil, err
+	}
 	if days > 0 && len(bars) > days {
 		bars = bars[len(bars)-days:]
 	}
 	return bars, nil
+}
+
+// 日线允许节假日、停牌和上市不足请求天数，但跨年断层不能当连续近期走势发送。
+// 此检查只拒绝可疑图，不插值或猜测缺失价格，实时报价仍可返回。
+func validateStockBars(bars []StockBar) error {
+	var previous time.Time
+	for _, bar := range bars {
+		date, err := time.Parse("2006-01-02", bar.Date)
+		if err != nil {
+			return fmt.Errorf("K 线日期无效：%s", bar.Date)
+		}
+		for _, value := range []float64{bar.Open, bar.Close, bar.High, bar.Low, bar.Volume} {
+			if math.IsNaN(value) || math.IsInf(value, 0) {
+				return fmt.Errorf("K 线数值无效：%s", bar.Date)
+			}
+		}
+		if bar.Low <= 0 || bar.Volume < 0 || bar.Low > math.Min(bar.Open, bar.Close) ||
+			bar.High < math.Max(bar.Open, bar.Close) {
+			return fmt.Errorf("K 线价格或成交量异常：%s", bar.Date)
+		}
+		if !previous.IsZero() && (!date.After(previous) || date.Sub(previous) > 366*24*time.Hour) {
+			return fmt.Errorf("K 线日期不连续，暂不绘图：%s 至 %s", previous.Format("2006-01-02"), bar.Date)
+		}
+		previous = date
+	}
+	return nil
 }
 
 func (c *stockClient) get(ctx context.Context, target string) ([]byte, error) {

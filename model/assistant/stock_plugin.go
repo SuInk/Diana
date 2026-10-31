@@ -24,7 +24,7 @@ func (p *StockPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          stockPluginID,
 		Name:        "股票行情",
-		Version:     "0.1.0",
+		Version:     "0.1.1",
 		Description: "群友让机器人查股票时，按代码或名称查 A 股、港股、美股的现价、涨跌幅、成交量等行情，可附一张近期日线走势图。行情来自腾讯财经公开接口，无需 API Key；美股有延迟，仅供参考。",
 		Official:    true,
 		BuiltIn:     true,

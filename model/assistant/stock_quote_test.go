@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,6 +30,7 @@ func TestNormalizeStockSymbol(t *testing.T) {
 		"AAPL":      "usAAPL",
 		"usTSLA":    "usTSLA",
 		"BRK.B":     "usBRK.B",
+		"BRK.A":     "usBRK.A",
 		"贵州茅台":      "",
 		"tengxun":   "",
 	}
@@ -102,17 +104,91 @@ func TestParseStockQuoteUnknownSymbol(t *testing.T) {
 }
 
 func TestParseStockKlineSortsAndTrims(t *testing.T) {
-	body := `{"code":0,"data":{"usAAPL":{"day":[["2011-06-02","1","346.2","1","1","1"],["2026-10-28","1","340.1","1","1","1"],["2026-10-29","1","348.91","1","1","1"]]}}}`
+	body := `{"code":0,"data":{"usAAPL":{"day":[["2026-10-30","340","348","350","330","1"],["2026-10-28","340","340","350","330","1"],["2026-10-29","340","345","350","330","1"],["2026-10-29","340","345","350","330","1"]]}}}`
 	bars, err := parseStockKline("usAAPL", []byte(body), 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bars) != 2 || bars[0].Date != "2026-10-28" || bars[1].Close != 348.91 || bars[1].High != 1 || bars[1].Volume != 1 {
+	if len(bars) != 2 || bars[0].Date != "2026-10-29" || bars[1].Close != 348 || stockAdjustmentLabel(bars) != "" {
 		t.Fatalf("unexpected bars %+v", bars)
 	}
-	aShare := `{"code":0,"data":{"sh600519":{"qfqday":[["2026-10-30","1","1392.05","1","1","1"]]}}}`
-	if bars, err := parseStockKline("sh600519", []byte(aShare), 60); err != nil || len(bars) != 1 {
+	aShare := `{"code":0,"data":{"sh600519":{"qfqday":[["2026-10-30","1363","1392.05","1393.37","1352.98","59927"]]}}}`
+	if bars, err := parseStockKline("sh600519", []byte(aShare), 60); err != nil || len(bars) != 1 || stockAdjustmentLabel(bars) != "（前复权）" {
 		t.Fatalf("qfqday not read: %v %+v", err, bars)
+	}
+}
+
+func TestStockUSCanonicalHistoryCode(t *testing.T) {
+	for _, code := range []string{"NVDA.OQ", "MU.OQ", "TME.N", "BRK.B.N", "BRK.A.N", ".IXIC"} {
+		t.Run(code, func(t *testing.T) {
+			symbol := "us" + stripUSExchangeSuffix(code)
+			if code == ".IXIC" {
+				symbol = "usIXIC"
+			}
+			quote, err := parseStockQuote(symbol, stockQuoteLine(symbol, map[int]string{1: "test", 2: code, 3: "11"}))
+			if err != nil || quote.klineSymbol != "us"+code {
+				t.Fatalf("quote=%+v err=%v", quote, err)
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if got := r.URL.Query().Get("param"); got != "us"+code+",day,,,60,qfq" {
+					t.Errorf("wrong history request: %s", got)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+					"us" + code: map[string]any{"day": [][]string{
+						{"2026-10-29", "10", "11", "12", "9", "100"},
+						{"2026-10-30", "11", "12", "13", "10", "200"},
+					}},
+				}})
+			}))
+			defer server.Close()
+			client := newStockClient()
+			client.klineURL = server.URL + "?param="
+			bars, err := client.History(context.Background(), quote, 60)
+			if err != nil || len(bars) != 2 {
+				t.Fatalf("history=%+v err=%v", bars, err)
+			}
+		})
+	}
+	if got := parseStockSearch(`v_hint="us~brk.a.n~伯克希尔A~bkxea~GP"`); got != "usBRK.A" {
+		t.Fatalf("share class lost: %s", got)
+	}
+}
+
+func TestStockKlineRejectsInvalidData(t *testing.T) {
+	good := []string{"2026-10-30", "10", "11", "12", "9", "100"}
+	cases := map[string][][]string{
+		"historical placeholder": {{"2011-06-02", "19.020", "19.020", "19.280", "18.840", "19701450"}, good},
+		"invalid date":           {{"2026-02-30", "10", "11", "12", "9", "100"}},
+		"nan":                    {{"2026-10-30", "NaN", "11", "12", "9", "100"}},
+		"infinity":               {{"2026-10-30", "10", "11", "+Inf", "9", "100"}},
+		"bad high":               {{"2026-10-30", "10", "11", "10", "9", "100"}},
+		"bad low":                {{"2026-10-30", "10", "11", "12", "11", "100"}},
+		"negative volume":        {{"2026-10-30", "10", "11", "12", "9", "-1"}},
+		"missing field":          {{"2026-10-30", "10"}},
+		"conflicting duplicate":  {good, {"2026-10-30", "10", "10", "12", "9", "100"}},
+	}
+	for name, rows := range cases {
+		t.Run(name, func(t *testing.T) {
+			body, _ := json.Marshal(map[string]any{"data": map[string]any{"usNVDA": map[string]any{"day": rows}}})
+			if _, err := parseStockKline("usNVDA", body, 60); err == nil {
+				t.Fatal("accepted invalid data")
+			}
+		})
+	}
+	if _, err := parseStockKline("usNVDA", []byte(`{"code":1,"data":{"usNVDA":{"day":[]}}}`), 60); err == nil {
+		t.Fatal("ignored upstream error")
+	}
+	// Renderer callers cannot bypass validation, even when a font is unavailable.
+	bars := []StockBar{
+		{Date: "2026-10-29", Open: 10, Close: 11, High: 12, Low: 9, Volume: 100},
+		{Date: "2026-10-30", Open: 10, Close: 11, High: math.Inf(1), Low: 9, Volume: 100},
+	}
+	if _, err := RenderStockChartPNG(StockQuote{}, bars); err == nil || !strings.Contains(err.Error(), "数值无效") {
+		t.Fatalf("renderer should reject invalid bars: %v", err)
+	}
+	bars[0].Adjustment = "qfq"
+	if stockAdjustmentLabel(bars) != "" {
+		t.Fatal("mixed adjustment must not be labelled qfq")
 	}
 }
 
@@ -193,5 +269,32 @@ func TestRenderStockChartPNG(t *testing.T) {
 	}
 	if _, err := RenderStockChartPNG(quote, bars[:1]); err == nil {
 		t.Fatal("expected error with a single bar")
+	}
+}
+
+func TestStockToolPreservesQuoteWhenHistoryIsInvalid(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/quote" {
+			_, _ = w.Write([]byte(stockQuoteLine("usNVDA", map[int]string{1: "NVIDIA", 2: "NVDA.OQ", 3: "204.64"})))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"usNVDA.OQ":{"day":[["2011-06-02","19.02","19.02","19.28","18.84","19701450"],["2026-10-30","208.94","204.64","209.06","200.92","168386423"]]}}}`))
+	}))
+	defer server.Close()
+	// A nil runtime also ensures that invalid history never reaches delivery.
+	tool := newDianaStockTool(nil, MessageEvent{}, SettingValues{stockSettingChart: true}).(*dianaStockTool)
+	tool.client.quoteURL = server.URL + "/quote?q="
+	tool.client.klineURL = server.URL + "/history?param="
+	output, err := tool.Run(context.Background(), map[string]any{"query": "NVDA"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaStockResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || result.ChartSent || result.Quote == nil || result.Quote.Price != 204.64 ||
+		!strings.Contains(result.Message, "K 线日期不连续") {
+		t.Fatalf("unexpected result %s", output)
 	}
 }
