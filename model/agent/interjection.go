@@ -3,46 +3,28 @@
 
 package agent
 
-import (
-	"context"
-	"errors"
+import "github.com/SuInk/diana/model/llm"
 
-	"github.com/SuInk/diana/model/llm"
-)
-
-// Interjections 把运行中途用户追加的补充接进同一轮：已经跑完的工具结果留着，
-// 只重做当前这一步规划。调用方负责判断哪些消息算补充。
+// Interjections 把运行中途用户追加的补充接进同一轮：每步规划开始前取一次，已经
+// 跑完的工具结果留着。正在进行的那一步不打断——掐掉请求会让已经流出去的字留成
+// 半截消息、白付一遍上下文，补充等这一步回来再接也不迟。这一步要是收尾，答案还
+// 没发出去，就丢掉它带着补充重做，仍然合成一份答案。调用方负责判断哪些消息算补充。
 type Interjections interface {
-	// Ready 在有新补充可取时可读。
-	Ready() <-chan struct{}
+	// Pending 报告有没有还没接入的补充。
+	Pending() bool
 	// Take 取出还没接入的补充；没有时返回空。
 	Take() []llm.Message
 }
 
-var errInterjected = errors.New("agent: planning step interrupted by an interjection")
+// maxInterjectionRedos 是一轮里因为补充重做收尾步的上限：人一直在补的话，第三次
+// 照常收尾，后面的补充交给调用方。
+const maxInterjectionRedos = 2
 
-// generateWithInterjections 跑一步规划；途中来了补充就掐掉这一步，交给调用方带着补充重做。
-func generateWithInterjections(ctx context.Context, interjections Interjections, generate func(context.Context) (*llm.GenerateResponse, error)) (*llm.GenerateResponse, bool, error) {
-	if interjections == nil {
-		resp, err := generate(ctx)
-		return resp, false, err
+// finalStep 报告这一步是不是收尾：只调了 send 且没要求续，或者文本协议下给出了最终答案。
+func finalStep(resp *llm.GenerateResponse, text string, declared ...FinalizeField) bool {
+	if len(resp.ToolCalls) > 0 {
+		return onlySendCalls(resp.ToolCalls) && !sendContinues(resp.ToolCalls)
 	}
-	stepCtx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
-	stop := make(chan struct{})
-	defer close(stop)
-	go func() {
-		defer recoverGoroutinePanic("interjection_watch")
-		select {
-		case <-interjections.Ready():
-			cancel(errInterjected)
-		case <-stop:
-		case <-stepCtx.Done():
-		}
-	}()
-	resp, err := generate(stepCtx)
-	if err != nil && !errors.Is(err, llm.ErrOutputCommitted) && ctx.Err() == nil && errors.Is(context.Cause(stepCtx), errInterjected) {
-		return nil, true, nil
-	}
-	return resp, false, err
+	action, ok := parseAction(text, declared...)
+	return (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(text))
 }

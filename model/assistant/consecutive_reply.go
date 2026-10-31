@@ -110,10 +110,23 @@ func (r *Runtime) finishReplyTurn(event MessageEvent, reply string, now time.Tim
 	r.replyTurns[key] = record
 }
 
-// consecutiveReplyContext 把「刚答过同一个人」写成提示词段落。
-func consecutiveReplyContext(previous replyTurnRecord) string {
+// consecutiveReplyContext 把「刚答过同一个人」写成提示词段落。arrivedAt 是这条
+// 消息到达的时间：早于上一条答案发出，说明对方是在答案出来前补的这句，上一条
+// 答案没看到它（连发补充不打断生成，没赶上的补充交回来单独一轮），不能当成看了
+// 答案以后的追问。
+func consecutiveReplyContext(previous replyTurnRecord, arrivedAt time.Time) string {
 	var builder strings.Builder
 	builder.WriteString("【同一个人的连续消息】\n")
+	if !previous.inFlight() && !arrivedAt.IsZero() && arrivedAt.Before(previous.finishedAt) {
+		builder.WriteString("这条是对方在你回答上一条之前补的，你那条回复生成时没看到它，现在已经发出去了")
+		if excerpt := truncateReplyExcerpt(previous.reply, consecutiveReplyExcerptRunes); excerpt != "" {
+			builder.WriteString("，说的是：")
+			builder.WriteString(excerpt)
+		}
+		builder.WriteString("。")
+		builder.WriteString("\n对方还没看到那条回复时说的这句，不是看完以后的追问或反驳。那条回复已经顾及这句（只是补个 @、催一下、重复一遍，或者答案里已经有了）就不用再回，选择静默；这句带来新的条件、纠正或问题时，只回应新增的部分，接着上一条往下说，不要把上一条重说一遍，也不要为上一条没看到它道歉。")
+		return builder.String()
+	}
 	if previous.inFlight() {
 		// 并发的那一路：答案还没生成完，只能告诉它「正在答」。
 		builder.WriteString("这个人上一条消息你正在回答，那条回复马上就会发出去。")
@@ -130,6 +143,19 @@ func consecutiveReplyContext(previous replyTurnRecord) string {
 	}
 	builder.WriteString("确实是另一件事时照常正常回答。")
 	return builder.String()
+}
+
+// messageSentAt 取这条消息最早的可信时间：进程内记下的到达时间，或平台给的发送
+// 时间（秒级）。交回队列重排后到达记录可能是重排那一刻，平台时间不会变；秒级
+// 截断最多把答案发出后一秒内的消息算成发出前，那么短的时间对方也来不及看答案。
+func (r *Runtime) messageSentAt(event MessageEvent) time.Time {
+	arrived := r.senderTurnArrivedAt(event, time.Time{})
+	if event.Time > 0 {
+		if sent := time.Unix(event.Time, 0); arrived.IsZero() || sent.Before(arrived) {
+			return sent
+		}
+	}
+	return arrived
 }
 
 // runningReplyContext 写给「同一个人前一条还没回完」的那一轮。

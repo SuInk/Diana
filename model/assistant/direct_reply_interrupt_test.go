@@ -7,94 +7,71 @@ import (
 	"testing"
 )
 
-// 补充一被接受，正在生成的旧版本就该停下，不必等它跑完模型调用和发送前审核再重来。
-func TestDirectReplySupplementInterruptsAttempt(t *testing.T) {
+// 补充被接受也不取消正在生成的这一版：掐掉请求会让流出去的字留成半截消息。
+// 这一版跑完、发送前才判出落后，带着补充整轮重来。
+func TestDirectReplySupplementDoesNotCancelAttempt(t *testing.T) {
 	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
 	r := topicTestRuntime(p)
 	root := directedGroupMessage("root", "user", "stdout")
-	ctx, finish := r.beginDirectReply(context.Background(), root)
+	ctx, finish := r.beginDirectReply(withReplyTriggerGate(context.Background()), root)
 	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
-	follow := directedGroupMessage("follow", "user", "stdout example")
-	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged {
-		t.Fatal("not merged")
-	}
-	if !errors.Is(context.Cause(attempt), errDirectReplySupplemented) {
-		t.Fatalf("attempt not interrupted: %v", context.Cause(attempt))
-	}
-	if !directReplyAttemptSupplemented(attempt, context.Canceled) {
-		t.Fatal("cancellation not recognised as supplement")
-	}
-}
-
-// 工具调用进行中不打断：它可能正在写外部系统，等它回来再停。
-func TestDirectReplySupplementWaitsForRunningTool(t *testing.T) {
-	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
-	r := topicTestRuntime(p)
-	root := directedGroupMessage("root", "user", "stdout")
-	ctx, finish := r.beginDirectReply(context.Background(), root)
-	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
-	r.noteDirectReplyTool(attempt, true)
+	attempt := r.directReplyAttemptContext(ctx)
 	follow := directedGroupMessage("follow", "user", "stdout example")
 	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged {
 		t.Fatal("not merged")
 	}
 	if attempt.Err() != nil {
-		t.Fatal("interrupted while a tool was running")
+		t.Fatalf("attempt canceled: %v", context.Cause(attempt))
 	}
-	r.noteDirectReplyTool(attempt, false)
-	if !errors.Is(context.Cause(attempt), errDirectReplySupplemented) {
-		t.Fatalf("not interrupted after the tool returned: %v", context.Cause(attempt))
+	if err := r.interruptedReplyError(attempt, root); !errors.Is(err, errDirectReplySupplemented) {
+		t.Fatalf("stale unsent answer passed the send gate: %v", err)
+	}
+	if !directReplyAttemptSupplemented(errDirectReplySupplemented) {
+		t.Fatal("supplement error not recognised")
 	}
 }
 
-// 重复的消息不需要重写，不打断。
-func TestDirectReplyRepeatDoesNotInterrupt(t *testing.T) {
+// 这一版已经写过外部系统时不再重来：照发，补充结算时交回队列另起一轮。
+func TestDirectReplySendGateKeepsAnswerAfterSideEffect(t *testing.T) {
+	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
+	r := topicTestRuntime(p)
+	root := directedGroupMessage("root", "user", "stdout")
+	ctx, finish := r.beginDirectReply(withExternalSideEffectLedger(withReplyTriggerGate(context.Background())), root)
+	defer finish()
+	attempt := r.directReplyAttemptContext(ctx)
+	follow := directedGroupMessage("follow", "user", "stdout example")
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged {
+		t.Fatal("not merged")
+	}
+	markExternalSideEffect(attempt)
+	if err := r.interruptedReplyError(attempt, root); err != nil {
+		t.Fatalf("answer with an external write was discarded: %v", err)
+	}
+}
+
+// 重复的消息不需要重写，发送前也不判落后。
+func TestDirectReplyRepeatDoesNotInvalidate(t *testing.T) {
 	p := &topicTestProvider{result: `{"relation":"repeat","confidence":0.99}`}
 	r := topicTestRuntime(p)
 	root := directedGroupMessage("root", "user", "茯砖茶是啥")
 	ctx, finish := r.beginDirectReply(context.Background(), root)
 	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
+	attempt := r.directReplyAttemptContext(ctx)
 	follow := directedGroupMessage("follow", "user", "茯砖茶是啥")
 	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
-	if attempt.Err() != nil {
-		t.Fatal("repeat interrupted the attempt")
+	if r.directReplyHasNewSupplements(attempt) {
+		t.Fatal("repeat invalidated the answer")
 	}
 }
 
-// 工具已经写过外部系统，跑完后不能再打断，否则做完的事会被咽回去。
-func TestDirectReplySupplementKeepsAttemptAfterSideEffect(t *testing.T) {
-	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
-	r := topicTestRuntime(p)
-	root := directedGroupMessage("root", "user", "stdout")
-	ctx, finish := r.beginDirectReply(withExternalSideEffectLedger(context.Background()), root)
-	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
-	r.noteDirectReplyTool(attempt, true)
-	follow := directedGroupMessage("follow", "user", "stdout example")
-	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
-	markExternalSideEffect(attempt)
-	r.noteDirectReplyTool(attempt, false)
-	if attempt.Err() != nil {
-		t.Fatalf("interrupted after an external write: %v", context.Cause(attempt))
-	}
-}
-
-// Agent 正在跑时补充直接接进这一轮，不打断，也不在发送前判成落后。
+// Agent 正在跑时补充等着接进下一步规划，取走后这一版就覆盖到了。
 func TestDirectReplySupplementJoinsRunningAgent(t *testing.T) {
 	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
 	r := topicTestRuntime(p)
 	root := directedGroupMessage("root", "user", "介绍下这款茶")
 	ctx, finish := r.beginDirectReply(context.Background(), root)
 	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
+	attempt := r.directReplyAttemptContext(ctx)
 	interjections, stop := r.startDirectReplyInterjections(attempt)
 	defer stop()
 	follow := directedGroupMessage("follow", "user", "顺便说下价格")
@@ -102,15 +79,13 @@ func TestDirectReplySupplementJoinsRunningAgent(t *testing.T) {
 		t.Fatal("not merged")
 	}
 	if attempt.Err() != nil {
-		t.Fatalf("interrupted although the agent could take it: %v", context.Cause(attempt))
+		t.Fatalf("attempt canceled: %v", context.Cause(attempt))
 	}
-	select {
-	case <-interjections.Ready():
-	default:
-		t.Fatal("agent not notified")
+	if !interjections.Pending() {
+		t.Fatal("agent not told a supplement is waiting")
 	}
 	taken := interjections.Take()
-	if len(taken) != 1 || !strings.Contains(taken[0].Content, "顺便说下价格") {
+	if len(taken) != 1 || !strings.Contains(taken[0].Content, "顺便说下价格") || interjections.Pending() {
 		t.Fatalf("taken = %#v", taken)
 	}
 	if r.directReplyHasNewSupplements(attempt) {
@@ -125,8 +100,7 @@ func TestDirectReplyUntakenInterjectionStillStale(t *testing.T) {
 	root := directedGroupMessage("root", "user", "介绍下这款茶")
 	ctx, finish := r.beginDirectReply(context.Background(), root)
 	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
+	attempt := r.directReplyAttemptContext(ctx)
 	_, stop := r.startDirectReplyInterjections(attempt)
 	follow := directedGroupMessage("follow", "user", "顺便说下价格")
 	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
@@ -136,21 +110,26 @@ func TestDirectReplyUntakenInterjectionStillStale(t *testing.T) {
 	}
 }
 
-// 带图片的补充要随用户消息进提示词，仍然整轮重写。
-func TestDirectReplyMediaSupplementStillInterrupts(t *testing.T) {
+// 带图片的补充要随用户消息进提示词，不接进 Agent，也不取消，等这一版跑完整轮重写。
+func TestDirectReplyMediaSupplementWaitsForRewrite(t *testing.T) {
 	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
 	r := topicTestRuntime(p)
 	root := directedGroupMessage("root", "user", "这茶怎么样")
 	ctx, finish := r.beginDirectReply(context.Background(), root)
 	defer finish()
-	attempt, done := r.beginDirectReplyAttempt(ctx)
-	defer done()
-	_, stop := r.startDirectReplyInterjections(attempt)
+	attempt := r.directReplyAttemptContext(ctx)
+	interjections, stop := r.startDirectReplyInterjections(attempt)
 	defer stop()
 	follow := directedGroupMessage("follow", "user", "就是这个")
 	follow.Segments = append(follow.Segments, MessageSegment{Type: "image", Data: map[string]string{"url": "https://example.com/a.png"}})
 	r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage)
-	if !errors.Is(context.Cause(attempt), errDirectReplySupplemented) {
-		t.Fatalf("media supplement did not interrupt: %v", context.Cause(attempt))
+	if attempt.Err() != nil {
+		t.Fatalf("media supplement canceled the attempt: %v", context.Cause(attempt))
+	}
+	if interjections.Pending() {
+		t.Fatal("media supplement interjected")
+	}
+	if !r.directReplyHasNewSupplements(attempt) {
+		t.Fatal("media supplement not marked for rewrite")
 	}
 }

@@ -31,7 +31,7 @@ func TestBeginReplyTurnSeesAnInFlightTurnFromTheSameSpeaker(t *testing.T) {
 	if !previous.inFlight() {
 		t.Fatalf("上一轮还没答完，应当标成 in-flight: %#v", previous)
 	}
-	block := consecutiveReplyContext(previous)
+	block := consecutiveReplyContext(previous, time.Time{})
 	if !strings.Contains(block, "正在回答") {
 		t.Fatalf("并发那一路的提示词没说清状态: %q", block)
 	}
@@ -56,7 +56,7 @@ func TestBeginReplyTurnCarriesTheFinishedReply(t *testing.T) {
 	if previous.inFlight() {
 		t.Fatalf("上一轮已经答完，不该还是 in-flight: %#v", previous)
 	}
-	block := consecutiveReplyContext(previous)
+	block := consecutiveReplyContext(previous, time.Time{})
 	if !strings.Contains(block, "海王") {
 		t.Fatalf("上一轮的答案没有带进提示词: %q", block)
 	}
@@ -137,7 +137,7 @@ func TestFinishReplyTurnIgnoresEmptyReplies(t *testing.T) {
 
 // 提示词要留出「这确实是另一件事」的余地，否则连续两个不同问题的第二个会被压成一句话。
 func TestConsecutiveReplyContextAllowsGenuineNewTopics(t *testing.T) {
-	block := consecutiveReplyContext(replyTurnRecord{startedAt: time.Now(), finishedAt: time.Now(), reply: "上一轮的答案"})
+	block := consecutiveReplyContext(replyTurnRecord{startedAt: time.Now(), finishedAt: time.Now(), reply: "上一轮的答案"}, time.Time{})
 	if !strings.Contains(block, "另一件事") {
 		t.Fatalf("提示词把所有后续消息都当成了追问: %q", block)
 	}
@@ -178,5 +178,23 @@ func TestBeginReplyTurnIsConcurrencySafe(t *testing.T) {
 	runtime.replyTurnMu.Unlock()
 	if tracked != 4 {
 		t.Fatalf("并发登记后的痕迹数 = %d, want 4", tracked)
+	}
+}
+
+// 答案发出前就补的那句交回来单独一轮时，要按「上一条没看到它」处理：已顾及就静默，
+// 有新增只补新增，不能当成看了答案以后的追问。
+func TestConsecutiveReplyContextForSupplementSentBeforeAnswer(t *testing.T) {
+	finished := time.Unix(1_800_000_100, 0)
+	previous := replyTurnRecord{startedAt: finished.Add(-5 * time.Second), finishedAt: finished, reply: "怎么啦？"}
+	block := consecutiveReplyContext(previous, finished.Add(-2*time.Second))
+	if !strings.Contains(block, "没看到它") || !strings.Contains(block, "怎么啦？") || !strings.Contains(block, "选择静默") || !strings.Contains(block, "只回应新增的部分") {
+		t.Fatalf("supplement framing missing: %s", block)
+	}
+	if strings.Contains(block, "反驳或质疑") {
+		t.Fatalf("supplement framed as a follow-up after reading the answer: %s", block)
+	}
+	after := consecutiveReplyContext(previous, finished.Add(10*time.Second))
+	if !strings.Contains(after, "上一条答案已发出") || strings.Contains(after, "没看到它") {
+		t.Fatalf("message sent after the answer must keep the follow-up framing: %s", after)
 	}
 }

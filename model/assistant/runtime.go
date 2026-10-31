@@ -2313,23 +2313,20 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	for attempt := 0; attempt < 3; attempt++ {
 		// Two regeneration opportunities cover normal typing bursts. Seal before
 		// the final attempt so an endless stream cannot starve this reply forever;
-		// later messages resume the ordinary routing path.
+		// later messages resume the ordinary routing path. 补充从不取消正在进行的
+		// 这一版，只在它跑完、发送前发现漏了补充时整轮重来。
 		if attempt == 2 {
 			r.sealDirectReply(replyCtx)
 		}
-		attemptCtx, attemptDone := r.beginDirectReplyAttempt(replyCtx)
 		attemptEvent := event
 		if attempt > 0 {
 			attemptEvent.replyHistoryLoaded = false
 			attemptEvent.replyHistory = nil
 		}
-		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
-		supplemented := directReplyAttemptSupplemented(attemptCtx, err)
-		attemptDone()
-		if !supplemented {
+		reply, err = r.replyTo(r.directReplyAttemptContext(replyCtx), attemptEvent, text)
+		if !directReplyAttemptSupplemented(err) {
 			break
 		}
-		err = errDirectReplySupplemented
 	}
 	r.abandonReplyStream(ctx, event)
 	timelineOutcome := "replied"
@@ -4323,7 +4320,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else if hasPreviousTurn {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
-				Content:    consecutiveReplyContext(previousTurn),
+				Content:    consecutiveReplyContext(previousTurn, r.messageSentAt(event)),
 				Priority:   llm.MessagePriorityPlugin,
 				AtomicText: true,
 			})

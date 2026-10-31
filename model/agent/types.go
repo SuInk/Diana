@@ -170,7 +170,7 @@ type Request struct {
 	LoadedTools []string
 	// ToolsLoaded is called immediately, including when a later model call fails.
 	ToolsLoaded func([]string)
-	// Interjections 不为空时，每步规划前接入用户中途的补充，规划途中来了补充就重做这一步。
+	// Interjections 不为空时，每步规划前接入用户中途的补充；正在进行的那一步不打断。
 	Interjections Interjections
 	// Continuation 不为空且 Key 和本轮的系统提示、契约、工具定义对得上时，Runner 不再
 	// 按 Messages 重新组装，而是在上一轮实际发出的请求后面接着发，见 continuation.go。

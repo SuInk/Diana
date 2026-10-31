@@ -22,10 +22,6 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 			markReplyStage(ctx, replyStageAgentStarted, time.Now())
 		case agent.RunPhaseCompleted, agent.RunPhaseFailed:
 			markReplyStage(ctx, replyStageAgentDone, time.Now())
-		case agent.RunPhaseToolStarted:
-			r.noteDirectReplyTool(ctx, true)
-		case agent.RunPhaseToolCompleted:
-			r.noteDirectReplyTool(ctx, false)
 		}
 		writer := r.appLogWriter()
 		if writer == nil {

@@ -260,6 +260,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var toolsDuration time.Duration
 	protocolRepairs := 0
 	continueOnlySends := 0
+	interjectionRedos := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
 	// asideSent 记这一轮已经当中途发言发过的旁白，同一句不再发第二遍。
@@ -397,16 +398,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			cancel()
 			return fail(prepareErr)
 		}
-		resp, interjected, err := generateWithInterjections(planningCtx, req.Interjections, func(ctx context.Context) (*llm.GenerateResponse, error) {
-			return r.client.Generate(ctx, planningRequest)
-		})
+		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil {
 			lastRequest, lastResponse = planningRequest, resp
-		}
-		if interjected {
-			// 这一步作废不计数，下一圈带上补充重做；已经执行的工具结果都还在。
-			cancel()
-			continue
 		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
@@ -454,6 +448,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			sent, steps = r.sendInterim(ctx, resp.ToolCalls, sendCallIndices(resp.ToolCalls), steps)
 			nativeProtocol = true
 			messages = appendToolRepair(messages, resp, sent, lastText, "")
+			continue
+		}
+		// 收尾这一步回来时同一个人又补了一句：答案还没发出去，带着补充重做这一步，
+		// 合成一份答案，不先发一条没看到补充的回复。下一圈开头会把补充接进上下文。
+		if req.Interjections != nil && interjectionRedos < maxInterjectionRedos && req.Interjections.Pending() && finalStep(resp, lastText, r.cfg.FinalizeFields...) {
+			interjectionRedos++
 			continue
 		}
 		action, ok := parseAction(lastText, r.cfg.FinalizeFields...)
