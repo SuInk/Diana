@@ -30,6 +30,8 @@ const (
 	// 只存元数据，字节放系统的文件缓存里，所以这个上限可以给得宽。
 	avatarCacheEntries = 2048
 	avatarFetchTimeout = 8 * time.Second
+	// avatarFailureRetry 是取不到头像之后多久再试。
+	avatarFailureRetry = 5 * time.Minute
 	avatarMaxBytes     = 4 << 20
 )
 
@@ -50,6 +52,8 @@ type avatarCache struct {
 	inflight map[string]chan struct{}
 	client   *http.Client
 	now      func() time.Time
+	// fetchTimeout 是单次回源的上限，测试里会调短。
+	fetchTimeout time.Duration
 }
 
 func newAvatarCache() *avatarCache {
@@ -58,6 +62,8 @@ func newAvatarCache() *avatarCache {
 		inflight: make(map[string]chan struct{}),
 		client:   &http.Client{Timeout: avatarFetchTimeout},
 		now:      time.Now,
+
+		fetchTimeout: avatarFetchTimeout,
 	}
 }
 
@@ -74,7 +80,7 @@ func (c *avatarCache) cachedSHA(key string) string {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if entry, ok := c.entries[key]; ok && c.now().Sub(entry.checkedAt) < avatarRecheckInterval {
+	if entry, ok := c.entries[key]; ok && !c.staleLocked(entry) {
 		return entry.sha
 	}
 	return ""
@@ -91,49 +97,91 @@ func (c *avatarCache) knownSHA(key string) (sha string, stale bool) {
 	if !ok {
 		return "", false
 	}
-	return entry.sha, c.now().Sub(entry.checkedAt) >= avatarRecheckInterval
+	return entry.sha, c.staleLocked(entry)
 }
 
 // load 取头像内容，必要时回源。fetch 只在缓存过期或没有时调用。
+//
+// 回源在后台跑，调用方最多等到自己的 ctx 结束：通道卡住（比如 QQ 官方通道的锁
+// 一直没放）时，浏览器那条请求不能跟着挂上两分钟。回源本身另有
+// fetchTimeout 兜底，超时按失败处理，同一张头像不会一直占着 inflight。
 func (c *avatarCache) load(ctx context.Context, key string, fetch func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error)) (*avatarEntry, bool) {
-	for {
-		c.mu.Lock()
-		entry, ok := c.entries[key]
-		if ok && c.now().Sub(entry.checkedAt) < avatarRecheckInterval {
-			c.mu.Unlock()
-			return entry, true
-		}
-		wait, busy := c.inflight[key]
-		if busy {
-			c.mu.Unlock()
-			select {
-			case <-wait:
-				continue
-			case <-ctx.Done():
-				// 等不到就把手上这份旧的先给出去，总比列表里空一格强。
-				return entry, entry != nil
-			}
-		}
-		done := make(chan struct{})
-		c.inflight[key] = done
+	c.mu.Lock()
+	entry := c.entries[key]
+	if entry != nil && !c.staleLocked(entry) {
 		c.mu.Unlock()
-
-		fresh, err := fetch(ctx, entry)
-		c.mu.Lock()
-		delete(c.inflight, key)
-		if err == nil && fresh != nil {
-			fresh.checkedAt = c.now()
-			c.entries[key] = fresh
-			entry = fresh
-		} else if entry != nil {
-			// 回源失败不丢已有的那张，只是推迟下一次校验，免得每个请求都去撞。
-			entry.checkedAt = c.now()
-		}
-		c.evictLocked()
-		c.mu.Unlock()
-		close(done)
-		return entry, entry != nil
+		return entry, len(entry.body) > 0
 	}
+	done, busy := c.inflight[key]
+	if !busy {
+		done = make(chan struct{})
+		c.inflight[key] = done
+		go c.refresh(ctx, key, entry, fetch, done)
+	}
+	c.mu.Unlock()
+
+	select {
+	case <-done:
+		c.mu.Lock()
+		entry = c.entries[key]
+		c.mu.Unlock()
+	case <-ctx.Done():
+		// 等不到就把手上这份旧的先给出去，总比列表里空一格强。
+	}
+	return entry, entry != nil && len(entry.body) > 0
+}
+
+// refresh 回源一次并写回结果，完事关掉 done。
+func (c *avatarCache) refresh(parent context.Context, key string, previous *avatarEntry, fetch func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error), done chan struct{}) {
+	defer recoverGoroutinePanic("avatar_cache.refresh")
+	result := make(chan *avatarEntry, 1)
+	go func() {
+		defer recoverGoroutinePanic("avatar_cache.fetch")
+		// 调用方走了也要取完：结果是给下一个请求用的。
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), c.fetchTimeout)
+		defer cancel()
+		fresh, err := fetch(ctx, previous)
+		if err != nil {
+			fresh = nil
+		}
+		result <- fresh
+	}()
+	var fresh *avatarEntry
+	timer := time.NewTimer(c.fetchTimeout + time.Second)
+	select {
+	case fresh = <-result:
+	case <-timer.C:
+		// fetch 没理会 ctx（卡在锁上之类），不再等它。
+	}
+	timer.Stop()
+
+	c.mu.Lock()
+	delete(c.inflight, key)
+	now := c.now()
+	switch {
+	case fresh != nil:
+		fresh.checkedAt = now
+		c.entries[key] = fresh
+	case previous != nil && len(previous.body) > 0:
+		// 回源失败不丢已有的那张，只是推迟下一次校验，免得每个请求都去撞。
+		previous.checkedAt = now
+	default:
+		// 压根没取到也记一笔：avatarFailureRetry 之内直接回 404，不再每次都等回源。
+		c.entries[key] = &avatarEntry{checkedAt: now}
+	}
+	c.evictLocked()
+	c.mu.Unlock()
+	close(done)
+}
+
+// staleLocked 判断条目该不该回源了。取失败的空条目只挡 avatarFailureRetry，
+// 头像可能是暂时取不到（通道还没连上），不能一挡就是几个小时。
+func (c *avatarCache) staleLocked(entry *avatarEntry) bool {
+	interval := avatarRecheckInterval
+	if len(entry.body) == 0 {
+		interval = avatarFailureRetry
+	}
+	return c.now().Sub(entry.checkedAt) >= interval
 }
 
 // evictLocked 超出条目上限就整批清掉。这里存的是可以随时重取的东西，清空的代价

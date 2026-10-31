@@ -201,3 +201,82 @@ func TestAvatarCacheCollapsesConcurrentRefresh(t *testing.T) {
 		t.Fatalf("同一张头像同时回源了 %d 次，应当只有 1 次", got)
 	}
 }
+
+// 生产上 QQ 官方通道锁死时，取机器人头像卡在锁上不理 ctx，浏览器那条请求一挂就是
+// 两分钟，下次打开页面再挂一遍。回源要有上限，超时记成失败，短时间内不再去撞。
+func TestAvatarCacheGivesUpOnHungFetch(t *testing.T) {
+	cache := newAvatarCache()
+	cache.fetchTimeout = 20 * time.Millisecond
+	release := make(chan struct{})
+	defer close(release)
+	var calls atomic.Int64
+	hung := func(context.Context, *avatarEntry) (*avatarEntry, error) {
+		calls.Add(1)
+		<-release
+		return nil, errUnexpectedAvatarStatus
+	}
+
+	started := time.Now()
+	if entry, ok := cache.load(t.Context(), "member:bot", hung); ok {
+		t.Fatalf("卡住的回源不该算取到：%+v", entry)
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("等了 %v 才放弃", elapsed)
+	}
+	started = time.Now()
+	if _, ok := cache.load(t.Context(), "member:bot", hung); ok || time.Since(started) > 100*time.Millisecond {
+		t.Fatalf("失败结果没缓存住：ok=%v 用时 %v", ok, time.Since(started))
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("回源 %d 次，失败后应先挡住", got)
+	}
+}
+
+// 调用方等不及（ctx 到期）就先走，回源继续跑完，结果留给下一个请求。
+func TestAvatarCacheCallerDoesNotWaitPastContext(t *testing.T) {
+	cache := newAvatarCache()
+	gate := make(chan struct{})
+	slow := func(context.Context, *avatarEntry) (*avatarEntry, error) {
+		<-gate
+		return &avatarEntry{sha: "abc", contentType: "image/png", body: onePixelPNG("x")}, nil
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, ok := cache.load(ctx, "member:1", slow); ok {
+		t.Fatal("还没取到就报成功")
+	}
+	close(gate)
+	deadline := time.Now().Add(2 * time.Second)
+	for cache.cachedSHA("member:1") != "abc" {
+		if time.Now().After(deadline) {
+			t.Fatal("调用方走了以后回源结果没写回缓存")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 取不到的头像过了 avatarFailureRetry 要再试：通道可能只是还没连上。
+func TestAvatarCacheRetriesFailureAfterShortDelay(t *testing.T) {
+	cache := newAvatarCache()
+	now := time.Now()
+	cache.now = func() time.Time { return now }
+	var fail atomic.Bool
+	fail.Store(true)
+	fetch := func(context.Context, *avatarEntry) (*avatarEntry, error) {
+		if fail.Load() {
+			return nil, errUnexpectedAvatarStatus
+		}
+		return &avatarEntry{sha: "abc", contentType: "image/png", body: onePixelPNG("x")}, nil
+	}
+	if _, ok := cache.load(t.Context(), "member:1", fetch); ok {
+		t.Fatal("失败的回源报成了成功")
+	}
+	fail.Store(false)
+	if _, ok := cache.load(t.Context(), "member:1", fetch); ok {
+		t.Fatal("失败后应先挡一阵")
+	}
+	now = now.Add(avatarFailureRetry + time.Second)
+	if entry, ok := cache.load(t.Context(), "member:1", fetch); !ok || entry.sha != "abc" {
+		t.Fatalf("过了重试间隔没再取：%+v", entry)
+	}
+}

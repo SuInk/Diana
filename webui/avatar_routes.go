@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 
@@ -17,6 +19,8 @@ import (
 const (
 	avatarKindGroup  = "group"
 	avatarKindMember = "member"
+	// profileAvatarWarmWait 是配置接口为补机器人头像哈希最多多等的时间。
+	profileAvatarWarmWait = 2 * time.Second
 )
 
 // registerAvatarRoutes 注册按内容寻址的头像端点。
@@ -145,9 +149,25 @@ func (h *BotHandler) fetchAvatar(ctx context.Context, kind, profileID, id string
 }
 
 // withConsoleProfileAvatars 给配置响应补上后台可直接显示的机器人头像地址。
-// 地址只指向本机代理；Telegram Bot Token 始终留在服务端。运行态暂时还没有
-// self_id 时退回已记住的 bot_account，连接建立后下一次刷新会换成实时账号。
+// 地址只指向本机代理；Telegram Bot Token 始终留在服务端。
 func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) assistant.ConfigPayload {
+	accounts := h.profileAvatarAccounts(payload)
+	enrich := func(profile *assistant.ConfigPayload) {
+		if account, ok := accounts[strings.TrimSpace(profile.ID)]; ok {
+			profile.AvatarURL = h.consoleProfileAvatarURL(profile.ID, account)
+		}
+	}
+	for index := range payload.Profiles {
+		enrich(&payload.Profiles[index])
+	}
+	enrich(&payload)
+	return payload
+}
+
+// profileAvatarAccounts 列出要由系统推头像的机器人：profile → 取头像用的账号，
+// 账号为空表示暂时推不出来。管理员自己填了头像的不在里面。运行态暂时还没有
+// self_id 时退回已记住的 bot_account，连接建立后下一次刷新会换成实时账号。
+func (h *BotHandler) profileAvatarAccounts(payload assistant.ConfigPayload) map[string]string {
 	selfIDs := map[string]string{}
 	if h != nil && h.runtime != nil {
 		status := h.runtime.Status()
@@ -160,25 +180,51 @@ func (h *BotHandler) withConsoleProfileAvatars(payload assistant.ConfigPayload) 
 			selfIDs[payload.Profiles[0].ID] = strings.TrimSpace(status.Channel.SelfID)
 		}
 	}
-	enrich := func(profile *assistant.ConfigPayload) {
-		if profile == nil {
-			return
-		}
+	accounts := map[string]string{}
+	add := func(profile assistant.ConfigPayload) {
 		if stored := strings.TrimSpace(profile.AvatarURL); stored != "" && !isDerivedProfileAvatarURL(stored) {
 			return
 		}
-		account := firstNonEmptyWebUI(selfIDs[strings.TrimSpace(profile.ID)], strings.TrimSpace(profile.BotAccount))
-		if account != "" {
-			profile.AvatarURL = h.consoleProfileAvatarURL(profile.ID, account)
-		} else {
-			profile.AvatarURL = ""
+		profileID := strings.TrimSpace(profile.ID)
+		accounts[profileID] = firstNonEmptyWebUI(selfIDs[profileID], strings.TrimSpace(profile.BotAccount))
+	}
+	for _, profile := range payload.Profiles {
+		add(profile)
+	}
+	add(payload)
+	return accounts
+}
+
+// warmProfileAvatars 在拼配置响应之前把还不知道哈希的机器人头像取一遍。头像缓存
+// 只在进程内，重启（升级）后的头一次配置响应拿不到哈希，只能发不带 v= 的地址，
+// 浏览器手上那张永久缓存的图就对不上，每次重启都要重新下载。内容哈希只跟图片
+// 有关，这里取到了，地址就和重启前一模一样。机器人就几台，并行取，最多等
+// profileAvatarWarmWait；取不到的照旧发不带哈希的地址，失败结果有短缓存，
+// 下一次配置请求不会再等。
+func (h *BotHandler) warmProfileAvatars(ctx context.Context, payload assistant.ConfigPayload) {
+	ctx, cancel := context.WithTimeout(ctx, profileAvatarWarmWait)
+	defer cancel()
+	store := h.avatarStore()
+	var wg sync.WaitGroup
+	for profileID, account := range h.profileAvatarAccounts(payload) {
+		if account == "" {
+			continue
 		}
+		key := avatarCacheKey(avatarKindMember, profileID, account)
+		if sha, _ := store.knownSHA(key); sha != "" {
+			// 已经有哈希就不等：过期的由 consoleProfileAvatarURL 在后台校验。
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer recoverGoroutinePanic("avatar_routes.warmProfileAvatars")
+			store.load(ctx, key, func(ctx context.Context, previous *avatarEntry) (*avatarEntry, error) {
+				return h.fetchAvatar(ctx, avatarKindMember, profileID, account, previous)
+			})
+		}()
 	}
-	for index := range payload.Profiles {
-		enrich(&payload.Profiles[index])
-	}
-	enrich(&payload)
-	return payload
+	wg.Wait()
 }
 
 // isDerivedProfileAvatarURL 判断机器人头像地址是不是系统按账号推出来的（QQ 头像

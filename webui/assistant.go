@@ -532,10 +532,12 @@ func (h *BotHandler) platforms(c *gin.Context) {
 func (h *BotHandler) getConfig(c *gin.Context) {
 	if queryBool(c.Query("include_secrets")) {
 		payload := assistant.PayloadFromProfileSetWithSecrets(h.profiles.Profiles(), botProfileScope(c))
+		h.warmProfileAvatars(c.Request.Context(), payload)
 		c.JSON(http.StatusOK, h.withConsoleProfileAvatars(payload))
 		return
 	}
 	payload := assistant.PayloadFromProfileSet(h.profiles.Profiles(), botProfileScope(c))
+	h.warmProfileAvatars(c.Request.Context(), payload)
 	c.JSON(http.StatusOK, h.withConsoleProfileAvatars(payload))
 }
 

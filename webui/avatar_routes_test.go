@@ -268,3 +268,28 @@ func TestRemoteAvatarURLForQQOfficialMembers(t *testing.T) {
 		t.Fatalf("QQ official group avatar has no known address, got %q", got)
 	}
 }
+
+// 头像缓存只在进程内：重启后的头一次配置响应原本拿不到哈希，地址跟浏览器缓存的
+// 那张对不上，每次升级都要重新下载。配置接口先把机器人头像取一遍，地址就带上 v=。
+func TestGetConfigWarmsProfileAvatarHash(t *testing.T) {
+	body := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 3}
+	runtime := &memberAvatarStubRuntime{avatar: assistant.GroupAvatar{Data: body, ContentType: "image/png"}, found: true}
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID = "tg"
+	telegram.Platform = assistant.PlatformTelegram
+	telegram.BotAccount = "12345"
+	handler := &BotHandler{runtime: runtime, profiles: NewMemoryBotProfileStore(telegram)}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.GET("/api/assistant/config", handler.getConfig)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/config", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	want := "v=" + avatarContentSHA(body)
+	if !strings.Contains(rec.Body.String(), want) {
+		t.Fatalf("配置响应的机器人头像没带哈希 %s：%s", want, rec.Body.String())
+	}
+}
