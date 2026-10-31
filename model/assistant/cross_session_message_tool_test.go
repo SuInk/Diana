@@ -533,7 +533,7 @@ func TestCrossSessionToolDeliversMessageVerbatim(t *testing.T) {
 	}
 }
 
-// 模型显式写的 [diana-msg] 仍是分条信号，分出来的每条同样保留原文排版。
+// 模型显式写的 <diana-message/> 仍是分条信号，分出来的每条同样保留原文排版。
 func TestCrossSessionToolSplitsOnlyOnExplicitMarker(t *testing.T) {
 	first := "第一篇：标题\n\n正文第一段。\n正文第二段。"
 	second := "第二篇：标题\n只有一段。"
@@ -545,12 +545,12 @@ func TestCrossSessionToolSplitsOnlyOnExplicitMarker(t *testing.T) {
 	}
 	sent := channel.sentSnapshot()
 	if len(sent) != 2 || sent[0].Text != first || sent[1].Text != second {
-		t.Fatalf("应当按 [diana-msg] 原样分成两条：%#v", sent)
+		t.Fatalf("应当按 <diana-message/> 原样分成两条：%#v", sent)
 	}
 }
 
 func TestSplitVerbatimReplyKeepsLayout(t *testing.T) {
-	text := "第一行。\r\n\r\n第二行[diana-line]第三行。"
+	text := "第一行。\r\n\r\n第二行<diana-br/>第三行。"
 	got := splitVerbatimReply(text)
 	want := "第一行。\n\n第二行\n第三行。"
 	if len(got) != 1 || got[0] != want {
