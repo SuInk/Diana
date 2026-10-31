@@ -1066,6 +1066,7 @@ type ModelRecoveryPolicy struct {
 	FailuresBeforeCooldown int `json:"failures_before_cooldown,omitempty"`
 }
 
+// normalizeModelRoles 只规范化各用途自身；继承在选路时解析，不能在保存时合并绑定。
 func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 	out := map[string]ModelRole{}
 	for key, role := range roles {
@@ -1085,27 +1086,10 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 			out[key] = role
 		}
 	}
-	mergeMediaParseIntoVision(out)
 	if len(out) == 0 {
 		return nil
 	}
 	return out
-}
-
-// mergeMediaParseIntoVision 把旧的「媒体解析」并进「视觉理解」。视觉理解以前是带图
-// 那一轮的回答模型，现在图直接交给对话模型，它只剩「替对话模型看图」这一件事：
-// 写描述、带着问题再看一次，和媒体解析是同一份活。媒体解析单独绑过的以它为准——
-// 那才是用户为看图挑的模型；它只是跟随对话、而视觉理解单独绑了的，留视觉理解。
-func mergeMediaParseIntoVision(roles map[string]ModelRole) {
-	media, ok := roles[PurposeMediaParse]
-	if !ok {
-		return
-	}
-	delete(roles, PurposeMediaParse)
-	if vision, bound := roles["vision"]; bound && !vision.FollowChat && media.FollowChat {
-		return
-	}
-	roles["vision"] = media
 }
 
 func normalizeModelRole(role ModelRole) ModelRole {

@@ -70,30 +70,53 @@ func TestAutomaticVideoDisabledPreservesMediaIndex(t *testing.T) {
 	}
 }
 
-// 旧的「媒体解析」并进「视觉理解」：单独绑过的媒体解析顶替跟随对话的视觉理解，
-// 看图的用途都走它；正式回复不受影响。
-func TestMediaParserMergesIntoVision(t *testing.T) {
-	roles := normalizeModelRoles(map[string]ModelRole{"chat": bindingRole("expensive"), "vision": {FollowChat: true}, PurposeMediaParse: bindingRole("cheap-vision")})
-	if _, ok := roles[PurposeMediaParse]; ok {
-		t.Fatal("media_parse should be merged away")
-	}
-	for _, purpose := range []string{"image_description_cache", "sticker_description", "image_describe", "image_ocr", imageQuestionPurpose} {
-		role, ok := modelRoleFor(roles, purpose, llm.GroupVision)
-		if !ok || role.Model != "cheap-vision" {
-			t.Fatalf("%s routed to %#v", purpose, role)
-		}
-	}
-	if role, _ := modelRoleFor(roles, PurposeReply, llm.GroupChat); role.Model != "expensive" {
-		t.Fatal("normal replies changed model")
-	}
-	// 媒体解析只是跟随对话、视觉理解单独绑了的，留视觉理解。
-	roles = normalizeModelRoles(map[string]ModelRole{"chat": bindingRole("expensive"), "vision": bindingRole("strong-vision"), PurposeMediaParse: {FollowChat: true}})
-	if role, _ := modelRoleFor(roles, "image_description_cache", llm.GroupVision); role.Model != "strong-vision" {
-		t.Fatalf("a follow-chat media parser must not override a bound vision role: %#v", role)
-	}
-	delete(roles, "vision")
-	if role, _ := modelRoleFor(roles, "image_description_cache", llm.GroupVision); role.Model != "expensive" {
-		t.Fatal("unconfigured vision lost the chat fallback")
+// 保存并重新读取后，媒体解析的独立绑定和跟随状态不能改写视觉理解。
+func TestMediaParserConfigRoundTripKeepsIndependentRoles(t *testing.T) {
+	independent := bindingRole("cheap-vision")
+	for _, tc := range []struct {
+		name  string
+		media *ModelRole
+		want  string
+	}{
+		{"independent", &independent, "cheap-vision"},
+		{"follow_chat", &ModelRole{FollowChat: true}, "expensive"},
+		{"follow_vision", nil, "strong-vision"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vision := bindingRole("strong-vision")
+			cfg := BotConfig{ModelRoles: map[string]ModelRole{"chat": bindingRole("expensive"), "vision": vision}}
+			if tc.media != nil {
+				cfg.ModelRoles[PurposeMediaParse] = *tc.media
+			}
+			cfg = cfg.WithDefaults()
+			// 覆盖 API payload、保存规范化与再次加载的链路。
+			for range 2 {
+				cfg = ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{}).WithDefaults()
+			}
+			roles := cfg.ModelRoles
+			if got := roles["vision"]; got.Model != vision.Model || got.ProfileID != vision.ProfileID || got.FollowChat {
+				t.Fatalf("vision binding changed: %#v", got)
+			}
+			media, exists := roles[PurposeMediaParse]
+			if exists != (tc.media != nil) {
+				t.Fatalf("media binding presence = %v", exists)
+			}
+			if tc.media != nil && (media.FollowChat != tc.media.FollowChat || media.Model != tc.media.Model) {
+				t.Fatalf("media binding changed: %#v", media)
+			}
+			for _, purpose := range []string{PurposeMediaParse, "image_description_cache", "sticker_description", "image_describe", "image_ocr", imageQuestionPurpose} {
+				role, ok := modelRoleFor(roles, purpose, llm.GroupVision)
+				if !ok || role.Model != tc.want {
+					t.Fatalf("%s routed to %#v, want %s", purpose, role, tc.want)
+				}
+			}
+			if role, _ := modelRoleFor(roles, PurposeReply, llm.GroupChat); role.Model != "expensive" {
+				t.Fatal("normal replies changed model")
+			}
+			if role, _ := modelRoleFor(roles, "", llm.GroupVision); role.Model != "strong-vision" {
+				t.Fatal("general vision changed model")
+			}
+		})
 	}
 }
 
@@ -150,6 +173,40 @@ func TestMediaParserFailureDoesNotUseChatProvider(t *testing.T) {
 	for _, model := range used {
 		if model != "cheap" {
 			t.Fatalf("unexpected costly fallback: %v", used)
+		}
+	}
+}
+
+func TestMediaParserRegistryBindingDoesNotReplaceVision(t *testing.T) {
+	registry, err := llm.RegistryFromDocument(llm.ProviderRegistryDocument{
+		Version:   1,
+		Providers: []llm.ProviderDefinition{{ID: "p", Name: "Provider", Protocol: llm.ProtocolOpenAIResponses, BaseURL: "https://example.invalid/v1", APIKey: "test", Enabled: true}},
+		Models: []llm.ModelDefinition{
+			{ID: "p:chat", ProviderID: "p", ModelID: "chat", Name: "chat"},
+			{ID: "p:vision", ProviderID: "p", ModelID: "vision", Name: "vision"},
+			{ID: "p:media", ProviderID: "p", ModelID: "media", Name: "media"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, follow := range []bool{false, true} {
+		roles := map[string]ModelRole{
+			"chat":            {ProviderID: "p", ModelID: "chat"},
+			"vision":          {ProviderID: "p", ModelID: "vision"},
+			PurposeMediaParse: {ProviderID: "p", ModelID: "media"},
+		}
+		wantMedia := "p:media"
+		if follow {
+			roles[PurposeMediaParse] = ModelRole{FollowChat: true}
+			wantMedia = "p:chat"
+		}
+		roles = normalizeModelRoles(roles)
+		for _, tc := range []struct{ purpose, want string }{{"image_description_cache", wantMedia}, {"", "p:vision"}} {
+			selection, ok, err := registrySelectionForGroup(registry, llm.ProfileSet{}, roles, tc.purpose, llm.GroupVision, "")
+			if err != nil || !ok || selection.ProviderID != "p" || selection.ModelID != tc.want {
+				t.Fatalf("follow=%v purpose=%q: selection=%#v ok=%v err=%v", follow, tc.purpose, selection, ok, err)
+			}
 		}
 	}
 }

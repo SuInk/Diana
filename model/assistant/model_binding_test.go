@@ -4,6 +4,8 @@
 package assistant
 
 import (
+	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -145,5 +147,45 @@ func TestNormalizeModelRolesKeepsOrderedCrossGroupFallbacks(t *testing.T) {
 	}
 	if role.Fallbacks[1].ProfileID != "final" || len(role.Fallbacks[1].Fallbacks) != 0 {
 		t.Fatalf("second fallback = %#v", role.Fallbacks[1])
+	}
+}
+
+// 所有可配置用途同时存在时，保存其中一项不能吞掉或覆盖另一项。
+func TestAllModelBindingsSurviveConfigRoundTrip(t *testing.T) {
+	for _, mode := range []string{"profile", "group", "registry", "follow_chat"} {
+		t.Run(mode, func(t *testing.T) {
+			roles := map[string]ModelRole{}
+			for _, key := range ModelBindingKeys() {
+				role := ModelRole{ProfileID: "provider-" + key, Model: "model-" + key, RoutingStrategy: "weighted", Weight: 7,
+					Params: map[string]string{"temperature": "0.5"}, ReasoningEffort: "high",
+					Fallbacks: []ModelRole{{ProfileID: "backup-" + key, Model: "backup-model-" + key, Standby: true, Weight: 3}}}
+				if mode == "group" {
+					role.ProfileID = ""
+					role.Group = "group-" + key
+				}
+				if mode == "registry" {
+					role.ProfileID = ""
+					role.ProviderID, role.ModelID = "provider-"+key, "model-"+key
+					role.Fallbacks = []ModelRole{{ProviderID: "backup-" + key, ModelID: "backup-model-" + key, Model: "backup-model-" + key, Standby: true, Weight: 3}}
+				}
+				if mode == "follow_chat" && key != "chat" {
+					role = ModelRole{FollowChat: true}
+				}
+				roles[key] = normalizeModelRole(role)
+			}
+			cfg := BotConfig{ModelRoles: roles}
+			data, err := json.Marshal(PayloadFromConfig(cfg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload ConfigPayload
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			restored := ConfigFromPayload(payload, BotConfig{}).WithDefaults().ModelRoles
+			if !reflect.DeepEqual(restored, roles) {
+				t.Fatalf("model bindings changed during save/load:\ngot %#v\nwant %#v", restored, roles)
+			}
+		})
 	}
 }
