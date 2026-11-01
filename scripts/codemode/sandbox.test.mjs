@@ -10,11 +10,18 @@ async function withSandbox(options, run) {
     ...options,
     onWorkerStarted: exited => workers.push(exited),
   });
+  // The SDK unrefs terminating workers. Unlike the JSONL host's stdin, a
+  // Node 22 test has no live handle while awaiting their exit notifications.
+  const keepAlive = setTimeout(() => {}, 10000);
   try {
     await run(sandbox);
   } finally {
-    await sandbox.close();
-    await Promise.all(workers);
+    try {
+      await sandbox.close();
+      await Promise.all(workers);
+    } finally {
+      clearTimeout(keepAlive);
+    }
   }
 }
 
