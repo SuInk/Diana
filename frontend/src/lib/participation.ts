@@ -1,4 +1,6 @@
 export interface ParticipationPreferences {
+  trigger_mode?: "semantic" | "rules";
+  rule_chance?: number;
 	 relevance_level?: string;
 	 chat_level?: string;
   desire: number;
@@ -12,6 +14,7 @@ export interface ParticipationPreferences {
 }
 
 export const defaultParticipationCooldownSeconds = 30;
+export const defaultRuleTriggerChance = 30;
 export const defaultParticipationScoreThreshold = 60;
 
 // proactiveCriteriaMaxLength 镜像 model/assistant/router_criteria.go 的
@@ -99,7 +102,7 @@ export const participationPresets = [
 
 export function participationPreset(level: string, cooldownSeconds = defaultParticipationCooldownSeconds): ParticipationPreferences {
   const score = participationPresets.find(p => p.value === level)?.score ?? 25;
-  return { desire: score, social: score, followup: score, restraint: 100 - score, information: 100 - score, cooldown_seconds: cooldownSeconds };
+  return { rule_chance: defaultRuleTriggerChance, desire: score, social: score, followup: score, restraint: 100 - score, information: 100 - score, cooldown_seconds: cooldownSeconds };
 }
 
 export function participationPresetName(value: ParticipationPreferences): string {
