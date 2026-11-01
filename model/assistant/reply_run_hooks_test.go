@@ -12,6 +12,26 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
+	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
+		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
+		hooks := newReplyRunHooks(cfg)
+		req := llm.GenerateRequest{Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "old context", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: "current"},
+		}}
+		for i := 0; i < 2; i++ {
+			got, err := hooks.PrepareRequest(context.Background(), req)
+			if err != nil || len(got.Messages) != 4 || strings.Count(got.Messages[3].Content, rule) != 1 {
+				t.Fatalf("expression reminder missing or duplicated: %+v err=%v", got, err)
+			}
+			if len(req.Messages) != 2 || got.Messages[2].Content != "current" || !got.Messages[0].CacheBreakpoint {
+				t.Fatal("expression reminder changed history, current input or cache prefix")
+			}
+		}
+	}
+}
+
 func TestReplyRunHooksUseActualExecutionAndKeepPrivateInputsOut(t *testing.T) {
 	hooks := newReplyRunHooks()
 	ctx := context.Background()

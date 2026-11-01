@@ -135,8 +135,12 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 	if reply := after[len(before)]; reply.Role != llm.RoleAssistant || len(reply.ToolCalls) != 0 || reply.Content != "在的" {
 		t.Fatalf("first reply missing after the prefix: %#v", reply)
 	}
-	if !strings.Contains(appendContextText(after[len(after)-1]), "吃了吗") {
-		t.Fatalf("current message is not last: %q", appendContextText(after[len(after)-1]))
+	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。
+	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule {
+		t.Fatalf("current expression reminder missing: %#v", last)
+	}
+	if current := after[len(after)-2]; current.Role != llm.RoleUser || !strings.Contains(appendContextText(current), "吃了吗") {
+		t.Fatalf("current message is not immediately before the reminder: %#v", current)
 	}
 }
 

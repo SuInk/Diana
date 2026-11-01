@@ -226,7 +226,13 @@ func TestRecentTextReferenceSurvivesIntoAgentProviderRequest(t *testing.T) {
 	if len(request.Messages) == 0 {
 		t.Fatal("provider request is empty")
 	}
-	currentMessage := request.Messages[len(request.Messages)-1]
+	var currentMessage llm.Message
+	for i := len(request.Messages) - 1; i >= 0; i-- {
+		if request.Messages[i].Role == llm.RoleUser {
+			currentMessage = request.Messages[i]
+			break
+		}
+	}
 	for _, want := range []string{"【运行时已解析的文本指代】", `"canonical":"GLM-5.3"`, `"shorthand":"5.3"`} {
 		if !strings.Contains(currentMessage.Content, want) {
 			t.Fatalf("current provider message missing %q: %q", want, currentMessage.Content)

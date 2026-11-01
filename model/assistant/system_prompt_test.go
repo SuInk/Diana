@@ -8,6 +8,25 @@ import (
 	"testing"
 )
 
+func TestSystemPromptConstrainsParentheticalAsides(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, event := range []MessageEvent{
+		{Kind: EventKindPrivate, UserID: "u"},
+		{Kind: EventKindGroup, GroupID: "g", UserID: "u"},
+		{Kind: EventKindGroup, GroupID: "g", UserID: "u", chatInReply: true},
+	} {
+		prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
+		if strings.Count(prompt, replyUnclosedBracketRule) != 1 {
+			t.Fatalf("bracket rule missing or duplicated for kind=%s chatIn=%v", event.Kind, event.chatInReply)
+		}
+	}
+	for _, boundary := range []string{"吐槽、内心独白或俏皮话", "不要只把括号去掉", "信息注释", "代码", "数学表达式", "引用原文", "人设明确要求的动作描写", "行尾单独一个「（」作为语气符号可以保留"} {
+		if !strings.Contains(replyUnclosedBracketRule, boundary) {
+			t.Errorf("bracket rule lost boundary %q", boundary)
+		}
+	}
+}
+
 func TestFactVerificationAppliesToDirectQuestionsAndInterjections(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, event := range []MessageEvent{

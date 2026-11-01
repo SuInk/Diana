@@ -15,7 +15,7 @@ import (
 // This temporary request context is rebuilt from actual callbacks; it is never
 // saved as user speech, a notebook fact, or another source for history search.
 // It is evidence guidance, not a semantic factuality classifier.
-func newReplyRunHooks() agent.RunHooks {
+func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 	type execution struct {
 		Tool   string            `json:"tool"`
 		Status string            `json:"status"`
@@ -60,6 +60,12 @@ func newReplyRunHooks() agent.RunHooks {
 			messages = append(messages, req.Messages[:at]...)
 			messages = append(messages, note)
 			req.Messages = append(messages, req.Messages[at:]...)
+			if len(configs) > 0 {
+				// 放在本轮输入和工具目录之后，避免续接历史把表达规则盖过。
+				// 不改写历史消息、不拆工具批次，也不事后删正文。
+				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem,
+					Content: "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)})
+			}
 			return req, nil
 		},
 	}

@@ -87,7 +87,8 @@ const replyEmojiRule = "不要在回复里使用 emoji（😂🤣👍✨ 这类�
 // replyUnclosedBracketRule 同样对所有风格生效。线上 3 天里约 7% 的回复是「正文（再接
 // 一段话」只开不合的写法，群友这么写，模型就跟着学。扮演风格的动作描写写的是闭合
 // 括号，不受影响；行尾单独一个「（」的语气用法也不在这条里。
-const replyUnclosedBracketRule = "不要用只开不合的「（」接一段补充的话，例如「这叫声控开关（摔一个来一个，百试百灵」；要补充就另起一句或把括号写完整，也不要照抄聊天记录里这种写法。"
+// 闭合也不代表有必要：闲聊的括号吐槽应直接表达，而不是只教模型把尾巴闭合。
+const replyUnclosedBracketRule = "日常聊天只写直接说出口的话，不在括号里追加吐槽、内心独白或俏皮话，也不要照抄历史回复里的这种补充。有必要说的就融入正文，没必要的就省掉，不要只把括号去掉却保留多余的补一句。必要的信息注释、缩写解释、代码、数学表达式和引用原文照常保留括号；用户明确要求的括号写法和人设明确要求的动作描写不受此限。行尾单独一个「（」作为语气符号可以保留，但它后面不能再有文字。群风格说句尾爱挂括号也只按这个边界学，不把它扩展成括号旁白。输出前检查：括号里若是在小声吐槽或补一句玩笑，就改成直接说或省掉；例如「终于下班了（累死）」直接说「终于下班了，累死」。"
 
 // replyBlankLineRule 同样对所有风格生效，而且是这套换行协议的唯一出处。
 //
@@ -148,7 +149,7 @@ var (
 	promptReplyConversationalIntentSpec = styleSpec("conversational_intent", "聊天还是求助", "每轮注入：先分清对方在聊天还是求助，闲聊不自动给建议、不追问。", replyConversationalIntentRule)
 	promptReplyCompactPacingSpec        = styleSpec("compact_pacing", "聊天节奏", "每轮注入：尽量少发几条，按自然停顿分条。", replyCompactPacingRule)
 	promptReplyEmojiSpec                = styleSpec("emoji", "不用 emoji", "每轮注入：回复里不用彩色 emoji。", replyEmojiRule)
-	promptReplyUnclosedBracketSpec      = styleSpec("unclosed_bracket", "不写半截括号", "每轮注入：不用只开不合的「（」接一段话。", replyUnclosedBracketRule)
+	promptReplyUnclosedBracketSpec      = styleSpec("unclosed_bracket", "括号使用", "每轮注入：闲聊不套用括号吐槽，保留必要注释、明确要求的写法和句尾单独的「（」。", replyUnclosedBracketRule)
 	promptReplyBlankLineSpec            = styleSpec("blank_line", "换行协议", "每轮都注入：自然排版与显式另起消息的标记。"+replyMarkerUsage, replyBlankLineRule)
 	promptReplySegmentationSpec         = styleSpec("segmentation", "自然分条", "开启自然分条时每轮注入：按意群决定在哪里另起一条。"+replyMarkerUsage, replySegmentationRule)
 	promptReplySegmentationOffSpec      = styleSpec("segmentation_off", "关闭多条发送", "关闭自然分条时替代上一条：默认只发一条。"+replyMarkerUsage, replySegmentationMarkerOnlyRule)
