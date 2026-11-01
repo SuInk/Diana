@@ -30,6 +30,40 @@ func TestParseRenderedPageExtractsVisibleContent(t *testing.T) {
 	}
 }
 
+func TestParseRenderedPageExpandsOnlyMatchingAbbreviatedTitle(t *testing.T) {
+	for _, tc := range []struct{ title, og, want string }{
+		{"Full head...", "Full headline\nHappy Thursday", "Full headline\nHappy Thursday"},
+		{"Full head…", "Full headline", "Full headline"},
+		{"Correct title", "Different metadata", "Correct title"},
+		{"Short...", "Unrelated headline", "Short..."},
+		{"", "Fallback headline", "Fallback headline"},
+	} {
+		page, err := parseRenderedPage([]byte(`<title>`+tc.title+`</title><meta property="og:title" content="`+tc.og+`"><main>body</main>`), "https://example.com", 1000, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Title != normalizeRenderedText(tc.want) {
+			t.Fatalf("title=%q want=%q", page.Title, tc.want)
+		}
+	}
+}
+
+func TestParseRenderedPageDoesNotMistakeRecommendationForMainContent(t *testing.T) {
+	for _, raw := range []string{
+		`<body><main><aside><article><h2>Recommended</h2><p>Other topic</p></article></aside><h1>Actual post</h1><p>Actual content</p></main></body>`,
+		`<body><article>Other topic</article><main><h1>Actual post</h1><p>Actual content</p></main></body>`,
+		`<body><main><main><h1>Actual post</h1><p>Actual content</p></main><article>Other topic</article></main></body>`,
+	} {
+		page, err := parseRenderedPage([]byte(raw), "https://example.com/post", 2000, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(page.Text, "Actual post") || !strings.Contains(page.Text, "Actual content") {
+			t.Fatalf("main content lost: %q", page.Text)
+		}
+	}
+}
+
 func TestSandboxedBrowserURLRejectsLocalTargets(t *testing.T) {
 	for _, rawURL := range []string{
 		"http://127.0.0.1:8080",

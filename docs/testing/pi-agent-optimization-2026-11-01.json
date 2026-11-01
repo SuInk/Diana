@@ -1,0 +1,105 @@
+{
+  "model": "gpt-6.1-terra",
+  "source": "private production request plus controlled follow-ups",
+  "requests": [
+    {
+      "arm": "baseline",
+      "round": 0,
+      "duration_ms": 4894,
+      "usage": {
+        "input_tokens": 63018,
+        "output_tokens": 61,
+        "total_tokens": 63079
+      }
+    },
+    {
+      "arm": "baseline",
+      "round": 1,
+      "duration_ms": 3226,
+      "usage": {
+        "input_tokens": 72069,
+        "output_tokens": 57,
+        "total_tokens": 72126,
+        "cached_input_tokens": 62848
+      }
+    },
+    {
+      "arm": "baseline",
+      "round": 2,
+      "duration_ms": 3077,
+      "usage": {
+        "input_tokens": 81116,
+        "output_tokens": 49,
+        "total_tokens": 81165,
+        "cached_input_tokens": 71936
+      }
+    },
+    {
+      "arm": "optimized",
+      "round": 0,
+      "duration_ms": 3427,
+      "usage": {
+        "input_tokens": 63018,
+        "output_tokens": 50,
+        "total_tokens": 63068,
+        "cached_input_tokens": 16896
+      }
+    },
+    {
+      "arm": "optimized",
+      "round": 1,
+      "duration_ms": 2546,
+      "usage": {
+        "input_tokens": 63055,
+        "output_tokens": 15,
+        "total_tokens": 63070,
+        "cached_input_tokens": 62848
+      }
+    },
+    {
+      "arm": "optimized",
+      "round": 2,
+      "duration_ms": 5431,
+      "usage": {
+        "input_tokens": 63092,
+        "output_tokens": 47,
+        "total_tokens": 63139,
+        "cached_input_tokens": 62848
+      }
+    }
+  ],
+  "parallel_comparison": {
+    "same_content_extraction_fix_in_both_arms": true,
+    "first_model_response": "recorded production three-call envelope (not an API request)",
+    "arms": [
+      {
+        "arm": "baseline",
+        "model": "gpt-6.1-terra",
+        "duration_ms": 43990,
+        "model_turns": 4,
+        "live_model_requests": 3,
+        "steps": 3,
+        "finish_reason": "final",
+        "usage": {
+          "input_tokens": 24477,
+          "output_tokens": 444,
+          "total_tokens": 24921
+        }
+      },
+      {
+        "arm": "optimized",
+        "model": "gpt-6.1-terra",
+        "duration_ms": 18768,
+        "model_turns": 2,
+        "live_model_requests": 1,
+        "steps": 3,
+        "finish_reason": "final",
+        "usage": {
+          "input_tokens": 11796,
+          "output_tokens": 310,
+          "total_tokens": 12106
+        }
+      }
+    ]
+  }
+}

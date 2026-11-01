@@ -1,0 +1,367 @@
+{
+  "model_source": "miku app_state.bot_config.model_roles.chat at replay time",
+  "no_chat_delivery": true,
+  "runs": [
+    {
+      "source": "ordinary.json",
+      "valid": false,
+      "note": "Ordinary browser tools; final answer contains verified excerpt.",
+      "arm": "ordinary",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 45813,
+      "live_model_calls": 3,
+      "script_used": false,
+      "usage": {
+        "input_tokens": 16037,
+        "output_tokens": 1054,
+        "total_tokens": 17091
+      },
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12303,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 13394,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：无正文\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time.\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：Happy Thursday\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today.\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：无正文",
+      "previous_valid": true
+    },
+    {
+      "source": "codemode-not-used.json",
+      "valid": false,
+      "note": "Model did not use Code Mode; excluded from Code Mode comparison.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 26217,
+      "live_model_calls": 2,
+      "script_used": false,
+      "usage": {
+        "input_tokens": 8339,
+        "output_tokens": 574,
+        "total_tokens": 8913
+      },
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12477,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文。\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time.\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：Happy Thursday\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today.\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文。",
+      "previous_valid": false
+    },
+    {
+      "source": "codemode-quality-failed.json",
+      "valid": false,
+      "note": "Script ran, but final answer omitted Happy Thursday; excluded from performance claims.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 27741,
+      "live_model_calls": 2,
+      "script_used": true,
+      "usage": {
+        "input_tokens": 7205,
+        "output_tokens": 756,
+        "total_tokens": 7961
+      },
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 11468,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11722,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11734,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 11908,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文\n\n页面标题：Never slept better and feeling reseted. Brand new me and...\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：没有正文\n\n页面标题：This celebration is moved to tomorrow as the button was...\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文",
+      "previous_valid": false
+    },
+    {
+      "source": "codemode.json",
+      "valid": false,
+      "note": "Explicit Code Mode instruction plus final-answer evidence guard; correct but slower, with repeated reads.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 68498,
+      "live_model_calls": 5,
+      "script_used": true,
+      "usage": {
+        "input_tokens": 22396,
+        "output_tokens": 1897,
+        "total_tokens": 24293
+      },
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12431,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12566,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12208,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12375,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12182,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12303,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文\n\n页面标题：Never slept better and feeling reseted. Brand new me and...\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：Happy Thursday\n\n页面标题：This celebration is moved to tomorrow as the button was...\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文",
+      "previous_valid": true
+    },
+    {
+      "source": "codemode-store.json",
+      "valid": false,
+      "note": "Invalid old body-excerpt assertion; retained for debugging only.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 62470,
+      "live_model_calls": 5,
+      "script_used": true,
+      "usage": null,
+      "error": "agent: final answer rejected: 最终摘录漏掉了已读取页面中实际存在的正文；请重新核对工具证据，不要把有正文的页面说成无正文。",
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12302,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12330,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 13229,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 13365,
+          "error": "codemode script: tools.store does not exist. Available: browser_render, codemode. ALL_TOOLS lists every tool; searchTools(query) finds tools by topic. Check for a member with \"store\" in tools."
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11120,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11856,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12140,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12309,
+          "error": ""
+        }
+      ],
+      "answer": null
+    },
+    {
+      "source": "codemode-store-clarified.json",
+      "valid": false,
+      "note": "Invalid old body-excerpt assertion; retained for debugging only.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 77083,
+      "live_model_calls": 6,
+      "script_used": true,
+      "usage": null,
+      "error": "agent: final answer rejected: 最终摘录漏掉了已读取页面中实际存在的正文；请重新核对工具证据，不要把有正文的页面说成无正文。",
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12673,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12836,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12431,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12596,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12666,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12815,
+          "error": ""
+        }
+      ],
+      "answer": null
+    },
+    {
+      "source": "ordinary-corrected.json",
+      "valid": true,
+      "note": "Corrected full-title evidence and no fabricated body.",
+      "arm": "ordinary",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 19079,
+      "live_model_calls": 2,
+      "script_used": false,
+      "usage": {
+        "input_tokens": 7998,
+        "output_tokens": 472,
+        "total_tokens": 8470
+      },
+      "error": null,
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 12337,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文。\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time.\nHappy Thursday | daily.dev\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：没有正文。\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today. | daily.dev\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文。"
+    },
+    {
+      "source": "codemode-corrected.json",
+      "valid": true,
+      "note": "Corrected full-title evidence and no fabricated body.",
+      "arm": "codemode",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 47960,
+      "live_model_calls": 3,
+      "script_used": true,
+      "usage": {
+        "input_tokens": 11771,
+        "output_tokens": 1036,
+        "total_tokens": 12807
+      },
+      "error": null,
+      "tools": [
+        {
+          "name": "browser_render",
+          "duration_ms": 11829,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12393,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12443,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12618,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11513,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 11838,
+          "error": ""
+        },
+        {
+          "name": "browser_render",
+          "duration_ms": 12256,
+          "error": ""
+        },
+        {
+          "name": "codemode",
+          "duration_ms": 12398,
+          "error": ""
+        }
+      ],
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文。\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time. Happy Thursday | daily.dev\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：没有正文。\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today. | daily.dev\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文。"
+    },
+    {
+      "source": "cache-1.json",
+      "valid": true,
+      "note": "Recorded real model scripts replayed against real browser tools, then live model finalization. Not fully autonomous model planning.",
+      "arm": "fresh",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 34308,
+      "live_model_calls": 1,
+      "recorded_model_responses": 2,
+      "usage": {
+        "input_tokens": 4906,
+        "output_tokens": 339,
+        "total_tokens": 5245
+      },
+      "actual_browser_reads": 6,
+      "read_cache_hits": 0,
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：无正文\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time.\nHappy Thursday | daily.dev\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：无正文\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today. | daily.dev\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：无正文"
+    },
+    {
+      "source": "cache-0.json",
+      "valid": true,
+      "note": "Recorded real model scripts replayed against real browser tools, then live model finalization. Not fully autonomous model planning.",
+      "arm": "request_cache",
+      "model": "gpt-5.6-terra",
+      "elapsed_ms": 18691,
+      "live_model_calls": 1,
+      "recorded_model_responses": 2,
+      "usage": {
+        "input_tokens": 4975,
+        "output_tokens": 273,
+        "total_tokens": 5248
+      },
+      "actual_browser_reads": 3,
+      "read_cache_hits": 3,
+      "answer": "页面标题：Day 6/ Reset | daily.dev\nURL：https://daily.dev/posts/day-6-reset-hj5q4m3rz\n正文开头：没有正文。\n\n页面标题：Never slept better and feeling reseted. Brand new me and brand new usage for all ChatGPT Work and Codex users. Regaining my youth one button press at a time. Happy Thursday | daily.dev\nURL：https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn\n正文开头：没有正文。\n\n页面标题：This celebration is moved to tomorrow as the button was already pressed today. | daily.dev\nURL：https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe\n正文开头：没有正文。"
+    }
+  ],
+  "ground_truth_correction": "2026-11-02: original HTML places Happy Thursday inside h1, og:title and JSON-LD headline, not a separate body. Previous body-excerpt assertions were invalid; metrics retained only as historical observations, pending rerun with full title extraction."
+}

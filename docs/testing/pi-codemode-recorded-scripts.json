@@ -1,0 +1,17 @@
+{
+  "source": "TestLiveCodeModeReplay, gpt-5.6-terra, corrected title extraction, 2026-11-02",
+  "observed": [
+    {
+      "tool": "codemode",
+      "input": {
+        "code": "const urls=[\n  'https://daily.dev/posts/day-6-reset-hj5q4m3rz',\n  'https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn',\n  'https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe'\n];\nconst r=await Promise.all(urls.map(url=>tools.browser_render({url})));\nfunction clean(s){return (s||'').replace(/\\s+/g,' ').trim()}\nfunction bodyStart(text,title){\n  let t=clean(text);\n  if(title && t.startsWith(title)) t=clean(t.slice(title.length));\n  return t ? [...t].slice(0,120).join('') : '';\n}\nreturn r.map((x,i)=>({\n  url:urls[i],\n  title:clean(x.title)||'',\n  excerpt:bodyStart(x.content||x.text||x.body||'',clean(x.title)||'')\n}));"
+      }
+    },
+    {
+      "tool": "codemode",
+      "input": {
+        "code": "const urls=[\n'https://daily.dev/posts/day-6-reset-hj5q4m3rz',\n'https://daily.dev/posts/never-slept-better-and-feeling-reseted-brand-new-me-and-brand-new-usage-for-all-chatgpt-work-and-co-k949hlchn',\n'https://daily.dev/posts/this-celebration-is-moved-to-tomorrow-as-the-button-was-already-pressed-today--irijyduoe'];\nconst rs=await Promise.all(urls.map(url=>tools.browser_render({url})));\nreturn rs.map((r,i)=>{const t=r.content||r.text||r.body||''; const k=t.indexOf('Read post'); return {title:r.title||'',url:urls[i],nearPost:k>=0?t.slice(k,k+1200):t.slice(0,1200)};});"
+      }
+    }
+  ]
+}

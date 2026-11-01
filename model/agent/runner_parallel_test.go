@@ -62,6 +62,14 @@ func toolResults(req llm.GenerateRequest) []llm.Message {
 }
 
 func TestParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T) {
+	for _, wrapped := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "tools_execute"}[wrapped], func(t *testing.T) {
+			testParallelReadsRunConcurrentlyAndKeepCallOrder(t, wrapped)
+		})
+	}
+}
+
+func testParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T, wrapped bool) {
 	var active, peak atomic.Int32
 	search := &slowReadTool{name: WebSearchToolName, active: &active, peak: &peak, delays: map[string]time.Duration{"slow": 60 * time.Millisecond}}
 	render := &slowReadTool{name: browserRenderToolName, active: &active, peak: &peak, delays: map[string]time.Duration{"https://ai.google.dev/x": 20 * time.Millisecond}}
@@ -70,7 +78,18 @@ func TestParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T) {
 		{ID: "c2", Name: finalizeToolName, Arguments: map[string]any{"content": "太早了"}},
 		{ID: "c3", Name: browserRenderToolName, Arguments: map[string]any{"url": "https://ai.google.dev/x"}},
 	}}
-	runner, err := NewRunner(client, Config{}, NewToolRegistry(search, render))
+	cfg := Config{}
+	if wrapped {
+		cfg.CoreTools = []string{search.Name(), render.Name()}
+		for i := range client.first {
+			call := &client.first[i]
+			if call.Name != finalizeToolName {
+				call.Arguments = map[string]any{"name": call.Name, "input": call.Arguments}
+				call.Name = ToolsExecuteToolName
+			}
+		}
+	}
+	runner, err := NewRunner(client, cfg, NewToolRegistry(search, render))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +110,9 @@ func TestParallelReadsRunConcurrentlyAndKeepCallOrder(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Content, "slow") || results[0].ToolError || !results[1].ToolError || !strings.Contains(results[1].Content, "send 没有发出") {
 		t.Fatalf("unexpected results: %+v", results)
+	}
+	if wrapped && (results[0].ToolName != ToolsExecuteToolName || client.first[0].Arguments["name"] != search.Name()) {
+		t.Fatal("provider envelope was replaced with the execution target")
 	}
 	if len(resp.Steps) != 2 || resp.Steps[0].Tool != WebSearchToolName || resp.Steps[1].Tool != browserRenderToolName || resp.Steps[1].Index != 2 {
 		t.Fatalf("steps out of order: %+v", resp.Steps)
@@ -175,6 +197,45 @@ func TestParallelReadsRespectDeferredContracts(t *testing.T) {
 			}
 			if search.calls != want || render.calls != want {
 				t.Fatalf("%s: search=%d render=%d want each %d", kind, search.calls, render.calls, want)
+			}
+		})
+	}
+}
+
+func TestParallelWrappedReadsPreserveGuards(t *testing.T) {
+	for _, kind := range []string{"valid", "invalid", "missing", "disabled", "write", "no-loader", "string-input"} {
+		t.Run(kind, func(t *testing.T) {
+			search := &schemaDispatchTool{countingTool: countingTool{name: WebSearchToolName}, schema: toolObjectSchema([]string{"query"}, map[string]any{"query": toolStringParam("query")})}
+			registry := NewToolRegistry(search, &countingTool{name: "write_file"})
+			runner, err := NewRunner(&batchClient{}, Config{CoreTools: []string{"common"}}, registry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runner.loader = newDeferredToolLoader(registry, []string{"common"}, nil, nil)
+			name := search.Name()
+			var input any = map[string]any{"query": "news"}
+			switch kind {
+			case "invalid":
+				input = map[string]any{"query": 123}
+			case "missing":
+				registry.Remove(name)
+			case "disabled":
+				registry.DisableOperations("blocked", DisabledOperation{Tool: name, Field: "query", Values: []string{"news"}})
+			case "write":
+				name = "write_file"
+			case "no-loader":
+				runner.loader = nil
+			case "string-input":
+				input = `{"query":"news"}`
+			}
+			call := llm.ToolCall{Name: ToolsExecuteToolName, Arguments: map[string]any{"name": name, "input": input}}
+			_, ok := runner.parallelReadBatch([]llm.ToolCall{call, call})
+			want := kind == "valid" || kind == "string-input"
+			if ok != want {
+				t.Fatalf("parallel=%v, want %v", ok, want)
+			}
+			if search.calls != 0 {
+				t.Fatal("eligibility check executed a tool")
 			}
 		})
 	}

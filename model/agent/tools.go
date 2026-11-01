@@ -141,6 +141,12 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 		return nil, err
 	}
 	registry := NewToolRegistry()
+	if cfg.CodeModeEnabled {
+		if tool, err := newCodeModeTool(context.Background()); err == nil {
+			registry.Register(tool)
+			registry.RegisterCloser(tool)
+		}
+	}
 	protected := agentProtectedFiles(cfg)
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
 	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。

@@ -431,6 +431,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
 	// 安全模式在最后收窄：它要盖过主人放宽的那些项（扩展管理跟着主人身份打开）。
 	return restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agent.Config{
+		CodeModeEnabled:     true,
 		WorkDir:             AgentWorkspaceDir(),
 		SkillRoots:          cfg.AgentSkillRoots,
 		MCPConfigPath:       cfg.AgentMCPConfigPath,
