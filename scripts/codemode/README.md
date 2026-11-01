@@ -18,10 +18,12 @@ DIANA_TEST_RACE=1 scripts/test-serial.sh ./internal/codemode
 
 The committed `internal/codemode/runtime.json.gz` embeds the host, dependency
 JavaScript, QuickJS WASM, package manifests, and licenses in the Go binary.
-It is a deterministic gzip-compressed JSON map of paths to base64 bytes. No
+It is a sorted JSON map of paths to base64 bytes, compressed with gzip. No
 bundler is required. Dependencies are exact versions with npm integrity hashes;
 install with `npm ci`, not an unlocked install. Run `build` whenever the host or
-dependencies change. `check` detects stale embedded bytes.
+dependencies change. `check` compares every decompressed byte with the canonical
+payload, detecting stale embedded files without false failures from different
+Node/zlib compression versions.
 
 `codemode.Prepare` requires existing Node >=22.19, extracts the archive into a
 private temporary directory, and returns a cleanup function. Runtime operation

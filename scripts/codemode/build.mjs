@@ -1,5 +1,5 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
-import { gzipSync } from 'node:zlib';
+import { gunzipSync, gzipSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -28,10 +28,13 @@ await add('node_modules/quickjs-wasi/quickjs.wasm');
 await add('node_modules/quickjs-wasi/LICENSE');
 await add('node_modules/@earendil-works/pi-codemode/LICENSE', 'licenses/pi-codemode-MIT.txt');
 const sorted = Object.fromEntries(Object.entries(files).sort(([a], [b]) => a < b ? -1 : 1));
-const archive = gzipSync(Buffer.from(JSON.stringify(sorted)), { level: 9 });
+const payload = Buffer.from(JSON.stringify(sorted));
+const archive = gzipSync(payload, { level: 9 });
 const destination = path.join(root, '../../internal/codemode/runtime.json.gz');
 if (process.argv.includes('--check')) {
-  if (!(await readFile(destination)).equals(archive)) throw new Error('embedded runtime is stale; run npm run build');
+  // Node releases ship different zlib versions. Verify every uncompressed byte,
+  // not compression choices that can differ while the runtime is identical.
+  if (!gunzipSync(await readFile(destination)).equals(payload)) throw new Error('embedded runtime is stale; run npm run build');
 } else {
   await writeFile(destination, archive);
 }
