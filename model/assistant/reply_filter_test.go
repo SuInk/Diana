@@ -101,6 +101,25 @@ func TestPreviewReplyFiltersReportsEachRule(t *testing.T) {
 	}
 }
 
+func TestDefaultReplyFiltersHandleCurrentTags(t *testing.T) {
+	rules := defaultReplyFilterRules()
+	if err := validateReplyFilterRules(rules); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ input, want string }{
+		{"好的<diana-single/>继续", "好的继续"},
+		{"好的<diana-lines-compact/>继续", "好的继续"},
+		{"好的<diana-unknown/>继续", "好的继续"},
+		{`<diana-at id="123"/>好<diana-quote id="456"/><diana-message/>再见<diana-br/>`, `<diana-at id="123"/>好<diana-quote id="456"/><diana-message/>再见<diana-br/>`},
+		{"示例 `<diana-single/>` 和 <div>正文</div>", "示例 `<diana-single/>` 和 <div>正文</div>"},
+		{"```xml\n<diana-single/>\n```", "```xml\n<diana-single/>\n```"},
+	} {
+		if got := applyReplyFilters(rules, tc.input); got != tc.want {
+			t.Errorf("input=%q got=%q want=%q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func TestApplyReplyFiltersKeepsMarkdown(t *testing.T) {
 	rules := []string{`（[^（）\n]*$`}
 	reply := "## 结论\n\n- **先重启**（试过了  \n- 看 [文档](https://example.com/a_(b))\n\n```go\nfmt.Println(\"（没闭合\")\n```\n用 `echo （` 测（顺手"
