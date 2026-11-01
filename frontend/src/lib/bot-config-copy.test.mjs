@@ -4,6 +4,16 @@ import { copyBotConfiguration } from "./bot-config-copy.ts";
 
 const defaults = { platform: "onebot-v11", enabled: true, onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://localhost/onebot/v11/ws" };
 
+test("copy preserves the explicit Telegram rich-message preference", () => {
+  for (const enabled of [true, false]) {
+    const draft = copyBotConfiguration({ ...defaults, telegram_rich_messages: enabled }, defaults);
+    assert.equal(draft.telegram_rich_messages, enabled);
+  }
+  assert.equal(copyBotConfiguration(defaults, defaults).telegram_rich_messages, undefined);
+  assert.equal(copyBotConfiguration(defaults, { ...defaults, telegram_rich_messages: true }).telegram_rich_messages, true);
+  assert.equal(copyBotConfiguration({ ...defaults, telegram_rich_messages: false }, { ...defaults, telegram_rich_messages: true }).telegram_rich_messages, false);
+});
+
 test("copy drops the obsolete host-access switch and command allowlist", () => {
   const source = { ...defaults, agent_host_access_enabled: true, agent_command_allowlist: ["uptime"] };
   const draft = copyBotConfiguration(source, defaults);

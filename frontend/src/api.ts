@@ -220,6 +220,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   telegram_proxy_url?: string;
   /** 默认抑制其他 Bot 的群消息；语义判断提到本机器人时放行。 */
   telegram_suppress_bot_messages?: boolean;
+  telegram_rich_messages?: boolean;
   /** OneBot 私聊准备回复时显示「对方正在输入」，默认开启。 */
   qq_typing_enabled?: boolean;
   /** QQ 开放平台机器人，出站 WebSocket 网关。 */

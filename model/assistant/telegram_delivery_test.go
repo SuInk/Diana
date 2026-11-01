@@ -20,6 +20,7 @@ func TestTelegramIgnoresForwardThresholdWithoutAudit(t *testing.T) {
 				{"single", replySingleMarker + "第一条" + notificationSplitMarker + "第二条", 1, []string{"第一条\n第二条"}},
 				{"over capacity", strings.Repeat("甲", 3000) + notificationSplitMarker + strings.Repeat("乙", 3000), 1, []string{strings.Repeat("甲", 3000), strings.Repeat("乙", 3000)}},
 				{"rich text", "**标题**" + notificationSplitMarker + "```python" + notificationLineMarker + "print(1)" + notificationLineMarker + "```", 1, []string{"标题", "print(1)"}},
+				{"quote and spoiler", "> 原话😀" + notificationSplitMarker + "||结局😀||", 1, []string{"原话😀", "结局😀"}},
 				{"mention capacity", strings.Repeat("甲", 2050) + "<diana-at id=\"10001\"/>" + notificationSplitMarker + strings.Repeat("乙", 2020), 1, []string{strings.Repeat("甲", 2050) + "@" + strings.Repeat("名", 60), strings.Repeat("乙", 2020)}},
 			} {
 				t.Run(tc.name+map[bool]string{false: "/direct", true: "/multi"}[multi]+"/"+string(kind), func(t *testing.T) {
@@ -61,6 +62,14 @@ func TestTelegramIgnoresForwardThresholdWithoutAudit(t *testing.T) {
 							entities, _ := calls[i].Params["entities"].([]any)
 							if len(entities) != 1 || entities[0].(map[string]any)["type"] != kind {
 								t.Fatalf("lost %s entity: %v", kind, entities)
+							}
+						}
+					}
+					if tc.name == "quote and spoiler" {
+						for i, kind := range []string{"blockquote", "spoiler"} {
+							entities, _ := calls[i].Params["entities"].([]any)
+							if len(entities) != 1 || entities[0].(map[string]any)["type"] != kind || calls[i].Params["parse_mode"] != nil {
+								t.Fatalf("lost %s entity or unexpected parse mode: %v", kind, calls[i].Params)
 							}
 						}
 					}
