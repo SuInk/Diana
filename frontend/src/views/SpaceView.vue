@@ -5,19 +5,29 @@
   <div>
     <header class="view-header">
       <div class="view-title">
-        <p>她的零花钱账本。全是虚拟数字，不接任何真实支付；以后她想买东西时要你点头。</p>
+        <p>看看她的小窝，给她记一笔零花钱。房间与 Agent 活动联动，账本不接任何真实支付。</p>
       </div>
       <div class="view-actions">
-        <button class="btn" type="button" :disabled="loading" @click="reload">
+        <button class="btn" type="button" :disabled="loading || saving || !botScope" @click="reload">
           <RefreshCw :size="15" aria-hidden="true" />
           刷新
         </button>
       </div>
     </header>
 
-    <LoadingSkeleton v-if="loading && !space" kind="form" label="正在加载小窝" />
+    <EmptyState v-if="!botScope" title="先选一位小窝的主人" hint="在侧栏选择一个机器人，查看它的房间、余额和账本。不同机器人的小窝彼此独立。">
+      <template #icon><Wallet :size="20" aria-hidden="true" /></template>
+    </EmptyState>
+
+    <LoadingSkeleton v-else-if="loading && !space" kind="form" label="正在加载小窝" />
+
+    <EmptyState v-else-if="!space" title="暂时没能打开小窝" hint="请稍后点击刷新重试。">
+      <template #icon><Wallet :size="20" aria-hidden="true" /></template>
+    </EmptyState>
 
     <div v-else-if="space" class="stack">
+      <OwnSpaceRoom :key="botScope" :profile="botScope" :enabled="space.enabled" :initial="space.room" />
+
       <div v-if="!space.enabled" class="card space-off">
         <div class="card-body">
           <strong>小窝还没开</strong>
@@ -50,7 +60,7 @@
             </div>
             <div class="space-grant-actions">
               <button class="btn ghost" type="button" @click="grantOpen = false">取消</button>
-              <button class="btn" type="submit" :disabled="saving || !grantAmount">确定</button>
+              <button class="btn" type="submit" :disabled="saving || loading || !grantAmount">确定</button>
             </div>
           </form>
 
@@ -74,7 +84,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { onActivated, onBeforeUnmount, onDeactivated, ref, watch } from "vue";
 import { Plus, RefreshCw, Wallet } from "@lucide/vue";
 import { getOwnSpace, recordOwnSpaceWallet, type OwnSpace, type WalletEntryKind } from "../api";
 import { botScope } from "../lib/bot-scope";
@@ -83,6 +93,7 @@ import { navigate } from "../router";
 import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
+import OwnSpaceRoom from "../components/OwnSpaceRoom.vue";
 
 const kindLabel: Record<WalletEntryKind, string> = {
   allowance: "零花钱",
@@ -99,6 +110,9 @@ const grantOpen = ref(false);
 const grantKind = ref<"allowance" | "adjust">("allowance");
 const grantAmount = ref<number | string>("");
 const grantReason = ref("");
+let loadVersion = 0;
+let disposed = false;
+let returning = false;
 
 function formatYuan(cents: number): string {
   return `¥${(cents / 100).toFixed(2)}`;
@@ -109,43 +123,60 @@ function signed(cents: number): string {
 }
 
 async function reload(): Promise<void> {
+  const profile = botScope.value;
+  const version = ++loadVersion;
+  if (!profile) { space.value = null; loading.value = false; return; }
   loading.value = true;
   try {
-    space.value = await getOwnSpace(botScope.value);
+    const result = await getOwnSpace(profile);
+    if (!disposed && version === loadVersion && botScope.value === profile) space.value = result;
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "操作失败");
+    if (!disposed && version === loadVersion) toastError(error instanceof Error ? error.message : "操作失败");
   } finally {
-    loading.value = false;
+    if (!disposed && version === loadVersion) loading.value = false;
   }
 }
 
 async function submit(): Promise<void> {
+  if (saving.value || loading.value || !botScope.value) return;
+  const profile = botScope.value;
   // 输入框里是元，账本里是分；四舍五入到分，避免 0.1 + 0.2 这类浮点尾巴。
   const cents = Math.round(Number(grantAmount.value) * 100);
   if (!Number.isFinite(cents) || cents === 0) {
     toastError("金额不能为零");
     return;
   }
+  const version = ++loadVersion;
   saving.value = true;
   try {
-    space.value = await recordOwnSpaceWallet(botScope.value, grantKind.value, cents, grantReason.value.trim());
+    const result = await recordOwnSpaceWallet(profile, grantKind.value, cents, grantReason.value.trim());
+    if (disposed || version !== loadVersion || botScope.value !== profile) return;
+    space.value = result;
     grantAmount.value = "";
     grantReason.value = "";
     grantOpen.value = false;
     toastSuccess("已记账");
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "操作失败");
+    if (!disposed && version === loadVersion) toastError(error instanceof Error ? error.message : "操作失败");
   } finally {
     saving.value = false;
   }
 }
 
-onMounted(() => {
-  void reload();
-});
-
 watch(botScope, () => {
+  space.value = null;
+  grantOpen.value = false;
+  grantAmount.value = "";
+  grantReason.value = "";
+  grantKind.value = "allowance";
   void reload();
+}, { immediate: true });
+
+onBeforeUnmount(() => { disposed = true; ++loadVersion; });
+onDeactivated(() => { returning = true; });
+onActivated(() => {
+  if (returning && !saving.value) void reload();
+  returning = false;
 });
 </script>
 

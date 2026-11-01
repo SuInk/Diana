@@ -516,6 +516,7 @@ func main() {
 	botRuntime.SetWorldBookStore(sqliteStore)
 	botRuntime.SetSelfNoteStore(sqliteStore)
 	botRuntime.SetWalletStore(sqliteStore)
+	botRuntime.SetRoomStore(sqliteStore)
 	botRuntime.SetFeedStore(sqliteStore)
 	botRuntime.SetGroupStyleStore(sqliteStore)
 	// 版本号只活在构建期注入的变量里，机器人自己看不到就只能按训练记忆编一个。
@@ -843,6 +844,9 @@ func main() {
 	router.GET("/onebot/v11/ws", gin.WrapH(oneBotServer))
 	router.POST("/onebot/v11/http", gin.WrapH(oneBotHTTPServer))
 	frontendRoot, frontendEmbedded := frontendFileSystem()
+	botRuntime.SetRoomSnapshotRenderer(assistant.NewRoomSnapshotRenderer(func(name string) (io.ReadCloser, error) {
+		return frontendRoot.Open(name)
+	}))
 	if !frontendEmbedded {
 		log.Printf("webui frontend warning: this build has no embedded frontend; build it with `make build` (copies frontend/dist into cmd/webui/webdist)")
 	}

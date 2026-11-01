@@ -1,7 +1,7 @@
 <!-- Copyright (c) 2025-now SuInk.
      Licensed under the Limited Redistribution License in the repository root. -->
 
-<!-- 小窝展示机器人的钱包、自述和动态，各档保留独立地址。 -->
+<!-- 小窝展示机器人的房间与钱包、自述和动态，各档保留独立地址。 -->
 <template>
   <div class="home-view">
     <div ref="tabList" class="segmented home-tabs" role="tablist" aria-label="小窝内容">
@@ -34,7 +34,7 @@ import SelfNotesView from "./SelfNotesView.vue";
 import FeedView from "./FeedView.vue";
 
 const tabs = [
-  { id: "space" as ViewID, label: "钱包", icon: Wallet },
+  { id: "space" as ViewID, label: "房间与钱包", icon: Wallet },
   { id: "self-notes" as ViewID, label: "自述", icon: NotebookPen },
   { id: "feed" as ViewID, label: "动态", icon: Newspaper }
 ];

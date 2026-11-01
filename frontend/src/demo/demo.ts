@@ -2449,7 +2449,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({ error: "演示模式不删除自述；正式部署里这里会删掉一条或清空全部。" }, 403);
   }
   if (path === "/api/assistant/own-space" && method === "GET") {
-    return json({ enabled: true, wallet: demoWallet });
+    const profile = url.searchParams.get("profile") ?? "";
+    return json({ enabled: true, wallet: demoWallet, room: {
+      profile_id: profile, epoch: "demo", revision: 1, enabled: true,
+      pose: "phone", source: "agent", phase: "idle", active_tasks: 0,
+      updated_at: new Date().toISOString()
+    } });
   }
   if (path.startsWith("/api/assistant/own-space/") && method !== "GET") {
     return json({ error: "演示模式不记账；正式部署里这里会给她发零花钱或调账。" }, 403);

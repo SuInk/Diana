@@ -1037,7 +1037,22 @@ export interface BotChannelStatus {
   updated_at: string;
 }
 
+export interface RoomState {
+  profile_id: string;
+  epoch: string;
+  revision: number;
+  enabled: boolean;
+  pose: "rest" | "phone" | "desk";
+  source: "idle" | "runtime" | "agent";
+  phase: "idle" | "thinking" | "tool" | "completed" | "cancelled" | "error" | "expired" | "disabled";
+  active_tasks: number;
+  task_id?: string;
+  expires_at?: string;
+  updated_at: string;
+}
+
 export interface BotStatus {
+  rooms?: RoomState[];
   running: boolean;
   channel: BotChannelStatus;
   channels?: BotChannelStatus[];
@@ -4863,6 +4878,7 @@ export interface WalletEntry {
 }
 
 export interface OwnSpace {
+  room?: RoomState;
   /** 小窝开没开。关着时账本照样能读，只是她用不了。 */
   enabled: boolean;
   wallet: { balance_cents: number; recent: WalletEntry[] };

@@ -7,7 +7,7 @@
 <sub>OneBot v11 · Telegram · QQ Official Bot · WeChat · iMessage — one instance, all online at once</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
+[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=159f6c)](https://github.com/SuInk/Diana/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
@@ -19,7 +19,10 @@
 
 <br />
 
-<img src="./docs/assets/diana-webui-overview.png" alt="Diana console overview: channel status, message stats, system resources and live event stream" width="100%" />
+<img src="./docs/assets/diana-webui-overview-green.jpg" alt="Diana console overview: channel status, message stats, system resources and live event stream" width="100%" />
+
+The console defaults to **Forest Green**, with light, dark, and system modes. Change the accent in Settings; upgrades preserve the color preference already saved in your browser.
+
 
 ## What is Diana
 

@@ -18,6 +18,7 @@ import (
 
 func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 	return func(ctx context.Context, runEvent agent.RunEvent) {
+		r.observeRoomRun(ctx, runEvent)
 		switch runEvent.Phase {
 		case agent.RunPhaseStarted:
 			markReplyStage(ctx, replyStageAgentStarted, time.Now())
