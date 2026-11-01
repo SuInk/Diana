@@ -4,6 +4,15 @@ import test from "node:test";
 
 const source = await readFile(new URL("../views/GroupsView.vue", import.meta.url), "utf8");
 
+test("group tools keep defaults inside an initially closed modal", () => {
+  const panel = source.match(/<Modal v-if="showGroupTools"[^>]*>([\s\S]*?)<\/Modal>/);
+  assert.ok(panel);
+  assert.match(source, /const showGroupTools = ref\(false\)/);
+  for (const id of ["group-disabled-mode", "group-default-level", "group-default-unknown"]) {
+    assert.ok(panel[1].includes(`id="${id}"`), id);
+  }
+});
+
 // 群配置留空跟随机器人：编辑和新建时不能再把机器人的值抄进群里，否则一保存就成了快照，
 // 之后机器人页改了也进不了这个群。
 test("GroupsView does not copy bot values into group configs", () => {

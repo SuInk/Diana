@@ -3,25 +3,6 @@
 
 <template>
   <div>
-    <header class="view-header">
-      <div class="view-title">
-        <p>查看机器人已加入的全部群，并按群配置回复时间、屏蔽账号、专属人设与插件开关</p>
-      </div>
-      <div class="group-manual-add">
-        <input
-          v-model="newGroupID"
-          class="input"
-          inputmode="numeric"
-          placeholder="群号"
-          @keydown.enter="addGroup"
-        />
-        <button class="btn primary" type="button" :disabled="newGroupID.trim().length === 0" @click="addGroup">
-          <Plus :size="15" aria-hidden="true" />
-          添加群配置
-        </button>
-      </div>
-    </header>
-
     <div :aria-busy="!loaded || undefined">
       <div class="group-list-toolbar">
         <div class="group-list-summary">
@@ -29,7 +10,7 @@
           <template v-else>
           <strong>{{ liveAvailable ? joinedCount : groups.length }}</strong>
           <span>{{ liveAvailable ? "个已加入群" : "个已保存配置" }}</span>
-          <span class="muted">· {{ configuredCount }} 个独立配置</span>
+          <span class="group-configured-count muted">· {{ configuredCount }} 个独立配置</span>
           </template>
         </div>
         <div class="group-list-actions">
@@ -37,71 +18,88 @@
             <Search :size="15" aria-hidden="true" />
             <input v-model="searchQuery" type="search" placeholder="搜索群名或群号" aria-label="搜索群名或群号" />
           </label>
-          <button class="btn" type="button" :disabled="refreshing" title="从机器人同步最新群列表" @click="load(true)">
+          <button class="btn" type="button" :disabled="refreshing" aria-label="刷新群列表" title="从机器人同步最新群列表" @click="load(true)">
             <RefreshCw :size="14" :class="{ spin: refreshing }" aria-hidden="true" />
-            {{ refreshing ? "同步中…" : "刷新群列表" }}
+            <span class="group-refresh-label">{{ refreshing ? "同步中…" : "刷新" }}</span>
           </button>
+          <button class="btn" type="button" aria-haspopup="dialog" @click="showGroupTools = true">群管理工具</button>
         </div>
       </div>
 
-      <GroupTokenUsage v-if="loaded" :profile="botScope" :groups="groups" />
-
-      <div v-if="loaded && botScope" class="group-scope-bar">
-        <div class="group-scope-default">
-          <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
-            <input type="checkbox" :checked="newGroupEnabled" :disabled="bulkBusy" @change="setNewGroupDefault($event)" />
-            <span class="track" aria-hidden="true"></span>
-          </label>
-          <span class="group-scope-copy">
-            <strong>{{ newGroupEnabled ? "新加入的群默认工作" : "新加入的群默认不工作" }}</strong>
-            <span>没有单独设过的群按这个来</span>
-          </span>
-        </div>
-        <div class="group-scope-actions">
-          <div class="group-scope-buttons">
-            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
-            <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+      <Modal v-if="showGroupTools" title="群管理工具" wide initial-focus="input" @close="showGroupTools = false">
+        <div class="group-tools-layout">
+          <div class="group-tools-top">
+            <section class="group-tool-section">
+              <h3>添加群配置</h3>
+              <div class="group-manual-add">
+                <input v-model="newGroupID" class="input" inputmode="numeric" placeholder="输入群号" aria-label="群号" @keydown.enter="addGroup" />
+                <button class="btn primary" type="button" :disabled="newGroupID.trim().length === 0" @click="addGroup">
+                  <Plus :size="15" aria-hidden="true" />
+                  添加
+                </button>
+              </div>
+            </section>
+            <section v-if="loaded && botScope" class="group-tool-section">
+              <h3>批量操作 <span>当前筛选的 {{ filteredGroups.length }} 个群</span></h3>
+              <div class="group-scope-buttons">
+                <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
+                <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+              </div>
+              <p class="group-tool-hint">不影响新加入的群。</p>
+            </section>
           </div>
-          <span>只改下面列出的 {{ filteredGroups.length }} 个群，新加入的群不受影响</span>
-        </div>
-      </div>
 
-      <div v-if="loaded && botScope" class="group-scope-bar group-scope-levels">
-        <div class="group-scope-level">
-          <label for="group-disabled-mode">群停用后</label>
-          <AppSelect
-            id="group-disabled-mode"
-            :model-value="defaultDisabledMode"
-            :options="disabledModeOptions"
-            :disabled="bulkBusy"
-            @update:model-value="saveDisabledMode($event as 'dormant' | 'observe')"
-          />
-          <span>{{ defaultDisabledMode === "observe" ? "不回复，仍学习记忆，会花后台 token。" : "不回复、不跑后台模型，不花 token。" }}</span>
+          <section v-if="loaded && botScope" class="group-tool-section group-default-settings">
+            <h3>群默认设置</h3>
+            <div class="group-scope-default">
+              <label class="switch" :title="newGroupEnabled ? '新加入的群默认工作' : '新加入的群默认不工作'">
+                <input type="checkbox" :checked="newGroupEnabled" :disabled="bulkBusy" @change="setNewGroupDefault($event)" />
+                <span class="track" aria-hidden="true"></span>
+              </label>
+              <span class="group-scope-copy">
+                <strong title="没有单独设置的群按此默认值工作">新群默认启用</strong>
+              </span>
+            </div>
+            <div class="group-scope-bar group-scope-levels">
+              <div class="group-scope-level">
+                <label for="group-disabled-mode">群停用后</label>
+                <AppSelect
+                  id="group-disabled-mode"
+                  :model-value="defaultDisabledMode"
+                  :options="disabledModeOptions"
+                  :disabled="bulkBusy"
+                  @update:model-value="saveDisabledMode($event as 'dormant' | 'observe')"
+                />
+                <span>{{ defaultDisabledMode === "observe" ? "不回复，仍学习记忆，会花后台 token。" : "不回复、不跑后台模型，不花 token。" }}</span>
+              </div>
+              <div v-if="supportsGroupLevel" class="group-scope-level">
+                <label for="group-default-level">群等级门槛</label>
+                <input
+                  id="group-default-level"
+                  class="input"
+                  inputmode="numeric"
+                  :value="defaultMinGroupLevel"
+                  :disabled="bulkBusy"
+                  @change="saveMinGroupLevel($event)"
+                />
+                <span>0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。单个群可以在它的配置里覆盖。</span>
+              </div>
+              <div v-if="supportsGroupLevel" class="group-scope-level">
+                <label for="group-default-unknown">等级读不到时</label>
+                <AppSelect
+                  id="group-default-unknown"
+                  :model-value="defaultLevelUnknownPolicy"
+                  :options="levelUnknownOptions"
+                  :disabled="bulkBusy"
+                  @update:model-value="saveLevelUnknownPolicy($event as 'allow' | 'deny')"
+                />
+                <span>部分 OneBot 实现不提供群等级。选「拦截」会让这些实现下的群整体静音。</span>
+              </div>
+            </div>
+          </section>
+          <GroupTokenUsage v-if="loaded" :profile="botScope" :groups="groups" />
         </div>
-        <div v-if="supportsGroupLevel" class="group-scope-level">
-          <label for="group-default-level">群等级门槛</label>
-          <input
-            id="group-default-level"
-            class="input"
-            inputmode="numeric"
-            :value="defaultMinGroupLevel"
-            :disabled="bulkBusy"
-            @change="saveMinGroupLevel($event)"
-          />
-          <span>0 表示不限。指群内活跃度等级（Lv.1~6），不是账号等级。单个群可以在它的配置里覆盖。</span>
-        </div>
-        <div v-if="supportsGroupLevel" class="group-scope-level">
-          <label for="group-default-unknown">等级读不到时</label>
-          <AppSelect
-            id="group-default-unknown"
-            :model-value="defaultLevelUnknownPolicy"
-            :options="levelUnknownOptions"
-            :disabled="bulkBusy"
-            @update:model-value="saveLevelUnknownPolicy($event as 'allow' | 'deny')"
-          />
-          <span>部分 OneBot 实现不提供群等级。选「拦截」会让这些实现下的群整体静音。</span>
-        </div>
-      </div>
+      </Modal>
 
       <div v-if="connectionPeers.length > 0" class="group-connection-note" role="status">
         <Share2 :size="16" aria-hidden="true" />
@@ -192,13 +190,13 @@
           </p>
           <div class="group-card-foot">
             <span class="muted">{{ group.enabled ? "发送与任务已启用" : disabledModeFor(group) === "observe" ? "发送与任务已暂停 · 静默旁观" : "发送与任务已暂停 · 彻底关闭" }}</span>
-            <div class="cluster" style="gap: 8px">
-              <button v-if="group.configured" class="btn small ghost" type="button" title="删除群配置" aria-label="删除群配置" :disabled="deleting" @click="pendingDelete = group">
+            <div class="group-card-actions">
+              <button v-if="group.configured" class="btn small ghost group-card-delete" type="button" title="删除群配置" aria-label="删除群配置" :disabled="deleting" @click="pendingDelete = group">
                 <Trash2 :size="14" aria-hidden="true" />
               </button>
               <button class="btn small ghost" type="button" @click="openRelations(group, group.group_name)">
-                <Share2 :size="13" aria-hidden="true" />
-                关系图
+                <Users :size="14" aria-hidden="true" />
+                互动圈
               </button>
               <button class="btn small ghost" type="button" @click="openWordCloud(group, group.group_name)">
                 <Cloud :size="13" aria-hidden="true" />
@@ -257,13 +255,13 @@
     <!-- 群配置编辑弹窗 -->
     <Modal
       v-if="relationsGroupID"
-      :title="`${relationsGroupName || `群 ${relationsGroupID}`} · 关系图`"
+      :title="`${relationsGroupName || `群 ${relationsGroupID}`} · 互动圈`"
       wide
       @close="closeRelations"
     >
       <div class="stack" style="gap: 12px">
         <div class="cluster" style="gap: 12px; justify-content: space-between">
-          <div class="segmented" role="radiogroup" aria-label="按时间范围统计关系">
+          <div class="segmented" role="radiogroup" aria-label="按时间范围统计互动圈">
             <button
               v-for="option in relationRangeOptions"
               :key="option.value"
@@ -896,6 +894,7 @@ const syncWarning = ref("");
 // 复用同一条连接的其它机器人：路由表散在各台自己的配置里，这份是那张全貌。
 const connectionPeers = ref<ConnectionPeer[]>([]);
 const searchQuery = ref("");
+const showGroupTools = ref(false);
 const newGroupID = ref("");
 const relationRangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
   { value: "24h", label: "24h" },
@@ -965,7 +964,7 @@ async function loadRelations(): Promise<void> {
     // 选的人这段时间没发过言，后端会退回机器人，选择框跟着回去。
     if (response.graph.center_id === response.graph.bot_id) relationsCenter.value = "";
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "关系图加载失败");
+    toastError(error instanceof Error ? error.message : "互动圈加载失败");
   } finally {
     relationsLoading.value = false;
   }
@@ -1414,6 +1413,7 @@ function addGroup(): void {
     return;
   }
   const existing = groups.value.find((group) => sameGroup(group, { group_id: groupID, bot_profile_id: botScope.value }));
+  showGroupTools.value = false;
   openEditor(
     existing ?? {
       group_id: groupID,
@@ -1817,6 +1817,61 @@ useConfigurationRefresh(["bot"], () => load());
 </script>
 
 <style scoped>
+.group-list-toolbar {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+.group-list-summary {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.group-list-actions {
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+.group-search {
+  min-width: 0;
+}
+.group-list-actions > .btn {
+  flex-shrink: 0;
+}
+@media (max-width: 1100px) {
+  .group-configured-count { display: none; }
+}
+@media (max-width: 600px) {
+  .group-list-toolbar, .group-list-actions { gap: 6px; }
+  .group-list-actions { flex: 1; }
+  .group-search { flex: 1; width: auto; }
+  .group-refresh-label { display: none; }
+}
+
+.group-tools-layout { display: grid; gap: 16px; }
+.group-tools-top { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.group-tool-section { padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.group-tool-section h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin: 0 0 14px; font-size: 14px; }
+.group-tool-section h3 span, .group-tool-hint { color: var(--muted); font-size: 12px; font-weight: 400; }
+.group-tool-hint { margin: 10px 0 0; }
+.group-tools-layout .group-manual-add .input { flex: 1; min-width: 0; width: 100%; }
+.group-tools-layout .group-manual-add .btn { flex-shrink: 0; }
+.group-tools-layout .group-scope-default { margin-bottom: 16px; }
+.group-tools-layout .group-scope-levels { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); padding: 0; border: 0; gap: 16px; }
+.group-tools-layout .group-scope-level { gap: 8px; }
+.group-tools-layout .group-scope-level .input,
+.group-tools-layout .group-scope-level :deep(.app-select) { width: 100%; max-width: none; }
+.group-tools-layout :deep(.token-usage-panel) { margin: 0; padding: 16px; }
+@media (max-width: 600px) {
+  .group-tools-top { grid-template-columns: 1fr; }
+}
+.group-default-settings .group-scope-levels {
+  margin-bottom: 0;
+}
+.group-scope-actions {
+  flex-direction: row;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* 跟 BotMarkerList 的「机器人范围」一样，是一行不抢眼的继承说明。 */
 .inherited-persona {
   font-size: 12px;

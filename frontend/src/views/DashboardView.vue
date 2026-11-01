@@ -218,7 +218,11 @@
         <!-- 卡面的数只说来了多少，这里补上什么时候来：哪几个钟点热闹、哪几个钟点没人，
              可以按群看，设免打扰或主动搭话时段时用得上。 -->
         <ActivityHeatmap v-if="openDetail === 'messages'" :profile-id="botScope" :groups="groupOptions" />
-        <TokenUsageBreakdown v-if="openDetail === 'usage'" :entries="selectedUsage?.breakdown" :range-label="rangeLabel" />
+        <TokenUsageBreakdown v-if="openDetail === 'usage'" :entries="selectedUsage?.breakdown" :range-label="rangeLabel">
+          <template #groups>
+            <GroupTokenUsage :profile="botScope" :groups="tokenGroups" embedded />
+          </template>
+        </TokenUsageBreakdown>
       </div>
     </Modal>
   </div>
@@ -249,6 +253,7 @@ import {
   getStats,
   getStatsRanges,
   listBotGroups,
+  type BotGroupSummary,
   type StatsHourBucket,
   type StatsRange,
   type StatsRangeID,
@@ -271,23 +276,31 @@ import LatencyDetail from "../components/LatencyDetail.vue";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import TokenUsageBreakdown from "../components/TokenUsageBreakdown.vue";
+import GroupTokenUsage from "../components/GroupTokenUsage.vue";
 import { cacheUsageDisplay, splitCacheUsage } from "../lib/llm-usage";
 
 const pending = ref(true);
 const setupNeeded = ref(false);
 const groupNames = ref<Record<string, string>>({});
+const tokenGroups = ref<BotGroupSummary[]>([]);
+let groupNamesGeneration = 0;
 // 活跃时段按群筛选用：没名字的群也要能选，显示成群号。
 const groupOptions = ref<{ id: string; name: string }[]>([]);
 
 async function loadGroupNames(): Promise<void> {
+  const generation = ++groupNamesGeneration;
+  tokenGroups.value = [];
   try {
     const response = await listBotGroups(false, botScope.value);
+    if (generation !== groupNamesGeneration) return;
+    tokenGroups.value = response.groups;
     groupNames.value = Object.fromEntries(response.groups.filter((group) => group.group_name).map((group) => [group.group_id, group.group_name ?? ""]));
     groupOptions.value = response.groups.map((group) => ({
       id: group.group_id,
       name: group.group_name ? `${group.group_name}（${group.group_id}）` : `群 ${group.group_id}`
     }));
   } catch {
+    if (generation !== groupNamesGeneration) return;
     groupNames.value = {};
     groupOptions.value = [];
   }

@@ -3395,7 +3395,6 @@ a.nav-action {
 .group-manual-add {
   display: flex;
   gap: 8px;
-  margin-left: auto;
 }
 
 .group-manual-add .input {
@@ -3407,8 +3406,8 @@ a.nav-action {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
 }
 
@@ -3429,6 +3428,8 @@ a.nav-action {
 .group-list-actions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -3681,9 +3682,23 @@ a.nav-action {
 }
 
 .group-card-foot {
+  flex-direction: column;
+  align-items: stretch;
   padding-top: 10px;
   border-top: 1px solid var(--border);
   font-size: 11.5px;
+}
+
+.group-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.group-card-delete {
+  margin-right: auto;
 }
 
 /* 插件方块卡片 */
