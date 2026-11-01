@@ -93,7 +93,11 @@ func TestRuntimeLimits(t *testing.T) {
 		{"budget", `try { await tools.read({}); } catch {} return 1`, "host_limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := r.Execute(t.Context(), Request{Code: tc.code, Tools: []string{"read"}, Timeout: 150 * time.Millisecond}, func(context.Context, string, json.RawMessage) (any, error) {
+			timeout := 2 * time.Second
+			if tc.kind == "timeout" {
+				timeout = 150 * time.Millisecond
+			}
+			result, err := r.Execute(t.Context(), Request{Code: tc.code, Tools: []string{"read"}, Timeout: timeout}, func(context.Context, string, json.RawMessage) (any, error) {
 				t.Error("unexpected host tool call")
 				return nil, nil
 			})
