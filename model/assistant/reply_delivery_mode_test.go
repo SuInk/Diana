@@ -159,7 +159,7 @@ func (c *deliveryDraftChannel) SendTextDraft(_ context.Context, message Outgoing
 func TestDeliveryChoiceDoesNotLeakInStreamingDrafts(t *testing.T) {
 	for _, marker := range []string{replySingleMarker, replyAutoMarker} {
 		channel := &deliveryDraftChannel{}
-		draft := &telegramReplyDraft{channel: channel}
+		draft := &replyDraft{channel: channel}
 		for i := 1; i <= len(marker); i++ {
 			draft.ObserveTextDelta(context.Background(), marker[:i])
 		}

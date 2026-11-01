@@ -158,23 +158,23 @@ func TestQQReplyDraftOnlyForUnauditedPrivateChats(t *testing.T) {
 	runtime := &Runtime{channel: newQQStreamFakeAPI(t).channel()}
 	event := MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindPrivate, UserID: "U2345", MessageID: "in1"}
 	cfg := BotConfig{ReplySafetyPrivateEnabled: boolPointer(false), BotReplyLoopDetectionEnabled: boolPointer(false)}
-	if runtime.telegramReplyDraft(event, cfg) == nil {
+	if runtime.replyDraft(event, cfg) == nil {
 		t.Fatal("private QQ chat without audit should stream")
 	}
 	audited := cfg
 	audited.ReplySafetyPrivateEnabled = boolPointer(true)
-	if runtime.telegramReplyDraft(event, audited) != nil {
+	if runtime.replyDraft(event, audited) != nil {
 		t.Fatal("audited private reply must not stream before the audit")
 	}
 	group := event
 	group.Kind = EventKindGroup
 	group.GroupID = "G2345"
-	if runtime.telegramReplyDraft(group, cfg) != nil {
+	if runtime.replyDraft(group, cfg) != nil {
 		t.Fatal("QQ groups have no stream API")
 	}
 	off := cfg
 	off.LLMStreamingEnabled = boolPointer(false)
-	if runtime.telegramReplyDraft(event, off) != nil {
+	if runtime.replyDraft(event, off) != nil {
 		t.Fatal("streaming switch off must disable QQ stream")
 	}
 }
@@ -231,7 +231,7 @@ func TestQQReplyDraftHoldsShortFirstFrameAndTurnEndRecallsIt(t *testing.T) {
 	runtime := &Runtime{channel: api.channel()}
 	event := MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindPrivate, UserID: "U2345", MessageID: "in1"}
 	cfg := BotConfig{ReplySafetyPrivateEnabled: boolPointer(false), BotReplyLoopDetectionEnabled: boolPointer(false)}
-	draft := runtime.telegramReplyDraft(event, cfg)
+	draft := runtime.replyDraft(event, cfg)
 	if draft == nil {
 		t.Fatal("private QQ chat without audit should stream")
 	}

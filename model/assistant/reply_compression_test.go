@@ -126,7 +126,7 @@ func TestReplyCompressionSkipsWithinBudget(t *testing.T) {
 
 func TestReplyCompressionPreservesChoiceAndDoesNotStream(t *testing.T) {
 	p := &compressionTestProvider{outputs: []string{replyAutoMarker + "核心结论" + replySuppressionMarker}}
-	ctx := withTextDeltaObserver(context.Background(), &telegramReplyDraft{channel: &deliveryDraftChannel{}})
+	ctx := withTextDeltaObserver(context.Background(), &replyDraft{channel: &deliveryDraftChannel{}})
 	got, err := compressionTestRuntime(p).prepareGeneratedReply(ctx, BotConfig{MaxReplyChars: 10}, replySingleMarker+strings.Repeat("较长说明", 20)+replyRefusalMarker)
 	body, intent := consumeReplyControlIntent(got)
 	if err != nil || body != "核心结论" || intent.DeliveryMode != replyDeliverySingle || !intent.RefuseCurrent || intent.SuppressCurrentUser {
@@ -219,7 +219,7 @@ func TestReplyCompressionPreservesAutoModeAndDraftLimit(t *testing.T) {
 		t.Fatalf("auto mode changed: %q %v", got, err)
 	}
 	channel := &deliveryDraftChannel{}
-	draft := &telegramReplyDraft{channel: channel, maxRunes: 4}
+	draft := &replyDraft{channel: channel, maxRunes: 4}
 	draft.ObserveTextDelta(context.Background(), "一二三四五六")
 	if len(channel.messages) != 1 || channel.messages[0].Text != "一二三四" {
 		t.Fatal("draft exceeded its preview budget")
