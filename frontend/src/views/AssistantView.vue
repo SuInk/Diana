@@ -1785,7 +1785,7 @@
             <div class="card-header">
               <div>
                 <h2>记忆</h2>
-                <span class="card-sub">长期记忆一直开着；这里管跨群跨平台共享和检索方式</span>
+                <span class="card-sub">长期记忆一直开着；这里管记忆共享、检索和笔记本自动学习</span>
               </div>
             </div>
             <div class="card-body form-grid">
@@ -1826,7 +1826,7 @@
                   <span class="switch-label">笔记本跟随机器人（群聊私聊共用一本）</span>
                 </label>
                 <span class="hint">
-                  默认打开：机器人只有一本笔记，在哪个群、哪个私聊里学到的梗和规矩都记进去，所有会话通用。
+                  默认打开：主动记下、群友明确解释或联网查实的新条目都写进机器人的共用笔记，群聊私聊通用。
                   关掉后按会话隔离：一个群记下的只在这个群生效，别的群查不到，只有主人能写全局笔记本。
                   切换不会搬动已有条目，各会话里已经记下的仍在自己会话里优先生效，可以在「笔记本」页按作用域逐条改。
                 </span>
@@ -1838,7 +1838,8 @@
                   <span class="switch-label">自动学习群里的黑话</span>
                 </label>
                 <span class="hint">
-                  长期记忆提取时顺带标出看不懂的说法；同一个群里至少两个人说过三次，就用联网搜索查证，查实的作为词条写进笔记本，标「自动」，可以照常改或作废。
+                  默认开启，可单独关闭，不影响长期记忆。复用长期记忆提取：群友明确解释或确认的叫法直接记入笔记本，不需要联网，不覆盖已有或已作废条目；共享范围遵循「笔记本跟随机器人」，默认群聊私聊共享。
+                  未知含义的说法，同一个群里至少两个人说过三次后再联网查证，查实的作为词条写进笔记本，标「自动」，可以照常改或作废。
                   查不实的会等出现更多次再查，几轮都查不实就不再管。每台机器人每天最多查证 20 次，需要开着联网搜索；作废过的词不会被写回来。
                 </span>
               </div>
@@ -4554,7 +4555,7 @@ function setForm(config: BotProfileConfig): void {
     forward_reply_enabled: config.forward_reply_enabled ?? ((config.forward_reply_threshold ?? 0) > 0 || (config.forward_reply_chunk_threshold ?? 0) > 0),
     social_reply_enabled: config.social_reply_enabled ?? false,
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
-    slang_learning_enabled: config.slang_learning_enabled ?? false,
+    slang_learning_enabled: config.slang_learning_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
     telegram_rich_messages: config.telegram_rich_messages ?? true,
     qq_typing_enabled: config.qq_typing_enabled ?? true,

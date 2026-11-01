@@ -550,6 +550,7 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 	systemPrompt := gateCfg.prompt(promptMemoryGateSpec)
 	if slang {
 		systemPrompt += slangGateRule
+		systemPrompt += notebookLearningRule
 	}
 	messages := []llm.Message{
 		{
@@ -572,12 +573,21 @@ func (r *Runtime) processEventMemoryJobs(ctx context.Context, store StructuredMe
 		return err
 	}
 	if slang {
+		// Save confirmed definitions before observing unknown terms, so they cannot trigger redundant research.
+		confirmed := r.learnNotebookDefinitions(ctx, last.event, gatePayload, raw, speakerAI)
 		events := make([]MessageEvent, len(sources))
 		texts := make([]string, len(sources))
 		for index, source := range sources {
 			events[index], texts[index] = source.event, source.text
 		}
-		r.observeSlangTerms(ctx, events, texts, parseSlangGateTerms(raw))
+		terms := parseSlangGateTerms(raw)
+		filtered := terms[:0]
+		for _, term := range terms {
+			if !confirmed[NormalizeNotebookTitle(term.Term)] {
+				filtered = append(filtered, term)
+			}
+		}
+		r.observeSlangTerms(ctx, events, texts, filtered)
 	}
 	// 一批里只有一个发言者时这份判断才说得清是谁的。
 	if memorySourcesSingleSpeaker(sources, func(source gateSource) string { return source.event.UserID }) {

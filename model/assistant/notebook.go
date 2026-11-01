@@ -210,6 +210,10 @@ type NotebookEntry struct {
 // NotebookUpsertRequest 是一次写入。同一个作用域下条目按归一化后的词去重：
 // 已存在就是修订（版本 +1，旧内容进修订史），不存在才是新建。
 type NotebookUpsertRequest struct {
+	// CreateOnly checks titles and aliases (including deleted entries) atomically.
+	// GuardScopes extends that check to other readable scopes; it never changes the write scope.
+	CreateOnly      bool
+	GuardScopes     []string
 	ScopeKey        string
 	Kind            NotebookKind
 	Term            string

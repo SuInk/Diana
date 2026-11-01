@@ -65,7 +65,7 @@
                 <strong>{{ entry.term }}</strong>
                 <span v-for="alias in entry.aliases ?? []" :key="alias" class="badge">{{ alias }}</span>
                 <span v-if="entry.status === 'deleted'" class="badge err">已作废</span>
-                <span v-if="entry.author_user_id === SLANG_AUTO_AUTHOR" class="badge accent" title="黑话自动学习联网查证后写入，可以照常修改或作废">自动</span>
+                <span v-if="entry.author_user_id === SLANG_AUTO_AUTHOR" class="badge accent" title="依据群友明确解释或联网查证自动写入，可以照常修改或作废">自动</span>
               </div>
               <p class="log-detail" style="white-space: normal">{{ entry.meaning }}</p>
               <p class="log-detail">

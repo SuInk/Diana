@@ -372,7 +372,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_account_safety_audit_default?: string;
   /** 笔记本是否跨群共用一本；默认按会话隔离。 */
   notebook_shared_scope_enabled?: boolean;
-  /** 黑话自动学习；缺省为关。 */
+  /** 群内说法自动学习；缺省为开，明确解释直接记，未知词联网查证。 */
   slang_learning_enabled?: boolean;
   /** 提示词增强开关；缺省等价于开启。 */
   prompt_inject_time?: boolean;

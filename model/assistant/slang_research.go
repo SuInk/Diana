@@ -147,7 +147,9 @@ func (r *Runtime) researchSlangCandidateWith(ctx context.Context, event MessageE
 	if err != nil {
 		return err
 	}
-	if _, _, err := notebook.UpsertNotebookEntry(ctx, NotebookUpsertRequest{
+	_, created, err := notebook.UpsertNotebookEntry(ctx, NotebookUpsertRequest{
+		CreateOnly:      true,
+		GuardScopes:     notebookScopeKeys(event),
 		ScopeKey:        scope,
 		Kind:            NotebookKindTerm,
 		Term:            candidate.Term,
@@ -159,8 +161,12 @@ func (r *Runtime) researchSlangCandidateWith(ctx context.Context, event MessageE
 		SourceSession:   sessionKey(event),
 		SourceMessageID: event.MessageID,
 		Now:             now,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("write notebook: %w", err)
+	}
+	if !created {
+		return store.UpdateSlangCandidate(ctx, candidate.ProfileID, candidate.GroupID, candidate.Term, SlangCandidateKnown, candidate.NextThreshold, false, now)
 	}
 	return store.UpdateSlangCandidate(ctx, candidate.ProfileID, candidate.GroupID, candidate.Term, SlangCandidateLearned, candidate.NextThreshold, false, now)
 }

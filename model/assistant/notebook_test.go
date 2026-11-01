@@ -34,6 +34,20 @@ func notebookStoreKey(scope, term string) string {
 }
 
 func (s *memoryNotebookStore) UpsertNotebookEntry(_ context.Context, request NotebookUpsertRequest) (NotebookEntry, bool, error) {
+	if request.CreateOnly {
+		for _, scope := range append([]string{request.ScopeKey}, request.GuardScopes...) {
+			for _, entry := range s.entries {
+				if entry.ScopeKey != scope {
+					continue
+				}
+				for _, term := range append([]string{entry.Term}, entry.Aliases...) {
+					if NormalizeNotebookTitle(term) == NormalizeNotebookTitle(request.Term) {
+						return entry, false, nil
+					}
+				}
+			}
+		}
+	}
 	key := notebookStoreKey(request.ScopeKey, request.Term)
 	entry, found := s.entries[key]
 	created := !found
