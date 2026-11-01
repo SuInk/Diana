@@ -1,6 +1,23 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { cacheUsageDisplay, cacheUtilization, groupCacheByPurpose, groupLLMUsage, splitCacheUsage, usageModelKey, usagePurposeLabel, usageShare } from "./llm-usage.ts";
+
+test("首页展示当前机器人的群排行，缓存率使用汇总输入而非总 Token", async () => {
+  const dashboard = await readFile(new URL("../views/DashboardView.vue", import.meta.url), "utf8");
+  const panel = await readFile(new URL("../components/GroupTokenUsage.vue", import.meta.url), "utf8");
+  const modal = dashboard.match(/<Modal v-if="activeDetail"[\s\S]*?<\/Modal>/)?.[0];
+  assert.ok(modal);
+  assert.match(modal, /<TokenUsageBreakdown v-if="openDetail === 'usage'"[\s\S]*<template #groups>\s*<GroupTokenUsage :profile="botScope" :groups="tokenGroups" embedded/);
+  const breakdown = await readFile(new URL("../components/TokenUsageBreakdown.vue", import.meta.url), "utf8");
+  assert.match(breakdown, /@click="dimension = 'group'">按群聊/);
+  assert.match(breakdown, /<slot v-if="dimension === 'group'" name="groups"/);
+  assert.equal(dashboard.match(/<GroupTokenUsage\b/g)?.length, 1);
+  assert.match(panel, /cacheUtilization\(report.usage.cached_input_tokens, report.usage.input_tokens\)/);
+  assert.match(panel, /cacheUtilization\(row.usage.cached_input_tokens, row.usage.input_tokens\)/);
+  assert.match(panel, /b.usage.total_tokens - a.usage.total_tokens/);
+  assert.equal(cacheUtilization(50 + 900, 100 + 1000), "86.4%");
+});
 
 const entry = (purpose, provider, model, input, output, calls = 1, missing = 0) => ({
   purpose, provider, model, input_tokens: input, output_tokens: output,

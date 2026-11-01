@@ -7,8 +7,9 @@
       <div class="segmented" role="group" aria-label="Token 统计维度">
         <button type="button" :class="{ active: dimension === 'purpose' }" :aria-pressed="dimension === 'purpose'" @click="dimension = 'purpose'">按使用方式</button>
         <button type="button" :class="{ active: dimension === 'model' }" :aria-pressed="dimension === 'model'" @click="dimension = 'model'">按模型</button>
+        <button v-if="$slots.groups" type="button" :class="{ active: dimension === 'group' }" :aria-pressed="dimension === 'group'" @click="dimension = 'group'">按群聊</button>
       </div>
-      <label class="token-breakdown-filter">
+      <label v-if="dimension !== 'group'" class="token-breakdown-filter">
         <span class="muted">{{ dimension === 'purpose' ? '模型' : '使用方式' }}</span>
         <select v-model="filter" class="input" :disabled="options.length === 0">
           <option value="">{{ dimension === 'purpose' ? '全部模型' : '全部使用方式' }}</option>
@@ -16,7 +17,8 @@
         </select>
       </label>
     </div>
-    <p v-if="entries === undefined" class="hint" style="margin: 0">当前统计尚未提供分类明细。</p>
+    <slot v-if="dimension === 'group'" name="groups" />
+    <p v-else-if="entries === undefined" class="hint" style="margin: 0">当前统计尚未提供分类明细。</p>
     <p v-else-if="rows.length === 0" class="hint" style="margin: 0">{{ filter ? '这个筛选条件下没有调用记录。' : '这个时间范围内还没有调用记录。' }}</p>
     <template v-else>
       <p class="hint" style="margin: 0">{{ filter ? '筛选合计' : '分类合计' }} {{ formatNumber(subtotal) }} Token · {{ formatNumber(calls) }} 次调用 · 缓存命中 {{ cacheUsageDisplay(cachedTokens, inputTokens) }} · 按总 Token 从高到低排列</p>
@@ -69,10 +71,10 @@ import { formatNumber } from "../lib/format";
 import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, usageShare, type UsageDimension } from "../lib/llm-usage";
 
 const props = defineProps<{ entries?: readonly LLMUsageBreakdown[]; rangeLabel: string }>();
-const dimension = ref<UsageDimension>("purpose");
+const dimension = ref<UsageDimension | "group">("purpose");
 const filter = ref("");
 const options = computed(() => groupLLMUsage(props.entries ?? [], dimension.value === "purpose" ? "model" : "purpose"));
-const rows = computed(() => groupLLMUsage(props.entries ?? [], dimension.value, filter.value));
+const rows = computed(() => dimension.value === "group" ? [] : groupLLMUsage(props.entries ?? [], dimension.value, filter.value));
 const subtotal = computed(() => rows.value.reduce((sum, row) => sum + row.total_tokens, 0));
 const calls = computed(() => rows.value.reduce((sum, row) => sum + row.recorded_calls, 0));
 const inputTokens = computed(() => rows.value.reduce((sum, row) => sum + row.input_tokens, 0));
