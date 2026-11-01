@@ -69,6 +69,7 @@ func researchObservationGuidance(tool, rawOutput string, remaining int) string {
 	default:
 		return ""
 	}
+	guidance += " 比较‘最新’时，只能在已核对的对象和范围内下结论；还有候选未读取或读取失败，不能把已读记录称为全局最新。只读到标题或列表时，不据此补写故障根因、实现细节，也不拿其他机器人的答复补证。"
 	if remaining == 0 {
 		return guidance + " 工具预算已耗尽，按已有证据回答，明确仍未确认的部分，不要承诺继续查询。"
 	}

@@ -19,10 +19,11 @@ import (
 )
 
 const (
-	defaultWebSearchMaxQueries       = 4
+	defaultWebSearchMaxQueries       = 10
 	defaultWebSearchMaxProviderCalls = 8
-	maximumWebSearchMaxQueries       = 8
-	maximumWebSearchMaxProviderCalls = 16
+	maximumWebSearchMaxQueries       = 10
+	maximumWebSearchMaxProviderCalls = 20
+	webSearchBatchConcurrency        = 10
 	maximumWebSearchQueryRunes       = 512
 	maximumWebSearchDomains          = 4
 	// 生产上 Exa p90 约 3 秒、结果页提前收尾后的 Google p90 约 4 秒：等过这条线

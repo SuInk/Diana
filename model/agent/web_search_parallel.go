@@ -53,7 +53,8 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	defer cancel()
 	calls := t.maxProviderCalls
 	if calls <= 0 {
-		calls = defaultWebSearchMaxProviderCalls
+		// Give each query/lane one attempt without increasing small-batch budgets.
+		calls = max(defaultWebSearchMaxProviderCalls, len(candidates)*len(lanes))
 	}
 	calls = min(calls, maximumWebSearchMaxProviderCalls)
 	type searchJob struct {
@@ -69,8 +70,8 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 	results := make([]webSearchResult, len(jobs))
 	errors := make([]error, len(jobs))
 	var wg sync.WaitGroup
-	// At most four browser jobs run at once; no per-conversation search quota.
-	slots := make(chan struct{}, 4)
+	// Bound jobs across both provider lanes; ten queries can create twenty jobs.
+	slots := make(chan struct{}, webSearchBatchConcurrency)
 	for i, job := range jobs {
 		wg.Add(1)
 		go func(index int, job searchJob) {

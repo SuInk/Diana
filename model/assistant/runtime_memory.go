@@ -269,8 +269,9 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	// 能力问题由 capabilities 负责；语气要求和恋爱关系同样由
 	// relationshipPermissionContext 统一给出，不在这里重复。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
-		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
+		builder.WriteString(portraitContextHeader)
 		builder.WriteString(lines)
+		builder.WriteString(portraitContextEnd)
 	}
 	// 这里不再列 profile.Memories。那份东西是原始发言的环形缓冲，不是长期记忆：
 	// 没有模型参与，不做相关性检索，@ 和回复标记也原样留着。同群聊天时它和最近

@@ -19,6 +19,11 @@ func TestFactVerificationAppliesToDirectQuestionsAndInterjections(t *testing.T) 
 		if strings.Count(prompt, promptFactVerification) != 1 {
 			t.Fatalf("fact rule missing or duplicated for kind=%s chatIn=%v", event.Kind, event.chatInReply)
 		}
+		for _, rule := range []string{"先利用上下文已有的主页", "不把提问者画像里的账号套给他正在问的人", "继续读取主页近期活动", "比较范围跟随问题", "不能先断言全局最新", "他人的答复可作查询线索"} {
+			if !strings.Contains(prompt, rule) {
+				t.Fatalf("research discovery rule %q missing for kind=%s chatIn=%v", rule, event.Kind, event.chatInReply)
+			}
+		}
 		if !event.chatInReply && strings.Contains(prompt, "就放弃这次插话") {
 			t.Fatal("direct question inherited interjection silence rule")
 		}

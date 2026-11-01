@@ -143,3 +143,19 @@ func TestResearchObservationRespectsExhaustedBudgetAndToolErrors(t *testing.T) {
 		t.Fatalf("execution error reclassified as an empty search: %s", failed)
 	}
 }
+
+func TestResearchObservationLimitsLatestClaimsToReadScope(t *testing.T) {
+	for _, tool := range []string{WebSearchToolName, "browser_render"} {
+		for _, remaining := range []int{0, 2} {
+			guidance := researchObservationGuidance(tool, `{}`, remaining)
+			for _, want := range []string{"不能把已读记录称为全局最新", "只读到标题或列表", "不拿其他机器人的答复补证"} {
+				if !strings.Contains(guidance, want) {
+					t.Fatalf("%s budget=%d missing %q: %s", tool, remaining, want, guidance)
+				}
+			}
+		}
+	}
+	if guidance := researchObservationGuidance("unrelated_tool", `{}`, 2); guidance != "" {
+		t.Fatalf("research guidance leaked into unrelated tool: %s", guidance)
+	}
+}

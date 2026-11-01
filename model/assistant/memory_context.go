@@ -383,6 +383,9 @@ func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, pol
 // 过了那天就不能当成正在发生。
 const structuredMemoryTimeRule = "每条记忆的「记于」是写下它的日期，不是现在；正文里的今天、早上、刚才等说法都相对那一天。一时的状态（吃药、生病、喝酒、在外地、心情）只说明当时，不要当成此刻仍在发生，需要时先问一句。\n"
 
+const portraitContextHeader = "\n人员画像（只属于上方当前发言者；账号等身份不可套给他正在询问的其他人，只在自然相关时用上，不要主动背出来）："
+const portraitContextEnd = "\n【当前发言者画像结束；其他人的身份以对应姓名的消息或来源为准】\n"
+
 func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage, []StructuredMemoryItem) {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
@@ -415,8 +418,9 @@ func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProf
 	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
 	// 度可控，不参与下面各段的裁剪。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
-		builder.WriteString("\n人员画像（当前发言者的长期情况，只在自然相关时用上，不要主动背出来）：")
+		builder.WriteString(portraitContextHeader)
 		builder.WriteString(lines)
+		builder.WriteString(portraitContextEnd)
 	}
 
 	sections := []struct {
