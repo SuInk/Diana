@@ -62,6 +62,9 @@ func onlySendCalls(calls []llm.ToolCall) bool {
 
 // sendText 取出一次 send 调用的正文；老会话历史里的 content 也认。
 func sendText(call llm.ToolCall) string {
+	if silent, _ := call.Arguments["silent"].(bool); silent {
+		return ""
+	}
 	for _, key := range []string{"text", "content"} {
 		if text, ok := call.Arguments[key].(string); ok && strings.TrimSpace(text) != "" {
 			return strings.TrimSpace(text)
@@ -123,6 +126,12 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 		}
 		if silent, _ := call.Arguments["silent"].(bool); silent {
 			silentHint = true
+			if action.SilentReason == "" {
+				action.SilentReason, _ = call.Arguments["silent_reason"].(string)
+				action.SilentReason = strings.TrimSpace(action.SilentReason)
+			}
+			// 显式静默优先于残留正文、表情包和 task_state，不让畸形参数触发发送。
+			continue
 		}
 		if reason, _ := call.Arguments["silent_reason"].(string); action.SilentReason == "" {
 			action.SilentReason = strings.TrimSpace(reason)
