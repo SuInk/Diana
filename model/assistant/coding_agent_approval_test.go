@@ -302,8 +302,8 @@ func TestCodingApprovalAsksOwnerAndHonorsReply(t *testing.T) {
 
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 	asked := channel.messages()[0].Text
-	allowCode, _, denyCode := codingApprovalCodes(request)
-	if !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, allowCode) || !strings.Contains(asked, denyCode) {
+	allowCode, _, _ := codingApprovalCodes(request)
+	if !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "同意编码操作") || !strings.Contains(asked, "拒绝编码操作") {
 		t.Fatalf("询问消息 = %q", asked)
 	}
 
@@ -312,7 +312,7 @@ func TestCodingApprovalAsksOwnerAndHonorsReply(t *testing.T) {
 		t.Fatalf("非主人回码不该被受理")
 	}
 
-	reply, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "同意 "+allowCode)
+	reply, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "同意编码操作")
 	if !handled || !strings.Contains(reply, job.ID) {
 		t.Fatalf("handled=%v reply=%q", handled, reply)
 	}
@@ -409,7 +409,7 @@ func TestCodingToolStatusShowsPendingApproval(t *testing.T) {
 	if result.Job == nil || !strings.Contains(result.Job.AwaitingApproval, "git push origin main") {
 		t.Fatalf("job = %#v", result.Job)
 	}
-	if result.Job.ApprovalAllowCode != allow || result.Job.ApprovalDenyCode != deny {
+	if result.Job.ApprovalAllowCode != "同意编码任务 "+job.ID || result.Job.ApprovalDenyCode != "拒绝编码任务 "+job.ID {
 		t.Fatalf("码没带出来：%#v", result.Job)
 	}
 	if !strings.Contains(result.Message, "点头") {

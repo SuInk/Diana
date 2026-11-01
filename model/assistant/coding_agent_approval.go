@@ -67,7 +67,8 @@ type codingApprovalRequest struct {
 	CreatedAt time.Time `json:"created_at"`
 	// ProfileID 是任务所属的机器人，由 Diana 登记询问时按任务记录补上，不从 hook
 	// 写的文件里读：谁能回这个码、常驻放行记到谁名下，都按它认。
-	ProfileID string `json:"-"`
+	ProfileID string          `json:"-"`
+	Target    codingJobTarget `json:"-"`
 }
 
 // codingApprovalResponse 是 Diana 写回去的裁决。
@@ -268,9 +269,8 @@ func codingApprovalResponsePath(dir, id string) string {
 
 // codingApprovalCodes 派生这次询问的放行码、常驻放行码和拒绝码。
 //
-// 用确认码而不是认「同意」「可以」这类词：判断只剩一次结构匹配，不涉及任何语义
-// 推断，而且码只出现在主人自己那条消息里——网页正文、工具输出或者别人的发言即使
-// 写着「同意」也放行不了任何东西。这和扩展变更确认码是同一个思路。
+// 内部仍用码索引一次性裁决，也兼容旧消息；新消息通过同会话的完整文字指令匹配，
+// 不从网页、工具输出或模型解释里推断授权。
 func codingApprovalCodes(request codingApprovalRequest) (string, string, string) {
 	seed := strings.Join([]string{request.ID, request.JobID, request.Tool, request.Detail}, "\x00")
 	allow := sha256.Sum256([]byte("allow\x00" + seed))
@@ -389,6 +389,7 @@ func (r *Runtime) watchCodingApprovals(ctx context.Context, job CodingJob, timeo
 			// 里，下一轮轮询可能在它跑起来之前又看到同一个请求，主人就会收到
 			// 两条一样的询问。
 			request.ProfileID = job.Target.ProfileID
+			request.Target = job.Target
 			allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
 			if strings.TrimSpace(request.Pattern) == "" {
 				// 没有命中模式（全部写操作档）时不给常驻放行码：记不下来是哪一类。
@@ -410,11 +411,10 @@ func (r *Runtime) watchCodingApprovals(ctx context.Context, job CodingJob, timeo
 	}
 }
 
-// askCodingApproval 把一次询问发给主人并等他回码。等不到就拒绝：让一个待确认的
+// askCodingApproval 把一次询问发给主人并等他确认。等不到就拒绝：让一个待确认的
 // 危险操作因为没人看见而默认放行，比让任务失败糟得多。
 func (r *Runtime) askCodingApproval(ctx context.Context, job CodingJob, wait *codingApprovalWait, timeout time.Duration) {
 	request := wait.request
-	allowCode, denyCode := wait.allowCode, wait.denyCode
 	defer r.codingJobs().dropApproval(wait)
 
 	// 重启接回的任务可能一启动就在等确认，这时聊天客户端多半还没连上（反向
@@ -432,12 +432,12 @@ func (r *Runtime) askCodingApproval(ctx context.Context, job CodingJob, wait *co
 
 	always := ""
 	if wait.alwaysCode != "" {
-		always = fmt.Sprintf("这类操作（%s）以后都同意就回 %s，", request.Pattern, wait.alwaysCode)
+		always = fmt.Sprintf("这类操作（%s）以后都同意就回「以后都同意编码任务 %s」，", request.Pattern, job.ID)
 	}
 	message := fmt.Sprintf(
-		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意就回 %s，%s不同意回 %s。%s内没人回我就当拒绝。",
+		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意就回「同意编码操作」，%s不同意回「拒绝编码操作」。有多个待审批时，回复「同意编码任务 %s」或「拒绝编码任务 %s」指定任务，无需确认码。%s内没人回我就当拒绝。",
 		job.ID, job.Workspace, codingApprovalDetail(request),
-		allowCode, always, denyCode, formatCodingDuration(timeout),
+		always, job.ID, job.ID, formatCodingDuration(timeout),
 	)
 	if err := r.sendSubscriberNotice(ctx, job.Target.event(), message); err != nil {
 		r.setError(err.Error())
@@ -482,8 +482,7 @@ func writeCodingApprovalResponse(request codingApprovalRequest, response codingA
 	_ = os.Rename(temp, path)
 }
 
-// handleCodingApprovalReply 认出主人回过来的确认码。匹配是结构性的：码必须作为一
-// 个独立片段出现，前后不接同类字符，避免被更长的哈希串意外命中。
+// handleCodingApprovalReply 接受完整文字审批指令，并兼容旧消息中的独立确认码。
 func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (string, bool) {
 	if r == nil || r.codingJobRegistry == nil {
 		return "", false
@@ -493,6 +492,11 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 		return "", false
 	}
 	lowered := strings.ToLower(text)
+	if code, ambiguous := r.codingApprovalTextCode(event, text); ambiguous {
+		return "有多个编码操作待审批，请回复「同意编码任务 任务ID」或「拒绝编码任务 任务ID」指定任务。", true
+	} else if code != "" {
+		lowered = code
+	}
 	for _, request := range pending {
 		// 同一个 Runtime 里几台机器人的主人可以不同：B 的主人不能替 A 派的任务点
 		// 头，常驻放行也只记到任务所属那台的清单里。
@@ -547,6 +551,36 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 		}
 	}
 	return "", false
+}
+
+// codingApprovalTextCode 只接受完整审批指令，且必须唯一匹配当前会话的待办。
+// 不消费普通的「同意」，避免抢走配置、付款等其他流程的确认。
+func (r *Runtime) codingApprovalTextCode(event MessageEvent, text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	var codes []string
+	for _, request := range r.codingJobs().pendingApprovals() {
+		target := request.Target
+		if !r.sameProfileAsEvent(request.ProfileID, event) || target.Platform != event.Platform ||
+			target.ContextNamespace != event.ContextNamespace || target.GroupID != event.GroupID ||
+			(target.GroupID == "" && target.UserID != event.UserID) {
+			continue
+		}
+		allow, always, deny := codingApprovalCodes(request)
+		switch text {
+		case "同意编码操作", "同意编码任务 " + request.JobID:
+			codes = append(codes, allow)
+		case "拒绝编码操作", "拒绝编码任务 " + request.JobID:
+			codes = append(codes, deny)
+		case "以后都同意编码任务 " + request.JobID:
+			if strings.TrimSpace(request.Pattern) != "" {
+				codes = append(codes, always)
+			}
+		}
+	}
+	if len(codes) == 1 {
+		return codes[0], false
+	}
+	return "", len(codes) > 1
 }
 
 // containsStandaloneCode 判断确认码是否作为独立片段出现在文本里。

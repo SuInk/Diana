@@ -84,7 +84,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            codingAgentPluginID,
 		Name:          "编码代理",
-		Version:       "0.1.4",
+		Version:       "0.1.5",
 		Description:   "把 Claude Code、Codex 这类编码 CLI 接进对话：在持久工作区里长时间改代码，完成后汇报，运行途中可以随时查询进度。仅机器人主人可用。",
 		Official:      true,
 		BuiltIn:       true,
@@ -167,7 +167,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 			{
 				Key:         codingAgentSettingApprovalMode,
 				Label:       "聊天里确认",
-				Description: "需要点头的操作会在聊天里发给主人，回确认码才继续。危险操作只拦下面那张清单命中的命令；全部写操作连改文件也要确认（改一个文件问一次，很吵，一般只在试水时用）。只支持 Claude Code 后端。",
+				Description: "需要点头的操作会在聊天里发给主人，回复「同意编码操作」才继续，无需确认码。危险操作只拦下面那张清单命中的命令；全部写操作连改文件也要确认（改一个文件问一次，很吵，一般只在试水时用）。支持 Claude Code 和 ACP 后端。",
 				Type:        PluginSettingTypeSelect,
 				Default:     codingApprovalModeDangerous,
 				Options: []PluginSettingOption{

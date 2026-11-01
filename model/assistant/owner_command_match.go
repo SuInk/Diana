@@ -152,6 +152,9 @@ func (r *Runtime) codingApprovalCodePending(event MessageEvent, text string) boo
 	if r == nil || r.codingJobRegistry == nil {
 		return false
 	}
+	if code, ambiguous := r.codingApprovalTextCode(event, text); code != "" || ambiguous {
+		return true
+	}
 	lowered := strings.ToLower(text)
 	for _, request := range r.codingJobs().pendingApprovals() {
 		if !r.sameProfileAsEvent(request.ProfileID, event) {

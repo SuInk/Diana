@@ -326,7 +326,7 @@ test("timeout saves keep newer drafts, failed edits and a different bot intact",
     const context = vm.createContext({
       connectionConflict: { value: undefined }, form: { value: { id: "bot-a", platform: "telegram", request_timeout_ms: 180000 } },
       roleForm: { value: {} }, visibleModelRoleRows: [], orderedRoleKeys: Object.keys,
-      modelRequestTimeoutDraft: { value: 1.25 }, walletQuickApproveDraft: { value: "" }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
+      modelRequestTimeoutDraft: { value: 1.25 }, walletAutoApproveDraft: { value: "" }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
       sendRetryValidationError: () => "", sendRetryPayload: () => ({}),
       botImageGenerationLimitsPayload: () => ({}), botVideoGenerationLimitsPayload: () => ({}), mediaGenerationCooldownPayload: () => ({}),
       isOneBotPlatform: { value: false }, busy: { value: false }, creating: { value: false }, page: { value: "edit" },
@@ -339,6 +339,7 @@ test("timeout saves keep newer drafts, failed edits and a different bot intact",
     const pending = loadFunction("save", context)();
     assert.equal(payload.model_request_timeout_ms, 1250);
     assert.equal(payload.request_timeout_ms, 180000);
+    assert.equal(payload.wallet_auto_approve_cents, 20000);
     if (outcome === "newer") context.modelRequestTimeoutDraft.value = 8;
     if (outcome === "switch") { context.form.value = { id: "bot-b" }; context.modelRequestTimeoutDraft.value = 9; }
     complete();

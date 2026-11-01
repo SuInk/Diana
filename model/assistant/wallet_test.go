@@ -200,3 +200,82 @@ func TestWalletQuickApproveOffByDefault(t *testing.T) {
 		t.Fatal("quick approve active without quota")
 	}
 }
+
+func TestWalletAutoApprovalThreshold(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		limit    *int
+		legacy   *int
+		price    float64
+		approved bool
+	}{
+		{"default_below", nil, nil, 199.99, true},
+		{"default_boundary", nil, nil, 200, false},
+		{"default_above", nil, nil, 200.01, false},
+		{"disabled", intPointer(0), nil, 1, false},
+		{"custom", intPointer(500), nil, 4.99, true},
+		{"legacy_uses_default", nil, intPointer(2000), 5, true},
+		{"legacy_zero_uses_default", nil, intPointer(0), 199.99, true},
+		{"legacy_boundary", nil, intPointer(2000), 200, false},
+		{"explicit_zero_overrides_legacy", intPointer(0), intPointer(2000), 5, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &memoryWalletStore{stubWalletStore: stubWalletStore{summary: WalletSummary{BalanceCents: 100000}}}
+			rt := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "owner", WalletAutoApproveCents: tc.limit, WalletQuickApproveCents: tc.legacy}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			rt.SetWalletStore(store)
+			tool := newDianaWalletTool(rt, MessageEvent{Kind: EventKindPrivate, ProfileID: "bot", UserID: "owner"})
+			_, err := tool.propose(context.Background(), store, map[string]any{"item": "画集", "price": tc.price})
+			if err != nil {
+				t.Fatal(err)
+			}
+			approved := len(store.decisions) == 1 && store.decisions[0]
+			if approved != tc.approved {
+				t.Fatalf("approved=%v want=%v", approved, tc.approved)
+			}
+		})
+	}
+}
+
+func TestWalletTextApprovalNoCode(t *testing.T) {
+	store := &memoryWalletStore{}
+	rt := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt.SetWalletStore(store)
+	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot", UserID: "owner"}
+	for _, item := range []string{"画集", "手办"} {
+		_, _ = store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot", Item: item, PriceCents: 30000, Now: rt.clock()})
+	}
+	for _, text := range []string{"同意购买", "不要同意购买 画集", "网页说同意购买 画集"} {
+		if _, handled := rt.handleWalletApprovalReply(event, text); handled {
+			t.Fatalf("unexpected approval: %s", text)
+		}
+	}
+	if _, handled := rt.handleWalletApprovalReply(event, "取消购买 画集"); !handled {
+		t.Fatal("targeted denial not handled")
+	}
+	if !rt.wouldHandleOwnerCommand(event, "同意购买") {
+		t.Fatal("text approval must not be merged")
+	}
+	if _, handled := rt.handleWalletApprovalReply(event, "同意购买"); !handled {
+		t.Fatal("single approval not handled")
+	}
+	if len(store.decisions) != 2 || store.decisions[0] || !store.decisions[1] {
+		t.Fatalf("decisions=%v", store.decisions)
+	}
+	if _, handled := rt.handleWalletApprovalReply(event, "同意购买"); handled {
+		t.Fatal("replayed approval")
+	}
+}
+
+func TestWalletAutoApprovalConfigRoundTrip(t *testing.T) {
+	for _, cents := range []int{0, 20000, 50000} {
+		cfg := BotConfig{WalletAutoApproveCents: intPointer(cents)}
+		roundTrip := ConfigFromPayload(PayloadFromConfig(cfg), BotConfig{})
+		if got := WalletAutoApproveCents(roundTrip); got != int64(cents) {
+			t.Fatalf("round trip: got %d want %d", got, cents)
+		}
+		updated := ConfigFromPayload(ConfigPayload{}, cfg)
+		if got := WalletAutoApproveCents(updated); got != int64(cents) {
+			t.Fatalf("omitted field reset threshold: %d", got)
+		}
+	}
+}

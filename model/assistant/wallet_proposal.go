@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-// 购买提议：她想买某样东西时记一份提议，私聊主人要确认码，主人回码才扣款。
+// 购买提议：她想买某样东西时记一份提议，超过免审批额度时私聊主人，文字确认后扣款。
 // 设计见 docs/wallet.md「购买提议」一节。
 //
 // 确认码由提议内容哈希得出，只在主人本人的消息里认：别人说「同意」、网页正文里
@@ -133,15 +133,13 @@ func (r *Runtime) walletEnabled(event MessageEvent) bool {
 	return OwnSpaceEnabled(r.effectiveConfigForEvent(event))
 }
 
-// askWalletApproval 私聊主人要确认码。主人就在当前私聊里时也照发一条：码要出现在
-// 一条独立的、由运行时写的消息里，不能指望模型把它原样转述。
+// askWalletApproval 由运行时私聊主人，展示商品、金额与文字确认指令。
 func (r *Runtime) askWalletApproval(ctx context.Context, event MessageEvent, proposal WalletProposal) error {
 	cfg := r.effectiveConfigForEvent(event)
 	ownerID := strings.TrimSpace(cfg.OwnerID)
 	if ownerID == "" {
 		return fmt.Errorf("这台机器人没有设置主人，没人能批准")
 	}
-	allowCode, denyCode := walletProposalCodes(proposal)
 	where := "私聊"
 	if proposal.SourceGroupID != "" {
 		where = "群 " + proposal.SourceGroupID
@@ -150,7 +148,7 @@ func (r *Runtime) askWalletApproval(ctx context.Context, event MessageEvent, pro
 	if who != "" {
 		where += "，和 " + who + " 聊天时"
 	}
-	answer := fmt.Sprintf("同意就回 %s，不同意回 %s", allowCode, denyCode)
+	answer := fmt.Sprintf("同意就回「同意购买 %s」，不同意回「取消购买 %s」。只有一笔待审批时也可以回「同意购买」或「取消购买」，无需确认码", proposal.Item, proposal.Item)
 	if walletQuickApprovable(cfg, proposal) {
 		answer = "同意就回「同意」，不同意回「不要」"
 	}
@@ -161,7 +159,7 @@ func (r *Runtime) askWalletApproval(ctx context.Context, event MessageEvent, pro
 	return r.sendSubscriberNotice(ctx, target, message)
 }
 
-// handleWalletApprovalReply 认出主人回过来的购买确认码，在进入模型那一轮之前处理。
+// handleWalletApprovalReply 在进入模型之前处理购买文字确认，兼容旧确认码。
 func (r *Runtime) handleWalletApprovalReply(event MessageEvent, text string) (string, bool) {
 	proposal, approve, ok := r.matchWalletApprovalCode(event, text)
 	if !ok {
@@ -174,7 +172,7 @@ func (r *Runtime) handleWalletApprovalReply(event MessageEvent, text string) (st
 		strings.TrimSpace(event.UserID), strings.TrimSpace(event.SenderName), r.clock())
 	switch {
 	case errors.Is(err, ErrWalletInsufficient):
-		return fmt.Sprintf("零花钱不够买「%s」了，这次没扣。提议还留着，补了零花钱再回一次码就行。", proposal.Item), true
+		return fmt.Sprintf("零花钱不够买「%s」了，这次没扣。提议还留着，补了零花钱再确认一次就行。", proposal.Item), true
 	case errors.Is(err, ErrWalletProposalClosed):
 		return "这个购买提议已经处理过或过期了。", true
 	case err != nil:
@@ -205,6 +203,35 @@ func (r *Runtime) matchWalletApprovalCode(event MessageEvent, text string) (Wall
 	store := r.walletProposalStore()
 	if store == nil {
 		return WalletProposal{}, false, false
+	}
+
+	if event.Kind == EventKindPrivate {
+		text = strings.TrimSpace(text)
+		approve := text == "同意购买" || strings.HasPrefix(text, "同意购买 ")
+		deny := text == "取消购买" || strings.HasPrefix(text, "取消购买 ")
+		if approve || deny {
+			ctx, cancel := context.WithTimeout(context.Background(), walletLoadTimeout)
+			defer cancel()
+			pending, err := store.ListWalletProposals(ctx, strings.TrimSpace(event.ProfileID), true, r.clock(), MaximumPendingWalletProposals)
+			if err != nil {
+				return WalletProposal{}, false, false
+			}
+			prefix := "取消购买"
+			if approve {
+				prefix = "同意购买"
+			}
+			item := strings.TrimSpace(strings.TrimPrefix(text, prefix))
+			var matches []WalletProposal
+			for _, proposal := range pending {
+				if item == "" || item == proposal.Item {
+					matches = append(matches, proposal)
+				}
+			}
+			if len(matches) == 1 {
+				return matches[0], approve, true
+			}
+			return WalletProposal{}, false, false
+		}
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	if approve, ok := walletQuickReply(text); ok && event.Kind == EventKindPrivate && WalletQuickApproveCents(cfg) > 0 {

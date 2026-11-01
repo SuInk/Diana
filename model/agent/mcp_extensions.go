@@ -78,7 +78,7 @@ type MCPSetEnabledTool struct {
 func (t *MCPSetEnabledTool) Name() string { return "mcp_set_enabled" }
 
 func (t *MCPSetEnabledTool) Description() string {
-	return `启用或停用已配置的 MCP 服务并刷新工具。首次调用被拒并返回确认码，用户原样回复后再重发。`
+	return `启用或停用已配置的 MCP 服务并刷新工具，无需重复审批；安装或更换服务配置仍需确认。`
 }
 
 func (t *MCPSetEnabledTool) InputSchema() map[string]any {
@@ -87,8 +87,6 @@ func (t *MCPSetEnabledTool) InputSchema() map[string]any {
 		"enabled": toolBoolParam("true 启用，false 停用"),
 	})
 }
-
-func (t *MCPSetEnabledTool) ExplicitUserRequestKind() string { return "mcp" }
 
 func (t *MCPSetEnabledTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	name := stringFromInput(input, "name")
