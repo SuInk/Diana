@@ -4644,7 +4644,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	replyCfg.AgentEnabled = agentActive
 	// 图片开场白攒在这一轮里：模型自己说了就用模型那句，什么都没说才拿它兜底，
 	// 保证发图前只出现一条文字（见 image_announcement.go）。
-	if draft := r.telegramReplyDraft(event, replyCfg); draft != nil {
+	if draft := r.replyDraft(event, replyCfg); draft != nil {
 		ctx = withTextDeltaObserver(ctx, draft)
 	}
 	// 模型收尾时填了表情包关键词的话，按配置顺序配一张，见 sticker_finalize.go。

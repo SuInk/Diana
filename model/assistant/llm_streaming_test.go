@@ -404,17 +404,17 @@ func TestDraftCommitFeedbackControlsFailover(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		text      string
-		draft     *telegramReplyDraft
+		draft     *replyDraft
 		committed bool
 	}{
 		{"nil", "partial", nil, false},
-		{"disabled", "partial", &telegramReplyDraft{channel: failingDraftChannel{}, disabled: true}, false},
-		{"blank", " \n", &telegramReplyDraft{channel: failingDraftChannel{}}, false},
-		{"metadata", replySingleMarker[:5], &telegramReplyDraft{channel: failingDraftChannel{}}, false},
-		{"rejected", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 400}}}, false},
-		{"sent", "partial", &telegramReplyDraft{channel: failingDraftChannel{}}, true},
-		{"uncertain", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: errors.New("connection reset")}}, true},
-		{"server-error", "partial", &telegramReplyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 500}}}, true},
+		{"disabled", "partial", &replyDraft{channel: failingDraftChannel{}, disabled: true}, false},
+		{"blank", " \n", &replyDraft{channel: failingDraftChannel{}}, false},
+		{"metadata", replySingleMarker[:5], &replyDraft{channel: failingDraftChannel{}}, false},
+		{"rejected", "partial", &replyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 400}}}, false},
+		{"sent", "partial", &replyDraft{channel: failingDraftChannel{}}, true},
+		{"uncertain", "partial", &replyDraft{channel: failingDraftChannel{err: errors.New("connection reset")}}, true},
+		{"server-error", "partial", &replyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 500}}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			primary := &streamRejectionRegistryAdapter{events: []llm.ChatEvent{textDelta(tc.text), {Type: llm.ChatEventError, Error: "HTTP 401"}}}

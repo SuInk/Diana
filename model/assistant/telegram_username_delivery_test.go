@@ -17,13 +17,13 @@ func TestTelegramDraftResolvesUsernameOnEveryUpdate(t *testing.T) {
 	api := newFakeTelegramAPI(t, nil)
 	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "Alice", SenderUsername: "alice_name", Time: 10}
 	r := &Runtime{channel: api.channel(), history: map[string][]MessageEvent{}}
-	draft := r.telegramReplyDraft(event, BotConfig{})
+	draft := r.replyDraft(event, BotConfig{})
 	if draft == nil {
 		t.Fatal("missing private draft")
 	}
 	draft.ObserveTextDelta(context.Background(), "<diana-at id=\"10002\"/> hello")
 	r.history[sessionKey(event)] = []MessageEvent{{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "Alice", SenderUsername: "alice_new", Time: 11}}
-	draft.lastSent = draft.lastSent.Add(-telegramDraftUpdateInterval)
+	draft.lastSent = draft.lastSent.Add(-replyDraftUpdateInterval)
 	draft.ObserveTextDelta(context.Background(), "<diana-at id=\"10002\"/> hello <diana-at id=\"10003\"/>")
 	calls := api.callsOf("sendMessageDraft")
 	if len(calls) != 2 {
@@ -45,7 +45,7 @@ func TestTelegramDraftRestoresIdentityAliasesFromProviderScope(t *testing.T) {
 			api := newFakeTelegramAPI(t, nil)
 			event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderName: "Alice", SenderUsername: username}
 			r := &Runtime{channel: api.channel()}
-			draft := r.telegramReplyDraft(event, BotConfig{})
+			draft := r.replyDraft(event, BotConfig{})
 			scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
 			alias := scope.register("10002", "user")
 			marker := mentionMarkerFor(alias)
@@ -85,7 +85,7 @@ func TestTelegramDraftWithholdsUnresolvedIdentityAliases(t *testing.T) {
 	api := newFakeTelegramAPI(t, nil)
 	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", SenderUsername: "alice_name"}
 	r := &Runtime{channel: api.channel()}
-	draft := r.telegramReplyDraft(event, BotConfig{})
+	draft := r.replyDraft(event, BotConfig{})
 	scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
 	alias := scope.register("10002", "user")
 	ctx := withIdentityPrivacyScope(context.Background(), scope)
@@ -118,7 +118,7 @@ func TestTelegramDraftRestoresAliasesBeforeRuneBudget(t *testing.T) {
 	scope := newIdentityPrivacyScopeWithSalt("telegram-draft-test")
 	alias := scope.register("10002", "user")
 	wantSource := "<diana-at id=\"10002\"/> hello"
-	draft := r.telegramReplyDraft(event, BotConfig{MaxReplyChars: len([]rune(wantSource))})
+	draft := r.replyDraft(event, BotConfig{MaxReplyChars: len([]rune(wantSource))})
 	draft.ObserveTextDelta(withIdentityPrivacyScope(context.Background(), scope), mentionMarkerFor(alias)+" hello")
 	if calls := api.callsOf("sendMessageDraft"); len(calls) != 1 || calls[0].Params["text"] != "@alice_name hello" {
 		t.Fatalf("alias was truncated before restoration: %#v", calls)
@@ -249,13 +249,13 @@ func TestTelegramDraftTruncatesExpandedUsernamesWithoutDisabling(t *testing.T) {
 	event := telegramMentionTestEvent("10002", 10, &username)
 	event.Kind, event.GroupID = EventKindPrivate, ""
 	r := &Runtime{channel: api.channel(), history: map[string][]MessageEvent{}}
-	draft := r.telegramReplyDraft(event, BotConfig{})
+	draft := r.replyDraft(event, BotConfig{})
 	source := strings.Repeat("<diana-at id=\"10002\"/>", 125)
 	draft.ObserveTextDelta(context.Background(), source)
 	if draft.disabled {
 		t.Fatal("expanded username draft disabled streaming")
 	}
-	draft.lastSent = draft.lastSent.Add(-telegramDraftUpdateInterval)
+	draft.lastSent = draft.lastSent.Add(-replyDraftUpdateInterval)
 	draft.ObserveTextDelta(context.Background(), source+"next")
 	calls := api.callsOf("sendMessageDraft")
 	if len(calls) != 2 {
