@@ -215,10 +215,12 @@ test("file input is manually checked and never claims login; saved file is not a
 });
 
 test("manifest groups render every setting exactly once, preserving future settings in advanced", () => {
-  const specs = ["enabled_platforms", ...resolverCredentialKeys, "download_media", "platform_level_rules", "future_option", "browser_render"].map((key) => ({ key, label: key, type: "string", default: "" }));
+  const specs = ["enabled_platforms", ...resolverCredentialKeys, "follow_up_comment", "follow_up_prompt", "download_media", "platform_level_rules", "future_option", "browser_render"].map((key) => ({ key, label: key, type: "string", default: "" }));
   const groups = groupResolverSettings(specs);
   const keys = [...groups.platforms, ...groups.credentials.map((item) => item.spec), ...groups.media, ...groups.advanced].map((spec) => spec.key);
   assert.deepEqual(keys.toSorted(), specs.map((spec) => spec.key).toSorted());
   assert.equal(new Set(keys).size, keys.length);
   assert.ok(groups.advanced.some((spec) => spec.key === "future_option"));
+  const followUpIndex = groups.media.findIndex((spec) => spec.key === "follow_up_comment");
+  assert.equal(groups.media[followUpIndex + 1].key, "follow_up_prompt");
 });
