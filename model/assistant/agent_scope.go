@@ -402,6 +402,9 @@ func memberSkills(source []agent.SkillMetadata, extensionIDs []string) []agent.S
 
 func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship RelationshipPolicy) map[string]bool {
 	allowed := relationship.allowedAgentToolNames()
+	if allowed != nil && r != nil && r.workspaceGroupScope(event) != "" {
+		allowed[dianaSaveToWorkspaceToolName] = true
+	}
 	if allowed == nil || r == nil || r.plugins == nil {
 		return allowed
 	}

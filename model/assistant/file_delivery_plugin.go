@@ -128,14 +128,16 @@ func (t *dianaFileDeliveryTool) Name() string { return dianaFileDeliveryToolName
 // 文件由运行时发，正文再贴一遍内容会刷屏（#603）。
 func (t *dianaFileDeliveryTool) Description() string {
 	return `把你写好的文本内容打包成文件发到当前会话供下载，适合长代码、脚本、SVG、Markdown、配置、CSV，别把几百行塞进正文。` +
+		`交付有权使用的工作目录文本文件时直接传 path，与 content 二选一，无需读取后复制全文；filename 是交付文件名。` +
 		`它只发送不留存，存进工作目录用 write_file（文本）或 save_to_workspace（二进制），不拿它冒充「存好了」。` +
 		`调用后一句话交代，不在正文再贴内容。`
 }
 
 func (t *dianaFileDeliveryTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"filename", "content"}, map[string]any{
+	return toolObjectSchema([]string{"filename"}, map[string]any{
 		"filename": toolStringParam("带扩展名的文件名，不含目录，如 main.go"),
 		"content":  toolStringParam("完整文件内容，UTF-8 文本"),
+		"path":     toolStringParam("工作目录内已有文本文件的路径，与 content 二选一；群成员仅限本群保存的文件"),
 		"preview":  toolBoolParam("先发一张渲染预览图，默认按插件设置"),
 	})
 }
@@ -156,18 +158,10 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return t.fail(ctx, "", err.Error())
 	}
-	content := configToolString(input, "content")
-	if strings.TrimSpace(content) == "" {
-		return t.fail(ctx, name, "content 是空的，没有东西可以发。")
+	content, sourceErr := toolTextSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
+	if sourceErr != nil {
+		return t.fail(ctx, name, sourceErr.Error())
 	}
-	if !utf8.ValidString(content) {
-		return t.fail(ctx, name, "content 不是合法的 UTF-8 文本。")
-	}
-	maxBytes := t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize)
-	if int64(len(content)) > maxBytes {
-		return t.fail(ctx, name, fmt.Sprintf("文件有 %d 字节，超过上限 %d 字节；拆成几个文件或精简一下。", len(content), maxBytes))
-	}
-
 	preview := t.settings.Bool(fileDeliverySettingPreview, true)
 	if _, ok := input["preview"]; ok {
 		preview = toolInputBool(input, "preview")

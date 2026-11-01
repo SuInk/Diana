@@ -13,11 +13,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
+	"golang.org/x/net/html"
 )
 
 // render_media 把模型写的 HTML 页面或 SVG 渲染成图片、视频或 GIF 发到会话。
@@ -76,15 +76,17 @@ func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 // 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
 	return `把 HTML 页面或 SVG 渲染成图片、视频或 GIF 发到当前会话。` +
+		`已有工作目录文件时，直接传 path，由运行时完整读取；不必 read_file 复制正文、打开 file:// 或启动 HTTP 服务。content 与 path 二选一。` +
 		`仅在用户明确要求图片、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
 		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
 		`成品由运行时发送，调用后一句话交代即可。`
 }
 
 func (t *dianaRenderMediaTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"format", "content"}, map[string]any{
+	return toolObjectSchema([]string{"format"}, map[string]any{
 		"format":   map[string]any{"type": "string", "enum": []string{renderMediaFormatHTML, renderMediaFormatSVG}},
 		"content":  toolStringParam("完整 HTML 文档，或以 <svg> 开头的 SVG"),
+		"path":     toolStringParam("工作目录内 HTML/SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件，不是 URL"),
 		"output":   map[string]any{"type": "string", "enum": []string{renderMediaOutputImage, renderMediaOutputVideo, renderMediaOutputGIF}, "description": "image 为 PNG 整页截图，video 为 MP4；默认 image"},
 		"duration": map[string]any{"type": "number", "description": "video/gif 时长（秒），默认 4"},
 		"fps":      map[string]any{"type": "integer", "description": "video/gif 帧率，默认 video 24、gif 12，最高 30"},
@@ -217,19 +219,17 @@ func (t *dianaRenderMediaTool) parse(input map[string]any) (renderMediaSpec, err
 	if !ok {
 		return spec, errors.New("output 只支持 image、video 或 gif。")
 	}
-	if strings.TrimSpace(spec.content) == "" {
-		return spec, errors.New("content 是空的，没有东西可以渲染。")
+	var err error
+	spec.content, err = toolTextSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
+	if err != nil {
+		return spec, err
 	}
-	if !utf8.ValidString(spec.content) {
-		return spec, errors.New("content 不是合法的 UTF-8 文本。")
-	}
-	if maxBytes := t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize); int64(len(spec.content)) > maxBytes {
-		return spec, fmt.Errorf("内容有 %d 字节，超过上限 %d 字节；精简一下再试。", len(spec.content), maxBytes)
+	if spec.format == renderMediaFormatHTML && !renderMediaHasHTML(spec.content) {
+		return spec, errors.New("content 必须是 HTML 正文，不能是文件路径或占位文字；已有文件请用 path 参数，不要把路径写进 content。")
 	}
 	_, hasWidth := input["width"]
 	_, hasHeight := input["height"]
 	spec.sized = hasWidth || hasHeight
-	var err error
 	if spec.width, err = renderMediaDimension(input, "width", defaults.width, 64, 1920); err != nil {
 		return spec, err
 	}
@@ -262,6 +262,18 @@ func (t *dianaRenderMediaTool) parse(input map[string]any) (renderMediaSpec, err
 		return spec, fmt.Errorf("总帧数 %d 超过上限 %d；降低帧率或缩短时长。", spec.frames, agent.MaxHTMLCaptureFrames)
 	}
 	return spec, nil
+}
+
+func renderMediaHasHTML(content string) bool {
+	tokens := html.NewTokenizer(strings.NewReader(content))
+	for {
+		switch tokens.Next() {
+		case html.ErrorToken:
+			return false
+		case html.StartTagToken, html.SelfClosingTagToken:
+			return true
+		}
+	}
 }
 
 func renderMediaDimension(input map[string]any, key string, fallback, low, high int) (int, error) {
