@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -24,7 +25,7 @@ func continuationTestMessages(current string) []llm.Message {
 // 第二轮续接时，发出的请求必须以第一轮的记录逐条开头，后面才是新内容，当前消息最后。
 func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, SharedTools: map[string]bool{}}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,6 +67,15 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	}
 	if sent[len(sent)-1].Content != "第二问" {
 		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
+	}
+	environments := 0
+	for _, message := range sent {
+		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+			environments++
+		}
+	}
+	if environments != 1 {
+		t.Fatalf("unchanged environment repeated: %d blocks", environments)
 	}
 }
 
@@ -141,5 +151,36 @@ func TestTranscriptAfterKeepsMixedCallsPaired(t *testing.T) {
 	added := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: calls}, "")[len(request.Messages):]
 	if len(added) != 3 || len(added[0].ToolCalls) != 2 || added[1].ToolCallID != "s1" || added[2].ToolCallID != "t1" {
 		t.Fatalf("mixed step must keep calls paired with results: %#v", added)
+	}
+}
+
+func TestContinuationVolatileOnlyOmitsLatestUnchangedEnvironment(t *testing.T) {
+	env := func(text string) llm.Message {
+		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + "\n" + text}
+	}
+	a, b := env("A"), env("B")
+	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now"}
+	for _, tc := range []struct {
+		name                             string
+		prefix, appended, volatile, want []llm.Message
+	}{
+		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
+		{"changed", []llm.Message{a}, nil, []llm.Message{b, clock}, []llm.Message{b, clock}},
+		{"restore", []llm.Message{a, b}, nil, []llm.Message{a}, []llm.Message{a}},
+		{"appended supersedes", []llm.Message{a}, []llm.Message{b}, []llm.Message{a}, []llm.Message{a}},
+		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
+		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{a}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before, _ := json.Marshal(tc.prefix)
+			got := continuationVolatile(tc.prefix, tc.appended, tc.volatile)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+			after, _ := json.Marshal(tc.prefix)
+			if string(before) != string(after) {
+				t.Fatal("historical prefix mutated")
+			}
+		})
 	}
 }

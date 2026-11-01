@@ -5,6 +5,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -26,14 +27,32 @@ var parallelReadTools = map[string]bool{
 }
 
 type parallelRead struct {
-	call      llm.ToolCall
-	action    llmAction
-	tool      Tool
-	record    Step
-	rawOutput string
-	output    string
-	err       error
-	metadata  map[string]any
+	cachedOutput *string
+	call         llm.ToolCall
+	action       llmAction
+	tool         Tool
+	record       Step
+	rawOutput    string
+	output       string
+	err          error
+	metadata     map[string]any
+}
+
+// Resolve the execution target without replacing the provider's call envelope.
+func (r *Runner) parallelReadAction(call llm.ToolCall) (llmAction, bool) {
+	action := llmAction{Action: "tool", Tool: call.Name, Input: cloneToolInput(call.Arguments)}
+	if call.Name == ToolsExecuteToolName {
+		name, _ := call.Arguments["name"].(string)
+		if !parallelReadTools[name] {
+			return action, false
+		}
+		var err error
+		action, err = r.loader.dispatch(action)
+		if err != nil {
+			return action, false
+		}
+	}
+	return action, parallelReadTools[action.Tool]
 }
 
 // parallelReadBatch 判断这一批原生调用能否并行执行，能则返回要执行的调用下标（不含收尾）。
@@ -43,17 +62,17 @@ func (r *Runner) parallelReadBatch(calls []llm.ToolCall) ([]int, bool) {
 		if call.Name == finalizeToolName {
 			continue
 		}
-		if !parallelReadTools[call.Name] {
+		action, allowed := r.parallelReadAction(call)
+		if !allowed {
 			return nil, false
 		}
-		tool, ok := r.registry.Get(call.Name)
-		if !ok || r.registry.OperationDisabledError(call.Name, call.Arguments) != nil || explicitUserRequestKind(tool, call.Arguments) != "" {
+		tool, ok := r.registry.Get(action.Tool)
+		if !ok || r.registry.OperationDisabledError(action.Tool, action.Input) != nil || explicitUserRequestKind(tool, action.Input) != "" {
 			return nil, false
 		}
-		// 先检查已加载的契约；不能在这里自动加载后立即执行，模型尚未看到契约。
-		// 不满足条件时退回普通路径，由 dispatch 返回加载提示或参数错误。
-		if r.loader != nil && !r.loader.core[call.Name] {
-			if _, err := r.loader.resolveLoaded(llmAction{Action: "tool", Tool: call.Name, Input: cloneToolInput(call.Arguments)}); err != nil {
+		// 和串行路径使用相同契约校验；合法的首次调用可按需登记，非法输入退回修复。
+		if r.loader != nil && !r.loader.core[action.Tool] {
+			if _, err := r.loader.resolveLoaded(action); err != nil {
 				return nil, false
 			}
 		}
@@ -66,13 +85,14 @@ func (r *Runner) runParallelReads(ctx context.Context, hooks *runHookState, obse
 	reads := make([]parallelRead, len(calls))
 	var wg sync.WaitGroup
 	for index, call := range calls {
-		tool, _ := r.registry.Get(call.Name)
-		input := cloneToolInput(call.Arguments)
+		action, _ := r.parallelReadAction(call)
+		tool, _ := r.registry.Get(action.Tool)
+		input := action.Input
 		if typed, ok := tool.(ToolInputSchema); ok {
 			input = coerceToolInputArrays(typed.InputSchema(), input)
 		}
-		input = resolveSearchRefs(call.Name, minimalToolInput(call.Name, input), steps)
-		reads[index] = parallelRead{call: call, tool: tool, action: llmAction{Action: "tool", Tool: call.Name, Input: input}}
+		input = resolveSearchRefs(action.Tool, minimalToolInput(action.Tool, input), steps)
+		reads[index] = parallelRead{call: call, tool: tool, action: llmAction{Action: "tool", Tool: action.Tool, Input: input}}
 		wg.Add(1)
 		go func(read *parallelRead, ordinal int) {
 			defer recoverGoroutinePanic("parallel_reads")
@@ -90,7 +110,11 @@ func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, obser
 	read.metadata = webSearchRunMetadataFromInput(action.Tool, action.Input)
 	emitRunEvent(ctx, observer, RunEvent{TraceID: traceID, Phase: RunPhaseToolStarted, ModelTurn: modelTurn, ToolCall: ordinal, MaxToolCalls: r.cfg.MaxSteps, Tool: action.Tool, InputKeys: inputKeys, ToolInput: cloneToolInput(action.Input), Metadata: read.metadata})
 	outputLimit := r.toolOutputLimit(read.tool)
-	toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), time.Duration(r.cfg.ToolTimeoutMS)*time.Millisecond, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
+	toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
+	if bounded, ok := read.tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
+		toolTimeout = bounded.Timeout()
+	}
+	toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 	startedAt := time.Now()
 	err := r.registry.OperationDisabledError(action.Tool, action.Input)
 	if err == nil {
@@ -99,25 +123,51 @@ func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, obser
 	blocked := err != nil
 	var output string
 	if err == nil {
-		output, err = read.tool.Run(toolCtx, action.Input)
+		if read.cachedOutput != nil {
+			output = *read.cachedOutput
+		} else {
+			output, err = invokeParallelTool(toolCtx, read.tool, action.Input)
+		}
 	}
 	cancel()
 	read.record = Step{Skipped: blocked, Tool: action.Tool, Input: action.Input, DurationMS: time.Since(startedAt).Milliseconds()}
+	read.record.CacheHit = err == nil && read.cachedOutput != nil
 	// 与逐个执行同一套遮罩和截断，见 Runner.Run。
 	output = secretmask.Output(output)
 	read.rawOutput = output
 	read.err = err
 	if err != nil {
-		read.record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, r.cfg.ToolTimeoutMS))
+		read.record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, int(toolTimeout/time.Millisecond)))
 		output = toolExecutionErrorForModel(action.Tool, read.record.Error)
 	} else {
 		read.record.Output = truncateToolOutput(output, outputLimit)
+		if action.Tool == ToolsLoadToolName {
+			read.record.Output = output
+		}
 		output = read.record.Output
 	}
 	hooks.after(ctx, read.record)
 	read.output = output
 	read.metadata = mergeRunMetadata(read.metadata, researchRunMetadataFromOutput(action.Tool, read.rawOutput, err))
+	if read.record.CacheHit {
+		if read.metadata == nil {
+			read.metadata = map[string]any{}
+		}
+		read.metadata["cache_hit"] = true
+	}
 	emitRunEvent(ctx, observer, RunEvent{TraceID: traceID, Phase: RunPhaseToolCompleted, ModelTurn: modelTurn, ToolCall: ordinal, MaxToolCalls: r.cfg.MaxSteps, Tool: action.Tool, InputKeys: inputKeys, ToolInput: cloneToolInput(action.Input), ToolOutput: read.record.Output, Metadata: read.metadata, OutputChars: len([]rune(read.record.Output)), DurationMS: read.record.DurationMS, Error: read.record.Error})
+}
+
+// Tool panics must become audited failures, not escape a Code Mode RPC worker
+// goroutine and terminate the process. Trusted host hooks keep their own contract.
+func invokeParallelTool(ctx context.Context, tool Tool, input map[string]any) (output string, err error) {
+	defer func() {
+		if value := recover(); value != nil {
+			output = ""
+			err = fmt.Errorf("tool execution panicked: %s", secretmask.Text(fmt.Sprint(value)))
+		}
+	}()
+	return tool.Run(ctx, input)
 }
 
 // parallelReadGuidance 合并同一批里各检索结果的观察提示，相同的只留一份，进度放最后。

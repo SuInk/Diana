@@ -25,7 +25,9 @@ type Runner struct {
 	cfg      Config
 	registry *ToolRegistry
 	// loader 是本次运行的按需加载状态；Run 开始时新建，一个 Runner 不并发执行 Run。
-	loader *deferredToolLoader
+	loader        *deferredToolLoader
+	codeModeStore map[string]json.RawMessage
+	codeModeReads map[string]codeModeReadSnapshot
 }
 
 const (
@@ -91,6 +93,9 @@ func (r *Runner) Close() error {
 
 // Run 执行 Agent 多步工具调用循环。
 func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
+	r.codeModeStore = nil
+	r.codeModeReads = nil
+	defer func() { r.codeModeStore = nil; r.codeModeReads = nil }()
 	if len(req.Messages) == 0 {
 		return nil, errors.New("agent: messages are required")
 	}
@@ -549,10 +554,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 						content = sent
 					case executed:
 						modelOutput := read.output
-						if read.err == nil && call.Name == WebSearchToolName {
+						if read.err == nil && read.action.Tool == WebSearchToolName {
 							modelOutput = webSearchOutputForModel(read.output)
 						}
-						content = toolObservationMessage(call.Name, modelOutput, read.err == nil, r.remainingToolCalls(toolCalls))
+						content = toolObservationMessage(read.action.Tool, modelOutput, read.err == nil, r.remainingToolCalls(toolCalls))
 					case call.Name == finalizeToolName:
 						content = "这次 send 没有发出：同一步还有其他工具。看过结果后再 send。"
 					default:
@@ -852,7 +857,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			blocked = err != nil
 		}
 		if err == nil {
-			output, err = tool.Run(toolCtx, action.Input)
+			if script, ok := tool.(*codeModeTool); ok {
+				output, err = r.runCodeMode(toolCtx, script, action.Input, req, hooks, traceID, modelTurns, &toolCalls, &introspectionCalls, &toolLoadCalls, &lastToolSignature, &steps)
+				for _, child := range steps {
+					if child.Tool == dianaImageToolName && child.Error == "" && imageToolResultQueued(child.Output) {
+						imageTaskQueued = true
+					}
+				}
+			} else {
+				output, err = tool.Run(toolCtx, action.Input)
+			}
 		}
 		toolCancel()
 		toolDuration := time.Since(toolStartedAt)
@@ -1312,7 +1326,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 措辞必须把「规划轮」和「用户消息」区分开:此前只写「每轮最多调用一个
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
-	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
+	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行，包括用 tools_execute 封装的调用；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
 	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
 	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
@@ -1481,7 +1495,7 @@ func (r *Runner) speakerToolPrompt() string {
 			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
 		}
 	}
-	return strings.Join(sections, "\n\n")
+	return speakerToolPromptMarker + "\n" + strings.Join(sections, "\n\n")
 }
 
 // systemPrompt 构造 Agent JSON 动作协议提示词。

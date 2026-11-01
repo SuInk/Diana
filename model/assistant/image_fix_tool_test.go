@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 主模型调用 image_fix 后立刻返回，被指到那张图的缓存描述在后台按更正重写。
@@ -69,5 +71,11 @@ func TestImageFixToolRejectsMessagesWithoutImages(t *testing.T) {
 func TestImageFixToolIsResident(t *testing.T) {
 	if !slices.Contains(replyAgentCoreTools, dianaImageFixToolName) {
 		t.Fatalf("replyAgentCoreTools = %v", replyAgentCoreTools)
+	}
+}
+
+func TestCodeModeToolIsResident(t *testing.T) {
+	if !slices.Contains(replyAgentCoreTools, agent.CodeModeToolName) {
+		t.Fatalf("Code Mode missing from resident tools: %v", replyAgentCoreTools)
 	}
 }

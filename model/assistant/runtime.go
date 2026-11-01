@@ -5168,7 +5168,7 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 //
 // image_fix 也常驻：它要在模型口头认错的同一步被调用，放进按需目录就得先 tool_search，
 // 模型不会为「顺手记一笔」多走这一步。定义对谁都一样，不影响前缀缓存。
-var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName}
+var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName, agent.CodeModeToolName}
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{

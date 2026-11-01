@@ -7,9 +7,36 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"github.com/SuInk/diana/model/llm"
 )
+
+const speakerToolPromptMarker = "【当前发言者工具环境】"
+
+// Only omit an unchanged runtime-owned environment block. Compare the latest
+// version, not any historical match: A -> B -> A must restore A explicitly.
+func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Message {
+	var latest string
+	for _, messages := range [][]llm.Message{prefix, appended} {
+		for _, message := range messages {
+			if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+				latest = message.Content
+			}
+		}
+	}
+	out := make([]llm.Message, 0, len(volatile))
+	for _, message := range volatile {
+		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+			if latest == message.Content {
+				continue
+			}
+			latest = message.Content
+		}
+		out = append(out, message)
+	}
+	return out
+}
 
 // 只追加续接：下一轮请求 = 上一轮实际发出的请求 + 模型的回复 + 本轮新内容。
 //
@@ -44,6 +71,7 @@ func shortFingerprint(data []byte) string {
 // continuationMessages 在前缀后接上本轮追加的消息，Runner 自己的逐轮消息插在当前
 // 消息之前，和完整组装时的位置一致。返回值里前缀末尾的下标用作缓存断点。
 func continuationMessages(continuation *Continuation, volatile []llm.Message) ([]llm.Message, int) {
+	volatile = continuationVolatile(continuation.Prefix, continuation.Append, volatile)
 	messages := make([]llm.Message, 0, len(continuation.Prefix)+len(continuation.Append)+len(volatile))
 	messages = append(messages, continuation.Prefix...)
 	for index := range messages {

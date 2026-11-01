@@ -711,7 +711,15 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 		URL:          requestedURL,
 		Truncated:    truncated,
 	}
-	page.Title = truncateText(normalizeRenderedText(nodeText(findElement(document, "title"))), 300)
+	title := normalizeRenderedText(nodeText(findElement(document, "title")))
+	// Some sites abbreviate the browser-tab title but retain the full headline
+	// in Open Graph metadata. Only replace a matching, explicitly shortened title.
+	fullTitle := normalizeRenderedText(metaContent(document, "property", "og:title"))
+	prefix := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(title, "..."), "…"))
+	if title == "" || (prefix != title && prefix != "" && strings.HasPrefix(fullTitle, prefix) && len(fullTitle) > len(title)) {
+		title = firstNonEmptyString(fullTitle, title)
+	}
+	page.Title = truncateText(title, 300)
 	page.Description = truncateText(firstNonEmptyString(
 		metaContent(document, "name", "description"),
 		metaContent(document, "property", "og:description"),
@@ -724,8 +732,7 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 			page.URL = resolved
 		}
 	}
-	// GitHub 的 main 还包含完整文件列表；article 才是 README 正文。
-	content := firstNonNilNode(findElement(document, "article"), findElement(document, "main"), findElement(document, "body"), document)
+	content := renderedContentRoot(document)
 	fullText := normalizeRenderedText(visibleNodeText(content))
 	page.Text = truncateText(fullText, maxChars)
 	if maxChars > 0 && len([]rune(fullText)) > maxChars {
@@ -738,6 +745,29 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 	page.Links = renderedPageLinks(document, requestedURL)
 	page.Images = renderedPageImages(document, requestedURL)
 	return page, nil
+}
+
+func renderedContentRoot(document *html.Node) *html.Node {
+	article, main := findElement(document, "article"), findElement(document, "main")
+	if main != nil {
+		heading := findElement(main, "h1")
+		// A recommendation card may be the first article. It must not replace
+		// the main page's heading and content. Keep article-only extraction for
+		// README-style pages whose primary heading belongs to the article.
+		if article == nil || !renderedNodeWithin(article, main) || (heading != nil && !renderedNodeWithin(heading, article)) {
+			return main
+		}
+	}
+	return firstNonNilNode(article, main, findElement(document, "body"), document)
+}
+
+func renderedNodeWithin(node, parent *html.Node) bool {
+	for current := node; current != nil; current = current.Parent {
+		if current == parent {
+			return true
+		}
+	}
+	return false
 }
 
 // renderedPageImages 先放 og:image（通常是这一页的主图），再按出现顺序放正文里的 <img>。

@@ -59,6 +59,8 @@ type LLMClient interface {
 }
 
 type Config struct {
+	// CodeModeEnabled enables the capability-only JavaScript composer when Node is available.
+	CodeModeEnabled bool
 	// SystemPrompt 为专用子代理替换通用角色提示词；空值保留默认行为。仅由可信调用方设置。
 	SystemPrompt string
 	// ResearchDetailReview 开启联网收尾前的细节复核（见 research_review.go），
@@ -223,6 +225,7 @@ type FinalizeField struct {
 }
 
 type Step struct {
+	CacheHit   bool           `json:"cache_hit,omitempty"`
 	Index      int            `json:"index,omitempty"`
 	Tool       string         `json:"tool"`
 	Input      map[string]any `json:"input,omitempty"`
