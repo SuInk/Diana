@@ -46,6 +46,7 @@ func memoryGateSubmitToolFor(slang bool) llm.ToolDefinition {
 	params := cloneSchemaMap(tool.Parameters)
 	properties := cloneSchemaMap(asSchemaMap(params["properties"]))
 	properties["unknown_terms"] = slangGateTermsSchema()
+	properties["notebook_candidates"] = notebookLearningSchema()
 	params["properties"] = properties
 	tool.Parameters = params
 	return tool
@@ -123,5 +124,5 @@ func slangTermInText(term, text string) bool {
 // slangLearningActive 只在开了黑话学习的群聊上生效：私聊里的说法没有「群内语境」
 // 可言，也凑不齐多个发言人。
 func slangLearningActive(cfg BotConfig, event MessageEvent) bool {
-	return boolValue(cfg.SlangLearningEnabled, false) && event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != ""
+	return boolValue(cfg.SlangLearningEnabled, true) && event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != ""
 }

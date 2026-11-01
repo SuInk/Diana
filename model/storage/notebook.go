@@ -215,6 +215,26 @@ func (s *SQLiteStore) UpsertNotebookEntry(ctx context.Context, request assistant
 	defer observeTransaction("UpsertNotebookEntry")()
 	defer func() { _ = tx.Rollback() }()
 
+	if request.CreateOnly {
+		scopes := append([]string{scope}, request.GuardScopes...)
+		args := make([]any, 0, len(scopes)+2)
+		for _, key := range scopes {
+			args = append(args, key)
+		}
+		args = append(args, normalized, normalized)
+		var existingScope, existingTerm string
+		err := tx.QueryRowContext(ctx, `SELECT e.scope_key, e.normalized_term FROM notebook_entries e
+WHERE e.scope_key IN (`+placeholders(len(scopes))+`) AND (e.normalized_term = ? OR
+EXISTS (SELECT 1 FROM notebook_aliases a WHERE a.entry_id = e.id AND a.normalized_alias = ?)) LIMIT 1`, args...).Scan(&existingScope, &existingTerm)
+		if err == nil {
+			entry, _, err := notebookEntryByTerm(ctx, tx, existingScope, existingTerm)
+			return entry, false, err
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return assistant.NotebookEntry{}, false, err
+		}
+	}
+
 	existing, found, err := notebookEntryByTerm(ctx, tx, scope, normalized)
 	if err != nil {
 		return assistant.NotebookEntry{}, false, err

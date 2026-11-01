@@ -139,8 +139,11 @@ func TestSlangLearningOnlyForEnabledGroups(t *testing.T) {
 	if !slangLearningActive(on, slangGroupEvent("1", "")) {
 		t.Fatal("enabled group should learn")
 	}
-	if slangLearningActive(BotConfig{}, slangGroupEvent("1", "")) {
-		t.Fatal("default must be off")
+	if !slangLearningActive(BotConfig{}, slangGroupEvent("1", "")) {
+		t.Fatal("default must be on")
+	}
+	if slangLearningActive(BotConfig{SlangLearningEnabled: boolPointer(false)}, slangGroupEvent("1", "")) {
+		t.Fatal("explicit off must be preserved")
 	}
 	private := slangGroupEvent("1", "")
 	private.Kind, private.GroupID = EventKindPrivate, ""
@@ -318,10 +321,7 @@ func runSlangGate(t *testing.T, enabled bool) (*capturingLLMProvider, *slangNote
 	t.Helper()
 	memory := &testStructuredMemoryStore{}
 	provider := &capturingLLMProvider{reply: `{"memories":[],"unknown_terms":[{"term":"开盒"},{"term":"编出来的词"}]}`}
-	cfg := BotConfig{}
-	if enabled {
-		cfg.SlangLearningEnabled = boolPointer(true)
-	}
+	cfg := BotConfig{SlangLearningEnabled: boolPointer(enabled)}
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -353,7 +353,7 @@ func TestMemoryGateCarriesSlangFieldOnlyWhenEnabled(t *testing.T) {
 	}
 
 	provider, notebook = runSlangGate(t, true)
-	if !strings.HasSuffix(provider.request.Messages[0].Content, slangGateRule) {
+	if !strings.HasSuffix(provider.request.Messages[0].Content, slangGateRule+notebookLearningRule) {
 		t.Fatal("enabled bot's gate prompt should end with the slang rule")
 	}
 	if got := notebook.candidate("", "10001", "开盒"); got.Count != 1 || len(got.Evidence) != 1 {

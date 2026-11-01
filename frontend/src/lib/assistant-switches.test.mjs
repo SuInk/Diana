@@ -4,6 +4,21 @@ import { test } from "node:test";
 import { NodeTypes } from "@vue/compiler-dom";
 import { parse } from "@vue/compiler-sfc";
 
+test("slang learning defaults on alongside memory settings without overriding explicit off", () => {
+  const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
+  const fallback = source.match(/slang_learning_enabled:\s*(config\.slang_learning_enabled\s*\?\?\s*true)/);
+  assert.ok(fallback, "slang learning must default on with a nullish fallback");
+  const resolve = new Function("config", `return ${fallback[1]}`);
+  assert.equal(resolve({}), true);
+  assert.equal(resolve({ slang_learning_enabled: false }), false);
+  assert.equal(resolve({ slang_learning_enabled: true }), true);
+  const memorySection = source.match(/<section[^>]*>(?:(?!<\/section>)[\s\S])*<h2>记忆<\/h2>[\s\S]*?<\/section>/)?.[0];
+  assert.ok(memorySection?.includes('v-model="form.slang_learning_enabled"'));
+  assert.ok(memorySection?.includes("群友明确解释或确认的叫法直接记入笔记本"));
+  assert.ok(memorySection?.includes("不覆盖已有或已作废条目"));
+  assert.ok(memorySection?.includes("共享范围遵循「笔记本跟随机器人」，默认群聊私聊共享"));
+});
+
 test("bot settings checkboxes have a visible switch track", () => {
   const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
   const { descriptor, errors } = parse(source);
