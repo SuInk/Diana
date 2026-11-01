@@ -8,6 +8,7 @@ import (
 )
 
 const defaultParticipationCooldownSeconds = 30
+const defaultRuleTriggerChance = 30
 
 // participationRatingsRetryReminder 是评分解析失败后重试时插在最前面的提醒。
 const participationRatingsRetryReminder = "只输出一个裸 JSON 对象：以左花括号开头、右花括号结尾，不要 Markdown 代码围栏，不要任何其他文字"
@@ -23,14 +24,16 @@ var promptParticipationRetrySpec = registerPrompt(PromptSpec{
 // Rating levels are independent. Legacy fields remain readable for saved configs;
 // CooldownSeconds only limits the chat branch.
 type ParticipationPreferences struct {
-	Desire             int  `json:"desire"`
-	Social             int  `json:"social"`
-	Followup           int  `json:"followup"`
-	Restraint          int  `json:"restraint"`
-	Information        int  `json:"information"`
-	CooldownSeconds    int  `json:"cooldown_seconds"`
-	RelevanceThreshold *int `json:"relevance_threshold,omitempty"`
-	SubstanceThreshold *int `json:"substance_threshold,omitempty"`
+	TriggerMode        string `json:"trigger_mode,omitempty"`
+	RuleChance         int    `json:"rule_chance"`
+	Desire             int    `json:"desire"`
+	Social             int    `json:"social"`
+	Followup           int    `json:"followup"`
+	Restraint          int    `json:"restraint"`
+	Information        int    `json:"information"`
+	CooldownSeconds    int    `json:"cooldown_seconds"`
+	RelevanceThreshold *int   `json:"relevance_threshold,omitempty"`
+	SubstanceThreshold *int   `json:"substance_threshold,omitempty"`
 	// RelevanceLevel 是「回应提问」开关：on 或 off。旧配置里的七档名称读作 on（off 除外）。
 	RelevanceLevel string `json:"relevance_level,omitempty"`
 	ChatLevel      string `json:"chat_level,omitempty"`
@@ -39,7 +42,7 @@ type ParticipationPreferences struct {
 // Preserve explicit zero (disabled) while defaulting an omitted cooldown.
 func (p *ParticipationPreferences) UnmarshalJSON(data []byte) error {
 	type preferences ParticipationPreferences
-	value := preferences{CooldownSeconds: defaultParticipationCooldownSeconds}
+	value := preferences{CooldownSeconds: defaultParticipationCooldownSeconds, RuleChance: defaultRuleTriggerChance}
 	if err := json.Unmarshal(data, &value); err != nil {
 		return err
 	}
@@ -52,6 +55,10 @@ func copyParticipation(p *ParticipationPreferences) *ParticipationPreferences {
 		return nil
 	}
 	v := *p
+	if v.TriggerMode != "rules" && v.TriggerMode != "" {
+		v.TriggerMode = "semantic"
+	}
+	v.RuleChance = max(0, min(100, v.RuleChance))
 	v.Desire = max(0, min(100, v.Desire))
 	v.Social = max(0, min(100, v.Social))
 	v.Followup = max(0, min(100, v.Followup))
@@ -88,7 +95,7 @@ func (cfg BotConfig) participationPreferences() ParticipationPreferences {
 	if cooldown <= 0 {
 		cooldown = defaultParticipationCooldownSeconds
 	}
-	return ParticipationPreferences{Desire: desire, Social: desire, Followup: desire, Restraint: 100 - desire, Information: 100 - desire, CooldownSeconds: min(3600, cooldown)}
+	return ParticipationPreferences{RuleChance: defaultRuleTriggerChance, Desire: desire, Social: desire, Followup: desire, Restraint: 100 - desire, Information: 100 - desire, CooldownSeconds: min(3600, cooldown)}
 }
 
 // Legacy numeric preferences are read only to select a named participation level.

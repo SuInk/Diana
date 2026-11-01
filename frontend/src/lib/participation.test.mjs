@@ -78,3 +78,17 @@ test("每个参与度档位都标出后端的评分门槛", () => {
 // 那条断言要同时读 participation.ts 和 participation_single_score.go，而这套前端测试
 // 还会在 Docker 的 frontend-next 构建阶段里跑（npm 的 prebuild），那一层只有
 // frontend-next/ 一个目录，读不到 model/assistant 下的 .go。
+
+test("rule trigger mode and explicit zero probability survive form round trips", () => {
+  for (const chance of [0, 15, 100]) {
+    const p = { ...participationPreset("low"), trigger_mode: "rules", rule_chance: chance };
+    assert.deepEqual(participationFromConfig({ participation: p }), p);
+  }
+  assert.notEqual(participationFromConfig({}).trigger_mode, "rules");
+});
+
+test("new rule trigger probability defaults to 0.3 without overwriting zero", () => {
+  assert.equal(participationFromConfig({}).rule_chance, 30);
+  const p = { ...participationPreset("low"), trigger_mode: "rules", rule_chance: 0 };
+  assert.equal(participationFromConfig({ participation: p }).rule_chance, 0);
+});

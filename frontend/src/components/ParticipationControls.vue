@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
-import { defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
+import { defaultRuleTriggerChance, defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
 
 // criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
 // 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
@@ -11,6 +11,7 @@ const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
 const inherited = computed(() => props.inheritable && !props.modelValue && !props.level);
 const cooldownSeconds = computed(() => value.value.cooldown_seconds ?? defaultParticipationCooldownSeconds);
+const rules = computed(() => value.value.trigger_mode === "rules");
 const preset = computed(() => participationPresetName(value.value));
 
 type RatingKey = "chat_level";
@@ -63,6 +64,13 @@ function updateCooldown(event: Event) {
   input.value = String(next);
   emit("update:modelValue", { ...value.value, cooldown_seconds: next });
 }
+function updateRuleChance(event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.value === "" || !Number.isFinite(input.valueAsNumber)) return;
+  const chance = Math.max(0, Math.min(100, Math.round(input.valueAsNumber)));
+  input.value = String(chance);
+  emit("update:modelValue", { ...value.value, rule_chance: chance });
+}
 function restoreCooldown(event: Event) {
   (event.target as HTMLInputElement).value = String(cooldownSeconds.value);
 }
@@ -94,6 +102,25 @@ function updateCriteria(event: Event) {
       <div class="participation-fields">
         <section class="participation-setting">
           <div class="setting-copy">
+            <label :for="id + '-mode'">触发模式</label>
+            <p class="setting-help">规则模式省去接话评分调用；回复生成、工具和其他审核仍可能使用模型。</p>
+          </div>
+          <AppSelect :id="id + '-mode'" aria-label="触发模式" :model-value="rules ? 'rules' : 'semantic'" :options="[{value:'semantic',label:'语义判断（现有模式）'},{value:'rules',label:'规则触发（省 Token）'}]" @update:model-value="emit('update:modelValue', { ...value, trigger_mode: $event === 'rules' ? 'rules' : 'semantic' })" />
+        </section>
+        <section v-if="rules" class="participation-setting">
+          <div class="setting-copy">
+            <label :for="id + '-chance'">随机接话概率（%）</label>
+            <p class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息按此概率接话，不做语义判断。默认 30%；填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
+          </div>
+          <input :id="id + '-chance'" class="input" type="number" min="0" max="100" step="1" aria-label="随机接话概率" :value="value.rule_chance ?? defaultRuleTriggerChance" @input="updateRuleChance" @blur="($event.target as HTMLInputElement).value = String(value.rule_chance ?? defaultRuleTriggerChance)" />
+          <div class="field wide cooldown-setting">
+            <label :for="id + '-rule-cooldown'">随机接话冷却时间（秒）</label>
+            <input :id="id + '-rule-cooldown'" class="input" type="number" min="0" max="3600" step="1" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
+            <span class="hint">只限制随机接话，不限制 @、引用回复和称呼触发。不会理解话题是否适合插话；其他机器人仅明确 @ 或回复本机时放行。</span>
+          </div>
+        </section>
+        <section v-if="!rules" class="participation-setting">
+          <div class="setting-copy">
             <label :for="id + '-relevance'">回应提问</label>
             <p class="setting-help">明确在跟你说话时回应。关掉之后只靠主动闲聊开口。</p>
           </div>
@@ -103,7 +130,7 @@ function updateCriteria(event: Event) {
             <span class="switch-label">{{ relevanceEnabled ? "开启" : "关闭" }}</span>
           </label>
         </section>
-        <section v-for="setting in settings" :key="setting.key" class="participation-setting">
+        <section v-for="setting in rules ? [] : settings" :key="setting.key" class="participation-setting">
           <div class="setting-copy">
             <label :for="id + '-' + setting.key">{{ setting.label }}</label>
             <p class="setting-help">{{ setting.description }}</p>
@@ -115,7 +142,7 @@ function updateCriteria(event: Event) {
             <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
         </section>
-        <section v-if="!criteriaOptional || criteria?.trim()" class="participation-setting criteria-setting">
+        <section v-if="!rules && (!criteriaOptional || criteria?.trim())" class="participation-setting criteria-setting">
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
             <p v-if="criteriaOptional" class="setting-help">旧版留下的补充判据，仍会拼进评分提示词。内置判据现在可以在下面的「接话评分提示词」里直接改，这里清空后不再显示。</p>
@@ -124,11 +151,11 @@ function updateCriteria(event: Event) {
           <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteria ?? ''" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
         </section>
       </div>
-      <p class="hint participation-gate-hint">
+      <p v-if="!rules" class="hint participation-gate-hint">
         闲聊档位括号里是后端的评分门槛：档位越积极，要求的分数越低（“很少插话”最严 ≥0.90，“积极参与”最松 ≥0.30）。
         “回应提问”和“主动闲聊”是两条独立通道，任意一条达标就会开口。
       </p>
-      <details class="participation-explanation">
+      <details v-if="!rules" class="participation-explanation">
         <summary>了解判断逻辑</summary>
         <div class="explanation-body">
           <p>满足“回应提问”，或满足“主动闲聊”且冷却结束，就进入回复流程。</p>

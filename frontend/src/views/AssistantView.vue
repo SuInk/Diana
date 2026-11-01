@@ -828,7 +828,7 @@
               <div class="field wide">
                 <ParticipationControls :key="form.id" :model-value="form.participation" :criteria="form.proactive_reply_extra_criteria" criteria-optional @update:model-value="setParticipation" @update:criteria="value => { if (form) form.proactive_reply_extra_criteria = value; }" />
               </div>
-              <div class="field wide participation-prompt">
+              <div v-if="form.participation?.trigger_mode !== 'rules'" class="field wide participation-prompt">
                 <label>接话评分提示词</label>
                 <span class="hint">两个框前后接起来就是整份评分提示词，按拼进去的顺序排。改完在下面预览发给模型的原样内容。</span>
                 <div class="participation-prompt-part">

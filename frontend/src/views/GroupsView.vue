@@ -785,7 +785,7 @@ import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import RandomRepeatControls from "../components/RandomRepeatControls.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
-import { participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../lib/participation";
+import { defaultRuleTriggerChance, participationFromConfig, participationLevelLabel, participationPresetName, type ParticipationPreferences } from "../lib/participation";
 import Modal from "../components/Modal.vue";
 import ReplyGateForm from "../components/ReplyGateForm.vue";
 import GroupGovernanceForm from "../components/GroupGovernanceForm.vue";
@@ -1264,6 +1264,7 @@ function groupReplyDesireValue(config: BotGroupConfig): string {
 }
 
 function participationSummary(p: ParticipationPreferences): string {
+  if (p.trigger_mode === "rules") return `规则触发 · 随机接话 ${p.rule_chance ?? defaultRuleTriggerChance}%`;
   // 档位名后面跟上评分门槛，门槛数字统一来自 participation.ts。
   const name = (level: string) => participationLevelLabel(level, { compact: true });
   const legacy = participationPresetName(p);

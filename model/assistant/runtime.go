@@ -2135,7 +2135,14 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		return finishWithoutReply("ignored_video")
 	}
 	if r.requiresTelegramBotMentionJudgment(event) {
-		if !r.markedBotMessageAddressesSelf(ctx, event, text) {
+		cfg := r.effectiveConfigForEvent(event)
+		addressesSelf := false
+		if cfg.ruleTriggerEnabled() && event.Kind == EventKindGroup {
+			addressesSelf = eventExplicitlyMentionsBot(event, cfg) || eventRepliesToBot(event, cfg)
+		} else {
+			addressesSelf = r.markedBotMessageAddressesSelf(ctx, event, text)
+		}
+		if !addressesSelf {
 			event.routingReason = "发送者已识别或手动标记为机器人，未确认在向本机接话，已自动抑制"
 			r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
 			return finishWithoutReply("ignored_bot_message")
@@ -2863,7 +2870,7 @@ func (r *Runtime) proactiveReplyConsideration(event MessageEvent, text string) (
 	if proactiveReplyTriggerText(event, text) == "" && !hasReplyCandidateImage(event.Segments) {
 		return false, "消息没有可供主动回复模型判断的文字或图片内容"
 	}
-	if !r.hasProactiveReplyRouter() {
+	if !cfg.ruleTriggerEnabled() && !r.hasProactiveReplyRouter() {
 		return false, "未配置可用的主动回复判断模型，消息未进入语义判断"
 	}
 	return true, ""
@@ -2945,6 +2952,10 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	latest := candidates[len(candidates)-1]
 	event, text := latest.Event, latest.Text
 	ctx = withLLMUsageContext(ctx, event)
+	cfg := r.effectiveConfigForEvent(event)
+	if cfg.ruleTriggerEnabled() {
+		return r.routeRuleReply(event, text, cfg)
+	}
 	select {
 	case r.proactiveRouteSem <- struct{}{}:
 		defer func() { <-r.proactiveRouteSem }()
@@ -2952,7 +2963,6 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		event.routingReason = "主动回复判断在等待并发名额时被取消：" + ctx.Err().Error()
 		return event, text, nil, false
 	}
-	cfg := r.effectiveConfigForEvent(event)
 	chatIn := cfg.chatInSettings()
 	if participationClosed(cfg) {
 		event.routingReason = "回应提问与闲聊均已关闭，不主动接话"
