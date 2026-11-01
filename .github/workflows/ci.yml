@@ -124,6 +124,17 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
+      - name: Setup Code Mode Node runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Verify embedded Code Mode runtime
+        run: |
+          npm ci --ignore-scripts --prefix scripts/codemode
+          npm test --prefix scripts/codemode
+          npm run check --prefix scripts/codemode
+
       - name: Verify gofmt
         run: |
           files="$(gofmt -l .)"
@@ -159,6 +170,12 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
+
+      - name: Setup Code Mode Node runtime
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
 
       - name: Test with race detector
         if: startsWith(github.ref, 'refs/tags/v')
