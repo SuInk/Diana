@@ -173,7 +173,7 @@ func TestLiveAgentReadsPublicRepoWithoutInventingPermissionExcuse(t *testing.T) 
 // review 之前必须先 pull_files：这句写在工具描述里（曾挪到 operation 枚举说明，后又收回描述）。
 // 同时盯住写操作停在草稿，以及确认码有没有被复述——确认码的说明现在只剩
 // user_confirmed_write 的参数说明和草稿结果的 message 两处。
-func TestLiveAgentReadsPullFilesBeforeReviewAndRecitesConfirmationCode(t *testing.T) {
+func TestLiveAgentReadsPullFilesBeforeReviewAndRequestsTextApproval(t *testing.T) {
 	github := newRepositoryPullRequestTestGitHub()
 	github.files = append(github.files,
 		githubPullRequestFile{Filename: "cmd/app.go", Status: "modified", Additions: 12, Patch: "@@ -1,3 +1,5 @@\n func main() {\n-\tlog.Print(\"hi\")\n+\tpassword := \"hunter2\"\n+\tlog.Print(password)\n }"},
@@ -209,16 +209,12 @@ func TestLiveAgentReadsPullFilesBeforeReviewAndRecitesConfirmationCode(t *testin
 	if reviewAt < 0 {
 		t.Skipf("这一轮模型没有走到 review，只验证了读的顺序：%v", steps)
 	}
-	// 草稿的确认码必须原样出现在回复里，否则有权限的人无从确认，整条审批链断在这。
+	// 草稿应停在文字审批，不要求用户抄确认码。
 	drafts := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "list_drafts"})
 	if len(drafts.Drafts) == 0 {
 		t.Fatalf("review 应该停在待审批草稿：%#v", drafts)
 	}
-	code := drafts.Drafts[0].ConfirmationCode
-	if code == "" {
-		t.Fatalf("草稿没有确认码：%#v", drafts.Drafts[0])
-	}
-	if !strings.Contains(reply, code) {
-		t.Errorf("确认码 %s 没有写进回复，对方无从确认：%q", code, reply)
+	if !strings.Contains(reply, "确认提交 GitHub") {
+		t.Errorf("没有给出文字确认指令：%q", reply)
 	}
 }
