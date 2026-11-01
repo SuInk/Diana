@@ -427,15 +427,15 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          repositoryPublishPluginID,
 		Name:        "GitHub Issue 与 PR",
-		Version:     "0.7.2",
-		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用确认码确认后写入。",
+		Version:     "0.7.3",
+		Description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。read_file 读取仓库文件：公开仓库全员可查，私有仓库仅主人与授权用户可读。群成员可生成草稿，由具备仓库权限的授权用户用文字确认后写入。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:https", "github:issues:read", "github:issues:write", "github:pull_requests:read", "github:pull_requests:write", "github:contents:read", "github:starring:write", "audit:write", "llm:tool"},
 		Settings: []PluginSettingSpec{
 			{
 				Key: repositoryPublishSettingStarEnabled, Label: "允许 GitHub Star",
-				Description: "默认关闭。启用后仅主人能生成 Star 草稿，原样回复确认码后为目标仓库点 Star。使用目标仓库绑定的凭据，否则使用公共 Token 或 gh 登录账号；Fine-grained Token 需要账号级 Starring: write 权限。",
+				Description: "默认关闭。启用后仅主人能生成 Star 草稿，原样回复「确认提交 GitHub」后为目标仓库点 Star。使用目标仓库绑定的凭据，否则使用公共 Token 或 gh 登录账号；Fine-grained Token 需要账号级 Starring: write 权限。",
 				Type:        PluginSettingTypeBool, Default: false,
 			},
 			{
@@ -468,7 +468,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key:         repositoryPublishSettingUserAccess,
 				Label:       "用户仓库授权",
-				Description: "允许特定用户在私聊和群聊里读取、审批和操作特定仓库；每个用户使用自己的 GitHub 认证。写入仍需仓库白名单及确认码。",
+				Description: "允许特定用户在私聊和群聊里读取、审批和操作特定仓库；每个用户使用自己的 GitHub 认证。写入仍需仓库白名单及文字确认。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 			},
@@ -495,7 +495,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 			{
 				Key: repositoryPublishSettingManagerUsers, Label: "Issue 管理人员（按用户）",
 				Description: "按“用户 ID = owner/repo, owner/repo”填写；这些用户在私聊和群聊里可以创建和管理 Issue。" +
-					"个人管理授权跨会话生效，群聊中的结果会展示在当前群；写入仍需确认码。" +
+					"个人管理授权跨会话生效，群聊中的结果会展示在当前群；写入仍需文字确认。" +
 					"想让某个群友能拍板推动本群草稿，用“群聊草稿审批人（按群）”。",
 				Type: PluginSettingTypeString, Default: "",
 			},
@@ -504,7 +504,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 				Description: "按“群 ID = owner/repo, owner/repo”填写；该群成员可以直接创建和管理 Issue，请谨慎授予。默认群里所有人都算数；" +
 					"要收窄就在仓库后面加身份要求——owner/repo#group_admin 只对群主和群管理员生效，owner/repo#group_owner 只对群主生效。" +
 					"这里说的是发言人在群里的身份，和本项授予的“Issue 管理人员”不是一回事：前者由聊天平台决定，后者是这份名单。" +
-					"身份不达标的调用会被直接拒绝并说明原因。只想授权个别人时改用“按用户”那项——按用户的管理授权可在私聊和群聊读取，不受群身份要求限制；写操作也跨会话生效，仍需确认码。",
+					"身份不达标的调用会被直接拒绝并说明原因。只想授权个别人时改用“按用户”那项——按用户的管理授权可在私聊和群聊读取，不受群身份要求限制；写操作也跨会话生效，仍需文字确认。",
 				Type: PluginSettingTypeString, Default: "",
 			},
 			{

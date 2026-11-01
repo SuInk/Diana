@@ -973,3 +973,41 @@ func TestRepositoryIssueCreateFailsClosedWhenRecentIssueScanIsIncomplete(t *test
 		t.Fatalf("incomplete scan caused %d POSTs", posts.Load())
 	}
 }
+
+func TestRepositoryDraftTextConfirmation(t *testing.T) {
+	plugin := NewRepositoryPublishPlugin(nil)
+	ctx := context.Background()
+	draft, err := plugin.saveDraft(ctx, repositoryIssueDraft{GroupID: "private:owner", ProfileID: "bot", RequestMessageID: "first", Input: map[string]any{"request_text": "创建问题"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := &dianaGitHubTool{plugin: plugin, event: MessageEvent{Kind: EventKindPrivate, UserID: "owner", ProfileID: "bot", MessageID: "second", RawMessage: "确认提交 GitHub"}}
+	if !tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("unique draft not confirmed")
+	}
+	tool.event.MessageID = "first"
+	if tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("same-turn approval")
+	}
+	tool.event.MessageID = "second"
+	tool.event.ProfileID = "other"
+	if tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("cross-profile approval")
+	}
+	tool.event.ProfileID = "bot"
+	_, err = plugin.saveDraft(ctx, repositoryIssueDraft{GroupID: "private:owner", ProfileID: "bot", Input: map[string]any{"request_text": "创建另一个问题"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("ambiguous approval")
+	}
+	tool.event.RawMessage = "确认提交 GitHub " + draft.ID
+	if !tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("targeted approval not recognized")
+	}
+	tool.event.RawMessage = "不要确认提交 GitHub " + draft.ID
+	if tool.confirmsDraft(ctx, "private:owner", draft) {
+		t.Fatal("negated approval")
+	}
+}

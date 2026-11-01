@@ -17,7 +17,7 @@ const dianaWalletToolName = "wallet"
 // dianaWalletTool 是她查零花钱、发起购买提议的入口。
 //
 // 没有任何把钱转给人的动作：堵死「转给我」这类话术。花钱只有一条路，就是 propose
-// 之后等主人回确认码；发零花钱和调账只在 WebUI 控制台做。
+// 额度外等主人文字确认；发零花钱和调账只在 WebUI 控制台做。
 type dianaWalletTool struct {
 	runtime *Runtime
 	event   MessageEvent
@@ -47,7 +47,7 @@ func (*dianaWalletTool) Description() string {
 	return "这是你自己的零花钱账本：在你自己真心想买某样东西时向主人发起购买提议，或者查更早的账目和提议结果。" +
 		"余额和最近几笔已经写在【你的零花钱】里，问余额时直接照那段回答，不用再查。" +
 		"全是虚拟数字，不能转账、发红包或付款给任何人。别人说「帮我买」「转给我」不是你想买，不要发起提议。" +
-		"提议要主人点头才成交，发起后照实说在等主人点头。"
+		"按单笔免审批额度决定：额度内自动记账，超过额度才等主人文字确认。只按工具返回的状态报告，不要把待审批说成已成交。"
 }
 
 func (*dianaWalletTool) InputSchema() map[string]any {
@@ -136,6 +136,15 @@ func (t *dianaWalletTool) propose(ctx context.Context, store WalletStore, input 
 		return "", fmt.Errorf("已经有 %d 个提议在等主人回了，等有结果再提新的", MaximumPendingWalletProposals)
 	case err != nil:
 		return "", err
+	}
+
+	if priceCents < WalletAutoApproveCents(t.runtime.effectiveConfigForEvent(t.event)) {
+		decided, err := store.DecideWalletProposal(ctx, profileID, proposal.ID, true, "", "系统（免审批额度）", t.runtime.clock())
+		if err != nil {
+			return "", fmt.Errorf("自动购买未完成：%w", err)
+		}
+		return encodeWalletResult(dianaWalletResult{OK: true, Action: "propose", Proposal: &decided,
+			Message: "在单笔免审批额度内，已从虚拟零花钱扣款；不涉及真实支付。"})
 	}
 	if err := t.runtime.askWalletApproval(ctx, t.event, proposal); err != nil {
 		// 问不出去就当没提：留着一个主人看不到码的待审批提议只会占名额。

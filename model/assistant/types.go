@@ -950,6 +950,8 @@ type BotConfig struct {
 	// 购买提议，主人私聊回一句「同意」就成交，不用抄确认码；超过的照旧要码。
 	// 缺省 0：全部要码，和加这个配置之前一样。
 	WalletQuickApproveCents *int `json:"wallet_quick_approve_cents,omitempty"`
+	// WalletAutoApproveCents 是虚拟购买的单笔免审批额度（分）；默认 200 元，0 为每笔确认。
+	WalletAutoApproveCents *int `json:"wallet_auto_approve_cents,omitempty"`
 	// FeedAutoReplyEnabled 控制主人在动态页评论后，机器人要不要自动回一句。默认关闭：
 	// 每条评论都会触发一次模型调用，升级后不该突然开始花钱。回复不带工具，只是照
 	// 人设写一两句话存进评论串；另有每天条数上限和单条动态的冷却。
@@ -1561,6 +1563,7 @@ type ConfigPayload struct {
 	SelfNoteEnabled                 *bool                     `json:"self_note_enabled,omitempty"`
 	OwnSpaceEnabled                 *bool                     `json:"own_space_enabled,omitempty"`
 	WalletQuickApproveCents         *int                      `json:"wallet_quick_approve_cents,omitempty"`
+	WalletAutoApproveCents          *int                      `json:"wallet_auto_approve_cents,omitempty"`
 	FeedAutoReplyEnabled            *bool                     `json:"feed_auto_reply_enabled,omitempty"`
 	MoodEnabled                     *bool                     `json:"mood_enabled,omitempty"`
 	PokeReplyEnabled                *bool                     `json:"poke_reply_enabled,omitempty"`
@@ -2892,6 +2895,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		SelfNoteEnabled:                 copyBoolPointer(cfg.SelfNoteEnabled),
 		OwnSpaceEnabled:                 copyBoolPointer(cfg.OwnSpaceEnabled),
 		WalletQuickApproveCents:         copyIntPointer(cfg.WalletQuickApproveCents),
+		WalletAutoApproveCents:          copyIntPointer(cfg.WalletAutoApproveCents),
 		FeedAutoReplyEnabled:            copyBoolPointer(cfg.FeedAutoReplyEnabled),
 		MoodEnabled:                     copyBoolPointer(cfg.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(cfg.PokeReplyEnabled),
@@ -2992,6 +2996,9 @@ func payloadFromProfileSet(set ProfileSet, focusID string, convert func(BotConfi
 
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
+	if payload.WalletAutoApproveCents == nil {
+		payload.WalletAutoApproveCents = copyIntPointer(existing.WalletAutoApproveCents)
+	}
 	if payload.TelegramRichMessages == nil {
 		payload.TelegramRichMessages = copyBoolPointer(existing.TelegramRichMessages)
 	}
@@ -3144,6 +3151,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		SelfNoteEnabled:                 copyBoolPointer(payload.SelfNoteEnabled),
 		OwnSpaceEnabled:                 copyBoolPointer(payload.OwnSpaceEnabled),
 		WalletQuickApproveCents:         copyIntPointer(payload.WalletQuickApproveCents),
+		WalletAutoApproveCents:          copyIntPointer(payload.WalletAutoApproveCents),
 		FeedAutoReplyEnabled:            copyBoolPointer(payload.FeedAutoReplyEnabled),
 		MoodEnabled:                     copyBoolPointer(payload.MoodEnabled),
 		PokeReplyEnabled:                copyBoolPointer(payload.PokeReplyEnabled),

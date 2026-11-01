@@ -456,6 +456,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   own_space_enabled?: boolean;
   /** 免确认码额度（分）：不超过它的购买提议主人回「同意」即可；缺省 0 表示每次都要确认码。 */
   wallet_quick_approve_cents?: number;
+  wallet_auto_approve_cents?: number;
   feed_auto_reply_enabled?: boolean;
   /** 情绪系统：随相处涨落、随时间回落的心情，只影响语气；缺省关闭。 */
   mood_enabled?: boolean;

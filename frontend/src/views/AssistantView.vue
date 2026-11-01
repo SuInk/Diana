@@ -1556,12 +1556,12 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">给她一个小窝</span>
                 </label>
-                <span class="hint">开启后，侧边栏「小窝」里可以给她发零花钱、看她的账本。全是虚拟账本，不接任何真实支付；想买东西时要你点头。默认关闭，保存配置后生效。</span>
+                <span class="hint">开启后，侧边栏「小窝」里可以给她发零花钱、看她的账本。全是虚拟账本，不接任何真实支付；达到单笔审批门槛时要你点头。默认关闭，保存配置后生效。</span>
               </div>
               <div v-if="form.own_space_enabled" class="field">
-                <label for="bot-wallet-quick-approve">免确认码额度（元）</label>
-                <input id="bot-wallet-quick-approve" v-model.number="walletQuickApproveDraft" class="input" type="number" min="0" step="0.01" inputmode="decimal" placeholder="留空或 0：每次都要确认码" />
-                <span class="hint">不超过这个价的购买提议，私聊里回「同意」就买下、回「不要」就作废；超过的照旧要回确认码。</span>
+                <label for="bot-wallet-auto-approve">单笔审批门槛（元）</label>
+                <input id="bot-wallet-auto-approve" v-model.number="walletAutoApproveDraft" class="input" type="number" min="0" step="0.01" inputmode="decimal" placeholder="默认 200；0：每笔都确认" />
+                <span class="hint">单笔低于此金额且余额足够时自动记账；达到或超过时私聊回复「同意购买」确认，无需确认码。0 表示每笔都确认。仅虚拟零花钱，不涉及真实支付。</span>
               </div>
             </div>
           </section>
@@ -2446,8 +2446,8 @@ import { accountSafetyRulesOverride, effectiveAccountSafetyRules, FALLBACK_ACCOU
 
 const form = ref<BotProfileConfig | null>(null);
 const modelRequestTimeoutDraft = ref<number | string>(0);
-// 免确认码额度：输入框按元填，存的是分。
-const walletQuickApproveDraft = ref<number | string>("");
+// 单笔审批门槛：输入框按元填，存的是分；未配置时统一默认 200 元。
+const walletAutoApproveDraft = ref<number | string>("");
 const savedModelRequestTimeoutMS = ref(0);
 
 const loading = ref(true);
@@ -4637,7 +4637,7 @@ function setRoleModel(role: RoleKey, value: string): void {
 function setForm(config: BotProfileConfig): void {
   savedModelRequestTimeoutMS.value = config.model_request_timeout_ms ?? 0;
   modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds(config.model_request_timeout_ms);
-  walletQuickApproveDraft.value = config.wallet_quick_approve_cents ? config.wallet_quick_approve_cents / 100 : "";
+  walletAutoApproveDraft.value = (config.wallet_auto_approve_cents ?? 20000) / 100;
   replyToneDefault.value = normalizeReplyTone(config.reply_tone_default) || FALLBACK_REPLY_TONE;
   replyToneDraft.value = effectiveReplyTone(config.maibot_reply_style, replyToneDefault.value);
   accountSafetyRulesDefault.value = normalizeAccountSafetyRules(config.reply_account_safety_audit_default) || FALLBACK_ACCOUNT_SAFETY_RULES;
@@ -5022,7 +5022,7 @@ async function save(): Promise<void> {
       // 输入框清空时 v-model.number 给的是 ""，原样发出去后端解析不了；留空就是没填，按默认不限制。
       max_input_chars: typeof current.max_input_chars === "number" ? current.max_input_chars : undefined,
       model_request_timeout_ms: modelRequestTimeoutMS,
-      wallet_quick_approve_cents: Math.max(0, Math.round((Number(walletQuickApproveDraft.value) || 0) * 100)),
+      wallet_auto_approve_cents: Math.max(0, Math.round((walletAutoApproveDraft.value === "" ? 200 : Number(walletAutoApproveDraft.value) || 0) * 100)),
       maibot_reply_style: replyToneOverride(replyToneDraft.value, replyToneDefault.value),
       reply_account_safety_audit_prompt: accountSafetyRulesOverride(accountSafetyRulesDraft.value, accountSafetyRulesDefault.value),
       // 只读默认值由后端回传，不写进机器人自己的配置。

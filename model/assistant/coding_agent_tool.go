@@ -348,7 +348,7 @@ func (t *dianaCodingTool) status(input map[string]any) (string, error) {
 	message := "任务已结束。"
 	switch {
 	case view.AwaitingApproval != "":
-		message = "任务停在一个要你点头的操作上，回放行码它才继续。"
+		message = "任务停在一个要你点头的操作上，回复「同意编码任务 任务ID」继续，无需确认码。"
 	case !job.finished():
 		message = "任务还在跑，跑完我会主动汇报。"
 	}
@@ -457,9 +457,7 @@ func (t *dianaCodingTool) runningJobs() []CodingJob {
 	return out
 }
 
-// attachPendingApproval 把这个任务正等着的确认填进查询结果。确认码原样给出：
-// 主人可能没看到当初那条消息，问进度时顺手把码再给一次，比让他去翻记录强。
-// 码本身不需要保密——唯一被检查的文本是主人自己那条消息。
+// attachPendingApproval 沿用响应字段名，但向用户提供可直接回复的文字指令。
 func (t *dianaCodingTool) attachPendingApproval(view *dianaCodingJob) {
 	if t.runtime == nil || t.runtime.codingJobRegistry == nil {
 		return
@@ -468,14 +466,13 @@ func (t *dianaCodingTool) attachPendingApproval(view *dianaCodingJob) {
 		if request.JobID != view.ID {
 			continue
 		}
-		allow, always, deny := codingApprovalCodes(request)
 		view.AwaitingApproval = codingApprovalDetail(request)
-		view.ApprovalAllowCode = allow
+		view.ApprovalAllowCode = "同意编码任务 " + request.JobID
 		if strings.TrimSpace(request.Pattern) != "" {
-			view.ApprovalAlwaysCode = always
+			view.ApprovalAlwaysCode = "以后都同意编码任务 " + request.JobID
 			view.ApprovalPattern = request.Pattern
 		}
-		view.ApprovalDenyCode = deny
+		view.ApprovalDenyCode = "拒绝编码任务 " + request.JobID
 		return
 	}
 }

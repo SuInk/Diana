@@ -88,7 +88,7 @@ Diana ──setsid 拉起──▶ diana __coding-acp <spec.json>   ← Diana �
   - 「不确认」：直接选 `allow_once`。
   - 「危险操作」：`execute` 类的命令命中危险清单才问，其余选 `allow_once`。
   - 「所有写操作」：`edit`/`delete`/`move`/`execute` 都问。
-- 要问时复用 hook 的 `requestCodingApproval`：写审批信箱，Diana 在聊天里发放行码、常驻放行码、拒绝码，等主人回。等待期间 Diana 重启也不丢，这点和 hook 一样。
+- 要问时复用 hook 的 `requestCodingApproval`：写审批信箱，Diana 在聊天里展示操作，主人回复「同意编码操作」或「拒绝编码操作」；多个待办时用「同意编码任务 <任务ID>」或「拒绝编码任务 <任务ID>」指定任务，常驻授权用「以后都同意编码任务 <任务ID>」。文字审批只匹配同一机器人、同一聊天的唯一待办，不消费其他流程的普通「同意」；旧确认码仍兼容。等待期间 Diana 重启也不丢，这点和 hook 一样。
 - 主人回放行码 → 选 `allow_once`；回常驻放行码 → 记进 Diana 自己的常驻放行清单，再选 `allow_once`；回拒绝码或超时 → 选 `reject_once`。
 - **不把 `allow_always` 转给代理。** 「以后都同意」只记在 Diana 这一处，`approvals clear` 才收得回来；代理那边记一份，Diana 就既看不见也清不掉。
 - 代理给的选项里没有对应种类时，按「允许类取第一个 allow、拒绝类取第一个 reject」兜底；两类都没有就回 `cancelled`。

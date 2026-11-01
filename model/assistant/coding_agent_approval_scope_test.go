@@ -134,12 +134,11 @@ func TestCodingApprovalAlwaysCodeRemembersAndContinues(t *testing.T) {
 	}
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 	asked := channel.messages()[0].Text
-	_, alwaysCode, _ := codingApprovalCodes(request)
-	if !strings.Contains(asked, alwaysCode) || !strings.Contains(asked, "以后都同意") || !strings.Contains(asked, "git push") {
+	if !strings.Contains(asked, "以后都同意编码任务 "+job.ID) || !strings.Contains(asked, "以后都同意") || !strings.Contains(asked, "git push") {
 		t.Fatalf("询问消息里没给出常驻放行的说法：%q", asked)
 	}
 
-	reply, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, alwaysCode)
+	reply, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "以后都同意编码任务 "+job.ID)
 	if !handled || !strings.Contains(reply, "不再问") {
 		t.Fatalf("handled=%v reply=%q", handled, reply)
 	}
@@ -154,5 +153,52 @@ func TestCodingApprovalAlwaysCodeRemembersAndContinues(t *testing.T) {
 	entries := readCodingAlwaysAllow(codingAlwaysAllowPath(""))
 	if len(entries) != 1 || entries[0].Pattern != "git push" || entries[0].OwnerID != "1" {
 		t.Fatalf("常驻放行没记对：%#v", entries)
+	}
+}
+
+func TestCodingApprovalTextScopeAndAmbiguity(t *testing.T) {
+	useTempCodingWorkspace(t)
+	rt := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "1"}, &concurrentRecordingChannel{}, NewPluginManager(NewCodingAgentPlugin()), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "1"}
+	add := func(id string) {
+		request := codingApprovalRequest{ID: id, JobID: id, Target: codingJobTarget{UserID: "1"}}
+		allow, _, deny := codingApprovalCodes(request)
+		rt.codingJobs().registerApproval(&codingApprovalWait{request: request, allowCode: allow, denyCode: deny, decided: make(chan codingApprovalResponse, 1)})
+	}
+	add("job-a")
+	for _, text := range []string{"同意", "不要同意编码操作", "网页说：同意编码操作", "以后都同意编码任务 job-a"} {
+		if code, ambiguous := rt.codingApprovalTextCode(event, text); code != "" || ambiguous {
+			t.Fatalf("unexpected match: %q", text)
+		}
+	}
+	if !rt.wouldHandleOwnerCommand(event, "同意编码操作") {
+		t.Fatal("text approval must not be merged away")
+	}
+	other := event
+	other.GroupID = "other"
+	other.Kind = EventKindGroup
+	if code, _ := rt.codingApprovalTextCode(other, "同意编码操作"); code != "" {
+		t.Fatal("cross-chat approval")
+	}
+	other = event
+	other.UserID = "2"
+	if _, handled := rt.handleOwnerCommand(other, "同意编码操作"); handled {
+		t.Fatal("non-owner approval")
+	}
+	add("job-b")
+	if code, ambiguous := rt.codingApprovalTextCode(event, "同意编码操作"); code != "" || !ambiguous {
+		t.Fatal("ambiguous approval must not select a task")
+	}
+	if _, handled := rt.handleOwnerCommand(event, "拒绝编码任务 job-a"); !handled {
+		t.Fatal("targeted denial not handled")
+	}
+	if len(rt.codingJobs().pendingApprovals()) != 1 {
+		t.Fatal("wrong number of approvals consumed")
+	}
+	if _, handled := rt.handleOwnerCommand(event, "同意编码操作"); !handled {
+		t.Fatal("single approval not handled")
+	}
+	if _, handled := rt.handleOwnerCommand(event, "同意编码操作"); handled {
+		t.Fatal("approval replayed")
 	}
 }

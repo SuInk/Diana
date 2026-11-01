@@ -359,3 +359,14 @@ func (t *guardedMutationTool) Run(context.Context, map[string]any) (string, erro
 	t.calls++
 	return "installed", nil
 }
+
+func TestConfiguredMCPToggleDoesNotRequireConfirmation(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		if kind := explicitUserRequestKind(&MCPSetEnabledTool{}, map[string]any{"enabled": enabled}); kind != "" {
+			t.Fatalf("toggle requires confirmation: %s", kind)
+		}
+	}
+	if kind := explicitUserRequestKind(&MCPInstallTool{}, nil); kind != "mcp" {
+		t.Fatal("install must retain confirmation")
+	}
+}

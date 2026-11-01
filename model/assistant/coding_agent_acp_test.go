@@ -618,12 +618,11 @@ func TestLaunchCodingJobACPApprovalGoesThroughChat(t *testing.T) {
 	var request codingApprovalRequest
 	body, _ := os.ReadFile(matches[0])
 	_ = json.Unmarshal(body, &request)
-	allowCode, _, _ := codingApprovalCodes(request)
-	if asked := channel.messages()[0].Text; !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, allowCode) {
+	if asked := channel.messages()[0].Text; !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "同意编码操作") {
 		t.Fatalf("询问消息 = %q", asked)
 	}
-	if _, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "同意 "+allowCode); !handled {
-		t.Fatalf("主人的放行码没被受理")
+	if _, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "同意编码操作"); !handled {
+		t.Fatalf("主人的文字确认没被受理")
 	}
 	waitForCondition(t, 20*time.Second, func() bool { return codingJobReported(t, job.ID) })
 	saved, _ := loadCodingJob(job.ID)
