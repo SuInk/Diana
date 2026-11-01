@@ -40,7 +40,7 @@ scripts/test-serial.sh ./model/assistant
 
 ## 可选 Rich Messages
 
-在「机器人 → 接入 → Telegram」设置「Rich Messages 富消息」，对应配置键 `telegram_rich_messages`，未配置时默认开启，显式 `false` 保持关闭（包括保存后重启）。保存后按通道配置变更重新建立运行通道。关闭时继续使用原来的 `sendMessage` + entities；旧配置缺少此字段时也默认开启；不兼容的客户端可手动关闭。
+仅 Telegram 机器人在「机器人 → 行为 → 回复怎么发」设置「Rich Messages 富消息」，对应配置键 `telegram_rich_messages`，未配置时默认开启，显式 `false` 保持关闭（包括保存后重启）。保存后按通道配置变更重新建立运行通道。关闭时继续使用原来的 `sendMessage` + entities；旧配置缺少此字段时也默认开启；不兼容的客户端可手动关闭。
 
 开启后，普通 Markdown 用 Goldmark 解析成 typed blocks，通过 `sendRichMessage` 发送，而不是直接把模型原文交给 Telegram 的富 Markdown 解释器。支持标题、段落、加粗、斜体、删除线、链接、代码、引用、有序/无序列表和不超过 20 列的原生表格；金额 `$400-600K` 仍是文字，不自动解释成公式。
 
