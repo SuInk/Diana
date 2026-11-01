@@ -22,7 +22,7 @@ const (
 // 开头结尾写对或写歪的标记发送层已经剥掉，这条管的是夹在正文中间、或者写歪到
 // 发送层认不出的那些。它只是预填进列表，主人可以改也可以删。
 func defaultReplyFilterRules() []string {
-	return []string{`\[\[?\s*/?\s*[A-Z]{4,6}_(?:REPLY|LINES|REFUSE)_[A-Z]+\s*\]\]?`}
+	return []string{`<[ \t]*/?[ \t]*diana-[a-z-]+[^<>\n]{0,200}>|\[\[?\s*/?\s*[A-Z]{4,6}_(?:REPLY|LINES|REFUSE)_[A-Z]+\s*\]\]?`}
 }
 
 // cloneReplyFilterRules 保留 nil 和空列表的区别：空列表是主人清空了默认规则。
@@ -85,7 +85,7 @@ func applyReplyFilters(rules []string, text string) string {
 
 // replyFilterProtected 是过滤规则不能碰的片段：代码块、行内代码，以及发送层要认的
 // 分条、换行、引用、@ 标记和 CQ 码。规则匹配跨过它们时，它们的原字节照样留下。
-// 漏进正文的 [[DIANA_…]] 控制标记不在其中，默认规则删的就是它们。
+// 漏进正文的其它 diana 标签和旧方括号控制标记不在其中。
 var replyFilterProtected = regexp.MustCompile("(?s:```.*?(?:```|$))|(?s:~~~.*?(?:~~~|$))|`[^`\n]+`|\\[CQ:[^\\]\\n]+\\]|<diana-(?:message|br|quote id=\"[^\"\\n]+\"|at id=\"[^\"\\n]+\")/>" +
 	`|\[[ \t]*@?[ \t]*` + dianaMentionVariantCore + `[ \t]*\]|\[[ \t]*` + dianaReplyVariantCore + `[ \t]*\]`)
 

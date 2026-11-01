@@ -947,6 +947,7 @@
                 </div>
                 <div class="reply-filter-actions">
                   <button class="btn small" type="button" @click="addReplyFilterRule('')">添加规则</button>
+                  <button class="btn small" type="button" :disabled="replyFilterResetBusy" @click="resetReplyFilterRules">{{ replyFilterResetBusy ? "恢复中…" : "恢复默认" }}</button>
                   <button class="btn small" type="button" @click="openReplyFilterAssist">AI 帮写</button>
                   <button class="btn small" type="button" @click="replyFilterTestOpen = !replyFilterTestOpen">{{ replyFilterTestOpen ? "收起测试" : "测试" }}</button>
                 </div>
@@ -976,7 +977,7 @@
                     <pre class="reply-filter-result">{{ replyFilterTestResult.result || "（整条被删光，这一轮不发送）" }}</pre>
                   </template>
                 </div>
-                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认带一条删漏出来的内部控制标记（如 [DIANA_REPLY_SINGLE] 这类旧写法）的规则，可以改也可以删，清空后不会再补回来。</span>
+                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认规则清理漏出的内部控制标记（如 &lt;diana-single/&gt;），同时兼容旧格式。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2530,6 +2531,7 @@ const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const replyFilterRulesDraft = ref<string[]>([]);
+const replyFilterResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);
 const replyFilterSample = ref("");
 const replyFilterTestBusy = ref(false);
@@ -4660,6 +4662,26 @@ function addReplyFilterRule(rule: string): void {
 
 function removeReplyFilterRule(index: number): void {
   replyFilterRulesDraft.value.splice(index, 1);
+}
+
+async function resetReplyFilterRules(): Promise<void> {
+  if (!form.value || replyFilterResetBusy.value) return;
+  const current = form.value;
+  const before = JSON.stringify(replyFilterRulesDraft.value);
+  replyFilterResetBusy.value = true;
+  try {
+    if (!(await askConfirm({ title: "恢复默认回复过滤规则？", message: "将替换当前规则列表，其它配置不变。保存配置后生效。", confirmLabel: "恢复默认" }))) return;
+    const defaults = await getNewBotProfileDefaults(current.platform || "onebot-v11");
+    if (form.value !== current || JSON.stringify(replyFilterRulesDraft.value) !== before) return;
+    if (!Array.isArray(defaults.reply_filter_rules)) throw new Error("服务端未返回默认回复过滤规则，请升级后重试");
+    replyFilterRulesDraft.value = [...defaults.reply_filter_rules];
+    replyFilterTestResult.value = null;
+    toastSuccess("已恢复默认回复过滤规则，保存配置后生效");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "恢复默认失败");
+  } finally {
+    replyFilterResetBusy.value = false;
+  }
 }
 
 async function runReplyFilterTest(): Promise<void> {
