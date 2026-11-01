@@ -2009,6 +2009,10 @@ func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices 
 	done := map[int]string{}
 	for _, index := range indices {
 		call := calls[index]
+		if silent, _ := call.Arguments["silent"].(bool); silent {
+			done[index] = "未发送：silent=true"
+			continue
+		}
 		text := sendText(call)
 		record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: cloneToolInput(call.Arguments)}
 		output, err := r.cfg.Interim(ctx, text)

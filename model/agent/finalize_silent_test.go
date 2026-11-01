@@ -18,6 +18,58 @@ type silentFinalizeClient struct {
 	requests  []llm.GenerateRequest
 }
 
+func TestExplicitSilentDropsConflictingPayload(t *testing.T) {
+	for _, text := range []string{"</antml:parameter>\n", "不该发出的正文"} {
+		t.Run(text, func(t *testing.T) {
+			arguments := map[string]any{
+				"silent": true, "silent_reason": "不是对我说的", "text": text,
+				"content": "旧正文", "sticker": text, "task_state": "pending",
+			}
+			client := &silentFinalizeClient{arguments: arguments}
+			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2,
+				FinalizeFields: []FinalizeField{{Name: "sticker"}},
+			}, NewToolRegistry())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "不是你咋算的"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.Silent || resp.Text != "" || len(resp.FinalizeFields) != 0 || resp.SilentReason != "不是对我说的" || len(client.requests) != 1 {
+				t.Fatalf("resp = %#v, requests = %d", resp, len(client.requests))
+			}
+			call := llm.ToolCall{Name: finalizeToolName, Arguments: arguments}
+			if got := sendText(call); got != "" {
+				t.Fatalf("silent sendText = %q", got)
+			}
+			action := finalizeAction([]llm.ToolCall{call}, "旁边的正文也不能发送")
+			if !action.Silent || action.Content != "" || action.TaskState != "" || len(action.Fields) != 0 {
+				t.Fatalf("action = %#v", action)
+			}
+		})
+	}
+}
+
+func TestExplicitSilentSkipsInterimDelivery(t *testing.T) {
+	runner, err := NewRunner(&silentFinalizeClient{}, Config{WorkDir: t.TempDir(),
+		Interim: func(context.Context, string) (string, error) {
+			t.Fatal("silent send must not invoke delivery")
+			return "", nil
+		},
+	}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := []llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{
+		"text": "</antml:parameter>", "silent": true, "continue": true,
+	}}}
+	done, steps := runner.sendInterim(context.Background(), calls, []int{0}, nil)
+	if done[0] == "" || len(steps) != 0 {
+		t.Fatalf("done = %#v, steps = %#v", done, steps)
+	}
+}
+
 func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, req)
 	return &llm.GenerateResponse{

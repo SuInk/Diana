@@ -254,8 +254,8 @@ func (p *stickerReannotateProvider) Generate(_ context.Context, req llm.Generate
 	return &llm.GenerateResponse{Text: p.annotation}, nil
 }
 
-// 一张图就够、不想说话：静默收尾加 sticker 只回一张表情包；挑不到就什么都不发，也不补兜底文字。
-func TestReplySilentFinalizeSendsStickerOnly(t *testing.T) {
+// 显式静默不发送正文或表情包，即使关键词能匹配候选也不投递。
+func TestReplyExplicitSilentFinalizeNeverSendsSticker(t *testing.T) {
 	withFastSendTiming(t)
 	path := filepath.Join(t.TempDir(), "night.gif")
 	body := []byte("night-sticker")
@@ -278,14 +278,8 @@ func TestReplySilentFinalizeSendsStickerOnly(t *testing.T) {
 				t.Fatalf("%s: err = %v, want silent finish", keywords, err)
 			}
 			sent := channel.sentSnapshot()
-			if keywords == "晚安 摸头" {
-				if len(sent) != 1 || sent[0].Text != "" || sentStickerPath(sent[0]) != path {
-					t.Fatalf("sticker-only: sent = %#v", sent)
-				}
-				continue
-			}
 			if len(sent) != 0 {
-				t.Fatalf("no match must stay silent: sent = %#v", sent)
+				t.Fatalf("explicit silent must not send: order=%s keywords=%s sent=%#v", configOrder, keywords, sent)
 			}
 		}
 	}
