@@ -215,6 +215,7 @@ type ReplySuppressionStore interface {
 }
 
 type RuntimeStatus struct {
+	Rooms         []RoomState     `json:"rooms,omitempty"`
 	Running       bool            `json:"running"`
 	Channel       ChannelStatus   `json:"channel"`
 	Channels      []ChannelStatus `json:"channels,omitempty"`
@@ -365,6 +366,7 @@ type EventListener func(EventRecord)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
+	rooms roomTracker
 	// identityAliases 记住换过别名的号码，见 identityAliasRegistry。
 	identityAliases identityAliasRegistry
 	// secretContextValues 记住只能靠上下文认出来的敏感值，见 secretContextRegistry。
@@ -1627,6 +1629,7 @@ func (r *Runtime) Status() RuntimeStatus {
 	}
 
 	return RuntimeStatus{
+		Rooms:          r.roomSnapshots(),
 		Running:        running,
 		Channel:        channelStatus,
 		Channels:       channelStatuses,
@@ -4925,7 +4928,15 @@ func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEven
 	return reply, nil
 }
 
-func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (string, error) {
+func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event MessageEvent, relationship RelationshipPolicy, messages []llm.Message, preparedRegistry *agent.ToolRegistry, extraTools ...agent.Tool) (replyText string, replyErr error) {
+	ctx, finishRoom := r.beginRoomReply(ctx, cfg, event)
+	defer func() {
+		if p := recover(); p != nil {
+			finishRoom(fmt.Errorf("reply generation panicked"))
+			panic(p)
+		}
+		finishRoom(replyErr)
+	}()
 	typingIndicatorFromContext(ctx).resume()
 	// generateReply 也被订阅、动态页和事件触发等后台入口直接调用；这些入口
 	// 没有入站 worker 的上下文，必须在这里按事件恢复 profile 和用量归属。

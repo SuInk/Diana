@@ -156,6 +156,7 @@ func (h *EventStreamHandler) StartWatcher(ctx context.Context, interval time.Dur
 
 // statusSignature 提取状态中影响 UI 展示的关键字段做变化检测。
 func statusSignature(status assistant.RuntimeStatus) string {
+	rooms, _ := json.Marshal(status.Rooms)
 	recentAt := ""
 	if len(status.RecentEvents) > 0 {
 		recentAt = status.RecentEvents[0].At.Format(time.RFC3339Nano)
@@ -177,7 +178,7 @@ func statusSignature(status assistant.RuntimeStatus) string {
 	}
 	// 模型并发和 token 合计进指纹：它们每秒都可能变，而 UpdatedAt 只在运行时状态
 	// 改动时才动。不带上它们，前端要等下一次别的变化才会看到这两个数刷新。
-	return fmt.Sprintf("%t|%t|%s|%s|%s|%d|%d|%d|%d|%d|%s|%s|%s",
+	return string(rooms) + "|" + fmt.Sprintf("%t|%t|%s|%s|%s|%d|%d|%d|%d|%d|%s|%s|%s",
 		status.Running,
 		status.Channel.Connected,
 		status.Channel.SelfID,

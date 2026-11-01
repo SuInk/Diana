@@ -120,6 +120,9 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if r.walletEnabled(event) && r.walletProposalStore() != nil {
 			extraTools = append(extraTools, newDianaWalletTool(r, event))
 		}
+		if event.ProfileID != "" && OwnSpaceEnabled(cfg) {
+			extraTools = append(extraTools, &dianaRoomTool{runtime: r, event: event})
+		}
 		// 动态只给主人：发在控制台里的内容不该由群里任何人一句话就能塞进去。
 		if relationship.Owner && r.feedStore() != nil {
 			extraTools = append(extraTools, newDianaFeedTool(r, event))

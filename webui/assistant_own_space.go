@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"time"
@@ -23,6 +24,7 @@ func (h *BotHandler) registerOwnSpaceRoutes(router gin.IRouter, base string) {
 }
 
 type ownSpaceResponse struct {
+	Room *assistant.RoomState `json:"room,omitempty"`
 	// Enabled 和自述一样单独给出：账本空着和小窝没开是两件事。
 	Enabled bool                    `json:"enabled"`
 	Wallet  assistant.WalletSummary `json:"wallet"`
@@ -41,7 +43,19 @@ func (h *BotHandler) getOwnSpace(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "own_space_get", err, "", nil)
 		return
 	}
+	var room *assistant.RoomState
+	if provider, ok := h.runtime.(interface {
+		RoomSnapshot(context.Context, string) (assistant.RoomState, error)
+	}); ok {
+		state, err := provider.RoomSnapshot(c.Request.Context(), profileID)
+		if err != nil {
+			h.writeError(c, http.StatusInternalServerError, "own_space_get", err, "", nil)
+			return
+		}
+		room = &state
+	}
 	c.JSON(http.StatusOK, ownSpaceResponse{
+		Room:    room,
 		Enabled: assistant.OwnSpaceEnabled(h.runtime.ProfileConfig(profileID)),
 		Wallet:  wallet,
 	})

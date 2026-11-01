@@ -11,11 +11,13 @@ export interface AccentOption {
   color: string;
 }
 
+export const DEFAULT_ACCENT = "forest";
+
 export const accentOptions: AccentOption[] = [
+  { id: "forest", label: "松间绿（默认）", color: "#159f6c" },
   { id: "diana", label: "樱粉", color: "#e0578f" },
   { id: "violet", label: "星夜紫", color: "#7c5cff" },
-  { id: "ocean", label: "深海蓝", color: "#2f7df6" },
-  { id: "forest", label: "松间绿", color: "#159f6c" }
+  { id: "ocean", label: "深海蓝", color: "#2f7df6" }
 ];
 
 interface ThemeState {
@@ -26,7 +28,7 @@ interface ThemeState {
 
 const STORAGE_KEY = "dqb-next:theme";
 // favicon.svg 只用这一个颜色，换主题时整体替换成当前强调色。
-const FAVICON_BASE_COLOR = "#e0578f";
+const FAVICON_BASE_COLOR = "#159f6c";
 let faviconTemplate = "";
 let faviconLink: HTMLLinkElement | null = null;
 
@@ -43,13 +45,13 @@ function load(): ThemeState {
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<ThemeState>;
       const mode: ThemeMode = parsed.mode === "light" || parsed.mode === "dark" ? parsed.mode : "auto";
-      const accent = accentOptions.some((option) => option.id === parsed.accent) ? (parsed.accent as string) : "diana";
+      const accent = accentOptions.some((option) => option.id === parsed.accent) ? (parsed.accent as string) : DEFAULT_ACCENT;
       return { mode, accent, showLoginLinks: parsed.showLoginLinks !== false };
     }
   } catch {
     /* 存储不可用时使用默认主题 */
   }
-  return { mode: "auto", accent: "diana", showLoginLinks: true };
+  return { mode: "auto", accent: DEFAULT_ACCENT, showLoginLinks: true };
 }
 
 export const theme = reactive<ThemeState>(load());

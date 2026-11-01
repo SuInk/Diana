@@ -36,9 +36,9 @@
   --err: #d24343;
   --err-soft: rgba(210, 67, 67, 0.12);
 
-  --accent: #e0578f;
-  --accent-strong: #c73f77;
-  --accent-soft: rgba(224, 87, 143, 0.12);
+  --accent: #159f6c;
+  --accent-strong: #0c8158;
+  --accent-soft: rgba(21, 159, 108, 0.13);
   --accent-contrast: #ffffff;
 
   /* 存储饼图的分类色：和主题强调色无关，换配色时扇区含义不能跟着变。 */
@@ -53,6 +53,12 @@
 
   --sidebar-width: 236px;
   --topbar-height: 56px;
+}
+
+:root[data-accent="diana"] {
+  --accent: #e0578f;
+  --accent-strong: #c73f77;
+  --accent-soft: rgba(224, 87, 143, 0.12);
 }
 
 :root[data-accent="violet"] {

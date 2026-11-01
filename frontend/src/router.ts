@@ -69,7 +69,7 @@ export const navItems: NavItem[] = [
   { id: "browser", label: "浏览器", hint: "浏览器管理与网页渲染", group: "capabilities" },
   { id: "chat", label: "聊天", hint: "和机器人私聊、语音通话", group: "operate" },
   { id: "users", label: "记忆", hint: "人员、笔记本与世界书", group: "operate", covers: ["notebook", "world-book"] },
-  { id: "space", label: "小窝", hint: "机器人的钱包、自述与动态", group: "operate", covers: ["self-notes", "feed"] },
+  { id: "space", label: "小窝", hint: "机器人的房间、钱包、自述与动态", group: "operate", covers: ["self-notes", "feed"] },
   { id: "events", label: "记录", hint: "消息处理、回复决策、运行日志与好感与画像", group: "operate", covers: ["logs", "favorability"] },
   { id: "settings", label: "设置", hint: "主题与系统更新", group: "system" }
 ];

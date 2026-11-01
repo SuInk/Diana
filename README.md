@@ -7,7 +7,7 @@
 <sub>OneBot v11 · Telegram · QQ 官方机器人 · 微信 · iMessage —— 一个实例，同时在线</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=c83f76)](https://github.com/SuInk/Diana/releases/latest)
+[![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=159f6c)](https://github.com/SuInk/Diana/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
@@ -19,7 +19,10 @@
 
 <br />
 
-<img src="./docs/assets/diana-webui-overview.png" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" width="100%" />
+<img src="./docs/assets/diana-webui-overview-green.jpg" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" width="100%" />
+
+控制台默认主题色为 **松间绿**，支持浅色、深色及跟随系统。在「设置 → 界面主题」中可切换配色；升级不会覆盖浏览器里已保存的配色选择。
+
 
 ## Diana 是什么
 
