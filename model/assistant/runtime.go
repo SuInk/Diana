@@ -5151,6 +5151,8 @@ var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{
+	dianaPluginMediaToolName,
+	dianaStickerToolName,
 	agent.WebSearchToolName,
 	dianaHistoryImagesToolName,
 	dianaImageToolName,

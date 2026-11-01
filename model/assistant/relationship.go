@@ -130,8 +130,9 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaThreadStateToolName: true,
 		// 自述是机器人自己的自我描述，不是谁的特权：只给主人就等于这个功能只在
 		// 主人在场时存在。清空全部是主人专属，由工具自己判身份。
-		dianaSelfNoteToolName: true,
-		dianaStickerToolName:  true,
+		dianaSelfNoteToolName:    true,
+		dianaStickerToolName:     true,
+		dianaPluginMediaToolName: true,
 		// 钱包查余额和发提议都不动钱，成交要主人回确认码。
 		dianaWalletToolName: true,
 		// VRChat 工具只在插件启用时挂；操控类默认只挂给主人，插件里放开后才给成员，
