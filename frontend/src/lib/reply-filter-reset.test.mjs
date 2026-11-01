@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
@@ -54,11 +54,14 @@ test("late response cannot overwrite another profile or newer edits", async () =
     assert.notEqual(JSON.stringify(c.replyFilterRulesDraft.value), '["server-default"]');
   }
 });
-test("demo defaults match Go defaults and UI documents current markup", () => {
-  const go = readFileSync(new URL("../../../model/assistant/reply_filter.go", import.meta.url), "utf8");
+const goDefaultsURL = new URL("../../../model/assistant/reply_filter.go", import.meta.url);
+test("demo defaults match Go defaults", { skip: !existsSync(goDefaultsURL) && "frontend-only Docker stage has no Go sources" }, () => {
+  const go = readFileSync(goDefaultsURL, "utf8");
   const demo = readFileSync(new URL("../demo/demo.ts", import.meta.url), "utf8");
   const rule = go.match(/return \[\]string\{`([^`]+)`\}/)[1];
   assert.ok(demo.includes('reply_filter_rules: [String.raw`' + rule + '`]'));
+});
+test("UI documents current markup", () => {
   assert.ok(source.includes("&lt;diana-single/&gt;"));
   assert.ok(!source.includes("[DIANA_REPLY_SINGLE]"));
 });
