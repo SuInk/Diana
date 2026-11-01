@@ -341,7 +341,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:            repositoryWatchPluginID,
 		Name:          "仓库订阅",
-		Version:       "0.2.12",
+		Version:       "0.2.13",
 		Description:   "在 WebUI 监控公开或私有 GitHub 仓库的 Commit、PR、Issue、Release 与 Star；检测到动态后生成事实摘要并通知指定群聊或私聊对象。私有仓库的推送默认打码：不写仓库路径、账号名和链接，可为每个订阅设置显示名。",
 		Official:      true,
 		BuiltIn:       true,
@@ -356,6 +356,7 @@ func (p *RepositoryWatchPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeBool,
 				Default:     true,
 			},
+			followUpPromptSetting(),
 			{
 				Key:         repositoryWatchSettingPatch,
 				Label:       "跟评读取受限代码片段",
