@@ -357,7 +357,13 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 	}
 	// 原图附不上时，用户问的这张图只剩文字摘要可用；摘要还没生成就当场加急等一会儿，
 	// 否则模型拿到的是一句「尚无缓存描述」。
-	waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+	wait := replyImageDescriptionWait
+	if mode := imageTextModeFromContext(ctx); mode != nil {
+		// Give an existing background request the remaining budget rather than
+		// starting a duplicate foreground request after the old 45-second wait.
+		wait = time.Until(mode.deadline)
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	r.awaitHistoryImageDescriptions(waitCtx, sources...)
 	cancel()
 	lines := make([]string, 0, len(sources))

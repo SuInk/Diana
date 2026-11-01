@@ -5,15 +5,157 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
 // 1x1 透明 PNG，够加载链路当成一张真图。
 const imageInputModeTestPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+
+type imageModeFailureProvider struct {
+	calls atomic.Int32
+	wait  bool
+}
+
+func (p *imageModeFailureProvider) Generate(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.calls.Add(1)
+	if p.wait {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return nil, errors.New("vision unavailable")
+}
+
+func TestImageTextModeFailureFallsBackWithoutSecondVisionCall(t *testing.T) {
+	p := &imageModeFailureProvider{}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	body, _, err := decodeInlineHistoryImage(imageInputModeTestPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image.png")
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	event := MessageEvent{MessageID: "vision-failure", Segments: []MessageSegment{{Type: "image", Data: map[string]string{"cached_file": path, "url": imageInputModeTestPNG}}}}
+	ctx := withImageTextMode(context.Background(), runtime, event)
+	mode := imageTextModeFromContext(ctx)
+	message, failures := mode.message(ctx, event, "评价一下", nil, "high")
+	if len(failures) != 0 || !messagesContainImages([]llm.Message{message}) {
+		t.Fatalf("fallback lost original: %v", failures)
+	}
+	before := p.calls.Load()
+	if before != 1 {
+		t.Fatalf("vision calls = %d", before)
+	}
+	for i := 0; i < 2; i++ {
+		out := mode.replaceImageParts(ctx, []llm.Message{message})
+		if !messagesContainImages(out) {
+			t.Fatal("failed description must retain pixels")
+		}
+	}
+	if p.calls.Load() != before {
+		t.Fatal("model adapter retried failed description")
+	}
+}
+
+func TestImageTextModeConcurrentDescriptionsShareDeadline(t *testing.T) {
+	p := &imageModeFailureProvider{wait: true}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	ctx := withImageTextMode(context.Background(), runtime, MessageEvent{})
+	mode := imageTextModeFromContext(ctx)
+	if remaining := time.Until(mode.deadline); remaining > 90*time.Second || remaining < 89*time.Second {
+		t.Fatalf("description budget = %s, want 90 seconds", remaining)
+	}
+	mode.deadline = time.Now().Add(100 * time.Millisecond)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); mode.sourceDescription(ctx, imageInputModeTestPNG) }()
+	}
+	wg.Wait()
+	if p.calls.Load() != 1 {
+		t.Fatalf("concurrent calls = %d", p.calls.Load())
+	}
+	// A different image must not receive a fresh budget after the turn expires.
+	mode.sources = map[string]string{}
+	mode.sourceDescription(ctx, imageInputModeTestPNG)
+	if p.calls.Load() != 1 {
+		t.Fatal("expired budget started another request")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("vision timeout canceled the reply context")
+	}
+}
+
+// Opt-in production replay; sends only model requests, never messages to QQ.
+func TestLiveImageDescriptionFallbackReplay(t *testing.T) {
+	path := os.Getenv("DIANA_IMAGE_REPLAY_FIXTURE")
+	if path == "" {
+		t.Skip("set DIANA_IMAGE_REPLAY_FIXTURE and live LLM configuration")
+	}
+	client := liveLLMClient(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct{ Vision, Reply llm.GenerateRequest }
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	start := time.Now()
+	response, err := client.Generate(ctx, fixture.Vision)
+	cancel()
+	if err != nil {
+		t.Logf("original vision replay: elapsed=%s error=%v", time.Since(start), err)
+	} else {
+		t.Logf("original vision replay: elapsed=%s usage=%+v description=%s", time.Since(start), response.Usage, response.Text)
+	}
+	// Reproduce an exhausted description budget, then exercise the real output adapter.
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return client, nil })
+	ctx = withImageTextMode(context.Background(), runtime, MessageEvent{})
+	mode := imageTextModeFromContext(ctx)
+	mode.deadline = time.Now().Add(-time.Second)
+	fixture.Reply.Messages = mode.replaceImageParts(ctx, fixture.Reply.Messages)
+	if !messagesContainImages(fixture.Reply.Messages) {
+		t.Fatal("fallback lost original image")
+	}
+	// Probe image readability without executing research or sending a chat message.
+	fixture.Reply.Tools = nil
+	fixture.Reply.Messages = append(fixture.Reply.Messages, llm.Message{Role: llm.RoleUser, Content: "本次只核对截图文字，不评价技术，也不联网：截图正文写连续加班多少天？只回答天数。"})
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	start = time.Now()
+	response, err = client.Generate(ctx, fixture.Reply)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := response.Text
+	for _, call := range response.ToolCalls {
+		if call.Name == "send" {
+			if text, ok := call.Arguments["text"].(string); ok {
+				reply += text
+			}
+		}
+	}
+	if strings.TrimSpace(reply) == "" {
+		t.Fatalf("empty reply: tool calls=%+v", response.ToolCalls)
+	}
+	if !strings.Contains(reply, "20") && !strings.Contains(reply, "二十") {
+		t.Fatalf("fallback did not read the screenshot: %s", reply)
+	}
+	t.Logf("native image fallback: elapsed=%s usage=%+v reply=%s", time.Since(start), response.Usage, reply)
+}
 
 // finalReplyProvider 每次都直接给最终回复，并记下每次请求。这里要看的是请求里有没有
 // 原图、有没有描述，agent 多走一轮也不该让测试崩。

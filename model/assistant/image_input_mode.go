@@ -65,18 +65,27 @@ func (cfg BotConfig) backgroundImageDescriptionEnabled() bool {
 
 type imageTextModeKey struct{}
 
+// Allow one slow description to finish instead of restarting it in another stage.
+const imageTextModeDescriptionBudget = 90 * time.Second
+
 // imageTextMode 挂在这一轮回复的 ctx 上：拼消息的地方看到它就把图换成描述，
 // 模型出口看到它就把漏网的图（工具返回的截图等）也换掉。
 type imageTextMode struct {
 	runtime *Runtime
 	event   MessageEvent
 
-	mu      sync.Mutex
-	sources map[string]string
+	mu       sync.Mutex
+	sources  map[string]string
+	pending  map[string]chan struct{}
+	deadline time.Time
 }
 
 func withImageTextMode(ctx context.Context, r *Runtime, event MessageEvent) context.Context {
-	return context.WithValue(ctx, imageTextModeKey{}, &imageTextMode{runtime: r, event: event, sources: map[string]string{}})
+	return context.WithValue(ctx, imageTextModeKey{}, &imageTextMode{
+		runtime: r, event: event,
+		sources: make(map[string]string), pending: make(map[string]chan struct{}),
+		deadline: time.Now().Add(imageTextModeDescriptionBudget),
+	})
 }
 
 func imageTextModeFromContext(ctx context.Context) *imageTextMode {
@@ -115,11 +124,8 @@ func (m *imageTextMode) segmentDescription(ctx context.Context, segment MessageS
 	if len(sources) == 0 {
 		return ""
 	}
-	callCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
-	defer cancel()
-	description, err := m.runtime.describeRecallImage(callCtx, m.event, sources[0])
-	if err != nil {
-		log.Printf("diana image text mode: describe failed: message_id=%s err=%v", m.event.MessageID, err)
+	description := m.sourceDescription(ctx, sources[0])
+	if description == "" {
 		return ""
 	}
 	if store != nil && hashed {
@@ -133,15 +139,49 @@ func (m *imageTextMode) segmentDescription(ctx context.Context, segment MessageS
 // sourceDescription 给没有消息段的图（语义引用、插件附图、视频关键帧、工具截图）
 // 取描述。同一轮里 agent 每一步都会重发整段消息，结果记在本轮，不重复识别。
 func (m *imageTextMode) sourceDescription(ctx context.Context, source string) string {
+	sourceKey := sha256Hex(source)
+	m.mu.Lock()
+	cached, found := m.sources[sourceKey]
+	m.mu.Unlock()
+	if found {
+		return cached
+	}
+	callCtx, cancel := context.WithDeadline(ctx, m.deadline)
+	defer cancel()
+	// Normalize file/HTTP sources to the same data URL used by the model fallback.
+	// Cache failures too, so the output adapter cannot start a second vision call.
+	ready := llmReadyImageURLs(callCtx, []string{source})
+	if len(ready) == 0 {
+		return ""
+	}
+	source = ready[0]
 	key := sha256Hex(source)
 	m.mu.Lock()
 	description, ok := m.sources[key]
-	m.mu.Unlock()
 	if ok {
+		m.sources[sourceKey] = description
+		m.mu.Unlock()
 		return description
 	}
-	callCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
-	defer cancel()
+	if done, found := m.pending[key]; found {
+		m.mu.Unlock()
+		select {
+		case <-done:
+			m.mu.Lock()
+			description = m.sources[key]
+			m.mu.Unlock()
+			return description
+		case <-callCtx.Done():
+			return ""
+		}
+	}
+	if callCtx.Err() != nil {
+		m.mu.Unlock()
+		return ""
+	}
+	done := make(chan struct{})
+	m.pending[key] = done
+	m.mu.Unlock()
 	description, err := m.runtime.budgetImageDescription(callCtx, m.event, source)
 	if err != nil {
 		log.Printf("diana image text mode: describe source failed: message_id=%s err=%v", m.event.MessageID, err)
@@ -150,6 +190,9 @@ func (m *imageTextMode) sourceDescription(ctx context.Context, source string) st
 	description = strings.TrimSpace(description)
 	m.mu.Lock()
 	m.sources[key] = description
+	m.sources[sourceKey] = description
+	delete(m.pending, key)
+	close(done)
 	m.mu.Unlock()
 	return description
 }
@@ -281,7 +324,7 @@ func (m *imageTextMode) message(ctx context.Context, event MessageEvent, text st
 }
 
 // replaceImageParts 是模型出口的兜底：拼消息时换不到的图（工具返回的截图、插件
-// 附图、依赖图兜底）在这里逐张换成描述，保证一个像素都不进对话模型。
+// 附图、依赖图兜底）在这里逐张换成描述；识别失败的原图保留，不能重复阻塞回复。
 func (m *imageTextMode) replaceImageParts(ctx context.Context, messages []llm.Message) []llm.Message {
 	if !messagesContainImages(messages) {
 		return messages
