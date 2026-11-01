@@ -513,6 +513,72 @@ func TestCrossSessionMediaPortableDropsPlatformRefs(t *testing.T) {
 	}
 }
 
+func TestCrossSessionMediaFileUploadClearsSourceIDs(t *testing.T) {
+	for _, portable := range []bool{false, true} {
+		for _, source := range []string{"https://example.test/report.md", "/tmp/report.md", "file:///tmp/report.md", "base64://IyBSZXBvcnQ="} {
+			original := map[string]string{
+				"file": "report.md", "url": source, "name": "report.md", "size": "8",
+				"file_id": "/source-group-file", "fileId": "/source-group-file", "id": "/source-group-file",
+			}
+			media := crossSessionMediaFromSegments([]MessageSegment{{Type: "file", Data: original}}, portable)
+			if len(media.files) != 1 {
+				t.Fatalf("portable=%v source=%q files=%#v", portable, source, media.files)
+			}
+			data := media.files[0].Data
+			if data["file"] != source || data["name"] != "report.md" || data["size"] != "8" {
+				t.Fatalf("file content metadata changed: %#v", data)
+			}
+			for _, key := range []string{"file_id", "fileId", "id"} {
+				if _, exists := data[key]; exists {
+					t.Fatalf("portable=%v source=%q retained %s: %#v", portable, source, key, data)
+				}
+				if original[key] != "/source-group-file" {
+					t.Fatalf("source message was mutated: %#v", original)
+				}
+			}
+		}
+	}
+	for _, id := range []string{"BQACAgUAAz", "/source-group-file"} {
+		media := crossSessionMediaFromSegments([]MessageSegment{{Type: "file", Data: map[string]string{
+			"file_id": id, "name": "report.md",
+		}}}, false)
+		if len(media.files) != 1 || media.files[0].Data["file_id"] != id {
+			t.Fatalf("same-platform file reference should remain usable: %#v", media.files)
+		}
+	}
+}
+
+func TestCrossSessionToolReuploadsFileWhenNativeForwardFails(t *testing.T) {
+	for _, forwardMedia := range []bool{false, true} {
+		channel := newFriendRosterChannel("555")
+		channel.forwardErr = errors.New("forward of file segment is not supported")
+		runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+		source := crossSessionForwardSource()
+		source.Quoted.Segments = []MessageSegment{{Type: "file", Data: map[string]string{
+			"file": "report.md", "name": "report.md", "url": "https://example.test/report.md",
+			"file_id": "/source-group-file", "id": "/source-group-file",
+		}}}
+		input := map[string]any{"group_id": "456"}
+		if forwardMedia {
+			input["forward_media"] = true
+		} else {
+			input["message_ids"] = []any{source.Quoted.MessageID}
+		}
+		out, err := newDianaCrossSessionTool(runtime, source, true).Run(context.Background(), input)
+		if err != nil || !strings.Contains(out, `"delivered":true`) {
+			t.Fatalf("forward_media=%v result=%s err=%v", forwardMedia, out, err)
+		}
+		sent := channel.sentSnapshot()
+		if len(sent) != 1 || sent[0].GroupID != "456" || len(sent[0].Segments) != 1 {
+			t.Fatalf("forward_media=%v sent=%#v", forwardMedia, sent)
+		}
+		file := sent[0].Segments[0]
+		if file.Type != "file" || file.Data["file"] != "https://example.test/report.md" || file.Data["file_id"] != "" || file.Data["id"] != "" {
+			t.Fatalf("file must be uploaded instead of publishing the source ID: %#v", file)
+		}
+	}
+}
+
 // 转发的是一段成品（帖子、整理好的长文），对面收到的必须和原文逐字一致。它曾经走
 // 聊天分条：每行拆成一个气泡、句号被删、段落空行被收掉，行数一多又被打包成合并
 // 转发卡片，看上去就是「转发多出了一堆分行」。
@@ -721,6 +787,93 @@ func TestCrossSessionToolForwardsMessageFromHistory(t *testing.T) {
 	calls := crossSessionNativeForwardCalls(channel)
 	if len(calls) != 1 || calls[0].params["message_id"] != int64(70002) {
 		t.Fatalf("历史消息没有被转发：%#v", calls)
+	}
+}
+
+func TestCrossSessionForwardRecoversHistoricalQuote(t *testing.T) {
+	for _, persisted := range []bool{false, true} {
+		mode := "memory"
+		if persisted {
+			mode = "persisted"
+		}
+		for _, location := range []string{"current", "other-session", "other-group"} {
+			t.Run(mode+"/"+location, func(t *testing.T) {
+				channel := newFriendRosterChannel("555")
+				channel.forwardErr = errors.New("forward of file segment is not supported")
+				runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+				source := crossSessionGroupSource("555")
+				quote := &QuotedMessage{MessageID: "70001", GroupID: source.GroupID, Segments: []MessageSegment{{Type: "file", Data: map[string]string{
+					"url": "https://example.test/report.md", "file_id": "/source-file", "name": "report.md",
+				}}}}
+				session := sessionKey(source)
+				if location == "other-session" {
+					session += "-other"
+				}
+				if location == "other-group" {
+					quote.GroupID = "987654"
+				}
+				items := []MessageEvent{{MessageID: "70002", Quoted: quote}}
+				if persisted {
+					runtime.messageStore = &crossGroupHistoryStore{recent: map[string][]MessageEvent{session: items}}
+				} else {
+					runtime.history[session] = items
+				}
+				out, err := newDianaCrossSessionTool(runtime, source, true).Run(context.Background(), map[string]any{
+					"group_id": "456", "message_ids": []any{"70001"},
+				})
+				if location != "current" {
+					if err == nil || len(channel.sentSnapshot()) != 0 || len(crossSessionNativeForwardCalls(channel)) != 0 {
+						t.Fatalf("foreign quote leaked: %s %v", out, err)
+					}
+					return
+				}
+				if err != nil || !strings.Contains(out, `"replayed":1`) {
+					t.Fatalf("historical quote not recovered: %s %v", out, err)
+				}
+				if !strings.Contains(out, "继续处理尚未发送的目标") {
+					t.Fatalf("replay result stops the broadcast: %s", out)
+				}
+				sent := channel.sentSnapshot()
+				if len(sent) != 1 || len(sent[0].Segments) != 1 || sent[0].Segments[0].Data["file"] != "https://example.test/report.md" || sent[0].Segments[0].Data["file_id"] != "" {
+					t.Fatalf("wrong file replay: %#v", sent)
+				}
+			})
+		}
+	}
+}
+
+func TestCrossSessionOwnerBroadcastRetainsTargetCooldown(t *testing.T) {
+	channel := newFriendRosterChannel()
+	runtime := crossSessionTestRuntime(channel, BotConfig{OwnerID: "555"})
+	source := crossSessionGroupSource("555")
+	for i := 1; i <= 12; i++ {
+		out, err := newDianaCrossSessionTool(runtime, source, true).Run(context.Background(), map[string]any{
+			"group_id": itoa(1000 + i), "message": "owner broadcast",
+		})
+		if err != nil || !strings.Contains(out, `"delivered":true`) {
+			t.Fatalf("target %d: %s %v", i, out, err)
+		}
+		if !strings.Contains(out, "继续处理尚未发送的目标") {
+			t.Fatalf("send result stops the broadcast: %s", out)
+		}
+	}
+	if _, err := newDianaCrossSessionTool(runtime, source, true).Run(context.Background(), map[string]any{
+		"group_id": "1001", "message": "duplicate",
+	}); !errors.Is(err, errCrossSessionRateLimited) {
+		t.Fatalf("owner bypassed target cooldown: %v", err)
+	}
+	if len(channel.sentSnapshot()) != 12 {
+		t.Fatalf("sent=%d", len(channel.sentSnapshot()))
+	}
+	member := source
+	member.UserID = "556"
+	for i := 0; i < crossSessionLimit; i++ {
+		if !runtime.claimCrossSessionSend(member, "private|"+itoa(i), time.Now(), false) {
+			t.Fatal("owner broadcast consumed member quota")
+		}
+	}
+	if runtime.claimCrossSessionSend(member, "private|extra", time.Now(), false) {
+		t.Fatal("member session limit was removed")
 	}
 }
 

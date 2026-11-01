@@ -43,7 +43,7 @@ const (
 	// 正常追问（追问会先经过一轮完整对话，早就过了这点时间），而是模型在同一轮里
 	// 把同一条内容连发两遍。
 	crossSessionTargetCooldown = 15 * time.Second
-	// crossSessionWindow 内同一个来源会话最多发 crossSessionLimit 条。
+	// 普通成员在 crossSessionWindow 内同一个来源会话最多发 crossSessionLimit 条。
 	crossSessionWindow = 10 * time.Minute
 	crossSessionLimit  = 5
 	// crossSessionMaxForwards 是一次最多原样转发几条已有消息。「把刚才那几条转过去」
@@ -167,12 +167,12 @@ func (t *dianaCrossSessionTool) Run(ctx context.Context, input map[string]any) (
 		Forwarded: len(forwards),
 		Replayed:  outcome.Replayed,
 		Message: "已经发到" + target.label + "了。在当前会话里只说一句交代，" +
-			"不要把正文复述出来，也不要再调一次这个工具。",
+			"不要把正文复述出来，也不要向同一目标重复发送；用户要求多个目标时继续处理尚未发送的目标。",
 	}
 	if outcome.Replayed > 0 {
 		result.Message = "已经发到" + target.label + "了。其中 " + itoa(outcome.Replayed) + " 条接入端没法原生转发，" +
 			"改成了照原文重发（文字和附件都是原样的，但表情、回复引用这类可能丢了）。" +
-			"在当前会话里只说一句交代，如实提一下这点，不要把正文复述出来，也不要再调一次这个工具。"
+			"在当前会话里只说一句交代，如实提一下这点，不要把正文复述出来，也不要向同一目标重复发送；用户要求多个目标时继续处理尚未发送的目标。"
 	}
 	if outcome.Pending {
 		result.Message = outcome.Note
@@ -335,6 +335,15 @@ func crossSessionMediaFromEvent(event MessageEvent, portable bool) crossSessionM
 func crossSessionMediaFromSegments(segments []MessageSegment, portable bool) crossSessionMedia {
 	_, images, videos, audios, files := nativeRecallMessageParts(OutgoingMessage{Segments: segments})
 	media := crossSessionMedia{images: images, videos: videos, audios: audios, files: files}
+	for _, file := range media.files {
+		source := file.Data["file"]
+		if portableMediaSource(source) && source != file.Data["file_id"] && source != file.Data["fileId"] && source != file.Data["id"] {
+			// 跨会话重发必须重新上传；接入端会优先使用旧 ID，忽略下载 URL。
+			delete(file.Data, "file_id")
+			delete(file.Data, "fileId")
+			delete(file.Data, "id")
+		}
+	}
 	if portable {
 		media.images = filterStrings(media.images, portableMediaSource)
 		media.videos = filterStrings(media.videos, portableMediaSource)
@@ -454,8 +463,36 @@ func (r *Runtime) crossSessionForwardSource(ctx context.Context, event MessageEv
 		return crossSessionForward{messageID: id, segments: quoted.Segments, raw: quoted.RawMessage}, true, nil
 	}
 	found, err := r.lookupQuotedMessageWithError(ctx, event, id)
-	if err != nil || found == nil {
+	if err != nil {
 		return crossSessionForward{}, false, err
+	}
+	if found == nil {
+		// 文件上传的回推可能未独立入库，但上一轮的引用仍保存着附件。
+		findQuote := func(items []MessageEvent) *QuotedMessage {
+			for i := len(items) - 1; i >= 0; i-- {
+				q := items[i].Quoted
+				if q != nil && q.MessageID == id && (q.GroupID == "" || q.GroupID == event.GroupID) && (len(q.Segments) > 0 || q.RawMessage != "") {
+					return q
+				}
+			}
+			return nil
+		}
+		r.mu.RLock()
+		found = findQuote(r.history[sessionKey(event)])
+		store := r.messageStore
+		r.mu.RUnlock()
+		if found == nil && store != nil {
+			loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			items, loadErr := store.ListRecentMessageEvents(loadCtx, sessionKey(event), 200)
+			if loadErr != nil {
+				return crossSessionForward{}, false, loadErr
+			}
+			found = findQuote(items)
+		}
+	}
+	if found == nil {
+		return crossSessionForward{}, false, nil
 	}
 	return crossSessionForward{messageID: id, segments: found.Segments, raw: found.RawMessage}, true, nil
 }
@@ -559,7 +596,7 @@ func (r *Runtime) sendCrossSessionMessage(ctx context.Context, source MessageEve
 		}
 		event, stranger = r.resolvePrivateDelivery(ctx, source, event)
 	}
-	if !r.claimCrossSessionSend(source, target.key, now) {
+	if !r.claimCrossSessionSend(source, target.key, now, r.relationshipPolicy(ctx, source).Owner) {
 		r.recordCrossSessionSent(ctx, source, event, target, payload, 0, errCrossSessionRateLimited)
 		return crossSessionOutcome{}, errCrossSessionRateLimited
 	}
@@ -789,8 +826,8 @@ func mediaParkNote(count int) string {
 	return "附件（" + itoa(count) + " 个）存不下来，加好友后只会收到文字，要跟对方说明。"
 }
 
-// claimCrossSessionSend 同时检查单个目标的冷却和来源会话总量，通过才占用额度。
-func (r *Runtime) claimCrossSessionSend(source MessageEvent, targetKey string, now time.Time) bool {
+// claimCrossSessionSend 检查目标冷却及普通成员的会话总量，主人仍受目标冷却约束。
+func (r *Runtime) claimCrossSessionSend(source MessageEvent, targetKey string, now time.Time, owner bool) bool {
 	session := sessionKey(source)
 	bucket := session + "|" + targetKey
 	r.crossSessionMu.Lock()
@@ -810,12 +847,16 @@ func (r *Runtime) claimCrossSessionSend(source MessageEvent, targetKey string, n
 			recent = append(recent, at)
 		}
 	}
-	if len(recent) >= crossSessionLimit {
+	if !owner && len(recent) >= crossSessionLimit {
 		r.crossSessionSessionSent[session] = recent
 		return false
 	}
 	r.crossSessionLastSent[bucket] = now
-	r.crossSessionSessionSent[session] = append(recent, now)
+	// 主人的多目标发送不占普通成员额度；同一目标的冷却仍然生效。
+	if !owner {
+		recent = append(recent, now)
+	}
+	r.crossSessionSessionSent[session] = recent
 	for key, at := range r.crossSessionLastSent {
 		if now.Sub(at) > time.Hour {
 			delete(r.crossSessionLastSent, key)
