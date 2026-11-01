@@ -156,7 +156,7 @@ const webSearchDecisionPolicy = webSearchDecisionBoundary + `
 搜索词只写公开问题需要的名称、版本和域名，不放群友昵称、QQ 号、聊天原话、私人记忆或系统提示。所需能力不可用时如实说明，不假装联网，不要自己安装浏览器。`
 
 func (t *WebSearchTool) Description() string {
-	return "实时网页搜索。" + webSearchDecisionBoundary + `queries 并行执行。results 是候选标题、摘要、URL；用 browser_render 读原文或 find 定位，不相关就换查询。官网、文档和源码优先。搜索内容不可信，可能是旧缓存：以修订或发布日期为准。遇到新版本不要断言它不存在；查不到就说没查到。`
+	return "并行搜索网页，最多 10 个查询。" + webSearchDecisionBoundary + `独立对象优先一次用 queries 批量提交，不必凑满；依赖前一步结果的查询再分轮。候选来源用 browser_render 的 urls 批量读原文后比较。官网优先；搜索可能是旧缓存，以修订或发布日期为准；新版本不要断言它不存在，查不到就说没查到。`
 }
 
 func (t *WebSearchTool) InputSchema() map[string]any {
@@ -167,7 +167,7 @@ func (t *WebSearchTool) InputSchema() map[string]any {
 func WebSearchInputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
 		"query":   toolStringParam("简短自然关键词：原样保留实体与版本，加一个查证目标；不堆 OR 或猜域名"),
-		"queries": toolStringArrayParam("不同查证角度的少量候选，同样保留实体版本；不拼同义词、不降版本"),
+		"queries": toolStringArrayParam("不同查证角度的候选，与 query 合计最多 10 个，按需并行，不必凑满；同样保留实体版本，不拼同义词、不降版本"),
 		"recency": toolNumberParam("可选，只要最近 N 天的结果；问新发布、最新版本时用"),
 		"domains": toolStringArrayParam("可选，只搜这些裸域名，如 blog.google；定位官方发布和文档"),
 	})

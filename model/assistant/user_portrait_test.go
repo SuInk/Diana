@@ -159,6 +159,13 @@ func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 	if !strings.Contains(structured, "居住地点：住在杭州") {
 		t.Fatalf("portrait missing from structured memory prompt: %s", structured)
 	}
+	for _, rendered := range []string{text, structured} {
+		start, end := strings.Index(rendered, portraitContextHeader), strings.Index(rendered, strings.TrimSpace(portraitContextEnd))
+		value := strings.Index(rendered, "居住地点：住在杭州")
+		if start < 0 || value <= start || end <= value {
+			t.Fatalf("portrait ownership boundary missing: %s", rendered)
+		}
+	}
 
 	// 原始发言缓冲不进提示词，预算再宽也不该露出来。
 	if strings.Contains(text, "上周问过怎么配置反向代理") {
