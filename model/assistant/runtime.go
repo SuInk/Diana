@@ -5059,7 +5059,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
-			Hooks:         newReplyRunHooks(),
+			Hooks:         newReplyRunHooks(cfg),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,
