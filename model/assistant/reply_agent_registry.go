@@ -157,6 +157,11 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if _, settings, enabled := r.pluginWithSettingsForEvent(stickerPluginID, event); enabled {
 			extraTools = append(extraTools, newDianaStickerTool(r, event, settings))
 		}
+		_, _, resolverEnabled := r.pluginWithSettingsForEvent(resolverPluginID, event)
+		_, _, fileParserEnabled := r.pluginWithSettingsForEvent(fileParserPluginID, event)
+		if resolverEnabled || fileParserEnabled {
+			extraTools = append(extraTools, &dianaPluginMediaTool{runtime: r, event: event})
+		}
 		// VRChat 联动默认关闭；开着时查状态人人可用，操控类工具默认只给主人。
 		if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(vrchatPluginID, event); enabled {
 			if plugin, ok := pluginValue.(*VRChatPlugin); ok {

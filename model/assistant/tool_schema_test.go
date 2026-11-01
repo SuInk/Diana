@@ -17,6 +17,7 @@ func dianaAgentTools(t *testing.T) []agent.Tool {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	policy := RelationshipPolicy{Owner: true, AllowImageGeneration: true, AllowImageEditing: true}
 	return []agent.Tool{
+		&dianaPluginMediaTool{runtime: runtime, event: event},
 		newDianaChatHistoryTool(runtime, event),
 		newDianaHistoryImagesTool(runtime, event),
 		newDianaGroupTool(runtime, event),
