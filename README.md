@@ -41,6 +41,13 @@
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
+```sh
+# 安卓 Termux（仅 ARM64，在 Termux 终端内运行，无需 root）
+pkg install -y curl tar coreutils && curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+```
+
+Termux 安装的是手机上的 Diana 服务端，不是安卓 App。请在 Android 设置中关闭 Termux 的电池优化；开机自启还需要安装并打开一次 Termux:Boot。
+
 ```powershell
 # Windows PowerShell
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex
@@ -53,10 +60,10 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 原生安装不需要管理员权限。**升级也是重跑同一条命令**；以前用 sudo 装过的，脚本会自动接着用原来的安装。更多安装方式见[部署文档](https://suink.github.io/Diana/deploy.html)。
 
-**或者用 Prompt 安装。** 把下面这段话复制给能在目标机器执行命令的 AI 助手：
+**或者让 AI 按 Skill 安装。** 把下面这段话复制给能在目标机器执行命令的 AI 助手；详细指引统一维护在[安装 Skill](skills/diana-install/SKILL.md)，随仓库发布更新，不必反复修改或复制长 Prompt：
 
 ```text
-请帮我在当前机器安装 Diana 最新稳定版。先阅读 https://github.com/SuInk/Diana 的 README 和仓库里的 scripts/install.sh（Linux/macOS）或 scripts/install.ps1（Windows），识别系统与架构，使用官方一键安装脚本安装。默认使用当前用户权限、仅监听 127.0.0.1；如果已有安装，保留现有配置和数据并按官方流程升级。完成后运行 diana doctor 检查健康状态，告诉我控制台地址、管理员账号和安装时首次生成的密码，并提醒我妥善保存；如果是已有安装且没有生成新密码，说明继续使用原密码，不要自动重置。需要我提供的模型 API Key 和机器人凭据，等我在控制台填写。
+请读取 https://raw.githubusercontent.com/SuInk/Diana/main/skills/diana-install/SKILL.md，按其中的指引帮我在当前机器安装 Diana 最新稳定版。
 ```
 
 **或者手动下载。** 不想跑脚本就直接下载对应平台的文件（总是最新稳定版）：
@@ -68,7 +75,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 | macOS Intel | [diana-macos-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-macos-amd64.tar.gz) | 解压后运行 `./run.sh` |
 | Linux x64 | [diana-linux-amd64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-amd64.tar.gz) | 解压后运行 `./run.sh` |
 | Linux ARM64 | [diana-linux-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-linux-arm64.tar.gz) | 解压后运行 `./run.sh` |
-| 安卓（Termux） | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 `./run.sh`；它是跑在手机上的服务端，不是安卓 App。Termux 里也能直接用上面的 Linux 一键命令 |
+| 安卓（Termux） | [diana-android-arm64.tar.gz](https://github.com/SuInk/Diana/releases/latest/download/diana-android-arm64.tar.gz) | 在 Termux 里解压后运行 `./run.sh`；它是跑在手机上的服务端，不是安卓 App。也可用上面的 Termux 一键命令 |
 
 WebUI 已编进程序，不需要装 Node.js。每个文件的 SHA-256 写在同一 Release 的 [`latest.json`](https://github.com/SuInk/Diana/releases/latest/download/latest.json) 里，Release 页面每个文件旁也有显示；历史版本见 [Releases](https://github.com/SuInk/Diana/releases)。手动下载的不会注册 `diana` 命令，管理命令用 `./diana-webui <命令>`（Windows：`diana-webui.exe <命令>`）。
 

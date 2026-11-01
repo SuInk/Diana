@@ -95,6 +95,7 @@
 
 ### 发布验证
 
+- 发布前核对 `skills/diana-install/SKILL.md` 与发布基线的 README、安装脚本一致；安装平台、依赖、权限或升级流程变化时同步更新 Skill。README 和文档首页只保留固定的 Skill 入口，不重复维护长安装 Prompt；安装说明包含 Termux 命令和 ARM64 边界。
 - 发布前至少运行并通过：`gofmt -l .`、`git diff --check`、`scripts/test-serial.sh ./...`（全仓库）、前端依赖安装与生产构建。涉及依赖变化时还要执行安全审计。
 - 发布 PR 的 CI 必须验证 Go 测试、Vue 构建、Linux amd64/arm64、Darwin amd64/arm64、Windows amd64 和 Docker 镜像。
 - 标签构建完成后，确认 GitHub Release 不是 Draft；正式版不得是 Prerelease，Beta/RC 标签必须标记为 Prerelease，并检查所有预期资产均已上传。

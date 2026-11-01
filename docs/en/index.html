@@ -152,23 +152,23 @@
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
       </div>
       <div class="qs-card">
+        <div class="qs-card-head">Android Termux (ARM64)<button class="copy-btn" data-copy="cmd-termux">Copy</button></div>
+        <pre id="cmd-termux"><span class="c"># Run inside Termux; no root required</span>
+pkg install -y curl tar coreutils &amp;&amp; curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
         <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">Copy</button></div>
         <pre id="cmd-ps"><span class="c"># the same command installs and upgrades</span>
 irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
       </div>
-      <div class="qs-card">
+      <div class="qs-card qs-card-wide">
         <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">Copy</button></div>
-        <pre id="cmd-docker"><span class="c"># prebuilt image, no need to clone the repo</span>
-curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json
-docker run -d --name diana --restart unless-stopped \
-  --security-opt seccomp="$PWD/chromium-seccomp.json" \
-  -p 18080:18080 \
-  -v "$PWD/data:/app/data" \
-  ghcr.io/suink/diana:latest</pre>
+        <pre id="cmd-docker"><span class="c"># Run in your data directory; Docker with Compose must be installed and running</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</pre>
       </div>
       <div class="qs-card qs-card-wide">
-        <div class="qs-card-head">Install with a prompt (paste into an AI assistant that can run commands)<button class="copy-btn" data-copy="cmd-prompt">Copy</button></div>
-        <pre id="cmd-prompt">Help me install the latest stable release of Diana on this machine. First read the README at https://github.com/SuInk/Diana and scripts/install.sh (Linux/macOS) or scripts/install.ps1 (Windows) in that repository. Detect the OS and architecture, then use the official one-click installer. Default to current-user permissions and listen only on 127.0.0.1. If Diana is already installed, preserve its configuration and data and follow the official upgrade procedure. Run diana doctor afterward to check its health, tell me the console URL, administrator username, and password initially generated during installation, and remind me to store them securely. For an existing installation with no newly generated password, explain that the original password still applies and do not reset it automatically. Leave model API keys and bot credentials for me to enter in the console.</pre>
+        <div class="qs-card-head">Install with a skill (paste into an AI assistant that can run commands)<button class="copy-btn" data-copy="cmd-prompt">Copy</button></div>
+        <pre id="cmd-prompt">Read https://raw.githubusercontent.com/SuInk/Diana/main/skills/diana-install/SKILL.md and follow it to install the latest stable release of Diana on this machine.</pre>
       </div>
     </div>
     <div class="qs-steps">
