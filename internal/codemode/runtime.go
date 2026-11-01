@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
+	"github.com/SuInk/diana/internal/safego"
+	"github.com/SuInk/diana/internal/secretmask"
 )
 
 const maxFrameBytes = 1024 * 1024
@@ -191,6 +193,7 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 			}
 			workers.Add(1)
 			go func(id int, name string, input json.RawMessage) {
+				defer recoverCallPanic(cancel)
 				defer workers.Done()
 				defer stop()
 				<-prior
@@ -253,4 +256,13 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 	}
 	// stderr can contain host paths; leave disclosure policy to the caller.
 	return result, fmt.Errorf("codemode host ended without a result: %w", io.ErrUnexpectedEOF)
+}
+
+func recoverCallPanic(cancel context.CancelFunc) {
+	if value := recover(); value != nil {
+		// Hooks are caller-supplied too. Stop the VM instead of leaving its RPC
+		// unresolved or allowing a callback panic to kill the entire process.
+		cancel()
+		safego.Report("codemode.tool_callback", secretmask.Text(fmt.Sprint(value)))
+	}
 }

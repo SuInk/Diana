@@ -111,6 +111,18 @@ func TestRuntimeLimits(t *testing.T) {
 	}
 }
 
+func TestRuntimeCallbackPanicCancelsExecution(t *testing.T) {
+	r := testRuntime(t)
+	_, err := r.Execute(t.Context(), Request{
+		Code: `return await tools.read({});`, Tools: []string{"read"}, MaxCalls: 1, Timeout: 2 * time.Second,
+	}, func(context.Context, string, json.RawMessage) (any, error) {
+		panic("callback failure")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("callback panic must cancel the runtime: %v", err)
+	}
+}
+
 func TestRuntimeSanitizedEnvironmentAndOversizedReply(t *testing.T) {
 	r := testRuntime(t)
 	// If inherited, this prevents the trusted host from even starting.
