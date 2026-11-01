@@ -140,12 +140,16 @@ func TestClaimMemoryJobBatchPullsInNotYetDueSameSpeaker(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = store.Close() }()
-	store.SetMemoryEventJobDelay(200 * time.Millisecond)
+	store.SetMemoryEventJobDelay(time.Hour)
 
-	if _, _, err := store.EnqueueMemoryJob(ctx, batchJob("group:123", "alice", "m1", 100)); err != nil {
+	firstID, _, err := store.EnqueueMemoryJob(ctx, batchJob("group:123", "alice", "m1", 100))
+	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(250 * time.Millisecond)
+	// Make only the first job due without depending on CI finishing within a short timer window.
+	if _, err := store.db.ExecContext(ctx, `UPDATE memory_jobs SET available_at = 0 WHERE id = ?`, firstID); err != nil {
+		t.Fatal(err)
+	}
 	for _, payload := range []assistant.MemoryJobPayload{
 		batchJob("group:123", "alice", "m2", 200),
 		batchJob("group:123", "bob", "m3", 300),
