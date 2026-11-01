@@ -22,7 +22,7 @@ func TestSaveToWorkspaceKeepRecordsIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaSaveToWorkspaceTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner", ProfileID: "bot-a"})
 	tool.now = func() time.Time { return time.Date(2026, 9, 26, 15, 30, 12, 0, time.UTC) }
 	saved := runSaveToWorkspace(t, tool, map[string]any{"source": "mcp", "media_id": id, "keep": true, "description": "头像草稿", "path": "avatars/"})

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -55,8 +56,9 @@ func (t *dianaSaveToWorkspaceTool) Name() string { return dianaSaveToWorkspaceTo
 // （#811）。source=chat 也能取机器人自己发出的生成图。默认目录 downloads/ 7 天、
 // outputs/ 30 天清理；keep/ 长期区每台机器人上限 2 GB，超了 Run 会拒绝。
 func (t *dianaSaveToWorkspaceTool) Description() string {
-	return "把图片、视频、语音、PDF、压缩包等二进制文件原样存进 Agent 工作目录，仅主人。按内容纠正扩展名，返回实际 path。" +
-		"文本文件用 write_file；存好要发给用户用 send_attachment，整理用 manage_files。"
+	return "把会话附件或公网文件原样存进 Agent 工作目录，支持 HTML、图片、视频、PDF 等。按内容纠正扩展名，返回实际 path。" +
+		"群成员可保存本群附件或公网文件，本群成员共享使用返回的 path，可直接交给 render_media、render 或 send_file；不能访问其他群或主人私有文件。" +
+		"普通成员仅能指定文件名，不能覆盖、存长期区或读取 MCP 暂存；主人可指定工作目录路径。新写文本用 write_file，整理用 manage_files。"
 }
 
 func (t *dianaSaveToWorkspaceTool) InputSchema() map[string]any {
@@ -66,9 +68,9 @@ func (t *dianaSaveToWorkspaceTool) InputSchema() map[string]any {
 		"media_index": toolIntParam("source=chat，消息里第几个媒体，从 1 起，只有一个可省略", 1, 64),
 		"url":         toolStringParam("source=url，公网文件直链"),
 		"media_id":    toolStringParam("source=mcp，MCP 结果里的 media_id"),
-		"path":        toolStringParam("相对保存路径，/ 结尾为目录；默认存 " + agent.WorkspaceDownloadsDir + "/ 或 " + agent.WorkspaceOutputsDir + "/，会定期清理"),
-		"overwrite":   toolBoolParam("同名时覆盖，默认自动加序号"),
-		"keep":        toolBoolParam("存进长期区 " + agent.WorkspaceKeepDir + "/ 不清理，仅主人说要留着时传"),
+		"path":        toolStringParam("群成员可省略或只给文件名，自动存入本群目录。主人可给相对路径，/ 结尾为目录；默认存 downloads/ 或 outputs/，会定期清理"),
+		"overwrite":   toolBoolParam("仅主人：同名时覆盖，默认自动加序号"),
+		"keep":        toolBoolParam("仅主人：存进长期区 " + agent.WorkspaceKeepDir + "/ 不清理"),
 		"description": toolStringParam("keep=true 时写一句这是什么，记进长期区索引"),
 	})
 }
@@ -104,7 +106,29 @@ func (t *dianaSaveToWorkspaceTool) Run(ctx context.Context, input map[string]any
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	if !t.runtime.effectiveConfigForEvent(t.event).agentFileWriteAllowed() {
+		return "", fmt.Errorf("当前未允许写入工作区（写入开关关闭或处于安全模式）")
+	}
 	source := strings.ToLower(strings.TrimSpace(configToolString(input, "source")))
+	owner := t.runtime.relationshipPolicy(ctx, t.event).toolScope().Owner
+	target := configToolString(input, "path")
+	if !owner {
+		scope := t.runtime.workspaceGroupScope(t.event)
+		if scope == "" {
+			return "", fmt.Errorf("普通成员只能在群聊中保存本群文件")
+		}
+		if source != saveSourceChat && source != saveSourceURL {
+			return "", fmt.Errorf("群成员只支持 source=chat 或 url，不能读取 MCP 暂存")
+		}
+		if toolInputBool(input, "overwrite") || toolInputBool(input, "keep") || workspacePathInKeep(target) {
+			return "", fmt.Errorf("群成员不能覆盖文件或写入长期区")
+		}
+		target = strings.TrimSpace(target)
+		if target != "" && (strings.ContainsAny(target, `/\\`) || target == "." || target == "..") {
+			return "", fmt.Errorf("群成员的 path 只能是文件名，保存目录由运行时按群分配")
+		}
+		target = "downloads/groups/" + scope + "/" + target
+	}
 	var (
 		payload workspaceMediaPayload
 		err     error
@@ -141,7 +165,7 @@ func (t *dianaSaveToWorkspaceTool) Run(ctx context.Context, input map[string]any
 			keep.SourceURL = normalizedHTTPURL(configToolString(input, "url"))
 		}
 	}
-	result, err := t.runtime.saveWorkspacePayloadWith(t.event, payload, configToolString(input, "path"), toolInputBool(input, "overwrite"), now(), keep)
+	result, err := t.runtime.saveWorkspacePayloadWith(t.event, payload, target, toolInputBool(input, "overwrite"), now(), keep)
 	if err != nil {
 		return "", err
 	}
@@ -212,12 +236,15 @@ func (r *Runtime) saveWorkspacePayloadWith(event MessageEvent, payload workspace
 	if err != nil {
 		return saveToWorkspaceResult{}, err
 	}
+	if err := r.grantWorkspaceGroupFile(event, filepath.Clean(filepath.FromSlash(saved)), payload.data); err != nil {
+		return saveToWorkspaceResult{}, fmt.Errorf("文件已保存，但登记本群访问权限失败：%w", err)
+	}
 	result := saveToWorkspaceResult{
 		Status:  "saved",
 		Path:    saved,
 		Bytes:   len(payload.data),
 		MIME:    mediaType,
-		Message: "已原样存进工作目录；path 以这里返回的为准。要发给用户用 send_attachment，这一步本身没有发送任何东西。",
+		Message: "已原样存进工作目录；path 以这里返回的为准。出图用 render_media 或 render，交付已有文本用 send_file 的 path；主人发送其他附件用 send_attachment。这一步本身没有发送任何东西。",
 	}
 	if requested != "" && requested != name {
 		result.ExtensionCorrected = requested + " → " + name
@@ -369,6 +396,9 @@ func (r *Runtime) workspaceChatMedia(ctx context.Context, event MessageEvent, me
 	if !found {
 		return workspaceMediaPayload{}, fmt.Errorf("当前会话里找不到 message_id=%s", messageID)
 	}
+	if event.Kind == EventKindGroup && r.workspaceGroupScope(source) != r.workspaceGroupScope(event) {
+		return workspaceMediaPayload{}, fmt.Errorf("不能从其他群聊或机器人会话保存文件")
+	}
 	refs := chatMediaRefs(source)
 	if len(refs) == 0 {
 		return workspaceMediaPayload{}, fmt.Errorf("message_id=%s 里没有图片、视频、语音或文件", messageID)
@@ -387,6 +417,9 @@ func (r *Runtime) workspaceChatMedia(ctx context.Context, event MessageEvent, me
 		item.GroupID = firstNonEmpty(source.Quoted.GroupID, source.GroupID)
 		item.UserID = firstNonEmpty(source.Quoted.UserID, source.UserID)
 		item.MessageID = source.Quoted.MessageID
+	}
+	if event.Kind == EventKindGroup && r.workspaceGroupScope(item) != r.workspaceGroupScope(event) {
+		return workspaceMediaPayload{}, fmt.Errorf("引用的文件不属于当前群聊")
 	}
 	item.Quoted = nil
 	segment := ref.segment

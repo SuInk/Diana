@@ -46,6 +46,7 @@ func (t *dianaRenderTool) Name() string { return dianaRenderToolName }
 // 一两句话的内容别用它。
 func (t *dianaRenderTool) Description() string {
 	return `把表格、流程图、结构图或 SVG 渲染成一张图片发到当前会话。` +
+		`渲染有权使用的工作目录文件时直接传 path，与 content 二选一，不必读取后复制全文。` +
 		`仅在用户明确要求图片、图表或棋盘等画面时使用；普通问答、榜单、参数对比默认文字，不为美化排版自行出图。五子棋盘用 svg。` +
 		`图由运行时发送，调用后一句话交代，不复述图里的内容。`
 }
@@ -54,6 +55,7 @@ func (t *dianaRenderTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"path": toolStringParam("工作目录内 Markdown、Mermaid 或 SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件"),
 			"format": map[string]any{
 				"type": "string",
 				"enum": []string{renderFormatMarkdown, renderFormatMermaid, renderFormatSVG},
@@ -67,7 +69,7 @@ func (t *dianaRenderTool) InputSchema() map[string]any {
 				"description": "图片顶部标题",
 			},
 		},
-		"required": []string{"format", "content"},
+		"required": []string{"format"},
 	}
 }
 
@@ -79,14 +81,18 @@ type dianaRenderResult struct {
 
 func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	format := strings.ToLower(strings.TrimSpace(configToolString(input, "format")))
-	content := configToolString(input, "content")
 	title := configToolString(input, "title")
 
 	if !renderFormatValid(format) {
 		return t.fail(ctx, format, "format 只支持 markdown、mermaid 或 svg。", "")
 	}
-	if strings.TrimSpace(content) == "" {
-		return t.fail(ctx, format, "content 是空的，没有东西可以画。", "")
+	owner := false
+	if strings.TrimSpace(configToolString(input, "path")) != "" && t.runtime != nil {
+		owner = t.runtime.relationshipPolicy(ctx, t.event).Owner
+	}
+	content, sourceErr := toolTextSource(t.runtime, t.event, owner, input, renderImageMaxContent*4)
+	if sourceErr != nil {
+		return t.fail(ctx, format, sourceErr.Error(), "")
 	}
 	if runes := []rune(content); len(runes) > renderImageMaxContent {
 		// 截断了再画只会得到一张半截图，不如直接说清楚让模型自己拆。

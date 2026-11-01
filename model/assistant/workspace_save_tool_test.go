@@ -74,7 +74,7 @@ func TestSaveToWorkspaceFromChatMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "user-photo",
 		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file": "abcdef.image", "cached_file": photoPath}}},
@@ -144,7 +144,7 @@ func TestSaveToWorkspaceRefusesRuntimeSecretPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	agent.ProtectRuntimeFiles(secret)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "crafted",
 		Segments: []MessageSegment{{Type: "file", Data: map[string]string{"name": "config.yaml", "path": secret}}},
@@ -162,7 +162,7 @@ func TestSaveToWorkspaceFromMCPMedia(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaSaveToWorkspaceTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"})
 	tool.now = func() time.Time { return time.Date(2026, 9, 26, 15, 30, 12, 0, time.UTC) }
 	saved := runSaveToWorkspace(t, tool, map[string]any{"source": "mcp", "media_id": id})
@@ -184,7 +184,7 @@ func TestSaveToWorkspaceURLUsesPublicFetcher(t *testing.T) {
 		_, _ = w.Write([]byte("secret intranet file"))
 	}))
 	defer server.Close()
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaSaveToWorkspaceTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"})
 	for _, raw := range []string{server.URL + "/file.txt", "file:///etc/passwd", "ftp://example.com/a"} {
 		if out, err := tool.Run(context.Background(), map[string]any{"source": "url", "url": raw}); err == nil {
@@ -206,7 +206,7 @@ func TestSaveToWorkspaceURLDownloadsAndCorrectsExtension(t *testing.T) {
 		_, _ = w.Write(photo)
 	}))
 	defer server.Close()
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	tool := newDianaSaveToWorkspaceTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "owner"})
 	saved := runSaveToWorkspace(t, tool, map[string]any{"source": "url", "url": server.URL + "/pics/cover.webp?x=1"})
 	if saved.Path != "downloads/cover.jpg" || saved.MIME != "image/jpeg" || saved.Width != 7 {
@@ -218,9 +218,9 @@ func TestSaveToWorkspaceURLDownloadsAndCorrectsExtension(t *testing.T) {
 	}
 }
 
-func TestSaveToWorkspaceToolIsOwnerOnly(t *testing.T) {
+func TestSaveToWorkspaceToolNotGloballyAllowed(t *testing.T) {
 	if (RelationshipPolicy{}).allowedAgentToolNames()[dianaSaveToWorkspaceToolName] {
-		t.Fatal("save_to_workspace 不该给群成员")
+		t.Fatal("save_to_workspace 不能在无群作用域时全局放行")
 	}
 	if (RelationshipPolicy{}).allowedAgentToolNames()[agent.ManageFilesToolName] {
 		t.Fatal("manage_files 不该给群成员")
@@ -246,7 +246,7 @@ func TestGeneratedImageExtensionNeverJFIF(t *testing.T) {
 
 func TestPersistGeneratedImagesWritesOutputs(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentMode: AgentModeStandard, AgentFileWriteEnabled: true}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	first := workspaceTestPNG(t, 5, 5)
 	second := workspaceTestJPEG(t, 6, 6)
 	images := []string{

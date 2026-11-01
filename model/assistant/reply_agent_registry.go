@@ -87,7 +87,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			extraTools = append(extraTools, newDianaVideoTool(r, event, relationship))
 		}
 		// 存二进制文件和 write_file 同一档：都是往磁盘上写，跟着「允许写入文件」走。
-		// 它不在 allowedAgentToolNames 里，群成员拿不到。
+		// 群成员仅能保存本群附件/公网文件，调用时限定目录、来源及覆盖权限。
 		if cfg.agentFileWriteAllowed() {
 			extraTools = append(extraTools, newDianaSaveToWorkspaceTool(r, event))
 		}
