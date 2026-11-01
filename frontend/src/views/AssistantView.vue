@@ -166,7 +166,7 @@
     </div>
 
     <div v-if="form && page === 'edit'" class="grid-main-side bot-editor">
-      <div class="stack">
+      <div ref="editorContent" class="stack">
         <nav class="editor-tabs" role="tablist" aria-label="机器人配置分区">
           <button
             v-for="tab in editorTabs"
@@ -181,6 +181,13 @@
             {{ tab.label }}
           </button>
         </nav>
+
+        <div v-if="outlineSections.length > 1" ref="mobileOutline" class="editor-outline-mobile">
+          <label for="bot-section-jump">跳转到分区</label>
+          <select id="bot-section-jump" class="input" :value="outlineActive" @change="jumpToSection(($event.target as HTMLSelectElement).value)">
+            <option v-for="section in outlineSections" :key="section.id" :value="section.id">{{ section.title }}</option>
+          </select>
+        </div>
 
         <div v-show="editorTab === 'access'" class="stack">
           <!-- 接入 -->
@@ -358,22 +365,6 @@
                     autocomplete="off"
                   />
                   <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
-                </div>
-                <div class="field wide">
-                  <label class="switch">
-                    <input v-model="form.telegram_rich_messages" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">Rich Messages 富消息</span>
-                  </label>
-                  <span class="hint">未配置时默认开启，手动关闭后会保留。为标题、列表和表格使用原生结构；API 明确不支持时回退普通消息。部分客户端可能显示“不支持”，服务端无法检测；遇到此问题请关闭。含提及或剧透的消息暂走普通富文本。</span>
-                </div>
-                <div class="field wide">
-                  <label class="switch">
-                    <input v-model="form.telegram_suppress_bot_messages" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">自动抑制 Telegram Bot 消息</span>
-                  </label>
-                  <span class="hint">默认开启。由模型结合上下文判断其他 Bot 是否提到了自己，不要求 @；未提到或无法确认时保持静默。</span>
                 </div>
               </template>
 
@@ -623,7 +614,7 @@
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
                             <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" title="测试调用：发一条短消息，看这条路由能不能用" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" :title="role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
                         </tbody>
@@ -814,6 +805,14 @@
                   严格：还要求触发词出现在句首或句尾。宽松：出现即回，连引述也算。
                 </span>
               </div>
+              <div v-if="currentPlatform === 'telegram'" class="field wide">
+                <label class="switch">
+                  <input v-model="form.telegram_suppress_bot_messages" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">自动抑制 Telegram Bot 消息</span>
+                </label>
+                <span class="hint">默认开启。由模型结合上下文判断其他 Bot 是否提到了自己，不要求 @；未提到或无法确认时保持静默。</span>
+              </div>
             </div>
           </section>
 
@@ -872,6 +871,14 @@
                   <span class="switch-label">发送 Markdown</span>
                 </label>
                 <span class="hint">{{ richTextPlatform ? "当前平台能渲染 Markdown，默认开启；关闭后去掉标记，改发纯文本。" : "当前平台只发纯文本，默认关闭，标记会先转成纯文本再发。" }}<template v-if="!richTextPlatform && !form.markdown_to_plain">当前已开启，回复里的 ** 和 # 会原样发出。</template></span>
+              </div>
+              <div v-if="currentPlatform === 'telegram'" class="field wide">
+                <label class="switch">
+                  <input v-model="form.telegram_rich_messages" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">Rich Messages 富消息</span>
+                </label>
+                <span class="hint">未配置时默认开启，手动关闭后会保留。为标题、列表和表格使用原生结构；API 明确不支持时回退普通消息。部分客户端可能显示“不支持”，服务端无法检测；遇到此问题请关闭。含提及或剧透的消息暂走普通富文本。</span>
               </div>
               <template v-if="currentPlatform === 'qq-official'">
                 <div class="field">
@@ -2047,7 +2054,7 @@
       </div>
 
       <!-- 侧栏状态 -->
-      <div class="stack grid-side-sticky">
+      <div class="stack grid-side-sticky bot-editor-sidebar">
         <section class="card">
           <div class="card-header">
             <h2>运行状态</h2>
@@ -2080,6 +2087,21 @@
             <p v-if="status?.last_error" class="text-err" style="font-size: 12px">{{ status.last_error }}</p>
           </div>
         </section>
+
+        <nav v-if="outlineSections.length > 1" class="card editor-outline" aria-label="当前配置页目录">
+          <div class="card-header">
+            <div>
+              <h2>{{ editorTabs.find(tab => tab.key === editorTab)?.label }}目录</h2>
+              <span class="card-sub">{{ outlineSections.length }} 个分区 · 点击跳转</span>
+            </div>
+          </div>
+          <div class="editor-outline-links">
+            <a v-for="(section, index) in outlineSections" :key="section.id" :href="`#${section.id}`" :class="{ active: outlineActive === section.id }" :aria-current="outlineActive === section.id ? 'location' : undefined" @click.prevent="jumpToSection(section.id)">
+              <span class="editor-outline-number" aria-hidden="true">{{ String(index + 1).padStart(2, '0') }}</span>
+              <span>{{ section.title }}</span>
+            </a>
+          </div>
+        </nav>
 
       </div>
     </div>
@@ -2133,6 +2155,31 @@
         </div>
       </section>
     </div>
+
+    <Modal v-if="modelRouteTestTarget" :title="`测试${modelPurposeLabel(modelRouteTestTarget.role)}模型 · ${modelRouteTestTarget.model}`" initial-focus="#bot-model-test-message" @close="modelRouteTestTarget = null">
+      <div class="stack">
+        <p class="muted">只测试当前路由，不走后备模型，不保存配置，也不向聊天发送。将逐个调用 {{ modelRouteTestTarget.profiles.length }} 个提供商，可能产生费用。</p>
+        <div class="field">
+          <label for="bot-model-test-message">{{ modelRouteTestTarget.role === 'image' ? '生图提示词' : '测试消息' }}</label>
+          <textarea id="bot-model-test-message" v-model="modelRouteTestTarget.message" class="textarea" rows="4" :disabled="modelRouteTestTarget.running" :placeholder="modelRouteTestTarget.role === 'image' ? '描述要生成的测试图片…' : '输入要发给模型的消息…'"></textarea>
+        </div>
+        <button class="btn primary" type="button" :disabled="modelRouteTestTarget.running || !modelRouteTestTarget.message.trim()" @click="runModelRouteTest">
+          {{ modelRouteTestTarget.running ? '测试中…' : modelRouteTestTarget.role === 'image' ? '生成测试图片' : '发送测试' }}
+        </button>
+        <p v-if="modelRouteTestTarget.running" class="hint" role="status">正在逐个测试；关闭弹窗不会取消已经发出的请求，但会停止后续提供商测试。</p>
+        <div class="stack" aria-live="polite">
+          <section v-for="(result, index) in modelRouteTestTarget.results" :key="index" class="model-route-test-output">
+            <strong>{{ result.provider }} · {{ result.seconds.toFixed(1) }} 秒</strong>
+            <pre v-if="result.error" class="operation-error llm-test-error">{{ result.error }}</pre>
+            <p v-if="result.text" class="model-route-test-text">{{ result.text }}</p>
+            <div v-if="result.images.length" class="llm-test-images">
+              <img v-for="(image, imageIndex) in result.images" :key="imageIndex" :src="image" :alt="`${result.provider} 生图测试结果 ${imageIndex + 1}`" />
+            </div>
+            <p v-if="result.usage" class="hint">{{ result.usage }}</p>
+          </section>
+        </div>
+      </div>
+    </Modal>
 
     <Modal v-if="modelRouteEditor" :title="`${modelRouteEditor.adding ? '添加' : '编辑'}${modelPurposeLabel(modelRouteEditor.role)}模型`" initial-focus="#model-route-editor-provider" @close="modelRouteEditor = null">
       <div class="stack model-route-editor">
@@ -2273,6 +2320,7 @@ import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts
 import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
 import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
+import { useSectionOutline } from "../lib/section-outline";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { ArrowLeft, Bot, ChevronDown, ChevronRight, Copy, Download, Eye, EyeOff, GitBranch, GripVertical, History, Image, Layers, MessageSquare, Pencil, Play, Plus, Power, PowerOff, RefreshCw, RotateCcw, Save, ScanLine, Search, Settings2, Shuffle, SlidersHorizontal, Sparkles, Trash2, Upload, Waypoints, X } from "@lucide/vue";
@@ -2291,6 +2339,7 @@ import {
   getBotProfileConfig,
   getModelHealth,
   testLLM,
+  testLLMImage,
   resetModelHealth,
   getBotPlatforms,
   listLLMModels,
@@ -2985,6 +3034,15 @@ const page = ref<"list" | "edit">("list");
 // 迟早错位——所以量出来写进 CSS 变量，让样式表去用。
 const viewRoot = ref<HTMLElement | null>(null);
 const viewHeader = ref<HTMLElement | null>(null);
+const editorContent = ref<HTMLElement | null>(null);
+const mobileOutline = ref<HTMLElement | null>(null);
+const { sections: outlineSections, active: outlineActive, jump: jumpToSection } = useSectionOutline(editorContent, editorTab, () => {
+  const topbarHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--topbar-height")) || 56;
+  const header = viewHeader.value;
+  const headerHeight = header && getComputedStyle(header).position === "sticky" ? header.getBoundingClientRect().height : 0;
+  const mobileHeight = mobileOutline.value?.getBoundingClientRect().height ?? 0;
+  return topbarHeight + headerHeight + mobileHeight + 16;
+});
 let headerResizeObserver: ResizeObserver | null = null;
 
 function trackHeaderHeight(): void {
@@ -3664,13 +3722,30 @@ interface ModelRouteTestResult {
 // 测试结果只留在当前页面：它回答的是「刚才这一下能不能调通」，不是健康状态。
 const modelRouteTests = ref<Record<string, ModelRouteTestResult>>({});
 const modelRouteTestMessage = "你好，请只回复「OK」。";
+interface ModelRouteTestOutput {
+  provider: string;
+  seconds: number;
+  text: string;
+  images: string[];
+  error?: string;
+  usage?: string;
+}
+const modelRouteTestTarget = ref<{
+  key: string;
+  role: RoleKey;
+  model: string;
+  profiles: LLMConfig[];
+  message: string;
+  running: boolean;
+  results: ModelRouteTestOutput[];
+} | null>(null);
 
 function modelRouteTestKey(role: RoleKey, route: RoleRoute): string {
   return [role, route.group || route.profile_id || "", route.model || ""].join("\u0000");
 }
 
 function modelRouteTestable(role: RoleKey, route: RoleRoute): boolean {
-  return !isMediaRole(role) && role !== "image" && !!route.model && selectedRoleProfiles(role, route).length > 0;
+  return !isMediaRole(role) && !!route.model?.trim() && selectedRoleProfiles(role, route).length > 0;
 }
 
 function modelRouteTestResult(role: RoleKey, route: RoleRoute): ModelRouteTestResult | undefined {
@@ -3679,33 +3754,68 @@ function modelRouteTestResult(role: RoleKey, route: RoleRoute): ModelRouteTestRe
 
 // 分组路由逐个测组里的提供商：调度时它们都可能被选中，只测一个说明不了整条路由。
 // 直接测这一档，不走降级链，所以测出来的就是它自己的情况。
-async function testModelRoute(role: RoleKey, route: RoleRoute): Promise<void> {
+function testModelRoute(role: RoleKey, route: RoleRoute): void {
   const key = modelRouteTestKey(role, route);
   const model = route.model?.trim() || "";
   const profiles = selectedRoleProfiles(role, route);
   if (!model || !profiles.length || modelRouteTests.value[key]?.running) return;
+  modelRouteTestTarget.value = {
+    key, role, model, profiles: profiles.map(profile => ({ ...profile, model })),
+    message: role === "image" ? "画一只坐在窗边晒太阳的橘猫，简洁插画风格。" : modelRouteTestMessage,
+    running: false, results: []
+  };
+}
+
+async function runModelRouteTest(): Promise<void> {
+  const target = modelRouteTestTarget.value;
+  if (!target || target.running || !target.message.trim()) return;
+  const { key, model, profiles } = target;
+  const message = target.message.trim();
+  target.running = true;
+  target.results = [];
   modelRouteTests.value = { ...modelRouteTests.value, [key]: { running: true, label: "测试中…", className: "", detail: "" } };
   const lines: string[] = [];
   let failed = 0;
   let slowest = 0;
   for (const profile of profiles) {
+    if (modelRouteTestTarget.value !== target) break;
     const name = profile.name || llmProviderLabel(profile.provider);
     const started = performance.now();
+    const output: ModelRouteTestOutput = { provider: name, seconds: 0, text: "", images: [] };
     try {
-      await testLLM(modelRouteTestMessage, { ...profile, model });
+      if (target.role === "image") {
+        const result = await testLLMImage(message, { ...profile, model });
+        if (!result.images?.length) throw new Error("上游未返回图片");
+        output.images = result.images;
+        output.usage = `${result.model || model} · 已生成 ${result.images.length} 张`;
+      } else {
+        const result = await testLLM(message, { ...profile, model });
+        output.text = result.text;
+        if (result.usage) output.usage = `输入 ${result.usage.input_tokens ?? 0} / 输出 ${result.usage.output_tokens ?? 0} tokens`;
+      }
       const seconds = (performance.now() - started) / 1000;
       slowest = Math.max(slowest, seconds);
       lines.push(`${name}：调用成功，用时 ${seconds.toFixed(1)} 秒`);
     } catch (error) {
       failed++;
-      lines.push(`${name}：${describeLLMTestError(error, llmProviderLabel(profile.provider), model)}`);
+      output.error = describeLLMTestError(error, llmProviderLabel(profile.provider), model);
+      lines.push(`${name}：${output.error}`);
+    } finally {
+      output.seconds = (performance.now() - started) / 1000;
+      target.results.push(output);
     }
   }
+  target.running = false;
+  const stopped = target.results.length < profiles.length;
+  if (stopped) lines.push(`已停止，完成 ${target.results.length}/${profiles.length} 个提供商`);
   const detail = lines.join("\n");
-  const result: ModelRouteTestResult = failed === 0
+  const result: ModelRouteTestResult = stopped
+    ? { running: false, label: "测试已停止", className: "warn", detail }
+    : failed === 0
     ? { running: false, label: `测试通过 · ${slowest.toFixed(1)}s`, className: "ok", detail }
     : { running: false, label: failed === profiles.length ? "测试失败" : `${failed}/${profiles.length} 失败`, className: failed === profiles.length ? "err" : "warn", detail };
   modelRouteTests.value = { ...modelRouteTests.value, [key]: result };
+  if (modelRouteTestTarget.value !== target) return;
   if (failed) toastError(`${model} 测试失败：${lines.find((line) => !line.includes("调用成功")) || detail}`);
   else toastSuccess(`${model} 调用正常，用时 ${slowest.toFixed(1)} 秒`);
 }
@@ -5144,6 +5254,7 @@ async function copyEndpoint(): Promise<void> {
 }
 
 onBeforeUnmount(() => {
+  modelRouteTestTarget.value = null;
   headerResizeObserver?.disconnect();
   headerResizeObserver = null;
   if (modelHealthTimer !== undefined) window.clearInterval(modelHealthTimer);

@@ -2795,6 +2795,9 @@ a.nav-action {
   border-radius: 6px;
 }
 
+.model-route-test-output { display: grid; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); min-width: 0; }
+.model-route-test-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; }
+
 /* 列表行 (profile / plugin) */
 .row-list {
   display: flex;
@@ -5540,6 +5543,51 @@ a.nav-action {
 }
 
 /* 机器人配置分区标签 */
+.editor-outline-mobile { display: none; }
+.editor-outline-links { display: grid; gap: 3px; padding: 0 12px 14px; overflow-y: auto; }
+.editor-outline-links a {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 9px 12px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  transition: color 120ms ease;
+}
+.editor-outline-links a:hover { color: var(--text); }
+.editor-outline-links a.active {
+  color: var(--text);
+  font-weight: 600;
+}
+.editor-outline-number { font-size: 11px; font-variant-numeric: tabular-nums; opacity: .65; }
+.bot-editor .bot-editor-sidebar {
+  max-height: calc(100dvh - var(--topbar-height) - var(--view-header-height, 84px) - 32px);
+  overflow: hidden;
+}
+.bot-editor-sidebar > section { flex-shrink: 0; max-height: 35vh; overflow-y: auto; }
+.editor-outline { display: flex; flex-direction: column; min-height: 100px; }
+.editor-outline .card-header { flex-shrink: 0; }
+@media (max-width: 960px) {
+  .bot-editor .bot-editor-sidebar { max-height: none; overflow: visible; }
+  .bot-editor-sidebar > section { max-height: none; overflow: visible; }
+  .editor-outline { display: none; }
+  .editor-outline-mobile {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: var(--topbar-height);
+    z-index: 12;
+    padding: 10px 12px;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+  }
+  .editor-outline-mobile label { flex-shrink: 0; font-size: 12px; color: var(--muted); }
+  .editor-outline-mobile select { flex: 1; min-width: 0; }
+}
 .editor-tabs {
   display: flex;
   gap: 2px;

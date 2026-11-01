@@ -19,6 +19,43 @@ test("slang learning defaults on alongside memory settings without overriding ex
   assert.ok(memorySection?.includes("共享范围遵循「笔记本跟随机器人」，默认群聊私聊共享"));
 });
 
+test("rich messages appear only in Telegram behavior reply settings", () => {
+  const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
+  const { descriptor } = parse(source);
+  const matches = [];
+  const directive = (node, name) => node.props?.find(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === name)?.exp?.content;
+  function visit(node, parents = []) {
+    if (node.type === NodeTypes.ELEMENT && directive(node, "model") === "form.telegram_rich_messages") matches.push(parents);
+    for (const child of node.children ?? []) visit(child, [...parents, node]);
+  }
+  visit(descriptor.template.ast);
+  assert.equal(matches.length, 1);
+  const parents = matches[0];
+  assert.ok(parents.some(node => directive(node, "if") === "currentPlatform === 'telegram'"));
+  assert.ok(parents.some(node => directive(node, "show") === "editorTab === 'behavior'"));
+  const card = parents.findLast(node => node.props?.some(prop => prop.name === "class" && prop.value?.content.split(/\s+/).includes("card")));
+  assert.ok(card?.loc.source.includes("<h2>回复怎么发</h2>"));
+  assert.ok(card.loc.source.indexOf("发送 Markdown") < card.loc.source.indexOf("form.telegram_rich_messages"));
+});
+
+test("Telegram bot suppression appears only in behavior trigger settings", () => {
+  const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
+  const { descriptor } = parse(source);
+  const matches = [];
+  const directive = (node, name) => node.props?.find(prop => prop.type === NodeTypes.DIRECTIVE && prop.name === name)?.exp?.content;
+  function visit(node, parents = []) {
+    if (node.type === NodeTypes.ELEMENT && directive(node, "model") === "form.telegram_suppress_bot_messages") matches.push(parents);
+    for (const child of node.children ?? []) visit(child, [...parents, node]);
+  }
+  visit(descriptor.template.ast);
+  assert.equal(matches.length, 1);
+  const parents = matches[0];
+  assert.ok(parents.some(node => directive(node, "if") === "currentPlatform === 'telegram'"));
+  assert.ok(parents.some(node => directive(node, "show") === "editorTab === 'behavior'"));
+  const card = parents.findLast(node => node.props?.some(prop => prop.name === "class" && prop.value?.content.split(/\s+/).includes("card")));
+  assert.ok(card?.loc.source.includes("<h2>触发</h2>"));
+});
+
 test("bot settings checkboxes have a visible switch track", () => {
   const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
   const { descriptor, errors } = parse(source);
