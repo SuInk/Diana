@@ -13,6 +13,20 @@ function load(name, context) {
   return context[name];
 }
 
+test("Telegram rich messages default on without overriding an explicit opt-out", () => {
+  const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "setForm");
+  let initializer;
+  function visit(node) {
+    if (ts.isPropertyAssignment(node) && node.name.getText(ast) === "telegram_rich_messages") initializer = node.initializer.getText(ast);
+    ts.forEachChild(node, visit);
+  }
+  visit(fn);
+  assert.ok(initializer);
+  for (const [value, want] of [[undefined, true], [null, true], [true, true], [false, false]]) {
+    assert.equal(vm.runInNewContext(initializer, { config: { telegram_rich_messages: value } }), want);
+  }
+});
+
 test("new bot loads independent defaults and enables both switches", async () => {
   let form;
   const defaults = { enabled: true, owner_login_enabled: true, private_admission: { mode: "owner_only" }, system_prompt: "default persona", onebot_access_token_configured: false };

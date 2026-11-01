@@ -112,9 +112,13 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 		return strings.TrimSpace(cfg.promptf(promptPlaintextRulesSpec, map[string]string{"platform": name}))
 	}
 	if ok && def.RichText {
+		features := platformMarkdownSyntaxNote(def.ID)
+		if def.ID == PlatformTelegram && cfg.TelegramRichMessagesEnabled() {
+			features = "已开启 Rich Messages：普通 Markdown 的标题、列表、引用、代码和不超过 20 列的表格可作为原生结构发送。仍写普通 Markdown，不写 Telegram 富消息专用语法或 JSON；含提及、剧透或未支持结构的消息会用普通富文本，表格降为等宽块。剧透用 ||内容||，引用用行首 >；不用为了富消息额外增加排版"
+		}
 		return cfg.promptf(promptPlatformRichTextSpec, map[string]string{
 			"platform": def.Name,
-			"features": platformMarkdownSyntaxNote(def.ID),
+			"features": features,
 		})
 	}
 	return cfg.promptf(promptPlatformMarkdownSpec, map[string]string{"platform": name})
@@ -125,7 +129,7 @@ func platformOutputRulesForConfig(cfg BotConfig) string {
 func platformMarkdownSyntaxNote(platform string) string {
 	switch NormalizePlatformID(platform) {
 	case PlatformTelegram:
-		return "加粗、斜体、删除线、行内代码、代码块、链接、引用和列表都能显示，表格会转成等宽块"
+		return "加粗、斜体、删除线、行内代码、代码块、链接、引用和列表都能显示；剧透用 ||内容||，引用用行首 >；表格会转成等宽块"
 	case PlatformQQOfficial:
 		return "标题、加粗、斜体、删除线、代码块、链接、引用和列表都能显示，公式、算式用 $…$ 或 $$…$$ 写 LaTeX 会排成数学公式；不认行内代码和表格，表格会转成对齐的文字行"
 	default:

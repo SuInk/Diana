@@ -67,3 +67,29 @@ func TestClosingAnchorDoesNotDismissAnswerScope(t *testing.T) {
 		}
 	}
 }
+
+func TestReplyBrevityPreservesFormattingAndEvidence(t *testing.T) {
+	if !strings.Contains(replyDepthClosingAnchor, "用户明确指定的格式逐项满足") {
+		t.Fatal("closing anchor must preserve explicit formatting requests")
+	}
+	for name, prompt := range map[string]string{
+		"closing": replyDepthClosingAnchor,
+		"tools":   replyToolResultBrevityRule,
+	} {
+		for _, want := range []string{"并列要点可用列表", "按当前平台规则排版", "不为排版增加内容"} {
+			if !strings.Contains(prompt, want) {
+				t.Errorf("%s missing formatting boundary %q", name, want)
+			}
+		}
+		for _, obsolete := range []string{"不分条列点", "先用一小段", "几十个字就够"} {
+			if strings.Contains(prompt, obsolete) {
+				t.Errorf("%s still suppresses structure: %q", name, obsolete)
+			}
+		}
+	}
+	for _, want := range []string{"覆盖用户问到的各项", "一两句话能说清就不凑列表", "只写材料支持的事实", "不加开场套话、重复总结"} {
+		if !strings.Contains(replyToolResultBrevityRule, want) {
+			t.Errorf("tool reminder missing scope/evidence boundary %q", want)
+		}
+	}
+}

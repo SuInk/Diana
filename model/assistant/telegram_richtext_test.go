@@ -21,6 +21,62 @@ func entityAt(t *testing.T, text string, entity telegramEntitySpec) string {
 	return string(utf16.Decode(units[entity.Offset : entity.Offset+entity.Length]))
 }
 
+func TestTelegramOutgoingQuotesAndSpoilers(t *testing.T) {
+	tests := []struct {
+		name, source, text string
+		entities           map[string][]string
+	}{
+		{"quote inline styles", "😀\n> **重点**\n> ||秘密😀||\n正文", "😀\n重点\n秘密😀\n正文", map[string][]string{"blockquote": {"重点\n秘密😀"}, "bold": {"重点"}, "spoiler": {"秘密😀"}}},
+		{"separate quotes", "> 第一段\n\n> 第二段", "第一段\n\n第二段", map[string][]string{"blockquote": {"第一段", "第二段"}}},
+		{"nested quotes flatten", "> 外层\n>> 内层", "外层\n内层", map[string][]string{"blockquote": {"外层\n内层"}}},
+		{"blank quote line", "> 第一段\n>\n> 第二段", "第一段\n\n第二段", map[string][]string{"blockquote": {"第一段\n\n第二段"}}},
+		{"multiple spoilers", "||一|| 和 ||二😀||", "一 和 二😀", map[string][]string{"spoiler": {"一", "二😀"}}},
+		{"multiline spoiler", "||第一行\n第二行||", "第一行\n第二行", map[string][]string{"spoiler": {"第一行\n第二行"}}},
+		{"unclosed and escaped", "\\||原样\\|| ||未闭合", "\\||原样\\|| ||未闭合", nil},
+		{"code stays literal", "```text\n> ||原样||\n```", "> ||原样||", map[string][]string{"pre": {"> ||原样||"}}},
+		{"inline code stays literal", "`||原样||`", "||原样||", map[string][]string{"code": {"||原样||"}}},
+		{"spoiler hides code", "||`秘密😀`||", "秘密😀", map[string][]string{"spoiler": {"秘密😀"}}},
+		{"link destination stays literal", "[链接](https://example.com/||path||)", "链接", map[string][]string{"text_link": {"链接"}}},
+		{"spoiler link label", "[||秘密||](https://example.com/)", "秘密", map[string][]string{"text_link": {"秘密"}, "spoiler": {"秘密"}}},
+		{"empty markers", "||||\n> ", "||||\n", nil},
+		{"quote mention", "> <diana-at id=\"10002\"/> **你好**", "@小😀 你好", map[string][]string{"blockquote": {"@小😀 你好"}, "text_mention": {"@小😀"}, "bold": {"你好"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			text, entities := renderTelegramOutgoingText(tt.source, map[string]string{"10002": "小😀"}, nil)
+			if text != tt.text {
+				t.Fatalf("text = %q, want %q", text, tt.text)
+			}
+			got := map[string][]string{}
+			for _, entity := range entities {
+				got[entity.Type] = append(got[entity.Type], entityAt(t, text, entity))
+			}
+			if len(got) != len(tt.entities) {
+				t.Fatalf("entities = %#v, want %#v", got, tt.entities)
+			}
+			for kind, want := range tt.entities {
+				if !reflect.DeepEqual(got[kind], want) {
+					t.Errorf("%s = %#v, want %#v", kind, got[kind], want)
+				}
+			}
+		})
+	}
+}
+
+func TestTelegramOutgoingQuoteSpoilerDraftLimit(t *testing.T) {
+	text, entities := renderTelegramOutgoingText("> ||"+strings.Repeat("😀", 2200)+"||", nil, nil)
+	text, entities = truncateTelegramDraft(text, entities)
+	if utf16Length(text) > telegramTextLimit {
+		t.Fatal("draft exceeds Telegram limit")
+	}
+	for _, kind := range []string{"blockquote", "spoiler"} {
+		entity, ok := findEntity(entities, kind)
+		if !ok || entityAt(t, text, entity) == "" {
+			t.Fatalf("missing or invalid %s: %#v", kind, entities)
+		}
+	}
+}
+
 func findEntity(entities []telegramEntitySpec, kind string) (telegramEntitySpec, bool) {
 	for _, entity := range entities {
 		if entity.Type == kind {
@@ -308,7 +364,7 @@ func TestTelegramOutgoingLegacyMarkdownParity(t *testing.T) {
 		{"link", "详见[发布说明](https://example.com/rel)最后一段"},
 		{"mention alignment", "**重点**看 <diana-at id=\"10002\"/> 说的"},
 		{"heading", "## 今日小结\n正文在这里"},
-		{"bullets and quote", "- 第一条\n- 第二条\n> 引用一句"},
+		{"bullets", "- 第一条\n- 第二条"},
 		{"non-markup symbols", "面积是 a*b*c，变量叫 user_name_id"},
 		{"plain text", "今天天气不错，出去走走吧"},
 		{"table", "看这个：\n| 平台 | 状态 |\n|------|------|\n| 钉钉 | 待办 |"},

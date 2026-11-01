@@ -894,19 +894,20 @@ func (h *BotHandler) newChannelForSet(set assistant.ProfileSet) assistant.Channe
 }
 
 type botTransportConfig struct {
-	ConnectionProfileID string
-	ID                  string
-	Platform            string
-	Credentials         platformCredentials
-	OneBotTransport     string
-	OneBotWSEndpoint    string
-	OneBotHTTPURL       string
-	OneBotHTTPSecret    string
-	OneBotEndpoint      string
-	OneBotAccessToken   string
-	TelegramBotToken    string
-	TelegramAPIBaseURL  string
-	TelegramProxyURL    string
+	ConnectionProfileID  string
+	ID                   string
+	Platform             string
+	Credentials          platformCredentials
+	OneBotTransport      string
+	OneBotWSEndpoint     string
+	OneBotHTTPURL        string
+	OneBotHTTPSecret     string
+	OneBotEndpoint       string
+	OneBotAccessToken    string
+	TelegramBotToken     string
+	TelegramAPIBaseURL   string
+	TelegramProxyURL     string
+	TelegramRichMessages bool
 	// 微信凭据是扫码时整组换掉的，同一台机器人重扫之后必须重建长轮询。
 	WeixinBotToken string
 	WeixinBaseURL  string
@@ -965,21 +966,22 @@ func enabledBotTransports(set assistant.ProfileSet) []botTransportConfig {
 		}
 		profile, _ = set.ResolveConnection(profile)
 		transports = append(transports, botTransportConfig{
-			ConnectionProfileID: profile.ConnectionProfileID,
-			ID:                  profile.ID,
-			Platform:            profile.Platform,
-			Credentials:         platformCredentialsOf(profile),
-			OneBotTransport:     profile.OneBotTransport,
-			OneBotWSEndpoint:    profile.OneBotWSEndpoint,
-			OneBotHTTPURL:       profile.OneBotHTTPURL,
-			OneBotHTTPSecret:    profile.OneBotHTTPSecret,
-			OneBotEndpoint:      profile.OneBotReverseWSEndpoint,
-			OneBotAccessToken:   profile.OneBotAccessToken,
-			TelegramBotToken:    profile.TelegramBotToken,
-			TelegramAPIBaseURL:  profile.TelegramAPIBaseURL,
-			TelegramProxyURL:    profile.TelegramProxyURL,
-			WeixinBotToken:      profile.WeixinBotToken,
-			WeixinBaseURL:       profile.WeixinBaseURL,
+			ConnectionProfileID:  profile.ConnectionProfileID,
+			ID:                   profile.ID,
+			Platform:             profile.Platform,
+			Credentials:          platformCredentialsOf(profile),
+			OneBotTransport:      profile.OneBotTransport,
+			OneBotWSEndpoint:     profile.OneBotWSEndpoint,
+			OneBotHTTPURL:        profile.OneBotHTTPURL,
+			OneBotHTTPSecret:     profile.OneBotHTTPSecret,
+			OneBotEndpoint:       profile.OneBotReverseWSEndpoint,
+			OneBotAccessToken:    profile.OneBotAccessToken,
+			TelegramBotToken:     profile.TelegramBotToken,
+			TelegramAPIBaseURL:   profile.TelegramAPIBaseURL,
+			TelegramProxyURL:     profile.TelegramProxyURL,
+			TelegramRichMessages: profile.TelegramRichMessagesEnabled(),
+			WeixinBotToken:       profile.WeixinBotToken,
+			WeixinBaseURL:        profile.WeixinBaseURL,
 		})
 	}
 	return transports

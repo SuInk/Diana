@@ -143,8 +143,8 @@ func telegramFenceLanguage(text string) bool {
 func (r *telegramOutgoingRenderer) markdown(text string) (string, []telegramEntitySpec) {
 	text = tgRulePattern.ReplaceAllString(text, "")
 	text = normalizeListLines(text)
-	text = tgQuotePattern.ReplaceAllString(text, "")
 	buffer := newTelegramSpanBuffer(text, nil)
+	buffer.applyBlockquotes()
 	for search := 0; search < len(buffer.text); {
 		bounds := tgHeadingPattern.FindStringSubmatchIndex(buffer.text[search:])
 		if bounds == nil {
@@ -164,6 +164,7 @@ func (r *telegramOutgoingRenderer) markdown(text string) (string, []telegramEnti
 	buffer.applyWrapped(tgItalicStar, func(string) telegramEntitySpec { return telegramEntitySpec{Type: "italic"} })
 	buffer.applyWrapped(tgItalicUnderscore, func(string) telegramEntitySpec { return telegramEntitySpec{Type: "italic"} })
 	buffer.applyLink(tgLinkPattern)
+	buffer.applySpoilers()
 	for index := len(r.opaque) - 1; index >= 0; index-- {
 		block := r.opaque[index]
 		// Link targets leave the text buffer during Markdown conversion. Restore
@@ -193,6 +194,89 @@ func (r *telegramOutgoingRenderer) markdown(text string) (string, []telegramEnti
 		kept = append(kept, entity)
 	}
 	return buffer.text, compatibleTelegramEntities(kept)
+}
+
+// Quote ranges are registered before inline markup is removed so the shared
+// span buffer adjusts their UTF-16 offsets together with all other entities.
+func (b *telegramSpanBuffer) applyBlockquotes() {
+	quoteStart := -1
+	quoteEnd := 0
+	flush := func() {
+		if quoteStart >= 0 && quoteEnd > quoteStart {
+			b.entities = append(b.entities, telegramEntitySpec{
+				Type: "blockquote", Offset: utf16Length(b.text[:quoteStart]),
+				Length: utf16Length(b.text[quoteStart:quoteEnd]),
+			})
+		}
+		quoteStart = -1
+	}
+	for cursor := 0; cursor < len(b.text); {
+		end := strings.IndexByte(b.text[cursor:], '\n')
+		if end < 0 {
+			end = len(b.text)
+		} else {
+			end += cursor
+		}
+		line := b.text[cursor:end]
+		prefix := tgQuotePattern.FindStringIndex(line)
+		if prefix == nil {
+			flush()
+		} else {
+			if quoteStart < 0 {
+				quoteStart = cursor
+			}
+			// Telegram cannot nest blockquotes; flatten repeated quote markers.
+			for prefix != nil {
+				b.replace(cursor, cursor+prefix[1], "")
+				end -= prefix[1]
+				prefix = tgQuotePattern.FindStringIndex(b.text[cursor:end])
+			}
+			quoteEnd = end
+		}
+		cursor = end + 1
+	}
+	flush()
+}
+
+func (b *telegramSpanBuffer) applySpoilers() {
+	find := func(from int) int {
+		for from < len(b.text) {
+			i := strings.Index(b.text[from:], "||")
+			if i < 0 {
+				return -1
+			}
+			i += from
+			slashes := 0
+			for j := i - 1; j >= 0 && b.text[j] == '\\'; j-- {
+				slashes++
+			}
+			if slashes%2 == 0 {
+				return i
+			}
+			from = i + 2
+		}
+		return -1
+	}
+	for cursor := 0; cursor < len(b.text); {
+		start := find(cursor)
+		if start < 0 {
+			break
+		}
+		end := find(start + 2)
+		if end < 0 {
+			break
+		}
+		if end == start+2 {
+			cursor = end + 2
+			continue
+		}
+		offset := utf16Length(b.text[:start])
+		length := utf16Length(b.text[start+2 : end])
+		b.replace(end, end+2, "")
+		b.replace(start, start+2, "")
+		b.entities = append(b.entities, telegramEntitySpec{Type: "spoiler", Offset: offset, Length: length})
+		cursor = end - 2
+	}
 }
 
 func (r *telegramOutgoingRenderer) table(rows [][]string) string {
@@ -283,8 +367,20 @@ func compatibleTelegramEntities(entities []telegramEntitySpec) []telegramEntityS
 			if entity.Offset >= other.Offset+other.Length || other.Offset >= entity.Offset+entity.Length {
 				continue
 			}
+			// Telegram forbids formatting inside code. Prefer hiding an explicit
+			// spoiler over preserving monospace and exposing its contents.
+			if (entity.Type == "code" || entity.Type == "pre") && other.Type == "spoiler" {
+				conflict = true
+				break
+			}
+			contains := entity.Offset <= other.Offset && entity.Offset+entity.Length >= other.Offset+other.Length
+			contained := other.Offset <= entity.Offset && other.Offset+other.Length >= entity.Offset+entity.Length
+			if !contains && !contained {
+				conflict = true
+				break
+			}
 			if (entity.Type == "text_link" && (other.Type == "mention" || other.Type == "text_mention")) ||
-				(entity.Type != "code" && entity.Type != "pre" && (other.Type == "code" || other.Type == "pre")) {
+				(entity.Type != "code" && entity.Type != "pre" && entity.Type != "spoiler" && (other.Type == "code" || other.Type == "pre")) {
 				conflict = true
 				break
 			}

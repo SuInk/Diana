@@ -705,6 +705,7 @@ type BotConfig struct {
 	TelegramBotToken            string `json:"telegram_bot_token,omitempty"`
 	TelegramAPIBaseURL          string `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL            string `json:"telegram_proxy_url,omitempty"`
+	TelegramRichMessages        *bool  `json:"telegram_rich_messages,omitempty"`
 	TelegramSuppressBotMessages *bool  `json:"telegram_suppress_bot_messages,omitempty"`
 	QQTypingEnabled             *bool  `json:"qq_typing_enabled,omitempty"`
 	QQAppID                     string `json:"qq_app_id,omitempty"`
@@ -1436,6 +1437,7 @@ type ConfigPayload struct {
 	TelegramBotTokenConfigured  bool               `json:"telegram_bot_token_configured,omitempty"`
 	TelegramAPIBaseURL          string             `json:"telegram_api_base_url,omitempty"`
 	TelegramProxyURL            string             `json:"telegram_proxy_url,omitempty"`
+	TelegramRichMessages        *bool              `json:"telegram_rich_messages,omitempty"`
 	TelegramSuppressBotMessages *bool              `json:"telegram_suppress_bot_messages,omitempty"`
 	QQTypingEnabled             *bool              `json:"qq_typing_enabled,omitempty"`
 	QQAppID                     string             `json:"qq_app_id,omitempty"`
@@ -2219,6 +2221,7 @@ func DefaultBotConfig() BotConfig {
 		BotReplyLoopThreshold:        defaultBotReplyLoopThreshold,
 		ReplyRefusalThreshold:        defaultReplyRefusalThreshold,
 		ReplySafetyMasterEnabled:     boolPointer(true),
+		TelegramRichMessages:         boolPointer(true),
 		TelegramSuppressBotMessages:  boolPointer(true),
 		QQTypingEnabled:              boolPointer(true),
 		NotebookSharedScopeEnabled:   boolPointer(true),
@@ -2463,6 +2466,9 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.ReplySuppressionEnabled == nil {
 		cfg.ReplySuppressionEnabled = boolPointer(true)
+	}
+	if cfg.TelegramRichMessages == nil {
+		cfg.TelegramRichMessages = boolPointer(true)
 	}
 	if cfg.TelegramSuppressBotMessages == nil {
 		cfg.TelegramSuppressBotMessages = boolPointer(true)
@@ -2769,6 +2775,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		TelegramBotTokenConfigured:  cfg.TelegramBotToken != "",
 		TelegramAPIBaseURL:          cfg.TelegramAPIBaseURL,
 		TelegramProxyURL:            cfg.TelegramProxyURL,
+		TelegramRichMessages:        copyBoolPointer(cfg.TelegramRichMessages),
 		TelegramSuppressBotMessages: copyBoolPointer(cfg.TelegramSuppressBotMessages),
 		QQTypingEnabled:             copyBoolPointer(cfg.QQTypingEnabled),
 		// 密钥一律只回 configured 标志或掩码预览（见 OneBotAccessTokenPreview），
@@ -2985,6 +2992,9 @@ func payloadFromProfileSet(set ProfileSet, focusID string, convert func(BotConfi
 
 // ConfigFromPayload 把前端 payload 合并旧密钥后转为内部配置。
 func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
+	if payload.TelegramRichMessages == nil {
+		payload.TelegramRichMessages = copyBoolPointer(existing.TelegramRichMessages)
+	}
 	operationAccess := existing.AgentBrowserOperationAccess.WithDefaults()
 	if payload.AgentBrowserOperationAccess != nil {
 		operationAccess = payload.AgentBrowserOperationAccess.WithDefaults()
@@ -3022,6 +3032,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		TelegramBotToken:            payload.TelegramBotToken,
 		TelegramAPIBaseURL:          payload.TelegramAPIBaseURL,
 		TelegramProxyURL:            payload.TelegramProxyURL,
+		TelegramRichMessages:        copyBoolPointer(payload.TelegramRichMessages),
 		TelegramSuppressBotMessages: copyBoolPointer(payload.TelegramSuppressBotMessages),
 		QQTypingEnabled:             copyBoolPointer(payload.QQTypingEnabled),
 		QQAppID:                     payload.QQAppID,
@@ -3291,6 +3302,11 @@ func cleanStrings(values []string) []string {
 // 事后已经补不回来。轨迹存在库外的文件里、按天过期，开着的代价只是磁盘。
 func debugModeEnabled(cfg BotConfig) bool {
 	return cfg.DebugModeEnabled == nil || *cfg.DebugModeEnabled
+}
+
+// TelegramRichMessagesEnabled defaults missing settings to enabled while preserving explicit opt-outs.
+func (cfg BotConfig) TelegramRichMessagesEnabled() bool {
+	return boolValue(cfg.TelegramRichMessages, true)
 }
 
 func boolPointer(value bool) *bool {

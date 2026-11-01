@@ -198,9 +198,10 @@ func NewChannelForConfig(cfg BotConfig) Channel {
 		}
 	case PlatformTelegram:
 		return NewTelegramChannel(TelegramConfig{
-			BotToken:   cfg.TelegramBotToken,
-			APIBaseURL: cfg.TelegramAPIBaseURL,
-			ProxyURL:   cfg.TelegramProxyURL,
+			BotToken:     cfg.TelegramBotToken,
+			APIBaseURL:   cfg.TelegramAPIBaseURL,
+			ProxyURL:     cfg.TelegramProxyURL,
+			RichMessages: cfg.TelegramRichMessagesEnabled(),
 		})
 	case PlatformQQOfficial:
 		return NewQQOfficialChannel(QQOfficialConfig{

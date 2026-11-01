@@ -9,7 +9,7 @@ export function copyBotConfiguration(source: BotProfileConfig, defaults: BotProf
   delete data.agent_command_allowlist;
   for (const key of Object.keys(data)) {
     if ((/^(onebot_|qq_|weixin_|imessage_)/.test(key) && key !== "qq_typing_enabled")
-      || (key.startsWith("telegram_") && key !== "telegram_suppress_bot_messages")) {
+      || (key.startsWith("telegram_") && !["telegram_suppress_bot_messages", "telegram_rich_messages"].includes(key))) {
       delete data[key];
     }
   }

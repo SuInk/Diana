@@ -32,7 +32,8 @@ type TelegramConfig struct {
 	// APIBaseURL 留空用官方 api.telegram.org；可指向自建 Bot API server。
 	APIBaseURL string
 	// ProxyURL 国内网络通常必须配置，支持 http/https/socks5。
-	ProxyURL string
+	ProxyURL     string
+	RichMessages bool
 }
 
 const (
@@ -415,7 +416,7 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		if reply := telegramReplyParameters(msg.ReplyMessageID); reply != nil {
 			params["reply_parameters"] = reply
 		}
-		result, err := c.CallAPI(ctx, "sendMessage", params)
+		result, err := c.sendTextWithRichFallback(ctx, msg, params)
 		if err != nil {
 			return nil, err
 		}
