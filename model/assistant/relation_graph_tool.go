@@ -27,6 +27,10 @@ type GroupRelationStore interface {
 	GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (GroupRelationGraph, error)
 }
 
+type groupRelationCenteredStore interface {
+	GroupRelationGraphCenteredOn(ctx context.Context, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error)
+}
+
 type dianaGroupRelationsTool struct {
 	runtime  *Runtime
 	event    MessageEvent
@@ -45,7 +49,8 @@ func (t *dianaGroupRelationsTool) defaultRange() string {
 func (t *dianaGroupRelationsTool) Name() string { return dianaGroupRelationsToolName }
 
 func (t *dianaGroupRelationsTool) Description() string {
-	return `画本群关系图并直接发到群里：你在中间，群友头像按和你的互动次数排成三圈，越靠里越亲近。` +
+	return `画本群互动圈（关系图）并直接发到群里：默认以机器人为中心，也可以用 center_id 指定群友，其他头像按和中心人物的互动次数排成三圈，越靠里互动越多。` +
+		`用户说“我的”时用当前发言者的账号 ID；指定其他人时从 @、引用消息或成员查询中确认账号 ID，不凭昵称猜。` +
 		`图由运行时发送，调用后一句话交代即可；你看不到图，不要描述里面的数字。`
 }
 
@@ -53,6 +58,10 @@ func (t *dianaGroupRelationsTool) InputSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
+			"center_id": map[string]any{
+				"type":        "string",
+				"description": "中心人物的账号 ID；省略或留空时以机器人为中心。用户要看自己的互动圈时传当前发言者 ID。",
+			},
 			"range": map[string]any{
 				"type":        "string",
 				"enum":        []string{"24h", "7d", "30d", "all"},
@@ -98,7 +107,8 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	botID := firstNonEmpty(strings.TrimSpace(t.event.SelfID), strings.TrimSpace(cfg.BotAccount))
-	graph, err := store.GroupRelationGraphFor(ctx, t.event.GroupID, since, botID)
+	centerID := strings.TrimSpace(configToolString(input, "center_id"))
+	graph, err := loadGroupRelationGraph(ctx, store, t.event.GroupID, since, botID, centerID)
 	if err != nil {
 		return "", fmt.Errorf("统计关系图失败：%w", err)
 	}
@@ -107,8 +117,19 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		t.recordRelationsOutcome(ctx, result, "")
 		return marshalRelationsResult(result), nil
 	}
+	if centerID != "" && centerID != botID && graph.CenterID != centerID {
+		result := dianaGroupRelationsResult{Message: "这段时间本群没有这位成员的发言记录，无法以其为中心画互动圈；可以扩大统计时间范围。", Range: rangeID}
+		t.recordRelationsOutcome(ctx, result, "")
+		return marshalRelationsResult(result), nil
+	}
 
-	title := fmt.Sprintf("群 %s · 关系图", t.event.GroupID)
+	groupName := strings.TrimSpace(t.event.GroupName)
+	if groupName == "" {
+		if info, err := t.runtime.getGroupInfoForEvent(ctx, t.event, t.event.GroupID); err == nil {
+			groupName = info.GroupName
+		}
+	}
+	title := groupRelationTitle(t.event.GroupID, groupName)
 	maxSeats := t.settings.Int(groupRelationsSettingMaxMembers, relationImageDefaultSeats)
 	rangeLabel := relationRangeLabel(rangeID)
 
@@ -167,6 +188,24 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	}
 	t.recordRelationsOutcome(ctx, result, "")
 	return marshalRelationsResult(result), nil
+}
+
+func loadGroupRelationGraph(ctx context.Context, store GroupRelationStore, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error) {
+	if centerID == "" || centerID == botID {
+		return store.GroupRelationGraphFor(ctx, groupID, since, botID)
+	}
+	if centered, ok := store.(groupRelationCenteredStore); ok {
+		return centered.GroupRelationGraphCenteredOn(ctx, groupID, since, botID, centerID)
+	}
+	return GroupRelationGraph{}, fmt.Errorf("当前消息存储不支持以指定成员为中心画互动圈")
+}
+
+// groupRelationTitle 优先使用平台提供的群名称，名称缺失时才退回群号。
+func groupRelationTitle(groupID, groupName string) string {
+	if name := strings.TrimSpace(groupName); name != "" {
+		return fmt.Sprintf("%s · 互动圈", name)
+	}
+	return fmt.Sprintf("群 %s · 互动圈", groupID)
 }
 
 // recordRelationsOutcome 把这次画图的结果写进运行记录。
