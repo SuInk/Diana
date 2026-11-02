@@ -5,6 +5,7 @@ package webui
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -263,6 +264,8 @@ func (h *BotHandler) remoteAvatarURL(kind, profileID, id string) string {
 	// 也是纯数字，猜错了 qlogo 照样回 200——大多是默认企鹅，撞上真实 QQ 号就是一张
 	// 陌生人的头像，前端分辨不出来。不猜就退回首字母占位。
 	if strings.TrimSpace(profileID) == "" && h.hasNonQQProfile() {
+		// 图片请求报错浏览器也只会显示占位，记一笔日志，漏传 profile 的调用方才找得到。
+		log.Printf("avatar: refused to guess qlogo for %s %s without bot_profile_id in a multi-platform deployment", kind, id)
 		return ""
 	}
 	if kind == avatarKindGroup {
@@ -283,6 +286,18 @@ func (h *BotHandler) hasNonQQProfile() bool {
 		}
 	}
 	return false
+}
+
+// hasMixedPlatforms 判断部署里的机器人是不是跨了不止一个平台。
+func (h *BotHandler) hasMixedPlatforms() bool {
+	if h.profiles == nil {
+		return false
+	}
+	platforms := map[string]bool{}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		platforms[assistant.NormalizePlatformID(profile.Platform)] = true
+	}
+	return len(platforms) > 1
 }
 
 // qqOfficialProfile 找出这条记录所属的 QQ 官方机器人。单机器人部署的事件里
