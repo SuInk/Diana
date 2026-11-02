@@ -904,6 +904,7 @@ const relationRangeOptions: Array<{ value: AssistantEventRange; label: string }>
 ];
 const relationsGroupID = ref("");
 const relationsGroupName = ref("");
+const relationsProfileID = ref("");
 const relationsRange = ref<AssistantEventRange>("7d");
 const relationsGraph = ref<GroupRelationGraph | null>(null);
 const relationsLoading = ref(false);
@@ -935,6 +936,7 @@ function selectRelationsCenter(value: string): void {
 function openRelations(group: BotGroupConfig, groupName = ""): void {
   relationsGroupID.value = group.group_id;
   relationsGroupName.value = groupName;
+  relationsProfileID.value = group.bot_profile_id || botScope.value;
   relationsCenter.value = "";
   relationsGraph.value = null;
   void loadRelations();
@@ -957,7 +959,7 @@ async function loadRelations(): Promise<void> {
   if (!groupID) return;
   relationsLoading.value = true;
   try {
-    const response = await getGroupRelations(groupID, relationsRange.value, relationsCenter.value);
+    const response = await getGroupRelations(groupID, relationsRange.value, relationsCenter.value, relationsProfileID.value);
     // 期间可能已经关掉弹窗或换了群，回来的结果不该覆盖当前状态。
     if (relationsGroupID.value !== groupID) return;
     relationsGraph.value = response.graph;
@@ -972,6 +974,7 @@ async function loadRelations(): Promise<void> {
 
 const wordCloudGroupID = ref("");
 const wordCloudGroupName = ref("");
+const wordCloudProfileID = ref("");
 const wordCloudRange = ref<AssistantEventRange>("7d");
 const wordCloud = ref<GroupWordCloud | null>(null);
 const wordCloudLoading = ref(false);
@@ -979,6 +982,7 @@ const wordCloudLoading = ref(false);
 function openWordCloud(group: BotGroupConfig, groupName = ""): void {
   wordCloudGroupID.value = group.group_id;
   wordCloudGroupName.value = groupName;
+  wordCloudProfileID.value = group.bot_profile_id || botScope.value;
   wordCloud.value = null;
   void loadWordCloud();
 }
@@ -1000,7 +1004,7 @@ async function loadWordCloud(): Promise<void> {
   if (!groupID) return;
   wordCloudLoading.value = true;
   try {
-    const response = await getGroupWordCloud(groupID, wordCloudRange.value);
+    const response = await getGroupWordCloud(groupID, wordCloudRange.value, wordCloudProfileID.value);
     if (wordCloudGroupID.value !== groupID) return;
     wordCloud.value = response.cloud;
   } catch (error) {
