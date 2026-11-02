@@ -65,6 +65,8 @@ type TelegramChannel struct {
 	// botUsername 来自 getMe，用于精确判断 @提及。
 	botUsername  string
 	knownMembers map[string]map[int64]telegramKnownMember
+	// recentJoins 按「群|用户」记最近报过的入群，见 claimMemberJoin。
+	recentJoins map[string]time.Time
 	// offset 是下一次 getUpdates 的起点，保证已处理的更新不会重复投递。
 	offset int64
 }
@@ -275,6 +277,10 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) e
 			}
 		}
 	}
+	if event, ok := telegramChatMemberJoinEvent(update.ChatMember, c.Status().SelfID); ok {
+		c.handleMemberJoins(ctx, update.UpdateID, []MessageEvent{event})
+		return nil
+	}
 	if update.ChatJoinRequest != nil {
 		c.mu.RLock()
 		handler := c.handler
@@ -320,6 +326,10 @@ func (c *TelegramChannel) dispatch(ctx context.Context, update telegramUpdate) e
 		return nil
 	}
 	c.observeMemberMessage(message)
+	if len(message.NewChatMembers) > 0 && !edited {
+		c.handleMemberJoins(ctx, update.UpdateID, telegramNewMemberEvents(message, c.Status().SelfID))
+		return nil
+	}
 	c.mu.RLock()
 	handler := c.handler
 	username := c.botUsername
@@ -395,6 +405,7 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	if text := strings.TrimSpace(msg.Text); text != "" {
 		var entities []telegramEntitySpec
 		if !msg.LiteralText {
+			text = telegramPrependMention(text, msg.MentionUserID)
 			// 有可信用户名时用 @username，否则以昵称和用户 ID 提及；Markdown 和
 			// 提及共用 UTF-16 实体坐标，不依赖 parse_mode 或把昵称当成格式解析。
 			text, entities = renderTelegramOutgoingText(text, msg.MentionNames, msg.MentionUsernames)
@@ -1117,21 +1128,13 @@ func telegramMessageToEvent(msg *telegramMessage, selfID, botUsername string) Me
 		}
 	}
 	// 入群通知：Telegram 把它作为带 new_chat_members 的普通消息下发，
-	// 不映射的话欢迎语在 Telegram 上永远不会触发。
+	// 不映射的话欢迎语在 Telegram 上永远不会触发。dispatch 会把每个新成员各报一条，
+	// 这里只返回第一条；全是机器人时整条消息丢掉，不当聊天正文。
 	if len(msg.NewChatMembers) > 0 && msg.Chat.Type != "private" {
-		joined := msg.NewChatMembers[0]
-		return MessageEvent{
-			Kind:        EventKindNotice,
-			SubType:     "group_increase",
-			Time:        msg.Date,
-			SelfID:      selfID,
-			MessageID:   strconv.FormatInt(msg.MessageID, 10),
-			MessageType: "notice",
-			GroupID:     strconv.FormatInt(msg.Chat.ID, 10),
-			GroupName:   strings.TrimSpace(msg.Chat.Title),
-			UserID:      strconv.FormatInt(joined.ID, 10),
-			SenderName:  telegramDisplayName(&joined),
+		if joins := telegramNewMemberEvents(msg, selfID); len(joins) > 0 {
+			return joins[0]
 		}
+		return MessageEvent{}
 	}
 
 	// 退群同理：映射成和 OneBot 一样的 group_decrease，退群审计才能跨平台共用。

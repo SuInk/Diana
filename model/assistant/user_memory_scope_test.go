@@ -135,6 +135,7 @@ func TestMessageEventLiteralsCarryProfileID(t *testing.T) {
 		"qq_official_interaction.go": "平台适配器",
 		"telegram.go":                "平台适配器",
 		"telegram_join_request.go":   "平台适配器",
+		"telegram_member_join.go":    "平台适配器",
 		"weixin.go":                  "平台适配器",
 		"imessage.go":                "平台适配器",
 		"history_identity.go":        "只用来算角色标签，配置显式传入",
