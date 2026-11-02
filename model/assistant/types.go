@@ -289,8 +289,11 @@ type MessageEvent struct {
 	// carryOver 是这一轮要点名承接的、同一个人更早连发还没回的消息，由回复构建时
 	// 的 claimCarryOver 决定（见 sender_burst.go）；carryOverSet 区分「算过、为空」
 	// 和「没算过」。
-	carryOver              []MessageEvent
-	carryOverSet           bool
+	carryOver    []MessageEvent
+	carryOverSet bool
+	// replyAnchorID 是这一轮回复该挂引用的消息，由回复构建时的 replyAnchorEvent 决定；
+	// 为空就是 MessageID 本身。
+	replyAnchorID          string
 	replyDeliveryMode      replyDeliveryMode
 	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string

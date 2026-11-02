@@ -1,0 +1,82 @@
+package assistant
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+// 同一个人追发并进这一轮后，回复引用挂在最晚那条上，不再挂在最早的触发消息上
+// （生产 2026-11-03：「我听到了」之后连发四条点评，回复讲点评，引用的却是「我听到了」）。
+func replyAnchorTestRuntime(mode ReplyDecorationMode) (*Runtime, *recordingChannel) {
+	channel := &recordingChannel{}
+	p := &topicTestProvider{result: `{"relation":"supplement","confidence":0.99}`}
+	r := NewRuntime(BotConfig{BotAccount: "42", ReplyReferenceMode: mode}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	return r, channel
+}
+
+func mergedReplyTurn(t *testing.T, r *Runtime) (context.Context, MessageEvent, MessageEvent) {
+	t.Helper()
+	root := directedGroupMessage("10001", "user", "我听到了")
+	root.Time = 100
+	ctx, finish := r.beginDirectReply(context.Background(), root)
+	t.Cleanup(finish)
+	follow := directedGroupMessage("10005", "user", "opus 那版最难听")
+	follow.Time = 110
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, follow, follow.RawMessage); !merged {
+		t.Fatal("follow-up not merged")
+	}
+	return ctx, root, follow
+}
+
+func TestReplyReferenceOnQuotesLatestMergedFollowUp(t *testing.T) {
+	withFastSendTiming(t)
+	r, channel := replyAnchorTestRuntime(ReplyDecorationOn)
+	ctx, root, follow := mergedReplyTurn(t, r)
+
+	if err := r.send(ctx, root, "opus 这波编曲翻车了"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != follow.MessageID {
+		t.Fatalf("reply did not quote the latest merged message: %#v", channel.sent)
+	}
+}
+
+func TestReplyReferenceSkipsRecalledFollowUp(t *testing.T) {
+	withFastSendTiming(t)
+	r, channel := replyAnchorTestRuntime(ReplyDecorationOn)
+	ctx, root, follow := mergedReplyTurn(t, r)
+	r.noteRecalledInbound(follow)
+
+	if err := r.send(ctx, root, "收到"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != root.MessageID {
+		t.Fatalf("recalled follow-up should fall back to the trigger: %#v", channel.sent)
+	}
+}
+
+func TestReplyDecorationPromptOffersLatestMergedFollowUp(t *testing.T) {
+	r, _ := replyAnchorTestRuntime(ReplyDecorationAuto)
+	ctx, root, follow := mergedReplyTurn(t, r)
+	root.replyAnchorID = r.replyAnchorEvent(ctx, root).MessageID
+
+	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil)
+	if !strings.Contains(prompt, replyMarkerFor(follow.MessageID)) || strings.Contains(prompt, replyMarkerFor(root.MessageID)) {
+		t.Fatalf("auto prompt should offer only the latest merged message:\n%s", prompt)
+	}
+}
+
+// 模型照候选写了补充那条的 ID：它就在这一轮里，不必等历史落库也算数。
+func TestModelMarkerForMergedFollowUpIsKept(t *testing.T) {
+	withFastSendTiming(t)
+	r, channel := replyAnchorTestRuntime(ReplyDecorationAuto)
+	ctx, root, follow := mergedReplyTurn(t, r)
+
+	if err := r.send(ctx, root, replyMarkerFor(follow.MessageID)+"opus 这波编曲翻车了"); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != follow.MessageID {
+		t.Fatalf("model marker for the merged follow-up was dropped: %#v", channel.sent)
+	}
+}

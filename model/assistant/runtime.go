@@ -4642,6 +4642,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
 	// 点名的和交接过来的是同一批（见 sender_burst.go）。
 	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
+	event.replyAnchorID = r.replyAnchorEvent(ctx, event).MessageID
 	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
@@ -7170,9 +7171,9 @@ func (r *Runtime) applyOutgoingReplyMarker(ctx context.Context, event MessageEve
 		r.recordOutgoingReplyDiscard(ctx, event, "invalid_target")
 		return msg
 	}
-	// 指向当前这条消息时不必再查一次：它一定存在，而历史查询可能因为存储未接入或
-	// 消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
-	if id != strings.TrimSpace(event.MessageID) {
+	// 指向当前这条消息或这一轮并进来的补充时不必再查一次：它们一定存在，而历史查询
+	// 可能因为存储未接入或消息尚未落库而落空，auto 档下会让模型自己写的引用悄悄失效。
+	if id != strings.TrimSpace(event.MessageID) && !r.directReplyIncludesMessage(ctx, id) {
 		quoted, err := r.lookupQuotedMessageWithError(ctx, event, id)
 		if err != nil {
 			reason := "storage_error"
