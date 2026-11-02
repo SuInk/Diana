@@ -285,3 +285,44 @@ func TestReplyTurnContinuesFromLastSuccessAfterFailure(t *testing.T) {
 		}
 	}
 }
+
+// 11-02 生产样本：上一轮回复在记录里是不带标记的正文，下一轮历史区把同一条出站
+// 消息按 reply 段渲染成带引用标记的 assistant 行，续接时不能再追加一遍。
+func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
+	const reply = "对，正好四个全是 y，y 家军实锤了"
+	first := appendTestTurn([]string{"[历史 10:07:03] 池宇健: 我发现活跃的bot都是y开头的"}, "", "【当前需要回复的消息】池宇健: 我发现活跃的bot都是y开头的")
+	transcript := append(append([]llm.Message(nil), first...), llm.Message{Role: llm.RoleAssistant, Content: reply})
+	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(first))
+	if log == nil {
+		t.Fatal("log not created")
+	}
+	second := appendTestTurn([]string{
+		"[历史 10:07:03] 池宇健: 我发现活跃的bot都是y开头的",
+		"[历史 10:07:17] 池宇健: 幽夜 月白 yuki 柚子",
+		"[历史 10:07:58] suakitsu: 你们四个y  是要起y吗？",
+	}, "", "【当前需要回复的消息】suakitsu: 你们四个y  是要起y吗？")
+	second = append(second[:3], append([]llm.Message{{Role: llm.RoleAssistant, Content: `<diana-quote id="im_message_ab257222a6f8"/>` + reply}}, second[3:]...)...)
+	continuation := continueFrom(log, second)
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	for _, message := range continuation.Append {
+		if message.Role == llm.RoleAssistant {
+			t.Fatalf("own reply appended again: %q", message.Content)
+		}
+	}
+	if !strings.Contains(continuation.Append[0].Content, "幽夜 月白 yuki 柚子") {
+		t.Fatalf("new history missing: %#v", continuation.Append)
+	}
+
+	// 真正新的一句话仍然照常追加。
+	second[3].Content = `<diana-quote id="im_message_ab257222a6f8"/>哈哈 y 势力集结了，不过他们四个好像不太想带我玩`
+	continuation = continueFrom(log, second)
+	found := false
+	for _, message := range continuation.Append {
+		found = found || message.Role == llm.RoleAssistant && message.Content == second[3].Content
+	}
+	if !found {
+		t.Fatalf("new reply missing: %#v", continuation.Append)
+	}
+}

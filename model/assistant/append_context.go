@@ -252,12 +252,12 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 		for _, call := range message.ToolCalls {
 			if call.Name == agent.FinalizeToolName {
 				if text, _ := call.Arguments["text"].(string); strings.TrimSpace(text) != "" {
-					log.sent[strings.TrimSpace(text)] = true
+					log.sent[appendContextSentKey(text)] = true
 				}
 			}
 		}
 		if message.Role == llm.RoleAssistant && strings.TrimSpace(message.Content) != "" {
-			log.sent[strings.TrimSpace(message.Content)] = true
+			log.sent[appendContextSentKey(message.Content)] = true
 		}
 		if isHistoryLine(content) || message.Role == llm.RoleAssistant {
 			continue
@@ -276,6 +276,17 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 		}
 	}
 	return log
+}
+
+// appendContextSentKey 是判断机器人回复是否已在记录里的键，去掉开头的引用标记。
+// 记录里那一轮的回复是不带标记的正文，下一轮历史区把同一条出站消息按入库的
+// reply 段渲染成「<diana-quote id=…/>正文」，原样比对不上就会再追加一遍：11-01～02
+// 生产主回复请求里约一成带着这种一句两遍的机器人发言，同期还有一轮把 76 秒前的
+// 旧回复加上引用原样重发到了群里。
+// 只按语法去掉，不校验 ID：请求里的 ID 可能已经换成了 im_message_ 别名。
+func appendContextSentKey(text string) string {
+	_, rest, _ := consumeOutgoingReplyControl(text)
+	return strings.TrimSpace(rest)
 }
 
 // isHistoryLine 认出群聊历史行（stableGroupHistory 渲染的每条消息都以它开头）。
@@ -335,7 +346,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		}
 		switch {
 		case isHistoryLine(content):
-		case message.Role == llm.RoleAssistant && log.sent[strings.TrimSpace(content)]:
+		case message.Role == llm.RoleAssistant && log.sent[appendContextSentKey(content)]:
 			// 机器人自己的回复已经在记录里了（普通发言，或老记录里的 send 调用）。
 			continue
 		case message.Role == llm.RoleAssistant:
