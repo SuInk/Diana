@@ -5075,7 +5075,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 接着它续，失败那条消息会作为新历史追加进去。以前直接清空，下一轮只能整段
 			// 重新组装（10-29～30 线上 56 次失败，每次都让下一轮多付一整份未命中）。
 			if err == nil {
-				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey))
+				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, r.appendContexts.get(appendKey)))
 			}
 			r.recordAppendContextDecision(ctx, appendDecision, continuation, resp, err)
 		}

@@ -247,6 +247,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, req.Messages...)
 	}
 
+	var promptTokens int64
+	for _, message := range messages {
+		promptTokens += llm.EstimateMessageTokens(message)
+	}
+
 	// lastRequest / lastResponse 是最后一次实际发出的请求和它的回复，收尾时拼成
 	// Response.Transcript 给下一轮续接。
 	var lastRequest llm.GenerateRequest
@@ -335,6 +340,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Transcript:      transcriptAfter(lastRequest, lastResponse, lastText),
 			ConversationKey: convKey,
 			Continued:       continued,
+			PromptTokens:    promptTokens,
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:         traceID,

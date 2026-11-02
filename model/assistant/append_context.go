@@ -35,6 +35,11 @@ import (
 // Runner 的系统提示、契约、工具定义变了也重开。记录只在内存里，进程重启后第一轮重新组装。
 
 // appendContextGrowthLimit 是续接请求相对这一轮完整组装的长度上限倍数。
+//
+// 「完整组装」要算上 Runner 自己加的系统提示、已加载工具契约和发言者工具段（记在
+// overhead 里）。以前只拿助手这一侧的消息比，而续接前缀是整份请求：11-02 生产里
+// 这两块各占一半，前缀续一两轮就超过「两倍」，46% 的主回复因 too_long 重新组装，
+// 首步命中 swe-2 从续接时的 53% 掉到 19%、terra 从 74% 掉到 34%。
 const appendContextGrowthLimit = 2
 
 type appendContextLog struct {
@@ -48,6 +53,9 @@ type appendContextLog struct {
 	sent   map[string]bool
 	latest map[string]string
 	memory map[string]bool
+	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
+	// 由两边之差得出，续接期间沿用。
+	overhead int64
 }
 
 // appendContextVerifyReminder 每轮续接都插在当前消息前面，不参与「和上一版一样就
@@ -224,12 +232,20 @@ func appendContextHeadKey(messages []llm.Message) string {
 	return hex.EncodeToString(hash.Sum(nil)[:16])
 }
 
-func newAppendContextLog(resp *agent.Response, headKey string) *appendContextLog {
+// newAppendContextLog 记下这一轮的请求供下一轮续接。fullTokens 是这一轮助手侧完整
+// 组装的估算；previous 是续接所接的那份记录，用来沿用 overhead。
+func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64, previous *appendContextLog) *appendContextLog {
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
 	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey,
 		seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{}, memory: map[string]bool{}}
+	switch {
+	case !resp.Continued:
+		log.overhead = max(0, resp.PromptTokens-fullTokens)
+	case previous != nil:
+		log.overhead = previous.overhead
+	}
 	for _, message := range resp.Transcript {
 		content := appendContextText(message)
 		log.seen[content] = true
@@ -332,7 +348,8 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 	appended = append(appended[:len(appended)-1:len(appended)-1],
 		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder}, appended[len(appended)-1])
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)
-	if decision.fullTokens > 0 && decision.prefixTokens+decision.appendTokens > appendContextGrowthLimit*decision.fullTokens {
+	decision.overhead = log.overhead
+	if decision.fullTokens > 0 && decision.prefixTokens+decision.appendTokens > appendContextGrowthLimit*(decision.fullTokens+log.overhead) {
 		decision.reason = "too_long"
 		return nil, decision
 	}
@@ -347,6 +364,7 @@ type appendContextDecision struct {
 	fullTokens   int64
 	prefixTokens int64
 	appendTokens int64
+	overhead     int64
 }
 
 // recordAppendContextDecision 在 Runner 跑完后补上 Runner 那一侧的结论：assistant 交了
@@ -354,12 +372,13 @@ type appendContextDecision struct {
 // 一眼看出是哪一段变了。
 func (r *Runtime) recordAppendContextDecision(ctx context.Context, decision appendContextDecision, continuation *agent.Continuation, resp *agent.Response, runErr error) {
 	metadata := map[string]any{
-		"phase":         "append_context",
-		"continued":     false,
-		"reason":        decision.reason,
-		"full_tokens":   decision.fullTokens,
-		"prefix_tokens": decision.prefixTokens,
-		"append_tokens": decision.appendTokens,
+		"phase":           "append_context",
+		"continued":       false,
+		"reason":          decision.reason,
+		"full_tokens":     decision.fullTokens,
+		"prefix_tokens":   decision.prefixTokens,
+		"append_tokens":   decision.appendTokens,
+		"overhead_tokens": decision.overhead,
 	}
 	switch {
 	case runErr != nil:
