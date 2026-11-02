@@ -309,3 +309,62 @@ func TestCodeModeReadCacheRejectsFailedPartialAndOversizedResults(t *testing.T) 
 		t.Fatal("valid page not cached")
 	}
 }
+
+type codeModeBlobTool struct{ output string }
+
+func (*codeModeBlobTool) Name() string                                          { return "usage_report" }
+func (*codeModeBlobTool) Description() string                                   { return "test usage report" }
+func (t *codeModeBlobTool) Run(context.Context, map[string]any) (string, error) { return t.output, nil }
+
+// 生产 llm_usage 返回 16 万字 JSON，子调用拿到的是截到 2 万字再拼一句说明的字符串：
+// r.groups 为空、Object.keys(r) 列出逐字下标撑爆 32KiB 输出。脚本要拿到完整对象。
+func TestCodeModeChildGetsUntruncatedJSON(t *testing.T) {
+	script := testCodeModeTool(t)
+	groups := make([]map[string]any, 400)
+	for index := range groups {
+		groups[index] = map[string]any{"group_id": index, "usage": map[string]any{"input_tokens": 1000, "note": strings.Repeat("x", 200)}}
+	}
+	data, _ := json.Marshal(map[string]any{"groups": groups})
+	if len(data) <= MaxAllowedToolOutputChars {
+		t.Fatalf("fixture too small: %d", len(data))
+	}
+	client := &batchClient{first: []llm.ToolCall{{ID: "script", Name: codeModeToolName, Arguments: map[string]any{"code": `const r = await tools.usage_report({}); let sum = 0; for (const g of r.groups) sum += g.usage.input_tokens; return {keys: Object.keys(r), groups: r.groups.length, sum};`}}}}
+	runner, _ := NewRunner(client, Config{MaxSteps: 3}, NewToolRegistry(script, &codeModeBlobTool{output: string(data)}))
+	response, err := runner.Run(t.Context(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "sum usage"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := toolResults(client.requests[1])
+	if len(results) != 1 || !strings.Contains(results[0].Content, `{"keys":["groups"],"groups":400,"sum":400000}`) {
+		t.Fatalf("script did not see the full object: %+v", results)
+	}
+	for _, step := range response.Steps {
+		if step.Tool == "usage_report" && len([]rune(step.Output)) > MaxAllowedToolOutputChars+200 {
+			t.Fatalf("audit output must stay truncated: %d", len(step.Output))
+		}
+	}
+}
+
+func TestCodeModeChildResultOverLimitIsCatchable(t *testing.T) {
+	script := testCodeModeTool(t)
+	client := &batchClient{first: []llm.ToolCall{{ID: "script", Name: codeModeToolName, Arguments: map[string]any{"code": `try { await tools.usage_report({}); return 'ok'; } catch (e) { return e.message; }`}}}}
+	runner, _ := NewRunner(client, Config{MaxSteps: 3}, NewToolRegistry(script, &codeModeBlobTool{output: strings.Repeat("y", codeModeChildResultBytes+1)}))
+	if _, err := runner.Run(t.Context(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	results := toolResults(client.requests[1])
+	if len(results) != 1 || !strings.Contains(results[0].Content, "over the 524288-byte script limit") {
+		t.Fatalf("limit error not surfaced to script: %+v", results)
+	}
+}
+
+func TestCompactCodeModeValue(t *testing.T) {
+	got := compactCodeModeValue(json.RawMessage(`{"attempts":null,"rows":[{"a":null,"b":"<x> & y"},null],"n":12345678901234567890,"ok":false}`))
+	want := `{"rows":[{"b":"<x> & y"},null],"n":12345678901234567890,"ok":false}`
+	if string(got) != want {
+		t.Fatalf("compact = %s, want %s", got, want)
+	}
+	if string(compactCodeModeValue(json.RawMessage(`"plain"`))) != `"plain"` {
+		t.Fatal("scalar changed")
+	}
+}
