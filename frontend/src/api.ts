@@ -737,6 +737,8 @@ export interface GroupGovernance {
   strike_reset_minutes?: number;
   warning_message?: string;
   member_leave_audit_enabled?: boolean;
+  /** 成员编辑已发消息时把改前改后私聊发给主人；目前只有 Telegram 推送编辑。 */
+  message_edit_audit_enabled?: boolean;
 }
 
 export interface BotGroupConfig extends SendRetrySettings {

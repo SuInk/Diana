@@ -68,6 +68,9 @@ type GroupGovernance struct {
 	WarningMessage string `json:"warning_message,omitempty"`
 	// MemberLeaveAuditEnabled 开启退群/踢人审计：有人离开本群时私聊通知主人。
 	MemberLeaveAuditEnabled bool `json:"member_leave_audit_enabled,omitempty"`
+	// MessageEditAuditEnabled 开启消息编辑审计：有人编辑了已发出的消息时，把改前改后私聊发给主人。
+	// 目前只有 Telegram 会推送编辑。
+	MessageEditAuditEnabled bool `json:"message_edit_audit_enabled,omitempty"`
 }
 
 // Normalized 补默认值并钳到合法范围。非法正则在这里静默丢掉，保存时的 Validate 负责报错。

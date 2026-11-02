@@ -91,6 +91,15 @@
           <span class="switch-label">退群/踢人时私聊通知主人</span>
         </label>
       </div>
+
+      <div v-if="platform === 'telegram'" class="field wide">
+        <label class="switch">
+          <input type="checkbox" :checked="gov.message_edit_audit_enabled ?? false" @change="patch({ message_edit_audit_enabled: checkedOf($event) })" />
+          <span class="track" aria-hidden="true"></span>
+          <span class="switch-label">成员编辑消息时私聊通知主人</span>
+        </label>
+        <span class="hint">通知里带改前和改后的内容，主人自己改的不通知。机器人要是群管理员（或在 BotFather 关掉隐私模式后重新拉进群）才收得到普通消息的编辑；主人也要先私聊过机器人，Telegram 才允许它发私聊。</span>
+      </div>
     </div>
   </div>
 </template>
@@ -99,7 +108,7 @@
 import { computed } from "vue";
 import type { GroupGovernance } from "../api";
 
-const props = defineProps<{ modelValue?: GroupGovernance | null; idPrefix: string }>();
+const props = defineProps<{ modelValue?: GroupGovernance | null; idPrefix: string; platform?: string }>();
 const emit = defineEmits<{ "update:modelValue": [GroupGovernance] }>();
 
 const gov = computed<GroupGovernance>(() => props.modelValue ?? {});
