@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -19,14 +17,10 @@ import (
 
 func testCodeModeTool(t *testing.T) *codeModeTool {
 	t.Helper()
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("Node is unavailable")
-	}
-	tool, err := newCodeModeTool(t.Context())
+	tool, err := newCodeModeTool()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = tool.Close() })
 	return tool
 }
 
@@ -140,29 +134,20 @@ func TestCodeModeDisabledOperationStillDenied(t *testing.T) {
 	}
 }
 
-func TestCodeModeRegistryFallbackWithoutNode(t *testing.T) {
+func TestCodeModeRegistryNeedsNoNode(t *testing.T) {
+	// The VM is embedded: an empty PATH (release packages, Termux, Windows) still
+	// gets Code Mode alongside the ordinary tools.
 	t.Setenv("PATH", t.TempDir())
 	registry, err := NewDefaultToolRegistry(Config{WorkDir: t.TempDir(), CodeModeEnabled: true, BrowserToolsDisabled: true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer registry.Close()
-	if _, ok := registry.Get(codeModeToolName); ok {
-		t.Fatal("Code Mode exposed without Node")
+	if _, ok := registry.Get(codeModeToolName); !ok {
+		t.Fatal("Code Mode missing without Node")
 	}
 	if _, ok := registry.Get("read_file"); !ok {
 		t.Fatal("ordinary tools must remain available")
-	}
-}
-
-func TestCodeModeRegistryOwnsRuntimeCleanup(t *testing.T) {
-	script := testCodeModeTool(t)
-	registry := NewToolRegistry(script)
-	if err := registry.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(script.runtime.Host); !os.IsNotExist(err) {
-		t.Fatalf("runtime was not cleaned up: %v", err)
 	}
 }
 

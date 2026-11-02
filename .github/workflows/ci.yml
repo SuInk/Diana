@@ -124,15 +124,16 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache-dependency-path: go.sum
 
-      - name: Setup Code Mode Node runtime
+      # Node only checks that the embedded QuickJS WASM and prelude match the
+      # locked npm packages; the Go runtime itself never runs Node.
+      - name: Setup Node for Code Mode embed check
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Verify embedded Code Mode runtime
+      - name: Verify embedded Code Mode files
         run: |
           npm ci --ignore-scripts --prefix scripts/codemode
-          npm test --prefix scripts/codemode
           npm run check --prefix scripts/codemode
 
       - name: Verify gofmt

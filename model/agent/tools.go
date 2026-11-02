@@ -142,9 +142,8 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	}
 	registry := NewToolRegistry()
 	if cfg.CodeModeEnabled {
-		if tool, err := newCodeModeTool(context.Background()); err == nil {
+		if tool, err := newCodeModeTool(); err == nil {
 			registry.Register(tool)
-			registry.RegisterCloser(tool)
 		}
 	}
 	protected := agentProtectedFiles(cfg)
