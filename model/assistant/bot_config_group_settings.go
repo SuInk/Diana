@@ -41,15 +41,15 @@ func (t *dianaBotConfigTool) parseGroupSettings(raw any, scope string, group Gro
 				}
 			}
 			group.GroupTriggers = words
-		case "trigger_mode":
+		case "trigger_word_mode", "trigger_mode": // trigger_mode 是旧名，容易和接话的 proactive_mode 混淆
 			mode, ok := value.(string)
 			if !ok {
-				return group, fmt.Errorf("trigger_mode 必须是文本")
+				return group, fmt.Errorf("trigger_word_mode 必须是文本")
 			}
 			switch AliasTriggerMode(mode) {
 			case "", AliasTriggerLoose, AliasTriggerSmart, AliasTriggerStrict:
 			default:
-				return group, fmt.Errorf("trigger_mode 必须是 loose、smart、strict 或空字符串（跟随机器人）")
+				return group, fmt.Errorf("trigger_word_mode 必须是 loose、smart、strict 或空字符串（跟随机器人）")
 			}
 			group.GroupTriggerMode = AliasTriggerMode(mode)
 		case "plugins":
@@ -90,10 +90,10 @@ func (t *dianaBotConfigTool) parseGroupSettings(raw any, scope string, group Gro
 
 func groupSettingsSchema() map[string]any {
 	schema := toolObjectSchema(nil, map[string]any{
-		"enabled":      toolBoolParam("本群启用或停用；停用后行为沿用 WebUI 群设置。"),
-		"triggers":     toolStringArrayParam("替换本群触发词，最多 50 个、每个 100 字；空数组恢复跟随机器人。"),
-		"trigger_mode": toolEnumParam("触发词匹配模式；空字符串恢复继承。", "loose", "smart", "strict", ""),
-		"plugins":      map[string]any{"type": "object", "description": "本群插件：键用 get 返回的 ID；true 开、false 关、null 继承。不支持联网搜索和内部能力。", "additionalProperties": map[string]any{"type": []string{"boolean", "null"}}},
+		"enabled":           toolBoolParam("本群启用或停用；停用后行为沿用 WebUI 群设置。"),
+		"triggers":          toolStringArrayParam("替换本群触发词，最多 50 个、每个 100 字；空数组恢复跟随机器人。"),
+		"trigger_word_mode": toolEnumParam("触发词匹配档位，只管触发词怎样算命中；不是主动接话的 proactive_mode。空字符串恢复继承。", "loose", "smart", "strict", ""),
+		"plugins":           map[string]any{"type": "object", "description": "本群插件：键用 get 返回的 ID；true 开、false 关、null 继承。不支持联网搜索和内部能力。", "additionalProperties": map[string]any{"type": []string{"boolean", "null"}}},
 	})
 	schema["description"] = "当前群启停、触发词和插件开关；只提交要改的项，不能用于机器人级。"
 	return schema
@@ -118,5 +118,5 @@ func (t *dianaBotConfigTool) groupSettingsView(scope string, group GroupConfig, 
 			plugins = append(plugins, map[string]any{"id": id, "name": state.Manifest.Name, "enabled": t.runtime.plugins.EnabledWithOverrides(id, overrides), "group_override": override, "supported": pluginSupportsPlatform(state.Manifest, t.event.Platform)})
 		}
 	}
-	return map[string]any{"enabled": group.Enabled, "triggers": effective.GroupTriggers, "trigger_mode": normalizeAliasTriggerMode(effective.GroupTriggerMode), "trigger_overrides": group.GroupTriggers, "trigger_mode_override": strings.TrimSpace(string(group.GroupTriggerMode)), "plugins": plugins}
+	return map[string]any{"enabled": group.Enabled, "triggers": effective.GroupTriggers, "trigger_word_mode": normalizeAliasTriggerMode(effective.GroupTriggerMode), "trigger_overrides": group.GroupTriggers, "trigger_word_mode_override": strings.TrimSpace(string(group.GroupTriggerMode)), "plugins": plugins}
 }

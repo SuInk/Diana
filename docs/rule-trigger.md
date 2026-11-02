@@ -12,4 +12,6 @@
 
 与语义模式相比，未点名的提问在 0% 时不会被主动识别；概率大于 0 时也不会先理解话题是否适合插话。以省 Token 为主可先用 0%，需要偶尔参与群聊再逐步提高。
 
+在聊天里，主人或实时核验的群管理员可以让机器人用 `bot_config` 切换：`proactive_mode=rules` / `semantic` 和 `rule_chance`，群里默认只改本群，`scope=bot` 改机器人默认值。机器人的能力说明（`capabilities` 检索「触发」「省 Token」）也会讲清两层触发，不再只回答触发词档位。
+
 配置保存在 `participation.trigger_mode`（`semantic` / `rules`）和 `participation.rule_chance`（0–100 的整数百分比）中，复用 `participation.cooldown_seconds`。
