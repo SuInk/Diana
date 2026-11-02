@@ -293,6 +293,7 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
+		defer recoverGoroutinePanic("member command watchdog")
 		watchMemberCommand(cmd.Process.Pid, dir, limits, stopWatch, func(reason string) {
 			exceeded <- reason
 			cancel()
