@@ -3100,9 +3100,9 @@ const stickerReplyOrderOptions: AppSelectOption[] = [
 ];
 
 const replyReferenceModeOptions: AppSelectOption[] = [
+  { value: "auto", label: "让模型自己决定（默认）" },
   { value: "on", label: "总是引用" },
-  { value: "off", label: "从不引用" },
-  { value: "auto", label: "让模型自己决定" }
+  { value: "off", label: "从不引用" }
 ];
 
 const disclosureOptions: AppSelectOption[] = [
@@ -3117,9 +3117,9 @@ const welcomeModeOptions: AppSelectOption[] = [
 ];
 
 const mentionUserModeOptions: AppSelectOption[] = [
+  { value: "auto", label: "让模型自己决定（默认）" },
   { value: "on", label: "总是 @" },
-  { value: "off", label: "从不 @" },
-  { value: "auto", label: "让模型自己决定" }
+  { value: "off", label: "从不 @" }
 ];
 
 
