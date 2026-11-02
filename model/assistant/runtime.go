@@ -5190,6 +5190,8 @@ var speakerVariantTools = []string{
 	dianaGitHubToolName,
 	dianaSubscriptionToolName,
 	dianaCrossSessionToolName,
+	// 主人和成员各是一份同名 run_command，描述不同。
+	"run_command",
 	"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs", "browser_screenshot",
 }
 

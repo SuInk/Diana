@@ -116,6 +116,11 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	// 所有人都要能用：它的用途就是核实「我是主人」这类声称，只给主人用等于没用。
 	// 它只读运行时判定、不改任何状态，对非主人开放没有额外风险。
 	registry.Register(&dianaIdentityCheckTool{runtime: r, event: event})
+	// 群成员版 run_command 和主人的同名，但关在成员沙盒里；名单由
+	// allowedAgentToolNamesForEvent 按同一个条件放行。
+	if !relationship.Owner && r.memberCommandExposed(event) {
+		registry.Register(newDianaMemberCommandTool(r, event))
+	}
 	for _, tool := range extraTools {
 		registry.Register(tool)
 	}
@@ -382,7 +387,8 @@ func (r *Runtime) senderGroupRole(ctx context.Context, event MessageEvent) strin
 }
 
 // memberSkills 挑出放给群成员的 skill。正文之外的脚本资源不跟着开放：成员没有
-// run_command 和 read_file，skill 里让跑脚本的段落在成员会话里执行不了。
+// read_file，成员版 run_command 也读不到 skill 目录，skill 里让跑脚本的段落在成员
+// 会话里执行不了。
 func memberSkills(source []agent.SkillMetadata, extensionIDs []string) []agent.SkillMetadata {
 	if len(source) == 0 || len(extensionIDs) == 0 {
 		return nil
@@ -404,6 +410,9 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	allowed := relationship.allowedAgentToolNames()
 	if allowed != nil && r != nil && r.workspaceGroupScope(event) != "" {
 		allowed[dianaSaveToWorkspaceToolName] = true
+	}
+	if allowed != nil && r.memberCommandExposed(event) {
+		allowed["run_command"] = true
 	}
 	if allowed == nil || r == nil || r.plugins == nil {
 		return allowed
@@ -440,7 +449,8 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 		BuiltinSkills:       r.botProtocolBuiltinSkills(event),
 		ReservedSkillNames:  []string{"platform", "bot-protocol"},
 		// run_command 只给主人，而且只在沙盒真的生效时给：它不过审核，没有沙盒时
-		// 就是一条绕开 host_access 审核的路。成员的工具名单本来就不收录它。
+		// 就是一条绕开 host_access 审核的路。成员用的是另一份同名工具，见
+		// newDianaMemberCommandTool。
 		CommandEnabled:   owner && commandSandboxed(cfg.AgentCommandSandbox),
 		CommandTimeoutMS: cfg.AgentCommandTimeoutMS,
 		// 这两项以前在 agent.Config 里存在但没人赋值，于是永远是 auto，
@@ -557,6 +567,13 @@ func logCommandExecutionPosture(configs []BotConfig) {
 		if cfg.agentSafeMode() {
 			log.Printf("diana agent: 配置 %q 处于安全模式，run_command、编码代理、交互式浏览器和 MCP 工具都不启用", cfg.ID)
 			continue
+		}
+		if cfg.AgentMemberCommandEnabled {
+			if kind, reason := agent.MemberCommandAvailable(); kind != "" {
+				log.Printf("diana agent: 配置 %q 的群成员 run_command 已打开（成员沙盒 %s，断网、只写个人目录）", cfg.ID, kind)
+			} else {
+				log.Printf("diana agent: 配置 %q 打开了群成员 run_command，但成员沙盒不可用，成员调用会被拒绝：%s", cfg.ID, reason)
+			}
 		}
 		status := agent.DescribeCommandSandbox(cfg.AgentCommandSandbox)
 		key := status.Mode + "\x00" + status.Effective() + "\x00" + status.Reason
