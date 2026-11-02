@@ -37,7 +37,7 @@ func appendTestLog(t *testing.T, messages []llm.Message, reply string) *appendCo
 	transcript := append(append([]llm.Message(nil), messages...),
 		llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c1", Name: agent.FinalizeToolName, Arguments: map[string]any{"text": reply}}}},
 		llm.Message{Role: llm.RoleTool, ToolCallID: "c1", ToolName: agent.FinalizeToolName, Content: "已发送"})
-	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(messages))
+	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(messages), estimateMessagesTokens(messages), nil)
 	if log == nil {
 		t.Fatal("log not created")
 	}
@@ -85,6 +85,30 @@ func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
 	log.prefix = append(log.prefix, llm.Message{Role: llm.RoleUser, Content: strings.Repeat("旧内容。", 3000)})
 	if continuation, decision := appendContextContinuation(log, long); continuation != nil || decision.reason != "too_long" {
 		t.Fatal("a prefix past the growth limit must restart")
+	}
+}
+
+// 续接前缀是 Runner 发出的整份请求，含它自己加的系统提示、契约和工具段；上限要
+// 按同一口径比，否则这些占一半时续一两轮就判 too_long（11-02 生产 46% 的主回复）。
+func TestAppendContextGrowthCountsRunnerOverhead(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
+	full := estimateMessagesTokens(first)
+	runnerPart := llm.Message{Role: llm.RoleSystem, Content: strings.Repeat("工具契约。", 2000)}
+	overhead := llm.EstimateMessageTokens(runnerPart)
+	transcript := append([]llm.Message{runnerPart}, first...)
+	transcript = append(transcript, llm.Message{Role: llm.RoleAssistant, Content: "在的"})
+	fresh := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k", PromptTokens: full + overhead}, appendContextHeadKey(first), full, nil)
+	if fresh.overhead != overhead {
+		t.Fatalf("overhead = %d, want %d", fresh.overhead, overhead)
+	}
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 甲: 在吗"}, "", "甲: 今天吃什么")
+	continuation, decision := appendContextContinuation(fresh, second)
+	if continuation == nil {
+		t.Fatalf("a prefix about as long as one full request must continue, reason = %q", decision.reason)
+	}
+	carried := newAppendContextLog(&agent.Response{Transcript: append(continuation.Prefix, continuation.Append...), ConversationKey: "k", Continued: true, PromptTokens: decision.prefixTokens + decision.appendTokens}, appendContextHeadKey(second), decision.fullTokens, fresh)
+	if carried.overhead != overhead {
+		t.Fatalf("continued run must keep the overhead from the fresh one: %d", carried.overhead)
 	}
 }
 

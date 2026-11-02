@@ -211,6 +211,10 @@ type Response struct {
 	ConversationKey string `json:"-"`
 	// Continued 表示这一轮是在上一轮的请求后面续接的。
 	Continued bool `json:"continued,omitempty"`
+	// PromptTokens 是这一轮第一次请求的消息估算 token 数，含 Runner 自己加的系统
+	// 提示、已加载契约和尾部工具段。调用方只看得到自己组装的那部分，续接时拿它
+	// 判断请求比完整组装长了多少。
+	PromptTokens int64 `json:"-"`
 	// FinalizeFields 是模型在 send 上填的 Config.FinalizeFields 字段，没填的不出现。
 	// Silent 时同样会带：调用方可以据此「不说话、只做字段表达的事」。
 	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`
