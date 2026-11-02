@@ -231,14 +231,13 @@ func memoryRetrievalText(event MessageEvent, current string) string {
 
 func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, query string, now time.Time) []StructuredMemoryItem {
 	analysis := analyzeStructuredMemoryQuery(query)
-	documentTerms := make([]map[string]struct{}, len(items))
+	// 文档频率只数查询里有的词，所以每条记忆只挑出命中的查询词；完整词集只有
+	// 去重要用，留给真正进了候选的那几条再算。以前每条记忆都切一整套 n-gram，
+	// 回放里这一处占了全部内存分配的三成。
 	documentFrequency := make(map[string]int)
-	for index, item := range items {
-		documentTerms[index] = structuredMemoryTerms(structuredMemoryDocument(item))
-		for term := range documentTerms[index] {
-			if _, relevant := analysis.terms[term]; relevant {
-				documentFrequency[term]++
-			}
+	for _, item := range items {
+		for term := range structuredMemoryMatchedTerms(structuredMemoryDocument(item), analysis.terms) {
+			documentFrequency[term]++
 		}
 	}
 
@@ -248,7 +247,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 	}
 	candidates := make([]scoredMemory, 0, len(items))
 	core := make([]scoredMemory, 0, maximumCoreMemoryItems)
-	for index, item := range items {
+	for _, item := range items {
 		lexical, strongestField, exactField := structuredMemoryLexicalScore(item, analysis, documentFrequency, len(items))
 		score := item.Importance*0.18 + item.Confidence*0.09 + lexical*0.58
 		reasons := make([]string, 0, 5)
@@ -325,10 +324,10 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		if coreCurrentMemory {
 			// 常驻档：长期交互要求和高置信要害事实不该跟检索结果抢名额。「回复永远
 			// 带颜文字」这类要求只在话题相关时才生效是错的，它本来就与话题无关。
-			core = append(core, scoredMemory{item: item, terms: documentTerms[index]})
+			core = append(core, scoredMemory{item: item, terms: structuredMemoryTerms(structuredMemoryDocument(item))})
 			continue
 		}
-		candidates = append(candidates, scoredMemory{item: item, terms: documentTerms[index]})
+		candidates = append(candidates, scoredMemory{item: item, terms: structuredMemoryTerms(structuredMemoryDocument(item))})
 	}
 	sort.SliceStable(core, func(left, right int) bool {
 		return core[left].item.RetrievalScore > core[right].item.RetrievalScore
@@ -571,10 +570,26 @@ func memoryKindLabel(kind MemoryKind) string {
 
 func structuredMemoryTerms(text string) map[string]struct{} {
 	terms := make(map[string]struct{})
-	for term := range weightedStructuredMemoryTerms(text) {
+	eachStructuredMemoryTerm(text, func(term string, _ float64, _ bool) {
 		terms[term] = struct{}{}
-	}
+	})
 	return terms
+}
+
+// structuredMemoryMatchedTerms 是 structuredMemoryTerms 与 query 的交集：打分只问
+// 查询词在不在，不必为一条记忆建完整词集。
+func structuredMemoryMatchedTerms(text string, query map[string]float64) map[string]struct{} {
+	var matched map[string]struct{}
+	eachStructuredMemoryTerm(text, func(term string, _ float64, _ bool) {
+		if _, ok := query[term]; !ok {
+			return
+		}
+		if matched == nil {
+			matched = make(map[string]struct{})
+		}
+		matched[term] = struct{}{}
+	})
+	return matched
 }
 
 type structuredMemoryQueryAnalysis struct {
@@ -642,7 +657,7 @@ func structuredMemoryLexicalScore(item StructuredMemoryItem, query structuredMem
 	strongestWeight := 0.0
 	exactField := ""
 	for index, field := range fields {
-		fieldTerms[index] = structuredMemoryTerms(field.value)
+		fieldTerms[index] = structuredMemoryMatchedTerms(field.value, query.terms)
 		normalized := normalizeStructuredMemoryText(field.value)
 		if exactField == "" && len([]rune(normalized)) >= 2 && strings.Contains(query.normalized, normalized) {
 			exactField = field.name
@@ -705,27 +720,51 @@ func structuredMemorySimilarity(left, right map[string]struct{}) float64 {
 
 func weightedStructuredMemoryTerms(text string) map[string]float64 {
 	terms := make(map[string]float64)
-	var ascii strings.Builder
-	cjk := make([]rune, 0, 16)
-	flushASCII := func() {
-		if ascii.Len() > 1 {
-			terms[strings.ToLower(ascii.String())] = 1.1
+	eachStructuredMemoryTerm(text, func(term string, weight float64, dictionary bool) {
+		// 词典词压过同长度的 n-gram 碎片:排序时真实词先被选进检索词表,
+		// 「爪很」这类跨词二字组沉底。词典没收录的词靠 n-gram 兜底。
+		if dictionary && weight <= terms[term] {
+			return
 		}
-		ascii.Reset()
+		terms[term] = weight
+	})
+	return terms
+}
+
+// eachStructuredMemoryTerm 把文本切成检索词逐个交给 yield：ASCII 连续段整段一个词，
+// 中日韩连续段切一二三字组，再加词典词（dictionary 为 true）。词都是小写后文本的
+// 子串，不为每个 n-gram 另分配字符串。
+func eachStructuredMemoryTerm(text string, yield func(term string, weight float64, dictionary bool)) {
+	lower := strings.ToLower(text)
+	asciiStart := -1
+	var offsetBuffer [64]int
+	cjk := offsetBuffer[:0] // 当前中日韩连续段里每个字的起始字节
+	flushASCII := func(end int) {
+		if asciiStart >= 0 && end-asciiStart > 1 {
+			yield(lower[asciiStart:end], 1.1, false)
+		}
+		asciiStart = -1
 	}
-	flushCJK := func() {
-		for index, value := range cjk {
-			terms[string(value)] = 0.18
+	flushCJK := func(end int) {
+		if len(cjk) == 0 {
+			return
+		}
+		boundary := func(index int) int {
+			if index < len(cjk) {
+				return cjk[index]
+			}
+			return end
+		}
+		for index, start := range cjk {
+			yield(lower[start:boundary(index+1)], 0.18, false)
 			if index+2 <= len(cjk) {
-				terms[string(cjk[index:index+2])] = 1
+				yield(lower[start:boundary(index+2)], 1, false)
 			}
 			if index+3 <= len(cjk) {
-				terms[string(cjk[index:index+3])] = 1.25
+				yield(lower[start:boundary(index+3)], 1.25, false)
 			}
 		}
-		// 词典词压过同长度的 n-gram 碎片:排序时真实词先被选进检索词表,
-		// 「爪很」这类跨词二字组沉底。词典没收录的词靠上面的 n-gram 兜底。
-		for _, word := range cjkSegmentWords(string(cjk)) {
+		for _, word := range cjkSegmentWords(lower[cjk[0]:end]) {
 			// 档位要整体压过 n-gram 的最高档 1.25,否则「凤爪很」这种
 			// 三字碎片会排在真实二字词前面。
 			weight := 1.35
@@ -735,28 +774,27 @@ func weightedStructuredMemoryTerms(text string) map[string]float64 {
 			case length == 3:
 				weight = 1.45
 			}
-			if weight > terms[word] {
-				terms[word] = weight
-			}
+			yield(word, weight, true)
 		}
 		cjk = cjk[:0]
 	}
-	for _, value := range strings.ToLower(text) {
+	for index, value := range lower {
 		switch {
 		case value <= unicode.MaxASCII && (unicode.IsLetter(value) || unicode.IsDigit(value)):
-			flushCJK()
-			ascii.WriteRune(value)
+			flushCJK(index)
+			if asciiStart < 0 {
+				asciiStart = index
+			}
 		case unicode.In(value, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul):
-			flushASCII()
-			cjk = append(cjk, value)
+			flushASCII(index)
+			cjk = append(cjk, index)
 		default:
-			flushASCII()
-			flushCJK()
+			flushASCII(index)
+			flushCJK(index)
 		}
 	}
-	flushASCII()
-	flushCJK()
-	return terms
+	flushASCII(len(lower))
+	flushCJK(len(lower))
 }
 
 func structuredMemorySearchTerms(text string, limit int) []string {
