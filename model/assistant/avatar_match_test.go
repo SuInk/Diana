@@ -214,9 +214,15 @@ type avatarDirectoryChannel struct {
 	*recordingChannel
 	members     map[string][]byte
 	avatarCalls atomic.Int64
+	// hiddenMembers 模拟开了「隐藏成员」的 Telegram 超级群：机器人不是管理员，
+	// 问谁在不在群都只能拿到「没权限查」。
+	hiddenMembers bool
 }
 
 func (c *avatarDirectoryChannel) GroupMember(_ context.Context, groupID, userID string) (OneBotGroupMemberInfo, error) {
+	if c.hiddenMembers {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("telegram: %w", ErrMembershipUnverifiable)
+	}
 	if _, ok := c.members[userID]; !ok {
 		return OneBotGroupMemberInfo{}, fmt.Errorf("不是群成员")
 	}

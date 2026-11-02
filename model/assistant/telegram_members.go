@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -139,6 +140,11 @@ func (c *TelegramChannel) observeMemberUpdate(update *telegramMemberUpdate, self
 	c.rememberMember(groupID, update.New.User)
 }
 
+// ErrMembershipUnverifiable 表示平台不让查这个人在不在群，不等于「不在群」。
+// Telegram 开了「隐藏成员」的超级群里，非管理员机器人对别人调 getChatMember
+// 一律回 CHAT_ADMIN_REQUIRED。
+var ErrMembershipUnverifiable = errors.New("membership cannot be verified without administrator rights")
+
 func (c *TelegramChannel) GroupMember(ctx context.Context, groupID, userID string) (OneBotGroupMemberInfo, error) {
 	groupID = strings.TrimSpace(groupID)
 	id, err := strconv.ParseInt(strings.TrimSpace(userID), 10, 64)
@@ -147,6 +153,10 @@ func (c *TelegramChannel) GroupMember(ctx context.Context, groupID, userID strin
 	}
 	raw, err := c.callRaw(ctx, "getChatMember", map[string]any{"chat_id": groupID, "user_id": id})
 	if err != nil {
+		var apiErr *telegramAPIError
+		if errors.As(err, &apiErr) && strings.Contains(apiErr.Description, "CHAT_ADMIN_REQUIRED") {
+			return OneBotGroupMemberInfo{}, fmt.Errorf("telegram: %w: %w", ErrMembershipUnverifiable, err)
+		}
 		return OneBotGroupMemberInfo{}, fmt.Errorf("telegram: cannot verify membership (bot administrator rights may be required): %w", err)
 	}
 	var member telegramChatMember
