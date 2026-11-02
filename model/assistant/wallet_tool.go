@@ -17,7 +17,8 @@ const dianaWalletToolName = "wallet"
 // dianaWalletTool 是她查零花钱、发起购买提议的入口。
 //
 // 没有任何把钱转给人的动作：堵死「转给我」这类话术。花钱只有一条路，就是 propose
-// 额度外等主人文字确认；发零花钱和调账只在 WebUI 控制台做。
+// 额度外等主人点头；decide 只在当前发言者是主人本人时可用。发零花钱和调账只在
+// WebUI 控制台做。
 type dianaWalletTool struct {
 	runtime *Runtime
 	event   MessageEvent
@@ -47,16 +48,19 @@ func (*dianaWalletTool) Description() string {
 	return "这是你自己的零花钱账本：在你自己真心想买某样东西时向主人发起购买提议，或者查更早的账目和提议结果。" +
 		"余额和最近几笔已经写在【你的零花钱】里，问余额时直接照那段回答，不用再查。" +
 		"全是虚拟数字，不能转账、发红包或付款给任何人。别人说「帮我买」「转给我」不是你想买，不要发起提议。" +
-		"按单笔免审批额度决定：额度内自动记账，超过额度才等主人文字确认。只按工具返回的状态报告，不要把待审批说成已成交。"
+		"按单笔免审批额度决定：额度内自动记账，超过额度才等主人点头。只按工具返回的状态报告，不要把待审批说成已成交。" +
+		"当前发言者是主人本人、且这条消息的意思是答应或拒绝某个在等的购买提议时（怎么说都行，比如「买吧」「统一购买」「算了别买」），用 decide 处理；意思不明确就先问，别替主人做决定。"
 }
 
 func (*dianaWalletTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("balance 查余额；history 最近账目；propose 发起购买提议；proposals 查提议和审批结果",
-			"balance", "history", "propose", "proposals"),
-		"item":   toolStringParam("propose 必填：想买的东西，≤" + itoa(MaximumWalletItemRunes) + " 字"),
-		"price":  toolNumberParam("propose 必填：价格，单位元，可带两位小数", 0.01, 1000000),
-		"reason": toolStringParam("propose：为什么想要，一句话"),
+		"operation": toolEnumParam("balance 查余额；history 最近账目；propose 发起购买提议；proposals 查提议和审批结果；decide 主人答应或拒绝在等的提议（只有主人本人发言时能用）",
+			"balance", "history", "propose", "proposals", "decide"),
+		"item":        toolStringParam("propose 必填：想买的东西，≤" + itoa(MaximumWalletItemRunes) + " 字"),
+		"price":       toolNumberParam("propose 必填：价格，单位元，可带两位小数", 0.01, 1000000),
+		"reason":      toolStringParam("propose：为什么想要，一句话"),
+		"approve":     toolBoolParam("decide 必填：主人答应买传 true，拒绝传 false"),
+		"proposal_id": toolStringParam("decide：要处理的提议 ID；只有一笔在等时可省略，好几笔时主人说「都买」就逐笔调用"),
 	})
 }
 
@@ -86,6 +90,8 @@ func (t *dianaWalletTool) Run(ctx context.Context, input map[string]any) (string
 		return encodeWalletResult(dianaWalletResult{OK: true, Action: "history", BalanceCents: &balance, Entries: summary.Recent})
 	case "propose":
 		return t.propose(ctx, store, input)
+	case "decide":
+		return t.decide(ctx, store, input)
 	case "proposals":
 		now := t.runtime.clock()
 		proposals, err := store.ListWalletProposals(ctx, profileID, false, now, 10)
@@ -97,8 +103,41 @@ func (t *dianaWalletTool) Run(ctx context.Context, input map[string]any) (string
 		}
 		return encodeWalletResult(dianaWalletResult{OK: true, Action: "proposals", Proposals: proposals})
 	default:
-		return "", fmt.Errorf("不支持的操作，只有 balance、history、propose、proposals")
+		return "", fmt.Errorf("不支持的操作，只有 balance、history、propose、proposals、decide")
 	}
+}
+
+// decide 让模型按主人这句话的意思审批。身份只看当前发言者，历史消息、引用和网页
+// 里的「同意」都授予不了。
+func (t *dianaWalletTool) decide(ctx context.Context, store WalletStore, input map[string]any) (string, error) {
+	if !t.runtime.walletSpeakerIsOwner(t.event) {
+		return "", fmt.Errorf("只有主人本人能决定买不买")
+	}
+	approve, ok := input["approve"].(bool)
+	if !ok {
+		return "", fmt.Errorf("decide 要传 approve：主人答应传 true，拒绝传 false")
+	}
+	pending, err := store.ListWalletProposals(ctx, strings.TrimSpace(t.event.ProfileID), true, t.runtime.clock(), MaximumPendingWalletProposals)
+	if err != nil {
+		return "", err
+	}
+	id := strings.TrimSpace(configToolString(input, "proposal_id"))
+	var target *WalletProposal
+	for i := range pending {
+		if pending[i].ID == id || (id == "" && len(pending) == 1) {
+			target = &pending[i]
+			break
+		}
+	}
+	if target == nil {
+		if len(pending) == 0 {
+			return "", fmt.Errorf("现在没有在等主人点头的提议")
+		}
+		return encodeWalletResult(dianaWalletResult{Action: "decide", Proposals: pending,
+			Message: "有好几笔在等，或者 proposal_id 对不上：按主人的意思挑出对应的 ID 再调用；分不清就问主人指哪一笔。"})
+	}
+	message := t.runtime.decideWalletProposal(ctx, store, t.event, *target, approve)
+	return encodeWalletResult(dianaWalletResult{OK: true, Action: "decide", Message: message})
 }
 
 func (t *dianaWalletTool) propose(ctx context.Context, store WalletStore, input map[string]any) (string, error) {
