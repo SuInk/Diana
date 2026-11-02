@@ -5857,10 +5857,13 @@ a.nav-action {
   gap: 12px;
 }
 
+/* 三列按内容宽度分：等分时「14 小时 12 分」这种长值会被挤成省略号，而旁边的
+   「19 / 23」用不满一列。列宽跟着值走、多余空白摊到列间，总宽不够时再一起缩。 */
 .dashboard-runtime-grid {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, auto));
+  justify-content: space-between;
   align-content: space-between;
   gap: 14px 16px;
 }
@@ -5912,7 +5915,7 @@ a.nav-action {
 
   /* 四分之一宽排不下三列，退成两列三行；数值小一号，免得卡片比热力图高出一截。 */
   .dashboard-runtime-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, auto));
     gap: 10px 12px;
   }
 
@@ -5931,7 +5934,7 @@ a.nav-action {
 
   /* 整行宽时六格排成一排。 */
   .dashboard-runtime-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, auto));
     gap: 14px 16px;
   }
 
@@ -5953,7 +5956,7 @@ a.nav-action {
 
   /* 手机上一排六格太挤，退回三列两行。 */
   .dashboard-runtime-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, auto));
   }
 }
 
