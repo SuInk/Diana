@@ -29,7 +29,6 @@ const codeModeChildResultBytes = 512 * 1024
 
 type codeModeTool struct {
 	runtime codemode.Runtime
-	cleanup func()
 }
 
 type codeModeReadSnapshot struct {
@@ -69,12 +68,12 @@ func (r *Runner) rememberCodeModeRead(key string, action llmAction, output strin
 	r.codeModeReads[key] = codeModeReadSnapshot{output: output, created: time.Now()}
 }
 
-func newCodeModeTool(ctx context.Context) (*codeModeTool, error) {
-	runtime, cleanup, err := codemode.Prepare(ctx)
+func newCodeModeTool() (*codeModeTool, error) {
+	runtime, err := codemode.Prepare()
 	if err != nil {
 		return nil, err
 	}
-	return &codeModeTool{runtime: runtime, cleanup: cleanup}, nil
+	return &codeModeTool{runtime: runtime}, nil
 }
 
 func (*codeModeTool) Name() string { return codeModeToolName }
@@ -88,7 +87,6 @@ func (*codeModeTool) Timeout() time.Duration { return 120 * time.Second }
 func (*codeModeTool) Run(context.Context, map[string]any) (string, error) {
 	return "", errors.New("codemode requires the Runner permission bridge")
 }
-func (t *codeModeTool) Close() error { t.cleanup(); return nil }
 
 // runCodeMode keeps child evidence in Steps, not in model tool messages. State
 // transitions are serialized; only the existing read-only allowlist may overlap.
