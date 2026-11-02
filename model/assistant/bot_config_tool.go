@@ -28,7 +28,7 @@ func newDianaBotConfigTool(r *Runtime, event MessageEvent) *dianaBotConfigTool {
 }
 func (*dianaBotConfigTool) Name() string { return botConfigToolName }
 func (*dianaBotConfigTool) Description() string {
-	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话、入群欢迎、回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）、插件详细设置（plugin_settings）和其余 WebUI 设置（fields）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
+	return "读取 Diana 脱敏配置、诊断，修改当前群启停、触发词、插件开关（group_settings），以及接话（含省 Token 的规则触发 proactive_mode=rules）、入群欢迎、回复行为（behavior：换行分条、打字延迟、回复字数、随机复读、禁言期间处理等）、插件详细设置（plugin_settings）和其余 WebUI 设置（fields）。群级设置需主人或实时核验的群管理员，机器人默认设置和诊断仅主人。开启或关闭欢迎修改 welcome_enabled，不创建事件任务。保存成功才报告生效。"
 }
 func (*dianaBotConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -36,6 +36,8 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"scope":                        toolEnumParam("settings 默认群聊 group、私聊 bot；诊断省略或传 bot。不支持跨机器人或群。", "group", "bot"),
 		"section":                      toolEnumParam("默认 settings：接话和欢迎设置，可局部 update；其他部分仅主人 get 脱敏诊断。", "settings", "all", "bot", "llm", "skills", "runtime", "paths"),
 		"desire_level":                 toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
+		"proactive_mode":               toolEnumParam("主动接话的触发模式：semantic 每条候选消息调用评分模型判断；rules 规则触发，不调用评分模型（省 Token），按 rule_chance 随机接话。@、引用和触发词两种模式都直接回复。", "semantic", "rules"),
+		"rule_chance":                  toolIntParam("规则触发的随机接话概率（百分比），0 只回应明确触发；只在 rules 模式生效。", 0, 100),
 		"relevance_level":              toolEnumParam("on：明确跟机器人说话时回应。", "on", "off"),
 		"chat_level":                   toolEnumParam("闲聊档位，按本群近一小时的插话需求动态控制频率，受冷却限制；always 不限频率。", "off", "minimal", "low", "medium", "high", "always"),
 		"cooldown_seconds":             toolIntParam("主动闲聊冷却秒数，0 关闭。", 0, 3600),
@@ -139,7 +141,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 	minimum := group.MinimumReplyMemberLevel
 	var stagedKeys []string
 	if op == "update" {
-		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
+		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "proactive_mode": true, "rule_chance": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
 			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true, "fields": true, "list_fields": true}
 		for key := range input {
@@ -203,6 +205,29 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 				}
 				*field.target = level
 				changed = true
+			}
+		}
+		if raw, ok := input["proactive_mode"]; ok {
+			mode, _ := raw.(string)
+			if mode != "semantic" && mode != "rules" {
+				return "", fmt.Errorf("proactive_mode 只能是 semantic 或 rules")
+			}
+			prefs.TriggerMode = mode
+			changed = true
+		}
+		if raw, ok := input["rule_chance"]; ok {
+			chance, e := groupToolInteger(raw)
+			if e != nil || chance < 0 || chance > 100 {
+				return "", fmt.Errorf("rule_chance 必须为 0–100 的整数")
+			}
+			prefs.RuleChance = chance
+			changed = true
+		} else if level, ok := input["desire_level"].(string); ok && prefs.TriggerMode == "rules" {
+			// 规则模式不看档位，关话痨只能把概率归零；重新打开时给回默认概率。
+			if level == "off" {
+				prefs.RuleChance = 0
+			} else if prefs.RuleChance == 0 {
+				prefs.RuleChance = defaultRuleTriggerChance
 			}
 		}
 		if raw, ok := input["cooldown_seconds"]; ok {
@@ -409,7 +434,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 			fieldsView = editableFieldsView(PayloadFromConfig(effective), botFieldRejection)
 		}
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "pending_fields": pendingView, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "welcome": secretmask.ChatConfigValue(welcomeSettingsFromConfig(effective)), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
+	data, err := json.Marshal(map[string]any{"ok": true, "pending_fields": pendingView, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "proactive": proactiveModeView(prefs), "welcome": secretmask.ChatConfigValue(welcomeSettingsFromConfig(effective)), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 
@@ -439,6 +464,17 @@ func (r *Runtime) saveBotSettings(expected BotConfig, update BotSettingsUpdate) 
 // CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
 func (*dianaBotConfigTool) CanonicalOperation(input map[string]any) string {
 	return strings.TrimSpace(configToolString(input, "operation"))
+}
+
+// proactiveModeView 把接话触发模式单独摆出来：旧配置的 participation.trigger_mode 是空的，
+// 模型只看得到群设置里的触发词档位，会把它当成全部的「触发模式」。
+func proactiveModeView(p ParticipationPreferences) map[string]any {
+	if p.TriggerMode == "rules" {
+		return map[string]any{"mode": "rules", "label": "规则触发（省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
+			"note": "未被点名的消息不调用接话评分模型，按 rule_chance 抽签；relevance_level、chat_level 和评分门槛不生效"}
+	}
+	return map[string]any{"mode": "semantic", "label": "语义判断", "relevance_level": p.RelevanceLevel, "chat_level": p.ChatLevel, "cooldown_seconds": p.CooldownSeconds,
+		"note": "未被点名的候选消息先调用一次接话评分模型；改成 proactive_mode=rules 可省掉这次调用"}
 }
 
 func behaviorKeys(values []behaviorValue) []string {

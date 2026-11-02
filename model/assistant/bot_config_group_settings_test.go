@@ -25,7 +25,7 @@ func TestBotConfigGroupSettingsScopeInheritanceAndValidation(t *testing.T) {
 	run := func(patch map[string]any) (string, error) {
 		return tool.Run(context.Background(), map[string]any{"operation": "update", "group_settings": patch})
 	}
-	raw, err := run(map[string]any{"enabled": false, "triggers": []any{"然然"}, "trigger_mode": "strict", "plugins": map[string]any{"test": false}})
+	raw, err := run(map[string]any{"enabled": false, "triggers": []any{"然然"}, "trigger_word_mode": "strict", "plugins": map[string]any{"test": false}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestBotConfigGroupSettingsScopeInheritanceAndValidation(t *testing.T) {
 		{"plugins": map[string]any{"test": true, "missing": false}},
 		{"plugins": map[string]any{webSearchPluginID: false}},
 		{"plugins": map[string]any{"test": "false"}},
-		{"trigger_mode": "invalid"}, {"triggers": []any{42}}, {"enabled": "false"}, {"unknown": true},
+		{"trigger_word_mode": "invalid"}, {"triggers": []any{42}}, {"enabled": "false"}, {"unknown": true},
 	} {
 		if _, err := run(patch); err == nil {
 			t.Fatalf("accepted %v", patch)

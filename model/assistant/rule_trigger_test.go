@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,5 +125,87 @@ func TestRuleTriggerDefaultChancePreservesZero(t *testing.T) {
 	}
 	if got := (BotConfig{}).participationPreferences().RuleChance; got != 30 {
 		t.Fatalf("legacy config default=%d", got)
+	}
+}
+
+func TestBotConfigSwitchesProactiveMode(t *testing.T) {
+	base := BotConfig{ID: "a", OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 75, RelevanceLevel: "on", ChatLevel: "low", RuleChance: 30, CooldownSeconds: 15}}
+	r := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{base}})
+	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
+	event := MessageEvent{ProfileID: "a", Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "g", UserID: "owner"}
+	tool := newDianaBotConfigTool(r, event)
+	run := func(input map[string]any) map[string]any {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	if mode := run(map[string]any{"operation": "get"})["proactive"].(map[string]any)["mode"]; mode != "semantic" {
+		t.Fatalf("legacy config must report semantic, got %v", mode)
+	}
+	out := run(map[string]any{"operation": "update", "proactive_mode": "rules", "rule_chance": 10})
+	if p := out["proactive"].(map[string]any); p["mode"] != "rules" || p["rule_chance"] != float64(10) {
+		t.Fatalf("proactive view %v", p)
+	}
+	actual := r.effectiveConfigForEvent(event)
+	if !actual.ruleTriggerEnabled() || actual.Participation.RuleChance != 10 || actual.Participation.ChatLevel != "low" || actual.Participation.CooldownSeconds != 15 {
+		t.Fatalf("rules not saved or other values lost: %+v", actual.Participation)
+	}
+	if r.ProfileConfig("a").ruleTriggerEnabled() {
+		t.Fatal("group update changed robot default")
+	}
+	// 规则模式不看 chat_level，关话痨必须把概率归零，恢复时给回默认概率。
+	run(map[string]any{"operation": "update", "desire_level": "off"})
+	if got := r.effectiveConfigForEvent(event).Participation.RuleChance; got != 0 {
+		t.Fatalf("desire off left rule chance %d", got)
+	}
+	run(map[string]any{"operation": "update", "desire_level": "low"})
+	if got := r.effectiveConfigForEvent(event).Participation.RuleChance; got != defaultRuleTriggerChance {
+		t.Fatalf("desire low restored chance %d", got)
+	}
+	for _, input := range []map[string]any{
+		{"operation": "update", "proactive_mode": "random"},
+		{"operation": "update", "rule_chance": 101},
+		{"operation": "update", "rule_chance": 1.5},
+	} {
+		if _, err := tool.Run(context.Background(), input); err == nil {
+			t.Fatalf("invalid update accepted: %v", input)
+		}
+	}
+	run(map[string]any{"operation": "update", "proactive_mode": "semantic"})
+	if r.effectiveConfigForEvent(event).ruleTriggerEnabled() {
+		t.Fatal("switch back to semantic failed")
+	}
+}
+
+func TestReplyTriggerCapabilityExplainsBothLayers(t *testing.T) {
+	for _, document := range coreCapabilityDocuments {
+		if document.ID != "core:reply-trigger" {
+			continue
+		}
+		for _, want := range []string{"proactive_mode", "rules", "rule_chance", "省 Token", "trigger_word_mode", "loose"} {
+			if !strings.Contains(document.Title+document.Content, want) {
+				t.Fatalf("missing %q", want)
+			}
+		}
+		return
+	}
+	t.Fatal("core:reply-trigger missing")
+}
+
+// 生产上问「触发模式有哪些」「闲聊触发模式」时，检索结果第一条要是这篇。
+func TestReplyTriggerCapabilityRanksFirst(t *testing.T) {
+	for _, query := range []string{"触发模式 触发词 trigger_mode", "闲聊触发 主动插话 chat_level desire_level 回复欲望 档位区别 cooldown", "省 token 不调用模型"} {
+		hits := retrieveCapabilityDocuments(query, coreCapabilityDocuments, 3)
+		if len(hits) == 0 || hits[0].ID != "core:reply-trigger" {
+			t.Fatalf("%q top hits %v", query, hits)
+		}
 	}
 }
