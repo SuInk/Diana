@@ -58,7 +58,10 @@ func (h *BotHandler) lookupAssistantUserNames(c *gin.Context) {
 		c.JSON(http.StatusOK, assistantUserNamesResponse{Names: names})
 		return
 	}
-	profileID := botProfileScope(c)
+	profileID, ok := h.requireBotProfileScope(c)
+	if !ok {
+		return
+	}
 	pending := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if name, ok := h.cachedUserName(profileID, id); ok {

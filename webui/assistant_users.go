@@ -264,6 +264,19 @@ func botProfileScope(c *gin.Context) string {
 	return strings.TrimSpace(c.Query("profile"))
 }
 
+// requireBotProfileScope 给「数据属于某一台机器人」的接口读 profile。部署里混着
+// 多个平台时空 profile 有歧义——Telegram 的用户 ID 和 QQ 号都是纯数字，猜错了
+// 拿回来的是默认头像或陌生人的昵称，看着像对的。所以直接回 400，让漏传的调用方
+// 当场暴露。单一平台的部署没有歧义，照旧放行。
+func (h *BotHandler) requireBotProfileScope(c *gin.Context) (string, bool) {
+	profileID := botProfileScope(c)
+	if profileID == "" && h.hasMixedPlatforms() {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "部署里有多个平台的机器人，必须指定数据所属机器人（profile）"})
+		return "", false
+	}
+	return profileID, true
+}
+
 // userAIOverrideRuntime 是能写主人手动 AI 结论的运行时；走运行时而不是直接写库，
 // 学说话时用的缓存才能立刻跟上。
 type userAIOverrideRuntime interface {

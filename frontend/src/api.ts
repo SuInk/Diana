@@ -4624,14 +4624,18 @@ export function getAgentModeImpact(profile: string): Promise<{ running_coding_jo
   return requestJSON(`/api/assistant/agent-mode/impact?profile=${encodeURIComponent(profile)}`);
 }
 
-export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d", center = ""): Promise<GroupRelationResponse> {
+// profile 是这个群所属的机器人。不带时后端认不出平台，会把 Telegram 群员的 ID
+// 当 QQ 号去 qlogo 取头像，拿回默认企鹅或陌生人的头像。
+export function getGroupRelations(groupID: string, range: AssistantEventRange = "7d", center = "", profile = ""): Promise<GroupRelationResponse> {
   const params = new URLSearchParams({ range });
   if (center) params.set("center", center);
+  if (profile) params.set("profile", profile);
   return requestJSON<GroupRelationResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/relations?${params.toString()}`);
 }
 
-export function getGroupWordCloud(groupID: string, range: AssistantEventRange = "7d"): Promise<GroupWordCloudResponse> {
+export function getGroupWordCloud(groupID: string, range: AssistantEventRange = "7d", profile = ""): Promise<GroupWordCloudResponse> {
   const params = new URLSearchParams({ range });
+  if (profile) params.set("profile", profile);
   return requestJSON<GroupWordCloudResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/wordcloud?${params.toString()}`);
 }
 

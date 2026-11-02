@@ -287,3 +287,48 @@ func TestParseUserNameLookupIDsDedupesAndCaps(t *testing.T) {
 		t.Fatalf("len=%d, want %d", len(got), userNameLookupLimit)
 	}
 }
+
+// 混着多个平台时，属于某一台机器人的接口不带 profile 直接 400：猜平台会把
+// Telegram ID 当 QQ 号，拿回默认头像或陌生人的昵称，看着像对的，漏传就藏住了。
+func TestProfileScopedEndpointsRejectMissingProfileInMixedDeployment(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "scope.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	onebot := assistant.DefaultBotConfig()
+	onebot.ID, onebot.Platform = "ob", assistant.PlatformOneBotV11
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID, telegram.Platform = "tg", assistant.PlatformTelegram
+
+	paths := []string{
+		"/api/assistant/groups/-10012345/relations?range=7d",
+		"/api/assistant/groups/-10012345/wordcloud?range=7d",
+		"/api/assistant/user-names?ids=12345",
+	}
+	serve := func(profiles ...assistant.BotConfig) http.Handler {
+		runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+		handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return fakeChannel{} })
+		handler.profiles = NewMemoryBotProfileStoreFromSet(assistant.ProfileSet{Profiles: profiles})
+		handler.SetSQLiteStore(store)
+		return botTestRouter(handler)
+	}
+	mixed, single := serve(onebot, telegram), serve(onebot)
+	for _, path := range paths {
+		rec := httptest.NewRecorder()
+		mixed.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("mixed deployment without profile %s: status=%d, want 400", path, rec.Code)
+		}
+		rec = httptest.NewRecorder()
+		mixed.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+"&profile=tg", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("mixed deployment with profile %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		rec = httptest.NewRecorder()
+		single.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("single-platform deployment without profile %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
+}

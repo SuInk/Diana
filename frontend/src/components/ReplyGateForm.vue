@@ -195,6 +195,8 @@ const props = defineProps<{
    * 这台机器人的群等级门槛在群管理里设，但它仍然生效，主人豁免也仍然绕过它。
    */
   hideGroupLevel?: boolean;
+  /** 名单里的账号属于哪台机器人；不传时后端认不出平台，Telegram 的 ID 会被当 QQ 号查昵称。 */
+  profile?: string;
 }>();
 const emit = defineEmits<{ "update:modelValue": [ReplyGate | null] }>();
 
@@ -264,7 +266,7 @@ function numberOf(event: Event): number {
 
 // 名字只是回显，profile 留空即当前选中的那台机器人——和其它几处昵称回显一致。
 async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
-  const response = await fetchAssistantUserNames(ids);
+  const response = await fetchAssistantUserNames(ids, props.profile ?? "");
   return response.names ?? {};
 }
 </script>

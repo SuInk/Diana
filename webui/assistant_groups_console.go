@@ -338,7 +338,10 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	}
 	// 中心节点优先用配置里的机器人账号：新群可能还没有机器人自己的发言，
 	// 光靠扫历史找不出中心，图就散成一堆互不相干的点。
-	profileID := botProfileScope(c)
+	profileID, ok := h.requireBotProfileScope(c)
+	if !ok {
+		return
+	}
 	config := h.botConfigForProfile(profileID)
 	botID := strings.TrimSpace(config.BotAccount)
 	graph, err := h.sqlite.GroupRelationGraphCenteredOn(c.Request.Context(), groupID, since, botID, c.Query("center"))
@@ -385,7 +388,11 @@ func (h *BotHandler) groupWordCloud(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 1h、24h、7d、30d、all"})
 		return
 	}
-	botID := strings.TrimSpace(h.botConfigForProfile(botProfileScope(c)).BotAccount)
+	profileID, ok := h.requireBotProfileScope(c)
+	if !ok {
+		return
+	}
+	botID := strings.TrimSpace(h.botConfigForProfile(profileID).BotAccount)
 	cloud, err := h.sqlite.GroupWordCloudFor(c.Request.Context(), groupID, since, botID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
