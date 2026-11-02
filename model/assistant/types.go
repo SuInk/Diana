@@ -1010,6 +1010,10 @@ type BotConfig struct {
 	// AgentCommandSandboxAllowNetwork 放开沙盒内的网络。默认切断——命令能联网
 	// 就意味着读到的东西能被发出去，白名单挡不住这一层。
 	AgentCommandSandboxAllowNetwork bool `json:"agent_command_sandbox_allow_network,omitempty"`
+	// AgentMemberCommandEnabled 让群里的普通成员也能用 run_command，默认关闭。成员版关在
+	// 更紧的独立沙盒里（读取白名单、只写个人目录、断网、限资源），沙盒不可用时拒绝，
+	// 见 agent.RunMemberCommand。
+	AgentMemberCommandEnabled bool `json:"agent_member_command_enabled,omitempty"`
 	// AgentFileWriteEnabled 打开 write_file / edit_file / save_to_workspace 和
 	// manage_files 的写操作，默认关闭。
 	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
@@ -1595,6 +1599,7 @@ type ConfigPayload struct {
 	AgentCommandTimeoutMS           int                       `json:"agent_command_timeout_ms,omitempty"`
 	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
 	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
+	AgentMemberCommandEnabled       bool                      `json:"agent_member_command_enabled,omitempty"`
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
@@ -2927,6 +2932,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentCommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
+		AgentMemberCommandEnabled:       cfg.AgentMemberCommandEnabled,
 		AgentFileWriteEnabled:           cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
@@ -3183,6 +3189,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
+		AgentMemberCommandEnabled:       payload.AgentMemberCommandEnabled,
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,

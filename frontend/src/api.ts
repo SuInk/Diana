@@ -486,6 +486,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
   agent_command_sandbox_allow_network?: boolean;
+  /** 群成员可用独立沙盒里的 run_command，默认关闭。 */
+  agent_member_command_enabled?: boolean;
   /** 打开 write_file / edit_file / save_to_workspace 和 manage_files 的写操作。新建配置默认打开。 */
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;

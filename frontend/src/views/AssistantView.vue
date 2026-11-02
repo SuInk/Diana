@@ -1967,6 +1967,18 @@
                   </label>
                   <span class="hint">默认切断。只影响 install_package 和插件声明的脚本、MCP；run_command 始终断网，要联网的命令走 host_access。</span>
                 </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_member_command_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">群成员可运行命令</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。打开后群里的普通成员也能用 run_command 跑 python3 / node 生成文件，再用 send_file 发出；只在群聊里提供。
+                    成员用的是单独一套更严的沙盒：只读得到系统库、解释器和自己的临时目录，读不到主人家目录、工作区和其他群；只写自己的目录、始终断网，
+                    单次最长 30 秒、内存 512 MB，文件保留 24 小时。本机成员沙盒不可用（Linux 没装 bubblewrap、容器禁用用户命名空间）时成员调用一律拒绝。
+                  </span>
+                </div>
                 <div class="field">
                   <label for="agent-timeout">命令超时（毫秒）</label>
                   <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
@@ -4673,6 +4685,7 @@ function setForm(config: BotProfileConfig): void {
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
+    agent_member_command_enabled: config.agent_member_command_enabled ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
