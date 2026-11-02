@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -243,7 +244,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 
 	type scoredMemory struct {
 		item  StructuredMemoryItem
-		terms map[string]struct{}
+		terms []string
 	}
 	candidates := make([]scoredMemory, 0, len(items))
 	core := make([]scoredMemory, 0, maximumCoreMemoryItems)
@@ -324,10 +325,10 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		if coreCurrentMemory {
 			// 常驻档：长期交互要求和高置信要害事实不该跟检索结果抢名额。「回复永远
 			// 带颜文字」这类要求只在话题相关时才生效是错的，它本来就与话题无关。
-			core = append(core, scoredMemory{item: item, terms: structuredMemoryTerms(structuredMemoryDocument(item))})
+			core = append(core, scoredMemory{item: item, terms: structuredMemoryTermList(structuredMemoryDocument(item))})
 			continue
 		}
-		candidates = append(candidates, scoredMemory{item: item, terms: structuredMemoryTerms(structuredMemoryDocument(item))})
+		candidates = append(candidates, scoredMemory{item: item, terms: structuredMemoryTermList(structuredMemoryDocument(item))})
 	}
 	sort.SliceStable(core, func(left, right int) bool {
 		return core[left].item.RetrievalScore > core[right].item.RetrievalScore
@@ -338,17 +339,20 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 
 	// MMR-style selection keeps several useful topics instead of spending the
 	// complete context budget on near-duplicate memories.
+	// 每个候选与已选集合的最大相似度随选入逐条更新，不必每轮都和全部已选重算一遍。
 	selected := make([]scoredMemory, 0, min(24, len(candidates))+len(core))
 	selected = append(selected, core...)
+	maxSimilarity := make([]float64, len(candidates))
+	for index, candidate := range candidates {
+		for _, existing := range core {
+			maxSimilarity[index] = max(maxSimilarity[index], structuredMemorySimilarity(candidate.terms, existing.terms))
+		}
+	}
 	for len(candidates) > 0 && len(selected) < 24+len(core) {
 		bestIndex := 0
 		bestScore := math.Inf(-1)
 		for index, candidate := range candidates {
-			maxSimilarity := 0.0
-			for _, existing := range selected {
-				maxSimilarity = max(maxSimilarity, structuredMemorySimilarity(candidate.terms, existing.terms))
-			}
-			adjusted := candidate.item.RetrievalScore - maxSimilarity*0.18
+			adjusted := candidate.item.RetrievalScore - maxSimilarity[index]*0.18
 			if adjusted > bestScore {
 				bestIndex, bestScore = index, adjusted
 			}
@@ -357,6 +361,10 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		chosen.item.RetrievalScore = bestScore
 		selected = append(selected, chosen)
 		candidates = append(candidates[:bestIndex], candidates[bestIndex+1:]...)
+		maxSimilarity = append(maxSimilarity[:bestIndex], maxSimilarity[bestIndex+1:]...)
+		for index, candidate := range candidates {
+			maxSimilarity[index] = max(maxSimilarity[index], structuredMemorySimilarity(candidate.terms, chosen.terms))
+		}
 	}
 	ranked := make([]StructuredMemoryItem, 0, len(selected))
 	for _, candidate := range selected {
@@ -568,12 +576,15 @@ func memoryKindLabel(kind MemoryKind) string {
 	}
 }
 
-func structuredMemoryTerms(text string) map[string]struct{} {
-	terms := make(map[string]struct{})
+// structuredMemoryTermList 是文本的去重检索词，按字典序排好。去重相似度只做集合
+// 交并计数，有序切片按归并就能数出来，比为每条候选建 map 少一大半分配。
+func structuredMemoryTermList(text string) []string {
+	terms := make([]string, 0, len(text))
 	eachStructuredMemoryTerm(text, func(term string, _ float64, _ bool) {
-		terms[term] = struct{}{}
+		terms = append(terms, term)
 	})
-	return terms
+	slices.Sort(terms)
+	return slices.Clip(slices.Compact(terms))
 }
 
 // structuredMemoryMatchedTerms 是 structuredMemoryTerms 与 query 的交集：打分只问
@@ -701,14 +712,22 @@ func structuredMemoryDocument(item StructuredMemoryItem) string {
 	return strings.Join([]string{item.Key, item.Topic, item.Entity, item.SubjectName, item.Content, item.Evidence}, " ")
 }
 
-func structuredMemorySimilarity(left, right map[string]struct{}) float64 {
+// structuredMemorySimilarity 是两组有序去重词的 Jaccard 相似度。
+func structuredMemorySimilarity(left, right []string) float64 {
 	if len(left) == 0 || len(right) == 0 {
 		return 0
 	}
 	common := 0
-	for term := range left {
-		if _, ok := right[term]; ok {
+	for l, r := 0, 0; l < len(left) && r < len(right); {
+		switch strings.Compare(left[l], right[r]) {
+		case 0:
 			common++
+			l++
+			r++
+		case -1:
+			l++
+		default:
+			r++
 		}
 	}
 	union := len(left) + len(right) - common

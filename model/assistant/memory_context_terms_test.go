@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -94,7 +95,7 @@ func TestStructuredMemoryMatchedTermsIsIntersection(t *testing.T) {
 	query := weightedStructuredMemoryTerms("凤爪 go 好吃吗 rust")
 	for _, sample := range structuredMemoryTermSamples {
 		want := map[string]struct{}{}
-		for term := range structuredMemoryTerms(sample) {
+		for term := range referenceWeightedStructuredMemoryTerms(sample) {
 			if _, ok := query[term]; ok {
 				want[term] = struct{}{}
 			}
@@ -106,6 +107,37 @@ func TestStructuredMemoryMatchedTermsIsIntersection(t *testing.T) {
 		for term := range want {
 			if _, ok := got[term]; !ok {
 				t.Fatalf("matched terms for %q miss %q", sample, term)
+			}
+		}
+	}
+}
+
+func TestStructuredMemoryTermListIsSortedSet(t *testing.T) {
+	for _, sample := range structuredMemoryTermSamples {
+		want := slices.Sorted(maps.Keys(referenceWeightedStructuredMemoryTerms(sample)))
+		if got := structuredMemoryTermList(sample); !slices.Equal(got, want) {
+			t.Fatalf("term list for %q:\n got  %v\n want %v", sample, got, want)
+		}
+	}
+}
+
+// 有序切片上归并出来的 Jaccard 必须和按 map 求交并完全相等，MMR 去重扣分才不会变。
+func TestStructuredMemorySimilarityMatchesSetJaccard(t *testing.T) {
+	for _, left := range structuredMemoryTermSamples {
+		for _, right := range structuredMemoryTermSamples {
+			leftSet, rightSet := referenceWeightedStructuredMemoryTerms(left), referenceWeightedStructuredMemoryTerms(right)
+			want := 0.0
+			if len(leftSet) > 0 && len(rightSet) > 0 {
+				common := 0
+				for term := range leftSet {
+					if _, ok := rightSet[term]; ok {
+						common++
+					}
+				}
+				want = float64(common) / float64(len(leftSet)+len(rightSet)-common)
+			}
+			if got := structuredMemorySimilarity(structuredMemoryTermList(left), structuredMemoryTermList(right)); got != want {
+				t.Fatalf("similarity(%q, %q) = %v, want %v", left, right, got, want)
 			}
 		}
 	}
