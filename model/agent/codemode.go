@@ -4,10 +4,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +19,13 @@ import (
 
 const CodeModeToolName = "codemode"
 const codeModeToolName = CodeModeToolName
+
+// codeModeChildResultBytes bounds one child result handed to a script. Scripts get
+// the full masked result, not the model-facing truncation: that cut lands mid-JSON
+// and appends a note, so the script received a string instead of an object
+// (production llm_usage: 163K chars cut to 20K, Object.keys returned character
+// indices and blew the 32 KiB output cap). Headroom stays under the 1 MiB frame.
+const codeModeChildResultBytes = 512 * 1024
 
 type codeModeTool struct {
 	runtime codemode.Runtime
@@ -70,7 +79,7 @@ func newCodeModeTool(ctx context.Context) (*codeModeTool, error) {
 
 func (*codeModeTool) Name() string { return codeModeToolName }
 func (*codeModeTool) Description() string {
-	return "异步 JavaScript 编排工具。const p=await tools.browser_render({url:'https://example.com'}); store('p',p); return p.title; 后续 load('p') 可重筛；store/load 是全局函数，不是 tools 方法，限512KiB、仅本轮。相同网页读取短期复用，fresh:true 强制重读。参数不明先 tool_search；仅 web_search/browser_render 可并发。权限预算不变，无 Node/文件/直接联网；发送、终止、图片在脚本外调用。"
+	return "异步 JavaScript 编排：多步调用、循环或筛选汇总大结果时用；只调一次就直接调原工具，别包一层。tools.X() 得完整原始结果，JSON 已解析，结构不明先 return Object.keys(r)；只 return 需要的字段。例：const p=await tools.browser_render({url}); store('p',p); return p.title; store/load 是全局函数，本轮跨脚本保留。参数不明先 tool_search；仅 web_search/browser_render 可并发。无 Node/文件/联网；发送、终止、图片在脚本外调用。"
 }
 func (*codeModeTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}}, "required": []string{"code"}, "additionalProperties": false}
@@ -191,17 +200,21 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 			cacheHits++
 		}
 		if read.err == nil && !read.record.CacheHit {
-			r.rememberCodeModeRead(cacheKey, action, read.output)
+			r.rememberCodeModeRead(cacheKey, action, read.rawOutput)
 		}
 		mu.Unlock()
 		if read.err != nil {
 			return nil, errors.New(read.record.Error)
 		}
+		output := read.rawOutput
+		if len(output) > codeModeChildResultBytes {
+			return nil, fmt.Errorf("%s returned %d bytes, over the %d-byte script limit; narrow the call with its paging, filter or scope parameters", action.Tool, len(output), codeModeChildResultBytes)
+		}
 		var value any
-		if json.Unmarshal([]byte(read.output), &value) == nil {
+		if json.Unmarshal([]byte(output), &value) == nil {
 			return value, nil
 		}
-		return read.output, nil
+		return output, nil
 	})
 	if err != nil {
 		return "", err
@@ -214,9 +227,86 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 	}
 	r.codeModeStore = result.Store
 	result.Store = nil
-	encoded, err := json.Marshal(struct {
+	result.Value = compactCodeModeValue(result.Value)
+	return marshalCodeModeJSON(struct {
 		codemode.Result
 		CacheHits int `json:"cache_hits,omitempty"`
 	}{result, cacheHits})
-	return string(encoded), err
+}
+
+// compactCodeModeValue drops null object members before the value reaches model
+// context. Scripts that return a tool response wholesale otherwise pay for fields
+// like attempts:null and providers:null on every turn after.
+func compactCodeModeValue(raw json.RawMessage) json.RawMessage {
+	if !bytes.Contains(raw, []byte("null")) {
+		return raw
+	}
+	compacted, err := dropJSONNulls(raw)
+	if err != nil {
+		return raw
+	}
+	return compacted
+}
+
+// dropJSONNulls walks raw values instead of decoding into maps so member order
+// stays as the script wrote it. Array nulls are kept: they hold positions.
+func dropJSONNulls(raw json.RawMessage) (json.RawMessage, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || (raw[0] != '{' && raw[0] != '[') {
+		return raw, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.WriteByte(raw[0])
+	for count := 0; decoder.More(); {
+		var key string
+		if raw[0] == '{' {
+			token, err := decoder.Token()
+			if err != nil {
+				return nil, err
+			}
+			key, _ = token.(string)
+		}
+		var item json.RawMessage
+		if err := decoder.Decode(&item); err != nil {
+			return nil, err
+		}
+		if raw[0] == '{' && string(item) == "null" {
+			continue
+		}
+		item, err := dropJSONNulls(item)
+		if err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			out.WriteByte(',')
+		}
+		count++
+		if raw[0] == '{' {
+			encodedKey, err := marshalCodeModeJSON(key)
+			if err != nil {
+				return nil, err
+			}
+			out.WriteString(encodedKey)
+			out.WriteByte(':')
+		}
+		out.Write(item)
+	}
+	out.WriteByte(raw[len(raw)-1])
+	return out.Bytes(), nil
+}
+
+// marshalCodeModeJSON keeps <, > and & literal: json.Marshal turns each into a
+// six-character \u escape, and page text is full of them.
+func marshalCodeModeJSON(value any) (string, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }

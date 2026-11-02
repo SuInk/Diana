@@ -962,11 +962,14 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		return false
 	}
-	// 工具规则跟着工具走：公共工具（见 sharedAgentTools）的规则进稳定头部；主人专属、
-	// 或描述随发言者不同的工具，规则写进尾部，免得主人和群友交替时前缀从这里分叉。
+	// 工具规则跟着「本群成员能不能用」走：成员都拿得到的工具，规则进稳定头部；主人
+	// 专属的写进尾部，免得主人和群友交替时前缀从这里分叉。github、subscription、
+	// cross_session_message 的工具定义随发言者变，定义留在尾部的按需目录里（见
+	// sharedAgentTools），但规则文本对谁都一样。以前规则跟着定义一起进了尾部：11-01～02
+	// 生产主回复尾部这几段约 2K 字，八成请求都带、每次重算。
 	shared := map[string]bool(nil)
 	if registry != nil {
-		shared = r.sharedAgentTools(event)
+		shared = r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
 	}
 	place := func(names ...string) *strings.Builder {
 		if shared == nil {
@@ -1083,8 +1086,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
 		place("tasks").WriteString("\n" + cfg.prompt(promptTaskListSpec))
 	}
+	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
+	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
-		place(dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
+		tail.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
 	}
 	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		place("tasks", "reminder", dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskNoSubstituteSpec))

@@ -350,6 +350,13 @@ func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 		}
 		t.Fatalf("prefix diverges at rune %d:\nmember: %q\nowner:  %q", i, string(a[max(0, i-80):min(len(a), i+160)]), string(b[max(0, i-80):min(len(b), i+160)]))
 	}
+	// 成员也能用、只是定义随发言者变的工具：定义留在尾部，规则进共享头部。
+	if !strings.Contains(member, promptToolCrossSession) {
+		t.Fatal("cross_session_message rule should be in the shared head")
+	}
+	if strings.Contains(member, promptTaskRepositoryWatch) {
+		t.Fatal("repository watch rule depends on the speaker and must stay in the tail")
+	}
 	foundTail := false
 	for _, message := range ownerReq.Messages {
 		foundTail = foundTail || strings.Contains(message.Content, "【当前发言者另有的按需工具】")

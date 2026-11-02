@@ -8996,6 +8996,7 @@ func truncateForChat(text string, maxRunes int) string {
 func normalizeReply(reply string, maxRunes int, markdownPlain ...bool) string {
 	reply = llm.VisibleAssistantText(reply)
 	reply = normalizeLegacyLayoutMarkers(reply)
+	reply = htmlInlineTagsToMarkdown(reply, len(markdownPlain) > 0 && markdownPlain[0])
 	if len(markdownPlain) > 0 && markdownPlain[0] {
 		reply = markdownToPlain(reply)
 	}
