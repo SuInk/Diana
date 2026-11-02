@@ -128,7 +128,7 @@ func (t *dianaFileDeliveryTool) Name() string { return dianaFileDeliveryToolName
 // 文件由运行时发，正文再贴一遍内容会刷屏（#603）。
 func (t *dianaFileDeliveryTool) Description() string {
 	return `把你写好的文本内容打包成文件发到当前会话供下载，适合长代码、脚本、SVG、Markdown、配置、CSV，别把几百行塞进正文。` +
-		`交付有权使用的工作目录文本文件时直接传 path，与 content 二选一，无需读取后复制全文；filename 是交付文件名。` +
+		`交付有权使用的工作目录文件（文本或二进制，如 .mid）时直接传 path，与 content 二选一，无需读取后复制全文；filename 是交付文件名。` +
 		`它只发送不留存，存进工作目录用 write_file（文本）或 save_to_workspace（二进制），不拿它冒充「存好了」。` +
 		`调用后一句话交代，不在正文再贴内容。`
 }
@@ -137,7 +137,7 @@ func (t *dianaFileDeliveryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"filename"}, map[string]any{
 		"filename": toolStringParam("带扩展名的文件名，不含目录，如 main.go"),
 		"content":  toolStringParam("完整文件内容，UTF-8 文本"),
-		"path":     toolStringParam("工作目录内已有文本文件的路径，与 content 二选一；群成员仅限本群保存的文件"),
+		"path":     toolStringParam("工作目录内已有文件的路径，文本或二进制均可，与 content 二选一；群成员仅限本群保存的文件"),
 		"preview":  toolBoolParam("先发一张渲染预览图，默认按插件设置"),
 	})
 }
@@ -158,7 +158,7 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return t.fail(ctx, "", err.Error())
 	}
-	content, sourceErr := toolTextSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
+	data, sourceErr := toolFileSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
 	if sourceErr != nil {
 		return t.fail(ctx, name, sourceErr.Error())
 	}
@@ -168,12 +168,16 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 	}
 	previewStatus := ""
 	if preview {
-		previewStatus = t.sendPreview(ctx, name, content)
+		if utf8.Valid(data) {
+			previewStatus = t.sendPreview(ctx, name, string(data))
+		} else {
+			previewStatus = "skipped: 二进制文件没有预览"
+		}
 	}
-	if err := t.runtime.sendFileAttachment(ctx, t.event, name, []byte(content)); err != nil {
+	if err := t.runtime.sendFileAttachment(ctx, t.event, name, data); err != nil {
 		return t.fail(ctx, name, "文件发送失败："+firstLineOf(err.Error()))
 	}
-	result := dianaFileDeliveryResult{OK: true, Message: "文件已经发到会话里了。", Filename: name, Bytes: len(content), Preview: previewStatus}
+	result := dianaFileDeliveryResult{OK: true, Message: "文件已经发到会话里了。", Filename: name, Bytes: len(data), Preview: previewStatus}
 	t.record(ctx, result, "")
 	return marshalFileDeliveryResult(result), nil
 }

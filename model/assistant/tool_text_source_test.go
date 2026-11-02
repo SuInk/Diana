@@ -92,6 +92,28 @@ func TestFileDeliverySendsWorkspaceTextWithoutTruncation(t *testing.T) {
 	}
 }
 
+// 二进制文件（比如模型生成的 MIDI）走 path 原样交付，不再要求打 zip；预览跳过。
+func TestFileDeliverySendsWorkspaceBinary(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	if err := os.MkdirAll(AgentWorkspaceDir(), 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := "MThd\x00\x00\x00\x06\x00\x01\x00\x05\x01\xe0MTrk\xff\x2f\x00"
+	if err := os.WriteFile(filepath.Join(AgentWorkspaceDir(), "song.mid"), []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	r, uploads := newFileDeliveryTestRuntime(t)
+	tool := newDianaFileDeliveryTool(r, MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "1"}, nil, RelationshipPolicy{Owner: true})
+	raw, err := tool.Run(context.Background(), map[string]any{"filename": "song.mid", "path": "song.mid"})
+	result := decodeFileDeliveryResult(t, raw)
+	if err != nil || !result.OK || !strings.HasPrefix(result.Preview, "skipped") {
+		t.Fatalf("%s %v", raw, err)
+	}
+	if len(*uploads) != 1 || (*uploads)[0].body != source {
+		t.Fatal("binary file changed or not sent")
+	}
+}
+
 // Optional replay of the actual production HTML; no platform delivery occurs.
 func TestRenderMediaProductionFileReplay(t *testing.T) {
 	path := os.Getenv("DIANA_RENDER_REPLAY_HTML")

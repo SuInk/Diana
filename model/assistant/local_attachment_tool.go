@@ -17,25 +17,12 @@ import (
 
 const localAttachmentMaxBytes = 32 << 20
 
-// 发送前的类型白名单：不在表内的扩展名直接拒绝，避免把可执行文件或
-// 平台接口不认识的格式丢给 OneBot / Telegram 报错。mode=image 额外放行
-// SVG——SVG 不能直接当图片发，走 sendSVGImage 栅格化成 PNG。
+// mode=image 的类型白名单：只收平台能当图片发的位图，外加 SVG——SVG 不能直接当图片发，
+// 走 sendSVGImage 栅格化成 PNG。mode=file 不设白名单，只拦 fileDeliveryBlockedExts 里的
+// 可执行与安装文件：Telegram sendDocument 和 OneBot 上传文件都接受任意格式，白名单只会逼
+// 模型把 .mid 之类打成 zip 再发。
 var localAttachmentImageExts = map[string]struct{}{
 	"png": {}, "jpg": {}, "jpeg": {}, "jfif": {}, "gif": {}, "webp": {}, "bmp": {}, "svg": {},
-}
-
-var localAttachmentFileExts = map[string]struct{}{
-	// 文本、数据与办公文档
-	"txt": {}, "md": {}, "markdown": {}, "json": {}, "csv": {}, "tsv": {}, "xml": {},
-	"yaml": {}, "yml": {}, "toml": {}, "ini": {}, "log": {}, "pdf": {},
-	"doc": {}, "docx": {}, "xls": {}, "xlsx": {}, "ppt": {}, "pptx": {},
-	// 图片
-	"png": {}, "jpg": {}, "jpeg": {}, "jfif": {}, "gif": {}, "webp": {}, "bmp": {}, "svg": {},
-	"tif": {}, "tiff": {}, "heic": {}, "avif": {},
-	// 压缩包与音视频
-	"zip": {}, "gz": {}, "tar": {}, "7z": {}, "rar": {},
-	"mp3": {}, "wav": {}, "ogg": {}, "mp4": {}, "webm": {}, "mov": {},
-	"m4a": {}, "flac": {}, "amr": {}, "silk": {},
 }
 
 // telegramPhotoMaxBytes / telegramPhotoMaxDimensionSum / telegramPhotoMaxAspect 是
@@ -106,8 +93,8 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 			if _, ok := localAttachmentImageExts[ext]; !ok {
 				return "", fmt.Errorf("mode=image 只支持位图（png/jpg/gif/webp/bmp）和 svg，收到 .%s；文本或文档请用 mode=file", ext)
 			}
-		} else if _, ok := localAttachmentFileExts[ext]; !ok {
-			return "", fmt.Errorf("不支持的附件类型 .%s；可执行文件不会发送，其他格式请先打成 zip 再试", ext)
+		} else if _, blocked := fileDeliveryBlockedExts[ext]; blocked {
+			return "", fmt.Errorf("不发送 .%s 这类可执行或安装文件", ext)
 		}
 	}
 	// 和 read_file 用同一份凭据名单：工作目录是几台机器人共用的，MCP 配置和编码代理登录态里的令牌
