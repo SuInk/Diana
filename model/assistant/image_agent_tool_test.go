@@ -109,17 +109,20 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if err != nil || string(data) != "search-derived-image" {
 		t.Fatalf("shared image = %q, err = %v", data, err)
 	}
-	// 第一条是运行时替模型发的「开始处理」，第二条才是图片结果。开场白以前留给模型
-	// 自己在 final 里写，写不写、写成什么样都不保证。
+	// 第一条是运行时替模型发的「开始处理」，之后是图片结果。开场白以前留给模型
+	// 自己在 final 里写，写不写、写成什么样都不保证。说明和图片分两条发，不挤在一个气泡里。
 	sent := channel.sentSnapshot()
-	if len(sent) != 2 {
+	if len(sent) != 3 {
 		t.Fatalf("sent = %#v", sent)
 	}
 	if !strings.Contains(sent[0].Text, "开始生成图片") || strings.Contains(sent[0].Text, "任务编号") {
 		t.Fatalf("start announcement = %#v", sent[0])
 	}
-	if sent[1].Text != "按检索结果画好了。" || len(sent[1].ImageURLs) != 1 || sent[1].ImageURLs[0] != sharer.url {
-		t.Fatalf("sent = %#v", sent)
+	if sent[1].Text != "按检索结果画好了。" || len(sent[1].ImageURLs) != 0 {
+		t.Fatalf("caption = %#v", sent[1])
+	}
+	if sent[2].Text != "" || len(sent[2].ImageURLs) != 1 || sent[2].ImageURLs[0] != sharer.url {
+		t.Fatalf("image = %#v", sent[2])
 	}
 	var loggedPrompt string
 	imageLogFound := false
@@ -314,9 +317,9 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		t.Fatalf("reply = %q", reply)
 	}
 	sent := channel.sentSnapshot()
-	// 发图之前只该有一条文字。模型自己交代了这一轮，运行时的开场白就不再补发——
-	// 以前两条都发，用户连着看到两句几乎一样的话。
-	if len(sent) != 2 {
+	// 开工前只该有一条文字。模型自己交代了这一轮，运行时的开场白就不再补发——
+	// 以前两条都发，用户连着看到两句几乎一样的话。成图的说明和图片各占一条。
+	if len(sent) != 3 {
 		t.Fatalf("sent = %#v", sent)
 	}
 	for _, message := range sent {
@@ -325,16 +328,20 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 		}
 	}
 	textFound := false
+	captionFound := false
 	imageFound := false
 	for _, message := range sent {
 		if message.Text == reply && len(message.ImageURLs) == 0 {
 			textFound = true
 		}
-		if message.Text == "按查到的官方配色画好了。" && len(message.ImageURLs) == 1 && message.ImageURLs[0] == sharer.url {
+		if message.Text == "按查到的官方配色画好了。" && len(message.ImageURLs) == 0 {
+			captionFound = true
+		}
+		if message.Text == "" && len(message.ImageURLs) == 1 && message.ImageURLs[0] == sharer.url {
 			imageFound = true
 		}
 	}
-	if !textFound || !imageFound {
+	if !textFound || !captionFound || !imageFound {
 		t.Fatalf("sent = %#v", sent)
 	}
 	sharedPaths := sharer.pathsSnapshot()
