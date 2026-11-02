@@ -1,6 +1,6 @@
 # 工具目录合并方案（评估稿）
 
-用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版落地。本稿只给方案和数据，不改代码。
+用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版（v1）落地。在 v1 的基础上，[通用化方案（v2）](#通用化方案v2)改成按「做什么」分工具，看图、发送这些操作的对象来源统一成一个媒体引用参数，再在注册表层用通用的工具族外观实现，主人目录可以降到 55 行；v2 还没有回放。本稿只给方案和数据，不改代码。
 
 ## 先纠正一个前提
 
@@ -201,21 +201,94 @@
 - **新名带括号的写法会被照抄。** 我在规则文字里把旧名改写成「`runtime_info（action=model）`」，B 臂有 11 次模型把整串括号写进了 `tools_execute` 的 `name`。判分时把它们算作选对，但上线就会走协议修复。落地时规则文字要写成「`runtime_info` 的 model」，或者让 `tools_execute` 认这种写法。
 - **体积**：主人目录从 102 行降到 58 行，约 1.14 万字降到 0.81 万字，减 29%。群友目录从 40 行降到 33 行，约 0.57 万字降到 0.50 万字，减 11%。目录在缓存前缀里，所以省下的主要是首轮未命中和缓存失效时的 token。
 
+## 通用化方案（v2）
+
+上面那一版是「同簇几个工具合成一个」，合完仍按来源和场景分工具，比如看历史图、看网图、看头像、看工作目录图片各有入口。v2 改成按「做什么」分工具，把「对象从哪来」统一成一个参数。工具数量因此变少，以后新加一种来源也不用再加工具。
+
+### 统一的媒体引用
+
+现在看图和发送工具的入参，本质上都是同几种来源，只是每个工具各写各的字段：
+
+- `history_media`、`image_source`、`ai_image_detect` 用 `message_id`。
+- `telegram_images` 用 `message_ids`。
+- `remote_image` 用 `url` 和 `avatar_source`。
+- `view_image`、`send_attachment` 用 `path`。
+- `mcp_media` 用 `media_id=mcpm_…`。
+- `plugin_media` 用 `media_id`。
+
+把它们统一成一个引用字符串：
+
+| 写法 | 指向 | 现在由谁读 |
+|---|---|---|
+| `msg:<消息ID>[#第几个]` | 历史消息里的图片、视频或文件 | `history_media`、`telegram_images` |
+| `url:<直链>` | 公网图片或视频 | `remote_image` view、`plugin_media` view_video |
+| `avatar:bot\|sender\|group\|member:<ID>` | 头像 | `remote_image` view_avatar |
+| `path:<相对路径>` | 工作目录文件 | `view_image`、`send_attachment` |
+| `media:<ID>` | `plugin_media` resolve 或 MCP 结果暂存的媒体 | `plugin_media` send、`mcp_media` |
+
+解析放在一处（`resolveMediaRef`），内部调用现有的加载函数：`avatarIdentityImageURLs`、`fetchImageAsDataURL`、`agent.LookupMCPMedia` 等。各来源原有的权限和额度检查原样保留，例如群友只能读本群附件、每轮最多 8 张远程图。
+
+### 通用工具
+
+| 通用工具 | 吸收 | 说明 |
+|---|---|---|
+| `view` | `history_media`、`view_image`、`remote_image` 的 view/view_avatar | 看任意引用的画面。填 `question` 时由视觉模型作答，否则把画面附给模型。 |
+| `send` | `send_file`、`send_attachment`、`mcp_media`、`telegram_images`、`remote_image` 的 send/send_album | 发任意引用。多张图自动组成相册，Telegram 复用 file_id 是平台内部的优化。写好的文本用 `content`+`filename` 打包成文件。 |
+| `image_lookup` | `image_source`、`ai_image_detect`、`match_avatar` | 查一张图的出处、是否 AI 生成、是谁的头像。 |
+| `render` | `render`、`render_media` | 加 `output=image\|video\|gif`。 |
+| `files` | `list_files`、`find_files`、`grep`、`read_file` | 只读工作目录。 |
+| `file_edit` | `write_file`、`edit_file`、`manage_files`、`extract_archive`、`save_to_workspace` | 写工作目录。`save` 接受媒体引用，群友只能 `save` 本群附件。 |
+| `browser` | 13 个 `browser_*` 交互工具 | 带登录态的浏览器。`browser_render` 仍单独保留。 |
+| `extensions` | MCP 和 Skill 的安装、卸载、启停，`extension_access` | 确认码流程不变。 |
+| `tasks` | `reminder`、`event_trigger`、`subscription`、`tasks` | `kind` × `operation`，额度规则不变。 |
+| `roster` | `bot_admins`、`bot_markers`、`identity_links`、`reply_block` | 维护各类人员名单：管理员、机器人标记、屏蔽、跨平台关联。各名单的权限照旧：`blocked` 群管可改本群，其余仅主人。 |
+| `capabilities` | `capabilities`、`list_capabilities` | 第一句**沿用原文**，只在句尾补一句 `action=list` 仅主人。 |
+
+v1 回放说明工具名本身就是很强的选择信号，所以下面这些**保留原名**：
+
+- `version`、`runtime_model`、`host_stats`
+- `llm_config`、`bot_config`
+- `web_search`、`browser_render`
+- `chat_history`、`memory`、`notebook`、`relationship`
+
+MCP 工具在目录里**按服务折成一行**（`mcp__<服务>__*`），这是通用机制，对所有 MCP 服务都生效。
+
+### 实现：注册表层的工具族
+
+不重写现有工具，在 `agent.ToolRegistry` 上加一层通用的「工具族」外观（`ToolFamily`）：
+
+- **声明**：一个工具族只声明三样东西：对外的名字、第一句描述、`action` 到成员工具的映射。成员工具的实现、`Run`、单元测试都不动。
+- **schema**：由成员的 schema 合并生成，外加一个 `action` enum。enum 只列出本次注册表里实际存在的成员，所以 `Retain`、`DenyTools` 和插件开关对成员的裁剪会自动反映到 enum 上。群友看到的 `file_edit` 只有 `save`，`browser` 只有个人浏览器那几个动作。
+- **执行**：按 `action` 转给成员工具。`IntrospectionTool` 也按 action 委托给成员。日志、最近调用记忆、额度统计里同时记族名和成员名，所以本文的调用量统计以后照样能做。
+- **目录**：`Catalog()` 和系统提示词里的按需目录，只出现族名。
+
+### 体积
+
+用生产首步请求改写后统计：
+
+| 目录 | 生产 | v1 | v2 |
+|---|---|---|---|
+| 主人，行数 | 102 | 58 | **55** |
+| 主人，字数 | 1.14 万 | 0.81 万 | **0.77 万**（减 32%） |
+| 群友，行数 | 40 | 33 | 33 |
+
+v2 **还没有回放**。A 臂（生产原样）的结果可以直接复用，只需要重跑 B 臂：132 条，约 800 万输入 token。v1 里抢请求的两处（`runtime_info`、放宽 `capabilities` 的第一句）在 v2 里已经撤掉。新增的风险在 `view` 和 `send`：它们吸收了群友高频用的 `history_media`（30 天 387 次），回放时要重点看这两个。
+
 ## 推荐顺序
 
-先做纯收益、名字信号损失最小的，每步单独开 PR，各自回放：
+每步单独开 PR，各自回放：
 
-1. **非 Telegram 会话不进 `telegram_images`**；**MCP 工具按服务折成一行目录**。不改任何工具的契约，只是不让无关的行出现。
-2. **去掉主人目录里的重复行**（`github`、`cross_session_message`、`subscription`、`runtime_model` 各出现两次）。先查清前缀和尾部为什么都放了它们。
-3. **浏览器 13 合 1**（`browser`），以及**安装管理 6 合 1**（`extensions`）。这两组都只有主人用，调用量低，行数收益最大（-18 行）。
-4. **文件**：`files`（只读）、`file_edit`（写）、`send_file`（吸收 `send_attachment`）。合之前先把 `action` 的说明写成动宾句，因为回放里主人的 `action` 只对了一半。
-5. **`image_lookup`**、**`render` 吸收 `render_media`**、**`tasks` 吸收 `reminder`/`event_trigger`/`subscription`**。回放里这三组前后持平。`tasks` 改动面最大（额度、提示词规则、数据迁移都要过一遍），放在最后。
-6. **不做**：`version`、`runtime_model`、`host_stats` 合成 `runtime_info`；改写 `capabilities` 的第一句。`list_capabilities` 并入 `capabilities` 的话，第一句只能沿用原文。
+1. **两样不改契约的**：非 Telegram 会话不进 `telegram_images`；MCP 工具按服务折成一行目录。同时**去掉主人目录里的重复行**：`github`、`cross_session_message`、`subscription`、`runtime_model` 各出现两次，要先查清前缀和尾部为什么都放了它们。
+2. **通用机制本身**：`ToolFamily` 外观和 `resolveMediaRef`。先只接只有主人用的工具族：`browser`、`extensions`、`files`、`file_edit`、`roster`。这批低频，行数收益最大，可以验证外观层的权限裁剪和日志。
+3. **`view` 和 `send`**：群友可见，而且吸收了高频的 `history_media`，风险最大。除了生产回放，还要用合成探针把每种引用都测一遍。
+4. **`image_lookup`、`render`、`tasks`**：v1 回放里这三组前后持平。`tasks` 涉及额度、提示词规则和数据迁移，放在最后。
+5. **不做**：把 `version`、`runtime_model`、`host_stats` 合成 `runtime_info`；改写 `capabilities` 的第一句。
 
-每一步都要用本文的方法回放：新旧定义重写同一批生产首步请求。除了看总比例，还要逐条看分歧样本。B 臂里被 `capabilities` 抢走的那几条，按 [tool-descriptions.md](tool-descriptions.md) 的做法重复 10 次，并逐项换回旧定义做消融，确认是哪一处改动引起的。
+每一步都要用本文的方法回放：新旧定义重写同一批生产首步请求，除了看总比例，还要逐条看分歧样本。被 `capabilities` 这类宽描述工具抢走的样本，按 [tool-descriptions.md](tool-descriptions.md) 的做法重复 10 次，并逐项换回旧定义做消融。
 
 ## 这次没做的
 
+- **v2 回放**：只重跑 B 臂，约 800 万 token。
 - **近似路由回放**：从首步请求重建 `current_text`、`recent_messages` 和 `available_tools`，比较路由选中集合对生产实际工具的召回，约 200 万 token。生产不跑路由，这一项只在打算重新启用路由时才有意义。
 - **合成探针**：每个合并工具造 1～2 句典型请求（「这图出自哪部番」「明早 8 点提醒我」），专门测同簇分流，约 220 万 token。生产 3 天里簇内低频工具的样本太少（`image_source`、`ai_image_detect`、`match_avatar` 一条都没抽到），这一项能补上这个空白。
 - 回放脚本和抽样结果在本机临时目录，没有进仓库：样本含真实聊天内容，脚本也依赖生产 trace 的布局。复现的方法以本文「方法」一节为准。
