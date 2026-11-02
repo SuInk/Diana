@@ -276,14 +276,15 @@ func TestLocalAttachmentSVGImageModeNeedsCoreBrowser(t *testing.T) {
 	}
 }
 
-func TestLocalAttachmentTextFileUploadPassesWhitelist(t *testing.T) {
+func TestLocalAttachmentUncommonFileTypeUploads(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	root := AgentWorkspaceDir()
 	if err := os.MkdirAll(root, 0700); err != nil {
 		t.Fatal(err)
 	}
-	content := []byte("hello diana")
-	if err := os.WriteFile(filepath.Join(root, "notes.txt"), content, 0600); err != nil {
+	// MIDI 不在常见类型里，过去被白名单拦下、逼模型打 zip；现在只拦可执行文件。
+	content := []byte("MThd\x00\x00\x00\x06\x00\x01\x00\x05\x01\xe0")
+	if err := os.WriteFile(filepath.Join(root, "song.mid"), content, 0600); err != nil {
 		t.Fatal(err)
 	}
 	var received []byte
@@ -311,10 +312,10 @@ func TestLocalAttachmentTextFileUploadPassesWhitelist(t *testing.T) {
 	defer api.Close()
 	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, NewTelegramChannel(TelegramConfig{BotToken: "test", APIBaseURL: api.URL}), NewPluginManager(), nil, nil, nil, nil)
 	tool := &dianaLocalAttachmentTool{runtime: r, event: MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100123"}}
-	if _, err := tool.Run(context.Background(), map[string]any{"path": "notes.txt", "mode": "file"}); err != nil {
+	if _, err := tool.Run(context.Background(), map[string]any{"path": "song.mid", "mode": "file"}); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(received, content) || filename != "notes.txt" || method != "sendDocument" {
+	if !bytes.Equal(received, content) || filename != "song.mid" || method != "sendDocument" {
 		t.Fatalf("unexpected upload: %s %s bytes=%d", method, filename, len(received))
 	}
 }
