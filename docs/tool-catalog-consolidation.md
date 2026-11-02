@@ -1,6 +1,6 @@
 # 工具目录合并方案（评估稿）
 
-用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版（v1）落地。在 v1 的基础上，[通用化方案（v2）](#通用化方案v2)改成按「做什么」分工具，看图、发送这些操作的对象来源统一成一个媒体引用参数，再在注册表层用通用的工具族外观实现，主人目录可以降到 56 行。v2 回放的选对数和生产一样（都是 94/132），`capabilities` 抢走的请求从 v1 的 8 次降到 5 次。本稿只给方案和数据，不改代码。
+用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版（v1）落地。在 v1 的基础上，[通用化方案（v2）](#通用化方案v2)改成按「做什么」分工具，看图、发送这些操作的对象来源统一成一个媒体引用参数，再在注册表层用通用的工具族外观实现，主人目录可以降到 56 行。v2 回放的选对数和生产一样（都是 94/132）。之后的 v3 把 `history_media` 和 `reply_block` 拆回来单独保留，回放结果和 v2 没有差别；定稿按 v3，主人目录 58 行。本稿只给方案和数据，不改代码。
 
 ## 先纠正一个前提
 
@@ -232,7 +232,7 @@
 
 | 通用工具 | 吸收 | 说明 |
 |---|---|---|
-| `view` | `history_media`、`view_image`、`remote_image` 的 view/view_avatar | 看任意引用的画面。填 `question` 时由视觉模型作答，否则把画面附给模型。 |
+| `view` | `view_image`、`remote_image` 的 view/view_avatar | 把任意引用的画面附给模型看。v3 起不再吸收 `history_media`，原因见 v3 回放。 |
 | `send` | `send_file`、`send_attachment`、`mcp_media`、`telegram_images`、`remote_image` 的 send/send_album | 发任意引用。多张图自动组成相册，Telegram 复用 file_id 是平台内部的优化。写好的文本用 `content`+`filename` 打包成文件。 |
 | `image_lookup` | `image_source`、`ai_image_detect`、`match_avatar` | 查一张图的出处、是否 AI 生成、是谁的头像。 |
 | `render` | `render`、`render_media` | 加 `output=image\|video\|gif`。 |
@@ -241,7 +241,7 @@
 | `browser` | 13 个 `browser_*` 交互工具 | 带登录态的浏览器。`browser_render` 仍单独保留。 |
 | `extensions` | MCP 和 Skill 的安装、卸载、启停，`extension_access` | 确认码流程不变。 |
 | `tasks` | `reminder`、`event_trigger`、`subscription`、`tasks` | `kind` × `operation`，额度规则不变。 |
-| `roster` | `bot_admins`、`bot_markers`、`identity_links`、`reply_block` | 维护各类人员名单：管理员、机器人标记、屏蔽、跨平台关联。各名单的权限照旧：`blocked` 群管可改本群，其余仅主人。 |
+| `roster` | `bot_admins`、`bot_markers`、`identity_links` | 维护只有主人能改的人员名单：管理员、机器人标记、跨平台关联。`reply_block` 群管也能用，v3 起单独保留。 |
 | `capabilities` | （暂不吸收） | 原想并入 `list_capabilities`，第一句沿用原文、句尾补一句 `action=list` 仅主人。v2 回放里这一行仍然多抢了请求，所以先保持生产原样，主人目录因此多 1 行（56 行）。 |
 
 v1 回放说明工具名本身就是很强的选择信号，所以下面这些**保留原名**：
@@ -298,9 +298,29 @@ MCP 工具在目录里**按服务折成一行**（`mcp__<服务>__*`），这是
 | `render` | 3 | 3 | 3 |
 
 - **总体和生产持平**，比 v1 多对 2 条。`view` 吸收了高频的 `history_media`，在这批样本里没有掉分：4 条都对，不该调工具的 28 条也没有因此多调。不过样本里 `history_media` 只有 4 条，覆盖还不够。
-- **`capabilities` 仍然多抢了一些**：错选到它的次数，A 是 3，B 是 5（v1 是 8）。「你什么版本」2 条在 v2 里 `version` 已经保留原名，还是被 `capabilities` 抢走了。所以起因不在 `version` 的名字，而在 `capabilities` 这一行本身：v2 在句尾加了一句 `action=list`，或者并入 `list_capabilities` 改变了它的含义。`list_capabilities` 先不要并进来，保持原样。
+- **`capabilities` 仍然多抢了一些**：错选到它的次数，A 是 3，B 是 5（v1 是 8）。「你什么版本」2 条在 v2 里 `version` 已经保留原名，还是被 `capabilities` 抢走了。所以起因不在 `version` 的名字，而在 `capabilities` 这一行本身：v2 在句尾加了一句 `action=list`，或者并入 `list_capabilities` 改变了它的含义。`list_capabilities` 先不要并进来，保持原样。（v3 把 `capabilities` 恢复成生产原文后，仍有 1 条「什么版本」被它抢走；生产 A 臂自己也有 3 次错选到它。可见这部分有不少是噪声和模型本身的倾向，不全是合并造成的。）
 - **旧名改写的格式还是会被照抄进工具名**：v1 写成「`runtime_info（action=model）`」，抄了 11 次；v2 写成「`browser` 的 open」，抄了 4 次（`browser 的 open`、`files 的 list`、`files 的 find`、`file_edit 的 save`）。动作本身选对了，只是名字不合法。落地时有两种做法：一是规则文字里只写族名，不带动作；二是让 `tools_execute` 认这种写法，把「名字 + 空格/的/括号 + 动作」拆成 `name` 和 `action`。第二种对所有工具族都有效，也更通用。
 - **低频族的样本太少**：`files` 和 `file_edit` 合计 6 条，`find_files` 被选成了 `file_edit` 的 save。这一族的分流靠这批样本判断不了，要用合成探针补。
+
+### v3：`history_media` 和 `reply_block` 单独保留
+
+v2 是按「对象从哪来」合并的，但有两个工具硬塞进去并不合适：
+
+- **`history_media`**：`view_image`、`remote_image` 都是把画面附给模型看。它不一样，默认是把问题交给视觉模型、只拿回文字答案；它还能按页读 PDF 和文件，并有「摘要够用时别调」这类只对历史消息成立的规则。它在 30 天里被调用 387 次，是群友高频用的工具，在常驻推荐里有完整描述；合并却只省下 1 行目录。
+- **`reply_block`**：群管也能用，权限和另外三份只有主人能改的名单不一样。
+
+v3 把这两个拆回来单独保留，`roster` 只管主人的三份名单，`view` 的描述改成「把画面直接附给你看，聊天记录里的图用 `history_media`」，`capabilities` 恢复生产原文。回放分两部分：
+
+| 样本 | 条数 | 生产 | v2 | v3 |
+|---|---|---|---|---|
+| 受影响的 v2 样本（不该调工具 28、`capabilities` 10，以及看图、`version`、`bot_config` 相关） | 46 | 38 | 37 | 37 |
+| 其中不该调工具 | 28 | 25 | 25 | 24 |
+| 补抽：生产首个工具是 `history_media` | 8 | 3 | 5 | 5 |
+| 补抽：生产首个工具是 `remote_image` | 4 | 2 | 2 | 2 |
+
+- **v2 和 v3 在选工具上完全一样。** 补抽的 12 条里，v2 选 `view` 的地方，v3 恰好都选了 `history_media`，没有一条去向不同。也就是说，是否把 `history_media` 并进 `view`，靠选对率分不出好坏。两版都比生产多对 2 条：生产在这两条上先派了 `subtask` 或去查 `capabilities`，新目录下直接去看图了。
+- 所以这一项按语义和风险来定：**保留 `history_media` 和 `reply_block`**。代价只是 2 行目录，主人目录 58 行，换来的是参数和规则不混在一起，高频工具的描述也不用改。
+- 这一轮输入约 550 万 token。
 
 ## 推荐顺序
 
@@ -308,7 +328,7 @@ MCP 工具在目录里**按服务折成一行**（`mcp__<服务>__*`），这是
 
 1. **两样不改契约的**：非 Telegram 会话不进 `telegram_images`；MCP 工具按服务折成一行目录。同时**去掉主人目录里的重复行**：`github`、`cross_session_message`、`subscription`、`runtime_model` 各出现两次，要先查清前缀和尾部为什么都放了它们。
 2. **通用机制本身**：`ToolFamily` 外观和 `resolveMediaRef`。先只接只有主人用的工具族：`browser`、`extensions`、`files`、`file_edit`、`roster`。这批低频，行数收益最大，可以验证外观层的权限裁剪和日志。
-3. **`view` 和 `send`**：群友可见，而且吸收了高频的 `history_media`，风险最大。v2 回放里 `view` 4/4 都对，但样本太少，还要用合成探针把每种引用都测一遍。
+3. **`view` 和 `send`**：群友可见。`view` 只吸收「把画面附给模型看」的两个工具，`history_media` 保持原样（见 v3）。`send` 统一了好几种来源，还要用合成探针把每种引用都测一遍。
 4. **`image_lookup`、`render`、`tasks`**：v1 回放里这三组前后持平。`tasks` 涉及额度、提示词规则和数据迁移，放在最后。
 5. **不做**：把 `version`、`runtime_model`、`host_stats` 合成 `runtime_info`；改写 `capabilities` 的第一句。
 
