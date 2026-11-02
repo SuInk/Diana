@@ -45,10 +45,10 @@ func TestInlineReplyListsReportedProductionReply(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := splitEventChatReply(prepared, cfg, event)
-	if len(parts) != 1 || strings.Count(parts[0], "\n• 第") != 4 {
+	if len(parts) != 1 || strings.Count(parts[0], "\n第") != 4 {
 		t.Fatalf("want one bubble with four items, got %q", parts)
 	}
-	if strings.ReplaceAll(parts[0], "\n• ", "") != raw {
+	if strings.ReplaceAll(parts[0], "\n", "") != raw {
 		t.Fatal("formatting changed original wording")
 	}
 	if len(p.requests) != 0 || p.generationCalls != 0 {
