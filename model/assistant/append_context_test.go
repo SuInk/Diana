@@ -292,7 +292,7 @@ func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
 	const reply = "对，正好四个全是 y，y 家军实锤了"
 	first := appendTestTurn([]string{"[历史 10:07:03] 池宇健: 我发现活跃的bot都是y开头的"}, "", "【当前需要回复的消息】池宇健: 我发现活跃的bot都是y开头的")
 	transcript := append(append([]llm.Message(nil), first...), llm.Message{Role: llm.RoleAssistant, Content: reply})
-	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(first))
+	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(first), estimateMessagesTokens(first), nil)
 	if log == nil {
 		t.Fatal("log not created")
 	}
