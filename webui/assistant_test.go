@@ -296,7 +296,7 @@ func TestProfileSetRequiresReconnectForPlatformCredentials(t *testing.T) {
 		change    func(*assistant.BotConfig)
 		reconnect bool
 	}{
-		{"Telegram rich messages", assistant.BotConfig{Enabled: true, Platform: assistant.PlatformTelegram, TelegramBotToken: "test"}, func(c *assistant.BotConfig) { off := false; c.TelegramRichMessages = &off }, true},
+		{"Telegram rich messages", assistant.BotConfig{Enabled: true, Platform: assistant.PlatformTelegram, TelegramBotToken: "test"}, func(c *assistant.BotConfig) { on := true; c.TelegramRichMessages = &on }, true},
 		{"QQ official app id", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQAppID = "new-app" }, true},
 		{"QQ official app secret", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQAppSecret = "new-secret" }, true},
 		{"QQ official sandbox", qqOfficialProfile(), func(c *assistant.BotConfig) { c.QQSandbox = true }, true},

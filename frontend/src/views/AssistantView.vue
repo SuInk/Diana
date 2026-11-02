@@ -878,7 +878,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">Rich Messages 富消息</span>
                 </label>
-                <span class="hint">未配置时默认开启，手动关闭后会保留。为标题、列表和表格使用原生结构；API 明确不支持时回退普通消息。部分客户端可能显示“不支持”，服务端无法检测；遇到此问题请关闭。含提及或剧透的消息暂走普通富文本。</span>
+                <span class="hint">默认关闭。开启后为标题、列表和表格使用原生结构；API 明确不支持时回退普通消息。部分客户端可能显示“不支持”，服务端无法检测，确认自己的客户端能正常显示再开启。含提及或剧透的消息暂走普通富文本。</span>
               </div>
               <template v-if="currentPlatform === 'qq-official'">
                 <div class="field">
@@ -4667,7 +4667,7 @@ function setForm(config: BotProfileConfig): void {
     notebook_shared_scope_enabled: config.notebook_shared_scope_enabled ?? true,
     slang_learning_enabled: config.slang_learning_enabled ?? true,
     telegram_suppress_bot_messages: config.telegram_suppress_bot_messages ?? true,
-    telegram_rich_messages: config.telegram_rich_messages ?? true,
+    telegram_rich_messages: config.telegram_rich_messages ?? false,
     qq_typing_enabled: config.qq_typing_enabled ?? true,
     // 后端归一化后总会回填 mode；旧配置没有该字段时按布尔开关折算。
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。

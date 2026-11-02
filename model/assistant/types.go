@@ -2224,7 +2224,7 @@ func DefaultBotConfig() BotConfig {
 		BotReplyLoopThreshold:        defaultBotReplyLoopThreshold,
 		ReplyRefusalThreshold:        defaultReplyRefusalThreshold,
 		ReplySafetyMasterEnabled:     boolPointer(true),
-		TelegramRichMessages:         boolPointer(true),
+		TelegramRichMessages:         boolPointer(false),
 		TelegramSuppressBotMessages:  boolPointer(true),
 		QQTypingEnabled:              boolPointer(true),
 		NotebookSharedScopeEnabled:   boolPointer(true),
@@ -2471,7 +2471,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplySuppressionEnabled = boolPointer(true)
 	}
 	if cfg.TelegramRichMessages == nil {
-		cfg.TelegramRichMessages = boolPointer(true)
+		cfg.TelegramRichMessages = boolPointer(false)
 	}
 	if cfg.TelegramSuppressBotMessages == nil {
 		cfg.TelegramSuppressBotMessages = boolPointer(true)
@@ -3312,9 +3312,10 @@ func debugModeEnabled(cfg BotConfig) bool {
 	return cfg.DebugModeEnabled == nil || *cfg.DebugModeEnabled
 }
 
-// TelegramRichMessagesEnabled defaults missing settings to enabled while preserving explicit opt-outs.
+// TelegramRichMessagesEnabled 未配置时关闭：部分客户端显示「不支持的消息」，
+// 服务端无从得知，只能由主人确认自己的客户端能显示后手动开启。
 func (cfg BotConfig) TelegramRichMessagesEnabled() bool {
-	return boolValue(cfg.TelegramRichMessages, true)
+	return boolValue(cfg.TelegramRichMessages, false)
 }
 
 func boolPointer(value bool) *bool {

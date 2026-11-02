@@ -150,6 +150,7 @@ func (r *telegramRichBlockRenderer) blocks(parent ast.Node, depth int) []any {
 
 func (r *telegramRichBlockRenderer) inline(parent ast.Node) []any {
 	out := make([]any, 0)
+	var literal strings.Builder
 	for node := parent.FirstChild(); node != nil; node = node.NextSibling() {
 		switch n := node.(type) {
 		case *ast.Text:
@@ -167,6 +168,7 @@ func (r *telegramRichBlockRenderer) inline(parent ast.Node) []any {
 				return nil
 			}
 			out = append(out, value)
+			literal.WriteString(value)
 			if n.SoftLineBreak() || n.HardLineBreak() {
 				out = append(out, "\n")
 			}
@@ -176,6 +178,7 @@ func (r *telegramRichBlockRenderer) inline(parent ast.Node) []any {
 				return nil
 			}
 			out = append(out, string(n.Value))
+			literal.WriteString(string(n.Value))
 		case *ast.Emphasis:
 			kind := "italic"
 			if n.Level == 2 {
@@ -211,7 +214,20 @@ func (r *telegramRichBlockRenderer) inline(parent ast.Node) []any {
 			return nil
 		}
 	}
+	// CommonMark 的左右侧定界规则不认中文标点：「**注意：**别这样」里闭合的 **
+	// 前面是标点、后面是汉字，不算右侧定界，goldmark 就把两对 ** 当正文留下了。
+	// 模型常这么写，富消息又会原样显示星号，所以只要正文里还能配出成对标记，
+	// 就整条退回 entities 路径——那边按字面配对，中文标点旁也能正确加粗。
+	if telegramRichLeakedDelimiters(literal.String()) {
+		r.valid = false
+		return nil
+	}
 	return out
+}
+
+func telegramRichLeakedDelimiters(text string) bool {
+	return tgBoldPattern.MatchString(text) || tgStrikePattern.MatchString(text) ||
+		tgItalicStar.MatchString(text) || tgItalicUnderscore.MatchString(text)
 }
 
 // Use Goldmark's escaping semantics, then remove only its HTML transport
