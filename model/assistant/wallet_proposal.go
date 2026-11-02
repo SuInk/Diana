@@ -148,13 +148,10 @@ func (r *Runtime) askWalletApproval(ctx context.Context, event MessageEvent, pro
 	if who != "" {
 		where += "，和 " + who + " 聊天时"
 	}
-	answer := fmt.Sprintf("同意就回「同意购买 %s」，不同意回「取消购买 %s」。只有一笔待审批时也可以回「同意购买」或「取消购买」，无需确认码", proposal.Item, proposal.Item)
-	if walletQuickApprovable(cfg, proposal) {
-		answer = "同意就回「同意」，不同意回「不要」"
-	}
-	message := fmt.Sprintf("我想用零花钱买：%s，%s。\n理由：%s\n（%s提的）\n\n%s。%d 小时内没回就作废，钱不动。",
+	// 主人怎么回都行：整句「同意」「不要」在进模型前直接处理，其余的由模型按语义调 wallet decide。
+	message := fmt.Sprintf("我想用零花钱买：%s，%s。\n理由：%s\n（%s提的）\n\n买不买回我一句就行，%d 小时内没回就作废。",
 		proposal.Item, formatWalletYuan(proposal.PriceCents, false), firstNonEmpty(proposal.Reason, "没写"),
-		where, answer, int(WalletProposalTTL/time.Hour))
+		where, int(WalletProposalTTL/time.Hour))
 	target := MessageEvent{Kind: EventKindPrivate, ProfileID: event.ProfileID, Platform: event.Platform, SelfID: event.SelfID, UserID: ownerID}
 	return r.sendSubscriberNotice(ctx, target, message)
 }
@@ -168,21 +165,33 @@ func (r *Runtime) handleWalletApprovalReply(event MessageEvent, text string) (st
 	store := r.walletProposalStore()
 	ctx, cancel := context.WithTimeout(context.Background(), walletLoadTimeout)
 	defer cancel()
+	return r.decideWalletProposal(ctx, store, event, proposal, approve), true
+}
+
+// decideWalletProposal 以当前发言者的名义审批一份提议，返回给主人看的结果。
+// 调用方负责先确认发言者是主人。
+func (r *Runtime) decideWalletProposal(ctx context.Context, store WalletStore, event MessageEvent, proposal WalletProposal, approve bool) string {
 	decided, err := store.DecideWalletProposal(ctx, proposal.ProfileID, proposal.ID, approve,
 		strings.TrimSpace(event.UserID), strings.TrimSpace(event.SenderName), r.clock())
 	switch {
 	case errors.Is(err, ErrWalletInsufficient):
-		return fmt.Sprintf("零花钱不够买「%s」了，这次没扣。提议还留着，补了零花钱再确认一次就行。", proposal.Item), true
+		return fmt.Sprintf("零花钱不够买「%s」了，这次没扣。提议还留着，补了零花钱再确认一次就行。", proposal.Item)
 	case errors.Is(err, ErrWalletProposalClosed):
-		return "这个购买提议已经处理过或过期了。", true
+		return "这个购买提议已经处理过或过期了。"
 	case err != nil:
 		log.Printf("diana wallet proposal decide failed: %v", err)
-		return "处理购买提议失败了，请稍后再试或看服务日志。", true
+		return "处理购买提议失败了，请稍后再试或看服务日志。"
 	}
 	if decided.Status == WalletProposalApproved {
-		return fmt.Sprintf("好，「%s」买下了，扣了 %s。", decided.Item, formatWalletYuan(decided.PriceCents, false)), true
+		return fmt.Sprintf("好，「%s」买下了，扣了 %s。", decided.Item, formatWalletYuan(decided.PriceCents, false))
 	}
-	return fmt.Sprintf("好，「%s」不买了，钱没动。", decided.Item), true
+	return fmt.Sprintf("好，「%s」不买了，钱没动。", decided.Item)
+}
+
+// walletSpeakerIsOwner 报告这条消息是不是主人本人发的。花钱只有主人能点头，管理员不行。
+func (r *Runtime) walletSpeakerIsOwner(event MessageEvent) bool {
+	ownerID := strings.TrimSpace(r.effectiveConfigForEvent(event).OwnerID)
+	return ownerID != "" && strings.TrimSpace(event.UserID) == ownerID
 }
 
 // walletApprovalCodePending 报告消息里有没有待审批的购买确认码，只看不处理。
@@ -196,8 +205,7 @@ func (r *Runtime) matchWalletApprovalCode(event MessageEvent, text string) (Wall
 		return WalletProposal{}, false, false
 	}
 	// 只认主人本人。管理员也能走到主人命令这一层，但花钱只有主人能点头。
-	ownerID := strings.TrimSpace(r.effectiveConfigForEvent(event).OwnerID)
-	if ownerID == "" || strings.TrimSpace(event.UserID) != ownerID {
+	if !r.walletSpeakerIsOwner(event) {
 		return WalletProposal{}, false, false
 	}
 	store := r.walletProposalStore()
@@ -234,15 +242,18 @@ func (r *Runtime) matchWalletApprovalCode(event MessageEvent, text string) (Wall
 		}
 	}
 	cfg := r.effectiveConfigForEvent(event)
-	if approve, ok := walletQuickReply(text); ok && event.Kind == EventKindPrivate && WalletQuickApproveCents(cfg) > 0 {
+	if approve, ok := walletQuickReply(text); ok && event.Kind == EventKindPrivate {
 		ctx, cancel := context.WithTimeout(context.Background(), walletLoadTimeout)
 		defer cancel()
 		pending, err := store.ListWalletProposals(ctx, strings.TrimSpace(event.ProfileID), true, r.clock(), MaximumPendingWalletProposals)
 		if err != nil {
 			return WalletProposal{}, false, false
 		}
-		// 新的在前：主人回「同意」时说的是刚收到的那一条。额度外的提议跳过，
-		// 那些只认确认码。
+		// 只有一笔在等时，「同意」「不要」说的就是它，不用再点名。
+		if len(pending) == 1 {
+			return pending[0], approve, true
+		}
+		// 好几笔时只有旧的「点一下就买」额度还认一个词：新的在前，挑额度内最新那笔。
 		for _, proposal := range pending {
 			if walletQuickApprovable(cfg, proposal) {
 				return proposal, approve, true

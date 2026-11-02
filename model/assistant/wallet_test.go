@@ -177,27 +177,55 @@ func TestWalletQuickApproveWithinQuota(t *testing.T) {
 	if !handled || !strings.Contains(reply, "奶茶") || len(store.decisions) != 1 || !store.decisions[0] {
 		t.Fatalf("quick approve reply=%q decisions=%v", reply, store.decisions)
 	}
-	// 额度外的那份不能被一句「同意」买下，只认码。
-	if _, handled := runtime.handleWalletApprovalReply(owner, "同意"); handled {
-		t.Fatal("over-quota proposal approved without code")
-	}
-	allowCode, _ := walletProposalCodes(big)
-	if _, handled := runtime.handleWalletApprovalReply(owner, allowCode); !handled {
-		t.Fatal("over-quota code not recognized")
+	// 只剩额度外那一笔时，一句「同意」说的就是它。
+	reply, handled = runtime.handleWalletApprovalReply(owner, "同意")
+	if !handled || !strings.Contains(reply, "画集") || len(store.decisions) != 2 || !store.decisions[1] {
+		t.Fatalf("single pending approve reply=%q decisions=%v", reply, store.decisions)
 	}
 	if small.Status != WalletProposalPending || big.Status != WalletProposalPending {
 		t.Fatal("test fixtures mutated unexpectedly")
 	}
 }
 
-func TestWalletQuickApproveOffByDefault(t *testing.T) {
+func TestWalletSingleWordApproval(t *testing.T) {
 	store := &memoryWalletStore{}
 	runtime := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetWalletStore(store)
-	store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "奶茶", PriceCents: 100, Now: runtime.clock()})
+	store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "电脑", PriceCents: 450400, Now: runtime.clock()})
+	owner := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10001"}
+	// 群里说、别人说、话夹在句子里都不算。
+	for _, attempt := range []struct {
+		event MessageEvent
+		text  string
+	}{
+		{MessageEvent{Kind: EventKindGroup, ProfileID: "bot-1", GroupID: "20001", UserID: "10001"}, "同意"},
+		{MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10003"}, "同意"},
+		{owner, "同意，不过明天再说"},
+	} {
+		if _, handled := runtime.handleWalletApprovalReply(attempt.event, attempt.text); handled {
+			t.Fatalf("%s %q should not approve", attempt.event.UserID, attempt.text)
+		}
+	}
+	// 只有一笔在等时不用额度、不用点名，回「同意」就买。
+	reply, handled := runtime.handleWalletApprovalReply(owner, "同意")
+	if !handled || !strings.Contains(reply, "买下了") || len(store.decisions) != 1 || !store.decisions[0] {
+		t.Fatalf("reply=%q decisions=%v", reply, store.decisions)
+	}
+	if _, handled := runtime.handleWalletApprovalReply(owner, "同意"); handled {
+		t.Fatal("replayed approval")
+	}
+}
+
+func TestWalletSingleWordNeedsNameWhenSeveralPending(t *testing.T) {
+	store := &memoryWalletStore{}
+	runtime := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetWalletStore(store)
+	for _, item := range []string{"画集", "手办"} {
+		store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: item, PriceCents: 30000, Now: runtime.clock()})
+	}
 	owner := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10001"}
 	if _, handled := runtime.handleWalletApprovalReply(owner, "同意"); handled {
-		t.Fatal("quick approve active without quota")
+		t.Fatal("ambiguous single-word approval accepted")
 	}
 }
 
@@ -277,5 +305,34 @@ func TestWalletAutoApprovalConfigRoundTrip(t *testing.T) {
 		if got := WalletAutoApproveCents(updated); got != int64(cents) {
 			t.Fatalf("omitted field reset threshold: %d", got)
 		}
+	}
+}
+
+func TestWalletDecideBySemantics(t *testing.T) {
+	store := &memoryWalletStore{}
+	rt := NewRuntime(BotConfig{OwnSpaceEnabled: boolPointer(true), OwnerID: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	rt.SetWalletStore(store)
+	a, _ := store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "画集", PriceCents: 30000, Now: rt.clock()})
+	b, _ := store.CreateWalletProposal(context.Background(), WalletProposalRequest{ProfileID: "bot-1", Item: "手办", PriceCents: 30000, Now: rt.clock()})
+	owner := MessageEvent{Kind: EventKindPrivate, ProfileID: "bot-1", UserID: "10001"}
+	member := MessageEvent{Kind: EventKindGroup, ProfileID: "bot-1", GroupID: "20001", UserID: "10003"}
+
+	if _, err := newDianaWalletTool(rt, member).Run(context.Background(), map[string]any{"operation": "decide", "approve": true, "proposal_id": a.ID}); err == nil {
+		t.Fatal("non-owner decided")
+	}
+	tool := newDianaWalletTool(rt, owner)
+	// 好几笔在等又没给 ID：不替主人挑。
+	out, err := tool.Run(context.Background(), map[string]any{"operation": "decide", "approve": true})
+	if err != nil || strings.Contains(out, `"ok":true`) || len(store.decisions) != 0 {
+		t.Fatalf("ambiguous decide out=%s err=%v", out, err)
+	}
+	for _, id := range []string{a.ID, b.ID} {
+		out, err := tool.Run(context.Background(), map[string]any{"operation": "decide", "approve": true, "proposal_id": id})
+		if err != nil || !strings.Contains(out, "买下了") {
+			t.Fatalf("decide %s out=%s err=%v", id, out, err)
+		}
+	}
+	if len(store.decisions) != 2 || !store.decisions[0] || !store.decisions[1] {
+		t.Fatalf("decisions=%v", store.decisions)
 	}
 }

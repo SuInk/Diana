@@ -161,11 +161,19 @@ func (r *Runtime) walletContext(ctx context.Context, event MessageEvent) string 
 	if proposals := r.walletProposalStore(); proposals != nil {
 		pending, err := proposals.ListWalletProposals(loadCtx, profileID, true, r.clock(), MaximumPendingWalletProposals)
 		if err == nil && len(pending) > 0 {
+			owner := r.walletSpeakerIsOwner(event)
 			items := make([]string, 0, len(pending))
 			for _, proposal := range pending {
-				items = append(items, proposal.Item+" "+formatWalletYuan(proposal.PriceCents, false))
+				item := proposal.Item + " " + formatWalletYuan(proposal.PriceCents, false)
+				if owner {
+					item += "（ID " + proposal.ID + "）"
+				}
+				items = append(items, item)
 			}
 			block += "\n在等主人点头：" + strings.Join(items, "、")
+			if owner {
+				block += "\n现在说话的就是主人：这条消息的意思如果是答应或拒绝上面的购买，用 wallet decide 处理。"
+			}
 		}
 	}
 	return block
