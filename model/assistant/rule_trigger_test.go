@@ -3,6 +3,8 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -34,16 +36,17 @@ func TestRuleTriggerRoutingWithoutModel(t *testing.T) {
 
 func TestRuleTriggerStableSample(t *testing.T) {
 	e := MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "m"}
-	for chance := 0; chance <= 100; chance++ {
+	for percent := 0; percent <= 100; percent++ {
+		chance := float64(percent) / 100
 		if ruleTriggerSample(e, chance) != ruleTriggerSample(e, chance) {
 			t.Fatal("unstable")
 		}
 	}
-	if ruleTriggerSample(e, 0) || !ruleTriggerSample(e, 100) {
+	if ruleTriggerSample(e, 0) || !ruleTriggerSample(e, 1) {
 		t.Fatal("probability endpoints")
 	}
 	e.MessageID = ""
-	if ruleTriggerSample(e, 100) {
+	if ruleTriggerSample(e, 1) {
 		t.Fatal("missing ID must not sample")
 	}
 }
@@ -207,5 +210,81 @@ func TestReplyTriggerCapabilityRanksFirst(t *testing.T) {
 		if len(hits) == 0 || hits[0].ID != "core:reply-trigger" {
 			t.Fatalf("%q top hits %v", query, hits)
 		}
+	}
+}
+
+func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
+	const at = int64(1_000_000)
+	now := time.Unix(at, 0)
+	msg := func(id, user string, ago int64, text string) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: id, UserID: user, Time: at - ago, RawMessage: text}
+	}
+	current := msg("cur", "u1", 0, "")
+	// 一段普通节奏：三个人隔几十秒说一句，上一条 40 秒前。
+	normal := []MessageEvent{msg("a", "u2", 200, "x"), msg("b", "u3", 120, "y"), msg("c", "u2", 40, "z")}
+	chance := func(text string, history []MessageEvent, fatigue float64) float64 {
+		got, _ := ruleChatChance(30, current, text, history, "bot", fatigue, now)
+		return got
+	}
+
+	if got := chance("今天食堂的菜还行", normal, 0); math.Abs(got-0.3) > 1e-9 {
+		t.Fatalf("plain message should keep base chance, got %v", got)
+	}
+	if got := chance("今天去哪吃饭？", normal, 0); got <= 0.3 {
+		t.Fatalf("question should raise chance, got %v", got)
+	}
+	if got := chance("哈哈哈", normal, 0); got >= 0.3 {
+		t.Fatalf("filler should lower chance, got %v", got)
+	}
+	if got := chance("[图片]", normal, 0); got >= 0.3 {
+		t.Fatalf("image-only should lower chance, got %v", got)
+	}
+	if got := chance("今天食堂的菜还行", nil, 0); got <= 0.3 {
+		t.Fatalf("first message after silence should raise chance, got %v", got)
+	}
+	if got := chance("今天食堂的菜还行", []MessageEvent{msg("old", "u2", 900, "x")}, 0); got <= 0.3 {
+		t.Fatalf("quiet gap should raise chance, got %v", got)
+	}
+
+	var busy []MessageEvent
+	for i := 0; i < 23; i++ {
+		busy = append(busy, msg(fmt.Sprintf("b%d", i), fmt.Sprintf("u%d", 2+i%5), int64(100-i*4), "刷"))
+	}
+	if got := chance("今天食堂的菜还行", busy, 0); math.Abs(got-0.3*0.25) > 1e-9 {
+		t.Fatalf("24 messages in 2 minutes should scale to 6/24, got %v", got)
+	}
+
+	duo := []MessageEvent{msg("d1", "u2", 60, "x"), msg("d2", "u1", 45, "y"), msg("d3", "u2", 30, "z")}
+	if got := chance("今天食堂的菜还行", duo, 0); got >= 0.3 {
+		t.Fatalf("two-person exchange should lower chance, got %v", got)
+	}
+
+	withBot := append(append([]MessageEvent(nil), normal...), MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "bot1", UserID: "bot", Time: at - 20, Outbound: true})
+	if got := chance("今天食堂的菜还行", withBot, 0); got <= 0.3 {
+		t.Fatalf("follow-up right after the bot should raise chance, got %v", got)
+	}
+
+	if got := chance("今天食堂的菜还行", normal, 1); got >= 0.3*0.31 {
+		t.Fatalf("full fatigue should cut chance to 30%%, got %v", got)
+	}
+
+	if got := chance("今天去哪吃饭？", nil, 0); got > 0.6+1e-9 {
+		t.Fatalf("chance must be capped at twice the base, got %v", got)
+	}
+	if got, _ := ruleChatChance(100, current, "哈哈", busy, "bot", 1, now); got != 1 {
+		t.Fatalf("100%% means always, got %v", got)
+	}
+	if got, _ := ruleChatChance(0, current, "在吗？", nil, "bot", 0, now); got != 0 {
+		t.Fatalf("0%% means never, got %v", got)
+	}
+}
+
+func TestRuleTriggerReasonShowsAdjustedChance(t *testing.T) {
+	cfg := BotConfig{Participation: &ParticipationPreferences{TriggerMode: "rules", RuleChance: 30, CooldownSeconds: 30}}
+	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { t.Fatal("rules must not call routing model"); return nil, nil })
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "哈哈哈", Time: time.Now().Unix()}
+	routed, _, _, _ := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+	if !strings.Contains(routed.routingReason, "基础概率 30%") || !strings.Contains(routed.routingReason, "附和或表情") {
+		t.Fatalf("reason should explain the adjustment: %s", routed.routingReason)
 	}
 }

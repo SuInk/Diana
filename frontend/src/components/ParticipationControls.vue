@@ -110,13 +110,13 @@ function updateCriteria(event: Event) {
         <section v-if="rules" class="participation-setting">
           <div class="setting-copy">
             <label :for="id + '-chance'">随机接话概率（%）</label>
-            <p class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息按此概率接话，不做语义判断。默认 30%；填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
+            <p class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息以此为基础概率接话，不调用模型：群里聊得快、两人正在对话、单字附和或纯表情、对同一人回复疲劳时调低；问句、冷场后第一句、接着机器人刚说的话时调高，最多到两倍。默认 30%；填 100 总是接话，填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
           </div>
           <input :id="id + '-chance'" class="input" type="number" min="0" max="100" step="1" aria-label="随机接话概率" :value="value.rule_chance ?? defaultRuleTriggerChance" @input="updateRuleChance" @blur="($event.target as HTMLInputElement).value = String(value.rule_chance ?? defaultRuleTriggerChance)" />
           <div class="field wide cooldown-setting">
             <label :for="id + '-rule-cooldown'">随机接话冷却时间（秒）</label>
             <input :id="id + '-rule-cooldown'" class="input" type="number" min="0" max="3600" step="1" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
-            <span class="hint">只限制随机接话，不限制 @、引用回复和称呼触发。不会理解话题是否适合插话；其他机器人仅明确 @ 或回复本机时放行。</span>
+            <span class="hint">只限制随机接话，不限制 @、引用回复和称呼触发。不做语义判断，只看上述本地信号；其他机器人仅明确 @ 或回复本机时放行。</span>
           </div>
         </section>
         <section v-if="!rules" class="participation-setting">

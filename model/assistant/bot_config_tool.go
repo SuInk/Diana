@@ -36,8 +36,8 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"scope":                        toolEnumParam("settings 默认群聊 group、私聊 bot；诊断省略或传 bot。不支持跨机器人或群。", "group", "bot"),
 		"section":                      toolEnumParam("默认 settings：接话和欢迎设置，可局部 update；其他部分仅主人 get 脱敏诊断。", "settings", "all", "bot", "llm", "skills", "runtime", "paths"),
 		"desire_level":                 toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
-		"proactive_mode":               toolEnumParam("主动接话的触发模式：semantic 每条候选消息调用评分模型判断；rules 规则触发，不调用评分模型（省 Token），按 rule_chance 随机接话。@、引用和触发词两种模式都直接回复。", "semantic", "rules"),
-		"rule_chance":                  toolIntParam("规则触发的随机接话概率（百分比），0 只回应明确触发；只在 rules 模式生效。", 0, 100),
+		"proactive_mode":               toolEnumParam("主动接话的触发模式：semantic 每条候选消息调用评分模型判断；rules 规则触发，不调用评分模型（省 Token），以 rule_chance 为基础概率随机接话（按群活跃度、问句、附和、两人对话、回复疲劳等本地信号调整）。@、引用和触发词两种模式都直接回复。", "semantic", "rules"),
+		"rule_chance":                  toolIntParam("规则触发的基础接话概率（百分比），会按本地信号调整、最多翻倍，100 总是接话，0 只回应明确触发；只在 rules 模式生效。", 0, 100),
 		"relevance_level":              toolEnumParam("on：明确跟机器人说话时回应。", "on", "off"),
 		"chat_level":                   toolEnumParam("闲聊档位，按本群近一小时的插话需求动态控制频率，受冷却限制；always 不限频率。", "off", "minimal", "low", "medium", "high", "always"),
 		"cooldown_seconds":             toolIntParam("主动闲聊冷却秒数，0 关闭。", 0, 3600),
@@ -471,7 +471,7 @@ func (*dianaBotConfigTool) CanonicalOperation(input map[string]any) string {
 func proactiveModeView(p ParticipationPreferences) map[string]any {
 	if p.TriggerMode == "rules" {
 		return map[string]any{"mode": "rules", "label": "规则触发（省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
-			"note": "未被点名的消息不调用接话评分模型，按 rule_chance 抽签；relevance_level、chat_level 和评分门槛不生效"}
+			"note": "未被点名的消息不调用接话评分模型，以 rule_chance 为基础概率、按本地信号调整后抽签；relevance_level、chat_level 和评分门槛不生效"}
 	}
 	return map[string]any{"mode": "semantic", "label": "语义判断", "relevance_level": p.RelevanceLevel, "chat_level": p.ChatLevel, "cooldown_seconds": p.CooldownSeconds,
 		"note": "未被点名的候选消息先调用一次接话评分模型；改成 proactive_mode=rules 可省掉这次调用"}
