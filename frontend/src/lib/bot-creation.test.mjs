@@ -13,7 +13,7 @@ function load(name, context) {
   return context[name];
 }
 
-test("Telegram rich messages default on without overriding an explicit opt-out", () => {
+test("Telegram rich messages default off without overriding an explicit opt-in", () => {
   const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "setForm");
   let initializer;
   function visit(node) {
@@ -22,7 +22,7 @@ test("Telegram rich messages default on without overriding an explicit opt-out",
   }
   visit(fn);
   assert.ok(initializer);
-  for (const [value, want] of [[undefined, true], [null, true], [true, true], [false, false]]) {
+  for (const [value, want] of [[undefined, false], [null, false], [true, true], [false, false]]) {
     assert.equal(vm.runInNewContext(initializer, { config: { telegram_rich_messages: value } }), want);
   }
 });

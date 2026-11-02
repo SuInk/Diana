@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -171,8 +172,8 @@ func TestTelegramRichSendAndSafeFallback(t *testing.T) {
 }
 
 func TestTelegramRichMessagesConfigRoundTrip(t *testing.T) {
-	if !DefaultBotConfig().TelegramRichMessagesEnabled() || !(BotConfig{}).WithDefaults().TelegramRichMessagesEnabled() {
-		t.Fatal("unconfigured bots must default on")
+	if DefaultBotConfig().TelegramRichMessagesEnabled() || (BotConfig{}).WithDefaults().TelegramRichMessagesEnabled() {
+		t.Fatal("unconfigured bots must default off")
 	}
 	for _, enabled := range []bool{true, false} {
 		cfg := BotConfig{Platform: PlatformTelegram, TelegramRichMessages: boolPointer(enabled)}
@@ -191,8 +192,8 @@ func TestTelegramRichMessagesDefaultAndExplicitOptOut(t *testing.T) {
 		json string
 		want bool
 	}{
-		{`{}`, true},
-		{`{"telegram_rich_messages":null}`, true},
+		{`{}`, false},
+		{`{"telegram_rich_messages":null}`, false},
 		{`{"telegram_rich_messages":true}`, true},
 		{`{"telegram_rich_messages":false}`, false},
 	} {
@@ -216,8 +217,8 @@ func TestTelegramRichMessagesDefaultAndExplicitOptOut(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !tc.want && !strings.Contains(string(encoded), `"telegram_rich_messages":false`) {
-					t.Fatal("explicit false omitted from payload")
+				if !strings.Contains(string(encoded), `"telegram_rich_messages":`+strconv.FormatBool(tc.want)) {
+					t.Fatal("preference omitted from payload")
 				}
 				var decoded ConfigPayload
 				if err := json.Unmarshal(encoded, &decoded); err != nil {
@@ -236,5 +237,32 @@ func TestTelegramRichMessagesDefaultAndExplicitOptOut(t *testing.T) {
 				t.Fatal("omitted field in an older client must preserve preference")
 			}
 		})
+	}
+}
+
+// CommonMark 的定界符规则在中文标点旁失效（「**注意：**别」），goldmark 会把 **
+// 当正文发出去。这类消息要整条退回 entities 路径，由它按字面配对。
+func TestTelegramRichBlocksFallBackOnUnparsedDelimiters(t *testing.T) {
+	for _, text := range []string{
+		"**注意：**别这样",
+		"这是**“重点”**内容",
+		"结论：**能用。**然后",
+		"- **步骤一：**打开设置",
+		"| 项 | 值 |\n| - | - |\n| a | **“b”**c |",
+		"用 ~~“旧的”~~新的",
+		"语气*“轻一点”*吧",
+	} {
+		if blocks, ok := telegramRichBlocks(text); ok {
+			t.Fatalf("%q should fall back, got %#v", text, blocks)
+		}
+		plain, entities := telegramRichText(text, nil)
+		if strings.ContainsAny(plain, "*~") || len(entities) == 0 {
+			t.Fatalf("entities path must render %q, got %q %#v", text, plain, entities)
+		}
+	}
+	for _, text := range []string{"正常**加粗**文字", "3 * 4 = 12", "`a**b`", "```\n**x\n```", "snake_case_name 不是斜体"} {
+		if _, ok := telegramRichBlocks(text); !ok {
+			t.Fatalf("%q should stay on rich path", text)
+		}
 	}
 }
