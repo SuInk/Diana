@@ -51,6 +51,9 @@ func TestMemberBubblewrapArgsStartFromEmptyRoot(t *testing.T) {
 	if strings.Contains(joined, "--ro-bind / /") {
 		t.Fatal("member sandbox binds the whole root")
 	}
+	if strings.Contains(joined, "--tmpfs") || !strings.Contains(joined, "--remount-ro /dev --remount-ro /") {
+		t.Fatalf("member sandbox leaves a writable tmpfs: %v", args)
+	}
 	if !slices.Contains(args, "--unshare-all") {
 		t.Fatalf("args lack --unshare-all: %v", args)
 	}
@@ -228,6 +231,20 @@ func TestMemberCommandCannotReadOutsideOwnDir(t *testing.T) {
 	escape, _ := runMemberCommand(context.Background(), sandbox, MemberCommandRequest{Dir: dir, Command: "python3", Args: []string{"-c", "import sys\ntry:\n  open(sys.argv[1],'w').write('x');print('LEAK')\nexcept Exception as e:\n  print('denied')", filepath.Join(root, "planted.txt")}})
 	if strings.Contains(escape.Output, "LEAK") {
 		t.Fatal("member wrote outside its dir")
+	}
+}
+
+// 除了成员目录，哪里都写不进去：/tmp、/dev/shm 和沙盒的根都不能变成一块不限量的
+// 内存盘。
+func TestMemberCommandCannotWriteRamBackedPaths(t *testing.T) {
+	sandbox := realMemberSandbox(t)
+	_, dir := memberTestDir(t)
+	code := "import os\nfor p in ['/tmp/x','/dev/shm/x','/x']:\n  try:\n    open(p,'w').write('x')\n    print('wrote',p,os.path.realpath(p))\n  except Exception as e:\n    print('denied',p)"
+	result := runMemberPython(t, sandbox, dir, code, DefaultMemberCommandLimits)
+	for _, line := range strings.Split(result.Output, "\n") {
+		if strings.HasPrefix(line, "wrote") && !strings.Contains(line, filepath.Join(dir, memberTmpDirName)) && !strings.Contains(line, "/work/.tmp") {
+			t.Fatalf("member wrote outside its dir: %s", result.Output)
+		}
 	}
 }
 

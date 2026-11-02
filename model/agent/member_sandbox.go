@@ -60,6 +60,9 @@ func memberSandboxExecProfile(spec memberSandboxSpec) string {
 	for _, path := range memberDarwinDeniedReads {
 		builder.WriteString("(deny file-read* (subpath " + sbplString(path) + "))")
 	}
+	// Intel 版 Homebrew 的 OpenSSL 配置和证书在被挡的 /usr/local/etc 里，node 启动就读，
+	// 挡掉就起不来。SBPL 后写覆盖先写，这几行要跟在 deny 后面。
+	builder.WriteString(`(allow file-read* (subpath "/usr/local/etc/openssl@3") (subpath "/usr/local/etc/ca-certificates"))`)
 	builder.WriteString("(allow file-write*")
 	for _, path := range sandboxWritableRoots(spec.dir) {
 		builder.WriteString(" (subpath " + sbplString(path) + ")")
@@ -105,9 +108,15 @@ func memberBubblewrapArgs(spec memberSandboxSpec) []string {
 	args = append(args,
 		"--dev", "/dev",
 		"--proc", "/proc",
-		"--tmpfs", "/tmp",
 		"--bind", spec.dir, memberBubblewrapWorkDir,
+		// /tmp 指到成员目录里的 .tmp：tmpfs 吃的是宿主机内存，又不算进进程 RSS，
+		// 看门狗管不住；落在成员目录里就归磁盘配额管。
+		"--symlink", memberBubblewrapWorkDir+"/"+memberTmpDirName, "/tmp",
 		"--chdir", memberBubblewrapWorkDir,
+		// 根和 /dev 都是 bwrap 建的 tmpfs，留着可写就是一块不限量的内存盘（/dev/shm
+		// 也在里面）。最后把它们改成只读；设备节点照常能写，/work 是单独的挂载不受影响。
+		"--remount-ro", "/dev",
+		"--remount-ro", "/",
 		"--",
 	)
 	return append(args, memberShellArgs(spec)...)
