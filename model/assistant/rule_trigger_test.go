@@ -106,7 +106,7 @@ func TestRuleTriggerKeepsAdmission(t *testing.T) {
 	cfg := BotConfig{Participation: &ParticipationPreferences{TriggerMode: "rules", RuleChance: 100}, ReplyGate: &ReplyGate{BlockedUsers: []string{"blocked"}}}
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, e := range []MessageEvent{{Kind: EventKindGroup, GroupID: "g", UserID: "blocked", MessageID: "m"}, {Kind: EventKindPrivate, UserID: "u", MessageID: "m"}} {
-		_, _, _, allowed := r.routeRuleReply(e, "hello", cfg)
+		_, _, _, allowed := r.routeRuleReply([]proactiveReplyCandidate{{Event: e, Text: "hello"}}, cfg)
 		if allowed {
 			t.Fatal("admission bypassed")
 		}
@@ -174,13 +174,17 @@ func TestBotConfigSwitchesProactiveMode(t *testing.T) {
 		t.Fatalf("desire low restored chance %d", got)
 	}
 	for _, input := range []map[string]any{
-		{"operation": "update", "proactive_mode": "random"},
+		{"operation": "update", "proactive_mode": "fixed"},
 		{"operation": "update", "rule_chance": 101},
 		{"operation": "update", "rule_chance": 1.5},
 	} {
 		if _, err := tool.Run(context.Background(), input); err == nil {
 			t.Fatalf("invalid update accepted: %v", input)
 		}
+	}
+	out = run(map[string]any{"operation": "update", "proactive_mode": "random"})
+	if p := out["proactive"].(map[string]any); p["mode"] != "random" || !r.effectiveConfigForEvent(event).ruleTriggerEnabled() {
+		t.Fatalf("random mode not saved: %v", p)
 	}
 	run(map[string]any{"operation": "update", "proactive_mode": "semantic"})
 	if r.effectiveConfigForEvent(event).ruleTriggerEnabled() {
@@ -219,6 +223,9 @@ func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
 	msg := func(id, user string, ago int64, text string) MessageEvent {
 		return MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: id, UserID: user, Time: at - ago, RawMessage: text}
 	}
+	bot := func(id string, ago int64) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: id, UserID: "bot", Time: at - ago, Outbound: true}
+	}
 	current := msg("cur", "u1", 0, "")
 	// 一段普通节奏：三个人隔几十秒说一句，上一条 40 秒前。
 	normal := []MessageEvent{msg("a", "u2", 200, "x"), msg("b", "u3", 120, "y"), msg("c", "u2", 40, "z")}
@@ -230,14 +237,18 @@ func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
 	if got := chance("今天食堂的菜还行", normal, 0); math.Abs(got-0.3) > 1e-9 {
 		t.Fatalf("plain message should keep base chance, got %v", got)
 	}
-	if got := chance("今天去哪吃饭？", normal, 0); got <= 0.3 {
-		t.Fatalf("question should raise chance, got %v", got)
+	for _, text := range []string{"今天去哪吃饭？", "有人在吗", "你呢~"} {
+		if got := chance(text, normal, 0); got <= 0.3 {
+			t.Fatalf("question %q should raise chance, got %v", text, got)
+		}
 	}
-	if got := chance("哈哈哈", normal, 0); got >= 0.3 {
-		t.Fatalf("filler should lower chance, got %v", got)
+	for _, text := range []string{"哈哈哈", "hhhh", "666", "好的", "[图片]", "😂😂😂", "👍🏻", "草。", "OK!"} {
+		if got := chance(text, normal, 0); got >= 0.3 {
+			t.Fatalf("low-content %q should lower chance, got %v", text, got)
+		}
 	}
-	if got := chance("[图片]", normal, 0); got >= 0.3 {
-		t.Fatalf("image-only should lower chance, got %v", got)
+	if got := chance("下班了", normal, 0); math.Abs(got-0.3) > 1e-9 {
+		t.Fatalf("three distinct characters is not low content, got %v", got)
 	}
 	if got := chance("今天食堂的菜还行", nil, 0); got <= 0.3 {
 		t.Fatalf("first message after silence should raise chance, got %v", got)
@@ -259,9 +270,26 @@ func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
 		t.Fatalf("two-person exchange should lower chance, got %v", got)
 	}
 
-	withBot := append(append([]MessageEvent(nil), normal...), MessageEvent{Kind: EventKindGroup, GroupID: "g", MessageID: "bot1", UserID: "bot", Time: at - 20, Outbound: true})
-	if got := chance("今天食堂的菜还行", withBot, 0); got <= 0.3 {
-		t.Fatalf("follow-up right after the bot should raise chance, got %v", got)
+	// 机器人刚回了 u1，u1 没引用、接着说：接着跟机器人对话。
+	partner := []MessageEvent{msg("p1", "u2", 100, "x"), msg("p2", "u1", 60, "那个怎么弄"), bot("p3", 40), msg("p4", "u3", 20, "插一句")}
+	if got := chance("1TB", partner, 0); math.Abs(got-0.75) > 1e-9 {
+		t.Fatalf("continuing a conversation with the bot should reach 2.5x, got %v", got)
+	}
+	// 机器人引用了 u1 回复：即使中间最近的真人是别人，也认 u1。
+	quotedBot := bot("q2", 30)
+	quotedBot.Quoted = &QuotedMessage{UserID: "u1"}
+	if got := chance("1TB", []MessageEvent{msg("q1", "u2", 50, "x"), quotedBot}, 0); got <= 0.6 {
+		t.Fatalf("bot quoting this user should count as continuation, got %v", got)
+	}
+	// 机器人刚说过话，但回的是别人：只略微抬高。
+	other := []MessageEvent{msg("o1", "u3", 200, "x"), msg("o2", "u2", 60, "y"), bot("o3", 30)}
+	if got := chance("今天食堂的菜还行", other, 0); got <= 0.3 || got > 0.4 {
+		t.Fatalf("bot spoke to someone else should only nudge chance, got %v", got)
+	}
+	// 太久以前的对话不算。
+	stale := []MessageEvent{msg("s1", "u1", 400, "x"), bot("s2", 300), msg("s3", "u2", 100, "y")}
+	if got := chance("今天食堂的菜还行", stale, 0); math.Abs(got-0.3) > 1e-9 {
+		t.Fatalf("stale conversation should not count, got %v", got)
 	}
 
 	if got := chance("今天食堂的菜还行", normal, 1); got >= 0.3*0.31 {
@@ -284,7 +312,38 @@ func TestRuleTriggerReasonShowsAdjustedChance(t *testing.T) {
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { t.Fatal("rules must not call routing model"); return nil, nil })
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "哈哈哈", Time: time.Now().Unix()}
 	routed, _, _, _ := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
-	if !strings.Contains(routed.routingReason, "基础概率 30%") || !strings.Contains(routed.routingReason, "附和或表情") {
+	if !strings.Contains(routed.routingReason, "基础概率 30%") || !strings.Contains(routed.routingReason, "内容很少") {
 		t.Fatalf("reason should explain the adjustment: %s", routed.routingReason)
+	}
+}
+
+// 连发攒成一批时，前面的问句不能被最后一句「哈哈」盖掉。
+func TestRuleTriggerBatchPicksHighestChance(t *testing.T) {
+	cfg := BotConfig{Participation: &ParticipationPreferences{TriggerMode: "rules", RuleChance: 30, CooldownSeconds: 30}}
+	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	now := time.Now().Unix()
+	question := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "q", RawMessage: "这个怎么弄？", Time: now - 2}
+	filler := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "f", RawMessage: "哈哈", Time: now}
+	routed, text, _, _ := r.routeRuleReply([]proactiveReplyCandidate{{Event: question, Text: question.RawMessage}, {Event: filler, Text: filler.RawMessage}}, cfg)
+	if routed.MessageID != "q" || text != question.RawMessage || !strings.Contains(routed.routingReason, "连发 2 条里概率最高的第 1 条") {
+		t.Fatalf("batch should be judged by the question: %s %s", routed.MessageID, routed.routingReason)
+	}
+}
+
+func TestRandomTriggerModeUsesFixedChance(t *testing.T) {
+	for _, chance := range []int{0, 100} {
+		cfg := BotConfig{Participation: &ParticipationPreferences{TriggerMode: "random", RuleChance: chance, CooldownSeconds: 30}}
+		r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { t.Fatal("random mode must not call routing model"); return nil, nil })
+		event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "m", RawMessage: "哈哈", Time: time.Now().Unix()}
+		routed, _, _, allowed := r.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: event.RawMessage}})
+		if allowed != (chance == 100) {
+			t.Fatalf("chance %d allowed %t: %s", chance, allowed, routed.routingReason)
+		}
+		if chance == 100 && !strings.Contains(routed.routingReason, "普通模式：固定接话概率 100%") {
+			t.Fatalf("reason: %s", routed.routingReason)
+		}
+	}
+	if got := copyParticipation(&ParticipationPreferences{TriggerMode: "random"}).TriggerMode; got != "random" {
+		t.Fatalf("random mode must survive normalization, got %q", got)
 	}
 }

@@ -36,7 +36,7 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"scope":                        toolEnumParam("settings 默认群聊 group、私聊 bot；诊断省略或传 bot。不支持跨机器人或群。", "group", "bot"),
 		"section":                      toolEnumParam("默认 settings：接话和欢迎设置，可局部 update；其他部分仅主人 get 脱敏诊断。", "settings", "all", "bot", "llm", "skills", "runtime", "paths"),
 		"desire_level":                 toolEnumParam("回复欲望；off 关主动插话，明确请求仍回复。", "off", "low", "medium", "high", "max"),
-		"proactive_mode":               toolEnumParam("主动接话的触发模式：semantic 每条候选消息调用评分模型判断；rules 规则触发，不调用评分模型（省 Token），以 rule_chance 为基础概率随机接话（按群活跃度、问句、附和、两人对话、回复疲劳等本地信号调整）。@、引用和触发词两种模式都直接回复。", "semantic", "rules"),
+		"proactive_mode":               toolEnumParam("主动接话的触发模式：semantic 每条候选消息调用评分模型判断；rules 规则触发，不调用评分模型（省 Token），以 rule_chance 为基础概率随机接话（按群活跃度、问句、内容多少、是否接着跟机器人对话、两人对话、回复疲劳等本地信号调整）；random 普通模式，不调用评分模型，每条都按 rule_chance 固定概率抽签。@、引用和触发词三种模式都直接回复。", "semantic", "rules", "random"),
 		"rule_chance":                  toolIntParam("规则触发的基础接话概率（百分比），会按本地信号调整、最多翻倍，100 总是接话，0 只回应明确触发；只在 rules 模式生效。", 0, 100),
 		"relevance_level":              toolEnumParam("on：明确跟机器人说话时回应。", "on", "off"),
 		"chat_level":                   toolEnumParam("闲聊档位，按本群近一小时的插话需求动态控制频率，受冷却限制；always 不限频率。", "off", "minimal", "low", "medium", "high", "always"),
@@ -209,8 +209,8 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 		}
 		if raw, ok := input["proactive_mode"]; ok {
 			mode, _ := raw.(string)
-			if mode != "semantic" && mode != "rules" {
-				return "", fmt.Errorf("proactive_mode 只能是 semantic 或 rules")
+			if mode != "semantic" && mode != triggerModeRules && mode != triggerModeRandom {
+				return "", fmt.Errorf("proactive_mode 只能是 semantic、rules 或 random")
 			}
 			prefs.TriggerMode = mode
 			changed = true
@@ -222,8 +222,8 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 			}
 			prefs.RuleChance = chance
 			changed = true
-		} else if level, ok := input["desire_level"].(string); ok && prefs.TriggerMode == "rules" {
-			// 规则模式不看档位，关话痨只能把概率归零；重新打开时给回默认概率。
+		} else if level, ok := input["desire_level"].(string); ok && (prefs.TriggerMode == triggerModeRules || prefs.TriggerMode == triggerModeRandom) {
+			// 规则和普通模式不看档位，关话痨只能把概率归零；重新打开时给回默认概率。
 			if level == "off" {
 				prefs.RuleChance = 0
 			} else if prefs.RuleChance == 0 {
@@ -469,8 +469,12 @@ func (*dianaBotConfigTool) CanonicalOperation(input map[string]any) string {
 // proactiveModeView 把接话触发模式单独摆出来：旧配置的 participation.trigger_mode 是空的，
 // 模型只看得到群设置里的触发词档位，会把它当成全部的「触发模式」。
 func proactiveModeView(p ParticipationPreferences) map[string]any {
-	if p.TriggerMode == "rules" {
-		return map[string]any{"mode": "rules", "label": "规则触发（省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
+	if p.TriggerMode == triggerModeRandom {
+		return map[string]any{"mode": triggerModeRandom, "label": "普通（固定概率，省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
+			"note": "未被点名的消息不调用接话评分模型，每条都按 rule_chance 固定概率抽签，不看上下文；relevance_level、chat_level 和评分门槛不生效"}
+	}
+	if p.TriggerMode == triggerModeRules {
+		return map[string]any{"mode": triggerModeRules, "label": "规则触发（省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
 			"note": "未被点名的消息不调用接话评分模型，以 rule_chance 为基础概率、按本地信号调整后抽签；relevance_level、chat_level 和评分门槛不生效"}
 	}
 	return map[string]any{"mode": "semantic", "label": "语义判断", "relevance_level": p.RelevanceLevel, "chat_level": p.ChatLevel, "cooldown_seconds": p.CooldownSeconds,

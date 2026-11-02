@@ -1,5 +1,5 @@
 export interface ParticipationPreferences {
-  trigger_mode?: "semantic" | "rules";
+  trigger_mode?: "semantic" | "rules" | "random";
   rule_chance?: number;
 	 relevance_level?: string;
 	 chat_level?: string;

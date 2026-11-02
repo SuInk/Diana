@@ -11,7 +11,9 @@ const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
 const inherited = computed(() => props.inheritable && !props.modelValue && !props.level);
 const cooldownSeconds = computed(() => value.value.cooldown_seconds ?? defaultParticipationCooldownSeconds);
-const rules = computed(() => value.value.trigger_mode === "rules");
+// 规则触发和普通模式都不调用接话评分模型，共用概率和冷却两项设置。
+const triggerMode = computed(() => value.value.trigger_mode === "rules" || value.value.trigger_mode === "random" ? value.value.trigger_mode : "semantic");
+const rules = computed(() => triggerMode.value !== "semantic");
 const preset = computed(() => participationPresetName(value.value));
 
 type RatingKey = "chat_level";
@@ -103,20 +105,21 @@ function updateCriteria(event: Event) {
         <section class="participation-setting">
           <div class="setting-copy">
             <label :for="id + '-mode'">触发模式</label>
-            <p class="setting-help">规则模式省去接话评分调用；回复生成、工具和其他审核仍可能使用模型。</p>
+            <p class="setting-help">规则触发和普通模式省去接话评分调用；回复生成、工具和其他审核仍可能使用模型。</p>
           </div>
-          <AppSelect :id="id + '-mode'" aria-label="触发模式" :model-value="rules ? 'rules' : 'semantic'" :options="[{value:'semantic',label:'语义判断（现有模式）'},{value:'rules',label:'规则触发（省 Token）'}]" @update:model-value="emit('update:modelValue', { ...value, trigger_mode: $event === 'rules' ? 'rules' : 'semantic' })" />
+          <AppSelect :id="id + '-mode'" aria-label="触发模式" :model-value="triggerMode" :options="[{value:'semantic',label:'语义判断（现有模式）'},{value:'rules',label:'规则触发（智能概率，省 Token）'},{value:'random',label:'普通（固定概率，省 Token）'}]" @update:model-value="emit('update:modelValue', { ...value, trigger_mode: $event === 'rules' || $event === 'random' ? $event : 'semantic' })" />
         </section>
         <section v-if="rules" class="participation-setting">
           <div class="setting-copy">
             <label :for="id + '-chance'">随机接话概率（%）</label>
-            <p class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息以此为基础概率接话，不调用模型：群里聊得快、两人正在对话、单字附和或纯表情、对同一人回复疲劳时调低；问句、冷场后第一句、接着机器人刚说的话时调高，最多到两倍。默认 30%；填 100 总是接话，填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
+            <p v-if="triggerMode === 'rules'" class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息以此为基础概率接话，不调用模型：群里聊得快、两人正在对话、内容很少（如「哈哈」、纯表情）、对同一人回复疲劳时调低；问句、冷场后第一句时调高，最多到两倍；有人接着跟机器人对话时最多到 2.5 倍。默认 30%；填 100 总是接话，填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
+            <p v-else class="setting-help">@、引用回复和命中配置称呼直接进入回复；其他消息每条都按这个固定概率接话，不看上下文，不调用模型。默认 30%；填 0 只回应明确触发。称呼仍使用现有匹配档位。</p>
           </div>
           <input :id="id + '-chance'" class="input" type="number" min="0" max="100" step="1" aria-label="随机接话概率" :value="value.rule_chance ?? defaultRuleTriggerChance" @input="updateRuleChance" @blur="($event.target as HTMLInputElement).value = String(value.rule_chance ?? defaultRuleTriggerChance)" />
           <div class="field wide cooldown-setting">
             <label :for="id + '-rule-cooldown'">随机接话冷却时间（秒）</label>
             <input :id="id + '-rule-cooldown'" class="input" type="number" min="0" max="3600" step="1" :value="cooldownSeconds" @input="updateCooldown" @blur="restoreCooldown" />
-            <span class="hint">只限制随机接话，不限制 @、引用回复和称呼触发。不做语义判断，只看上述本地信号；其他机器人仅明确 @ 或回复本机时放行。</span>
+            <span class="hint">只限制随机接话，不限制 @、引用回复和称呼触发。不做语义判断；其他机器人仅明确 @ 或回复本机时放行。</span>
           </div>
         </section>
         <section v-if="!rules" class="participation-setting">

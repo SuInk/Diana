@@ -21,7 +21,7 @@
 
 闲聊分支按模型评分、档位门槛和冷却放行。评分 JSON 解析失败时自动重试一次，仍解析失败才按未放行处理。总是档位不覆盖停止或重复循环；`cooldown_seconds` 为 0–3600，0 只表示关闭闲聊冷却。旧 `extreme` 闲聊档位按 `high` 读取，旧相关度档位除 `off` 外都按 `on` 读取。
 
-回复触发分两层，被问「触发模式」时两层都要说。明确触发（@、引用回复机器人、命中群触发词）直接进入回复，`group_settings.trigger_word_mode`（`loose` / `smart` / `strict`，旧名 `trigger_mode` 仍可写入）只管触发词怎样算命中。主动接话由 `proactive_mode` 决定：`semantic` 对每条候选消息调用接话评分模型；`rules` 是规则触发（省 Token），不调用评分模型，冷却结束后以 `rule_chance`（0–100，默认 30）为基础概率、按群活跃度、问句、附和、两人对话和回复疲劳等本地信号调整后抽签，`relevance_level`、`chat_level` 和评分门槛在该模式下不生效。返回里的 `proactive` 对象给出实际生效的模式；旧配置的 `participation.trigger_mode` 为空，按 `semantic` 显示。规则模式下 `desire_level=off` 把 `rule_chance` 归零，其他档位在概率为 0 时恢复默认 30。详见 [rule-trigger.md](rule-trigger.md)。
+回复触发分两层，被问「触发模式」时两层都要说。明确触发（@、引用回复机器人、命中群触发词）直接进入回复，`group_settings.trigger_word_mode`（`loose` / `smart` / `strict`，旧名 `trigger_mode` 仍可写入）只管触发词怎样算命中。主动接话由 `proactive_mode` 决定，有三种：`semantic` 对每条候选消息调用接话评分模型；`rules` 是规则触发（省 Token），不调用评分模型，冷却结束后以 `rule_chance`（0–100，默认 30）为基础概率、按群活跃度、问句、内容多少、是否接着跟机器人对话、两人对话和回复疲劳等本地信号调整后抽签；`random` 是普通模式，也不调用评分模型，每条按 `rule_chance` 固定概率抽签。这两种模式下 `relevance_level`、`chat_level` 和评分门槛在该模式下不生效。返回里的 `proactive` 对象给出实际生效的模式；旧配置的 `participation.trigger_mode` 为空，按 `semantic` 显示。规则和普通模式下 `desire_level=off` 把 `rule_chance` 归零，其他档位在概率为 0 时恢复默认 30。详见 [rule-trigger.md](rule-trigger.md)。
 
 旧调用的 `desire_level=off` 同时关闭两条接话分支。历史数值门槛仍保留在配置中，但不控制当前接话判定。修改欲望不会清空其他设置和冷却。更新时复制当前实际生效设置，只修改指定字段，保存成功后返回实际 `participation`；失败会明确报错，不以口头承诺代替配置操作。其他群和机器人默认设置保持各自范围。
 
