@@ -650,7 +650,7 @@
         </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
-          <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" />
+          <ReplyGateForm v-model="editing.reply_gate" allow-inherit id-prefix="group-gate" :supports-group-level="supportsGroupLevel" :profile="editing.bot_profile_id || botScope" />
         </div>
         <div v-if="extensions.length" class="field wide">
           <label>本群扩展</label>
@@ -1474,7 +1474,7 @@ function extensionTierLabel(tier: string): string {
 }
 
 async function resolveAccountNames(ids: string[]): Promise<Record<string, string>> {
-  const response = await fetchAssistantUserNames(ids);
+  const response = await fetchAssistantUserNames(ids, editing.value?.bot_profile_id || botScope.value);
   return response.names ?? {};
 }
 

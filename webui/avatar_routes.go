@@ -259,10 +259,30 @@ func (h *BotHandler) remoteAvatarURL(kind, profileID, id string) string {
 	if !h.isOneBotProfile(profileID) {
 		return ""
 	}
+	// 空 profile 时只在部署里全是 QQ 系机器人才按 QQ 号去 qlogo：Telegram 的用户 ID
+	// 也是纯数字，猜错了 qlogo 照样回 200——大多是默认企鹅，撞上真实 QQ 号就是一张
+	// 陌生人的头像，前端分辨不出来。不猜就退回首字母占位。
+	if strings.TrimSpace(profileID) == "" && h.hasNonQQProfile() {
+		return ""
+	}
 	if kind == avatarKindGroup {
 		return assistant.OneBotGroupAvatarURL(id)
 	}
 	return assistant.OneBotMemberAvatarURL(id)
+}
+
+// hasNonQQProfile 判断部署里有没有 OneBot 和 QQ 官方以外的机器人。
+func (h *BotHandler) hasNonQQProfile() bool {
+	if h.profiles == nil {
+		return false
+	}
+	for _, profile := range h.profiles.Profiles().Profiles {
+		platform := assistant.NormalizePlatformID(profile.Platform)
+		if !assistant.IsOneBotPlatform(profile.Platform) && platform != assistant.PlatformQQOfficial {
+			return true
+		}
+	}
+	return false
 }
 
 // qqOfficialProfile 找出这条记录所属的 QQ 官方机器人。单机器人部署的事件里

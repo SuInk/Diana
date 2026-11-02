@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/storage"
 	"github.com/gin-gonic/gin"
 )
 
@@ -269,6 +270,26 @@ func TestRemoteAvatarURLForQQOfficialMembers(t *testing.T) {
 	}
 }
 
+// 混着 Telegram 机器人时，空 profile 认不出数字 ID 是 QQ 号还是 Telegram 用户 ID，
+// 拿去 qlogo 会配上默认企鹅或陌生人的头像，宁可不给地址。
+func TestRemoteAvatarURLDoesNotGuessQQWithTelegramBots(t *testing.T) {
+	onebot := assistant.DefaultBotConfig()
+	onebot.ID, onebot.Platform = "ob", assistant.PlatformOneBotV11
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID, telegram.Platform = "tg", assistant.PlatformTelegram
+	handler := &BotHandler{profiles: NewMemoryBotProfileStoreFromSet(assistant.ProfileSet{Profiles: []assistant.BotConfig{onebot, telegram}})}
+
+	if got := handler.remoteAvatarURL(avatarKindMember, "", "12345"); got != "" {
+		t.Fatalf("empty profile with a Telegram bot should not guess qlogo, got %q", got)
+	}
+	if got := handler.remoteAvatarURL(avatarKindMember, "tg", "12345"); got != "" {
+		t.Fatalf("Telegram member must not use qlogo, got %q", got)
+	}
+	if got := handler.remoteAvatarURL(avatarKindMember, "ob", "12345"); got != assistant.OneBotMemberAvatarURL("12345") {
+		t.Fatalf("OneBot member avatar = %q", got)
+	}
+}
+
 // 头像缓存只在进程内：重启后的头一次配置响应原本拿不到哈希，地址跟浏览器缓存的
 // 那张对不上，每次升级都要重新下载。配置接口先把机器人头像取一遍，地址就带上 v=。
 func TestGetConfigWarmsProfileAvatarHash(t *testing.T) {
@@ -291,5 +312,18 @@ func TestGetConfigWarmsProfileAvatarHash(t *testing.T) {
 	want := "v=" + avatarContentSHA(body)
 	if !strings.Contains(rec.Body.String(), want) {
 		t.Fatalf("配置响应的机器人头像没带哈希 %s：%s", want, rec.Body.String())
+	}
+}
+
+// 事件页「全部机器人」视图下请求 scope 为空，群头像要按群自己所属的机器人拼，
+// 否则代理认不出 Telegram 群，会拿群号去 qlogo。
+func TestEventGroupAvatarUsesGroupOwnProfile(t *testing.T) {
+	telegram := assistant.DefaultBotConfig()
+	telegram.ID, telegram.Platform = "tg", assistant.PlatformTelegram
+	handler := &BotHandler{profiles: NewMemoryBotProfileStore(telegram)}
+
+	items := handler.namedEventGroups(context.Background(), "", []storage.InboundEventGroup{{GroupID: "-10012345", BotProfileID: "tg"}})
+	if len(items) != 1 || !strings.Contains(items[0].AvatarURL, "bot_profile_id=tg") {
+		t.Fatalf("group avatar should carry the group's own profile: %+v", items)
 	}
 }

@@ -102,7 +102,9 @@ func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, gro
 			GroupName:         name,
 			// 头像地址是纯拼接，不需要额外请求；由后端给而不是前端拼，
 			// 免得把 QQ 的地址格式写死在界面里——别的平台不长这样。
-			AvatarURL: h.consoleAvatarURL(avatarKindGroup, profileID, groupID),
+			// 按群自己所属的机器人拼：「全部机器人」视图下 profileID 为空，
+			// 会把 Telegram 群号当 QQ 群号去 qlogo 取头像。
+			AvatarURL: h.consoleAvatarURL(avatarKindGroup, firstNonEmptyWebUI(group.BotProfileID, profileID), groupID),
 		})
 	}
 	return items

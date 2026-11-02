@@ -267,7 +267,7 @@ async function savePreset(){if(!preset.value)return;presetSaving.value=true;pres
 // 权限跟着正在编辑的那一条走：设置弹窗里改，改完从列表里取回最新的一份。
 const permissionName=ref(''),accessUsers=ref<string[]>([]),accessGroups=ref<string[]>([]),accessError=ref(''),savingAccess=ref(false);
 const permissionItem=computed(()=>editing.value&&botScope.value&&permissionName.value?items.value.find(i=>i.kind===props.kind&&i.name===permissionName.value)||null:null);
-async function resolveAccountNames(ids:string[]):Promise<Record<string,string>>{const response=await fetchAssistantUserNames(ids);return response.names??{}}
+async function resolveAccountNames(ids:string[]):Promise<Record<string,string>>{const response=await fetchAssistantUserNames(ids,botScope.value);return response.names??{}}
 const extensionStates=[{value:'off',label:'停用',hint:'这台机器人不用它'},{value:'owner',label:'仅主人',hint:'只有主人会话能用'},{value:'admins',label:'群管',hint:'群主和群管理员也能用；平台给不出身份时按普通成员处理'},{value:'members',label:'群成员',hint:'群成员也能用，可再限定对象'}] as const;
 type ExtensionState=typeof extensionStates[number]['value'];
 // 「停用」是列表那一行的开关，弹窗里只挑「开着的时候给谁」。
