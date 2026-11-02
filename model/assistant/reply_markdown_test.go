@@ -44,8 +44,8 @@ func TestNormalizeReplyPreservingControlIntentKeepsControlMarkers(t *testing.T) 
 // 投递层保留已有列表，并为明确连续编号的行内枚举补换行。
 func TestMarkdownReplyDeliveryPreservesModelListBoundaries(t *testing.T) {
 	for _, tc := range []struct{ name, raw, want string }{
-		{"markdown_list", "演进如下：\n- **第 0 代**：全模拟\n- **第 1 代**：共享内存", "演进如下：\n• 第 0 代：全模拟\n• 第 1 代：共享内存"},
-		{"inline_prose", "演进如下：第 0 代全模拟；第 1 代共享内存", "演进如下：\n• 第 0 代全模拟；\n• 第 1 代共享内存"},
+		{"markdown_list", "演进如下：\n- **第 0 代**：全模拟\n- **第 1 代**：共享内存", "演进如下：\n第 0 代：全模拟\n第 1 代：共享内存"},
+		{"inline_prose", "演进如下：第 0 代全模拟；第 1 代共享内存", "演进如下：\n第 0 代全模拟；\n第 1 代共享内存"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &compressionTestProvider{}

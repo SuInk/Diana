@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -61,13 +62,43 @@ func markdownToPlain(text string) string {
 		}
 		return label + " (" + target + ")"
 	})
-	text = mdBulletPattern.ReplaceAllString(text, "$1• ")
+	text = plainMarkdownBullets(text)
 	text = mdQuotePattern.ReplaceAllString(text, "")
 	text = mdExtraBlankPattern.ReplaceAllString(text, "\n\n")
 	if explicitLayout {
 		text = encodeExplicitMarkdownLayout(text)
 	}
 	return text
+}
+
+// plainMarkdownBullets 把无序列表换成纯文本里读得顺的写法：顶层连续的项目编成
+// 1. 2. 3.，项目本身以「第 N 代/步」开头的只去掉符号，不再叠一层编号；缩进的
+// 子项保留缩进和短横线。QQ 里「•」又小又不对齐，气泡里一排圆点很难看。
+func plainMarkdownBullets(text string) string {
+	lines := strings.Split(text, "\n")
+	number := 0
+	for i, line := range lines {
+		match := mdBulletPattern.FindStringSubmatchIndex(line)
+		if match == nil {
+			// 列表项下的缩进续行不打断编号，其余行（含空行）都算列表结束。
+			if strings.TrimSpace(line) == "" || line == strings.TrimLeft(line, " \t") {
+				number = 0
+			}
+			continue
+		}
+		indent, item := line[match[2]:match[3]], line[match[1]:]
+		if indent != "" {
+			lines[i] = indent + "- " + item
+			continue
+		}
+		if loc := inlineReplyOrdinal.FindStringIndex(item); loc != nil && loc[0] == 0 {
+			lines[i] = item
+			continue
+		}
+		number++
+		lines[i] = strconv.Itoa(number) + ". " + item
+	}
+	return strings.Join(lines, "\n")
 }
 
 func encodeExplicitMarkdownLayout(text string) string {

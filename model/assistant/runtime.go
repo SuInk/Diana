@@ -9580,6 +9580,10 @@ func isStructuredReplyLine(line string) bool {
 			return strings.TrimSpace(string(runes[digits+1:])) != ""
 		}
 	}
+	// 「第 1 代 …」「第二步 …」这类自带序号的行：纯文本降级会去掉它们前面的列表符号。
+	if loc := inlineReplyOrdinal.FindStringIndex(line); loc != nil && loc[0] == 0 && strings.TrimSpace(line[loc[1]:]) != "" {
+		return true
+	}
 	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
 	for index, r := range runes {
 		if r != '：' && r != ':' {

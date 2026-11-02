@@ -142,7 +142,7 @@ func TestMaiBotReplyerKeepsDraftMessagesAndLayout(t *testing.T) {
 	if len(bubbles) != 3 {
 		t.Fatalf("bubbles = %q, want list, conclusion and sources", bubbles)
 	}
-	if !strings.Contains(bubbles[0], "内存带宽：\n• 2022 款") || !strings.Contains(bubbles[1], "压着。跑大模型") || !strings.Contains(bubbles[2], "来源：\nhttps://") {
+	if !strings.Contains(bubbles[0], "内存带宽：\n1. 2022 款") || !strings.Contains(bubbles[1], "压着。跑大模型") || !strings.Contains(bubbles[2], "来源：\nhttps://") {
 		t.Fatalf("bubbles lost layout: %q", bubbles)
 	}
 }

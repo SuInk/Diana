@@ -57,7 +57,7 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 		}
 	}
 	// 输出规范仍然会被注入，只是不再由人设承担。
-	if !strings.Contains(defaultPromptPlaintextRules, "Markdown 转为纯文本并保留换行") || strings.Contains(defaultPromptPlaintextRules, "不要使用 Markdown") {
+	if !strings.Contains(defaultPromptPlaintextRules, "消息不渲染 Markdown") || !strings.Contains(defaultPromptPlaintextRules, "1. 2. 3.") || strings.Contains(defaultPromptPlaintextRules, "主动使用 Markdown") {
 		t.Fatalf("plaintext rules should still cover Markdown: %q", defaultPromptPlaintextRules)
 	}
 	// 分条归内置规则，不放在可编辑的文本框里：用户改一次、关一次，或者存着旧版
