@@ -231,3 +231,39 @@ func TestGroupPromptConcurrentToolsAndReset(t *testing.T) {
 		t.Fatal("in-flight run resurrected reset state")
 	}
 }
+
+// 11-02 生产样本：触发消息「起义嘛」之后三秒同一人补了「有点意思」，它入站就进了
+// 历史，几秒后又被判成补充接进 Agent 的下一步，请求里出现两遍。本轮历史应跳过它，
+// 别人的消息和触发之前的消息照常保留。
+func TestTurnHistorySkipsSenderMessagesAfterTrigger(t *testing.T) {
+	r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	at := func(id, user, text string, unix int64) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "40001", MessageID: id, UserID: user, SenderName: user, RawMessage: text, Time: unix}
+	}
+	earlier := at("50001", "30001", "y 字天团", 1793585300)
+	current := at("50002", "30001", "起义嘛", 1793585363)
+	other := at("50003", "30002", "在呢，怎么啦？", 1793585364)
+	supplement := at("50004", "30001", "有点意思", 1793585366)
+	history := []MessageEvent{earlier, current, other, supplement}
+	skip := withLaterSenderMessages(map[string]bool{"50009": true}, history, current)
+	if !skip["50004"] || !skip["50009"] || skip["50001"] || skip["50003"] {
+		t.Fatalf("skip = %v", skip)
+	}
+	stable, _ := r.stableGroupHistory(context.Background(), current, r.effectiveConfigForEvent(current), history, true, skip)
+	var joined strings.Builder
+	for _, message := range stable {
+		joined.WriteString(message.Content)
+		joined.WriteString("\n")
+	}
+	if strings.Contains(joined.String(), "有点意思") {
+		t.Fatalf("later supplement stayed in history:\n%s", joined.String())
+	}
+	for _, want := range []string{"y 字天团", "在呢，怎么啦？"} {
+		if !strings.Contains(joined.String(), want) {
+			t.Fatalf("missing %q:\n%s", want, joined.String())
+		}
+	}
+	if got := withLaterSenderMessages(nil, []MessageEvent{earlier, current, other}, current); got != nil {
+		t.Fatalf("nothing later from sender, skip = %v", got)
+	}
+}

@@ -4483,7 +4483,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 这一轮已经带着那几张图在答了，纯图那条自己的回复就不必再发。
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
-		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, turnMessageIDs)
+		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, withLaterSenderMessages(turnMessageIDs, replyHistory, event))
 		if mediaIndexMessage != nil {
 			messages = append(messages, *mediaIndexMessage)
 		}
@@ -7634,6 +7634,37 @@ func (r *Runtime) sendChannelPayloadWithRetry(ctx context.Context, msg OutgoingM
 		}
 	}
 	return nil, fmt.Errorf("diana: send failed after %d attempts: %w", attempts, lastErr)
+}
+
+// withLaterSenderMessages 在历史跳过名单里加上当前发言者在触发消息之后发的消息。
+// 入站消息一到就进历史，合并判定要再等几秒，判成补充时 Agent 已经拿着含这条的
+// 历史在跑，补充又以【补充】接进下一步，同一句话在请求里出现两遍，还排在当前
+// 消息前面。11-01～02 生产 125 个带补充的主回复请求里 72 个如此。这些消息要么
+// 作为补充接进本轮，要么自己另起一轮，本轮历史里都不需要。
+func withLaterSenderMessages(skip map[string]bool, history []MessageEvent, event MessageEvent) map[string]bool {
+	sender := strings.TrimSpace(event.UserID)
+	if sender == "" || event.Outbound {
+		return skip
+	}
+	var out map[string]bool
+	for _, item := range history {
+		messageID := strings.TrimSpace(item.MessageID)
+		if messageID == "" || item.Outbound || item.crossGroupContext || item.Time <= event.Time ||
+			strings.TrimSpace(item.UserID) != sender || item.GroupID != event.GroupID {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]bool, len(skip)+1)
+			for id := range skip {
+				out[id] = true
+			}
+		}
+		out[messageID] = true
+	}
+	if out == nil {
+		return skip
+	}
+	return out
 }
 
 func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg OutgoingMessage) {
