@@ -259,6 +259,7 @@ func main() {
 	}
 	logWriter, closeLog, logStartupDone := setupLogging(appCfg.Storage.LogPath)
 	defer closeLog()
+	startPprofFromEnv()
 	if appCfg.path != "" {
 		log.Printf("config loaded from %s", appCfg.path)
 	} else {
