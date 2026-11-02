@@ -130,7 +130,7 @@ func TestMemberCommandGrantsProducedFilesToGroup(t *testing.T) {
 	}
 }
 
-// 真沙盒端到端：成员用 python 生成文件，拿返回的 path 就能用；本机没有成员沙盒或
+// 真沙盒端到端：成员用 python 生成二进制文件，拿返回的 path 就能用；本机没有成员沙盒或
 // python3 时跳过。
 func TestMemberCommandPythonEndToEnd(t *testing.T) {
 	if kind, reason := agent.MemberCommandAvailable(); kind == "" {
@@ -139,7 +139,7 @@ func TestMemberCommandPythonEndToEnd(t *testing.T) {
 	r, event := memberCommandTestRuntime(t, true)
 	body, err := newDianaMemberCommandTool(r, event).Run(context.Background(), map[string]any{
 		"command": "python3",
-		"args":    []any{"-c", "open('hello.txt','w').write('hi from sandbox')"},
+		"args":    []any{"-c", "open('song.mid','wb').write(b'MThd\\x00\\x00\\x00\\x06\\xff')"},
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "没有 python3") {
@@ -153,8 +153,9 @@ func TestMemberCommandPythonEndToEnd(t *testing.T) {
 	if err := json.Unmarshal([]byte(body), &result); err != nil || len(result.Files) != 1 {
 		t.Fatalf("result = %s (%v)", body, err)
 	}
-	content, err := toolTextSource(r, event, false, map[string]any{"path": result.Files[0].Path}, 1<<20)
-	if err != nil || content != "hi from sandbox" {
-		t.Fatalf("content = %q err = %v", content, err)
+	// .mid 不是文本，send_file 走 toolFileSource 照样能按本群凭据读出来。
+	data, err := toolFileSource(r, event, false, map[string]any{"path": result.Files[0].Path}, 1<<20)
+	if err != nil || string(data) != "MThd\x00\x00\x00\x06\xff" {
+		t.Fatalf("data = %q err = %v", data, err)
 	}
 }
