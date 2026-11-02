@@ -1,6 +1,6 @@
 # 工具目录合并方案（评估稿）
 
-用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版（v1）落地。在 v1 的基础上，[通用化方案（v2）](#通用化方案v2)改成按「做什么」分工具，看图、发送这些操作的对象来源统一成一个媒体引用参数，再在注册表层用通用的工具族外观实现，主人目录可以降到 56 行。v2 回放的选对数和生产一样（都是 94/132）。之后的 v3 把 `history_media` 和 `reply_block` 拆回来单独保留，回放结果和 v2 没有差别；定稿按 v3，主人目录 58 行。本稿只给方案和数据，不改代码。
+用户问工具是不是太多、太像了。本文先盘点生产上的工具目录和调用量，再逐簇读代码划分职责，最后用生产首步请求做新旧目录回放。结论：**合并能让主人那份目录从 102 行降到 58 行（约 1.14 万字降到 0.81 万字），首步选对率没有变化（94/132 对 92/132，在噪声内）**。所以合并的收益在目录体积和同簇互认错上，选对率不会因此变高。有两处合并会把请求引到 `capabilities` 上，不能照这一版（v1）落地。在 v1 的基础上，[通用化方案（v2）](#通用化方案v2)改成按「做什么」分工具，看图、发送这些操作的对象来源统一成一个媒体引用参数，再在注册表层用通用的工具族外观实现，主人目录可以降到 56 行。v2 回放的选对数和生产一样（都是 94/132）。之后的 v3 把 `history_media` 和 `reply_block` 拆回来单独保留，回放结果和 v2 没有差别。定稿：`history_media` 按 v2 并进 `view`，`reply_block` 按 v3 单独保留，主人目录 57 行。本稿只给方案和数据，不改代码。
 
 ## 先纠正一个前提
 
@@ -232,7 +232,7 @@
 
 | 通用工具 | 吸收 | 说明 |
 |---|---|---|
-| `view` | `view_image`、`remote_image` 的 view/view_avatar | 把任意引用的画面附给模型看。v3 起不再吸收 `history_media`，原因见 v3 回放。 |
+| `view` | `history_media`、`view_image`、`remote_image` 的 view/view_avatar | 看任意引用的画面。填 `question` 时由视觉模型作答、只返回文字（原 `history_media` 的默认行为）；不填就把画面附给模型。PDF 分页读取用 `pdf_page`，只对 `msg:` 引用生效。「摘要够用时别调」写进 `view` 的描述，作为 `msg:` 引用专用的约束。 |
 | `send` | `send_file`、`send_attachment`、`mcp_media`、`telegram_images`、`remote_image` 的 send/send_album | 发任意引用。多张图自动组成相册，Telegram 复用 file_id 是平台内部的优化。写好的文本用 `content`+`filename` 打包成文件。 |
 | `image_lookup` | `image_source`、`ai_image_detect`、`match_avatar` | 查一张图的出处、是否 AI 生成、是谁的头像。 |
 | `render` | `render`、`render_media` | 加 `output=image\|video\|gif`。 |
@@ -319,7 +319,7 @@ v3 把这两个拆回来单独保留，`roster` 只管主人的三份名单，`v
 | 补抽：生产首个工具是 `remote_image` | 4 | 2 | 2 | 2 |
 
 - **v2 和 v3 在选工具上完全一样。** 补抽的 12 条里，v2 选 `view` 的地方，v3 恰好都选了 `history_media`，没有一条去向不同。也就是说，是否把 `history_media` 并进 `view`，靠选对率分不出好坏。两版都比生产多对 2 条：生产在这两条上先派了 `subtask` 或去查 `capabilities`，新目录下直接去看图了。
-- 所以这一项按语义和风险来定：**保留 `history_media` 和 `reply_block`**。代价只是 2 行目录，主人目录 58 行，换来的是参数和规则不混在一起，高频工具的描述也不用改。
+- 所以这一项按语义和风险来定。**定稿：`history_media` 并进 `view`，`reply_block` 单独保留。** 回放已经说明合并 `history_media` 不影响选工具；它的特有行为（问视觉模型、读 PDF 页、「摘要够用时别调」）作为 `msg:` 引用的参数和约束，写进 `view` 的描述。`reply_block` 的权限和主人的名单不同，留着更清楚。主人目录 57 行。
 - 这一轮输入约 550 万 token。
 
 ## 推荐顺序
@@ -328,7 +328,7 @@ v3 把这两个拆回来单独保留，`roster` 只管主人的三份名单，`v
 
 1. **两样不改契约的**：非 Telegram 会话不进 `telegram_images`；MCP 工具按服务折成一行目录。同时**去掉主人目录里的重复行**：`github`、`cross_session_message`、`subscription`、`runtime_model` 各出现两次，要先查清前缀和尾部为什么都放了它们。
 2. **通用机制本身**：`ToolFamily` 外观和 `resolveMediaRef`。先只接只有主人用的工具族：`browser`、`extensions`、`files`、`file_edit`、`roster`。这批低频，行数收益最大，可以验证外观层的权限裁剪和日志。
-3. **`view` 和 `send`**：群友可见。`view` 只吸收「把画面附给模型看」的两个工具，`history_media` 保持原样（见 v3）。`send` 统一了好几种来源，还要用合成探针把每种引用都测一遍。
+3. **`view` 和 `send`**：群友可见，`view` 还吸收了高频的 `history_media`（30 天 387 次）。上线前要做两件事：一是用合成探针把每种引用都测一遍；二是上线后对比 `view` 带 `msg:` 引用的调用量，和原来 `history_media` 的调用量是否一致。`send` 统一了好几种来源，同样要用探针测。
 4. **`image_lookup`、`render`、`tasks`**：v1 回放里这三组前后持平。`tasks` 涉及额度、提示词规则和数据迁移，放在最后。
 5. **不做**：把 `version`、`runtime_model`、`host_stats` 合成 `runtime_info`；改写 `capabilities` 的第一句。
 
