@@ -465,6 +465,37 @@ func TestVideoSlotFailsOverWhenSubmitIsRejected(t *testing.T) {
 	}
 }
 
+// 「自定义」接口的字段全在插槽参数里，比例和分辨率档位也从插槽参数代入模板。
+func TestVideoSlotCustomFormatUsesSlotParams(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/make":
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != `{"q":"x","r":"9:16","res":"768P"}` {
+				t.Errorf("body = %s", body)
+			}
+			_, _ = w.Write([]byte(`{"tid":"t1"}`))
+		case "/v1/poll/t1":
+			_, _ = w.Write([]byte(`{"s":"ok","u":"` + server.URL + `/v.mp4"}`))
+		case "/v.mp4":
+			_, _ = w.Write([]byte("mp4"))
+		}
+	}))
+	defer server.Close()
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"video": {ProfileID: "p1", Model: "m", Params: map[string]string{
+			"api": "custom", "poll_interval_seconds": "0.001", "ratio": "9:16", "resolution": "768P",
+			"submit_path": "make", "submit_body": `{"q":"{{prompt}}","r":"{{ratio}}","res":"{{resolution}}"}`, "id_path": "tid",
+			"status_path": "poll/{{id}}", "status_field": "s", "status_map": "ok=completed", "video_url_path": "u",
+		}},
+	}, mediaSlotProfile("p1", server.URL))
+	result, _, err := r.generateVideo(context.Background(), llm.VideoGenerateRequest{Prompt: "x"}, nil)
+	if err != nil || string(result.Video) != "mp4" {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
 func TestMediaSlotProviderSpeechParamsFollowEachRoute(t *testing.T) {
 	primary := mediaSlotProfile("p1", "http://one")
 	primary.Config.SpeechParams = map[string]map[string]string{

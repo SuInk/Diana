@@ -3466,7 +3466,7 @@ const mediaRoleRows: ModelRoleRow[] = [
     label: "视频生成",
     sublabel: "可选",
     description:
-      "文生视频、图生视频，按 OpenAI Sora 的 /videos 任务接口提交并轮询。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
+      "文生视频、图生视频，直连可灵、Vidu、Seedance、Runway、Luma、MiniMax 等厂商的任务接口，也支持 Sora 格式和自定义格式。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
   }
 ];
 
@@ -3474,7 +3474,8 @@ function mediaParamFieldsFor(role: RoleKey): MediaParamField[] {
   const assignment = roleForm.value[role];
   const builtin = builtinSpeechAPIs[assignment?.profile_id ?? ""];
   const profile = selectedRoleProfiles(role, assignment)[0];
-  const api = builtin || resolveSpeechAPI(assignment?.params?.api, profile?.base_url);
+  // 视频接口不按地址猜，没选就是 Sora 格式。
+  const api = role === "video" ? assignment?.params?.api ?? "" : builtin || resolveSpeechAPI(assignment?.params?.api, profile?.base_url);
   const fields = mediaParamFields(role, api, Boolean(builtin));
   if (role === "video" || builtin) return fields;
   // 旧机器人配置仍可编辑；新建的服务参数统一到提供商。

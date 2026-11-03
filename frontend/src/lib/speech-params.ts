@@ -58,15 +58,76 @@ export const customSpeechTemplates: { value: string; label: string; params: Reco
 
 const formatOptions = (values: string[], fallback: string): AppSelectOption[] => values.map((value) => ({ value, label: value || `默认（${fallback}）` }));
 
-export function mediaParamFields(role: string, api: string, builtin = false): MediaParamField[] {
-  if (role === "video") {
-    return [
-      { key: "size", label: "分辨率", placeholder: "1280x720" },
-      { key: "seconds", label: "默认时长（秒）", placeholder: "由服务决定" },
-      { key: "timeout_seconds", label: "任务总时限（秒）", placeholder: "600" },
-      { key: "poll_interval_seconds", label: "轮询间隔（秒）", placeholder: "5" }
-    ];
+// 视频接口，和后端 model/llm/video_presets.go 的预设一一对应。hint 说明提供商的
+// Key 和地址怎么填：密钥只放提供商配置，插槽参数里没有密钥。
+export const videoAPIOptions: AppSelectOption[] = [
+  { value: "", label: "OpenAI Sora 格式（/videos）", hint: "OpenAI 及照搬 Sora 接口的服务" },
+  { value: "kling", label: "可灵", hint: "提供商 Key 填 API Key 或 AccessKey:SecretKey；海外地址 https://api-singapore.klingai.com" },
+  { value: "jimeng", label: "即梦（火山视觉，下线中）", hint: "提供商 Key 填 AccessKeyID:SecretAccessKey；模型填 req_key，如 jimeng_t2v_v30" },
+  { value: "vidu", label: "Vidu", hint: "海外地址 https://api.vidu.com" },
+  { value: "seedance", label: "火山方舟 Seedance", hint: "BytePlus 地址 https://ark.ap-southeast.bytepluses.com/api/v3" },
+  { value: "runway", label: "Runway", hint: "分辨率直接作 ratio，如 1280x720" },
+  { value: "luma", label: "Luma（Agents API）", hint: "Key 以 luma-api- 开头，模型如 ray-3.2" },
+  { value: "minimax", label: "MiniMax 海螺（v1）", hint: "海外地址 https://api.minimax.io" },
+  { value: "minimax_v2", label: "MiniMax 海螺 H3（v2）", hint: "分辨率档位和时长必填" },
+  { value: "custom", label: "自定义", hint: "照下面的字段描述接口，可先套用预设" }
+];
+const videoTaskAPIs = new Set(videoAPIOptions.map(option => option.value).filter(value => value !== ""));
+const videoRatioPlaceholder: Record<string, string> = {
+  kling: "16:9 / 9:16 / 1:1", jimeng: "16:9 / 4:3 / 1:1 / 3:4 / 9:16 / 21:9", vidu: "16:9 / 9:16 / 3:4 / 4:3 / 1:1",
+  seedance: "16:9 / 4:3 / 1:1 / 9:16 / 21:9 / adaptive", luma: "16:9 / 9:16 / 1:1 / 4:3 / 21:9", minimax_v2: "16:9 / 9:16 / adaptive"
+};
+const videoResolutionPlaceholder: Record<string, string> = {
+  kling: "720p / 1080p", vidu: "540p / 720p / 1080p", seedance: "480p / 720p / 1080p", luma: "540p / 720p / 1080p",
+  minimax: "512P / 720P / 768P / 1080P", minimax_v2: "480P / 768P / 2K"
+};
+
+function videoParamFields(api: string): MediaParamField[] {
+  const fields: MediaParamField[] = [
+    { key: "api", label: "接口", placeholder: "OpenAI Sora 格式", options: videoAPIOptions, hint: videoAPIOptions.find(option => option.value === api)?.hint }
+  ];
+  if (api === "custom") {
+    fields.push(
+      { key: "template", label: "套用预设", placeholder: "不套用", options: [{ value: "", label: "不套用" }, ...videoAPIOptions.filter(option => videoTaskAPIs.has(option.value) && option.value !== "custom").map(({ value, label }) => ({ value, label }))], hint: "下面留空的字段沿用预设" },
+      { key: "auth", label: "鉴权", placeholder: "Bearer", options: [{ value: "", label: "默认" }, { value: "bearer", label: "Bearer" }, { value: "header", label: "自定义头" }, { value: "kling", label: "可灵 JWT（AK:SK）" }, { value: "volc_v4", label: "火山 V4 签名（AK:SK）" }, { value: "none", label: "不鉴权" }] },
+      { key: "auth_header", label: "鉴权头", placeholder: "Authorization" },
+      { key: "auth_prefix", label: "Key 前缀", placeholder: "如 Token，自动补空格" },
+      { key: "submit_method", label: "提交方法", placeholder: "POST", options: [{ value: "", label: "POST" }, { value: "PUT", label: "PUT" }] },
+      { key: "submit_path", label: "提交路径", placeholder: "接在提供商地址后面，如 v1/videos" },
+      { key: "submit_body", label: "提交请求体", placeholder: '{"model":"{{model}}","prompt":"{{prompt}}","duration":{{seconds}}}', multiline: true, hint: "可用 {{prompt}} {{model}} {{seconds}} {{size}} {{width}} {{height}} {{ratio}} {{resolution}} {{frames}}；变量为空时整项省略" },
+      { key: "image_submit_path", label: "图生视频路径", placeholder: "留空沿用提交路径" },
+      { key: "image_submit_body", label: "图生视频请求体", placeholder: '{"prompt":"{{prompt}}","image":"{{image}}"}', multiline: true, hint: "{{image}} 是链接或 data URL，{{image_raw}} 是链接或裸 Base64，另有 {{image_base64}} {{image_mime}}" },
+      { key: "id_path", label: "任务 ID 位置", placeholder: "data.task_id" },
+      { key: "status_method", label: "查询方法", placeholder: "GET", options: [{ value: "", label: "GET" }, { value: "POST", label: "POST" }] },
+      { key: "status_path", label: "查询路径", placeholder: "v1/tasks/{{id}}" },
+      { key: "status_body", label: "查询请求体", placeholder: "GET 留空", multiline: true },
+      { key: "status_field", label: "状态位置", placeholder: "data.status" },
+      { key: "status_map", label: "状态对照", placeholder: "succeed=completed, failed=failed, processing=in_progress", hint: "统一状态是 queued / in_progress / completed / failed；没列的按常见状态名猜" },
+      { key: "video_url_path", label: "成品地址位置", placeholder: "data.videos.0.url", hint: "数组可写 outputs[type=video].url；多个位置用 | 隔开" },
+      { key: "error_path", label: "失败原因位置", placeholder: "data.message" },
+      { key: "code_path", label: "业务码位置", placeholder: "code，HTTP 200 里也报错的厂商才填" },
+      { key: "code_ok", label: "成功业务码", placeholder: "0" },
+      { key: "code_message_path", label: "业务错误说明", placeholder: "message" },
+      { key: "download_auth", label: "下载带鉴权", placeholder: "不带", options: [{ value: "", label: "默认" }, { value: "false", label: "不带" }, { value: "true", label: "带" }] }
+    );
   }
+  fields.push({ key: "size", label: "分辨率", placeholder: "1280x720" });
+  if (videoTaskAPIs.has(api) && api !== "runway") {
+    fields.push(
+      { key: "ratio", label: "画面比例", placeholder: videoRatioPlaceholder[api] ?? "留空按分辨率推算", hint: "模型自己给了尺寸时按尺寸推算" },
+      { key: "resolution", label: "分辨率档位", placeholder: videoResolutionPlaceholder[api] ?? "留空按分辨率推算，如 720p" }
+    );
+  }
+  fields.push(
+    { key: "seconds", label: "默认时长（秒）", placeholder: "由服务决定" },
+    { key: "timeout_seconds", label: "任务总时限（秒）", placeholder: "600" },
+    { key: "poll_interval_seconds", label: "轮询间隔（秒）", placeholder: "5" }
+  );
+  return fields;
+}
+
+export function mediaParamFields(role: string, api: string, builtin = false): MediaParamField[] {
+  if (role === "video") return videoParamFields(api);
   if (role === "stt") {
     const fields: MediaParamField[] = [];
     if (!builtin) fields.push({ key: "api", label: "接口", placeholder: "按地址自动", options: transcriptionAPIOptions });
@@ -173,9 +234,9 @@ export function speechServiceFields(role: "tts" | "stt", params: Record<string, 
 
 export function updateSpeechParam(params: Record<string, string>, key: string, value: string): Record<string, string> {
   const next = { ...params };
-  if (key === "template") {
-    const template = customSpeechTemplates.find(item => item.value === value);
-    if (!template) return next;
+  // 视频的「套用预设」也叫 template，值是预设名，照普通参数存。
+  const template = key === "template" ? customSpeechTemplates.find(item => item.value === value) : undefined;
+  if (template) {
     for (const field of ["method", "path", "body_type", "body", "response"]) delete next[field];
     return { ...next, ...template.params };
   }
