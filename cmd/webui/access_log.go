@@ -17,16 +17,15 @@ import (
 // 5 秒一次，线上 3 天光这几条就各记了三千多行、占了进程日志一半的字节，把真正
 // 有用的请求和运行日志淹掉。它们成功时不记访问日志；失败、慢请求照常记。
 var quietAccessLogPaths = map[string]bool{
-	"/api/logs":                            true,
-	"/api/health":                          true,
-	"/api/stats":                           true,
-	"/api/system/version":                  true,
-	"/api/system/update":                   true,
-	"/api/assistant/status":                true,
-	"/api/assistant/plugins/vrchat/status": true,
-	"/api/browser-source":                  true,
-	"/api/browser-box/status":              true,
-	"/api/browser-box/tabs":                true,
+	"/api/logs":               true,
+	"/api/health":             true,
+	"/api/stats":              true,
+	"/api/system/version":     true,
+	"/api/system/update":      true,
+	"/api/assistant/status":   true,
+	"/api/browser-source":     true,
+	"/api/browser-box/status": true,
+	"/api/browser-box/tabs":   true,
 }
 
 // quietAccessLogSlowThreshold 以上的轮询请求照样记下：轮询变慢本身就是要看的信号。

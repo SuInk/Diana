@@ -450,7 +450,6 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/plugins/repo/archive/install", h.installRepoPluginArchive)
 	router.POST(base+"/plugins/repo/update/:id", h.updateRepoPlugin)
 	router.POST(base+"/plugins/music/test", h.testMusicConnections)
-	router.GET(base+"/plugins/vrchat/status", h.vrchatStatus)
 	router.POST(base+"/plugins/resolver/test", h.testResolverCredentials)
 	router.POST(base+"/plugins/resolver/cookie-file/read", h.readResolverCookieFile)
 	router.POST(base+"/plugins/resolver/cookie-file/check", h.checkResolverCookieFile)

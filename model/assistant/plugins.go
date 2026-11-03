@@ -440,7 +440,6 @@ func NewDefaultPluginManager() *PluginManager {
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
 		NewStockPlugin(),
-		NewVRChatPlugin(),
 		NewQQVoiceCallPlugin(),
 		NewQQJoinApprovalPlugin(),
 		NewFileDeliveryPlugin(),

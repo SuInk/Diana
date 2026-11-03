@@ -4875,8 +4875,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			return sendErr
 		}
 		r.applyReplyControlAfterSend(sendCtx, event, reply, controlIntent)
-		// 只同步真正发出去的这一版：审核改写、拦下或发送失败的都到不了这里。
-		r.afterReplyVRChat(event, strings.Join(splitEventChatReply(reply, cfg, event), "\n"))
 		if stickerAllowed {
 			r.sendFinalizeSticker(sendCtx, event, stickerQuery, false)
 		}

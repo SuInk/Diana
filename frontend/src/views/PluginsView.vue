@@ -502,7 +502,6 @@
         </div>
       </div>
       <StickerLibrary v-if="isStickerSettings && stickerSettingsTab === 'library'" :profile="botScope" />
-      <VRChatStatusPanel v-if="settingsTarget.manifest.id === vrchatPluginID" />
       <QQJoinStrategyPanel v-if="settingsTarget.manifest.id === qqJoinApprovalPluginID" :default-profile="botScope" />
       <RSSWatchManager
         v-if="settingsTarget.manifest.id === rssWatchPluginID"
@@ -861,7 +860,6 @@ import RepositoryIssueDraftList from "../components/RepositoryIssueDraftList.vue
 import RepositoryCredentialEditor, { type CredentialTestInput } from "../components/RepositoryCredentialEditor.vue";
 import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import StickerLibrary from "../components/StickerLibrary.vue";
-import VRChatStatusPanel from "../components/VRChatStatusPanel.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import QQJoinStrategyPanel from "../components/QQJoinStrategyPanel.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
@@ -886,7 +884,6 @@ const rssWatchPluginID = "official.rss-watch";
 const qqJoinApprovalPluginID = "official.qq-join-approval";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";
-const vrchatPluginID = "official.vrchat-osc";
 // 依赖按插件 ID 分组；内置网页渲染的浏览器依赖改在浏览器页展示。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
 const dependenciesLoading = ref(false);
