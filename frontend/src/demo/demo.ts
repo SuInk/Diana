@@ -372,6 +372,10 @@ const demoGroupAvatar = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(`
   </svg>
 `)}`;
 
+// Telegram 机器人只列自己的群，按机器人取群的界面才看得出不会串到 QQ 群。
+const telegramGroups: BotGroupSummary[] = [
+  { group_id: "-1001002003", group_name: "Telegram 频道讨论（演示）", avatar_url: demoGroupAvatar, member_count: 42, max_member_count: 200000, enabled: true, configured: true, joined: true, bot_profile_id: "bot-telegram" }
+];
 const groups: BotGroupSummary[] = [
   { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
   { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
@@ -2031,7 +2035,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const usage=rows.reduce((sum,row)=>({...sum,recorded_calls:sum.recorded_calls+row.usage.recorded_calls,input_tokens:sum.input_tokens+row.usage.input_tokens,output_tokens:sum.output_tokens+row.usage.output_tokens,total_tokens:sum.total_tokens+row.usage.total_tokens,cached_input_tokens:sum.cached_input_tokens+row.usage.cached_input_tokens,usage_missing_calls:sum.usage_missing_calls+row.usage.usage_missing_calls}),{since,until,recorded_calls:0,input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens:0,usage_missing_calls:0});
     return json({usage,groups:rows});
   }
-  if (path === "/api/assistant/groups" && method === "GET") return json({ groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
+  if (path === "/api/assistant/groups" && method === "GET") return json({ groups: url.searchParams.get("profile") === telegramProfile.id ? telegramGroups : groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {
     const config = body.config as BotGroupSummary;
     const index = groups.findIndex((group) => group.group_id === config.group_id);

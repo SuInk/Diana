@@ -11,6 +11,7 @@
       </div>
       <button class="btn small ghost danger icon-only" type="button" title="移除通知目标" aria-label="移除通知目标" @click="emit('update:modelValue', modelValue.filter((_, i) => i !== index))"><Trash2 :size="14" /></button>
     </div>
+    <p v-if="multiPlatform && modelValue.some(t => t.destination === 'group')" class="hint">一个群里有几台机器人时只选其中一台，否则会收到几份推送。不同平台的群 ID 不一样（比如 QQ 官方和 OneBot），系统认不出是同一个群，不会自动去重。</p>
     <button class="btn small ghost" type="button" :disabled="modelValue.length >= 50" @click="emit('update:modelValue', [...modelValue, { profile_id: defaultProfile || profiles[0]?.id, destination: 'private', user_id: '' }])"><Plus :size="14" />添加通知目标</button>
   </div>
 </template>
@@ -26,6 +27,8 @@ import AccountNameHint from "./AccountNameHint.vue";
 const props = defineProps<{ modelValue: RepositoryWatchTarget[]; profiles: BotProfileConfig[]; defaultProfile?: string; pluginIds?: string[] }>();
 const emit = defineEmits<{ 'update:modelValue': [RepositoryWatchTarget[]] }>();
 const profileOptions = computed(() => props.profiles.map(p => ({ value: p.id || '', label: p.name || p.id || '', hint: p.platform })));
+// 同一个群在不同平台的 ID 对不上（QQ 官方是 group_openid，OneBot 是群号），后端没法替用户去重。
+const multiPlatform = computed(() => new Set(props.profiles.map(p => p.platform).filter(Boolean)).size > 1);
 const destinationOptions = [{ value: 'private', label: '私聊' }, { value: 'group', label: '群聊' }];
 // 按机器人各取各的群。「全部机器人」那份列表按群号去重，两台机器人同在一个群时
 // 只记在其中一台名下，另一台的下拉框就少了这个群。

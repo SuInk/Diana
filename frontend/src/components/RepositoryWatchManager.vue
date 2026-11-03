@@ -120,28 +120,30 @@
               <span class="hint">跨过指定绝对 Star 数时通知；已越过的里程碑不会补发。</span>
             </div>
           </div>
-          <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
-          <p v-if="form.notification_enabled && groupsLoading" class="hint">正在读取已加入的群聊…</p>
-          <p v-else-if="form.notification_enabled && groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
           <SubscriptionTargetsEditor v-if="form.notification_enabled" v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" :plugin-ids='["official.repository-watch", "official.repository-publish"]' />
         </div>
         <div class="field wide repository-notification-settings">
           <div class="repository-section-title"><span id="watch-issue-title">Issue 管理</span><label class="switch"><input v-model="form.issue_enabled" type="checkbox" aria-labelledby="watch-issue-title" /><span class="track" aria-hidden="true"></span></label></div>
           <span class="hint">开启后，此仓库允许通过机器人操作 Issue：管理人员可直接创建和管理，草稿人只能提交草稿、由管理人员确认写入。</span>
           <template v-if="form.issue_enabled">
+            <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
+            <p v-if="groupsLoading" class="hint">正在读取已加入的群聊…</p>
+            <p v-else-if="groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
+            <p v-if="multiPlatform" class="hint">不同平台的群 ID 不一样（比如 QQ 官方和 OneBot），同一个群要让几台机器人都认，就给每台机器人各加一条。</p>
             <div class="issue-role-block">
               <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">管理人员可以读取该仓库的私有信息，群聊读取结果会展示在当前群。按用户管理授权在私聊和群聊均可读写；写入仍需确认码。按群授权仍遵守配置的群身份要求。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-managers-title">
-                <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
+                <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row" :class="{ 'with-bot': profileOptions.length > 1 }">
+                  <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="管理人员所在的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''; member.user_id = ''" />
                   <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`管理人员授权对象`" />
                   <div v-if="member.destination === 'group'" class="target-group">
-                    <AppSelect v-if="groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                    <AppSelect v-if="groupOptionsFor(member).length" :model-value="member.group_id ?? ''" :options="groupOptionsFor(member)" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                     <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
                     <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="管理人员生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
                   </div>
                   <div v-else class="target-user">
                     <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="管理人员用户 ID" />
-                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                    <AccountNameHint :user-id="member.user_id" :profile="memberProfile(member)" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
@@ -152,16 +154,17 @@
             <div class="issue-role-block">
               <div class="issue-role-head"><span id="watch-drafters-title">草稿人</span><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。管理人员自动也是草稿人，不必在这里重复添加。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-drafters-title">
-                <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row">
+                <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row" :class="{ 'with-bot': profileOptions.length > 1 }">
+                  <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="草稿人所在的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''; member.user_id = ''" />
                   <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`草稿人授权对象`" />
                   <div v-if="member.destination === 'group'" class="target-group">
-                    <AppSelect v-if="groupOptions.length" :model-value="member.group_id ?? ''" :options="groupOptions" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
+                    <AppSelect v-if="groupOptionsFor(member).length" :model-value="member.group_id ?? ''" :options="groupOptionsFor(member)" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                     <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
                     <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="草稿人生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
                   </div>
                   <div v-else class="target-user">
                     <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="草稿人用户 ID" />
-                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                    <AccountNameHint :user-id="member.user_id" :profile="memberProfile(member)" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
@@ -264,9 +267,6 @@ const props = defineProps<{
   draftGroupAccess?: string;
   managerUserAccess?: string;
   managerGroupAccess?: string;
-  joinedGroups?: BotGroupSummary[];
-  groupsLoading?: boolean;
-  groupsWarning?: string;
 }>();
 const emit = defineEmits<{
   "update:issue-enabled-repositories": [string[]];
@@ -307,7 +307,10 @@ const maskOptions = [
 const emptyForm = () => ({ blocked_users_text: "", repository: "", branch: "", display_name: "", mask: "auto" as "auto" | "always" | "never", interval_seconds: defaultIntervalSeconds.value, watch_commits: true, watch_pull_requests: true, watch_issues: true, watch_releases: true, watch_stars: true, pull_request_events: allPullEventKinds(), issue_events: allIssueEventKinds(), release_kinds: allReleaseKinds(), star_notify_mode: "growth" as "growth" | "milestone", star_notify_threshold: 1, star_milestones_text: "", issue_enabled: false, profile_id: "", notification_enabled: true, notification_targets: [] as IssueMember[], issue_managers: [] as IssueMember[], issue_drafters: [] as IssueMember[] });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
-const joinedGroups = ref<BotGroupSummary[]>([]);
+// 按机器人各取各的群：合并后的群列表会把别的平台、别的机器人的群也列进来。
+const groupsByProfile = ref<Record<string, BotGroupSummary[]>>({});
+const groupsLoading = ref(false);
+const groupsWarning = ref("");
 const loading = ref(false);
 const saving = ref(false);
 const busyID = ref("");
@@ -317,8 +320,36 @@ const editorSnapshot = ref("");
 const form = ref(emptyForm());
 
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
-const selectedProfile = computed(() => profiles.value.find((profile) => profile.id === form.value.profile_id));
-const groupOptions = computed(() => selectedProfile.value?.platform === "telegram" ? [] : joinedGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined })));
+// 同一个群在 QQ 官方是 group_openid、在 OneBot 是群号，按群授权只认 ID，跨平台得各配一条。
+const multiPlatform = computed(() => new Set(profiles.value.map((profile) => profile.platform).filter(Boolean)).size > 1);
+// 授权规则只存群号和用户 ID，机器人只用来挑群、认昵称；没选过的按订阅机器人。
+function memberProfile(member: IssueMember): string {
+  return member.profile_id || form.value.profile_id;
+}
+function groupOptionsFor(member: IssueMember) {
+  return (groupsByProfile.value[memberProfile(member)] ?? []).filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || `群 ${group.group_id}`, hint: group.group_name ? group.group_id : undefined }));
+}
+// 存下来的规则不带机器人，回显时找第一台加入了这个群的机器人，找不到就留空走默认。
+function profileForGroup(groupID: string | undefined): string | undefined {
+  if (!groupID) return undefined;
+  return profiles.value.find((profile) => profile.id && groupsByProfile.value[profile.id]?.some((group) => group.joined && group.group_id === groupID))?.id;
+}
+async function loadGroups(): Promise<void> {
+  groupsLoading.value = true;
+  groupsWarning.value = "";
+  const next: Record<string, BotGroupSummary[]> = {};
+  const failures: string[] = [];
+  await Promise.all(profiles.value.filter((profile) => profile.id).map(async (profile) => {
+    try {
+      next[profile.id as string] = (await listBotGroups(false, profile.id)).groups ?? [];
+    } catch {
+      failures.push(profile.name || profile.id || "");
+    }
+  }));
+  groupsByProfile.value = next;
+  if (failures.length) groupsWarning.value = `${failures.join("、")} 的群列表暂不可用，可手动填写群号`;
+  groupsLoading.value = false;
+}
 // 这一栏区分授权对象：按用户的管理授权允许跨会话读写，写入仍需确认码。
 // 按群授权另受群身份要求约束，存储值保持不变。
 const accessSubjectOptions = [{ value: "private", label: "按用户" }, { value: "group", label: "按群" }];
@@ -340,10 +371,10 @@ function toggleEvent<T extends string>(list: T[], value: T): void {
 async function load(): Promise<void> {
   loading.value = true;
   try {
-    const [tasks, config, groups] = await Promise.all([getAssistantTasks(), getBotProfileConfig(), listBotGroups().catch(() => ({ groups: [] }))]);
+    const [tasks, config] = await Promise.all([getAssistantTasks(), getBotProfileConfig()]);
     watches.value = tasks.items.filter((task) => task.kind === "repository_watch");
     profiles.value = (config.profiles?.length ? config.profiles : [config]);
-    joinedGroups.value = groups.groups;
+    void loadGroups();
     if (!form.value.profile_id) form.value.profile_id = props.defaultProfileId || profiles.value[0]?.id || "";
   } catch (error) {
     toastError(error instanceof Error ? error.message : "仓库订阅加载失败");
@@ -478,7 +509,7 @@ function issueMemberEntries(members: IssueMember[], destination: "private" | "gr
 function issueMembersFrom(userValue: string | undefined, groupValue: string | undefined, repository: string): IssueMember[] {
   return [
     ...accessEntriesFor(userValue, repository).map((entry) => ({ destination: "private" as const, user_id: entry.id })),
-    ...accessEntriesFor(groupValue, repository).map((entry) => ({ destination: "group" as const, group_id: entry.id, role: entry.role }))
+    ...accessEntriesFor(groupValue, repository).map((entry) => ({ destination: "group" as const, group_id: entry.id, role: entry.role, profile_id: profileForGroup(entry.id) }))
   ];
 }
 
