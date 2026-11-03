@@ -213,7 +213,6 @@ let plugins: PluginState[] = [
         { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址，Node 版和 L-1124 版都认。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
         { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。" },
         { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
-        { key: "qq_send_as", label: "QQ 发送方式", type: "select", default: "voice", options: [{ value: "voice", label: "语音" }, { value: "card", label: "音乐卡片" }], description: "语音会被 QQ 压成约 40k 的 silk，音质明显变差；音乐卡片点开直接在 QQ 里播放曲库原音质，也不受时长和文件大小限制。卡片要 OneBot 端的音乐卡片签名服务，播放地址来自曲库 CDN，过一段时间会失效，久了再点可能放不了。" },
         { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
         { key: "timeout_seconds", label: "请求超时", type: "number", default: 45, min: 5, max: 180, step: 5, unit: "秒" },

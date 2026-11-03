@@ -26,40 +26,6 @@ func musicPageURL(item song) string {
 	return link
 }
 
-// musicSendsCard 判断这次该不该发音乐卡片：只有 OneBot 认 music 段，Telegram 和
-// QQ 官方照旧发音频文件。
-func musicSendsCard(cfg musicConfig, platform string) bool {
-	return cfg.SendAsCard && IsOneBotPlatform(platform)
-}
-
-// musicCardCode 拼一张自定义音乐卡片。用 custom 而不是 type=qq/163 加歌曲 ID 的
-// 平台卡片：平台卡片由签名服务自己去取播放地址，不带我们的会员 Cookie，会员歌
-// 只能试听；custom 直接塞已经取到的地址，填了会员 Cookie 就是整首、原音质。
-// 代价是地址来自曲库 CDN，会过期（网易云官方接口给的通常只有二十来分钟）。
-//
-// 签名在 OneBot 端做（SnowLuma 的 musicSignUrl），这里只给字段；签不出来时
-// SnowLuma 会退回一张未签名的本地卡片。
-func musicCardCode(item song) string {
-	fields := []string{
-		"type=custom",
-		"url=" + escapeCQParameter(musicCardURL(firstNonEmpty(musicPageURL(item), item.PlayURL))),
-		"audio=" + escapeCQParameter(musicCardURL(item.PlayURL)),
-		"title=" + escapeCQParameter(firstNonEmpty(strings.TrimSpace(item.Name), item.Title())),
-	}
-	if artists := strings.TrimSpace(item.Artists); artists != "" {
-		fields = append(fields, "content="+escapeCQParameter(artists))
-	}
-	return "[CQ:music," + strings.Join(fields, ",") + "]"
-}
-
-// musicCardURL 把地址里的 + 写成 %2B。签名服务（SnowLuma 默认用的 xingzhige）会按
-// 表单规则解码字段，原样的 + 变成空格：网易云 CDN 地址的 vuutv 参数是 base64，
-// 一首歌常有好几个 +，签出来的 musicUrl 就成了带裸空格的坏地址。%2B 经它解码后
-// 正好还原成 +，CDN 两种写法都认。2026-11-03 在 miku 上实测。
-func musicCardURL(raw string) string {
-	return strings.ReplaceAll(strings.TrimSpace(raw), "+", "%2B")
-}
-
 var outgoingCQRecord = regexp.MustCompile(`\[CQ:record(?:,[^\]]*)?\]`)
 
 // prepareChannelAudio 把正文里的 [CQ:record] 换成本机音频文件，交给不认 CQ 码的
