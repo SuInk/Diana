@@ -4,9 +4,12 @@
 package assistant
 
 import (
+	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -324,5 +327,94 @@ func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("new reply missing: %#v", continuation.Append)
+	}
+}
+
+// auditBlockingProvider 让第一次发送前审核停住，等测试把同一个人的补充消息并进来。
+type auditBlockingProvider struct {
+	*sequenceLLMProvider
+	once         sync.Once
+	auditStarted chan struct{}
+	releaseAudit chan struct{}
+}
+
+func (p *auditBlockingProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	for _, message := range req.Messages {
+		if strings.Contains(message.Content, directReplyTopicPrompt) {
+			return &llm.GenerateResponse{Text: `{"relation":"supplement","confidence":0.99}`}, nil
+		}
+		if strings.Contains(message.Content, "发送前审核器") {
+			p.once.Do(func() {
+				close(p.auditStarted)
+				<-p.releaseAudit
+			})
+		}
+	}
+	return p.sequenceLLMProvider.Generate(ctx, req)
+}
+
+// 11-04 生产：回复答好了正在审核，对方补了个表情，这一版因为漏了补充被丢掉重来。
+// 续接记录里还留着那条没发出的草稿，重来的一版以为「刚答过」就静默了，问题被漏掉。
+func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
+	disabled := false
+	provider := &auditBlockingProvider{
+		sequenceLLMProvider: &sequenceLLMProvider{replies: []string{
+			`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"只回答第一条的草稿"}}]`,
+			`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"两条一起回答"}}]`,
+		}},
+		auditStarted: make(chan struct{}), releaseAudit: make(chan struct{}),
+	}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", BotReplyLoopDetectionEnabled: &disabled},
+		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+
+	root := directedGroupMessage("root", "user-1", "你是什么模型")
+	runtime.noteDirectedInbound(root)
+	runtime.remember(root)
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, "replied")
+		done <- err
+	}()
+	select {
+	case <-provider.auditStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("send audit did not start")
+	}
+	followUp := directedGroupMessage("follow-up", "user-1", "顺便说下上下文多长")
+	runtime.noteDirectedInbound(followUp)
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), followUp); handled || outcome != "merged_into_reply" {
+		t.Fatalf("follow-up handled=%v outcome=%q", handled, outcome)
+	}
+	close(provider.releaseAudit)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("merged reply did not finish")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text != "两条一起回答" {
+		t.Fatalf("sent=%#v", sent)
+	}
+	var replies []llm.GenerateRequest
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Tools) > 0 {
+			replies = append(replies, request)
+		}
+	}
+	if len(replies) != 2 {
+		t.Fatalf("reply requests = %d, want draft plus regeneration", len(replies))
+	}
+	for _, message := range replies[1].Messages {
+		if strings.Contains(appendContextText(message), "只回答第一条的草稿") {
+			t.Fatalf("regeneration still sees the discarded draft: %s %q", message.Role, appendContextText(message))
+		}
+		for _, call := range message.ToolCalls {
+			if text, _ := call.Arguments["text"].(string); strings.Contains(text, "只回答第一条的草稿") {
+				t.Fatalf("regeneration still sees the discarded draft call: %#v", call)
+			}
+		}
 	}
 }

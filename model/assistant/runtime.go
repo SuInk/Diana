@@ -2371,7 +2371,14 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			attemptEvent.replyHistoryLoaded = false
 			attemptEvent.replyHistory = nil
 		}
-		reply, err = r.replyTo(r.directReplyAttemptContext(replyCtx), attemptEvent, text)
+		attemptCtx, appendUndo := withAppendContextUndo(r.directReplyAttemptContext(replyCtx))
+		reply, err = r.replyTo(attemptCtx, attemptEvent, text)
+		// 这一版没发出去就撤回它写的续接记录，否则重来的那一版（和以后几轮）会以为
+		// 它已经回过了。模型自己选的静默是真实结果，记录照留。
+		var silentFinish *modelSilentFinishError
+		if err != nil && !errors.As(err, &silentFinish) {
+			r.rollbackAppendContext(appendUndo)
+		}
 		if !directReplyAttemptSupplemented(err) {
 			break
 		}
@@ -4706,6 +4713,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		dependency.pixels = false
 		if fallback := r.senderDependencyMessage(ctx, event, dependency); !runtimeLLMMessageEmpty(fallback) {
 			messages[dependencyIndex] = fallback
+			// 「没收到图片」那版没发出去，别让重来的这一版续接在它后面。
+			r.rollbackAppendContext(appendContextUndoFromContext(ctx))
 			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 		}
 	}
@@ -5102,7 +5111,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 接着它续，失败那条消息会作为新历史追加进去。以前直接清空，下一轮只能整段
 			// 重新组装（10-29～30 线上 56 次失败，每次都让下一轮多付一整份未命中）。
 			if err == nil {
-				r.appendContexts.put(appendKey, newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, r.appendContexts.get(appendKey)))
+				previous := r.appendContexts.get(appendKey)
+				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
+				r.appendContexts.put(appendKey, written)
+				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}
 			r.recordAppendContextDecision(ctx, appendDecision, continuation, resp, err)
 		}
