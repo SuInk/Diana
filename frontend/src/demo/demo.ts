@@ -137,6 +137,7 @@ let llmConfig: LLMConfig = {
     { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6-terra", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "user", catalog_context_window_tokens: 400_000 },
     { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2.5-sunburst", image_model: "gpt-image-2.5-sunburst", models: modelCatalog },
     { id: "llm-voice", name: "MiniMax 语音", group: "speech", description: "群聊语音消息", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "eyJh…Qx7c", base_url: "https://api.minimaxi.com/v1", model: "speech-2.6-hd", models: [{ id: "speech-2.6-hd", output_modalities: ["audio"] }], speech_params: { tts: { voice: "female-shaonv", format: "mp3", speed: "1.0" } }, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "tts", role_label: "语音合成", model: "speech-2.6-hd" }] },
+    { id: "llm-kling", name: "可灵", group: "video", description: "", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "ak-d…7Fq2", base_url: "", model: "kling-v2-6", models: [{ id: "kling-v2-6", output_modalities: ["video"] }], speech_params: { video: { api: "kling", resolution: "720p" } } },
     { id: "llm-whisper", name: "硅基流动转写", group: "speech", description: "", provider: "openai_compatible", api_style: "chat_completions", api_key_configured: true, api_key_preview: "sk-si…a91F", base_url: "https://api.siliconflow.cn/v1", model: "FunAudioLLM/SenseVoiceSmall", models: [{ id: "FunAudioLLM/SenseVoiceSmall", input_modalities: ["audio"] }], speech_params: { stt: { api: "openai", language: "zh" } } }
   ]
 };
@@ -214,8 +215,8 @@ let plugins: PluginState[] = [
         { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
         { key: "netease_api_base", label: "网易云自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。" },
         { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
-        { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
-        { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。" },
+        { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址，Node 版和 L-1124 版都认。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
+        { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。" },
         { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
         { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
@@ -1314,6 +1315,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json(demoSearchConfiguration());
   }
+  if (path === '/api/assistant/search-providers/order' && method === 'PUT') {
+    const ids = (body.ids as string[] | undefined) ?? [];
+    if (ids.length !== demoSearchProviders.length || ids.some(id => !demoSearchProviders.some(provider => provider.id === id))) return json({ error: '搜索提供商列表已变化，请刷新后再排序' }, 400);
+    demoSearchProviders = ids.map(id => demoSearchProviders.find(provider => provider.id === id)!);
+    return json(demoSearchConfiguration());
+  }
   if (path === '/api/assistant/search-providers/export') return json({ providers: demoSearchProviders.map(provider => ({ ...provider, api_key: demoSearchKeys[provider.id] })) });
   if (path === '/api/assistant/search-providers/import' && method === 'POST') {
     for (const item of (body.providers as (SearchProvider & { api_key?: string })[] | undefined) ?? []) {
@@ -1973,7 +1980,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         },
         {
           source: "qq", label: "QQ 音乐", search_ok: true, playable: false, api_configured: false, cookie_configured: true,
-          login: { key: "qq_cookie", label: "QQ 音乐 Cookie", configured: true, state: "invalid", message: "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key 或 qm_keyst。" },
+          login: { key: "qq_cookie", label: "QQ 音乐 Cookie", configured: true, state: "invalid", message: "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key、qm_keyst 或 musicid/musickey。" },
           message: "搜索正常，但登录态无效，取不到播放地址"
         }
       ]

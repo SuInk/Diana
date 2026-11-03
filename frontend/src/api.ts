@@ -19,7 +19,7 @@ export interface LLMRoleBinding {
 }
 
 export interface LLMConfig {
-  speech_params?: Partial<Record<"tts" | "stt", Record<string, string>>>;
+  speech_params?: Partial<Record<"tts" | "stt" | "video", Record<string, string>>>;
   id?: string;
   name?: string;
   group?: string;
@@ -570,6 +570,11 @@ export function saveSearchProvider(provider: SearchProvider & { api_key?: string
 
 export function deleteSearchProvider(id: string): Promise<SearchConfiguration> {
   return requestJSON<SearchConfiguration>(`/api/assistant/search-providers/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+// reorderSearchProviders 提交整个目录的新顺序，ids 必须包含全部提供商。
+export function reorderSearchProviders(ids: string[]): Promise<SearchConfiguration> {
+  return requestJSON<SearchConfiguration>("/api/assistant/search-providers/order", { method: "PUT", body: JSON.stringify({ ids }) });
 }
 
 export type SearchProviderWithKey = SearchProvider & { api_key?: string };

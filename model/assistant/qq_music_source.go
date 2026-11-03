@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +39,19 @@ var (
 type qqSource struct {
 	musicuAPI string
 	streamCDN string
+
+	// dialects 记住每个自建地址答得上哪套接口，见 qq_music_selfhosted.go。
+	dialects sync.Map
+
+	// credentialMu 串起自建接口的凭据检查和续期，下面几个字段都归它管。
+	credentialMu  sync.Mutex
+	checkedCookie string
+	checkedAt     time.Time
+	refreshedFrom string
+	refreshedTo   string
+	failedCookie  string
+	failedAt      time.Time
+	failedErr     error
 }
 
 func newQQSource() *qqSource {
@@ -124,7 +138,7 @@ func qqAlphanumericID(value string) string {
 func (s *qqSource) headers(cfg musicConfig) map[string]string {
 	headers := map[string]string{"Referer": qqReferer, "Accept": "application/json, text/plain, */*"}
 	if cookie := cfg.sourceOptions(s.Key()).Cookie; cookie != "" {
-		headers["Cookie"] = cookie
+		headers["Cookie"] = qqOfficialCookie(cookie)
 	}
 	return headers
 }
@@ -246,13 +260,14 @@ type qqSelfHostedSearchResponse struct {
 
 func (s *qqSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig, query string) (song, bool) {
 	if base := cfg.sourceOptions(s.Key()).APIBase; base != "" {
-		var payload qqSelfHostedSearchResponse
-		endpoint := fmt.Sprintf("%s/search?pageSize=5&key=%s", base, url.QueryEscape(query))
-		if f.fetchJSON(ctx, cfg, endpoint, false, s.headers(cfg), &payload) {
-			for _, entry := range payload.Data.List {
-				if found, ok := entry.toSong(); ok {
+		for _, dialect := range s.dialectOrder(base) {
+			found, ok, responded := s.searchSelfHosted(ctx, f, cfg, base, dialect, query)
+			if responded {
+				s.dialects.Store(base, dialect)
+				if ok {
 					return found, true
 				}
+				break
 			}
 		}
 	}
@@ -316,14 +331,18 @@ type qqSelfHostedURLResponse struct {
 // 没有登录态时 vkey 接口对会员和独家曲目会返回空 purl——那不是错误，是这首歌
 // 在这家放不了。返回空串让上层换下一家，别把空地址当成可播放的往下走。
 func (s *qqSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) string {
+	// 续期失败时 freshCredentials 已经记下原因，这里照旧往下试：免费曲目不看
+	// 登录态，照样放得了；放不了时上层会把记下的原因报给用户。
+	cfg, _ = s.freshCredentials(ctx, f, cfg)
 	if base := cfg.sourceOptions(s.Key()).APIBase; base != "" {
-		var payload qqSelfHostedURLResponse
-		endpoint := fmt.Sprintf("%s/song/urls?id=%s", base, url.QueryEscape(songID))
-		if f.fetchJSON(ctx, cfg, endpoint, false, s.headers(cfg), &payload) {
-			for _, candidate := range payload.Data {
-				if candidate = strings.TrimSpace(candidate); candidate != "" {
-					return candidate
+		for _, dialect := range s.dialectOrder(base) {
+			playURL, responded := s.playableSelfHosted(ctx, f, cfg, base, dialect, songID)
+			if responded {
+				s.dialects.Store(base, dialect)
+				if playURL != "" {
+					return playURL
 				}
+				break
 			}
 		}
 	}

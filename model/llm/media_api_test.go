@@ -488,8 +488,8 @@ func TestGenerateVideoJobTimeout(t *testing.T) {
 }
 
 func TestNewVideoGeneratorRejectsUnknownAPI(t *testing.T) {
-	if _, err := NewVideoGenerator(mediaTestConfig("http://example.com"), "runway", 0); err == nil {
-		t.Fatal("unknown video api must be rejected until it is implemented")
+	if _, err := NewVideoGenerator(mediaTestConfig("http://example.com"), "no-such-vendor", 0); err == nil {
+		t.Fatal("unknown video api must be rejected")
 	}
 }
 

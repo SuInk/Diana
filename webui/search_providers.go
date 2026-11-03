@@ -81,6 +81,32 @@ func (h *BotHandler) importSearchProviders(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+// reorderSearchProviders 按提交的 ID 顺序重排搜索提供商目录。
+func (h *BotHandler) reorderSearchProviders(c *gin.Context) {
+	var payload struct {
+		IDs []string `json:"ids"`
+	}
+	if err := c.ShouldBindJSON(&payload); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_providers_reorder", err, "", nil)
+		return
+	}
+	if err := h.runtime.Plugins().ReorderSearchProviders(payload.IDs); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_providers_reorder", err, "", nil)
+		return
+	}
+	if err := h.persistState(); err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers_reorder", fmt.Errorf("搜索提供商持久化失败：%w", err), "", nil)
+		return
+	}
+	recordRequestOperation(c, h.logs, "search_providers_reorder", "搜索提供商顺序已调整", "", nil)
+	config, err := h.runtime.Plugins().SearchConfiguration("")
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, config)
+}
+
 func (h *BotHandler) testSearchProvider(c *gin.Context) {
 	var payload struct {
 		Provider assistant.SearchProvider `json:"provider"`

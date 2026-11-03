@@ -502,6 +502,36 @@ func (m *PluginManager) DeleteSearchProvider(id string) error {
 	return nil
 }
 
+// ReorderSearchProviders 按 ids 重排目录，ids 必须正好是现有提供商的一个排列。目录顺序
+// 决定提供商页的显示顺序和没有单独排序时的默认先后；机器人自己的搜索优先级不受影响。
+func (m *PluginManager) ReorderSearchProviders(ids []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		return ErrPluginNotFound
+	}
+	providers, keys, err := searchProviderCatalog(webSearchStateSettings(state))
+	if err != nil {
+		return err
+	}
+	if len(ids) != len(providers) {
+		return fmt.Errorf("搜索提供商列表已变化，请刷新后再排序")
+	}
+	ordered := make([]SearchProvider, 0, len(providers))
+	for _, id := range ids {
+		index := slices.IndexFunc(providers, func(provider SearchProvider) bool { return provider.ID == id })
+		if index < 0 || slices.ContainsFunc(ordered, func(provider SearchProvider) bool { return provider.ID == id }) {
+			return fmt.Errorf("搜索提供商列表已变化，请刷新后再排序")
+		}
+		ordered = append(ordered, providers[index])
+	}
+	materializeFreshSearchDefaults(&state)
+	writeSearchProviderState(&state, ordered, keys)
+	m.states[webSearchPluginID] = state
+	return nil
+}
+
 func writeSearchProviderState(state *PluginState, providers []SearchProvider, keys map[string]string) {
 	state.Settings = clonePluginValues(state.Settings)
 	if state.Settings == nil {

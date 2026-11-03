@@ -6442,6 +6442,19 @@ a.nav-action {
     justify-content: flex-end;
     flex-wrap: wrap;
   }
+
+  /* 搜索提供商行前面还有图标，整行竖排会把图标和名称拆成两行；
+     改成图标、名称同一行，按钮照样放到下一行右对齐。 */
+  .provider-view .search-provider-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .provider-view .search-provider-row .row-actions {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7025,10 +7038,8 @@ a.nav-action {
 .search-provider-test-input .btn { flex-shrink: 0; }
 .search-provider-test-result { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px; }
 .search-provider-test-result pre { margin: 10px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-.search-provider-toggle { flex: 0 0 15px; width: 15px; height: 15px; margin: 0; accent-color: var(--err); cursor: pointer; }
 .search-provider-row.disabled .search-provider-icon { color: var(--muted); background: var(--surface-2); }
 .search-provider-row.disabled .row-title { color: var(--muted); }
-.search-provider-row-test { margin-top: 4px; overflow-wrap: anywhere; }
 .search-template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
 .search-template { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .search-template:hover, .search-template:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
