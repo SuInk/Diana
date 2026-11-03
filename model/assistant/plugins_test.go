@@ -1703,3 +1703,34 @@ func TestXiaohongshuUnreadableDefersToBrowser(t *testing.T) {
 		t.Fatalf("要说清楚缺的是浏览器：%q", noBrowser.Context)
 	}
 }
+
+// 10-30 前后小红书往 __INITIAL_STATE__ 里加了 new Map([])，原样 Unmarshal 会整页失败，
+// 每条笔记都报 page_unavailable。字符串里的 undefined / new Map( 是正文，要原样留着。
+func TestParseXiaohongshuStateAcceptsJSLiterals(t *testing.T) {
+	body := `<script>window.__INITIAL_STATE__={"global":{"x":undefined},` +
+		`"AiNoteDetailStore":{"noteDetailMap":new Map([])},"tags":new Set(["a"]),"empty":new Map(),` +
+		`"note":{"noteDetailMap":{"abc123":{"note":{"title":"undefined 也能写 new Map(1)","desc":"引号\"和)不算"}}}}}</script>`
+	state, ok := parseXiaohongshuState(body)
+	if !ok {
+		t.Fatal("带 new Map / new Set / undefined 的状态应当能解析")
+	}
+	note := xiaohongshuNoteData(state, "abc123")
+	if note["title"] != "undefined 也能写 new Map(1)" || note["desc"] != `引号"和)不算` {
+		t.Fatalf("字符串里的内容不该被改写：%#v", note)
+	}
+	if tags, _ := state["tags"].([]any); len(tags) != 1 {
+		t.Fatalf("new Set 应当保留成数组：%#v", state["tags"])
+	}
+}
+
+// 同一批改版把 h264 流挪到了 EF4 下；只认 h264 的话视频笔记只剩封面。
+func TestXiaohongshuVideoCandidateURLsReadsEF4Stream(t *testing.T) {
+	note := map[string]any{"video": map[string]any{"media": map[string]any{"stream": map[string]any{
+		"EF4": []any{map[string]any{"masterUrl": "https://sns-video.example/a.mp4", "backupUrls": []any{"https://sns-video.example/b.mp4"}}},
+		"EF5": []any{},
+	}}}}
+	got := xiaohongshuVideoCandidateURLs(note)
+	if len(got) != 2 || got[0] != "https://sns-video.example/a.mp4" {
+		t.Fatalf("EF4 下的视频地址应当被取到：%v", got)
+	}
+}
