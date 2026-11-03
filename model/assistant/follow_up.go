@@ -206,6 +206,9 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		role := llm.RoleUser
 		if !push && (strings.TrimSpace(historyEvent.botReply) != "" || assistantHistoryEvent(historyEvent, botID)) {
 			role = llm.RoleAssistant
+			if !isPokeHistoryEvent(historyEvent) {
+				content = assistantHistoryPlainText(historyEvent)
+			}
 		}
 		messages = append(messages, llm.Message{Role: role, Content: content, Priority: llm.MessagePriorityHistory})
 	}

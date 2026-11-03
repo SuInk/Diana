@@ -206,6 +206,42 @@ func dropUnusableDianaMentions(text string, acceptable func(id string) bool) str
 	return strings.TrimSpace(builder.String())
 }
 
+// plainIDMentionPattern 匹配正文里手写的「@<账号 ID>」。前面必须是行首或空白、
+// 后面不能紧跟账号字符，免得把邮箱、链接里的 @ 当成提及。
+var plainIDMentionPattern = regexp.MustCompile(mentionCodeSpanAlternation +
+	`(^|[\s>）)】\]])@([A-Za-z0-9_-]{5,64})([^A-Za-z0-9_-]|$)`)
+
+// promotePlainIDMentions 把「@<成员 ID>」纯文本改回提及标记。
+//
+// 模型偶尔不写 <diana-at/>，直接写「@im_user_xxx」：它照抄的是自己历史发言里渲染
+// 出来的样子（见 assistantHistoryPlainText）。隐私代理把别名还原成真实 ID 之后，
+// 这串数字就当正文发进了群，对方没有提醒，读的人也认不出是谁。模型本意就是 @ 这个
+// 人，所以只要 ID 是本会话里认得的成员，就当成真提及发；认不出的数字原样留着，
+// 可能本来就是在说一个号码。
+func promotePlainIDMentions(text string, known func(id string) bool) string {
+	if !strings.Contains(text, "@") {
+		return text
+	}
+	// 匹配会吃掉提及后面那个分隔字符，「@a @b」一遍只认得出 @a，所以重复到不再变化。
+	for range 8 {
+		next := plainIDMentionPattern.ReplaceAllStringFunc(text, func(token string) string {
+			if isMentionCodeSpan(token) {
+				return token
+			}
+			match := plainIDMentionPattern.FindStringSubmatch(token)
+			if match == nil || !known(match[2]) {
+				return token
+			}
+			return match[1] + mentionMarkerFor(match[2]) + match[3]
+		})
+		if next == text {
+			break
+		}
+		text = next
+	}
+	return text
+}
+
 // usableMentionMarker 判断这段残骸是不是一个照常发出去就行的正规标记。
 func usableMentionMarker(token string, acceptable func(id string) bool) bool {
 	match := dianaMentionMarkerPattern.FindStringSubmatch(token)
