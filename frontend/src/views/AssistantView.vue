@@ -1201,6 +1201,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">开启入群欢迎</span>
                 </label>
+                <span v-if="currentPlatform === 'telegram'" class="hint">Telegram 群开了「隐藏入群消息」或人数太多不再显示入群提示时，机器人要是群管理员才知道有人进群。</span>
               </div>
               <div v-if="form.welcome_enabled" class="field">
                 <label for="bot-welcome-mode">欢迎词模式</label>

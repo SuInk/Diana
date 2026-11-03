@@ -391,3 +391,21 @@ func compatibleTelegramEntities(entities []telegramEntitySpec) []telegramEntityS
 	}
 	return out
 }
+
+// telegramPrependMention 把出站消息的 MentionUserID 变成正文开头的提及标记。
+//
+// OneBot 用单独的 at 段 @ 人，Telegram 没有消息段，只认正文里的实体；不在这里
+// 转一下，入群欢迎、群规警告、提醒推送在 Telegram 上都 @ 不到人。正文里已经
+// 提到这个人就不重复加。
+func telegramPrependMention(text, userID string) string {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return text
+	}
+	for _, id := range mentionedIDsInText(text) {
+		if id == userID {
+			return text
+		}
+	}
+	return mentionMarkerFor(userID) + " " + text
+}

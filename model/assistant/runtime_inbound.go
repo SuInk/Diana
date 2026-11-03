@@ -104,6 +104,8 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		return nil
 	}
 	if event.Edited {
+		// 改前的内容要在刷新之前取：刷新之后历史里就只剩改后的那版了。
+		before, hasBefore := r.messageRevisionBeforeEdit(event)
 		// Known edits update the current message revision and stop here. Running
 		// governance, pairing, plugins, direct-address tracking, or sender-turn
 		// registration again would treat one transport message as a second user
@@ -113,6 +115,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 		if err != nil {
 			return err
 		}
+		r.auditMessageEdit(ctx, event, before, hasBefore)
 		if known {
 			return nil
 		}

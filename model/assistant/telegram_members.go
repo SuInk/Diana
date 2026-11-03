@@ -42,6 +42,8 @@ type telegramChatMember struct {
 }
 type telegramMemberUpdate struct {
 	Chat telegramChat       `json:"chat"`
+	From telegramUser       `json:"from"`
+	Date int64              `json:"date"`
 	Old  telegramChatMember `json:"old_chat_member"`
 	New  telegramChatMember `json:"new_chat_member"`
 }

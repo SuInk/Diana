@@ -397,6 +397,7 @@
             :options="groupWelcomeOptions"
             @update:model-value="(value) => { if (editing) editing.welcome_enabled = fromSwitchValue(value); }"
           />
+          <span v-if="inheritedBot?.platform === 'telegram'" class="hint">本群开了「隐藏入群消息」或人数太多不再显示入群提示时，机器人要是群管理员才知道有人进群。</span>
         </div>
         <div v-if="effectiveWelcomeEnabled" class="field wide">
           <label for="group-welcome">欢迎语</label>
@@ -646,7 +647,7 @@
         </div>
         <div class="field wide">
           <label>规则防御</label>
-          <GroupGovernanceForm v-model="editing.governance" id-prefix="group-governance" />
+          <GroupGovernanceForm v-model="editing.governance" id-prefix="group-governance" :platform="inheritedBot?.platform" />
         </div>
         <div class="field wide">
           <label>本群回复时间与屏蔽账号</label>
