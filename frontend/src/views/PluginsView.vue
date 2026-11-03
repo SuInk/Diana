@@ -986,7 +986,7 @@ const testingMusic = ref(false);
 const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
 const musicPlatforms = [
   { key: "netease", label: "网易云音乐", guide: "公开试听可直接使用；会员歌曲建议填写自建 NeteaseCloudMusicApi，并从浏览器登录 Cookie 中复制 MUSIC_U 的值。" },
-  { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。自建 API 可选。" },
+  { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可选。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
 const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCredentialKeys.has(spec.key)));
@@ -1009,8 +1009,8 @@ function musicPlatformSummary(source: string): string {
 function musicCredentialHint(source: string): string {
   const raw = String(settingsForm.value[`${source}_cookie`] ?? "").trim().toLowerCase();
   if (!raw) return "";
-  if (source === "qq" && !(raw.includes("uin=") || raw.includes("qqmusic_uin="))) return "当前输入中未发现 uin 或 qqmusic_uin，QQ 会员请求可能无法识别账号。";
-  if (source === "qq" && !(raw.includes("qm_keyst=") || raw.includes("qqmusic_key="))) return "当前输入中未发现 qm_keyst 或 qqmusic_key，登录态可能不完整。";
+  if (source === "qq" && !(raw.includes("uin=") || raw.includes("musicid="))) return "当前输入中未发现 uin、qqmusic_uin 或 musicid，QQ 会员请求可能无法识别账号。";
+  if (source === "qq" && !(raw.includes("qm_keyst=") || raw.includes("qqmusic_key=") || raw.includes("musickey="))) return "当前输入中未发现 qm_keyst、qqmusic_key 或 musickey，登录态可能不完整。";
   return "凭据格式包含所需字段；仍建议点击下方按钮实际测试。";
 }
 

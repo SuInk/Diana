@@ -52,12 +52,20 @@ func (s *neteaseSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg mus
 const qqLoginCodeNotLoggedIn = 1000
 
 func (s *qqSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg musicConfig) CredentialCheck {
-	cookie := cfg.sourceOptions(s.Key()).Cookie
 	result := CredentialCheck{Key: musicSourceCookieSetting(s.Key()), Label: "QQ 音乐 Cookie", Configured: true}
+	// 配了能续期的自建接口时先续期再查：过期的 musickey 拿去问账号接口只会得到
+	// 「未登录」，而它其实点一下就能续上。
+	cfg, err := s.freshCredentials(ctx, f, cfg)
+	if err != nil {
+		result.State = CredentialInvalid
+		result.Message = err.Error() + "。"
+		return result
+	}
+	cookie := cfg.sourceOptions(s.Key()).Cookie
 	uin := qqUINFromCookie(cookie)
 	if uin == "0" {
 		result.State = CredentialInvalid
-		result.Message = "Cookie 里找不到 uin 或 qqmusic_uin，QQ 音乐认不出是哪个账号。"
+		result.Message = "Cookie 里找不到 uin、qqmusic_uin 或 musicid，QQ 音乐认不出是哪个账号。"
 		return result
 	}
 	comm := map[string]any{"uin": uin, "format": "json", "ct": 24, "cv": 0}
@@ -87,7 +95,7 @@ func (s *qqSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg musicCon
 		result.MembershipExpired = expired
 	case qqLoginCodeNotLoggedIn:
 		result.State = CredentialInvalid
-		result.Message = "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key 或 qm_keyst。"
+		result.Message = "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key、qm_keyst 或 musicid/musickey。"
 	default:
 		result.State = CredentialError
 		result.Message = fmt.Sprintf("QQ 音乐账号接口返回 code %d，暂时判断不了 Cookie 好坏。", payload.Req0.Code)

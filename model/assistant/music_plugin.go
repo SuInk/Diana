@@ -62,8 +62,9 @@ type MusicPlugin struct {
 	sources       []musicSource
 	commandRunner voiceCommandRunner
 
-	mu     sync.RWMutex
-	sharer LocalMediaSharer
+	mu      sync.RWMutex
+	sharer  LocalMediaSharer
+	runtime *Runtime
 }
 
 // MusicConnectionStatus is safe to return to the settings page. It reports
@@ -151,18 +152,68 @@ func (c musicConfig) sourceOptions(key string) musicSourceOptions {
 	return c.SourceOptions[key]
 }
 
+// withSourceCookie 换掉某家曲库的 Cookie，返回副本，不动调用方手里的 cfg。
+func (c musicConfig) withSourceCookie(key, cookie string) musicConfig {
+	options := make(map[string]musicSourceOptions, len(c.SourceOptions))
+	for name, value := range c.SourceOptions {
+		options[name] = value
+	}
+	current := options[key]
+	current.Cookie = cookie
+	options[key] = current
+	c.SourceOptions = options
+	return c
+}
+
 func (c musicConfig) sourceEnabled(key string) bool {
 	return slices.Contains(c.EnabledSources, key)
 }
 
 func NewMusicPlugin(client *http.Client) *MusicPlugin {
-	return &MusicPlugin{
-		fetcher: &musicFetcher{client: client},
+	plugin := &MusicPlugin{
 		sources: defaultMusicSources(),
 		commandRunner: func(ctx context.Context, name string, args ...string) ([]byte, error) {
 			return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 		},
 	}
+	plugin.fetcher = &musicFetcher{client: client, saveCookie: plugin.saveSourceCookie}
+	return plugin
+}
+
+func (p *MusicPlugin) bindRuntime(runtime *Runtime) {
+	p.mu.Lock()
+	p.runtime = runtime
+	p.mu.Unlock()
+}
+
+// saveSourceCookie 把曲库续期得到的新 Cookie 写回全局设置并落盘。只改这一个键，
+// 其余设置按现值原样提交；不写回的话，重启后又拿已经作废的 refresh_token 去换。
+func (p *MusicPlugin) saveSourceCookie(ctx context.Context, source, cookie string) error {
+	p.mu.RLock()
+	runtime := p.runtime
+	p.mu.RUnlock()
+	if runtime == nil || runtime.plugins == nil {
+		return fmt.Errorf("音乐插件未接入运行时，无法保存新 Cookie")
+	}
+	state, ok := runtime.plugins.Get(musicPluginID)
+	if !ok {
+		return ErrPluginNotFound
+	}
+	values := make(map[string]any, len(state.Settings)+1)
+	for key, value := range state.Settings {
+		values[key] = value
+	}
+	values[musicSourceCookieSetting(source)] = cookie
+	if _, err := runtime.plugins.UpdateSettingsForProfile(musicPluginID, "", values, nil); err != nil {
+		return err
+	}
+	runtime.mu.RLock()
+	persist := runtime.pluginStatePersister
+	runtime.mu.RUnlock()
+	if persist != nil {
+		return persist(ctx)
+	}
+	return nil
 }
 
 func (p *MusicPlugin) Manifest() PluginManifest {
@@ -220,7 +271,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Label:       "QQ 音乐自建 API 地址",
 				Type:        PluginSettingTypeString,
 				Default:     "",
-				Description: "自建 QQMusicApi 的地址。留空走官方接口，无登录态时多数曲目取不到播放地址。",
+				Description: "自建 QQMusicApi 的地址，Node 版和 L-1124 版都认。留空走官方接口，无登录态时多数曲目取不到播放地址。",
 			},
 			{
 				Key:         musicSourceCookieSetting("qq"),
@@ -228,7 +279,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
-				Description: "完整的 Cookie 串，用于会员和独家曲目。",
+				Description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。",
 			},
 			{
 				Key:     musicSettingBitrate,
@@ -341,6 +392,7 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 	}
 	ctx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer cancel()
+	ctx, diagnostics := withMusicDiagnostics(ctx)
 
 	// 一条消息里贴了好几首也只发第一首：连着甩出几条语音在群里是刷屏，
 	// 剩下的仍然由链接解析给出标题。
@@ -357,7 +409,11 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 	}
 	playable, ok := p.playableSong(ctx, cfg, found)
 	if !ok {
-		return musicNoticeResponse(found, "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"), nil
+		reason := "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"
+		if problem := diagnostics.credentialProblem(); problem != "" {
+			reason = "各家曲库都拿不到可播放的音频；" + problem
+		}
+		return musicNoticeResponse(found, reason), nil
 	}
 	record, err := p.prepareSongVoice(ctx, cfg, playable, req.Event.Platform)
 	if err != nil {
@@ -636,6 +692,9 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 	found, ok, matched := t.plugin.pickSongWithStatus(ctx, cfg, query)
 	if !ok {
 		if matched {
+			if problem := diagnostics.credentialProblem(); problem != "" {
+				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
+			}
 			return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；可能需要对应平台的有效会员 Cookie，或该曲目受版权/地区限制", query)
 		}
 		if diagnostics.failed() {

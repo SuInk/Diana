@@ -112,12 +112,18 @@ type musicFetcher struct {
 	// 对外抓取走 netguard 的公网客户端，只有管理员自己填的自建接口用普通客户端
 	// ——自建服务通常就在 127.0.0.1，被 SSRF 防护挡掉才是错的。
 	client *http.Client
+	// saveCookie 把续期后的 Cookie 写回插件设置，见 MusicPlugin.saveSourceCookie。
+	// 为空时（测试里直接构造的 fetcher）只在内存里用新 Cookie。
+	saveCookie func(ctx context.Context, source, cookie string) error
 }
 
 type musicDiagnosticsKey struct{}
 
 type musicDiagnostics struct {
 	failures []string
+	// credential 是凭据已过期、自动续期又失败时给用户看的那句话。只记第一次：
+	// 一轮里每次请求都会撞上同一个原因。
+	credential string
 }
 
 func withMusicDiagnostics(ctx context.Context) (context.Context, *musicDiagnostics) {
@@ -134,6 +140,19 @@ func recordMusicFailure(ctx context.Context, format string, args ...any) {
 }
 
 func (d *musicDiagnostics) failed() bool { return d != nil && len(d.failures) > 0 }
+
+func recordMusicCredentialProblem(ctx context.Context, message string) {
+	if diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics); diagnostics != nil && diagnostics.credential == "" {
+		diagnostics.credential = message
+	}
+}
+
+func (d *musicDiagnostics) credentialProblem() string {
+	if d == nil {
+		return ""
+	}
+	return d.credential
+}
 
 func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) *http.Client {
 	if f != nil && f.client != nil {
