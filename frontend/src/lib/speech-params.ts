@@ -152,6 +152,13 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
 }
 
 
+// speechAPILabel 是接口形态的显示名，不带括号里的路径说明，供列表摘要用。
+export function speechAPILabel(role: "tts" | "stt", api: string): string {
+  if (api === "whisper_cli") return "本机 Whisper";
+  const option = (role === "stt" ? transcriptionAPIOptions : speechAPIOptions).find((item) => item.value === api);
+  return (option?.label ?? api).replace(/（\/audio\/[a-z]+）$/, "");
+}
+
 export function resolveSpeechAPI(explicit = "", baseURL = ""): string {
   if (explicit) return explicit;
   try {

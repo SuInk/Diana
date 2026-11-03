@@ -13,7 +13,7 @@ export type Provider = "openai_compatible" | "gemini" | "anthropic" | "typesafe"
 export interface LLMRoleBinding {
   bot_id?: string;
   bot_name?: string;
-  role: "chat" | "vision" | "intent" | "image";
+  role: "chat" | "vision" | "media_parse" | "intent" | "image" | "reply_tone" | "background" | "reply_assist" | "tts" | "stt" | "video";
   role_label: string;
   model: string;
 }

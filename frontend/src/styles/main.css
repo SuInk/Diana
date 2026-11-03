@@ -6999,8 +6999,8 @@ a.nav-action {
 .prompt-yaml-error { margin: 0; color: var(--err); font-size: 13px; white-space: pre-wrap; }
 /* Search sources share the model configuration controls and spacing. */
 .provider-tabs { margin-bottom: 20px; width: fit-content; }
-.search-provider-manager .card-header { justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.search-provider-manager .card-header h2 { margin-bottom: 4px; }
+:is(.search-provider-manager, .provider-list-card) .card-header { justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+:is(.search-provider-manager, .provider-list-card) .card-header h2 { margin-bottom: 4px; }
 .search-provider-row .row-main { min-width: 0; }
 .search-provider-row .row-sub { overflow-wrap: anywhere; }
 .search-provider-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }

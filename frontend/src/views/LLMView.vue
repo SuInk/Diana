@@ -5,40 +5,48 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <p>管理模型与搜索提供商的接入和凭据；模型按机器人分配，联网搜索在机器人页按机器人配置</p>
+        <p>按能力分开管理模型、语音和搜索的接入与凭据；机器人页按用途选用，联网搜索也在机器人页按机器人配置</p>
       </div>
       <div class="view-actions">
-        <button class="btn" type="button" :disabled="!profileSet" @click="exportProfiles">
+        <button class="btn" type="button" :disabled="!profileSet" title="导出模型、语音与搜索提供商（含密钥）" @click="exportProfiles">
           <Download :size="15" aria-hidden="true" />
           导出
         </button>
-        <button class="btn" type="button" @click="importInputClick">
+        <button class="btn" type="button" title="导入模型、语音与搜索提供商" @click="importInputClick">
           <Upload :size="15" aria-hidden="true" />
           导入
         </button>
         <input ref="importInput" type="file" accept="application/json" style="display: none" @change="importProfiles" />
-        <button v-if="providerTab === 'model'" class="btn primary" type="button" @click="startCreate">
-          <Plus :size="15" aria-hidden="true" />
-          新建配置
-        </button>
       </div>
     </header>
 
-    <nav class="editor-tabs provider-tabs" aria-label="提供商类型" role="tablist"><button id="provider-tab-model" class="editor-tab" :class="{ active: providerTab === 'model' }" type="button" role="tab" :aria-selected="providerTab === 'model'" aria-controls="provider-panel-model" @click="providerTab = 'model'">模型提供商</button><button id="provider-tab-search" class="editor-tab" :class="{ active: providerTab === 'search' }" type="button" role="tab" :aria-selected="providerTab === 'search'" aria-controls="provider-panel-search" @click="providerTab = 'search'">搜索提供商</button></nav>
+    <nav class="editor-tabs provider-tabs" aria-label="提供商类型" role="tablist">
+      <button v-for="tab in providerTabs" :id="`provider-tab-${tab.key}`" :key="tab.key" class="editor-tab" :class="{ active: providerTab === tab.key }" type="button" role="tab" :aria-selected="providerTab === tab.key" :aria-controls="`provider-panel-${tab.key}`" @click="selectTab(tab.key)">
+        <component :is="tab.icon" :size="14" aria-hidden="true" />
+        {{ tab.label }}
+        <span v-if="tab.count !== null" class="provider-tab-count">{{ tab.count }}</span>
+      </button>
+    </nav>
     <div v-show="providerTab === 'model'" id="provider-panel-model" role="tabpanel" aria-labelledby="provider-tab-model" class="stack">
-      <!-- 配置列表 -->
-      <section class="card">
+      <section class="card provider-list-card">
         <div class="card-header">
-          <h2>配置列表</h2>
-          <span v-if="profileSet" class="badge">{{ profiles.length }} 套</span>
+          <div>
+            <h2>模型提供商</h2>
+            <span class="card-sub">对话、识图、生图、视频和向量嵌入的接入；机器人页「模型分配」按用途选模型，同一分组内的顺序就是失败降级的优先级。</span>
+          </div>
+          <button class="btn small primary" type="button" @click="startCreate('model')">
+            <Plus :size="14" aria-hidden="true" />
+            新建模型提供商
+          </button>
         </div>
         <div class="card-body stack" style="gap: 14px">
+          <input v-if="modelProfiles.length > 5" v-model="profileFilter" class="input provider-filter" type="search" placeholder="按名称、地址、模型或分组筛选" aria-label="筛选模型提供商" />
           <LoadingSkeleton v-if="loading && !profileSet" kind="providers" label="正在加载提供商" />
           <div v-for="section in groupedProfiles" :key="section.group" class="stack" style="gap: 6px">
             <div class="group-header">
               <span>{{ groupLabel(section.group) }}</span>
               <span class="muted" style="font-size: 12px">
-                {{ section.items.length }} 个提供商 · {{ sectionModelCount(section.items) }} 个模型 · 顺序即降级优先级
+                {{ section.items.length }} 个提供商 · {{ sectionModelCount(section.items) }} 个模型<template v-if="section.items.length > 1"> · 顺序即降级优先级</template>
               </span>
             </div>
             <div class="row-list">
@@ -51,28 +59,31 @@
               <div class="row-main">
                 <div class="row-title">
                   {{ profile.name || profile.model }}
+                  <span v-if="profile.speech_params?.tts" class="badge accent">语音合成</span>
+                  <span v-if="profile.speech_params?.stt" class="badge accent">语音识别</span>
                 </div>
                 <div class="row-sub">
-                  {{ providerLabel(profile.provider) }} · {{ profileModelCount(profile) }} 个模型
+                  {{ providerLabel(profile.provider) }} · {{ profileAddress(profile) }} · {{ profileModelCount(profile) }} 个模型
                   <template v-if="profile.description"> · {{ profile.description }}</template>
                 </div>
+                <div class="row-sub provider-usage" :class="{ unused: !profile.role_bindings?.length }">{{ usageSummary(profile) }}</div>
               </div>
               <div class="row-actions">
-                <span class="cluster" style="gap: 2px" title="组内顺序即失败降级优先级">
-                  <button class="btn small ghost icon-only" type="button" :disabled="busy || !canMove(profile, -1)" @click="move(profile, -1)">
+                <span v-if="!profileFilter.trim()" class="cluster" style="gap: 2px" title="组内顺序即失败降级优先级">
+                  <button class="btn small ghost icon-only" type="button" :aria-label="`上移 ${profile.name || profile.model}`" :disabled="busy || !canMove(profile, -1)" @click="move(profile, -1)">
                     <ChevronUp :size="13" aria-hidden="true" />
                   </button>
-                  <button class="btn small ghost icon-only" type="button" :disabled="busy || !canMove(profile, 1)" @click="move(profile, 1)">
+                  <button class="btn small ghost icon-only" type="button" :aria-label="`下移 ${profile.name || profile.model}`" :disabled="busy || !canMove(profile, 1)" @click="move(profile, 1)">
                     <ChevronDown :size="13" aria-hidden="true" />
                   </button>
                 </span>
-                <button class="btn small ghost" type="button" title="测试这套配置" @click="openTest(profile)">
+                <button class="btn small ghost" type="button" title="测试这套配置" :aria-label="`测试提供商 ${profile.name || profile.model}`" @click="openTest(profile)">
                   <Send :size="13" aria-hidden="true" />
                 </button>
                 <button class="btn small ghost" type="button" :aria-label="`编辑提供商 ${profile.name || profile.model}`" @click="startEdit(profile)">
                   <Pencil :size="13" aria-hidden="true" />
                 </button>
-                <button class="btn small ghost" type="button" :disabled="busy" @click="clone(profile)" title="克隆">
+                <button class="btn small ghost" type="button" :disabled="busy" title="克隆" :aria-label="`克隆提供商 ${profile.name || profile.model}`" @click="clone(profile)">
                   <Copy :size="13" aria-hidden="true" />
                 </button>
                 <button
@@ -80,6 +91,7 @@
                   type="button"
                   :disabled="busy || profiles.length <= 1"
                   title="删除"
+                  :aria-label="`删除提供商 ${profile.name || profile.model}`"
                   @click="remove(profile)"
                 >
                   <Trash2 :size="13" aria-hidden="true" />
@@ -91,10 +103,68 @@
           <EmptyState v-if="!loading && loadError && !profileSet" title="暂时无法加载提供商" :hint="loadError">
             <button class="btn" type="button" @click="reload().catch(() => undefined)"><RefreshCw :size="15" aria-hidden="true" />重试</button>
           </EmptyState>
-          <EmptyState v-else-if="!loading && profiles.length === 0" title="还没有配置档" hint="点击右上角「新建配置」开始" />
+          <EmptyState v-else-if="!loading && modelProfiles.length === 0" title="还没有模型提供商" hint="点击「新建模型提供商」开始" />
+          <p v-else-if="profileFilter.trim() && groupedProfiles.length === 0" class="muted">没有匹配「{{ profileFilter.trim() }}」的提供商。</p>
         </div>
       </section>
+    </div>
 
+    <div v-show="providerTab === 'voice'" id="provider-panel-voice" role="tabpanel" aria-labelledby="provider-tab-voice" class="stack">
+      <section class="card provider-list-card">
+        <div class="card-header">
+          <div>
+            <h2>语音提供商</h2>
+            <span class="card-sub">语音合成和语音识别的接口、音色与格式；机器人页「模型分配」里选用，发送模式、字数和时长上限也在那里设置。</span>
+          </div>
+          <button class="btn small primary" type="button" @click="startCreate('voice')">
+            <Plus :size="14" aria-hidden="true" />
+            新建语音提供商
+          </button>
+        </div>
+        <div class="card-body stack" style="gap: 14px">
+          <LoadingSkeleton v-if="loading && !profileSet" kind="providers" label="正在加载语音提供商" />
+          <div v-for="section in voiceSections" :key="section.role" class="stack" style="gap: 6px">
+            <div class="group-header">
+              <span>{{ section.label }}</span>
+              <span class="muted" style="font-size: 12px">{{ section.items.length }} 个 · {{ section.hint }}</span>
+            </div>
+            <div class="row-list">
+              <div v-for="profile in section.items" :key="profile.id" class="row-item" :class="{ selected: editingID === profile.id }">
+                <div class="row-main">
+                  <div class="row-title">
+                    {{ profile.name || profile.model }}
+                    </div>
+                  <div class="row-sub">{{ voiceSummary(profile, section.role) }}</div>
+                  <div class="row-sub provider-usage" :class="{ unused: !voiceBindings(profile, section.role).length }">{{ voiceUsageSummary(profile, section.role) }}</div>
+                </div>
+                <div class="row-actions">
+                  <button class="btn small ghost" type="button" :aria-label="`编辑语音提供商 ${profile.name || profile.model}`" @click="startEdit(profile, 'voice')">
+                    <Pencil :size="13" aria-hidden="true" />
+                  </button>
+                  <button v-if="groupOf(profile) === speechGroup" class="btn small ghost danger" type="button" :disabled="busy || profiles.length <= 1" title="删除" :aria-label="`删除语音提供商 ${profile.name || profile.model}`" @click="remove(profile)">
+                    <Trash2 :size="13" aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+              <p v-if="section.items.length === 0" class="muted provider-section-empty">{{ section.empty }}</p>
+            </div>
+          </div>
+          <div class="stack" style="gap: 6px">
+            <div class="group-header">
+              <span>内置，无需配置</span>
+              <span class="muted" style="font-size: 12px">不用建提供商，在机器人页「模型分配」里直接选</span>
+            </div>
+            <div class="row-list">
+              <div v-for="item in builtinVoiceServices" :key="item.label" class="row-item">
+                <div class="row-main">
+                  <div class="row-title">{{ item.label }} <span class="badge">{{ item.role }}</span></div>
+                  <div class="row-sub">{{ item.hint }}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search" class="stack">
@@ -155,219 +225,238 @@
     </Modal>
 
     <!-- 编辑弹窗 -->
-    <Modal v-if="editorOpen" :title="editingID ? '编辑配置' : '新建配置'" wide @close="closeEditor">
-      <div class="form-grid">
-        <div class="field">
-          <label for="llm-name">名称</label>
-          <input id="llm-name" v-model="form.name" class="input" placeholder="例如 主力 · GPT" />
-        </div>
-        <div class="field">
-          <label for="llm-channel-group">渠道分组（可选）</label>
-          <input id="llm-channel-group" v-model="form.group" class="input" placeholder="例如 主力、备用" />
-          <span class="hint">同分组的渠道自动轮换降级；机器人页可把用途绑到整个分组。</span>
-        </div>
-        <div class="field">
-          <label for="llm-provider-kind">接入类型</label>
-          <AppSelect
-            id="llm-provider-kind"
-            :model-value="form.provider"
-            :options="providerKindOptions"
-            @update:model-value="applyProviderKind"
-          />
-          <span class="hint">{{ currentProviderKind.hint }}。</span>
-        </div>
-        <div class="field">
-          <label for="llm-service">服务平台</label>
-          <AppSelect
-            id="llm-service"
-            :model-value="selectedService"
-            :options="serviceOptions"
-            @update:model-value="applyServicePreset"
-          />
-        </div>
-        <!-- 接口模式只对 OpenAI 兼容接口有意义；原生协议带上它会被后端拒绝。 -->
-        <div v-if="supportsAPIStyle" class="field">
-          <label for="llm-api-style">接口模式</label>
-          <AppSelect
-            id="llm-api-style"
-            v-model="form.api_style"
-            :options="[
-              { value: 'chat_completions', label: 'Chat Completions' },
-              { value: 'responses', label: 'Responses API' }
-            ]"
-          />
-          <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
-        </div>
-        <div class="field wide">
-          <label for="llm-baseurl">API 地址</label>
-          <input
-            id="llm-baseurl"
-            v-model="form.base_url"
-            class="input mono"
-            :class="{ invalid: invalidField === 'base_url' }"
-            :aria-invalid="invalidField === 'base_url'"
-            :placeholder="supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
-            @input="clearInvalid('base_url')"
-          />
-          <span class="hint">
-            {{ selectedPreset?.hint }}；{{
-              supportsAPIStyle
-                ? "请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。"
-                : "原生协议留空即走官方地址，只有走代理或自建网关时才需要填。"
-            }}
-          </span>
-        </div>
-        <div class="field wide">
-          <label for="llm-apikey">API Key</label>
-          <div class="input-group">
-            <input
-              id="llm-apikey"
-              v-model="form.api_key"
-              class="input"
-              :class="{ invalid: invalidField === 'api_key' }"
-              :aria-invalid="invalidField === 'api_key'"
-              :type="showKey ? 'text' : 'password'"
-              autocomplete="off"
-              :placeholder="apiKeyPlaceholder"
-              @input="clearInvalid('api_key')"
-            />
-            <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
-              <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
-              <Eye v-else :size="14" aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-        <details class="field wide" :open="Object.keys(form.speech_params).length > 0">
-          <summary>语音服务</summary>
-          <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
-          <div v-for="role in speechRoles" :key="role.key" class="stack">
-            <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
-            <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
-              <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
-                <span>{{ field.label }}</span>
-                <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
-                <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
-                <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
-                <span v-if="field.hint" class="hint">{{ field.hint }}</span>
-              </label>
+    <Modal v-if="editorOpen" :title="editorTitle" wide @close="closeEditor">
+      <div class="provider-editor">
+        <section class="provider-editor-section" style="order: 0">
+          <h3 class="provider-editor-title">连接</h3>
+          <div class="form-grid">
+            <div class="field">
+              <label for="llm-name">名称</label>
+              <input id="llm-name" v-model="form.name" class="input" :placeholder="voiceOnly ? '例如 MiniMax 语音' : '例如 主力 · GPT'" />
+            </div>
+            <div class="field">
+              <label for="llm-channel-group">渠道分组（可选）</label>
+              <input id="llm-channel-group" v-model="form.group" class="input" placeholder="例如 主力、备用" />
+              <span class="hint">同分组的渠道自动轮换降级；机器人页可把用途绑到整个分组。</span>
+            </div>
+            <div class="field">
+              <label for="llm-provider-kind">接入类型</label>
+              <AppSelect
+                id="llm-provider-kind"
+                :model-value="form.provider"
+                :options="providerKindOptions"
+                @update:model-value="applyProviderKind"
+              />
+              <span class="hint">{{ currentProviderKind.hint }}。</span>
+            </div>
+            <div v-if="!voiceOnly" class="field">
+              <label for="llm-service">服务平台</label>
+              <AppSelect
+                id="llm-service"
+                :model-value="selectedService"
+                :options="serviceOptions"
+                @update:model-value="applyServicePreset"
+              />
+            </div>
+            <!-- 接口模式只对 OpenAI 兼容接口有意义；原生协议带上它会被后端拒绝。 -->
+            <div v-if="supportsAPIStyle && !voiceOnly" class="field">
+              <label for="llm-api-style">接口模式</label>
+              <AppSelect
+                id="llm-api-style"
+                v-model="form.api_style"
+                :options="[
+                  { value: 'chat_completions', label: 'Chat Completions' },
+                  { value: 'responses', label: 'Responses API' }
+                ]"
+              />
+              <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
+            </div>
+            <div class="field wide">
+              <label for="llm-baseurl">API 地址</label>
+              <input
+                id="llm-baseurl"
+                v-model="form.base_url"
+                class="input mono"
+                :class="{ invalid: invalidField === 'base_url' }"
+                :aria-invalid="invalidField === 'base_url'"
+                :placeholder="supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
+                @input="clearInvalid('base_url')"
+              />
+              <span class="hint">
+                {{ selectedPreset?.hint }}；{{
+                  supportsAPIStyle
+                    ? "请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。"
+                    : "原生协议留空即走官方地址，只有走代理或自建网关时才需要填。"
+                }}
+              </span>
+            </div>
+            <div class="field wide">
+              <label for="llm-apikey">API Key</label>
+              <div class="input-group">
+                <input
+                  id="llm-apikey"
+                  v-model="form.api_key"
+                  class="input"
+                  :class="{ invalid: invalidField === 'api_key' }"
+                  :aria-invalid="invalidField === 'api_key'"
+                  :type="showKey ? 'text' : 'password'"
+                  autocomplete="off"
+                  :placeholder="apiKeyPlaceholder"
+                  @input="clearInvalid('api_key')"
+                />
+                <button class="btn icon-only" type="button" :aria-label="showKey ? '隐藏 Key' : '显示 Key'" @click="showKey = !showKey">
+                  <EyeOff v-if="showKey" :size="14" aria-hidden="true" />
+                  <Eye v-else :size="14" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+            <div class="field wide">
+              <label for="llm-desc">备注（可选）</label>
+              <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
             </div>
           </div>
-          <p class="hint">未启用此处参数时沿用已有机器人语音配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
+        </section>
+        <details class="provider-editor-section prompt-advanced" :style="{ order: editorMode === 'voice' ? 1 : 3 }" :open="editorMode === 'voice' || Object.keys(form.speech_params).length > 0">
+          <summary class="provider-editor-title">语音服务<span v-if="speechSummary" class="muted provider-editor-summary">{{ speechSummary }}</span></summary>
+          <div class="form-grid">
+            <div class="field wide">
+              <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在「模型列表」里添加，没有模型概念的接口可以不填。</p>
+              <div v-for="role in speechRoles" :key="role.key" class="stack">
+                <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
+                <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
+                  <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
+                    <span>{{ field.label }}</span>
+                    <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
+                    <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
+                    <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
+                    <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+                  </label>
+                </div>
+              </div>
+              <p class="hint">未启用此处参数时沿用已有机器人语音配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
+            </div>
+          </div>
         </details>
-        <div class="field wide model-config-field">
-          <div class="model-sync-row">
-            <div class="model-sync-copy">
-              <span class="model-sync-title">模型列表</span>
-              <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，勾选启用，右侧编辑或删除。手动设置会在同步后保留。</span>
-              <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
+        <section class="provider-editor-section" style="order: 2">
+          <h3 class="provider-editor-title">模型</h3>
+          <div class="form-grid">
+            <div class="field wide model-config-field">
+              <div class="model-sync-row">
+                <div class="model-sync-copy">
+                  <span class="model-sync-title">模型列表</span>
+                  <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，勾选启用，右侧编辑或删除。手动设置会在同步后保留。</span>
+                  <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
+                </div>
+                <span class="cluster" style="gap: 8px">
+                  <button
+                    v-if="modelOptions.length > 0"
+                    class="btn ghost"
+                    type="button"
+                    :disabled="modelsLoading || modelMetadataEditing"
+                    title="移除全部模型，然后手动补上要留的那几个"
+                    @click="clearModels"
+                  >
+                    <Trash2 :size="14" aria-hidden="true" />
+                    清空
+                  </button>
+                  <button class="btn" type="button" :disabled="modelsLoading || modelMetadataEditing" @click="loadModels(false)">
+                    <RefreshCw :size="14" aria-hidden="true" />
+                    {{ modelsLoading ? "同步中…" : "同步模型列表" }}
+                  </button>
+                </span>
+              </div>
+              <ModelCatalogEditor
+                v-model="modelOptions"
+                :disabled="modelsLoading || busy"
+                :provider-window="optionalTokenInput(form.context_window_tokens)"
+                @editing-change="modelMetadataEditing = $event"
+              />
             </div>
-            <span class="cluster" style="gap: 8px">
-              <button
-                v-if="modelOptions.length > 0"
-                class="btn ghost"
-                type="button"
-                :disabled="modelsLoading || modelMetadataEditing"
-                title="移除全部模型，然后手动补上要留的那几个"
-                @click="clearModels"
-              >
-                <Trash2 :size="14" aria-hidden="true" />
-                清空
-              </button>
-              <button class="btn" type="button" :disabled="modelsLoading || modelMetadataEditing" @click="loadModels(false)">
-                <RefreshCw :size="14" aria-hidden="true" />
-                {{ modelsLoading ? "同步中…" : "同步模型列表" }}
-              </button>
-            </span>
+            <div v-if="!voiceOnly" class="field">
+              <label for="llm-window">统一上下文窗口（可选）</label>
+              <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="使用每个模型的设置" />
+              <span class="hint">
+                {{ effectiveContextHint }}
+                <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
+              </span>
+              <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
+                <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
+              </ul>
+            </div>
           </div>
-          <ModelCatalogEditor
-            v-model="modelOptions"
-            :disabled="modelsLoading || busy"
-            :provider-window="optionalTokenInput(form.context_window_tokens)"
-            @editing-change="modelMetadataEditing = $event"
-          />
-        </div>
-        <div class="field">
-          <label for="llm-window">统一上下文窗口（可选）</label>
-          <input id="llm-window" v-model="form.context_window_tokens" class="input" inputmode="numeric" placeholder="使用每个模型的设置" />
-          <span class="hint">
-            {{ effectiveContextHint }}
-            <template v-if="contextWindowBindings.length > 0">在用这套配置的用途：</template>
-          </span>
-          <ul v-if="contextWindowBindings.length > 0" class="hint context-binding-list">
-            <li v-for="line in contextWindowBindings" :key="line">{{ line }}</li>
-          </ul>
-        </div>
-        <div v-if="form.provider === 'openai_compatible'" class="field wide">
-          <label for="llm-header-name-0">自定义请求头（可选）</label>
-          <div class="target-list" style="margin-top: 0">
-            <div v-for="(row, index) in headerRows" :key="row.key" class="header-row">
+        </section>
+        <details class="provider-editor-section prompt-advanced" style="order: 4" :open="advancedOpen" @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open">
+          <summary class="provider-editor-title">高级设置<span class="muted provider-editor-summary">{{ advancedSummary }}</span></summary>
+          <div class="form-grid">
+            <div v-if="form.provider === 'openai_compatible'" class="field wide">
+              <label for="llm-header-name-0">自定义请求头（可选）</label>
+              <div class="target-list" style="margin-top: 0">
+                <div v-for="(row, index) in headerRows" :key="row.key" class="header-row">
+                  <input
+                    :id="`llm-header-name-${index}`"
+                    v-model="row.name"
+                    class="input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :readonly="row.configured"
+                    :title="row.name"
+                    placeholder="请求头名，如 X-Session-Affinity"
+                  />
+                  <input
+                    v-model="row.value"
+                    class="input"
+                    autocomplete="off"
+                    spellcheck="false"
+                    :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
+                  />
+                  <button
+                    class="btn ghost"
+                    type="button"
+                    :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
+                    :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
+                    @click="removeHeader(index)"
+                  >
+                    <X :size="14" :stroke-width="2.25" aria-hidden="true" />
+                    删除
+                  </button>
+                </div>
+                <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
+              </div>
+              <span class="hint">
+                中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
+                <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
+              </span>
+            </div>
+            <div v-if="form.provider === 'openai_compatible'" class="field wide">
+              <label for="llm-ua">User-Agent</label>
               <input
-                :id="`llm-header-name-${index}`"
-                v-model="row.name"
-                class="input"
+                id="llm-ua"
+                v-model="form.user_agent"
+                class="input mono"
+                required
                 autocomplete="off"
                 spellcheck="false"
-                :readonly="row.configured"
-                :title="row.name"
-                placeholder="请求头名，如 X-Session-Affinity"
+                :class="{ invalid: invalidField === 'user_agent' }"
+                :aria-invalid="invalidField === 'user_agent'"
+                :placeholder="defaultUserAgent || 'diana (darwin; arm64)'"
+                @input="clearInvalid('user_agent')"
               />
-              <input
-                v-model="row.value"
-                class="input"
-                autocomplete="off"
-                spellcheck="false"
-                :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
-              />
-              <button
-                class="btn ghost"
-                type="button"
-                :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
-                :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
-                @click="removeHeader(index)"
-              >
-                <X :size="14" :stroke-width="2.25" aria-hidden="true" />
-                删除
-              </button>
+              <span class="hint">
+                默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
+              </span>
             </div>
-            <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
+            <div class="field">
+              <label for="llm-max-concurrency">最大并发请求</label>
+              <input id="llm-max-concurrency" v-model="form.max_concurrency" class="input" type="number" min="0" max="10000" step="1" />
+              <span class="hint">0 表示不限。共用这套配置的机器人一起排队，流式请求结束后释放名额。</span>
+            </div>
+            <div class="field">
+              <label for="llm-max-rps">每秒请求上限（RPS）</label>
+              <input id="llm-max-rps" v-model="form.max_rps" class="input" type="number" min="0" max="10000" step="0.001" />
+              <span class="hint">0 表示不限；正数至少 0.001。请求均匀发出，重试也受限制，等待计入请求超时。</span>
+            </div>
           </div>
-          <span class="hint">
-            中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
-            <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
-          </span>
-        </div>
-        <div v-if="form.provider === 'openai_compatible'" class="field wide">
-          <label for="llm-ua">User-Agent</label>
-          <input
-            id="llm-ua"
-            v-model="form.user_agent"
-            class="input mono"
-            required
-            autocomplete="off"
-            spellcheck="false"
-            :class="{ invalid: invalidField === 'user_agent' }"
-            :aria-invalid="invalidField === 'user_agent'"
-            :placeholder="defaultUserAgent || 'diana (darwin; arm64)'"
-            @input="clearInvalid('user_agent')"
-          />
-          <span class="hint">
-            默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
-          </span>
-        </div>
-        <div class="field">
-          <label for="llm-max-concurrency">最大并发请求</label>
-          <input id="llm-max-concurrency" v-model="form.max_concurrency" class="input" type="number" min="0" max="10000" step="1" />
-          <span class="hint">0 表示不限。共用这套配置的机器人一起排队，流式请求结束后释放名额。</span>
-        </div>
-        <div class="field">
-          <label for="llm-max-rps">每秒请求上限（RPS）</label>
-          <input id="llm-max-rps" v-model="form.max_rps" class="input" type="number" min="0" max="10000" step="0.001" />
-          <span class="hint">0 表示不限；正数至少 0.001。请求均匀发出，重试也受限制，等待计入请求超时。</span>
-        </div>
-        <div class="field wide">
-          <label for="llm-desc">备注（可选）</label>
-          <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
-        </div>
+        </details>
       </div>
       <template #footer>
         <button class="btn ghost" type="button" @click="closeEditor">取消</button>
@@ -383,12 +472,12 @@
 <script setup lang="ts">
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { computed, onActivated, onMounted, ref, watch } from "vue";
-import { viewQuery } from "../router";
+import { viewPath, viewQuery } from "../router";
 import SearchProviderManager from "../components/SearchProviderManager.vue";
 import ModelCatalogEditor from "../components/ModelCatalogEditor.vue";
 import { syncModelMetadata } from "../lib/model-metadata";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
-import { ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
+import { AudioLines, Boxes, ChevronDown, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Globe, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,
@@ -410,7 +499,7 @@ import {
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 import Modal from "../components/Modal.vue";
-import { speechServiceFields, updateSpeechParam } from "../lib/speech-params";
+import { resolveSpeechAPI, speechAPILabel, speechServiceFields, updateSpeechParam } from "../lib/speech-params";
 import AppSwitch from "../components/AppSwitch.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
@@ -426,8 +515,28 @@ import {
   type LLMErrorField
 } from "../lib/llm-presets";
 
-const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'search' ? 'search' : 'model');
-onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });
+// 按能力分标签，参照 Open WebUI、LobeChat 把语音、搜索从模型里拆出来；?section= 记住当前标签，
+// 机器人页的「管理搜索提供商」等入口靠它直达。
+type ProviderTab = "model" | "voice" | "search";
+const providerTabKeys: ProviderTab[] = ["model", "voice", "search"];
+function tabFromQuery(): ProviderTab | null {
+  const section = viewQuery().get("section") as ProviderTab | null;
+  return section && providerTabKeys.includes(section) ? section : null;
+}
+const providerTab = ref<ProviderTab>(tabFromQuery() ?? "model");
+onActivated(() => { const tab = tabFromQuery(); if (tab) providerTab.value = tab; });
+function selectTab(tab: ProviderTab): void {
+  providerTab.value = tab;
+  const query = viewQuery();
+  if (tab === "model") query.delete("section");
+  else query.set("section", tab);
+  window.history.replaceState(null, "", viewPath("provider", query));
+}
+const providerTabs = computed(() => [
+  { key: "model" as const, label: "模型", icon: Boxes, count: profileSet.value ? modelProfiles.value.length : null },
+  { key: "voice" as const, label: "语音", icon: AudioLines, count: profileSet.value ? voiceProfileCount.value : null },
+  { key: "search" as const, label: "搜索", icon: Globe, count: null }
+]);
 
 interface LLMFormState {
   speech_params: NonNullable<LLMConfig["speech_params"]>;
@@ -589,7 +698,35 @@ async function reload(): Promise<void> {
   }
 }
 
-function startCreate(): void {
+// editorMode 只决定编辑框的标题和分区顺序：从语音标签进来时语音服务排在模型列表前、默认展开。
+const editorMode = ref<"model" | "voice">("model");
+// 纯语音分组用不上对话那套预设：服务平台、接口模式和上下文窗口都只影响对话请求，藏起来少一层干扰。
+const voiceOnly = computed(() => form.value.group.trim() === speechGroup);
+const advancedOpen = ref(false);
+const editorTitle = computed(() => {
+  const noun = editorMode.value === "voice" ? "语音提供商" : "模型提供商";
+  return editingID.value ? `编辑${noun}` : `新建${noun}`;
+});
+const speechSummary = computed(() => {
+  const enabled = speechRoles.filter((role) => form.value.speech_params[role.key] !== undefined).map((role) => role.label);
+  return enabled.length ? `已开启${enabled.join("、")}` : "未开启";
+});
+const advancedSummary = computed(() => {
+  const parts: string[] = [];
+  const headerCount = headerRows.value.filter((row) => row.name.trim()).length;
+  if (headerCount > 0) parts.push(`${headerCount} 个请求头`);
+  if (Number(form.value.max_concurrency) > 0) parts.push(`并发 ${form.value.max_concurrency}`);
+  if (Number(form.value.max_rps) > 0) parts.push(`RPS ${form.value.max_rps}`);
+  return parts.length ? parts.join(" · ") : "请求头、User-Agent、并发与限速";
+});
+// 高级设置默认收起；报错落在 User-Agent 时要展开，不然标红的那格看不见。
+watch(invalidField, (field) => {
+  if (field === "user_agent") advancedOpen.value = true;
+});
+
+function startCreate(mode: "model" | "voice" = "model"): void {
+  editorMode.value = mode;
+  advancedOpen.value = false;
   editingID.value = undefined;
   editingConfigured.value = false;
   editingKeyPreview.value = "";
@@ -601,20 +738,49 @@ function startCreate(): void {
   resetHeaderRows(undefined);
   modelMetadataEditing.value = false;
   invalidField.value = "";
+  if (mode === "voice") {
+    // 语音提供商多是自建或专门的语音服务：从自定义兼容接口起步，单独成组，
+    // 免得落进默认分组被对话的失败降级轮到。
+    applyServicePreset("custom");
+    form.value.group = speechGroup;
+    form.value.speech_params = { tts: {} };
+  }
   editorOpen.value = true;
 }
 
+// 分组名是用户自己起的；常见的几个用途分组给中文名，其余照原样显示。
 const groupLabels: Record<string, string> = {
   default: "默认分组",
-  embedding: "向量嵌入（语义检索）"
+  vision: "视觉理解",
+  intent: "意图识别",
+  image: "图片生成",
+  video: "视频生成",
+  embedding: "向量嵌入（语义检索）",
+  speech: "语音"
 };
 
-const groupOrder = ["default", "vision", "intent", "image", "embedding"];
+const groupOrder = ["default", "vision", "intent", "image", "video", "embedding", "speech"];
+
+// 「语音」分组是在语音标签新建的纯语音提供商，模型标签不重复列；放在别的分组、
+// 同时开了语音参数的配置两边都列，模型标签上用徽标标出来。
+const speechGroup = "speech";
+const profileFilter = ref("");
+const modelProfiles = computed(() => profiles.value.filter((profile) => groupOf(profile) !== speechGroup));
+
+function profileMatches(profile: LLMConfig, keyword: string): boolean {
+  const haystack = [profile.name, profile.description, profile.base_url, profile.model, groupOf(profile), groupLabel(groupOf(profile)), ...(profile.models ?? []).map((model) => model.id)]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase();
+  return haystack.includes(keyword);
+}
 
 // 配置列表按用途分节展示；已知用途按固定顺序排前，自定义分组跟在后面。
 const groupedProfiles = computed<{ group: string; items: LLMConfig[] }[]>(() => {
+  const keyword = profileFilter.value.trim().toLowerCase();
   const sections = new Map<string, LLMConfig[]>();
-  for (const profile of profiles.value) {
+  for (const profile of modelProfiles.value) {
+    if (keyword && !profileMatches(profile, keyword)) continue;
     const group = groupOf(profile);
     if (!sections.has(group)) {
       sections.set(group, []);
@@ -628,6 +794,71 @@ const groupedProfiles = computed<{ group: string; items: LLMConfig[] }[]>(() => 
   });
   return keys.map((group) => ({ group, items: sections.get(group)! }));
 });
+
+type SpeechRole = "tts" | "stt";
+const voiceSections = computed(() => {
+  const sections: { role: SpeechRole | "pending"; label: string; hint: string; empty: string; items: LLMConfig[] }[] = [
+    { role: "tts", label: "语音合成", hint: "把回复读成语音消息", empty: "还没有配置语音合成，也可以直接用下面的内置朗读。", items: profiles.value.filter((profile) => profile.speech_params?.tts !== undefined) },
+    { role: "stt", label: "语音识别", hint: "把收到的语音转成文字", empty: "还没有配置语音识别，也可以直接用下面的本机 Whisper。", items: profiles.value.filter((profile) => profile.speech_params?.stt !== undefined) }
+  ];
+  const pending = profiles.value.filter((profile) => groupOf(profile) === speechGroup && !profile.speech_params?.tts && !profile.speech_params?.stt);
+  if (pending.length > 0) sections.push({ role: "pending", label: "待配置", hint: "在语音分组里，但还没开语音合成或识别参数", empty: "", items: pending });
+  return sections;
+});
+const voiceProfileCount = computed(() => profiles.value.filter((profile) => profile.speech_params?.tts || profile.speech_params?.stt || groupOf(profile) === speechGroup).length);
+
+const builtinVoiceServices = [
+  { label: "Edge 朗读", role: "语音合成", hint: "免费，不要 Key，音色用 zh-CN-XiaoxiaoNeural 这类名字" },
+  { label: "谷歌翻译朗读", role: "语音合成", hint: "免费，不要 Key，只能选语言不能选音色" },
+  { label: "本机 Whisper（whisper.cpp）", role: "语音识别", hint: "调用本机的 whisper-cli 命令，需要自行安装并下载模型文件" }
+];
+
+const speechRoleLabels: Record<string, string> = { tts: "语音合成", stt: "语音识别", video: "视频生成" };
+
+function voiceSummary(profile: LLMConfig, role: SpeechRole | "pending"): string {
+  if (role === "pending") return `${profileAddress(profile)} · 编辑后开启语音合成或语音识别参数`;
+  const params = profile.speech_params?.[role] ?? {};
+  const api = resolveSpeechAPI(params.api, profile.base_url);
+  const parts = [speechAPILabel(role, api) + (params.api ? "" : "（按地址识别）"), profileAddress(profile)];
+  if (params.voice) parts.push(`${api === "google_translate" ? "语言" : "音色"} ${params.voice}`);
+  if (params.format) parts.push(params.format);
+  if (role === "stt" && params.language) parts.push(`语言 ${params.language}`);
+  return parts.join(" · ");
+}
+
+function voiceBindings(profile: LLMConfig, role: SpeechRole | "pending") {
+  return (profile.role_bindings ?? []).filter((binding) => role === "pending" ? binding.role === "tts" || binding.role === "stt" : binding.role === role);
+}
+
+function voiceUsageSummary(profile: LLMConfig, role: SpeechRole | "pending"): string {
+  const bots = [...new Set(voiceBindings(profile, role).map((binding) => binding.bot_name || binding.bot_id || "未命名机器人"))];
+  return bots.length ? `在用：${bots.join("、")}` : "还没有机器人选用";
+}
+
+// usageSummary 汇总「谁在用这套配置」：按机器人归并，避免一台机器人绑了五个用途刷满一行。
+function usageSummary(profile: LLMConfig): string {
+  const bindings = profile.role_bindings ?? [];
+  if (bindings.length === 0) return "还没有机器人选用";
+  const byBot = new Map<string, string[]>();
+  for (const binding of bindings) {
+    const bot = binding.bot_name || binding.bot_id || "未命名机器人";
+    const label = binding.role_label || speechRoleLabels[binding.role] || binding.role;
+    const roles = byBot.get(bot) ?? [];
+    if (!roles.includes(label)) roles.push(label);
+    byBot.set(bot, roles);
+  }
+  return "在用：" + [...byBot.entries()].map(([bot, roles]) => `${bot}（${roles.join("、")}）`).join("；");
+}
+
+function profileAddress(profile: LLMConfig): string {
+  const raw = profile.base_url?.trim();
+  if (!raw) return "官方地址";
+  try {
+    return new URL(raw).host;
+  } catch {
+    return raw;
+  }
+}
 
 function groupOf(profile: LLMConfig): string {
   return profile.group?.trim() || "default";
@@ -703,7 +934,9 @@ async function move(profile: LLMConfig, delta: number): Promise<void> {
   }
 }
 
-function startEdit(profile: LLMConfig): void {
+function startEdit(profile: LLMConfig, mode: "model" | "voice" = "model"): void {
+  editorMode.value = mode;
+  advancedOpen.value = false;
   editingID.value = profile.id;
   editingConfigured.value = Boolean(profile.api_key_configured);
   editingKeyPreview.value = profile.api_key_preview ?? "";
@@ -768,7 +1001,7 @@ const effectiveContextHint = computed(() => {
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。
 const contextWindowBindings = computed(() =>
-  (editingProfile.value?.role_bindings ?? []).map((binding) => {
+  (editingProfile.value?.role_bindings ?? []).filter((binding) => !(binding.role in speechRoleLabels)).map((binding) => {
     const owner = binding.bot_name ? `${binding.role_label}（${binding.bot_name}）` : binding.role_label;
     return `${owner}：${binding.model}`;
   })
@@ -1156,6 +1389,72 @@ useConfigurationRefresh(["bot", "llm"], reload);
   margin: 2px 0 0;
   padding-left: 16px;
   list-style: disc;
+}
+
+/* 标签上的数量：和标签文字同色，弱一档，不做成彩色角标抢视线。 */
+.provider-tab-count {
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+.editor-tab :deep(svg) {
+  vertical-align: -2px;
+  margin-right: 2px;
+}
+
+.provider-filter {
+  max-width: 320px;
+}
+
+/* 「谁在用」是次要信息，没人用时再淡一档，一眼能扫出闲置的配置。 */
+.provider-usage {
+  color: var(--text-secondary);
+}
+
+.provider-usage.unused {
+  color: var(--muted);
+  opacity: 0.75;
+}
+
+.provider-section-empty {
+  margin: 0;
+  padding: 10px 2px;
+  font-size: 12.5px;
+}
+
+/* 编辑框分区：连接、语音、模型、高级。用 flex order 按入口调顺序，模板只写一份。 */
+.provider-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.provider-editor-section + .provider-editor-section {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.provider-editor-title {
+  margin: 0 0 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+summary.provider-editor-title {
+  margin: 0;
+  padding: 0;
+}
+
+details[open] > summary.provider-editor-title {
+  margin-bottom: 12px;
+}
+
+.provider-editor-summary {
+  margin-left: 10px;
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .llm-test-error {

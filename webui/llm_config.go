@@ -805,13 +805,25 @@ func (h *LLMConfigHandler) attachRoleBindings(payload llmConfigPayload) llmConfi
 	return payload
 }
 
-// llmRoleLabels 和机器人页「模型分配」那四行用同一套说法。
+// llmRoleLabels 和机器人页「模型分配」各行用同一套说法；llmBindingRoles 是列出顺序。
 var llmRoleLabels = map[string]string{
-	"chat":   "对话",
-	"vision": "视觉理解",
-	"intent": "意图识别",
-	"image":  "图片生成",
+	"chat":         "对话",
+	"vision":       "视觉理解",
+	"media_parse":  "媒体解析",
+	"intent":       "意图识别",
+	"image":        "图片生成",
+	"reply_tone":   "回复口吻",
+	"background":   "后台生成",
+	"reply_assist": "回复辅助",
+	"tts":          "语音合成",
+	"stt":          "语音识别",
+	"video":        "视频生成",
 }
+
+var llmBindingRoles = []string{"chat", "vision", "media_parse", "intent", "image", "reply_tone", "background", "reply_assist", "tts", "stt", "video"}
+
+// 语音插槽可以不选模型（不少语音接口没有模型这一说），只看指没指到这套配置。
+var llmModelOptionalRoles = map[string]bool{"tts": true, "stt": true}
 
 // botRoleBindingsFor 找出所有指向这套配置的模型分配。按 profile_id 直接指定和按
 // 分组指定两种绑定都要算上。
@@ -823,7 +835,7 @@ func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string) []ll
 	group = llm.NormalizeProfileGroup(group)
 	bindings := make([]llmRoleBinding, 0, 4)
 	for _, bot := range bots.Profiles {
-		for _, role := range []string{"chat", "vision", "intent", "image"} {
+		for _, role := range llmBindingRoles {
 			binding, ok := bot.ModelRoles[role]
 			if !ok {
 				continue
@@ -834,7 +846,7 @@ func botRoleBindingsFor(bots assistant.ProfileSet, profileID, group string) []ll
 				continue
 			}
 			model := strings.TrimSpace(binding.Model)
-			if model == "" {
+			if model == "" && !llmModelOptionalRoles[role] {
 				continue
 			}
 			bindings = append(bindings, llmRoleBinding{

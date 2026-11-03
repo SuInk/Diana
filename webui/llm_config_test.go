@@ -883,6 +883,8 @@ func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 				"chat": {ProfileID: "main", Model: "small-model"},
 				// 视觉理解按分组绑定。
 				"vision": {Group: "vision", Model: "see-model"},
+				// 语音合成不选模型也算在用：不少语音接口没有模型这一说。
+				"tts": {ProfileID: "main"},
 			},
 		}},
 	}})
@@ -899,8 +901,11 @@ func TestLLMPayloadListsModelRoleBindings(t *testing.T) {
 	if main.CatalogContextWindowTokens != 400000 {
 		t.Fatalf("catalog reference = %d", main.CatalogContextWindowTokens)
 	}
-	if len(main.RoleBindings) != 1 {
+	if len(main.RoleBindings) != 2 {
 		t.Fatalf("role bindings = %+v", main.RoleBindings)
+	}
+	if tts := main.RoleBindings[1]; tts.Role != "tts" || tts.RoleLabel != "语音合成" || tts.Model != "" {
+		t.Fatalf("tts binding = %+v", tts)
 	}
 	binding := main.RoleBindings[0]
 	if binding.Role != "chat" || binding.RoleLabel != "对话" || binding.BotName != "Diana" {
