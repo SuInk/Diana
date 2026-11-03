@@ -1459,7 +1459,29 @@ func (r *Runtime) getGroupMemberInfo(ctx context.Context, groupID string, userID
 	if err != nil {
 		return OneBotGroupMemberInfo{}, err
 	}
+	if oneBotMemberPlaceholder(data) {
+		return OneBotGroupMemberInfo{}, fmt.Errorf("群 %s 里没有账号 %s（not in group：接入端只回了占位资料）", groupID, userID)
+	}
 	return oneBotGroupMemberInfoFromData(groupID, data), nil
+}
+
+// oneBotMemberPlaceholder 认出 SnowLuma 给群外账号编的占位成员。
+//
+// 查不到这个人时 SnowLuma 不报错，而是原样回显请求里的 user_id，昵称、名片留空、
+// join_time 为 0。只比对 user_id 的调用方因此把任何账号都当成群成员：生产上
+// 17 人的群里，跨群联想把五十多个群外人的发言都带了进来。真实成员至少有昵称
+// 和入群时间，这几项都在且全为空只会是占位。只认字段齐全的这种形状：别的接入端
+// 回的精简资料不带 join_time，不在这里误判。
+func oneBotMemberPlaceholder(data map[string]any) bool {
+	for _, key := range []string{"nickname", "card", "join_time", "last_sent_time"} {
+		if _, ok := data[key]; !ok {
+			return false
+		}
+	}
+	return strings.TrimSpace(stringFromAny(data["nickname"])) == "" &&
+		strings.TrimSpace(stringFromAny(data["card"])) == "" &&
+		intFromAny(data["join_time"]) == 0 &&
+		intFromAny(data["last_sent_time"]) == 0
 }
 
 func (r *Runtime) GetGroupMemberList(ctx context.Context, groupID string) ([]OneBotGroupMemberInfo, error) {

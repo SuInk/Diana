@@ -335,6 +335,21 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 				action.Input["input"] = input
 			}
 		}
+		// 也有模型把工具名写进了 input 里（{"input": {"name": "chat_history", ...}}），
+		// 线上 devin/swe-2 一轮里连犯三次直到放弃。信封只缺 name、input 里的 name 正好
+		// 是注册过的工具时才挪出来；目标工具自己的 name 参数不会被这样误拆，因为
+		// 正常调用的信封本来就带着 name。
+		if _, hasName := action.Input["name"]; !hasName && len(action.Input) == 1 {
+			if inner, ok := action.Input["input"].(map[string]any); ok {
+				if name, ok := inner["name"].(string); ok {
+					if _, exists := l.registry.Get(strings.TrimSpace(name)); exists {
+						lifted := cloneDeferredInput(inner).(map[string]any)
+						delete(lifted, "name")
+						action.Input = map[string]any{"name": strings.TrimSpace(name), "input": lifted}
+					}
+				}
+			}
+		}
 		if err := validateToolInput(executeInputSchema(), action.Input); err != nil {
 			return action, err
 		}

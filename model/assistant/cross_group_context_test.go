@@ -96,6 +96,28 @@ func TestCrossGroupContextDefaultsToIsolatedAndFailsClosed(t *testing.T) {
 	}
 }
 
+// SnowLuma 查群外账号时回占位资料而不是报错。生产上 17 人的群里，跨群联想因此带进了
+// 五十多个群外人的发言；占位不能算在群。
+func TestCrossGroupContextRejectsPlaceholderMemberInfo(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}, placeholder: true}
+	store := &crossGroupHistoryStore{candidates: []MessageEvent{
+		crossGroupTestEvent(190, "shared", "speaker", "member-said", "图片缓存修复已经部署到测试机器"),
+		crossGroupTestEvent(191, "shared", "outsider", "outsider-said", "图片缓存修复也需要重启"),
+	}}
+	runtime := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	current := crossGroupTestEvent(200, "current", "requester", "current", "图片缓存修复现在怎么样")
+	runtime.remember(current)
+
+	history := runtime.contextHistory(current)
+	if len(history) != 2 || history[0].UserID != "speaker" {
+		t.Fatalf("history=%#v", history)
+	}
+	if _, cached := runtime.members.lookup("current", "outsider"); cached {
+		t.Fatal("placeholder member info was cached as membership")
+	}
+}
+
 func TestCrossGroupContextRequiresMeaningfulTopicOverlap(t *testing.T) {
 	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{
@@ -197,6 +219,8 @@ type crossGroupMembershipChannel struct {
 	mu      sync.Mutex
 	allowed map[string]bool
 	calls   []string
+	// placeholder 模拟 SnowLuma：群外账号不报错，回显 user_id 配空资料。
+	placeholder bool
 }
 
 func (*crossGroupMembershipChannel) Connect(context.Context, EventHandler) error { return nil }
@@ -214,7 +238,11 @@ func (c *crossGroupMembershipChannel) CallAPI(_ context.Context, action string, 
 	c.mu.Lock()
 	c.calls = append(c.calls, key)
 	allowed := c.allowed[key]
+	placeholder := c.placeholder
 	c.mu.Unlock()
+	if !allowed && placeholder {
+		return map[string]any{"group_id": params["group_id"], "user_id": params["user_id"], "nickname": "", "card": "", "join_time": 0, "last_sent_time": 0, "level": "0", "role": "member"}, nil
+	}
 	if !allowed {
 		return nil, fmt.Errorf("member not found")
 	}

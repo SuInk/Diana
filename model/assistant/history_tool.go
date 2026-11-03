@@ -317,6 +317,11 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		return "", err
 	}
+	// 私聊里说「群里那款」时，模型照默认的 current 只翻了私聊，回一句「今天还没看到」
+	// 就让主人自己发图（生产 2026-11-03）。能跨群查的时候提醒它换范围。
+	if t.event.Kind == EventKindPrivate && result.Scope != "all_groups" && groupID == "" && t.crossGroupSearchError(ctx) == nil {
+		result.Message = strings.TrimSpace(result.Message + " 这里只有这个私聊的记录，不含群聊；要找群里的消息，用 search 加 scope=all_groups 跨群检索，或传 group_id 指定群。")
+	}
 	if strings.TrimSpace(result.Message) != "" {
 		result.Message = strings.TrimSpace(result.Message) + " " + t.idNotice()
 	}
