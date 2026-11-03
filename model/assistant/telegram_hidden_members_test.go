@@ -41,9 +41,9 @@ func TestTelegramGroupMemberReportsUnverifiableMembership(t *testing.T) {
 	}
 }
 
-// 隐藏成员的群里查不了成员身份，本群对话里出现过的人就是在场的证据：看头像、
-// 改头像都要能取到他们；从没出现过的 ID 仍然拒绝，别的群的人也不算。
-func TestTelegramHiddenMembersAvatarFromConversation(t *testing.T) {
+// 隐藏成员的群里查不了成员身份。头像按 id 直接取：最近上下文里没有的人（活跃群里
+// 早就滑出窗口了）也要能取到；只有平台确实没有头像时才失败。
+func TestTelegramHiddenMembersAvatarWithoutMembershipCheck(t *testing.T) {
 	channel := &avatarDirectoryChannel{
 		recordingChannel: &recordingChannel{},
 		members:          map[string][]byte{"20002": []byte("\x89PNG\r\n\x1a\nrain"), "20003": []byte("\x89PNG\r\n\x1a\nquoted"), "20009": []byte("\x89PNG\r\n\x1a\nother")},
@@ -57,16 +57,14 @@ func TestTelegramHiddenMembersAvatarFromConversation(t *testing.T) {
 		{Kind: EventKindGroup, GroupID: "-10099999", UserID: "20009", MessageID: "x1", Platform: PlatformTelegram},
 	}
 
-	for _, userID := range []string{"20002", "20003"} {
+	for _, userID := range []string{"20002", "20003", "20009"} {
 		urls := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + userID})
 		if len(urls) != 1 || !strings.HasPrefix(urls[0], "data:image/png;base64,") {
-			t.Fatalf("member_avatar:%s in this conversation not resolved: %#v", userID, urls)
+			t.Fatalf("member_avatar:%s not resolved: %#v", userID, urls)
 		}
 	}
-	for _, userID := range []string{"20009", "77777"} {
-		if urls := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + userID}); len(urls) != 0 {
-			t.Fatalf("member_avatar:%s outside this conversation resolved: %#v", userID, urls)
-		}
+	if urls := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + "77777"}); len(urls) != 0 {
+		t.Fatalf("member_avatar:77777 without a platform avatar resolved: %#v", urls)
 	}
 }
 

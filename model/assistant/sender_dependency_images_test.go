@@ -479,7 +479,7 @@ func TestExplicitIdentitySourceBeatsCurrentMessageImage(t *testing.T) {
 		t.Fatalf("sources_used = %#v", used)
 	}
 	// 点名的人取不到头像：报错，不退回当前消息里那张图。
-	if _, _, err := runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{avatarSourceMemberPrefix + "99999"}}); err == nil {
+	if _, _, err := runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{avatarSourceMemberPrefix}}); err == nil {
 		t.Fatal("unresolvable identity source silently fell back")
 	}
 	// 什么都没点名时，当前消息里的图仍是第一选择。

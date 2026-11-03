@@ -4627,8 +4627,7 @@ func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
 }
 
 // 以前运行时拿群成员的名片和昵称去正文里做子串匹配，靠命中判断「用户说的是这个
-// 人」。现在由模型点名 user_id，运行时只负责把 id 换成头像地址，并核对这个人确实
-// 在当前会话里；编出来的 QQ 号拿不到任何图。
+// 人」。现在由模型点名 user_id，运行时只负责把 id 换成头像地址。
 func TestRuntimeImageEditNamedMemberAvatarComesFromModelSelection(t *testing.T) {
 	channel := &recordingChannel{apiResponses: map[string]map[string]any{
 		"get_group_member_list": {
@@ -4655,14 +4654,9 @@ func TestRuntimeImageEditNamedMemberAvatarComesFromModelSelection(t *testing.T) 
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("20002") {
 		t.Fatalf("sources = %#v", sources)
 	}
-
-	// 不在当前会话里的 id 不能凭空变出一张头像。
-	if extra := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(extra) != 0 {
-		t.Fatalf("unknown identity source produced %#v", extra)
-	}
 }
 
-func TestRuntimeImageEditPrivateAvatarAllowsExplicitAccountOnly(t *testing.T) {
+func TestRuntimeImageEditPrivateAvatarResolvesNamedAccount(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:      EventKindPrivate,
@@ -4676,9 +4670,6 @@ func TestRuntimeImageEditPrivateAvatarAllowsExplicitAccountOnly(t *testing.T) {
 	sources := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "2980652655"})
 	if len(sources) != 1 || sources[0] != OneBotMemberAvatarURL("2980652655") {
 		t.Fatalf("sources = %#v", sources)
-	}
-	if extra := runtime.imageEditSourceImages(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(extra) != 0 {
-		t.Fatalf("unmentioned identity source produced %#v", extra)
 	}
 }
 

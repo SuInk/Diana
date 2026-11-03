@@ -21,23 +21,18 @@ var explicitQQAccountPattern = regexp.MustCompile(`[1-9][0-9]{4,13}`)
 //
 // 现在由模型在调用 image 时点名要哪几个来源：本群、机器人、发送者，或某个
 // 具体成员。名字到 user_id 的对应关系模型本来就能从上下文和群成员工具里拿到，运行时
-// 只负责把 id 换成头像地址，并核对这个人在当前会话里确实存在。
+// 只负责把 id 换成头像地址。成员头像不再核对在不在群：Telegram 隐藏成员的群里
+// getChatMember 一律 CHAT_ADMIN_REQUIRED，只靠最近几十条上下文核对，活跃群里半小时
+// 前说过话的人就取不到了；头像本身平台就对外可见，按 id 直接取。
 const (
 	avatarSourceGroup        = "group_avatar"
 	avatarSourceGroupPrefix  = "group_avatar:"
 	avatarSourceBot          = "bot_avatar"
 	avatarSourceSender       = "sender_avatar"
 	avatarSourceMemberPrefix = "member_avatar:"
-
-	// privateAvatarAccountWindow 是私聊里往前认号码的时长，单位秒。
-	privateAvatarAccountWindow = 30 * 60
 )
 
 // avatarIdentityImageURLs 把模型点名的来源换成图片地址。
-//
-// 校验放在真正用到的时候，而不是渲染工具参数的时候：列群成员要打一次 OneBot 接口，
-// 而工具参数每轮都要渲染，放在那里等于每轮都拉一次名单。member_avatar 只在模型确实
-// 选了成员头像时才去核对，绝大多数轮次一次接口都不会打。
 func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEvent, selected []string) []string {
 	resolved, _ := r.avatarIdentitySources(ctx, event, selected)
 	var out []string
@@ -56,17 +51,16 @@ type resolvedImageEditSource struct {
 }
 
 // avatarIdentitySources 和 avatarIdentityImageURLs 同一套解析规则，另外交出每张头像
-// 的来历，以及没能解析的来源（成员核对不过、群号不在当前会话里）。
+// 的来历，以及没能解析的来源（平台取不到头像、群号不在当前会话里）。
 func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent, selected []string) ([]resolvedImageEditSource, []string) {
 	if len(selected) == 0 || (event.Kind != EventKindGroup && event.Kind != EventKindPrivate) {
 		return nil, selected
 	}
 	botID := r.avatarBotID(event)
 	var (
-		out         []resolvedImageEditSource
-		failed      []string
-		seen        = map[string]bool{}
-		memberCheck func(string) bool
+		out    []resolvedImageEditSource
+		failed []string
+		seen   = map[string]bool{}
 	)
 	add := func(url string, used imageEditSourceUsed) bool {
 		url = strings.TrimSpace(url)
@@ -110,12 +104,6 @@ func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent,
 		case strings.HasPrefix(id, avatarSourceMemberPrefix):
 			userID := strings.TrimSpace(strings.TrimPrefix(id, avatarSourceMemberPrefix))
 			if userID == "" {
-				break
-			}
-			if memberCheck == nil {
-				memberCheck = r.reachableAvatarUserIDs(ctx, event)
-			}
-			if !memberCheck(userID) {
 				break
 			}
 			ok = add(r.avatarSourceURL(ctx, event, userID, false), imageEditSourceUsed{Kind: "member_avatar", UserID: userID, User: r.knownDisplayName(event, userID)})
@@ -172,87 +160,6 @@ func (r *Runtime) privateGroupAvatarAllowed(ctx context.Context, event MessageEv
 	}
 	_, err := r.getGroupMemberInfoForEvent(ctx, event, groupID, event.UserID)
 	return err == nil
-}
-
-// reachableAvatarUserIDs 返回一个判定函数：这个 user_id 是不是当前会话里真实可见
-// 的人。防的是模型凭空编一个 QQ 号，把陌生人的头像拉进图生图管线。
-func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent) func(string) bool {
-	reachable := map[string]bool{}
-	for _, userID := range mentionedUserIDs(event.Segments) {
-		reachable[strings.TrimSpace(userID)] = true
-	}
-	// 私聊没有群成员名单可供核验，但用户在当前消息里明确写出的 QQ 号同样是
-	// 结构化、可审计的身份指向。只放行消息中逐字出现的号码，避免模型凭空选择
-	// 一个不相关账号；群聊仍以真实成员名单为准。
-	if event.Kind == EventKindPrivate {
-		for userID := range explicitAccountIDs(event.Segments) {
-			reachable[userID] = true
-		}
-		// 号码常常是上一条发的：生产上主人先发「741083048 给这个人也生成那款头像」，
-		// 下一条才贴提示词，这一轮的消息里没有号码，头像就一直拉不到。同一个人近期
-		// 在这个私聊里亲手写过的号码同样算数；机器人自己的话不算。
-		history, _ := r.sessionContextHistory(event)
-		for _, item := range history {
-			if item.Outbound || item.Kind != EventKindPrivate || strings.TrimSpace(item.UserID) != strings.TrimSpace(event.UserID) {
-				continue
-			}
-			if event.Time > 0 && (item.Time <= 0 || event.Time-item.Time > privateAvatarAccountWindow) {
-				continue
-			}
-			for userID := range explicitAccountIDs(item.Segments) {
-				reachable[userID] = true
-			}
-		}
-	}
-	if event.Quoted != nil {
-		if userID := strings.TrimSpace(event.Quoted.UserID); userID != "" {
-			reachable[userID] = true
-		}
-	}
-	if userID := strings.TrimSpace(event.UserID); userID != "" {
-		reachable[userID] = true
-	}
-	// 没有完整成员名单的平台（Telegram）只能逐个问 getChatMember，而开了「隐藏成员」
-	// 的超级群里非管理员机器人问谁都是 CHAT_ADMIN_REQUIRED——这道检查会把群里每个
-	// 人都拦下。本群当前对话里发过言、被引用过的人本身就是在场的证据，直接放行。
-	// 只看本会话，不带跨群联想进来的别群消息。
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && !IsOneBotPlatform(r.currentPlatform(event)) {
-		history, _ := r.sessionContextHistory(event)
-		groupID := strings.TrimSpace(event.GroupID)
-		for _, item := range history {
-			if item.Kind != EventKindGroup || strings.TrimSpace(item.GroupID) != groupID {
-				continue
-			}
-			if userID := strings.TrimSpace(item.UserID); userID != "" {
-				reachable[userID] = true
-			}
-			if item.Quoted != nil {
-				if userID := strings.TrimSpace(item.Quoted.UserID); userID != "" {
-					reachable[userID] = true
-				}
-			}
-		}
-	}
-	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && IsOneBotPlatform(r.currentPlatform(event)) {
-		if members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID); err == nil {
-			for _, member := range members {
-				if userID := strings.TrimSpace(member.UserID); userID != "" {
-					reachable[userID] = true
-				}
-			}
-		}
-	}
-	return func(userID string) bool {
-		userID = strings.TrimSpace(userID)
-		if reachable[userID] {
-			return true
-		}
-		if !IsOneBotPlatform(r.currentPlatform(event)) && event.Kind == EventKindGroup {
-			_, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
-			return err == nil
-		}
-		return false
-	}
 }
 
 func explicitAccountIDs(segments []MessageSegment) map[string]bool {
