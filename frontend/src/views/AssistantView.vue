@@ -630,10 +630,10 @@
                     <p v-if="effectiveModelRoutingStrategy(role.key) !== 'failover'" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
                   </template>
                 <p v-if="(role.key === 'tts' || role.key === 'stt') && roleForm[role.key] && !builtinSpeechAPIs[roleForm[role.key]?.profile_id ?? '']" class="hint">
-                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音与视频服务」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
+                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音合成 / 语音识别」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
                 </p>
                 <p v-if="role.key === 'video' && roleForm[role.key]" class="hint">
-                  接口格式、自定义模板、分辨率和时长在「提供商 → 编辑配置 → 语音与视频服务」配置，这里只选模型；各后备提供商使用自己的设置。未配置提供商视频参数时，已有插槽参数继续生效。
+                  接口格式、自定义模板、分辨率和时长在「提供商 → 编辑配置 → 视频生成」配置，这里只选模型；各后备提供商使用自己的设置。未配置提供商视频参数时，已有插槽参数继续生效。
                 </p>
                 <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
                   <label v-for="field in mediaParamFieldsFor(role.key)" :key="field.key" class="field" :class="{ 'model-role-param-wide': field.multiline }">

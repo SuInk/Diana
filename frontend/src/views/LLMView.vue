@@ -237,22 +237,21 @@
             </button>
           </div>
         </div>
-        <details class="field wide" :open="Object.keys(form.speech_params).length > 0">
-          <summary>语音与视频服务</summary>
-          <p class="hint">为这个提供商配置语音接口、音色与格式，以及视频接口格式（可灵、Vidu、自定义等）。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
-          <div v-for="role in speechRoles" :key="role.key" class="stack">
-            <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
-            <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
-              <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
-                <span>{{ field.label }}</span>
-                <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
-                <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
-                <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
-                <span v-if="field.hint" class="hint">{{ field.hint }}</span>
-              </label>
-            </div>
+        <!-- 语音合成、语音识别、视频生成各是一块：同一个提供商往往只做其中一样，分开放才好找。 -->
+        <details v-for="role in speechRoles" :key="role.key" class="field wide" :open="form.speech_params[role.key] !== undefined">
+          <summary>{{ role.label }}</summary>
+          <p class="hint">{{ role.hint }}机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
+          <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">启用{{ role.label }}参数</AppSwitch>
+          <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
+            <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
+              <span>{{ field.label }}</span>
+              <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
+              <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
+              <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
+              <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+            </label>
           </div>
-          <p class="hint">未启用此处参数时沿用已有机器人语音、视频配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
+          <p class="hint">未启用时沿用机器人页已有的{{ role.label }}配置；启用后以这里为准，包括留空的默认值。{{ role.botHint }}</p>
         </details>
         <div class="field wide model-config-field">
           <div class="model-sync-row">
@@ -856,7 +855,11 @@ function formToPayload(): LLMConfig {
   return payload;
 }
 
-const speechRoles = [{ key: "tts", label: "语音合成" }, { key: "stt", label: "语音识别" }, { key: "video", label: "视频生成" }] as const;
+const speechRoles = [
+  { key: "tts", label: "语音合成（TTS）", hint: "语音接口、音色与格式。", botHint: "发送模式和字数上限仍在机器人页设置。" },
+  { key: "stt", label: "语音识别（STT）", hint: "识别接口、语言与提示词。", botHint: "私聊转写和时长上限仍在机器人页设置。" },
+  { key: "video", label: "视频生成", hint: "视频接口格式（可灵、Vidu、Seedance、自定义等）、分辨率与时长。", botHint: "" }
+] as const;
 
 function setProviderSpeechEnabled(role: "tts" | "stt" | "video", enabled: boolean): void {
   const params = { ...form.value.speech_params };
