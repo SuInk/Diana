@@ -152,6 +152,26 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
 }
 
 
+// 新建语音提供商时先选服务。地址和后端 model/llm/speech*.go 里的默认地址一致：留空就走这里，
+// 所以界面只拿它当占位提示；本机服务没有 Key 也得填一个，因为配置保存要求 Key 非空。
+export type SpeechServiceOption = { value: string; label: string; hint: string; baseURL: string; local?: boolean; stt?: boolean };
+export const speechServices: SpeechServiceOption[] = [
+  { value: "openai", label: "OpenAI 兼容", hint: "OpenAI、硅基流动、Kokoro-FastAPI 等走 /audio/speech 的服务", baseURL: "https://api.openai.com/v1", stt: true },
+  { value: "minimax", label: "MiniMax", hint: "国内账号把域名换成 api.minimaxi.com", baseURL: "https://api.minimax.io/v1" },
+  { value: "volcengine", label: "火山引擎（豆包语音）", hint: "还要在下方填 App ID", baseURL: "https://openspeech.bytedance.com/api/v1/tts" },
+  { value: "dashscope", label: "阿里云百炼", hint: "qwen-tts、CosyVoice、Sambert", baseURL: "https://dashscope.aliyuncs.com" },
+  { value: "elevenlabs", label: "ElevenLabs", hint: "", baseURL: "https://api.elevenlabs.io/v1", stt: true },
+  { value: "fishaudio", label: "Fish Audio", hint: "", baseURL: "https://api.fish.audio/v1" },
+  { value: "azure", label: "Azure 语音", hint: "地址留空时按下方填的区域拼官方地址", baseURL: "" },
+  { value: "gemini", label: "Gemini TTS", hint: "", baseURL: "https://generativelanguage.googleapis.com/v1beta" },
+  { value: "mimo", label: "小米 MiMo", hint: "", baseURL: "https://api.xiaomimimo.com/v1", stt: true },
+  { value: "breeze", label: "Breeze", hint: "", baseURL: "https://api.breeze.blue/v1" },
+  { value: "novelai", label: "NovelAI", hint: "", baseURL: "https://api.novelai.net" },
+  { value: "gpt_sovits", label: "GPT-SoVITS v2（本机）", hint: "api_v2 接口", baseURL: "http://127.0.0.1:9880", local: true },
+  { value: "gsvi", label: "GPT-SoVITS-Inference（本机）", hint: "GSVI 整合包", baseURL: "http://127.0.0.1:8000", local: true },
+  { value: "custom_http", label: "自定义请求模板", hint: "AllTalk、XTTS、VITS、Chatterbox 等自建服务", baseURL: "", local: true }
+];
+
 // speechAPILabel 是接口形态的显示名，不带括号里的路径说明，供列表摘要用。
 export function speechAPILabel(role: "tts" | "stt", api: string): string {
   if (api === "whisper_cli") return "本机 Whisper";

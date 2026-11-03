@@ -5,7 +5,7 @@
   <section class="card search-provider-manager">
     <div class="card-header">
       <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据；每台机器人在机器人页「联网搜索」中选择来源和优先级。</span></div>
-      <button class="btn small primary" type="button" @click="picking = true"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
+      <button v-if="!hideCreate" class="btn small primary" type="button" @click="picking = true"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
     </div>
     <div class="card-body stack">
       <p v-if="loading" class="muted">正在加载搜索提供商…</p>
@@ -123,6 +123,9 @@ const providerSections = computed(() => [
   { key: "browser", label: "浏览器搜索", hint: "隔离 Chrome 打开搜索页提取结果，无需密钥", items: providers.value.filter(provider => provider.type === "browser") },
 ].filter(section => section.items.length));
 const picking = ref(false);
+// 提供商页把「新建」放在页头，由它来打开服务选择；单独使用时仍显示卡片里的按钮。
+defineProps<{ hideCreate?: boolean }>();
+defineExpose({ startCreate: () => { picking.value = true; } });
 const templateGroups = [
   { label: "API 搜索", items: searchProviderTemplates.filter(template => template.provider.type !== "browser") },
   { label: "浏览器搜索", items: searchProviderTemplates.filter(template => template.provider.type === "browser") },

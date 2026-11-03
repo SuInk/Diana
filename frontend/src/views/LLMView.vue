@@ -17,6 +17,10 @@
           导入
         </button>
         <input ref="importInput" type="file" accept="application/json" style="display: none" @change="importProfiles" />
+        <button class="btn primary" type="button" @click="createForTab">
+          <Plus :size="15" aria-hidden="true" />
+          {{ createLabel }}
+        </button>
       </div>
     </header>
 
@@ -34,10 +38,6 @@
             <h2>模型提供商</h2>
             <span class="card-sub">对话、识图、生图、视频和向量嵌入的接入；机器人页「模型分配」按用途选模型，同一分组内的顺序就是失败降级的优先级。</span>
           </div>
-          <button class="btn small primary" type="button" @click="startCreate('model')">
-            <Plus :size="14" aria-hidden="true" />
-            新建模型提供商
-          </button>
         </div>
         <div class="card-body stack" style="gap: 14px">
           <input v-if="modelProfiles.length > 5" v-model="profileFilter" class="input provider-filter" type="search" placeholder="按名称、地址、模型或分组筛选" aria-label="筛选模型提供商" />
@@ -116,10 +116,6 @@
             <h2>语音提供商</h2>
             <span class="card-sub">语音合成和语音识别的接口、音色与格式；机器人页「模型分配」里选用，发送模式、字数和时长上限也在那里设置。</span>
           </div>
-          <button class="btn small primary" type="button" @click="startCreate('voice')">
-            <Plus :size="14" aria-hidden="true" />
-            新建语音提供商
-          </button>
         </div>
         <div class="card-body stack" style="gap: 14px">
           <LoadingSkeleton v-if="loading && !profileSet" kind="providers" label="正在加载语音提供商" />
@@ -168,7 +164,7 @@
     </div>
 
     <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search" class="stack">
-      <SearchProviderManager :key="searchProvidersVersion" />
+      <SearchProviderManager ref="searchManager" :key="searchProvidersVersion" hide-create />
     </div>
 
     <!-- 单配置连通测试弹窗 -->
@@ -230,16 +226,21 @@
         <section class="provider-editor-section" style="order: 0">
           <h3 class="provider-editor-title">连接</h3>
           <div class="form-grid">
+            <div v-if="voiceOnly" class="field">
+              <label for="llm-voice-service">语音服务</label>
+              <AppSelect id="llm-voice-service" :model-value="voiceService" :options="voiceServiceOptions" @update:model-value="applyVoiceService" />
+              <span v-if="currentVoiceService?.hint" class="hint">{{ currentVoiceService.hint }}</span>
+            </div>
             <div class="field">
               <label for="llm-name">名称</label>
               <input id="llm-name" v-model="form.name" class="input" :placeholder="voiceOnly ? '例如 MiniMax 语音' : '例如 主力 · GPT'" />
             </div>
-            <div class="field">
+            <div v-if="!voiceOnly" class="field">
               <label for="llm-channel-group">渠道分组（可选）</label>
               <input id="llm-channel-group" v-model="form.group" class="input" placeholder="例如 主力、备用" />
               <span class="hint">同分组的渠道自动轮换降级；机器人页可把用途绑到整个分组。</span>
             </div>
-            <div class="field">
+            <div v-if="!voiceOnly" class="field">
               <label for="llm-provider-kind">接入类型</label>
               <AppSelect
                 id="llm-provider-kind"
@@ -279,10 +280,11 @@
                 class="input mono"
                 :class="{ invalid: invalidField === 'base_url' }"
                 :aria-invalid="invalidField === 'base_url'"
-                :placeholder="supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
+                :placeholder="voiceOnly ? (currentVoiceService?.baseURL || 'https://your-tts-server') : supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
                 @input="clearInvalid('base_url')"
               />
-              <span class="hint">
+              <span v-if="voiceOnly" class="hint">{{ currentVoiceService?.baseURL ? (currentVoiceService.local ? "留空使用上面的本机默认地址；装在别处时填它的地址。" : "留空使用官方地址；走代理或中转时才需要填。") : "填服务的根地址。" }}</span>
+              <span v-else class="hint">
                 {{ selectedPreset?.hint }}；{{
                   supportsAPIStyle
                     ? "请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。"
@@ -309,6 +311,12 @@
                   <Eye v-else :size="14" aria-hidden="true" />
                 </button>
               </div>
+              <span v-if="voiceOnly && currentVoiceService?.local" class="hint">本机服务一般不校验 Key，随便填一个即可（保存时 Key 不能为空）。</span>
+            </div>
+            <div v-if="voiceOnly && modelOptions.length <= 1" class="field wide">
+              <label for="llm-voice-model">模型 ID</label>
+              <input id="llm-voice-model" v-model="voiceModel" class="input mono" :placeholder="voiceService === 'openai' ? 'tts-1、gpt-4o-mini-tts、FunAudioLLM/SenseVoiceSmall' : '按服务文档填写'" />
+              <span class="hint">机器人页按这个 ID 选用；没有模型概念的服务填一个好认的名字即可，比如服务名。</span>
             </div>
             <div class="field wide">
               <label for="llm-desc">备注（可选）</label>
@@ -317,14 +325,14 @@
           </div>
         </section>
         <details class="provider-editor-section prompt-advanced" :style="{ order: editorMode === 'voice' ? 1 : 3 }" :open="editorMode === 'voice' || Object.keys(form.speech_params).length > 0">
-          <summary class="provider-editor-title">语音服务<span v-if="speechSummary" class="muted provider-editor-summary">{{ speechSummary }}</span></summary>
+          <summary class="provider-editor-title">{{ voiceOnly ? "合成与识别参数" : "语音服务" }}<span v-if="speechSummary" class="muted provider-editor-summary">{{ speechSummary }}</span></summary>
           <div class="form-grid">
             <div class="field wide">
-              <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在「模型列表」里添加，没有模型概念的接口可以不填。</p>
+              <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。</p>
               <div v-for="role in speechRoles" :key="role.key" class="stack">
                 <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
                 <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
-                  <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url)" :key="field.key" class="field" :class="{ wide: field.multiline }">
+                  <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url).filter((field) => !(voiceOnly && field.key === 'api'))" :key="field.key" class="field" :class="{ wide: field.multiline }">
                     <span>{{ field.label }}</span>
                     <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
                     <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
@@ -337,7 +345,7 @@
             </div>
           </div>
         </details>
-        <section class="provider-editor-section" style="order: 2">
+        <section v-if="!voiceOnly || modelOptions.length > 1" class="provider-editor-section" style="order: 2">
           <h3 class="provider-editor-title">模型</h3>
           <div class="form-grid">
             <div class="field wide model-config-field">
@@ -499,7 +507,7 @@ import {
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 import Modal from "../components/Modal.vue";
-import { resolveSpeechAPI, speechAPILabel, speechServiceFields, updateSpeechParam } from "../lib/speech-params";
+import { resolveSpeechAPI, speechAPILabel, speechServiceFields, speechServices, updateSpeechParam } from "../lib/speech-params";
 import AppSwitch from "../components/AppSwitch.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
@@ -531,6 +539,13 @@ function selectTab(tab: ProviderTab): void {
   if (tab === "model") query.delete("section");
   else query.set("section", tab);
   window.history.replaceState(null, "", viewPath("provider", query));
+}
+// 三个标签的「新建」统一放在页头导入右边，按当前标签新建对应的提供商。
+const searchManager = ref<InstanceType<typeof SearchProviderManager> | null>(null);
+const createLabel = computed(() => ({ model: "新建模型提供商", voice: "新建语音提供商", search: "新建搜索提供商" })[providerTab.value]);
+function createForTab(): void {
+  if (providerTab.value === "search") searchManager.value?.startCreate();
+  else startCreate(providerTab.value);
 }
 const providerTabs = computed(() => [
   { key: "model" as const, label: "模型", icon: Boxes, count: profileSet.value ? modelProfiles.value.length : null },
@@ -702,6 +717,36 @@ async function reload(): Promise<void> {
 const editorMode = ref<"model" | "voice">("model");
 // 纯语音分组用不上对话那套预设：服务平台、接口模式和上下文窗口都只影响对话请求，藏起来少一层干扰。
 const voiceOnly = computed(() => form.value.group.trim() === speechGroup);
+// 纯语音提供商先选服务：接口写进语音参数，地址只当占位（留空走官方地址），不用再选接入类型。
+const voiceServiceOptions = speechServices.map((service) => ({ value: service.value, label: service.label, hint: service.hint || undefined }));
+const voiceService = computed(() => {
+  const params = form.value.speech_params.tts ?? form.value.speech_params.stt ?? {};
+  return resolveSpeechAPI(params.api, form.value.base_url);
+});
+const currentVoiceService = computed(() => speechServices.find((service) => service.value === voiceService.value));
+function applyVoiceService(value: string): void {
+  const service = speechServices.find((item) => item.value === value);
+  if (!service) return;
+  const params = { ...form.value.speech_params };
+  if (!params.tts && !params.stt) params.tts = {};
+  if (params.tts) params.tts = { ...params.tts, api: value };
+  // 识别只有几家支持；选了不支持识别的服务就把识别参数关掉，免得留着一个对不上的接口。
+  if (params.stt) {
+    if (service.stt) params.stt = { ...params.stt, api: value };
+    else delete params.stt;
+  }
+  form.value.speech_params = params;
+  if (!form.value.name.trim() || speechServices.some((item) => item.label === form.value.name.trim())) form.value.name = service.label;
+}
+// 纯语音提供商通常只有一个模型：直接给一个输入框，多了再回到完整的模型列表。
+const voiceModel = computed({
+  get: () => modelOptions.value[0]?.id ?? "",
+  set: (value: string) => {
+    const id = value.trim();
+    modelOptions.value = id ? [{ ...(modelOptions.value[0] ?? {}), id }] : [];
+    form.value.model = id;
+  }
+});
 const advancedOpen = ref(false);
 const editorTitle = computed(() => {
   const noun = editorMode.value === "voice" ? "语音提供商" : "模型提供商";
@@ -743,7 +788,8 @@ function startCreate(mode: "model" | "voice" = "model"): void {
     // 免得落进默认分组被对话的失败降级轮到。
     applyServicePreset("custom");
     form.value.group = speechGroup;
-    form.value.speech_params = { tts: {} };
+    form.value.speech_params = { tts: { api: "openai" } };
+    form.value.name = "";
   }
   editorOpen.value = true;
 }
