@@ -630,7 +630,10 @@
                     <p v-if="effectiveModelRoutingStrategy(role.key) !== 'failover'" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
                   </template>
                 <p v-if="(role.key === 'tts' || role.key === 'stt') && roleForm[role.key] && !builtinSpeechAPIs[roleForm[role.key]?.profile_id ?? '']" class="hint">
-                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音服务」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
+                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音与视频服务」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
+                </p>
+                <p v-if="role.key === 'video' && roleForm[role.key]" class="hint">
+                  接口格式、自定义模板、分辨率和时长在「提供商 → 编辑配置 → 语音与视频服务」配置，这里只选模型；各后备提供商使用自己的设置。未配置提供商视频参数时，已有插槽参数继续生效。
                 </p>
                 <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
                   <label v-for="field in mediaParamFieldsFor(role.key)" :key="field.key" class="field" :class="{ 'model-role-param-wide': field.multiline }">
@@ -2204,7 +2207,7 @@
     <Modal v-if="modelRouteEditor" :title="`${modelRouteEditor.adding ? '添加' : '编辑'}${modelPurposeLabel(modelRouteEditor.role)}模型`" initial-focus="#model-route-editor-provider" @close="modelRouteEditor = null">
       <div class="stack model-route-editor">
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
-        <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="channelOptionsFor(modelRouteEditor.role).filter((option) => option.value !== FOLLOW_CHAT && option.value !== FOLLOW_VISION)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
+        <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="modelRouteEditorChannelOptions(modelRouteEditor.role)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
         <div class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
         <div v-if="roleSupportsReasoning(modelRouteEditor.role)" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
         <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
@@ -3477,10 +3480,10 @@ function mediaParamFieldsFor(role: RoleKey): MediaParamField[] {
   // 视频接口不按地址猜，没选就是 Sora 格式。
   const api = role === "video" ? assignment?.params?.api ?? "" : builtin || resolveSpeechAPI(assignment?.params?.api, profile?.base_url);
   const fields = mediaParamFields(role, api, Boolean(builtin));
-  if (role === "video" || builtin) return fields;
-  // 旧机器人配置仍可编辑；新建的服务参数统一到提供商。
+  if (builtin) return fields;
+  // 旧机器人配置仍可编辑；新建的服务参数统一到提供商，插槽只选模型。
   const legacy = Object.keys(assignment?.params ?? {}).some(key => !isSpeechBehaviorParam(key));
-  const configured = profile?.speech_params?.[role as "tts" | "stt"] !== undefined;
+  const configured = profile?.speech_params?.[role as "tts" | "stt" | "video"] !== undefined;
   return legacy && !configured ? fields : fields.filter(field => isSpeechBehaviorParam(field.key));
 }
 
@@ -4260,6 +4263,12 @@ function isBuiltinSpeechChannel(id?: string): boolean {
 function roleChannels(role: RoleKey): LLMConfig[] {
   if (role === "tts" || role === "stt") return [...llmChannels.value, ...builtinSpeechChannels[role]];
   return llmChannels.value;
+}
+
+// 添加或编辑一条模型路由时只能选具体的提供商或分组：「跟随」「不指定」「不启用」
+// 都是整档的来源设置，放在「模型来源」和「停用这个插槽」里，选进单条路由没有意义。
+function modelRouteEditorChannelOptions(role: RoleKey): AppSelectOption[] {
+  return channelOptionsFor(role).filter((option) => ![FOLLOW_CHAT, FOLLOW_VISION, UNSPECIFIED, DISABLED].includes(option.value));
 }
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {

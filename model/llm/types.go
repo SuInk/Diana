@@ -248,7 +248,8 @@ type ImageGenerateResponse struct {
 }
 
 type ProviderConfig struct {
-	// SpeechParams 按 tts/stt 保存提供商自己的语音参数；存在的空对象表示使用服务默认值。
+	// SpeechParams 按 tts/stt/video 保存提供商自己的语音、视频服务参数（接口格式、音色、
+	// 自定义模板等）；存在的空对象表示使用服务默认值。JSON 键名沿用旧名。
 	SpeechParams map[string]map[string]string `json:"speech_params,omitempty"`
 	// RequestLimitID is the provider profile identity, shared by all robots.
 	RequestLimitID      string            `json:"-"`

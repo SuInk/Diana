@@ -62,8 +62,8 @@ const formatOptions = (values: string[], fallback: string): AppSelectOption[] =>
 // Key 和地址怎么填：密钥只放提供商配置，插槽参数里没有密钥。
 export const videoAPIOptions: AppSelectOption[] = [
   { value: "", label: "OpenAI Sora 格式（/videos）", hint: "OpenAI 及照搬 Sora 接口的服务" },
-  { value: "kling", label: "可灵", hint: "提供商 Key 填 API Key 或 AccessKey:SecretKey；海外地址 https://api-singapore.klingai.com" },
-  { value: "jimeng", label: "即梦（火山视觉，下线中）", hint: "提供商 Key 填 AccessKeyID:SecretAccessKey；模型填 req_key，如 jimeng_t2v_v30" },
+  { value: "kling", label: "可灵", hint: "API Key 填 Key 或 AccessKey:SecretKey；海外地址 https://api-singapore.klingai.com" },
+  { value: "jimeng", label: "即梦（火山视觉，下线中）", hint: "API Key 填 AccessKeyID:SecretAccessKey；模型填 req_key，如 jimeng_t2v_v30" },
   { value: "vidu", label: "Vidu", hint: "海外地址 https://api.vidu.com" },
   { value: "seedance", label: "火山方舟 Seedance", hint: "BytePlus 地址 https://ark.ap-southeast.bytepluses.com/api/v3" },
   { value: "runway", label: "Runway", hint: "分辨率直接作 ratio，如 1280x720" },
@@ -228,7 +228,9 @@ export function resolveSpeechAPI(explicit = "", baseURL = ""): string {
 const behaviorKeys = new Set(["send_mode", "max_chars", "private_enabled", "max_duration_seconds"]);
 export function isSpeechBehaviorParam(key: string): boolean { return behaviorKeys.has(key); }
 
-export function speechServiceFields(role: "tts" | "stt", params: Record<string, string>, baseURL: string): MediaParamField[] {
+export function speechServiceFields(role: "tts" | "stt" | "video", params: Record<string, string>, baseURL: string): MediaParamField[] {
+  // 视频接口不按地址猜，没选就是 Sora 格式。
+  if (role === "video") return mediaParamFields("video", params.api ?? "");
   return mediaParamFields(role, resolveSpeechAPI(params.api, baseURL)).filter(field => !isSpeechBehaviorParam(field.key));
 }
 

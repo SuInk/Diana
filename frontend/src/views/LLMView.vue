@@ -238,8 +238,8 @@
           </div>
         </div>
         <details class="field wide" :open="Object.keys(form.speech_params).length > 0">
-          <summary>语音服务</summary>
-          <p class="hint">为这个提供商配置语音接口、音色与格式。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
+          <summary>语音与视频服务</summary>
+          <p class="hint">为这个提供商配置语音接口、音色与格式，以及视频接口格式（可灵、Vidu、自定义等）。机器人选择此提供商后直接使用；后备提供商也使用各自的设置。模型 ID 在下方模型列表添加。</p>
           <div v-for="role in speechRoles" :key="role.key" class="stack">
             <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
             <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
@@ -252,7 +252,7 @@
               </label>
             </div>
           </div>
-          <p class="hint">未启用此处参数时沿用已有机器人语音配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
+          <p class="hint">未启用此处参数时沿用已有机器人语音、视频配置；启用后以这里为准，包括留空的默认值。发送模式、字数和识别时长上限仍在机器人页设置。</p>
         </details>
         <div class="field wide model-config-field">
           <div class="model-sync-row">
@@ -854,16 +854,16 @@ function formToPayload(): LLMConfig {
   return payload;
 }
 
-const speechRoles = [{ key: "tts", label: "语音合成" }, { key: "stt", label: "语音识别" }] as const;
+const speechRoles = [{ key: "tts", label: "语音合成" }, { key: "stt", label: "语音识别" }, { key: "video", label: "视频生成" }] as const;
 
-function setProviderSpeechEnabled(role: "tts" | "stt", enabled: boolean): void {
+function setProviderSpeechEnabled(role: "tts" | "stt" | "video", enabled: boolean): void {
   const params = { ...form.value.speech_params };
   if (enabled) params[role] = {};
   else delete params[role];
   form.value.speech_params = params;
 }
 
-function setProviderSpeechParam(role: "tts" | "stt", key: string, value: string): void {
+function setProviderSpeechParam(role: "tts" | "stt" | "video", key: string, value: string): void {
   form.value.speech_params = { ...form.value.speech_params, [role]: updateSpeechParam(form.value.speech_params[role] ?? {}, key, value) };
 }
 
@@ -915,7 +915,7 @@ async function save(): Promise<void> {
       saved.profiles?.[0] ??
       saved;
     if (Object.keys(savedProfile.speech_params ?? {}).length) {
-      toastSuccess("配置已保存，语音参数将用于引用此提供商的机器人");
+      toastSuccess("配置已保存，语音与视频参数将用于引用此提供商的机器人");
     } else if (testModelIDs(savedProfile).length) {
       openTest(savedProfile);
       toastSuccess("配置已保存，请完成连通测试");

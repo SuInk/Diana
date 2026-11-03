@@ -190,7 +190,7 @@ func newMediaSlotRoute(profile llm.Profile, model, slot string, params map[strin
 	for key, value := range params {
 		merged[key] = value
 	}
-	if service, configured := profile.Config.SpeechParams[slot]; configured && (slot == mediaSlotTTS || slot == mediaSlotSTT) {
+	if service, configured := profile.Config.SpeechParams[slot]; configured && (slot == mediaSlotTTS || slot == mediaSlotSTT || slot == mediaSlotVideo) {
 		// 提供商是完整的服务配置，不能泄漏主路由或旧插槽的协议、音色到后备。
 		clear(merged)
 		for key, value := range service {
@@ -331,8 +331,8 @@ func (route mediaSlotRoute) videoJobTimeout() time.Duration {
 	return defaultVideoSlotTimeout
 }
 
-// videoGenerator 按插槽的「接口」参数建客户端；自定义格式的各个字段也在插槽参数里，
-// 密钥仍然只从提供商配置读。
+// videoGenerator 按路由参数里的「接口」建客户端。接口格式、自定义模板都是提供商的
+// 视频服务参数，每个后备用自己的；旧配置写在插槽参数里的照旧生效。
 func (route mediaSlotRoute) videoGenerator() (llm.VideoGenerator, error) {
 	api := llm.VideoAPI(strings.ToLower(route.param(mediaParamAPI)))
 	if api != llm.VideoAPICustom {

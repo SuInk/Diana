@@ -465,8 +465,8 @@ func TestVideoSlotFailsOverWhenSubmitIsRejected(t *testing.T) {
 	}
 }
 
-// 「自定义」接口的字段全在插槽参数里，比例和分辨率档位也从插槽参数代入模板。
-func TestVideoSlotCustomFormatUsesSlotParams(t *testing.T) {
+// 旧配置把「自定义」接口的字段写在插槽参数里，比例和分辨率档位也从那里代入模板。
+func TestVideoSlotCustomFormatUsesLegacySlotParams(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -493,6 +493,52 @@ func TestVideoSlotCustomFormatUsesSlotParams(t *testing.T) {
 	result, _, err := r.generateVideo(context.Background(), llm.VideoGenerateRequest{Prompt: "x"}, nil)
 	if err != nil || string(result.Video) != "mp4" {
 		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+// 视频接口格式是提供商的服务参数：主路由和后备各用各的，插槽里的旧参数不再生效。
+func TestVideoSlotUsesEachProvidersVideoParams(t *testing.T) {
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/submit" {
+			t.Errorf("primary got %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"code":1201,"message":"model is invalid"}`))
+	}))
+	defer primary.Close()
+	var backup *httptest.Server
+	backup = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/jobs":
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != `{"text":"x"}` {
+				t.Errorf("backup body = %s", body)
+			}
+			_, _ = w.Write([]byte(`{"id":"j1"}`))
+		case "/v1/jobs/j1":
+			_, _ = w.Write([]byte(`{"state":"done","video":"` + backup.URL + `/v.mp4"}`))
+		case "/v.mp4":
+			_, _ = w.Write([]byte("mp4"))
+		default:
+			t.Errorf("backup got %s", r.URL.Path)
+		}
+	}))
+	defer backup.Close()
+	first := mediaSlotProfile("p1", primary.URL)
+	first.Config.SpeechParams = map[string]map[string]string{"video": {
+		"api": "custom", "submit_path": "submit", "submit_body": `{"p":"{{prompt}}"}`, "id_path": "id", "status_path": "s/{{id}}",
+		"status_field": "s", "video_url_path": "u", "code_path": "code", "code_ok": "0", "code_message_path": "message",
+	}}
+	second := mediaSlotProfile("p2", backup.URL)
+	second.Config.SpeechParams = map[string]map[string]string{"video": {
+		"api": "custom", "poll_interval_seconds": "0.001", "submit_path": "jobs", "submit_body": `{"text":"{{prompt}}"}`, "id_path": "id",
+		"status_path": "jobs/{{id}}", "status_field": "state", "status_map": "done=completed", "video_url_path": "video",
+	}}
+	r := mediaSlotTestRuntime(t, map[string]ModelRole{
+		"video": {ProfileID: "p1", Model: "m", Params: map[string]string{"api": "kling"}, Fallbacks: []ModelRole{{ProfileID: "p2", Model: "m2"}}},
+	}, first, second)
+	result, route, err := r.generateVideo(context.Background(), llm.VideoGenerateRequest{Prompt: "x"}, nil)
+	if err != nil || string(result.Video) != "mp4" || route.Name != "p2" {
+		t.Fatalf("result=%#v route=%v err=%v", result, route.Name, err)
 	}
 }
 

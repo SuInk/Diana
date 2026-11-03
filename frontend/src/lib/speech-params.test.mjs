@@ -42,4 +42,7 @@ test("video slot shows only the fields the selected vendor needs", () => {
   // 密钥只在提供商配置里，插槽参数不出现任何 Key 字段。
   assert.ok(keys("custom").every(key => !/secret|api_key|access/.test(key)));
   assert.equal(updateSpeechParam({}, "template", "vidu").template, "vidu");
+  // 提供商页的视频服务参数用同一套字段，不按地址猜接口。
+  assert.deepEqual(speechServiceFields("video", { api: "kling" }, "https://api.minimax.io").map(field => field.key), keys("kling"));
+  assert.deepEqual(speechServiceFields("video", {}, "https://api.minimax.io").map(field => field.key), keys(""));
 });
