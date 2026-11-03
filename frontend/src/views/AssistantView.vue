@@ -2471,9 +2471,9 @@ const walletAutoApproveDraft = ref<number | string>("");
 const savedModelRequestTimeoutMS = ref(0);
 
 const loading = ref(true);
-// 地址点名了某台（?profile=）就直达它的配置：读配置这段时间占位画成编辑页的样子，
-// 不先闪一下列表。打开之后（或者那台不存在、留在列表）就清掉。
-const openingProfile = ref(viewQuery().has("profile"));
+// 进页会直达某台的配置（地址点名了，或侧栏选着某台）：读配置这段时间占位画成编辑页
+// 的样子，不先闪一下列表。打开之后（或者那台不存在、留在列表）就清掉。
+const openingProfile = ref(viewQuery().has("profile") || (botScope.value !== ALL_PROFILES && !botCreateRequested.value));
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
@@ -5146,6 +5146,7 @@ async function editProfile(profile: BotProfileConfig, keepTab = false): Promise<
   creating.value = false;
   if (!keepTab) editorTab.value = "access";
   page.value = "edit";
+  followedScope = profile.id;
   setBotScope(profile.id);
 }
 
@@ -5238,17 +5239,21 @@ function syncEditorLocation(): void {
 }
 watch([page, () => form.value?.id, creating, editorTab], syncEditorLocation);
 
-// 侧栏换了机器人：编辑页跟着换成那一台，停在同一档；选「全部机器人」就回列表。
-// 列表页本来就列着全部，不用动。有未保存的修改时 requestBotScope 已经问过了。
+// 侧栏换了机器人就打开那一台；本来就在编辑页时停在同一档。选「全部机器人」回列表。
+// 只认作用域真的变了：点「机器人列表」返回之后，侧栏还选着这台，别又把人弹回去。
+// 有未保存的修改时 requestBotScope 已经问过了。
+let followedScope = botScope.value;
 function followBotScope(): void {
-  if (page.value !== "edit") return;
+  if (botScope.value === followedScope) return;
+  followedScope = botScope.value;
   if (botScope.value === ALL_PROFILES) {
-    leaveEditor();
+    if (page.value === "edit") leaveEditor();
     return;
   }
-  if (!creating.value && form.value?.id === botScope.value) return;
+  const editing = page.value === "edit" && !creating.value;
+  if (editing && form.value?.id === botScope.value) return;
   const target = profiles.value.find((profile) => profile.id === botScope.value);
-  if (target) void editProfile(target, !creating.value);
+  if (target) void editProfile(target, editing);
 }
 watch(botScope, () => {
   if (viewActive) followBotScope();
@@ -5375,7 +5380,7 @@ onMounted(() => {
   trackHeaderHeight();
   void loadAgentSafeModeCatalog();
   void load().then(() => {
-    openRequestedProfile();
+    openRequestedProfile(true);
     openingProfile.value = false;
     locationReady = true;
     syncEditorLocation();
@@ -5406,20 +5411,21 @@ watch(editorTab, (tab) => {
   if (tab === "model") void loadModelHealth();
 });
 
-// 进机器人页先看列表：有几台、谁在线、谁出了错，选了哪台再进哪台。以前侧栏选着
-// 哪台就直接打开哪台的配置，想看全貌或者换一台都得先点返回。
+// 侧栏已经选了一台机器人，进页就直接进它的配置，不用在列表里再点一次同一台；选
+// 「全部机器人」时停在列表，新建、复制、删除和消息互通这些跨机器人的事在那里做。
+// 只在第一次挂载时这么判断（initial），之后页面被缓存着，停在哪就是哪，返回按钮照样
+// 能回列表；侧栏再换机器人由 followBotScope 跟。
 //
-// 地址里点名了才直达：?profile=<id> 是编辑页自己写进地址的（刷新、分享链接）；
-// 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context，那边看到工具占了多少，
-// 这边才是改它的地方——没带 profile 就用侧栏选着的那台，只有一台时就是它。
-// 返回是否打开了编辑页。
-function openRequestedProfile(): boolean {
+// 地址点名的优先：?profile=<id> 是编辑页自己写进地址的（刷新、分享链接）；别处（运行
+// 记录里的上下文构成）跳过来时带着 ?tab=context，那边看到工具占了多少，这边才是改它
+// 的地方——没带 profile 就用侧栏选着的那台，只有一台时就是它。返回是否打开了编辑页。
+function openRequestedProfile(initial = false): boolean {
   if (platformPickerOpen.value) return false;
   const query = viewQuery();
   const requestedID = query.get("profile");
   const requestedTab = query.get("tab") as EditorTab | null;
   const validTab = requestedTab && editorTabs.some((tab) => tab.key === requestedTab) ? requestedTab : null;
-  if (!requestedID && !validTab) return false;
+  if (!requestedID && !validTab && !(initial && botScope.value !== ALL_PROFILES)) return false;
   const target = requestedID
     ? profiles.value.find((profile) => profile.id === requestedID)
     : profiles.value.find((profile) => profile.id === botScope.value) ?? (profiles.value.length === 1 ? profiles.value[0] : undefined);
