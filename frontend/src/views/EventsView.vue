@@ -389,6 +389,7 @@
                 <span v-if="event.total_tokens">
                   Token {{ formatNumber(event.total_tokens) }}（输入 {{ formatNumber(event.input_tokens || 0) }} / 输出 {{ formatNumber(event.output_tokens || 0) }}<template v-if="eventCacheHitText(event)"> / {{ eventCacheHitText(event) }}</template>）
                 </span>
+                <span v-if="eventPurposeTokensText(event)">用途 {{ eventPurposeTokensText(event) }}</span>
                 <span v-if="eventPurposeCacheText(event)">缓存命中率 {{ eventPurposeCacheText(event) }}</span>
                 <span v-if="event.usage_missing_calls" class="usage-missing" :title="'上游没返回用量的调用不计 token，这条的实际消耗比显示的多'">{{ event.usage_missing_calls }} 次调用未报用量</span>
                 <span v-if="event.output_tokens_per_second">
@@ -713,7 +714,7 @@ import {
   type AssistantContextBudgetLayer
 } from "../api";
 import { formatClock, formatNumber, formatTime } from "../lib/format";
-import { cacheUtilization, groupCacheByPurpose } from "../lib/llm-usage";
+import { cacheUtilization, eventPurposeTokens, groupCacheByPurpose } from "../lib/llm-usage";
 import { askConfirm } from "../lib/confirm";
 import { compactID, displayMessageText, displayChatIdentity } from "../lib/message-display";
 import { currentView, navigate } from "../router";
@@ -922,6 +923,13 @@ function eventPurposeCacheText(event: AssistantEventDetail): string {
   if (groups.length === 0) return "";
   return groups
     .map((item) => `${item.label} ${cacheUtilization(item.cached_input_tokens, item.input_tokens)}${item.calls > 1 ? `（${item.calls} 次）` : ""}`)
+    .join(" · ");
+}
+
+// 老数据没有分用途的 total_tokens，只列名字和次数。
+function eventPurposeTokensText(event: AssistantEventDetail): string {
+  return eventPurposeTokens(event.purposes ?? [])
+    .map((item) => `${item.label}${item.total_tokens ? ` ${formatNumber(item.total_tokens)}` : ""}${item.calls > 1 ? `（${item.calls} 次）` : ""}`)
     .join(" · ");
 }
 
