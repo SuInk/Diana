@@ -397,42 +397,69 @@ code {
   padding: 2px 10px 10px;
 }
 
+/* 左栏每档一行：健康点、用途名，右边一句状态。正常时只写个数，出问题才标黄。 */
 .model-purpose-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 8px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 11px 10px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text);
   text-align: left;
   font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
-.model-purpose-tab > span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
+.model-purpose-tab.muted .model-purpose-name {
+  color: var(--text-secondary);
+}
+
+.model-purpose-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 
-.model-purpose-tab > span > svg:last-child:not(:first-child) {
-  margin-left: auto;
-}
-
 .model-purpose-tab small {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 24px;
-  color: var(--muted);
-  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.model-health-dot.none {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+
+.model-purpose-group-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.model-purpose-group-caption small {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 
@@ -629,9 +656,97 @@ code {
 .model-route-enable-col {
   width: 46px;
 }
-/* 测试、立即恢复、编辑、删除最多四个按钮同时出现，80px 会把删除挤到表外。 */
+/* 测试、编辑、删除三个按钮；立即恢复挪到异常提示后面。 */
 .model-route-actions-col {
-  width: 116px;
+  width: 96px;
+}
+
+/* 「参与调度」「后备」分组行：组名说清怎么用，模型行里就不再挂徽标。 */
+.model-route-group-row td {
+  padding: 10px 10px 6px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.model-route-group-row strong {
+  margin-right: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.model-route-group-row span {
+  color: var(--muted);
+}
+
+/* 点和模型名不拆开；放不下时提供商名换到下一行。 */
+.model-route-line {
+  display: grid;
+  grid-template-columns: 7px minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.model-route-line .model-route-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-route-line .model-route-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.model-route-alert {
+  display: block;
+  margin: 3px 0 0 15px;
+  font-size: 11.5px;
+}
+
+.model-route-alert.warn { color: var(--warn); }
+.model-route-alert.err { color: var(--err); }
+
+.model-route-recover {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.model-role-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 超时和看图方式收成一行摘要，点开再改。 */
+.model-role-extras {
+  margin-top: 14px;
+  font-size: 12.5px;
+}
+
+.model-role-extras > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.model-role-extras > summary span {
+  margin-left: 10px;
+  color: var(--accent);
+}
+
+.model-role-extras[open] > summary {
+  margin-bottom: 10px;
 }
 .model-route-order-cell {
   color: var(--muted);
@@ -781,9 +896,19 @@ code {
     display: grid;
     grid-template-columns: 28px minmax(0, 1fr) auto auto;
     align-items: center;
-    padding: 12px;
-    gap: 10px 8px;
+    padding: 10px 12px;
+    gap: 8px;
     border-bottom: 1px solid var(--border);
+  }
+  .model-route-table .model-route-group-row,
+  .model-route-table .model-route-group-row td {
+    display: block;
+  }
+  .model-route-table .model-route-group-row td {
+    padding: 8px 12px 6px;
+  }
+  .model-route-alert {
+    margin-left: 0;
   }
   .model-route-table tbody tr:last-child {
     border-bottom: 0;
@@ -801,7 +926,9 @@ code {
     padding-left: 8px;
   }
   .model-route-identity {
-    grid-column: 2 / -1;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
   }
   .model-route-kind-cell {
     grid-column: 2;
@@ -809,7 +936,7 @@ code {
   }
   .model-route-weight-cell {
     grid-column: 2 / -1;
-    grid-row: 3;
+    grid-row: 2;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -821,14 +948,14 @@ code {
   }
   .model-route-enable-cell {
     grid-column: 3;
-    grid-row: 2;
+    grid-row: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
   }
   .model-route-actions {
     grid-column: 4;
-    grid-row: 2;
+    grid-row: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -860,9 +987,9 @@ code {
   .model-purpose-tab {
     flex-shrink: 0;
     width: auto;
-    padding: 9px 11px;
+    padding: 7px 10px;
   }
-  .model-purpose-tab small, .model-purpose-caption, .model-purpose-foot, .model-purpose-tab > span > svg:last-child:not(:first-child) {
+  .model-purpose-caption, .model-purpose-foot {
     display: none;
   }
 }
