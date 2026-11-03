@@ -480,9 +480,6 @@
         :draft-group-access="String(repositoryPublishForm.issue_draft_group_access ?? '')"
         :manager-user-access="String(repositoryPublishForm.issue_manager_user_access ?? '')"
         :manager-group-access="String(repositoryPublishForm.issue_manager_group_access ?? '')"
-        :joined-groups="joinedGroups"
-        :groups-loading="groupsLoading"
-        :groups-warning="groupsWarning"
         :credentials="credentialList"
         :repository-credentials="repositoryCredentialMap"
         @update:repository-credentials="onRepositoryCredentialsChanged"
@@ -976,9 +973,6 @@ const resolverCookieEditor = ref<InstanceType<typeof ResolverCookieEditor> | nul
 const settingsBusy = computed(() => savingSettings.value || savingSubscription.value || !!resolverCookieEditor.value?.isBusy());
 const openedSnapshot = ref("");
 const githubSettingsTab = ref<"config" | "repositories" | "records">("config");
-const joinedGroups = ref<BotGroupSummary[]>([]);
-const groupsLoading = ref(false);
-const groupsWarning = ref("");
 
 const settingsSpecs = computed<PluginSettingSpec[]>(() => settingsTarget.value?.manifest.settings ?? []);
 const repositoryPublishTarget = computed(() => plugins.value.find((plugin) => plugin.manifest.id === repositoryPublishPluginID) ?? null);
@@ -1571,20 +1565,6 @@ function openSettings(plugin: PluginState): void {
     for (const { key } of resolverGroups.value.credentials) {
       if (resolverInput(key).configured) void resolverChecks.test(key);
     }
-  }
-  if (isGitHubSettings.value) void loadJoinedGroups();
-}
-
-async function loadJoinedGroups(): Promise<void> {
-  groupsLoading.value = true;
-  groupsWarning.value = "";
-  try {
-    joinedGroups.value = (await listBotGroups()).groups ?? [];
-  } catch (error) {
-    joinedGroups.value = [];
-    groupsWarning.value = error instanceof Error ? error.message : "群列表暂不可用，可手动填写群号";
-  } finally {
-    groupsLoading.value = false;
   }
 }
 

@@ -4697,8 +4697,13 @@ a.nav-action {
   min-width: 0;
 }
 
+/* 有多台机器人时最前面多一个机器人下拉，群列表跟着它走。 */
+.target-group.with-bot {
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) 150px;
+}
+
 @media (max-width: 620px) {
-  .target-group { grid-template-columns: minmax(0, 1fr); }
+  .target-group, .target-group.with-bot { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
