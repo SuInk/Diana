@@ -133,17 +133,17 @@
             <div class="issue-role-block">
               <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">管理人员可以读取该仓库的私有信息，群聊读取结果会展示在当前群。按用户管理授权在私聊和群聊均可读写；写入仍需确认码。按群授权仍遵守配置的群身份要求。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-managers-title">
-                <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row">
+                <div v-for="(member, index) in form.issue_managers" :key="`manager-${index}`" class="target-row" :class="{ 'with-bot': profileOptions.length > 1 }">
+                  <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="管理人员所在的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''; member.user_id = ''" />
                   <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`管理人员授权对象`" />
-                  <div v-if="member.destination === 'group'" class="target-group" :class="{ 'with-bot': profileOptions.length > 1 }">
-                    <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="管理人员所在群的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''" />
+                  <div v-if="member.destination === 'group'" class="target-group">
                     <AppSelect v-if="groupOptionsFor(member).length" :model-value="member.group_id ?? ''" :options="groupOptionsFor(member)" :aria-label="`管理人员群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                     <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="管理人员群号或 Chat ID" />
                     <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="管理人员生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
                   </div>
                   <div v-else class="target-user">
                     <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="管理人员用户 ID" />
-                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                    <AccountNameHint :user-id="member.user_id" :profile="memberProfile(member)" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除管理人员" aria-label="移除管理人员" @click="form.issue_managers.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
@@ -154,17 +154,17 @@
             <div class="issue-role-block">
               <div class="issue-role-head"><span id="watch-drafters-title">草稿人</span><span class="hint">可以提出需求并生成 Issue 草稿，不能直接写入 GitHub。管理人员自动也是草稿人，不必在这里重复添加。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-drafters-title">
-                <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row">
+                <div v-for="(member, index) in form.issue_drafters" :key="`drafter-${index}`" class="target-row" :class="{ 'with-bot': profileOptions.length > 1 }">
+                  <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="草稿人所在的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''; member.user_id = ''" />
                   <AppSelect v-model="member.destination" :options="accessSubjectOptions" :aria-label="`草稿人授权对象`" />
-                  <div v-if="member.destination === 'group'" class="target-group" :class="{ 'with-bot': profileOptions.length > 1 }">
-                    <AppSelect v-if="profileOptions.length > 1" :model-value="memberProfile(member)" :options="profileOptions" aria-label="草稿人所在群的机器人" @update:model-value="member.profile_id = String($event ?? ''); member.group_id = ''" />
+                  <div v-if="member.destination === 'group'" class="target-group">
                     <AppSelect v-if="groupOptionsFor(member).length" :model-value="member.group_id ?? ''" :options="groupOptionsFor(member)" :aria-label="`草稿人群聊`" @update:model-value="member.group_id = String($event ?? '')" />
                     <input v-else v-model.trim="member.group_id" class="input" type="text" placeholder="群号或 Chat ID" aria-label="草稿人群号或 Chat ID" />
                     <AppSelect :model-value="member.role ?? defaultGroupRole" :options="groupRoleOptions" aria-label="草稿人生效的群身份" @update:model-value="member.role = String($event ?? defaultGroupRole)" />
                   </div>
                   <div v-else class="target-user">
                     <input v-model.trim="member.user_id" class="input" type="text" placeholder="用户 ID" aria-label="草稿人用户 ID" />
-                    <AccountNameHint :user-id="member.user_id" :profile="form.profile_id" />
+                    <AccountNameHint :user-id="member.user_id" :profile="memberProfile(member)" />
                   </div>
                   <button class="btn small ghost danger icon-only" type="button" title="移除草稿人" aria-label="移除草稿人" @click="form.issue_drafters.splice(index, 1)"><Trash2 :size="14" aria-hidden="true" /></button>
                 </div>
@@ -322,7 +322,7 @@ const form = ref(emptyForm());
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
 // 同一个群在 QQ 官方是 group_openid、在 OneBot 是群号，按群授权只认 ID，跨平台得各配一条。
 const multiPlatform = computed(() => new Set(profiles.value.map((profile) => profile.platform).filter(Boolean)).size > 1);
-// 授权规则只存群号，机器人只用来挑群；没选过的按订阅机器人。
+// 授权规则只存群号和用户 ID，机器人只用来挑群、认昵称；没选过的按订阅机器人。
 function memberProfile(member: IssueMember): string {
   return member.profile_id || form.value.profile_id;
 }

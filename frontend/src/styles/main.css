@@ -4697,13 +4697,17 @@ a.nav-action {
   min-width: 0;
 }
 
-/* 有多台机器人时最前面多一个机器人下拉，群列表跟着它走。 */
-.target-group.with-bot {
-  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) 150px;
+/* 有多台机器人时最前面多一个机器人下拉，群列表和昵称都跟着它走。 */
+.target-row.with-bot {
+  grid-template-columns: minmax(0, 0.7fr) 100px minmax(0, 1.6fr) auto;
+}
+
+.target-row.with-bot .target-user > .account-name-hint {
+  grid-column: 3;
 }
 
 @media (max-width: 620px) {
-  .target-group, .target-group.with-bot { grid-template-columns: minmax(0, 1fr); }
+  .target-group { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* 人设库是一排可点的卡片：点正文套用，点右上角小叉删除。宽度自适应内容，
@@ -4971,10 +4975,12 @@ a.nav-action {
 }
 
 @media (max-width: 620px) {
-  .target-row { grid-template-columns: 1fr auto; }
+  .target-row, .target-row.with-bot { grid-template-columns: 1fr auto; }
   .target-row > :nth-child(2),
+  .target-row.with-bot > :nth-child(3),
   .target-user > .input { grid-column: 1 / -1; }
-  .target-user > .account-name-hint { grid-row: 3; grid-column: 1 / -1; }
+  .target-user > .account-name-hint,
+  .target-row.with-bot .target-user > .account-name-hint { grid-row: auto; grid-column: 1 / -1; }
   .target-row > .btn.icon-only { grid-row: 1; grid-column: 2; }
 }
 
