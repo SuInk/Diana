@@ -108,16 +108,7 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 	defer cancel()
 	cmd := procgroup.CommandContext(ctx, request.Command, request.Args...)
 	cmd.Dir = request.CWD
-	// Keep ordinary host identity/path settings, without implicitly exporting Diana's
-	// API credentials or interpreter/loader hooks to every program.
-	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "LANG", "SystemRoot", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC"} {
-		if value, ok := os.LookupEnv(key); ok {
-			cmd.Env = append(cmd.Env, key+"="+value)
-		}
-	}
-	if cmd.Env == nil {
-		cmd.Env = []string{"PATH=/usr/bin:/bin"}
-	}
+	cmd.Env = ownerCommandEnv()
 	out := &ownerCommandOutput{}
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -140,6 +131,21 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 	}
 	body, err := json.Marshal(result)
 	return string(body), err
+}
+
+// ownerCommandEnv keeps ordinary host identity/path settings, without implicitly
+// exporting Diana's API credentials or interpreter/loader hooks to every program.
+func ownerCommandEnv() []string {
+	var env []string
+	for _, key := range []string{"PATH", "HOME", "USER", "LOGNAME", "TMPDIR", "TEMP", "TMP", "LANG", "SystemRoot", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PATHEXT", "COMSPEC"} {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	if env == nil {
+		env = []string{"PATH=/usr/bin:/bin"}
+	}
+	return env
 }
 
 // These are diagnostic hints from command output, not an OS permission probe.

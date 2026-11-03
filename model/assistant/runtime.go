@@ -478,7 +478,10 @@ type Runtime struct {
 	pluginStatePersister func(context.Context) error
 	// hostReviewBreaker 是宿主命令审核的熔断，见 host_command_review.go。
 	hostReviewBreaker hostReviewBreaker
-	sharedRoutes      sharedRouteState
+	// hostSessions 是主人在宿主机上开的交互会话，按需创建，Stop 时全部结束，
+	// 见 host_session_tool.go。归 mu 管。
+	hostSessions *agent.OwnerSessions
+	sharedRoutes sharedRouteState
 	// telegramRecallProbes serializes active deletion checks per bot account and
 	// remembers recent results/rate limits so repeated queries do not hammer the
 	// Bot API. It owns its own lock; Runtime.mu must not be held while acquiring it.
@@ -1196,6 +1199,7 @@ func (r *Runtime) Stop() error {
 	if userBrowsers != nil {
 		userBrowsers.Stop()
 	}
+	r.closeHostSessions()
 	return err
 }
 
