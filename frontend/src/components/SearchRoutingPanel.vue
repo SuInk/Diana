@@ -12,7 +12,7 @@
         <AppSelect v-if="!draft.disabled && draft.provider_ids.length > 1" id="search-source-priority" class="search-priority-select" aria-label="优先使用" :model-value="draft.source_priority || 'list'" :options="priorityOptions" @update:model-value="patch({ source_priority: $event === 'list' ? undefined : $event as WebSearchAssignment['source_priority'] })" />
         <span class="search-routing-actions">
           <button class="btn small ghost" type="button" @click="navigate('provider', { section: 'search' })"><Settings2 :size="14" aria-hidden="true" />管理提供商</button>
-          <AppSelect v-if="!draft.disabled && unusedProviders.length && draft.provider_ids.length < 16" class="search-route-add" aria-label="添加搜索来源" model-value="" :options="addOptions" placeholder="＋ 添加" @update:model-value="addProvider" />
+          <button v-if="!draft.disabled && draft.provider_ids.length < 16" class="btn small primary" type="button" @click="openAdd"><Plus :size="14" aria-hidden="true" />添加</button>
         </span>
       </div>
       <p v-if="draft.disabled" class="hint">已关闭，来源保留。</p>
@@ -21,12 +21,17 @@
         <div v-if="draft.provider_ids.length" class="search-route-list" aria-label="搜索来源，按尝试顺序排列">
           <template v-for="(row, position) in orderedRows" :key="row.index">
             <div v-if="row.groupLabel" class="search-route-group"><strong>{{ row.groupLabel }}</strong><span>{{ row.groupHint }}</span></div>
-            <div class="search-route-row" :class="{ 'is-dragging': drag?.from === row.index, 'is-drop-target': drag?.over === row.index && drag.from !== row.index, 'is-warning': providerWarns(row.id) }" :data-search-route-slot="row.index" @dragover="onDragOver(row.index, $event)" @drop="onDrop(row.index, $event)">
+            <div class="search-route-row" :class="{ 'is-off': sourceOff(row.id), 'is-dragging': drag?.from === row.index, 'is-drop-target': drag?.over === row.index && drag.from !== row.index, 'is-warning': providerWarns(row.id) }" :data-search-route-slot="row.index" @dragover="onDragOver(row.index, $event)" @drop="onDrop(row.index, $event)">
               <button class="model-route-handle search-route-label" type="button" draggable="true" :disabled="draft.provider_ids.length < 2" :title="draft.provider_ids.length < 2 ? '只有一个来源' : '拖动或按上下方向键调整顺序'" :aria-label="`第 ${position + 1} 个尝试，按上下方向键调整顺序`" @dragstart="onDragStart(row.index, $event)" @dragend="onDragEnd" @pointerdown="onHandlePointerDown(row.index, $event)" @keydown="onHandleKeydown(position, $event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ position + 1 }}</span></button>
               <span class="model-health-dot" :class="providerWarns(row.id) ? 'warn' : 'ok'" aria-hidden="true"></span>
               <span class="search-route-name" :title="providerHint(row.id)">{{ providerName(row.id) }}<small v-if="!draft.source_priority && !providerWarns(row.id)">{{ providerKind(row.id) }}</small></span>
               <span v-if="providerWarns(row.id)" class="search-route-warn" :title="providerHint(row.id)">{{ providerKind(row.id) }}</span>
-              <button class="btn icon-only small ghost" type="button" :disabled="draft.provider_ids.length < 2 && !draft.disabled" :aria-label="`移除第 ${position + 1} 个搜索来源`" title="移除" @click="remove(row.index)"><X :size="14" aria-hidden="true" /></button>
+              <AppSwitch :model-value="!sourceOff(row.id)" compact :aria-label="`启用搜索来源 ${providerName(row.id)}`" @update:model-value="setSourceEnabled(row.id, $event)" />
+              <span class="search-route-actions">
+                <button class="btn icon-only small ghost" type="button" :disabled="!providerExists(row.id)" :aria-label="`测试搜索来源 ${providerName(row.id)}`" title="用已保存的配置搜一次" @click="manager?.testByID(row.id)"><Play :size="14" aria-hidden="true" /></button>
+                <button class="btn icon-only small ghost" type="button" :disabled="!providerExists(row.id)" :aria-label="`编辑搜索来源 ${providerName(row.id)}`" title="编辑这个来源（改的是提供商，所有机器人共用）" @click="manager?.editByID(row.id)"><Pencil :size="14" aria-hidden="true" /></button>
+                <button class="btn icon-only small ghost danger" type="button" :disabled="draft.provider_ids.length < 2 && !draft.disabled" :aria-label="`移除第 ${position + 1} 个搜索来源`" title="从这台机器人移除" @click="confirmRemove(row.index, row.id)"><Trash2 :size="14" aria-hidden="true" /></button>
+              </span>
             </div>
           </template>
         </div>
@@ -42,12 +47,24 @@
         </details>
       </div>
     </template>
+    <SearchProviderManager ref="manager" dialogs-only />
+    <!-- 添加来源：弹窗里一个下拉，按浏览器 / API 分段列出全部提供商，已加的置灰。自定义来源在提供商页新建。 -->
+    <Modal v-if="adding" title="添加搜索来源" initial-focus="#search-add-source" @close="adding = false">
+      <div class="field">
+        <label for="search-add-source">来源</label>
+        <AppSelect id="search-add-source" v-model="pendingSource" :options="addOptions" placeholder="选择搜索来源" :searchable="addOptions.length > 8" />
+      </div>
+      <template #footer>
+        <button class="btn" type="button" @click="adding = false">取消</button>
+        <button class="btn primary" type="button" :disabled="!pendingSource" @click="confirmAdd">添加</button>
+      </template>
+    </Modal>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { GripVertical, Settings2, X } from "@lucide/vue";
+import { GripVertical, Pencil, Play, Plus, Settings2, Trash2 } from "@lucide/vue";
 import { navigate } from "../router";
 import { getSearchProviders, type SearchConfiguration, type WebSearchAssignment } from "../api";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
@@ -55,6 +72,10 @@ import { searchProviderKeyStatus, searchProviderTypeLabel } from "../lib/search-
 import AppNumberInput from "./AppNumberInput.vue";
 import AppSelect from "./AppSelect.vue";
 import AppSwitch from "./AppSwitch.vue";
+import Modal from "./Modal.vue";
+import SearchProviderManager from "./SearchProviderManager.vue";
+import { askConfirm } from "../lib/confirm";
+import { toastError } from "../lib/toast";
 
 const props = defineProps<{ modelValue?: WebSearchAssignment }>();
 const emit = defineEmits<{ 'update:modelValue': [WebSearchAssignment] }>();
@@ -122,8 +143,50 @@ function setEnabled(enabled: boolean): void {
   const ids = draft.value.provider_ids.length ? draft.value.provider_ids : (config.value?.providers ?? []).filter(provider => !provider.disabled).slice(0, 1).map(provider => provider.id);
   patch({ disabled: !enabled, provider_ids: enabled ? ids : draft.value.provider_ids });
 }
-// 添加来源直接从下拉里挑，不再先塞一个再改：行里只显示名字，换来源就删了再加。
-const addOptions = computed(() => unusedProviders.value.map(provider => ({ value: provider.id, label: provider.name, hint: searchProviderTypeLabel(provider.type) })));
+// 添加来源在弹窗里挑，不再先塞一个再改：行里只显示名字，换来源就删了再加。
+// 列出全部提供商并按浏览器 / API 分段，已加的标「已添加」不可选，免得以为下拉里少了来源。
+const addOptions = computed(() => {
+  const providers = [...(config.value?.providers ?? [])].sort((a, b) => Number(a.type !== "browser") - Number(b.type !== "browser"));
+  return providers.map(provider => {
+    const added = draft.value.provider_ids.includes(provider.id);
+    return {
+      value: provider.id,
+      label: provider.name,
+      hint: added ? "已添加" : provider.disabled ? "已停用" : searchProviderTypeLabel(provider.type),
+      disabled: added || !!provider.disabled,
+      group: provider.type === "browser" ? "浏览器" : "API"
+    };
+  });
+});
+const adding = ref(false);
+// 行里的测试、编辑借提供商页的弹窗；编辑改的是提供商本身，所有机器人共用。
+const manager = ref<InstanceType<typeof SearchProviderManager> | null>(null);
+function providerExists(id: string): boolean { return !!config.value?.providers.some(provider => provider.id === id); }
+// 移除只是从这台机器人的来源里拿掉，提供商本身不删；也要先确认，免得误点。
+async function confirmRemove(index: number, id: string): Promise<void> {
+  if (!await askConfirm({ title: "移除搜索来源", message: `从这台机器人的联网搜索里移除「${providerName(id)}」？提供商本身不会删除，之后可以再添加。`, confirmLabel: "移除", danger: true })) return;
+  remove(index);
+}
+// 单个来源的开关：关掉的留在列表里、搜索时跳过；至少留一个开着，不然等于关了联网搜索。
+function sourceOff(id: string): boolean { return !!draft.value.disabled_provider_ids?.includes(id); }
+function setSourceEnabled(id: string, enabled: boolean): void {
+  const off = new Set(draft.value.disabled_provider_ids ?? []);
+  if (enabled) off.delete(id);
+  else {
+    if (draft.value.provider_ids.every(item => item === id || off.has(item))) { toastError("至少要留一个来源开着"); return; }
+    off.add(id);
+  }
+  patch({ disabled_provider_ids: draft.value.provider_ids.filter(item => off.has(item)) });
+}
+const pendingSource = ref("");
+function openAdd(): void {
+  pendingSource.value = unusedProviders.value[0]?.id ?? "";
+  adding.value = true;
+}
+function confirmAdd(): void {
+  addProvider(pendingSource.value);
+  adding.value = false;
+}
 function providerHint(id: string): string {
   const provider = config.value?.providers.find(provider => provider.id === id);
   if (!provider) return "请选择可用的搜索提供商";
@@ -137,7 +200,10 @@ function providerWarns(id: string): boolean {
   return !provider || !!provider.disabled || searchProviderKeyStatus(provider) === "待配置密钥";
 }
 function addProvider(id: string): void { if (id && !draft.value.provider_ids.includes(id)) patch({ provider_ids: [...draft.value.provider_ids, id] }); }
-function remove(index: number): void { patch({ provider_ids: draft.value.provider_ids.filter((_, current) => current !== index) }); }
+function remove(index: number): void {
+  const id = draft.value.provider_ids[index];
+  patch({ provider_ids: draft.value.provider_ids.filter((_, current) => current !== index), disabled_provider_ids: (draft.value.disabled_provider_ids ?? []).filter(item => item !== id) });
+}
 function move(from: number, to: number): void {
   const ids = [...draft.value.provider_ids];
   if (from === to || from < 0 || to < 0 || from >= ids.length || to >= ids.length) return;

@@ -157,14 +157,14 @@
         </template>
         <p v-if="error" class="error-text" role="alert">{{ error }}</p>
       </div>
-      <template #footer><button v-if="kind==='mcp'&&!readonly" class="btn" :disabled="saving" @click="resetForm"><RotateCcw :size="15" />恢复默认</button><button v-if="editPresetVerifiable" class="btn" :disabled="saving||verifying" @click="verifyEditPreset"><KeyRound :size="15" />检测令牌</button><button v-if="kind==='mcp'&&(!editPreset||editAdvanced)" class="btn" :disabled="saving" @click="testConnection"><PlugZap :size="15" />测试连接</button><button class="btn" :disabled="saving" @click="closeEditor">关闭</button><button v-if="!readonly" class="btn primary" :disabled="saving" @click="save"><Save :size="15" />保存</button></template>
+      <template #footer><button v-if="kind==='mcp'&&!readonly" class="btn" :disabled="saving" @click="resetForm"><RotateCcw :size="15" />恢复默认</button><button v-if="editPresetVerifiable" class="btn" :disabled="saving||verifying" @click="verifyEditPreset"><KeyRound :size="15" />检测令牌</button><button v-if="kind==='mcp'&&(!editPreset||editAdvanced)" class="btn" :disabled="saving" @click="testConnection"><Play :size="15" />测试连接</button><button class="btn" :disabled="saving" @click="closeEditor">关闭</button><button v-if="!readonly" class="btn primary" :disabled="saving" @click="save"><Save :size="15" />保存</button></template>
     </Modal>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { ExternalLink, KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, PlugZap } from '@lucide/vue';
+import { ExternalLink, KeyRound, LayoutGrid, Plus, RefreshCw, RotateCcw, Rows3, Search, Settings2, Trash2, Save, Play } from '@lucide/vue';
 import Modal from './Modal.vue';
 import { botScope } from '../lib/bot-scope';
 import { extensionLayout, setExtensionLayout } from '../lib/extension-layout';

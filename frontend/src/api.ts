@@ -513,6 +513,8 @@ export interface WebSearchAssignment {
   source_recall?: boolean;
   reply_link_policy?: "on_request" | "always" | "never";
   source_priority?: "api" | "browser";
+  /** 列表里暂时关掉的来源，搜索时跳过。 */
+  disabled_provider_ids?: string[];
 }
 
 export interface HTTPSearchConfig {

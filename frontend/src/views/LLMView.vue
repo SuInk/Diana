@@ -78,7 +78,7 @@
                   </button>
                 </span>
                 <button class="btn small ghost" type="button" title="测试这套配置" :aria-label="`测试提供商 ${profile.name || profile.model}`" @click="openTest(profile)">
-                  <Send :size="13" aria-hidden="true" />
+                  <Play :size="13" aria-hidden="true" />
                 </button>
                 <button class="btn small ghost" type="button" :aria-label="`编辑提供商 ${profile.name || profile.model}`" @click="startEdit(profile)">
                   <Pencil :size="13" aria-hidden="true" />
@@ -235,7 +235,7 @@
         ></textarea>
         <button class="btn primary" type="button" :disabled="busy || !testMessage.trim()" @click="runTest">
           <ImageIcon v-if="isImageTest" :size="15" aria-hidden="true" />
-          <Send v-else :size="15" aria-hidden="true" />
+          <Play v-else :size="15" aria-hidden="true" />
           {{ busy ? (isImageTest ? "生成中…" : "请求中…") : (isImageTest ? "生成测试图片" : "发送测试") }}
         </button>
         <div v-if="testImages.length > 0" class="llm-test-images" aria-live="polite">
@@ -520,7 +520,7 @@ import SearchProviderManager from "../components/SearchProviderManager.vue";
 import ModelCatalogEditor from "../components/ModelCatalogEditor.vue";
 import { syncModelMetadata } from "../lib/model-metadata";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
-import { AudioLines, Boxes, ChevronDown, Clapperboard, ChevronUp, CircleCheck, Copy, Download, Eye, EyeOff, Globe, Image as ImageIcon, Pencil, Plus, RefreshCw, Save, Send, Trash2, Upload } from "@lucide/vue";
+import { AudioLines, Boxes, ChevronDown, ChevronUp, Clapperboard, Copy, Download, Eye, EyeOff, Globe, Image as ImageIcon, Pencil, Play, Plus, RefreshCw, Save, Trash2, Upload } from "@lucide/vue";
 import {
   cloneConfigProfile,
   deleteConfigProfile,

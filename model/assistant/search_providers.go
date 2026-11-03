@@ -54,6 +54,8 @@ type WebSearchAssignment struct {
 	ReplyLinkPolicy        string   `json:"reply_link_policy,omitempty"`
 	// SourcePriority 为 api 或 browser 时先试该类来源，留空按列表顺序。
 	SourcePriority string `json:"source_priority,omitempty"`
+	// DisabledProviderIDs 是列表里暂时关掉的来源：留在列表里方便再打开，搜索时跳过。
+	DisabledProviderIDs []string `json:"disabled_provider_ids,omitempty"`
 }
 
 const (
@@ -86,8 +88,26 @@ func normalizeWebSearchAssignment(value *WebSearchAssignment) *WebSearchAssignme
 	for i := range out.ProviderIDs {
 		out.ProviderIDs[i] = strings.TrimSpace(out.ProviderIDs[i])
 	}
+	out.DisabledProviderIDs = slices.Clone(value.DisabledProviderIDs)
+	for i := range out.DisabledProviderIDs {
+		out.DisabledProviderIDs[i] = strings.TrimSpace(out.DisabledProviderIDs[i])
+	}
 	out.SourceRecall = copyBoolPointer(value.SourceRecall)
 	return &out
+}
+
+// enabledProviderIDs 是实际参与搜索的来源：列表顺序不变，去掉关掉的。
+func (value *WebSearchAssignment) enabledProviderIDs() []string {
+	if value.ProviderIDs == nil {
+		return nil
+	}
+	enabled := make([]string, 0, len(value.ProviderIDs))
+	for _, id := range value.ProviderIDs {
+		if !slices.Contains(value.DisabledProviderIDs, id) {
+			enabled = append(enabled, id)
+		}
+	}
+	return enabled
 }
 
 func (value *WebSearchAssignment) Validate() error {
@@ -106,6 +126,14 @@ func (value *WebSearchAssignment) Validate() error {
 			return fmt.Errorf("搜索提供商 ID 无效或重复")
 		}
 		seen[id] = true
+	}
+	for _, id := range value.DisabledProviderIDs {
+		if !seen[id] {
+			return fmt.Errorf("关闭的搜索来源不在列表里")
+		}
+	}
+	if !value.Disabled && value.ProviderIDs != nil && len(value.enabledProviderIDs()) == 0 {
+		return fmt.Errorf("联网搜索至少要启用一个来源")
 	}
 	for _, limit := range []struct {
 		value, min, max int
@@ -150,7 +178,7 @@ func webSearchStateSettings(state PluginState) SettingValues {
 	if freshSearchInstall(state.Settings) {
 		ids, _ := json.Marshal(freshSearchProviderIDs)
 		settings[searchProviderOrderSetting] = string(ids)
-		settings[webSearchSettingSourcePriority] = searchSourcePriorityBrowser
+		// 首装列表本身就是浏览器在前、Exa 在后，按列表顺序即可，界面默认也显示「按列表顺序」。
 		settings[webSearchFreshInstallMarker] = true
 	}
 	return settings
@@ -168,7 +196,6 @@ func materializeFreshSearchDefaults(state *PluginState) {
 	}
 	ids, _ := json.Marshal(freshSearchProviderIDs)
 	state.Settings[searchProviderOrderSetting] = string(ids)
-	state.Settings[webSearchSettingSourcePriority] = searchSourcePriorityBrowser
 }
 
 // webSearchOverrideKeys 是机器人单独配置可以覆盖的全局搜索设置。
@@ -177,7 +204,7 @@ var webSearchOverrideKeys = []string{searchProviderOrderSetting, webSearchSettin
 func (value *WebSearchAssignment) settings() map[string]any {
 	settings := map[string]any{}
 	if value.ProviderIDs != nil {
-		ids, _ := json.Marshal(value.ProviderIDs)
+		ids, _ := json.Marshal(value.enabledProviderIDs())
 		settings[searchProviderOrderSetting] = string(ids)
 	}
 	if value.MaxResults != 0 {

@@ -2,7 +2,8 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <section class="card search-provider-manager">
+  <!-- dialogsOnly：机器人页「联网搜索」借它的编辑、测试弹窗，不画列表。 -->
+  <section v-if="!dialogsOnly" class="card search-provider-manager">
     <div class="card-header">
       <div><h2>搜索提供商</h2><span class="card-sub">在机器人页「联网搜索」里选用和排序。</span></div>
       <button v-if="!hideCreate" class="btn small primary" type="button" @click="picking = true"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
@@ -24,7 +25,7 @@
               <button class="btn icon-only small ghost" type="button" :aria-label="`上移搜索提供商 ${provider.name}`" :disabled="busy || !canMove(section.items, provider, -1)" @click="move(section.items, provider, -1)"><ChevronUp :size="15" aria-hidden="true" /></button>
               <button class="btn icon-only small ghost" type="button" :aria-label="`下移搜索提供商 ${provider.name}`" :disabled="busy || !canMove(section.items, provider, 1)" @click="move(section.items, provider, 1)"><ChevronDown :size="15" aria-hidden="true" /></button>
             </span>
-            <button class="btn icon-only small ghost" type="button" :aria-label="`测试搜索提供商 ${provider.name}`" title="测试这个搜索提供商" @click="openRowTest(provider)"><Send :size="15" aria-hidden="true" /></button>
+            <button class="btn icon-only small ghost" type="button" :aria-label="`测试搜索提供商 ${provider.name}`" title="测试这个搜索提供商" @click="openRowTest(provider)"><Play :size="15" aria-hidden="true" /></button>
             <button class="btn icon-only small ghost" type="button" :aria-label="`编辑搜索提供商 ${provider.name}`" @click="openEditor(provider)"><Pencil :size="15" aria-hidden="true" /></button>
             <button class="btn icon-only small ghost" type="button" :aria-label="`克隆搜索提供商 ${provider.name}`" title="克隆（不复制密钥）" @click="cloneProvider(provider)"><Copy :size="15" aria-hidden="true" /></button>
             <button class="btn icon-only small ghost danger" type="button" :aria-label="`删除搜索提供商 ${provider.name}`" :disabled="busy" @click="remove(provider)"><Trash2 :size="15" aria-hidden="true" /></button>
@@ -53,7 +54,7 @@
     <div class="stack" style="gap: 10px">
       <p class="muted" style="margin: 0; font-size: 12.5px">{{ searchProviderTypeLabel(rowTest.provider.type) }} · {{ searchProviderAddress(rowTest.provider.url) }}</p>
       <input v-model="rowTest.query" class="input" maxlength="512" placeholder="输入测试搜索词…" aria-label="测试搜索词" @keydown.enter="runRowTest" />
-      <button class="btn primary" type="button" :disabled="rowTest.running || !rowTest.query.trim()" @click="runRowTest"><Send :size="15" aria-hidden="true" />{{ rowTest.running ? '测试中…' : '测试搜索' }}</button>
+      <button class="btn primary" type="button" :disabled="rowTest.running || !rowTest.query.trim()" @click="runRowTest"><Play :size="15" aria-hidden="true" />{{ rowTest.running ? '测试中…' : '测试搜索' }}</button>
       <span class="hint">用已保存的配置搜一次。</span>
       <div v-if="rowTest.result" class="search-provider-test-result" aria-live="polite">
         <div :class="rowTest.result.error ? 'warn-text' : ''">{{ rowTest.result.error ? '测试失败' : `搜索成功 · ${rowTest.result.result_count} 个结果` }} · {{ rowTest.result.duration_ms }} ms<template v-if="rowTest.result.http_status"> · HTTP {{ rowTest.result.http_status }}</template></div>
@@ -100,7 +101,7 @@
         </div>
       </AppDisclosure>
       <div class="search-provider-test stack">
-        <div class="field"><label for="search-test-query">测试搜索词</label><div class="search-provider-test-input"><input id="search-test-query" v-model="testQuery" class="input" maxlength="512" placeholder="输入用于验证配置的搜索词" /><button class="btn" type="button" :disabled="busy || testing || !testQuery.trim()" @click="test"><FlaskConical :size="14" aria-hidden="true" />{{ testing ? '测试中…' : '测试搜索' }}</button></div><span class="hint">使用当前草稿发送一次搜索请求，测试不会保存配置。</span></div>
+        <div class="field"><label for="search-test-query">测试搜索词</label><div class="search-provider-test-input"><input id="search-test-query" v-model="testQuery" class="input" maxlength="512" placeholder="输入用于验证配置的搜索词" /><button class="btn" type="button" :disabled="busy || testing || !testQuery.trim()" @click="test"><Play :size="14" aria-hidden="true" />{{ testing ? '测试中…' : '测试搜索' }}</button></div><span class="hint">使用当前草稿发送一次搜索请求，测试不会保存配置。</span></div>
         <div v-if="testResult" class="search-provider-test-result" aria-live="polite">
           <div :class="testResult.error ? 'warn-text' : ''">{{ testResult.error ? '测试失败' : `搜索成功 · ${testResult.result_count} 个结果` }} · {{ testResult.duration_ms }} ms<template v-if="testResult.http_status"> · HTTP {{ testResult.http_status }}</template></div>
           <p v-if="testResult.error" class="warn-text">{{ testResult.error }}</p>
@@ -115,7 +116,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { ChevronDown, ChevronUp, Copy, FlaskConical, Globe, Pencil, Save, Send, Trash2 } from "@lucide/vue";
+import { ChevronDown, ChevronUp, Copy, Globe, Pencil, Play, Save, Trash2 } from "@lucide/vue";
 import { deleteSearchProvider, getSearchProviders, reorderSearchProviders, saveSearchProvider, testSearchProvider, type SearchProvider, type SearchProviderTestResult, type WebSearchAssignment } from "../api";
 import { changeSearchProviderType, parseSearchParams, searchProviderAddress, searchProviderFromTemplate, searchProviderKeyHint, searchProviderKeyStatus, searchProviderTemplates, searchProviderTypeLabel, searchProviderTypes, type SearchProviderTemplate } from "../lib/search-providers";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
@@ -134,7 +135,7 @@ const providerSections = computed(() => [
 ].filter(section => section.items.length));
 const picking = ref(false);
 // 提供商页把「新建」放在页头，由它来打开服务选择；单独使用时仍显示卡片里的按钮。
-defineProps<{ hideCreate?: boolean }>();
+defineProps<{ hideCreate?: boolean; dialogsOnly?: boolean }>();
 const templateGroups = [
   { label: "API 搜索", items: searchProviderTemplates.filter(template => template.provider.type !== "browser") },
   { label: "浏览器搜索", items: searchProviderTemplates.filter(template => template.provider.type === "browser") },
@@ -252,7 +253,10 @@ async function remove(provider: SearchProvider): Promise<void> {
 }
 // 新建入口在提供商页右上角的「新建配置」，和模型提供商同一个位置。
 function startCreate(): void { picking.value = true; }
-defineExpose({ startCreate });
+// 按 id 打开编辑、测试弹窗，给机器人页「联网搜索」的来源行用。
+function editByID(id: string): void { const provider = providers.value.find(item => item.id === id); if (provider) openEditor(provider); }
+function testByID(id: string): void { const provider = providers.value.find(item => item.id === id); if (provider) openRowTest(provider); }
+defineExpose({ startCreate, editByID, testByID });
 onMounted(load);
 watch([editor, testQuery], () => { testResult.value = null; }, { deep: true });
 useConfigurationRefresh(["search"], load);

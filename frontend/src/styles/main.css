@@ -7205,7 +7205,10 @@ a.nav-action {
 .search-route-row + .search-route-group { border-top: 1px solid var(--border); }
 .search-route-group strong { font-weight: 600; color: var(--text); }
 .search-route-group span { color: var(--muted); }
-.search-route-row { display: grid; grid-template-columns: 44px 7px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface); font-size: 13px; }
+.search-route-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface); font-size: 13px; }
+.search-route-row .search-route-name { flex: 1; min-width: 0; }
+.search-route-row.is-off .search-route-name, .search-route-row.is-off .model-health-dot { opacity: 0.45; }
+.search-route-actions { display: inline-flex; align-items: center; gap: 2px; }
 .search-route-row + .search-route-row { border-top: 1px solid var(--border); }
 .search-route-label { min-width: 40px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .search-route-label:disabled { cursor: default; }
