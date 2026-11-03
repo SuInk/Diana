@@ -99,6 +99,30 @@ func TestSearchProviderValidationAndClearKey(t *testing.T) {
 	}
 }
 
+func TestReorderSearchProviders(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	config, _ := manager.SearchConfiguration("")
+	ids := make([]string, 0, len(config.Providers))
+	for _, provider := range config.Providers {
+		ids = append(ids, provider.ID)
+	}
+	slices.Reverse(ids)
+	if err := manager.ReorderSearchProviders(ids); err != nil {
+		t.Fatal(err)
+	}
+	config, _ = manager.SearchConfiguration("")
+	for i, provider := range config.Providers {
+		if provider.ID != ids[i] {
+			t.Fatalf("order = %v, want %v", config.Providers, ids)
+		}
+	}
+	for _, bad := range [][]string{ids[1:], append([]string{ids[0]}, ids[:len(ids)-1]...), append(append([]string{}, ids[1:]...), "missing")} {
+		if err := manager.ReorderSearchProviders(bad); err == nil {
+			t.Fatalf("stale order %v accepted", bad)
+		}
+	}
+}
+
 func TestGlobalSearchRoutingIgnoresLegacyRobotAndFallsBack(t *testing.T) {
 	var called []string
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

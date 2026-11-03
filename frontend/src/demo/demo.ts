@@ -1310,6 +1310,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json(demoSearchConfiguration());
   }
+  if (path === '/api/assistant/search-providers/order' && method === 'PUT') {
+    const ids = (body.ids as string[] | undefined) ?? [];
+    if (ids.length !== demoSearchProviders.length || ids.some(id => !demoSearchProviders.some(provider => provider.id === id))) return json({ error: '搜索提供商列表已变化，请刷新后再排序' }, 400);
+    demoSearchProviders = ids.map(id => demoSearchProviders.find(provider => provider.id === id)!);
+    return json(demoSearchConfiguration());
+  }
   if (path === '/api/assistant/search-providers/export') return json({ providers: demoSearchProviders.map(provider => ({ ...provider, api_key: demoSearchKeys[provider.id] })) });
   if (path === '/api/assistant/search-providers/import' && method === 'POST') {
     for (const item of (body.providers as (SearchProvider & { api_key?: string })[] | undefined) ?? []) {

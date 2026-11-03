@@ -17,7 +17,7 @@
           导入
         </button>
         <input ref="importInput" type="file" accept="application/json" style="display: none" @change="importProfiles" />
-        <button v-if="providerTab === 'model'" class="btn primary" type="button" @click="startCreate">
+        <button class="btn primary" type="button" @click="providerTab === 'search' ? searchManager?.startCreate() : startCreate()">
           <Plus :size="15" aria-hidden="true" />
           新建配置
         </button>
@@ -98,7 +98,7 @@
     </div>
 
     <div v-if="providerTab === 'search'" id="provider-panel-search" role="tabpanel" aria-labelledby="provider-tab-search" class="stack">
-      <SearchProviderManager :key="searchProvidersVersion" />
+      <SearchProviderManager ref="searchManager" :key="searchProvidersVersion" />
     </div>
 
     <!-- 单配置连通测试弹窗 -->
@@ -426,6 +426,8 @@ import {
   type LLMErrorField
 } from "../lib/llm-presets";
 
+// 两个标签页共用右上角的「新建配置」，搜索页由它打开搜索提供商的模板选择。
+const searchManager = ref<InstanceType<typeof SearchProviderManager> | null>(null);
 const providerTab = ref<'model' | 'search'>(viewQuery().get('section') === 'search' ? 'search' : 'model');
 onActivated(() => { if (viewQuery().get('section') === 'search') providerTab.value = 'search'; });
 
