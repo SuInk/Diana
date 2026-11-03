@@ -129,6 +129,7 @@
             <!-- 群列表拉不到时下拉框只会变成空的，不说一声用户会以为自己没进群。 -->
             <p v-if="groupsLoading" class="hint">正在读取已加入的群聊…</p>
             <p v-else-if="groupsWarning" class="hint warn-text">{{ groupsWarning }}</p>
+            <p v-if="multiPlatform" class="hint">不同平台的群 ID 不一样（比如 QQ 官方和 OneBot），同一个群要让几台机器人都认，就给每台机器人各加一条。</p>
             <div class="issue-role-block">
               <div class="issue-role-head"><span id="watch-managers-title">管理人员</span><span class="hint">管理人员可以读取该仓库的私有信息，群聊读取结果会展示在当前群。按用户管理授权在私聊和群聊均可读写；写入仍需确认码。按群授权仍遵守配置的群身份要求。</span></div>
               <div class="target-list" role="group" aria-labelledby="watch-managers-title">
@@ -319,6 +320,8 @@ const editorSnapshot = ref("");
 const form = ref(emptyForm());
 
 const profileOptions = computed(() => profiles.value.map((profile) => ({ value: profile.id ?? "", label: profile.name || profile.platform || profile.id || "未命名机器人", hint: profile.platform })).filter((option) => option.value));
+// 同一个群在 QQ 官方是 group_openid、在 OneBot 是群号，按群授权只认 ID，跨平台得各配一条。
+const multiPlatform = computed(() => new Set(profiles.value.map((profile) => profile.platform).filter(Boolean)).size > 1);
 // 授权规则只存群号，机器人只用来挑群；没选过的按订阅机器人。
 function memberProfile(member: IssueMember): string {
   return member.profile_id || form.value.profile_id;
