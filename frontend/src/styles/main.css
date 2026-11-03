@@ -583,9 +583,26 @@ code {
 .model-health-dot.warn { background: var(--warn); }
 .model-health-dot.err { background: var(--err); }
 
-.model-overview .model-overview-detail {
-  padding: 12px 6px 18px;
+.model-overview-detail {
+  padding: 0;
   border-top: 0;
+  /* 模型表、调度工具条的窄屏样式按容器宽度切换，抽屉在手机上只有一屏宽。 */
+  container-type: inline-size;
+}
+
+.model-overview-detail .model-purpose-heading {
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.model-overview-detail .model-overview-description {
+  margin: 0;
+}
+
+.model-drawer-hint {
+  margin-right: auto;
+  align-self: center;
+  font-size: 12px;
 }
 
 .model-overview-group {
@@ -633,15 +650,6 @@ code {
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 11.5px;
-}
-
-.model-overview-detail .model-purpose-heading > div {
-  align-items: flex-start;
-}
-
-.model-overview-detail .model-purpose-heading .badge {
-  flex: none;
-  white-space: nowrap;
 }
 
 .model-overview-description {
@@ -793,12 +801,9 @@ code {
   overflow: hidden;
 }
 
-/* 一览展开区里的模型表限高、表内滚动，表头钉住：备用模型再多，展开后也不会把页面拉得老长，
-   靠表上方的搜索和状态筛选定位。 */
+/* 抽屉本身能滚，模型表就不再单独限高；表头钉在抽屉顶上，模型再多也知道每列是什么。 */
 .model-overview-detail .model-route-table-wrap {
-  max-height: 520px;
-  overflow: auto;
-  overscroll-behavior: contain;
+  overflow: visible;
 }
 
 .model-overview-detail .model-route-table th {
@@ -2623,6 +2628,42 @@ a.nav-action {
 
 .modal.wide {
   width: min(760px, 100%);
+}
+
+/* 右侧抽屉：不加遮罩、不拦点击，只有抽屉本身接收事件。 */
+.modal-backdrop.side {
+  z-index: 70;
+  display: block;
+  padding: 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.modal.side {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(600px, 100%);
+  max-height: none;
+  border-width: 0 0 0 1px;
+  border-radius: 0;
+  pointer-events: auto;
+  animation: drawer-in 0.18s ease-out;
+}
+
+.modal.side .modal-body {
+  flex: 1;
+}
+
+@keyframes drawer-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.side { animation: none; }
 }
 
 .modal.fixed-height {

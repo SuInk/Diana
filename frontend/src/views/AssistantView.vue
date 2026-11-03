@@ -555,141 +555,6 @@
                     </span>
                     <component :is="expandedModelRole === entry.role.key ? ChevronDown : ChevronRight" class="model-overview-caret" :size="15" aria-hidden="true" />
                   </button>
-                  <div
-                    v-if="expandedModelRole === entry.role.key"
-                    :id="`model-purpose-panel-${entry.role.key}`"
-                    class="model-role-block model-overview-detail"
-                    role="region"
-                    :aria-labelledby="`model-purpose-${entry.role.key}`"
-                  >
-                  <div class="model-purpose-heading">
-                    <div>
-                      <span class="badge">{{ modelRoleRouteSummary(entry.role.key) }}</span>
-                      <span class="model-overview-description">{{ entry.role.description }}</span>
-                    </div>
-                    <button class="btn small primary" type="button" @click="openModelRouteEditor(entry.role.key)">
-                      <Plus :size="14" aria-hidden="true" />添加模型
-                    </button>
-                  </div>
-                  <div class="model-routing-toolbar">
-                    <div v-if="entry.role.key !== 'chat'" class="model-routing-control">
-                      <label :for="`model-source-${entry.role.key}`">模型来源</label>
-                      <AppSelect :id="`model-source-${entry.role.key}`" :model-value="modelRoleSource(entry.role.key)" :options="modelRoleSourceOptions(entry.role.key)" @update:model-value="(value) => setModelRoleSource(entry.role.key, value)" />
-                    </div>
-                    <div v-if="roleForm[entry.role.key] && !modelRoleInherited(entry.role.key) && modelRoleRoutes(entry.role.key).length > 1" class="model-routing-control">
-                      <label :for="`model-strategy-${entry.role.key}`">调度方式</label>
-                      <AppSelect :id="`model-strategy-${entry.role.key}`" :model-value="effectiveModelRoutingStrategy(entry.role.key)" :options="modelRoutingStrategiesFor(entry.role.key)" @update:model-value="(value) => setRoleRoutingStrategy(entry.role.key, value)" />
-                    </div>
-                    <span v-if="!modelRoleInherited(entry.role.key) && modelRoleRoutes(entry.role.key).length > 1" class="model-routing-toolbar-hint">{{ modelRoutingDescription(entry.role.key) }}</span>
-                  </div>
-                  <div v-if="modelRoleInherited(entry.role.key)" class="model-inherited-state">
-                    <GitBranch :size="22" aria-hidden="true" />
-                    <div><strong>{{ modelRoleSource(entry.role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(entry.role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(entry.role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
-                    <button class="btn small" type="button" @click="openModelRouteEditor(entry.role.key, 0)">独立配置</button>
-                  </div>
-                  <template v-else>
-                    <div class="model-list-toolbar">
-                      <div class="model-list-search">
-                        <Search :size="14" aria-hidden="true" />
-                        <input v-model="modelRouteSearch" class="input" :aria-label="`搜索${modelPurposeLabel(entry.role.key)}模型`" placeholder="搜索模型或提供商" />
-                      </div>
-                      <AppSelect :id="`model-status-filter-${entry.role.key}`" v-model="modelRouteStatusFilter" :options="modelRouteStatusOptions" />
-                      <button class="btn icon-only small ghost" type="button" title="刷新运行状态" aria-label="刷新模型运行状态" :disabled="modelHealthLoading" @click="loadModelHealth">
-                        <RefreshCw :size="14" :class="{ spinning: modelHealthLoading }" aria-hidden="true" />
-                      </button>
-                    </div>
-                    <div class="model-route-table-wrap">
-                      <table class="model-route-table" :aria-label="`${modelPurposeLabel(entry.role.key)}模型列表`">
-                        <thead><tr><th class="model-route-order-col" scope="col">顺序</th><th scope="col">提供商 / 模型</th><th class="model-route-kind-col" scope="col">调度</th><th v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'" class="model-route-weight-col" scope="col">权重</th><th class="model-route-enable-col" scope="col">启用</th><th class="model-route-actions-col" scope="col">操作</th></tr></thead>
-                        <tbody>
-                          <tr
-                            v-for="item in filteredModelRoutes(entry.role.key)"
-                            :key="`${entry.role.key}-${item.index}`"
-                            class="model-route-list-row"
-                            :data-route-slot="`${entry.role.key}:${item.index}`"
-                            :class="{ ...routeDragClasses(entry.role.key, item.index), 'is-disabled': item.route.disabled }"
-                            @dragover="(event) => onRouteDragOver(entry.role.key, item.index, event)"
-                            @drop="(event) => onRouteDrop(entry.role.key, item.index, event)"
-                          >
-                            <td class="model-route-order-cell">
-                              <button v-if="routeReorderable(entry.role.key)" class="model-route-handle" type="button" draggable="true" :data-route-handle="`${entry.role.key}-${item.index}`" :title="modelRouteSearch || modelRouteStatusFilter !== 'all' ? '筛选时无法调整顺序，请先清除筛选' : '拖动或按上下方向键调整顺序'" :disabled="!!modelRouteSearch || modelRouteStatusFilter !== 'all'" :aria-label="`${entry.role.label}：模型 ${item.index + 1}，按上下方向键调整顺序`" @dragstart="(event) => { if (modelRouteSearch || modelRouteStatusFilter !== 'all') event.preventDefault(); else onRouteDragStart(entry.role.key, item.index, event); }" @dragend="onRouteDragEnd" @pointerdown="(event) => onRouteHandlePointerDown(entry.role.key, item.index, event)" @keydown="(event) => onRouteHandleKeydown(entry.role.key, item.index, event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ item.index + 1 }}</span></button>
-                              <span v-else class="model-route-order-number">{{ item.index + 1 }}</span>
-                            </td>
-                            <td class="model-route-identity">
-                              <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
-                              <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(entry.role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
-                              <span v-if="item.route.model" class="model-route-last-call" :class="modelRouteLastCall(entry.role.key, item.route).className" :title="modelRouteLastCall(entry.role.key, item.route).title">{{ modelRouteLastCall(entry.role.key, item.route).label }}</span>
-                            </td>
-                            <td class="model-route-kind-cell">
-                              <span class="badge" :class="modelRouteIsStandby(entry.role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(entry.role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(entry.role.key) !== 'failover' ? '参与调度' : '主模型' }}</span>
-                              <span class="badge model-health-badge" :class="modelRouteHealth(entry.role.key, item.route).className" :title="modelRouteHealth(entry.role.key, item.route).title">{{ modelRouteHealth(entry.role.key, item.route).label }}</span>
-                              <span v-if="modelRouteTestResult(entry.role.key, item.route)" class="badge model-test-badge" :class="modelRouteTestResult(entry.role.key, item.route)?.className" :title="modelRouteTestResult(entry.role.key, item.route)?.detail">{{ modelRouteTestResult(entry.role.key, item.route)?.label }}</span>
-                            </td>
-                            <td v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
-                              <span v-if="modelRouteIsStandby(entry.role.key, item.index)" class="muted">—</span>
-                              <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${entry.role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(entry.role.key, item.index, value)" />
-                            </td>
-                            <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${entry.role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(entry.role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button v-if="modelRouteTestable(entry.role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${entry.role.label}模型 ${item.index + 1}`" :title="entry.role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(entry.role.key, item.route)?.running" @click="testModelRoute(entry.role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(entry.role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${entry.role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(entry.role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${entry.role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(entry.role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${entry.role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(entry.role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
-                          </tr>
-                          <tr v-if="!filteredModelRoutes(entry.role.key).length"><td :colspan="roleForm[entry.role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(entry.role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(entry.role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
-                        </tbody>
-                      </table>
-                    </div>
-                    <p v-if="effectiveModelRoutingStrategy(entry.role.key) !== 'failover'" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
-                  </template>
-                <p v-if="(entry.role.key === 'tts' || entry.role.key === 'stt') && roleForm[entry.role.key] && !builtinSpeechAPIs[roleForm[entry.role.key]?.profile_id ?? '']" class="hint">
-                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音服务」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
-                </p>
-                <div v-if="isMediaRole(entry.role.key) && roleForm[entry.role.key]" class="model-role-params">
-                  <label v-for="field in mediaParamFieldsFor(entry.role.key)" :key="field.key" class="field" :class="{ 'model-role-param-wide': field.multiline }">
-                    <span>{{ field.label }}</span>
-                    <AppSelect
-                      v-if="field.options"
-                      :model-value="mediaParamValue(entry.role.key, field.key)"
-                      :options="field.options"
-                      :placeholder="field.placeholder"
-                      @update:model-value="(value) => setMediaParam(entry.role.key, field.key, value)"
-                    />
-                    <textarea
-                      v-else-if="field.multiline"
-                      class="input"
-                      rows="3"
-                      :value="mediaParamValue(entry.role.key, field.key)"
-                      :placeholder="field.placeholder"
-                      @change="(event) => setMediaParam(entry.role.key, field.key, (event.target as HTMLTextAreaElement).value)"
-                    />
-                    <input
-                      v-else
-                      class="input"
-                      :value="mediaParamValue(entry.role.key, field.key)"
-                      :placeholder="field.placeholder"
-                      @change="(event) => setMediaParam(entry.role.key, field.key, (event.target as HTMLInputElement).value)"
-                    />
-                    <span v-if="field.hint" class="hint">{{ field.hint }}</span>
-                  </label>
-                  <button type="button" class="btn ghost small" @click="clearRole(entry.role.key)">停用这个插槽</button>
-                </div>
-                <div v-if="entry.role.key === 'chat'" class="model-role-params model-request-timeout">
-                  <div class="field">
-                    <label for="bot-model-request-timeout">单次模型请求超时（秒）</label>
-                    <input id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft" class="input" type="number" min="0" :max="maximumModelRequestTimeoutSeconds" step="0.001" inputmode="decimal" aria-describedby="bot-model-request-timeout-hint" />
-                    <span id="bot-model-request-timeout-hint" class="hint">0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。</span>
-                  </div>
-                </div>
-                <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->
-                <div v-if="entry.role.key === 'chat'" class="model-role-params">
-                  <label class="field">
-                    <span>看图方式</span>
-                    <AppSelect
-                      :model-value="form.image_input_mode ?? 'auto'"
-                      :options="imageInputModeOptions"
-                      @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
-                    />
-                  </label>
-                </div>
-                  <p v-if="!isMediaRole(entry.role.key) && entry.role.key !== 'image'" class="hint model-routing-hint">拖动模型调整调用顺序；失败时自动重试或切换，冷却规则在「高级」标签的「自动恢复规则」里统一设置。</p>
-                  </div>
                 </div>
               </template>
               <p class="model-overview-foot">点一行展开编辑：备用模型、调度方式、超时都在里面；保存后只影响当前机器人。</p>
@@ -2181,6 +2046,148 @@
         </div>
       </section>
     </div>
+
+    <!-- 模型分配的编辑抽屉：一览留在左边，换用途直接点另一行。底部就是整页的「保存配置」，
+         这里没有只暂存不保存的「确定」，免得以为已经存了。 -->
+    <Modal
+      v-for="entry in modelDrawerEntries"
+      :key="entry.role.key"
+      side
+      :title="`${modelPurposeLabel(entry.role.key)} · 模型分配`"
+      @close="expandedModelRole = null"
+    >
+      <div :id="`model-purpose-panel-${entry.role.key}`" class="model-role-block model-overview-detail">
+                  <div class="model-purpose-heading">
+                    <p class="model-overview-description">{{ entry.role.description }}</p>
+                    <button class="btn small primary" type="button" @click="openModelRouteEditor(entry.role.key)">
+                      <Plus :size="14" aria-hidden="true" />添加模型
+                    </button>
+                  </div>
+                  <div class="model-routing-toolbar">
+                    <div v-if="entry.role.key !== 'chat'" class="model-routing-control">
+                      <label :for="`model-source-${entry.role.key}`">模型来源</label>
+                      <AppSelect :id="`model-source-${entry.role.key}`" :model-value="modelRoleSource(entry.role.key)" :options="modelRoleSourceOptions(entry.role.key)" @update:model-value="(value) => setModelRoleSource(entry.role.key, value)" />
+                    </div>
+                    <div v-if="roleForm[entry.role.key] && !modelRoleInherited(entry.role.key) && modelRoleRoutes(entry.role.key).length > 1" class="model-routing-control">
+                      <label :for="`model-strategy-${entry.role.key}`">调度方式</label>
+                      <AppSelect :id="`model-strategy-${entry.role.key}`" :model-value="effectiveModelRoutingStrategy(entry.role.key)" :options="modelRoutingStrategiesFor(entry.role.key)" @update:model-value="(value) => setRoleRoutingStrategy(entry.role.key, value)" />
+                    </div>
+                    <span v-if="!modelRoleInherited(entry.role.key) && modelRoleRoutes(entry.role.key).length > 1" class="model-routing-toolbar-hint">{{ modelRoutingDescription(entry.role.key) }}</span>
+                  </div>
+                  <div v-if="modelRoleInherited(entry.role.key)" class="model-inherited-state">
+                    <GitBranch :size="22" aria-hidden="true" />
+                    <div><strong>{{ modelRoleSource(entry.role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(entry.role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(entry.role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
+                    <button class="btn small" type="button" @click="openModelRouteEditor(entry.role.key, 0)">独立配置</button>
+                  </div>
+                  <template v-else>
+                    <div v-if="modelRoleRoutes(entry.role.key).length > 6" class="model-list-toolbar">
+                      <div class="model-list-search">
+                        <Search :size="14" aria-hidden="true" />
+                        <input v-model="modelRouteSearch" class="input" :aria-label="`搜索${modelPurposeLabel(entry.role.key)}模型`" placeholder="搜索模型或提供商" />
+                      </div>
+                      <AppSelect :id="`model-status-filter-${entry.role.key}`" v-model="modelRouteStatusFilter" :options="modelRouteStatusOptions" />
+                      <button class="btn icon-only small ghost" type="button" title="刷新运行状态" aria-label="刷新模型运行状态" :disabled="modelHealthLoading" @click="loadModelHealth">
+                        <RefreshCw :size="14" :class="{ spinning: modelHealthLoading }" aria-hidden="true" />
+                      </button>
+                    </div>
+                    <div class="model-route-table-wrap">
+                      <table class="model-route-table" :aria-label="`${modelPurposeLabel(entry.role.key)}模型列表`">
+                        <thead><tr><th class="model-route-order-col" scope="col">顺序</th><th scope="col">提供商 / 模型</th><th class="model-route-kind-col" scope="col">调度</th><th v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'" class="model-route-weight-col" scope="col">权重</th><th class="model-route-enable-col" scope="col">启用</th><th class="model-route-actions-col" scope="col">操作</th></tr></thead>
+                        <tbody>
+                          <tr
+                            v-for="item in filteredModelRoutes(entry.role.key)"
+                            :key="`${entry.role.key}-${item.index}`"
+                            class="model-route-list-row"
+                            :data-route-slot="`${entry.role.key}:${item.index}`"
+                            :class="{ ...routeDragClasses(entry.role.key, item.index), 'is-disabled': item.route.disabled }"
+                            @dragover="(event) => onRouteDragOver(entry.role.key, item.index, event)"
+                            @drop="(event) => onRouteDrop(entry.role.key, item.index, event)"
+                          >
+                            <td class="model-route-order-cell">
+                              <button v-if="routeReorderable(entry.role.key)" class="model-route-handle" type="button" draggable="true" :data-route-handle="`${entry.role.key}-${item.index}`" :title="modelRouteSearch || modelRouteStatusFilter !== 'all' ? '筛选时无法调整顺序，请先清除筛选' : '拖动或按上下方向键调整顺序'" :disabled="!!modelRouteSearch || modelRouteStatusFilter !== 'all'" :aria-label="`${entry.role.label}：模型 ${item.index + 1}，按上下方向键调整顺序`" @dragstart="(event) => { if (modelRouteSearch || modelRouteStatusFilter !== 'all') event.preventDefault(); else onRouteDragStart(entry.role.key, item.index, event); }" @dragend="onRouteDragEnd" @pointerdown="(event) => onRouteHandlePointerDown(entry.role.key, item.index, event)" @keydown="(event) => onRouteHandleKeydown(entry.role.key, item.index, event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ item.index + 1 }}</span></button>
+                              <span v-else class="model-route-order-number">{{ item.index + 1 }}</span>
+                            </td>
+                            <td class="model-route-identity">
+                              <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
+                              <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(entry.role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
+                              <span v-if="item.route.model" class="model-route-last-call" :class="modelRouteLastCall(entry.role.key, item.route).className" :title="modelRouteLastCall(entry.role.key, item.route).title">{{ modelRouteLastCall(entry.role.key, item.route).label }}</span>
+                            </td>
+                            <td class="model-route-kind-cell">
+                              <span class="badge" :class="modelRouteIsStandby(entry.role.key, item.index) ? '' : 'accent'">{{ modelRouteIsStandby(entry.role.key, item.index) ? '后备' : effectiveModelRoutingStrategy(entry.role.key) !== 'failover' ? '参与调度' : '主模型' }}</span>
+                              <span class="badge model-health-badge" :class="modelRouteHealth(entry.role.key, item.route).className" :title="modelRouteHealth(entry.role.key, item.route).title">{{ modelRouteHealth(entry.role.key, item.route).label }}</span>
+                              <span v-if="modelRouteTestResult(entry.role.key, item.route)" class="badge model-test-badge" :class="modelRouteTestResult(entry.role.key, item.route)?.className" :title="modelRouteTestResult(entry.role.key, item.route)?.detail">{{ modelRouteTestResult(entry.role.key, item.route)?.label }}</span>
+                            </td>
+                            <td v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
+                              <span v-if="modelRouteIsStandby(entry.role.key, item.index)" class="muted">—</span>
+                              <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${entry.role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(entry.role.key, item.index, value)" />
+                            </td>
+                            <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${entry.role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(entry.role.key, item.index, !value)" /></td>
+                            <td class="model-route-actions"><button v-if="modelRouteTestable(entry.role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${entry.role.label}模型 ${item.index + 1}`" :title="entry.role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(entry.role.key, item.route)?.running" @click="testModelRoute(entry.role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="modelRouteCanRecover(entry.role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`立即恢复${entry.role.label}模型 ${item.index + 1}`" title="立即恢复：清除故障与冷却记录" :disabled="modelHealthLoading" @click="recoverModelRoute(entry.role.key, item.route)"><RotateCcw :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${entry.role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(entry.role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${entry.role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(entry.role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                          </tr>
+                          <tr v-if="!filteredModelRoutes(entry.role.key).length"><td :colspan="roleForm[entry.role.key]?.routing_strategy === 'weighted' ? 6 : 5" class="model-list-empty">{{ modelRoleRoutes(entry.role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(entry.role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p v-if="effectiveModelRoutingStrategy(entry.role.key) !== 'failover'" class="hint model-routing-hint">后备模型仅在参与渠道均失败时使用。<template v-if="roleForm[entry.role.key]?.routing_strategy === 'weighted'">分组中的每个兼容渠道使用该行权重；</template>一次调用中的后续请求沿用当前渠道。</p>
+                  </template>
+                <p v-if="(entry.role.key === 'tts' || entry.role.key === 'stt') && roleForm[entry.role.key] && !builtinSpeechAPIs[roleForm[entry.role.key]?.profile_id ?? '']" class="hint">
+                  接口、音色等服务参数在「提供商 → 编辑配置 → 语音服务」统一配置，各后备提供商使用自己的参数。未配置提供商语音参数时，已有插槽参数继续生效。
+                </p>
+                <div v-if="isMediaRole(entry.role.key) && roleForm[entry.role.key]" class="model-role-params">
+                  <label v-for="field in mediaParamFieldsFor(entry.role.key)" :key="field.key" class="field" :class="{ 'model-role-param-wide': field.multiline }">
+                    <span>{{ field.label }}</span>
+                    <AppSelect
+                      v-if="field.options"
+                      :model-value="mediaParamValue(entry.role.key, field.key)"
+                      :options="field.options"
+                      :placeholder="field.placeholder"
+                      @update:model-value="(value) => setMediaParam(entry.role.key, field.key, value)"
+                    />
+                    <textarea
+                      v-else-if="field.multiline"
+                      class="input"
+                      rows="3"
+                      :value="mediaParamValue(entry.role.key, field.key)"
+                      :placeholder="field.placeholder"
+                      @change="(event) => setMediaParam(entry.role.key, field.key, (event.target as HTMLTextAreaElement).value)"
+                    />
+                    <input
+                      v-else
+                      class="input"
+                      :value="mediaParamValue(entry.role.key, field.key)"
+                      :placeholder="field.placeholder"
+                      @change="(event) => setMediaParam(entry.role.key, field.key, (event.target as HTMLInputElement).value)"
+                    />
+                    <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+                  </label>
+                  <button type="button" class="btn ghost small" @click="clearRole(entry.role.key)">停用这个插槽</button>
+                </div>
+                <div v-if="entry.role.key === 'chat'" class="model-role-params model-request-timeout">
+                  <div class="field">
+                    <label for="bot-model-request-timeout">单次模型请求超时（秒）</label>
+                    <input id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft" class="input" type="number" min="0" :max="maximumModelRequestTimeoutSeconds" step="0.001" inputmode="decimal" aria-describedby="bot-model-request-timeout-hint" />
+                    <span id="bot-model-request-timeout-hint" class="hint">0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。</span>
+                  </div>
+                </div>
+                <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->
+                <div v-if="entry.role.key === 'chat'" class="model-role-params">
+                  <label class="field">
+                    <span>看图方式</span>
+                    <AppSelect
+                      :model-value="form?.image_input_mode ?? 'auto'"
+                      :options="imageInputModeOptions"
+                      @update:model-value="(value) => { if (form) form.image_input_mode = value as ImageInputMode; }"
+                    />
+                  </label>
+                </div>
+                  <p v-if="!isMediaRole(entry.role.key) && entry.role.key !== 'image'" class="hint model-routing-hint">拖动模型调整调用顺序；失败时自动重试或切换，冷却规则在「高级」标签的「自动恢复规则」里统一设置。</p>
+      </div>
+      <template #footer>
+        <span class="hint model-drawer-hint">改动和页面其他设置一起保存</span>
+        <button class="btn ghost" type="button" @click="expandedModelRole = null">关闭</button>
+        <button class="btn primary" type="button" :disabled="busy || !form" @click="save"><Save :size="15" aria-hidden="true" />保存配置</button>
+      </template>
+    </Modal>
 
     <Modal v-if="modelRouteTestTarget" :title="`测试${modelPurposeLabel(modelRouteTestTarget.role)}模型 · ${modelRouteTestTarget.model}`" initial-focus="#bot-model-test-message" @close="modelRouteTestTarget = null">
       <div class="stack">
@@ -3986,6 +3993,13 @@ const modelOverviewSublabels: Partial<Record<RoleKey, string>> = {
   intent: "要不要回、找谁"
 };
 const expandedModelRole = ref<RoleKey | null>(null);
+// 抽屉只在编辑页、表单已加载时出现；换标签、回列表都收起。
+const modelDrawerEntries = computed(() => {
+  const key = expandedModelRole.value;
+  if (!key || !form.value || page.value !== "edit" || editorTab.value !== "model") return [];
+  const row = visibleModelRoleRows.find((item) => item.key === key);
+  return row ? [{ role: overviewRow(row) }] : [];
+});
 const secondaryModelRolesOpen = ref(false);
 
 function overviewRow(row: ModelRoleRow): ModelRoleRow {
