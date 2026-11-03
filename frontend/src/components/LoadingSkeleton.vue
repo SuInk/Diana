@@ -1,23 +1,65 @@
 <template>
   <div class="loading-skeleton" :class="`loading-skeleton-${kind}`" role="status" :aria-label="label" aria-busy="true">
-    <div v-if="kind === 'bots'" class="bot-profile-grid" aria-hidden="true">
+    <!-- 机器人列表页从副标题以下整段：平台筛选、消息互通条、卡片网格。卡片按真实
+         卡片的结构排（右上角启停开关、底部三个按钮），数据到了只换内容不挪位置。 -->
+    <div v-if="kind === 'bots'" class="stack" aria-hidden="true">
+      <div class="platform-filters">
+        <SkeletonBlock v-for="width in ['76px', '69px', '105px']" :key="width" :width="width" height="33px" rounded />
+      </div>
+      <section class="settings-band">
+        <SkeletonBlock width="34px" height="34px" />
+        <div class="settings-band-copy">
+          <SkeletonBlock width="64px" height="20px" />
+          <SkeletonBlock width="52%" height="17px" />
+        </div>
+        <SkeletonBlock class="settings-band-action" width="67px" height="31px" />
+      </section>
+      <div class="bot-profile-grid">
         <article v-for="n in count" :key="n" class="bot-profile-tile">
           <div class="bot-profile-select">
             <div class="bot-profile-head">
               <SkeletonBlock width="38px" height="38px" />
-              <SkeletonBlock width="36px" height="17px" />
+              <SkeletonBlock width="36px" height="18px" />
             </div>
-            <SkeletonBlock width="75%" height="22px" />
+            <SkeletonBlock width="70%" height="22px" />
             <div class="bot-profile-meta">
               <SkeletonBlock width="94px" height="21px" />
-              <SkeletonBlock width="72px" height="17px" />
+              <SkeletonBlock width="64px" height="17px" />
             </div>
           </div>
+          <span class="bot-profile-enable"><SkeletonBlock width="38px" height="22px" rounded /></span>
           <div class="bot-profile-actions">
-            <SkeletonBlock v-for="action in 2" :key="action" width="68px" height="30px" />
+            <SkeletonBlock v-for="width in ['68px', '93px', '68px']" :key="width" :width="width" height="31px" />
           </div>
         </article>
         <div class="bot-profile-add"><SkeletonBlock width="100px" height="20px" /></div>
+      </div>
+    </div>
+
+    <!-- 直达某台机器人的配置（地址带 ?profile=）时，占位换成编辑页的样子：分区标签、
+         当前分区的表单卡片，右侧运行状态卡。 -->
+    <div v-else-if="kind === 'bot-editor'" class="grid-main-side bot-editor" aria-hidden="true">
+      <div class="stack">
+        <div class="editor-tabs">
+          <span v-for="n in 6" :key="n" class="editor-tab" :class="{ active: n === 1 }"><SkeletonBlock width="28px" height="14px" /></span>
+        </div>
+        <section class="card">
+          <div class="card-header"><SkeletonBlock width="132px" height="20px" /><SkeletonBlock width="112px" height="16px" /></div>
+          <div class="card-body stack">
+            <div v-for="n in count" :key="n" class="field"><SkeletonBlock width="96px" height="18px" /><SkeletonBlock height="37px" /></div>
+          </div>
+        </section>
+      </div>
+      <div class="stack bot-editor-sidebar">
+        <section class="card">
+          <div class="card-header"><SkeletonBlock width="60px" height="20px" /></div>
+          <div class="card-body stack" style="gap: 10px">
+            <div v-for="n in 4" :key="n" class="cluster" style="justify-content: space-between">
+              <SkeletonBlock width="64px" height="18px" /><SkeletonBlock :width="n < 3 ? '52px' : '16px'" :height="n < 3 ? '22px' : '20px'" />
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
 
     <div v-else-if="kind === 'groups'" class="group-grid" aria-hidden="true">
@@ -130,7 +172,7 @@
 import SkeletonBlock from "./SkeletonBlock.vue";
 
 withDefaults(defineProps<{
-  kind: "bots" | "groups" | "plugins" | "providers" | "users" | "notebook" | "logs" | "tasks" | "sessions" | "form" | "chart" | "feed";
+  kind: "bots" | "bot-editor" | "groups" | "plugins" | "providers" | "users" | "notebook" | "logs" | "tasks" | "sessions" | "form" | "chart" | "feed";
   count?: number;
   layout?: "tiles" | "rows";
   label?: string;

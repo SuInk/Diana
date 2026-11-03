@@ -5,17 +5,25 @@
   <div ref="viewRoot" class="assistant-view">
     <header ref="viewHeader" class="view-header">
       <div class="view-title">
-        <button v-if="page === 'edit'" class="btn ghost back-link" type="button" @click="backToList">
+        <SkeletonBlock v-if="openingProfile" class="back-link" width="104px" height="29px" />
+        <button v-else-if="page === 'edit'" class="btn ghost back-link" type="button" @click="backToList">
           <ArrowLeft :size="16" aria-hidden="true" />
           机器人列表
         </button>
         <div>
           <!-- 列表态的标题就是「机器人」，跟顶栏重复；编辑态是机器人名字，要留。 -->
-          <h2 v-if="page !== 'list'">{{ form?.name || "新机器人" }}</h2>
-          <p>{{ page === "list" ? "多机器人配置、平台接入与运行管理" : `${platformName(form?.platform)} · 机器人配置` }}</p>
+          <template v-if="openingProfile">
+            <h2><SkeletonBlock width="168px" height="26px" /></h2>
+            <p><SkeletonBlock width="150px" height="20px" /></p>
+          </template>
+          <h2 v-else-if="page !== 'list'">{{ form?.name || "新机器人" }}</h2>
+          <p v-if="!openingProfile">{{ page === "list" ? "多机器人配置、平台接入与运行管理" : `${platformName(form?.platform)} · 机器人配置` }}</p>
         </div>
       </div>
-      <div v-if="page === 'edit'" class="view-actions">
+      <div v-if="openingProfile" class="view-actions" aria-hidden="true">
+        <SkeletonBlock v-for="n in 2" :key="n" width="108px" height="39px" />
+      </div>
+      <div v-else-if="page === 'edit'" class="view-actions">
         <!-- 运行时的启停挪到页头：机器人连不上的时候，人正盯着的是这一页顶上的名字
              和状态，启停却埋在右侧卡片里，得先找一遍。回补消息搬去了运行记录——
              它要看的是「哪几条消息漏了」，那些内容在记录页，不在配置页。 -->
@@ -40,8 +48,9 @@
       <!-- 批量启停作用于列表里的所有机器人，不属于某一台的配置，所以放在列表页
            页头；编辑页只保留该机器人自己的保存和回补动作。 -->
       <div v-else class="view-actions">
+        <SkeletonBlock v-if="!form" width="108px" height="39px" />
         <button
-          v-if="profiles.length > 0"
+          v-else-if="profiles.length > 0"
           class="btn"
           :class="allProfilesEnabled ? 'danger' : 'primary'"
           type="button"
@@ -55,12 +64,11 @@
       </div>
     </header>
 
-    <div v-if="page === 'list' && (form || loading)" class="stack">
+    <LoadingSkeleton v-if="openingProfile" kind="bot-editor" :count="4" label="正在加载机器人配置" />
+    <LoadingSkeleton v-else-if="page === 'list' && !form && loading" kind="bots" :count="2" label="正在加载机器人" />
+    <div v-if="page === 'list' && form" class="stack">
       <!-- 平台筛选：默认全选，点标签可以只看某个平台。 -->
-      <div v-if="!form" class="platform-filters" role="status" aria-label="正在加载平台筛选">
-        <SkeletonBlock v-for="width in ['76px', '68px', '105px']" :key="width" :width="width" height="34px" rounded />
-      </div>
-      <div v-else-if="platformFilters.length > 1" class="platform-filters">
+      <div v-if="platformFilters.length > 1" class="platform-filters">
         <button
           type="button"
           class="platform-filter"
@@ -87,16 +95,15 @@
         <span class="settings-band-icon"><Shuffle :size="17" aria-hidden="true" /></span>
         <div class="settings-band-copy">
           <strong>消息互通</strong>
-          <span :class="{ 'skeleton skeleton-text': !form }" :aria-hidden="!form || undefined">{{ relaySummary }}</span>
+          <span>{{ relaySummary }}</span>
         </div>
-        <button class="btn small" type="button" :disabled="busy || !form" @click="relayManagerOpen = true">
+        <button class="btn small" type="button" :disabled="busy" @click="relayManagerOpen = true">
           <Settings2 :size="13" aria-hidden="true" />
           配置
         </button>
       </section>
 
-      <LoadingSkeleton v-if="!form" kind="bots" :count="2" label="正在加载机器人" />
-      <div v-else class="bot-profile-grid">
+      <div class="bot-profile-grid">
         <article
           v-for="profile in filteredProfiles"
           :key="profile.id ?? profile.name"
@@ -2326,13 +2333,13 @@
 <script setup lang="ts">
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
-import { navigate, viewQuery } from "../router";
-import { botCreateRequested, botScope, setScopeLeaveGuard } from "../lib/bot-scope";
+import { currentView, navigate, viewPath, viewQuery } from "../router";
+import { ALL_PROFILES, botCreateRequested, botScope, setBotScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
 import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts";
 import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
 import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
-import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch, type Ref } from "vue";
+import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Ref } from "vue";
 import { useSectionOutline } from "../lib/section-outline";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -2464,6 +2471,9 @@ const walletAutoApproveDraft = ref<number | string>("");
 const savedModelRequestTimeoutMS = ref(0);
 
 const loading = ref(true);
+// 地址点名了某台（?profile=）就直达它的配置：读配置这段时间占位画成编辑页的样子，
+// 不先闪一下列表。打开之后（或者那台不存在、留在列表）就清掉。
+const openingProfile = ref(viewQuery().has("profile"));
 const personaComposerOpen = ref(false);
 const personaDraft = ref("");
 const personaDraftInput = ref<HTMLTextAreaElement | null>(null);
@@ -5121,17 +5131,22 @@ function validWebSocketURL(value: string): boolean {
 }
 
 
-// 编辑哪台机器人只是这个页面自己的状态：直接用列表里的那台填表单，不通知服务端。
-// 以前这里会先调用「切换激活」，把选中的机器人写成全局的当前机器人，影响运行时判断，
-// 两个人同时开控制台还会互相覆盖。
-async function editProfile(profile: BotProfileConfig): Promise<void> {
+// 编辑哪台机器人不通知服务端：直接用列表里的那台填表单。以前这里会先调用「切换
+// 激活」，把选中的机器人写成全局的当前机器人，影响运行时判断，两个人同时开控制台
+// 还会互相覆盖。
+//
+// 侧栏的作用域（只存在这个浏览器里）倒要跟着换：顶上那条写着「当前机器人」，
+// 编辑的却是另一台，人会以为改错了地方；别的页面也该看这一台。keepTab 用于在
+// 编辑页里换机器人，停在同一档方便对照。
+async function editProfile(profile: BotProfileConfig, keepTab = false): Promise<void> {
   if (!profile.id) {
     return;
   }
   setForm(profile);
   creating.value = false;
-  editorTab.value = "access";
+  if (!keepTab) editorTab.value = "access";
   page.value = "edit";
+  setBotScope(profile.id);
 }
 
 // 未保存修改的判断：保存时会读的那些状态拼成一份快照，载入表单时记下基准，之后
@@ -5200,6 +5215,44 @@ function leaveEditor(): void {
   creating.value = false;
   page.value = "list";
 }
+
+// 地址里记着正在编辑哪台：刷新、复制链接都回到同一台的同一档。回到列表就去掉。
+// 只在这一页显示时改，页面被缓存在后台时别去动别的页的地址。首次读配置时表单会
+// 先填上一份，那时地址里点名的那台还没打开，不能先把 ?profile= 抹掉。
+let viewActive = false;
+let locationReady = false;
+function syncEditorLocation(): void {
+  if (!viewActive || !locationReady || currentView.value !== "bot") return;
+  const query = viewQuery();
+  const id = page.value === "edit" && !creating.value ? form.value?.id : undefined;
+  if (id) {
+    query.set("profile", id);
+    if (editorTab.value === "access") query.delete("tab");
+    else query.set("tab", editorTab.value);
+  } else {
+    query.delete("profile");
+    query.delete("tab");
+  }
+  const target = viewPath("bot", query);
+  if (`${window.location.pathname}${window.location.search}` !== target) window.history.replaceState(null, "", target);
+}
+watch([page, () => form.value?.id, creating, editorTab], syncEditorLocation);
+
+// 侧栏换了机器人：编辑页跟着换成那一台，停在同一档；选「全部机器人」就回列表。
+// 列表页本来就列着全部，不用动。有未保存的修改时 requestBotScope 已经问过了。
+function followBotScope(): void {
+  if (page.value !== "edit") return;
+  if (botScope.value === ALL_PROFILES) {
+    leaveEditor();
+    return;
+  }
+  if (!creating.value && form.value?.id === botScope.value) return;
+  const target = profiles.value.find((profile) => profile.id === botScope.value);
+  if (target) void editProfile(target, !creating.value);
+}
+watch(botScope, () => {
+  if (viewActive) followBotScope();
+});
 
 async function beginCreate(platform: BotPlatform, connectionProfileID = ""): Promise<void> {
   if (busy.value) return;
@@ -5307,13 +5360,26 @@ async function load(): Promise<void> {
 // 都不该拖住机器人配置本身的加载。条目在「档案 → 世界书」里改，这一页被 KeepAlive
 // 缓存着，每次切回来都要重新读，否则按钮上的条数还是离开前的。
 onActivated(() => {
+  viewActive = true;
   void loadWorldBook();
+  // 第一次挂载时配置还没读到，交给 onMounted 里 load() 之后那一次。
+  if (loading.value) return;
+  if (!openRequestedProfile()) followBotScope();
+  syncEditorLocation();
+});
+onDeactivated(() => {
+  viewActive = false;
 });
 
 onMounted(() => {
   trackHeaderHeight();
   void loadAgentSafeModeCatalog();
-  void load().then(openScopedProfile);
+  void load().then(() => {
+    openRequestedProfile();
+    openingProfile.value = false;
+    locationReady = true;
+    syncEditorLocation();
+  });
   void loadMediaBaseURL();
   modelHealthTimer = window.setInterval(() => {
     if (page.value === "edit" && editorTab.value === "model") void loadModelHealth();
@@ -5340,22 +5406,36 @@ watch(editorTab, (tab) => {
   if (tab === "model") void loadModelHealth();
 });
 
-// 侧栏已经选了一台机器人，就直接进它的配置，不用在列表里再点一次同一台；
-// 选「全部机器人」时停在列表，新建、复制、删除和消息互通这些跨机器人的事在那里做。
-// 切换作用域会整页重新挂载，所以只在挂载时判断一次，返回按钮照样能回列表。
+// 进机器人页先看列表：有几台、谁在线、谁出了错，选了哪台再进哪台。以前侧栏选着
+// 哪台就直接打开哪台的配置，想看全貌或者换一台都得先点返回。
 //
-// 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context：那边看到工具占了多少，
-// 这边才是改它的地方。没选作用域又只有一台时就是它，再多就停在列表让人自己点。
-function openScopedProfile(): void {
-  if (platformPickerOpen.value) return;
-  const requested = viewQuery().get("tab") as EditorTab | null;
-  const validTab = requested && editorTabs.some((tab) => tab.key === requested) ? requested : null;
-  const scoped = profiles.value.find((profile) => profile.id === botScope.value);
-  const target = scoped ?? (validTab && profiles.value.length === 1 ? profiles.value[0] : undefined);
-  if (!target) return;
-  void editProfile(target).then(() => {
+// 地址里点名了才直达：?profile=<id> 是编辑页自己写进地址的（刷新、分享链接）；
+// 别处（运行记录里的上下文构成）跳过来时带着 ?tab=context，那边看到工具占了多少，
+// 这边才是改它的地方——没带 profile 就用侧栏选着的那台，只有一台时就是它。
+// 返回是否打开了编辑页。
+function openRequestedProfile(): boolean {
+  if (platformPickerOpen.value) return false;
+  const query = viewQuery();
+  const requestedID = query.get("profile");
+  const requestedTab = query.get("tab") as EditorTab | null;
+  const validTab = requestedTab && editorTabs.some((tab) => tab.key === requestedTab) ? requestedTab : null;
+  if (!requestedID && !validTab) return false;
+  const target = requestedID
+    ? profiles.value.find((profile) => profile.id === requestedID)
+    : profiles.value.find((profile) => profile.id === botScope.value) ?? (profiles.value.length === 1 ? profiles.value[0] : undefined);
+  if (!target) return false;
+  if (page.value === "edit" && form.value?.id === target.id && !creating.value) {
     if (validTab) editorTab.value = validTab;
-  });
+    return true;
+  }
+  const open = (): void => {
+    void editProfile(target);
+    if (validTab) editorTab.value = validTab;
+  };
+  // 页面缓存着，可能还停在另一台没保存的编辑页上，换之前先问。
+  if (!editorDirty.value) open();
+  else void confirmDiscardChanges().then((ok) => ok && open());
+  return true;
 }
 useConfigurationRefresh(["llm"], async () => {
   const config = await getConfig();
