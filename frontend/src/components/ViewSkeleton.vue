@@ -30,6 +30,7 @@ import { computed } from "vue";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 import SkeletonBlock from "./SkeletonBlock.vue";
 import { currentView, viewQuery, type ViewID } from "../router";
+import { ALL_PROFILES, botScope } from "../lib/bot-scope";
 
 type SkeletonKind = InstanceType<typeof LoadingSkeleton>["$props"]["kind"];
 
@@ -56,9 +57,9 @@ const kinds: Partial<Record<ViewID, SkeletonKind>> = {
 // 卡片网格本身就是页面的外框，不再套一层 card。
 const bareKinds = new Set<SkeletonKind>(["bots", "bot-editor", "groups", "plugins"]);
 
-// 机器人页地址点名了某台时会直达它的配置，占位跟着画编辑页。
+// 机器人页地址点名了某台、或侧栏选着某台时会直达它的配置，占位跟着画编辑页。
 const kind = computed<SkeletonKind>(() => {
-  if (currentView.value === "bot" && viewQuery().has("profile")) return "bot-editor";
+  if (currentView.value === "bot" && (viewQuery().has("profile") || botScope.value !== ALL_PROFILES)) return "bot-editor";
   return kinds[currentView.value] ?? "form";
 });
 const bare = computed(() => bareKinds.has(kind.value));
