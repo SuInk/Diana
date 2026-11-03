@@ -130,21 +130,18 @@ func (r *Runtime) imageRequestBudget(ctx context.Context, group string, req llm.
 				profiles = []llm.Profile{first}
 			}
 		}
-		for i, profile := range profiles {
-			cfg := profile.Config
+		// 只按首选模型算，不取整条降级链里最小的窗口。以前取最小值：聊天配了 32k 的
+		// 本地备用后，发给 12.8 万窗口主模型的请求也按 32k 卡，判成超预算去调摘要模型，
+		// 线上一轮串行摘要两次、多等 9 秒，压完还是超，最后照样靠供应商裁剪。真降级到
+		// 小窗口模型时，它自己的客户端按自己的上限裁（applyContextBudget）。
+		if len(profiles) > 0 {
+			cfg := profiles[0].Config
 			if req.Model != "" {
 				cfg.Model = req.Model
 			}
-			candidate := cfg.MaxContextTokensWithDefault()
-			if i == 0 || candidate < window {
-				window = candidate
-			}
-			output := cfg.MaxOutputTokens
-			if output <= 0 {
-				output = llm.DefaultMaxOutputTokens
-			}
-			if i == 0 || output > reserve {
-				reserve = output
+			window = cfg.MaxContextTokensWithDefault()
+			if cfg.MaxOutputTokens > 0 {
+				reserve = cfg.MaxOutputTokens
 			}
 		}
 	}

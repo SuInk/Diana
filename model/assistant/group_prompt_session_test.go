@@ -8,7 +8,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -265,5 +267,45 @@ func TestTurnHistorySkipsSenderMessagesAfterTrigger(t *testing.T) {
 	}
 	if got := withLaterSenderMessages(nil, []MessageEvent{earlier, current, other}, current); got != nil {
 		t.Fatalf("nothing later from sender, skip = %v", got)
+	}
+}
+
+// 已加载工具不能只增不减：久未使用的退回按需目录，最多留几个最近用过的，
+// 留下的保持原顺序（契约按这个顺序渲染，顺序不动前缀才稳）。
+func TestGroupLoadedToolsExpireAndCap(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	restore := groupPromptSessionNow
+	groupPromptSessionNow = func() time.Time { return now }
+	defer func() { groupPromptSessionNow = restore }()
+
+	r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	s := r.groupPromptSession(MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20002"})
+	s.data.LoadedTools = []string{"legacy"} // 升级前写入、没有时间记录的
+	s.rememberTools([]string{"legacy", "chat_history", "platform"})
+	if got := s.loadedTools(); !reflect.DeepEqual(got, []string{"chat_history", "platform"}) {
+		t.Fatalf("legacy entry kept: %v", got)
+	}
+
+	now = now.Add(loadedToolIdleTTL - time.Hour)
+	s.touchTools([]agent.Step{{Tool: "platform"}, {Tool: "chat_history", Skipped: true}, {Tool: "unknown"}})
+	now = now.Add(2 * time.Hour)
+	if got := s.loadedTools(); !reflect.DeepEqual(got, []string{"platform"}) {
+		t.Fatalf("idle tool kept or used tool dropped: %v", got)
+	}
+	if _, ok := s.data.ToolLastUsed["chat_history"]; ok {
+		t.Fatal("expired tool timestamp kept")
+	}
+
+	var names []string
+	for i := range maxPersistedLoadedTools + 3 {
+		now = now.Add(time.Minute)
+		name := fmt.Sprintf("tool_%02d", i)
+		names = append(names, name)
+		s.rememberTools([]string{name})
+	}
+	got := s.loadedTools()
+	want := names[len(names)-maxPersistedLoadedTools:]
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cap kept %v, want %v", got, want)
 	}
 }
