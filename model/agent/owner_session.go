@@ -64,7 +64,10 @@ func newOwnerSessions(idle, lifetime, reapEvery time.Duration) *OwnerSessions {
 		now:      time.Now,
 		stopReap: make(chan struct{}),
 	}
-	go m.reapLoop(reapEvery)
+	go func() {
+		defer recoverGoroutinePanic("owner_sessions.reap")
+		m.reapLoop(reapEvery)
+	}()
 	return m
 }
 
@@ -158,7 +161,10 @@ func (m *OwnerSessions) Start(cfg Config, owner string, request OwnerCommand, wa
 	}
 	m.sessions[s.id] = s
 	m.mu.Unlock()
-	go s.wait()
+	go func() {
+		defer recoverGoroutinePanic("owner_sessions.wait")
+		s.wait()
+	}()
 	s.waitOutput(wait, cancel)
 	return m.snapshot(s), nil
 }
@@ -251,6 +257,7 @@ func (m *OwnerSessions) Close() {
 	for _, s := range sessions {
 		wg.Add(1)
 		go func(s *ownerSession) {
+			defer recoverGoroutinePanic("owner_sessions.close")
 			defer wg.Done()
 			s.terminate("diana_stopped")
 		}(s)
