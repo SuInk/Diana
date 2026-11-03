@@ -1424,7 +1424,7 @@ async function retryAllFailed(): Promise<void> {
 
 function openContextSettings(): void {
   contextOpen.value = false;
-  navigate("bot", { tab: "context" });
+  navigate("bot", botScope.value ? { profile: botScope.value, tab: "context" } : { tab: "context" });
 }
 
 const contextBudget = computed(() => response.value?.context_budget ?? null);

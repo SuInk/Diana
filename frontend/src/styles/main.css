@@ -6394,6 +6394,15 @@ a.nav-action {
   cursor: default;
 }
 
+/* 标签是 span 不是按钮，撑不出按钮的行高，这里按真实标签的 36px 定高。 */
+.loading-skeleton .editor-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  cursor: default;
+}
+
 .loading-skeleton .spark-bars .skeleton-block {
   flex: 1;
 }
@@ -6640,7 +6649,8 @@ a.nav-action {
     align-items: start;
   }
 
-  .settings-band > .btn {
+  .settings-band > .btn,
+  .settings-band > .settings-band-action {
     grid-column: 2;
     justify-self: start;
   }
