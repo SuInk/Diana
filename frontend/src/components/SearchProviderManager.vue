@@ -146,7 +146,9 @@ type SearchDraft = SearchProvider & { api_key: string; clear_api_key: boolean; p
 const editor = ref<SearchDraft | null>(null);
 const editorError = ref("");
 const keyRevealed = ref(false);
-const testQuery = ref("Diana");
+// 默认搜一个有时效的词，能看出来源是不是真在联网拿新结果。
+const defaultTestQuery = "Diana 最新版本";
+const testQuery = ref(defaultTestQuery);
 const testing = ref(false);
 const testResult = ref<SearchProviderTestResult | null>(null);
 let testGeneration = 0;
@@ -170,7 +172,7 @@ function cloneProvider(provider: SearchProvider): void {
   openEditor({ ...JSON.parse(JSON.stringify(provider)), id: "", name: `${provider.name} 副本`.slice(0, 100), api_key_configured: false });
 }
 // 列表上的测试和模型提供商一样弹窗进行，可以改搜索词再测。
-function openRowTest(provider: SearchProvider): void { rowTest.value = { provider, query: "Diana", running: false, result: null }; }
+function openRowTest(provider: SearchProvider): void { rowTest.value = { provider, query: defaultTestQuery, running: false, result: null }; }
 async function runRowTest(): Promise<void> {
   const current = rowTest.value;
   if (!current || current.running || !current.query.trim()) return;
