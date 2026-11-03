@@ -55,7 +55,7 @@ func copyParticipation(p *ParticipationPreferences) *ParticipationPreferences {
 		return nil
 	}
 	v := *p
-	if v.TriggerMode != "rules" && v.TriggerMode != "" {
+	if v.TriggerMode != triggerModeRules && v.TriggerMode != triggerModeRandom && v.TriggerMode != "" {
 		v.TriggerMode = "semantic"
 	}
 	v.RuleChance = max(0, min(100, v.RuleChance))

@@ -2957,7 +2957,7 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 	ctx = withLLMUsageContext(ctx, event)
 	cfg := r.effectiveConfigForEvent(event)
 	if cfg.ruleTriggerEnabled() {
-		return r.routeRuleReply(event, text, cfg)
+		return r.routeRuleReply(candidates, cfg)
 	}
 	select {
 	case r.proactiveRouteSem <- struct{}{}:

@@ -1269,7 +1269,8 @@ function groupReplyDesireValue(config: BotGroupConfig): string {
 }
 
 function participationSummary(p: ParticipationPreferences): string {
-  if (p.trigger_mode === "rules") return `规则触发 · 随机接话 ${p.rule_chance ?? defaultRuleTriggerChance}%`;
+  if (p.trigger_mode === "rules") return `规则触发 · 基础概率 ${p.rule_chance ?? defaultRuleTriggerChance}%`;
+  if (p.trigger_mode === "random") return `普通 · 固定概率 ${p.rule_chance ?? defaultRuleTriggerChance}%`;
   // 档位名后面跟上评分门槛，门槛数字统一来自 participation.ts。
   const name = (level: string) => participationLevelLabel(level, { compact: true });
   const legacy = participationPresetName(p);
