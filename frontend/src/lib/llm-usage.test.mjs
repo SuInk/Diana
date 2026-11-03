@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { cacheUsageDisplay, cacheUtilization, groupCacheByPurpose, groupLLMUsage, splitCacheUsage, usageModelKey, usagePurposeLabel, usageShare } from "./llm-usage.ts";
+import { cacheUsageDisplay, cacheUtilization, eventPurposeTokens, groupCacheByPurpose, groupLLMUsage, splitCacheUsage, usageModelKey, usagePurposeLabel, usageShare } from "./llm-usage.ts";
 
 test("首页展示当前机器人的群排行，缓存率使用汇总输入而非总 Token", async () => {
   const dashboard = await readFile(new URL("../views/DashboardView.vue", import.meta.url), "utf8");
@@ -119,5 +119,21 @@ test("记录页按主回复、回复判断、发送前审核、其他四类汇�
     ["主回复", 3, 60000, 57000],
     ["回复判断", 2, 4000, 1000],
     ["发送前审核", 2, 4000, 500]
+  ]);
+});
+
+test("记录页按用途列出 token，同名用途合并、多的在前", () => {
+  const items = eventPurposeTokens([
+    { purpose: "reply_rule_router", calls: 1, total_tokens: 300 },
+    { purpose: "image_description_cache", calls: 1, total_tokens: 2333 },
+    { purpose: "image_describe", calls: 1, total_tokens: 900 },
+    { purpose: "image_description", calls: 1, total_tokens: 100 },
+    { purpose: "memory_extract", calls: 2 }
+  ]);
+  assert.deepEqual(items.map((item) => [item.label, item.calls, item.total_tokens]), [
+    ["图片描述缓存", 1, 2333],
+    ["图片描述", 2, 1000],
+    ["回复规则判断", 1, 300],
+    ["记忆抽取", 2, 0]
   ]);
 });

@@ -147,6 +147,24 @@ func TestImageBudgetUsesBoundModelAndRequestCap(t *testing.T) {
 	}
 }
 
+// 降级链里有小窗口备用模型时，预算仍按首选模型算：备用的 32k 不能把主模型的
+// 请求也卡在 32k，否则装得下的请求会被判超预算、白调摘要模型。
+func TestImageBudgetUsesPrimaryWindowNotSmallestFallback(t *testing.T) {
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{"chat": {
+		ProfileID: "main", Model: "big",
+		Fallbacks: []ModelRole{{ProfileID: "local", Model: "small"}},
+	}}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.llmStore = &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "main", Config: llm.ProviderConfig{Model: "big", ContextWindowTokens: 128000}},
+		{ID: "local", Config: llm.ProviderConfig{Model: "small", ContextWindowTokens: 32768, MaxOutputTokens: 4096}},
+	}}}
+	ctx := withLLMUsagePurpose(context.Background(), PurposeReply)
+	window, reserve := runtime.imageRequestBudget(ctx, llm.GroupChat, llm.GenerateRequest{})
+	if window != 128000 || reserve != llm.DefaultMaxOutputTokens {
+		t.Fatalf("window=%d reserve=%d, want primary 128000/%d", window, reserve, llm.DefaultMaxOutputTokens)
+	}
+}
+
 func TestImageBudgetRuntimeWrapperReplacesOverflow(t *testing.T) {
 	source := imageSourceTestDataURL
 	data, _, _ := decodeInlineHistoryImage(source)

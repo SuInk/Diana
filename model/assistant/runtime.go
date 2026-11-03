@@ -5105,6 +5105,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
+		promptSession.touchTools(resp.Steps)
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Sources)
 		replyToolTraceFromContext(ctx).add(resp.Steps)
@@ -5652,6 +5653,24 @@ func quotedPlainText(quoted *QuotedMessage) string {
 
 func historyPlainText(event MessageEvent) string {
 	text := strings.TrimSpace(PlainText(event.Segments))
+	if hasImageSegment(event.Segments) {
+		text = rawMessageWithoutImagePlaceholders(text)
+	}
+	if text == "" && !hasImageSegment(event.Segments) {
+		text = strings.TrimSpace(event.RawMessage)
+	}
+	return text
+}
+
+// assistantHistoryPlainText 渲染机器人自己的历史发言。
+//
+// 这一份是以 assistant 身份喂给模型的，模型会把它当成「我上次就是这么写的」照抄。
+// at 段要是按 historyPlainText 渲染成「@10001」，模型下一轮就照着写「@10001」
+// 纯文本——隐私代理把别名还原成真实 ID 后原样发出去，群里看到的是一串数字，
+// 谁也没被提醒到。所以这里把 at 段写回发送时用的 <diana-at id="…"/> 标记，
+// 和引用段写回 <diana-quote/> 是同一个道理。
+func assistantHistoryPlainText(event MessageEvent) string {
+	text := strings.TrimSpace(plainTextWithOptions(event.Segments, plainTextOptions{renderAt: mentionMarkerFor}))
 	if hasImageSegment(event.Segments) {
 		text = rawMessageWithoutImagePlaceholders(text)
 	}
@@ -7346,6 +7365,10 @@ func (r *Runtime) fillTelegramMentionsFromDirectory(event MessageEvent, ids []st
 func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
 	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	if event.Kind == EventKindGroup {
+		participants := r.recentParticipantIDs(event)
+		text = promotePlainIDMentions(text, func(id string) bool { return participants[id] && acceptable(id) })
+	}
 	text = dropResidualDianaReplyMarkers(text)
 	text = stripLeakedControlMarkers(text)
 	if text == msg.Text {
@@ -7354,6 +7377,28 @@ func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMess
 	log.Printf("diana rewrote mention markers: platform=%s before=%q after=%q", NormalizePlatformID(event.Platform), truncateForError(msg.Text), truncateForError(text))
 	msg.Text = text
 	return msg
+}
+
+// recentParticipantIDs 列出本会话近期消息里出现过的群友 ID（不含机器人自己）。
+func (r *Runtime) recentParticipantIDs(event MessageEvent) map[string]bool {
+	r.mu.RLock()
+	history := append([]MessageEvent(nil), r.history[sessionKey(event)]...)
+	r.mu.RUnlock()
+	ids := make(map[string]bool, len(history)+1)
+	for _, item := range append(history, event) {
+		if item.Outbound {
+			continue
+		}
+		if id := strings.TrimSpace(item.UserID); id != "" && id != strings.TrimSpace(item.SelfID) {
+			ids[id] = true
+		}
+		if item.Quoted != nil {
+			if id := strings.TrimSpace(item.Quoted.UserID); id != "" && id != strings.TrimSpace(item.SelfID) {
+				ids[id] = true
+			}
+		}
+	}
+	return ids
 }
 
 // send 按私聊或群聊规则发送回复。

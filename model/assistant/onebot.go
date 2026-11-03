@@ -951,6 +951,8 @@ type AtMentionNameResolver func(userID string) string
 type plainTextOptions struct {
 	// resolveName 只在 at 段自己没带昵称时被调用。
 	resolveName AtMentionNameResolver
+	// renderAt 换掉 at 段的渲染，优先于 resolveName。返回空串表示这一段不写出来。
+	renderAt func(userID string) string
 	// renderReply 换掉引用段的渲染。返回空串表示这一段不写出来。
 	renderReply func(messageID string) string
 	// renderForward 换掉合并转发段的渲染。留空时保持 PlainText 的原行为——正文里
@@ -971,6 +973,10 @@ func plainTextWithOptions(segments []MessageSegment, options plainTextOptions) s
 			builder.WriteString(segment.Data["text"])
 		case "at":
 			if qq := segment.Data["qq"]; qq != "" && qq != "all" {
+				if options.renderAt != nil {
+					builder.WriteString(options.renderAt(qq))
+					break
+				}
 				name := AtMentionName(segment)
 				if name == "" && options.resolveName != nil {
 					name = strings.TrimSpace(options.resolveName(qq))

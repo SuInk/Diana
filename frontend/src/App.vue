@@ -177,7 +177,11 @@
       </header>
 
       <main class="app-content" :class="{ 'app-content-fill': fillViews.has(currentView) }">
-        <section v-if="scopeReady && !unscopedViews.has(currentView)" class="scope-context" aria-label="当前平台与机器人">
+        <!-- 机器人配置还没读到时先占住这一条，读到后再填字，下面的页面不会整体往下跳。 -->
+        <section v-if="!scopeReady && !unscopedViews.has(currentView)" class="scope-context" aria-hidden="true">
+          <div class="scope-identity"><SkeletonBlock width="64px" height="20px" /><SkeletonBlock width="180px" height="18px" /></div>
+        </section>
+        <section v-else-if="!unscopedViews.has(currentView)" class="scope-context" aria-label="当前平台与机器人">
           <div class="scope-identity">
             <span class="badge">{{ scopePlatform }}</span>
             <strong>{{ scopeProfile?.name || (botScope ? "未命名机器人" : "全部机器人") }}</strong>
@@ -188,9 +192,12 @@
           <div v-if="scopeSwitching" class="scope-progress" role="progressbar" aria-label="正在加载当前机器人数据"><span /></div>
         </section>
         <ViewSkeleton v-if="!scopeReady" label="正在加载机器人配置" />
-        <div v-else :aria-busy="scopeSwitching" :inert="scopeSwitching" :class="{ 'scope-content-pending': scopeSwitching }">
+        <div v-else :aria-busy="scopedContentPending" :inert="scopedContentPending" :class="{ 'scope-content-pending': scopedContentPending }">
+          <KeepAlive :max="VIEW_CACHE_LIMIT">
+            <component :is="activeView" v-if="scopeIndependent" :key="viewKey" />
+          </KeepAlive>
           <KeepAlive :key="botScope" :max="VIEW_CACHE_LIMIT">
-            <component :is="activeView" :key="viewKey" />
+            <component :is="activeView" v-if="!scopeIndependent" :key="viewKey" />
           </KeepAlive>
         </div>
       </main>
@@ -257,6 +264,7 @@ import LoginView from "./views/LoginView.vue";
 import DashboardView from "./views/DashboardView.vue";
 import BrandLogo from "./components/BrandLogo.vue";
 import ViewSkeleton from "./components/ViewSkeleton.vue";
+import SkeletonBlock from "./components/SkeletonBlock.vue";
 import ViewLoadError from "./components/ViewLoadError.vue";
 
 // 页面代码首次下载期间显示整页骨架；120ms 内下完的不画，免得缓存命中时也闪一下。
@@ -488,6 +496,12 @@ function isActiveNav(id: ViewID): boolean {
 }
 const activeView = computed(() => viewComponents[currentView.value] ?? DashboardView);
 const viewKey = computed(() => currentView.value);
+// 这几页本来就列着所有机器人，作用域只决定打开哪一台，自己跟着切就行。放进按作用域
+// 换 key 的那组缓存里，每切一次都要整页重建、把配置和模型清单再拉一遍，期间内容还
+// 被藏起来，切换要等两轮请求才看得到东西。
+const scopeIndependentViews = new Set<ViewID>(["bot"]);
+const scopeIndependent = computed(() => scopeIndependentViews.has(currentView.value));
+const scopedContentPending = computed(() => scopeSwitching.value && !scopeIndependent.value);
 
 const botSummary = computed(() => {
   const status = stream.status;

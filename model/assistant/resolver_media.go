@@ -1074,13 +1074,8 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	if !ok {
 		return nil, "request_failed"
 	}
-	match := xiaohongshuStateRegex.FindStringSubmatch(body)
-	if len(match) < 2 {
-		return nil, "page_unavailable"
-	}
-	stateJSON := strings.ReplaceAll(match[1], "undefined", "null")
-	var state map[string]any
-	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+	state, ok := parseXiaohongshuState(body)
+	if !ok {
 		return nil, "page_unavailable"
 	}
 	note := xiaohongshuNoteData(state, xhsID)
@@ -1094,6 +1089,69 @@ func fetchXiaohongshuNote(ctx context.Context, raw string) (map[string]any, stri
 	}
 	note["noteId"] = xhsID
 	return note, ""
+}
+
+// parseXiaohongshuState 取出页面里的 window.__INITIAL_STATE__。它是 JS 对象字面量，
+// 不是 JSON：除了 undefined，10-30 前后还多了 "AiNoteDetailStore":{"noteDetailMap":new Map([])}，
+// 原样 Unmarshal 会整页失败，每条笔记都报 page_unavailable。
+func parseXiaohongshuState(body string) (map[string]any, bool) {
+	match := xiaohongshuStateRegex.FindStringSubmatch(body)
+	if len(match) < 2 {
+		return nil, false
+	}
+	var state map[string]any
+	if err := json.Unmarshal([]byte(xiaohongshuStateJSON(match[1])), &state); err != nil {
+		return nil, false
+	}
+	return state, true
+}
+
+// xiaohongshuStateJSON 把状态字面量里 JSON 不认的写法换掉：undefined 换成 null，
+// new Map(...) / new Set(...) 只留里面的数组。只改字符串外的部分，笔记正文里
+// 写着 undefined 或 new Map( 的原样保留。
+func xiaohongshuStateJSON(literal string) string {
+	var out strings.Builder
+	out.Grow(len(literal))
+	inString, escaped := false, false
+	for i := 0; i < len(literal); i++ {
+		c := literal[i]
+		if inString {
+			out.WriteByte(c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		rest := literal[i:]
+		switch {
+		case c == '"':
+			inString = true
+			out.WriteByte(c)
+		case strings.HasPrefix(rest, "new Map(") || strings.HasPrefix(rest, "new Set("):
+			i += len("new Map(") - 1
+			if i+1 < len(literal) && literal[i+1] == ')' {
+				out.WriteString("[]")
+			}
+		case c == ')':
+			// JSON 里没有括号，字符串外的 ) 只会是 new Map( 的收尾。
+		case strings.HasPrefix(rest, "undefined") && (i == 0 || !isJSIdentByte(literal[i-1])) &&
+			(len(rest) == len("undefined") || !isJSIdentByte(rest[len("undefined")])):
+			out.WriteString("null")
+			i += len("undefined") - 1
+		default:
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
+}
+
+func isJSIdentByte(c byte) bool {
+	return c == '_' || c == '$' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 // xiaohongshuUnresolvedStatus 解释一条没解析出笔记 ID 的小红书地址。
@@ -1146,7 +1204,13 @@ func xiaohongshuVideoCandidateURLs(note map[string]any) []string {
 	video, _ := note["video"].(map[string]any)
 	media, _ := video["media"].(map[string]any)
 	stream, _ := media["stream"].(map[string]any)
-	h264, _ := stream["h264"].([]any)
+	// 10-30 前后 h264 流改挂在 EF4 下（ffprobe 实测仍是 h264+aac 的 mp4）。
+	// EF5–EF7 的编码没核实过，不拿来发。
+	var h264 []any
+	for _, key := range []string{"h264", "EF4"} {
+		items, _ := stream[key].([]any)
+		h264 = append(h264, items...)
+	}
 	out := make([]string, 0, len(h264)*2)
 	seen := map[string]bool{}
 	for _, item := range h264 {

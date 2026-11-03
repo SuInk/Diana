@@ -3117,6 +3117,7 @@ export interface AssistantEventPurposeUsage {
   calls: number;
   input_tokens: number;
   cached_input_tokens: number;
+  total_tokens?: number;
 }
 
 export interface AssistantEventDetail extends BotEvent {

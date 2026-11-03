@@ -87,7 +87,7 @@ func (r *Runtime) resolveExplicitImageEditSources(ctx context.Context, event Mes
 		avatars, failed := r.avatarIdentitySources(ctx, event, plan.IdentitySources)
 		if len(failed) > 0 {
 			// 点名的头像取不到就当场说，不退回当前消息里的图：那正是事故里的错法。
-			return nil, nil, fmt.Errorf("identity_sources 里 %s 取不到头像（成员不在当前会话、群号不对，或平台没有头像）。这次没有开始画；请核对 user_id 后重新调用，或改用 source_message_ids 指认图片", strings.Join(failed, "、"))
+			return nil, nil, fmt.Errorf("identity_sources 里 %s 取不到头像（user_id 不对、群号不对，或对方没有可见头像）。这次没有开始画；请核对 user_id 后重新调用，或改用 source_message_ids 指认图片", strings.Join(failed, "、"))
 		}
 		for _, avatar := range avatars {
 			urls = appendImageEditSourceImages(urls, avatar.URL)
