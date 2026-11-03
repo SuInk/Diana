@@ -42,6 +42,7 @@ const (
 	musicSettingSources     = "enabled_sources"
 	musicSettingPreferred   = "preferred_source"
 	musicSettingBitrate     = "bitrate"
+	musicSettingQQSendAs    = "qq_send_as"
 	musicSettingMaxDuration = "max_duration_seconds"
 	musicSettingMaxMB       = "max_file_mb"
 	musicSettingTimeout     = "timeout_seconds"
@@ -141,11 +142,13 @@ type musicConfig struct {
 	MaxBytes        int64
 	Timeout         time.Duration
 	SendSongInfo    bool
-	RequestedSong   bool
-	OutputDir       string
-	FFmpegPath      string
-	SilkEncoder     string
-	SilkBitrate     int
+	// SendAsCard 让 QQ（OneBot）发音乐卡片而不是语音，见 musicCardCode。
+	SendAsCard    bool
+	RequestedSong bool
+	OutputDir     string
+	FFmpegPath    string
+	SilkEncoder   string
+	SilkBitrate   int
 }
 
 func (c musicConfig) sourceOptions(key string) musicSourceOptions {
@@ -294,6 +297,17 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Description: "用于网易云自建 API；QQ 音乐官方接口有登录态且选择 320k 时优先获取高品质，不可用时回退标准音质。其余情况由音源决定。",
 			},
 			{
+				Key:     musicSettingQQSendAs,
+				Label:   "QQ 发送方式",
+				Type:    PluginSettingTypeSelect,
+				Default: "voice",
+				Options: []PluginSettingOption{
+					{Value: "voice", Label: "语音"},
+					{Value: "card", Label: "音乐卡片"},
+				},
+				Description: "语音会被 QQ 压成约 40k 的 silk，音质明显变差；音乐卡片点开直接在 QQ 里播放曲库原音质，也不受时长和文件大小限制。卡片要 OneBot 端的音乐卡片签名服务，播放地址来自曲库 CDN，过一段时间会失效，久了再点可能放不了。",
+			},
+			{
 				Key:         musicSettingMaxDuration,
 				Label:       "最长时长",
 				Type:        PluginSettingTypeNumber,
@@ -403,6 +417,21 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 	}
 	if !musicPlatformSendsAudio(req.Event.Platform) {
 		return &PluginResponse{Handled: true, Reply: musicLinkReply(found)}, nil
+	}
+	if musicSendsCard(cfg, req.Event.Platform) {
+		playable, ok := p.playableSong(ctx, cfg, found)
+		if !ok {
+			reason := "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"
+			if problem := diagnostics.credentialProblem(); problem != "" {
+				reason = "各家曲库都拿不到可播放的音频；" + problem
+			}
+			return musicNoticeResponse(found, reason), nil
+		}
+		return &PluginResponse{
+			Handled: true,
+			Reply:   musicCardCode(playable),
+			Context: musicSongContext(p, playable, "已发送音乐卡片，点开即可播放"),
+		}, nil
 	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
 		return musicNoticeResponse(found, reason), nil
@@ -660,7 +689,7 @@ type musicToolResult struct {
 func (t *dianaMusicTool) Name() string { return musicToolName }
 
 func (t *dianaMusicTool) Description() string {
-	return `按歌名或歌手点播歌曲：QQ 发语音，Telegram 发音频，其他平台发链接。只在用户要放歌、点歌时用，聊音乐、问歌词不用。工具会完成本次回复，不再重复发文字；没有可用音频时如实说明，不说播放成功。`
+	return `按歌名或歌手点播歌曲：QQ 按设置发语音或音乐卡片，Telegram 发音频，其他平台发链接。只在用户要放歌、点歌时用，聊音乐、问歌词不用。工具会完成本次回复，不再重复发文字；没有可用音频时如实说明，不说播放成功。`
 }
 
 func (t *dianaMusicTool) InputSchema() map[string]any {
@@ -706,6 +735,10 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 		body, err := json.Marshal(musicToolResult{OK: true, Action: "song_link", Song: found.Title(), Source: found.Source, Reply: musicLinkReply(found)})
 		return string(body), err
 	}
+	if musicSendsCard(cfg, t.platform) {
+		body, err := json.Marshal(musicToolResult{OK: true, Action: "song_card", Song: found.Title(), Source: found.Source, Reply: musicCardCode(found)})
+		return string(body), err
+	}
 	if reason := musicVoiceUnavailableReason(cfg, found); reason != "" {
 		return "", fmt.Errorf("《%s》%s", found.Title(), reason)
 	}
@@ -734,7 +767,7 @@ func (t *dianaMusicTool) TerminalResult(output string) (string, bool) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		return "", false
 	}
-	if !result.OK || (strings.TrimSpace(result.CQRecord) == "" && result.Action != "song_link") {
+	if !result.OK || (strings.TrimSpace(result.CQRecord) == "" && result.Action != "song_link" && result.Action != "song_card") {
 		return "", false
 	}
 	reply := firstNonEmpty(strings.TrimSpace(result.Reply), result.CQRecord)
@@ -767,6 +800,7 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		MaxBytes:        int64(maxMB) << 20,
 		Timeout:         time.Duration(timeout) * time.Second,
 		SendSongInfo:    settings.Bool(musicSettingSendInfo, true),
+		SendAsCard:      strings.TrimSpace(settings.String(musicSettingQQSendAs, "voice")) == "card",
 		RequestedSong:   settings.Bool(musicSettingRequestSong, true),
 		OutputDir:       musicOutputDir(),
 		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),

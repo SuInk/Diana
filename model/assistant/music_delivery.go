@@ -26,6 +26,32 @@ func musicPageURL(item song) string {
 	return link
 }
 
+// musicSendsCard 判断这次该不该发音乐卡片：只有 OneBot 认 music 段，Telegram 和
+// QQ 官方照旧发音频文件。
+func musicSendsCard(cfg musicConfig, platform string) bool {
+	return cfg.SendAsCard && IsOneBotPlatform(platform)
+}
+
+// musicCardCode 拼一张自定义音乐卡片。用 custom 而不是 type=qq/163 加歌曲 ID 的
+// 平台卡片：平台卡片由签名服务自己去取播放地址，不带我们的会员 Cookie，会员歌
+// 只能试听；custom 直接塞已经取到的地址，填了会员 Cookie 就是整首、原音质。
+// 代价是地址来自曲库 CDN，会过期（网易云官方接口给的通常只有二十来分钟）。
+//
+// 签名在 OneBot 端做（SnowLuma 的 musicSignUrl），这里只给字段；签不出来时
+// SnowLuma 会退回一张未签名的本地卡片。
+func musicCardCode(item song) string {
+	fields := []string{
+		"type=custom",
+		"url=" + escapeCQParameter(firstNonEmpty(musicPageURL(item), item.PlayURL)),
+		"audio=" + escapeCQParameter(item.PlayURL),
+		"title=" + escapeCQParameter(firstNonEmpty(strings.TrimSpace(item.Name), item.Title())),
+	}
+	if artists := strings.TrimSpace(item.Artists); artists != "" {
+		fields = append(fields, "content="+escapeCQParameter(artists))
+	}
+	return "[CQ:music," + strings.Join(fields, ",") + "]"
+}
+
 var outgoingCQRecord = regexp.MustCompile(`\[CQ:record(?:,[^\]]*)?\]`)
 
 // prepareChannelAudio 把正文里的 [CQ:record] 换成本机音频文件，交给不认 CQ 码的
