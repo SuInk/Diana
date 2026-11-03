@@ -15,8 +15,9 @@ import type { RoomPose } from "../lib/room-activity";
 import type { RoomAppearance } from "../lib/room-customization";
 import { roomMotion, type MotionFrame } from "../lib/room-motion";
 const props = defineProps<{ pose: RoomPose; paused: boolean; appearance: RoomAppearance }>();
-const background = `${import.meta.env.BASE_URL}room/whale-bedroom.png`;
-const sprites = `${import.meta.env.BASE_URL}room/whale-poses.png`;
+// 换素材或 CDN 缓存卡住时递增 v：Cloudflare 曾把旧地址的背景缓存成永远不返回的条目。
+const background = `${import.meta.env.BASE_URL}room/whale-bedroom.png?v=room-2`;
+const sprites = `${import.meta.env.BASE_URL}room/whale-poses.png?v=room-2`;
 const frame = ref<MotionFrame>({ pose: props.pose, location: props.pose === "desk" ? "desk" : "bed", phase: "settled" });
 const motion = roomMotion(props.pose, value => { frame.value = value; });
 const walking = computed(() => frame.value.phase === "walk" || frame.value.phase === "stand");
