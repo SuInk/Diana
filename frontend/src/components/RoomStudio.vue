@@ -6,7 +6,7 @@
       <h3>布置你的小窝</h3>
       <p>仅保存在当前浏览器，按机器人隔离。图片在本地处理，不上传。预览动作不会改变 Agent 状态。交还或离开页面会放弃未保存的布置。</p>
       <label>编辑位置
-        <select v-model="preview"><option value="rest">床边 · 休息</option><option value="phone">床边 · 手机</option><option value="desk">书桌</option></select>
+        <AppSelect :model-value="preview" :options="previewOptions" aria-label="编辑位置" @update:model-value="(value) => { preview = value as RoomPose; }" />
       </label>
       <div class="uploads">
         <label v-for="slot in slots" :key="slot.key">{{ slot.label }}
@@ -28,12 +28,14 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import RoomScene from "./RoomScene.vue";
+import AppSelect from "./AppSelect.vue";
 import type { RoomPose } from "../lib/room-activity";
 import { defaultRoomAppearance, normalizeRoomAppearance, readRoomImage, roomAppearanceKey, type RoomImageSlot } from "../lib/room-customization";
 const props = defineProps<{ profile: string; pose: RoomPose; paused: boolean; canEdit?: boolean }>();
 const appearance = ref(defaultRoomAppearance());
 const editing = ref(false);
 const preview = ref<RoomPose>("phone");
+const previewOptions = [{ value: "rest", label: "床边 · 休息" }, { value: "phone", label: "床边 · 手机" }, { value: "desk", label: "书桌" }];
 const pose = computed(() => editing.value ? preview.value : props.pose);
 const feedback = ref("");
 const busy = ref(false);

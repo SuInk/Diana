@@ -397,39 +397,69 @@ code {
   padding: 2px 10px 10px;
 }
 
+/* 左栏每档一行：健康点、用途名，右边一句状态。正常时只写个数，出问题才标黄。 */
 .model-purpose-tab {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
+  display: grid;
+  grid-template-columns: 8px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
   width: 100%;
-  padding: 11px 10px;
+  padding: 8px 10px;
   border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
-  color: var(--text-secondary);
+  color: var(--text);
   text-align: left;
   font: inherit;
+  font-size: 13px;
   cursor: pointer;
 }
 
-.model-purpose-tab > span {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
+.model-purpose-tab.muted .model-purpose-name {
+  color: var(--text-secondary);
+}
+
+.model-purpose-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
 }
 
-.model-purpose-tab > span > svg:last-child:not(:first-child) {
-  margin-left: auto;
-}
-
 .model-purpose-tab small {
-  margin-left: 24px;
-  color: var(--muted);
-  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.model-health-dot.none {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+}
+
+.model-purpose-group-caption {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.model-purpose-group-caption small {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
   white-space: nowrap;
 }
 
@@ -497,6 +527,29 @@ code {
 .model-purpose-description p {
   margin: 8px 0 0;
 }
+.model-purpose-heading-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  min-width: 0;
+}
+
+/* 窄容器里 .model-purpose-heading > div 会改成竖排，这一行要保持横排、放不下再换行。 */
+.model-purpose-heading > .model-purpose-heading-main {
+  flex-direction: row;
+  align-items: center;
+}
+
+.model-purpose-heading-main h3 {
+  margin: 0 4px 0 0;
+}
+
+.model-heading-select {
+  width: auto;
+  min-width: 112px;
+}
+
 .model-routing-toolbar {
   display: flex;
   align-items: flex-end;
@@ -626,8 +679,97 @@ code {
 .model-route-enable-col {
   width: 46px;
 }
+/* 测试、编辑、删除三个按钮；立即恢复挪到异常提示后面。 */
 .model-route-actions-col {
-  width: 80px;
+  width: 96px;
+}
+
+/* 「参与调度」「后备」分组行：组名说清怎么用，模型行里就不再挂徽标。 */
+.model-route-group-row td {
+  padding: 10px 10px 6px;
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.model-route-group-row strong {
+  margin-right: 8px;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.model-route-group-row span {
+  color: var(--muted);
+}
+
+/* 点和模型名不拆开；放不下时提供商名换到下一行。 */
+.model-route-line {
+  display: grid;
+  grid-template-columns: 7px minmax(0, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+}
+
+.model-route-line .model-route-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-route-line .model-route-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.model-route-alert {
+  display: block;
+  margin: 3px 0 0 15px;
+  font-size: 11.5px;
+}
+
+.model-route-alert.warn { color: var(--warn); }
+.model-route-alert.err { color: var(--err); }
+
+.model-route-recover {
+  margin-left: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.model-role-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* 超时和看图方式收成一行摘要，点开再改。 */
+.model-role-extras {
+  margin-top: 14px;
+  font-size: 12.5px;
+}
+
+.model-role-extras > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.model-role-extras > summary span {
+  margin-left: 10px;
+  color: var(--accent);
+}
+
+.model-role-extras[open] > summary {
+  margin-bottom: 10px;
 }
 .model-route-order-cell {
   color: var(--muted);
@@ -777,9 +919,19 @@ code {
     display: grid;
     grid-template-columns: 28px minmax(0, 1fr) auto auto;
     align-items: center;
-    padding: 12px;
-    gap: 10px 8px;
+    padding: 10px 12px;
+    gap: 8px;
     border-bottom: 1px solid var(--border);
+  }
+  .model-route-table .model-route-group-row,
+  .model-route-table .model-route-group-row td {
+    display: block;
+  }
+  .model-route-table .model-route-group-row td {
+    padding: 8px 12px 6px;
+  }
+  .model-route-alert {
+    margin-left: 0;
   }
   .model-route-table tbody tr:last-child {
     border-bottom: 0;
@@ -797,7 +949,9 @@ code {
     padding-left: 8px;
   }
   .model-route-identity {
-    grid-column: 2 / -1;
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
   }
   .model-route-kind-cell {
     grid-column: 2;
@@ -805,7 +959,7 @@ code {
   }
   .model-route-weight-cell {
     grid-column: 2 / -1;
-    grid-row: 3;
+    grid-row: 2;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -817,14 +971,14 @@ code {
   }
   .model-route-enable-cell {
     grid-column: 3;
-    grid-row: 2;
+    grid-row: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
   }
   .model-route-actions {
     grid-column: 4;
-    grid-row: 2;
+    grid-row: 1;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -856,9 +1010,9 @@ code {
   .model-purpose-tab {
     flex-shrink: 0;
     width: auto;
-    padding: 9px 11px;
+    padding: 7px 10px;
   }
-  .model-purpose-tab small, .model-purpose-caption, .model-purpose-foot, .model-purpose-tab > span > svg:last-child:not(:first-child) {
+  .model-purpose-caption, .model-purpose-foot {
     display: none;
   }
 }
@@ -6438,6 +6592,19 @@ a.nav-action {
     justify-content: flex-end;
     flex-wrap: wrap;
   }
+
+  /* 搜索提供商行前面还有图标，整行竖排会把图标和名称拆成两行；
+     改成图标、名称同一行，按钮照样放到下一行右对齐。 */
+  .provider-view .search-provider-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .provider-view .search-provider-row .row-actions {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -7009,8 +7176,8 @@ a.nav-action {
 .prompt-yaml-error { margin: 0; color: var(--err); font-size: 13px; white-space: pre-wrap; }
 /* Search sources share the model configuration controls and spacing. */
 .provider-tabs { margin-bottom: 20px; width: fit-content; }
-.search-provider-manager .card-header { justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-.search-provider-manager .card-header h2 { margin-bottom: 4px; }
+:is(.search-provider-manager, .provider-list-card) .card-header { justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+:is(.search-provider-manager, .provider-list-card) .card-header h2 { margin-bottom: 4px; }
 .search-provider-row .row-main { min-width: 0; }
 .search-provider-row .row-sub { overflow-wrap: anywhere; }
 .search-provider-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; border-radius: 10px; color: var(--accent); background: var(--accent-soft); }
@@ -7021,36 +7188,52 @@ a.nav-action {
 .search-provider-test-input .btn { flex-shrink: 0; }
 .search-provider-test-result { padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px; }
 .search-provider-test-result pre { margin: 10px 0 0; max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
-.search-provider-toggle { flex: 0 0 15px; width: 15px; height: 15px; margin: 0; accent-color: var(--err); cursor: pointer; }
 .search-provider-row.disabled .search-provider-icon { color: var(--muted); background: var(--surface-2); }
 .search-provider-row.disabled .row-title { color: var(--muted); }
-.search-provider-row-test { margin-top: 4px; overflow-wrap: anywhere; }
 .search-template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
 .search-template { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .search-template:hover, .search-template:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+/* 联网搜索：开关、优先级、管理入口一行；来源按浏览器 / API 分组、一行一个，和模型路由同一套样子。 */
 .search-routing-panel { container-type: inline-size; }
-.search-routing-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.search-routing-body { display: grid; gap: 14px; margin-top: 16px; }
+.search-routing-top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.search-routing-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.search-priority-select { width: auto; min-width: 128px; }
+.search-routing-body { display: grid; gap: 10px; margin-top: 12px; }
 .search-routing-body.muted { opacity: 0.6; }
-.search-priority-select { max-width: 280px; }
-.search-route-list { display: grid; gap: 6px; }
-.search-route-group { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.search-route-group:first-child { margin-top: 0; }
-.search-route-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.search-route-row.is-warning { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
+.search-route-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.search-route-group { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px 6px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 12px; }
+.search-route-row + .search-route-group { border-top: 1px solid var(--border); }
+.search-route-group strong { font-weight: 600; color: var(--text); }
+.search-route-group span { color: var(--muted); }
+.search-route-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface); font-size: 13px; }
+.search-route-row .search-route-name { flex: 1; min-width: 0; }
+.search-route-row.is-off .search-route-name, .search-route-row.is-off .model-health-dot { opacity: 0.45; }
+.search-route-actions { display: inline-flex; align-items: center; gap: 2px; }
+.search-route-row + .search-route-row { border-top: 1px solid var(--border); }
 .search-route-label { min-width: 40px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .search-route-label:disabled { cursor: default; }
 .search-route-row.is-dragging { opacity: 0.45; }
 .search-route-row.is-drop-target { box-shadow: inset 0 2px var(--accent); }
-.search-route-kind { white-space: nowrap; }
-.search-route-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.search-route-footer .hint { flex: 1; min-width: 200px; font-size: 12px; color: var(--muted); }
-.search-routing-options { margin-top: 24px; }
-.search-routing-options .form-grid { margin-top: 16px; }
+.search-route-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-route-name small { margin-left: 8px; color: var(--muted); font-size: 11.5px; }
+.search-route-warn { color: var(--warn); font-size: 11.5px; white-space: nowrap; }
+.search-route-add { width: auto; min-width: 96px; }
+.search-routing-options { font-size: 12.5px; }
+.search-routing-options > summary { cursor: pointer; color: var(--text-secondary); }
+.search-routing-options > summary span { margin-left: 10px; color: var(--accent); }
+.search-routing-options[open] > summary { margin-bottom: 12px; }
+.model-health-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.model-health-dot.ok { background: var(--ok); }
+.model-health-dot.warn { background: var(--warn); }
+.model-health-dot.err { background: var(--err); }
+
 @container (max-width: 520px) {
-  .search-route-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .search-route-kind { display: none; }
-  .search-routing-panel .model-purpose-heading { flex-wrap: wrap; gap: 12px; }
   .search-routing-options .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
 

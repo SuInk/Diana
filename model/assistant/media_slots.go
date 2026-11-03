@@ -34,6 +34,8 @@ const (
 	mediaParamPrompt       = "prompt"
 	mediaParamSize         = "size"
 	mediaParamSeconds      = "seconds"
+	mediaParamRatio        = "ratio"
+	mediaParamResolution   = "resolution"
 	mediaParamTimeout      = "timeout_seconds"
 	mediaParamPollInterval = "poll_interval_seconds"
 )
@@ -188,7 +190,7 @@ func newMediaSlotRoute(profile llm.Profile, model, slot string, params map[strin
 	for key, value := range params {
 		merged[key] = value
 	}
-	if service, configured := profile.Config.SpeechParams[slot]; configured && (slot == mediaSlotTTS || slot == mediaSlotSTT) {
+	if service, configured := profile.Config.SpeechParams[slot]; configured && (slot == mediaSlotTTS || slot == mediaSlotSTT || slot == mediaSlotVideo) {
 		// 提供商是完整的服务配置，不能泄漏主路由或旧插槽的协议、音色到后备。
 		clear(merged)
 		for key, value := range service {
@@ -329,10 +331,24 @@ func (route mediaSlotRoute) videoJobTimeout() time.Duration {
 	return defaultVideoSlotTimeout
 }
 
+// videoGenerator 按路由参数里的「接口」建客户端。接口格式、自定义模板都是提供商的
+// 视频服务参数，每个后备用自己的；旧配置写在插槽参数里的照旧生效。
+func (route mediaSlotRoute) videoGenerator() (llm.VideoGenerator, error) {
+	api := llm.VideoAPI(strings.ToLower(route.param(mediaParamAPI)))
+	if api != llm.VideoAPICustom {
+		return llm.NewVideoGenerator(route.Config, api, 0)
+	}
+	spec, err := llm.VideoTaskSpecFromParams(route.Params)
+	if err != nil {
+		return nil, err
+	}
+	return llm.NewVideoTaskGenerator(route.Config, spec, 0)
+}
+
 // generateVideo 用视频生成插槽跑完一个异步任务，返回成品和实际用到的路由。
 func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateRequest, onProgress func(llm.VideoJob)) (*llm.VideoResult, mediaSlotRoute, error) {
 	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotVideo, true), "视频生成", func(route mediaSlotRoute) (*llm.VideoResult, error) {
-		generator, err := llm.NewVideoGenerator(route.Config, llm.VideoAPI(route.param(mediaParamAPI)), 0)
+		generator, err := route.videoGenerator()
 		if err != nil {
 			return nil, err
 		}
@@ -340,7 +356,11 @@ func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateReques
 		request.Model = route.Model
 		if request.Size == "" {
 			request.Size = route.param(mediaParamSize)
+			// 模型自己点了尺寸就按它推比例；插槽的比例只是默认值。
+			request.Ratio = route.param(mediaParamRatio)
 		}
+		// 分辨率档位是厂商的固定写法（MiniMax 的 768P），从尺寸推不出来，插槽填了就用。
+		request.Resolution = route.param(mediaParamResolution)
 		if request.Seconds == 0 {
 			request.Seconds = route.paramInt(mediaParamSeconds)
 		}

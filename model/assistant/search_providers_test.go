@@ -99,6 +99,30 @@ func TestSearchProviderValidationAndClearKey(t *testing.T) {
 	}
 }
 
+func TestReorderSearchProviders(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	config, _ := manager.SearchConfiguration("")
+	ids := make([]string, 0, len(config.Providers))
+	for _, provider := range config.Providers {
+		ids = append(ids, provider.ID)
+	}
+	slices.Reverse(ids)
+	if err := manager.ReorderSearchProviders(ids); err != nil {
+		t.Fatal(err)
+	}
+	config, _ = manager.SearchConfiguration("")
+	for i, provider := range config.Providers {
+		if provider.ID != ids[i] {
+			t.Fatalf("order = %v, want %v", config.Providers, ids)
+		}
+	}
+	for _, bad := range [][]string{ids[1:], append([]string{ids[0]}, ids[:len(ids)-1]...), append(append([]string{}, ids[1:]...), "missing")} {
+		if err := manager.ReorderSearchProviders(bad); err == nil {
+			t.Fatalf("stale order %v accepted", bad)
+		}
+	}
+}
+
 func TestGlobalSearchRoutingIgnoresLegacyRobotAndFallsBack(t *testing.T) {
 	var called []string
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -517,13 +541,43 @@ func TestRobotSearchOverrideRoundTripsAndValidates(t *testing.T) {
 	}
 }
 
+// 机器人在自己的来源列表里关掉某个来源：留在列表里，搜索时跳过；全关掉不允许。
+func TestWebSearchAssignmentDisabledProvidersSkipRoute(t *testing.T) {
+	value := &WebSearchAssignment{ProviderIDs: []string{"engine-google", "exa", "tavily"}, DisabledProviderIDs: []string{"exa"}}
+	if err := value.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	if err := json.Unmarshal([]byte(value.settings()[searchProviderOrderSetting].(string)), &order); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(order, []string{"engine-google", "tavily"}) {
+		t.Fatalf("order=%v", order)
+	}
+	if restored := normalizeWebSearchAssignment(value); !reflect.DeepEqual(restored.DisabledProviderIDs, []string{"exa"}) {
+		t.Fatalf("normalized=%+v", restored)
+	}
+	allOff := &WebSearchAssignment{ProviderIDs: []string{"exa"}, DisabledProviderIDs: []string{"exa"}}
+	if err := allOff.Validate(); err == nil {
+		t.Fatal("enabled search with every source turned off accepted")
+	}
+	allOff.Disabled = true
+	if err := allOff.Validate(); err != nil {
+		t.Fatalf("search turned off entirely should keep the list: %v", err)
+	}
+	stray := &WebSearchAssignment{ProviderIDs: []string{"exa"}, DisabledProviderIDs: []string{"tavily"}}
+	if err := stray.Validate(); err == nil {
+		t.Fatal("disabled source outside the list accepted")
+	}
+}
+
 func TestFreshInstallSearchDefaultsToBrowsersThenExaAndSurvivesFirstSave(t *testing.T) {
 	manager := NewDefaultPluginManager()
 	config, err := manager.SearchConfiguration("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.DefaultAssignment.Disabled || !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != searchSourcePriorityBrowser {
+	if config.DefaultAssignment.Disabled || !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != "" {
 		t.Fatalf("fresh default=%+v", config.DefaultAssignment)
 	}
 	for _, provider := range config.Providers {
@@ -555,7 +609,7 @@ func TestFreshInstallSearchDefaultsToBrowsersThenExaAndSurvivesFirstSave(t *test
 	restored := NewDefaultPluginManager()
 	restored.Restore(manager.Snapshot())
 	config, _ = restored.SearchConfiguration("")
-	if !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != searchSourcePriorityBrowser {
+	if !reflect.DeepEqual(config.DefaultAssignment.ProviderIDs, freshSearchProviderIDs) || config.DefaultAssignment.SourcePriority != "" {
 		t.Fatalf("restored default=%+v", config.DefaultAssignment)
 	}
 	for _, provider := range config.Providers {

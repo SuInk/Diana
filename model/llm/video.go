@@ -21,9 +21,9 @@ import (
 	"github.com/google/uuid"
 )
 
-// VideoAPI 是视频生成接口的形态。各家视频服务的任务接口差别很大（Runway、Luma、
-// Kling 的字段和状态名都不一样），所以不像语音那样按地址猜，由插槽参数显式指定；
-// 新接一家就是实现一个 VideoGenerator，再在 NewVideoGenerator 里加一个分支。
+// VideoAPI 是视频生成接口的形态，由插槽参数显式指定，不像语音那样按地址猜。
+// OpenAI Sora 提交用 multipart，单独实现；其余厂商都是 JSON 任务接口，写成
+// video_presets.go 里的描述交给通用执行器，新接一家只加一条数据。
 type VideoAPI string
 
 const (
@@ -60,6 +60,10 @@ type VideoGenerateRequest struct {
 	Seconds int
 	// Size 形如 1280x720，为空时由服务端决定。
 	Size string
+	// Ratio、Resolution 是按厂商写法给的画面比例（16:9）和分辨率档位（720p），
+	// 为空时从 Size 推。
+	Ratio      string
+	Resolution string
 }
 
 // VideoJob 是一个异步视频任务的当前状态。
@@ -104,11 +108,16 @@ type VideoPollOptions struct {
 }
 
 // NewVideoGenerator 按接口形态创建视频任务客户端。requestTimeout 是单次 HTTP 请求的上限。
+// 「自定义」格式要读插槽参数，用 NewVideoTaskGenerator 和 VideoTaskSpecFromParams。
 func NewVideoGenerator(cfg ProviderConfig, api VideoAPI, requestTimeout time.Duration, opts ...ClientOption) (VideoGenerator, error) {
 	if requestTimeout <= 0 {
 		requestTimeout = defaultVideoRequestTimeout
 	}
-	switch VideoAPI(strings.ToLower(strings.TrimSpace(string(api)))) {
+	api = VideoAPI(strings.ToLower(strings.TrimSpace(string(api))))
+	if spec, ok := VideoTaskPreset(api); ok {
+		return NewVideoTaskGenerator(cfg, spec, requestTimeout, opts...)
+	}
+	switch api {
 	case "", VideoAPIOpenAI:
 		client, err := newMediaHTTP(cfg, defaultOpenAIMediaBaseURL, opts)
 		if err != nil {

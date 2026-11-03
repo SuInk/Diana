@@ -135,7 +135,10 @@ let llmConfig: LLMConfig = {
     { id: "llm-chat", name: "主对话模型", group: "default", description: "群聊、私聊与 Agent 主回复", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-6-sol", models: modelCatalog, max_output_tokens: 4096, effective_max_output_tokens: 4096, max_output_tokens_source: "user", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "chat", role_label: "对话", model: "gpt-5.6-terra" }] },
     { id: "llm-vision", name: "视觉理解", group: "vision", description: "图片理解与 OCR", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-6-sol", models: modelCatalog, max_output_tokens_source: "provider", effective_context_window_tokens: 128_000, effective_max_context_tokens: 128_000, context_window_source: "fallback", catalog_context_window_tokens: 1_050_000 },
     { id: "llm-intent", name: "主动回复判断", group: "intent", description: "群聊语义路由和机器人识别", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-5.6-terra", models: modelCatalog, effective_context_window_tokens: 400_000, effective_max_context_tokens: 400_000, context_window_source: "user", catalog_context_window_tokens: 400_000 },
-    { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2.5-sunburst", image_model: "gpt-image-2.5-sunburst", models: modelCatalog }
+    { id: "llm-image", name: "图片生成", group: "image", description: "独立图片生成测试链路", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "sk-pr…8X2a", base_url: "https://api.openai.com/v1", model: "gpt-image-2.5-sunburst", image_model: "gpt-image-2.5-sunburst", models: modelCatalog },
+    { id: "llm-voice", name: "MiniMax 语音", group: "speech", description: "群聊语音消息", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "eyJh…Qx7c", base_url: "https://api.minimaxi.com/v1", model: "speech-2.6-hd", models: [{ id: "speech-2.6-hd", output_modalities: ["audio"] }], speech_params: { tts: { voice: "female-shaonv", format: "mp3", speed: "1.0" } }, role_bindings: [{ bot_id: "bot-onebot", bot_name: "Diana OneBot（演示）", role: "tts", role_label: "语音合成", model: "speech-2.6-hd" }] },
+    { id: "llm-kling", name: "可灵", group: "video", description: "", provider: "openai_compatible", api_style: "responses", api_key_configured: true, api_key_preview: "ak-d…7Fq2", base_url: "", model: "kling-v2-6", models: [{ id: "kling-v2-6", output_modalities: ["video"] }], speech_params: { video: { api: "kling", resolution: "720p" } } },
+    { id: "llm-whisper", name: "硅基流动转写", group: "speech", description: "", provider: "openai_compatible", api_style: "chat_completions", api_key_configured: true, api_key_preview: "sk-si…a91F", base_url: "https://api.siliconflow.cn/v1", model: "FunAudioLLM/SenseVoiceSmall", models: [{ id: "FunAudioLLM/SenseVoiceSmall", input_modalities: ["audio"] }], speech_params: { stt: { api: "openai", language: "zh" } } }
   ]
 };
 
@@ -159,8 +162,10 @@ const oneBotProfile: BotProfileConfig = {
   cross_group_memory_enabled: true, world_book_enabled: true, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", subtask_max_tasks: 8, subtask_max_concurrency: 3,
   max_bot_concurrency: 4, request_timeout_ms: 60_000, model_request_timeout_ms: 0,
   model_roles: {
-    chat: { profile_id: "llm-chat", model: "gpt-6-sol" }, vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
-    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" }
+    chat: { profile_id: "llm-chat", model: "gpt-6-sol", fallbacks: [{ profile_id: "llm-vision", model: "gpt-6-sol" }, { profile_id: "llm-intent", model: "gpt-5.6-terra", standby: true }] },
+    vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
+    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" },
+    tts: { profile_id: "llm-voice", model: "speech-2.6-hd" }
   }
 };
 
@@ -181,7 +186,7 @@ let demoSearchProviders: SearchProvider[] = [
 const demoSearchKeys: Record<string, string> = { tavily: 'demo-secret' };
 let demoSearchAssignment: SearchConfiguration['default_assignment'] | undefined;
 function demoSearchConfiguration(): SearchConfiguration {
-  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: [...demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), 'exa'], source_priority: 'browser', max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
+  return { providers: demoSearchProviders.map(provider => ({ ...provider, api_key_configured: !!demoSearchKeys[provider.id] })), default_assignment: demoSearchAssignment ?? { provider_ids: [...demoSearchProviders.filter(provider => provider.id.startsWith('engine-') && !provider.disabled).map(provider => provider.id), 'exa'], max_results: 5, provider_timeout_seconds: 25, total_timeout_seconds: 90, source_recall: true, reply_link_policy: 'on_request' } };
 }
 
 
@@ -1310,6 +1315,12 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json(demoSearchConfiguration());
   }
+  if (path === '/api/assistant/search-providers/order' && method === 'PUT') {
+    const ids = (body.ids as string[] | undefined) ?? [];
+    if (ids.length !== demoSearchProviders.length || ids.some(id => !demoSearchProviders.some(provider => provider.id === id))) return json({ error: '搜索提供商列表已变化，请刷新后再排序' }, 400);
+    demoSearchProviders = ids.map(id => demoSearchProviders.find(provider => provider.id === id)!);
+    return json(demoSearchConfiguration());
+  }
   if (path === '/api/assistant/search-providers/export') return json({ providers: demoSearchProviders.map(provider => ({ ...provider, api_key: demoSearchKeys[provider.id] })) });
   if (path === '/api/assistant/search-providers/import' && method === 'POST') {
     for (const item of (body.providers as (SearchProvider & { api_key?: string })[] | undefined) ?? []) {
@@ -1623,7 +1634,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/model-health" && method === "GET") {
     return json({
       checked_at: new Date().toISOString(),
-      candidates: [],
+      // 一条在冷却的候选，好让模型分配一览里能看到黄点。
+      candidates: [{ profile_id: "llm-vision", model: "gpt-6-sol", failure_count: 3, last_failure_at: before(4), cooldown_until: new Date(Date.now() + 6 * 60_000).toISOString() }],
       calls: [
         { profile_id: "llm-chat", model: "gpt-6-sol", at: before(2), ok: true },
         { profile_id: "llm-vision", model: "gpt-6-sol", at: before(47), ok: true },

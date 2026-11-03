@@ -19,7 +19,7 @@
       <p class="hint">模型会以这个浏览器里登录的账号身份操作，只接专门给机器人用的实例，别接日常那个。</p>
       <p v-if="testResult" :class="testResult.connected ? 'hint' : 'error-text'" role="status">{{ testResult.connected ? `连上了${testResult.browser ? '：' + testResult.browser : ''}` : `连不上：${testResult.error}` }}</p>
       <div class="view-actions">
-        <button class="btn" type="button" :disabled="busy" @click="test"><PlugZap :size="15" />测试连接</button>
+        <button class="btn" type="button" :disabled="busy" @click="test"><Play :size="15" />测试连接</button>
         <button class="btn primary" type="submit" :disabled="busy"><Save :size="15" />保存</button>
       </div>
     </form>
@@ -28,7 +28,7 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { PlugZap, Save } from '@lucide/vue';
+import { Play, Save } from '@lucide/vue';
 import { getAgentBrowser, saveAgentBrowser, testAgentBrowser } from '../api';
 import Modal from './Modal.vue';
 import { toastError, toastSuccess } from '../lib/toast';

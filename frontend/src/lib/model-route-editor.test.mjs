@@ -38,7 +38,9 @@ test("model route table exposes live cooling and degraded health states", () => 
   assert.match(source, /冷却中/);
   assert.match(source, /已降权/);
   assert.match(source, /10_000/);
-  assert.match(source, /model-health-badge/);
+  // 健康状态改成行首的点，只在冷却、失败时写字。
+  assert.match(source, /class="model-health-dot" :class="modelRouteHealth\(role.key, item.route\).className"/);
+  assert.match(source, /class="model-route-alert"/);
 });
 
 test("model recovery rules are editable and unhealthy routes can be restored immediately", () => {
@@ -266,7 +268,8 @@ test("unsupported media has no smart option and smart retains explicit standby",
 });
 
 test("model route touch dragging retains both handle binding and row hit targets", () => {
-  const row = source.match(/<tr\s+v-for="item in filteredModelRoutes\(role.key\)"[\s\S]*?<\/tr>/)?.[0];
+  assert.match(source, /<template v-for="item in groupedModelRoutes\(role.key\)"/);
+  const row = source.match(/<tr\s+class="model-route-list-row"[\s\S]*?<\/tr>/)?.[0];
   assert.ok(row);
   assert.ok(row.includes(':data-route-slot="`${role.key}:${item.index}`"'));
   assert.match(row, /@pointerdown="\(event\) => onRouteHandlePointerDown\(role.key, item.index, event\)"/);

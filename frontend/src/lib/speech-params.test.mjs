@@ -30,3 +30,19 @@ test("changing request templates preserves voice but removes previous request fi
   assert.equal(original.path, "old");
   assert.equal(updateSpeechParam(next, "voice", "  ").voice, undefined);
 });
+
+test("video slot shows only the fields the selected vendor needs", () => {
+  const keys = api => mediaParamFields("video", api).map(field => field.key);
+  assert.deepEqual(keys(""), ["api", "size", "seconds", "timeout_seconds", "poll_interval_seconds"]);
+  assert.ok(keys("kling").includes("ratio") && keys("kling").includes("resolution"));
+  assert.ok(!keys("kling").includes("submit_body"));
+  assert.ok(!keys("runway").includes("ratio"));
+  for (const key of ["template", "auth", "submit_path", "submit_body", "id_path", "status_path", "status_field", "status_map", "video_url_path", "download_auth"]) assert.ok(keys("custom").includes(key), key);
+  assert.match(mediaParamFields("video", "kling")[0].hint, /AccessKey:SecretKey/);
+  // 密钥只在提供商配置里，插槽参数不出现任何 Key 字段。
+  assert.ok(keys("custom").every(key => !/secret|api_key|access/.test(key)));
+  assert.equal(updateSpeechParam({}, "template", "vidu").template, "vidu");
+  // 提供商页的视频服务参数用同一套字段，不按地址猜接口。
+  assert.deepEqual(speechServiceFields("video", { api: "kling" }, "https://api.minimax.io").map(field => field.key), keys("kling"));
+  assert.deepEqual(speechServiceFields("video", {}, "https://api.minimax.io").map(field => field.key), keys(""));
+});

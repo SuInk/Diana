@@ -174,11 +174,7 @@
             长期记忆生成时顺带判断，攒够 3 次、AI 率到 80% 才算机器人。算作机器人的人不作为学说话的参照，不影响回不回复。
           </p>
           <div class="cluster" style="gap: 8px; align-items: center">
-            <select v-model="aiOverride" class="input" style="width: auto" :disabled="savingAI" aria-label="真人还是机器人" @change="saveAIOverride">
-              <option value="">自动判断</option>
-              <option value="human">真人</option>
-              <option value="bot">机器人</option>
-            </select>
+            <AppSelect :model-value="aiOverride" :options="aiOverrideOptions" :disabled="savingAI" aria-label="真人还是机器人" @update:model-value="(value) => { aiOverride = value as UserAIOverride; void saveAIOverride(); }" />
             <span class="badge">{{ detail.profile.ai?.likely ? "当前算作机器人" : "当前算作真人" }}</span>
             <span v-if="detail.profile.ai?.observations" class="muted" style="font-size: 12.5px">
               AI 率 {{ Math.round((detail.profile.ai.likelihood ?? 0) * 100) }}% · 判断 {{ detail.profile.ai.observations }} 次
@@ -400,6 +396,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
+import AppSelect from "../components/AppSelect.vue";
 import { botScope } from "../lib/bot-scope";
 import { navigate, viewQuery } from "../router";
 import { ChevronDown, ChevronRight, ChevronUp, MessageSquareQuote, Pencil, RefreshCw, Save, Trash2, Unlink } from "@lucide/vue";
@@ -553,6 +550,7 @@ async function toggleMemorySource(memory: UserStructuredMemory): Promise<void> {
 }
 
 const aiOverride = ref<UserAIOverride>("");
+const aiOverrideOptions = [{ value: "", label: "自动判断" }, { value: "human", label: "真人" }, { value: "bot", label: "机器人" }];
 const savingAI = ref(false);
 watch(() => detail.value?.profile.ai?.override ?? "", (value) => { aiOverride.value = value; }, { immediate: true });
 
