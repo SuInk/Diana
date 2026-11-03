@@ -165,14 +165,6 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if resolverEnabled || fileParserEnabled {
 			extraTools = append(extraTools, &dianaPluginMediaTool{runtime: r, event: event})
 		}
-		// VRChat 联动默认关闭；开着时查状态人人可用，操控类工具默认只给主人。
-		if pluginValue, settings, enabled := r.pluginWithSettingsForEvent(vrchatPluginID, event); enabled {
-			if plugin, ok := pluginValue.(*VRChatPlugin); ok {
-				tools, denied := newDianaVRChatTools(plugin, settings, relationship.Owner, r.eventProfileID(event))
-				extraTools = append(extraTools, tools...)
-				deniedTools = append(deniedTools, denied...)
-			}
-		}
 		// 只有能上传文件的平台才挂：其他平台模型看得到也只能失败。
 		if platform := NormalizePlatformID(event.Platform); platform == PlatformTelegram || IsOneBotPlatform(platform) {
 			if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
