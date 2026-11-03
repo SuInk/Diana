@@ -6438,6 +6438,19 @@ a.nav-action {
     justify-content: flex-end;
     flex-wrap: wrap;
   }
+
+  /* 搜索提供商行前面还有勾选框和图标，整行竖排会把它们各挤成一行；
+     改成勾选框、图标、名称同一行，按钮照样放到下一行右对齐。 */
+  .provider-view .search-provider-row {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    align-items: center;
+    column-gap: 12px;
+  }
+
+  .provider-view .search-provider-row .row-actions {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
