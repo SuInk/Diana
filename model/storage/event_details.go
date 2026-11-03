@@ -942,6 +942,8 @@ type InboundEventPurposeUsage struct {
 	Calls             int64  `json:"calls"`
 	InputTokens       int64  `json:"input_tokens"`
 	CachedInputTokens int64  `json:"cached_input_tokens"`
+	// TotalTokens 让记录页写明 token 花在哪：没回复的消息也会因为后台识图之类的调用记账。
+	TotalTokens int64 `json:"total_tokens"`
 }
 
 // cacheRateExcludedPurposes 不计入缓存命中率的用途：发送前审核和回复触发判断。它们
@@ -1008,10 +1010,11 @@ func (t *inboundEventTokenTotals) addPurpose(purpose string, call inboundEventTo
 			t.purposes[index].Calls++
 			t.purposes[index].InputTokens += call.InputTokens
 			t.purposes[index].CachedInputTokens += call.CachedInputTokens
+			t.purposes[index].TotalTokens += call.TotalTokens
 			return
 		}
 	}
-	t.purposes = append(t.purposes, InboundEventPurposeUsage{Purpose: purpose, Calls: 1, InputTokens: call.InputTokens, CachedInputTokens: call.CachedInputTokens})
+	t.purposes = append(t.purposes, InboundEventPurposeUsage{Purpose: purpose, Calls: 1, InputTokens: call.InputTokens, CachedInputTokens: call.CachedInputTokens, TotalTokens: call.TotalTokens})
 }
 
 // avgTTFTMS 是有样本的那些调用的均值。没有样本时返回 0。

@@ -187,6 +187,26 @@ export function groupCacheByPurpose(entries: readonly { purpose: string; calls: 
   return order.map((group) => groups.get(group)).filter((usage): usage is CachePurposeGroupUsage => !!usage && usage.input_tokens > 0);
 }
 
+export interface PurposeTokenUsage {
+  label: string;
+  calls: number;
+  total_tokens: number;
+}
+
+/** 一条消息的 token 按用途列出来，多的在前。没回复的消息也可能有后台识图之类的调用，
+ * 不写明用途，看着像是判断回不回花的。同名的用途（图片描述有两个用途名）合成一项。 */
+export function eventPurposeTokens(entries: readonly { purpose: string; calls: number; total_tokens?: number }[]): PurposeTokenUsage[] {
+  const groups = new Map<string, PurposeTokenUsage>();
+  for (const entry of entries) {
+    const label = usagePurposeLabel(entry.purpose);
+    const usage = groups.get(label) ?? { label, calls: 0, total_tokens: 0 };
+    usage.calls += entry.calls;
+    usage.total_tokens += entry.total_tokens ?? 0;
+    groups.set(label, usage);
+  }
+  return [...groups.values()].sort((a, b) => b.total_tokens - a.total_tokens || b.calls - a.calls);
+}
+
 export interface CacheSplit {
   cached_input_tokens: number;
   input_tokens: number;
