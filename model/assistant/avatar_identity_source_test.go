@@ -89,3 +89,33 @@ func TestDefaultAvatarIdentitySourcesUsesMentionsOnly(t *testing.T) {
 		t.Fatalf("private message produced default sources: %#v", got)
 	}
 }
+
+// 号码在上一条私聊里：主人先发「54321 给这个人也做那款头像」，下一条才贴提示词。
+// 同一个人近期亲手写过的号码要能拉头像；机器人自己说过的、太久以前的、别人的不算。
+func TestPrivateAvatarAcceptsAccountFromOwnRecentMessage(t *testing.T) {
+	r := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
+	text := func(value string) []MessageSegment {
+		return []MessageSegment{{Type: "text", Data: map[string]string{"text": value}}}
+	}
+	base := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindPrivate, UserID: "10001"}
+	earlier := base
+	earlier.Time, earlier.MessageID, earlier.Segments = 1000, "m1", text("54321 给这个人也生成那款头像")
+	stale := base
+	stale.Time, stale.MessageID, stale.Segments = 1000-privateAvatarAccountWindow-1, "m0", text("65432 以前提过的号")
+	botSaid := base
+	botSaid.Time, botSaid.MessageID, botSaid.Outbound, botSaid.Segments = 1001, "m2", true, text("要不也给 76543 做一张")
+	for _, item := range []MessageEvent{stale, earlier, botSaid} {
+		r.remember(item)
+	}
+	current := base
+	current.Time, current.MessageID, current.Segments = 1100, "m3", text("提示词在这里：粗糙涂鸦风")
+
+	_, failed := r.avatarIdentitySources(context.Background(), current, []string{
+		avatarSourceMemberPrefix + "54321",
+		avatarSourceMemberPrefix + "65432",
+		avatarSourceMemberPrefix + "76543",
+	})
+	if len(failed) != 2 || failed[0] != avatarSourceMemberPrefix+"65432" || failed[1] != avatarSourceMemberPrefix+"76543" {
+		t.Fatalf("failed=%#v", failed)
+	}
+}

@@ -28,6 +28,9 @@ const (
 	avatarSourceBot          = "bot_avatar"
 	avatarSourceSender       = "sender_avatar"
 	avatarSourceMemberPrefix = "member_avatar:"
+
+	// privateAvatarAccountWindow 是私聊里往前认号码的时长，单位秒。
+	privateAvatarAccountWindow = 30 * 60
 )
 
 // avatarIdentityImageURLs 把模型点名的来源换成图片地址。
@@ -184,6 +187,21 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	if event.Kind == EventKindPrivate {
 		for userID := range explicitAccountIDs(event.Segments) {
 			reachable[userID] = true
+		}
+		// 号码常常是上一条发的：生产上主人先发「741083048 给这个人也生成那款头像」，
+		// 下一条才贴提示词，这一轮的消息里没有号码，头像就一直拉不到。同一个人近期
+		// 在这个私聊里亲手写过的号码同样算数；机器人自己的话不算。
+		history, _ := r.sessionContextHistory(event)
+		for _, item := range history {
+			if item.Outbound || item.Kind != EventKindPrivate || strings.TrimSpace(item.UserID) != strings.TrimSpace(event.UserID) {
+				continue
+			}
+			if event.Time > 0 && (item.Time <= 0 || event.Time-item.Time > privateAvatarAccountWindow) {
+				continue
+			}
+			for userID := range explicitAccountIDs(item.Segments) {
+				reachable[userID] = true
+			}
 		}
 	}
 	if event.Quoted != nil {

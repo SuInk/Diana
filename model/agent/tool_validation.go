@@ -75,7 +75,14 @@ func validateToolInput(schema map[string]any, input map[string]any) error {
 				}
 				return
 			}
-			reasons = append(reasons, fmt.Sprintf("input%s: 不符合 %s 约束（参照 tool_search 返回的 inputSchema）", e.InstanceLocation, e.KeywordLocation))
+			// 缺了哪个字段、多了哪个字段要说出来：只回「不符合 /required」时，线上模型
+			// 把 tools_execute 的 name 塞进 input 里连错三次也没改过来。这两类消息只含
+			// 字段名，不含取值。
+			detail := ""
+			if strings.HasSuffix(e.KeywordLocation, "/required") || strings.HasSuffix(e.KeywordLocation, "/additionalProperties") {
+				detail = "（" + e.Message + "）"
+			}
+			reasons = append(reasons, fmt.Sprintf("input%s: 不符合 %s 约束%s（参照 tool_search 返回的 inputSchema）", e.InstanceLocation, e.KeywordLocation, detail))
 		}
 		visit(validation)
 		return fmt.Errorf("%s", strings.Join(reasons, "; "))

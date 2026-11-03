@@ -752,3 +752,44 @@ func TestHistorySearchNarrowsWindowAfterTimeout(t *testing.T) {
 		t.Fatalf("raw = %s", raw)
 	}
 }
+
+// 主人私聊说「群里那款」时模型只翻了私聊就回「今天还没看到」。私聊范围的结果要提醒它
+// 群消息得换 scope=all_groups；没有跨群权限的人不提，免得引着去撞权限错误。
+func TestPrivateHistoryResultPointsToGroupScope(t *testing.T) {
+	run := func(userID string) dianaChatHistoryResult {
+		t.Helper()
+		runtime := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime.SetMessageHistoryStore(&capturingHistorySearchStore{})
+		event := MessageEvent{Kind: EventKindPrivate, Time: 200, UserID: userID, ContextNamespace: "bot-a"}
+		raw, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{"operation": "recent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaChatHistoryResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	if result := run("owner"); !strings.Contains(result.Message, "scope=all_groups") {
+		t.Fatalf("owner private result should point to group scope: %q", result.Message)
+	}
+	if result := run("stranger"); strings.Contains(result.Message, "scope=all_groups") {
+		t.Fatalf("stranger should not be pointed at cross-group search: %q", result.Message)
+	}
+}
+
+// 群成员跨群检索只能读自己也在的群。SnowLuma 查群外账号回占位资料不报错，
+// 以前只比对 user_id 就放行，群里任何人都能把别的群翻出来。
+func TestCrossGroupReadGuardRejectsPlaceholderMember(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"joined|asker": true}, placeholder: true}
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "current", UserID: "asker", Time: 200}
+	guard := newCrossGroupReadGuard(context.Background(), newDianaChatHistoryTool(runtime, event))
+	if !guard.allows(context.Background(), "joined") {
+		t.Fatal("requester's own group should be readable")
+	}
+	if guard.allows(context.Background(), "elsewhere") {
+		t.Fatal("placeholder member info let the requester read a group they are not in")
+	}
+}

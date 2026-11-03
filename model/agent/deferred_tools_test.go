@@ -191,6 +191,35 @@ func TestDeferredEncodedSearchInput(t *testing.T) {
 	}
 }
 
+// 2026-11-03 生产私聊里 swe-2 把工具名写进了 input，连撞三次「不符合 /required」
+// 后放弃，头像和群消息都没查成。信封只缺 name 时把它挪出来；目标工具自己的
+// name 参数在正常信封里不受影响。
+func TestDeferredExecuteLiftsNameFromInput(t *testing.T) {
+	tool := &schemaDispatchTool{countingTool: countingTool{name: "lookup"}, schema: toolObjectSchema([]string{"query"}, map[string]any{
+		"query": map[string]any{"type": "string"},
+		"name":  map[string]any{"type": "string"},
+	})}
+	loader := newDeferredToolLoader(NewToolRegistry(tool), []string{finalizeToolName}, nil, nil)
+	envelope := map[string]any{"input": map[string]any{"name": "lookup", "query": "头像"}}
+	action, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: envelope})
+	if err != nil || action.Tool != "lookup" || action.Input["query"] != "头像" || action.Input["name"] != nil {
+		t.Fatalf("nested name not lifted: %#v, %v", action, err)
+	}
+	if inner := envelope["input"].(map[string]any); inner["name"] != "lookup" {
+		t.Fatal("provider envelope mutated")
+	}
+
+	action, err = loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"name": "lookup", "input": map[string]any{"name": "Alice", "query": "x"}}})
+	if err != nil || action.Input["name"] != "Alice" {
+		t.Fatalf("target name parameter changed: %#v, %v", action, err)
+	}
+
+	_, err = loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"input": map[string]any{"name": "invented", "query": "x"}}})
+	if err == nil || !strings.Contains(err.Error(), "missing properties") || !strings.Contains(err.Error(), "name") {
+		t.Fatalf("unknown nested name should report the missing envelope field: %v", err)
+	}
+}
+
 // 按需工具不必先 tool_search：直接点名或直接 tools_execute，参数合法就执行；参数不合法、
 // 工具已移除或不存在时照旧拒绝，且报错不回显非法值。
 func TestDeferredDispatchRunsValidCallsAndRejectsInvalidInput(t *testing.T) {
