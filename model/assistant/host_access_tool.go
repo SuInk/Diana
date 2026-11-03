@@ -22,17 +22,20 @@ type hostAccessTool struct {
 
 func (t *hostAccessTool) Name() string { return hostAccessToolName }
 func (t *hostAccessTool) Description() string {
-	return `主人专用宿主机读取和执行，标准模式默认可用。支持程序、脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。exec 按用户原话自动审核，purpose 写明目的；拒绝时返回理由。cleanup 清理 Diana 自身缓存并报告释放空间。未授权的重大或不可逆操作先确认；禁止整机毁坏、绕过身份校验和泄露凭据。失败时按 permission_guidance 提示宿主机上的手动操作；needs_verification 不是确认缺权限。不要索取密码、自动提权或反复重试。硬件状态用 host_stats，主人账号用 bot_config。`
+	return `主人专用宿主机读取和执行，标准模式默认可用。支持程序、脚本、联网及宿主账号有权进行的文件和服务操作，不受工作区或沙盒限制。exec 按用户原话自动审核，purpose 写明目的；拒绝时返回理由。cleanup 清理 Diana 自身缓存并报告释放空间。交互程序用 session_*，输入也审核。未授权的重大或不可逆操作先确认；禁止整机毁坏、绕过身份校验和泄露凭据。失败时按 permission_guidance 提示宿主机上的手动操作；needs_verification 不是确认缺权限。不要索取密码、自动提权或反复重试。硬件状态用 host_stats，主人账号用 bot_config。`
 }
 func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("read 读文件；list 列目录；usage 目录体积；disk 磁盘；exec 执行；cleanup 清理自身存储", "read", "list", "usage", "disk", "exec", "cleanup"),
-		"path":      toolStringParam("读取或统计的绝对路径；相对路径以 Agent 工作区为基准"),
-		"offset":    toolIntParam("read 的字节偏移或 list 跳过的条数，默认 0", 0, 1000000000),
-		"command":   toolStringParam("exec 的可执行文件绝对路径，如 /bin/sh"),
-		"args":      toolStringArrayParam("exec 的原始参数数组，不自动经过 shell"),
-		"cwd":       toolStringParam("exec 的绝对工作目录，默认 Agent 工作区"),
-		"purpose":   toolStringParam("exec 必填：这条命令对应用户的哪项请求、预期影响，供自动审核"),
+		"operation":  toolEnumParam("read 读文件；list 列目录；usage 目录体积；disk 磁盘；exec 执行；cleanup 清理自身存储；session_start/send/read/stop/list 管 dev server、REPL 等常驻进程", "read", "list", "usage", "disk", "exec", "cleanup", "session_start", "session_send", "session_read", "session_stop", "session_list"),
+		"path":       toolStringParam("读取或统计的绝对路径；相对路径以 Agent 工作区为基准"),
+		"offset":     toolIntParam("read 的字节偏移或 list 跳过的条数，默认 0", 0, 1000000000),
+		"command":    toolStringParam("exec 的可执行文件绝对路径，如 /bin/sh"),
+		"args":       toolStringArrayParam("exec 的原始参数数组，不自动经过 shell"),
+		"cwd":        toolStringParam("exec 的绝对工作目录，默认 Agent 工作区"),
+		"purpose":    toolStringParam("exec、session_start、session_send 必填：对应用户的哪项请求、预期影响，供自动审核"),
+		"session_id": toolStringParam("session_send/read/stop 的会话 ID，取自 session_start 或 session_list"),
+		"input":      toolStringParam("session_send 写进会话 stdin 的一行，末尾自动补换行"),
+		"wait_ms":    toolIntParam("等新输出的毫秒数，start/send 默认 2000、read 默认 1000，最多 15000", 0, 15000),
 	})
 }
 func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -51,6 +54,8 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 	switch op {
 	case "exec":
 		return t.execute(ctx, acfg, input)
+	case "session_start", "session_send", "session_read", "session_stop", "session_list":
+		return t.session(ctx, acfg, op, input)
 	case "cleanup":
 		return hostAccessJSON(t.runtime.cleanupDianaStorage(ctx, time.Now()))
 	}
@@ -179,34 +184,10 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 	}
 }
 func (t *hostAccessTool) execute(ctx context.Context, cfg agent.Config, input map[string]any) (string, error) {
-	if configToolString(input, "writable_dir") != "" {
-		return "", fmt.Errorf("宿主执行没有 writable_dir 隔离，请移除该参数")
+	request, purpose, err := hostExecRequest(cfg, input)
+	if err != nil {
+		return "", err
 	}
-	args := []string{}
-	switch values := input["args"].(type) {
-	case nil:
-	case []string:
-		args = append(args, values...)
-	case []any:
-		for _, v := range values {
-			s, ok := v.(string)
-			if !ok {
-				return "", fmt.Errorf("args 必须是字符串数组")
-			}
-			args = append(args, s)
-		}
-	default:
-		return "", fmt.Errorf("args 必须是字符串数组")
-	}
-	cwd := configToolString(input, "cwd")
-	if cwd == "" {
-		cwd = cfg.WorkDir
-	}
-	purpose := configToolString(input, "purpose")
-	if purpose == "" {
-		return "", fmt.Errorf("purpose 必填：写清这条命令对应用户的哪项请求")
-	}
-	request := agent.OwnerCommand{Command: configToolString(input, "command"), Args: args, CWD: cwd}
 	out, review, err := t.runtime.runReviewedHostCommand(ctx, t.event, cfg, request, purpose)
 	if err != nil {
 		return "", err
@@ -219,4 +200,37 @@ func (t *hostAccessTool) execute(ctx context.Context, cfg agent.Config, input ma
 	result["review"] = review
 	return hostAccessJSON(result)
 }
+
+// hostExecRequest 从 exec 和 session_start 共用的参数里取出命令、参数、目录和目的。
+func hostExecRequest(cfg agent.Config, input map[string]any) (agent.OwnerCommand, string, error) {
+	if configToolString(input, "writable_dir") != "" {
+		return agent.OwnerCommand{}, "", fmt.Errorf("宿主执行没有 writable_dir 隔离，请移除该参数")
+	}
+	args := []string{}
+	switch values := input["args"].(type) {
+	case nil:
+	case []string:
+		args = append(args, values...)
+	case []any:
+		for _, v := range values {
+			s, ok := v.(string)
+			if !ok {
+				return agent.OwnerCommand{}, "", fmt.Errorf("args 必须是字符串数组")
+			}
+			args = append(args, s)
+		}
+	default:
+		return agent.OwnerCommand{}, "", fmt.Errorf("args 必须是字符串数组")
+	}
+	cwd := configToolString(input, "cwd")
+	if cwd == "" {
+		cwd = cfg.WorkDir
+	}
+	purpose := configToolString(input, "purpose")
+	if purpose == "" {
+		return agent.OwnerCommand{}, "", fmt.Errorf("purpose 必填：写清这条命令对应用户的哪项请求")
+	}
+	return agent.OwnerCommand{Command: configToolString(input, "command"), Args: args, CWD: cwd}, purpose, nil
+}
+
 func hostAccessJSON(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }
