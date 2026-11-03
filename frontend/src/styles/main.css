@@ -7193,67 +7193,32 @@ a.nav-action {
 .search-template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
 .search-template { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
 .search-template:hover, .search-template:focus-visible { border-color: var(--accent); background: var(--accent-soft); }
+/* 联网搜索：开关、优先级、管理入口一行；来源按浏览器 / API 分组、一行一个，和模型路由同一套样子。 */
 .search-routing-panel { container-type: inline-size; }
-.search-routing-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.search-routing-body { display: grid; gap: 14px; margin-top: 16px; }
+.search-routing-top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.search-routing-manage { margin-left: auto; }
+.search-priority-select { width: auto; min-width: 128px; }
+.search-routing-body { display: grid; gap: 10px; margin-top: 12px; }
 .search-routing-body.muted { opacity: 0.6; }
-.search-priority-select { max-width: 280px; }
-.search-route-list { display: grid; gap: 6px; }
-.search-route-group { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.search-route-group:first-child { margin-top: 0; }
-.search-route-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
-.search-route-row.is-warning { border-color: color-mix(in srgb, var(--err) 45%, var(--border)); }
+.search-route-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.search-route-group { display: flex; align-items: baseline; gap: 8px; padding: 8px 10px 6px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 12px; }
+.search-route-row + .search-route-group { border-top: 1px solid var(--border); }
+.search-route-group strong { font-weight: 600; color: var(--text); }
+.search-route-group span { color: var(--muted); }
+.search-route-row { display: grid; grid-template-columns: 44px 7px minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 6px 8px; background: var(--surface); font-size: 13px; }
+.search-route-row + .search-route-row { border-top: 1px solid var(--border); }
 .search-route-label { min-width: 40px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .search-route-label:disabled { cursor: default; }
 .search-route-row.is-dragging { opacity: 0.45; }
 .search-route-row.is-drop-target { box-shadow: inset 0 2px var(--accent); }
-.search-route-kind { white-space: nowrap; }
-.search-route-footer { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.search-route-footer .hint { flex: 1; min-width: 200px; font-size: 12px; color: var(--muted); }
-.search-routing-options { margin-top: 8px; padding-top: 14px; border-top: 1px solid var(--border); }
-.search-overview { display: grid; gap: 10px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
-.search-overview.muted { opacity: 0.6; }
-.search-overview-group { color: var(--text-secondary); font-weight: 600; }
-.search-overview-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
-.search-overview-foot .hint { font-size: 12px; }
-
-/* 联网搜索来源一览：和模型路由同一套小芯片与健康点。 */
-.model-overview-chain {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-.model-overview-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 3px 9px;
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  background: var(--surface);
-  font-size: 12.5px;
-}
-.model-overview-chip .mono {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.model-overview-chip small {
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-.model-overview-chip.off {
-  opacity: 0.55;
-  text-decoration: line-through;
-}
-.model-overview-sep {
-  color: var(--muted);
-  font-size: 11.5px;
-}
+.search-route-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-route-name small { margin-left: 8px; color: var(--muted); font-size: 11.5px; }
+.search-route-warn { color: var(--warn); font-size: 11.5px; white-space: nowrap; }
+.search-route-add { width: auto; max-width: 220px; }
+.search-routing-options { font-size: 12.5px; }
+.search-routing-options > summary { cursor: pointer; color: var(--text-secondary); }
+.search-routing-options > summary span { margin-left: 10px; color: var(--accent); }
+.search-routing-options[open] > summary { margin-bottom: 12px; }
 .model-health-dot {
   flex: none;
   width: 7px;
@@ -7266,9 +7231,6 @@ a.nav-action {
 .model-health-dot.err { background: var(--err); }
 
 @container (max-width: 520px) {
-  .search-route-row { grid-template-columns: auto minmax(0, 1fr) auto; }
-  .search-route-kind { display: none; }
-  .search-routing-panel .model-purpose-heading { flex-wrap: wrap; gap: 12px; }
   .search-routing-options .form-grid { grid-template-columns: minmax(0, 1fr); }
 }
 

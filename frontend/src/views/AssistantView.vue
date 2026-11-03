@@ -583,6 +583,8 @@
                     </div>
                     <div class="model-route-table-wrap">
                       <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
+                        <!-- 列宽写在 colgroup 上：只有一个模型时表头会藏起来，不能靠表头撑列宽。 -->
+                        <colgroup><col class="model-route-order-col" /><col /><col v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-col" /><col class="model-route-enable-col" /><col class="model-route-actions-col" /></colgroup>
                         <thead :class="{ 'visually-hidden': modelRoleRoutes(role.key).length < 2 && roleForm[role.key]?.routing_strategy !== 'weighted' }"><tr><th class="model-route-order-col" scope="col">顺序</th><th scope="col">模型</th><th v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-col" scope="col">权重</th><th class="model-route-enable-col" scope="col">启用</th><th class="model-route-actions-col" scope="col">操作</th></tr></thead>
                         <tbody>
                           <template v-for="item in groupedModelRoutes(role.key)" :key="`${role.key}-${item.index}`">
