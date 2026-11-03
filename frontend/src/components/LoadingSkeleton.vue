@@ -41,7 +41,7 @@
     <div v-else-if="kind === 'bot-editor'" class="grid-main-side bot-editor" aria-hidden="true">
       <div class="stack">
         <div class="editor-tabs">
-          <span v-for="n in 6" :key="n" class="editor-tab" :class="{ active: n === 1 }"><SkeletonBlock width="28px" height="14px" /></span>
+          <span v-for="n in 7" :key="n" class="editor-tab" :class="{ active: n === 1 }"><SkeletonBlock width="28px" height="14px" /></span>
         </div>
         <section class="card">
           <div class="card-header"><SkeletonBlock width="132px" height="20px" /><SkeletonBlock width="112px" height="16px" /></div>

@@ -13,7 +13,28 @@
       <p v-if="!modelValue" class="hint">这台机器人还没保存过搜索配置，下面是当前生效的默认值；改动后点「保存配置」即成为它自己的配置。</p>
       <p v-if="draft.disabled" class="hint">已关闭，回复时不会联网搜索。下方来源会保留，重新打开即可沿用。</p>
       <p v-else-if="!config.providers.length" class="hint warn-text">还没有搜索提供商，请先点「管理搜索提供商」新建。</p>
-      <div v-if="!draft.disabled || draft.provider_ids.length" class="search-routing-body" :class="{ muted: draft.disabled }">
+      <!-- 一览：和模型分配同一套样子，按运行时真正的尝试顺序串成一行，点「调整」才展开编辑。 -->
+      <div v-if="draft.provider_ids.length" class="search-overview" :class="{ muted: draft.disabled }">
+        <div class="model-overview-chain" aria-label="搜索来源，按尝试顺序排列">
+          <template v-for="(row, position) in orderedRows" :key="row.index">
+            <span v-if="row.groupLabel" class="model-overview-sep search-overview-group">{{ row.groupLabel }}</span>
+            <span v-else-if="position > 0" class="model-overview-sep">失败时</span>
+            <span class="model-overview-chip" :class="{ off: providerWarns(row.id) }" :title="providerHint(row.id)">
+              <span class="model-health-dot" :class="providerWarns(row.id) ? 'warn' : 'ok'" aria-hidden="true"></span>
+              {{ providerName(row.id) }}
+              <small>{{ providerKind(row.id) }}</small>
+            </span>
+          </template>
+        </div>
+        <div class="search-overview-foot">
+          <span class="hint">{{ optionsSummary }}</span>
+          <button class="btn small" type="button" :aria-expanded="editing" aria-controls="search-routing-editor" @click="editing = !editing">
+            <component :is="editing ? ChevronDown : ChevronRight" :size="14" aria-hidden="true" />{{ editing ? "收起" : "调整来源与选项" }}
+          </button>
+        </div>
+        <p v-if="warningText" class="hint warn-text">{{ warningText }}</p>
+      </div>
+      <div v-if="(!draft.disabled || draft.provider_ids.length) && (editing || !draft.provider_ids.length)" id="search-routing-editor" class="search-routing-body" :class="{ muted: draft.disabled }">
         <div class="field">
           <label for="search-source-priority">优先使用</label>
           <AppSelect id="search-source-priority" class="search-priority-select" :model-value="draft.source_priority || 'list'" :options="priorityOptions" @update:model-value="patch({ source_priority: $event === 'list' ? undefined : $event as WebSearchAssignment['source_priority'] })" />
@@ -29,12 +50,11 @@
             </div>
           </template>
         </div>
-        <p v-if="warningText" class="hint warn-text">{{ warningText }}</p>
         <div class="search-route-footer">
           <button class="btn small ghost" type="button" :disabled="!unusedProviders.length || draft.provider_ids.length >= 16" @click="add"><Plus :size="14" aria-hidden="true" />添加来源</button>
           <span class="hint">{{ priorityHint }}</span>
         </div>
-        <AppDisclosure id="web-search-options" title="搜索选项" class="search-routing-options">
+        <div class="search-routing-options">
           <div class="form-grid">
             <div class="field"><label for="search-max-results">每次结果上限</label><AppNumberInput id="search-max-results" :model-value="draft.max_results || 5" :min="1" :max="10" label="每次结果上限" @update:model-value="patch({ max_results: $event })" /></div>
             <div class="field"><label for="search-provider-timeout">单来源超时（秒）</label><AppNumberInput id="search-provider-timeout" :model-value="draft.provider_timeout_seconds || 12" :min="2" :max="30" label="单来源超时" @update:model-value="patch({ provider_timeout_seconds: $event })" /></div>
@@ -42,7 +62,7 @@
             <div class="field"><label for="search-link-policy">回复附带链接</label><AppSelect id="search-link-policy" :model-value="draft.reply_link_policy || 'on_request'" :options="linkPolicies" @update:model-value="patch({ reply_link_policy: $event as WebSearchAssignment['reply_link_policy'] })" /></div>
             <div class="field wide"><AppSwitch :model-value="draft.source_recall !== false" @update:model-value="patch({ source_recall: $event })">保留来源，追问时可给出链接</AppSwitch></div>
           </div>
-        </AppDisclosure>
+        </div>
       </div>
     </template>
   </div>
@@ -50,12 +70,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from "vue";
-import { GripVertical, Plus, Settings2, X } from "@lucide/vue";
+import { ChevronDown, ChevronRight, GripVertical, Plus, Settings2, X } from "@lucide/vue";
 import { navigate } from "../router";
 import { getSearchProviders, type SearchConfiguration, type WebSearchAssignment } from "../api";
 import { useConfigurationRefresh } from "../lib/configuration-sync";
 import { searchProviderKeyStatus, searchProviderTypeLabel } from "../lib/search-providers";
-import AppDisclosure from "./AppDisclosure.vue";
 import AppNumberInput from "./AppNumberInput.vue";
 import AppSelect from "./AppSelect.vue";
 import AppSwitch from "./AppSwitch.vue";
@@ -92,6 +111,15 @@ const orderedRows = computed(() => {
   rows.sort((a, b) => Number(a.browser !== browserFirst) - Number(b.browser !== browserFirst));
   rows.forEach((row, position) => { if (position === 0 || rows[position - 1].browser !== row.browser) row.groupLabel = row.browser ? "浏览器来源" : "API 来源"; });
   return rows;
+});
+const editing = ref(false);
+function providerName(id: string): string {
+  return config.value?.providers.find(provider => provider.id === id)?.name ?? "已删除的来源";
+}
+const optionsSummary = computed(() => {
+  const link = linkPolicies.find(policy => policy.value === (draft.value.reply_link_policy || "on_request"))?.label ?? "";
+  const priority = priorityOptions.find(option => option.value === (draft.value.source_priority || "list"))?.label ?? "";
+  return `${priority} · 每次 ${draft.value.max_results || 5} 条 · 单来源 ${draft.value.provider_timeout_seconds || 12} 秒、总共 ${draft.value.total_timeout_seconds || 35} 秒 · ${link}`;
 });
 function providerKind(id: string): string {
   const provider = config.value?.providers.find(provider => provider.id === id);

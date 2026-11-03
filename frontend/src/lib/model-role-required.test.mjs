@@ -24,6 +24,11 @@ function loadFunction(name, context) {
     context.accountSafetyRulesDraft ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.accountSafetyRulesDefault ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.page ??= { value: "edit" };
+    // 保存校验失败时跳到出错的用途：真实实现还要展开一览里的那一行并滚过去，这里只看落点。
+    context.focusModelRole ??= role => {
+      if (context.editorTab) context.editorTab.value = "model";
+      if (context.selectedModelRole) context.selectedModelRole.value = role;
+    };
   }
   // 提供商列表在语音两档里还要加上内置服务，用到它的函数都依赖 roleChannels。
   if (["channelOptionsFor", "selectedRoleProfiles", "crossProviderModelOptions"].includes(name) && !context.roleChannels) {

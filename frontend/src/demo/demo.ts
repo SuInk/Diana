@@ -161,8 +161,10 @@ const oneBotProfile: BotProfileConfig = {
   cross_group_memory_enabled: true, world_book_enabled: true, mood_enabled: true, poke_reply_enabled: true, expression_learning_enabled: true, style_filter_enabled: true, dict_segment_enabled: true, semantic_search_enabled: false, agent_enabled: true, agent_mode: "standard", subtask_max_tasks: 8, subtask_max_concurrency: 3,
   max_bot_concurrency: 4, request_timeout_ms: 60_000, model_request_timeout_ms: 0,
   model_roles: {
-    chat: { profile_id: "llm-chat", model: "gpt-6-sol" }, vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
-    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" }
+    chat: { profile_id: "llm-chat", model: "gpt-6-sol", fallbacks: [{ profile_id: "llm-vision", model: "gpt-6-sol" }, { profile_id: "llm-intent", model: "gpt-5.6-terra", standby: true }] },
+    vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
+    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" },
+    tts: { profile_id: "llm-voice", model: "speech-2.6-hd" }
   }
 };
 
@@ -1625,7 +1627,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/model-health" && method === "GET") {
     return json({
       checked_at: new Date().toISOString(),
-      candidates: [],
+      // 一条在冷却的候选，好让模型分配一览里能看到黄点。
+      candidates: [{ profile_id: "llm-vision", model: "gpt-6-sol", failure_count: 3, last_failure_at: before(4), cooldown_until: new Date(Date.now() + 6 * 60_000).toISOString() }],
       calls: [
         { profile_id: "llm-chat", model: "gpt-6-sol", at: before(2), ok: true },
         { profile_id: "llm-vision", model: "gpt-6-sol", at: before(47), ok: true },
