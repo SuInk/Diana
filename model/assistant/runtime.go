@@ -5105,6 +5105,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if err != nil {
 			return "", err
 		}
+		promptSession.touchTools(resp.Steps)
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Sources)
 		replyToolTraceFromContext(ctx).add(resp.Steps)

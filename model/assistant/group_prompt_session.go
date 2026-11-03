@@ -1,14 +1,17 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -16,11 +19,14 @@ import (
 // persist retrieved memories, private thread state, credentials or tool objects.
 // The archive remains authoritative for edits, deletions and context resets.
 type GroupPromptSession struct {
-	Generation  int64                     `json:"generation"`
-	Anchor      string                    `json:"anchor,omitempty"`
-	Checkpoint  string                    `json:"checkpoint,omitempty"`
-	LoadedTools []string                  `json:"loaded_tools,omitempty"`
-	History     []GroupPromptHistoryEntry `json:"history,omitempty"`
+	Generation  int64    `json:"generation"`
+	Anchor      string   `json:"anchor,omitempty"`
+	Checkpoint  string   `json:"checkpoint,omitempty"`
+	LoadedTools []string `json:"loaded_tools,omitempty"`
+	// ToolLastUsed 记着每个已加载工具最近一次加载或调用的时间（Unix 秒），
+	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
+	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`
+	History      []GroupPromptHistoryEntry `json:"history,omitempty"`
 }
 
 // promptContextSummary reads the source at assembly time, not the earlier routing
@@ -164,6 +170,20 @@ func (s *groupPromptSession) saveLocked() {
 	}
 }
 
+// 群里加载过的工具以前只增不减：模型某一轮用过一次的工具，契约（description 加
+// schema）此后每轮都带着。线上一个活跃群攒到 20 个、近 2 万字，比人设还长。现在
+// 超过 loadedToolIdleTTL 没用过的退回按需目录，再用时模型重新 tool_search 一次；
+// 同时最多保留 maxPersistedLoadedTools 个最近用过的。淘汰只在工具跨过期限时发生，
+// 前缀缓存只在那一轮断一次。
+const (
+	loadedToolIdleTTL       = 48 * time.Hour
+	maxPersistedLoadedTools = 8
+	// loadedToolTouchInterval 内重复调用不再刷新时间，免得每轮都写库。
+	loadedToolTouchInterval = time.Hour
+)
+
+var groupPromptSessionNow = time.Now
+
 func (s *groupPromptSession) loadedTools() []string {
 	if s == nil {
 		return nil
@@ -173,7 +193,40 @@ func (s *groupPromptSession) loadedTools() []string {
 	if s.invalidated {
 		return nil
 	}
+	if kept := s.data.liveLoadedTools(groupPromptSessionNow()); len(kept) != len(s.data.LoadedTools) {
+		s.data.LoadedTools = kept
+		for name := range s.data.ToolLastUsed {
+			if !slices.Contains(kept, name) {
+				delete(s.data.ToolLastUsed, name)
+			}
+		}
+		s.saveLocked()
+	}
 	return append([]string(nil), s.data.LoadedTools...)
+}
+
+// liveLoadedTools 去掉过期的工具，超出上限时只留最近用过的那几个，其余保持原顺序：
+// 契约按这个顺序渲染，顺序不动前缀才稳。
+func (d GroupPromptSession) liveLoadedTools(now time.Time) []string {
+	cutoff := now.Add(-loadedToolIdleTTL).Unix()
+	live := make([]string, 0, len(d.LoadedTools))
+	for _, name := range d.LoadedTools {
+		if d.ToolLastUsed[name] > cutoff {
+			live = append(live, name)
+		}
+	}
+	if len(live) <= maxPersistedLoadedTools {
+		return live
+	}
+	recent := slices.Clone(live)
+	slices.SortStableFunc(recent, func(a, b string) int {
+		return cmp.Compare(d.ToolLastUsed[b], d.ToolLastUsed[a])
+	})
+	keep := make(map[string]bool, maxPersistedLoadedTools)
+	for _, name := range recent[:maxPersistedLoadedTools] {
+		keep[name] = true
+	}
+	return slices.DeleteFunc(live, func(name string) bool { return !keep[name] })
 }
 
 func (s *groupPromptSession) rememberTools(names []string) {
@@ -189,17 +242,52 @@ func (s *groupPromptSession) rememberTools(names []string) {
 	for _, name := range s.data.LoadedTools {
 		seen[name] = true
 	}
+	now := groupPromptSessionNow().Unix()
 	changed := false
 	for _, name := range names {
 		if name != "" && !seen[name] {
 			seen[name] = true
 			s.data.LoadedTools = append(s.data.LoadedTools, name)
+			s.touchToolLocked(name, now)
 			changed = true
 		}
 	}
 	if changed {
 		s.saveLocked()
 	}
+}
+
+// touchTools 在一轮回复结束后刷新本轮实际调用过的已加载工具。
+func (s *groupPromptSession) touchTools(steps []agent.Step) {
+	if s == nil || len(steps) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.invalidated {
+		return
+	}
+	now := groupPromptSessionNow().Unix()
+	changed := false
+	for _, step := range steps {
+		if step.Skipped || !slices.Contains(s.data.LoadedTools, step.Tool) {
+			continue
+		}
+		if now-s.data.ToolLastUsed[step.Tool] >= int64(loadedToolTouchInterval/time.Second) {
+			s.touchToolLocked(step.Tool, now)
+			changed = true
+		}
+	}
+	if changed {
+		s.saveLocked()
+	}
+}
+
+func (s *groupPromptSession) touchToolLocked(name string, now int64) {
+	if s.data.ToolLastUsed == nil {
+		s.data.ToolLastUsed = map[string]int64{}
+	}
+	s.data.ToolLastUsed[name] = now
 }
 
 func (s *groupPromptSession) anchor() string {
