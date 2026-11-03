@@ -42,14 +42,22 @@ func musicSendsCard(cfg musicConfig, platform string) bool {
 func musicCardCode(item song) string {
 	fields := []string{
 		"type=custom",
-		"url=" + escapeCQParameter(firstNonEmpty(musicPageURL(item), item.PlayURL)),
-		"audio=" + escapeCQParameter(item.PlayURL),
+		"url=" + escapeCQParameter(musicCardURL(firstNonEmpty(musicPageURL(item), item.PlayURL))),
+		"audio=" + escapeCQParameter(musicCardURL(item.PlayURL)),
 		"title=" + escapeCQParameter(firstNonEmpty(strings.TrimSpace(item.Name), item.Title())),
 	}
 	if artists := strings.TrimSpace(item.Artists); artists != "" {
 		fields = append(fields, "content="+escapeCQParameter(artists))
 	}
 	return "[CQ:music," + strings.Join(fields, ",") + "]"
+}
+
+// musicCardURL 把地址里的 + 写成 %2B。签名服务（SnowLuma 默认用的 xingzhige）会按
+// 表单规则解码字段，原样的 + 变成空格：网易云 CDN 地址的 vuutv 参数是 base64，
+// 一首歌常有好几个 +，签出来的 musicUrl 就成了带裸空格的坏地址。%2B 经它解码后
+// 正好还原成 +，CDN 两种写法都认。2026-11-03 在 miku 上实测。
+func musicCardURL(raw string) string {
+	return strings.ReplaceAll(strings.TrimSpace(raw), "+", "%2B")
 }
 
 var outgoingCQRecord = regexp.MustCompile(`\[CQ:record(?:,[^\]]*)?\]`)

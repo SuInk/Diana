@@ -87,3 +87,12 @@ func TestMusicCardCodeEscapesFields(t *testing.T) {
 		t.Fatalf("decoded card = %#v", data)
 	}
 }
+
+// 签名服务按表单规则解码，原样的 + 会变成空格，网易云地址的签名参数就坏了。
+func TestMusicCardCodeProtectsPlusSigns(t *testing.T) {
+	code := musicCardCode(song{Source: "netease", ID: "1330348068", Name: "起风了", PlayURL: "http://m801.music.126.net/x.mp3?vuutv=ab+cd/ef+A="})
+	data := CQToSegments(code)[0].Data
+	if data["audio"] != "http://m801.music.126.net/x.mp3?vuutv=ab%2Bcd/ef%2BA=" {
+		t.Fatalf("audio = %q", data["audio"])
+	}
+}
