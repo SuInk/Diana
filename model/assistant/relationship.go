@@ -138,12 +138,6 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		// 钱包查余额和发提议都不动钱，成交要主人回确认码。
 		dianaWalletToolName: true,
 		dianaRoomToolName:   true,
-		// VRChat 工具只在插件启用时挂；操控类默认只挂给主人，插件里放开后才给成员，
-		// 所以这里不必再按身份挡一次。
-		dianaVRChatStatusToolName:     true,
-		dianaVRChatChatboxToolName:    true,
-		dianaVRChatExpressionToolName: true,
-		dianaVRChatMoveToolName:       true,
 		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
 		dianaFileDeliveryToolName: true,
 		// 同插件的渲染：页面在断网无头浏览器里跑，碰不到本地文件和命令。
