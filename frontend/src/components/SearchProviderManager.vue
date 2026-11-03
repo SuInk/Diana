@@ -147,7 +147,7 @@ const editor = ref<SearchDraft | null>(null);
 const editorError = ref("");
 const keyRevealed = ref(false);
 // 默认搜一个有时效的词，能看出来源是不是真在联网拿新结果。
-const defaultTestQuery = "Diana 最新版本";
+const defaultTestQuery = "SuInk/Diana 最新版本";
 const testQuery = ref(defaultTestQuery);
 const testing = ref(false);
 const testResult = ref<SearchProviderTestResult | null>(null);
