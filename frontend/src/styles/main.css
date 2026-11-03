@@ -792,6 +792,20 @@ code {
   border-radius: 8px;
   overflow: hidden;
 }
+
+/* 一览展开区里的模型表限高、表内滚动，表头钉住：备用模型再多，展开后也不会把页面拉得老长，
+   靠表上方的搜索和状态筛选定位。 */
+.model-overview-detail .model-route-table-wrap {
+  max-height: 520px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.model-overview-detail .model-route-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
 .model-route-table {
   width: 100%;
   border-collapse: collapse;
