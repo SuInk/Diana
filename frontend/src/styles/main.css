@@ -7196,7 +7196,7 @@ a.nav-action {
 /* 联网搜索：开关、优先级、管理入口一行；来源按浏览器 / API 分组、一行一个，和模型路由同一套样子。 */
 .search-routing-panel { container-type: inline-size; }
 .search-routing-top { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
-.search-routing-manage { margin-left: auto; }
+.search-routing-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .search-priority-select { width: auto; min-width: 128px; }
 .search-routing-body { display: grid; gap: 10px; margin-top: 12px; }
 .search-routing-body.muted { opacity: 0.6; }
@@ -7214,7 +7214,7 @@ a.nav-action {
 .search-route-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-route-name small { margin-left: 8px; color: var(--muted); font-size: 11.5px; }
 .search-route-warn { color: var(--warn); font-size: 11.5px; white-space: nowrap; }
-.search-route-add { width: auto; max-width: 220px; }
+.search-route-add { width: auto; min-width: 96px; }
 .search-routing-options { font-size: 12.5px; }
 .search-routing-options > summary { cursor: pointer; color: var(--text-secondary); }
 .search-routing-options > summary span { margin-left: 10px; color: var(--accent); }

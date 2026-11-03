@@ -10,7 +10,10 @@
       <div class="search-routing-top">
         <AppSwitch :model-value="!draft.disabled" aria-label="允许联网搜索" @update:model-value="setEnabled">启用</AppSwitch>
         <AppSelect v-if="!draft.disabled && draft.provider_ids.length > 1" id="search-source-priority" class="search-priority-select" aria-label="优先使用" :model-value="draft.source_priority || 'list'" :options="priorityOptions" @update:model-value="patch({ source_priority: $event === 'list' ? undefined : $event as WebSearchAssignment['source_priority'] })" />
-        <button class="btn small ghost search-routing-manage" type="button" @click="navigate('provider', { section: 'search' })"><Settings2 :size="14" aria-hidden="true" />管理提供商</button>
+        <span class="search-routing-actions">
+          <button class="btn small ghost" type="button" @click="navigate('provider', { section: 'search' })"><Settings2 :size="14" aria-hidden="true" />管理提供商</button>
+          <AppSelect v-if="!draft.disabled && unusedProviders.length && draft.provider_ids.length < 16" class="search-route-add" aria-label="添加搜索来源" model-value="" :options="addOptions" placeholder="＋ 添加" @update:model-value="addProvider" />
+        </span>
       </div>
       <p v-if="draft.disabled" class="hint">已关闭，来源保留。</p>
       <p v-else-if="!config.providers.length" class="hint warn-text">还没有搜索提供商，先去「管理提供商」新建。</p>
@@ -27,7 +30,6 @@
             </div>
           </template>
         </div>
-        <AppSelect v-if="unusedProviders.length && draft.provider_ids.length < 16" class="search-route-add" aria-label="添加搜索来源" model-value="" :options="addOptions" placeholder="＋ 添加来源" @update:model-value="addProvider" />
         <details class="search-routing-options">
           <summary>{{ optionsSummary }}<span>修改</span></summary>
           <div class="form-grid">
