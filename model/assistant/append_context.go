@@ -215,6 +215,74 @@ func (s *appendContextStore) put(key string, log *appendContextLog) {
 	s.logs[key] = log
 }
 
+// restore 把 key 的记录从 written 换回 previous；记录已经被别的轮次换掉时不动。
+func (s *appendContextStore) restore(key string, written, previous *appendContextLog) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.logs[key] != written {
+		return
+	}
+	if previous == nil {
+		delete(s.logs, key)
+		return
+	}
+	s.logs[key] = previous
+}
+
+// appendContextUndo 记下一次回复尝试写进续接记录的那份和写之前的那份。记录在 Agent
+// 跑完时就写，这时回复还没过审核、也没发出；这一版最后被丢掉的话（发送前收到同一个人
+// 的补充要重来、被新消息取代、审核拦下……），记录里那条草稿就成了「已经回过」。
+// 11-04 生产：「虹夏是什么模型」答好了正在审核，对方补了个表情，重来那一版续接时看到
+// 自己「刚答过」，静默收尾，问题就这么漏了。
+type appendContextUndo struct {
+	mu       sync.Mutex
+	key      string
+	previous *appendContextLog
+	written  *appendContextLog
+	noted    bool
+}
+
+type appendContextUndoKey struct{}
+
+func withAppendContextUndo(ctx context.Context) (context.Context, *appendContextUndo) {
+	undo := &appendContextUndo{}
+	return context.WithValue(ctx, appendContextUndoKey{}, undo), undo
+}
+
+func appendContextUndoFromContext(ctx context.Context) *appendContextUndo {
+	undo, _ := ctx.Value(appendContextUndoKey{}).(*appendContextUndo)
+	return undo
+}
+
+// note 记一次写入。同一次尝试里写了几回（例如识图被拒后重跑）时，previous 留第一回
+// 写之前的那份。
+func (u *appendContextUndo) note(key string, previous, written *appendContextLog) {
+	if u == nil {
+		return
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if !u.noted || u.key != key {
+		u.key, u.previous, u.noted = key, previous, true
+	}
+	u.written = written
+}
+
+// rollback 撤回这次尝试写的记录，下一轮从写之前那份接着续，这期间真正发出去的
+// 消息会作为新历史追加进去。
+func (r *Runtime) rollbackAppendContext(undo *appendContextUndo) {
+	if undo == nil {
+		return
+	}
+	undo.mu.Lock()
+	key, previous, written, noted := undo.key, undo.previous, undo.written, undo.noted
+	undo.noted, undo.written = false, nil
+	undo.mu.Unlock()
+	if noted {
+		r.appendContexts.restore(key, written, previous)
+	}
+}
+
 // appendContextKey 按配置档和会话区分记录：同一个群里两台机器人、私聊和群聊各一份。
 func appendContextKey(event MessageEvent) string {
 	return strings.TrimSpace(event.ProfileID) + "\x00" + sessionKey(event)
