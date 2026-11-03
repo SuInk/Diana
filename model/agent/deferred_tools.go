@@ -351,7 +351,7 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 			}
 		}
 		if err := validateToolInput(executeInputSchema(), action.Input); err != nil {
-			return action, err
+			return action, executeEnvelopeError(action.Input, err)
 		}
 		name := action.Input["name"].(string)
 		input, ok := action.Input["input"].(map[string]any)
@@ -374,6 +374,18 @@ func (l *deferredToolLoader) dispatch(action llmAction) (llmAction, error) {
 		}
 	}
 	return action, nil
+}
+
+// executeEnvelopeError 给 tools_execute 信封出错补一句具体改法。input 里的 name 是注册过的
+// 工具时上面已经挪出来了；走到这里说明它写的名字目录里没有，照抄回去只会再撞一次。
+func executeEnvelopeError(envelope map[string]any, err error) error {
+	_, hasName := envelope["name"]
+	if inner, ok := envelope["input"].(map[string]any); ok && !hasName {
+		if name, ok := inner["name"].(string); ok && strings.TrimSpace(name) != "" {
+			return fmt.Errorf("%w。name 要放在外层、和 input 并列，而且 %q 不是目录里的工具名，照目录一字不差地填：{\"name\":\"目录里的工具名\",\"input\":{该工具的参数}}", err, hintName(name))
+		}
+	}
+	return fmt.Errorf("%w。tools_execute 的格式是 {\"name\":\"目录里的工具名\",\"input\":{该工具的参数}}，目标工具的参数都放进 input", err)
 }
 
 // dispatchDirect 处理模型不套 tools_execute、直接按名字调用延迟工具的情况。
