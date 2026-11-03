@@ -4,10 +4,13 @@
 package assistant
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 	"unicode/utf16"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestDianaMentionsToCQ(t *testing.T) {
@@ -343,5 +346,54 @@ func TestOutgoingDropsResidualReplyMarkers(t *testing.T) {
 	code := "标记写成 `<diana-quote id=\"123\"/>` 这样喵"
 	if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: code}).Text; got != code {
 		t.Fatalf("代码块被改写了：%q", got)
+	}
+}
+
+// 机器人自己的历史发言是以 assistant 身份喂给模型的。at 段渲染成「@10002」的话，
+// 模型下一轮照抄成纯文本，群里看到一串数字、谁也没被提醒到；要写回发送用的标记。
+func TestAssistantHistoryRendersMentionAsMarker(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	source := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-10012345", UserID: "10001", MessageID: "m1"}
+	outbound := runtime.outgoingHistoryEvent(source, OutgoingMessage{GroupID: "-10012345", Text: "<diana-at id=\"10002\"/> 看下这个"})
+	current := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-10012345", UserID: "10001", Time: outbound.Time + 5}
+	messages := runtime.renderPromptHistoryEvent(context.Background(), current, outbound, BotConfig{BotAccount: "42"}, false)
+	if len(messages) == 0 || messages[0].Role != llm.RoleAssistant {
+		t.Fatalf("机器人发言没有按 assistant 渲染：%#v", messages)
+	}
+	if want := "<diana-at id=\"10002\"/> 看下这个"; messages[0].Content != want {
+		t.Fatalf("got %q, want %q", messages[0].Content, want)
+	}
+	// 群友消息里的 at 照旧渲染成可读文本，不受影响。
+	if got := historyPlainText(MessageEvent{Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "10002"}}, {Type: "text", Data: map[string]string{"text": "hi"}}}}); got != "@10002 hi" {
+		t.Fatalf("群友消息的 at 渲染变了：%q", got)
+	}
+}
+
+// 模型照抄旧历史写出的「@<成员 ID>」纯文本，ID 是本会话认得的群友就改回真提及；
+// 认不出来的号码、邮箱、代码里的 @ 都原样保留。
+func TestOutgoingPromotesPlainIDMentionsOfKnownMembers(t *testing.T) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-10012345", UserID: "10001", SenderName: "Alice"}
+	runtime.history[sessionKey(event)] = []MessageEvent{
+		{Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-10012345", UserID: "10002", SenderName: "Bob"},
+	}
+	cases := map[string]string{
+		"@10002 一坨就重来啊":           "<diana-at id=\"10002\"/> 一坨就重来啊",
+		"@10001 @10002 你俩对一下":     "<diana-at id=\"10001\"/> <diana-at id=\"10002\"/> 你俩对一下",
+		"好的，@10002，回头说":           "好的，@10002，回头说",
+		"@99999 不是群友，原样留着":        "@99999 不是群友，原样留着",
+		"发到 bob@10002.example 就行": "发到 bob@10002.example 就行",
+		"写法是 `@10002` 这样":         "写法是 `@10002` 这样",
+		"@100023 前缀撞上也不算":         "@100023 前缀撞上也不算",
+	}
+	for input, want := range cases {
+		if got := runtime.normalizeOutgoingMentions(event, OutgoingMessage{Text: input}).Text; got != want {
+			t.Errorf("%q: got %q, want %q", input, got, want)
+		}
+	}
+	// 私聊没有要 @ 的人，不动。
+	private := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, SelfID: "42", UserID: "10001"}
+	if got := runtime.normalizeOutgoingMentions(private, OutgoingMessage{Text: "@10001 你好"}).Text; got != "@10001 你好" {
+		t.Fatalf("私聊被改写了：%q", got)
 	}
 }

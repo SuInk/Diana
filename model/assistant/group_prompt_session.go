@@ -345,7 +345,7 @@ func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item Me
 	}
 	var result []llm.Message
 	if !item.crossGroupContext && assistantHistoryEvent(item, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(current.SelfID))) {
-		if text := strings.TrimSpace(historyPlainText(item)); text != "" {
+		if text := strings.TrimSpace(assistantHistoryPlainText(item)); text != "" {
 			result = append(result, llm.Message{Role: llm.RoleAssistant, Content: text})
 			if note, ok := replyToolTraceNote(item.ToolCalls); ok {
 				result = append(result, note)
