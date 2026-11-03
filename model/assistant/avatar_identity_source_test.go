@@ -37,16 +37,20 @@ func TestAvatarIdentityImageURLsResolvesEachSource(t *testing.T) {
 	}
 }
 
-// 模型编出来的 QQ 号不能变成一张头像：成员来源要在当前会话里真实可见才作数。
-func TestAvatarIdentityImageURLsRejectsUnreachableMember(t *testing.T) {
+// 成员头像按 id 直接取，不核对在不在当前会话：隐藏成员的 Telegram 群里核对不了，
+// 硬核对只会把活跃群友挡在外面。
+func TestAvatarIdentityImageURLsResolvesMemberWithoutMembershipCheck(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "10001",
 		MessageID: "avatar-stranger",
 	}
-	if got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(got) != 0 {
-		t.Fatalf("stranger avatar resolved: %#v", got)
+	if got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + "99999"}); len(got) != 1 || got[0] != OneBotMemberAvatarURL("99999") {
+		t.Fatalf("member outside conversation not resolved: %#v", got)
+	}
+	if got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix}); len(got) != 0 {
+		t.Fatalf("empty member id resolved: %#v", got)
 	}
 	if got := runtime.avatarIdentityImageURLs(context.Background(), event, []string{avatarSourceMemberPrefix + "10001"}); len(got) != 1 {
 		t.Fatalf("sender avatar not resolved: %#v", got)
@@ -87,35 +91,5 @@ func TestDefaultAvatarIdentitySourcesUsesMentionsOnly(t *testing.T) {
 	}
 	if got := defaultAvatarIdentitySources(MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, "42"); len(got) != 0 {
 		t.Fatalf("private message produced default sources: %#v", got)
-	}
-}
-
-// 号码在上一条私聊里：主人先发「54321 给这个人也做那款头像」，下一条才贴提示词。
-// 同一个人近期亲手写过的号码要能拉头像；机器人自己说过的、太久以前的、别人的不算。
-func TestPrivateAvatarAcceptsAccountFromOwnRecentMessage(t *testing.T) {
-	r := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
-	text := func(value string) []MessageSegment {
-		return []MessageSegment{{Type: "text", Data: map[string]string{"text": value}}}
-	}
-	base := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindPrivate, UserID: "10001"}
-	earlier := base
-	earlier.Time, earlier.MessageID, earlier.Segments = 1000, "m1", text("54321 给这个人也生成那款头像")
-	stale := base
-	stale.Time, stale.MessageID, stale.Segments = 1000-privateAvatarAccountWindow-1, "m0", text("65432 以前提过的号")
-	botSaid := base
-	botSaid.Time, botSaid.MessageID, botSaid.Outbound, botSaid.Segments = 1001, "m2", true, text("要不也给 76543 做一张")
-	for _, item := range []MessageEvent{stale, earlier, botSaid} {
-		r.remember(item)
-	}
-	current := base
-	current.Time, current.MessageID, current.Segments = 1100, "m3", text("提示词在这里：粗糙涂鸦风")
-
-	_, failed := r.avatarIdentitySources(context.Background(), current, []string{
-		avatarSourceMemberPrefix + "54321",
-		avatarSourceMemberPrefix + "65432",
-		avatarSourceMemberPrefix + "76543",
-	})
-	if len(failed) != 2 || failed[0] != avatarSourceMemberPrefix+"65432" || failed[1] != avatarSourceMemberPrefix+"76543" {
-		t.Fatalf("failed=%#v", failed)
 	}
 }

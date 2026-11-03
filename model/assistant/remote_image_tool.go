@@ -74,7 +74,7 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		}
 		urls := t.runtime.avatarIdentityImageURLs(ctx, t.event, []string{source})
 		if len(urls) == 0 {
-			return "", fmt.Errorf("取不到这个头像：来源无效、成员不在当前会话，或对方没有可见头像，不能据此描述画面")
+			return "", fmt.Errorf("取不到这个头像：来源无效、user_id 不对，或对方没有可见头像，不能据此描述画面")
 		}
 		now := t.runtime.clock()
 		ready, meta, err := loadAvatarImage(ctx, urls[0], now)
