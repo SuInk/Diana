@@ -33,7 +33,8 @@ test("model scheduling keeps purpose help concise and points to shared recovery 
 
 test("model overview shows one row per purpose with a health chain and folds secondary purposes", () => {
   assert.match(source, /v-for="entry in modelOverviewItems"/);
-  assert.match(source, /class="model-overview-chip"/);
+  assert.match(source, /class="model-overview-status"/);
+  assert.match(source, /<span>主模型<\/span><span>备用<\/span><span>状态<\/span>/);
   assert.match(source, /model-health-dot/);
   assert.match(source, /secondaryModelRolesOpen = !secondaryModelRolesOpen/);
   assert.match(source, /function focusModelRole\(role: RoleKey\)/);

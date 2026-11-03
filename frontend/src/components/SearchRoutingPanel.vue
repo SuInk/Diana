@@ -16,7 +16,7 @@
       <!-- 一览：和模型分配同一套样子，按运行时真正的尝试顺序串成一行，点「调整」才展开编辑。 -->
       <div v-if="draft.provider_ids.length" class="search-overview" :class="{ muted: draft.disabled }">
         <div class="model-overview-chain" aria-label="搜索来源，按尝试顺序排列">
-          <template v-for="(row, position) in orderedRows" :key="row.index">
+          <template v-for="(row, position) in orderedRows.slice(0, overviewLimit)" :key="row.index">
             <span v-if="row.groupLabel" class="model-overview-sep search-overview-group">{{ row.groupLabel }}</span>
             <span v-else-if="position > 0" class="model-overview-sep">失败时</span>
             <span class="model-overview-chip" :class="{ off: providerWarns(row.id) }" :title="providerHint(row.id)">
@@ -25,6 +25,7 @@
               <small>{{ providerKind(row.id) }}</small>
             </span>
           </template>
+          <span v-if="orderedRows.length > overviewLimit" class="model-overview-sep" :title="orderedRows.slice(overviewLimit).map(row => providerName(row.id)).join('、')">+{{ orderedRows.length - overviewLimit }} 个</span>
         </div>
         <div class="search-overview-foot">
           <span class="hint">{{ optionsSummary }}</span>
@@ -40,7 +41,7 @@
           <AppSelect id="search-source-priority" class="search-priority-select" :model-value="draft.source_priority || 'list'" :options="priorityOptions" @update:model-value="patch({ source_priority: $event === 'list' ? undefined : $event as WebSearchAssignment['source_priority'] })" />
         </div>
         <div class="search-route-list" aria-label="搜索来源，按尝试顺序排列">
-          <template v-for="(row, position) in orderedRows" :key="row.index">
+          <template v-for="(row, position) in orderedRows.slice(0, overviewLimit)" :key="row.index">
             <div v-if="row.groupLabel" class="search-route-group">{{ row.groupLabel }}</div>
             <div class="search-route-row" :class="{ 'is-dragging': drag?.from === row.index, 'is-drop-target': drag?.over === row.index && drag.from !== row.index, 'is-warning': providerWarns(row.id) }" :data-search-route-slot="row.index" @dragover="onDragOver(row.index, $event)" @drop="onDrop(row.index, $event)">
               <button class="model-route-handle search-route-label" type="button" draggable="true" :disabled="draft.provider_ids.length < 2" :title="draft.provider_ids.length < 2 ? '只有一个来源' : '拖动或按上下方向键调整顺序'" :aria-label="`第 ${position + 1} 个尝试，按上下方向键调整顺序`" @dragstart="onDragStart(row.index, $event)" @dragend="onDragEnd" @pointerdown="onHandlePointerDown(row.index, $event)" @keydown="onHandleKeydown(position, $event)"><GripVertical :size="14" aria-hidden="true" /><span>{{ position + 1 }}</span></button>
@@ -113,6 +114,8 @@ const orderedRows = computed(() => {
   return rows;
 });
 const editing = ref(false);
+// 一览里最多列 5 个来源，其余收成「+N 个」，来源再多也只占一两行；完整顺序展开后看。
+const overviewLimit = 5;
 function providerName(id: string): string {
   return config.value?.providers.find(provider => provider.id === id)?.name ?? "已删除的来源";
 }

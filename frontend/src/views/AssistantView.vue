@@ -518,6 +518,7 @@
                 模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
               </p>
+              <div class="model-overview-head" aria-hidden="true"><span>用途</span><span>主模型</span><span>备用</span><span>状态</span><span></span></div>
               <template v-for="entry in modelOverviewItems" :key="entry.kind === 'row' ? entry.role.key : 'secondary'">
                 <button v-if="entry.kind === 'group'" type="button" class="model-overview-group" :aria-expanded="secondaryModelRolesOpen" @click="secondaryModelRolesOpen = !secondaryModelRolesOpen">
                   <component :is="secondaryModelRolesOpen ? ChevronDown : ChevronRight" :size="14" aria-hidden="true" />
@@ -538,23 +539,19 @@
                       <component :is="modelPurposeIcon(entry.role.key)" :size="15" aria-hidden="true" />
                       <span>{{ modelPurposeLabel(entry.role.key) }}<small v-if="entry.role.sublabel">{{ entry.role.sublabel }}</small></span>
                     </span>
-                    <span class="model-overview-chain">
-                      <template v-if="modelOverviewChain(entry.role.key).kind === 'routes'">
-                        <template v-for="(link, linkIndex) in modelOverviewChain(entry.role.key).links" :key="linkIndex">
-                          <span v-if="linkIndex > 0" class="model-overview-sep">{{ link.via }}</span>
-                          <span class="model-overview-chip" :class="{ off: link.disabled }" :title="link.title">
-                            <span class="model-health-dot" :class="link.health" aria-hidden="true"></span>
-                            <span class="mono">{{ link.model }}</span>
-                            <small>{{ link.provider }}</small>
-                          </span>
-                          <span v-if="link.alert" class="model-overview-alert" :class="link.health">{{ link.alert }}</span>
-                        </template>
-                        <span v-if="modelOverviewChain(entry.role.key).more" class="model-overview-sep">+{{ modelOverviewChain(entry.role.key).more }}</span>
-                      </template>
-                      <span v-else class="model-overview-muted" :class="{ 'warn-text': modelOverviewChain(entry.role.key).kind === 'missing' }">
-                        <GitBranch v-if="modelOverviewChain(entry.role.key).kind === 'inherit'" :size="13" aria-hidden="true" />
-                        {{ modelOverviewChain(entry.role.key).text }}
+                    <template v-if="modelOverviewRow(entry.role.key).kind === 'routes'">
+                      <span class="model-overview-primary" :title="modelOverviewRow(entry.role.key).primaryTitle">
+                        <span class="mono">{{ modelOverviewRow(entry.role.key).model }}</span>
+                        <small>{{ modelOverviewRow(entry.role.key).provider }}</small>
                       </span>
+                      <span class="model-overview-backups" :class="{ empty: modelOverviewRow(entry.role.key).backups === '—' }" :title="modelOverviewRow(entry.role.key).backupTitle">{{ modelOverviewRow(entry.role.key).backups }}</span>
+                      <span class="model-overview-status" :class="modelOverviewRow(entry.role.key).health" :title="modelOverviewRow(entry.role.key).statusTitle">
+                        <span class="model-health-dot" :class="modelOverviewRow(entry.role.key).health" aria-hidden="true"></span><span>{{ modelOverviewRow(entry.role.key).status }}</span>
+                      </span>
+                    </template>
+                    <span v-else class="model-overview-muted" :class="{ 'warn-text': modelOverviewRow(entry.role.key).kind === 'missing' }">
+                      <GitBranch v-if="modelOverviewRow(entry.role.key).kind === 'inherit'" :size="13" aria-hidden="true" />
+                      {{ modelOverviewRow(entry.role.key).text }}
                     </span>
                     <component :is="expandedModelRole === entry.role.key ? ChevronDown : ChevronRight" class="model-overview-caret" :size="15" aria-hidden="true" />
                   </button>
@@ -695,13 +692,10 @@
                   </div>
                 </div>
               </template>
-              <p class="model-overview-legend"><span><span class="model-health-dot ok" aria-hidden="true"></span>正常</span><span><span class="model-health-dot warn" aria-hidden="true"></span>冷却中或近期失败</span><span><span class="model-health-dot err" aria-hidden="true"></span>全部冷却</span><span>点一行展开编辑；保存后只影响当前机器人。</span></p>
+              <p class="model-overview-foot">点一行展开编辑：备用模型、调度方式、超时都在里面；保存后只影响当前机器人。</p>
             </div>
           </section>
 
-        </div>
-
-        <div v-show="editorTab === 'search'" class="stack">
           <!-- 联网搜索：每台机器人自己的开关、来源顺序与参数。提供商本身在「提供商」页统一管理。 -->
           <section class="card">
             <div class="card-header">
@@ -3027,7 +3021,6 @@ async function copyCallbackURL(): Promise<void> {
 const editorTabs = [
   { key: "access", label: "接入" },
   { key: "model", label: "模型" },
-  { key: "search", label: "联网搜索" },
   { key: "persona", label: "人设" },
   { key: "behavior", label: "行为" },
   { key: "context", label: "上下文" },
@@ -4011,10 +4004,10 @@ const modelOverviewItems = computed<ModelOverviewItem[]>(() => {
 });
 
 const secondaryModelRoleKeys = computed(() => visibleModelRoleRows.map((row) => row.key).filter((key) => !primaryModelRoleKeys.includes(key)));
-const secondaryModelRolesProblem = computed(() => secondaryModelRoleKeys.value.some((key) => modelOverviewChain(key).kind === "missing"));
+const secondaryModelRolesProblem = computed(() => secondaryModelRoleKeys.value.some((key) => modelOverviewRow(key).kind === "missing"));
 const secondaryModelRolesSummary = computed(() => {
   const keys = secondaryModelRoleKeys.value;
-  const missing = keys.filter((key) => modelOverviewChain(key).kind === "missing").map(modelPurposeLabel);
+  const missing = keys.filter((key) => modelOverviewRow(key).kind === "missing").map(modelPurposeLabel);
   if (missing.length) return `${missing.join("、")}未配置`;
   const own = keys.filter((key) => !modelRoleInherited(key));
   if (own.length === 0) return "全部跟随";
@@ -4039,36 +4032,61 @@ function focusModelRole(role: RoleKey): void {
   void nextTick(() => document.getElementById(`model-purpose-${role}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }));
 }
 
-type ModelOverviewLink = { model: string; provider: string; health: string; alert: string; disabled: boolean; via: string; title: string };
-type ModelOverviewChain = { kind: "routes" | "inherit" | "off" | "missing"; text: string; links: ModelOverviewLink[]; more: number };
+type ModelOverviewRow = {
+  kind: "routes" | "inherit" | "off" | "missing";
+  text: string;
+  model: string;
+  provider: string;
+  primaryTitle: string;
+  backups: string;
+  backupTitle: string;
+  health: string;
+  status: string;
+  statusTitle: string;
+};
 
-const modelRoutingShortLabels: Record<string, string> = { smart: "智能切换", round_robin: "轮询", weighted: "加权", failover: "后备" };
+const modelRoutingShortLabels: Record<string, string> = { smart: "智能切换", round_robin: "轮询", weighted: "加权轮询", failover: "主备切换" };
 
-// modelOverviewChain 把一个用途的模型路由压成一行链路：主模型在前，之后每个模型前写明
-// 它是怎么接上的（参与调度时写调度方式，只作后备时写「后备」），健康点直接取运行状态。
-function modelOverviewChain(role: RoleKey): ModelOverviewChain {
-  const empty = { links: [], more: 0 };
-  if (modelRoleInherited(role)) return { ...empty, kind: "inherit", text: modelRoleRouteSummary(role) };
+// modelOverviewRow 把一个用途压成对齐的四列：主模型、备用、状态。备用只给个数和调度方式，
+// 具体名单在悬停提示和展开区里；状态取所有路由里最差的那个，出问题时写明是第几个、几点恢复。
+function modelOverviewRow(role: RoleKey): ModelOverviewRow {
+  const blank = { model: "", provider: "", primaryTitle: "", backups: "", backupTitle: "", health: "", status: "", statusTitle: "" };
+  if (modelRoleInherited(role)) return { ...blank, kind: "inherit", text: modelRoleRouteSummary(role) };
   const assignment = roleForm.value[role];
-  if (!assignment) return isMediaRole(role) ? { ...empty, kind: "off", text: "未启用" } : { ...empty, kind: "missing", text: "尚未配置，点开选择模型" };
-  const strategy = effectiveModelRoutingStrategy(role);
+  if (!assignment) return isMediaRole(role) ? { ...blank, kind: "off", text: "未启用" } : { ...blank, kind: "missing", text: "尚未配置，点开选择模型" };
   const routes = modelRoleRoutes(role);
-  const shown = routes.slice(0, 4);
-  const links = shown.map(({ route, index }) => {
-    const health = modelRouteHealth(role, route);
-    const standby = modelRouteIsStandby(role, index);
-    return {
-      model: route.model || "未选模型",
-      provider: modelRouteProviderLabel(route),
-      health: health.className,
-      // 出问题的模型把状态直接写在它后面，一行里有好几个模型时也看得出是哪个。
-      alert: health.className === "warn" || health.className === "err" ? health.label : "",
-      disabled: !!route.disabled,
-      via: standby ? "后备" : modelRoutingShortLabels[strategy],
-      title: `${modelRouteProviderLabel(route)} · ${route.model || "未选模型"}\n${health.label}`
-    };
-  });
-  return { kind: "routes", text: "", links, more: routes.length - shown.length };
+  const [primary, ...rest] = routes;
+  const enabledRest = rest.filter(({ route }) => !route.disabled);
+  const standby = enabledRest.filter(({ index }) => modelRouteIsStandby(role, index)).length;
+  const strategy = effectiveModelRoutingStrategy(role);
+  let backups = "—";
+  if (enabledRest.length) {
+    const active = enabledRest.length - standby;
+    backups = active > 0 ? `${enabledRest.length} 个 · ${modelRoutingShortLabels[strategy]}` : `${enabledRest.length} 个后备`;
+  }
+  const backupTitle = rest.map(({ route, index }) => `${index + 1}. ${modelRouteProviderLabel(route)} · ${route.model || "未选模型"}${route.disabled ? "（已停用）" : modelRouteIsStandby(role, index) ? "（后备）" : ""}`).join("\n");
+  const healths = routes.map(({ route, index }) => ({ index, health: modelRouteHealth(role, route) }));
+  const bad = healths.filter(({ health }) => health.className === "err" || health.className === "warn");
+  const worst = bad.find(({ health }) => health.className === "err") ?? bad[0];
+  let status = "正常";
+  if (worst) {
+    // 徽标上的「冷却中 · 12:03:45 恢复」在一览里太长，收成「冷却至 12:03」。
+    const label = worst.health.label.replace("冷却中", "冷却").replace(/ · (\d{2}:\d{2}):\d{2} 恢复/, "至 $1");
+    status = routes.length > 1 ? `第${worst.index + 1}个${label}` : label;
+    if (bad.length > 1) status += ` 等 ${bad.length} 个`;
+  }
+  return {
+    kind: "routes",
+    text: "",
+    model: primary?.route.model || "未选模型",
+    provider: primary ? modelRouteProviderLabel(primary.route) : "",
+    primaryTitle: primary ? `${modelRouteProviderLabel(primary.route)} · ${primary.route.model}` : "",
+    backups,
+    backupTitle,
+    health: worst ? worst.health.className : "ok",
+    status,
+    statusTitle: healths.map(({ index, health }) => `${index + 1}. ${health.label}`).join("\n")
+  };
 }
 
 function setRoleRoutingStrategy(role: RoleKey, value: string): void {
