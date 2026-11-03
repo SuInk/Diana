@@ -21,24 +21,16 @@ test("privacy proxy lives only in context settings", () => {
 });
 
 test("model scheduling keeps purpose help concise and points to shared recovery settings", () => {
-  const hint = source.match(/<p v-if="!isMediaRole\(entry\.role\.key\) && entry\.role\.key !== 'image'" class="hint model-routing-hint">[\s\S]*?<\/p>/)?.[0];
-  assert.ok(hint);
-  for (const text of ["拖动模型调整调用顺序", "自动重试或切换", "「自动恢复规则」"]) {
-    assert.ok(hint.includes(text), text);
+  const disclosure = source.match(/<AppDisclosure :id="`model-description-\$\{role.key\}`"[\s\S]*?<\/AppDisclosure>/)?.[0];
+  assert.ok(disclosure);
+  for (const text of ["拖动模型即可调整调用顺序", "调用失败时会自动重试或切换", "冷却规则在页面底部统一设置"]) {
+    assert.ok(disclosure.includes(text), text);
   }
   for (const detail of ["700 毫秒重试 1 次", "连续失败翻倍", "流式边界", "能力边界"]) {
-    assert.ok(!hint.includes(detail), detail);
+    assert.ok(!disclosure.includes(detail), detail);
   }
-});
-
-test("model overview shows one row per purpose with a health chain and folds secondary purposes", () => {
-  assert.match(source, /v-for="entry in modelOverviewItems"/);
-  assert.match(source, /class="model-overview-status"/);
-  assert.match(source, /<span>主模型<\/span><span>备用<\/span><span>状态<\/span>/);
-  assert.match(source, /model-health-dot/);
-  assert.match(source, /secondaryModelRolesOpen = !secondaryModelRolesOpen/);
-  assert.match(source, /function focusModelRole\(role: RoleKey\)/);
-  assert.doesNotMatch(source, /model-purpose-nav/);
+  assert.ok(disclosure.includes('v-if="!isMediaRole(role.key) && role.key !== \'image\'"'));
+  assert.doesNotMatch(disclosure, /<AppSwitch/);
 });
 
 test("model route table exposes live cooling and degraded health states", () => {
@@ -57,7 +49,7 @@ test("model recovery rules are editable and unhealthy routes can be restored imm
   assert.match(source, /model_recovery_policy/);
   assert.equal(source.match(/:show-controls="false"/g)?.length, 6);
   assert.ok(source.indexOf("<h2>自动恢复规则</h2>") > source.indexOf("<h2>聊天内模型管理</h2>"));
-  assert.ok(source.indexOf("<h2>自动恢复规则</h2>") > source.indexOf("editorTab === 'advanced'"));
+  assert.ok(source.indexOf("<h2>自动恢复规则</h2>") < source.indexOf("editorTab === 'behavior'"));
 });
 
 const ast = ts.createSourceFile("view.ts", parse(source).descriptor.scriptSetup.content, ts.ScriptTarget.Latest, true);
@@ -212,7 +204,7 @@ test("timeout refresh preserves edits and reads the currently edited bot only", 
 });
 
 test("timeout stays in the bot draft across purpose changes and resets on cancel or bot switch", () => {
-  assert.match(source, /v-if="entry.role.key === 'chat'"[\s\S]*?id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft"/);
+  assert.match(source, /v-if="role.key === 'chat'"[\s\S]*?id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft"/);
   assert.match(source, /function setForm\(config[\s\S]*?modelRequestTimeoutDraft.value = modelRequestTimeoutSeconds\(config.model_request_timeout_ms\)/);
   assert.match(source, /function leaveEditor\([\s\S]*?setForm\(current\)/);
   assert.match(source, /function editProfile\([\s\S]*?setForm\(profile\)/);
@@ -268,16 +260,16 @@ test("unsupported media has no smart option and smart retains explicit standby",
   assert.equal(context.modelRouteIsStandby("chat", 1), false);
   assert.equal(context.modelRouteIsStandby("chat", 2), true);
   assert.match(context.modelRoutingDescription("chat"), /按配置顺序/);
-  assert.match(source, /v-if="roleForm\[entry.role.key\]\?\.routing_strategy === 'weighted'"/);
+  assert.match(source, /v-if="roleForm\[role.key\]\?\.routing_strategy === 'weighted'"/);
   assert.doesNotMatch(source, /model-purpose-search|current\.web_search(?!_override)/);
   assert.match(source, /const payload[\s\S]*?\.\.\.current|const saved[\s\S]*?\.\.\.current|\.\.\.current,/);
 });
 
 test("model route touch dragging retains both handle binding and row hit targets", () => {
-  const row = source.match(/<tr\s+v-for="item in filteredModelRoutes\(entry.role.key\)"[\s\S]*?<\/tr>/)?.[0];
+  const row = source.match(/<tr\s+v-for="item in filteredModelRoutes\(role.key\)"[\s\S]*?<\/tr>/)?.[0];
   assert.ok(row);
-  assert.ok(row.includes(':data-route-slot="`${entry.role.key}:${item.index}`"'));
-  assert.match(row, /@pointerdown="\(event\) => onRouteHandlePointerDown\(entry.role.key, item.index, event\)"/);
+  assert.ok(row.includes(':data-route-slot="`${role.key}:${item.index}`"'));
+  assert.match(row, /@pointerdown="\(event\) => onRouteHandlePointerDown\(role.key, item.index, event\)"/);
 });
 
 test("touch route dragging commits on release and cancels without changing order", () => {

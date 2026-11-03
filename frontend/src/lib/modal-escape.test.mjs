@@ -13,7 +13,7 @@ const code = ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts
 test('Escape closes only the topmost dialog and preserves the parent settings form', () => {
   const parent = {}, child = {}, closed = [];
   const dialogs = [parent, child];
-  const context = vm.createContext({ document: { querySelectorAll: () => dialogs }, modalRef: { value: parent }, props: { side: false }, emit: event => closed.push(event) });
+  const context = vm.createContext({ document: { querySelectorAll: () => dialogs }, modalRef: { value: parent }, emit: event => closed.push(event) });
   vm.runInContext(code, context);
   context.onKeydown({ key: 'Escape' });
   assert.deepEqual(closed, []);
@@ -26,16 +26,4 @@ test('Escape closes only the topmost dialog and preserves the parent settings fo
   assert.equal(closed.length, 1);
   context.onKeydown({ key: 'Escape' });
   assert.equal(closed.length, 2);
-});
-
-test('a side drawer closes on Escape only when no modal dialog is stacked on it', () => {
-  const dialog = {}, closed = [];
-  const dialogs = [dialog];
-  const context = vm.createContext({ document: { querySelectorAll: () => dialogs }, modalRef: { value: {} }, props: { side: true }, emit: event => closed.push(event) });
-  vm.runInContext(code, context);
-  context.onKeydown({ key: 'Escape' });
-  assert.deepEqual(closed, []);
-  dialogs.pop();
-  context.onKeydown({ key: 'Escape' });
-  assert.deepEqual(closed, ['close']);
 });
