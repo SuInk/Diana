@@ -157,7 +157,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				toolOutput = "ERROR: " + runError
 			}
 			toolInput, toolOutput = r.maskSecretsForTrace(ctx, toolInput, toolOutput)
-			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", map[string]any{
+			traceMetadata := map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
 				"trace_id":        runEvent.TraceID,
 				"model_turn":      runEvent.ModelTurn,
@@ -171,7 +171,13 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				"error":           runError,
 				"finish_reason":   runEvent.FinishReason,
 				"usage":           runEvent.Usage,
-			})
+			}
+			// 联网搜索实际用了哪个搜索 API、每次尝试的结果，以前只进操作日志；调用链里
+			// 只剩一大段工具结果，要从 JSON 里翻。这里和操作日志用同一份工具元数据。
+			if toolMetadata, ok := metadata["tool_metadata"]; ok {
+				traceMetadata["tool_metadata"] = toolMetadata
+			}
+			r.recordDebugTrace(debugTraceFromContext(ctx), "Agent 调用链更新", traceMetadata)
 		}
 		if agentProgressWorthProcessLog(runEvent) {
 			log.Printf("diana agent progress: trace=%s %s %s phase=%s model_turn=%d tool=%s duration_ms=%d",

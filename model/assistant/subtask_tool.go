@@ -511,13 +511,18 @@ func (r *Runtime) recordSubtaskDebugEvent(ctx context.Context, event agent.RunEv
 	if event.Phase == agent.RunPhaseModelCompleted {
 		return
 	} // 模型请求由 provider 统一记录。
-	r.recordDebugTrace(debugTraceFromContext(ctx), "子任务调用链更新", map[string]any{
+	metadata := map[string]any{
 		"phase": "agent_" + string(event.Phase), "trace_id": event.TraceID,
 		"model_turn": event.ModelTurn, "tool_call": event.ToolCall, "tool": event.Tool,
 		"tool_input": event.ToolInput, "tool_output": event.ToolOutput,
 		"available_tools": event.AvailableTools, "duration_ms": event.DurationMS,
 		"error": event.Error, "finish_reason": event.FinishReason, "usage": event.Usage,
-	})
+	}
+	// 搜索子任务用了哪个搜索 API，同主调用链一样带上工具元数据。
+	if len(event.Metadata) > 0 {
+		metadata["tool_metadata"] = event.Metadata
+	}
+	r.recordDebugTrace(debugTraceFromContext(ctx), "子任务调用链更新", metadata)
 }
 
 func (r *Runtime) subtaskSearchTools(event MessageEvent) ([]agent.Tool, error) {
