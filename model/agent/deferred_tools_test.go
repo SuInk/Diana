@@ -215,7 +215,7 @@ func TestDeferredExecuteLiftsNameFromInput(t *testing.T) {
 	}
 
 	_, err = loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"input": map[string]any{"name": "invented", "query": "x"}}})
-	if err == nil || !strings.Contains(err.Error(), "missing properties") || !strings.Contains(err.Error(), "name") {
+	if err == nil || !strings.Contains(err.Error(), "缺少必填参数 name") {
 		t.Fatalf("unknown nested name should report the missing envelope field: %v", err)
 	}
 }
@@ -765,5 +765,19 @@ func TestDeferredDirectCallKeepsPermissionChecks(t *testing.T) {
 	}
 	if platform.calls != 0 || len(result.Steps) == 0 || !strings.Contains(result.Steps[0].Error, "安全模式") {
 		t.Fatalf("disabled operation ran: calls=%d steps=%#v", platform.calls, result.Steps)
+	}
+}
+
+// 信封写错时报错要直接写出改法，而不是只说不符合 /required。
+func TestExecuteEnvelopeErrorShowsFix(t *testing.T) {
+	envelope := map[string]any{"input": map[string]any{"name": "invented", "query": "PRIVATE-SECRET"}}
+	err := executeEnvelopeError(envelope, validateToolInput(executeInputSchema(), envelope))
+	if text := err.Error(); !strings.Contains(text, "缺少必填参数 name") || !strings.Contains(text, `"invented" 不是目录里的工具名`) || strings.Contains(text, "PRIVATE-SECRET") {
+		t.Fatalf("nested name: %q", text)
+	}
+	envelope = map[string]any{"name": "chat_history", "operation": "search"}
+	err = executeEnvelopeError(envelope, validateToolInput(executeInputSchema(), envelope))
+	if text := err.Error(); !strings.Contains(text, "缺少必填参数 input") || !strings.Contains(text, "多了不支持的参数 operation") || !strings.Contains(text, "目标工具的参数都放进 input") {
+		t.Fatalf("flat params: %q", text)
 	}
 }

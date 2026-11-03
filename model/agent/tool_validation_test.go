@@ -52,3 +52,28 @@ func TestToolInputJSONSchemaValidation(t *testing.T) {
 		t.Fatal("external ref allowed")
 	}
 }
+
+func TestToolInputValidationHints(t *testing.T) {
+	tests := []struct{ name, schema, input, want string }{
+		{"required", `{"type":"object","required":["name","input"],"properties":{"name":{},"input":{}}}`, `{"input":{}}`, "缺少必填参数 name"},
+		{"additional", `{"properties":{"operation":{},"query":{}},"additionalProperties":false}`, `{"query":"PRIVATE-SECRET","window":"PRIVATE-SECRET","days":30}`, "多了不支持的参数 days、window，去掉它们；可用参数只有 operation、query"},
+		{"enum", `{"properties":{"scope":{"enum":["current","all"]}}}`, `{"scope":"PRIVATE-SECRET"}`, `只能取 "current"、"all"`},
+		{"type", `{"properties":{"a":{"type":"array","items":{"type":"integer"}}}}`, `{"a":["PRIVATE-SECRET"]}`, "应为 integer 类型"},
+		{"ref", `{"$defs":{"count":{"type":"integer"}},"properties":{"x":{"$ref":"#/$defs/count"}}}`, `{"x":false}`, "应为 integer 类型"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var schema, input map[string]any
+			if err := json.Unmarshal([]byte(tt.schema), &schema); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(tt.input), &input); err != nil {
+				t.Fatal(err)
+			}
+			err := validateToolInput(schema, input)
+			if err == nil || !strings.Contains(err.Error(), tt.want) || strings.Contains(err.Error(), "PRIVATE-SECRET") {
+				t.Fatalf("hint = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
