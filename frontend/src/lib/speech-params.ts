@@ -220,7 +220,7 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
   fields.push(...(extra[api] ?? []));
   fields.push(
     { key: "timeout_seconds", label: "超时（秒）", placeholder: "60" },
-    { key: "send_mode", label: "发送模式", placeholder: "按需", options: [{ value: "", label: "按需：用户要语音时才发" }, { value: "always", label: "常驻：回复都用语音发" }], hint: "常驻时带链接、图片、@ 或超过字数上限的回复仍发文字，合成失败也回退文字。只对 QQ 生效。" },
+    { key: "send_mode", label: "发送模式", placeholder: "按需", options: [{ value: "", label: "按需：用户要语音时才发" }, { value: "always", label: "常驻：回复都用语音发" }], hint: "常驻时带链接、图片、@ 的回复仍发文字；仅 QQ。" },
     { key: "max_chars", label: "单次字数上限", placeholder: "500" }
   );
   return fields;

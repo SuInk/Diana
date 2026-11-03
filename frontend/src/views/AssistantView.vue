@@ -191,9 +191,7 @@
 
         <div v-if="outlineSections.length > 1" ref="mobileOutline" class="editor-outline-mobile">
           <label for="bot-section-jump">跳转到分区</label>
-          <select id="bot-section-jump" class="input" :value="outlineActive" @change="jumpToSection(($event.target as HTMLSelectElement).value)">
-            <option v-for="section in outlineSections" :key="section.id" :value="section.id">{{ section.title }}</option>
-          </select>
+          <AppSelect id="bot-section-jump" :model-value="outlineActive" :options="outlineSections.map((section) => ({ value: section.id, label: section.title }))" @update:model-value="jumpToSection" />
         </div>
 
         <div v-show="editorTab === 'access'" class="stack">
@@ -511,11 +509,11 @@
           <section class="card">
             <div class="card-header">
               <h2>模型</h2>
-              <span class="card-sub">按用途分配模型来源；接入地址和凭据在「提供商」页管理</span>
+              <span class="card-sub">地址和凭据在「提供商」页</span>
             </div>
             <div class="card-body model-allocation-workspace">
               <p v-if="modelRolesChangedElsewhere" class="hint warn-text">
-                模型分配刚在别处改过，通常是在聊天里让机器人自己换的。你在这一档也有未保存的修改，所以没有自动替换；直接保存会把那次改动覆盖掉。
+                模型分配刚在别处（如聊天里）改过，直接保存会覆盖那次改动。
                 <button type="button" class="btn ghost small" @click="adoptIncomingModelRoles">载入最新</button>
               </p>
               <nav class="model-purpose-nav" aria-label="模型用途" role="tablist">
@@ -541,7 +539,6 @@
                     <small :class="{ 'warn-text': modelPurposeStatus(item.role.key).problem }">{{ modelPurposeStatus(item.role.key).text }}</small>
                   </button>
                 </template>
-                <p class="model-purpose-foot">切换用途会保留未保存的修改。保存后仅影响当前机器人。</p>
               </nav>
               <div class="model-allocation-panels">
                 <div
@@ -553,32 +550,24 @@
                   role="tabpanel"
                   :aria-labelledby="`model-purpose-${role.key}`"
                 >
+                  <!-- 标题、模型来源、调度方式、添加按钮压成一行；调度说明放进下拉框的悬停提示，不再单占一行。
+                       只有一个选项的「模型来源」、只有一个模型时的调度方式都不显示。 -->
                   <div class="model-purpose-heading">
-                    <div>
+                    <div class="model-purpose-heading-main">
                       <h3>{{ modelPurposeLabel(role.key) }}</h3>
+                      <AppSelect v-if="role.key !== 'chat' && modelRoleSourceOptions(role.key).length > 1" :id="`model-source-${role.key}`" class="model-heading-select" aria-label="模型来源" :model-value="modelRoleSource(role.key)" :options="modelRoleSourceOptions(role.key)" @update:model-value="(value) => setModelRoleSource(role.key, value)" />
+                      <AppSelect v-if="roleForm[role.key] && !modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1" :id="`model-strategy-${role.key}`" class="model-heading-select" aria-label="调度方式" :title="modelRoutingDescription(role.key)" :model-value="effectiveModelRoutingStrategy(role.key)" :options="modelRoutingStrategiesFor(role.key)" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
                     </div>
                     <span class="cluster" style="gap: 6px">
                       <button v-if="isMediaRole(role.key) && roleForm[role.key]" type="button" class="btn ghost small" @click="clearRole(role.key)">停用</button>
                       <button class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
-                        <Plus :size="14" aria-hidden="true" />添加模型
+                        <Plus :size="14" aria-hidden="true" />添加
                       </button>
                     </span>
                   </div>
-                  <!-- 只有一个选项的「模型来源」、只有一个模型时的调度方式都不显示，整条工具栏也就跟着省掉。 -->
-                  <div v-if="(role.key !== 'chat' && modelRoleSourceOptions(role.key).length > 1) || (roleForm[role.key] && !modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1)" class="model-routing-toolbar">
-                    <div v-if="role.key !== 'chat' && modelRoleSourceOptions(role.key).length > 1" class="model-routing-control">
-                      <label :for="`model-source-${role.key}`">模型来源</label>
-                      <AppSelect :id="`model-source-${role.key}`" :model-value="modelRoleSource(role.key)" :options="modelRoleSourceOptions(role.key)" @update:model-value="(value) => setModelRoleSource(role.key, value)" />
-                    </div>
-                    <div v-if="roleForm[role.key] && !modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1" class="model-routing-control">
-                      <label :for="`model-strategy-${role.key}`">调度方式</label>
-                      <AppSelect :id="`model-strategy-${role.key}`" :model-value="effectiveModelRoutingStrategy(role.key)" :options="modelRoutingStrategiesFor(role.key)" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
-                    </div>
-                    <span v-if="!modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1" class="model-routing-toolbar-hint">{{ modelRoutingDescription(role.key) }}</span>
-                  </div>
                   <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
                     <GitBranch :size="22" aria-hidden="true" />
-                    <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong><p>模型、调度方式和后备路由随来源一起更新。</p></div>
+                    <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong></div>
                     <button class="btn small" type="button" @click="openModelRouteEditor(role.key, 0)">独立配置</button>
                   </div>
                   <template v-else>
@@ -673,7 +662,7 @@
                   <div class="field">
                     <label for="bot-model-request-timeout">单次模型请求超时（秒）</label>
                     <input id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft" class="input" type="number" min="0" :max="maximumModelRequestTimeoutSeconds" step="0.001" inputmode="decimal" aria-describedby="bot-model-request-timeout-hint" />
-                    <span id="bot-model-request-timeout-hint" class="hint">0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。</span>
+                    <span id="bot-model-request-timeout-hint" class="hint" title="0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。">0 为不限，建议填正数；每次请求单独计时。</span>
                   </div>
                 </div>
                 <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->
@@ -720,10 +709,7 @@
             <div class="card-body form-grid">
               <div class="field wide">
                 <AppSwitch v-model="form.llm_streaming_enabled">流式调用模型（默认开启）</AppSwitch>
-                <span class="hint">
-                  默认使用流式接收正文、思考和工具调用；思考不会作为聊天正文发送，工具参数完整后才会执行。
-                  可统计首 token 时延（TTFT），Telegram 私聊支持回复预览。仅当供应商明确不支持流式时才会尝试普通调用；其他失败按当前调度策略重试或切换。
-                </span>
+                <span class="hint">可统计首 token 时延，Telegram 私聊能预览回复；服务不支持时自动改普通调用。</span>
               </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
@@ -733,7 +719,7 @@
                   :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.model_disclosure = value as 'owner' | 'everyone'; }"
                 />
-                <span class="hint">默认对所有人如实回答模型 ID 和供应商；切换模型仍仅限主人。选择「仅主人」后，其他人问起时机器人会含糊带过，也不会凭训练记忆自报家门。</span>
+                <span class="hint">选「仅主人」后，其他人问起会含糊带过。</span>
               </div>
               <div class="field">
                 <label for="bot-repository-disclosure">谁能问出项目地址</label>
@@ -743,7 +729,7 @@
                   :options="disclosureOptions"
                   @update:model-value="(value) => { if (form) form.repository_disclosure = value as 'owner' | 'everyone'; }"
                 />
-                <span class="hint">默认对所有人提供开源仓库地址。选择「仅主人」后，其他人问「你源码在哪」时机器人会带过去，不给链接也不会编一个。仓库中包含默认提示词和全部工具实现。</span>
+                <span class="hint">选「仅主人」后，其他人问起不给链接。</span>
               </div>
             </div>
           </section>
@@ -759,7 +745,7 @@
             <div class="card-body form-grid">
               <div class="field wide">
                 <AppSwitch v-model="form.owner_llm_config_enabled">允许主人在聊天中修改提供商和模型</AppSwitch>
-                <span class="hint">仅主人账号可修改，保存前会校验目标模型是否可用。</span>
+                <span class="hint">保存前会校验模型是否可用。</span>
               </div>
             </div>
           </section>
@@ -769,15 +755,15 @@
             <div class="card-header">
               <div>
                 <h2>自动恢复规则</h2>
-                <span class="card-sub">所有文本模型用途共用；图片、语音和视频生成保持各自的任务策略</span>
+                <span class="card-sub">文本用途共用</span>
               </div>
               <span class="badge" :class="modelRecoveryIsCustom() ? 'accent' : ''">{{ modelRecoveryIsCustom() ? '自定义' : '默认' }}</span>
             </div>
             <div class="card-body">
               <div class="form-grid model-recovery-grid">
-                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">限流、普通 5xx 和连接故障在切换模型前原地重试 0–3 次，间隔逐次翻倍、最长 8 秒。</span></label>
+                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">限流、5xx、断连时先原地重试，间隔翻倍。</span></label>
                 <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().retry_delay_milliseconds" :min="0" :max="10000" :show-controls="false" label="重试间隔" @update:model-value="(value) => setModelRecoveryPolicyField('retry_delay_milliseconds', value)" /></label>
-                <label class="field"><span>连续失败几次后冷却</span><AppNumberInput :model-value="modelRecoveryPolicy().failures_before_cooldown ?? 3" :min="1" :max="10" :show-controls="false" label="连续失败几次后冷却" @update:model-value="(value) => setModelRecoveryPolicyField('failures_before_cooldown', value)" /><span class="hint">没到次数时只是这次请求改用备用，下次仍先用它。</span></label>
+                <label class="field"><span>连续失败几次后冷却</span><AppNumberInput :model-value="modelRecoveryPolicy().failures_before_cooldown ?? 3" :min="1" :max="10" :show-controls="false" label="连续失败几次后冷却" @update:model-value="(value) => setModelRecoveryPolicyField('failures_before_cooldown', value)" /><span class="hint">没到次数只换这一次。</span></label>
                 <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_cooldown_seconds" :min="0" :max="3600" :show-controls="false" label="瞬时错误首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('transient_cooldown_seconds', value)" /></label>
                 <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().status_cooldown_seconds" :min="0" :max="86400" :show-controls="false" label="限流鉴权首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('status_cooldown_seconds', value)" /></label>
                 <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().max_cooldown_seconds" :min="1" :max="86400" :show-controls="false" label="单次冷却上限" @update:model-value="(value) => setModelRecoveryPolicyField('max_cooldown_seconds', value)" /></label>
@@ -786,7 +772,7 @@
                 <AppSwitch :model-value="modelRecoveryPolicy().respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField('respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
                 <button v-if="modelRecoveryIsCustom()" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy">恢复默认规则</button>
               </div>
-              <p class="hint">鉴权失败、额度用完和上游给了等待时间的限流当场冷却；冷却后再失败按指数退避，冷却不在当前请求中等待。修改后点击页面「保存配置」生效。</p>
+              <p class="hint">鉴权失败、额度用完会立即冷却，再失败按指数退避。</p>
             </div>
           </section>
         </div>

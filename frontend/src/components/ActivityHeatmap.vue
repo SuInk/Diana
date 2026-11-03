@@ -6,10 +6,7 @@
     <div class="activity-head">
       <h3>活跃时段</h3>
       <div class="activity-controls">
-        <select v-model="groupID" class="input activity-group" aria-label="按群聊筛选">
-          <option value="">全部群聊和私聊</option>
-          <option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option>
-        </select>
+        <AppSelect v-model="groupID" class="activity-group" :options="groupOptions" aria-label="按群聊筛选" :searchable="groups.length > 8" />
         <div class="segmented" role="radiogroup" aria-label="活跃时段统计窗口">
           <button
             v-for="option in windowOptions"
@@ -83,6 +80,7 @@ import { getStatsActivity, type ActivityWindowID, type StatsActivity } from "../
 import { activityLevel, activityLevelColor, activityTimezoneNote } from "../lib/activity";
 import { formatNumber, formatTime } from "../lib/format";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
+import AppSelect from "./AppSelect.vue";
 
 const props = defineProps<{
   profileId: string;
@@ -100,6 +98,7 @@ const legendLevels = [0, 1, 2, 3, 4];
 
 const selected = ref<ActivityWindowID>("28d");
 const groupID = ref("");
+const groupOptions = computed(() => [{ value: "", label: "全部群聊和私聊" }, ...props.groups.map((group) => ({ value: group.id, label: group.name }))]);
 const data = ref<StatsActivity | null>(null);
 const loading = ref(false);
 const error = ref("");

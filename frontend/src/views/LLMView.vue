@@ -5,7 +5,7 @@
   <div class="provider-view">
     <header class="view-header">
       <div class="view-title">
-        <p>按能力分开管理模型、语音、视频和搜索的接入与凭据；机器人页按用途选用，联网搜索也在机器人页按机器人配置</p>
+        <p>各类提供商的接入与凭据，机器人页按用途选用</p>
       </div>
       <div class="view-actions">
         <button class="btn" type="button" :disabled="!profileSet" title="导出模型、语音、视频与搜索提供商（含密钥）" @click="exportProfiles">
@@ -36,7 +36,7 @@
         <div class="card-header">
           <div>
             <h2>模型提供商</h2>
-            <span class="card-sub">对话、识图、生图、视频和向量嵌入的接入；机器人页「模型分配」按用途选模型，同一分组内的顺序就是失败降级的优先级。</span>
+            <span class="card-sub">同组内顺序即降级优先级。</span>
           </div>
         </div>
         <div class="card-body stack" style="gap: 14px">
@@ -114,7 +114,7 @@
         <div class="card-header">
           <div>
             <h2>语音提供商</h2>
-            <span class="card-sub">语音合成和语音识别的接口、音色与格式；机器人页「模型分配」里选用，发送模式、字数和时长上限也在那里设置。</span>
+            <span class="card-sub">在机器人页「模型」里选用。</span>
           </div>
         </div>
         <div class="card-body stack" style="gap: 14px">
@@ -168,7 +168,7 @@
         <div class="card-header">
           <div>
             <h2>视频提供商</h2>
-            <span class="card-sub">文生视频、图生视频的接口格式与默认参数；机器人页「模型分配」的「视频生成」里选用。</span>
+            <span class="card-sub">在机器人页「模型 → 视频生成」里选用。</span>
           </div>
         </div>
         <div class="card-body stack" style="gap: 6px">
@@ -189,7 +189,7 @@
                 </button>
               </div>
             </div>
-            <p v-if="profileSet && videoProfiles.length === 0" class="muted provider-section-empty">还没有视频提供商。可灵、Vidu、Seedance、海螺等都能直连，点右上角「新建视频提供商」开始。</p>
+            <p v-if="profileSet && videoProfiles.length === 0" class="muted provider-section-empty">还没有视频提供商，可灵、Vidu、Seedance、海螺等都能直连。</p>
           </div>
         </div>
       </section>
@@ -275,7 +275,7 @@
             <div v-if="!mediaOnly" class="field">
               <label for="llm-channel-group">渠道分组（可选）</label>
               <input id="llm-channel-group" v-model="form.group" class="input" placeholder="例如 主力、备用" />
-              <span class="hint">同分组的渠道自动轮换降级；机器人页可把用途绑到整个分组。</span>
+              <span class="hint">同组自动轮换降级。</span>
             </div>
             <div v-if="!mediaOnly" class="field">
               <label for="llm-provider-kind">接入类型</label>
@@ -307,7 +307,6 @@
                   { value: 'responses', label: 'Responses API' }
                 ]"
               />
-              <span class="hint">平台预设会选择推荐模式，也可按服务实际支持情况切换。</span>
             </div>
             <div class="field wide">
               <label for="llm-baseurl">API 地址</label>
@@ -320,8 +319,8 @@
                 :placeholder="videoOnly ? (videoServiceBaseURLs[videoService] || 'https://your-video-api') : voiceOnly ? (currentVoiceService?.baseURL || 'https://your-tts-server') : supportsAPIStyle ? 'https://api.example.com/v1' : '留空使用官方地址'"
                 @input="clearInvalid('base_url')"
               />
-              <span v-if="videoOnly" class="hint">{{ videoServiceBaseURLs[videoService] ? "留空使用官方地址；海外站或中转时才需要填。" : "填服务的根地址，提交和查询路径在下面的参数里写。" }}</span>
-              <span v-else-if="voiceOnly" class="hint">{{ currentVoiceService?.baseURL ? (currentVoiceService.local ? "留空使用上面的本机默认地址；装在别处时填它的地址。" : "留空使用官方地址；走代理或中转时才需要填。") : "填服务的根地址。" }}</span>
+              <span v-if="videoOnly" class="hint">{{ videoServiceBaseURLs[videoService] ? "留空用官方地址。" : "填服务根地址。" }}</span>
+              <span v-else-if="voiceOnly" class="hint">{{ currentVoiceService?.baseURL ? (currentVoiceService.local ? "留空用本机默认地址。" : "留空用官方地址。") : "填服务根地址。" }}</span>
               <span v-else class="hint">
                 {{ selectedPreset?.hint }}；{{
                   supportsAPIStyle
@@ -349,12 +348,12 @@
                   <Eye v-else :size="14" aria-hidden="true" />
                 </button>
               </div>
-              <span v-if="voiceOnly && currentVoiceService?.local" class="hint">本机服务一般不校验 Key，随便填一个即可（保存时 Key 不能为空）。</span>
+              <span v-if="voiceOnly && currentVoiceService?.local" class="hint">本机服务填任意值即可。</span>
             </div>
             <div v-if="mediaOnly && modelOptions.length <= 1" class="field wide">
               <label for="llm-voice-model">模型 ID</label>
               <input id="llm-voice-model" v-model="voiceModel" class="input mono" :placeholder="videoOnly ? (videoService === '' ? 'sora-2' : '按服务文档填写，如 kling-v2-6、viduq3、ray-3.2') : voiceService === 'openai' ? 'tts-1、gpt-4o-mini-tts、FunAudioLLM/SenseVoiceSmall' : '按服务文档填写'" />
-              <span class="hint">机器人页按这个 ID 选用；没有模型概念的服务填一个好认的名字即可，比如服务名。</span>
+              <span class="hint">没有模型概念的服务填服务名即可。</span>
             </div>
             <div class="field wide">
               <label for="llm-desc">备注（可选）</label>
@@ -366,7 +365,6 @@
           <summary class="provider-editor-title">{{ videoOnly ? "视频参数" : voiceOnly ? "合成与识别参数" : "语音与视频服务" }}<span v-if="speechSummary" class="muted provider-editor-summary">{{ speechSummary }}</span></summary>
           <div class="form-grid">
             <div class="field wide">
-              <p class="hint">机器人选择此提供商后直接使用这里的参数；后备提供商也使用各自的设置。</p>
               <div v-for="role in editorSpeechRoles" :key="role.key" class="stack">
                 <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
                 <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
@@ -379,7 +377,7 @@
                   </label>
                 </div>
               </div>
-              <p class="hint">未启用此处参数时沿用机器人页已有的配置；启用后以这里为准，包括留空的默认值。语音的发送模式、字数和识别时长上限仍在机器人页设置。</p>
+              <p class="hint">不开启时沿用机器人页的旧配置。</p>
             </div>
           </div>
         </details>
@@ -390,8 +388,8 @@
               <div class="model-sync-row">
                 <div class="model-sync-copy">
                   <span class="model-sync-title">模型列表</span>
-                  <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，勾选启用，右侧编辑或删除。手动设置会在同步后保留。</span>
-                  <span v-else class="hint">从服务同步模型列表，也可手动添加中转或自建模型 ID。</span>
+                  <span v-if="modelOptions.length > 0" class="hint">{{ modelOptions.length }} 个模型，勾选启用。</span>
+                  <span v-else class="hint">同步或手动添加模型 ID。</span>
                 </div>
                 <span class="cluster" style="gap: 8px">
                   <button
@@ -469,8 +467,7 @@
                 <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
               </div>
               <span class="hint">
-                中转网关常靠请求头做会话亲和、分组或计费标记，填在这里的会原样发给这套配置的每个会话类请求；图片等无状态端点不带。同名时以这里为准，会覆盖内置的请求头。
-                <br />已保存的头出于和 API Key 同样的理由不回显值，留空则沿用，填了新值才覆盖；删掉整行才是删除这个头。
+                原样附在每个会话请求上，同名覆盖内置头。已保存的值不回显，留空沿用。
               </span>
             </div>
             <div v-if="form.provider === 'openai_compatible'" class="field wide">
@@ -488,18 +485,18 @@
                 @input="clearInvalid('user_agent')"
               />
               <span class="hint">
-                默认填本机的内置值 <code>{{ defaultUserAgent || "diana (darwin; arm64)" }}</code>——自报家门，不带版本号所以不会过期。订阅转发网关通常按「originator 精确匹配加 User-Agent 子串匹配」双因子认客户端，需要冒充特定客户端时在这里填它的 UA，配套的 <code>originator</code> 填到上面的自定义请求头里。
+                网关需要认特定客户端时再改，<code>originator</code> 填在请求头里。
               </span>
             </div>
             <div class="field">
               <label for="llm-max-concurrency">最大并发请求</label>
               <input id="llm-max-concurrency" v-model="form.max_concurrency" class="input" type="number" min="0" max="10000" step="1" />
-              <span class="hint">0 表示不限。共用这套配置的机器人一起排队，流式请求结束后释放名额。</span>
+              <span class="hint">0 为不限，共用的机器人一起排队。</span>
             </div>
             <div class="field">
               <label for="llm-max-rps">每秒请求上限（RPS）</label>
               <input id="llm-max-rps" v-model="form.max_rps" class="input" type="number" min="0" max="10000" step="0.001" />
-              <span class="hint">0 表示不限；正数至少 0.001。请求均匀发出，重试也受限制，等待计入请求超时。</span>
+              <span class="hint">0 为不限，最小 0.001。</span>
             </div>
           </div>
         </details>

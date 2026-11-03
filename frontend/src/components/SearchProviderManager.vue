@@ -4,7 +4,7 @@
 <template>
   <section class="card search-provider-manager">
     <div class="card-header">
-      <div><h2>搜索提供商</h2><span class="card-sub">统一管理接入地址和凭据；每台机器人在机器人页「联网搜索」中选择来源和优先级。</span></div>
+      <div><h2>搜索提供商</h2><span class="card-sub">在机器人页「联网搜索」里选用和排序。</span></div>
       <button v-if="!hideCreate" class="btn small primary" type="button" @click="picking = true"><Plus :size="14" aria-hidden="true" />新建搜索提供商</button>
     </div>
     <div class="card-body stack">
@@ -33,7 +33,6 @@
       </div>
       </div>
       <p v-if="!providers.length && !loading && !error" class="muted">还没有搜索提供商。点右上角「新建配置」添加，之后在机器人页「联网搜索」中选用。</p>
-      <p class="hint">用不用某个来源在机器人页「联网搜索」里选，测试按钮用已保存的配置搜索一次。已有 Exa、Tavily 的地址和密钥自动沿用；自定义来源支持 HTTP API、搜索 MCP 和浏览器搜索。</p>
     </div>
   </section>
 
@@ -47,7 +46,6 @@
       </button>
     </div>
     </template>
-    <p class="hint">地址和参数会按所选服务自动填写，之后仍可修改。</p>
     </div>
   </Modal>
 
@@ -56,7 +54,7 @@
       <p class="muted" style="margin: 0; font-size: 12.5px">{{ searchProviderTypeLabel(rowTest.provider.type) }} · {{ searchProviderAddress(rowTest.provider.url) }}</p>
       <input v-model="rowTest.query" class="input" maxlength="512" placeholder="输入测试搜索词…" aria-label="测试搜索词" @keydown.enter="runRowTest" />
       <button class="btn primary" type="button" :disabled="rowTest.running || !rowTest.query.trim()" @click="runRowTest"><Send :size="15" aria-hidden="true" />{{ rowTest.running ? '测试中…' : '测试搜索' }}</button>
-      <span class="hint">用已保存的配置和密钥搜索一次，不会改动配置。</span>
+      <span class="hint">用已保存的配置搜一次。</span>
       <div v-if="rowTest.result" class="search-provider-test-result" aria-live="polite">
         <div :class="rowTest.result.error ? 'warn-text' : ''">{{ rowTest.result.error ? '测试失败' : `搜索成功 · ${rowTest.result.result_count} 个结果` }} · {{ rowTest.result.duration_ms }} ms<template v-if="rowTest.result.http_status"> · HTTP {{ rowTest.result.http_status }}</template></div>
         <p v-if="rowTest.result.error" class="warn-text">{{ rowTest.result.error }}</p>
@@ -68,7 +66,7 @@
     <div class="stack search-provider-editor">
       <div class="field"><label for="search-provider-name">名称</label><input id="search-provider-name" v-model="editor.name" class="input" placeholder="例如 自建搜索 · 主力" maxlength="100" /></div>
       <div class="field"><label for="search-provider-type">接入协议</label><AppSelect id="search-provider-type" :model-value="editor.type" :options="searchProviderTypes" @update:model-value="changeType" /></div>
-      <div class="field"><label for="search-provider-url">{{ editor.type === 'browser' ? '搜索页面地址' : '接入地址' }}</label><input id="search-provider-url" v-model="editor.url" class="input mono" :placeholder="editor.type === 'browser' ? 'https://www.google.com/search' : editor.type === 'http' ? 'https://search.example.com/search' : 'https://search.example.com/mcp'" /><span class="hint">{{ editor.type === 'browser' ? '填写搜索页地址，可使用 {query} 占位符；否则搜索词作为下方查询参数传入。使用服务器上的隔离 Chrome / Chromium。' : '填写完整接口地址，支持 HTTPS 服务或本机 localhost HTTP 服务。' }}</span></div>
+      <div class="field"><label for="search-provider-url">{{ editor.type === 'browser' ? '搜索页面地址' : '接入地址' }}</label><input id="search-provider-url" v-model="editor.url" class="input mono" :placeholder="editor.type === 'browser' ? 'https://www.google.com/search' : editor.type === 'http' ? 'https://search.example.com/search' : 'https://search.example.com/mcp'" /><span class="hint">{{ editor.type === 'browser' ? '可用 {query} 占位，否则按下方查询参数传入。' : '完整接口地址，HTTPS 或本机 HTTP。' }}</span></div>
       <div v-if="editor.type === 'http' && editor.http_config" class="form-grid">
         <div class="field"><label for="search-http-method">请求方式</label><AppSelect id="search-http-method" :model-value="editor.http_config.method || 'POST'" :options="httpMethods" @update:model-value="editor.http_config.method = $event as 'GET' | 'POST'" /></div>
         <div class="field"><label for="search-http-auth">认证方式</label><AppSelect id="search-http-auth" :model-value="editor.http_config.auth_type || 'none'" :options="httpAuthTypes" @update:model-value="editor.http_config.auth_type = $event as 'none' | 'bearer' | 'header'" /></div>

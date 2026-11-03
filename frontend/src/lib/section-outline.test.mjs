@@ -24,6 +24,8 @@ test("active section follows the last heading above the sticky header boundary",
 test("mobile outline uses the compact section selector", () => {
   const source = readFileSync(new URL("../views/AssistantView.vue", import.meta.url), "utf8");
   assert.match(source, /<label for="bot-section-jump">跳转到分区<\/label>/);
-  assert.match(source, /<select id="bot-section-jump"[^>]*:value="outlineActive"/);
+  // 用项目统一的 AppSelect，不用系统原生下拉框。
+  assert.match(source, /<AppSelect id="bot-section-jump" :model-value="outlineActive"/);
+  assert.doesNotMatch(source, /<select\b/);
   assert.ok(!source.includes("mobileOutlineOpen"));
 });

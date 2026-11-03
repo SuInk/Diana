@@ -11,10 +11,7 @@
       </div>
       <label v-if="dimension !== 'group'" class="token-breakdown-filter">
         <span class="muted">{{ dimension === 'purpose' ? '模型' : '使用方式' }}</span>
-        <select v-model="filter" class="input" :disabled="options.length === 0">
-          <option value="">{{ dimension === 'purpose' ? '全部模型' : '全部使用方式' }}</option>
-          <option v-for="option in options" :key="option.key" :value="option.key">{{ option.label }}{{ option.detail ? `（${option.detail}）` : '' }}</option>
-        </select>
+        <AppSelect v-model="filter" :options="filterOptions" :disabled="options.length === 0" :aria-label="dimension === 'purpose' ? '按模型筛选' : '按使用方式筛选'" />
       </label>
     </div>
     <slot v-if="dimension === 'group'" name="groups" />
@@ -68,11 +65,13 @@
 import { computed, ref, watch } from "vue";
 import type { LLMUsageBreakdown } from "../api";
 import { formatNumber } from "../lib/format";
+import AppSelect from "./AppSelect.vue";
 import { cacheUsageDisplay, cacheUtilization, groupLLMUsage, usageShare, type UsageDimension } from "../lib/llm-usage";
 
 const props = defineProps<{ entries?: readonly LLMUsageBreakdown[]; rangeLabel: string }>();
 const dimension = ref<UsageDimension | "group">("purpose");
 const filter = ref("");
+const filterOptions = computed(() => [{ value: "", label: dimension.value === "purpose" ? "全部模型" : "全部使用方式" }, ...options.value.map((option) => ({ value: option.key, label: option.label, hint: option.detail || undefined }))]);
 const options = computed(() => groupLLMUsage(props.entries ?? [], dimension.value === "purpose" ? "model" : "purpose"));
 const rows = computed(() => dimension.value === "group" ? [] : groupLLMUsage(props.entries ?? [], dimension.value, filter.value));
 const subtotal = computed(() => rows.value.reduce((sum, row) => sum + row.total_tokens, 0));
@@ -95,7 +94,7 @@ watch(options, (values) => {
 .token-breakdown-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; justify-content: space-between; }
 .token-breakdown-filter { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
 .token-breakdown-filter > span { flex: none; white-space: nowrap; }
-.token-breakdown-filter select { width: min(280px, 100%); min-width: 0; }
+.token-breakdown-filter > :last-child { width: min(280px, 100%); min-width: 0; }
 .token-breakdown-table-wrap { overflow-x: auto; }
 .token-breakdown-scroll-hint { display: none; }
 .token-breakdown-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
@@ -112,6 +111,6 @@ watch(options, (values) => {
   .token-breakdown-controls > .segmented { width: 100%; }
   .token-breakdown-controls > .segmented button { flex: 1; }
   .token-breakdown-filter { width: 100%; }
-  .token-breakdown-filter select { flex: 1; width: auto; }
+  .token-breakdown-filter > :last-child { flex: 1; width: auto; }
 }
 </style>

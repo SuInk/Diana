@@ -10,9 +10,8 @@
         <AppSwitch :model-value="!draft.disabled" @update:model-value="setEnabled">允许联网搜索</AppSwitch>
         <button class="btn small ghost" type="button" @click="navigate('provider', { section: 'search' })"><Settings2 :size="14" aria-hidden="true" />管理搜索提供商</button>
       </div>
-      <p v-if="!modelValue" class="hint">这台机器人还没保存过搜索配置，下面是当前生效的默认值；改动后点「保存配置」即成为它自己的配置。</p>
-      <p v-if="draft.disabled" class="hint">已关闭，回复时不会联网搜索。下方来源会保留，重新打开即可沿用。</p>
-      <p v-else-if="!config.providers.length" class="hint warn-text">还没有搜索提供商，请先点「管理搜索提供商」新建。</p>
+      <p v-if="draft.disabled" class="hint">已关闭，来源保留。</p>
+      <p v-else-if="!config.providers.length" class="hint warn-text">还没有搜索提供商，先去「管理搜索提供商」新建。</p>
       <!-- 一览：和模型分配同一套样子，按运行时真正的尝试顺序串成一行，点「调整」才展开编辑。 -->
       <div v-if="draft.provider_ids.length" class="search-overview" :class="{ muted: draft.disabled }">
         <div class="model-overview-chain" aria-label="搜索来源，按尝试顺序排列">
