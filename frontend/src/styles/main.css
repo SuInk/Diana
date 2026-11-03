@@ -857,8 +857,9 @@ code {
 .model-route-enable-col {
   width: 46px;
 }
+/* 测试、立即恢复、编辑、删除最多四个按钮同时出现，80px 会把删除挤到表外。 */
 .model-route-actions-col {
-  width: 80px;
+  width: 116px;
 }
 .model-route-order-cell {
   color: var(--muted);
