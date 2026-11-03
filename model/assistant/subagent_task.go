@@ -363,13 +363,19 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			return
 		}
 		if ctx.Err() == nil || rootCtx.Err() == nil {
-			reason := publicTaskErrorMessage(err)
 			// 任务自己的时限到了就直说，别让里面某一步的报错顶替真正的原因。
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) && rootCtx.Err() == nil {
-				reason = fmt.Sprintf("超过任务时限（%s），已停止。", formatCodingDuration(timeout))
+			timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded) && rootCtx.Err() == nil
+			if item.task.Kind == "image" {
+				// 生图失败有自己的说法和开关：原因分类、处理建议，见 image_task_failure.go。
+				r.handleImageTaskFailure(rootCtx, item, err, timedOut, timeout)
+			} else {
+				reason := publicTaskErrorMessage(err)
+				if timedOut {
+					reason = fmt.Sprintf("超过任务时限（%s），已停止。", formatCodingDuration(timeout))
+				}
+				message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, reason)
+				_ = r.sendDiagnosticFollowup(rootCtx, item.event, subagentTaskPluginID(item), message)
 			}
-			message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, reason)
-			_ = r.sendDiagnosticFollowup(rootCtx, item.event, subagentTaskPluginID(item), message)
 			r.recordSubagentTaskLog(context.Background(), item, applog.KindError, applog.LevelError, "后台任务执行失败", err.Error())
 			r.persistSubagentTask(item, "failed", PluginTaskProgress{}, err, true)
 		}

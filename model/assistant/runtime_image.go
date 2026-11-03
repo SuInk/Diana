@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -510,7 +511,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 			r.recordImageUsage(ctx, cfg, resp, "image_generate", duration)
 			return resp, cfg, nil
 		}
-		lastErr = err
+		lastErr = annotateImageProviderAttempt(err, cfg)
 	}
 	return nil, llm.ProviderConfig{}, lastErr
 }
@@ -535,7 +536,7 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 			r.recordImageUsage(ctx, cfg, resp, "image_edit", duration)
 			return resp, cfg, nil
 		}
-		lastErr = err
+		lastErr = annotateImageProviderAttempt(err, cfg)
 	}
 	return nil, llm.ProviderConfig{}, lastErr
 }
@@ -1218,4 +1219,21 @@ func appendHistoryImageSegments(segments []MessageSegment, imageURLs []string) [
 		})
 	}
 	return segments
+}
+
+// annotateImageProviderAttempt 给图片接口的失败标上提供商和模型。图片配置档链只留
+// 最后一个错误，不标的话运行日志里只剩一句「EOF」，看不出是哪个模型、哪条线路断的。
+func annotateImageProviderAttempt(err error, cfg llm.ProviderConfig) error {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return err
+	}
+	var existing llmProviderAttemptError
+	if errors.As(err, &existing) {
+		return err
+	}
+	attempt := llmProviderAttemptError{provider: cfg.Provider, model: cfg.ImageModelWithDefault(), cause: err}
+	if attempt.label() == "" {
+		return err
+	}
+	return attempt
 }

@@ -343,6 +343,14 @@
                         <span>可用工具</span>
                         <pre>{{ traceJSON(step, "available_tools") }}</pre>
                       </div>
+                      <div v-if="traceText(step, 'notice')" class="debug-payload">
+                        <span>{{ traceMetadata(step).notice_sent ? "发进聊天的提示" : "未发出的提示" }}</span>
+                        <pre>{{ traceText(step, "notice") }}</pre>
+                      </div>
+                      <div v-if="traceSearchAPIs(step)" class="debug-payload">
+                        <span>搜索 API</span>
+                        <pre>{{ traceSearchAPIs(step) }}</pre>
+                      </div>
                       <div v-if="traceJSON(step, 'tool_input')" class="debug-payload">
                         <span>工具参数</span>
                         <pre>{{ traceJSON(step, "tool_input") }}</pre>
@@ -493,6 +501,14 @@
                       <div v-if="traceJSON(step, 'available_tools')" class="debug-payload">
                         <span>可用工具</span>
                         <pre>{{ traceJSON(step, "available_tools") }}</pre>
+                      </div>
+                      <div v-if="traceText(step, 'notice')" class="debug-payload">
+                        <span>{{ traceMetadata(step).notice_sent ? "发进聊天的提示" : "未发出的提示" }}</span>
+                        <pre>{{ traceText(step, "notice") }}</pre>
+                      </div>
+                      <div v-if="traceSearchAPIs(step)" class="debug-payload">
+                        <span>搜索 API</span>
+                        <pre>{{ traceSearchAPIs(step) }}</pre>
                       </div>
                       <div v-if="traceJSON(step, 'tool_input')" class="debug-payload">
                         <span>工具参数</span>
@@ -1726,7 +1742,8 @@ function tracePhaseLabel(step: AppLogEntry): string {
     agent_tool_completed: "工具调用完成",
     agent_protocol_repair: "Agent 协议修正",
     agent_completed: "Agent 完成",
-    agent_failed: "Agent 失败"
+    agent_failed: "Agent 失败",
+    image_task_failed: "图片任务失败"
   };
   return labels[phase] ?? step.message;
 }
@@ -1746,13 +1763,91 @@ function traceSummary(step: AppLogEntry): string {
     }
     return parts.join(" · ");
   }
+  if (metadata.phase === "image_task_failed") {
+    // 原因和建议原文在下面「发进聊天的提示」里，这里只放分类、出处和是否发出。
+    const parts = [`分类：${String(metadata.category ?? "unknown")}`];
+    if (metadata.provider_label) parts.push(String(metadata.provider_label));
+    parts.push(metadata.notice_sent ? "已在聊天里说明" : "未发进聊天");
+    return parts.join(" · ");
+  }
   const parts: string[] = [];
   if (metadata.purpose) parts.push(`用途：${String(metadata.purpose)}`);
   if (metadata.provider) parts.push(`提供商：${String(metadata.provider)}`);
   if (metadata.model) parts.push(`模型：${String(metadata.model)}`);
   if (metadata.tool) parts.push(`工具：${String(metadata.tool)}`);
+  const searchAPIs = traceSearchProviders(step)
+    .filter((item) => item.attempts > 0)
+    .map((item) => item.name);
+  if (searchAPIs.length) parts.push(`搜索 API：${searchAPIs.join("、")}`);
   if (metadata.finish_reason) parts.push(`结束原因：${String(metadata.finish_reason)}`);
   return parts.join(" · ");
+}
+
+interface TraceSearchProvider {
+  name: string;
+  type: string;
+  status: string;
+  outcome: string;
+  reason: string;
+  attempts: number;
+}
+
+// 联网搜索的工具元数据里记着每个搜索 API 的状态和逐次尝试，见 web_search_observability.go。
+function traceSearchProviders(step: AppLogEntry): TraceSearchProvider[] {
+  const toolMetadata = traceMetadata(step).tool_metadata as Record<string, unknown> | undefined;
+  const providers = toolMetadata?.providers;
+  if (!Array.isArray(providers)) return [];
+  return providers.map((raw) => {
+    const item = (raw ?? {}) as Record<string, unknown>;
+    return {
+      name: String(item.provider ?? "未知"),
+      type: String(item.type ?? ""),
+      status: String(item.status ?? ""),
+      outcome: String(item.outcome ?? ""),
+      reason: String(item.reason ?? ""),
+      attempts: Number(item.attempts ?? 0)
+    };
+  });
+}
+
+const searchStatusLabels: Record<string, string> = {
+  attempted: "已调用",
+  skipped: "跳过",
+  not_executed: "未调用",
+  ok: "成功",
+  success: "成功",
+  no_results: "无结果",
+  insufficient_evidence: "证据不足",
+  provider_error: "接口出错",
+  timeout: "超时",
+  budget_exhausted: "预算用完"
+};
+
+function searchStatusLabel(value: string): string {
+  return searchStatusLabels[value] ?? value;
+}
+
+function traceSearchAPIs(step: AppLogEntry): string {
+  const providers = traceSearchProviders(step);
+  if (!providers.length) return "";
+  const toolMetadata = (traceMetadata(step).tool_metadata ?? {}) as Record<string, unknown>;
+  const attempts = Array.isArray(toolMetadata.attempts) ? (toolMetadata.attempts as Record<string, unknown>[]) : [];
+  const lines = providers.map((provider) => {
+    const parts = [`${provider.name}${provider.type ? `（${provider.type}）` : ""}`, searchStatusLabel(provider.outcome || provider.status)];
+    if (provider.attempts > 0) parts.push(`调用 ${provider.attempts} 次`);
+    const own = attempts.filter((item) => String(item.provider ?? "") === provider.name);
+    const results = own.reduce((sum, item) => sum + Number(item.result_count ?? 0), 0);
+    if (own.length) parts.push(`结果 ${results} 条`);
+    const durations = own.map((item) => Number(item.duration_ms ?? 0)).filter((value) => value > 0);
+    if (durations.length) parts.push(`最长 ${formatDuration(Math.max(...durations))}`);
+    const errors = [...new Set(own.map((item) => String(item.error_code ?? "")).filter(Boolean))];
+    if (errors.length) parts.push(`错误：${errors.map(searchStatusLabel).join("、")}`);
+    if (provider.reason) parts.push(provider.reason);
+    return parts.filter(Boolean).join(" · ");
+  });
+  const summary = [toolMetadata.status, toolMetadata.stop_reason].filter(Boolean).map((value) => searchStatusLabel(String(value)));
+  if (summary.length) lines.push(`整体：${summary.join(" · ")}`);
+  return lines.join("\n");
 }
 
 function traceJSON(step: AppLogEntry, key: string): string {

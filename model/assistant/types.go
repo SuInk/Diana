@@ -786,6 +786,9 @@ type BotConfig struct {
 	// 回一句，不把错误原文发进聊天。默认关：已关掉错误提示的机器人升级后保持静默。
 	ErrorPersonaReplyEnabled *bool  `json:"error_persona_reply_enabled,omitempty"`
 	ErrorReplyPrefix         string `json:"error_reply_prefix,omitempty"`
+	// ImageFailureNoticeEnabled 控制生图、改图失败时要不要在聊天里说明原因和处理建议，
+	// nil 按开启处理。它独立于 ErrorNotifyEnabled：图是有人点名要的，见 image_task_failure.go。
+	ImageFailureNoticeEnabled *bool `json:"image_failure_notice_enabled,omitempty"`
 	// MutedReplyPauseEnabled 为空或 true 时，机器人在群里被禁言期间只记上下文、
 	// 不做回复判断和生成（见 bot_mute.go）。
 	MutedReplyPauseEnabled *bool `json:"muted_reply_pause_enabled,omitempty"`
@@ -1496,6 +1499,7 @@ type ConfigPayload struct {
 	MutedReplyJudgmentEnabled      *bool                `json:"muted_reply_judgment_enabled,omitempty"`
 	ErrorPersonaReplyEnabled       *bool                `json:"error_persona_reply_enabled,omitempty"`
 	ErrorReplyPrefix               string               `json:"error_reply_prefix,omitempty"`
+	ImageFailureNoticeEnabled      *bool                `json:"image_failure_notice_enabled,omitempty"`
 	SendRetryAttempts              int                  `json:"send_retry_attempts,omitempty"`
 	sendRetrySettings
 	SendChunkIntervalMS            int                  `json:"send_chunk_interval_ms,omitempty"`
@@ -2836,6 +2840,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MutedImageDescriptionEnabled:    copyBoolPointer(cfg.MutedImageDescriptionEnabled),
 		MutedReplyJudgmentEnabled:       copyBoolPointer(cfg.MutedReplyJudgmentEnabled),
 		ErrorPersonaReplyEnabled:        copyBoolPointer(cfg.ErrorPersonaReplyEnabled),
+		ImageFailureNoticeEnabled:       copyBoolPointer(cfg.ImageFailureNoticeEnabled),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
 		sendRetrySettings:               cfg.sendRetrySettings,
@@ -3094,6 +3099,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MutedImageDescriptionEnabled:    copyBoolPointer(payload.MutedImageDescriptionEnabled),
 		MutedReplyJudgmentEnabled:       copyBoolPointer(payload.MutedReplyJudgmentEnabled),
 		ErrorPersonaReplyEnabled:        copyBoolPointer(payload.ErrorPersonaReplyEnabled),
+		ImageFailureNoticeEnabled:       copyBoolPointer(payload.ImageFailureNoticeEnabled),
 		ErrorReplyPrefix:                payload.ErrorReplyPrefix,
 		SendRetryAttempts:               payload.SendRetryAttempts,
 		sendRetrySettings:               payload.sendRetrySettings,

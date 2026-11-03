@@ -69,6 +69,7 @@ type dianaBotConfigSnapshot struct {
 	MutedImageDescriptionEnabled    bool                 `json:"muted_image_description_enabled"`
 	MutedReplyJudgmentEnabled       bool                 `json:"muted_reply_judgment_enabled"`
 	ErrorPersonaReplyEnabled        bool                 `json:"error_persona_reply_enabled"`
+	ImageFailureNoticeEnabled       bool                 `json:"image_failure_notice_enabled"`
 	ErrorReplyPrefix                string               `json:"error_reply_prefix,omitempty"`
 	SendRetryAttempts               int                  `json:"send_retry_attempts"`
 	SendBackoffInitialSeconds       int                  `json:"send_backoff_initial_seconds"`
@@ -317,6 +318,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MutedImageDescriptionEnabled:    cfg.mutedImageDescriptionEnabled(),
 		MutedReplyJudgmentEnabled:       cfg.mutedReplyJudgmentEnabled(),
 		ErrorPersonaReplyEnabled:        boolValue(cfg.ErrorPersonaReplyEnabled, false),
+		ImageFailureNoticeEnabled:       boolValue(cfg.ImageFailureNoticeEnabled, true),
 		ErrorReplyPrefix:                cfg.ErrorReplyPrefix,
 		SendRetryAttempts:               cfg.SendRetryAttempts,
 		SendBackoffInitialSeconds:       cfg.SendBackoffInitialSeconds,
