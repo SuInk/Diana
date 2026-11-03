@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -113,7 +114,9 @@ func (r *Runtime) matchCurrentGroupMemberAvatar(ctx context.Context, event Messa
 			defer wg.Done()
 			for member := range jobs {
 				if provider, ok := eventChannelFor[MemberAvatarChannel](r, event); ok {
-					if _, err := r.getGroupMemberInfoForEvent(matchCtx, event, event.GroupID, member.UserID); err != nil {
+					// 明确不在群的排除；只是没权限查（隐藏成员的超级群）不算退群，
+					// 否则这种群里每个候选人都会被跳过，永远比对不出是谁。
+					if _, err := r.getGroupMemberInfoForEvent(matchCtx, event, event.GroupID, member.UserID); err != nil && !errors.Is(err, ErrMembershipUnverifiable) {
 						continue
 					}
 					avatar, err := cachedMemberAvatar(matchCtx, r, event, provider, member.UserID)

@@ -194,6 +194,27 @@ func (r *Runtime) reachableAvatarUserIDs(ctx context.Context, event MessageEvent
 	if userID := strings.TrimSpace(event.UserID); userID != "" {
 		reachable[userID] = true
 	}
+	// 没有完整成员名单的平台（Telegram）只能逐个问 getChatMember，而开了「隐藏成员」
+	// 的超级群里非管理员机器人问谁都是 CHAT_ADMIN_REQUIRED——这道检查会把群里每个
+	// 人都拦下。本群当前对话里发过言、被引用过的人本身就是在场的证据，直接放行。
+	// 只看本会话，不带跨群联想进来的别群消息。
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && !IsOneBotPlatform(r.currentPlatform(event)) {
+		history, _ := r.sessionContextHistory(event)
+		groupID := strings.TrimSpace(event.GroupID)
+		for _, item := range history {
+			if item.Kind != EventKindGroup || strings.TrimSpace(item.GroupID) != groupID {
+				continue
+			}
+			if userID := strings.TrimSpace(item.UserID); userID != "" {
+				reachable[userID] = true
+			}
+			if item.Quoted != nil {
+				if userID := strings.TrimSpace(item.Quoted.UserID); userID != "" {
+					reachable[userID] = true
+				}
+			}
+		}
+	}
 	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" && IsOneBotPlatform(r.currentPlatform(event)) {
 		if members, err := r.getGroupMemberListForEvent(ctx, event, event.GroupID); err == nil {
 			for _, member := range members {
