@@ -59,19 +59,19 @@ func TestClassifyImageFailureSeesThroughProviderLabel(t *testing.T) {
 	}
 }
 
-// 错误提示关掉了，生图失败照样要告诉请求的人原因和建议；生图失败开关关掉才静默。
-func TestImageTaskFailureNoticeIgnoresErrorNotifySwitch(t *testing.T) {
+// 生图失败的提示跟着「错误提示」开关走：开着就说明原因和建议，关掉就静默。
+func TestImageTaskFailureNoticeFollowsErrorNotifySwitch(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
-		imageFlag  *bool
+		notify     *bool
 		wantNotice bool
 	}{
 		{name: "default", wantNotice: true},
-		{name: "disabled", imageFlag: boolPtr(false), wantNotice: false},
+		{name: "disabled", notify: boolPtr(false), wantNotice: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			channel := &concurrentRecordingChannel{}
-			runtime := NewRuntime(BotConfig{BotAccount: "42", ErrorNotifyEnabled: boolPtr(false), ImageFailureNoticeEnabled: tc.imageFlag}, channel, NewPluginManager(), nil, nil, nil, nil)
+			runtime := NewRuntime(BotConfig{BotAccount: "42", ErrorNotifyEnabled: tc.notify}, channel, NewPluginManager(), nil, nil, nil, nil)
 			event := MessageEvent{Kind: EventKindGroup, GroupID: "12345", UserID: "10001", MessageID: "message-1"}
 			task := PluginTask{
 				Kind: "image", Name: "图片生成", Key: "image:failure",

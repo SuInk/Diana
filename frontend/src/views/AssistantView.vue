@@ -1447,7 +1447,7 @@
                   <span class="switch-label">出错时在聊天里提示</span>
                 </label>
                 <span class="hint">
-                  关闭后仍保留完整事件记录和运行日志，只是不把错误发进聊天。账号安全拦下的回复也走这个开关：提示会用机器人自己的口吻说，
+                  生图、改图失败时按原因（安全审核、限流、超时、鉴权、模型名等）说明并附处理建议。关闭后仍保留完整事件记录和运行日志，只是不把错误发进聊天。账号安全拦下的回复也走这个开关：提示会用机器人自己的口吻说，
                   并且不会复述被拦下的内容或风险类别；改写用的模型调用失败时退回固定文案。
                 </span>
               </div>
@@ -1462,14 +1462,6 @@
                   <span class="switch-label">出错时仍用人设回一句</span>
                 </label>
                 <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.image_failure_notice_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">生图失败时说明原因和处理建议</span>
-                </label>
-                <span class="hint">默认开启，不受上面的错误提示开关影响：画图、改图是有人在等的结果。失败时按原因（安全审核、限流、超时、鉴权、模型名等）回一句，并附上用户或管理员能做的处理建议；分类和建议同时记进运行日志和这条消息的调试记录。</span>
               </div>
               <div class="field wide">
                 <label>发送失败重试</label>
@@ -4713,7 +4705,6 @@ function setForm(config: BotProfileConfig): void {
     muted_image_description_enabled: config.muted_image_description_enabled ?? true,
     muted_reply_judgment_enabled: config.muted_reply_judgment_enabled ?? false,
     error_persona_reply_enabled: config.error_persona_reply_enabled ?? false,
-    image_failure_notice_enabled: config.image_failure_notice_enabled ?? true,
     recall_reply_auto_delete_enabled: config.recall_reply_auto_delete_enabled ?? false,
     recall_reply_auto_delete_delay_seconds: config.recall_reply_auto_delete_delay_seconds ?? defaultRecallReplyAutoDeleteDelaySeconds,
     debug_mode_enabled: config.debug_mode_enabled ?? true,

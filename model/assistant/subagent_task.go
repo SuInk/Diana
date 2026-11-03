@@ -366,7 +366,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			// 任务自己的时限到了就直说，别让里面某一步的报错顶替真正的原因。
 			timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded) && rootCtx.Err() == nil
 			if item.task.Kind == "image" {
-				// 生图失败有自己的说法和开关：原因分类、处理建议，见 image_task_failure.go。
+				// 生图失败按原因分类并附处理建议，见 image_task_failure.go。
 				r.handleImageTaskFailure(rootCtx, item, err, timedOut, timeout)
 			} else {
 				reason := publicTaskErrorMessage(err)

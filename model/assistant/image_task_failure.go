@@ -14,8 +14,8 @@ import (
 )
 
 // 生图、改图是群友点名要的东西，后台任务失败后以前只有一句通用的「后台任务执行失败」，
-// 而且跟着「错误提示」开关走——开关一关，请求的人就等不到任何下文。这里把失败归成
-// 几类，每类配一句人能照着做的处理建议，单独受「生图失败时说明原因」开关控制。
+// 看不出是被审核拦了、限流了还是网络断了，也不知道该怎么办。这里把失败归成几类，
+// 每类配一句人能照着做的处理建议；发不发仍由「错误提示」开关决定，和别的诊断一致。
 
 // imageFailureAdvice 是一次生图失败对外的说法。Category 进运行日志和调试记录，
 // 方便按类统计；Reason、Advice 发进聊天，不含地址、密钥这类细节。
@@ -125,25 +125,15 @@ func (a imageFailureAdvice) message(taskName string) string {
 	return fmt.Sprintf("%s失败：%s。\n处理建议：%s", name, strings.TrimRight(a.Reason, "。"), a.Advice)
 }
 
-// imageFailureNoticeAllowed 读「生图失败时说明原因」开关，默认开。它独立于「错误提示」：
-// 生图是有人在等的结果，关掉通用报错的机器人也该告诉请求的人图没画出来。
-func (r *Runtime) imageFailureNoticeAllowed(event MessageEvent) bool {
-	if r.profileDisabled(event.ProfileID) {
-		return false
-	}
-	return boolValue(r.effectiveConfigForEvent(event).ImageFailureNoticeEnabled, true)
-}
-
 // handleImageTaskFailure 记下生图失败的分类和建议，并在开关允许时发进聊天。
 func (r *Runtime) handleImageTaskFailure(ctx context.Context, item reservedSubagentTask, err error, timedOut bool, timeout time.Duration) {
 	advice := classifyImageFailure(err, timedOut, timeout)
 	notice := advice.message(item.task.Name)
-	allowed := r.imageFailureNoticeAllowed(item.event)
+	allowed := r.diagnosticAllowed(item.event, subagentTaskPluginID(item))
 	sent := false
 	var sendErr error
 	if allowed {
-		// 失败提示不是模型对哪条消息的回答，不能让连发交接据此落定（见 sender_burst.go）。
-		sendErr = r.sendSubagentFollowup(withoutCarryOverDelivery(ctx), item.event, notice)
+		sendErr = r.sendDiagnosticFollowup(ctx, item.event, subagentTaskPluginID(item), notice)
 		sent = sendErr == nil
 	}
 	detail := ""
