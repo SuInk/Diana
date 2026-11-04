@@ -435,11 +435,36 @@ func TestTelegramOutgoingMentions(t *testing.T) {
 	}
 }
 
+func TestTelegramOutgoingMentionTrailingSpace(t *testing.T) {
+	usernames := map[string]string{"10002": "alice"}
+	for _, tc := range []struct{ source, want string }{
+		{"<diana-at id=\"10002\"/>你好", "@alice 你好"},
+		{"<diana-at id=\"10002\"/>hello", "@alice hello"},
+		{"<diana-at id=\"10002\"/> 你好", "@alice 你好"},
+		{"<diana-at id=\"10002\"/>\n你好", "@alice\n你好"},
+		{"<diana-at id=\"10002\"/>，你好", "@alice，你好"},
+		{"<diana-at id=\"10002\"/>", "@alice"},
+		{"**<diana-at id=\"10002\"/>**你好", "@alice 你好"},
+		{"<diana-at id=\"10002\"/><diana-at id=\"10002\"/>", "@alice @alice"},
+		{"`<diana-at id=\"10002\"/>x`", "<diana-at id=\"10002\"/>x"},
+	} {
+		text, entities := renderTelegramOutgoingText(tc.source, nil, usernames)
+		if text != tc.want {
+			t.Fatalf("source=%q text=%q want=%q", tc.source, text, tc.want)
+		}
+		for _, entity := range entities {
+			if entity.Type == "text_mention" && entityAt(t, text, entity) != "@alice" {
+				t.Fatalf("misaligned entity in %q: %#v", text, entity)
+			}
+		}
+	}
+}
+
 func TestTelegramOutgoingMentionPositions(t *testing.T) {
 	for _, tc := range []struct{ source, want, bold string }{
-		{"🎉 **<diana-at id=\"10002\"/>**<diana-at id=\"10002\"/> <diana-at id=\"10003\"/>", "🎉 @a_b_c@a_b_c @小😀", "@a_b_c"},
-		{"**前<diana-at id=\"10002\"/>后**", "前@a_b_c后", "前@a_b_c后"},
-		{"**<diana-at id=\"10002\"/>尾**", "@a_b_c尾", "@a_b_c尾"},
+		{"🎉 **<diana-at id=\"10002\"/>**<diana-at id=\"10002\"/> <diana-at id=\"10003\"/>", "🎉 @a_b_c @a_b_c @小😀", "@a_b_c"},
+		{"**前<diana-at id=\"10002\"/>后**", "前@a_b_c 后", "前@a_b_c 后"},
+		{"**<diana-at id=\"10002\"/>尾**", "@a_b_c 尾", "@a_b_c 尾"},
 		{"**头<diana-at id=\"10002\"/>**", "头@a_b_c", "头@a_b_c"},
 		{"# <diana-at id=\"10002\"/>\n- <diana-at id=\"10003\"/>", "@a_b_c\n• @小😀", "@a_b_c"},
 		{"# **<diana-at id=\"10002\"/>** 标题\n- [x] <diana-at id=\"10003\"/>", "@a_b_c 标题\n☑ @小😀", "@a_b_c 标题"},

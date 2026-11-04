@@ -269,8 +269,8 @@ func TestTelegramDraftTruncatesExpandedUsernamesWithoutDisabling(t *testing.T) {
 	}
 	for _, call := range calls {
 		assertTelegramDraftPayloadBounds(t, call.Params)
-		if call.Params["text"] != strings.Repeat("@"+username, 124) || len(call.Params["entities"].([]any)) != 124 {
-			t.Fatal("draft should retain 124 whole usernames and no partial mention")
+		if call.Params["text"] != strings.Repeat("@"+username+" ", 120) || len(call.Params["entities"].([]any)) != 120 {
+			t.Fatalf("draft should retain 120 whole usernames and no partial mention: text=%q", call.Params["text"])
 		}
 	}
 	if err := api.channel().Send(context.Background(), OutgoingMessage{UserID: "10002", Text: source, MentionUsernames: map[string]string{"10002": username}}); err == nil {
