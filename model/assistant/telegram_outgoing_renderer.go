@@ -3,7 +3,11 @@
 
 package assistant
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
 
 type telegramOpaqueText struct {
 	marker   string
@@ -26,6 +30,7 @@ func renderTelegramOutgoingText(text string, names, usernames map[string]string)
 	}
 	renderer := newTelegramOutgoingRenderer(reserved)
 	text = renderer.protectCode(text)
+	text = spaceAfterTelegramMentions(text)
 	text = dianaMentionMarkerPattern.ReplaceAllStringFunc(text, func(marker string) string {
 		id := dianaMentionMarkerPattern.FindStringSubmatch(marker)[1]
 		display := mentionDisplayText(id, names[id])
@@ -40,6 +45,39 @@ func renderTelegramOutgoingText(text string, names, usernames map[string]string)
 	})
 	text = convertMarkdownTableRows(text, renderer.table)
 	return renderer.markdown(text)
+}
+
+// spaceAfterTelegramMentions 让 @ 后面像客户端里手打的那样跟一个空格：
+// 「@alice你好」读起来像一个词，用户名还会和后文粘在一起。紧跟强调符号时
+// 空格补在符号之后，免得「**@a **」让粗体闭合失效；后面是空白、标点或结尾就不补。
+func spaceAfterTelegramMentions(text string) string {
+	matches := dianaMentionMarkerPattern.FindAllStringIndex(text, -1)
+	if len(matches) == 0 {
+		return text
+	}
+	var out strings.Builder
+	last := 0
+	for _, match := range matches {
+		end := match[1]
+		for end < len(text) && strings.IndexByte("*_~", text[end]) >= 0 {
+			end++
+		}
+		out.WriteString(text[last:end])
+		last = end
+		if end == len(text) {
+			continue
+		}
+		if strings.HasPrefix(text[end:], dianaMentionMarkerPrefix) {
+			out.WriteByte(' ')
+			continue
+		}
+		next, _ := utf8.DecodeRuneInString(text[end:])
+		if !unicode.IsSpace(next) && !unicode.IsPunct(next) {
+			out.WriteByte(' ')
+		}
+	}
+	out.WriteString(text[last:])
+	return out.String()
 }
 
 func newTelegramOutgoingRenderer(reserved []string) *telegramOutgoingRenderer {
