@@ -62,7 +62,7 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		id := fmt.Sprintf("remote_image_%d", len(t.images)+1)
 		t.images[id] = image
 		t.parts = []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: image, Detail: "high"}}
-		result, _ := json.Marshal(map[string]any{"image_id": id, "status": "loaded", "message": "真实画面已附加，请先检查内容再决定是否发送。"})
+		result, _ := json.Marshal(map[string]any{"image_id": id, "status": "loaded", "message": remoteImageViewMessage(id)})
 		return string(result), nil
 	case "view_avatar":
 		if len(t.images) >= 8 {
@@ -101,6 +101,10 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 				return "", fmt.Errorf("相册目前只支持 Telegram")
 			}
 			ids = attachmentInputStrings(input["image_ids"])
+			if len(ids) == 0 {
+				// 回放里模型会把相册的 ID 列表填进 image_id。
+				ids = attachmentInputStrings(input["image_id"])
+			}
 			if len(ids) < 2 || len(ids) > 8 {
 				return "", fmt.Errorf("相册需要 2 至 8 张已查看的图片")
 			}
@@ -129,6 +133,14 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 	default:
 		return "", fmt.Errorf("action 必须是 view、view_avatar、send 或 send_album")
 	}
+}
+
+// remoteImageViewMessage 把「看过」和「发出」分开说清。运行时在每个工具结果后追加
+// 「用 send 回复并结束本轮」，回复工具也叫 send：模型曾看完图只用回复工具收尾，
+// 还说「上面是宣传图」，群里其实一张图都没有。
+func remoteImageViewMessage(id string) string {
+	return "真实画面只附加给你看，还没发到聊天，对方看不到。要发就再调 remote_image，action=send、image_id=" + id +
+		"（多张用 send_album）；回复工具 send 只发文字，不会带上这张图，没发图就别说「上面这张」。"
 }
 
 func (t *dianaRemoteImageTool) ToolResultParts(string) []llm.ContentPart {

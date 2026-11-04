@@ -63,6 +63,10 @@ func TestRemoteImageViewThenTelegramUpload(t *testing.T) {
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
 		t.Fatal(err)
 	}
+	// 回复工具也叫 send，view 的结果要说清图还没发、发图得再调 action=send。
+	if message, _ := result["message"].(string); !strings.Contains(message, "还没发到聊天") || !strings.Contains(message, "action=send、image_id="+result["image_id"].(string)) {
+		t.Fatalf("view message does not explain how to send: %q", message)
+	}
 	parts := tool.ToolResultParts(output)
 	if len(parts) != 1 || parts[0].ImageURL == "" {
 		t.Fatal("missing visual attachment")
@@ -158,5 +162,35 @@ func TestRemoteImageViewAvatarRejectsUnavailableSource(t *testing.T) {
 		if len(tool.ToolResultParts(output)) != 0 {
 			t.Fatalf("input %v attached an image", input)
 		}
+	}
+}
+
+// 回放里模型会把相册的 ID 列表填进 image_id，照样按相册发。
+func TestRemoteImageSendAlbumAcceptsIDListInImageID(t *testing.T) {
+	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	var data bytes.Buffer
+	if err := png.Encode(&data, image.NewRGBA(image.Rect(0, 0, 20, 20))); err != nil {
+		t.Fatal(err)
+	}
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(data.Bytes())
+	}))
+	defer source.Close()
+	api := newFakeTelegramAPI(t, map[string]any{"sendMediaGroup": []any{map[string]any{"message_id": 7}, map[string]any{"message_id": 8}}})
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100123", UserID: "22222"}
+	r := NewRuntime(BotConfig{Platform: PlatformTelegram}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
+	tool := newDianaRemoteImageTool(r, event)
+	ctx := context.Background()
+	for range 2 {
+		if _, err := tool.Run(ctx, map[string]any{"action": "view", "url": source.URL}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tool.Run(ctx, map[string]any{"action": "send_album", "image_id": []any{"remote_image_1", "remote_image_2"}}); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.callsOf("sendMediaGroup")) != 1 {
+		t.Fatal("album was not sent")
 	}
 }
