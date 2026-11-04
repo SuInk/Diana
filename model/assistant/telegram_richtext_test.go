@@ -405,12 +405,12 @@ func TestTelegramOutgoingMentions(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, username, display, kind string
 	}{
-		{"username", "<diana-at id=\"10002\"/>", "some_user_name", "@some_user_name", "mention"},
-		{"short trusted username", "<diana-at id=\"10002\"/>", "a", "@a", "mention"},
-		{"numeric trusted username", "<diana-at id=\"10002\"/>", "2_a", "@2_a", "mention"},
-		{"all numeric trusted username", "<diana-at id=\"10002\"/>", "12345", "@12345", "mention"},
-		{"case preserved", "<diana-at id=\"10002\"/>", "Some_User", "@Some_User", "mention"},
-		{"max length", "<diana-at id=\"10002\"/>", strings.Repeat("a", 32), "@" + strings.Repeat("a", 32), "mention"},
+		{"username", "<diana-at id=\"10002\"/>", "some_user_name", "@some_user_name", "text_mention"},
+		{"short trusted username", "<diana-at id=\"10002\"/>", "a", "@a", "text_mention"},
+		{"numeric trusted username", "<diana-at id=\"10002\"/>", "2_a", "@2_a", "text_mention"},
+		{"all numeric trusted username", "<diana-at id=\"10002\"/>", "12345", "@12345", "text_mention"},
+		{"case preserved", "<diana-at id=\"10002\"/>", "Some_User", "@Some_User", "text_mention"},
+		{"max length", "<diana-at id=\"10002\"/>", strings.Repeat("a", 32), "@" + strings.Repeat("a", 32), "text_mention"},
 		{"too long", "<diana-at id=\"10002\"/>", strings.Repeat("a", 33), "@小😀_*[名]", "text_mention"},
 		{"whitespace", "<diana-at id=\"10002\"/>", " handle ", "@小😀_*[名]", "text_mention"},
 		{"nickname", "<diana-at id=\"10002\"/>", "", "@小😀_*[名]", "text_mention"},
@@ -456,7 +456,7 @@ func TestTelegramOutgoingMentionPositions(t *testing.T) {
 				switch entity.Type {
 				case "bold":
 					foundBold = foundBold || body == tc.bold
-				case "mention", "text_mention":
+				case "text_mention":
 					mentions++
 					if body != "@a_b_c" && body != "@小😀" {
 						t.Fatalf("misaligned entity=%#v body=%q", entity, body)
@@ -489,7 +489,7 @@ func TestTelegramOutgoingCodeMarkersStayLiteral(t *testing.T) {
 			}
 			mentions := 0
 			for _, entity := range entities {
-				if entity.Type == "mention" || entity.Type == "text_mention" {
+				if entity.Type == "text_mention" {
 					mentions++
 					if entityAt(t, text, entity) != "@other_user" {
 						t.Fatalf("code marker became mention: %#v", entity)
@@ -509,7 +509,7 @@ func TestTelegramOutgoingMentionLinkPriority(t *testing.T) {
 		"[前 **<diana-at id=\"10002\"/>** 后](https://example.com)",
 	} {
 		text, entities := renderTelegramOutgoingText(source+" [网址](https://example.org)", nil, map[string]string{"10002": "some_user"})
-		mention, ok := findEntity(entities, "mention")
+		mention, ok := findEntity(entities, "text_mention")
 		if !ok || entityAt(t, text, mention) != "@some_user" {
 			t.Fatalf("text=%q entities=%#v", text, entities)
 		}
@@ -530,10 +530,10 @@ func TestTelegramOutgoingLinkTargetsRestoreOpaqueText(t *testing.T) {
 		wantText string
 		kind     string
 	}{
-		{"username", "<diana-at id=\"10002\"/>", "alice_name", "https://example.com/@alice_name", "个人页 @alice_name", "mention"},
+		{"username", "<diana-at id=\"10002\"/>", "alice_name", "https://example.com/@alice_name", "个人页 @alice_name", "text_mention"},
 		{"fallback", "<diana-at id=\"10002\"/>", "", "https://example.com/@Alice", "个人页 @Alice", "text_mention"},
-		{"repeated", "<diana-at id=\"10002\"/>/<diana-at id=\"10002\"/>", "alice_name", "https://example.com/@alice_name/@alice_name", "个人页 @alice_name", "mention"},
-		{"code", "`<diana-at id=\"10002\"/>`", "alice_name", "https://example.com/<diana-at id=\"10002\"/>", "个人页 @alice_name", "mention"},
+		{"repeated", "<diana-at id=\"10002\"/>/<diana-at id=\"10002\"/>", "alice_name", "https://example.com/@alice_name/@alice_name", "个人页 @alice_name", "text_mention"},
+		{"code", "`<diana-at id=\"10002\"/>`", "alice_name", "https://example.com/<diana-at id=\"10002\"/>", "个人页 @alice_name", "text_mention"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			source := "[个人页](https://example.com/" + tc.target + ") <diana-at id=\"10002\"/>"
@@ -601,7 +601,7 @@ func TestTelegramOutgoingMentionTables(t *testing.T) {
 			t.Fatalf("unaligned visible table: %q", text)
 		}
 	}
-	for _, kind := range []string{"mention", "text_mention", "bold", "pre"} {
+	for _, kind := range []string{"text_mention", "bold", "pre"} {
 		entity, ok := findEntity(entities, kind)
 		if !ok {
 			t.Fatalf("missing %s: %#v", kind, entities)

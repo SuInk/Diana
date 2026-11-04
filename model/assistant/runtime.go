@@ -7379,8 +7379,9 @@ func (r *Runtime) fillTelegramMentionsFromDirectory(event MessageEvent, ids []st
 func (r *Runtime) normalizeOutgoingMentions(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	acceptable := func(id string) bool { return mentionIDAcceptable(event.Platform, id) }
 	text := dropUnusableDianaMentions(normalizeDianaMentionVariants(msg.Text), acceptable)
+	participants := r.recentParticipantIDs(event)
+	text = normalizeAngleMentions(text, func(id string) bool { return participants[id] && acceptable(id) })
 	if event.Kind == EventKindGroup {
-		participants := r.recentParticipantIDs(event)
 		text = promotePlainIDMentions(text, func(id string) bool { return participants[id] && acceptable(id) })
 	}
 	text = dropResidualDianaReplyMarkers(text)

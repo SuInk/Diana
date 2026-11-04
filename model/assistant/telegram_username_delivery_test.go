@@ -68,7 +68,7 @@ func TestTelegramDraftRestoresIdentityAliasesFromProviderScope(t *testing.T) {
 			calls := api.callsOf("sendMessageDraft")
 			want, kind := "@Alice hello", "text_mention"
 			if username != "" {
-				want, kind = "@"+username+" hello", "mention"
+				want, kind = "@"+username+" hello", "text_mention"
 			}
 			if len(calls) != 1 || calls[0].Params["text"] != want {
 				t.Fatalf("draft calls = %#v, want %q", calls, want)
@@ -161,20 +161,26 @@ func TestTelegramUsernameDeliveryEntities(t *testing.T) {
 				kind := entity["type"].(string)
 				seen[kind] = true
 				switch kind {
-				case "mention", "bold":
+				case "bold":
 					if entity["offset"] != float64(3) || entity["length"] != float64(15) || entity["user"] != nil {
 						t.Fatalf("username entity=%#v", entity)
 					}
 				case "text_mention":
 					user, _ := entity["user"].(map[string]any)
-					if entity["offset"] != float64(19) || entity["length"] != float64(6) || user["id"] != float64(10003) {
+					offset, length := float64(19), float64(6)
+					if user["id"] == float64(10002) {
+						offset, length = 3, 15
+					} else if user["id"] != float64(10003) {
+						t.Fatalf("unexpected target=%#v", entity)
+					}
+					if entity["offset"] != offset || entity["length"] != length {
 						t.Fatalf("fallback entity=%#v", entity)
 					}
 				default:
 					t.Fatalf("unexpected entity=%#v", entity)
 				}
 			}
-			if !seen["mention"] || !seen["text_mention"] || !seen["bold"] {
+			if !seen["text_mention"] || !seen["bold"] {
 				t.Fatalf("entities=%#v", entities)
 			}
 		})
@@ -288,7 +294,7 @@ func TestTelegramDraftTruncationPreservesUTF16Entities(t *testing.T) {
 		{"username crosses boundary", prefix + "<diana-at id=\"10002\"/>", prefix, map[string]string{"10002": "long_username"}, "", 0},
 		{"fallback crosses boundary", prefix + "<diana-at id=\"10002\"/>", prefix, nil, "", 0},
 		{"link crosses boundary", prefix + "[abcdefghij](https://example.com)", prefix, nil, "", 0},
-		{"mention ends at boundary", prefix + "<diana-at id=\"10002\"/>😀", prefix + "@alice", map[string]string{"10002": "alice"}, "mention", 6},
+		{"mention ends at boundary", prefix + "<diana-at id=\"10002\"/>😀", prefix + "@alice", map[string]string{"10002": "alice"}, "text_mention", 6},
 		{"entities after boundary", strings.Repeat("😀", 2048) + " **later** <diana-at id=\"10002\"/>", strings.Repeat("😀", 2048), nil, "", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
