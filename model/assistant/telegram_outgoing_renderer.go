@@ -32,7 +32,8 @@ func renderTelegramOutgoingText(text string, names, usernames map[string]string)
 		entity := telegramEntitySpec{Type: "text_mention", URL: "diana-mention:" + id}
 		if username := usernames[id]; username != "" && normalizeTelegramMentionUsername(username) == username {
 			display = "@" + username
-			entity = telegramEntitySpec{Type: "mention"}
+			// Bot API ignores input "mention" entities. Keep the explicit user
+			// target even when the display is a username adjacent to other text.
 		}
 		entity.Length = utf16Length(display)
 		return renderer.keep(display, []telegramEntitySpec{entity})

@@ -1735,7 +1735,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     });
   if (path === "/api/assistant/agent-mode/impact") return json({ running_coding_jobs: 1, held_tasks: 2 });
   if (path === "/api/assistant/config/defaults" && method === "GET") return json({
-    reply_filter_rules: [String.raw`<[ \t]*/?[ \t]*diana-[a-z-]+[^<>\n]{0,200}>|\[\[?\s*/?\s*[A-Z]{4,6}_(?:REPLY|LINES|REFUSE)_[A-Z]+\s*\]\]?`],
+    reply_filter_rules: [
+      String.raw`</?diana-[^<>\n]*>`,
+      String.raw`\[\[?/?[A-Z]+_(REPLY|LINES|REFUSE)_[A-Z]+\]\]?`,
+    ],
     platform: url.searchParams.get("platform") || "onebot-v11", enabled: true, owner_login_enabled: true,
     onebot_transport: "reverse_ws", onebot_reverse_ws_endpoint: "ws://127.0.0.1:18080/onebot/v11/ws",
     group_triggers: ["Diana", "diana"], private_admission: { mode: "owner_only" }, request_timeout_ms: 60000, model_request_timeout_ms: 0, agent_enabled: true, agent_mode: "standard",

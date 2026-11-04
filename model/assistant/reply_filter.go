@@ -18,11 +18,12 @@ const (
 	maxReplyFilterRuleRunes = 200
 )
 
-// 默认带一条规则，兜住漏进正文的内部控制标记（<diana-single/> 这类）。
-// 开头结尾写对或写歪的标记发送层已经剥掉，这条管的是夹在正文中间、或者写歪到
-// 发送层认不出的那些。它只是预填进列表，主人可以改也可以删。
+// 默认规则按标记格式拆开，方便主人编辑；复杂变体由发送层内置清理兜底。
 func defaultReplyFilterRules() []string {
-	return []string{`<[ \t]*/?[ \t]*diana-[a-z-]+[^<>\n]{0,200}>|\[\[?\s*/?\s*[A-Z]{4,6}_(?:REPLY|LINES|REFUSE)_[A-Z]+\s*\]\]?`}
+	return []string{
+		`</?diana-[^<>\n]*>`,
+		`\[\[?/?[A-Z]+_(REPLY|LINES|REFUSE)_[A-Z]+\]\]?`,
+	}
 }
 
 // cloneReplyFilterRules 保留 nil 和空列表的区别：空列表是主人清空了默认规则。

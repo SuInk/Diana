@@ -1750,7 +1750,7 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	// 合并聊天记录不给 attachments，媒体全压在 content 文本里：拆成消息段，
 	// 同时抹掉正文里的一次性下载地址。
 	text, mergedMedia := qqOfficialMergedForwardMedia(text)
-	segments := platformTextSegments(text, quoted)
+	text, segments := qqOfficialMentionSegments(text, quoted)
 	segments = append(segments, mergedMedia...)
 	mediaSegments := qqOfficialMediaSegments(msg.Attachments)
 	// 附件图补上 sub_type=1 才会被 StickerSegmentLabel 认成表情包、收进表情包库，
@@ -1861,7 +1861,8 @@ func qqOfficialQuotedPayload(elements []qqOfficialMsgElement) (string, []Message
 		media = append(media, qqOfficialMediaSegments(element.Attachments)...)
 	}
 	text := strings.Join(parts, "\n")
-	return text, append(platformTextSegments(text, ""), media...)
+	text, segments := qqOfficialMentionSegments(text, "")
+	return text, append(segments, media...)
 }
 
 // qqOfficialMarkdownFeatures 是原生 Markdown（msg_type 2）认的子集：官方文档列了

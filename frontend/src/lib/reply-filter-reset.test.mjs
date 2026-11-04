@@ -58,8 +58,10 @@ const goDefaultsURL = new URL("../../../model/assistant/reply_filter.go", import
 test("demo defaults match Go defaults", { skip: !existsSync(goDefaultsURL) && "frontend-only Docker stage has no Go sources" }, () => {
   const go = readFileSync(goDefaultsURL, "utf8");
   const demo = readFileSync(new URL("../demo/demo.ts", import.meta.url), "utf8");
-  const rule = go.match(/return \[\]string\{`([^`]+)`\}/)[1];
-  assert.ok(demo.includes('reply_filter_rules: [String.raw`' + rule + '`]'));
+  const goBlock = go.match(/return \[\]string\{([\s\S]*?)\n\t\}/)[1];
+  const demoBlock = demo.match(/reply_filter_rules: \[([\s\S]*?)\n    \]/)[1];
+  const rules = (block) => [...block.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  assert.deepEqual(rules(demoBlock), rules(goBlock));
 });
 test("UI documents current markup", () => {
   assert.ok(source.includes("&lt;diana-single/&gt;"));

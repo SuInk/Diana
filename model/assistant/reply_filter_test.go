@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -64,7 +65,7 @@ func TestPrepareGeneratedReplyAppliesReplyFilters(t *testing.T) {
 
 func TestReplyFilterRulesDefaultIsEditable(t *testing.T) {
 	var unset BotConfig
-	if got := unset.WithDefaults().ReplyFilterRules; len(got) != 1 || got[0] != defaultReplyFilterRules()[0] {
+	if got := unset.WithDefaults().ReplyFilterRules; !reflect.DeepEqual(got, defaultReplyFilterRules()) {
 		t.Fatalf("unset rules = %#v, want default", got)
 	}
 	cleared := BotConfig{ReplyFilterRules: []string{}}
@@ -110,6 +111,8 @@ func TestDefaultReplyFiltersHandleCurrentTags(t *testing.T) {
 		{"好的<diana-single/>继续", "好的继续"},
 		{"好的<diana-lines-compact/>继续", "好的继续"},
 		{"好的<diana-unknown/>继续", "好的继续"},
+		{"好的</diana-single>继续", "好的继续"},
+		{"保留[OTHER_VALUE]和<tag>普通内容</tag>", "保留[OTHER_VALUE]和<tag>普通内容</tag>"},
 		{`<diana-at id="123"/>好<diana-quote id="456"/><diana-message/>再见<diana-br/>`, `<diana-at id="123"/>好<diana-quote id="456"/><diana-message/>再见<diana-br/>`},
 		{"示例 `<diana-single/>` 和 <div>正文</div>", "示例 `<diana-single/>` 和 <div>正文</div>"},
 		{"```xml\n<diana-single/>\n```", "```xml\n<diana-single/>\n```"},
