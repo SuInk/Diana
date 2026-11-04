@@ -274,8 +274,10 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		appendPromptSection(&builder, "你上一条回的就是这个人,这一轮是同一段对话的下一句:接着上一条往下说,"+
 			"已经讲过的结论不要再重讲一遍,只补上这一条问到的新东西;这一条没问到新东西就短一句带过。")
 	}
+	quote := mentionQuoteNone
 	switch replyReferenceMode(cfg) {
 	case ReplyDecorationOn:
+		quote = mentionQuoteAutomatic
 		appendPromptSection(&builder, "本轮由程序自动引用当前消息，你只输出正文，不要生成或复制任何引用控制标记，也不要自行选择引用 ID。历史里的引用标记仅表示已有消息关系。")
 	case ReplyDecorationOff:
 		appendPromptSection(&builder, "本轮关闭引用消息，你只输出正文，不要生成或复制任何引用控制标记。历史里的引用标记仅表示已有消息关系。")
@@ -284,6 +286,7 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		// 的提示词全部拦掉，auto 档就永远不会教模型自己写引用（见 replyMarkerIDAcceptable）。
 		// 同一个人追发并进来时候选是最晚那条，回复回答的就是它，见 replyAnchorEvent。
 		if messageID := replyAnchorMessageID(event); replyMarkerIDAcceptable(event.Platform, messageID) {
+			quote = mentionQuoteByModel
 			target := "当前这条消息"
 			if messageID != strings.TrimSpace(event.MessageID) {
 				target = "这一轮里对方最后补的那条消息"
@@ -297,7 +300,7 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 			// 官方群里的 @ 点不开对方资料，回复又已经挂在对方消息下面，点名没有用处。
 			appendPromptSection(&builder, "本次不要 @ 发送者：QQ 官方机器人的回复已经关联在对方那条消息下面，@ 也点不开对方资料，开头再写一个名字只会显得生硬。")
 		} else if userID := strings.TrimSpace(event.UserID); userID != "" {
-			appendPromptSection(&builder, mentionDecorationRule(userID, otherSpeakersBefore(history, event), justAnswered))
+			appendPromptSection(&builder, mentionDecorationRule(userID, otherSpeakersBefore(history, event), justAnswered, quote))
 		}
 	}
 	return strings.TrimSpace(builder.String())
@@ -393,12 +396,28 @@ func otherSpeakersBefore(history []MessageEvent, event MessageEvent) int {
 	return len(speakers)
 }
 
+// mentionQuoteAvailability 是这一轮能不能用引用回复来指明回谁。引用在 QQ 和
+// Telegram 上本身就会提醒被引用的人，能引用时再在开头 @ 一遍就是重复点名。
+type mentionQuoteAvailability int
+
+const (
+	mentionQuoteNone mentionQuoteAvailability = iota
+	// mentionQuoteByModel：auto 档给了引用候选，由模型决定写不写引用标记。
+	mentionQuoteByModel
+	// mentionQuoteAutomatic：on 档，发送层每条都会引用当前消息。
+	mentionQuoteAutomatic
+)
+
 // mentionDecorationRule 按插话人数给出这一轮的 @ 规则。
 //
 // 写法用平台中立的提及标记,和「群聊真实提及规则」那段一致。同一件事在相邻两段
 // 提示词里有两种拼法,模型本来就容易犹豫;而且 CQ 码是 OneBot 方言,Telegram 群里
 // 教它只会把字面量发出去（见 mention_marker.go）。
-func mentionDecorationRule(userID string, otherSpeakers int, justAnswered bool) string {
+//
+// 热闹时以前一律让模型在开头 @ 发送者。多机器人的 Telegram 群几乎永远「还有别人
+// 在说话」,于是约一半回复开头都挂着 @（生产 2026-11-04：317 条里 159 条）。能引用
+// 时改为用引用指明回谁,@ 只留给引用不可用的时候。
+func mentionDecorationRule(userID string, otherSpeakers int, justAnswered bool, quote mentionQuoteAvailability) string {
 	mention := mentionMarkerFor(userID)
 	// 「上一条刚回过 TA」以前是写在多人档尾巴上的一句除外条件,由模型自己从历史里
 	// 认。它是运行时算得出来的事实,而且这是唯一一档答案确定的情况——刚回过就是
@@ -410,6 +429,13 @@ func mentionDecorationRule(userID string, otherSpeakers int, justAnswered bool) 
 		return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里只有 TA 在说话,你们是一对一在接话,不用 @；" +
 			"只有隔了很久才回、对方可能已经走开时才写 " + mention + "。"
 	}
-	return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里除了 TA 还有 " + strconv.Itoa(otherSpeakers) +
-		" 个人在说话,这种时候在回复最开头写 " + mention + " 点名,对方才知道这句是回 TA 的。"
+	crowd := "刚才这段时间里群里除了 TA 还有 " + strconv.Itoa(otherSpeakers) + " 个人在说话"
+	switch quote {
+	case mentionQuoteAutomatic:
+		return "本次不要 @ 发送者：" + crowd + ",但程序会引用 TA 的消息,引用本身就会提醒 TA,再 @ 一遍是重复点名。"
+	case mentionQuoteByModel:
+		return "本次不要在开头 @ 发送者：" + crowd + ",要让 TA 知道这句是回 TA 的,就用上面的引用标记指向 TA 的消息——引用本身就会提醒 TA,再 @ 一遍是重复点名。" +
+			"只有隔了很久才回、对方可能已经走开时才写 " + mention + "。"
+	}
+	return "本次是否 @ 发送者由你自己决定：" + crowd + ",这种时候在回复最开头写 " + mention + " 点名,对方才知道这句是回 TA 的。"
 }
