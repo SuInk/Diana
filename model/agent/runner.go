@@ -583,6 +583,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if envelope, decoded := finalizeEnvelopeFromText(lastText, r.cfg.FinalizeFields...); decoded {
 				action = envelope
 				ok = true
+			} else if reason, silent := SilentDirectiveFromText(lastText); silent {
+				// 正文写的是「silent=true，理由」：模型想静默却没调 send，按静默收尾，
+				// 别把理由发到群里。走下面同一条静默分支，图片任务等限制照旧生效。
+				action = llmAction{Action: "final", Silent: true, SilentReason: reason}
+				ok = true
 			}
 		}
 		if imageTaskQueued && ((!ok && !looksLikeAgentAction(lastText)) || (ok && action.Action == "final" && !imageTaskFinalIsPending(action))) {
@@ -1680,10 +1685,10 @@ type llmAction struct {
 	Content   string         `json:"content,omitempty"`
 	TaskState string         `json:"task_state,omitempty"`
 	Reply     *string        `json:"reply,omitempty"`
-	// Silent 是模型自己决定「这一轮不发任何消息」。只有两种来源：原生
-	// send 调用的空正文，和文本兼容协议里那个完整的 final JSON
-	// 对象。任何把普通正文兜底成 final 的路径都不得置位——正文里出现 silent
-	// 这个词只是一个词，不是一次决定。
+	// Silent 是模型自己决定「这一轮不发任何消息」。只有三种来源：原生
+	// send 调用的空正文，文本兼容协议里那个完整的 final JSON 对象，和整段以
+	// 「silent=true」加标点开头的纯文本（见 SilentDirectiveFromText）。其他把普通正文
+	// 兜底成 final 的路径都不得置位——正文里出现 silent 这个词只是一个词，不是一次决定。
 	Silent       bool   `json:"silent,omitempty"`
 	SilentReason string `json:"silent_reason,omitempty"`
 	// emptySend 是 send 正文为空却没填 silent=true：多半是忘了写，不是决定不说话。

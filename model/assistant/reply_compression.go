@@ -114,6 +114,11 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 		}
 		body = content
 	}
+	// 正文整段是「silent=true，理由」时同样是模型想静默：理由只进日志，不发出去。
+	if reason, silent := agent.SilentDirectiveFromText(body); silent {
+		log.Printf("diana reply: silent directive leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
+		return "", newModelSilentFinishError(reason)
+	}
 	if (tagged && strings.TrimSpace(body) == "") || agent.LooksLikeRenderedToolCall(body) {
 		log.Printf("diana reply blocked: rendered tool call leaked into the reply body (platform=%s profile=%s)", cfg.Platform, cfg.ID)
 		return "", errRenderedToolCallReply
