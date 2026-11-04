@@ -414,7 +414,18 @@ func backupReleaseDatabase(databasePath, backupRoot string) (string, error) {
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return "", err
 	}
-	mainBackup := ""
+	if !regularFileExists(databasePath) {
+		return "", fmt.Errorf("database %s does not exist", databasePath)
+	}
+	mainBackup := filepath.Join(backupDir, filepath.Base(databasePath))
+	if err := snapshotReleaseDatabase(databasePath, mainBackup); err == nil {
+		return mainBackup, nil
+	} else {
+		// 快照做不出来（库损坏、只读打开失败等）时退回逐文件复制，备份能力不比
+		// 原来差。
+		log.Printf("updater: SQLite snapshot failed, copying database files instead: %v", err)
+	}
+	mainBackup = ""
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		source := databasePath + suffix
 		if !regularFileExists(source) {

@@ -4,8 +4,10 @@
 package updater
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,4 +69,40 @@ func BackupDatabaseOnVersionChange(databasePath, updatesDir, currentVersion stri
 		return backup, fmt.Errorf("record run version: %w", err)
 	}
 	return backup, nil
+}
+
+// updateBackupPruneInterval 是运行期间检查过期升级备份的间隔。备份 3 天过期，
+// 进程常常一跑几周不重启，只在升级时清理的话过期备份会一直占着磁盘。
+const updateBackupPruneInterval = 6 * time.Hour
+
+// RunUpdateBackupPruner 在启动时以及之后每隔 updateBackupPruneInterval 清掉
+// 过期的升级备份，直到 ctx 结束。只按 3 天的保留期删，不按份数删：份数上限
+// 由做新备份的那一步负责腾位置。清理失败只记日志，不影响运行。
+func RunUpdateBackupPruner(ctx context.Context, databasePath, updatesDir string) {
+	databasePath = strings.TrimSpace(databasePath)
+	if databasePath == "" {
+		return
+	}
+	updatesRoot, err := resolveUpdatesRoot(updatesDir, databasePath, filepath.Dir(databasePath))
+	if err != nil {
+		log.Printf("updater: resolve update backups: %v", err)
+		return
+	}
+	backupsRoot := filepath.Join(updatesRoot, "backups")
+	prune := func() {
+		if err := pruneReleaseBackups(backupsRoot, releaseBackupMaxCount, time.Now()); err != nil {
+			log.Printf("updater: remove expired update backups: %v", err)
+		}
+	}
+	prune()
+	ticker := time.NewTicker(updateBackupPruneInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
 }
