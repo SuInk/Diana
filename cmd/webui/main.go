@@ -305,6 +305,11 @@ func main() {
 			log.Printf("version changed to %s; database backed up to %s before migration", runtimeVersion, backup)
 		}
 	}
+	// 过期的升级备份不必等下次升级才删：启动时和运行期间定期清一次。
+	go func() {
+		defer recoverGoroutinePanic("update_backup_pruner")
+		updater.RunUpdateBackupPruner(ctx, dbPath, appCfg.Update.WorkDir)
+	}()
 
 	// SQLite 同时保存模型、助手、插件、提醒和操作日志配置。
 	sqliteStore, err := storage.NewSQLiteStore(strings.TrimSpace(appCfg.Storage.DBPath))
