@@ -809,10 +809,11 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 	if len(searchTerms) > 48 {
 		searchTerms = searchTerms[:48]
 	}
-	searchOrder := ""
+	var scoreParts []string
 	if len(searchTerms) > 0 {
-		searchable := `LOWER(COALESCE(memory_key, '') || CHAR(10) || COALESCE(topic, '') || CHAR(10) || COALESCE(entity, '') || CHAR(10) || COALESCE(content, '') || CHAR(10) || COALESCE(evidence, ''))`
-		scoreParts := make([]string, 0, len(searchTerms))
+		// subject_name 也算进来：排序端本来就按「人物」字段给分，候选端不认它的话，问
+		// 「小明喜欢什么」时小明名下的记忆在 SQL 这层就被别的记忆挤出候选窗口了。
+		searchable := `LOWER(COALESCE(memory_key, '') || CHAR(10) || COALESCE(topic, '') || CHAR(10) || COALESCE(entity, '') || CHAR(10) || COALESCE(subject_name, '') || CHAR(10) || COALESCE(content, '') || CHAR(10) || COALESCE(evidence, ''))`
 		for _, term := range searchTerms {
 			term = strings.TrimSpace(strings.ToLower(term))
 			if term == "" {
@@ -828,9 +829,17 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 			scoreParts = append(scoreParts, fmt.Sprintf(`CASE WHEN `+searchable+` LIKE ? ESCAPE '\' THEN %d ELSE 0 END`, weight))
 			args = append(args, "%"+escapeMessageHistoryLike(term)+"%")
 		}
-		if len(scoreParts) > 0 {
-			searchOrder = "(" + strings.Join(scoreParts, " + ") + ") DESC, "
+	}
+	// 当前消息点到的人：他名下的记忆在候选窗口里优先，只改排序，不放开可见性。
+	if mentioned := trimmedNonEmpty(query.MentionedSubjectUserIDs, 8); len(mentioned) > 0 {
+		scoreParts = append(scoreParts, `CASE WHEN subject_user_id IN (`+placeholders(len(mentioned))+`) THEN 4 ELSE 0 END`)
+		for _, id := range mentioned {
+			args = append(args, id)
 		}
+	}
+	searchOrder := ""
+	if len(scoreParts) > 0 {
+		searchOrder = "(" + strings.Join(scoreParts, " + ") + ") DESC, "
 	}
 	args = append(args, limit)
 	rows, err := s.eventReader().QueryContext(ctx, `
@@ -1346,4 +1355,17 @@ LIMIT 1
 		return assistant.StructuredMemoryItem{}, false, err
 	}
 	return item, true, nil
+}
+
+func trimmedNonEmpty(values []string, limit int) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
 }

@@ -77,7 +77,7 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 	default:
 		return "", fmt.Errorf("operation 必须为 search 或 read")
 	}
-	query := r.memoryQueryForEvent(t.event, text, structuredMemoryLoadLimit)
+	query := r.memoryQueryForEvent(ctx, t.event, text, structuredMemoryLoadLimit)
 	if op == "read" {
 		query.IDs = []string{id}
 		query.MaxCandidates = 1

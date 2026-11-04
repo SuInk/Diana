@@ -154,6 +154,9 @@ WHERE
 	if err := s.indexMessageHistoryRowTx(tx, id, event.SenderName, event.UserID, text, strings.TrimSpace(extra.String)); err != nil {
 		return assistant.MessageEvent{}, false, fmt.Errorf("index message history: %w", err)
 	}
+	if err := recordMessageSpeakerTx(ctx, tx, session, event, eventTime); err != nil {
+		return assistant.MessageEvent{}, false, fmt.Errorf("record message speaker: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return assistant.MessageEvent{}, false, fmt.Errorf("commit message history append: %w", err)
 	}

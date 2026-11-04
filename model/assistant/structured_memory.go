@@ -150,6 +150,8 @@ type StructuredMemoryItem struct {
 	CompactRecall    bool             `json:"-"`
 	// LinkedSubject 表示这是当前发言者关联账号的个人记忆，排序时和本人的记忆同等对待。
 	LinkedSubject bool `json:"-"`
+	// MentionedSubject 表示这是当前消息点到的那个人的记忆，排序时提权。
+	MentionedSubject bool `json:"-"`
 }
 
 type MemoryWriteRequest struct {
@@ -195,6 +197,9 @@ type StructuredMemoryQuery struct {
 	// LinkedSubjects 是和当前发言者同属一个人的其他账号。它们的 visibility=user
 	// 记忆只按各自机器人的命名空间读出来，别的记忆一概不放开，见 identity_link_context.go。
 	LinkedSubjects []StructuredMemorySubject
+	// MentionedSubjectUserIDs 是当前消息点到的其他人（@、引用、正文里的昵称）。只给
+	// 这些人的记忆在候选排序和打分里提权，不放开任何可见性。
+	MentionedSubjectUserIDs []string
 }
 
 // StructuredMemorySubject 是一个账号的个人记忆所在：Namespace 是会话前缀

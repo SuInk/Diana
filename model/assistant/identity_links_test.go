@@ -548,12 +548,12 @@ func TestIdentityLinksPersonalMemoryQueryAndRanking(t *testing.T) {
 	r, channel, _ := newIdentityLinkTestRuntime(t, nil)
 	bindQQOwnerToTelegram(t, r, channel)
 	event := identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestTGUser, "喝什么")
-	query := r.memoryQueryForEvent(event, "喝什么", 20)
+	query := r.memoryQueryForEvent(context.Background(), event, "喝什么", 20)
 	if len(query.LinkedSubjects) != 1 || query.LinkedSubjects[0] != (StructuredMemorySubject{Namespace: "qq:", UserID: identityTestQQOwner}) {
 		t.Fatalf("linked subjects = %#v", query.LinkedSubjects)
 	}
 	stranger := identityTestEvent("tg", PlatformTelegram, EventKindPrivate, identityTestStranger, "喝什么")
-	if subjects := r.memoryQueryForEvent(stranger, "喝什么", 20).LinkedSubjects; len(subjects) != 0 {
+	if subjects := r.memoryQueryForEvent(context.Background(), stranger, "喝什么", 20).LinkedSubjects; len(subjects) != 0 {
 		t.Fatalf("stranger must not read linked memories: %#v", subjects)
 	}
 

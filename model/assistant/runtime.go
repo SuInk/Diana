@@ -155,6 +155,30 @@ type MessageHistorySearchQuery struct {
 	SenderUserIDs []string
 }
 
+// MessageSpeakerQuery 在聊天记录汇总出的发言人名录里找人，见 speaker_directory.go。
+type MessageSpeakerQuery struct {
+	Session       string
+	SessionPrefix string
+	CrossSession  bool
+	// Name 按昵称（含旧昵称）子串、@用户名或账号匹配；为空时按最近发言列出。
+	Name  string
+	Limit int
+}
+
+// MessageSpeaker 是名录里的一个账号。Names 是它在范围内用过的昵称，最近的在前。
+type MessageSpeaker struct {
+	UserID     string   `json:"user_id"`
+	Names      []string `json:"names"`
+	Username   string   `json:"username,omitempty"`
+	FirstSeen  int64    `json:"-"`
+	LastSeen   int64    `json:"-"`
+	ExactMatch bool     `json:"exact_match,omitempty"`
+}
+
+type MessageSpeakerStore interface {
+	ListMessageSpeakers(ctx context.Context, query MessageSpeakerQuery) ([]MessageSpeaker, error)
+}
+
 type MessageHistorySearchStore interface {
 	SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error)
 }
@@ -419,6 +443,8 @@ type Runtime struct {
 	// runtimeConfig 是启动配置管理器，主人私聊的 runtime_config 工具用。
 	runtimeConfig *runtimeconfig.Manager
 	messageStore  MessageHistoryStore
+	// speakerCache 缓存各会话的发言人名录，记忆召回比对昵称用，见 speaker_directory.go。
+	speakerCache speakerDirectoryCache
 	// aliasSalt 是脱敏别名的全局盐，进程内只定一次，落库后跨重启不变。
 	aliasSalt        string
 	inboundStore     InboundEventStore

@@ -92,7 +92,7 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	crossGroup := boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup
 	crossPlatformPrefixes := r.crossPlatformMemoryPrefixes(event, cfg)
 	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	query := r.memoryQueryForEvent(event, queryText, structuredMemoryLoadLimit)
+	query := r.memoryQueryForEvent(loadCtx, event, queryText, structuredMemoryLoadLimit)
 	items, err := store.ListStructuredMemories(loadCtx, query)
 	if err != nil {
 		cancel()
@@ -262,6 +262,12 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			score += 0.05
 			reasons = append(reasons, "当前用户")
 		}
+		// 问「小明喜欢什么」时，记在小明名下的记忆正文主语就是他，往往不再写名字，
+		// 词面分数偏低；被点到的人这一项单独补上，并允许他的情景记忆参与。
+		if item.MentionedSubject {
+			score += 0.12
+			reasons = append(reasons, "提到的人")
+		}
 		if item.SourceSession == sessionKey(event) {
 			score += 0.02
 		}
@@ -306,7 +312,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			score = item.AssociationScore
 			reasons = append(reasons, "关联主题："+item.AssociationLabel)
 		}
-		relatedEpisode := lexical >= 0.08 || exactField != "" || associated
+		relatedEpisode := lexical >= 0.08 || exactField != "" || associated || item.MentionedSubject
 		if recollection && !relatedEpisode {
 			continue
 		}

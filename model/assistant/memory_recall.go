@@ -9,10 +9,19 @@ import (
 	"time"
 )
 
-func (r *Runtime) memoryQueryForEvent(event MessageEvent, text string, limit int) StructuredMemoryQuery {
+// memoryQueryForEvent 组装记忆检索条件。text 里点到的人（@、引用、昵称或旧昵称）
+// 经发言人名录解析成账号，他们的个人记忆提权：问「小明喜欢什么」时，记在小明账号下
+// 的记忆正文主语就是他、往往不写名字，他改过昵称时 subject_name 也对不上，只靠关键词
+// 排不进候选。
+func (r *Runtime) memoryQueryForEvent(ctx context.Context, event MessageEvent, text string, limit int) StructuredMemoryQuery {
 	cfg := r.effectiveConfigForEvent(event)
+	var mentioned []string
+	if strings.TrimSpace(text) != "" {
+		mentioned = r.mentionedSubjectUserIDs(ctx, event, text)
+	}
 	return StructuredMemoryQuery{
-		SubjectUserID: event.UserID, LinkedSubjects: r.linkedMemorySubjects(event), Session: sessionKey(event), GroupID: event.GroupID,
+		MentionedSubjectUserIDs: mentioned,
+		SubjectUserID:           event.UserID, LinkedSubjects: r.linkedMemorySubjects(event), Session: sessionKey(event), GroupID: event.GroupID,
 		Text: text, SearchTerms: structuredMemorySearchTerms(text, 48), Now: time.Now(), MaxCandidates: limit,
 		ExcludeKinds:       []MemoryKind{MemoryKindThread},
 		CrossGroup:         boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup,
