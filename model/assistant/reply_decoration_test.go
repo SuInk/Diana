@@ -274,11 +274,11 @@ func TestOtherSpeakersBeforeIgnoresSelfBotAndStaleTurns(t *testing.T) {
 
 // 冷清和热闹给的是两条不同的规则，不是同一句话加个数字。
 func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
-	quiet := mentionDecorationRule("123456", 0, false)
+	quiet := mentionDecorationRule("123456", 0, false, mentionQuoteNone)
 	if !strings.Contains(quiet, "不用 @") {
 		t.Fatalf("一对一时应当明说不用 @：%s", quiet)
 	}
-	busy := mentionDecorationRule("123456", 3, false)
+	busy := mentionDecorationRule("123456", 3, false, mentionQuoteNone)
 	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
 	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
 	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "<diana-at id=\"123456\"/>") {
@@ -287,6 +287,39 @@ func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
 	for _, unwanted := range []string{"写 @123456", "[CQ:at"} {
 		if strings.Contains(busy, unwanted) {
 			t.Fatalf("不该再教平台方言写法 %q：%s", unwanted, busy)
+		}
+	}
+}
+
+// 热闹时能引用就用引用指明回谁，开头不再 @：引用本身会提醒对方，两样都来是重复点名。
+// 引用不可用时才退回开头 @。
+func TestMentionDecorationRulePrefersQuoteInCrowd(t *testing.T) {
+	for _, quote := range []mentionQuoteAvailability{mentionQuoteByModel, mentionQuoteAutomatic} {
+		rule := mentionDecorationRule("123456", 3, false, quote)
+		if !strings.Contains(rule, "不要") || !strings.Contains(rule, "引用") || strings.Contains(rule, "在回复最开头写") {
+			t.Fatalf("quote=%d 热闹时应当改用引用、不在开头 @：%s", quote, rule)
+		}
+	}
+	if rule := mentionDecorationRule("123456", 3, false, mentionQuoteAutomatic); strings.Contains(rule, "<diana-at") {
+		t.Fatalf("程序自动引用时不该再教 @ 写法：%s", rule)
+	}
+	if rule := mentionDecorationRule("123456", 3, false, mentionQuoteNone); !strings.Contains(rule, "在回复最开头写 <diana-at id=\"123456\"/>") {
+		t.Fatalf("引用不可用时仍应开头 @：%s", rule)
+	}
+}
+
+func TestReplyDecorationPromptCrowdUsesQuoteWhenAvailable(t *testing.T) {
+	now := int64(1_700_000_000)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "303", Time: now, Platform: "telegram"}
+	history := []MessageEvent{
+		{GroupID: "g", UserID: "2", MessageID: "301", Time: now - 30},
+		{GroupID: "g", UserID: "3", MessageID: "302", Time: now - 20},
+		event,
+	}
+	for _, mode := range []ReplyDecorationMode{ReplyDecorationAuto, ReplyDecorationOn} {
+		prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: mode}, event, history)
+		if !strings.Contains(prompt, "2 个人") || !strings.Contains(prompt, "再 @ 一遍是重复点名") {
+			t.Fatalf("reference=%s 热闹时应改用引用：%s", mode, prompt)
 		}
 	}
 }
