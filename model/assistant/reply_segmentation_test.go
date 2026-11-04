@@ -40,10 +40,10 @@ func TestExplicitReplyLayoutMarkers(t *testing.T) {
 	}
 }
 
-// 真实换行等同 <diana-br/>：空行只算一次换行；混着列表的整条按排版留着。
+// 真实换行等同 <diana-br/>：普通的话一行一条，列表自成一块（见 splitReplyBlocks）。
 func TestLiteralNewlinesActAsLineMarkers(t *testing.T) {
 	input := "第一段\r\n第二段\n\n1. 项目"
-	want := []string{"第一段\n第二段\n1. 项目"}
+	want := []string{"第一段", "第二段", "1. 项目"}
 	if got := splitChatReply(input, chatSplitLimits{}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("literal newlines = %#v, want %#v", got, want)
 	}

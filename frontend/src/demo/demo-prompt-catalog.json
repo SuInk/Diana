@@ -1055,7 +1055,7 @@
       "group": "reply_style",
       "title": "保留段落换行",
       "usage": "「保留换行」打开时每轮注入。",
-      "default": "当前保留消息内部的段落换行，本轮明确排版要求优先。"
+      "default": "当前不把多行回复收拢成一段，本轮明确排版要求优先。"
     },
     {
       "key": "reply.style.line_breaks.compact",
