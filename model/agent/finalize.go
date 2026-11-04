@@ -270,7 +270,7 @@ func finalizeEnvelopeKey(key string, declared []FinalizeField) bool {
 // 「silent=true，这是在问 Mio 不是我（」。swe-2 在多机器人群里偶尔不调 send，直接
 // 用纯文本写出 silent=true 和理由，原路径把它当最终回复发到了群里。整段以
 // silent=true（或 silent: true）开头、后面紧跟标点或结束时按静默处理，其后的文字
-// 作为理由，只进日志。true 后面接空格或文字的不算：那更像是在正文里讲这个参数。
+// 作为理由，只进日志。true 后面（可隔空格）直接接文字的不算：那更像是在正文里讲这个参数。
 func SilentDirectiveFromText(text string) (reason string, ok bool) {
 	rest := strings.TrimSpace(text)
 	if len(rest) < len("silent") || !strings.EqualFold(rest[:len("silent")], "silent") {
@@ -289,7 +289,7 @@ func SilentDirectiveFromText(text string) (reason string, ok bool) {
 	if len(rest) < len("true") || !strings.EqualFold(rest[:len("true")], "true") {
 		return "", false
 	}
-	rest = rest[len("true"):]
+	rest = strings.TrimLeft(rest[len("true"):], " \t")
 	if rest == "" {
 		return "", true
 	}
