@@ -63,7 +63,8 @@ func TestSplitChatReplyKeepsBlankLinesInsideFence(t *testing.T) {
 func TestPlainTextPlatformCollapsesMarkdownParagraphSpacing(t *testing.T) {
 	reply := "第一段" + notificationLineMarker + notificationLineMarker + "第二段"
 	oneBot := splitEventChatReply(reply, BotConfig{Platform: PlatformOneBotV11}.WithDefaults(), MessageEvent{Kind: EventKindGroup})
-	if len(oneBot) != 1 || oneBot[0] != "第一段\n第二段" {
+	// 纯文本气泡里空行分段就是两件事，按块切成两条（见 splitReplyBlocks）。
+	if len(oneBot) != 2 || oneBot[0] != "第一段" || oneBot[1] != "第二段" {
 		t.Fatalf("OneBot blank paragraph = %#v", oneBot)
 	}
 	telegram := splitEventChatReply(reply, BotConfig{Platform: PlatformTelegram}.WithDefaults(), MessageEvent{Kind: EventKindGroup})

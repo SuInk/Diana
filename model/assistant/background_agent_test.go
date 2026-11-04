@@ -19,6 +19,16 @@ func backgroundTestRuntime() (*Runtime, *concurrentRecordingChannel, MessageEven
 	return runtime, channel, event
 }
 
+// sentText 把发出去的消息连起来：结束通知的「最后进度：……」那行会另起一条
+// （见 splitReplyBlocks），只看最后一条会漏掉前半句。
+func sentText(channel *concurrentRecordingChannel) string {
+	var texts []string
+	for _, message := range channel.messages() {
+		texts = append(texts, message.Text)
+	}
+	return strings.Join(texts, "\n")
+}
+
 func lastText(channel *concurrentRecordingChannel) string {
 	messages := channel.messages()
 	if len(messages) == 0 {
@@ -73,9 +83,12 @@ func TestBackgroundAgentStopsAtRoundLimit(t *testing.T) {
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "start", "goal": "查不完的事", "max_rounds": 2}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, 2*time.Second, func() bool { return strings.Contains(lastText(channel), "尚未完成") })
-	if !strings.Contains(lastText(channel), "还在查") {
-		t.Fatalf("最后一轮的结果没交出来: %q", lastText(channel))
+	waitForCondition(t, 2*time.Second, func() bool {
+		text := sentText(channel)
+		return strings.Contains(text, "尚未完成") && strings.Contains(text, "还在查")
+	})
+	if !strings.Contains(sentText(channel), "还在查") {
+		t.Fatalf("最后一轮的结果没交出来: %q", sentText(channel))
 	}
 	if states := runtime.backgroundAgentsFor(event); len(states) != 1 || states[0].Phase != "exhausted" {
 		t.Fatalf("states = %+v", states)
@@ -121,8 +134,11 @@ func TestBackgroundAgentCancelAndLimits(t *testing.T) {
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "cancel", "id": ids[0]}); err != nil {
 		t.Fatal(err)
 	}
-	waitForCondition(t, 2*time.Second, func() bool { return strings.Contains(lastText(channel), "⏹") })
-	if text := lastText(channel); !strings.Contains(text, ids[0]) || !strings.Contains(text, "读完第一份材料") {
+	waitForCondition(t, 2*time.Second, func() bool {
+		text := sentText(channel)
+		return strings.Contains(text, "⏹") && strings.Contains(text, "停下前的进度")
+	})
+	if text := sentText(channel); !strings.Contains(text, ids[0]) || !strings.Contains(text, "读完第一份材料") {
 		t.Fatalf("取消通知 = %q", text)
 	}
 	_, _ = tool.Run(context.Background(), map[string]any{"operation": "cancel", "id": ids[1]})

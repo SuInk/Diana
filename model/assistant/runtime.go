@@ -9481,7 +9481,7 @@ func splitVerbatimReply(reply string) []string {
 // splitChatReply 是聊天发言的分条：把一条回复切成几次发言。
 //
 // 消息边界是 <diana-message/>；真实换行等同 <diana-br/>（见 normalizeExplicitReplyLayout），
-// 普通话之间的换行再由 splitPlainProseLines 拆成几条。
+// 普通话之间的换行再由 splitReplyBlocks（纯文本）或 splitPlainProseLines（富文本）拆成几条。
 //
 // 聊天配置不再限制条数或单条长度；是否收进合并转发由独立阈值决定。
 // splitChatReply 把回复切成实际要发的几条，每条去掉句号（见 chat_periods.go）和行尾的
@@ -9522,7 +9522,11 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 			pieces = splitReplyLinesKeepingLists(part)
 		case !limits.KeepProseLines && limits.LineBreakMode != replyLinesCompact:
 			// 配置成「收拢换行」时由 formatReplyLineBreaks 把普通话连成一段，不在这里拆。
-			pieces = splitPlainProseLines(part)
+			if limits.PreserveBlankLines {
+				pieces = splitPlainProseLines(part)
+			} else {
+				pieces = splitReplyBlocks(part)
+			}
 		}
 		for _, segment := range pieces {
 			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
@@ -9678,6 +9682,11 @@ func endsWithBracketTone(line string, rest []string) bool {
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」
 // 这种逐项打分常用的写法。
 func isStructuredReplyLine(line string) bool {
+	return isListReplyLine(line) || isLabeledReplyLine(line)
+}
+
+// isListReplyLine 认出项目符号、编号、表格行和「第二步 …」这类自带序号的行。
+func isListReplyLine(line string) bool {
 	line = stripLeadingReplyDecorationsForStructure(line)
 	if line == "" {
 		return false
@@ -9701,7 +9710,15 @@ func isStructuredReplyLine(line string) bool {
 	if loc := inlineReplyOrdinal.FindStringIndex(line); loc != nil && loc[0] == 0 && strings.TrimSpace(line[loc[1]:]) != "" {
 		return true
 	}
-	// 「变装皇后：+1」这类标签行：冒号靠前，且冒号两侧都有内容。
+	return false
+}
+
+// isLabeledReplyLine 认出「变装皇后：+1」这类标签行：冒号靠前，冒号两侧都有内容，
+// 而且冒号前面是个名词短语。前面带逗号、句号或书名号的是一句话说到一半，比如
+// 「看完了，原来是《赛博朋克：边缘行者2》……」，不是标签。
+func isLabeledReplyLine(line string) bool {
+	line = stripLeadingReplyDecorationsForStructure(line)
+	runes := []rune(line)
 	for index, r := range runes {
 		if r != '：' && r != ':' {
 			continue
@@ -9709,10 +9726,16 @@ func isStructuredReplyLine(line string) bool {
 		if index == 0 || index > structuredReplyLabelMaxRunes {
 			return false
 		}
+		if strings.ContainsAny(string(runes[:index]), replyLabelSentencePunctuation) {
+			return false
+		}
 		return strings.TrimSpace(string(runes[index+1:])) != ""
 	}
 	return false
 }
+
+// replyLabelSentencePunctuation 出现在冒号前面就说明那是半句话，不是标签。
+const replyLabelSentencePunctuation = "，。！？；、…,!?;《》「」『』“”\""
 
 // stripLeadingReplyDecorationsForStructure 去掉行首只负责投递的引用和提及标记。
 // 结构化识别看的是用户最终读到的正文；把 <diana-at id="..."/> 或 [CQ:at,...] 里的冒号

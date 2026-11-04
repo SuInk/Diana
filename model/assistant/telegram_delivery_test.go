@@ -191,7 +191,7 @@ func TestTelegramDeliversRawMultilineTable(t *testing.T) {
 	rt := NewRuntime(BotConfig{Platform: PlatformTelegram}, api.channel(), NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100123"}
 	source := "最近的统计：\n| 排名 | 用户 | 发言次数 |\n| --- | --- | --- |\n| 1 | 用户甲 | 450 |\n| 2 | 用户乙 | 320 |\n以上是统计结果"
-	chunks := splitChatReply(source, chatSplitLimits{})
+	chunks := splitChatReply(source, chatSplitLimitsFrom(BotConfig{Platform: PlatformTelegram}.WithDefaults()))
 	if len(chunks) != 1 || chunks[0] != source {
 		t.Fatalf("table layout was flattened: %q", chunks)
 	}
