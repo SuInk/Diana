@@ -1422,7 +1422,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	if hasTool("image") && hasTool("render") {
 		rules = append(rules, "- 在 render 与 image 之间选择时：坐标棋盘、表格、流程图、状态图、时间线和其他要求位置/文字/数量精确的结构化画面，优先用 render（通常使用静态 SVG）；人物、风景、质感、艺术风格和其他开放式视觉创作使用 image。用户明确指定某一种时遵从用户。五子棋等已有 canonical 任务状态的盘面更新默认用 render，不要为了木纹或写实感牺牲落子准确性。")
 	}
-	if hasAnyTool("reminder", "schedule") {
+	if hasAnyTool("reminder", "schedule", "subscription") {
 		rules = append(rules, "- 禁止使用命令、sleep、脚本或后台进程实现计时、提醒和周期任务；必须调用当前已提供的持久化任务工具。")
 	}
 	rules = append(rules,

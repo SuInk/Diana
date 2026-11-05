@@ -327,7 +327,8 @@ func TestRuntimeAgentCanCreateNaturalLanguageReminder(t *testing.T) {
 		if strings.Contains(msg.Content, "reminder") {
 			foundReminderTool = true
 		}
-		if strings.Contains(msg.Content, "不得用 run_command") {
+		// 「不许用命令和后台进程代替提醒」留在 Agent 规则里（人设里那句重复的已删）。
+		if strings.Contains(msg.Content, "禁止使用命令、sleep、脚本或后台进程实现计时") {
 			foundNoCommandTimerRule = true
 		}
 	}

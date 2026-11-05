@@ -159,8 +159,9 @@ func TestRuntimeAgentUsesTTSForModelSelectedVoiceRequest(t *testing.T) {
 	if len(segments) != 1 || segments[0]["type"] != "record" {
 		t.Fatalf("segments=%#v", segments)
 	}
-	// 群里多一轮发送前审核，所以请求数不定；关键是加载 tts 的那一轮带着语音提示。
-	if len(provider.requests) < 3 || !requestMessagesContain(provider.requests[1].Messages, "只有用户明确要求用语音回复") {
+	// 群里多一轮发送前审核，所以请求数不定；关键是加载 tts 的那一轮带着语音提示
+	//（什么时候用语音写在 tts 的描述里，随按需目录一起发）。
+	if len(provider.requests) < 3 || !requestMessagesContain(provider.requests[1].Messages, "只在用户明确要语音回复或朗读时用") {
 		t.Fatalf("requests=%d", len(provider.requests))
 	}
 }

@@ -107,7 +107,8 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	if !requestMessagesContain(provider.requests[2].Messages, `"id": "core:media"`) {
 		t.Fatalf("retrieval missing: %#v", provider.requests[2].Messages)
 	}
-	if !requestMessagesContain(provider.requests[1].Messages, "必须先调用 capabilities") {
+	// 「问会什么先查」写在 capabilities 的描述里，随按需目录一起发。
+	if !requestMessagesContain(provider.requests[1].Messages, "问能做什么或某功能怎么运作时先查") {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
 	}
 }
