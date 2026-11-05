@@ -339,13 +339,8 @@ func (r *Runtime) claimEventTriggers(event MessageEvent, text string, eventSessi
 
 func (r *Runtime) executeEventTrigger(ctx context.Context, item Reminder, event MessageEvent, text string) {
 	spec, _ := decodeEventTrigger(item.EventTriggerJSON)
-	cfg := r.effectiveConfigForEvent(event)
-	timeout := cfg.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
-	}
-	runCtx, cancel := context.WithTimeout(withEventTriggerRun(ctx), timeout)
-	defer cancel()
+	// 和主回复一样不设总期限：每次模型请求有统一的单次上限。
+	runCtx := withEventTriggerRun(ctx)
 
 	var err error
 	switch spec.Action {

@@ -284,21 +284,6 @@ func TestParseMemoryCandidatesKeepsFirstOfConcatenatedObjects(t *testing.T) {
 	}
 }
 
-// 摘要和门控各用各的超时：摘要输入大、输出长，60 秒对慢模型几乎必然超时。
-func TestMemoryJobTimeoutByKind(t *testing.T) {
-	event := MemoryJob{Payload: MemoryJobPayload{Kind: MemoryJobEvent}}
-	summary := MemoryJob{Payload: MemoryJobPayload{Kind: MemoryJobSummary}}
-	if got := memoryJobTimeout([]MemoryJob{event, event}); got != memoryExtractionTimeout {
-		t.Fatalf("event batch timeout = %v", got)
-	}
-	if got := memoryJobTimeout([]MemoryJob{summary}); got != memorySummaryTimeout || got <= memoryExtractionTimeout {
-		t.Fatalf("summary timeout = %v", got)
-	}
-	if memorySummaryTimeout >= memoryLeaseDuration {
-		t.Fatalf("summary timeout %v must stay below lease %v", memorySummaryTimeout, memoryLeaseDuration)
-	}
-}
-
 // 重试不能原样重放：每次砍半事件数，保留最新的一段，不低于下限。
 func TestMemorySummaryEventWindowShrinksOnRetry(t *testing.T) {
 	events := make([]MessageEvent, 150)

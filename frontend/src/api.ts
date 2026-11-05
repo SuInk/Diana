@@ -472,7 +472,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   semantic_search_enabled?: boolean;
   max_bot_concurrency?: number;
   request_timeout_ms?: number;
-  /** 单次模型请求（含流式接收）的硬上限；0 或缺省不额外限制，独立于整轮超时。 */
+  /** 单次模型请求（含流式接收）的硬上限；0 或缺省用默认的 5 分钟。每个候选各自计时，没有整条调用的总期限。 */
   model_request_timeout_ms?: number;
   /** 旧的「启用 Agent」开关，后端迁移后恒为 true，只为兼容保留。 */
   agent_enabled?: boolean;

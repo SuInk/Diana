@@ -233,8 +233,7 @@ func (r *Runtime) replyFatigueBlocks(ctx context.Context, event MessageEvent, te
 	// 机器人一次回复拆成好几条发，3 条往往只是上一次回复的后半截，两组也看不出先后。
 	// 这份对话稿只取本群的历史，跨群参考只留给回复正文（#891）。
 	payload := r.proactiveReplyPayload(event, readableEventText(event, text))
-	judgeCtx, cancel := context.WithTimeout(withLLMUsagePurpose(ctx, PurposeReplyFatigueGate), proactiveReplyRouteTimeout(cfg))
-	defer cancel()
+	judgeCtx := withLLMUsagePurpose(ctx, PurposeReplyFatigueGate)
 	raw, err := r.runLLMRouterProviderOnce(judgeCtx, func(client LLMProvider) (string, error) {
 		resp, callErr := client.Generate(judgeCtx, llm.GenerateRequest{
 			Messages: []llm.Message{

@@ -664,7 +664,7 @@
                   <div class="field">
                     <label for="bot-model-request-timeout">单次模型请求超时（秒）</label>
                     <input id="bot-model-request-timeout" v-model.number="modelRequestTimeoutDraft" class="input" type="number" min="0" :max="maximumModelRequestTimeoutSeconds" step="0.001" inputmode="decimal" aria-describedby="bot-model-request-timeout-hint" />
-                    <span id="bot-model-request-timeout-hint" class="hint" title="0 表示不额外限制；若提供商也未设超时，可能一直等待，建议配置正数。正数是每次模型请求的最长时间，包含流式接收；重试或切换候选重新计时。调用方取消、独立任务自身期限或提供商更短的超时仍可提前终止，不保证所有候选都能轮到。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人共用模型调用链的对话与理解用途共享，不限制整段工具执行，也不覆盖独立图片生成、语音和视频任务。">0 为不限，建议填正数；每次请求单独计时。</span>
+                    <span id="bot-model-request-timeout-hint" class="hint" title="每次模型请求的最长时间，包含流式接收；0 表示用默认的 5 分钟。每次重试、每个候选各自重新计时，超时就换下一个候选，直到候选全部试完，整条调用不另设总期限。提供商自己配的更短超时仍会先生效。已发送或提交的输出不会因超时重新生成或切换模型。此设置由当前机器人所有文本模型用途共享，不限制整段工具执行；图片生成按提供商的图片超时计时（未配置时同样是 5 分钟），语音和视频任务不受影响。">0 为默认 5 分钟；每次请求单独计时，超时换下一个模型。</span>
                   </div>
                 </div>
                 <!-- 图片交付方式：对话模型怎么看图，所以跟着对话这一档。 -->

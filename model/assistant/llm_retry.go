@@ -27,54 +27,34 @@ var errModelRequestTimeout = errors.New("diana: single model request timeout")
 // 的同账号重试（maxRequestScopedRetryDelay / openAIOAuth429MaxRetryDelay）。
 const llmSameProfileRetryMaxWait = 8 * time.Second
 
-// llmCandidateBudgetCeiling 是按候选计时时，整次调用最多能用几个候选的完整预算。
-// 每切一个候选重新计时，但候选全卡住时也不能无限等下去。
-const llmCandidateBudgetCeiling = 3
+// llmRequestTimeoutDefault 是单次模型请求的统一上限：「单次模型请求超时」没配（0）
+// 时用它。每次请求、每次重试、每个候选各自重新计时，超时就换下一个候选，直到候选
+// 全部试完；整条调用不再另设总期限。
+//
+// 取 5 分钟：主流 Agent 都只限单次请求（Claude Code 和 OpenAI SDK 默认 10 分钟，
+// Codex CLI 的流空闲超时 5 分钟），没有给整条降级链设总期限。生产 11-02～11-05：
+// 主回复 p99.9 114s、记忆归纳 p99 147s、生图 p99 122s，都在 5 分钟以内；首字 p99.9
+// 就有 93 秒，所以不另设更短的空闲超时。
+const llmRequestTimeoutDefault = 5 * time.Minute
 
-type llmCandidateBudgetKey struct{}
-
-var errLLMCandidateTimeout = errors.New("diana: llm candidate budget exceeded")
-
-// llmCandidateTimeoutError 是某个候选用完了自己那份时间。它可以切下一个候选，
-// 也计入连续失败——一直卡住的上游和一直报 503 的上游一样该被冷却。
-type llmCandidateTimeoutError struct {
-	budget time.Duration
-	cause  error
+// modelRequestTimeoutError 是一次模型请求用完了单次上限。它可以切下一个候选，也计入
+// 连续失败——一直卡住的上游和一直报 503 的上游一样该被冷却。
+type modelRequestTimeoutError struct {
+	timeout time.Duration
 }
 
-func (e llmCandidateTimeoutError) Error() string {
-	return fmt.Sprintf("单个模型 %s 内没有完成：%v", e.budget, e.cause)
+func (e modelRequestTimeoutError) Error() string {
+	return fmt.Sprintf("单个模型 %s 内没有完成：%v", e.timeout, context.DeadlineExceeded)
 }
-func (e llmCandidateTimeoutError) Unwrap() error        { return e.cause }
-func (e llmCandidateTimeoutError) Is(target error) bool { return target == errLLMCandidateTimeout }
+func (e modelRequestTimeoutError) Unwrap() error        { return context.DeadlineExceeded }
+func (e modelRequestTimeoutError) Is(target error) bool { return target == errModelRequestTimeout }
 
-// withLLMCandidateBudget 替代调用点上的 context.WithTimeout：budget 是每个候选
-// 各自的时间，切到下一个候选时重新计时。以前整次调用共用一个期限，第一个候选
-// 卡满 60 秒，配好的备用一次都轮不到。
-func withLLMCandidateBudget(parent context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
-	if budget <= 0 {
-		return context.WithCancel(parent)
+// effectiveModelRequestTimeout 是这次请求用的单次上限：配置了就用配置，否则用默认值。
+func effectiveModelRequestTimeout(ctx context.Context) time.Duration {
+	if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); timeout > 0 {
+		return timeout
 	}
-	ctx, cancel := context.WithTimeout(parent, budget*llmCandidateBudgetCeiling)
-	return context.WithValue(ctx, llmCandidateBudgetKey{}, budget), cancel
-}
-
-// llmCandidateAttemptContext 给一个候选开它自己的计时。返回的上下文里预算已经
-// 用掉，里层再调用不会重复套一层。
-func llmCandidateAttemptContext(ctx context.Context) (context.Context, func(error) error) {
-	budget, _ := ctx.Value(llmCandidateBudgetKey{}).(time.Duration)
-	if budget <= 0 {
-		return ctx, func(err error) error { return err }
-	}
-	attemptCtx, cancel := context.WithTimeoutCause(context.WithValue(ctx, llmCandidateBudgetKey{}, time.Duration(0)), budget, errLLMCandidateTimeout)
-	return attemptCtx, func(err error) error {
-		expired := errors.Is(context.Cause(attemptCtx), errLLMCandidateTimeout)
-		cancel()
-		if err != nil && expired && ctx.Err() == nil && !errors.Is(err, errLLMOutputCommitted) {
-			return llmCandidateTimeoutError{budget: budget, cause: err}
-		}
-		return err
-	}
+	return llmRequestTimeoutDefault
 }
 
 type modelRequestTimeoutKey struct{}
@@ -147,13 +127,7 @@ func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
 }
 
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	ctx, finish := llmCandidateAttemptContext(ctx)
-	if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); p.disableRetry && timeout <= 0 {
-		resp, err := p.provider.Generate(ctx, req)
-		return resp, finish(err)
-	}
-	resp, err := generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
-	return resp, finish(err)
+	return generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
 }
 
 func generateWithTransientRetry(ctx context.Context, provider LLMProvider, req llm.GenerateRequest, enabled bool) (*llm.GenerateResponse, error) {
@@ -193,20 +167,18 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		if attemptTimeout > 0 {
 			attemptCtx, cancel = context.WithTimeout(ctx, attemptTimeout)
 		}
-		hardCtx := attemptCtx
-		hardCancel := func() {}
-		if hardTimeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); hardTimeout > 0 {
-			hardCtx, hardCancel = context.WithTimeoutCause(attemptCtx, hardTimeout, errModelRequestTimeout)
-		}
+		hardTimeout := effectiveModelRequestTimeout(ctx)
+		hardCtx, hardCancel := context.WithTimeoutCause(attemptCtx, hardTimeout, errModelRequestTimeout)
 		resp, err := provider.Generate(hardCtx, req)
 		hardExpired := errors.Is(context.Cause(hardCtx), errModelRequestTimeout)
 		hardCancel()
 		cancel()
 		if hardExpired && ctx.Err() == nil {
+			timeoutErr := modelRequestTimeoutError{timeout: hardTimeout}
 			if errors.Is(err, errLLMOutputCommitted) {
-				err = committedLLMError{cause: errModelRequestTimeout}
+				err = committedLLMError{cause: timeoutErr}
 			} else {
-				err = errModelRequestTimeout
+				err = timeoutErr
 			}
 			resp = nil
 		}
@@ -439,9 +411,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		if streamingRequested(ctx) {
 			client = &streamingLLMProvider{provider: client}
 		}
-		attemptCtx, finish := llmCandidateAttemptContext(ctx)
-		resp, err := generateWithTransientRetryPolicy(attemptCtx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
-		err = finish(err)
+		resp, err := generateWithTransientRetryPolicy(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
 		if err == nil {
 			p.current = index
 			p.cooldowns.noteCall(candidate.profile, true)
@@ -541,9 +511,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 			if streamingRequested(ctx) {
 				client = &streamingLLMProvider{provider: client}
 			}
-			attemptCtx, finish := llmCandidateAttemptContext(ctx)
-			resp, err = generateWithTransientRetryPolicy(attemptCtx, client, req, p.retryTransient, p.profiles[index].Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
-			err = finish(err)
+			resp, err = generateWithTransientRetryPolicy(ctx, client, req, p.retryTransient, p.profiles[index].Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
 			if err == nil {
 				p.current = index
 				p.cooldowns.noteCall(p.profiles[index], true)

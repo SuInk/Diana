@@ -140,8 +140,8 @@ func (r *Runtime) observeGroupStyle(event MessageEvent) {
 	go func() {
 		defer r.groupStyles.learning.Done()
 		defer recoverGoroutinePanic("group_style.observe")
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
+		// 不设总期限：这里只有本地库读写和一次模型请求，后者有统一的单次上限。
+		ctx := context.Background()
 		style, found, err := store.GroupStyle(ctx, event.ProfileID, event.GroupID)
 		if err != nil {
 			log.Printf("diana group style load failed: %v", err)

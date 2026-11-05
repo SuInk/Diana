@@ -409,22 +409,25 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	if text, ok := r.cachedRecognition(ctx, plugin, cacheKey); ok {
 		return text
 	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
 	var text string
 	var err error
 	switch cfg.Backend {
-	case imageOCRBackendLocal:
-		text, err = localImageOCRTranscription(callCtx, cfg, imageURL)
-	case imageOCRBackendHTTP:
-		text, err = plugin.httpImageOCRTranscription(callCtx, cfg, imageURL)
+	case imageOCRBackendLocal, imageOCRBackendHTTP:
+		// 插件的超时设置只管本地和 HTTP 后端；走模型时受模型请求的单次上限约束，
+		// 不再另套一层。
+		timeout := cfg.Timeout
+		if timeout <= 0 {
+			timeout = 90 * time.Second
+		}
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		if cfg.Backend == imageOCRBackendLocal {
+			text, err = localImageOCRTranscription(callCtx, cfg, imageURL)
+		} else {
+			text, err = plugin.httpImageOCRTranscription(callCtx, cfg, imageURL)
+		}
+		cancel()
 	default:
-		text, err = r.llmImageOCRTranscription(callCtx, event, cfg, imageURL)
+		text, err = r.llmImageOCRTranscription(ctx, event, cfg, imageURL)
 	}
 	if err != nil {
 		// 转写只是辅助信息，失败不值得打断回复，也不缓存失败结果。
@@ -453,14 +456,8 @@ func (r *Runtime) describeContextImage(ctx context.Context, event MessageEvent, 
 	if text, ok := r.cachedRecognition(ctx, plugin, cacheKey); ok {
 		return text
 	}
-	timeout := cfg.Timeout
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	text, err := r.llmImageDescription(callCtx, event, cfg, imageURL)
+	// 描述只走模型，受模型请求的单次上限约束，插件的超时设置不套在这里。
+	text, err := r.llmImageDescription(ctx, event, cfg, imageURL)
 	if err != nil {
 		return ""
 	}

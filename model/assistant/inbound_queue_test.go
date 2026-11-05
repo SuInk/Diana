@@ -827,18 +827,6 @@ func TestReplyToBotTriggersReplyDirectly(t *testing.T) {
 	}
 }
 
-func TestProactiveReplyRouterUsesStrictSemanticTimeout(t *testing.T) {
-	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 5 * time.Minute}); got != 60*time.Second {
-		t.Fatalf("route timeout = %s, want 60s", got)
-	}
-	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 3 * time.Minute}); got != 60*time.Second {
-		t.Fatalf("route timeout = %s, want 60s", got)
-	}
-	if got := proactiveReplyRouteTimeout(BotConfig{RequestTimeout: 8 * time.Second}); got != 8*time.Second {
-		t.Fatalf("short configured timeout = %s, want 8s", got)
-	}
-}
-
 func TestRuntimeAssignsInboundPriorities(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
 	tests := []struct {

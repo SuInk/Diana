@@ -158,10 +158,9 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	// 可选模型跟评遵守追问发送闸门，不能继承插件事实投递的豁免。
 	ctx = withReplyTriggerGate(ctx)
 	ctx = r.withFileParserVideoLimit(ctx, event)
-	// 跟评有自己的时间预算：解析慢一点就把整条回复链路的超时吃光，
-	// 跟着上游 ctx 一起被取消的话，跟评会毫无规律地时有时无。
+	// 跟评脱离上游 ctx：跟着上游一起被取消的话，跟评会毫无规律地时有时无。
 	cfg := r.effectiveConfigForEvent(event).WithDefaults()
-	ctx, cancel := detachFollowUpContext(ctx, cfg.RequestTimeout)
+	ctx, cancel := detachFollowUpContext(ctx)
 	defer cancel()
 	// 先静音：跟评可能为空，主回复发完后不应再闪一下「正在输入」。
 	typing := r.startTypingIndicatorMuted(ctx, event, cfg)
@@ -1697,14 +1696,13 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 	if !r.plugins.CanAskAgent(repositoryWatchPluginID, r.pluginOverridesForEvent(source), r.pluginSettingOverridesForEvent(source)) {
 		return
 	}
-	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须有自己的预算，
+	// 轮询的 ctx 在这一轮检查结束时就会取消，跟评必须脱离它，
 	// 否则仓库拉取慢一点跟评就永远赶不上开口。
 	for _, target := range repositoryWatchDeliveryTargets(item) {
 		if r.profileDisabled(target.ProfileID) {
 			continue
 		}
-		timeout := r.effectiveConfigForEvent(target).WithDefaults().RequestTimeout
-		followCtx, cancel := detachFollowUpContext(ctx, timeout)
+		followCtx, cancel := detachFollowUpContext(ctx)
 		comment := r.followUpCommentWithReference(followCtx, followUpKindRepositoryWatch, target, notification, reference)
 		if comment == "" {
 			cancel()
@@ -2423,9 +2421,7 @@ type scheduledQueryRunContextKey struct{}
 func (r *Runtime) runTaskQuery(ctx context.Context, item Reminder, systemSpec, requestSpec *PromptSpec) (string, error) {
 	source := r.sourceEventForReminder(item)
 	cfg := r.effectiveConfigForEvent(source)
-	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
-	taskCtx = context.WithValue(taskCtx, scheduledQueryRunContextKey{}, true)
+	taskCtx := context.WithValue(ctx, scheduledQueryRunContextKey{}, true)
 	taskCtx = withLLMUsageContext(taskCtx, source)
 	relationship := r.relationshipPolicy(taskCtx, source)
 	messages := []llm.Message{

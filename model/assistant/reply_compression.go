@@ -8,7 +8,6 @@ import (
 	"log"
 	"reflect"
 	"strings"
-	"time"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -176,8 +175,7 @@ func (r *Runtime) prepareGeneratedReply(ctx context.Context, cfg BotConfig, repl
 			event.replyDeliveryMode = replyDeliveryAuto
 		}
 	}
-	compactCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	compactCtx := ctx
 	compactCtx = withLLMUsagePurpose(compactCtx, "reply_compression")
 	compactCtx = context.WithValue(compactCtx, textDeltaObserverKey{}, struct{}{})
 	attemptsLeft := 2

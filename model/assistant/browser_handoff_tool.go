@@ -167,12 +167,7 @@ func (r *Runtime) resumeAfterBrowserHandoff(job browserHandoffJob, outcome strin
 		return
 	}
 	cfg := r.effectiveConfigForEvent(job.event)
-	timeout := cfg.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	runCtx := ctx
 	relationship := r.relationshipPolicy(runCtx, job.event)
 	// 工具只挂给主人；这里再核一遍，配置在这期间改过也不会让别人借到这一轮。
 	if !cfg.AgentEnabled || !relationship.Owner {

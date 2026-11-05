@@ -194,8 +194,7 @@ func (r *Runtime) evaluateRelationshipUpdateDetailed(ctx context.Context, event 
 			Content: "请评估这条消息是否改变当前发言者与机器人的关系，并给出这一轮观察到的人员画像。上下文 JSON：\n" + string(payloadJSON),
 		},
 	}
-	callCtx, cancel := withLLMCandidateBudget(ctx, relationshipEvaluationTimeout(cfg))
-	defer cancel()
+	callCtx := ctx
 	model := ""
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
@@ -310,18 +309,6 @@ func (r *Runtime) waitForRelationshipEvaluations(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
-}
-
-// relationshipEvaluationBudget 是后台好感度评估单次调用的上限。它在回复送达后才跑，
-// 不挡聊天，给宽一点只是多占一会儿后台名额；原来的 20 秒在线上有约 5% 被出网代理
-// 偶发的停滞卡满，评估整轮作废。
-const relationshipEvaluationBudget = 60 * time.Second
-
-func relationshipEvaluationTimeout(cfg BotConfig) time.Duration {
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < relationshipEvaluationBudget {
-		return cfg.RequestTimeout
-	}
-	return relationshipEvaluationBudget
 }
 
 func parseRelationshipEvaluationDecision(raw string) (relationshipEvaluationDecision, bool) {

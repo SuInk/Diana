@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/SuInk/diana/model/llm"
@@ -18,8 +17,6 @@ func (p *ResolverPlugin) translateResponse(ctx context.Context, req PluginReques
 	if !req.Settings.Bool(resolverSettingTranslate, false) || req.TranslateResolver == nil || strings.TrimSpace(response.Reply) == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	if mostlyChineseText(response.Reply) {
 		return
 	}

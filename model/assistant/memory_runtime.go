@@ -20,16 +20,10 @@ import (
 )
 
 const (
-	memoryWorkerCount       = 2
-	memoryPollInterval      = 750 * time.Millisecond
-	memoryLeaseDuration     = 3 * time.Minute
-	memoryExtractionTimeout = 60 * time.Second
-	// memorySummaryTimeout 单独给摘要任务：门控一次只带几条消息，几秒就回；摘要
-	// 要吃下最多 100 条事件加已有摘要、卷叠源和线程便签（约 15–18k token），再
-	// 写出 800–1300 token，慢模型（~20 tok/s）光生成就要 40–65 秒，跟门控共用
-	// 60 秒几乎必然超时。它必须小于租约时长，否则任务还在跑就被别的 worker 领走。
-	memorySummaryTimeout = 150 * time.Second
-	memoryMaxAttempts    = 8
+	memoryWorkerCount   = 2
+	memoryPollInterval  = 750 * time.Millisecond
+	memoryLeaseDuration = 3 * time.Minute
+	memoryMaxAttempts   = 8
 	// memoryMaxConsecutiveTimeouts 是连续超时几次就放弃。摘要第二次起输入已经缩到
 	// 最小（见 memorySummaryEventWindow、memorySummaryPromptExisting），最小输入再
 	// 超时两次，基本可以断定不是输入的问题。
@@ -255,9 +249,7 @@ func (r *Runtime) runMemoryWorker(ctx context.Context, leaseOwner string, store 
 			if len(live) == 0 {
 				continue
 			}
-			jobCtx, jobCancel := withLLMCandidateBudget(ctx, memoryJobTimeout(live))
-			err = r.processMemoryJobs(jobCtx, store, live)
-			jobCancel()
+			err = r.processMemoryJobs(ctx, store, live)
 			if err != nil && ctx.Err() == nil {
 				r.recordBackgroundFailure("memory_job_failed", "长期记忆提取失败，稍后自动重试", "", err,
 					map[string]any{"jobs": len(live), "kind": string(live[0].Payload.Kind), "attempts": live[0].Attempts})
@@ -290,17 +282,6 @@ func memoryJobKindLabel(kind MemoryJobKind) string {
 	default:
 		return "记忆任务"
 	}
-}
-
-// memoryJobTimeout 按任务种类给超时。一批里只要有摘要任务就按摘要算——目前
-// 摘要总是单独领取，这里取最宽的那个只是不让批量规则的变动悄悄把摘要卡回 60 秒。
-func memoryJobTimeout(jobs []MemoryJob) time.Duration {
-	for _, job := range jobs {
-		if job.Payload.Kind == MemoryJobSummary {
-			return memorySummaryTimeout
-		}
-	}
-	return memoryExtractionTimeout
 }
 
 // memorySummaryEventWindow 决定这一次摘要带多少条事件：首次最多 100 条，之后每

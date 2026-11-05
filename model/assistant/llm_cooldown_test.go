@@ -757,50 +757,62 @@ func TestLLMFailoverKeepsPrimaryUntilStreak(t *testing.T) {
 }
 
 // 每个候选各自计时：主档卡住用满自己那份时间后，备用档拿到完整的一份重新计时。
-func TestLLMCandidateBudgetRestartsOnFailover(t *testing.T) {
+// 单次请求上限按候选各自计时：第一个候选卡满上限后，备用拿到一份完整的新上限，
+// 没有整条调用的总期限把它挤掉。
+func TestModelRequestTimeoutRestartsOnFailover(t *testing.T) {
 	table := &llmCooldownTable{}
 	primary := &cooldownRegistryAdapter{block: true}
 	backup := &cooldownRegistryAdapter{response: "备用回复", delay: 60 * time.Millisecond}
 	provider := cooldownProviderFactory(t, table, primary, backup)()
-	ctx, cancel := withLLMCandidateBudget(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 100*time.Millisecond)
 	started := time.Now()
 	resp, err := provider.Generate(ctx, cooldownRequest())
 	if err != nil || resp.Text != "备用回复" {
 		t.Fatalf("resp=%#v err=%v", resp, err)
 	}
-	// 共用一个期限的话备用档只剩 0ms；分开计时总耗时约 100ms + 60ms。
 	if elapsed := time.Since(started); elapsed < 150*time.Millisecond {
 		t.Fatalf("elapsed = %s", elapsed)
+	}
+	if primary.generateCalls != 1 {
+		t.Fatalf("超时不应在同一候选原地重试：calls=%d", primary.generateCalls)
 	}
 	if health := table.snapshot([]llm.Profile{{ID: "primary", Config: llm.ProviderConfig{Model: "primary-model"}}}); health[0].failures != 1 {
 		t.Fatalf("候选超时应当计入连续失败：%+v", health)
 	}
+}
 
-	// 只有一个候选时总时长仍是一份预算，不会被放宽成三份。
+// 前两个候选都卡住（常见于同一个网关整体变慢）时，第三个候选照样轮得到。2026-11-05
+// 主动回复审核就是前两个各卡一份、第三个没轮到，回复整条作废。
+func TestModelRequestTimeoutReachesEveryCandidate(t *testing.T) {
+	primary := &cooldownRegistryAdapter{block: true}
+	sameGateway := &cooldownRegistryAdapter{block: true}
+	other := &cooldownRegistryAdapter{response: "第三个候选", delay: 20 * time.Millisecond}
+	provider := cooldownProviderFactory(t, &llmCooldownTable{}, primary, sameGateway, other)()
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 50*time.Millisecond)
+	resp, err := provider.Generate(ctx, cooldownRequest())
+	if err != nil || resp.Text != "第三个候选" {
+		t.Fatalf("resp=%#v err=%v", resp, err)
+	}
+}
+
+// 只有一个候选时超时就是这一次的结果，错误要认得出是单次上限。
+func TestModelRequestTimeoutSingleCandidateError(t *testing.T) {
 	single := cooldownProviderFactory(t, &llmCooldownTable{}, &cooldownRegistryAdapter{block: true})()
-	ctx, cancel = withLLMCandidateBudget(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	started = time.Now()
-	_, err = single.Generate(ctx, cooldownRequest())
-	if !errors.Is(err, errLLMCandidateTimeout) || time.Since(started) > 500*time.Millisecond {
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 50*time.Millisecond)
+	started := time.Now()
+	_, err := single.Generate(ctx, cooldownRequest())
+	if !errors.Is(err, errModelRequestTimeout) || time.Since(started) > 500*time.Millisecond {
 		t.Fatalf("err=%v elapsed=%s", err, time.Since(started))
 	}
 }
 
-// 发送前审核：总期限不变，每个候选只拿一半。主档卡住时备用档还来得及答，而不是
-// 主档吃满整段、审核超时放行。
-func TestReplyAuditBudgetLeavesTimeForBackup(t *testing.T) {
-	primary := &cooldownRegistryAdapter{block: true}
-	backup := &cooldownRegistryAdapter{response: "备用回复", delay: 20 * time.Millisecond}
-	provider := cooldownProviderFactory(t, &llmCooldownTable{}, primary, backup)()
-	total := 200 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), total)
-	defer cancel()
-	ctx, cancelBudget := withLLMCandidateBudget(ctx, replyAuditCandidateBudget(total))
-	defer cancelBudget()
-	resp, err := provider.Generate(ctx, cooldownRequest())
-	if err != nil || resp.Text != "备用回复" {
-		t.Fatalf("resp=%#v err=%v", resp, err)
+// 没配单次上限时用统一默认值，不再是不限。
+func TestEffectiveModelRequestTimeoutDefault(t *testing.T) {
+	if got := effectiveModelRequestTimeout(context.Background()); got != 5*time.Minute {
+		t.Fatalf("default = %s", got)
+	}
+	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, 7*time.Second)
+	if got := effectiveModelRequestTimeout(ctx); got != 7*time.Second {
+		t.Fatalf("configured = %s", got)
 	}
 }

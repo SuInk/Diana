@@ -420,13 +420,10 @@ func (r *Runtime) runReplyAudit(ctx context.Context, event MessageEvent, input, 
 	if err != nil {
 		return proactiveReplyQualityDecision{}, fmt.Errorf("编码审核上下文: %w", err)
 	}
-	// 总预算不变，但按候选计时：主模型卡住时留一半时间给备用，而不是一个候选吃满
-	// 整段再放行。审核失败多半按放行处理，等满 30 秒只是白白推迟发送。
-	total := proactiveReplyQualityTimeout(cfg)
-	auditCtx, cancel := context.WithTimeout(ctx, total)
-	defer cancel()
-	auditCtx, cancelBudget := withLLMCandidateBudget(auditCtx, replyAuditCandidateBudget(total))
-	defer cancelBudget()
+	// 不另设总期限：每次模型请求有统一的单次上限，超时就换下一个候选。以前 30 秒
+	// 总预算分给前两个候选，二者挂在同一个卡住的网关上时，第三个候选一次都轮不到，
+	// 主动回复就此作废。
+	auditCtx := ctx
 	auditText := "请审核以下回复：\n" + string(payload) + replyAuditAppendix(cfg, need)
 	auditMessage := llm.Message{Role: llm.RoleUser, Content: auditText}
 	if imageContext == "" && replyAuditHasImage(event) {
@@ -806,23 +803,6 @@ func (r *Runtime) recordPrivateClosingVerdict(ctx context.Context, event Message
 			"reason":               reason,
 		},
 	})
-}
-
-// replyAuditCandidateBudget 是发送前审核每个候选模型的时间，取总预算的一半。
-//
-// 生产 10-20～10-26 的 2477 次审核：成功的 p90 约 12 秒、超过 15 秒的占 4.7%；另有
-// 38 次在 30 秒处超时放行——那是上游卡住，不是模型想得久。主模型 15 秒没答完就
-// 换备用，备用还剩 15 秒。
-func replyAuditCandidateBudget(total time.Duration) time.Duration {
-	return total / 2
-}
-
-func proactiveReplyQualityTimeout(cfg BotConfig) time.Duration {
-	const budget = 30 * time.Second
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < budget {
-		return cfg.RequestTimeout
-	}
-	return budget
 }
 
 // parseAccountSafeScore 读 account_safe。它现在是 0 到 1 的安全置信度，但旧提示词

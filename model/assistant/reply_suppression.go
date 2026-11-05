@@ -21,13 +21,11 @@ import (
 const (
 	// 暂停时长在这个区间里随机取，不再固定三十分钟：固定值等于给对方一个精确的
 	// 时刻表，而且每次都一样的「恰好三十分钟」本身就很像机器。
-	replySuppressionNoticeTimeout     = 60 * time.Second
 	replySuppressionMarker            = "<diana-ignore-user/>"
 	replyRefusalMarker                = "<diana-refuse/>"
 	replyRefusalWindow                = 30 * time.Minute
 	botReplyLoopWindow                = 30 * time.Minute
 	botReplyLoopAIConfidenceThreshold = 0.90
-	botReplyLoopClassificationTimeout = 20 * time.Second
 	replyRefusalAuditConfidence       = 0.90
 )
 
@@ -728,8 +726,7 @@ func (r *Runtime) applyReplyControlAfterSend(ctx context.Context, event MessageE
 	// 攒够了次数却还在继续回。提示发不出去不该影响暂停。
 	r.activateReplySuppressionWithinOutboundGate(event, reason, now)
 	hintBase := withReplySuppressionOutboundGateHeld(withReplySuppressionSendGuard(context.Background()))
-	hintCtx, cancel := context.WithTimeout(hintBase, replySuppressionNoticeTimeout)
-	defer cancel()
+	hintCtx := hintBase
 	r.sendReplyPauseHint(hintCtx, event, item)
 }
 
@@ -891,8 +888,7 @@ func (r *Runtime) generateReplyPauseHint(ctx context.Context, event MessageEvent
 		{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptReplyPauseHintSpec)},
 		{Role: llm.RoleUser, Content: "现在说这一句。"},
 	})
-	callCtx, cancel := context.WithTimeout(ctx, replySuppressionNoticeTimeout)
-	defer cancel()
+	callCtx := ctx
 	// 和其他提示改写一样走回复辅助。runLLMProvider 按对话分组取，对话那一档总有
 	// 绑定，会盖过用途归属。
 	raw, err := r.runLLMProviderForGroup(callCtx, llm.GroupReplyAssist, func(client LLMProvider) (string, error) {

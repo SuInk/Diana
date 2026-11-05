@@ -127,8 +127,7 @@ func (r *Runtime) enrichSemanticReference(ctx context.Context, event MessageEven
 	cacheKey := semanticReferenceDecisionCacheKey(event, text, candidates)
 	decision, cacheHit := r.loadSemanticReferenceDecision(ctx, cacheKey)
 	if !cacheHit {
-		callCtx, cancel := context.WithTimeout(ctx, semanticRouteTimeout)
-		defer cancel()
+		callCtx := ctx
 		raw, routeErr := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 			resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{
 				{

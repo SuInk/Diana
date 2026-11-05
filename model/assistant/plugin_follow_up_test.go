@@ -320,17 +320,17 @@ func TestPluginFollowUpSurvivesCancelledUpstreamContext(t *testing.T) {
 	}
 }
 
-func TestFollowUpUsesConfiguredRequestTimeout(t *testing.T) {
-	const timeout = 73 * time.Second
-	ctx, cancel := detachFollowUpContext(context.Background(), timeout)
+// 跟评脱离上游取消，但不另设总期限：模型请求按单次上限计时。
+func TestFollowUpContextDetachedWithoutDeadline(t *testing.T) {
+	parent, cancelParent := context.WithCancel(context.Background())
+	ctx, cancel := detachFollowUpContext(parent)
 	defer cancel()
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		t.Fatal("follow-up context has no deadline")
+	cancelParent()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("follow-up context should not carry a total deadline")
 	}
-	remaining := time.Until(deadline)
-	if remaining < timeout-time.Second || remaining > timeout {
-		t.Fatalf("follow-up timeout = %s, want %s", remaining, timeout)
+	if ctx.Err() != nil {
+		t.Fatalf("follow-up context canceled with parent: %v", ctx.Err())
 	}
 }
 

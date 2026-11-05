@@ -132,7 +132,11 @@ func (c *sharedResultCache[T]) load(ctx context.Context, key string, ttl, budget
 			return json.Marshal(value)
 		}
 		// A single caller's cancellation must not abort other subscribers.
-		loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
+		// budget <= 0 不设期限：模型调用只受单次请求上限约束，不另套总期限。
+		loadCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		if budget > 0 {
+			loadCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), budget)
+		}
 		defer cancel()
 		value, err := fetch(loadCtx)
 		if err != nil {

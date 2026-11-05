@@ -26,9 +26,9 @@ import (
 const (
 	// pokeReplyCooldown 是同一个人两次得到回应的最小间隔。
 	pokeReplyCooldown = 90 * time.Second
-	// pokeReplyTimeout 限制旁路生成的耗时：戳一戳是即时互动，十几秒后才回话
-	// 的反应已经错过了那个瞬间。
-	pokeReplyTimeout = 15 * time.Second
+	// pokeReplyFollowWindow 是「这句话紧跟在戳一戳之后」的认定窗口：超过它，机器人
+	// 的话就不再当成对那次戳的回应。
+	pokeReplyFollowWindow = 30 * time.Second
 	// pokeReplyMaxRunes 兜底裁剪生成结果。提示词要求一句话，模型偶尔不听。
 	pokeReplyMaxRunes = 60
 )
@@ -188,8 +188,7 @@ func (r *Runtime) generatePokeReaction(ctx context.Context, event MessageEvent) 
 		"recent_chat": r.pokeRecentChat(event),
 	})
 	messages := r.withUserFacingPersona(event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
-	callCtx, cancel := context.WithTimeout(ctx, pokeReplyTimeout)
-	defer cancel()
+	callCtx := ctx
 	raw, err := r.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {

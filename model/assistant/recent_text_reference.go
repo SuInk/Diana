@@ -176,8 +176,7 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 	if err != nil {
 		return nil
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
-	defer cancel()
+	callCtx := ctx
 	callCtx = withLLMUsagePurpose(callCtx, PurposeSemanticTextRef)
 	raw, err := r.runLLMRouterProviderOnce(callCtx, func(provider LLMProvider) (string, error) {
 		response, err := provider.Generate(callCtx, llm.GenerateRequest{Messages: []llm.Message{

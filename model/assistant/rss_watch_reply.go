@@ -113,9 +113,6 @@ func (r *Runtime) renderRSSWatchItem(ctx context.Context, item Reminder, entry r
 		return rssWatchUnfilteredText(entry), nil
 	}
 	source := r.sourceEventForReminder(item)
-	cfg := r.effectiveConfigForEvent(source)
-	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), PurposeRSSWatchJudge)
 	ctx, group, err := r.rssModelContext(ctx, item.FeedTranslationModelID)
 	if err != nil {
