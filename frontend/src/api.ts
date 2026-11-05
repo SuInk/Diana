@@ -2200,6 +2200,9 @@ export interface MusicConnectionStatus {
   api_configured: boolean;
   cookie_configured: boolean;
   login?: CredentialCheck;
+  // 账号档位，和后端点歌时排曲库顺序用的是同一套。
+  tier?: "member" | "expired" | "not_member" | "unknown" | "invalid" | "guest";
+  membership_end?: string;
   message: string;
 }
 

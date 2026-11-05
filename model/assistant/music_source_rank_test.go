@@ -97,3 +97,23 @@ func TestMusicMembershipNotes(t *testing.T) {
 		t.Fatalf("a valid member should not be blamed: %q", notes)
 	}
 }
+
+func TestMusicLoginTierMatchesRank(t *testing.T) {
+	cases := []struct {
+		check      CredentialCheck
+		configured bool
+		tier       string
+	}{
+		{CredentialCheck{State: CredentialValid, Member: true}, true, musicTierMember},
+		{CredentialCheck{State: CredentialValid, MembershipExpired: true}, true, musicTierExpired},
+		{CredentialCheck{State: CredentialValid}, true, musicTierNotMember},
+		{CredentialCheck{State: CredentialError}, true, musicTierUnknown},
+		{CredentialCheck{State: CredentialInvalid}, true, musicTierInvalid},
+		{CredentialCheck{}, false, musicTierGuest},
+	}
+	for _, c := range cases {
+		if got := musicLoginTier(c.check, c.configured); got != c.tier {
+			t.Fatalf("musicLoginTier(%+v, %v) = %q, want %q", c.check, c.configured, got, c.tier)
+		}
+	}
+}

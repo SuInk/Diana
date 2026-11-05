@@ -46,7 +46,6 @@ const (
 	musicSettingMaxMB       = "max_file_mb"
 	musicSettingTimeout     = "timeout_seconds"
 	musicSettingSendInfo    = "send_song_info"
-	musicSettingRequestSong = "request_song_enabled"
 	musicSettingSilkEncoder = "silk_encoder_path"
 
 	defaultMusicBitrate     = 320000
@@ -79,8 +78,11 @@ type MusicConnectionStatus struct {
 	APIConfigured    bool   `json:"api_configured"`
 	CookieConfigured bool   `json:"cookie_configured"`
 	// Login 只在填了 Cookie 时出现，是账号接口的实测结果。
-	Login   *CredentialCheck `json:"login,omitempty"`
-	Message string           `json:"message"`
+	Login *CredentialCheck `json:"login,omitempty"`
+	// Tier 是账号档位，设置页拿它显示状态并按和点歌时一样的规则排顺序。
+	Tier          string `json:"tier"`
+	MembershipEnd string `json:"membership_end,omitempty"`
+	Message       string `json:"message"`
 }
 
 // TestConnections performs one small real query per source. It deliberately
@@ -107,6 +109,12 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 			// 测试刚问过的结果顺手记下，自动排序就不用再问一遍。
 			p.logins.put(source.Key(), strings.TrimSpace(options.Cookie), login)
 			status.Login = &login
+		}
+		if status.Login != nil {
+			status.Tier = musicLoginTier(*status.Login, true)
+			status.MembershipEnd = status.Login.MembershipEnd
+		} else {
+			status.Tier = musicLoginTier(CredentialCheck{}, false)
 		}
 		found, ok := source.Search(testCtx, p.fetcher, cfg, "晴天 周杰伦")
 		status.SearchOK = ok
@@ -145,7 +153,6 @@ type musicConfig struct {
 	MaxBytes        int64
 	Timeout         time.Duration
 	SendSongInfo    bool
-	RequestedSong   bool
 	OutputDir       string
 	FFmpegPath      string
 	SilkEncoder     string
@@ -224,19 +231,12 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.3.2",
+		Version:     "0.3.3",
 		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 和 QQ 官方机器人发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"agent:tool", "network:http", "file:write", "process:execute", "message:read", "message:send"},
 		Settings: []PluginSettingSpec{
-			{
-				Key:         musicSettingRequestSong,
-				Label:       "允许点歌",
-				Type:        PluginSettingTypeBool,
-				Default:     true,
-				Description: "开启后模型可以按用户要求搜歌，按平台发送语音、原生音乐或歌曲链接。关掉只保留链接解析。",
-			},
 			{
 				Key:         musicSettingSources,
 				Label:       "启用曲库",
@@ -382,9 +382,8 @@ func (p *MusicPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
 }
 
 func (p *MusicPlugin) AgentToolsForPlatform(platform string, settings SettingValues) ([]agent.Tool, error) {
-	if !settings.Bool(musicSettingRequestSong, true) {
-		return nil, nil
-	}
+	// 点歌和链接解析同属这个插件，不再单设「允许点歌」：不想点歌就关插件。
+	// 旧配置里残留的 request_song_enabled 一律忽略。
 	return []agent.Tool{&dianaMusicTool{plugin: p, settings: settings, platform: platform}}, nil
 }
 
@@ -776,7 +775,6 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		MaxBytes:        int64(maxMB) << 20,
 		Timeout:         time.Duration(timeout) * time.Second,
 		SendSongInfo:    settings.Bool(musicSettingSendInfo, true),
-		RequestedSong:   settings.Bool(musicSettingRequestSong, true),
 		OutputDir:       musicOutputDir(),
 		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
 		SilkEncoder:     strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),

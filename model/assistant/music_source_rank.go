@@ -98,6 +98,37 @@ func (p *MusicPlugin) sourceLogin(ctx context.Context, cfg musicConfig, source m
 	return check, true
 }
 
+// 账号档位，设置页的状态标签和排序都看它。
+const (
+	musicTierMember    = "member"
+	musicTierExpired   = "expired"
+	musicTierNotMember = "not_member"
+	musicTierUnknown   = "unknown"
+	musicTierInvalid   = "invalid"
+	musicTierGuest     = "guest"
+)
+
+func musicLoginTier(check CredentialCheck, configured bool) string {
+	if !configured {
+		return musicTierGuest
+	}
+	switch check.State {
+	case CredentialValid:
+		switch {
+		case check.Member && !check.MembershipExpired:
+			return musicTierMember
+		case check.MembershipExpired:
+			return musicTierExpired
+		}
+		return musicTierNotMember
+	case CredentialInvalid:
+		return musicTierInvalid
+	case CredentialUnconfigured:
+		return musicTierGuest
+	}
+	return musicTierUnknown
+}
+
 func musicLoginRank(check CredentialCheck, configured bool) int {
 	if !configured {
 		return musicRankGuest

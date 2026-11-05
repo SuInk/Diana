@@ -339,80 +339,102 @@
         </button>
       </template>
       <template v-if="isMusicSettings">
-        <div class="plugin-settings-section-head">
-          <h3>曲库与会员能力</h3>
-          <p>不配置凭据也能尝试公开试听；会员歌曲需要对应平台登录态。凭据只写入服务器，页面不会回显原文。</p>
-        </div>
-        <div class="music-priority">
-          <div class="music-priority-row">
-            <span class="music-priority-label">曲库优先级</span>
-            <div class="segmented" role="radiogroup" aria-label="曲库优先级">
-              <button type="button" role="radio" :aria-checked="!musicManualOrder" :class="{ active: !musicManualOrder }" @click="setMusicPriorityMode('auto')">自动</button>
-              <button type="button" role="radio" :aria-checked="musicManualOrder" :class="{ active: musicManualOrder }" @click="setMusicPriorityMode('manual')">手动</button>
-            </div>
+        <section class="music-sources">
+          <div class="music-sources-head">
+            <h3>曲库</h3>
+            <button class="btn small" type="button" :disabled="testingMusic" @click="testMusicSettings()">
+              <RefreshCw :size="14" :class="{ spin: testingMusic }" aria-hidden="true" />
+              {{ testingMusic ? "测试中…" : "测试全部" }}
+            </button>
           </div>
-          <p class="hint">{{ musicManualOrder ? "排在前面的先问，一家放不出来再问下一家。点卡片上的「设为首选」调整顺序。" : "按实测登录态排序：会员有效的先问，登录但不是会员或会员已到期的其次，没填或失效的最后。登录态每 30 分钟重新确认一次。" }}</p>
-        </div>
-        <div class="music-platform-grid">
-          <section v-for="(platform, index) in orderedMusicPlatforms" :key="platform.key" class="music-platform-card" :class="{ 'is-disabled': !musicSourceEnabled(platform.key) }">
-            <div class="music-platform-head">
-              <div>
-                <h4>{{ platform.label }}</h4>
-                <span class="hint">{{ musicSourceEnabled(platform.key) ? musicPlatformSummary(platform.key) : "已停用，点歌和链接解析都不会问这家" }}</span>
+          <p class="hint">{{ musicListHint }}</p>
+          <ul class="music-source-list">
+            <li
+              v-for="(platform, index) in orderedMusicPlatforms"
+              :key="platform.key"
+              class="music-source-row"
+              :class="{ 'is-disabled': !musicSourceEnabled(platform.key), 'is-open': musicExpanded === platform.key }"
+            >
+              <div class="music-source-head">
+                <button
+                  type="button"
+                  class="music-source-toggle"
+                  :aria-expanded="musicExpanded === platform.key"
+                  :aria-controls="`music-source-${platform.key}`"
+                  @click="musicExpanded = musicExpanded === platform.key ? '' : platform.key"
+                >
+                  <span class="music-source-rank" aria-hidden="true">{{ musicSourceEnabled(platform.key) ? musicEnabledRank(platform.key) : "–" }}</span>
+                  <span class="music-source-name">{{ platform.label }}</span>
+                  <span class="badge" :class="musicStatusClass(platform.key)">{{ musicStatusLabel(platform.key) }}</span>
+                </button>
+                <button
+                  v-if="!musicAutoOrder && musicSourceEnabled(platform.key) && index > 0"
+                  class="btn small ghost icon-only"
+                  type="button"
+                  :aria-label="`把${platform.label}设为首选`"
+                  title="设为首选"
+                  @click="settingsForm.preferred_source = platform.key"
+                >
+                  <ArrowUp :size="14" aria-hidden="true" />
+                </button>
+                <label class="switch" :title="musicSourceToggleTitle(platform.key)">
+                  <input
+                    type="checkbox"
+                    :aria-label="`启用${platform.label}`"
+                    :checked="musicSourceEnabled(platform.key)"
+                    :disabled="musicSourceEnabled(platform.key) && musicEnabledCount <= 1"
+                    @change="toggleMusicSource(platform.key, $event)"
+                  />
+                  <span class="track" aria-hidden="true"></span>
+                </label>
+                <ChevronDown class="music-source-chevron" :size="15" aria-hidden="true" />
               </div>
-              <label class="switch" :title="musicSourceToggleTitle(platform.key)">
-                <input
-                  type="checkbox"
-                  :aria-label="`启用${platform.label}`"
-                  :checked="musicSourceEnabled(platform.key)"
-                  :disabled="musicSourceEnabled(platform.key) && musicEnabledCount <= 1"
-                  @change="toggleMusicSource(platform.key, $event)"
+              <div v-if="musicExpanded === platform.key" :id="`music-source-${platform.key}`" class="music-source-body">
+                <PluginSettingField
+                  v-if="musicSpec(`${platform.key}_cookie`)"
+                  :spec="musicSpec(`${platform.key}_cookie`)!"
+                  :form="settingsForm"
+                  :clearing="clearSecrets.includes(`${platform.key}_cookie`)"
+                  :secret-configured="secretConfigured(`${platform.key}_cookie`)"
+                  :secret-placeholder="secretPlaceholder(`${platform.key}_cookie`)"
+                  @toggle-clear="toggleClearSecret"
                 />
-                <span class="track" aria-hidden="true"></span>
-              </label>
+                <p v-if="musicCredentialHint(platform.key)" class="music-credential-hint">{{ musicCredentialHint(platform.key) }}</p>
+                <p v-if="musicResultDetail(platform.key)" class="music-source-detail" :class="musicStatusClass(platform.key)">{{ musicResultDetail(platform.key) }}</p>
+                <details class="music-advanced" :open="musicAPIConfigured(platform.key)">
+                  <summary>高级：自建 API 地址</summary>
+                  <p class="music-platform-guide">{{ platform.guide }}</p>
+                  <PluginSettingField v-if="musicSpec(`${platform.key}_api_base`)" :spec="musicSpec(`${platform.key}_api_base`)!" :form="settingsForm" />
+                </details>
+              </div>
+            </li>
+          </ul>
+        </section>
+        <section class="music-playback">
+          <h3>播放</h3>
+          <div class="stack plugin-settings-form">
+            <div class="field">
+              <div class="plugin-setting-switch">
+                <div class="plugin-setting-switch-text">
+                  <label for="setting-music-auto-order">按会员状态自动排序</label>
+                  <span class="hint">{{ musicAutoOrder ? "会员有效的先问，登录但不是会员的其次，没填或失效的最后。" : "关掉后按上面列表的顺序问，用箭头调整。" }}</span>
+                </div>
+                <label class="switch">
+                  <input id="setting-music-auto-order" type="checkbox" :checked="musicAutoOrder" @change="setMusicAutoOrder(($event.target as HTMLInputElement).checked)" />
+                  <span class="track" aria-hidden="true"></span>
+                </label>
+              </div>
             </div>
-            <div class="music-platform-badges">
-              <span v-if="musicManualOrder && musicSourceEnabled(platform.key)" class="badge">第 {{ musicEnabledRank(platform.key) }} 顺位</span>
-              <span class="badge" :class="musicStatusClass(platform.key)">{{ musicStatusLabel(platform.key) }}</span>
-              <button
-                v-if="musicManualOrder && musicSourceEnabled(platform.key) && index > 0"
-                class="btn small ghost"
-                type="button"
-                @click="settingsForm.preferred_source = platform.key"
-              >
-                <ArrowUp :size="13" aria-hidden="true" />
-                设为首选
-              </button>
+            <PluginSettingField v-for="spec in musicPlaybackSpecs.lead" :key="spec.key" :spec="spec" :form="settingsForm" />
+            <div v-if="musicPlaybackSpecs.numbers.length" class="music-number-grid">
+              <PluginSettingField v-for="spec in musicPlaybackSpecs.numbers" :key="spec.key" :spec="spec" :form="settingsForm" />
             </div>
-            <p class="music-platform-guide">{{ platform.guide }}</p>
-            <PluginSettingField
-              v-for="spec in musicSpecsFor(platform.key)"
-              :key="spec.key"
-              :spec="spec"
-              :form="settingsForm"
-              :clearing="clearSecrets.includes(spec.key)"
-              :secret-configured="secretConfigured(spec.key)"
-              :secret-placeholder="secretPlaceholder(spec.key)"
-              @toggle-clear="toggleClearSecret"
-            />
-            <p v-if="musicCredentialHint(platform.key)" class="music-credential-hint">{{ musicCredentialHint(platform.key) }}</p>
-            <p v-if="musicTestResults[platform.key]?.login" class="credential-check-line">
-              <span class="badge" :class="credentialBadgeClass(musicTestResults[platform.key].login!.state)">{{ credentialStateLabel(musicTestResults[platform.key].login!) }}</span>
-              {{ musicTestResults[platform.key].login!.message }}
-            </p>
-          </section>
-        </div>
-        <button class="btn music-test-button" type="button" :disabled="testingMusic" @click="testMusicSettings">
-          <RefreshCw :size="15" :class="{ spin: testingMusic }" aria-hidden="true" />
-          {{ testingMusic ? "正在测试各家曲库" : "测试登录、连接与播放能力" }}
-        </button>
-        <div class="plugin-settings-section-head plugin-settings-subsection">
-          <h3>播放设置</h3>
-          <p>下面这些设置同时作用于所有已启用曲库。</p>
-        </div>
-        <div class="stack plugin-settings-form">
-          <PluginSettingField v-for="spec in musicGeneralSpecs" :key="spec.key" :spec="spec" :form="settingsForm" />
-        </div>
+            <details v-if="musicPlaybackSpecs.advanced.length" class="music-advanced" :open="musicPlaybackSpecs.advanced.some((spec) => String(settingsForm[spec.key] ?? '') !== '')">
+              <summary>高级：{{ musicPlaybackSpecs.advanced.map((spec) => spec.label).join("、") }}</summary>
+              <PluginSettingField v-for="spec in musicPlaybackSpecs.advanced" :key="spec.key" :spec="spec" :form="settingsForm" />
+            </details>
+          </div>
+        </section>
       </template>
       <template v-if="isResolverSettings">
         <section class="resolver-platform-section">
@@ -1018,20 +1040,52 @@ const musicPlatforms = [
   { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可选。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
-// 启用和优先级放在曲库卡片上，不再在下方「播放设置」里重复一份。
-const musicCardOwnedKeys = new Set([...musicCredentialKeys, "enabled_sources", "preferred_source"]);
-const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCardOwnedKeys.has(spec.key)));
-const musicManualOrder = computed(() => String(settingsForm.value.preferred_source ?? "") !== "");
+// 启用和顺序放在曲库列表上，不再在下方「播放」里重复一份。
+const musicListOwnedKeys = new Set([...musicCredentialKeys, "enabled_sources", "preferred_source"]);
+const musicNumberKeys = new Set(["max_duration_seconds", "max_file_mb", "timeout_seconds"]);
+const musicAdvancedKeys = new Set(["silk_encoder_path"]);
+// 开关在前、音质次之，三个数字并一行，很少改的路径收进「高级」；后端新加的设置项落在 lead 末尾，不会被漏掉。
+const musicPlaybackSpecs = computed(() => {
+  const rest = settingsSpecs.value.filter((spec) => !musicListOwnedKeys.has(spec.key));
+  const lead = rest.filter((spec) => !musicNumberKeys.has(spec.key) && !musicAdvancedKeys.has(spec.key));
+  return {
+    lead: [...lead.filter((spec) => spec.type === "bool"), ...lead.filter((spec) => spec.type !== "bool")],
+    numbers: rest.filter((spec) => musicNumberKeys.has(spec.key)),
+    advanced: rest.filter((spec) => musicAdvancedKeys.has(spec.key)),
+  };
+});
+const musicAutoOrder = computed(() => String(settingsForm.value.preferred_source ?? "") === "");
+const musicExpanded = ref("");
 const musicEnabledSources = computed<string[]>(() => {
   const raw = settingsForm.value.enabled_sources;
   return Array.isArray(raw) ? raw.map(String) : musicPlatforms.map((item) => item.key);
 });
 const musicEnabledCount = computed(() => musicPlatforms.filter((item) => musicEnabledSources.value.includes(item.key)).length);
-// 手动模式下首选那家排最前，其余保持登记顺序；自动模式按登记顺序展示。
+// 和后端 musicLoginRank 同一套档位：会员有效的先问，登录但不是会员（含问不到）的其次，游客和失效的最后。
+const musicTierRank: Record<string, number> = { member: 0, expired: 1, not_member: 1, unknown: 1, invalid: 2, guest: 2 };
+// 列表顺序就是点歌时的问询顺序：停用的沉底；自动按测试出的档位排，没测过的保持登记顺序；手动时首选那家在最前。
 const orderedMusicPlatforms = computed(() => {
   const preferred = String(settingsForm.value.preferred_source ?? "");
-  if (!preferred) return [...musicPlatforms];
-  return [...musicPlatforms].sort((a, b) => Number(b.key === preferred) - Number(a.key === preferred));
+  const weight = (key: string): number => {
+    if (preferred) return key === preferred ? 0 : 1;
+    const tier = musicTestResults.value[key]?.tier;
+    return tier ? musicTierRank[tier] ?? 1 : 1;
+  };
+  return [...musicPlatforms].sort((a, b) =>
+    Number(!musicSourceEnabled(a.key)) - Number(!musicSourceEnabled(b.key)) || weight(a.key) - weight(b.key));
+});
+const musicListHint = computed(() => {
+  if (!musicAutoOrder.value) return "按这个顺序问，一家放不出来就换下一家。";
+  if (!Object.keys(musicTestResults.value).length) return "按会员状态自动排序，测试后显示实际顺序；一家放不出来就换下一家。";
+  return "按这个顺序问，一家放不出来就换下一家。登录态每 30 分钟重新确认一次。";
+});
+
+// 打开音乐设置时：没填 Cookie 的那家默认展开，最该填的东西不用找；顺手静默测一遍，列表直接排出实际顺序。
+watch(settingsTarget, (target) => {
+  musicExpanded.value = "";
+  if (target?.manifest.id !== musicPluginID) return;
+  musicExpanded.value = musicPlatforms.find((item) => musicSourceEnabled(item.key) && !musicCookieConfigured(item.key))?.key ?? "";
+  void testMusicSettings(true);
 });
 
 function musicSourceEnabled(source: string): boolean {
@@ -1043,7 +1097,7 @@ function musicEnabledRank(source: string): number {
 }
 
 function musicSourceToggleTitle(source: string): string {
-  if (musicSourceEnabled(source) && musicEnabledCount.value <= 1) return "至少保留一家曲库；不想点歌请关闭下方「允许点歌」";
+  if (musicSourceEnabled(source) && musicEnabledCount.value <= 1) return "至少保留一家曲库；不想点歌请关掉整个插件";
   return musicSourceEnabled(source) ? "点歌和链接解析会问这家" : "已停用";
 }
 
@@ -1058,28 +1112,26 @@ function toggleMusicSource(source: string, event: Event): void {
   if (!enabled && settingsForm.value.preferred_source === source) settingsForm.value.preferred_source = "";
 }
 
-function setMusicPriorityMode(mode: "auto" | "manual"): void {
-  if (mode === "auto") {
+// 关掉自动时把当前看到的第一家定为首选，列表顺序不跳。
+function setMusicAutoOrder(auto: boolean): void {
+  if (auto) {
     settingsForm.value.preferred_source = "";
     return;
   }
-  if (musicManualOrder.value) return;
-  settingsForm.value.preferred_source = musicPlatforms.find((item) => musicSourceEnabled(item.key))?.key ?? musicPlatforms[0].key;
+  settingsForm.value.preferred_source = orderedMusicPlatforms.value.find((item) => musicSourceEnabled(item.key))?.key ?? musicPlatforms[0].key;
 }
 
-function musicSpecsFor(source: string): PluginSettingSpec[] {
-  return settingsSpecs.value.filter((spec) => spec.key === `${source}_api_base` || spec.key === `${source}_cookie`);
+function musicSpec(key: string): PluginSettingSpec | undefined {
+  return settingsSpecs.value.find((spec) => spec.key === key);
 }
 
-function musicPlatformSummary(source: string): string {
-  const cookieKey = `${source}_cookie`;
-  const apiKey = `${source}_api_base`;
-  const cookie = !clearSecrets.value.includes(cookieKey) && (secretConfigured(cookieKey) || String(settingsForm.value[cookieKey] ?? "").trim() !== "");
-  const api = String(settingsForm.value[apiKey] ?? "").trim() !== "";
-  if (cookie && api) return "自建服务与登录态均已配置";
-  if (cookie) return "已配置登录态";
-  if (api) return "已配置自建服务，尚未配置登录态";
-  return "当前使用公开接口";
+function musicAPIConfigured(source: string): boolean {
+  return String(settingsForm.value[`${source}_api_base`] ?? "").trim() !== "";
+}
+
+function musicCookieConfigured(source: string): boolean {
+  const key = `${source}_cookie`;
+  return !clearSecrets.value.includes(key) && (secretConfigured(key) || String(settingsForm.value[key] ?? "").trim() !== "");
 }
 
 function musicCredentialHint(source: string): string {
@@ -1092,25 +1144,56 @@ function musicCredentialHint(source: string): string {
 
 function musicStatusClass(source: string): string {
   const result = musicTestResults.value[source];
-  if (!result) return "";
-  if (result.login?.state === "invalid") return "err";
-  return result.playable ? "accent" : result.search_ok ? "warn" : "err";
+  if (!musicSourceEnabled(source) || !result) return "";
+  if (!result.search_ok) return "err";
+  switch (result.tier) {
+    case "member": return result.playable ? "accent" : "warn";
+    case "invalid": return "err";
+    case "guest": return result.playable ? "" : "warn";
+    default: return "warn";
+  }
 }
 
 function musicStatusLabel(source: string): string {
+  if (!musicSourceEnabled(source)) return "已停用";
   const result = musicTestResults.value[source];
-  return result?.message ?? "尚未测试";
+  if (!result) {
+    if (testingMusic.value) return "测试中";
+    return musicCookieConfigured(source) ? "已填 Cookie · 未测试" : "游客 · 未填 Cookie";
+  }
+  if (!result.search_ok) return "连不上";
+  switch (result.tier) {
+    case "member": return "会员有效";
+    case "expired": return result.membership_end ? `会员 ${result.membership_end} 到期` : "会员已到期";
+    case "not_member": return "已登录 · 非会员";
+    case "unknown": return "登录态未确认";
+    case "invalid": return "Cookie 失效";
+    case "guest": return "游客 · 未填 Cookie";
+  }
+  return result.message;
 }
 
-async function testMusicSettings(): Promise<void> {
+// 展开后在 Cookie 下面写清楚这家测出来什么样，标签只放一个词。
+function musicResultDetail(source: string): string {
+  const result = musicTestResults.value[source];
+  if (!musicSourceEnabled(source) || !result) return "";
+  const login = result.login?.message ? `${result.login.message}。` : "";
+  return `${login}${result.message}`.replace(/。。/g, "。");
+}
+
+// quiet 是打开弹窗时的自动检测：只为排出实际顺序，不弹提示。
+async function testMusicSettings(quiet = false): Promise<void> {
   testingMusic.value = true;
+  const target = settingsTarget.value;
   try {
     const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value);
+    if (settingsTarget.value !== target) return;
     musicTestResults.value = Object.fromEntries(response.sources.map((item) => [item.source, item]));
+    if (quiet) return;
     const playable = response.sources.filter((item) => item.playable).length;
-    playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，请按卡片提示检查配置");
+    playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，展开各家看具体原因");
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "音乐连接测试失败");
+    if (!quiet) toastError(error instanceof Error ? error.message : "音乐连接测试失败");
   } finally {
     testingMusic.value = false;
   }
