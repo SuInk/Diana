@@ -115,7 +115,15 @@ func (r *Runtime) linkedMemorySubjects(event MessageEvent) []StructuredMemorySub
 }
 
 // markLinkedMemorySubjects 给关联账号的个人记忆打标，排序时按「当前用户」对待。
+// 当前消息点到的人（MentionedSubjectUserIDs）的记忆也在这里打标。
 func markLinkedMemorySubjects(query StructuredMemoryQuery, items []StructuredMemoryItem) {
+	if len(query.MentionedSubjectUserIDs) > 0 {
+		for index := range items {
+			if subject := items[index].SubjectUserID; subject != "" && containsTrimmed(query.MentionedSubjectUserIDs, subject) {
+				items[index].MentionedSubject = true
+			}
+		}
+	}
 	if len(query.LinkedSubjects) == 0 {
 		return
 	}

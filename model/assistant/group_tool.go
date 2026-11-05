@@ -167,11 +167,21 @@ func (t *dianaGroupTool) listMembers(ctx context.Context, input map[string]any) 
 		}
 	}
 
+	// 群名片、昵称会改，名单里只有现名。聊天记录的发言人名录还记着旧昵称和用户名，
+	// 对得上的账号一并算命中（仍须在上面的成员候选里）。
+	historical := map[string]bool{}
+	if query != "" {
+		speakers, _ := t.runtime.resolveSpeakers(ctx, t.event, query, false, 50)
+		for _, speaker := range speakers {
+			historical[speaker.UserID] = true
+		}
+	}
+
 	limit := groupToolLimit(input)
 	items := make([]dianaGroupMemberItem, 0, min(limit, len(members)))
 	matched := 0
 	for _, member := range members {
-		if member.UserID == "" || excluded[member.UserID] || !oneBotGroupMemberMatches(member, query) {
+		if member.UserID == "" || excluded[member.UserID] || (!oneBotGroupMemberMatches(member, query) && !historical[member.UserID]) {
 			continue
 		}
 		matched++

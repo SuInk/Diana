@@ -53,7 +53,7 @@ func recallFixture() (*Runtime, *associativeMemoryStore, MessageEvent) {
 
 func TestMemoryAssociationRecallsDifferentWordsWithoutEmbedding(t *testing.T) {
 	r, s, event := recallFixture()
-	q := r.memoryQueryForEvent(event, "部署阻塞", 120)
+	q := r.memoryQueryForEvent(context.Background(), event, "部署阻塞", 120)
 	items := r.expandMemoryAssociations(context.Background(), s, q, event, s.items)
 	if len(s.seen) != 1 || len(s.seen[0].RelatedEntities) != 1 || s.seen[0].RelatedEntities[0] != "ProjectX" || s.seen[0].MaxCandidates != 24 {
 		t.Fatalf("unbounded or missing association query: %+v", s.seen)

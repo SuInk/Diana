@@ -41,22 +41,23 @@ type dianaChatHistoryTool struct {
 }
 
 type dianaChatHistoryResult struct {
-	Scope             string   `json:"scope,omitempty"`
-	Sender            string   `json:"sender_user_id,omitempty"`
-	GroupID           string   `json:"group_id,omitempty"`
-	ReturnedCount     int      `json:"returned_count"`
-	OmittedCount      int      `json:"omitted_count"`
-	RemainingCount    int      `json:"remaining_count"`
-	Offset            int      `json:"offset"`
-	ClippedCount      int      `json:"clipped_count"`
-	Truncated         bool     `json:"truncated"`
-	TruncationReasons []string `json:"truncation_reasons,omitempty"`
-	HasMore           bool     `json:"has_more"`
-	SearchComplete    bool     `json:"search_complete"`
-	TotalIsExact      bool     `json:"total_is_exact"`
-	NextCursor        string   `json:"next_cursor,omitempty"`
-	Order             string   `json:"order,omitempty"`
-	Guidance          string   `json:"guidance,omitempty"`
+	Scope             string           `json:"scope,omitempty"`
+	Sender            string           `json:"sender_user_id,omitempty"`
+	ResolvedSenders   []MessageSpeaker `json:"resolved_senders,omitempty"` // sender_name 解析出的账号，多个时结果是合并
+	GroupID           string           `json:"group_id,omitempty"`
+	ReturnedCount     int              `json:"returned_count"`
+	OmittedCount      int              `json:"omitted_count"`
+	RemainingCount    int              `json:"remaining_count"`
+	Offset            int              `json:"offset"`
+	ClippedCount      int              `json:"clipped_count"`
+	Truncated         bool             `json:"truncated"`
+	TruncationReasons []string         `json:"truncation_reasons,omitempty"`
+	HasMore           bool             `json:"has_more"`
+	SearchComplete    bool             `json:"search_complete"`
+	TotalIsExact      bool             `json:"total_is_exact"`
+	NextCursor        string           `json:"next_cursor,omitempty"`
+	Order             string           `json:"order,omitempty"`
+	Guidance          string           `json:"guidance,omitempty"`
 	searchPage        *historySearchCursor
 	rangeTimes        []int64
 	OK                bool                   `json:"ok"`
@@ -240,7 +241,7 @@ func (t *dianaChatHistoryTool) Description() string {
 	// 「别说看不到」防模型不查记录就回「看不到之前的消息」。
 	// speakers/reactions 分开写：曾拿发言排行冒充点赞名单（#553）。
 	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到。` +
-		`问某人说过什么用 search 填 sender_user_id，可不带关键词，跨群加 scope=all_groups。` +
+		`问某人说过什么用 search 填 sender_user_id；只知道昵称就填 sender_name（含旧昵称、@用户名），可不带关键词，跨群加 scope=all_groups。` +
 		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充。`
 }
 
@@ -256,6 +257,7 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"after":          toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
 		"query":          toolStringParam("search：关键词；设了 sender_user_id 时可省略，按时间列出此人发言"),
 		"sender_user_id": toolStringParam(`search：只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
+		"sender_name":    toolStringParam("search：不知道账号时按昵称、旧昵称或 @用户名找人，结果的 resolved_senders 列出对应账号"),
 		// relevance 曾被拿来断言「最早一条」，见 #457。
 		"order":        toolEnumParam("search 排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
@@ -525,10 +527,11 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		}
 	}
 	query := strings.TrimSpace(configToolString(input, "query"))
-	sender := t.historySenderFilter(input)
-	if query == "" && sender == "" {
+	senderInput := t.historySenderFilter(input)
+	senderName := strings.TrimSpace(configToolString(input, "sender_name"))
+	if query == "" && senderInput == "" && senderName == "" {
 		if scope := strings.TrimSpace(configToolString(input, "scope")); scope != "" && scope != "current" {
-			return dianaChatHistoryResult{}, fmt.Errorf("跨群 search 必须提供 query 或 sender_user_id；不能改查当前会话时间线")
+			return dianaChatHistoryResult{}, fmt.Errorf("跨群 search 必须提供 query、sender_user_id 或 sender_name；不能改查当前会话时间线")
 		}
 		result, err := t.window(ctx, input)
 		result.Scope, result.GroupID = "current", t.event.GroupID
@@ -560,6 +563,11 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			return dianaChatHistoryResult{}, err
 		}
 	}
+	senders, resolvedSenders, senderNote, err := t.resolveSearchSenders(ctx, senderInput, senderName, crossGroup)
+	if err != nil {
+		return dianaChatHistoryResult{}, err
+	}
+	sender := strings.Join(senders, ",")
 	from, through := t.resolveWindow(input)
 	if order == "oldest" && !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
 		from = 0
@@ -582,10 +590,6 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	total := 0
 	narrowed := false
 	if searchStore, ok := store.(MessageHistorySearchStore); ok {
-		var senders []string
-		if sender != "" {
-			senders = []string{sender}
-		}
 		run := func() error {
 			loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
 			defer cancel()
@@ -630,7 +634,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			return timeline[i].Time > timeline[j].Time
 		})
 		for _, event := range timeline {
-			if sender != "" && event.UserID != sender {
+			if len(senders) > 0 && !containsTrimmed(senders, event.UserID) {
 				continue
 			}
 			searchable := strings.Join([]string{event.MessageID, event.UserID, event.SenderNameOrID(), historyToolEventText(event), quotedPlainText(event.Quoted), t.runtime.messageImageDescriptionText(ctx, event)}, "\n")
@@ -674,8 +678,8 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 		Scope: scope,
 		OK:    true, Action: "search", Query: query, Order: order, Items: items, Total: total,
 		Message: "已在" + label + "内按指定时间顺序进行关键词检索，返回精简命中；图片仅保留相关片段。",
-		Sender:  sender,
-		Window:  chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page,
+		Sender:  sender, ResolvedSenders: resolvedSenders,
+		Window: chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page,
 		Guidance: "需要原文或前后文时调用 around，传 message_id；跨群命中同时传 group_id。has_more=true 时继续使用 next_cursor，保持 query、scope、order 相同。search_complete 仅表示当前关键词与范围已枚举完，不等于事件事实完整；未核对原文和完整范围时只能说目前查到最早，不能断言最早就是。时间分页采用关键词匹配，不混入不具备完整总数的语义候选。",
 	}
 	if !crossGroup {
@@ -683,6 +687,9 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	if query == "" {
 		result.Message = "已在" + label + "内按时间列出该账号的发言，返回精简内容。"
+	}
+	if senderNote != "" {
+		result.Message += senderNote
 	}
 	if narrowed {
 		result.Limited = true
@@ -1268,6 +1275,71 @@ func uniqueLowerFields(text string) []string {
 		}
 	}
 	return words
+}
+
+// resolveSearchSenders 把 sender_user_id / sender_name 落成账号列表。
+//
+// Telegram 拉不到全群成员表，模型常常只有昵称；以前只能把昵称塞进 query 做全文检索，
+// 结果混着「别人提到他」的消息，而且对方改过昵称就整段漏掉。这里走聊天记录汇总的
+// 发言人名录：昵称、旧昵称、@用户名都能解析回账号，再按账号过滤。
+//
+// 模型把昵称误填进 sender_user_id 也很常见（按账号过滤必然查空），名录里该值不是任何
+// 账号、却能对上昵称时按昵称处理，并在结果里说明。
+func (t *dianaChatHistoryTool) resolveSearchSenders(ctx context.Context, senderID, senderName string, crossGroup bool) ([]string, []MessageSpeaker, string, error) {
+	if senderID != "" {
+		if senderName != "" || t.runtime.speakerStore() == nil {
+			return []string{senderID}, nil, "", nil
+		}
+		speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderID, crossGroup, 50)
+		if err != nil || len(speakers) == 0 {
+			return []string{senderID}, nil, "", nil
+		}
+		for _, speaker := range speakers {
+			if speaker.UserID == senderID {
+				return []string{senderID}, nil, "", nil
+			}
+		}
+		senderName = senderID
+		resolved := preferExactSpeakers(speakers, maximumResolvedSenders)
+		return speakerIDs(resolved), resolved, "sender_user_id 填的不是账号，已按昵称解析成 resolved_senders 里的账号。", nil
+	}
+	if senderName == "" {
+		return nil, nil, "", nil
+	}
+	if t.runtime.speakerStore() == nil {
+		return nil, nil, "", fmt.Errorf("当前历史存储不支持按昵称找人；请改用 sender_user_id，或把昵称放进 query 做全文检索")
+	}
+	speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderName, crossGroup, 50)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("按昵称查找发言人失败: %w", err)
+	}
+	if len(speakers) == 0 {
+		return nil, nil, "", fmt.Errorf("聊天记录里没有昵称、旧昵称或用户名含「%s」的发言人；换个写法，或不填 sender_name、把昵称放进 query 做全文检索", senderName)
+	}
+	resolved := preferExactSpeakers(speakers, maximumResolvedSenders)
+	note := ""
+	if len(resolved) > 1 {
+		note = "昵称对应多个账号，结果是 resolved_senders 里这些人的合并；只看其中一人时改用 sender_user_id。"
+	}
+	return speakerIDs(resolved), resolved, note, nil
+}
+
+func speakerIDs(speakers []MessageSpeaker) []string {
+	ids := make([]string, 0, len(speakers))
+	for _, speaker := range speakers {
+		ids = append(ids, speaker.UserID)
+	}
+	return ids
+}
+
+func containsTrimmed(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 // historySenderFilter 读 sender_user_id；"self"/"me" 指当前发言者。

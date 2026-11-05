@@ -59,6 +59,7 @@ func (s *SQLiteStore) startWALMaintenance() {
 	// 要不要重建存量索引在启动 goroutine 之前查完：查询会读 store 字段和包级慢日志，
 	// 放进 goroutine 就和构造完之后对它们的改动（测试里换 historyFTS、换慢日志）抢跑。
 	cleanupPending := s.messageHistoryFTSCleanupPending(ctx)
+	speakerCursor, speakersPending := s.messageSpeakersBackfillPending(ctx)
 	go func() {
 		defer recoverGoroutinePanic("wal_maintenance")
 		defer close(s.walDone)
@@ -73,6 +74,13 @@ func (s *SQLiteStore) startWALMaintenance() {
 			cleanup = cleanupTicker.C
 		}
 		var cleanupCursor int64
+		// 发言人名录的存量回填（见 message_speakers.go）同样搭车，做完即停。
+		var speakers <-chan time.Time
+		if speakersPending {
+			speakerTicker := time.NewTicker(messageHistoryFTSCleanupInterval)
+			defer speakerTicker.Stop()
+			speakers = speakerTicker.C
+		}
 		busyStreak := 0
 		for {
 			select {
@@ -96,6 +104,24 @@ func (s *SQLiteStore) startWALMaintenance() {
 				if done {
 					log.Printf("diana sqlite history index cleanup finished")
 					cleanup = nil
+				}
+			case <-speakers:
+				if s.db.Stats().InUse > 0 {
+					continue
+				}
+				batchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				next, done, err := s.backfillMessageSpeakersBatch(batchCtx, speakerCursor)
+				cancel()
+				if err != nil {
+					if ctx.Err() == nil {
+						log.Printf("diana sqlite speaker directory backfill failed: after_rowid=%d err=%v", speakerCursor, err)
+					}
+					continue
+				}
+				speakerCursor = next
+				if done {
+					log.Printf("diana sqlite speaker directory backfill finished")
+					speakers = nil
 				}
 			case <-ticker.C:
 				busyStreak = s.checkpointWALIfLarge(ctx, busyStreak)

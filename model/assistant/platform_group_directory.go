@@ -31,17 +31,7 @@ func (r *Runtime) groupDirectoryForEvent(ctx context.Context, event MessageEvent
 	ctx = withDirectoryEvent(ctx, event)
 	if provider, ok := eventChannelFor[GroupMemberChannel](r, event); ok {
 		if telegram, ok := provider.(*TelegramChannel); ok {
-			// Seed candidates from already available local history after a restart;
-			// these names never establish current membership or administrator rights.
-			history, _ := r.sessionContextHistory(event)
-			for _, item := range append(append([]MessageEvent(nil), history...), event) {
-				if item.GroupID != groupID || item.UserID == "" || (item.Platform != "" && NormalizePlatformID(item.Platform) != PlatformTelegram) {
-					continue
-				}
-				if id, err := strconv.ParseInt(item.UserID, 10, 64); err == nil && id > 0 {
-					telegram.rememberMember(groupID, telegramUser{ID: id, FirstName: item.SenderName}, true)
-				}
-			}
+			r.seedTelegramMembersFromHistory(ctx, telegram, event, groupID)
 		}
 		ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 		defer cancel()
@@ -54,6 +44,43 @@ func (r *Runtime) groupDirectoryForEvent(ctx context.Context, event MessageEvent
 		return r.callOneBotAPIForEvent(ctx, event, action, params)
 	})
 	return GroupMemberDirectory{Members: members, Complete: err == nil, Total: len(members), TotalKnown: err == nil, Source: "platform_member_list"}, err
+}
+
+// seedTelegramMembersFromHistory 把聊天记录里出现过的发言人补进通道的成员候选。
+//
+// Bot API 不给全群成员表，通道只记得启动以来见过的人，原来补的也只是当前上下文
+// 窗口里那几十条消息的发送者——很久没说话的人按昵称就找不到账号。改从发言人名录取，
+// 重启后也能覆盖全部历史发言者，用户名一并带上。这些候选只是「在这里发过言」，
+// 不证明此刻在群，也不带管理员身份；那两件事仍由 getChatMember 实时核验。
+func (r *Runtime) seedTelegramMembersFromHistory(ctx context.Context, telegram *TelegramChannel, event MessageEvent, groupID string) {
+	seed := func(userID, name, username string) {
+		if id, err := strconv.ParseInt(strings.TrimSpace(userID), 10, 64); err == nil && id > 0 {
+			telegram.rememberMember(groupID, telegramUser{ID: id, FirstName: name, Username: username}, true)
+		}
+	}
+	scoped := event
+	scoped.GroupID, scoped.Kind = groupID, EventKindGroup
+	if store := r.speakerStore(); store != nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, speakerLookupTimeout)
+		speakers, err := store.ListMessageSpeakers(lookupCtx, MessageSpeakerQuery{Session: sessionKey(scoped), Limit: 300})
+		cancel()
+		if err == nil {
+			for _, speaker := range r.dropSelfSpeakers(event, speakers) {
+				name := ""
+				if len(speaker.Names) > 0 {
+					name = speaker.Names[0]
+				}
+				seed(speaker.UserID, name, speaker.Username)
+			}
+		}
+	}
+	history, _ := r.sessionContextHistory(event)
+	for _, item := range append(append([]MessageEvent(nil), history...), event) {
+		if item.GroupID != groupID || item.Outbound || (item.Platform != "" && NormalizePlatformID(item.Platform) != PlatformTelegram) {
+			continue
+		}
+		seed(item.UserID, item.SenderName, item.SenderUsername)
+	}
 }
 
 const (
