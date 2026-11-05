@@ -43,6 +43,7 @@ func (s *neteaseSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg mus
 	result.Account = payload.Profile.Nickname
 	result.Message = "已登录"
 	if payload.Account.VIPType > 0 || payload.Profile.VIPType > 0 {
+		result.Member = true
 		result.Message = "已登录，会员账号"
 	}
 	return result
@@ -90,9 +91,11 @@ func (s *qqSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg musicCon
 		result.State = CredentialValid
 		// 昵称在 data.info.nick；早先的写法读 data.nick，账号名永远是空的。
 		result.Account = firstNonEmpty(strings.TrimSpace(payload.Req0.Data.Info.Nick), strings.TrimSpace(payload.Req0.Data.Nick))
-		summary, expired := s.vipSummary(ctx, f, cfg, comm, time.Now())
+		summary, end, expired := s.vipSummary(ctx, f, cfg, comm, time.Now())
 		result.Message = "已登录" + summary
+		result.MembershipEnd = end
 		result.MembershipExpired = expired
+		result.Member = end != "" && !expired
 	case qqLoginCodeNotLoggedIn:
 		result.State = CredentialInvalid
 		result.Message = "QQ 音乐说这份 Cookie 没有登录或已过期，需要重新复制；Cookie 里应当有 qqmusic_key、qm_keyst 或 musicid/musickey。"
@@ -106,7 +109,7 @@ func (s *qqSource) CheckLogin(ctx context.Context, f *musicFetcher, cfg musicCon
 // vipSummary 补一句会员状态。登录有效但会员过期时，会员歌照样拿不到播放地址，
 // 不说清楚的话，用户只会看到「填了 Cookie 还是放不了」，以为 Cookie 没用。
 // 会员接口问不到或字段为空时什么都不补，不猜。
-func (s *qqSource) vipSummary(ctx context.Context, f *musicFetcher, cfg musicConfig, comm map[string]any, now time.Time) (string, bool) {
+func (s *qqSource) vipSummary(ctx context.Context, f *musicFetcher, cfg musicConfig, comm map[string]any, now time.Time) (summary, end string, expired bool) {
 	var payload struct {
 		Req0 struct {
 			Code int `json:"code"`
@@ -117,14 +120,15 @@ func (s *qqSource) vipSummary(ctx context.Context, f *musicFetcher, cfg musicCon
 		} `json:"req_0"`
 	}
 	if !s.musicu(ctx, f, cfg, qqMusicuRequest(comm, "VipLogin.VipLoginInter", "vip_login_base", map[string]any{}), &payload) || payload.Req0.Code != 0 {
-		return "", false
+		return "", "", false
 	}
-	end, err := time.ParseInLocation(time.DateOnly, strings.TrimSpace(payload.Req0.Data.End), now.Location())
+	date, err := time.ParseInLocation(time.DateOnly, strings.TrimSpace(payload.Req0.Data.End), now.Location())
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
-	if now.Before(end.AddDate(0, 0, 1)) {
-		return "，会员有效期至 " + end.Format(time.DateOnly), false
+	end = date.Format(time.DateOnly)
+	if now.Before(date.AddDate(0, 0, 1)) {
+		return "，会员有效期至 " + end, end, false
 	}
-	return "，但会员已于 " + end.Format(time.DateOnly) + " 到期，会员歌曲拿不到播放地址", true
+	return "，但会员已于 " + end + " 到期，会员歌曲拿不到播放地址", end, true
 }

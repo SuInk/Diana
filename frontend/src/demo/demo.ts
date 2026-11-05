@@ -208,11 +208,11 @@ let plugins: PluginState[] = [
   { manifest: resolverDemoManifest, installed: true, enabled: true },
   {
     manifest: {
-      id: "official.music", name: "音乐增强", version: "0.2.1", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      id: "official.music", name: "音乐增强", version: "0.3.2", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
       settings: [
         { key: "request_song_enabled", label: "允许点歌", type: "bool", default: true, description: "开启后模型可以按用户要求搜歌并直接发出语音。关掉只保留链接解析。" },
         { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
-        { key: "preferred_source", label: "点歌优先曲库", type: "select", default: "", options: [{ value: "", label: "按启用顺序" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。" },
+        { key: "preferred_source", label: "曲库优先级", type: "select", default: "", options: [{ value: "", label: "自动" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "点歌时先问哪家。自动按实测登录态排：会员有效的先问，登录但不是会员的其次，没填或失效的最后。选了某家就固定先问它。分享链接始终用链接自己的平台。" },
         { key: "netease_api_base", label: "网易云自建 API 地址", type: "string", default: "", description: "自建 NeteaseCloudMusicApi 的地址，例如 http://127.0.0.1:3000。留空走官方接口，只能拿到可试听的歌曲。" },
         { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
         { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址，Node 版和 L-1124 版都认。留空走官方接口，无登录态时多数曲目取不到播放地址。" },

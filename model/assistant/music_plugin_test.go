@@ -451,7 +451,8 @@ func TestMusicPluginRefusesTheFallbackPageInsteadOfSendingSilence(t *testing.T) 
 	if resp == nil || strings.Contains(resp.Reply, "[CQ:") {
 		t.Fatalf("Handle() = %#v, want a text-only notice", resp)
 	}
-	if !strings.Contains(resp.Reply, "雾里") || !strings.Contains(resp.Reply, "会员") {
+	// 没填 Cookie 就直说，别笼统归到「会员或独家」。
+	if !strings.Contains(resp.Reply, "雾里") || !strings.Contains(resp.Reply, "网易云音乐没填登录 Cookie") {
 		t.Fatalf("reply = %q, want the song name and why there is no voice", resp.Reply)
 	}
 	if len(sharer.paths) != 0 {
@@ -570,7 +571,7 @@ func TestMusicRequestToolReportsAFoundButRestrictedSong(t *testing.T) {
 	if err == nil {
 		t.Fatalf("Run() = %q, want a restricted-song error", output)
 	}
-	if !strings.Contains(err.Error(), "会员 Cookie") || strings.Contains(err.Error(), "没搜到") {
+	if !strings.Contains(err.Error(), "QQ 音乐没填登录 Cookie") || strings.Contains(err.Error(), "没搜到") {
 		t.Fatalf("Run() error = %v", err)
 	}
 }
@@ -1015,7 +1016,7 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 		}
 	})
 
-	if got := musicLoginCheck(t, plugin, "netease", "good"); got.State != CredentialValid || got.Account != "云村村民" || got.Message != "已登录，会员账号" {
+	if got := musicLoginCheck(t, plugin, "netease", "good"); got.State != CredentialValid || got.Account != "云村村民" || got.Message != "已登录，会员账号" || !got.Member {
 		t.Fatalf("netease valid = %#v", got)
 	}
 	if got := musicLoginCheck(t, plugin, "netease", "MUSIC_U=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "只填 MUSIC_U 的值") {
@@ -1023,10 +1024,11 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	}
 	// 登录有效但会员过期要说出来：不然用户只看到「填了 Cookie 还是放不了」。
 	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" ||
-		got.Message != "已登录，但会员已于 2020-05-02 到期，会员歌曲拿不到播放地址" || !got.MembershipExpired {
+		got.Message != "已登录，但会员已于 2020-05-02 到期，会员歌曲拿不到播放地址" || !got.MembershipExpired ||
+		got.Member || got.MembershipEnd != "2020-05-02" {
 		t.Fatalf("qq valid = %#v", got)
 	}
-	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=vip"); got.State != CredentialValid || got.Message != "已登录，会员有效期至 2099-05-02" || got.MembershipExpired {
+	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=vip"); got.State != CredentialValid || got.Message != "已登录，会员有效期至 2099-05-02" || got.MembershipExpired || !got.Member {
 		t.Fatalf("qq vip = %#v", got)
 	}
 	if got := musicLoginCheck(t, plugin, "qq", "uin=12345; qqmusic_key=stale"); got.State != CredentialInvalid {

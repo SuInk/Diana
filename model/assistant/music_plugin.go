@@ -62,6 +62,8 @@ type MusicPlugin struct {
 	sources       []musicSource
 	commandRunner voiceCommandRunner
 
+	logins musicLoginCache
+
 	mu      sync.RWMutex
 	sharer  LocalMediaSharer
 	runtime *Runtime
@@ -102,6 +104,8 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 		testCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		if checker, ok := source.(musicLoginChecker); ok && status.CookieConfigured {
 			login := checker.CheckLogin(testCtx, p.fetcher, cfg)
+			// 测试刚问过的结果顺手记下，自动排序就不用再问一遍。
+			p.logins.put(source.Key(), strings.TrimSpace(options.Cookie), login)
 			status.Login = &login
 		}
 		found, ok := source.Search(testCtx, p.fetcher, cfg, "晴天 周杰伦")
@@ -220,7 +224,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 和 QQ 官方机器人发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
@@ -243,11 +247,11 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         musicSettingPreferred,
-				Label:       "点歌优先曲库",
+				Label:       "曲库优先级",
 				Type:        PluginSettingTypeSelect,
 				Default:     "",
-				Options:     append([]PluginSettingOption{{Value: "", Label: "按启用顺序"}}, musicSourceOptionsList()...),
-				Description: "点歌时先问哪家。分享链接始终用链接自己的平台，不受这里影响。",
+				Options:     append([]PluginSettingOption{{Value: "", Label: "自动"}}, musicSourceOptionsList()...),
+				Description: "点歌时先问哪家。自动按实测登录态排：会员有效的先问，登录但不是会员的其次，没填或失效的最后。选了某家就固定先问它。分享链接始终用链接自己的平台。",
 			},
 			// 每家的自建接口和 Cookie 分开填：它们的地址格式和凭据形式本来就不一样，
 			// 挤成一个框只会让人不知道该填哪个。
@@ -412,6 +416,8 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		reason := "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"
 		if problem := diagnostics.credentialProblem(); problem != "" {
 			reason = "各家曲库都拿不到可播放的音频；" + problem
+		} else if notes := p.membershipNotes(ctx, cfg); notes != "" {
+			reason = "各家曲库都拿不到可播放的音频；" + notes
 		}
 		return musicNoticeResponse(found, reason), nil
 	}
@@ -472,7 +478,7 @@ func (p *MusicPlugin) pickSongWithStatus(ctx context.Context, cfg musicConfig, q
 		return song{}, false, false
 	}
 	matched := false
-	for _, source := range p.orderedSources(cfg) {
+	for _, source := range p.rankedSources(ctx, cfg) {
 		if slices.Contains(skip, source.Key()) {
 			continue
 		}
@@ -694,6 +700,9 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 		if matched {
 			if problem := diagnostics.credentialProblem(); problem != "" {
 				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
+			}
+			if notes := t.plugin.membershipNotes(ctx, cfg); notes != "" {
+				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址：%s", query, notes)
 			}
 			return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；可能需要对应平台的有效会员 Cookie，或该曲目受版权/地区限制", query)
 		}
