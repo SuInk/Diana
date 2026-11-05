@@ -65,7 +65,9 @@ func (cfg BotConfig) backgroundImageDescriptionEnabled() bool {
 
 type imageTextModeKey struct{}
 
-// Allow one slow description to finish instead of restarting it in another stage.
+// imageTextModeDescriptionBudget 只管本轮等后台描述队列交卷的时间：让一张慢图在
+// 后台识完，而不是换个阶段再起一次前台识图。前台自己发起的识图不受它限制，只受
+// 模型请求的单次上限约束。
 const imageTextModeDescriptionBudget = 90 * time.Second
 
 // imageTextMode 挂在这一轮回复的 ctx 上：拼消息的地方看到它就把图换成描述，
@@ -146,8 +148,7 @@ func (m *imageTextMode) sourceDescription(ctx context.Context, source string) st
 	if found {
 		return cached
 	}
-	callCtx, cancel := context.WithDeadline(ctx, m.deadline)
-	defer cancel()
+	callCtx := ctx
 	// Normalize file/HTTP sources to the same data URL used by the model fallback.
 	// Cache failures too, so the output adapter cannot start a second vision call.
 	ready := llmReadyImageURLs(callCtx, []string{source})
@@ -213,9 +214,7 @@ func (m *imageTextMode) framesDescription(ctx context.Context, frames []string) 
 			parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: ready, Detail: "auto"})
 		}
 		if len(parts) > 0 {
-			callCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
-			answer, err := m.runtime.askImages(callCtx, m.event, parts, videoFramesQuestion)
-			cancel()
+			answer, err := m.runtime.askImages(ctx, m.event, parts, videoFramesQuestion)
 			if err != nil {
 				log.Printf("diana image text mode: describe video frames failed: message_id=%s err=%v", m.event.MessageID, err)
 			}

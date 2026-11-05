@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -21,7 +20,7 @@ import (
 // 群里有人说话它就一直排着，倒计时照样在走。
 //
 // 现在改成一条有序队列加一个 worker：
-//   - 超时只罩住真正的识图调用，排队不计时；队列长度由 historyImageDescriptionQueueLimit 兜底。
+//   - 排队不计时，识图调用只受模型请求的单次上限约束；队列长度由 historyImageDescriptionQueueLimit 兜底。
 //   - 任务按入队顺序一张一张做，一条消息的所有图（包括全部视频关键帧）排在一起。
 //   - 普通任务仍然让路给前台：有回复在处理时不开工，新消息进来会打断正在跑的普通任务，
 //     被打断的任务放回队首重新开始，不算失败，也不沿用旧的计时。
@@ -303,13 +302,6 @@ func (r *Runtime) historyImageDescriptionBaseContext() context.Context {
 	return context.Background()
 }
 
-func (r *Runtime) historyImageDescriptionTimeoutValue() time.Duration {
-	if r.historyImageDescTimeout > 0 {
-		return r.historyImageDescTimeout
-	}
-	return historyImageDescriptionTimeout
-}
-
 // historyImageDescriptionBackoffValue 为负时表示不退避（测试用）。
 func (r *Runtime) historyImageDescriptionBackoffValue() time.Duration {
 	switch {
@@ -384,7 +376,8 @@ func (r *Runtime) nextHistoryImageDescriptionJob() *historyImageDescJob {
 
 func (r *Runtime) runHistoryImageDescriptionJob(job *historyImageDescJob) {
 	base := r.historyImageDescriptionBaseContext()
-	ctx, cancel := context.WithTimeout(base, r.historyImageDescriptionTimeoutValue())
+	// 不另设期限：识图本身受模型请求的单次上限约束，cancel 只用于被前台抢占。
+	ctx, cancel := context.WithCancel(base)
 	r.historyImageDescMu.Lock()
 	job.cancel = cancel
 	preempted := job.preempted
@@ -489,9 +482,6 @@ func (r *Runtime) describeHistoryImageJob(ctx context.Context, job *historyImage
 		description, err = r.describeRecallImage(ctx, job.event, job.source)
 	}
 	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("vision call exceeded %s: %w", r.historyImageDescriptionTimeoutValue(), err)
-		}
 		return err
 	}
 	if err := store.SaveImageDescription(ctx, ImageDescriptionRecord{

@@ -260,8 +260,8 @@ func (r *Runtime) auditImageSources(ctx context.Context, event MessageEvent, cfg
 		return verdicts
 	}
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeOutboundImageSafety)
-	auditCtx, cancel := context.WithTimeout(ctx, proactiveReplyQualityTimeout(cfg))
-	defer cancel()
+	// 不设整体期限：取图各自有超时，模型请求有统一的单次上限。
+	auditCtx := ctx
 	groups, failures := loadLLMImageURLGroupsDetailed(auditCtx, sources)
 	prompt := outboundImageAuditPromptForConfig(cfg)
 	type pending struct {

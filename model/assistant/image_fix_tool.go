@@ -43,8 +43,8 @@ func (t *dianaImageFixTool) InputSchema() map[string]any {
 	})
 }
 
-// Run 只核对那条消息里确实有图，重写在后台做：视觉模型要对照原图重看一遍，最长
-// imageFixTimeout，不能拖着这一轮回复。
+// Run 只核对那条消息里确实有图，重写在后台做：视觉模型要对照原图重看一遍，不能
+// 拖着这一轮回复。
 func (t *dianaImageFixTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	messageID := stringFromAny(input["message_id"])
 	correction := truncateRunes(stringFromAny(input["fix"]), 200)
@@ -62,9 +62,7 @@ func (t *dianaImageFixTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 	go func() {
 		defer recoverGoroutinePanic("image_fix")
-		fixCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageFixTimeout)
-		defer cancel()
-		fixed := t.runtime.rewriteImageDescriptions(fixCtx, t.event, store, correction, messageID)
+		fixed := t.runtime.rewriteImageDescriptions(context.WithoutCancel(ctx), t.event, store, correction, messageID)
 		log.Printf("diana image fix: tool message_id=%s target=%s images=%d", t.event.MessageID, messageID, fixed)
 	}()
 	return "已记下，后台会对照原图按这条更正重写描述；和画面明显矛盾的说法不会采纳。", nil

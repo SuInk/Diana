@@ -32,9 +32,6 @@ import (
 // 反复试。审核不替代 ValidateOwnerCommand 的整机破坏拦截，两层各管各的。
 const PurposeHostCommandReview = "host_command_review"
 
-// hostCommandReviewTimeout 是单次审核的上限，和 Codex 的 REVIEW_TIMEOUT 一致。
-const hostCommandReviewTimeout = 90 * time.Second
-
 // hostCommandReviewTranscriptTurns 是带给审核器的最近对话条数。主人被拒后说「确认，
 // 删吧」时，审核器得看得到前文才知道确认的是什么。
 const hostCommandReviewTranscriptTurns = 12
@@ -198,8 +195,7 @@ func (r *Runtime) reviewHostAction(ctx context.Context, event MessageEvent, purp
 		{Role: llm.RoleUser, Content: header + "\n" + string(payload)},
 	}
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeHostCommandReview)
-	reviewCtx, cancel := context.WithTimeout(ctx, hostCommandReviewTimeout)
-	defer cancel()
+	reviewCtx := ctx
 	// 返回格式不对时重试一次：偶发的格式错误不该直接拦掉一条正常命令。上游错误
 	// 由 runLLMProvider 自己的重试处理，这里不再叠加。
 	var parseErr error

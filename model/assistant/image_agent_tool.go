@@ -41,7 +41,6 @@ const (
 	dianaImageToolName       = "image"
 	dianaImageMediaTTL       = 10 * time.Minute
 	dianaImageMaxDecodedSize = 32 << 20
-	dianaImageTimeoutGrace   = 30 * time.Second
 )
 
 type dianaImageTool struct {
@@ -469,17 +468,11 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	return dianaImageToolResult{}, fmt.Errorf("图片任务无法启动")
 }
 
+// taskTimeout 是整个图片任务的上限，和其它子任务一样取默认值。以前按第一个候选的
+// 图片超时加 30 秒算，第一个候选卡满，配好的备用就一次都轮不到；单次请求的上限
+// 见 imageRequestTimeout。
 func (t *dianaImageTool) taskTimeout() time.Duration {
-	configs := t.runtime.imageProviderConfigs(withModelConfigEvent(context.Background(), t.event))
-	if len(configs) == 0 {
-		return defaultSubagentTaskTimeout
-	}
-	cfg := configs[0]
-	timeout := cfg.ImageTimeout + dianaImageTimeoutGrace
-	if timeout <= dianaImageTimeoutGrace {
-		return defaultSubagentTaskTimeout
-	}
-	return timeout
+	return defaultSubagentTaskTimeout
 }
 
 func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequest, services PluginTaskServices) (dianaImageTaskOutput, error) {

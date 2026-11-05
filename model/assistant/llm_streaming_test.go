@@ -601,9 +601,14 @@ func TestModelRequestTimeoutHTTPHeartbeatFailover(t *testing.T) {
 						t.Fatalf("calls=%v", calls)
 					}
 				}
-				for _, health := range runtime.llmCooldowns.snapshot(set.Profiles) {
-					if health.failures != 0 || health.remaining != 0 {
-						t.Fatalf("unexpected health penalty=%+v", health)
+				// 心跳不续命：前两个卡满单次上限，各记一次失败（还没到冷却次数）；成功的不受牵连。
+				health := runtime.llmCooldowns.snapshot(set.Profiles)
+				if health[0].failures != 1 || health[1].failures != 1 || health[2].failures != 0 {
+					t.Fatalf("health=%+v", health)
+				}
+				for _, item := range health {
+					if item.remaining != 0 {
+						t.Fatalf("unexpected cooldown=%+v", health)
 					}
 				}
 			})

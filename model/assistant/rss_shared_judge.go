@@ -43,6 +43,6 @@ func (r *Runtime) reuseRSSJudgment(ctx context.Context, source MessageEvent, mes
 			key = sharedResultKey([]any{"rss-judge-v1", identity, settings, messages})
 		}
 	}
-	budget := r.effectiveConfigForEvent(source).RequestTimeout
-	return r.rssJudgments.load(ctx, key, 10*time.Minute, budget, func(rssJudgeDecision) bool { return identity != "" && identity == r.rssJudgeIdentity(ctx, source) }, load)
+	// 不设期限：判断是一次模型调用，受单次请求上限约束。
+	return r.rssJudgments.load(ctx, key, 10*time.Minute, 0, func(rssJudgeDecision) bool { return identity != "" && identity == r.rssJudgeIdentity(ctx, source) }, load)
 }

@@ -193,7 +193,7 @@ func pokeLeadsToBotMessage(message MessageEvent, history []MessageEvent, userID 
 	botID := strings.TrimSpace(message.UserID)
 	for i := index - 1; i >= 0; i-- {
 		item := history[i]
-		if message.Time > 0 && item.Time > 0 && message.Time-item.Time > int64(pokeReplyTimeout/time.Second)*2 {
+		if message.Time > 0 && item.Time > 0 && message.Time-item.Time > int64(pokeReplyFollowWindow/time.Second) {
 			return false
 		}
 		if isPokeHistoryEvent(item) {

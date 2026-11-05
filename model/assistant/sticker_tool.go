@@ -42,7 +42,6 @@ const (
 	stickerElsewhereHalfLifeSecs = 6 * 3600
 	// 命中的候选先取「返回数量 × 这个倍数」进池子，再按分数加权抽，排名靠前的更容易被抽中。
 	stickerMatchedPoolFactor = 2
-	stickerBackgroundTagTTL  = 3 * time.Minute
 	stickerSendRateWindow    = time.Hour
 	// 自动配图时最多拿几张命中的去过人设判断，每张第一次判断要调一次模型。
 	stickerPersonaAttempts = 3
@@ -1019,10 +1018,10 @@ func (t *dianaStickerTool) tagCandidatesInBackground(ctx context.Context, candid
 	if len(pending) == 0 {
 		return
 	}
-	tagCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stickerBackgroundTagTTL)
+	// 脱离本轮回复的取消，不设总期限：每次识图请求有统一的单次上限。
+	tagCtx := context.WithoutCancel(ctx)
 	go func() {
 		defer recoverGoroutinePanic("sticker_tool.go:tag")
-		defer cancel()
 		for _, candidate := range pending {
 			annotation, err := t.runtime.describeStickerImage(tagCtx, t.event, candidate.Path)
 			if err == nil {

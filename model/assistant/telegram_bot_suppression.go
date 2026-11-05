@@ -74,8 +74,6 @@ func (r *Runtime) markedBotPrivateMessageNeedsReply(ctx context.Context, event M
 	if err != nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(r.effectiveConfigForEvent(event)))
-	defer cancel()
 	raw, err := r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptMarkedBotPrivateSpec)},
@@ -123,8 +121,6 @@ func (r *Runtime) telegramBotMessageMentionsSelf(ctx context.Context, event Mess
 	if err != nil {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(ctx, proactiveReplyRouteTimeout(cfg))
-	defer cancel()
 	raw, err := r.runLLMRouterProviderOnce(ctx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: cfg.prompt(promptMarkedBotMentionSpec)},

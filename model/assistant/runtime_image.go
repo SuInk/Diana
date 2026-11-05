@@ -491,6 +491,16 @@ func appendImageEditSourceImages(out []string, images ...string) []string {
 	return out
 }
 
+// imageRequestTimeout 是单次生图、改图请求的上限：提供商配了图片超时就用它，否则
+// 和文本请求一样用统一的 5 分钟。每个候选各自计时，一个候选卡满也不耽误下一个；
+// 超时不在原候选上重试，超时的那次多半照样计费。
+func imageRequestTimeout(cfg llm.ProviderConfig) time.Duration {
+	if timeout := cfg.ImageTimeoutWithDefault(); timeout > 0 {
+		return timeout
+	}
+	return llmRequestTimeoutDefault
+}
+
 func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGenerateRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {
 	configs := r.resolveImageProviderConfigs(ctx, true)
 	if len(configs) == 0 {
@@ -504,7 +514,9 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
-		resp, err := llm.GenerateImage(ctx, cfg, request)
+		requestCtx, cancel := context.WithTimeout(ctx, imageRequestTimeout(cfg))
+		resp, err := llm.GenerateImage(requestCtx, cfg, request)
+		cancel()
 		duration := time.Since(started)
 		r.recordImageDebugTrace(ctx, cfg, "image_generate", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N}, resp, err, duration)
 		if err == nil {
@@ -529,7 +541,9 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		request := req
 		request.Model = cfg.ImageModelWithDefault()
 		started := time.Now()
-		resp, err := llm.EditImage(ctx, cfg, request)
+		requestCtx, cancel := context.WithTimeout(ctx, imageRequestTimeout(cfg))
+		resp, err := llm.EditImage(requestCtx, cfg, request)
+		cancel()
 		duration := time.Since(started)
 		r.recordImageDebugTrace(ctx, cfg, "image_edit", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N, "image_count": len(request.Images)}, resp, err, duration)
 		if err == nil {

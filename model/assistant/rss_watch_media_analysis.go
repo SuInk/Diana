@@ -50,9 +50,6 @@ func (r *Runtime) prepareRSSMedia(ctx context.Context, item Reminder, change rss
 	original := change
 	change.Items = append([]rssWatchItem(nil), change.Items...)
 	event := r.sourceEventForReminder(item)
-	budget := r.effectiveConfigForEvent(event).RequestTimeout
-	ctx, cancel := context.WithTimeout(ctx, budget)
-	defer cancel()
 	identity := r.rssJudgeIdentity(ctx, event)
 	for i := range change.Items {
 		entry := change.Items[i]
@@ -60,7 +57,7 @@ func (r *Runtime) prepareRSSMedia(ctx context.Context, item Reminder, change rss
 		if identity != "" && p.client.Jar == nil {
 			key = sharedResultKey([]any{"rss-media-v1", identity, mode, settings, entry.Images, entry.Videos})
 		}
-		analysis, analysisErr := p.analyses.load(ctx, key, 24*time.Hour, budget, func(s string) bool { return s != "" && identity == r.rssJudgeIdentity(ctx, event) }, func(callCtx context.Context) (string, error) {
+		analysis, analysisErr := p.analyses.load(ctx, key, 24*time.Hour, 0, func(s string) bool { return s != "" && identity == r.rssJudgeIdentity(ctx, event) }, func(callCtx context.Context) (string, error) {
 			return r.analyzeRSSMedia(callCtx, event, entry, mode, p)
 		})
 		if analysisErr != nil {
@@ -134,8 +131,15 @@ func (r *Runtime) analyzeRSSMedia(ctx context.Context, event MessageEvent, entry
 	if len(entry.Images) > 4 || (strings.HasPrefix(mode, "video") && len(entry.Videos) > 2) {
 		return "", fmt.Errorf("单条分析最多 4 张图片、2 个视频，不能静默忽略其余媒体")
 	}
+	// 期限只罩住下载、抽帧和转写这些准备工作；后面的视觉分析是模型调用，受单次
+	// 请求上限约束，不和准备工作共用一个总期限。
+	prepCtx, cancelPrep := context.WithCancel(ctx)
+	if budget := r.effectiveConfigForEvent(event).RequestTimeout; budget > 0 {
+		prepCtx, cancelPrep = context.WithTimeout(ctx, budget)
+	}
+	defer cancelPrep()
 	for _, source := range entry.Images {
-		body, mime, err := p.readAnalysisMedia(ctx, source, false)
+		body, mime, err := p.readAnalysisMedia(prepCtx, source, false)
 		if err != nil {
 			return "", err
 		}
@@ -144,7 +148,7 @@ func (r *Runtime) analyzeRSSMedia(ctx context.Context, event MessageEvent, entry
 	var transcripts []string
 	if strings.HasPrefix(mode, "video") {
 		for _, video := range entry.Videos {
-			frames, transcript, err := r.rssVideoAnalysis(ctx, video.URL, mode == "video_audio", p)
+			frames, transcript, err := r.rssVideoAnalysis(prepCtx, video.URL, mode == "video_audio", p)
 			if err != nil {
 				return "", err
 			}
@@ -157,6 +161,7 @@ func (r *Runtime) analyzeRSSMedia(ctx context.Context, event MessageEvent, entry
 			}
 		}
 	}
+	cancelPrep()
 	if len(parts) == 1 {
 		return "", nil
 	}

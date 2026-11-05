@@ -57,12 +57,10 @@ func (kind followUpKind) label() string {
 }
 
 // detachFollowUpContext 让跟评脱离上游任务的取消信号，只保留 ctx 上的值
-// （身份脱敏状态等），并给它自己的超时。
-func detachFollowUpContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
-	if timeout <= 0 {
-		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
-	}
-	return context.WithTimeout(context.WithoutCancel(ctx), timeout)
+// （身份脱敏状态等）。跟评是一次回复生成，和主回复一样不设总期限，每次模型请求
+// 有统一的单次上限。
+func detachFollowUpContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(context.WithoutCancel(ctx))
 }
 
 // sendFollowUp 投递所有由模型生成的自然跟评。插件跟评紧接当前消息，沿用普通聊天

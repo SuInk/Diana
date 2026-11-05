@@ -194,7 +194,7 @@ func llmFailureReasonLabel(err error) string {
 	if err == nil {
 		return "调用失败"
 	}
-	if errors.Is(err, errLLMCandidateTimeout) || errors.Is(err, errModelRequestTimeout) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, errModelRequestTimeout) || errors.Is(err, context.DeadlineExceeded) {
 		return "超时"
 	}
 	if policy := llmErrorPolicy(err); policy.retry && policy.cooldown == llmCooldownDefault {

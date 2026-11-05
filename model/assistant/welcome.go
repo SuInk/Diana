@@ -226,12 +226,6 @@ const welcomeHistoryLimit = 20
 func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, event MessageEvent) (string, error) {
 	source := eventTriggerDeliveryEvent(event)
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, source), PurposeWelcomeGenerator)
-	timeout := cfg.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	if strings.TrimSpace(source.GroupName) == "" {
 		lookupCtx, lookupCancel := context.WithTimeout(ctx, 5*time.Second)
 		if info, err := r.getGroupInfoForEvent(lookupCtx, source, source.GroupID); err == nil {

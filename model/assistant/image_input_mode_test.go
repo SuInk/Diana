@@ -68,15 +68,13 @@ func TestImageTextModeFailureFallsBackWithoutSecondVisionCall(t *testing.T) {
 	}
 }
 
-func TestImageTextModeConcurrentDescriptionsShareDeadline(t *testing.T) {
+// 同一张图并发要描述时只发一次请求；这次请求按单次模型请求上限计时，不再和
+// 本轮其它图共用一个总期限——换一张图照样拿到自己的一份。
+func TestImageTextModeConcurrentDescriptionsDeduplicate(t *testing.T) {
 	p := &imageModeFailureProvider{wait: true}
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
+	runtime := NewRuntime(BotConfig{ModelRequestTimeout: 100 * time.Millisecond}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
 	ctx := withImageTextMode(context.Background(), runtime, MessageEvent{})
 	mode := imageTextModeFromContext(ctx)
-	if remaining := time.Until(mode.deadline); remaining > 90*time.Second || remaining < 89*time.Second {
-		t.Fatalf("description budget = %s, want 90 seconds", remaining)
-	}
-	mode.deadline = time.Now().Add(100 * time.Millisecond)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -86,11 +84,10 @@ func TestImageTextModeConcurrentDescriptionsShareDeadline(t *testing.T) {
 	if p.calls.Load() != 1 {
 		t.Fatalf("concurrent calls = %d", p.calls.Load())
 	}
-	// A different image must not receive a fresh budget after the turn expires.
 	mode.sources = map[string]string{}
 	mode.sourceDescription(ctx, imageInputModeTestPNG)
-	if p.calls.Load() != 1 {
-		t.Fatal("expired budget started another request")
+	if p.calls.Load() != 2 {
+		t.Fatalf("a later description should get its own request budget: calls=%d", p.calls.Load())
 	}
 	if ctx.Err() != nil {
 		t.Fatal("vision timeout canceled the reply context")

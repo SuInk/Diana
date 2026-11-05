@@ -35,22 +35,15 @@ const (
 	recallImageDescriptionMaxRunes    = 1600
 	recallImageDescriptionConcurrency = 3
 	// 历史行里的描述比撤回记录短得多：每轮都要重复发送，超长会把上下文预算吃光。
-	historyImageDescriptionMaxRunes   = 400
-	historyImageDescriptionQueueLimit = 32
-	historyImageDescriptionReadyLimit = 2048
-	historyImageDescriptionIdlePoll   = 250 * time.Millisecond
-	// 识图超时只罩住单次视觉调用（不含排队）。线上成功调用最长 57 秒，p90 约 16 秒；
-	// 队列是单并发的，一次卡死的调用会让后面所有图陪着等满这段时间，不宜再放大。
-	historyImageDescriptionTimeout      = 90 * time.Second
+	historyImageDescriptionMaxRunes     = 400
+	historyImageDescriptionQueueLimit   = 32
+	historyImageDescriptionReadyLimit   = 2048
+	historyImageDescriptionIdlePoll     = 250 * time.Millisecond
 	historyImageDescriptionRetryBackoff = 10 * time.Minute
-	// 线上每天都有几次 recall image description failed: context deadline exceeded：
-	// 识图要把整张图带上去问一次模型，20 秒经常跑不完，撤回记录里的图就一直是空描述。
-	replyImageGroundingTimeout = 60 * time.Second
 	// historyImageDescriptionMaxAge 限定「自动补描述」的时间窗。
 	//
-	// 库里有近两万条带图消息，识图是单并发、每张最多等 90 秒。真要顺着回填
-	// 补完，按每张 5 秒算是 26 小时，按超时算是 19 天——而且补的是没人再提起
-	// 的老图。窗口之外的图不自动补，等真被引用时再补。
+	// 库里有近两万条带图消息，识图是单并发的。真要顺着回填补完，按每张 5 秒算
+	// 是 26 小时——而且补的是没人再提起的老图。窗口之外的图不自动补，等真被引用时再补。
 	historyImageDescriptionMaxAge = 24 * time.Hour
 )
 
@@ -66,15 +59,15 @@ func (r *Runtime) ensureReplyImageDescription(ctx context.Context, event Message
 	if !hasImageSegment(event.Segments) || r.recallImageDescriptionStore() == nil {
 		return event, ""
 	}
-	waitCtx, cancel := context.WithTimeout(ctx, replyImageGroundingTimeout)
-	defer cancel()
-	enriched := r.enrichRecallImageDescriptions(waitCtx, event, []MessageEvent{event})
+	// 这是一次同步识图调用，不另设总期限：每次请求有统一的单次上限，超时换下一个
+	// 候选（见 llmRequestTimeoutDefault）。
+	enriched := r.enrichRecallImageDescriptions(ctx, event, []MessageEvent{event})
 	if len(enriched) == 0 {
 		return event, ""
 	}
 	// 失败原因留在 enriched 的片段里，拼提示词时由 imageFailureNotice 现取。
 	event.Segments = enriched[0].Segments
-	return event, r.messageImageDescriptionText(waitCtx, event)
+	return event, r.messageImageDescriptionText(ctx, event)
 }
 
 // withinHistoryImageDescriptionWindow 判断这条消息是否新到值得自动补描述。

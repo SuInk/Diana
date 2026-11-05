@@ -214,8 +214,8 @@ test("timeout stays in the bot draft across purpose changes and resets on cancel
   assert.match(source, /latestTimeoutDraft !== submittedTimeoutDraft/);
   assert.match(source, /form.value !== current \|\| page.value !== "edit"/);
   const help = source.match(/<span id="bot-model-request-timeout-hint"[\s\S]*?<\/span>/)?.[0];
-  for (const text of ["0 表示不额外限制", "包含流式接收", "提供商更短的超时", "调用方取消", "已发送或提交", "独立图片生成"]) assert.ok(help.includes(text));
-  assert.doesNotMatch(help, /整轮总|整轮预算|180 秒/);
+  for (const text of ["0 表示用默认的 5 分钟", "包含流式接收", "提供商自己配的更短超时", "直到候选全部试完", "已发送或提交", "图片生成"]) assert.ok(help.includes(text));
+  assert.doesNotMatch(help, /整轮总|整轮预算|180 秒|不额外限制/);
 });
 
 function schedulingContext(roles) {

@@ -6,7 +6,6 @@ import (
 	"log"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -52,14 +51,7 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	}
 	textCalls := 0
 	if llm.PlanInputBudget(req, budget).OverBudget() {
-		timeout := 20 * time.Second
-		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline)/3 < timeout {
-			timeout = time.Until(deadline) / 3
-		}
-		if timeout <= 0 {
-			return p.provider.Generate(ctx, req)
-		}
-		describeCtx, cancel := context.WithTimeout(context.WithValue(ctx, imageBudgetActiveKey{}, true), timeout)
+		describeCtx := context.WithValue(ctx, imageBudgetActiveKey{}, true)
 		req = fitBudgetText(describeCtx, req, budget, &textCalls, run, p.runtime.summarizeBudgetText)
 		if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
 			beforeDescriptions := countBudgetImages(req)
@@ -76,7 +68,6 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 			}
 		}
 		req = lowerOverBudgetImageDetail(req, budget)
-		cancel()
 	}
 	retained := countBudgetImages(req)
 	after := llm.PlanInputBudget(req, budget)

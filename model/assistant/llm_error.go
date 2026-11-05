@@ -41,10 +41,10 @@ func llmErrorPolicy(err error) llmFailurePolicy {
 	if err == nil || errors.Is(err, errLLMOutputCommitted) || errors.Is(err, context.Canceled) {
 		return llmFailurePolicy{}
 	}
-	if errors.Is(err, errLLMCandidateTimeout) {
+	if errors.Is(err, errModelRequestTimeout) {
 		return llmFailurePolicy{failover: true, cooldown: llmCooldownTimeout}
 	}
-	if errors.Is(err, errModelRequestTimeout) || errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, llm.ErrDecisionRequired) {
+	if errors.Is(err, llm.ErrUnverifiedRejection) || errors.Is(err, llm.ErrDecisionRequired) {
 		return llmFailurePolicy{failover: true}
 	}
 	if errors.Is(err, errContentPolicyRejection) || isContentPolicyRejection(err) || llm.IsContextOverflowError(err) || errors.Is(err, llm.ErrCompletionHasNoText) {

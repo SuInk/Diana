@@ -315,7 +315,8 @@ func TestOrdinaryReplyHasNoRequestTimeoutDeadline(t *testing.T) {
 			calls := 0
 			provider := modelTimeoutTestProvider{run: func(attempt context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
 				calls++
-				if deadline, ok := attempt.Deadline(); ok {
+				// 只允许统一的单次请求上限，不能有 RequestTimeout 那种整轮总期限。
+				if deadline, ok := attempt.Deadline(); ok && time.Until(deadline) < 4*time.Minute {
 					t.Fatalf("unexpected total deadline: %v", deadline)
 				}
 				if cancelParent {

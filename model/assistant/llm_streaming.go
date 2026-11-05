@@ -132,10 +132,8 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	case *registryFailoverLLMProvider, *profileFailoverLLMProvider, *modelRequestTimeoutLLMProvider:
 		return p.provider.Generate(context.WithValue(ctx, streamingRequestKey{}, true), req)
 	case *transientRetryLLMProvider:
+		// 和非流式一样总走重试包装：单次请求上限在那里统一施加，关掉重试也不例外。
 		streaming := &streamingLLMProvider{provider: provider.provider}
-		if timeout, _ := ctx.Value(modelRequestTimeoutKey{}).(time.Duration); provider.disableRetry && timeout <= 0 {
-			return streaming.Generate(ctx, req)
-		}
 		return generateWithTransientRetry(ctx, streaming, req, !provider.disableRetry)
 	}
 	streamer, ok := p.provider.(streamingLLMClient)

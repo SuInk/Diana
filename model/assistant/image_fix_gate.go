@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -37,8 +36,6 @@ const (
 	imageFixMaxCandidates = 6
 	// imageFixRecentMessages 是带给判断的近期消息条数。
 	imageFixRecentMessages = 10
-	imageFixGateTimeout    = 20 * time.Second
-	imageFixTimeout        = 90 * time.Second
 	imageFixDescriptionCap = 400
 )
 
@@ -98,15 +95,13 @@ func (r *Runtime) startQuotedImageFixGate(ctx context.Context, event MessageEven
 	}
 	go func() {
 		defer recoverGoroutinePanic("image_fix_gate")
-		gateCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), imageFixGateTimeout)
-		correction, messageID := r.detectImageFix(gateCtx, event, store)
-		cancel()
+		// 脱离回复的取消，后台跑完；每次模型请求有统一的单次上限。
+		bgCtx := context.WithoutCancel(ctx)
+		correction, messageID := r.detectImageFix(bgCtx, event, store)
 		if correction == "" {
 			return
 		}
-		fixCtx, cancelFix := context.WithTimeout(context.WithoutCancel(ctx), imageFixTimeout)
-		defer cancelFix()
-		fixed := r.rewriteImageDescriptions(fixCtx, event, store, correction, messageID)
+		fixed := r.rewriteImageDescriptions(bgCtx, event, store, correction, messageID)
 		log.Printf("diana image fix: message_id=%s target=%s images=%d", event.MessageID, messageID, fixed)
 	}()
 }

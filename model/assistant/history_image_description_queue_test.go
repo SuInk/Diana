@@ -57,11 +57,12 @@ func (p *queueVisionProvider) snapshot() (calls, maxActive int) {
 func newQueueTestRuntime(t *testing.T, provider *queueVisionProvider, timeout, backoff time.Duration) (*Runtime, *recallImageTestStore) {
 	t.Helper()
 	store := newRecallImageTestStore()
-	runtime := NewRuntime(BotConfig{BotAccount: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	// 识图队列不再另设总期限，每次识图请求按单次模型请求上限计时。
+	runtime := NewRuntime(BotConfig{BotAccount: "bot", ModelRequestTimeout: timeout}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
-	runtime.historyImageDescTimeout, runtime.historyImageDescBackoff = timeout, backoff
+	runtime.historyImageDescBackoff = backoff
 	return runtime, store
 }
 
@@ -352,7 +353,7 @@ func newStickerTagQueueRuntime(t *testing.T, plugins *PluginManager) (*Runtime, 
 		return provider, nil
 	})
 	runtime.SetMessageHistoryStore(store)
-	runtime.historyImageDescTimeout, runtime.historyImageDescBackoff = time.Second, time.Hour
+	runtime.historyImageDescBackoff = time.Hour
 	return runtime, store, provider
 }
 

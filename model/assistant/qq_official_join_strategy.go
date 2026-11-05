@@ -260,9 +260,6 @@ const qqJoinDecisionLLM = "llm"
 // qqJoinLLMReview 让模型判一条申请，返回 approve、decline 或空串（留给主人）。
 // 申请内容是外人写的，单独装进 JSON 交给模型，不拼进指令。
 func (r *Runtime) qqJoinLLMReview(ctx context.Context, event MessageEvent, raw qqOfficialGroupEvent, settings SettingValues) (string, string, error) {
-	cfg := r.effectiveConfigForEvent(event)
-	ctx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeQQJoinReview)
 	group := llm.GroupChat
 	id, model := parseLLMProfileSetting(settings.String(qqJoinSettingLLMModel, ""))

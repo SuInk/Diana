@@ -47,7 +47,8 @@ func TestModelRequestTimeoutHardCap(t *testing.T) {
 			if !errors.Is(err, errModelRequestTimeout) || calls != 1 || errors.Is(err, errLLMOutputCommitted) != committed {
 				t.Fatalf("calls=%d err=%v", calls, err)
 			}
-			if policy := llmErrorPolicy(err); policy.retry || policy.cooldown != 0 || policy.failover == committed {
+			// 未提交的超时换下一个候选并按超时冷却；已提交的输出不能再换模型重发。
+			if policy := llmErrorPolicy(err); policy.retry || policy.failover == committed || (!committed && policy.cooldown != llmCooldownTimeout) {
 				t.Fatalf("policy=%+v", policy)
 			}
 		})
@@ -73,10 +74,9 @@ func TestModelRequestTimeoutCommittedStopsFailover(t *testing.T) {
 	if !errors.Is(err, errLLMOutputCommitted) || !errors.Is(err, errModelRequestTimeout) || calls["a"] != 1 || calls["b"] != 0 {
 		t.Fatalf("calls=%v err=%v", calls, err)
 	}
-	for _, health := range provider.cooldowns.snapshot(profiles) {
-		if health.failures != 0 {
-			t.Fatalf("health=%+v", health)
-		}
+	// 卡满单次上限照样计入这个候选的连续失败；没被调用的备用不受牵连。
+	if health := provider.cooldowns.snapshot(profiles); health[0].failures != 1 || health[1].failures != 0 {
+		t.Fatalf("health=%+v", health)
 	}
 }
 
@@ -167,10 +167,10 @@ func TestModelRequestTimeoutRouterFailover(t *testing.T) {
 			if err != nil || text != "ok" || calls["first"] != 1 || calls["backup"] != 1 {
 				t.Fatalf("text=%s calls=%v err=%v", text, calls, err)
 			}
-			for _, health := range r.llmCooldowns.snapshot(set.Profiles) {
-				if health.failures != 0 {
-					t.Fatalf("health=%+v", health)
-				}
+			// 卡满单次上限的上游计入连续失败，攒够次数冷却，免得每次都先在它上面白等。
+			health := r.llmCooldowns.snapshot(set.Profiles)
+			if health[0].failures != 1 || health[1].failures != 0 {
+				t.Fatalf("health=%+v", health)
 			}
 		})
 	}
@@ -192,15 +192,17 @@ func TestModelRequestTimeoutRouterFailover(t *testing.T) {
 	}
 }
 
-func TestModelRequestTimeoutZeroAddsNoDeadline(t *testing.T) {
+// 0 不再表示不限：没配时每次请求也有统一的 5 分钟上限。
+func TestModelRequestTimeoutZeroUsesDefault(t *testing.T) {
 	provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
-		if deadline, ok := ctx.Deadline(); ok {
-			t.Fatalf("unexpected deadline=%v", deadline)
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) <= 4*time.Minute || time.Until(deadline) > llmRequestTimeoutDefault {
+			t.Fatalf("deadline=%v ok=%v", deadline, ok)
 		}
 		return &llm.GenerateResponse{Text: "ok"}, nil
 	}}
 	ctx := context.WithValue(context.Background(), modelRequestTimeoutKey{}, time.Duration(0))
-	if _, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{}, true, time.Second, 1, 0); err != nil {
+	if _, err := generateWithTransientRetryPolicy(ctx, provider, llm.GenerateRequest{}, true, 0, 1, 0); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -676,8 +678,9 @@ func TestManagedAttemptTimeoutDoesNotReceiveWholeRequestDeadline(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err=%v", err)
 	}
-	if provider.calls != 1 || len(provider.deadlines) != 0 {
-		t.Fatalf("calls=%d deadlines=%v, want one attempt without a wrapper deadline", provider.calls, provider.deadlines)
+	// 自管计时的客户端不再套 8 秒的单次尝试期限，只剩统一的单次请求上限。
+	if provider.calls != 1 || len(provider.deadlines) != 1 || provider.deadlines[0] < 4*time.Minute {
+		t.Fatalf("calls=%d deadlines=%v, want one attempt under only the request cap", provider.calls, provider.deadlines)
 	}
 }
 

@@ -148,12 +148,8 @@ func (r *Runtime) feedReplyOnce(profileID, postID string) error {
 	if !r.feedAutoReplyEnabled(profileID) {
 		return nil
 	}
-	timeout := cfg.RequestTimeout
-	if timeout <= 0 {
-		timeout = DefaultBotConfig().WithDefaults().RequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout+feedReplyCooldown)
-	defer cancel()
+	// 不设总期限：这里是一次普通补全，模型请求有统一的单次上限。
+	ctx := context.Background()
 
 	post, pending, err := r.pendingFeedComment(ctx, store, postID)
 	if err != nil || pending == nil {

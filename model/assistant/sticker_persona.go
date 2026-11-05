@@ -18,8 +18,6 @@ import (
 // 以机器人本人的身份发出去不合人设也不能发。判断交给模型，带着 SOUL.md 以角色本人的
 // 视角回答「这张你会发吗」；结果按人设指纹缓存，同一张图同一份人设只问一次。
 
-const stickerPersonaFitTimeout = 20 * time.Second
-
 // StickerPersonaFitStore 缓存人设判断。没判过的图不在 StickerPersonaFit 的结果里。
 type StickerPersonaFitStore interface {
 	StickerPersonaFit(ctx context.Context, personaKey string, hashes []string) (map[string]bool, error)
@@ -115,8 +113,7 @@ func (t *dianaStickerTool) fitsPersona(ctx context.Context, candidate stickerCan
 		"name": firstNonEmpty(candidate.Summary, "动画表情"), "description": truncateRunes(description, 400), "tags": tags,
 	})
 	messages := t.runtime.withUserFacingPersona(t.event, []llm.Message{{Role: llm.RoleUser, Content: instruction}})
-	callCtx, cancel := context.WithTimeout(withLLMUsagePurpose(withLLMUsageContext(ctx, t.event), PurposeStickerPersonaFit), stickerPersonaFitTimeout)
-	defer cancel()
+	callCtx := withLLMUsagePurpose(withLLMUsageContext(ctx, t.event), PurposeStickerPersonaFit)
 	raw, err := t.runtime.runLLMRouterProvider(callCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(callCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {

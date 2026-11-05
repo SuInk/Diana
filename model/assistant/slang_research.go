@@ -21,7 +21,9 @@ const (
 	SlangAutoEditorID   = "diana:slang-learning"
 	slangAutoEditorName = "自动学习"
 
-	slangResearchTimeout      = 90 * time.Second
+	// slangSearchTimeout 只罩住联网搜索；后面的判断是模型调用，受模型请求的单次
+	// 上限约束，不再和搜索共用一个总期限。
+	slangSearchTimeout        = 90 * time.Second
 	slangSearchResultMaxRunes = 6000
 	slangMeaningMaxRunes      = 120
 )
@@ -81,9 +83,7 @@ func (r *Runtime) scheduleSlangResearch(event MessageEvent, candidate SlangCandi
 	go func() {
 		defer r.slangResearch.end(key)
 		defer recoverGoroutinePanic("runtime.slangResearch")
-		ctx, cancel := context.WithTimeout(context.Background(), slangResearchTimeout)
-		defer cancel()
-		if err := r.researchSlangCandidate(ctx, event, candidate); err != nil {
+		if err := r.researchSlangCandidate(context.Background(), event, candidate); err != nil {
 			log.Printf("diana slang research %q failed: %v", candidate.Term, err)
 		}
 	}()
@@ -127,7 +127,9 @@ func (r *Runtime) researchSlangCandidateWith(ctx context.Context, event MessageE
 	if err := store.UpdateSlangCandidate(ctx, candidate.ProfileID, candidate.GroupID, candidate.Term, SlangCandidatePending, candidate.NextThreshold, true, now); err != nil {
 		return fmt.Errorf("mark research: %w", err)
 	}
-	results, err := search.Run(ctx, map[string]any{"query": candidate.Term + " 是什么梗 什么意思"})
+	searchCtx, cancelSearch := context.WithTimeout(ctx, slangSearchTimeout)
+	results, err := search.Run(searchCtx, map[string]any{"query": candidate.Term + " 是什么梗 什么意思"})
+	cancelSearch()
 	if err != nil {
 		return r.deferSlangCandidate(ctx, store, candidate, now, fmt.Errorf("search: %w", err))
 	}

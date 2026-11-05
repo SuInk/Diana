@@ -45,11 +45,8 @@ type replyRuleContextKey struct{}
 const (
 	proactiveReplyRouteConcurrency = 8
 	relationshipEvalConcurrency    = 4
-	semanticRouteTimeout           = 20 * time.Second
 	llmTransientRetryDelay         = 700 * time.Millisecond
 	llmTransientMaxRetries         = 2
-	proactiveReplyRouteBudget      = 60 * time.Second
-	replyRuleRouteBudget           = 15 * time.Second
 
 	// auditPersistTimeout 是「落库留痕，失败只打日志」这类写入的预算：入站判决原因、
 	// 通知事件、消息历史。
@@ -719,8 +716,7 @@ type Runtime struct {
 	historyImageDescReady         map[string]struct{}
 	historyImageDescFailed        map[string]historyImageDescFailure
 	historyImageDescFront         int
-	// 测试用来缩短识图超时和失败退避；零值取 historyImageDescriptionTimeout/RetryBackoff。
-	historyImageDescTimeout time.Duration
+	// 测试用来缩短失败退避；零值取 historyImageDescriptionRetryBackoff。
 	historyImageDescBackoff time.Duration
 	agentRegistryMu         sync.Mutex
 	agentRegistryCache      map[string]*agent.ToolRegistry
@@ -3072,9 +3068,8 @@ func (r *Runtime) routeProactiveReplyBatch(ctx context.Context, candidates []pro
 		event.routingReason = "主动回复判断上下文编码失败，已保持沉默：" + err.Error()
 		return event, text, nil, false
 	}
-	// 预算按候选算：主模型卡住时切到备用重新计时，不让它把整段时间吃光。
-	routeCtx, cancel := withLLMCandidateBudget(ctx, proactiveReplyRouteTimeout(cfg))
-	defer cancel()
+	// 不另设总期限：每次模型请求有统一的单次上限，主模型卡住时超时换备用。
+	routeCtx := ctx
 	// 先选好指令再拼消息：llmMessageFromEventWithImagesForContext 可能去抓图片，
 	// 以前这里先按旧契约构造一次，再在评分契约下整条覆盖，那次抓图完全是白做的。
 	routeInstruction := cfg.prompt(promptLegacyRouteInstructionSpec)
@@ -3321,13 +3316,6 @@ func selectProactiveReplyTurn(candidates []proactiveReplyCandidate, targetMessag
 		}
 	}
 	return turn
-}
-
-func proactiveReplyRouteTimeout(cfg BotConfig) time.Duration {
-	if cfg.RequestTimeout > 0 && cfg.RequestTimeout < proactiveReplyRouteBudget {
-		return cfg.RequestTimeout
-	}
-	return proactiveReplyRouteBudget
 }
 
 type proactiveReplyPayload struct {
@@ -5377,8 +5365,7 @@ func (r *Runtime) evaluateReplyRules(ctx context.Context, event MessageEvent, te
 			Content: "请判断本次回复是否命中回复规则。上下文 JSON：\n" + string(payloadJSON),
 		},
 	}
-	routeCtx, cancel := context.WithTimeout(ctx, replyRuleRouteBudget)
-	defer cancel()
+	routeCtx := ctx
 	raw, err := r.runLLMRouterProviderOnce(routeCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(routeCtx, llm.GenerateRequest{Messages: messages})
 		if err != nil {
@@ -5579,8 +5566,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 			Content: userPrompt + string(payloadJSON),
 		},
 	}
-	routeCtx, cancel := context.WithTimeout(ctx, semanticRouteTimeout)
-	defer cancel()
+	routeCtx := ctx
 	var raw string
 	raw, err = r.runLLMRouterProvider(routeCtx, func(client LLMProvider) (string, error) {
 		resp, err := client.Generate(routeCtx, llm.GenerateRequest{
@@ -8950,8 +8936,7 @@ func (r *Runtime) judgeRSSWatch(ctx context.Context, item Reminder, change rssWa
 	}
 	source := r.sourceEventForReminder(item)
 	cfg := r.effectiveConfigForEvent(source)
-	taskCtx, cancel := context.WithTimeout(ctx, cfg.RequestTimeout)
-	defer cancel()
+	taskCtx := ctx
 	// 判断器只需要知道条目来自哪个 Feed，订阅地址里的令牌不进提示词。
 	change.FeedURL = secretmask.URLs(change.FeedURL)
 	payload, err := json.Marshal(change)

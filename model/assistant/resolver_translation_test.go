@@ -6,7 +6,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestResolverTranslationFallbackAndMedia(t *testing.T) {
@@ -18,9 +17,9 @@ func TestResolverTranslationFallbackAndMedia(t *testing.T) {
 			req := PluginRequest{Settings: SettingValues{resolverSettingTranslate: mode != "disabled"}}
 			req.TranslateResolver = func(ctx context.Context, event MessageEvent, text string) (string, error) {
 				called = true
-				deadline, ok := ctx.Deadline()
-				if !ok || time.Until(deadline) > 15*time.Second {
-					t.Fatal("translation has no bounded deadline")
+				// 翻译不另设总期限，模型请求按单次上限计时。
+				if _, ok := ctx.Deadline(); ok {
+					t.Fatal("translation should not carry a total deadline")
 				}
 				if text != original.Reply {
 					t.Fatalf("unexpected source %q", text)
