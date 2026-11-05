@@ -67,6 +67,10 @@ func TestDianaImageToolGeneratesGIF(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
 
 	// 越界的帧时长夹到上限，而不是让上游拒掉整次请求。
+	// 单帧 1024 时 9 帧的精灵图超出上游像素预算，GIF 一律交给上游挑尺寸。
+	if payload["size"] != "auto" {
+		t.Fatalf("gif size = %#v", payload["size"])
+	}
 	if payload["output_format"] != "gif" || payload["frame_count"] != float64(12) || payload["frame_duration_ms"] != float64(llm.ImageGIFMaxFrameDurationMS) {
 		t.Fatalf("payload = %#v", payload)
 	}
@@ -111,5 +115,12 @@ func TestDianaImageToolFormatValidation(t *testing.T) {
 	}
 	if request.FrameCount != llm.ImageGIFMinFrames || request.FrameDurationMS != 0 {
 		t.Fatalf("帧数应夹到下限、没填的帧时长用上游默认: %#v", request)
+	}
+}
+
+// 画面描述带句号时，开场白不能念成「纯色背景。，完成后」。
+func TestImageAnnouncementSubjectTrimsTrailingPunctuation(t *testing.T) {
+	if got := imageAnnouncementSubject("像素风小狗摇尾巴，纯色背景。"); got != "像素风小狗摇尾巴，纯色背景" {
+		t.Fatalf("subject = %q", got)
 	}
 }

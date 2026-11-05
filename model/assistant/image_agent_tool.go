@@ -167,6 +167,8 @@ func imageAnnouncementSubject(prompt string) string {
 	if index := strings.IndexAny(subject, "\r\n"); index >= 0 {
 		subject = strings.TrimSpace(subject[:index])
 	}
+	// 句末标点去掉：后面还要接「，完成后…」，不去会念成「纯色背景。，完成后」。
+	subject = strings.TrimRight(subject, "。.！!？?，,；;、 ")
 	if subject == "" || len([]rune(subject)) > imageAnnouncementSubjectMaxRunes {
 		return ""
 	}
@@ -567,7 +569,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	case "generate":
 		resp, usedCfg, err := t.runtime.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
 			Prompt:          submittedPrompt,
-			Size:            "1024x1024",
+			Size:            dianaImageGenerateSize(request.Format),
 			N:               1,
 			OutputFormat:    request.Format,
 			FrameCount:      request.FrameCount,
@@ -709,6 +711,17 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		ImageURLs: sharedImages,
 		Models:    models,
 	}, nil
+}
+
+// dianaImageGenerateSize 给生图挑尺寸。gpt-image-2.6 把 GIF 的所有帧拼在一张精灵图里
+// 一起画，size 指的是单帧：9 帧 × 1024 拼出 3072×3072，超了像素预算，上游直接 400
+// （实测 "No supported sheet fits 9 GIF frames at size '1024x1024'"）。auto 让上游按帧数
+// 挑能放下的单帧尺寸，9 帧和 16 帧实测都给 512×512。
+func dianaImageGenerateSize(format string) string {
+	if format == llm.ImageFormatGIF {
+		return "auto"
+	}
+	return "1024x1024"
 }
 
 // dianaImageCaptionThenImages 把说明文字拆成单独一条排在图片前面：图文挤在一个气泡里

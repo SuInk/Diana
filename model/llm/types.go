@@ -245,7 +245,8 @@ const (
 	ImageFormatGIF  = "gif"
 )
 
-// GIF 帧参数的取值范围。官方指南写 2–64 帧，API 参考写 2–16 帧，按更严的来。
+// GIF 帧参数的取值范围。官方指南写 2–64 帧，但接口实测 17 帧就报
+// "Use an integer from 2 to 16"，以接口为准。
 const (
 	ImageGIFMinFrames          = 2
 	ImageGIFMaxFrames          = 16
