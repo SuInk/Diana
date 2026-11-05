@@ -24,16 +24,20 @@ var promptParticipationRetrySpec = registerPrompt(PromptSpec{
 // Rating levels are independent. Legacy fields remain readable for saved configs;
 // CooldownSeconds only limits the chat branch.
 type ParticipationPreferences struct {
-	TriggerMode        string `json:"trigger_mode,omitempty"`
-	RuleChance         int    `json:"rule_chance"`
-	Desire             int    `json:"desire"`
-	Social             int    `json:"social"`
-	Followup           int    `json:"followup"`
-	Restraint          int    `json:"restraint"`
-	Information        int    `json:"information"`
-	CooldownSeconds    int    `json:"cooldown_seconds"`
-	RelevanceThreshold *int   `json:"relevance_threshold,omitempty"`
-	SubstanceThreshold *int   `json:"substance_threshold,omitempty"`
+	TriggerMode     string `json:"trigger_mode,omitempty"`
+	RuleChance      int    `json:"rule_chance"`
+	Desire          int    `json:"desire"`
+	Social          int    `json:"social"`
+	Followup        int    `json:"followup"`
+	Restraint       int    `json:"restraint"`
+	Information     int    `json:"information"`
+	CooldownSeconds int    `json:"cooldown_seconds"`
+	// MergeWindowSeconds、MergeMaxMessages 控制没人叫机器人的消息攒多久、攒几条再做
+	// 一次接话评分，见 proactive_route_debounce.go。0 表示默认值。
+	MergeWindowSeconds int  `json:"merge_window_seconds,omitempty"`
+	MergeMaxMessages   int  `json:"merge_max_messages,omitempty"`
+	RelevanceThreshold *int `json:"relevance_threshold,omitempty"`
+	SubstanceThreshold *int `json:"substance_threshold,omitempty"`
 	// RelevanceLevel 是「回应提问」开关：on 或 off。旧配置里的七档名称读作 on（off 除外）。
 	RelevanceLevel string `json:"relevance_level,omitempty"`
 	ChatLevel      string `json:"chat_level,omitempty"`
@@ -65,6 +69,8 @@ func copyParticipation(p *ParticipationPreferences) *ParticipationPreferences {
 	v.Restraint = max(0, min(100, v.Restraint))
 	v.Information = max(0, min(100, v.Information))
 	v.CooldownSeconds = max(0, min(3600, v.CooldownSeconds))
+	v.MergeWindowSeconds = max(0, min(maxProactiveRouteMergeWindowSeconds, v.MergeWindowSeconds))
+	v.MergeMaxMessages = max(0, min(backlogMessageMaxItems, v.MergeMaxMessages))
 	if p.RelevanceThreshold != nil {
 		value := p.relevanceThreshold()
 		v.RelevanceThreshold = &value

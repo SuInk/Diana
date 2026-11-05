@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -15,76 +16,6 @@ func debounceTestEvent(id, user, text string, at time.Time) MessageEvent {
 		Kind: EventKindGroup, GroupID: "group-1", UserID: user, MessageID: id, Time: at.Unix(),
 		RawMessage: text,
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
-	}
-}
-
-// 三个人几秒内连发，前两条都交给最后一条，只评一次分，三条都在评分输入里。
-func TestProactiveRouteDebounceMergesBurstIntoOneRoute(t *testing.T) {
-	provider := &sequenceLLMProvider{replies: []string{`{"should_reply":false,"confidence":0.2,"category":"chat","directed_at_bot":false,"answerable":true}`}}
-	runtime := NewRuntime(BotConfig{
-		BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
-	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.proactiveRouteDebounce = 20 * time.Millisecond
-	store := newMemoryInboundEventStore()
-	runtime.SetInboundEventStore(store)
-	now := time.Now()
-	events := []MessageEvent{
-		debounceTestEvent("message-1", "user-1", "这个报错应该怎么处理？", now.Add(-2*time.Second)),
-		debounceTestEvent("message-2", "user-2", "我也遇到了同样的报错", now.Add(-time.Second)),
-		debounceTestEvent("message-3", "user-3", "重启试试", now),
-	}
-	for i := range events {
-		id, _, err := store.EnqueueInboundEvent(context.Background(), sessionKey(events[i]), events[i])
-		if err != nil {
-			t.Fatal(err)
-		}
-		events[i].backlogProbe = &InboundQueueItem{ID: id, Session: sessionKey(events[i]), Event: events[i], Attempts: 1, EnqueuedAt: time.Now()}
-	}
-	for i := 0; i < 2; i++ {
-		if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), events[i]); handled || outcome != "merged_into_backlog_turn" {
-			t.Fatalf("%s handled=%v outcome=%q", events[i].MessageID, handled, outcome)
-		}
-		store.mu.Lock()
-		store.records[events[i].backlogProbe.ID].state = "done"
-		store.mu.Unlock()
-	}
-	if len(provider.requestsSnapshot()) != 0 {
-		t.Fatal("后面还有消息排队时不该评分")
-	}
-	runtime.prepareMessageEvent(context.Background(), events[2])
-	requests := provider.requestsSnapshot()
-	if len(requests) != 1 {
-		t.Fatalf("router calls=%d, want 1", len(requests))
-	}
-	input := requests[0].Messages[len(requests[0].Messages)-1].Content
-	for _, want := range []string{"这个报错应该怎么处理", "我也遇到了同样的报错", "重启试试"} {
-		if !strings.Contains(input, want) {
-			t.Fatalf("评分输入缺 %q：%q", want, input)
-		}
-	}
-}
-
-// 窗口内没人接着说就照常评分，只多等这一个窗口。
-func TestProactiveRouteDebounceRoutesWhenQuiet(t *testing.T) {
-	provider := &sequenceLLMProvider{replies: []string{`{"should_reply":false,"confidence":0.2,"category":"chat","directed_at_bot":false,"answerable":true}`}}
-	runtime := NewRuntime(BotConfig{
-		BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
-	}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.proactiveRouteDebounce = 20 * time.Millisecond
-	store := newMemoryInboundEventStore()
-	runtime.SetInboundEventStore(store)
-	event := debounceTestEvent("message-1", "user-1", "这个报错应该怎么处理？", time.Now())
-	id, _, _ := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event)
-	event.backlogProbe = &InboundQueueItem{ID: id, Session: sessionKey(event), Event: event, Attempts: 1, EnqueuedAt: time.Now()}
-	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), event); outcome == "merged_into_backlog_turn" {
-		t.Fatal("没有后续消息时不该交出去")
-	}
-	if got := len(provider.requestsSnapshot()); got != 1 {
-		t.Fatalf("router calls=%d, want 1", got)
 	}
 }
 
@@ -178,5 +109,219 @@ func TestSplitBurstRepliesSendsTopicsSeparately(t *testing.T) {
 	_, _, _, allowed = runtime.splitBurstReplies(current, "嘉然你觉得呢", burst[1:], participationRatings{Burst: map[int]participationRelevance{1: {Directed: &no, Reason: "问别人"}}}, false)
 	if allowed {
 		t.Fatal("都判否时不该回")
+	}
+}
+
+const legacyQuietRoute = `{"should_reply":false,"confidence":0.2,"category":"chat","directed_at_bot":false,"answerable":true}`
+
+// parkTestRuntime 起一个「运行中」的 runtime：等待批只在运行时启用。
+func parkTestRuntime(t *testing.T, cfg BotConfig, replies ...string) (*Runtime, *sequenceLLMProvider, *memoryInboundEventStore) {
+	t.Helper()
+	provider := &sequenceLLMProvider{replies: replies}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		runtime.clearProactiveRouteParks()
+	})
+	runtime.mu.Lock()
+	runtime.running = true
+	runtime.runCtx = ctx
+	runtime.mu.Unlock()
+	store := newMemoryInboundEventStore()
+	runtime.SetInboundEventStore(store)
+	return runtime, provider, store
+}
+
+func enqueueParkTestEvent(t *testing.T, store *memoryInboundEventStore, event MessageEvent) MessageEvent {
+	t.Helper()
+	id, _, err := store.EnqueueInboundEvent(context.Background(), sessionKey(event), event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event.backlogProbe = &InboundQueueItem{ID: id, Session: sessionKey(event), Event: event, Attempts: 1, EnqueuedAt: time.Now()}
+	return event
+}
+
+func waitRouterCalls(provider *sequenceLLMProvider, want int, within time.Duration) int {
+	deadline := time.Now().Add(within)
+	for {
+		got := len(provider.requestsSnapshot())
+		if got >= want || time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func routerInput(provider *sequenceLLMProvider, index int) string {
+	request := provider.requestsSnapshot()[index]
+	return request.Messages[len(request.Messages)-1].Content
+}
+
+// 三个人几秒内连发：每条都登记进等待批、worker 立刻收工，安静下来后只评一次，三条都在评分输入里。
+func TestProactiveRouteParkMergesBurstIntoOneRoute(t *testing.T) {
+	runtime, provider, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, legacyQuietRoute)
+	runtime.proactiveRouteDebounce = 300 * time.Millisecond
+	now := time.Now()
+	texts := []string{"这个报错应该怎么处理？", "我也遇到了同样的报错", "重启试试"}
+	for i, text := range texts {
+		event := enqueueParkTestEvent(t, store, debounceTestEvent(fmt.Sprintf("message-%d", i+1), fmt.Sprintf("user-%d", i+1), text, now.Add(time.Duration(i-2)*time.Second)))
+		started := time.Now()
+		if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), event); handled || outcome != "merged_into_backlog_turn" {
+			t.Fatalf("%s handled=%v outcome=%q", event.MessageID, handled, outcome)
+		}
+		if elapsed := time.Since(started); elapsed > 200*time.Millisecond {
+			t.Fatalf("登记等待批不该占着 worker，实际 %s", elapsed)
+		}
+	}
+	if got := len(provider.requestsSnapshot()); got != 0 {
+		t.Fatalf("还在等待窗口里就评分了：%d", got)
+	}
+	if got := waitRouterCalls(provider, 1, 3*time.Second); got != 1 {
+		t.Fatalf("router calls=%d, want 1", got)
+	}
+	input := routerInput(provider, 0)
+	for _, want := range texts {
+		if !strings.Contains(input, want) {
+			t.Fatalf("评分输入缺 %q：%q", want, input)
+		}
+	}
+	time.Sleep(400 * time.Millisecond)
+	if got := len(provider.requestsSnapshot()); got != 1 {
+		t.Fatalf("同一批只该评一次，实际 %d", got)
+	}
+}
+
+// 合并窗口比防抖长：防抖早就过了也继续等，窗口里来的消息并进同一批。
+func TestProactiveRouteParkMergeWindowWaitsPastDebounce(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{Desire: 25, CooldownSeconds: 30, ChatLevel: "low", RelevanceLevel: "on", MergeWindowSeconds: 2}}
+	runtime, provider, store := parkTestRuntime(t, cfg)
+	runtime.proactiveRouteDebounce = 50 * time.Millisecond
+	now := time.Now()
+	first := enqueueParkTestEvent(t, store, debounceTestEvent("message-1", "user-1", "今天吃什么", now))
+	runtime.prepareMessageEvent(context.Background(), first)
+	time.Sleep(300 * time.Millisecond)
+	second := enqueueParkTestEvent(t, store, debounceTestEvent("message-2", "user-2", "火锅吧", now))
+	runtime.prepareMessageEvent(context.Background(), second)
+	time.Sleep(300 * time.Millisecond)
+	if got := len(provider.requestsSnapshot()); got != 0 {
+		t.Fatalf("合并窗口没到就评分了：%d", got)
+	}
+	if got := waitRouterCalls(provider, 1, 4*time.Second); got < 1 {
+		t.Fatal("窗口结束后应该评分")
+	}
+	input := routerInput(provider, 0)
+	if !strings.Contains(input, "今天吃什么") || !strings.Contains(input, "火锅吧") {
+		t.Fatalf("两条应该在同一次评分里：%q", input)
+	}
+}
+
+// 攒满条数上限就在当前 worker 里当场评，等着的一起带上。
+func TestProactiveRouteParkMaxMessagesRoutesImmediately(t *testing.T) {
+	cfg := BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{Desire: 25, CooldownSeconds: 30, ChatLevel: "low", RelevanceLevel: "on", MergeWindowSeconds: 60, MergeMaxMessages: 3}}
+	runtime, provider, store := parkTestRuntime(t, cfg)
+	runtime.proactiveRouteDebounce = time.Second
+	now := time.Now()
+	texts := []string{"第一条", "第二条", "第三条"}
+	var outcome string
+	for i, text := range texts {
+		event := enqueueParkTestEvent(t, store, debounceTestEvent(fmt.Sprintf("message-%d", i+1), fmt.Sprintf("user-%d", i+1), text, now))
+		_, _, _, outcome = runtime.prepareMessageEvent(context.Background(), event)
+	}
+	if outcome == "merged_into_backlog_turn" {
+		t.Fatal("第三条攒满了，应该当场评分")
+	}
+	if got := len(provider.requestsSnapshot()); got < 1 {
+		t.Fatal("攒满后应该已经评过分")
+	}
+	input := routerInput(provider, 0)
+	for _, want := range texts {
+		if !strings.Contains(input, want) {
+			t.Fatalf("评分输入缺 %q：%q", want, input)
+		}
+	}
+	runtime.routeParkMu.Lock()
+	left := len(runtime.routeParks)
+	runtime.routeParkMu.Unlock()
+	if left != 0 {
+		t.Fatalf("等待批应该清空，还剩 %d", left)
+	}
+}
+
+// @ 机器人的消息不等，进来时把等着的候选并进自己那一轮，等待批不再另评。
+func TestProactiveRouteParkTakenByDirectMessage(t *testing.T) {
+	runtime, provider, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, legacyQuietRoute)
+	runtime.proactiveRouteDebounce = 200 * time.Millisecond
+	now := time.Now()
+	first := enqueueParkTestEvent(t, store, debounceTestEvent("message-1", "user-1", "有人知道怎么配代理吗", now))
+	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), first); outcome != "merged_into_backlog_turn" {
+		t.Fatalf("outcome=%q", outcome)
+	}
+	direct := debounceTestEvent("message-2", "user-2", "看看这个", now)
+	direct.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, direct.Segments...)
+	direct = enqueueParkTestEvent(t, store, direct)
+	started := time.Now()
+	event, _, handled, _ := runtime.prepareMessageEvent(context.Background(), direct)
+	if !handled {
+		t.Fatal("@ 机器人应该直接进回复")
+	}
+	if elapsed := time.Since(started); elapsed > 150*time.Millisecond {
+		t.Fatalf("@ 消息不该等，实际 %s", elapsed)
+	}
+	if len(event.backlogTurn) != 1 || event.backlogTurn[0].Event.MessageID != "message-1" {
+		t.Fatalf("等着的候选应该并进这一轮：%+v", event.backlogTurn)
+	}
+	time.Sleep(400 * time.Millisecond)
+	for i := range provider.requestsSnapshot() {
+		if strings.Contains(routerInput(provider, i), "有人知道怎么配代理吗") && strings.Contains(routerInput(provider, i), "本批群消息") {
+			t.Fatal("已经并进 @ 那一轮，不该再单独评分")
+		}
+	}
+}
+
+func TestProactiveRouteWaitUsesOldestCandidate(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	debounce := 3 * time.Second
+	cases := []struct {
+		name   string
+		window time.Duration
+		oldest time.Time
+		want   time.Duration
+	}{
+		{"不设窗口按防抖", 0, now, debounce},
+		{"窗口短于防抖按防抖", 2 * time.Second, now, debounce},
+		{"窗口从最早那条算起", 15 * time.Second, now.Add(-5 * time.Second), 10 * time.Second},
+		{"窗口用完仍等一个防抖", 15 * time.Second, now.Add(-20 * time.Second), debounce},
+	}
+	for _, tc := range cases {
+		if got := proactiveRouteWait(debounce, tc.window, tc.oldest, now); got != tc.want {
+			t.Fatalf("%s: wait=%s, want %s", tc.name, got, tc.want)
+		}
+	}
+	merged := mergeProactiveRouteCandidates(
+		[]proactiveReplyCandidate{{Event: debounceTestEvent("m2", "u2", "b", now.Add(-3*time.Second))}},
+		[]proactiveReplyCandidate{{Event: debounceTestEvent("m1", "u1", "a", now.Add(-8*time.Second))}, {Event: debounceTestEvent("m2", "u2", "b", now.Add(-3*time.Second))}},
+	)
+	if len(merged) != 2 || merged[0].Event.MessageID != "m1" {
+		t.Fatalf("merged=%+v", merged)
+	}
+	if got := proactiveRouteCandidateTime(merged[0], now); !got.Equal(now.Add(-8 * time.Second)) {
+		t.Fatalf("oldest=%s", got)
+	}
+}
+
+func TestParticipationMergeSettingsClamp(t *testing.T) {
+	p := copyParticipation(&ParticipationPreferences{MergeWindowSeconds: 999, MergeMaxMessages: 99})
+	if p.MergeWindowSeconds != maxProactiveRouteMergeWindowSeconds || p.MergeMaxMessages != backlogMessageMaxItems {
+		t.Fatalf("clamp=%+v", p)
+	}
+	window, maxMessages := proactiveRouteMergeLimits(BotConfig{Participation: &ParticipationPreferences{MergeWindowSeconds: 15, MergeMaxMessages: 8}})
+	if window != 15*time.Second || maxMessages != 8 {
+		t.Fatalf("limits=%s/%d", window, maxMessages)
 	}
 }

@@ -9,12 +9,20 @@ export interface ParticipationPreferences {
   restraint: number;
   information: number;
   cooldown_seconds?: number;
+  /** 合并判断窗口（秒）；不填或 0 按 3 秒防抖。见 model/assistant/proactive_route_debounce.go。 */
+  merge_window_seconds?: number;
+  /** 合并判断最多攒几条；不填或 0 不限（积压包最多 20 条）。 */
+  merge_max_messages?: number;
   relevance_threshold?: number;
   substance_threshold?: number;
 }
 
 export const defaultParticipationCooldownSeconds = 30;
 export const defaultRuleTriggerChance = 30;
+// 镜像 model/assistant 的 defaultProactiveRouteDebounce、maxProactiveRouteMergeWindowSeconds、backlogMessageMaxItems。
+export const defaultMergeWindowSeconds = 3;
+export const maxMergeWindowSeconds = 120;
+export const maxMergeMessages = 20;
 export const defaultParticipationScoreThreshold = 60;
 
 // proactiveCriteriaMaxLength 镜像 model/assistant/router_criteria.go 的

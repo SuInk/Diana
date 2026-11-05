@@ -672,10 +672,13 @@ type Runtime struct {
 	privateClosingBySession map[string]*privateClosingState
 	// groupStopBySession 记录每个群最近一次被叫停到什么时候，见 group_stop.go。
 	// 只在内存里：重启后窗口作废，方向上同样偏「多答一句」。
-	groupStopMu           sync.Mutex
-	groupStopBySession    map[string]groupStopState
-	proactiveBatchMu      sync.Mutex
-	proactiveBatches      map[string]*proactiveReplyBatch
+	groupStopMu        sync.Mutex
+	groupStopBySession map[string]groupStopState
+	proactiveBatchMu   sync.Mutex
+	proactiveBatches   map[string]*proactiveReplyBatch
+	// routeParkMu 守着 routeParks：按会话等着做接话评分的候选，见 proactive_route_debounce.go。
+	routeParkMu           sync.Mutex
+	routeParks            map[string]*proactiveRoutePark
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
 	// proactiveRouteDebounce 是接话评分前的防抖窗口，见 proactive_route_debounce.go。
@@ -1200,6 +1203,7 @@ func (r *Runtime) Stop() error {
 		cancel()
 	}
 	r.clearProactiveReplyBatches()
+	r.clearProactiveRouteParks()
 	r.clearErrorNoticeBursts()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
 	err := r.channel.Close()
@@ -2229,46 +2233,34 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	if !handled {
 		considerProactive, proactiveSkipReason = r.proactiveReplyConsideration(event, text)
 	}
+	if handled {
+		// 等着做接话评分的那几条并进这一轮，不再另评一次、另回一遍。
+		if parked := r.takeProactiveRoutePark(event); len(parked) > 0 {
+			event.backlogTurn = mergeProactiveRouteCandidates(parked, event.backlogTurn)
+		}
+	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
 	if considerProactive {
 		proactiveCandidates = append(proactiveCandidates, proactiveReplyCandidate{Event: event, Text: text})
 	}
-	if !handled && considerProactive && r.deferProactiveRouteToNewer(ctx, event) {
-		r.holdProactiveRouteForNewer(event, text, time.Now())
-		event.routingReason = "群里几秒内又有新消息，这条交给后面那条一起做接话评分"
-		r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
-		return finishWithoutReply("merged_into_backlog_turn")
-	}
 	if !handled && len(proactiveCandidates) > 0 {
-		// Judge each candidate immediately. The semantic router already receives
-		// recent group context, so a debounce batch only adds latency and leaves the
-		// durable inbound outcome unresolved.
 		r.cancelProactiveReplyBatch(event)
-		routed, routedText, turn, allowed := r.routeProactiveReplyBatch(ctx, proactiveCandidates)
-		if allowed && routed.MessageID != event.MessageID {
-			// 路由挑中的是积压包里的消息，它进积压包时还没做过响应限制检查。
-			if routedRestriction, routedBlocked := r.activeReplySuppression(routed, time.Now()); routedBlocked {
-				r.recordReplySuppressionBlocked(routed, routedRestriction)
-				allowed = false
-				routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+		if considerProactive {
+			// 不当场评：登记进等待批，worker 立刻收工，见 proactive_route_debounce.go。
+			var parked bool
+			if parked, proactiveCandidates = r.parkProactiveRoute(event, proactiveCandidates); parked {
+				r.updateUserMemory(event, 0)
+				event.routingReason = "等待合并：和这段时间的群消息一起做一次接话评分，结论记在这一批最后那条消息上"
+				r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
+				return finishWithoutReply("merged_into_backlog_turn")
 			}
 		}
-		// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
-		// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
-		if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
-			allowed = false
-			routed.routingReason = triggeredDeliverySkipReason
-		}
+		routed, routedText, allowed := r.resolveProactiveRoute(ctx, event, proactiveCandidates)
 		if allowed {
 			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
 			markReplyStage(ctx, replyStageDecided, time.Now())
 			r.prefetchCrossGroupContext(event)
-			if event.burstSplit {
-				event.backlogTurn = event.burstTargets
-			} else if len(proactiveCandidates) > 1 {
-				event.backlogTurn = backlogRoutedTurn(proactiveCandidates, turn, event.MessageID)
-			}
 		} else {
 			event.routingReason = routed.routingReason
 		}
@@ -2308,6 +2300,34 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 	}
 	return event, text, true, successOutcome
+}
+
+// resolveProactiveRoute 跑一次接话评分并做放行后的检查。放行时返回的回复对象已经带好
+// 这一轮要一起回的消息（backlogTurn）。
+func (r *Runtime) resolveProactiveRoute(ctx context.Context, current MessageEvent, candidates []proactiveReplyCandidate) (MessageEvent, string, bool) {
+	routed, routedText, turn, allowed := r.routeProactiveReplyBatch(ctx, candidates)
+	if allowed && routed.MessageID != current.MessageID {
+		// 路由挑中的是积压包里的消息，它进积压包时还没做过响应限制检查。
+		if routedRestriction, routedBlocked := r.activeReplySuppression(routed, time.Now()); routedBlocked {
+			r.recordReplySuppressionBlocked(routed, routedRestriction)
+			allowed = false
+			routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+		}
+	}
+	// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
+	// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
+	if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
+		allowed = false
+		routed.routingReason = triggeredDeliverySkipReason
+	}
+	if allowed {
+		if routed.burstSplit {
+			routed.backlogTurn = routed.burstTargets
+		} else if len(candidates) > 1 {
+			routed.backlogTurn = backlogRoutedTurn(candidates, turn, routed.MessageID)
+		}
+	}
+	return routed, routedText, allowed
 }
 
 func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text string, outcome string) error {
