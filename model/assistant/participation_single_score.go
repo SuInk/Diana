@@ -216,6 +216,10 @@ func (p ParticipationPreferences) ratingLevels() (string, string) {
 	}
 	return r, c
 }
+
+// chatLevelThresholds 是四个评分档位的闲聊分门槛；off 从不放行，always 总是放行。
+var chatLevelThresholds = map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30}
+
 func ratingPasses(score float64, level string) bool {
 	if level == "off" {
 		return false
@@ -223,7 +227,7 @@ func ratingPasses(score float64, level string) bool {
 	if level == "always" {
 		return true
 	}
-	threshold, valid := map[string]float64{"minimal": 0.90, "low": 0.70, "medium": 0.50, "high": 0.30}[level]
+	threshold, valid := chatLevelThresholds[level]
 	if !valid {
 		return false
 	}

@@ -28,7 +28,7 @@ Use `bot_config` for Diana's settings and redacted diagnostics. Platform protoco
 - Example: `{"operation":"update","scope":"group","proactive_mode":"rules","rule_chance":10}`. In `rules` and `random`, `desire_level=off` sets `rule_chance` to 0.
 - Use `scope=bot` only when the owner explicitly wants to change the current bot's defaults. Group administrators can update only their current group after backend verification.
 - Submit only requested fields. Changing desire must preserve other settings and cooldown. Do not submit legacy `chat_in_enabled`, `chat_in_level` or `natural_interjection_enabled` fields.
-- Report success only after a successful save, using returned `participation`. On failure, report the error; never just promise to stay silent as if configuration changed.
+- Report success only after a successful save, using the returned `proactive` object. It lists only the values the current mode actually uses (semantic: `relevance_level`, `chat_level`, `chat_threshold`, `cooldown_seconds`; rules/random: `rule_chance`, `cooldown_seconds`). When asked how Diana decides to chime in, explain from that object; there are no other desire values or 0–100 thresholds to report. On failure, report the error; never just promise to stay silent as if configuration changed.
 
 ### Built-in Member Welcome
 

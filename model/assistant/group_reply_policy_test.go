@@ -188,14 +188,14 @@ func TestDianaOneBotGroupToolUpdatesReplyPolicyForBotOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		OperatorRole            string                    `json:"operator_role"`
-		Participation           *ParticipationPreferences `json:"participation"`
-		MinimumReplyMemberLevel int                       `json:"minimum_reply_member_level"`
+		OperatorRole            string         `json:"operator_role"`
+		Proactive               map[string]any `json:"proactive"`
+		MinimumReplyMemberLevel int            `json:"minimum_reply_member_level"`
 	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.OperatorRole != "bot_owner" || result.Participation == nil || result.MinimumReplyMemberLevel != 15 || result.Participation.replyLevel() != ChatInLevelHigh {
+	if result.OperatorRole != "bot_owner" || result.MinimumReplyMemberLevel != 15 || result.Proactive["chat_level"] != "high" {
 		t.Fatalf("result = %#v", result)
 	}
 	saved, ok := store.ConfigForGroup("", "123")
@@ -251,7 +251,7 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		Participation *ParticipationPreferences `json:"participation"`
+		Proactive map[string]any `json:"proactive"`
 	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
@@ -261,8 +261,8 @@ func TestDianaOneBotGroupToolSwitchesToCustomWhenChatInChanges(t *testing.T) {
 	if !ok || saved.ResponseMode != ResponseModeCustom || saved.ChatInLevel != ChatInLevelMax {
 		t.Fatalf("saved = %#v, ok = %v", saved, ok)
 	}
-	if result.Participation == nil || result.Participation.replyLevel() != ChatInLevelMax {
-		t.Fatalf("reported policy = %#v", result.Participation)
+	if result.Proactive["chat_level"] != "always" {
+		t.Fatalf("reported policy = %#v", result.Proactive)
 	}
 	effective := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123"})
 	if effective.ChatInLevel != ChatInLevelMax {
@@ -278,12 +278,12 @@ func TestBotConfigGetReportsEffectiveInheritedPreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result struct {
-		Participation ParticipationPreferences `json:"participation"`
+		Proactive map[string]any `json:"proactive"`
 	}
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Participation.Desire != 50 || result.Participation.CooldownSeconds != 120 {
+	if result.Proactive["chat_level"] != "medium" || result.Proactive["cooldown_seconds"] != float64(120) {
 		t.Fatalf("reported raw defaults instead of effective prefs: %s", raw)
 	}
 }
