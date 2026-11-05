@@ -608,34 +608,24 @@ func TestMusicRequestToolHonoursTheDurationCap(t *testing.T) {
 	}
 }
 
-// 关掉点歌开关，模型就看不到这个工具——链接解析那半边不受影响。
-func TestMusicRequestToolDisappearsWhenTurnedOff(t *testing.T) {
+// 「允许点歌」已并进插件开关：旧配置里残留的 false 不再藏掉点歌工具。
+func TestMusicRequestToolIgnoresLegacyRequestSongSetting(t *testing.T) {
 	server := musicTestServer(t, 213000, []byte(strings.Repeat("audio", 512)))
 	plugin := newMusicTestPlugin(server)
-	sharer := &recordingLocalMediaSharer{url: "http://127.0.0.1:18080/media/music-token"}
-	plugin.SetLocalMediaSharer(sharer)
 
 	settings := musicRequestSettings(server)
-	settings[musicSettingRequestSong] = false
+	settings["request_song_enabled"] = false
 	tools, err := plugin.AgentTools(settings)
 	if err != nil {
 		t.Fatalf("AgentTools() error = %v", err)
 	}
-	if len(tools) != 0 {
-		t.Fatalf("AgentTools() = %#v, want none while song requests are off", tools)
+	if len(tools) != 1 {
+		t.Fatalf("AgentTools() = %#v, want the song tool regardless of the legacy setting", tools)
 	}
-
-	req := musicTestRequest(server, PlatformOneBotV11)
-	req.Settings[musicSettingRequestSong] = false
-	resp, handleErr := plugin.Handle(context.Background(), req)
-	if handleErr != nil {
-		t.Fatalf("Handle() error = %v", handleErr)
-	}
-	if resp == nil || !strings.Contains(resp.Reply, "[CQ:record,") {
-		t.Fatalf("link sharing broke when song requests were turned off: %#v", resp)
-	}
-	if len(sharer.paths) == 1 {
-		t.Cleanup(func() { cleanupLocalMediaFile(sharer.paths[0]) })
+	for _, spec := range plugin.Manifest().Settings {
+		if spec.Key == "request_song_enabled" {
+			t.Fatalf("manifest still exposes request_song_enabled")
+		}
 	}
 }
 
