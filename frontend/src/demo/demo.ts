@@ -233,7 +233,7 @@ let plugins: PluginState[] = [
     manifest: {
       id: "official.repository-publish", name: "GitHub Issue 与 PR", version: "0.7.1", description: "搜索和管理 GitHub Issue；读取 Pull Request 的描述、改动文件和 patch，并在 PR 上发表评论或提交 review（只评论，不批准、不合并）。群成员可生成草稿，由具备仓库权限的授权用户文字确认后写入。", official: true, built_in: true, permissions: ["network:https", "github:issues:read", "github:issues:write", "audit:write", "llm:tool"],
       settings: [
-        { key: "github_star_enabled", label: "允许 GitHub Star", description: "默认关闭。开启后仅主人能提出 Star 草稿，回复「确认提交 GitHub」后才写入目标仓库配置的 GitHub 账号。Fine-grained Token 需要 Starring: write 权限。", type: "bool", default: false },
+        { key: "github_star_enabled", label: "允许 GitHub Star", description: "默认关闭。开启后仅主人能提出 Star 草稿，主人同意后才写入目标仓库配置的 GitHub 账号。Fine-grained Token 需要 Starring: write 权限。", type: "bool", default: false },
         { key: "github_auth_mode", label: "GitHub 认证方式", description: "可使用独立 Token 或当前系统的 gh 登录。", type: "select", default: "token", options: [{ value: "token", label: "独立 Token" }, { value: "gh", label: "GitHub CLI (gh)" }, { value: "auto", label: "自动选择" }] },
         { key: "github_token", label: "GitHub Issues Token", description: "在 Token 或自动模式下使用，保存后不回显。", type: "string", default: "", secret: true },
         { key: "allowed_repositories", label: "允许操作的仓库", description: "Issue 的读写操作白名单；精确填写 owner/repo，多个仓库用逗号或换行分隔。", type: "string", default: "" },

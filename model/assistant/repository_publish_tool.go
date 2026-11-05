@@ -351,9 +351,9 @@ func (t *dianaGitHubTool) Description() string {
 	repositories := repositoryPublishEventRepositories(t.event, isOwner, t.settings)
 	if isOwner {
 		if len(repositories) == 0 {
-			return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿后必须等用户回复「确认提交 GitHub」。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制，按用户给的 owner/repo 直接执行。"
+			return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿，主人在后续消息同意后再 approve。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制，按用户给的 owner/repo 直接执行。"
 		}
-		return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿后必须等用户回复「确认提交 GitHub」。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
+		return description + "\nStar 仅主人可用，且需开启 github_star_enabled；operation=star、repository=owner/repo 生成草稿，主人在后续消息同意后再 approve。使用该仓库当前配置的 GitHub 账号。\n你是主人：写操作不受仓库白名单限制。白名单仓库：" + strings.Join(repositories, "、") +
 			"，用户给简称时优先按它匹配，匹配不上照用户给的 owner/repo 执行。"
 	}
 	// 非主人的授权清单按发言者变，放进尾部（见 accessPrompt）。工具定义排在请求最前面，
@@ -418,7 +418,7 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 		"labels":               toolStringArrayParam("标签，空数组为清空。"),
 		"assignees":            toolStringArrayParam("负责人，空数组为清空。"),
 		"milestone":            toolStringParam("里程碑，null 为清空。"),
-		"user_confirmed_write": toolBoolParam("本条消息确实要求写入时传 true，写操作必填。完整展示草稿，有权限者在后续消息回复「确认提交 GitHub」后再 approve；多个草稿时须指定草稿ID，无需确认码。"),
+		"user_confirmed_write": toolBoolParam("本条消息确实要求写入时传 true，写操作必填。写操作先生成草稿，等有权限者在后续消息同意后再 approve，由你带上对应 draft_id，不要让用户回复草稿 ID 或固定句式。"),
 		"operation_id":         toolStringParam("幂等标识，重试时传相同值。"),
 		"draft_id":             toolStringParam("approve、cancel_draft 必填，可用 list_drafts 查。"),
 		"confirmation_token":   toolStringParam("审批返回的确认令牌，原样回传。"),
@@ -550,10 +550,29 @@ func (t *dianaGitHubTool) Run(ctx context.Context, input map[string]any) (string
 	if code, message := t.validateWriteAccess(repository, owner); code != "" {
 		return t.finish(ctx, result.fail(code, message))
 	}
-	// 写操作一律先落草稿。真正执行只发生在 approve：那里要求用户本人原样打出确认码，
-	// 而不是让代码去比对「用户是不是真的这么要求了」——那件事以前靠字段名、否定词和
-	// 清空词三组词表来判，属于用关键词判断语义意图。
+	// 写操作一律先落草稿给用户过目；有权限的人在后续消息里同意后才由 approve 执行。
 	return t.finish(ctx, t.createWriteDraft(ctx, repository, operation, input))
+}
+
+// draftScope 是草稿归属的会话范围：群聊按群，私聊按用户。
+func (t *dianaGitHubTool) draftScope() string {
+	if t.event.Kind != EventKindGroup {
+		return "private:" + strings.TrimSpace(t.event.UserID)
+	}
+	return strings.TrimSpace(t.event.GroupID)
+}
+
+// repositoryIssueBackgroundRun 判断当前是不是定时任务、事件触发这类后台运行。
+// 它们的原文可能带着旧指令，不能当成本轮用户的确认。
+func repositoryIssueBackgroundRun(ctx context.Context) bool {
+	if ctx.Value(scheduledQueryRunContextKey{}) == true || eventTriggerRunFromContext(ctx) {
+		return true
+	}
+	switch llmUsagePurposeFromContext(ctx) {
+	case PurposeScheduledQuery, PurposeEventTrigger, PurposeFeedReply:
+		return true
+	}
+	return false
 }
 
 func normalizeRepositoryIssueOperation(operation, state string) string {
@@ -1566,7 +1585,7 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 			result.Outcome = "draft_pending"
 			result.RequiresApproval = true
 			result.Draft = repositoryIssueDraftViewFromDraft(existing)
-			result.Message = "同标题的草稿已经在等待审批，没有重复创建。完整展示草稿，请有权限的用户回复「确认提交 GitHub」；多份草稿时指定草稿ID，无需确认码。"
+			result.Message = "同标题的草稿已经在等待审批，没有重复创建。完整展示草稿，等有权限的用户在后续消息同意后再 approve。"
 			return result
 		} else if kind == "created" {
 			result.OK = true
@@ -1668,7 +1687,7 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 	}
 	result.OK = true
 	result.Outcome = "draft_pending"
-	result.Message = "草稿已生成，尚未写入 GitHub。完整展示将要写入的内容，再请有权限的用户回复「确认提交 GitHub」；多个待审批草稿时回复「确认提交 GitHub 草稿ID」指定草稿，无需确认码。必须等后续用户消息确认后才能调用 approve。"
+	result.Message = "草稿已生成，尚未写入 GitHub。完整展示将要写入的内容，等有权限的用户在后续消息同意后再调用 approve（带上 draft_id），不要让用户回复草稿 ID 或固定句式。"
 	result.RequiresApproval = true
 	result.Draft = repositoryIssueDraftViewFromDraft(draft)
 	return result
@@ -1676,17 +1695,17 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 
 func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
-	// 后台任务的原文可能带着旧确认码，不能当成本轮用户的新确认。
-	if ctx.Value(scheduledQueryRunContextKey{}) == true || eventTriggerRunFromContext(ctx) {
-		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中回复「确认提交 GitHub」。")
+	// 后台任务的原文可能带着旧指令，不能当成本轮用户的新确认。
+	if repositoryIssueBackgroundRun(ctx) {
+		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中确认。")
 	}
-	switch llmUsagePurposeFromContext(ctx) {
-	case PurposeScheduledQuery, PurposeEventTrigger, PurposeFeedReply:
-		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中回复「确认提交 GitHub」。")
-	}
-	scope := strings.TrimSpace(t.event.GroupID)
-	if t.event.Kind != EventKindGroup {
-		scope = "private:" + strings.TrimSpace(t.event.UserID)
+	scope := t.draftScope()
+	if strings.TrimSpace(configToolString(input, "draft_id")) == "" {
+		// 不指定草稿时只在没有歧义的情况下替用户挑：多份待审批时由模型按用户说的是哪份
+		// 传 draft_id，而不是让用户去抄 ID。
+		if pending, err := t.plugin.listDrafts(ctx, scope, "pending"); err == nil && len(dropExpiredDrafts(pending)) > 1 {
+			return result.fail("draft_id_required", "有多份待审批草稿：按用户指的那份（或逐份）带 draft_id 调用 approve，不要让用户回复草稿 ID。")
+		}
 	}
 	draft, ok, err := t.plugin.findDraft(ctx, scope, configToolString(input, "draft_id"))
 	if err != nil {
@@ -1723,12 +1742,10 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 	}); code != "" {
 		return result.fail(code, message)
 	}
-	// 确认必须是用户本人原样打出运行时给的确认码。以前这里扫「同意/批准/提交」并用
-	// 「不同意/取消/拒绝」反向排除，那是拿关键词判断意图：措辞千变万化，判宽了会替
-	// 用户写 Issue，判严了又让人确认不了。确认码没有这个歧义。
-	if !t.confirmsDraft(ctx, scope, draft) {
-		return result.fail("explicit_approval_required", fmt.Sprintf(
-			"请在后续消息回复「确认提交 GitHub %s」确认这份草稿，无需确认码。", draft.ID))
+	// 审批人身份上面已经核过；这里只要求确认来自草稿之后的另一条消息，不再要求抄写
+	// 固定句式或草稿 ID。
+	if !t.confirmsDraft(draft) {
+		return result.fail("explicit_approval_required", "这份草稿刚在本条消息里生成，等有权限的人在后续消息里同意后再 approve。")
 	}
 	if code, message := names.check(ctx, func(repository string) (string, string) {
 		return t.validateWriteAccess(repository, owner)
@@ -1738,8 +1755,9 @@ func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any
 	return t.executeDraft(ctx, draft, input, "approve")
 }
 
-// confirmsDraft 只认用户完整指令，且不能在创建草稿的同一条消息里批准。
-func (t *dianaGitHubTool) confirmsDraft(ctx context.Context, scope string, draft repositoryIssueDraft) bool {
+// confirmsDraft 要求批准来自同一机器人、同一平台上创建草稿之后的另一条消息，
+// 免得模型在提出草稿的那一轮顺手把它批掉。
+func (t *dianaGitHubTool) confirmsDraft(draft repositoryIssueDraft) bool {
 	text := strings.TrimSpace(repositoryIssueCurrentRequestText(t.event))
 	if repositoryIssueRequestConfirms(text, draft) {
 		return true // 兼容已经发出的旧确认码。
@@ -1747,27 +1765,11 @@ func (t *dianaGitHubTool) confirmsDraft(ctx context.Context, scope string, draft
 	if draft.ProfileID != t.event.ProfileID || draft.Platform != t.event.Platform {
 		return false
 	}
+	if draft.RequestMessageID != "" && draft.RequestMessageID == t.event.MessageID {
+		return false
+	}
 	original := strings.TrimSpace(configToolString(draft.Input, "request_text"))
-	if original == "" || text == original || (draft.RequestMessageID != "" && draft.RequestMessageID == t.event.MessageID) {
-		return false
-	}
-	if text == "确认提交 GitHub "+draft.ID {
-		return true
-	}
-	if text != "确认提交 GitHub" || draft.GroupID != scope {
-		return false
-	}
-	pending, err := t.plugin.listDrafts(ctx, scope, "pending")
-	if err != nil {
-		return false
-	}
-	count := 0
-	for _, item := range dropExpiredDrafts(pending) {
-		if item.ProfileID == draft.ProfileID && item.Platform == draft.Platform {
-			count++
-		}
-	}
-	return count == 1
+	return original != "" && text != original
 }
 
 // executeDraft 执行草稿记录的写操作并把草稿标记为已用掉。
@@ -2041,7 +2043,7 @@ func (t *dianaGitHubTool) listDrafts(ctx context.Context, input map[string]any) 
 	}
 	result.OK = true
 	result.Outcome = "listed"
-	result.Message = fmt.Sprintf("共找到 %d 条 Issue 草稿。逐条完整展示标题和内容；待审批的草稿请有权限的人在后续消息回复「确认提交 GitHub 草稿ID」，只有一份待审批草稿时可省略草稿ID，无需确认码。确认前不要调用 approve。", len(drafts))
+	result.Message = fmt.Sprintf("共找到 %d 条 Issue 草稿。逐条完整展示标题和内容；有权限的人在后续消息同意后，按其所指带 draft_id 调用 approve，不要让用户回复草稿 ID。同意前不要调用 approve。", len(drafts))
 	if resolved > 0 {
 		result.Message += fmt.Sprintf(" 其中 %d 条是最近已处理的：status=created 的已经写进 GitHub（issue_number/issue_url 就是结果），"+
 			"status=cancelled 的已被用户取消；这两种都不要再为同一件事重新建草稿或要确认码。", resolved)
