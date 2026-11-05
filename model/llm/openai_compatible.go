@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -353,6 +354,17 @@ func (c *openAICompatibleClient) GenerateImage(ctx context.Context, req ImageGen
 	if background := openAIImageBackground(req.Model); background != "" {
 		payload["background"] = background
 	}
+	if format := strings.ToLower(strings.TrimSpace(req.OutputFormat)); format != "" {
+		payload["output_format"] = format
+		if format == ImageFormatGIF {
+			if req.FrameCount > 0 {
+				payload["frame_count"] = req.FrameCount
+			}
+			if req.FrameDurationMS > 0 {
+				payload["frame_duration_ms"] = req.FrameDurationMS
+			}
+		}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -501,13 +513,31 @@ func decodeOpenAIImagesResponse(reader io.Reader) ([]string, Usage, error) {
 			continue
 		}
 		if value := strings.TrimSpace(item.B64JSON); value != "" {
-			images = append(images, "data:image/png;base64,"+value)
+			images = append(images, "data:"+openAIBase64ImageMediaType(value)+";base64,"+value)
 		}
 	}
 	if len(images) == 0 {
 		return nil, Usage{}, errors.New("llm: image output is empty")
 	}
 	return images, usageFromPayload(payload.Usage), nil
+}
+
+// openAIBase64ImageMediaType 按解码后的文件头认格式。接口不在 data 里报格式，
+// 以前一律标成 image/png，指定了 output_format 的 GIF、JPEG、WebP 也被当成 PNG。
+// 认不出来时仍按 PNG，那是上游的默认格式。
+func openAIBase64ImageMediaType(encoded string) string {
+	head := encoded
+	if len(head) > 64 {
+		head = head[:64]
+	}
+	data, err := base64.StdEncoding.DecodeString(head[:len(head)/4*4])
+	if err != nil || len(data) == 0 {
+		return "image/png"
+	}
+	if detected := http.DetectContentType(data); strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+	return "image/png"
 }
 
 type imageEditInputData struct {

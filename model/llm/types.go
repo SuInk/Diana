@@ -228,7 +228,30 @@ type ImageGenerateRequest struct {
 	Prompt string `json:"prompt"`
 	Size   string `json:"size,omitempty"`
 	N      int    `json:"n,omitempty"`
+	// OutputFormat 是 png、jpeg、webp 或 gif，空值让上游用默认格式（PNG）。gif 只有
+	// gpt-image-2.6 起的模型支持，而且只能走 generations，不能改图。
+	OutputFormat string `json:"output_format,omitempty"`
+	// FrameCount、FrameDurationMS 只在 OutputFormat 为 gif 时有意义，零值用上游默认
+	//（9 帧、每帧 200ms）。
+	FrameCount      int `json:"frame_count,omitempty"`
+	FrameDurationMS int `json:"frame_duration_ms,omitempty"`
 }
+
+// 图片输出格式。
+const (
+	ImageFormatPNG  = "png"
+	ImageFormatJPEG = "jpeg"
+	ImageFormatWebP = "webp"
+	ImageFormatGIF  = "gif"
+)
+
+// GIF 帧参数的取值范围。官方指南写 2–64 帧，API 参考写 2–16 帧，按更严的来。
+const (
+	ImageGIFMinFrames          = 2
+	ImageGIFMaxFrames          = 16
+	ImageGIFMinFrameDurationMS = 20
+	ImageGIFMaxFrameDurationMS = 2000
+)
 
 type ImageEditRequest struct {
 	Model  string   `json:"model,omitempty"`
