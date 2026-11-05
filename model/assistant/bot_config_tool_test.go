@@ -22,12 +22,12 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 		t.Fatal(err)
 	}
 	var response struct {
-		Participation ParticipationPreferences `json:"participation"`
+		Proactive map[string]any `json:"proactive"`
 	}
 	if err := json.Unmarshal([]byte(raw), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.Participation.Desire != 0 {
+	if response.Proactive["relevance_level"] != "off" || response.Proactive["chat_level"] != "off" {
 		t.Fatal("returned success without disabling participation")
 	}
 	actual := r.effectiveConfigForEvent(event).participationPreferences()
@@ -52,11 +52,11 @@ func TestBotConfigOffOverridesInheritedParticipation(t *testing.T) {
 	if r.effectiveConfigForEvent(event).participationPreferences().Desire != 0 {
 		t.Fatal("restart lost off")
 	}
-	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "desire_level": "low", "substance_level": "high", "cooldown_seconds": 0}); err != nil {
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "desire_level": "low", "cooldown_seconds": 0}); err != nil {
 		t.Fatal(err)
 	}
 	actual = r.effectiveConfigForEvent(event).participationPreferences()
-	if actual.Desire != 25 || actual.CooldownSeconds != 0 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 80 {
+	if actual.Desire != 25 || actual.CooldownSeconds != 0 || actual.relevanceThreshold() != 80 || actual.substanceThreshold() != 90 {
 		t.Fatalf("partial update lost values: %+v", actual)
 	}
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "update", "relevance_level": "on", "chat_level": "off"}); err != nil {
@@ -191,5 +191,48 @@ func TestChangingMemberLevelPreservesParticipationInheritance(t *testing.T) {
 	saved, ok := store.ConfigForGroup("", "g")
 	if !ok || saved.Participation != nil || saved.ResponseMode != "" {
 		t.Fatal("member level update froze inherited participation")
+	}
+}
+
+// 群友问「现在怎么接话」时模型照着 bot_config 的返回念。旧版 desire/social/followup 和
+// 0–100 的相关度、实质内容门槛不参与现行判定，返回里出现就会被当成生效参数报出去。
+func TestBotConfigGetShowsOnlyLiveParticipationValues(t *testing.T) {
+	relevance, substance := 60, 80
+	r := NewRuntime(BotConfig{OwnerID: "owner", Participation: &ParticipationPreferences{Desire: 75, Social: 75, Followup: 75, CooldownSeconds: 13, RelevanceThreshold: &relevance, SubstanceThreshold: &substance, RelevanceLevel: "on", ChatLevel: "medium"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}
+	raw, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "get"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	diagnostics, err := r.readConfigDiagnostics(event, "bot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"get": raw, "diagnostics": diagnostics} {
+		for _, legacy := range []string{"desire", "social", "followup", "restraint", "relevance_threshold", "substance_threshold", "chat_in_threshold", "chat_in_chance", "proactive_reply_chance"} {
+			if strings.Contains(body, `"`+legacy+`"`) {
+				t.Fatalf("%s exposes legacy %s: %s", name, legacy, body)
+			}
+		}
+	}
+	var result struct {
+		Proactive map[string]any `json:"proactive"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	p := result.Proactive
+	if p["mode"] != "semantic" || p["relevance_level"] != "on" || p["chat_level"] != "medium" || p["chat_threshold"] != 0.5 || p["cooldown_seconds"] != float64(13) {
+		t.Fatalf("proactive view = %#v", p)
+	}
+}
+
+func TestBotConfigRejectsRemovedSubstanceLevel(t *testing.T) {
+	r := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r.SetGroupConfigStore(&testWritableGroupConfigStore{})
+	_, err := newDianaBotConfigTool(r, MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "owner"}).Run(context.Background(), map[string]any{"operation": "update", "substance_level": "high"})
+	if err == nil {
+		t.Fatal("substance_level was accepted although it no longer controls participation")
 	}
 }

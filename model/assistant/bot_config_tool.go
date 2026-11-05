@@ -141,7 +141,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 	minimum := group.MinimumReplyMemberLevel
 	var stagedKeys []string
 	if op == "update" {
-		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "substance_level": true, "chat_level": true, "proactive_mode": true, "rule_chance": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
+		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "chat_level": true, "proactive_mode": true, "rule_chance": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
 			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true, "fields": true, "list_fields": true}
 		for key := range input {
@@ -173,20 +173,6 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 				}
 			}
 			changed = true
-		}
-		for _, field := range []struct {
-			key    string
-			target **int
-		}{{"substance_level", &prefs.SubstanceThreshold}} {
-			if raw, ok := input[field.key]; ok {
-				level, _ := raw.(string)
-				score, valid := map[string]int{"low": 40, "medium": 60, "high": 80, "max": 90}[level]
-				if !valid {
-					return "", fmt.Errorf("无效门槛档位 %s", field.key)
-				}
-				*field.target = &score
-				changed = true
-			}
 		}
 		for _, field := range []struct {
 			key    string
@@ -434,7 +420,7 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 			fieldsView = editableFieldsView(PayloadFromConfig(effective), botFieldRejection)
 		}
 	}
-	data, err := json.Marshal(map[string]any{"ok": true, "pending_fields": pendingView, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "participation": prefs, "proactive": proactiveModeView(prefs), "welcome": secretmask.ChatConfigValue(welcomeSettingsFromConfig(effective)), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
+	data, err := json.Marshal(map[string]any{"ok": true, "pending_fields": pendingView, "plugin_settings": pluginView, "fields": fieldsView, "action": op, "section": section, "scope": scope, "bot_profile_id": base.ID, "group_id": groupID, "operator_role": role, "proactive": proactiveModeView(prefs), "welcome": secretmask.ChatConfigValue(welcomeSettingsFromConfig(effective)), "behavior": behaviorView, "group_settings": t.groupSettingsView(scope, group, effective), "minimum_reply_member_level": minimum, "message": message})
 	return string(data), err
 }
 
@@ -466,19 +452,28 @@ func (*dianaBotConfigTool) CanonicalOperation(input map[string]any) string {
 	return strings.TrimSpace(configToolString(input, "operation"))
 }
 
-// proactiveModeView 把接话触发模式单独摆出来：旧配置的 participation.trigger_mode 是空的，
-// 模型只看得到群设置里的触发词档位，会把它当成全部的「触发模式」。
+// proactiveModeView 是给模型看的接话设置：只列当前模式下真正参与判定的值。
+//
+// 不能把 ParticipationPreferences 原样交出去：里面还留着旧版的 desire/social/followup
+// 和 0–100 的 relevance/substance 门槛，现行判定不读它们，模型却会当成生效参数念给
+// 群友听。旧配置的 participation.trigger_mode 是空的，单独摆出模式也免得模型只看到
+// 群设置里的触发词档位，把它当成全部的「触发模式」。
 func proactiveModeView(p ParticipationPreferences) map[string]any {
 	if p.TriggerMode == triggerModeRandom {
 		return map[string]any{"mode": triggerModeRandom, "label": "普通（固定概率，省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
-			"note": "未被点名的消息不调用接话评分模型，每条都按 rule_chance 固定概率抽签，不看上下文；relevance_level、chat_level 和评分门槛不生效"}
+			"note": "未被点名的消息不调用接话评分模型，每条都按 rule_chance 固定概率抽签，不看上下文；relevance_level、chat_level 不生效"}
 	}
 	if p.TriggerMode == triggerModeRules {
 		return map[string]any{"mode": triggerModeRules, "label": "规则触发（省 Token）", "rule_chance": p.RuleChance, "cooldown_seconds": p.CooldownSeconds,
-			"note": "未被点名的消息不调用接话评分模型，以 rule_chance 为基础概率、按本地信号调整后抽签；relevance_level、chat_level 和评分门槛不生效"}
+			"note": "未被点名的消息不调用接话评分模型，以 rule_chance 为基础概率、按本地信号调整后抽签；relevance_level、chat_level 不生效"}
 	}
-	return map[string]any{"mode": "semantic", "label": "语义判断", "relevance_level": p.RelevanceLevel, "chat_level": p.ChatLevel, "cooldown_seconds": p.CooldownSeconds,
-		"note": "未被点名的候选消息先调用一次接话评分模型；改成 proactive_mode=rules 可省掉这次调用"}
+	relevance, chat := p.ratingLevels()
+	view := map[string]any{"mode": "semantic", "label": "语义判断", "relevance_level": relevance, "chat_level": chat, "cooldown_seconds": p.CooldownSeconds,
+		"note": "未被点名的消息调用一次接话评分模型，模型只给两项：是否在跟机器人说话（是/否）和闲聊分（0–1）。回应提问开着且判为在跟机器人说话就接；否则闲聊分达到 chat_level 的门槛才接，闲聊插话还要等冷却结束。没有其他门槛或欲望参数；改成 proactive_mode=rules 可省掉这次评分调用"}
+	if threshold, ok := chatLevelThresholds[chat]; ok {
+		view["chat_threshold"] = threshold
+	}
+	return view
 }
 
 func behaviorKeys(values []behaviorValue) []string {

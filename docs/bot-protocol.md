@@ -11,7 +11,7 @@
 
 群聊默认 `scope=group`，需要主人或实时核验的群主、管理员；`scope=bot` 只改消息所属机器人的默认设置，仅主人可用。不能在参数中指定其他机器人或其他群。
 
-开启本群内置欢迎使用 `{"operation":"update","welcome_enabled":true}`，关闭时传 `false`。欢迎词、模式、模板池和 LLM 冷却分别使用 `welcome_message`、`welcome_mode`、`welcome_templates`、`welcome_llm_cooldown_seconds`；模板最多 50 条、每条最多 200 字，冷却为 0–86400 秒，0 使用机器人或系统默认值。只更新指定字段，保存成功后返回实际生效的 `welcome` 和 `participation`。重复开启修改同一份配置，不创建任务。明确要求新增入群事件任务时才使用 `event_trigger`。
+开启本群内置欢迎使用 `{"operation":"update","welcome_enabled":true}`，关闭时传 `false`。欢迎词、模式、模板池和 LLM 冷却分别使用 `welcome_message`、`welcome_mode`、`welcome_templates`、`welcome_llm_cooldown_seconds`；模板最多 50 条、每条最多 200 字，冷却为 0–86400 秒，0 使用机器人或系统默认值。只更新指定字段，保存成功后返回实际生效的 `welcome` 和 `proactive`。重复开启修改同一份配置，不创建任务。明确要求新增入群事件任务时才使用 `event_trigger`。
 
 主人可用 `{"operation":"get","section":"all","scope":"bot"}` 查询完整脱敏诊断，也可选择 `bot`、`runtime`、`llm`、`skills`、`paths`。诊断部分只读且仅主人可用，范围可省略或传 `bot`；默认 `section=settings` 查询或修改实际生效的接话和欢迎设置。群管理员无法借诊断入口读取完整机器人配置、凭据状态或主机路径。
 
@@ -21,9 +21,9 @@
 
 闲聊分支按模型评分、档位门槛和冷却放行。评分 JSON 解析失败时自动重试一次，仍解析失败才按未放行处理。总是档位不覆盖停止或重复循环；`cooldown_seconds` 为 0–3600，0 只表示关闭闲聊冷却。旧 `extreme` 闲聊档位按 `high` 读取，旧相关度档位除 `off` 外都按 `on` 读取。
 
-回复触发分两层，被问「触发模式」时两层都要说。明确触发（@、引用回复机器人、命中群触发词）直接进入回复，`group_settings.trigger_word_mode`（`loose` / `smart` / `strict`，旧名 `trigger_mode` 仍可写入）只管触发词怎样算命中。主动接话由 `proactive_mode` 决定，有三种：`semantic` 对每条候选消息调用接话评分模型；`rules` 是规则触发（省 Token），不调用评分模型，冷却结束后以 `rule_chance`（0–100，默认 30）为基础概率、按群活跃度、问句、内容多少、是否接着跟机器人对话、两人对话和回复疲劳等本地信号调整后抽签；`random` 是普通模式，也不调用评分模型，每条按 `rule_chance` 固定概率抽签。这两种模式下 `relevance_level`、`chat_level` 和评分门槛在该模式下不生效。返回里的 `proactive` 对象给出实际生效的模式；旧配置的 `participation.trigger_mode` 为空，按 `semantic` 显示。规则和普通模式下 `desire_level=off` 把 `rule_chance` 归零，其他档位在概率为 0 时恢复默认 30。详见 [rule-trigger.md](rule-trigger.md)。
+回复触发分两层，被问「触发模式」时两层都要说。明确触发（@、引用回复机器人、命中群触发词）直接进入回复，`group_settings.trigger_word_mode`（`loose` / `smart` / `strict`，旧名 `trigger_mode` 仍可写入）只管触发词怎样算命中。主动接话由 `proactive_mode` 决定，有三种：`semantic` 对每条候选消息调用接话评分模型；`rules` 是规则触发（省 Token），不调用评分模型，冷却结束后以 `rule_chance`（0–100，默认 30）为基础概率、按群活跃度、问句、内容多少、是否接着跟机器人对话、两人对话和回复疲劳等本地信号调整后抽签；`random` 是普通模式，也不调用评分模型，每条按 `rule_chance` 固定概率抽签。这两种模式下 `relevance_level`、`chat_level` 和评分门槛在该模式下不生效。返回里的 `proactive` 对象给出实际生效的模式，只列该模式真正参与判定的值（语义判断：`relevance_level`、`chat_level`、`chat_threshold`、`cooldown_seconds`；规则和普通：`rule_chance`、`cooldown_seconds`），不再返回原始 `participation`，免得模型把旧版欲望值和 0–100 门槛当成生效参数报出去；旧配置的 `participation.trigger_mode` 为空，按 `semantic` 显示。规则和普通模式下 `desire_level=off` 把 `rule_chance` 归零，其他档位在概率为 0 时恢复默认 30。详见 [rule-trigger.md](rule-trigger.md)。
 
-旧调用的 `desire_level=off` 同时关闭两条接话分支。历史数值门槛仍保留在配置中，但不控制当前接话判定。修改欲望不会清空其他设置和冷却。更新时复制当前实际生效设置，只修改指定字段，保存成功后返回实际 `participation`；失败会明确报错，不以口头承诺代替配置操作。其他群和机器人默认设置保持各自范围。
+旧调用的 `desire_level=off` 同时关闭两条接话分支。历史数值门槛仍保留在配置中，但不控制当前接话判定。修改欲望不会清空其他设置和冷却。更新时复制当前实际生效设置，只修改指定字段，保存成功后返回实际生效的 `proactive`；失败会明确报错，不以口头承诺代替配置操作。其他群和机器人默认设置保持各自范围。
 
 ## 屏蔽某个人
 

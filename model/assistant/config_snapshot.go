@@ -102,46 +102,42 @@ type dianaBotConfigSnapshot struct {
 	ProactiveReplyRouterPromptChars int                  `json:"proactive_reply_router_prompt_chars,omitempty"`
 	ProactiveReplyPromptChars       int                  `json:"proactive_reply_prompt_chars,omitempty"`
 	// CustomizedPrompts 列出在界面上改过的内置提示词键，正文不外露。
-	CustomizedPrompts            []string                  `json:"customized_prompts,omitempty"`
-	MaxInputChars                int                       `json:"max_input_chars"`
-	MaxReplyChars                int                       `json:"max_reply_chars"`
-	DirectReplyChunkSize         int                       `json:"direct_reply_chunk_size"`
-	ForwardReplyEnabled          bool                      `json:"forward_reply_enabled"`
-	ForwardReplyThreshold        int                       `json:"forward_reply_threshold"`
-	RecallReplyMode              RecallReplyMode           `json:"recall_reply_mode"`
-	RecallReplyAutoDeleteEnabled bool                      `json:"recall_reply_auto_delete_enabled"`
-	RecallReplyTTLSeconds        int                       `json:"recall_reply_auto_delete_delay_seconds"`
-	OwnerLLMConfigEnabled        bool                      `json:"owner_llm_config_enabled"`
-	LLMIdentityMaskingEnabled    bool                      `json:"llm_identity_masking_enabled"`
-	LLMIdentityBodyAccounts      bool                      `json:"llm_identity_body_account_mapping_enabled"`
-	LLMSecretMaskingEnabled      bool                      `json:"llm_secret_masking_enabled"`
-	RecentContextLimit           int                       `json:"recent_context_limit"`
-	ContextSummaryThreshold      int                       `json:"context_summary_threshold"`
-	CrossGroupMemoryEnabled      bool                      `json:"cross_group_memory_enabled"`
-	CrossPlatformMemoryEnabled   bool                      `json:"cross_platform_memory_enabled"`
-	WorldBookEnabled             bool                      `json:"world_book_enabled"`
-	SelfNoteEnabled              bool                      `json:"self_note_enabled"`
-	OwnSpaceEnabled              bool                      `json:"own_space_enabled"`
-	MoodEnabled                  bool                      `json:"mood_enabled"`
-	PokeReplyEnabled             bool                      `json:"poke_reply_enabled"`
-	ExpressionLearningEnabled    bool                      `json:"expression_learning_enabled"`
-	StyleFilterEnabled           bool                      `json:"style_filter_enabled"`
-	DictSegmentEnabled           bool                      `json:"dict_segment_enabled"`
-	SemanticSearchEnabled        bool                      `json:"semantic_search_enabled"`
-	ProactiveReplyChance         float64                   `json:"proactive_reply_chance"`
-	ProactiveReplyThreshold      float64                   `json:"proactive_reply_threshold"`
-	RandomRepeat                 *RandomRepeatConfig       `json:"random_repeat"`
-	ChatInEnabled                bool                      `json:"chat_in_enabled"`
-	ChatInLevel                  string                    `json:"chat_in_level"`
-	Participation                *ParticipationPreferences `json:"participation"`
-	ChatInThreshold              float64                   `json:"chat_in_threshold"`
-	ChatInChance                 float64                   `json:"chat_in_chance"`
-	ChatInCooldownSeconds        int                       `json:"chat_in_cooldown_seconds"`
-	ReplyRules                   []ReplyRule               `json:"reply_rules,omitempty"`
-	MaxBotConcurrency            int                       `json:"max_bot_concurrency"`
-	RequestTimeoutMS             int64                     `json:"request_timeout_ms"`
-	ModelRequestTimeoutMS        int64                     `json:"model_request_timeout_ms"`
-	Agent                        dianaAgentConfigSnapshot  `json:"agent"`
+	CustomizedPrompts            []string        `json:"customized_prompts,omitempty"`
+	MaxInputChars                int             `json:"max_input_chars"`
+	MaxReplyChars                int             `json:"max_reply_chars"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size"`
+	ForwardReplyEnabled          bool            `json:"forward_reply_enabled"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode"`
+	RecallReplyAutoDeleteEnabled bool            `json:"recall_reply_auto_delete_enabled"`
+	RecallReplyTTLSeconds        int             `json:"recall_reply_auto_delete_delay_seconds"`
+	OwnerLLMConfigEnabled        bool            `json:"owner_llm_config_enabled"`
+	LLMIdentityMaskingEnabled    bool            `json:"llm_identity_masking_enabled"`
+	LLMIdentityBodyAccounts      bool            `json:"llm_identity_body_account_mapping_enabled"`
+	LLMSecretMaskingEnabled      bool            `json:"llm_secret_masking_enabled"`
+	RecentContextLimit           int             `json:"recent_context_limit"`
+	ContextSummaryThreshold      int             `json:"context_summary_threshold"`
+	CrossGroupMemoryEnabled      bool            `json:"cross_group_memory_enabled"`
+	CrossPlatformMemoryEnabled   bool            `json:"cross_platform_memory_enabled"`
+	WorldBookEnabled             bool            `json:"world_book_enabled"`
+	SelfNoteEnabled              bool            `json:"self_note_enabled"`
+	OwnSpaceEnabled              bool            `json:"own_space_enabled"`
+	MoodEnabled                  bool            `json:"mood_enabled"`
+	PokeReplyEnabled             bool            `json:"poke_reply_enabled"`
+	ExpressionLearningEnabled    bool            `json:"expression_learning_enabled"`
+	StyleFilterEnabled           bool            `json:"style_filter_enabled"`
+	DictSegmentEnabled           bool            `json:"dict_segment_enabled"`
+	SemanticSearchEnabled        bool            `json:"semantic_search_enabled"`
+	// ProactiveReplyThreshold 只用于主动回复生成后的发送前审核，不决定接不接话。
+	ProactiveReplyThreshold float64             `json:"proactive_reply_quality_threshold"`
+	RandomRepeat            *RandomRepeatConfig `json:"random_repeat"`
+	// Proactive 只列当前接话模式真正参与判定的值，见 proactiveModeView。
+	Proactive             map[string]any           `json:"proactive"`
+	ReplyRules            []ReplyRule              `json:"reply_rules,omitempty"`
+	MaxBotConcurrency     int                      `json:"max_bot_concurrency"`
+	RequestTimeoutMS      int64                    `json:"request_timeout_ms"`
+	ModelRequestTimeoutMS int64                    `json:"model_request_timeout_ms"`
+	Agent                 dianaAgentConfigSnapshot `json:"agent"`
 }
 
 type dianaAgentConfigSnapshot struct {
@@ -279,7 +275,6 @@ func dianaRuntimeFromStatus(status RuntimeStatus) dianaRuntimeSnapshot {
 }
 
 func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
-	chatIn := cfg.chatInSettings()
 	return dianaBotConfigSnapshot{
 		ID:                              cfg.ID,
 		Name:                            cfg.Name,
@@ -347,7 +342,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ReplySuppressionMaxMinutes:      replySuppressionMaxMinutes(cfg),
 		BotReplyLoopThreshold:           botReplyLoopThreshold(cfg),
 		ReplyRefusalThreshold:           replyRefusalThreshold(cfg),
-		ProactiveReplyRouterPromptChars: len([]rune(cfg.prompt(promptLegacyRouterSpec))),
+		ProactiveReplyRouterPromptChars: len([]rune(cfg.participationPreferences().promptWith(cfg.PromptOverrides))),
 		ProactiveReplyPromptChars:       len([]rune(cfg.prompt(promptProactiveReplySpec))),
 		CustomizedPrompts:               customizedPromptKeys(cfg.PromptOverrides),
 		MaxInputChars:                   cfg.MaxInputChars,
@@ -375,15 +370,9 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		StyleFilterEnabled:              styleFilterEnabled(cfg),
 		DictSegmentEnabled:              boolValue(cfg.DictSegmentEnabled, false),
 		SemanticSearchEnabled:           boolValue(cfg.SemanticSearchEnabled, false),
-		ProactiveReplyChance:            cfg.ProactiveReplyChance,
 		ProactiveReplyThreshold:         cfg.ProactiveReplyThreshold,
 		RandomRepeat:                    copyRandomRepeat(cfg.RandomRepeat),
-		ChatInEnabled:                   chatIn.Enabled,
-		ChatInLevel:                     string(chatIn.Level),
-		Participation:                   chatIn.Participation,
-		ChatInThreshold:                 chatIn.Threshold,
-		ChatInChance:                    chatIn.Chance,
-		ChatInCooldownSeconds:           int(chatIn.Cooldown / time.Second),
+		Proactive:                       proactiveModeView(cfg.participationPreferences()),
 		ReplyRules:                      append([]ReplyRule(nil), cfg.ReplyRules...),
 		MaxBotConcurrency:               cfg.MaxBotConcurrency,
 		RequestTimeoutMS:                cfg.RequestTimeout.Milliseconds(),
