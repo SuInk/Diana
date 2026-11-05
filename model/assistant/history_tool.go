@@ -266,9 +266,9 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"through_time": toolStringParam(`range/search 结束时间，格式同 from_time`),
 		"scope": toolEnumParam("all_groups 仅 search，需开启跨群记忆；私聊仅主人",
 			"current", "all_groups"),
-		"hours":    toolIntParam("只看最近多少小时", 1, 24*365),
+		"hours":    toolIntParam("只看最近多少小时；search 不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
 		"days":     toolIntParam("只看最近多少天", 1, 365),
-		"all_time": toolBoolParam("search：查全部历史，忽略 hours/days"),
+		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
 		"limit":    toolIntParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
 	})
 }
@@ -569,7 +569,11 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	sender := strings.Join(senders, ",")
 	from, through := t.resolveWindow(input)
-	if order == "oldest" && !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
+	// 没给时间范围的检索查全部历史。原来 newest/relevance 默认只看 24 小时，
+	// 问「前几天谁说过 X」时模型常不带 days，结果 0 条就回「没找到」
+	// （生产 2026-11-05：「心海」7 天内 3 条、24 小时内 0 条）。高频词查全部
+	// 历史会超时，下面的超时兜底会缩回结束时间前 24 小时。
+	if !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
 		from = 0
 	}
 	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), query+"\x00"+sender, scope, order), From: from, Through: through}

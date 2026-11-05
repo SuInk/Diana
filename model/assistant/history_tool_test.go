@@ -730,6 +730,35 @@ func (s *slowThenFastHistoryStore) SearchMessageEvents(ctx context.Context, quer
 	return s.capturingHistorySearchStore.SearchMessageEvents(ctx, query)
 }
 
+// 没给时间的检索查全部历史：原来默认 24 小时，几天前的消息一律 0 条，模型就回「没找到」。
+// 只有显式给了 hours/days/from_time 才收窄。
+func TestHistorySearchWithoutTimeSearchesAllHistory(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, Time: 1_000_000, GroupID: "g", UserID: "u"}
+	for _, tc := range []struct {
+		name  string
+		input map[string]any
+		from  int64
+	}{
+		{"newest", map[string]any{"operation": "search", "query": "心海"}, 0},
+		{"relevance", map[string]any{"operation": "search", "query": "心海", "order": "relevance"}, 0},
+		{"sender only", map[string]any{"operation": "search", "sender_user_id": "u"}, 0},
+		{"explicit days", map[string]any{"operation": "search", "query": "心海", "days": 3}, 1_000_000 - 3*86400},
+		{"explicit hours", map[string]any{"operation": "search", "query": "心海", "hours": 2}, 1_000_000 - 2*3600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			store := &capturingHistorySearchStore{}
+			runtime.SetMessageHistoryStore(store)
+			if _, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), tc.input); err != nil {
+				t.Fatal(err)
+			}
+			if store.query.FromTime != tc.from {
+				t.Fatalf("from = %d, want %d", store.query.FromTime, tc.from)
+			}
+		})
+	}
+}
+
 // 「Diana」这种高频词查 7 天会超时；缩到最近一天再查一次，而不是直接报错。
 func TestHistorySearchNarrowsWindowAfterTimeout(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
