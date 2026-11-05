@@ -34,6 +34,10 @@ type CredentialCheck struct {
 	// MembershipExpired 表示登录有效但会员已过期。只在服务端内部用：音乐连接测试
 	// 靠它把「测试曲放不了」归因到会员，而不是笼统地说版权限制。
 	MembershipExpired bool `json:"-"`
+	// Member 表示账号接口确认是有效会员；MembershipEnd 是会员到期日（YYYY-MM-DD），
+	// 问不到时为空。两者只给音乐插件排曲库优先级和写失败原因用。
+	Member        bool   `json:"-"`
+	MembershipEnd string `json:"-"`
 }
 
 const credentialCheckTimeout = 15 * time.Second

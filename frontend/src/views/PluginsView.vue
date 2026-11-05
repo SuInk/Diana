@@ -343,14 +343,46 @@
           <h3>曲库与会员能力</h3>
           <p>不配置凭据也能尝试公开试听；会员歌曲需要对应平台登录态。凭据只写入服务器，页面不会回显原文。</p>
         </div>
+        <div class="music-priority">
+          <div class="music-priority-row">
+            <span class="music-priority-label">曲库优先级</span>
+            <div class="segmented" role="radiogroup" aria-label="曲库优先级">
+              <button type="button" role="radio" :aria-checked="!musicManualOrder" :class="{ active: !musicManualOrder }" @click="setMusicPriorityMode('auto')">自动</button>
+              <button type="button" role="radio" :aria-checked="musicManualOrder" :class="{ active: musicManualOrder }" @click="setMusicPriorityMode('manual')">手动</button>
+            </div>
+          </div>
+          <p class="hint">{{ musicManualOrder ? "排在前面的先问，一家放不出来再问下一家。点卡片上的「设为首选」调整顺序。" : "按实测登录态排序：会员有效的先问，登录但不是会员或会员已到期的其次，没填或失效的最后。登录态每 30 分钟重新确认一次。" }}</p>
+        </div>
         <div class="music-platform-grid">
-          <section v-for="platform in musicPlatforms" :key="platform.key" class="music-platform-card">
+          <section v-for="(platform, index) in orderedMusicPlatforms" :key="platform.key" class="music-platform-card" :class="{ 'is-disabled': !musicSourceEnabled(platform.key) }">
             <div class="music-platform-head">
               <div>
                 <h4>{{ platform.label }}</h4>
-                <span class="hint">{{ musicPlatformSummary(platform.key) }}</span>
+                <span class="hint">{{ musicSourceEnabled(platform.key) ? musicPlatformSummary(platform.key) : "已停用，点歌和链接解析都不会问这家" }}</span>
               </div>
+              <label class="switch" :title="musicSourceToggleTitle(platform.key)">
+                <input
+                  type="checkbox"
+                  :aria-label="`启用${platform.label}`"
+                  :checked="musicSourceEnabled(platform.key)"
+                  :disabled="musicSourceEnabled(platform.key) && musicEnabledCount <= 1"
+                  @change="toggleMusicSource(platform.key, $event)"
+                />
+                <span class="track" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="music-platform-badges">
+              <span v-if="musicManualOrder && musicSourceEnabled(platform.key)" class="badge">第 {{ musicEnabledRank(platform.key) }} 顺位</span>
               <span class="badge" :class="musicStatusClass(platform.key)">{{ musicStatusLabel(platform.key) }}</span>
+              <button
+                v-if="musicManualOrder && musicSourceEnabled(platform.key) && index > 0"
+                class="btn small ghost"
+                type="button"
+                @click="settingsForm.preferred_source = platform.key"
+              >
+                <ArrowUp :size="13" aria-hidden="true" />
+                设为首选
+              </button>
             </div>
             <p class="music-platform-guide">{{ platform.guide }}</p>
             <PluginSettingField
@@ -372,7 +404,7 @@
         </div>
         <button class="btn music-test-button" type="button" :disabled="testingMusic" @click="testMusicSettings">
           <RefreshCw :size="15" :class="{ spin: testingMusic }" aria-hidden="true" />
-          {{ testingMusic ? "正在测试三家曲库" : "测试登录、连接与播放能力" }}
+          {{ testingMusic ? "正在测试各家曲库" : "测试登录、连接与播放能力" }}
         </button>
         <div class="plugin-settings-section-head plugin-settings-subsection">
           <h3>播放设置</h3>
@@ -820,7 +852,7 @@ async function changeExtensionTab(value:ExtensionTab) {
   if (settingsTarget.value) { await closeSettings(); if (settingsTarget.value) return; }
   extensionTab.value=value;
 }
-import { ArrowRight, ChevronDown, Download, LayoutGrid, Pencil, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
+import { ArrowRight, ArrowUp, ChevronDown, Download, LayoutGrid, Pencil, RefreshCw, Rows3, Search, SlidersHorizontal } from "@lucide/vue";
 import {
   installPlugin,
   installRepoPlugin,
@@ -986,7 +1018,54 @@ const musicPlatforms = [
   { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可选。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
-const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCredentialKeys.has(spec.key)));
+// 启用和优先级放在曲库卡片上，不再在下方「播放设置」里重复一份。
+const musicCardOwnedKeys = new Set([...musicCredentialKeys, "enabled_sources", "preferred_source"]);
+const musicGeneralSpecs = computed(() => settingsSpecs.value.filter((spec) => !musicCardOwnedKeys.has(spec.key)));
+const musicManualOrder = computed(() => String(settingsForm.value.preferred_source ?? "") !== "");
+const musicEnabledSources = computed<string[]>(() => {
+  const raw = settingsForm.value.enabled_sources;
+  return Array.isArray(raw) ? raw.map(String) : musicPlatforms.map((item) => item.key);
+});
+const musicEnabledCount = computed(() => musicPlatforms.filter((item) => musicEnabledSources.value.includes(item.key)).length);
+// 手动模式下首选那家排最前，其余保持登记顺序；自动模式按登记顺序展示。
+const orderedMusicPlatforms = computed(() => {
+  const preferred = String(settingsForm.value.preferred_source ?? "");
+  if (!preferred) return [...musicPlatforms];
+  return [...musicPlatforms].sort((a, b) => Number(b.key === preferred) - Number(a.key === preferred));
+});
+
+function musicSourceEnabled(source: string): boolean {
+  return musicEnabledSources.value.includes(source);
+}
+
+function musicEnabledRank(source: string): number {
+  return orderedMusicPlatforms.value.filter((item) => musicSourceEnabled(item.key)).findIndex((item) => item.key === source) + 1;
+}
+
+function musicSourceToggleTitle(source: string): string {
+  if (musicSourceEnabled(source) && musicEnabledCount.value <= 1) return "至少保留一家曲库；不想点歌请关闭下方「允许点歌」";
+  return musicSourceEnabled(source) ? "点歌和链接解析会问这家" : "已停用";
+}
+
+function toggleMusicSource(source: string, event: Event): void {
+  const enabled = (event.target as HTMLInputElement).checked;
+  const next = new Set(musicEnabledSources.value);
+  if (enabled) next.add(source);
+  else next.delete(source);
+  // 保持登记顺序，和默认值比较时才不会因为顺序不同被当成改动。
+  settingsForm.value.enabled_sources = musicPlatforms.map((item) => item.key).filter((key) => next.has(key));
+  // 首选那家被停用就退回自动，免得手动顺序指向一家不会被问的曲库。
+  if (!enabled && settingsForm.value.preferred_source === source) settingsForm.value.preferred_source = "";
+}
+
+function setMusicPriorityMode(mode: "auto" | "manual"): void {
+  if (mode === "auto") {
+    settingsForm.value.preferred_source = "";
+    return;
+  }
+  if (musicManualOrder.value) return;
+  settingsForm.value.preferred_source = musicPlatforms.find((item) => musicSourceEnabled(item.key))?.key ?? musicPlatforms[0].key;
+}
 
 function musicSpecsFor(source: string): PluginSettingSpec[] {
   return settingsSpecs.value.filter((spec) => spec.key === `${source}_api_base` || spec.key === `${source}_cookie`);

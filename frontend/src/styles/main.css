@@ -4541,7 +4541,7 @@ a.nav-action {
 
 .music-platform-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
@@ -4568,10 +4568,45 @@ a.nav-action {
   font-size: 14px;
 }
 
-.music-platform-head .badge {
-  max-width: 58%;
+.music-platform-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.music-platform-badges .badge {
   white-space: normal;
-  text-align: right;
+}
+
+.music-platform-badges .btn {
+  margin-left: auto;
+}
+
+.music-platform-card.is-disabled > :not(.music-platform-head) {
+  opacity: 0.55;
+}
+
+.music-priority {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.music-priority-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.music-priority-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.music-priority .hint {
+  margin: 0;
 }
 
 .music-platform-guide,
@@ -4719,9 +4754,6 @@ a.nav-action {
     grid-template-columns: 1fr;
   }
 
-  .music-platform-head .badge {
-    max-width: 65%;
-  }
 }
 
 .repository-watch-manager {
