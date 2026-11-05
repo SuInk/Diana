@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
-import { defaultRuleTriggerChance, defaultParticipationCooldownSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
+import { defaultMergeWindowSeconds, defaultRuleTriggerChance, defaultParticipationCooldownSeconds, maxMergeMessages, maxMergeWindowSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
 
 // criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
 // 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
@@ -65,6 +65,17 @@ function updateCooldown(event: Event) {
   const next = Math.max(0, Math.min(3600, Math.round(input.valueAsNumber)));
   input.value = String(next);
   emit("update:modelValue", { ...value.value, cooldown_seconds: next });
+}
+// 合并判断：0 表示默认，界面上显示成默认值，填回默认值就存 0（不写进配置）。
+const mergeWindowSeconds = computed(() => value.value.merge_window_seconds || defaultMergeWindowSeconds);
+const mergeMaxMessages = computed(() => value.value.merge_max_messages || maxMergeMessages);
+function updateMerge(key: "merge_window_seconds" | "merge_max_messages", event: Event) {
+  const input = event.target as HTMLInputElement;
+  if (input.value === "" || !Number.isFinite(input.valueAsNumber)) return;
+  const [low, high, fallback] = key === "merge_window_seconds" ? [1, maxMergeWindowSeconds, defaultMergeWindowSeconds] : [1, maxMergeMessages, maxMergeMessages];
+  const next = Math.max(low, Math.min(high, Math.round(input.valueAsNumber)));
+  input.value = String(next);
+  emit("update:modelValue", { ...value.value, [key]: next === fallback ? 0 : next });
 }
 function updateRuleChance(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -145,6 +156,23 @@ function updateCriteria(event: Event) {
             <span :id="id + '-cooldown-help'" class="hint">主动闲聊的最短间隔，默认 30 秒；填 0 不限制。</span>
           </div>
         </section>
+        <section v-if="!rules" class="participation-setting merge-setting">
+          <div class="setting-copy">
+            <label :for="id + '-merge-window'">合并判断</label>
+            <p class="setting-help">没人叫机器人的消息先等一会儿，期间的群消息合成一次接话评分，逐条判断回哪条，省评分调用。@、引用、点名和私聊不等。</p>
+          </div>
+          <div class="merge-fields">
+            <div class="field">
+              <label :for="id + '-merge-window'">最长等待（秒）</label>
+              <input :id="id + '-merge-window'" class="input" type="number" inputmode="numeric" min="1" :max="maxMergeWindowSeconds" step="1" aria-label="合并判断最长等待秒数" :value="mergeWindowSeconds" @input="updateMerge('merge_window_seconds', $event)" @blur="($event.target as HTMLInputElement).value = String(mergeWindowSeconds)" />
+            </div>
+            <div class="field">
+              <label :for="id + '-merge-max'">最多攒（条）</label>
+              <input :id="id + '-merge-max'" class="input" type="number" inputmode="numeric" min="1" :max="maxMergeMessages" step="1" aria-label="合并判断最多条数" :value="mergeMaxMessages" @input="updateMerge('merge_max_messages', $event)" @blur="($event.target as HTMLInputElement).value = String(mergeMaxMessages)" />
+            </div>
+          </div>
+          <span class="hint">从这批最早那条算起最多等这么久，攒满条数立即判断。默认 3 秒、{{ maxMergeMessages }} 条；调长更省，没人叫时的接话会相应变慢。</span>
+        </section>
         <section v-if="!rules && (!criteriaOptional || criteria?.trim())" class="participation-setting criteria-setting">
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
@@ -187,6 +215,9 @@ function updateCriteria(event: Event) {
 .relevance-switch { justify-self: start; }
 .setting-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .cooldown-setting { margin-top: 8px; }
+.merge-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 260px; max-width: 100%; }
+.merge-fields .field { min-width: 0; }
+.merge-setting > .hint { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
 /* 判据是整段文字，挤在 260px 那一列里只剩十来个字的可视宽度。 */
 .criteria-setting { grid-template-columns: minmax(0, 1fr); }
 .criteria-setting > .textarea { width: 100%; min-width: 0; resize: vertical; }
@@ -201,5 +232,6 @@ function updateCriteria(event: Event) {
 @container (max-width: 520px) {
   .participation-setting, .configuration-source { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .participation-setting > .app-select, .configuration-source > .app-select { width: 100%; }
+  .merge-fields { width: 100%; }
 }
 </style>
