@@ -151,6 +151,13 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 	return messageIDs, nil
 }
 
+// ReplyPlainText 原样回复这条入站消息所在的会话（不做提及、表情等加工），
+// 给登录回执这类拦截在对话逻辑之前的系统消息用。走的是普通回复通道，所以
+// QQ 官方机器人会带上这条消息的 msg_id 当被动回复发，不需要主动消息额度。
+func (r *Runtime) ReplyPlainText(ctx context.Context, event MessageEvent, text string) error {
+	return r.sendOutgoing(ctx, event, OutgoingMessage{Text: text, LiteralText: true})
+}
+
 func (r *Runtime) sendOutgoing(ctx context.Context, event MessageEvent, msg OutgoingMessage) error {
 	_, err := r.sendOutgoingWithResult(ctx, event, msg)
 	return err

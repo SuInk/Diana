@@ -40,7 +40,9 @@ var ownerPairingCodePattern = regexp.MustCompile(`^(?:登录(?:控制台)?\s*)?(
 type OwnerLoginRuntime interface {
 	ProfileConfig(profileID string) assistant.BotConfig
 	ProfileConfigs() []assistant.BotConfig
-	CallPlatformAPIForProfile(ctx context.Context, profileID, action string, params map[string]any) (map[string]any, error)
+	// ReplyPlainText 回复主人发来的那条私聊。回执一律跟着这条消息回，不按主人
+	// 账号主动发：QQ 官方机器人的主人是 openid，且只能被动回复。
+	ReplyPlainText(ctx context.Context, event assistant.MessageEvent, text string) error
 }
 
 type ownerPairing struct {
@@ -113,7 +115,7 @@ func (h *OwnerLoginHandler) availability() error {
 }
 
 // ownerLoginEligible 判断这台机器人能不能接受主人快速登录：启用、开了快速登录、
-// 配了主人账号，且平台能把回执投递给主人。
+// 配了主人账号。回执是回复主人那条私聊，不依赖主人账号的格式，所以各平台都能用。
 func ownerLoginEligible(cfg assistant.BotConfig) error {
 	if !cfg.Enabled {
 		return errors.New("机器人未启用")
@@ -123,11 +125,6 @@ func ownerLoginEligible(cfg assistant.BotConfig) error {
 	}
 	if strings.TrimSpace(cfg.OwnerID) == "" {
 		return errors.New("未配置主人账号")
-	}
-	if cfg.Platform != assistant.PlatformTelegram || assistant.TelegramOwnerUsername(cfg.OwnerID) == "" {
-		if _, _, err := ownerMessageDelivery(cfg, ""); err != nil {
-			return err
-		}
 	}
 	return nil
 }
@@ -326,7 +323,6 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	if ownerLoginEligible(cfg) != nil || !cfg.IsOwnerEvent(event) {
 		return false
 	}
-	cfg.OwnerID = cfg.OwnerIDForEvent(event)
 	match := ownerPairingCodePattern.FindStringSubmatch(strings.TrimSpace(text))
 	if len(match) != 2 {
 		return false
@@ -350,24 +346,19 @@ func (h *OwnerLoginHandler) ConsumePrivateMessage(ctx context.Context, event ass
 	// 回执不是确认环节，主人不用做任何动作。它存在只是为了别让这条消息被静默
 	// 吞掉——万一验证码是被诱导转发的，主人当场就能发现并去踢掉会话。
 	receipt := fmt.Sprintf("已确认登录\n来源 IP：%s\n设备：%s\n\n浏览器没有自动跳转的话，把这个验证码填进登录页即可。\n若非本人操作，请立刻在控制台踢掉该会话并修改密码。", requestIP, deviceName)
-	if err := h.notifyOwner(ctx, cfg, receipt); err != nil {
+	if err := h.notifyOwner(ctx, event, receipt); err != nil {
 		recordOperation(ctx, h.logs, "auth_owner_pair_notify", "登录回执发送失败："+err.Error(), event.UserID, nil)
 	}
 	recordOperation(ctx, h.logs, "auth_owner_pair_approve", "主人已通过私聊确认控制台登录", event.UserID, nil)
 	return true
 }
 
-// notifyOwner 只在主人自己先私聊过来之后才会被调用，因此不存在匿名请求触发
-// 消息推送的路径。
-func (h *OwnerLoginHandler) notifyOwner(ctx context.Context, cfg assistant.BotConfig, message string) error {
-	action, params, err := ownerMessageDelivery(cfg, message)
-	if err != nil {
-		return err
-	}
+// notifyOwner 回复主人刚发来的那条私聊。只在主人自己先私聊过来之后才会被调用，
+// 因此不存在匿名请求触发消息推送的路径。
+func (h *OwnerLoginHandler) notifyOwner(ctx context.Context, event assistant.MessageEvent, message string) error {
 	sendCtx, cancel := context.WithTimeout(ctx, ownerMessageSendTimeout)
 	defer cancel()
-	_, err = h.runtime.CallPlatformAPIForProfile(sendCtx, cfg.ID, action, params)
-	return err
+	return h.runtime.ReplyPlainText(sendCtx, event, message)
 }
 
 func (h *OwnerLoginHandler) cleanupLocked(now time.Time) {
@@ -424,30 +415,4 @@ func hashOwnerCode(code string) string {
 func hashOwnerPairingToken(token string) string {
 	sum := sha256.Sum256([]byte("owner-login-token:" + token))
 	return hex.EncodeToString(sum[:])
-}
-
-// ownerMessageDelivery 把一条发给主人的私聊消息翻译成当前平台的 API 调用。
-// 传空消息可用于探测当前配置是否具备投递能力。
-func ownerMessageDelivery(cfg assistant.BotConfig, message string) (string, map[string]any, error) {
-	ownerID := strings.TrimSpace(cfg.OwnerID)
-	parsedOwnerID, err := strconv.ParseInt(ownerID, 10, 64)
-	if err != nil {
-		return "", nil, errors.New("管理员账号格式不正确")
-	}
-	platform := assistant.NormalizePlatformID(cfg.Platform)
-	if platform == assistant.PlatformTelegram {
-		return "sendMessage", map[string]any{
-			"chat_id": parsedOwnerID,
-			"text":    message,
-		}, nil
-	}
-	if assistant.IsOneBotPlatform(platform) {
-		return "send_private_msg", map[string]any{
-			"user_id": parsedOwnerID,
-			"message": []map[string]any{
-				{"type": "text", "data": map[string]string{"text": message}},
-			},
-		}, nil
-	}
-	return "", nil, fmt.Errorf("当前平台 %q 不支持向主人投递消息", platform)
 }

@@ -294,9 +294,8 @@ func (h *TrustedLoginHandler) ConsumePrivateMessage(ctx context.Context, event a
 	}
 	found.identity = &trustedIdentity{ProfileID: cfg.ID, Platform: string(cfg.Platform), UserID: event.UserID, ConfirmedAt: now.UTC()}
 	h.mu.Unlock()
-	cfg.OwnerID = cfg.OwnerIDForEvent(event)
 	receipt := fmt.Sprintf("已确认登录 %s（%s）\n请返回发起登录的页面。此确认仅用于该应用，不会登录 Diana 控制台。\n若非本人操作，请联系该应用管理员撤销会话。", a.Name, a.ID)
-	if err := h.owner.notifyOwner(ctx, cfg, receipt); err != nil {
+	if err := h.owner.notifyOwner(ctx, event, receipt); err != nil {
 		recordOperation(ctx, h.owner.logs, "auth_app_pair_notify", "受信应用登录回执发送失败", event.UserID, nil)
 	}
 	recordOperation(ctx, h.owner.logs, "auth_app_pair_approve", "已确认受信应用登录："+a.ID, event.UserID, nil)

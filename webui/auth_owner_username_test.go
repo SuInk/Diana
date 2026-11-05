@@ -21,8 +21,8 @@ func TestTelegramUsernameOwnerPrivateLogin(t *testing.T) {
 	if !handler.ConsumePrivateMessage(context.Background(), event, code) {
 		t.Fatal("username owner could not approve login")
 	}
-	if len(runtime.calls) != 1 || runtime.calls[0].action != "sendMessage" || runtime.calls[0].params["chat_id"] != int64(70001) {
-		t.Fatalf("receipt did not use verified numeric ID: %#v", runtime.calls)
+	if len(runtime.calls) != 1 || runtime.calls[0].params["user_id"] != "70001" {
+		t.Fatalf("receipt did not reply to the owner message: %#v", runtime.calls)
 	}
 	if runtime.cfg.OwnerID != "@Owneruser" {
 		t.Fatal("login rewrote persisted owner")
