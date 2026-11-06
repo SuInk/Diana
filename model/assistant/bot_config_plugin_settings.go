@@ -15,7 +15,7 @@ import (
 func pluginSettingsSchema() map[string]any {
 	return map[string]any{
 		"type":        "object",
-		"description": "插件详细设置 {插件ID:{键:值}}，null 恢复继承；先 get 带 plugin 查键，凭据通过 console_config 暂存确认。",
+		"description": "插件详细设置 {插件ID:{键:值}}，插件 ID 也可写插件名称或它提供的工具名；null 恢复继承；先 get 带 plugin 查键，凭据通过 console_config 暂存确认。",
 		"additionalProperties": map[string]any{
 			"type":                 "object",
 			"additionalProperties": map[string]any{},
@@ -29,7 +29,7 @@ func pluginSettingEditable(spec PluginSettingSpec, scope string, owner bool) err
 		return fmt.Errorf("设置 %q 是凭据，请用 console_config 暂存并确认", spec.Key)
 	}
 	if scope == PluginSettingScopeGroup && !spec.allowsScope(PluginSettingScopeGroup) {
-		return fmt.Errorf("设置 %q 只能在机器人级修改", spec.Key)
+		return fmt.Errorf("设置 %q 只能在机器人级修改，主人可带 scope=bot 再改", spec.Key)
 	}
 	editor := PluginSettingEditorGroupAdmin
 	if owner {
@@ -45,14 +45,75 @@ func (t *dianaBotConfigTool) configurablePlugin(id string) (PluginState, error) 
 	if t.runtime.plugins == nil {
 		return PluginState{}, fmt.Errorf("插件管理器不可用")
 	}
-	state, ok := t.runtime.plugins.Get(strings.TrimSpace(id))
-	if !ok || !state.Installed || state.Manifest.Internal || id == webSearchPluginID {
-		return PluginState{}, fmt.Errorf("插件 %q 不可在聊天里配置；联网搜索使用统一搜索配置", id)
+	state, err := t.runtime.resolveInstalledPlugin(t.event, id)
+	if err != nil {
+		return PluginState{}, err
 	}
-	if len(state.Manifest.Settings) == 0 {
-		return PluginState{}, fmt.Errorf("插件 %q 没有可配置的设置", id)
+	switch {
+	case state.Manifest.ID == webSearchPluginID:
+		return PluginState{}, fmt.Errorf("联网搜索的设置在统一搜索配置里，请用 console_config 查看和修改")
+	case state.Manifest.Internal:
+		return PluginState{}, fmt.Errorf("%q 是内置能力，没有单独的插件设置", state.Manifest.ID)
+	case len(state.Manifest.Settings) == 0:
+		return PluginState{}, fmt.Errorf("插件 %q 没有可配置的设置", state.Manifest.ID)
 	}
 	return state, nil
+}
+
+// resolveInstalledPlugin 把模型给的名字解析成已安装的插件。模型常拿它用过的工具名
+// （github）或插件名称去问，而不是 official.repository-publish 这种 ID；只认 ID
+// 时它会被一句「不可配置」劝退，转头让主人去控制台。所以这里依次认：ID、ID 末段、
+// 插件名称、插件贡献的工具名，唯一命中才算。
+func (r *Runtime) resolveInstalledPlugin(event MessageEvent, name string) (PluginState, error) {
+	if r == nil || r.plugins == nil {
+		return PluginState{}, fmt.Errorf("插件管理器不可用")
+	}
+	name = strings.TrimSpace(name)
+	if state, ok := r.plugins.Get(name); ok && state.Installed {
+		return state, nil
+	}
+	want := strings.ToLower(name)
+	states := r.plugins.List()
+	// 关着的插件也要认得出工具名：主人常常就是想先改好设置再打开。
+	allOn := make(map[string]bool, len(states))
+	for _, state := range states {
+		allOn[state.Manifest.ID] = true
+	}
+	owners := r.plugins.AgentToolOwners(r.currentPlatform(event), allOn, r.pluginSettingOverridesForEvent(event))
+	var matched []PluginState
+	var listed []string
+	for _, state := range states {
+		if !state.Installed {
+			continue
+		}
+		id := state.Manifest.ID
+		if !state.Manifest.Internal && len(state.Manifest.Settings) > 0 {
+			listed = append(listed, id+"（"+state.Manifest.Name+"）")
+		}
+		hit := strings.ToLower(id) == want || strings.ToLower(state.Manifest.Name) == want
+		if _, tail, ok := strings.Cut(id, "."); ok && strings.ToLower(tail) == want {
+			hit = true
+		}
+		for _, tool := range owners[id] {
+			if strings.ToLower(tool) == want {
+				hit = true
+			}
+		}
+		if hit {
+			matched = append(matched, state)
+		}
+	}
+	if len(matched) == 1 {
+		return matched[0], nil
+	}
+	if len(matched) > 1 {
+		ids := make([]string, 0, len(matched))
+		for _, state := range matched {
+			ids = append(ids, state.Manifest.ID)
+		}
+		return PluginState{}, fmt.Errorf("%q 对应多个插件：%s，请改用插件 ID", name, strings.Join(ids, "、"))
+	}
+	return PluginState{}, fmt.Errorf("没有插件 %q；可配置的插件：%s", name, strings.Join(listed, "、"))
 }
 
 type pluginSettingsPatch map[string]map[string]any
@@ -84,6 +145,7 @@ func (t *dianaBotConfigTool) applyGroupPluginSettings(patch pluginSettingsPatch,
 		if err != nil {
 			return group, err
 		}
+		id = state.Manifest.ID
 		values := next[id]
 		if values == nil {
 			values = map[string]any{}
@@ -121,6 +183,7 @@ func (t *dianaBotConfigTool) prepareBotPluginSettings(patch pluginSettingsPatch)
 		if err != nil {
 			return nil, err
 		}
+		id = state.Manifest.ID
 		secrets := secretSettingKeys(state.Manifest.Settings)
 		merged := map[string]any{}
 		for key, value := range state.Settings {

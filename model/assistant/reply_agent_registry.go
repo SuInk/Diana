@@ -255,11 +255,14 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if boolValue(cfg.OwnerLLMConfigEnabled, true) {
 			extraTools = append(extraTools, newDianaLLMConfigTool(r, event))
 		}
-		// 启动配置只在主人私聊里挂：查看结果有路径和部署信息，群里有旁人。
-		if relationship.Owner && event.Kind == EventKindPrivate && r.runtimeConfigManager() != nil {
+		// 启动配置和控制台配置跟着主人本人走，私聊、群聊都挂：主人在群里说「你自己
+		// 加一下」时，只能改一半设置、剩下的推回控制台，等于没给。回显照常脱敏，改动
+		// 仍要主人本人在下一条消息确认（暂存按会话 + 发言人区分），群友代答不了。
+		realOwner := relationship.Owner && cfg.IsOwnerEvent(event)
+		if realOwner && r.runtimeConfigManager() != nil {
 			extraTools = append(extraTools, newDianaRuntimeConfigTool(r, event))
 		}
-		if (relationship.Owner && event.Kind == EventKindPrivate || isAdminChatRun(ctx)) && r.consoleConfigManager() != nil {
+		if (realOwner || isAdminChatRun(ctx)) && r.consoleConfigManager() != nil {
 			extraTools = append(extraTools, &dianaConsoleConfigTool{runtime: r, event: event})
 		}
 		extraTools = append(extraTools, pluginTools...)
