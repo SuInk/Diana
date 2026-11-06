@@ -34,7 +34,7 @@ import (
 // 合并评分里几条话题可能各不相同，整组只给一个结论时，最后那条在跟谁说话会把前面的
 // 一起带偏：回放 66 条前一条在叫机器人的连发，整组判最好也只认出 58 条，漏的多是「是的」
 // 「我给你举个例子→攻击面管理」这种接机器人话的句子，被后一条 @ 别人带走。所以评分对
-// 【连发k】逐条判（burst_k），判为在叫机器人的每条各回一次，见 splitBurstReplies。
+// burst="k" 那几条逐条判（burst_k），判为在叫机器人的每条各回一次，见 splitBurstReplies。
 const (
 	defaultProactiveRouteDebounce       = 3 * time.Second
 	maxProactiveRouteMergeWindowSeconds = 120
@@ -273,7 +273,7 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	}
 }
 
-// splitBurstReplies 按逐条判断挑出这一轮要回的消息：【连发k】判为在跟机器人说话的，加上
+// splitBurstReplies 按逐条判断挑出这一轮要回的消息：burst="k" 那几条判为在跟机器人说话的，加上
 // 当前消息放行的。仍是一轮回复，最晚那条作回复对象，其余跟着这一轮；话题各自独立，
 // 回复按话题分开发送、各自引用原消息（见 backlogReplyRequestText）。判否的不跟进来。
 func (r *Runtime) splitBurstReplies(current MessageEvent, currentText string, burst []proactiveReplyCandidate, ratings participationRatings, currentAllowed bool) (MessageEvent, string, []proactiveReplyCandidate, bool) {

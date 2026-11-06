@@ -19,7 +19,7 @@ func debounceTestEvent(id, user, text string, at time.Time) MessageEvent {
 	}
 }
 
-// 合并进来的消息原地标【连发k】、逐条判断；机器人已经回过的标「已回」。
+// 合并进来的消息原地标 burst="k"、逐条判断；机器人已经回过的标 bot_replied。
 func TestProactiveReplyTranscriptNumbersBurst(t *testing.T) {
 	age := func(v int64) *int64 { return &v }
 	payload := proactiveReplyPayload{
@@ -37,9 +37,9 @@ func TestProactiveReplyTranscriptNumbersBurst(t *testing.T) {
 	}
 	got := proactiveReplyTranscript(payload)
 	for _, want := range []string{
-		"【连发1】（嘉然已回）[12秒前] Alice：我给你举个例子",
-		"【连发2】[8秒前] Bob：那你帮我看看\n",
-		"【当前消息】[刚刚] Carol：重启试试",
+		`<msg age="12秒前" from="Alice" burst="1" bot_replied="true">我给你举个例子</msg>`,
+		`<msg age="8秒前" from="Bob" burst="2">那你帮我看看</msg>` + "\n",
+		`<msg age="刚刚" from="Carol" current="true">重启试试</msg>`,
 		"burst_k",
 	} {
 		if !strings.Contains(got, want) {
