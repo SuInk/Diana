@@ -357,15 +357,15 @@ func (r *Runtime) semanticSearchEvents(ctx context.Context, event MessageEvent, 
 	}
 	embedCtx, cancel := context.WithTimeout(ctx, semanticQueryTimeout)
 	embedCtx = withLLMUsagePurpose(withLLMUsageContext(embedCtx, event), semanticSearchPurpose(ctx))
-	vectors, err := r.embedTextsFunc()(embedCtx, cfg, []string{query})
+	vector, err := r.embedQueryText(embedCtx, cfg, query)
 	cancel()
-	if err != nil || len(vectors) != 1 {
+	if err != nil {
 		return nil
 	}
 	matched, err := store.SearchMessageEventsByVector(ctx, MessageHistoryVectorQuery{
 		Session:       sessionKey(event),
 		SessionPrefix: groupHistorySessionPrefix(event),
-		Vector:        vectors[0],
+		Vector:        vector,
 		Model:         cfg.Model,
 		FromTime:      fromTime,
 		ThroughTime:   throughTime,

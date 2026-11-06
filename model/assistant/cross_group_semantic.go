@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 )
 
@@ -28,13 +29,16 @@ func (r *Runtime) crossGroupSemanticEvents(event MessageEvent, store MessageHist
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), semanticQueryTimeout)
 	defer cancel()
-	embedded, err := r.embedTextsFunc()(withLLMUsagePurpose(withLLMUsageContext(ctx, event), "cross_group_semantic"), cfg, []string{query})
-	if err != nil || len(embedded) != 1 || len(embedded[0]) == 0 {
+	vector, err := r.embedQueryText(withLLMUsagePurpose(withLLMUsageContext(ctx, event), "cross_group_semantic"), cfg, query)
+	if errors.Is(err, errSemanticQueryBreakerOpen) {
+		return nil, "embedding 服务连续失败，本次跳过"
+	}
+	if err != nil {
 		return nil, "查询向量生成失败或超时"
 	}
 	events, err := vectors.SearchMessageEventsByVector(ctx, MessageHistoryVectorQuery{
 		Session: sessionKey(event), SessionPrefix: groupHistorySessionPrefix(event), ExcludeSession: sessionKey(event),
-		Vector: embedded[0], Model: cfg.Model, FromTime: 0, ThroughTime: through,
+		Vector: vector, Model: cfg.Model, FromTime: 0, ThroughTime: through,
 		Limit: crossGroupContextSearchLimit, CrossSession: true, MinSimilarity: crossGroupSemanticMinSimilarity,
 	})
 	if err != nil {
