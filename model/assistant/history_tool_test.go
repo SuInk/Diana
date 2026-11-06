@@ -730,26 +730,52 @@ func (s *slowThenFastHistoryStore) SearchMessageEvents(ctx context.Context, quer
 	return s.capturingHistorySearchStore.SearchMessageEvents(ctx, query)
 }
 
-// 「Diana」这种高频词查 7 天会超时；缩到最近一天再查一次，而不是直接报错。
-func TestHistorySearchNarrowsWindowAfterTimeout(t *testing.T) {
+// 没给时间的检索查全部历史：原来默认 24 小时，几天前的消息一律 0 条，模型就回「没找到」。
+// 只有显式给了 hours/days/from_time 才收窄。
+func TestHistorySearchWithoutTimeSearchesAllHistory(t *testing.T) {
+	event := MessageEvent{Kind: EventKindGroup, Time: 1_000_000, GroupID: "g", UserID: "u"}
+	for _, tc := range []struct {
+		name  string
+		input map[string]any
+		from  int64
+	}{
+		{"newest", map[string]any{"operation": "search", "query": "心海"}, 0},
+		{"relevance", map[string]any{"operation": "search", "query": "心海", "order": "relevance"}, 0},
+		{"sender only", map[string]any{"operation": "search", "sender_user_id": "u"}, 0},
+		{"explicit days", map[string]any{"operation": "search", "query": "心海", "days": 3}, 1_000_000 - 3*86400},
+		{"explicit hours", map[string]any{"operation": "search", "query": "心海", "hours": 2}, 1_000_000 - 2*3600},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+			store := &capturingHistorySearchStore{}
+			runtime.SetMessageHistoryStore(store)
+			if _, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), tc.input); err != nil {
+				t.Fatal(err)
+			}
+			if store.query.FromTime != tc.from {
+				t.Fatalf("from = %d, want %d", store.query.FromTime, tc.from)
+			}
+		})
+	}
+}
+
+// 查不完就如实报错，不能偷偷缩到一天再查一次，拿近一天的结果冒充全部历史。
+func TestHistorySearchDoesNotNarrowWindowAfterTimeout(t *testing.T) {
+	previous := chatHistorySearchTimeout
+	chatHistorySearchTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { chatHistorySearchTimeout = previous })
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := &slowThenFastHistoryStore{}
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{Kind: EventKindGroup, Time: 1_000_000, GroupID: "g", UserID: "u"}
-	raw, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{
+	_, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), map[string]any{
 		"operation": "search", "query": "Diana", "days": 7,
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("timeout should surface as an error")
 	}
-	if len(store.froms) != 2 || store.froms[1] <= store.froms[0] {
+	if len(store.froms) != 1 || store.froms[0] != 1_000_000-7*86400 {
 		t.Fatalf("froms = %v", store.froms)
-	}
-	if store.query.ThroughTime-store.query.FromTime != chatHistoryNarrowedWindow {
-		t.Fatalf("retry window = %d..%d", store.query.FromTime, store.query.ThroughTime)
-	}
-	if !strings.Contains(raw, "已缩到结束时间前 24 小时") {
-		t.Fatalf("raw = %s", raw)
 	}
 }
 

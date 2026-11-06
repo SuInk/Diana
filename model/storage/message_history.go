@@ -950,23 +950,16 @@ func messageHistoryFTSStatements(scopedWhere, order string, tierWords int) (page
 	// 按时间排序时用不到相关度，省掉逐条命中的 BM25 计算。
 	chronological := order == "oldest" || order == "newest"
 	score := `bm25(` + messageHistoryFTSTable + `)`
-	pageOrder := "h.score ASC, e.event_time DESC, e.created_at DESC, e.id DESC"
-	outerOrder := "p.score ASC, p.event_time DESC, p.created_at DESC, p.id DESC"
+	pageOrder := "h.score ASC, " + historyFTSCandidateOrder("newest", "c.")
+	outerOrder := "p.score ASC, " + historyFTSCandidateOrder("newest", "p.")
 	if chronological {
 		score = `0`
-		pageOrder = historyChronologicalOrder(order, "e.")
-		outerOrder = historyChronologicalOrder(order, "p.")
+		pageOrder = historyFTSCandidateOrder(order, "c.")
+		outerOrder = historyFTSCandidateOrder(order, "p.")
 	}
 
 	// MATCH 放进 CTE 只求值一次。写成逐行的相关子查询会让每个候选都重跑一遍
 	// 全文检索，实测比原来的 LIKE 还慢一个数量级。
-	//
-	// 限制条数不能挪进 FTS 子查询：会话、时间范围要回表才能过滤，先截断再过滤会
-	// 把本该命中的行截掉，结果和总数都会变。能省的是重复计算——原先 COUNT 和取
-	// 页各跑一遍 MATCH、BM25 和回表过滤，高频词在大库上命中十几万行，每遍都要
-	// 上百毫秒。现在总数用窗口函数和当前页一起算；排序只带 rowid 和排序键，截出
-	// 当前页之后再回表取 payload，排序器里不再塞整段 JSON。排序键以 id 收尾，
-	// 页内顺序和原来一次排序完全一致。
 	//
 	// hits 必须 MATERIALIZED。不加时规划器会把 CTE 展开进连接：同会话检索里它
 	// 先按 (session, event_time) 索引扫这个会话的每一行，再对每一行用 rowid=?
@@ -975,7 +968,6 @@ func messageHistoryFTSStatements(scopedWhere, order string, tierWords int) (page
 	// MATCH 只跑一遍，结果进临时表再按 rowid 连接。
 	hits := `WITH hits AS MATERIALIZED (SELECT rowid AS rid, ` + score + ` AS score
 FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
-	from := `FROM message_events AS e JOIN hits AS h ON h.rid = e.rowid`
 
 	// 分档词各自物化成一张 rowid 表，理由同 hits。
 	tier := `0`
@@ -986,27 +978,62 @@ FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?
 			name := fmt.Sprintf("w%d", index)
 			tierCTEs += `,
 ` + name + ` AS MATERIALIZED (SELECT rowid AS rid FROM ` + messageHistoryFTSTable + ` WHERE ` + messageHistoryFTSTable + ` MATCH ?)`
-			tierParts = append(tierParts, `(e.rowid IN (SELECT rid FROM `+name+`))`)
+			tierParts = append(tierParts, `(c.rid IN (SELECT rid FROM `+name+`))`)
 		}
 		tier = `(` + strings.Join(tierParts, ` + `) + `)`
 		pageOrder = "tier DESC, " + pageOrder
 		outerOrder = "p.tier DESC, " + outerOrder
 	}
 
-	pageSQL = hits + tierCTEs + `,
+	// 候选只从索引里筛，不回正表。原先拿命中的 rowid 逐条回表判会话、时间和
+	// kind，高频词要回几万次：生产上「diana」查一个群的全部历史冷读 3.7 秒、CPU
+	// 只用 0.1 秒，全花在随机读宽行上，于是只能把时间窗缩到一天。现在：
+	//   - 会话、时间、发言人都在 (session, event_time, created_at) 或
+	//     (user_id, event_time) 索引里，rowid 前加一元 + 不让规划器拿它当驱动，
+	//     只能顺着这些索引扫，命中与否用物化的 rowid 集合判；
+	//   - kind 不在这些索引里，改成排除 notice 的 rowid 集合（全库几千条，走覆盖索引）；
+	//   - 排序键只用索引里有的列，最后的并列按 rowid（插入顺序）。created_at 精确到
+	//     微秒，实际几乎不会走到这一步。
+	// 同一查询改完后 0.05 秒，跨群 0.1 秒，只有当前页的二十来行回表取 payload。
+	where := scopedWhere
+	var noticeCTE string
+	if rest, ok := strings.CutPrefix(where, "e.kind != ? AND "); ok {
+		noticeCTE = `,
+notices AS MATERIALIZED (SELECT rowid AS rid FROM message_events WHERE kind = ?)`
+		where = rest + ` AND +e.rowid NOT IN (SELECT rid FROM notices)`
+	}
+	candidates := `,
+cand AS MATERIALIZED (
+  SELECT e.rowid AS rid, e.event_time AS event_time, e.created_at AS created_at
+  FROM message_events AS e
+  WHERE ` + where + ` AND +e.rowid IN (SELECT rid FROM hits)
+)`
+	from := `FROM cand AS c JOIN hits AS h ON h.rid = c.rid`
+
+	// 总数用窗口函数和当前页一起算，截出当前页之后再回表取 payload。
+	pageSQL = hits + tierCTEs + noticeCTE + candidates + `,
 page AS (
-  SELECT e.rowid AS rid, h.score AS score, ` + tier + ` AS tier, e.event_time AS event_time, e.created_at AS created_at, e.id AS id,
+  SELECT c.rid AS rid, h.score AS score, ` + tier + ` AS tier, c.event_time AS event_time, c.created_at AS created_at,
          COUNT(*) OVER () AS total
   ` + from + `
-  WHERE ` + scopedWhere + `
   ORDER BY ` + pageOrder + `
   LIMIT ? OFFSET ?
 )
 SELECT m.payload, p.total
 FROM page AS p JOIN message_events AS m ON m.rowid = p.rid
 ORDER BY ` + outerOrder
-	countSQL = hits + ` SELECT COUNT(*) ` + from + ` WHERE ` + scopedWhere
+	countSQL = hits + noticeCTE + candidates + ` SELECT COUNT(*) FROM cand`
 	return pageSQL, countSQL
+}
+
+// historyFTSCandidateOrder 是全文检索候选的时间顺序。和 historyChronologicalOrder
+// 只差最后的并列键：id 不在索引里，用 rowid 代替。
+func historyFTSCandidateOrder(order, prefix string) string {
+	direction := " DESC"
+	if order == "oldest" {
+		direction = " ASC"
+	}
+	return prefix + "event_time" + direction + ", " + prefix + "created_at" + direction + ", " + prefix + "rid" + direction
 }
 
 func historyChronologicalOrder(order, prefix string) string {

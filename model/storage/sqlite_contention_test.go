@@ -208,6 +208,48 @@ func TestMessageHistoryFTSHitsAreMaterialized(t *testing.T) {
 	}
 }
 
+// 候选必须顺着会话/发言人索引筛，不能拿 FTS 命中的 rowid 逐条回正表：高频词在
+// 生产上命中几万行，逐条回表冷读 3.7 秒，以前只能靠把时间窗缩到一天躲超时。
+// 回表只允许出现在截出当前页之后取 payload 的那一步。
+func TestMessageHistoryFTSCandidatesStayInIndex(t *testing.T) {
+	store := ftsStore(t)
+	base := `kind != ? AND event_time BETWEEN ? AND ?`
+	for name, scope := range map[string]struct {
+		where string
+		args  []any
+	}{
+		"same":   {base + ` AND session = ?`, []any{"notice", 0, 100, "onebot-main:group:one"}},
+		"cross":  {base + ` AND session LIKE ? ESCAPE '\' AND session != ?`, []any{"notice", 0, 100, "onebot-main:group:%", "onebot-main:group:two"}},
+		"sender": {base + ` AND session = ? AND user_id IN (?)`, []any{"notice", 0, 100, "onebot-main:group:one", "Alice"}},
+	} {
+		pageSQL, _ := messageHistoryFTSStatements(prefixMessageHistoryColumns(scope.where), "newest", 0)
+		args := append(append([]any{`"凤爪"*`}, scope.args...), 10, 0)
+		rows, err := store.db.Query("EXPLAIN QUERY PLAN "+pageSQL, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lines []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			lines = append(lines, detail)
+		}
+		_ = rows.Close()
+		plan := strings.Join(lines, "\n")
+		for _, line := range lines {
+			if strings.Contains(line, "SEARCH e USING INTEGER PRIMARY KEY") || line == "SCAN e" {
+				t.Fatalf("%s: candidates read message_events row by row:\n%s", name, plan)
+			}
+		}
+		if !strings.Contains(plan, "MATERIALIZE cand") {
+			t.Fatalf("%s: candidates not materialized:\n%s", name, plan)
+		}
+	}
+}
+
 // 启动补索引改成先只取 rowid 找缺口、再分批回表。缺的行跨好几批时，每一行都得补
 // 进去，而且补进去的 token 和写入时同步建的一样，能被检索到。
 func TestMessageHistoryFTSBackfillsMissingRowsInChunks(t *testing.T) {

@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -15,23 +14,27 @@ import (
 )
 
 const (
-	dianaChatHistoryToolName              = "chat_history"
-	defaultChatHistoryRecentLimit         = 20
-	maximumChatHistoryResultLimit         = 50
-	defaultChatHistoryBefore              = 10
-	defaultChatHistoryAfter               = 10
-	maximumChatHistoryAroundRadius        = 10
-	defaultChatHistorySearchHours         = 24
-	maximumChatHistorySearchHours         = 24 * 365 * 100
-	defaultChatHistoryRangeLimit          = 60
-	maximumChatHistoryRangeLimit          = 200
-	defaultChatHistoryOverviewLimit       = 24
-	maximumChatHistoryOverviewLimit       = 40
-	chatHistoryOverviewTextRunes          = 140
-	maximumChatHistoryOutputRunes         = 7600
-	chatHistoryLookupTimeout              = 3 * time.Second
-	chatHistoryNarrowedWindow       int64 = 24 * 60 * 60
+	dianaChatHistoryToolName        = "chat_history"
+	defaultChatHistoryRecentLimit   = 20
+	maximumChatHistoryResultLimit   = 50
+	defaultChatHistoryBefore        = 10
+	defaultChatHistoryAfter         = 10
+	maximumChatHistoryAroundRadius  = 10
+	defaultChatHistorySearchHours   = 24
+	maximumChatHistorySearchHours   = 24 * 365 * 100
+	defaultChatHistoryRangeLimit    = 60
+	maximumChatHistoryRangeLimit    = 200
+	defaultChatHistoryOverviewLimit = 24
+	maximumChatHistoryOverviewLimit = 40
+	chatHistoryOverviewTextRunes    = 140
+	maximumChatHistoryOutputRunes   = 7600
+	chatHistoryLookupTimeout        = 3 * time.Second
 )
+
+// chatHistorySearchTimeout 是关键词检索的单次期限。检索不缩时间窗，查不完宁可
+// 多等，也不拿一天的结果冒充全部历史；候选只走索引后，高频词查全部历史生产上
+// 0.1 秒内，这个期限只兜冷启动读盘这类极端情况。测试会改它。
+var chatHistorySearchTimeout = 10 * time.Second
 
 type dianaChatHistoryTool struct {
 	runtime *Runtime
@@ -266,9 +269,9 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"through_time": toolStringParam(`range/search 结束时间，格式同 from_time`),
 		"scope": toolEnumParam("all_groups 仅 search，需开启跨群记忆；私聊仅主人",
 			"current", "all_groups"),
-		"hours":    toolIntParam("只看最近多少小时", 1, 24*365),
+		"hours":    toolIntParam("只看最近多少小时；search 不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
 		"days":     toolIntParam("只看最近多少天", 1, 365),
-		"all_time": toolBoolParam("search：查全部历史，忽略 hours/days"),
+		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
 		"limit":    toolIntParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
 	})
 }
@@ -569,7 +572,10 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	sender := strings.Join(senders, ",")
 	from, through := t.resolveWindow(input)
-	if order == "oldest" && !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
+	// 没给时间范围的检索查全部历史。原来 newest/relevance 默认只看 24 小时，
+	// 问「前几天谁说过 X」时模型常不带 days，结果 0 条就回「没找到」
+	// （生产 2026-11-05：「心海」7 天内 3 条、24 小时内 0 条）。
+	if !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
 		from = 0
 	}
 	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), query+"\x00"+sender, scope, order), From: from, Through: through}
@@ -588,28 +594,16 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	t.runtime.mu.RUnlock()
 	var matched []MessageEvent
 	total := 0
-	narrowed := false
 	if searchStore, ok := store.(MessageHistorySearchStore); ok {
-		run := func() error {
-			loadCtx, cancel := context.WithTimeout(ctx, chatHistoryLookupTimeout)
-			defer cancel()
-			var err error
-			matched, total, err = searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
-				Session: sessionKey(t.event), SessionPrefix: groupHistorySessionPrefix(t.event),
-				Text: query, Terms: structuredMemorySearchTerms(query, 48),
-				FromTime: page.From, ThroughTime: page.Through, Limit: limit,
-				CrossSession: crossGroup, Sort: order, Offset: page.Offset, SenderUserIDs: senders,
-			})
-			return err
-		}
-		err := run()
-		// 高频词（机器人名字这类）在长时段里要逐行回表，3 秒内扫不完。不直接报错，
-		// 缩到结束时间前的一天再查一次，结果里说明范围缩过，模型可以按需换词或分段续查。
-		if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil && page.Offset == 0 && page.Through-page.From > chatHistoryNarrowedWindow {
-			page.From = page.Through - chatHistoryNarrowedWindow
-			narrowed = true
-			err = run()
-		}
+		loadCtx, cancel := context.WithTimeout(ctx, chatHistorySearchTimeout)
+		var err error
+		matched, total, err = searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
+			Session: sessionKey(t.event), SessionPrefix: groupHistorySessionPrefix(t.event),
+			Text: query, Terms: structuredMemorySearchTerms(query, 48),
+			FromTime: page.From, ThroughTime: page.Through, Limit: limit,
+			CrossSession: crossGroup, Sort: order, Offset: page.Offset, SenderUserIDs: senders,
+		})
+		cancel()
 		if err != nil {
 			return dianaChatHistoryResult{}, fmt.Errorf("检索持久化聊天记录失败: %w", err)
 		}
@@ -690,10 +684,6 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	if senderNote != "" {
 		result.Message += senderNote
-	}
-	if narrowed {
-		result.Limited = true
-		result.Message += "原时间范围内命中太多、查询超时，已缩到结束时间前 24 小时；更早的部分换更具体的词，或用 from_time/through_time 分段再查。"
 	}
 	if order != "relevance" && len(uniqueLowerFields(query)) > 1 {
 		result.Message += "多个词时先列同时含全部词的消息，再列只含部分词的，每档内按指定时间顺序。"
