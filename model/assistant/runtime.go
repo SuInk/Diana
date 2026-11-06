@@ -595,7 +595,9 @@ type Runtime struct {
 	semanticIndexQueue  chan semanticIndexItem
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
-	chatInLastReplyAt   map[string]time.Time
+	// semanticQueryBreaker 在 embedding 服务连续失败时让查询路径快速跳过，见 semantic_query_breaker.go。
+	semanticQueryBreaker semanticQueryBreaker
+	chatInLastReplyAt    map[string]time.Time
 	// groupLastReplyAt 记各群机器人最后一次发出回复的时间，见 relevance_only_window.go。
 	groupLastReplyAt map[string]time.Time
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
