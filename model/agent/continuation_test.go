@@ -184,3 +184,112 @@ func TestContinuationVolatileOnlyOmitsLatestUnchangedEnvironment(t *testing.T) {
 		})
 	}
 }
+
+func contractTestRunner(t *testing.T, client llm.LLMClient, names ...string) *Runner {
+	t.Helper()
+	tools := []Tool{&countingTool{name: "common"}}
+	for _, name := range names {
+		tools = append(tools, &countingTool{name: name})
+	}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, CoreTools: []string{"common"}}, NewToolRegistry(tools...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return runner
+}
+
+func contractMessagesIn(messages []llm.Message) (blocks []string) {
+	for _, message := range messages {
+		if strings.HasPrefix(message.Content, systemNoteHeader) && strings.Contains(message.Content, sharedContractsLead) {
+			blocks = append(blocks, message.Content)
+		}
+	}
+	return blocks
+}
+
+// 群里又加载了一个工具时，续接照旧：历史之前的契约块一个字不改，新契约接在尾部，
+// 再下一轮不重复发。以前契约算在续接指纹里，多加载一个工具就整条重新组装，契约块
+// 排在历史之前，它一变后面的缓存全部作废。
+func TestRunnerContinuationAppendsNewlyLoadedContract(t *testing.T) {
+	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
+	runner := contractTestRunner(t, client, "platform", "bot_config")
+	first, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("第一问"), LoadedTools: []string{"platform"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocks := contractMessagesIn(first.Transcript); len(blocks) != 1 || !strings.Contains(blocks[0], `"name":"platform"`) || strings.Contains(blocks[0], "bot_config") {
+		t.Fatalf("first contract blocks = %q", blocks)
+	}
+	next := func(prefix []llm.Message, key, current string) *Response {
+		t.Helper()
+		resp, err := runner.Run(context.Background(), Request{
+			Messages:     continuationTestMessages(current),
+			LoadedTools:  []string{"platform", "bot_config"},
+			Continuation: &Continuation{Prefix: prefix, Append: []llm.Message{{Role: llm.RoleUser, Content: current}}, Key: key},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.Continued {
+			t.Fatalf("loading one more tool must not break the continuation (key %s -> %s)", key, resp.ConversationKey)
+		}
+		return resp
+	}
+	second := next(first.Transcript, first.ConversationKey, "第二问")
+	sent := client.requests[1].Messages
+	for index, message := range first.Transcript {
+		got := sent[index]
+		got.CacheBreakpoint = false
+		if !reflect.DeepEqual(got, message) {
+			t.Fatalf("prefix changed at %d:\n got %#v\nwant %#v", index, got, message)
+		}
+	}
+	blocks := contractMessagesIn(sent)
+	if len(blocks) != 2 || !strings.Contains(blocks[1], `"name":"bot_config"`) || strings.Contains(blocks[1], `"name":"platform"`) {
+		t.Fatalf("the new contract must be appended alone: %q", blocks)
+	}
+	if sent[len(sent)-1].Content != "第二问" {
+		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
+	}
+	next(second.Transcript, second.ConversationKey, "第三问")
+	if blocks := contractMessagesIn(client.requests[2].Messages); len(blocks) != 2 {
+		t.Fatalf("a delivered contract was sent again: %d blocks", len(blocks))
+	}
+}
+
+// 前缀里有、当前发言者却用不了的契约留在原处，补一句说明；说明只在变化时发，换回
+// 能用的人也要明说。
+func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
+	platform := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管","inputSchema":{}}`}
+	config := loadedContract{name: "bot_config", raw: `{"name":"bot_config","description":"配置","inputSchema":{}}`}
+	prefix := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设"},
+		{Role: llm.RoleUser, Content: sharedContractsMessage(renderLoadedContracts([]loadedContract{platform, config})) + "\n\n## Skills"},
+	}
+	if delta := contractDelta([]loadedContract{platform, config}, prefix, nil); len(delta) != 0 {
+		t.Fatalf("nothing changed, nothing to append: %#v", delta)
+	}
+	// 普通成员：bot_config 用不了。
+	delta := contractDelta([]loadedContract{platform}, prefix, nil)
+	if len(delta) != 1 || delta[0].Role != llm.RoleSystem || !strings.Contains(delta[0].Content, "用不了：bot_config。") {
+		t.Fatalf("blocked contract notice = %#v", delta)
+	}
+	prefix = append(prefix, delta...)
+	if delta := contractDelta([]loadedContract{platform}, prefix, nil); len(delta) != 0 {
+		t.Fatalf("the same notice was repeated: %#v", delta)
+	}
+	// 换回管理员：要明说都能用，否则模型沿用上一句。
+	delta = contractDelta([]loadedContract{platform, config}, prefix, nil)
+	if len(delta) != 1 || !strings.Contains(delta[0].Content, "都能用") {
+		t.Fatalf("restored availability notice = %#v", delta)
+	}
+	// 定义变了的契约按新的再发一次。
+	changed := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管（新）","inputSchema":{}}`}
+	delta = contractDelta([]loadedContract{changed, config}, prefix[:2], nil)
+	if len(delta) != 1 || !strings.Contains(delta[0].Content, "群管（新）") || strings.Contains(delta[0].Content, "bot_config") {
+		t.Fatalf("changed contract delta = %#v", delta)
+	}
+	if got := deliveredContracts(append(prefix[:2:2], delta...)); got["platform"] != changed.raw {
+		t.Fatalf("latest delivery must win: %q", got["platform"])
+	}
+}
