@@ -781,6 +781,7 @@ func (m *Manager) start(ctx context.Context, id string) error {
 	if err != nil && ctx.Err() == nil && agent.BrowserSandboxFallback(err.Error()) {
 		err = m.launch(ctx, inst, settings, generation)
 	}
+	err = agent.WithBrowserSandboxHint(err)
 	m.mu.Lock()
 	inst.starting = nil
 	inst.startErr = err

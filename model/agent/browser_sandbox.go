@@ -13,8 +13,9 @@ import (
 	"github.com/SuInk/diana/internal/termux"
 )
 
-// BrowserSandboxMode 决定 Diana 拉起的 Chromium（网页渲染、浏览器搜索、内置浏览器、
-// 带脚本的 HTML 出图）要不要关进程沙箱；只渲染本地 HTML 的简单截图另有取舍，不归它管。
+// BrowserSandboxMode 决定 Diana 拉起的、会打开外部网页的 Chromium（网页渲染、浏览器
+// 搜索、内置浏览器）要不要关进程沙箱。只渲染本地 HTML 的出图另有取舍：简单截图一直
+// 不带沙箱，带脚本的出图在 root 下放行，其余跟这里的档位走。
 // WebUI 浏览器页可改，立即生效。
 //
 // 关掉沙箱后，网页里的渲染器漏洞利用不再被沙箱挡住，页面隔离只剩内网屏蔽和临时
@@ -104,22 +105,44 @@ func browserNoSandbox() bool {
 	return !CurrentBrowserSandbox().Active
 }
 
-// BrowserSandboxFallback 在浏览器启动失败后调用：处于「自动」档、这次带了沙箱、且失败
-// 输出是沙箱起不来的特征时，记下降级并返回 true，调用方去掉沙箱重试一次。其余情况
-// 返回 false，原样报错。
+// BrowserSandboxFallback 在浏览器启动失败后调用：处于「自动」档、且失败输出是沙箱起不来
+// 的特征时，记下降级并返回 true，调用方去掉沙箱重试一次（每次启动最多一次）。
+// 已经降级过也返回 true：并发的几次启动可能同时带着沙箱失败，后到的那次同样该重试。
+// 其余情况返回 false，原样报错。
 func BrowserSandboxFallback(diagnostics string) bool {
 	if !browserSandboxFailure(diagnostics) {
 		return false
 	}
 	browserSandbox.Lock()
 	defer browserSandbox.Unlock()
-	if browserSandbox.mode != BrowserSandboxAuto || browserSandbox.fellBack || termux.Detected() || browserRunningAsRoot() {
+	if browserSandbox.mode != BrowserSandboxAuto || termux.Detected() || browserRunningAsRoot() {
 		return false
 	}
-	browserSandbox.fellBack = true
-	browserSandbox.reason = compactBrowserError(diagnostics)
-	log.Printf("WARN 浏览器沙箱起不来，按「自动」档去掉沙箱重试：%s", browserSandbox.reason)
+	if !browserSandbox.fellBack {
+		browserSandbox.fellBack = true
+		browserSandbox.reason = compactBrowserError(diagnostics)
+		log.Printf("WARN 浏览器沙箱起不来，按「自动」档去掉沙箱重试：%s", browserSandbox.reason)
+	}
 	return true
+}
+
+// WithBrowserSandboxHint 给「仅沙箱」档下因沙箱起不来的启动失败补一句怎么办，
+// 不然模型和主人只看到 Chromium 的原始报错，不知道能换档。
+func WithBrowserSandboxHint(err error) error {
+	if err == nil || !browserSandboxFailure(err.Error()) {
+		return err
+	}
+	browserSandbox.RLock()
+	mode := browserSandbox.mode
+	browserSandbox.RUnlock()
+	if mode != BrowserSandboxOnly {
+		return err
+	}
+	hint := "浏览器沙箱起不来"
+	if browserRunningAsRoot() {
+		hint = "以 root 运行时 Chromium 不允许带沙箱启动"
+	}
+	return fmt.Errorf("%w（%s：当前是「仅沙箱」档，可改用普通用户运行，或在浏览器页「更多设置 → 浏览器沙箱」改成「自动」）", err, hint)
 }
 
 // browserSandboxFailure 认 Chromium 因沙箱起不来而退出的几种输出：root 被拒、
@@ -134,7 +157,6 @@ func browserSandboxFailure(diagnostics string) bool {
 		"zygote_host",
 		"operation not permitted",
 		"failed to move to new namespace",
-		"clone",
 	} {
 		if strings.Contains(text, marker) {
 			return true

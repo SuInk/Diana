@@ -422,7 +422,11 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	defer cancelSandbox()
 	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
 		status.Available = false
-		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开；放不开（root 运行、proot 等）可以在浏览器页把「浏览器沙箱」改成「自动」或「关闭」"
+		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error()
+		// 启动报错里已经带了换档提示（见 WithBrowserSandboxHint）就不再重复。
+		if !strings.Contains(err.Error(), "浏览器沙箱") {
+			status.Detail += "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开；放不开（root 运行、proot 等）可以在浏览器页把「浏览器沙箱」改成「自动」或「关闭」"
+		}
 	}
 	return status
 }

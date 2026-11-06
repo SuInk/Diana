@@ -249,7 +249,11 @@ func htmlCaptureExtraArgs() []string {
 		"--proxy-bypass-list=<-loopback>",
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 	}
-	// 要不要关进程沙箱由底座参数统一决定（见 browser_sandbox.go），这里不再另判。
+	// 关不关进程沙箱先按底座参数的档位（见 browser_sandbox.go）。这里只渲染本地 HTML、
+	// 而且断网，root 身份另外放行：root 起不来沙箱，默认「仅沙箱」也不该让出图跟着坏。
+	if browserRunningAsRoot() && !browserNoSandbox() {
+		args = append(args, "--no-sandbox")
+	}
 	return args
 }
 

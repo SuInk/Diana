@@ -4,7 +4,9 @@
 package agent
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -82,8 +84,9 @@ func TestBrowserSandboxAutoFallsBackOnceOnSandboxFailure(t *testing.T) {
 	if !slices.Contains(sandboxedChromeBaseArgsForMode("p", "c", "d", false), "--no-sandbox") {
 		t.Fatal("降级之后的启动仍带沙箱")
 	}
-	if BrowserSandboxFallback(failure) {
-		t.Fatal("已经降级过，不该再报一次重试")
+	// 并发启动时后到的那次也带着沙箱失败了，同样要重试，而不是直接报错。
+	if !BrowserSandboxFallback(failure) {
+		t.Fatal("已降级后另一次带沙箱的失败没有重试")
 	}
 	if status := CurrentBrowserSandbox(); status.Active || status.Reason == "" {
 		t.Fatalf("降级后状态不对：%+v", status)
@@ -94,6 +97,42 @@ func TestBrowserSandboxAutoFallsBackOnceOnSandboxFailure(t *testing.T) {
 	SetBrowserSandboxMode(BrowserSandboxAuto)
 	if slices.Contains(sandboxedChromeBaseArgsForMode("p", "c", "d", false), "--no-sandbox") {
 		t.Fatal("换档后仍沿用旧的降级记录")
+	}
+}
+
+func TestBrowserSandboxHintOnlyInSandboxOnlyMode(t *testing.T) {
+	t.Setenv("PREFIX", "/usr/local")
+	t.Setenv("TERMUX_VERSION", "")
+	stubBrowserRunningAsRoot(t, true)
+	t.Cleanup(func() { SetBrowserSandboxMode(BrowserSandboxOnly) })
+	failure := errors.New("headless browser exited before CDP startup: Running as root without --no-sandbox is not supported")
+
+	SetBrowserSandboxMode(BrowserSandboxOnly)
+	got := WithBrowserSandboxHint(failure)
+	if !errors.Is(got, failure) || !strings.Contains(got.Error(), "root") || !strings.Contains(got.Error(), "自动") {
+		t.Fatalf("仅沙箱档没给出换档提示：%v", got)
+	}
+	if other := errors.New("exit status 1: profile in use"); WithBrowserSandboxHint(other) != other {
+		t.Fatal("跟沙箱无关的失败不该加提示")
+	}
+	SetBrowserSandboxMode(BrowserSandboxOff)
+	if WithBrowserSandboxHint(failure) != failure {
+		t.Fatal("不是仅沙箱档不该加提示")
+	}
+}
+
+func TestHTMLCaptureKeepsRootExemptionInSandboxOnlyMode(t *testing.T) {
+	t.Setenv("PREFIX", "/usr/local")
+	t.Setenv("TERMUX_VERSION", "")
+	SetBrowserSandboxMode(BrowserSandboxOnly)
+	stubBrowserRunningAsRoot(t, true)
+	// 本地出图在 root 下照旧放行，默认档不能让它跟着坏。
+	if args := htmlCaptureExtraArgs(); !slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("root 下带脚本的 HTML 出图丢了原有的放行：%v", args)
+	}
+	stubBrowserRunningAsRoot(t, false)
+	if args := htmlCaptureExtraArgs(); slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("普通用户的 HTML 出图不该关沙箱：%v", args)
 	}
 }
 

@@ -350,7 +350,7 @@ func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profile
 		process, err = launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
 	}
 	if err != nil {
-		return nil, err
+		return nil, WithBrowserSandboxHint(err)
 	}
 	process.window = cfg.Window
 	return process, nil
