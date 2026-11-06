@@ -157,6 +157,11 @@ function remove(id: string) { emit("update:modelValue", props.modelValue.filter(
 .model-metadata-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding-top: 4px; }
 @media (max-width: 640px) {
   .model-catalog-tools { flex-direction: column; align-items: stretch; }
+  /* 窄屏上胶囊会长短不一地各占一行：改成整行宽的列表，名字过长省略，操作按钮靠右对齐。 */
+  .model-catalog-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 0; max-height: 320px; }
+  .model-catalog-chip { display: flex; width: 100%; border-radius: 10px; padding: 4px 4px 4px 10px; }
+  .model-catalog-label { flex: 1; }
+  .model-catalog-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; overflow-wrap: normal; }
   .model-metadata-fields, .model-capability-fields { grid-template-columns: 1fr; }
   .model-metadata-panel { padding: 12px; }
   .model-capability-option { min-height: 40px; }

@@ -7006,6 +7006,17 @@ a.nav-action {
     align-self: flex-start;
   }
 
+  /* 「清空」「同步模型列表」在窄屏上并排平分一行，不再挤在左边。 */
+  .model-sync-row > .cluster {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+  }
+
+  .model-sync-row > .cluster > .btn {
+    justify-content: center;
+  }
+
   .app-topbar {
     padding: 0 14px;
   }

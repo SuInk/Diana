@@ -48,6 +48,9 @@ type semanticIndexItem struct {
 	// message must delete the previous vector only after every older embedding
 	// job has finished, otherwise that older job can write the stale vector back.
 	invalidate bool
+	// embedding 是入队时按这条消息所属机器人解析出的向量模型。不同机器人可以
+	// 在模型分配里各选各的，同一批要按它分组调用。
+	embedding llm.ProviderConfig
 }
 
 // messageHistoryVectorDeleteStore is an optional extension implemented by the
@@ -61,16 +64,35 @@ func (r *Runtime) semanticSearchActive(cfg BotConfig) bool {
 	if !boolValue(cfg.SemanticSearchEnabled, false) {
 		return false
 	}
-	_, ok := r.embeddingProviderConfig()
+	_, ok := r.embeddingProviderConfig(cfg)
 	return ok
 }
 
-// embeddingProviderConfig 返回 embedding 分组下的配置档。多个时取第一个。
-func (r *Runtime) embeddingProviderConfig() (llm.ProviderConfig, bool) {
+// embeddingProviderConfig 返回这台机器人语义检索用的向量模型。
+//
+// 模型分配里「向量嵌入」那一档选了就用它；没选时沿用以前的做法，取 embedding
+// 分组下的第一个配置档，升级不改变已开语义检索的机器人。选了却找不到对应的
+// 提供商时如实当作没配，不悄悄换成别的模型——向量按模型名存取，换了模型旧向量
+// 就搜不到了。
+func (r *Runtime) embeddingProviderConfig(cfg BotConfig) (llm.ProviderConfig, bool) {
 	if r.llmStore == nil {
 		return llm.ProviderConfig{}, false
 	}
-	for _, profile := range r.llmStore.Profiles().Profiles {
+	set := r.llmStore.Profiles()
+	if role, ok := normalizeModelRoles(cfg.ModelRoles)[llm.GroupEmbedding]; ok && !role.FollowChat {
+		model := mediaSlotModel(role)
+		if role.Disabled || model == "" {
+			return llm.ProviderConfig{}, false
+		}
+		profiles := mediaSlotProfiles(set, role)
+		if len(profiles) == 0 {
+			return llm.ProviderConfig{}, false
+		}
+		config := profiles[0].Config
+		config.Model = model
+		return config, true
+	}
+	for _, profile := range set.Profiles {
 		if strings.EqualFold(strings.TrimSpace(profile.Group), llm.GroupEmbedding) &&
 			strings.TrimSpace(profile.Config.Model) != "" {
 			return profile.Config, true
@@ -118,7 +140,8 @@ func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session str
 		messageID:  event.MessageID,
 		invalidate: event.Edited && event.EditRefreshOnly,
 	}
-	active := r.semanticSearchActive(r.effectiveConfigForEvent(event))
+	botConfig := r.effectiveConfigForEvent(event)
+	active := r.semanticSearchActive(botConfig)
 	// 已知编辑只刷新历史和词面索引，不触发新的模型调用。语义侧只排一个
 	// tombstone；无论新正文长短，都不会为这次 edit 再请求 embedding。
 	if !item.invalidate && active && !r.groupDormant(event) && !r.statusCommandActive(event, PlainText(event.Segments)) {
@@ -130,6 +153,7 @@ func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session str
 		cancel()
 		if len([]rune(text)) >= semanticMinTextRunes {
 			item.text = text
+			item.embedding, _ = r.embeddingProviderConfig(botConfig)
 		}
 	}
 	// 普通短消息从来没有向量，不必排队。已知消息的编辑无论新正文长短
@@ -209,30 +233,42 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 	if store == nil {
 		return
 	}
-	cfg, hasConfig := r.embeddingProviderConfig()
-	texts := make([]string, 0, len(batch))
-	textIndexes := make([]int, 0, len(batch))
+	// 同一批里可能混着几台机器人的消息，按各自的向量模型分组调用。
+	type embedGroup struct {
+		cfg     llm.ProviderConfig
+		texts   []string
+		indexes []int
+	}
+	var groups []*embedGroup
+	groupByKey := map[string]*embedGroup{}
 	for index, item := range batch {
-		if item.text == "" {
+		if item.text == "" || strings.TrimSpace(item.embedding.Model) == "" {
 			continue
 		}
-		texts = append(texts, item.text)
-		textIndexes = append(textIndexes, index)
+		key := string(item.embedding.Provider) + "\x00" + item.embedding.BaseURL + "\x00" + item.embedding.APIKey + "\x00" + item.embedding.Model
+		group := groupByKey[key]
+		if group == nil {
+			group = &embedGroup{cfg: item.embedding}
+			groupByKey[key] = group
+			groups = append(groups, group)
+		}
+		group.texts = append(group.texts, item.text)
+		group.indexes = append(group.indexes, index)
 	}
 
-	vectorsByItem := make(map[int][]float32, len(texts))
-	if hasConfig && len(texts) > 0 {
+	vectorsByItem := make(map[int][]float32, len(batch))
+	for _, group := range groups {
 		embedCtx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
 		embedCtx = withLLMUsagePurpose(embedCtx, "semantic_index")
-		vectors, err := r.embedTextsFunc()(embedCtx, cfg, texts)
+		vectors, err := r.embedTextsFunc()(embedCtx, group.cfg, group.texts)
 		cancel()
 		if err != nil {
-			log.Printf("semantic index embed failed (%d items dropped): %v", len(texts), err)
+			log.Printf("semantic index embed failed (%d items dropped): %v", len(group.texts), err)
 			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量生成失败，这批消息以后按语义搜不到", "", err,
-				map[string]any{"dropped": len(texts), "model": cfg.Model})
-		} else if len(vectors) == len(texts) {
+				map[string]any{"dropped": len(group.texts), "model": group.cfg.Model})
+		} else if len(vectors) == len(group.texts) {
 			for index, vector := range vectors {
-				vectorsByItem[textIndexes[index]] = vector
+				vectorsByItem[group.indexes[index]] = vector
 			}
 		}
 	}
@@ -254,10 +290,10 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 		if !ok {
 			continue
 		}
-		if err := store.SaveMessageEventVector(writeCtx, item.session, item.messageID, cfg.Model, vector); err != nil {
+		if err := store.SaveMessageEventVector(writeCtx, item.session, item.messageID, item.embedding.Model, vector); err != nil {
 			log.Printf("semantic index save failed: %v", err)
 			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量写入失败，这条消息以后按语义搜不到", "semantic_index_save_failed", err,
-				map[string]any{"message_id": item.messageID, "model": cfg.Model})
+				map[string]any{"message_id": item.messageID, "model": item.embedding.Model})
 		}
 	}
 }
@@ -303,14 +339,15 @@ func semanticSearchPurpose(ctx context.Context) string {
 // semanticSearchEvents 把查询转成向量后按相似度召回历史消息。
 // 任一环节失败都返回 nil,调用方只用词面结果。
 func (r *Runtime) semanticSearchEvents(ctx context.Context, event MessageEvent, query string, fromTime, throughTime int64, crossSession bool) []MessageEvent {
-	if !r.semanticSearchActive(r.effectiveConfigForEvent(event)) {
+	botConfig := r.effectiveConfigForEvent(event)
+	if !r.semanticSearchActive(botConfig) {
 		return nil
 	}
 	store := r.messageVectorStore()
 	if store == nil {
 		return nil
 	}
-	cfg, ok := r.embeddingProviderConfig()
+	cfg, ok := r.embeddingProviderConfig(botConfig)
 	if !ok {
 		return nil
 	}

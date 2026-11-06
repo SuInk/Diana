@@ -560,14 +560,14 @@
                     </div>
                     <span class="cluster" style="gap: 6px">
                       <button v-if="isMediaRole(role.key) && roleForm[role.key]" type="button" class="btn ghost small" @click="clearRole(role.key)">停用</button>
-                      <button class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
+                      <button v-if="!roleSingleRoute(role.key) || !modelRoleRoutes(role.key).length" class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
                         <Plus :size="14" aria-hidden="true" />添加
                       </button>
                     </span>
                   </div>
                   <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
                     <GitBranch :size="22" aria-hidden="true" />
-                    <div><strong>{{ modelRoleSource(role.key) === FOLLOW_VISION ? '沿用视觉理解的模型配置' : modelRoleSource(role.key) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role.key)}的模型配置` : '沿用对话的模型配置' }}</strong></div>
+                    <div><strong>{{ modelInheritedText(role.key) }}</strong></div>
                     <button class="btn small" type="button" @click="openModelRouteEditor(role.key, 0)">独立配置</button>
                   </div>
                   <template v-else>
@@ -681,8 +681,8 @@
                 </details>
                   <AppDisclosure :id="`model-description-${role.key}`" class="model-purpose-description" title="用途与调度说明">
                     <p>{{ role.description }}</p>
-                    <p>拖动模型即可调整调用顺序，具体选择方式由调度模式决定。</p>
-                    <p v-if="!isMediaRole(role.key) && role.key !== 'image'">调用失败时会自动重试或切换；冷却规则在页面底部统一设置。</p>
+                    <p v-if="!roleSingleRoute(role.key)">拖动模型即可调整调用顺序，具体选择方式由调度模式决定。</p>
+                    <p v-if="!isMediaRole(role.key) && role.key !== 'image' && role.key !== 'embedding'">调用失败时会自动重试或切换；冷却规则在页面底部统一设置。</p>
                   </AppDisclosure>
                 </div>
               </div>
@@ -1829,7 +1829,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。需在提供商配置里建一个分组为 embedding 的配置档；每条消息会调用一次向量化接口。</span>
+                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。用的模型在<a href="#" @click.prevent="editorTab = 'model'; selectedModelRole = 'embedding'">「模型」标签</a>的「向量嵌入」里选，不选时自动用提供商里 embedding 分组的第一个配置档；每条消息会调用一次向量化接口。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -3376,7 +3376,7 @@ const purposeRoleKeys = ["reply_tone", "reply_assist", "background"] as const;
 const mediaRoleKeys = ["tts", "stt", "video"] as const;
 type MediaRoleKey = (typeof mediaRoleKeys)[number];
 
-type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
+type RoleKey = "chat" | "vision" | "intent" | "image" | "media_parse" | "embedding" | (typeof purposeRoleKeys)[number] | MediaRoleKey;
 type RoleRoute = { profile_id?: string; group?: string; model: string; provider_id?: string; model_id?: string; follow_chat?: boolean; weight?: number; disabled?: boolean; standby?: boolean; reasoning_effort?: string };
 // params 只在音视频插槽的主路由上有，后备沿用同一份。
 // reasoning_effort 随每条模型路由保存；空表示不发，交给模型默认。
@@ -3441,6 +3441,19 @@ const purposeRoleRows: ModelRoleRow[] = [
   }
 ];
 
+// 向量嵌入只给语义检索用，接的是 /embeddings，对话模型顶替不了，所以没有「跟随对话」。
+// 不选时自动取提供商里 embedding 分组的第一个配置档，和这一档出现之前一样。
+// 向量按模型名存取，换模型后旧消息要重新向量化才搜得到，也就不给后备：失败换一个
+// 模型生成的向量和库里的对不上。
+const embeddingRoleRow: ModelRoleRow = {
+  key: "embedding",
+  label: "向量嵌入",
+  sublabel: "语义检索",
+  description:
+    "把消息转成向量，按意思检索历史（「有什么吃的推荐」能找到「凤爪味道不错」）。只在机器人设置里开了「语义检索」时调用。" +
+    "不指定时自动用提供商里 embedding 分组的第一个配置档。换模型后，之前的消息要等重新向量化后才能按语义搜到。"
+};
+
 const mediaRoleRows: ModelRoleRow[] = [
   {
     key: "tts",
@@ -3499,7 +3512,7 @@ function setMediaParam(role: RoleKey, key: string, value: string): void {
 // 思考强度只对读写文字的用途有意义；生图和音视频插槽不是对话模型，不显示。
 // 跟随对话的那几档连同思考强度一起跟着对话走，也不显示。
 function roleSupportsReasoning(role: RoleKey): boolean {
-  return role !== "image" && !isMediaRole(role);
+  return role !== "image" && role !== "embedding" && !isMediaRole(role);
 }
 
 function roleReasoningOptions(role: RoleKey, route: RoleRoute): AppSelectOption[] {
@@ -3517,7 +3530,7 @@ function clearRole(role: RoleKey): void {
 }
 
 // 细分用途只有这两档，直接和其他用途一起铺开，不再折叠。音视频插槽排在最后。
-const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, imageRoleRow, ...mediaRoleRows];
+const visibleModelRoleRows = [...modelRoleRows, ...purposeRoleRows, embeddingRoleRow, imageRoleRow, ...mediaRoleRows];
 
 function isPurposeRole(role: RoleKey): boolean {
   return purposeRoleKeys.includes(role as (typeof purposeRoleKeys)[number]);
@@ -3525,7 +3538,12 @@ function isPurposeRole(role: RoleKey): boolean {
 
 // 媒体解析和细分用途可以不配，不配时模型一栏锁定，占位文字说明它跟着谁走。
 function isOptionalRole(role: RoleKey): boolean {
-  return role === "media_parse" || isPurposeRole(role) || isMediaRole(role);
+  return role === "media_parse" || role === "embedding" || isPurposeRole(role) || isMediaRole(role);
+}
+
+// 只能配一个模型的用途：向量嵌入换模型就和库里的向量对不上，不做后备。
+function roleSingleRoute(role: RoleKey): boolean {
+  return role === "embedding";
 }
 
 // 细分用途留空时跟着谁：回复辅助先找后台生成，后台生成直接跟随对话。
@@ -3538,6 +3556,7 @@ function roleModelPlaceholder(role: RoleKey): string {
     if (role === "media_parse") return "跟随视觉理解模型";
     if (isPurposeRole(role)) return `跟随${purposeRoleFallbackLabel(role)}模型`;
     if (isMediaRole(role)) return "未配置，不启用";
+    if (role === "embedding") return "自动选用 embedding 分组";
   }
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
@@ -3597,7 +3616,7 @@ function resetModelRecoveryPolicy(): void {
 }
 
 function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
-  return role === "image" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
+  return role === "image" || role === "embedding" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
 }
 
 function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignment["routing_strategy"]> {
@@ -3605,7 +3624,7 @@ function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignmen
   if (assignment?.follow_chat && role !== "chat") return effectiveModelRoutingStrategy("chat");
   const strategy = assignment?.routing_strategy?.trim();
   if (strategy === "failover" || strategy === "round_robin" || strategy === "weighted") return strategy;
-  return role === "image" || isMediaRole(role) ? "failover" : "smart";
+  return role === "image" || role === "embedding" || isMediaRole(role) ? "failover" : "smart";
 }
 
 function clearModelRouteFilters(): void {
@@ -3614,15 +3633,31 @@ function clearModelRouteFilters(): void {
 }
 
 function modelRoleInherited(role: RoleKey): boolean {
-  return !!roleForm.value[role]?.follow_chat || (!roleForm.value[role] && (role === "media_parse" || isPurposeRole(role)));
+  return !!roleForm.value[role]?.follow_chat || (!roleForm.value[role] && (role === "media_parse" || role === "embedding" || isPurposeRole(role)));
 }
 
 function modelRoleSource(role: RoleKey): string {
-  return roleForm.value[role]?.follow_chat ? FOLLOW_CHAT : !roleForm.value[role] && role === "media_parse" ? FOLLOW_VISION : !roleForm.value[role] && isPurposeRole(role) ? UNSPECIFIED : "independent";
+  if (roleForm.value[role]?.follow_chat) return FOLLOW_CHAT;
+  if (roleForm.value[role]) return "independent";
+  if (role === "media_parse") return FOLLOW_VISION;
+  if (role === "embedding") return AUTO_EMBEDDING;
+  return isPurposeRole(role) ? UNSPECIFIED : "independent";
+}
+
+// 模型分配里「沿用…」那一块的说明。
+function modelInheritedText(role: RoleKey): string {
+  const source = modelRoleSource(role);
+  if (source === FOLLOW_VISION) return "沿用视觉理解的模型配置";
+  if (source === UNSPECIFIED) return `跟随${purposeRoleFallbackLabel(role)}的模型配置`;
+  if (source === AUTO_EMBEDDING) {
+    const profile = llmChannels.value.find((channel) => channel.group?.trim() === "embedding" && channel.model?.trim());
+    return profile ? `自动选用 embedding 分组的「${profile.name || profile.id}」· ${profile.model}` : "自动选用 embedding 分组，但提供商里还没有这个分组的配置";
+  }
+  return "沿用对话的模型配置";
 }
 
 function modelRoleSourceOptions(role: RoleKey): AppSelectOption[] {
-  return [{ value: "independent", label: "独立配置" }, ...channelOptionsFor(role).filter((option) => option.value === FOLLOW_CHAT || option.value === FOLLOW_VISION || option.value === UNSPECIFIED)];
+  return [{ value: "independent", label: "独立配置" }, ...channelOptionsFor(role).filter((option) => option.value === FOLLOW_CHAT || option.value === FOLLOW_VISION || option.value === UNSPECIFIED || option.value === AUTO_EMBEDDING)];
 }
 
 function setModelRoleSource(role: RoleKey, value: string): void {
@@ -3645,7 +3680,7 @@ function modelRouteIsStandby(role: RoleKey, index: number): boolean {
 }
 
 function modelRoleRouteSummary(role: RoleKey): string {
-  if (modelRoleInherited(role)) return modelRoleSource(role) === FOLLOW_VISION ? "跟随视觉理解" : modelRoleSource(role) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role)}` : "跟随对话";
+  if (modelRoleInherited(role)) return modelRoleSource(role) === FOLLOW_VISION ? "跟随视觉理解" : modelRoleSource(role) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role)}` : modelRoleSource(role) === AUTO_EMBEDDING ? "自动" : "跟随对话";
   const routes = modelRoleRoutes(role);
   return `${routes.length} 个模型 · ${routes.filter(({ route }) => !route.disabled).length} 已启用`;
 }
@@ -3766,7 +3801,7 @@ function modelRouteTestKey(role: RoleKey, route: RoleRoute): string {
 }
 
 function modelRouteTestable(role: RoleKey, route: RoleRoute): boolean {
-  return !isMediaRole(role) && !!route.model?.trim() && selectedRoleProfiles(role, route).length > 0;
+  return !isMediaRole(role) && role !== "embedding" && !!route.model?.trim() && selectedRoleProfiles(role, route).length > 0;
 }
 
 function modelRouteTestResult(role: RoleKey, route: RoleRoute): ModelRouteTestResult | undefined {
@@ -3960,13 +3995,13 @@ function modelPurposeLabel(role: RoleKey): string {
 }
 
 function modelPurposeIcon(role: RoleKey) {
-  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, background: Layers, reply_tone: MessageSquare, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
+  return { chat: MessageSquare, vision: Eye, media_parse: ScanLine, intent: Waypoints, image: Image, embedding: Search, background: Layers, reply_tone: MessageSquare, reply_assist: MessageSquare, tts: MessageSquare, stt: MessageSquare, video: Image }[role];
 }
 
 function modelPurposeSummary(role: RoleKey): string {
   const assignment = roleForm.value[role];
   if (assignment?.follow_chat) return "跟随对话";
-  if (!assignment) return role === "media_parse" ? "跟随视觉理解" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
+  if (!assignment) return role === "media_parse" ? "跟随视觉理解" : role === "embedding" ? "自动" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
   return assignment.model || "请选择模型";
 }
 
@@ -4198,6 +4233,8 @@ const FOLLOW_VISION = "__follow_vision__";
 const DISABLED = "__disabled__";
 // 细分用途的「不指定」：不存这一档，跟随它所属的那一档（见 purposeRoleFallbackLabel）。
 const UNSPECIFIED = "__unspecified__";
+// 向量嵌入的「自动」：不存这一档，后端取 embedding 分组的第一个配置档。
+const AUTO_EMBEDDING = "__auto_embedding__";
 
 // 没设过就跟随对话的用途：视觉理解、意图识别、图片生成。留空和显式「跟随对话」
 // 是同一个意思，界面上统一显示成后者，保存时也写成后者。
@@ -4264,6 +4301,7 @@ function modelCompatibility(model: LLMModelInfo, role: RoleKey): ModelCompatibil
   if (role === "tts") return output.has("audio") ? "compatible" : "unknown";
   if (role === "stt") return input.has("audio") ? "compatible" : "unknown";
   if (role === "video") return output.has("video") ? "compatible" : "unknown";
+  if (role === "embedding") return output.has("embedding") || output.has("embeddings") ? "compatible" : "unknown";
   if (role === "chat" || role === "intent" || isPurposeRole(role)) {
     return !outputKnown ? "unknown" : output.has("text") ? "compatible" : "incompatible";
   }
@@ -4337,7 +4375,7 @@ function roleChannels(role: RoleKey): LLMConfig[] {
 // 添加或编辑一条模型路由时只能选具体的提供商或分组：「跟随」「不指定」「不启用」
 // 都是整档的来源设置，放在「模型来源」和「停用这个插槽」里，选进单条路由没有意义。
 function modelRouteEditorChannelOptions(role: RoleKey): AppSelectOption[] {
-  return channelOptionsFor(role).filter((option) => ![FOLLOW_CHAT, FOLLOW_VISION, UNSPECIFIED, DISABLED].includes(option.value));
+  return channelOptionsFor(role).filter((option) => ![FOLLOW_CHAT, FOLLOW_VISION, UNSPECIFIED, DISABLED, AUTO_EMBEDDING].includes(option.value));
 }
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
@@ -4345,10 +4383,11 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
   // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
   if (isMediaRole(role)) base.push({ value: DISABLED, label: "不启用", hint: "不配置这项能力" });
+  if (role === "embedding") base.push({ value: AUTO_EMBEDDING, label: "自动", hint: "用提供商里 embedding 分组的第一个配置档" });
   if (isPurposeRole(role)) {
     base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
   }
-  if (role !== "chat" && role !== "reply_tone" && !isMediaRole(role)) {
+  if (role !== "chat" && role !== "reply_tone" && role !== "embedding" && !isMediaRole(role)) {
     base.push({
       value: FOLLOW_CHAT,
       label: "跟随对话",
@@ -4493,6 +4532,7 @@ function roleModelValue(role: RoleKey): string {
 function roleSelectionValue(role: RoleKey): string {
   if (role === "media_parse" && !roleForm.value[role]) return FOLLOW_VISION;
   if (isMediaRole(role) && !roleForm.value[role]) return DISABLED;
+  if (role === "embedding" && !roleForm.value[role]) return AUTO_EMBEDDING;
   if (isPurposeRole(role) && !roleForm.value[role]) return UNSPECIFIED;
   return routeSelectionValue(roleForm.value[role]);
 }
@@ -4508,7 +4548,7 @@ function setRoleChannel(role: RoleKey, value: string): void {
     delete roleForm.value[role];
     return;
   }
-  if ((isMediaRole(role) && value === DISABLED) || (isPurposeRole(role) && value === UNSPECIFIED)) {
+  if ((isMediaRole(role) && value === DISABLED) || (isPurposeRole(role) && value === UNSPECIFIED) || (role === "embedding" && value === AUTO_EMBEDDING)) {
     delete roleForm.value[role];
     return;
   }
@@ -5044,7 +5084,7 @@ async function save(): Promise<void> {
   for (const row of visibleModelRoleRows) {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
-    if (!role && (row.key === "media_parse" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
+    if (!role && (row.key === "media_parse" || row.key === "embedding" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
     // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && role?.follow_chat) continue;
     const modelError = (message: string) => {

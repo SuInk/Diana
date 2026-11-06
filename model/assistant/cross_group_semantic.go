@@ -11,10 +11,11 @@ import (
 const crossGroupSemanticMinSimilarity = 0.65
 
 func (r *Runtime) crossGroupSemanticEvents(event MessageEvent, store MessageHistoryStore, query string, through int64) ([]MessageEvent, string) {
-	if !boolValue(r.effectiveConfigForEvent(event).SemanticSearchEnabled, false) {
+	botConfig := r.effectiveConfigForEvent(event)
+	if !boolValue(botConfig.SemanticSearchEnabled, false) {
 		return nil, "未开启语义检索"
 	}
-	cfg, ok := r.embeddingProviderConfig()
+	cfg, ok := r.embeddingProviderConfig(botConfig)
 	if !ok {
 		return nil, "未配置 embedding 模型"
 	}

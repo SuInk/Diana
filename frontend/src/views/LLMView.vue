@@ -122,7 +122,7 @@
           <div v-for="section in voiceSections" :key="section.role" class="stack" style="gap: 6px">
             <div class="group-header">
               <span>{{ section.label }}</span>
-              <span class="muted" style="font-size: 12px">{{ section.items.length }} 个 · {{ section.hint }}</span>
+              <span class="muted" style="font-size: 12px">{{ section.hint }}</span>
             </div>
             <div class="row-list">
               <div v-for="profile in section.items" :key="profile.id" class="row-item" :class="{ selected: editingID === profile.id }">
@@ -137,26 +137,19 @@
                   <button class="btn small ghost" type="button" :aria-label="`编辑语音提供商 ${profile.name || profile.model}`" @click="startEdit(profile, 'voice')">
                     <Pencil :size="13" aria-hidden="true" />
                   </button>
-                  <button v-if="groupOf(profile) === speechGroup" class="btn small ghost danger" type="button" :disabled="busy || profiles.length <= 1" title="删除" :aria-label="`删除语音提供商 ${profile.name || profile.model}`" @click="remove(profile)">
+                  <button v-if="voiceGroups.has(groupOf(profile))" class="btn small ghost danger" type="button" :disabled="busy || profiles.length <= 1" title="删除" :aria-label="`删除语音提供商 ${profile.name || profile.model}`" @click="remove(profile)">
                     <Trash2 :size="13" aria-hidden="true" />
                   </button>
                 </div>
               </div>
-              <p v-if="section.items.length === 0" class="muted provider-section-empty">{{ section.empty }}</p>
-            </div>
-          </div>
-          <div class="stack" style="gap: 6px">
-            <div class="group-header">
-              <span>内置，无需配置</span>
-              <span class="muted" style="font-size: 12px">不用建提供商，在机器人页「模型分配」里直接选</span>
-            </div>
-            <div class="row-list">
-              <div v-for="item in builtinVoiceServices" :key="item.label" class="row-item">
+              <!-- 内置服务不用建提供商，直接排在对应那一节里，在机器人页「模型」里就能选。 -->
+              <div v-for="item in builtinVoiceServices.filter((builtin) => builtin.role === section.role)" :key="item.label" class="row-item">
                 <div class="row-main">
-                  <div class="row-title">{{ item.label }} <span class="badge">{{ item.role }}</span></div>
+                  <div class="row-title">{{ item.label }} <span class="badge">内置</span></div>
                   <div class="row-sub">{{ item.hint }}</div>
                 </div>
               </div>
+              <p v-if="section.items.length === 0 && !builtinVoiceServices.some((builtin) => builtin.role === section.role)" class="muted provider-section-empty">{{ section.empty }}</p>
             </div>
           </div>
         </div>
@@ -268,6 +261,10 @@
               <AppSelect id="llm-voice-service" :model-value="voiceService" :options="voiceServiceOptions" @update:model-value="applyVoiceService" />
               <span v-if="currentVoiceService?.hint" class="hint">{{ currentVoiceService.hint }}</span>
             </div>
+            <div v-if="voiceUsageEditable" class="field">
+              <label for="llm-voice-usage">用途</label>
+              <AppSelect id="llm-voice-usage" :model-value="voiceUsage" :options="voiceUsageOptions" placeholder="未设置，沿用机器人页的旧参数" @update:model-value="setVoiceUsage" />
+            </div>
             <div class="field">
               <label for="llm-name">名称</label>
               <input id="llm-name" v-model="form.name" class="input" :placeholder="videoOnly ? '例如 可灵' : voiceOnly ? '例如 MiniMax 语音' : '例如 主力 · GPT'" />
@@ -355,32 +352,25 @@
               <input id="llm-voice-model" v-model="voiceModel" class="input mono" :placeholder="videoOnly ? (videoService === '' ? 'sora-2' : '按服务文档填写，如 kling-v2-6、viduq3、ray-3.2') : voiceService === 'openai' ? 'tts-1、gpt-4o-mini-tts、FunAudioLLM/SenseVoiceSmall' : '按服务文档填写'" />
               <span class="hint">没有模型概念的服务填服务名即可。</span>
             </div>
-            <div class="field wide">
-              <label for="llm-desc">备注（可选）</label>
-              <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
-            </div>
           </div>
         </section>
-        <details class="provider-editor-section prompt-advanced" :style="{ order: editorMode !== 'model' ? 1 : 3 }" :open="editorMode !== 'model' || Object.keys(form.speech_params).length > 0">
-          <summary class="provider-editor-title">{{ videoOnly ? "视频参数" : voiceOnly ? "合成与识别参数" : "语音与视频服务" }}<span v-if="speechSummary" class="muted provider-editor-summary">{{ speechSummary }}</span></summary>
-          <div class="form-grid">
-            <div class="field wide">
-              <div v-for="role in editorSpeechRoles" :key="role.key" class="stack">
-                <AppSwitch :model-value="form.speech_params[role.key] !== undefined" :aria-label="role.label + '参数'" @update:model-value="value => setProviderSpeechEnabled(role.key, value)">{{ role.label }}参数</AppSwitch>
-                <div v-if="form.speech_params[role.key] !== undefined" class="form-grid">
-                  <label v-for="field in speechServiceFields(role.key, form.speech_params[role.key] ?? {}, form.base_url).filter((field) => !(mediaOnly && field.key === 'api'))" :key="field.key" class="field" :class="{ wide: field.multiline }">
-                    <span>{{ field.label }}</span>
-                    <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
-                    <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
-                    <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
-                    <span v-if="field.hint" class="hint">{{ field.hint }}</span>
-                  </label>
-                </div>
-              </div>
-              <p class="hint">不开启时沿用机器人页的旧配置。</p>
+        <!-- 语音、视频参数只在语音和视频标签里编辑；模型提供商的编辑框不列这一节。
+             用哪几项由「用途」决定，不再一项项开关。 -->
+        <section v-if="(editorMode !== 'model' || mediaOnly) && editorParamRoles.some((role) => speechFieldsFor(role.key).length)" class="provider-editor-section" style="order: 1">
+          <h3 class="provider-editor-title">{{ videoOnly ? "视频参数" : "语音参数" }}</h3>
+          <template v-for="role in editorParamRoles" :key="role.key">
+            <h4 v-if="editorParamRoles.length > 1 && speechFieldsFor(role.key).length" class="provider-editor-subtitle">{{ role.label }}</h4>
+            <div class="form-grid">
+              <label v-for="field in speechFieldsFor(role.key)" :key="field.key" class="field" :class="{ wide: field.multiline }">
+                <span>{{ field.label }}</span>
+                <AppSelect v-if="field.options" :model-value="form.speech_params[role.key]?.[field.key] ?? ''" :options="field.options" :placeholder="field.placeholder" @update:model-value="value => setProviderSpeechParam(role.key, field.key, value)" />
+                <textarea v-else-if="field.multiline" class="input" rows="3" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLTextAreaElement).value)" />
+                <input v-else class="input" :value="form.speech_params[role.key]?.[field.key] ?? ''" :placeholder="field.placeholder" @change="event => setProviderSpeechParam(role.key, field.key, (event.target as HTMLInputElement).value)" />
+                <span v-if="field.hint" class="hint">{{ field.hint }}</span>
+              </label>
             </div>
-          </div>
-        </details>
+          </template>
+        </section>
         <section v-if="!mediaOnly || modelOptions.length > 1" class="provider-editor-section" style="order: 2">
           <h3 class="provider-editor-title">模型</h3>
           <div class="form-grid">
@@ -429,8 +419,8 @@
             </div>
           </div>
         </section>
-        <details class="provider-editor-section prompt-advanced" style="order: 4" :open="advancedOpen" @toggle="advancedOpen = ($event.target as HTMLDetailsElement).open">
-          <summary class="provider-editor-title">高级设置<span class="muted provider-editor-summary">{{ advancedSummary }}</span></summary>
+        <section class="provider-editor-section" style="order: 4">
+          <h3 class="provider-editor-title">高级设置</h3>
           <div class="form-grid">
             <div v-if="form.provider === 'openai_compatible'" class="field wide">
               <label for="llm-header-name-0">自定义请求头（可选）</label>
@@ -454,14 +444,13 @@
                     :placeholder="row.configured ? '已保存，留空则沿用' : '值'"
                   />
                   <button
-                    class="btn ghost"
+                    class="btn icon-only ghost danger"
                     type="button"
                     :title="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                     :aria-label="row.name ? `删除请求头 ${row.name}` : '清空这一行'"
                     @click="removeHeader(index)"
                   >
-                    <X :size="14" :stroke-width="2.25" aria-hidden="true" />
-                    删除
+                    <Trash2 :size="14" aria-hidden="true" />
                   </button>
                 </div>
                 <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
@@ -499,7 +488,16 @@
               <span class="hint">0 为不限，最小 0.001。</span>
             </div>
           </div>
-        </details>
+        </section>
+        <!-- 备注不影响调用，放在编辑框最下面。 -->
+        <section class="provider-editor-section" style="order: 5">
+          <div class="form-grid">
+            <div class="field wide">
+              <label for="llm-desc">备注（可选）</label>
+              <input id="llm-desc" v-model="form.description" class="input" placeholder="这套配置的用途" />
+            </div>
+          </div>
+        </section>
       </div>
       <template #footer>
         <button class="btn ghost" type="button" @click="closeEditor">取消</button>
@@ -753,11 +751,16 @@ async function reload(): Promise<void> {
 type EditorMode = "model" | "voice" | "video";
 const editorMode = ref<EditorMode>("model");
 // 纯语音分组用不上对话那套预设：服务平台、接口模式和上下文窗口都只影响对话请求，藏起来少一层干扰。
-const voiceOnly = computed(() => form.value.group.trim() === speechGroup);
+const voiceOnly = computed(() => voiceGroups.has(form.value.group.trim()));
 const videoOnly = computed(() => form.value.group.trim() === videoGroup);
 // 纯语音、纯视频提供商都用不上对话那套预设：服务平台、接入类型、接口模式和上下文窗口都只影响对话请求。
 const mediaOnly = computed(() => voiceOnly.value || videoOnly.value);
-const editorSpeechRoles = computed(() => speechRoles.filter((role) => videoOnly.value ? role.key === "video" : voiceOnly.value ? role.key !== "video" : true));
+// 编辑框里列哪几项参数：视频提供商只有视频；语音提供商按「用途」，即 speech_params 里有哪几项。
+const editorParamRoles = computed(() => speechRoles.filter((role) => videoOnly.value || editorMode.value === "video" ? role.key === "video" : role.key !== "video" && form.value.speech_params[role.key] !== undefined));
+function speechFieldsFor(role: "tts" | "stt" | "video") {
+  // 语音服务已经在连接一节选过，参数里不再重复列接口。
+  return speechServiceFields(role, form.value.speech_params[role] ?? {}, form.value.base_url).filter((field) => !(mediaOnly.value && field.key === "api"));
+}
 const videoServiceOptions = videoAPIOptions.map((option) => ({ ...option, value: option.value || "sora" }));
 // Sora 格式在参数里是空的 api；下拉框不收空值，用 "sora" 代替。
 const videoService = computed(() => form.value.speech_params.video?.api ?? "");
@@ -802,31 +805,12 @@ const voiceModel = computed({
     form.value.model = id;
   }
 });
-const advancedOpen = ref(false);
 const editorTitle = computed(() => {
   const noun = { model: "模型提供商", voice: "语音提供商", video: "视频提供商" }[editorMode.value];
   return editingID.value ? `编辑${noun}` : `新建${noun}`;
 });
-const speechSummary = computed(() => {
-  const enabled = speechRoles.filter((role) => form.value.speech_params[role.key] !== undefined).map((role) => role.label);
-  return enabled.length ? `已开启${enabled.join("、")}` : "未开启";
-});
-const advancedSummary = computed(() => {
-  const parts: string[] = [];
-  const headerCount = headerRows.value.filter((row) => row.name.trim()).length;
-  if (headerCount > 0) parts.push(`${headerCount} 个请求头`);
-  if (Number(form.value.max_concurrency) > 0) parts.push(`并发 ${form.value.max_concurrency}`);
-  if (Number(form.value.max_rps) > 0) parts.push(`RPS ${form.value.max_rps}`);
-  return parts.length ? parts.join(" · ") : "请求头、User-Agent、并发与限速";
-});
-// 高级设置默认收起；报错落在 User-Agent 时要展开，不然标红的那格看不见。
-watch(invalidField, (field) => {
-  if (field === "user_agent") advancedOpen.value = true;
-});
-
 function startCreate(mode: EditorMode = "model"): void {
   editorMode.value = mode;
-  advancedOpen.value = false;
   editingID.value = undefined;
   editingConfigured.value = false;
   editingKeyPreview.value = "";
@@ -864,17 +848,28 @@ const groupLabels: Record<string, string> = {
   image: "图片生成",
   video: "视频生成",
   embedding: "向量嵌入（语义检索）",
-  speech: "语音"
+  speech: "语音",
+  tts: "语音合成",
+  stt: "语音识别"
 };
 
-const groupOrder = ["default", "vision", "intent", "image", "video", "embedding", "speech"];
+const groupOrder = ["default", "vision", "intent", "image", "video", "embedding", "speech", "tts", "stt"];
 
 // 「语音」分组是在语音标签新建的纯语音提供商，模型标签不重复列；放在别的分组、
 // 同时开了语音参数的配置两边都列，模型标签上用徽标标出来。
+// 后端另有 tts、stt 两个分组（旧版 GPT-SoVITS 插件迁移、手填分组都会落在这里），
+// 它们同样是纯语音提供商，归到语音标签对应的那一节，不再混进模型标签。
 const speechGroup = "speech";
+const voiceGroups = new Set([speechGroup, "tts", "stt"]);
 const videoGroup = "video";
 const profileFilter = ref("");
-const modelProfiles = computed(() => profiles.value.filter((profile) => groupOf(profile) !== speechGroup && groupOf(profile) !== videoGroup));
+const modelProfiles = computed(() => profiles.value.filter((profile) => !voiceGroups.has(groupOf(profile)) && groupOf(profile) !== videoGroup));
+
+// 这个配置在语音标签的哪一节：开了哪种语音参数就进哪节；tts、stt 分组没开参数时按分组归节，
+// 语音按地址识别接口，不开参数也能用。
+function profileServesVoice(profile: LLMConfig, role: SpeechRole): boolean {
+  return profile.speech_params?.[role] !== undefined || groupOf(profile) === role;
+}
 const videoProfiles = computed(() => profiles.value.filter((profile) => profile.speech_params?.video !== undefined || groupOf(profile) === videoGroup));
 
 function videoSummary(profile: LLMConfig): string {
@@ -926,19 +921,19 @@ const groupedProfiles = computed<{ group: string; items: LLMConfig[] }[]>(() => 
 type SpeechRole = "tts" | "stt";
 const voiceSections = computed(() => {
   const sections: { role: SpeechRole | "pending"; label: string; hint: string; empty: string; items: LLMConfig[] }[] = [
-    { role: "tts", label: "语音合成", hint: "把回复读成语音消息", empty: "还没有配置语音合成，也可以直接用下面的内置朗读。", items: profiles.value.filter((profile) => profile.speech_params?.tts !== undefined) },
-    { role: "stt", label: "语音识别", hint: "把收到的语音转成文字", empty: "还没有配置语音识别，也可以直接用下面的本机 Whisper。", items: profiles.value.filter((profile) => profile.speech_params?.stt !== undefined) }
+    { role: "tts", label: "语音合成", hint: "把回复读成语音消息", empty: "还没有配置语音合成。", items: profiles.value.filter((profile) => profileServesVoice(profile, "tts")) },
+    { role: "stt", label: "语音识别", hint: "把收到的语音转成文字", empty: "还没有配置语音识别。", items: profiles.value.filter((profile) => profileServesVoice(profile, "stt")) }
   ];
   const pending = profiles.value.filter((profile) => groupOf(profile) === speechGroup && !profile.speech_params?.tts && !profile.speech_params?.stt);
   if (pending.length > 0) sections.push({ role: "pending", label: "待配置", hint: "在语音分组里，但还没开语音合成或识别参数", empty: "", items: pending });
   return sections;
 });
-const voiceProfileCount = computed(() => profiles.value.filter((profile) => profile.speech_params?.tts || profile.speech_params?.stt || groupOf(profile) === speechGroup).length);
+const voiceProfileCount = computed(() => profiles.value.filter((profile) => profile.speech_params?.tts || profile.speech_params?.stt || voiceGroups.has(groupOf(profile))).length);
 
 const builtinVoiceServices = [
-  { label: "Edge 朗读", role: "语音合成", hint: "免费，不要 Key，音色用 zh-CN-XiaoxiaoNeural 这类名字" },
-  { label: "谷歌翻译朗读", role: "语音合成", hint: "免费，不要 Key，只能选语言不能选音色" },
-  { label: "本机 Whisper（whisper.cpp）", role: "语音识别", hint: "调用本机的 whisper-cli 命令，需要自行安装并下载模型文件" }
+  { label: "Edge 朗读", role: "tts", hint: "免费，不要 Key，不用建提供商；音色用 zh-CN-XiaoxiaoNeural 这类名字" },
+  { label: "谷歌翻译朗读", role: "tts", hint: "免费，不要 Key，不用建提供商；只能选语言不能选音色" },
+  { label: "本机 Whisper（whisper.cpp）", role: "stt", hint: "调用本机的 whisper-cli 命令，需要自行安装并下载模型文件" }
 ];
 
 const speechRoleLabels: Record<string, string> = { tts: "语音合成", stt: "语音识别", video: "视频生成" };
@@ -1064,7 +1059,6 @@ async function move(profile: LLMConfig, delta: number): Promise<void> {
 
 function startEdit(profile: LLMConfig, mode: EditorMode = "model"): void {
   editorMode.value = mode;
-  advancedOpen.value = false;
   editingID.value = profile.id;
   editingConfigured.value = Boolean(profile.api_key_configured);
   editingKeyPreview.value = profile.api_key_preview ?? "";
@@ -1221,10 +1215,28 @@ const speechRoles = [
   { key: "video", label: "视频生成", hint: "视频接口格式（可灵、Vidu、Seedance、自定义等）、分辨率与时长。", botHint: "" }
 ] as const;
 
-function setProviderSpeechEnabled(role: "tts" | "stt" | "video", enabled: boolean): void {
+// 语音提供商的用途：合成、识别或两者都用，决定保存哪几项语音参数。识别只有几家支持。
+// 两项都没有的是旧配置（参数还在机器人页的插槽上），显示为未设置，不替它补参数。
+const voiceUsageEditable = computed(() => editorMode.value === "voice" || voiceOnly.value);
+const voiceUsageOptions = computed(() => {
+  const sttSupported = Boolean(currentVoiceService.value?.stt || form.value.speech_params.stt);
+  return [
+    { value: "tts", label: "语音合成" },
+    ...(sttSupported ? [{ value: "stt", label: "语音识别" }, { value: "both", label: "合成和识别都用" }] : [])
+  ];
+});
+const voiceUsage = computed(() => {
+  const { tts, stt } = form.value.speech_params;
+  return tts && stt ? "both" : stt ? "stt" : tts ? "tts" : "";
+});
+function setVoiceUsage(value: string): void {
   const params = { ...form.value.speech_params };
-  if (enabled) params[role] = {};
-  else delete params[role];
+  const api = (params.tts ?? params.stt)?.api;
+  const seed: Record<string, string> = api ? { api } : {};
+  if (value === "tts" || value === "both") params.tts ??= { ...seed };
+  else delete params.tts;
+  if (value === "stt" || value === "both") params.stt ??= { ...seed };
+  else delete params.stt;
   form.value.speech_params = params;
 }
 
@@ -1497,13 +1509,12 @@ useConfigurationRefresh(["bot", "llm"], reload);
    设置的授权列表，放在列表下面。 */
 .header-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 80px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
   gap: 8px;
   align-items: center;
 }
 
 .header-row > .btn {
-  width: 100%;
   justify-content: center;
 }
 
@@ -1572,6 +1583,13 @@ useConfigurationRefresh(["bot", "llm"], reload);
   font-size: 13.5px;
   font-weight: 600;
   color: var(--text);
+}
+
+.provider-editor-subtitle {
+  margin: 12px 0 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-muted, var(--muted));
 }
 
 summary.provider-editor-title {
