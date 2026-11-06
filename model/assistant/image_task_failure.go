@@ -125,35 +125,73 @@ func (a imageFailureAdvice) message(taskName string) string {
 	return fmt.Sprintf("%s失败：%s。\n处理建议：%s", name, strings.TrimRight(a.Reason, "。"), a.Advice)
 }
 
+// personaSource 是交给人设改写的那句。只给群友听得懂、能照做的部分：处理建议里
+// 「请管理员检查配置档、额度、代理」这类话不该经由角色口吻说出来，只有换个说法、
+// 重发原图这几类群友自己能做的留下。
+func (a imageFailureAdvice) personaSource(taskName string) string {
+	name := strings.TrimSpace(taskName)
+	if name == "" {
+		name = "图片生成"
+	}
+	text := fmt.Sprintf("%s失败：%s。", name, strings.TrimRight(a.Reason, "。"))
+	switch a.Category {
+	case "content_policy", "source_missing", "invalid_source":
+		text += a.Advice
+	}
+	return text
+}
+
+// imageFailurePersonaAllowed 报告错误提示关着、但主人开了「出错时仍用人设回一句」。
+// 停用的机器人和插件自己说了不要发错误的，照样不出声。
+func (r *Runtime) imageFailurePersonaAllowed(event MessageEvent, pluginID string) bool {
+	if r.profileDisabled(event.ProfileID) || r.errorNoticeAllowed(event) || !r.pluginErrorNoticeAllowed(event, pluginID) {
+		return false
+	}
+	return boolValue(r.effectiveConfigForEvent(event).ErrorPersonaReplyEnabled, false)
+}
+
 // handleImageTaskFailure 记下生图失败的分类和建议，并在开关允许时发进聊天。
 func (r *Runtime) handleImageTaskFailure(ctx context.Context, item reservedSubagentTask, err error, timedOut bool, timeout time.Duration) {
 	advice := classifyImageFailure(err, timedOut, timeout)
 	notice := advice.message(item.task.Name)
-	allowed := r.diagnosticAllowed(item.event, subagentTaskPluginID(item))
-	sent := false
+	pluginID := subagentTaskPluginID(item)
+	allowed := r.diagnosticAllowed(item.event, pluginID)
+	sent, persona := false, false
 	var sendErr error
 	if allowed {
-		sendErr = r.sendDiagnosticFollowup(ctx, item.event, subagentTaskPluginID(item), notice)
+		sendErr = r.sendDiagnosticFollowup(ctx, item.event, pluginID, notice)
 		sent = sendErr == nil
+	} else if r.imageFailurePersonaAllowed(item.event, pluginID) {
+		// 错误提示关了、但开着「出错时仍用人设回一句」：和主回复出错一样，让模型按人设
+		// 说一句没画出来。不然群友只看到「在画了」，之后再没下文。改写不成就保持静默，
+		// 不退回带「处理建议」的原文。
+		cfg := r.effectiveConfigForEvent(item.event)
+		if rewritten, ok := r.rewriteNoticeText(ctx, item.event, advice.personaSource(item.task.Name), cfg.PromptOverrides.text(promptErrorNoticeSpec), PurposeErrorNotice); ok {
+			persona = true
+			notice = rewritten
+			sendErr = r.sendSubagentFollowup(withoutCarryOverDelivery(ctx), item.event, rewritten)
+			sent = sendErr == nil
+		}
 	}
 	detail := ""
 	if err != nil {
 		detail = err.Error()
 	}
 	metadata := map[string]any{
-		"kind":          item.task.Kind,
-		"name":          item.task.Name,
-		"task_id":       item.id,
-		"group_id":      item.event.GroupID,
-		"user_id":       item.event.UserID,
-		"message_id":    item.event.MessageID,
-		"category":      advice.Category,
-		"reason":        advice.Reason,
-		"advice":        advice.Advice,
-		"notice":        notice,
-		"notice_sent":   sent,
-		"notice_switch": allowed,
-		"timed_out":     timedOut,
+		"kind":           item.task.Kind,
+		"name":           item.task.Name,
+		"task_id":        item.id,
+		"group_id":       item.event.GroupID,
+		"user_id":        item.event.UserID,
+		"message_id":     item.event.MessageID,
+		"category":       advice.Category,
+		"reason":         advice.Reason,
+		"advice":         advice.Advice,
+		"notice":         notice,
+		"notice_sent":    sent,
+		"notice_switch":  allowed,
+		"notice_persona": persona,
+		"timed_out":      timedOut,
 	}
 	if label := llmProviderAttemptLabel(err); label != "" {
 		metadata["provider_label"] = label

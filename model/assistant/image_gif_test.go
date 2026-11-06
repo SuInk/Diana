@@ -200,3 +200,42 @@ func TestDianaImageToolHidesGIFWithoutAnimationModel(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// 审核拒绝按内容判，换模型再试等于绕审核，还要再花一次钱；上游 5xx 才换下一个。
+func TestImageFailoverStopsOnContentPolicy(t *testing.T) {
+	var models []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		model, _ := payload["model"].(string)
+		models = append(models, model)
+		w.Header().Set("Content-Type", "application/json")
+		switch model {
+		case "blocked":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Your request was rejected by the safety system.","type":"image_generation_user_error","code":"moderation_blocked"}}`))
+		case "flaky":
+			w.WriteHeader(http.StatusBadGateway)
+			_, _ = w.Write([]byte(`{"error":{"message":"bad gateway"}}`))
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": []map[string]string{{"b64_json": base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n"))}}})
+		}
+	}))
+	defer server.Close()
+
+	base := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: server.URL + "/v1", Model: "gpt-test"}
+	set := llm.ProfileSet{Profiles: []llm.Profile{{ID: "a", Group: "pool", Config: base}, {ID: "b", Group: "pool", Config: base}}}
+	run := func(first string) error {
+		models = nil
+		role := ModelRole{ProfileID: "a", Model: first, Fallbacks: []ModelRole{{ProfileID: "b", Model: "spare"}}}
+		runtime := NewRuntime(BotConfig{ID: "bot", ModelRoles: map[string]ModelRole{"image": role}}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: set}, nil, nil, nil)
+		_, _, err := runtime.generateImageWithFailover(context.Background(), llm.ImageGenerateRequest{Prompt: "猫"})
+		return err
+	}
+	if err := run("blocked"); err == nil || strings.Join(models, ",") != "blocked" {
+		t.Fatalf("审核拒绝后不该换模型: models=%v err=%v", models, err)
+	}
+	if err := run("flaky"); err != nil || strings.Join(models, ",") != "flaky,spare" {
+		t.Fatalf("5xx 应换下一个: models=%v err=%v", models, err)
+	}
+}

@@ -536,8 +536,25 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 			return resp, cfg, nil
 		}
 		lastErr = annotateImageProviderAttempt(err, cfg)
+		if imageFailureStopsFailover(err) {
+			break
+		}
 	}
 	return nil, llm.ProviderConfig{}, lastErr
+}
+
+// imageFailureStopsFailover 报告这次失败换模型也没用，应当直接结束。
+//
+// 审核拒绝（moderation_blocked）是按内容判的：拿同一段描述去下一个模型那里再试，
+// 等于绕着审核找能放行的地方，多半还会再被拒，每次都要花钱。原图格式不被接受、
+// 找不到原图也一样，换谁都读不了。其余的超时、5xx、限流、鉴权、参数不被支持，
+// 都是这个候选自己的问题，照旧换下一个。
+func imageFailureStopsFailover(err error) bool {
+	switch classifyImageFailure(err, false, 0).Category {
+	case "content_policy", "invalid_source", "source_missing":
+		return true
+	}
+	return false
 }
 
 // errNoAnimationImageModel 是要动图、但图片候选里没有一个标了动图能力。
@@ -612,6 +629,9 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 			return resp, cfg, nil
 		}
 		lastErr = annotateImageProviderAttempt(err, cfg)
+		if imageFailureStopsFailover(err) {
+			break
+		}
 	}
 	return nil, llm.ProviderConfig{}, lastErr
 }

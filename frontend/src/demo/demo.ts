@@ -123,7 +123,8 @@ const modelCatalog = [
   { id: "gpt-6.1-sol", input_modalities: ["text", "image"], output_modalities: ["text"], reasoning_efforts: ["low", "medium", "high", "xhigh", "max"] },
   { id: "gpt-6-sol", input_modalities: ["text", "image"], output_modalities: ["text"], context_window_tokens: 1_050_000 },
   { id: "gpt-5.6-terra", input_modalities: ["text"], output_modalities: ["text"], context_window_tokens: 400_000 },
-  { id: "gpt-image-2.5-sunburst", input_modalities: ["text", "image"], output_modalities: ["image"] }
+  { id: "gpt-image-2.5-sunburst", input_modalities: ["text", "image"], output_modalities: ["image"] },
+  { id: "gpt-image-2.6-sunburst", input_modalities: ["text", "image"], output_modalities: ["image"] }
 ];
 
 let llmConfig: LLMConfig = {
@@ -166,7 +167,7 @@ const oneBotProfile: BotProfileConfig = {
   model_roles: {
     chat: { profile_id: "llm-chat", model: "gpt-6-sol", fallbacks: [{ profile_id: "llm-vision", model: "gpt-6-sol" }, { profile_id: "llm-intent", model: "gpt-5.6-terra", standby: true }] },
     vision: { profile_id: "llm-vision", model: "gpt-6-sol" },
-    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst" },
+    intent: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, image: { profile_id: "llm-image", model: "gpt-image-2.5-sunburst", routing_strategy: "failover", fallbacks: [{ profile_id: "llm-image", model: "gpt-image-2.6-sunburst" }] },
     tts: { profile_id: "llm-voice", model: "speech-2.6-hd" }
   }
 };

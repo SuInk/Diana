@@ -63,6 +63,17 @@ export function modelCapabilitySummary(model: LLMModelInfo): string {
   return labels.join(" · ") || "能力未标注";
 }
 
+// 和后端 ImageModelSupportsAnimation 同一套规则：模型目录都不标「动图」，已知能出
+// GIF 的按名字认；手动设置过能力的以手动为准，勾掉就是不支持。
+const animationImageModelPrefixes = ["gpt-image-2.6"];
+
+export function imageModelSupportsAnimation(id: string, model?: LLMModelInfo): boolean {
+  if (model?.capabilities_override) return normalizeModelModalities(model.capabilities_override.output_modalities).includes("animation");
+  if (normalizeModelModalities(model?.output_modalities).includes("animation")) return true;
+  const name = id.trim().toLowerCase().split("/").pop() ?? "";
+  return animationImageModelPrefixes.some(prefix => name.startsWith(prefix));
+}
+
 export interface ModelMetadataDraft {
   id: string;
   context: string;

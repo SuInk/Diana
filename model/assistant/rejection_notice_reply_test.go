@@ -207,3 +207,117 @@ func TestUpstreamRejectionRewriteKeepsItsOwnPurpose(t *testing.T) {
 		}
 	}
 }
+
+type errorNoticeRewriteProvider struct {
+	calls  int
+	source string
+	text   string
+}
+
+func (p *errorNoticeRewriteProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	if llmUsagePurposeFromContext(ctx) != PurposeErrorNotice {
+		return nil, errors.New("unexpected purpose")
+	}
+	p.calls++
+	p.source = req.Messages[len(req.Messages)-1].Content
+	return &llm.GenerateResponse{Text: p.text}, nil
+}
+
+// 错误提示关着、开了「出错时仍用人设回一句」时，生图失败也要像主回复出错一样按人设
+// 说一句，不然群友只看到「在画了」就再没下文。交给改写的只有群友能照做的部分，
+// 不带「请管理员检查配置档」。
+func TestImageFailureRepliesInPersonaWhenNoticesOff(t *testing.T) {
+	withFastSendTiming(t)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "img-fail"}
+	task := reservedSubagentTask{id: "img-1", task: PluginTask{Kind: "image", Name: "图片编辑"}, event: event}
+	blocked := errors.New("llm: openai-compatible request failed: 400 Bad Request: code=moderation_blocked; message=Your request was rejected by the safety system.")
+	auth := errors.New("llm: openai-compatible request failed: status=401 invalid api key")
+
+	for _, tc := range []struct {
+		name      string
+		persona   bool
+		err       error
+		wantSent  bool
+		wantInSrc string
+		notInSrc  string
+	}{
+		{"审核拒绝", true, blocked, true, "换个说法", "管理员"},
+		{"鉴权失败不带管理员建议", true, auth, true, "鉴权失败", "管理员"},
+		{"没开人设回复就静默", false, blocked, false, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &recordingChannel{}
+			provider := &errorNoticeRewriteProvider{text: "这张没画出来，换个说法再叫我试试～"}
+			runtime := NewRuntime(BotConfig{ErrorNotifyEnabled: boolPointer(false), ErrorPersonaReplyEnabled: boolPointer(tc.persona)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			runtime.handleImageTaskFailure(context.Background(), task, tc.err, false, 0)
+			sent := channel.sentSnapshot()
+			if !tc.wantSent {
+				if len(sent) != 0 || provider.calls != 0 {
+					t.Fatalf("应当静默: calls=%d sent=%+v", provider.calls, sent)
+				}
+				return
+			}
+			if provider.calls != 1 || len(sent) != 1 || sent[0].Text != provider.text {
+				t.Fatalf("calls=%d sent=%+v", provider.calls, sent)
+			}
+			if !strings.Contains(provider.source, tc.wantInSrc) || strings.Contains(provider.source, tc.notInSrc) {
+				t.Fatalf("改写来源 = %q", provider.source)
+			}
+		})
+	}
+}
+
+type proactiveFailureProvider struct {
+	modelDown bool
+	purposes  []string
+}
+
+func (p *proactiveFailureProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	purpose := llmUsagePurposeFromContext(ctx)
+	p.purposes = append(p.purposes, purpose)
+	switch purpose {
+	case PurposeReplySendAudit:
+		return &llm.GenerateResponse{Text: `{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_safe_score":0,"account_risk":"politics","account_risk_reason":"涉政"}`}, nil
+	case PurposeAccountSafetyNotice, PurposeErrorNotice, PurposeUpstreamRejectionNotice:
+		return &llm.GenerateResponse{Text: "这句我就不发啦"}, nil
+	case "reply":
+		if p.modelDown {
+			return nil, llm.ErrUnverifiedRejection
+		}
+	}
+	return &llm.GenerateResponse{Text: "我觉得这事吧（涉政内容）"}, nil
+}
+
+// 主动插话没人在等回答：被账号安全审核拦下、模型拒答时都不能再冒一句「这条不发了」，
+// 不然等于告诉群里它刚才想说点不该说的。有人问它时照旧按人设回一句。
+func TestProactiveReplyFailureStaysSilent(t *testing.T) {
+	withFastSendTiming(t)
+	for _, tc := range []struct {
+		name      string
+		proactive bool
+		modelDown bool
+		want      string
+	}{
+		{"主动插话被审核拦", true, false, "error_silent_proactive"},
+		{"主动插话模型拒答", true, true, "error_silent_proactive"},
+		{"直接回复被审核拦照旧说明", false, false, "error_replied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			channel := &recordingChannel{}
+			provider := &proactiveFailureProvider{modelDown: tc.modelDown}
+			runtime := NewRuntime(BotConfig{BotAccount: "42", ErrorNotifyEnabled: boolPointer(false), ErrorPersonaReplyEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", SelfID: "42", UserID: "10001", MessageID: "m1", RawMessage: "怎么看这事", proactiveReply: tc.proactive, chatInReply: tc.proactive}
+			outcome, err := runtime.replyAndRecord(context.Background(), event, "怎么看这事", "replied")
+			if err != nil || outcome != tc.want {
+				t.Fatalf("outcome=%s err=%v purposes=%v", outcome, err, provider.purposes)
+			}
+			sent := channel.sentSnapshot()
+			if tc.proactive && len(sent) != 0 {
+				t.Fatalf("主动插话出错不该出声: %+v", sent)
+			}
+			if !tc.proactive && (len(sent) != 1 || sent[0].Text != "这句我就不发啦") {
+				t.Fatalf("直接回复应按人设说明: %+v", sent)
+			}
+		})
+	}
+}

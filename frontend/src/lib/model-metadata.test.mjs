@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyModelMetadataDraft, createModelMetadataDraft, effectiveModelInfo, mergeModelMetadata, modelCapabilitySummary, syncModelMetadata } from "./model-metadata.ts";
+import { applyModelMetadataDraft, createModelMetadataDraft, effectiveModelInfo, mergeModelMetadata, imageModelSupportsAnimation, modelCapabilitySummary, syncModelMetadata } from "./model-metadata.ts";
 
 test("editing a synced model overrides capabilities without changing the directory or the original", () => {
   const models = [{ id: "upstream", context_window_tokens: 1000000, input_modalities: ["text", "image"], output_modalities: ["text"] }];
@@ -75,4 +75,12 @@ test("disabled models remain disabled through sync and metadata edits", () => {
 test("animation output shows up in the capability summary", () => {
   const model = { id: "gpt-image-2.6-sunburst", capabilities_override: { input_modalities: ["text", "image"], output_modalities: ["image", "animation"] } };
   assert.equal(modelCapabilitySummary(model), "图片生成 / 编辑 · 动图");
+});
+
+test("animation support follows the backend rules", () => {
+  assert.equal(imageModelSupportsAnimation("gpt-image-2.6-sunburst"), true);
+  assert.equal(imageModelSupportsAnimation("openai/gpt-image-2.6-flare"), true);
+  assert.equal(imageModelSupportsAnimation("gpt-image-2.5-sunburst"), false);
+  assert.equal(imageModelSupportsAnimation("relay-gif", { id: "relay-gif", capabilities_override: { input_modalities: ["text"], output_modalities: ["image", "animation"] } }), true);
+  assert.equal(imageModelSupportsAnimation("gpt-image-2.6-sunburst", { id: "gpt-image-2.6-sunburst", capabilities_override: { input_modalities: ["text"], output_modalities: ["image"] } }), false);
 });

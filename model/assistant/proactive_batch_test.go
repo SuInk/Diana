@@ -538,8 +538,9 @@ func TestProactiveReplyBatchDoesNotAwardFavorabilityWhenReplyFails(t *testing.T)
 	if provider.relationshipCalls != 0 {
 		t.Fatalf("relationship evaluator calls = %d, want 0 after failed reply", provider.relationshipCalls)
 	}
-	if len(channel.sent) != 1 || !strings.HasPrefix(channel.sent[0].Text, "出错了：") {
-		t.Fatalf("sent = %#v, want only the generic error reply", channel.sent)
+	// 主动插话没人在等回答，出错不在聊天里说明（见 unpromptedReplyTurn）。
+	if len(channel.sent) != 0 {
+		t.Fatalf("sent = %#v, want silence after a failed proactive reply", channel.sent)
 	}
 }
 
