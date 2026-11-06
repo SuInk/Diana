@@ -17,7 +17,7 @@ import (
 
 const dianaRuntimeConfigToolName = "runtime_config"
 
-// SetRuntimeConfig 注入启动配置管理器，主人私聊里的 runtime_config 工具靠它查看和
+// SetRuntimeConfig 注入启动配置管理器，主人的 runtime_config 工具靠它查看和
 // 改写 config.yaml。没注入时不挂这个工具。
 func (r *Runtime) SetRuntimeConfig(manager *runtimeconfig.Manager) {
 	r.mu.Lock()
@@ -31,9 +31,9 @@ func (r *Runtime) runtimeConfigManager() *runtimeconfig.Manager {
 	return r.runtimeConfig
 }
 
-// dianaRuntimeConfigTool 让主人在私聊里查看启动参数、环境变量和 config.yaml，
-// 并改其中少数低风险的数值项。只挂在主人私聊：群里有旁人，查看结果里有路径
-// 和部署信息。改动只写文件，重启才生效，工具不替主人重启。
+// dianaRuntimeConfigTool 让主人查看启动参数、环境变量和 config.yaml，并改其中
+// bot_editable 的项。私聊、群聊都挂给主人本人；群里有旁人，回复时只说主人问到
+// 的部分。改动只写文件，重启才生效，工具不替主人重启。
 type dianaRuntimeConfigTool struct {
 	runtime *Runtime
 	event   MessageEvent
@@ -47,7 +47,7 @@ func (t *dianaRuntimeConfigTool) Name() string { return dianaRuntimeConfigToolNa
 
 func (t *dianaRuntimeConfigTool) Description() string {
 	return `查看 Diana 的启动配置：命令行参数、环境变量、config.yaml 基础设施项及各自来源，探测本机局域网/公网/回环地址和端口，改其中 bot_editable 的项。` +
-		`仅在主人问到或明确要求改启动配置时调用；模型、接话等机器人设置不归这里。` +
+		`仅在主人问到或明确要求改启动配置时调用；模型、接话等机器人设置不归这里。在群里回答时不要主动念出路径、地址等部署信息。` +
 		`update 前先向主人复述要改的项和新值，risky 项（端口、监听地址、数据库和媒体目录等）还要说清后果，主人明确同意后才带 confirmed=true 调用。改动写入 config.yaml，重启后生效，不会自动重启；改坏了可以再改回来。`
 }
 
@@ -74,8 +74,8 @@ func (t *dianaRuntimeConfigTool) Run(ctx context.Context, input map[string]any) 
 	if manager == nil {
 		return "", errors.New("当前部署没有接入启动配置")
 	}
-	if t.event.Kind != EventKindPrivate || !t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) {
-		return "", errors.New("启动配置只能由主人在私聊里查看和修改")
+	if !t.runtime.effectiveConfigForEvent(t.event).IsOwnerEvent(t.event) {
+		return "", errors.New("启动配置只能由机器人主人查看和修改")
 	}
 	switch t.CanonicalOperation(input) {
 	case "get":
@@ -116,7 +116,7 @@ func (t *dianaRuntimeConfigTool) Run(ctx context.Context, input map[string]any) 
 			Kind:    applog.KindOperation,
 			Level:   applog.LevelInfo,
 			Action:  "runtime_config_update",
-			Message: "主人在私聊里修改了启动配置，重启后生效",
+			Message: "主人在聊天里修改了启动配置，重启后生效",
 			Actor:   oneBotEventActor(t.event),
 			Target:  key,
 		})

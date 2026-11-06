@@ -50,7 +50,7 @@ func (t *dianaConsoleConfigTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("查询或暂存/确认/放弃修改", "catalog", "get", "stage", "confirm", "discard"),
 		"resource":  toolStringParam("catalog 返回的资源名"),
 		"action":    toolStringParam("catalog 返回的操作名"),
-		"target":    toolStringParam("资源标识；机器人默认当前机器人；插件用插件 ID"),
+		"target":    toolStringParam("资源标识；机器人默认当前机器人；插件用插件 ID，也可写插件名称或它提供的工具名"),
 		"payload":   map[string]any{"type": "object", "additionalProperties": map[string]any{}, "description": "改动的字段；更新为补丁，数组按完整列表替换；不可把脱敏占位符作为新值"},
 	})
 }
@@ -70,8 +70,8 @@ func (t *dianaConsoleConfigTool) Run(ctx context.Context, input map[string]any) 
 	r := t.runtime
 	cfg := r.effectiveConfigForEvent(t.event)
 	admin := isAdminChatRun(ctx)
-	if !admin && (t.event.Kind != EventKindPrivate || !cfg.IsOwnerEvent(t.event)) {
-		return "", fmt.Errorf("仅主人私聊或控制台管理对话可以管理这些设置")
+	if !admin && !cfg.IsOwnerEvent(t.event) {
+		return "", fmt.Errorf("仅机器人主人或控制台管理对话可以管理这些设置")
 	}
 	manager := r.consoleConfigManager()
 	if manager == nil {
@@ -87,6 +87,12 @@ func (t *dianaConsoleConfigTool) Run(ctx context.Context, input map[string]any) 
 	}
 	reply := func(v any) (string, error) { b, e := json.Marshal(secretmask.ChatConfigValue(v)); return string(b), e }
 	resource, target := configToolString(input, "resource"), configToolString(input, "target")
+	// 插件按 ID 存，模型常拿工具名或插件名称来问，解析不了就原样交给管理器报错。
+	if resource == "plugin" && target != "" && r.plugins != nil {
+		if state, e := r.resolveInstalledPlugin(t.event, target); e == nil {
+			target = state.Manifest.ID
+		}
+	}
 	switch op {
 	case "catalog":
 		return reply(manager.Catalog())
