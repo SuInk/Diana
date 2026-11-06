@@ -319,7 +319,7 @@
                       <div v-if="traceLoading[event.id]" class="debug-trace-empty muted">正在读取调试记录</div>
                       <div v-else-if="!subtaskTraceSteps(event.id, task.task_id).length" class="debug-trace-empty muted">{{ traceEmptyReason[event.id] || "此子任务暂无调试记录。需在任务执行前开启调试记录；旧记录无法补回。" }}</div>
                   <ol v-else class="debug-trace-list">
-                    <li v-for="(step, index) in subtaskTraceSteps(event.id, task.task_id)" :key="step.id" class="debug-trace-step">
+                    <li v-for="(step, index) in visibleTraceSteps(subtaskTraceSteps(event.id, task.task_id))" :key="step.id" class="debug-trace-step">
                       <div class="debug-step-header">
                         <span class="debug-step-index mono">{{ index + 1 }}</span>
                         <strong>{{ tracePhaseLabel(step) }}</strong>
@@ -339,10 +339,10 @@
                         <span>模型响应</span>
                         <pre>{{ traceJSON(step, "response") }}</pre>
                       </div>
-                      <div v-if="traceJSON(step, 'available_tools')" class="debug-payload">
-                        <span>可用工具</span>
-                        <pre>{{ traceJSON(step, "available_tools") }}</pre>
-                      </div>
+                      <details v-if="traceToolNames(step).length" class="debug-payload debug-tools">
+                        <summary>可用工具 {{ traceToolNames(step).length }} 个</summary>
+                        <p class="mono">{{ traceToolNames(step).join("、") }}</p>
+                      </details>
                       <div v-if="traceText(step, 'notice')" class="debug-payload">
                         <span>{{ traceMetadata(step).notice_sent ? "发进聊天的提示" : "未发出的提示" }}</span>
                         <pre>{{ traceText(step, "notice") }}</pre>
@@ -479,7 +479,7 @@
                     {{ traceEmptyReason[event.id] || "这条事件没有调试记录。" }}
                   </div>
                   <ol v-else class="debug-trace-list">
-                    <li v-for="(step, index) in traceSteps[event.id]" :key="step.id" class="debug-trace-step">
+                    <li v-for="(step, index) in visibleTraceSteps(traceSteps[event.id] ?? [])" :key="step.id" class="debug-trace-step">
                       <div class="debug-step-header">
                         <span class="debug-step-index mono">{{ index + 1 }}</span>
                         <strong>{{ tracePhaseLabel(step) }}</strong>
@@ -499,10 +499,10 @@
                         <span>模型响应</span>
                         <pre>{{ traceJSON(step, "response") }}</pre>
                       </div>
-                      <div v-if="traceJSON(step, 'available_tools')" class="debug-payload">
-                        <span>可用工具</span>
-                        <pre>{{ traceJSON(step, "available_tools") }}</pre>
-                      </div>
+                      <details v-if="traceToolNames(step).length" class="debug-payload debug-tools">
+                        <summary>可用工具 {{ traceToolNames(step).length }} 个</summary>
+                        <p class="mono">{{ traceToolNames(step).join("、") }}</p>
+                      </details>
                       <div v-if="traceText(step, 'notice')" class="debug-payload">
                         <span>{{ traceMetadata(step).notice_sent ? "发进聊天的提示" : "未发出的提示" }}</span>
                         <pre>{{ traceText(step, "notice") }}</pre>
@@ -1741,13 +1741,68 @@ function traceMetadata(step: AppLogEntry): Record<string, unknown> {
   return step.metadata ?? {};
 }
 
+// 调试记录里有两类条目自己不带新信息，单独占一步只会把列表拉长：
+//
+//   - 「Agent 启动」只有一份可用工具清单（带完整说明，一百来个工具时上万字）。并进它
+//     后面那一步，只列工具名；每个工具的说明在模型请求上下文里本来就有。
+//   - 「工具调用开始」和「工具调用完成」说的是同一次调用，参数两边都记了。有完成记录
+//     时只留完成那一条；还没完成（或中途失败没写完成）的才显示开始。
+//
+// agentStartTools 记下并进来的工具名，按接收它的那一步的 id 取。
+const agentStartTools = new Map<string, string[]>();
+
+function visibleTraceSteps(steps: AppLogEntry[]): AppLogEntry[] {
+  const completed = new Set<string>();
+  for (const step of steps) {
+    const metadata = traceMetadata(step);
+    if (metadata.phase === "agent_tool_completed") completed.add(traceToolCallKey(step));
+  }
+  const out: AppLogEntry[] = [];
+  let pendingStart: AppLogEntry | null = null;
+  for (const step of steps) {
+    const metadata = traceMetadata(step);
+    if (metadata.phase === "agent_started") {
+      // 连着两次启动（重试）时，前一次没有后续可并，照原样留下。
+      if (pendingStart) out.push(pendingStart);
+      pendingStart = step;
+      continue;
+    }
+    if (metadata.phase === "agent_tool_started" && completed.has(traceToolCallKey(step))) continue;
+    if (pendingStart) {
+      agentStartTools.set(step.id, toolNamesOf(traceMetadata(pendingStart).available_tools));
+      pendingStart = null;
+    }
+    out.push(step);
+  }
+  // 启动之后什么都没记下来（刚开始跑，或一启动就断了）：这一条就是全部信息，留着。
+  if (pendingStart) out.push(pendingStart);
+  return out;
+}
+
+function traceToolCallKey(step: AppLogEntry): string {
+  const metadata = traceMetadata(step);
+  return [metadata.subtask_id ?? "", metadata.model_turn ?? "", metadata.tool_call ?? "", metadata.tool ?? ""].join("|");
+}
+
+function toolNamesOf(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => (typeof item === "string" ? item : String((item as Record<string, unknown> | null)?.name ?? "")))
+    .filter((name) => name !== "");
+}
+
+// traceToolNames 是这一步要显示的可用工具名：并进来的 Agent 启动清单，或它自己带的。
+function traceToolNames(step: AppLogEntry): string[] {
+  return agentStartTools.get(step.id) ?? toolNamesOf(traceMetadata(step).available_tools);
+}
+
 function tracePhaseLabel(step: AppLogEntry): string {
   const phase = String(traceMetadata(step).phase ?? "");
   const labels: Record<string, string> = {
     model_request: "模型请求",
     agent_started: "Agent 启动",
-    agent_tool_started: "工具调用开始",
-    agent_tool_completed: "工具调用完成",
+    agent_tool_started: "工具调用（未完成）",
+    agent_tool_completed: "工具调用",
     agent_protocol_repair: "Agent 协议修正",
     agent_completed: "Agent 完成",
     agent_failed: "Agent 失败",
@@ -2584,6 +2639,19 @@ onBeforeUnmount(() => {
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.debug-tools > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.debug-tools > p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  word-break: break-all;
 }
 
 .debug-payload.err pre {
