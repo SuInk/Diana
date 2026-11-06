@@ -422,7 +422,7 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	defer cancelSandbox()
 	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
 		status.Available = false
-		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；不要禁用 Chromium 沙箱"
+		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开，不要禁用 Chromium 沙箱"
 	}
 	return status
 }
@@ -650,13 +650,20 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 	if headless {
 		args = append([]string{"--headless=new"}, args...)
 	}
-	// 安卓不给普通 App 开用户命名空间，Chromium 的进程沙盒在 Termux 里起不来，
-	// 不关掉连启动都失败。页面隔离靠 Termux 自己的 App 沙盒和上面的内网屏蔽。
-	if termux.Detected() {
+	// 两种情况 Chromium 的进程沙盒起不来，不关掉连启动都失败：
+	//   - 安卓不给普通 App 开用户命名空间，Termux 里建不了沙盒；页面隔离靠
+	//     Termux 自己的 App 沙盒和上面的内网屏蔽。
+	//   - 以 root 运行时 Chromium 直接拒绝带沙盒启动（Running as root without
+	//     --no-sandbox is not supported）。HTML 截图那条路早就按 root 放行，
+	//     这里跟它一致，否则同一台机器上截图能跑、网页渲染却起不来。
+	if termux.Detected() || browserRunningAsRoot() {
 		args = append(args, "--no-sandbox")
 	}
 	return args
 }
+
+// browserRunningAsRoot 单独抽出来，测试才能在 root 跑的 CI 容器里固定结果。
+var browserRunningAsRoot = func() bool { return os.Geteuid() == 0 }
 
 func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
 	return sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)

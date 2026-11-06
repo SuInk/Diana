@@ -22,9 +22,30 @@ func TestSandboxedChromeArgsDisableSandboxOnTermux(t *testing.T) {
 func TestSandboxedChromeArgsKeepSandboxElsewhere(t *testing.T) {
 	t.Setenv("PREFIX", "/usr/local")
 	t.Setenv("TERMUX_VERSION", "")
+	stubBrowserRunningAsRoot(t, false)
 	if args := sandboxedChromeBaseArgsForMode("p", "c", "d", false); slices.Contains(args, "--no-sandbox") {
 		t.Fatal("不在 Termux 时把沙盒关掉了")
 	}
+}
+
+func TestSandboxedChromeArgsDisableSandboxAsRoot(t *testing.T) {
+	t.Setenv("PREFIX", "/usr/local")
+	t.Setenv("TERMUX_VERSION", "")
+	stubBrowserRunningAsRoot(t, true)
+	// root 身份下 Chromium 不带 --no-sandbox 直接拒绝启动（issue #1445）。
+	if args := sandboxedChromeBaseArgsForMode("p", "c", "d", false); !slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("以 root 运行时网页渲染没关沙盒，Chromium 起不来：%v", args)
+	}
+	if args := PersistentBrowserArgs("p", "c", "d", true, 0, 1280, 960); !slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("以 root 运行时内置浏览器没关沙盒：%v", args)
+	}
+}
+
+func stubBrowserRunningAsRoot(t *testing.T, root bool) {
+	t.Helper()
+	previous := browserRunningAsRoot
+	browserRunningAsRoot = func() bool { return root }
+	t.Cleanup(func() { browserRunningAsRoot = previous })
 }
 
 func TestBrowserSandboxPrefixShortensDeepTempDir(t *testing.T) {
