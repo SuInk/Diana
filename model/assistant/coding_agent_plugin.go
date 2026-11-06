@@ -167,7 +167,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 			{
 				Key:         codingAgentSettingApprovalMode,
 				Label:       "聊天里确认",
-				Description: "需要点头的操作会在聊天里发给主人，回复「同意编码操作」才继续，无需确认码。危险操作只拦下面那张清单命中的命令；全部写操作连改文件也要确认（改一个文件问一次，很吵，一般只在试水时用）。支持 Claude Code 和 ACP 后端。",
+				Description: "需要点头的操作会在聊天里发给主人，主人回一句同意才继续。危险操作只拦下面那张清单命中的命令；全部写操作连改文件也要确认（改一个文件问一次，很吵，一般只在试水时用）。支持 Claude Code 和 ACP 后端。",
 				Type:        PluginSettingTypeSelect,
 				Default:     codingApprovalModeDangerous,
 				Options: []PluginSettingOption{
@@ -188,7 +188,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 			{
 				Key:         codingAgentSettingApprovalTimeout,
 				Label:       "等确认多久",
-				Description: "超过这个时间没回确认码就按拒绝处理。等待期间任务是停着的，这段时间也算在单次最长运行时间里。",
+				Description: "超过这个时间主人没表态就按拒绝处理。等待期间任务是停着的，这段时间也算在单次最长运行时间里。",
 				Type:        PluginSettingTypeNumber,
 				Default:     defaultCodingApprovalTimeoutMinutes,
 				Min:         settingRange(1),

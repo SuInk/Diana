@@ -562,9 +562,9 @@ func (t *dianaGitHubTool) draftScope() string {
 	return strings.TrimSpace(t.event.GroupID)
 }
 
-// repositoryIssueBackgroundRun 判断当前是不是定时任务、事件触发这类后台运行。
+// backgroundRunContext 判断当前是不是定时任务、事件触发这类后台运行。
 // 它们的原文可能带着旧指令，不能当成本轮用户的确认。
-func repositoryIssueBackgroundRun(ctx context.Context) bool {
+func backgroundRunContext(ctx context.Context) bool {
 	if ctx.Value(scheduledQueryRunContextKey{}) == true || eventTriggerRunFromContext(ctx) {
 		return true
 	}
@@ -1696,7 +1696,7 @@ func (t *dianaGitHubTool) createWriteDraft(ctx context.Context, repository, oper
 func (t *dianaGitHubTool) approveDraft(ctx context.Context, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "approve", Message: "Issue 草稿未提交。"}
 	// 后台任务的原文可能带着旧指令，不能当成本轮用户的新确认。
-	if repositoryIssueBackgroundRun(ctx) {
+	if backgroundRunContext(ctx) {
 		return result.fail("explicit_approval_required", "后台任务不能确认 GitHub 写入，请主人或授权用户在聊天中确认。")
 	}
 	scope := t.draftScope()

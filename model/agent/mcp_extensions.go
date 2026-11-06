@@ -28,7 +28,7 @@ type MCPInstallTool struct {
 func (t *MCPInstallTool) Name() string { return "mcp_install" }
 
 func (t *MCPInstallTool) Description() string {
-	return `安装并连接 MCP 服务，持久化后立即注册其工具。首次调用被拒并返回确认码，讲清要装什么，用户原样回复确认码后再重发。`
+	return `安装并连接 MCP 服务，持久化后立即注册其工具。首次调用被拒，讲清要装什么，用户在后续消息同意后原样重发。`
 }
 
 func (t *MCPInstallTool) InputSchema() map[string]any {
@@ -111,7 +111,7 @@ type MCPUninstallTool struct {
 func (t *MCPUninstallTool) Name() string { return "mcp_uninstall" }
 
 func (t *MCPUninstallTool) Description() string {
-	return `卸载 MCP 服务：断开连接、移除工具并删除配置。首次调用被拒并返回确认码，用户原样回复后再重发。`
+	return `卸载 MCP 服务：断开连接、移除工具并删除配置。首次调用被拒，讲清要卸什么，用户在后续消息同意后原样重发。`
 }
 
 func (t *MCPUninstallTool) InputSchema() map[string]any {

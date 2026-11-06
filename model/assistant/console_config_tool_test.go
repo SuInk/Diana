@@ -55,7 +55,7 @@ func TestConsoleConfigPlainConfirmationIsolation(t *testing.T) {
 		t.Fatalf("stage leaked or applied: %s", out)
 	}
 	confirm := map[string]any{"operation": "confirm"}
-	for _, change := range []func(*MessageEvent){func(e *MessageEvent) { e.RawMessage = "确认" }, func(e *MessageEvent) { e.MessageID = "2"; e.RawMessage = "查询配置" }, func(e *MessageEvent) { e.MessageID = "2"; e.RawMessage = "确认"; e.ContextNamespace = "second" }, func(e *MessageEvent) { e.MessageID = "2"; e.RawMessage = "确认"; e.UserID = "other" }} {
+	for _, change := range []func(*MessageEvent){func(e *MessageEvent) { e.RawMessage = "确认" }, func(e *MessageEvent) { e.MessageID = "2"; e.RawMessage = "确认"; e.ContextNamespace = "second" }, func(e *MessageEvent) { e.MessageID = "2"; e.RawMessage = "确认"; e.UserID = "other" }} {
 		e := event
 		change(&e)
 		if _, err := run(e, confirm); err == nil {

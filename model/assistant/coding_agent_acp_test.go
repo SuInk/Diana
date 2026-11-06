@@ -618,7 +618,7 @@ func TestLaunchCodingJobACPApprovalGoesThroughChat(t *testing.T) {
 	var request codingApprovalRequest
 	body, _ := os.ReadFile(matches[0])
 	_ = json.Unmarshal(body, &request)
-	if asked := channel.messages()[0].Text; !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "同意编码操作") {
+	if asked := channel.messages()[0].Text; !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "直接回一句就行") {
 		t.Fatalf("询问消息 = %q", asked)
 	}
 	if _, handled := rt.handleOwnerCommand(MessageEvent{Kind: EventKindPrivate, UserID: "1"}, "同意编码操作"); !handled {

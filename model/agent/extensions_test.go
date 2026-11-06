@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -368,5 +369,36 @@ func TestConfiguredMCPToggleDoesNotRequireConfirmation(t *testing.T) {
 	}
 	if kind := explicitUserRequestKind(&MCPInstallTool{}, nil); kind != "mcp" {
 		t.Fatal("install must retain confirmation")
+	}
+}
+
+// 用户不用报确认码：被拦下的那条消息之后，同一个人在同一会话里再发一条，原样重发就放行。
+func TestExtensionMutationConfirmedByLaterMessage(t *testing.T) {
+	identity := CallerIdentity{Platform: "qq", BotID: "b", ChatType: "private", UserID: "u-later", MessageID: "m1"}
+	code := extensionMutationConfirmationCode("skill", "install_skill", map[string]any{"name": "later-demo"})
+	now := time.Now()
+	rememberExtensionPendingConfirmation(identity, code, now)
+	if consumeExtensionPendingConfirmation(identity, code, now) {
+		t.Fatal("同一条消息不能确认自己")
+	}
+	stranger := identity
+	stranger.UserID, stranger.MessageID = "u-other", "m2"
+	if consumeExtensionPendingConfirmation(stranger, code, now) {
+		t.Fatal("别人不能替他确认")
+	}
+	later := identity
+	later.MessageID = "m2"
+	if consumeExtensionPendingConfirmation(later, code, now.Add(extensionPendingConfirmationTTL+time.Minute)) {
+		t.Fatal("过期了不该放行")
+	}
+	rememberExtensionPendingConfirmation(identity, code, now)
+	if !consumeExtensionPendingConfirmation(later, code, now) {
+		t.Fatal("后续消息应当放行")
+	}
+	if consumeExtensionPendingConfirmation(later, code, now) {
+		t.Fatal("确认只能用一次")
+	}
+	if usableForExtensionConfirmation(CallerIdentity{UserID: "u", MessageID: "m", Background: true}, true) {
+		t.Fatal("后台运行不能确认")
 	}
 }

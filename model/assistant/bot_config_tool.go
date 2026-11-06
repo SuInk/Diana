@@ -497,9 +497,6 @@ func (t *dianaBotConfigTool) resolvePendingBotFields(ctx context.Context, op str
 		data, err := json.Marshal(map[string]any{"ok": true, "action": op, "message": message})
 		return string(data), err
 	}
-	if !isConfigConfirmation(hostCommandRequestFromContext(ctx, t.event)) {
-		return "", fmt.Errorf("请在下一条消息回复“确认”，无需确认码")
-	}
 	patch, err := t.runtime.takePendingBotFields(base.ID, t.event)
 	if err != nil {
 		return "", err

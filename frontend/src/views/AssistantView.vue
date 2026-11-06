@@ -1566,7 +1566,7 @@
               <div v-if="form.own_space_enabled" class="field">
                 <label for="bot-wallet-auto-approve">单笔审批门槛（元）</label>
                 <input id="bot-wallet-auto-approve" v-model.number="walletAutoApproveDraft" class="input" type="number" min="0" step="0.01" inputmode="decimal" placeholder="默认 200；0：每笔都确认" />
-                <span class="hint">单笔低于此金额且余额足够时自动记账；达到或超过时私聊回复「同意购买」确认，无需确认码。0 表示每笔都确认。仅虚拟零花钱，不涉及真实支付。</span>
+                <span class="hint">单笔低于此金额且余额足够时自动记账；达到或超过时私聊问主人，回一句同意就行。0 表示每笔都确认。仅虚拟零花钱，不涉及真实支付。</span>
               </div>
             </div>
           </section>

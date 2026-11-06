@@ -43,7 +43,7 @@ type dianaConsoleConfigTool struct {
 
 func (t *dianaConsoleConfigTool) Name() string { return consoleConfigToolName }
 func (t *dianaConsoleConfigTool) Description() string {
-	return "管理控制台配置：机器人全部可编辑字段（含各用途模型完整路由、思考强度、权重、后备、排序、分组和参数）、提供商、插件凭据、缓存、媒体保留、访问安全、登录会话和受信应用。先 catalog/get 查询。stage 暂存改动并返回脱敏预览，不生效；用户在同一会话下一条回复确认后才 confirm，无需确认码。每次只确认最后一份预览；密钥和 URL 不得回显。"
+	return "管理控制台配置：机器人全部可编辑字段（含各用途模型完整路由、思考强度、权重、后备、排序、分组和参数）、提供商、插件凭据、缓存、媒体保留、访问安全、登录会话和受信应用。先 catalog/get 查询。stage 暂存改动并返回脱敏预览，不生效；用户在同一会话后续消息同意（怎么说都行）后才 confirm，无需确认码。每次只确认最后一份预览；密钥和 URL 不得回显。"
 }
 func (t *dianaConsoleConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
@@ -171,16 +171,13 @@ func (t *dianaConsoleConfigTool) Run(ctx context.Context, input map[string]any) 
 				preview["settings"] = hidden
 			}
 		}
-		return reply(map[string]any{"pending": true, "resource": resource, "action": configToolString(input, "action"), "target": target, "changes": preview, "message": "以上改动尚未生效。请在下一条消息回复确认，无需确认码；10 分钟内有效，新的暂存替换旧的。"})
+		return reply(map[string]any{"pending": true, "resource": resource, "action": configToolString(input, "action"), "target": target, "changes": preview, "message": "以上改动尚未生效。等发起人在后续消息里同意（怎么说都行）再 confirm；10 分钟内有效，新的暂存替换旧的。"})
 	case "discard":
 		r.mu.Lock()
 		delete(r.pendingConsoleConfig, session)
 		r.mu.Unlock()
 		return reply(map[string]any{"discarded": true})
 	case "confirm":
-		if !isConfigConfirmation(hostCommandRequestFromContext(ctx, t.event)) {
-			return "", fmt.Errorf("请在下一条消息回复确认，无需确认码")
-		}
 		r.mu.Lock()
 		pending, ok := r.pendingConsoleConfig[session]
 		if !ok || time.Now().After(pending.expires) {

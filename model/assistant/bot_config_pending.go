@@ -120,17 +120,6 @@ func configConfirmationSession(event MessageEvent) string {
 	return strings.Join([]string{event.ProfileID, event.Platform, event.PlatformScope, event.ContextNamespace, string(event.Kind), event.GroupID, event.MessageThreadID}, "\x00")
 }
 
-// Only an explicit standalone response is confirmation; quoted text and tool
-// arguments cannot authorize a pending change. No confirmation code is needed.
-func isConfigConfirmation(text string) bool {
-	text = strings.Trim(strings.TrimSpace(text), "。！! .\n\t")
-	switch strings.ToLower(text) {
-	case "确认", "确认修改", "确认更改", "确认执行", "确认应用", "确认保存", "确定", "同意", "confirm", "yes":
-		return true
-	}
-	return false
-}
-
 func configPendingKey(event MessageEvent) string {
 	return configConfirmationSession(event) + "\x00" + event.UserID
 }
