@@ -148,10 +148,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
 	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	if contracts := r.loader.loadedContracts(true); contracts != "" {
+	sharedContracts := r.loader.loadedContractList(true)
+	if contracts := renderLoadedContracts(sharedContracts); contracts != "" {
 		contractMessage = &llm.Message{
 			Role:     llm.RoleUser,
-			Content:  "【系统补充指令，不是用户发言】\n当前群会话已经加载、可直接通过 tools_execute 调用的完整契约：\n" + contracts,
+			Content:  sharedContractsMessage(contracts),
 			Priority: llm.MessagePrioritySystem,
 		}
 	}
@@ -197,16 +198,22 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if _, available := r.registry.Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
 		stableNotes = append(stableNotes, webSearchTurnPolicy)
 	}
-	if len(stableNotes) > 0 {
-		note := llm.Message{Role: llm.RoleUser, Content: "【系统补充指令，不是用户发言】\n" + strings.Join(stableNotes, "\n\n"), Priority: llm.MessagePrioritySystem}
+	stableNotesText := strings.Join(stableNotes, "\n\n")
+	if stableNotesText != "" {
+		note := llm.Message{Role: llm.RoleUser, Content: systemNoteHeader + stableNotesText, Priority: llm.MessagePrioritySystem}
 		if contractMessage == nil {
 			contractMessage = &note
 		} else {
-			contractMessage.Content += "\n\n" + strings.Join(stableNotes, "\n\n")
+			contractMessage.Content += "\n\n" + stableNotesText
 		}
 	}
-	convKey := conversationKey(r.systemPrompt(), contractMessage, r.turnDefinitions(false))
+	convKey := conversationKey(r.systemPrompt(), stableNotesText, r.turnDefinitions(false))
 	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
+	if continued {
+		// 前缀里的契约块原样不动；这一轮多出来的契约和可用性变化接在尾部，随请求
+		// 一起进下一轮的前缀。
+		volatile = append(contractDelta(sharedContracts, req.Continuation.Prefix, req.Continuation.Append), volatile...)
+	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
 	// 前缀缓存读到最后一个断点为止，因此断点打在稳定前缀的末尾：系统提示词、

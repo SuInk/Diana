@@ -131,18 +131,24 @@ func (l *deferredToolLoader) restore(names []string) {
 	}
 }
 
-// loadedContracts 渲染已加载工具的完整契约。shared=true 只收公共工具（放在历史之前），
-// shared=false 只收发言者专属的（放在尾部）。
-func (l *deferredToolLoader) loadedContracts(shared bool) string {
+// loadedContract 是一份已加载工具的完整契约，raw 是它发给模型的 JSON。
+type loadedContract struct {
+	name string
+	raw  string
+}
+
+// loadedContractList 按加载顺序列出已加载工具的完整契约。shared=true 只收公共工具（放在
+// 历史之前），shared=false 只收发言者专属的（放在尾部）。当前发言者用不了的工具不在内。
+func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
 	if l == nil || len(l.order) == 0 {
-		return ""
+		return nil
 	}
 	type contract struct {
 		Name        string         `json:"name"`
 		Description string         `json:"description"`
 		InputSchema map[string]any `json:"inputSchema"`
 	}
-	contracts := make([]contract, 0, len(l.order))
+	contracts := make([]loadedContract, 0, len(l.order))
 	for _, name := range l.order {
 		if l.isShared(name) != shared {
 			continue
@@ -151,13 +157,29 @@ func (l *deferredToolLoader) loadedContracts(shared bool) string {
 		if !ok {
 			continue
 		}
-		contracts = append(contracts, contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
+		raw, err := json.Marshal(contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
+		if err != nil {
+			continue
+		}
+		contracts = append(contracts, loadedContract{name: name, raw: string(raw)})
 	}
+	return contracts
+}
+
+// loadedContracts 把 loadedContractList 渲染成一个 JSON 数组，没有契约时返回空串。
+func (l *deferredToolLoader) loadedContracts(shared bool) string {
+	return renderLoadedContracts(l.loadedContractList(shared))
+}
+
+func renderLoadedContracts(contracts []loadedContract) string {
 	if len(contracts) == 0 {
 		return ""
 	}
-	raw, _ := json.Marshal(contracts)
-	return string(raw)
+	raws := make([]string, len(contracts))
+	for index, contract := range contracts {
+		raws[index] = contract.raw
+	}
+	return "[" + strings.Join(raws, ",") + "]"
 }
 
 func executeInputSchema() map[string]any {
