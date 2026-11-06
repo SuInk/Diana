@@ -1019,9 +1019,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaGitHubToolName) {
 		place(dianaGitHubToolName).WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
 	}
-	if agentEnabled && hasTool(dianaPlatformToolName) {
-		place(dianaPlatformToolName).WriteString("\n" + cfg.prompt(promptToolPlatformSpec))
-	}
 	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
 	if agentEnabled && hasTool(dianaCrossSessionToolName) {
 		place(dianaCrossSessionToolName).WriteString("\n" + cfg.prompt(promptToolCrossSessionSpec))
@@ -1045,9 +1042,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
 		place(dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptToolHistoryImagesSpec))
-	}
-	if agentEnabled && hasTool(dianaMemoryToolName) {
-		place(dianaMemoryToolName).WriteString("\n" + cfg.prompt(promptToolMemorySpec))
 	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		place(dianaChatHistoryToolName, dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptInternalIdentifiersSpec))
@@ -1083,16 +1077,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
 		place(dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskRSSSpec))
 	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("tasks") {
-		place("tasks").WriteString("\n" + cfg.prompt(promptTaskListSpec))
-	}
 	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
 	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
 		tail.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
-	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		place("tasks", "reminder", dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskNoSubstituteSpec))
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
@@ -1159,9 +1147,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	if agentEnabled && (hasTool(dianaRenderToolName) || hasTool(dianaRenderMediaToolName)) {
 		builder.WriteString("\n" + cfg.prompt(promptToolRenderSpec))
-	}
-	if agentEnabled && hasTool("tts") {
-		place("tts").WriteString("\n" + cfg.prompt(promptToolTTSSpec))
 	}
 	builder.WriteString("\n" + cfg.prompt(promptRelationshipTierSpec) + cfg.prompt(promptIdentityAuthoritySpec))
 	builder.WriteString("\n" + cfg.prompt(promptLongTermMemorySpec))
