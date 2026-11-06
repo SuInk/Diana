@@ -316,7 +316,7 @@ func TestImageToolCountsOnlySuccessfulGenerations(t *testing.T) {
 			run := func(messageID, prompt string) dianaImageToolResult {
 				t.Helper()
 				event.MessageID = messageID
-				raw, err := newDianaImageTool(runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": prompt})
+				raw, err := newDianaImageTool(context.Background(), runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": prompt})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -517,7 +517,7 @@ func TestImageToolReusesRunningTaskWithoutQuota(t *testing.T) {
 	runtime, event, policy := imageQuotaToolRuntime(t, server.URL, 1)
 	run := func() dianaImageToolResult {
 		t.Helper()
-		raw, err := newDianaImageTool(runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": "一只猫"})
+		raw, err := newDianaImageTool(context.Background(), runtime, event, policy).Run(context.Background(), map[string]any{"operation": "generate", "prompt": "一只猫"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -547,7 +547,7 @@ func TestImageToolReleasesQuotaWhenDeferredTaskIsCancelled(t *testing.T) {
 	defer server.Close()
 	runtime, event, policy := imageQuotaToolRuntime(t, server.URL, 1)
 	ctx, sink := withImageAnnouncementSink(context.Background())
-	raw, err := newDianaImageTool(runtime, event, policy).Run(ctx, map[string]any{"operation": "generate", "prompt": "一只猫"})
+	raw, err := newDianaImageTool(context.Background(), runtime, event, policy).Run(ctx, map[string]any{"operation": "generate", "prompt": "一只猫"})
 	if err != nil || strings.Contains(raw, "quota_exceeded") {
 		t.Fatalf("raw = %q, err = %v", raw, err)
 	}

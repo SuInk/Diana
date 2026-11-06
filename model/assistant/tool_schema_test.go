@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -22,7 +23,7 @@ func dianaAgentTools(t *testing.T) []agent.Tool {
 		newDianaHistoryImagesTool(runtime, event),
 		newDianaGroupTool(runtime, event),
 		newDianaRelationshipTool(runtime, event),
-		newDianaImageTool(runtime, event, policy),
+		newDianaImageTool(context.Background(), runtime, event, policy),
 		newDianaTasksTool(runtime, event),
 		newDianaReminderTool(runtime, event),
 		newDianaScheduleTool(runtime, event),

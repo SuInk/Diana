@@ -57,6 +57,7 @@ export function modelCapabilitySummary(model: LLMModelInfo): string {
   const labels: string[] = [];
   if (output.includes("text")) labels.push(input.includes("image") ? "文字 / 视觉理解" : "文字");
   if (output.includes("image")) labels.push(input.includes("image") ? "图片生成 / 编辑" : "图片生成");
+  if (output.includes("animation")) labels.push("动图");
   if (output.includes("audio")) labels.push("音频输出");
   if (output.includes("video")) labels.push("视频输出");
   return labels.join(" · ") || "能力未标注";

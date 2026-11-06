@@ -506,6 +506,13 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 	if len(configs) == 0 {
 		return nil, llm.ProviderConfig{}, fmt.Errorf("diana: llm profile store is not configured")
 	}
+	animation := strings.EqualFold(strings.TrimSpace(req.OutputFormat), llm.ImageFormatGIF)
+	if animation {
+		configs = animationImageConfigs(configs)
+		if len(configs) == 0 {
+			return nil, llm.ProviderConfig{}, errNoAnimationImageModel
+		}
+	}
 	var lastErr error
 	for _, cfg := range configs {
 		if err := ctx.Err(); err != nil {
@@ -521,11 +528,51 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		r.recordImageDebugTrace(ctx, cfg, "image_generate", imageGenerateTraceRequest(request), resp, err, duration)
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_generate", duration)
+			if animation && !imageResponseIsGIF(resp) {
+				// 兼容网关不认 output_format 时会照旧回 PNG：钱花了也记上，但不能当动图交差。
+				lastErr = annotateImageProviderAttempt(errors.New("llm: provider returned a still image for a GIF request"), cfg)
+				continue
+			}
 			return resp, cfg, nil
 		}
 		lastErr = annotateImageProviderAttempt(err, cfg)
 	}
 	return nil, llm.ProviderConfig{}, lastErr
+}
+
+// errNoAnimationImageModel 是要动图、但图片候选里没有一个标了动图能力。
+var errNoAnimationImageModel = errors.New("diana: no image model supports GIF output")
+
+// animationImageConfigs 只留下图片模型能出动图的候选，顺序不变。
+func animationImageConfigs(configs []llm.ProviderConfig) []llm.ProviderConfig {
+	out := make([]llm.ProviderConfig, 0, len(configs))
+	for _, cfg := range configs {
+		if cfg.ImageModelSupportsAnimation() {
+			out = append(out, cfg)
+		}
+	}
+	return out
+}
+
+// animationImageAvailable 报告当前会话的图片候选里有没有能出动图的，工具据此决定
+// 要不要把 gif 摆给模型。
+func (r *Runtime) animationImageAvailable(ctx context.Context) bool {
+	return len(animationImageConfigs(r.resolveImageProviderConfigs(ctx, false))) > 0
+}
+
+// imageResponseIsGIF 检查返回的图是不是真的 GIF。只认得出 data URI；上游给的是
+// 远程地址时不额外下载，放行。
+func imageResponseIsGIF(resp *llm.ImageGenerateResponse) bool {
+	if resp == nil || len(resp.Images) == 0 {
+		return false
+	}
+	for _, image := range resp.Images {
+		image = strings.TrimSpace(image)
+		if strings.HasPrefix(image, "data:") && !strings.HasPrefix(image, "data:image/gif") {
+			return false
+		}
+	}
+	return true
 }
 
 func imageGenerateTraceRequest(request llm.ImageGenerateRequest) map[string]any {

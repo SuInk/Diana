@@ -94,3 +94,25 @@ func TestGeminiImageRejectsGIF(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestImageModelSupportsAnimation(t *testing.T) {
+	override := func(model string, output ...string) []ModelInfo {
+		return []ModelInfo{{ID: model, CapabilitiesOverride: &ModelCapabilities{InputModalities: []string{"text"}, OutputModalities: output}}}
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  ProviderConfig
+		want bool
+	}{
+		{"已知模型", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "gpt-image-2.6-sunburst"}, true},
+		{"带命名空间", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "openai/gpt-image-2.6-flare"}, true},
+		{"老模型", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "gpt-image-2.5-sunburst"}, false},
+		{"手动勾上", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "relay-gif", Models: override("relay-gif", "image", ModalityAnimation)}, true},
+		{"手动勾掉", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "gpt-image-2.6-sunburst", Models: override("gpt-image-2.6-sunburst", "image")}, false},
+		{"清单标注", ProviderConfig{Provider: ProviderOpenAICompatible, ImageModel: "relay-gif", Models: []ModelInfo{{ID: "relay-gif", OutputModalities: []string{"image", "animation"}}}}, true},
+	} {
+		if got := tc.cfg.ImageModelSupportsAnimation(); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

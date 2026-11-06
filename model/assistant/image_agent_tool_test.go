@@ -68,7 +68,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	runtime.SetAppLogWriter(logs)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "agent-image"}
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
-	tool := newDianaImageTool(runtime, event, policy)
+	tool := newDianaImageTool(context.Background(), runtime, event, policy)
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"prompt":  "官方检索结果确认主色为靛蓝 #4B0082 与金色 #FFD700；据此创作一张平面海报。",
@@ -148,7 +148,7 @@ func TestDianaImageAgentToolEnforcesRelationshipPermissions(t *testing.T) {
 		t.Fatalf("initial allowlist hid permission-checked image tool: %#v", initial.allowedAgentToolNames())
 	}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	tool := newDianaImageTool(runtime, MessageEvent{UserID: "user"}, initial)
+	tool := newDianaImageTool(context.Background(), runtime, MessageEvent{UserID: "user"}, initial)
 	for _, operation := range []string{"generate", "edit"} {
 		_, err := tool.Run(context.Background(), map[string]any{
 			"operation": operation,
@@ -469,7 +469,7 @@ func TestDianaImageToolEditsEachSourceSeparately(t *testing.T) {
 		},
 	}
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
-	tool := newDianaImageTool(runtime, event, policy)
+	tool := newDianaImageTool(context.Background(), runtime, event, policy)
 
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"operation":   "edit",
@@ -634,7 +634,7 @@ func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
 		},
 	}
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
-	tool := newDianaImageTool(runtime, event, policy)
+	tool := newDianaImageTool(context.Background(), runtime, event, policy)
 
 	if _, err := tool.Run(context.Background(), map[string]any{
 		"operation": "edit",

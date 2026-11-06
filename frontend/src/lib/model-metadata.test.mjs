@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { applyModelMetadataDraft, createModelMetadataDraft, effectiveModelInfo, mergeModelMetadata, syncModelMetadata } from "./model-metadata.ts";
+import { applyModelMetadataDraft, createModelMetadataDraft, effectiveModelInfo, mergeModelMetadata, modelCapabilitySummary, syncModelMetadata } from "./model-metadata.ts";
 
 test("editing a synced model overrides capabilities without changing the directory or the original", () => {
   const models = [{ id: "upstream", context_window_tokens: 1000000, input_modalities: ["text", "image"], output_modalities: ["text"] }];
@@ -70,4 +70,9 @@ test("disabled models remain disabled through sync and metadata edits", () => {
  assert.equal(mergeModelMetadata({id:"off"},stored[0]).disabled,true);
  const edited = applyModelMetadataDraft(createModelMetadataDraft(stored[0]),stored,"off");
  assert.equal(edited[0].disabled,true);
+});
+
+test("animation output shows up in the capability summary", () => {
+  const model = { id: "gpt-image-2.6-sunburst", capabilities_override: { input_modalities: ["text", "image"], output_modalities: ["image", "animation"] } };
+  assert.equal(modelCapabilitySummary(model), "图片生成 / 编辑 · 动图");
 });
