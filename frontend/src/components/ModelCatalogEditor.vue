@@ -24,7 +24,7 @@
         </div>
       </div>
       <AppSwitch v-model="draft.overrideCapabilities">手动设置模型能力</AppSwitch>
-      <p class="hint">{{ draft.overrideCapabilities ? '输入图片 + 输出文字用于视觉理解；输出图片用于图片生成，再勾动图才会接 GIF 请求（gpt-image-2.6 不用勾）。' : '跟随同步的能力信息；没有能力信息时保持待确认。' }}</p>
+      <p class="hint">{{ draft.overrideCapabilities ? '输入图片 + 输出文字用于视觉理解；输出图片用于图片生成，再勾动图才会接 GIF 请求（gpt-image-2.6 会自动勾上）。' : '跟随同步的能力信息；没有能力信息时保持待确认。' }}</p>
       <div v-if="draft.overrideCapabilities" class="model-capability-fields">
         <div class="field">
           <span class="model-capability-label">输入能力</span>
