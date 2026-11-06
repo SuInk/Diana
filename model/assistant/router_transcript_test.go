@@ -173,6 +173,40 @@ func TestProactiveReplyTranscriptMarksSameNamedOthers(t *testing.T) {
 	}
 }
 
+// TestProactiveReplyTranscriptMarksReservedNicknames 来自生产：群友的昵称就叫「本人」，
+// 别人回复他、@ 他说了句「猥琐」。对话稿拿「本人」指机器人，渲染成「回复本人，@本人」
+// 之后判断模型认定在跟机器人说话，机器人跳出来替那位群友辩解。
+func TestProactiveReplyTranscriptMarksReservedNicknames(t *testing.T) {
+	age := func(v int64) *int64 { return &v }
+	payload := proactiveReplyPayload{
+		Addressing: messageAddressing{
+			ReplyTarget: "other", ReplySender: "本人",
+			Mentions: []MessageMention{{UserID: "20891", Target: "other", Username: "本人"}},
+		},
+		CurrentText:   "@本人（20891） 猥琐",
+		CurrentSender: "双皮奶",
+		QuotedSender:  "本人",
+		QuotedText:    "已打",
+		BotAliases:    []string{"嘉然"},
+		RecentMessages: []proactiveReplyHistoryItem{
+			{Sender: "本人", Text: "已打", AgeSeconds: age(30),
+				Addressing: messageAddressing{ReplyTarget: "other", ReplySender: "珂珂豆"}},
+		},
+	}
+	got := proactiveReplyTranscript(payload)
+	want := []string{
+		"机器人（即本人）叫嘉然",
+		"（群里有群友的昵称就叫「本人」，回复、@、引用这个名字都是在找那位群友，不是在找机器人；机器人的发言都标着「机器人」）",
+		"对话按时间从早到晚：",
+		"[30秒前] 本人（群友的昵称，不是机器人）（回复珂珂豆）：已打",
+		"【当前消息】[刚刚] 双皮奶（回复本人（群友的昵称，不是机器人），@本人（群友的昵称，不是机器人））：@本人（群友，20891） 猥琐（引用 本人（群友的昵称，不是机器人）：已打）",
+		"（这段记录里嘉然没有发过言）",
+	}
+	if got != strings.Join(want, "\n") {
+		t.Fatalf("transcript mismatch:\n%s", got)
+	}
+}
+
 // TestProactiveReplyTranscriptStatesLastBotTurn 当前消息没点本人时写明本人上次发言在多久前，
 // 模型不用自己在对话里找、也就编不出「本人刚接了他的话」。@ 了本人时不写。
 func TestProactiveReplyTranscriptStatesLastBotTurn(t *testing.T) {

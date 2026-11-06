@@ -55,7 +55,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	// 别名之一）。开头写了「本人也叫小汐」，模型就把那个账号的发言全认成自己的，编出
 	// 「本人刚接了他的话」，把下一句没点名的「你」判成在叫本人。撞名的账号原地标出来。
 	others := sameNamedOthers(payload)
-	lines := make([]string, 0, len(payload.RecentMessages)+4)
+	lines := make([]string, 0, len(payload.RecentMessages)+5)
 	if botName != "机器人" {
 		header := "机器人（即本人）叫" + botName
 		if aliasTail != "" {
@@ -64,12 +64,22 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 		lines = append(lines, header)
 	}
 	if len(others) > 0 {
-		names := make([]string, 0, len(others))
+		var aliasNames, reservedNames []string
 		for name := range others {
-			names = append(names, name)
+			if transcriptReservedName(name) {
+				reservedNames = append(reservedNames, "「"+name+"」")
+			} else {
+				aliasNames = append(aliasNames, name)
+			}
 		}
-		sort.Strings(names)
-		lines = append(lines, "（群里另有账号也叫"+strings.Join(names, "、")+"，那是别人，不是本人；本人的发言都标着「机器人」）")
+		sort.Strings(aliasNames)
+		sort.Strings(reservedNames)
+		if len(aliasNames) > 0 {
+			lines = append(lines, "（群里另有账号也叫"+strings.Join(aliasNames, "、")+"，那是别人，不是本人；本人的发言都标着「机器人」）")
+		}
+		if len(reservedNames) > 0 {
+			lines = append(lines, "（群里有群友的昵称就叫"+strings.Join(reservedNames, "、")+"，回复、@、引用这个名字都是在找那位群友，不是在找机器人；机器人的发言都标着「机器人」）")
+		}
 	}
 	lines = append(lines, "对话按时间从早到晚：")
 	// 防抖、积压合并进来的候选（见 proactive_route_debounce.go）和当前消息挨着发，但话题
@@ -112,7 +122,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	}
 	current := transcriptLine(payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, botName, botLabel, others)
 	if quoted := strings.TrimSpace(payload.QuotedText); quoted != "" {
-		who := strings.TrimSpace(payload.QuotedSender)
+		who := transcriptOtherName(strings.TrimSpace(payload.QuotedSender), others)
 		if payload.QuotedIsBot {
 			who = botName
 		}
@@ -209,12 +219,7 @@ func transcriptAge(seconds *int64) string {
 // transcriptLine 渲染一行：「发送者（回复谁，@谁）：正文」。机器人自己的发言标成
 // botLabel（「<称呼>（机器人，也叫…）」），指向机器人的回复和 @ 也写成它的称呼，模型不用再对账号。
 func transcriptLine(sender string, isBot bool, addressing messageAddressing, text string, images int, botName, botLabel string, others map[string]bool) string {
-	other := func(name string) string {
-		if others[name] {
-			return name + "（另一个账号，不是本人）"
-		}
-		return name
-	}
+	other := func(name string) string { return transcriptOtherName(name, others) }
 	name := other(strings.TrimSpace(sender))
 	if isBot {
 		name = botLabel
@@ -237,15 +242,46 @@ func transcriptLine(sender string, isBot bool, addressing messageAddressing, tex
 		name += "（" + strings.Join(targets, "，") + "）"
 	}
 	body := strings.Join(strings.Fields(text), " ")
+	// 正文里的 @ 是平台渲染好的「@昵称（账号）」，撞名的群友也在这里原地标一下，
+	// 不然行首标清楚了，正文里那个「@本人」照样把模型带回去。
+	for name := range others {
+		if transcriptReservedName(name) {
+			body = strings.ReplaceAll(body, "@"+name+"（", "@"+name+"（群友，")
+		}
+	}
 	if images > 0 {
 		body = strings.TrimSpace(body + fmt.Sprintf(" [图片×%d]", images))
 	}
 	return name + "：" + body
 }
 
-// sameNamedOthers 找出对话里叫本人某个别名、却不是本人的账号称呼。
+// transcriptReservedNames 是对话稿和评分判据自己拿来指机器人的词。群友的昵称恰好
+// 就是这几个字时（生产上真有人叫「本人」），「回复本人，@本人」在模型眼里就是在叫
+// 机器人：那位群友被人回了一句「猥琐」，机器人跳出来替他辩解。
+var transcriptReservedNames = map[string]bool{"本人": true, "机器人": true}
+
+func transcriptReservedName(name string) bool {
+	return transcriptReservedNames[strings.TrimSpace(name)]
+}
+
+// transcriptOtherName 渲染一个不是机器人的账号称呼，撞了本人别名或保留词的原地标出来。
+func transcriptOtherName(name string, others map[string]bool) string {
+	if !others[name] {
+		return name
+	}
+	if transcriptReservedName(name) {
+		return name + "（群友的昵称，不是机器人）"
+	}
+	return name + "（另一个账号，不是本人）"
+}
+
+// sameNamedOthers 找出对话里叫本人某个别名、却不是本人的账号称呼；昵称撞上
+// transcriptReservedNames 的也算。
 func sameNamedOthers(payload proactiveReplyPayload) map[string]bool {
 	aliases := map[string]bool{}
+	for name := range transcriptReservedNames {
+		aliases[name] = true
+	}
 	for _, alias := range payload.BotAliases {
 		if alias = strings.ToLower(strings.TrimSpace(alias)); alias != "" {
 			aliases[alias] = true
@@ -257,20 +293,30 @@ func sameNamedOthers(payload proactiveReplyPayload) map[string]bool {
 			found[name] = true
 		}
 	}
+	checkAddressing := func(addressing messageAddressing) {
+		if addressing.ReplyTarget == "other" {
+			check(addressing.ReplySender)
+		}
+		for _, mention := range addressing.Mentions {
+			if mention.Target == "other" {
+				check(mention.Username)
+			}
+		}
+	}
 	for _, item := range payload.RecentMessages {
 		if !item.IsBot {
 			check(item.Sender)
 		}
-		if item.Addressing.ReplyTarget == "other" {
-			check(item.Addressing.ReplySender)
-		}
+		checkAddressing(item.Addressing)
 	}
 	for _, candidate := range payload.Candidates {
 		check(candidate.Sender)
+		checkAddressing(candidate.Addressing)
 	}
 	check(payload.CurrentSender)
-	if payload.Addressing.ReplyTarget == "other" {
-		check(payload.Addressing.ReplySender)
+	checkAddressing(payload.Addressing)
+	if !payload.QuotedIsBot {
+		check(payload.QuotedSender)
 	}
 	return found
 }
