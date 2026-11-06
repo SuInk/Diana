@@ -58,7 +58,20 @@ func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared ma
 
 // isShared 判断工具是不是「对谁都一样」的那一份，见 Config.SharedTools。
 func (l *deferredToolLoader) isShared(name string) bool {
-	return l.shared == nil || l.shared[name]
+	if l.shared == nil || l.shared[name] {
+		return true
+	}
+	// 工具族的 action 随发言者能用哪些成员而变，只有声明的成员全都是公共的才算公共。
+	family, ok := l.registry.familyByName(name)
+	if !ok {
+		return false
+	}
+	for _, member := range family.Members {
+		if !l.shared[member.Tool] {
+			return false
+		}
+	}
+	return true
 }
 
 // catalog 列出公共的非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
@@ -73,7 +86,7 @@ func (l *deferredToolLoader) speakerCatalog() string {
 
 func (l *deferredToolLoader) catalogWhere(shared bool) string {
 	var builder strings.Builder
-	for _, name := range l.registry.Names() {
+	for _, name := range l.registry.PresentedNames() {
 		if l.core[name] || l.isShared(name) != shared {
 			continue
 		}
@@ -82,7 +95,7 @@ func (l *deferredToolLoader) catalogWhere(shared bool) string {
 			continue
 		}
 		if l.featured[name] {
-			builder.WriteString("- " + name + ": " + strings.Join(strings.Fields(tool.Description()), " ") + "\n")
+			builder.WriteString("- " + name + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
 			continue
 		}
 		builder.WriteString(deferredCatalogLine(tool))
@@ -113,6 +126,12 @@ func (l *deferredToolLoader) restore(names []string) {
 	}
 	for _, name := range names {
 		name = strings.TrimSpace(name)
+		// 合并成工具族之前加载过的成员名，恢复成族的契约。
+		if family, _, ok := l.registry.familyOfMember(name); ok {
+			if _, presented := l.registry.familyTool(family.Name); presented {
+				name = family.Name
+			}
+		}
 		if name == "" || l.core[name] {
 			continue
 		}
@@ -443,6 +462,8 @@ func (l *deferredToolLoader) dispatchDirect(action llmAction) (llmAction, error)
 // resolveLoaded 校验一次已经拆开的延迟工具调用：本轮加载过、当前仍可用、入参同时符合
 // 加载时和现在的 inputSchema。
 func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) {
+	// 成员的旧名字、「族名 + 动作」连写的名字，先统一成族名加 action 参数。
+	action.Tool, action.Input = l.registry.normalizeFamilyCall(action.Tool, action.Input)
 	name := action.Tool
 	schema, loaded := l.loaded[name]
 	if !loaded && l.core[name] {
@@ -604,7 +625,7 @@ func (l *deferredToolLoader) search(query string) []string {
 		score int
 	}
 	var hits []hit
-	for _, name := range l.registry.Names() {
+	for _, name := range l.registry.PresentedNames() {
 		if l.core[name] {
 			continue
 		}

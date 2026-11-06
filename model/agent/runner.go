@@ -730,7 +730,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// Keep provider history in the original envelope while executing the target
 		// through the ordinary Runner guards and result handling below.
 		var dispatchErr error
-		action, dispatchErr = r.loader.dispatch(action)
+		action, dispatchErr = r.dispatchAction(action)
 		if dispatchErr == nil {
 			action.Input = resolveSearchRefs(action.Tool, action.Input, steps)
 		}
@@ -1398,7 +1398,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 		rules = append(rules, "- 读网页优先用 browser_render（一次性沙盒浏览器，不带用户登录态）。价格、套餐、额度、版本、是否支持，以官方定价、文档、更新日志页为准：从返回的 links 找对应页面打开，或用 find 页内定位，多个来源用 urls 一次并行打开；只看了首页或摘要时，没写不等于没有。GitHub 最新版本读 /owner/repo/releases/latest，核验指定版本读 /owner/repo/releases/tag/<tag>，不能拿 site: 搜索为空代替。浏览器失败不等于站点拦截或版本不存在。")
 	}
 	if hasAnyTool("webpage_screenshot", "browser_screenshot") {
-		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser_screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
+		rules = append(rules, "- 公共网页截图用 webpage_screenshot，不带登录态；browser 的 screenshot 只截已授权的登录页面。capture 的真实画面才是截图证据；要求发送时，用同一工具的 action=send 和本轮 image_id 发到当前会话。")
 	}
 	// 10-15「发下标普500的k线」：搜到 Yahoo 行情页后直接说「没接行情插件发不了」。
 	// 网上现有的图优先下载原图发送，截图只是拿不到直链时的退路。
@@ -1411,14 +1411,14 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	if hasTool("browser_eval") {
 		// 交互式浏览器只登记给主人，带着主人的登录态。主人的事需要用浏览器就直接用，
 		// 不必等他点名「用浏览器」——那条「只在明确要求时才用」把主人也挡在了外面。
-		rules = append(rules, "- 交互式浏览器（browser_open 等）是主人的常驻浏览器，带着主人的登录态。主人的请求需要登录后的页面、要在网页上操作、或 browser_render 读不到时，直接用它完成，不必等主人点名。操作顺序通常是：browser_open 打开 → browser_text 或 browser_screenshot 看清页面 → browser_click / browser_type / browser_press_key / browser_select 操作 → browser_wait 等结果；多个标签页用 browser_tabs 管理，批量提取数据用 browser_eval。截图坐标可以直接交给 browser_click 的 x/y。付款、删除、发帖、改账号设置这类不可逆操作，先说清要做什么，等主人确认再点。")
+		rules = append(rules, "- 交互式浏览器 browser 是主人的常驻浏览器，带着主人的登录态。主人的请求需要登录后的页面、要在网页上操作、或 browser_render 读不到时，直接用它完成，不必等主人点名。它是一个工具，用 action 选动作，通常的顺序是：open 打开 → text 或 screenshot 看清页面 → click / type / press_key / select 操作 → wait 等结果；多个标签页用 tabs_list、tabs_switch 这几个动作管理，批量提取数据用 eval。截图坐标可以直接交给 click 的 x/y。付款、删除、发帖、改账号设置这类不可逆操作，先说清要做什么，等主人确认再点。")
 	}
 	if hasTool("browser_handoff") {
 		// 密码和验证码不该经过聊天记录，也不该经过模型。
-		rules = append(rules, "- 碰上登录、扫码、短信或邮箱验证码、人机验证这类只能主人亲手做的一步，先在内置浏览器里把那一页打开，再用 browser_handoff 请主人接手，task 里写清楚接下来要做完什么；不要让主人把密码或验证码发到聊天里。")
+		rules = append(rules, "- 碰上登录、扫码、短信或邮箱验证码、人机验证这类只能主人亲手做的一步，先在内置浏览器里把那一页打开，再用 browser 的 handoff 请主人接手，task 里写清楚接下来要做完什么；不要让主人把密码或验证码发到聊天里。")
 	}
 	if hasTool("browser_tabs") && !hasTool("browser_eval") {
-		rules = append(rules, "- 当前 browser_* 使用发信用户的个人隔离浏览器，仅限已授权网站。登录跳转、资源和弹窗域名也需授权，无法访问时不要绕过白名单；browser_tabs 可查本人登录弹窗，后续用 tab_id 选择。扫码登录可截取并发送当前页面；不要要求用户在聊天里发送密码或验证码。")
+		rules = append(rules, "- 当前 browser 使用发信用户的个人隔离浏览器，仅限已授权网站。登录跳转、资源和弹窗域名也需授权，无法访问时不要绕过白名单；tabs_list 可查本人登录弹窗，后续用 tab_id 选择。扫码登录可截取并发送当前页面；不要要求用户在聊天里发送密码或验证码。")
 	}
 	if hasTool("image") && hasAnyTool(webSearchToolName, "browser_render", "browser_open", "browser_text") {
 		rules = append(rules, "- 用户明确要求先搜索、核验网页或读取外部资料再生成/编辑图片时，必须先完成搜索和必要的网页核验，再把已确认结果整理为完整、自包含 prompt 调用 image。")
@@ -1517,6 +1517,17 @@ func (r *Runner) speakerToolPrompt() string {
 		}
 	}
 	return speakerToolPromptMarker + "\n" + strings.Join(sections, "\n\n")
+}
+
+// dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、
+// 按已加载的契约校验，再把对工具族的调用换回成员工具和成员自己的参数。
+func (r *Runner) dispatchAction(action llmAction) (llmAction, error) {
+	action, err := r.loader.dispatch(action)
+	if err != nil {
+		return action, err
+	}
+	action.Tool, action.Input, err = r.registry.resolveFamilyCall(action.Tool, action.Input)
+	return action, err
 }
 
 // systemPrompt 构造 Agent JSON 动作协议提示词。

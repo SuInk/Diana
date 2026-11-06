@@ -78,6 +78,24 @@ type ToolResultPartsTool interface {
 	ToolResultParts(output string) []llm.ContentPart
 }
 
+// ToolCatalogDescription 让工具单独给出目录里那一行的说明。完整说明很长、后半段是
+// 逐项用法的工具（工具族）用它，免得目录的字数预算被用法细节占掉。
+type ToolCatalogDescription interface {
+	Tool
+	CatalogDescription() string
+}
+
+// catalogDescription 是工具在目录里的说明：声明了 CatalogDescription 就用它，否则是
+// 完整的 Description。
+func catalogDescription(tool Tool) string {
+	if typed, ok := tool.(ToolCatalogDescription); ok {
+		if description := strings.TrimSpace(typed.CatalogDescription()); description != "" {
+			return description
+		}
+	}
+	return tool.Description()
+}
+
 type ToolCatalogItem struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -126,6 +144,8 @@ type ToolRegistry struct {
 	restricted         map[string]bool
 	denied             map[string]bool
 	extensionOverrides map[string]bool
+	// families 是登记在这份注册表上的工具族，见 tool_family.go。
+	families []ToolFamily
 	// disabled 记着被配置整体关掉的工具和操作，见 tool_disable.go。
 	disabled       toolDisableState
 	activeViews    int
@@ -462,7 +482,49 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 	if !cfg.BrowserScreenshotDisabled {
 		r.Register(&BrowserScreenshotTool{base: base, restricted: cfg.BrowserScreenshotRestricted, allowedHosts: cfg.BrowserScreenshotHosts, protected: agentProtectedFiles(cfg)})
 	}
+	r.RegisterFamily(BrowserToolFamily())
+}
 
+// BrowserToolFamilyName 是交互式浏览器对模型呈现的工具名。
+const BrowserToolFamilyName = "browser"
+
+// BrowserToolFamily 把交互式浏览器的十几个工具呈现成一个 browser：目录里只占一行，
+// 用哪个动作由 action 选。成员仍按各自的名字登记和裁剪权限（个人浏览器只有其中几个，
+// 安全模式整组摘掉），所以这里只管对外长什么样。browser_render 是一次性的公网沙盒，
+// 用得最多，单独保留。
+//
+// 标签页和前进后退这两个成员自己还有一层 action，在这里摊平成各自的动作。
+func BrowserToolFamily() ToolFamily {
+	tabs := func(action, summary string, optional bool) ToolFamilyMember {
+		return ToolFamilyMember{Action: "tabs_" + action, Tool: "browser_tabs", Fixed: map[string]any{"action": action}, FixedOptional: optional, Summary: summary}
+	}
+	navigate := func(action, summary string) ToolFamilyMember {
+		return ToolFamilyMember{Action: action, Tool: "browser_navigate", Fixed: map[string]any{"action": action}, Summary: summary}
+	}
+	return ToolFamily{
+		Name:        BrowserToolFamilyName,
+		Description: "操作带登录态的交互式浏览器：打开页面、读正文、点击、输入、截图、管理标签页。只是读公开网页用 browser_render，要登录态或要在页面上操作时才用这个。",
+		Members: []ToolFamilyMember{
+			{Action: "open", Tool: "browser_open"},
+			{Action: "text", Tool: "browser_text"},
+			{Action: "click", Tool: "browser_click"},
+			{Action: "type", Tool: "browser_type"},
+			{Action: "press_key", Tool: "browser_press_key"},
+			{Action: "select", Tool: "browser_select"},
+			{Action: "scroll", Tool: "browser_scroll"},
+			{Action: "wait", Tool: "browser_wait"},
+			{Action: "screenshot", Tool: "browser_screenshot"},
+			tabs("list", "列出标签页，返回的 tab_id 可用于其他动作。", true),
+			tabs("switch", "切到 tab_id 那一页，之后的动作作用在它上面。", false),
+			tabs("close", "关闭 tab_id 那一页，省略时关当前页。", false),
+			tabs("new", "新开标签页，url 省略时是空白页。", false),
+			navigate("back", "当前标签页后退，返回新页面文本。"),
+			navigate("forward", "当前标签页前进，返回新页面文本。"),
+			navigate("reload", "刷新当前标签页，返回新页面文本。"),
+			{Action: "eval", Tool: "browser_eval"},
+			{Action: "handoff", Tool: "browser_handoff"},
+		},
+	}
 }
 
 // InteractiveBrowserToolNames 是 RegisterBrowserTools 登记的全部工具，WebUI 和提示词
@@ -473,8 +535,16 @@ var InteractiveBrowserToolNames = []string{
 	"browser_select", "browser_wait", "browser_eval",
 }
 
-// Get 按名称查找工具。
+// Get 按名称查找工具。名字是工具族时，返回按当前可用成员拼出来的族工具。
 func (r *ToolRegistry) Get(name string) (Tool, bool) {
+	if tool, ok := r.getRegistered(name); ok {
+		return tool, true
+	}
+	return r.familyTool(name)
+}
+
+// getRegistered 只查登记过的工具（含父注册表），不认工具族。
+func (r *ToolRegistry) getRegistered(name string) (Tool, bool) {
 	if r == nil {
 		return nil, false
 	}
@@ -535,6 +605,10 @@ func (r *ToolRegistry) PolicyDenied(name string) bool {
 	// 拿得到就不是权限问题：这个判断要能独立回答，不能依赖调用方先试过 Get。
 	if _, ok := r.Get(name); ok {
 		return false
+	}
+	// 工具族：成员一个都取不到、其中有因为权限取不到的，整族按没权限回话。
+	if r.familyPolicyDenied(name) {
+		return true
 	}
 	r.mu.RLock()
 	_, local := r.tools[name]
@@ -670,14 +744,14 @@ func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
 	if descriptionRunes <= 0 {
 		descriptionRunes = 180
 	}
-	names := r.Names()
+	names := r.PresentedNames()
 	items := make([]ToolCatalogItem, 0, len(names))
 	for _, name := range names {
 		tool, ok := r.Get(name)
 		if !ok {
 			continue
 		}
-		description := strings.TrimSpace(tool.Description())
+		description := strings.TrimSpace(catalogDescription(tool))
 		if index := strings.Index(strings.ToLower(description), "input:"); index >= 0 {
 			description = strings.TrimSpace(description[:index])
 		}
@@ -695,7 +769,7 @@ func (r *ToolRegistry) Descriptions() string {
 	if r == nil {
 		return "无可用工具。"
 	}
-	names := r.Names()
+	names := r.PresentedNames()
 	if len(names) == 0 {
 		return "无可用工具。"
 	}
@@ -721,7 +795,7 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 		return nil
 	}
 	definitions := make([]llm.ToolDefinition, 0, r.Len())
-	for _, name := range r.Names() {
+	for _, name := range r.PresentedNames() {
 		tool, ok := r.Get(name)
 		if !ok {
 			continue
@@ -759,7 +833,7 @@ func ResidencyCost(tool Tool) (resident, deferred int64) {
 
 // deferredCatalogLine 是按需目录里的一行，catalog 和开销估算共用同一份格式。
 func deferredCatalogLine(tool Tool) string {
-	return "- " + tool.Name() + ": " + compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget) + "\n"
+	return "- " + tool.Name() + ": " + compactToolDescription(catalogDescription(tool), SystemPromptToolDescriptionBudget) + "\n"
 }
 
 // SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上
@@ -770,7 +844,7 @@ func (r *ToolRegistry) SystemPromptCatalog() string {
 	if r == nil {
 		return "无可用工具。"
 	}
-	names := r.Names()
+	names := r.PresentedNames()
 	if len(names) == 0 {
 		return "无可用工具。"
 	}
@@ -783,7 +857,7 @@ func (r *ToolRegistry) SystemPromptCatalog() string {
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
-		builder.WriteString(compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget))
+		builder.WriteString(compactToolDescription(catalogDescription(tool), SystemPromptToolDescriptionBudget))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())

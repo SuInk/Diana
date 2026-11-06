@@ -401,7 +401,7 @@ func TestBrowserTabLimitReclaimsIdleThenRefuses(t *testing.T) {
 
 	late := browserToolsFor(t, f, tabs, "bot\x00group:late", time.Second)
 	_, err := runBrowserTool(ctx, late, "browser_open", map[string]any{"url": "https://late.example/", "new_tab": true})
-	if err == nil || !strings.Contains(err.Error(), "上限") || !strings.Contains(err.Error(), "browser_tabs") {
+	if err == nil || !strings.Contains(err.Error(), "上限") || !strings.Contains(err.Error(), "tabs_close") {
 		t.Fatalf("都有对话在用时应当明确拒绝并指路：%v", err)
 	}
 	if f.pages() != pages {

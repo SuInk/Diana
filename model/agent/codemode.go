@@ -94,7 +94,7 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 	if err := validateToolInput(tool.InputSchema(), input); err != nil {
 		return "", err
 	}
-	names := r.registry.Names()
+	names := r.registry.PresentedNames()
 	if r.loader != nil {
 		names = append(names, ToolsLoadToolName)
 	}
@@ -122,7 +122,7 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 			return deny(errors.New("nested dispatch and send are not available inside codemode"))
 		}
 		var err error
-		action, err = r.loader.dispatch(action)
+		action, err = r.dispatchAction(action)
 		if err != nil {
 			return deny(err)
 		}
