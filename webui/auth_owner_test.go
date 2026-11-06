@@ -51,11 +51,11 @@ func (f *fakeOwnerRuntime) ProfileConfigs() []assistant.BotConfig {
 	return []assistant.BotConfig{f.cfg}
 }
 
-func (f *fakeOwnerRuntime) CallPlatformAPIForProfile(_ context.Context, profileID string, action string, params map[string]any) (map[string]any, error) {
+func (f *fakeOwnerRuntime) ReplyPlainText(_ context.Context, event assistant.MessageEvent, text string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, fakeOwnerAPICall{profileID: profileID, action: action, params: params})
-	return map[string]any{}, nil
+	f.calls = append(f.calls, fakeOwnerAPICall{profileID: event.ProfileID, action: "reply", params: map[string]any{"text": text, "user_id": event.UserID}})
+	return nil
 }
 
 func (f *fakeOwnerRuntime) sentTexts() []string {
@@ -267,16 +267,23 @@ func TestOwnerPairingIgnoresOtherSenders(t *testing.T) {
 	}
 }
 
-func TestOwnerMessageDeliverySupportsTelegram(t *testing.T) {
-	action, params, err := ownerMessageDelivery(assistant.BotConfig{
-		Platform: assistant.PlatformTelegram,
-		OwnerID:  "10001",
-	}, "login code")
-	if err != nil {
-		t.Fatal(err)
+// QQ 官方机器人的主人是 openid，不是数字；回执跟着主人那条私聊被动回复，照样能登录。
+func TestOwnerLoginAcceptsQQOfficialOpenIDOwner(t *testing.T) {
+	const openID = "E4F3A2B1C0D9E8F7A6B5C4D3E2F1A0B9"
+	runtime := &fakeOwnerRuntime{cfg: assistant.BotConfig{
+		ID: "qq", Platform: assistant.PlatformQQOfficial, OwnerID: openID, Enabled: true, OwnerLoginEnabled: true,
+	}}
+	if err := ownerLoginEligible(runtime.cfg); err != nil {
+		t.Fatalf("openid 主人被判不可用：%v", err)
 	}
-	if action != "sendMessage" || params["chat_id"] != int64(10001) || params["text"] != "login code" {
-		t.Fatalf("delivery = %q %#v", action, params)
+	router, _, handler := newOwnerLoginTestRouter(t, runtime)
+	code, _ := createOwnerPairing(t, router)
+	event := assistant.MessageEvent{Kind: assistant.EventKindPrivate, Platform: assistant.PlatformQQOfficial, ProfileID: "qq", UserID: openID, MessageID: "msg-1"}
+	if !handler.ConsumePrivateMessage(context.Background(), event, code) {
+		t.Fatal("openid 主人私聊验证码没能登录")
+	}
+	if len(runtime.calls) != 1 || runtime.calls[0].params["user_id"] != openID {
+		t.Fatalf("回执应回复主人那条私聊：%+v", runtime.calls)
 	}
 }
 
