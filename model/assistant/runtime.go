@@ -307,6 +307,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "error", "回复生成失败；当前机器人已关闭错误提示，错误仅记录到事件与日志", false
 	case "error_silent_empty_output":
 		return "error", "上游模型这次没有返回任何有效内容；这类失败不发进聊天，只记录到事件与日志", false
+	case "error_silent_proactive":
+		return "error", "主动插话出错（含被发送前审核拦下）；没人叫机器人，出错不在聊天里说明，只记录到事件与日志", false
 	case "ignored_unavailable_group":
 		return "not_replied", "群聊当前不可用、未加入允许范围或机器人已不在该群", false
 	case "ignored_bot_muted":
@@ -2381,6 +2383,16 @@ func (r *Runtime) replyAndRecord(ctx context.Context, event MessageEvent, text s
 	return outcome, err
 }
 
+// unpromptedReplyTurn 报告这一轮是机器人主动插话：接话评分或闲聊插话选出来的，
+// 不是有人 @、引用它或私聊。引用机器人的消息在 replyAndRecord 入口已经清掉了这两个
+// 标记，和生成时 proactiveTriggered 的口径一致。
+func unpromptedReplyTurn(ctx context.Context, event MessageEvent) bool {
+	if event.Kind == EventKindPrivate {
+		return false
+	}
+	return event.proactiveReply || event.chatInReply || len(proactiveReplyTurnFromContext(ctx)) > 0
+}
+
 func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
 	defer r.enqueueHistoryImageDescriptions(event)
 	start := time.Now()
@@ -2573,6 +2585,15 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			setEventRecordOutcome(&record, "error_silent_empty_output")
 			r.record(record)
 			return "error_silent_empty_output", nil
+		}
+		// 主动插话是机器人自己要开口，没人在等它的回答。这时出错（模型挂了、被发送前
+		// 审核拦下）再冒一句「这条不发了」「出了点问题」，等于凭空告诉群里它刚才想说
+		// 点什么、没说成；被账号安全拦下时更是在提示「我差点说了不该说的」。所以不管
+		// 错误提示和「出错时仍用人设回一句」怎么设都不出声。有人 @、引用或私聊时不走这里。
+		if unpromptedReplyTurn(replyCtx, event) {
+			setEventRecordOutcome(&record, "error_silent_proactive")
+			r.record(record)
+			return "error_silent_proactive", nil
 		}
 		// 错误提示开关控制所有面向聊天的诊断消息。关闭后仍保留完整事件、
 		// LastError 和应用日志，但不把 LLM、Agent、工具或协议错误发进群聊/私聊。

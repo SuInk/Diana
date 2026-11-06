@@ -605,6 +605,7 @@
                                 <span class="model-health-dot" :class="modelRouteHealth(role.key, item.route).className" :title="modelRouteHealth(role.key, item.route).title" aria-hidden="true"></span>
                                 <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
                                 <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
+                                <span v-if="role.key === 'image' && imageRouteSupportsAnimation(item.route)" class="badge model-route-capability" title="要动图（GIF）时只会用标了「动图」的模型">动图</span>
                               </span>
                               <!-- 正常的只留绿点；冷却、近期失败、上次调用失败才写字，一眼扫出要处理的那几行。 -->
                               <span v-if="modelRouteHealth(role.key, item.route).className === 'warn' || modelRouteHealth(role.key, item.route).className === 'err'" class="model-route-alert" :class="modelRouteHealth(role.key, item.route).className">
@@ -627,6 +628,7 @@
                       </table>
                     </div>
                   </template>
+                <p v-if="role.key === 'image' && roleForm[role.key] && !roleForm[role.key]?.follow_chat && modelRoleRoutes(role.key).length && !imageAnimationAvailable()" class="model-role-note">没有启用的模型能出动图，群友要 GIF 时会直接说做不了。要支持就加一个 gpt-image-2.6，或在「提供商」里给模型勾上「动图」。</p>
                 <p v-if="(role.key === 'tts' || role.key === 'stt') && roleForm[role.key] && !builtinSpeechAPIs[roleForm[role.key]?.profile_id ?? '']" class="model-role-note" title="各后备提供商使用自己的参数；提供商没配语音参数时，已有插槽参数继续生效。">接口、音色在「提供商 → 语音」里配置。</p>
                 <p v-if="role.key === 'video' && roleForm[role.key]" class="model-role-note" title="各后备提供商使用自己的设置；提供商没配视频参数时，已有插槽参数继续生效。">接口格式、分辨率和时长在「提供商 → 视频」里配置。</p>
                 <div v-if="isMediaRole(role.key) && roleForm[role.key]" class="model-role-params">
@@ -2335,7 +2337,7 @@ import { ALL_PROFILES, botCreateRequested, botScope, setBotScope, setScopeLeaveG
 import { copyBotConfiguration } from "../lib/bot-config-copy";
 import { findWebSocketConnectionConflict } from "../lib/bot-connection-conflicts";
 import { maximumModelRequestTimeoutSeconds, modelRequestTimeoutMilliseconds, modelRequestTimeoutSeconds, useConfigurationRefresh } from "../lib/configuration-sync";
-import { mergeModelMetadata, effectiveModelInfo } from "../lib/model-metadata";
+import { mergeModelMetadata, effectiveModelInfo, imageModelSupportsAnimation } from "../lib/model-metadata";
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Ref } from "vue";
 import { useSectionOutline } from "../lib/section-outline";
 import LoadingSkeleton from "../components/LoadingSkeleton.vue";
@@ -4413,6 +4415,19 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
     });
   }
   return base;
+}
+
+// 动图请求只发给能出 GIF 的图片模型（见后端 animationImageConfigs），这里按同一套
+// 规则给每一行标出来，一个都没有时在表格下提醒，不用等群友要了动图才发现做不了。
+function imageRouteSupportsAnimation(route: RoleRoute): boolean {
+  const id = route.model?.trim();
+  if (!id) return false;
+  const info = selectedRoleProfiles("image", route).flatMap(profile => profileModels(profile)).find(model => model.id === id);
+  return imageModelSupportsAnimation(id, info);
+}
+
+function imageAnimationAvailable(): boolean {
+  return modelRoleRoutes("image").some(({ route }) => !route.disabled && imageRouteSupportsAnimation(route));
 }
 
 function selectedRoleProfiles(role: RoleKey, selection: RoleRoute | undefined = roleForm.value[role]): LLMConfig[] {

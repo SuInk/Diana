@@ -726,6 +726,16 @@ code {
   font-size: 11.5px;
 }
 
+.model-route-line:has(.model-route-capability) {
+  grid-template-columns: 7px minmax(0, max-content) minmax(0, 1fr) auto;
+}
+
+.model-route-line .model-route-capability {
+  flex: none;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
 .model-route-alert {
   display: block;
   margin: 3px 0 0 15px;

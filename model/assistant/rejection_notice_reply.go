@@ -100,6 +100,15 @@ func (r *Runtime) rewriteRejectionNotice(ctx context.Context, event MessageEvent
 	if !ok {
 		return "", false
 	}
+	return r.rewriteNoticeText(ctx, event, source, prompt, purpose)
+}
+
+// rewriteNoticeText 让模型按人设把一句已经可以发进聊天的说明换个口吻说。source 必须
+// 是已脱敏、本来就能原样发出的文案；改写失败、超长或像在调指令时返回 false。
+func (r *Runtime) rewriteNoticeText(ctx context.Context, event MessageEvent, source, prompt, purpose string) (string, bool) {
+	if ctx.Err() != nil || strings.TrimSpace(source) == "" {
+		return "", false
+	}
 	callCtx := withLLMUsagePurpose(withLLMUsageContext(ctx, event), purpose)
 	messages := r.withUserFacingPersona(event, []llm.Message{
 		{Role: llm.RoleSystem, Content: prompt},
