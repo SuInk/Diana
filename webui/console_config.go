@@ -28,13 +28,17 @@ type ConsoleConfigManager struct {
 	media   *HistoryMediaHandler
 	auth    *AuthHandler
 	trusted *TrustedLoginHandler
+	// switches 是不属于某台机器人的全局开关页，见 console_config_switches.go。
+	switches ConsoleSwitchHandlers
 }
 
 func NewConsoleConfigManager(bot *BotHandler, llm *LLMConfigHandler, cache *MediaCacheHandler, media *HistoryMediaHandler, auth *AuthHandler, trusted *TrustedLoginHandler) *ConsoleConfigManager {
 	return &ConsoleConfigManager{bot: bot, llm: llm, cache: cache, media: media, auth: auth, trusted: trusted}
 }
 func (m *ConsoleConfigManager) Catalog() any {
-	return map[string]any{
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := map[string]any{
 		"bot":               map[string]any{"actions": []string{"update", "create", "clone", "delete"}, "fields": consoleFieldTypes(assistant.ConfigPayload{}), "hint": "target 默认当前机器人；update 是顶层补丁；model_roles 按用途整体替换，可设所有用途、各路由 reasoning_effort/weight/standby/disabled/group/fallbacks/routing_strategy/params。删除用途键恢复继承。身份、权限与连接修改确认后生效。至少保留一个机器人。"},
 		"provider":          map[string]any{"actions": []string{"update", "create", "clone", "delete", "reorder"}, "fields": consoleFieldTypes(llmConfigPayload{}), "hint": "target 使用 get 返回的提供商 ID；update 只提交变化字段；models 为完整目录；group 为提供商分组；凭据和地址不回显；reorder 提交 ids 顺序。"},
 		"plugin":            map[string]any{"actions": []string{"update"}, "hint": "target 为插件 ID，payload.settings 为完整非敏感覆盖加本次修改的密钥；省略密钥保留原值，clear_secrets 指定清除。get 返回插件 schema。"},
@@ -45,8 +49,10 @@ func (m *ConsoleConfigManager) Catalog() any {
 		"trusted_apps":      map[string]any{"actions": []string{"enable", "create", "update", "rotate"}, "fields": []string{"id", "name", "profile_id", "disabled", "enabled", "secret"}, "hint": "enable 修改总开关；create/rotate 必须提供至少 32 字符的 secret，由用户保存，聊天不回显；update 使用完整 name/profile_id/disabled。"},
 		"group":             map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(assistant.GroupConfig{}), "hint": "target 为当前机器人的群 ID；chat_model.route 设置独立完整对话路由（disabled/weight/standby/reasoning_effort/fallbacks/routing_strategy）；chat_model={} 恢复继承。"},
 		"model_role_fields": consoleFieldTypes(assistant.ModelRole{}),
-		"readonly":          []string{"标识和派生状态不能修改；浏览器主题仅存浏览器本地，不是机器人配置"},
+		"readonly":          []string{"标识和派生状态不能修改；浏览器主题仅存浏览器本地，不是机器人配置；config.yaml 启动配置（含 browser.disable_sandbox）用 runtime_config 工具修改"},
 	}
+	m.switchCatalog(out)
+	return out
 }
 func consoleFieldTypes(value any) map[string]string {
 	out := map[string]string{}
@@ -88,6 +94,9 @@ func (m *ConsoleConfigManager) Read(ctx context.Context, profile, resource, targ
 	defer m.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if out, handled, err := m.readSwitch(ctx, profile, resource, target); handled {
+		return out, err
 	}
 	switch resource {
 	case "bot":
@@ -134,6 +143,9 @@ func (m *ConsoleConfigManager) Apply(ctx context.Context, profile, resource, act
 	ctx = context.WithValue(ctx, consoleConfigContextKey{}, true)
 	// Register newly submitted values before downstream validation can echo them.
 	registerConsoleSecrets(payload)
+	if out, handled, err := m.applySwitch(ctx, profile, resource, action, target, payload); handled {
+		return out, err
+	}
 	switch resource {
 	case "bot":
 		if target == "" {
@@ -322,10 +334,19 @@ func registerConsoleSecrets(value any) {
 	}
 }
 func (m *ConsoleConfigManager) invoke(ctx context.Context, profile, target string, payload map[string]any, handler gin.HandlerFunc) (any, error) {
+	return m.invokeWithQuery(ctx, profile, target, payload, handler, nil)
+}
+
+// invokeWithQuery 给需要额外查询参数（如 bot_profile_id）的 handler 用。
+func (m *ConsoleConfigManager) invokeWithQuery(ctx context.Context, profile, target string, payload map[string]any, handler gin.HandlerFunc, query url.Values) (any, error) {
 	body, _ := json.Marshal(payload)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest("POST", "/internal/chat-settings?profile="+url.QueryEscape(profile), bytes.NewReader(body)).WithContext(context.WithValue(ctx, consoleConfigContextKey{}, true))
+	values := url.Values{"profile": {profile}}
+	for key, items := range query {
+		values[key] = items
+	}
+	c.Request = httptest.NewRequest("POST", "/internal/chat-settings?"+values.Encode(), bytes.NewReader(body)).WithContext(context.WithValue(ctx, consoleConfigContextKey{}, true))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("X-Diana-Actor", "chat-settings")
 	c.Params = gin.Params{{Key: "id", Value: target}}

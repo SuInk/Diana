@@ -393,6 +393,10 @@ func main() {
 		log.Fatal(err)
 	}
 	llm.SetOutputTokenCeiling(appCfg.LLMRuntime.OutputTokenMax)
+	agent.SetBrowserSandboxDisabled(appCfg.Browser.DisableSandbox)
+	if appCfg.Browser.DisableSandbox {
+		log.Printf("WARN 已按 config.yaml 的 browser.disable_sandbox 关闭 Chromium 进程沙箱")
+	}
 	// models.dev 快照随版本打包，和请求时查窗口共用一份。
 	modelCatalog := llm.SharedModelsDevCatalog()
 	// 模型列表从当前提供商读取；公共目录只补全后端省略的模态和 token 限制。
@@ -792,7 +796,8 @@ func main() {
 		desktopLocal.Run(ctx)
 	}()
 	defer desktopLocal.Close()
-	webui.NewDesktopControlHandler(desktopControlRegistry, desktopControlHub, desktopLocal, desktopControlJobs).Register(router)
+	desktopControlHandler := webui.NewDesktopControlHandler(desktopControlRegistry, desktopControlHub, desktopLocal, desktopControlJobs)
+	desktopControlHandler.Register(router)
 
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
@@ -832,7 +837,15 @@ func main() {
 	runtimeConfigHandler := webui.NewRuntimeConfigHandler(runtimeConfigManager)
 	runtimeConfigHandler.SetLogStore(sqliteStore)
 	runtimeConfigHandler.Register(router)
-	botRuntime.SetConsoleConfigManager(webui.NewConsoleConfigManager(botHandler, handler, mediaCacheHandler, historyMediaHandler, authHandler, trustedLoginHandler))
+	consoleConfig := webui.NewConsoleConfigManager(botHandler, handler, mediaCacheHandler, historyMediaHandler, authHandler, trustedLoginHandler)
+	consoleConfig.SetSwitchHandlers(webui.ConsoleSwitchHandlers{
+		BrowserSource:  browserSourceHandler,
+		BrowserControl: browserControlHandler,
+		DesktopControl: desktopControlHandler,
+		BrowserBox:     browserBoxHandler,
+		SystemUpdate:   systemHandler,
+	})
+	botRuntime.SetConsoleConfigManager(consoleConfig)
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)

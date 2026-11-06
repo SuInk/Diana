@@ -41,6 +41,20 @@ func TestSandboxedChromeArgsDisableSandboxAsRoot(t *testing.T) {
 	}
 }
 
+func TestSandboxedChromeArgsDisableSandboxBySwitch(t *testing.T) {
+	t.Setenv("PREFIX", "/usr/local")
+	t.Setenv("TERMUX_VERSION", "")
+	stubBrowserRunningAsRoot(t, false)
+	SetBrowserSandboxDisabled(true)
+	t.Cleanup(func() { SetBrowserSandboxDisabled(false) })
+	if args := sandboxedChromeBaseArgsForMode("p", "c", "d", false); !slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("browser.disable_sandbox 打开后网页渲染仍带沙箱：%v", args)
+	}
+	if args := htmlCaptureExtraArgs(); !slices.Contains(args, "--no-sandbox") {
+		t.Fatalf("browser.disable_sandbox 打开后 HTML 出图仍带沙箱：%v", args)
+	}
+}
+
 func stubBrowserRunningAsRoot(t *testing.T, root bool) {
 	t.Helper()
 	previous := browserRunningAsRoot

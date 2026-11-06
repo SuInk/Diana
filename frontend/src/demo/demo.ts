@@ -1058,7 +1058,8 @@ const demoRuntimeConfig: RuntimeConfigSnapshot = {
     demoRuntimeItem("storage.media_max_mb", "单个媒体大小上限（MB）", "int", "0", null, { editable: true, bot_editable: true, hint: "0 用内置默认值。" }),
     demoRuntimeItem("admin.password", "初始管理员密码", "string", "", "已设置", { secret: true, hint: "只在第一次启动时使用。" }),
     demoRuntimeItem("update.release_enabled", "允许 Release 更新", "bool", "true", null, { editable: true, bot_editable: true, hint: "关掉后控制台不能下载安装新版本。" }),
-    demoRuntimeItem("llm_runtime.output_token_max", "默认最大输出 token", "int", "0", null, { editable: true, bot_editable: true, hint: "Anthropic 协议没填最大输出时代发的值，0 用 32000。" })
+    demoRuntimeItem("llm_runtime.output_token_max", "默认最大输出 token", "int", "0", null, { editable: true, bot_editable: true, hint: "Anthropic 协议没填最大输出时代发的值，0 用 32000。" }),
+    demoRuntimeItem("browser.disable_sandbox", "关闭浏览器沙箱", "bool", "false", null, { editable: true, bot_editable: true, risky: true, hint: "给网页渲染、浏览器搜索、内置浏览器和 HTML 截图的 Chromium 都加 --no-sandbox。只在沙箱确实起不来（proot、宿主禁用用户命名空间）时打开；Termux 和 root 运行时已自动关闭，不用开。关闭沙箱后网页里的漏洞利用不再被挡住。" })
   ],
   env: [
     { name: "DIANA_DEPLOYMENT", label: "部署方式", set: false },

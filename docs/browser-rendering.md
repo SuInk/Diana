@@ -54,7 +54,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；它不是挂载给应用的配置文件。旧版尚未包含预装浏览器，需要升级到包含浏览器的镜像。
 
-默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。例外只有两种：在 Termux 里（安卓不给普通 App 开用户命名空间），以及 Diana 以 root 身份运行时（Chromium 拒绝 root 带沙盒启动）；这两种情况下网页渲染、内置浏览器和 HTML 截图都会带上 `--no-sandbox`，页面隔离只剩内网屏蔽和临时 profile，能用普通用户运行就别用 root。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
+默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。例外只有两种：在 Termux 里（安卓不给普通 App 开用户命名空间），以及 Diana 以 root 身份运行时（Chromium 拒绝 root 带沙盒启动）；这两种情况下网页渲染、内置浏览器和 HTML 截图都会带上 `--no-sandbox`，页面隔离只剩内网屏蔽和临时 profile，能用普通用户运行就别用 root。proot、宿主禁用用户命名空间又放不开这类沙箱怎么都起不来的环境，可以在 `config.yaml` 里设 `browser.disable_sandbox: true`（控制台「设置 → 启动配置」或在私聊里让 Diana 用 `runtime_config` 改），重启后所有 Diana 拉起的 Chromium 都带 `--no-sandbox`；默认关闭。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
 
 Docker 默认的 `/dev/shm` 只有 64MB，Chrome 渲染重页面时容易写满它导致渲染进程崩溃。Linux 上启动的所有 Chrome 都带 `--disable-dev-shm-usage`，共享内存改走临时目录，因此 Compose 里不需要再设 `shm_size`，`docker run` 也不用加 `--shm-size`。
 

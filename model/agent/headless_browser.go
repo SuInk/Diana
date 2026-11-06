@@ -17,6 +17,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/SuInk/diana/internal/procgroup"
@@ -422,7 +423,7 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	defer cancelSandbox()
 	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
 		status.Available = false
-		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开，不要禁用 Chromium 沙箱"
+		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开；确实放不开（如 proot）才在启动配置里打开 browser.disable_sandbox 并重启"
 	}
 	return status
 }
@@ -656,7 +657,9 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 	//   - 以 root 运行时 Chromium 直接拒绝带沙盒启动（Running as root without
 	//     --no-sandbox is not supported）。HTML 截图那条路早就按 root 放行，
 	//     这里跟它一致，否则同一台机器上截图能跑、网页渲染却起不来。
-	if termux.Detected() || browserRunningAsRoot() {
+	//   - 主人在 config.yaml 里打开了 browser.disable_sandbox：proot、禁用用户
+	//     命名空间又没法放开的宿主，沙箱怎么都起不来，只能显式放弃。
+	if termux.Detected() || browserRunningAsRoot() || browserSandboxDisabled.Load() {
 		args = append(args, "--no-sandbox")
 	}
 	return args
@@ -664,6 +667,17 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 
 // browserRunningAsRoot 单独抽出来，测试才能在 root 跑的 CI 容器里固定结果。
 var browserRunningAsRoot = func() bool { return os.Geteuid() == 0 }
+
+// browserSandboxDisabled 对应 config.yaml 的 browser.disable_sandbox，启动时设一次。
+var browserSandboxDisabled atomic.Bool
+
+// SetBrowserSandboxDisabled 关掉（或恢复）所有 Diana 拉起的 Chromium 的进程沙箱。
+// 只给沙箱确实起不来的宿主用：关掉后网页里的漏洞利用不再被沙箱挡住，页面隔离只剩
+// 内网屏蔽和临时 profile。
+func SetBrowserSandboxDisabled(disabled bool) { browserSandboxDisabled.Store(disabled) }
+
+// BrowserSandboxDisabled 报告主人是否显式关掉了浏览器沙箱。
+func BrowserSandboxDisabled() bool { return browserSandboxDisabled.Load() }
 
 func sandboxedChromeArgs(profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig) []string {
 	return sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
