@@ -110,6 +110,11 @@ type dianaImageToolRequest struct {
 	// WorkspaceStem 是成品在工作目录 outputs/ 里的文件名前缀，受理时定下来，
 	// 这样受理结果里就能告诉模型图会存到哪。为空表示不落盘。
 	WorkspaceStem string
+	// Format 是成品格式（png/jpeg/webp/gif），空值用上游默认。FrameCount、
+	// FrameDurationMS 只在 gif 时生效，零值用上游默认。
+	Format          string
+	FrameCount      int
+	FrameDurationMS int
 	// quota 是受理时占下的每日生图次数，任务结束时按实际成功张数结清。
 	quota *mediaGenerationReservation
 }
@@ -162,6 +167,8 @@ func imageAnnouncementSubject(prompt string) string {
 	if index := strings.IndexAny(subject, "\r\n"); index >= 0 {
 		subject = strings.TrimSpace(subject[:index])
 	}
+	// 句末标点去掉：后面还要接「，完成后…」，不去会念成「纯色背景。，完成后」。
+	subject = strings.TrimRight(subject, "。.！!？?，,；;、 ")
 	if subject == "" || len([]rune(subject)) > imageAnnouncementSubjectMaxRunes {
 		return ""
 	}
@@ -177,6 +184,9 @@ func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageTo
 		return ""
 	}
 	action := "生成图片"
+	if request.Format == llm.ImageFormatGIF {
+		action = "生成动图"
+	}
 	if request.Operation == "edit" {
 		action = "编辑图片"
 		// 参考图要等任务真正跑起来才解析得出来，这里说不出确切张数，就不说，
@@ -212,6 +222,13 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("generate 凭文字出新图；edit 以图或头像为底修改。省略时有原图来源按 edit", operations...),
 		"prompt":    toolStringParam("给图片模型的完整自包含提示词，不用对话口吻和上下文指代"),
 		"caption":   toolStringParam("随图的一句话，用平时聊天口吻，别写「图片生成完成」这类系统提示；可留空只发图"),
+	}
+	// 动图来自群友要 gpt-image-2.6 的 GIF 输出：以前工具没有这个参数，模型只能回答
+	// 「我这边不能指定 GIF」。gif 只能 generate，上游的 edits 不支持。
+	if t.relationship.AllowImageGeneration {
+		properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF)
+		properties["frame_count"] = toolIntParam("gif 总帧数，省略为 9", llm.ImageGIFMinFrames, llm.ImageGIFMaxFrames)
+		properties["frame_duration_ms"] = toolIntParam("gif 每帧毫秒数，省略为 200", llm.ImageGIFMinFrameDurationMS, llm.ImageGIFMaxFrameDurationMS)
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
 	// 头像地址，并核对这个人在当前会话里确实存在。
@@ -341,6 +358,10 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if sourceMode != dianaImageSourceModeEach {
 		sourceMode = dianaImageSourceModeCombine
 	}
+	format, frameCount, frameDuration, err := dianaImageFormatInput(input, operation)
+	if err != nil {
+		return dianaImageToolRequest{}, err
+	}
 	sourceLabels := configToolStringSlice(input, "source_labels")
 	if len(sourceLabels) != len(identitySources) {
 		// 数量对不上就整组丢弃:错位的标注比没有标注更糟(把 A 的头像标成 B)。
@@ -351,7 +372,37 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		IdentitySources: identitySources, DefaultIdentitySources: defaultIdentitySources,
 		SourceLabels: sourceLabels, SourceMode: sourceMode,
 		SourceMessageIDs: sourceMessageIDs,
+		Format:           format, FrameCount: frameCount, FrameDurationMS: frameDuration,
 	}, nil
+}
+
+// dianaImageFormatInput 读成品格式和 GIF 帧参数。帧参数超出范围就夹到边界：上游会
+// 直接拒掉越界值，为一个帧数让整次出图失败不划算。
+func dianaImageFormatInput(input map[string]any, operation string) (string, int, int, error) {
+	format := strings.ToLower(strings.TrimSpace(configToolString(input, "format")))
+	switch format {
+	case "":
+	case "jpg":
+		format = llm.ImageFormatJPEG
+	case llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF:
+	default:
+		return "", 0, 0, fmt.Errorf("format 只能是 png、jpeg、webp 或 gif")
+	}
+	if format == llm.ImageFormatGIF && operation != "generate" {
+		return "", 0, 0, fmt.Errorf("gif 动图只能用 operation=\"generate\" 凭文字生成，图片接口不支持把原图改成动图。要做动图就把原图内容写进 prompt 改用 generate；要改原图就去掉 format")
+	}
+	if format != llm.ImageFormatGIF {
+		return format, 0, 0, nil
+	}
+	frameCount := 0
+	if _, ok := input["frame_count"]; ok {
+		frameCount = min(max(intFromAny(input["frame_count"]), llm.ImageGIFMinFrames), llm.ImageGIFMaxFrames)
+	}
+	frameDuration := 0
+	if _, ok := input["frame_duration_ms"]; ok {
+		frameDuration = min(max(intFromAny(input["frame_duration_ms"]), llm.ImageGIFMinFrameDurationMS), llm.ImageGIFMaxFrameDurationMS)
+	}
+	return format, frameCount, frameDuration, nil
 }
 
 func (t *dianaImageTool) sourcePlan(request dianaImageToolRequest) imageEditSourcePlan {
@@ -517,9 +568,12 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	switch operation {
 	case "generate":
 		resp, usedCfg, err := t.runtime.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
-			Prompt: submittedPrompt,
-			Size:   "1024x1024",
-			N:      1,
+			Prompt:          submittedPrompt,
+			Size:            dianaImageGenerateSize(request.Format),
+			N:               1,
+			OutputFormat:    request.Format,
+			FrameCount:      request.FrameCount,
+			FrameDurationMS: request.FrameDurationMS,
 		})
 		if err != nil {
 			return dianaImageTaskOutput{}, err
@@ -659,6 +713,17 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	}, nil
 }
 
+// dianaImageGenerateSize 给生图挑尺寸。gpt-image-2.6 把 GIF 的所有帧拼在一张精灵图里
+// 一起画，size 指的是单帧：9 帧 × 1024 拼出 3072×3072，超了像素预算，上游直接 400
+// （实测 "No supported sheet fits 9 GIF frames at size '1024x1024'"）。auto 让上游按帧数
+// 挑能放下的单帧尺寸，9 帧和 16 帧实测都给 512×512。
+func dianaImageGenerateSize(format string) string {
+	if format == llm.ImageFormatGIF {
+		return "auto"
+	}
+	return "1024x1024"
+}
+
 // dianaImageCaptionThenImages 把说明文字拆成单独一条排在图片前面：图文挤在一个气泡里
 // 图会被压小，也不像真人先说一句再甩图。
 func dianaImageCaptionThenImages(caption string, images OutgoingMessage) []OutgoingMessage {
@@ -699,6 +764,7 @@ func dianaImageResultCaption(caption string, delivered, dropped, failed int) str
 func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string {
 	payload := strings.Join(append([]string{
 		sessionKey(event), event.MessageID, request.Operation, request.Prompt, request.SourceMode,
+		request.Format, fmt.Sprint(request.FrameCount), fmt.Sprint(request.FrameDurationMS),
 	}, append(append([]string(nil), request.IdentitySources...), request.SourceMessageIDs...)...), "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("image:%x", digest[:12])

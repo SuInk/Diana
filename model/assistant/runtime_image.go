@@ -518,7 +518,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		resp, err := llm.GenerateImage(requestCtx, cfg, request)
 		cancel()
 		duration := time.Since(started)
-		r.recordImageDebugTrace(ctx, cfg, "image_generate", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N}, resp, err, duration)
+		r.recordImageDebugTrace(ctx, cfg, "image_generate", imageGenerateTraceRequest(request), resp, err, duration)
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_generate", duration)
 			return resp, cfg, nil
@@ -526,6 +526,20 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		lastErr = annotateImageProviderAttempt(err, cfg)
 	}
 	return nil, llm.ProviderConfig{}, lastErr
+}
+
+func imageGenerateTraceRequest(request llm.ImageGenerateRequest) map[string]any {
+	trace := map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N}
+	if request.OutputFormat != "" {
+		trace["output_format"] = request.OutputFormat
+	}
+	if request.FrameCount > 0 {
+		trace["frame_count"] = request.FrameCount
+	}
+	if request.FrameDurationMS > 0 {
+		trace["frame_duration_ms"] = request.FrameDurationMS
+	}
+	return trace
 }
 
 func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRequest) (*llm.ImageGenerateResponse, llm.ProviderConfig, error) {

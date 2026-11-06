@@ -30,6 +30,11 @@ func (c *geminiClient) GenerateImage(ctx context.Context, req ImageGenerateReque
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("llm: image prompt is required")
 	}
+	// Gemini 的图片模型只出静态图。照样请求会拿回一张 PNG，用户要的动图就悄悄没了；
+	// 直接报错，让故障转移去试下一个提供商。
+	if strings.EqualFold(strings.TrimSpace(req.OutputFormat), ImageFormatGIF) {
+		return nil, errors.New("llm: gemini image models cannot generate GIF")
+	}
 	parts := []*genai.Part{{Text: req.Prompt}}
 	images, usage, err := c.generateImageParts(ctx, req.Model, req.Size, req.N, parts)
 	if err != nil {
