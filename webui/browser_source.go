@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
@@ -23,6 +24,12 @@ import (
 type BrowserSourceStore interface {
 	LoadBrowserSource(ctx context.Context) (browsersource.Settings, bool, error)
 	SaveBrowserSource(ctx context.Context, doc browsersource.Settings) error
+}
+
+// BrowserSandboxStore 保存浏览器沙箱档位；BrowserSourceStore 实现了它就落盘。
+type BrowserSandboxStore interface {
+	LoadBrowserSandbox(ctx context.Context) (string, bool, error)
+	SaveBrowserSandbox(ctx context.Context, mode string) error
 }
 
 // BrowserSourceHandler 管「机器人用哪个浏览器」：内置浏览器和扩展各自开关，外加一个
@@ -47,6 +54,13 @@ func NewBrowserSourceHandler(ctx context.Context, box *browserbox.Manager, contr
 	if store != nil {
 		if doc, ok, err := store.LoadBrowserSource(ctx); err == nil && ok {
 			h.settings = doc.WithDefaults()
+		}
+		if sandboxStore, ok := store.(BrowserSandboxStore); ok {
+			if raw, found, err := sandboxStore.LoadBrowserSandbox(ctx); err == nil && found {
+				if mode, err := agent.ParseBrowserSandboxMode(raw); err == nil {
+					agent.SetBrowserSandboxMode(mode)
+				}
+			}
 		}
 	}
 	return h
@@ -88,6 +102,8 @@ type browserSourceState struct {
 	Active    string              `json:"active"`
 	Box       browserSourceSwitch `json:"box"`
 	Extension browserSourceSwitch `json:"extension"`
+	// Sandbox 是所有 Diana 拉起的 Chromium 的进程沙箱档位和实际状态。
+	Sandbox agent.BrowserSandboxStatus `json:"sandbox"`
 }
 
 type browserSourceSwitch struct {
@@ -120,6 +136,7 @@ func (h *BrowserSourceHandler) state() browserSourceState {
 			Enabled: extensionEnabled, Usable: h.hub.Ready(), Detected: len(connections) > 0,
 			Dependencies: []assistant.ResolverDependency{extensionDependency(connections)},
 		},
+		Sandbox: agent.CurrentBrowserSandbox(),
 	}
 }
 
@@ -174,12 +191,32 @@ func (h *BrowserSourceHandler) set(c *gin.Context) {
 		Order            []string `json:"order"`
 		BoxEnabled       *bool    `json:"box_enabled"`
 		ExtensionEnabled *bool    `json:"extension_enabled"`
+		Sandbox          *string  `json:"sandbox"`
 	}
 	if err := c.ShouldBindJSON(&payload); err != nil {
 		writeError(c, http.StatusBadRequest, errors.New("浏览器来源格式错误"))
 		return
 	}
 	ctx := c.Request.Context()
+	if payload.Sandbox != nil {
+		mode, err := agent.ParseBrowserSandboxMode(*payload.Sandbox)
+		if err != nil {
+			writeError(c, http.StatusBadRequest, err)
+			return
+		}
+		if sandboxStore, ok := h.store.(BrowserSandboxStore); ok {
+			if err := sandboxStore.SaveBrowserSandbox(ctx, string(mode)); err != nil {
+				logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_source", err, "", nil)
+				return
+			}
+		}
+		agent.SetBrowserSandboxMode(mode)
+		// 依赖页的「网页沙箱」探测结论跟着档位变，后台重探一次，下次打开就是新结论。
+		go func() {
+			defer recoverGoroutinePanic("browser_sandbox_refresh")
+			assistant.RefreshBrowserDependencies()
+		}()
+	}
 	if payload.BoxEnabled != nil {
 		if err := h.setBoxEnabled(ctx, *payload.BoxEnabled); err != nil {
 			logAndWriteError(c, h.logs, http.StatusInternalServerError, "browser_source", err, "", nil)
@@ -210,6 +247,7 @@ func (h *BrowserSourceHandler) set(c *gin.Context) {
 		"active":            state.Active,
 		"box_enabled":       state.Box.Enabled,
 		"extension_enabled": state.Extension.Enabled,
+		"sandbox":           state.Sandbox.Mode,
 	})
 	c.JSON(http.StatusOK, state)
 }

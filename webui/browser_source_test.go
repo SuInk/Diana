@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/browserbox"
 	"github.com/SuInk/diana/model/browserctl"
 	"github.com/SuInk/diana/model/browsersource"
@@ -80,5 +81,57 @@ func TestBrowserSourceSwitchesAreIndependent(t *testing.T) {
 	state = putBrowserSource(t, router, `{"box_enabled":false,"extension_enabled":false}`)
 	if state.Box.Enabled || state.Extension.Enabled || state.Active != browsersource.Off {
 		t.Fatalf("都关掉后应是不用：%+v", state)
+	}
+}
+
+type memoryBrowserSandboxStore struct {
+	memoryBrowserSourceStore
+	mode string
+}
+
+func (s *memoryBrowserSandboxStore) LoadBrowserSandbox(context.Context) (string, bool, error) {
+	return s.mode, s.mode != "", nil
+}
+
+func (s *memoryBrowserSandboxStore) SaveBrowserSandbox(_ context.Context, mode string) error {
+	s.mode = mode
+	return nil
+}
+
+// 沙箱档位默认「仅沙箱」，改了立即生效并落盘，重启后读回来。
+func TestBrowserSourceSandboxMode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	t.Cleanup(func() { agent.SetBrowserSandboxMode(agent.BrowserSandboxOnly) })
+	agent.SetBrowserSandboxMode(agent.BrowserSandboxOnly)
+	box := browserbox.New(ctx, &memoryBrowserBoxStore{}, t.TempDir())
+	registry := browserctl.NewRegistry(ctx, nil)
+	store := &memoryBrowserSandboxStore{}
+	handler := NewBrowserSourceHandler(ctx, box, registry, browserctl.NewHub(registry), store)
+	router := gin.New()
+	handler.Register(router)
+
+	if mode := handler.state().Sandbox.Mode; mode != agent.BrowserSandboxOnly {
+		t.Fatalf("默认档位应为仅沙箱，得到 %q", mode)
+	}
+	state := putBrowserSource(t, router, `{"sandbox":"off"}`)
+	if state.Sandbox.Mode != agent.BrowserSandboxOff || state.Sandbox.Active || store.mode != "off" {
+		t.Fatalf("关闭沙箱没生效或没落盘：%+v / %q", state.Sandbox, store.mode)
+	}
+
+	request := httptest.NewRequest(http.MethodPut, "/api/browser-source", strings.NewReader(`{"sandbox":"never"}`))
+	request.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || store.mode != "off" {
+		t.Fatalf("非法档位应被拒且不改存储：%d %q", recorder.Code, store.mode)
+	}
+
+	// 模拟重启：进程内回到默认值，构造 handler 时从存储读回。
+	agent.SetBrowserSandboxMode(agent.BrowserSandboxOnly)
+	store.mode = "auto"
+	NewBrowserSourceHandler(ctx, box, registry, browserctl.NewHub(registry), store)
+	if mode := agent.CurrentBrowserSandbox().Mode; mode != agent.BrowserSandboxAuto {
+		t.Fatalf("重启后没读回保存的档位：%q", mode)
 	}
 }

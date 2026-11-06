@@ -123,7 +123,7 @@ const network = ref<NetworkSnapshot | null>(null);
 const networkLoading = ref(false);
 const networkError = ref("");
 
-const sectionNames: Record<string, string> = { server: "服务", storage: "存储与日志", admin: "初始管理员", update: "更新", llm_runtime: "模型调用", browser: "浏览器" };
+const sectionNames: Record<string, string> = { server: "服务", storage: "存储与日志", admin: "初始管理员", update: "更新", llm_runtime: "模型调用" };
 const sectionLabel = (name: string) => sectionNames[name] ?? name;
 const sourceLabel = (source: RuntimeConfigItem["source"]) => ({ default: "默认值", config_file: "配置文件", env: "环境变量", arg: "启动参数" })[source];
 const inputId = (item: RuntimeConfigItem) => `rc-${item.key.replace(/\./g, "-")}`;

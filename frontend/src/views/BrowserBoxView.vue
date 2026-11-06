@@ -30,6 +30,7 @@
                 <span class="browser-toggle-label">网页渲染</span>
                 <span v-if="dependencyProblem('render')" class="badge warn">没找到 Chrome</span>
                 <span v-else class="badge ok">内置</span>
+                <span v-if="sourceState && !sourceState.sandbox.active" class="badge warn" :title="sourceState.sandbox.reason">未开沙箱</span>
               </div>
               <p class="browser-toggle-desc">
                 每次开一个全新的 Chrome，用完就扔。群里发的链接、模型查网页（browser_render）和 HTML/SVG 转图片都默认有头隐藏运行；没有可用显示环境时自动退回无头。浏览器未安装或启动失败时会明确报错。
@@ -371,6 +372,27 @@
     <template v-if="advancedOpen">
       <div class="card">
         <div class="card-body stack">
+          <div v-if="sourceState" class="field wide">
+            <label>浏览器沙箱</label>
+            <div class="segmented" role="radiogroup" aria-label="浏览器沙箱">
+              <button
+                v-for="option in sandboxOptions"
+                :key="option.mode"
+                type="button"
+                role="radio"
+                :aria-checked="sourceState.sandbox.mode === option.mode"
+                :class="{ active: sourceState.sandbox.mode === option.mode }"
+                :disabled="savingSource"
+                @click="setSandboxMode(option.mode)"
+              >
+                {{ option.label }}
+              </button>
+            </div>
+            <span class="hint">
+              网页渲染、浏览器搜索、内置浏览器和带脚本的 HTML 出图都按这一档（只渲染本地 HTML 的简单截图不受影响）。仅沙箱：沙箱起不来就报错，不降级；自动：以 root 运行或沙箱起不来时关掉沙箱重试；关闭：始终不用沙箱。不开沙箱时，群里发来的网页一旦利用浏览器漏洞，就不再被沙箱挡住。已在运行的内置浏览器重启后才换档。
+            </span>
+            <span v-if="!sourceState.sandbox.active" class="hint warn-text">当前没有沙箱：{{ sourceState.sandbox.reason }}</span>
+          </div>
           <div v-if="sourceState?.box.enabled && botID" class="field wide">
             <label class="switch">
               <input v-model="settings.headful" type="checkbox" :disabled="saving" @change="saveSettings" />
@@ -405,6 +427,7 @@ import {
   getBrowserSource,
   saveBrowserSource,
   type BrowserSource,
+  type BrowserSandboxMode,
   type BrowserSourceState,
   installResolverDependency,
   listPluginDependencies,
@@ -804,6 +827,17 @@ async function patchSource(patch: Parameters<typeof saveBrowserSource>[0]): Prom
   } finally {
     savingSource.value = false;
   }
+}
+
+const sandboxOptions: { mode: BrowserSandboxMode; label: string }[] = [
+  { mode: "sandbox", label: "仅沙箱" },
+  { mode: "auto", label: "自动" },
+  { mode: "off", label: "关闭" }
+];
+
+function setSandboxMode(mode: BrowserSandboxMode): void {
+  if (sourceState.value?.sandbox.mode === mode) return;
+  void patchSource({ sandbox: mode });
 }
 
 // 打勾只管启用，不动顺序；顺序用「优先用」调。

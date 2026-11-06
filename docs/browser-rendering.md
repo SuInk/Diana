@@ -54,7 +54,15 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 seccomp 配置必须保存在宿主机，Docker 在创建容器时读取它；它不是挂载给应用的配置文件。旧版尚未包含预装浏览器，需要升级到包含浏览器的镜像。
 
-默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。例外只有两种：在 Termux 里（安卓不给普通 App 开用户命名空间），以及 Diana 以 root 身份运行时（Chromium 拒绝 root 带沙盒启动）；这两种情况下网页渲染、内置浏览器和 HTML 截图都会带上 `--no-sandbox`，页面隔离只剩内网屏蔽和临时 profile，能用普通用户运行就别用 root。proot、宿主禁用用户命名空间又放不开这类沙箱怎么都起不来的环境，可以在 `config.yaml` 里设 `browser.disable_sandbox: true`（控制台「设置 → 启动配置」或在私聊里让 Diana 用 `runtime_config` 改），重启后所有 Diana 拉起的 Chromium 都带 `--no-sandbox`；默认关闭。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
+默认 Docker seccomp 会阻止 Chromium 创建其沙箱所需的命名空间，表现为 `Operation not permitted` 或 CDP 启动失败。项目配置保留默认拒绝策略，只在 Moby 默认配置基础上额外允许 `clone`、`setns`、`unshare`。不需要 `--privileged`、`SYS_ADMIN` 或 `seccomp=unconfined`，网页渲染也不添加 `--no-sandbox`。
+
+浏览器页「更多设置 → 浏览器沙箱」决定 Diana 拉起的 Chromium（网页渲染、浏览器搜索、内置浏览器、带脚本的 HTML 出图）要不要关沙箱；只渲染本地 HTML 的简单截图一直不带沙箱，不受档位影响，改了立即生效，已在运行的内置浏览器要重启才换档：
+
+- **仅沙箱**（默认）：始终带沙箱，起不来就报错、不降级。以 root 身份运行时 Chromium 不允许带沙箱启动，网页渲染会失败，依赖页会提示换档。
+- **自动**：以 root 运行时直接关；其余情况先带沙箱启动，因沙箱起不来（seccomp 拦了 `clone`/`unshare`、宿主禁用用户命名空间、proot 等）而退出时，去掉沙箱重试一次并记 WARN 日志，之后这个进程里都不再带沙箱，换档后重新判断。
+- **关闭**：始终带 `--no-sandbox`。
+
+Termux 不受档位约束、始终关闭：安卓不给普通 App 开用户命名空间，带沙箱一个浏览器都起不来。不开沙箱时页面隔离只剩内网屏蔽和临时 profile，群里发来的网页一旦利用浏览器漏洞就不再被挡住，能用普通用户运行、能放开命名空间就别关。主人也可以在私聊里让 Diana 用 `console_config` 的 `browser_source.sandbox` 改，需要确认后才生效。宿主机另有 AppArmor 或用户命名空间禁令时仍需按管理员策略处理，插件探测会显示实际失败原因。
 
 Docker 默认的 `/dev/shm` 只有 64MB，Chrome 渲染重页面时容易写满它导致渲染进程崩溃。Linux 上启动的所有 Chrome 都带 `--disable-dev-shm-usage`，共享内存改走临时目录，因此 Compose 里不需要再设 `shm_size`，`docker run` 也不用加 `--shm-size`。
 

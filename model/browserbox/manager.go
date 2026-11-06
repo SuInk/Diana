@@ -776,6 +776,11 @@ func (m *Manager) start(ctx context.Context, id string) error {
 	m.mu.Unlock()
 
 	err := m.launch(ctx, inst, settings, generation)
+	// 浏览器沙箱在「自动」档时，沙箱起不来就去掉沙箱重试一次（见 agent.BrowserSandboxFallback）。
+	// 没起来的那次不会登记进 inst，也不会触发 waitProcess 的退避重启，直接再起一次就行。
+	if err != nil && ctx.Err() == nil && agent.BrowserSandboxFallback(err.Error()) {
+		err = m.launch(ctx, inst, settings, generation)
+	}
 	m.mu.Lock()
 	inst.starting = nil
 	inst.startErr = err

@@ -28,30 +28,81 @@ func TestSandboxedChromeArgsKeepSandboxElsewhere(t *testing.T) {
 	}
 }
 
-func TestSandboxedChromeArgsDisableSandboxAsRoot(t *testing.T) {
+func TestBrowserSandboxModes(t *testing.T) {
 	t.Setenv("PREFIX", "/usr/local")
 	t.Setenv("TERMUX_VERSION", "")
-	stubBrowserRunningAsRoot(t, true)
-	// root 身份下 Chromium 不带 --no-sandbox 直接拒绝启动（issue #1445）。
-	if args := sandboxedChromeBaseArgsForMode("p", "c", "d", false); !slices.Contains(args, "--no-sandbox") {
-		t.Fatalf("以 root 运行时网页渲染没关沙盒，Chromium 起不来：%v", args)
-	}
-	if args := PersistentBrowserArgs("p", "c", "d", true, 0, 1280, 960); !slices.Contains(args, "--no-sandbox") {
-		t.Fatalf("以 root 运行时内置浏览器没关沙盒：%v", args)
+	t.Cleanup(func() { SetBrowserSandboxMode(BrowserSandboxOnly) })
+	for _, tc := range []struct {
+		name      string
+		mode      BrowserSandboxMode
+		root      bool
+		noSandbox bool
+	}{
+		{"仅沙箱、普通用户", BrowserSandboxOnly, false, false},
+		// 默认档宁可起不来也不降级：root 下也带沙箱，由探测报错引导主人换档。
+		{"仅沙箱、root", BrowserSandboxOnly, true, false},
+		{"自动、普通用户先带沙箱", BrowserSandboxAuto, false, false},
+		{"自动、root 直接关", BrowserSandboxAuto, true, true},
+		{"关闭", BrowserSandboxOff, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stubBrowserRunningAsRoot(t, tc.root)
+			SetBrowserSandboxMode(tc.mode)
+			for name, args := range map[string][]string{
+				"网页渲染":  sandboxedChromeBaseArgsForMode("p", "c", "d", false),
+				"内置浏览器": PersistentBrowserArgs("p", "c", "d", true, 0, 1280, 960),
+			} {
+				if got := slices.Contains(args, "--no-sandbox"); got != tc.noSandbox {
+					t.Fatalf("%s 带 --no-sandbox = %v，想要 %v", name, got, tc.noSandbox)
+				}
+			}
+		})
 	}
 }
 
-func TestSandboxedChromeArgsDisableSandboxBySwitch(t *testing.T) {
+func TestBrowserSandboxAutoFallsBackOnceOnSandboxFailure(t *testing.T) {
 	t.Setenv("PREFIX", "/usr/local")
 	t.Setenv("TERMUX_VERSION", "")
 	stubBrowserRunningAsRoot(t, false)
-	SetBrowserSandboxDisabled(true)
-	t.Cleanup(func() { SetBrowserSandboxDisabled(false) })
-	if args := sandboxedChromeBaseArgsForMode("p", "c", "d", false); !slices.Contains(args, "--no-sandbox") {
-		t.Fatalf("browser.disable_sandbox 打开后网页渲染仍带沙箱：%v", args)
+	t.Cleanup(func() { SetBrowserSandboxMode(BrowserSandboxOnly) })
+	failure := "headless browser exited before CDP startup: exit status 1: No usable sandbox! Update your kernel"
+
+	SetBrowserSandboxMode(BrowserSandboxOnly)
+	if BrowserSandboxFallback(failure) {
+		t.Fatal("仅沙箱档不该降级")
 	}
-	if args := htmlCaptureExtraArgs(); !slices.Contains(args, "--no-sandbox") {
-		t.Fatalf("browser.disable_sandbox 打开后 HTML 出图仍带沙箱：%v", args)
+
+	SetBrowserSandboxMode(BrowserSandboxAuto)
+	if BrowserSandboxFallback("exit status 1: profile in use") {
+		t.Fatal("跟沙箱无关的失败不该降级")
+	}
+	if !BrowserSandboxFallback(failure) {
+		t.Fatal("自动档遇到沙箱失败没有降级")
+	}
+	if !slices.Contains(sandboxedChromeBaseArgsForMode("p", "c", "d", false), "--no-sandbox") {
+		t.Fatal("降级之后的启动仍带沙箱")
+	}
+	if BrowserSandboxFallback(failure) {
+		t.Fatal("已经降级过，不该再报一次重试")
+	}
+	if status := CurrentBrowserSandbox(); status.Active || status.Reason == "" {
+		t.Fatalf("降级后状态不对：%+v", status)
+	}
+
+	// 换档清掉降级记录。
+	SetBrowserSandboxMode(BrowserSandboxOnly)
+	SetBrowserSandboxMode(BrowserSandboxAuto)
+	if slices.Contains(sandboxedChromeBaseArgsForMode("p", "c", "d", false), "--no-sandbox") {
+		t.Fatal("换档后仍沿用旧的降级记录")
+	}
+}
+
+func TestParseBrowserSandboxMode(t *testing.T) {
+	if mode, err := ParseBrowserSandboxMode(""); err != nil || mode != BrowserSandboxOnly {
+		t.Fatalf("空值应为仅沙箱：%q %v", mode, err)
+	}
+	if _, err := ParseBrowserSandboxMode("disable"); err == nil {
+		t.Fatal("接受了不存在的档位")
 	}
 }
 

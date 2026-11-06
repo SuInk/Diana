@@ -336,12 +336,19 @@ func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profile
 		env, headless = nil, true
 	}
 	env = append(env, extraEnv...)
-	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
-	if headless {
-		args = append([]string{"--headless=new"}, args...)
+	buildArgs := func() []string {
+		args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
+		if headless {
+			args = append([]string{"--headless=new"}, args...)
+		}
+		return append(args, cfg.ExtraArgs...)
 	}
-	args = append(args, cfg.ExtraArgs...)
-	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
+	process, err := launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
+	// 「自动」档：沙箱起不来就去掉沙箱再试一次，只试一次（见 BrowserSandboxFallback）。
+	if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
+		clearChromeSingletonLocks(profileDir)
+		process, err = launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1055,3 +1062,11 @@ const browserDOMCaptureScript = `(() => {
     dom_changes: Number(state.mutations || 0)
   };
 })()`
+
+// clearChromeSingletonLocks 删掉上一次没起来的进程留在 profile 里的单实例锁，
+// 重试时 Chrome 才不会以为已有实例在跑。
+func clearChromeSingletonLocks(profileDir string) {
+	for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+		_ = os.Remove(filepath.Join(profileDir, name))
+	}
+}

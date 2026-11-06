@@ -58,7 +58,6 @@ func baseRuntimeConfigFields() []runtimeconfig.Field {
 		{Key: "update.work_dir", Label: "更新工作目录", Kind: runtimeconfig.KindString, Hint: "留空跟着数据目录走。", Editable: true, Risky: true},
 		{Key: "update.group_test_enabled", Label: "群测试通道", Kind: runtimeconfig.KindBool, Default: "false", Editable: true},
 		{Key: "llm_runtime.output_token_max", Label: "默认最大输出 token", Kind: runtimeconfig.KindInt, Default: "0", Hint: "Anthropic 协议没填最大输出时代发的值，0 用 32000。", Editable: true, Min: runtimeconfig.Int64(0), Max: runtimeconfig.Int64(1 << 20)},
-		{Key: "browser.disable_sandbox", Label: "关闭浏览器沙箱", Kind: runtimeconfig.KindBool, Default: "false", Hint: "给网页渲染、浏览器搜索、内置浏览器和 HTML 截图的 Chromium 都加 --no-sandbox。只在沙箱确实起不来（proot、宿主禁用用户命名空间）时打开；Termux 和 root 运行时已自动关闭，不用开。关闭沙箱后网页里的漏洞利用不再被挡住。", Editable: true, Risky: true},
 	}
 }
 

@@ -49,7 +49,7 @@ func (m *ConsoleConfigManager) Catalog() any {
 		"trusted_apps":      map[string]any{"actions": []string{"enable", "create", "update", "rotate"}, "fields": []string{"id", "name", "profile_id", "disabled", "enabled", "secret"}, "hint": "enable 修改总开关；create/rotate 必须提供至少 32 字符的 secret，由用户保存，聊天不回显；update 使用完整 name/profile_id/disabled。"},
 		"group":             map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(assistant.GroupConfig{}), "hint": "target 为当前机器人的群 ID；chat_model.route 设置独立完整对话路由（disabled/weight/standby/reasoning_effort/fallbacks/routing_strategy）；chat_model={} 恢复继承。"},
 		"model_role_fields": consoleFieldTypes(assistant.ModelRole{}),
-		"readonly":          []string{"标识和派生状态不能修改；浏览器主题仅存浏览器本地，不是机器人配置；config.yaml 启动配置（含 browser.disable_sandbox）用 runtime_config 工具修改"},
+		"readonly":          []string{"标识和派生状态不能修改；浏览器主题仅存浏览器本地，不是机器人配置；config.yaml 启动配置用 runtime_config 工具修改"},
 	}
 	m.switchCatalog(out)
 	return out

@@ -249,11 +249,7 @@ func htmlCaptureExtraArgs() []string {
 		"--proxy-bypass-list=<-loopback>",
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 	}
-	// 这里跑的是带脚本的页面，能开进程沙盒就开。只有 root 身份起不来沙盒，
-	// 和截图那条路的兼容取舍一样；主人显式关掉沙箱时也跟网页渲染一致。
-	if browserRunningAsRoot() || browserSandboxDisabled.Load() {
-		args = append(args, "--no-sandbox")
-	}
+	// 要不要关进程沙箱由底座参数统一决定（见 browser_sandbox.go），这里不再另判。
 	return args
 }
 

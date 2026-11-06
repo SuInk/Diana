@@ -393,10 +393,6 @@ func main() {
 		log.Fatal(err)
 	}
 	llm.SetOutputTokenCeiling(appCfg.LLMRuntime.OutputTokenMax)
-	agent.SetBrowserSandboxDisabled(appCfg.Browser.DisableSandbox)
-	if appCfg.Browser.DisableSandbox {
-		log.Printf("WARN 已按 config.yaml 的 browser.disable_sandbox 关闭 Chromium 进程沙箱")
-	}
 	// models.dev 快照随版本打包，和请求时查窗口共用一份。
 	modelCatalog := llm.SharedModelsDevCatalog()
 	// 模型列表从当前提供商读取；公共目录只补全后端省略的模态和 token 限制。
