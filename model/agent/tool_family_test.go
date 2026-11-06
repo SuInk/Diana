@@ -80,7 +80,8 @@ func TestToolFamilyIsPresentedAsOneTool(t *testing.T) {
 		t.Fatalf("member names must stay visible to permission code: %v", got)
 	}
 	catalog := registry.SystemPromptCatalog()
-	if strings.Count(catalog, "\n") != 1 || !strings.Contains(catalog, "- page: 操作网页") || strings.Contains(catalog, "page_open") {
+	// 目录那一行带着各动作和必填参数，简单的调用不用先取契约。
+	if strings.Count(catalog, "\n") != 1 || !strings.Contains(catalog, "- page: 操作网页：打开、点击、管理标签页。 action：open(url) / click / tabs_list / tabs_close") || strings.Contains(catalog, "page_open") {
 		t.Fatalf("catalog = %q", catalog)
 	}
 	var definitions []string

@@ -246,8 +246,28 @@ type toolFamilyTool struct {
 
 func (t *toolFamilyTool) Name() string { return t.family.Name }
 
-// CatalogDescription 是目录里那一行：只有族的定位，不带逐个动作的用法。
-func (t *toolFamilyTool) CatalogDescription() string { return t.family.Description }
+// CatalogDescription 是目录里那一行：族的定位，加上各动作和它的必填参数。
+//
+// 只写定位的话，模型要先 tool_search 取契约才敢调——回放里 12 条该用浏览器的请求有
+// 6 条先多走了这一步，合并前看着 browser_open 这种成员名就能直接调。动作连同必填
+// 参数列在目录里，简单的调用可以直接发；参数不对时分发层会把完整契约连报错交回去。
+func (t *toolFamilyTool) CatalogDescription() string {
+	signatures := make([]string, 0, len(t.members))
+	for _, member := range t.members {
+		signature := member.action
+		var required []string
+		for _, name := range requiredSchemaFields(memberSchema(member.tool)) {
+			if _, fixed := member.fixed[name]; !fixed {
+				required = append(required, name)
+			}
+		}
+		if len(required) > 0 {
+			signature += "(" + strings.Join(required, ",") + ")"
+		}
+		signatures = append(signatures, signature)
+	}
+	return strings.TrimSpace(t.family.Description) + " " + toolFamilyActionField + "：" + strings.Join(signatures, " / ")
+}
 
 // Description 第一句是族的定位（目录里只显示这一句），后面逐个列出可用动作和成员
 // 自己的说明：加载完整契约时模型读到的使用约束和合并前是同一份文字。

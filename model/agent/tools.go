@@ -88,12 +88,28 @@ type ToolCatalogDescription interface {
 // catalogDescription 是工具在目录里的说明：声明了 CatalogDescription 就用它，否则是
 // 完整的 Description。
 func catalogDescription(tool Tool) string {
-	if typed, ok := tool.(ToolCatalogDescription); ok {
-		if description := strings.TrimSpace(typed.CatalogDescription()); description != "" {
-			return description
-		}
+	if description, ok := ownCatalogDescription(tool); ok {
+		return description
 	}
 	return tool.Description()
+}
+
+func ownCatalogDescription(tool Tool) (string, bool) {
+	if typed, ok := tool.(ToolCatalogDescription); ok {
+		if description := strings.TrimSpace(typed.CatalogDescription()); description != "" {
+			return description, true
+		}
+	}
+	return "", false
+}
+
+// catalogLineDescription 是按需目录和系统提示词目录里的一行说明。工具自己给了目录
+// 说明时整句照用，不按字数预算截：那一句是它量好的，截掉后半句就少了动作清单。
+func catalogLineDescription(tool Tool) string {
+	if description, ok := ownCatalogDescription(tool); ok {
+		return strings.Join(strings.Fields(description), " ")
+	}
+	return compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget)
 }
 
 type ToolCatalogItem struct {
@@ -833,7 +849,7 @@ func ResidencyCost(tool Tool) (resident, deferred int64) {
 
 // deferredCatalogLine 是按需目录里的一行，catalog 和开销估算共用同一份格式。
 func deferredCatalogLine(tool Tool) string {
-	return "- " + tool.Name() + ": " + compactToolDescription(catalogDescription(tool), SystemPromptToolDescriptionBudget) + "\n"
+	return "- " + tool.Name() + ": " + catalogLineDescription(tool) + "\n"
 }
 
 // SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上
@@ -857,7 +873,7 @@ func (r *ToolRegistry) SystemPromptCatalog() string {
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
-		builder.WriteString(compactToolDescription(catalogDescription(tool), SystemPromptToolDescriptionBudget))
+		builder.WriteString(catalogLineDescription(tool))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())

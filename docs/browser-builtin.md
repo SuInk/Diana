@@ -61,6 +61,8 @@ CDP 地址。只有一个前提：WebUI「浏览器」页的「Diana 内置浏�
 既然只有主人能驱动，这组工具就不再分「只读」「不许执行脚本」这类档位：主人在自己浏览器里
 能做的，机器人替他也能做。
 
+模型看到的是**一个** `browser` 工具，用 `action` 选动作：`open`、`text`、`click`、`type`、`press_key`、`select`、`scroll`、`wait`、`screenshot`、`tabs_list`、`tabs_switch`、`tabs_close`、`tabs_new`、`back`、`forward`、`reload`、`eval`、`handoff`。下表是它背后的成员工具，名字仍用在权限、安全模式、操作日志和本文其余部分；按成员名调用也照样认。成员被裁掉（个人浏览器只有其中几个、安全模式整组停用）时，对应的动作不会出现在 `action` 里。实现见 `model/agent/tool_family.go`。
+
 | 工具 | 做什么 |
 | --- | --- |
 | `browser_open` | 打开网页，默认沿用当前标签页，`new_tab` 才新开 |
