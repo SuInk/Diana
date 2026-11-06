@@ -236,6 +236,47 @@ func TestAppendContextSendsOnlyWhatChanged(t *testing.T) {
 	}
 }
 
+// 随发言者变化的工具规则在尾部单独成段：对话对象每条消息都变，规则没变就不跟着重发；
+// 换了规则不同的人说话才整段再给，没有规则时也要写明。
+func TestAppendContextSendsSpeakerToolRulesOnlyWhenTheyChange(t *testing.T) {
+	admin := speakerToolRulesBlock("\nplatform 的群管操作对主人、群主和群管理员开放。")
+	member := speakerToolRulesBlock("")
+	turn := func(rules, target, current string) []llm.Message {
+		return []llm.Message{
+			// 头部给足量级，否则几条短消息就超过续接的两倍上限。
+			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
+			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleSystem, Content: rules + "\n【当前消息的对话对象】\n" + target},
+			{Role: llm.RoleUser, Content: current},
+		}
+	}
+	appended := func(messages []llm.Message, log *appendContextLog) string {
+		continuation := continueFrom(log, messages)
+		if continuation == nil {
+			t.Fatal("expected a continuation")
+		}
+		var parts []string
+		for _, message := range continuation.Append {
+			parts = append(parts, message.Content)
+		}
+		return strings.Join(parts, "|")
+	}
+	log := appendTestLog(t, turn(admin, `{"reply_target":"none"}`, "甲: 禁言乙"), "好")
+
+	joined := appended(turn(admin, `{"reply_target":"self"}`, "甲: 再解禁"), log)
+	if strings.Contains(joined, speakerToolRulesTitle) || strings.Contains(joined, "群管操作") {
+		t.Fatalf("unchanged speaker rules were sent again: %q", joined)
+	}
+	if !strings.Contains(joined, `【当前消息的对话对象】`+"\n"+`{"reply_target":"self"}`) {
+		t.Fatalf("the changed addressing block is missing: %q", joined)
+	}
+
+	joined = appended(turn(member, `{"reply_target":"self"}`, "丙: 我也要禁言他"), log)
+	if !strings.Contains(joined, speakerToolRulesTitle) || !strings.Contains(joined, "没有额外的工具规则") || strings.Contains(joined, "群管操作") {
+		t.Fatalf("a speaker without the rules must get an explicit empty block: %q", joined)
+	}
+}
+
 // 带画像的记忆块中间有一行「【当前发言者画像结束…】」，它后面的条目照样按条去重，
 // 不会因为这行也以「【」开头就被切成一段整块重发。
 func TestAppendContextDedupsMemoryItemsAfterPortrait(t *testing.T) {

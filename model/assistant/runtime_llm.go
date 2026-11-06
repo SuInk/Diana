@@ -900,6 +900,25 @@ var (
 	promptChatInNoAgreementSpec = ruleSpec("chat_in_no_agreement", "插话别空口附和", "机器人闲聊插话的那一轮注入：只能附和一个无法核实的判断时就别发。", promptChatInNoAgreement)
 )
 
+// speakerToolRulesTitle 是尾部「当前发言者适用的工具规则」那一段的标题。
+const speakerToolRulesTitle = "【当前发言者适用的工具规则】"
+
+// speakerToolRulesBlock 把随发言者变化的工具规则（主人专属工具、群管动作、仓库订阅、
+// 模型与项目地址的披露）收成尾部最前面单独的一段。
+//
+// 它们以前直接写在「当前消息的对话对象」那一段里。续接时尾部按段标题去重：整段和
+// 上一次逐字相同才不重发，而对话对象段每条消息都不一样，这些规则就跟着每轮重发一遍
+// ——11-06 生产续接轮里，群管规则一条 654 字，122 段里出现 79 次，全是同一段文字。
+// 单独成段后，同一个人或权限相同的人连着说话时只发一次；换了规则不同的人说话，
+// 整段按新的再给一次。没有规则时也要写明，否则模型会沿用上一个人的那一段。
+func speakerToolRulesBlock(rules string) string {
+	rules = strings.TrimSpace(rules)
+	if rules == "" {
+		rules = "当前发言者没有额外的工具规则。"
+	}
+	return speakerToolRulesTitle + "\n这一段只说明当前发言者；没再出现时沿用上面最近的一次，换了规则不同的人说话会重新给出。\n" + rules
+}
+
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
 // 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
 // 用 systemPromptPartsWithRelationshipAndAgentTools 把两段分开放。
@@ -930,6 +949,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
 	// 的稳定规则永远命中不了供应商的前缀缓存。
 	var tail strings.Builder
+	// speakerRules 收随发言者变化的工具规则，在尾部单独成段（见 speakerToolRulesBlock）。
+	var speakerRules strings.Builder
 	tail.WriteString(addressingPrompt(event, cfg))
 	hasTool := func(name string) bool {
 		if registry == nil {
@@ -977,7 +998,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 		for _, name := range names {
 			if !shared[name] {
-				return &tail
+				return &speakerRules
 			}
 		}
 		return &builder
@@ -1014,7 +1035,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		builder.WriteString("\n" + cfg.promptf(promptAliasSpec, map[string]string{"aliases": aliases}))
 	}
 	if agentEnabled && tools.Owner && hasTool("llm_config") {
-		tail.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
 	}
 	if agentEnabled && hasTool(dianaGitHubToolName) {
 		place(dianaGitHubToolName).WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
@@ -1026,13 +1047,13 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
 	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
 	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, tools.Owner) {
-		tail.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaOneBotRequestsToolName) {
-		tail.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaIdentityLinksToolName) {
-		tail.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
 	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
 	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
@@ -1055,10 +1076,10 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		place(dianaChatHistoryToolName).WriteString("\n" + cfg.prompt(promptCrossGroupMoreSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool("relationship") {
-		tail.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
 	if agentEnabled && tools.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		tail.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
 	}
 	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
 	//（见 RelationshipPolicyFor），所以这几段对谁都注入，只随本轮注册了哪些工具
@@ -1080,18 +1101,18 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
 	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
-		tail.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
 	case !everyone && !tools.Owner:
-		tail.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
 	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
 	case everyone:
 		place(dianaRuntimeModelToolName).WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	default:
-		tail.WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	}
 	// 项目地址的披露规则和模型身份同理：everyone 下对谁都一样，进 head；owner 下
 	// 随发言者是不是主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
@@ -1100,9 +1121,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	case everyone:
 		place(dianaVersionToolName).WriteString("\n" + cfg.prompt(promptToolVersionSpec))
 	case tools.Owner:
-		tail.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
 	default:
-		tail.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	if agentEnabled && hasTool(dianaNotebookToolName) {
 		place(dianaNotebookToolName).WriteString("\n" + cfg.prompt(promptToolNotebookSpec))
@@ -1263,7 +1284,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tail, personaClosingAnchor(cfg))
-	return builder.String(), strings.TrimSpace(tail.String())
+	return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
 }
 
 // joinPromptSections 用换行拼接非空段落。
