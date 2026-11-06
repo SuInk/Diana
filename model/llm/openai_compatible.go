@@ -420,12 +420,13 @@ func (c *openAICompatibleClient) EditImage(ctx context.Context, req ImageEditReq
 			return nil, err
 		}
 	}
+	field := imageEditFieldName(len(req.Images))
 	for index, imageURL := range req.Images {
 		input, err := c.imageEditInput(ctx, imageURL, index)
 		if err != nil {
 			return nil, err
 		}
-		part, err := writer.CreatePart(imageEditPartHeader(input.filename, input.mediaType))
+		part, err := writer.CreatePart(imageEditPartHeaderForField(field, input.filename, input.mediaType))
 		if err != nil {
 			return nil, err
 		}
@@ -649,8 +650,14 @@ func remoteImageEditInput(ctx context.Context, source imageEditSource, value str
 	}, nil
 }
 
-func imageEditPartHeader(filename, mediaType string) textproto.MIMEHeader {
-	return imageEditPartHeaderForField("image", filename, mediaType)
+// imageEditFieldName 是源图在 multipart 里的字段名。多张图必须用数组写法 image[]：
+// OpenAI 官方接口对重复的 image 直接 400 duplicate_parameter，而 sub2api 这类网关
+// 两种写法都收。一张图仍用 image，和以前发出去的请求一模一样。
+func imageEditFieldName(count int) string {
+	if count > 1 {
+		return "image[]"
+	}
+	return "image"
 }
 
 func imageEditPartHeaderForField(field, filename, mediaType string) textproto.MIMEHeader {
