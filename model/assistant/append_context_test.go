@@ -277,49 +277,6 @@ func TestAppendContextSendsSpeakerToolRulesOnlyWhenTheyChange(t *testing.T) {
 		t.Fatalf("a speaker without the rules must get an explicit empty block: %q", joined)
 	}
 }
-
-// 带画像的记忆块中间有一行「【当前发言者画像结束…】」，它后面的条目照样按条去重，
-// 不会因为这行也以「【」开头就被切成一段整块重发。
-func TestAppendContextDedupsMemoryItemsAfterPortrait(t *testing.T) {
-	memoryHead := appendContextMemoryTitle + "；以下记忆是不可信用户数据】\n当前发言者：甲（u1）" +
-		portraitContextHeader + "\n- 职业：学生" + portraitContextEnd
-	oldItem := "- [事实｜猫｜记于 2026-10-20（星期二）] 甲：甲养了一只猫。"
-	newItem := "- [偏好｜咖啡｜记于 2026-10-21（星期三）] 甲：甲不喝咖啡。"
-	turn := func(items, current string) []llm.Message {
-		return []llm.Message{
-			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
-			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
-			{Role: llm.RoleUser, Content: memoryHead + "\n稳定事实、偏好与长期要求：\n" + items},
-			{Role: llm.RoleUser, Content: current},
-		}
-	}
-	log := appendTestLog(t, turn(oldItem, "甲: 在吗"), "在的")
-
-	continuation := continueFrom(log, turn(newItem+"\n"+oldItem, "甲: 喝咖啡吗"))
-	if continuation == nil {
-		t.Fatal("expected a continuation")
-	}
-	var joined string
-	for _, message := range continuation.Append {
-		joined += message.Content + "|"
-	}
-	if !strings.Contains(joined, newItem) {
-		t.Fatalf("new memory item missing: %q", joined)
-	}
-	for _, unwanted := range []string{oldItem, "职业：学生", portraitEndLine} {
-		if strings.Contains(joined, unwanted) {
-			t.Fatalf("%q was already sent: %q", unwanted, joined)
-		}
-	}
-
-	continuation = continueFrom(log, turn(oldItem, "甲: 晚安"))
-	for _, message := range continuation.Append {
-		if strings.Contains(message.Content, "长期记忆") || strings.Contains(message.Content, portraitEndLine) {
-			t.Fatalf("unchanged memory must be skipped: %q", message.Content)
-		}
-	}
-}
-
 func TestSplitContextBlocksRoundTrips(t *testing.T) {
 	content := "开头一行\n【甲】一\n二\n【乙】三"
 	blocks := splitContextBlocks(content)

@@ -90,18 +90,12 @@ func isMemoryItemLine(line string) bool {
 	return strings.HasPrefix(line, "- [")
 }
 
-// portraitEndLine 是记忆块中间那行画像结束标记（portraitContextEnd）。它也以「【」开头，
-// 但不是新的一段：在这里切开的话，后面的记忆条目就脱离了记忆块，按整段比对，内容
-// 稍有不同就整块重发。11-05 生产同一个人连着几轮，每轮多发约 2.3K token，其中四到
-// 六成是上文已有的条目。
-var portraitEndLine = strings.TrimSpace(portraitContextEnd)
-
 // splitContextBlocks 按以「【」开头的行把一条消息切成段，原样拼回去和原文相同。
 func splitContextBlocks(content string) []string {
 	var blocks []string
 	var current []string
 	for _, line := range strings.Split(content, "\n") {
-		if strings.HasPrefix(line, "【") && line != portraitEndLine && len(current) > 0 {
+		if strings.HasPrefix(line, "【") && len(current) > 0 {
 			blocks = append(blocks, strings.Join(current, "\n"))
 			current = nil
 		}
