@@ -363,3 +363,62 @@ func TestSemanticIndexerEditWinsAfterOlderEmbeddingFinishes(t *testing.T) {
 		})
 	}
 }
+
+func TestEmbeddingProviderConfigFollowsModelRole(t *testing.T) {
+	profiles := &stubLLMProfileStore{set: llm.ProfileSet{
+		Profiles: []llm.Profile{
+			{ID: "embed", Name: "embed", Group: llm.GroupEmbedding, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k"}},
+			{ID: "other", Name: "other", Group: llm.GroupEmbedding, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k2"}},
+		},
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
+
+	// 没在模型分配里选：沿用 embedding 分组的第一个配置档。
+	cfg, ok := runtime.embeddingProviderConfig(BotConfig{})
+	if !ok || cfg.Model != "embed-v1" || cfg.APIKey != "k" {
+		t.Fatalf("unbound embedding = %+v, %v; want first embedding profile", cfg, ok)
+	}
+
+	// 选了就用选中的提供商和模型。
+	bound := BotConfig{ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {ProfileID: "other", Model: "embed-v2"}}}
+	cfg, ok = runtime.embeddingProviderConfig(bound)
+	if !ok || cfg.Model != "embed-v2" || cfg.APIKey != "k2" {
+		t.Fatalf("bound embedding = %+v, %v; want profile other with embed-v2", cfg, ok)
+	}
+
+	// 选中的提供商被删了：如实当作没配，不悄悄换模型。
+	missing := BotConfig{ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {ProfileID: "gone", Model: "embed-v2"}}}
+	if cfg, ok := runtime.embeddingProviderConfig(missing); ok {
+		t.Fatalf("missing profile resolved to %+v", cfg)
+	}
+}
+
+func TestSemanticIndexBatchEmbedsPerModel(t *testing.T) {
+	store := newSemanticRevisionStore()
+	runtime := newSemanticRuntime(t, true, store, nil)
+	var models []string
+	runtime.embedTexts = func(_ context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error) {
+		models = append(models, cfg.Model)
+		vectors := make([][]float32, len(texts))
+		for index := range vectors {
+			vectors[index] = []float32{1, 0}
+		}
+		return vectors, nil
+	}
+	first := semanticTestEvent(10, "m1", "第一条足够长的消息")
+	second := semanticTestEvent(11, "m2", "第二条足够长的消息")
+	for _, event := range []MessageEvent{first, second} {
+		if err := store.AppendMessageEvent(context.Background(), sessionKey(event), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v1 := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k"}
+	v2 := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v2", APIKey: "k"}
+	runtime.flushSemanticIndexBatch([]semanticIndexItem{
+		{session: sessionKey(first), messageID: "m1", text: "第一条足够长的消息", embedding: v1},
+		{session: sessionKey(second), messageID: "m2", text: "第二条足够长的消息", embedding: v2},
+	})
+	if len(models) != 2 || models[0] != "embed-v1" || models[1] != "embed-v2" {
+		t.Fatalf("embed calls = %v, want one per model", models)
+	}
+}

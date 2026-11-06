@@ -29,7 +29,7 @@ test("model scheduling keeps purpose help concise and points to shared recovery 
   for (const detail of ["700 毫秒重试 1 次", "连续失败翻倍", "流式边界", "能力边界"]) {
     assert.ok(!disclosure.includes(detail), detail);
   }
-  assert.ok(disclosure.includes('v-if="!isMediaRole(role.key) && role.key !== \'image\'"'));
+  assert.ok(disclosure.includes('v-if="!isMediaRole(role.key) && role.key !== \'image\' && role.key !== \'embedding\'"'));
   assert.doesNotMatch(disclosure, /<AppSwitch/);
 });
 

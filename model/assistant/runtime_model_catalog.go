@@ -62,7 +62,7 @@ func (t *dianaRuntimeModelTool) configuredModelPurpose(key string) modelCatalogE
 		return entry
 	}
 	if key == "embedding" {
-		cfg, ok := r.embeddingProviderConfig()
+		cfg, ok := r.embeddingProviderConfig(r.configForContext(t.provider.ctx))
 		if ok {
 			entry.Models = []dianaRuntimeModelResult{configuredProfileIdentity(cfg, "", key)}
 		} else {
