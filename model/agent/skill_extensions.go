@@ -41,7 +41,7 @@ type SkillsInstallTool struct {
 func (t *SkillsInstallTool) Name() string { return "install_skill" }
 
 func (t *SkillsInstallTool) Description() string {
-	return `安装受 Diana 管理的 Skill 并刷新能力目录。首次调用被拒并返回确认码，讲清要装什么，用户原样回复确认码后再重发。`
+	return `安装受 Diana 管理的 Skill 并刷新能力目录。首次调用被拒，讲清要装什么，用户在后续消息同意后原样重发。`
 }
 
 func (t *SkillsInstallTool) InputSchema() map[string]any {
@@ -84,7 +84,7 @@ type SkillsUninstallTool struct {
 func (t *SkillsUninstallTool) Name() string { return "uninstall_skill" }
 
 func (t *SkillsUninstallTool) Description() string {
-	return `卸载 Diana 管理的 Skill，外部只读 Skill 不可卸载。首次调用被拒并返回确认码，用户原样回复后再重发。`
+	return `卸载 Diana 管理的 Skill，外部只读 Skill 不可卸载。首次调用被拒，讲清要卸什么，用户在后续消息同意后原样重发。`
 }
 
 func (t *SkillsUninstallTool) InputSchema() map[string]any {

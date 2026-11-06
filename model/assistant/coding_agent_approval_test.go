@@ -303,7 +303,7 @@ func TestCodingApprovalAsksOwnerAndHonorsReply(t *testing.T) {
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 	asked := channel.messages()[0].Text
 	allowCode, _, _ := codingApprovalCodes(request)
-	if !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "同意编码操作") || !strings.Contains(asked, "拒绝编码操作") {
+	if !strings.Contains(asked, "git push origin main") || !strings.Contains(asked, "直接回一句就行") || strings.Contains(asked, "同意编码操作") {
 		t.Fatalf("询问消息 = %q", asked)
 	}
 
@@ -409,10 +409,55 @@ func TestCodingToolStatusShowsPendingApproval(t *testing.T) {
 	if result.Job == nil || !strings.Contains(result.Job.AwaitingApproval, "git push origin main") {
 		t.Fatalf("job = %#v", result.Job)
 	}
-	if result.Job.ApprovalAllowCode != "同意编码任务 "+job.ID || result.Job.ApprovalDenyCode != "拒绝编码任务 "+job.ID {
-		t.Fatalf("码没带出来：%#v", result.Job)
+	if strings.Contains(result.Message, "同意编码任务") || !strings.Contains(result.Message, "decide") {
+		t.Fatalf("不该再让主人报任务号：%q", result.Message)
 	}
 	if !strings.Contains(result.Message, "点头") {
 		t.Fatalf("message = %q", result.Message)
+	}
+}
+
+// 主人怎么说都行：模型调 decide 就能放行，不用主人报任务号或照抄指令。
+func TestCodingToolDecideResolvesPendingApproval(t *testing.T) {
+	useTempCodingWorkspace(t)
+	rt, settings, event := codingTestRuntime(t, "/bin/true", t.TempDir())
+	request := codingApprovalRequest{ID: "req-decide", JobID: "code-decide", Tool: "Bash", Detail: "git push origin main", CreatedAt: time.Now().Add(-time.Minute), Target: codingJobTarget{UserID: "1"}}
+	allow, _, deny := codingApprovalCodes(request)
+	wait := &codingApprovalWait{request: request, allowCode: allow, denyCode: deny, decided: make(chan codingApprovalResponse, 1)}
+	rt.codingJobs().registerApproval(wait)
+
+	other := event
+	other.UserID = "2"
+	if _, err := newDianaCodingTool(rt, other, settings).decide(context.Background(), map[string]any{"decision": "allow"}); err == nil {
+		t.Fatal("别的会话的人不该能裁决")
+	}
+	if _, err := newDianaCodingTool(rt, event, settings).decide(context.Background(), map[string]any{"decision": "always"}); err == nil {
+		t.Fatal("没有类别的操作不该能常驻放行")
+	}
+	if _, err := newDianaCodingTool(rt, event, settings).decide(context.Background(), map[string]any{"decision": "allow"}); err != nil {
+		t.Fatalf("decide: %v", err)
+	}
+	select {
+	case decision := <-wait.decided:
+		if !decision.Allow {
+			t.Fatalf("decision = %#v", decision)
+		}
+	default:
+		t.Fatal("没有写出裁决")
+	}
+	if _, err := newDianaCodingTool(rt, event, settings).decide(context.Background(), map[string]any{"decision": "allow"}); err == nil {
+		t.Fatal("同一条审批不该被裁决两次")
+	}
+}
+
+func TestCodingToolDecideRejectsApprovalAskedAfterMessage(t *testing.T) {
+	useTempCodingWorkspace(t)
+	rt, settings, event := codingTestRuntime(t, "/bin/true", t.TempDir())
+	event.Time = time.Now().Add(-time.Hour).Unix()
+	request := codingApprovalRequest{ID: "req-late", JobID: "code-late", Tool: "Bash", Detail: "git push", CreatedAt: time.Now(), Target: codingJobTarget{UserID: "1"}}
+	allow, _, deny := codingApprovalCodes(request)
+	rt.codingJobs().registerApproval(&codingApprovalWait{request: request, allowCode: allow, denyCode: deny, decided: make(chan codingApprovalResponse, 1)})
+	if _, err := newDianaCodingTool(rt, event, settings).decide(context.Background(), map[string]any{"decision": "allow"}); err == nil {
+		t.Fatal("主人发消息时还没问到这一步，不该算同意")
 	}
 }

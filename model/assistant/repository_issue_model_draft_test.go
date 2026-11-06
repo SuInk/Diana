@@ -123,9 +123,8 @@ func TestUnapprovedDraftNeverReachesGitHub(t *testing.T) {
 	if drafted.Draft == nil {
 		t.Fatalf("没有生成草稿：%#v", drafted)
 	}
-	// 消息里没有确认码，草稿不得执行。以前这里判的是「有没有说同意」，靠一张同意/
-	// 拒绝词表；换成确认码之后，「再想想吧」和任何其他措辞一样都不放行。
-	rejected := runRepositoryPublishToolOnce(t, toolFor("再想想吧"), map[string]any{
+	// 同意怎么说都行，由模型判断；工具这边只保证提出草稿的那条消息不能顺手把它批掉。
+	rejected := runRepositoryPublishToolOnce(t, toolFor("在 acme/demo 的 #9 下面回复一下"), map[string]any{
 		"operation": "approve", "draft_id": drafted.Draft.ID,
 	})
 	if rejected.OK || rejected.FailureCode != "explicit_approval_required" {
@@ -224,11 +223,9 @@ func TestListDraftsCarriesConfirmationCode(t *testing.T) {
 	if drafted.Draft.ConfirmationCode != code {
 		t.Fatalf("建草稿时没带确认码：%#v", drafted.Draft)
 	}
-	// 「确认码要发出去」和「确认码只能由用户自己打出来」是两件事。原先合成一句
-	// 「不要替用户说出确认码」，模型可以读成「别把确认码说出来」，于是真的不发，
-	// 管理员无从确认。文案必须明确要求写进回复。
-	if !strings.Contains(drafted.Message, "确认提交 GitHub") || !strings.Contains(drafted.Message, "无需确认码") {
-		t.Fatalf("建草稿文案没有要求把确认码发出去：%q", drafted.Message)
+	// 用户同意时不该再被要求抄草稿 ID 或固定句式，草稿 ID 由模型自己带上。
+	if !strings.Contains(drafted.Message, "draft_id") || !strings.Contains(drafted.Message, "不要让用户回复草稿 ID") {
+		t.Fatalf("建草稿文案没有交代由模型带 draft_id：%q", drafted.Message)
 	}
 	for _, message := range []string{drafted.Message} {
 		if strings.Contains(message, "不要替用户说出确认码") {
@@ -243,9 +240,8 @@ func TestListDraftsCarriesConfirmationCode(t *testing.T) {
 	if listed.Drafts[0].ConfirmationCode != code {
 		t.Fatalf("草稿列表里没有确认码：%#v", listed.Drafts[0])
 	}
-	// 光把码放进载荷不够，还得让模型知道要把它写进回复。
-	if !strings.Contains(listed.Message, "确认提交 GitHub") || !strings.Contains(listed.Message, "无需确认码") {
-		t.Fatalf("列表文案没有要求把确认码发出去：%q", listed.Message)
+	if !strings.Contains(listed.Message, "draft_id") || !strings.Contains(listed.Message, "不要让用户回复草稿 ID") {
+		t.Fatalf("列表文案没有交代由模型带 draft_id：%q", listed.Message)
 	}
 	if strings.Contains(listed.Message, "不要替用户说出确认码") {
 		t.Fatalf("列表文案仍然含有会被读成「别说出确认码」的措辞：%q", listed.Message)

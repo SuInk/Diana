@@ -30,7 +30,7 @@ func newDianaExtensionAccessTool(runtime *Runtime, event MessageEvent) *dianaExt
 func (t *dianaExtensionAccessTool) Name() string { return dianaExtensionAccessToolName }
 
 func (t *dianaExtensionAccessTool) Description() string {
-	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。档位 off/owner/admins（群主和管理员）/members。判定顺序：停用 > 黑名单 > 白名单 > 档位，名单不作用于主人。写操作首次被拒并给出确认码，用户原样回复后再重发。`
+	return `读写 MCP 服务和 Skill 的开放范围，仅主人可用。档位 off/owner/admins（群主和管理员）/members。判定顺序：停用 > 黑名单 > 白名单 > 档位，名单不作用于主人。写操作首次被拒，讲清改动，主人在后续消息同意后原样重发。`
 }
 
 // Introspection 只认 list 这一路：查档位是打听，改档位和改名单是真动作，照常占预算。

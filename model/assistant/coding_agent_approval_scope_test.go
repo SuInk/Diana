@@ -134,7 +134,7 @@ func TestCodingApprovalAlwaysCodeRemembersAndContinues(t *testing.T) {
 	}
 	waitForCondition(t, 10*time.Second, func() bool { return channel.count() >= 1 })
 	asked := channel.messages()[0].Text
-	if !strings.Contains(asked, "以后都同意编码任务 "+job.ID) || !strings.Contains(asked, "以后都同意") || !strings.Contains(asked, "git push") {
+	if !strings.Contains(asked, "以后都不想再被问") || strings.Contains(asked, job.ID+"」") || !strings.Contains(asked, "git push") {
 		t.Fatalf("询问消息里没给出常驻放行的说法：%q", asked)
 	}
 

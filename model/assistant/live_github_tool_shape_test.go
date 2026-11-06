@@ -214,7 +214,7 @@ func TestLiveAgentReadsPullFilesBeforeReviewAndRequestsTextApproval(t *testing.T
 	if len(drafts.Drafts) == 0 {
 		t.Fatalf("review 应该停在待审批草稿：%#v", drafts)
 	}
-	if !strings.Contains(reply, "确认提交 GitHub") {
-		t.Errorf("没有给出文字确认指令：%q", reply)
+	if strings.Contains(reply, "确认提交 GitHub") || strings.Contains(reply, "确认码") {
+		t.Errorf("不该再让用户照抄句式或确认码：%q", reply)
 	}
 }

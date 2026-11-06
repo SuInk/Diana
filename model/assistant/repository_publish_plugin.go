@@ -435,7 +435,7 @@ func (p *RepositoryPublishPlugin) Manifest() PluginManifest {
 		Settings: []PluginSettingSpec{
 			{
 				Key: repositoryPublishSettingStarEnabled, Label: "允许 GitHub Star",
-				Description: "默认关闭。启用后仅主人能生成 Star 草稿，原样回复「确认提交 GitHub」后为目标仓库点 Star。使用目标仓库绑定的凭据，否则使用公共 Token 或 gh 登录账号；Fine-grained Token 需要账号级 Starring: write 权限。",
+				Description: "默认关闭。启用后仅主人能生成 Star 草稿，主人同意后为目标仓库点 Star。使用目标仓库绑定的凭据，否则使用公共 Token 或 gh 登录账号；Fine-grained Token 需要账号级 Starring: write 权限。",
 				Type:        PluginSettingTypeBool, Default: false,
 			},
 			{

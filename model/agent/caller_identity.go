@@ -24,6 +24,9 @@ type CallerIdentity struct {
 	ChatType string
 	// IsOwner 由运行时按配置判定，与工具鉴权同一条规则，不看提示词里的说法。
 	IsOwner bool
+	// Background 表示这是定时任务、事件触发这类后台运行：原文不是用户此刻说的话，
+	// 不能拿来确认扩展变更。
+	Background bool
 }
 
 type callerIdentityContextKey struct{}

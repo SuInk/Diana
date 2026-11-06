@@ -210,7 +210,7 @@ func oneBotRequestOwnerNotice(item OneBotRequestRecord) string {
 	if comment := truncateForChat(item.Comment, oneBotRequestTextLimit); comment != "" {
 		lines = append(lines, "附言："+comment)
 	}
-	lines = append(lines, "回复“同意请求 "+item.ID+"”或“拒绝请求 "+item.ID+"，原因……”即可处理")
+	lines = append(lines, "直接回复同意或拒绝就行，拒绝可以顺带说原因")
 	return strings.Join(lines, "\n")
 }
 

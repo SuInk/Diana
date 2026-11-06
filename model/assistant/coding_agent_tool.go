@@ -33,12 +33,12 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把编码工作交给外部编码 CLI（Claude Code/Codex/ACP）在持久工作区后台执行，仅主人可用。submit 派活，没很快结束就返回任务号，跑完会主动汇报；status 查进度，tail 看最近动作，cancel 终止，followup 在原会话追加指令；agents 列代理配置；approvals 查看或清空常驻放行。适合改代码、修 Bug、跑构建等长任务。`
+	return `把编码工作交给外部编码 CLI（Claude Code/Codex/ACP）在持久工作区后台执行，仅主人可用。submit 派活，没很快结束就返回任务号，跑完会主动汇报；status 查进度，tail 看最近动作，cancel 终止，followup 在原会话追加指令；agents 列代理配置；decide 在主人对等待点头的操作表态后裁决（怎么说都行，不必让主人报任务号）；approvals 查看或清空常驻放行。适合改代码、修 Bug、跑构建等长任务。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation":   toolEnumParam("操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "approvals", "agents"),
+		"operation":   toolEnumParam("操作。", "submit", "status", "tail", "cancel", "followup", "list", "workspaces", "decide", "approvals", "agents"),
 		"agent":       toolStringParam("代理配置名，submit 默认用默认配置，followup 沿用原任务。"),
 		"workspace":   toolStringParam("设置里登记的工作区名，submit 必填；只登记一个时可省。"),
 		"instruction": toolStringParam("完整指令，submit/followup 必填。CLI 看不到聊天记录，写清改什么、为什么、验收标准。"),
@@ -46,6 +46,7 @@ func (t *dianaCodingTool) InputSchema() map[string]any {
 		"job_id":      toolStringParam("任务号；status 省略时取最近的任务。"),
 		"tail_lines":  toolIntParam("tail 行数，默认 10。", 1, codingJobTailLines),
 		"clear":       toolBoolParam("approvals 专用：清空主人说过「以后都同意」的操作类别。"),
+		"decision":    toolEnumParam("decide 专用：allow 同意这一次，always 同意并以后这类都不再问，deny 拒绝。", "allow", "always", "deny"),
 	})
 }
 
@@ -81,12 +82,9 @@ type dianaCodingJob struct {
 	CanFollowUp     bool    `json:"can_follow_up"`
 	// AwaitingApproval 是任务正停着等确认的那个操作。查进度时这条比「最近动作」
 	// 重要：任务没在跑，是在等人。
-	AwaitingApproval  string `json:"awaiting_approval,omitempty"`
-	ApprovalAllowCode string `json:"approval_allow_code,omitempty"`
-	// ApprovalAlwaysCode 回过去表示这类操作以后都同意；ApprovalPattern 是那一类。
-	ApprovalAlwaysCode string `json:"approval_always_code,omitempty"`
-	ApprovalPattern    string `json:"approval_pattern,omitempty"`
-	ApprovalDenyCode   string `json:"approval_deny_code,omitempty"`
+	AwaitingApproval string `json:"awaiting_approval,omitempty"`
+	// ApprovalPattern 是这个操作所属的类别，主人说以后都同意时 decide 传 always。
+	ApprovalPattern string `json:"approval_pattern,omitempty"`
 }
 
 func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -129,6 +127,8 @@ func (t *dianaCodingTool) Run(ctx context.Context, input map[string]any) (string
 			Workspaces: cfg.workspaceNames(),
 			Message:    codingWorkspaceHint(cfg),
 		})
+	case "decide":
+		return t.decide(ctx, input)
 	case "approvals":
 		// 主人回过「以后都同意」之后，得有地方看见记了什么、并且能收回。清单按
 		// 机器人分开，看到和清掉的都只是这台自己的。
@@ -348,11 +348,63 @@ func (t *dianaCodingTool) status(input map[string]any) (string, error) {
 	message := "任务已结束。"
 	switch {
 	case view.AwaitingApproval != "":
-		message = "任务停在一个要你点头的操作上，回复「同意编码任务 任务ID」继续，无需确认码。"
+		message = "任务停在一个要主人点头的操作上。主人表态后用 decide 裁决，不要让主人回复任务号或固定句式。"
 	case !job.finished():
 		message = "任务还在跑，跑完我会主动汇报。"
 	}
 	return codingToolJSON(dianaCodingResult{OK: true, Operation: "status", Job: &view, Message: message})
+}
+
+// decide 按主人这条消息的表态裁决当前会话里在等的操作。同意怎么说由模型判断；
+// 这里只保证是主人本人、在询问发出之后的消息里、在发出询问的那个会话里。
+func (t *dianaCodingTool) decide(ctx context.Context, input map[string]any) (string, error) {
+	if t.runtime == nil || t.runtime.codingJobRegistry == nil {
+		return "", fmt.Errorf("编码代理未启用")
+	}
+	if backgroundRunContext(ctx) {
+		return "", fmt.Errorf("后台任务不能替主人裁决编码操作")
+	}
+	jobID := strings.TrimSpace(configToolString(input, "job_id"))
+	var candidates []codingApprovalRequest
+	for _, request := range t.runtime.codingJobs().pendingApprovals() {
+		if !t.runtime.codingApprovalInScope(t.event, request) || (jobID != "" && request.JobID != jobID) {
+			continue
+		}
+		candidates = append(candidates, request)
+	}
+	switch {
+	case len(candidates) == 0:
+		return "", fmt.Errorf("当前会话没有在等主人点头的编码操作")
+	case len(candidates) > 1:
+		lines := make([]string, 0, len(candidates))
+		for _, request := range candidates {
+			lines = append(lines, request.JobID+"："+codingApprovalDetail(request))
+		}
+		return "", fmt.Errorf("有多条在等：%s。按主人说的是哪个带 job_id 再调；分不清就问主人指的是哪个操作，不要让主人报任务号", strings.Join(lines, "；"))
+	}
+	request := candidates[0]
+	if t.event.Time > 0 && request.CreatedAt.After(time.Unix(t.event.Time, 0).Add(time.Second)) {
+		return "", fmt.Errorf("这条询问是在主人这条消息之后才发出的，等主人看到后再表态")
+	}
+	allowCode, alwaysCode, denyCode := codingApprovalCodes(request)
+	code, allow, always := allowCode, true, false
+	switch strings.TrimSpace(configToolString(input, "decision")) {
+	case "allow":
+	case "always":
+		if strings.TrimSpace(request.Pattern) == "" {
+			return "", fmt.Errorf("这个操作不属于可以常驻放行的类别，只能同意这一次")
+		}
+		code, always = alwaysCode, true
+	case "deny":
+		code, allow = denyCode, false
+	default:
+		return "", fmt.Errorf("decision 必须是 allow、always 或 deny")
+	}
+	reply, ok := t.runtime.resolveCodingApproval(t.event, request, code, allow, always)
+	if !ok {
+		return "", fmt.Errorf("这个确认已经处理过或超时了")
+	}
+	return codingToolJSON(dianaCodingResult{OK: true, Operation: "decide", Message: reply})
 }
 
 func (t *dianaCodingTool) tail(input map[string]any) (string, error) {
@@ -457,7 +509,7 @@ func (t *dianaCodingTool) runningJobs() []CodingJob {
 	return out
 }
 
-// attachPendingApproval 沿用响应字段名，但向用户提供可直接回复的文字指令。
+// attachPendingApproval 告诉模型任务停在哪个操作上，裁决走 decide。
 func (t *dianaCodingTool) attachPendingApproval(view *dianaCodingJob) {
 	if t.runtime == nil || t.runtime.codingJobRegistry == nil {
 		return
@@ -467,12 +519,7 @@ func (t *dianaCodingTool) attachPendingApproval(view *dianaCodingJob) {
 			continue
 		}
 		view.AwaitingApproval = codingApprovalDetail(request)
-		view.ApprovalAllowCode = "同意编码任务 " + request.JobID
-		if strings.TrimSpace(request.Pattern) != "" {
-			view.ApprovalAlwaysCode = "以后都同意编码任务 " + request.JobID
-			view.ApprovalPattern = request.Pattern
-		}
-		view.ApprovalDenyCode = "拒绝编码任务 " + request.JobID
+		view.ApprovalPattern = strings.TrimSpace(request.Pattern)
 		return
 	}
 }

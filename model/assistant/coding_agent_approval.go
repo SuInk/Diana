@@ -432,12 +432,12 @@ func (r *Runtime) askCodingApproval(ctx context.Context, job CodingJob, wait *co
 
 	always := ""
 	if wait.alwaysCode != "" {
-		always = fmt.Sprintf("这类操作（%s）以后都同意就回「以后都同意编码任务 %s」，", request.Pattern, job.ID)
+		always = fmt.Sprintf("；这类操作（%s）以后都不想再被问，也可以直接说", request.Pattern)
 	}
 	message := fmt.Sprintf(
-		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意就回「同意编码操作」，%s不同意回「拒绝编码操作」。有多个待审批时，回复「同意编码任务 %s」或「拒绝编码任务 %s」指定任务，无需确认码。%s内没人回我就当拒绝。",
+		"编码任务 %s（工作区 %s）要执行一个需要你点头的操作：\n%s\n\n同意还是拒绝，直接回一句就行%s。%s内没人回我就当拒绝。",
 		job.ID, job.Workspace, codingApprovalDetail(request),
-		always, job.ID, job.ID, formatCodingDuration(timeout),
+		always, formatCodingDuration(timeout),
 	)
 	if err := r.sendSubscriberNotice(ctx, job.Target.event(), message); err != nil {
 		r.setError(err.Error())
@@ -493,7 +493,7 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 	}
 	lowered := strings.ToLower(text)
 	if code, ambiguous := r.codingApprovalTextCode(event, text); ambiguous {
-		return "有多个编码操作待审批，请回复「同意编码任务 任务ID」或「拒绝编码任务 任务ID」指定任务。", true
+		return "", false // 有好几条在等：交给模型按主人说的是哪个任务去裁决。
 	} else if code != "" {
 		lowered = code
 	}
@@ -518,39 +518,47 @@ func (r *Runtime) handleCodingApprovalReply(event MessageEvent, text string) (st
 			if !containsStandaloneCode(lowered, item.code) {
 				continue
 			}
-			wait, ok := r.codingJobs().resolveApproval(item.code)
-			if !ok {
-				continue
+			if reply, ok := r.resolveCodingApproval(event, request, item.code, item.allow, item.always); ok {
+				return reply, true
 			}
-			decision := codingApprovalResponse{Allow: item.allow}
-			if !item.allow {
-				decision.Reason = "主人拒绝了这个操作"
-			}
-			remembered := ""
-			if item.always {
-				path, _ := r.codingAlwaysAllowPathFor(request.ProfileID)
-				if err := rememberCodingAlwaysAllow(path, request.Pattern, event.UserID, request.Detail); err != nil {
-					remembered = "（这类操作没记住：" + err.Error() + "，下次还会问）"
-				} else {
-					remembered = fmt.Sprintf("以后「%s」这类操作我不再问了，想恢复就用编码工具的 approvals 清空。", request.Pattern)
-				}
-			}
-			select {
-			case wait.decided <- decision:
-			default:
-				// 已经有裁决了（超时或者重复回复），不覆盖。
-				return "这个确认已经处理过了。", true
-			}
-			if item.allow {
-				if remembered != "" {
-					return fmt.Sprintf("好，任务 %s 继续。%s", request.JobID, remembered), true
-				}
-				return fmt.Sprintf("好，任务 %s 继续。", request.JobID), true
-			}
-			return fmt.Sprintf("已拒绝，任务 %s 会绕过这一步或者报错收尾。", request.JobID), true
 		}
 	}
 	return "", false
+}
+
+// resolveCodingApproval 用 code 对应的那一档裁决一条待审批操作，返回告诉主人的话。
+// 文字快捷指令和模型调 coding decide 都走这里。
+func (r *Runtime) resolveCodingApproval(event MessageEvent, request codingApprovalRequest, code string, allow, always bool) (string, bool) {
+	wait, ok := r.codingJobs().resolveApproval(code)
+	if !ok {
+		return "", false
+	}
+	decision := codingApprovalResponse{Allow: allow}
+	if !allow {
+		decision.Reason = "主人拒绝了这个操作"
+	}
+	remembered := ""
+	if always {
+		path, _ := r.codingAlwaysAllowPathFor(request.ProfileID)
+		if err := rememberCodingAlwaysAllow(path, request.Pattern, event.UserID, request.Detail); err != nil {
+			remembered = "（这类操作没记住：" + err.Error() + "，下次还会问）"
+		} else {
+			remembered = fmt.Sprintf("以后「%s」这类操作我不再问了，想恢复就用编码工具的 approvals 清空。", request.Pattern)
+		}
+	}
+	select {
+	case wait.decided <- decision:
+	default:
+		// 已经有裁决了（超时或者重复回复），不覆盖。
+		return "这个确认已经处理过了。", true
+	}
+	if allow {
+		if remembered != "" {
+			return fmt.Sprintf("好，任务 %s 继续。%s", request.JobID, remembered), true
+		}
+		return fmt.Sprintf("好，任务 %s 继续。", request.JobID), true
+	}
+	return fmt.Sprintf("已拒绝，任务 %s 会绕过这一步或者报错收尾。", request.JobID), true
 }
 
 // codingApprovalTextCode 只接受完整审批指令，且必须唯一匹配当前会话的待办。
@@ -559,10 +567,7 @@ func (r *Runtime) codingApprovalTextCode(event MessageEvent, text string) (strin
 	text = strings.TrimSpace(text)
 	var codes []string
 	for _, request := range r.codingJobs().pendingApprovals() {
-		target := request.Target
-		if !r.sameProfileAsEvent(request.ProfileID, event) || target.Platform != event.Platform ||
-			target.ContextNamespace != event.ContextNamespace || target.GroupID != event.GroupID ||
-			(target.GroupID == "" && target.UserID != event.UserID) {
+		if !r.codingApprovalInScope(event, request) {
 			continue
 		}
 		allow, always, deny := codingApprovalCodes(request)
@@ -581,6 +586,14 @@ func (r *Runtime) codingApprovalTextCode(event MessageEvent, text string) (strin
 		return codes[0], false
 	}
 	return "", len(codes) > 1
+}
+
+// codingApprovalInScope 判断这条待审批是不是发在当前会话里、归当前机器人管。
+func (r *Runtime) codingApprovalInScope(event MessageEvent, request codingApprovalRequest) bool {
+	target := request.Target
+	return r.sameProfileAsEvent(request.ProfileID, event) && target.Platform == event.Platform &&
+		target.ContextNamespace == event.ContextNamespace && target.GroupID == event.GroupID &&
+		(target.GroupID != "" || target.UserID == event.UserID)
 }
 
 // containsStandaloneCode 判断确认码是否作为独立片段出现在文本里。

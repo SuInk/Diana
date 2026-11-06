@@ -5126,7 +5126,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
-		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, callerIdentityForEvent(cfg, event)), agent.Request{
+		identity := callerIdentityForEvent(cfg, event)
+		identity.Background = backgroundRunContext(ctx)
+		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, identity), agent.Request{
 			Hooks:         newReplyRunHooks(cfg),
 			Messages:      messages,
 			TraceID:       traceID,

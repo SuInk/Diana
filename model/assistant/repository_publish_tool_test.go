@@ -1153,12 +1153,12 @@ func TestRepositoryIssueGroupApproverScope(t *testing.T) {
 		t.Fatalf("draft=%#v", draft)
 	}
 
-	// 个人管理人员有群内审批权限，但没有确认码仍不得写入。
-	denied := runRepositoryPublishToolOnce(t, inGroup("manager", "同意"), map[string]any{
+	// 提交者本人没有审批权，说「同意」也批不了自己的草稿。
+	denied := runRepositoryPublishToolOnce(t, inGroup("member", "同意"), map[string]any{
 		"operation": "approve", "draft_id": draft.Draft.ID,
 	})
-	if denied.OK || denied.FailureCode != "explicit_approval_required" || github.count(http.MethodPost) != 0 {
-		t.Fatalf("管理人员绕过了确认码：%#v posts=%d", denied, github.count(http.MethodPost))
+	if denied.OK || denied.FailureCode != "permission_denied" || github.count(http.MethodPost) != 0 {
+		t.Fatalf("提交者批准了自己的草稿：%#v posts=%d", denied, github.count(http.MethodPost))
 	}
 
 	// 群审批人不能绕过草稿直接写：他发起的写操作同样只落成草稿。

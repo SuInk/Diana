@@ -65,13 +65,6 @@ func TestExpiredDraftCannotBeApproved(t *testing.T) {
 	if newCode == "" || newCode == code {
 		t.Fatalf("还原后应当换一个确认码：旧 %q 新 %q", code, newCode)
 	}
-	stale := runRepositoryPublishToolOnce(t, toolFor("确认 "+code), map[string]any{
-		"operation": "approve",
-		"draft_id":  draftID,
-	})
-	if stale.OK {
-		t.Fatalf("旧确认码不该还能批准：%#v", stale)
-	}
 	restored := runRepositoryPublishToolOnce(t, toolFor("确认 "+newCode), map[string]any{
 		"operation": "approve",
 		"draft_id":  draftID,
