@@ -24,7 +24,7 @@
         </div>
       </div>
       <AppSwitch v-model="draft.overrideCapabilities">手动设置模型能力</AppSwitch>
-      <p class="hint">{{ draft.overrideCapabilities ? '输入图片 + 输出文字用于视觉理解；输出图片用于图片生成。' : '跟随同步的能力信息；没有能力信息时保持待确认。' }}</p>
+      <p class="hint">{{ draft.overrideCapabilities ? '输入图片 + 输出文字用于视觉理解；输出图片用于图片生成，再勾动图才会接 GIF 请求（gpt-image-2.6 不用勾）。' : '跟随同步的能力信息；没有能力信息时保持待确认。' }}</p>
       <div v-if="draft.overrideCapabilities" class="model-capability-fields">
         <div class="field">
           <span class="model-capability-label">输入能力</span>
@@ -82,9 +82,11 @@ const contextHint = computed(() => {
   return prefix + (reference ? `目录参考：${reference.toLocaleString("en-US")} Token。` : "");
 });
 const modalityOptions = [{ value: "text", label: "文字" }, { value: "image", label: "图片" }, { value: "audio", label: "音频" }, { value: "video", label: "视频" }];
-function options(values: string[]) { return [...modalityOptions, ...values.filter(value => !modalityOptions.some(item => item.value === value)).map(value => ({ value, label: value }))]; }
-const inputOptions = computed(() => options(draft.value?.input ?? []));
-const outputOptions = computed(() => options(draft.value?.output ?? []));
+// 动图只是输出能力：生图候选按它筛，GIF 请求不会落到只出静图的模型上。
+const outputModalityOptions = [...modalityOptions, { value: "animation", label: "动图" }];
+function options(base: typeof modalityOptions, values: string[]) { return [...base, ...values.filter(value => !base.some(item => item.value === value)).map(value => ({ value, label: value }))]; }
+const inputOptions = computed(() => options(modalityOptions, draft.value?.input ?? []));
+const outputOptions = computed(() => options(outputModalityOptions, draft.value?.output ?? []));
 
 function summary(model: LLMModelInfo): string {
   const parts = [modelCapabilitySummary(model)];

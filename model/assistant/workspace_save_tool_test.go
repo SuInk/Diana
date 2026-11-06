@@ -403,7 +403,7 @@ func TestDianaImageToolPersistsOwnerResultIntoWorkspace(t *testing.T) {
 	runtime.SetMediaStore(mediaStore(t))
 	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "owner", MessageID: "owner-image"}
-	tool := newDianaImageTool(runtime, event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner"))
+	tool := newDianaImageTool(context.Background(), runtime, event, RelationshipPolicyFor(UserMemoryProfile{}, "owner", "owner"))
 	raw, err := tool.Run(context.Background(), map[string]any{"prompt": "一只坐在窗台上的橘猫"})
 	if err != nil {
 		t.Fatal(err)

@@ -47,6 +47,9 @@ type dianaImageTool struct {
 	runtime      *Runtime
 	event        MessageEvent
 	relationship RelationshipPolicy
+	// animation 表示图片候选里有能出动图的模型。没有时 gif 不出现在参数里：
+	// 模型看得到这个选项就会答应用户，最后只能失败或交一张静图。
+	animation bool
 }
 
 type dianaImageToolResult struct {
@@ -128,8 +131,10 @@ type dianaImageTaskOutput struct {
 	Delivered bool
 }
 
-func newDianaImageTool(runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
-	return &dianaImageTool{runtime: runtime, event: event, relationship: relationship}
+func newDianaImageTool(ctx context.Context, runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
+	tool := &dianaImageTool{runtime: runtime, event: event, relationship: relationship}
+	tool.animation = runtime != nil && relationship.AllowImageGeneration && runtime.animationImageAvailable(ctx)
+	return tool
 }
 
 func (t *dianaImageTool) Name() string {
@@ -226,9 +231,13 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 动图来自群友要 gpt-image-2.6 的 GIF 输出：以前工具没有这个参数，模型只能回答
 	// 「我这边不能指定 GIF」。gif 只能 generate，上游的 edits 不支持。
 	if t.relationship.AllowImageGeneration {
-		properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF)
-		properties["frame_count"] = toolIntParam("gif 总帧数，省略为 9", llm.ImageGIFMinFrames, llm.ImageGIFMaxFrames)
-		properties["frame_duration_ms"] = toolIntParam("gif 每帧毫秒数，省略为 200", llm.ImageGIFMinFrameDurationMS, llm.ImageGIFMaxFrameDurationMS)
+		if t.animation {
+			properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF)
+			properties["frame_count"] = toolIntParam("gif 总帧数，省略为 9", llm.ImageGIFMinFrames, llm.ImageGIFMaxFrames)
+			properties["frame_duration_ms"] = toolIntParam("gif 每帧毫秒数，省略为 200", llm.ImageGIFMinFrameDurationMS, llm.ImageGIFMaxFrameDurationMS)
+		} else {
+			properties["format"] = toolEnumParam("成品格式，省略为 png。当前没有能出动图的图片模型，做不了 GIF", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP)
+		}
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
 	// 头像地址，并核对这个人在当前会话里确实存在。
@@ -361,6 +370,9 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	format, frameCount, frameDuration, err := dianaImageFormatInput(input, operation)
 	if err != nil {
 		return dianaImageToolRequest{}, err
+	}
+	if format == llm.ImageFormatGIF && !t.animation {
+		return dianaImageToolRequest{}, fmt.Errorf("当前没有能出动图的图片模型，做不了 GIF。照实告诉用户，或去掉 format 出静态图")
 	}
 	sourceLabels := configToolStringSlice(input, "source_labels")
 	if len(sourceLabels) != len(identitySources) {

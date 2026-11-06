@@ -221,7 +221,7 @@ func TestTelegramGroupToolPromptAndPermissionsAreRegistered(t *testing.T) {
 	if !strings.Contains(prompt, "调用 group") || !strings.Contains(prompt, "绝不是完整名单") {
 		t.Fatal("Telegram group capability missing from prompt")
 	}
-	if !strings.Contains(newDianaImageTool(r, event, RelationshipPolicy{AllowImageEditing: true}).(*dianaImageTool).InputSchema()["properties"].(map[string]any)["identity_sources"].(map[string]any)["description"].(string), "当前平台") {
+	if !strings.Contains(newDianaImageTool(context.Background(), r, event, RelationshipPolicy{AllowImageEditing: true}).(*dianaImageTool).InputSchema()["properties"].(map[string]any)["identity_sources"].(map[string]any)["description"].(string), "当前平台") {
 		t.Fatal("image tool still requires QQ identifiers")
 	}
 }

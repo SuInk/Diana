@@ -151,7 +151,7 @@ func TestImageToolEditResolvesSourcesBeforeQueueing(t *testing.T) {
 	policy := RelationshipPolicy{AllowImageEditing: true}
 
 	missing := editSourceText("no-image", editSourceUserID, "磨皮算一笔")
-	_, err := newDianaImageTool(runtime, missing, policy).Run(context.Background(), map[string]any{"operation": "edit", "prompt": "磨皮"})
+	_, err := newDianaImageTool(context.Background(), runtime, missing, policy).Run(context.Background(), map[string]any{"operation": "edit", "prompt": "磨皮"})
 	if !errors.Is(err, errImageEditSourceNotFound) {
 		t.Fatalf("Run() error = %v, want errImageEditSourceNotFound", err)
 	}
@@ -160,7 +160,7 @@ func TestImageToolEditResolvesSourcesBeforeQueueing(t *testing.T) {
 	}
 
 	withImage := editSourceImage("with-image", editSourceOriginal)
-	tool := newDianaImageTool(runtime, withImage, policy).(*dianaImageTool)
+	tool := newDianaImageTool(context.Background(), runtime, withImage, policy).(*dianaImageTool)
 	request, err := tool.prepareRequest(map[string]any{"operation": "edit", "prompt": "改成黑白"})
 	if err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
 	runtime.remember(editSourceImage("unrelated", editSourceNewer))
 
 	event := editSourceText("ask", editSourceUserID, "把前面那三张都改成黑白")
-	tool := newDianaImageTool(runtime, event, RelationshipPolicy{AllowImageEditing: true}).(*dianaImageTool)
+	tool := newDianaImageTool(context.Background(), runtime, event, RelationshipPolicy{AllowImageEditing: true}).(*dianaImageTool)
 	request, err := tool.prepareRequest(map[string]any{
 		"operation": "edit", "prompt": "黑白", "source_mode": "each",
 		"source_message_ids": []any{"pair", "first"},
