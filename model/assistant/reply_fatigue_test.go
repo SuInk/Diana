@@ -235,9 +235,9 @@ func TestReplyFatigueGateSeesOrderedTranscript(t *testing.T) {
 	provider.mu.Lock()
 	content := requestTextContent(provider.last)
 	provider.mu.Unlock()
-	order := []string{"那我出题", "你说的都不在点子上", "确实是我没想清楚", "你这种先把边界敲死的思路才对", "【当前消息】"}
-	// 系统提示词里也提到【当前消息】，从对话稿开头往后找。
-	start := strings.Index(content, "对话按时间从早到晚：")
+	order := []string{"那我出题", "你说的都不在点子上", "确实是我没想清楚", "你这种先把边界敲死的思路才对", `current="true">`}
+	// 系统提示词里也提到 current="true"，从对话稿开头往后找。
+	start := strings.Index(content, "对话按时间从早到晚，每条消息一个 <msg> 标签")
 	if start < 0 {
 		t.Fatalf("门控应收到对话稿：\n%s", content)
 	}

@@ -50,7 +50,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 	}
 	requestText := provider.requests[0].Messages[len(provider.requests[0].Messages)-1].Content
 	// 评分喂的是对话稿：两条候选按发送者和正文各占一行，不带账号。
-	for _, want := range []string{"Alice：这个报错应该怎么处理", "【当前消息】[刚刚] Bob：我先去吃饭了"} {
+	for _, want := range []string{`from="Alice" burst="1">这个报错应该怎么处理</msg>`, `<msg age="刚刚" from="Bob" current="true">我先去吃饭了</msg>`} {
 		if !strings.Contains(requestText, want) {
 			t.Fatalf("batch transcript missing %s: %s", want, requestText)
 		}
@@ -59,7 +59,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		t.Fatalf("batch payload leaked candidate identities: %s", requestText)
 	}
 	routePrompt := provider.requests[0].Messages[0].Content
-	for _, want := range []string{"只评估标了【当前消息】的那一条", "前面的对话供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
+	for _, want := range []string{"只评估 current=\"true\" 的那一条", "前面的对话供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
 		if !strings.Contains(routePrompt, want) {
 			t.Fatalf("batch route prompt missing %q: %s", want, routePrompt)
 		}
@@ -310,7 +310,7 @@ func TestProactiveReplyBatchReroutesOnceBeforeSending(t *testing.T) {
 	if provider.routeCalls != 2 || provider.replyCalls != 2 {
 		t.Fatalf("route calls=%d reply calls=%d, want one bounded reroute", provider.routeCalls, provider.replyCalls)
 	}
-	if !strings.Contains(provider.lastRoutePayload, first.RawMessage) || !strings.Contains(provider.lastRoutePayload, "【当前消息】") {
+	if !strings.Contains(provider.lastRoutePayload, first.RawMessage) || !strings.Contains(provider.lastRoutePayload, `current="true"`) {
 		t.Fatalf("reroute did not receive both candidates: %s", provider.lastRoutePayload)
 	}
 	var superseded bool

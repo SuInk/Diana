@@ -45,13 +45,13 @@ func participationDecisionSpec(overrides PromptOverrides, burst int) *llm.Decisi
 			ReasonPath:   "chat_in.reason",
 		},
 	}}
-	// 合并评分时【连发k】逐条一道是非题，和 relevance 同一套判据，见 proactiveReplyTranscript。
+	// 合并评分时 burst="k" 那几条逐条一道是非题，和 relevance 同一套判据，见 proactiveReplyTranscript。
 	for k := 1; k <= burst; k++ {
 		spec.Questions = append(spec.Questions, llm.DecisionQuestion{
 			Key:           fmt.Sprintf("burst_%d", k),
 			Kind:          llm.DecisionNoul,
-			Label:         fmt.Sprintf("【连发%d】在跟本人说话", k),
-			Instructions:  fmt.Sprintf("只看对话稿里标【连发%d】的那一条，判断它是不是明确在跟本人说话；不看当前消息和其它连发。已标「已回」的填否。\n", k) + overrides.text(promptParticipationRelevanceIntroSpec),
+			Label:         fmt.Sprintf("burst=\"%d\" 那条在跟本人说话", k),
+			Instructions:  fmt.Sprintf("只看对话稿里 burst=\"%d\" 的那一条，判断它是不是明确在跟本人说话；不看当前消息和其它连发。标了 bot_replied=\"true\" 的填否。\n", k) + overrides.text(promptParticipationRelevanceIntroSpec),
 			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
 			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
 			Path:          fmt.Sprintf("burst_%d.directed", k),

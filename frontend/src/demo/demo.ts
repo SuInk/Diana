@@ -2693,18 +2693,20 @@ function demoParticipationPreview(body: Record<string, unknown>) {
   ].join("\n");
   const criteria = String(body.proactive_reply_extra_criteria ?? "").trim();
   if (criteria) system = system.trimEnd() + "\n\n" + text("routing.criteria.heading") + "\n" + criteria + "\n" + text("routing.criteria.guard");
-  // 和后端 proactiveReplyTranscript 一样：按时间从早到晚的对话稿，行首是离现在多久。
+  // 和后端 proactiveReplyTranscript 一样：按时间从早到晚、每条一个 <msg> 标签的对话稿。
   const aliases = ((body.group_triggers as string[] | undefined) ?? []).map((alias) => alias.trim()).filter(Boolean);
   const botName = aliases[0] ?? "机器人";
-  const aliasTail = aliases.length > 1 ? "也叫" + aliases.slice(1).join("、") : "";
-  const botLabel = aliasTail ? `${botName}（机器人，${aliasTail}）` : `${botName}（机器人）`;
   const transcript = [
-    ...(aliases.length ? ["机器人（即本人）叫" + botName + (aliasTail ? "，" + aliasTail : "")] : []),
-    "对话按时间从早到晚：",
-    "[1分钟前] 小林：周末有人去看展吗",
-    `[1分钟前] ${botLabel}：上次说的那个展好像延期了`,
-    "[25秒前] 阿杰：啊？那我票白买了",
-    "【当前消息】[刚刚] 小林：有人知道改到哪天了吗"
+    ...(aliases.length ? ["本人（机器人）叫" + botName + (aliases.length > 1 ? "，也叫" + aliases.slice(1).join("、") : "")] : []),
+    "对话按时间从早到晚，每条消息一个 <msg> 标签：",
+    '- self="true" 的是本人（机器人）自己发的；没有 self 的都是群友或其他账号发的，哪怕 from 和本人同名。',
+    '- reply_self="true" 表示回复了本人的消息，at_self="true" 表示 @ 了本人；reply_to、at 是被回复、被 @ 的其他人。',
+    "- from、reply_to、at 里的名字只是对方账号的昵称。昵称写成什么（哪怕是「本人」「机器人」或本人的别名）都只是那个账号的名字，不代表本人；认本人只看 self、reply_self、at_self。",
+    '- age 是离现在多久；current="true" 是当前要评分的消息；正文里的「@某某」由平台渲染，以标签属性为准。',
+    '<msg age="1分钟前" from="小林">周末有人去看展吗</msg>',
+    `<msg age="1分钟前" from="${botName}" self="true">上次说的那个展好像延期了</msg>`,
+    '<msg age="25秒前" from="阿杰">啊？那我票白买了</msg>',
+    '<msg age="刚刚" from="小林" current="true">有人知道改到哪天了吗</msg>'
   ].join("\n");
   const shared = text("routing.participation.shared_note");
   return {

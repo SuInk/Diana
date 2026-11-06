@@ -61,7 +61,7 @@ func TestReplyClosedUndirectedMessageSkipsCrossGroupRetrieval(t *testing.T) {
 	}
 }
 
-// 路由请求里当前消息只出现一次，标着【当前消息】。
+// 路由请求里当前消息只出现一次，标着 current="true"。
 func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"relevance":{"directed":false,"reason":"群友之间"},"chat_in":{"score":0.1,"reason":"没什么可接"}}`,
@@ -82,7 +82,7 @@ func TestProactiveRouterPayloadCarriesCurrentTextOnce(t *testing.T) {
 	if got := strings.Count(payload, text); got != 1 {
 		t.Fatalf("当前消息在路由请求里出现了 %d 次，want 1：%s", got, payload)
 	}
-	for _, want := range []string{"【当前消息】[刚刚] Alice：" + text} {
+	for _, want := range []string{`<msg age="刚刚" from="Alice" current="true">` + text + "</msg>"} {
 		if !strings.Contains(payload, want) {
 			t.Fatalf("payload missing %s: %s", want, payload)
 		}
@@ -105,7 +105,7 @@ func TestProactiveRouterPayloadKeepsEarlierCandidateText(t *testing.T) {
 	if strings.Count(payload, "前面那句先说的话") != 1 || strings.Count(payload, "后面这句才是当前") != 1 {
 		t.Fatalf("each candidate text should appear exactly once: %s", payload)
 	}
-	if strings.Count(payload, "【当前消息】") != 1 || !strings.Contains(payload, "【当前消息】[刚刚] user-2：后面这句才是当前") {
+	if strings.Count(payload, `current="true">`) != 1 || !strings.Contains(payload, `<msg age="刚刚" from="user-2" current="true">后面这句才是当前</msg>`) {
 		t.Fatalf("only the latest candidate is current: %s", payload)
 	}
 }

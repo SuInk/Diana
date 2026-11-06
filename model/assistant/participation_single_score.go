@@ -27,7 +27,7 @@ type participationRelevance struct {
 type participationRatings struct {
 	Relevance participationRelevance `json:"relevance"`
 	ChatIn    participationRating    `json:"chat_in"`
-	// Burst 是合并评分时对【连发k】逐条的判断，键是 k（见 proactiveReplyTranscript）。
+	// Burst 是合并评分时对 burst="k" 那几条逐条的判断，键是 k（见 proactiveReplyTranscript）。
 	Burst map[int]participationRelevance `json:"-"`
 }
 
@@ -69,7 +69,7 @@ func parseParticipationRatings(raw string) (participationRatings, error) {
 	return p, nil
 }
 
-// requireBurst 要求【连发1】到【连发n】每条都有判断。缺一条就按格式无效处理、重问一次：
+// requireBurst 要求 burst="1" 到 burst="n" 每条都有判断。缺一条就按格式无效处理、重问一次：
 // 合并评分省的是调用，不能拿漏判来换。
 func (p participationRatings) requireBurst(n int) error {
 	for k := 1; k <= n; k++ {
