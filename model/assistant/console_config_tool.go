@@ -43,7 +43,7 @@ type dianaConsoleConfigTool struct {
 
 func (t *dianaConsoleConfigTool) Name() string { return consoleConfigToolName }
 func (t *dianaConsoleConfigTool) Description() string {
-	return "管理控制台配置：机器人全部可编辑字段（含各用途模型完整路由、思考强度、权重、后备、排序、分组和参数）、提供商、插件凭据、缓存、媒体保留、访问安全、登录会话和受信应用。先 catalog/get 查询。stage 暂存改动并返回脱敏预览，不生效；用户在同一会话后续消息同意（怎么说都行）后才 confirm，无需确认码。每次只确认最后一份预览；密钥和 URL 不得回显。"
+	return "管理控制台配置：机器人全部可编辑字段（含各用途模型完整路由、思考强度、权重、后备、排序、分组和参数）、提供商、插件凭据、缓存、媒体保留、访问安全、登录会话、受信应用，以及浏览器来源、浏览器控制、桌面控制、内置浏览器、自动更新和群风格学习等全局开关（config.yaml 启动项用 runtime_config）。先 catalog/get 查询。stage 暂存改动并返回脱敏预览，不生效；用户在同一会话后续消息同意（怎么说都行）后才 confirm，无需确认码。每次只确认最后一份预览；密钥和 URL 不得回显。"
 }
 func (t *dianaConsoleConfigTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{

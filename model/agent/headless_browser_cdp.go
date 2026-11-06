@@ -336,14 +336,21 @@ func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profile
 		env, headless = nil, true
 	}
 	env = append(env, extraEnv...)
-	args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
-	if headless {
-		args = append([]string{"--headless=new"}, args...)
+	buildArgs := func() []string {
+		args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
+		if headless {
+			args = append([]string{"--headless=new"}, args...)
+		}
+		return append(args, cfg.ExtraArgs...)
 	}
-	args = append(args, cfg.ExtraArgs...)
-	process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
+	process, err := launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
+	// 「自动」档：沙箱起不来就去掉沙箱再试一次，只试一次（见 BrowserSandboxFallback）。
+	if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
+		clearChromeSingletonLocks(profileDir)
+		process, err = launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
+	}
 	if err != nil {
-		return nil, err
+		return nil, WithBrowserSandboxHint(err)
 	}
 	process.window = cfg.Window
 	return process, nil
@@ -395,6 +402,11 @@ func launchChromeProcessWithEnv(ctx context.Context, executable, root string, ar
 	cmd.Stdin = nil
 	cmd.Stdout = io.Discard
 	cmd.WaitDelay = 2 * time.Second
+	// root 运行时换成 diana 用户启动，沙箱照开；root 是这次运行独占的临时目录。
+	if err := applyBrowserAccount(cmd, executable, args, root); err != nil {
+		cancel()
+		return nil, err
+	}
 	diagnostics := newChromeDiagnosticBuffer(32 * 1024)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -1055,3 +1067,11 @@ const browserDOMCaptureScript = `(() => {
     dom_changes: Number(state.mutations || 0)
   };
 })()`
+
+// clearChromeSingletonLocks 删掉上一次没起来的进程留在 profile 里的单实例锁，
+// 重试时 Chrome 才不会以为已有实例在跑。
+func clearChromeSingletonLocks(profileDir string) {
+	for _, name := range []string{"SingletonLock", "SingletonSocket", "SingletonCookie"} {
+		_ = os.Remove(filepath.Join(profileDir, name))
+	}
+}

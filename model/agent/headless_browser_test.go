@@ -83,6 +83,7 @@ func TestSandboxedBrowserURLRejectsLocalTargets(t *testing.T) {
 }
 
 func TestSandboxedChromeArgsKeepChromeSandboxEnabled(t *testing.T) {
+	stubBrowserRunningAsRoot(t, false)
 	args := sandboxedChromeArgs("/tmp/profile", "/tmp/cache", "/tmp/crash", sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{}))
 	joined := strings.Join(args, " ")
 	if strings.Contains(joined, "--no-sandbox") {

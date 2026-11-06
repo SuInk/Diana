@@ -1022,6 +1022,7 @@ let residencyListed = false;
 // 预填好，切过去就能看到授权边界长什么样。
 let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
 let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
+let demoBrowserSandboxMode: "sandbox" | "auto" | "off" = "sandbox";
 let demoDesktopPolicy = { enabled: true, write_enabled: false, allowed_apps: ["com.apple.TextEdit"], denied_apps: [] as string[] };
 let demoDesktopTakeover = false;
 let demoDesktopActionApproved = false;
@@ -1475,7 +1476,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ]
     };
     const active = demoBrowserSourceOrder.find((key) => (key === "box" ? box : extension).usable) ?? "off";
-    return { order: demoBrowserSourceOrder, active, box, extension };
+    const sandbox =
+      demoBrowserSandboxMode === "off"
+        ? { mode: demoBrowserSandboxMode, active: false, reason: "已手动关闭" }
+        : { mode: demoBrowserSandboxMode, active: true };
+    return { order: demoBrowserSourceOrder, active, box, extension, sandbox };
   };
   if (path === "/api/assistant/agent-browser") {
     const profile = String(body.profile_id ?? url.searchParams.get("profile") ?? "");
@@ -1495,6 +1500,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     if (typeof body.box_enabled === "boolean") demoBrowserBoxSettings = { ...demoBrowserBoxSettings, enabled: body.box_enabled };
     if (typeof body.extension_enabled === "boolean") demoBrowserControlPolicy = { ...demoBrowserControlPolicy, enabled: body.extension_enabled };
     if (Array.isArray(body.order)) demoBrowserSourceOrder = body.order as ("box" | "extension")[];
+    if (body.sandbox === "sandbox" || body.sandbox === "auto" || body.sandbox === "off") demoBrowserSandboxMode = body.sandbox;
     return json(demoBrowserSourceState());
   }
   // 内置浏览器在演示里不起进程：开着但没在跑，画面那块不会去连实时流。每台机器人

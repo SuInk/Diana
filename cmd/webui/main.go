@@ -792,7 +792,8 @@ func main() {
 		desktopLocal.Run(ctx)
 	}()
 	defer desktopLocal.Close()
-	webui.NewDesktopControlHandler(desktopControlRegistry, desktopControlHub, desktopLocal, desktopControlJobs).Register(router)
+	desktopControlHandler := webui.NewDesktopControlHandler(desktopControlRegistry, desktopControlHub, desktopLocal, desktopControlJobs)
+	desktopControlHandler.Register(router)
 
 	// 内置浏览器：Diana 自己那个常驻 Chrome，profile 落在数据目录里，
 	// 用户在 WebUI 里能看画面、能直接操作。默认关着，开了才会有进程。
@@ -832,7 +833,15 @@ func main() {
 	runtimeConfigHandler := webui.NewRuntimeConfigHandler(runtimeConfigManager)
 	runtimeConfigHandler.SetLogStore(sqliteStore)
 	runtimeConfigHandler.Register(router)
-	botRuntime.SetConsoleConfigManager(webui.NewConsoleConfigManager(botHandler, handler, mediaCacheHandler, historyMediaHandler, authHandler, trustedLoginHandler))
+	consoleConfig := webui.NewConsoleConfigManager(botHandler, handler, mediaCacheHandler, historyMediaHandler, authHandler, trustedLoginHandler)
+	consoleConfig.SetSwitchHandlers(webui.ConsoleSwitchHandlers{
+		BrowserSource:  browserSourceHandler,
+		BrowserControl: browserControlHandler,
+		DesktopControl: desktopControlHandler,
+		BrowserBox:     browserBoxHandler,
+		SystemUpdate:   systemHandler,
+	})
+	botRuntime.SetConsoleConfigManager(consoleConfig)
 	logHandler.Register(router)
 	statsHandler.Register(router)
 	eventStreamHandler.Register(router)

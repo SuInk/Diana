@@ -4684,12 +4684,24 @@ export interface BrowserSourceSwitch {
   dependencies: ResolverDependency[];
 }
 
+/** 所有 Diana 拉起的 Chromium 的进程沙箱档位：仅沙箱（默认）、自动、关闭。 */
+export type BrowserSandboxMode = "sandbox" | "auto" | "off";
+
+export interface BrowserSandboxStatus {
+  mode: BrowserSandboxMode;
+  /** 接下来启动的浏览器会不会带沙箱。 */
+  active: boolean;
+  /** 没带沙箱的原因（Termux、root、自动降级、手动关闭）。 */
+  reason?: string;
+}
+
 /** 两个开关各自独立，按 order 每一轮取第一个开着且用得上的，就是 active。 */
 export interface BrowserSourceState {
   order: Exclude<BrowserSource, "off">[];
   active: BrowserSource;
   box: BrowserSourceSwitch;
   extension: BrowserSourceSwitch;
+  sandbox: BrowserSandboxStatus;
 }
 
 export function getBrowserSource(): Promise<BrowserSourceState> {
@@ -4700,6 +4712,7 @@ export function saveBrowserSource(patch: {
   order?: Exclude<BrowserSource, "off">[];
   box_enabled?: boolean;
   extension_enabled?: boolean;
+  sandbox?: BrowserSandboxMode;
 }): Promise<BrowserSourceState> {
   return requestJSON<BrowserSourceState>("/api/browser-source", {
     method: "PUT",

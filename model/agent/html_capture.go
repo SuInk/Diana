@@ -249,9 +249,9 @@ func htmlCaptureExtraArgs() []string {
 		"--proxy-bypass-list=<-loopback>",
 		"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
 	}
-	// 这里跑的是带脚本的页面，能开进程沙盒就开。只有 root 身份起不来沙盒，
-	// 和截图那条路的兼容取舍一样。
-	if os.Geteuid() == 0 {
+	// 关不关进程沙箱先按底座参数的档位（见 browser_sandbox.go）。这里只渲染本地 HTML、
+	// 而且断网，root 又换不成 diana 用户时另外放行：默认「仅沙箱」也不该让出图跟着坏。
+	if browserRootWithoutAccount() != "" && !browserNoSandbox() {
 		args = append(args, "--no-sandbox")
 	}
 	return args

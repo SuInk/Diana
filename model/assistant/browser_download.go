@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/browseruser"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -33,6 +34,10 @@ var chromeForTestingVersionsEndpoint = chromeForTestingVersionsURL
 // diana 运行用户一定可写。位置约定与工作区、媒体缓存一致——跟着 APP_DB_PATH 走。
 func browserDownloadDir() string {
 	if dir := strings.TrimSpace(os.Getenv("DIANA_BROWSER_DIR")); dir != "" {
+		return dir
+	}
+	// root 运行时浏览器换成 diana 用户启动，装到它够得着的地方：数据目录常在 /root 下。
+	if dir := browseruser.DownloadDir(); dir != "" {
 		return dir
 	}
 	if dbPath := strings.TrimSpace(os.Getenv("APP_DB_PATH")); dbPath != "" {

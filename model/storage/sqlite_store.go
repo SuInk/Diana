@@ -52,6 +52,7 @@ const (
 	desktopControlJobsKey = "desktop_control_jobs"
 	browserBoxKey         = "browser_box"
 	browserSourceKey      = "browser_source"
+	browserSandboxKey     = "browser_sandbox"
 )
 
 type SQLiteStore struct {
@@ -442,6 +443,20 @@ func (s *SQLiteStore) LoadBrowserSource(ctx context.Context) (browsersource.Sett
 // SaveBrowserSource 保存浏览器来源的优先级。
 func (s *SQLiteStore) SaveBrowserSource(ctx context.Context, doc browsersource.Settings) error {
 	return s.saveJSON(ctx, browserSourceKey, doc)
+}
+
+// LoadBrowserSandbox 读取浏览器沙箱档位（sandbox / auto / off）。
+func (s *SQLiteStore) LoadBrowserSandbox(ctx context.Context) (string, bool, error) {
+	var doc struct {
+		Mode string `json:"mode"`
+	}
+	ok, err := s.loadJSON(ctx, browserSandboxKey, &doc)
+	return doc.Mode, ok, err
+}
+
+// SaveBrowserSandbox 保存浏览器沙箱档位。
+func (s *SQLiteStore) SaveBrowserSandbox(ctx context.Context, mode string) error {
+	return s.saveJSON(ctx, browserSandboxKey, map[string]string{"mode": mode})
 }
 
 // LoadBrowserBox 读取内置浏览器的配置。

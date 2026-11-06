@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/SuInk/diana/internal/browseruser"
 	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/internal/xvfb"
 	"net/url"
@@ -422,7 +423,11 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	defer cancelSandbox()
 	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
 		status.Available = false
-		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error() + "。Docker 部署请使用项目提供的 chromium-seccomp.json；不要禁用 Chromium 沙箱"
+		status.Detail = "找到了 " + status.Path + "，但网页沙箱启动失败：" + err.Error()
+		// 启动报错里已经带了换档提示（见 WithBrowserSandboxHint）就不再重复。
+		if !strings.Contains(err.Error(), "浏览器沙箱") {
+			status.Detail += "。Docker 部署请使用项目提供的 chromium-seccomp.json；宿主机禁用了用户命名空间时需由管理员放开；放不开（proot 等）可以在浏览器页把「浏览器沙箱」改成「自动」或「关闭」"
+		}
 	}
 	return status
 }
@@ -590,13 +595,23 @@ func downloadedChromePaths() []string {
 			dir = filepath.Join(cacheDir, "diana", "browser")
 		}
 	}
-	if dir == "" {
-		return nil
+	var dirs []string
+	// root 运行时依赖页把 Chrome 装到 diana 用户够得着的目录（见 internal/browseruser），
+	// 排在前面：数据目录在 /root 下的老安装重装一次就换过来。
+	if shared := browseruser.DownloadDir(); shared != "" {
+		dirs = append(dirs, shared)
 	}
-	return []string{
-		filepath.Join(dir, "chrome-linux64", "chrome"),
-		filepath.Join(dir, "chrome-linux-arm64", "chrome"),
+	if dir != "" {
+		dirs = append(dirs, dir)
 	}
+	var paths []string
+	for _, dir := range dirs {
+		paths = append(paths,
+			filepath.Join(dir, "chrome-linux64", "chrome"),
+			filepath.Join(dir, "chrome-linux-arm64", "chrome"),
+		)
+	}
+	return paths
 }
 
 func sandboxedChromeBaseArgs(profileDir, cacheDir, crashDir string) []string {
@@ -650,9 +665,7 @@ func sandboxedChromeBaseArgsForMode(profileDir, cacheDir, crashDir string, headl
 	if headless {
 		args = append([]string{"--headless=new"}, args...)
 	}
-	// 安卓不给普通 App 开用户命名空间，Chromium 的进程沙盒在 Termux 里起不来，
-	// 不关掉连启动都失败。页面隔离靠 Termux 自己的 App 沙盒和上面的内网屏蔽。
-	if termux.Detected() {
+	if browserNoSandbox() {
 		args = append(args, "--no-sandbox")
 	}
 	return args
