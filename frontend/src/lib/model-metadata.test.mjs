@@ -84,3 +84,14 @@ test("animation support follows the backend rules", () => {
   assert.equal(imageModelSupportsAnimation("relay-gif", { id: "relay-gif", capabilities_override: { input_modalities: ["text"], output_modalities: ["image", "animation"] } }), true);
   assert.equal(imageModelSupportsAnimation("gpt-image-2.6-sunburst", { id: "gpt-image-2.6-sunburst", capabilities_override: { input_modalities: ["text"], output_modalities: ["image"] } }), false);
 });
+
+test("known animation models keep GIF when capabilities are edited by hand", () => {
+  const model = { id: "gpt-image-2.6-sunburst", input_modalities: ["text", "image"], output_modalities: ["image"] };
+  assert.equal(modelCapabilitySummary(model), "图片生成 / 编辑 · 动图");
+  assert.deepEqual(createModelMetadataDraft(model).output, ["image", "animation"]);
+  assert.deepEqual(createModelMetadataDraft({ id: "gpt-image-2.5-sunburst", output_modalities: ["image"] }).output, ["image"]);
+  // 手动关掉过的不再自动勾回去。
+  const off = { id: "gpt-image-2.6-sunburst", capabilities_override: { input_modalities: ["text"], output_modalities: ["image"] } };
+  assert.deepEqual(createModelMetadataDraft(off).output, ["image"]);
+  assert.equal(modelCapabilitySummary(off), "图片生成");
+});

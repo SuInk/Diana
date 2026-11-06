@@ -57,7 +57,7 @@ export function modelCapabilitySummary(model: LLMModelInfo): string {
   const labels: string[] = [];
   if (output.includes("text")) labels.push(input.includes("image") ? "文字 / 视觉理解" : "文字");
   if (output.includes("image")) labels.push(input.includes("image") ? "图片生成 / 编辑" : "图片生成");
-  if (output.includes("animation")) labels.push("动图");
+  if (output.includes("animation") || (output.includes("image") && imageModelSupportsAnimation(model.id, model))) labels.push("动图");
   if (output.includes("audio")) labels.push("音频输出");
   if (output.includes("video")) labels.push("视频输出");
   return labels.join(" · ") || "能力未标注";
@@ -90,8 +90,15 @@ export function createModelMetadataDraft(model?: LLMModelInfo): ModelMetadataDra
     overrideCapabilities: model ? Boolean(model.capabilities_override) : true,
     // 创建时显式展示默认文字能力，用户可以改为视觉或生图。
     input: [...(effective?.input_modalities?.length ? effective.input_modalities : ["text"])],
-    output: [...(effective?.output_modalities?.length ? effective.output_modalities : ["text"])]
+    // 按名字认出来的动图模型（gpt-image-2.6）清单里不标 animation：打开手动设置时要
+    // 先勾上，不然改别的能力一保存，动图就被悄悄关掉了。
+    output: withKnownAnimation(model, [...(effective?.output_modalities?.length ? effective.output_modalities : ["text"])])
   };
+}
+
+function withKnownAnimation(model: LLMModelInfo | undefined, output: string[]): string[] {
+  if (!model || model.capabilities_override || !output.includes("image") || output.includes("animation")) return output;
+  return imageModelSupportsAnimation(model.id, model) ? [...output, "animation"] : output;
 }
 
 export function applyModelMetadataDraft(draft: ModelMetadataDraft, models: LLMModelInfo[], editingID?: string): LLMModelInfo[] {
