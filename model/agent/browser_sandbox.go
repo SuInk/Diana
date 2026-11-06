@@ -7,9 +7,12 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 
+	"github.com/SuInk/diana/internal/browseruser"
 	"github.com/SuInk/diana/internal/termux"
 )
 
@@ -44,6 +47,72 @@ var browserSandbox = struct {
 
 // browserRunningAsRoot 单独抽出来，测试才能在 root 跑的 CI 容器里固定结果。
 var browserRunningAsRoot = func() bool { return os.Geteuid() == 0 }
+
+// browserLaunchAccount 是 root 运行时拉起 Chromium 用的普通用户（见 internal/browseruser）。
+// Chromium 不许 root 带沙箱启动，换成 diana 用户启动，沙箱就照开。
+func browserLaunchAccount() (browseruser.Account, bool) {
+	if !browserRunningAsRoot() || termux.Detected() {
+		return browseruser.Account{}, false
+	}
+	return browseruser.Lookup()
+}
+
+// browserAccountFor 返回启动 executable 该用的账号：root 运行、建得出 diana 用户、
+// 而且它够得着这个可执行文件。不需要降权或降不了时返回 false。
+func browserAccountFor(executable string) (browseruser.Account, bool) {
+	account, ok := browserLaunchAccount()
+	if !ok || !account.CanReach(executable) {
+		return browseruser.Account{}, false
+	}
+	return account, true
+}
+
+// BrowserRootAccount 是 root 运行时降权用的账号，不看可执行文件；给 model/browserbox
+// 算登录态目录用。
+func BrowserRootAccount() (browseruser.Account, bool) { return browserLaunchAccount() }
+
+// BrowserLaunchAccount 给 model/browserbox：常驻浏览器同样按这个账号启动。
+func BrowserLaunchAccount(executable string) (browseruser.Account, bool) {
+	return browserAccountFor(executable)
+}
+
+// applyBrowserAccount 在 args 带沙箱时把 cmd 换成 diana 用户启动，并把浏览器要写的
+// 目录交给它。args 本来就不带沙箱（比如简单截图）时照当前身份启动：那条路要读 root
+// 家目录里的字体，降权反而读不到。
+func applyBrowserAccount(cmd *exec.Cmd, executable string, args []string, dirs ...string) error {
+	if slices.Contains(args, "--no-sandbox") {
+		return nil
+	}
+	account, ok := browserAccountFor(executable)
+	if !ok {
+		return nil
+	}
+	if err := account.Own(dirs...); err != nil {
+		return err
+	}
+	account.Apply(cmd)
+	return nil
+}
+
+// browserRootWithoutAccount 表示以 root 运行、却没法换成 diana 用户启动默认找到的
+// 浏览器：这时 Chromium 仍然是 root，起不来沙箱。返回原因，空串表示不是这种情况。
+func browserRootWithoutAccount() string {
+	if !browserRunningAsRoot() || termux.Detected() {
+		return ""
+	}
+	account, ok := browserLaunchAccount()
+	if !ok {
+		if reason := browseruser.Reason(); reason != "" {
+			return "以 root 运行，没能准备 " + browseruser.Name + " 用户来降权启动浏览器：" + reason
+		}
+		return "以 root 运行，Chromium 不允许 root 带沙箱启动"
+	}
+	executable, err := findHeadlessBrowserExecutable("")
+	if err != nil || account.CanReach(executable) {
+		return ""
+	}
+	return fmt.Sprintf("以 root 运行，浏览器 %s 在 %s 用户进不去的目录里，没法降权启动；到依赖页重新安装浏览器会装到 %s", executable, browseruser.Name, browseruser.Home)
+}
 
 // ParseBrowserSandboxMode 校验档位；空值按默认「仅沙箱」。
 func ParseBrowserSandboxMode(value string) (BrowserSandboxMode, error) {
@@ -89,8 +158,8 @@ func CurrentBrowserSandbox() BrowserSandboxStatus {
 		status.Active, status.Reason = false, "Termux 里安卓不给普通 App 开用户命名空间，进程沙箱建不起来，始终关闭"
 	case mode == BrowserSandboxOff:
 		status.Active, status.Reason = false, "已手动关闭"
-	case mode == BrowserSandboxAuto && browserRunningAsRoot():
-		status.Active, status.Reason = false, "以 root 运行，Chromium 不允许 root 带沙箱启动，已自动关闭"
+	case mode == BrowserSandboxAuto && browserRootWithoutAccount() != "":
+		status.Active, status.Reason = false, browserRootWithoutAccount()+"，已自动关闭"
 	case mode == BrowserSandboxAuto && fellBack:
 		status.Active, status.Reason = false, "带沙箱启动失败，已自动关闭："+reason
 	}
@@ -115,7 +184,7 @@ func BrowserSandboxFallback(diagnostics string) bool {
 	}
 	browserSandbox.Lock()
 	defer browserSandbox.Unlock()
-	if browserSandbox.mode != BrowserSandboxAuto || termux.Detected() || browserRunningAsRoot() {
+	if browserSandbox.mode != BrowserSandboxAuto || termux.Detected() || browserRootWithoutAccount() != "" {
 		return false
 	}
 	if !browserSandbox.fellBack {
@@ -139,10 +208,10 @@ func WithBrowserSandboxHint(err error) error {
 		return err
 	}
 	hint := "浏览器沙箱起不来"
-	if browserRunningAsRoot() {
-		hint = "以 root 运行时 Chromium 不允许带沙箱启动"
+	if reason := browserRootWithoutAccount(); reason != "" {
+		hint = reason
 	}
-	return fmt.Errorf("%w（%s：当前是「仅沙箱」档，可改用普通用户运行，或在浏览器页「更多设置 → 浏览器沙箱」改成「自动」）", err, hint)
+	return fmt.Errorf("%w（%s：当前是「仅沙箱」档。Ubuntu 23.10+ 等用 AppArmor 限制了用户命名空间的系统需由管理员放开；放不开可以在浏览器页「更多设置 → 浏览器沙箱」改成「自动」）", err, hint)
 }
 
 // browserSandboxFailure 认 Chromium 因沙箱起不来而退出的几种输出：root 被拒、

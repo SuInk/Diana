@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -206,7 +207,15 @@ func (m *Manager) EnableByDefault(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (m *Manager) rootDir() string     { return filepath.Join(m.dataDir, "browser-box") }
+// rootDir 是内置浏览器的数据目录。root 运行时浏览器换成 diana 用户启动（见
+// internal/browseruser），它进不去数据目录（root 装的常在 /root 下）就放到它的家目录。
+func (m *Manager) rootDir() string {
+	if account, ok := agent.BrowserRootAccount(); ok && !account.CanTraverse(m.dataDir) {
+		return filepath.Join(account.Home, "browser-box")
+	}
+	return filepath.Join(m.dataDir, "browser-box")
+}
+
 func (m *Manager) profilesDir() string { return filepath.Join(m.rootDir(), "profiles") }
 
 // legacyProfileDir 是按机器人拆分之前那一份共用的 profile。
@@ -847,6 +856,13 @@ func (m *Manager) launch(ctx context.Context, inst *instance, settings Settings,
 	args = append(args, m.extraArgs...)
 	cmd := procgroup.Isolate(exec.Command(executable, args...))
 	cmd.Dir = dir
+	// root 运行时换成 diana 用户启动，沙箱照开；args 已经带 --no-sandbox 就不换。
+	if account, ok := agent.BrowserLaunchAccount(executable); ok && !slices.Contains(args, "--no-sandbox") {
+		if err := account.Own(m.rootDir(), tmpDir); err != nil {
+			return err
+		}
+		account.Apply(cmd)
+	}
 	// TMPDIR 不能跟着 dir 走：Chrome 在 TMPDIR 下建单实例用的 Unix 套接字，路径上限
 	// 108 字节（macOS 104），而 dir 是「数据目录/browser-box/profiles/<机器人 UUID>」，
 	// 容器里光这一段就七十多字节，再拼上 org.chromium.Chromium.XXXXXX/SingletonSocket

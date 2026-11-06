@@ -34,7 +34,7 @@ func (m *ConsoleConfigManager) SetSwitchHandlers(handlers ConsoleSwitchHandlers)
 func (m *ConsoleConfigManager) switchCatalog(out map[string]any) {
 	s := m.switches
 	if s.BrowserSource != nil {
-		out["browser_source"] = map[string]any{"actions": []string{"update"}, "fields": map[string]string{"order": "[]string", "box_enabled": "bool", "extension_enabled": "bool", "sandbox": "string"}, "hint": "浏览器来源：内置浏览器/浏览器扩展各自的开关和优先顺序（order 取 box、extension）；sandbox 是所有 Diana 拉起的 Chromium 的进程沙箱档位：sandbox 仅沙箱（默认，起不来就报错）、auto 自动（root 或沙箱起不来时关闭）、off 关闭。关闭沙箱会削弱对群成员发来网页的隔离，改之前向主人说明。"}
+		out["browser_source"] = map[string]any{"actions": []string{"update"}, "fields": map[string]string{"order": "[]string", "box_enabled": "bool", "extension_enabled": "bool", "sandbox": "string"}, "hint": "浏览器来源：内置浏览器/浏览器扩展各自的开关和优先顺序（order 取 box、extension）；sandbox 是所有 Diana 拉起的 Chromium 的进程沙箱档位：sandbox 仅沙箱（默认，起不来就报错）、auto 自动（沙箱起不来时关闭；root 运行时浏览器自动改用 diana 用户启动，不用为 root 换档）、off 关闭。关闭沙箱会削弱对群成员发来网页的隔离，改之前向主人说明。"}
 	}
 	if s.BrowserControl != nil {
 		out["browser_control"] = map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(s.BrowserControl.registry.Policy()), "hint": "浏览器控制扩展的总开关、站点白名单/黑名单和写操作档位；数组按完整列表替换。关掉总开关会立即断开已连接的扩展。"}
