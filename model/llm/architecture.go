@@ -83,6 +83,8 @@ type ChatRequest struct {
 	Tools            []ToolDefinition `json:"tools,omitempty"`
 	ToolChoice       string           `json:"toolChoice,omitempty"`
 	Decision         *DecisionSpec    `json:"-"`
+	// ReasoningEffortFallback 见 GenerateRequest.ReasoningEffortFallback。
+	ReasoningEffortFallback string `json:"reasoningEffortFallback,omitempty"`
 }
 
 type ChatEventType string
@@ -341,7 +343,7 @@ func (a clientAdapter) Generate(ctx context.Context, model ModelDefinition, req 
 		return ChatResponse{}, err
 	}
 	messages := chatMessagesToLegacy(req.Messages)
-	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
+	response, err := client.Generate(ctx, GenerateRequest{Model: model.ModelID, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, ReasoningEffortFallback: req.ReasoningEffortFallback, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 	if err != nil {
 		return ChatResponse{}, err
 	}
@@ -353,7 +355,7 @@ func (a clientAdapter) Stream(ctx context.Context, model ModelDefinition, req Ch
 	if err != nil {
 		return nil, err
 	}
-	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision}
+	legacy := GenerateRequest{Model: model.ModelID, Messages: chatMessagesToLegacy(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, ReasoningEffortFallback: req.ReasoningEffortFallback, MaxOutputTokens: req.MaxTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision}
 	if streamable, ok := client.(interface {
 		Stream(context.Context, GenerateRequest) (<-chan ChatEvent, error)
 	}); ok {
@@ -541,7 +543,7 @@ func (c RegistryClient) Stream(ctx context.Context, req GenerateRequest) (<-chan
 	if c.Registry == nil {
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
-	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
+	return c.Registry.Stream(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: legacyMessagesToChat(req.Messages), Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, ReasoningEffortFallback: req.ReasoningEffortFallback, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 }
 
 func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
@@ -549,7 +551,7 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 		return nil, fmt.Errorf("llm: provider registry is not configured")
 	}
 	messages := legacyMessagesToChat(req.Messages)
-	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
+	response, err := c.Registry.Generate(ctx, c.Selection, ChatRequest{Model: req.Model, Messages: messages, Temperature: req.Temperature, ReasoningEffort: req.ReasoningEffort, ReasoningEffortFallback: req.ReasoningEffortFallback, MaxTokens: req.MaxOutputTokens, Tools: req.Tools, ToolChoice: req.ToolChoice, MaxContextTokens: req.MaxContextTokens, PromptCacheKey: req.PromptCacheKey, Decision: req.Decision})
 	if err != nil {
 		return nil, err
 	}

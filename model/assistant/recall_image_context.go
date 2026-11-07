@@ -691,6 +691,7 @@ func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, s
 		return "", fmt.Errorf("%w: %s", errVisionImageUnavailable, source)
 	}
 	request := llm.GenerateRequest{
+		ReasoningEffortFallback: visionReasoningEffortFallback,
 		Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: system},
 			{

@@ -388,6 +388,12 @@ var promptImageQuestionSystemSpec = registerPrompt(PromptSpec{
 
 const defaultImageQuestion = "描述这些画面的内容，完整抄录清晰可辨的文字。"
 
+// visionReasoningEffortFallback 是识图调用在请求、视觉路由、提供商配置都没设思考
+// 强度时的档位。看图写描述不需要深想：生产里视觉跟随对话模型 devin/swe-2 时，
+// 默认思考让单张识图在出第一个字前就花 7 秒多（p50，占整次 11 秒的大头）。用户
+// 在视觉路由上明确选了档位就以用户的为准。
+const visionReasoningEffortFallback = "low"
+
 // askImages 把图交给视觉理解模型看，按问题作答，只回文字。
 func (r *Runtime) askImages(ctx context.Context, event MessageEvent, images []llm.ContentPart, question string) (string, error) {
 	question = strings.TrimSpace(question)
@@ -395,7 +401,7 @@ func (r *Runtime) askImages(ctx context.Context, event MessageEvent, images []ll
 		question = defaultImageQuestion
 	}
 	parts := append([]llm.ContentPart{{Type: llm.ContentPartText, Text: question}}, images...)
-	request := llm.GenerateRequest{Messages: []llm.Message{
+	request := llm.GenerateRequest{ReasoningEffortFallback: visionReasoningEffortFallback, Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: r.effectiveConfigForEvent(event).prompt(promptImageQuestionSystemSpec)},
 		{Role: llm.RoleUser, Content: question, Parts: parts},
 	}}
