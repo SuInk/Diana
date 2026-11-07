@@ -243,7 +243,7 @@ func (b browserToolBase) openTab(ctx context.Context, baseURL string) (browserTa
 		count--
 	}
 	if count >= maxAgentBrowserTabs {
-		return browserTarget{}, fmt.Errorf("机器人开的标签页已达上限（%d 个），没有可以自动回收的闲置页，不能再新开。用 browser_open 不带 new_tab 沿用当前标签页，或先用 browser_tabs 的 list 查看、close 关掉不用的", maxAgentBrowserTabs)
+		return browserTarget{}, fmt.Errorf("机器人开的标签页已达上限（%d 个），没有可以自动回收的闲置页，不能再新开。用 browser 的 open 不带 new_tab 沿用当前标签页，或先用 tabs_list 查看、tabs_close 关掉不用的", maxAgentBrowserTabs)
 	}
 	target, err := newBrowserTarget(ctx, baseURL, "about:blank")
 	if err != nil {

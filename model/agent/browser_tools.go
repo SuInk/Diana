@@ -206,7 +206,7 @@ func (t *BrowserOpenTool) Description() string {
 func (t *BrowserOpenTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
 		"url":     toolStringParam("页面地址"),
-		"tab_id":  toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
+		"tab_id":  toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"new_tab": toolBoolParam("新标签页打开，默认沿用当前页"),
 	})
 }
@@ -301,7 +301,7 @@ func (t *BrowserTextTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserTextTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"tab_id":   toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
+		"tab_id":   toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector": toolStringParam("CSS 选择器，默认整页"),
 	})
 }
@@ -332,7 +332,7 @@ func (t *BrowserClickTool) Description() string {
 
 func (t *BrowserClickTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"tab_id":      toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
+		"tab_id":      toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector":    toolStringParam("CSS 选择器"),
 		"x":           toolNumberParam("视口 CSS 像素，同截图坐标"),
 		"y":           toolNumberParam("视口 CSS 像素"),
@@ -439,7 +439,7 @@ func (t *BrowserTypeTool) Description() string {
 
 func (t *BrowserTypeTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"text"}, map[string]any{
-		"tab_id":      toolStringParam("个人浏览器标签页 ID，可通过 browser_tabs 查询"),
+		"tab_id":      toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector":    toolStringParam("输入框 CSS 选择器，默认当前焦点"),
 		"text":        toolStringParam(""),
 		"clear":       toolBoolParam("先清空原内容，默认 true"),
@@ -1047,7 +1047,7 @@ func (b browserToolBase) pickPersonalOrOwnerTarget(ctx context.Context, endpoint
 			return target, nil
 		}
 	}
-	return browserTarget{}, errors.New("个人浏览器标签页不存在，请用 browser_open 打开网站或 browser_tabs 查找登录弹窗")
+	return browserTarget{}, errors.New("个人浏览器标签页不存在，请用 browser 的 open 打开网站或 tabs_list 查找登录弹窗")
 }
 
 type PersonalBrowserTabsTool struct{ base browserToolBase }

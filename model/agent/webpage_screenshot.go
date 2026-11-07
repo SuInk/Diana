@@ -57,7 +57,7 @@ func NewWebpageScreenshotTool(browser PageScreenshotter) *WebpageScreenshotTool 
 
 func (t *WebpageScreenshotTool) Name() string { return "webpage_screenshot" }
 func (t *WebpageScreenshotTool) Description() string {
-	return "截取公网页面的可见窗口并附加真实画面。每次使用独立临时浏览器，不带主人或用户的登录态；拒绝本机、内网和带账号密码的 URL。需要登录浏览器画面时用已授权的 browser_screenshot。"
+	return "截取公网页面的可见窗口并附加真实画面。每次使用独立临时浏览器，不带主人或用户的登录态；拒绝本机、内网和带账号密码的 URL。需要登录浏览器画面时用已授权的 browser 的 screenshot。"
 }
 func (t *WebpageScreenshotTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{"url": toolStringParam("公网 HTTP(S) 网页完整 URL")})

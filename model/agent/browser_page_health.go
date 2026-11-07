@@ -138,7 +138,7 @@ func (b browserToolBase) recoverPage(client *cdpClient, mode pageRecovery) strin
 	if b.session.active() == client.targetID {
 		b.session.setActive("")
 	}
-	return "这个标签页救不回来，用 browser_tabs 的 new 另开一页"
+	return "这个标签页救不回来，用 browser 的 tabs_new 另开一页"
 }
 
 // pageResponds 另开一条会话确认页面能回话。卡住的渲染进程连新会话都挂不上，
