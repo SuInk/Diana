@@ -66,8 +66,8 @@ func TestRepositoryWatchPushRecordedAsSubscriptionPushNotSpeech(t *testing.T) {
 		t.Fatalf("普通回复不该带推送标记：%#v", reply)
 	}
 	messages = runtime.renderPromptHistoryEvent(context.Background(), current, reply, cfg, false)
-	if len(messages) != 1 || messages[0].Role != llm.RoleAssistant || messages[0].Content != "普通回复一句" {
-		t.Fatalf("普通回复渲染不该变：%#v", messages)
+	if len(messages) != 2 || !llm.IsHistoryReplyMessage(messages[0]) || llm.HistoryReplyText(messages[0]) != "普通回复一句" || !llm.IsHistoryReplyMessage(messages[1]) {
+		t.Fatalf("普通回复应渲染成 send 调用加结果：%#v", messages)
 	}
 }
 

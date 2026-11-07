@@ -20,8 +20,13 @@ import (
 // 这一轮照常继续。现在它不再单独暴露给模型：send 和其他工具同一步调用时由
 // agent.Config.Interim 转到这里，名字和描述只留给测试与日志。
 //
-// 它不是分条发答案用的：一轮最多 interimMessageMaxPerTurn 次，每次一句短话。中途的话
-// 不过发送前审核（那要多等一次模型，「我去查一下」用不着），靠长度和次数兜着。
+// 它不是分条发答案用的：一轮最多 interimMessageMaxPerTurn 次，每次一句短话。和工具同一
+// 步的那句不过发送前审核（那要多等一次模型，「我去查一下」用不着），靠长度和次数兜着。
+//
+// 一步里只调 send、填了 continue=true 的那句不一样（agent.Config.InterimReply 转到
+// RunReply）：11-07 历史发言改成 send 调用后，swe-2 回放约三成闲聊把一整条回复这样发，
+// 不审就等于完整回复绕过了审核。所以这句和最终回复一样先审再发，也不限 80 字。试过把
+// 中途发言拆回独立的 say 工具，静默从 9/84 涨到 25/84，没用。
 
 const (
 	dianaInterimMessageToolName = "say"
@@ -37,6 +42,10 @@ const (
 type interimMessageLedger struct {
 	mu   sync.Mutex
 	sent []string
+	// input、proactive 是这一轮发送前审核要的上下文，replyTo 算出来后记在这里，
+	// RunReply 审核时用（见 setInterimReplyAudit）。
+	input     string
+	proactive bool
 }
 
 type interimMessageContextKey struct{}
@@ -47,6 +56,15 @@ func withInterimMessages(ctx context.Context) context.Context {
 		return ctx
 	}
 	return context.WithValue(ctx, interimMessageContextKey{}, &interimMessageLedger{})
+}
+
+// setInterimReplyAudit 记下这一轮发送前审核要的输入和是否主动接话。
+func setInterimReplyAudit(ctx context.Context, input string, proactive bool) {
+	if ledger, ok := ctx.Value(interimMessageContextKey{}).(*interimMessageLedger); ok {
+		ledger.mu.Lock()
+		ledger.input, ledger.proactive = input, proactive
+		ledger.mu.Unlock()
+	}
 }
 
 // interimMessagesSent 返回这一轮中途已经发出的话。
@@ -110,6 +128,16 @@ type interimMessageResult struct {
 }
 
 func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	return t.run(ctx, input, false)
+}
+
+// RunReply 发单独 send、填了 continue=true 的那句：和最终回复一样先过发送前审核，
+// 不限 80 字。见文件头。
+func (t *dianaInterimMessageTool) RunReply(ctx context.Context, input map[string]any) (string, error) {
+	return t.run(ctx, input, true)
+}
+
+func (t *dianaInterimMessageTool) run(ctx context.Context, input map[string]any, audited bool) (string, error) {
 	text, _ := input["text"].(string)
 	text = strings.TrimSpace(text)
 	if text == "" {
@@ -118,7 +146,7 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 	if strings.Contains(text, notificationSplitMarker) || strings.ContainsAny(text, "\r\n") {
 		return "", fmt.Errorf("一次只说一句，不要换行或分条")
 	}
-	if n := len([]rune(text)); n > interimMessageMaxRunes {
+	if n := len([]rune(text)); n > interimMessageMaxRunes && !audited {
 		return "", fmt.Errorf("这句有 %d 字，超过中途发言上限 %d 字；答案本身最后单独 send", n, interimMessageMaxRunes)
 	}
 	ledger, ok := ctx.Value(interimMessageContextKey{}).(*interimMessageLedger)
@@ -138,9 +166,27 @@ func (t *dianaInterimMessageTool) Run(ctx context.Context, input map[string]any)
 	if text == "" {
 		return "", fmt.Errorf("text 不能为空")
 	}
+	var prepared preparedReplyAudit
+	if audited {
+		ledger.mu.Lock()
+		auditInput, proactive := ledger.input, ledger.proactive
+		ledger.mu.Unlock()
+		// 和最终回复一样：账号安全这类要拦当前这条的判断发送前等结果，其余挪到发出之后。
+		prepared = t.runtime.prepareReplyAuditOrDefer(ctx, t.event, auditInput, text, cfg, proactive, true)
+		intent, err := t.runtime.applyReplyAudit(ctx, t.event, cfg, prepared)
+		if err != nil {
+			return "", fmt.Errorf("审核没通过，没有发出：%w", err)
+		}
+		if intent.RefuseCurrent {
+			return "", fmt.Errorf("审核判定这条不该回答，没有发出")
+		}
+	}
 	defer typingIndicatorFromContext(ctx).resume()
 	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{Text: text})); err != nil {
 		return "", fmt.Errorf("发送失败: %w", err)
+	}
+	if prepared.deferred {
+		t.runtime.runDeferredReplyAudit(ctx, t.event, cfg, prepared, text, false)
 	}
 	// 话已经出去了：这一轮不能再被合并重来，否则重新生成时会把这句再说一遍。
 	t.runtime.sealDirectReply(ctx)

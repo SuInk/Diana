@@ -28,7 +28,7 @@ func (p *burstReplyProvider) Generate(_ context.Context, req llm.GenerateRequest
 	p.mu.Lock()
 	p.requests = append(p.requests, cloneGenerateRequestForTest(req))
 	p.mu.Unlock()
-	return &llm.GenerateResponse{Model: "test", Text: "几条一起回答"}, nil
+	return asSendReply(req, &llm.GenerateResponse{Model: "test", Text: "几条一起回答"}), nil
 }
 
 // sawPrompt 报告有没有哪次请求里同时出现了这些片段。

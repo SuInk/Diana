@@ -23,18 +23,49 @@ import (
 //
 // 合并时一并删掉了 silent/silent_reason，「不说话」只剩留空 text 这一步。上线后
 // 模型自选静默从 0.9% 涨到 8%～10%，几乎全是主动接话；把 silent 和一句理由加回来，
-// 再配合续接历史里把上一轮的回复记成普通发言（见 transcriptAfter），回放里同一批
-// 线上静默样本从 16～19/21 降到 10/23，正常回复的样本没有一条转成静默。
+// 回放里同一批线上静默样本从 16～19/21 降到 10/23，正常回复的样本没有一条转成静默。
+// 当时续接历史还把上一轮的回复记成普通发言，11-07 起改回 send 调用，见 transcriptAfter。
 const finalizeToolName = "send"
 
 // legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
 const legacyFinalizeToolName = "agent_finalize"
 
 // legacyInterimToolName 是并进 send 之前的中途发言工具。
+//
+// 11-07 试过把它拆回来（send 去掉 continue、say 常驻）：swe-2 回放里 continue 误用没
+// 了，但线上原本有回复的闲聊静默从 9/84 涨到 25/84，「在画了」空口承诺也回来了；
+// send 改名 reply 也压不住静默。所以保留 continue，改成给 continue 那句补审核，见
+// Config.InterimReply。
 const legacyInterimToolName = "say"
 
 // FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。
 const FinalizeToolName = finalizeToolName
+
+// historyReplyResult 是历史发言调用的工具结果，和续接记录里真实 send 的结果一致。
+const historyReplyResult = "已发送"
+
+// HistoryReplyMessages 把机器人以前发出去的一句话写成 send 调用加「已发送」结果，
+// 供调用方拼历史用；id 在同一份请求里要唯一且逐轮稳定。为什么不写成 assistant
+// 纯文本见 llm.HistoryReplyCallIDPrefix。
+func HistoryReplyMessages(id, text string) []llm.Message {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	callID := llm.HistoryReplyCallIDPrefix + id
+	return []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: callID, Name: finalizeToolName, Arguments: map[string]any{"text": text}}}},
+		{Role: llm.RoleTool, ToolCallID: callID, ToolName: finalizeToolName, Content: historyReplyResult},
+	}
+}
+
+// plainTextNotSentPrompt 是 Config.PlainTextNotSent 退回纯文本时接在后面的话。11-07
+// 回放那条「在画了」的生产请求：退回这句后 12/12 真去调了 image；14 条闲聊里退回后
+// 20/24 改用 send 发出。
+const plainTextNotSentPrompt = "这段普通文本没有发出去，对方什么也没看到。只有 send 会把话发给对方；要做事就先调用对应工具（按需工具用 tools_execute），做完再 send。"
+
+// plainTextNotSentReason 是退回后仍写纯文本、按静默结束时记下的原因。
+const plainTextNotSentReason = "退回一次后仍只写了普通文本，没有调用 send，没有发出"
 
 // errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。

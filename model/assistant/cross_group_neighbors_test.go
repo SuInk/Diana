@@ -88,7 +88,7 @@ func (p *crossGroupPromptRecorder) Generate(_ context.Context, req llm.GenerateR
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.requests = append(p.requests, req)
-	return &llm.GenerateResponse{Text: "修好了"}, nil
+	return asSendReply(req, &llm.GenerateResponse{Text: "修好了"}), nil
 }
 
 func (p *crossGroupPromptRecorder) joined() string {

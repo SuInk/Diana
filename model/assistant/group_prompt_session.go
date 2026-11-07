@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -315,6 +316,10 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 	s.saveLocked()
 }
 
+// historyRenderVersion 进渲染缓存的源哈希：历史的渲染形态变了就加一，已存的条目
+// 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用。
+const historyRenderVersion = 2
+
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
 // Removed/edited events deliberately invalidate the prefix instead of retaining
@@ -368,7 +373,8 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 			Reply  string
 			Direct bool
 			Bot    string
-		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount})
+			Render int
+		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion})
 		hash := promptCacheHash(string(source))
 		entry, ok := old[key]
 		if !ok || entry.SourceHash != hash {
@@ -416,9 +422,20 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	return stable, volatile
 }
 
+// historyReplyMessages 把机器人自己发过的一句话写成 send 调用加「已发送」，不写成
+// assistant 纯文本，原因见 llm.HistoryReplyCallIDPrefix。调用 ID 由这条历史的去重键
+// 算出，逐轮不变，前缀缓存照常命中。
+func historyReplyMessages(item MessageEvent, text string) []llm.Message {
+	key := messageHistoryDedupeKey(item)
+	if key == "" {
+		key = strconv.FormatInt(item.Time, 10) + "|" + text
+	}
+	return agent.HistoryReplyMessages(promptCacheHash(key), text)
+}
+
 func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item MessageEvent, cfg BotConfig, direct bool) []llm.Message {
 	if strings.TrimSpace(item.botReply) != "" {
-		return []llm.Message{{Role: llm.RoleAssistant, Content: item.botReply}}
+		return historyReplyMessages(item, item.botReply)
 	}
 	if isPokeHistoryEvent(item) {
 		text := pokeHistoryPromptText(item, cfg.BotAccount, current.SelfID, item.SelfID)
@@ -437,7 +454,7 @@ func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item Me
 	var result []llm.Message
 	if !item.crossGroupContext && assistantHistoryEvent(item, firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(current.SelfID))) {
 		if text := strings.TrimSpace(assistantHistoryPlainText(item)); text != "" {
-			result = append(result, llm.Message{Role: llm.RoleAssistant, Content: text})
+			result = append(result, historyReplyMessages(item, text)...)
 			if note, ok := replyToolTraceNote(item.ToolCalls); ok {
 				result = append(result, note)
 			}

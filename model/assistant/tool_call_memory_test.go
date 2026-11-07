@@ -49,10 +49,10 @@ func TestReplyToolCallsSurviveRestartViaHistory(t *testing.T) {
 
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20006", UserID: "10005", SelfID: "10000", MessageID: "ask-searched"}
 	messages := runtime.renderPromptHistoryEvent(context.Background(), current, restored, runtime.effectiveConfigForEvent(current), false)
-	if len(messages) != 2 || messages[0].Role != llm.RoleAssistant || messages[1].Role != llm.RoleUser {
+	if len(messages) != 3 || !llm.IsHistoryReplyMessage(messages[0]) || !llm.IsHistoryReplyMessage(messages[1]) || messages[2].Role != llm.RoleUser {
 		t.Fatalf("rendered = %#v", messages)
 	}
-	note := messages[1].Content
+	note := messages[2].Content
 	for _, want := range []string{"web_search「MoE 大模型 主流架构 区别」", "web_search「gemini-image-2.1,nano banana 2.1」", "browser_render「https://ai.google.dev/」（调用失败）", "不要因为对方质疑就改口"} {
 		if !strings.Contains(note, want) {
 			t.Fatalf("note missing %q:\n%s", want, note)
