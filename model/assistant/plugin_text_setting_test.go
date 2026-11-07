@@ -42,6 +42,7 @@ func TestEveryDeclaredPluginSettingTypeIsSupported(t *testing.T) {
 		PluginSettingTypePlatformLevelRules: []any{},
 		PluginSettingTypeCodingAgents:       []any{},
 		PluginSettingTypeLLMProfile:         "",
+		PluginSettingTypeBotProfile:         "",
 	}
 	for _, state := range NewDefaultPluginManager().List() {
 		manifest := state.Manifest

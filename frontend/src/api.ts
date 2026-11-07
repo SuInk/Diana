@@ -597,7 +597,7 @@ export interface PluginSettingSpec {
   key: string;
   label: string;
   description?: string;
-  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents" | "llm_profile";
+  type: "bool" | "number" | "string" | "select" | "multi_select" | "text" | "size" | "platform_level_rules" | "coding_agents" | "llm_profile" | "bot_profile";
   /** 只在另一个设置取这些值时显示。 */
   show_when?: { key: string; values: string[] };
   default: unknown;
@@ -616,6 +616,18 @@ export interface PluginSettingSpec {
   scopes?: Array<"bot" | "group" | "user">;
   /** 可修改此设置的角色：owner、group_admin、member。 */
   configure_by?: Array<"owner" | "group_admin" | "member">;
+  /** bot_profile 类型只列这些平台的机器人；候选项由列表接口现填进 options。 */
+  profile_platforms?: string[];
+}
+
+/** 插件此刻跑得怎么样；只有会报状态的插件、并且开着时才有。 */
+export interface PluginRuntimeStatus {
+  summary: string;
+  /** 要处理的问题，每条带怎么修；空表示一切正常。 */
+  problems?: string[];
+  recent?: string;
+  /** recent 的 Unix 秒。 */
+  recent_at?: number;
 }
 
 export interface PluginManifest {
@@ -647,6 +659,7 @@ export interface PluginState {
   secrets_configured?: Record<string, boolean>;
   /** 第三方仓库插件的安装来源；有它才显示更新入口。 */
   repo_source?: RepoPluginSource;
+  runtime_status?: PluginRuntimeStatus;
 }
 
 export interface RepositoryIssueCreateInput {

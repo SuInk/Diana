@@ -204,7 +204,18 @@ func InstallResolverDependency(ctx context.Context, name string) (ResolverDepend
 }
 
 func resolverDependencyGroup(deps []ResolverDependency) map[string][]ResolverDependency {
-	return map[string][]ResolverDependency{ResolverPluginID: deps}
+	return map[string][]ResolverDependency{ResolverPluginID: deps, QQVoiceCallPluginID: QQVoiceCallDependencies(deps)}
+}
+
+// QQVoiceCallDependencies 是 QQ 语音通话要的外部命令：ffmpeg 把合成的语音转成 QQ
+// 那头播的裸 PCM。和链接解析共用同一份探测和一键安装。
+func QQVoiceCallDependencies(resolver []ResolverDependency) []ResolverDependency {
+	dep, ok := resolverDependencyByName(resolver, "ffmpeg")
+	if !ok {
+		return nil
+	}
+	dep.Purpose = "把机器人说的话转成 QQ 通话能播的声音"
+	return []ResolverDependency{dep}
 }
 
 // runDependencyInstallPlan 按顺序执行安装计划。失败时把包管理器自己的输出带出来——

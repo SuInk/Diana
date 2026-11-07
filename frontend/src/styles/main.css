@@ -4504,6 +4504,19 @@ a.nav-action {
   transform: rotate(180deg);
 }
 
+/* 插件自己报的运行状态：问题逐条列出，每条带怎么修 */
+.plugin-runtime-status {
+  margin-top: 12px;
+}
+
+.plugin-runtime-problems {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .plugin-settings-section-head h3,
 .repository-watch-manager-head h3 {
   margin: 0;
