@@ -143,9 +143,13 @@ class DianaClient {
   Future<CallInfo> callInfo(String profile) async =>
       CallInfo.fromJson(await _json('GET', '/api/assistant/call', query: {'profile': profile}));
 
-  Future<WebSocket> openCall(String profile) async {
+  /// [resume] 是断线重连时原来那通电话的 ID，服务端在保留期里就接着用原来那通。
+  Future<WebSocket> openCall(String profile, {String? resume}) async {
     final scheme = server.scheme == 'https' ? 'wss' : 'ws';
-    final url = server.replace(scheme: scheme, path: '/api/assistant/call/ws', queryParameters: {'profile': profile});
+    final url = server.replace(scheme: scheme, path: '/api/assistant/call/ws', queryParameters: {
+      'profile': profile,
+      if (resume != null && resume.isNotEmpty) 'resume': resume,
+    });
     try {
       final socket = await WebSocket.connect(url.toString(), headers: authHeaders, customClient: _http);
       socket.pingInterval = const Duration(seconds: 20);

@@ -200,3 +200,91 @@ func TestQQVoiceCallTransportFlushesOnInterrupt(t *testing.T) {
 		t.Fatal("interrupted sentence audio was kept")
 	}
 }
+
+// fakeActiveQQCall 装一通「正在打」的电话：会话是真的，后端什么都不做。
+func fakeActiveQQCall(t *testing.T, calls *qqCallSet, id string) *qqActiveCall {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	session := voicecall.NewSession(ctx, nopVoiceBackend{}, &qqCallTransport{ctx: ctx, set: calls, call: id}, voicecall.Options{CallID: id})
+	active := &qqActiveCall{id: id, session: session, cancel: cancel}
+	calls.mu.Lock()
+	calls.active = active
+	calls.mu.Unlock()
+	return active
+}
+
+type nopVoiceBackend struct{}
+
+func (nopVoiceBackend) Transcribe(context.Context, []byte, string) (string, error) { return "", nil }
+func (nopVoiceBackend) Reply(context.Context, string, func(string)) error          { return nil }
+func (nopVoiceBackend) Synthesize(context.Context, string, func(string, []byte) error) error {
+	return nil
+}
+
+// Diana 和 agent 断一下再连回来：agent 报同一通电话还接着，通话接着说，不挂。
+func TestQQVoiceCallSurvivesAgentReconnect(t *testing.T) {
+	oldLink, _ := fakeQQCallAgent(t)
+	calls := newQQCallSet(NewQQVoiceCallPlugin(), nil)
+	calls.setLink(oldLink)
+	active := fakeActiveQQCall(t, calls, "c1")
+	calls.linkLost(oldLink)
+	if calls.currentLink() != nil {
+		t.Fatal("断线后不该还拿着旧连接")
+	}
+	newLink, got := fakeQQCallAgent(t)
+	calls.setLink(newLink)
+	calls.handle(context.Background(), qqcall.Message{Type: qqcall.TypeHello, State: qqcall.StateConnected, Call: "c1", PeerUIN: "10001"})
+	if calls.active != active {
+		t.Fatal("重连后同一通电话应接着打")
+	}
+	expectNoQQCallMessage(t, got)
+	if calls.currentLink() != newLink {
+		t.Fatal("通话应改往新连接上写")
+	}
+}
+
+// 断线期间那通电话挂了：agent 连回来报空闲，这边的会话收掉。
+func TestQQVoiceCallEndsCallThatHungUpWhileDisconnected(t *testing.T) {
+	calls := newQQCallSet(NewQQVoiceCallPlugin(), nil)
+	fakeActiveQQCall(t, calls, "c1")
+	link, _ := fakeQQCallAgent(t)
+	calls.setLink(link)
+	calls.handle(context.Background(), qqcall.Message{Type: qqcall.TypeHello, State: qqcall.StateIdle})
+	if calls.active != nil {
+		t.Fatal("agent 报空闲时这边的通话应结束")
+	}
+}
+
+// 断线超过保留时间还没连回来，通话结束；期间连回来过就不结束。
+func TestQQVoiceCallResumeGraceExpires(t *testing.T) {
+	link, _ := fakeQQCallAgent(t)
+	calls := newQQCallSet(NewQQVoiceCallPlugin(), nil)
+	calls.resumeGrace = 50 * time.Millisecond
+	calls.setLink(link)
+	fakeActiveQQCall(t, calls, "c1")
+	calls.linkLost(link)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		calls.mu.Lock()
+		gone := calls.active == nil
+		calls.mu.Unlock()
+		if gone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("断线超时后通话应结束")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	calls.setLink(link)
+	active := fakeActiveQQCall(t, calls, "c2")
+	calls.linkLost(link)
+	calls.setLink(link)
+	time.Sleep(150 * time.Millisecond)
+	calls.mu.Lock()
+	defer calls.mu.Unlock()
+	if calls.active != active {
+		t.Fatal("期间连回来过，通话不该被结束")
+	}
+}

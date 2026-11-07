@@ -5,6 +5,7 @@ import {applyCallMessage,callSocketURL,downsample,floatToPCM16,SentenceAudioColl
 test('call socket URL follows page protocol and encodes the bot', () => {
   assert.equal(callSocketURL('bot a',{protocol:'https:',host:'diana.example'}),'wss://diana.example/api/assistant/call/ws?profile=bot%20a');
   assert.equal(callSocketURL('',{protocol:'http:',host:'127.0.0.1:8080'}),'ws://127.0.0.1:8080/api/assistant/call/ws');
+  assert.equal(callSocketURL('bot',{protocol:'https:',host:'diana.example'},'call-1'),'wss://diana.example/api/assistant/call/ws?profile=bot&resume=call-1');
 });
 
 test('downsample averages 48k into 16k and converts to little-endian PCM16', () => {

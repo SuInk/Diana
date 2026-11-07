@@ -106,7 +106,7 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 // Finish 在挂断时调用一次：往主人私聊里记一条通话记录（打了多久），见 call_history.go。
 // 重复调用只记一次。
 func (c *VoiceCall) Finish() {
-	if c == nil {
+	if c == nil || c.runtime == nil {
 		return
 	}
 	c.ended.Do(func() { c.runtime.rememberVoiceCall(c.base, c.started, time.Now()) })

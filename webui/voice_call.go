@@ -80,12 +80,19 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 	}
 	profile := strings.TrimSpace(c.Query("profile"))
 	callID := newVoiceCallID()
-	// 先建好机器人那一侧再升级：插槽没配、没有主人账号时直接回 HTTP 错误，
-	// 客户端不用连上再断开才知道原因。
-	call, err := runtime.NewVoiceCall(c.Request.Context(), profile, callID)
-	if err != nil {
-		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
-		return
+	// 断线重连带着原来的通话 ID：还在保留期里就接着用原来那通，通话记录只记一条。
+	call := parkedVoiceCalls.take(strings.TrimSpace(c.Query("resume")), profile)
+	if call != nil {
+		callID = strings.TrimSpace(c.Query("resume"))
+	} else {
+		// 先建好机器人那一侧再升级：插槽没配、没有主人账号时直接回 HTTP 错误，
+		// 客户端不用连上再断开才知道原因。
+		var err error
+		call, err = runtime.NewVoiceCall(c.Request.Context(), profile, callID)
+		if err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+			return
+		}
 	}
 	info := runtime.VoiceCallInfo(c.Request.Context(), profile)
 	conn, err := voiceCallUpgrader.Upgrade(c.Writer, c.Request, nil)
@@ -99,10 +106,18 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &voiceCallConn{conn: conn}
-	// 挂断后在私聊里记一条通话记录。排在 session.Close 前面 defer，最后一轮的话先落进
-	// 历史，记录排在它们后面。
-	defer call.Finish()
-	session := voicecall.NewSession(ctx, call, out, voicecall.Options{CallID: callID, BotID: info.BotID, BotName: info.BotName})
+	// 挂断后在私聊里记一条通话记录；连接意外断了就先留着等重连（parkedVoiceCalls）。
+	// 排在 session.Close 前面 defer，最后一轮的话先落进历史，记录排在它们后面。
+	hungUp := false
+	var session *voicecall.Session
+	defer func() {
+		if hungUp || session.BotHungUp() {
+			call.Finish()
+			return
+		}
+		parkedVoiceCalls.park(callID, profile, call)
+	}()
+	session = voicecall.NewSession(ctx, call, out, voicecall.Options{CallID: callID, BotID: info.BotID, BotName: info.BotName})
 	defer session.Close()
 	recordOperation(ctx, h.logs, "voice_call", "开始语音通话", info.BotID, map[string]any{"call_id": callID})
 	started := time.Now()
@@ -143,6 +158,7 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 				continue
 			}
 			if err := session.HandleControl(msg); errors.Is(err, voicecall.ErrHangup) {
+				hungUp = true
 				_ = out.close(websocket.CloseNormalClosure, "hangup")
 				return
 			}
@@ -198,4 +214,64 @@ func newVoiceCallID() string {
 	var buf [8]byte
 	_, _ = rand.Read(buf[:])
 	return hex.EncodeToString(buf[:])
+}
+
+// voiceCallResumeGrace 是连接意外断开后一通电话保留多久：手机切网、浏览器短暂掉线
+// 一般几秒就连回来。
+const voiceCallResumeGrace = 60 * time.Second
+
+// parkedVoiceCalls 存着连接意外断开、还在等客户端重连的通话。到点没连回来就当挂断，
+// 记通话记录。
+var parkedVoiceCalls = &voiceCallParking{calls: map[string]*parkedVoiceCall{}, grace: voiceCallResumeGrace}
+
+type voiceCallParking struct {
+	mu    sync.Mutex
+	calls map[string]*parkedVoiceCall
+	grace time.Duration
+}
+
+type parkedVoiceCall struct {
+	profile string
+	call    *assistant.VoiceCall
+	timer   *time.Timer
+}
+
+func (p *voiceCallParking) park(callID, profile string, call *assistant.VoiceCall) {
+	if callID == "" || call == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if old, ok := p.calls[callID]; ok {
+		old.timer.Stop()
+	}
+	parked := &parkedVoiceCall{profile: profile, call: call}
+	parked.timer = time.AfterFunc(p.grace, func() {
+		p.mu.Lock()
+		current, ok := p.calls[callID]
+		if ok && current == parked {
+			delete(p.calls, callID)
+		}
+		p.mu.Unlock()
+		if ok && current == parked {
+			call.Finish()
+		}
+	})
+	p.calls[callID] = parked
+}
+
+// take 取回保留着的通话；机器人对不上（重连时换了 profile）不算同一通。
+func (p *voiceCallParking) take(callID, profile string) *assistant.VoiceCall {
+	if callID == "" {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	parked, ok := p.calls[callID]
+	if !ok || parked.profile != profile {
+		return nil
+	}
+	parked.timer.Stop()
+	delete(p.calls, callID)
+	return parked.call
 }

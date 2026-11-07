@@ -212,9 +212,11 @@ func (p *QQVoiceCallPlugin) apply() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
+	calls := newQQCallSet(p, nil)
 	go func() {
 		defer recoverGoroutinePanic("qq_voice_call.loop")
-		p.loop(ctx, url, token)
+		defer calls.closeAll()
+		p.loop(ctx, url, token, calls)
 	}()
 }
 
@@ -317,11 +319,11 @@ func notifyQQVoiceCallOwner(ctx context.Context, runtime *Runtime, profileID, te
 }
 
 // loop 保持到 agent 的连接，断了退避重连。
-func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string) {
+func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string, calls *qqCallSet) {
 	wait := qqVoiceCallRetryMin
 	for ctx.Err() == nil {
 		started := time.Now()
-		err := p.run(ctx, url, token)
+		err := p.run(ctx, url, token, calls)
 		p.setStatus(func(s *QQVoiceCallStatus) {
 			s.Connected = false
 			if err != nil {
@@ -353,7 +355,7 @@ func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string) {
 	}
 }
 
-func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
+func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string, calls *qqCallSet) error {
 	dialer := websocket.Dialer{HandshakeTimeout: qqVoiceCallDialTimeout}
 	header := http.Header{}
 	if token != "" {
@@ -379,8 +381,10 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
 		link.keepAlive(ctx)
 	}()
 
-	calls := newQQCallSet(p, link)
-	defer calls.closeAll()
+	// 通话不跟着这条连接走：Diana 和 agent 之间断一下（Diana 升级重启、网络抖动），
+	// QQ 那头的电话还通着，连回来接着说，见 linkLost 和 hello 的处理。
+	calls.setLink(link)
+	defer calls.linkLost(link)
 	for {
 		kind, data, err := conn.ReadMessage()
 		if err != nil {
@@ -403,6 +407,8 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
 }
 
 var errQQCallAgentAuth = errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
+
+var errQQCallAgentGone = errors.New("和 qqcall-agent 的连接断了")
 
 // qqCallLink 串行写到 agent 的连接。
 type qqCallLink struct {
@@ -447,9 +453,14 @@ func (l *qqCallLink) keepAlive(ctx context.Context) {
 // 挂断是异步的，按 call ID 记着更稳。
 type qqCallSet struct {
 	plugin *QQVoiceCallPlugin
-	link   *qqCallLink
 
 	mu sync.Mutex
+	// link 是当前到 agent 的连接，断开期间为 nil。
+	link *qqCallLink
+	// linkGen 每换一次连接加一，断线计时到点时据此判断期间连回来过没有。
+	linkGen int
+	// resumeGrace 是断线后通话保留多久，测试里调短。
+	resumeGrace time.Duration
 	// answered 是我们决定接的电话：ID → 接电话的机器人和主人。只有它们接通后才开会话，
 	// 别人在 noVNC 里手动接的电话不归机器人管。
 	answered map[string]qqCallTarget
@@ -468,18 +479,108 @@ type qqActiveCall struct {
 	call    *VoiceCall
 }
 
+// qqCallResumeGrace 是和 agent 断线后通话保留多久：Diana 升级重启一般十几秒就连回来。
+const qqCallResumeGrace = 60 * time.Second
+
 func newQQCallSet(plugin *QQVoiceCallPlugin, link *qqCallLink) *qqCallSet {
-	return &qqCallSet{plugin: plugin, link: link, answered: map[string]qqCallTarget{}}
+	return &qqCallSet{plugin: plugin, link: link, resumeGrace: qqCallResumeGrace, answered: map[string]qqCallTarget{}}
+}
+
+func (s *qqCallSet) currentLink() *qqCallLink {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.link
+}
+
+func (s *qqCallSet) send(msg qqcall.Message) error {
+	link := s.currentLink()
+	if link == nil {
+		return errQQCallAgentGone
+	}
+	return link.send(msg)
+}
+
+func (s *qqCallSet) setLink(link *qqCallLink) {
+	s.mu.Lock()
+	s.link = link
+	s.linkGen++
+	s.mu.Unlock()
+}
+
+// linkLost 是到 agent 的连接断了。正在打的电话先留着，resumeGrace 内连回来就接着说；
+// 到点还没连回来才挂掉这边的会话。
+func (s *qqCallSet) linkLost(link *qqCallLink) {
+	s.mu.Lock()
+	if s.link != link {
+		s.mu.Unlock()
+		return
+	}
+	s.link = nil
+	s.linkGen++
+	gen := s.linkGen
+	active := s.active != nil
+	grace := s.resumeGrace
+	s.mu.Unlock()
+	if !active {
+		return
+	}
+	s.plugin.noteCall("和 qqcall-agent 断线，通话先留着等重连")
+	time.AfterFunc(grace, func() {
+		defer recoverGoroutinePanic("qq_voice_call.resume_grace")
+		s.mu.Lock()
+		expired := s.linkGen == gen
+		s.mu.Unlock()
+		if expired {
+			s.plugin.noteCall("和 qqcall-agent 断线超过 %s 没连回来，通话结束", grace)
+			s.closeAll()
+		}
+	})
+}
+
+// resume 处理 agent 连上时报的「有一通已经接通的电话」。同一通就接着说；这边没有
+// 这通（Diana 重启过）而对方是主人，就重新开会话接着聊。
+func (s *qqCallSet) resume(ctx context.Context, msg qqcall.Message) {
+	s.mu.Lock()
+	active := s.active
+	s.mu.Unlock()
+	if active != nil && active.id == msg.Call {
+		s.plugin.noteCall("qqcall-agent 连回来了，通话继续")
+		return
+	}
+	if active != nil {
+		s.ended(active.id)
+	}
+	runtime, change := s.plugin.settings()
+	if runtime == nil {
+		return
+	}
+	ready := qqVoiceCallReadiness(ctx, runtime, change)
+	if ready.problem != "" || msg.PeerUIN == "" || msg.PeerUIN != ready.ownerID {
+		// 不是主人的、认不出来的，都不是这边接的电话，不碰。
+		return
+	}
+	s.mu.Lock()
+	s.answered[msg.Call] = qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID}
+	s.mu.Unlock()
+	s.plugin.noteCall("接上了重连前主人那通电话")
+	s.connected(ctx, msg)
 }
 
 func (s *qqCallSet) handle(ctx context.Context, msg qqcall.Message) {
 	switch msg.Type {
 	case qqcall.TypeHello:
-		if msg.State == qqcall.StateRinging && msg.Call != "" {
+		switch {
+		case msg.State == qqcall.StateConnected && msg.Call != "":
+			s.resume(ctx, msg)
+		case msg.State == qqcall.StateRinging && msg.Call != "":
+			s.endActiveExcept("")
 			go func() {
 				defer recoverGoroutinePanic("qq_voice_call.screen")
 				s.screen(ctx, msg)
 			}()
+		default:
+			// 断线期间那通电话已经挂了。
+			s.endActiveExcept("")
 		}
 	case qqcall.TypeRinging:
 		go func() {
@@ -523,7 +624,7 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 	s.mu.Lock()
 	s.answered[msg.Call] = qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID}
 	s.mu.Unlock()
-	if err := s.link.send(qqcall.Message{Type: qqcall.TypeAnswer, Call: msg.Call}); err != nil {
+	if err := s.send(qqcall.Message{Type: qqcall.TypeAnswer, Call: msg.Call}); err != nil {
 		s.plugin.noteCall("接听来电「%s」失败: %v", msg.Name, err)
 	}
 }
@@ -566,7 +667,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		return
 	}
 	if msg.PeerUIN != target.ownerID {
-		_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		if msg.PeerUIN != "" {
 			// 别人打来的：这是正常的拦截，不打扰主人。
 			s.plugin.noteCall("来电「%s」是 %s，不是主人，已挂断", msg.Name, msg.PeerUIN)
@@ -585,12 +686,12 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	call, err := runtime.NewVoiceCall(ctx, target.profileID, voiceCallMessagePrefix+"qq-"+msg.Call)
 	if err != nil {
 		s.plugin.noteCall("主人的电话接通了，但开不了通话: %v", err)
-		_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		s.plugin.tellOwner(runtime, target.profileID, "open:"+err.Error(), "你的电话接通了，但通话开不起来："+err.Error()+"，只好先挂了。")
 		return
 	}
 	callCtx, cancel := context.WithCancel(ctx)
-	out := &qqCallTransport{ctx: callCtx, link: s.link, call: msg.Call, hangupDelay: qqCallHangupGrace}
+	out := &qqCallTransport{ctx: callCtx, set: s, call: msg.Call, hangupDelay: qqCallHangupGrace}
 	session := voicecall.NewSession(callCtx, call, out, voicecall.Options{CallID: msg.Call, BotID: target.profileID})
 	bargeIn := change.Settings.Bool(qqVoiceCallSettingBargeIn, true)
 	if err := session.HandleControl(voicecall.ClientMessage{
@@ -603,7 +704,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		cancel()
 		session.Close()
 		s.plugin.noteCall("通话开始失败: %v", err)
-		_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		return
 	}
 	s.mu.Lock()
@@ -621,7 +722,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		case <-callCtx.Done():
 		case <-time.After(maxDuration):
 			s.plugin.noteCall("通话到了 %s 上限，自动挂断", maxDuration)
-			_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+			_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		}
 	}()
 }
@@ -639,6 +740,16 @@ func (s *qqCallSet) ended(id string) {
 	if active != nil {
 		active.close()
 		s.plugin.noteCall("主人的电话挂断了")
+	}
+}
+
+// endActiveExcept 结束不是 keep 的那通正在打的电话。
+func (s *qqCallSet) endActiveExcept(keep string) {
+	s.mu.Lock()
+	active := s.active
+	s.mu.Unlock()
+	if active != nil && active.id != keep {
+		s.ended(active.id)
 	}
 }
 
@@ -671,7 +782,10 @@ func (c *qqActiveCall) close() {
 // qqCallTransport 把通话引擎的下行交给 agent：一句合成好的音频收齐后转成 16kHz
 // 裸 PCM 发过去；打断时让 agent 丢掉还没播的。字幕类消息 QQ 那头用不上，丢掉。
 type qqCallTransport struct {
-	ctx  context.Context
+	ctx context.Context
+	// set 给出当前到 agent 的连接：断线重连后换了连接，通话照样往新连接上写。
+	// 只有测试直接给 link。
+	set  *qqCallSet
 	link *qqCallLink
 	// call 是 agent 那边的通话 ID：机器人自己挂断时要带着它让 agent 点挂断。
 	call string
@@ -708,19 +822,32 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 			t.playUntil = now
 		}
 		t.playUntil = t.playUntil.Add(time.Duration(len(pcm)/2) * time.Second / time.Duration(qqcall.SampleRate))
-		return t.link.write(websocket.BinaryMessage, pcm)
+		link := t.currentLink()
+		if link == nil {
+			// 断线期间这一句就丢了，连回来接着说下一句。
+			return nil
+		}
+		return link.write(websocket.BinaryMessage, pcm)
 	case voicecall.ServerInterrupted:
 		t.buf.Reset()
 		t.playUntil = time.Now()
-		return t.link.send(qqcall.Message{Type: qqcall.TypeFlush})
+		if link := t.currentLink(); link != nil {
+			return link.send(qqcall.Message{Type: qqcall.TypeFlush})
+		}
+		return nil
 	case voicecall.ServerHangup:
 		// 告别那句已经交给 agent 了，等它播完再挂。
 		wait := min(time.Until(t.playUntil)+t.hangupDelay, qqCallHangupWaitCap)
-		link, call := t.link, t.call
+		call := t.call
 		go func() {
 			defer recoverGoroutinePanic("qq_voice_call.hangup")
 			if wait > 0 {
 				time.Sleep(wait)
+			}
+			link := t.currentLink()
+			if link == nil {
+				log.Printf("diana: qq voice call: 挂断时和 qqcall-agent 断着线")
+				return
 			}
 			if err := link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: call}); err != nil {
 				log.Printf("diana: qq voice call: 挂断失败: %v", err)
@@ -733,6 +860,13 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 		}
 	}
 	return nil
+}
+
+func (t *qqCallTransport) currentLink() *qqCallLink {
+	if t.set != nil {
+		return t.set.currentLink()
+	}
+	return t.link
 }
 
 func (t *qqCallTransport) WriteBinary(data []byte) error {

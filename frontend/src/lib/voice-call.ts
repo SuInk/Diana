@@ -54,10 +54,13 @@ export function openCallAudio(): CallAudio {
 }
 
 /** 通话 WebSocket 地址。鉴权靠同源的登录 Cookie。 */
-export function callSocketURL(profileID: string, location: Pick<Location, "protocol" | "host"> = window.location): string {
+export function callSocketURL(profileID: string, location: Pick<Location, "protocol" | "host"> = window.location, resume = ""): string {
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
-  const query = profileID ? `?profile=${encodeURIComponent(profileID)}` : "";
-  return `${protocol}//${location.host}/api/assistant/call/ws${query}`;
+  const params: string[] = [];
+  if (profileID) params.push(`profile=${encodeURIComponent(profileID)}`);
+  // 断线重连带上原来的通话 ID，服务端在保留期里就接着用原来那通。
+  if (resume) params.push(`resume=${encodeURIComponent(resume)}`);
+  return `${protocol}//${location.host}/api/assistant/call/ws${params.length ? `?${params.join("&")}` : ""}`;
 }
 
 /**
