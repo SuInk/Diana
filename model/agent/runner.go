@@ -457,11 +457,16 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 只调 send 却填了 continue：这句是动手前的「我去查一下」，模型以为说完还能接着
 		// 做。按收尾处理的话这一轮就停在这句上，承诺的事从没发生（10-27/28 线上「我查
 		// 一下今天的新闻」「我查一下数字人民币最近的官方消息」都是这样收的工）。照中途
-		// 发言发出去，再给模型一步；连续两次只说不做就不再续，按收尾处理。
+		// 发言发出去，再给模型一步；连续两次只说不做就不再续，按收尾处理。这句常常就是一
+		// 整条回复，走 InterimReply 先过审核（见 Config.InterimReply）。
 		if onlySendCalls(resp.ToolCalls) && sendContinues(resp.ToolCalls) && r.cfg.Interim != nil && continueOnlySends < maxContinueOnlySends {
 			continueOnlySends++
+			deliver := r.cfg.InterimReply
+			if deliver == nil {
+				deliver = r.cfg.Interim
+			}
 			var sent map[int]string
-			sent, steps = r.sendInterim(ctx, resp.ToolCalls, sendCallIndices(resp.ToolCalls), steps)
+			sent, steps = r.sendInterimVia(ctx, deliver, resp.ToolCalls, sendCallIndices(resp.ToolCalls), steps)
 			nativeProtocol = true
 			messages = appendToolRepair(messages, resp, sent, lastText, "")
 			continue
@@ -618,6 +623,19 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
 			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			continue
+		}
+		// 说话只走 send：带着工具定义的这一步写了纯文本，就不当回复发出。先退回一次，
+		// 让模型知道这段没发出去；上面那条修复已经退过一次的也算。再写纯文本就按静默
+		// 结束，不发任何东西——「在画了，画好自动发出来」这种一个工具都没调的空口承诺，
+		// 宁可不说也不能发出去。
+		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(lastRequest.Tools) > 0 {
+			if !plainTextRepaired {
+				plainTextRepaired = true
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "普通文本没有发出")
+				messages = appendToolRepair(messages, resp, interimDone, lastText, plainTextNotSentPrompt)
+				continue
+			}
+			return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
 			feedback, reviewErr := reviewFinish(action.Content, "candidate", true)
@@ -2062,7 +2080,12 @@ func (r *Runner) remainingToolCalls(used int) int {
 // sendInterim 把 indices 指向的 send 当作中途发言立刻发出，按调用下标返回每个调用的结果。
 // 没配 Interim 时不发，结果留空，由调用处按「没有执行」回给模型。
 func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices []int, steps []Step) (map[int]string, []Step) {
-	if r.cfg.Interim == nil {
+	return r.sendInterimVia(ctx, r.cfg.Interim, calls, indices, steps)
+}
+
+// sendInterimVia 和 sendInterim 一样，只是用 deliver 发。
+func (r *Runner) sendInterimVia(ctx context.Context, deliver func(context.Context, string) (string, error), calls []llm.ToolCall, indices []int, steps []Step) (map[int]string, []Step) {
+	if deliver == nil {
 		return nil, steps
 	}
 	done := map[int]string{}
@@ -2074,7 +2097,7 @@ func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices 
 		}
 		text := sendText(call)
 		record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: cloneToolInput(call.Arguments)}
-		output, err := r.cfg.Interim(ctx, text)
+		output, err := deliver(ctx, text)
 		if err != nil {
 			record.Error = err.Error()
 			output = "没有发出：" + err.Error()

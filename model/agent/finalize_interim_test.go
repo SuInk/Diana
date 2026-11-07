@@ -288,3 +288,54 @@ func TestExplicitSilentSendFinishesImmediately(t *testing.T) {
 		t.Fatalf("silent = %v, reason = %q, requests = %d", resp.Silent, resp.SilentReason, len(client.requests))
 	}
 }
+
+// 只调 send 填了 continue 的那句走 InterimReply（调用方在那里先审核再发）；和工具同一步
+// 的 send 照旧走 Interim。
+func TestSendOnlyContinueUsesInterimReply(t *testing.T) {
+	var events []string
+	client := &stepsClient{steps: [][]llm.ToolCall{
+		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "这话有点敏感，我就不展开聊了", "continue": true}}},
+		{
+			{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
+			{ID: "search-1", Name: webSearchToolName, Arguments: map[string]any{"query": "天气"}},
+		},
+	}}
+	cfg := Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events), InterimReply: func(_ context.Context, text string) (string, error) {
+		events = append(events, "reply:"+text)
+		return "已经发出去了", nil
+	}}
+	runner, err := NewRunner(client, cfg, NewToolRegistry(&orderTool{name: webSearchToolName, events: &events}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "嗯"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(events, "|"); got != "reply:这话有点敏感，我就不展开聊了|send:我去查一下|run:"+webSearchToolName {
+		t.Fatalf("events = %q", got)
+	}
+}
+
+// 审核没放行时 InterimReply 返回错误：模型收到「没有发出」，本轮照常继续。
+func TestSendOnlyContinueRejectedIsReportedToModel(t *testing.T) {
+	client := &stepsClient{steps: [][]llm.ToolCall{
+		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "不该发的话", "continue": true}}},
+	}}
+	cfg := Config{WorkDir: t.TempDir(), MaxSteps: 4,
+		Interim: func(context.Context, string) (string, error) { return "", errors.New("unexpected") },
+		InterimReply: func(context.Context, string) (string, error) {
+			return "", errors.New("审核没通过，没有发出")
+		}}
+	runner, err := NewRunner(client, cfg, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "嗯"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := client.toolResults(1)
+	if resp.Text != "好了" || len(results) != 1 || !strings.Contains(results[0].Content, "没有发出：审核没通过") {
+		t.Fatalf("text = %q, results = %#v", resp.Text, results)
+	}
+}

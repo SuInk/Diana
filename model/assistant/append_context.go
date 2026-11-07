@@ -397,11 +397,25 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		head++
 	}
 	var appended []llm.Message
+	// keepReply 记着上一条历史发言调用追加了没有：它的「已发送」结果跟着走，两半要么
+	// 都追加、要么都不追加，否则留下不成对的调用，供应商整轮拒绝。
+	keepReply := false
 	for index, message := range messages[head:] {
 		index += head
 		message.CacheBreakpoint = false
 		if index == len(messages)-1 {
 			appended = append(appended, message)
+			continue
+		}
+		if index <= historyEnd && llm.IsHistoryReplyMessage(message) {
+			if message.Role == llm.RoleAssistant {
+				// 机器人自己的发言：记录里已经有了（上一轮真实的 send，或重新组装时拼的
+				// 发言调用，或老记录里的普通发言）就不再追加。
+				keepReply = !log.sent[appendContextSentKey(llm.HistoryReplyText(message))]
+			}
+			if keepReply {
+				appended = append(appended, message)
+			}
 			continue
 		}
 		if index > historyEnd {
@@ -421,7 +435,8 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		switch {
 		case isHistoryLine(content):
 		case message.Role == llm.RoleAssistant && log.sent[appendContextSentKey(content)]:
-			// 机器人自己的回复已经在记录里了（普通发言，或老记录里的 send 调用）。
+			// 机器人自己的回复已经在记录里了。历史发言现在是 send 调用，在上面处理；
+			// 这里接的是不带调用的老形态。
 			continue
 		case message.Role == llm.RoleAssistant:
 		default:

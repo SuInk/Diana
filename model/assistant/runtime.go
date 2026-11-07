@@ -4130,6 +4130,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
 	cleanText = truncateInputText(cleanText, event.MessageID, cfg.MaxInputChars)
+	setInterimReplyAudit(ctx, cleanText, proactiveTriggered)
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
 		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
@@ -5076,6 +5077,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		agentCfg.Interim = func(ctx context.Context, text string) (string, error) {
 			return interim.Run(ctx, map[string]any{"text": text})
 		}
+		agentCfg.InterimReply = func(ctx context.Context, text string) (string, error) {
+			return interim.RunReply(ctx, map[string]any{"text": text})
+		}
+		// 说话只走 send：纯文本退回一次，再写纯文本就不发（见 agent.Config.PlainTextNotSent）。
+		agentCfg.PlainTextNotSent = true
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {

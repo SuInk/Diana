@@ -42,6 +42,11 @@ func (r *Runtime) maiBotReplyerMessages(cfg BotConfig, event MessageEvent, sourc
 		if message.Role != llm.RoleUser && message.Role != llm.RoleAssistant {
 			continue
 		}
+		// 机器人自己的历史发言是 send 调用（见 llm.HistoryReplyCallIDPrefix），改写模型不带
+		// 工具，取出正文当普通发言给它看。
+		if message.Role == llm.RoleAssistant && llm.IsHistoryReplyMessage(message) {
+			message.Content, message.ToolCalls = llm.HistoryReplyText(message), nil
+		}
 		if message.AtomicText || len(message.ToolCalls) != 0 || message.ToolCallID != "" || message.ToolName != "" {
 			continue
 		}

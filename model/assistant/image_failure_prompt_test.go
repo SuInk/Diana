@@ -35,7 +35,7 @@ func (p *blindVisionProvider) Generate(_ context.Context, req llm.GenerateReques
 	case strings.Contains(body.String(), "发送前审核器"):
 		return &llm.GenerateResponse{Model: "blind", Text: `{"send_confidence":0.99,"reason":"ok"}`}, nil
 	}
-	return &llm.GenerateResponse{Model: "blind", Text: "好的喵"}, nil
+	return asSendReply(req, &llm.GenerateResponse{Model: "blind", Text: "好的喵"}), nil
 }
 
 func (p *blindVisionProvider) currentMessages() []llm.Message {
