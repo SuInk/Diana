@@ -14,12 +14,15 @@ const (
 	PlatformQQOfficial = "qq-official"
 	PlatformWeixin     = "weixin"
 	PlatformIMessage   = "imessage"
+	// PlatformLocal 是内置机器人：不接任何聊天平台，只在控制台聊天页、电话和本地群里说话。
+	PlatformLocal = "local"
 
 	ProtocolOneBotV11    = "onebot-v11"
 	ProtocolTelegramBot  = "telegram-bot-api"
 	ProtocolQQOfficialWS = "qq-official-gateway-ws"
 	ProtocolWeixinILink  = "weixin-ilink-longpoll"
 	ProtocolBlueBubbles  = "bluebubbles"
+	ProtocolLocal        = "diana-local"
 
 	// PlatformCategory* 用于在 WebUI 里按聊天平台分组。
 	PlatformCategoryOneBotV11  = "onebot_v11"
@@ -27,6 +30,7 @@ const (
 	PlatformCategoryQQOfficial = "qq_official"
 	PlatformCategoryWeixin     = "weixin"
 	PlatformCategoryIMessage   = "imessage"
+	PlatformCategoryLocal      = "local"
 )
 
 // PlatformInbound 说明消息是怎么进来的。这决定了部署形态：只有 InboundCallback
@@ -74,6 +78,7 @@ var supportedPlatforms = []PlatformDefinition{
 	{ID: PlatformTelegram, Name: "Telegram", Protocol: ProtocolTelegramBot, Category: PlatformCategoryTelegram, CategoryLabel: "Telegram", Description: "官方 Bot API 长轮询，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformQQOfficial, Name: "QQ 官方机器人", Protocol: ProtocolQQOfficialWS, Category: PlatformCategoryQQOfficial, CategoryLabel: "QQ 官方机器人", Description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformWeixin, Name: "微信", Protocol: ProtocolWeixinILink, Category: PlatformCategoryWeixin, CategoryLabel: "微信", Description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", Inbound: InboundOutbound, Untested: true},
+	{ID: PlatformLocal, Name: "内置机器人", Protocol: ProtocolLocal, Category: PlatformCategoryLocal, CategoryLabel: "内置", Description: "只在 Diana 里：不接任何聊天平台，不用填连接，在控制台聊天页私聊、打电话，也能拉进本地群一起讨论", Inbound: InboundOutbound, RichText: true},
 	{ID: PlatformIMessage, Name: "iMessage", Protocol: ProtocolBlueBubbles, Category: PlatformCategoryIMessage, CategoryLabel: "iMessage", Description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", Inbound: InboundCallback, CallbackPath: IMessageCallbackPath, Untested: true},
 }
 
@@ -155,6 +160,8 @@ func NormalizePlatformID(value string) string {
 		return PlatformWeixin
 	case "imessage", "i-message", "bluebubbles", "apple-messages":
 		return PlatformIMessage
+	case "local", "builtin", "built-in", "内置", "内置机器人":
+		return PlatformLocal
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -216,6 +223,8 @@ func NewChannelForConfig(cfg BotConfig) Channel {
 			BotID:     cfg.WeixinBotID,
 			BaseURL:   cfg.WeixinBaseURL,
 		})
+	case PlatformLocal:
+		return newLocalChannel(cfg)
 	case PlatformIMessage:
 		return NewIMessageChannel(IMessageConfig{
 			ProfileID:    cfg.ID,

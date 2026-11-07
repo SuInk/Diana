@@ -407,6 +407,9 @@
                 />
               </template>
 
+              <div v-else-if="currentPlatform === 'local'" class="field wide">
+                <span class="hint">内置机器人只在 Diana 里，不用填连接：保存后就在线，可以在「聊天」页和它私聊、打电话。它不会出现在 QQ、Telegram 等平台上，主动提醒和订阅推送也发不出去。</span>
+              </div>
               <template v-else-if="currentPlatform === 'imessage'">
                 <div class="field">
                   <label for="bot-imessage-url">BlueBubbles 服务器地址</label>
@@ -464,6 +467,8 @@
                 </span>
               </div>
               <div class="form-grid">
+                <!-- 内置机器人没有平台账号：在控制台里和它说话的就是主人，主人、管理员和快速登录都用不上。 -->
+                <template v-if="currentPlatform !== 'local'">
                 <div class="field">
                   <label for="bot-owner">{{ isOneBotPlatform || form.platform === 'telegram' ? "主人账号" : "主人用户 ID" }}</label>
                   <input
@@ -491,6 +496,7 @@
                   </label>
                   <span class="hint">开启后登录页可显示一次性验证码，主人私聊发给机器人即可登录；需当前机器人在线。</span>
                 </div>
+                </template>
                 <div class="field wide">
                   <label class="switch">
                     <input v-model="form.enabled" type="checkbox" />
@@ -2808,10 +2814,8 @@ async function toggleTokenReveal(field: TokenField): Promise<void> {
 /** OneBot v11 与 Telegram 的接入字段完全不同。 */
 /** 账号字段在不同平台叫法不同，列表卡片的占位文案跟着平台走。 */
 function accountPlaceholder(profile: BotProfileConfig): string {
-  const def = platforms.value.find((item) => item.id === profile.platform);
-  if (def && !def.protocol.startsWith("onebot")) {
-    return "未填账号";
-  }
+  // 内置机器人没有平台账号，「未填账号」会让人以为没配好。
+  if (profile.platform === "local") return "只在 Diana 里";
   return "未填账号";
 }
 
@@ -3345,6 +3349,7 @@ function platformProtocol(id?: string): string {
     const mode = source?.onebot_transport || "reverse_ws";
     return ({ reverse_ws: "OneBot v11 反向 WebSocket", forward_ws: "OneBot v11 正向 WebSocket", http: "OneBot v11 HTTP" } as Record<string, string>)[mode] || "OneBot v11";
   }
+  if (platformDefinition(id)?.protocol === "diana-local") return "Diana 内置，不接平台";
   return platformDefinition(id)?.protocol ?? "未识别协议";
 }
 
@@ -5402,7 +5407,7 @@ async function beginCreate(platform: BotPlatform, connectionProfileID = ""): Pro
     setForm({
       ...defaults,
       id: undefined,
-      name: `新建 ${platform.name} 机器人`,
+      name: platform.name.endsWith("机器人") ? `新建${platform.name}` : `新建 ${platform.name} 机器人`,
       connection_profile_id: connectionProfileID,
       platform: platform.id
     });
