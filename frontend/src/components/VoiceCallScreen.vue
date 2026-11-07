@@ -150,6 +150,8 @@ let playbackSources: AudioBufferSourceNode[] = [];
 let playbackCursor = 0;
 let playbackChain: Promise<void> = Promise.resolve();
 let playbackEpoch = 0;
+// 机器人自己挂断：告别那句还排在播放队列里，等它放完再结束通话。
+let botHungUp = false;
 const collector = new SentenceAudioCollector();
 const audioContext = props.audio.context;
 
@@ -181,6 +183,7 @@ async function dial(): Promise<void> {
   };
   ws.onclose = (event) => {
     if (socket !== ws) return;
+    if (botHungUp) return endAfterPlayback();
     if (connecting.value) problem.value = event.reason || "没接通：确认已登录，并且语音识别和语音合成都配好了。";
     endCall();
   };
@@ -217,6 +220,9 @@ function handleMessage(msg: CallServerMessage): void {
     }
     case "interrupted":
       stopPlayback();
+      break;
+    case "hangup":
+      botHungUp = true;
       break;
     case "error":
       if (msg.fatal) fail(msg.text || msg.code || "通话出错");
@@ -328,6 +334,16 @@ function hangup(): void {
   send({ type: "hangup" });
   endCall();
   emit("close");
+}
+
+// endAfterPlayback 等播放队列里的告别放完再挂。
+function endAfterPlayback(): void {
+  void playbackChain.then(() => {
+    const remaining = Math.max(0, playbackCursor - audioContext.currentTime);
+    setTimeout(() => {
+      if (!ended.value) endCall();
+    }, remaining * 1000 + 200);
+  });
 }
 
 function endCall(): void {

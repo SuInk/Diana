@@ -505,3 +505,44 @@ func TestSessionCompressedFormatForcesClientSegmentation(t *testing.T) {
 		t.Fatalf("webm 只能客户端分句，got %q", ready.Ready.Segmentation)
 	}
 }
+
+// hangupBackend 在回复流程里决定挂断，像 hang_up 工具那样。
+type hangupBackend struct {
+	*fakeBackend
+	mu      sync.Mutex
+	pending bool
+}
+
+func (b *hangupBackend) Reply(ctx context.Context, text string, emit func(string)) error {
+	b.mu.Lock()
+	b.pending = true
+	b.mu.Unlock()
+	return b.fakeBackend.Reply(ctx, text, emit)
+}
+
+func (b *hangupBackend) TakeHangup() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	taken := b.pending
+	b.pending = false
+	return taken
+}
+
+// 机器人自己挂断：告别那句念完，下发 hangup，会话结束。
+func TestSessionBotHangupAfterFarewellIsSpoken(t *testing.T) {
+	backend := &hangupBackend{fakeBackend: &fakeBackend{replyText: "好，那先挂啦，拜拜。"}}
+	session, out := startSession(t, backend, ClientMessage{Format: FormatPCM16, SampleRate: testRate})
+	session.HandleControl(ClientMessage{Type: ClientText, Text: "我先挂了"})
+	out.waitFor(t, "hangup", isType(ServerHangup))
+	select {
+	case <-session.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("挂断后会话应结束")
+	}
+	frames := out.snapshot()
+	audioEnd := frameIndex(frames, func(msg ServerMessage) bool { return msg.Type == ServerAudioEnd && msg.Turn == 1 })
+	hangup := frameIndex(frames, isType(ServerHangup))
+	if audioEnd < 0 || hangup < audioEnd {
+		t.Fatalf("hangup 应在告别那句的音频之后：%s", describe(frames))
+	}
+}

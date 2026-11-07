@@ -181,11 +181,18 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 // agentCoreTools 按这台机器人配的档位算出本轮的常驻工具名单。没配过档位就是内置
 // 默认名单；读不到覆盖文件时同样退回默认，不因为配置读失败就把工具列表抖一遍。
 func (r *Runtime) agentCoreTools(event MessageEvent, registry *agent.ToolRegistry) []string {
+	core := replyAgentCoreTools
 	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
-	if err != nil || len(overrides) == 0 {
-		return replyAgentCoreTools
+	if err == nil && len(overrides) > 0 {
+		core = agent.ResolveCoreTools(replyAgentCoreTools, registry.ToolOwners(), overrides)
 	}
-	return agent.ResolveCoreTools(replyAgentCoreTools, registry.ToolOwners(), overrides)
+	// 通话里挂断要一步到位：放进按需目录就得先 tools_execute 再收尾，多一轮调用。
+	if event.voiceCall && registry != nil {
+		if _, ok := registry.Get(voiceCallHangupToolName); ok {
+			core = append(append([]string(nil), core...), voiceCallHangupToolName)
+		}
+	}
+	return core
 }
 
 // groupExtensionAccessForEvent 取本群对扩展档位的覆盖，私聊没有群配置。

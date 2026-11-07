@@ -56,6 +56,8 @@ class CallController extends ChangeNotifier {
   Timer? _clock;
   Directory? _audioDir;
   bool _disposed = false;
+  // 机器人自己挂断：告别那句还排在播放队列里，等它放完再结束通话。
+  bool _botHungUp = false;
 
   bool get canInterrupt => inCall && (callState == 'speaking' || callState == 'thinking');
 
@@ -87,6 +89,10 @@ class CallController extends ChangeNotifier {
       _socket = socket;
       socket.listen(_onFrame, onDone: () {
         if (_socket != socket) return;
+        if (_botHungUp) {
+          unawaited(_playback.then((_) => _end()));
+          return;
+        }
         if (connecting) problem = socket.closeReason?.isNotEmpty == true ? socket.closeReason : '没接通：确认已登录，并且语音识别和语音合成都配好了';
         _end();
       }, onError: (Object e) => _fail('通话断了：$e'));
@@ -135,6 +141,8 @@ class CallController extends ChangeNotifier {
         }
       case 'interrupted':
         _stopPlayback();
+      case 'hangup':
+        _botHungUp = true;
       case 'error':
         if (msg['fatal'] == true) _fail((msg['text'] ?? msg['code'] ?? '通话出错') as String);
     }
