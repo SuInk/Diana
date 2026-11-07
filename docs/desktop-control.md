@@ -11,17 +11,19 @@
 | 工具 | `browser_ext_*` | `desktop_*` + `desktop_job_*` |
 | 默认 | 全关 | 全关 |
 
-WebUI 的“设置 → 桌面控制”提供系统权限状态、具体操作预览与确认、人工接管和任务管理；当前没有实时画面流。
+WebUI 的“设置 → 桌面控制”提供系统权限状态、人工接管和任务管理；当前没有实时画面流。
 
 ## 授权模型
 
 1. **总开关** `enabled`（默认关）。
 2. **执行器已连接**。
 3. **应用范围**：`allowed_apps` 为空时主人默认可访问全部应用；可再收窄。`denied_apps` 优先。显示名给人看；Bundle ID / `window_id` 做定位。
-4. **读写档位**：列窗口与截图只读；点击/输入/按键须 `write_enabled`。
-5. **机器人开关** `agent_desktop_control_enabled`。
+4. **读写档位**：列窗口与截图只读；点击/输入/按键/滚动须 `write_enabled`。打开后 Diana 自己动手，不逐条等人确认。
+5. **机器人开关** `agent_desktop_control_enabled`：机器人配置「高级」页签里的「允许使用桌面控制」，默认关；安全模式下不登记这些工具。
 6. **身份**：仅主人；群成员工具白名单不含这些工具。
 7. **macOS 权限**：Screen Recording（截图）；Accessibility（写操作）。失败返回可解释 `permission_denied`。
+
+以上开关默认全关。主人也可以直接在聊天里让 Diana 打开：它用 `console_config` 暂存总开关、`write_enabled` 和本机器人的 `agent_desktop_control_enabled`，主人回复同意后生效，下一条消息起就有 `desktop_*` 工具。macOS 的屏幕录制和辅助功能权限仍要主人在系统设置里授权。
 
 人工接管开启后，一切指令拒绝（`takeover`）。接管状态独立落盘，重连、重启、修改应用权限不会自动解除；只能在控制台明确结束接管。
 
@@ -32,7 +34,7 @@ WebUI 的“设置 → 桌面控制”提供系统权限状态、具体操作预
 | `desktop_windows` | 读 | 列出已授权窗口 |
 | `desktop_screenshot` | 读 | 截图；可清掉任务的「须重新观察」标记 |
 | `desktop_elements` | 读 | 读取可访问元素、标签和观察版本，需要辅助功能权限；安全输入控件不返回 |
-| `desktop_click` / `desktop_type` / `desktop_key` / `desktop_scroll` | 写 | 须 `write_enabled`、有效 `observation` 和控制台单次确认 |
+| `desktop_click` / `desktop_type` / `desktop_key` / `desktop_scroll` | 写 | 须 `write_enabled` 和两分钟内的 `observation`，画面没变才下发 |
 | `desktop_job_create` | 任务 | 创建持久任务，返回 `job_id`；不限总步数和时长 |
 | `desktop_job_status` | 任务 | 查询或列出 |
 | `desktop_job_pause` / `desktop_job_resume` | 任务 | 暂停 / 恢复（恢复须先截图再写） |
@@ -59,7 +61,7 @@ WebUI 的“设置 → 桌面控制”提供系统权限状态、具体操作预
 
 ## 执行器
 
-真正截图、读元素、发键鼠的执行器默认是 trycua 开源的 [cua-driver](https://github.com/trycua/cua)（MIT），通过 MCP stdio 接入。Diana 只把它当执行层：观察版本、画面比对、单次确认、取证、应用范围、读写档位、人工接管和持久任务仍全部由 Diana 自己判断，驱动在这些检查通过后才收到指令。
+真正截图、读元素、发键鼠的执行器默认是 trycua 开源的 [cua-driver](https://github.com/trycua/cua)（MIT），通过 MCP stdio 接入。Diana 只把它当执行层：观察版本、画面比对、取证、应用范围、读写档位、人工接管和持久任务仍全部由 Diana 自己判断，驱动在这些检查通过后才收到指令。
 
 - **按需下载**：完整包不附带驱动。主人第一次打开桌面控制时，Diana 在后台下载锁定版本（当前 `0.38.0`）的官方 Release 到 `<数据目录>/desktop/cua-driver/<版本>/`，先核对压缩包的 SHA-256，只解出 `cua-driver` 一个文件，再核对它的 SHA-256。每次启动前都会重新核对，被替换的文件不会被运行。下载走「系统更新」里设置的 GitHub 下载线路；失败后五分钟内不重试，控制台显示原因。
 - **版本锁定**：驱动接口仍是 0.x，Diana 不跟随它自动升级，也关闭了它的更新检查。升级时更新 `model/desktopctl/cua_driver_install.go` 里的版本和两个哈希，并重跑 `TestLiveCUADriver*`。
@@ -88,24 +90,23 @@ cua-driver 自带的 `bounded` 权限模式（只放行清单里的工具和应�
 
 HTTP 管理接口位于 `/api/desktop-control`，沿用控制台会话认证。启用和输入权限均默认关闭。系统授权需要用户在 macOS 系统设置中完成。
 
-## 观察、确认和结果核实
+## 观察和结果核实
 
-本机执行器的写操作使用以下流程：
+Diana 是自己动手的 agent，写操作不逐条等人确认。防止点错的办法是「先看再动、动完再看」：
 
 1. `desktop_screenshot` 或 `desktop_elements` 返回绑定当前窗口、应用和画面的 `observation`，有效期两分钟。元素 ID 仅用于本次元素观察；优先元素点击，坐标用于不提供元素的应用。
-2. 模型提交具体操作与观察版本。执行器核对窗口画面，先返回 `confirmation_required`，这时尚未发送输入。控制台展示请求时的窗口截图、目标应用、元素或坐标、输入文字或按键。
-3. 主人在控制台确认后，让 Diana 使用相同参数重试。确认只用一次，不能换文字、目标、观察版本或任务。使用任务幂等键时须给这次尝试新的键；原先的等待确认记录不会重放。
-4. 执行器再次截图比较。画面变动、过期或连接重建会令旧观察失效。比较允许一处不超过 4×40 像素的变化（输入框里闪烁的光标），打一个字、勾一个复选框或多处同时变化都按画面已变处理；动画仍会使比较失败，需要重新观察。
-5. 操作下发后附带新截图，`ok` 仅表示输入已经发送，`needs_verification` 提醒模型核实实际效果。若回看截图失败，保留输入已发送这一事实，返回核实错误，禁止盲目重复提交。
+2. 写操作必须带 `observation`。执行器下发前重新截图，和那次观察比较；画面变了、观察过期或连接重建都拒绝（`stale_observation`），模型重新观察后再做。比较允许一处不超过 4×40 像素的变化（输入框里闪烁的光标），打一个字、勾一个复选框或多处同时变化都按画面已变处理；动画仍会使比较失败，需要重新观察。
+3. 一次观察只能用一次：下发前就作废，超时或没有回执也不会被重放。
+4. 操作下发后附带新截图和新的 `observation`，`ok` 仅表示输入已经发送，`needs_verification` 提醒模型核实实际效果。若回看截图失败，保留输入已发送这一事实，返回核实错误，禁止盲目重复提交。
 
-当前通用执行器不能可靠判断一个按钮是否代表发送、支付或删除，因此所有写操作逐条确认。任务的“继续任务”只解除任务等待，不代替具体操作授权。确认与观察只在内存保留；重启后必须重新观察并确认。
+主人想叫停时点控制台的「接管桌面」：在途指令立即中断、观察全部作废，接管结束后 Diana 必须重新观察。持久任务的防空转（见上文）会在原地打转时暂停任务。模型侧的工具说明仍要求不点付款、删除、系统设置等敏感控件，除非主人明确要求；不输入密码、验证码或支付信息。
 
 滚动的 `x/y` 指向窗口内区域，`delta_y` 正值向下，`delta_x` 正值向右，每轴最多 1000 像素。同一执行器的观察、核对、输入、回看串行执行，不能让其他任务在核对和输入之间插入操作。
 
-任务审计新记录保存输入文本与截图的 SHA-256 摘要，不保存输入全文、原始截图或元素值。截图通过本次工具结果交给模型，待确认窗口截图只在内存中短期保留；这不改变聊天记录或模型提供商自己的留存行为。历史任务记录不会自动迁移或清除。
+任务审计新记录保存输入文本与截图的 SHA-256 摘要，不保存输入全文、原始截图或元素值。截图通过本次工具结果交给模型；这不改变聊天记录或模型提供商自己的留存行为。观察只在内存保留；重启后必须重新观察。历史任务记录不会自动迁移或清除。
 
 ## 尚未覆盖的边界
 
-本功能还不能视为完整的电脑任务沙箱：尚无文件选择、上传、导出路径的目录级强制约束，也没有通用截图敏感信息识别与遮罩。系统标记的安全输入框会要求人工接管，普通文本框中的验证码、密钥等仍需人工处理。实时画面流、完整的任务证据归档/保留策略和跨应用任务仍待完善。真实写入并保存产物的验收由 `TestLiveCUADriverWriteAndSave` 覆盖（「文本编辑」输入并 ⌘S 保存，读文件逐字核对），需设置 `DIANA_CUA_DRIVER_LIVE` 与 `DIANA_CUA_DRIVER_LIVE_WRITE=1` 在有权限的 Mac 上手动运行；[新增受限电脑操作能力：本地桌面执行器与持久任务管理（#948）](https://github.com/SuInk/Diana/issues/948) 保持开放。
+本功能还不能视为完整的电脑任务沙箱：尚无文件选择、上传、导出路径的目录级强制约束，也没有通用截图敏感信息识别与遮罩。系统标记的安全输入框会要求人工接管，普通文本框中的验证码、密钥等仍需人工处理。实时画面流、完整的任务证据归档/保留策略和跨应用任务仍待完善。真实写入并保存产物的验收由 `TestLiveCUADriverWriteAndSave` 覆盖（「文本编辑」输入并 ⌘S 保存，读文件逐字核对），需设置 `DIANA_CUA_DRIVER_LIVE` 与 `DIANA_CUA_DRIVER_LIVE_WRITE=1` 在有权限的 Mac 上手动运行。跟踪 issue [新增受限电脑操作能力：本地桌面执行器与持久任务管理（#948）](https://github.com/SuInk/Diana/issues/948) 已在主体合入后关闭，上面这些边界以后单独开 issue。
 
 原生实现使用 Apple 的 [Accessibility 元素读取 API](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue) 和 [Core Graphics 滚动事件 API](https://developer.apple.com/documentation/coregraphics/cgevent/init(scrollwheelevent2source:units:wheelcount:wheel1:wheel2:wheel3:))。

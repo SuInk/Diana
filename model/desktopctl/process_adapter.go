@@ -20,7 +20,9 @@ import (
 )
 
 // ProcessAdapter owns the safety contract of local desktop input: observation
-// versions bound to a captured scene, one-shot approvals and post-action evidence.
+// versions bound to a captured scene and post-action evidence. Writes need no
+// human confirmation; the agent must look first, and a changed scene rejects
+// the action so it observes again.
 // The executor behind it is a desktopBackend — the native macOS helper or
 // cua-driver — whose path is operator configuration, never a model parameter.
 type ProcessAdapter struct {
@@ -29,11 +31,10 @@ type ProcessAdapter struct {
 	gate         chan struct{}
 	sequence     chan struct{}
 	observations map[int64]processObservation
-	approvals    map[string]ActionApproval
 }
 
 // desktopBackend only executes. It must not decide whether an action is
-// allowed: ProcessAdapter checks observation, scene and approval first.
+// allowed: ProcessAdapter checks observation and scene first.
 type desktopBackend interface {
 	listWindows(ctx context.Context) ([]WindowInfo, error)
 	// capture returns a PNG of exactly one window.
@@ -45,7 +46,7 @@ type desktopBackend interface {
 }
 
 func newProcessAdapter(backend desktopBackend, path string) *ProcessAdapter {
-	return &ProcessAdapter{backend: backend, path: path, gate: make(chan struct{}, 1), sequence: make(chan struct{}, 1), observations: map[int64]processObservation{}, approvals: map[string]ActionApproval{}}
+	return &ProcessAdapter{backend: backend, path: path, gate: make(chan struct{}, 1), sequence: make(chan struct{}, 1), observations: map[int64]processObservation{}}
 }
 
 // NewProcessAdapter drives the native macOS helper (desktopctl-helper).
@@ -247,8 +248,8 @@ func (a *ProcessAdapter) PressKey(ctx context.Context, c Command) (ActionResult,
 	return a.action(ctx, c, OpWindowKey)
 }
 
-// action runs op for c. The approval key hashes c as the caller sent it, so op
-// is passed beside it rather than written into the command.
+// action runs op for c. op is passed beside the command rather than written
+// into it, so the command stays exactly as the caller sent it.
 func (a *ProcessAdapter) action(ctx context.Context, c Command, op string) (ActionResult, error) {
 	if err := a.lockSequence(ctx); err != nil {
 		return ActionResult{}, err
@@ -286,9 +287,6 @@ func (a *ProcessAdapter) action(ctx context.Context, c Command, op string) (Acti
 		if target == nil {
 			return ActionResult{}, commandError(CodeBadRequest, "元素不存在或不可操作")
 		}
-	}
-	if err := a.authorizeAction(c, current, before.elements); err != nil {
-		return ActionResult{}, err
 	}
 	// Consume before sending: a timeout or missing receipt must never permit replay.
 	a.observations = map[int64]processObservation{}
@@ -339,6 +337,16 @@ func (a *ProcessAdapter) lockSequence(ctx context.Context) error {
 	}
 }
 func (a *ProcessAdapter) unlockSequence() { <-a.sequence }
+
+// Invalidate drops every observation, so the next write must observe again.
+// Takeover and reconnect call it.
+func (a *ProcessAdapter) Invalidate(ctx context.Context) {
+	if a.lockSequence(ctx) != nil {
+		return
+	}
+	defer a.unlockSequence()
+	a.observations = map[int64]processObservation{}
+}
 func (a *ProcessAdapter) remember(p ScreenshotPayload, elements []Element) int64 {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {

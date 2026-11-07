@@ -1940,6 +1940,17 @@
                 </div>
                 <div class="field wide">
                   <label class="switch">
+                    <input v-model="form.agent_desktop_control_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">允许使用桌面控制（desktop_*）</span>
+                  </label>
+                  <span class="hint">
+                    默认关闭。那组工具查看并操作运行 Diana 的这台 Mac 上的窗口，只对主人开放，安全模式下不可用。
+                    还要在「设置 → 桌面控制」打开总开关，两边都开才真的能用；要它动手点击、输入，再在那一页打开「点击与输入」。
+                  </span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
                     <input v-model="form.agent_browser_box_disabled" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">禁止这台机器人使用内置浏览器</span>
@@ -4833,6 +4844,7 @@ function setForm(config: BotProfileConfig): void {
     agent_member_command_enabled: config.agent_member_command_enabled ?? false,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
+    agent_desktop_control_enabled: config.agent_desktop_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "everyone",

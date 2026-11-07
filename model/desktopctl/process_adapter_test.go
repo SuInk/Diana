@@ -43,16 +43,6 @@ printf '{"ok":true}'
 		t.Fatal(err)
 	}
 	cmd.Observation = shot.Observation
-	if _, err = a.TypeText(ctx, cmd); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
-	pending, _ := a.PendingActions(ctx)
-	if len(pending) != 1 {
-		t.Fatal(pending)
-	}
-	if err = a.ConfirmAction(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
 	got, err := a.TypeText(ctx, cmd)
 	if err != nil || !got.OK || got.WindowID != "42" || got.BundleID != "com.example.fixture" {
 		t.Fatalf("receipt=%+v err=%v", got, err)
@@ -113,16 +103,6 @@ esac`)
 		t.Fatal(err)
 	}
 	cmd := Command{Op: OpWindowType, WindowID: "42", ExpectedBundleID: "forged", Text: "hello", Observation: shot.Observation}
-	if _, err = h.Dispatch(ctx, cmd); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
-	pending, _ := a.PendingActions(ctx)
-	if len(pending) != 1 {
-		t.Fatal(pending)
-	}
-	if err = a.ConfirmAction(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
 	_, err = h.Dispatch(ctx, cmd)
 	if err != nil {
 		t.Fatal(err)
@@ -357,22 +337,6 @@ func TestProcessRejectsStaleAndConsumedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := Command{WindowID: "42", ExpectedBundleID: "app", Text: "hello", Observation: shot.Observation}
-	if _, err = a.TypeText(ctx, c); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
-	pending, _ := a.PendingActions(ctx)
-	if len(pending) != 1 {
-		t.Fatal(pending)
-	}
-	if err = a.ConfirmAction(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
-	// Approval is bound to text too; changing the intended input needs a fresh grant.
-	changed := c
-	changed.Text = "different"
-	if _, err = a.TypeText(ctx, changed); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
 	if err = os.WriteFile(scene, []byte("changed"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -384,10 +348,6 @@ func TestProcessRejectsStaleAndConsumedObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Observation = shot.Observation
-	_, _ = a.TypeText(ctx, c)
-	if err = a.ConfirmAction(ctx, actionKey(c)); err != nil {
-		t.Fatal(err)
-	}
 	got, err := a.TypeText(ctx, c)
 	if err != nil {
 		t.Fatal(err)
@@ -428,12 +388,6 @@ func TestProcessElementsScrollAndApprovalExpiry(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := Command{Op: OpWindowClick, WindowID: "42", ExpectedBundleID: "app", ElementID: "0.1", Observation: elements.Observation}
-	if _, err = a.Click(ctx, c); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
-	if err = a.ConfirmAction(ctx, actionKey(c)); err != nil {
-		t.Fatal(err)
-	}
 	if _, err = a.Click(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -443,21 +397,20 @@ func TestProcessElementsScrollAndApprovalExpiry(t *testing.T) {
 	}
 	x, y := 10.0, 12.0
 	c = Command{Op: OpWindowScroll, WindowID: "42", ExpectedBundleID: "app", X: &x, Y: &y, DeltaY: 200, Observation: shot.Observation}
-	if _, err = a.Scroll(ctx, c); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatal(err)
-	}
-	pending := a.approvals[actionKey(c)]
-	pending.ExpiresAt = time.Now().Add(-time.Second)
-	a.approvals[pending.ID] = pending
-	if err = a.ConfirmAction(ctx, pending.ID); ErrorCode(err) != CodeStaleObservation {
-		t.Fatal(err)
-	}
-	_, _ = a.Scroll(ctx, c)
-	if err = a.ConfirmAction(ctx, actionKey(c)); err != nil {
-		t.Fatal(err)
-	}
 	if _, err = a.Scroll(ctx, c); err != nil {
 		t.Fatal(err)
+	}
+	// An observation older than two minutes is rejected; the agent looks again.
+	shot, err = a.screenshot(ctx, "42", "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Observation = shot.Observation
+	old := a.observations[c.Observation]
+	old.at = time.Now().Add(-3 * time.Minute)
+	a.observations[c.Observation] = old
+	if _, err = a.Scroll(ctx, c); ErrorCode(err) != CodeStaleObservation {
+		t.Fatal("expired observation accepted", err)
 	}
 }
 
@@ -473,7 +426,7 @@ func TestDesktopAuditOmitsRawTextAndPixels(t *testing.T) {
 	}
 }
 
-func TestTakeoverInvalidatesApprovedAction(t *testing.T) {
+func TestTakeoverInvalidatesObservation(t *testing.T) {
 	ctx := context.Background()
 	a := processFixture(t, `case "$1" in
  list) printf '{"windows":[{"id":"42","bundle_id":"app","active":true}]}' ;;
@@ -493,18 +446,11 @@ func TestTakeoverInvalidatesApprovedAction(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := Command{WindowID: "42", ExpectedBundleID: "app", Text: "hello", Observation: shot.Observation}
-	_, _ = a.TypeText(ctx, cmd)
-	if err = a.ConfirmAction(ctx, actionKey(cmd)); err != nil {
-		t.Fatal(err)
-	}
 	c.SetTakeover(true, "human")
 	c.SetTakeover(false, "")
+	// After the human hands the desktop back, the agent must look again.
 	if _, err = a.TypeText(ctx, cmd); ErrorCode(err) != CodeStaleObservation {
-		t.Fatal("old grant survived takeover", err)
-	}
-	pending, _ := a.PendingActions(ctx)
-	if len(pending) != 0 {
-		t.Fatal("pending grant survived", pending)
+		t.Fatal("observation survived takeover", err)
 	}
 }
 

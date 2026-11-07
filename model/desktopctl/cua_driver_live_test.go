@@ -228,16 +228,9 @@ func TestLiveCUADriverWriteAndSave(t *testing.T) {
 	}
 	t.Logf("window=%+v", window)
 
-	// confirmAndRun drives one action through Diana's approval gate: the first
-	// attempt must stop at confirmation_required without sending input.
-	confirmAndRun := func(label string, c Command, run func(Command) (ActionResult, error)) ActionResult {
+	// runAction sends one observed action and requires post-action evidence.
+	runAction := func(label string, c Command, run func(Command) (ActionResult, error)) ActionResult {
 		t.Helper()
-		if _, err := run(c); ErrorCode(err) != CodeConfirmationRequired {
-			t.Fatalf("%s: first attempt should wait for approval, got %v", label, err)
-		}
-		if err := a.ConfirmAction(ctx, actionKey(c)); err != nil {
-			t.Fatalf("%s: confirm: %v", label, err)
-		}
 		result, err := run(c)
 		if err != nil {
 			t.Fatalf("%s: %v", label, err)
@@ -267,7 +260,7 @@ func TestLiveCUADriverWriteAndSave(t *testing.T) {
 		t.Fatalf("no editable text area among %d elements", len(elements.Elements))
 	}
 	const line = "Diana 桌面控制验收 cua-driver"
-	typed := confirmAndRun("type", Command{WindowID: window.ID, ExpectedBundleID: bundle, ElementID: textArea.ID, Text: line, Observation: elements.Observation}, func(c Command) (ActionResult, error) {
+	typed := runAction("type", Command{WindowID: window.ID, ExpectedBundleID: bundle, ElementID: textArea.ID, Text: line, Observation: elements.Observation}, func(c Command) (ActionResult, error) {
 		return a.TypeText(ctx, c)
 	})
 	// The evidence is captured right after input; the window keeps updating
@@ -281,7 +274,7 @@ func TestLiveCUADriverWriteAndSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	confirmAndRun("save", Command{WindowID: window.ID, ExpectedBundleID: bundle, Key: "cmd+s", Observation: fresh.Observation}, func(c Command) (ActionResult, error) {
+	runAction("save", Command{WindowID: window.ID, ExpectedBundleID: bundle, Key: "cmd+s", Observation: fresh.Observation}, func(c Command) (ActionResult, error) {
 		return a.PressKey(ctx, c)
 	})
 	var saved []byte
