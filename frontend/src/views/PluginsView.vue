@@ -119,12 +119,27 @@
 
         <p class="plugin-card-desc" :title="pluginDisplayDescription(plugin)">{{ pluginDisplayDescription(plugin) }}</p>
 
-        <div v-if="plugin.manifest.permissions?.length || showFooter(plugin) || groupExceptions(plugin).length || closedGroupsWithPlugin(plugin).length" class="plugin-card-bottom">
+        <div v-if="plugin.runtime_status || plugin.manifest.permissions?.length || showFooter(plugin) || groupExceptions(plugin).length || closedGroupsWithPlugin(plugin).length" class="plugin-card-bottom">
           <!-- 权限在左，设置等操作在右；有无设置都不再改变卡片的基础高度。 -->
           <div class="plugin-card-meta">
             <!-- 依赖列表展开后比整张卡片还高，行内展开会把这一条撑得和邻居完全
                  不是一个量级；改成弹窗，卡片上只留状态。
                  排在权限前面：依赖缺了插件直接不工作，比权限更需要先被看到。 -->
+            <!-- 插件自己报的运行状态（连没连上、缺什么）。有问题时点开设置，
+                 里面逐条写了怎么修。 -->
+            <button
+              v-if="plugin.runtime_status"
+              class="plugin-perms-head"
+              type="button"
+              :title="runtimeStatusTitle(plugin.runtime_status)"
+              data-runtime-status
+              @click="openSettings(plugin)"
+            >
+              <span
+                class="plugin-dependency-count"
+                :class="{ warn: plugin.runtime_status.problems?.length }"
+              >{{ plugin.runtime_status.problems?.length ? `${plugin.runtime_status.problems.length} 个问题` : "运行正常" }}</span>
+            </button>
             <button
               v-if="dependenciesFor(plugin.manifest.id).length"
               class="plugin-dependencies-head"
@@ -242,6 +257,18 @@
       @close="closeSettings"
     >
       <p v-if="settingsSpecs.length" class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
+      <section v-if="settingsTarget.runtime_status" class="plugin-settings-section-head plugin-runtime-status" data-runtime-status-detail>
+        <div class="cluster">
+          <h3>运行状态</h3>
+          <span class="badge" :class="settingsTarget.runtime_status.problems?.length ? 'warn' : 'accent'">{{ settingsTarget.runtime_status.summary }}</span>
+        </div>
+        <ul v-if="settingsTarget.runtime_status.problems?.length" class="plugin-runtime-problems">
+          <li v-for="problem in settingsTarget.runtime_status.problems" :key="problem">{{ problem }}</li>
+        </ul>
+        <p v-if="settingsTarget.runtime_status.recent">
+          最近：{{ settingsTarget.runtime_status.recent }}<template v-if="settingsTarget.runtime_status.recent_at">（{{ formatRuntimeStatusTime(settingsTarget.runtime_status.recent_at) }}）</template>
+        </p>
+      </section>
       <!-- Dependencies expand only when attention is needed. -->
       <details
         v-if="dependenciesFor(settingsTarget.manifest.id).length"
@@ -891,6 +918,7 @@ import {
   testGitHubCredentials,
   listPluginDependencies,
   listBotGroups,
+  type PluginRuntimeStatus,
   type PluginSettingSpec,
   type PluginState,
   type RepoPluginPreview,
@@ -966,6 +994,14 @@ function missingDependencyCount(pluginID: string): number {
 function hasDependencyProblem(pluginID: string): boolean {
   if (pluginID === groupRelationsPluginID) return !dependenciesFor(pluginID).some((dep) => dep.name === "cjk-font" && dep.available);
   return missingDependencyCount(pluginID) > 0;
+}
+
+function runtimeStatusTitle(status: PluginRuntimeStatus): string {
+  return [status.summary, ...(status.problems ?? [])].join("\n");
+}
+
+function formatRuntimeStatusTime(unix: number): string {
+  return new Date(unix * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
 function dependencyHint(pluginID: string): string {

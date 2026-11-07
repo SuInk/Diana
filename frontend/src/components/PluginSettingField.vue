@@ -160,7 +160,7 @@ function toggleMultiSelect(option: string, event: Event): void {
         />
       </div>
       <AppSelect
-        v-else-if="spec.type === 'select'"
+        v-else-if="spec.type === 'select' || spec.type === 'bot_profile'"
         :id="controlID"
         v-model="form[spec.key]"
         :options="spec.options ?? []"

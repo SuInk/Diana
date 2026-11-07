@@ -30,7 +30,13 @@ import (
 // 引擎（model/voicecall）。设计和部署见 docs/qq-voice-call.md。
 //
 // 第一版只接主人。响铃时只看得到窗口上的昵称，QQ 号要接通后才从 SnowLuma 日志里
-// 读到，所以核对两次：昵称对上主人的备注或昵称才接，接通后 QQ 号不是主人立刻挂断。
+// 读到。昵称靠 OCR，表情、特殊符号、被截断的长备注都认不准，拿它决定接不接会让主人
+// 的电话经常没人接，所以来电一律接起来，接通后按 QQ 号核对：不是主人、读不到都立刻
+// 挂断，机器人不开口。代价是别人打来会被接通几秒再挂掉。
+//
+// 接不起来的原因（缺 ffmpeg、没配语音识别、令牌不对……）私聊告诉主人：这条消息进了
+// 私聊记录，主人回头问「电话怎么没接」时机器人自己知道；bot_config 查这个插件也能
+// 看到同一份状态（见 RuntimeStatus）。
 const (
 	qqVoiceCallPluginID = "official.qq-voice-call"
 
@@ -45,7 +51,10 @@ const (
 	qqVoiceCallRetryMin     = 3 * time.Second
 	qqVoiceCallRetryMax     = 30 * time.Second
 	qqVoiceCallWriteTimeout = 10 * time.Second
-	qqVoiceCallNameTimeout  = 8 * time.Second
+	// qqVoiceCallNoticeEvery 是同一个问题私聊提醒主人的最短间隔：问题没修好时每来
+	// 一通电话都会再碰到一次，不节流就是一通一条。
+	qqVoiceCallNoticeEvery   = 6 * time.Hour
+	qqVoiceCallNoticeTimeout = 30 * time.Second
 )
 
 // QQVoiceCallPlugin 持有到 qqcall-agent 的唯一一条连接。
@@ -57,6 +66,10 @@ type QQVoiceCallPlugin struct {
 	key    string
 	cancel context.CancelFunc
 	status QQVoiceCallStatus
+	// noticed 记着每个问题上次私聊提醒主人的时间，见 tellOwner。
+	noticed map[string]time.Time
+	// notify 发私聊提醒，测试里换掉。
+	notify func(ctx context.Context, runtime *Runtime, profileID, text string) error
 }
 
 // QQVoiceCallStatus 是插件此刻的状态，排查用。
@@ -64,19 +77,20 @@ type QQVoiceCallStatus struct {
 	Connected bool   `json:"connected"`
 	LastError string `json:"last_error,omitempty"`
 	// LastCall 是最近一通电话的处理结果，给人看的一句话。
-	LastCall string `json:"last_call,omitempty"`
+	LastCall   string    `json:"last_call,omitempty"`
+	LastCallAt time.Time `json:"last_call_at,omitempty"`
 }
 
 func NewQQVoiceCallPlugin() *QQVoiceCallPlugin {
-	return &QQVoiceCallPlugin{}
+	return &QQVoiceCallPlugin{noticed: map[string]time.Time{}, notify: notifyQQVoiceCallOwner}
 }
 
 func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:              qqVoiceCallPluginID,
 		Name:            "QQ 语音通话",
-		Version:         "0.1.0",
-		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。第一版只接主人的电话。",
+		Version:         "0.1.1",
+		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
 		Official:        true,
 		BuiltIn:         true,
 		DefaultDisabled: true,
@@ -106,10 +120,12 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 			{
 				Key:         qqVoiceCallSettingProfile,
 				Label:       "接电话的机器人",
-				Description: "填机器人 ID，这台机器人的 QQ 号就是容器里登录的那个。留空时用启用了插件的机器人里 ID 排第一的 OneBot 机器人。",
-				Type:        PluginSettingTypeString,
+				Description: "选容器里登录的那个 QQ 对应的机器人。只有一台 OneBot 机器人时不用选。",
+				Type:        PluginSettingTypeBotProfile,
 				Default:     "",
 				GlobalOnly:  true,
+				// 只列 OneBot 机器人：电话是容器里的 Linux QQ 接的。
+				ProfilePlatforms: []string{PlatformOneBotV11},
 			},
 			{
 				Key:         qqVoiceCallSettingAnswerDelay,
@@ -202,6 +218,40 @@ func (p *QQVoiceCallPlugin) apply() {
 	}()
 }
 
+// RuntimeStatus 报插件此刻能不能接电话、缺什么、最近一通怎么样。插件关着时不报。
+func (p *QQVoiceCallPlugin) RuntimeStatus(ctx context.Context) (PluginRuntimeStatus, bool) {
+	runtime, change := p.settings()
+	status := p.Status()
+	if runtime == nil || !change.Enabled {
+		return PluginRuntimeStatus{}, false
+	}
+	var problems []string
+	url := strings.TrimSpace(change.Settings.String(qqVoiceCallSettingAgentURL, ""))
+	switch {
+	case url == "":
+		problems = append(problems, "还没填 qqcall-agent 地址：同一个 compose 里写 ws://snowluma:6190/ws，分开部署写 ws://<SnowLuma 所在机器>:6190/ws")
+	case !status.Connected:
+		reason := "连不上 qqcall-agent（" + url + "）"
+		if status.LastError != "" {
+			reason += "：" + status.LastError
+		}
+		problems = append(problems, reason+"。确认 SnowLuma 容器换成了带语音组件的镜像、设了 QQCALL_TOKEN，端口 6190 Diana 访问得到")
+	}
+	if ready := qqVoiceCallReadiness(ctx, runtime, change); ready.problem != "" {
+		problems = append(problems, ready.problem)
+	}
+	out := PluginRuntimeStatus{Problems: problems, Recent: status.LastCall}
+	if !status.LastCallAt.IsZero() {
+		out.RecentAt = status.LastCallAt.Unix()
+	}
+	if len(problems) == 0 {
+		out.Summary = "已连上 qqcall-agent，主人打来会自动接"
+	} else {
+		out.Summary = fmt.Sprintf("有 %d 个问题，电话接不起来", len(problems))
+	}
+	return out, true
+}
+
 // settings 取当前的设置和运行时，每通电话开始时读一次。
 func (p *QQVoiceCallPlugin) settings() (*Runtime, PluginStateChange) {
 	p.mu.Lock()
@@ -218,7 +268,52 @@ func (p *QQVoiceCallPlugin) setStatus(fn func(*QQVoiceCallStatus)) {
 func (p *QQVoiceCallPlugin) noteCall(format string, args ...any) {
 	text := fmt.Sprintf(format, args...)
 	log.Printf("diana: qq voice call: %s", text)
-	p.setStatus(func(s *QQVoiceCallStatus) { s.LastCall = text })
+	p.setStatus(func(s *QQVoiceCallStatus) { s.LastCall, s.LastCallAt = text, time.Now() })
+}
+
+// tellOwner 私聊告诉主人电话为什么没接起来。同一个问题 qqVoiceCallNoticeEvery 内只说一次。
+// 消息照常进私聊记录，主人回头问起时机器人从历史里就知道发生了什么。
+func (p *QQVoiceCallPlugin) tellOwner(runtime *Runtime, profileID, key, text string) {
+	if runtime == nil || strings.TrimSpace(profileID) == "" {
+		return
+	}
+	p.mu.Lock()
+	if last, ok := p.noticed[key]; ok && time.Since(last) < qqVoiceCallNoticeEvery {
+		p.mu.Unlock()
+		return
+	}
+	if p.noticed == nil {
+		p.noticed = map[string]time.Time{}
+	}
+	p.noticed[key] = time.Now()
+	notify := p.notify
+	p.mu.Unlock()
+	if notify == nil {
+		return
+	}
+	go func() {
+		defer recoverGoroutinePanic("qq_voice_call.notice")
+		ctx, cancel := context.WithTimeout(context.Background(), qqVoiceCallNoticeTimeout)
+		defer cancel()
+		if err := notify(ctx, runtime, profileID, text); err != nil {
+			log.Printf("diana: qq voice call: 私聊提醒主人失败: %v", err)
+		}
+	}()
+}
+
+// notifyQQVoiceCallOwner 往主人在平台上的私聊发一条提醒。ownerChatEvent 造的是 WebUI
+// 聊天页的事件，去掉 webChat 标记才会真的发到 QQ。
+func notifyQQVoiceCallOwner(ctx context.Context, runtime *Runtime, profileID, text string) error {
+	cfg, event, err := runtime.ownerChatEvent(profileID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(cfg.OwnerID) == "" {
+		return errors.New("机器人还没填主人账号")
+	}
+	event.webChat = false
+	event.Time = time.Now().Unix()
+	return runtime.sendSubscriberNotice(ctx, event, "【QQ 语音通话】"+text)
 }
 
 // loop 保持到 agent 的连接，断了退避重连。
@@ -238,6 +333,13 @@ func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string) {
 		}
 		if err != nil {
 			log.Printf("diana: qq voice call: agent 连接断开: %v", err)
+			if errors.Is(err, errQQCallAgentAuth) {
+				if runtime, change := p.settings(); runtime != nil {
+					if profileID, problem := qqVoiceCallProfile(runtime, change); problem == "" {
+						p.tellOwner(runtime, profileID, "auth", "连不上容器里的 qqcall-agent："+err.Error()+"。改好之前你打来的电话都接不起来。令牌在插件页「QQ 语音通话」的设置里。")
+					}
+				}
+			}
 		}
 		if time.Since(started) > time.Minute {
 			wait = qqVoiceCallRetryMin
@@ -260,7 +362,7 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
 	conn, resp, err := dialer.DialContext(ctx, url, header)
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
+			return errQQCallAgentAuth
 		}
 		return err
 	}
@@ -299,6 +401,8 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string) error {
 		}
 	}
 }
+
+var errQQCallAgentAuth = errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
 
 // qqCallLink 串行写到 agent 的连接。
 type qqCallLink struct {
@@ -387,39 +491,26 @@ func (s *qqCallSet) handle(ctx context.Context, msg qqcall.Message) {
 		s.ended(msg.Call)
 	case qqcall.TypeError:
 		s.plugin.noteCall("agent 报错: %s", msg.Error)
+		if runtime, change := s.plugin.settings(); runtime != nil {
+			if profileID, problem := qqVoiceCallProfile(runtime, change); problem == "" {
+				s.plugin.tellOwner(runtime, profileID, "agent:"+msg.Error, "容器里的 qqcall-agent 报错："+msg.Error+"。")
+			}
+		}
 	}
 }
 
-// screen 是第一道核对：来电窗口上的昵称得是主人的备注或昵称。
+// screen 决定接不接：前提都齐了就接。来电窗口上的昵称只用来记日志，不拿它挡电话，
+// 身份在接通后按 QQ 号核对（见 connected）。前提不齐时不接，并私聊告诉主人缺什么。
 func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 	defer recoverGoroutinePanic("qq_voice_call.screen")
 	runtime, change := s.plugin.settings()
 	if runtime == nil {
 		return
 	}
-	profileID, problem := qqVoiceCallProfile(runtime, change)
-	if problem != "" {
-		s.plugin.noteCall("来电「%s」没接：%s", msg.Name, problem)
-		return
-	}
-	if info := runtime.VoiceCallInfo(ctx, profileID); info.Problem != "" {
-		s.plugin.noteCall("来电「%s」没接：%s", msg.Name, info.Problem)
-		return
-	}
-	ownerID := strings.TrimSpace(runtime.profileConfig(profileID).WithDefaults().OwnerID)
-	if ownerID == "" {
-		s.plugin.noteCall("来电「%s」没接：机器人还没填主人账号", msg.Name)
-		return
-	}
-	nameCtx, cancel := context.WithTimeout(ctx, qqVoiceCallNameTimeout)
-	names := runtime.qqOwnerNames(nameCtx, profileID, ownerID)
-	cancel()
-	if len(names) == 0 {
-		s.plugin.noteCall("来电「%s」没接：问不到主人的 QQ 昵称", msg.Name)
-		return
-	}
-	if !qqcall.NameMatches(msg.Name, names...) {
-		s.plugin.noteCall("来电「%s」不是主人，没接", msg.Name)
+	ready := qqVoiceCallReadiness(ctx, runtime, change)
+	if ready.problem != "" {
+		s.plugin.noteCall("来电「%s」没接：%s", msg.Name, ready.problem)
+		s.plugin.tellOwner(runtime, ready.profileID, "ready:"+ready.problem, "刚才有人打 QQ 语音给我，我没接起来："+ready.problem+"。")
 		return
 	}
 	delay := qqVoiceCallSeconds(change.Settings, qqVoiceCallSettingAnswerDelay, 2*time.Second)
@@ -429,11 +520,40 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 	case <-time.After(delay):
 	}
 	s.mu.Lock()
-	s.answered[msg.Call] = qqCallTarget{profileID: profileID, ownerID: ownerID}
+	s.answered[msg.Call] = qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID}
 	s.mu.Unlock()
 	if err := s.link.send(qqcall.Message{Type: qqcall.TypeAnswer, Call: msg.Call}); err != nil {
-		s.plugin.noteCall("接听主人的来电失败: %v", err)
+		s.plugin.noteCall("接听来电「%s」失败: %v", msg.Name, err)
 	}
+}
+
+// qqVoiceCallReady 是接电话前要齐的东西。problem 非空时接不了，内容是给人看的原因，
+// 带上怎么修。
+type qqVoiceCallReady struct {
+	profileID string
+	ownerID   string
+	problem   string
+}
+
+func qqVoiceCallReadiness(ctx context.Context, runtime *Runtime, change PluginStateChange) qqVoiceCallReady {
+	profileID, problem := qqVoiceCallProfile(runtime, change)
+	if problem != "" {
+		return qqVoiceCallReady{problem: problem}
+	}
+	ready := qqVoiceCallReady{profileID: profileID}
+	ready.ownerID = strings.TrimSpace(runtime.profileConfig(profileID).WithDefaults().OwnerID)
+	if ready.ownerID == "" {
+		ready.problem = "机器人还没填主人账号，认不出哪通是主人打的"
+		return ready
+	}
+	if info := runtime.VoiceCallInfo(ctx, profileID); info.Problem != "" {
+		ready.problem = info.Problem
+		return ready
+	}
+	if _, err := lookResolverCommand("ffmpeg"); err != nil {
+		ready.problem = "Diana 这台机器没装 ffmpeg，机器人说的话转不成 QQ 能播的声音。插件页「QQ 语音通话」的运行依赖里可以一键安装；Docker 部署换成完整版镜像"
+	}
+	return ready
 }
 
 // connected 是第二道核对：接通后读到的 QQ 号必须是主人，读不到也挂。
@@ -445,12 +565,16 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		return
 	}
 	if msg.PeerUIN != target.ownerID {
-		reason := "对方 QQ 号不是主人"
-		if msg.PeerUIN == "" {
-			reason = "接通后读不到对方 QQ 号"
-		}
-		s.plugin.noteCall("来电「%s」%s，已挂断", msg.Name, reason)
 		_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+		if msg.PeerUIN != "" {
+			// 别人打来的：这是正常的拦截，不打扰主人。
+			s.plugin.noteCall("来电「%s」是 %s，不是主人，已挂断", msg.Name, msg.PeerUIN)
+			return
+		}
+		s.plugin.noteCall("来电「%s」接通后读不到对方 QQ 号，已挂断", msg.Name)
+		if runtime, _ := s.plugin.settings(); runtime != nil {
+			s.plugin.tellOwner(runtime, target.profileID, "no-peer", "刚才接起来一通 QQ 语音，但读不到对方的 QQ 号，认不出是不是你，只好挂了。多半是 qqcall-agent 读不到 SnowLuma 的日志（容器里的 QQCALL_LOG_DIR），或者 SnowLuma 升级后日志格式变了。")
+		}
 		return
 	}
 	runtime, change := s.plugin.settings()
@@ -461,6 +585,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if err != nil {
 		s.plugin.noteCall("主人的电话接通了，但开不了通话: %v", err)
 		_ = s.link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
+		s.plugin.tellOwner(runtime, target.profileID, "open:"+err.Error(), "你的电话接通了，但通话开不起来："+err.Error()+"，只好先挂了。")
 		return
 	}
 	callCtx, cancel := context.WithCancel(ctx)
@@ -584,7 +709,11 @@ func decodeCallSpeechToPCM(ctx context.Context, audio []byte, mime string) ([]by
 	if len(audio) == 0 {
 		return nil, errors.New("空音频")
 	}
-	cmd := procgroup.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
+	ffmpeg, err := lookResolverCommand("ffmpeg")
+	if err != nil {
+		return nil, errors.New("没装 ffmpeg")
+	}
+	cmd := procgroup.CommandContext(ctx, ffmpeg, "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
 		"-ac", "1", "-ar", fmt.Sprint(qqcall.SampleRate), "-f", "s16le", "pipe:1")
 	cmd.Stdin = bytes.NewReader(audio)
 	var stdout, stderr bytes.Buffer
@@ -595,11 +724,11 @@ func decodeCallSpeechToPCM(ctx context.Context, audio []byte, mime string) ([]by
 	return stdout.Bytes(), nil
 }
 
-// qqVoiceCallProfile 选出接电话的机器人：设置里指定的，否则启用了插件的第一台 OneBot 机器人。
+// qqVoiceCallProfile 选出接电话的机器人：设置里选的，否则启用了插件的第一台 OneBot 机器人。
 func qqVoiceCallProfile(runtime *Runtime, change PluginStateChange) (string, string) {
 	if id := strings.TrimSpace(change.Settings.String(qqVoiceCallSettingProfile, "")); id != "" {
 		if !IsOneBotPlatform(runtime.profileConfig(id).WithDefaults().Platform) {
-			return "", "指定的机器人「" + id + "」不是 OneBot 机器人"
+			return "", "插件设置里选的机器人「" + id + "」不是 OneBot 机器人，换成容器里登录的那个 QQ"
 		}
 		return id, ""
 	}
@@ -608,34 +737,7 @@ func qqVoiceCallProfile(runtime *Runtime, change PluginStateChange) (string, str
 			return id, ""
 		}
 	}
-	return "", "没有启用了插件的 OneBot 机器人，在插件设置里填「接电话的机器人」"
-}
-
-// qqOwnerNames 问出主人在 QQ 上可能显示的名字：好友备注（来电窗口优先显示它）和昵称。
-func (r *Runtime) qqOwnerNames(ctx context.Context, profileID, ownerID string) []string {
-	_, event, err := r.ownerChatEvent(profileID)
-	if err != nil {
-		return nil
-	}
-	data, err := r.callOneBotAPIForEvent(ctx, event, "get_friend_list", map[string]any{"no_cache": true})
-	if err != nil {
-		return nil
-	}
-	items, _ := structuredGroupListItems(data)
-	for _, raw := range items {
-		item, ok := raw.(map[string]any)
-		if !ok || strings.TrimSpace(stringFromAny(item["user_id"])) != ownerID {
-			continue
-		}
-		var names []string
-		for _, key := range []string{"remark", "nickname"} {
-			if name := strings.TrimSpace(stringFromAny(item[key])); name != "" {
-				names = append(names, name)
-			}
-		}
-		return names
-	}
-	return nil
+	return "", "没有启用了这个插件的 OneBot 机器人，在插件设置里选「接电话的机器人」"
 }
 
 func qqVoiceCallSeconds(settings SettingValues, key string, fallback time.Duration) time.Duration {
