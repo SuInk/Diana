@@ -12,7 +12,15 @@
       <div class="qq-contacts" role="list">
         <div v-if="profilesLoading && !contacts.length" class="qq-loading" role="status" aria-label="正在加载机器人"><SkeletonBlock v-for="i in 3" :key="i" width="100%" height="44px" /></div>
         <p v-else-if="profilesError" class="qq-empty" role="alert">{{ profilesError }}</p>
-        <p v-else-if="!contacts.length" class="qq-empty">还没有机器人，先到「机器人」页添加一台。</p>
+        <!-- 管理助手置顶：和机器人聊、找管理助手办事都从聊天页进，对话仍各管各的。 -->
+        <button v-if="!search" role="listitem" class="qq-contact qq-admin" type="button" data-admin-chat @click="navigate('admin-chat')">
+          <span class="qq-admin-avatar" aria-hidden="true"><Wrench :size="20" /></span>
+          <span class="qq-contact-text">
+            <span class="qq-contact-top"><strong>管理助手</strong></span>
+            <small>装扩展、查问题、改配置</small>
+          </span>
+        </button>
+        <p v-if="!profilesLoading && !profilesError && !contacts.length" class="qq-empty">还没有机器人，先到「机器人」页添加一台。</p>
         <button
           v-for="contact in filteredContacts"
           :key="contact.id"
@@ -90,13 +98,14 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { ChevronLeft, CircleAlert, LoaderCircle, MessagesSquare, Phone, Search } from "@lucide/vue";
+import { ChevronLeft, CircleAlert, LoaderCircle, MessagesSquare, Phone, Search, Wrench } from "@lucide/vue";
 import BotAvatar from "../components/BotAvatar.vue";
 import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import VoiceCallScreen from "../components/VoiceCallScreen.vue";
 import { getBotProfileConfig, type BotProfileConfig } from "../api";
 import { botScope } from "../lib/bot-scope";
+import { navigate } from "../router";
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
@@ -434,6 +443,18 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow-y: auto;
   padding: 0 6px 8px;
+}
+
+/* 管理助手的头像和机器人头像一样大，换成工具图标区分开 */
+.qq-admin-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
 }
 
 .qq-contact {
