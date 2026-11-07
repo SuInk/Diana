@@ -2,7 +2,7 @@
 
 配置 `CoreTools` 后，MCP 与内置的非 core 工具统一通过固定的 `tool_search` / `tools_execute` 协议调用。未配置时维持全部工具直接声明的兼容模式。主回复只留 `send` 常驻，API `tools` 数组只有 `send`、`tool_search`、`tools_execute` 三项，对谁都一样。
 
-1. 从系统提示词目录选择工具，按目录行里的参数签名填 `input`，直接调用 `tools_execute({"name":"目标工具名","input":{...}})`。参数符合当前定义就当场执行并登记为已加载；不符合时不执行，把完整契约连同报错交回，下一步照着重新调用。兼容 JSON action 协议也使用此信封；直接按工具名调用同样处理。
+1. 从系统提示词目录选择工具，按目录行里的参数签名填 `input`，直接调用 `tools_execute({"name":"目标工具名","input":{...}})`。参数符合当前定义就当场执行并登记为已加载；不符合时不执行，把校验错误和完整契约一起交回并登记为已加载，下一步改好参数直接重调，不用 `tool_search`（2026-11-07 前这条路回的是「未在本轮加载，请先 tool_search」，模型照做再调一遍，白走两步）。兼容 JSON action 协议也使用此信封；直接按工具名调用同样处理。
 2. 签名写着「参数多，先 tool_search 取定义」（签名超过 600 字的几个大工具：`bot_config`、`subscription`、`github`、`runtime_model`），或某个参数的含义拿不准时，先 `tool_search({"names":["目标工具名"]})` 取完整 `description` 和 `inputSchema`；不知道确切名字时用 `tool_search({"query":"关键词"})`，按工具名和描述匹配（中文按相邻两字切），返回最相关的 4 个。
 
 `tool_search` 以前叫 `tools_load`，和 Codex CLI、Claude Code 的叫法对齐后改名。旧名不再出现在工具定义里，但模型照旧这么调、或历史里留着旧调用时，调度层照常认。

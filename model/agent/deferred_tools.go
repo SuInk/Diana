@@ -481,10 +481,24 @@ func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) 
 		schema, loaded = l.loaded[name], true
 	}
 	if !loaded {
-		if _, exists := l.registry.Get(name); !exists {
+		tool, exists := l.registry.Get(name)
+		if !exists {
 			return action, l.missingToolError(name)
 		}
-		return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tool_search，再 tools_execute", name)
+		// 走到这里是参数不符合定义（没加载过、又没能当场登记）。以前回「未在本轮加载，请先
+		// tool_search」：模型照做再调一遍，白走两步；线上 swe-2 一天 12 次，全是 operation
+		// 写成 action、query 写成 keyword 这种字段名错。和 dispatchDirect 一样，说清哪里不对，
+		// 把完整契约一起交回，下一步直接改好重调。
+		current, err := snapshotToolSchema(tool)
+		if err != nil {
+			return action, fmt.Errorf("工具 %q 当前 inputSchema 无效，请重新 tool_search", name)
+		}
+		why := validateToolInput(current, coerceToolInputArrays(current, action.Input))
+		contract, err := l.Run(context.Background(), map[string]any{"names": []string{name}})
+		if err != nil {
+			return action, err
+		}
+		return action, fmt.Errorf("工具 %q 的参数不符合定义（%v），这次没有执行；已经替你加载，完整契约如下，照 inputSchema 改好参数后重新 tools_execute，不用 tool_search：%s", name, why, contract)
 	}
 	action.Input = coerceToolInputArrays(schema, action.Input)
 	input := action.Input
@@ -716,7 +730,7 @@ func (l *deferredToolLoader) loadOnCall(name string, input map[string]any) bool 
 		return false
 	}
 	schema, err := snapshotToolSchema(tool)
-	if err != nil || validateToolInput(schema, input) != nil {
+	if err != nil || validateToolInput(schema, coerceToolInputArrays(schema, input)) != nil {
 		return false
 	}
 	if _, exists := l.loaded[name]; !exists {
