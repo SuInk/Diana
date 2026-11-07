@@ -127,8 +127,8 @@ func TestCUADriverCaptureMatchesLogicalPoints(t *testing.T) {
 	}
 }
 
-// 元素点击走完 Diana 自己的观察→比对→确认流程，确认前不下发；下发时用最新快照拼令牌。
-func TestCUADriverElementClickNeedsApprovalAndFreshToken(t *testing.T) {
+// 元素点击走完 Diana 自己的观察→比对流程后直接下发，不等人确认；下发时用最新快照拼令牌。
+func TestCUADriverElementClickUsesFreshToken(t *testing.T) {
 	a, fake := newFakeCUAAdapter()
 	ctx := context.Background()
 	elements, err := a.Elements(ctx, Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit"})
@@ -139,19 +139,6 @@ func TestCUADriverElementClickNeedsApprovalAndFreshToken(t *testing.T) {
 		t.Fatalf("elements = %#v", elements.Elements)
 	}
 	c := Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit", ElementID: "3", Observation: elements.Observation}
-	if _, err := a.Click(ctx, c); ErrorCode(err) != CodeConfirmationRequired {
-		t.Fatalf("first click should wait for approval, got %v", err)
-	}
-	if fake.count("click") != 0 {
-		t.Fatal("input was dispatched before the owner confirmed")
-	}
-	pending, _ := a.PendingActions(ctx)
-	if len(pending) != 1 || pending[0].TargetLabel != "保存" {
-		t.Fatalf("pending = %#v", pending)
-	}
-	if err := a.ConfirmAction(ctx, pending[0].ID); err != nil {
-		t.Fatal(err)
-	}
 	result, err := a.Click(ctx, c)
 	if err != nil {
 		t.Fatal(err)
@@ -178,10 +165,6 @@ func TestCUADriverCoordinateClickBindsCapture(t *testing.T) {
 	}
 	x, y := 12.5, 30.0
 	c := Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit", X: &x, Y: &y, Button: "right", Observation: shot.Observation}
-	_, _ = a.Click(ctx, c)
-	if err := a.ConfirmAction(ctx, actionKey(c)); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := a.Click(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -200,10 +183,6 @@ func TestCUADriverMenuShortcutsUseForeground(t *testing.T) {
 			t.Fatal(err)
 		}
 		c := Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit", Key: key, Observation: shot.Observation}
-		_, _ = a.PressKey(ctx, c)
-		if err := a.ConfirmAction(ctx, actionKey(c)); err != nil {
-			t.Fatal(err)
-		}
 		if _, err := a.PressKey(ctx, c); err != nil {
 			t.Fatal(err)
 		}
@@ -222,10 +201,6 @@ func TestCUADriverRefusedEffectIsNotDispatched(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := Command{WindowID: "501:77", ExpectedBundleID: "com.apple.TextEdit", Key: "f13", Observation: shot.Observation}
-	_, _ = a.PressKey(ctx, c)
-	if err := a.ConfirmAction(ctx, actionKey(c)); err != nil {
-		t.Fatal(err)
-	}
 	result, err := a.PressKey(ctx, c)
 	if err == nil || result.OK || !strings.Contains(err.Error(), "target_focus_unconfirmed") {
 		t.Fatalf("refused effect reported as dispatched: result=%+v err=%v", result, err)

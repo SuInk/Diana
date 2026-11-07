@@ -20,7 +20,9 @@ import (
 )
 
 // ProcessAdapter owns the safety contract of local desktop input: observation
-// versions bound to a captured scene, one-shot approvals and post-action evidence.
+// versions bound to a captured scene and post-action evidence. Writes need no
+// human confirmation; the agent must look first, and a changed scene rejects
+// the action so it observes again.
 // The executor behind it is a desktopBackend — the native macOS helper or
 // cua-driver — whose path is operator configuration, never a model parameter.
 type ProcessAdapter struct {
@@ -29,18 +31,10 @@ type ProcessAdapter struct {
 	gate         chan struct{}
 	sequence     chan struct{}
 	observations map[int64]processObservation
-	approvals    map[string]ActionApproval
-	// changed is closed and replaced whenever approvals or observations change,
-	// waking callers that wait for the owner (see signalLocked).
-	changed chan struct{}
-	// confirmWait is how long a write blocks for the owner's confirmation. Zero
-	// returns confirmation_required at once and expects a retry with the same
-	// parameters after the owner confirmed.
-	confirmWait time.Duration
 }
 
 // desktopBackend only executes. It must not decide whether an action is
-// allowed: ProcessAdapter checks observation, scene and approval first.
+// allowed: ProcessAdapter checks observation and scene first.
 type desktopBackend interface {
 	listWindows(ctx context.Context) ([]WindowInfo, error)
 	// capture returns a PNG of exactly one window.
@@ -52,16 +46,7 @@ type desktopBackend interface {
 }
 
 func newProcessAdapter(backend desktopBackend, path string) *ProcessAdapter {
-	return &ProcessAdapter{backend: backend, path: path, gate: make(chan struct{}, 1), sequence: make(chan struct{}, 1), observations: map[int64]processObservation{}, approvals: map[string]ActionApproval{}, changed: make(chan struct{})}
-}
-
-// SetConfirmationWait sets how long writes wait for the owner's confirmation.
-// Call it before the adapter serves commands.
-func (a *ProcessAdapter) SetConfirmationWait(d time.Duration) {
-	if d < 0 {
-		d = 0
-	}
-	a.confirmWait = d
+	return &ProcessAdapter{backend: backend, path: path, gate: make(chan struct{}, 1), sequence: make(chan struct{}, 1), observations: map[int64]processObservation{}}
 }
 
 // NewProcessAdapter drives the native macOS helper (desktopctl-helper).
@@ -263,87 +248,36 @@ func (a *ProcessAdapter) PressKey(ctx context.Context, c Command) (ActionResult,
 	return a.action(ctx, c, OpWindowKey)
 }
 
-// action runs op for c. The approval key hashes c as the caller sent it, so op
-// is passed beside it rather than written into the command.
-//
-// Without an approved grant the first attempt registers a confirmation request
-// and, when confirmWait is set, waits outside the sequence gate until the owner
-// confirms, the grant expires or ctx ends. Every wake re-runs the full check:
-// the observation must still exist and the window must still match the scene
-// the owner was shown, so a confirmation never sends input into a changed UI.
+// action runs op for c. op is passed beside the command rather than written
+// into it, so the command stays exactly as the caller sent it.
 func (a *ProcessAdapter) action(ctx context.Context, c Command, op string) (ActionResult, error) {
-	waited := false
-	for {
-		result, wake, err := a.attemptAction(ctx, c, op, waited)
-		if wake == nil {
-			return result, err
-		}
-		waited = true
-		select {
-		case <-wake.changed:
-		case <-wake.expired.C:
-		case <-ctx.Done():
-			wake.expired.Stop()
-			// Nobody will act on this request any more; do not leave a grant the
-			// owner could still approve for a later, unrelated retry.
-			a.dropApproval(actionKey(c))
-			return ActionResult{}, ctx.Err()
-		}
-		wake.expired.Stop()
-	}
-}
-
-func (a *ProcessAdapter) dropApproval(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if a.lockSequence(ctx) != nil {
-		return
-	}
-	defer a.unlockSequence()
-	delete(a.approvals, id)
-}
-
-type actionWake struct {
-	changed <-chan struct{}
-	expired *time.Timer
-}
-
-func (a *ProcessAdapter) attemptAction(ctx context.Context, c Command, op string, waited bool) (ActionResult, *actionWake, error) {
 	if err := a.lockSequence(ctx); err != nil {
-		return ActionResult{}, nil, err
+		return ActionResult{}, err
 	}
 	defer a.unlockSequence()
-	a.pruneApprovals()
 	before, ok := a.observations[c.Observation]
-	if !ok || before.window != c.WindowID || before.bundle != c.ExpectedBundleID || (time.Since(before.at) > observationTTL && !a.pinned(c.Observation)) {
-		if waited {
-			return ActionResult{}, nil, commandError(CodeStaleObservation, "等待确认期间观察已失效（窗口有了新的观察或执行器重连），操作没有执行，请重新观察")
-		}
-		return ActionResult{}, nil, commandError(CodeStaleObservation, "先截图或读取元素，再传入对应 observation；观察有效期为两分钟")
+	if !ok || before.window != c.WindowID || before.bundle != c.ExpectedBundleID || time.Since(before.at) > 2*time.Minute {
+		return ActionResult{}, commandError(CodeStaleObservation, "先截图或读取元素，再传入对应 observation；观察有效期为两分钟")
 	}
 	current, err := a.capture(ctx, c.WindowID, c.ExpectedBundleID)
 	if err != nil {
-		return ActionResult{}, nil, err
+		return ActionResult{}, err
 	}
 	if !sameScene(before.scene, current.Data) {
 		delete(a.observations, c.Observation)
-		a.pruneApprovals()
-		if waited {
-			return ActionResult{}, nil, commandError(CodeStaleObservation, "主人确认时窗口画面已经和请求时不同，操作没有执行，请重新观察后再操作")
-		}
-		return ActionResult{}, nil, commandError(CodeStaleObservation, "窗口画面已经变化，请重新观察后再操作")
+		return ActionResult{}, commandError(CodeStaleObservation, "窗口画面已经变化，请重新观察后再操作")
 	}
 	var target *Element
 	if c.ElementID != "" {
 		if before.elements == nil {
-			return ActionResult{}, nil, commandError(CodeStaleObservation, "元素点击须使用 desktop_elements 的 observation")
+			return ActionResult{}, commandError(CodeStaleObservation, "元素点击须使用 desktop_elements 的 observation")
 		}
 		currentElements, e := a.backend.elements(ctx, c.WindowID, c.ExpectedBundleID)
 		if e != nil {
-			return ActionResult{}, nil, e
+			return ActionResult{}, e
 		}
 		if !bytes.Equal(rawJSON(currentElements.Elements), rawJSON(before.elements)) {
-			return ActionResult{}, nil, commandError(CodeStaleObservation, "元素已经变化，请重新读取")
+			return ActionResult{}, commandError(CodeStaleObservation, "元素已经变化，请重新读取")
 		}
 		for index, el := range before.elements {
 			if el.ID == c.ElementID && el.Enabled {
@@ -351,32 +285,16 @@ func (a *ProcessAdapter) attemptAction(ctx context.Context, c Command, op string
 			}
 		}
 		if target == nil {
-			return ActionResult{}, nil, commandError(CodeBadRequest, "元素不存在或不可操作")
+			return ActionResult{}, commandError(CodeBadRequest, "元素不存在或不可操作")
 		}
-	}
-	wait, created, err := a.authorizeAction(c, current, before.elements, waited)
-	if created != nil {
-		if notify := ConfirmationNotifierFrom(ctx); notify != nil {
-			req := ConfirmationRequest{ID: created.ID, Command: created.Command, TargetLabel: created.TargetLabel, ExpiresAt: created.ExpiresAt}
-			notifyCtx := context.WithoutCancel(ctx)
-			go notify(notifyCtx, req)
-		}
-	}
-	if err != nil {
-		return ActionResult{}, nil, err
-	}
-	if wait {
-		expiresAt := a.approvals[actionKey(c)].ExpiresAt
-		return ActionResult{}, &actionWake{changed: a.changed, expired: time.NewTimer(time.Until(expiresAt) + 10*time.Millisecond)}, nil
 	}
 	// Consume before sending: a timeout or missing receipt must never permit replay.
 	a.observations = map[int64]processObservation{}
-	a.signalLocked()
 	sent := c
 	sent.Op = op
 	result, err := a.backend.dispatch(ctx, sent, target)
 	if err != nil {
-		return ActionResult{}, nil, err
+		return ActionResult{}, err
 	}
 	result.OK = true
 	result.Op = op
@@ -392,7 +310,7 @@ func (a *ProcessAdapter) attemptAction(ctx context.Context, c Command, op string
 		result.Observation = evidence.Observation
 		result.Evidence = &evidence
 	}
-	return result, nil, nil
+	return result, nil
 }
 
 var _ io.Writer = (*boundedOutput)(nil)
@@ -419,6 +337,16 @@ func (a *ProcessAdapter) lockSequence(ctx context.Context) error {
 	}
 }
 func (a *ProcessAdapter) unlockSequence() { <-a.sequence }
+
+// Invalidate drops every observation, so the next write must observe again.
+// Takeover and reconnect call it.
+func (a *ProcessAdapter) Invalidate(ctx context.Context) {
+	if a.lockSequence(ctx) != nil {
+		return
+	}
+	defer a.unlockSequence()
+	a.observations = map[int64]processObservation{}
+}
 func (a *ProcessAdapter) remember(p ScreenshotPayload, elements []Element) int64 {
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -428,18 +356,11 @@ func (a *ProcessAdapter) remember(p ScreenshotPayload, elements []Element) int64
 	if id == 0 {
 		id = 1
 	}
-	// One latest observation per window. Bound total in-memory retention; an
-	// observation a pending confirmation is bound to outlives observationTTL.
-	removed := false
+	// One latest observation per window. Bound total in-memory retention.
 	for key, old := range a.observations {
-		if old.window == p.WindowID || (time.Since(old.at) > observationTTL && !a.pinned(key)) || len(a.observations) >= 64 {
+		if old.window == p.WindowID || time.Since(old.at) > 2*time.Minute || len(a.observations) >= 64 {
 			delete(a.observations, key)
-			removed = true
 		}
-	}
-	if removed {
-		a.pruneApprovals()
-		a.signalLocked()
 	}
 	a.observations[id] = processObservation{window: p.WindowID, bundle: p.BundleID, scene: p.Data, at: time.Now(), elements: elements}
 	return id

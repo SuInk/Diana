@@ -569,8 +569,6 @@ type Runtime struct {
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
 	desktopControl            agent.DesktopControlBridge
-	// desktopConfirmationNotify 换掉「桌面操作等你确认」私聊的出口，测试里用。
-	desktopConfirmationNotify func(ctx context.Context, profileID, text string) error
 	browserBox                BuiltinBrowserProvider
 	browserSource             func() string
 	userBrowsers              *browserbox.UserSessionPool
@@ -874,10 +872,7 @@ func (r *Runtime) desktopControlFor(cfg BotConfig) agent.DesktopControlBridge {
 	r.mu.RLock()
 	bridge := r.desktopControl
 	r.mu.RUnlock()
-	if bridge == nil {
-		return nil
-	}
-	return desktopControlOwnerBridge{DesktopControlBridge: bridge, runtime: r, profileID: cfg.ID}
+	return bridge
 }
 
 func (r *Runtime) SetPrivateMessageInterceptor(interceptor PrivateMessageInterceptor) {

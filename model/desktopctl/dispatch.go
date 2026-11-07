@@ -146,17 +146,6 @@ func (h *Hub) Dispatch(ctx context.Context, cmd Command) (Result, error) {
 		return Result{}, err
 	}
 	timeout := time.Duration(policy.CommandTimeoutMS) * time.Millisecond
-	if IsWriteOp(op) {
-		// 本机执行器会在下发前等主人确认，回执期限要把这段等待算进去。
-		timeout += ActionConfirmationWait
-		if notify := ConfirmationNotifierFrom(ctx); notify != nil {
-			app := target.AppName
-			ctx = WithConfirmationNotifier(ctx, func(ctx context.Context, req ConfirmationRequest) {
-				req.AppName = app
-				notify(ctx, req)
-			})
-		}
-	}
 	result, err := conn.send(ctx, op, cmd, timeout)
 	if stepID != "" && h.jobs != nil {
 		h.jobs.RecordDispatch(ctx, cmd.JobID, stepID, cmd, result, err)

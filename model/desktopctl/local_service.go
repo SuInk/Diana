@@ -143,7 +143,6 @@ func (s *LocalService) newAdapter(ctx context.Context) (*ProcessAdapter, string,
 		if err != nil {
 			return nil, "", err.Error()
 		}
-		a.SetConfirmationWait(ActionConfirmationWait)
 		return a, label, ""
 	}
 	pending := ""
@@ -173,7 +172,6 @@ func (s *LocalService) newAdapter(ctx context.Context) (*ProcessAdapter, string,
 	if err != nil {
 		return nil, "", err.Error()
 	}
-	a.SetConfirmationWait(ActionConfirmationWait)
 	return a, "desktopctl-helper", ""
 }
 
