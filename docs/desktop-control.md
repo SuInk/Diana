@@ -23,6 +23,8 @@ WebUI 的“设置 → 桌面控制”提供系统权限状态、人工接管和
 6. **身份**：仅主人；群成员工具白名单不含这些工具。
 7. **macOS 权限**：Screen Recording（截图）；Accessibility（写操作）。失败返回可解释 `permission_denied`。
 
+以上开关默认全关。主人也可以直接在聊天里让 Diana 打开：它用 `console_config` 暂存总开关、`write_enabled` 和本机器人的 `agent_desktop_control_enabled`，主人回复同意后生效，下一条消息起就有 `desktop_*` 工具。macOS 的屏幕录制和辅助功能权限仍要主人在系统设置里授权。
+
 人工接管开启后，一切指令拒绝（`takeover`）。接管状态独立落盘，重连、重启、修改应用权限不会自动解除；只能在控制台明确结束接管。
 
 ## 工具
