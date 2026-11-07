@@ -253,6 +253,7 @@ func (t *dianaBotConfigTool) pluginSettingsView(id, scope string, owner bool, gr
 	if err != nil {
 		return nil, err
 	}
+	state = t.runtime.withBotProfileOptions(state)
 	overrides := map[string]any(nil)
 	if scope == PluginSettingScopeGroup {
 		overrides = group.PluginSettingOverrides[state.Manifest.ID]
@@ -294,5 +295,11 @@ func (t *dianaBotConfigTool) pluginSettingsView(id, scope string, owner bool, gr
 		item["editable"] = pluginSettingEditable(spec, scope, owner) == nil
 		settings = append(settings, item)
 	}
-	return map[string]any{"id": state.Manifest.ID, "name": state.Manifest.Name, "scope": scope, "settings": settings}, nil
+	view := map[string]any{"id": state.Manifest.ID, "name": state.Manifest.Name, "scope": scope, "settings": settings}
+	// 运行状态（连没连上、缺什么、最近一次的结果）一起给：主人问「怎么没用」时模型
+	// 不用猜，Problems 里每条都写了怎么修。
+	if status := t.runtime.plugins.PluginRuntimeStatus(context.Background(), state.Manifest.ID); status != nil {
+		view["status"] = status
+	}
+	return view, nil
 }

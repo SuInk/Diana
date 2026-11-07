@@ -1189,6 +1189,8 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 			}
 			state.EnabledProfiles, state.ProfileCount = &enabled, &total
 		}
+		state = assistant.WithBotProfileOptions(state, h.profiles.Profiles().Profiles)
+		state.RuntimeStatus = h.runtime.Plugins().PluginRuntimeStatus(c.Request.Context(), state.Manifest.ID)
 		visible = append(visible, h.withRepoSource(state))
 	}
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
@@ -1238,6 +1240,7 @@ func (h *BotHandler) pluginDependencies(c *gin.Context) {
 			assistant.ResolverPluginID:            resolver,
 			assistant.BrowserRendererDependencyID: browser,
 			assistant.GroupRelationsPluginID:      assistant.RelationRenderDependencies(browser),
+			assistant.QQVoiceCallPluginID:         assistant.QQVoiceCallDependencies(resolver),
 		},
 	})
 }

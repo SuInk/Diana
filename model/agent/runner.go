@@ -1505,7 +1505,7 @@ func (r *Runner) speakerToolPrompt() string {
 	}
 	if r.loader != nil {
 		if catalog := r.loader.speakerCatalog(); catalog != "" {
-			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，用 tools_execute 调用，不清楚参数时先 "+ToolsLoadToolName+"：\n"+catalog)
+			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，按括号里的签名填参数、用 tools_execute 调用：\n"+catalog)
 		}
 	}
 	shared := r.toolRules(r.sharedToolPredicate(), false)
@@ -1578,7 +1578,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 填参数，参数合法就直接执行；不清楚参数怎么填时先用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}

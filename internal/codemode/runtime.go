@@ -38,6 +38,9 @@ type Request struct {
 	Store map[string]json.RawMessage
 	Code  string
 	Tools []string
+	// Descriptions is what a script sees in ALL_TOOLS for each tool: its
+	// signature and a line of purpose. Missing entries render as empty.
+	Descriptions map[string]string
 	// ParallelTools is an explicit read-only allowlist. Other calls run in call order.
 	ParallelTools []string
 	MaxCalls      int
@@ -135,7 +138,7 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 	entries := make([]toolEntry, 0, len(req.Tools))
 	for _, name := range req.Tools {
 		allowed[name] = true
-		entries = append(entries, toolEntry{Name: name, JSName: scriptIdentifier(name)})
+		entries = append(entries, toolEntry{Name: name, JSName: scriptIdentifier(name), Description: req.Descriptions[name]})
 	}
 	toolsJSON, _ := json.Marshal(entries)
 	parallel := make(map[string]bool, len(req.ParallelTools))
@@ -241,7 +244,12 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 				input = machine.toString(args[2])
 			}
 			trimmed := strings.TrimSpace(input)
-			if !allowed[name] || len(input) > maxArgumentBytes || !strings.HasPrefix(trimmed, "{") || !json.Valid([]byte(trimmed)) {
+			if !allowed[name] {
+				message := "tool " + name + " is not available in this script; ALL_TOOLS lists the tools"
+				immediate = append(immediate, toolReply{id: id, payload: &message})
+				return
+			}
+			if len(input) > maxArgumentBytes || !strings.HasPrefix(trimmed, "{") || !json.Valid([]byte(trimmed)) {
 				message := "tool arguments must be a bounded JSON object"
 				immediate = append(immediate, toolReply{id: id, payload: &message})
 				return

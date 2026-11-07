@@ -847,9 +847,10 @@ func ResidencyCost(tool Tool) (resident, deferred int64) {
 	return llm.EstimateToolDefinitionTokens(ToolDefinitionFor(tool)), llm.EstimateTextTokens(deferredCatalogLine(tool))
 }
 
-// deferredCatalogLine 是按需目录里的一行，catalog 和开销估算共用同一份格式。
+// deferredCatalogLine 是按需目录里的一行，catalog 和开销估算共用同一份格式：名字后面
+// 跟参数签名（见 tool_signature.go），模型照着就能直接 tools_execute。
 func deferredCatalogLine(tool Tool) string {
-	return "- " + tool.Name() + ": " + catalogLineDescription(tool) + "\n"
+	return "- " + tool.Name() + toolSignature(tool) + ": " + catalogLineDescription(tool) + "\n"
 }
 
 // SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上

@@ -157,6 +157,8 @@ type PluginState struct {
 	Settings map[string]any `json:"settings,omitempty"`
 	// RepoSource 只对第三方仓库插件出现：安装来源与版本，插件页据此提供更新入口。
 	RepoSource *RepoPluginSource `json:"repo_source,omitempty"`
+	// RuntimeStatus 只在插件列表接口里出现，见 PluginRuntimeStatus。
+	RuntimeStatus *PluginRuntimeStatus `json:"runtime_status,omitempty"`
 	// SecretsConfigured 只在脱敏后的响应里出现，标记哪些凭据已经配置过。
 	// 明文永远不出现在读接口里。
 	SecretsConfigured map[string]bool `json:"secrets_configured,omitempty"`
@@ -327,6 +329,40 @@ type PluginTaskServices struct {
 type Plugin interface {
 	Manifest() PluginManifest
 	Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error)
+}
+
+// PluginRuntimeStatus 是插件此刻跑得怎么样：连没连上、缺什么、最近一次干了什么。
+// 插件页显示它，bot_config 查插件设置时也带上它，机器人被问起时能自己说清原因。
+type PluginRuntimeStatus struct {
+	// Summary 是一句话结论。
+	Summary string `json:"summary"`
+	// Problems 是要处理的问题，每条一句，带怎么修。为空表示一切正常。
+	Problems []string `json:"problems,omitempty"`
+	// Recent 是最近一次活动的结果，RecentAt 是它的 Unix 秒。
+	Recent   string `json:"recent,omitempty"`
+	RecentAt int64  `json:"recent_at,omitempty"`
+}
+
+// RuntimeStatusPlugin 是能报运行状态的插件。返回 false 表示这时没什么可报的（比如插件关着）。
+type RuntimeStatusPlugin interface {
+	RuntimeStatus(ctx context.Context) (PluginRuntimeStatus, bool)
+}
+
+// PluginRuntimeStatus 取一个插件的运行状态，插件不报状态时返回 nil。
+func (m *PluginManager) PluginRuntimeStatus(ctx context.Context, id string) *PluginRuntimeStatus {
+	plugin, _, ok := m.PluginForConfiguration(id)
+	if !ok {
+		return nil
+	}
+	reporter, ok := plugin.(RuntimeStatusPlugin)
+	if !ok {
+		return nil
+	}
+	status, ok := reporter.RuntimeStatus(ctx)
+	if !ok {
+		return nil
+	}
+	return &status
 }
 
 type DirectTriggerPlugin interface {

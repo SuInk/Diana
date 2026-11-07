@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -21,6 +22,10 @@ const (
 	PluginSettingTypePlatformLevelRules = "platform_level_rules"
 	// PluginSettingTypeLLMProfile 存一个模型配置 ID，前端渲染成模型下拉框；空串表示跟随对话模型。
 	PluginSettingTypeLLMProfile = "llm_profile"
+	// PluginSettingTypeBotProfile 存一个机器人 ID，WebUI 渲染成机器人下拉框；空串表示
+	// 由插件自己挑。候选项不写死在清单里，列表接口按当前的机器人现填（见
+	// WithBotProfileOptions），ProfilePlatforms 限定只列哪些平台的机器人。
+	PluginSettingTypeBotProfile = "bot_profile"
 	// PluginSettingTypeText 渲染为多行文本框，用于模板这类带换行的配置。
 	PluginSettingTypeText = "text"
 	// PluginSettingTypeSize 的值统一是字节数，WebUI 渲染成「数字 + 单位」，
@@ -65,6 +70,8 @@ type PluginSettingSpec struct {
 	ConfigureBy []string `json:"configure_by,omitempty"`
 	// ShowWhen 让设置项只在另一个设置取某些值时显示，减少用不到的输入框。只影响界面。
 	ShowWhen *PluginSettingCondition `json:"show_when,omitempty"`
+	// ProfilePlatforms 只对 bot_profile 类型有意义：下拉框只列这些平台的机器人，空表示全列。
+	ProfilePlatforms []string `json:"profile_platforms,omitempty"`
 }
 
 // parseLLMProfileSetting 拆开 llm_profile 设置：JSON 的 [提供商ID, 模型]；只填了
@@ -349,7 +356,7 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 		}
 		// 字节数没有小数概念，落库前取整。
 		return math.Round(number), nil
-	case PluginSettingTypeString, PluginSettingTypeText, PluginSettingTypeLLMProfile:
+	case PluginSettingTypeString, PluginSettingTypeText, PluginSettingTypeLLMProfile, PluginSettingTypeBotProfile:
 		value, ok := raw.(string)
 		if !ok {
 			return nil, fmt.Errorf("diana: setting %q expects a string", spec.Key)
@@ -515,4 +522,69 @@ func numberValue(raw any) (float64, bool) {
 // settingRange 构造设置范围用的 float64 指针。
 func settingRange(value float64) *float64 {
 	return &value
+}
+
+// WithBotProfileOptions 给 bot_profile 类型的设置填上这些机器人作候选项，第一项是空串
+// 「自动」。清单里的 Settings 切片和别的状态共用，这里复制一份再改。
+func WithBotProfileOptions(state PluginState, profiles []BotConfig) PluginState {
+	has := false
+	for _, spec := range state.Manifest.Settings {
+		if spec.Type == PluginSettingTypeBotProfile {
+			has = true
+			break
+		}
+	}
+	if !has {
+		return state
+	}
+	sorted := append([]BotConfig(nil), profiles...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	settings := append([]PluginSettingSpec(nil), state.Manifest.Settings...)
+	for index, spec := range settings {
+		if spec.Type != PluginSettingTypeBotProfile {
+			continue
+		}
+		options := []PluginSettingOption{{Value: "", Label: "自动"}}
+		for _, profile := range sorted {
+			cfg := profile.WithDefaults()
+			id := strings.TrimSpace(cfg.ID)
+			if id == "" || !profilePlatformAllowed(spec.ProfilePlatforms, cfg.Platform) {
+				continue
+			}
+			label := firstNonEmpty(strings.TrimSpace(cfg.Name), id)
+			if account := strings.TrimSpace(cfg.BotAccount); account != "" {
+				label += "（" + account + "）"
+			}
+			options = append(options, PluginSettingOption{Value: id, Label: label})
+		}
+		settings[index].Options = options
+	}
+	state.Manifest.Settings = settings
+	return state
+}
+
+// withBotProfileOptions 用这台 Runtime 里的机器人填候选项，聊天里查插件设置时用。
+func (r *Runtime) withBotProfileOptions(state PluginState) PluginState {
+	r.mu.RLock()
+	profiles := make([]BotConfig, 0, len(r.profileConfigs))
+	for id, cfg := range r.profileConfigs {
+		if strings.TrimSpace(cfg.ID) == "" {
+			cfg.ID = id
+		}
+		profiles = append(profiles, cfg)
+	}
+	r.mu.RUnlock()
+	return WithBotProfileOptions(state, profiles)
+}
+
+func profilePlatformAllowed(platforms []string, platform string) bool {
+	if len(platforms) == 0 {
+		return true
+	}
+	for _, allowed := range platforms {
+		if NormalizePlatformID(allowed) == NormalizePlatformID(platform) || (IsOneBotPlatform(allowed) && IsOneBotPlatform(platform)) {
+			return true
+		}
+	}
+	return false
 }

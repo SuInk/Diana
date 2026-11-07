@@ -70,16 +70,99 @@ func expectNoQQCallMessage(t *testing.T, got <-chan qqcall.Message) {
 	}
 }
 
+// recordQQVoiceCallNotices 换掉插件发私聊提醒的出口，把提醒收进通道。
+func recordQQVoiceCallNotices(plugin *QQVoiceCallPlugin, runtime *Runtime) <-chan string {
+	notices := make(chan string, 8)
+	plugin.runtime = runtime
+	plugin.notify = func(_ context.Context, _ *Runtime, _ string, text string) error {
+		notices <- text
+		return nil
+	}
+	return notices
+}
+
 func TestQQVoiceCallHangsUpWhenPeerIsNotOwner(t *testing.T) {
 	for _, peer := range []string{"10002", ""} {
 		link, got := fakeQQCallAgent(t)
-		calls := newQQCallSet(NewQQVoiceCallPlugin(), link)
+		plugin := NewQQVoiceCallPlugin()
+		notices := recordQQVoiceCallNotices(plugin, &Runtime{})
+		calls := newQQCallSet(plugin, link)
 		calls.answered["c1"] = qqCallTarget{profileID: "default", ownerID: "10001"}
 		calls.connected(context.Background(), qqcall.Message{Type: qqcall.TypeConnected, Call: "c1", Name: "主人", PeerUIN: peer})
 		expectQQCallMessage(t, got, qqcall.Message{Type: qqcall.TypeHangup, Call: "c1"})
 		if calls.active != nil {
 			t.Fatalf("peer %q: a session was opened for someone who is not the owner", peer)
 		}
+		select {
+		case text := <-notices:
+			// 读不到 QQ 号是坏了，要告诉主人；别人打来是正常拦截，不打扰主人。
+			if peer != "" || !strings.Contains(text, "读不到对方的 QQ 号") {
+				t.Fatalf("peer %q: unexpected owner notice %q", peer, text)
+			}
+		case <-time.After(300 * time.Millisecond):
+			if peer == "" {
+				t.Fatal("owner was not told the peer could not be identified")
+			}
+		}
+	}
+}
+
+// 前提不齐（这里是没配语音插槽）时不接，并私聊告诉主人缺什么；来电昵称是谁都一样。
+func TestQQVoiceCallScreenTellsOwnerWhyItDidNotAnswer(t *testing.T) {
+	runtime, _, _ := newVoiceCallTestRuntime(t, "")
+	link, got := fakeQQCallAgent(t)
+	plugin := NewQQVoiceCallPlugin()
+	notices := recordQQVoiceCallNotices(plugin, runtime)
+	plugin.change = PluginStateChange{Enabled: true, EnabledProfiles: []string{"bot"}, Settings: SettingValues{}}
+	calls := newQQCallSet(plugin, link)
+	for range 2 {
+		calls.screen(context.Background(), qqcall.Message{Type: qqcall.TypeRinging, Call: "c1", Name: "随便什么昵称🐱"})
+	}
+	expectNoQQCallMessage(t, got)
+	select {
+	case text := <-notices:
+		if !strings.Contains(text, "语音识别") {
+			t.Fatalf("notice should say what is missing, got %q", text)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owner was not told why the call was not answered")
+	}
+	select {
+	case text := <-notices:
+		t.Fatalf("the same problem should only be reported once, got another %q", text)
+	case <-time.After(200 * time.Millisecond):
+	}
+	status, ok := plugin.RuntimeStatus(context.Background())
+	if !ok || len(status.Problems) == 0 || !strings.Contains(status.Recent, "没接") {
+		t.Fatalf("runtime status should list the problems and the last call, got %#v", status)
+	}
+}
+
+func TestQQVoiceCallRuntimeStatusSilentWhenDisabled(t *testing.T) {
+	plugin := NewQQVoiceCallPlugin()
+	plugin.runtime = &Runtime{}
+	if _, ok := plugin.RuntimeStatus(context.Background()); ok {
+		t.Fatal("a disabled plugin should not report status")
+	}
+}
+
+func TestWithBotProfileOptionsListsOnlyMatchingPlatforms(t *testing.T) {
+	state := PluginState{Manifest: NewQQVoiceCallPlugin().Manifest()}
+	profiles := []BotConfig{
+		{ID: "tg", Name: "电报", Platform: PlatformTelegram},
+		{ID: "qq", Name: "嘉然", Platform: PlatformOneBotV11, BotAccount: "10003"},
+	}
+	filled := WithBotProfileOptions(state, profiles)
+	spec, _ := findPluginSettingSpec(filled.Manifest.Settings, qqVoiceCallSettingProfile)
+	if len(spec.Options) != 2 || spec.Options[0].Value != "" || spec.Options[1].Value != "qq" || spec.Options[1].Label != "嘉然（10003）" {
+		t.Fatalf("options = %#v", spec.Options)
+	}
+	original, _ := findPluginSettingSpec(state.Manifest.Settings, qqVoiceCallSettingProfile)
+	if len(original.Options) != 0 {
+		t.Fatal("filling options must not touch the shared manifest")
+	}
+	if _, err := normalizePluginSettings(filled.Manifest.Settings, map[string]any{qqVoiceCallSettingProfile: "qq"}); err != nil {
+		t.Fatalf("bot_profile value should save: %v", err)
 	}
 }
 

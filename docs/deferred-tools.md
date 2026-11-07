@@ -2,12 +2,12 @@
 
 配置 `CoreTools` 后，MCP 与内置的非 core 工具统一通过固定的 `tool_search` / `tools_execute` 协议调用。未配置时维持全部工具直接声明的兼容模式。主回复只留 `send` 常驻，API `tools` 数组只有 `send`、`tool_search`、`tools_execute` 三项，对谁都一样。
 
-1. 从系统提示词目录选择工具，直接调用 `tools_execute({"name":"目标工具名","input":{...}})`。参数符合当前定义就当场执行并登记为已加载；不符合时不执行，把完整契约连同报错交回，下一步照着重新调用。兼容 JSON action 协议也使用此信封；直接按工具名调用同样处理。
-2. 不清楚参数怎么填时，先 `tool_search({"names":["目标工具名"]})` 取完整 `description` 和 `inputSchema`；不知道确切名字时用 `tool_search({"query":"关键词"})`，按工具名和描述匹配（中文按相邻两字切），返回最相关的 4 个。
+1. 从系统提示词目录选择工具，按目录行里的参数签名填 `input`，直接调用 `tools_execute({"name":"目标工具名","input":{...}})`。参数符合当前定义就当场执行并登记为已加载；不符合时不执行，把校验错误和完整契约一起交回并登记为已加载，下一步改好参数直接重调，不用 `tool_search`（2026-11-07 前这条路回的是「未在本轮加载，请先 tool_search」，模型照做再调一遍，白走两步）。兼容 JSON action 协议也使用此信封；直接按工具名调用同样处理。
+2. 签名写着「参数多，先 tool_search 取定义」（签名超过 600 字的几个大工具：`bot_config`、`subscription`、`github`、`runtime_model`），或某个参数的含义拿不准时，先 `tool_search({"names":["目标工具名"]})` 取完整 `description` 和 `inputSchema`；不知道确切名字时用 `tool_search({"query":"关键词"})`，按工具名和描述匹配（中文按相邻两字切），返回最相关的 4 个。
 
 `tool_search` 以前叫 `tools_load`，和 Codex CLI、Claude Code 的叫法对齐后改名。旧名不再出现在工具定义里，但模型照旧这么调、或历史里留着旧调用时，调度层照常认。
 
-目录只列名字和一句用途；原先常驻的 `web_search`、`history_media`、`image`、`chat_history`、`browser_render`、`capabilities`、`poke`、`platform`（`replyFeaturedTools`）写完整描述。「什么时候该戳」「群管请求先调 platform」只写在描述里，压成一行模型就不会想到去用；目录在缓存前缀里，多写几百字几乎不花钱。
+目录每行是 `- 名字(参数签名): 一句用途`。签名照 pi-codemode 的 TypeScript 声明压成一行：必填在前、可选带 `?`，枚举写成字面量联合，嵌套对象展开到第三层，例如 `- browser_render(url: string, find?: string, urls?: string[]): …`。2026-11-05～07 生产三天 754 次 `tools_execute` 前有 73 次 `tool_search`，其中 66 次模型已经知道名字、只是要参数，另有 12 次没先取定义就调用但参数不合法；签名进目录就是为了省掉这一步。2026-11-07 用 gpt-6.1-terra 回放这 73 步里的 63 条（原目录 vs 带签名目录各一次）：原目录 46 条仍先 tool_search，带签名后只剩 11 条（其中 4 条是签名放不下的 `subscription`、`github`、`runtime_model` 这类），32 条直接 tools_execute 且参数合法，3 条参数不合法（`chat_history` 的 `limit` 超上限，运行时会把契约连报错一起交回）。目录从约 9.8k 字涨到 14.3k 字，都在缓存前缀里。没写 schema 的工具标「参数不限」。codemode 脚本里 `ALL_TOOLS` 和「tools.X 不存在」的提示用同一份签名，脚本参数校验失败时把期望签名一起回给脚本。原先常驻的 `web_search`、`history_media`、`image`、`chat_history`、`browser_render`、`capabilities`、`poke`、`platform`（`replyFeaturedTools`）写完整描述。「什么时候该戳」「群管请求先调 platform」只写在描述里，压成一行模型就不会想到去用；目录在缓存前缀里，多写几百字几乎不花钱。
 
 ## 公共工具与发言者专属工具
 
