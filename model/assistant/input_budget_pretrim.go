@@ -292,12 +292,24 @@ func budgetPretrimHistoryUnits(messages []llm.Message, current int) []budgetPret
 	lastGroup := ""
 	for i := 0; i < current; i++ {
 		message := messages[i]
-		if message.Priority != llm.MessagePriorityHistory || message.Role == llm.RoleSystem || message.Role == llm.RoleTool || len(message.ToolCalls) > 0 || len(message.ResponsesOutput) > 0 || message.Content == budgetPretrimMarker {
+		// 机器人自己的历史发言是 send 调用加「已发送」（见 llm.HistoryReplyCallIDPrefix），
+		// 和普通历史行一样可以整轮丢；结果永远并进它前面那条调用，两半一起走。
+		historyReply := llm.IsHistoryReplyMessage(message)
+		if message.Priority != llm.MessagePriorityHistory || message.Role == llm.RoleSystem || (!historyReply && (message.Role == llm.RoleTool || len(message.ToolCalls) > 0)) || len(message.ResponsesOutput) > 0 || message.Content == budgetPretrimMarker {
 			lastGroup = ""
 			continue
 		}
 		fingerprint := promptCacheHash(promptCacheCanonicalMessage(message))
 		cost := llm.PlanInputBudget(llm.GenerateRequest{Messages: []llm.Message{message}}, 0).TextTokens
+		if n := len(units); historyReply && message.Role == llm.RoleTool {
+			if n > 0 && units[n-1].indexes[len(units[n-1].indexes)-1] == i-1 {
+				units[n-1].indexes = append(units[n-1].indexes, i)
+				units[n-1].key += fingerprint
+				units[n-1].cost += cost
+			}
+			// 前面那条调用不在可丢的范围里时，结果也不能单独丢。
+			continue
+		}
 		if n := len(units); n > 0 && message.ContextGroup != "" && message.ContextGroup == lastGroup && units[n-1].indexes[len(units[n-1].indexes)-1] == i-1 {
 			units[n-1].indexes = append(units[n-1].indexes, i)
 			units[n-1].key += fingerprint

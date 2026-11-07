@@ -756,6 +756,9 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	if requiresReasoningReplay(cfg, req.Model) {
 		req.Messages = flattenForeignToolTurns(req.Messages, scope)
 	}
+	if len(req.Tools) == 0 {
+		req.Messages = flattenHistoryReplies(req.Messages)
+	}
 	req.ReasoningEffort = normalizeReasoningEffort(req.ReasoningEffort)
 	if cfg.Provider == ProviderOpenAICompatible {
 		req.ReasoningEffort = cfg.ResolveReasoningEffort(req.Model, req.ReasoningEffort)

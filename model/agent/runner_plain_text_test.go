@@ -209,3 +209,91 @@ func TestRunnerPlainTextAcceptedWhenSendHasExtraFields(t *testing.T) {
 		})
 	}
 }
+
+// mixedReplyClient 按顺序回预先写好的响应：纯文本或原生调用。
+type mixedReplyClient struct {
+	responses []*llm.GenerateResponse
+	requests  []llm.GenerateRequest
+}
+
+func (c *mixedReplyClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	next := c.responses[0]
+	if len(c.responses) > 1 {
+		c.responses = c.responses[1:]
+	}
+	return next, nil
+}
+
+// 主回复只认 send：纯文本先退回一次，退回后用 send 发的就是最终回复。
+func TestRunnerPlainTextNotSentBouncesOnce(t *testing.T) {
+	client := &mixedReplyClient{responses: []*llm.GenerateResponse{
+		{Text: "在画了，画好自动发出来"},
+		{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "好，这就画"}}}},
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true}, NewToolRegistry(&recordingSearchTool{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一个我的"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Silent || resp.Text != "好，这就画" || len(client.requests) != 2 {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
+	}
+	second := client.requests[1].Messages
+	if len(second) < 2 || second[len(second)-2].Content != "在画了，画好自动发出来" || second[len(second)-1].Content != plainTextNotSentPrompt {
+		t.Fatalf("bounce not appended: %#v", second)
+	}
+}
+
+// 退回后还是纯文本就不发，按静默结束，原因写进 SilentReason；占位文本的那次修复
+// 也算退回过，不会退两次。
+func TestRunnerPlainTextNotSentDropsSecondPlainText(t *testing.T) {
+	for _, first := range []string{"在画了，画好自动发出来", "[搜索 WePlay 参展商名单]"} {
+		client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: first}, {Text: "马上就好"}}}
+		runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true}, NewToolRegistry(&recordingSearchTool{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一个我的"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !resp.Silent || resp.Text != "" || resp.FinishReason != "plain_text_not_sent" || resp.SilentReason != plainTextNotSentReason || len(client.requests) != 2 {
+			t.Fatalf("first=%q requests=%d response=%#v", first, len(client.requests), resp)
+		}
+	}
+}
+
+// 没开 PlainTextNotSent 的调用方（子任务等）照旧拿纯文本当结果。
+func TestRunnerPlainTextKeptWithoutPlainTextNotSent(t *testing.T) {
+	client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: "子任务结论"}}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(&recordingSearchTool{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查一下"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Silent || resp.Text != "子任务结论" || resp.FinishReason != "plain_text" || len(client.requests) != 1 {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
+	}
+}
+
+// 拼历史用的发言调用：一条 send 调用配一条「已发送」，调用 ID 带历史前缀。
+func TestHistoryReplyMessagesPairsCallAndResult(t *testing.T) {
+	messages := HistoryReplyMessages("abc", " 早上好 ")
+	if len(messages) != 2 || !llm.IsHistoryReplyMessage(messages[0]) || !llm.IsHistoryReplyMessage(messages[1]) {
+		t.Fatalf("messages = %#v", messages)
+	}
+	call := messages[0].ToolCalls[0]
+	if call.Name != finalizeToolName || sendText(call) != "早上好" || messages[1].ToolCallID != call.ID || messages[1].Content != historyReplyResult {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if HistoryReplyMessages("abc", "  ") != nil {
+		t.Fatal("empty reply must render nothing")
+	}
+}

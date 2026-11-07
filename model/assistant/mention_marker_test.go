@@ -349,7 +349,7 @@ func TestOutgoingDropsResidualReplyMarkers(t *testing.T) {
 	}
 }
 
-// 机器人自己的历史发言是以 assistant 身份喂给模型的。at 段渲染成「@10002」的话，
+// 机器人自己的历史发言是以 send 调用喂给模型的。at 段渲染成「@10002」的话，
 // 模型下一轮照抄成纯文本，群里看到一串数字、谁也没被提醒到；要写回发送用的标记。
 func TestAssistantHistoryRendersMentionAsMarker(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42", Name: "Diana"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -357,11 +357,11 @@ func TestAssistantHistoryRendersMentionAsMarker(t *testing.T) {
 	outbound := runtime.outgoingHistoryEvent(source, OutgoingMessage{GroupID: "-10012345", Text: "<diana-at id=\"10002\"/> 看下这个"})
 	current := MessageEvent{Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-10012345", UserID: "10001", Time: outbound.Time + 5}
 	messages := runtime.renderPromptHistoryEvent(context.Background(), current, outbound, BotConfig{BotAccount: "42"}, false)
-	if len(messages) == 0 || messages[0].Role != llm.RoleAssistant {
-		t.Fatalf("机器人发言没有按 assistant 渲染：%#v", messages)
+	if len(messages) == 0 || !llm.IsHistoryReplyMessage(messages[0]) || messages[0].Role != llm.RoleAssistant {
+		t.Fatalf("机器人发言没有按 send 调用渲染：%#v", messages)
 	}
-	if want := "<diana-at id=\"10002\"/> 看下这个"; messages[0].Content != want {
-		t.Fatalf("got %q, want %q", messages[0].Content, want)
+	if want := "<diana-at id=\"10002\"/> 看下这个"; llm.HistoryReplyText(messages[0]) != want {
+		t.Fatalf("got %q, want %q", llm.HistoryReplyText(messages[0]), want)
 	}
 	// 群友消息里的 at 照旧渲染成可读文本，不受影响。
 	if got := historyPlainText(MessageEvent{Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "10002"}}, {Type: "text", Data: map[string]string{"text": "hi"}}}}); got != "@10002 hi" {

@@ -231,7 +231,7 @@ func (p *scriptedReplyProvider) Generate(_ context.Context, req llm.GenerateRequ
 	if p.reply != nil {
 		text = p.reply(req)
 	}
-	return &llm.GenerateResponse{Model: "test", Text: text}, nil
+	return asSendReply(req, &llm.GenerateResponse{Model: "test", Text: text}), nil
 }
 
 func (p *scriptedReplyProvider) dependencyMessages() []llm.Message {

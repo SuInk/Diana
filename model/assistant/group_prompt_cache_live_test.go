@@ -290,7 +290,7 @@ func stableTailCacheFixtures(t *testing.T, nonce string) []stableTailCacheFixtur
 			summary, _ := r.promptContextSummary(e, "", 1024)
 			head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(e, nil, false, RelationshipPolicy{}, true, registry)
 			stable, volatile := r.stableGroupHistory(t.Context(), e, cfg, history, true, nil)
-			if len(volatile) != 0 || len(stable) != len(history) || summary == "" {
+			if len(volatile) != 0 || len(stable) < len(history) || summary == "" {
 				t.Fatal("fixture lost synthetic history or summary")
 			}
 			messages := append([]llm.Message{{Role: llm.RoleSystem, Content: head, Priority: llm.MessagePrioritySystem}}, stable...)
@@ -454,8 +454,9 @@ func TestStableTailCacheFixtures(t *testing.T) {
 			if req.PromptCacheKey != routes[key] || observation.ToolsHash != old.ToolsHash {
 				t.Fatalf("%s: route key or provider tool schema changed across turns", key)
 			}
-			if observation.StableBoundary != old.StableBoundary+2 {
-				t.Fatalf("%s: synthetic history did not grow equally by two messages", key)
+			// 每轮追加一条群友消息和一句机器人发言；发言是 send 调用加「已发送」两条。
+			if observation.StableBoundary != old.StableBoundary+3 {
+				t.Fatalf("%s: synthetic history did not grow equally by three messages", key)
 			}
 		} else {
 			for other, route := range routes {

@@ -190,11 +190,15 @@ func continuationMessages(continuation *Continuation, volatile []llm.Message) ([
 // transcriptAfter 是下一轮的前缀：这一轮最后一次实际发出的请求，接上模型的回复；
 // 回复里的每个工具调用都配一条结果，否则供应商会拒绝不成对的调用。
 //
-// 只调了 send 的收尾例外：每次 send 记成一条普通 assistant 发言，不说话的一轮什么
-// 都不记。原样留下 send 调用和「已发送」时，模型到下一轮会把它读成这一轮刚说过，
-// 新消息明明没人接也判「刚才已经回应过」而静默；回放里把它还原成普通发言，同一批
-// 线上静默样本从 16/21 降到 9～11/21。缓存不受影响：gpt 只在上一次完整请求的末尾
-// 复用，模型的回复本来就在断点之后。
+// 只调了 send 的收尾也原样留下 send 调用和「已发送」，和重新组装时历史里自己的发言
+// 同一个形态（见 llm.HistoryReplyCallIDPrefix）；不说话的一轮什么都不记。
+//
+// 10-28（#1255）曾把这里还原成普通 assistant 发言：那时 send 刚删掉 silent 字段，不说话
+// 只能留空 text，前缀里的「send + 已发送」让模型把新一轮读成刚说过，同批线上静默样本
+// 16/21，还原后 9～11/21。现在 silent 是单独字段，11-07 把历史发言全部写成调用形态回放
+// 11-06 线上样本：静默样本 swe-2 24/48 → 20/48、terra 17/21 → 17/21，正常回复样本静默
+// swe-2 2/48 → 0/48、terra 26/152 → 30/152（同一批样本两边都静默），没有复现；留成纯文本
+// 反倒让离当前消息最近的那句发言成了模型照着学的纯文本收尾。
 func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse, text string) []llm.Message {
 	if len(request.Messages) == 0 {
 		return nil
@@ -207,12 +211,7 @@ func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse
 	if response == nil {
 		return transcript
 	}
-	if onlySendCalls(response.ToolCalls) {
-		for _, call := range response.ToolCalls {
-			if body := sendText(call); body != "" {
-				transcript = append(transcript, llm.Message{Role: llm.RoleAssistant, Content: body})
-			}
-		}
+	if onlySendCalls(response.ToolCalls) && !anySendSpoke(response.ToolCalls) {
 		return transcript
 	}
 	assistant := llm.Message{
@@ -229,11 +228,24 @@ func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse
 	}
 	transcript = append(transcript, assistant)
 	for _, call := range response.ToolCalls {
-		result := "已发送"
-		if call.Name != finalizeToolName {
+		result := historyReplyResult
+		switch {
+		case call.Name != finalizeToolName:
 			result = "本次调用没有执行：这一轮已经结束。"
+		case sendText(call) == "":
+			result = "没有发出：这一轮不说话。"
 		}
 		transcript = append(transcript, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: result})
 	}
 	return transcript
+}
+
+// anySendSpoke 报告这一步的 send 里有没有真的带正文发出去的。
+func anySendSpoke(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if call.Name == finalizeToolName && sendText(call) != "" {
+			return true
+		}
+	}
+	return false
 }
