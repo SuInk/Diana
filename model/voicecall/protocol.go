@@ -26,6 +26,9 @@ const (
 	ServerTurnEnd     = "turn_end"
 	ServerInterrupted = "interrupted"
 	ServerError       = "error"
+	// ServerHangup 是机器人这边挂断：最后一句已经念完，服务端随后关闭连接。客户端
+	// 按对方挂断处理，不要重连。
+	ServerHangup = "hangup"
 )
 
 // 上行音频格式。只有裸 PCM 能在服务端做静音分段；带封装的压缩格式由客户端自己

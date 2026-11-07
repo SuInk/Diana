@@ -33,7 +33,7 @@ const (
 	voiceCallMaxAudioBytes = 16 << 20
 )
 
-const promptVoiceCall = "你正在和对方实时语音通话，你说的每个字都会被念出来：像打电话一样口语化地回答，一次说两三句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。对方的话来自语音识别，可能有错别字或断句不准，按最合理的意思理解。"
+const promptVoiceCall = "你正在和对方实时语音通话，你说的每个字都会被念出来：像打电话一样口语化地回答，一次说两三句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。对方的话来自语音识别，可能有错别字或断句不准，按最合理的意思理解。对方道别或说要挂了，就用 hang_up 说句再见挂断。"
 
 var promptVoiceCallSpec = tailSpec("voice_call", "语音通话", "主人在 WebUI 或 App 里和机器人语音通话时注入：回复会被逐句合成语音，要写成能直接念的口语。",
 	promptVoiceCall)
@@ -46,7 +46,14 @@ type VoiceCall struct {
 	turns   atomic.Int64
 	started time.Time
 	ended   sync.Once
+	// hangup 由 hang_up 工具置上，通话引擎念完这一轮后取走并挂断。
+	hangup atomic.Bool
 }
+
+func (c *VoiceCall) requestHangup() { c.hangup.Store(true) }
+
+// TakeHangup 实现 voicecall.HangupBackend：这一轮机器人决定挂电话了。
+func (c *VoiceCall) TakeHangup() bool { return c.hangup.Swap(false) }
 
 // VoiceCallInfo 是开始通话前给前端看的状态。
 type VoiceCallInfo struct {
@@ -152,7 +159,7 @@ func normalizeVoiceCallAudio(ctx context.Context, audio []byte, format string) (
 func (c *VoiceCall) Reply(ctx context.Context, text string, emit func(string)) error {
 	event := c.base
 	event.MessageID = voiceCallMessagePrefix + c.callID + "-" + strconv.FormatInt(c.turns.Add(1), 10)
-	return c.runtime.replyAsOwner(ctx, event, text, func(msg WebChatMessage) {
+	return c.runtime.replyAsOwner(withVoiceCall(ctx, c), event, text, func(msg WebChatMessage) {
 		if msg.Text != "" {
 			emit(msg.Text)
 		}

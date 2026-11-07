@@ -590,7 +590,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		return
 	}
 	callCtx, cancel := context.WithCancel(ctx)
-	out := &qqCallTransport{ctx: callCtx, link: s.link}
+	out := &qqCallTransport{ctx: callCtx, link: s.link, call: msg.Call, hangupDelay: qqCallHangupGrace}
 	session := voicecall.NewSession(callCtx, call, out, voicecall.Options{CallID: msg.Call, BotID: target.profileID})
 	bargeIn := change.Settings.Bool(qqVoiceCallSettingBargeIn, true)
 	if err := session.HandleControl(voicecall.ClientMessage{
@@ -673,9 +673,22 @@ func (c *qqActiveCall) close() {
 type qqCallTransport struct {
 	ctx  context.Context
 	link *qqCallLink
+	// call 是 agent 那边的通话 ID：机器人自己挂断时要带着它让 agent 点挂断。
+	call string
 	mime string
 	buf  bytes.Buffer
+	// playUntil 估算 agent 那边已收到的声音要播到什么时候：一句 PCM 交过去是立刻
+	// 返回的，真正播完还要这么久。机器人挂断时等它播完再让 agent 点挂断，否则告别
+	// 那句还在缓冲里电话就断了。
+	playUntil time.Time
+	// hangupDelay 是播完之后再多等的余量，测试里设成 0。
+	hangupDelay time.Duration
 }
+
+const qqCallHangupGrace = 600 * time.Millisecond
+
+// qqCallHangupWaitCap 是等告别播完的上限：估算错了也不能让电话一直不挂。
+const qqCallHangupWaitCap = 30 * time.Second
 
 func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 	switch msg.Type {
@@ -690,10 +703,30 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 			log.Printf("diana: qq voice call: 合成的语音转 PCM 失败: %v", err)
 			return nil
 		}
+		now := time.Now()
+		if t.playUntil.Before(now) {
+			t.playUntil = now
+		}
+		t.playUntil = t.playUntil.Add(time.Duration(len(pcm)/2) * time.Second / time.Duration(qqcall.SampleRate))
 		return t.link.write(websocket.BinaryMessage, pcm)
 	case voicecall.ServerInterrupted:
 		t.buf.Reset()
+		t.playUntil = time.Now()
 		return t.link.send(qqcall.Message{Type: qqcall.TypeFlush})
+	case voicecall.ServerHangup:
+		// 告别那句已经交给 agent 了，等它播完再挂。
+		wait := min(time.Until(t.playUntil)+t.hangupDelay, qqCallHangupWaitCap)
+		link, call := t.link, t.call
+		go func() {
+			defer recoverGoroutinePanic("qq_voice_call.hangup")
+			if wait > 0 {
+				time.Sleep(wait)
+			}
+			if err := link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: call}); err != nil {
+				log.Printf("diana: qq voice call: 挂断失败: %v", err)
+			}
+		}()
+		return nil
 	case voicecall.ServerError:
 		if msg.Fatal {
 			log.Printf("diana: qq voice call: 通话出错: %s", msg.Text)

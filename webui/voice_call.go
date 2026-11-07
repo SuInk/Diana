@@ -114,6 +114,15 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 		defer recoverGoroutinePanic("voice_call.keepalive")
 		out.keepAlive(ctx)
 	}()
+	// 机器人自己挂断时会话先结束：hangup 已经下发，关掉连接让读循环退出。
+	go func() {
+		defer recoverGoroutinePanic("voice_call.hangup")
+		select {
+		case <-session.Done():
+			_ = out.close(websocket.CloseNormalClosure, "hangup")
+		case <-ctx.Done():
+		}
+	}()
 	_ = conn.SetReadDeadline(time.Now().Add(voiceCallReadTimeout))
 	conn.SetPongHandler(func(string) error {
 		return conn.SetReadDeadline(time.Now().Add(voiceCallReadTimeout))
