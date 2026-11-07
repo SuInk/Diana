@@ -10,7 +10,7 @@
         <p v-if="status.detail" class="hint field wide">{{ status.detail }}</p>
         <p v-if="!status.helper_configured" class="hint field wide">桌面执行器目前只支持 macOS 14 或更新版本。</p>
         <div class="field wide desktop-option">
-          <div><label for="desktop-enabled">桌面控制</label><p class="hint">允许 Diana 查看已授权应用的窗口。还需在机器人配置中启用桌面工具。</p></div>
+          <div><label for="desktop-enabled">桌面控制</label><p class="hint">允许 Diana 查看已授权应用的窗口。还需在「机器人 → 配置」里打开「允许使用桌面控制」。</p></div>
           <label class="switch"><input id="desktop-enabled" v-model="policy.enabled" type="checkbox" aria-label="启用桌面控制" /><span class="track" aria-hidden="true"></span></label>
         </div>
         <div class="field wide desktop-option">
@@ -37,7 +37,7 @@
     <section v-if="status?.pending_actions?.length" class="card">
       <div class="card-header"><h2>待确认操作</h2><span class="badge">{{ status.pending_actions.length }}</span></div>
       <div class="card-body stack">
-        <p class="hint">确认仅对本次操作有效，两分钟后过期。画面变化需重新观察；确认后让 Diana 继续。</p>
+        <p class="hint">Diana 正停在这一步等你确认，确认后会当场核对画面并执行，不用再回聊天让它重试。确认只对这一条有效，5 分钟内不确认就不执行；画面和下面的截图不一致时也不会执行。</p>
         <article v-for="action in status.pending_actions" :key="action.id" class="desktop-item">
           <div class="desktop-item-heading"><strong>{{ actionLabels[action.command.op] || '桌面操作' }}</strong><span v-if="action.approved" class="badge ok">已确认</span></div>
           <p class="hint">{{ action.command.expected_bundle_id || '目标应用' }} · 窗口 {{ action.command.window_id }}</p>
