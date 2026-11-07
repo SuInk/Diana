@@ -89,7 +89,7 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:              qqVoiceCallPluginID,
 		Name:            "QQ 语音通话",
-		Version:         "0.1.1",
+		Version:         "0.1.2",
 		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
 		Official:        true,
 		BuiltIn:         true,
@@ -153,9 +153,9 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 			{
 				Key:         qqVoiceCallSettingBargeIn,
 				Label:       "允许打断",
-				Description: "机器人说话时对方开口就停下。虚拟声卡没有回声消除，对方外放时机器人自己的声音可能被 QQ 回传过来把自己打断；对方戴耳机时再打开。",
+				Description: "对方说话不用等机器人说完：这句转写出字后按新说的话生成回复，新回复出声时打断正在说的那一句；咳嗽、杂音转不出字就不打断。关掉后机器人想和说的时候对方的声音整段丢掉；虚拟声卡没有回声消除，对方外放、机器人老被自己的声音打断时再关。",
 				Type:        PluginSettingTypeBool,
-				Default:     false,
+				Default:     true,
 				GlobalOnly:  true,
 			},
 		},
@@ -591,7 +591,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	callCtx, cancel := context.WithCancel(ctx)
 	out := &qqCallTransport{ctx: callCtx, link: s.link}
 	session := voicecall.NewSession(callCtx, call, out, voicecall.Options{CallID: msg.Call, BotID: target.profileID})
-	bargeIn := change.Settings.Bool(qqVoiceCallSettingBargeIn, false)
+	bargeIn := change.Settings.Bool(qqVoiceCallSettingBargeIn, true)
 	if err := session.HandleControl(voicecall.ClientMessage{
 		Type:         voicecall.ClientStart,
 		Format:       voicecall.FormatPCM16,

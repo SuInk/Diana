@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -62,6 +63,35 @@ func TestWebChatSendRepliesInPageNotPlatform(t *testing.T) {
 }
 
 // 登录 WebUI 的人就是主人：没填主人、Telegram 主人填的是用户名，都照样能聊，而且按主人对待。
+// 聊天页和通话的回复不发到平台：分段间隔和模拟打字都不该等。通话里第二条晚到
+// 一两秒，前面那句短的就得陪着干等，用户听着就是半天没声。
+func TestWebChatDeliversChunksWithoutSendInterval(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &capturingLLMProvider{reply: "在呢\n刚吃完饭，你呢"}
+	cfg := BotConfig{ID: "bot", OwnerID: "10001", SendChunkIntervalMS: 5000, TypingDelayEnabled: boolPtr(true)}
+	runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	var mu sync.Mutex
+	var emitted []WebChatMessage
+	start := time.Now()
+	if _, err := runtime.WebChatSend(context.Background(), "bot", "在干嘛", func(msg WebChatMessage) {
+		mu.Lock()
+		emitted = append(emitted, msg)
+		mu.Unlock()
+	}); err != nil {
+		t.Fatalf("WebChatSend() error = %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("两条回复花了 %s，聊天页不该等分段间隔", elapsed)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(emitted) < 2 {
+		t.Fatalf("回复应拆成两条，emitted = %#v", emitted)
+	}
+}
+
 func TestWebChatTreatsLoggedInUserAsOwnerForEveryBot(t *testing.T) {
 	for _, cfg := range []BotConfig{
 		{ID: "bot"},

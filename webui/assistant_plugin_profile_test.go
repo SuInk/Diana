@@ -147,3 +147,51 @@ func TestBotHandlerPluginEnabledForAllProfiles(t *testing.T) {
 		t.Fatalf("after enable all = %d/%d", on, total)
 	}
 }
+
+// 开关和保存设置的返回值会直接替换插件卡片：机器人下拉框的候选项也得在里面，
+// 否则刚启用就弹出的设置框里，下拉框退回显示原始机器人 ID。
+func TestBotHandlerPluginToggleResponseFillsBotProfileOptions(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	r := assistant.NewRuntime(assistant.BotConfig{ID: "qq-a"}, fakeChannel{}, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
+	h := NewBotHandlerWithFactory(ctx, r, nil)
+	profiles := NewMemoryBotProfileStore(r.ProfileConfig(""))
+	if err := profiles.SaveProfiles(assistant.ProfileSet{Profiles: []assistant.BotConfig{
+		{ID: "qq-a", Name: "嘉然", Platform: assistant.PlatformOneBotV11},
+		{ID: "tg", Platform: assistant.PlatformTelegram},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	h.SetProfileStore(profiles)
+	h.SetSQLiteStore(store)
+	router := botTestRouter(h)
+	for _, req := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.QQVoiceCallPluginID+"/enabled?profile=qq-a", strings.NewReader(`{"enabled":true}`)),
+		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.QQVoiceCallPluginID+"/settings", strings.NewReader(`{"settings":{"profile":"qq-a"}}`)),
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s %s: %d %s", req.Method, req.URL.Path, rec.Code, rec.Body.String())
+		}
+		var state assistant.PluginState
+		if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+			t.Fatal(err)
+		}
+		var labels []string
+		for _, spec := range state.Manifest.Settings {
+			if spec.Key == "profile" {
+				for _, option := range spec.Options {
+					labels = append(labels, option.Label)
+				}
+			}
+		}
+		if strings.Join(labels, ",") != "自动,嘉然" {
+			t.Fatalf("%s %s: profile options = %v", req.Method, req.URL.Path, labels)
+		}
+	}
+}
