@@ -28,6 +28,12 @@ type Backend interface {
 	Synthesize(ctx context.Context, text string, chunk func(mime string, data []byte) error) error
 }
 
+// HangupBackend 是能让机器人自己挂电话的 Backend：回复流程里决定挂断时 TakeHangup
+// 返回 true，会话把这一轮念完后下发 hangup 并关闭。
+type HangupBackend interface {
+	TakeHangup() bool
+}
+
 // Transport 是下行通道。实现方保证不会被并发调用以外的方式打乱顺序；会话自己
 // 串行调用它。
 type Transport interface {
@@ -94,6 +100,13 @@ type Session struct {
 	lastReply chan struct{}
 	// pendingCarry 是开口打断时还没进回复流程的那一轮，下一句接上它的文字。
 	pendingCarry *turn
+
+	botHungUp bool
+
+	// done 在会话结束时关闭，见 Done。
+	done      chan struct{}
+	doneOnce  sync.Once
+	doneClose sync.Once
 }
 
 type turn struct {
@@ -529,6 +542,47 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 	default:
 		s.finishTurn(t, TurnDone)
 	}
+	if t.ctx.Err() == nil {
+		if hanger, ok := s.backend.(HangupBackend); ok && hanger.TakeHangup() {
+			// 告别那句念完了：下发 hangup 再关。Close 要等这一轮收尾，不能在这里同步调。
+			go func() {
+				defer recoverGoroutinePanic("hangup")
+				s.hangup()
+			}()
+		}
+	}
+}
+
+// hangup 是机器人这边挂断：告诉客户端，然后关闭会话。
+func (s *Session) hangup() {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return
+	}
+	s.writeLocked(ServerMessage{Type: ServerHangup})
+	s.botHungUp = true
+	s.mu.Unlock()
+	s.Close()
+}
+
+// BotHungUp 报告这通电话是不是机器人自己挂的。传输层据此区分「机器人挂断」和
+// 「连接意外断了」：后者可以等客户端重连。
+func (s *Session) BotHungUp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.botHungUp
+}
+
+// Done 在会话结束（任何一方挂断）后关闭，传输层据此收尾，比如关掉连接。
+func (s *Session) Done() <-chan struct{} {
+	s.doneOnce.Do(func() { s.done = make(chan struct{}) })
+	return s.done
+}
+
+func (s *Session) markDone() {
+	s.Done()
+	s.doneClose.Do(func() { close(s.done) })
 }
 
 // speak 下发一句回复的文字，再把它合成后的音频逐片下发。合成失败只报错，文字已经
@@ -632,4 +686,5 @@ func (s *Session) Close() {
 	for _, done := range waits {
 		<-done
 	}
+	s.markDone()
 }
