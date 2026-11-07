@@ -185,6 +185,10 @@ type GenerateRequest struct {
 	// 哪个字段。生成文本的供应商忽略它；只做判断的供应商靠它还原出调用方期待的
 	// JSON，没有它就只能报错。
 	Decision *DecisionSpec `json:"-"`
+	// ReasoningEffortFallback 是请求、用途路由、提供商配置都没指定思考强度时才生效
+	// 的档位。识图这类不需要深想的调用用它把默认思考压下来，又不盖过用户在任何
+	// 一层明确设的值；实际发出前仍按模型支持的档位收口。
+	ReasoningEffortFallback string `json:"reasoning_effort_fallback,omitempty"`
 	// implicitMaxOutputTokens 标记 MaxOutputTokens 是按内置表代填的，不是调用方或
 	// 配置档给的。上游拒绝这个值时可以去掉字段重发；显式给的值被拒就照实报错。
 	implicitMaxOutputTokens bool
@@ -743,6 +747,9 @@ func (req GenerateRequest) withDefaults(cfg ProviderConfig) GenerateRequest {
 	}
 	if strings.TrimSpace(req.ReasoningEffort) == "" {
 		req.ReasoningEffort = cfg.ReasoningEffort
+	}
+	if strings.TrimSpace(req.ReasoningEffort) == "" {
+		req.ReasoningEffort = req.ReasoningEffortFallback
 	}
 	scope := continuationScope(cfg, req.Model)
 	req.Messages = scopedContinuationMessages(req.Messages, scope)

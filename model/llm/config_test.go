@@ -216,6 +216,35 @@ func TestGenerateRequestDefaults(t *testing.T) {
 	}
 }
 
+// TestGenerateRequestReasoningEffortFallback 回落档位只在请求和配置档都没设时生效，
+// 否则用户在任何一层设的值都要保住。
+func TestGenerateRequestReasoningEffortFallback(t *testing.T) {
+	messages := []Message{{Role: RoleUser, Content: "看图"}}
+	cases := []struct {
+		name    string
+		request string
+		config  string
+		want    string
+	}{
+		{name: "都没设时用回落", want: "low"},
+		{name: "配置档优先于回落", config: "high", want: "high"},
+		{name: "请求优先于一切", request: "medium", config: "high", want: "medium"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := GenerateRequest{Messages: messages, ReasoningEffort: tc.request, ReasoningEffortFallback: "low"}
+			got := req.withDefaults(ProviderConfig{Model: "m", ReasoningEffort: tc.config})
+			if got.ReasoningEffort != tc.want {
+				t.Fatalf("ReasoningEffort = %q, want %q", got.ReasoningEffort, tc.want)
+			}
+		})
+	}
+	got := (GenerateRequest{Messages: messages}).withDefaults(ProviderConfig{Model: "m"})
+	if got.ReasoningEffort != "" {
+		t.Fatalf("没有回落时 ReasoningEffort = %q, want empty", got.ReasoningEffort)
+	}
+}
+
 func TestValidateGenerateRequestAcceptsNativeToolCallWithoutText(t *testing.T) {
 	req := GenerateRequest{
 		Model: "test-model",

@@ -61,7 +61,7 @@ func TestDescribeRecallImageRejectsRefusal(t *testing.T) {
 	}}}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) {
-		return fixedTextLLMProvider{text: "未收到图片内容，无法生成描述。请重新发送需要记录的图片。"}, nil
+		return &fixedTextLLMProvider{text: "未收到图片内容，无法生成描述。请重新发送需要记录的图片。"}, nil
 	})
 	path, _ := writeRecallImageFixture(t)
 	description, err := runtime.describeRecallImage(context.Background(), MessageEvent{}, path)
@@ -73,10 +73,40 @@ func TestDescribeRecallImageRejectsRefusal(t *testing.T) {
 	}
 }
 
-// fixedTextLLMProvider 原样返回一段正文，用来模拟「模型拿不到图，但请求成功」。
-type fixedTextLLMProvider struct{ text string }
+// TestDescribeRecallImageAsksForLowReasoningByDefault 识图请求要带 low 的回落档位：
+// 视觉跟随默认思考的对话模型时，单张描述出首字前要等 7 秒多，而写描述不需要深想。
+// 只是回落，不是指定：用户在路由或提供商配置上设了档位，llm 层仍以用户的为准。
+func TestDescribeRecallImageAsksForLowReasoningByDefault(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "vision", Group: llm.GroupVision, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "eyes"}},
+	}}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	provider := &fixedTextLLMProvider{text: "一只橘猫趴在键盘上。"}
+	runtime.SetLLMProviderConfigFactory(func(llm.ProviderConfig) (LLMProvider, error) { return provider, nil })
+	path, _ := writeRecallImageFixture(t)
+	if _, err := runtime.describeRecallImage(context.Background(), MessageEvent{}, path); err != nil {
+		t.Fatal(err)
+	}
+	if provider.last.ReasoningEffortFallback != visionReasoningEffortFallback || provider.last.ReasoningEffort != "" {
+		t.Fatalf("描述请求 ReasoningEffort=%q fallback=%q, want 只带回落 %q", provider.last.ReasoningEffort, provider.last.ReasoningEffortFallback, visionReasoningEffortFallback)
+	}
+	answer, err := runtime.askImages(context.Background(), MessageEvent{}, []llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,aGk="}}, "图里是什么")
+	if err != nil || answer == "" {
+		t.Fatalf("askImages = %q, %v", answer, err)
+	}
+	if provider.last.ReasoningEffortFallback != visionReasoningEffortFallback {
+		t.Fatalf("看图问答请求 fallback=%q, want %q", provider.last.ReasoningEffortFallback, visionReasoningEffortFallback)
+	}
+}
 
-func (p fixedTextLLMProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
+// fixedTextLLMProvider 原样返回一段正文，用来模拟「模型拿不到图，但请求成功」。
+type fixedTextLLMProvider struct {
+	text string
+	last llm.GenerateRequest
+}
+
+func (p *fixedTextLLMProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.last = req
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "blind", Text: p.text}, nil
 }
 
