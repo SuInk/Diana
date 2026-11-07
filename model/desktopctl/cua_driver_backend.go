@@ -13,8 +13,8 @@ import (
 )
 
 // cuaDriverBackend drives the desktop through trycua's cua-driver (MIT) over
-// MCP stdio. It only translates: observation versions, scene hashing, one-shot
-// approvals and post-action evidence stay in ProcessAdapter, exactly as with
+// MCP stdio. It only translates: observation versions, scene hashing and
+// post-action evidence stay in ProcessAdapter, exactly as with
 // the native helper.
 //
 // Diana window IDs are "<pid>:<window_id>". Element IDs are the driver's row

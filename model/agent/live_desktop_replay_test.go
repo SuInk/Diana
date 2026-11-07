@@ -77,7 +77,7 @@ func TestLiveDesktopReplay(t *testing.T) {
 }
 
 // Exercise the real subprocess adapter, observation tokens and the human boundary.
-func TestLiveDesktopActionConfirmationReplay(t *testing.T) {
+func TestLiveDesktopActionReplay(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix helper fixture")
 	}
@@ -124,18 +124,15 @@ esac
 		t.Fatal(err)
 	}
 	defer runner.Close()
-	response, err := runner.Run(ctx, Request{Messages: []llm.Message{{Role: llm.RoleSystem, Content: "你在隔离桌面测试中，只依据工具结果报告进度。"}, {Role: llm.RoleUser, Content: "先找到 Test Editor 并截图，然后尝试输入 hello fixture。工具要求主人确认时就停下来告诉我，不要绕过确认或继续重试，不要宣称已输入。"}}})
+	response, err := runner.Run(ctx, Request{Messages: []llm.Message{{Role: llm.RoleSystem, Content: "你在隔离桌面测试中，只依据工具结果报告进度。"}, {Role: llm.RoleUser, Content: "先找到 Test Editor 并截图，然后在里面输入 hello fixture，做完核实一下。"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if response == nil {
 		t.Fatal("missing response")
 	}
-	pending, err := adapter.PendingActions(ctx)
-	if err != nil || len(pending) != 1 {
-		t.Fatalf("pending=%+v err=%v", pending, err)
-	}
-	if _, err = os.Stat(helper + ".input"); !os.IsNotExist(err) {
-		t.Fatal("model bypassed human confirmation")
+	// 写操作不等人确认：模型看过画面后直接输入。
+	if _, err = os.Stat(helper + ".input"); err != nil {
+		t.Fatalf("model did not type after observing: %v", err)
 	}
 }

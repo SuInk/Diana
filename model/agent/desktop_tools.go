@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"time"
 
 	"github.com/SuInk/diana/model/desktopctl"
 	"github.com/SuInk/diana/model/llm"
@@ -208,7 +207,7 @@ type DesktopClickTool struct {
 func (t *DesktopClickTool) Name() string { return "desktop_click" }
 
 func (t *DesktopClickTool) Description() string {
-	return `在本机已授权应用窗口内点击。优先用 desktop_elements 的元素 ID，否则用窗口内坐标。须传 observation。` + desktopConfirmNote + `需要 WriteEnabled 与 macOS Accessibility；接管中会被拒。不要点付款、删除、系统设置等敏感控件，除非主人明确要求。`
+	return `在本机已授权应用窗口内点击。优先用 desktop_elements 的元素 ID，否则用窗口内坐标。须传 observation（最近两分钟内的截图或元素读取），画面变了会被拒，重新观察即可。需要 WriteEnabled 与 macOS Accessibility；接管中会被拒。不要点付款、删除、系统设置等敏感控件，除非主人明确要求。`
 }
 
 func (t *DesktopClickTool) InputSchema() map[string]any {
@@ -248,7 +247,7 @@ type DesktopTypeTool struct {
 func (t *DesktopTypeTool) Name() string { return "desktop_type" }
 
 func (t *DesktopTypeTool) Description() string {
-	return `在本机已授权应用窗口里输入文字。须带 observation。` + desktopConfirmNote + `需要 WriteEnabled 与 Accessibility。不要输入密码、验证码或支付信息。`
+	return `在本机已授权应用窗口里输入文字。须带 observation，画面变了会被拒，重新观察即可。需要 WriteEnabled 与 Accessibility。不要输入密码、验证码或支付信息。`
 }
 
 func (t *DesktopTypeTool) InputSchema() map[string]any {
@@ -279,7 +278,7 @@ type DesktopKeyTool struct {
 func (t *DesktopKeyTool) Name() string { return "desktop_key" }
 
 func (t *DesktopKeyTool) Description() string {
-	return `在本机已授权应用窗口里按键或组合键（如 Return、Tab、cmd+c）。须带 observation。` + desktopConfirmNote + `需要 WriteEnabled 与 Accessibility。`
+	return `在本机已授权应用窗口里按键或组合键（如 Return、Tab、cmd+c）。须带 observation，画面变了会被拒，重新观察即可。需要 WriteEnabled 与 Accessibility。`
 }
 
 func (t *DesktopKeyTool) InputSchema() map[string]any {
@@ -538,17 +537,6 @@ func (t *DesktopJobCancelTool) Run(ctx context.Context, input map[string]any) (s
 	return string(body), err
 }
 
-// desktopConfirmNote 是四个写操作工具共用的确认说明。
-const desktopConfirmNote = "调用后会停下来等主人在控制台确认这一条具体操作（最多 5 分钟），确认后当场复核画面并执行，同一次调用直接返回结果，不用重试；返回 confirmation_timeout 表示主人没确认、输入没发出，别自己反复重试，告诉主人即可。"
-
-// desktopWriteTimeout 盖住执行器等主人确认的时间和一次指令的回执期限。
-const desktopWriteTimeout = desktopctl.ActionConfirmationWait + desktopctl.MaxCommandTimeoutMS*time.Millisecond
-
-func (*DesktopClickTool) Timeout() time.Duration  { return desktopWriteTimeout }
-func (*DesktopTypeTool) Timeout() time.Duration   { return desktopWriteTimeout }
-func (*DesktopKeyTool) Timeout() time.Duration    { return desktopWriteTimeout }
-func (*DesktopScrollTool) Timeout() time.Duration { return desktopWriteTimeout }
-
 type desktopActionParts struct {
 	mu    sync.Mutex
 	parts []llm.ContentPart
@@ -604,7 +592,7 @@ type DesktopScrollTool struct {
 
 func (t *DesktopScrollTool) Name() string { return "desktop_scroll" }
 func (t *DesktopScrollTool) Description() string {
-	return "在已观察窗口内滚动。x/y 指向滚动区域，delta_y 正值向下、delta_x 正值向右，每轴最多 1000 像素。须传 observation。" + desktopConfirmNote + "结果附带新画面，须核实效果。"
+	return "在已观察窗口内滚动。x/y 指向滚动区域，delta_y 正值向下、delta_x 正值向右，每轴最多 1000 像素。须传 observation，画面变了会被拒，重新观察即可。结果附带新画面，须核实效果。"
 }
 func (t *DesktopScrollTool) InputSchema() map[string]any {
 	return mergeDesktopSchema([]string{"x", "y", "observation"}, map[string]any{"window_id": toolStringParam("目标窗口"), "connection": toolStringParam("执行器连接"), "x": toolNumberParam("窗口内 X"), "y": toolNumberParam("窗口内 Y"), "delta_x": toolIntParam("水平像素"), "delta_y": toolIntParam("垂直像素")})

@@ -25,7 +25,6 @@ func NewDesktopControlHandler(r *desktopctl.Registry, h *desktopctl.Hub, l *desk
 // All endpoints require the existing WebUI /api session authentication.
 func (h *DesktopControlHandler) Register(r gin.IRouter) {
 	r.GET("/api/desktop-control/status", h.status)
-	r.POST("/api/desktop-control/actions/:id/confirm", h.confirmAction)
 	r.PUT("/api/desktop-control/policy", h.policy)
 	r.POST("/api/desktop-control/takeover", h.takeover)
 	r.GET("/api/desktop-control/jobs", func(c *gin.Context) {
@@ -37,17 +36,15 @@ func (h *DesktopControlHandler) Register(r gin.IRouter) {
 func (h *DesktopControlHandler) status(c *gin.Context) {
 	configured, detail := h.local.Status()
 	var permissions *desktopctl.Permissions
-	var pending []desktopctl.ActionApproval
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
 	if p := h.local.Process(); p != nil {
 		if v, err := p.Permissions(ctx); err == nil {
 			permissions = &v
 		}
-		pending, _ = p.PendingActions(ctx)
 	}
 	c.Header("Cache-Control", "no-store")
-	c.JSON(200, gin.H{"permissions": permissions, "pending_actions": pending, "takeover": h.registry.EmergencyStop(), "policy": h.registry.Policy(), "ready": h.hub.Ready(), "helper_configured": configured, "executor": h.local.Executor(), "detail": detail, "connections": h.hub.Connections()})
+	c.JSON(200, gin.H{"permissions": permissions, "takeover": h.registry.EmergencyStop(), "policy": h.registry.Policy(), "ready": h.hub.Ready(), "helper_configured": configured, "executor": h.local.Executor(), "detail": detail, "connections": h.hub.Connections()})
 }
 func (h *DesktopControlHandler) policy(c *gin.Context) {
 	var p desktopctl.Policy
@@ -103,21 +100,4 @@ func (h *DesktopControlHandler) jobAction(c *gin.Context) {
 		return
 	}
 	c.JSON(200, gin.H{"job": j})
-}
-
-func (h *DesktopControlHandler) confirmAction(c *gin.Context) {
-	if h.registry.EmergencyStop() || !h.registry.Policy().Enabled || !h.registry.Policy().WriteEnabled {
-		writeError(c, 409, errors.New("请先结束接管并启用写操作"))
-		return
-	}
-	p := h.local.Process()
-	if p == nil {
-		writeError(c, 409, errors.New("本机执行器不可用"))
-		return
-	}
-	if err := p.ConfirmAction(c.Request.Context(), c.Param("id")); err != nil {
-		writeError(c, 409, err)
-		return
-	}
-	c.JSON(200, gin.H{"confirmed": true})
 }
