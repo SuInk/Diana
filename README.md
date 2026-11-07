@@ -111,6 +111,7 @@ Telegram 的图片/表情包发送格式及群消息撤回边界，参见[Telegr
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
 | **微信** | 不用填：保存机器人后在「接入」里扫码登录（腾讯 iLink Bot，只有私聊） | Diana 主动出站，无需公网 |
 | **iMessage** | 常开 Mac 上 BlueBubbles Server 的地址与密码，详见 [iMessage 接入说明](docs/imessage.md) | BlueBubbles webhook → Diana，Mac 能访问到 Diana 即可，可选轮询兜底 |
+| **内置机器人** | 不用填：只在 Diana 里，不接任何聊天平台，在控制台「聊天」页私聊、打电话 | 不连接任何平台；主动提醒、订阅推送发不出去 |
 
 QQ 个人号推荐用 SnowLuma 作 OneBot 接入端，Diana 的群历史、成员信息等接口按它的行为做过适配。
 
