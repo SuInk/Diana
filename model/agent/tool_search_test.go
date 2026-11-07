@@ -102,7 +102,7 @@ func TestSpeakerToolsStayOutOfSharedPrefix(t *testing.T) {
 			tail = message.Content
 		}
 	}
-	for _, want := range []string{"最多可调用 32 次", "- coding:", "编写或修复代码时", "当前发言者已经加载"} {
+	for _, want := range []string{"最多可调用 32 次", "- coding(", "编写或修复代码时", "当前发言者已经加载"} {
 		if !strings.Contains(tail, want) {
 			t.Fatalf("owner tail misses %q:\n%s", want, tail)
 		}

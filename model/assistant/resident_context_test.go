@@ -124,7 +124,7 @@ func TestResidentContextIncludesAgentFootprint(t *testing.T) {
 		t.Fatalf("tools block = %#v", tools)
 	}
 	protocol := residentBlock(snapshot, ResidentBlockAgentPrompt)
-	if !strings.Contains(protocol.Content, "- rare:") || strings.Contains(protocol.Note, "别处") {
+	if !strings.Contains(protocol.Content, "- rare(") || strings.Contains(protocol.Note, "别处") {
 		t.Fatalf("protocol block = %#v", protocol)
 	}
 	var sum int64

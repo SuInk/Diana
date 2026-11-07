@@ -230,7 +230,7 @@ func TestDeferredLoaderRestoresMemberNamesAsFamily(t *testing.T) {
 	if err := json.Unmarshal([]byte(loader.loadedContracts(true)), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
 		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(true), err)
 	}
-	if catalog := loader.catalog(); strings.Contains(catalog, "page_open") || !strings.Contains(catalog, "- page: ") {
+	if catalog := loader.catalog(); strings.Contains(catalog, "page_open") || !strings.Contains(catalog, "- page(action: ") {
 		t.Fatalf("deferred catalog = %q", catalog)
 	}
 }

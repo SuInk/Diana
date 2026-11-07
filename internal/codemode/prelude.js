@@ -202,7 +202,7 @@
 		tools,
 		"tools",
 		allTools.map((tool) => tool.name),
-		"ALL_TOOLS lists every tool; searchTools(query) finds tools by topic.",
+		"ALL_TOOLS lists every tool with its signature.",
 	);
 
 	const namespaces = new Map();

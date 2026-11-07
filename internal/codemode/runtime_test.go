@@ -237,3 +237,29 @@ func TestRuntimeStoreRoundTrip(t *testing.T) {
 		t.Fatalf("failed run must not commit writes: %+v err=%v", failed, err)
 	}
 }
+
+// ALL_TOOLS 带上调用方给的签名说明，脚本和「tools.X 不存在」的提示都能看到。
+func TestRuntimeExposesToolDescriptions(t *testing.T) {
+	r := testRuntime(t)
+	result, err := r.Execute(t.Context(), Request{
+		Code:         `return ALL_TOOLS.map(t => t.name + " => " + t.description);`,
+		Tools:        []string{"web_search", "render"},
+		Descriptions: map[string]string{"web_search": "web_search(query: string): 搜索"},
+		MaxCalls:     1, Timeout: 2 * time.Second,
+	}, func(context.Context, string, json.RawMessage) (any, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || string(result.Value) != `["web_search => web_search(query: string): 搜索","render => "]` {
+		t.Fatalf("result: %+v value=%s", result, result.Value)
+	}
+	result, err = r.Execute(t.Context(), Request{
+		Code: `try { await tools.websearch({}); } catch (e) { return String(e); }`, Tools: []string{"web_search"}, MaxCalls: 1, Timeout: 2 * time.Second,
+	}, func(context.Context, string, json.RawMessage) (any, error) { return nil, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || !strings.Contains(string(result.Value), "Did you mean tools.web_search") {
+		t.Fatalf("result: %+v value=%s", result, result.Value)
+	}
+}

@@ -62,10 +62,10 @@ func TestRunnerDefersNonCoreToolsUntilLoaded(t *testing.T) {
 		t.Fatalf("after loading, tools = %s", second)
 	}
 	system := client.requests[0].Messages[0].Content
-	if !strings.Contains(system, "按需加载的工具") || !strings.Contains(system, "- rare:") {
+	if !strings.Contains(system, "按需加载的工具") || !strings.Contains(system, "- rare(参数不限):") {
 		t.Fatalf("system prompt lacks deferred catalog:\n%s", system)
 	}
-	if strings.Contains(system, "- common:") {
+	if strings.Contains(system, "- common(") {
 		t.Fatalf("core tool repeated in system catalog:\n%s", system)
 	}
 }
@@ -521,7 +521,7 @@ func TestDeferredNewCapabilityGoesThroughDispatcher(t *testing.T) {
 	if _, loaded := loader.loaded[rare.Name()]; !loaded {
 		t.Fatal("new deferred tool not recorded as loaded")
 	}
-	if !strings.Contains(loader.catalog(), "- new:") {
+	if !strings.Contains(loader.catalog(), "- new(参数不限):") {
 		t.Fatal("new capability missing from catalog")
 	}
 }

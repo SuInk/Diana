@@ -185,7 +185,7 @@ func (r *Runtime) appendAgentFootprintBlocks(snapshot *ResidentContextSnapshot, 
 	}
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockAgentPrompt, Label: "Agent 协议与按需工具目录", Content: footprint.systemPrompt,
-		Note: "按需工具只进这份目录（名字加一句用途），要用时直接 tools_execute，不清楚参数先 tool_search。" + source + "。",
+		Note: "按需工具只进这份目录（名字、参数签名加一句用途），要用时直接 tools_execute；签名放不下的几个才先 tool_search。" + source + "。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockAgentTools, Label: "常驻工具定义", Content: strings.Join(footprint.toolNames, "\n"),

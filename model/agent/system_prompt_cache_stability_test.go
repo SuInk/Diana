@@ -56,7 +56,7 @@ func TestLoadedContractsSitBeforeHistory(t *testing.T) {
 				} else if string(head) != string(headBytes) || string(schema) != string(schemaBytes) {
 					t.Fatalf("LoadedTools=%v changed Agent/persona prefix or provider schema", loaded)
 				}
-				if !strings.Contains(messages[0].Content, "- alpha:") || !strings.Contains(messages[0].Content, "- beta:") {
+				if !strings.Contains(messages[0].Content, "- alpha(") || !strings.Contains(messages[0].Content, "- beta(") {
 					t.Fatal("fixed deferred catalog lost")
 				}
 				if messages[len(messages)-1].Content != current.Content || !messages[len(messages)-1].CacheBreakpoint {

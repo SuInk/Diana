@@ -95,7 +95,7 @@ func (l *deferredToolLoader) catalogWhere(shared bool) string {
 			continue
 		}
 		if l.featured[name] {
-			builder.WriteString("- " + name + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
+			builder.WriteString("- " + name + toolSignature(tool) + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
 			continue
 		}
 		builder.WriteString(deferredCatalogLine(tool))
@@ -116,7 +116,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 须符合其 inputSchema；不清楚参数时先 tool_search。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的，先 tool_search 再调。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -211,7 +211,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "取得「按需加载的工具」的完整定义，之后用 tools_execute 调用。names 填目录里的确切名字（优先）；拿不准叫什么时用 query 写关键词，返回最相关的几个。取过的在本会话后续保留；只取确实要用的。"
+	return "取得「按需加载的工具」的完整定义（每个参数的说明和 inputSchema）。目录里的签名已够填参数时不用取，直接 tools_execute；只在签名写着「参数多」、或参数含义拿不准时用。names 填目录里的确切名字（优先）；拿不准叫什么时用 query 写关键词，返回最相关的几个。取过的在本会话后续保留。"
 }
 
 // toolSearchQueryLimit 是按关键词搜时最多返回几个工具。
