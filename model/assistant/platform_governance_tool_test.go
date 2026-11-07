@@ -230,6 +230,8 @@ var expectedPlatformWriteOperations = map[string][]string{
 	PlatformWeixin: nil,
 	// iMessage 本身没有群管理（踢人、禁言、公告、置顶都没有），BlueBubbles 也没有对应接口。
 	PlatformIMessage: nil,
+	// 内置机器人不接平台，本地群是 Diana 自己的会话，没有平台群管。
+	PlatformLocal: nil,
 }
 
 func TestPlatformWriteOperationMatrix(t *testing.T) {

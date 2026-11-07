@@ -179,7 +179,13 @@ const telegramProfile: BotProfileConfig = {
   telegram_api_base_url: "https://api.telegram.org", bot_account: "", owner_id: "880024"
 };
 
-let assistantConfig: BotProfileConfig = { ...oneBotProfile, profiles: [oneBotProfile, telegramProfile] };
+// 内置机器人不接平台，连接相关的字段全空。
+const localProfile: BotProfileConfig = {
+  ...oneBotProfile, id: "bot-local", name: "小助手（内置·演示）", platform: "local", enabled: true,
+  onebot_reverse_ws_endpoint: "", onebot_access_token_configured: false, bot_account: "", owner_id: ""
+};
+
+let assistantConfig: BotProfileConfig = { ...oneBotProfile, profiles: [oneBotProfile, telegramProfile, localProfile] };
 
 let demoSearchProviders: SearchProvider[] = [
   { id: 'exa', name: 'Exa', type: 'exa_mcp', url: 'https://mcp.exa.ai/mcp?tools=web_search_exa', tool: 'web_search_exa' },
@@ -723,7 +729,8 @@ export const demoStatus: BotStatus = {
   channel: { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
   channels: [
     { profile_id: "bot-onebot", platform: "onebot-v11", name: "Diana OneBot（演示）", connected: true, endpoint: "ws://127.0.0.1:18080/onebot/v11/ws", self_id: "100000001", updated_at: before(1) },
-    { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) }
+    { profile_id: "bot-telegram", platform: "telegram", name: "Diana Telegram（演示）", connected: true, endpoint: "https://api.telegram.org", self_id: "@diana_demo_bot", updated_at: before(1) },
+    { profile_id: "bot-local", platform: "local", name: "小助手（内置·演示）", connected: true, account_status_known: true, account_online: true, account_good: true, account_status_message: "内置机器人，只在 Diana 里", endpoint: "", self_id: "local-bot-local", updated_at: before(1) }
   ],
   plugins, recent_events: demoEvents, active_workers: 2,
   llm_concurrency: {
@@ -761,6 +768,7 @@ const platforms: BotPlatform[] = [
   { id: "telegram", name: "Telegram Bot", protocol: "telegram-bot-api", category: "telegram", category_label: "Telegram", description: "通过 Telegram Bot API 长轮询接入。", inbound: "outbound", rich_text: true },
   { id: "qq-official", name: "QQ 官方机器人", protocol: "qq-official-gateway-ws", category: "qq_official", category_label: "QQ 官方机器人", description: "QQ 开放平台 WebSocket 网关，出站长连接，不需要公网地址", inbound: "outbound", rich_text: true },
   { id: "weixin", name: "微信", protocol: "weixin-ilink-longpoll", category: "weixin", category_label: "微信", description: "腾讯 iLink Bot 扫码登录，长轮询收发私聊，不需要公网地址", inbound: "outbound", untested: true },
+  { id: "local", name: "内置机器人", protocol: "diana-local", category: "local", category_label: "内置", description: "只在 Diana 里：不接任何聊天平台，不用填连接，在控制台聊天页私聊、打电话，也能拉进本地群一起讨论", inbound: "outbound", rich_text: true },
   { id: "imessage", name: "iMessage", protocol: "bluebubbles", category: "imessage", category_label: "iMessage", description: "通过 Mac 上的 BlueBubbles Server 收发，webhook 回调需要 Mac 能访问到本机", inbound: "callback", callback_path: "/api/channels/imessage/callback", untested: true }
 ];
 
