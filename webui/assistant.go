@@ -1189,11 +1189,18 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 			}
 			state.EnabledProfiles, state.ProfileCount = &enabled, &total
 		}
-		state = assistant.WithBotProfileOptions(state, h.profiles.Profiles().Profiles)
-		state.RuntimeStatus = h.runtime.Plugins().PluginRuntimeStatus(c.Request.Context(), state.Manifest.ID)
-		visible = append(visible, h.withRepoSource(state))
+		visible = append(visible, h.withRepoSource(h.pluginStateView(c, state)))
 	}
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
+}
+
+// pluginStateView 补上插件页要的现填内容：机器人下拉框的候选项和插件运行状态。
+// 列表、开关、保存设置三个接口都返回插件状态，前端拿返回值直接替换卡片，少了哪个
+// 接口，下拉框就会退回显示原始机器人 ID。
+func (h *BotHandler) pluginStateView(c *gin.Context, state assistant.PluginState) assistant.PluginState {
+	state = assistant.WithBotProfileOptions(state, h.profiles.Profiles().Profiles)
+	state.RuntimeStatus = h.runtime.Plugins().PluginRuntimeStatus(c.Request.Context(), state.Manifest.ID)
+	return state
 }
 
 func (h *BotHandler) pluginProfileIDs() []string {
@@ -1338,7 +1345,7 @@ func (h *BotHandler) setPluginEnabled(c *gin.Context) {
 	metadata := pluginLogMetadata(state)
 	metadata["profile_id"] = profileID
 	recordRequestOperation(c, h.logs, "plugin_enabled", "机器人插件开关已更新", state.Manifest.ID, metadata)
-	c.JSON(http.StatusOK, state.Redacted())
+	c.JSON(http.StatusOK, h.pluginStateView(c, state).Redacted())
 }
 
 // updatePluginSettings 处理插件详细设置变更请求。
@@ -1371,7 +1378,7 @@ func (h *BotHandler) updatePluginSettings(c *gin.Context) {
 	metadata := pluginLogMetadata(state)
 	metadata["profile_id"] = profileID
 	recordRequestOperation(c, h.logs, "plugin_settings", "机器人插件设置已更新", state.Manifest.ID, metadata)
-	c.JSON(http.StatusOK, state.Redacted())
+	c.JSON(http.StatusOK, h.pluginStateView(c, state).Redacted())
 }
 
 func (h *BotHandler) testMusicConnections(c *gin.Context) {

@@ -128,14 +128,18 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		}
 		sendCtx := ctx
 		if sentChunks > 0 {
-			interval := chunkSendInterval(cfg, chunk)
-			// 这一轮还没发完，等待期间重新点亮输入状态：空着的话，多条回复中间
-			// 看上去就是「正在输入」断了。
-			typingIndicatorFromContext(ctx).resume()
-			select {
-			case <-ctx.Done():
-				return messageIDs, ctx.Err()
-			case <-time.After(interval):
+			// 聊天页和通话不发到平台：分段间隔防的风控、模拟打字装的样子都用不上。
+			// 通话里更不能等，第二条要等一两秒才到，前面那句短的就得陪着干等。
+			if !event.webChat {
+				interval := chunkSendInterval(cfg, chunk)
+				// 这一轮还没发完，等待期间重新点亮输入状态：空着的话，多条回复中间
+				// 看上去就是「正在输入」断了。
+				typingIndicatorFromContext(ctx).resume()
+				select {
+				case <-ctx.Done():
+					return messageIDs, ctx.Err()
+				case <-time.After(interval):
+				}
 			}
 			sendCtx = withContinuousOutboundDelivery(ctx)
 		}

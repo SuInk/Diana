@@ -257,21 +257,133 @@ func TestSessionInterruptStopsSynthesisAndDownlink(t *testing.T) {
 	}
 }
 
-func TestSessionServerVADBargeInInterruptsSpeech(t *testing.T) {
-	backend := &fakeBackend{replyText: "我会一直说下去，直到你打断我为止。"}
+// bargeInBackend 第一轮一直说下去（每句交出一片后卡住，直到被打断）；后面几轮
+// 按 transcribe 给的文字回一句短的。
+func bargeInBackend(transcript string) *fakeBackend {
+	backend := &fakeBackend{}
+	backend.transcribe = func(ctx context.Context, audio []byte, format string) (string, error) {
+		return transcript, nil
+	}
+	backend.reply = func(ctx context.Context, text string, emit func(string)) error {
+		if text == "说点什么" {
+			emit("我会一直说下去，直到你打断我为止。")
+			return nil
+		}
+		emit("好，换个话题。")
+		return nil
+	}
 	backend.synthesize = func(ctx context.Context, text string, chunk func(string, []byte) error) error {
-		if err := chunk("audio/mpeg", []byte("<speaking>")); err != nil {
+		if err := chunk("audio/mpeg", []byte("<"+text+">")); err != nil {
 			return err
 		}
-		<-ctx.Done()
+		if strings.Contains(text, "一直说") {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return nil
+	}
+	return backend
+}
+
+func speakUp(session *Session) {
+	pcm := append(tone(400, 9000), silence(900)...)
+	for i := 0; i < len(pcm); i += 640 {
+		session.HandleAudio(pcm[i:min(i+640, len(pcm))])
+	}
+}
+
+func frameIndex(frames []ServerMessage, match func(ServerMessage) bool) int {
+	for i, frame := range frames {
+		if match(frame) {
+			return i
+		}
+	}
+	return -1
+}
+
+// 先生成再打断：开口不停，这句转写出字、新回复的第一句合成出声音时才打断正在说的
+// 那一轮，中间没有空白。
+func TestSessionServerVADBargeInInterruptsOnceNewReplyHasAudio(t *testing.T) {
+	session, out := startSession(t, bargeInBackend("换个话题"), ClientMessage{Format: FormatPCM16, SampleRate: testRate})
+	session.HandleControl(ClientMessage{Type: ClientText, Text: "说点什么"})
+	out.waitFor(t, "开始播报", func(msg ServerMessage) bool { return msg.Type == "binary" })
+	speakUp(session)
+	out.waitFor(t, "第二轮说完", turnEnd(2, TurnDone))
+	frames := out.snapshot()
+	speechStart := frameIndex(frames, func(msg ServerMessage) bool { return msg.Type == ServerSpeech && msg.Event == "start" })
+	transcript := frameIndex(frames, func(msg ServerMessage) bool { return msg.Type == ServerTranscript && msg.Turn == 2 })
+	interrupted := frameIndex(frames, func(msg ServerMessage) bool { return msg.Type == ServerInterrupted && msg.Turn == 1 })
+	newAudio := frameIndex(frames, func(msg ServerMessage) bool { return msg.Type == ServerAudioStart && msg.Turn == 2 })
+	if speechStart < 0 || transcript < 0 || interrupted < 0 || newAudio < 0 {
+		t.Fatalf("缺帧：%s", describe(frames))
+	}
+	if !(speechStart < transcript && transcript < interrupted && interrupted < newAudio) {
+		t.Fatalf("应开口→转写→新回复出声时才打断：%s", describe(frames))
+	}
+	if frameIndex(frames, turnEnd(1, TurnInterrupted)) < 0 {
+		t.Fatalf("第一轮应以 interrupted 结束：%s", describe(frames))
+	}
+}
+
+// 开口了但转写不出字（咳嗽、底噪、外放的回声）：正在说的那一轮照常说完。
+func TestSessionNoiseDoesNotInterruptSpeech(t *testing.T) {
+	backend := bargeInBackend("")
+	release := make(chan struct{})
+	backend.synthesize = func(ctx context.Context, text string, chunk func(string, []byte) error) error {
+		if err := chunk("audio/mpeg", []byte("<"+text+">")); err != nil {
+			return err
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	session, out := startSession(t, backend, ClientMessage{Format: FormatPCM16, SampleRate: testRate})
+	session.HandleControl(ClientMessage{Type: ClientText, Text: "说点什么"})
+	out.waitFor(t, "开始播报", func(msg ServerMessage) bool { return msg.Type == "binary" })
+	speakUp(session)
+	out.waitFor(t, "第二轮没听出字", turnEnd(2, TurnNoSpeech))
+	close(release)
+	out.waitFor(t, "第一轮照常说完", turnEnd(1, TurnDone))
+	if frameIndex(out.snapshot(), isType(ServerInterrupted)) >= 0 {
+		t.Fatalf("杂音不该打断：%s", describe(out.snapshot()))
+	}
+}
+
+// 新的一句有字以后，前一轮不再往下想：回复流程里后面才发出的消息不再念。
+func TestSessionNewUtteranceStopsPreviousReplyGeneration(t *testing.T) {
+	backend := bargeInBackend("等一下")
+	more := make(chan struct{})
+	cancelled := make(chan struct{})
+	backend.reply = func(ctx context.Context, text string, emit func(string)) error {
+		if text != "说点什么" {
+			emit("好，你说。")
+			return nil
+		}
+		emit("我会一直说下去，直到你打断我为止。")
+		select {
+		case <-ctx.Done():
+			close(cancelled)
+		case <-more:
+		}
+		emit("这句不该念出来。")
 		return ctx.Err()
 	}
 	session, out := startSession(t, backend, ClientMessage{Format: FormatPCM16, SampleRate: testRate})
 	session.HandleControl(ClientMessage{Type: ClientText, Text: "说点什么"})
 	out.waitFor(t, "开始播报", func(msg ServerMessage) bool { return msg.Type == "binary" })
-	session.HandleAudio(tone(400, 9000))
-	out.waitFor(t, "speech start", func(msg ServerMessage) bool { return msg.Type == ServerSpeech && msg.Event == "start" })
-	out.waitFor(t, "turn_end interrupted", turnEnd(1, TurnInterrupted))
+	speakUp(session)
+	out.waitFor(t, "第二轮说完", turnEnd(2, TurnDone))
+	select {
+	case <-cancelled:
+	default:
+		t.Fatal("前一轮的回复流程应被取消")
+	}
+	if strings.Contains(describe(out.snapshot()), "不该念") {
+		t.Fatalf("被顶替的一轮后面的消息不该再念：%s", describe(out.snapshot()))
+	}
 }
 
 func TestSessionServerVADSegmentsAndTranscribesUtterance(t *testing.T) {

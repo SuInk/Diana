@@ -81,9 +81,17 @@ type Session struct {
 	vad          *VAD
 	buffer       []byte
 	turnSeq      int
-	active       *turn
-	// lastDone 是最近一轮的结束信号：回复流程一次只跑一轮，后一轮要等前一轮收完尾。
+	// active 是正在说（或正在想、还没被顶替）的那一轮，下行以它为准。
+	active *turn
+	// next 是用户在 active 回着的时候又说的一句：先转写、先想好回复，第一句合成出
+	// 声音时才顶替 active（见 promoteLocked）。一时只留一个候补，更新的一句来了，
+	// 还没出声的候补直接作废。
+	next *turn
+	// lastDone 是最近一轮的结束信号，挂断时等它收尾。
 	lastDone chan struct{}
+	// lastReply 是最近一轮的回复流程结束信号：回复流程一次只跑一轮，后一轮要等前一轮
+	// 的回复流程收完尾才进。只等回复流程，不等它念完：前一轮念着的时候后一轮就能想。
+	lastReply chan struct{}
 	// pendingCarry 是开口打断时还没进回复流程的那一轮，下一句接上它的文字。
 	pendingCarry *turn
 }
@@ -93,6 +101,13 @@ type turn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
+	// genCtx 只管回复流程：后一句有了文字，这一轮就不用再往下想了，但已经排好的
+	// 句子还接着念，直到后一句的回复出声。取消 ctx 才是连念也停。
+	genCtx    context.Context
+	genCancel context.CancelFunc
+	// replyDone 在回复流程结束（或这一轮根本没走到回复流程）时关闭。
+	replyDone chan struct{}
+	replyOnce sync.Once
 
 	audio  []byte
 	format string
@@ -168,7 +183,7 @@ func (s *Session) HandleAudio(frame []byte) {
 			if !s.bargeIn {
 				return
 			}
-			s.supersedeLocked()
+			s.mergeUnstartedLocked()
 		}
 		if len(s.buffer)+len(frame) > s.opts.MaxUtteranceBytes {
 			s.buffer = nil
@@ -189,10 +204,10 @@ func (s *Session) handleVADLocked(events []VADEvent) {
 	for _, event := range events {
 		switch event.Kind {
 		case VADSpeechStart:
+			// 开口不打断正在回的那一轮：可能只是咳嗽、底噪或外放的回声。等这句转写出字、
+			// 新回复出声再打断（见 runTurn、promoteLocked）。
 			s.writeLocked(ServerMessage{Type: ServerSpeech, Event: "start"})
-			if s.active != nil {
-				s.supersedeLocked()
-			}
+			s.mergeUnstartedLocked()
 		case VADSpeechEnd:
 			s.writeLocked(ServerMessage{Type: ServerSpeech, Event: "end"})
 			s.startTurnLocked(&turn{audio: PCMToWAV(event.Audio, s.sampleRate), format: FormatWAV})
@@ -275,44 +290,69 @@ func (s *Session) commit() {
 	s.startTurnLocked(&turn{audio: audio, format: format})
 }
 
-// supersedeLocked 是用户开口了：播报中的那一轮直接打断；还没进回复流程的那一轮
-// 留着，等这句说完带上它的文字一起回。
-func (s *Session) supersedeLocked() {
-	t := s.active
-	if t == nil {
-		return
+// mergeUnstartedLocked 是用户开口了：还没进回复流程的那一轮留着，等这句说完带上
+// 它的文字一起回。已经在回的不动，见 promoteLocked。
+func (s *Session) mergeUnstartedLocked() {
+	for _, t := range []*turn{s.next, s.active} {
+		if t != nil && !t.ended && !t.replyStarted {
+			s.endTurnLocked(t, TurnMerged)
+			t.cancel()
+			s.pendingCarry = t
+			return
+		}
 	}
-	if !t.replyStarted {
-		s.endTurnLocked(t, TurnMerged)
-		t.cancel()
-		s.pendingCarry = t
-		return
-	}
-	s.interruptLocked()
 }
 
+// promoteLocked 让候补的一轮接过话头：它的第一句已经合成出声音了，这时才打断还在
+// 说的那一轮。先生成再打断，用户听不到「旧的停了、新的还没好」那段空白。
+func (s *Session) promoteLocked(t *turn) {
+	if s.next != t {
+		return
+	}
+	if old := s.active; old != nil && !old.ended {
+		old.cancel()
+		s.writeLocked(ServerMessage{Type: ServerInterrupted, Turn: old.id})
+		s.endTurnLocked(old, TurnInterrupted)
+	}
+	if s.next == t {
+		s.active, s.next = t, nil
+	}
+}
+
+// interruptLocked 立即停掉候补和正在说的那一轮，用户主动点打断时用。
 func (s *Session) interruptLocked() {
-	t := s.active
-	if t == nil {
-		return
+	for _, t := range []*turn{s.next, s.active} {
+		if t == nil || t.ended {
+			continue
+		}
+		t.cancel()
+		s.writeLocked(ServerMessage{Type: ServerInterrupted, Turn: t.id})
+		s.endTurnLocked(t, TurnInterrupted)
 	}
-	t.cancel()
-	s.writeLocked(ServerMessage{Type: ServerInterrupted, Turn: t.id})
-	s.endTurnLocked(t, TurnInterrupted)
 }
 
-// endTurnLocked 结束一轮并告诉客户端。之后这一轮的任何下行都会被丢掉。
+// endTurnLocked 结束一轮并告诉客户端。之后这一轮的任何下行都会被丢掉。正在说的
+// 那一轮结束时，候补直接接上。
 func (s *Session) endTurnLocked(t *turn, reason string) {
 	if t.ended {
 		return
 	}
 	t.ended = true
-	if s.active == t {
-		s.active = nil
+	promoted := false
+	switch {
+	case s.active == t:
+		s.active, s.next = s.next, nil
+		promoted = s.active != nil
+	case s.next == t:
+		s.next = nil
 	}
 	s.writeLocked(ServerMessage{Type: ServerTurnEnd, Turn: t.id, Reason: reason})
-	if s.active == nil && !s.closed {
+	switch {
+	case s.closed:
+	case s.active == nil:
 		s.writeLocked(ServerMessage{Type: ServerState, State: StateListening})
+	case promoted && !s.active.speaking:
+		s.writeLocked(ServerMessage{Type: ServerState, State: StateThinking})
 	}
 }
 
@@ -320,19 +360,29 @@ func (s *Session) startTurnLocked(t *turn) {
 	if s.closed {
 		return
 	}
-	if s.active != nil {
-		s.supersedeLocked()
+	s.mergeUnstartedLocked()
+	// 还没出声的候补被更新的一句顶掉：它的话已经进了回复流程，作废就行。
+	if old := s.next; old != nil {
+		old.cancel()
+		s.writeLocked(ServerMessage{Type: ServerInterrupted, Turn: old.id})
+		s.endTurnLocked(old, TurnInterrupted)
 	}
 	s.turnSeq++
 	t.id = s.turnSeq
 	t.ctx, t.cancel = context.WithCancel(s.ctx)
+	t.genCtx, t.genCancel = context.WithCancel(t.ctx)
 	t.done = make(chan struct{})
 	t.transcribed = make(chan struct{})
+	t.replyDone = make(chan struct{})
 	t.carry, s.pendingCarry = s.pendingCarry, nil
-	previous := s.lastDone
-	s.lastDone = t.done
-	s.active = t
-	s.writeLocked(ServerMessage{Type: ServerState, State: StateThinking})
+	previous := s.lastReply
+	s.lastDone, s.lastReply = t.done, t.replyDone
+	if s.active != nil {
+		s.next = t
+	} else {
+		s.active = t
+		s.writeLocked(ServerMessage{Type: ServerState, State: StateThinking})
+	}
 	go func() {
 		defer recoverGoroutinePanic("transcribe")
 		s.transcribe(t)
@@ -374,6 +424,14 @@ func (t *turn) fullText(ctx context.Context) (string, error) {
 
 func (s *Session) runTurn(t *turn, previous chan struct{}) {
 	defer close(t.done)
+	// 没走到回复流程就退出时，也要等前一轮的回复流程收完尾再放行后一轮：被顶掉的
+	// 候补早早退出，不能让更后面的一轮趁前面还在想的时候插进来。
+	defer func() {
+		if previous != nil {
+			<-previous
+		}
+		t.finishReply()
+	}()
 	text, err := t.fullText(t.ctx)
 	if err != nil {
 		if t.ctx.Err() == nil {
@@ -389,6 +447,13 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 	if s.turnWrite(t, ServerMessage{Type: ServerTranscript, Turn: t.id, Text: text}) != nil {
 		return
 	}
+	// 这句有字了，是真开口：正在回的那一轮不用再往下想，已经排好的句子接着念，等这句
+	// 的回复出声再打断。
+	s.mu.Lock()
+	if s.next == t && s.active != nil {
+		s.active.genCancel()
+	}
+	s.mu.Unlock()
 	if previous != nil {
 		select {
 		case <-previous:
@@ -436,10 +501,10 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 		}
 	}
 	// emit 在回复流程的发送路径上被调用；每条消息之间本来就是断句处。
-	replyErr := s.backend.Reply(t.ctx, text, func(message string) {
+	replyErr := s.backend.Reply(t.genCtx, text, func(message string) {
 		queueMu.Lock()
 		defer queueMu.Unlock()
-		if finished {
+		if finished || t.genCtx.Err() != nil {
 			return
 		}
 		queue(splitter.Push(message + "\n"))
@@ -449,9 +514,13 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 	finished = true
 	close(sentences)
 	queueMu.Unlock()
+	t.finishReply()
 	<-spoken
 	switch {
 	case t.ctx.Err() != nil:
+	case t.genCtx.Err() != nil:
+		// 被后一句顶替：排好的句子念完了，后一句接着说。
+		s.finishTurn(t, TurnInterrupted)
 	case replyErr != nil:
 		s.turnWrite(t, ServerMessage{Type: ServerError, Turn: t.id, Code: "reply_failed", Text: "回复失败：" + replyErr.Error()})
 		s.finishTurn(t, TurnFailed)
@@ -480,6 +549,7 @@ func (s *Session) speak(t *turn, seq int, sentence string) {
 		return s.turnDo(t, func() error {
 			if !started {
 				started = true
+				s.promoteLocked(t)
 				if !t.speaking {
 					t.speaking = true
 					s.writeLocked(ServerMessage{Type: ServerState, State: StateSpeaking})
@@ -503,6 +573,10 @@ func (s *Session) finishTurn(t *turn, reason string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.endTurnLocked(t, reason)
+}
+
+func (t *turn) finishReply() {
+	t.replyOnce.Do(func() { close(t.replyDone) })
 }
 
 // turnDo 在这一轮还算数时执行 fn。持锁执行，保证打断之后不会再有这一轮的下行。
@@ -542,14 +616,20 @@ func (s *Session) Close() {
 		s.mu.Unlock()
 		return
 	}
-	if s.active != nil {
-		s.active.cancel()
+	var waits []chan struct{}
+	for _, t := range []*turn{s.active, s.next} {
+		if t != nil {
+			t.cancel()
+			waits = append(waits, t.done)
+		}
 	}
 	s.closed = true
-	done := s.lastDone
+	if s.lastDone != nil {
+		waits = append(waits, s.lastDone)
+	}
 	s.mu.Unlock()
 	s.cancel()
-	if done != nil {
+	for _, done := range waits {
 		<-done
 	}
 }
