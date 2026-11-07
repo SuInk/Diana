@@ -465,6 +465,7 @@ type qqActiveCall struct {
 	id      string
 	session *voicecall.Session
 	cancel  context.CancelFunc
+	call    *VoiceCall
 }
 
 func newQQCallSet(plugin *QQVoiceCallPlugin, link *qqCallLink) *qqCallSet {
@@ -609,7 +610,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if s.active != nil {
 		s.active.close()
 	}
-	s.active = &qqActiveCall{id: msg.Call, session: session, cancel: cancel}
+	s.active = &qqActiveCall{id: msg.Call, session: session, cancel: cancel, call: call}
 	s.mu.Unlock()
 	s.plugin.noteCall("接通了主人的电话")
 
@@ -663,6 +664,8 @@ func (s *qqCallSet) closeAll() {
 func (c *qqActiveCall) close() {
 	c.cancel()
 	c.session.Close()
+	// 最后一轮的话落进历史以后，再记这通电话打了多久。
+	c.call.Finish()
 }
 
 // qqCallTransport 把通话引擎的下行交给 agent：一句合成好的音频收齐后转成 16kHz

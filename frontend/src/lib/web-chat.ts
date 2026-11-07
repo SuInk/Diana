@@ -7,6 +7,8 @@
 export interface WebChatMessage {
   id: string;
   role: "user" | "assistant";
+  /** "call" 是一条通话记录（「[语音通话] 通话 3 分 12 秒」），显示成居中的提示。 */
+  kind?: "call";
   text: string;
   images?: string[];
   /** Unix 秒。 */

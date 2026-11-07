@@ -25,8 +25,8 @@ const localOutboundIDPrefix = "local-out-"
 
 // recallableOutboundMessageID 判断一条历史事件能不能拿去撤回。
 func recallableOutboundMessageID(event MessageEvent) string {
-	// 戳一戳历史的 ID 是本地编的，平台上没有这条消息。
-	if !event.Outbound || isPokeHistoryEvent(event) {
+	// 戳一戳、通话记录的 ID 是本地编的，平台上没有这条消息。
+	if !event.Outbound || isNarrationHistoryEvent(event) {
 		return ""
 	}
 	id := strings.TrimSpace(event.MessageID)

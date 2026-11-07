@@ -195,6 +195,8 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		push := isSubscriptionPushEvent(historyEvent)
 		if isPokeHistoryEvent(historyEvent) {
 			content = pokeHistoryPromptText(historyEvent, botID, historyEvent.SelfID)
+		} else if isCallHistoryEvent(historyEvent) {
+			content = callHistoryPromptText(historyEvent)
 		} else if push {
 			content = subscriptionPushHistoryPromptText(historyEvent)
 		}
@@ -204,7 +206,7 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		role := llm.RoleUser
 		if !push && (strings.TrimSpace(historyEvent.botReply) != "" || assistantHistoryEvent(historyEvent, botID)) {
 			role = llm.RoleAssistant
-			if !isPokeHistoryEvent(historyEvent) {
+			if !isNarrationHistoryEvent(historyEvent) {
 				content = assistantHistoryPlainText(historyEvent)
 			}
 		}

@@ -424,6 +424,9 @@ func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item Me
 		text := pokeHistoryPromptText(item, cfg.BotAccount, current.SelfID, item.SelfID)
 		return []llm.Message{{Role: llm.RoleUser, Content: text, Priority: llm.MessagePriorityHistory}}
 	}
+	if isCallHistoryEvent(item) {
+		return []llm.Message{{Role: llm.RoleUser, Content: callHistoryPromptText(item), Priority: llm.MessagePriorityHistory}}
+	}
 	if isSubscriptionPushEvent(item) {
 		// 订阅推送不当 assistant 发言给模型看，否则模型会照着卡片格式自己拼一张。
 		if text := subscriptionPushHistoryPromptText(item); text != "" {
