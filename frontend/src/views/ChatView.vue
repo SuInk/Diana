@@ -52,7 +52,8 @@
           <p v-else-if="!messages.length && !info?.problem" class="qq-hint">和 {{ current.name }} 打个招呼吧。这里是主人和她的私聊，平台上聊过的也会出现在这里。</p>
           <template v-for="(message, i) in messages" :key="message.id">
             <div v-if="dividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
-            <article class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : `${current.name} 说`">
+            <div v-if="message.kind === 'call'" class="qq-call-record" role="note"><Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }}</div>
+            <article v-else class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : `${current.name} 说`">
               <BotAvatar v-if="message.role === 'assistant'" :name="current.name" :src="current.avatar" :size="38" />
               <div class="qq-bubble-wrap">
                 <template v-if="message.text">
@@ -157,6 +158,11 @@ function readSelected(): string {
 
 function lastOf(id: string): WebChatMessage | undefined {
   return lastMessages.value[id];
+}
+
+// 通话记录在聊天里只显示「通话 3 分 12 秒」，前面的电话图标代替「[语音通话]」。
+function callRecordLabel(text: string): string {
+  return text.replace(/^\[语音通话\]\s*/, "") || "语音通话";
 }
 
 // 列表里一行预览，机器人回复里的 Markdown 标记去掉再显示。
@@ -584,6 +590,21 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 12px 18px 20px;
+}
+
+/* 通话记录：挂断时记的一条，像 QQ 里的「通话时长」提示一样居中 */
+.qq-call-record {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: fit-content;
+  margin: 4px auto 14px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .qq-time {

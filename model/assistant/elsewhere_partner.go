@@ -59,7 +59,7 @@ func elsewherePartner(cfg BotConfig, event MessageEvent, history []MessageEvent)
 	scanned := 0
 	for index := len(history) - 1; index >= 0 && scanned < elsewherePartnerLookback; index-- {
 		item := history[index]
-		if item.crossGroupContext || isPokeHistoryEvent(item) {
+		if item.crossGroupContext || isNarrationHistoryEvent(item) {
 			continue
 		}
 		if currentID != "" && strings.TrimSpace(item.MessageID) == currentID {

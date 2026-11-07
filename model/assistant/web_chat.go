@@ -30,6 +30,9 @@ const (
 type WebChatMessage struct {
 	ID   string `json:"id"`
 	Role string `json:"role"` // user 或 assistant
+	// Kind 为 "call" 时是一条通话记录（「[语音通话] 通话 3 分 12 秒」），页面显示成
+	// 居中的提示；Role 仍是 user，不认识 Kind 的旧客户端照常显示成一条消息。
+	Kind string `json:"kind,omitempty"`
 	Text string `json:"text"`
 	// Images 是能直接在网页里显示的图片地址（http/https）。
 	Images []string `json:"images,omitempty"`
@@ -175,6 +178,9 @@ func (r *Runtime) WebChatHistory(ctx context.Context, profileID string, limit in
 			continue
 		}
 		msg := WebChatMessage{ID: item.MessageID, Role: "user", At: item.Time}
+		if isCallHistoryEvent(item) {
+			msg.Kind = "call"
+		}
 		if assistantHistoryEvent(item, bot) {
 			msg.Role = "assistant"
 		}

@@ -99,6 +99,9 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &voiceCallConn{conn: conn}
+	// 挂断后在私聊里记一条通话记录。排在 session.Close 前面 defer，最后一轮的话先落进
+	// 历史，记录排在它们后面。
+	defer call.Finish()
 	session := voicecall.NewSession(ctx, call, out, voicecall.Options{CallID: callID, BotID: info.BotID, BotName: info.BotName})
 	defer session.Close()
 	recordOperation(ctx, h.logs, "voice_call", "开始语音通话", info.BotID, map[string]any{"call_id": callID})

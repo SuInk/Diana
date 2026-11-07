@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -43,6 +44,8 @@ type VoiceCall struct {
 	callID  string
 	base    MessageEvent
 	turns   atomic.Int64
+	started time.Time
+	ended   sync.Once
 }
 
 // VoiceCallInfo 是开始通话前给前端看的状态。
@@ -90,7 +93,16 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 		return nil, err
 	}
 	event.voiceCall = true
-	return &VoiceCall{runtime: r, callID: callID, base: event}, nil
+	return &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}, nil
+}
+
+// Finish 在挂断时调用一次：往主人私聊里记一条通话记录（打了多久），见 call_history.go。
+// 重复调用只记一次。
+func (c *VoiceCall) Finish() {
+	if c == nil {
+		return
+	}
+	c.ended.Do(func() { c.runtime.rememberVoiceCall(c.base, c.started, time.Now()) })
 }
 
 // Transcribe 用语音识别插槽转写一句话。封装格式（webm、ogg、mp4）先用 ffmpeg 转成

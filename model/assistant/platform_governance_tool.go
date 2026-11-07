@@ -396,7 +396,7 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 	for i := len(history) - 1; i >= 0 && len(req.messageIDs) < req.count; i-- {
 		event := history[i]
 		id := strings.TrimSpace(event.MessageID)
-		if event.Outbound || id == "" || strings.HasPrefix(id, localOutboundIDPrefix) || isPokeHistoryEvent(event) {
+		if event.Outbound || id == "" || strings.HasPrefix(id, localOutboundIDPrefix) || isNarrationHistoryEvent(event) {
 			continue
 		}
 		if strings.TrimSpace(event.UserID) == target {

@@ -1254,8 +1254,8 @@ function demoWorkspaceFile(rel: string, download: boolean): Response {
   return new Response(new Uint8Array(node.size ?? 0), { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": disposition } });
 }
 
-const demoWebChats = new Map<string, { id: string; role: string; text: string; at: number }[]>();
-function demoWebChat(profile: string): { id: string; role: string; text: string; at: number }[] {
+const demoWebChats = new Map<string, { id: string; role: string; kind?: string; text: string; at: number }[]>();
+function demoWebChat(profile: string): { id: string; role: string; kind?: string; text: string; at: number }[] {
   let history = demoWebChats.get(profile);
   if (!history) {
     const base = Math.floor(Date.now() / 1000) - 26 * 3600;
@@ -1264,7 +1264,10 @@ function demoWebChat(profile: string): { id: string; role: string; text: string;
       { id: "demo-2", role: "assistant", text: "辛苦啦，先喝口水歇一会儿", at: base + 20 },
       { id: "demo-3", role: "assistant", text: "晚上想吃点什么？我帮你想想", at: base + 25 },
       { id: "demo-4", role: "user", text: "番茄牛腩吧", at: base + 25 * 3600 },
-      { id: "demo-5", role: "assistant", text: "好耶，**番茄牛腩**炖一锅能吃两顿", at: base + 25 * 3600 + 30 }
+      { id: "demo-5", role: "assistant", text: "好耶，**番茄牛腩**炖一锅能吃两顿", at: base + 25 * 3600 + 30 },
+      { id: "demo-6", role: "user", text: "喂？听得到吗", at: base + 25 * 3600 + 600 },
+      { id: "demo-7", role: "assistant", text: "听得到！今天的牛腩炖上了没？", at: base + 25 * 3600 + 606 },
+      { id: "demo-8", role: "user", kind: "call", text: "[语音通话] 通话 3 分 12 秒", at: base + 25 * 3600 + 792 }
     ];
     demoWebChats.set(profile, history);
   }

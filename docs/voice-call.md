@@ -177,6 +177,7 @@ OpenAI 兼容接口和 ElevenLabs 是边合成边下发的，一句会分成多�
 - **句号保留**：聊天回复平时会去掉句号（读起来不像公文），通话里保留，切句和合成停顿都靠它。
 - **回复的出口**：回复在发送的最后一步交给通话，不发到 QQ 或 Telegram；输入状态、Telegram 草稿流、合并转发卡片在通话里都跳过。机器人的平台连接不需要在线。
 - **打断后的记录**：被打断时，回复的文字可能已经整段写进私聊记录，但用户只听到了一部分。
+- **通话记录**：挂断时在私聊记录里记一条「[语音通话] 通话 3 分 12 秒」（不到 1 秒的不记），网页、App 和 QQ 打进来的电话都记。它是旁白，不是谁说的话：模型看到的是「语音通话记录」，不当成自己的发言，也不会被引用或撤回。只记时长，不存录音。
 
 ## 网页通话界面
 
@@ -198,7 +199,7 @@ OpenAI 兼容接口和 ElevenLabs 是边合成边下发的，一句会分成多�
 
 ```
 GET  /api/assistant/chat?profile=<机器人 ID>
-→ {"info": {"bot_id", "bot_name", "platform", "problem?"}, "messages": [{"id", "role": "user|assistant", "text", "images?", "at"}]}
+→ {"info": {"bot_id", "bot_name", "platform", "problem?"}, "messages": [{"id", "role": "user|assistant", "kind?", "text", "images?", "at"}]}
 
 POST /api/assistant/chat   {"profile": "<机器人 ID>", "text": "在干嘛"}
 → 按行流式返回（application/x-ndjson）：
@@ -207,6 +208,6 @@ POST /api/assistant/chat   {"profile": "<机器人 ID>", "text": "在干嘛"}
   {"type":"done","replies":1}          结束；出错时是 {"type":"done","error":"原因"}
 ```
 
-- 记录是主人和这台机器人的私聊，平台上（比如 QQ 私聊）聊过的、通话里说的都在里面，最多返回最近 200 条。
+- 记录是主人和这台机器人的私聊，平台上（比如 QQ 私聊）聊过的、通话里说的都在里面，最多返回最近 200 条。`kind` 为 `call` 的是通话记录，页面显示成居中的提示；不认识它的客户端照常当一条消息显示。
 - 回复不发到平台上，输入状态、草稿流、合并转发和 `tts` 工具都跳过；私聊准入同样不拦。回复里的图片只保留 http(s) 地址，本地文件和 base64 图片在页面上不显示。
 - 和通话不同，打字聊天不加口语化提示，也照常去掉句号，和平台上的私聊一样。
