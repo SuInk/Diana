@@ -101,6 +101,8 @@ type Session struct {
 	// pendingCarry 是开口打断时还没进回复流程的那一轮，下一句接上它的文字。
 	pendingCarry *turn
 
+	botHungUp bool
+
 	// done 在会话结束时关闭，见 Done。
 	done      chan struct{}
 	doneOnce  sync.Once
@@ -559,8 +561,17 @@ func (s *Session) hangup() {
 		return
 	}
 	s.writeLocked(ServerMessage{Type: ServerHangup})
+	s.botHungUp = true
 	s.mu.Unlock()
 	s.Close()
+}
+
+// BotHungUp 报告这通电话是不是机器人自己挂的。传输层据此区分「机器人挂断」和
+// 「连接意外断了」：后者可以等客户端重连。
+func (s *Session) BotHungUp() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.botHungUp
 }
 
 // Done 在会话结束（任何一方挂断）后关闭，传输层据此收尾，比如关掉连接。
