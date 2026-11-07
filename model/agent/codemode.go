@@ -78,7 +78,7 @@ func newCodeModeTool() (*codeModeTool, error) {
 
 func (*codeModeTool) Name() string { return codeModeToolName }
 func (*codeModeTool) Description() string {
-	return "异步 JavaScript 编排：多步调用、循环或筛选汇总大结果时用；只调一次就直接调原工具，别包一层。tools.X() 得完整原始结果，JSON 已解析，结构不明先 return Object.keys(r)；只 return 需要的字段。例：const p=await tools.browser_render({url}); store('p',p); return p.title; store/load 是全局函数，本轮跨脚本保留。参数不明先 tool_search；仅 web_search/browser_render 可并发。无 Node/文件/联网；发送、终止、图片在脚本外调用。"
+	return "异步 JavaScript 编排：多步调用、循环或筛选大结果时用；只调一次就直接调原工具。await tools.<名字>({参数}) 调按需目录里的工具，参数照目录里括号内的签名填，不用 tool_search；结果是解析好的 JSON，结构不明先 return Object.keys(r)，只 return 需要的字段。例：const p=await tools.browser_render({url}); return p.title; store/load 跨脚本存小状态。仅 web_search/browser_render 可并发。无 Node/联网；发送、终止、图片在脚本外调用。"
 }
 func (*codeModeTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}}, "required": []string{"code"}, "additionalProperties": false}
@@ -95,13 +95,21 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 		return "", err
 	}
 	names := r.registry.PresentedNames()
+	// 脚本里 ALL_TOOLS 和「tools.X 不存在」的提示用得上签名：和按需目录同一份。
+	descriptions := make(map[string]string, len(names)+1)
+	for _, name := range names {
+		if child, ok := r.registry.Get(name); ok {
+			descriptions[name] = name + toolSignature(child) + ": " + catalogLineDescription(child)
+		}
+	}
 	if r.loader != nil {
 		names = append(names, ToolsLoadToolName)
+		descriptions[ToolsLoadToolName] = ToolsLoadToolName + schemaSignature(r.loader.InputSchema()) + ": " + r.loader.Description()
 	}
 	var mu sync.Mutex
 	cacheHits := 0
 	fresh, _ := input["fresh"].(bool)
-	result, err := tool.runtime.Execute(ctx, codemode.Request{Code: input["code"].(string), Store: r.codeModeStore, Tools: names, ParallelTools: []string{WebSearchToolName, browserRenderToolName}, MaxCalls: 32, Timeout: 120 * time.Second}, func(callCtx context.Context, name string, raw json.RawMessage) (any, error) {
+	result, err := tool.runtime.Execute(ctx, codemode.Request{Code: input["code"].(string), Store: r.codeModeStore, Tools: names, Descriptions: descriptions, ParallelTools: []string{WebSearchToolName, browserRenderToolName}, MaxCalls: 32, Timeout: 120 * time.Second}, func(callCtx context.Context, name string, raw json.RawMessage) (any, error) {
 		mu.Lock()
 		action := llmAction{Action: "tool", Tool: name}
 		if err := json.Unmarshal(raw, &action.Input); err != nil {
@@ -142,7 +150,8 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 		if typed, ok := child.(ToolInputSchema); ok {
 			action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
 			if err := validateToolInput(typed.InputSchema(), action.Input); err != nil {
-				return deny(err)
+				// 参数错了就把期望的形状一起给脚本，照 pi-codemode 的做法，免得模型再猜一轮。
+				return deny(fmt.Errorf("%w；期望 tools.%s%s", err, action.Tool, toolSignature(child)))
 			}
 		}
 		action.Input = resolveSearchRefs(action.Tool, action.Input, *steps)

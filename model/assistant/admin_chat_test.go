@@ -246,12 +246,12 @@ func TestAdminChatUsesOwnerToolSurfaceWithoutSessionTools(t *testing.T) {
 		prompt.WriteString(message.Content)
 	}
 	for _, name := range []string{"plugin.echo", "notebook", "tasks"} {
-		if !strings.Contains(prompt.String(), "- "+name+": ") {
+		if !strings.Contains(prompt.String(), "- "+name+"(") {
 			t.Errorf("deferred tool %s missing from catalog", name)
 		}
 	}
 	for _, name := range adminChatSessionBoundTools {
-		if declared[name] || strings.Contains(prompt.String(), "- "+name+": ") {
+		if declared[name] || strings.Contains(prompt.String(), "- "+name+"(") {
 			t.Errorf("session-bound tool %s leaked into admin chat", name)
 		}
 	}

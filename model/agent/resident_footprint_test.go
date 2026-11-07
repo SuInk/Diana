@@ -31,7 +31,7 @@ func TestResidentFootprintFollowsResidencyTiers(t *testing.T) {
 	if names != "common,"+ToolsLoadToolName+","+ToolsExecuteToolName+","+finalizeToolName {
 		t.Fatalf("resident tools = %s", names)
 	}
-	if !strings.Contains(footprint.SystemPrompt, "- rare:") || strings.Contains(footprint.SystemPrompt, "- common:") {
+	if !strings.Contains(footprint.SystemPrompt, "- rare(") || strings.Contains(footprint.SystemPrompt, "- common(") {
 		t.Fatalf("deferred catalog wrong:\n%s", footprint.SystemPrompt)
 	}
 	if !strings.Contains(footprint.SkillsCatalog, "常驻正文") || strings.Contains(footprint.SkillsCatalog, "触发正文") {

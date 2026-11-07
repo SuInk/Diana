@@ -95,7 +95,7 @@ func (l *deferredToolLoader) catalogWhere(shared bool) string {
 			continue
 		}
 		if l.featured[name] {
-			builder.WriteString("- " + name + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
+			builder.WriteString("- " + name + toolSignature(tool) + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
 			continue
 		}
 		builder.WriteString(deferredCatalogLine(tool))
@@ -116,7 +116,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 须符合其 inputSchema；不清楚参数时先 tool_search。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的，先 tool_search 再调。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -211,7 +211,7 @@ func executeInputSchema() map[string]any {
 func (l *deferredToolLoader) Name() string { return ToolsLoadToolName }
 
 func (l *deferredToolLoader) Description() string {
-	return "取得「按需加载的工具」的完整定义，之后用 tools_execute 调用。names 填目录里的确切名字（优先）；拿不准叫什么时用 query 写关键词，返回最相关的几个。取过的在本会话后续保留；只取确实要用的。"
+	return "取得「按需加载的工具」的完整定义（每个参数的说明和 inputSchema）。目录里的签名已够填参数时不用取，直接 tools_execute；只在签名写着「参数多」、或参数含义拿不准时用。names 填目录里的确切名字（优先）；拿不准叫什么时用 query 写关键词，返回最相关的几个。取过的在本会话后续保留。"
 }
 
 // toolSearchQueryLimit 是按关键词搜时最多返回几个工具。
@@ -481,10 +481,24 @@ func (l *deferredToolLoader) resolveLoaded(action llmAction) (llmAction, error) 
 		schema, loaded = l.loaded[name], true
 	}
 	if !loaded {
-		if _, exists := l.registry.Get(name); !exists {
+		tool, exists := l.registry.Get(name)
+		if !exists {
 			return action, l.missingToolError(name)
 		}
-		return action, fmt.Errorf("工具 %q 未在本轮加载，请先 tool_search，再 tools_execute", name)
+		// 走到这里是参数不符合定义（没加载过、又没能当场登记）。以前回「未在本轮加载，请先
+		// tool_search」：模型照做再调一遍，白走两步；线上 swe-2 一天 12 次，全是 operation
+		// 写成 action、query 写成 keyword 这种字段名错。和 dispatchDirect 一样，说清哪里不对，
+		// 把完整契约一起交回，下一步直接改好重调。
+		current, err := snapshotToolSchema(tool)
+		if err != nil {
+			return action, fmt.Errorf("工具 %q 当前 inputSchema 无效，请重新 tool_search", name)
+		}
+		why := validateToolInput(current, coerceToolInputArrays(current, action.Input))
+		contract, err := l.Run(context.Background(), map[string]any{"names": []string{name}})
+		if err != nil {
+			return action, err
+		}
+		return action, fmt.Errorf("工具 %q 的参数不符合定义（%v），这次没有执行；已经替你加载，完整契约如下，照 inputSchema 改好参数后重新 tools_execute，不用 tool_search：%s", name, why, contract)
 	}
 	action.Input = coerceToolInputArrays(schema, action.Input)
 	input := action.Input
@@ -716,7 +730,7 @@ func (l *deferredToolLoader) loadOnCall(name string, input map[string]any) bool 
 		return false
 	}
 	schema, err := snapshotToolSchema(tool)
-	if err != nil || validateToolInput(schema, input) != nil {
+	if err != nil || validateToolInput(schema, coerceToolInputArrays(schema, input)) != nil {
 		return false
 	}
 	if _, exists := l.loaded[name]; !exists {

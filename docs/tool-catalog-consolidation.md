@@ -10,7 +10,7 @@
 
 - 路由只在 `!directAgentDecision` 时才跑，也就是没开完整 Agent 的时候（`model/assistant/runtime.go` 的 `routeReplyIntent` 调用处）。即使跑了，结果也只记日志（「Planner output is advisory only」），不会裁掉工具。
 - 生产近 30 天 `app_logs` 里 `intent_recognition` 和 `visual_intent` 都是 **0 行**。生产开着完整 Agent，路由一次都没跑过。
-- 真正挑工具的是主回复 Agent 本身。系统提示词里有一份按需目录（每个工具一行 `- 名字: 描述`），Agent 读这份目录，再用 `tools_execute` 或 `tool_search` 调用，见 [延迟工具调用协议](deferred-tools.md)。`001-agent_started.json` 里的 `metadata.available_tools`，就是 `registry.Catalog(180)` 算出来的这份目录。
+- 真正挑工具的是主回复 Agent 本身。系统提示词里有一份按需目录（每个工具一行 `- 名字(参数签名): 描述`），Agent 读这份目录，再用 `tools_execute` 或 `tool_search` 调用，见 [延迟工具调用协议](deferred-tools.md)。`001-agent_started.json` 里的 `metadata.available_tools`，就是 `registry.Catalog(180)` 算出来的这份目录。
 
 所以本次评估的对象是 **Agent 第一步的工具选择**。「路由选对率」在生产上没有可比的东西：路由请求没有落盘，只能从首步请求近似重建。重建版大约要 200 万 token，这次没有跑，等决定后再说。
 

@@ -62,10 +62,10 @@ func TestRunnerDefersNonCoreToolsUntilLoaded(t *testing.T) {
 		t.Fatalf("after loading, tools = %s", second)
 	}
 	system := client.requests[0].Messages[0].Content
-	if !strings.Contains(system, "按需加载的工具") || !strings.Contains(system, "- rare:") {
+	if !strings.Contains(system, "按需加载的工具") || !strings.Contains(system, "- rare(参数不限):") {
 		t.Fatalf("system prompt lacks deferred catalog:\n%s", system)
 	}
-	if strings.Contains(system, "- common:") {
+	if strings.Contains(system, "- common(") {
 		t.Fatalf("core tool repeated in system catalog:\n%s", system)
 	}
 }
@@ -521,7 +521,7 @@ func TestDeferredNewCapabilityGoesThroughDispatcher(t *testing.T) {
 	if _, loaded := loader.loaded[rare.Name()]; !loaded {
 		t.Fatal("new deferred tool not recorded as loaded")
 	}
-	if !strings.Contains(loader.catalog(), "- new:") {
+	if !strings.Contains(loader.catalog(), "- new(参数不限):") {
 		t.Fatal("new capability missing from catalog")
 	}
 }
@@ -779,5 +779,33 @@ func TestExecuteEnvelopeErrorShowsFix(t *testing.T) {
 	err = executeEnvelopeError(envelope, validateToolInput(executeInputSchema(), envelope))
 	if text := err.Error(); !strings.Contains(text, "缺少必填参数 input") || !strings.Contains(text, "多了不支持的参数 operation") || !strings.Contains(text, "目标工具的参数都放进 input") {
 		t.Fatalf("flat params: %q", text)
+	}
+}
+
+// 模型没先 tool_search、直接 tools_execute 但字段名写错（线上 swe-2 把 operation 写成 action）：
+// 以前回「未在本轮加载，请先 tool_search」，模型照做再调一遍，白走两步。现在说清哪里不对，
+// 把契约一起交回并登记为已加载，下一步改好参数直接重调。
+func TestToolsExecuteInvalidInputReturnsContractInsteadOfDemandingSearch(t *testing.T) {
+	tool := &schemaTool{name: "chat_history", description: "读聊天记录", schema: map[string]any{
+		"type": "object", "additionalProperties": false, "required": []string{"operation"},
+		"properties": map[string]any{
+			"operation": map[string]any{"type": "string", "enum": []string{"search", "recent"}},
+			"query":     map[string]any{"type": "string"},
+		},
+	}}
+	loader := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, tool), []string{"common"}, nil, nil)
+	_, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"name": "chat_history", "input": map[string]any{"action": "search", "keyword": "x"}}})
+	if err == nil {
+		t.Fatal("invalid input accepted")
+	}
+	if strings.Contains(err.Error(), "未在本轮加载") || !strings.Contains(err.Error(), "参数不符合定义") || !strings.Contains(err.Error(), `"inputSchema"`) || !strings.Contains(err.Error(), "operation") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, loaded := loader.loaded["chat_history"]; !loaded {
+		t.Fatal("contract not registered as loaded")
+	}
+	action, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"name": "chat_history", "input": map[string]any{"operation": "search", "query": "x"}}})
+	if err != nil || action.Tool != "chat_history" {
+		t.Fatalf("corrected call: action=%+v err=%v", action, err)
 	}
 }
