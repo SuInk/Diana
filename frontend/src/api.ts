@@ -496,6 +496,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   agent_browser_operation_access?: BrowserOperationAccess;
   /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
   agent_browser_control_enabled?: boolean;
+  /** 允许这台机器人使用桌面控制（desktop_*）。默认关闭，还要打开「设置 → 桌面控制」的总开关。 */
+  agent_desktop_control_enabled?: boolean;
   agent_browser_box_disabled?: boolean;
 }
 

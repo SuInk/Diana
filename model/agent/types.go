@@ -118,7 +118,7 @@ type Config struct {
 	// ExtensionScope 取字段，它不在其中，所以不会被带进缓存键。
 	BrowserControl BrowserControlBridge `json:"-"`
 	// DesktopControl 是桌面控制执行器的控制面句柄，由运行时注入。
-	// 为 nil 时 desktop_windows / desktop_screenshot 不登记。
+	// 为 nil 时 desktop_* 与 desktop_job_* 都不登记。
 	DesktopControl DesktopControlBridge `json:"-"`
 	// BuiltinBrowser 是内置浏览器（model/browserbox）的句柄，同样由运行时注入。
 	// 它在时 browser_* 那组 CDP 工具就接到 Diana 自己那个常驻浏览器上，带着

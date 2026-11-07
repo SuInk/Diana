@@ -19,7 +19,7 @@ WebUI 的“设置 → 桌面控制”提供系统权限状态、具体操作预
 2. **执行器已连接**。
 3. **应用范围**：`allowed_apps` 为空时主人默认可访问全部应用；可再收窄。`denied_apps` 优先。显示名给人看；Bundle ID / `window_id` 做定位。
 4. **读写档位**：列窗口与截图只读；点击/输入/按键须 `write_enabled`。
-5. **机器人开关** `agent_desktop_control_enabled`。
+5. **机器人开关** `agent_desktop_control_enabled`：机器人配置里的「允许使用桌面控制」，默认关；安全模式下不登记这些工具。
 6. **身份**：仅主人；群成员工具白名单不含这些工具。
 7. **macOS 权限**：Screen Recording（截图）；Accessibility（写操作）。失败返回可解释 `permission_denied`。
 
@@ -32,7 +32,7 @@ WebUI 的“设置 → 桌面控制”提供系统权限状态、具体操作预
 | `desktop_windows` | 读 | 列出已授权窗口 |
 | `desktop_screenshot` | 读 | 截图；可清掉任务的「须重新观察」标记 |
 | `desktop_elements` | 读 | 读取可访问元素、标签和观察版本，需要辅助功能权限；安全输入控件不返回 |
-| `desktop_click` / `desktop_type` / `desktop_key` / `desktop_scroll` | 写 | 须 `write_enabled`、有效 `observation` 和控制台单次确认 |
+| `desktop_click` / `desktop_type` / `desktop_key` / `desktop_scroll` | 写 | 须 `write_enabled`、有效 `observation` 和控制台单次确认；调用会等确认（最多 5 分钟），确认后同一次调用直接返回结果 |
 | `desktop_job_create` | 任务 | 创建持久任务，返回 `job_id`；不限总步数和时长 |
 | `desktop_job_status` | 任务 | 查询或列出 |
 | `desktop_job_pause` / `desktop_job_resume` | 任务 | 暂停 / 恢复（恢复须先截图再写） |
@@ -93,12 +93,12 @@ HTTP 管理接口位于 `/api/desktop-control`，沿用控制台会话认证。�
 本机执行器的写操作使用以下流程：
 
 1. `desktop_screenshot` 或 `desktop_elements` 返回绑定当前窗口、应用和画面的 `observation`，有效期两分钟。元素 ID 仅用于本次元素观察；优先元素点击，坐标用于不提供元素的应用。
-2. 模型提交具体操作与观察版本。执行器核对窗口画面，先返回 `confirmation_required`，这时尚未发送输入。控制台展示请求时的窗口截图、目标应用、元素或坐标、输入文字或按键。
-3. 主人在控制台确认后，让 Diana 使用相同参数重试。确认只用一次，不能换文字、目标、观察版本或任务。使用任务幂等键时须给这次尝试新的键；原先的等待确认记录不会重放。
-4. 执行器再次截图比较。画面变动、过期或连接重建会令旧观察失效。比较允许一处不超过 4×40 像素的变化（输入框里闪烁的光标），打一个字、勾一个复选框或多处同时变化都按画面已变处理；动画仍会使比较失败，需要重新观察。
+2. 模型提交具体操作与观察版本。执行器核对窗口画面后登记一条待确认操作，这时尚未发送输入。控制台展示请求时的窗口截图、目标应用、元素或坐标、输入文字或按键；机器人填了主人账号时，同时私聊提醒主人去确认（只是通知，聊天里回复不算确认）。
+3. 工具调用停在执行器里等，最多 5 分钟（`desktopctl.ActionConfirmationWait`）。等待期间这条观察不按两分钟过期，等待不占执行器的串行锁，其他截图照常进行。主人在控制台确认后，同一次调用当场继续，不用回聊天让 Diana 重试。确认只用一次，不能换文字、目标、观察版本或任务。超时没确认返回 `confirmation_timeout`，输入没有发出；人工接管、取消任务、修改权限或连接重建会立即结束等待并作废这条确认。
+4. 执行器再次截图比较，比较对象是请求时那张画面，也就是主人在控制台看到的那张。画面变动、过期或连接重建会令旧观察失效；同一窗口有了新观察也会让等着的请求作废。比较允许一处不超过 4×40 像素的变化（输入框里闪烁的光标），打一个字、勾一个复选框或多处同时变化都按画面已变处理；动画仍会使比较失败，需要重新观察。
 5. 操作下发后附带新截图，`ok` 仅表示输入已经发送，`needs_verification` 提醒模型核实实际效果。若回看截图失败，保留输入已发送这一事实，返回核实错误，禁止盲目重复提交。
 
-当前通用执行器不能可靠判断一个按钮是否代表发送、支付或删除，因此所有写操作逐条确认。任务的“继续任务”只解除任务等待，不代替具体操作授权。确认与观察只在内存保留；重启后必须重新观察并确认。
+当前通用执行器不能可靠判断一个按钮是否代表发送、支付或删除，因此所有写操作逐条确认。任务的“继续任务”只解除任务等待，不代替具体操作授权。确认与观察只在内存保留；重启后必须重新观察并确认。没有走本机执行器等待的旧调用方仍按原来的两段式：先拿到 `confirmation_required`，主人确认后用相同参数重试。
 
 滚动的 `x/y` 指向窗口内区域，`delta_y` 正值向下，`delta_x` 正值向右，每轴最多 1000 像素。同一执行器的观察、核对、输入、回看串行执行，不能让其他任务在核对和输入之间插入操作。
 
@@ -106,6 +106,6 @@ HTTP 管理接口位于 `/api/desktop-control`，沿用控制台会话认证。�
 
 ## 尚未覆盖的边界
 
-本功能还不能视为完整的电脑任务沙箱：尚无文件选择、上传、导出路径的目录级强制约束，也没有通用截图敏感信息识别与遮罩。系统标记的安全输入框会要求人工接管，普通文本框中的验证码、密钥等仍需人工处理。实时画面流、完整的任务证据归档/保留策略和跨应用任务仍待完善。真实写入并保存产物的验收由 `TestLiveCUADriverWriteAndSave` 覆盖（「文本编辑」输入并 ⌘S 保存，读文件逐字核对），需设置 `DIANA_CUA_DRIVER_LIVE` 与 `DIANA_CUA_DRIVER_LIVE_WRITE=1` 在有权限的 Mac 上手动运行；[新增受限电脑操作能力：本地桌面执行器与持久任务管理（#948）](https://github.com/SuInk/Diana/issues/948) 保持开放。
+本功能还不能视为完整的电脑任务沙箱：尚无文件选择、上传、导出路径的目录级强制约束，也没有通用截图敏感信息识别与遮罩。系统标记的安全输入框会要求人工接管，普通文本框中的验证码、密钥等仍需人工处理。实时画面流、完整的任务证据归档/保留策略和跨应用任务仍待完善。真实写入并保存产物的验收由 `TestLiveCUADriverWriteAndSave` 覆盖（「文本编辑」输入并 ⌘S 保存，读文件逐字核对），需设置 `DIANA_CUA_DRIVER_LIVE` 与 `DIANA_CUA_DRIVER_LIVE_WRITE=1` 在有权限的 Mac 上手动运行。跟踪 issue [新增受限电脑操作能力：本地桌面执行器与持久任务管理（#948）](https://github.com/SuInk/Diana/issues/948) 已在主体合入后关闭，上面这些边界以后单独开 issue。
 
 原生实现使用 Apple 的 [Accessibility 元素读取 API](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue) 和 [Core Graphics 滚动事件 API](https://developer.apple.com/documentation/coregraphics/cgevent/init(scrollwheelevent2source:units:wheelcount:wheel1:wheel2:wheel3:))。
