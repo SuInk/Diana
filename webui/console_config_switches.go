@@ -40,7 +40,7 @@ func (m *ConsoleConfigManager) switchCatalog(out map[string]any) {
 		out["browser_control"] = map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(s.BrowserControl.registry.Policy()), "hint": "浏览器控制扩展的总开关、站点白名单/黑名单和写操作档位；数组按完整列表替换。关掉总开关会立即断开已连接的扩展。"}
 	}
 	if s.DesktopControl != nil {
-		out["desktop_control"] = map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(s.DesktopControl.registry.Policy()), "hint": "桌面控制总开关、应用白名单/黑名单、写操作和限速；改动会中断正在执行的桌面任务并重连执行器。"}
+		out["desktop_control"] = map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(s.DesktopControl.registry.Policy()), "hint": "桌面控制：让机器人查看并操作运行 Diana 的这台 Mac 上的窗口（仅 macOS，仅主人）。enabled 是总开关，write_enabled 允许点击、输入、按键和滚动（打开后直接执行，不逐条确认），allowed_apps/denied_apps 收窄应用范围（空白名单=全部应用）。主人要你操作电脑时，还要把 bot 资源的 agent_desktop_control_enabled 打开，两边都开、下一条消息起才有 desktop_* 工具。首次打开会自动下载执行器；屏幕录制和辅助功能权限要主人在 macOS 系统设置里授权。改动会中断正在执行的桌面任务并重连执行器。"}
 	}
 	if s.BrowserBox != nil {
 		out["browser_box"] = map[string]any{"actions": []string{"update"}, "fields": consoleFieldTypes(s.BrowserBox.manager.Settings()), "hint": "内置常驻浏览器：enabled 关掉会当场结束进程。"}
