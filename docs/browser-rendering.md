@@ -91,7 +91,8 @@ Docker：完整版镜像预装 `xvfb`，读网页直接有头；slim 镜像没�
 
 ## 隔离、并发与超时
 
-- **每次一份临时 profile。** 网页读取（`browser_render`）和 HTML 截图每次都起一个新的 Chrome 进程，profile 建在系统临时目录下、权限 0700、用完即删。两次调用之间、两个群之间、和主人的内置浏览器之间都不共用 Cookie 或登录态，群成员触发也碰不到主人的账号。
+- **每次一份临时 profile。** HTML 截图每次都起一个新的 Chrome 进程，profile 建在系统临时目录下、权限 0700、用完即删。网页读取（`browser_render`）和搜索结果页复用一个常驻 Chrome 进程，每页在独立的隐身上下文里打开、用完即销毁，隔离效果和一次性 profile 一样，省掉每次 1～2 秒的启动；进程闲置 3 分钟自动退出，起不来时退回一次性进程。两次调用之间、两个群之间、和主人的内置浏览器之间都不共用 Cookie 或登录态，群成员触发也碰不到主人的账号。
+- **稳住就收尾，不等满观察窗。** 渲染先看页面有没有「后手」：文档 `complete`、网络静止（`DIANA_HEADLESS_BROWSER_NETWORK_IDLE_MS`，默认 750 毫秒没有请求）、DOM 连续不动够宽限期（`DIANA_HEADLESS_BROWSER_SETTLED_GRACE_MS`，默认 2500 毫秒），就收尾。只有一种页面例外：正文还不到 1500 字、而且排着会在观察窗内到期的一次性 `setTimeout`——这是「Loading…please wait」几秒后跳转那类过渡页的形状，它们等到最短观察窗（`DIANA_HEADLESS_BROWSER_VIRTUAL_TIME_MS`，默认 8 秒）或跳转发生。`setInterval` 心跳不算后手；正文几千字的内容页常年排着轮询、埋点的一次性回调，也不再为它们多等。以前只要页面挂着任意一个定时器就等满 8 秒，生产上渲染等待中位 10 秒、正文中位却只有 600 字。
 - **同时最多 3 个。** 一次性浏览器每个都是一整个 Chrome 进程，网页读取（`browser_render`）和简单 HTML 截图（Chrome `--screenshot`）共用这份名额；带脚本或动画的出图走 `html_capture`，目前不占这份名额。满了就排队，最多等 20 秒，排不上交回「同时运行的一次性浏览器已达上限」，不会无限堆进程拖垮机器。排队时间不算进渲染超时。内存宽裕的机器可以用环境变量 `DIANA_HEADLESS_BROWSER_MAX_CONCURRENT` 调高（上限 16）。
 - **容器里有 init 回收子进程。** 官方镜像以 `tini` 作为 PID 1（`ENTRYPOINT ["/usr/bin/tini", "-s", "--", "/usr/local/bin/diana-entrypoint", "/app/diana-webui"]`）。没有它时 Chromium 退出后过继给 PID 1 的子进程没人回收，每次渲染都留下一串僵尸进程；`docker run` 和 Compose 都不用再加 `--init` / `init: true`，加了也无妨。
 - **渲染有硬超时。** 默认 25 秒（`DIANA_HEADLESS_BROWSER_TIMEOUT_MS`，最多 60 秒）；到期收尾时拿已经抓到的内容，一点内容都没有就报错，浏览器进程随即结束。调用方取消时进程同样立即结束。

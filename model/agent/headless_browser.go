@@ -31,6 +31,9 @@ const (
 	defaultHeadlessBrowserHTMLBytes   = 4 * 1024 * 1024
 	defaultHeadlessBrowserTextChars   = 8000
 	defaultHeadlessBrowserVirtualTime = 8 * time.Second
+	// 页面稳住 2.5 秒且没有观察窗内到期的一次性回调就收尾（见 settledWithoutScheduledWork）。
+	// 稳定窗是 0.9 秒，这里留它的近三倍：延迟补内容的页面几乎都在稳住后一两秒内再动。
+	defaultHeadlessBrowserSettledGrace = 2500 * time.Millisecond
 	// headlessBrowserProbeTimeout 只够跑一次 --version；探测卡住不该拖住整个设置页。
 	headlessBrowserProbeTimeout = 5 * time.Second
 )
@@ -195,8 +198,13 @@ type SandboxedBrowserConfig struct {
 	StabilityWindow   time.Duration
 	NetworkIdleWindow time.Duration
 	PollInterval      time.Duration
+	// SettledGrace 是页面 complete、网络静止后 DOM 连续不动多久就收尾，不再等满
+	// VirtualTimeBudget；只有观察窗内还会到期的一次性 setTimeout 能把它拦下。
+	// 默认 defaultHeadlessBrowserSettledGrace，设成 0 以上、不超过 VirtualTimeBudget。
+	SettledGrace time.Duration
 	// ReuseProcess 让渲染复用一个常驻浏览器进程，每次在隐身上下文里打开页面，
-	// 省掉每次启动 Chrome 的时间。只给搜索结果页用；起不来时退回一次性浏览器。
+	// 省掉每次启动 Chrome 的时间。搜索结果页和 browser_render 都用；起不来时退回
+	// 一次性浏览器。截图仍走一次性进程。
 	ReuseProcess bool
 	// ExtraArgs are trusted, caller-owned Chrome flags for specialized local rendering paths.
 	ExtraArgs []string
@@ -358,6 +366,17 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 	}
 	if cfg.PollInterval > time.Second {
 		cfg.PollInterval = time.Second
+	}
+	if cfg.SettledGrace <= 0 {
+		cfg.SettledGrace = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_SETTLED_GRACE_MS", defaultHeadlessBrowserSettledGrace)
+	}
+	// 宽限期不能短于稳定窗（否则 contentStable 一成立就收尾，宽限形同虚设），也
+	// 不能长过观察窗（那就永远轮不到它）。
+	if cfg.SettledGrace < cfg.StabilityWindow {
+		cfg.SettledGrace = cfg.StabilityWindow
+	}
+	if cfg.SettledGrace > cfg.VirtualTimeBudget {
+		cfg.SettledGrace = cfg.VirtualTimeBudget
 	}
 	return cfg
 }
@@ -1138,7 +1157,7 @@ type BrowserRenderTool struct {
 
 func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 	if renderer == nil {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
+		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
 	}
 	return &BrowserRenderTool{renderer: renderer}
 }
