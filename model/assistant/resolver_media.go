@@ -849,7 +849,7 @@ func bilibiliSessdata(ctx context.Context) string {
 	if value := credentialFromContext(ctx, func(c resolverCredentials) string { return c.BiliSessdata }); value != "" || hasResolverCredentials(ctx) {
 		return value
 	}
-	return firstNonEmpty(os.Getenv("DIANA_BILI_SESSDATA"), os.Getenv("BILI_SESSDATA"))
+	return cookieFieldValue(firstNonEmpty(os.Getenv("DIANA_BILI_SESSDATA"), os.Getenv("BILI_SESSDATA")), "SESSDATA")
 }
 
 func platformCookieHeader(ctx context.Context, raw string) string {

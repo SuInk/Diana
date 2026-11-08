@@ -974,6 +974,21 @@ func musicLoginCheck(t *testing.T, plugin *MusicPlugin, source string, cookie st
 	return checker.CheckLogin(context.Background(), plugin.fetcher, cfg)
 }
 
+func TestMusicLoginCheckAcceptsWholeNeteaseCookie(t *testing.T) {
+	plugin := musicLoginTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Header.Get("Cookie") != "MUSIC_U=good" {
+			fmt.Fprint(w, `{"code":200,"account":null,"profile":null}`)
+			return
+		}
+		fmt.Fprint(w, `{"code":200,"account":{"id":1,"vipType":0},"profile":{"nickname":"云村村民","vipType":0}}`)
+	})
+	check := musicLoginCheck(t, plugin, "netease", "_ga=GA1.1.1; NMTID=abc; MUSIC_U=good; __csrf=c1")
+	if check.State != CredentialValid || check.Account != "云村村民" {
+		t.Fatalf("whole cookie check = %#v", check)
+	}
+}
+
 func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	plugin := musicLoginTestPlugin(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1009,8 +1024,12 @@ func TestMusicLoginCheckReadsAccountInterfaces(t *testing.T) {
 	if got := musicLoginCheck(t, plugin, "netease", "good"); got.State != CredentialValid || got.Account != "云村村民" || got.Message != "已登录，会员账号" || !got.Member {
 		t.Fatalf("netease valid = %#v", got)
 	}
-	if got := musicLoginCheck(t, plugin, "netease", "MUSIC_U=good"); got.State != CredentialInvalid || !strings.Contains(got.Message, "只填 MUSIC_U 的值") {
+	// 连字段名一起贴也认得出来；整串 Cookie 里压根没有 MUSIC_U 才提示填法。
+	if got := musicLoginCheck(t, plugin, "netease", "MUSIC_U=good"); got.State != CredentialValid {
 		t.Fatalf("netease pasted name = %#v", got)
+	}
+	if got := musicLoginCheck(t, plugin, "netease", "_ga=x; __csrf=y"); got.State != CredentialInvalid || !strings.Contains(got.Message, "只填 MUSIC_U 的值") {
+		t.Fatalf("netease cookie without MUSIC_U = %#v", got)
 	}
 	// 登录有效但会员过期要说出来：不然用户只看到「填了 Cookie 还是放不了」。
 	if got := musicLoginCheck(t, plugin, "qq", "uin=o12345; qqmusic_key=good"); got.State != CredentialValid || got.Account != "企鹅" ||

@@ -70,6 +70,26 @@ func fetchCredentialProbe(ctx context.Context, client *http.Client, endpoint str
 	return resp.StatusCode, string(body), err
 }
 
+// cookieFieldValue 从用户贴进来的内容里认出某个 Cookie 字段的值。
+//
+// 这类设置只要一个字段的值，但大家常直接把浏览器里整串 Cookie 或者
+// 「MUSIC_U=xxx」贴进来；发送时又会自己补字段名，原样用就成了
+// MUSIC_U=MUSIC_U=xxx，接口只回「未登录」。贴的是整串就从里面挑出这一项，
+// 只贴了值就原样用；整串里没有这个字段时也原样返回，留给检测去提示。
+func cookieFieldValue(value, name string) string {
+	value = strings.TrimSpace(value)
+	for _, part := range strings.Split(value, ";") {
+		key, field, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if ok && strings.EqualFold(strings.TrimSpace(key), name) {
+			return strings.TrimSpace(field)
+		}
+	}
+	if !strings.Contains(value, "=") {
+		return strings.TrimSpace(strings.Trim(value, ";"))
+	}
+	return value
+}
+
 // pastedCookieNameHint 提示「只该填值却连字段名一起贴进来」。SESSDATA、MUSIC_U
 // 这类设置在发送时会自己补上字段名，贴成 SESSDATA=xxx 就变成 SESSDATA=SESSDATA=xxx，
 // 接口只会回一句「未登录」，看不出是填法错了。

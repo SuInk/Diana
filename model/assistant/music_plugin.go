@@ -841,6 +841,10 @@ func musicSourceOptionsFromSettings(settings SettingValues) map[string]musicSour
 			Cookie:  strings.TrimSpace(settings.String(musicSourceCookieSetting(key), "")),
 		}
 	}
+	// 网易云这一项只要 MUSIC_U 的值，贴成整串 Cookie 也认得出来。
+	netease := options["netease"]
+	netease.Cookie = cookieFieldValue(netease.Cookie, "MUSIC_U")
+	options["netease"] = netease
 	return options
 }
 

@@ -1831,7 +1831,7 @@ type resolverCredentials struct {
 // Missing credentials stay empty; process environment is read only during migration.
 func resolverCredentialsFromSettings(settings SettingValues) resolverCredentials {
 	return resolverCredentials{
-		BiliSessdata:   strings.TrimSpace(settings.String(resolverSettingBiliSessdata, "")),
+		BiliSessdata:   cookieFieldValue(settings.String(resolverSettingBiliSessdata, ""), "SESSDATA"),
 		DouyinCookie:   strings.TrimSpace(settings.String(resolverSettingDouyinCookie, "")),
 		XHSCookie:      strings.TrimSpace(settings.String(resolverSettingXHSCookie, "")),
 		YTDLPCookies:   strings.TrimSpace(settings.String(resolverSettingYTDLPCookies, "")),
