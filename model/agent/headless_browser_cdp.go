@@ -569,17 +569,10 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 		}),
 		fetch.Enable().WithPatterns([]*fetch.RequestPattern{pattern}),
 		chromedp.ActionFunc(func(actionCtx context.Context) error {
-			_, _, errorText, isDownload, err := cdppage.Navigate(rawURL).Do(actionCtx)
-			if err != nil {
-				return err
-			}
-			if isDownload {
-				return errors.New("headless browser navigation became a download")
-			}
-			if errorText != "" {
-				return errors.New(errorText)
-			}
-			return nil
+			return navigateRetryingNetworkChange(actionCtx, func(navCtx context.Context) (string, bool, error) {
+				_, _, errorText, isDownload, err := cdppage.Navigate(rawURL).Do(navCtx)
+				return errorText, isDownload, err
+			})
 		}),
 	)
 	setupTimedOut := errors.Is(setupCtx.Err(), context.DeadlineExceeded)
