@@ -72,8 +72,49 @@
     </aside>
 
     <section class="qq-room" :aria-label="adminSelected ? '管理助手' : currentRoom ? `群聊 ${currentRoom.name}` : current ? `和 ${current.name} 的私聊` : '私聊'">
-      <!-- 管理助手和机器人本人是两回事（身份、权限、会话都分开），这里只是把它放进同一个页面。 -->
-      <AdminChatView v-if="adminSelected" embedded @back="showList = true" />
+      <!-- 管理助手和机器人本人是两回事（身份、权限、会话都分开），界面上就是一个普通联系人。 -->
+      <template v-if="adminSelected">
+        <header class="qq-room-head">
+          <button class="qq-icon qq-back" type="button" aria-label="返回列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
+          <div class="qq-room-title">
+            <h2>管理助手</h2>
+            <p :class="{ typing: adminBusy }">{{ adminBusy ? adminProgressText : "装扩展、查问题、改配置" }}</p>
+          </div>
+          <button v-if="adminBusy" class="qq-icon" type="button" aria-label="停止" title="停止" @click="stopAdmin"><CircleStop :size="19" aria-hidden="true" /></button>
+          <button class="qq-icon" type="button" aria-label="新会话" title="新会话" :disabled="adminBusy || adminLoading" @click="newAdminSession"><SquarePen :size="18" aria-hidden="true" /></button>
+        </header>
+
+        <div v-if="adminError" class="qq-banner err" role="alert"><span>{{ adminError }}</span><button class="btn ghost small" type="button" @click="loadAdmin()">重试</button></div>
+
+        <section ref="transcript" class="qq-transcript" aria-live="polite" :aria-busy="adminLoading || adminBusy">
+          <div v-if="adminLoading && !adminMessages.length" class="qq-loading" role="status" aria-label="正在加载管理对话"><SkeletonBlock width="40%" height="36px" /><SkeletonBlock width="55%" height="36px" /></div>
+          <p v-else-if="!adminMessages.length" class="qq-hint">想装扩展、查问题、改配置，直接跟管理助手说。这里的对话不会进任何机器人的私聊记录。</p>
+          <template v-for="(message, i) in adminMessages" :key="message.id">
+            <div v-if="adminDividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
+            <article class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : '管理助手说'">
+              <span v-if="message.role === 'assistant'" class="qq-admin-avatar small" aria-hidden="true"><Wrench :size="16" /></span>
+              <div class="qq-bubble-wrap">
+                <MarkdownText v-if="message.role === 'assistant'" class="qq-bubble qq-markdown" :class="{ err: message.error }" :source="message.text" />
+                <div v-else class="qq-bubble">{{ message.text }}</div>
+                <span v-if="message.tools" class="qq-sender">调用了 {{ message.tools }} 次工具</span>
+              </div>
+              <span v-if="message.role === 'user'" class="qq-self" aria-hidden="true">我</span>
+              <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
+              <span v-else-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
+            </article>
+          </template>
+          <article v-if="adminBusy" class="qq-msg assistant" aria-label="管理助手正在处理">
+            <span class="qq-admin-avatar small" aria-hidden="true"><Wrench :size="16" /></span>
+            <div class="qq-bubble-wrap"><div class="qq-bubble qq-typing" aria-hidden="true"><i /><i /><i /></div></div>
+          </article>
+        </section>
+
+        <form class="qq-composer" @submit.prevent="send">
+          <label class="sr-only" for="qq-input">发消息给管理助手</label>
+          <textarea id="qq-input" ref="composer" v-model="draft" rows="1" maxlength="4000" placeholder="描述问题，或交给它一个任务…" :disabled="adminLoading" @keydown="onKeydown" />
+          <button class="qq-send" type="submit" :disabled="!draft.trim() || adminLoading || adminBusy">发送</button>
+        </form>
+      </template>
       <template v-else-if="currentRoom">
         <header class="qq-room-head">
           <button class="qq-icon qq-back" type="button" aria-label="返回列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
@@ -186,16 +227,16 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { ChevronLeft, CircleAlert, CircleStop, LoaderCircle, MessagesSquare, Phone, Search, Settings2, UsersRound, Wrench } from "@lucide/vue";
+import { ChevronLeft, CircleAlert, CircleStop, LoaderCircle, MessagesSquare, Phone, Search, Settings2, SquarePen, UsersRound, Wrench } from "@lucide/vue";
 import BotAvatar from "../components/BotAvatar.vue";
 import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import VoiceCallScreen from "../components/VoiceCallScreen.vue";
 import LocalRoomDialog from "../components/LocalRoomDialog.vue";
-import AdminChatView from "./AdminChatView.vue";
 import { getBotProfileConfig, type BotProfileConfig } from "../api";
 import { botScope } from "../lib/bot-scope";
 import { CHAT_ADMIN, chatOpenTarget, chatSelection } from "../lib/chat-target";
+import { createAdminChatSession, getAdminChat, listAdminChatSessions, sendAdminChat, stopAdminChat, type AdminChatMessage } from "../lib/admin-chat";
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
@@ -337,6 +378,7 @@ function openContact(id: string): void {
 }
 
 async function send(): Promise<void> {
+  if (adminSelected.value) return sendAdmin();
   if (currentRoom.value) return sendRoom();
   const text = draft.value.trim();
   if (!text || !current.value) return;
@@ -618,11 +660,136 @@ const adminSelected = computed(() => selected.value === CHAT_ADMIN);
 
 function openAdmin(): void {
   showList.value = false;
+  const switching = selected.value !== CHAT_ADMIN;
   selected.value = CHAT_ADMIN;
   try {
     localStorage.setItem(selectedKey, selected.value);
   } catch {
     // 记不住也不影响聊天。
+  }
+  if (switching || !adminMessages.value.length) void loadAdmin();
+}
+
+// 管理助手就是一个联系人：一段会话，和机器人私聊一样的气泡。管理对话的会话按
+// 「机器人范围」分，这里跟着侧栏选的机器人走；记住最近用的那段会话。
+interface AdminBubble {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  at: number;
+  error?: boolean;
+  tools?: number;
+  pending?: boolean;
+  failed?: boolean;
+}
+const adminSessionKey = "diana:chat-admin-session";
+const adminSessionID = ref("");
+const adminMessages = ref<AdminBubble[]>([]);
+const adminLoading = ref(false);
+const adminError = ref("");
+const adminBusy = ref(false);
+const adminProgressText = ref("正在处理…");
+const adminDividers = computed(() => timeDividers(adminMessages.value));
+let adminController: AbortController | null = null;
+
+function adminBubble(message: AdminChatMessage): AdminBubble {
+  const at = message.created_at ? Math.floor(new Date(message.created_at).getTime() / 1000) : Math.floor(Date.now() / 1000);
+  const tools = (message.steps ?? []).filter((step) => step.tool && step.phase !== "started").length;
+  return { id: message.id, role: message.role, text: message.content, at, error: message.error, tools: tools || undefined };
+}
+
+function adminProfile(): string {
+  return botScope.value || "";
+}
+
+async function loadAdmin(): Promise<void> {
+  adminController?.abort();
+  const controller = new AbortController();
+  adminController = controller;
+  adminLoading.value = true;
+  adminError.value = "";
+  try {
+    const profile = adminProfile();
+    let remembered = "";
+    try {
+      remembered = localStorage.getItem(adminSessionKey) ?? "";
+    } catch {
+      // 记不住就用最近一段。
+    }
+    const sessions = await listAdminChatSessions(profile, controller.signal);
+    const id = sessions.some((item) => item.session_id === remembered) ? remembered : sessions[0]?.session_id || "";
+    const session = await getAdminChat(profile, controller.signal, id);
+    if (controller.signal.aborted || !adminSelected.value) return;
+    adminSessionID.value = session.session_id;
+    rememberAdminSession(session.session_id);
+    adminMessages.value = (session.messages ?? []).map(adminBubble);
+    adminBusy.value = session.running;
+    await scrollToBottom();
+  } catch (err) {
+    if (controller.signal.aborted) return;
+    adminError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (adminController === controller) adminLoading.value = false;
+  }
+}
+
+function rememberAdminSession(id: string): void {
+  try {
+    localStorage.setItem(adminSessionKey, id);
+  } catch {
+    // 记不住也不影响对话。
+  }
+}
+
+async function newAdminSession(): Promise<void> {
+  try {
+    const created = await createAdminChatSession(adminProfile());
+    rememberAdminSession(created.session_id);
+    adminMessages.value = [];
+    await loadAdmin();
+  } catch (err) {
+    adminError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function sendAdmin(): Promise<void> {
+  const text = draft.value.trim();
+  if (!text || !adminSessionID.value || adminBusy.value) return;
+  draft.value = "";
+  const local: AdminBubble = { id: `local-${++localSeq}`, role: "user", text, at: Math.floor(Date.now() / 1000), pending: true };
+  adminMessages.value = [...adminMessages.value, local];
+  adminBusy.value = true;
+  adminProgressText.value = "正在处理…";
+  await scrollToBottom();
+  const controller = new AbortController();
+  sendControllers.add(controller);
+  try {
+    await sendAdminChat(adminSessionID.value, text, ["", ""], controller.signal, (frame) => {
+      if (!adminSelected.value) return;
+      if (frame.type === "user") {
+        adminMessages.value = adminMessages.value.map((message) => (message.id === local.id ? { ...adminBubble(frame.message), pending: false } : message));
+      } else if (frame.type === "message") {
+        adminMessages.value = [...adminMessages.value, adminBubble(frame.message)];
+        void scrollToBottom();
+      } else if (frame.type === "progress") {
+        adminProgressText.value = frame.progress.tool ? `正在调用 ${frame.progress.tool}…` : "正在处理…";
+      }
+    });
+  } catch (err) {
+    adminMessages.value = adminMessages.value.map((message) => (message.id === local.id ? { ...message, pending: false, failed: true } : message));
+    if (!controller.signal.aborted) adminError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    adminBusy.value = false;
+    sendControllers.delete(controller);
+  }
+}
+
+async function stopAdmin(): Promise<void> {
+  if (!adminSessionID.value) return;
+  try {
+    await stopAdminChat(adminSessionID.value);
+  } catch (err) {
+    adminError.value = err instanceof Error ? err.message : String(err);
   }
 }
 
@@ -949,6 +1116,15 @@ onBeforeUnmount(() => {
   border-radius: 50%;
   background: var(--surface-2);
   color: var(--accent);
+}
+
+.qq-admin-avatar.small {
+  width: 38px;
+  height: 38px;
+}
+
+.qq-markdown.err {
+  color: var(--err);
 }
 
 .qq-room-avatar.small {
