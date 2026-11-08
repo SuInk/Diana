@@ -3,7 +3,7 @@
   机器人用到的浏览器全在这一页，按用途分两组：
 
   - 读网页、出图：Diana 内置的网页渲染。每次开一个全新的 Chrome，用完就扔，不带登录态，
-    谁的消息都能用。默认有头隐藏运行；没有可用显示环境时自动退回无头。
+    谁的消息都能用。有头隐藏运行；没有可用显示环境时报错，不退回无头（Termux 除外）。
   - 登录、点按钮：Diana 内置和用户自己的 Chrome（扩展）做的是同一件事——带登录态、只有
     主人能驱动——区别只在用谁的。一行一个勾选框，可以都勾上并排优先级，排在上面的先用，
     它用不了时自动换另一个（见 model/browsersource）。外接 CDP 不参与排序：它是 browser_*
@@ -33,7 +33,7 @@
                 <span v-if="sourceState && !sourceState.sandbox.active" class="badge warn" :title="sourceState.sandbox.reason">未开沙箱</span>
               </div>
               <p class="browser-toggle-desc">
-                每次开一个全新的 Chrome，用完就扔。群里发的链接、模型查网页（browser_render）和 HTML/SVG 转图片都默认有头隐藏运行；没有可用显示环境时自动退回无头。浏览器未安装或启动失败时会明确报错。
+                每次开一个全新的 Chrome，用完就扔。群里发的链接、模型查网页（browser_render）和 HTML/SVG 转图片都有头隐藏运行；没有可用显示环境时直接报错，不退回无头（Termux 除外）。浏览器未安装或启动失败时会明确报错。
               </p>
               <div class="browser-toggle-meta">
                 <button type="button" :class="{ warn: dependencyProblem('render') }" @click="dependenciesTarget = 'render'">

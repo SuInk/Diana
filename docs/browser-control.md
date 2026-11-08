@@ -2,9 +2,9 @@
 
 这一档让 Diana 操作**用户自己浏览器里的页面**：页面在用户日常浏览器中打开，登录态归用户，Diana 只通过一个用户自己安装、自己授权的扩展下发有限的几条操作指令。
 
-它和[无头浏览器渲染](browser-rendering.md)、[内置浏览器](browser-builtin.md)都是两回事，不互相替代：
+它和[一次性浏览器渲染](browser-rendering.md)、[内置浏览器](browser-builtin.md)都是两回事，不互相替代：
 
-| | 一次性无头渲染（`browser_render`） | 浏览器控制扩展（`browser_ext_*`） |
+| | 一次性渲染（`browser_render`） | 浏览器控制扩展（`browser_ext_*`） |
 | --- | --- | --- |
 | 浏览器 | Diana 自己起的一次性 Chromium | 用户日常使用的浏览器 |
 | 登录态 | 没有，每次全新 profile | 用户自己的，Diana 不接触 Cookie 和密码 |

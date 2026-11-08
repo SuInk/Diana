@@ -53,7 +53,7 @@ func SystemDisplayAvailable() bool {
 // Available 判断能不能自己拉一块虚拟屏。
 func Available() bool {
 	// Termux 装得上 Xvfb，可它的 socket 落在 $PREFIX/tmp/.X11-unix，这里按 /tmp 等不到，
-	// 当作没有，让调用方走无头。
+	// 当作没有：Termux 上调用方退回无头，别处凑不出屏幕就报错。
 	if runtime.GOOS != "linux" || termux.Detected() {
 		return false
 	}
@@ -200,7 +200,7 @@ type Shared struct {
 	lastFailure time.Time
 }
 
-// Env 返回有头浏览器该补的环境变量，ok 为假表示这台机器凑不出屏幕、只能无头。
+// Env 返回有头浏览器该补的环境变量，ok 为假表示这台机器凑不出屏幕（要不要退回无头由调用方决定）。
 // 有现成图形会话时不拉 Xvfb，返回空环境。
 func (s *Shared) Env() (env []string, ok bool) {
 	s.mu.Lock()

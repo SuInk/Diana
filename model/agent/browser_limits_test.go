@@ -468,7 +468,7 @@ func TestDisposableBrowserLimitCoversRenderAndScreenshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Executable: executable, Timeout: 5 * time.Second})
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{Executable: executable, Timeout: 5 * time.Second})
 	if _, err := renderer.Render(context.Background(), "http://1.1.1.1/"); !errors.Is(err, ErrBrowserBusy) {
 		t.Fatalf("渲染应当排队后报忙：%v", err)
 	}
@@ -480,11 +480,11 @@ func TestDisposableBrowserLimitCoversRenderAndScreenshot(t *testing.T) {
 // browser_render 群成员也能触发，每次都是一份全新的临时 profile：和别的调用、和主人的
 // 常驻浏览器都不共用登录态。这里钉住「每次一份、用完就删」。
 func TestDisposableRenderProfilesAreNeverShared(t *testing.T) {
-	first, err := newBrowserSandboxDirs("diana-headless-browser-")
+	first, err := newBrowserSandboxDirs("diana-render-browser-")
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := newBrowserSandboxDirs("diana-headless-browser-")
+	second, err := newBrowserSandboxDirs("diana-render-browser-")
 	if err != nil {
 		t.Fatal(err)
 	}

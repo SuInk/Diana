@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// 无头浏览器和纯 HTTP 抓取共用的浏览器身份。
+// 一次性浏览器和纯 HTTP 抓取共用的浏览器身份。
 //
 // 抽出来之前两条路各说各话：链接解析那条（resolver_fetch.go）伪装成真实的桌面
 // Chrome，浏览器那条什么都不设，于是 UA 里明晃晃写着 HeadlessChrome，
@@ -71,7 +71,7 @@ var (
 // detectChromeUAVersion 读本机 Chrome 的大版本，按真实 Chrome 的精简 UA 写成
 // "<大版本>.0.0.0"。
 func detectChromeUAVersion() string {
-	status := ProbeHeadlessBrowser(context.Background(), "")
+	status := ProbeRenderBrowser(context.Background(), "")
 	return chromeUAVersionFrom(status.Version)
 }
 

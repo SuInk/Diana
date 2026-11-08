@@ -152,7 +152,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			extraTools = append(extraTools, newDianaIdentityLinksTool(r, event))
 		}
 		// 关系图按插件开关走：不是每个群都想让机器人画这个，渲染也要占一次
-		// 无头浏览器。插件停用时模型看不到这个工具。
+		// 一次性浏览器。插件停用时模型看不到这个工具。
 		if _, settings, enabled := r.pluginWithSettingsForEvent(groupRelationsPluginID, event); enabled {
 			extraTools = append(extraTools, newDianaGroupRelationsTool(r, event, settings), newDianaGroupWordCloudTool(r, event, settings))
 		}

@@ -14,7 +14,7 @@ import (
 	"golang.org/x/image/font/sfnt"
 )
 
-// 关系图原先只能靠无头浏览器出图，理由写在 RenderGroupRelationHTML 上：位图要自己
+// 关系图原先只能靠浏览器出图，理由写在 RenderGroupRelationHTML 上：位图要自己
 // 做字体光栅化，中文名字第一个就过不去。x/image/font 能做这件事，缺的只是一个字型
 // 文件——而浏览器画得出中文，本身就说明这台机器上有中文字体，找到它就行。
 //

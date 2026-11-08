@@ -23,7 +23,9 @@ func fakeBrowserExecutable(t *testing.T, dir string) string {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", path)
+	old := testChromeExecutable
+	testChromeExecutable = path
+	t.Cleanup(func() { testChromeExecutable = old })
 	return path
 }
 

@@ -198,7 +198,7 @@ func tinyFishHTTPURL(raw string) string {
 
 func withTinyFishTextLimit(page RenderedPage, maxChars int) RenderedPage {
 	if maxChars <= 0 {
-		maxChars = defaultHeadlessBrowserTextChars
+		maxChars = defaultRenderBrowserTextChars
 	}
 	// 和浏览器渲染同一个截断函数，模型看到的截断标记一致。
 	page.Text = truncateText(page.FullText, maxChars)

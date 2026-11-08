@@ -22,7 +22,7 @@ import (
 
 // 关系图的第二条出图路径：不经浏览器，直接在 Go 里栅格化。
 //
-// 第一条路径（HTML + 无头浏览器截图）上写着当初的理由：位图要自己做字体光栅化，
+// 第一条路径（HTML + 浏览器截图）上写着当初的理由：位图要自己做字体光栅化，
 // 中文名字第一个就过不去。那条理由现在只剩一半——x/image/font 就是干光栅化的，
 // 真正缺的是一个字型文件，而浏览器画得出中文本身就说明这台机器上有中文字体。
 //
@@ -47,7 +47,7 @@ var (
 	relationColorCenterText = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 )
 
-// RenderGroupRelationPNG 直接把关系图画成 PNG，不需要无头浏览器。avatars 是解码好
+// RenderGroupRelationPNG 直接把关系图画成 PNG，不需要浏览器。avatars 是解码好
 // 的头像，按账号索引。找不到能画中文的字体时返回错误，让调用方退回浏览器那条路。
 func RenderGroupRelationPNG(graph GroupRelationGraph, title, rangeLabel string, maxSeats int, avatars map[string]image.Image) ([]byte, error) {
 	sfntFont, _, err := LoadCJKFont()

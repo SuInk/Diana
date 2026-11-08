@@ -36,15 +36,15 @@ func TestBrowserDependencyUsesSystemInstaller(t *testing.T) {
 		}
 		return "", fmt.Errorf("missing")
 	}
-	deps := browserDependenciesFromStatus(agent.HeadlessBrowserStatus{Detail: "missing browser"}, "linux", lookup)
+	deps := browserDependenciesFromStatus(agent.RenderBrowserStatus{Detail: "missing browser"}, "linux", lookup)
 	if len(deps) != 1 || deps[0].Available || !deps[0].Installable || deps[0].Installer != "apk" {
 		t.Fatalf("wrong installer: %#v", deps)
 	}
-	deps = browserDependenciesFromStatus(agent.HeadlessBrowserStatus{Available: true, Path: "/usr/bin/chromium", Version: "Chromium 142"}, "linux", lookup)
+	deps = browserDependenciesFromStatus(agent.RenderBrowserStatus{Available: true, Path: "/usr/bin/chromium", Version: "Chromium 142"}, "linux", lookup)
 	if !deps[0].Available || deps[0].Installable || deps[0].Path != "/usr/bin/chromium" {
 		t.Fatalf("existing browser not reused: %#v", deps)
 	}
-	deps = browserDependenciesFromStatus(agent.HeadlessBrowserStatus{Detail: "screenshot failed"}, "linux", func(string) (string, error) { return "", fmt.Errorf("missing") })
+	deps = browserDependenciesFromStatus(agent.RenderBrowserStatus{Detail: "screenshot failed"}, "linux", func(string) (string, error) { return "", fmt.Errorf("missing") })
 	if runningOnMusl() {
 		// musl（Alpine）上没有 CfT 退路，保持「手动安装」提示。
 		if deps[0].Installable || !strings.Contains(deps[0].Detail, "手动安装") || !strings.Contains(deps[0].Detail, "screenshot failed") {
@@ -55,7 +55,7 @@ func TestBrowserDependencyUsesSystemInstaller(t *testing.T) {
 		t.Fatalf("missing installer: %#v", deps)
 	}
 	// 非 Linux 没有 headless shell 退路，保持原来的「手动安装」提示。
-	deps = browserDependenciesFromStatus(agent.HeadlessBrowserStatus{Detail: "screenshot failed"}, "darwin", func(string) (string, error) { return "", fmt.Errorf("missing") })
+	deps = browserDependenciesFromStatus(agent.RenderBrowserStatus{Detail: "screenshot failed"}, "darwin", func(string) (string, error) { return "", fmt.Errorf("missing") })
 	if deps[0].Installable || !strings.Contains(deps[0].Detail, "手动安装") {
 		t.Fatalf("darwin should keep manual-install hint: %#v", deps)
 	}

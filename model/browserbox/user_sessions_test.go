@@ -162,8 +162,8 @@ func TestUserProxyChecksLoginRedirectsAndBackgroundRequests(t *testing.T) {
 }
 
 func TestUserBrowserProfileIsolationIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome")
+	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome")
 	}
 	pool := NewUserSessionPool(t.TempDir(), nil)
 	defer pool.Stop()

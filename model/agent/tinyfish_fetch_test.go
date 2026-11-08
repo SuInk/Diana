@@ -109,7 +109,7 @@ func TestSandboxedBrowserPrefersTinyFishFetch(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"url": tinyFishTestPage, "title": "Docs", "text": "hello"}}})
 	}))
 	defer server.Close()
-	browser := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "test-key", FetchEndpoint: server.URL})
+	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "test-key", FetchEndpoint: server.URL})
 	page, err := browser.Render(context.Background(), tinyFishTestPage)
 	if err != nil || page.Text != "hello" || page.BrowserEngine != "tinyfish" {
 		t.Fatalf("page=%#v err=%v", page, err)
@@ -119,7 +119,7 @@ func TestSandboxedBrowserPrefersTinyFishFetch(t *testing.T) {
 	resetTinyFishCache(t)
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
 	defer failing.Close()
-	browser = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "test-key", FetchEndpoint: failing.URL})
+	browser = NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "test-key", FetchEndpoint: failing.URL})
 	_, err = browser.Render(context.Background(), tinyFishTestPage)
 	if err == nil || !errors.Is(err, errTinyFishFetch) || !strings.Contains(err.Error(), "/nonexistent/chrome") {
 		t.Fatalf("fallback err = %v", err)

@@ -15,8 +15,8 @@ import (
 
 func requireHTMLCaptureBrowser(t *testing.T) {
 	t.Helper()
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION=1 to run against the installed browser")
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_PROBE_INTEGRATION=1 to run against the installed browser")
 	}
 }
 

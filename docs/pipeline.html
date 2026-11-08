@@ -215,7 +215,7 @@
 
       <section class="section searchable" id="browser">
         <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>这一轮用哪个浏览器</h2></div>
-        <p>一次性无头渲染 <code>browser_render</code> 所有人可用、始终注册；带登录态的交互式浏览器只有主人能驱动，每轮只注册一套，模型不会同时拿到两套再自己去猜。</p>
+        <p>一次性渲染 <code>browser_render</code> 所有人可用、始终注册；带登录态的交互式浏览器只有主人能驱动，每轮只注册一套，模型不会同时拿到两套再自己去猜。</p>
         <ol class="flow">
           <li class="q"><div class="flow-node"><strong>对方是主人？</strong></div><div class="flow-exits"><span class="flow-exit"><b>否</b>只有 <code>browser_render</code></span></div></li>
           <li><div class="flow-node"><strong>按优先级选来源</strong><p><code>browsersource.Pick</code>，默认内置在前、扩展在后，取第一个用得上的。</p></div></li>
@@ -238,7 +238,7 @@
       </section>
 
       <section class="section searchable" id="browser-render">
-        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>一次性无头渲染</h2></div>
+        <div class="section-heading"><p class="eyebrow">04 浏览器机制</p><h2>一次性渲染</h2></div>
         <ol class="flow">
           <li><div class="flow-node"><strong>browser_render 或网页渲染插件</strong><p>插件每条消息最多渲染 2 个链接，正文以「不可信内容」块注入上下文。</p></div></li>
           <li class="q"><div class="flow-node"><strong>公网地址校验</strong><p>只允许 http/https，拒绝内网、回环、链路本地、localhost、<code>.local</code> 等地址。</p></div><div class="flow-exits"><span class="flow-exit"><b>不通过</b>拒绝</span><span class="flow-exit go"><b>GitHub /releases 链接</b>先走官方 API</span></div></li>

@@ -15,24 +15,24 @@ import (
 	"testing"
 )
 
-func TestProbeHeadlessBrowserRenderingChecksRealScreenshot(t *testing.T) {
+func TestProbeRenderBrowserRenderingChecksRealScreenshot(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake browser uses a POSIX shell script")
 	}
 	browser := filepath.Join(t.TempDir(), "chrome")
 	writeExecutable(t, browser, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Chromium test'; fi\n")
 
-	status := ProbeHeadlessBrowserRendering(context.Background(), browser)
+	status := ProbeRenderBrowserRendering(context.Background(), browser)
 	if status.Available || !strings.Contains(status.Detail, "真实截图失败") {
 		t.Fatalf("status=%#v", status)
 	}
 }
 
-func TestProbeHeadlessBrowserRenderingIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION=1 to probe the installed browser")
+func TestProbeRenderBrowserRenderingIntegration(t *testing.T) {
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_PROBE_INTEGRATION=1 to probe the installed browser")
 	}
-	status := ProbeHeadlessBrowserRendering(context.Background(), "")
+	status := ProbeRenderBrowserRendering(context.Background(), "")
 	if !status.Available {
 		t.Fatalf("installed browser failed real screenshot probe: %#v", status)
 	}
@@ -57,14 +57,14 @@ func TestBrowserProbeRejectsScreenshotOnlySuccess(t *testing.T) {
 	}
 	browser := filepath.Join(dir, "chromium")
 	writeExecutable(t, browser, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'Chromium test'; exit 0; fi\nfor arg in \"$@\"; do case \"$arg\" in --screenshot=*) cp '"+fixture+"' \"${arg#--screenshot=}\";; esac; done\n")
-	status := ProbeHeadlessBrowserRendering(context.Background(), browser)
+	status := ProbeRenderBrowserRendering(context.Background(), browser)
 	if status.Available || !strings.Contains(status.Detail, "真实截图失败") {
 		t.Fatalf("screenshot-only browser incorrectly available: %#v", status)
 	}
 }
 
 func TestScreenshotPixelDensityIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
 		t.Skip("requires installed browser")
 	}
 	for _, scale := range []float64{0, 2} {

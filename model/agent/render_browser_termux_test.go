@@ -67,7 +67,7 @@ func TestBrowserSandboxAutoFallsBackOnceOnSandboxFailure(t *testing.T) {
 	t.Setenv("TERMUX_VERSION", "")
 	stubBrowserRunningAsRoot(t, false)
 	t.Cleanup(func() { SetBrowserSandboxMode(BrowserSandboxOnly) })
-	failure := "headless browser exited before CDP startup: exit status 1: No usable sandbox! Update your kernel"
+	failure := "browser exited before CDP startup: exit status 1: No usable sandbox! Update your kernel"
 
 	SetBrowserSandboxMode(BrowserSandboxOnly)
 	if BrowserSandboxFallback(failure) {
@@ -105,7 +105,7 @@ func TestBrowserSandboxHintOnlyInSandboxOnlyMode(t *testing.T) {
 	t.Setenv("TERMUX_VERSION", "")
 	stubBrowserRunningAsRoot(t, true)
 	t.Cleanup(func() { SetBrowserSandboxMode(BrowserSandboxOnly) })
-	failure := errors.New("headless browser exited before CDP startup: Running as root without --no-sandbox is not supported")
+	failure := errors.New("browser exited before CDP startup: Running as root without --no-sandbox is not supported")
 
 	SetBrowserSandboxMode(BrowserSandboxOnly)
 	got := WithBrowserSandboxHint(failure)
@@ -154,10 +154,10 @@ func stubBrowserRunningAsRoot(t *testing.T, root bool) {
 
 func TestBrowserSandboxPrefixShortensDeepTempDir(t *testing.T) {
 	// Termux 的临时目录拼上长前缀，Chrome 单实例套接字会超出 108 字节上限。
-	if got := browserSandboxPrefix("/data/data/com.termux/files/usr/tmp", "diana-headless-browser-"); got != shortBrowserTempPrefix {
+	if got := browserSandboxPrefix("/data/data/com.termux/files/usr/tmp", "diana-render-browser-"); got != shortBrowserTempPrefix {
 		t.Fatalf("Termux 临时目录下没换短前缀：%q", got)
 	}
-	if got := browserSandboxPrefix("/tmp", "diana-headless-browser-"); got != "diana-headless-browser-" {
+	if got := browserSandboxPrefix("/tmp", "diana-render-browser-"); got != "diana-render-browser-" {
 		t.Fatalf("普通临时目录不该改前缀：%q", got)
 	}
 }

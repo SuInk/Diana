@@ -127,7 +127,7 @@ type searchEngineResult struct {
 func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchProviderConfig, query string) (string, error) {
 	renderer := t.renderer
 	if renderer == nil {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
+		renderer = NewSandboxedBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
 	}
 	target, engine, err := searchEngineRequestURL(provider, query)
 	if err != nil {

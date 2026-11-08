@@ -101,7 +101,7 @@ func fetchGitHubRelease(ctx context.Context, client *http.Client, requested, api
 	}
 	text := fmt.Sprintf("%s\n版本：%s\n名称：%s\n发布时间：%s\n预发布：%t\n发布页面：%s\n官方 API：%s\n\n%s", heading, release.Tag, release.Name, published.UTC().Format(time.RFC3339), release.Prerelease, release.HTMLURL, apiURL, release.Body)
 	if maxChars <= 0 {
-		maxChars = defaultHeadlessBrowserTextChars
+		maxChars = defaultRenderBrowserTextChars
 	}
 	truncated := len([]rune(text)) > maxChars
 	return RenderedPage{RequestedURL: requested, URL: release.HTMLURL, Title: firstNonEmptyString(release.Name, release.Tag), Text: truncateRunes(text, maxChars), Truncated: truncated, SourceType: "github_release_api", SourceURLs: []string{apiURL, release.HTMLURL}, SourceNotice: notice, RetrievedAt: time.Now().UTC().Format(time.RFC3339), Stable: true, StabilityReason: "official_api_snapshot", WaitedMS: time.Since(started).Milliseconds()}, nil

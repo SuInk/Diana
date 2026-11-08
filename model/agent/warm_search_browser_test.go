@@ -13,8 +13,8 @@ import (
 
 // 常驻搜索浏览器要复用进程，但每次渲染之间不能共享 Cookie。
 func TestWarmSearchBrowserReusesProcessAndIsolatesCookies(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
+	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
 	t.Cleanup(func() {
 		warmSearchBrowser.mu.Lock()
@@ -27,7 +27,7 @@ func TestWarmSearchBrowserReusesProcessAndIsolatesCookies(t *testing.T) {
 			warmSearchBrowser.session = nil
 		}
 	})
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, ReuseProcess: true})
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, ReuseProcess: true})
 	started := time.Now()
 	if _, err := renderer.Render(context.Background(), "https://httpbin.org/cookies/set?diana_isolation=leaked"); err != nil {
 		t.Fatal(err)

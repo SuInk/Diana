@@ -11,8 +11,7 @@ pkg install -y chromium
 WebUI「依赖」页的一键安装在 Termux 里执行的就是这两条。Termux 装了一段时间没升级的话，先跑一次
 `pkg upgrade`：tur-repo 的 Chromium 跟着最新的 libc++ 编译，旧 libc++ 上启动会报
 `CANNOT LINK EXECUTABLE ... cannot locate symbol`。装完不用配路径：Diana 认出 Termux 后先找
-`$PREFIX/bin/chromium-browser` 和 `$PREFIX/bin/chromium`，再按 `PATH` 找；装在别处时用
-`DIANA_HEADLESS_BROWSER_EXECUTABLE` 指过去。
+`$PREFIX/bin/chromium-browser` 和 `$PREFIX/bin/chromium`，再按 `PATH` 找；装在别处时把它所在目录加进 `PATH`。
 
 ## 和普通 Linux 不一样的地方
 

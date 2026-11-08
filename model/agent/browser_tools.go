@@ -904,7 +904,7 @@ func newBrowserTarget(ctx context.Context, baseURL, pageURL string) (browserTarg
 }
 
 func browserConnectError(baseURL string, err error) error {
-	return fmt.Errorf("browser cdp is unavailable at %s: %w; start Chrome with --remote-debugging-port=9222 or configure DIANA_AGENT_BROWSER_CDP_URL", baseURL, err)
+	return fmt.Errorf("browser cdp is unavailable at %s: %w; start Chrome with --remote-debugging-port=9222 or set the external CDP address in WebUI (浏览器页「更多设置」)", baseURL, err)
 }
 
 // compactCDPValue 把 Chrome 交回的 JSON 重新编码一遍。Chrome 把非 ASCII 字符一律写成
