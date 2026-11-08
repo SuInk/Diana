@@ -57,7 +57,8 @@ func callHistoryPromptText(event MessageEvent) string {
 }
 
 // rememberVoiceCall 在主人私聊里记一条通话记录。base 是通话用的主人私聊事件。
-func (r *Runtime) rememberVoiceCall(base MessageEvent, started, ended time.Time) {
+// callID 写进记录的消息 ID，聊天页靠它把通话里的轮次归到这条记录下（见 web_chat_call.go）。
+func (r *Runtime) rememberVoiceCall(base MessageEvent, callID string, started, ended time.Time) {
 	duration := ended.Sub(started)
 	if duration < callHistoryMinDuration {
 		return
@@ -74,7 +75,7 @@ func (r *Runtime) rememberVoiceCall(base MessageEvent, started, ended time.Time)
 		SelfID:           base.SelfID,
 		UserID:           base.UserID,
 		SenderName:       base.SenderName,
-		MessageID:        "local-call-" + uuid.NewString(),
+		MessageID:        callHistoryIDPrefix + firstNonEmpty(strings.TrimSpace(callID), uuid.NewString()),
 		RawMessage:       text,
 		Segments:         []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}},
 	}))

@@ -49,6 +49,8 @@ type VoiceCall struct {
 	callID  string
 	base    MessageEvent
 	turns   atomic.Int64
+	// replies 给通话里机器人的回复编号，见 voiceCallReplyID。
+	replies atomic.Int64
 	started time.Time
 	ended   sync.Once
 	// hangup 由 hang_up 工具置上，通话引擎念完这一轮后取走并挂断。
@@ -105,7 +107,9 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 		return nil, err
 	}
 	event.voiceCall = true
-	return &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}, nil
+	call := &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}
+	r.trackVoiceCall(call)
+	return call, nil
 }
 
 // NewGroupVoiceCall 开一通 QQ 群通话：听到的话当成群里有人对机器人说的，回复按这个群
@@ -139,7 +143,10 @@ func (c *VoiceCall) Finish() {
 	if c == nil || c.runtime == nil || c.base.Kind == EventKindGroup {
 		return
 	}
-	c.ended.Do(func() { c.runtime.rememberVoiceCall(c.base, c.started, time.Now()) })
+	c.ended.Do(func() {
+		c.runtime.untrackVoiceCall(c)
+		c.runtime.rememberVoiceCall(c.base, c.callID, c.started, time.Now())
+	})
 }
 
 // Transcribe 用语音识别插槽转写一句话。封装格式（webm、ogg、mp4）先用 ffmpeg 转成

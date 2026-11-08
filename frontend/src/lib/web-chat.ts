@@ -11,11 +11,29 @@ export interface WebChatMessage {
   kind?: "call";
   text: string;
   images?: string[];
+  /** 这条回的那一条；原消息不在记录里时只有 message_id。 */
+  quote?: WebChatQuote;
+  /** 通话里说的话带着那通电话的 ID；kind 为 "call" 时是那通电话的记录。 */
+  call_id?: string;
   /** Unix 秒。 */
   at: number;
   /** 本地刚发出、还没被服务端确认的那句。 */
   pending?: boolean;
   failed?: boolean;
+}
+
+export interface WebChatQuote {
+  message_id?: string;
+  user_id?: string;
+  sender_name?: string;
+  text?: string;
+}
+
+/** 还没挂断的那通电话。 */
+export interface WebChatCall {
+  id: string;
+  /** Unix 秒。 */
+  started_at: number;
 }
 
 export interface WebChatInfo {
@@ -24,6 +42,7 @@ export interface WebChatInfo {
   platform: string;
   problem?: string;
   owner_avatar_url?: string;
+  active_call?: WebChatCall;
 }
 
 export type WebChatFrame =
@@ -112,4 +131,72 @@ export function chatTimeLabel(at: number, now = new Date()): string {
 /** 哪些消息前面要插时间分隔：第一条和隔了五分钟以上的。 */
 export function timeDividers(messages: Pick<WebChatMessage, "at">[]): boolean[] {
   return messages.map((message, i) => i === 0 || message.at - messages[i - 1].at >= TIME_DIVIDER_GAP);
+}
+
+/** 聊天里的一项：普通消息，或者一条通话记录连同那通电话里说的话。 */
+export interface WebChatEntry {
+  message: WebChatMessage;
+  turns?: WebChatMessage[];
+}
+
+/**
+ * 把通话里说的话从私聊里拿出来：有通话记录的归到记录下面，正在通话的那通单独放在
+ * live 里。对不上记录的（旧版本记的、记录还没写进来）照常当普通消息显示，不丢。
+ */
+export function groupCallTurns(messages: WebChatMessage[], activeCallID = ""): { entries: WebChatEntry[]; live: WebChatMessage[] } {
+  const recorded = new Set(messages.filter((m) => m.kind === "call" && m.call_id).map((m) => m.call_id));
+  const turns = new Map<string, WebChatMessage[]>();
+  const entries: WebChatEntry[] = [];
+  const live: WebChatMessage[] = [];
+  for (const message of messages) {
+    const callID = message.kind === "call" ? "" : message.call_id || "";
+    if (callID && recorded.has(callID)) {
+      turns.set(callID, [...(turns.get(callID) ?? []), message]);
+    } else if (callID && callID === activeCallID) {
+      live.push(message);
+    } else {
+      entries.push({ message });
+    }
+  }
+  for (const entry of entries) {
+    if (entry.message.kind === "call" && entry.message.call_id) entry.turns = turns.get(entry.message.call_id) ?? [];
+  }
+  return { entries, live };
+}
+
+/** 通话时长「03:12」，过一小时写成「1:03:12」。 */
+export function callClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const rest = `${pad(m)}:${pad(total % 60)}`;
+  return h ? `${h}:${rest}` : rest;
+}
+
+/**
+ * 通话记录正文（「[语音通话] 通话 3 分 12 秒」，后端 formatCallDuration 的写法）换成 QQ
+ * 那样的「03:12」。认不出来时返回空串，页面照原文显示。超过一小时后端只记到分钟。
+ */
+export function callRecordClock(text: string): string {
+  const body = text.replace(/^\[语音通话\]\s*通话\s*/, "").trim();
+  const match = /^(?:(\d+)\s*小时)?\s*(?:(\d+)\s*分)?\s*(?:(\d+)\s*秒)?$/.exec(body);
+  if (!body || !match || !(match[1] || match[2] || match[3])) return "";
+  return callClock(Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0));
+}
+
+/** 悬停时显示的完整时间。 */
+export function fullTimeLabel(at: number): string {
+  const date = new Date(at * 1000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+/**
+ * 后台刷新拿到的新记录合进页面：以服务端为准，本地还没确认或没发出去的那几句接在后面，
+ * 免得刷新一下就把失败待重发的消息冲掉。
+ */
+export function mergeWebChatHistory(server: WebChatMessage[], current: WebChatMessage[]): WebChatMessage[] {
+  const local = current.filter((m) => m.pending || m.failed);
+  return local.length ? [...server, ...local] : server;
 }

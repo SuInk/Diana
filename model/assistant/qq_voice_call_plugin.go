@@ -806,6 +806,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	}); err != nil {
 		cancel()
 		session.Close()
+		call.Finish()
 		s.plugin.noteCall("通话开始失败: %v", err)
 		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		return
