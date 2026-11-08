@@ -1262,6 +1262,18 @@ function demoWorkspaceFile(rel: string, download: boolean): Response {
   return new Response(new Uint8Array(node.size ?? 0), { headers: { "Content-Type": "application/octet-stream", "Content-Disposition": disposition } });
 }
 
+// 本地群的演示数据：一个现成的群，成员是演示里的几台机器人。
+const demoRooms: { id: string; name: string; members: string[]; max_bot_turns: number; created_at: number }[] = [
+  { id: "demo-room-band", name: "结束乐队（演示）", members: ["bot-local", "bot-onebot"], max_bot_turns: 8, created_at: Math.floor(Date.now() / 1000) - 3600 }
+];
+const demoRoomMessages = new Map<string, { id: string; sender_id: string; sender_name: string; text: string; at: number }[]>([
+  ["demo-room-band", [
+    { id: "demo-room-1", sender_id: "owner", sender_name: "主人", text: "今晚排练几点？", at: Math.floor(Date.now() / 1000) - 3000 },
+    { id: "demo-room-2", sender_id: "bot-local", sender_name: "小助手（内置·演示）", text: "七点！记得带上**节拍器**～", at: Math.floor(Date.now() / 1000) - 2990 },
+    { id: "demo-room-3", sender_id: "bot-onebot", sender_name: "Diana OneBot（演示）", text: "那我六点半先去调音。", at: Math.floor(Date.now() / 1000) - 2980 }
+  ]]
+]);
+
 const demoWebChats = new Map<string, { id: string; role: string; kind?: string; text: string; at: number }[]>();
 function demoWebChat(profile: string): { id: string; role: string; kind?: string; text: string; at: number }[] {
   let history = demoWebChats.get(profile);
@@ -1529,6 +1541,67 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ...(bot ? { bot, profile_dir: `/data/browser-box/profiles/${bot}/profile` } : {})
     };
   };
+  // 本地群：演示里有一个现成的乐队群；发言后每个成员回一句现成的话；一句话建群按「、」拆名字。
+  if (path === "/api/assistant/rooms" && method === "GET") return json({ rooms: demoRooms });
+  if (path === "/api/assistant/rooms" && method === "POST") {
+    const room = { id: `demo-room-${Date.now()}`, name: String(body.name || "新群"), members: (body.members as string[]) ?? [], max_bot_turns: Number(body.max_bot_turns) || 8, created_at: Math.floor(Date.now() / 1000) };
+    demoRooms.unshift(room);
+    demoRoomMessages.set(room.id, []);
+    return json({ room });
+  }
+  if (path === "/api/assistant/rooms/plan" && method === "POST") {
+    // 演示没有模型：取冒号后、第一个逗号前那一段，按顿号拆名字。
+    const names = String(body.text || "").replace(/^.*?[：:]/, "").split(/[，,。]/)[0].split(/[、\s]+/).map((name) => name.trim()).filter((name) => name && name.length <= 6).slice(0, 8);
+    const members: string[] = [];
+    for (const name of names.length ? names : ["小助手"]) {
+      const id = `demo-local-${Date.now()}-${members.length}`;
+      assistantConfig.profiles = [...(assistantConfig.profiles ?? []), { ...localProfile, id, name, system_prompt: `你是${name}。` }];
+      members.push(id);
+    }
+    const room = { id: `demo-room-${Date.now()}`, name: "新群（演示）", members, max_bot_turns: 8, created_at: Math.floor(Date.now() / 1000) };
+    demoRooms.unshift(room);
+    demoRoomMessages.set(room.id, []);
+    await new Promise((resolve) => window.setTimeout(resolve, 900));
+    return json({ room, plan: { room_name: room.name, bots: names.map((name) => ({ name, persona: `你是${name}。` })) } });
+  }
+  const roomMatch = path.match(/^\/api\/assistant\/rooms\/([^/]+)(\/messages|\/stop)?$/);
+  if (roomMatch) {
+    const room = demoRooms.find((item) => item.id === decodeURIComponent(roomMatch[1]));
+    if (!room) return json({ error: "群不存在" }, 404);
+    const history = demoRoomMessages.get(room.id) ?? [];
+    const status = { thinking: 0, bot_streak: 0, paused: false };
+    if (roomMatch[2] === "/stop") return json({ status: { ...status, paused: true } });
+    if (roomMatch[2] === "/messages") {
+      const now = Math.floor(Date.now() / 1000);
+      history.push({ id: `demo-room-in-${now}`, sender_id: "owner", sender_name: "主人", text: String(body.text || ""), at: now });
+      const lines = ["好呀好呀！", "……嗯。", "我也想说两句！", "（默默点头）"];
+      const replies = room.members.map((member, index) => {
+        const profile = (assistantConfig.profiles ?? []).find((item) => item.id === member);
+        return { id: `demo-room-out-${now}-${index}`, sender_id: member, sender_name: profile?.name || member, text: lines[index % lines.length], at: now + index + 1 };
+      });
+      history.push(...replies);
+      demoRoomMessages.set(room.id, history);
+      const stream = new ReadableStream({ async start(controller) {
+        for (const reply of replies) {
+          await new Promise((resolve) => window.setTimeout(resolve, 700));
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: "message", message: reply }) + "\n"));
+        }
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ type: "done", messages: replies.length, status: { ...status, bot_streak: replies.length } }) + "\n"));
+        controller.close();
+      } });
+      return new Response(stream, { headers: { "Content-Type": "application/x-ndjson" } });
+    }
+    if (method === "PUT") {
+      Object.assign(room, { name: String(body.name || room.name), members: (body.members as string[]) ?? room.members, max_bot_turns: Number(body.max_bot_turns) || room.max_bot_turns });
+      return json({ room });
+    }
+    if (method === "DELETE") {
+      demoRooms.splice(demoRooms.indexOf(room), 1);
+      demoRoomMessages.delete(room.id);
+      return json({ ok: true });
+    }
+    return json({ room, messages: history, status });
+  }
   // 聊天页：演示里每台机器人有几句现成的私聊，发消息回一句固定的话。
   if (path === "/api/assistant/chat") {
     const profile = (method === "GET" ? url.searchParams.get("profile") : String(body.profile || "")) || "demo";

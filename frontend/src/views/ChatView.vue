@@ -6,7 +6,10 @@
     <aside class="qq-list" aria-label="机器人列表">
       <header class="qq-list-head">
         <h2>消息</h2>
-        <button class="qq-icon" type="button" aria-label="搜索机器人" :aria-expanded="searching" title="搜索" @click="toggleSearch"><Search :size="17" aria-hidden="true" /></button>
+        <span class="qq-list-actions">
+          <button class="qq-icon" type="button" aria-label="新建群聊" title="新建群聊" data-new-room @click="roomDialog = 'create'"><UsersRound :size="17" aria-hidden="true" /></button>
+          <button class="qq-icon" type="button" aria-label="搜索机器人" :aria-expanded="searching" title="搜索" @click="toggleSearch"><Search :size="17" aria-hidden="true" /></button>
+        </span>
       </header>
       <div v-if="searching" class="qq-search"><Search :size="14" aria-hidden="true" /><input ref="searchInput" v-model="search" type="search" placeholder="搜索名称、平台或 ID" aria-label="搜索机器人" @keydown.esc="toggleSearch" /></div>
       <div class="qq-contacts" role="list">
@@ -21,6 +24,24 @@
           </span>
         </button>
         <p v-if="!profilesLoading && !profilesError && !contacts.length" class="qq-empty">还没有机器人，先到「机器人」页添加一台。</p>
+        <!-- 本地群排在机器人前面：群里的人一般比单聊的多，打开得也勤。 -->
+        <button
+          v-for="room in filteredRooms"
+          :key="roomKey(room.id)"
+          role="listitem"
+          class="qq-contact"
+          :class="{ selected: roomKey(room.id) === selected }"
+          :aria-current="roomKey(room.id) === selected ? 'true' : undefined"
+          type="button"
+          data-room
+          @click="openRoom(room.id)"
+        >
+          <span class="qq-room-avatar" aria-hidden="true"><UsersRound :size="20" /></span>
+          <span class="qq-contact-text">
+            <span class="qq-contact-top"><strong>{{ room.name }}</strong><time v-if="roomLast[room.id]">{{ shortTime(roomLast[room.id]!.at) }}</time></span>
+            <small>{{ roomPreview(room) }}</small>
+          </span>
+        </button>
         <button
           v-for="contact in filteredContacts"
           :key="contact.id"
@@ -41,8 +62,54 @@
       </div>
     </aside>
 
-    <section class="qq-room" :aria-label="current ? `和 ${current.name} 的私聊` : '私聊'">
-      <template v-if="current">
+    <section class="qq-room" :aria-label="currentRoom ? `群聊 ${currentRoom.name}` : current ? `和 ${current.name} 的私聊` : '私聊'">
+      <template v-if="currentRoom">
+        <header class="qq-room-head">
+          <button class="qq-icon qq-back" type="button" aria-label="返回列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
+          <div class="qq-room-title">
+            <h2>{{ currentRoom.name }}</h2>
+            <p :class="{ typing: roomBusy }">{{ roomSubtitle }}</p>
+          </div>
+          <button v-if="roomBusy" class="qq-icon" type="button" aria-label="停止讨论" title="停止讨论" data-room-stop @click="stopRoom"><CircleStop :size="19" aria-hidden="true" /></button>
+          <button class="qq-icon" type="button" aria-label="群设置" title="群设置" @click="roomDialog = 'edit'"><Settings2 :size="19" aria-hidden="true" /></button>
+        </header>
+
+        <div v-if="roomError" class="qq-banner err" role="alert"><span>{{ roomError }}</span><button class="btn ghost small" type="button" @click="loadRoom()">重试</button></div>
+        <div v-else-if="roomStatus?.paused && !roomBusy && roomMessages.length" class="qq-banner" role="status">机器人们停下来了，等你说话。</div>
+
+        <section ref="transcript" class="qq-transcript" aria-live="polite" :aria-busy="roomLoading || roomBusy">
+          <div v-if="roomLoading && !roomMessages.length" class="qq-loading" role="status" aria-label="正在加载群消息"><SkeletonBlock width="40%" height="36px" /><SkeletonBlock width="55%" height="36px" /></div>
+          <p v-else-if="!roomMessages.length" class="qq-hint">说点什么，{{ roomMemberNames }}都会接话。群里的话只在 Diana 里，不会发到平台上。</p>
+          <template v-for="(message, i) in roomMessages" :key="message.id">
+            <div v-if="roomDividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
+            <article class="qq-msg" :class="[message.sender_id === LOCAL_ROOM_OWNER ? 'user' : 'assistant', { failed: message.failed }]" :aria-label="message.sender_id === LOCAL_ROOM_OWNER ? '我说' : `${message.sender_name} 说`">
+              <BotAvatar v-if="message.sender_id !== LOCAL_ROOM_OWNER" :name="message.sender_name" :src="memberAvatar(message.sender_id)" :size="38" />
+              <div class="qq-bubble-wrap">
+                <span v-if="message.sender_id !== LOCAL_ROOM_OWNER" class="qq-sender">{{ message.sender_name }}</span>
+                <template v-if="message.text">
+                  <MarkdownText v-if="message.sender_id !== LOCAL_ROOM_OWNER" class="qq-bubble qq-markdown" :source="message.text" />
+                  <div v-else class="qq-bubble">{{ message.text }}</div>
+                </template>
+                <a v-for="image in message.images ?? []" :key="image" class="qq-image" :href="image" target="_blank" rel="noopener noreferrer"><img :src="image" alt="图片" loading="lazy" /></a>
+              </div>
+              <span v-if="message.sender_id === LOCAL_ROOM_OWNER" class="qq-self" aria-hidden="true">我</span>
+              <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
+              <span v-else-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
+            </article>
+          </template>
+          <article v-if="roomBusy" class="qq-msg assistant" aria-label="群里有人在想">
+            <span class="qq-room-avatar small" aria-hidden="true"><UsersRound :size="16" /></span>
+            <div class="qq-bubble-wrap"><div class="qq-bubble qq-typing" aria-hidden="true"><i /><i /><i /></div></div>
+          </article>
+        </section>
+
+        <form class="qq-composer" @submit.prevent="send">
+          <label class="sr-only" for="qq-input">在 {{ currentRoom.name }} 里发言</label>
+          <textarea id="qq-input" ref="composer" v-model="draft" rows="1" maxlength="4000" placeholder="在群里说点什么…" :disabled="roomLoading" @keydown="onKeydown" />
+          <button class="qq-send" type="submit" :disabled="!draft.trim() || roomLoading">发送</button>
+        </form>
+      </template>
+      <template v-else-if="current">
         <header class="qq-room-head">
           <button class="qq-icon qq-back" type="button" aria-label="返回机器人列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
           <div class="qq-room-title">
@@ -93,17 +160,27 @@
       <div v-else class="qq-placeholder"><MessagesSquare :size="40" aria-hidden="true" /><p>选一台机器人开始聊天</p></div>
     </section>
 
+    <LocalRoomDialog
+      v-if="roomDialog"
+      :room="roomDialog === 'edit' ? currentRoom : undefined"
+      :contacts="contacts"
+      @close="roomDialog = ''"
+      @saved="onRoomSaved"
+      @deleted="onRoomDeleted"
+    />
+
     <VoiceCallScreen v-if="callAudio && current" :profile="current.id" :name="current.name" :avatar="current.avatar" :audio="callAudio" @close="endCall" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { ChevronLeft, CircleAlert, LoaderCircle, MessagesSquare, Phone, Search, Wrench } from "@lucide/vue";
+import { ChevronLeft, CircleAlert, CircleStop, LoaderCircle, MessagesSquare, Phone, Search, Settings2, UsersRound, Wrench } from "@lucide/vue";
 import BotAvatar from "../components/BotAvatar.vue";
 import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import VoiceCallScreen from "../components/VoiceCallScreen.vue";
+import LocalRoomDialog from "../components/LocalRoomDialog.vue";
 import { getBotProfileConfig, type BotProfileConfig } from "../api";
 import { botScope } from "../lib/bot-scope";
 import { navigate } from "../router";
@@ -111,6 +188,7 @@ import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
 import { chatTimeLabel, getWebChat, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage } from "../lib/web-chat";
+import { getLocalRoom, listLocalRooms, LOCAL_ROOM_OWNER, sendLocalRoom, stopLocalRoom, type LocalRoom, type LocalRoomMessage, type LocalRoomStatus } from "../lib/local-rooms";
 
 interface Contact {
   id: string;
@@ -192,6 +270,7 @@ async function loadProfiles(): Promise<void> {
     const config = await getBotProfileConfig();
     profiles.value = config.profiles?.length ? config.profiles : [config];
     profilesError.value = "";
+    if (isRoomKey(selected.value)) return;
     if (!contacts.value.some((c) => c.id === selected.value)) selected.value = contacts.value[0]?.id ?? "";
     if (selected.value) void loadHistory();
   } catch (err) {
@@ -246,6 +325,7 @@ function openContact(id: string): void {
 }
 
 async function send(): Promise<void> {
+  if (currentRoom.value) return sendRoom();
   const text = draft.value.trim();
   if (!text || !current.value) return;
   draft.value = "";
@@ -335,10 +415,199 @@ watch(draft, async () => {
   el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
 });
 
+// —— 本地群 ——
+// 选中的是群时 selected 存 "room:<id>"，和机器人 ID 分开。
+const roomPrefix = "room:";
+const rooms = ref<LocalRoom[]>([]);
+const roomDialog = ref<"" | "create" | "edit">("");
+const roomMessages = ref<LocalRoomMessage[]>([]);
+const roomStatus = ref<LocalRoomStatus | null>(null);
+const roomLoading = ref(false);
+const roomError = ref("");
+// 页面上还没结束的发言流。
+const roomSends = ref(0);
+const roomLast = ref<Record<string, LocalRoomMessage>>({});
+let roomController: AbortController | null = null;
+let roomPoll: number | undefined;
+
+function roomKey(id: string): string {
+  return roomPrefix + id;
+}
+
+function isRoomKey(value: string): boolean {
+  return value.startsWith(roomPrefix);
+}
+
+const currentRoom = computed(() => (isRoomKey(selected.value) ? rooms.value.find((room) => roomKey(room.id) === selected.value) : undefined));
+const filteredRooms = computed(() => {
+  const keyword = search.value.trim().toLowerCase();
+  return keyword ? rooms.value.filter((room) => room.name.toLowerCase().includes(keyword)) : rooms.value;
+});
+const roomBusy = computed(() => roomSends.value > 0 || (roomStatus.value?.thinking ?? 0) > 0);
+const roomDividers = computed(() => timeDividers(roomMessages.value));
+const contactByID = computed(() => new Map(contacts.value.map((contact) => [contact.id, contact])));
+const roomMemberNames = computed(() => (currentRoom.value?.members ?? []).map((id) => contactByID.value.get(id)?.name ?? id).join("、"));
+const roomSubtitle = computed(() => {
+  const room = currentRoom.value;
+  if (!room) return "";
+  return roomBusy.value ? "群里有人在说话…" : `${room.members.length} 个成员`;
+});
+
+function memberAvatar(id: string): string | undefined {
+  return contactByID.value.get(id)?.avatar;
+}
+
+function roomPreview(room: LocalRoom): string {
+  const last = roomLast.value[room.id];
+  if (!last) return `${room.members.length} 个成员`;
+  return last.sender_id === LOCAL_ROOM_OWNER ? `我：${last.text}` : `${last.sender_name}：${markdownToPlain(last.text)}`;
+}
+
+function rememberRoomLast(id: string): void {
+  const sent = roomMessages.value.filter((message) => !message.failed);
+  const last = sent[sent.length - 1];
+  if (last) roomLast.value = { ...roomLast.value, [id]: last };
+}
+
+async function loadRooms(): Promise<void> {
+  try {
+    rooms.value = await listLocalRooms();
+  } catch {
+    // 群列表读不到不影响私聊。
+  }
+  if (!isRoomKey(selected.value)) return;
+  if (currentRoom.value) void loadRoom();
+  else {
+    selected.value = contacts.value[0]?.id ?? "";
+    if (selected.value) void loadHistory();
+  }
+}
+
+// quiet 是后台轮询：不显示加载骨架，有新消息才滚到底。
+async function loadRoom(quiet = false): Promise<void> {
+  const room = currentRoom.value;
+  if (!room) return;
+  roomController?.abort();
+  const controller = new AbortController();
+  roomController = controller;
+  if (!quiet) roomLoading.value = true;
+  roomError.value = "";
+  try {
+    const result = await getLocalRoom(room.id, controller.signal);
+    if (controller.signal.aborted || currentRoom.value?.id !== room.id) return;
+    const grew = result.messages.length !== roomMessages.value.length;
+    rooms.value = rooms.value.map((item) => (item.id === result.room.id ? result.room : item));
+    roomMessages.value = result.messages;
+    roomStatus.value = result.status;
+    rememberRoomLast(room.id);
+    if (!quiet || grew) await scrollToBottom();
+    scheduleRoomPoll();
+  } catch (err) {
+    if (controller.signal.aborted) return;
+    roomError.value = err instanceof Error ? err.message : String(err);
+  } finally {
+    if (roomController === controller) roomLoading.value = false;
+  }
+}
+
+// 讨论还在进行、但这个页面没开着发言流（比如刚打开，或者流已经断了）时，隔两秒刷一次。
+function scheduleRoomPoll(): void {
+  window.clearTimeout(roomPoll);
+  if ((roomStatus.value?.thinking ?? 0) > 0 && roomSends.value === 0) roomPoll = window.setTimeout(() => void loadRoom(true), 2000);
+}
+
+function openRoom(id: string): void {
+  showList.value = false;
+  if (roomKey(id) === selected.value && roomMessages.value.length) return;
+  selected.value = roomKey(id);
+  try {
+    localStorage.setItem(selectedKey, selected.value);
+  } catch {
+    // 记不住也不影响聊天。
+  }
+  roomMessages.value = [];
+  roomStatus.value = null;
+  draft.value = "";
+  void loadRoom();
+}
+
+async function sendRoom(): Promise<void> {
+  const room = currentRoom.value;
+  const text = draft.value.trim();
+  if (!room || !text) return;
+  draft.value = "";
+  const local: LocalRoomMessage = { id: `local-${++localSeq}`, sender_id: LOCAL_ROOM_OWNER, sender_name: "主人", text, at: Math.floor(Date.now() / 1000), pending: true };
+  roomMessages.value = [...roomMessages.value, local];
+  roomSends.value++;
+  window.clearTimeout(roomPoll);
+  await scrollToBottom();
+  const controller = new AbortController();
+  sendControllers.add(controller);
+  const settle = (patch: Partial<LocalRoomMessage>) => {
+    roomMessages.value = roomMessages.value.map((message) => (message.id === local.id ? { ...message, ...patch } : message));
+  };
+  try {
+    const status = await sendLocalRoom(room.id, text, controller.signal, (message) => {
+      if (currentRoom.value?.id !== room.id) return;
+      settle({ pending: false });
+      roomMessages.value = [...roomMessages.value, message];
+      void scrollToBottom();
+    });
+    if (currentRoom.value?.id === room.id) {
+      settle({ pending: false });
+      if (status) roomStatus.value = status;
+    }
+  } catch (err) {
+    if (currentRoom.value?.id === room.id) {
+      settle({ pending: false, failed: true });
+      if (!controller.signal.aborted) roomError.value = err instanceof Error ? err.message : String(err);
+    }
+  } finally {
+    roomSends.value = Math.max(0, roomSends.value - 1);
+    sendControllers.delete(controller);
+    rememberRoomLast(room.id);
+    scheduleRoomPoll();
+  }
+}
+
+async function stopRoom(): Promise<void> {
+  const room = currentRoom.value;
+  if (!room) return;
+  try {
+    roomStatus.value = await stopLocalRoom(room.id);
+  } catch (err) {
+    roomError.value = err instanceof Error ? err.message : String(err);
+  }
+}
+
+async function onRoomSaved(room: LocalRoom, created: boolean): Promise<void> {
+  roomDialog.value = "";
+  if (!created) {
+    rooms.value = rooms.value.map((item) => (item.id === room.id ? room : item));
+    return;
+  }
+  rooms.value = [room, ...rooms.value.filter((item) => item.id !== room.id)];
+  // 一句话建群会新建机器人，列表里要有它们的名字和头像。
+  await loadProfiles();
+  openRoom(room.id);
+}
+
+function onRoomDeleted(id: string): void {
+  roomDialog.value = "";
+  rooms.value = rooms.value.filter((room) => room.id !== id);
+  selected.value = contacts.value[0]?.id ?? "";
+  showList.value = true;
+  roomMessages.value = [];
+  if (selected.value) void loadHistory();
+}
+
 void loadProfiles();
+void loadRooms();
 
 onBeforeUnmount(() => {
   loadController?.abort();
+  roomController?.abort();
+  window.clearTimeout(roomPoll);
   for (const controller of sendControllers) controller.abort();
 });
 </script>
@@ -624,6 +893,34 @@ onBeforeUnmount(() => {
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.qq-list-actions {
+  display: flex;
+  gap: 2px;
+}
+
+/* 群聊：头像是群图标，机器人的气泡上面写名字 */
+.qq-room-avatar {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--accent);
+}
+
+.qq-room-avatar.small {
+  width: 38px;
+  height: 38px;
+}
+
+.qq-sender {
+  margin: 0 0 3px 2px;
   color: var(--muted);
   font-size: 12px;
 }
