@@ -373,7 +373,12 @@ type OutgoingMessage struct {
 	ImageURLs   []string
 	// ImageLabels 与 ImageURLs 一一对应，给控制台的事件记录标出每张图是什么
 	// （比如哪个表情包）；不发给平台。
-	ImageLabels          []string
+	ImageLabels []string
+	// StickerFileIDs 按 ImageURLs 里的地址索引平台原贴纸 ID（目前只有 Telegram 的
+	// file_id）。表情包库里的动态/视频贴纸只存了静态缩略图，按文件重发就成了一张
+	// 小图文件；有 ID 时通道直接按原贴纸转发，ID 失效才退回发文件。按地址索引，
+	// 审核拿掉某张图时不用跟着对齐下标。
+	StickerFileIDs       map[string]string
 	ImageAlbum           bool
 	GeneratedImageModels []GeneratedImageModel
 	VideoURLs            []string

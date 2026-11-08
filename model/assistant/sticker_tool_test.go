@@ -859,14 +859,14 @@ func sentStickerPath(message OutgoingMessage) string {
 // QQ 上按表情包形式发（小尺寸、能添加到表情），不是大图；其他平台照旧发图片。
 func TestStickerOutgoingMessageUsesQQStickerForm(t *testing.T) {
 	candidate := stickerCandidate{Path: "/cache/a.gif", Summary: "无语"}
-	qq := stickerOutgoingMessage(PlatformOneBotV11, candidate)
+	qq := stickerOutgoingMessage(PlatformOneBotV11, "", candidate)
 	if len(qq.ImageURLs) != 0 || len(qq.Segments) != 1 || qq.Segments[0].Data["sub_type"] != "1" || qq.Segments[0].Data["summary"] != "[无语]" || qq.Segments[0].Data["file"] != "/cache/a.gif" {
 		t.Fatalf("qq = %#v", qq)
 	}
 	if segments := buildOutgoingSegments(qq); len(segments) != 1 || segments[0]["type"] != "image" {
 		t.Fatalf("onebot segments = %#v", segments)
 	}
-	generic := stickerOutgoingMessage(PlatformTelegram, stickerCandidate{Path: "/cache/a.gif"})
+	generic := stickerOutgoingMessage(PlatformTelegram, "", stickerCandidate{Path: "/cache/a.gif"})
 	if len(generic.Segments) != 0 || len(generic.ImageURLs) != 1 || generic.ImageLabels[0] != "表情包" {
 		t.Fatalf("telegram = %#v", generic)
 	}
@@ -881,7 +881,7 @@ func TestResolveOutgoingLocalImagesSharesStickerSegments(t *testing.T) {
 	}
 	rt := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	rt.SetLocalMediaSharer(&recordingLocalMediaSharer{url: "http://host.docker.internal:18080/media/token"})
-	msg := stickerOutgoingMessage(PlatformOneBotV11, stickerCandidate{Path: path, Summary: "无语"})
+	msg := stickerOutgoingMessage(PlatformOneBotV11, "", stickerCandidate{Path: path, Summary: "无语"})
 	msg.Platform = PlatformOneBotV11
 	resolved := rt.resolveOutgoingLocalImages(msg)
 	data := resolved.Segments[0].Data

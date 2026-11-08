@@ -84,10 +84,13 @@ type stickerCandidate struct {
 	FromAssets    bool
 	Path          string
 	Hash          string
-	MessageID     string
-	EventTime     int64
-	LastSentAt    int64
-	SentCount     int
+	// StickerFileID 是平台原贴纸 ID（Telegram file_id），只对 StickerProfileID 那台机器人有效。
+	StickerFileID    string
+	StickerProfileID string
+	MessageID        string
+	EventTime        int64
+	LastSentAt       int64
+	SentCount        int
 	// ElsewhereLastSentAt 是机器人最近一次在别的会话里发这张图的时间。
 	ElsewhereLastSentAt int64
 	// RecentlySent 是这张或和它算同一张的图刚在本会话发过，见 rankStickerCandidates。
@@ -226,7 +229,7 @@ func (t *dianaStickerTool) deliver(ctx context.Context, selected stickerCandidat
 	if reason != "" {
 		return reason, nil
 	}
-	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, stickerOutgoingMessage(t.runtime.currentPlatform(t.event), selected))); err != nil {
+	if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, stickerOutgoingMessage(t.runtime.currentPlatform(t.event), t.event.ProfileID, selected))); err != nil {
 		if !errors.Is(err, ErrOutboundOutcomeUnknown) && !errors.Is(err, errOutboundOutcomeUnconfirmed) {
 			release()
 		}
@@ -238,8 +241,9 @@ func (t *dianaStickerTool) deliver(ctx context.Context, selected stickerCandidat
 
 // stickerOutgoingMessage 在 QQ 上按表情包发：图片消息段带 sub_type=1 和 summary，
 // 对方看到的是小尺寸的表情、能直接添加到表情，而不是一张大图。收到的表情包就是这个
-// 形状（SnowLuma/NapCat 都这样上报），发送时两个字段同样生效。其他平台照旧按图片发。
-func stickerOutgoingMessage(platform string, selected stickerCandidate) OutgoingMessage {
+// 形状（SnowLuma/NapCat 都这样上报），发送时两个字段同样生效。其他平台照旧按图片发；
+// Telegram 上同一台机器人收到过的贴纸另带原贴纸 ID，通道按它原样转发（见 StickerFileIDs）。
+func stickerOutgoingMessage(platform, profileID string, selected stickerCandidate) OutgoingMessage {
 	name := firstNonEmpty(selected.Summary, "动画表情")
 	if IsOneBotPlatform(platform) {
 		return OutgoingMessage{Segments: []MessageSegment{{Type: "image", Data: map[string]string{
@@ -253,7 +257,11 @@ func stickerOutgoingMessage(platform string, selected stickerCandidate) Outgoing
 	if described := firstNonEmpty(selected.Summary, truncateRunes(selected.Description, 60)); described != "" {
 		label += "：" + described
 	}
-	return OutgoingMessage{ImageURLs: []string{selected.Path}, ImageLabels: []string{label}}
+	msg := OutgoingMessage{ImageURLs: []string{selected.Path}, ImageLabels: []string{label}}
+	if platform == PlatformTelegram && selected.StickerFileID != "" && selected.StickerProfileID == profileID {
+		msg.StickerFileIDs = map[string]string{selected.Path: selected.StickerFileID}
+	}
+	return msg
 }
 
 // sendBestMatch 按收尾时模型填的关键词直接配一张：只在有关键词命中时发，随机补位的
@@ -572,6 +580,7 @@ func stickerCandidatesFromAssets(assets []StickerAsset, currentSession string, i
 		}
 		candidates = append(candidates, stickerCandidate{
 			ID: hash[:24], Summary: summary, Path: path, Hash: hash, MessageID: asset.MessageID, EventTime: asset.EventTime,
+			StickerFileID: strings.TrimSpace(asset.StickerFileID), StickerProfileID: asset.ProfileID,
 			Description: strings.TrimSpace(firstNonEmpty(asset.Gist, asset.Description)),
 			Tags:        asset.Tags, Tagged: asset.Tagged, Category: asset.Category, CategoryKnown: asset.CategoryKnown, FromAssets: true, LastSentAt: asset.LastSentAt, SentCount: asset.SentCount, ElsewhereLastSentAt: asset.ElsewhereLastSentAt,
 			SemanticScore: semanticScores[stickerCandidateEventKey(source)], SourceEvent: source,
@@ -615,6 +624,7 @@ func stickerCandidatesFromEvents(events []MessageEvent, currentSession string, i
 			}
 			candidates = append(candidates, stickerCandidate{
 				ID: id, Summary: summary, Path: path, Hash: hash, MessageID: event.MessageID, EventTime: event.Time,
+				StickerFileID: strings.TrimSpace(segment.Data["sticker_file_id"]), StickerProfileID: event.ProfileID,
 				SemanticScore: semanticScores[stickerCandidateEventKey(event)], SourceEvent: event,
 				SharedGroup:   event.Kind == EventKindGroup && sessionKey(event) != currentSession,
 				SharedPrivate: event.Kind == EventKindPrivate && sessionKey(event) != currentSession,
