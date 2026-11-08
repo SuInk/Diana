@@ -10,42 +10,42 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/SuInk/diana/model/callbridge"
 	"github.com/SuInk/diana/model/llm"
-	"github.com/SuInk/diana/model/qqcall"
 )
 
 // 生产里实际 OCR 到的群通话来电（群名被截断，后面还混进了一行乱码）。
 const testGroupInviteOCR = "Winter\n邀请您加入“Diana种子用户 (sls... “的语音通话\nUs\n"
 
-var testCallGroups = []qqCallGroup{
+var testCallGroups = []bridgeCallGroup{
 	{ID: "20001", Name: "Diana交流群"},
 	{ID: "20002", Name: "Diana种子用户 (sls测试)"},
 }
 
-func listTestCallGroups(context.Context) ([]qqCallGroup, error) { return testCallGroups, nil }
+func listTestCallGroups(context.Context) ([]bridgeCallGroup, error) { return testCallGroups, nil }
 
-func TestQQCallInviteRulesTellPrivateFromGroup(t *testing.T) {
-	invite := parseQQCallInviteRules(testGroupInviteOCR)
+func TestBridgeCallInviteRulesTellPrivateFromGroup(t *testing.T) {
+	invite := parseBridgeCallInviteRules(testGroupInviteOCR)
 	if !invite.incoming || !invite.group || invite.caller != "Winter" {
 		t.Fatalf("group invite = %+v", invite)
 	}
-	if id, _ := matchQQCallGroup(invite.groupName, testCallGroups); id != "20002" {
+	if id, _ := matchBridgeCallGroup(invite.groupName, testCallGroups); id != "20002" {
 		t.Fatalf("group name %q matched %q", invite.groupName, id)
 	}
-	private := parseQQCallInviteRules("主人\n邀请你语音通话\n")
+	private := parseBridgeCallInviteRules("主人\n邀请你语音通话\n")
 	if !private.incoming || private.group || private.caller != "主人" {
 		t.Fatalf("private invite = %+v", private)
 	}
-	if outgoing := parseQQCallInviteRules("主人\n正在等待对方接听\n"); outgoing.incoming {
+	if outgoing := parseBridgeCallInviteRules("主人\n正在等待对方接听\n"); outgoing.incoming {
 		t.Fatalf("outgoing call taken as incoming: %+v", outgoing)
 	}
 	// 截得太短、几个群都像时不猜。
-	if id, _ := matchQQCallGroup("Diana...", testCallGroups); id != "" {
+	if id, _ := matchBridgeCallGroup("Diana...", testCallGroups); id != "" {
 		t.Fatalf("ambiguous prefix matched %q", id)
 	}
 }
 
-func TestClassifyQQCallInviteAsksModelAndOnlyTrustsListedGroups(t *testing.T) {
+func TestClassifyBridgeCallInviteAsksModelAndOnlyTrustsListedGroups(t *testing.T) {
 	for _, tc := range []struct {
 		reply, want string
 	}{
@@ -57,7 +57,7 @@ func TestClassifyQQCallInviteAsksModelAndOnlyTrustsListedGroups(t *testing.T) {
 		runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 			return provider, nil
 		})
-		invite := runtime.classifyQQCallInvite(context.Background(), "bot", qqcall.Message{Name: "Winter", Text: testGroupInviteOCR}, listTestCallGroups)
+		invite := runtime.classifyBridgeCallInvite(context.Background(), "bot", callbridge.Message{Name: "Winter", Text: testGroupInviteOCR}, listTestCallGroups)
 		if invite.how != "llm" || !invite.incoming || !invite.group || invite.groupID != tc.want {
 			t.Fatalf("reply %s: invite = %+v", tc.reply, invite)
 		}
@@ -68,29 +68,29 @@ func TestClassifyQQCallInviteAsksModelAndOnlyTrustsListedGroups(t *testing.T) {
 	}
 }
 
-func TestClassifyQQCallInviteFallsBackWithoutModel(t *testing.T) {
+func TestClassifyBridgeCallInviteFallsBackWithoutModel(t *testing.T) {
 	runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return nil, errors.New("没配模型")
 	})
-	invite := runtime.classifyQQCallInvite(context.Background(), "bot", qqcall.Message{Text: testGroupInviteOCR}, listTestCallGroups)
+	invite := runtime.classifyBridgeCallInvite(context.Background(), "bot", callbridge.Message{Text: testGroupInviteOCR}, listTestCallGroups)
 	if invite.how != "rules" || invite.groupID != "20002" {
 		t.Fatalf("invite = %+v", invite)
 	}
 	// 旧版 agent 不带原文，只报私聊来电。
-	legacy := runtime.classifyQQCallInvite(context.Background(), "bot", qqcall.Message{Name: "主人"}, nil)
+	legacy := runtime.classifyBridgeCallInvite(context.Background(), "bot", callbridge.Message{Name: "主人"}, nil)
 	if !legacy.incoming || legacy.group || legacy.how != "legacy" {
 		t.Fatalf("legacy = %+v", legacy)
 	}
 }
 
-func TestQQGroupVoiceCallRepliesAsThatGroup(t *testing.T) {
+func TestGroupBridgeCallRepliesAsThatGroup(t *testing.T) {
 	runtime, channel, provider := newVoiceCallTestRuntime(t, "大家好呀。")
 	_, base, err := runtime.ownerChatEvent("bot")
 	if err != nil {
 		t.Fatal(err)
 	}
 	base.Kind, base.MessageType, base.GroupID, base.GroupName = EventKindGroup, string(EventKindGroup), "20002", "Diana种子用户"
-	base.UserID, base.SenderName, base.voiceCall = qqGroupCallSpeakerID, "群通话", true
+	base.UserID, base.SenderName, base.voiceCall = groupCallSpeakerID, "群通话", true
 	call := &VoiceCall{runtime: runtime, callID: "g1", base: base}
 	var mu sync.Mutex
 	var emitted []string
@@ -116,7 +116,7 @@ func TestQQGroupVoiceCallRepliesAsThatGroup(t *testing.T) {
 			system.WriteString(message.Content)
 		}
 	}
-	if !strings.Contains(system.String(), "QQ 群语音通话") || strings.Contains(system.String(), "实时语音通话") {
+	if !strings.Contains(system.String(), "被群友邀请加入") || strings.Contains(system.String(), "实时语音通话") {
 		t.Fatal("群通话应注入群通话提示，不是私聊通话提示")
 	}
 	var sawHangup bool
@@ -134,12 +134,12 @@ func TestQQGroupVoiceCallRepliesAsThatGroup(t *testing.T) {
 	}
 }
 
-func TestClassifyQQCallInviteLooksAtScreenshotFirst(t *testing.T) {
+func TestClassifyBridgeCallInviteLooksAtScreenshotFirst(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"incoming":true,"kind":"group","caller":"Winter","group_id":"20002"}`}
 	runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	invite := runtime.classifyQQCallInvite(context.Background(), "bot", qqcall.Message{Text: testGroupInviteOCR, Image: "iVBORw0KGgo="}, listTestCallGroups)
+	invite := runtime.classifyBridgeCallInvite(context.Background(), "bot", callbridge.Message{Text: testGroupInviteOCR, Image: "iVBORw0KGgo="}, listTestCallGroups)
 	if invite.how != "vision" || invite.groupID != "20002" {
 		t.Fatalf("invite = %+v", invite)
 	}

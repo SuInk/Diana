@@ -1258,7 +1258,7 @@ func (h *BotHandler) pluginDependencies(c *gin.Context) {
 			assistant.ResolverPluginID:            resolver,
 			assistant.BrowserRendererDependencyID: browser,
 			assistant.GroupRelationsPluginID:      assistant.RelationRenderDependencies(browser),
-			assistant.QQVoiceCallPluginID:         assistant.QQVoiceCallDependencies(resolver),
+			assistant.CallPluginID:                assistant.CallPluginDependencies(resolver),
 		},
 	})
 }

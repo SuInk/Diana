@@ -113,8 +113,8 @@ func TestCallWAVStreamRejectsWhatItCannotDecode(t *testing.T) {
 	}
 }
 
-func TestQQVoiceCallTransportPlaysWAVAsItArrives(t *testing.T) {
-	out := &qqCallTransport{}
+func TestCallPluginTransportPlaysWAVAsItArrives(t *testing.T) {
+	out := &bridgeCallTransport{}
 	wav := testWAV(32000, 1, 16, 32000, true)
 	_ = out.WriteJSON(voicecall.ServerMessage{Type: voicecall.ServerAudioStart, MIME: "audio/wav"})
 	before := time.Now()

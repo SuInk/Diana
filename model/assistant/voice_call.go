@@ -38,10 +38,10 @@ const promptVoiceCall = "你正在和对方实时语音通话，你说的每个�
 var promptVoiceCallSpec = tailSpec("voice_call", "语音通话", "主人在 WebUI 或 App 里和机器人语音通话时注入：回复会被逐句合成语音，要写成能直接念的口语。",
 	promptVoiceCall)
 
-const promptQQGroupCall = "你正在 QQ 群语音通话里，群里几个人都可能在说话，你听到的是混在一起的语音识别结果，分不清是谁说的；你说的每个字都会被念出来。像群聊语音一样口语化，一次一两句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。听到的话来自语音识别，可能有错别字或几个人的话混在一起，按最合理的意思理解。大家说散了、让你走，就用 hang_up 说句再见退出通话。"
+const promptBridgeGroupCall = "你正在群语音通话里（被群友邀请加入的那种），群里几个人都可能在说话，你听到的是混在一起的语音识别结果，分不清是谁说的；你说的每个字都会被念出来。像群聊语音一样口语化，一次一两句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。听到的话来自语音识别，可能有错别字或几个人的话混在一起，按最合理的意思理解。大家说散了、让你走，就用 hang_up 说句再见退出通话。"
 
-var promptQQGroupCallSpec = tailSpec("qq_group_call", "QQ 群语音通话", "机器人被邀请加入 QQ 群语音通话时注入：听到的是群里多人混在一起的语音识别结果，回复会被念出来。",
-	promptQQGroupCall)
+var promptBridgeGroupCallSpec = tailSpec("bridge_group_call", "被邀请加入的群通话", "机器人被邀请加入群语音通话时注入：听到的是群里多人混在一起的语音识别结果，回复会被念出来。",
+	promptBridgeGroupCall)
 
 // VoiceCall 是一通电话在机器人这一侧的对接，实现 voicecall.Backend。
 type VoiceCall struct {
@@ -55,7 +55,7 @@ type VoiceCall struct {
 	ended   sync.Once
 	// hangup 由 hang_up 工具置上，通话引擎念完这一轮后取走并挂断。
 	hangup atomic.Bool
-	// streamWAV 为真时下行能边收边播流式 WAV（QQ 通话），GPT-SoVITS 也走流式合成。
+	// streamWAV 为真时下行能边收边播流式 WAV（通话插件的电话），GPT-SoVITS 也走流式合成。
 	// 网页和 App 整句收齐再解码，流式 WAV 头里的长度是占位值，放不了。
 	streamWAV bool
 }
@@ -115,7 +115,7 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 	return call, nil
 }
 
-// NewGroupVoiceCall 开一通 QQ 群通话：听到的话当成群里有人对机器人说的，回复按这个群
+// NewGroupVoiceCall 开一通 群通话：听到的话当成群里有人对机器人说的，回复按这个群
 // 的身份生成。群通话里的声音混在一起分不清是谁，发言人统一记成「群通话」。
 func (r *Runtime) NewGroupVoiceCall(ctx context.Context, profileID, groupID, groupName, callID string) (*VoiceCall, error) {
 	info := r.VoiceCallInfo(ctx, profileID)
@@ -130,15 +130,15 @@ func (r *Runtime) NewGroupVoiceCall(ctx context.Context, profileID, groupID, gro
 	event.MessageType = string(EventKindGroup)
 	event.GroupID = groupID
 	event.GroupName = groupName
-	event.UserID = qqGroupCallSpeakerID
+	event.UserID = groupCallSpeakerID
 	event.SenderUsername = ""
 	event.SenderName = "群通话"
 	event.voiceCall = true
 	return &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}, nil
 }
 
-// qqGroupCallSpeakerID 是群通话里说话人的占位账号：混音里分不出是谁。
-const qqGroupCallSpeakerID = "qqcall-group"
+// groupCallSpeakerID 是群通话里说话人的占位账号：混音里分不出是谁。
+const groupCallSpeakerID = "call-group"
 
 // Finish 在挂断时调用一次：往主人私聊里记一条通话记录（打了多久），见 call_history.go。
 // 重复调用只记一次。群通话不记：通话记录是主人私聊里的旁白。
@@ -207,7 +207,7 @@ func (c *VoiceCall) Reply(ctx context.Context, text string, emit func(string)) e
 }
 
 // Synthesize 用语音合成插槽念一句话。OpenAI 兼容、ElevenLabs 和 Breeze 边合成边交出音频，
-// QQ 通话里 GPT-SoVITS 也是（见 streamWAV），其余各家整句合成完再交出。一条路由失败换下一条，但已经交出过音频就不换：
+// 通话插件的电话里 GPT-SoVITS 也是（见 streamWAV），其余各家整句合成完再交出。一条路由失败换下一条，但已经交出过音频就不换：
 // 换了会从头再念一遍。
 func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime string, data []byte) error) error {
 	r := c.runtime
@@ -236,7 +236,7 @@ func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime
 }
 
 // voiceCallSpeechFormat 选下发的音频格式：插槽上配的格式浏览器和手机放不了（裸 PCM、
-// QQ 的 silk/amr）时改用 mp3。
+// 平台语音的 silk/amr）时改用 mp3。
 func voiceCallSpeechFormat(format string) string {
 	switch strings.ToLower(strings.TrimSpace(format)) {
 	case "", "pcm", "silk", "amr":

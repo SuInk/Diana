@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
-	"github.com/SuInk/diana/model/qqcall"
+	"github.com/SuInk/diana/model/callbridge"
 	"github.com/SuInk/diana/model/voicecall"
 )
 
@@ -51,14 +51,14 @@ func TestAgentCoreToolsIncludeHangupOnlyInCalls(t *testing.T) {
 }
 
 // QQ 那头告别那句还在 agent 的播放缓冲里：等估算的播放时长过去再让 agent 点挂断。
-func TestQQCallTransportWaitsForFarewellBeforeHangup(t *testing.T) {
-	link, got := fakeQQCallAgent(t)
-	out := &qqCallTransport{ctx: context.Background(), link: link, call: "c1", playUntil: time.Now().Add(300 * time.Millisecond)}
+func TestBridgeCallTransportWaitsForFarewellBeforeHangup(t *testing.T) {
+	link, got := fakeBridgeCallAgent(t)
+	out := &bridgeCallTransport{ctx: context.Background(), link: link, call: "c1", playUntil: time.Now().Add(300 * time.Millisecond)}
 	start := time.Now()
 	if err := out.WriteJSON(voicecall.ServerMessage{Type: voicecall.ServerHangup}); err != nil {
 		t.Fatal(err)
 	}
-	expectQQCallMessage(t, got, qqcall.Message{Type: qqcall.TypeHangup, Call: "c1"})
+	expectBridgeCallMessage(t, got, callbridge.Message{Type: callbridge.TypeHangup, Call: "c1"})
 	if waited := time.Since(start); waited < 250*time.Millisecond {
 		t.Fatalf("告别还没播完就挂了：只等了 %s", waited)
 	}

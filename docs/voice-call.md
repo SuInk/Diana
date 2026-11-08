@@ -151,7 +151,7 @@ GET /api/assistant/call/ws?profile=<机器人 ID>&resume=<call_id>
 
 下行音频是语音合成插槽配置的格式；配的是浏览器和手机放不了的 `pcm`、`silk`、`amr` 时改用 `mp3`。`mime` 以 `audio_start` 里给的为准（`audio/mpeg`、`audio/wav`、`audio/ogg`……）。
 
-OpenAI 兼容接口、ElevenLabs 和 Breeze 是边合成边下发的（GPT-SoVITS 只在 QQ 通话里流式，网页和 App 照旧整句），一句会分成多个二进制帧；其他各家合成完整句后一帧发出。无论哪种，`audio_start` 到 `audio_end` 之间的帧拼起来就是一个完整的音频文件。客户端可以边收边播（MSE、原生流式播放器），也可以一句收齐后解码播放（网页测试页就是这样）。
+OpenAI 兼容接口、ElevenLabs 和 Breeze 是边合成边下发的（GPT-SoVITS 只在通话插件的电话里流式，网页和 App 照旧整句），一句会分成多个二进制帧；其他各家合成完整句后一帧发出。无论哪种，`audio_start` 到 `audio_end` 之间的帧拼起来就是一个完整的音频文件。客户端可以边收边播（MSE、原生流式播放器），也可以一句收齐后解码播放（网页测试页就是这样）。
 
 ## 时序
 

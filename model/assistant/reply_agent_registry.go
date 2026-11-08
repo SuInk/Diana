@@ -39,10 +39,10 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 	if call := voiceCallFromContext(ctx); call != nil && event.voiceCall {
 		pluginTools = append(pluginTools, &voiceCallHangupTool{call: call})
 	}
-	// 主动打 QQ 电话只给主人，而且要开着「QQ 语音通话」插件，见 qq_call_tool.go。
+	// 主动打电话只给主人，而且要开着通话插件，见 call_dial_tool.go。
 	if relationship.Owner && !event.voiceCall && r.plugins != nil && IsOneBotPlatform(cfg.Platform) {
-		if _, _, enabled := r.plugins.PluginWithSettingsForProfile(qqVoiceCallPluginID, event.ProfileID); enabled {
-			pluginTools = append(pluginTools, &qqCallTool{runtime: r, event: event})
+		if _, _, enabled := r.plugins.PluginWithSettingsForProfile(callPluginID, event.ProfileID); enabled {
+			pluginTools = append(pluginTools, &phoneCallTool{runtime: r, event: event})
 		}
 	}
 	for index, tool := range pluginTools {
