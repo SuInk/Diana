@@ -914,6 +914,32 @@ func TestCrossSessionToolForwardMediaSkipsForwardedMessage(t *testing.T) {
 	}
 }
 
+// 机器人自己发的图在历史里是发送接口回的 ID，别人引用时带的是接入端回推的另一个
+// ID。按历史 ID 转发、再让 forward_media 带上引用里的图，同一张图不能发两遍；
+// 引用里别的图照常带上。
+func TestCrossSessionForwardMediaSkipsSameImageUnderOtherID(t *testing.T) {
+	const shareID = "d6a035d1-94ea-44bc-927e-aa34d6345e1d"
+	forwards := []crossSessionForward{{messageID: "-18089", segments: []MessageSegment{{Type: "image", Data: map[string]string{
+		"file":           "http://host.docker.internal:18080/media/resolver/" + shareID,
+		"content_sha256": strings.Repeat("ab", 32),
+	}}}}}
+	event := crossSessionGroupSource("555")
+	event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "发到群里"}}}
+	event.Quoted = &QuotedMessage{MessageID: "17130", UserID: "10000", Segments: []MessageSegment{
+		{Type: "image", Data: map[string]string{"file": shareID, "url": "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=Eh1&spec=0"}},
+		{Type: "image", Data: map[string]string{"file": "other.png", "url": "https://multimedia.nt.qq.com.cn/download?appid=1406&fileid=Eh2&spec=0"}},
+	}}
+	original := event.Quoted.Segments
+
+	media := crossSessionMediaFromEvent(crossSessionEventWithoutForwarded(event, forwards), false)
+	if len(media.images) != 1 || !strings.Contains(media.images[0], "fileid=Eh2") {
+		t.Fatalf("引用里的同一张图没去掉，或误删了别的图：%#v", media.images)
+	}
+	if len(event.Quoted.Segments) != 2 || &event.Quoted.Segments[0] != &original[0] {
+		t.Fatal("去重改到了原事件的引用")
+	}
+}
+
 // 隐私代理给消息 ID 起的别名放在数组里也要还原成真实 ID。
 func TestIdentityPrivacyRestoresMessageIDArray(t *testing.T) {
 	scope := newIdentityPrivacyScopeWithSalt("test")

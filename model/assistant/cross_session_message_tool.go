@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -499,7 +501,12 @@ func (r *Runtime) crossSessionForwardSource(ctx context.Context, event MessageEv
 
 // crossSessionEventWithoutForwarded 去掉已经要整条转发的当前消息或引用消息，
 // 免得 forward_media 再把它们的附件单独发一遍。
+//
+// 只比消息 ID 不够：机器人自己发的消息有两个 ID，发送接口回的那个进了历史，
+// 接入端回推的那个才是别人引用时带的。模型按历史里的 ID 转发、又让 forward_media
+// 带上引用里的图时，两边 ID 对不上，同一张图就发了两遍。所以附件再按来源标识比一次。
 func crossSessionEventWithoutForwarded(event MessageEvent, forwards []crossSessionForward) MessageEvent {
+	forwardedMedia := map[string]struct{}{}
 	for _, forward := range forwards {
 		if forward.messageID == strings.TrimSpace(event.MessageID) {
 			event.Segments = nil
@@ -507,8 +514,77 @@ func crossSessionEventWithoutForwarded(event MessageEvent, forwards []crossSessi
 		if event.Quoted != nil && forward.messageID == strings.TrimSpace(event.Quoted.MessageID) {
 			event.Quoted = nil
 		}
+		for _, segment := range forward.segments {
+			for _, key := range crossSessionMediaKeys(segment) {
+				forwardedMedia[key] = struct{}{}
+			}
+		}
+	}
+	if len(forwardedMedia) == 0 {
+		return event
+	}
+	event.Segments = withoutForwardedMedia(event.Segments, forwardedMedia)
+	if event.Quoted != nil {
+		quoted := *event.Quoted
+		quoted.Segments = withoutForwardedMedia(quoted.Segments, forwardedMedia)
+		event.Quoted = &quoted
 	}
 	return event
+}
+
+func withoutForwardedMedia(segments []MessageSegment, forwarded map[string]struct{}) []MessageSegment {
+	var kept []MessageSegment
+	for _, segment := range segments {
+		duplicate := false
+		for _, key := range crossSessionMediaKeys(segment) {
+			if _, ok := forwarded[key]; ok {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			kept = append(kept, segment)
+		}
+	}
+	return kept
+}
+
+// crossSessionMediaKeys 列出能认出「这是同一个附件」的标识：入库时算的内容哈希、
+// 本机媒体分享链接的 ID（发出去后接入端回推时把它当 file 名带回来）、QQ 图床的
+// fileid。都是现成字段，不为去重去下载图片。
+func crossSessionMediaKeys(segment MessageSegment) []string {
+	switch strings.ToLower(strings.TrimSpace(segment.Type)) {
+	case "image", "video", "record", "file":
+	default:
+		return nil
+	}
+	var keys []string
+	if hash := strings.ToLower(strings.TrimSpace(segment.Data[imageContentSHA256Key])); validSHA256(hash) {
+		keys = append(keys, "sha256:"+hash)
+	}
+	for _, field := range []string{"file", "url", "path"} {
+		value := strings.TrimSpace(segment.Data[field])
+		if value == "" {
+			continue
+		}
+		parsed, err := url.Parse(value)
+		if err != nil {
+			continue
+		}
+		switch {
+		case isLocalMediaShareURL(value):
+			if id := path.Base(parsed.Path); id != "" && id != "/" && id != "." {
+				keys = append(keys, "name:"+id)
+			}
+		case parsed.Scheme == "http" || parsed.Scheme == "https":
+			if fileID := parsed.Query().Get("fileid"); fileID != "" {
+				keys = append(keys, "fileid:"+fileID)
+			}
+		case field == "file" && parsed.Scheme == "" && !strings.ContainsAny(value, `/\`):
+			keys = append(keys, "name:"+value)
+		}
+	}
+	return keys
 }
 
 // crossSessionMessageIDs 兼容字符串数组、单个字符串和数字：模型常把消息 ID 写成
