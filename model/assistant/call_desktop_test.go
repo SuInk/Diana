@@ -153,3 +153,30 @@ func TestPhoneCallToolNeedsPlugin(t *testing.T) {
 		t.Fatal("reason is required")
 	}
 }
+
+func TestDialedTurnSendsNoTextToPlatform(t *testing.T) {
+	runtime, channel, _ := newVoiceCallTestRuntime(t, "")
+	event := MessageEvent{ProfileID: "bot", Kind: EventKindPrivate, MessageType: "private", UserID: "10001", MessageID: "m-dial"}
+	cfg := runtime.profileConfig("bot").WithDefaults()
+	runtime.markDialed(event)
+	if _, err := runtime.deliverChunks(context.Background(), event, []string{"电话拨出去啦"}, cfg, outboundDecoration{}); err != nil {
+		t.Fatal(err)
+	}
+	channel.mu.Lock()
+	sent := len(channel.sent)
+	channel.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("拨号那一轮不该往平台发文字：%#v", channel.sent)
+	}
+	other := event
+	other.MessageID = "m-other"
+	if _, err := runtime.deliverChunks(context.Background(), other, []string{"别的回复"}, cfg, outboundDecoration{}); err != nil {
+		t.Fatal(err)
+	}
+	channel.mu.Lock()
+	sent = len(channel.sent)
+	channel.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("别的轮次照常发：sent=%d", sent)
+	}
+}

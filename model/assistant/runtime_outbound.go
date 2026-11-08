@@ -64,6 +64,11 @@ func (r *Runtime) deliveryEvidence(event MessageEvent, messageIDs []string) ([]s
 }
 
 func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks []string, cfg BotConfig, decoration outboundDecoration) ([]string, error) {
+	// 这一轮机器人用 phone_call 打了电话：电话就是回应，文字不发到平台上（聊天页照常显示）。
+	if !event.webChat && r.dialedThisTurn(event) {
+		log.Printf("diana: call plugin: 这一轮拨了电话，不往平台发文字（%d 段）", len(chunks))
+		return nil, nil
+	}
 	if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !decoration.LiteralText {
 		chunks = rssWatchMediaChunks(chunks)
 	}

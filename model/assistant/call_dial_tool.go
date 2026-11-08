@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/callbridge"
@@ -93,6 +94,7 @@ func (t *phoneCallTool) Run(_ context.Context, input map[string]any) (string, er
 		steps = "在客户端主窗口里：点顶部搜索框，输入主人的账号 " + ready.ownerID + " 回车打开私聊；点会话标题栏右侧的电话图标（语音通话）。每一步先截图或读元素看清楚再点。"
 	}
 	calls.expectOutgoing(target)
+	r.markDialed(t.event)
 	body, err := json.Marshal(phoneCallToolResult{OK: true, Steps: steps + "客户端主窗口被收起来时，点托盘里的客户端小图标拿回来。拨出去以后不用等，对方接通后通话会自动接上。拨号这件事不用再发文字说明：拨出去后用 send 的 silent=true 结束这一轮，要说的话等接通了在电话里说。"})
 	return string(body), err
 }
@@ -132,4 +134,39 @@ func (s *bridgeCallSet) outgoing(msg callbridge.Message) {
 // bridgeCallOpener 是机器人主动打的电话接通后交给通话的第一句「旁白」，让它先开口。
 func bridgeCallOpener(target bridgeCallTarget) string {
 	return "（电话接通了。这通是你主动打过去的，原因：" + target.reason + "。你先开口。）"
+}
+
+// 拨号那一轮不往平台发文字：电话本身就是回应。按触发这一轮的消息记，几分钟后作废。
+const dialedTurnTTL = 5 * time.Minute
+
+var dialedTurns sync.Map
+
+func dialedTurnKey(event MessageEvent) string {
+	return event.ProfileID + "\x00" + event.MessageID
+}
+
+func (r *Runtime) markDialed(event MessageEvent) {
+	if strings.TrimSpace(event.MessageID) == "" {
+		return
+	}
+	now := time.Now()
+	dialedTurns.Store(dialedTurnKey(event), now)
+	dialedTurns.Range(func(key, value any) bool {
+		if at, ok := value.(time.Time); ok && now.Sub(at) > dialedTurnTTL {
+			dialedTurns.Delete(key)
+		}
+		return true
+	})
+}
+
+func (r *Runtime) dialedThisTurn(event MessageEvent) bool {
+	if strings.TrimSpace(event.MessageID) == "" {
+		return false
+	}
+	value, ok := dialedTurns.Load(dialedTurnKey(event))
+	if !ok {
+		return false
+	}
+	at, _ := value.(time.Time)
+	return time.Since(at) <= dialedTurnTTL
 }
