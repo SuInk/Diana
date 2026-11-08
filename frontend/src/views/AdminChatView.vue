@@ -581,8 +581,19 @@ onBeforeUnmount(deactivate);
 <style scoped>
 .admin-chat-view { min-width: 0; }
 /* 放进聊天页右栏时：高度跟着右栏走，四周留出和聊天窗格一样的边距；返回按钮只在窄屏出现 */
-.admin-chat-view.embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 10px 16px 12px; }
+.admin-chat-view.embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .admin-chat-view.embedded .chat-workspace { flex: 1; height: auto; min-height: 0; }
+/* 标题栏和按钮照聊天页的私聊、群聊窗格：同样的高度、分隔线、图标大小和颜色 */
+.admin-chat-view.embedded .chat-room-header { min-height: 56px; padding: 8px 12px 8px 18px; border-bottom: 1px solid var(--border); }
+.admin-chat-view.embedded .chat-room-title h2 { font-size: 15px; font-weight: 650; }
+.admin-chat-view.embedded .chat-icon { width: 34px; height: 34px; border-radius: 8px; color: var(--text-secondary); }
+.admin-chat-view.embedded .chat-icon:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.admin-chat-view.embedded .chat-main { padding-left: 0; }
+.admin-chat-view.embedded .chat-banner, .admin-chat-view.embedded .chat-transcript, .admin-chat-view.embedded .chat-composer-area { width: auto; max-width: none; margin-left: 16px; margin-right: 16px; }
+.admin-chat-view.embedded .chat-composer-area { margin-bottom: 12px; }
+.admin-chat-view.embedded .chat-sidebar { padding: 0; }
+.admin-chat-view.embedded .chat-sidebar-heading { min-height: 56px; margin-bottom: 0; padding: 8px 8px 8px 16px; border-bottom: 1px solid var(--border); }
+.admin-chat-view.embedded .chat-session-list, .admin-chat-view.embedded .chat-session-search { margin: 8px 8px 0; }
 .admin-chat-view .chat-embedded-back { display: none; }
 @media (max-width: 720px) { .admin-chat-view .chat-embedded-back { display: inline-flex; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
