@@ -145,11 +145,11 @@
         <!-- 管理对话是随时可能要用的求助入口（装扩展、排查问题），做成全局入口，不占侧栏。 -->
         <button
           class="btn ghost small icon-only topbar-chat"
-          :class="{ active: currentView === 'admin-chat' }"
+          :class="{ active: adminChatOpen }"
           type="button"
-          :title="currentView === 'admin-chat' ? '关闭管理对话' : '管理对话：安装扩展与排查问题'"
+          :title="adminChatOpen ? '关闭管理对话' : '管理对话：安装扩展与排查问题'"
           aria-label="管理对话"
-          :aria-pressed="currentView === 'admin-chat'"
+          :aria-pressed="adminChatOpen"
           @click="toggleAdminChat"
         >
           <MessageCircle :size="16" aria-hidden="true" />
@@ -248,6 +248,7 @@ import { currentView, navItemForView, navItems, navSections, navigate, type View
 import { markSpaceSeen, refreshSpaceUnread, spaceUnread } from "./lib/space-unread";
 import { ALL_PROFILES, botCreateRequested, botScope, reconcileBotScope, requestBotScope, setBotScope } from "./lib/bot-scope";
 import { scopeSwitching } from "./lib/scope-transition";
+import { CHAT_ADMIN, chatSelection, openChatTarget } from "./lib/chat-target";
 import AppSelect from "./components/AppSelect.vue";
 import { startEventStream, stream, pushStatusSnapshot } from "./lib/stream";
 import { theme } from "./lib/theme";
@@ -568,13 +569,28 @@ function go(view: ViewID): void {
   drawerOpen.value = false;
 }
 
-// 顶栏的管理对话按钮是开关：再点一下回到打开它之前的那页，直接打开的就回总览。
+// 管理对话放进了聊天页：顶栏按钮打开聊天页并选中管理助手，再点一下回到打开它之前
+// 的那页（直接打开的回总览）。旧的 /admin-chat 地址照样能用，转到聊天页的管理助手。
+const adminChatOpen = computed(() => currentView.value === "chat" && chatSelection.value === CHAT_ADMIN);
 let viewBeforeAdminChat: ViewID = "dashboard";
-watch(currentView, (view, previous) => {
-  if (view === "admin-chat" && previous && previous !== "admin-chat") viewBeforeAdminChat = previous;
-});
+watch(
+  currentView,
+  (view, previous) => {
+    if (view !== "admin-chat") return;
+    if (previous && previous !== "chat") viewBeforeAdminChat = previous;
+    openChatTarget(CHAT_ADMIN);
+    navigate("chat");
+  },
+  { immediate: true }
+);
 function toggleAdminChat(): void {
-  go(currentView.value === "admin-chat" ? viewBeforeAdminChat : "admin-chat");
+  if (adminChatOpen.value) {
+    go(viewBeforeAdminChat);
+    return;
+  }
+  if (currentView.value !== "chat") viewBeforeAdminChat = currentView.value;
+  openChatTarget(CHAT_ADMIN);
+  go("chat");
 }
 
 function requestBotCreate(): void {
