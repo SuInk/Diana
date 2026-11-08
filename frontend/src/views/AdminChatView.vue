@@ -2,7 +2,7 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <div class="admin-chat-view">
+  <div class="admin-chat-view" :class="{ embedded }">
     <div class="chat-workspace" :class="{ 'show-sessions': showSessions }">
       <aside id="admin-chat-sessions" class="chat-sidebar" aria-label="管理会话列表">
         <div class="chat-sidebar-heading">
@@ -25,6 +25,7 @@
       <section class="chat-main" aria-label="管理助手">
         <header class="chat-room-header">
           <div class="chat-room-title">
+            <button v-if="embedded" class="chat-icon chat-embedded-back" type="button" aria-label="返回列表" @click="emit('back')"><ChevronLeft :size="20" aria-hidden="true" /></button>
             <button class="chat-icon" type="button" :aria-label="showSessions ? '收起会话列表' : '展开会话列表'" :aria-expanded="showSessions" aria-controls="admin-chat-sessions" :title="showSessions ? '收起会话列表' : '展开会话列表'" @click="showSessions = !showSessions"><PanelLeft :size="17" aria-hidden="true" /></button>
             <h2>{{ session?.title || '新会话' }}</h2>
           </div>
@@ -120,8 +121,13 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onDeactivated, ref, watch } from 'vue';
-import { Activity, ArrowDown, ArrowUp, Blocks, Check, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
+import { Activity, ArrowDown, ArrowUp, Blocks, Check, ChevronLeft, Copy, Ellipsis, LoaderCircle, PanelLeft, Plus, RotateCcw, Search, ShieldCheck, Square, SquarePen, Trash2, TriangleAlert, ListPlus, X } from '@lucide/vue';
 import { botScope } from '../lib/bot-scope';
+
+// embedded：放进聊天页右栏，窄屏多一个返回列表的按钮。
+const props = defineProps<{ embedded?: boolean }>();
+const emit = defineEmits<{ back: [] }>();
+const embedded = computed(() => props.embedded === true);
 import AppSelect from '../components/AppSelect.vue';
 import MarkdownText from '../components/MarkdownText.vue';
 import Modal from '../components/Modal.vue';
@@ -161,7 +167,8 @@ const modelOptions = computed(() => [{ value: '', label: '跟随机器人', hint
 const sessionSearch = ref(''), filteredSessions = computed(() => filterAdminChatSessions(conversations.value, sessionSearch.value));
 const messages = ref<AdminChatMessage[]>([]), draft = ref(''), error = ref(''), copiedID = ref('');
 const loading = ref(false), creating = ref(false), sending = ref(false), stopping = ref(false), remoteRunning = ref(false);
-const showSessions = ref(window.matchMedia('(min-width: 721px)').matches), showSessionSearch = ref(false), showHistorySearch = ref(false), showPermissions = ref(false), followTranscript = ref(true);
+// 放进聊天页右栏时地方小，会话列表默认收起，点左上角再展开。
+const showSessions = ref(!props.embedded && window.matchMedia('(min-width: 721px)').matches), showSessionSearch = ref(false), showHistorySearch = ref(false), showPermissions = ref(false), followTranscript = ref(true);
 const sessionSearchInput = ref<HTMLInputElement | null>(null), moreMenu = ref<HTMLDetailsElement | null>(null), addMenu = ref<HTMLDetailsElement | null>(null);
 const moreOpen = ref(false), addOpen = ref(false);
 const historyPanel = ref<HTMLElement | null>(null), permissionsPanel = ref<HTMLElement | null>(null);
@@ -573,6 +580,11 @@ onBeforeUnmount(deactivate);
 
 <style scoped>
 .admin-chat-view { min-width: 0; }
+/* 放进聊天页右栏时：高度跟着右栏走，四周留出和聊天窗格一样的边距；返回按钮只在窄屏出现 */
+.admin-chat-view.embedded { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 10px 16px 12px; }
+.admin-chat-view.embedded .chat-workspace { flex: 1; height: auto; min-height: 0; }
+.admin-chat-view .chat-embedded-back { display: none; }
+@media (max-width: 720px) { .admin-chat-view .chat-embedded-back { display: inline-flex; } }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .chat-workspace { display: grid; grid-template-columns: minmax(0, 1fr); height: calc(100dvh - 86px); min-height: 400px; }
 .chat-workspace.show-sessions { grid-template-columns: 190px minmax(0, 1fr); }

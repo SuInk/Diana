@@ -16,7 +16,16 @@
         <div v-if="profilesLoading && !contacts.length" class="qq-loading" role="status" aria-label="正在加载机器人"><SkeletonBlock v-for="i in 3" :key="i" width="100%" height="44px" /></div>
         <p v-else-if="profilesError" class="qq-empty" role="alert">{{ profilesError }}</p>
         <!-- 管理助手置顶：和机器人聊、找管理助手办事都从聊天页进，对话仍各管各的。 -->
-        <button v-if="!search" role="listitem" class="qq-contact qq-admin" type="button" data-admin-chat @click="navigate('admin-chat')">
+        <button
+          v-if="!search"
+          role="listitem"
+          class="qq-contact qq-admin"
+          :class="{ selected: adminSelected }"
+          :aria-current="adminSelected ? 'true' : undefined"
+          type="button"
+          data-admin-chat
+          @click="openAdmin"
+        >
           <span class="qq-admin-avatar" aria-hidden="true"><Wrench :size="20" /></span>
           <span class="qq-contact-text">
             <span class="qq-contact-top"><strong>管理助手</strong></span>
@@ -62,8 +71,10 @@
       </div>
     </aside>
 
-    <section class="qq-room" :aria-label="currentRoom ? `群聊 ${currentRoom.name}` : current ? `和 ${current.name} 的私聊` : '私聊'">
-      <template v-if="currentRoom">
+    <section class="qq-room" :aria-label="adminSelected ? '管理助手' : currentRoom ? `群聊 ${currentRoom.name}` : current ? `和 ${current.name} 的私聊` : '私聊'">
+      <!-- 管理助手和机器人本人是两回事（身份、权限、会话都分开），这里只是把它放进同一个页面。 -->
+      <AdminChatView v-if="adminSelected" embedded @back="showList = true" />
+      <template v-else-if="currentRoom">
         <header class="qq-room-head">
           <button class="qq-icon qq-back" type="button" aria-label="返回列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
           <div class="qq-room-title">
@@ -181,9 +192,10 @@ import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import VoiceCallScreen from "../components/VoiceCallScreen.vue";
 import LocalRoomDialog from "../components/LocalRoomDialog.vue";
+import AdminChatView from "./AdminChatView.vue";
 import { getBotProfileConfig, type BotProfileConfig } from "../api";
 import { botScope } from "../lib/bot-scope";
-import { navigate } from "../router";
+import { CHAT_ADMIN, chatOpenTarget, chatSelection } from "../lib/chat-target";
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
@@ -270,7 +282,7 @@ async function loadProfiles(): Promise<void> {
     const config = await getBotProfileConfig();
     profiles.value = config.profiles?.length ? config.profiles : [config];
     profilesError.value = "";
-    if (isRoomKey(selected.value)) return;
+    if (isRoomKey(selected.value) || selected.value === CHAT_ADMIN) return;
     if (!contacts.value.some((c) => c.id === selected.value)) selected.value = contacts.value[0]?.id ?? "";
     if (selected.value) void loadHistory();
   } catch (err) {
@@ -600,6 +612,31 @@ function onRoomDeleted(id: string): void {
   roomMessages.value = [];
   if (selected.value) void loadHistory();
 }
+
+// —— 管理助手 ——
+const adminSelected = computed(() => selected.value === CHAT_ADMIN);
+
+function openAdmin(): void {
+  showList.value = false;
+  selected.value = CHAT_ADMIN;
+  try {
+    localStorage.setItem(selectedKey, selected.value);
+  } catch {
+    // 记不住也不影响聊天。
+  }
+}
+
+// 顶栏按钮、旧的 /admin-chat 地址要求切到管理助手。
+watch(
+  chatOpenTarget,
+  (target) => {
+    if (!target) return;
+    chatOpenTarget.value = "";
+    if (target === CHAT_ADMIN) openAdmin();
+  },
+  { immediate: true }
+);
+watch(selected, (value) => (chatSelection.value = value), { immediate: true });
 
 void loadProfiles();
 void loadRooms();
