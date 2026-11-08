@@ -65,17 +65,9 @@ func fakeDesktopAgent(t *testing.T) (*bridgeCallLink, <-chan desktopctl.Command)
 	return link, clicks
 }
 
-func TestBridgeCallAgentScreenJoinsDesktopControl(t *testing.T) {
+func TestCallDesktopBridgeRoundTrip(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	registry := desktopctl.NewRegistry(ctx, nil)
-	if _, err := registry.SetPolicy(ctx, desktopctl.Policy{Enabled: true, WriteEnabled: true, AllowedApps: []string{"x11.chat"}}); err != nil {
-		t.Fatal(err)
-	}
-	hub := desktopctl.NewHub(registry)
-	runtime := &Runtime{}
-	runtime.SetDesktopControl(hub)
-
 	link, clicks := fakeDesktopAgent(t)
 	calls := newBridgeCallSet(NewCallPlugin(), link)
 	// agent 的回执由读循环交给 handle；这里直接把连接上的帧转过去。
@@ -91,16 +83,12 @@ func TestBridgeCallAgentScreenJoinsDesktopControl(t *testing.T) {
 			}
 		}
 	}()
-	calls.desktop.attach(ctx, runtime)
-	if conns := hub.Connections(); len(conns) != 1 || conns[0].HelperName != "通话容器" {
-		t.Fatalf("connections = %+v", conns)
-	}
-	result, err := hub.Dispatch(ctx, desktopctl.Command{Op: desktopctl.OpWindowScreenshot, WindowID: "100"})
-	if err != nil || !strings.Contains(string(result.Data), "iVBORw0KGgo=") {
-		t.Fatalf("screenshot = %s, %v", result.Data, err)
+	var shot desktopctl.ScreenshotPayload
+	if err := calls.desktop.call(ctx, desktopctl.OpWindowScreenshot, desktopctl.Command{WindowID: "100"}, &shot); err != nil || shot.Data != "iVBORw0KGgo=" {
+		t.Fatalf("screenshot = %+v, %v", shot, err)
 	}
 	x, y := 740.0, 67.0
-	if _, err := hub.Dispatch(ctx, desktopctl.Command{Op: desktopctl.OpWindowClick, WindowID: "100", X: &x, Y: &y}); err != nil {
+	if err := calls.desktop.call(ctx, desktopctl.OpWindowClick, desktopctl.Command{WindowID: "100", X: &x, Y: &y}, nil); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -111,10 +99,16 @@ func TestBridgeCallAgentScreenJoinsDesktopControl(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("click never reached the agent")
 	}
-	// agent 断线：连接从桌面控制里注销。
-	calls.desktop.detach()
-	if conns := hub.Connections(); len(conns) != 0 {
-		t.Fatalf("connection should be gone after detach: %+v", conns)
+}
+
+func TestCallScreenToolNeedsPlugin(t *testing.T) {
+	runtime, _, _ := newVoiceCallTestRuntime(t, "")
+	tool := &callScreenTool{runtime: runtime, event: MessageEvent{ProfileID: "bot"}}
+	if _, err := tool.Run(context.Background(), map[string]any{"action": "screenshot", "window_id": "1"}); err == nil || !strings.Contains(err.Error(), "通话插件没开") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"action": "rm"}); err == nil {
+		t.Fatal("unknown action should fail")
 	}
 }
 
@@ -149,7 +143,7 @@ func TestBridgeCallOutgoingOnlyClaimsRegisteredDials(t *testing.T) {
 	}
 }
 
-func TestBridgeCallToolNeedsPluginAndDesktop(t *testing.T) {
+func TestPhoneCallToolNeedsPlugin(t *testing.T) {
 	runtime, _, _ := newVoiceCallTestRuntime(t, "")
 	tool := &phoneCallTool{runtime: runtime, event: MessageEvent{ProfileID: "bot", Kind: EventKindPrivate}}
 	if _, err := tool.Run(context.Background(), map[string]any{"reason": "想你了"}); err == nil || !strings.Contains(err.Error(), "插件没开") {

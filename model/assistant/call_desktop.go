@@ -7,31 +7,22 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/SuInk/diana/model/callbridge"
 	"github.com/SuInk/diana/model/desktopctl"
 )
 
-// 把 SnowLuma 容器的屏幕接进「桌面控制」。
+// 容器屏幕的指令通道。
 //
-// 主动打电话、发起群通话这类事要在 客户端界面上点，界面会改版，写死流程和坐标都不通用。
-// 桌面控制本来就是让模型看截图、读元素、点击输入去操作电脑的那一套（白名单、写权限、
-// 限流、人工接管、持久任务都有），只是它原来只管 Diana 所在的那台机器。这里把 agent
-// 那块 X 屏幕注册成桌面控制的一个执行器「通话容器」，指令沿着已有的 agent 连接走
-// （callbridge 的 desktop / desktop_result），不另开端口。
+// 主动打电话、发起群通话要在客户端界面上点，界面会改版，写死流程和坐标都不通用，所以
+// 交给模型看截图、读元素去点（call_screen 工具，见 call_screen.go）。指令沿已有的
+// agent 连接走（callbridge 的 desktop / desktop_result），载荷沿用桌面控制的 window.*
+// 格式，不另开端口。
 //
-// 注册的前提是桌面控制总开关开着；客户端窗口要在应用白名单里（bundle 是 x11.<WM_CLASS 类名>），写操作
-// 要打开 write_enabled，这些都按桌面控制原有的规矩来。
-
-const (
-	callDesktopHelperID = "call-agent"
-	// callDesktopAttachEvery 是没注册上时多久再试一次：总开关可能是后来才打开的。
-	callDesktopAttachEvery = 30 * time.Second
-)
+// 它不接进宿主机的「桌面控制」：操作的是容器里的客户端，不是 Diana 所在的那台机器，
+// 能不能操作是通话插件自己的设置（screen_control），和宿主机桌面控制的总开关无关。
 
 type callDesktopBridge struct {
 	set *bridgeCallSet
@@ -39,74 +30,15 @@ type callDesktopBridge struct {
 	mu      sync.Mutex
 	seq     int
 	pending map[string]chan callbridge.Message
-	conn    *desktopctl.Connection
 }
 
 func newCallDesktopBridge(set *bridgeCallSet) *callDesktopBridge {
 	return &callDesktopBridge{set: set, pending: map[string]chan callbridge.Message{}}
 }
 
-// hubFor 取运行时的桌面控制控制面；没注入时返回 nil。
-func hubFor(runtime *Runtime) *desktopctl.Hub {
-	if runtime == nil {
-		return nil
-	}
-	runtime.mu.RLock()
-	bridge := runtime.desktopControl
-	runtime.mu.RUnlock()
-	hub, _ := bridge.(*desktopctl.Hub)
-	return hub
-}
-
-// keepAttached 在 agent 连着的时候保持注册：总开关后来打开、连接被关掉了都会补上。
-func (b *callDesktopBridge) keepAttached(ctx context.Context, runtime *Runtime) {
-	ticker := time.NewTicker(callDesktopAttachEvery)
-	defer ticker.Stop()
-	for {
-		b.attach(ctx, runtime)
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
-func (b *callDesktopBridge) attach(ctx context.Context, runtime *Runtime) {
-	hub := hubFor(runtime)
-	if hub == nil || !hub.Policy().Enabled {
-		return
-	}
-	b.mu.Lock()
-	conn := b.conn
-	b.mu.Unlock()
-	if conn != nil {
-		if _, alive := hub.Connection(conn.ID()); alive {
-			return
-		}
-	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	c, _, err := hub.AttachLocal(ctx, b, desktopctl.Hello{
-		HelperID:   callDesktopHelperID,
-		HelperName: "通话容器",
-		Platform:   "linux",
-		Label:      "SnowLuma 容器里的客户端（通话插件）",
-	}, desktopctl.TokenInfo{Name: "通话插件"})
-	if err != nil {
-		log.Printf("diana: call plugin: 接进桌面控制失败: %v", err)
-		return
-	}
-	b.mu.Lock()
-	b.conn = c
-	b.mu.Unlock()
-}
-
-// detach 是 agent 断线：注销连接，在飞的指令立刻失败。
+// detach 是 agent 断线：在飞的指令立刻失败。
 func (b *callDesktopBridge) detach() {
 	b.mu.Lock()
-	conn := b.conn
-	b.conn = nil
 	pending := b.pending
 	b.pending = map[string]chan callbridge.Message{}
 	b.mu.Unlock()
@@ -115,9 +47,6 @@ func (b *callDesktopBridge) detach() {
 		case ch <- callbridge.Message{Type: callbridge.TypeDesktopResult, Error: "和通话插件断线了"}:
 		default:
 		}
-	}
-	if conn != nil {
-		conn.Close()
 	}
 }
 
@@ -133,6 +62,7 @@ func (b *callDesktopBridge) deliver(msg callbridge.Message) {
 
 // call 下发一条指令，等 agent 回执，把 Data 解到 out。
 func (b *callDesktopBridge) call(ctx context.Context, op string, cmd desktopctl.Command, out any) error {
+	cmd.Op = op
 	params, err := json.Marshal(cmd)
 	if err != nil {
 		return err
@@ -166,49 +96,3 @@ func (b *callDesktopBridge) call(ctx context.Context, op string, cmd desktopctl.
 		return json.Unmarshal(reply.Data, out)
 	}
 }
-
-// 下面实现 desktopctl.Adapter 及元素读取、滚动两个可选能力。
-
-func (b *callDesktopBridge) ListWindows(ctx context.Context) ([]desktopctl.WindowInfo, error) {
-	var payload desktopctl.WindowsPayload
-	err := b.call(ctx, desktopctl.OpWindowsList, desktopctl.Command{Op: desktopctl.OpWindowsList}, &payload)
-	return payload.Windows, err
-}
-
-func (b *callDesktopBridge) Screenshot(ctx context.Context, windowID string) (desktopctl.ScreenshotPayload, error) {
-	var payload desktopctl.ScreenshotPayload
-	err := b.call(ctx, desktopctl.OpWindowScreenshot, desktopctl.Command{Op: desktopctl.OpWindowScreenshot, WindowID: windowID}, &payload)
-	return payload, err
-}
-
-func (b *callDesktopBridge) action(ctx context.Context, op string, cmd desktopctl.Command) (desktopctl.ActionResult, error) {
-	cmd.Op = op
-	var payload desktopctl.ActionResult
-	err := b.call(ctx, op, cmd, &payload)
-	return payload, err
-}
-
-func (b *callDesktopBridge) Click(ctx context.Context, cmd desktopctl.Command) (desktopctl.ActionResult, error) {
-	return b.action(ctx, desktopctl.OpWindowClick, cmd)
-}
-
-func (b *callDesktopBridge) TypeText(ctx context.Context, cmd desktopctl.Command) (desktopctl.ActionResult, error) {
-	return b.action(ctx, desktopctl.OpWindowType, cmd)
-}
-
-func (b *callDesktopBridge) PressKey(ctx context.Context, cmd desktopctl.Command) (desktopctl.ActionResult, error) {
-	return b.action(ctx, desktopctl.OpWindowKey, cmd)
-}
-
-func (b *callDesktopBridge) Scroll(ctx context.Context, cmd desktopctl.Command) (desktopctl.ActionResult, error) {
-	return b.action(ctx, desktopctl.OpWindowScroll, cmd)
-}
-
-func (b *callDesktopBridge) Elements(ctx context.Context, cmd desktopctl.Command) (desktopctl.ElementsPayload, error) {
-	cmd.Op = desktopctl.OpWindowElements
-	var payload desktopctl.ElementsPayload
-	err := b.call(ctx, desktopctl.OpWindowElements, cmd, &payload)
-	return payload, err
-}
-
-var _ desktopctl.Adapter = (*callDesktopBridge)(nil)
