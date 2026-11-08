@@ -18,6 +18,7 @@ func TestSupportedPlatformsCoverAllAdapters(t *testing.T) {
 		PlatformQQOfficial: false,
 		PlatformWeixin:     false,
 		PlatformIMessage:   false,
+		PlatformLocal:      false,
 	}
 	for _, platform := range SupportedPlatforms() {
 		if _, ok := want[platform.ID]; !ok {

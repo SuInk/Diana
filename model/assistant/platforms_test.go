@@ -245,7 +245,8 @@ func TestProfileSetIgnoresLegacyContextIsolationSetting(t *testing.T) {
 
 // 只有真实账号跑通过收发的平台才不带「未测试」标记。
 func TestPlatformUntestedMarks(t *testing.T) {
-	tested := map[string]bool{PlatformOneBotV11: true, PlatformQQOfficial: true, PlatformTelegram: true}
+	// 内置机器人没有平台适配器可测，不打「未测试」。
+	tested := map[string]bool{PlatformOneBotV11: true, PlatformQQOfficial: true, PlatformTelegram: true, PlatformLocal: true}
 	for _, def := range SupportedPlatforms() {
 		if def.Untested == tested[def.ID] {
 			t.Fatalf("%s 的未测试标记不对：untested=%v", def.ID, def.Untested)
