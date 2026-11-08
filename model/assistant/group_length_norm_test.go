@@ -49,8 +49,15 @@ func TestGroupLengthNormPromptOnlyForGroupsWithEnoughHistory(t *testing.T) {
 	if !strings.Contains(got, "学的是上面群友的消息") {
 		t.Fatalf("the group voice line is missing: %q", got)
 	}
-	if !strings.Contains(got, "一条消息只写一行") {
-		t.Fatalf("a group that never breaks lines should be told so: %q", got)
+	// 默认开着自然分条，换行就是拆条：要让模型换行，不能说「一条只写一行」，
+	// 否则它拿空格把两句硬接起来。
+	if !strings.Contains(got, "直接换行，会拆成两条发出") || strings.Contains(got, "一条消息只写一行") {
+		t.Fatalf("a group that never breaks lines should be told to split by newline: %q", got)
+	}
+	single := cfg
+	single.NaturalReplySplitEnabled = boolPointer(false)
+	if got := runtime.groupLengthNormPrompt(event, single); !strings.Contains(got, "一条消息只写一行") {
+		t.Fatalf("single-message delivery keeps the one-line rule: %q", got)
 	}
 	private := event
 	private.Kind = EventKindPrivate

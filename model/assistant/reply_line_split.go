@@ -268,6 +268,19 @@ func replyLineSplitPrompt(limits chatSplitLimits) string {
 	return "换行怎么发：两句普通的话之间换行，会拆成两条发出，想留在同一条就写在同一行。列表、表格、代码块连同引出它的那一行整块一条；小节标题和它下面的正文一条；单独一行的链接跟着上一句。"
 }
 
+// newlineSplitsProse 报告两句普通的话之间换行会不会拆成两条发出，判断和
+// splitChatReplyKeepingPeriods 一致。只发一条、保留换行或收拢换行时不拆。
+func newlineSplitsProse(limits chatSplitLimits) bool {
+	switch {
+	case limits.SingleMessage:
+		return false
+	case limits.LineSplit && !limits.MarkerOnly:
+		return true
+	default:
+		return !limits.KeepProseLines && limits.LineBreakMode != replyLinesCompact
+	}
+}
+
 // isReplyBlockLeadIn 认出引出列表或代码块的那一行。
 func isReplyBlockLeadIn(line string) bool {
 	line = strings.TrimSpace(line)
