@@ -200,6 +200,10 @@ type SandboxedBrowserConfig struct {
 	ReuseProcess bool
 	// ExtraArgs are trusted, caller-owned Chrome flags for specialized local rendering paths.
 	ExtraArgs []string
+	// FetchAPIKey 非空时读网页先走 TinyFish fetch 接口（见 tinyfish_fetch.go），
+	// 失败才起本地浏览器。截图不受影响。FetchEndpoint 只给测试替换地址用。
+	FetchAPIKey   string
+	FetchEndpoint string
 }
 
 // SandboxedHeadlessBrowser starts a fresh Chrome/Chromium profile for every render.
@@ -220,20 +224,38 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 		timeout = defaultHeadlessBrowserTimeout
 	}
 	queueCtx := ctx
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
 		return RenderedPage{}, err
 	}
 	var sourceErr error
 	if apiURL, ok := githubReleaseAPIURL(rawURL); ok {
+		releaseCtx, cancelRelease := context.WithTimeout(ctx, timeout)
 		var page RenderedPage
-		page, sourceErr = readGitHubRelease(ctx, rawURL, apiURL, b.cfg.MaxTextChars)
+		page, sourceErr = readGitHubRelease(releaseCtx, rawURL, apiURL, b.cfg.MaxTextChars)
+		cancelRelease()
 		if sourceErr == nil {
 			return page, nil
 		}
 	}
+	// fetch 接口自带期限，不占浏览器那份超时：它失败退回浏览器时，浏览器照样有完整的
+	// 渲染时间。
+	var fetchErr error
+	if sourceErr == nil && strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
+		page, err := fetchTinyFishPage(ctx, b.cfg.FetchAPIKey, b.cfg.FetchEndpoint, rawURL, b.cfg.MaxTextChars)
+		if err == nil {
+			return page, nil
+		}
+		if ctx.Err() != nil {
+			return RenderedPage{}, err
+		}
+		fetchErr = err
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
 	page, err := b.renderBrowser(queueCtx, ctx, rawURL)
+	if fetchErr != nil && err != nil {
+		return RenderedPage{}, errors.Join(err, fetchErr)
+	}
 	if sourceErr != nil {
 		if err != nil {
 			return RenderedPage{}, errors.Join(sourceErr, err)

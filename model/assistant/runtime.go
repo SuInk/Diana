@@ -4234,7 +4234,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				var result *PluginResponse
 				defer func() { browserResult <- result }()
 				defer recoverGoroutinePanic("runtime.builtInBrowserRenderer")
-				resp, err := NewBuiltInBrowserRenderer().Handle(ctx, request)
+				resp, err := r.builtInBrowserRenderer(event).Handle(ctx, request)
 				if err != nil {
 					log.Printf("diana built-in browser renderer: %v", err)
 					return
