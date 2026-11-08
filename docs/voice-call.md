@@ -125,8 +125,8 @@ GET /api/assistant/call/ws?profile=<机器人 ID>&resume=<call_id>
 | `state` | `state` | `listening` 等用户说 / `thinking` 转写和生成回复中 / `speaking` 在下发合成的音频 |
 | `speech` | `event` | 服务端分句模式下的检测结果：`start` 用户开口，`end` 一句说完，`discarded` 太短被丢弃（咳嗽、碰麦） |
 | `transcript` | `turn, text` | 用户这一轮说的话（转写结果） |
-| `reply` | `turn, seq, text` | 一句回复的文字。总在这一句的音频之前到 |
-| `audio_start` | `turn, seq, mime` | 这一句的音频开始，后面跟若干二进制帧 |
+| `reply` | `turn, seq, text, speaker?, speaker_name?` | 一句回复的文字。总在这一句的音频之前到。群语音通话里带着是哪台机器人说的 |
+| `audio_start` | `turn, seq, mime, speaker?, speaker_name?` | 这一句的音频开始，后面跟若干二进制帧 |
 | （二进制帧） | | 音频数据，属于最近一个 `audio_start` |
 | `audio_end` | `turn, seq` | 这一句的音频发完了 |
 | `interrupted` | `turn` | 这一轮被打断，客户端应立即停止播放。被用户的新一句顶替时，紧跟着就是新一轮的音频 |
@@ -234,6 +234,12 @@ POST /api/assistant/chat   {"profile": "<机器人 ID>", "text": "在干嘛"}
 - **页面关了讨论也继续**：发言流只负责把消息推给页面。重新打开群时，如果还有成员在想，页面会每两秒刷新一次。
 - **记录**：群消息每个群最多保留最近 300 条，存在 app_state 里。解散群只删群和群消息；成员各自记得的聊天不受影响。
 
+- **群语音通话**：群聊右上角的电话按钮。你说的话转写后当成你在群里说的一句，和打字一样交给每个成员；每个成员的发言用它自己的「语音合成」插槽念出来，所以每台机器人可以是不同的声音。字幕每段都标着是谁说的，通话界面的头像和名字跟着正在说话的成员换。
+  - 语音识别用第一个配了「语音识别」的成员；没配「语音合成」的成员借第一个配了的成员的声音，字幕照常标它的名字。一个成员都没配时打不了。
+  - 成员之间接话、刹车、停止讨论和打字时一样；你开口打断时，正在想的回复作废。成员按群通话的口吻回（口语化、一次一两句），没有 `hang_up`，挂断只能由你来。
+  - 说的话和回的话都记在群消息里；挂断时记一条「通话 3 分 12 秒」，不存录音。群通话断线不保留，断了就算挂断。
+  - 协议和单人通话一样，地址换成 `GET /api/assistant/rooms/:id/call/ws`；`reply` 和 `audio_start` 多两个字段：`speaker`（成员机器人 ID）、`speaker_name`。`GET /api/assistant/rooms/:id/call` 返回和单人通话一样的状态，`bot_name` 是群名。
+
 接口在 `/api/assistant/rooms`，和聊天页一样要登录 WebUI：
 
 ```
@@ -245,4 +251,6 @@ PUT    /api/assistant/rooms/:id             改群名、成员、刹车条数
 DELETE /api/assistant/rooms/:id             解散
 POST   /api/assistant/rooms/:id/stop        停止讨论
 POST   /api/assistant/rooms/:id/messages    {"text"} → 按行流式返回：message（成员的每条发言）、heartbeat、done（带 status）
+GET    /api/assistant/rooms/:id/call        → 能不能打群电话，同 /api/assistant/call
+GET    /api/assistant/rooms/:id/call/ws     群语音通话（WebSocket）
 ```

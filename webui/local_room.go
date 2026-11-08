@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
+	"github.com/SuInk/diana/model/voicecall"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,6 +36,8 @@ type localRoomRuntime interface {
 	LocalRoomSend(context.Context, string, string, func(assistant.LocalRoomMessage)) (assistant.LocalRoomMessage, error)
 	StopLocalRoom(context.Context, string) (assistant.LocalRoomStatus, error)
 	PlanLocalRoom(context.Context, string, string) (assistant.LocalRoomPlan, error)
+	LocalRoomCallInfo(context.Context, string) assistant.VoiceCallInfo
+	NewLocalRoomCall(context.Context, string) (*assistant.LocalRoomCall, error)
 }
 
 func (h *BotHandler) registerLocalRoomRoutes(router gin.IRouter) {
@@ -53,6 +56,33 @@ func (h *BotHandler) registerLocalRoomRoutes(router gin.IRouter) {
 	group.DELETE("/:id", h.deleteLocalRoom)
 	group.POST("/:id/messages", h.localRoomSend)
 	group.POST("/:id/stop", h.stopLocalRoom)
+	group.GET("/:id/call", h.localRoomCallInfo)
+	group.GET("/:id/call/ws", h.localRoomCallSocket)
+}
+
+// localRoomCallInfo 告诉前端这个群现在能不能打群电话、缺什么。
+func (h *BotHandler) localRoomCallInfo(c *gin.Context) {
+	runtime, ok := h.localRoomRuntime(c)
+	if !ok {
+		return
+	}
+	c.JSON(http.StatusOK, runtime.LocalRoomCallInfo(c.Request.Context(), c.Param("id")))
+}
+
+// localRoomCallSocket 是群聊通话，协议和单人通话一样（docs/voice-call.md），回复帧多了
+// speaker、speaker_name。群通话不保留断线重连：断了就记一条通话记录。
+func (h *BotHandler) localRoomCallSocket(c *gin.Context) {
+	runtime, ok := h.localRoomRuntime(c)
+	if !ok {
+		return
+	}
+	call, err := runtime.NewLocalRoomCall(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	info := runtime.LocalRoomCallInfo(c.Request.Context(), c.Param("id"))
+	h.serveVoiceCall(c, call, voicecall.Options{CallID: newVoiceCallID(), BotID: info.BotID, BotName: info.BotName}, func(bool) { call.Finish() })
 }
 
 func (h *BotHandler) localRoomRuntime(c *gin.Context) (localRoomRuntime, bool) {

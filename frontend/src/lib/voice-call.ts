@@ -20,6 +20,9 @@ export interface CallServerMessage {
   reason?: string;
   code?: string;
   fatal?: boolean;
+  /** 群聊通话里这句是哪台机器人说的（reply、audio_start）。 */
+  speaker?: string;
+  speaker_name?: string;
   ready?: { call_id: string; bot_id: string; bot_name?: string; format: string; sample_rate?: number; segmentation: string; barge_in: boolean };
 }
 
@@ -63,6 +66,12 @@ export function callSocketURL(profileID: string, location: Pick<Location, "proto
   return `${protocol}//${location.host}/api/assistant/call/ws${params.length ? `?${params.join("&")}` : ""}`;
 }
 
+/** 本地群的群聊通话地址。群通话不支持断线重连。 */
+export function roomCallSocketURL(roomID: string, location: Pick<Location, "protocol" | "host"> = window.location): string {
+  const protocol = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${location.host}/api/assistant/rooms/${encodeURIComponent(roomID)}/call/ws`;
+}
+
 /**
  * 把麦克风的采样率降到 16kHz。按区间取平均，顺带滤掉一点高频；手机上
  * AudioContext 多半是 48kHz，正好三取一。
@@ -99,7 +108,26 @@ export interface CallTurnView {
   turn: number;
   user: string;
   bot: string[];
+  /** 和 bot 一一对应：群聊通话里每句是谁说的，单人通话全是空的。 */
+  speakers?: CallSpeaker[];
   status: "active" | "done" | "interrupted" | "merged" | "failed" | "empty";
+}
+
+export interface CallSpeaker {
+  id: string;
+  name: string;
+}
+
+/** 一轮里连续同一个人说的几句并成一段，群聊通话的字幕按段标发言人。 */
+export function callReplyParts(turn: CallTurnView): { speaker: CallSpeaker; text: string }[] {
+  const parts: { speaker: CallSpeaker; text: string }[] = [];
+  turn.bot.forEach((text, i) => {
+    const speaker = turn.speakers?.[i] ?? { id: "", name: "" };
+    const last = parts[parts.length - 1];
+    if (last && last.speaker.id === speaker.id) last.text += text;
+    else parts.push({ speaker, text });
+  });
+  return parts;
 }
 
 const endStatus: Record<string, CallTurnView["status"]> = {
@@ -126,6 +154,7 @@ export function applyCallMessage(turns: CallTurnView[], msg: CallServerMessage):
       break;
     case "reply":
       next = { ...current, bot: [...current.bot, msg.text ?? ""] };
+      if (msg.speaker || current.speakers) next.speakers = [...(current.speakers ?? current.bot.map(() => ({ id: "", name: "" }))), { id: msg.speaker ?? "", name: msg.speaker_name ?? "" }];
       break;
     case "turn_end":
       next = { ...current, status: endStatus[msg.reason ?? ""] ?? "done" };

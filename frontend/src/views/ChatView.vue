@@ -123,6 +123,7 @@
             <p :class="{ typing: roomBusy }">{{ roomSubtitle }}</p>
           </div>
           <button v-if="roomBusy" class="qq-icon" type="button" aria-label="停止讨论" title="停止讨论" data-room-stop @click="stopRoom"><CircleStop :size="19" aria-hidden="true" /></button>
+          <button class="qq-icon" type="button" :aria-label="`${currentRoom.name} 群语音通话`" title="群语音通话" @click="startRoomCall"><Phone :size="19" aria-hidden="true" /></button>
           <button class="qq-icon" type="button" aria-label="群设置" title="群设置" @click="roomDialog = 'edit'"><Settings2 :size="19" aria-hidden="true" /></button>
         </header>
 
@@ -134,7 +135,8 @@
           <p v-else-if="!roomMessages.length" class="qq-hint">说点什么，{{ roomMemberNames }}都会接话。群里的话只在 Diana 里，不会发到平台上。</p>
           <template v-for="(message, i) in roomMessages" :key="message.id">
             <div v-if="roomDividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
-            <article class="qq-msg" :class="[message.sender_id === LOCAL_ROOM_OWNER ? 'user' : 'assistant', { failed: message.failed }]" :aria-label="message.sender_id === LOCAL_ROOM_OWNER ? '我说' : `${message.sender_name} 说`">
+            <div v-if="message.kind === 'call'" class="qq-call-record" role="note"><Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }}</div>
+            <article v-else class="qq-msg" :class="[message.sender_id === LOCAL_ROOM_OWNER ? 'user' : 'assistant', { failed: message.failed }]" :aria-label="message.sender_id === LOCAL_ROOM_OWNER ? '我说' : `${message.sender_name} 说`">
               <BotAvatar v-if="message.sender_id !== LOCAL_ROOM_OWNER" :name="message.sender_name" :src="memberAvatar(message.sender_id)" :size="38" />
               <div class="qq-bubble-wrap">
                 <span v-if="message.sender_id !== LOCAL_ROOM_OWNER" class="qq-sender">{{ message.sender_name }}</span>
@@ -221,6 +223,7 @@
       @deleted="onRoomDeleted"
     />
 
+    <VoiceCallScreen v-if="roomCallAudio && currentRoom" profile="" :name="currentRoom.name" :room="roomCallTarget" :audio="roomCallAudio" @close="endRoomCall" />
     <VoiceCallScreen v-if="callAudio && current" :profile="current.id" :name="current.name" :avatar="current.avatar" :audio="callAudio" @close="endCall" />
   </div>
 </template>
@@ -454,6 +457,23 @@ function startCall(): void {
   if (!callAudio.value && current.value && !info.value?.problem) callAudio.value = openCallAudio();
 }
 
+// 群聊通话：成员的话都记进群消息，挂断后刷新群就能看到，字幕和头像按发言人标。
+const roomCallAudio = ref<CallAudio | null>(null);
+const roomCallTarget = computed(() =>
+  currentRoom.value
+    ? { id: currentRoom.value.id, members: currentRoom.value.members.map((id) => ({ id, name: contactByID.value.get(id)?.name ?? id, avatar: contactByID.value.get(id)?.avatar })) }
+    : undefined
+);
+
+function startRoomCall(): void {
+  if (!roomCallAudio.value && currentRoom.value) roomCallAudio.value = openCallAudio();
+}
+
+function endRoomCall(): void {
+  roomCallAudio.value = null;
+  void loadRoom();
+}
+
 // 通话里说的也记进私聊，挂断后刷新一下就能看到。
 function endCall(): void {
   callAudio.value = null;
@@ -514,6 +534,7 @@ function memberAvatar(id: string): string | undefined {
 function roomPreview(room: LocalRoom): string {
   const last = roomLast.value[room.id];
   if (!last) return `${room.members.length} 个成员`;
+  if (last.kind === "call") return callRecordLabel(last.text);
   return last.sender_id === LOCAL_ROOM_OWNER ? `我：${last.text}` : `${last.sender_name}：${markdownToPlain(last.text)}`;
 }
 

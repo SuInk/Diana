@@ -34,6 +34,20 @@ type HangupBackend interface {
 	TakeHangup() bool
 }
 
+// Speaker 是群聊通话里说话的那一方。
+type Speaker struct {
+	ID   string
+	Name string
+}
+
+// SpeakerBackend 是群聊通话的 Backend：一句话会有好几个成员接，每条回复带着是谁说
+// 的，合成时用那个成员的声音。实现了它，会话就不再调 Backend.Reply 和
+// Backend.Synthesize。
+type SpeakerBackend interface {
+	ReplyBySpeaker(ctx context.Context, text string, emit func(Speaker, string)) error
+	SynthesizeAs(ctx context.Context, speaker Speaker, text string, chunk func(mime string, data []byte) error) error
+}
+
 // Transport 是下行通道。实现方保证不会被并发调用以外的方式打乱顺序；会话自己
 // 串行调用它。
 type Transport interface {
@@ -482,7 +496,7 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 	t.replyStarted = true
 	s.mu.Unlock()
 
-	sentences := make(chan string, 64)
+	sentences := make(chan spokenSentence, 64)
 	spoken := make(chan struct{})
 	go func() {
 		defer recoverGoroutinePanic("speak")
@@ -493,7 +507,7 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 				continue
 			}
 			seq++
-			s.speak(t, seq, sentence)
+			s.speak(t, seq, sentence.speaker, sentence.text)
 		}
 	}()
 	// emit 可能在回复流程的别的 goroutine 上调用，切句和计数要加锁。
@@ -503,27 +517,41 @@ func (s *Session) runTurn(t *turn, previous chan struct{}) {
 		replied  bool
 		finished bool
 	)
-	queue := func(items []string) {
+	queue := func(speaker Speaker, items []string) {
 		for _, sentence := range items {
 			replied = true
 			select {
-			case sentences <- sentence:
+			case sentences <- spokenSentence{speaker: speaker, text: sentence}:
 			case <-t.ctx.Done():
 				return
 			}
 		}
 	}
 	// emit 在回复流程的发送路径上被调用；每条消息之间本来就是断句处。
-	replyErr := s.backend.Reply(t.genCtx, text, func(message string) {
-		queueMu.Lock()
-		defer queueMu.Unlock()
-		if finished || t.genCtx.Err() != nil {
-			return
-		}
-		queue(splitter.Push(message + "\n"))
-	})
+	var replyErr error
+	if group, ok := s.backend.(SpeakerBackend); ok {
+		// 每条发言单独切句：上一个人没说完的半句不能并到下一个人嘴里。
+		replyErr = group.ReplyBySpeaker(t.genCtx, text, func(speaker Speaker, message string) {
+			queueMu.Lock()
+			defer queueMu.Unlock()
+			if finished || t.genCtx.Err() != nil {
+				return
+			}
+			var own SentenceSplitter
+			queue(speaker, append(own.Push(message+"\n"), own.Flush()...))
+		})
+	} else {
+		replyErr = s.backend.Reply(t.genCtx, text, func(message string) {
+			queueMu.Lock()
+			defer queueMu.Unlock()
+			if finished || t.genCtx.Err() != nil {
+				return
+			}
+			queue(Speaker{}, splitter.Push(message+"\n"))
+		})
+	}
 	queueMu.Lock()
-	queue(splitter.Flush())
+	queue(Speaker{}, splitter.Flush())
 	finished = true
 	close(sentences)
 	queueMu.Unlock()
@@ -587,8 +615,8 @@ func (s *Session) markDone() {
 
 // speak 下发一句回复的文字，再把它合成后的音频逐片下发。合成失败只报错，文字已经
 // 到了，通话继续。
-func (s *Session) speak(t *turn, seq int, sentence string) {
-	if s.turnWrite(t, ServerMessage{Type: ServerReply, Turn: t.id, Seq: seq, Text: sentence}) != nil {
+func (s *Session) speak(t *turn, seq int, speaker Speaker, sentence string) {
+	if s.turnWrite(t, ServerMessage{Type: ServerReply, Turn: t.id, Seq: seq, Text: sentence, Speaker: speaker.ID, SpeakerName: speaker.Name}) != nil {
 		return
 	}
 	speakable := SpeakableText(sentence)
@@ -596,7 +624,13 @@ func (s *Session) speak(t *turn, seq int, sentence string) {
 		return
 	}
 	started := false
-	err := s.backend.Synthesize(t.ctx, speakable, func(mime string, data []byte) error {
+	synthesize := s.backend.Synthesize
+	if group, ok := s.backend.(SpeakerBackend); ok {
+		synthesize = func(ctx context.Context, text string, chunk func(string, []byte) error) error {
+			return group.SynthesizeAs(ctx, speaker, text, chunk)
+		}
+	}
+	err := synthesize(t.ctx, speakable, func(mime string, data []byte) error {
 		if len(data) == 0 {
 			return nil
 		}
@@ -608,7 +642,7 @@ func (s *Session) speak(t *turn, seq int, sentence string) {
 					t.speaking = true
 					s.writeLocked(ServerMessage{Type: ServerState, State: StateSpeaking})
 				}
-				if err := s.writeLocked(ServerMessage{Type: ServerAudioStart, Turn: t.id, Seq: seq, MIME: mime}); err != nil {
+				if err := s.writeLocked(ServerMessage{Type: ServerAudioStart, Turn: t.id, Seq: seq, MIME: mime, Speaker: speaker.ID, SpeakerName: speaker.Name}); err != nil {
 					return err
 				}
 			}
@@ -621,6 +655,12 @@ func (s *Session) speak(t *turn, seq int, sentence string) {
 	if err != nil && !errors.Is(err, errTurnGone) && t.ctx.Err() == nil {
 		s.turnWrite(t, ServerMessage{Type: ServerError, Turn: t.id, Seq: seq, Code: "tts_failed", Text: "语音合成失败：" + err.Error()})
 	}
+}
+
+// spokenSentence 是排队等念的一句，群聊通话里带着是谁说的。
+type spokenSentence struct {
+	speaker Speaker
+	text    string
 }
 
 func (s *Session) finishTurn(t *turn, reason string) {

@@ -95,8 +95,23 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 		}
 	}
 	info := runtime.VoiceCallInfo(c.Request.Context(), profile)
+	// 挂断后在私聊里记一条通话记录；连接意外断了就先留着等重连（parkedVoiceCalls）。
+	h.serveVoiceCall(c, call, voicecall.Options{CallID: callID, BotID: info.BotID, BotName: info.BotName}, func(hungUp bool) {
+		if hungUp {
+			call.Finish()
+			return
+		}
+		parkedVoiceCalls.park(callID, profile, call)
+	})
+}
+
+// serveVoiceCall 升级 WebSocket，跑一通电话直到任何一方挂断或连接断开。onEnd 在
+// 会话关闭前调用（最后一轮的话先落进历史，通话记录排在它们后面），hungUp 为真表示
+// 是挂断而不是连接意外断了。
+func (h *BotHandler) serveVoiceCall(c *gin.Context, backend voicecall.Backend, opts voicecall.Options, onEnd func(hungUp bool)) {
 	conn, err := voiceCallUpgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
+		onEnd(true)
 		return
 	}
 	defer conn.Close()
@@ -106,23 +121,15 @@ func (h *BotHandler) voiceCallSocket(c *gin.Context) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &voiceCallConn{conn: conn}
-	// 挂断后在私聊里记一条通话记录；连接意外断了就先留着等重连（parkedVoiceCalls）。
-	// 排在 session.Close 前面 defer，最后一轮的话先落进历史，记录排在它们后面。
 	hungUp := false
 	var session *voicecall.Session
-	defer func() {
-		if hungUp || session.BotHungUp() {
-			call.Finish()
-			return
-		}
-		parkedVoiceCalls.park(callID, profile, call)
-	}()
-	session = voicecall.NewSession(ctx, call, out, voicecall.Options{CallID: callID, BotID: info.BotID, BotName: info.BotName})
+	defer func() { onEnd(hungUp || session.BotHungUp()) }()
+	session = voicecall.NewSession(ctx, backend, out, opts)
 	defer session.Close()
-	recordOperation(ctx, h.logs, "voice_call", "开始语音通话", info.BotID, map[string]any{"call_id": callID})
+	recordOperation(ctx, h.logs, "voice_call", "开始语音通话", opts.BotID, map[string]any{"call_id": opts.CallID})
 	started := time.Now()
 	defer func() {
-		recordOperation(context.Background(), h.logs, "voice_call", "结束语音通话", info.BotID, map[string]any{"call_id": callID, "duration_seconds": int(time.Since(started).Seconds())})
+		recordOperation(context.Background(), h.logs, "voice_call", "结束语音通话", opts.BotID, map[string]any{"call_id": opts.CallID, "duration_seconds": int(time.Since(started).Seconds())})
 	}()
 
 	go func() {

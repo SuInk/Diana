@@ -1564,6 +1564,11 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     await new Promise((resolve) => window.setTimeout(resolve, 900));
     return json({ room, plan: { room_name: room.name, bots: names.map((name) => ({ name, persona: `你是${name}。` })) } });
   }
+  const roomCallMatch = path.match(/^\/api\/assistant\/rooms\/([^/]+)\/call$/);
+  if (roomCallMatch && method === "GET") {
+    const room = demoRooms.find((item) => item.id === decodeURIComponent(roomCallMatch[1]));
+    return room ? json({ bot_id: room.id, bot_name: room.name, platform: "local", stt: true, tts: true }) : json({ error: "群不存在" }, 404);
+  }
   const roomMatch = path.match(/^\/api\/assistant\/rooms\/([^/]+)(\/messages|\/stop)?$/);
   if (roomMatch) {
     const room = demoRooms.find((item) => item.id === decodeURIComponent(roomMatch[1]));

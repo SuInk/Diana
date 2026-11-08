@@ -5,6 +5,7 @@
 // 成员都回；成员之间还会接话，连续到刹车条数就停下等主人。
 
 import { readWebChatFrames } from "./web-chat";
+import type { CallInfo } from "./voice-call";
 
 export interface LocalRoom {
   id: string;
@@ -24,6 +25,8 @@ export interface LocalRoomMessage {
   images?: string[];
   /** Unix 秒。 */
   at: number;
+  /** "call" 是群通话记录（打了多久），显示成居中的提示。 */
+  kind?: string;
   /** 本地刚发出、还没被服务端确认的那句。 */
   pending?: boolean;
   failed?: boolean;
@@ -94,4 +97,9 @@ export async function sendLocalRoom(id: string, text: string, signal: AbortSigna
     if (value.type === "done") status = value.status;
   });
   return status;
+}
+
+/** 这个群现在能不能打群电话；bot_name 是群名。 */
+export async function getRoomCallInfo(id: string): Promise<CallInfo> {
+  return (await roomRequest(`/${encodeURIComponent(id)}/call`)).json();
 }
