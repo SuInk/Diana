@@ -187,11 +187,20 @@ func SynthesizeSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest
 	}, nil
 }
 
+// SpeechAPIStreams 报告这个接口能不能边合成边交出音频（StreamSpeech）。
+func SpeechAPIStreams(api SpeechAPI) bool {
+	switch api {
+	case SpeechAPIOpenAI, SpeechAPIElevenLabs, SpeechAPIBreeze, SpeechAPIGPTSoVITS:
+		return true
+	}
+	return false
+}
+
 // StreamSpeech 和 SynthesizeSpeech 一样，但拿到响应头就把音频流交给调用方。
 // 只在拿到响应头之前重试；之后断流由调用方处理。
 func StreamSpeech(ctx context.Context, cfg ProviderConfig, req SpeechRequest, opts ...ClientOption) (*SpeechStream, error) {
 	req.API = ResolveSpeechAPI(string(req.API), cfg)
-	if req.API != SpeechAPIOpenAI && req.API != SpeechAPIElevenLabs && req.API != SpeechAPIBreeze {
+	if !SpeechAPIStreams(req.API) {
 		return nil, fmt.Errorf("llm: speech api %q does not support streaming", req.API)
 	}
 	client, spec, format, err := newSpeechCall(cfg, req, true, opts)
@@ -241,6 +250,14 @@ func newSpeechCall(cfg ProviderConfig, req SpeechRequest, stream bool, opts []Cl
 		timeout = defaultSpeechTimeout
 	}
 	switch req.API {
+	case SpeechAPIGPTSoVITS:
+		client, err := newMediaHTTPWithKey(cfg, vendorDefaultBaseURL(req.API), opts, false)
+		if err != nil {
+			return nil, mediaRequestSpec{}, "", err
+		}
+		client.policy.AttemptTimeout = timeout
+		spec, err := gptSoVITSSpec(client, req, stream)
+		return client, spec, "wav", err
 	case SpeechAPIBreeze:
 		client, err := newXIKeySpeechHTTP(cfg, "https://api.breeze.blue/v1", opts)
 		if err != nil {

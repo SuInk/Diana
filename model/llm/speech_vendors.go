@@ -331,6 +331,27 @@ func xmlEscape(text string) string {
 // synthesizeGPTSoVITS 调 GPT-SoVITS v2 的 /tts（api_v2.py），参数与原来的语音合成
 // 插件一致。参考音频是 v2 的必填项，没配时服务端会直接 400。
 func synthesizeGPTSoVITS(ctx context.Context, client *mediaHTTP, req SpeechRequest) ([]byte, string, error) {
+	spec, err := gptSoVITSSpec(client, req, false)
+	if err != nil {
+		return nil, "", err
+	}
+	result, err := client.do(ctx, spec, maxSpeechAudioBytes)
+	if err != nil {
+		return nil, "", err
+	}
+	audio, err := audioBody(result)
+	if err != nil {
+		return nil, "", err
+	}
+	if !isWAV(audio) {
+		return nil, "", badSpeechResponse(result.status, "GPT-SoVITS 未返回有效 WAV 音频")
+	}
+	return audio, "wav", nil
+}
+
+// gptSoVITSSpec 构造 /tts 请求。stream 为真时服务端边合成边吐：先发一个 WAV 头，
+// 再一段段发 PCM；头里的长度是占位值，读到哪算哪。第一段声音比整句合成完早两三秒。
+func gptSoVITSSpec(client *mediaHTTP, req SpeechRequest, stream bool) (mediaRequestSpec, error) {
 	speed := req.Speed
 	if speed <= 0 {
 		speed = 1
@@ -347,28 +368,17 @@ func synthesizeGPTSoVITS(ctx context.Context, client *mediaHTTP, req SpeechReque
 		"speed_factor":       speed,
 		"fragment_interval":  0.3,
 		"media_type":         "wav",
-		"streaming_mode":     false,
+		"streaming_mode":     stream,
 		"parallel_infer":     true,
 		"repetition_penalty": 1.35,
 		"seed":               -1,
 	}
 	spec, err := marshalJSONSpec("speech", http.MethodPost, endpointUnlessPresent(client.baseURL, "tts"), payload)
 	if err != nil {
-		return nil, "", err
+		return mediaRequestSpec{}, err
 	}
 	spec.accept = "audio/*, application/octet-stream"
-	result, err := client.do(ctx, spec, maxSpeechAudioBytes)
-	if err != nil {
-		return nil, "", err
-	}
-	audio, err := audioBody(result)
-	if err != nil {
-		return nil, "", err
-	}
-	if !isWAV(audio) {
-		return nil, "", badSpeechResponse(result.status, "GPT-SoVITS 未返回有效 WAV 音频")
-	}
-	return audio, "wav", nil
+	return spec, nil
 }
 
 // synthesizeGSVI 调 GPT-SoVITS-Inference 整合包的 /infer_single：先合成，再按回包里的

@@ -397,3 +397,27 @@ func TestVendorSpeechRequiresKeyOnlyForCloudServices(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestGPTSoVITSStreamsWAVChunks(t *testing.T) {
+	server := vendorServer(t, func(t *testing.T, w http.ResponseWriter, r *http.Request, body []byte) {
+		payload := decodeJSONBody(t, body)
+		if payload["streaming_mode"] != true || payload["media_type"] != "wav" {
+			t.Errorf("payload = %#v", payload)
+		}
+		w.Header().Set("Content-Type", "audio/wav")
+		_, _ = w.Write([]byte("RIFF\xff\xff\xff\xffWAVE"))
+		w.(http.Flusher).Flush()
+		_, _ = w.Write([]byte("pcm"))
+	})
+	stream, err := StreamSpeech(context.Background(), ProviderConfig{Provider: ProviderOpenAICompatible, BaseURL: server.URL}, SpeechRequest{
+		API: SpeechAPIGPTSoVITS, Model: "gpt-sovits", Input: "你好",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	audio, _ := io.ReadAll(stream)
+	if stream.MediaType != "audio/wav" || !strings.HasSuffix(string(audio), "WAVEpcm") {
+		t.Fatalf("mime=%s audio=%q", stream.MediaType, audio)
+	}
+}

@@ -119,7 +119,7 @@ func TestVoiceCallBreezeStreamsBeforeCompletion(t *testing.T) {
 		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, BaseURL: server.URL, APIKey: "test"},
 		Model:  "breeze-tts-2",
 		Params: map[string]string{"api": "breeze", "voice": "voc_test", "format": "pcm"},
-	}, "你好", func(mime string, data []byte) error {
+	}, "你好", false, func(mime string, data []byte) error {
 		if mime != "audio/mpeg" || len(data) == 0 {
 			t.Errorf("mime=%s data=%q", mime, data)
 		}
