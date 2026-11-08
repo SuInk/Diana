@@ -691,6 +691,7 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 	if answerGroup {
 		listGroups = runtime.qqCallGroupLister(ready.profileID)
 	}
+	judged := time.Now()
 	invite := runtime.classifyQQCallInvite(ctx, ready.profileID, msg, listGroups)
 	log.Printf("diana: qq voice call: 来电判断（%s）：来电=%v 群通话=%v 来电人=%q 群=%s", invite.how, invite.incoming, invite.group, invite.caller, invite.groupID)
 	target := qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID, caller: firstNonEmpty(invite.caller, msg.Name)}
@@ -710,7 +711,8 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 		s.plugin.noteCall("「%s」私聊来电，没接：插件设置里关了「接主人的私聊电话」", target.caller)
 		return
 	}
-	delay := qqVoiceCallSeconds(change.Settings, qqVoiceCallSettingAnswerDelay, 2*time.Second)
+	// 判断来电已经响了一会儿，从「响铃多久后接听」里扣掉。
+	delay := max(0, qqVoiceCallSeconds(change.Settings, qqVoiceCallSettingAnswerDelay, 2*time.Second)-time.Since(judged))
 	select {
 	case <-ctx.Done():
 		return

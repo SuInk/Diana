@@ -45,6 +45,9 @@ type qqCallGroup struct {
 
 const (
 	qqCallInviteTimeout = 8 * time.Second
+	// qqCallInviteVisionTimeout 给识图多留些：识图那档模型看一张图常要六七秒。
+	// 文字模型同时在跑，识图超时就用它的结果，不再从头等。
+	qqCallInviteVisionTimeout = 12 * time.Second
 	// qqCallInviteMaxGroups 是交给模型的群列表上限，机器人在几千个群里时只给前这么多。
 	qqCallInviteMaxGroups = 500
 )
@@ -63,6 +66,16 @@ func (r *Runtime) classifyQQCallInvite(ctx context.Context, profileID string, ms
 			groups = listed
 		}
 	}
+	type verdict struct {
+		invite qqCallInvite
+		err    error
+	}
+	textDone := make(chan verdict, 1)
+	go func() {
+		defer recoverGoroutinePanic("qq_call_invite.text")
+		invite, err := r.qqCallInviteLLM(ctx, profileID, text, "", groups)
+		textDone <- verdict{invite, err}
+	}()
 	if msg.Image != "" {
 		invite, err := r.qqCallInviteLLM(ctx, profileID, text, msg.Image, groups)
 		if err == nil {
@@ -70,8 +83,8 @@ func (r *Runtime) classifyQQCallInvite(ctx context.Context, profileID string, ms
 		}
 		log.Printf("diana: qq voice call: 识图判断来电失败，改用文字模型: %v", err)
 	}
-	if invite, err := r.qqCallInviteLLM(ctx, profileID, text, "", groups); err == nil {
-		return invite
+	if result := <-textDone; result.err == nil {
+		return result.invite
 	}
 	invite := parseQQCallInviteRules(text)
 	invite.how = "rules"
@@ -83,7 +96,11 @@ func (r *Runtime) classifyQQCallInvite(ctx context.Context, profileID string, ms
 
 // qqCallInviteLLM 让模型判断来电。image 非空时走识图模型看截图，否则文字模型只读 OCR。
 func (r *Runtime) qqCallInviteLLM(ctx context.Context, profileID, text, image string, groups []qqCallGroup) (qqCallInvite, error) {
-	ctx, cancel := context.WithTimeout(ctx, qqCallInviteTimeout)
+	timeout := qqCallInviteTimeout
+	if image != "" {
+		timeout = qqCallInviteVisionTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	event := MessageEvent{ProfileID: profileID, Platform: PlatformOneBotV11}
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeQQCallInvite)

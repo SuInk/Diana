@@ -119,6 +119,13 @@ func TestQQGroupVoiceCallRepliesAsThatGroup(t *testing.T) {
 	if !strings.Contains(system.String(), "QQ 群语音通话") || strings.Contains(system.String(), "实时语音通话") {
 		t.Fatal("群通话应注入群通话提示，不是私聊通话提示")
 	}
+	var sawHangup bool
+	for _, tool := range provider.requestSnapshot().Tools {
+		sawHangup = sawHangup || tool.Name == voiceCallHangupToolName
+	}
+	if !sawHangup {
+		t.Fatal("群通话里说话的不是主人，也要能直接调 hang_up")
+	}
 	call.Finish()
 	for _, event := range runtime.history[sessionKey(runtime.bindInboundEventIdentity(MessageEvent{ProfileID: "bot", Kind: EventKindPrivate, UserID: "10001"}))] {
 		if isCallHistoryEvent(event) {

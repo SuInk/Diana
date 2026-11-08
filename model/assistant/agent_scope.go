@@ -421,6 +421,11 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	if allowed != nil && r.memberCommandExposed(event) {
 		allowed["run_command"] = true
 	}
+	// 群通话里说话的是群成员（混音里分不出是谁），挂断要照样能用，否则机器人说了
+	// 再见电话还通着。挂断只结束这通电话，不碰别的东西。
+	if allowed != nil && event.voiceCall {
+		allowed[voiceCallHangupToolName] = true
+	}
 	if allowed == nil || r == nil || r.plugins == nil {
 		return allowed
 	}
