@@ -51,7 +51,7 @@ SnowLuma 容器里要额外装上 PulseAudio、QQ 语音插件缺的 `libpulse-m
 | 设置 | 说明 |
 | --- | --- |
 | qqcall-agent 地址 | `ws://127.0.0.1:6190/ws`；同一个 compose 里写 `ws://snowluma:6190/ws` |
-| qqcall-agent 令牌 | 和 `QQCALL_TOKEN` 一致 |
+| qqcall-agent 令牌 | 和 `QQCALL_TOKEN` 一致。留空时自动读 Diana 这边的环境变量 `QQCALL_TOKEN`，或数据目录（数据库所在目录）里的 `qqcall-token` 文件：同一个 compose 里给两边配同一个 `QQCALL_TOKEN` 就不用填；原生安装把令牌写进 `data/qqcall-token`，下次重连就生效 |
 | 接电话的机器人 | 下拉框选容器里登录的那个 QQ 对应的机器人，只列 OneBot 机器人；选「自动」用启用了插件的第一台 |
 | 响铃多久后接听 | 默认 2 秒 |
 | 单次通话最长 | 默认 30 分钟 |

@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -111,7 +113,7 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 			{
 				Key:         qqVoiceCallSettingAgentToken,
 				Label:       "qqcall-agent 令牌",
-				Description: "和容器里的 QQCALL_TOKEN 环境变量一致。",
+				Description: "和容器里的 QQCALL_TOKEN 环境变量一致。留空时自动读 Diana 这边的 QQCALL_TOKEN 环境变量，或数据目录（数据库所在目录）里的 qqcall-token 文件。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -358,6 +360,10 @@ func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string, calls *
 func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string, calls *qqCallSet) error {
 	dialer := websocket.Dialer{HandshakeTimeout: qqVoiceCallDialTimeout}
 	header := http.Header{}
+	if token == "" {
+		// 每次连之前现读：部署时后写进去的令牌文件，下一次重连就能用上，不用重启。
+		token = qqCallTokenFallback()
+	}
 	if token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
@@ -405,6 +411,23 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string, calls *q
 		}
 	}
 }
+
+// qqCallTokenFallback 是插件设置里没填令牌时的来源：先看环境变量 QQCALL_TOKEN（同一个
+// compose 里给 Diana 和 SnowLuma 配同一个值就行），再看数据目录里的 qqcall-token 文件
+// （原生安装时部署脚本或运维写进去）。令牌是部署时生成的一串随机数，不该要人进 WebUI 抄一遍。
+func qqCallTokenFallback() string {
+	if token := strings.TrimSpace(os.Getenv("QQCALL_TOKEN")); token != "" {
+		return token
+	}
+	if dbPath := strings.TrimSpace(os.Getenv("APP_DB_PATH")); dbPath != "" {
+		if data, err := os.ReadFile(filepath.Join(filepath.Dir(dbPath), qqCallTokenFileName)); err == nil {
+			return strings.TrimSpace(string(data))
+		}
+	}
+	return ""
+}
+
+const qqCallTokenFileName = "qqcall-token"
 
 var errQQCallAgentAuth = errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
 
