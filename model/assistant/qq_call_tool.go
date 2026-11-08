@@ -71,7 +71,7 @@ func (t *qqCallTool) Run(_ context.Context, input map[string]any) (string, error
 	}
 	calls := qq.currentCalls()
 	if calls == nil || calls.currentLink() == nil {
-		return "", errors.New("没连上容器里的 qqcall-agent，打不了 QQ 电话")
+		return "", errors.New("没连上容器里的通话插件，打不了 QQ 电话")
 	}
 	runtime, change := qq.settings()
 	ready := qqVoiceCallReadiness(context.Background(), runtime, change)

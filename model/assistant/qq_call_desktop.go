@@ -91,7 +91,7 @@ func (b *qqDesktopBridge) attach(ctx context.Context, runtime *Runtime) {
 		HelperID:   qqDesktopHelperID,
 		HelperName: "QQ 容器",
 		Platform:   "linux",
-		Label:      "SnowLuma 容器里的 Linux QQ（qqcall-agent）",
+		Label:      "SnowLuma 容器里的 Linux QQ（通话插件）",
 	}, desktopctl.TokenInfo{Name: "QQ 语音通话插件"})
 	if err != nil {
 		log.Printf("diana: qq voice call: 接进桌面控制失败: %v", err)
@@ -112,7 +112,7 @@ func (b *qqDesktopBridge) detach() {
 	b.mu.Unlock()
 	for _, ch := range pending {
 		select {
-		case ch <- qqcall.Message{Type: qqcall.TypeDesktopResult, Error: "和 qqcall-agent 断线了"}:
+		case ch <- qqcall.Message{Type: qqcall.TypeDesktopResult, Error: "和通话插件断线了"}:
 		default:
 		}
 	}

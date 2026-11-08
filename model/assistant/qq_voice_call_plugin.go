@@ -96,27 +96,27 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 		ID:              qqVoiceCallPluginID,
 		Name:            "QQ 语音通话",
 		Version:         "0.1.3",
-		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份；也可以打开「接群语音通话」，群里有人邀请机器人加入群通话时它就加入，按那个群的身份聊。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。私聊来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
+		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份；也可以打开「接群语音通话」，群里有人邀请机器人加入群通话时它就加入，按那个群的身份聊。需要在 SnowLuma 容器里运行通话插件，并在模型分配里配好语音识别和语音合成。私聊来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
 		Official:        true,
 		BuiltIn:         true,
 		DefaultDisabled: true,
 		Platforms:       []string{PlatformOneBotV11},
 		PlatformNotes: map[string]string{
-			PlatformOneBotV11: "只支持 SnowLuma 容器里的 Linux QQ，需要部署 qqcall-agent。",
+			PlatformOneBotV11: "只支持 SnowLuma 容器里的 Linux QQ，需要在容器里部署通话插件（qqcall-agent）。",
 		},
 		Permissions: []string{"network:websocket", "qq:voice_call"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         qqVoiceCallSettingAgentURL,
-				Label:       "qqcall-agent 地址",
-				Description: "SnowLuma 容器里 qqcall-agent 的 WebSocket 地址，例如 ws://127.0.0.1:6190/ws；同一个 compose 里写 ws://snowluma:6190/ws。留空不连接。",
+				Label:       "通话插件地址",
+				Description: "SnowLuma 容器里通话插件的 WebSocket 地址，例如 ws://127.0.0.1:6190/ws；同一个 compose 里写 ws://snowluma:6190/ws。留空不连接。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				GlobalOnly:  true,
 			},
 			{
 				Key:         qqVoiceCallSettingAgentToken,
-				Label:       "qqcall-agent 令牌",
+				Label:       "通话插件令牌",
 				Description: "和容器里的 QQCALL_TOKEN 一致。留空时依次用 Diana 这边的 QQCALL_TOKEN 环境变量、数据目录（数据库所在目录）里的 qqcall-token 文件、接电话那台机器人的 OneBot access token；容器里没设 QQCALL_TOKEN 时 agent 也默认用 OneBot token，一般不用填。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
@@ -255,9 +255,9 @@ func (p *QQVoiceCallPlugin) RuntimeStatus(ctx context.Context) (PluginRuntimeSta
 	url := strings.TrimSpace(change.Settings.String(qqVoiceCallSettingAgentURL, ""))
 	switch {
 	case url == "":
-		problems = append(problems, "还没填 qqcall-agent 地址：同一个 compose 里写 ws://snowluma:6190/ws，分开部署写 ws://<SnowLuma 所在机器>:6190/ws")
+		problems = append(problems, "还没填通话插件地址：同一个 compose 里写 ws://snowluma:6190/ws，分开部署写 ws://<SnowLuma 所在机器>:6190/ws")
 	case !status.Connected:
-		reason := "连不上 qqcall-agent（" + url + "）"
+		reason := "连不上通话插件（" + url + "）"
 		if status.LastError != "" {
 			reason += "：" + status.LastError
 		}
@@ -271,7 +271,7 @@ func (p *QQVoiceCallPlugin) RuntimeStatus(ctx context.Context) (PluginRuntimeSta
 		out.RecentAt = status.LastCallAt.Unix()
 	}
 	if len(problems) == 0 {
-		out.Summary = "已连上 qqcall-agent，主人打来会自动接"
+		out.Summary = "已连上通话插件，主人打来会自动接"
 	} else {
 		out.Summary = fmt.Sprintf("有 %d 个问题，电话接不起来", len(problems))
 	}
@@ -362,7 +362,7 @@ func (p *QQVoiceCallPlugin) loop(ctx context.Context, url, token string, calls *
 			if errors.Is(err, errQQCallAgentAuth) {
 				if runtime, change := p.settings(); runtime != nil {
 					if profileID, problem := qqVoiceCallProfile(runtime, change); problem == "" {
-						p.tellOwner(runtime, profileID, "auth", "连不上容器里的 qqcall-agent："+err.Error()+"。改好之前你打来的电话都接不起来。令牌在插件页「QQ 语音通话」的设置里。")
+						p.tellOwner(runtime, profileID, "auth", "连不上容器里的通话插件："+err.Error()+"。改好之前你打来的电话都接不起来。令牌在插件页「QQ 语音通话」的设置里。")
 					}
 				}
 			}
@@ -476,7 +476,7 @@ func (p *QQVoiceCallPlugin) oneBotTokenFallback() string {
 
 var errQQCallAgentAuth = errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
 
-var errQQCallAgentGone = errors.New("和 qqcall-agent 的连接断了")
+var errQQCallAgentGone = errors.New("和通话插件的连接断了")
 
 // qqCallLink 串行写到 agent 的连接。
 type qqCallLink struct {
@@ -614,14 +614,14 @@ func (s *qqCallSet) linkLost(link *qqCallLink) {
 	if !active {
 		return
 	}
-	s.plugin.noteCall("和 qqcall-agent 断线，通话先留着等重连")
+	s.plugin.noteCall("和通话插件断线，通话先留着等重连")
 	time.AfterFunc(grace, func() {
 		defer recoverGoroutinePanic("qq_voice_call.resume_grace")
 		s.mu.Lock()
 		expired := s.linkGen == gen
 		s.mu.Unlock()
 		if expired {
-			s.plugin.noteCall("和 qqcall-agent 断线超过 %s 没连回来，通话结束", grace)
+			s.plugin.noteCall("和通话插件断线超过 %s 没连回来，通话结束", grace)
 			s.closeAll()
 		}
 	})
@@ -634,7 +634,7 @@ func (s *qqCallSet) resume(ctx context.Context, msg qqcall.Message) {
 	active := s.active
 	s.mu.Unlock()
 	if active != nil && active.id == msg.Call {
-		s.plugin.noteCall("qqcall-agent 连回来了，通话继续")
+		s.plugin.noteCall("通话插件连回来了，通话继续")
 		return
 	}
 	if active != nil {
@@ -689,7 +689,7 @@ func (s *qqCallSet) handle(ctx context.Context, msg qqcall.Message) {
 		s.plugin.noteCall("agent 报错: %s", msg.Error)
 		if runtime, change := s.plugin.settings(); runtime != nil {
 			if profileID, problem := qqVoiceCallProfile(runtime, change); problem == "" {
-				s.plugin.tellOwner(runtime, profileID, "agent:"+msg.Error, "容器里的 qqcall-agent 报错："+msg.Error+"。")
+				s.plugin.tellOwner(runtime, profileID, "agent:"+msg.Error, "容器里的通话插件报错："+msg.Error+"。")
 			}
 		}
 	}
@@ -795,7 +795,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		}
 		s.plugin.noteCall("来电「%s」接通后读不到对方 QQ 号，已挂断", msg.Name)
 		if runtime, _ := s.plugin.settings(); runtime != nil {
-			s.plugin.tellOwner(runtime, target.profileID, "no-peer", "刚才接起来一通 QQ 语音，但读不到对方的 QQ 号，认不出是不是你，只好挂了。多半是 qqcall-agent 读不到 SnowLuma 的日志（容器里的 QQCALL_LOG_DIR），或者 SnowLuma 升级后日志格式变了。")
+			s.plugin.tellOwner(runtime, target.profileID, "no-peer", "刚才接起来一通 QQ 语音，但读不到对方的 QQ 号，认不出是不是你，只好挂了。多半是通话插件读不到 SnowLuma 的日志（容器里的 QQCALL_LOG_DIR），或者 SnowLuma 升级后日志格式变了。")
 		}
 		return
 	}
@@ -977,7 +977,7 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 			}
 			link := t.currentLink()
 			if link == nil {
-				log.Printf("diana: qq voice call: 挂断时和 qqcall-agent 断着线")
+				log.Printf("diana: qq voice call: 挂断时和通话插件断着线")
 				return
 			}
 			if err := link.send(qqcall.Message{Type: qqcall.TypeHangup, Call: call}); err != nil {
