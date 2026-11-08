@@ -144,7 +144,8 @@ type Config struct {
 	// 回复（11-07 swe-2 回放约三成闲聊这样发），调用方要让它和最终回复一样先过审核再发。
 	InterimReply func(ctx context.Context, text string) (string, error) `json:"-"`
 	// PlainTextNotSent 让带工具定义的规划步里写出来的纯文本不当回复发出：先退回一次，
-	// 告诉模型这段没发出去、只有 send 会发；再写纯文本就按静默结束。只给主回复开：
+	// 告诉模型这段没发出去、只有 send 会发；再写纯文本就单独复核一次「说了的事做没做」，
+	// 说了没做才静默，否则照常发出（见 plain_text_review.go）。只给主回复开：
 	// 子任务和别的调用方要的正是 Runner 交回的那段文本。见 plainTextNotSentPrompt。
 	PlainTextNotSent bool `json:"-"`
 	// FinalizeFields 给 send 追加可选的字符串字段，模型在收尾时顺手填写，
