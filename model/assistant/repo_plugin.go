@@ -353,7 +353,7 @@ func (m repoPluginManifestFile) pluginManifest() PluginManifest {
 		BuiltIn:       false,
 		Platforms:     m.Platforms,
 		PlatformNotes: notes,
-		Permissions:   append([]string(nil), m.Permissions...),
+		Permissions:   canonicalRepoPluginPermissions(m.Permissions),
 		Settings:      m.Settings,
 		ReportsErrors: m.ReportsErrors,
 	}
@@ -432,7 +432,6 @@ var repoPluginPermissionCatalog = []RepoPluginPermission{
 	{ID: "process:execute", Label: "执行外部命令", Sensitive: true},
 	{ID: "process:media", Label: "调用媒体处理工具"},
 	{ID: "browser:render", Label: "使用浏览器渲染页面"},
-	{ID: "browser:headless", Label: "使用渲染浏览器"},
 	{ID: "sandbox:ephemeral", Label: "使用一次性沙箱"},
 	{ID: "task:persistent", Label: "创建持久后台任务"},
 	{ID: "task:notify", Label: "发送任务通知"},
@@ -449,7 +448,34 @@ var repoPluginPermissionCatalog = []RepoPluginPermission{
 	{ID: "audit:write", Label: "写审计日志"},
 }
 
+// repoPluginPermissionAliases 是改过名的权限：旧名照样能声明，读进来就换成新名，
+// 已经发布的第三方插件不用改清单。browser:headless 是一次性浏览器还叫「无头」
+// 时的名字，它早就只用有头了。
+var repoPluginPermissionAliases = map[string]string{
+	"browser:headless": "browser:render",
+}
+
+// canonicalRepoPluginPermissions 把旧权限名换成新名并去重，顺序不变。
+func canonicalRepoPluginPermissions(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if canonical, ok := repoPluginPermissionAliases[id]; ok {
+			id = canonical
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 func repoPluginPermissionByID(id string) (RepoPluginPermission, bool) {
+	if canonical, ok := repoPluginPermissionAliases[id]; ok {
+		id = canonical
+	}
 	for _, permission := range repoPluginPermissionCatalog {
 		if permission.ID == id {
 			return permission, true
@@ -462,7 +488,7 @@ func repoPluginPermissionByID(id string) (RepoPluginPermission, bool) {
 // 排在前面，未在词表中的值跳过（安装前的格式校验已经挡掉）。
 func DescribeRepoPluginPermissions(ids []string) []RepoPluginPermission {
 	out := make([]RepoPluginPermission, 0, len(ids))
-	for _, id := range ids {
+	for _, id := range canonicalRepoPluginPermissions(ids) {
 		if permission, ok := repoPluginPermissionByID(id); ok {
 			out = append(out, permission)
 		}

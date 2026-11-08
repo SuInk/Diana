@@ -192,7 +192,7 @@ tag。不带 ref 的链接安装的是默认分支最新提交，内容与权限
 | `filesystem:write` | 写入工作目录 | 高 |
 | `process:execute` | 执行外部命令 | 高 |
 | `process:media` | 调用媒体处理工具 | 中 |
-| `browser:render` / `browser:headless` | 使用浏览器渲染 | 中 |
+| `browser:render` | 使用浏览器渲染（旧名 `browser:headless` 仍可声明，安装后按 `browser:render` 显示） | 中 |
 | `sandbox:ephemeral` | 使用一次性沙箱 | 低 |
 | `task:persistent` / `task:notify` | 创建持久任务 / 任务通知 | 中 |
 | `agent:tool` | 作为 Agent 工具被调用 | 中 |

@@ -14,6 +14,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -215,6 +216,27 @@ func TestDescribeRepoPluginPermissionsSensitiveFirst(t *testing.T) {
 		if permission.Label == "" {
 			t.Fatalf("权限缺少翻译文案: %+v", permission)
 		}
+	}
+}
+
+// 旧权限名 browser:headless 已经发布的第三方插件还在用：照样能装，装进来按新名
+// browser:render 记，同时声明两个的只留一条。
+func TestRepoPluginOldBrowserPermissionStillInstalls(t *testing.T) {
+	manifest, err := decodeRepoPluginManifest(validManifestJSON(t, func(raw map[string]any) {
+		raw["permissions"] = []any{"message:read", "browser:headless", "browser:render"}
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manifest.validate(); err != nil {
+		t.Fatalf("旧权限名被拒装：%v", err)
+	}
+	if got := manifest.pluginManifest().Permissions; !slices.Equal(got, []string{"message:read", "browser:render"}) {
+		t.Fatalf("Permissions = %v，想要 [message:read browser:render]", got)
+	}
+	described := DescribeRepoPluginPermissions([]string{"browser:headless", "browser:render"})
+	if len(described) != 1 || described[0].ID != "browser:render" {
+		t.Fatalf("确认框应只显示一条 browser:render：%+v", described)
 	}
 }
 
