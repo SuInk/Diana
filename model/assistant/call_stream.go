@@ -7,12 +7,12 @@ import (
 	"encoding/binary"
 	"strings"
 
-	"github.com/SuInk/diana/model/qqcall"
+	"github.com/SuInk/diana/model/callbridge"
 )
 
-// QQ 通话边合成边播。GPT-SoVITS 流式合成先吐一个 WAV 头，再一段段吐 PCM；整句合成完
+// 通话插件的电话边合成边播。GPT-SoVITS 流式合成先吐一个 WAV 头，再一段段吐 PCM；整句合成完
 // 要三四秒，第一段只要一秒左右。agent 只收 16kHz 单声道 PCM，以前每句收齐后交给
-// ffmpeg 转一次，所以 QQ 那头总要等整句合成完才出声。
+// ffmpeg 转一次，所以电话那头总要等整句合成完才出声。
 //
 // callWAVStream 在 Go 里直接解 WAV 头、降采样，每收到一段就交出一段，不起 ffmpeg。
 // 只处理 16 位整数 PCM（GPT-SoVITS、绝大多数 WAV 都是）；别的格式交回 ffmpeg 整句转。
@@ -103,7 +103,7 @@ func (w *callWAVStream) parseHead() (body []byte, done, ok bool) {
 				return nil, false, false
 			}
 			w.channels, w.inRate = channels, rate
-			w.avg = max(1, (rate+qqcall.SampleRate/2)/qqcall.SampleRate)
+			w.avg = max(1, (rate+callbridge.SampleRate/2)/callbridge.SampleRate)
 		}
 		off += size + size%2
 	}
@@ -138,12 +138,12 @@ func (w *callWAVStream) convert(data []byte) []byte {
 		}
 		w.pending = append(w.pending, sample)
 	}
-	if w.inRate == qqcall.SampleRate {
+	if w.inRate == callbridge.SampleRate {
 		out := encodePCM16(w.pending)
 		w.pending = w.pending[:0]
 		return out
 	}
-	step := float64(w.inRate) / float64(qqcall.SampleRate)
+	step := float64(w.inRate) / float64(callbridge.SampleRate)
 	var out []float64
 	for w.pos+1 < float64(len(w.pending)) {
 		i := int(w.pos)

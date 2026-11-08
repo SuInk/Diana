@@ -1213,7 +1213,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if event.roomCall {
 		appendPromptSection(&tail, cfg.prompt(promptLocalRoomCallSpec))
 	} else if event.voiceCall && event.Kind == EventKindGroup {
-		appendPromptSection(&tail, cfg.prompt(promptQQGroupCallSpec))
+		appendPromptSection(&tail, cfg.prompt(promptBridgeGroupCallSpec))
 	} else if event.voiceCall {
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}

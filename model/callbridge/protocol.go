@@ -1,13 +1,13 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
-// Package qqcall 是 QQ 语音通话桥的线上协议：Diana 的插件和 SnowLuma 容器里的
-// qqcall-agent（另一个仓库里有一份相同的 qqcall 包）之间
-// 的约定，改动要两边一起改。设计见 docs/qq-voice-call.md。
+// Package callbridge 是通话插件的线上协议：Diana 的插件和 SnowLuma 容器里的
+// call-agent（另一个仓库里有一份相同的 callbridge 包）之间
+// 的约定，改动要两边一起改。设计见 docs/call-plugin.md。
 //
 // 一条 WebSocket：文本帧是 JSON 控制消息，二进制帧是 16kHz 单声道 s16le 裸 PCM。
 // 上行（agent → Diana）是对方的声音，下行是机器人的声音；只在接通期间有音频。
-package qqcall
+package callbridge
 
 import "encoding/json"
 
@@ -26,7 +26,7 @@ const (
 	// （私聊是「XX 邀请你语音通话」，群通话是「XX 邀请您加入"群名"的语音通话」）。
 	// 是不是来电、私聊还是群通话由 Diana 按 Text 判断；旧版 agent 没有 Text，只报私聊来电。
 	TypeRinging = "ringing"
-	// Connected 已接通，PeerUIN 是 SnowLuma 日志里读到的对方 QQ 号，读不到时为空。
+	// Connected 已接通，PeerUIN 是 SnowLuma 日志里读到的对方账号，读不到时为空。
 	TypeConnected = "connected"
 	// Outgoing 是自己拨出去的电话（窗口上没有「邀请你/您」）：多半是模型用桌面控制拨的。
 	// agent 照样跟踪它，接通后报 connected 并收发声音，接不接管由 Diana 决定。
@@ -37,7 +37,7 @@ const (
 )
 
 // 桌面控制：Diana 把 SnowLuma 容器的屏幕接进「桌面控制」，让模型像操作电脑一样操作
-// 容器里的 QQ（主动拨号等）。Diana 发 desktop（ID、Op、Params），agent 回
+// 容器里的客户端（主动拨号等）。Diana 发 desktop（ID、Op、Params），agent 回
 // desktop_result（同一个 ID，Data 或 Error）。Op 和 Params、Data 的格式就是 desktopctl
 // 的 window.* 指令，agent 只管执行，授权和限流都在 Diana 这边。
 const (

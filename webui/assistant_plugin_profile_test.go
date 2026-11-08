@@ -170,8 +170,8 @@ func TestBotHandlerPluginToggleResponseFillsBotProfileOptions(t *testing.T) {
 	h.SetSQLiteStore(store)
 	router := botTestRouter(h)
 	for _, req := range []*http.Request{
-		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.QQVoiceCallPluginID+"/enabled?profile=qq-a", strings.NewReader(`{"enabled":true}`)),
-		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.QQVoiceCallPluginID+"/settings", strings.NewReader(`{"settings":{"profile":"qq-a"}}`)),
+		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.CallPluginID+"/enabled?profile=qq-a", strings.NewReader(`{"enabled":true}`)),
+		httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+assistant.CallPluginID+"/settings", strings.NewReader(`{"settings":{"profile":"qq-a"}}`)),
 	} {
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)

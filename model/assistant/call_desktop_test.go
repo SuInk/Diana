@@ -14,12 +14,12 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/SuInk/diana/model/callbridge"
 	"github.com/SuInk/diana/model/desktopctl"
-	"github.com/SuInk/diana/model/qqcall"
 )
 
-// fakeDesktopAgent 是只会回桌面指令的 agent：一个 QQ 窗口，截图回固定内容，点击记下来。
-func fakeDesktopAgent(t *testing.T) (*qqCallLink, <-chan desktopctl.Command) {
+// fakeDesktopAgent 是只会回桌面指令的 agent：一个 客户端窗口，截图回固定内容，点击记下来。
+func fakeDesktopAgent(t *testing.T) (*bridgeCallLink, <-chan desktopctl.Command) {
 	t.Helper()
 	clicks := make(chan desktopctl.Command, 4)
 	upgrader := websocket.Upgrader{}
@@ -34,8 +34,8 @@ func fakeDesktopAgent(t *testing.T) (*qqCallLink, <-chan desktopctl.Command) {
 			if err != nil {
 				return
 			}
-			var msg qqcall.Message
-			if json.Unmarshal(data, &msg) != nil || msg.Type != qqcall.TypeDesktop {
+			var msg callbridge.Message
+			if json.Unmarshal(data, &msg) != nil || msg.Type != callbridge.TypeDesktop {
 				continue
 			}
 			var cmd desktopctl.Command
@@ -43,7 +43,7 @@ func fakeDesktopAgent(t *testing.T) (*qqCallLink, <-chan desktopctl.Command) {
 			var payload any
 			switch msg.Op {
 			case desktopctl.OpWindowsList:
-				payload = desktopctl.WindowsPayload{Windows: []desktopctl.WindowInfo{{ID: "100", AppName: "QQ", BundleID: "x11.qq", Title: "QQ", Active: true}}}
+				payload = desktopctl.WindowsPayload{Windows: []desktopctl.WindowInfo{{ID: "100", AppName: "Chat", BundleID: "x11.chat", Title: "Chat", Active: true}}}
 			case desktopctl.OpWindowScreenshot:
 				payload = desktopctl.ScreenshotPayload{WindowID: cmd.WindowID, Mime: "image/png", Data: "iVBORw0KGgo=", Observation: 3}
 			case desktopctl.OpWindowClick:
@@ -51,7 +51,7 @@ func fakeDesktopAgent(t *testing.T) (*qqCallLink, <-chan desktopctl.Command) {
 				payload = desktopctl.ActionResult{WindowID: cmd.WindowID, Op: msg.Op, OK: true}
 			}
 			body, _ := json.Marshal(payload)
-			reply, _ := json.Marshal(qqcall.Message{Type: qqcall.TypeDesktopResult, ID: msg.ID, Data: body})
+			reply, _ := json.Marshal(callbridge.Message{Type: callbridge.TypeDesktopResult, ID: msg.ID, Data: body})
 			_ = conn.WriteMessage(websocket.TextMessage, reply)
 		}
 	}))
@@ -61,15 +61,15 @@ func fakeDesktopAgent(t *testing.T) (*qqCallLink, <-chan desktopctl.Command) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { conn.Close() })
-	link := &qqCallLink{conn: conn}
+	link := &bridgeCallLink{conn: conn}
 	return link, clicks
 }
 
-func TestQQCallAgentScreenJoinsDesktopControl(t *testing.T) {
+func TestBridgeCallAgentScreenJoinsDesktopControl(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	registry := desktopctl.NewRegistry(ctx, nil)
-	if _, err := registry.SetPolicy(ctx, desktopctl.Policy{Enabled: true, WriteEnabled: true, AllowedApps: []string{"x11.qq"}}); err != nil {
+	if _, err := registry.SetPolicy(ctx, desktopctl.Policy{Enabled: true, WriteEnabled: true, AllowedApps: []string{"x11.chat"}}); err != nil {
 		t.Fatal(err)
 	}
 	hub := desktopctl.NewHub(registry)
@@ -77,7 +77,7 @@ func TestQQCallAgentScreenJoinsDesktopControl(t *testing.T) {
 	runtime.SetDesktopControl(hub)
 
 	link, clicks := fakeDesktopAgent(t)
-	calls := newQQCallSet(NewQQVoiceCallPlugin(), link)
+	calls := newBridgeCallSet(NewCallPlugin(), link)
 	// agent 的回执由读循环交给 handle；这里直接把连接上的帧转过去。
 	go func() {
 		for {
@@ -85,14 +85,14 @@ func TestQQCallAgentScreenJoinsDesktopControl(t *testing.T) {
 			if err != nil {
 				return
 			}
-			var msg qqcall.Message
+			var msg callbridge.Message
 			if json.Unmarshal(data, &msg) == nil {
 				calls.handle(ctx, msg)
 			}
 		}
 	}()
 	calls.desktop.attach(ctx, runtime)
-	if conns := hub.Connections(); len(conns) != 1 || conns[0].HelperName != "QQ 容器" {
+	if conns := hub.Connections(); len(conns) != 1 || conns[0].HelperName != "通话容器" {
 		t.Fatalf("connections = %+v", conns)
 	}
 	result, err := hub.Dispatch(ctx, desktopctl.Command{Op: desktopctl.OpWindowScreenshot, WindowID: "100"})
@@ -118,40 +118,40 @@ func TestQQCallAgentScreenJoinsDesktopControl(t *testing.T) {
 	}
 }
 
-func TestQQCallOutgoingOnlyClaimsRegisteredDials(t *testing.T) {
-	link, _ := fakeQQCallAgent(t)
-	calls := newQQCallSet(NewQQVoiceCallPlugin(), link)
+func TestBridgeCallOutgoingOnlyClaimsRegisteredDials(t *testing.T) {
+	link, _ := fakeBridgeCallAgent(t)
+	calls := newBridgeCallSet(NewCallPlugin(), link)
 	// 没登记过：有人在 noVNC 里拨的，不归机器人管。
-	calls.outgoing(qqcall.Message{Type: qqcall.TypeOutgoing, Call: "o1"})
+	calls.outgoing(callbridge.Message{Type: callbridge.TypeOutgoing, Call: "o1"})
 	if _, ok := calls.answered["o1"]; ok {
 		t.Fatal("unregistered outgoing call was claimed")
 	}
-	calls.expectOutgoing(qqCallTarget{profileID: "bot", ownerID: "10001", groupID: "20002", dialed: true, reason: "提醒开会"})
-	calls.outgoing(qqcall.Message{Type: qqcall.TypeOutgoing, Call: "o2"})
+	calls.expectOutgoing(bridgeCallTarget{profileID: "bot", ownerID: "10001", groupID: "20002", dialed: true, reason: "提醒开会"})
+	calls.outgoing(callbridge.Message{Type: callbridge.TypeOutgoing, Call: "o2"})
 	target, ok := calls.answered["o2"]
 	if !ok || !target.dialed || target.groupID != "20002" {
 		t.Fatalf("registered dial not claimed: %+v", target)
 	}
 	// 登记只用一次。
-	calls.outgoing(qqcall.Message{Type: qqcall.TypeOutgoing, Call: "o3"})
+	calls.outgoing(callbridge.Message{Type: callbridge.TypeOutgoing, Call: "o3"})
 	if _, ok := calls.answered["o3"]; ok {
 		t.Fatal("one intent claimed two calls")
 	}
 	// 过期的登记不算。
-	calls.expectOutgoing(qqCallTarget{profileID: "bot", dialed: true, reason: "x"})
-	calls.intent.at = time.Now().Add(-qqCallIntentTTL - time.Second)
-	calls.outgoing(qqcall.Message{Type: qqcall.TypeOutgoing, Call: "o4"})
+	calls.expectOutgoing(bridgeCallTarget{profileID: "bot", dialed: true, reason: "x"})
+	calls.intent.at = time.Now().Add(-bridgeCallIntentTTL - time.Second)
+	calls.outgoing(callbridge.Message{Type: callbridge.TypeOutgoing, Call: "o4"})
 	if _, ok := calls.answered["o4"]; ok {
 		t.Fatal("stale intent claimed a call")
 	}
-	if opener := qqCallOpener(target); !strings.Contains(opener, "提醒开会") || !strings.Contains(opener, "先开口") {
+	if opener := bridgeCallOpener(target); !strings.Contains(opener, "提醒开会") || !strings.Contains(opener, "先开口") {
 		t.Fatalf("opener = %q", opener)
 	}
 }
 
-func TestQQCallToolNeedsPluginAndDesktop(t *testing.T) {
+func TestBridgeCallToolNeedsPluginAndDesktop(t *testing.T) {
 	runtime, _, _ := newVoiceCallTestRuntime(t, "")
-	tool := &qqCallTool{runtime: runtime, event: MessageEvent{ProfileID: "bot", Kind: EventKindPrivate}}
+	tool := &phoneCallTool{runtime: runtime, event: MessageEvent{ProfileID: "bot", Kind: EventKindPrivate}}
 	if _, err := tool.Run(context.Background(), map[string]any{"reason": "想你了"}); err == nil || !strings.Contains(err.Error(), "插件没开") {
 		t.Fatalf("err = %v", err)
 	}

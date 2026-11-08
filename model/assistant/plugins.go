@@ -476,7 +476,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewGroupRelationsPlugin(),
 		NewStickerPlugin(),
 		NewStockPlugin(),
-		NewQQVoiceCallPlugin(),
+		NewCallPlugin(),
 		NewQQJoinApprovalPlugin(),
 		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),

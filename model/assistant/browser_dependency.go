@@ -30,7 +30,7 @@ const relationFontDependencyName = "cjk-font"
 // 依赖分组 ID 对外导出，WebUI 用它在浏览器页展示内置网页渲染的依赖。
 const (
 	ResolverPluginID            = resolverPluginID
-	QQVoiceCallPluginID         = qqVoiceCallPluginID
+	CallPluginID                = callPluginID
 	RepositoryWatchPluginID     = repositoryWatchPluginID
 	BrowserRendererDependencyID = "core.browser-renderer"
 )
