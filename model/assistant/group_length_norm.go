@@ -48,6 +48,15 @@ var promptGroupNoNewlineSpec = tailSpec("group_length_norm.no_newline", "本群�
 	promptGroupNoNewline,
 	PromptVar{Name: "percent", Description: "最近群友消息里带换行的百分比"})
 
+// 换行会拆条时不能说「一条只写一行」：模型把它读成「不许换行」，又不愿多调一次
+// send，就拿空格把两句硬接成一行（11-09 Telegram「懂了，你问的是小雪（ 她那边是…」）。
+// 换行本来就会拆成两条，直说让它换行。
+const promptGroupNoNewlineSplit = "大家的消息几乎不换行（只有 {percent}% 带换行），你也别在一条消息里换行排版；想分开说的两句话直接换行，会拆成两条发出，别用空格把两句硬接成一行。"
+
+var promptGroupNoNewlineSplitSpec = tailSpec("group_length_norm.no_newline_split", "本群消息不换行（换行即分条）", "群友消息里带换行的不超过一成、且本轮换行会拆成两条发出时，代替「本群消息不换行」：要分开说就换行，别用空格硬接。",
+	promptGroupNoNewlineSplit,
+	PromptVar{Name: "percent", Description: "最近群友消息里带换行的百分比"})
+
 // groupLengthNormPrompt 按最近的群聊给出「学群友怎么说话」那一段，不够样本时返回空串。
 //
 // 以前这里还有一句「你每条也尽量不超过 {群友中位} 字」。长度确实压下来了，口吻却跟着
@@ -80,7 +89,11 @@ func (r *Runtime) groupLengthNormPrompt(event MessageEvent, cfg BotConfig) strin
 	}
 	text := cfg.prompt(promptGroupVoiceSpec)
 	if norm.newlinePercent <= groupNoNewlineMaxPercent {
-		text += cfg.promptf(promptGroupNoNewlineSpec, map[string]string{"percent": strconv.Itoa(norm.newlinePercent)})
+		spec := promptGroupNoNewlineSpec
+		if newlineSplitsProse(chatSplitLimitsForEvent(cfg, event)) {
+			spec = promptGroupNoNewlineSplitSpec
+		}
+		text += cfg.promptf(spec, map[string]string{"percent": strconv.Itoa(norm.newlinePercent)})
 	}
 	return text
 }

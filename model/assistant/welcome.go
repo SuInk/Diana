@@ -209,6 +209,18 @@ const welcomeGeneratorPrompt = `有新成员刚进群，按你平时在这个群
 - 不介绍自己的功能、触发方式或群规，不复述这条通知，不写 QQ 号或群号。
 - 直接给出要发的话。系统会自动 @ 对方，正文里不用再写 @。`
 
+// welcomeOwnerPrompt 在进群的是机器人主人时接在欢迎要求后面。入群通知只说「有新成员」，
+// 不点明的话模型会把主人当陌生新人招呼。
+const welcomeOwnerPrompt = `进群的是主人（按当前配置核验）。别把对方当陌生新人：按你平时跟主人说话的样子打个招呼，不用介绍这个群，也别在群里点破对方是主人。`
+
+var promptWelcomeOwnerSpec = registerPrompt(PromptSpec{
+	Key:     "social.welcome_owner",
+	Group:   PromptGroupSocial,
+	Title:   "入群欢迎：主人进群",
+	Usage:   "入群欢迎由模型生成、且进群的是机器人主人时，接在「入群欢迎语生成」后面，让模型别把主人当新人。",
+	Default: welcomeOwnerPrompt,
+})
+
 var promptWelcomeGeneratorSpec = registerPrompt(PromptSpec{
 	Key:     "social.welcome",
 	Group:   PromptGroupSocial,
@@ -276,6 +288,9 @@ func (r *Runtime) welcomeRequestText(cfg BotConfig, event MessageEvent) string {
 	var builder strings.Builder
 	builder.WriteString("【当前需要回复的消息】【入群通知】" + formatPromptIdentity(event.SenderName, event.UserID) + " 刚加入了" + where + "，还没说过话。\n\n")
 	builder.WriteString(strings.TrimSpace(cfg.prompt(promptWelcomeGeneratorSpec)))
+	if cfg.IsOwnerEvent(event) {
+		builder.WriteString("\n" + strings.TrimSpace(cfg.prompt(promptWelcomeOwnerSpec)))
+	}
 	if recent := r.recentWelcomeTexts(event.ProfileID); len(recent) > 0 {
 		builder.WriteString("\n\n你最近说过的欢迎（这次换个开头和句式）：")
 		for _, text := range recent {

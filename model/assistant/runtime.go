@@ -4385,7 +4385,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
 	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
 	// 图片任务通知和可提及成员名单都随这条消息变：并进尾部那条 system 消息。
-	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, r.replyMentionPrompt(cfg, event, replyHistory))
+	// 【主人】只在主人出现在这一轮的历史或当前消息里时才有，排在候选名单前面：
+	// 续接按「【」开头的行切段，后面紧跟新段，不会粘上随消息变的行。
+	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, ownerAccountPrompt(cfg, event, replyHistory), r.replyMentionPrompt(cfg, event, replyHistory))
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
 	if ruleMatched && strings.TrimSpace(ruleDecision.Rule.LLMProfileID) != "" {
 		ctx = context.WithValue(ctx, replyRuleContextKey{}, strings.TrimSpace(ruleDecision.Rule.LLMProfileID))
