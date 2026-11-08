@@ -20,7 +20,9 @@ const (
 const (
 	// Hello 是连上后的第一条，带 agent 版本和当前状态。
 	TypeHello = "hello"
-	// Ringing 有人打进来，Name 是来电窗口上识别出的昵称。
+	// Ringing 有人打进来，Name 是来电窗口上识别出的昵称，Text 是那块区域 OCR 的原文
+	// （私聊是「XX 邀请你语音通话」，群通话是「XX 邀请您加入"群名"的语音通话」）。
+	// 是不是来电、私聊还是群通话由 Diana 按 Text 判断；旧版 agent 没有 Text，只报私聊来电。
 	TypeRinging = "ringing"
 	// Connected 已接通，PeerUIN 是 SnowLuma 日志里读到的对方 QQ 号，读不到时为空。
 	TypeConnected = "connected"
@@ -43,6 +45,7 @@ type Message struct {
 	// Call 是 agent 给每通电话起的 ID，从响铃到挂断不变。
 	Call    string `json:"call,omitempty"`
 	Name    string `json:"name,omitempty"`
+	Text    string `json:"text,omitempty"`
 	PeerUIN string `json:"peer_uin,omitempty"`
 	// State 只在 hello 里：idle / ringing / connected。
 	State   string `json:"state,omitempty"`

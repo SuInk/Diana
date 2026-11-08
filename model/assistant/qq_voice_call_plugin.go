@@ -31,7 +31,7 @@ import (
 // 连着它：来电时核对身份、决定接不接，接通后把声音交给和 WebUI 电话同一套通话
 // 引擎（model/voicecall）。设计和部署见 docs/qq-voice-call.md。
 //
-// 第一版只接主人。响铃时只看得到窗口上的昵称，QQ 号要接通后才从 SnowLuma 日志里
+// 私聊来电只接主人，群通话可选（见 qq_call_invite.go）。私聊响铃时只看得到窗口上的昵称，QQ 号要接通后才从 SnowLuma 日志里
 // 读到。昵称靠 OCR，表情、特殊符号、被截断的长备注都认不准，拿它决定接不接会让主人
 // 的电话经常没人接，所以来电一律接起来，接通后按 QQ 号核对：不是主人、读不到都立刻
 // 挂断，机器人不开口。代价是别人打来会被接通几秒再挂掉。
@@ -48,6 +48,8 @@ const (
 	qqVoiceCallSettingAnswerDelay = "answer_delay"
 	qqVoiceCallSettingMaxMinutes  = "max_minutes"
 	qqVoiceCallSettingBargeIn     = "barge_in"
+	qqVoiceCallSettingPrivate     = "answer_private"
+	qqVoiceCallSettingGroup       = "answer_group"
 
 	qqVoiceCallDialTimeout  = 10 * time.Second
 	qqVoiceCallRetryMin     = 3 * time.Second
@@ -91,8 +93,8 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:              qqVoiceCallPluginID,
 		Name:            "QQ 语音通话",
-		Version:         "0.1.2",
-		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
+		Version:         "0.1.3",
+		Description:     "主人用 QQ 给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与 QQ 私聊是同一份；也可以打开「接群语音通话」，群里有人邀请机器人加入群通话时它就加入，按那个群的身份聊。需要在 SnowLuma 容器里运行 qqcall-agent，并在模型分配里配好语音识别和语音合成。私聊来电都会接起来，接通后对方 QQ 号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。",
 		Official:        true,
 		BuiltIn:         true,
 		DefaultDisabled: true,
@@ -128,6 +130,22 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 				GlobalOnly:  true,
 				// 只列 OneBot 机器人：电话是容器里的 Linux QQ 接的。
 				ProfilePlatforms: []string{PlatformOneBotV11},
+			},
+			{
+				Key:         qqVoiceCallSettingPrivate,
+				Label:       "接主人的私聊电话",
+				Description: "主人私聊打来的 QQ 语音。别人私聊打来会被接通几秒、核对 QQ 号后挂断。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
+				GlobalOnly:  true,
+			},
+			{
+				Key:         qqVoiceCallSettingGroup,
+				Label:       "接群语音通话",
+				Description: "群里有人发起群语音通话并邀请机器人时加入，按那个群的身份聊，群通话里谁说话都会接。是哪个群由模型读来电窗口上的群名、对照机器人所在的群认出来，认不出就不接。",
+				Type:        PluginSettingTypeBool,
+				Default:     false,
+				GlobalOnly:  true,
 			},
 			{
 				Key:         qqVoiceCallSettingAnswerDelay,
@@ -510,6 +528,10 @@ type qqCallSet struct {
 type qqCallTarget struct {
 	profileID string
 	ownerID   string
+	// groupID 非空是群通话：接通后不核对 QQ 号（群通话没有那条推送），按群聊身份对话。
+	groupID   string
+	groupName string
+	caller    string
 }
 
 type qqActiveCall struct {
@@ -517,6 +539,15 @@ type qqActiveCall struct {
 	session *voicecall.Session
 	cancel  context.CancelFunc
 	call    *VoiceCall
+	target  qqCallTarget
+}
+
+// describe 是给人看的「哪通电话」。
+func (t qqCallTarget) describe() string {
+	if t.groupID != "" {
+		return "群「" + firstNonEmpty(t.groupName, t.groupID) + "」的群通话"
+	}
+	return "主人的电话"
 }
 
 // qqCallResumeGrace 是和 agent 断线后通话保留多久：Diana 升级重启一般十几秒就连回来。
@@ -655,6 +686,29 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 		s.plugin.tellOwner(runtime, ready.profileID, "ready:"+ready.problem, "刚才有人打 QQ 语音给我，我没接起来："+ready.problem+"。")
 		return
 	}
+	var listGroups func(context.Context) ([]qqCallGroup, error)
+	answerGroup := change.Settings.Bool(qqVoiceCallSettingGroup, false)
+	if answerGroup {
+		listGroups = runtime.qqCallGroupLister(ready.profileID)
+	}
+	invite := runtime.classifyQQCallInvite(ctx, ready.profileID, msg, listGroups)
+	target := qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID, caller: firstNonEmpty(invite.caller, msg.Name)}
+	switch {
+	case !invite.incoming:
+		s.plugin.noteCall("「语音通话」窗口不是来电，不处理（%s）", invite.how)
+		return
+	case invite.group && !answerGroup:
+		s.plugin.noteCall("「%s」邀请加入群通话，没接：插件设置里没打开「接群语音通话」", target.caller)
+		return
+	case invite.group && invite.groupID == "":
+		s.plugin.noteCall("「%s」邀请加入群通话，没接：认不出是哪个群（%s）", target.caller, invite.how)
+		return
+	case invite.group:
+		target.groupID, target.groupName = invite.groupID, invite.groupName
+	case !change.Settings.Bool(qqVoiceCallSettingPrivate, true):
+		s.plugin.noteCall("「%s」私聊来电，没接：插件设置里关了「接主人的私聊电话」", target.caller)
+		return
+	}
 	delay := qqVoiceCallSeconds(change.Settings, qqVoiceCallSettingAnswerDelay, 2*time.Second)
 	select {
 	case <-ctx.Done():
@@ -662,7 +716,7 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 	case <-time.After(delay):
 	}
 	s.mu.Lock()
-	s.answered[msg.Call] = qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID}
+	s.answered[msg.Call] = target
 	s.mu.Unlock()
 	if err := s.send(qqcall.Message{Type: qqcall.TypeAnswer, Call: msg.Call}); err != nil {
 		s.plugin.noteCall("接听来电「%s」失败: %v", msg.Name, err)
@@ -706,7 +760,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if !ours {
 		return
 	}
-	if msg.PeerUIN != target.ownerID {
+	if target.groupID == "" && msg.PeerUIN != target.ownerID {
 		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		if msg.PeerUIN != "" {
 			// 别人打来的：这是正常的拦截，不打扰主人。
@@ -723,11 +777,17 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if runtime == nil {
 		return
 	}
-	call, err := runtime.NewVoiceCall(ctx, target.profileID, voiceCallMessagePrefix+"qq-"+msg.Call)
+	var call *VoiceCall
+	var err error
+	if target.groupID != "" {
+		call, err = runtime.NewGroupVoiceCall(ctx, target.profileID, target.groupID, target.groupName, voiceCallMessagePrefix+"qq-"+msg.Call)
+	} else {
+		call, err = runtime.NewVoiceCall(ctx, target.profileID, voiceCallMessagePrefix+"qq-"+msg.Call)
+	}
 	if err != nil {
-		s.plugin.noteCall("主人的电话接通了，但开不了通话: %v", err)
+		s.plugin.noteCall("%s接通了，但开不了通话: %v", target.describe(), err)
 		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
-		s.plugin.tellOwner(runtime, target.profileID, "open:"+err.Error(), "你的电话接通了，但通话开不起来："+err.Error()+"，只好先挂了。")
+		s.plugin.tellOwner(runtime, target.profileID, "open:"+err.Error(), target.describe()+"接通了，但通话开不起来："+err.Error()+"，只好先挂了。")
 		return
 	}
 	callCtx, cancel := context.WithCancel(ctx)
@@ -751,9 +811,9 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if s.active != nil {
 		s.active.close()
 	}
-	s.active = &qqActiveCall{id: msg.Call, session: session, cancel: cancel, call: call}
+	s.active = &qqActiveCall{id: msg.Call, session: session, cancel: cancel, call: call, target: target}
 	s.mu.Unlock()
-	s.plugin.noteCall("接通了主人的电话")
+	s.plugin.noteCall("接通了%s", target.describe())
 
 	maxDuration := time.Duration(change.Settings.Int(qqVoiceCallSettingMaxMinutes, 30)) * time.Minute
 	go func() {
@@ -779,7 +839,7 @@ func (s *qqCallSet) ended(id string) {
 	s.mu.Unlock()
 	if active != nil {
 		active.close()
-		s.plugin.noteCall("主人的电话挂断了")
+		s.plugin.noteCall("%s挂断了", active.target.describe())
 	}
 }
 

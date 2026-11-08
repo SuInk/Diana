@@ -47,6 +47,7 @@ const purposeLabels: Record<string, string> = {
   forward_content_safety: "转发内容审核",
   rss_watch_judge: "RSS 更新判断",
   qq_join_review: "入群申请审批",
+  qq_call_invite: "QQ 来电识别",
   host_command_review: "宿主命令审核",
   direct_reply_topic: "回复话题判断",
   welcome_generator: "入群欢迎",
