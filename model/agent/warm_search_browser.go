@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -123,8 +124,18 @@ func startWarmBrowser(ctx context.Context, executable string, cfg SandboxedBrows
 		dirs.remove()
 		return nil, err
 	}
+	// 进程以 --no-startup-window 启动，一个窗口都没有。chromedp 第一次 Run 默认会开
+	// 一个不带 newWindow 的标签页，Chrome 回「no browser is open」，常驻浏览器就永远
+	// 起不来、每次都悄悄退回一次性进程。和一次性浏览器一样，先在屏幕外开一个后台
+	// 窗口，root 挂在它上面；这个窗口一直留着，后面的隐身页面也有窗口可依附。
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		process.stop()
+		dirs.remove()
+		return nil, fmt.Errorf("start warm search browser: open background page: %w: %s", err, compactBrowserError(process.diagnostics.String()))
+	}
 	allocatorCtx, cancelAllocator := chromedp.NewRemoteAllocator(context.Background(), process.wsURL, chromedp.NoModifyURL)
-	root, cancelRoot := chromedp.NewContext(allocatorCtx)
+	root, cancelRoot := chromedp.NewContext(allocatorCtx, chromedp.WithTargetID(target.ID(targetID)))
 	session := &warmBrowserSession{executable: executable, window: process.window, requestedWindow: cfg.Window, process: process, dirs: dirs, root: root, cancel: func() { cancelRoot(); cancelAllocator() }}
 	connected := make(chan error, 1)
 	go func() {
@@ -195,11 +206,19 @@ func (b *SandboxedBrowser) renderOnWarmBrowser(ctx context.Context, executable, 
 	renderStarted := time.Now()
 	session, release, err := warmSearchBrowser.acquire(ctx, executable, b.cfg)
 	if err != nil {
+		// 退回一次性进程照样能渲染，但每次多一次冷启动。不记一笔的话常驻浏览器坏了
+		// 也没人知道：10 月底 --no-startup-window 让它起不来，两周里每次都在静默退回。
+		if ctx.Err() == nil {
+			log.Printf("WARN 常驻浏览器不可用，退回一次性浏览器：%v", err)
+		}
 		return RenderedPage{}, false, nil
 	}
 	defer release()
 	browserCtx, cleanup, err := session.openIsolatedPage(ctx)
 	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("WARN 常驻浏览器开页面失败，退回一次性浏览器：%v", err)
+		}
 		return RenderedPage{}, false, nil
 	}
 	defer cleanup()
