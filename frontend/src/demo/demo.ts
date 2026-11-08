@@ -1034,6 +1034,7 @@ let residencyListed = false;
 let demoBrowserBoxSettings: BrowserBoxSettings = { enabled: true, headful: true };
 let demoBrowserSourceOrder: ("box" | "extension")[] = ["box", "extension"];
 let demoBrowserSandboxMode: "sandbox" | "auto" | "off" = "sandbox";
+const demoDesktopPermissions = { screen_recording: true, accessibility: false };
 let demoDesktopPolicy = { enabled: true, write_enabled: false, allowed_apps: ["com.apple.TextEdit"], denied_apps: [] as string[] };
 let demoDesktopTakeover = false;
 let demoDesktopJobs = [{ id: "desktop-demo", goal: "整理本机文本草稿", status: "waiting_confirm", wait_reason: "草稿已整理，等待主人检查后继续。", budget: { steps_used: 3 } }];
@@ -1628,8 +1629,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   // 浏览器控制：演示里给一条已连接的扩展和一把令牌，否则这一页全是空状态，
   // 看不出授权边界长什么样。写操作在演示里始终关着。
-  if (path === "/api/desktop-control/status") return json({ policy: demoDesktopPolicy, ready: demoDesktopPolicy.enabled && !demoDesktopTakeover, takeover: demoDesktopTakeover, permissions: { screen_recording: true, accessibility: false }, helper_configured: true, executor: demoDesktopPolicy.enabled ? "cua-driver 0.38.0" : "", detail: "演示环境不连接真实桌面", connections: demoDesktopPolicy.enabled ? [{id:"local-demo", takeover:demoDesktopTakeover}] : [] });
+  if (path === "/api/desktop-control/status") return json({ policy: demoDesktopPolicy, ready: demoDesktopPolicy.enabled && !demoDesktopTakeover, takeover: demoDesktopTakeover, permissions: demoDesktopPolicy.enabled ? demoDesktopPermissions : undefined, authorize: { name: "Diana", path: "/Applications/Diana/Diana.app", bundle: true }, helper_configured: true, executor: demoDesktopPolicy.enabled ? "cua-driver 0.38.0" : "", detail: "演示环境不连接真实桌面", connections: demoDesktopPolicy.enabled ? [{id:"local-demo", takeover:demoDesktopTakeover}] : [] });
   if (path === "/api/desktop-control/jobs") return json({ jobs: demoDesktopJobs });
+  if (path === "/api/desktop-control/permissions/request" && method === "POST") { if (body.kind === "accessibility") demoDesktopPermissions.accessibility = true; else demoDesktopPermissions.screen_recording = true; return json({ permissions: demoDesktopPermissions, opened: true, authorize: { name: "Diana", path: "/Applications/Diana/Diana.app", bundle: true } }); }
+  if (path === "/api/desktop-control/reconnect" && method === "POST") return json({ ready: demoDesktopPolicy.enabled, executor: "cua-driver 0.38.0" });
   if (path === "/api/desktop-control/policy" && method === "PUT") { demoDesktopPolicy = { ...demoDesktopPolicy, ...(body as unknown as typeof demoDesktopPolicy) }; return json({ policy: demoDesktopPolicy }); }
   if (path === "/api/desktop-control/takeover" && method === "POST") { demoDesktopTakeover = Boolean(body.active); return json({active:demoDesktopTakeover}); }
   if (path.startsWith("/api/desktop-control/jobs/") && method === "POST") {

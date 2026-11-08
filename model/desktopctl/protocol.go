@@ -217,6 +217,10 @@ type ElementsPayload struct {
 	Elements    []Element `json:"elements"`
 	Truncated   bool      `json:"truncated"`
 }
+
+// PermissionGuide 接在缺系统权限的报错后面，告诉主人去哪儿补，模型照着转述即可。
+const PermissionGuide = "。macOS 系统权限没给：到 Diana 控制台「设置 → 桌面控制」点「请求授权」，在弹出的系统设置里打开 Diana 的开关，再点「重新检测」"
+
 type Permissions struct {
 	ScreenRecording bool `json:"screen_recording"`
 	Accessibility   bool `json:"accessibility"`

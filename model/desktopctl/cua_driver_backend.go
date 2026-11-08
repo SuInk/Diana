@@ -366,7 +366,15 @@ func (b *cuaDriverBackend) dispatch(ctx context.Context, c Command, element *Ele
 }
 
 func (b *cuaDriverBackend) permissions(ctx context.Context) (Permissions, error) {
-	result, err := b.session.call(ctx, "check_permissions", map[string]any{"prompt": false})
+	return b.checkPermissions(ctx, false)
+}
+
+func (b *cuaDriverBackend) requestPermissions(ctx context.Context) (Permissions, error) {
+	return b.checkPermissions(ctx, true)
+}
+
+func (b *cuaDriverBackend) checkPermissions(ctx context.Context, prompt bool) (Permissions, error) {
+	result, err := b.session.call(ctx, "check_permissions", map[string]any{"prompt": prompt})
 	if err != nil {
 		return Permissions{}, err
 	}

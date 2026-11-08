@@ -70,7 +70,7 @@ func screenshotWindow(id: String) async -> (Data?, String?) {
         return (nil, "bad_request: invalid window id")
     }
     guard CGPreflightScreenCaptureAccess() else {
-        return (nil, "permission_denied: 请在系统设置 → 隐私与安全性 → 屏幕录制中允许本 helper，然后重启。")
+        return (nil, "permission_denied: 屏幕录制未授权。到 Diana 控制台「设置 → 桌面控制」点「请求授权」，在弹出的系统设置里打开 Diana（手动部署时是运行 Diana 的程序）的开关。")
     }
     do {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -97,7 +97,7 @@ func screenshotWindow(id: String) async -> (Data?, String?) {
 func requireAccessibility() -> String? {
     let trusted = AXIsProcessTrusted()
     if trusted { return nil }
-    return "permission_denied: Accessibility（辅助功能）未授权。请在系统设置 → 隐私与安全性 → 辅助功能中允许本 helper，然后完全退出并重启。"
+    return "permission_denied: 辅助功能未授权，点击和输入发不出去。到 Diana 控制台「设置 → 桌面控制」点「请求授权」，在弹出的系统设置里打开 Diana（手动部署时是运行 Diana 的程序）的开关，再点「重新检测」。"
 }
 
 // 写入只能指向当前最前的应用窗口；不猜测后台窗口，也不向全局前台发键盘事件。
@@ -361,6 +361,13 @@ if args.count > 2, let expected = ProcessInfo.processInfo.environment["DIANA_TAR
 switch args[1] {
 case "permissions":
     print("{\"screen_recording\":\(CGPreflightScreenCaptureAccess()),\"accessibility\":\(AXIsProcessTrusted())}")
+case "request-permissions":
+    // 触发系统授权弹窗；macOS 同时把负责进程（运行 Diana 的程序）加进隐私列表。
+    var screen = CGPreflightScreenCaptureAccess()
+    if !screen { screen = CGRequestScreenCaptureAccess() }
+    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    let accessibility = AXIsProcessTrustedWithOptions(options)
+    print("{\"screen_recording\":\(screen),\"accessibility\":\(accessibility)}")
 case "list":
     let enc = JSONEncoder()
     enc.outputFormatting = [.prettyPrinted, .sortedKeys]

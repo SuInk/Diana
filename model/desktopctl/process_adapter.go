@@ -43,6 +43,9 @@ type desktopBackend interface {
 	// dispatch sends one input; element is the matched row of a fresh read.
 	dispatch(ctx context.Context, c Command, element *Element) (ActionResult, error)
 	permissions(ctx context.Context) (Permissions, error)
+	// requestPermissions asks macOS to show its authorization prompts, which
+	// also lists Diana in System Settings so the owner only flips a switch.
+	requestPermissions(ctx context.Context) (Permissions, error)
 }
 
 func newProcessAdapter(backend desktopBackend, path string) *ProcessAdapter {
@@ -164,7 +167,15 @@ func (h helperBackend) dispatch(ctx context.Context, c Command, element *Element
 }
 
 func (h helperBackend) permissions(ctx context.Context) (Permissions, error) {
-	raw, err := h.adapter.run(ctx, "", "", "permissions")
+	return h.permissionCommand(ctx, "permissions")
+}
+
+func (h helperBackend) requestPermissions(ctx context.Context) (Permissions, error) {
+	return h.permissionCommand(ctx, "request-permissions")
+}
+
+func (h helperBackend) permissionCommand(ctx context.Context, command string) (Permissions, error) {
+	raw, err := h.adapter.run(ctx, "", "", command)
 	if err != nil {
 		return Permissions{}, err
 	}
@@ -409,4 +420,10 @@ func (a *ProcessAdapter) Scroll(ctx context.Context, c Command) (ActionResult, e
 }
 func (a *ProcessAdapter) Permissions(ctx context.Context) (Permissions, error) {
 	return a.backend.permissions(ctx)
+}
+
+// RequestPermissions triggers the macOS prompts for whichever permission is
+// still missing and returns the state afterwards.
+func (a *ProcessAdapter) RequestPermissions(ctx context.Context) (Permissions, error) {
+	return a.backend.requestPermissions(ctx)
 }
