@@ -84,8 +84,11 @@ type ServerMessage struct {
 	MIME   string `json:"mime,omitempty"`
 	Reason string `json:"reason,omitempty"`
 	Code   string `json:"code,omitempty"`
-	Fatal  bool   `json:"fatal,omitempty"`
-	Ready  *Ready `json:"ready,omitempty"`
+	// Speaker、SpeakerName 只在群聊通话的 reply、audio_start 里有：这句是哪台机器人说的。
+	Speaker     string `json:"speaker,omitempty"`
+	SpeakerName string `json:"speaker_name,omitempty"`
+	Fatal       bool   `json:"fatal,omitempty"`
+	Ready       *Ready `json:"ready,omitempty"`
 }
 
 // Ready 是 ready 消息的内容。

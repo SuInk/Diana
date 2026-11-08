@@ -3,27 +3,30 @@
 
 <template>
   <Teleport to="body">
-    <div class="vc-screen" role="dialog" aria-modal="true" :aria-label="`和 ${displayName} 语音通话`" @keydown.esc="hangup">
-      <div class="vc-backdrop" :style="avatar ? { backgroundImage: `url(${avatar})` } : undefined" aria-hidden="true" />
+    <div class="vc-screen" role="dialog" aria-modal="true" :aria-label="room ? `${displayName} 群语音通话` : `和 ${displayName} 语音通话`" @keydown.esc="hangup">
+      <div class="vc-backdrop" :style="peerAvatar ? { backgroundImage: `url(${peerAvatar})` } : undefined" aria-hidden="true" />
       <header class="vc-top">
-        <span class="vc-top-label"><Lock :size="12" aria-hidden="true" />语音通话</span>
+        <span class="vc-top-label"><Lock :size="12" aria-hidden="true" />{{ room ? "群语音通话" : "语音通话" }}</span>
       </header>
 
       <div class="vc-peer" :class="[stageState, { 'user-speaking': userSpeaking || holding }]">
         <div class="vc-avatar-wrap">
           <span class="vc-ring" aria-hidden="true" />
           <span class="vc-ring delay" aria-hidden="true" />
-          <img v-if="avatar" class="vc-avatar" :src="avatar" alt="" />
-          <span v-else class="vc-avatar vc-avatar-fallback" aria-hidden="true">{{ displayName.slice(0, 1) }}</span>
+          <img v-if="peerAvatar" class="vc-avatar" :src="peerAvatar" alt="" />
+          <span v-else class="vc-avatar vc-avatar-fallback" aria-hidden="true">{{ peerName.slice(0, 1) }}</span>
         </div>
-        <h2 class="vc-name">{{ displayName }}</h2>
+        <h2 class="vc-name">{{ peerName }}</h2>
+        <p v-if="room && speaking" class="vc-group">{{ displayName }}</p>
         <p class="vc-status" role="status" aria-live="polite">{{ statusLabel }}</p>
       </div>
 
       <section class="vc-captions" aria-label="通话字幕" aria-live="polite" @click="canInterrupt && interrupt()">
         <p v-if="problem" class="vc-problem">{{ problem }}</p>
         <template v-else>
-          <p v-for="line in captions" :key="line.key" class="vc-caption" :class="line.who">{{ line.text }}</p>
+          <p v-for="line in captions" :key="line.key" class="vc-caption" :class="line.who">
+            <b v-if="line.speaker" class="vc-speaker">{{ line.speaker }}</b>{{ line.text }}
+          </p>
           <button v-if="canInterrupt" class="vc-interrupt" type="button" @click.stop="interrupt"><Hand :size="14" aria-hidden="true" />轻点打断</button>
         </template>
       </section>
@@ -77,10 +80,13 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowUp, Hand, Keyboard, Lock, Mic, MicOff, PhoneOff } from "@lucide/vue";
 import { getVoiceCallInfo } from "../api";
+import { getRoomCallInfo } from "../lib/local-rooms";
 import {
   applyCallMessage,
   CALL_SAMPLE_RATE,
+  callReplyParts,
   callSocketURL,
+  roomCallSocketURL,
   downsample,
   floatToPCM16,
   SentenceAudioCollector,
@@ -96,11 +102,18 @@ const props = defineProps<{
   avatar?: string;
   /** 点击电话按钮时就建好的音频上下文和麦克风请求：手机浏览器只认手势里发起的。 */
   audio: CallAudio;
+  /** 群聊通话：打给本地群，profile 不用。成员用来按发言人换头像。 */
+  room?: { id: string; members: { id: string; name: string; avatar?: string }[] };
 }>();
 const emit = defineEmits<{ close: [] }>();
 
 const botName = ref("");
 const displayName = computed(() => botName.value || props.name || "机器人");
+// 群聊通话里正在说话的成员：头像和名字跟着换，没人说话时显示群。
+const speaking = ref<{ id: string; name: string } | null>(null);
+const speakingMember = computed(() => (speaking.value ? props.room?.members.find((member) => member.id === speaking.value?.id) : undefined));
+const peerName = computed(() => (speaking.value ? speakingMember.value?.name || speaking.value.name : displayName.value));
+const peerAvatar = computed(() => (speaking.value ? speakingMember.value?.avatar : props.avatar));
 const problem = ref("");
 const connecting = ref(true);
 const inCall = ref(false);
@@ -133,14 +146,21 @@ const statusLabel = computed(() => {
   if (userSpeaking.value || holding.value) return `${duration.value} · 在听`;
   if (callState.value === "thinking") return `${duration.value} · 在想…`;
   if (callState.value === "speaking") return `${duration.value} · 在说话`;
+  if (props.room && callState.value === "listening") return `${duration.value} · ${props.room.members.length} 个成员`;
   return duration.value;
 });
-// 字幕只留最近两轮，像通话里的实时字幕，完整记录在机器人的私聊记录里。
+// 字幕只留最近两轮，像通话里的实时字幕，完整记录在机器人的私聊记录里（群通话在群
+// 消息里）。群通话每段标上是谁说的。
 const captions = computed(() =>
-  turns.value.slice(-2).flatMap((item) => [
-    ...(item.user ? [{ key: `${item.turn}u`, who: "user", text: item.user }] : []),
-    ...(item.bot.length ? [{ key: `${item.turn}b`, who: item.status === "interrupted" ? "bot cut" : "bot", text: item.bot.join("") }] : [])
-  ])
+  turns.value.slice(-2).flatMap((item) => {
+    const who = item.status === "interrupted" ? "bot cut" : "bot";
+    const replies = props.room
+      ? callReplyParts(item).map((part, i) => ({ key: `${item.turn}b${i}`, who, speaker: part.speaker.name || "成员", text: part.text }))
+      : item.bot.length
+        ? [{ key: `${item.turn}b`, who, speaker: "", text: item.bot.join("") }]
+        : [];
+    return [...(item.user ? [{ key: `${item.turn}u`, who: "user", speaker: props.room ? "我" : "", text: item.user }] : []), ...replies];
+  })
 );
 
 let socket: WebSocket | null = null;
@@ -165,7 +185,7 @@ onMounted(() => void dial());
 
 async function dial(): Promise<void> {
   try {
-    const info = await getVoiceCallInfo(props.profile);
+    const info = props.room ? await getRoomCallInfo(props.room.id) : await getVoiceCallInfo(props.profile);
     botName.value = info.bot_name;
     if (info.problem) return fail(`${info.problem}。到「提供商」页的模型分配里设置后再打。`);
   } catch (err) {
@@ -182,7 +202,7 @@ async function dial(): Promise<void> {
 }
 
 function openSocket(resume = ""): void {
-  const ws = new WebSocket(callSocketURL(props.profile, window.location, resume));
+  const ws = new WebSocket(props.room ? roomCallSocketURL(props.room.id) : callSocketURL(props.profile, window.location, resume));
   ws.binaryType = "arraybuffer";
   socket = ws;
   // 一直按服务端分句、允许打断开始：按住说话和静音都在本地控制上行，通话中随时能切。
@@ -194,7 +214,8 @@ function openSocket(resume = ""): void {
   ws.onclose = (event) => {
     if (socket !== ws) return;
     if (botHungUp) return endAfterPlayback();
-    if (inCall.value && !ended.value && callID && reconnects < MAX_RECONNECTS) return scheduleReconnect();
+    // 群通话服务端不保留断线的通话，断了就是挂了。
+    if (!props.room && inCall.value && !ended.value && callID && reconnects < MAX_RECONNECTS) return scheduleReconnect();
     if (connecting.value) problem.value = event.reason || "没接通：确认已登录，并且语音识别和语音合成都配好了。";
     endCall();
   };
@@ -242,10 +263,11 @@ function handleMessage(msg: CallServerMessage): void {
       break;
     case "audio_start":
       collector.start(msg.turn ?? 0, msg.seq ?? 0, msg.mime ?? "audio/mpeg");
+      if (msg.speaker) sentenceSpeakers.set(`${msg.turn}.${msg.seq}`, { id: msg.speaker, name: msg.speaker_name ?? "" });
       break;
     case "audio_end": {
       const sentence = collector.end(msg.turn ?? 0, msg.seq ?? 0);
-      if (sentence) enqueuePlayback(sentence.data);
+      if (sentence) enqueuePlayback(sentence.data, sentenceSpeakers.get(`${msg.turn}.${msg.seq}`) ?? null);
       break;
     }
     case "interrupted":
@@ -279,7 +301,10 @@ function startCapture(): void {
 }
 
 // 一句一句排着放：合成完的句子可能比上一句还没放完的时候先到。
-function enqueuePlayback(data: ArrayBuffer): void {
+// 群通话里每句音频是谁的，播到那句时换头像。
+const sentenceSpeakers = new Map<string, { id: string; name: string }>();
+
+function enqueuePlayback(data: ArrayBuffer, speaker: { id: string; name: string } | null = null): void {
   const epoch = playbackEpoch;
   playbackChain = playbackChain.then(async () => {
     if (epoch !== playbackEpoch || ended.value) return;
@@ -297,14 +322,18 @@ function enqueuePlayback(data: ArrayBuffer): void {
     source.start(startAt);
     playbackCursor = startAt + buffer.duration;
     playbackSources.push(source);
+    if (speaker) setTimeout(() => epoch === playbackEpoch && (speaking.value = speaker), Math.max(0, (startAt - audioContext.currentTime) * 1000));
     source.onended = () => {
       playbackSources = playbackSources.filter((item) => item !== source);
+      if (speaker && !playbackSources.length && epoch === playbackEpoch) speaking.value = null;
     };
   });
 }
 
 function stopPlayback(): void {
   playbackEpoch++;
+  speaking.value = null;
+  sentenceSpeakers.clear();
   collector.reset();
   for (const source of playbackSources) {
     try {
@@ -555,6 +584,18 @@ onBeforeUnmount(() => {
 .vc-caption.user {
   font-size: 14px;
   color: var(--vc-dim);
+}
+
+.vc-speaker {
+  margin-right: 6px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+
+.vc-group {
+  margin: -4px 0 0;
+  font-size: 13px;
+  opacity: 0.7;
 }
 
 .vc-caption.bot {

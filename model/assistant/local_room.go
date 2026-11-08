@@ -61,6 +61,8 @@ type LocalRoomMessage struct {
 	Text       string   `json:"text"`
 	Images     []string `json:"images,omitempty"`
 	At         int64    `json:"at"`
+	// Kind 为 "call" 的是群通话记录（打了多久），不是谁说的话，不交给成员。
+	Kind string `json:"kind,omitempty"`
 }
 
 // LocalRoomStatus 是群里讨论此刻的状态。
@@ -102,6 +104,8 @@ type localRoomLive struct {
 	idle    chan struct{}
 	subs    map[int]func(LocalRoomMessage)
 	nextSub int
+	// calls 是正在进行的群通话数，大于 0 时成员按通话口吻回复。
+	calls int
 	// members 让同一台机器人在一个群里一次只跑一轮。
 	members map[string]*sync.Mutex
 }
@@ -533,6 +537,9 @@ func (r *Runtime) localRoomEvent(room LocalRoom, member string, msg LocalRoomMes
 		RawMessage:       msg.Text,
 		Segments:         segments,
 		webChat:          true,
+	}
+	if r.localRoomCalling(room.ID) {
+		event.voiceCall, event.roomCall = true, true
 	}
 	if msg.SenderID == localRoomOwnerSender {
 		_, owner, err := r.ownerChatEvent(member)

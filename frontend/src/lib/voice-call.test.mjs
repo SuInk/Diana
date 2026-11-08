@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {test} from 'node:test';
-import {applyCallMessage,callSocketURL,downsample,floatToPCM16,SentenceAudioCollector} from './voice-call.ts';
+import {applyCallMessage,callReplyParts,callSocketURL,downsample,floatToPCM16,roomCallSocketURL,SentenceAudioCollector} from './voice-call.ts';
 
 test('call socket URL follows page protocol and encodes the bot', () => {
   assert.equal(callSocketURL('bot a',{protocol:'https:',host:'diana.example'}),'wss://diana.example/api/assistant/call/ws?profile=bot%20a');
@@ -42,4 +42,17 @@ test('sentence audio collector joins chunks and drops stale sentences', () => {
   collector.start(1,2,'audio/mpeg');
   collector.reset();
   assert.equal(collector.end(1,2),null);
+});
+
+test('room call captions label every speaker and keep halves apart', () => {
+  assert.equal(roomCallSocketURL('r 1',{protocol:'https:',host:'diana.example'}),'wss://diana.example/api/assistant/rooms/r%201/call/ws');
+  let turns=[];
+  turns=applyCallMessage(turns,{type:'transcript',turn:1,text:'今晚几点排练'});
+  turns=applyCallMessage(turns,{type:'reply',turn:1,seq:1,text:'七点。',speaker:'nijika',speaker_name:'虹夏'});
+  turns=applyCallMessage(turns,{type:'reply',turn:1,seq:2,text:'别迟到。',speaker:'nijika',speaker_name:'虹夏'});
+  turns=applyCallMessage(turns,{type:'reply',turn:1,seq:3,text:'我带贝斯。',speaker:'ryo',speaker_name:'凉'});
+  assert.deepEqual(callReplyParts(turns[0]),[
+    {speaker:{id:'nijika',name:'虹夏'},text:'七点。别迟到。'},
+    {speaker:{id:'ryo',name:'凉'},text:'我带贝斯。'}
+  ]);
 });
