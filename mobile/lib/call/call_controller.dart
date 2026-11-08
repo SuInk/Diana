@@ -56,6 +56,14 @@ class CallController extends ChangeNotifier {
   Timer? _clock;
   Directory? _audioDir;
   bool _disposed = false;
+  // 机器人自己挂断：告别那句还排在播放队列里，等它放完再结束通话。
+  bool _botHungUp = false;
+
+  // 断线重连：通话中连接意外断了，带着原来的通话 ID 重连几次，服务端保留着这通电话。
+  static const _maxReconnects = 5;
+  bool reconnecting = false;
+  int _reconnects = 0;
+  String? _callId;
 
   bool get canInterrupt => inCall && (callState == 'speaking' || callState == 'thinking');
 
@@ -64,6 +72,7 @@ class CallController extends ChangeNotifier {
   String get statusLabel {
     if (problem != null) return ended && elapsed > 0 ? '通话结束 $duration' : '未接通';
     if (ended) return '通话结束 $duration';
+    if (reconnecting) return '$duration · 重新连接中…';
     if (connecting) return '正在呼叫…';
     if (muted) return '$duration · 已静音';
     if (userSpeaking || holding) return '$duration · 在听';
@@ -79,22 +88,60 @@ class CallController extends ChangeNotifier {
       if (info.problem != null) return _fail('${info.problem}。到 WebUI「提供商」页的模型分配里设置后再打。');
       if (!await _recorder.hasPermission()) return _fail('没有麦克风权限，到系统设置里允许后再打');
       if (ended) return;
-      final socket = await client.openCall(profile);
-      if (ended) {
-        await socket.close();
-        return;
-      }
-      _socket = socket;
-      socket.listen(_onFrame, onDone: () {
-        if (_socket != socket) return;
-        if (connecting) problem = socket.closeReason?.isNotEmpty == true ? socket.closeReason : '没接通：确认已登录，并且语音识别和语音合成都配好了';
-        _end();
-      }, onError: (Object e) => _fail('通话断了：$e'));
-      // 一直按服务端分句、允许打断开始：按住说话和静音都在本地控制上行，通话中随时能切。
-      _send({'type': 'start', 'format': 'pcm_s16le', 'sample_rate': callSampleRate, 'segmentation': 'server_vad', 'barge_in': true});
+      await _openSocket();
     } catch (e) {
       _fail(e.toString());
     }
+  }
+
+  Future<void> _openSocket({String? resume}) async {
+    final socket = await client.openCall(profile, resume: resume);
+    if (ended) {
+      await socket.close();
+      return;
+    }
+    _socket = socket;
+    socket.listen(_onFrame, onDone: () {
+      if (_socket != socket) return;
+      if (_botHungUp) {
+        unawaited(_playback.then((_) => _end()));
+        return;
+      }
+      if (inCall && !ended && _callId != null && _reconnects < _maxReconnects) {
+        _scheduleReconnect();
+        return;
+      }
+      if (connecting) problem = socket.closeReason?.isNotEmpty == true ? socket.closeReason : '没接通：确认已登录，并且语音识别和语音合成都配好了';
+      _end();
+    }, onError: (Object e) {
+      if (inCall && !ended && _callId != null && _reconnects < _maxReconnects) return;
+      _fail('通话断了：$e');
+    });
+    // 一直按服务端分句、允许打断开始：按住说话和静音都在本地控制上行，通话中随时能切。
+    _send({'type': 'start', 'format': 'pcm_s16le', 'sample_rate': callSampleRate, 'segmentation': 'server_vad', 'barge_in': true});
+  }
+
+  // 通话中连接意外断开：等一会儿再连，次数用完才算挂断。
+  void _scheduleReconnect() {
+    _socket = null;
+    reconnecting = true;
+    _stopPlayback();
+    notifyListeners();
+    final delay = Duration(milliseconds: (1000 * (1 << _reconnects)).clamp(1000, 4000));
+    _reconnects++;
+    Timer(delay, () async {
+      if (ended) return;
+      try {
+        await _openSocket(resume: _callId);
+      } catch (_) {
+        if (ended) return;
+        if (_reconnects < _maxReconnects) {
+          _scheduleReconnect();
+        } else {
+          _fail('通话断了，重连没成功');
+        }
+      }
+    });
   }
 
   void _onFrame(dynamic data) {
@@ -113,13 +160,22 @@ class CallController extends ChangeNotifier {
       case 'ready':
         connecting = false;
         inCall = true;
-        final name = (msg['ready'] as Map?)?['bot_name'];
+        final ready = msg['ready'] as Map?;
+        final name = ready?['bot_name'];
         if (name is String && name.isNotEmpty) botName = name;
-        _clock = Timer.periodic(const Duration(seconds: 1), (_) {
+        final id = ready?['call_id'];
+        if (id is String && id.isNotEmpty) _callId = id;
+        if (reconnecting) {
+          // 重连后的会话轮次从 1 重新数，旧字幕清掉免得串到新的一轮里。
+          reconnecting = false;
+          _reconnects = 0;
+          turns.clear();
+        }
+        _clock ??= Timer.periodic(const Duration(seconds: 1), (_) {
           elapsed++;
           notifyListeners();
         });
-        _startCapture();
+        if (_mic == null) _startCapture();
       case 'state':
         final state = msg['state'];
         if (state is String) callState = state;
@@ -135,6 +191,8 @@ class CallController extends ChangeNotifier {
         }
       case 'interrupted':
         _stopPlayback();
+      case 'hangup':
+        _botHungUp = true;
       case 'error':
         if (msg['fatal'] == true) _fail((msg['text'] ?? msg['code'] ?? '通话出错') as String);
     }

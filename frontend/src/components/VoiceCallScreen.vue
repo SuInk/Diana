@@ -127,6 +127,7 @@ const duration = computed(() => {
 const statusLabel = computed(() => {
   if (problem.value) return ended.value && elapsed.value ? `通话结束 ${duration.value}` : "未接通";
   if (ended.value) return `通话结束 ${duration.value}`;
+  if (reconnecting.value) return `${duration.value} · 重新连接中…`;
   if (connecting.value) return "正在呼叫…";
   if (muted.value) return `${duration.value} · 已静音`;
   if (userSpeaking.value || holding.value) return `${duration.value} · 在听`;
@@ -150,6 +151,13 @@ let playbackSources: AudioBufferSourceNode[] = [];
 let playbackCursor = 0;
 let playbackChain: Promise<void> = Promise.resolve();
 let playbackEpoch = 0;
+// 机器人自己挂断：告别那句还排在播放队列里，等它放完再结束通话。
+let botHungUp = false;
+// 断线重连：通话中连接意外断了，带着原来的通话 ID 重连几次，服务端保留着这通电话。
+const MAX_RECONNECTS = 5;
+const reconnecting = ref(false);
+let reconnects = 0;
+let callID = "";
 const collector = new SentenceAudioCollector();
 const audioContext = props.audio.context;
 
@@ -170,7 +178,11 @@ async function dial(): Promise<void> {
     return fail(`拿不到麦克风：${err instanceof Error ? err.message : String(err)}`);
   }
   if (ended.value) return cleanup();
-  const ws = new WebSocket(callSocketURL(props.profile));
+  openSocket();
+}
+
+function openSocket(resume = ""): void {
+  const ws = new WebSocket(callSocketURL(props.profile, window.location, resume));
   ws.binaryType = "arraybuffer";
   socket = ws;
   // 一直按服务端分句、允许打断开始：按住说话和静音都在本地控制上行，通话中随时能切。
@@ -181,9 +193,23 @@ async function dial(): Promise<void> {
   };
   ws.onclose = (event) => {
     if (socket !== ws) return;
+    if (botHungUp) return endAfterPlayback();
+    if (inCall.value && !ended.value && callID && reconnects < MAX_RECONNECTS) return scheduleReconnect();
     if (connecting.value) problem.value = event.reason || "没接通：确认已登录，并且语音识别和语音合成都配好了。";
     endCall();
   };
+}
+
+// scheduleReconnect 在通话中连接意外断开时重连：等一会儿再连，次数用完才算挂断。
+function scheduleReconnect(): void {
+  socket = null;
+  reconnecting.value = true;
+  stopPlayback();
+  const delay = Math.min(1000 * 2 ** reconnects, 4000);
+  reconnects++;
+  setTimeout(() => {
+    if (!ended.value) openSocket(callID);
+  }, delay);
 }
 
 function fail(message: string): void {
@@ -198,8 +224,15 @@ function handleMessage(msg: CallServerMessage): void {
       connecting.value = false;
       inCall.value = true;
       if (msg.ready?.bot_name) botName.value = msg.ready.bot_name;
-      clock = setInterval(() => elapsed.value++, 1000);
-      startCapture();
+      if (msg.ready?.call_id) callID = msg.ready.call_id;
+      if (reconnecting.value) {
+        // 重连后的会话轮次从 1 重新数，旧字幕清掉免得串到新的一轮里。
+        reconnecting.value = false;
+        reconnects = 0;
+        turns.value = [];
+      }
+      clock ??= setInterval(() => elapsed.value++, 1000);
+      if (!processor) startCapture();
       break;
     case "state":
       if (msg.state) callState.value = msg.state;
@@ -217,6 +250,9 @@ function handleMessage(msg: CallServerMessage): void {
     }
     case "interrupted":
       stopPlayback();
+      break;
+    case "hangup":
+      botHungUp = true;
       break;
     case "error":
       if (msg.fatal) fail(msg.text || msg.code || "通话出错");
@@ -328,6 +364,16 @@ function hangup(): void {
   send({ type: "hangup" });
   endCall();
   emit("close");
+}
+
+// endAfterPlayback 等播放队列里的告别放完再挂。
+function endAfterPlayback(): void {
+  void playbackChain.then(() => {
+    const remaining = Math.max(0, playbackCursor - audioContext.currentTime);
+    setTimeout(() => {
+      if (!ended.value) endCall();
+    }, remaining * 1000 + 200);
+  });
 }
 
 function endCall(): void {

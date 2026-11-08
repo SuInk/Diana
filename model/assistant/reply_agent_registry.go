@@ -35,6 +35,10 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 	if tool, _, ok := r.voiceTTSToolForEvent(ctx, event); ok {
 		pluginTools = append(pluginTools, tool)
 	}
+	// 通话里才有挂断，见 voice_call_hangup.go。
+	if call := voiceCallFromContext(ctx); call != nil && event.voiceCall {
+		pluginTools = append(pluginTools, &voiceCallHangupTool{call: call})
+	}
 	for index, tool := range pluginTools {
 		pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		if knowledge, ok := pluginTools[index].(*dianaCapabilitiesTool); ok {

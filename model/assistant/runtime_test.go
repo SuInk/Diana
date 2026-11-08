@@ -5189,10 +5189,13 @@ func (c *recordingChannel) callsSnapshot() []recordingAPICall {
 }
 
 type capturingLLMProvider struct {
-	mu      sync.Mutex
-	reply   string
-	request llm.GenerateRequest
-	calls   int
+	mu    sync.Mutex
+	reply string
+	// sendWhenTools 让它像真模型一样：请求带工具定义时用 send 回复，不写纯文本
+	// （主回复里带工具时纯文本不发，见 agent.Config.PlainTextNotSent）。
+	sendWhenTools bool
+	request       llm.GenerateRequest
+	calls         int
 }
 
 // Generate 记录请求并返回固定回复。
@@ -5206,6 +5209,13 @@ func (p *capturingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	p.request = cloneGenerateRequestForTest(req)
 	p.calls++
 	p.mu.Unlock()
+	if p.sendWhenTools && len(req.Tools) > 0 {
+		for _, tool := range req.Tools {
+			if tool.Name == "send" {
+				return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", ToolCalls: []llm.ToolCall{{ID: "call_send", Name: "send", Arguments: map[string]any{"text": p.reply}}}}, nil
+			}
+		}
+	}
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
 }
 
