@@ -107,7 +107,8 @@ func TestResolverCredentialCheckExplainsLoggedOutCookies(t *testing.T) {
 		}
 	})
 	checks := plugin.TestCredentials(context.Background(), SettingValues{
-		resolverSettingBiliSessdata: "SESSDATA=pasted-with-name",
+		// 整串 Cookie 里没有 SESSDATA，认不出来才提示填法。
+		resolverSettingBiliSessdata: "buvid3=x; bili_jct=y",
 		resolverSettingDouyinCookie: "ttwid=t",
 		// 从 curl 的 -b '...' 里复制出来、又没有 web_session 的 Cookie：
 		// 这正是生产上「明明给了 Cookie 却解析不了」的那份。
