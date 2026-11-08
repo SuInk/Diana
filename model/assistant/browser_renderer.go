@@ -38,7 +38,10 @@ func (p *BuiltInBrowserRenderer) rendererFor() agent.PageRenderer {
 	if p.renderer != nil {
 		return p.renderer
 	}
-	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, FetchAPIKey: p.fetchAPIKey})
+	// 复用常驻进程：每页仍在独立的隐身上下文里开、用完即销毁，省掉每次 1～2 秒的
+	// Chrome 启动；进程起不来时自动退回一次性浏览器。配了 TinyFish 时先走 fetch 接口，
+	// 失败才用到这里的浏览器。
+	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true, FetchAPIKey: p.fetchAPIKey})
 }
 
 // builtInBrowserRenderer 是这一轮用的内置网页读取：搜索设置里配了 TinyFish 且没停用时，

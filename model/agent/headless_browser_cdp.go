@@ -51,6 +51,17 @@ type browserDOMProbe struct {
 	// 到底有没有采到（脚本注入失败、页面自己换掉了 setTimeout 都会采不到）。
 	PendingTimers int  `json:"pending_timers"`
 	Instrumented  bool `json:"instrumented"`
+	// NextTimeoutMS 是最近的一个一次性 setTimeout 还有多少毫秒到期，-1 表示一个都
+	// 没排。setInterval 不计入：周期性心跳在页面稳住后不会再凭空补出内容。
+	// 页面传给 setTimeout 的 delay 可以是小数，所以这里收 float64，不然一个
+	// 171.7 就让整次探针解析失败、整页渲染报错。
+	NextTimeoutMS float64 `json:"next_timeout_ms"`
+}
+
+// upcomingTimeout 报告页面是否排着一个会在 within 之内触发的一次性回调。
+// 没采到定时器信号时答「没有」：那条路由最短观察窗兜底。
+func (p browserDOMProbe) upcomingTimeout(within time.Duration) bool {
+	return p.Instrumented && p.NextTimeoutMS >= 0 && time.Duration(p.NextTimeoutMS*float64(time.Millisecond)) <= within
 }
 
 func (p browserDOMProbe) meaningful() bool {
@@ -251,7 +262,9 @@ func (r *renderReadiness) observe(now time.Time, probe browserDOMProbe, activity
 		(probe.ReadyState == "loading" && probe.TextLength >= loadingDocumentMinText && stableFor >= loadingStableWindow)
 	contentStable := documentReady && probe.meaningful() && navigationQuiet && stableFor >= cfg.StabilityWindow
 	settled := contentStable && ((!activity.Loading && networkQuiet) || semanticOverride)
-	minimumObserved := now.Sub(r.started) >= cfg.VirtualTimeBudget || nothingLeftToWaitFor(probe, activity, settled, networkQuiet)
+	observed := now.Sub(r.started)
+	settledEarly := settledWithoutScheduledWork(probe, activity, settled, networkQuiet, stableFor, cfg.VirtualTimeBudget-observed, cfg)
+	minimumObserved := observed >= cfg.VirtualTimeBudget || nothingLeftToWaitFor(probe, activity, settled, networkQuiet) || settledEarly
 
 	reason := "waiting_for_dom"
 	switch {
@@ -261,6 +274,8 @@ func (r *renderReadiness) observe(now time.Time, probe browserDOMProbe, activity
 		reason = "dom_or_navigation_still_changing"
 	case !settled:
 		reason = "network_still_active"
+	case settledEarly && observed < cfg.VirtualTimeBudget:
+		reason = "settled_before_observation_window"
 	default:
 		reason = "dom_and_network_stable"
 	}
@@ -887,6 +902,40 @@ func nothingLeftToWaitFor(probe browserDOMProbe, activity browserActivitySnapsho
 		activity.PendingRequests == 0
 }
 
+// settledWithoutScheduledWork 是上面那条的放宽版：页面已经 complete、网络静了、
+// DOM 连续 cfg.SettledGrace 没动，而且没有会在剩下的观察窗里触发的一次性回调。
+//
+// 只看「一个定时器都没有」在线上几乎永远等不到：现代页面总挂着几个 setInterval
+// 心跳、埋点轮询，或者一个几十秒后才到期的 setTimeout。生产 11-05～07 的 715 次
+// 渲染，等待时间中位 10.1 秒、p90 12.0 秒，正文中位却只有 600 字——基本都是等满
+// 8 秒最短观察窗。周期性回调在页面稳住之后再跳几拍也不会凭空补出内容；到期在
+// 观察窗之外的回调，照旧等下去也等不到它。真正要接住的只有「几秒后才跳转、才
+// 补内容」的那一类，它排的是观察窗内到期的一次性 setTimeout，这里只为它留着。
+//
+// 而且只有正文还很短的页面才让这种回调拦住收尾。实测 GitHub 仓库页、MCP 文档页
+// 这类正文几千字的内容页也常年排着三五秒后到期的一次性回调（轮询链、埋点上报），
+// 正文早就齐了；真正的延迟跳转页只有「Loading…please wait」一两行字。正文够长
+// 就是内容页，不再为它的后台回调多等。
+//
+// 没采到定时器信号时（脚本没注进去、页面换掉了 setTimeout）照样按宽限期收尾：
+// 宽限期本身已经比稳定窗长两倍多，延迟动作绝大多数在这之前就露头了。
+func settledWithoutScheduledWork(probe browserDOMProbe, activity browserActivitySnapshot, settled, networkQuiet bool, stableFor, remaining time.Duration, cfg SandboxedBrowserConfig) bool {
+	if cfg.SettledGrace <= 0 {
+		return false
+	}
+	return settled &&
+		networkQuiet &&
+		probe.ReadyState == "complete" &&
+		!activity.Loading &&
+		activity.PendingRequests == 0 &&
+		stableFor >= cfg.SettledGrace &&
+		!(probe.TextLength < interstitialTextLimit && probe.upcomingTimeout(remaining))
+}
+
+// interstitialTextLimit 是「还可能是过渡页」的正文字数上限：延迟跳转、「正在加载」
+// 的占位页只有一两行字，正文超过这个数的页面按内容页处理。
+const interstitialTextLimit = 1500
+
 // probeAction 是一次 DOM 探针失败之后该怎么办。
 type probeAction int
 
@@ -936,7 +985,7 @@ func transientBrowserEvaluationError(err error) bool {
 }
 
 const browserMutationObserverScript = `(function () {
-  const state = { mutations: 0, lastMutationAt: Date.now(), pendingTimers: 0, instrumented: false };
+  const state = { mutations: 0, lastMutationAt: Date.now(), pendingTimers: 0, instrumented: false, nextTimeoutAt: 0 };
   Object.defineProperty(globalThis, "__dianaRenderState", {
     configurable: false,
     enumerable: false,
@@ -945,23 +994,39 @@ const browserMutationObserverScript = `(function () {
   // 记还有多少「已排期但还没烧完」的回调。页面靠 setTimeout 延迟跳转、延迟补内容
   // 是最常见的一类慢，光看 DOM 和网络都是静的，看这个才知道它还有后手。
   // setInterval 只要没 clear 就一直算挂着。
+  //
+  // 一次性的 setTimeout 另记到期时刻：探针据此报出「最近的一个还有多久到期」。
+  // 延迟跳转、延迟补内容排的都是一次性回调；setInterval 是周期性的心跳、轮询，
+  // 页面稳住之后它再跳几拍也不会凭空多出内容，不算后手。
   try {
     const timeout = globalThis.setTimeout;
     const interval = globalThis.setInterval;
     const clearT = globalThis.clearTimeout;
     const clearI = globalThis.clearInterval;
     const live = new Set();
+    const dueAt = new Map();
+    const refreshNext = () => {
+      let next = 0;
+      for (const at of dueAt.values()) {
+        if (!next || at < next) next = at;
+      }
+      state.nextTimeoutAt = next;
+    };
     globalThis.setTimeout = function (fn, delay, ...rest) {
       if (typeof fn !== "function") return timeout.apply(this, arguments);
       let id;
       const wrapped = function () {
         live.delete(id);
+        dueAt.delete(id);
         state.pendingTimers = live.size;
+        refreshNext();
         return fn.apply(this, arguments);
       };
       id = timeout.call(this, wrapped, delay, ...rest);
       live.add(id);
+      dueAt.set(id, Date.now() + Math.max(0, Number(delay) || 0));
       state.pendingTimers = live.size;
+      refreshNext();
       return id;
     };
     globalThis.setInterval = function (fn, delay, ...rest) {
@@ -972,12 +1037,16 @@ const browserMutationObserverScript = `(function () {
     };
     globalThis.clearTimeout = function (id) {
       live.delete(id);
+      dueAt.delete(id);
       state.pendingTimers = live.size;
+      refreshNext();
       return clearT.apply(this, arguments);
     };
     globalThis.clearInterval = function (id) {
       live.delete(id);
+      dueAt.delete(id);
       state.pendingTimers = live.size;
+      refreshNext();
       return clearI.apply(this, arguments);
     };
     state.instrumented = true;
@@ -1052,6 +1121,7 @@ const browserDOMProbeScript = `(() => {
     semantic_signature: (hash >>> 0).toString(16) + ":" + semantic.length,
     dom_changes: Number(state.mutations || 0),
     pending_timers: Number(state.pendingTimers || 0),
+    next_timeout_ms: state.nextTimeoutAt ? Math.max(0, Math.round(Number(state.nextTimeoutAt) - Date.now())) : -1,
     instrumented: Boolean(state.instrumented)
   };
 })()`

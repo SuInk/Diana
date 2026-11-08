@@ -784,3 +784,122 @@ func TestRenderReadinessWaitsForLoadingShellBody(t *testing.T) {
 		t.Fatalf("loading shell accepted as rendered page: %#v", decision)
 	}
 }
+
+// 线上 715 次渲染等待中位 10.1 秒、正文中位 600 字：现代页面总挂着心跳 setInterval 或
+// 几十秒后才到期的 setTimeout，「一个定时器都没有」几乎等不到，于是每页都等满 8 秒。
+// 页面 complete、网络静止、DOM 连续 SettledGrace 不动，而且没有观察窗内到期的一次性
+// 回调，就该收尾；只有真会在观察窗内触发的一次性 setTimeout 能把它拦下。
+func TestSettledPageFinishesAfterGraceInsteadOfObservationWindow(t *testing.T) {
+	started := time.Unix(1_700_000_000, 0)
+	cfg := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{
+		VirtualTimeBudget: 8 * time.Second,
+		StabilityWindow:   900 * time.Millisecond,
+		NetworkIdleWindow: 750 * time.Millisecond,
+		SettledGrace:      2500 * time.Millisecond,
+	})
+	quiet := browserActivitySnapshot{LastNavigation: started, LastNetwork: started}
+	// 心跳 setInterval 挂着（pending_timers=1），但没有一次性回调。
+	probe := browserDOMProbe{URL: "https://example.com", ReadyState: "complete", Title: "Example", TextLength: 600, SemanticSignature: "same", Instrumented: true, PendingTimers: 1, NextTimeoutMS: -1}
+
+	readiness := newRenderReadiness(started)
+	_ = readiness.observe(started, probe, quiet, cfg)
+	if decision := readiness.observe(started.Add(2*time.Second), probe, quiet, cfg); decision.Complete {
+		t.Fatalf("宽限期没到就收尾了：%#v", decision)
+	}
+	decision := readiness.observe(started.Add(2600*time.Millisecond), probe, quiet, cfg)
+	if !decision.Complete || decision.Reason != "settled_before_observation_window" {
+		t.Fatalf("页面稳了 2.6 秒还不收尾：%#v", decision)
+	}
+
+	// 正文几千字的内容页也常年排着几秒后到期的一次性回调（轮询链、埋点上报），
+	// 正文早齐了，不为它多等。
+	article := probe
+	article.TextLength = 11_000
+	article.NextTimeoutMS = 3000
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, article, quiet, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), article, quiet, cfg); !decision.Complete {
+		t.Fatalf("内容页不该被后台回调拦住：%#v", decision)
+	}
+
+	// 只有一两行字、还排着一个 3 秒后到期的一次性回调（延迟跳转页就是这样）：
+	// 观察窗内会触发，得等。
+	soon := probe
+	soon.TextLength = 80
+	soon.NextTimeoutMS = 3000
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, soon, quiet, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), soon, quiet, cfg); decision.Complete {
+		t.Fatalf("观察窗内还有一次性回调要触发却早退了：%#v", decision)
+	}
+	if decision := readiness.observe(started.Add(8*time.Second), soon, quiet, cfg); !decision.Complete || decision.Reason != "dom_and_network_stable" {
+		t.Fatalf("等满观察窗仍不收尾：%#v", decision)
+	}
+
+	// 到期在观察窗之外的回调（埋点 30 秒后上报）拦不住收尾：等下去也等不到它。
+	far := probe
+	far.NextTimeoutMS = 30_000
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, far, quiet, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), far, quiet, cfg); !decision.Complete {
+		t.Fatalf("观察窗外的回调不该拦住收尾：%#v", decision)
+	}
+
+	// 没采到定时器信号：照样按宽限期收尾，不再退回等满 8 秒。
+	blind := probe
+	blind.Instrumented = false
+	blind.NextTimeoutMS = 0
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, blind, quiet, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), blind, quiet, cfg); !decision.Complete {
+		t.Fatalf("没有定时器信号时宽限期也该生效：%#v", decision)
+	}
+
+	// 网络还有在途请求、或文档没 complete：不算稳，宽限期不生效。
+	busy := quiet
+	busy.PendingRequests = 1
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, probe, busy, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), probe, busy, cfg); decision.Complete {
+		t.Fatalf("还有在途请求却早退了：%#v", decision)
+	}
+	interactive := probe
+	interactive.ReadyState = "interactive"
+	readiness = newRenderReadiness(started)
+	_ = readiness.observe(started, interactive, quiet, cfg)
+	if decision := readiness.observe(started.Add(2600*time.Millisecond), interactive, quiet, cfg); decision.Complete {
+		t.Fatalf("文档没 complete 却早退了：%#v", decision)
+	}
+}
+
+// 宽限期的取值夹在稳定窗和观察窗之间：短于稳定窗等于没有宽限，长过观察窗永远轮不到。
+func TestSettledGraceClampedBetweenStabilityAndObservationWindow(t *testing.T) {
+	cfg := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{})
+	if cfg.SettledGrace != defaultHeadlessBrowserSettledGrace {
+		t.Fatalf("default SettledGrace = %s", cfg.SettledGrace)
+	}
+	short := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{StabilityWindow: 3 * time.Second, SettledGrace: time.Second})
+	if short.SettledGrace != 3*time.Second {
+		t.Fatalf("SettledGrace below stability window = %s", short.SettledGrace)
+	}
+	long := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{VirtualTimeBudget: time.Second, SettledGrace: 5 * time.Second})
+	if long.SettledGrace != time.Second {
+		t.Fatalf("SettledGrace above observation window = %s", long.SettledGrace)
+	}
+}
+
+// 探针里 next_timeout_ms 为 -1 表示没有一次性回调；没采到信号时不管数值都不算有。
+func TestProbeUpcomingTimeout(t *testing.T) {
+	if (browserDOMProbe{Instrumented: true, NextTimeoutMS: -1}).upcomingTimeout(5 * time.Second) {
+		t.Fatal("没有一次性回调却报有")
+	}
+	if !(browserDOMProbe{Instrumented: true, NextTimeoutMS: 1200}).upcomingTimeout(5 * time.Second) {
+		t.Fatal("1.2 秒后到期的回调在 5 秒窗内，应报有")
+	}
+	if (browserDOMProbe{Instrumented: true, NextTimeoutMS: 9000}).upcomingTimeout(5 * time.Second) {
+		t.Fatal("9 秒后到期的回调不在 5 秒窗内")
+	}
+	if (browserDOMProbe{Instrumented: false, NextTimeoutMS: 0}).upcomingTimeout(5 * time.Second) {
+		t.Fatal("没采到信号时不该当成有回调")
+	}
+}
