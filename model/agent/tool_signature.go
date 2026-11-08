@@ -249,11 +249,40 @@ func typeUnion(types []string) string {
 	return strings.Join(unique, " | ")
 }
 
+// parenthesizeUnion 给最外层是联合的类型加括号，放进数组或交叉类型时才不改意思：
+// 「{ a } | { b }[]」读出来是「a 或 b 的数组」。只看括号和引号之外的「 | 」，
+// 「{ a: "x" | "y" }」这种对象内部的联合不用加。
 func parenthesizeUnion(rendered string) string {
-	if strings.Contains(rendered, " | ") && !strings.HasPrefix(rendered, "{") {
+	if topLevelUnion(rendered) {
 		return "(" + rendered + ")"
 	}
 	return rendered
+}
+
+func topLevelUnion(rendered string) bool {
+	depth, quoted, escaped := 0, false, false
+	for index, char := range rendered {
+		switch {
+		case quoted:
+			switch {
+			case escaped:
+				escaped = false
+			case char == '\\':
+				escaped = true
+			case char == '"':
+				quoted = false
+			}
+		case char == '"':
+			quoted = true
+		case char == '{' || char == '[' || char == '(':
+			depth++
+		case char == '}' || char == ']' || char == ')':
+			depth--
+		case char == '|' && depth == 0 && strings.HasPrefix(rendered[index:], "| ") && index > 0 && rendered[index-1] == ' ':
+			return true
+		}
+	}
+	return false
 }
 
 // signatureFromJSON 给测试和离线核对用：从一份 inputSchema 的 JSON 文本渲染签名。
