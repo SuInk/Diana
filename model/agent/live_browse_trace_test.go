@@ -57,7 +57,7 @@ func TestLiveBrowseTraceReplay(t *testing.T) {
 	if maxSteps <= 0 {
 		maxSteps = DefaultMaxSteps
 	}
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden})
 	var providers []WebSearchProviderConfig
 	for _, engine := range []string{"google", "bing", "duckduckgo", "baidu"} {
 		providers = append(providers, WebSearchProviderConfig{Name: engine, Type: WebSearchProviderSearchEngine, Tool: engine, MaxResults: 5})

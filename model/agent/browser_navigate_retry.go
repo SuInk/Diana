@@ -25,7 +25,7 @@ func navigateRetryingNetworkChange(ctx context.Context, navigate func(context.Co
 			return err
 		}
 		if isDownload {
-			return errors.New("headless browser navigation became a download")
+			return errors.New("browser navigation became a download")
 		}
 		if errorText == "" {
 			return nil

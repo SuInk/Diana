@@ -222,7 +222,7 @@ func groupRelationTitle(groupID, groupName string) string {
 // 并把原始错误带上。
 func relationRenderFailureMessage(ctx context.Context, rasterErr, browserErr error) string {
 	browserDetail := strings.TrimSpace(firstLineOf(browserErr.Error()))
-	if status := agent.ProbeHeadlessBrowser(ctx, ""); !status.Available {
+	if status := agent.ProbeRenderBrowser(ctx, ""); !status.Available {
 		if detail := strings.TrimSpace(status.Detail); detail != "" {
 			browserDetail = detail
 		}
@@ -244,7 +244,7 @@ func firstLineOf(value string) string {
 	return ""
 }
 
-// 无头浏览器、这段时间没人说话——都是正常返回的 ok:false，在那条记录里和成功长得
+// 浏览器、这段时间没人说话——都是正常返回的 ok:false，在那条记录里和成功长得
 // 一模一样。而「这台机器没装浏览器」正是生产里最可能撞上的那个，看不见就只能靠
 // 群里没出图去猜。
 func (t *dianaGroupRelationsTool) recordRelationsOutcome(ctx context.Context, result dianaGroupRelationsResult, detail string) {

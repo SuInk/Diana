@@ -16,7 +16,7 @@ Diana 自己的浏览器：**每台机器人各一个** Chrome/Chromium 进程�
 
 它和另外两档不重叠：
 
-| | 一次性无头渲染（`browser_render`） | 浏览器控制扩展（`browser_ext_*`） | 内置浏览器（本页） |
+| | 一次性渲染（`browser_render`） | 浏览器控制扩展（`browser_ext_*`） | 内置浏览器（本页） |
 | --- | --- | --- | --- |
 | 浏览器 | 一次性 Chromium，每次全新 profile | 用户日常浏览器 | Diana 自己的常驻浏览器 |
 | 登录态 | 没有 | 用户的，Diana 不碰 Cookie | 用户在这个浏览器里自己登的，留在 profile 目录 |
@@ -43,7 +43,7 @@ Diana 不管，同样只有主人能驱动。三者怎么选、每轮注册哪�
 模型每一轮只看到一套浏览器工具：轮到扩展时 `browser_open` 这组不登记，轮到内置时
 `browser_ext_*` 不登记。例外是机器人自己改过外部 CDP 地址（不是默认的
 `http://127.0.0.1:9222`），那是显式指定的浏览器，`browser_open` 这组照样登记。开真窗口、
-扩展的令牌与网站名单、外接 CDP 都在页面底部的「更多设置」里。一次性无头渲染
+扩展的令牌与网站名单、外接 CDP 都在页面底部的「更多设置」里。一次性渲染
 （`browser_render`）不参与这个选择，一直可用。
 
 打开这一档之后，交互式浏览器这组工具会自动接到内置浏览器上，不再指向机器人配置里那个外部
@@ -53,7 +53,7 @@ CDP 地址。只有一个前提：WebUI「浏览器」页的「Diana 内置浏�
 
 **本页的主人浏览器只有主人能用。** 它连的是带着你登录态的常驻浏览器，所以未获个人权限的群成员工具面里
 根本没有它们（见 `RelationshipPolicy.allowedAgentToolNames`）——群成员能用的是
-`browser_render` 那条一次性无头渲染：临时 profile、用完即删、不带任何登录态。
+`browser_render` 那条一次性渲染：临时 profile、用完即删、不带任何登录态。
 接管打开时连主人也拿不到。
 
 ## 主人能让机器人做什么
@@ -192,7 +192,7 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 另外只接受 `http` 与 `https`，`file://` 和 `chrome://` 一律拒绝——前者能读到容器里的
 文件，后者能翻出浏览器自己的设置页。
 
-启动参数沿用无头渲染那条路的沙盒加固，只有一条例外：**内置浏览器能打开本机和内网地址**
+启动参数沿用一次性渲染那条路的沙盒加固，只有一条例外：**内置浏览器能打开本机和内网地址**
 （`localhost`、`*.local`、`host.docker.internal`、局域网 IP）。一次性渲染带着
 `--host-resolver-rules=MAP localhost ~NOTFOUND, ...`，因为群成员也能触发它，不能让别人
 借机器人探你的内网；内置浏览器只有主人能驱动，路由器后台、NAS、本机起的服务本来就是你
@@ -226,7 +226,7 @@ Chromium，浏览器退出时再把它收掉。Selenium Grid、Playwright 官方
 - **你的动作**：打开浏览器页时的自动拉起、接管和交还（`browser_box_start` / `_takeover`），在
   实时画面里打开网页（`browser_box_navigate`），以及在画面上第一次动手触发的自动接管。
   鼠标移动不逐条记。
-- 一次性无头渲染（`browser_render`）不带登录态，不混进这里：网页渲染插件被动渲染消息里的
+- 一次性渲染（`browser_render`）不带登录态，不混进这里：网页渲染插件被动渲染消息里的
   链接时由插件自己记；Agent 主动调用它时只留通用的 `agent_tool` 记录。
 
 `GET /api/logs` 支持 `action=a,b,c` 和 `profile=<机器人 ID>` 两个筛选参数。

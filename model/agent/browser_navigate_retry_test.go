@@ -57,7 +57,7 @@ func TestNavigateRetryingNetworkChangeOtherErrorsNotRetried(t *testing.T) {
 		want      string
 	}{
 		{"域名解析失败", "net::ERR_NAME_NOT_RESOLVED", false, nil, "net::ERR_NAME_NOT_RESOLVED"},
-		{"变成下载", "", true, nil, "headless browser navigation became a download"},
+		{"变成下载", "", true, nil, "browser navigation became a download"},
 		{"CDP 调用失败", "", false, errors.New("target closed"), "target closed"},
 	}
 	for _, tc := range cases {

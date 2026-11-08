@@ -18,7 +18,7 @@ import (
 
 // FindBrowserExecutable 按配置、环境变量、常见安装路径的顺序找 Chrome/Chromium。
 func FindBrowserExecutable(configured string) (string, error) {
-	return findHeadlessBrowserExecutable(configured)
+	return findChromeExecutable(configured)
 }
 
 // PersistentBrowserArgs 返回常驻浏览器的启动参数。

@@ -107,7 +107,7 @@ func browserRootWithoutAccount() string {
 		}
 		return "以 root 运行，Chromium 不允许 root 带沙箱启动"
 	}
-	executable, err := findHeadlessBrowserExecutable("")
+	executable, err := findChromeExecutable("")
 	if err != nil || account.CanReach(executable) {
 		return ""
 	}

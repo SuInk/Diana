@@ -16,7 +16,7 @@ import (
 )
 
 func TestPublicScreenshotRejectsUnsafeURLsBeforeLaunchingBrowser(t *testing.T) {
-	browser := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Executable: "missing-test-browser"})
+	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "missing-test-browser"})
 	for _, rawURL := range []string{"http://127.0.0.1/", "http://192.168.1.1/", "http://[::1]/", "file:///etc/passwd", "https://user:secret@1.1.1.1/"} {
 		if _, err := browser.Screenshot(context.Background(), rawURL); err == nil || strings.Contains(err.Error(), "executable") {
 			t.Fatalf("unsafe URL reached the browser: %s %v", rawURL, err)
@@ -45,7 +45,7 @@ func TestPublicScreenshotIntegration(t *testing.T) {
 	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
 		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
-	browser := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, VirtualTimeBudget: 3 * time.Second})
+	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, VirtualTimeBudget: 3 * time.Second})
 	page, err := browser.Screenshot(context.Background(), "https://example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +65,7 @@ func TestRestrictedCDPScreenshotIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	executable, err := findHeadlessBrowserExecutable("")
+	executable, err := findChromeExecutable("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +118,7 @@ func TestSystemPromptRoutesChartRequests(t *testing.T) {
 	if strings.Contains(prompt(), "K 线") {
 		t.Fatal("chart rule should only appear when an image tool is registered")
 	}
-	screenshot := NewWebpageScreenshotTool(NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{}))
+	screenshot := NewWebpageScreenshotTool(NewSandboxedBrowser(SandboxedBrowserConfig{}))
 	if got := prompt(screenshot); !strings.Contains(got, "就是截图任务") || strings.Contains(got, "remote_image 的 view") {
 		t.Fatal("screenshot-only prompt should treat charts as screenshots")
 	}

@@ -25,7 +25,7 @@ import (
 // Local generated pages with downloaded fonts need an explicit font-ready
 // barrier; a complete PNG may otherwise contain only the font-loading blank.
 func captureFontReadyScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, error) {
-	executable, err := findHeadlessBrowserExecutable(req.Executable)
+	executable, err := findChromeExecutable(req.Executable)
 	if err != nil {
 		return nil, err
 	}

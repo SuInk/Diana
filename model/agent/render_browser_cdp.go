@@ -320,7 +320,7 @@ type sandboxedChromeProcess struct {
 	diagnostics *chromeDiagnosticBuffer
 	cancel      context.CancelFunc
 	done        <-chan error
-	// window 是这一次实际怎么开的：要有头但凑不出屏幕时会退回无头。
+	// window 是这一次实际怎么开的：Termux 上凑不出屏幕时会退回无头，别处始终是有头。
 	window BrowserWindow
 }
 
@@ -435,12 +435,12 @@ func launchChromeProcessWithEnv(ctx context.Context, executable, root string, ar
 
 	wsURL := make(chan string, 1)
 	go func() {
-		defer recoverGoroutinePanic("headless_browser_cdp.scanChromeDiagnostics")
+		defer recoverGoroutinePanic("render_browser_cdp.scanChromeDiagnostics")
 		scanChromeDiagnostics(stderr, diagnostics, wsURL)
 	}()
 	done := make(chan error, 1)
 	go func() {
-		defer recoverGoroutinePanic("headless_browser_cdp.go:321")
+		defer recoverGoroutinePanic("render_browser_cdp.waitChromeProcess")
 		done <- cmd.Wait()
 	}()
 
@@ -451,10 +451,10 @@ func launchChromeProcessWithEnv(ctx context.Context, executable, root string, ar
 		return &sandboxedChromeProcess{wsURL: value, diagnostics: diagnostics, cancel: cancel, done: done}, nil
 	case err := <-done:
 		cancel()
-		return nil, fmt.Errorf("headless browser exited before CDP startup: %w: %s", err, compactBrowserError(diagnostics.String()))
+		return nil, fmt.Errorf("browser exited before CDP startup: %w: %s", err, compactBrowserError(diagnostics.String()))
 	case <-timer.C:
 		cancel()
-		return nil, fmt.Errorf("headless browser CDP startup timeout: %s", compactBrowserError(diagnostics.String()))
+		return nil, fmt.Errorf("browser CDP startup timeout: %s", compactBrowserError(diagnostics.String()))
 	case <-ctx.Done():
 		cancel()
 		return nil, ctx.Err()
@@ -510,7 +510,7 @@ func scanChromeDiagnostics(reader io.Reader, diagnostics *chromeDiagnosticBuffer
 	}
 }
 
-func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executable, root, profileDir, cacheDir, crashDir, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
+func (b *SandboxedBrowser) renderObservable(ctx context.Context, executable, root, profileDir, cacheDir, crashDir, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
 	renderStarted := time.Now()
 	process, err := launchSandboxedChrome(ctx, executable, root, profileDir, cacheDir, crashDir, b.cfg)
 	if err != nil {
@@ -533,7 +533,7 @@ func (b *SandboxedHeadlessBrowser) renderObservable(ctx context.Context, executa
 
 // observeRender 在已经连上的页面里导航并观察到可以收尾。一次性浏览器和搜索复用的
 // 常驻浏览器共用这一段，只是页面从哪来不同。
-func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context, diagnostics func() string, executable, rawURL string, renderStarted time.Time, screenshot ...*[]byte) (RenderedPage, error) {
+func (b *SandboxedBrowser) observeRender(ctx, browserCtx context.Context, diagnostics func() string, executable, rawURL string, renderStarted time.Time, screenshot ...*[]byte) (RenderedPage, error) {
 	tracker := newBrowserActivityTracker(rawURL, time.Now())
 	chromedp.ListenTarget(browserCtx, func(event any) {
 		tracker.observe(event, time.Now())
@@ -545,7 +545,7 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 	// The first Run owns the remote browser lifecycle, so it must use the
 	// long-lived browser context rather than a short setup timeout.
 	if err := chromedp.Run(browserCtx); err != nil {
-		return RenderedPage{}, fmt.Errorf("connect to headless browser CDP: %w", err)
+		return RenderedPage{}, fmt.Errorf("connect to browser CDP: %w", err)
 	}
 	setupTimeout := min(b.cfg.Timeout, browserStartupTimeout)
 	setupCtx, cancelSetup := context.WithTimeout(browserCtx, setupTimeout)
@@ -586,7 +586,7 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 		if setupTimedOut && ctx.Err() == nil {
 			return RenderedPage{}, &browserTimeoutError{message: fmt.Sprintf("渲染 %s 超时：%s 内页面没有响应，已停止加载。这个网址可能打不开或响应太慢，换个地址或稍后再试", rawURL, setupTimeout)}
 		}
-		return RenderedPage{}, fmt.Errorf("headless browser CDP setup failed: %w: %s", err, compactBrowserError(diagnostics()))
+		return RenderedPage{}, fmt.Errorf("browser CDP setup failed: %w: %s", err, compactBrowserError(diagnostics()))
 	}
 
 	observationStarted := time.Now()
@@ -653,7 +653,7 @@ func (b *SandboxedHeadlessBrowser) observeRender(ctx, browserCtx context.Context
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return RenderedPage{}, &browserTimeoutError{message: fmt.Sprintf("渲染 %s 超时：%s 内页面始终没有可读取的内容", rawURL, time.Since(renderStarted).Round(time.Millisecond))}
 			}
-			return RenderedPage{}, fmt.Errorf("headless browser render ended after %s with no capturable content: %w", time.Since(renderStarted).Round(time.Millisecond), ctx.Err())
+			return RenderedPage{}, fmt.Errorf("browser render ended after %s with no capturable content: %w", time.Since(renderStarted).Round(time.Millisecond), ctx.Err())
 		case <-ticker.C:
 		}
 
@@ -698,7 +698,7 @@ func handlePausedBrowserDocument(ctx context.Context, tracker *browserActivityTr
 	requestID := event.RequestID
 	rawURL := event.Request.URL
 	go func() {
-		defer recoverGoroutinePanic("headless_browser_cdp.go:491")
+		defer recoverGoroutinePanic("render_browser_cdp.handlePausedBrowserDocument")
 		browserContext := chromedp.FromContext(ctx)
 		if browserContext == nil || browserContext.Target == nil {
 			return
@@ -738,7 +738,7 @@ func evaluateBrowserDOMProbe(ctx context.Context) (browserDOMProbe, error) {
 	return probe, err
 }
 
-func (b *SandboxedHeadlessBrowser) captureObservablePage(ctx context.Context, requestedURL string) (RenderedPage, error) {
+func (b *SandboxedBrowser) captureObservablePage(ctx context.Context, requestedURL string) (RenderedPage, error) {
 	captureCtx, cancel := context.WithTimeout(ctx, browserCaptureTimeout)
 	defer cancel()
 	var snapshot struct {
@@ -753,7 +753,7 @@ func (b *SandboxedHeadlessBrowser) captureObservablePage(ctx context.Context, re
 		return RenderedPage{}, err
 	}
 	if strings.TrimSpace(snapshot.HTML) == "" {
-		return RenderedPage{}, errors.New("headless browser returned an empty DOM snapshot")
+		return RenderedPage{}, errors.New("browser returned an empty DOM snapshot")
 	}
 	page, err := parseRenderedPage([]byte(snapshot.HTML), requestedURL, b.cfg.MaxTextChars, snapshot.Truncated)
 	if err != nil {
@@ -767,14 +767,14 @@ func (b *SandboxedHeadlessBrowser) captureObservablePage(ctx context.Context, re
 	return page, nil
 }
 
-func (b *SandboxedHeadlessBrowser) finishObservableRender(ctx context.Context, executable, requestedURL string, started time.Time, probe browserDOMProbe, decision renderDecision, activity browserActivitySnapshot, captures []capturedBrowserPage, stable bool, reason string, screenshot ...*[]byte) (RenderedPage, error) {
+func (b *SandboxedBrowser) finishObservableRender(ctx context.Context, executable, requestedURL string, started time.Time, probe browserDOMProbe, decision renderDecision, activity browserActivitySnapshot, captures []capturedBrowserPage, stable bool, reason string, screenshot ...*[]byte) (RenderedPage, error) {
 	if activity.BlockedError != nil {
 		return RenderedPage{}, activity.BlockedError
 	}
 	page, err := b.captureObservablePage(ctx, requestedURL)
 	if err != nil {
 		if len(captures) == 0 {
-			return RenderedPage{}, fmt.Errorf("headless browser did not produce a readable DOM: %w", err)
+			return RenderedPage{}, fmt.Errorf("browser did not produce a readable DOM: %w", err)
 		}
 		page = captures[len(captures)-1].page
 	}

@@ -166,7 +166,7 @@ func relationAvatarIDs(graph GroupRelationGraph, maxSeats int) []string {
 	return ids
 }
 
-// RenderGroupRelationHTML 把关系图渲染成一张自包含的 HTML，交给无头浏览器截图。
+// RenderGroupRelationHTML 把关系图渲染成一张自包含的 HTML，交给一次性浏览器截图。
 // avatars 是解码好的头像，按账号索引；没有的人画成纯色圆点。
 func RenderGroupRelationHTML(graph GroupRelationGraph, title string, rangeLabel string, maxSeats int, avatars map[string]image.Image) string {
 	var body strings.Builder

@@ -177,7 +177,7 @@ func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run fun
 		fonts[fmt.Sprintf("%s/diana-font-%d.ttf", htmlCaptureOrigin, index)] = file
 	}
 
-	executable, err := findHeadlessBrowserExecutable(req.Executable)
+	executable, err := findChromeExecutable(req.Executable)
 	if err != nil {
 		return fmt.Errorf("html capture: %w", err)
 	}

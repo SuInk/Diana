@@ -27,7 +27,7 @@ func TestWarmSearchBrowserReusesProcessAndIsolatesCookies(t *testing.T) {
 			warmSearchBrowser.session = nil
 		}
 	})
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, ReuseProcess: true})
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, ReuseProcess: true})
 	started := time.Now()
 	if _, err := renderer.Render(context.Background(), "https://httpbin.org/cookies/set?diana_isolation=leaked"); err != nil {
 		t.Fatal(err)

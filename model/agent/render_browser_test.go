@@ -267,7 +267,7 @@ func TestRenderReadinessAcceptsStableLoadingDocumentAfterGrace(t *testing.T) {
 	}
 }
 
-func TestSandboxedHeadlessBrowserIntegration(t *testing.T) {
+func TestSandboxedBrowserIntegration(t *testing.T) {
 	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
 		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
@@ -275,7 +275,7 @@ func TestSandboxedHeadlessBrowserIntegration(t *testing.T) {
 	if targetURL == "" {
 		targetURL = "https://example.com"
 	}
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{
 		Timeout:           30 * time.Second,
 		VirtualTimeBudget: 3 * time.Second,
 	})
@@ -292,11 +292,11 @@ func TestSandboxedHeadlessBrowserIntegration(t *testing.T) {
 	}
 }
 
-func TestSandboxedHeadlessBrowserDelayedRedirectIntegration(t *testing.T) {
+func TestSandboxedBrowserDelayedRedirectIntegration(t *testing.T) {
 	if os.Getenv("DIANA_HEADLESS_BROWSER_REDIRECT_INTEGRATION") != "1" {
 		t.Skip("set DIANA_HEADLESS_BROWSER_REDIRECT_INTEGRATION=1 to run delayed redirect integration")
 	}
-	renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{})
+	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{})
 	page, err := renderer.Render(context.Background(), "https://67movies.xyz")
 	if err != nil {
 		t.Fatal(err)
@@ -313,14 +313,14 @@ func TestSandboxedHeadlessBrowserDelayedRedirectIntegration(t *testing.T) {
 // 插件在控制台上是「已启用」，机器上没装浏览器也照样是「已启用」——以前只有等
 // 有人发了链接才会知道。探测要能分清「没找到」和「找到了但跑不起来」，这两种
 // 的处理方式完全不同。
-func TestProbeHeadlessBrowserReportsWhyItIsUnavailable(t *testing.T) {
+func TestProbeRenderBrowserReportsWhyItIsUnavailable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 上 chrome.exe 不往标准输出打印版本，探测走的是另一条路径")
 	}
 	dir := t.TempDir()
 
 	missing := filepath.Join(dir, "nope")
-	status := ProbeHeadlessBrowser(context.Background(), missing)
+	status := ProbeRenderBrowser(context.Background(), missing)
 	if status.Available || !strings.Contains(status.Detail, missing) {
 		t.Fatalf("status=%#v", status)
 	}
@@ -328,14 +328,14 @@ func TestProbeHeadlessBrowserReportsWhyItIsUnavailable(t *testing.T) {
 	// 存在但一执行就失败：架构不匹配、缺动态库都是这个形状，不能算可用。
 	broken := filepath.Join(dir, "broken")
 	writeExecutable(t, broken, "#!/bin/sh\necho 'error while loading shared libraries' >&2\nexit 127\n")
-	status = ProbeHeadlessBrowser(context.Background(), broken)
+	status = ProbeRenderBrowser(context.Background(), broken)
 	if status.Available || status.Path != broken || !strings.Contains(status.Detail, "执行失败") {
 		t.Fatalf("status=%#v", status)
 	}
 
 	working := filepath.Join(dir, "chromium")
 	writeExecutable(t, working, "#!/bin/sh\necho 'Chromium 120.0.6099.109'\n")
-	status = ProbeHeadlessBrowser(context.Background(), working)
+	status = ProbeRenderBrowser(context.Background(), working)
 	if !status.Available || status.Path != working || status.Version != "Chromium 120.0.6099.109" {
 		t.Fatalf("status=%#v", status)
 	}
@@ -351,28 +351,28 @@ func writeExecutable(t *testing.T, path, body string) {
 	}
 }
 
-// TestHeadlessBrowserExecutableHonoursEnvironment 盯住三条路径认同一份浏览器配置。
+// TestBrowserExecutableHonoursEnvironment 盯住三条路径认同一份浏览器配置。
 //
 // 环境变量原先只写在 SandboxedBrowserConfig 的默认值里，于是只有网页渲染认得它；
-// 截图和可用性探测走 findHeadlessBrowserExecutable 这条入口，读不到。浏览器装在
+// 截图和可用性探测走 findChromeExecutable 这条入口，读不到。浏览器装在
 // 非标准路径、靠环境变量指过去的机器上，症状就是网页渲染能用、关系图却报「这台
 // 机器上没有可用的无头浏览器」。
-func TestHeadlessBrowserExecutableHonoursEnvironment(t *testing.T) {
+func TestBrowserExecutableHonoursEnvironment(t *testing.T) {
 	fake := filepath.Join(t.TempDir(), "fake-chrome")
 	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho fake\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 
 	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", fake)
-	got, err := findHeadlessBrowserExecutable("")
+	got, err := findChromeExecutable("")
 	if err != nil || got != fake {
-		t.Fatalf("findHeadlessBrowserExecutable(\"\") = %q, %v，想要 %q", got, err, fake)
+		t.Fatalf("findChromeExecutable(\"\") = %q, %v，想要 %q", got, err, fake)
 	}
 
 	// 另一个环境变量名同样认。
 	t.Setenv("DIANA_HEADLESS_BROWSER_EXECUTABLE", "")
 	t.Setenv("DIANA_AGENT_BROWSER_EXECUTABLE", fake)
-	if got, err := findHeadlessBrowserExecutable(""); err != nil || got != fake {
+	if got, err := findChromeExecutable(""); err != nil || got != fake {
 		t.Fatalf("备用环境变量没生效：%q, %v", got, err)
 	}
 
@@ -381,12 +381,12 @@ func TestHeadlessBrowserExecutableHonoursEnvironment(t *testing.T) {
 	if err := os.WriteFile(other, []byte("#!/bin/sh\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := findHeadlessBrowserExecutable(other); err != nil || got != other {
+	if got, err := findChromeExecutable(other); err != nil || got != other {
 		t.Fatalf("显式路径被环境变量盖掉了：%q, %v", got, err)
 	}
 
 	// 探测走的是同一个入口，结论必须跟着一致。
-	if status := ProbeHeadlessBrowser(context.Background(), ""); status.Path != fake {
+	if status := ProbeRenderBrowser(context.Background(), ""); status.Path != fake {
 		t.Fatalf("探测没有认环境变量：%#v", status)
 	}
 }
@@ -875,7 +875,7 @@ func TestSettledPageFinishesAfterGraceInsteadOfObservationWindow(t *testing.T) {
 // 宽限期的取值夹在稳定窗和观察窗之间：短于稳定窗等于没有宽限，长过观察窗永远轮不到。
 func TestSettledGraceClampedBetweenStabilityAndObservationWindow(t *testing.T) {
 	cfg := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{})
-	if cfg.SettledGrace != defaultHeadlessBrowserSettledGrace {
+	if cfg.SettledGrace != defaultRenderBrowserSettledGrace {
 		t.Fatalf("default SettledGrace = %s", cfg.SettledGrace)
 	}
 	short := sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{StabilityWindow: 3 * time.Second, SettledGrace: time.Second})

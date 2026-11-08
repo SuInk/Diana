@@ -90,8 +90,8 @@ func runningOnMusl() bool {
 
 // downloadChromeForTesting 从 Chrome for Testing 拉取 Stable 版完整 Chrome
 // （有头构建），解压到 browserDownloadDir() 下并返回可执行文件路径。统一用完整
-// 二进制、调用时以 --headless=new 无头运行：渲染行为与桌面版 Chrome 完全一致，
-// 不引入旧无头实现的差异。官方 zip 不带校验和，完整性以「--version 能跑通」
+// 二进制：网页渲染和内置浏览器都按有头方式启动（Termux 没屏幕时除外），行为与
+// 桌面版 Chrome 完全一致。官方 zip 不带校验和，完整性以「--version 能跑通」
 // 为准——和依赖探测同一把尺子，调用方随后验证。重复调用会重新下载并覆盖，
 // 也用于升级到新版本。
 //

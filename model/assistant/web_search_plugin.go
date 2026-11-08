@@ -252,7 +252,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 		totalTimeout = max(totalTimeout, minSearchEngineTotalTimeout)
 		renderer = p.renderer
 		if renderer == nil {
-			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
+			renderer = agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
 		}
 	} else {
 		if settings.Bool(webSearchSettingExaEnabled, true) {
@@ -287,7 +287,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	if renderer == nil {
 		renderer = p.renderer
 		if renderer == nil {
-			renderer = agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
+			renderer = agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true})
 		}
 	}
 

@@ -32,8 +32,8 @@ type ScreenshotRequest struct {
 }
 
 // CaptureHTMLScreenshot renders local HTML to PNG in the same headed-hidden browser path used by
-// webpage rendering. If the host cannot provide a real or virtual display, browser launch falls
-// back to headless automatically. A missing browser remains an explicit error.
+// webpage rendering. Without a real or virtual display the launch fails (only Termux falls back
+// to headless). A missing browser remains an explicit error.
 func CaptureHTMLScreenshot(ctx context.Context, req ScreenshotRequest) ([]byte, error) {
 	if strings.TrimSpace(req.HTML) == "" {
 		return nil, errors.New("screenshot: empty html")

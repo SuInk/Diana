@@ -48,7 +48,7 @@ func TestLiveSearchMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal("cannot initialize replay model")
 	}
-	renderer := agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, Timeout: 30 * time.Second})
+	renderer := agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, Timeout: 30 * time.Second})
 	cases := []searchMigrationCase{
 		{"opus-original-full", "", true, true, true},
 		{"opus-leading-full-1", "嘉然 Claude Opus5.5是不是根本不存在？", true, true, true},

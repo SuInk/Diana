@@ -25,9 +25,9 @@ type PageScreenshotter interface {
 
 // Screenshot uses a fresh profile and renders the actual webpage, including
 // GitHub URLs for which textual rendering may otherwise use the official API.
-func (b *SandboxedHeadlessBrowser) Screenshot(ctx context.Context, rawURL string) (PageScreenshot, error) {
+func (b *SandboxedBrowser) Screenshot(ctx context.Context, rawURL string) (PageScreenshot, error) {
 	if b == nil {
-		return PageScreenshot{}, errors.New("headless browser is not configured")
+		return PageScreenshot{}, errors.New("browser is not configured")
 	}
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.Timeout)
 	defer cancel()
@@ -50,7 +50,7 @@ type WebpageScreenshotTool struct {
 
 func NewWebpageScreenshotTool(browser PageScreenshotter) *WebpageScreenshotTool {
 	if browser == nil {
-		browser = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{})
+		browser = NewSandboxedBrowser(SandboxedBrowserConfig{})
 	}
 	return &WebpageScreenshotTool{browser: browser}
 }

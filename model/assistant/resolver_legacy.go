@@ -134,7 +134,7 @@ func (p *ResolverPlugin) resolveDouyin(ctx context.Context, req PluginRequest, r
 }
 
 // xiaohongshuBrowserFallback 在抓不到笔记时自动改用浏览器渲染，不要求用户先去打开
-// 什么开关：开了沙盒浏览器就交给它，否则直接用内置的无头浏览器渲染一次，拿标题和摘要。
+// 什么开关：开了沙盒浏览器就交给它，否则直接用一次性浏览器渲染一次，拿标题和摘要。
 // 两条都走不通才回文字，而且文字里说的是「这条路读不到」，不是「笔记不存在」。
 func (p *ResolverPlugin) xiaohongshuBrowserFallback(ctx context.Context, req PluginRequest, raw, nickname, reason string) resolverPlatformResult {
 	if req.SandboxedBrowserEnabled {

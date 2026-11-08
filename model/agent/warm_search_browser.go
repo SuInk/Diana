@@ -191,7 +191,7 @@ func (s *warmBrowserSession) openIsolatedPage(ctx context.Context) (context.Cont
 
 // renderOnWarmBrowser 用常驻浏览器渲染一次；常驻浏览器起不来时返回 ok=false，
 // 由调用方退回一次性浏览器。
-func (b *SandboxedHeadlessBrowser) renderOnWarmBrowser(ctx context.Context, executable, rawURL string) (RenderedPage, bool, error) {
+func (b *SandboxedBrowser) renderOnWarmBrowser(ctx context.Context, executable, rawURL string) (RenderedPage, bool, error) {
 	renderStarted := time.Now()
 	session, release, err := warmSearchBrowser.acquire(ctx, executable, b.cfg)
 	if err != nil {

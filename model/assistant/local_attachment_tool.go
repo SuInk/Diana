@@ -223,7 +223,7 @@ func (t *dianaLocalAttachmentTool) viewSVGImage(ctx context.Context, data []byte
 	return `{"status":"loaded","message":"SVG 已栅格化，真实画面已附加到工具结果；尚未发送到聊天。"}`, nil
 }
 
-// sendSVGImage 把 SVG 文件经无头浏览器栅格化成 PNG 发到当前会话。
+// sendSVGImage 把 SVG 文件经一次性浏览器栅格化成 PNG 发到当前会话。
 // 数据已经整体读进内存，命令进程在截图期间改不了它。
 func (t *dianaLocalAttachmentTool) sendSVGImage(ctx context.Context, data []byte) (string, error) {
 	if t.runtime == nil || !t.runtime.sandboxedBrowserEnabled(t.event) {

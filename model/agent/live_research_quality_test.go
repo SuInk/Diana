@@ -46,7 +46,7 @@ func TestLiveResearchQuality(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := &researchRecordedClient{client: client}
-			renderer := NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, Timeout: 30 * time.Second})
+			renderer := NewSandboxedBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, Timeout: 30 * time.Second})
 			search, err := NewWebSearchTool(WebSearchToolOptions{Config: browserSearchEvalConfig(), Timeout: 60 * time.Second, Renderer: renderer})
 			if err != nil {
 				t.Fatal(err)

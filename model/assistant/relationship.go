@@ -140,7 +140,7 @@ func (p RelationshipPolicy) allowedAgentToolNames() map[string]bool {
 		dianaRoomToolName:   true,
 		// 只发模型自己写的文本内容，不碰本地文件和命令；「仅主人可用」由插件设置在工具内判断。
 		dianaFileDeliveryToolName: true,
-		// 同插件的渲染：页面在断网无头浏览器里跑，碰不到本地文件和命令。
+		// 同插件的渲染：页面在断网的一次性浏览器里跑，碰不到本地文件和命令。
 		dianaRenderMediaToolName: true,
 		// 查图是不是 AI 生成的只读图片元数据，不碰本地文件和命令；群里人人都会问。
 		dianaAIImageDetectToolName: true,

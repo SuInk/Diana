@@ -58,11 +58,11 @@ func RefreshBrowserDependencies() []ResolverDependency {
 }
 
 func probeBrowserDependencies() []ResolverDependency {
-	status := agent.ProbeHeadlessBrowserRendering(context.Background(), "")
+	status := agent.ProbeRenderBrowserRendering(context.Background(), "")
 	return append(browserDependenciesFromStatus(status, runtime.GOOS, lookResolverCommand), cjkFontDependency())
 }
 
-func browserDependenciesFromStatus(status agent.HeadlessBrowserStatus, goos string, lookPath func(string) (string, error)) []ResolverDependency {
+func browserDependenciesFromStatus(status agent.RenderBrowserStatus, goos string, lookPath func(string) (string, error)) []ResolverDependency {
 	dep := ResolverDependency{
 		Name:    browserDependencyName,
 		Purpose: "网页渲染：使用系统 Chromium / Google Chrome",
@@ -114,7 +114,7 @@ func installBrowserDependency(ctx context.Context) (ResolverDependencyInstallRes
 	if runtime.GOOS == "linux" && !runningOnMusl() && !termux.Detected() {
 		path, err := downloadChromeForTesting(ctx)
 		if err == nil {
-			status := agent.ProbeHeadlessBrowserRendering(ctx, path)
+			status := agent.ProbeRenderBrowserRendering(ctx, path)
 			if status.Available {
 				return verifiedBrowserInstallResult("Chrome for Testing")
 			}

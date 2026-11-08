@@ -27,18 +27,18 @@ import (
 )
 
 const (
-	defaultHeadlessBrowserTimeout     = 25 * time.Second
-	defaultHeadlessBrowserHTMLBytes   = 4 * 1024 * 1024
-	defaultHeadlessBrowserTextChars   = 8000
-	defaultHeadlessBrowserVirtualTime = 8 * time.Second
+	defaultRenderBrowserTimeout     = 25 * time.Second
+	defaultRenderBrowserHTMLBytes   = 4 * 1024 * 1024
+	defaultRenderBrowserTextChars   = 8000
+	defaultRenderBrowserVirtualTime = 8 * time.Second
 	// 页面稳住 2.5 秒且没有观察窗内到期的一次性回调就收尾（见 settledWithoutScheduledWork）。
 	// 稳定窗是 0.9 秒，这里留它的近三倍：延迟补内容的页面几乎都在稳住后一两秒内再动。
-	defaultHeadlessBrowserSettledGrace = 2500 * time.Millisecond
-	// headlessBrowserProbeTimeout 只够跑一次 --version；探测卡住不该拖住整个设置页。
-	headlessBrowserProbeTimeout = 5 * time.Second
+	defaultRenderBrowserSettledGrace = 2500 * time.Millisecond
+	// renderBrowserProbeTimeout 只够跑一次 --version；探测卡住不该拖住整个设置页。
+	renderBrowserProbeTimeout = 5 * time.Second
 )
 
-// RenderedPage is the sanitized result of one disposable headless browser run.
+// RenderedPage is the sanitized result of one disposable browser run.
 type RenderedPage struct {
 	SourceStage     string                 `json:"source_stage,omitempty"`
 	SourceType      string                 `json:"source_type,omitempty"`
@@ -200,7 +200,7 @@ type SandboxedBrowserConfig struct {
 	PollInterval      time.Duration
 	// SettledGrace 是页面 complete、网络静止后 DOM 连续不动多久就收尾，不再等满
 	// VirtualTimeBudget；只有观察窗内还会到期的一次性 setTimeout 能把它拦下。
-	// 默认 defaultHeadlessBrowserSettledGrace，设成 0 以上、不超过 VirtualTimeBudget。
+	// 默认 defaultRenderBrowserSettledGrace，设成 0 以上、不超过 VirtualTimeBudget。
 	SettledGrace time.Duration
 	// ReuseProcess 让渲染复用一个常驻浏览器进程，每次在隐身上下文里打开页面，
 	// 省掉每次启动 Chrome 的时间。搜索结果页和 browser_render 都用；起不来时退回
@@ -214,22 +214,22 @@ type SandboxedBrowserConfig struct {
 	FetchEndpoint string
 }
 
-// SandboxedHeadlessBrowser starts a fresh Chrome/Chromium profile for every render.
-type SandboxedHeadlessBrowser struct {
+// SandboxedBrowser starts a fresh Chrome/Chromium profile for every render.
+type SandboxedBrowser struct {
 	cfg SandboxedBrowserConfig
 }
 
-func NewSandboxedHeadlessBrowser(cfg SandboxedBrowserConfig) *SandboxedHeadlessBrowser {
-	return &SandboxedHeadlessBrowser{cfg: sandboxedBrowserConfigWithDefaults(cfg)}
+func NewSandboxedBrowser(cfg SandboxedBrowserConfig) *SandboxedBrowser {
+	return &SandboxedBrowser{cfg: sandboxedBrowserConfigWithDefaults(cfg)}
 }
 
-func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (RenderedPage, error) {
+func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedPage, error) {
 	if b == nil {
-		return RenderedPage{}, errors.New("headless browser is not configured")
+		return RenderedPage{}, errors.New("browser is not configured")
 	}
 	timeout := b.cfg.Timeout
 	if timeout <= 0 {
-		timeout = defaultHeadlessBrowserTimeout
+		timeout = defaultRenderBrowserTimeout
 	}
 	queueCtx := ctx
 	if err := validateSandboxedBrowserURL(ctx, rawURL); err != nil {
@@ -276,8 +276,8 @@ func (b *SandboxedHeadlessBrowser) Render(ctx context.Context, rawURL string) (R
 
 // renderBrowser 先排队拿一次性浏览器的名额，再起进程。排队的时间不算进渲染超时：
 // 渲染的期限在拿到名额之后按原来剩下的时长顺延，没排队时和以前完全一样。
-func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
-	executable, err := findHeadlessBrowserExecutable(b.cfg.Executable)
+func (b *SandboxedBrowser) renderBrowser(queueCtx, ctx context.Context, rawURL string, screenshot ...*[]byte) (RenderedPage, error) {
+	executable, err := findChromeExecutable(b.cfg.Executable)
 	if err != nil {
 		return RenderedPage{}, err
 	}
@@ -299,7 +299,7 @@ func (b *SandboxedHeadlessBrowser) renderBrowser(queueCtx, ctx context.Context, 
 		}
 	}
 
-	dirs, err := newBrowserSandboxDirs("diana-headless-browser-")
+	dirs, err := newBrowserSandboxDirs("diana-render-browser-")
 	if err != nil {
 		return RenderedPage{}, err
 	}
@@ -326,22 +326,22 @@ var resolveBrowserDisplay = func() ([]string, error) {
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_TIMEOUT_MS", defaultHeadlessBrowserTimeout)
+		cfg.Timeout = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_TIMEOUT_MS", defaultRenderBrowserTimeout)
 	}
 	if cfg.Timeout > MaxAllowedBrowserTimeoutMS*time.Millisecond {
 		cfg.Timeout = MaxAllowedBrowserTimeoutMS * time.Millisecond
 	}
 	if cfg.MaxHTMLBytes <= 0 {
-		cfg.MaxHTMLBytes = defaultHeadlessBrowserHTMLBytes
+		cfg.MaxHTMLBytes = defaultRenderBrowserHTMLBytes
 	}
 	if cfg.MaxTextChars <= 0 {
-		cfg.MaxTextChars = intFromEnv("DIANA_HEADLESS_BROWSER_MAX_CHARS", defaultHeadlessBrowserTextChars)
+		cfg.MaxTextChars = intFromEnv("DIANA_HEADLESS_BROWSER_MAX_CHARS", defaultRenderBrowserTextChars)
 	}
 	if cfg.MaxTextChars > MaxAllowedToolOutputChars {
 		cfg.MaxTextChars = MaxAllowedToolOutputChars
 	}
 	if cfg.VirtualTimeBudget <= 0 {
-		cfg.VirtualTimeBudget = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_VIRTUAL_TIME_MS", defaultHeadlessBrowserVirtualTime)
+		cfg.VirtualTimeBudget = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_VIRTUAL_TIME_MS", defaultRenderBrowserVirtualTime)
 	}
 	if cfg.VirtualTimeBudget > 15*time.Second {
 		cfg.VirtualTimeBudget = 15 * time.Second
@@ -368,7 +368,7 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 		cfg.PollInterval = time.Second
 	}
 	if cfg.SettledGrace <= 0 {
-		cfg.SettledGrace = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_SETTLED_GRACE_MS", defaultHeadlessBrowserSettledGrace)
+		cfg.SettledGrace = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_SETTLED_GRACE_MS", defaultRenderBrowserSettledGrace)
 	}
 	// 宽限期不能短于稳定窗（否则 contentStable 一成立就收尾，宽限形同虚设），也
 	// 不能长过观察窗（那就永远轮不到它）。
@@ -397,8 +397,8 @@ func intFromEnv(key string, fallback int) int {
 	return value
 }
 
-// HeadlessBrowserStatus 是沙盒无头浏览器的可用性探测结果。
-type HeadlessBrowserStatus struct {
+// RenderBrowserStatus 是一次性渲染浏览器的可用性探测结果。
+type RenderBrowserStatus struct {
 	Available bool
 	Path      string
 	Version   string
@@ -407,23 +407,23 @@ type HeadlessBrowserStatus struct {
 	Detail string
 }
 
-// ProbeHeadlessBrowser 检查沙盒渲染现在能不能真的跑起来。
+// ProbeRenderBrowser 检查沙盒渲染现在能不能真的跑起来。
 //
 // 判定以「--version 真的执行成功」为准，而不是文件存在：架构不匹配、缺动态库、
 // 悬空的符号链接都能骗过存在性检查，却一渲染就失败——那时候用户已经在群里发过
 // 链接了，只会看到一句「渲染失败」，还不知道是环境问题。
-func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowserStatus {
-	path, err := findHeadlessBrowserExecutable(configured)
+func ProbeRenderBrowser(ctx context.Context, configured string) RenderBrowserStatus {
+	path, err := findChromeExecutable(configured)
 	if err != nil {
-		return HeadlessBrowserStatus{Detail: headlessBrowserProbeDetail(configured)}
+		return RenderBrowserStatus{Detail: renderBrowserProbeDetail(configured)}
 	}
 	// Windows 上的 chrome.exe 是 GUI 子系统程序，--version 什么都不往标准输出写，
 	// 拿它判活会把装好的 Chrome 判成不可用。这里退回到「可执行文件存在」，
 	// 版本号留空。
 	if runtime.GOOS == "windows" {
-		return HeadlessBrowserStatus{Available: true, Path: path, Engine: "chrome"}
+		return RenderBrowserStatus{Available: true, Path: path, Engine: "chrome"}
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, renderBrowserProbeTimeout)
 	defer cancel()
 	output, err := procgroup.CommandContext(probeCtx, path, "--version").CombinedOutput()
 	if err != nil {
@@ -431,21 +431,21 @@ func ProbeHeadlessBrowser(ctx context.Context, configured string) HeadlessBrowse
 		if message := compactBrowserError(string(output)); message != "" {
 			detail += "：" + message
 		}
-		return HeadlessBrowserStatus{Path: path, Detail: detail}
+		return RenderBrowserStatus{Path: path, Detail: detail}
 	}
 	version := strings.TrimSpace(firstNonEmptyLine(string(output)))
-	return HeadlessBrowserStatus{Available: true, Path: path, Version: version, Engine: "chrome"}
+	return RenderBrowserStatus{Available: true, Path: path, Version: version, Engine: "chrome"}
 }
 
-// ProbeHeadlessBrowserRendering 验证版本、本地截图及网页沙箱/CDP 执行。
+// ProbeRenderBrowserRendering 验证版本、本地截图及网页沙箱/CDP 执行。
 // --version 只能证明文件能执行，不能发现浏览器启动后卡住、沙箱参数不兼容或无法
 // 产出 PNG。插件依赖页用这个探测，结论才和真正调用时一致。
-func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) HeadlessBrowserStatus {
-	status := ProbeHeadlessBrowser(ctx, configured)
+func ProbeRenderBrowserRendering(ctx context.Context, configured string) RenderBrowserStatus {
+	status := ProbeRenderBrowser(ctx, configured)
 	if !status.Available {
 		return status
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	probeCtx, cancel := context.WithTimeout(ctx, renderBrowserProbeTimeout)
 	defer cancel()
 	executable := status.Path
 	_, err := captureHTMLScreenshot(probeCtx, ScreenshotRequest{
@@ -453,14 +453,14 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 		Width:      64,
 		Height:     64,
 		Executable: executable,
-		Timeout:    headlessBrowserProbeTimeout,
+		Timeout:    renderBrowserProbeTimeout,
 	})
 	if err != nil {
 		status.Available = false
 		status.Detail = "找到了 " + status.Path + "，但真实截图失败：" + err.Error()
 		return status
 	}
-	sandboxCtx, cancelSandbox := context.WithTimeout(ctx, headlessBrowserProbeTimeout)
+	sandboxCtx, cancelSandbox := context.WithTimeout(ctx, renderBrowserProbeTimeout)
 	defer cancelSandbox()
 	if err := probeSandboxedChrome(sandboxCtx, status.Path); err != nil {
 		status.Available = false
@@ -473,7 +473,7 @@ func ProbeHeadlessBrowserRendering(ctx context.Context, configured string) Headl
 	return status
 }
 
-func headlessBrowserProbeDetail(configured string) string {
+func renderBrowserProbeDetail(configured string) string {
 	if strings.TrimSpace(configured) != "" {
 		return "配置的浏览器路径不存在：" + strings.TrimSpace(configured)
 	}
@@ -489,13 +489,13 @@ func firstNonEmptyLine(value string) string {
 	return ""
 }
 
-// findHeadlessBrowserExecutable 解析浏览器可执行文件。三条路径共用它：网页渲染、
+// findChromeExecutable 解析浏览器可执行文件。三条路径共用它：网页渲染、
 // 截图和可用性探测。
 //
 // 环境变量的兜底必须在这里，不能只写在 SandboxedBrowserConfig 的默认值里——那样
 // 只有网页渲染认得它，截图和探测走的是另一条入口。浏览器装在非标准路径、靠环境
 // 变量指过去的机器上，症状就是网页渲染能用，关系图却报「这台机器上没有浏览器」。
-func findHeadlessBrowserExecutable(configured string) (string, error) {
+func findChromeExecutable(configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
 		configured = firstNonEmptyString(
@@ -510,7 +510,7 @@ func findHeadlessBrowserExecutable(configured string) (string, error) {
 		if path, err := exec.LookPath(configured); err == nil {
 			return path, nil
 		}
-		return "", fmt.Errorf("configured headless browser executable not found: %s", configured)
+		return "", fmt.Errorf("configured browser executable not found: %s", configured)
 	}
 
 	// Termux 的程序都在 $PREFIX/bin，服务管理器起的进程 PATH 里未必有它。
@@ -794,7 +794,7 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 	}
 	page.FullText = truncateText(fullText, maxRenderedFullTextChars)
 	if page.Title == "" && page.Description == "" && page.Text == "" {
-		return RenderedPage{}, errors.New("headless browser rendered an empty page")
+		return RenderedPage{}, errors.New("browser rendered an empty page")
 	}
 	page.Links = renderedPageLinks(document, requestedURL)
 	page.Images = renderedPageImages(document, requestedURL)
@@ -1157,7 +1157,7 @@ type BrowserRenderTool struct {
 
 func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
 	if renderer == nil {
-		renderer = NewSandboxedHeadlessBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
+		renderer = NewSandboxedBrowser(SandboxedBrowserConfig{Window: BrowserWindowHidden, ReuseProcess: true})
 	}
 	return &BrowserRenderTool{renderer: renderer}
 }
