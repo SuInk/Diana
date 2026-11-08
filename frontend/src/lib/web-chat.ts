@@ -174,6 +174,17 @@ export function callClock(seconds: number): string {
   return h ? `${h}:${rest}` : rest;
 }
 
+/**
+ * 通话记录正文（「[语音通话] 通话 3 分 12 秒」，后端 formatCallDuration 的写法）换成 QQ
+ * 那样的「03:12」。认不出来时返回空串，页面照原文显示。超过一小时后端只记到分钟。
+ */
+export function callRecordClock(text: string): string {
+  const body = text.replace(/^\[语音通话\]\s*通话\s*/, "").trim();
+  const match = /^(?:(\d+)\s*小时)?\s*(?:(\d+)\s*分)?\s*(?:(\d+)\s*秒)?$/.exec(body);
+  if (!body || !match || !(match[1] || match[2] || match[3])) return "";
+  return callClock(Number(match[1] ?? 0) * 3600 + Number(match[2] ?? 0) * 60 + Number(match[3] ?? 0));
+}
+
 /** 悬停时显示的完整时间。 */
 export function fullTimeLabel(at: number): string {
   const date = new Date(at * 1000);

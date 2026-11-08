@@ -198,19 +198,29 @@
           <p v-else-if="!messages.length && !info?.problem" class="qq-hint">和 {{ current.name }} 打个招呼吧。这里是主人和她的私聊，平台上聊过的也会出现在这里。</p>
           <template v-for="({ message, turns }, i) in chatEntries" :key="message.id">
             <div v-if="dividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
-            <div v-if="message.kind === 'call'" class="qq-call-record" role="note" :data-call-record="message.call_id || undefined">
-              <button v-if="turns?.length" class="qq-call-pill" type="button" :aria-expanded="expandedCalls.has(message.id)" :title="fullTimeLabel(message.at)" @click="toggleCall(message.id)">
-                <Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }} · {{ turns.length }} 句<ChevronDown :size="13" aria-hidden="true" :class="{ open: expandedCalls.has(message.id) }" />
-              </button>
-              <span v-else class="qq-call-pill" :title="fullTimeLabel(message.at)"><Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }}</span>
-              <div v-if="turns?.length && expandedCalls.has(message.id)" class="qq-call-turns">
+            <!-- 通话记录和 QQ 一样是主人这边的一个气泡：电话图标加「通话时长 03:12」。通话里说的话收在气泡下面，点开才看。 -->
+            <template v-if="message.kind === 'call'">
+              <article class="qq-msg user" aria-label="语音通话" :data-call-record="message.call_id || undefined">
+                <div class="qq-bubble-wrap" :title="fullTimeLabel(message.at)">
+                  <div class="qq-bubble qq-call-bubble"><Phone :size="15" aria-hidden="true" />{{ callRecordLabel(message.text) }}</div>
+                  <span class="qq-msg-time">
+                    <button v-if="turns?.length" class="qq-call-toggle" type="button" :aria-expanded="expandedCalls.has(message.id)" @click="toggleCall(message.id)">
+                      通话内容 {{ turns.length }} 句<ChevronDown :size="12" aria-hidden="true" :class="{ open: expandedCalls.has(message.id) }" />
+                    </button>
+                    <time :datetime="new Date(message.at * 1000).toISOString()">{{ clockOf(message.at) }}</time>
+                  </span>
+                </div>
+                <BotAvatar v-if="info?.owner_avatar_url" class="qq-self-avatar" name="我" :src="info.owner_avatar_url" :size="38" aria-hidden="true" />
+                <span v-else class="qq-self" aria-hidden="true">我</span>
+              </article>
+              <div v-if="turns?.length && expandedCalls.has(message.id)" class="qq-call-turns qq-call-turns-record">
                 <p v-for="turn in turns" :key="turn.id" class="qq-call-turn" :class="turn.role">
                   <span class="qq-call-turn-who">{{ turn.role === "user" ? "我" : current.name }}</span>
                   <time :title="fullTimeLabel(turn.at)">{{ clockOf(turn.at) }}</time>
                   <span class="qq-call-turn-text">{{ turn.role === "assistant" ? markdownToPlain(turn.text) : turn.text }}</span>
                 </p>
               </div>
-            </div>
+            </template>
             <article v-else class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : `${current.name} 说`">
               <BotAvatar v-if="message.role === 'assistant'" :name="current.name" :src="current.avatar" :size="38" />
               <div class="qq-bubble-wrap" :title="fullTimeLabel(message.at)">
@@ -274,7 +284,7 @@ import { createAdminChatSession, getAdminChat, listAdminChatSessions, sendAdminC
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
-import { callClock, chatTimeLabel, fullTimeLabel, getWebChat, groupCallTurns, mergeWebChatHistory, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage, type WebChatQuote } from "../lib/web-chat";
+import { callClock, callRecordClock, chatTimeLabel, fullTimeLabel, getWebChat, groupCallTurns, mergeWebChatHistory, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage, type WebChatQuote } from "../lib/web-chat";
 import { getLocalRoom, listLocalRooms, LOCAL_ROOM_OWNER, sendLocalRoom, stopLocalRoom, type LocalRoom, type LocalRoomMessage, type LocalRoomStatus } from "../lib/local-rooms";
 
 interface Contact {
@@ -365,9 +375,10 @@ function lastOf(id: string): WebChatMessage | undefined {
   return lastMessages.value[id];
 }
 
-// 通话记录在聊天里只显示「通话 3 分 12 秒」，前面的电话图标代替「[语音通话]」。
+// 通话记录和 QQ 一样写「通话时长 03:12」，前面的电话图标代替「[语音通话]」。
 function callRecordLabel(text: string): string {
-  return text.replace(/^\[语音通话\]\s*/, "") || "语音通话";
+  const clock = callRecordClock(text);
+  return clock ? `通话时长 ${clock}` : text.replace(/^\[语音通话\]\s*/, "") || "语音通话";
 }
 
 // 列表里一行预览，机器人回复里的 Markdown 标记去掉再显示。
@@ -1226,35 +1237,30 @@ onBeforeUnmount(() => {
 
 /* 通话记录：挂断时记的一条，像 QQ 里的「通话时长」提示一样居中；通话里说的话
    收在里面，点开才看。 */
-.qq-call-record {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  margin: 4px auto 14px;
-}
-
-.qq-call-pill {
+.qq-call-bubble {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 10px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--surface-2);
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
+  gap: 6px;
+  font-variant-numeric: tabular-nums;
 }
 
-button.qq-call-pill {
-  cursor: pointer;
+.qq-msg-time .qq-call-toggle {
+  margin: 0 6px 0 0;
+  padding: 0;
+  color: var(--accent);
+  font-size: 11px;
 }
 
-button.qq-call-pill:hover {
-  color: var(--text);
+.qq-msg-time .qq-call-toggle:hover {
+  background: transparent;
+  text-decoration: underline;
 }
 
-.qq-call-pill svg.open,
+/* 展开的通话内容贴在气泡下面，靠右和主人的气泡对齐。 */
+.qq-call-turns.qq-call-turns-record {
+  margin: -6px 48px 14px auto;
+}
+
 .qq-call-toggle svg.open {
   transform: rotate(180deg);
 }

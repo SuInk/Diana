@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {callClock,chatTimeLabel,groupCallTurns,mergeWebChatHistory,readWebChatFrames,timeDividers} from './web-chat.ts';
+import {callClock,callRecordClock,chatTimeLabel,groupCallTurns,mergeWebChatHistory,readWebChatFrames,timeDividers} from './web-chat.ts';
 
 const stream = (chunks) => new ReadableStream({start(c){for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk)); c.close();}});
 
@@ -47,4 +47,12 @@ test('call clock and history merge', () => {
   assert.equal(callClock(3725), '1:02:05');
   const failed = {id: 'local-1', role: 'user', text: 'x', at: 2, failed: true};
   assert.deepEqual(mergeWebChatHistory([{id: 's', role: 'user', text: 's', at: 1}], [failed]).map(m => m.id), ['s', 'local-1']);
+});
+
+test('call record text becomes a QQ-style clock', () => {
+  assert.equal(callRecordClock('[语音通话] 通话 3 分 12 秒'), '03:12');
+  assert.equal(callRecordClock('[语音通话] 通话 8 秒'), '00:08');
+  assert.equal(callRecordClock('[语音通话] 通话 1 小时 5 分'), '1:05:00');
+  assert.equal(callRecordClock('[语音通话] 通话 0 分 0 秒'), '00:00');
+  assert.equal(callRecordClock('随便一句话'), '');
 });
