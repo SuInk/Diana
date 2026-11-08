@@ -36,7 +36,7 @@ func (p *GroupRelationsPlugin) Manifest() PluginManifest {
 		Description: "在群里画一张以机器人为中心的关系图：群友头像按与它的互动次数排成三圈，越靠里越亲近。也能画本群词云（群友说得最多的词）。数据取自本群的历史消息，不额外记录任何东西。",
 		Official:    true,
 		BuiltIn:     true,
-		Permissions: []string{"message:read", "message:send", "browser:headless"},
+		Permissions: []string{"message:read", "message:send", "browser:render"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         groupRelationsSettingDefaultRange,

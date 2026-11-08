@@ -38,15 +38,15 @@ func TestGroupRelationsPluginIsRegistered(t *testing.T) {
 			t.Fatalf("缺少设置项 %s：%#v", want, found.Settings)
 		}
 	}
-	// 声明要用无头浏览器：渲染依赖它，权限清单得说出来。
+	// 声明要用浏览器渲染：出图依赖它，权限清单得说出来。
 	var declaresBrowser bool
 	for _, permission := range found.Permissions {
-		if permission == "browser:headless" {
+		if permission == "browser:render" {
 			declaresBrowser = true
 		}
 	}
 	if !declaresBrowser {
-		t.Fatalf("没有声明无头浏览器权限：%#v", found.Permissions)
+		t.Fatalf("没有声明浏览器渲染权限：%#v", found.Permissions)
 	}
 }
 
