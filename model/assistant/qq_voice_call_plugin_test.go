@@ -310,3 +310,16 @@ func TestQQCallTokenFallback(t *testing.T) {
 		t.Fatalf("环境变量优先，got %q", got)
 	}
 }
+
+// 设置、环境变量、文件都没有时，默认用接电话那台机器人的 OneBot access token。
+func TestQQCallTokenDefaultsToOneBotToken(t *testing.T) {
+	t.Setenv("QQCALL_TOKEN", "")
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	runtime := NewRuntime(BotConfig{ID: "bot", Platform: PlatformOneBotV11, OneBotAccessToken: "onebot-secret"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	plugin := NewQQVoiceCallPlugin()
+	plugin.runtime = runtime
+	plugin.change = PluginStateChange{Enabled: true, EnabledProfiles: []string{"bot"}, Settings: SettingValues{}}
+	if got := plugin.oneBotTokenFallback(); got != "onebot-secret" {
+		t.Fatalf("默认应用 OneBot token，got %q", got)
+	}
+}

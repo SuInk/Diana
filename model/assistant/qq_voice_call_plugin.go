@@ -113,7 +113,7 @@ func (p *QQVoiceCallPlugin) Manifest() PluginManifest {
 			{
 				Key:         qqVoiceCallSettingAgentToken,
 				Label:       "qqcall-agent 令牌",
-				Description: "和容器里的 QQCALL_TOKEN 环境变量一致。留空时自动读 Diana 这边的 QQCALL_TOKEN 环境变量，或数据目录（数据库所在目录）里的 qqcall-token 文件。",
+				Description: "和容器里的 QQCALL_TOKEN 一致。留空时依次用 Diana 这边的 QQCALL_TOKEN 环境变量、数据目录（数据库所在目录）里的 qqcall-token 文件、接电话那台机器人的 OneBot access token；容器里没设 QQCALL_TOKEN 时 agent 也默认用 OneBot token，一般不用填。",
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
@@ -364,6 +364,9 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string, calls *q
 		// 每次连之前现读：部署时后写进去的令牌文件，下一次重连就能用上，不用重启。
 		token = qqCallTokenFallback()
 	}
+	if token == "" {
+		token = p.oneBotTokenFallback()
+	}
 	if token != "" {
 		header.Set("Authorization", "Bearer "+token)
 	}
@@ -428,6 +431,20 @@ func qqCallTokenFallback() string {
 }
 
 const qqCallTokenFileName = "qqcall-token"
+
+// oneBotTokenFallback 是最后的默认：接电话那台机器人的 OneBot access token。agent 没设
+// QQCALL_TOKEN 时也默认用 SnowLuma 的 OneBot token，两边不用另配就对得上。
+func (p *QQVoiceCallPlugin) oneBotTokenFallback() string {
+	runtime, change := p.settings()
+	if runtime == nil {
+		return ""
+	}
+	profileID, problem := qqVoiceCallProfile(runtime, change)
+	if problem != "" {
+		return ""
+	}
+	return strings.TrimSpace(runtime.profileConfig(profileID).WithDefaults().OneBotAccessToken)
+}
 
 var errQQCallAgentAuth = errors.New("令牌不对，和容器里的 QQCALL_TOKEN 核对一下")
 
