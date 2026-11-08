@@ -341,11 +341,33 @@ func TestRunnerDoesNotRepairFinalByScanningItsText(t *testing.T) {
 	}
 }
 
-func TestRunnerRequiresPendingStateAfterQueuedImage(t *testing.T) {
+// 图片任务受理后 send 写了正文却没填 task_state：直接按 pending 发出，不为补一个
+// 标记字段打回重写。
+func TestRunnerTreatsQueuedImageSendWithTextAsPending(t *testing.T) {
 	tool := &queuedImageTestTool{}
 	client := &scriptedClient{responses: []string{
 		`{"action":"tool","tool":"image","input":{"prompt":"画一只奶鼠"}}`,
-		`{"action":"final","content":"任意未声明任务状态的回复。"}`,
+		`{"action":"final","content":"在画了，画好自动发出来。"}`,
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一只奶鼠"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Text != "在画了，画好自动发出来。" || len(client.requests) != 2 || tool.calls != 1 {
+		t.Fatalf("resp=%#v requests=%d calls=%d", resp, len(client.requests), tool.calls)
+	}
+}
+
+// 空正文、又没填 pending 的收尾仍然要打回：这一轮得让用户知道图在画。
+func TestRunnerRepairsEmptyFinalAfterQueuedImage(t *testing.T) {
+	tool := &queuedImageTestTool{}
+	client := &scriptedClient{responses: []string{
+		`{"action":"tool","tool":"image","input":{"prompt":"画一只奶鼠"}}`,
+		`{"action":"final","content":""}`,
 		`{"action":"final","task_state":"pending","content":"已经开始画啦，完成后会自动发出来。"}`,
 	}}
 	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 3}, NewToolRegistry(tool))

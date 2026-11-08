@@ -1590,8 +1590,20 @@ func imageToolResultQueued(output string) bool {
 	return json.Unmarshal([]byte(output), &result) == nil && result.Queued
 }
 
+// imageTaskFinalIsPending 判断图片任务受理后的这次 send 能不能直接发出。显式填了
+// task_state=pending 当然可以；没填但写了正文、也没要静默的，同样按 pending 放行。
+// task_state 在下游没有别的用途，只是「模型知道图还没画完」的标记，而 swe-2 这类模型
+// 几乎不填可选字段：生产 11-08 一天 15 次图片任务有 8 次因为没填被打回，正文早就写成
+// 「在画了，画好自动发出来」，每次打回多一整轮约 5 万 token 的请求，3 次修满了还会
+// 把模型写好的正文换成固定兜底句。空正文和静默仍走原来的修正。
 func imageTaskFinalIsPending(action llmAction) bool {
-	return action.Action == "final" && strings.EqualFold(strings.TrimSpace(action.TaskState), imageTaskPendingState)
+	if action.Action != "final" {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(action.TaskState), imageTaskPendingState) {
+		return true
+	}
+	return !action.Silent && strings.TrimSpace(action.Content) != ""
 }
 
 func toolExecutionErrorForModel(toolName, message string) string {
