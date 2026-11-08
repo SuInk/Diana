@@ -41,8 +41,8 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 	}
 	// 主动打电话只给主人，而且要开着通话插件，见 call_dial_tool.go。
 	if relationship.Owner && !event.voiceCall && r.plugins != nil && IsOneBotPlatform(cfg.Platform) {
-		if _, _, enabled := r.plugins.PluginWithSettingsForProfile(callPluginID, event.ProfileID); enabled {
-			pluginTools = append(pluginTools, &phoneCallTool{runtime: r, event: event})
+		if _, settings, enabled := r.plugins.PluginWithSettingsForProfile(callPluginID, event.ProfileID); enabled && settings.Bool(callPluginSettingScreen, true) {
+			pluginTools = append(pluginTools, &phoneCallTool{runtime: r, event: event}, &callScreenTool{runtime: r, event: event})
 		}
 	}
 	for index, tool := range pluginTools {

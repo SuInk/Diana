@@ -50,6 +50,7 @@ const (
 	callPluginSettingBargeIn     = "barge_in"
 	callPluginSettingPrivate     = "answer_private"
 	callPluginSettingGroup       = "answer_group"
+	callPluginSettingScreen      = "screen_control"
 
 	callPluginDialTimeout  = 10 * time.Second
 	callPluginRetryMin     = 3 * time.Second
@@ -147,6 +148,14 @@ func (p *CallPlugin) Manifest() PluginManifest {
 				Description: "群里有人发起群语音通话并邀请机器人时加入，按那个群的身份聊，群通话里谁说话都会接。是哪个群由模型读来电窗口上的群名、对照机器人所在的群认出来，认不出就不接。",
 				Type:        PluginSettingTypeBool,
 				Default:     false,
+				GlobalOnly:  true,
+			},
+			{
+				Key:         callPluginSettingScreen,
+				Label:       "允许机器人操作容器屏幕",
+				Description: "主人让机器人打电话、发起群语音时，机器人看着容器里客户端的截图自己点按钮拨号。只操作容器里的客户端，和宿主机的桌面控制无关；只给主人用。",
+				Type:        PluginSettingTypeBool,
+				Default:     true,
 				GlobalOnly:  true,
 			},
 			{
@@ -417,11 +426,6 @@ func (p *CallPlugin) run(ctx context.Context, url, token string, calls *bridgeCa
 	calls.setLink(link)
 	defer calls.linkLost(link)
 	defer calls.desktop.detach()
-	go func() {
-		defer recoverGoroutinePanic("call_plugin.desktop")
-		runtime, _ := p.settings()
-		calls.desktop.keepAttached(ctx, runtime)
-	}()
 	for {
 		kind, data, err := conn.ReadMessage()
 		if err != nil {
@@ -535,7 +539,7 @@ type bridgeCallSet struct {
 	active   *activeBridgeCall
 	// intent 是 phone_call 登记的、接下来要拨出去的那通电话。
 	intent *bridgeCallIntent
-	// desktop 把 agent 那块屏幕接进桌面控制，见 call_desktop.go。
+	// desktop 是操作容器屏幕的指令通道（call_screen 用），见 call_desktop.go。
 	desktop *callDesktopBridge
 }
 
