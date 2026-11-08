@@ -70,6 +70,9 @@ const (
 	// PurposeOutboundImageSafety 是出站图片审核：发图前让识图模型逐张判账号风险，
 	// 见 outbound_media_audit.go。
 	PurposeOutboundImageSafety = "outbound_image_safety"
+	// PurposeQQCallInvite 读 QQ 来电窗口的 OCR 文字，判断是私聊还是群通话、哪个群，
+	// 见 qq_call_invite.go。
+	PurposeQQCallInvite = "qq_call_invite"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -121,6 +124,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeImageFixGate:      llm.GroupReplyAssist,
 	PurposeReplyRuleRouter:   llm.GroupReplyAssist,
 	PurposeBotReplyLoop:      llm.GroupReplyAssist,
+	// 来电判断时对方在等接听，和回复辅助一样要快；要从群列表里挑出群号，不是是非题。
+	PurposeQQCallInvite: llm.GroupReplyAssist,
 
 	// 后台生成：好感度、长期记忆、RSS 判定和主动问候都要写出成段文字，判断模型答不了；
 	// 它们也都在回复之外异步跑，可以指一个便宜的慢模型。

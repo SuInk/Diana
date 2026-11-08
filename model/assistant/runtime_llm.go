@@ -1212,6 +1212,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&tail, r.persistentVoicePrompt(context.Background(), event, cfg))
 	if event.roomCall {
 		appendPromptSection(&tail, cfg.prompt(promptLocalRoomCallSpec))
+	} else if event.voiceCall && event.Kind == EventKindGroup {
+		appendPromptSection(&tail, cfg.prompt(promptQQGroupCallSpec))
 	} else if event.voiceCall {
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}

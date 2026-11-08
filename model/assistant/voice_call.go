@@ -38,6 +38,11 @@ const promptVoiceCall = "你正在和对方实时语音通话，你说的每个�
 var promptVoiceCallSpec = tailSpec("voice_call", "语音通话", "主人在 WebUI 或 App 里和机器人语音通话时注入：回复会被逐句合成语音，要写成能直接念的口语。",
 	promptVoiceCall)
 
+const promptQQGroupCall = "你正在 QQ 群语音通话里，群里几个人都可能在说话，你听到的是混在一起的语音识别结果，分不清是谁说的；你说的每个字都会被念出来。像群聊语音一样口语化，一次一两句，不用 Markdown、列表、表情符号、链接和括号里的动作描写。听到的话来自语音识别，可能有错别字或几个人的话混在一起，按最合理的意思理解。大家说散了、让你走，就用 hang_up 说句再见退出通话。"
+
+var promptQQGroupCallSpec = tailSpec("qq_group_call", "QQ 群语音通话", "机器人被邀请加入 QQ 群语音通话时注入：听到的是群里多人混在一起的语音识别结果，回复会被念出来。",
+	promptQQGroupCall)
+
 // VoiceCall 是一通电话在机器人这一侧的对接，实现 voicecall.Backend。
 type VoiceCall struct {
 	runtime *Runtime
@@ -103,10 +108,35 @@ func (r *Runtime) NewVoiceCall(ctx context.Context, profileID, callID string) (*
 	return &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}, nil
 }
 
+// NewGroupVoiceCall 开一通 QQ 群通话：听到的话当成群里有人对机器人说的，回复按这个群
+// 的身份生成。群通话里的声音混在一起分不清是谁，发言人统一记成「群通话」。
+func (r *Runtime) NewGroupVoiceCall(ctx context.Context, profileID, groupID, groupName, callID string) (*VoiceCall, error) {
+	info := r.VoiceCallInfo(ctx, profileID)
+	if info.Problem != "" {
+		return nil, errors.New(info.Problem)
+	}
+	_, event, err := r.ownerChatEvent(profileID)
+	if err != nil {
+		return nil, err
+	}
+	event.Kind = EventKindGroup
+	event.MessageType = string(EventKindGroup)
+	event.GroupID = groupID
+	event.GroupName = groupName
+	event.UserID = qqGroupCallSpeakerID
+	event.SenderUsername = ""
+	event.SenderName = "群通话"
+	event.voiceCall = true
+	return &VoiceCall{runtime: r, callID: callID, base: event, started: time.Now()}, nil
+}
+
+// qqGroupCallSpeakerID 是群通话里说话人的占位账号：混音里分不出是谁。
+const qqGroupCallSpeakerID = "qqcall-group"
+
 // Finish 在挂断时调用一次：往主人私聊里记一条通话记录（打了多久），见 call_history.go。
-// 重复调用只记一次。
+// 重复调用只记一次。群通话不记：通话记录是主人私聊里的旁白。
 func (c *VoiceCall) Finish() {
-	if c == nil || c.runtime == nil {
+	if c == nil || c.runtime == nil || c.base.Kind == EventKindGroup {
 		return
 	}
 	c.ended.Do(func() { c.runtime.rememberVoiceCall(c.base, c.started, time.Now()) })
