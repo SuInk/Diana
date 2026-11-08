@@ -123,7 +123,7 @@ func TestSystemPromptRoutesChartRequests(t *testing.T) {
 		t.Fatal("screenshot-only prompt should treat charts as screenshots")
 	}
 	got := prompt(screenshot, &countingTool{name: "remote_image"})
-	for _, want := range []string{"remote_image 的 view 下载", "browser_render 返回的 images", "finviz.com/chart.ashx", "确实拿不到直链再用 webpage_screenshot"} {
+	for _, want := range []string{"remote_image view 确认画面", "拿不到直链再用 webpage_screenshot"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("system prompt missing %q", want)
 		}

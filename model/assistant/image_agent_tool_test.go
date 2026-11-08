@@ -307,7 +307,7 @@ func TestRuntimeAgentSearchesBeforeGeneratingImage(t *testing.T) {
 	if !requestMessagesContain(requests[2].Messages, search.result) {
 		t.Fatalf("image tool decision did not receive search result: %#v", requests[2].Messages)
 	}
-	if !requestMessagesContain(requests[1].Messages, "先完成搜索和必要的网页核验") || !requestMessagesContain(requests[1].Messages, dianaImageToolName) {
+	if !requestMessagesContain(requests[1].Messages, "用户要先查资料的，先查完") || !requestMessagesContain(requests[1].Messages, dianaImageToolName) {
 		t.Fatalf("agent prompt does not enforce search-before-image: %#v", requests[1].Messages)
 	}
 	if !strings.Contains(submittedPrompt, "#4B0082") || !strings.Contains(submittedPrompt, "#FFD700") {
@@ -706,7 +706,7 @@ func TestDianaImageStartedMessageCarriesSubject(t *testing.T) {
 // 「已受理」。现在两处提示词都必须同时要求：说清准备画什么，但不许描述成品。
 func TestImagePromptsRequireSubjectWithoutClaimingResult(t *testing.T) {
 	prompts := map[string]string{
-		"promptToolImage":            promptToolImage,
+		"imagePendingNote":           imagePendingNote,
 		"asyncImageReplyInstruction": asyncImageReplyInstruction(dianaImageToolResult{OK: true, TaskID: "img-1"}),
 	}
 	for name, prompt := range prompts {
@@ -714,7 +714,7 @@ func TestImagePromptsRequireSubjectWithoutClaimingResult(t *testing.T) {
 			if !strings.Contains(prompt, "准备画什么") {
 				t.Fatalf("%s 没有要求说清这次准备画什么：%q", name, prompt)
 			}
-			if !strings.Contains(prompt, "不要说成「已经生成好了」") {
+			if !strings.Contains(prompt, "不要说成「已经生成好了」") && !strings.Contains(prompt, "别说画好了") {
 				t.Fatalf("%s 丢了「不许说成画好了」：%q", name, prompt)
 			}
 			if strings.Contains(prompt, "不要描述图里长什么样") {

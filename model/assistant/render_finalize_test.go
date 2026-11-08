@@ -111,14 +111,14 @@ func TestReplyFinalizeIgnoresLegacyRenderField(t *testing.T) {
 	}
 }
 
-func TestRenderDeliveryRuleFollowsAvailableTools(t *testing.T) {
+// 「不拿效果图冒充已修改」写在两个渲染工具自己的描述里，不再另写进系统提示词。
+func TestRenderToolsRefuseToStandInForRealEdits(t *testing.T) {
 	rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
-	for _, tools := range [][]agent.Tool{nil, {newDianaRenderTool(rt, event)}, {newDianaRenderMediaTool(rt, event, nil, RelationshipPolicy{})}} {
-		registry := agent.NewToolRegistry(tools...)
-		prompt := rt.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
-		if strings.Contains(prompt, promptToolRender) != (len(tools) > 0) {
-			t.Fatalf("render rule presence differs from tool availability: %d tools", len(tools))
+	for _, tool := range []agent.Tool{newDianaRenderTool(rt, event), newDianaRenderMediaTool(rt, event, nil, RelationshipPolicy{})} {
+		desc := tool.Description()
+		if !strings.Contains(desc, "冒充") && !strings.Contains(desc, "代替实际修改") {
+			t.Fatalf("%s 描述没说不拿效果图冒充修改：%q", tool.Name(), desc)
 		}
 	}
 }

@@ -78,10 +78,13 @@ func (t *dianaRelationshipTool) Name() string {
 func (t *dianaRelationshipTool) Description() string {
 	// 「别猜、别说查不了」防模型凭上下文编好感度，或以隐藏数据为由拒查。
 	// 能力问题转 capabilities：本工具早年带过权限清单，模型拿它当能力边界（d9b73dbe）。
+	// 「只讲他问的那件事」防模型把结果按字段抄成清单、顺口报提醒额度。
+	// relationship 在 replyFeaturedTools 里，目录写全文。
 	return `查好感度、关系等级、互动记录和人员画像；主人可设定或增减好感度；可写画像。` +
-		`问自己、被 @ 或指定成员的好感度或关系时必须查，不要猜，也不要说查不了。` +
-		`用户让记住或忘掉自己的住处、职业等个人情况时用 portrait_set/portrait_forget。` +
-		`不返回能力清单，「你能做什么」用 capabilities。`
+		`问或说起自己、被 @ 或指定成员的好感度、分数变化、关系或互动时必须先查目标本人，不要猜，不说查不了，也不编「隐藏数据」。` +
+		`只讲对方问的那件事：问好感度说分数和关系，问怎么变的才讲增减分和原因，不按字段罗列、不报提醒额度。` +
+		`榜单和画像对群成员公开，不以隐私拒绝。用户让记住、改掉或忘掉自己的住处、职业等情况时当场 portrait_set/portrait_forget。` +
+		`「你能做什么」用 capabilities。`
 }
 
 // InputSchema 声明参数契约。「拿到结果后怎么说话」不在这里，也不在 Description
@@ -92,7 +95,7 @@ func (t *dianaRelationshipTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation": toolEnumParam("list 群内好感排行，成员均可查，勿以隐私拒绝；set 设定、adjust 增减好感度，仅主人",
 			"get", "list", "set", "adjust", "portrait_set", "portrait_forget"),
-		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人"),
+		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人；画像只能写自己的，写别人的要主人"),
 		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
 		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语；portrait_forget：要删的那一条，省略则清空整栏"),
 		"history_limit":  toolIntParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit), 1, maximumRelationshipHistoryLimit),

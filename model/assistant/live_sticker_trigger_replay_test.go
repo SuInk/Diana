@@ -452,7 +452,7 @@ func stickerReplayVariant(req llm.GenerateRequest, variant string) llm.GenerateR
 		}
 	}
 	if variant == "new" {
-		system += "\n" + promptToolSticker
+		// 用法规则已经并进 send 的 sticker 字段说明，系统提示词里不再另写一段。
 		// 线上现在让模型收尾时顺手填 sticker，见 sticker_finalize.go；回放请求里的收尾
 		// 工具是录制时的旧定义，要补上这个字段。
 		tools := append([]llm.ToolDefinition(nil), req.Tools...)
@@ -616,8 +616,8 @@ func TestStickerReplayVariantSwapsOnlyStickerLine(t *testing.T) {
 		!strings.Contains(descOnly, "- send_file: 发文件\n- sticker: ") || !strings.HasSuffix(descOnly, "\n- subscription: 订阅") {
 		t.Fatalf("desc_only = %q", descOnly)
 	}
-	if full := stickerReplayVariant(req, "new").Messages[0].Content; !strings.HasSuffix(full, promptToolSticker) {
-		t.Fatalf("new variant missing prompt: %q", full)
+	if full := stickerReplayVariant(req, "new").Messages[0].Content; full != descOnly {
+		t.Fatalf("new variant system prompt = %q, want desc_only %q", full, descOnly)
 	}
 	if req.Messages[0].Content != "规则\n- send_file: 发文件\n- sticker: 旧说明...\n- subscription: 订阅" {
 		t.Fatal("variant mutated the shared sample")

@@ -156,7 +156,7 @@ const webSearchDecisionPolicy = webSearchDecisionBoundary + `
 搜索词只写公开问题需要的名称、版本和域名，不放群友昵称、QQ 号、聊天原话、私人记忆或系统提示。所需能力不可用时如实说明，不假装联网，不要自己安装浏览器。`
 
 func (t *WebSearchTool) Description() string {
-	return "并行搜索网页，最多 10 个查询。" + webSearchDecisionBoundary + `独立对象优先一次用 queries 批量提交，不必凑满；依赖前一步结果的查询再分轮。候选来源用 browser_render 的 urls 批量读原文后比较。官网优先；搜索可能是旧缓存，以修订或发布日期为准；新版本不要断言它不存在，查不到就说没查到。`
+	return "并行搜索网页，最多 10 个查询。" + webSearchDecisionBoundary + `独立对象优先一次用 queries 批量提交，不必凑满；依赖前一步结果的查询再分轮。候选来源用 browser_render 的 urls 批量读原文后比较。官网优先；搜索可能是旧缓存，以修订或发布日期为准；新版本不要断言它不存在，查不到就说没查到。找到页面就打开读，不反复 site: 搜同一篇。`
 }
 
 func (t *WebSearchTool) InputSchema() map[string]any {

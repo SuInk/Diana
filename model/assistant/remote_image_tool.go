@@ -38,7 +38,7 @@ func (t *dianaRemoteImageTool) Description() string {
 func (t *dianaRemoteImageTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"action"}, map[string]any{
 		"action":        toolEnumParam("send_album 为 Telegram 相册", "view", "view_avatar", "send", "send_album"),
-		"url":           toolStringParam("view 专用，公网图片直链，不是网页地址"),
+		"url":           toolStringParam("view 专用，公网图片直链，不是网页地址；从 browser_render 的 images 找，美股 K 线可用 https://finviz.com/chart.ashx?t=代码&p=d"),
 		"avatar_source": toolStringParam(avatarSourceBot + `、` + avatarSourceSender + `、` + avatarSourceGroup + `、` + avatarSourceMemberPrefix + `<id>`),
 		"image_id":      toolStringParam("send 专用，本轮 view 返回的图片 ID"),
 		"image_ids":     toolStringArrayParam("send_album 专用，本轮 view 返回的 2～8 个图片 ID，按发送顺序"),

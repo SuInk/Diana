@@ -190,16 +190,13 @@ func TestHumanizeChineseDurationKeepsTwoUnits(t *testing.T) {
 	}
 }
 
-// 注册了版本工具才注入版本规则。
-func TestSystemPromptInjectsVersionRuleWithTool(t *testing.T) {
+// 「只答问到的那一项」写在 version 的描述里，两种披露方式都有。
+func TestVersionDescriptionAnswersOnlyWhatWasAsked(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	registry := agent.NewToolRegistry(newDianaVersionTool(runtime, true))
-	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
-		MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"},
-		nil, false, RelationshipPolicy{Owner: true}, true, registry,
-	)
-	if !strings.Contains(prompt, promptToolVersion) {
-		t.Fatalf("prompt missing the version rule: %s", prompt)
+	for _, disclose := range []bool{true, false} {
+		if desc := newDianaVersionTool(runtime, disclose).Description(); !strings.Contains(desc, "只答被问的那一项") {
+			t.Fatalf("version 描述（disclose=%t）缺「只答被问的那一项」：%s", disclose, desc)
+		}
 	}
 	// 普通成员也能问版本，这不是机密。
 	member := RelationshipPolicy{}
@@ -264,10 +261,10 @@ func TestSystemPromptVersionRuleFollowsRepositoryDisclosure(t *testing.T) {
 		owner bool
 		want  string
 	}{
-		{"默认对成员公开", "", false, promptToolVersion},
+		{"默认对成员公开", "", false, ""},
 		{"仅主人时对成员收紧", RepositoryDisclosureOwner, false, promptToolVersionNoRepository},
-		{"主人照旧", "", true, promptToolVersion},
-		{"全公开", RepositoryDisclosureEveryone, false, promptToolVersion},
+		{"主人照旧", "", true, ""},
+		{"全公开", RepositoryDisclosureEveryone, false, ""},
 	}
 	for _, tc := range cases {
 		runtime := NewRuntime(BotConfig{RepositoryDisclosure: tc.mode}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -276,11 +273,8 @@ func TestSystemPromptVersionRuleFollowsRepositoryDisclosure(t *testing.T) {
 			MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"},
 			nil, false, RelationshipPolicy{Owner: tc.owner}, true, registry,
 		)
-		if !strings.Contains(prompt, tc.want) {
-			t.Fatalf("%s: prompt missing the expected version rule: %s", tc.name, prompt)
-		}
-		if tc.want == promptToolVersionNoRepository && strings.Contains(prompt, promptToolVersion) {
-			t.Fatalf("%s: 收紧时不该还带着公开地址那份规则", tc.name)
+		if got := strings.Contains(prompt, promptToolVersionNoRepository); got != (tc.want != "") {
+			t.Fatalf("%s: 不公开地址的规则出现=%t，想要 %t", tc.name, got, tc.want != "")
 		}
 	}
 }

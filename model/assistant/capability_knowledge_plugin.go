@@ -165,7 +165,7 @@ func (t *dianaCapabilitiesTool) Name() string {
 func (t *dianaCapabilitiesTool) Introspection(map[string]any) bool { return true }
 
 func (t *dianaCapabilitiesTool) Description() string {
-	return `检索 Diana 自身能力、工具、权限门槛和插件状态，以及功能的设计文档、内置提示词。问能做什么或某功能怎么运作时先查，别凭记忆猜。`
+	return `检索 Diana 自身能力、工具、权限门槛和插件状态，以及功能的设计文档、内置提示词。问能做什么、某功能怎么运作、质疑有没有某能力或归哪个插件时先查，别凭记忆猜。没解锁的如实说门槛，资料没写的细节不编。`
 }
 
 func (t *dianaCapabilitiesTool) InputSchema() map[string]any {

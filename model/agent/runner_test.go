@@ -226,12 +226,17 @@ func TestRunnerPreservesCompleteToolErrors(t *testing.T) {
 }
 
 func TestRunnerPromptDistinguishesQueuedImageTaskFromCompletion(t *testing.T) {
+	// 「queued 不等于画好了」跟着 image 的工具结果给（pending_note），这里守的是通用的
+	// 执行失败不等于工具不存在。
 	runner, err := NewRunner(&scriptedClient{}, Config{WorkDir: t.TempDir()}, NewToolRegistry(&countingTool{name: "image"}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"queued=true", "不表示图片已经完成", "TOOL_EXECUTION_ERROR", "工具不存在"} {
+	if strings.Contains(prompt, "queued=true") {
+		t.Fatal("image 受理后怎么说属于它自己的结果，不该再写进系统提示词")
+	}
+	for _, want := range []string{"TOOL_EXECUTION_ERROR", "工具不存在"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("runner prompt missing %q: %s", want, prompt)
 		}
@@ -577,7 +582,7 @@ func TestRunnerSkipsClockWhenCallerAlreadyProvidesOne(t *testing.T) {
 func TestRunnerPromptExplainsBoundedIterativeWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{})}
 	prompt := runner.systemPrompt()
-	for _, expected := range []string{"围绕一个信息缺口", "queries 仅补充确有区别的查证角度", "本轮最多调用 8 次工具", "不要把完整聊天记录", "insufficient_evidence", "优先核对官方或法定披露来源"} {
+	for _, expected := range []string{"本轮最多调用 8 次工具", "insufficient_evidence", "别重复同一个 query", "搜索词只写公开问题需要的名称"} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt does not contain %q: %s", expected, prompt)
 		}
@@ -1131,7 +1136,7 @@ func TestRunnerMarksCacheBreakpointsAroundVolatilePrefix(t *testing.T) {
 func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 	runner := &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingTool{name: "browser_render"})}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开搜索引擎的结果页", "https://www.google.com/search?q=", "https://www.bing.com/search?q=", "换下一家"} {
+	for _, want := range []string{"没有 web_search 时", "用 browser_render 打开 https://www.google.com/search?q=", "https://www.bing.com/search?q=", "人机验证页"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q: %s", want, prompt)
 		}
@@ -1145,7 +1150,7 @@ func TestRunnerPromptSearchesThroughBrowserWithoutWebSearch(t *testing.T) {
 	// 两样都有时：web_search 优先，浏览器是它全部 provider 失败后的退路。
 	runner = &Runner{cfg: Config{MaxSteps: 8}.WithDefaults(), registry: NewToolRegistry(&countingWebSearchTool{}, &countingTool{name: "browser_render"})}
 	prompt = runner.systemPrompt()
-	if !strings.Contains(prompt, "全部 provider 都失败") || !strings.Contains(prompt, "- 用浏览器搜索：用 browser_render") {
+	if !strings.Contains(prompt, "全部失败时有浏览器就用浏览器搜索") || !strings.Contains(prompt, "- 用浏览器搜索：用 browser_render") {
 		t.Fatalf("fallback rule missing: %s", prompt)
 	}
 

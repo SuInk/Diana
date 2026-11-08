@@ -479,11 +479,11 @@ func TestAgentHistorySummarizesImagesBeforeLazyToolSkipsBrokenImage(t *testing.T
 	if strings.Contains(message.Content, "[图片]") {
 		t.Fatalf("history media notice = %q", message.Content)
 	}
-	// 逐条摘要省掉这两句的前提，是系统提示里仍然说了一次。两处同时丢掉的话，模型
-	// 会把摘要当成看过原件，这里守住那个前提。
-	for _, want := range []string{"不代表你看过真实画面", dianaHistoryImagesToolName} {
-		if !strings.Contains(promptToolHistoryImages, want) {
-			t.Fatalf("promptToolHistoryImages = %q, missing %q", promptToolHistoryImages, want)
+	// 逐条摘要省掉这句的前提，是 history_media 的描述（目录写全文）里仍然说了一次。
+	// 两处同时丢掉的话，模型会把摘要当成看过原件，这里守住那个前提。
+	for _, tool := range []*dianaHistoryImagesTool{{}, {currentDescribed: true, imageMode: ImageInputModeAuto}} {
+		if desc := tool.Description(); !strings.Contains(desc, "没调过不算看过原图") {
+			t.Fatalf("history_media description = %q, missing 没调过不算看过原图", desc)
 		}
 	}
 	if calls := recordedCallsByAction(channel.callsSnapshot(), "get_image"); len(calls) != 0 {

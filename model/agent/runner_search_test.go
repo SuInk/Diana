@@ -90,10 +90,8 @@ func TestRunnerPromptRequiresSearchForEcosystemAndAvailabilityClaims(t *testing.
 		"有没有现成实现或插件",
 		"当前版本与 API 现状",
 		// 堵住把聊天记录当已核实事实的漏洞。
-		"聊天记录里讨论过这个话题不等于其中的事实已经核实",
-		"不能拿来替代检索",
-		// 讲原理和断言现状要分开。
-		"讲原理可以直接答",
+		"聊天记录、先前回复、记忆和 Rollup 只是线索",
+		"不能证明外部事实已核实",
 	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("search guidance missing %q: %s", expected, prompt)

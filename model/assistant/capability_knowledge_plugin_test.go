@@ -108,7 +108,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 		t.Fatalf("retrieval missing: %#v", provider.requests[2].Messages)
 	}
 	// 「问会什么先查」写在 capabilities 的描述里，随按需目录一起发。
-	if !requestMessagesContain(provider.requests[1].Messages, "问能做什么或某功能怎么运作时先查") {
+	if !requestMessagesContain(provider.requests[1].Messages, "问能做什么、某功能怎么运作") {
 		t.Fatalf("capability guidance missing: %#v", provider.requests[1].Messages)
 	}
 }

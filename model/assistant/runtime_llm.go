@@ -1040,10 +1040,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	if agentEnabled && hasTool(dianaGitHubToolName) {
 		place(dianaGitHubToolName).WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
 	}
-	// 这条对所有人逐字相同（能不能指定别人或指定群由工具自己判身份），所以进稳定头部。
-	if agentEnabled && hasTool(dianaCrossSessionToolName) {
-		place(dianaCrossSessionToolName).WriteString("\n" + cfg.prompt(promptToolCrossSessionSpec))
-	}
 	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
 	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
 	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, tools.Owner) {
@@ -1061,9 +1057,6 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			tail.WriteString("\n" + prompt)
 		}
 	}
-	if agentEnabled && hasTool(dianaHistoryImagesToolName) {
-		place(dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptToolHistoryImagesSpec))
-	}
 	if agentEnabled && hasAnyTool(dianaChatHistoryToolName, dianaHistoryImagesToolName) {
 		place(dianaChatHistoryToolName, dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptInternalIdentifiersSpec))
 		// 引用被管理员关掉时不教这一手：那是「永不带引用」的明确配置。
@@ -1071,32 +1064,11 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 			place(dianaChatHistoryToolName, dianaHistoryImagesToolName).WriteString("\n" + cfg.prompt(promptQuoteHistoryMessageSpec))
 		}
 	}
-	// 跨群历史常驻带一部分，想看更多的由模型自己去查；开关是机器人配置，对谁都一样。
-	if agentEnabled && event.Kind == EventKindGroup && boolValue(cfg.CrossGroupMemoryEnabled, false) && hasTool(dianaChatHistoryToolName) {
-		place(dianaChatHistoryToolName).WriteString("\n" + cfg.prompt(promptCrossGroupMoreSpec))
-	}
 	if agentEnabled && tools.Owner && hasTool("relationship") {
 		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
 	if agentEnabled && tools.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
 		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
-	}
-	// 任务工具规则进稳定头部：AllowPersonalSchedule 在每个关系等级都是 true
-	//（见 RelationshipPolicyFor），所以这几段对谁都注入，只随本轮注册了哪些工具
-	// 变化——和头部其余工具规则的性质完全一样。它们以前跟着「按好感度解锁」的
-	// 假设待在尾部，实测占尾部 436 token 里的绝大部分，等于每条消息都重发一遍
-	// 一段人人相同的文本，且永远命不中前缀缓存。
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool("reminder") {
-		place("reminder").WriteString("\n" + cfg.prompt(promptTaskReminderSpec))
-	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasTool(dianaEventTriggerToolName) {
-		place(dianaEventTriggerToolName).WriteString("\n" + cfg.prompt(promptTaskEventTriggerSpec))
-	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindSchedule) {
-		place(dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskScheduleSpec))
-	}
-	if agentEnabled && relationship.AllowPersonalSchedule && hasSubscriptionKind(subscriptionKindRSS) {
-		place(dianaSubscriptionToolName).WriteString("\n" + cfg.prompt(promptTaskRSSSpec))
 	}
 	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
 	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
@@ -1114,60 +1086,28 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	default:
 		speakerRules.WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	}
-	// 项目地址的披露规则和模型身份同理：everyone 下对谁都一样，进 head；owner 下
-	// 随发言者是不是主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
-	switch everyone := normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) == RepositoryDisclosureEveryone; {
-	case !agentEnabled || !hasTool(dianaVersionToolName):
-	case everyone:
-		place(dianaVersionToolName).WriteString("\n" + cfg.prompt(promptToolVersionSpec))
-	case tools.Owner:
-		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionSpec))
-	default:
+	// 项目地址不对这个人公开时要明说不给链接，随发言者是不是主人分叉，进 tail；
+	// 只答问到的那一项写在 version 的描述里。
+	if agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone && !tools.Owner {
 		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
-	}
-	if agentEnabled && hasTool(dianaNotebookToolName) {
-		place(dianaNotebookToolName).WriteString("\n" + cfg.prompt(promptToolNotebookSpec))
 	}
 	if agentEnabled && hasTool(dianaCodingToolName) {
 		place(dianaCodingToolName).WriteString("\n" + cfg.prompt(promptToolCodingSpec))
 	}
-	if agentEnabled && r.threadStateStore() != nil && hasTool(dianaThreadStateToolName) {
-		place(dianaThreadStateToolName).WriteString("\n" + cfg.prompt(promptToolThreadStateSpec))
-	}
-	// 自述的规则进 head：开关是机器人配置，对同一个群里的所有人逐字相同。
-	if agentEnabled && hasTool(dianaSelfNoteToolName) {
-		place(dianaSelfNoteToolName).WriteString("\n" + cfg.prompt(promptToolSelfNoteSpec))
-	}
-	// 表情包的规则进 head：插件开关按群生效，同一个群里对所有人逐字相同。
+	// 单个工具怎么用写在它自己的描述和参数说明里（docs/tool-descriptions.md），这里只留
+	// 跨工具的规则。表情包是她说话方式的一部分（send 的 sticker 字段），只留一句邀请：
+	// 整段挪进字段说明后回放里配图率从 10/38 掉到 7/38。配图顺序随机器人配置变，也在这里说。
 	if agentEnabled && hasTool(dianaStickerToolName) {
-		place(dianaStickerToolName).WriteString("\n" + cfg.prompt(promptToolStickerSpec))
+		place(dianaStickerToolName).WriteString("\n" + cfg.prompt(promptStickerInviteSpec))
 		if rule := stickerReplyOrderPrompt(cfg.StickerReplyOrder); rule != "" {
 			place(dianaStickerToolName).WriteString("\n" + rule)
 		}
 	}
-	if agentEnabled && hasTool("capabilities") {
-		place("capabilities").WriteString("\n" + cfg.prompt(promptToolCapabilitiesSpec))
-	}
+	// 走 platform 的平台上群资料的说明都在 platform、match_avatar 的描述里；其余平台的
+	// group_directory 描述就是这段规则本身，目录只截一行，仍放一份在头部。
 	groupEvent := groupToolEventForConfig(event, cfg)
-	if agentEnabled && hasTool(r.groupToolName(groupEvent)) {
+	if agentEnabled && !r.groupToolUsesPlatform(groupEvent) && hasTool(r.groupToolName(groupEvent)) {
 		place(r.groupToolName(groupEvent)).WriteString("\n" + r.groupToolPrompt(groupEvent, cfg))
-	}
-	if agentEnabled && hasTool(botConfigToolName) {
-		place(botConfigToolName).WriteString("\n" + cfg.prompt(promptToolBotConfigSpec))
-	}
-	if agentEnabled && hasTool(replyBlockToolName) {
-		place(replyBlockToolName).WriteString("\n" + cfg.prompt(promptToolReplyBlockSpec))
-	}
-	if agentEnabled && hasTool("relationship") {
-		place("relationship").WriteString("\n" + cfg.prompt(promptToolRelationshipListSpec))
-		place("relationship").WriteString("\n" + cfg.prompt(promptToolRelationshipQuerySpec))
-		place("relationship").WriteString("\n" + cfg.prompt(promptToolRelationshipPortraitSpec))
-	}
-	if agentEnabled && hasTool(dianaImageToolName) {
-		place(dianaImageToolName).WriteString("\n" + cfg.prompt(promptToolImageSpec))
-	}
-	if agentEnabled && (hasTool(dianaRenderToolName) || hasTool(dianaRenderMediaToolName)) {
-		builder.WriteString("\n" + cfg.prompt(promptToolRenderSpec))
 	}
 	builder.WriteString("\n" + cfg.prompt(promptRelationshipTierSpec) + cfg.prompt(promptIdentityAuthoritySpec))
 	builder.WriteString("\n" + cfg.prompt(promptLongTermMemorySpec))

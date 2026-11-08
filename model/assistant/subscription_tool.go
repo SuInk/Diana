@@ -103,7 +103,7 @@ func (t *dianaSubscriptionTool) Description() string {
 	return `管理持久化订阅：` + strings.Join(labels, "；") + `。` +
 		`工具名始终是 subscription，kind 和 operation 是参数不是子工具。` +
 		`参数说明开头标了所属 kind，别的 kind 的字段不填。list 不填 kind 一次列出全部。` +
-		`一次性提醒用 reminder；每天、每周这类重复提醒用 kind=schedule，日期时刻传 date+time 由系统换算。`
+		`一次性提醒用 reminder；每天、每周这类重复提醒和定时查询用 kind=schedule，日期时刻传 date+time 由系统换算；每周几、每月几号、第几个星期几都用一条订阅的规则字段覆盖，不拆成多条，取消也用它。`
 }
 
 func (t *dianaSubscriptionTool) InputSchema() map[string]any {

@@ -90,9 +90,9 @@ func (t *dianaHistoryImagesTool) Description() string {
 		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐。`
 	}
 	if t.asksVision() {
-		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节。`
 	}
-	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，相关消息一次传齐。单张失效会跳过。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {

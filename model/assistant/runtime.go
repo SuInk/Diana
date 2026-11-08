@@ -5288,6 +5288,12 @@ var replyFeaturedTools = []string{
 	"capabilities",
 	dianaPokeToolName,
 	dianaPlatformToolName,
+	// 下面四个「什么时候该用」以前写在人设后的规则段里，挪进描述后要在目录里看得到全文：
+	// 笔记本、自述是模型不等吩咐自己写的，线程状态要在答应开局之前就 set，好感度问法多。
+	dianaNotebookToolName,
+	dianaThreadStateToolName,
+	dianaSelfNoteToolName,
+	"relationship",
 }
 
 // speakerVariantTools 是对非主人开放、但描述随发言者不同的工具：放进公共目录会让

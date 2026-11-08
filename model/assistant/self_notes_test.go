@@ -235,19 +235,25 @@ func TestSelfNoteToolCapacityErrorTellsModelWhatToDo(t *testing.T) {
 	}
 }
 
-// 自述的规则必须进稳定头部、而且只在工具真挂上时才出现：写进尾部会让它每条消息
-// 重发一遍，挂不上工具还注入就是白付 token 教一件做不到的事。
-func TestSelfNotePromptRuleFollowsToolRegistration(t *testing.T) {
+// 自述的用法写在工具描述里，目录写全文（replyFeaturedTools）；系统提示词不再另写一段，
+// 挂不上工具时也不提它。
+func TestSelfNoteUsageLivesInToolDefinition(t *testing.T) {
 	runtime := selfNoteTestRuntime(t, true, &stubSelfNoteStore{})
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1", ProfileID: "bot-1"}
 
-	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true,
-		agentToolRegistryWithSelfNote(runtime, event))
-	if !strings.Contains(head, promptToolSelfNote) {
-		t.Fatalf("head missing the self note rule: %s", head)
+	if !slicesContains(replyFeaturedTools, dianaSelfNoteToolName) {
+		t.Fatal("self_note 不在 replyFeaturedTools 里，目录只截一行")
 	}
-	if strings.Contains(tail, promptToolSelfNote) {
-		t.Fatalf("self note rule leaked into the per-speaker tail: %s", tail)
+	desc := (*dianaSelfNoteTool)(nil).Description()
+	for _, want := range []string{"别人的评价", "人设", "不会生效"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("self_note 描述缺 %q：%s", want, desc)
+		}
+	}
+	head, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true,
+		agentToolRegistryWithSelfNote(runtime, event))
+	if strings.Contains(head, "自述是你自己写的自我认知") {
+		t.Fatalf("系统提示词里不该再另写一段自述用法: %s", head)
 	}
 
 	bare := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, agentToolRegistryWithSelfNote(nil, event))
