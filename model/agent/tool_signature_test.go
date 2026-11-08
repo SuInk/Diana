@@ -23,6 +23,8 @@ func TestSchemaSignatureRendersCompactTypeScript(t *testing.T) {
 		{"enum and integer", `{"type":"object","properties":{"action":{"type":"string","enum":["view","send"]},"count":{"type":"integer","minimum":1}},"required":["action"]}`, `(action: "view" | "send", count?: number)`},
 		{"nested object and array of objects", `{"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"n":{"type":"number"}},"required":["id"]}},"opts":{"type":"object","properties":{"deep":{"type":"boolean"}}}}}`, "(items?: { id: string; n?: number }[], opts?: { deep?: boolean })"},
 		{"anyOf union in array", `{"type":"object","properties":{"v":{"type":"array","items":{"anyOf":[{"type":"string"},{"type":"number"}]}}}}`, "(v?: (string | number)[])"},
+		{"union of objects in array is parenthesized", `{"type":"object","properties":{"v":{"type":"array","items":{"anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"string"}}}]}}}}`, "(v?: ({ a?: string } | { b?: string })[])"},
+		{"union inside one object is not", `{"type":"object","properties":{"v":{"type":"array","items":{"type":"object","properties":{"k":{"enum":["x","y"]}}}}}}`, `(v?: { k?: "x" | "y" }[])`},
 		{"type list and const", `{"type":"object","properties":{"a":{"type":["string","null"]},"b":{"const":3}}}`, "(a?: string | null, b?: 3)"},
 		{"quoted key", `{"type":"object","properties":{"x-y":{"type":"string"}}}`, `("x-y"?: string)`},
 		{"no fields", `{"type":"object","properties":{},"additionalProperties":false}`, "()"},
