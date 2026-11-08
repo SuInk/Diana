@@ -43,7 +43,7 @@ func (t *phoneCallTool) Name() string { return phoneCallToolName }
 
 func (t *phoneCallTool) Description() string {
 	return "打语音电话：在私聊里是打给主人，在群里是在当前群发起群语音通话并邀请主人。主人让你打电话、发起语音时用。" +
-		"调用后照返回的步骤用 call_screen 在容器里的客户端上拨号；对方接通后通话自动接管，你先开口。"
+		"调用后照返回的步骤用 call_screen 在容器里的客户端上拨号；对方接通后通话自动接管，你先开口。拨号过程不发文字回复。"
 }
 
 func (t *phoneCallTool) InputSchema() map[string]any {
@@ -93,7 +93,7 @@ func (t *phoneCallTool) Run(_ context.Context, input map[string]any) (string, er
 		steps = "在客户端主窗口里：点顶部搜索框，输入主人的账号 " + ready.ownerID + " 回车打开私聊；点会话标题栏右侧的电话图标（语音通话）。每一步先截图或读元素看清楚再点。"
 	}
 	calls.expectOutgoing(target)
-	body, err := json.Marshal(phoneCallToolResult{OK: true, Steps: steps + "客户端主窗口被收起来时，点托盘里的客户端小图标拿回来。拨出去以后不用等，对方接通后通话会自动接上。"})
+	body, err := json.Marshal(phoneCallToolResult{OK: true, Steps: steps + "客户端主窗口被收起来时，点托盘里的客户端小图标拿回来。拨出去以后不用等，对方接通后通话会自动接上。拨号这件事不用再发文字说明：拨出去后用 send 的 silent=true 结束这一轮，要说的话等接通了在电话里说。"})
 	return string(body), err
 }
 
