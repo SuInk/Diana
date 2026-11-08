@@ -242,6 +242,10 @@ type MessageEvent struct {
 	// PushKind 非空表示这条出站消息是订阅推送（仓库动态、RSS 这类事实卡片），
 	// 是系统自动发的，不是机器人在聊天里说的话。见 subscription_push_history.go。
 	PushKind string `json:"push_kind,omitempty"`
+	// Initiative 非空表示这条出站消息是机器人主动开口发的（没人找她，见
+	// proactive_messaging.go），值是这一次开口的编号：一次开口拆成几条气泡共用一个
+	// 编号，数「连着几次没人接」时按编号数，不按气泡数。
+	Initiative string `json:"initiative,omitempty"`
 	// SemanticSourceMessageID keeps the first selected historical source for
 	// compatibility with persisted events created before multi-source routing.
 	SemanticSourceMessageID string `json:"semantic_source_message_id,omitempty"`
@@ -750,6 +754,9 @@ type BotConfig struct {
 	WelcomeMode               WelcomeMode      `json:"welcome_mode,omitempty"`
 	WelcomeTemplates          []string         `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds int              `json:"welcome_llm_cooldown_seconds,omitempty"`
+	// ProactiveMessaging 是试验性的主动开口：群里冷场、主人好久没来时自己先说一句。
+	// 为空就是没开，见 proactive_messaging.go。
+	ProactiveMessaging *ProactiveMessaging `json:"proactive_messaging,omitempty"`
 	// SystemPrompt 是这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。展开 {{name}} 后
 	// 放在系统提示词最前面。JSON 键名沿用 system_prompt，存量配置不用迁移。
 	SystemPrompt     string `json:"system_prompt,omitempty"`
@@ -1473,6 +1480,7 @@ type ConfigPayload struct {
 	WelcomeMode                    WelcomeMode          `json:"welcome_mode,omitempty"`
 	WelcomeTemplates               []string             `json:"welcome_templates,omitempty"`
 	WelcomeLLMCooldownSeconds      int                  `json:"welcome_llm_cooldown_seconds,omitempty"`
+	ProactiveMessaging             *ProactiveMessaging  `json:"proactive_messaging,omitempty"`
 	SystemPrompt                   string               `json:"system_prompt,omitempty"`
 	ReplyComposer                  string               `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
@@ -2307,6 +2315,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		normalized := cfg.ReplyGate.WithDefaults()
 		cfg.ReplyGate = &normalized
 	}
+	cfg.ProactiveMessaging = cfg.ProactiveMessaging.normalized()
 	if strings.TrimSpace(cfg.SystemPrompt) == "" {
 		cfg.SystemPrompt = defaults.SystemPrompt
 	} else {
@@ -2630,6 +2639,9 @@ func (cfg BotConfig) Validate() error {
 	if cfg.WelcomeLLMCooldownSeconds < 0 || cfg.WelcomeLLMCooldownSeconds > 24*60*60 {
 		return fmt.Errorf("欢迎词 LLM 冷却必须在 0 到 86400 秒之间")
 	}
+	if err := cfg.ProactiveMessaging.validate(); err != nil {
+		return err
+	}
 	if criteria := strings.TrimSpace(cfg.ProactiveReplyExtraCriteria); len([]rune(criteria)) > routerCriteriaMaxRunes {
 		return fmt.Errorf("主动回复补充判据不能超过 %d 字", routerCriteriaMaxRunes)
 	}
@@ -2814,6 +2826,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		WelcomeMode:                     cfg.WelcomeMode,
 		WelcomeTemplates:                append([]string(nil), cfg.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       cfg.WelcomeLLMCooldownSeconds,
+		ProactiveMessaging:              cfg.ProactiveMessaging.Clone(),
 		SystemPrompt:                    cfg.SystemPrompt,
 		ReplyComposer:                   cfg.ReplyComposer,
 		MaiBotReplyStyle:                cfg.MaiBotReplyStyle,
@@ -3073,6 +3086,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		WelcomeMode:                     payload.WelcomeMode,
 		WelcomeTemplates:                append([]string(nil), payload.WelcomeTemplates...),
 		WelcomeLLMCooldownSeconds:       payload.WelcomeLLMCooldownSeconds,
+		ProactiveMessaging:              payload.ProactiveMessaging.Clone(),
 		SystemPrompt:                    payload.SystemPrompt,
 		ReplyComposer:                   payload.ReplyComposer,
 		MaiBotReplyStyle:                payload.MaiBotReplyStyle,

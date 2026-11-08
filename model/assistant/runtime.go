@@ -487,6 +487,8 @@ type Runtime struct {
 	welcomeLLMLast    map[string]time.Time
 	welcomeNoticeSeen map[string]time.Time
 	welcomeRecent     map[string][]string
+	// proactive 记着主动开口的进行中和最近一次尝试，见 proactive_messaging.go。
+	proactive proactiveMessagingState
 	// governance 是群规则防御的刷屏计数和违规次数，见 group_governance.go。
 	governance governanceTracker
 	// groupRoles 是群身份的短期缓存，见 platform_moderation_auth.go。
@@ -1170,6 +1172,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		go func() {
 			defer recoverGoroutinePanic("runtime.channelWatch")
 			r.runChannelWatch(ctx)
+		}()
+		go func() {
+			defer recoverGoroutinePanic("runtime.proactiveMessagingLoop")
+			r.runProactiveMessagingLoop(ctx)
 		}()
 		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
@@ -7833,6 +7839,7 @@ func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source Mess
 		event.MessageID = messageID
 	}
 	event.PushKind = subscriptionPushKindFromContext(ctx)
+	event.Initiative = proactiveInitiativeFromContext(ctx)
 	r.rememberSharedReply(source, msg, strings.TrimSpace(messageID))
 	if event.PushKind == "" {
 		event.ToolCalls = replyToolTraceFromContext(ctx).take()
@@ -8431,6 +8438,9 @@ func (r *Runtime) remember(event MessageEvent) {
 				// 只认回显（本地记的出站都带 Outbound）：本地重记的一条自己说了算。
 				if event.PushKind == "" && !event.Outbound {
 					event.PushKind = history[i].PushKind
+				}
+				if event.Initiative == "" && !event.Outbound {
+					event.Initiative = history[i].Initiative
 				}
 				if event.Edited || history[i].Edited {
 					history[i] = event

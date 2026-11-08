@@ -61,6 +61,8 @@ const (
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
 	PurposePokeReply        = "poke_reply"
 	PurposeWelcomeGenerator = "welcome_generator"
+	// PurposeProactiveMessage 是试验性的主动开口，见 proactive_messaging.go。
+	PurposeProactiveMessage = "proactive_message"
 	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
 	PurposeImageFixGate = "image_fix_gate"
 	// PurposeQQJoinReview 是入群自动审批插件让模型判断一条入群申请。
@@ -81,6 +83,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeSubtask:    llm.GroupChat,
 	// 入群欢迎和普通回复一样带人设和群聊上下文，用对话模型说话才像同一个人。
 	PurposeWelcomeGenerator: llm.GroupChat,
+	// 主动开口也是她在说话，和普通回复用同一个模型。
+	PurposeProactiveMessage: llm.GroupChat,
 
 	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
 	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
