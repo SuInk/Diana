@@ -82,6 +82,7 @@ func renderDianaMentions(text string, names map[string]string) (string, []dianaM
 	if !strings.Contains(text, dianaMentionMarkerPrefix) {
 		return text, nil
 	}
+	text = dropUnnamedMentions(text, func(id string) bool { return strings.TrimSpace(names[id]) != "" })
 	var builder strings.Builder
 	var spans []dianaMentionSpan
 	offset := 0
@@ -92,7 +93,7 @@ func renderDianaMentions(text string, names map[string]string) (string, []dianaM
 		offset += utf16Length(plain)
 
 		userID := text[bounds[2]:bounds[3]]
-		display := mentionDisplayText(userID, names[userID])
+		display := mentionDisplayText(names[userID])
 		builder.WriteString(display)
 		length := utf16Length(display)
 		spans = append(spans, dianaMentionSpan{UserID: userID, Display: display, Offset: offset, Length: length})
@@ -103,13 +104,39 @@ func renderDianaMentions(text string, names map[string]string) (string, []dianaM
 	return builder.String(), spans
 }
 
-// mentionDisplayText 决定提及显示成什么。查不到昵称就退回 id：显示成 @10001
-// 不好看，但比显示成空白或漏掉这个人要好。
-func mentionDisplayText(userID string, name string) string {
-	if trimmed := strings.TrimSpace(name); trimmed != "" {
-		return "@" + trimmed
+// mentionDisplayText 是提及显示成的文字。名字查不到的提及在渲染前已经被
+// dropUnnamedMentions 去掉，这里不再退回显示成 @10001：群友看到的是一串数字，
+// 不知道在叫谁，也点不出这个人。
+func mentionDisplayText(name string) string {
+	return "@" + strings.TrimSpace(name)
+}
+
+// dropUnnamedMentions 去掉查不到名字的提及标记，连同它后面跟着的空格；标记在行尾时
+// 去掉前面的空格。named 报告某个 id 有没有可显示的名字。
+func dropUnnamedMentions(text string, named func(id string) bool) string {
+	if !strings.Contains(text, dianaMentionMarkerPrefix) {
+		return text
 	}
-	return "@" + strings.TrimSpace(userID)
+	var out strings.Builder
+	last := 0
+	for _, bounds := range dianaMentionMarkerPattern.FindAllStringSubmatchIndex(text, -1) {
+		if named(text[bounds[2]:bounds[3]]) {
+			continue
+		}
+		out.WriteString(text[last:bounds[0]])
+		end := bounds[1]
+		for end < len(text) && text[end] == ' ' {
+			end++
+		}
+		if end == len(text) || text[end] == '\n' {
+			trimmed := strings.TrimRight(out.String(), " ")
+			out.Reset()
+			out.WriteString(trimmed)
+		}
+		last = end
+	}
+	out.WriteString(text[last:])
+	return out.String()
 }
 
 // utf16Length 返回字符串占多少个 UTF-16 码元。Telegram 的 entity 偏移量按这个算，

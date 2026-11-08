@@ -395,8 +395,8 @@ func TestTelegramOutgoingLegacyMarkdownParity(t *testing.T) {
 	}
 	// The new entry point resolves Diana markers rather than exposing the legacy
 	// Markdown-only stage, but a following non-link must still remain literal.
-	text, entities := renderTelegramOutgoingText("<diana-at id=\"10002\"/>(不是链接)", nil, nil)
-	if text != "@10002(不是链接)" || len(entities) != 1 || entities[0].Type != "text_mention" {
+	text, entities := renderTelegramOutgoingText("<diana-at id=\"10002\"/>(不是链接)", map[string]string{"10002": "Alice"}, nil)
+	if text != "@Alice(不是链接)" || len(entities) != 1 || entities[0].Type != "text_mention" {
 		t.Fatalf("Diana marker followed by non-link = %q %#v", text, entities)
 	}
 }
@@ -429,9 +429,10 @@ func TestTelegramOutgoingMentions(t *testing.T) {
 			}
 		})
 	}
-	text, entities := renderTelegramOutgoingText("<diana-at id=\"10003\"/>", nil, nil)
-	if text != "@10003" || len(entities) != 1 || entityAt(t, text, entities[0]) != text {
-		t.Fatalf("ID fallback text=%q entities=%#v", text, entities)
+	// 昵称和用户名都查不到：不显示成 @10003，这个提及直接去掉，也不留 text_mention。
+	text, entities := renderTelegramOutgoingText("<diana-at id=\"10003\"/> 早", nil, nil)
+	if text != "早" || len(entities) != 0 {
+		t.Fatalf("unnamed mention text=%q entities=%#v", text, entities)
 	}
 }
 

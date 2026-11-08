@@ -7361,7 +7361,7 @@ func routeOutgoingToEvent(event MessageEvent, msg OutgoingMessage) OutgoingMessa
 // 标记里只有 id——昵称会改、会重名，不能当标识。但 Telegram 的 text_mention 需要
 // 一段可见文字，所以在这里按 id 查一次昵称。先查本会话内存里的近期消息加当前
 // 这条事件；Telegram 群里还查不到用户名的，再问通道（见 fillTelegramMentionsFromDirectory），
-// 都查不到才退回显示 @<id>。
+// 都查不到就不 @ 这个人（见 dropUnnamedMentions），不显示成 @<id>。
 func (r *Runtime) resolveOutgoingMentionNames(event MessageEvent, msg OutgoingMessage) OutgoingMessage {
 	msg.MentionUsernames = nil
 	ids := mentionedIDsInText(msg.Text)

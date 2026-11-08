@@ -20,7 +20,8 @@ func (c *mentionDirectoryStubChannel) MentionIdentity(_ context.Context, groupID
 	return identity[0], identity[1], ok
 }
 
-// 提醒投递、很久没说话的群友不在近期消息里，以前只能显示成 @<数字ID>。
+// 提醒投递、很久没说话的群友不在近期消息里，以前只能显示成 @<数字ID>。目录里也
+// 查不到的（10004）现在直接不 @，不再显示成数字。
 func TestTelegramMentionFallsBackToChannelDirectory(t *testing.T) {
 	channel := &mentionDirectoryStubChannel{identities: map[string][2]string{
 		"10002": {"小汐", "xiaoxi_dev"},
@@ -30,7 +31,7 @@ func TestTelegramMentionFallsBackToChannelDirectory(t *testing.T) {
 	event := telegramMentionTestEvent("10001", 20, nil)
 	msg := runtime.resolveOutgoingMentionNames(event, OutgoingMessage{Text: "<diana-at id=\"10002\"/> <diana-at id=\"10003\"/> <diana-at id=\"10004\"/>"})
 	text, _ := renderTelegramOutgoingText(msg.Text, msg.MentionNames, msg.MentionUsernames)
-	if text != "@xiaoxi_dev @雨夹雪 @10004" {
+	if text != "@xiaoxi_dev @雨夹雪" {
 		t.Fatalf("rendered %q (names=%v usernames=%v)", text, msg.MentionNames, msg.MentionUsernames)
 	}
 	if len(channel.asked) != 3 || channel.asked[0] != "-10001/10002" {
