@@ -4933,6 +4933,8 @@ export interface DesktopJob {
 export interface DesktopStatus {
  takeover: boolean;
  permissions?: { screen_recording: boolean; accessibility: boolean };
+ /** 要在 macOS「隐私与安全性」里打开的那一项：一键安装是 Diana.app，手动部署是程序文件。非 macOS 没有。 */
+ authorize?: DesktopAuthorize | null;
   policy: DesktopPolicy;
   ready: boolean;
   helper_configured: boolean;
@@ -4940,6 +4942,12 @@ export interface DesktopStatus {
   detail: string;
   connections: { id: string; takeover: boolean }[];
 }
+export interface DesktopAuthorize { name: string; path: string; bundle: boolean }
+export type DesktopPermissionKind = "screen_recording" | "accessibility";
+/** 让执行器触发 macOS 授权弹窗，并在运行 Diana 的那台 Mac 上打开对应的隐私设置。 */
+export const requestDesktopPermission = (kind: DesktopPermissionKind) => requestJSON<{ permissions: { screen_recording: boolean; accessibility: boolean }; opened: boolean; authorize?: DesktopAuthorize | null }>("/api/desktop-control/permissions/request", { method: "POST", body: JSON.stringify({ kind }) });
+/** 重启执行器：刚在系统设置里给的权限，往往要新进程才认。 */
+export const reconnectDesktop = () => requestJSON<{ ready: boolean; executor: string }>("/api/desktop-control/reconnect", { method: "POST" });
 export const getDesktopStatus = () => requestJSON<DesktopStatus>("/api/desktop-control/status");
 export const getDesktopJobs = () => requestJSON<{jobs: DesktopJob[]}>("/api/desktop-control/jobs");
 export const saveDesktopPolicy = (policy: DesktopPolicy) => requestJSON("/api/desktop-control/policy", {method: "PUT", body: JSON.stringify(policy)});

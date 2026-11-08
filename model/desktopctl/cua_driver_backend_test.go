@@ -207,6 +207,18 @@ func TestCUADriverRefusedEffectIsNotDispatched(t *testing.T) {
 	}
 }
 
+// 「请求授权」让驱动带 prompt 调权限检查，平时的状态查询不弹窗。
+func TestCUADriverRequestPermissionsPrompts(t *testing.T) {
+	a, fake := newFakeCUAAdapter()
+	ctx := context.Background()
+	if _, err := a.Permissions(ctx); err != nil || fake.last("check_permissions")["prompt"] != false {
+		t.Fatalf("status check prompted: %v %v", fake.last("check_permissions"), err)
+	}
+	if _, err := a.RequestPermissions(ctx); err != nil || fake.last("check_permissions")["prompt"] != true {
+		t.Fatalf("request did not prompt: %v %v", fake.last("check_permissions"), err)
+	}
+}
+
 func TestCUADriverKeyAndScrollTranslation(t *testing.T) {
 	key, modifiers := splitCUAKey("Command+Shift+S")
 	if key != "s" || !reflect.DeepEqual(modifiers, []string{"cmd", "shift"}) {

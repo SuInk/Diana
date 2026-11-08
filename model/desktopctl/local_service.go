@@ -62,6 +62,24 @@ func (s *LocalService) Close() {
 		s.connection = nil
 	}
 }
+
+// Restart stops the executor process and drops the connection, so the next
+// Sync starts a fresh one. macOS may only apply a permission granted in System
+// Settings to a newly started process.
+func (s *LocalService) Restart(ctx context.Context) {
+	s.mu.Lock()
+	if s.connection != nil {
+		s.connection.Close()
+		s.connection = nil
+	}
+	if p, ok := s.adapter.(*ProcessAdapter); ok {
+		p.Close()
+	}
+	s.adapter, s.executor, s.lastError = nil, "", ""
+	s.mu.Unlock()
+	s.Sync(ctx)
+}
+
 func (s *LocalService) closeAdapter() {
 	s.mu.Lock()
 	defer s.mu.Unlock()

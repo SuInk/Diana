@@ -181,5 +181,9 @@ func cuaDriverToolError(name string, result cuaDriverResult) error {
 	if len(detail) > 400 {
 		detail = detail[:400] + "…"
 	}
+	if code == CodePermissionDenied {
+		// 驱动的原话是英文、说的是它自己；主人要做的是给运行 Diana 的程序授权。
+		detail += PermissionGuide
+	}
 	return commandError(code, "%s", detail)
 }

@@ -1,6 +1,32 @@
 <template>
   <div class="desktop-settings" :aria-busy="busy">
     <p v-if="error" role="alert" class="error">{{ error }}</p>
+    <section v-if="status?.authorize" class="card">
+      <div class="card-header"><h2>开启步骤</h2><span class="badge" :class="stepsDone === steps.length ? 'ok' : ''">{{ stepsDone }}/{{ steps.length }}</span></div>
+      <div class="card-body stack">
+        <p class="hint">按顺序走完就能让 Diana 操作这台 Mac。也可以直接在聊天里跟 Diana 说「打开电脑操作」，它会帮你打开第 1、5、6 步的开关；系统授权那两步只能你在这台 Mac 上点。</p>
+        <ol class="desktop-steps">
+          <li v-for="(step, index) in steps" :key="step.key" class="desktop-step" :class="{ done: step.done }">
+            <span class="desktop-step-mark" aria-hidden="true"><Check v-if="step.done" :size="14" /><template v-else>{{ index + 1 }}</template></span>
+            <div class="desktop-step-body">
+              <strong>{{ step.title }}</strong>
+              <p class="hint">{{ step.hint }}</p>
+              <ul v-if="step.key === 'bot' && bots.length" class="desktop-bots">
+                <li v-for="bot in bots" :key="bot.id">
+                  <span class="badge" :class="bot.enabled ? 'ok' : ''">{{ bot.enabled ? '已开' : '未开' }}</span>
+                  {{ bot.name }}
+                  <a v-if="!bot.enabled" class="desktop-link" :href="`/bot?profile=${encodeURIComponent(bot.id)}&tab=advanced`">去打开</a>
+                </li>
+              </ul>
+              <div v-if="!step.done && step.actions.length" class="cluster desktop-actions">
+                <button v-for="action in step.actions" :key="action.label" class="btn small" :class="{ primary: action.primary }" type="button" :disabled="busy || action.disabled" @click="action.run">{{ action.label }}</button>
+              </div>
+            </div>
+          </li>
+        </ol>
+        <p v-if="status.authorize && !status.authorize.bundle" class="hint">这台 Mac 是手动部署的：系统设置列表里要找的是「{{ status.authorize.name }}」，位置 <code>{{ status.authorize.path }}</code>。列表里没有时点「+」，按 ⇧⌘G 粘贴这个路径。</p>
+      </div>
+    </section>
     <section class="card">
       <div class="card-header desktop-header">
         <span class="badge" :class="takenOver ? 'warn' : status?.ready ? 'ok' : ''">{{ takenOver ? '人工接管中' : status?.ready ? '执行器已连接' : '桌面尚未就绪' }}</span>
@@ -22,12 +48,7 @@
         <div class="field wide"><div class="cluster"><button class="btn primary" type="submit" :disabled="busy || !policyDirty"><Save :size="15" aria-hidden="true" />保存权限</button></div></div>
       </form>
       <div v-if="status" class="card-body desktop-system">
-        <div v-if="status.permissions" class="cluster desktop-permissions">
-          <span class="badge" :class="status.permissions.screen_recording ? 'ok' : 'warn'">屏幕录制{{ status.permissions.screen_recording ? '已授权' : '未授权' }}</span>
-          <span class="badge" :class="status.permissions.accessibility ? 'ok' : 'warn'">辅助功能{{ status.permissions.accessibility ? '已授权' : '未授权' }}</span>
-        </div>
         <p v-if="status.executor" class="hint">执行器：{{ status.executor }}</p>
-        <p class="hint">首次开启时会自动下载执行器 cua-driver。系统权限需在 macOS「隐私与安全性」中授权给运行 Diana 的程序。</p>
         <div class="desktop-option">
           <div><strong>人工接管</strong><p class="hint">{{ takenOver ? 'Diana 已停止操作，重连和重启后仍保持接管。' : '立即停止 Diana 的桌面操作，由你接手。' }}</p></div>
           <button class="btn small" type="button" :disabled="busy" @click="takeover"><Hand :size="14" aria-hidden="true" />{{ takenOver ? '结束接管' : '接管桌面' }}</button>
@@ -53,9 +74,9 @@
   </div>
 </template>
 <script setup lang="ts">
-import { RefreshCw, Save, Hand } from "@lucide/vue";
+import { RefreshCw, Save, Hand, Check } from "@lucide/vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import { controlDesktopJob, getDesktopJobs, getDesktopStatus, saveDesktopPolicy, setDesktopTakeover, type DesktopJob, type DesktopPolicy, type DesktopStatus } from "../api";
+import { controlDesktopJob, getBotProfileConfig, getDesktopJobs, getDesktopStatus, reconnectDesktop, requestDesktopPermission, saveDesktopPolicy, setDesktopTakeover, type DesktopJob, type DesktopPermissionKind, type DesktopPolicy, type DesktopStatus } from "../api";
 import { toastSuccess } from "../lib/toast";
 const status = ref<DesktopStatus | null>(null);
 const policy = ref<DesktopPolicy>({ enabled: false, write_enabled: false });
@@ -66,9 +87,43 @@ const busy = ref(false);
 const error = ref("");
 const labels: Record<string, string> = { queued: "等待执行", running: "执行中", paused: "已暂停", waiting_confirm: "等待确认", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
 const policyDirty = computed(() => !!status.value && JSON.stringify({ ...policy.value, allowed_apps: split(allowed.value), denied_apps: split(denied.value) }) !== JSON.stringify({ ...status.value.policy, allowed_apps: status.value.policy.allowed_apps || [], denied_apps: status.value.policy.denied_apps || [] }));
+const bots = ref<{ id: string; name: string; enabled: boolean }[]>([]);
+type StepAction = { label: string; run: () => void; primary?: boolean; disabled?: boolean };
+type Step = { key: string; title: string; hint: string; done: boolean; actions: StepAction[] };
+const appName = computed(() => status.value?.authorize?.name || "Diana");
+const enablePolicy = (patch: Partial<DesktopPolicy>) => run(async () => { await saveDesktopPolicy({ ...status.value!.policy, ...patch }); await load(true); });
+const askPermission = (kind: DesktopPermissionKind) => run(async () => {
+  const res = await requestDesktopPermission(kind);
+  await load();
+  toastSuccess(res.opened ? `已在这台 Mac 上打开系统设置，把「${res.authorize?.name || appName.value}」的开关打开` : `到这台 Mac 的系统设置里打开「${res.authorize?.name || appName.value}」的开关`);
+});
+const recheck = () => run(async () => { await reconnectDesktop(); await load(); });
+const steps = computed<Step[]>(() => {
+  const s = status.value;
+  if (!s) return [];
+  const enabled = s.policy.enabled;
+  const ready = enabled && s.ready;
+  const perm = s.permissions;
+  const name = appName.value;
+  const permissionStep = (key: DesktopPermissionKind, title: string, what: string): Step => ({
+    key, title, done: !!perm?.[key],
+    hint: !ready ? `${what}。前两步完成后再来授权。` : `${what}。点「请求授权」会在这台 Mac 上弹出系统设置，打开「${name}」的开关；打开后点「重新检测」。`,
+    actions: ready ? [{ label: "请求授权", run: () => askPermission(key), primary: true }, { label: "重新检测", run: recheck }] : [],
+  });
+  return [
+    { key: "enabled", title: "打开桌面控制", done: enabled, hint: "总开关，默认关。", actions: [{ label: "打开", run: () => enablePolicy({ enabled: true }), primary: true }] },
+    { key: "executor", title: "准备执行器", done: ready, hint: !enabled ? "打开总开关后自动下载执行器 cua-driver，一般一两分钟。" : s.detail || "正在连接执行器…", actions: enabled ? [{ label: "重新检测", run: recheck }] : [] },
+    permissionStep("screen_recording", "允许屏幕录制", "让 Diana 看得到窗口"),
+    permissionStep("accessibility", "允许辅助功能", "让 Diana 能点击、输入和按键"),
+    { key: "write", title: "允许点击与输入", done: s.policy.write_enabled, hint: "只想让 Diana 看看窗口可以跳过这一步。", actions: [{ label: "打开", run: () => enablePolicy({ write_enabled: true }), primary: true, disabled: !enabled }] },
+    { key: "bot", title: "给机器人打开桌面控制", done: bots.value.some(b => b.enabled), hint: "在机器人配置「高级」页签里打开「允许使用桌面控制」，只对主人生效。", actions: [] },
+  ];
+});
+const stepsDone = computed(() => steps.value.filter(step => step.done).length);
 const takenOver = computed(() => status.value?.takeover || status.value?.connections.some(c => c.takeover));
 async function load(reset = false) {
-  const [s, j] = await Promise.all([getDesktopStatus(), getDesktopJobs()]);
+  const [s, j, cfg] = await Promise.all([getDesktopStatus(), getDesktopJobs(), getBotProfileConfig().catch(() => null)]);
+  if (cfg) bots.value = (cfg.profiles?.length ? cfg.profiles : [cfg]).map(p => ({ id: p.id || "", name: p.name || p.id || "机器人", enabled: !!p.agent_desktop_control_enabled }));
   status.value = s;
   jobs.value = j.jobs || [];
   if (reset) {
@@ -105,5 +160,16 @@ onBeforeUnmount(() => { if (timer) clearInterval(timer); });
 .desktop-item { display: grid; gap: 8px; min-width: 0; }
 .desktop-item + .desktop-item { padding-top: 16px; border-top: 1px solid var(--border); }
 .desktop-item-heading { flex-wrap: wrap; }
+.desktop-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.desktop-step { display: flex; gap: 12px; align-items: flex-start; min-width: 0; }
+.desktop-step-mark { flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; border: 1px solid var(--border); color: var(--muted); }
+.desktop-step.done .desktop-step-mark { background: var(--accent, var(--primary)); border-color: transparent; color: #fff; }
+.desktop-step.done .desktop-step-body strong { color: var(--muted); }
+.desktop-step-body { display: grid; gap: 6px; min-width: 0; }
+.desktop-step-body strong { font-size: 13px; font-weight: 500; }
+.desktop-bots { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 13px; }
+.desktop-bots li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.desktop-link { font-size: 12.5px; }
+code { overflow-wrap: anywhere; }
 @media (max-width: 520px) { .desktop-option { align-items: flex-start; } }
 </style>
