@@ -387,7 +387,7 @@ func TestDeferredRunnerPreservesCrossCuttingBehavior(t *testing.T) {
 					client.replies = append(client.replies, executeReply(native, tool.Name(), map[string]any{}))
 				}
 				if kind == "image" {
-					client.replies = append(client.replies, &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, &llm.GenerateResponse{Text: `{"action":"final","task_state":"pending","content":"queued"}`})
+					client.replies = append(client.replies, &llm.GenerateResponse{Text: `{"action":"final","content":""}`}, &llm.GenerateResponse{Text: `{"action":"final","task_state":"pending","content":"queued"}`})
 				}
 				if kind == "search" {
 					// 搜索不单独限次：加载后的第一次调用加上这里四次都会执行。
