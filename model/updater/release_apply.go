@@ -50,6 +50,10 @@ type releaseApplyPlan struct {
 	Supervisor    serviceSupervisor  `json:"supervisor,omitempty"`
 	OptionalFiles []releaseApplyFile `json:"optional_files,omitempty"`
 	LogPath       string             `json:"log_path"`
+	// RenamedExecutable 不为空时这次更新顺带改程序名：新程序装到这里，旧路径留
+	// 兼容软链接，Launchers 里的启动入口把旧名字换成新名字。见 release_rename.go。
+	RenamedExecutable string   `json:"renamed_executable,omitempty"`
+	Launchers         []string `json:"launchers,omitempty"`
 }
 
 type releaseUpdateState struct {
@@ -223,7 +227,7 @@ func validateReleaseApplyPlan(plan releaseApplyPlan) error {
 	if err := validateServiceSupervisor(plan.Supervisor); err != nil {
 		return err
 	}
-	return nil
+	return validateRenamePlan(plan)
 }
 
 func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
@@ -251,23 +255,35 @@ func applyReleasePlan(plan releaseApplyPlan, hooks releaseApplyHooks) error {
 		return restartPreviousRelease(plan, hooks, fmt.Errorf("backup SQLite database: %w", err), "")
 	}
 
+	// 改名时新程序装到新名字上，之后的重签、启动都对着它。
+	launchPlan := plan
+	if plan.RenamedExecutable != "" {
+		launchPlan.ExecutablePath = plan.RenamedExecutable
+	}
 	files := []releaseApplyFile{
-		{Target: plan.ExecutablePath, Staged: plan.StagedExecutable},
+		{Target: launchPlan.ExecutablePath, Staged: plan.StagedExecutable},
 	}
 	files = append(files, plan.OptionalFiles...)
 	switched, err := switchReleaseFiles(plan.InstallRoot, plan.BackupRoot, files)
 	if err != nil {
 		return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("switch release files: %w", err))
 	}
+	if plan.RenamedExecutable != "" {
+		renamed, err := applyRename(plan)
+		switched = append(switched, renamed...)
+		if err != nil {
+			return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("rename program: %w", err))
+		}
+	}
 	// 新二进制刚落地，签名还是 Release 里的样子（CI 产物根本没签）。先按固定
 	// identifier 重签再启动，否则 macOS 会把它当成一个全新程序重新登记，隐私
 	// 列表里多出一条同名 Diana，之前给过的授权也全部作废。签不上不算更新失败：
 	// 顶多是授权要重点一次，回滚反而让用户彻底升不上去。
-	if err := restoreMacOSIdentity(plan.ExecutablePath); err != nil {
+	if err := restoreMacOSIdentity(launchPlan.ExecutablePath); err != nil {
 		log.Printf("updater: restore macOS code identity: %v", err)
 	}
 
-	process, err := startReleaseInstance(plan, hooks)
+	process, err := startReleaseInstance(launchPlan, hooks)
 	if err != nil {
 		return rollbackReleasePlan(plan, hooks, switched, databaseBackup, fmt.Errorf("start updated Diana: %w", err))
 	}

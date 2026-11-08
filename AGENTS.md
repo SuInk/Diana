@@ -102,7 +102,7 @@
 - Release 必须包含各支持平台的下载文件和自更新清单 `latest.json`，新程序只从 `latest.json` 取 SHA-256。过渡期另发旧版自更新器用的 `diana-windows-amd64.zip` 和 `SHA256SUMS`，当前 CI 的预期资产数量为 9（5 个 `.tar.gz` 完整包，含 Termux 用的 `diana-android-arm64.tar.gz`；`diana-windows-amd64.exe`；过渡用的 `.zip` 和 `SHA256SUMS`；`latest.json`）；若工作流调整了产物矩阵，应按工作流重新计算。
 - 完整包统一使用 `diana-<系统>-<架构>.tar.gz`，包内只放一个 `diana-webui`，不附带 `diana-webui-<系统>-<架构>` 兼容副本；Windows 直接发布 `diana-windows-amd64.exe`，卸载脚本编在程序里。过渡期（CI 里标 LEGACY 的部分，几个版本后删）照旧给旧版自更新器发 `diana-windows-amd64.zip`、`SHA256SUMS`，包里保留 `frontend-next/dist`，所以 v0.8.91 起的控制台仍可在 WebUI 里直接升级；v0.8.90 及更早只认 `diana-webui-…` 包名，必须重跑一键安装或手动安装。删掉过渡产物的那个版本，发布说明必须写明哪些旧版本要先重跑一键安装。
 - 发布后必须实际下载 Darwin ARM64 完整包、`diana-windows-amd64.exe` 及 `latest.json`，独立计算 SHA-256 并与 `latest.json` 和 GitHub Release 页面显示的摘要都一致，同时检查归档内只有一个 `diana-webui` 程序（前端已内嵌）和启动脚本。
-- `latest.json` 的 `packages` 必须为每个平台写明更新规则（`asset`、`sha256`、`format`、`binary`、`install_as`），自更新器照它下载和改名，格式见 [docs/update-channels.md](docs/update-channels.md)。改包名或格式时只改 CI 里生成清单的那一段，不在更新器里加兼容分支。
+- `latest.json` 的 `packages` 必须为每个平台写明更新规则（`asset`、`sha256`、`format`、`binary`、`install_as`），自更新器照它下载和改名，格式见 [docs/update-channels.md](docs/update-channels.md)。改包名或格式时只改 CI 里生成清单的那一段，不在更新器里加兼容分支。程序改名（`install_as` 变化）由更新器统一迁移：新程序换名落地、旧名留兼容软链接、一键安装的启动入口同步改名，失败整体回滚，见 `model/updater/release_rename.go`；发改名版本前，确认用户已经能自动升到带这套迁移的版本，并在发布说明里写明从哪个版本起才能自动升级。
 - 面向用户的 macOS 完整包使用 `macos` 而非 `darwin`，例如 `diana-macos-arm64.tar.gz`；内部 Go 交叉编译继续使用 `GOOS=darwin`。
 - Docker 发布需要确认版本标签成功生成；正式版更新 `latest`，Beta/RC 更新 `beta`，Canary 更新 `canary`，预发布不得覆盖 `latest`（包括对应的 `-slim` 标签）。
 - 在 CI、Release 资产和校验全部完成前，不得向用户宣称版本已经发布成功。

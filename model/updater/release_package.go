@@ -72,6 +72,8 @@ type resolvedReleasePackage struct {
 	format string
 	binary string
 	digest string // 清单直接给的摘要；为空时去校验文件里查
+	// installAs 不为空表示这个版本给程序改了名，见 release_rename.go。
+	installAs string
 }
 
 func (u *ReleasePackageUpdater) resolvePackage(release ReleasePackage) (resolvedReleasePackage, error) {
@@ -107,17 +109,21 @@ func (u *ReleasePackageUpdater) resolvePackageFormat(release ReleasePackage) (re
 		}
 		return resolvedReleasePackage{format: "tar.gz", binary: releasePackageDirectory(assetName) + "/" + u.binaryName}, nil
 	}
-	if installAs := strings.TrimSpace(release.InstallAs); installAs != "" && installAs != u.binaryName {
-		return resolvedReleasePackage{}, fmt.Errorf("updater: %s renames the program to %s but this installation runs %s; rerun the one-click installer", release.Tag, installAs, u.binaryName)
+	var installAs string
+	if name := strings.TrimSpace(release.InstallAs); name != "" && name != u.binaryName {
+		if !validInstallName(u.goos, name) {
+			return resolvedReleasePackage{}, fmt.Errorf("%w: invalid install_as %q", ErrInvalidReleaseArchive, name)
+		}
+		installAs = name
 	}
 	switch release.Format {
 	case "exe":
-		return resolvedReleasePackage{format: "exe"}, nil
+		return resolvedReleasePackage{format: "exe", installAs: installAs}, nil
 	case "tar.gz":
 		if _, err := safeArchiveDestination(string(filepath.Separator), release.Binary); err != nil {
 			return resolvedReleasePackage{}, err
 		}
-		return resolvedReleasePackage{format: "tar.gz", binary: release.Binary}, nil
+		return resolvedReleasePackage{format: "tar.gz", binary: release.Binary, installAs: installAs}, nil
 	default:
 		return resolvedReleasePackage{}, fmt.Errorf("%w: unsupported package format %q", ErrInvalidReleaseArchive, release.Format)
 	}
@@ -190,6 +196,7 @@ type MirrorResolver interface {
 type ReleasePackageUpdater struct {
 	currentVersion string
 	executable     string
+	goos           string
 	databasePath   string
 	healthURL      string
 	workingDir     string
@@ -302,6 +309,9 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	if err != nil {
 		return nil, err
 	}
+	// 改名后旧名字是指向新程序的软链接，从旧启动入口拉起来时 macOS 报的是链接
+	// 路径；按真实文件判定和替换，否则更新会去替换那个链接。
+	absExecutable = resolveRenamedEntry(absExecutable)
 	installRoot := filepath.Dir(absExecutable)
 	binaryName := expectedReleaseBinaryName(goos, goarch)
 	databasePath := strings.TrimSpace(options.DatabasePath)
@@ -337,6 +347,7 @@ func NewReleasePackageUpdater(options ReleasePackageOptions) (*ReleasePackageUpd
 	u := &ReleasePackageUpdater{
 		currentVersion: strings.TrimSpace(options.CurrentVersion),
 		executable:     absExecutable,
+		goos:           goos,
 		databasePath:   databasePath,
 		healthURL:      strings.TrimSpace(options.HealthURL),
 		workingDir:     workingDir,
@@ -567,7 +578,7 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 	var stagedExecutable string
 	if rule.format == "exe" {
 		// 发布的就是程序本身，没有包可解，改名放进暂存目录即可。
-		stagedExecutable = filepath.Join(extractRoot, u.binaryName)
+		stagedExecutable = filepath.Join(extractRoot, releaseInstallName(rule.installAs, u.binaryName))
 		if err := os.Rename(archivePath, stagedExecutable); err != nil {
 			return Result{}, err
 		}
@@ -619,7 +630,16 @@ func (u *ReleasePackageUpdater) Download(ctx context.Context, release ReleasePac
 		Supervisor: detectServiceSupervisor(),
 		LogPath:    filepath.Join(updatesRoot, "last-update.log"),
 	}
-	optionalNames := []string{"run.sh", "README.txt"}
+	if rule.installAs != "" {
+		launchers, err := planRenameLaunchers(u.executable)
+		if err != nil {
+			return Result{}, err
+		}
+		plan.RenamedExecutable = filepath.Join(filepath.Dir(u.executable), rule.installAs)
+		plan.Launchers = launchers
+	}
+	// uninstall.sh 跟着包走：程序改名后，旧的卸载脚本不认识新名字。
+	optionalNames := []string{"run.sh", "uninstall.sh", "README.txt"}
 	if runtime.GOOS == "darwin" {
 		optionalNames = append(optionalNames, "desktopctl-helper")
 	}
@@ -1119,4 +1139,11 @@ func writePrivateJSON(path string, value any) error {
 		return err
 	}
 	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func releaseInstallName(installAs, current string) string {
+	if installAs != "" {
+		return installAs
+	}
+	return current
 }
