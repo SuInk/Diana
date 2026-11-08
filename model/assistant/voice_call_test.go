@@ -19,7 +19,7 @@ import (
 func newVoiceCallTestRuntime(t *testing.T, reply string) (*Runtime, *recordingChannel, *capturingLLMProvider) {
 	t.Helper()
 	channel := &recordingChannel{}
-	provider := &capturingLLMProvider{reply: reply}
+	provider := &capturingLLMProvider{reply: reply, sendWhenTools: true}
 	runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
