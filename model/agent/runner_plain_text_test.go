@@ -248,11 +248,11 @@ func TestRunnerPlainTextNotSentBouncesOnce(t *testing.T) {
 	}
 }
 
-// 退回后还是纯文本就不发，按静默结束，原因写进 SilentReason；占位文本的那次修复
-// 也算退回过，不会退两次。
-func TestRunnerPlainTextNotSentDropsSecondPlainText(t *testing.T) {
+// 退回后还是纯文本就复核一次：说了却没做（一个工具没调就说在画）按静默结束，原因写进
+// SilentReason；占位文本的那次修复也算退回过，不会退两次。
+func TestRunnerPlainTextNotSentDropsUnfinishedSecondPlainText(t *testing.T) {
 	for _, first := range []string{"在画了，画好自动发出来", "[搜索 WePlay 参展商名单]"} {
-		client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: first}, {Text: "马上就好"}}}
+		client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: first}, {Text: "马上就画好"}, {Text: `{"unfinished":"马上就画好"}`}}}
 		runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true}, NewToolRegistry(&recordingSearchTool{}))
 		if err != nil {
 			t.Fatal(err)
@@ -261,9 +261,48 @@ func TestRunnerPlainTextNotSentDropsSecondPlainText(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !resp.Silent || resp.Text != "" || resp.FinishReason != "plain_text_not_sent" || resp.SilentReason != plainTextNotSentReason || len(client.requests) != 2 {
+		if !resp.Silent || resp.Text != "" || resp.FinishReason != "plain_text_not_sent" || resp.SilentReason != plainTextUnfinishedReason+"马上就画好" || len(client.requests) != 3 {
 			t.Fatalf("first=%q requests=%d response=%#v", first, len(client.requests), resp)
 		}
+		review := client.requests[2]
+		if len(review.Tools) != 0 || !strings.Contains(review.Messages[1].Content, "本轮没有调用任何工具") || !strings.Contains(review.Messages[1].Content, "画一个我的") {
+			t.Fatalf("review request = %#v", review)
+		}
+	}
+}
+
+// 退回后还是纯文本、复核没发现说了没做的：照常发出。11-08 生产里这样被吞的全是
+// 正常回复（接话、总结、查完资料的结论）。复核输出看不懂时同样放行。
+func TestRunnerPlainTextNotSentSendsCheckedSecondPlainText(t *testing.T) {
+	for _, verdict := range []string{`{"unfinished":""}`, "看不懂的输出"} {
+		client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: "这扭得，看来是加上了"}, {Text: "这扭得可真欢，看来好友加上了"}, {Text: verdict}}}
+		runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true}, NewToolRegistry(&recordingSearchTool{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "[图片]"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.Silent || resp.Text != "这扭得可真欢，看来好友加上了" || resp.FinishReason != "final" || len(client.requests) != 3 {
+			t.Fatalf("verdict=%q requests=%d response=%#v", verdict, len(client.requests), resp)
+		}
+	}
+}
+
+// 退回后写的是空文本：没有可复核的正文，直接静默，不多花一次复核调用。
+func TestRunnerPlainTextNotSentDropsEmptySecondPlainText(t *testing.T) {
+	client := &mixedReplyClient{responses: []*llm.GenerateResponse{{Text: "在画了"}, {Text: "  "}}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true}, NewToolRegistry(&recordingSearchTool{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "画一个我的"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || resp.SilentReason != plainTextNotSentReason || len(client.requests) != 2 {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
 	}
 }
 

@@ -64,8 +64,11 @@ func HistoryReplyMessages(id, text string) []llm.Message {
 // 20/24 改用 send 发出。
 const plainTextNotSentPrompt = "这段普通文本没有发出去，对方什么也没看到。只有 send 会把话发给对方；要做事就先调用对应工具（按需工具用 tools_execute），做完再 send。"
 
-// plainTextNotSentReason 是退回后仍写纯文本、按静默结束时记下的原因。
+// plainTextNotSentReason 是退回后仍写空的纯文本、按静默结束时记下的原因。
 const plainTextNotSentReason = "退回一次后仍只写了普通文本，没有调用 send，没有发出"
+
+// plainTextUnfinishedReason 是退回后仍写纯文本、复核发现说了却没做时记下的原因前缀。
+const plainTextUnfinishedReason = "退回一次后仍只写了普通文本，复核发现说了却没做，没有发出："
 
 // errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。

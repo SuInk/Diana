@@ -624,10 +624,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
 			continue
 		}
-		// 说话只走 send：带着工具定义的这一步写了纯文本，就不当回复发出。先退回一次，
-		// 让模型知道这段没发出去；上面那条修复已经退过一次的也算。再写纯文本就按静默
-		// 结束，不发任何东西——「在画了，画好自动发出来」这种一个工具都没调的空口承诺，
-		// 宁可不说也不能发出去。
+		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
+		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就复核「说了的事做没做」：
+		// 「在画了，画好自动发出来」这种一个工具都没调的空口承诺按静默结束，不发出去；
+		// 其余当作正常 send 往下走，照常过发送前审核。见 plain_text_review.go。
 		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(lastRequest.Tools) > 0 {
 			if !plainTextRepaired {
 				plainTextRepaired = true
@@ -635,7 +635,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				messages = appendToolRepair(messages, resp, interimDone, lastText, plainTextNotSentPrompt)
 				continue
 			}
-			return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
+			if strings.TrimSpace(lastText) == "" {
+				return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
+			}
+			if unfinished := r.reviewPlainTextCompletion(ctx, req.Messages, lastText, steps); unfinished != "" {
+				return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextUnfinishedReason + unfinished}, "plain_text_not_sent")
+			}
+			action = llmAction{Action: "final", Content: strings.TrimSpace(lastText)}
+			ok = true
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
 			feedback, reviewErr := reviewFinish(action.Content, "candidate", true)
