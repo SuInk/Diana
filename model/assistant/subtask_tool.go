@@ -536,7 +536,7 @@ func (r *Runtime) subtaskSearchTools(event MessageEvent) ([]agent.Tool, error) {
 		}
 		// 内置浏览器不在插件工具列表里，要跟主回复一样并进去，否则 search 子任务永远读不了正文。
 		if r.plugins.builtInBrowser {
-			tools = append(NewBuiltInBrowserRenderer().AgentTools(), tools...)
+			tools = append(r.builtInBrowserRenderer(event).AgentTools(), tools...)
 		}
 	}
 	var searchTool, browserTool agent.Tool

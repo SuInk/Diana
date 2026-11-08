@@ -4,6 +4,14 @@
 
 网页渲染统一使用 Chromium / Google Chrome。插件不再下载或回退到 Obscura；此前手动安装的 Obscura 文件不会被自动删除。
 
+## 读网页先走 TinyFish
+
+搜索设置里配了 TinyFish（填了 key、来源列表里没停用）时，`browser_render` 和群里链接的自动读取先调 TinyFish 的 fetch 接口：一次 HTTP 请求拿到整页 markdown、最终网址、描述和站内链接，不起浏览器。这是照参考项目 [mizorewww/pi-extension-telegram-agent](https://github.com/mizorewww/pi-extension-telegram-agent) 的 `search` 工具做的，那边读页只走这一个接口。整页按网址缓存 15 分钟，模型对同一页换 `find` 再读不重新抓。
+
+fetch 报错（被拦、超时 25 秒、空正文、HTTP 错误）才退回下面的本地 Chrome；没配 TinyFish 的部署照旧全走 Chrome。网页截图、GitHub Release 的官方 API 核验不受影响。TinyFish 不跟页面里脚本触发的延迟跳转，这类过渡页只读到过渡页本身。
+
+生产 11-05～07 的 `browser_render` 走本地 Chrome，一次中位 10.5 秒、p90 15.6 秒。同一批常见网址走 fetch 接口，在 miku 上实测单页 1.4～7.4 秒，多数 2～4 秒；三页并行一次调用 3.7 秒。
+
 ## 渲染已有文件
 
 要求把有权使用的已保存 HTML/SVG 出图时，`render_media` 可以直接用 `path` 指定工作目录文件；Markdown、Mermaid 和静态 SVG 使用 `render` 的同名参数。`send_file` 也支持从 `path` 读取已有 UTF-8 文本，以 `filename` 指定交付文件名。三个工具都在运行时完整读取文件，`content` 与 `path` 二选一，不需要模型分页读取再复制全文，也不需要打开 `file://` 或启动临时 HTTP 服务。

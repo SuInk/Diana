@@ -20,6 +20,9 @@ const defaultBrowserRenderURLLimit = 2
 type BuiltInBrowserRenderer struct {
 	renderer agent.PageRenderer
 	maxURLs  int
+	// fetchAPIKey 是搜索设置里的 TinyFish key：有它就先走 fetch 接口读网页，
+	// 失败才起本地浏览器。
+	fetchAPIKey string
 }
 
 // NewBuiltInBrowserRenderer creates Diana's disposable-browser renderer.
@@ -35,7 +38,37 @@ func (p *BuiltInBrowserRenderer) rendererFor() agent.PageRenderer {
 	if p.renderer != nil {
 		return p.renderer
 	}
-	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden})
+	return agent.NewSandboxedHeadlessBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, FetchAPIKey: p.fetchAPIKey})
+}
+
+// builtInBrowserRenderer 是这一轮用的内置网页读取：搜索设置里配了 TinyFish 且没停用时，
+// 读网页走它的 fetch 接口。
+func (r *Runtime) builtInBrowserRenderer(event MessageEvent) *BuiltInBrowserRenderer {
+	renderer := NewBuiltInBrowserRenderer()
+	renderer.fetchAPIKey = r.tinyFishFetchKey(event)
+	return renderer
+}
+
+// tinyFishFetchKey 从搜索插件的设置里取 TinyFish key。搜索插件没开、来源列表里把
+// TinyFish 停用了、或者没填 key，都返回空串，读网页照旧走本地浏览器。
+func (r *Runtime) tinyFishFetchKey(event MessageEvent) string {
+	if r == nil || r.plugins == nil {
+		return ""
+	}
+	_, settings, ok := r.plugins.PluginWithSettingsForGroup(webSearchPluginID, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
+	if !ok {
+		return ""
+	}
+	providers, keys, err := searchProviderCatalog(settings)
+	if err != nil {
+		return ""
+	}
+	for _, provider := range providers {
+		if provider.ID == "tinyfish" && provider.Disabled {
+			return ""
+		}
+	}
+	return strings.TrimSpace(keys["tinyfish"])
 }
 
 func (p *BuiltInBrowserRenderer) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
