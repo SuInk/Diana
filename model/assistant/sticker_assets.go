@@ -24,6 +24,9 @@ type StickerAsset struct {
 	Path             string
 	MIME             string
 	ContentSHA256    string
+	// StickerFileID 是平台原贴纸的 ID（目前只有 Telegram 的 file_id），只对 ProfileID
+	// 那台机器人有效。Path 可能只是动态贴纸的静态缩略图，按它重发就不是原来的贴纸了。
+	StickerFileID string
 	// Description 是这张图的通用图片描述，Gist/Tags 是表情包专用标注；Tagged 表示标注过。
 	Description string
 	Gist        string

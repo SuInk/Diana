@@ -435,6 +435,20 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 	}
 
 	for _, image := range msg.ImageURLs {
+		if fileID := strings.TrimSpace(msg.StickerFileIDs[image]); fileID != "" {
+			result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, "sendSticker", "sticker", fileID, msg.ReplyMessageID)
+			if err == nil {
+				keep(result)
+				continue
+			}
+			// 只有 Telegram 明确拒收（file_id 失效、换了机器人等 400）才退回发文件；
+			// 超时这类结果未知的错误照常上抛，免得同一张发两遍。
+			var apiErr *telegramAPIError
+			if !errors.As(err, &apiErr) || apiErr.Code != http.StatusBadRequest {
+				return nil, err
+			}
+			log.Printf("telegram: send sticker by file_id rejected, falling back to file upload: chat_id=%s err=%v", chatID, err)
+		}
 		method, field, err := telegramImageMethod(image)
 		if err != nil {
 			return nil, err

@@ -17,6 +17,9 @@ import (
 
 const stickerAssetsBackfillKey = "sticker_assets_backfill_v1"
 
+// stickerFileIDBackfillKey 标记旧库存已经从原消息补过平台贴纸 ID。
+const stickerFileIDBackfillKey = "sticker_assets_sticker_file_id_backfill_v1"
+
 func (s *SQLiteStore) ensureStickerAssets() error {
 	if _, err := s.db.Exec(`
 CREATE TABLE IF NOT EXISTS sticker_assets (
@@ -95,22 +98,60 @@ CREATE TABLE IF NOT EXISTS sticker_usage (
 		}
 	}
 
+	// 平台贴纸 ID 是后加的：Telegram 的动态/视频贴纸库里只存了静态缩略图，靠原贴纸的
+	// file_id 才能按贴纸原样转发，见 telegramStickerCandidateFileID。
+	if has, err := s.hasColumn("sticker_assets", "sticker_file_id"); err != nil {
+		return err
+	} else if !has {
+		if _, err := s.db.Exec(`ALTER TABLE sticker_assets ADD COLUMN sticker_file_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add sticker asset file id: %w", err)
+		}
+	}
+	if err := s.runStickerAssetMigrationOnce(stickerAssetsBackfillKey, s.backfillStickerAssets); err != nil {
+		return err
+	}
+	return s.runStickerAssetMigrationOnce(stickerFileIDBackfillKey, s.backfillStickerFileIDs)
+}
+
+// runStickerAssetMigrationOnce 跑一次性的回填，完成后在 app_state 记下标记。
+func (s *SQLiteStore) runStickerAssetMigrationOnce(key string, run func() error) error {
 	var marker string
-	err := s.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, stickerAssetsBackfillKey).Scan(&marker)
+	err := s.db.QueryRow(`SELECT value FROM app_state WHERE key = ?`, key).Scan(&marker)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("read sticker asset backfill marker: %w", err)
 	}
-	if err := s.backfillStickerAssets(); err != nil {
+	if err := run(); err != nil {
 		return err
 	}
 	_, err = s.db.Exec(`
 INSERT INTO app_state (key, value, updated_at) VALUES (?, 'true', CURRENT_TIMESTAMP)
 ON CONFLICT(key) DO UPDATE SET value='true', updated_at=CURRENT_TIMESTAMP
-`, stickerAssetsBackfillKey)
+`, key)
 	return err
+}
+
+// backfillStickerFileIDs 给加列之前入库的表情包补上原贴纸 ID：按入库时记下的消息 ID
+// 和段序号回到原消息里取。只看库里这几千行，每行走 message_id 索引，不扫整张消息表。
+func (s *SQLiteStore) backfillStickerFileIDs() error {
+	_, err := s.db.Exec(`
+UPDATE sticker_assets AS a SET sticker_file_id = COALESCE((
+  SELECT TRIM(json_extract(e.payload, '$.segments[' || a.segment_index || '].data.sticker_file_id'))
+  FROM message_events AS e
+  WHERE e.message_id = a.message_id AND e.kind = a.kind AND e.session = a.session
+    AND json_valid(e.payload)
+    AND LOWER(TRIM(COALESCE(json_extract(e.payload, '$.segments[' || a.segment_index || '].data.content_sha256'), ''))) = a.content_sha256
+    AND TRIM(COALESCE(json_extract(e.payload, '$.segments[' || a.segment_index || '].data.sticker_file_id'), '')) != ''
+  LIMIT 1
+), '')
+WHERE a.sticker_file_id = '' AND COALESCE(a.message_id, '') != ''
+`)
+	if err != nil {
+		return fmt.Errorf("backfill sticker file ids: %w", err)
+	}
+	return nil
 }
 
 func (s *SQLiteStore) backfillStickerAssets() error {
@@ -185,9 +226,9 @@ func (s *SQLiteStore) indexStickerAssets(ctx context.Context, session string, ev
 		_, err := s.db.ExecContext(ctx, `
 INSERT INTO sticker_assets (
   session, content_sha256, profile_id, context_namespace, kind, group_id, user_id,
-  message_id, event_time, segment_index, summary, cached_file, cached_mime, updated_at
+  message_id, event_time, segment_index, summary, cached_file, cached_mime, sticker_file_id, updated_at
 )
-SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 WHERE NOT EXISTS (
   SELECT 1 FROM sticker_blocklist AS b WHERE b.content_sha256 = ? AND b.profile_id IN (?, '')
 )
@@ -203,12 +244,18 @@ ON CONFLICT(session, content_sha256) DO UPDATE SET
   summary=excluded.summary,
   cached_file=excluded.cached_file,
   cached_mime=excluded.cached_mime,
+  -- 贴纸 ID 只对收到它的那台机器人有效：新的一行没带 ID（比如机器人自己发出去的那条）时，
+  -- 同一台机器人就沿用旧 ID，换了机器人则清掉。
+  sticker_file_id=CASE
+    WHEN excluded.sticker_file_id != '' THEN excluded.sticker_file_id
+    WHEN COALESCE(excluded.profile_id, '') = COALESCE(sticker_assets.profile_id, '') THEN sticker_assets.sticker_file_id
+    ELSE '' END,
   updated_at=excluded.updated_at
 WHERE excluded.event_time >= sticker_assets.event_time
 `, session, hash, event.ProfileID, event.ContextNamespace, string(event.Kind), event.GroupID,
 			event.UserID, event.MessageID, eventTime, index, summary, path,
-			strings.TrimSpace(segment.Data["cached_mime"]), time.Now().UTC().Format(time.RFC3339Nano),
-			hash, event.ProfileID)
+			strings.TrimSpace(segment.Data["cached_mime"]), strings.TrimSpace(segment.Data["sticker_file_id"]),
+			time.Now().UTC().Format(time.RFC3339Nano), hash, event.ProfileID)
 		if err != nil {
 			return err
 		}
@@ -301,7 +348,7 @@ func (s *SQLiteStore) queryStickerAssets(ctx context.Context, currentSession, wh
 SELECT a.session, COALESCE(a.profile_id, ''), COALESCE(a.context_namespace, ''), a.kind,
        COALESCE(a.group_id, ''), COALESCE(a.user_id, ''), COALESCE(a.message_id, ''),
        a.event_time, a.segment_index, COALESCE(a.summary, ''), a.cached_file,
-       COALESCE(a.cached_mime, ''), a.content_sha256,
+       COALESCE(a.cached_mime, ''), a.content_sha256, COALESCE(a.sticker_file_id, ''),
        COALESCE(d.description, ''), `+stickerTagCurrent+`, CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.gist, '') ELSE '' END,
        CASE WHEN `+stickerTagCurrent+` THEN COALESCE(t.tags, '') ELSE '' END,
        COALESCE(t.category, ''), t.category IS NOT NULL,
@@ -326,7 +373,7 @@ LIMIT ?`, args...)
 		var kind, tags string
 		if err := rows.Scan(&asset.Session, &asset.ProfileID, &asset.ContextNamespace, &kind,
 			&asset.GroupID, &asset.UserID, &asset.MessageID, &asset.EventTime,
-			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256,
+			&asset.SegmentIndex, &asset.Summary, &asset.Path, &asset.MIME, &asset.ContentSHA256, &asset.StickerFileID,
 			&asset.Description, &asset.Tagged, &asset.Gist, &tags, &asset.Category, &asset.CategoryKnown,
 			&asset.SentCount, &asset.LastSentAt, &asset.ElsewhereLastSentAt); err != nil {
 			return nil, err

@@ -147,3 +147,65 @@ func TestStickerAssetBackfillRecognizesPlatformSubtypeWithoutSummary(t *testing.
 		t.Fatalf("backfilled assets=%#v err=%v", assets, err)
 	}
 }
+
+// 原贴纸 ID 要跟着入库；机器人自己发出去的那条不带 ID，不能把它冲掉。加列之前入库的旧行
+// 升级时从原消息补上。
+func TestStickerAssetsKeepTelegramStickerFileID(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "stickers.db")
+	store, err := NewSQLiteStore(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "media.webp")
+	if err := os.WriteFile(path, []byte("thumb"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("2", 64)
+	segment := func(fileID string) []assistant.MessageSegment {
+		data := map[string]string{"sub_type": "telegram_sticker", "summary": "😭", "cached_file": path, "content_sha256": hash}
+		if fileID != "" {
+			data["sticker_file_id"] = fileID
+		}
+		return []assistant.MessageSegment{{Type: "image", Data: data}}
+	}
+	session := "bot-a:group:-10012345"
+	base := assistant.MessageEvent{Kind: assistant.EventKindGroup, ContextNamespace: "bot-a", ProfileID: "profile-a", GroupID: "-10012345"}
+	incoming := base
+	incoming.MessageID, incoming.Time, incoming.Segments = "in", 10, segment("CAACAgUAAx0")
+	if err := store.AppendMessageEvent(ctx, session, incoming); err != nil {
+		t.Fatal(err)
+	}
+	outgoing := base
+	outgoing.MessageID, outgoing.Time, outgoing.Segments = "out", 20, segment("")
+	if err := store.AppendMessageEvent(ctx, session, outgoing); err != nil {
+		t.Fatal(err)
+	}
+	list := func() []assistant.StickerAsset {
+		t.Helper()
+		assets, err := store.ListStickerAssets(ctx, assistant.StickerHistoryQuery{Session: session, Limit: 10})
+		if err != nil || len(assets) != 1 {
+			t.Fatalf("assets=%#v err=%v", assets, err)
+		}
+		return assets
+	}
+	if got := list()[0]; got.StickerFileID != "CAACAgUAAx0" || got.MessageID != "out" {
+		t.Fatalf("asset=%#v", got)
+	}
+
+	// 模拟加列之前的旧库：ID 为空、回填标记没有，重开后从原消息补回来。
+	if _, err := store.db.Exec(`UPDATE sticker_assets SET sticker_file_id = '', message_id = 'in', segment_index = 0; DELETE FROM app_state WHERE key = ?`, stickerFileIDBackfillKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewSQLiteStore(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if got := list()[0]; got.StickerFileID != "CAACAgUAAx0" {
+		t.Fatalf("backfilled asset=%#v", got)
+	}
+}
