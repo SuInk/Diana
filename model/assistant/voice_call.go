@@ -55,6 +55,9 @@ type VoiceCall struct {
 	ended   sync.Once
 	// hangup 由 hang_up 工具置上，通话引擎念完这一轮后取走并挂断。
 	hangup atomic.Bool
+	// streamWAV 为真时下行能边收边播流式 WAV（QQ 通话），GPT-SoVITS 也走流式合成。
+	// 网页和 App 整句收齐再解码，流式 WAV 头里的长度是占位值，放不了。
+	streamWAV bool
 }
 
 func (c *VoiceCall) requestHangup() { c.hangup.Store(true) }
@@ -204,7 +207,7 @@ func (c *VoiceCall) Reply(ctx context.Context, text string, emit func(string)) e
 }
 
 // Synthesize 用语音合成插槽念一句话。OpenAI 兼容、ElevenLabs 和 Breeze 边合成边交出音频，
-// 其余各家整句合成完再交出。一条路由失败换下一条，但已经交出过音频就不换：
+// QQ 通话里 GPT-SoVITS 也是（见 streamWAV），其余各家整句合成完再交出。一条路由失败换下一条，但已经交出过音频就不换：
 // 换了会从头再念一遍。
 func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime string, data []byte) error) error {
 	r := c.runtime
@@ -220,7 +223,7 @@ func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime
 	}
 	var errs []error
 	for _, route := range routes {
-		err := r.synthesizeCallSpeech(ctx, route, text, tracked)
+		err := r.synthesizeCallSpeech(ctx, route, text, c.streamWAV, tracked)
 		if err == nil {
 			return nil
 		}
@@ -242,7 +245,7 @@ func voiceCallSpeechFormat(format string) string {
 	return format
 }
 
-func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute, text string, chunk func(mime string, data []byte) error) error {
+func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute, text string, streamWAV bool, chunk func(mime string, data []byte) error) error {
 	started := time.Now()
 	req := llm.SpeechRequest{
 		API:          route.speechAPI(),
@@ -255,7 +258,8 @@ func (r *Runtime) synthesizeCallSpeech(ctx context.Context, route mediaSlotRoute
 		Timeout:      route.paramSeconds(mediaParamTimeout),
 		Options:      route.Params,
 	}
-	if api := llm.ResolveSpeechAPI(string(req.API), route.Config); api == llm.SpeechAPIOpenAI || api == llm.SpeechAPIElevenLabs || api == llm.SpeechAPIBreeze {
+	api := llm.ResolveSpeechAPI(string(req.API), route.Config)
+	if api == llm.SpeechAPIOpenAI || api == llm.SpeechAPIElevenLabs || api == llm.SpeechAPIBreeze || (streamWAV && api == llm.SpeechAPIGPTSoVITS) {
 		stream, err := llm.StreamSpeech(ctx, route.Config, req)
 		if err != nil {
 			return err

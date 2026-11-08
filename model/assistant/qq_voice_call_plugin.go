@@ -816,6 +816,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 		s.plugin.tellOwner(runtime, target.profileID, "open:"+err.Error(), target.describe()+"接通了，但通话开不起来："+err.Error()+"，只好先挂了。")
 		return
 	}
+	call.streamWAV = true
 	callCtx, cancel := context.WithCancel(ctx)
 	out := &qqCallTransport{ctx: callCtx, set: s, call: msg.Call, hangupDelay: qqCallHangupGrace}
 	session := voicecall.NewSession(callCtx, call, out, voicecall.Options{CallID: msg.Call, BotID: target.profileID})
@@ -922,6 +923,8 @@ type qqCallTransport struct {
 	call string
 	mime string
 	buf  bytes.Buffer
+	// wav 非空时这一句是 WAV，收到一段就降采样交给 agent，见 qq_voice_call_stream.go。
+	wav *callWAVStream
 	// playUntil 估算 agent 那边已收到的声音要播到什么时候：一句 PCM 交过去是立刻
 	// 返回的，真正播完还要这么久。机器人挂断时等它播完再让 agent 点挂断，否则告别
 	// 那句还在缓冲里电话就断了。
@@ -940,7 +943,15 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 	case voicecall.ServerAudioStart:
 		t.mime = msg.MIME
 		t.buf.Reset()
+		t.wav = nil
+		if isWAVMIME(msg.MIME) {
+			t.wav = &callWAVStream{}
+		}
 	case voicecall.ServerAudioEnd:
+		if t.wav != nil {
+			t.wav = nil
+			return nil
+		}
 		audio := append([]byte(nil), t.buf.Bytes()...)
 		t.buf.Reset()
 		pcm, err := decodeCallSpeechToPCM(t.ctx, audio, t.mime)
@@ -948,19 +959,10 @@ func (t *qqCallTransport) WriteJSON(msg voicecall.ServerMessage) error {
 			log.Printf("diana: qq voice call: 合成的语音转 PCM 失败: %v", err)
 			return nil
 		}
-		now := time.Now()
-		if t.playUntil.Before(now) {
-			t.playUntil = now
-		}
-		t.playUntil = t.playUntil.Add(time.Duration(len(pcm)/2) * time.Second / time.Duration(qqcall.SampleRate))
-		link := t.currentLink()
-		if link == nil {
-			// 断线期间这一句就丢了，连回来接着说下一句。
-			return nil
-		}
-		return link.write(websocket.BinaryMessage, pcm)
+		return t.play(pcm)
 	case voicecall.ServerInterrupted:
 		t.buf.Reset()
+		t.wav = nil
 		t.playUntil = time.Now()
 		if link := t.currentLink(); link != nil {
 			return link.send(qqcall.Message{Type: qqcall.TypeFlush})
@@ -1001,8 +1003,36 @@ func (t *qqCallTransport) currentLink() *qqCallLink {
 }
 
 func (t *qqCallTransport) WriteBinary(data []byte) error {
+	if t.wav != nil {
+		pcm, ok := t.wav.write(data)
+		if ok {
+			return t.play(pcm)
+		}
+		// 不是能直接解的 WAV：攒起来，整句收齐再交给 ffmpeg。
+		t.buf.Write(t.wav.raw())
+		t.wav = nil
+		return nil
+	}
 	t.buf.Write(data)
 	return nil
+}
+
+// play 把一段 16kHz PCM 交给 agent，顺带估算它要播到什么时候。
+func (t *qqCallTransport) play(pcm []byte) error {
+	if len(pcm) == 0 {
+		return nil
+	}
+	now := time.Now()
+	if t.playUntil.Before(now) {
+		t.playUntil = now
+	}
+	t.playUntil = t.playUntil.Add(time.Duration(len(pcm)/2) * time.Second / time.Duration(qqcall.SampleRate))
+	link := t.currentLink()
+	if link == nil {
+		// 断线期间这一段就丢了，连回来接着说。
+		return nil
+	}
+	return link.write(websocket.BinaryMessage, pcm)
 }
 
 // decodeCallSpeechToPCM 用 ffmpeg 把一句合成的音频（mp3、wav、ogg……）转成 16kHz 单声道裸 PCM。
