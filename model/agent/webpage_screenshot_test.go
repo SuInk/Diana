@@ -42,8 +42,8 @@ func TestPublicScreenshotResourceValidation(t *testing.T) {
 }
 
 func TestPublicScreenshotIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
+	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
 	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Timeout: 30 * time.Second, VirtualTimeBudget: 3 * time.Second})
 	page, err := browser.Screenshot(context.Background(), "https://example.com")
@@ -60,8 +60,8 @@ func TestPublicScreenshotIntegration(t *testing.T) {
 }
 
 func TestRestrictedCDPScreenshotIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
+	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

@@ -8,9 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/SuInk/diana/internal/browseruser"
-	"github.com/SuInk/diana/internal/termux"
-	"github.com/SuInk/diana/internal/xvfb"
 	"net/url"
 	"os"
 	"os/exec"
@@ -19,6 +16,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/internal/browseruser"
+	"github.com/SuInk/diana/internal/termux"
+	"github.com/SuInk/diana/internal/xvfb"
 
 	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/model/netguard"
@@ -326,7 +327,7 @@ var resolveBrowserDisplay = func() ([]string, error) {
 
 func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBrowserConfig {
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_TIMEOUT_MS", defaultRenderBrowserTimeout)
+		cfg.Timeout = defaultRenderBrowserTimeout
 	}
 	if cfg.Timeout > MaxAllowedBrowserTimeoutMS*time.Millisecond {
 		cfg.Timeout = MaxAllowedBrowserTimeoutMS * time.Millisecond
@@ -335,31 +336,31 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 		cfg.MaxHTMLBytes = defaultRenderBrowserHTMLBytes
 	}
 	if cfg.MaxTextChars <= 0 {
-		cfg.MaxTextChars = intFromEnv("DIANA_HEADLESS_BROWSER_MAX_CHARS", defaultRenderBrowserTextChars)
+		cfg.MaxTextChars = defaultRenderBrowserTextChars
 	}
 	if cfg.MaxTextChars > MaxAllowedToolOutputChars {
 		cfg.MaxTextChars = MaxAllowedToolOutputChars
 	}
 	if cfg.VirtualTimeBudget <= 0 {
-		cfg.VirtualTimeBudget = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_VIRTUAL_TIME_MS", defaultRenderBrowserVirtualTime)
+		cfg.VirtualTimeBudget = defaultRenderBrowserVirtualTime
 	}
 	if cfg.VirtualTimeBudget > 15*time.Second {
 		cfg.VirtualTimeBudget = 15 * time.Second
 	}
 	if cfg.StabilityWindow <= 0 {
-		cfg.StabilityWindow = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_STABILITY_MS", 900*time.Millisecond)
+		cfg.StabilityWindow = 900 * time.Millisecond
 	}
 	if cfg.StabilityWindow > 5*time.Second {
 		cfg.StabilityWindow = 5 * time.Second
 	}
 	if cfg.NetworkIdleWindow <= 0 {
-		cfg.NetworkIdleWindow = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_NETWORK_IDLE_MS", 750*time.Millisecond)
+		cfg.NetworkIdleWindow = 750 * time.Millisecond
 	}
 	if cfg.NetworkIdleWindow > 5*time.Second {
 		cfg.NetworkIdleWindow = 5 * time.Second
 	}
 	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_POLL_MS", 250*time.Millisecond)
+		cfg.PollInterval = 250 * time.Millisecond
 	}
 	if cfg.PollInterval < 100*time.Millisecond {
 		cfg.PollInterval = 100 * time.Millisecond
@@ -368,7 +369,7 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 		cfg.PollInterval = time.Second
 	}
 	if cfg.SettledGrace <= 0 {
-		cfg.SettledGrace = durationFromMillisecondsEnv("DIANA_HEADLESS_BROWSER_SETTLED_GRACE_MS", defaultRenderBrowserSettledGrace)
+		cfg.SettledGrace = defaultRenderBrowserSettledGrace
 	}
 	// 宽限期不能短于稳定窗（否则 contentStable 一成立就收尾，宽限形同虚设），也
 	// 不能长过观察窗（那就永远轮不到它）。
@@ -379,22 +380,6 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 		cfg.SettledGrace = cfg.VirtualTimeBudget
 	}
 	return cfg
-}
-
-func durationFromMillisecondsEnv(key string, fallback time.Duration) time.Duration {
-	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return time.Duration(value) * time.Millisecond
-}
-
-func intFromEnv(key string, fallback int) int {
-	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }
 
 // RenderBrowserStatus 是一次性渲染浏览器的可用性探测结果。
@@ -489,19 +474,16 @@ func firstNonEmptyLine(value string) string {
 	return ""
 }
 
-// findChromeExecutable 解析浏览器可执行文件。三条路径共用它：网页渲染、
-// 截图和可用性探测。
-//
-// 环境变量的兜底必须在这里，不能只写在 SandboxedBrowserConfig 的默认值里——那样
-// 只有网页渲染认得它，截图和探测走的是另一条入口。浏览器装在非标准路径、靠环境
-// 变量指过去的机器上，症状就是网页渲染能用，关系图却报「这台机器上没有浏览器」。
+// testChromeExecutable 只给测试用：非空时代替自动查找，让默认路径落到假浏览器上。
+var testChromeExecutable string
+
+// findChromeExecutable 解析浏览器可执行文件。网页渲染、截图和可用性探测共用它，
+// 所以几条路径找到的永远是同一个浏览器。configured 为空时按常见安装位置自动找，
+// 不读环境变量。
 func findChromeExecutable(configured string) (string, error) {
 	configured = strings.TrimSpace(configured)
 	if configured == "" {
-		configured = firstNonEmptyString(
-			os.Getenv("DIANA_HEADLESS_BROWSER_EXECUTABLE"),
-			os.Getenv("DIANA_AGENT_BROWSER_EXECUTABLE"),
-		)
+		configured = testChromeExecutable
 	}
 	if configured != "" {
 		if info, err := os.Stat(configured); err == nil && !info.IsDir() {

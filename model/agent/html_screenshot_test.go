@@ -29,8 +29,8 @@ func TestProbeRenderBrowserRenderingChecksRealScreenshot(t *testing.T) {
 }
 
 func TestProbeRenderBrowserRenderingIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION=1 to probe the installed browser")
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_PROBE_INTEGRATION=1 to probe the installed browser")
 	}
 	status := ProbeRenderBrowserRendering(context.Background(), "")
 	if !status.Available {
@@ -64,7 +64,7 @@ func TestBrowserProbeRejectsScreenshotOnlySuccess(t *testing.T) {
 }
 
 func TestScreenshotPixelDensityIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
 		t.Skip("requires installed browser")
 	}
 	for _, scale := range []float64{0, 2} {

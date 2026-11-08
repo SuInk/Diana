@@ -13,8 +13,8 @@ import (
 
 // 常驻搜索浏览器要复用进程，但每次渲染之间不能共享 Cookie。
 func TestWarmSearchBrowserReusesProcessAndIsolatesCookies(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_INTEGRATION=1 to run Chrome integration")
+	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome integration")
 	}
 	t.Cleanup(func() {
 		warmSearchBrowser.mu.Lock()

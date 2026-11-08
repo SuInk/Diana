@@ -143,8 +143,8 @@ func TestRenderMediaToolAllowedForNonOwners(t *testing.T) {
 
 // 真实浏览器 + ffmpeg 跑一遍完整编码链。
 func TestRenderMediaEncodesVideoAndGIFIntegration(t *testing.T) {
-	if os.Getenv("DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION") != "1" {
-		t.Skip("set DIANA_HEADLESS_BROWSER_PROBE_INTEGRATION=1 to run against the installed browser")
+	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
+		t.Skip("set DIANA_BROWSER_PROBE_INTEGRATION=1 to run against the installed browser")
 	}
 	ffmpeg, err := lookResolverCommand("ffmpeg")
 	if err != nil {

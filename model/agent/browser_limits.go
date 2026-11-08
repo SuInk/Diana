@@ -23,7 +23,6 @@ import (
 
 const (
 	defaultDisposableBrowserLimit = 3
-	maxDisposableBrowserLimit     = 16
 	// disposableBrowserQueueWait 是一次性浏览器排队的上限。排不上就当场说「忙」，
 	// 不把请求挂到工具总超时才失败。
 	disposableBrowserQueueWait = 20 * time.Second
@@ -87,12 +86,7 @@ func (s *browserSlots) acquire(ctx context.Context) (func(), error) {
 	}
 }
 
-var disposableBrowsers = newBrowserSlots(disposableBrowserLimitFromEnv(), disposableBrowserQueueWait)
-
-func disposableBrowserLimitFromEnv() int {
-	limit := intFromEnv("DIANA_HEADLESS_BROWSER_MAX_CONCURRENT", defaultDisposableBrowserLimit)
-	return min(limit, maxDisposableBrowserLimit)
-}
+var disposableBrowsers = newBrowserSlots(defaultDisposableBrowserLimit, disposableBrowserQueueWait)
 
 // ---- 交互式浏览器：按对话分标签页 ----
 
