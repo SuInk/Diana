@@ -463,11 +463,14 @@ type Runtime struct {
 	likelyAI         likelyAIState
 	moodMu           sync.Mutex
 	moodPersistMu    sync.Mutex
-	moods            map[string]*moodState
-	pokeMu           sync.Mutex
-	pokeLastReply    map[string]time.Time
-	pokeLastSent     map[string]time.Time
-	pokeSessionSent  map[string][]time.Time
+	// localRoomState 是本地群（local_room.go），第一次用到时建。
+	localRoomsOnce  sync.Once
+	localRoomState  *localRoomHub
+	moods           map[string]*moodState
+	pokeMu          sync.Mutex
+	pokeLastReply   map[string]time.Time
+	pokeLastSent    map[string]time.Time
+	pokeSessionSent map[string][]time.Time
 	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
 	// 自带锁，不受 mu 保护。
 	crossSessionMu          sync.Mutex
