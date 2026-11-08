@@ -139,6 +139,14 @@ type Config struct {
 	// Interim 在 send 和其他工具同一步发来时立刻发出 send 的正文，返回给模型看的结果；
 	// 本轮照常继续。为空时这类 send 不执行，模型要在下一步单独 send。
 	Interim func(ctx context.Context, text string) (string, error) `json:"-"`
+	// InterimReply 发「一步里只调 send、填了 continue=true」的那几句，本轮照常继续；为空时
+	// 用 Interim。和工具同一步的 send 是动手前的一句短话，这种单独的 send 却常常就是一整条
+	// 回复（11-07 swe-2 回放约三成闲聊这样发），调用方要让它和最终回复一样先过审核再发。
+	InterimReply func(ctx context.Context, text string) (string, error) `json:"-"`
+	// PlainTextNotSent 让带工具定义的规划步里写出来的纯文本不当回复发出：先退回一次，
+	// 告诉模型这段没发出去、只有 send 会发；再写纯文本就按静默结束。只给主回复开：
+	// 子任务和别的调用方要的正是 Runner 交回的那段文本。见 plainTextNotSentPrompt。
+	PlainTextNotSent bool `json:"-"`
 	// FinalizeFields 给 send 追加可选的字符串字段，模型在收尾时顺手填写，
 	// 值原样出现在 Response.FinalizeFields 里，由调用方决定怎么用（例如按关键词配一张
 	// 表情包）。让模型「多填一个字段」比让它先加载、再调用一个工具容易得多。

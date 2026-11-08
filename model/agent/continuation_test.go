@@ -36,9 +36,10 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if first.Continued || len(first.Transcript) < 2 || first.ConversationKey == "" {
 		t.Fatalf("first = %#v", first)
 	}
-	last := first.Transcript[len(first.Transcript)-1]
-	if last.Role != llm.RoleAssistant || last.Content != "好" || len(last.ToolCalls) > 0 {
-		t.Fatalf("a send-only finish must be recorded as a plain reply: %#v", last)
+	call, result := first.Transcript[len(first.Transcript)-2], first.Transcript[len(first.Transcript)-1]
+	if call.Role != llm.RoleAssistant || len(call.ToolCalls) != 1 || sendText(call.ToolCalls[0]) != "好" ||
+		result.Role != llm.RoleTool || result.ToolCallID != call.ToolCalls[0].ID || result.Content != historyReplyResult {
+		t.Fatalf("a send-only finish must stay a send call with its result: %#v / %#v", call, result)
 	}
 	second, err := runner.Run(context.Background(), Request{
 		Messages: continuationTestMessages("第二问"),
@@ -107,9 +108,9 @@ func TestRunnerContinuationFallsBackOnKeyMismatch(t *testing.T) {
 	}
 }
 
-// 只调 send 的收尾记成普通发言：每次 send 一条，不说话的一轮什么都不留。留下 send
-// 调用和「已发送」时，模型下一轮会把它读成刚说过，新消息没人接也判「已经回应过」。
-func TestTranscriptAfterRecordsSendOnlyFinishAsPlainReplies(t *testing.T) {
+// 只调 send 的收尾原样留成 send 调用加结果，和重新组装时历史里自己的发言同一个形态；
+// 不说话的一轮什么都不留。
+func TestTranscriptAfterKeepsSendOnlyFinishAsCalls(t *testing.T) {
 	request := llm.GenerateRequest{Messages: continuationTestMessages("问题")}
 	cases := []struct {
 		name  string
@@ -127,12 +128,21 @@ func TestTranscriptAfterRecordsSendOnlyFinishAsPlainReplies(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			transcript := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
 			added := transcript[len(request.Messages):]
-			var got []string
-			for _, message := range added {
-				if message.Role != llm.RoleAssistant || len(message.ToolCalls) > 0 || len(message.ResponsesOutput) > 0 {
-					t.Fatalf("send-only finish left a tool call behind: %#v", message)
+			if tc.want == nil {
+				if len(added) != 0 {
+					t.Fatalf("silent finish left messages behind: %#v", added)
 				}
-				got = append(got, message.Content)
+				return
+			}
+			if len(added) != 1+len(tc.calls) || len(added[0].ToolCalls) != len(tc.calls) || len(added[0].ResponsesOutput) == 0 {
+				t.Fatalf("send-only finish must keep its native calls: %#v", added)
+			}
+			var got []string
+			for index, call := range added[0].ToolCalls {
+				got = append(got, sendText(call))
+				if result := added[1+index]; result.Role != llm.RoleTool || result.ToolCallID != call.ID || result.Content != historyReplyResult {
+					t.Fatalf("result %d not paired: %#v", index, result)
+				}
 			}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %q, want %q", got, tc.want)

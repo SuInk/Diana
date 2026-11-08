@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/SuInk/diana/internal/maibotreply"
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -168,5 +169,28 @@ func TestMaiBotReplyLinesAlignsParagraphsToDraftMessages(t *testing.T) {
 	messages := strings.Split(got, notificationSplitMarker)
 	if len(messages) != 3 || strings.Count(messages[0], notificationLineMarker) != 3 || !strings.HasPrefix(messages[1], "规律") || !strings.HasPrefix(messages[2], "来源") {
 		t.Fatalf("maiBotReplyLines() = %q", messages)
+	}
+}
+
+// 历史里自己的发言是 send 调用，润色模型不带工具，要拿到调用里的正文当普通发言。
+func TestMaiBotReplyerReadsHistoryReplyCalls(t *testing.T) {
+	cfg := (BotConfig{ReplyComposer: "maibot", AgentEnabled: false}).WithDefaults()
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, MessageID: "m2", UserID: "u2", SenderName: "群友", RawMessage: "然后呢"}
+	source := []llm.Message{{Role: llm.RoleUser, Content: "真实群聊", Priority: llm.MessagePriorityHistory}}
+	for _, message := range agent.HistoryReplyMessages("h1", "上次说过的话") {
+		message.Priority = llm.MessagePriorityHistory
+		source = append(source, message)
+	}
+	source = append(source, llm.Message{Role: llm.RoleUser, Content: event.RawMessage, Priority: llm.MessagePriorityCurrent})
+	all := ""
+	for _, message := range runtime.maiBotReplyerMessages(cfg, event, source, "草稿") {
+		if len(message.ToolCalls) > 0 || message.Role == llm.RoleTool {
+			t.Fatalf("tool turn leaked into replyer request: %#v", message)
+		}
+		all += message.Content
+	}
+	if !strings.Contains(all, "上次说过的话") {
+		t.Fatalf("history reply text missing: %s", all)
 	}
 }

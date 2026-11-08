@@ -2020,7 +2020,7 @@ func TestRuntimeModelDiscussionNeverMutatesLLMConfigBeforeReply(t *testing.T) {
 				}},
 			}}
 			runtime := NewRuntime(BotConfig{OwnerID: "10001"}, channel, NewDefaultPluginManager(), store, nil, nil, func() (LLMProvider, error) {
-				return provider, nil
+				return sendWrappingProvider{provider}, nil
 			})
 
 			reply, err := runtime.replyTo(context.Background(), MessageEvent{Kind: EventKindPrivate, UserID: tt.userID, RawMessage: tt.text}, tt.text)
@@ -5284,7 +5284,7 @@ func (p *sequenceLLMProvider) Generate(ctx context.Context, req llm.GenerateRequ
 		}
 		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", ToolCalls: calls}, nil
 	}
-	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}, nil
+	return asSendReply(req, &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: reply}), nil
 }
 
 func (p *sequenceLLMProvider) requestsSnapshot() []llm.GenerateRequest {

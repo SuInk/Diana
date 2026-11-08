@@ -157,10 +157,11 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 			t.Fatalf("prefix differs at %d:\n got %s: %.200q\nwant %s: %.200q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
 		}
 	}
-	// 上一轮只调 send 的收尾记成普通发言，不留 send 调用和「已发送」：留着的话模型会
-	// 把下一轮读成刚说过，新消息没人接也判「已经回应过」而静默。
-	if reply := after[len(before)]; reply.Role != llm.RoleAssistant || len(reply.ToolCalls) != 0 || reply.Content != "在的" {
-		t.Fatalf("first reply missing after the prefix: %#v", reply)
+	// 上一轮只调 send 的收尾原样留成 send 调用加「已发送」，和历史里自己的发言同一个形态。
+	if reply, result := after[len(before)], after[len(before)+1]; reply.Role != llm.RoleAssistant || len(reply.ToolCalls) != 1 ||
+		reply.ToolCalls[0].Name != agent.FinalizeToolName || reply.ToolCalls[0].Arguments["text"] != "在的" ||
+		result.Role != llm.RoleTool || result.ToolCallID != reply.ToolCalls[0].ID {
+		t.Fatalf("first reply missing after the prefix: %#v / %#v", reply, result)
 	}
 	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。
 	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule {
@@ -410,6 +411,45 @@ func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("new reply missing: %#v", continuation.Append)
+	}
+}
+
+// 历史里自己的发言是 send 调用加「已发送」：记录里已有的那句两半都不再追加，新的那句
+// 两半一起追加，不留不成对的调用。
+func TestAppendContextKeepsHistoryReplyPairsTogether(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 在吗")
+	log := appendTestLog(t, first, "在的")
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:02] 乙: 吃了吗"}, "", "【当前需要回复的消息】乙: 吃了吗")
+	old := agent.HistoryReplyMessages("old", `<diana-quote id="im_message_1"/>在的`)
+	fresh := agent.HistoryReplyMessages("new", "刚吃完")
+	history := append(append([]llm.Message{second[1]}, old...), second[2])
+	history = append(history, fresh...)
+	history[len(history)-1].CacheBreakpoint = true
+	second[2].CacheBreakpoint = false
+	second = append(append([]llm.Message{second[0]}, history...), second[3:]...)
+	continuation := continueFrom(log, second)
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	var calls, results int
+	for index, message := range continuation.Append {
+		if !llm.IsHistoryReplyMessage(message) {
+			continue
+		}
+		if message.Role == llm.RoleAssistant {
+			calls++
+			if text := llm.HistoryReplyText(message); text != "刚吃完" {
+				t.Fatalf("already-sent reply appended again: %q", text)
+			}
+			if next := continuation.Append[index+1]; next.Role != llm.RoleTool || next.ToolCallID != message.ToolCalls[0].ID {
+				t.Fatalf("call not followed by its result: %#v", continuation.Append)
+			}
+			continue
+		}
+		results++
+	}
+	if calls != 1 || results != 1 {
+		t.Fatalf("calls=%d results=%d in %#v", calls, results, continuation.Append)
 	}
 }
 

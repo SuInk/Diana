@@ -117,3 +117,46 @@ func TestReplyTurnAfterInterimNeedsNoFinalText(t *testing.T) {
 		})
 	}
 }
+
+// 单独 send、填了 continue 的那句（RunReply）常常就是一整条回复：和最终回复一样先过
+// 发送前审核，审核拦下就不发；放行时不受中途发言 80 字的限制。
+func TestInterimReplyIsAuditedBeforeSend(t *testing.T) {
+	long := strings.Repeat("长", interimMessageMaxRunes+10)
+	for name, tc := range map[string]struct {
+		verdict string
+		sent    bool
+	}{
+		"拦下": {`{"send_confidence":0.99,"reason":"ok","account_safe":false,"account_risk":"explicit"}`, false},
+		"放行": {`{"send_confidence":0.99,"reason":"ok","account_safe":true}`, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			channel := &recordingChannel{}
+			provider := &qualityTestProvider{reply: tc.verdict}
+			runtime := interimTestRuntime(channel, provider)
+			event := interimTestEvent()
+			event.proactiveReply = false
+			tool := newDianaInterimMessageTool(runtime, event)
+			ctx := withInterimMessages(context.Background())
+			setInterimReplyAudit(ctx, event.RawMessage, false)
+			_, err := tool.RunReply(ctx, map[string]any{"text": long})
+			if len(provider.requests) != 1 {
+				t.Fatalf("audit calls = %d, want 1", len(provider.requests))
+			}
+			sent := channel.sentSnapshot()
+			if tc.sent && (err != nil || len(sent) != 1 || sent[0].Text != long) {
+				t.Fatalf("err = %v, sent = %#v", err, sent)
+			}
+			if !tc.sent && (err == nil || !strings.Contains(err.Error(), "审核没通过") || len(sent) != 0) {
+				t.Fatalf("err = %v, sent = %#v", err, sent)
+			}
+		})
+	}
+	// 和工具同一步的那句（Run）照旧不审、限 80 字。
+	channel := &recordingChannel{}
+	provider := &qualityTestProvider{reply: `{"account_safe":false}`}
+	tool := newDianaInterimMessageTool(interimTestRuntime(channel, provider), interimTestEvent())
+	ctx := withInterimMessages(context.Background())
+	if _, err := tool.Run(ctx, map[string]any{"text": "我去查一下"}); err != nil || len(provider.requests) != 0 {
+		t.Fatalf("err = %v, audit calls = %d", err, len(provider.requests))
+	}
+}
