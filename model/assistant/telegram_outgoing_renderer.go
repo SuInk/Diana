@@ -21,6 +21,10 @@ type telegramOutgoingRenderer struct {
 }
 
 func renderTelegramOutgoingText(text string, names, usernames map[string]string) (string, []telegramEntitySpec) {
+	text = dropUnnamedMentions(text, func(id string) bool {
+		username := usernames[id]
+		return strings.TrimSpace(names[id]) != "" || (username != "" && normalizeTelegramMentionUsername(username) == username)
+	})
 	reserved := []string{text}
 	for _, name := range names {
 		reserved = append(reserved, name)
@@ -33,7 +37,7 @@ func renderTelegramOutgoingText(text string, names, usernames map[string]string)
 	text = spaceAfterTelegramMentions(text)
 	text = dianaMentionMarkerPattern.ReplaceAllStringFunc(text, func(marker string) string {
 		id := dianaMentionMarkerPattern.FindStringSubmatch(marker)[1]
-		display := mentionDisplayText(id, names[id])
+		display := mentionDisplayText(names[id])
 		entity := telegramEntitySpec{Type: "text_mention", URL: "diana-mention:" + id}
 		if username := usernames[id]; username != "" && normalizeTelegramMentionUsername(username) == username {
 			display = "@" + username

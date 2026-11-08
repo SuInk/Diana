@@ -29,7 +29,8 @@ func TestTelegramDraftResolvesUsernameOnEveryUpdate(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("draft calls = %#v", calls)
 	}
-	for i, want := range []string{"@alice_name hello", "@alice_new hello @10003"} {
+	// 10003 查不到名字，不显示成 @10003，直接去掉。
+	for i, want := range []string{"@alice_name hello", "@alice_new hello"} {
 		if calls[i].Params["text"] != want {
 			t.Fatalf("draft[%d] = %#v, want text %q", i, calls[i].Params, want)
 		}

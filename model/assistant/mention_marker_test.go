@@ -36,16 +36,14 @@ func TestOneBotSegmentsRenderMentionMarker(t *testing.T) {
 	}
 }
 
-func TestRenderDianaMentionsUsesDisplayNamesAndFallsBackToID(t *testing.T) {
+func TestRenderDianaMentionsUsesDisplayNamesAndDropsUnknown(t *testing.T) {
 	text, spans := renderDianaMentions("<diana-at id=\"10002\"/> 和 <diana-at id=\"10008\"/> 都看下",
 		map[string]string{"10002": "Alice"})
-	if text != "@Alice 和 @10008 都看下" {
+	// 查不到名字的不再显示成 @10008：群友看到一串数字不知道在叫谁。
+	if text != "@Alice 和 都看下" {
 		t.Fatalf("text = %q", text)
 	}
-	want := []dianaMentionSpan{
-		{UserID: "10002", Display: "@Alice", Offset: 0, Length: 6},
-		{UserID: "10008", Display: "@10008", Offset: 9, Length: 6},
-	}
+	want := []dianaMentionSpan{{UserID: "10002", Display: "@Alice", Offset: 0, Length: 6}}
 	if !reflect.DeepEqual(spans, want) {
 		t.Fatalf("spans = %#v, want %#v", spans, want)
 	}
@@ -54,6 +52,22 @@ func TestRenderDianaMentionsUsesDisplayNamesAndFallsBackToID(t *testing.T) {
 	for _, span := range spans {
 		if got := string(utf16Decode(units[span.Offset : span.Offset+span.Length])); got != span.Display {
 			t.Fatalf("offset %d..%d = %q, want %q", span.Offset, span.Offset+span.Length, got, span.Display)
+		}
+	}
+}
+
+func TestDropUnnamedMentionsKeepsSpacingTidy(t *testing.T) {
+	named := func(id string) bool { return id == "10002" }
+	for source, want := range map[string]string{
+		"<diana-at id=\"10009\"/> 你好":                             "你好",
+		"<diana-at id=\"10009\"/>你好":                              "你好",
+		"你好 <diana-at id=\"10009\"/>":                             "你好",
+		"你好 <diana-at id=\"10009\"/>\n下一行":                        "你好\n下一行",
+		"<diana-at id=\"10002\"/> <diana-at id=\"10009\"/> 你俩对一下": "<diana-at id=\"10002\"/> 你俩对一下",
+		"没有提及": "没有提及",
+	} {
+		if got := dropUnnamedMentions(source, named); got != want {
+			t.Errorf("%q => %q, want %q", source, got, want)
 		}
 	}
 }
