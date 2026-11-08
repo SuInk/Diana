@@ -612,6 +612,10 @@ export interface PluginSettingSpec {
   options?: PluginSettingOption[];
   /** 多行文本框的建议行高；模板类设置比默认四行更高。 */
   rows?: number;
+  /** 值为空时运行时实际用的内容（默认提示词、模板、清单）；界面直接显示在框里，和它一样就存空串。 */
+  fallback?: string;
+  /** 默认内容随另一个设置变：按 key 的当前值查 values，查不到用 fallback。 */
+  fallback_by?: { key: string; values: Record<string, string> };
   /** 凭据类设置；读接口不返回明文，提交空串表示保持原值。 */
   secret?: boolean;
   // 只能全局设置、不能按群覆盖（端口、连接这类进程里只有一份的资源）。

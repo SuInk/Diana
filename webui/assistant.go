@@ -1195,11 +1195,21 @@ func (h *BotHandler) listPlugins(c *gin.Context) {
 	c.JSON(http.StatusOK, assistant.RedactStates(visible))
 }
 
-// pluginStateView 补上插件页要的现填内容：机器人下拉框的候选项和插件运行状态。
+// pluginStateView 补上插件页要的现填内容：机器人下拉框的候选项、按机器人算的默认提示词和插件运行状态。
 // 列表、开关、保存设置三个接口都返回插件状态，前端拿返回值直接替换卡片，少了哪个
 // 接口，下拉框就会退回显示原始机器人 ID。
 func (h *BotHandler) pluginStateView(c *gin.Context, state assistant.PluginState) assistant.PluginState {
-	state = assistant.WithBotProfileOptions(state, h.profiles.Profiles().Profiles)
+	profiles := h.profiles.Profiles().Profiles
+	state = assistant.WithBotProfileOptions(state, profiles)
+	// 选了机器人时，跟评提示词框显示的是这台机器人实际生效的跟评要求。
+	if profileID := strings.TrimSpace(c.Query("profile")); profileID != "" {
+		for _, profile := range profiles {
+			if profile.ID == profileID {
+				state = assistant.WithFollowUpPromptFallback(state, profile)
+				break
+			}
+		}
+	}
 	state.RuntimeStatus = h.runtime.Plugins().PluginRuntimeStatus(c.Request.Context(), state.Manifest.ID)
 	return state
 }

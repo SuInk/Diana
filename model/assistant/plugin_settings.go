@@ -49,6 +49,13 @@ type PluginSettingSpec struct {
 	Step        float64               `json:"step,omitempty"`
 	Unit        string                `json:"unit,omitempty"`
 	Options     []PluginSettingOption `json:"options,omitempty"`
+	// Fallback 是值为空时运行时实际用的内容（内置默认提示词、默认模板、默认清单）。
+	// 界面把它直接填进输入框，用户看到的就是真正发出去的东西；保存时内容和它一样
+	// 就仍存空串，以后升级改了默认文案也跟着走。
+	Fallback string `json:"fallback,omitempty"`
+	// FallbackBy 是默认内容随另一个设置变的情况（编码代理的命令模板随后端 CLI 变）：
+	// 按 Key 的当前值查 Values，查不到再用 Fallback。
+	FallbackBy *PluginSettingFallbackBy `json:"fallback_by,omitempty"`
 	// Rows 是多行文本框的建议行高。模板类设置默认的四行装不下带
 	// <diana-message/> 的多行模板，编辑时全靠滚动，给它一个更合身的高度。
 	Rows int `json:"rows,omitempty"`
@@ -83,6 +90,12 @@ func parseLLMProfileSetting(value string) (profileID, model string) {
 		return strings.TrimSpace(pair[0]), strings.TrimSpace(pair[1])
 	}
 	return value, ""
+}
+
+// PluginSettingFallbackBy 按另一个设置的取值给出不同的默认内容。
+type PluginSettingFallbackBy struct {
+	Key    string            `json:"key"`
+	Values map[string]string `json:"values"`
 }
 
 // PluginSettingCondition 是「Key 的当前值在 Values 里」。
@@ -362,7 +375,12 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 			return nil, fmt.Errorf("diana: setting %q expects a string", spec.Key)
 		}
 		// 多行文本只去掉首尾空白，中间的换行是配置本身（模板、白名单一行一条）。
-		return strings.TrimSpace(value), nil
+		value = strings.TrimSpace(value)
+		// 界面把默认内容直接摊在框里，原样提交回来的不算自定义，免得把当前默认冻住。
+		if spec.Fallback != "" && normalizeFallbackText(value) == normalizeFallbackText(spec.Fallback) {
+			return "", nil
+		}
+		return value, nil
 	case PluginSettingTypeSelect:
 		value, ok := raw.(string)
 		if !ok {
@@ -517,6 +535,10 @@ func numberValue(raw any) (float64, bool) {
 		return float64(number), true
 	}
 	return 0, false
+}
+
+func normalizeFallbackText(text string) string {
+	return strings.TrimSpace(strings.ReplaceAll(text, "\r\n", "\n"))
 }
 
 // settingRange 构造设置范围用的 float64 指针。

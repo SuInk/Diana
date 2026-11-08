@@ -78,6 +78,14 @@
               :model-value="settingValue(spec)"
               @update:model-value="setValue(spec.key, $event)"
             />
+            <textarea
+              v-else-if="spec.type === 'text'"
+              :id="controlID(spec)"
+              class="input plugin-setting-textarea"
+              :rows="spec.rows && spec.rows > 0 ? spec.rows : 4"
+              :value="shownFallbackText(String(settingValue(spec) ?? ''), spec.fallback)"
+              @input="setValue(spec.key, ($event.target as HTMLTextAreaElement).value)"
+            ></textarea>
             <input
               v-else
               :id="controlID(spec)"
@@ -87,6 +95,7 @@
               @input="setValue(spec.key, ($event.target as HTMLInputElement).value)"
             />
           </div>
+          <pre v-else-if="spec.type === 'text' && displayValue(spec) !== '空'" class="group-plugin-setting-inherited group-plugin-setting-inherited-text">全局：{{ displayValue(spec) }}</pre>
           <span v-else class="group-plugin-setting-inherited">全局：{{ displayValue(spec) }}</span>
         </div>
       </div>
@@ -100,6 +109,7 @@
 import { computed, ref } from "vue";
 import { ChevronDown, SlidersHorizontal } from "@lucide/vue";
 import type { PluginSettingSpec, PluginState } from "../api";
+import { shownFallbackText } from "../lib/fallback-text";
 import AppSelect from "./AppSelect.vue";
 import PluginSizeInput from "./PluginSizeInput.vue";
 import PlatformLevelRulesField from "./PlatformLevelRulesField.vue";
@@ -121,10 +131,15 @@ function isCustom(key: string): boolean {
 }
 
 function globalValue(spec: PluginSettingSpec): unknown {
+  let value: unknown = spec.default;
   if (Object.prototype.hasOwnProperty.call(props.plugin.settings ?? {}, spec.key)) {
-    return props.plugin.settings?.[spec.key];
+    value = props.plugin.settings?.[spec.key];
   }
-  return spec.default;
+  // 留空的文本项运行时用的是 fallback，跟随时也显示它，切到自定义时从它改起。
+  if (spec.fallback && String(value ?? "").trim() === "") {
+    return spec.fallback;
+  }
+  return value;
 }
 
 function settingValue(spec: PluginSettingSpec): unknown {

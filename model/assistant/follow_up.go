@@ -29,9 +29,30 @@ const (
 func followUpPromptSetting() PluginSettingSpec {
 	return PluginSettingSpec{
 		Key: pluginSettingFollowUpPrompt, Label: "跟评提示词", Type: PluginSettingTypeText,
-		Description: "只影响本插件发送后的跟评，不影响解析结果或订阅事实清单。留空沿用机器人「内置提示词 → 跟评要求」的自定义内容；没有自定义时使用默认规则（只评论本轮发送的内容，不接续旧话题）。",
-		Default:     "", Rows: 6,
+		Description: "只影响本插件发送后的跟评，不影响解析结果或订阅事实清单。框里显示的是当前生效的跟评要求：没改过时就是机器人「内置提示词 → 跟评要求」的内容，改了只对本插件生效。",
+		Default:     "", Fallback: promptFollowUp, Rows: 6,
 	}
+}
+
+// WithFollowUpPromptFallback 把跟评提示词框里显示的默认内容换成这台机器人实际生效
+// 的「跟评要求」：机器人在内置提示词里改过，插件留空时用的就是改过的那份。
+func WithFollowUpPromptFallback(state PluginState, cfg BotConfig) PluginState {
+	text := strings.TrimSpace(cfg.PromptOverrides.body(promptFollowUpSpec))
+	if text == "" || text == promptFollowUp {
+		return state
+	}
+	settings := append([]PluginSettingSpec(nil), state.Manifest.Settings...)
+	changed := false
+	for index, spec := range settings {
+		if spec.Key == pluginSettingFollowUpPrompt {
+			settings[index].Fallback = text
+			changed = true
+		}
+	}
+	if changed {
+		state.Manifest.Settings = settings
+	}
+	return state
 }
 
 type followUpKind string

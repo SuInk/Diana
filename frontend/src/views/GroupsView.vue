@@ -379,7 +379,7 @@
         </div>
         <div class="field wide">
           <label>接话设置</label>
-          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
+          <ParticipationControls :key="`${editing.bot_profile_id}:${editing.group_id}`" :model-value="editing.participation" :level="groupReplyDesireValue(editing)" :inherited-value="participationDefaults[editing.bot_profile_id || botScope || '']" :criteria="editing.proactive_reply_extra_criteria" :inherited-criteria="inheritedBot?.proactive_reply_extra_criteria" inheritable @update:model-value="setGroupParticipation" @update:criteria="value => { if (editing) editing.proactive_reply_extra_criteria = value; }" />
         </div>
         <div class="field wide">
           <RandomRepeatControls v-model="editing.random_repeat" :inherited-value="inheritedBot?.random_repeat" inheritable />
@@ -417,11 +417,12 @@
           <label for="group-welcome-templates">欢迎词模板池</label>
           <textarea
             id="group-welcome-templates"
-            v-model="welcomeTemplatesDraft"
+            v-model="groupWelcomeTemplates"
             class="textarea"
             rows="3"
             placeholder="每行一条候选，发送时随机抽一条；可用 {nickname} 昵称、{user_id} 账号、{group} 群名、{group_id} 群号。留空跟随机器人。LLM 模式冷却或失败时也从这里回落。"
           ></textarea>
+          <span v-if="inheritedWelcomeTemplates" class="hint">{{ usingFallbackText(welcomeTemplatesDraft, inheritedWelcomeTemplates) ? "框里是机器人的模板池，本群正跟着用；改了只对本群生效。" : "已为本群单独改过；清空或改回机器人那份就恢复跟随。" }}</span>
         </div>
         <div v-if="effectiveWelcomeEnabled && effectiveWelcomeMode === 'llm'" class="field">
           <label for="group-welcome-cooldown">LLM 欢迎冷却（秒/群）</label>
@@ -574,16 +575,23 @@
           <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；空转、回复疲劳、拒答和对话收尾仍按各自规则处理。发送前审核不检查准确度或答非所问。</span>
         </div>
         <div class="field wide">
-          <label for="group-account-safety-prompt">本群账号安全审核规则（留空跟随机器人）</label>
+          <div class="field-label-row">
+            <label for="group-account-safety-prompt">本群账号安全审核规则</label>
+            <span v-if="!groupAccountSafetyInherited" class="badge accent">已修改</span>
+            <button v-if="!groupAccountSafetyInherited" class="btn small ghost field-label-action" type="button" @click="editing.reply_account_safety_audit_prompt = ''">
+              <RotateCcw :size="14" aria-hidden="true" />
+              跟随机器人
+            </button>
+          </div>
           <textarea
             id="group-account-safety-prompt"
-            v-model="editing.reply_account_safety_audit_prompt"
+            v-model="groupAccountSafetyRules"
             class="textarea"
             rows="5"
             maxlength="8000"
             placeholder="填写本群需要拦截的内容范围"
           ></textarea>
-          <span class="hint">填写后替代机器人级或内置风险范围，仅用于本群。</span>
+          <span class="hint">{{ groupAccountSafetyInherited ? "框里是机器人当前生效的风险范围，本群正跟着用；改了只对本群生效。" : "已替代机器人级的风险范围，仅用于本群。" }}</span>
         </div>
         <div v-if="supportsGroupLevel" class="field wide">
           <label for="group-forward-mode">本群合并转发卡片</label>
@@ -750,7 +758,9 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { askConfirm } from "../lib/confirm";
 import { botScope } from "../lib/bot-scope";
-import { Cloud, Plus, RefreshCw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
+import { Cloud, Plus, RefreshCw, RotateCcw, Save, Search, Share2, SlidersHorizontal, Trash2, Users, WifiOff } from "@lucide/vue";
+import { effectiveAccountSafetyRules } from "../lib/account-safety-rules";
+import { shownFallbackText, storedFallbackText, usingFallbackText } from "../lib/fallback-text";
 import {
   type ConnectionPeer,
   getBotProfileConfig,
@@ -806,6 +816,22 @@ function botFor(group: { bot_profile_id?: string }): BotProfileConfig | undefine
   return botInheritDefaults.value[group.bot_profile_id || botScope.value] ?? botInheritDefaults.value[""];
 }
 const inheritedBot = computed<BotProfileConfig | undefined>(() => (editing.value ? botFor(editing.value) : botInheritDefaults.value[""]));
+// 群里留空跟随机器人的文本：框里直接显示机器人实际生效的那份，改回一样仍算跟随。
+const inheritedAccountSafetyRules = computed(() => effectiveAccountSafetyRules(inheritedBot.value?.reply_account_safety_audit_prompt, inheritedBot.value?.reply_account_safety_audit_default));
+const groupAccountSafetyInherited = computed(() => usingFallbackText(editing.value?.reply_account_safety_audit_prompt, inheritedAccountSafetyRules.value));
+const groupAccountSafetyRules = computed<string>({
+  get: () => shownFallbackText(editing.value?.reply_account_safety_audit_prompt, inheritedAccountSafetyRules.value),
+  set: (value) => {
+    if (editing.value) editing.value.reply_account_safety_audit_prompt = storedFallbackText(value, inheritedAccountSafetyRules.value);
+  },
+});
+const inheritedWelcomeTemplates = computed(() => (inheritedBot.value?.welcome_templates ?? []).map((item) => item.trim()).filter(Boolean).join("\n"));
+const groupWelcomeTemplates = computed<string>({
+  get: () => shownFallbackText(welcomeTemplatesDraft.value, inheritedWelcomeTemplates.value),
+  set: (value) => {
+    welcomeTemplatesDraft.value = storedFallbackText(value, inheritedWelcomeTemplates.value);
+  },
+});
 function inheritedPlaceholder(value: unknown, unit = ""): string {
   const text = Array.isArray(value) ? value.join(",") : value == null || value === "" || value === 0 ? "" : `${value}${unit}`;
   return text ? `留空跟随机器人（${text}）` : "留空跟随机器人";
