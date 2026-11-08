@@ -121,7 +121,7 @@ func TestLiveBotConfigGroupSettingsFromNaturalLanguage(t *testing.T) {
 			defer runner.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 			defer cancel()
-			response, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{{Role: llm.RoleSystem, Content: promptToolBotConfig + " 当前是群聊，发言者是主人。"}, {Role: llm.RoleUser, Content: tc.prompt}}})
+			response, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{{Role: llm.RoleSystem, Content: "当前是群聊，发言者是主人。"}, {Role: llm.RoleUser, Content: tc.prompt}}})
 			if err != nil {
 				t.Fatal(err)
 			}

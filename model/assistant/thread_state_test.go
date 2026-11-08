@@ -266,10 +266,9 @@ func TestThreadStatePromptAndPermissions(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetThreadStateStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "u1"}
-	registry := agent.NewToolRegistry(newDianaThreadStateTool(runtime, event))
-	prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
-	if !strings.Contains(prompt, "必须先调用 thread_state set") {
-		t.Fatalf("system prompt missing commit rule: %q", prompt)
+	// 「先 set 成功再说准备好了」写在 thread_state 的描述里，目录写全文。
+	if desc := newDianaThreadStateTool(runtime, event).Description(); !strings.Contains(desc, "必须先 set 成功") {
+		t.Fatalf("thread_state description missing commit rule: %q", desc)
 	}
 	if !(RelationshipPolicy{}).allowedAgentToolNames()[dianaThreadStateToolName] {
 		t.Fatal("ordinary members cannot use private thread state")

@@ -226,7 +226,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[3].Messages, `"favorability": 5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
-	for _, want := range []string{"必须调用 relationship", "operation=list", "不得以隐私", "不得编造"} {
+	for _, want := range []string{"必须先查目标本人", "榜单和画像对群成员公开", "不以隐私拒绝", "不编「隐藏数据」"} {
 		if !requestMessagesContain(provider.requests[1].Messages, want) {
 			t.Fatalf("relationship guidance missing %q: %#v", want, provider.requests[1].Messages)
 		}

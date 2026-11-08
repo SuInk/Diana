@@ -163,13 +163,14 @@ func TestThreadStateCompleteReturnsFinalStateButClearsStore(t *testing.T) {
 }
 
 func TestThreadStatePromptSteersGroupGamesToLockedSession(t *testing.T) {
-	for _, want := range []string{"群聊里发起的猜谜", "scope=session", "locked_keys", "不要重新出题"} {
-		if !strings.Contains(promptToolThreadState, want) {
-			t.Fatalf("thread state prompt missing %q", want)
+	description := (&dianaThreadStateTool{}).Description()
+	for _, want := range []string{"必须先 set 成功", "猜谜", "scope=session", "locked_keys", "不要重新出题", "不传 task_kind"} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("thread_state 描述缺 %q：%s", want, description)
 		}
 	}
-	if description := (&dianaThreadStateTool{}).Description(); !strings.Contains(description, "locked_keys") || !strings.Contains(description, "get 不传 task_kind") {
-		t.Fatalf("tool description = %q", description)
+	if !slicesContains(replyFeaturedTools, dianaThreadStateToolName) {
+		t.Fatal("thread_state 不在 replyFeaturedTools 里，目录只截一行")
 	}
 }
 

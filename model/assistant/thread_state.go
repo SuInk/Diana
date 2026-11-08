@@ -167,11 +167,12 @@ func newDianaThreadStateTool(runtime *Runtime, event MessageEvent) *dianaThreadS
 func (*dianaThreadStateTool) Name() string { return dianaThreadStateToolName }
 
 func (*dianaThreadStateTool) Description() string {
-	// 完整的多人任务规则在系统提示词 promptToolThreadState，这里只留路由要点：
-	// 群里多人参与的任务和自出谜底放 session 并锁定；读不到谜底别重新出题。
+	// thread_state 在 replyFeaturedTools 里，目录写全文：「先 set 成功再说准备好了」
+	// 要在模型想到加载它之前就看得到。
 	return "保存、读取、结束 Diana 自建的多轮任务状态，不用长期记忆代替。" +
-		"群里他人可能参与的任务（猜谜、棋局）用 scope=session，自出谜底用 locked_keys 锁住。" +
-		"get 不传 task_kind 列出全部进行中状态；回答前先 get，读不到锁定谜底时不要重新出题。"
+		"自己暗中选定目标（出谜底）、跨轮计划或临时中间状态，必须先 set 成功再说「准备好了」，不只记在思考里。" +
+		"群里他人可能参与的任务（猜谜、棋局）用 scope=session，存完整规则、参与者、顺序和下一步，自出谜底用 locked_keys 锁住。" +
+		"回答前先看注入的线程状态，没有就 get（可不传 task_kind）；读不到锁定谜底时如实说丢了，不要重新出题。结束用 complete，取消用 cancel。"
 }
 
 func (*dianaThreadStateTool) InputSchema() map[string]any {
@@ -185,7 +186,7 @@ func (*dianaThreadStateTool) InputSchema() map[string]any {
 			"description":          "set 必填：目标、约束和进度，≤8 KiB",
 			"additionalProperties": true,
 		},
-		"expected_version": toolIntParam("当前版本，防并发覆盖；首次创建省略", 1, 1_000_000),
+		"expected_version": toolIntParam("当前版本，防并发覆盖；首次创建省略，冲突就重新 get 再改", 1, 1_000_000),
 		"ttl_seconds":      toolIntParam("闲置有效期秒数，默认 1800", int(minimumThreadStateTTL/time.Second), int(maximumThreadStateTTL/time.Second)),
 	})
 }

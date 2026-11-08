@@ -192,11 +192,11 @@ func TestSelfAvatarPromptFollowsSoulWhenAvatarToolExists(t *testing.T) {
 	registry := agent.NewToolRegistry(newDianaRemoteImageTool(runtime, event))
 	head, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
 	soulEnd := strings.Index(head, cfg.SystemPrompt) + len(cfg.SystemPrompt)
-	if !strings.Contains(head[soulEnd:], "你的形象默认就是你自己的头像") || !strings.Contains(head, avatarSourceBot) {
+	if !strings.Contains(head[soulEnd:], "你的样子就是自己的头像") || !strings.Contains(head, avatarSourceBot) {
 		t.Fatalf("self avatar prompt missing after the SOUL: %q", head[soulEnd:min(len(head), soulEnd+200)])
 	}
 	head, _ = runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, false, nil)
-	if strings.Contains(head, "你的形象默认就是你自己的头像") {
+	if strings.Contains(head, "你的样子就是自己的头像") {
 		t.Fatal("without the agent there is no tool to look at the avatar; the line must not be injected")
 	}
 }

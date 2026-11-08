@@ -73,7 +73,7 @@ func TestLiveGomokuSharedThreadState(t *testing.T) {
 		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "parallel-universe-gomoku", UserID: userID, MessageID: messageID}
 		messages := []llm.Message{{
 			Role:    llm.RoleSystem,
-			Content: promptToolThreadState + "\n这是自动化验收。必须严格按用户给出的 JSON 调用工具，不得省略工具调用、改变坐标或另建 task_kind。",
+			Content: (*dianaThreadStateTool)(nil).Description() + "\n这是自动化验收。必须严格按用户给出的 JSON 调用工具，不得省略工具调用、改变坐标或另建 task_kind。",
 		}}
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
@@ -403,7 +403,7 @@ func TestLiveGomokuRepeatedAndConflictingUserMoves(t *testing.T) {
 
 	runTurnErr := func(userID, name, messageID, text string) (*agent.Response, error) {
 		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "chatter-gomoku", UserID: userID, MessageID: messageID}
-		messages := []llm.Message{{Role: llm.RoleSystem, Content: promptToolThreadState + "\n" + hostPrompt}}
+		messages := []llm.Message{{Role: llm.RoleSystem, Content: (*dianaThreadStateTool)(nil).Description() + "\n" + hostPrompt}}
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
 		}
@@ -557,7 +557,7 @@ func TestLiveGuessCharacterGroupGame(t *testing.T) {
 		t.Helper()
 		now = now.Add(time.Minute)
 		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "guess-character", UserID: userID, MessageID: messageID}
-		messages := []llm.Message{{Role: llm.RoleSystem, Content: promptToolThreadState + "\n" + hostPrompt}}
+		messages := []llm.Message{{Role: llm.RoleSystem, Content: (*dianaThreadStateTool)(nil).Description() + "\n" + hostPrompt}}
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
 		}
@@ -727,7 +727,7 @@ func TestLiveGuessCharacterIndependentGuesser(t *testing.T) {
 		t.Helper()
 		now = now.Add(time.Minute)
 		event := MessageEvent{ProfileID: "bot-live", Kind: EventKindGroup, GroupID: "guess-character-duel", UserID: "guesser-model", MessageID: messageID}
-		messages := []llm.Message{{Role: llm.RoleSystem, Content: promptToolThreadState + "\n" + hostPrompt}}
+		messages := []llm.Message{{Role: llm.RoleSystem, Content: (*dianaThreadStateTool)(nil).Description() + "\n" + hostPrompt}}
 		if state := runtime.privateThreadStateContext(context.Background(), event); state != "" {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: state, Priority: llm.MessagePriorityPlugin, AtomicText: true})
 		}
@@ -934,7 +934,7 @@ func TestLiveGuessCharacterHostPickVariety(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		_, runErr := runner.Run(ctx, agent.Request{
 			Messages: []llm.Message{
-				{Role: llm.RoleSystem, Content: promptToolThreadState + "\n" + hostPrompt},
+				{Role: llm.RoleSystem, Content: (*dianaThreadStateTool)(nil).Description() + "\n" + hostPrompt},
 				{Role: llm.RoleUser, Content: "发言者：群友（user_id=asker）\n消息：我们来玩猜角色吧，你心里想一个，我来问"},
 			},
 			TraceID: fmt.Sprintf("live-guess-variety-%d", round),

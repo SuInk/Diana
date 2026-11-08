@@ -47,7 +47,7 @@ func (t *dianaRenderTool) Name() string { return dianaRenderToolName }
 func (t *dianaRenderTool) Description() string {
 	return `把表格、流程图、结构图或 SVG 渲染成一张图片发到当前会话。` +
 		`渲染有权使用的工作目录文件时直接传 path，与 content 二选一，不必读取后复制全文。` +
-		`仅在用户明确要求图片、图表或棋盘等画面时使用；普通问答、榜单、参数对比默认文字，不为美化排版自行出图。五子棋盘用 svg。` +
+		`仅在用户明确要求图片、图表或棋盘等画面时使用；普通问答、榜单、参数对比默认文字，不为美化排版自行出图，也不拿效果图冒充改了界面或代码。五子棋盘用 svg。` +
 		`图由运行时发送，调用后一句话交代，不复述图里的内容。`
 }
 

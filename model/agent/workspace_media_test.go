@@ -165,14 +165,14 @@ func TestSystemPromptRequiresToolEvidenceForSavedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prompt := runner.systemPrompt(); !strings.Contains(prompt, "本轮必须有工具调用真的返回了它") || !strings.Contains(prompt, "save_to_workspace") {
+	if prompt := runner.systemPrompt(); !strings.Contains(prompt, "本轮必须有工具真的返回了路径或发送成功") || !strings.Contains(prompt, "save_to_workspace") {
 		t.Fatalf("系统提示词缺少文件存发的证据规则:\n%s", prompt)
 	}
 	bare, err := NewRunner(&scriptedClient{}, Config{WorkDir: workDir}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(bare.systemPrompt(), "本轮必须有工具调用真的返回了它") {
+	if strings.Contains(bare.systemPrompt(), "本轮必须有工具真的返回了路径或发送成功") {
 		t.Fatal("没有文件工具时不该注入这条规则")
 	}
 }

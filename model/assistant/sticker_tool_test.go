@@ -817,19 +817,29 @@ func TestStickerCatalogLineKeepsWhenToUse(t *testing.T) {
 	}
 }
 
-// 表情包的发送时机进稳定头部，而且只在工具真挂上时才出现。
-func TestStickerPromptRuleFollowsToolRegistration(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+// 什么时候配表情包写在 send 的 sticker 字段说明里（每步都带完整定义），系统提示词
+// 不再另写一段；auto 顺序的那句仍随工具注入。
+func TestStickerUsageLivesInFinalizeField(t *testing.T) {
+	desc := stickerFinalizeField().Description
+	for _, want := range []string{"像群友一样", "配不配由你按聊天判断", "发完不解释"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("sticker 字段说明缺 %q：%s", want, desc)
+		}
+	}
+	runtime := NewRuntime(BotConfig{StickerReplyOrder: StickerReplyOrderAuto}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g1", UserID: "1"}
 	registry := agent.NewToolRegistry()
 	registry.Register(newDianaStickerTool(runtime, event, nil))
-	head, tail := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
-	if !strings.Contains(head, promptToolSticker) || strings.Contains(tail, promptToolSticker) {
-		t.Fatalf("sticker rule placement: head=%v tail=%v", strings.Contains(head, promptToolSticker), strings.Contains(tail, promptToolSticker))
+	head, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
+	if !strings.Contains(head, promptStickerInvite) || strings.Contains(head, "表情包发出去就算说完了") {
+		t.Fatal("系统提示词里只留一句表情包邀请，用法在 sticker 字段说明里")
+	}
+	if !strings.Contains(head, stickerReplyOrderPrompt(StickerReplyOrderAuto)) {
+		t.Fatal("auto 顺序规则应随表情包工具注入")
 	}
 	bare, _ := runtime.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, agent.NewToolRegistry())
-	if strings.Contains(bare, promptToolSticker) {
-		t.Fatal("sticker rule injected without the tool")
+	if strings.Contains(bare, "sticker_order") {
+		t.Fatal("sticker order rule injected without the tool")
 	}
 }
 

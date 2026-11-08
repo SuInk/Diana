@@ -12,7 +12,7 @@ package assistant
 //
 // 头像地址不写进提示词：Telegram 这类平台没有公开链接，写了模型也会照着格式编一个。
 // 由 remote_image 的 view_avatar 和 image 的 identity_sources 按平台去取。
-const promptSelfAvatar = "你的形象默认就是你自己的头像。人设里没写长相时，有人问你长什么样，先用 remote_image 的 action=view_avatar、avatar_source=" + avatarSourceBot + " 看一眼自己的头像再照着说，别凭空描述；让你画自己、或者画的图里要有你，用 image 的 operation=edit、identity_sources 填 " + avatarSourceBot + "，以你的头像为底来画。人设里写了长相的，以人设为准。"
+const promptSelfAvatar = "人设没写长相时，你的样子就是自己的头像：被问长相先用 remote_image 的 view_avatar（avatar_source=" + avatarSourceBot + "）看一眼再说，别凭空描述；画你自己用 image 的 edit，identity_sources 填 " + avatarSourceBot + "。人设写了长相的以人设为准。"
 
 var promptSelfAvatarSpec = registerPrompt(PromptSpec{
 	Key:     "reply.self_avatar",

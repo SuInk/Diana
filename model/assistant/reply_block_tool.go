@@ -33,7 +33,7 @@ func newDianaReplyBlockTool(r *Runtime, event MessageEvent) *dianaReplyBlockTool
 func (*dianaReplyBlockTool) Name() string { return replyBlockToolName }
 
 func (*dianaReplyBlockTool) Description() string {
-	return "屏蔽某人：之后他说什么都不回，直到解除，无时限。scope=group 主人或核验过的群管可改，scope=bot 全局且仅主人。只认账号 ID；不禁言、不撤回。"
+	return "屏蔽某人：之后他说什么都不回，直到解除，无时限。scope=group 主人或核验过的群管可改，scope=bot 全局且仅主人。只认账号 ID（取自 @、被引用消息的发送者或成员查询）；不禁言、不撤回。保存成功才说生效。"
 }
 
 func (*dianaReplyBlockTool) InputSchema() map[string]any {

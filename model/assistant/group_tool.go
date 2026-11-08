@@ -68,7 +68,7 @@ func (t *dianaGroupTool) Description() string {
 	if !t.runtime.groupToolUsesPlatform(t.event) {
 		return t.runtime.groupToolPrompt(t.event, t.runtime.effectiveConfigForEvent(t.event)) + " 只读；回复设置用 bot_config。match_avatar 只比对能核验的成员头像，不代表全群。"
 	}
-	return `把当前或被引用消息里的图与本地群成员头像做模式比对，找出是谁的头像，不凭视觉猜身份。只读；群资料和成员查询用 platform，回复设置用 bot_config。`
+	return `把当前或被引用消息里的图与本地群成员头像做模式比对，找出是谁的头像，不凭视觉猜身份；没附原图也照调，没调过不能说匹配失败。只读；群资料和成员人数以 platform 实时结果为准，回复设置用 bot_config。`
 }
 
 // InputSchema 声明参数契约。取值范围引用与校验同一份常量。

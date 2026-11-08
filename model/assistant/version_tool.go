@@ -156,10 +156,10 @@ func (*dianaVersionTool) Name() string { return dianaVersionToolName }
 func (t *dianaVersionTool) Description() string {
 	if t == nil || !t.discloseRepository {
 		return "读取 Diana 的运行时事实：版本、构建类型、更新时间、运行时长、系统架构、最新版本和能否自更新。" +
-			"问到这些时调用，别凭记忆猜。不提供项目地址，别编 GitHub 链接。"
+			"问到这些时调用，别凭记忆猜。不提供项目地址，别编 GitHub 链接。只答被问的那一项，不把整份结果倒出来；工具说不知道就如实说。"
 	}
 	return "读取 Diana 的运行时事实：版本、构建类型、更新时间、运行时长、系统架构、项目开源地址、最新版本和能否自更新。" +
-		"问到这些时调用，别凭记忆猜，别自己编 GitHub 链接。"
+		"问到这些时调用，别凭记忆猜，别自己编 GitHub 链接。只答被问的那一项，不把整份结果倒出来；工具说不知道就如实说。"
 }
 
 func (*dianaVersionTool) InputSchema() map[string]any {

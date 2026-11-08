@@ -86,17 +86,15 @@ func TestCrossGroupSemanticHitsStillRequireMembership(t *testing.T) {
 	}
 }
 
-// 跨群历史常驻带一部分，开了跨群记忆时头部告诉模型更多的去 chat_history 查。
-func TestCrossGroupMoreHintFollowsSetting(t *testing.T) {
+// 跨群历史常驻带一部分，更多的去 chat_history 查：这句写在 chat_history 的描述里
+// （目录写全文），不再另写进系统提示词。
+func TestCrossGroupMoreHintLivesInChatHistory(t *testing.T) {
+	if desc := (&dianaChatHistoryTool{}).Description(); !strings.Contains(desc, "scope=all_groups") {
+		t.Fatalf("chat_history description = %q", desc)
+	}
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "20001"}
-	for _, enabled := range []bool{true, false} {
-		r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(enabled)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-		head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil)
-		if got := strings.Contains(head, "scope=all_groups"); got != enabled {
-			t.Fatalf("enabled=%v hint in head=%v", enabled, got)
-		}
-		if strings.Contains(tail, "scope=all_groups") {
-			t.Fatal("hint leaked into the per-speaker tail")
-		}
+	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if head, _ := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil); strings.Contains(head, "标着「跨群历史」的行") {
+		t.Fatal("系统提示词里不该再另写跨群历史查更多")
 	}
 }

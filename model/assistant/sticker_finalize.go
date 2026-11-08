@@ -53,6 +53,12 @@ func stickerReplyBefore(order StickerReplyOrder, modelBefore bool) bool {
 	}
 }
 
+// promptStickerInvite 是表情包规则里唯一留在人设后面的一句：用不用、怎么填写在 send 的
+// sticker 字段说明里。
+const promptStickerInvite = "表情包：你可以像群友一样用表情包说话，send 时在 sticker 里填关键词就会配一张；对方只甩来一张表情包时，回一张常常比打一句话更自然。"
+
+var promptStickerInviteSpec = toolPromptSpec("sticker", "表情包", "表情包工具可用时注入：可以像群友一样用表情包说话。怎么填、发完别解释写在 send 的 sticker 字段说明里；先后顺序只在 auto 配置下另行注入。", promptStickerInvite)
+
 // stickerReplyOrderPrompt 只在 auto 时教模型选先后；固定顺序由发送端直接执行，
 // 不必让模型知道，也不给它 sticker_order 字段。
 func stickerReplyOrderPrompt(order StickerReplyOrder) string {
@@ -75,7 +81,8 @@ func stickerFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: stickerFinalizeFieldName,
 		// 「配不配由你判断」「挑不到就不发」是回放里触发率和误发的平衡点，别删。
-		Description: "想配表情包时填 2～6 个空格分隔的短关键词，如「得意 叉腰」。有正文时一起发；只回图就 text 留空。挑不到合适的就不发。配不配由你按聊天判断。",
+		// 以前「像群友一样用」「只甩表情包就回一张」「发完不解释」写在系统提示词 promptToolSticker 里。
+		Description: "想配表情包时像群友一样填 2～6 个空格分隔的短关键词，如「得意 叉腰」；对方只甩来表情包时回一张常更自然。有正文时一起发，只回图就 text 留空。挑不到就不发，配不配由你按聊天判断。发完不解释，正文不写[狗头]这类文字表情。",
 	}
 }
 

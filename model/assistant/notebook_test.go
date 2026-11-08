@@ -566,23 +566,30 @@ func TestNotebookContextPrefersSessionScope(t *testing.T) {
 	}
 }
 
-// 注册了笔记本工具才注入笔记本规则；没注册时提示词里一个字都不该出现（上面那条
-// TestSystemPromptOmitsUnselectedToolRules 守的是反面）。
-func TestSystemPromptInjectsNotebookRuleWithTool(t *testing.T) {
+// 笔记本的用法写在工具自己的描述和参数说明里，目录写全文（replyFeaturedTools），
+// 模型不加载也看得到「不等吩咐就记」。
+func TestNotebookUsageLivesInToolDefinition(t *testing.T) {
 	runtime := newNotebookRuntime(t, newMemoryNotebookStore())
-	registry := agent.NewToolRegistry(newDianaNotebookTool(runtime, notebookTestEvent("10001", ""), RelationshipPolicy{Owner: true}))
+	tool := newDianaNotebookTool(runtime, notebookTestEvent("10001", ""), RelationshipPolicy{Owner: true})
+	if !slicesContains(replyFeaturedTools, dianaNotebookToolName) {
+		t.Fatal("notebook 不在 replyFeaturedTools 里，目录只截一行，模型看不到什么时候该记")
+	}
+	// 要说清「一直维护」，只会查不会改的笔记本等于没有。
+	contract := tool.Description()
+	if schema, err := json.Marshal(tool.InputSchema()); err == nil {
+		contract += string(schema)
+	}
+	for _, want := range []string{"不等吩咐就 upsert", "【笔记本命中】", "delete", "restore"} {
+		if !strings.Contains(contract, want) {
+			t.Fatalf("笔记本定义没有交代 %s：%s", want, contract)
+		}
+	}
 	prompt := runtime.systemPromptWithRelationshipAndAgentTools(
 		MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "10001"},
-		nil, false, RelationshipPolicy{Owner: true}, true, registry,
+		nil, false, RelationshipPolicy{Owner: true}, true, agent.NewToolRegistry(tool),
 	)
-	if !strings.Contains(prompt, promptToolNotebook) {
-		t.Fatalf("prompt 缺少笔记本规则: %s", prompt)
-	}
-	// 规则要说清「一直维护」，只会查不会改的笔记本等于没有。
-	for _, want := range []string{"upsert", "delete", "restore"} {
-		if !strings.Contains(promptToolNotebook, want) {
-			t.Fatalf("笔记本规则没有交代 %s", want)
-		}
+	if strings.Contains(prompt, "notebook 是你自己维护的笔记本") {
+		t.Fatal("系统提示词里不该再另写一段笔记本用法")
 	}
 }
 
