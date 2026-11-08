@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -34,6 +35,11 @@ type WebChatMessage struct {
 	// 居中的提示；Role 仍是 user，不认识 Kind 的旧客户端照常显示成一条消息。
 	Kind string `json:"kind,omitempty"`
 	Text string `json:"text"`
+	// Quote 是这条消息回的那一条；原消息不在记录里时只有 MessageID。
+	Quote *DisplayQuote `json:"quote,omitempty"`
+	// CallID 非空时这条是那通电话里说的话（Kind 为 "call" 时是那通电话的记录），
+	// 页面把同一通电话的轮次收进通话记录里，见 web_chat_call.go。
+	CallID string `json:"call_id,omitempty"`
 	// Images 是能直接在网页里显示的图片地址（http/https）。
 	Images []string `json:"images,omitempty"`
 	// At 是 Unix 秒。
@@ -50,6 +56,8 @@ type WebChatInfo struct {
 	// OwnerAvatarURL 是主人账号的头像，由控制台按 OwnerUserID 拼好；没填主人时为空。
 	OwnerAvatarURL string `json:"owner_avatar_url,omitempty"`
 	OwnerUserID    string `json:"-"`
+	// ActiveCall 是正在进行的那通电话，没有时为空。
+	ActiveCall *WebChatCall `json:"active_call,omitempty"`
 }
 
 type webChatSinkKey struct{}
@@ -70,6 +78,9 @@ func deliverToWebChat(ctx context.Context, msg OutgoingMessage) (map[string]any,
 		return nil, false
 	}
 	id := webChatMessagePrefix + "out-" + strconv.FormatInt(webChatOutboundSeq.Add(1), 10)
+	if call := voiceCallFromContext(ctx); call != nil {
+		id = voiceCallReplyID(call.callID, call.replies.Add(1))
+	}
 	text := msg.Text
 	if strings.Contains(text, "[CQ:") {
 		text = PlainText(CQToSegments(text))
@@ -92,7 +103,10 @@ func (r *Runtime) WebChatInfo(profileID string) WebChatInfo {
 	info := WebChatInfo{BotID: cfg.ID, BotName: cfg.Name, Platform: cfg.Platform}
 	if err != nil {
 		info.Problem = err.Error()
-	} else if event.UserID != webChatOwnerID && !strings.HasPrefix(event.UserID, "@") {
+		return info
+	}
+	info.ActiveCall = r.activeVoiceCall(cfg.ID)
+	if event.UserID != webChatOwnerID && !strings.HasPrefix(event.UserID, "@") {
 		info.OwnerUserID = event.UserID
 	}
 	return info
@@ -180,13 +194,16 @@ func (r *Runtime) WebChatHistory(ctx context.Context, profileID string, limit in
 		msg := WebChatMessage{ID: item.MessageID, Role: "user", At: item.Time}
 		if isCallHistoryEvent(item) {
 			msg.Kind = "call"
+			msg.CallID = voiceCallIDFromRecord(item.MessageID)
+		} else {
+			msg.CallID = voiceCallIDFromTurn(item.MessageID)
 		}
 		if assistantHistoryEvent(item, bot) {
 			msg.Role = "assistant"
 		}
-		msg.Text = strings.TrimSpace(historyPlainText(item))
+		msg.Text, msg.Quote = webChatDisplayText(item)
 		if msg.Text == "" && strings.TrimSpace(item.botReply) != "" {
-			msg.Text = strings.TrimSpace(item.botReply)
+			msg.Text, _ = splitWebChatQuoteMarker(strings.TrimSpace(item.botReply))
 		}
 		for _, segment := range item.Segments {
 			if segment.Type != "image" {
@@ -204,7 +221,78 @@ func (r *Runtime) WebChatHistory(ctx context.Context, profileID string, limit in
 		}
 		out = append(out, msg)
 	}
+	fillWebChatQuotes(out)
 	return out, nil
+}
+
+// webChatQuoteMarkerPattern 是正文里原样留着的引用标记。平台的引用段由 renderReply
+// 处理；这里接的是已经落成文字的那种，例如机器人回复只存了 botReply。
+var webChatQuoteMarkerPattern = regexp.MustCompile(`<diana-quote id="([^"]*)"\s*/>`)
+
+// webChatDisplayText 渲染聊天页里的一条消息。historyPlainText 是给模型看的，引用段会
+// 写成 <diana-quote id="…"/>，原样显示在页面上就是一串标签；这里把引用拆出来单独返回，
+// 页面画成引用块。和 DisplaySegmentsBody 不同，正文里的换行要留着。
+func webChatDisplayText(item MessageEvent) (string, *DisplayQuote) {
+	var quote *DisplayQuote
+	text := plainTextWithOptions(item.Segments, plainTextOptions{
+		renderReply: func(messageID string) string {
+			if quote == nil {
+				quote = &DisplayQuote{MessageID: strings.TrimSpace(messageID)}
+				if sender, preview, matched := quotedDisplayParts(item.Quoted, messageID, nil, maxDisplayQuoteBlockRunes); matched {
+					quote.UserID = strings.TrimSpace(item.Quoted.UserID)
+					quote.SenderName, quote.Text = sender, preview
+				}
+			}
+			return ""
+		},
+		renderForward: forwardDisplayLabel,
+	})
+	if hasImageSegment(item.Segments) {
+		text = strings.ReplaceAll(text, "[图片]", "")
+	}
+	text = strings.TrimSpace(text)
+	if text == "" && !hasImageSegment(item.Segments) {
+		text = strings.TrimSpace(item.RawMessage)
+	}
+	text, marker := splitWebChatQuoteMarker(text)
+	if quote == nil && marker != nil {
+		quote = marker
+	}
+	return text, quote
+}
+
+// splitWebChatQuoteMarker 去掉正文里落成文字的引用标记，返回第一个引用的消息号。
+func splitWebChatQuoteMarker(text string) (string, *DisplayQuote) {
+	if !strings.Contains(text, "<diana-quote") {
+		return text, nil
+	}
+	var quote *DisplayQuote
+	text = webChatQuoteMarkerPattern.ReplaceAllStringFunc(text, func(marker string) string {
+		if quote == nil {
+			quote = &DisplayQuote{MessageID: webChatQuoteMarkerPattern.FindStringSubmatch(marker)[1]}
+		}
+		return ""
+	})
+	return strings.TrimSpace(text), quote
+}
+
+// fillWebChatQuotes 给只剩消息号的引用补上原话：私聊里回的多半就是记录里的上一两句。
+func fillWebChatQuotes(messages []WebChatMessage) {
+	byID := make(map[string]int, len(messages))
+	for i, msg := range messages {
+		byID[msg.ID] = i
+	}
+	for i := range messages {
+		quote := messages[i].Quote
+		if quote == nil || quote.Text != "" {
+			continue
+		}
+		j, ok := byID[quote.MessageID]
+		if !ok {
+			continue
+		}
+		quote.Text = truncateDisplayRunes(strings.Join(strings.Fields(messages[j].Text), " "), maxDisplayQuoteBlockRunes)
+	}
 }
 
 // WebChatSend 把聊天页里打的一句话当成主人发来的私聊，同步走完一轮回复，每条回复交给 emit。

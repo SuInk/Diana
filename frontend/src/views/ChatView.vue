@@ -99,8 +99,7 @@
                 <span v-if="message.tools" class="qq-sender">调用了 {{ message.tools }} 次工具</span>
               </div>
               <span v-if="message.role === 'user'" class="qq-self" aria-hidden="true">我</span>
-              <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
-              <span v-else-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
+              <span v-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
             </article>
           </template>
           <article v-if="adminBusy" class="qq-msg assistant" aria-label="管理助手正在处理">
@@ -147,8 +146,7 @@
                 <a v-for="image in message.images ?? []" :key="image" class="qq-image" :href="image" target="_blank" rel="noopener noreferrer"><img :src="image" alt="图片" loading="lazy" /></a>
               </div>
               <span v-if="message.sender_id === LOCAL_ROOM_OWNER" class="qq-self" aria-hidden="true">我</span>
-              <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
-              <span v-else-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
+              <span v-if="message.failed" class="qq-state err" aria-label="没发出去"><CircleAlert :size="16" aria-hidden="true" /></span>
             </article>
           </template>
           <article v-if="roomBusy" class="qq-msg assistant" aria-label="群里有人在想">
@@ -168,35 +166,68 @@
           <button class="qq-icon qq-back" type="button" aria-label="返回机器人列表" @click="showList = true"><ChevronLeft :size="22" aria-hidden="true" /></button>
           <div class="qq-room-title">
             <h2>{{ current.name }}</h2>
-            <p :class="{ typing: sending }">{{ sending ? "对方正在输入…" : current.platform }}</p>
+            <p :class="{ typing: sending, calling: !sending && liveCall }">{{ sending ? "对方正在输入…" : liveCall ? `通话中 ${liveClock}` : current.platform }}</p>
           </div>
           <button class="qq-icon" type="button" :disabled="!!info?.problem" :aria-label="`和 ${current.name} 语音通话`" :title="`语音通话`" @click="startCall"><Phone :size="19" aria-hidden="true" /></button>
         </header>
 
         <div v-if="info?.problem" class="qq-banner" role="status">{{ info.problem }}</div>
-        <div v-else-if="error" class="qq-banner err" role="alert"><span>{{ error }}</span><button class="btn ghost small" type="button" @click="loadHistory">重试</button></div>
+        <div v-else-if="error" class="qq-banner err" role="alert"><span>{{ error }}</span><button class="btn ghost small" type="button" @click="loadHistory()">重试</button></div>
+        <!-- 通话还没挂断：别的设备、QQ 上打着的电话也显示在这里，说的话收在这一条里，不混进私聊。 -->
+        <div v-if="liveCall" class="qq-live-call" role="status" data-live-call>
+          <div class="qq-live-call-head">
+            <span class="qq-live-dot" aria-hidden="true" />
+            <Phone :size="14" aria-hidden="true" />
+            <strong>正在通话中</strong>
+            <time class="qq-live-clock" :datetime="`PT${liveSeconds}S`">{{ liveClock }}</time>
+            <button v-if="liveTurns.length" class="qq-call-toggle" type="button" :aria-expanded="expandedCalls.has(liveCall.id)" @click="toggleCall(liveCall.id)">
+              {{ liveTurns.length }} 句<ChevronDown :size="13" aria-hidden="true" :class="{ open: expandedCalls.has(liveCall.id) }" />
+            </button>
+          </div>
+          <div v-if="expandedCalls.has(liveCall.id) && liveTurns.length" class="qq-call-turns">
+            <p v-for="turn in liveTurns" :key="turn.id" class="qq-call-turn" :class="turn.role">
+              <span class="qq-call-turn-who">{{ turn.role === "user" ? "我" : current.name }}</span>
+              <time :title="fullTimeLabel(turn.at)">{{ clockOf(turn.at) }}</time>
+              <span class="qq-call-turn-text">{{ turn.role === "assistant" ? markdownToPlain(turn.text) : turn.text }}</span>
+            </p>
+          </div>
+        </div>
 
         <section ref="transcript" class="qq-transcript" aria-live="polite" :aria-busy="loading || sending">
           <div v-if="loading && !messages.length" class="qq-loading" role="status" aria-label="正在加载聊天记录"><SkeletonBlock width="40%" height="36px" /><SkeletonBlock width="55%" height="36px" /></div>
           <p v-else-if="!messages.length && !info?.problem" class="qq-hint">和 {{ current.name }} 打个招呼吧。这里是主人和她的私聊，平台上聊过的也会出现在这里。</p>
-          <template v-for="(message, i) in messages" :key="message.id">
+          <template v-for="({ message, turns }, i) in chatEntries" :key="message.id">
             <div v-if="dividers[i]" class="qq-time">{{ chatTimeLabel(message.at) }}</div>
-            <div v-if="message.kind === 'call'" class="qq-call-record" role="note"><Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }}</div>
+            <div v-if="message.kind === 'call'" class="qq-call-record" role="note" :data-call-record="message.call_id || undefined">
+              <button v-if="turns?.length" class="qq-call-pill" type="button" :aria-expanded="expandedCalls.has(message.id)" :title="fullTimeLabel(message.at)" @click="toggleCall(message.id)">
+                <Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }} · {{ turns.length }} 句<ChevronDown :size="13" aria-hidden="true" :class="{ open: expandedCalls.has(message.id) }" />
+              </button>
+              <span v-else class="qq-call-pill" :title="fullTimeLabel(message.at)"><Phone :size="13" aria-hidden="true" />{{ callRecordLabel(message.text) }}</span>
+              <div v-if="turns?.length && expandedCalls.has(message.id)" class="qq-call-turns">
+                <p v-for="turn in turns" :key="turn.id" class="qq-call-turn" :class="turn.role">
+                  <span class="qq-call-turn-who">{{ turn.role === "user" ? "我" : current.name }}</span>
+                  <time :title="fullTimeLabel(turn.at)">{{ clockOf(turn.at) }}</time>
+                  <span class="qq-call-turn-text">{{ turn.role === "assistant" ? markdownToPlain(turn.text) : turn.text }}</span>
+                </p>
+              </div>
+            </div>
             <article v-else class="qq-msg" :class="[message.role, { failed: message.failed }]" :aria-label="message.role === 'user' ? '我说' : `${current.name} 说`">
               <BotAvatar v-if="message.role === 'assistant'" :name="current.name" :src="current.avatar" :size="38" />
-              <div class="qq-bubble-wrap">
+              <div class="qq-bubble-wrap" :title="fullTimeLabel(message.at)">
+                <blockquote v-if="message.quote" class="qq-quote">{{ quoteLabel(message.quote) }}</blockquote>
                 <template v-if="message.text">
                   <MarkdownText v-if="message.role === 'assistant'" class="qq-bubble qq-markdown" :source="message.text" />
                   <div v-else class="qq-bubble">{{ message.text }}</div>
                 </template>
                 <a v-for="image in message.images ?? []" :key="image" class="qq-image" :href="image" target="_blank" rel="noopener noreferrer"><img :src="image" alt="图片" loading="lazy" /></a>
+                <time class="qq-msg-time" :datetime="new Date(message.at * 1000).toISOString()">{{ clockOf(message.at) }}</time>
               </div>
               <template v-if="message.role === 'user'">
                 <BotAvatar v-if="info?.owner_avatar_url" class="qq-self-avatar" name="我" :src="info.owner_avatar_url" :size="38" aria-hidden="true" />
                 <span v-else class="qq-self" aria-hidden="true">我</span>
               </template>
-              <span v-if="message.pending" class="qq-state" aria-label="发送中"><LoaderCircle :size="14" class="qq-spin" aria-hidden="true" /></span>
-              <button v-else-if="message.failed" class="qq-state err" type="button" aria-label="重新发送" title="重新发送" @click="resend(message)"><CircleAlert :size="16" aria-hidden="true" /></button>
+              <!-- 发送中不画转圈：对方的「正在输入」已经说明发出去了，失败时才标出来。 -->
+              <button v-if="message.failed" class="qq-state err" type="button" aria-label="重新发送" title="重新发送" @click="resend(message)"><CircleAlert :size="16" aria-hidden="true" /></button>
             </article>
           </template>
           <article v-if="sending" class="qq-msg assistant" aria-label="对方正在输入">
@@ -230,7 +261,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
-import { ChevronLeft, CircleAlert, CircleStop, LoaderCircle, MessagesSquare, Phone, Search, Settings2, SquarePen, UsersRound, Wrench } from "@lucide/vue";
+import { ChevronDown, ChevronLeft, CircleAlert, CircleStop, MessagesSquare, Phone, Search, Settings2, SquarePen, UsersRound, Wrench } from "@lucide/vue";
 import BotAvatar from "../components/BotAvatar.vue";
 import MarkdownText from "../components/MarkdownText.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
@@ -243,7 +274,7 @@ import { createAdminChatSession, getAdminChat, listAdminChatSessions, sendAdminC
 import { subscriptionPlatformLabel } from "../lib/rss-display";
 import { openCallAudio, type CallAudio } from "../lib/voice-call";
 import { markdownToPlain } from "../lib/markdown";
-import { chatTimeLabel, getWebChat, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage } from "../lib/web-chat";
+import { callClock, chatTimeLabel, fullTimeLabel, getWebChat, groupCallTurns, mergeWebChatHistory, sendWebChat, timeDividers, type WebChatInfo, type WebChatMessage, type WebChatQuote } from "../lib/web-chat";
 import { getLocalRoom, listLocalRooms, LOCAL_ROOM_OWNER, sendLocalRoom, stopLocalRoom, type LocalRoom, type LocalRoomMessage, type LocalRoomStatus } from "../lib/local-rooms";
 
 interface Contact {
@@ -275,7 +306,18 @@ const showList = ref(true);
 
 const info = ref<WebChatInfo | null>(null);
 const messages = ref<WebChatMessage[]>([]);
-const dividers = computed(() => timeDividers(messages.value));
+// 通话里说的话归到通话记录下面（正在打的那通放进顶上的通话条），不和打字的私聊混在一起。
+const grouped = computed(() => groupCallTurns(messages.value, info.value?.active_call?.id));
+const chatEntries = computed(() => grouped.value.entries);
+const liveTurns = computed(() => grouped.value.live);
+const dividers = computed(() => timeDividers(chatEntries.value.map((entry) => entry.message)));
+const liveCall = computed(() => info.value?.active_call);
+const expandedCalls = ref(new Set<string>());
+const nowSeconds = ref(Math.floor(Date.now() / 1000));
+const liveSeconds = computed(() => (liveCall.value ? Math.max(0, nowSeconds.value - liveCall.value.started_at) : 0));
+const liveClock = computed(() => callClock(liveSeconds.value));
+let clockTimer: number | undefined;
+let historyPoll: number | undefined;
 // 每台机器人最后一条消息，列表里当预览。
 const lastMessages = ref<Record<string, WebChatMessage>>({});
 const loading = ref(false);
@@ -297,6 +339,26 @@ function readSelected(): string {
   } catch {
     return botScope.value || "";
   }
+}
+
+function toggleCall(id: string): void {
+  const next = new Set(expandedCalls.value);
+  if (!next.delete(id)) next.add(id);
+  expandedCalls.value = next;
+}
+
+function clockOf(at: number): string {
+  const date = new Date(at * 1000);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+// 引用块：回的那条在记录里就写出原话，不在就只说是条回复。
+function quoteLabel(quote: WebChatQuote): string {
+  const target = quote.message_id ? messages.value.find((m) => m.id === quote.message_id) : undefined;
+  const text = quote.text || (target ? (target.role === "assistant" ? markdownToPlain(target.text) : target.text) : "");
+  const sender = quote.sender_name || (target ? (target.role === "assistant" ? current.value?.name ?? "" : "我") : "");
+  if (!text) return "回复了一条消息";
+  return sender ? `${sender}：${text}` : text;
 }
 
 function lastOf(id: string): WebChatMessage | undefined {
@@ -336,28 +398,78 @@ async function loadProfiles(): Promise<void> {
   }
 }
 
-async function loadHistory(): Promise<void> {
+// quiet 是后台刷新：不显示加载骨架、读不到也不报错，有新消息且本来就在底部才滚下去。
+async function loadHistory(quiet = false): Promise<void> {
   const profile = selected.value;
   if (!profile) return;
   loadController?.abort();
   const controller = new AbortController();
   loadController = controller;
-  loading.value = true;
-  error.value = "";
+  if (!quiet) {
+    loading.value = true;
+    error.value = "";
+  }
   try {
     const result = await getWebChat(profile, controller.signal);
     if (controller.signal.aborted || profile !== selected.value) return;
+    const before = messages.value;
+    const atBottom = nearBottom();
     info.value = result.info;
-    messages.value = result.messages;
+    messages.value = quiet ? mergeWebChatHistory(result.messages, before) : result.messages;
     rememberLast(profile);
-    await scrollToBottom();
+    const grew = messages.value.length !== before.length || messages.value[messages.value.length - 1]?.id !== before[before.length - 1]?.id;
+    if (!quiet || (grew && atBottom)) await scrollToBottom();
+    if (quiet) error.value = "";
   } catch (err) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || quiet) return;
     error.value = err instanceof Error ? err.message : String(err);
   } finally {
     if (loadController === controller) loading.value = false;
+    scheduleHistoryPoll();
   }
 }
+
+// 别的渠道来的消息（QQ 上的私聊、通话、机器人主动发的）不用手动刷新：页面开着就隔
+// 几秒拉一次。通话中拉得勤一些，说的话能跟上。页面在后台、正在发消息时先不拉，
+// 发完那一轮的流里已经带着回复了。
+const HISTORY_POLL_MS = 5000;
+const HISTORY_POLL_CALL_MS = 2000;
+
+function scheduleHistoryPoll(): void {
+  window.clearTimeout(historyPoll);
+  historyPoll = window.setTimeout(pollHistory, liveCall.value ? HISTORY_POLL_CALL_MS : HISTORY_POLL_MS);
+}
+
+function pollHistory(): void {
+  if (!current.value || currentRoom.value || info.value?.problem) return;
+  if (document.hidden || loading.value || sending.value) {
+    scheduleHistoryPoll();
+    return;
+  }
+  void loadHistory(true);
+}
+
+function onVisibilityChange(): void {
+  if (!document.hidden && current.value && !currentRoom.value && !loading.value && !sending.value) void loadHistory(true);
+}
+
+function nearBottom(): boolean {
+  const el = transcript.value;
+  return !el || el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+}
+
+// 通话时长每秒走一格，没在通话时不开计时器。
+watch(
+  liveCall,
+  (call) => {
+    window.clearInterval(clockTimer);
+    clockTimer = undefined;
+    if (!call) return;
+    nowSeconds.value = Math.floor(Date.now() / 1000);
+    clockTimer = window.setInterval(() => (nowSeconds.value = Math.floor(Date.now() / 1000)), 1000);
+  },
+  { immediate: true }
+);
 
 function rememberLast(profile: string): void {
   const sent = messages.value.filter((m) => !m.failed);
@@ -376,6 +488,7 @@ function openContact(id: string): void {
   }
   info.value = null;
   messages.value = [];
+  expandedCalls.value = new Set();
   draft.value = "";
   void loadHistory();
 }
@@ -474,7 +587,7 @@ function endRoomCall(): void {
   void loadRoom();
 }
 
-// 通话里说的也记进私聊，挂断后刷新一下就能看到。
+// 通话里说的也记进私聊，挂断后刷新一下就能看到通话记录。
 function endCall(): void {
   callAudio.value = null;
   void loadHistory();
@@ -828,8 +941,12 @@ watch(selected, (value) => (chatSelection.value = value), { immediate: true });
 
 void loadProfiles();
 void loadRooms();
+document.addEventListener("visibilitychange", onVisibilityChange);
 
 onBeforeUnmount(() => {
+  document.removeEventListener("visibilitychange", onVisibilityChange);
+  window.clearTimeout(historyPoll);
+  window.clearInterval(clockTimer);
   loadController?.abort();
   roomController?.abort();
   window.clearTimeout(roomPoll);
@@ -1107,19 +1224,181 @@ onBeforeUnmount(() => {
   padding: 12px 18px 20px;
 }
 
-/* 通话记录：挂断时记的一条，像 QQ 里的「通话时长」提示一样居中 */
+/* 通话记录：挂断时记的一条，像 QQ 里的「通话时长」提示一样居中；通话里说的话
+   收在里面，点开才看。 */
 .qq-call-record {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 5px;
-  width: fit-content;
   margin: 4px auto 14px;
+}
+
+.qq-call-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 3px 10px;
+  border: 0;
   border-radius: 999px;
   background: var(--surface-2);
   color: var(--muted);
+  font: inherit;
   font-size: 12px;
+}
+
+button.qq-call-pill {
+  cursor: pointer;
+}
+
+button.qq-call-pill:hover {
+  color: var(--text);
+}
+
+.qq-call-pill svg.open,
+.qq-call-toggle svg.open {
+  transform: rotate(180deg);
+}
+
+.qq-call-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: min(100%, 560px);
+  max-height: 320px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 45%, var(--surface));
+}
+
+.qq-call-turn {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.qq-call-turn-who {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.qq-call-turn.user .qq-call-turn-who {
+  color: var(--accent);
+}
+
+.qq-call-turn time {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.qq-call-turn-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* 窄屏上名字和时间一行，说的话另起一行，免得被长名字挤成一条竖缝。 */
+@media (max-width: 720px) {
+  .qq-call-turn {
+    grid-template-columns: auto minmax(0, 1fr);
+    row-gap: 0;
+  }
+
+  .qq-call-turn-text {
+    grid-column: 1 / -1;
+  }
+}
+
+/* 正在通话：顶上一条，时长实时走 */
+.qq-live-call {
+  margin: 10px 16px 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--success, #22a06b) 12%, var(--surface));
+  font-size: 13px;
+}
+
+.qq-live-call-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success, #22a06b);
+}
+
+.qq-live-call .qq-call-turns {
+  width: 100%;
+  background: var(--surface);
+}
+
+.qq-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: qq-live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes qq-live-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.qq-live-clock {
+  font-variant-numeric: tabular-nums;
+}
+
+.qq-call-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.qq-call-toggle:hover {
+  background: var(--surface);
+}
+
+.qq-room-title p.calling {
+  color: var(--success, #22a06b);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 引用块：回的是哪句，画在气泡上面 */
+.qq-quote {
+  margin: 0;
+  padding: 4px 10px;
+  border-left: 3px solid var(--border);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--surface-2) 60%, var(--surface));
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 每条消息的发送时间，小字跟在气泡下面 */
+.qq-msg-time {
+  margin-top: -3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .qq-list-actions {
@@ -1295,16 +1574,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.qq-spin {
-  animation: qq-spin 1s linear infinite;
-}
-
-@keyframes qq-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 .qq-composer {
   display: flex;
   align-items: flex-end;
@@ -1363,7 +1632,7 @@ onBeforeUnmount(() => {
 
 @media (prefers-reduced-motion: reduce) {
   .qq-typing i,
-  .qq-spin {
+  .qq-live-dot {
     animation: none;
   }
 }

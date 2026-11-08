@@ -1276,8 +1276,11 @@ const demoRoomMessages = new Map<string, { id: string; sender_id: string; sender
   ]]
 ]);
 
-const demoWebChats = new Map<string, { id: string; role: string; kind?: string; text: string; at: number }[]>();
-function demoWebChat(profile: string): { id: string; role: string; kind?: string; text: string; at: number }[] {
+type DemoWebChatMessage = { id: string; role: string; kind?: string; text: string; at: number; call_id?: string; quote?: { message_id?: string; text?: string } };
+const demoWebChats = new Map<string, DemoWebChatMessage[]>();
+// 演示里一直有一通打了一分多钟的电话，聊天页能看到「正在通话中」。
+const demoLiveCallStarted = Math.floor(Date.now() / 1000) - 75;
+function demoWebChat(profile: string): DemoWebChatMessage[] {
   let history = demoWebChats.get(profile);
   if (!history) {
     const base = Math.floor(Date.now() / 1000) - 26 * 3600;
@@ -1287,9 +1290,15 @@ function demoWebChat(profile: string): { id: string; role: string; kind?: string
       { id: "demo-3", role: "assistant", text: "晚上想吃点什么？我帮你想想", at: base + 25 },
       { id: "demo-4", role: "user", text: "番茄牛腩吧", at: base + 25 * 3600 },
       { id: "demo-5", role: "assistant", text: "好耶，**番茄牛腩**炖一锅能吃两顿", at: base + 25 * 3600 + 30 },
-      { id: "demo-6", role: "user", text: "喂？听得到吗", at: base + 25 * 3600 + 600 },
-      { id: "demo-7", role: "assistant", text: "听得到！今天的牛腩炖上了没？", at: base + 25 * 3600 + 606 },
-      { id: "demo-8", role: "user", kind: "call", text: "[语音通话] 通话 3 分 12 秒", at: base + 25 * 3600 + 792 }
+      { id: "demo-5b", role: "user", text: "两顿都归我", quote: { message_id: "demo-5" }, at: base + 25 * 3600 + 90 },
+      { id: "call-demo-a-1", role: "user", text: "喂？听得到吗", call_id: "demo-a", at: base + 25 * 3600 + 600 },
+      { id: "call-demo-a-out-1", role: "assistant", text: "听得到！今天的牛腩炖上了没？", call_id: "demo-a", at: base + 25 * 3600 + 606 },
+      { id: "call-demo-a-2", role: "user", text: "炖上了，再炖半小时", call_id: "demo-a", at: base + 25 * 3600 + 700 },
+      { id: "call-demo-a-out-2", role: "assistant", text: "那我掐着点提醒你关火～", call_id: "demo-a", at: base + 25 * 3600 + 706 },
+      { id: "local-call-demo-a", role: "user", kind: "call", text: "[语音通话] 通话 3 分 12 秒", call_id: "demo-a", at: base + 25 * 3600 + 792 },
+      { id: "demo-9", role: "assistant", text: "牛腩该关火啦！", at: Math.floor(Date.now() / 1000) - 600 },
+      { id: "call-demo-live-1", role: "user", text: "我又打过来了", call_id: "demo-live", at: demoLiveCallStarted + 5 },
+      { id: "call-demo-live-out-1", role: "assistant", text: "在呢在呢，怎么啦？", call_id: "demo-live", at: demoLiveCallStarted + 9 }
     ];
     demoWebChats.set(profile, history);
   }
@@ -1613,7 +1622,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/assistant/chat") {
     const profile = (method === "GET" ? url.searchParams.get("profile") : String(body.profile || "")) || "demo";
     const history = demoWebChat(profile);
-    if (method === "GET") return json({ info: { bot_id: profile, bot_name: "Diana", platform: "onebot-v11", owner_avatar_url: demoGroupAvatar }, messages: history });
+    if (method === "GET") return json({ info: { bot_id: profile, bot_name: "Diana", platform: "onebot-v11", owner_avatar_url: demoGroupAvatar, active_call: { id: "demo-live", started_at: demoLiveCallStarted } }, messages: history });
     const now = Math.floor(Date.now() / 1000);
     history.push({ id: `demo-in-${now}`, role: "user", text: String(body.text || ""), at: now });
     const reply = { id: `demo-out-${now}`, role: "assistant", text: "演示模式里我只会回这一句～真实部署里这就是和我私聊，QQ 上聊过的也在这里。", at: now + 1 };

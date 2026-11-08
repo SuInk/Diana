@@ -497,6 +497,8 @@ type Runtime struct {
 	wholeMuteSnapshots wholeMuteSnapshotStore
 	// telegramOwnerIDs 记主人配成 @用户名时见过的数字 ID（键是机器人 ID），私聊通知要用。
 	telegramOwnerIDs sync.Map
+	// activeVoiceCalls 是还没挂断的电话（*VoiceCall），聊天页据此显示「正在通话中」。
+	activeVoiceCalls sync.Map
 	// ownerBind 是 QQ 官方机器人绑定主人的验证码和提醒记录，见 qq_official_owner_bind.go。
 	ownerBind ownerBindState
 	// identityLinks 是跨平台账号关联，identityLinkCache 是它的内存副本，identityBind

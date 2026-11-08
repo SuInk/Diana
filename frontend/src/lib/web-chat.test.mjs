@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatTimeLabel,readWebChatFrames,timeDividers} from './web-chat.ts';
+import {callClock,chatTimeLabel,groupCallTurns,mergeWebChatHistory,readWebChatFrames,timeDividers} from './web-chat.ts';
 
 const stream = (chunks) => new ReadableStream({start(c){for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk)); c.close();}});
 
@@ -24,4 +24,27 @@ test('time labels and dividers follow QQ conventions', () => {
   assert.equal(chatTimeLabel(at(new Date(2026, 2, 3, 8, 0)), now), '3月3日 08:00');
   assert.equal(chatTimeLabel(at(new Date(2025, 2, 3, 8, 0)), now), '2025年3月3日 08:00');
   assert.deepEqual(timeDividers([{at:0},{at:60},{at:400},{at:401}]), [true,false,true,false]);
+});
+
+test('call turns fold under their record, live call turns stay apart', () => {
+  const m = (id, extra = {}) => ({id, role: 'user', text: id, at: 1, ...extra});
+  const {entries, live} = groupCallTurns([
+    m('a'),
+    m('call-x-1', {call_id: 'x'}),
+    m('call-x-out-1', {call_id: 'x', role: 'assistant'}),
+    m('qq', {}),
+    m('local-call-x', {kind: 'call', call_id: 'x'}),
+    m('call-old-1', {call_id: 'old'}),
+    m('call-y-1', {call_id: 'y'})
+  ], 'y');
+  assert.deepEqual(entries.map(e => e.message.id), ['a', 'qq', 'local-call-x', 'call-old-1']);
+  assert.deepEqual(entries[2].turns.map(t => t.id), ['call-x-1', 'call-x-out-1']);
+  assert.deepEqual(live.map(t => t.id), ['call-y-1']);
+});
+
+test('call clock and history merge', () => {
+  assert.equal(callClock(75), '01:15');
+  assert.equal(callClock(3725), '1:02:05');
+  const failed = {id: 'local-1', role: 'user', text: 'x', at: 2, failed: true};
+  assert.deepEqual(mergeWebChatHistory([{id: 's', role: 'user', text: 's', at: 1}], [failed]).map(m => m.id), ['s', 'local-1']);
 });
