@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +288,38 @@ func TestQQVoiceCallResumeGraceExpires(t *testing.T) {
 	defer calls.mu.Unlock()
 	if calls.active != active {
 		t.Fatal("期间连回来过，通话不该被结束")
+	}
+}
+
+// 插件设置里没填令牌：先读环境变量 QQCALL_TOKEN，没有再读数据目录里的 qqcall-token。
+func TestQQCallTokenFallback(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APP_DB_PATH", filepath.Join(dir, "diana.db"))
+	t.Setenv("QQCALL_TOKEN", "")
+	if got := qqCallTokenFallback(); got != "" {
+		t.Fatalf("什么都没配时应为空，got %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, qqCallTokenFileName), []byte("from-file\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := qqCallTokenFallback(); got != "from-file" {
+		t.Fatalf("应读数据目录里的令牌文件，got %q", got)
+	}
+	t.Setenv("QQCALL_TOKEN", "from-env")
+	if got := qqCallTokenFallback(); got != "from-env" {
+		t.Fatalf("环境变量优先，got %q", got)
+	}
+}
+
+// 设置、环境变量、文件都没有时，默认用接电话那台机器人的 OneBot access token。
+func TestQQCallTokenDefaultsToOneBotToken(t *testing.T) {
+	t.Setenv("QQCALL_TOKEN", "")
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	runtime := NewRuntime(BotConfig{ID: "bot", Platform: PlatformOneBotV11, OneBotAccessToken: "onebot-secret"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	plugin := NewQQVoiceCallPlugin()
+	plugin.runtime = runtime
+	plugin.change = PluginStateChange{Enabled: true, EnabledProfiles: []string{"bot"}, Settings: SettingValues{}}
+	if got := plugin.oneBotTokenFallback(); got != "onebot-secret" {
+		t.Fatalf("默认应用 OneBot token，got %q", got)
 	}
 }
