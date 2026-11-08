@@ -496,6 +496,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   agent_browser_operation_access?: BrowserOperationAccess;
   /** 允许这台机器人使用浏览器控制扩展（browser_ext_*）。默认关闭。 */
   agent_browser_control_enabled?: boolean;
+  /** 允许这台机器人使用桌面控制（desktop_*）。默认关闭，还要打开「设置 → 桌面控制」的总开关。 */
+  agent_desktop_control_enabled?: boolean;
   agent_browser_box_disabled?: boolean;
 }
 
@@ -4928,18 +4930,9 @@ export interface DesktopJob {
   error?: string;
   budget: { steps_used: number };
 }
-export interface DesktopActionApproval {
- target_label?: string;
- preview?: {data: string};
- id: string;
- command: { op: string; window_id: string; expected_bundle_id?: string; text?: string; key?: string; element_id?: string; x?: number; y?: number; delta_x?: number; delta_y?: number };
- expires_at: string;
- approved: boolean;
-}
 export interface DesktopStatus {
  takeover: boolean;
  permissions?: { screen_recording: boolean; accessibility: boolean };
- pending_actions?: DesktopActionApproval[];
   policy: DesktopPolicy;
   ready: boolean;
   helper_configured: boolean;
@@ -4952,8 +4945,6 @@ export const getDesktopJobs = () => requestJSON<{jobs: DesktopJob[]}>("/api/desk
 export const saveDesktopPolicy = (policy: DesktopPolicy) => requestJSON("/api/desktop-control/policy", {method: "PUT", body: JSON.stringify(policy)});
 export const setDesktopTakeover = (active: boolean) => requestJSON("/api/desktop-control/takeover", {method: "POST", body: JSON.stringify({active})});
 export const controlDesktopJob = (id: string, action: "pause" | "resume" | "confirm" | "cancel") => requestJSON(`/api/desktop-control/jobs/${encodeURIComponent(id)}/${action}`, {method: "POST"});
-
-export const confirmDesktopAction = (id: string) => requestJSON(`/api/desktop-control/actions/${encodeURIComponent(id)}/confirm`, {method:"POST"});
 
 export interface GitHubUserIdentity { login: string; name?: string; }
 export function lookupGitHubUser(login: string): Promise<{ user?: GitHubUserIdentity }> {

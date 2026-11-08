@@ -1030,7 +1030,7 @@ type BotConfig struct {
 	// 就多一处能借到这份登录态的地方，所以逐台显式打开。全局的总开关、站点
 	// 白名单和读写档位另由 WebUI 的浏览器控制页决定，两边都开才真的能用。
 	AgentBrowserControlEnabled bool `json:"agent_browser_control_enabled,omitempty"`
-	// AgentDesktopControlEnabled 允许这台机器人使用桌面控制（desktop_windows / desktop_screenshot）。
+	// AgentDesktopControlEnabled 允许这台机器人使用桌面控制（desktop_* 与 desktop_job_*）。
 	// 默认关闭：操作的是主人本机窗口画面，只对主人开放，且须另开桌面控制总开关并连接执行器。
 	AgentDesktopControlEnabled bool `json:"agent_desktop_control_enabled,omitempty"`
 	// AgentBrowserBoxDisabled 关掉这台机器人对 Diana 内置常驻浏览器
