@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, useId } from "vue";
 import AppSelect from "./AppSelect.vue";
+import { shownFallbackText, storedFallbackText, usingFallbackText } from "../lib/fallback-text";
 import { defaultMergeWindowSeconds, defaultRuleTriggerChance, defaultParticipationCooldownSeconds, maxMergeMessages, maxMergeWindowSeconds, participationLevelLabel, participationPreset, participationPresetName, proactiveCriteriaMaxLength, type ParticipationPreferences } from "../lib/participation";
 
 // criteriaOptional：机器人页已经能直接改内置判据，补充判据只在留有旧值时露出来，
 // 让人看得见、清得掉——藏起来的旧值照样拼进评分提示词。
-const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean }>();
+const props = defineProps<{ modelValue?: ParticipationPreferences; level?: string; inheritable?: boolean; inheritedValue?: ParticipationPreferences; criteria?: string; criteriaOptional?: boolean; inheritedCriteria?: string }>();
 const emit = defineEmits<{ "update:modelValue": [value: ParticipationPreferences | undefined]; "update:criteria": [value: string] }>();
 const id = useId();
 const value = computed(() => props.modelValue ?? (props.level ? participationPreset(props.level) : props.inheritedValue ?? participationPreset("low")));
@@ -97,8 +98,11 @@ function selectSource(source: string) {
   }
   emit("update:modelValue", { ...value.value });
 }
+// 群里没单独写补充判据时用的是机器人那份，框里直接显示它；改回一样的内容仍算跟随。
+const criteriaText = computed(() => shownFallbackText(props.criteria, props.inheritedCriteria));
+const criteriaInherited = computed(() => usingFallbackText(props.criteria, props.inheritedCriteria));
 function updateCriteria(event: Event) {
-  emit("update:criteria", (event.target as HTMLTextAreaElement).value);
+  emit("update:criteria", storedFallbackText((event.target as HTMLTextAreaElement).value, props.inheritedCriteria));
 }
 </script>
 
@@ -177,9 +181,10 @@ function updateCriteria(event: Event) {
           <div class="setting-copy">
             <label :for="id + '-criteria'">补充判据</label>
             <p v-if="criteriaOptional" class="setting-help">旧版留下的补充判据，仍会拼进评分提示词。内置判据现在可以在下面的「接话评分提示词」里直接改，这里清空后不再显示。</p>
+            <p v-else-if="inheritedCriteria?.trim()" class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。{{ criteriaInherited ? "框里是机器人的补充判据，本群正跟着用；改了只对本群生效。" : "已为本群单独改过；清空或改回机器人那份就恢复跟随。" }}</p>
             <p v-else class="setting-help">本群特有的称呼、黑话和禁区，帮它判断这句话该不该接。留空只用内置判据。</p>
           </div>
-          <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteria ?? ''" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
+          <textarea :id="id + '-criteria'" class="textarea" rows="3" :maxlength="proactiveCriteriaMaxLength" :value="criteriaText" placeholder="例：群里叫「鸽子」是催更，不是骂人。不要接和考试答案有关的话题。" @input="updateCriteria"></textarea>
         </section>
       </div>
       <p v-if="!rules" class="hint participation-gate-hint">

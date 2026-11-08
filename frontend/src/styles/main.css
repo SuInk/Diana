@@ -3122,6 +3122,14 @@ a.nav-action {
   overflow-wrap: anywhere;
 }
 
+.group-plugin-setting-inherited-text {
+  margin-bottom: 0;
+  font-family: inherit;
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+}
+
 .group-plugin-secret-note {
   margin: 12px 0 0;
   color: var(--muted);
@@ -4425,7 +4433,8 @@ a.nav-action {
   font-family: var(--font-mono, ui-monospace, monospace);
   resize: vertical;
   min-height: 88px;
-  white-space: pre;
+  /* 保留换行又自动折行：默认提示词是一整段长句，不折行就只能横向拖着看。 */
+  white-space: pre-wrap;
 }
 
 .plugin-setting-number {
@@ -7399,4 +7408,16 @@ a.nav-action {
 
 @media (max-width: 480px) {
   .login-screen { padding-top: 88px; }
+}
+
+/* 标签旁边挂「已修改」和恢复按钮的那一行：留空用默认 / 跟随机器人的文本框共用。 */
+.field-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.field-label-action {
+  margin-left: auto;
 }

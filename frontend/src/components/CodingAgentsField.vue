@@ -2,6 +2,7 @@
 import { computed, ref } from "vue";
 import { codingAgentSetup } from "../api";
 import AppSelect from "./AppSelect.vue";
+import { shownFallbackText, storedFallbackText } from "../lib/fallback-text";
 
 interface AgentProfile {
   id: string;
@@ -15,7 +16,11 @@ interface AgentProfile {
   approval_mode: string;
   default: boolean;
 }
-const props = defineProps<{ modelValue?: AgentProfile[]; id: string; keyDrafts?: string }>();
+// templateFallbacks：各后端的预置命令模板。模板留空时框里直接显示它，改回一样仍存空。
+const props = defineProps<{ modelValue?: AgentProfile[]; id: string; keyDrafts?: string; templateFallbacks?: Record<string, string> }>();
+function templateFallback(profile: AgentProfile): string {
+  return props.templateFallbacks?.[profile.backend] ?? "";
+}
 const emit = defineEmits<{ (event: "update:modelValue", value: AgentProfile[]): void; (event: "update:key-drafts", value: string): void }>();
 const busy = ref(false);
 const logins = ref<Record<string,{url?:string;code?:string;state?:string}>>({});
@@ -128,7 +133,7 @@ function remove(index: number): void {
         <summary>高级配置</summary>
         <div class="stack" style="margin-top: 12px">
           <label class="field">{{ profile.backend === 'acp' ? '代理参数' : '命令模板' }}
-            <textarea class="input" rows="3" :value="profile.command_template" :placeholder="profile.backend === 'acp' ? '例如 --acp（Gemini CLI）或 acp（opencode）' : '留空使用预置命令，自定义后端必填'" @input="update(index, 'command_template', text($event))"></textarea>
+            <textarea class="input" rows="3" :value="shownFallbackText(profile.command_template, templateFallback(profile))" :placeholder="profile.backend === 'acp' ? '例如 --acp（Gemini CLI）或 acp（opencode）' : '自定义后端必填'" @input="update(index, 'command_template', storedFallbackText(text($event), templateFallback(profile)))"></textarea>
             <span v-if="profile.backend === 'acp'" class="hint">指令通过 ACP 协议发送，这里只填代理自己的参数，不要写 <code v-text="'{{instruction}}'"></code>；可用 <code v-text="'{{model}}'"></code>。</span>
             <span v-else class="hint">模板需包含 <code v-text="'{{instruction}}'"></code>，其他占位符与原有配置一致。</span>
           </label>

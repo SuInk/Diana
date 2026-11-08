@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { RotateCcw } from "@lucide/vue";
 import CodingAgentsField from "./CodingAgentsField.vue";
 import AppSelect from "./AppSelect.vue";
 import PluginSizeInput from "./PluginSizeInput.vue";
 import { getConfig, type LLMConfig, type PluginSettingSpec } from "../api";
+import { shownFallbackText, storedFallbackText, usingFallbackText } from "../lib/fallback-text";
 
 // 插件设置项的单个控件。抽出来是为了让 GitHub 仓库这类需要把设置项
 // 分组重排的弹窗能复用同一套渲染，而不是把整段模板复制几份。
@@ -73,6 +75,28 @@ onMounted(async () => {
   }
 });
 
+// 有 fallback 的文本项：值为空时直接把运行时实际用的内容摊在框里；内容和它一样就仍存
+// 空串，以后升级改了默认内容也跟着走。
+// 默认内容可能随另一个设置变（编码代理的命令模板随后端 CLI 变）。
+const fallback = computed(() => {
+  const by = props.spec.fallback_by;
+  if (by) {
+    const byValue = by.values?.[String(props.form[by.key] ?? "")];
+    if (byValue) return byValue;
+  }
+  return props.spec.fallback ?? "";
+});
+const textValue = computed<string>({
+  get: () => shownFallbackText(String(props.form[props.spec.key] ?? ""), fallback.value),
+  set: (value: string) => {
+    props.form[props.spec.key] = storedFallbackText(value, fallback.value);
+  },
+});
+const usingFallback = computed(() => usingFallbackText(String(props.form[props.spec.key] ?? ""), fallback.value));
+function restoreFallback(): void {
+  props.form[props.spec.key] = "";
+}
+
 function multiSelected(option: string): boolean {
   const value = props.form[props.spec.key];
   return Array.isArray(value) && value.includes(option);
@@ -123,11 +147,19 @@ function toggleMultiSelect(option: string, event: Event): void {
     </template>
     <template v-else-if="spec.type === 'coding_agents'">
       <span :id="labelID" class="plugin-setting-group-label">{{ spec.label }}</span>
-      <CodingAgentsField :id="controlID" v-model="form[spec.key]" :key-drafts="form.agent_api_keys || ''" @update:key-drafts="form.agent_api_keys = $event" :aria-labelledby="labelID" />
+      <CodingAgentsField :id="controlID" :template-fallbacks="spec.fallback_by?.values" v-model="form[spec.key]" :key-drafts="form.agent_api_keys || ''" @update:key-drafts="form.agent_api_keys = $event" :aria-labelledby="labelID" />
       <span v-if="spec.description" class="hint">{{ spec.description }}</span>
     </template>
     <template v-else>
-      <label :for="controlID">{{ spec.label }}</label>
+      <div v-if="fallback" class="field-label-row">
+        <label :for="controlID">{{ spec.label }}</label>
+        <span v-if="!usingFallback" class="badge accent">已修改</span>
+        <button v-if="!usingFallback" class="btn small ghost field-label-action" type="button" @click="restoreFallback">
+          <RotateCcw :size="14" aria-hidden="true" />
+          恢复默认
+        </button>
+      </div>
+      <label v-else :for="controlID">{{ spec.label }}</label>
       <div v-if="spec.type === 'number'" class="plugin-setting-number">
         <input
           :id="controlID"
@@ -190,10 +222,11 @@ function toggleMultiSelect(option: string, event: Event): void {
       <textarea
         v-else-if="spec.type === 'text'"
         :id="controlID"
-        v-model="form[spec.key]"
+        v-model="textValue"
         class="input plugin-setting-textarea"
         :rows="spec.rows && spec.rows > 0 ? spec.rows : 4"
       ></textarea>
+      <input v-else-if="fallback" :id="controlID" v-model="textValue" class="input" type="text" />
       <input v-else :id="controlID" v-model="form[spec.key]" class="input" type="text" />
       <span v-if="spec.description" class="hint">{{ spec.description }}</span>
     </template>

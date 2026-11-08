@@ -72,6 +72,16 @@ func codingBackendPresets() map[string]codingBackendPreset {
 	}
 }
 
+// codingTemplateFallbacks 让命令模板框按所选后端显示预置命令；额外编码代理的
+// 每一行也按自己的后端套用同一份。
+func codingTemplateFallbacks() *PluginSettingFallbackBy {
+	values := map[string]string{}
+	for backend, preset := range codingBackendPresets() {
+		values[backend] = preset.Template
+	}
+	return &PluginSettingFallbackBy{Key: codingAgentSettingBackend, Values: values}
+}
+
 // CodingAgentPlugin 把外部编码 CLI（Claude Code、Codex 等）接成机器人的一个工具。
 //
 // 它自己不解析消息，只提供清单和设置：工具是事件绑定的，由运行时在装配工具表时
@@ -94,7 +104,7 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 		Permissions:     []string{"运行外部编码 CLI", "读写白名单仓库", "执行 git 操作"},
 		Settings: []PluginSettingSpec{
 			{Key: codingAgentSettingKeys, Label: "代理密钥", Type: PluginSettingTypeString, Default: "", Secret: true},
-			{Key: codingAgentSettingProfiles, Label: "额外编码代理", Type: PluginSettingTypeCodingAgents, Default: []codingAgentProfile{},
+			{Key: codingAgentSettingProfiles, Label: "额外编码代理", Type: PluginSettingTypeCodingAgents, Default: []codingAgentProfile{}, FallbackBy: codingTemplateFallbacks(),
 				Description: "同时配置多个 CLI 或模型，派任务时按名称选择。下方原有 CLI 设置保留为 default；所有代理共用工作区白名单和并发上限。"},
 			{
 				Key:   codingAgentSettingBackend,
@@ -120,11 +130,12 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 			{
 				Key:   codingAgentSettingTemplate,
 				Label: "命令模板",
-				Description: "留空用后端预置。占位符：{{instruction}} 指令、{{model}} 模型、{{session}} 续跑会话 ID、" +
+				Description: "框里是当前后端的预置命令，改了才算自定义。占位符：{{instruction}} 指令、{{model}} 模型、{{session}} 续跑会话 ID、" +
 					"{{workspace}} 工作目录。带空值占位符的参数会整个丢掉。自定义后端必须填。ACP 代理这里只填代理参数，不写 {{instruction}}。",
-				Type:    PluginSettingTypeText,
-				Default: "",
-				Rows:    3,
+				Type:       PluginSettingTypeText,
+				Default:    "",
+				FallbackBy: codingTemplateFallbacks(),
+				Rows:       3,
 			},
 			{
 				Key:         codingAgentSettingModel,
@@ -177,13 +188,13 @@ func (p *CodingAgentPlugin) Manifest() PluginManifest {
 				},
 			},
 			{
-				Key:   codingAgentSettingApprovalPatterns,
-				Label: "危险操作清单",
-				Description: "一行一个命令片段，大小写不敏感，命中即要确认。留空用内置默认：" +
-					"git push、git reset --hard、git clean -f、git tag -d、gh pr merge、gh pr create、gh release、npm publish、docker push、rm -rf、sudo。",
-				Type:    PluginSettingTypeText,
-				Default: "",
-				Rows:    6,
+				Key:         codingAgentSettingApprovalPatterns,
+				Label:       "危险操作清单",
+				Description: "一行一个命令片段，大小写不敏感，命中即要确认。框里是当前生效的清单，没改过时就是内置默认。",
+				Type:        PluginSettingTypeText,
+				Default:     "",
+				Fallback:    strings.Join(defaultCodingApprovalPatterns(), "\n"),
+				Rows:        6,
 			},
 			{
 				Key:         codingAgentSettingApprovalTimeout,
