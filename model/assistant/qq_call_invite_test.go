@@ -126,3 +126,24 @@ func TestQQGroupVoiceCallRepliesAsThatGroup(t *testing.T) {
 		}
 	}
 }
+
+func TestClassifyQQCallInviteLooksAtScreenshotFirst(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"incoming":true,"kind":"group","caller":"Winter","group_id":"20002"}`}
+	runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	invite := runtime.classifyQQCallInvite(context.Background(), "bot", qqcall.Message{Text: testGroupInviteOCR, Image: "iVBORw0KGgo="}, listTestCallGroups)
+	if invite.how != "vision" || invite.groupID != "20002" {
+		t.Fatalf("invite = %+v", invite)
+	}
+	req := provider.requestSnapshot()
+	var sawImage bool
+	for _, part := range req.Messages[len(req.Messages)-1].Parts {
+		if part.Type == llm.ContentPartImageURL && strings.HasPrefix(part.ImageURL, "data:image/png;base64,") {
+			sawImage = true
+		}
+	}
+	if !sawImage || !strings.Contains(req.Messages[0].Content, "截图") {
+		t.Fatalf("screenshot was not sent to the vision model: %#v", req.Messages)
+	}
+}

@@ -43,9 +43,11 @@ const (
 type Message struct {
 	Type string `json:"type"`
 	// Call 是 agent 给每通电话起的 ID，从响铃到挂断不变。
-	Call    string `json:"call,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Text    string `json:"text,omitempty"`
+	Call string `json:"call,omitempty"`
+	Name string `json:"name,omitempty"`
+	Text string `json:"text,omitempty"`
+	// Image 只在 ringing 里：整个来电窗口的 PNG 截图（base64），给识图模型看。
+	Image   string `json:"image,omitempty"`
 	PeerUIN string `json:"peer_uin,omitempty"`
 	// State 只在 hello 里：idle / ringing / connected。
 	State   string `json:"state,omitempty"`

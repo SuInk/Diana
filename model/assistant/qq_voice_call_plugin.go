@@ -692,6 +692,7 @@ func (s *qqCallSet) screen(ctx context.Context, msg qqcall.Message) {
 		listGroups = runtime.qqCallGroupLister(ready.profileID)
 	}
 	invite := runtime.classifyQQCallInvite(ctx, ready.profileID, msg, listGroups)
+	log.Printf("diana: qq voice call: 来电判断（%s）：来电=%v 群通话=%v 来电人=%q 群=%s", invite.how, invite.incoming, invite.group, invite.caller, invite.groupID)
 	target := qqCallTarget{profileID: ready.profileID, ownerID: ready.ownerID, caller: firstNonEmpty(invite.caller, msg.Name)}
 	switch {
 	case !invite.incoming:
