@@ -227,10 +227,10 @@ func TestReleasePackageUpdaterFollowsManifestRule(t *testing.T) {
 		Binary:    "diana-next-linux-amd64/diana-webui",
 		InstallAs: "diana-webui",
 	}
-	renamed := release
-	renamed.InstallAs = "diana"
-	if _, err := u.Download(context.Background(), renamed, false); err == nil || !strings.Contains(err.Error(), "rerun the one-click installer") {
-		t.Fatalf("Download() with a renamed program error = %v", err)
+	badName := release
+	badName.InstallAs = "../diana"
+	if _, err := u.Download(context.Background(), badName, false); !errors.Is(err, ErrInvalidReleaseArchive) {
+		t.Fatalf("Download() with an unsafe install_as error = %v", err)
 	}
 	wrongDigest := release
 	wrongDigest.SHA256 = strings.Repeat("0", 64)
