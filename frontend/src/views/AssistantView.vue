@@ -1252,6 +1252,71 @@
             </div>
           </section>
 
+          <!-- 试验：没人找她时自己在群里或给主人先说一句，规则见 proactive_messaging.go。 -->
+          <section v-if="form.proactive_messaging" class="card">
+            <div class="card-header">
+              <div>
+                <h2>主动开口</h2>
+                <span class="card-sub">试验功能 · 冷场或主人好久没来时自己先说一句</span>
+              </div>
+              <span class="badge" :class="form.proactive_messaging.enabled ? 'accent' : ''">{{ form.proactive_messaging.enabled ? "已开启" : "未开启" }}</span>
+            </div>
+            <div class="card-body form-grid">
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.proactive_messaging.enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">开启主动开口（试验）</span>
+                </label>
+                <span class="hint">到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
+              </div>
+              <template v-if="form.proactive_messaging.enabled">
+                <div class="field wide">
+                  <label for="bot-proactive-groups">允许主动开口的群</label>
+                  <textarea
+                    id="bot-proactive-groups"
+                    v-model="proactiveGroupsDraft"
+                    class="textarea"
+                    rows="2"
+                    placeholder="每行一个群号，也可以用逗号分隔；没列进来的群不会主动说话。"
+                  ></textarea>
+                </div>
+                <div class="field">
+                  <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>
+                  <input id="bot-proactive-group-idle" v-model.number="form.proactive_messaging.group_idle_minutes" class="input" type="number" min="30" max="10080" step="10" inputmode="numeric" placeholder="默认 120" />
+                  <span class="hint">只在冷场前三小时里有人在聊时才算冷场；两天没人说话的群不去叫醒。说了没人接就不再说，等有人说话再算。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-proactive-daily">每个会话每天最多几次</label>
+                  <input id="bot-proactive-daily" v-model.number="form.proactive_messaging.daily_limit" class="input" type="number" min="1" max="10" step="1" inputmode="numeric" placeholder="默认 2" />
+                  <span class="hint">每个群、主人私聊各自计数，一次开口拆成几条气泡也只算一次。</span>
+                </div>
+                <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.proactive_messaging.owner_enabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">主动找主人私聊</span>
+                  </label>
+                  <span v-if="!form.owner_id?.trim()" class="hint">还没填主人账号，填了才知道该找谁。</span>
+                </div>
+                <div v-if="form.proactive_messaging.owner_enabled" class="field">
+                  <label for="bot-proactive-owner-idle">主人多久没来后开口（小时）</label>
+                  <input id="bot-proactive-owner-idle" v-model.number="form.proactive_messaging.owner_idle_hours" class="input" type="number" min="1" max="336" step="1" inputmode="numeric" placeholder="默认 8" />
+                  <span class="hint">主人没回可以再追一次，等的时间翻倍；连着两次没回就停，等主人下次说话。</span>
+                </div>
+                <div class="field">
+                  <label for="bot-proactive-quiet-start">免打扰开始</label>
+                  <input id="bot-proactive-quiet-start" v-model="form.proactive_messaging.quiet_start" class="input" type="time" />
+                </div>
+                <div class="field">
+                  <label for="bot-proactive-quiet-end">免打扰结束</label>
+                  <input id="bot-proactive-quiet-end" v-model="form.proactive_messaging.quiet_end" class="input" type="time" />
+                  <span class="hint">按机器人时区，可以跨夜；开始和结束设成同一时间表示不设免打扰。</span>
+                </div>
+              </template>
+            </div>
+          </section>
+
           <!-- 安全：账号风险审核、拒答话术和撤回回复。 -->
           <section class="card">
             <div class="card-header">
@@ -2349,6 +2414,7 @@
 <script setup lang="ts">
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
+import { proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
 import { currentView, navigate, viewPath, viewQuery } from "../router";
 import { ALL_PROFILES, botCreateRequested, botScope, setBotScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
@@ -2619,6 +2685,7 @@ const busy = ref(false);
 const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
+const proactiveGroupsDraft = ref("");
 const replyFilterRulesDraft = ref<string[]>([]);
 const replyFilterResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);
@@ -4818,6 +4885,7 @@ function setForm(config: BotProfileConfig): void {
   form.value = {
     ...config,
     participation: participationFromConfig(config),
+    proactive_messaging: proactiveFormValue(config.proactive_messaging),
     profiles: undefined,
     // 可选布尔字段先归一化成具体值供开关绑定；少数安全行为默认关闭。
     owner_llm_config_enabled: config.owner_llm_config_enabled ?? true,
@@ -4904,6 +4972,7 @@ function setForm(config: BotProfileConfig): void {
   };
   triggersDraft.value = formatTriggerWords(config.group_triggers ?? []);
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
+  proactiveGroupsDraft.value = (config.proactive_messaging?.group_ids ?? []).join("\n");
   replyFilterRulesDraft.value = [...(config.reply_filter_rules ?? [])];
   replyFilterTestResult.value = null;
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
@@ -5226,6 +5295,7 @@ async function save(): Promise<void> {
         .filter((item) => item !== ""),
       reply_filter_rules: replyFilterRulesDraft.value.map((item) => item.trim()).filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
+      proactive_messaging: proactivePayload(current.proactive_messaging, proactiveGroupsDraft.value),
       // 清空的输入框是空字符串，后端的整数字段读不了；0 表示用默认值。
       reply_suppression_min_minutes: Math.trunc(Number(current.reply_suppression_min_minutes)) || 0,
       reply_suppression_max_minutes: Math.trunc(Number(current.reply_suppression_max_minutes)) || 0,
@@ -5310,6 +5380,7 @@ function editorSnapshot(): string {
     roleForm.value,
     triggersDraft.value,
     welcomeTemplatesDraft.value,
+    proactiveGroupsDraft.value,
     replyFilterRulesDraft.value,
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),

@@ -276,6 +276,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   welcome_templates?: string[];
   /** LLM 欢迎词每群冷却秒数；不设用默认值 300。 */
   welcome_llm_cooldown_seconds?: number;
+  /** 试验性的主动开口：群里冷场、主人好久没来时自己先说一句；不设就是没开。 */
+  proactive_messaging?: ProactiveMessaging | null;
   /** 这台机器人的 SOUL.md：她是谁、在乎什么、怎么说话。整份原样放在系统提示词最前面。 */
   system_prompt?: string;
   /** 是否在内容与工具处理完成后单独整理最终回复口吻。 */
@@ -910,6 +912,24 @@ export interface PrivateAdmission {
   mode?: PrivateAdmissionMode;
   /** 仅 whitelist 模式生效；启用私聊后主人不受白名单限制。 */
   allowed_users?: string[];
+}
+
+/** 主动开口（试验）设置，默认值见 lib/proactive-messaging.ts。 */
+export interface ProactiveMessaging {
+  enabled?: boolean;
+  /** 允许主动开口的群号，没列进来的群不会主动说话。 */
+  group_ids?: string[];
+  /** 群里安静多少分钟后考虑开口，默认 120。 */
+  group_idle_minutes?: number | string;
+  /** 主人私聊安静够久时主动找主人。 */
+  owner_enabled?: boolean;
+  /** 主人私聊安静多少小时后考虑开口，默认 8。 */
+  owner_idle_hours?: number | string;
+  /** 每个会话每天最多主动开口几次，默认 2。 */
+  daily_limit?: number | string;
+  /** 免打扰时段 HH:MM，按机器人时区，可跨夜；两个相同表示不设。默认 23:00–08:00。 */
+  quiet_start?: string;
+  quiet_end?: string;
 }
 
 export interface ReplyGate {

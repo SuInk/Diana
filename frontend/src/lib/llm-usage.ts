@@ -50,6 +50,7 @@ const purposeLabels: Record<string, string> = {
   host_command_review: "宿主命令审核",
   direct_reply_topic: "回复话题判断",
   welcome_generator: "入群欢迎",
+  proactive_message: "主动开口",
   poke_reply: "戳一戳回复",
   romance_greeting: "主动问候",
   reply_suppression_notice: "回复拦截提示",
