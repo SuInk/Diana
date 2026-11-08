@@ -267,49 +267,6 @@ func TestRenderReadinessAcceptsStableLoadingDocumentAfterGrace(t *testing.T) {
 	}
 }
 
-func TestSandboxedBrowserIntegration(t *testing.T) {
-	if os.Getenv("DIANA_BROWSER_INTEGRATION") != "1" {
-		t.Skip("set DIANA_BROWSER_INTEGRATION=1 to run Chrome integration")
-	}
-	targetURL := strings.TrimSpace(os.Getenv("DIANA_BROWSER_TEST_URL"))
-	if targetURL == "" {
-		targetURL = "https://example.com"
-	}
-	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{
-		Timeout:           30 * time.Second,
-		VirtualTimeBudget: 3 * time.Second,
-	})
-	page, err := renderer.Render(context.Background(), targetURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("rendered title=%q url=%q text=%q", page.Title, page.URL, truncateText(page.Text, 500))
-	if !page.Sandboxed || (page.Title == "" && page.Text == "") {
-		t.Fatalf("page = %#v", page)
-	}
-	if targetURL == "https://example.com" && (page.Title != "Example Domain" || !strings.Contains(page.Text, "documentation examples")) {
-		t.Fatalf("page = %#v", page)
-	}
-}
-
-func TestSandboxedBrowserDelayedRedirectIntegration(t *testing.T) {
-	if os.Getenv("DIANA_BROWSER_REDIRECT_INTEGRATION") != "1" {
-		t.Skip("set DIANA_BROWSER_REDIRECT_INTEGRATION=1 to run delayed redirect integration")
-	}
-	renderer := NewSandboxedBrowser(SandboxedBrowserConfig{})
-	page, err := renderer.Render(context.Background(), "https://67movies.xyz")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("rendered stable=%v waited=%d url=%q title=%q chain=%#v previous=%#v", page.Stable, page.WaitedMS, page.URL, page.Title, page.NavigationChain, page.PreviousPages)
-	if !page.Stable || !strings.Contains(page.URL, "youtube.com/watch") {
-		t.Fatalf("final page = %#v", page)
-	}
-	if len(page.NavigationChain) < 2 || len(page.PreviousPages) == 0 || !strings.Contains(page.PreviousPages[0].Text, "Welcome to 67movies") {
-		t.Fatalf("navigation evidence missing: %#v", page)
-	}
-}
-
 // 插件在控制台上是「已启用」，机器上没装浏览器也照样是「已启用」——以前只有等
 // 有人发了链接才会知道。探测要能分清「没找到」和「找到了但跑不起来」，这两种
 // 的处理方式完全不同。

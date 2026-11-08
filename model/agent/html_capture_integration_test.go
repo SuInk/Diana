@@ -1,3 +1,5 @@
+//go:build browser_integration
+
 package agent
 
 import (
@@ -6,22 +8,13 @@ import (
 	"image"
 	_ "image/jpeg"
 	"image/png"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/chromedp/chromedp"
 )
 
-func requireHTMLCaptureBrowser(t *testing.T) {
-	t.Helper()
-	if os.Getenv("DIANA_BROWSER_PROBE_INTEGRATION") != "1" {
-		t.Skip("set DIANA_BROWSER_PROBE_INTEGRATION=1 to run against the installed browser")
-	}
-}
-
 func TestHTMLCaptureClockDrivesAnimations(t *testing.T) {
-	requireHTMLCaptureBrowser(t)
 	// 左块靠 CSS 动画由黑变白，右块靠定时器在 500ms 变红，下块靠 rAF 按
 	// performance.now 着色——三种时间源都要跟着虚拟时钟走。
 	page := `<!doctype html><html><head><style>
@@ -62,7 +55,6 @@ requestAnimationFrame(draw);
 }
 
 func TestHTMLCaptureBlocksNetworkAndLocalFiles(t *testing.T) {
-	requireHTMLCaptureBrowser(t)
 	page := `<!doctype html><html><body><script>
 window.results = {};
 const done = (key, value) => { window.results[key] = value; };
@@ -95,7 +87,6 @@ try { const ws = new WebSocket('wss://example.com/'); ws.onopen = () => done('ws
 }
 
 func TestHTMLCaptureStillFitsPageHeight(t *testing.T) {
-	requireHTMLCaptureBrowser(t)
 	page := `<!doctype html><html><body style="margin:0"><div style="height:1500px;background:linear-gradient(#fff,#000)"></div></body></html>`
 	shot, size, err := CaptureHTMLStill(context.Background(), HTMLCaptureRequest{HTML: page, Width: 300, MaxHeight: 1200, Timeout: 30 * time.Second}, 100*time.Millisecond)
 	if err != nil {
