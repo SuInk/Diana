@@ -9,6 +9,8 @@
 // 上行（agent → Diana）是对方的声音，下行是机器人的声音；只在接通期间有音频。
 package qqcall
 
+import "encoding/json"
+
 // 音频格式固定，两边都不协商。
 const (
 	SampleRate = 16000
@@ -26,9 +28,21 @@ const (
 	TypeRinging = "ringing"
 	// Connected 已接通，PeerUIN 是 SnowLuma 日志里读到的对方 QQ 号，读不到时为空。
 	TypeConnected = "connected"
+	// Outgoing 是自己拨出去的电话（窗口上没有「邀请你/您」）：多半是模型用桌面控制拨的。
+	// agent 照样跟踪它，接通后报 connected 并收发声音，接不接管由 Diana 决定。
+	TypeOutgoing = "outgoing"
 	// Ended 通话窗口关了：对方挂断、拒接、超时或我们挂断都是它。
 	TypeEnded = "ended"
 	TypeError = "error"
+)
+
+// 桌面控制：Diana 把 SnowLuma 容器的屏幕接进「桌面控制」，让模型像操作电脑一样操作
+// 容器里的 QQ（主动拨号等）。Diana 发 desktop（ID、Op、Params），agent 回
+// desktop_result（同一个 ID，Data 或 Error）。Op 和 Params、Data 的格式就是 desktopctl
+// 的 window.* 指令，agent 只管执行，授权和限流都在 Diana 这边。
+const (
+	TypeDesktop       = "desktop"
+	TypeDesktopResult = "desktop_result"
 )
 
 // Diana 发给 agent 的消息类型。
@@ -53,6 +67,11 @@ type Message struct {
 	State   string `json:"state,omitempty"`
 	Version string `json:"version,omitempty"`
 	Error   string `json:"error,omitempty"`
+	// 下面几项只在 desktop / desktop_result 里。
+	ID     string          `json:"id,omitempty"`
+	Op     string          `json:"op,omitempty"`
+	Params json.RawMessage `json:"params,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 // 通话状态。

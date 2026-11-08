@@ -70,6 +70,8 @@ type QQVoiceCallPlugin struct {
 	key    string
 	cancel context.CancelFunc
 	status QQVoiceCallStatus
+	// calls 是当前这条 agent 连接上的通话集合，主动拨号（qq_call）要往里登记。
+	calls *qqCallSet
 	// noticed 记着每个问题上次私聊提醒主人的时间，见 tellOwner。
 	noticed map[string]time.Time
 	// notify 发私聊提醒，测试里换掉。
@@ -227,12 +229,14 @@ func (p *QQVoiceCallPlugin) apply() {
 	}
 	p.key = key
 	p.status.Connected = false
+	p.calls = nil
 	if key == "" {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 	calls := newQQCallSet(p, nil)
+	p.calls = calls
 	go func() {
 		defer recoverGoroutinePanic("qq_voice_call.loop")
 		defer calls.closeAll()
@@ -412,6 +416,12 @@ func (p *QQVoiceCallPlugin) run(ctx context.Context, url, token string, calls *q
 	// QQ 那头的电话还通着，连回来接着说，见 linkLost 和 hello 的处理。
 	calls.setLink(link)
 	defer calls.linkLost(link)
+	defer calls.desktop.detach()
+	go func() {
+		defer recoverGoroutinePanic("qq_voice_call.desktop")
+		runtime, _ := p.settings()
+		calls.desktop.keepAttached(ctx, runtime)
+	}()
 	for {
 		kind, data, err := conn.ReadMessage()
 		if err != nil {
@@ -523,6 +533,10 @@ type qqCallSet struct {
 	// 别人在 noVNC 里手动接的电话不归机器人管。
 	answered map[string]qqCallTarget
 	active   *qqActiveCall
+	// intent 是 qq_call 登记的、接下来要拨出去的那通电话。
+	intent *qqCallIntent
+	// desktop 把 agent 那块屏幕接进桌面控制，见 qq_call_desktop.go。
+	desktop *qqDesktopBridge
 }
 
 type qqCallTarget struct {
@@ -532,6 +546,9 @@ type qqCallTarget struct {
 	groupID   string
 	groupName string
 	caller    string
+	// dialed 是机器人自己拨出去的（qq_call 登记过）：不核对 QQ 号，接通后先开口。
+	dialed bool
+	reason string
 }
 
 type qqActiveCall struct {
@@ -554,7 +571,9 @@ func (t qqCallTarget) describe() string {
 const qqCallResumeGrace = 60 * time.Second
 
 func newQQCallSet(plugin *QQVoiceCallPlugin, link *qqCallLink) *qqCallSet {
-	return &qqCallSet{plugin: plugin, link: link, resumeGrace: qqCallResumeGrace, answered: map[string]qqCallTarget{}}
+	set := &qqCallSet{plugin: plugin, link: link, resumeGrace: qqCallResumeGrace, answered: map[string]qqCallTarget{}}
+	set.desktop = newQQDesktopBridge(set)
+	return set
 }
 
 func (s *qqCallSet) currentLink() *qqCallLink {
@@ -658,10 +677,14 @@ func (s *qqCallSet) handle(ctx context.Context, msg qqcall.Message) {
 			defer recoverGoroutinePanic("qq_voice_call.screen")
 			s.screen(ctx, msg)
 		}()
+	case qqcall.TypeOutgoing:
+		s.outgoing(msg)
 	case qqcall.TypeConnected:
 		s.connected(ctx, msg)
 	case qqcall.TypeEnded:
 		s.ended(msg.Call)
+	case qqcall.TypeDesktopResult:
+		s.desktop.deliver(msg)
 	case qqcall.TypeError:
 		s.plugin.noteCall("agent 报错: %s", msg.Error)
 		if runtime, change := s.plugin.settings(); runtime != nil {
@@ -763,7 +786,7 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	if !ours {
 		return
 	}
-	if target.groupID == "" && msg.PeerUIN != target.ownerID {
+	if target.groupID == "" && !target.dialed && msg.PeerUIN != target.ownerID {
 		_ = s.send(qqcall.Message{Type: qqcall.TypeHangup, Call: msg.Call})
 		if msg.PeerUIN != "" {
 			// 别人打来的：这是正常的拦截，不打扰主人。
@@ -818,6 +841,10 @@ func (s *qqCallSet) connected(ctx context.Context, msg qqcall.Message) {
 	s.active = &qqActiveCall{id: msg.Call, session: session, cancel: cancel, call: call, target: target}
 	s.mu.Unlock()
 	s.plugin.noteCall("接通了%s", target.describe())
+	if target.dialed {
+		// 机器人打过去的：先开口说明来意。
+		_ = session.HandleControl(voicecall.ClientMessage{Type: voicecall.ClientText, Text: qqCallOpener(target)})
+	}
 
 	maxDuration := time.Duration(change.Settings.Int(qqVoiceCallSettingMaxMinutes, 30)) * time.Minute
 	go func() {
