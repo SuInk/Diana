@@ -12,6 +12,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,8 +27,10 @@ import (
 // 模型对同一页换 find 再读不再重新抓取。fetch 失败（被拦、超时、空正文）时由调用方
 // 退回本地浏览器。
 //
-// 和参考 bot 唯一的不同是请求时开了 links：browser_render 的说明承诺返回站内链接，
-// 模型要从里面取真实网址继续读，不能让它去猜。
+// 和参考 bot 的不同是请求时开了 links 和 image_links：browser_render 的说明承诺返回
+// 站内链接，模型要从里面取真实网址继续读，不能让它去猜；图片直链给 remote_image 和
+// 改图当参考图用。11-09 群友要照 X 主页的头像画图，fetch 不带图片列表，模型只能对
+// 整页截图当底图。本地 Chrome 路径一直会带出 og:image 和正文 <img>。
 const (
 	TinyFishFetchURL = "https://api.fetch.tinyfish.ai"
 
@@ -95,7 +99,7 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	if strings.TrimSpace(endpoint) == "" {
 		endpoint = TinyFishFetchURL
 	}
-	body, err := json.Marshal(map[string]any{"urls": []string{rawURL}, "format": "markdown", "links": true, "image_links": false})
+	body, err := json.Marshal(map[string]any{"urls": []string{rawURL}, "format": "markdown", "links": true, "image_links": true})
 	if err != nil {
 		return RenderedPage{}, err
 	}
@@ -133,6 +137,7 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 			Description string   `json:"description"`
 			Text        string   `json:"text"`
 			Links       []string `json:"links"`
+			ImageLinks  []string `json:"image_links"`
 		} `json:"results"`
 		Errors []struct {
 			Error string `json:"error"`
@@ -177,6 +182,7 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 		Description:     strings.TrimSpace(strings.Join(strings.Fields(result.Description), " ")),
 		FullText:        full,
 		Links:           links,
+		Images:          tinyFishImages(result.ImageLinks),
 		BrowserEngine:   "tinyfish",
 		Stable:          true,
 		StabilityReason: "fetched_by_api",
@@ -184,6 +190,99 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	}
 	tinyFishPages.put(rawURL, page, time.Now())
 	return withTinyFishTextLimit(page, maxChars), nil
+}
+
+// tinyFishImages 按接口给的顺序收图片直链，去重、跳过 SVG（多是图标，也发不出去），
+// 最多 maxRenderedPageImages 张。X 主页会把同一张头像的 _mini/_normal/_bigger/_x96/
+// _200x200/_400x400 都列出来，这些尺寸变体合成一条，留在第一次出现的位置、换成最大
+// 的那张，免得名额被同一张图占满。
+func tinyFishImages(raw []string) []RenderedImage {
+	type candidate struct {
+		url  string
+		rank int
+	}
+	var order []string
+	best := map[string]candidate{}
+	for _, link := range raw {
+		link = tinyFishHTTPURL(link)
+		if link == "" || strings.Contains(strings.ToLower(link), ".svg") {
+			continue
+		}
+		key, rank := twimgVariantKey(link)
+		current, exists := best[key]
+		if !exists {
+			if len(order) == maxRenderedPageImages {
+				continue
+			}
+			order = append(order, key)
+		}
+		if !exists || rank > current.rank {
+			best[key] = candidate{url: link, rank: rank}
+		}
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	images := make([]RenderedImage, 0, len(order))
+	for _, key := range order {
+		images = append(images, RenderedImage{URL: best[key].url})
+	}
+	return images
+}
+
+var twimgProfileSuffix = regexp.MustCompile(`_(mini|normal|bigger|x96|\d+x\d+)(\.[A-Za-z0-9]+)?$`)
+
+// twimgVariantKey 给 pbs.twimg.com 的图片算「去掉尺寸后的同一张图」和尺寸档位。
+// 头像尺寸写在文件名后缀里（_400x400.jpg，不带后缀是原图），推文配图写在 name 参数里
+// （?name=small，orig 是原图）。别的网址原样作键，不合并。
+func twimgVariantKey(link string) (string, int) {
+	parsed, err := url.Parse(link)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "pbs.twimg.com") {
+		return link, 0
+	}
+	if strings.HasPrefix(parsed.Path, "/profile_images/") {
+		match := twimgProfileSuffix.FindStringSubmatch(parsed.Path)
+		if match == nil {
+			return parsed.Path, 1 << 20
+		}
+		key := strings.TrimSuffix(parsed.Path, match[0]) + match[2]
+		return key, twimgSizeRank(match[1])
+	}
+	if name := parsed.Query().Get("name"); name != "" {
+		query := parsed.Query()
+		query.Del("name")
+		return parsed.Path + "?" + query.Encode(), twimgSizeRank(name)
+	}
+	return link, 0
+}
+
+func twimgSizeRank(size string) int {
+	switch size {
+	case "orig":
+		return 1 << 20
+	case "large":
+		return 2048
+	case "medium":
+		return 1200
+	case "small":
+		return 680
+	case "thumb":
+		return 150
+	case "x96":
+		return 96
+	case "bigger":
+		return 73
+	case "normal":
+		return 48
+	case "mini":
+		return 24
+	}
+	if width, _, ok := strings.Cut(size, "x"); ok {
+		if n, err := strconv.Atoi(width); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 // tinyFishHTTPURL 只收绝对的 http(s) 地址，去掉锚点：同一页的 #section 不算新链接。
