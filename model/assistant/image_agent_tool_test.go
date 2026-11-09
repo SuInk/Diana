@@ -20,7 +20,7 @@ import (
 )
 
 func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
-	var submittedPrompt string
+	var submittedPrompt, submittedSize string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/media" {
 			writeTestPNG(w)
@@ -31,11 +31,12 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 		}
 		var body struct {
 			Prompt string `json:"prompt"`
+			Size   string `json:"size"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		submittedPrompt = body.Prompt
+		submittedPrompt, submittedSize = body.Prompt, body.Size
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"b64_json":"c2VhcmNoLWRlcml2ZWQtaW1hZ2U="}]}`))
 	}))
@@ -73,7 +74,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	raw, err := tool.Run(context.Background(), map[string]any{
 		"prompt":  "官方检索结果确认主色为靛蓝 #4B0082 与金色 #FFD700；据此创作一张平面海报。",
 		"caption": "按检索结果画好了。",
-		"size":    "1024x1024",
+		"aspect":  "portrait",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -95,8 +96,13 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	waitForCondition(t, 2*time.Second, func() bool {
 		return runtime.activeSubagentTaskCount() == 0
 	})
-	if !strings.Contains(submittedPrompt, "#4B0082") || !strings.Contains(submittedPrompt, "#FFD700") || !strings.Contains(submittedPrompt, "群聊：测试群") {
+	// 生图只交模型写的 prompt：群名、群号、成员号码和头像链接对图片模型没用，
+	// 以前那段「不要在图片中加入文字」还会压掉 prompt 里明确要写的字。
+	if submittedPrompt != "官方检索结果确认主色为靛蓝 #4B0082 与金色 #FFD700；据此创作一张平面海报。" {
 		t.Fatalf("submitted prompt = %q", submittedPrompt)
+	}
+	if submittedSize != "1024x1536" {
+		t.Fatalf("portrait size = %q", submittedSize)
 	}
 	sharedPaths := sharer.pathsSnapshot()
 	if len(sharedPaths) != 1 {
@@ -137,7 +143,7 @@ func TestDianaImageAgentToolGeneratesFromResolvedPrompt(t *testing.T) {
 	if !imageLogFound {
 		t.Fatalf("logs = %#v", entries)
 	}
-	if !strings.Contains(loggedPrompt, "#4B0082") || !strings.Contains(loggedPrompt, "群聊：测试群") {
+	if loggedPrompt != submittedPrompt {
 		t.Fatalf("logged prompt = %q", loggedPrompt)
 	}
 }
@@ -588,8 +594,9 @@ func TestDianaImageToolDiscardsMismatchedSourceLabels(t *testing.T) {
 // 不是把原来的行为改掉。
 func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
 	var (
-		editMu    sync.Mutex
-		editCalls [][]string
+		editMu     sync.Mutex
+		editCalls  [][]string
+		editPrompt string
 	)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/media" {
@@ -608,6 +615,7 @@ func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
 		}
 		editMu.Lock()
 		editCalls = append(editCalls, names)
+		editPrompt = r.FormValue("prompt")
 		editMu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[{"b64_json":"ZWRpdGVkLWltYWdl"}]}`))
@@ -653,6 +661,87 @@ func TestDianaImageToolCombinesSourcesByDefault(t *testing.T) {
 	editMu.Unlock()
 	if len(calls) != 1 || len(calls[0]) != 2 {
 		t.Fatalf("combine 模式应当把两张参考图交给同一次请求：%#v", calls)
+	}
+	// 图片模型只收到一串没名字的图，按顺序写明每张的来历，prompt 里的「底图」「另一张」才有着落。
+	editMu.Lock()
+	prompt := editPrompt
+	editMu.Unlock()
+	want := "把两张图合成一张海报\n\n" + promptImageReferenceOrder + "\n第1张：当前消息里的图片\n第2张：当前消息里的图片"
+	if prompt != want {
+		t.Fatalf("edit prompt = %q, want %q", prompt, want)
+	}
+}
+
+// 点名了原图来源却填 generate：以前打回让模型重调，白多一轮。能改图就直接按 edit 做；
+// 动图只能 generate、没有改图权限时仍然打回，不静默丢掉原图。
+func TestDianaImageToolGenerateWithSourcesBecomesEdit(t *testing.T) {
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "gpt-test", ImageModel: "gpt-image-2"})}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "10001", MessageID: "gen-src"}
+	input := func(extra map[string]any) map[string]any {
+		out := map[string]any{"operation": "generate", "prompt": "参考头像画一张表情包", "identity_sources": []any{"bot_avatar"}}
+		for key, value := range extra {
+			out[key] = value
+		}
+		return out
+	}
+
+	full := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
+	tool := newDianaImageTool(context.Background(), runtime, event, full).(*dianaImageTool)
+	request, err := tool.prepareRequest(input(nil))
+	if err != nil || request.Operation != "edit" {
+		t.Fatalf("request = %#v, err = %v", request, err)
+	}
+	tool.animation = true
+	if _, err := tool.prepareRequest(input(map[string]any{"format": "gif"})); err == nil || !strings.Contains(err.Error(), "只凭文字生成新图") {
+		t.Fatalf("gif with sources err = %v", err)
+	}
+
+	generateOnly := full
+	generateOnly.AllowImageEditing = false
+	tool = newDianaImageTool(context.Background(), runtime, event, generateOnly).(*dianaImageTool)
+	if _, err := tool.prepareRequest(input(nil)); err == nil || !strings.Contains(err.Error(), "只凭文字生成新图") {
+		t.Fatalf("generate-only err = %v", err)
+	}
+}
+
+func TestImageReferenceOrderLines(t *testing.T) {
+	used := []imageEditSourceUsed{
+		{Kind: imageSourceKindMessage, MessageID: "m1", UserID: "10001", User: "Alice", Images: 1},
+		{Kind: avatarSourceSender, UserID: "10002", User: "Bob"},
+		{Kind: avatarSourceBot, UserID: "42"},
+	}
+	got := imageReferenceOrderLines(used, 3)
+	want := []string{"第1张：聊天里的一张图片（Alice 发的）", "第2张：发送者 Bob 的头像", "第3张：机器人自己的头像"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("lines = %#v", got)
+	}
+	for _, line := range got {
+		if strings.Contains(line, "10001") || strings.Contains(line, "42") {
+			t.Fatalf("账号 ID 不该交给图片模型：%q", line)
+		}
+	}
+	// 去重或截断后张数对不上就不标：标错比不标更糟。
+	if lines := imageReferenceOrderLines(used, 2); lines != nil {
+		t.Fatalf("mismatched count lines = %#v", lines)
+	}
+	if lines := imageReferenceOrderLines(used[:1], 1); lines != nil {
+		t.Fatalf("single source lines = %#v", lines)
+	}
+}
+
+func TestDianaImageSize(t *testing.T) {
+	cases := []struct{ format, aspect, want string }{
+		{"", "", "1024x1024"},
+		{"", dianaImageAspectPortrait, "1024x1536"},
+		{llm.ImageFormatPNG, dianaImageAspectLandscape, "1536x1024"},
+		{llm.ImageFormatGIF, dianaImageAspectPortrait, "auto"},
+		{"", normalizeDianaImageAspect("XX"), "1024x1024"},
+	}
+	for _, c := range cases {
+		if got := dianaImageSize(c.format, c.aspect); got != c.want {
+			t.Fatalf("dianaImageSize(%q, %q) = %q, want %q", c.format, c.aspect, got, c.want)
+		}
 	}
 }
 

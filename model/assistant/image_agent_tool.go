@@ -120,6 +120,8 @@ type dianaImageToolRequest struct {
 	Format          string
 	FrameCount      int
 	FrameDurationMS int
+	// Aspect 是画幅（square/portrait/landscape），见 dianaImageSize。
+	Aspect string
 	// quota 是受理时占下的每日生图次数，任务结束时按实际成功张数结清。
 	quota *mediaGenerationReservation
 }
@@ -230,6 +232,8 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 		"prompt":    toolStringParam("给图片模型的完整自包含提示词，不用对话口吻和上下文指代"),
 		"caption":   toolStringParam("随图的一句话，用平时聊天口吻，别写「图片生成完成」这类系统提示；可留空只发图"),
 	}
+	// 画幅来自线上：用户要竖版海报、改竖版梗图时 prompt 写了「竖向画面」，成品仍是正方形。
+	properties["aspect"] = toolEnumParam("画幅，省略为 square。竖版海报、手机壁纸填 portrait，横幅、电脑壁纸填 landscape；改图时按原图的横竖选", dianaImageAspectSquare, dianaImageAspectPortrait, dianaImageAspectLandscape)
 	// 动图来自群友要 gpt-image-2.6 的 GIF 输出：以前工具没有这个参数，模型只能回答
 	// 「我这边不能指定 GIF」。gif 只能 generate，上游的 edits 不支持。
 	if t.relationship.AllowImageGeneration {
@@ -343,7 +347,13 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	switch operation {
 	case "generate":
 		if explicitSources {
-			// 生成不读任何原图。静默忽略的话，模型会以为头像已经用上了。
+			// 生成不读任何原图，静默忽略的话模型会以为头像已经用上了。点名了原图来源就是要
+			// 照着画：能改图就直接按 edit 做，以前打回去让模型重调，白白多一轮（线上
+			// 「参考给定头像画表情包」就这样多等了一次）。动图只能 generate，这时仍然打回。
+			if t.relationship.AllowImageEditing && !strings.EqualFold(strings.TrimSpace(configToolString(input, "format")), llm.ImageFormatGIF) {
+				operation = "edit"
+				break
+			}
 			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 identity_sources 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
 		}
 	case "edit":
@@ -387,6 +397,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		SourceLabels: sourceLabels, SourceMode: sourceMode,
 		SourceMessageIDs: sourceMessageIDs,
 		Format:           format, FrameCount: frameCount, FrameDurationMS: frameDuration,
+		Aspect: normalizeDianaImageAspect(configToolString(input, "aspect")),
 	}, nil
 }
 
@@ -548,7 +559,8 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	progress := services.Report
 	operation := request.Operation
 	prompt := request.Prompt
-	submittedPrompt := t.runtime.enrichImagePromptWithChatContext(ctx, t.event, prompt)
+	// submittedPrompt 是真正交给图片模型的文本，记进日志；改图合成多张时会补上参考图顺序。
+	submittedPrompt := prompt
 	var (
 		cfg         llm.ProviderConfig
 		images      []string
@@ -583,7 +595,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	case "generate":
 		resp, usedCfg, err := t.runtime.generateImageWithFailover(ctx, llm.ImageGenerateRequest{
 			Prompt:          submittedPrompt,
-			Size:            dianaImageGenerateSize(request.Format),
+			Size:            dianaImageSize(request.Format, request.Aspect),
 			N:               1,
 			OutputFormat:    request.Format,
 			FrameCount:      request.FrameCount,
@@ -603,8 +615,9 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		message = "Agent 图片生成已完成"
 	case "edit":
 		sources := append([]string(nil), request.Sources...)
+		sourcesUsed := request.SourcesUsed
 		if len(sources) == 0 {
-			sources, _, _ = t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
+			sources, sourcesUsed, _ = t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
 		}
 		if len(sources) == 0 {
 			return dianaImageTaskOutput{}, errImageEditSourceNotFound
@@ -626,6 +639,16 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		// 也不再需要「正在编辑第 N/M 张」这种带内部味道的进度播报——
 		// 图片本身就是进度。发不出去再退回攒总。
 		streaming := request.SourceMode == dianaImageSourceModeEach && len(batches) > 1 && services.Send != nil
+		botCfg := t.runtime.effectiveConfigForEvent(t.event)
+		editPrompt := func(batch []string) string {
+			// 只有一次交出多张图（combine）才需要说明顺序；逐张模式每次只有一张。
+			if len(batch) != len(sources) {
+				return prompt
+			}
+			composed := composeImageEditPrompt(prompt, sourcesUsed, len(batch), botCfg)
+			submittedPrompt = composed
+			return composed
+		}
 		// 标注按「来源→解析出的头像地址」建映射:来源解析是保序但有损的
 		//（解析失败会整个跳过）,按下标硬对会把 A 的头像标成 B。查不到就
 		// 不标,宁缺毋错。
@@ -652,9 +675,9 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 				progress(PluginTaskProgress{Phase: "running", Completed: index, Total: len(batches)})
 			}
 			resp, usedCfg, err := t.runtime.editImageWithFailover(ctx, llm.ImageEditRequest{
-				Prompt: submittedPrompt,
+				Prompt: editPrompt(batch),
 				Images: batch,
-				Size:   "1024x1024",
+				Size:   dianaImageSize(request.Format, request.Aspect),
 				N:      1,
 			})
 			if err != nil {
@@ -727,17 +750,6 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	}, nil
 }
 
-// dianaImageGenerateSize 给生图挑尺寸。gpt-image-2.6 把 GIF 的所有帧拼在一张精灵图里
-// 一起画，size 指的是单帧：9 帧 × 1024 拼出 3072×3072，超了像素预算，上游直接 400
-// （实测 "No supported sheet fits 9 GIF frames at size '1024x1024'"）。auto 让上游按帧数
-// 挑能放下的单帧尺寸，9 帧和 16 帧实测都给 512×512。
-func dianaImageGenerateSize(format string) string {
-	if format == llm.ImageFormatGIF {
-		return "auto"
-	}
-	return "1024x1024"
-}
-
 // dianaImageCaptionThenImages 把说明文字拆成单独一条排在图片前面：图文挤在一个气泡里
 // 图会被压小，也不像真人先说一句再甩图。
 func dianaImageCaptionThenImages(caption string, images OutgoingMessage) []OutgoingMessage {
@@ -778,7 +790,7 @@ func dianaImageResultCaption(caption string, delivered, dropped, failed int) str
 func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string {
 	payload := strings.Join(append([]string{
 		sessionKey(event), event.MessageID, request.Operation, request.Prompt, request.SourceMode,
-		request.Format, fmt.Sprint(request.FrameCount), fmt.Sprint(request.FrameDurationMS),
+		request.Format, fmt.Sprint(request.FrameCount), fmt.Sprint(request.FrameDurationMS), request.Aspect,
 	}, append(append([]string(nil), request.IdentitySources...), request.SourceMessageIDs...)...), "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("image:%x", digest[:12])

@@ -269,63 +269,6 @@ func (r *Runtime) recordLLMUsage(ctx context.Context, event MessageEvent, provid
 	_ = writer.AppendLog(logCtx, entry)
 }
 
-func (r *Runtime) enrichImagePromptWithChatContext(ctx context.Context, event MessageEvent, prompt string) string {
-	prompt = strings.TrimSpace(prompt)
-	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" {
-		return prompt
-	}
-	var lines []string
-	if group, err := r.getGroupInfoForEvent(ctx, event, event.GroupID); err == nil {
-		line := "群聊：" + firstNonEmpty(group.GroupName, group.GroupID)
-		if group.GroupID != "" {
-			line += " (" + group.GroupID + ")"
-		}
-		if group.AvatarURL != "" {
-			line += "，群头像：" + group.AvatarURL
-		}
-		lines = append(lines, line)
-	}
-	if sender, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, event.UserID); err == nil && sender.UserID != "" {
-		lines = append(lines, "当前发送者："+sender.DisplayName()+" ("+sender.UserID+")，头像："+sender.AvatarURL)
-	}
-	cfg := r.effectiveConfigForEvent(event)
-	botIDs := map[string]bool{}
-	for _, id := range []string{event.SelfID, cfg.BotAccount} {
-		if id = strings.TrimSpace(id); id != "" {
-			botIDs[id] = true
-		}
-	}
-	for _, userID := range mentionedUserIDs(event.Segments) {
-		if botIDs[userID] {
-			continue
-		}
-		member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, userID)
-		if err != nil || member.UserID == "" {
-			avatar := MemberAvatarURL(r.currentPlatform(event), userID)
-			if r.currentPlatform(event) == PlatformQQOfficial {
-				avatar = r.qqOfficialMemberAvatarURL(event, userID)
-			}
-			lines = append(lines, "被@成员："+userID+"，头像："+avatar)
-			continue
-		}
-		lines = append(lines, "被@成员："+member.DisplayName()+" ("+member.UserID+")，头像："+member.AvatarURL)
-	}
-	if len(lines) == 0 {
-		return prompt
-	}
-	return prompt + "\n\n" + r.effectiveConfigForEvent(event).prompt(promptImageChatContextSpec) + "\n" + strings.Join(lines, "\n")
-}
-
-const promptImageChatContext = "群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）："
-
-var promptImageChatContextSpec = registerPrompt(PromptSpec{
-	Key:     "media.image_chat_context",
-	Group:   PromptGroupMedia,
-	Title:   "生图时附带的群聊上下文",
-	Usage:   "群聊里生图时，接在画图描述后面、群名和成员头像信息前面，说明这些信息只供理解、别画进图里。",
-	Default: promptImageChatContext,
-})
-
 func (r *Runtime) runLLMProvider(ctx context.Context, run llmProviderRunFunc) (string, error) {
 	return r.runLLMProviderForGroup(ctx, llm.GroupChat, run)
 }
