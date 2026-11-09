@@ -600,7 +600,7 @@ func proactiveRequestText(cfg BotConfig, event MessageEvent, plan proactivePlan,
 	builder.WriteString("\n\n")
 	builder.WriteString(strings.TrimSpace(cfg.prompt(spec)))
 	if news.Results != "" {
-		builder.WriteString("\n\n" + proactiveNewsMaterial(news))
+		builder.WriteString("\n\n" + proactiveNewsMaterial(cfg, news))
 	}
 	return builder.String()
 }
