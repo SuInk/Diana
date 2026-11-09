@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -31,6 +32,12 @@ import (
 // 把等待拉长成窗口：从这一批最早那条算起最多等 merge_window_seconds，攒满 merge_max_messages
 // 条立即评。等待批只在内存里，进程重启时还没评的那几条只留在历史里，不再补评。
 //
+// 定时器取走一批之后，评分和生成要好几秒到十几秒。这段时间里同会话来了直接触发的消息，
+// 它那一轮看得到这几条还没回（「前面的转发你还没回复」），会一起答掉；评分那一轮却不知道，
+// 照样再答一遍。2026-11-09 生产上同一段话 8～90 秒后原样又发一遍就是这么来的。所以取走的
+// 那一批登记成 proactiveRouteFlight：直接触发的那一轮把还没开始发的也一并接走，评分那一轮
+// 在发送前看到已被接走就不发。已经开始发的不再接走，免得回复只发出半截。
+//
 // 合并评分里几条话题可能各不相同，整组只给一个结论时，最后那条在跟谁说话会把前面的
 // 一起带偏：回放 66 条前一条在叫机器人的连发，整组判最好也只认出 58 条，漏的多是「是的」
 // 「我给你举个例子→攻击面管理」这种接机器人话的句子，被后一条 @ 别人带走。所以评分对
@@ -39,6 +46,24 @@ const (
 	defaultProactiveRouteDebounce       = 3 * time.Second
 	maxProactiveRouteMergeWindowSeconds = 120
 )
+
+var errProactiveRouteTaken = errors.New("diana: parked proactive route taken by a directly triggered turn")
+
+const (
+	proactiveRouteTakenOutcome = "superseded_by_trigger_turn"
+	proactiveRouteTakenReason  = "接话评分期间同一会话来了直接叫机器人的消息（@、引用、点名等），这几条已交给那一轮一起回，不再单独发送"
+)
+
+// proactiveRouteFlight 是定时器已经取走、还在评分或生成回复的那一批。字段由 routeParkMu 守着。
+type proactiveRouteFlight struct {
+	items []proactiveReplyCandidate
+	// taken：直接触发的那一轮已经把这批接进自己那一轮。
+	taken bool
+	// committed：这一批的回复已经开始往外发，之后不再被接走。
+	committed bool
+}
+
+type proactiveRouteFlightContextKey struct{}
 
 type proactiveRoutePark struct {
 	items      []proactiveReplyCandidate
@@ -168,6 +193,7 @@ func (r *Runtime) parkProactiveRoute(event MessageEvent, candidates []proactiveR
 }
 
 // takeProactiveRoutePark 取走会话的等待批：直接触发的消息进来时调用，等着的候选并进它那一轮。
+// 定时器已经取走、回复还没开始发的那几批也一起接走，它们自己那一轮在发送前放弃。
 func (r *Runtime) takeProactiveRoutePark(event MessageEvent) []proactiveReplyCandidate {
 	if event.Kind != EventKindGroup {
 		return nil
@@ -175,21 +201,89 @@ func (r *Runtime) takeProactiveRoutePark(event MessageEvent) []proactiveReplyCan
 	key := proactiveRouteParkKey(event)
 	r.routeParkMu.Lock()
 	defer r.routeParkMu.Unlock()
-	park := r.routeParks[key]
-	if park == nil {
-		return nil
-	}
-	if park.timer != nil {
-		park.timer.Stop()
-	}
-	delete(r.routeParks, key)
-	items := make([]proactiveReplyCandidate, 0, len(park.items))
-	for _, item := range park.items {
-		if item.Event.MessageID != event.MessageID {
-			items = append(items, item)
+	var items []proactiveReplyCandidate
+	keep := func(candidates []proactiveReplyCandidate) {
+		for _, item := range candidates {
+			if item.Event.MessageID != event.MessageID {
+				items = append(items, item)
+			}
 		}
 	}
-	return items
+	for _, flight := range r.routeFlights[key] {
+		if flight.committed {
+			continue
+		}
+		flight.taken = true
+		keep(flight.items)
+	}
+	if park := r.routeParks[key]; park != nil {
+		if park.timer != nil {
+			park.timer.Stop()
+		}
+		delete(r.routeParks, key)
+		keep(park.items)
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return mergeProactiveRouteCandidates(nil, items)
+}
+
+// beginProactiveRouteFlightLocked 登记定时器刚取走的那一批；调用方持有 routeParkMu。
+func (r *Runtime) beginProactiveRouteFlightLocked(key string, items []proactiveReplyCandidate) *proactiveRouteFlight {
+	flight := &proactiveRouteFlight{items: items}
+	if r.routeFlights == nil {
+		r.routeFlights = map[string][]*proactiveRouteFlight{}
+	}
+	r.routeFlights[key] = append(r.routeFlights[key], flight)
+	return flight
+}
+
+func (r *Runtime) endProactiveRouteFlight(key string, flight *proactiveRouteFlight) {
+	r.routeParkMu.Lock()
+	defer r.routeParkMu.Unlock()
+	flights := r.routeFlights[key]
+	kept := flights[:0]
+	for _, item := range flights {
+		if item != flight {
+			kept = append(kept, item)
+		}
+	}
+	if len(kept) == 0 {
+		delete(r.routeFlights, key)
+		return
+	}
+	r.routeFlights[key] = kept
+}
+
+func (r *Runtime) proactiveRouteFlightTaken(flight *proactiveRouteFlight) bool {
+	if flight == nil {
+		return false
+	}
+	r.routeParkMu.Lock()
+	defer r.routeParkMu.Unlock()
+	return flight.taken && !flight.committed
+}
+
+// proactiveRouteTakenBeforeSend 是发送闸门：这一批已被直接触发的那一轮接走就不发。没被接走
+// 就在同一把锁里记成已开始发送，之后不会再被接走，分几条发的后几条照常发。已经写到外部
+// 系统的这一轮不能丢（同 inboundTurnSuperseded），照发。
+func (r *Runtime) proactiveRouteTakenBeforeSend(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	flight, _ := ctx.Value(proactiveRouteFlightContextKey{}).(*proactiveRouteFlight)
+	if flight == nil {
+		return false
+	}
+	sideEffect := hasExternalSideEffect(ctx)
+	r.routeParkMu.Lock()
+	defer r.routeParkMu.Unlock()
+	if flight.taken && !flight.committed && !sideEffect {
+		return true
+	}
+	flight.committed = true
+	return false
 }
 
 func (r *Runtime) clearProactiveRouteParks() {
@@ -200,6 +294,9 @@ func (r *Runtime) clearProactiveRouteParks() {
 			park.timer.Stop()
 		}
 		delete(r.routeParks, key)
+	}
+	for key := range r.routeFlights {
+		delete(r.routeFlights, key)
 	}
 }
 
@@ -214,10 +311,14 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	}
 	delete(r.routeParks, key)
 	candidates := park.items
-	r.routeParkMu.Unlock()
 	if len(candidates) == 0 || ctx.Err() != nil {
+		r.routeParkMu.Unlock()
 		return
 	}
+	flight := r.beginProactiveRouteFlightLocked(key, candidates)
+	r.routeParkMu.Unlock()
+	defer r.endProactiveRouteFlight(key, flight)
+	ctx = context.WithValue(ctx, proactiveRouteFlightContextKey{}, flight)
 	// 等的这几秒里，发送者可能刚被叫停。
 	eligible := candidates[:0:0]
 	for _, candidate := range candidates {
@@ -251,6 +352,11 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	if blocked, reason := r.replyFatigueBlocks(ctx, event, text); blocked {
 		event.routingReason = reason
 		r.record(r.decisionEventRecord(event, text, "ignored_reply_fatigue"))
+		return
+	}
+	// 评分和疲劳判断都要调模型，这几秒里被直接触发的那一轮接走了就不必再生成。
+	if r.proactiveRouteFlightTaken(flight) {
+		r.record(r.decisionEventRecord(event, text, proactiveRouteTakenOutcome))
 		return
 	}
 	r.mu.RLock()

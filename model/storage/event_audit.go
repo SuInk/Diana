@@ -12,6 +12,10 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
+// parkedProactiveRouteOutcome 是挂进接话评分等待批时先记下的 outcome，见
+// assistant/proactive_route_debounce.go。
+const parkedProactiveRouteOutcome = "merged_into_backlog_turn"
+
 // RecordInboundEventAudit persists the runtime's final human-readable decision
 // and reply result on the durable inbound queue row.
 func (s *SQLiteStore) RecordInboundEventAudit(ctx context.Context, event assistant.EventRecord) error {
@@ -35,9 +39,17 @@ func (s *SQLiteStore) RecordInboundEventAudit(ctx context.Context, event assista
 	if event.Duration > 0 && !event.At.IsZero() {
 		replyStartedAt = event.At.UTC().UnixNano()
 	}
+	// 接话评分的等待批：入站 worker 登记完就以 merged_into_backlog_turn 收工，评分和回复
+	// 在定时器里跑完才写这里。只有这个占位会被后来的真实结果改写，其余 outcome 照旧由
+	// worker 定。
+	outcome := strings.TrimSpace(event.Outcome)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET decision = ?, decision_reason = ?, reply_text = ?, processing_error = ?, duration_ms = ?, delivery_json = ?,
+    outcome = CASE
+      WHEN outcome = '`+parkedProactiveRouteOutcome+`' AND ? <> '' THEN ?
+      ELSE outcome
+    END,
     reply_wait_ms = CASE
       WHEN ? > 0 AND ? > 0 AND COALESCE(CASE WHEN json_valid(payload) THEN json_extract(payload, '$.manual_retry') END, 0) <> 1
         THEN MAX(0, (? - created_at) / 1000000)
@@ -60,6 +72,7 @@ WHERE id = (
 		strings.TrimSpace(event.Error),
 		event.Duration,
 		deliveryJSON,
+		outcome, outcome,
 		event.Duration, replyStartedAt, replyStartedAt,
 		strings.TrimSpace(event.MessageID),
 		strings.TrimSpace(string(event.Kind)),
