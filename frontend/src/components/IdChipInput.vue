@@ -6,7 +6,7 @@
   <div class="chip-input" :class="{ focused }" @mousedown="focusInput">
     <span v-for="(id, index) in items" :key="`${id}-${index}`" class="chip" :title="titleOf(id)">
       <span class="chip-id">{{ id }}</span>
-      <span v-if="names[id]" class="chip-name">{{ names[id] }}</span>
+      <span v-if="nameOf(id)" class="chip-name">{{ nameOf(id) }}</span>
       <button
         type="button"
         class="chip-remove"
@@ -24,14 +24,38 @@
       class="chip-field"
       :placeholder="items.length > 0 ? '' : placeholder"
       autocomplete="off"
-      @keydown.enter.prevent="commitDraft"
+      :role="suggestions ? 'combobox' : undefined"
+      :aria-expanded="suggestions ? menuOpen : undefined"
+      @keydown.enter.prevent="enter"
+      @keydown.down.prevent="move(1)"
+      @keydown.up.prevent="move(-1)"
+      @keydown.escape="menuDismissed = true"
       @keydown.tab="commitDraft"
       @keydown.backspace="backspace"
       @paste.prevent="paste"
       @input="splitOnSeparator"
-      @focus="focused = true"
+      @focus="focus"
       @blur="blur"
     />
+    <!-- 候选只在聚焦时出现；mousedown.prevent 让点选项时输入框不失焦。 -->
+    <div v-if="menuOpen" class="app-select-menu chip-menu" role="listbox" @mousedown.stop.prevent>
+      <button
+        v-for="(option, index) in visibleSuggestions"
+        :key="option.value"
+        type="button"
+        class="app-select-item"
+        :class="{ highlighted: index === highlight }"
+        role="option"
+        :aria-selected="index === highlight"
+        @mouseenter="highlight = index"
+        @click="pick(option.value)"
+      >
+        <span class="app-select-item-label">
+          <span class="app-select-item-text">{{ option.label || option.value }}</span>
+          <small v-if="option.label" class="muted">{{ option.value }}</small>
+        </span>
+      </button>
+    </div>
   </div>
 </template>
 
@@ -53,6 +77,11 @@ const props = defineProps<{
    * 由调用方决定名字从哪来：账号查昵称，群号查群名。
    */
   resolveNames?: (ids: string[]) => Promise<Record<string, string>>;
+  /**
+   * 可直接点选的候选，比如机器人已经加的群。给了就在聚焦时弹出下拉，
+   * 能按号码或名字筛；候选里的名字也直接用作 chip 的显示名。
+   */
+  suggestions?: { value: string; label?: string }[];
 }>();
 const emit = defineEmits<{ "update:modelValue": [string[]] }>();
 
@@ -69,8 +98,63 @@ const names = ref<Record<string, string>>({});
 
 const items = computed(() => props.modelValue ?? []);
 
+const suggestionNames = computed(() => {
+  const map: Record<string, string> = {};
+  for (const option of props.suggestions ?? []) if (option.label) map[option.value] = option.label;
+  return map;
+});
+
+function nameOf(id: string): string {
+  return names.value[id] || suggestionNames.value[id] || "";
+}
+
 function titleOf(id: string): string {
-  return names.value[id] ? `${id} · ${names.value[id]}` : id;
+  const name = nameOf(id);
+  return name ? `${id} · ${name}` : id;
+}
+
+// —— 候选下拉
+const menuDismissed = ref(false);
+const highlight = ref(-1);
+const visibleSuggestions = computed(() => {
+  const keyword = draft.value.trim().toLowerCase();
+  return (props.suggestions ?? []).filter((option) => {
+    if (items.value.includes(option.value)) return false;
+    if (keyword === "") return true;
+    return option.value.toLowerCase().includes(keyword) || (option.label ?? "").toLowerCase().includes(keyword);
+  });
+});
+const menuOpen = computed(() => focused.value && !menuDismissed.value && visibleSuggestions.value.length > 0);
+
+// 打字时默认高亮第一条，回车就能选中；没打字时不高亮，回车不会误加。
+watch([draft, () => visibleSuggestions.value.length], () => {
+  menuDismissed.value = false;
+  highlight.value = draft.value.trim() !== "" && visibleSuggestions.value.length > 0 ? 0 : -1;
+});
+
+function move(step: number): void {
+  if (!menuOpen.value) {
+    menuDismissed.value = false;
+    return;
+  }
+  const count = visibleSuggestions.value.length;
+  highlight.value = (highlight.value + step + count) % count;
+}
+
+function pick(value: string): void {
+  add([value]);
+  draft.value = "";
+}
+
+function enter(): void {
+  const option = menuOpen.value ? visibleSuggestions.value[highlight.value] : undefined;
+  if (option) pick(option.value);
+  else commitDraft();
+}
+
+function focus(): void {
+  focused.value = true;
+  menuDismissed.value = false;
 }
 
 function focusInput(): void {
@@ -133,6 +217,13 @@ function paste(event: ClipboardEvent): void {
  */
 function blur(): void {
   focused.value = false;
+  // 输入的是名字片段、刚好只对上一个候选时，收下的是那个号而不是这段文字。
+  const keyword = draft.value.trim();
+  const matches = visibleSuggestions.value;
+  if (keyword !== "" && matches.length === 1 && !/^\d+$/.test(keyword)) {
+    pick(matches[0].value);
+    return;
+  }
   commitDraft();
 }
 
@@ -189,6 +280,7 @@ onBeforeUnmount(() => {
 <style scoped>
 /* 视觉上要和 .input 是同一件东西：同样的边框、圆角、底色和聚焦光圈。 */
 .chip-input {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -266,5 +358,21 @@ onBeforeUnmount(() => {
 
 .chip-field:focus {
   outline: none;
+}
+
+/* 复用 AppSelect 的菜单外观，只是定位跟着输入框走，不挂到 body。 */
+.chip-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  width: auto;
+  max-height: 260px;
+  overflow-y: auto;
+  cursor: default;
+}
+
+.chip-menu .highlighted {
+  background: var(--hover, rgb(127 127 127 / 10%));
 }
 </style>

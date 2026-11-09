@@ -1273,13 +1273,13 @@
               <template v-if="form.proactive_messaging.enabled">
                 <div class="field wide">
                   <label for="bot-proactive-groups">允许主动开口的群</label>
-                  <textarea
-                    id="bot-proactive-groups"
-                    v-model="proactiveGroupsDraft"
-                    class="textarea"
-                    rows="2"
-                    placeholder="每行一个群号，也可以用逗号分隔；没列进来的群不会主动说话。"
-                  ></textarea>
+                  <IdChipInput
+                    input-id="bot-proactive-groups"
+                    v-model="proactiveGroupIDs"
+                    :suggestions="proactiveGroupSuggestions"
+                    :placeholder="proactiveGroupSuggestions.length ? '点这里从机器人已加的群里选，也能输入群号或群名筛选' : '填群号后回车'"
+                  />
+                  <span class="hint">没列进来的群不会主动说话。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>
@@ -2414,7 +2414,7 @@
 <script setup lang="ts">
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
-import { proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
+import { parseProactiveGroupIDs, proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
 import { currentView, navigate, viewPath, viewQuery } from "../router";
 import { ALL_PROFILES, botCreateRequested, botScope, setBotScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
@@ -2466,6 +2466,8 @@ import {
   type RefusalStrategy,
   listWorldBook,
   type WorldBookNode,
+  listBotGroups,
+  type BotGroupSummary,
   getAgentDefaults,
   getAgentModeImpact,
   listManagedExtensions,
@@ -2686,6 +2688,29 @@ const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const proactiveGroupsDraft = ref("");
+// 保存和脏检查仍走 proactiveGroupsDraft 这串文本，chip 编辑器只是换了个输入方式。
+const proactiveGroupIDs = computed({
+  get: () => parseProactiveGroupIDs(proactiveGroupsDraft.value),
+  set: (ids: string[]) => { proactiveGroupsDraft.value = ids.join("\n"); }
+});
+// 候选是这台机器人已经加入的群；名单里已有、但机器人退了的群照样显示成 chip。
+const proactiveGroups = ref<BotGroupSummary[]>([]);
+const proactiveGroupsLoadedFor = ref("");
+const proactiveGroupSuggestions = computed(() =>
+  proactiveGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || "" }))
+);
+watch(
+  () => (form.value?.proactive_messaging?.enabled ? form.value.id ?? "" : ""),
+  (profileID) => {
+    if (!profileID || proactiveGroupsLoadedFor.value === profileID) return;
+    proactiveGroupsLoadedFor.value = profileID;
+    proactiveGroups.value = [];
+    listBotGroups(false, profileID)
+      .then((result) => { if (proactiveGroupsLoadedFor.value === profileID) proactiveGroups.value = result.groups ?? []; })
+      .catch(() => { if (proactiveGroupsLoadedFor.value === profileID) proactiveGroupsLoadedFor.value = ""; });
+  },
+  { immediate: true }
+);
 const replyFilterRulesDraft = ref<string[]>([]);
 const replyFilterResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);
