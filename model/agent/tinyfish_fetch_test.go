@@ -192,3 +192,40 @@ func TestTinyFishImagesCapKeepsUpgradingKnownVariants(t *testing.T) {
 		t.Fatalf("images = %#v", images)
 	}
 }
+
+// engine=browser 跳过 fetch 和它的缓存，直接用本地浏览器；浏览器起不来就明确报错，
+// 不悄悄退回快速读取。单页和批量都一样。不填 engine 时照旧先走 fetch。
+func TestBrowserRenderEngineBrowserSkipsTinyFish(t *testing.T) {
+	resetTinyFishCache(t)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"url": tinyFishTestPage, "title": "Docs", "text": "hello"}}})
+	}))
+	defer server.Close()
+	tool := NewBrowserRenderTool(NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "test-key", FetchEndpoint: server.URL}))
+
+	output, err := tool.Run(context.Background(), map[string]any{"url": tinyFishTestPage})
+	if err != nil || !strings.Contains(output, "hello") || calls.Load() != 1 {
+		t.Fatalf("默认应走 fetch：output=%s err=%v calls=%d", output, err, calls.Load())
+	}
+
+	// 缓存里已经有这一页，指定 browser 也不能拿缓存交差。
+	_, err = tool.Run(context.Background(), map[string]any{"url": tinyFishTestPage, "engine": "browser"})
+	if err == nil || !strings.Contains(err.Error(), "engine=browser") || !strings.Contains(err.Error(), "/nonexistent/chrome") || errors.Is(err, errTinyFishFetch) {
+		t.Fatalf("engine=browser err = %v", err)
+	}
+	_, err = tool.Run(context.Background(), map[string]any{"url": tinyFishTestPage, "urls": []any{"https://1.1.1.1/docs/next"}, "engine": "browser"})
+	if err == nil || !strings.Contains(err.Error(), "engine=browser") {
+		t.Fatalf("批量 engine=browser err = %v", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("engine=browser 仍请求了 fetch：%d 次", calls.Load())
+	}
+
+	schema := tool.InputSchema()
+	engine, _ := schema["properties"].(map[string]any)["engine"].(map[string]any)
+	if values, _ := engine["enum"].([]string); len(values) != 2 || values[0] != RenderEngineAuto || values[1] != RenderEngineBrowser {
+		t.Fatalf("engine schema = %#v", engine)
+	}
+}

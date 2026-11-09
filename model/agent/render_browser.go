@@ -114,6 +114,33 @@ func (f PageRendererFunc) Render(ctx context.Context, rawURL string) (RenderedPa
 	return f(ctx, rawURL)
 }
 
+// RenderEngineBrowser 是 browser_render 的 engine=browser：跳过 TinyFish fetch 和它的
+// 缓存，直接用本地浏览器渲染。fetch 返回了正文就不会退回浏览器，可快速读取有时缺图片
+// （11-09 读 X 主页拿不到头像直链）、缺 JS 才渲染出的内容，模型得能主动换浏览器重读。
+const (
+	RenderEngineAuto    = "auto"
+	RenderEngineBrowser = "browser"
+)
+
+type renderEngineContextKey struct{}
+
+// WithRenderEngine 让这一次渲染按 engine 选读取方式，空串或 auto 照旧。走 context 是因为
+// 中间可能隔着别的 PageRenderer 包装，接口签名不用跟着改。
+func WithRenderEngine(ctx context.Context, engine string) context.Context {
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	if engine == "" || engine == RenderEngineAuto {
+		return ctx
+	}
+	return context.WithValue(ctx, renderEngineContextKey{}, engine)
+}
+
+func renderEngineFromContext(ctx context.Context) string {
+	if engine, ok := ctx.Value(renderEngineContextKey{}).(string); ok {
+		return engine
+	}
+	return RenderEngineAuto
+}
+
 // renderReadyKeyContextKey 带着这一次渲染的提前收尾判定，见 WithRenderReadyKey。
 type renderReadyKeyContextKey struct{}
 
@@ -248,8 +275,9 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 	}
 	// fetch 接口自带期限，不占浏览器那份超时：它失败退回浏览器时，浏览器照样有完整的
 	// 渲染时间。
+	forceBrowser := renderEngineFromContext(ctx) == RenderEngineBrowser
 	var fetchErr error
-	if sourceErr == nil && strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
+	if sourceErr == nil && !forceBrowser && strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
 		page, err := fetchTinyFishPage(ctx, b.cfg.FetchAPIKey, b.cfg.FetchEndpoint, rawURL, b.cfg.MaxTextChars)
 		if err == nil {
 			return page, nil
@@ -262,6 +290,10 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	page, err := b.renderBrowser(queueCtx, ctx, rawURL)
+	if forceBrowser && err != nil {
+		// 指定了浏览器就不悄悄换回快速读取：模型要知道这次没拿到浏览器渲染的结果。
+		err = fmt.Errorf("engine=browser 指定的本地浏览器读取失败，未改用快速读取：%w", err)
+	}
 	if fetchErr != nil && err != nil {
 		return RenderedPage{}, errors.Join(err, fetchErr)
 	}
@@ -1157,6 +1189,8 @@ func (t *BrowserRenderTool) InputSchema() map[string]any {
 		"url":  toolStringParam("公网页面地址，或搜索结果的 ref 编号"),
 		"urls": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
 		"find": toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
+		"engine": toolEnumParam("上次读到的正文缺内容、缺图片或页面要 JS 渲染时填 browser，跳过快速读取和缓存、用本地浏览器重新渲染；默认 auto",
+			RenderEngineAuto, RenderEngineBrowser),
 	})
 }
 
@@ -1169,6 +1203,7 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if budget <= 0 {
 		budget = DefaultMaxToolOutputChars
 	}
+	ctx = WithRenderEngine(ctx, stringFromInput(input, "engine"))
 	if urls := browserRenderURLs(input); len(urls) > 1 {
 		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
 	}
