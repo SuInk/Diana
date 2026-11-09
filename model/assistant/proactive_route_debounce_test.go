@@ -325,3 +325,70 @@ func TestParticipationMergeSettingsClamp(t *testing.T) {
 		t.Fatalf("limits=%s/%d", window, maxMessages)
 	}
 }
+
+// 定时器已经取走、还在评分的那一批：@ 进来时一并接走，评分那一轮在发送前放弃，
+// 不再把 @ 那一轮已经答过的话原样再发一遍（2026-11-09 生产事故）。
+func TestProactiveRouteFlightTakenByDirectMessage(t *testing.T) {
+	runtime, _, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8})
+	now := time.Now()
+	forward := debounceTestEvent("message-1", "user-1", "你看这段转发", now)
+	key := proactiveRouteParkKey(forward)
+	runtime.routeParkMu.Lock()
+	flight := runtime.beginProactiveRouteFlightLocked(key, []proactiveReplyCandidate{{Event: forward, Text: "你看这段转发"}})
+	runtime.routeParkMu.Unlock()
+	defer runtime.endProactiveRouteFlight(key, flight)
+	flightCtx := context.WithValue(context.Background(), proactiveRouteFlightContextKey{}, flight)
+
+	direct := debounceTestEvent("message-2", "user-1", "你干的", now.Add(10*time.Second))
+	direct.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, direct.Segments...)
+	direct = enqueueParkTestEvent(t, store, direct)
+	event, _, handled, _ := runtime.prepareMessageEvent(context.Background(), direct)
+	if !handled {
+		t.Fatal("@ 机器人应该直接进回复")
+	}
+	if len(event.backlogTurn) != 1 || event.backlogTurn[0].Event.MessageID != "message-1" {
+		t.Fatalf("评分中的那条应该并进 @ 这一轮：%+v", event.backlogTurn)
+	}
+	if !runtime.proactiveRouteFlightTaken(flight) {
+		t.Fatal("被接走后，评分那一轮应该在生成前放弃")
+	}
+	if !runtime.proactiveRouteTakenBeforeSend(flightCtx) {
+		t.Fatal("被接走后，评分那一轮的回复不该再发")
+	}
+	if outcome, _, _ := DescribeEventOutcome(proactiveRouteTakenOutcome); outcome != "not_replied" {
+		t.Fatalf("decision=%q", outcome)
+	}
+}
+
+// 评分那一轮已经开始往外发了，就不再被接走：@ 那一轮不带它，它后面的几条照常发完。
+func TestProactiveRouteFlightCommittedIsNotTaken(t *testing.T) {
+	runtime, _, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8})
+	now := time.Now()
+	forward := debounceTestEvent("message-1", "user-1", "你看这段转发", now)
+	key := proactiveRouteParkKey(forward)
+	runtime.routeParkMu.Lock()
+	flight := runtime.beginProactiveRouteFlightLocked(key, []proactiveReplyCandidate{{Event: forward, Text: "你看这段转发"}})
+	runtime.routeParkMu.Unlock()
+	flightCtx := context.WithValue(context.Background(), proactiveRouteFlightContextKey{}, flight)
+	if runtime.proactiveRouteTakenBeforeSend(flightCtx) {
+		t.Fatal("没人接走时第一条应该照发")
+	}
+
+	direct := debounceTestEvent("message-2", "user-1", "你干的", now.Add(10*time.Second))
+	direct.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, direct.Segments...)
+	direct = enqueueParkTestEvent(t, store, direct)
+	event, _, _, _ := runtime.prepareMessageEvent(context.Background(), direct)
+	if len(event.backlogTurn) != 0 {
+		t.Fatalf("已经在发的那一批不该被接走：%+v", event.backlogTurn)
+	}
+	if runtime.proactiveRouteTakenBeforeSend(flightCtx) {
+		t.Fatal("已经开始发的回复，后面几条也要发完")
+	}
+	runtime.endProactiveRouteFlight(key, flight)
+	runtime.routeParkMu.Lock()
+	left := len(runtime.routeFlights)
+	runtime.routeParkMu.Unlock()
+	if left != 0 {
+		t.Fatalf("结束后不该残留评分中的批次：%d", left)
+	}
+}

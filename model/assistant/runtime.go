@@ -359,6 +359,8 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 		return "not_replied", "等待主动回复期间出现了更高优先级消息，本次候选已取消", false
 	case "superseded_proactive_own_reply":
 		return "not_replied", chatInPreemptedReason, false
+	case proactiveRouteTakenOutcome:
+		return "not_replied", proactiveRouteTakenReason, false
 	case inboundOutcomeSupersededReplyTurn:
 		return "not_replied", "这条消息已并入同一个人正在等待的那轮回复，不再单独发送", false
 	case inboundOutcomeLegacySupersededMediaTurn:
@@ -687,9 +689,11 @@ type Runtime struct {
 	groupStopBySession map[string]groupStopState
 	proactiveBatchMu   sync.Mutex
 	proactiveBatches   map[string]*proactiveReplyBatch
-	// routeParkMu 守着 routeParks：按会话等着做接话评分的候选，见 proactive_route_debounce.go。
+	// routeParkMu 守着 routeParks 和 routeFlights：按会话等着做接话评分的候选，以及定时器
+	// 已经取走、还在评分或生成的那几批，见 proactive_route_debounce.go。
 	routeParkMu           sync.Mutex
 	routeParks            map[string]*proactiveRoutePark
+	routeFlights          map[string][]*proactiveRouteFlight
 	proactiveBatchWindow  time.Duration
 	proactiveBatchMaxWait time.Duration
 	// proactiveRouteDebounce 是接话评分前的防抖窗口，见 proactive_route_debounce.go。
@@ -2533,6 +2537,12 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			setEventRecordOutcome(&record, "superseded_proactive")
 			r.record(record)
 			return "superseded_proactive", err
+		}
+		if errors.Is(err, errProactiveRouteTaken) {
+			setEventRecordOutcome(&record, proactiveRouteTakenOutcome)
+			record.Error = ""
+			r.record(record)
+			return proactiveRouteTakenOutcome, nil
 		}
 		if errors.Is(err, errChatInPreemptedByOwnReply) {
 			setEventRecordOutcome(&record, "superseded_proactive_own_reply")
@@ -8221,6 +8231,9 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	if turnID, superseded := r.inboundTurnSuperseded(ctx, event); superseded && !hasExternalSideEffect(ctx) {
 		r.recordInboundTurnSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
+	}
+	if r.proactiveRouteTakenBeforeSend(ctx) {
+		return nil, errProactiveRouteTaken
 	}
 	params := map[string]any{"messages": nodes}
 	action := "send_private_forward_msg"

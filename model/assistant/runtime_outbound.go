@@ -229,6 +229,9 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	if r.chatInPreempted(ctx, event) {
 		return nil, errChatInPreemptedByOwnReply
 	}
+	if r.proactiveRouteTakenBeforeSend(ctx) {
+		return nil, errProactiveRouteTaken
+	}
 	action := "send_private_msg"
 	if event.Kind == EventKindGroup {
 		action = "send_group_msg"
