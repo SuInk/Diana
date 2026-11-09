@@ -534,8 +534,9 @@ func TestImageToolOperationFollowsSources(t *testing.T) {
 	if err != nil || request.Operation != "edit" {
 		t.Fatalf("missing operation with source_message_ids: op=%q err=%v", request.Operation, err)
 	}
-	if _, err := tool.prepareRequest(map[string]any{"operation": "generate", "prompt": "机器人风格", "identity_sources": []any{"member_avatar:20002"}}); err == nil || !strings.Contains(err.Error(), "generate") {
-		t.Fatalf("generate with sources should be rejected, err=%v", err)
+	// 点名了来源却填 generate：能改图就按 edit 做，不再打回重调（见 TestDianaImageToolGenerateWithSourcesBecomesEdit）。
+	if request, err := tool.prepareRequest(map[string]any{"operation": "generate", "prompt": "机器人风格", "identity_sources": []any{"member_avatar:20002"}}); err != nil || request.Operation != "edit" {
+		t.Fatalf("generate with sources should become edit: op=%q err=%v", request.Operation, err)
 	}
 	request, err = tool.prepareRequest(map[string]any{"prompt": "一只猫"})
 	if err != nil || request.Operation != "generate" {

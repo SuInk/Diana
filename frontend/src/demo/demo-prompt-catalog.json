@@ -2065,6 +2065,13 @@
       "format_key": "media.image_ocr.format"
     },
     {
+      "key": "media.image_reference_order",
+      "group": "media",
+      "title": "多张参考图的顺序说明",
+      "usage": "改图时一次交给图片模型两张及以上参考图，接在提示词后面、逐张来历前面，让图片模型知道每张图是什么。",
+      "default": "参考图按传入顺序（提示词里说的底图、头像、截图等按这里对应）："
+    },
+    {
       "key": "media.image_cache.system",
       "group": "media",
       "title": "图片缓存描述 · 身份",
@@ -2098,13 +2105,6 @@
       "title": "当前图片的视觉描述提示",
       "usage": "用户这条消息带图、而本轮没走 OCR 时，识图模型先给出一段独立描述，这句放在描述前面，提醒回复模型对照原图、搜索词不要跑题。",
       "default": "【当前图片的独立视觉描述，可能有识别误差；请与原图共同核对主题，搜索词必须来自这张图，不得改换成无关话题】"
-    },
-    {
-      "key": "media.image_chat_context",
-      "group": "media",
-      "title": "生图时附带的群聊上下文",
-      "usage": "群聊里生图时，接在画图描述后面、群名和成员头像信息前面，说明这些信息只供理解、别画进图里。",
-      "default": "群聊上下文（仅供理解群名、成员和头像来源；不要在图片中加入文字，除非用户明确要求）："
     },
     {
       "key": "media.sticker.persona_fit",

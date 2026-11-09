@@ -4533,7 +4533,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 		"image_edit",
 		"图片编辑已发送",
 		"只修改背景",
-		"只修改背景\n\n群聊上下文：\n当前发送者：Alice (456)，头像：https://example.test/avatar.png",
+		"只修改背景\n\n参考图按传入顺序：\n第1张：发送者 Alice 的头像",
 		"gpt-image-2",
 		1,
 		1,
@@ -4547,7 +4547,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 		t.Fatalf("intent_prompt = %#v", metadata["intent_prompt"])
 	}
 	submitted, _ := metadata["prompt"].(string)
-	if !strings.Contains(submitted, "群聊上下文") || !strings.Contains(submitted, "Alice") {
+	if !strings.Contains(submitted, "参考图按传入顺序") || !strings.Contains(submitted, "Alice") {
 		t.Fatalf("submitted prompt = %#v", metadata["prompt"])
 	}
 }
