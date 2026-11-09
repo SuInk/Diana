@@ -1268,18 +1268,21 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">开启主动开口（试验）</span>
                 </label>
-                <span class="hint">到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
+                <span class="hint">机器人所在的群都会参与，不想要的群在群管理里单独关掉。到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
               </div>
               <template v-if="form.proactive_messaging.enabled">
+                <div v-if="proactiveGroupIDs.length" class="field wide">
+                  <label>主动开口的群</label>
+                  <span class="hint">旧版设置只对这 {{ proactiveGroupIDs.length }} 个群开：{{ proactiveGroupIDs.join("、") }}。改为所有群后，不想要的群到群管理里单独关；保存后生效。</span>
+                  <div><button type="button" class="btn small" @click="proactiveGroupsDraft = ''">改为所有群</button></div>
+                </div>
                 <div class="field wide">
-                  <label for="bot-proactive-groups">允许主动开口的群</label>
-                  <IdChipInput
-                    input-id="bot-proactive-groups"
-                    v-model="proactiveGroupIDs"
-                    :suggestions="proactiveGroupSuggestions"
-                    :placeholder="proactiveGroupSuggestions.length ? '点这里从机器人已加的群里选，也能输入群号或群名筛选' : '填群号后回车'"
-                  />
-                  <span class="hint">没列进来的群不会主动说话。</span>
+                  <label class="switch">
+                    <input v-model="form.proactive_messaging.search_news" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">群里冷场时联网找新鲜事聊</span>
+                  </label>
+                  <span class="hint">开口前按群里平时聊的东西搜最近几天的新闻，挑一条群友会感兴趣的随口聊起来；群里聊的都是私事闲扯就不搜。需要开着联网搜索插件，没开就照常只接之前的话题。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>
@@ -2466,8 +2469,6 @@ import {
   type RefusalStrategy,
   listWorldBook,
   type WorldBookNode,
-  listBotGroups,
-  type BotGroupSummary,
   getAgentDefaults,
   getAgentModeImpact,
   listManagedExtensions,
@@ -2688,29 +2689,8 @@ const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const proactiveGroupsDraft = ref("");
-// 保存和脏检查仍走 proactiveGroupsDraft 这串文本，chip 编辑器只是换了个输入方式。
-const proactiveGroupIDs = computed({
-  get: () => parseProactiveGroupIDs(proactiveGroupsDraft.value),
-  set: (ids: string[]) => { proactiveGroupsDraft.value = ids.join("\n"); }
-});
-// 候选是这台机器人已经加入的群；名单里已有、但机器人退了的群照样显示成 chip。
-const proactiveGroups = ref<BotGroupSummary[]>([]);
-const proactiveGroupsLoadedFor = ref("");
-const proactiveGroupSuggestions = computed(() =>
-  proactiveGroups.value.filter((group) => group.joined).map((group) => ({ value: group.group_id, label: group.group_name || "" }))
-);
-watch(
-  () => (form.value?.proactive_messaging?.enabled ? form.value.id ?? "" : ""),
-  (profileID) => {
-    if (!profileID || proactiveGroupsLoadedFor.value === profileID) return;
-    proactiveGroupsLoadedFor.value = profileID;
-    proactiveGroups.value = [];
-    listBotGroups(false, profileID)
-      .then((result) => { if (proactiveGroupsLoadedFor.value === profileID) proactiveGroups.value = result.groups ?? []; })
-      .catch(() => { if (proactiveGroupsLoadedFor.value === profileID) proactiveGroupsLoadedFor.value = ""; });
-  },
-  { immediate: true }
-);
+// 旧版群名单，只读展示；清空后所有群跟随机器人。
+const proactiveGroupIDs = computed(() => parseProactiveGroupIDs(proactiveGroupsDraft.value));
 const replyFilterRulesDraft = ref<string[]>([]);
 const replyFilterResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);

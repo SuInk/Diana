@@ -852,6 +852,8 @@ export interface BotGroupConfig extends SendRetrySettings {
   reply_account_safety_audit_enabled?: boolean;
   /** 本群自定义账号安全规则；留空跟随机器人。 */
   reply_account_safety_audit_prompt?: string;
+  /** 本群主动开口：不设跟随机器人，false 本群不主动说话，true 机器人没开也让本群开。 */
+  proactive_messaging_enabled?: boolean;
   /** 本群被禁言时是否暂停回复；不设表示跟随机器人。 */
   muted_reply_pause_enabled?: boolean;
   /** 本群暂停回复期间是否转写语音、识别图片、做回复判断；不设表示跟随机器人。 */
@@ -921,8 +923,10 @@ export interface PrivateAdmission {
 /** 主动开口（试验）设置，默认值见 lib/proactive-messaging.ts。 */
 export interface ProactiveMessaging {
   enabled?: boolean;
-  /** 允许主动开口的群号，没列进来的群不会主动说话。 */
+  /** 旧版（v0.9.8）的群名单：非空时只有名单里的群跟随机器人，清空后所有群都开。 */
   group_ids?: string[];
+  /** 群里开口前先联网搜最近的新闻当话题；不设按开启。 */
+  search_news?: boolean;
   /** 群里安静多少分钟后考虑开口，默认 120。 */
   group_idle_minutes?: number | string;
   /** 主人私聊安静够久时主动找主人。 */

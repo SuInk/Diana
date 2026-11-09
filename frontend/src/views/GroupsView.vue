@@ -435,6 +435,16 @@
           />
           <span class="hint">冷却期内或生成失败时改发模板池或自定义欢迎词，都没配就这次不欢迎；避免进出群刷屏消耗 Token。</span>
         </div>
+        <div class="field wide">
+          <label for="group-proactive-enabled">本群主动开口</label>
+          <AppSelect
+            id="group-proactive-enabled"
+            :model-value="switchValue(editing.proactive_messaging_enabled)"
+            :options="groupProactiveOptions"
+            @update:model-value="(value) => { if (editing) editing.proactive_messaging_enabled = fromSwitchValue(value); }"
+          />
+          <span class="hint">群里冷场时自己先说一句（试验）。冷场时长、每天次数和免打扰跟随机器人的设置。</span>
+        </div>
         <div class="field">
           <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
           <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
@@ -850,6 +860,13 @@ function followSwitchOptions(inherited: boolean): AppSelectOption[] {
   ];
 }
 const groupWelcomeOptions = computed(() => followSwitchOptions(inheritedBot.value?.welcome_enabled ?? false));
+// 机器人开了主动开口就所有群跟随；旧版群名单非空时只有名单里的群跟随。
+const groupProactiveOptions = computed(() => {
+  const settings = inheritedBot.value?.proactive_messaging;
+  const legacy = settings?.group_ids ?? [];
+  const inherited = !!settings?.enabled && (legacy.length === 0 || legacy.includes(editing.value?.group_id ?? ""));
+  return followSwitchOptions(inherited);
+});
 const groupRecallDeleteOptions = computed(() => followSwitchOptions(inheritedBot.value?.recall_reply_auto_delete_enabled ?? false));
 const effectiveWelcomeEnabled = computed(() => editing.value?.welcome_enabled ?? inheritedBot.value?.welcome_enabled ?? false);
 const effectiveWelcomeMode = computed(() => editing.value?.welcome_mode || inheritedBot.value?.welcome_mode || "");

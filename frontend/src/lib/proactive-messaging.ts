@@ -17,6 +17,7 @@ export function proactiveFormValue(value: ProactiveMessaging | null | undefined)
   return {
     enabled: value?.enabled ?? false,
     group_ids: [...(value?.group_ids ?? [])],
+    search_news: value?.search_news ?? true,
     group_idle_minutes: value?.group_idle_minutes || PROACTIVE_DEFAULTS.group_idle_minutes,
     owner_enabled: value?.owner_enabled ?? false,
     owner_idle_hours: value?.owner_idle_hours || PROACTIVE_DEFAULTS.owner_idle_hours,
@@ -26,7 +27,7 @@ export function proactiveFormValue(value: ProactiveMessaging | null | undefined)
   };
 }
 
-// parseProactiveGroupIDs 把「每行一个，也可用逗号、空格分隔」的输入拆成去重的群号。
+// parseProactiveGroupIDs 把旧版群名单拆成去重的群号。名单只在控制台里清空，不再编辑。
 export function parseProactiveGroupIDs(draft: string): string[] {
   const seen = new Set<string>();
   for (const part of draft.split(/[\s,，、]+/)) {
@@ -43,6 +44,7 @@ export function proactivePayload(value: ProactiveMessaging | null | undefined, g
   return {
     enabled: current.enabled,
     group_ids: parseProactiveGroupIDs(groupDraft),
+    search_news: current.search_news,
     group_idle_minutes: int(current.group_idle_minutes),
     owner_enabled: current.owner_enabled,
     owner_idle_hours: int(current.owner_idle_hours),

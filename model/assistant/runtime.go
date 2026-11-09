@@ -1887,6 +1887,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 		// 群级开关是完整覆盖：主动和直接回复都服从它，覆盖机器人级的总开关。
 		cfg.groupReplyAccountSafetyAuditOverride = copyBoolPointer(groupCfg.ReplyAccountSafetyAuditEnabled)
 	}
+	if groupCfg.ProactiveMessagingEnabled != nil {
+		cfg.groupProactiveMessagingOverride = copyBoolPointer(groupCfg.ProactiveMessagingEnabled)
+	}
 	if strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt) != "" {
 		cfg.ReplyAccountSafetyAuditPrompt = strings.TrimSpace(groupCfg.ReplyAccountSafetyAuditPrompt)
 	}
