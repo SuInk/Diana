@@ -858,6 +858,8 @@ type BotConfig struct {
 	// 非空时作为管理员规则替代默认风险范围，但不改变审核输出协议。
 	ReplyAccountSafetyAuditPrompt        string `json:"reply_account_safety_audit_prompt,omitempty"`
 	groupReplyAccountSafetyAuditOverride *bool
+	// groupProactiveMessagingOverride 是群配置里的「本群主动开口」，nil 跟随机器人。
+	groupProactiveMessagingOverride *bool
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
@@ -1355,6 +1357,9 @@ type GroupConfig struct {
 	// nil 跟随机器人；true/false 在本群对主动和直接回复统一开启/关闭账号安全审核。
 	ReplyAccountSafetyAuditEnabled *bool  `json:"reply_account_safety_audit_enabled,omitempty"`
 	ReplyAccountSafetyAuditPrompt  string `json:"reply_account_safety_audit_prompt,omitempty"`
+	// ProactiveMessagingEnabled 是本群的主动开口：nil 跟随机器人（开了就所有群都开），
+	// false 本群不主动说话，true 机器人那边没开时也让本群单独开。
+	ProactiveMessagingEnabled *bool `json:"proactive_messaging_enabled,omitempty"`
 	// 本群的补充判据，留空跟随机器人级。
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
 	// 本群的发送退避和入站重跑参数，每项 0 表示跟随机器人。

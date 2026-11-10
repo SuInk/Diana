@@ -13,9 +13,15 @@ test("没配过的主动开口按后端默认值填表，默认关闭", () => {
   assert.equal(value.daily_limit, 2);
   assert.equal(value.quiet_start, "23:00");
   assert.equal(value.quiet_end, "08:00");
+  assert.equal(value.search_news, true);
 });
 
-test("群号支持换行、逗号和空格分隔，并去重", () => {
+test("联网找新鲜事可以关掉，保存时原样提交", () => {
+  assert.equal(proactivePayload({ enabled: true, search_news: false }, "").search_news, false);
+  assert.equal(proactivePayload({ enabled: true }, "").search_news, true);
+});
+
+test("旧版群名单支持换行、逗号和空格分隔，并去重", () => {
   assert.deepEqual(parseProactiveGroupIDs("10001\n10002, 10003，10001  \n\n"), ["10001", "10002", "10003"]);
 });
 

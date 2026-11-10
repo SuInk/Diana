@@ -1268,18 +1268,21 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">开启主动开口（试验）</span>
                 </label>
-                <span class="hint">到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
+                <span class="hint">机器人所在的群都会参与，不想要的群在群管理里单独关掉。到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
               </div>
               <template v-if="form.proactive_messaging.enabled">
+                <div v-if="proactiveGroupIDs.length" class="field wide">
+                  <label>主动开口的群</label>
+                  <span class="hint">旧版设置只对这 {{ proactiveGroupIDs.length }} 个群开：{{ proactiveGroupIDs.join("、") }}。改为所有群后，不想要的群到群管理里单独关；保存后生效。</span>
+                  <div><button type="button" class="btn small" @click="proactiveGroupsDraft = ''">改为所有群</button></div>
+                </div>
                 <div class="field wide">
-                  <label for="bot-proactive-groups">允许主动开口的群</label>
-                  <textarea
-                    id="bot-proactive-groups"
-                    v-model="proactiveGroupsDraft"
-                    class="textarea"
-                    rows="2"
-                    placeholder="每行一个群号，也可以用逗号分隔；没列进来的群不会主动说话。"
-                  ></textarea>
+                  <label class="switch">
+                    <input v-model="form.proactive_messaging.search_news" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">群里冷场时联网找新鲜事聊</span>
+                  </label>
+                  <span class="hint">开口前按群里平时聊的东西搜最近几天的新闻，挑一条群友会感兴趣的随口聊起来；群里聊的都是私事闲扯就不搜。需要开着联网搜索插件，没开就照常只接之前的话题。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>
@@ -2414,7 +2417,7 @@
 <script setup lang="ts">
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
-import { proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
+import { parseProactiveGroupIDs, proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
 import { currentView, navigate, viewPath, viewQuery } from "../router";
 import { ALL_PROFILES, botCreateRequested, botScope, setBotScope, setScopeLeaveGuard } from "../lib/bot-scope";
 import { copyBotConfiguration } from "../lib/bot-config-copy";
@@ -2686,6 +2689,8 @@ const tokenDraft = ref("");
 const triggersDraft = ref("");
 const welcomeTemplatesDraft = ref("");
 const proactiveGroupsDraft = ref("");
+// 旧版群名单，只读展示；清空后所有群跟随机器人。
+const proactiveGroupIDs = computed(() => parseProactiveGroupIDs(proactiveGroupsDraft.value));
 const replyFilterRulesDraft = ref<string[]>([]);
 const replyFilterResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);

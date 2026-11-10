@@ -31,6 +31,13 @@ import (
 // 冷场只认「本来在聊、后来停了」：群里冷场前几个小时得有人在说话，几天没人说话的群
 // 不去叫醒。主人私聊不看这条，主人就是要她主动找。
 //
+// 机器人这边一开，所在的群全都参与；单个群在群管理里关掉，或者机器人没开时单独给
+// 某个群打开（GroupConfig.ProactiveMessagingEnabled）。候选群从最近有人说话的会话里
+// 找，冷场判断本来就要求冷场前有人在聊，没聊过的群不用去问平台。
+//
+// 群里开口前默认先联网找点新鲜事（proactive_news.go）：按群里平时聊的东西定一个
+// 搜索词，搜最近几天的新闻，交给生成那一步当素材，用不上也可以不用。
+//
 // 发出去的消息带 Initiative 标记写进历史，退避、每日上限都从历史里数，进程重启不会
 // 把计数清零再来一遍。
 
@@ -68,8 +75,11 @@ const (
 // ProactiveMessaging 是一台机器人的主动开口设置。
 type ProactiveMessaging struct {
 	Enabled bool `json:"enabled"`
-	// GroupIDs 是允许主动开口的群，没列进来的群一律不主动说话。
+	// GroupIDs 是旧版的群名单（v0.9.8）：非空时只有名单里的群跟随机器人开，其余群
+	// 要在群管理里单独打开。控制台清空它就变成所有群都开。
 	GroupIDs []string `json:"group_ids,omitempty"`
+	// SearchNews 让群里开口前先联网搜最近的新闻当话题；nil 按开启算。
+	SearchNews *bool `json:"search_news,omitempty"`
 	// GroupIdleMinutes 是群里安静多久之后考虑开口。
 	GroupIdleMinutes int `json:"group_idle_minutes,omitempty"`
 	// OwnerEnabled 打开后，主人私聊安静 OwnerIdleHours 小时会主动找主人。
@@ -90,6 +100,7 @@ func (p *ProactiveMessaging) Clone() *ProactiveMessaging {
 	}
 	copied := *p
 	copied.GroupIDs = append([]string(nil), p.GroupIDs...)
+	copied.SearchNews = copyBoolPointer(p.SearchNews)
 	return &copied
 }
 
@@ -198,6 +209,7 @@ type proactiveMessagingState struct {
 	mu          sync.Mutex
 	inflight    map[string]bool
 	lastAttempt map[string]time.Time
+	proactiveSessionCache
 }
 
 func (s *proactiveMessagingState) claim(key string, now time.Time, wait time.Duration) bool {
@@ -335,19 +347,72 @@ func (r *Runtime) runProactiveMessagingLoop(ctx context.Context) {
 	}
 }
 
-// proactiveEnabledConfigs 列出开了主动开口、也没被停用的机器人。
+// proactiveEnabledConfigs 列出开了主动开口、也没被停用的机器人。机器人那边没开、
+// 但有群单独打开的也算，只是只看那几个群。
 func (r *Runtime) proactiveEnabledConfigs() []BotConfig {
 	r.mu.RLock()
 	profiles := r.orderedProfilesLocked()
 	r.mu.RUnlock()
 	out := make([]BotConfig, 0, len(profiles))
 	for _, cfg := range profiles {
-		if cfg.ProactiveMessaging == nil || !cfg.ProactiveMessaging.Enabled || r.profileDisabled(cfg.ID) {
+		if r.profileDisabled(cfg.ID) {
 			continue
 		}
-		out = append(out, cfg)
+		if proactiveMasterEnabled(cfg) || len(r.proactiveGroupOptIns(cfg.ID)) > 0 {
+			out = append(out, cfg)
+		}
 	}
 	return out
+}
+
+func proactiveMasterEnabled(cfg BotConfig) bool {
+	return cfg.ProactiveMessaging != nil && cfg.ProactiveMessaging.Enabled
+}
+
+// proactiveSettings 是这台机器人生效的主动开口参数；没配过时全用默认值，给单独
+// 打开的群用。
+func proactiveSettings(cfg BotConfig) *ProactiveMessaging {
+	if cfg.ProactiveMessaging == nil {
+		return (&ProactiveMessaging{}).normalized()
+	}
+	return cfg.ProactiveMessaging.normalized()
+}
+
+// proactiveGroupOptIns 列出群管理里给这台机器人单独打开主动开口的群。
+func (r *Runtime) proactiveGroupOptIns(profileID string) []string {
+	r.mu.RLock()
+	lister, _ := r.groupConfigs.(groupConfigLister)
+	r.mu.RUnlock()
+	if lister == nil {
+		return nil
+	}
+	var ids []string
+	for _, groupCfg := range lister.Groups().Groups {
+		if strings.TrimSpace(groupCfg.BotProfileID) == profileID && groupCfg.ProactiveMessagingEnabled != nil && *groupCfg.ProactiveMessagingEnabled {
+			ids = append(ids, groupCfg.GroupID)
+		}
+	}
+	return cleanStrings(ids)
+}
+
+// proactiveGroupAllowed 判断这个群要不要主动开口：群里单独设置过就听群的，否则跟随
+// 机器人；旧版群名单非空时只有名单里的群跟随。
+func proactiveGroupAllowed(cfg BotConfig, groupCfg BotConfig, settings *ProactiveMessaging, groupID string) bool {
+	if groupCfg.groupProactiveMessagingOverride != nil {
+		return *groupCfg.groupProactiveMessagingOverride
+	}
+	if !proactiveMasterEnabled(cfg) {
+		return false
+	}
+	if len(settings.GroupIDs) == 0 {
+		return true
+	}
+	for _, id := range settings.GroupIDs {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 type proactiveTarget struct {
@@ -356,11 +421,17 @@ type proactiveTarget struct {
 }
 
 func (r *Runtime) proactiveTargets(cfg BotConfig) []proactiveTarget {
-	settings := cfg.ProactiveMessaging.normalized()
+	settings := proactiveSettings(cfg)
+	candidates := r.proactiveRecentGroups(cfg.ID)
+	candidates = append(candidates, settings.GroupIDs...)
+	candidates = append(candidates, r.proactiveGroupOptIns(cfg.ID)...)
 	var targets []proactiveTarget
-	for _, groupID := range settings.GroupIDs {
+	for _, groupID := range cleanStrings(candidates) {
 		target, err := r.crossBotEvent(cfg.ID, EventKindGroup, groupID)
 		if err != nil {
+			continue
+		}
+		if !proactiveGroupAllowed(cfg, r.effectiveConfigForEvent(target.event), settings, groupID) {
 			continue
 		}
 		targets = append(targets, proactiveTarget{event: target.event, rules: proactiveRules{
@@ -368,7 +439,7 @@ func (r *Runtime) proactiveTargets(cfg BotConfig) []proactiveTarget {
 			DailyLimit: settings.DailyLimit,
 		}})
 	}
-	if owner := strings.TrimSpace(cfg.OwnerID); settings.OwnerEnabled && owner != "" {
+	if owner := strings.TrimSpace(cfg.OwnerID); proactiveMasterEnabled(cfg) && settings.OwnerEnabled && owner != "" {
 		if target, err := r.crossBotEvent(cfg.ID, EventKindPrivate, owner); err == nil {
 			targets = append(targets, proactiveTarget{event: target.event, rules: proactiveRules{
 				Owner:      true,
@@ -384,7 +455,7 @@ func (r *Runtime) proactiveTargets(cfg BotConfig) []proactiveTarget {
 func (r *Runtime) dispatchProactiveMessages(ctx context.Context) {
 	for _, cfg := range r.proactiveEnabledConfigs() {
 		now := r.clock().In(cfg.Location())
-		if proactiveQuietAt(cfg.ProactiveMessaging.normalized(), now) {
+		if proactiveQuietAt(proactiveSettings(cfg), now) {
 			continue
 		}
 		for _, target := range r.proactiveTargets(cfg) {
@@ -514,7 +585,7 @@ var promptProactiveOwnerSpec = registerPrompt(PromptSpec{
 
 // proactiveRequestText 是这一轮的「当前消息」：一条内部事件，说清这不是谁发来的消息、
 // 为什么现在醒来、已经连着几次没人接。
-func proactiveRequestText(cfg BotConfig, event MessageEvent, plan proactivePlan) string {
+func proactiveRequestText(cfg BotConfig, event MessageEvent, plan proactivePlan, news proactiveNews) string {
 	var builder strings.Builder
 	where := "这个群"
 	spec := promptProactiveGroupSpec
@@ -528,6 +599,9 @@ func proactiveRequestText(cfg BotConfig, event MessageEvent, plan proactivePlan)
 	}
 	builder.WriteString("\n\n")
 	builder.WriteString(strings.TrimSpace(cfg.prompt(spec)))
+	if news.Results != "" {
+		builder.WriteString("\n\n" + proactiveNewsMaterial(cfg, news))
+	}
 	return builder.String()
 }
 
@@ -582,9 +656,17 @@ func (r *Runtime) runProactiveInitiative(parent context.Context, target proactiv
 	}
 
 	cfg := r.effectiveConfigForEvent(event)
+	// 搜索放在模型名额外面：联网可能要一分多钟，不该占着对话模型的并发。
+	news := r.findProactiveNews(ctx, cfg, event)
 	text, err := r.runTaskQueryWithSlot(ctx, func(ctx context.Context) (string, error) {
-		return r.generateProactiveMessage(ctx, cfg, event, plan)
+		return r.generateProactiveMessage(ctx, cfg, event, plan, news)
 	})
+	if news.Query != "" {
+		record.Text += " · 搜索「" + news.Query + "」"
+		if news.Results == "" {
+			record.Text += "（没搜到）"
+		}
+	}
 	if err != nil {
 		if ctx.Err() == nil {
 			log.Printf("diana proactive message generation failed for %s: %v", sessionKey(event), err)
@@ -627,8 +709,8 @@ func (r *Runtime) runProactiveInitiative(parent context.Context, target proactiv
 }
 
 // generateProactiveMessage 像入群欢迎一样生成：同一份系统提示词（人设、关系）、最近的
-// 会话历史、对话模型；不开工具，一轮出结果。
-func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, event MessageEvent, plan proactivePlan) (string, error) {
+// 会话历史、对话模型；不开工具，一轮出结果。新闻是事先由 Runner 搜好的素材。
+func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, event MessageEvent, plan proactivePlan, news proactiveNews) (string, error) {
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), PurposeProactiveMessage)
 	source := event
 	if source.Kind == EventKindGroup && strings.TrimSpace(source.GroupName) == "" {
@@ -659,7 +741,7 @@ func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, e
 	}
 	messages = append(messages, llm.Message{
 		Role:     llm.RoleUser,
-		Content:  proactiveRequestText(cfg, source, plan),
+		Content:  proactiveRequestText(cfg, source, plan, news),
 		Priority: llm.MessagePriorityCurrent,
 	})
 	replyCfg := cfg
