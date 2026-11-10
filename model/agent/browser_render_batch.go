@@ -125,6 +125,7 @@ func (r *browserRenderReads) start(ctx context.Context, engine, url string, rend
 	r.entries[key] = entry
 	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), browserRenderDetachedTimeout)
 	go func() {
+		defer recoverGoroutinePanic("browser_render_read")
 		defer cancel()
 		defer func() {
 			if recovered := recover(); recovered != nil {
@@ -170,6 +171,7 @@ func (t *BrowserRenderTool) runBatch(ctx context.Context, urls []string, find st
 	for index, url := range urls {
 		reads[index] = t.reads.start(ctx, engine, url, t.renderer.Render)
 		go func(index int) {
+			defer recoverGoroutinePanic("browser_render_batch")
 			<-reads[index].done
 			finished <- index
 		}(index)
