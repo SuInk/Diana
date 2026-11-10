@@ -1167,6 +1167,8 @@ func (b *cappedBuffer) Len() int       { return b.buffer.Len() }
 
 type BrowserRenderTool struct {
 	renderer PageRenderer
+	// reads 记批量读取里发起的每一页，见 browser_render_batch.go。零值可用。
+	reads browserRenderReads
 }
 
 func NewBrowserRenderTool(renderer PageRenderer) *BrowserRenderTool {
@@ -1207,7 +1209,11 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if urls := browserRenderURLs(input); len(urls) > 1 {
 		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
 	}
-	page, err := t.renderer.Render(ctx, rawURL)
+	// 这一页要是上一次批量读取里没等到的那页，接着等它或直接取它的结果，不重开一次。
+	page, err, started := t.reads.await(ctx, renderEngineFromContext(ctx), rawURL)
+	if !started {
+		page, err = t.renderer.Render(ctx, rawURL)
+	}
 	if err != nil {
 		return "", err
 	}
