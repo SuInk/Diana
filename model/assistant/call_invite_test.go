@@ -135,7 +135,7 @@ func TestGroupBridgeCallRepliesAsThatGroup(t *testing.T) {
 }
 
 func TestClassifyBridgeCallInviteLooksAtScreenshotFirst(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"incoming":true,"kind":"group","caller":"Winter","group_id":"20002"}`}
+	provider := &allRequestsLLMProvider{reply: `{"incoming":true,"kind":"group","caller":"Winter","group_id":"20002"}`}
 	runtime := NewRuntime(BotConfig{ID: "bot", OwnerID: "10001"}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
@@ -143,14 +143,39 @@ func TestClassifyBridgeCallInviteLooksAtScreenshotFirst(t *testing.T) {
 	if invite.how != "vision" || invite.groupID != "20002" {
 		t.Fatalf("invite = %+v", invite)
 	}
-	req := provider.requestSnapshot()
-	var sawImage bool
-	for _, part := range req.Messages[len(req.Messages)-1].Parts {
-		if part.Type == llm.ContentPartImageURL && strings.HasPrefix(part.ImageURL, "data:image/png;base64,") {
-			sawImage = true
+	// 识图和文字模型同时跑，最后一次请求可能是文字那次，所以在全部请求里找识图请求。
+	var sawVision bool
+	for _, req := range provider.snapshot() {
+		if len(req.Messages) == 0 || !strings.Contains(req.Messages[0].Content, "截图") {
+			continue
+		}
+		for _, part := range req.Messages[len(req.Messages)-1].Parts {
+			if part.Type == llm.ContentPartImageURL && strings.HasPrefix(part.ImageURL, "data:image/png;base64,") {
+				sawVision = true
+			}
 		}
 	}
-	if !sawImage || !strings.Contains(req.Messages[0].Content, "截图") {
-		t.Fatalf("screenshot was not sent to the vision model: %#v", req.Messages)
+	if !sawVision {
+		t.Fatalf("screenshot was not sent to the vision model: %#v", provider.snapshot())
 	}
+}
+
+// allRequestsLLMProvider 记下每一次请求，用于同时发出多路请求的场景。
+type allRequestsLLMProvider struct {
+	mu       sync.Mutex
+	reply    string
+	requests []llm.GenerateRequest
+}
+
+func (p *allRequestsLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	p.mu.Lock()
+	p.requests = append(p.requests, cloneGenerateRequestForTest(req))
+	p.mu.Unlock()
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.reply}, nil
+}
+
+func (p *allRequestsLLMProvider) snapshot() []llm.GenerateRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]llm.GenerateRequest(nil), p.requests...)
 }
