@@ -255,3 +255,102 @@ func TestQQReplyDraftHoldsShortFirstFrameAndTurnEndRecallsIt(t *testing.T) {
 		t.Fatalf("frames = %d, deletes = %#v", len(api.frames), api.deletes)
 	}
 }
+
+// 一轮回复分几条时一条气泡一条气泡地流：下一条开始了上一条才定住，标记不进预览，
+// 定稿和预览一样就不再发，已经显示的字不会变。
+func TestQQReplyDraftStreamsEachBubbleAndFinalClaimsThem(t *testing.T) {
+	api := newQQStreamFakeAPI(t)
+	channel := api.channel()
+	runtime := &Runtime{channel: channel}
+	event := MessageEvent{Platform: PlatformQQOfficial, Kind: EventKindPrivate, UserID: "U2345", MessageID: "in1"}
+	cfg := BotConfig{ReplySafetyPrivateEnabled: boolPointer(false), BotReplyLoopDetectionEnabled: boolPointer(false)}
+	draft := runtime.replyDraft(event, cfg)
+	if draft == nil {
+		t.Fatal("private QQ chat without audit should stream")
+	}
+	ctx := context.Background()
+	first, second := "哼哼，本来也没多累<diana-br/>就那条审核老卡着烦人", "数字没测出来这事儿我记着"
+	for _, text := range []string{first[:len(first)-3], first + "<diana-", first + "<diana-message/>", first + "<diana-message/>数字", first + "<diana-message/>" + second} {
+		draft.ObserveTextDelta(ctx, text)
+	}
+	type frame struct {
+		seq, state float64
+		content    string
+	}
+	// 默认配置下换行也分条，所以这一轮是三条气泡。
+	lineOne, lineTwo := "哼哼，本来也没多累", "就那条审核老卡着烦人"
+	want := []frame{
+		{1, qqStreamStateGenerating, lineOne},
+		{1, qqStreamStateDone, lineOne},
+		{2, qqStreamStateGenerating, strings.TrimSuffix(lineTwo, "人")},
+		// 下一条攒够首帧字数后，这一条补一帧全文再发结束帧定住。
+		{2, qqStreamStateGenerating, lineTwo},
+		{2, qqStreamStateDone, lineTwo},
+		{3, qqStreamStateGenerating, second},
+	}
+	if len(api.frames) != len(want) {
+		t.Fatalf("frames = %#v", api.frames)
+	}
+	for i, w := range want {
+		got := api.frames[i]
+		if got["msg_seq"] != w.seq || got["input_state"] != w.state || got["content_raw"] != w.content {
+			t.Fatalf("frame %d = %#v, want %#v", i, got, w)
+		}
+	}
+	// 定稿：前两条和定住的预览一样，不再发；第三条给还在流的那条发结束帧。
+	for _, text := range []string{lineOne, lineTwo, second + "，等它缓过来"} {
+		if _, err := channel.SendWithResult(ctx, OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1", Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(api.messages) != 0 || len(api.deletes) != 0 || len(api.frames) != len(want)+1 {
+		t.Fatalf("messages = %#v, deletes = %#v, frames = %d", api.messages, api.deletes, len(api.frames))
+	}
+	if last := api.frames[len(want)]; last["msg_seq"] != float64(3) || last["input_state"] != float64(qqStreamStateDone) || last["content_raw"] != second+"，等它缓过来" {
+		t.Fatalf("closing frame = %#v", last)
+	}
+	runtime.abandonReplyStream(ctx, event)
+	if len(api.deletes) != 0 {
+		t.Fatalf("claimed bubbles were recalled: %#v", api.deletes)
+	}
+}
+
+// 定住的预览和定稿对不上时改不了它：撤回这一轮的预览，定稿按普通消息发。
+func TestQQOfficialStreamSettledBubbleMismatchIsRecalled(t *testing.T) {
+	api := newQQStreamFakeAPI(t)
+	channel := api.channel()
+	ctx := context.Background()
+	msg := OutgoingMessage{UserID: "U2345", PassiveReplyMessageID: "in1"}
+	for id, text := range []string{"第一条预览的内容", "第二条预览的内容"} {
+		msg.Text = text
+		if err := channel.SendTextDraft(ctx, msg, int64(id+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	msg.Text = "定稿换了一种说法"
+	if _, err := channel.SendWithResult(ctx, msg); err != nil {
+		t.Fatal(err)
+	}
+	// 两条预览（定住的和还在流的）都撤回，定稿只发一次。
+	if len(api.deletes) != 2 || len(api.messages) != 1 {
+		t.Fatalf("deletes = %#v, messages = %#v", api.deletes, api.messages)
+	}
+	if err := channel.AbandonTextDraft(ctx, msg); err != nil || len(api.deletes) != 2 {
+		t.Fatalf("abandon after recall: err = %v, deletes = %#v", err, api.deletes)
+	}
+}
+
+func TestTelegramDraftRendersLayoutMarkersAsLineBreaks(t *testing.T) {
+	api := newFakeTelegramAPI(t, nil)
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "10002", Time: 10}
+	r := &Runtime{channel: api.channel(), history: map[string][]MessageEvent{}}
+	draft := r.replyDraft(event, BotConfig{})
+	if draft == nil {
+		t.Fatal("missing private draft")
+	}
+	draft.ObserveTextDelta(context.Background(), "第一条<diana-br/>第二行<diana-message/>第二条")
+	calls := api.callsOf("sendMessageDraft")
+	if len(calls) != 1 || calls[0].Params["text"] != "第一条\n第二行\n\n第二条" {
+		t.Fatalf("draft calls = %#v", calls)
+	}
+}

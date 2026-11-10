@@ -902,14 +902,6 @@
               <template v-if="currentPlatform === 'qq-official'">
                 <div class="field">
                   <label class="switch">
-                    <input v-model="form.qq_official_feedback" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">单聊回复下显示赞踩</span>
-                  </label>
-                  <span class="hint">默认开启。对方点赞或点踩会记进运行日志；平台不认时自动去掉再发，不影响回复。</span>
-                </div>
-                <div class="field">
-                  <label class="switch">
                     <input v-model="form.qq_official_input_notify" type="checkbox" />
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">单聊显示「对方正在输入」</span>
@@ -4997,7 +4989,6 @@ function setForm(config: BotProfileConfig): void {
     sticker_reply_order: config.sticker_reply_order ?? "before",
     markdown_to_plain: config.markdown_to_plain ?? !platformSupportsRichText(config.platform),
     qq_official_input_notify: config.qq_official_input_notify ?? false,
-    qq_official_feedback: config.qq_official_feedback ?? true,
     qq_official_keyboard_template: config.qq_official_keyboard_template ?? "",
     error_notify_enabled: config.error_notify_enabled ?? true,
     muted_reply_pause_enabled: config.muted_reply_pause_enabled ?? true,

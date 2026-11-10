@@ -99,7 +99,6 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			msg.Buttons, msg.ButtonFontSize = finalizeButtonsFromContext(ctx).take()
 			msg.Suggestions, msg.Card = finalizeQQExtrasFromContext(ctx).takeLast()
 			if event.Platform == PlatformQQOfficial {
-				msg.QQFeedback = event.Kind == EventKindPrivate && boolValue(cfg.QQOfficialFeedback, true)
 				msg.QQKeyboardTemplate = cfg.QQOfficialKeyboardTemplate
 			}
 		}
