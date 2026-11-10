@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -127,15 +128,8 @@ func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
 	if strings.Contains(notice, "等下再看") {
 		t.Fatalf("unrelated reason leaked into the notice:\n%s", notice)
 	}
-	// 这段是内部说明，不能把实现细节递到模型嘴边——人设明令不暴露内部配置，
-	// 拟人人设下「视觉链路/接口/通道」更是彻底出戏。
-	for _, leak := range []string{"视觉链路", "接口", "通道", "vision", "provider"} {
-		if strings.Contains(notice, leak) {
-			t.Fatalf("notice leaks the internal term %q:\n%s", leak, notice)
-		}
-	}
-	if !strings.Contains(notice, "不要照抄给对方") || !strings.Contains(notice, "按你自己的身份") {
-		t.Fatalf("notice does not leave the wording to the persona:\n%s", notice)
+	if !strings.Contains(notice, "照实告诉对方") {
+		t.Fatalf("notice does not ask for the real cause:\n%s", notice)
 	}
 	if imageFailureNotice(MessageEvent{Segments: []MessageSegment{{Type: "image", Data: map[string]string{"url": "a"}}}}, false) != "" {
 		t.Fatal("notice should be empty when nothing failed")
@@ -162,7 +156,10 @@ func TestClassifyImageDescriptionFailureDistinguishesDelivery(t *testing.T) {
 	cases := map[error]string{
 		fmt.Errorf("%w: data:image/png", errVisionImageUnavailable): imageFailureUnavailable,
 		fmt.Errorf("%w: 未收到图片内容", errVisionImageNotDelivered):       imageFailureNotDelivered,
-		context.DeadlineExceeded: imageFailureTimeout,
+		context.DeadlineExceeded:                       imageFailureTimeout,
+		newVisionNotDeliveredError("blind", "未收到图片内容"): imageFailureNotDelivered,
+		// 上游报错不是超时：以前一律归成超时，回复会说「等下再看」。
+		errors.New("llm stream failed: Upstream request failed"): imageFailureError,
 	}
 	for err, want := range cases {
 		if got := classifyImageDescriptionFailure(err); got != want {

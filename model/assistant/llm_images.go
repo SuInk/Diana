@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
@@ -203,17 +202,15 @@ func downloadImageBytesWithHeader(ctx context.Context, imageURL string, maxBytes
 	if maxBytes <= 0 {
 		maxBytes = maxLLMImageBytes
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, imageURL, nil)
+	// 不设总时限：以前限 8 秒，慢一点的图就读不到。卡死的连接由下载客户端按阶段断开。
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, imageURL, nil)
 	if err != nil {
 		return nil, "", nil, err
 	}
 	req.Header.Set("Accept", "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36")
 
-	resp, err := netguard.NewPublicHTTPClient(8 * time.Second).Do(req)
+	resp, err := netguard.NewPublicDownloadClient().Do(req)
 	if err != nil {
 		return nil, "", nil, err
 	}

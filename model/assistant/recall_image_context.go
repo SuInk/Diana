@@ -27,9 +27,11 @@ type MessageSearchExtraRevisionStore interface {
 }
 
 const (
-	recallImageDescriptionKey         = "cached_description"
-	recallImageDescriptionSourceKey   = "cached_description_source"
-	recallImageFailureKey             = "cached_description_failure"
+	recallImageDescriptionKey       = "cached_description"
+	recallImageDescriptionSourceKey = "cached_description_source"
+	recallImageFailureKey           = "cached_description_failure"
+	// recallImageFailureDetailKey 是随失败种类一起留下的具体原因，见 imageFailureDetail。
+	recallImageFailureDetailKey       = "cached_description_failure_detail"
 	recallImageAttachmentIndexKey     = "recall_attachment_index"
 	recallImageDescriptionVersion     = "recall-image-v1"
 	recallImageDescriptionMaxRunes    = 1600
@@ -93,6 +95,7 @@ type recallImageTarget struct {
 	description       string
 	descriptionSource string
 	failure           string
+	failureDetail     string
 }
 
 func prepareRecallImageAttachments(recalls []MessageEvent) ([]MessageEvent, []string) {
@@ -221,7 +224,11 @@ func (r *Runtime) enrichRecallImageDescriptions(ctx context.Context, event Messa
 		if target.description == "" {
 			// 没有描述时把失败原因留在片段上，拼提示词时才说得出这张图是怎么没的。
 			for _, position := range target.failurePositions() {
-				out[position.eventIndex].Segments[position.segmentIndex].Data[recallImageFailureKey] = target.failure
+				data := out[position.eventIndex].Segments[position.segmentIndex].Data
+				data[recallImageFailureKey] = target.failure
+				if target.failureDetail != "" {
+					data[recallImageFailureDetailKey] = target.failureDetail
+				}
 			}
 			continue
 		}
@@ -394,7 +401,7 @@ func messageSearchImageIdentity(segment MessageSegment) string {
 	keys := make([]string, 0, len(segment.Data))
 	for key := range segment.Data {
 		switch key {
-		case recallImageDescriptionKey, recallImageDescriptionSourceKey, recallImageFailureKey, recallImageAttachmentIndexKey:
+		case recallImageDescriptionKey, recallImageDescriptionSourceKey, recallImageFailureKey, recallImageFailureDetailKey, recallImageAttachmentIndexKey:
 			continue
 		}
 		keys = append(keys, key)
@@ -635,6 +642,8 @@ func (r *Runtime) describeMissingRecallImages(ctx context.Context, event Message
 		if result.err != nil {
 			log.Printf("diana recall image description failed: message_id=%s err=%v", firstNonEmpty(result.target.sourceMessageIDs...), result.err)
 			result.target.failure = classifyImageDescriptionFailure(result.err)
+			result.target.failureDetail = imageFailureDetail(result.err)
+			r.recordImageDescriptionFailureLog(event, firstNonEmpty(result.target.sourceMessageIDs...), result.err)
 			continue
 		}
 		result.target.description = compactRecallImageDescription(result.description)
@@ -717,7 +726,7 @@ func (r *Runtime) describeCachedImage(ctx context.Context, event MessageEvent, s
 		// 模型说它没收到图片时，这句话不是描述。当成成功返回会被调用方缓存成永久
 		// 的视觉事实，理由见 vision_refusal.go。
 		if VisionDescriptionRefused(description) {
-			return "", fmt.Errorf("%w: %s", errVisionImageNotDelivered, truncateRunes(description, 60))
+			return "", newVisionNotDeliveredError(response.Model, description)
 		}
 		return description, nil
 	})

@@ -428,14 +428,12 @@ func (r *Runtime) voiceSourceAnalysisWAV(ctx context.Context, event MessageEvent
 }
 
 func downloadVoiceBytes(ctx context.Context, source string, maxBytes int64) ([]byte, error) {
-	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(callCtx, http.MethodGet, source, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "audio/*,application/octet-stream;q=0.8")
-	resp, err := netguard.NewPublicHTTPClient(15 * time.Second).Do(req)
+	resp, err := netguard.NewPublicDownloadClient().Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -17,8 +17,8 @@ import (
 // 提供商自己的同源文件使用配置的 API Key 和请求头，并拒绝跳出服务地址的重定向；
 // 其余链接使用不带授权的公网客户端，逐跳校验并阻止访问私有地址。
 
-// imageEditDownloadTimeout 是下载一张源图的上限，和其他下载器的量级一致；调用方的
-// ctx 期限更短时以 ctx 为准。
+// imageEditDownloadTimeout 只管提供商同源文件那条路（沿用提供商客户端，没有按阶段的
+// 停滞保护）。公网链接不设总时限，由 netguard.NewPublicDownloadClient 按阶段断开。
 const imageEditDownloadTimeout = 30 * time.Second
 
 // imageEditSource 决定一次源图下载用哪个客户端。
@@ -94,7 +94,7 @@ func (s imageEditSource) clientFor(target *url.URL) *http.Client {
 		}
 		return &client
 	}
-	return netguard.NewPublicHTTPClient(imageEditDownloadTimeout)
+	return netguard.NewPublicDownloadClient()
 }
 
 func sameURLOrigin(left, right *url.URL) bool {

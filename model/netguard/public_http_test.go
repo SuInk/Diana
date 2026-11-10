@@ -5,7 +5,10 @@ package netguard
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"testing"
 	"time"
@@ -80,5 +83,64 @@ func TestStrictDialCannotUseTrustedMediaPrivateOptIn(t *testing.T) {
 		if err == nil {
 			t.Fatalf("strict dial connected to %s", address)
 		}
+	}
+}
+
+// 下载内容不设总时限，只有正文停住不动才中断：慢但一直有数据的下载要能跑完，
+// 发了一半就卡死的连接要能断开并说清原因。
+func TestPublicDownloadClientStopsOnlyWhenBodyStalls(t *testing.T) {
+	t.Setenv(allowPrivateFetchesEnv, "true")
+	originalStall := downloadStallTimeout
+	downloadStallTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { downloadStallTimeout = originalStall })
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher := w.(http.Flusher)
+		if r.URL.Path == "/slow" {
+			// 总耗时超过停滞时限，但每一段都在时限内。
+			for i := 0; i < 5; i++ {
+				_, _ = w.Write([]byte("chunk"))
+				flusher.Flush()
+				time.Sleep(120 * time.Millisecond)
+			}
+			return
+		}
+		_, _ = w.Write([]byte("partial"))
+		flusher.Flush()
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	client := NewPublicDownloadClient()
+	if client.Timeout != 0 {
+		t.Fatalf("download client still has a total timeout: %v", client.Timeout)
+	}
+	resp, err := client.Get(server.URL + "/slow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil || string(body) != "chunkchunkchunkchunkchunk" {
+		t.Fatalf("slow but steady download was cut off: body=%q err=%v", body, err)
+	}
+
+	resp, err = client.Get(server.URL + "/stall")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	_, err = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if !errors.Is(err, ErrDownloadStalled) {
+		t.Fatalf("stalled download error = %v, want ErrDownloadStalled", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("stalled download took %v to stop", elapsed)
 	}
 }

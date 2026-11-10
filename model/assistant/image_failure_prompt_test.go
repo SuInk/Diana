@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -87,7 +88,7 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 		if !strings.Contains(message.Content, event.RawMessage) {
 			t.Fatalf("the notice replaced the user's own text:\n%s", message.Content)
 		}
-		for _, want := range []string{"图没能送进识图那一步", "不要说没收到图片"} {
+		for _, want := range []string{"图没能送进识图模型", "不要说没收到图片"} {
 			if !strings.Contains(message.Content, want) {
 				t.Fatalf("notice missing %q:\n%s", want, message.Content)
 			}
@@ -105,30 +106,33 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 	}
 }
 
-// TestImageFailureNoticeStaysInCharacter 这段说明会进到任何人设的提示词里，包括拟人
-// 人设。人设本身就禁止暴露内部配置，所以这里只给事实和硬约束，措辞交给模型；实现细节
-// 一个字都不能出现——写进去就等于递到模型嘴边。
-func TestImageFailureNoticeStaysInCharacter(t *testing.T) {
+// TestImageFailureNoticeReportsRealCause 识图失败要照实报出来：2026-11-08 对话模型换成
+// 不收图的模型后，机器人只会说「图没加载出来，你重发一下」，没人看得出是识图模型的
+// 问题。说明里要带上具体原因，并且不许再含糊成「没加载出来」。
+func TestImageFailureNoticeReportsRealCause(t *testing.T) {
+	notDelivered := newVisionNotDeliveredError("deepseek-v4-pro", "我无法查看这张图片")
+	upstream := errors.New("配置档「sub2api」调用失败：Upstream request failed https://example.invalid/v1?key=abc")
 	event := MessageEvent{Segments: []MessageSegment{
-		{Type: "image", Data: map[string]string{"url": "a", recallImageFailureKey: imageFailureNotDelivered}},
+		{Type: "image", Data: map[string]string{"url": "a", recallImageFailureKey: classifyImageDescriptionFailure(notDelivered), recallImageFailureDetailKey: imageFailureDetail(notDelivered)}},
 		{Type: "image", Data: map[string]string{"url": "b", recallImageFailureKey: imageFailureUnavailable}},
 		{Type: "image", Data: map[string]string{"url": "c", recallImageFailureKey: imageFailureTimeout}},
+		{Type: "image", Data: map[string]string{"url": "d", recallImageFailureKey: classifyImageDescriptionFailure(upstream), recallImageFailureDetailKey: imageFailureDetail(upstream)}},
 	}}
 	for _, attached := range []bool{true, false} {
 		notice := imageFailureNotice(event, attached)
-		for _, leak := range []string{
-			"模型", "接口", "通道", "链路", "视觉", "缓存", "描述失败",
-			"vision", "provider", "LLM", "API", "token",
+		for _, want := range []string{
+			"识图模型 deepseek-v4-pro 没收到图片", "Upstream request failed", "识图调用报错", "识图超时",
+			"照实告诉对方", "不要含糊成「图没加载出来」", "不要说对方没发",
 		} {
+			if !strings.Contains(notice, want) {
+				t.Fatalf("attached=%v notice missing %q:\n%s", attached, want, notice)
+			}
+		}
+		// 图片直链带临时凭据，报错原文里的地址不能跟着进提示词。
+		for _, leak := range []string{"example.invalid", "key=abc", "不要解释技术细节"} {
 			if strings.Contains(notice, leak) {
 				t.Fatalf("attached=%v notice leaks %q:\n%s", attached, leak, notice)
 			}
-		}
-		if !strings.Contains(notice, "不要照抄给对方") {
-			t.Fatalf("attached=%v notice may be quoted verbatim:\n%s", attached, notice)
-		}
-		if !strings.Contains(notice, "按你自己的身份") {
-			t.Fatalf("attached=%v notice dictates wording instead of leaving it to the persona:\n%s", attached, notice)
 		}
 	}
 }

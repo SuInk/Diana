@@ -220,9 +220,7 @@ func qqReadMediaBytes(ctx context.Context, source string, maxBytes int64) ([]byt
 	if remote == "" {
 		return nil, fmt.Errorf("无法识别的媒体来源")
 	}
-	callCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-	defer cancel()
-	path, _, release, err := acquireMediaDownload(callCtx, netguard.NewPublicHTTPClient(60*time.Second), remote, "media", "", "qq", maxBytes)
+	path, _, release, err := acquireMediaDownload(ctx, netguard.NewPublicDownloadClient(), remote, "media", "", "qq", maxBytes)
 	if err != nil {
 		return nil, err
 	}

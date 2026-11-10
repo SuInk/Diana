@@ -125,7 +125,7 @@ const (
 
 // 测试里换成假的，免得投递测试真去连推特。
 var rssWatchTelegramVideoClient = func() *http.Client {
-	return netguard.NewPublicHTTPClient(3 * time.Minute)
+	return netguard.NewPublicDownloadClient()
 }
 
 // rssWatchTelegramVideos 让推特视频在 Telegram 上发得出去：20MB 以内照旧交链接，

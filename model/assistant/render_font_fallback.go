@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/SuInk/diana/model/netguard"
@@ -191,7 +190,7 @@ func ensureRenderScriptFont(ctx context.Context, asset renderFontAsset) (string,
 		source = "https://raw.githubusercontent.com/google/fonts/1edf95b4328bc5997ca93d2c0c7205272ec7347f/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
 		license = notoEmojiLicense
 	}
-	if err := downloadVerifiedFont(ctx, netguard.NewPublicHTTPClient(2*time.Minute), source, destination, asset.sha, nil, license); err != nil {
+	if err := downloadVerifiedFont(ctx, netguard.NewPublicDownloadClient(), source, destination, asset.sha, nil, license); err != nil {
 		return "", fmt.Errorf("补齐 %s 字体失败：%w", asset.name, err)
 	}
 	return destination, nil
