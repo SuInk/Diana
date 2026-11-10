@@ -73,3 +73,9 @@
 - [Gitea 最新正式发布 API](https://api.github.com/repos/go-gitea/gitea/releases/latest)
 - [Gitea v1.27.3 发布记录](https://github.com/go-gitea/gitea/releases/tag/v1.27.3)
 - [Gitea 1.27.3 官方公告](https://blog.gitea.com/release-of-1.27.3/)
+
+## 2026-11-10 subtask 与 web_search 分工
+
+- 现象：#1375（十路并行 web_search）上线后，生产 subtask 从每天约 50 次降到 5–18 次，web_search 平均查询数从约 1.6 升到约 2.5。规则段说「不由你逐个串行 web_search」，一次带多个 queries 的 web_search 不算串行；subtask 不在 `replyFeaturedTools` 里，目录只剩一行截断的签名，看不出什么时候该派。
+- 改动：规则段改成「要联网查证的调研默认交给 subtask，只有一两个一搜就有答案的简单事实才自己 web_search」；web_search 描述补一句指向 subtask；subtask 描述先写什么时候用，并进 `replyFeaturedTools` 写全文。
+- 回放：11-08～11-10 生产第一步就调 web_search/subtask 的 122 条主回复请求，只替换规则行、两条工具描述和目录行，gpt-6.1-terra 各跑一次。原措辞两次都是 16/122 选 subtask；先试的「两类分工」措辞 30/122，多出的多是群里随口问的游戏怎么选，用户表示都派 subtask 也可以，定稿措辞 51/122，不搜直接回的 21→18 没有变多。devin/swe-2 在同一批请求上 429 太多，跑完的 81 对两臂都没选 subtask，没有据此下结论。

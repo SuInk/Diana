@@ -5317,6 +5317,9 @@ var replyFeaturedTools = []string{
 	dianaThreadStateToolName,
 	dianaSelfNoteToolName,
 	"relationship",
+	// subtask 压成一行时只剩「交给隔离 Worker」，看不出什么调研该派；web_search
+	// 写全文能批量并行之后，模型就全用它自己查了。两边都写全文才比得出分工。
+	dianaSubtaskToolName,
 }
 
 // speakerVariantTools 是对非主人开放、但描述随发言者不同的工具：放进公共目录会让

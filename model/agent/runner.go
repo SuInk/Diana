@@ -1381,7 +1381,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 单个工具怎么用写在它自己的描述和参数说明里（docs/tool-descriptions.md）；这里只留
 	// 跨工具的选择和流程。
 	if hasTool(subtaskToolName) {
-		rules = append(rules, "- 调研有两个以上互不依赖的方向时，一次 subtask（mode=search）把各方向放进 tasks 并行查，再综合结果，不由你逐个串行 web_search；需要独立核实外部事实或多步调研时，单个问题也可以派一个 Worker。后一步依赖前一步、或要用 subtask 没有的权限和上下文时自己查。")
+		rules = append(rules, "- 要联网查证的调研默认交给 subtask（mode=search）：把各个方向放进一次 tasks 并行查，只有一个方向也派一个 Worker，你只综合结论。只有一两个一搜就有答案的简单事实（版本号、价格、日期、有没有），或后一步依赖前一步、要用 subtask 没有的权限和上下文时，才自己 web_search。")
 	}
 	if hasTool("read_skill") {
 		// 条件只看工具在不在,不看当前有几个 skill:按 len(Skills()) 判定会让这一行
