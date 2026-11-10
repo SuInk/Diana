@@ -1048,7 +1048,12 @@ export interface AppLogEntry {
 
 export interface AppLogsResponse {
   logs: AppLogEntry[];
+  /** 非空表示还有更早的记录，原样传给下一次请求的 before。旧版后端没有这一项。 */
+  next_cursor?: string;
 }
+
+/** 日志页的页签。llm 是每次模型调用的记录（成功的用量和失败的请求），不混进其余几档。 */
+export type AppLogTab = "all" | "operation" | "error" | "llm";
 
 export interface BotEvent {
   at: string;
@@ -1157,6 +1162,8 @@ export interface LLMUsageCounters {
   total_tokens: number;
   /** 上游没报用量的调用数；不为 0 时 token 合计只会偏少。 */
   missing_usage_calls: number;
+  /** 失败的模型请求数，不算在 calls 里；旧版后端没有这一项。 */
+  failed_calls?: number;
   breakdown?: LLMUsageBreakdown[];
 }
 
@@ -1171,6 +1178,7 @@ export interface LLMUsageBreakdown {
   cached_input_tokens: number;
   total_tokens: number;
   missing_usage_calls: number;
+  failed_calls?: number;
 }
 
 /** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
@@ -2831,10 +2839,30 @@ export function getChangelog(): Promise<ChangelogResponse> {
 }
 
 /** "all" 是操作和错误合在一起（不含调试追踪）。 */
-export function listAppLogs(kind?: AppLogKind | "all", limit = 100): Promise<AppLogsResponse> {
+/** 日志页的筛选：日期是 RFC3339 边界 [since, until)；status/model/purpose 只对 llm 页签有效。 */
+export interface AppLogQueryOptions {
+  before?: string;
+  query?: string;
+  actions?: string[];
+  since?: string;
+  until?: string;
+  status?: "" | "ok" | "failed";
+  model?: string;
+  purpose?: string;
+}
+
+export function listAppLogs(kind?: AppLogKind | AppLogTab, limit = 100, options: AppLogQueryOptions = {}): Promise<AppLogsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (kind) {
     params.set("kind", kind);
+  }
+  if (options.before) params.set("before", options.before);
+  const query = options.query?.trim();
+  if (query) params.set("q", query);
+  if (options.actions?.length) params.set("action", options.actions.join(","));
+  for (const key of ["since", "until", "status", "model", "purpose"] as const) {
+    const value = options[key];
+    if (value) params.set(key, value);
   }
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
@@ -2992,6 +3020,8 @@ export interface LLMUsageSummary {
   total_tokens: number;
   cached_input_tokens: number;
   usage_missing_calls?: number;
+  /** 窗口内失败的模型请求数，不算在 recorded_calls 里；旧版后端没有这一项。 */
+  failed_calls?: number;
   breakdown?: LLMUsageBreakdown[];
 }
 
@@ -4889,6 +4919,8 @@ export interface GroupUsageSummary {
   total_tokens: number;
   cached_input_tokens: number;
   usage_missing_calls?: number;
+  failed_calls?: number;
+  breakdown?: LLMUsageBreakdown[];
 }
 export interface GroupTokenUsage {
   profile_id?: string;

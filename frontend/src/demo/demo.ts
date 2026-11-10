@@ -743,8 +743,8 @@ export const demoStatus: BotStatus = {
     ]
   },
   llm_usage: {
-    today: { calls: 412, input_tokens: 1_284_600, output_tokens: 96_420, cached_input_tokens: 742_180, total_tokens: 1_381_020, missing_usage_calls: 0 },
-    session: { calls: 1_486, input_tokens: 4_612_880, output_tokens: 338_940, cached_input_tokens: 2_604_310, total_tokens: 4_951_820, missing_usage_calls: 3 }
+    today: { calls: 412, input_tokens: 1_284_600, output_tokens: 96_420, cached_input_tokens: 742_180, total_tokens: 1_381_020, missing_usage_calls: 0, failed_calls: 6 },
+    session: { calls: 1_486, input_tokens: 4_612_880, output_tokens: 338_940, cached_input_tokens: 2_604_310, total_tokens: 4_951_820, missing_usage_calls: 3, failed_calls: 21 }
   },
   updated_at: before(1)
 };
@@ -814,6 +814,24 @@ const browserDependencies: ResolverDependency[] = [
 const updateStatus: UpdateStatus = { root: "/opt/diana", head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示", dirty: false, update_available: true, restart_required: false, download_ready: false, last_fetched_at: before(4) };
 let updatePolicy = { channel: "release", auto_download: true, auto_install: false, docker_auto_install: false, github_mirror: "direct" };
 let demoUpdateTokenConfigured = false;
+
+// 「LLM 调用」页签的模拟记录：够翻两页，夹着几次失败。
+function demoLLMCallLogs(): AppLogEntry[] {
+  const purposes = ["reply", "proactive_reply_router", "memory_extract", "reply", "proactive_reply_router"];
+  const models = ["gpt-6-sol", "gpt-5.6-terra", "gpt-5.6-terra"];
+  return Array.from({ length: 160 }, (_, index) => {
+    const failed = index % 23 === 4;
+    const model = models[index % models.length];
+    const purpose = purposes[index % purposes.length];
+    const input = 4_000 + ((index * 7919) % 30_000);
+    const output = 80 + ((index * 131) % 900);
+    const base = { id: `llm-call-${String(index).padStart(3, "0")}`, actor: "qq:100200711", actor_name: "青禾", group_id: "100200301", group_name: "周末摸鱼群", target: String(272291 - index), created_at: before(1 + index * 2) };
+    if (failed) {
+      return { ...base, kind: "error", level: "error", action: "llm_call_failed", message: `模型「${model}」调用失败`, detail: "429 Too Many Requests: rate limit exceeded（模拟数据）", metadata: { group_id: "100200301", provider: "openai_compatible", model, purpose, duration_ms: 1_200 + index * 3, recovered: index % 2 === 0 } } as AppLogEntry;
+    }
+    return { ...base, kind: "operation", level: "info", action: "llm_usage", message: "LLM 调用用量已记录", metadata: { group_id: "100200301", provider: "openai_compatible", model, purpose, input_tokens: input, output_tokens: output, cached_input_tokens: Math.floor(input * 0.6), total_tokens: input + output, duration_ms: 1_800 + output * 9, ttft_ms: 900 + (index % 7) * 110 } } as AppLogEntry;
+  });
+}
 
 const logs: AppLogEntry[] = [
   { id: "log-0", kind: "operation", level: "info", action: "llm_usage", message: "LLM 调用用量已记录", actor: "qq:100200711", actor_name: "青禾", actor_card: "青禾｜周末摸鱼", group_id: "100200301", group_name: "周末摸鱼群", target: "272291", metadata: { group_id: "100200301", message_id: "272291" }, created_at: before(1) },
@@ -1731,6 +1749,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         total_tokens: entry.total,
         cached_input_tokens: entry.cached,
         usage_missing_calls: 0,
+        failed_calls: Math.round(entry.calls * 0.012),
         breakdown: demoUsageBreakdown({
           calls: entry.calls, input_tokens: entry.input, output_tokens: entry.output,
           cached_input_tokens: entry.cached, total_tokens: entry.total, missing_usage_calls: 0
@@ -2166,7 +2185,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const since=new Date(Date.now()-hours*3600000).toISOString(),until=new Date().toISOString();
     const rows=groups.filter(group=>!profile || !group.bot_profile_id || group.bot_profile_id===profile).map((group,index)=>({profile_id:group.bot_profile_id || profile || "demo",platform:profile==="bot-telegram"?"telegram":"onebot-v11",group_id:group.group_id,usage:{since,until,recorded_calls:Math.max(1,groups.length-index)*22,input_tokens:Math.max(1,groups.length-index)*24000,output_tokens:Math.max(1,groups.length-index)*3200,total_tokens:Math.max(1,groups.length-index)*27200,cached_input_tokens:Math.max(1,groups.length-index)*16000,usage_missing_calls:index===0?1:0},purposes:{}}));
     const usage=rows.reduce((sum,row)=>({...sum,recorded_calls:sum.recorded_calls+row.usage.recorded_calls,input_tokens:sum.input_tokens+row.usage.input_tokens,output_tokens:sum.output_tokens+row.usage.output_tokens,total_tokens:sum.total_tokens+row.usage.total_tokens,cached_input_tokens:sum.cached_input_tokens+row.usage.cached_input_tokens,usage_missing_calls:sum.usage_missing_calls+row.usage.usage_missing_calls}),{since,until,recorded_calls:0,input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens:0,usage_missing_calls:0});
-    return json({usage,groups:rows});
+    return json({usage:{...usage,breakdown:demoUsageBreakdown({calls:usage.recorded_calls,input_tokens:usage.input_tokens,output_tokens:usage.output_tokens,cached_input_tokens:usage.cached_input_tokens,total_tokens:usage.total_tokens,missing_usage_calls:usage.usage_missing_calls})},groups:rows});
   }
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups: url.searchParams.get("profile") === telegramProfile.id ? telegramGroups : groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {
@@ -2699,15 +2718,46 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你打开浏览器页，内置浏览器随之启动", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
       { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
     ];
-    return json({ logs: browserLogs.filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile)) });
+    const failoverLogs: AppLogEntry[] = [
+      { id: "failover-log-1", kind: "error", level: "error", action: "llm_failover", message: "「对话主力 / gpt-6-sol」调用失败，已切到「视觉备用 / gpt-6-sol」；连续失败 2/3 次，下次照样先试它", detail: "429 Too Many Requests（模拟数据）", target: "llm-chat", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-chat", to: "llm-vision", to_model: "gpt-6-sol" }, created_at: before(18) },
+      { id: "failover-log-2", kind: "error", level: "error", action: "llm_failover", message: "「视觉备用 / gpt-6-sol」调用失败，已切到「意图识别 / gpt-5.6-terra」；冷却到 14:32", detail: "502 Bad Gateway（模拟数据）", target: "llm-vision", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-vision", to: "llm-intent", to_model: "gpt-5.6-terra" }, created_at: before(4) }
+    ];
+    return json({ logs: [...browserLogs, ...failoverLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)).filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile || log.action === "llm_failover")) });
   }
   if (path === "/api/logs") {
     const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
     const kind = url.searchParams.get("kind");
-    if (kind === "all") {
-      return json({ logs: [...logs, ...errorLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)) });
+    const llmCalls = demoLLMCallLogs();
+    const isLLM = (log: AppLogEntry) => log.action === "llm_usage" || log.action === "llm_call_failed";
+    let rows: AppLogEntry[] =
+      kind === "llm" ? llmCalls
+        : kind === "all" ? [...logs, ...errorLogs].filter((log) => !isLLM(log))
+          : kind === "error" ? errorLogs
+            : logs.filter((log) => !isLLM(log));
+    rows = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
+    const since = url.searchParams.get("since");
+    const until = url.searchParams.get("until");
+    if (since) rows = rows.filter((log) => log.created_at >= new Date(since).toISOString());
+    if (until) rows = rows.filter((log) => log.created_at < new Date(until).toISOString());
+    if (kind === "llm") {
+      const status = url.searchParams.get("status");
+      if (status) rows = rows.filter((log) => (status === "failed") === (log.action === "llm_call_failed"));
+      for (const key of ["model", "purpose"]) {
+        const value = url.searchParams.get(key);
+        if (value) rows = rows.filter((log) => log.metadata?.[key] === value);
+      }
     }
-    return json({ logs: kind === "error" ? errorLogs : logs });
+    const query = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+    if (query) rows = rows.filter((log) => JSON.stringify([log.action, log.message, log.detail, log.actor, log.actor_name, log.target, log.group_name, log.metadata]).toLowerCase().includes(query));
+    const cursor = url.searchParams.get("before") ?? "";
+    if (cursor) {
+      const [at, id] = cursor.split("|");
+      rows = rows.filter((log) => log.created_at < at || (log.created_at === at && log.id < (id ?? "")));
+    }
+    const limit = Number(url.searchParams.get("limit") ?? 100) || 100;
+    const page = rows.slice(0, limit);
+    const last = page[page.length - 1];
+    return json({ logs: page, next_cursor: rows.length > limit && last ? `${last.created_at}|${last.id}` : undefined });
   }
 
   if (path === "/api/system/version") return json({ build_version: "v0.8.6-demo", build_type: "release", version_label: "v0.8.6 · Pages 演示", git_available: false, deployment_mode: "release", update_supported: true, head_commit: "26ebc1bed07e9e5b", head_subject: "真实 WebUI Pages 演示" });

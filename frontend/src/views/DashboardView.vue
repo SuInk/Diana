@@ -410,6 +410,7 @@ interface UsageDetail {
   cached_input_tokens: number;
   total_tokens: number;
   missing_usage_calls?: number;
+  failed_calls?: number;
   breakdown?: readonly LLMUsageBreakdown[];
 }
 
@@ -540,7 +541,12 @@ const detailViews = computed<Record<DetailID, DetailView>>(() => {
         { label: "输入", value: formatNumber(usage?.input_tokens ?? 0) },
         ...cacheRows(usage),
         { label: "输出", value: formatNumber(usage?.output_tokens ?? 0) },
-        { label: "调用次数", value: formatNumber(usage?.calls ?? 0) },
+        { label: "调用次数", value: formatNumber(usage?.calls ?? 0), hint: "只数成功的调用" },
+        {
+          label: "失败请求",
+          value: `${formatNumber(usage?.failed_calls ?? 0)} 次`,
+          hint: llmSuccessRateHint(usage)
+        },
         ...(selectedRange.value === "today" && status.value?.llm_usage
           ? [
               {
@@ -582,7 +588,18 @@ function cacheRows(usage: UsageDetail | null) {
   return rows;
 }
 
-const llmUsageFoot = computed(() => `调用 ${formatNumber(selectedUsage.value?.calls ?? 0)} 次`);
+const llmUsageFoot = computed(() => {
+  const failed = selectedUsage.value?.failed_calls ?? 0;
+  return `调用 ${formatNumber(selectedUsage.value?.calls ?? 0)} 次${failed > 0 ? ` · 失败 ${formatNumber(failed)} 次` : ""}`;
+});
+
+// 成功率按请求算：降级链里失败的每一档各算一次失败，最后接上的那一档算一次成功。
+function llmSuccessRateHint(usage: UsageDetail | null): string {
+  const ok = usage?.calls ?? 0;
+  const failed = usage?.failed_calls ?? 0;
+  if (ok + failed <= 0) return "降级链里失败的每一档各算一次；明细见日志页「LLM 调用」";
+  return `请求成功率 ${((ok / (ok + failed)) * 100).toFixed(1)}%；降级链里失败的每一档各算一次，明细见日志页「LLM 调用」`;
+}
 
 // 图表卡在「最近 24 小时」和「按天」之间切换：前者看此刻的走势，后者是 GitHub 式的
 // 日历，看这阵子哪天热闹。选哪个是个人习惯，记在 localStorage 里；存储不可用时退回

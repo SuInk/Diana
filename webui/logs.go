@@ -60,6 +60,8 @@ type appLogEntry struct {
 
 type appLogsResponse struct {
 	Logs []appLogEntry `json:"logs"`
+	// NextCursor 非空表示还有更早的记录，原样放进下一次请求的 before 参数。
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 // NewAppLogHandler 创建 AppLogHandler 实例。
@@ -80,16 +82,45 @@ func (h *AppLogHandler) Register(router gin.IRouter) {
 }
 
 // list 封装当前模块的 list 逻辑。
+// llmCallLogActions 是「LLM 调用」页签的两种记录。它们每次模型调用都写一条，量比别的
+// 日志大一两个数量级，混在「全部」「操作」「错误」里会把真正的记录挤出第一页，所以
+// 只在自己的页签里出现。
+var llmCallLogActions = []string{"llm_usage", "llm_call_failed"}
+
 func (h *AppLogHandler) list(c *gin.Context) {
 	kind := storage.AppLogKind(strings.TrimSpace(c.Query("kind")))
 	// all 是日志页的「全部」：操作和错误合在一起按时间排。调试追踪不算在内——它是
 	// 按需打开的完整调用链，体量大，混进来会把真正的记录冲掉。
 	var kinds []storage.AppLogKind
+	var actions, excluded []string
+	var metadata map[string]string
 	switch kind {
 	case "", storage.LogKindOperation, storage.LogKindError:
 	case "all":
 		kind = ""
 		kinds = []storage.AppLogKind{storage.LogKindOperation, storage.LogKindError}
+	case "llm":
+		kind = ""
+		// 「LLM 调用」能按结果、模型和用途筛：只看失败的、只看某个模型的。
+		switch status := strings.TrimSpace(c.Query("status")); status {
+		case "":
+			actions = append(actions, llmCallLogActions...)
+		case "ok":
+			actions = []string{"llm_usage"}
+		case "failed":
+			actions = []string{"llm_call_failed"}
+		default:
+			writeError(c, http.StatusBadRequest, fmt.Errorf("unsupported llm call status %q", status))
+			return
+		}
+		for _, key := range []string{"model", "purpose"} {
+			if value := strings.TrimSpace(c.Query(key)); value != "" {
+				if metadata == nil {
+					metadata = map[string]string{}
+				}
+				metadata[key] = value
+			}
+		}
 	default:
 		writeError(c, http.StatusBadRequest, fmt.Errorf("unsupported log kind %q", kind))
 		return
@@ -99,29 +130,141 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, err)
 		return
 	}
+	beforeTime, beforeID, err := parseLogCursor(c.Query("before"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	since, err := parseLogTime(c.Query("since"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	until, err := parseLogTime(c.Query("until"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
 	// 日志存储不可用时返回空列表，前端日志页仍可正常打开。
 	if h.store == nil {
 		c.JSON(http.StatusOK, appLogsResponse{Logs: []appLogEntry{}})
 		return
 	}
-	var actions []string
-	for _, action := range strings.Split(c.Query("action"), ",") {
-		if action = strings.TrimSpace(action); action != "" {
-			actions = append(actions, action)
+	if len(actions) == 0 {
+		for _, action := range strings.Split(c.Query("action"), ",") {
+			if action = strings.TrimSpace(action); action != "" {
+				actions = append(actions, action)
+			}
+		}
+		if len(actions) == 0 && c.Query("kind") != "" {
+			excluded = llmCallLogActions
 		}
 	}
-	logs, err := h.store.ListLogs(c.Request.Context(), storage.AppLogFilter{
-		Kind:      kind,
-		Kinds:     kinds,
-		Actions:   actions,
-		ProfileID: strings.TrimSpace(c.Query("profile")),
-		Limit:     limit,
-	})
+	filter := storage.AppLogFilter{
+		Kind:           kind,
+		Kinds:          kinds,
+		Actions:        actions,
+		ExcludeActions: excluded,
+		ProfileID:      strings.TrimSpace(c.Query("profile")),
+		Metadata:       metadata,
+		Since:          since,
+		Until:          until,
+		BeforeTime:     beforeTime,
+		BeforeID:       beforeID,
+	}
+	if query := strings.TrimSpace(c.Query("q")); query != "" {
+		filter.Query = query
+		filter.QueryActors, filter.QueryGroupIDs = h.resolveLogQueryNames(c.Request.Context(), query)
+	}
+	// 多取一条判断还有没有下一页，返回时去掉。
+	pageSize := normalizedLogPageSize(limit)
+	filter.Limit = pageSize + 1
+	logs, err := h.store.ListLogs(c.Request.Context(), filter)
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, err)
 		return
 	}
-	c.JSON(http.StatusOK, appLogsResponse{Logs: h.namedAppLogs(c.Request.Context(), logs)})
+	response := appLogsResponse{}
+	if len(logs) > pageSize {
+		logs = logs[:pageSize]
+		last := logs[len(logs)-1]
+		response.NextCursor = formatLogCursor(last.CreatedAt, last.ID)
+	}
+	response.Logs = h.namedAppLogs(c.Request.Context(), logs)
+	c.JSON(http.StatusOK, response)
+}
+
+// normalizedLogPageSize 和存储层的上限保持一致；多取的那一条不能被存储层截掉。
+func normalizedLogPageSize(limit int) int {
+	switch {
+	case limit <= 0:
+		return 100
+	case limit >= 500:
+		return 499
+	}
+	return limit
+}
+
+// 游标是「最后一条的时间|ID」：时间相同的多条靠 ID 接着往下翻，不会漏也不会重复。
+func formatLogCursor(at time.Time, id string) string {
+	return at.UTC().Format(time.RFC3339Nano) + "|" + id
+}
+
+func parseLogCursor(raw string) (time.Time, string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, "", nil
+	}
+	stamp, id, _ := strings.Cut(raw, "|")
+	at, err := time.Parse(time.RFC3339Nano, stamp)
+	if err != nil {
+		return time.Time{}, "", fmt.Errorf("invalid log cursor")
+	}
+	return at, id, nil
+}
+
+// parseLogTime 解析日期筛选的边界。前端按本地日期换算好再传 RFC3339，这里不猜时区。
+func parseLogTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid log time %q", raw)
+	}
+	return at, nil
+}
+
+// appLogUserFinder 是日志存储的可选能力：按昵称反查账号，让搜索框搜昵称也能
+// 翻到更早的记录，而不只是在已经加载的那一页里找。
+type appLogUserFinder interface {
+	FindUserIDsByDisplayName(ctx context.Context, query string, limit int) ([]string, error)
+}
+
+// resolveLogQueryNames 把搜索词按昵称和群名反查成账号、群号。日志行里只存号码，
+// 页面上显示的却是名字，不反查的话照着屏幕上的名字搜会什么都搜不到。
+func (h *AppLogHandler) resolveLogQueryNames(ctx context.Context, query string) ([]string, []string) {
+	keyword := strings.ToLower(strings.TrimSpace(query))
+	var actors, groups []string
+	if finder, ok := h.store.(appLogUserFinder); ok {
+		ids, err := finder.FindUserIDsByDisplayName(ctx, keyword, 50)
+		if err != nil {
+			log.Printf("find app log actors by name failed: %v", err)
+		}
+		actors = ids
+	}
+	if h.groupNames != nil {
+		for groupID, name := range h.groupNames(ctx) {
+			if strings.Contains(strings.ToLower(name), keyword) {
+				groups = append(groups, groupID)
+				if len(groups) >= 50 {
+					break
+				}
+			}
+		}
+	}
+	return actors, groups
 }
 
 // namedAppLogs 给日志行补上 actor 的昵称、群名片和群名。一次查完整页，不逐行查库。

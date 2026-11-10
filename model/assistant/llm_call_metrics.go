@@ -159,8 +159,10 @@ type LLMUsageCounters struct {
 	TotalTokens       int64 `json:"total_tokens"`
 	// MissingUsageCalls 是上游没报用量的调用数。不为 0 时 token 合计只会偏少，
 	// 不标出来就会被当成「这几次没花钱」。
-	MissingUsageCalls int64                   `json:"missing_usage_calls"`
-	Breakdown         []applog.UsageBreakdown `json:"breakdown"`
+	MissingUsageCalls int64 `json:"missing_usage_calls"`
+	// FailedCalls 是失败的模型请求数，不算在 Calls 里。
+	FailedCalls int64                   `json:"failed_calls"`
+	Breakdown   []applog.UsageBreakdown `json:"breakdown"`
 }
 
 func (c *LLMUsageCounters) add(usage llm.Usage) {
@@ -218,6 +220,18 @@ func (t *llmUsageTracker) observe(usage llm.Usage, provider, model, purpose stri
 	t.sessionBreakdown.Add(entry)
 }
 
+// observeFailure 记一次失败的模型请求。
+func (t *llmUsageTracker) observeFailure(provider, model, purpose string, now time.Time) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.resetDay(now)
+	t.totals.Today.FailedCalls++
+	t.totals.Session.FailedCalls++
+	entry := applog.UsageBreakdown{Purpose: purpose, Provider: provider, Model: model, FailedCalls: 1}
+	t.todayBreakdown.Add(entry)
+	t.sessionBreakdown.Add(entry)
+}
+
 // snapshot 返回当前合计。过了零点还没有新调用时，今天那一桶还是昨天的数，这里
 // 按 now 判断，日期不对就当成今天还没用过。
 func (t *llmUsageTracker) snapshot(now time.Time) LLMUsageTotals {
@@ -250,11 +264,12 @@ func (t *llmUsageTracker) restoreToday(now time.Time, counters LLMUsageCounters)
 		t.todayBreakdown.Add(entry)
 	}
 	// Older readers may provide only totals. Preserve those calls as unlabelled.
-	if len(counters.Breakdown) == 0 && counters.Calls > 0 {
+	if len(counters.Breakdown) == 0 && (counters.Calls > 0 || counters.FailedCalls > 0) {
 		t.todayBreakdown.Add(applog.UsageBreakdown{
 			Calls: counters.Calls, InputTokens: counters.InputTokens,
 			OutputTokens: counters.OutputTokens, TotalTokens: counters.TotalTokens,
 			CachedInputTokens: counters.CachedInputTokens, MissingUsageCalls: counters.MissingUsageCalls,
+			FailedCalls: counters.FailedCalls,
 		})
 	}
 }
@@ -301,6 +316,7 @@ func (r *Runtime) RestoreLLMUsageToday(ctx context.Context, reader applog.UsageR
 		CachedInputTokens: summary.CachedInputTokens,
 		TotalTokens:       summary.TotalTokens,
 		MissingUsageCalls: summary.MissingUsageCalls,
+		FailedCalls:       summary.FailedCalls,
 		Breakdown:         summary.Breakdown,
 	})
 	return nil

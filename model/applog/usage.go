@@ -10,15 +10,18 @@ import (
 // UsageSummary counts recorded calls across this Diana instance.
 // CachedInputTokens is already included in InputTokens.
 type UsageSummary struct {
-	Since             time.Time        `json:"since"`
-	Until             time.Time        `json:"until"`
-	Calls             int64            `json:"recorded_calls"`
-	InputTokens       int64            `json:"input_tokens"`
-	OutputTokens      int64            `json:"output_tokens"`
-	TotalTokens       int64            `json:"total_tokens"`
-	CachedInputTokens int64            `json:"cached_input_tokens"`
-	MissingUsageCalls int64            `json:"usage_missing_calls,omitempty"`
-	Breakdown         []UsageBreakdown `json:"breakdown"`
+	Since             time.Time `json:"since"`
+	Until             time.Time `json:"until"`
+	Calls             int64     `json:"recorded_calls"`
+	InputTokens       int64     `json:"input_tokens"`
+	OutputTokens      int64     `json:"output_tokens"`
+	TotalTokens       int64     `json:"total_tokens"`
+	CachedInputTokens int64     `json:"cached_input_tokens"`
+	MissingUsageCalls int64     `json:"usage_missing_calls,omitempty"`
+	// FailedCalls 是窗口内失败的模型请求数，不算在 Calls 里：Calls 只数成功的调用，
+	// 降级链里失败的每一档各算一次。
+	FailedCalls int64            `json:"failed_calls"`
+	Breakdown   []UsageBreakdown `json:"breakdown"`
 }
 
 // UsageBreakdown preserves the combination of purpose and actual model so
@@ -34,6 +37,7 @@ type UsageBreakdown struct {
 	TotalTokens       int64  `json:"total_tokens"`
 	CachedInputTokens int64  `json:"cached_input_tokens"`
 	MissingUsageCalls int64  `json:"missing_usage_calls"`
+	FailedCalls       int64  `json:"failed_calls"`
 }
 
 type usageBreakdownKey struct {
@@ -68,6 +72,7 @@ func (a *UsageBreakdownAccumulator) Add(entry UsageBreakdown) {
 	current.TotalTokens += entry.TotalTokens
 	current.CachedInputTokens += entry.CachedInputTokens
 	current.MissingUsageCalls += entry.MissingUsageCalls
+	current.FailedCalls += entry.FailedCalls
 	a.entries[key] = current
 }
 

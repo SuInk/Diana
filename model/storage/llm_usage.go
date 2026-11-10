@@ -31,7 +31,8 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 	const seconds = "2006-01-02T15:04:05"
 	// 筛选条件先在 SQL 里粗筛，省得把整个窗口的元数据都搬进 Go 解析；
 	// 循环里仍按原规则精确比对。json_valid 守住空串和坏 JSON：它们本就匹配不上非空条件。
-	query := `SELECT metadata,created_at FROM app_logs WHERE created_at>=? AND created_at<? AND action='llm_usage'`
+	// 失败的请求（llm_call_failed）一并读出来，只计进 FailedCalls，不动成功调用的口径。
+	query := `SELECT action,metadata,created_at FROM app_logs WHERE created_at>=? AND created_at<? AND action IN ('llm_usage','llm_call_failed')`
 	args := []any{since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds)}
 	for _, condition := range []struct{ key, value string }{{"profile_id", filter.ProfileID}, {"platform", filter.Platform}, {"group_id", filter.GroupID}} {
 		if condition.value == "" {
@@ -53,9 +54,10 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 	var breakdown applog.UsageBreakdownAccumulator
 	groups := map[string]*groupAccumulator{}
 	for rows.Next() {
+		var action string
 		var metadata sql.NullString
 		var timestamp string
-		if err := rows.Scan(&metadata, &timestamp); err != nil {
+		if err := rows.Scan(&action, &metadata, &timestamp); err != nil {
 			return report, err
 		}
 		at, err := time.Parse(time.RFC3339Nano, timestamp)
@@ -79,6 +81,9 @@ func (s *SQLiteStore) LLMUsageReport(ctx context.Context, filter applog.UsageFil
 			continue
 		}
 		call := usageCall(meta)
+		if action == "llm_call_failed" {
+			call = failedUsageCall(meta)
+		}
 		addUsageCall(&report.Usage, call)
 		breakdown.Add(call)
 		if group == "" {
@@ -154,6 +159,14 @@ func usageCall(meta map[string]any) applog.UsageBreakdown {
 	}
 }
 
+// failedUsageCall 把一条失败记录折算成「失败一次」，token 和成功调用次数都记 0。
+func failedUsageCall(meta map[string]any) applog.UsageBreakdown {
+	purpose, _ := meta["purpose"].(string)
+	provider, _ := meta["provider"].(string)
+	model, _ := meta["model"].(string)
+	return applog.UsageBreakdown{Purpose: purpose, Provider: provider, Model: model, FailedCalls: 1}
+}
+
 func addUsageCall(usage *applog.UsageSummary, call applog.UsageBreakdown) {
 	usage.Calls += call.Calls
 	usage.InputTokens += call.InputTokens
@@ -161,6 +174,7 @@ func addUsageCall(usage *applog.UsageSummary, call applog.UsageBreakdown) {
 	usage.TotalTokens += call.TotalTokens
 	usage.CachedInputTokens += call.CachedInputTokens
 	usage.MissingUsageCalls += call.MissingUsageCalls
+	usage.FailedCalls += call.FailedCalls
 }
 
 // GroupLLMUsageSince 统计某个群在窗口内的模型调用次数，供按群额度判断。
