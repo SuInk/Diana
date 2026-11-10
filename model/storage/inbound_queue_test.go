@@ -1316,7 +1316,7 @@ func TestInboundSessionHasNewerPendingAndClaimEnqueuedAt(t *testing.T) {
 	}
 	check := func(want bool) {
 		t.Helper()
-		got, err := store.InboundSessionHasNewerPending(ctx, item)
+		got, err := store.InboundSessionHasNewerPending(ctx, item, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1352,6 +1352,17 @@ func TestInboundSessionHasNewerPendingAndClaimEnqueuedAt(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(true)
+
+	// 限了窗口时只算紧跟着的：后面那条晚 3 秒，窗口 2 秒算没有，3 秒算有。
+	for within, want := range map[time.Duration]bool{2 * time.Second: false, 3 * time.Second: true} {
+		got, err := store.InboundSessionHasNewerPending(ctx, item, within)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("within=%s: got %v, want %v", within, got, want)
+		}
+	}
 }
 
 func TestGroupSeqGapCountsMissingMessagesExcludingBotReplies(t *testing.T) {

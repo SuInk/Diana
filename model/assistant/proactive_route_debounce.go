@@ -344,6 +344,7 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	event, text, allowed := r.resolveProactiveRoute(ctx, latest.Event, eligible)
 	if !allowed {
 		r.record(r.decisionEventRecord(event, text, "ignored"))
+		r.recordProactiveBatchIgnored(eligible, event, "ignored")
 		return
 	}
 	event.replyHistory, event.replyHistoryLoaded = history, true
@@ -352,6 +353,7 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	if blocked, reason := r.replyFatigueBlocks(ctx, event, text); blocked {
 		event.routingReason = reason
 		r.record(r.decisionEventRecord(event, text, "ignored_reply_fatigue"))
+		r.recordProactiveBatchIgnored(eligible, event, "ignored_reply_fatigue")
 		return
 	}
 	// 评分和疲劳判断都要调模型，这几秒里被直接触发的那一轮接走了就不必再生成。
@@ -376,6 +378,20 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	}
 	if _, err := r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, "replied_proactive"); err != nil {
 		log.Printf("diana parked proactive reply failed: %v", err)
+	}
+}
+
+// recordProactiveBatchIgnored 把同一批里其余几条的结果也落成「不回」。它们入站时先记了
+// 「等待合并」的占位，整批评完决定不接话以后要是不改，事件页里就一直挂着「已合并」，
+// 看上去像被并进了哪条回复。recorded 是结论已经记过的那条。
+func (r *Runtime) recordProactiveBatchIgnored(batch []proactiveReplyCandidate, recorded MessageEvent, outcome string) {
+	for _, candidate := range batch {
+		if candidate.Event.MessageID == recorded.MessageID {
+			continue
+		}
+		event := candidate.Event
+		event.routingReason = "和这段时间的群消息一起做了接话评分，结论是不接话（原因记在这一批最后那条消息上）"
+		r.record(r.decisionEventRecord(event, candidate.Text, outcome))
 	}
 }
 

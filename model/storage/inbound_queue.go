@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -594,14 +595,20 @@ RETURNING id, session, payload, attempts, priority, created_at
 	return item, true, nil
 }
 
-// InboundSessionHasNewerPending 看同一会话里在这条之后还有没有等着处理的消息。
-func (s *SQLiteStore) InboundSessionHasNewerPending(ctx context.Context, item assistant.InboundQueueItem) (bool, error) {
+// InboundSessionHasNewerPending 看同一会话里在这条之后还有没有等着处理的消息。within 大于 0
+// 时只算发出时间比这条晚不超过 within 的；这条消息自己没有时间时不限。
+func (s *SQLiteStore) InboundSessionHasNewerPending(ctx context.Context, item assistant.InboundQueueItem, within time.Duration) (bool, error) {
 	defer s.observeStorage(ctx, "InboundSessionHasNewerPending", "read")()
 	if s == nil || s.db == nil {
 		return false, errors.New("check newer pending inbound event: sqlite store is not configured")
 	}
 	if strings.TrimSpace(item.Session) == "" {
 		return false, nil
+	}
+	// 上界按整秒算：event_time 只有秒精度。
+	latest := int64(math.MaxInt64)
+	if within > 0 && item.Event.Time > 0 {
+		latest = item.Event.Time + int64(within/time.Second)
 	}
 	var exists int
 	// 只读判断，走读池：写连接上排队的入队、领取不该让它跟着等。还在提交中的
@@ -611,8 +618,9 @@ SELECT EXISTS (
   SELECT 1 FROM inbound_events
   WHERE session = ? AND status = ? AND id != ?
     AND (event_time > ? OR (event_time = ? AND created_at > ?))
+    AND event_time <= ?
 )
-`, item.Session, inboundStatusPending, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano()).Scan(&exists)
+`, item.Session, inboundStatusPending, item.ID, item.Event.Time, item.Event.Time, item.EnqueuedAt.UnixNano(), latest).Scan(&exists)
 	if err != nil {
 		return false, fmt.Errorf("check newer pending inbound event: %w", err)
 	}
