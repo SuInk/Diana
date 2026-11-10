@@ -1708,6 +1708,10 @@ func (r *Runtime) maybeSendRepositoryWatchFollowUp(ctx context.Context, item Rem
 			cancel()
 			continue
 		}
+		// 版本介绍一条发完：按句拆成四五个气泡，读起来像在播报更新日志。
+		if followUpReferenceHasReleaseNotes(reference) {
+			target.replyDeliveryMode = replyDeliverySingle
+		}
 		if err := r.sendFollowUp(followCtx, followUpKindRepositoryWatch, target, comment); err != nil {
 			r.recordFollowUpFailure(followCtx, followUpKindRepositoryWatch, target, "send", err)
 		}

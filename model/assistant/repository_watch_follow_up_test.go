@@ -96,6 +96,26 @@ func TestRepositoryWatchFollowUpUsesExplicitChatSegmentation(t *testing.T) {
 	}
 }
 
+func TestRepositoryWatchReleaseFollowUpIsOneMessage(t *testing.T) {
+	// v0.9.9 推送后的版本介绍被拆成四个气泡，读起来像播报更新日志。
+	withFastSendTiming(t)
+	reply := "生图能出竖版和横版了" + notificationSplitMarker + "主动开口现在所有群都跟随\n日志页也能翻页搜索了"
+	runtime, channel, _ := repositoryWatchFollowUpRuntime(reply)
+	item := Reminder{Kind: ReminderKindRepositoryWatch, GroupID: "g1", UserID: "u1"}
+
+	runtime.maybeSendRepositoryWatchFollowUp(context.Background(), item, "GitHub 动态：SuInk/Diana\nRelease v0.9.9", "Release v0.9.9 更新说明：\n- 生图支持竖版和横版")
+
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 {
+		t.Fatalf("版本介绍应一条发完：%#v", sent)
+	}
+	for _, part := range []string{"生图能出竖版和横版了", "主动开口现在所有群都跟随", "日志页也能翻页搜索了"} {
+		if !strings.Contains(sent[0].Text, part) {
+			t.Fatalf("合成一条时丢了内容 %q：%q", part, sent[0].Text)
+		}
+	}
+}
+
 func TestRepositoryWatchFollowUpStaysQuietOnSkip(t *testing.T) {
 	runtime, channel, provider := repositoryWatchFollowUpRuntime("SKIP")
 
