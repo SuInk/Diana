@@ -170,12 +170,63 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	registry.ApplyExtensionOverrides(mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
 	// 安全模式放在所有身份和扩展开关之后：它对主人同样生效，不能被前面任何一道放行盖掉。
 	applyAgentSafeMode(cfg, registry)
+	if event.Kind == EventKindGroup {
+		r.setGroupSkillAudience(registry, event, skillSource, base, localSkills, access, mergeExtensionOverrides(overrides, groupExtensionOverrides(groupAccess)))
+	}
 	r.wrapScreenshotTools(registry, event)
 	if personal != nil {
 		registry.RegisterCloser(personal)
 		transferred = true
 	}
 	return registry, nil
+}
+
+// skillRestrictedAudience 写在目录里不是人人能用的 skill 后面。
+const skillRestrictedAudience = "只对主人、管理员和被单独放行的成员开放"
+
+// setGroupSkillAudience 让群里每个发言者看到同一份 skill 目录：列出主人能用的全部 skill，
+// 不是所有成员都能用的注明对谁开放，当前发言者用不了的交给注册表在 read_skill 时拒绝。
+// 「所有成员都能用」只看档位，不看本轮发言者的个人黑白名单和群身份；私聊只有一个发言者，
+// 不用这一步。
+func (r *Runtime) setGroupSkillAudience(registry *agent.ToolRegistry, event MessageEvent, skillSource []agent.SkillMetadata, base *agent.ToolRegistry, localSkills []agent.SkillMetadata, access extensionAccessInput, overrides map[string]bool) {
+	usable := map[string]bool{}
+	for _, skill := range registry.Skills() {
+		usable[skill.Name] = true
+	}
+	candidates := extensionIDsOf(base)
+	if base == nil {
+		candidates = skillExtensionIDs(localSkills)
+	}
+	everyone := access
+	everyone.userID = ""
+	open, _ := resolveMemberExtensions(candidates, everyone)
+	openToAll := map[string]bool{}
+	for _, skill := range memberSkills(skillSource, open) {
+		openToAll[skill.Name] = true
+	}
+	audience := map[string]string{}
+	var locked []agent.SkillMetadata
+	seen := map[string]bool{}
+	for _, skill := range append(append([]agent.SkillMetadata(nil), skillSource...), r.repoPluginBundleSkills(event)...) {
+		if seen[skill.Name] {
+			continue
+		}
+		seen[skill.Name] = true
+		// 机器人或本群停用了的 skill 对谁都不存在，不进目录。
+		if enabled, set := overrides["skill:"+skill.Name]; set && !enabled {
+			continue
+		}
+		if !openToAll[skill.Name] {
+			audience[skill.Name] = skillRestrictedAudience
+		}
+		if !usable[skill.Name] {
+			locked = append(locked, skill)
+		}
+	}
+	if len(audience) == 0 && len(locked) == 0 {
+		return
+	}
+	registry.SetSkillAudience(audience, locked)
 }
 
 // agentCoreTools 按这台机器人配的档位算出本轮的常驻工具名单。没配过档位就是内置

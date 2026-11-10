@@ -324,6 +324,24 @@ func renderSkillsCatalog(skills []SkillMetadata, budget int) (string, map[string
 	return strings.TrimSpace(builder.String()), delivered
 }
 
+// withSkillAudience 给不是人人能用的 skill 在简介后面注明对谁开放，并且不让它的正文进
+// 目录后面的常驻段：那一段对谁都是同一份，用不了的人不该读到正文。能用的人要正文时
+// 走尾部（renderTriggeredSkillBodies）。
+func withSkillAudience(skills []SkillMetadata, audience map[string]string) []SkillMetadata {
+	if len(audience) == 0 {
+		return skills
+	}
+	out := make([]SkillMetadata, len(skills))
+	for i, skill := range skills {
+		if note := audience[skill.Name]; note != "" {
+			skill.Description = strings.TrimSpace(skill.Description) + "〔" + note + "〕"
+			skill.IncludeBody = false
+		}
+		out[i] = skill
+	}
+	return out
+}
+
 // residentSkillsOnly 只保留常驻 skill 的正文开关：目录和常驻正文进历史之前的稳定段，
 // 关键词命中的正文由 renderTriggeredSkillBodies 放进尾部。
 func residentSkillsOnly(skills []SkillMetadata) []SkillMetadata {
@@ -495,6 +513,8 @@ func newLiveSkillTools(provider func() []SkillMetadata) SkillTools {
 
 type SkillsReadTool struct {
 	provider func() []SkillMetadata
+	// locked 报告某份 skill 是不是目录里有、当前发言者却用不了，见 ToolRegistry.SetSkillAudience。
+	locked func(name string) (audience string, locked bool)
 }
 
 func (t *SkillsReadTool) Name() string {
@@ -542,6 +562,14 @@ func (t *SkillsReadTool) Run(_ context.Context, input map[string]any) (string, e
 			return "", err
 		}
 		return string(encoded), nil
+	}
+	if t.locked != nil {
+		if audience, locked := t.locked(name); locked {
+			if audience == "" {
+				audience = "没有对当前发言者开放"
+			}
+			return "", fmt.Errorf("skill %q %s，当前发言者不能用；不要重试，也不要凭目录里的一句简介去执行它", name, audience)
+		}
 	}
 	return "", fmt.Errorf("skill %q not found", name)
 }
