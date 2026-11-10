@@ -409,11 +409,10 @@ type OutgoingMessage struct {
 	ButtonFontSize string
 	// 以下几项只有 QQ 官方机器人认，见 qq_official_extras.go：MarkdownStyle 是正文版式，
 	// Suggestions 是单聊输入框上方的推荐回复，Card 跟在正文后单独发一张图文卡片，
-	// QQFeedback 在单聊回复下挂赞踩栏，QQKeyboardTemplate 是没有按钮时挂的按钮模板 ID。
+	// QQKeyboardTemplate 是没有按钮时挂的按钮模板 ID。
 	MarkdownStyle      QQMarkdownStyle
 	Suggestions        []string
 	Card               *QQCard
-	QQFeedback         bool
 	QQKeyboardTemplate string
 }
 
@@ -791,8 +790,6 @@ type BotConfig struct {
 	// QQOfficialInputNotify 让 QQ 官方机器人的单聊在准备回复时显示「对方正在输入」。
 	// 默认关：输入状态要带被动回复的 msg_id，平台没说占不占同一条消息的回复次数。
 	QQOfficialInputNotify *bool `json:"qq_official_input_notify,omitempty"`
-	// QQOfficialFeedback 在 QQ 官方机器人单聊回复下挂赞踩栏，nil 按开启处理。
-	QQOfficialFeedback *bool `json:"qq_official_feedback,omitempty"`
 	// QQOfficialKeyboardTemplate 是开放平台上申请的按钮模板 ID，模型没填按钮时挂它。
 	QQOfficialKeyboardTemplate string `json:"qq_official_keyboard_template,omitempty"`
 	ErrorNotifyEnabled         *bool  `json:"error_notify_enabled,omitempty"`
@@ -1507,7 +1504,6 @@ type ConfigPayload struct {
 	MentionUserMode                ReplyDecorationMode  `json:"mention_user_mode,omitempty"`
 	MarkdownToPlain                *bool                `json:"markdown_to_plain,omitempty"`
 	QQOfficialInputNotify          *bool                `json:"qq_official_input_notify,omitempty"`
-	QQOfficialFeedback             *bool                `json:"qq_official_feedback,omitempty"`
 	QQOfficialKeyboardTemplate     string               `json:"qq_official_keyboard_template,omitempty"`
 	ErrorNotifyEnabled             *bool                `json:"error_notify_enabled,omitempty"`
 	MutedReplyPauseEnabled         *bool                `json:"muted_reply_pause_enabled,omitempty"`
@@ -2853,7 +2849,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MentionUserMode:                 cfg.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(cfg.MarkdownToPlain),
 		QQOfficialInputNotify:           copyBoolPointer(cfg.QQOfficialInputNotify),
-		QQOfficialFeedback:              copyBoolPointer(cfg.QQOfficialFeedback),
 		QQOfficialKeyboardTemplate:      cfg.QQOfficialKeyboardTemplate,
 		ErrorNotifyEnabled:              copyBoolPointer(cfg.ErrorNotifyEnabled),
 		MutedReplyPauseEnabled:          copyBoolPointer(cfg.MutedReplyPauseEnabled),
@@ -3112,7 +3107,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MentionUserMode:                 payload.MentionUserMode,
 		MarkdownToPlain:                 copyBoolPointer(payload.MarkdownToPlain),
 		QQOfficialInputNotify:           copyBoolPointer(payload.QQOfficialInputNotify),
-		QQOfficialFeedback:              copyBoolPointer(payload.QQOfficialFeedback),
 		QQOfficialKeyboardTemplate:      strings.TrimSpace(payload.QQOfficialKeyboardTemplate),
 		ErrorNotifyEnabled:              copyBoolPointer(payload.ErrorNotifyEnabled),
 		MutedReplyPauseEnabled:          copyBoolPointer(payload.MutedReplyPauseEnabled),

@@ -112,9 +112,11 @@ type QQOfficialChannel struct {
 	seqMu      sync.Mutex
 	passiveSeq map[string]qqPassiveSeq
 
-	// streams 是私聊里按入站 msg_id 进行中的流式消息，见 qq_official_stream.go。
-	streamMu sync.Mutex
-	streams  map[string]*qqStream
+	// streams 是私聊里按入站 msg_id 进行中的流式消息，settledStreams 是同一轮里已经
+	// 定住、等定稿来认领的前几条，见 qq_official_stream.go。
+	streamMu       sync.Mutex
+	streams        map[string]*qqStream
+	settledStreams map[string][]*qqStream
 	// inputNotified 记哪些入站消息已经发过「正在输入」，见 qq_official_input.go。
 	inputNotifyMu sync.Mutex
 	inputNotified map[string]time.Time
@@ -709,18 +711,15 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 
 	var firstID string
 	if text != "" && !isGroup {
-		// 这一轮的正文已经以流式消息推出去了：发结束帧把预览替换成定稿，不另发一条。
-		// 结束帧失败就退回普通发送，宁可多一条也不能让回复停在半截。
-		if id, streamed, err := c.finishQQStream(ctx, strings.TrimSpace(msg.PassiveReplyMessageID), target, text); streamed {
-			if err == nil {
-				if len(msg.Buttons) > 0 {
-					log.Printf("qq: 流式消息不支持按钮，本条按钮未挂上")
-				}
-				firstID = id
-				text = ""
-			} else {
-				log.Printf("qq: 流式消息收尾失败，改为普通发送: %v", err)
+		// 这一轮的正文已经以流式消息推出去了：前面几条在生成中途就定住了，定稿对得上
+		// 就不再发；还在流的那一条发结束帧定稿。对不上或收尾失败就撤回预览、退回普通
+		// 发送，宁可重发也不能让回复停在半截或者重复。
+		if id, streamed := c.settleQQStream(ctx, strings.TrimSpace(msg.PassiveReplyMessageID), target, text); streamed {
+			if len(msg.Buttons) > 0 {
+				log.Printf("qq: 流式消息不支持按钮，本条按钮未挂上")
 			}
+			firstID = id
+			text = ""
 		}
 	}
 	if text != "" {
@@ -733,12 +732,11 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if !isGuild && !keyboard {
 			keyboardTemplate = strings.TrimSpace(msg.QQKeyboardTemplate)
 		}
-		// 推荐回复和赞踩栏只有单聊有；版式群和单聊都能用。见 qq_official_extras.go。
+		// 推荐回复只有单聊有；版式群和单聊都能用。见 qq_official_extras.go。
 		c2c := !isGroup && !isGuild
 		suggestions := c2c && len(msg.Suggestions) > 0
-		feedback := c2c && msg.QQFeedback
 		markdownStyle := !isGuild && !msg.MarkdownStyle.isZero()
-		extras := suggestions || feedback || markdownStyle
+		extras := suggestions || markdownStyle
 		if !isGuild {
 			source, mentionIDs := text, []string(nil)
 			if isGroup {
@@ -746,7 +744,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}
 			markdownContent, markdown = qqOfficialMarkdownContent(source)
 			if (keyboard || keyboardTemplate != "" || extras || len(mentionIDs) > 0) && !markdown {
-				// 按钮、推荐回复、赞踩栏、版式和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
+				// 按钮、推荐回复、版式和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
 				markdownContent, markdown = qqMarkdownLineBreaks(source), true
 			}
 			markdownContent = qqOfficialRestoreMentions(markdownContent, mentionIDs)
@@ -770,9 +768,6 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				if suggestions {
 					body["prompt_keyboard"] = qqPromptKeyboard(msg.Suggestions)
 				}
-				if feedback {
-					body["action_button"] = map[string]any{"feedback": true}
-				}
 				if strings.Contains(markdownContent, "qqbot-media://") {
 					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。
 					body["force_verify_image_resource"] = true
@@ -788,10 +783,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 		id, err := post(body)
 		if err != nil && extras && markdown && !qqOfficialRetryUseless(err) {
-			// 推荐回复、赞踩栏和版式都是文档外的字段，被拒就去掉重发，正文和按钮照旧。
-			log.Printf("qq: 带推荐回复/赞踩/版式的消息被拒，去掉后重发: %v", err)
+			// 推荐回复和版式都是文档外的字段，被拒就去掉重发，正文和按钮照旧。
+			log.Printf("qq: 带推荐回复/版式的消息被拒，去掉后重发: %v", err)
 			delete(body, "prompt_keyboard")
-			delete(body, "action_button")
 			delete(body["markdown"].(map[string]any), "style")
 			id, err = post(body)
 		}

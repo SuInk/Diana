@@ -34,8 +34,12 @@ type replyDraft struct {
 	prepare  func(OutgoingMessage) OutgoingMessage
 	// qqStream 表示这是 QQ 官方私聊的流式消息：帧一旦发出就是正式消息的一部分。
 	qqStream bool
+	// chunks 按定稿的规则把截至当前的正文分条，QQ 流式据此一条气泡一条气泡地流。
+	chunks func(text string, intent replyControlIntent) []string
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// segment 是正在流的第几条；前面的已经定住，不再动。
+	segment  int
 	lastSent time.Time
 	lastText string
 	disabled bool
@@ -77,7 +81,36 @@ func (r *Runtime) replyDraft(event MessageEvent, cfg BotConfig) *replyDraft {
 			return r.resolveOutgoingMentionNames(event, r.normalizeOutgoingMentions(event, msg))
 		},
 		qqStream: qqStream,
+		chunks: func(text string, intent replyControlIntent) []string {
+			return replyPreviewChunks(cfg, event, text, intent)
+		},
 	}
+}
+
+// replyPreviewChunks 照定稿的路子（prepareGeneratedReply 加 sendDecorated，不含压缩）
+// 把还在生成的正文分条。和定稿分得一样，流式里定住的每一条才能被定稿原样认领。
+func replyPreviewChunks(cfg BotConfig, event MessageEvent, text string, intent replyControlIntent) []string {
+	text = applyReplyFilters(cfg.ReplyFilterRules, text)
+	if intent.DeliveryMode != "" {
+		event.replyDeliveryMode = intent.DeliveryMode
+	}
+	if intent.LineBreakMode != "" {
+		event.replyLineBreakMode = intent.LineBreakMode
+	}
+	if chatSplitLimitsForEvent(cfg, event).SingleMessage {
+		event.replyDeliveryMode = replyDeliverySingle
+	}
+	text = formatInlineReplyLists(normalizeExplicitReplyLayout(normalizeReply(text, 0)))
+	if event.replyDeliveryMode == replyDeliverySingle {
+		text = strings.ReplaceAll(text, notificationSplitMarker, notificationLineMarker)
+	}
+	var chunks []string
+	for _, chunk := range splitEventChatReply(normalizeReply(text, 0, markdownToPlainForConfig(cfg)), cfg, event) {
+		if chunk = previewLayout(chunk); chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+	}
+	return chunks
 }
 
 // abandonReplyStream 在一轮回复结束后收掉还没定稿的 QQ 私聊流式消息。正常出了
@@ -115,6 +148,14 @@ func (r *Runtime) replyAuditMayRun(event MessageEvent, cfg BotConfig) bool {
 	return r.replyDensityApplies(event) && r.replyDensityRecent(event, time.Now()) > 0
 }
 
+// previewLayout 把分条和换行标记换成预览里看得见的排版。定稿由发送层消费这两种
+// 标记，预览不经过那一步，原样推出去对方就会看到 <diana-message/>。分条在预览里
+// 显示成空行（Telegram 草稿整份显示；QQ 流式先分条，见 replyPreviewChunks）。
+func previewLayout(text string) string {
+	text = strings.ReplaceAll(text, notificationSplitMarker, "\n\n")
+	return strings.TrimSpace(strings.ReplaceAll(text, notificationLineMarker, "\n"))
+}
+
 func (d *replyDraft) ObserveTextDelta(ctx context.Context, text string) bool {
 	if d == nil || d.channel == nil || ctx.Err() != nil {
 		return false
@@ -124,7 +165,7 @@ func (d *replyDraft) ObserveTextDelta(ctx context.Context, text string) bool {
 		return false
 	}
 	text = normalizeDianaMarkup(text)
-	text, _ = consumeReplyControlIntent(text)
+	text, intent := consumeReplyControlIntent(text)
 	text = strings.TrimSpace(text)
 	// Hold an incomplete metadata prefix until it can be stripped safely.
 	if text == "" || strings.HasPrefix(replySingleMarker, text) || strings.HasPrefix(replyAutoMarker, text) || strings.HasPrefix(replyLinesPreserveMarker, text) || strings.HasPrefix(replyLinesCompactMarker, text) {
@@ -138,35 +179,78 @@ func (d *replyDraft) ObserveTextDelta(ctx context.Context, text string) bool {
 	if strings.Contains(text, identityAliasPrefix) {
 		return false
 	}
-	runes := []rune(text)
+	if d.qqStream && d.chunks != nil {
+		return d.observeQQChunks(ctx, d.chunks(text, intent))
+	}
+	text = d.clip(previewLayout(text))
+	if text == "" {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.disabled || text == d.lastText || (!d.lastSent.IsZero() && time.Since(d.lastSent) < replyDraftUpdateInterval) {
+		return false
+	}
+	return d.sendLocked(ctx, text)
+}
+
+// observeQQChunks 一条气泡一条气泡地流：后面又出了一条、而且已经攒够首帧的字数，
+// 当前这条才算写完——补一帧全文后换下一个流，通道据此把它定住。发出去的字只会
+// 往后长；定稿时每条各自认领，见 QQOfficialChannel.settleQQStream。
+func (d *replyDraft) observeQQChunks(ctx context.Context, chunks []string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	published := false
+	for !d.disabled && d.segment+1 < len(chunks) &&
+		(d.segment+2 < len(chunks) || len([]rune(chunks[d.segment+1])) >= qqStreamFirstFrameMinRunes) {
+		if text := d.clip(chunks[d.segment]); text != d.lastText {
+			if !d.sendLocked(ctx, text) {
+				return published
+			}
+			published = true
+		}
+		d.segment++
+		d.lastText, d.lastSent = "", time.Time{}
+	}
+	if d.disabled || d.segment >= len(chunks) {
+		return published
+	}
+	text := d.clip(chunks[d.segment])
+	if d.lastText == "" && len([]rune(text)) < qqStreamFirstFrameMinRunes {
+		return published
+	}
+	if text == d.lastText || (!d.lastSent.IsZero() && time.Since(d.lastSent) < replyDraftUpdateInterval) {
+		return published
+	}
+	return d.sendLocked(ctx, text) || published
+}
+
+func (d *replyDraft) clip(text string) string {
 	limit := d.maxRunes
 	if limit <= 0 {
 		limit = replyDraftMaxRunes
 	}
-	if len(runes) > limit {
-		text = string(runes[:limit])
+	if runes := []rune(text); len(runes) > limit {
+		return string(runes[:limit])
 	}
+	return text
+}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.qqStream && d.lastText == "" && len([]rune(text)) < qqStreamFirstFrameMinRunes {
-		return false
-	}
-	if d.disabled || text == d.lastText || (!d.lastSent.IsZero() && time.Since(d.lastSent) < replyDraftUpdateInterval) {
-		return false
-	}
+// sendLocked 推一帧预览；调用方持有 d.mu。返回值表示对方是否已经看得到这一轮的预览。
+func (d *replyDraft) sendLocked(ctx context.Context, text string) bool {
+	text = d.clip(text)
 	msg := d.message
 	msg.Text = text
 	if d.prepare != nil {
 		msg = d.prepare(msg)
 	}
-	if err := d.channel.SendTextDraft(ctx, msg, d.draftID); err != nil {
+	if err := d.channel.SendTextDraft(ctx, msg, d.draftID+int64(d.segment)); err != nil {
 		// Drafts are best effort. A Bot API server that has not implemented
 		// sendMessageDraft must not make the final reply fail.
 		d.disabled = true
 		if d.qqStream {
 			// 帧发过就已经是对方看得到的消息；首帧就失败则照常生成、照常发送。
-			return d.lastText != ""
+			return d.lastText != "" || d.segment > 0
 		}
 		// A definite Bot API rejection did not publish a preview. Transport
 		// failures may happen after delivery, so do not restart generation.

@@ -28,14 +28,13 @@ func TestParseQQExtras(t *testing.T) {
 	}
 }
 
-// 单聊里版式、推荐回复、赞踩栏都拼进同一条 Markdown，卡片跟在后面单独一条。
+// 单聊里版式、推荐回复都拼进同一条 Markdown，卡片跟在后面单独一条。
 func TestQQOfficialSendsC2CExtras(t *testing.T) {
 	api := newQQFakeAPI(t)
 	if err := api.channel().Send(context.Background(), OutgoingMessage{
 		UserID: "U", Text: "看这里", PassiveReplyMessageID: "in1",
 		MarkdownStyle: QQMarkdownStyle{FontSize: "small", Centered: true},
 		Suggestions:   []string{"展开讲讲", "再来一个"},
-		QQFeedback:    true,
 		Card:          &QQCard{Title: "Diana", Description: "介绍", URL: "https://example.test"},
 	}); err != nil {
 		t.Fatal(err)
@@ -53,8 +52,8 @@ func TestQQOfficialSendsC2CExtras(t *testing.T) {
 	if string(prompt) != `{"keyboard":{"content":{"rows":[{"buttons":[{"action":{"type":2},"render_data":{"label":"展开讲讲","style":2}},{"action":{"type":2},"render_data":{"label":"再来一个","style":2}}]}]}}}` {
 		t.Fatalf("prompt_keyboard = %s", prompt)
 	}
-	if text["action_button"].(map[string]any)["feedback"] != true {
-		t.Fatalf("action_button = %#v", text["action_button"])
+	if _, has := text["action_button"]; has {
+		t.Fatalf("不该再挂赞踩栏：%#v", text["action_button"])
 	}
 	content := card["card"].(map[string]any)
 	if card["msg_type"] != float64(qqMsgTypeCard) || content["type"] != qqCardTypeTuwen || card["msg_id"] != "in1" {
@@ -62,23 +61,19 @@ func TestQQOfficialSendsC2CExtras(t *testing.T) {
 	}
 }
 
-// 群里只认版式，推荐回复和赞踩栏不往群里发。
+// 群里只认版式，推荐回复不往群里发。
 func TestQQOfficialGroupSkipsC2COnlyExtras(t *testing.T) {
 	api := newQQFakeAPI(t)
 	if err := api.channel().Send(context.Background(), OutgoingMessage{
 		GroupID: "G", Text: "看这里", PassiveReplyMessageID: "in1",
 		MarkdownStyle: QQMarkdownStyle{Centered: true},
 		Suggestions:   []string{"展开讲讲"},
-		QQFeedback:    true,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	msg := api.messages[0]
 	if _, has := msg["prompt_keyboard"]; has {
 		t.Fatalf("群消息不该带推荐回复：%#v", msg)
-	}
-	if _, has := msg["action_button"]; has {
-		t.Fatalf("群消息不该带赞踩栏：%#v", msg)
 	}
 	if msg["markdown"].(map[string]any)["style"] == nil {
 		t.Fatalf("群消息应当带版式：%#v", msg)
@@ -91,7 +86,7 @@ func TestQQOfficialRetriesWithoutExtrasWhenRejected(t *testing.T) {
 	api.rejectExtras = true
 	if err := api.channel().Send(context.Background(), OutgoingMessage{
 		UserID: "U", Text: "看这里", PassiveReplyMessageID: "in1",
-		Suggestions: []string{"展开讲讲"}, QQFeedback: true,
+		Suggestions: []string{"展开讲讲"},
 	}); err != nil {
 		t.Fatal(err)
 	}
