@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/netguard"
 )
 
 var rssWatchVideoTagPattern = regexp.MustCompile(`\[CQ:video,file=[^\]]+\]`)
@@ -112,4 +114,79 @@ func rssWatchMediaChunks(chunks []string) []string {
 		out = append(out, videos...)
 	}
 	return out
+}
+
+// Telegram 按链接发视频时由它的服务器自己去取，超过 20MB 一律拒收；本机上传的
+// 上限是 50MB。订阅的视频上限默认 200MiB，是按 QQ 定的。
+const (
+	telegramURLVideoLimit       = 20 << 20
+	rssWatchTelegramOversizeTip = "（视频超过 Telegram 50MB 上传上限，请到原推查看）"
+)
+
+// 测试里换成假的，免得投递测试真去连推特。
+var rssWatchTelegramVideoClient = func() *http.Client {
+	return netguard.NewPublicHTTPClient(3 * time.Minute)
+}
+
+// rssWatchTelegramVideos 让推特视频在 Telegram 上发得出去：20MB 以内照旧交链接，
+// 20–50MB 先下到本机再上传，更大的换成一句说明。返回的 release 要在发送完成后调用。
+//
+// 探不到大小（本机连不上推特）时照旧交链接，让 Telegram 自己去取。大小在 50MB
+// 以内却下载失败算临时故障，报错让整条推送稍后重试。
+func rssWatchTelegramVideos(ctx context.Context, client *http.Client, msg OutgoingMessage) (OutgoingMessage, func(), error) {
+	var releases []func()
+	release := func() {
+		for _, fn := range releases {
+			fn()
+		}
+	}
+	videos := make([]string, 0, len(msg.VideoURLs))
+	oversized := false
+	for _, raw := range msg.VideoURLs {
+		size := int64(0)
+		if rssWatchVideoAllowed(raw) {
+			size = rssWatchRemoteSize(ctx, client, raw)
+		}
+		if size <= telegramURLVideoLimit {
+			videos = append(videos, raw)
+			continue
+		}
+		if size > telegramMaxUploadBytes {
+			oversized = true
+			continue
+		}
+		downloadCtx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		path, _, done, err := acquireMediaDownload(downloadCtx, client, raw, "video.mp4", "", "public", telegramMaxUploadBytes)
+		cancel()
+		if err != nil {
+			release()
+			return msg, func() {}, fmt.Errorf("telegram: 下载订阅视频失败: %w", err)
+		}
+		releases = append(releases, done)
+		videos = append(videos, path)
+	}
+	msg.VideoURLs = videos
+	if oversized {
+		msg.Text = strings.TrimSpace(msg.Text + "\n" + rssWatchTelegramOversizeTip)
+	}
+	return msg, release, nil
+}
+
+// rssWatchRemoteSize 返回远端文件大小，拿不到时返回 0。
+func rssWatchRemoteSize(ctx context.Context, client *http.Client, raw string) int64 {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, raw, nil)
+	if err != nil {
+		return 0
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ContentLength <= 0 {
+		return 0
+	}
+	return resp.ContentLength
 }

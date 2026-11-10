@@ -103,8 +103,18 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 				msg.QQKeyboardTemplate = cfg.QQOfficialKeyboardTemplate
 			}
 		}
+		releaseMedia := func() {}
 		if subscriptionPushKindFromContext(ctx) == subscriptionPushRSSWatch && !msg.LiteralText {
 			msg = rssWatchOutgoingImages(msg)
+			if len(msg.VideoURLs) > 0 {
+				if platform, _ := r.outboundPlatformForEvent(event); platform == PlatformTelegram {
+					var prepareErr error
+					msg, releaseMedia, prepareErr = rssWatchTelegramVideos(ctx, rssWatchTelegramVideoClient(), msg)
+					if prepareErr != nil {
+						return messageIDs, prepareErr
+					}
+				}
+			}
 		}
 		if event.Kind == EventKindGroup {
 			msg.GroupID = event.GroupID
@@ -142,6 +152,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 				typingIndicatorFromContext(ctx).resume()
 				select {
 				case <-ctx.Done():
+					releaseMedia()
 					return messageIDs, ctx.Err()
 				case <-time.After(interval):
 				}
@@ -149,6 +160,7 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			sendCtx = withContinuousOutboundDelivery(ctx)
 		}
 		result, err := r.sendOutgoingWithResult(sendCtx, event, msg)
+		releaseMedia()
 		if err != nil {
 			return messageIDs, err
 		}

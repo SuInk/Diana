@@ -161,6 +161,13 @@ func TestLiveRSSWatchTwitterVideoDelivery(t *testing.T) {
 func TestRSSWatchVideoNoticeDelivery(t *testing.T) {
 	for _, platform := range []string{PlatformOneBotV11, PlatformTelegram} {
 		t.Run(platform, func(t *testing.T) {
+			previous := rssWatchTelegramVideoClient
+			rssWatchTelegramVideoClient = func() *http.Client {
+				return &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: 200, ContentLength: 1 << 20, Body: http.NoBody}, nil
+				})}
+			}
+			defer func() { rssWatchTelegramVideoClient = previous }()
 			channel := &recordingChannel{}
 			r := NewRuntime(BotConfig{ID: "a", Platform: platform, SendRetryAttempts: 1}, channel, NewDefaultPluginManager(), nil, nil, nil, nil)
 			event := MessageEvent{Platform: platform, ProfileID: "a", UserID: "100"}
@@ -197,5 +204,80 @@ func TestRSSWatchVideoFallbackWithoutCover(t *testing.T) {
 		if rssWatchImageAllowed(cover) != strings.Contains(tags, "CQ:image") {
 			t.Fatalf("unexpected cover: %s", tags)
 		}
+	}
+}
+
+type rssWatchZeroReader struct{}
+
+func (rssWatchZeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
+}
+
+func TestRSSWatchTelegramVideosBySize(t *testing.T) {
+	const raw = "https://video.twimg.com/a.mp4"
+	for _, tc := range []struct {
+		name      string
+		size      int64
+		getStatus int
+		wantURL   bool
+		wantLocal bool
+		wantTip   bool
+		wantErr   bool
+		wantGets  int
+	}{
+		{name: "Telegram 自己能取的照旧交链接", size: 1 << 20, getStatus: 200, wantURL: true},
+		{name: "超过链接上限的下到本机上传", size: telegramURLVideoLimit + 1, getStatus: 200, wantLocal: true, wantGets: 1},
+		{name: "超过上传上限的换成说明", size: telegramMaxUploadBytes + 1, getStatus: 200, wantTip: true},
+		{name: "下载临时失败时报错重试", size: telegramURLVideoLimit + 1, getStatus: 503, wantErr: true, wantGets: 1},
+		{name: "探不到大小时照旧交链接", size: 0, getStatus: 503, wantURL: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("DIANA_HISTORY_MEDIA_DIR", t.TempDir())
+			gets := 0
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				header := http.Header{"Content-Type": []string{"video/mp4"}}
+				if r.Method == http.MethodHead {
+					return &http.Response{StatusCode: 200, Header: header, ContentLength: tc.size, Body: http.NoBody}, nil
+				}
+				gets++
+				if tc.getStatus != 200 {
+					return &http.Response{StatusCode: tc.getStatus, Header: header, Body: http.NoBody}, nil
+				}
+				return &http.Response{StatusCode: 200, Header: header, ContentLength: tc.size, Body: io.NopCloser(io.LimitReader(rssWatchZeroReader{}, tc.size))}, nil
+			})}
+			msg, release, err := rssWatchTelegramVideos(context.Background(), client, OutgoingMessage{VideoURLs: []string{raw}})
+			defer release()
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err=%v, wantErr=%v", err, tc.wantErr)
+			}
+			if gets != tc.wantGets {
+				t.Fatalf("下载次数 %d，期望 %d", gets, tc.wantGets)
+			}
+			if tc.wantErr {
+				return
+			}
+			if tc.wantTip != strings.Contains(msg.Text, rssWatchTelegramOversizeTip) {
+				t.Fatalf("说明文字不符：%q", msg.Text)
+			}
+			switch {
+			case tc.wantURL:
+				if len(msg.VideoURLs) != 1 || msg.VideoURLs[0] != raw {
+					t.Fatalf("应保留链接：%+v", msg.VideoURLs)
+				}
+			case tc.wantLocal:
+				if len(msg.VideoURLs) != 1 || telegramLocalPath(msg.VideoURLs[0]) == "" {
+					t.Fatalf("应换成本机文件：%+v", msg.VideoURLs)
+				}
+				info, err := os.Stat(msg.VideoURLs[0])
+				if err != nil || info.Size() != tc.size {
+					t.Fatalf("本机文件不完整：%v %v", info, err)
+				}
+			default:
+				if len(msg.VideoURLs) != 0 {
+					t.Fatalf("超限视频不该再发：%+v", msg.VideoURLs)
+				}
+			}
+		})
 	}
 }
