@@ -258,7 +258,8 @@ func TestWelcomeLLMModeUsesNormalReplyContext(t *testing.T) {
 		t.Fatalf("sent = %#v", channel.sent)
 	}
 	dump := welcomeRequestDump(stub.lastRequest())
-	for _, want := range []string{"一只高冷的猫娘", "火锅蘸料必须是麻酱", "【入群通知】小新（", "群「吃货群」", "上一句欢迎"} {
+	// 自动 @ 已经把昵称显示出来，请求里要点明，免得正文再叫一遍名字。
+	for _, want := range []string{"一只高冷的猫娘", "火锅蘸料必须是麻酱", "【入群通知】小新（", "群「吃货群」", "上一句欢迎", "「@小新 」"} {
 		if !strings.Contains(dump, want) {
 			t.Fatalf("welcome request missing %q:\n%s", want, dump)
 		}

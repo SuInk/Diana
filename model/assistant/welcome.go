@@ -291,6 +291,12 @@ func (r *Runtime) welcomeRequestText(cfg BotConfig, event MessageEvent) string {
 	if cfg.IsOwnerEvent(event) {
 		builder.WriteString("\n" + strings.TrimSpace(cfg.prompt(promptWelcomeOwnerSpec)))
 	}
+	// 自动加的 @ 会把昵称显示出来。模型只知道「系统会 @」，不知道名字已经露过一次，
+	// 正文又拿名字开头，发出去就成了「@肥鱼 肥鱼来啦」。写在这里而不是提示词默认值里，
+	// 主人改过提示词也照样生效。
+	if name := strings.TrimSpace(event.SenderName); name != "" {
+		builder.WriteString("\n- 发出去时你的话前面已经带着「@" + name + " 」，对方的名字出现过一次了。正文直接接着往下说，别再用这个名字（或它的简称）开头、也别再叫一遍；想聊这个名字本身有什么意思可以，但别先把名字念出来。")
+	}
 	if recent := r.recentWelcomeTexts(event.ProfileID); len(recent) > 0 {
 		builder.WriteString("\n\n你最近说过的欢迎（这次换个开头和句式）：")
 		for _, text := range recent {
