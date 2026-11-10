@@ -399,6 +399,23 @@ func TestAppLogHandlerSeparatesLLMCallsAndPaginates(t *testing.T) {
 	if got := list("kind=all&q=" + url.QueryEscape("send failed")); len(got.Logs) != 1 || got.Logs[0].Action != "delivery" {
 		t.Fatalf("搜索 = %+v", got.Logs)
 	}
+	if got := list("kind=llm&status=failed"); len(got.Logs) != 1 || got.Logs[0].Action != "llm_call_failed" {
+		t.Fatalf("只看失败 = %+v", got.Logs)
+	}
+	if got := list("kind=llm&status=ok"); len(got.Logs) != 3 {
+		t.Fatalf("只看成功 = %d 条", len(got.Logs))
+	}
+	since := url.QueryEscape(base.Add(15 * time.Second).Format(time.RFC3339Nano))
+	if got := list("kind=llm&since=" + since); len(got.Logs) != 1 || got.Logs[0].Action != "llm_call_failed" {
+		t.Fatalf("按日期筛 = %+v", got.Logs)
+	}
+	for _, bad := range []string{"kind=llm&status=nope", "kind=all&since=yesterday"} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/logs?"+bad, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s 应返回 400，实际 %d", bad, rec.Code)
+		}
+	}
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/logs?kind=all&before=bad", nil))
 	if rec.Code != http.StatusBadRequest {

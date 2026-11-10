@@ -201,3 +201,37 @@ func TestLLMUsageReportCountsFailedCalls(t *testing.T) {
 		t.Fatalf("按模型的失败次数 = %d", failedOnM0)
 	}
 }
+
+// 按日期区间和元数据（模型、用途）筛；拼进 JSON 路径的键只放行普通标识符。
+func TestListLogsFiltersByTimeAndMetadata(t *testing.T) {
+	s, err := NewSQLiteStore(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	day := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	for _, entry := range []AppLogEntry{
+		{ID: "old", Kind: LogKindOperation, Action: "llm_usage", Metadata: map[string]any{"model": "m1", "purpose": "chat_reply"}, CreatedAt: day.Add(-time.Hour)},
+		{ID: "in-m1", Kind: LogKindOperation, Action: "llm_usage", Metadata: map[string]any{"model": "m1", "purpose": "chat_reply"}, CreatedAt: day.Add(time.Hour)},
+		{ID: "in-m2", Kind: LogKindOperation, Action: "llm_usage", Metadata: map[string]any{"model": "m2", "purpose": "send_audit"}, CreatedAt: day.Add(2 * time.Hour)},
+		{ID: "late", Kind: LogKindOperation, Action: "llm_usage", Metadata: map[string]any{"model": "m1", "purpose": "chat_reply"}, CreatedAt: day.Add(25 * time.Hour)},
+	} {
+		if err := s.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.ListLogs(ctx, AppLogFilter{Since: day, Until: day.Add(24 * time.Hour), Metadata: map[string]string{"model": "m1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != "in-m1" {
+		t.Fatalf("日期加模型筛选 = %+v", got)
+	}
+	if got, err = s.ListLogs(ctx, AppLogFilter{Metadata: map[string]string{"purpose": "send_audit"}}); err != nil || len(got) != 1 || got[0].ID != "in-m2" {
+		t.Fatalf("按用途筛选 = %+v, %v", got, err)
+	}
+	if _, err := s.ListLogs(ctx, AppLogFilter{Metadata: map[string]string{"model') OR 1=1 --": "x"}}); err == nil {
+		t.Fatal("带引号的元数据键应被拒绝")
+	}
+}

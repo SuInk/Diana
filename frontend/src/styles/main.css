@@ -5804,6 +5804,25 @@ a.nav-action {
   color: var(--err);
 }
 
+.log-filter {
+  flex: 0 0 168px;
+  width: 168px;
+  min-width: 0;
+}
+
+.log-date {
+  flex: 0 0 150px;
+  width: 150px;
+}
+
+@media (max-width: 600px) {
+  .log-filter,
+  .log-date {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+}
+
 .log-more {
   display: flex;
   justify-content: center;

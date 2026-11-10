@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -108,6 +109,14 @@ func (s *SQLiteStore) ListLogs(ctx context.Context, filter AppLogFilter) ([]AppL
 		}
 		where = append(where, "action NOT IN ("+strings.Join(placeholders, ", ")+")")
 	}
+	if !filter.Since.IsZero() {
+		where = append(where, "created_at >= ?")
+		args = append(args, filter.Since.UTC().Format(time.RFC3339Nano))
+	}
+	if !filter.Until.IsZero() {
+		where = append(where, "created_at < ?")
+		args = append(args, filter.Until.UTC().Format(time.RFC3339Nano))
+	}
 	if !filter.BeforeTime.IsZero() {
 		// 游标和 ORDER BY 用同一套字典序：created_at 入库时统一成 UTC 的 RFC3339Nano，
 		// 这里按同样的格式拼回去，同一时刻的多条再按 id 接着往下翻。
@@ -138,6 +147,18 @@ func (s *SQLiteStore) ListLogs(ctx context.Context, filter AppLogFilter) ([]AppL
 			}
 		}
 		where = append(where, "("+strings.Join(conditions, " OR ")+")")
+	}
+	metadataKeys := make([]string, 0, len(filter.Metadata))
+	for key := range filter.Metadata {
+		metadataKeys = append(metadataKeys, key)
+	}
+	sort.Strings(metadataKeys)
+	for _, key := range metadataKeys {
+		if !isPlainLogMetadataKey(key) {
+			return nil, fmt.Errorf("unsupported log metadata key %q", key)
+		}
+		where = append(where, "json_extract(NULLIF(metadata, ''), '$."+key+"') = ?")
+		args = append(args, filter.Metadata[key])
 	}
 	if filter.ProfileID != "" {
 		// 机器人 ID 只在 metadata 里：各子系统的 target 含义不同，不能拿它当机器人 ID。
@@ -172,6 +193,19 @@ FROM app_logs`
 		return nil, err
 	}
 	return logs, nil
+}
+
+// isPlainLogMetadataKey 只放行字母、数字和下划线：键要拼进 JSON 路径，不能带引号或点。
+func isPlainLogMetadataKey(key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, char := range key {
+		if !(char == '_' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9') {
+			return false
+		}
+	}
+	return true
 }
 
 // escapeLogLike 转义 LIKE 里的通配符，搜「100%」不会变成「100 开头的任意内容」。

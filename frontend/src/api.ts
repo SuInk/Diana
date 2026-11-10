@@ -2839,7 +2839,19 @@ export function getChangelog(): Promise<ChangelogResponse> {
 }
 
 /** "all" 是操作和错误合在一起（不含调试追踪）。 */
-export function listAppLogs(kind?: AppLogKind | AppLogTab, limit = 100, options: { before?: string; query?: string; actions?: string[] } = {}): Promise<AppLogsResponse> {
+/** 日志页的筛选：日期是 RFC3339 边界 [since, until)；status/model/purpose 只对 llm 页签有效。 */
+export interface AppLogQueryOptions {
+  before?: string;
+  query?: string;
+  actions?: string[];
+  since?: string;
+  until?: string;
+  status?: "" | "ok" | "failed";
+  model?: string;
+  purpose?: string;
+}
+
+export function listAppLogs(kind?: AppLogKind | AppLogTab, limit = 100, options: AppLogQueryOptions = {}): Promise<AppLogsResponse> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (kind) {
     params.set("kind", kind);
@@ -2848,6 +2860,10 @@ export function listAppLogs(kind?: AppLogKind | AppLogTab, limit = 100, options:
   const query = options.query?.trim();
   if (query) params.set("q", query);
   if (options.actions?.length) params.set("action", options.actions.join(","));
+  for (const key of ["since", "until", "status", "model", "purpose"] as const) {
+    const value = options[key];
+    if (value) params.set(key, value);
+  }
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
 
@@ -4903,6 +4919,8 @@ export interface GroupUsageSummary {
   total_tokens: number;
   cached_input_tokens: number;
   usage_missing_calls?: number;
+  failed_calls?: number;
+  breakdown?: LLMUsageBreakdown[];
 }
 export interface GroupTokenUsage {
   profile_id?: string;

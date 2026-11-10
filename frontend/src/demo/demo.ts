@@ -817,8 +817,8 @@ let demoUpdateTokenConfigured = false;
 
 // 「LLM 调用」页签的模拟记录：够翻两页，夹着几次失败。
 function demoLLMCallLogs(): AppLogEntry[] {
-  const purposes = ["chat_reply", "proactive_reply_route", "memory_extract", "image_describe", "send_audit"];
-  const models = ["gpt-6-sol", "gpt-5.6-terra", "gpt-6-sol"];
+  const purposes = ["reply", "proactive_reply_router", "memory_extract", "reply", "proactive_reply_router"];
+  const models = ["gpt-6-sol", "gpt-5.6-terra", "gpt-5.6-terra"];
   return Array.from({ length: 160 }, (_, index) => {
     const failed = index % 23 === 4;
     const model = models[index % models.length];
@@ -2185,7 +2185,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const since=new Date(Date.now()-hours*3600000).toISOString(),until=new Date().toISOString();
     const rows=groups.filter(group=>!profile || !group.bot_profile_id || group.bot_profile_id===profile).map((group,index)=>({profile_id:group.bot_profile_id || profile || "demo",platform:profile==="bot-telegram"?"telegram":"onebot-v11",group_id:group.group_id,usage:{since,until,recorded_calls:Math.max(1,groups.length-index)*22,input_tokens:Math.max(1,groups.length-index)*24000,output_tokens:Math.max(1,groups.length-index)*3200,total_tokens:Math.max(1,groups.length-index)*27200,cached_input_tokens:Math.max(1,groups.length-index)*16000,usage_missing_calls:index===0?1:0},purposes:{}}));
     const usage=rows.reduce((sum,row)=>({...sum,recorded_calls:sum.recorded_calls+row.usage.recorded_calls,input_tokens:sum.input_tokens+row.usage.input_tokens,output_tokens:sum.output_tokens+row.usage.output_tokens,total_tokens:sum.total_tokens+row.usage.total_tokens,cached_input_tokens:sum.cached_input_tokens+row.usage.cached_input_tokens,usage_missing_calls:sum.usage_missing_calls+row.usage.usage_missing_calls}),{since,until,recorded_calls:0,input_tokens:0,output_tokens:0,total_tokens:0,cached_input_tokens:0,usage_missing_calls:0});
-    return json({usage,groups:rows});
+    return json({usage:{...usage,breakdown:demoUsageBreakdown({calls:usage.recorded_calls,input_tokens:usage.input_tokens,output_tokens:usage.output_tokens,cached_input_tokens:usage.cached_input_tokens,total_tokens:usage.total_tokens,missing_usage_calls:usage.usage_missing_calls})},groups:rows});
   }
   if (path === "/api/assistant/groups" && method === "GET") return json({ groups: url.searchParams.get("profile") === telegramProfile.id ? telegramGroups : groups, plugins, live_available: true, quota_window_seconds: 5 * 3600 });
   if (path === "/api/assistant/groups" && method === "POST") {
@@ -2735,6 +2735,18 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
           : kind === "error" ? errorLogs
             : logs.filter((log) => !isLLM(log));
     rows = [...rows].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id));
+    const since = url.searchParams.get("since");
+    const until = url.searchParams.get("until");
+    if (since) rows = rows.filter((log) => log.created_at >= new Date(since).toISOString());
+    if (until) rows = rows.filter((log) => log.created_at < new Date(until).toISOString());
+    if (kind === "llm") {
+      const status = url.searchParams.get("status");
+      if (status) rows = rows.filter((log) => (status === "failed") === (log.action === "llm_call_failed"));
+      for (const key of ["model", "purpose"]) {
+        const value = url.searchParams.get(key);
+        if (value) rows = rows.filter((log) => log.metadata?.[key] === value);
+      }
+    }
     const query = (url.searchParams.get("q") ?? "").trim().toLowerCase();
     if (query) rows = rows.filter((log) => JSON.stringify([log.action, log.message, log.detail, log.actor, log.actor_name, log.target, log.group_name, log.metadata]).toLowerCase().includes(query));
     const cursor = url.searchParams.get("before") ?? "";

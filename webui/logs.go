@@ -93,6 +93,7 @@ func (h *AppLogHandler) list(c *gin.Context) {
 	// 按需打开的完整调用链，体量大，混进来会把真正的记录冲掉。
 	var kinds []storage.AppLogKind
 	var actions, excluded []string
+	var metadata map[string]string
 	switch kind {
 	case "", storage.LogKindOperation, storage.LogKindError:
 	case "all":
@@ -100,7 +101,26 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		kinds = []storage.AppLogKind{storage.LogKindOperation, storage.LogKindError}
 	case "llm":
 		kind = ""
-		actions = append(actions, llmCallLogActions...)
+		// 「LLM 调用」能按结果、模型和用途筛：只看失败的、只看某个模型的。
+		switch status := strings.TrimSpace(c.Query("status")); status {
+		case "":
+			actions = append(actions, llmCallLogActions...)
+		case "ok":
+			actions = []string{"llm_usage"}
+		case "failed":
+			actions = []string{"llm_call_failed"}
+		default:
+			writeError(c, http.StatusBadRequest, fmt.Errorf("unsupported llm call status %q", status))
+			return
+		}
+		for _, key := range []string{"model", "purpose"} {
+			if value := strings.TrimSpace(c.Query(key)); value != "" {
+				if metadata == nil {
+					metadata = map[string]string{}
+				}
+				metadata[key] = value
+			}
+		}
 	default:
 		writeError(c, http.StatusBadRequest, fmt.Errorf("unsupported log kind %q", kind))
 		return
@@ -111,6 +131,16 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		return
 	}
 	beforeTime, beforeID, err := parseLogCursor(c.Query("before"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	since, err := parseLogTime(c.Query("since"))
+	if err != nil {
+		writeError(c, http.StatusBadRequest, err)
+		return
+	}
+	until, err := parseLogTime(c.Query("until"))
 	if err != nil {
 		writeError(c, http.StatusBadRequest, err)
 		return
@@ -136,6 +166,9 @@ func (h *AppLogHandler) list(c *gin.Context) {
 		Actions:        actions,
 		ExcludeActions: excluded,
 		ProfileID:      strings.TrimSpace(c.Query("profile")),
+		Metadata:       metadata,
+		Since:          since,
+		Until:          until,
 		BeforeTime:     beforeTime,
 		BeforeID:       beforeID,
 	}
@@ -188,6 +221,19 @@ func parseLogCursor(raw string) (time.Time, string, error) {
 		return time.Time{}, "", fmt.Errorf("invalid log cursor")
 	}
 	return at, id, nil
+}
+
+// parseLogTime 解析日期筛选的边界。前端按本地日期换算好再传 RFC3339，这里不猜时区。
+func parseLogTime(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("invalid log time %q", raw)
+	}
+	return at, nil
 }
 
 // appLogUserFinder 是日志存储的可选能力：按昵称反查账号，让搜索框搜昵称也能
