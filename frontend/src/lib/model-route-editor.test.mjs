@@ -36,7 +36,11 @@ test("model scheduling keeps purpose help concise and points to shared recovery 
 test("model route table exposes live cooling and degraded health states", () => {
   assert.match(source, /getModelHealth/);
   assert.match(source, /冷却中/);
-  assert.match(source, /已降权/);
+  // 冷却结束就按配置顺序回到原位，不再提「已降权」；当前先用哪一档、最近切换单独写出来。
+  assert.doesNotMatch(source, /已降权/);
+  assert.match(source, /近期失败/);
+  assert.match(source, /class="model-role-current"/);
+  assert.match(source, /llm_failover/);
   assert.match(source, /10_000/);
   // 健康状态改成行首的点，只在冷却、失败时写字。
   assert.match(source, /class="model-health-dot" :class="modelRouteHealth\(role.key, item.route\).className"/);

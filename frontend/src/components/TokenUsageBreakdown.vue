@@ -45,6 +45,7 @@
               <td>
                 {{ formatNumber(row.recorded_calls) }}
                 <small v-if="row.missing_usage_calls" class="text-warn">{{ formatNumber(row.missing_usage_calls) }} 次未报用量</small>
+                <small v-if="row.failed_calls" class="text-err" title="失败的请求不算在调用次数里；降级链里失败的每一档各算一次">失败 {{ formatNumber(row.failed_calls) }} 次</small>
               </td>
               <td>{{ formatNumber(row.input_tokens) }}</td>
               <td :title="cacheUsageDisplay(row.cached_input_tokens, row.input_tokens)">

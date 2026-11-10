@@ -634,6 +634,13 @@
                       </table>
                     </div>
                   </template>
+                <!-- 主备切换要一眼看得出：现在实际先用哪一个、为什么不是主模型、最近什么时候切过。 -->
+                <div v-if="roleForm[role.key] && !modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1" class="model-role-current" :class="modelRoleCurrent(role.key).className">
+                  <p><strong>{{ modelRoleCurrent(role.key).title }}</strong><span v-if="modelRoleCurrent(role.key).detail">{{ modelRoleCurrent(role.key).detail }}</span></p>
+                  <ul v-if="modelRoleSwitches(role.key).length" class="model-role-switches" aria-label="最近的主备切换">
+                    <li v-for="entry in modelRoleSwitches(role.key)" :key="entry.id" :title="entry.detail || entry.message"><time :datetime="entry.created_at">{{ formatRelative(entry.created_at) }}</time>{{ entry.message }}</li>
+                  </ul>
+                </div>
                 <p v-if="role.key === 'image' && roleForm[role.key] && !roleForm[role.key]?.follow_chat && modelRoleRoutes(role.key).length && !imageAnimationAvailable()" class="model-role-note">没有启用的模型能出动图，群友要 GIF 时会直接说做不了。要支持就加一个 gpt-image-2.6，或在「提供商」里给模型勾上「动图」。</p>
                 <p v-if="(role.key === 'tts' || role.key === 'stt') && roleForm[role.key] && !builtinSpeechAPIs[roleForm[role.key]?.profile_id ?? '']" class="model-role-note" title="各后备提供商使用自己的参数；提供商没配语音参数时，已有插槽参数继续生效。">接口、音色在「提供商 → 语音」里配置。</p>
                 <p v-if="role.key === 'video' && roleForm[role.key]" class="model-role-note" title="各后备提供商使用自己的设置；提供商没配视频参数时，已有插槽参数继续生效。">接口格式、分辨率和时长在「提供商 → 视频」里配置。</p>
@@ -2415,6 +2422,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatRelative } from "../lib/format";
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";
 import { parseProactiveGroupIDs, proactiveFormValue, proactivePayload } from "../lib/proactive-messaging";
@@ -2443,6 +2451,7 @@ import {
   getConfig,
   getBotProfileConfig,
   getModelHealth,
+  listAppLogs,
   testLLM,
   testLLMImage,
   resetModelHealth,
@@ -2460,6 +2469,7 @@ import {
   type ModelCandidateCall,
   type ModelCandidateHealth,
   type ModelHealthSnapshot,
+  type AppLogEntry,
   type ModelRecoveryPolicy,
   type BotProfileConfig,
   type BotChannelStatus,
@@ -3828,7 +3838,8 @@ function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
   }
   if (failures > 0) {
     const smart = effectiveModelRoutingStrategy(role) === "smart";
-    return { label: smart ? "已降权" : "近期失败", className: "warn", title: [smart ? "冷却已结束，但智能调度会优先选择失败次数更少的候选。" : "冷却已结束，候选已重新参与调度。", ...details].join("\n"), cooling: false, degraded: true };
+    // 冷却结束就按配置顺序回到原位，不会因为残留的失败次数排到后面（见 model_routing.go）。
+    return { label: "近期失败", className: "warn", title: ["冷却已结束，已按配置顺序重新参与调度；10 分钟内没有新失败，计数会清零。", ...details].join("\n"), cooling: false, degraded: true };
   }
   return { label: "正常", className: "ok", title: "当前进程内没有保留这条路由的近期健康故障。", cooling: false, degraded: false };
 }
@@ -3986,13 +3997,68 @@ async function loadModelHealth(): Promise<void> {
   if (modelHealthLoading.value) return;
   modelHealthLoading.value = true;
   try {
-    modelHealth.value = await getModelHealth();
+    const [health, switches] = await Promise.all([
+      getModelHealth(),
+      listAppLogs("error", 30, { actions: ["llm_failover"] }).catch(() => null)
+    ]);
+    modelHealth.value = health;
     modelHealthReceivedAt.value = Date.now();
+    if (switches) modelSwitchLogs.value = switches.logs;
   } catch {
     // 运行状态是辅助信息，暂时读不到时保留上一次结果，不打断配置编辑。
   } finally {
     modelHealthLoading.value = false;
   }
+}
+
+const modelSwitchLogs = ref<AppLogEntry[]>([]);
+
+// 这一用途下所有候选的「配置档 ID + 模型」，用来认出哪些切换记录属于它。
+function modelRoleCandidateKeys(role: RoleKey): Set<string> {
+  const keys = new Set<string>();
+  for (const { route } of modelRoleRoutes(role)) {
+    for (const profile of selectedRoleProfiles(role, route)) {
+      if (profile.id && route.model) keys.add(`${profile.id}\u0000${route.model}`);
+    }
+  }
+  return keys;
+}
+
+// 最近三次切换：切走的那一档属于这个用途才算。切换记录同一种一分钟最多一条。
+function modelRoleSwitches(role: RoleKey): AppLogEntry[] {
+  const keys = modelRoleCandidateKeys(role);
+  return modelSwitchLogs.value
+    .filter((entry) => {
+      const from = typeof entry.metadata?.from === "string" ? entry.metadata.from : entry.target ?? "";
+      const model = typeof entry.metadata?.model === "string" ? entry.metadata.model : "";
+      return keys.has(`${from}\u0000${model}`);
+    })
+    .slice(0, 3);
+}
+
+// 现在实际先用哪一档。智能调度和主备切换都是「按顺序，跳过冷却中的」，后备排在
+// 参与调度的后面；轮询和权重没有固定的一档，只说明怎么分。
+function modelRoleCurrent(role: RoleKey): { title: string; detail: string; className: string } {
+  const strategy = effectiveModelRoutingStrategy(role);
+  const all = modelRoleRoutes(role);
+  const ordered = [...all.filter(({ index }) => !modelRouteIsStandby(role, index)), ...all.filter(({ index }) => modelRouteIsStandby(role, index))]
+    .filter(({ route }) => !route.disabled && !!route.model);
+  if (!ordered.length) return { title: "没有可用的模型", detail: "全部停用或未选择模型。", className: "err" };
+  if (strategy === "round_robin" || strategy === "weighted") {
+    const cooling = ordered.filter(({ route }) => modelRouteHealth(role, route).cooling).length;
+    const label = strategy === "round_robin" ? "轮询" : "按权重";
+    return { title: `${label}分配给 ${ordered.length - cooling} 个模型`, detail: cooling ? `，${cooling} 个冷却中暂时跳过` : "", className: cooling ? "warn" : "" };
+  }
+  const primary = ordered[0];
+  const current = ordered.find(({ route }) => modelRouteHealth(role, route).className !== "err") ?? primary;
+  const provider = modelRouteProviderLabel(current.route);
+  const name = `${current.route.model}${provider ? `（${provider}）` : ""}`;
+  if (current.index === primary.index) {
+    return { title: `当前先用主模型：${name}`, detail: "，失败后按顺序换下一个，冷却结束自动回切。", className: "" };
+  }
+  const primaryHealth = modelRouteHealth(role, primary.route);
+  const recover = primaryHealth.label.includes("恢复") ? `，${primaryHealth.label.replace(/^.*·\s*/, "")}后自动回切` : "";
+  return { title: `已切到后备：${name}`, detail: `主模型 ${primary.route.model} 冷却中${recover}。`, className: "warn" };
 }
 
 function filteredModelRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {

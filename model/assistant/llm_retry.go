@@ -411,6 +411,7 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		if streamingRequested(ctx) {
 			client = &streamingLLMProvider{provider: client}
 		}
+		attemptStarted := time.Now()
 		resp, err := generateWithTransientRetryPolicy(ctx, client, candidateReasoningRequest(req, candidate.profile), p.retryTransient, candidate.profile.Config.Timeout, p.recoveryPolicy.transientRetries, p.recoveryPolicy.retryDelay)
 		if err == nil {
 			p.current = index
@@ -422,12 +423,14 @@ func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.Gene
 		lastErr = annotateLLMProviderAttempt(err, candidate.profile, req)
 		if errors.Is(err, errLLMOutputCommitted) {
 			noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
+			noteLLMAttemptFailure(ctx, candidate.profile, req, err, time.Since(attemptStarted))
 			return nil, lastErr
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		mark := noteLLMCandidateFailure(p.cooldowns, p.group, candidate.profile, healthFailureCause(err), p.recoveryPolicy)
+		noteLLMAttemptFailure(ctx, candidate.profile, req, err, time.Since(attemptStarted))
 		if !failover {
 			return nil, lastErr
 		}
@@ -505,6 +508,7 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		attemptStarted := time.Now()
 		client, err := p.client(index)
 		if err == nil {
 			var resp *llm.GenerateResponse
@@ -529,12 +533,14 @@ func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.Gener
 		lastErr = err
 		if errors.Is(err, errLLMOutputCommitted) {
 			noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
+			noteLLMAttemptFailure(ctx, p.profiles[index], req, rawErr, time.Since(attemptStarted))
 			return nil, err
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		mark := noteLLMCandidateFailure(p.cooldowns, p.group, p.profiles[index], healthFailureCause(rawErr), p.recoveryPolicy)
+		noteLLMAttemptFailure(ctx, p.profiles[index], req, rawErr, time.Since(attemptStarted))
 		if !failover {
 			return nil, err
 		}

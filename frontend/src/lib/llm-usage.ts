@@ -93,6 +93,8 @@ export interface UsageGroup {
   cached_input_tokens: number;
   total_tokens: number;
   missing_usage_calls: number;
+  /** 失败的模型请求数，不算在 recorded_calls 里。 */
+  failed_calls: number;
 }
 
 // 筛选的是另一维度：按用途查看时可选模型，按模型查看时可选用途。
@@ -112,7 +114,7 @@ export function groupLLMUsage(entries: readonly LLMUsageBreakdown[], dimension: 
         label: dimension === "purpose" ? usagePurposeLabel(purpose) : (model === "unknown" ? "未知模型" : model),
         detail: dimension === "model" ? entry.provider.trim() : "",
         recorded_calls: 0, input_tokens: 0, output_tokens: 0,
-        cached_input_tokens: 0, total_tokens: 0, missing_usage_calls: 0
+        cached_input_tokens: 0, total_tokens: 0, missing_usage_calls: 0, failed_calls: 0
       };
       groups.set(key, group);
     }
@@ -122,6 +124,7 @@ export function groupLLMUsage(entries: readonly LLMUsageBreakdown[], dimension: 
     group.cached_input_tokens += entry.cached_input_tokens;
     group.total_tokens += entry.total_tokens;
     group.missing_usage_calls += entry.missing_usage_calls ?? 0;
+    group.failed_calls += entry.failed_calls ?? 0;
   }
   return [...groups.values()].sort((a, b) => b.total_tokens - a.total_tokens || b.recorded_calls - a.recorded_calls || a.key.localeCompare(b.key));
 }

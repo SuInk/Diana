@@ -92,9 +92,10 @@ func TestUsageAccountingRecordsDuration(t *testing.T) {
 	}
 }
 
-// TestUsageAccountingSkipsFailedCall 调用失败时不写用量条目。
+// TestUsageAccountingSkipsFailedCall 调用失败时不写用量条目，只记一条失败。
 //
-// 失败没有 token 也没有可信的速率，硬记一条会把统计里的调用次数抬高、速率拉低。
+// 失败没有 token 也没有可信的速率，硬记一条用量会把统计里的调用次数抬高、速率拉低；
+// 失败单独记成 llm_call_failed，供错误次数统计。
 func TestUsageAccountingSkipsFailedCall(t *testing.T) {
 	logs := &captureAppLogs{}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
@@ -107,7 +108,8 @@ func TestUsageAccountingSkipsFailedCall(t *testing.T) {
 	if _, err := provider.Generate(context.Background(), llm.GenerateRequest{}); err == nil {
 		t.Fatal("失败的调用应该把错误透传出来")
 	}
-	if entries := logs.entriesSnapshot(); len(entries) != 0 {
-		t.Fatalf("失败的调用不该写用量条目：%#v", entries)
+	entries := logs.entriesSnapshot()
+	if countAppLogAction(entries, "llm_usage") != 0 || countAppLogAction(entries, LLMCallFailedAction) != 1 {
+		t.Fatalf("失败的调用应只记一条失败、不写用量：%#v", entries)
 	}
 }

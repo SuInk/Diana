@@ -48,9 +48,19 @@ type Filter struct {
 	Level Level
 	// Actions 非空时只取这些动作。
 	Actions []string
+	// ExcludeActions 非空时排除这些动作。
+	ExcludeActions []string
 	// ProfileID 非空时只取 metadata.profile_id 等于它的记录。
 	ProfileID string
-	Limit     int
+	// Query 非空时按子串匹配动作、内容、详情、操作人、目标和元数据；QueryActors、
+	// QueryGroupIDs 是调用方按昵称、群名反查出来的账号和群号，命中其一也算。
+	Query         string
+	QueryActors   []string
+	QueryGroupIDs []string
+	// BeforeTime、BeforeID 是翻页游标：只取排在这一条之后（更早）的记录。
+	BeforeTime time.Time
+	BeforeID   string
+	Limit      int
 }
 
 // Writer 是只写日志路径的最小依赖，方便 WebUI 和聊天技能共用。

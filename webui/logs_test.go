@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
@@ -337,5 +339,69 @@ func TestUpstreamFailureStatusSurvivesReverseProxies(t *testing.T) {
 		if got := repositoryIssueCreateFailureStatus(code); got >= 500 {
 			t.Fatalf("repositoryIssueCreateFailureStatus(%q) = %d", code, got)
 		}
+	}
+}
+
+// 「LLM 调用」单独一个页签：用量和失败记录只在那里出现，其余页签不被它们挤满；
+// 翻页靠 next_cursor 接着取。
+func TestAppLogHandlerSeparatesLLMCallsAndPaginates(t *testing.T) {
+	ctx := context.Background()
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	base := time.Now().Add(-time.Hour).UTC()
+	entries := []storage.AppLogEntry{
+		{Kind: storage.LogKindOperation, Action: "start", Message: "started", CreatedAt: base},
+		{Kind: storage.LogKindError, Action: "delivery", Message: "send failed", CreatedAt: base.Add(time.Second)},
+	}
+	for index := 0; index < 3; index++ {
+		entries = append(entries, storage.AppLogEntry{Kind: storage.LogKindOperation, Action: "llm_usage", Message: "LLM 调用用量已记录", CreatedAt: base.Add(time.Duration(10+index) * time.Second)})
+	}
+	entries = append(entries, storage.AppLogEntry{Kind: storage.LogKindError, Action: "llm_call_failed", Message: "模型「m」调用失败", CreatedAt: base.Add(20 * time.Second)})
+	for _, entry := range entries {
+		if err := store.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	NewAppLogHandler(store).Register(router)
+	list := func(query string) appLogsResponse {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/logs?"+query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+		}
+		var payload appLogsResponse
+		if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	for _, kind := range []string{"all", "operation", "error"} {
+		for _, entry := range list("kind=" + kind).Logs {
+			if entry.Action == "llm_usage" || entry.Action == "llm_call_failed" {
+				t.Fatalf("kind=%s 不该出现模型调用记录：%+v", kind, entry)
+			}
+		}
+	}
+	first := list("kind=llm&limit=3")
+	if len(first.Logs) != 3 || first.Logs[0].Action != "llm_call_failed" || first.NextCursor == "" {
+		t.Fatalf("第一页 = %+v", first)
+	}
+	second := list("kind=llm&limit=3&before=" + url.QueryEscape(first.NextCursor))
+	if len(second.Logs) != 1 || second.NextCursor != "" {
+		t.Fatalf("第二页 = %+v", second)
+	}
+	if got := list("kind=all&q=" + url.QueryEscape("send failed")); len(got.Logs) != 1 || got.Logs[0].Action != "delivery" {
+		t.Fatalf("搜索 = %+v", got.Logs)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/logs?kind=all&before=bad", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("坏游标应返回 400，实际 %d", rec.Code)
 	}
 }

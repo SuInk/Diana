@@ -762,6 +762,53 @@ code {
   font-size: 12px;
 }
 
+/* 当前实际先用哪一档 + 最近的主备切换。 */
+.model-role-current {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.model-role-current p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-role-current p span {
+  color: var(--muted);
+}
+
+.model-role-current.warn {
+  border-color: var(--warn);
+}
+
+.model-role-current.warn strong {
+  color: var(--warn);
+}
+
+.model-role-current.err strong {
+  color: var(--err);
+}
+
+.model-role-switches {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.model-role-switches li {
+  overflow-wrap: anywhere;
+}
+
+.model-role-switches time {
+  margin-right: 8px;
+  font-family: var(--font-mono);
+}
+
 /* 超时和看图方式收成一行摘要，点开再改。 */
 .model-role-extras {
   margin-top: 14px;
@@ -5742,6 +5789,26 @@ a.nav-action {
   font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
+}
+
+.log-row .log-message .badge {
+  margin-right: 6px;
+}
+
+.log-row .log-message .muted {
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.log-row .log-detail-error {
+  color: var(--err);
+}
+
+.log-more {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 4px;
+  margin: 0;
 }
 
 /* 登录会话列表 */

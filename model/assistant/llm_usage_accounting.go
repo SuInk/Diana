@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"time"
@@ -124,16 +125,33 @@ func (p *usageAccountingLLMProvider) Generate(ctx context.Context, req llm.Gener
 	// TTFT 由更内层的流式装饰器填进 collector：它才看得到 token 一个个到达。
 	// 没开流式、或者底层退化成非流式时，collector 给 0，这一项就不记。
 	ctx, collector := withTTFTCollector(ctx)
+	ctx, attempts := withLLMAttemptCollector(ctx)
 	started := time.Now()
 	response, err := p.provider.Generate(ctx, req)
 	elapsed := time.Since(started)
 	ttft := collector.ttft(started)
+	purpose := llmCallPurpose(ctx)
+	p.recordFailures(ctx, attempts.snapshot(), req, response != nil && err == nil, err, elapsed, purpose)
 	if response == nil {
 		return response, err
 	}
-	purpose := llmCallPurpose(ctx)
 	p.runtime.recordLLMUsage(ctx, p.state.event, response.Provider, response.Model, response.Usage, purpose, elapsed, ttft)
 	return response, err
+}
+
+// recordFailures 把这次逻辑调用里失败的每一档写进运行日志。降级 provider 会逐档
+// 上报；没经过降级 provider 的调用（单个客户端直连）只有最终错误，按一档记。
+// 调用方取消或超时被上层掐掉不算失败。
+func (p *usageAccountingLLMProvider) recordFailures(ctx context.Context, failures []llmAttemptFailure, req llm.GenerateRequest, ok bool, err error, elapsed time.Duration, purpose string) {
+	if len(failures) == 0 {
+		if ok || err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) {
+			return
+		}
+		failures = []llmAttemptFailure{{model: strings.TrimSpace(req.Model), err: err, elapsed: elapsed}}
+	}
+	for _, failure := range failures {
+		p.runtime.recordLLMCallFailure(ctx, p.state.event, failure, purpose, ok)
+	}
 }
 
 // TokensPerSecond 是输出 token 的生成速率，保留两位小数。
