@@ -157,7 +157,7 @@ func TestStructuredMemoryRankingDoesNotInjectUnrelatedSafetyEpisode(t *testing.T
 	items := []StructuredMemoryItem{
 		{
 			ID: "risk", SubjectUserID: "user", Kind: MemoryKindEpisode,
-			Topic: "安全风险", Content: "用户过去表达过自伤想法", Confidence: 1, Importance: 1,
+			Topic: "安全风险", Content: "用户过去表达过自杀和自伤想法", Confidence: 1, Importance: 1,
 			SourceSession: "group:123", LastVerifiedAt: now.Add(-24 * time.Hour),
 		},
 		{

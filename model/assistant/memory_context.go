@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
@@ -222,7 +224,13 @@ func (r *Runtime) touchRetrievedMemories(ctx context.Context, store StructuredMe
 	}()
 }
 
+// memoryRetrievalMarkerPattern 匹配正文里 Diana 自己的引用、@ 等标记。
+var memoryRetrievalMarkerPattern = regexp.MustCompile(`<diana-[a-z]+(?: id="[^"]*")?/>`)
+
 func memoryRetrievalText(event MessageEvent, current string) string {
+	// 标记是给模型和出站适配器看的协议写法，不是用户说的话。留在检索词里，
+	// 「diana」「id」会对上每一条提到 Diana 的摘要。
+	current = memoryRetrievalMarkerPattern.ReplaceAllString(current, " ")
 	parts := []string{strings.TrimSpace(current)}
 	if event.Quoted != nil {
 		parts = append(parts, quotedPromptText(event.Quoted))
@@ -617,6 +625,14 @@ type structuredMemoryQueryAnalysis struct {
 	// 在末位比特上分出胜负，MMR 的去重扣分随之落到随机一方——表现为排序用例
 	// 每二十次翻一次脸，看起来像「摘要被歧视」，其实只是加法次序。
 	orderedTerms []string
+	// hasWord 表示查询里有不止一个字的检索词（二字以上的中文片段或 ASCII 词）。
+	hasWord bool
+}
+
+// structuredMemorySingleRuneTerm 判断检索词是不是单个字。ASCII 词至少两个字符，
+// 所以单字只可能是中日韩的一字组。
+func structuredMemorySingleRuneTerm(term string) bool {
+	return utf8.RuneCountInString(term) == 1
 }
 
 // structuredMemoryStopTerms 是记忆检索的中文停用词表。
@@ -648,6 +664,9 @@ func analyzeStructuredMemoryQuery(query string) structuredMemoryQueryAnalysis {
 	analysis.orderedTerms = make([]string, 0, len(analysis.terms))
 	for term := range analysis.terms {
 		analysis.orderedTerms = append(analysis.orderedTerms, term)
+		if !structuredMemorySingleRuneTerm(term) {
+			analysis.hasWord = true
+		}
 	}
 	sort.Strings(analysis.orderedTerms)
 	return analysis
@@ -684,6 +703,7 @@ func structuredMemoryLexicalScore(item StructuredMemoryItem, query structuredMem
 	matchedWeight := 0.0
 	totalWeight := 0.0
 	rawScore := 0.0
+	matchedWord := false
 	for _, term := range query.orderedTerms {
 		queryWeight := query.terms[term]
 		idf := math.Log(1 + float64(documentCount+1)/float64(documentFrequency[term]+1))
@@ -702,11 +722,21 @@ func structuredMemoryLexicalScore(item StructuredMemoryItem, query structuredMem
 		}
 		matchedWeight += weightedQuery
 		rawScore += weightedQuery * bestFieldWeight
+		if !structuredMemorySingleRuneTerm(term) {
+			matchedWord = true
+		}
 		if bestFieldWeight > strongestWeight {
 			strongestWeight, strongestField = bestFieldWeight, bestField
 		}
 	}
 	if matchedWeight == 0 || totalWeight == 0 {
+		return 0, "", exactField
+	}
+	// 只对上了单个汉字不算相关。「了」「给」「这」几乎每条长记忆里都有，
+	// 一句闲聊凭它们就能把十几条不相干的摘要带进提示词，模型再顺手把
+	// 里面的旧事接到当前话题上。单字只在已有词级命中时帮着加分；查询本身
+	// 只有单字（比如只问一个「猫」）时照旧。
+	if query.hasWord && !matchedWord {
 		return 0, "", exactField
 	}
 	coverage := matchedWeight / totalWeight
