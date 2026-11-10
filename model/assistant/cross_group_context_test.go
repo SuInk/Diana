@@ -33,6 +33,37 @@ func TestCrossGroupMixedMembershipCacheIsRaceFree(t *testing.T) {
 	}
 }
 
+// 不在本群的作者查过一次就记住，下一条回复不再为他去问接入端。
+func TestCrossGroupMembershipRemembersNonMembers(t *testing.T) {
+	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"target|member": true}}
+	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "target", UserID: "requester"}
+	candidates := map[string][]MessageEvent{"member": nil, "outsider": nil}
+	for round := 0; round < 3; round++ {
+		allowed := r.crossGroupCurrentMembers(event, candidates)
+		if !allowed["member"] || allowed["outsider"] || len(allowed) != 1 {
+			t.Fatalf("round %d allowed=%v", round, allowed)
+		}
+	}
+	calls := channel.callsSnapshot()
+	sort.Strings(calls)
+	if strings.Join(calls, ",") != "target|member,target|outsider" {
+		t.Fatalf("成员和群外的人都应当只查一次：%v", calls)
+	}
+
+	// 别的群各记各的；这个人后来进了群、成员缓存里有了他，就不再看「不在群」的记录。
+	other := event
+	other.GroupID = "other"
+	r.crossGroupCurrentMembers(other, map[string][]MessageEvent{"outsider": nil})
+	if calls := channel.callsSnapshot(); !strings.Contains(strings.Join(calls, ","), "other|outsider") {
+		t.Fatalf("别的群应当单独查：%v", calls)
+	}
+	r.members.store("target", "outsider", memberInfo{At: time.Now()})
+	if allowed := r.crossGroupCurrentMembers(event, candidates); !allowed["outsider"] {
+		t.Fatalf("成员缓存里有他时应当放行：%v", allowed)
+	}
+}
+
 func TestCrossGroupContextMergesRelatedMessageWhenAuthorIsInTargetGroup(t *testing.T) {
 	channel := &crossGroupMembershipChannel{allowed: map[string]bool{"current|speaker": true}}
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{
