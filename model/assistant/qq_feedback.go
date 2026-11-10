@@ -19,7 +19,7 @@ import (
 
 // QQ 官方机器人单聊回复的赞踩反馈。对方点赞、点踩或取消时平台推来一条互动事件
 // （INTERACTION_CREATE，data.type = 13），以前只打一行日志，点了等于没点。
-// Diana 自己不往回复下挂赞踩栏；事件来自以前发出的消息上的赞踩栏，或客户端自带的反馈入口。
+// 赞踩栏由模型在收尾时逐条决定挂不挂（feedback 字段，见 qq_official_extras.go），不设开关。
 //
 // 现在每次反馈做三件事：
 //   - 记一条平台通知进事件页，写明是哪条回复、点了什么；
@@ -66,33 +66,6 @@ func qqFeedbackAction(opt string, checked int) string {
 		}
 	}
 	return qqFeedbackUnknown
-}
-
-// qqOfficialFeedbackEvent 把单聊的赞踩互动映射成一条通知事件。MessageID 用外层事件 ID，
-// 回应时据此走 event_id 被动回复；TargetID 是被评价的那条机器人消息。
-func qqOfficialFeedbackEvent(eventID string, interaction qqOfficialInteraction, selfID string) (MessageEvent, bool) {
-	eventID = strings.TrimSpace(eventID)
-	userID := strings.TrimSpace(interaction.UserOpenID)
-	if interaction.Data.Type != qqInteractionTypeFeedback || interaction.ChatType != qqInteractionChatC2C ||
-		!strings.HasPrefix(eventID, qqInteractionEventPrefix) || userID == "" {
-		return MessageEvent{}, false
-	}
-	resolved := interaction.Data.Resolved
-	return MessageEvent{
-		Platform:    PlatformQQOfficial,
-		Kind:        EventKindNotice,
-		SubType:     qqFeedbackSubType,
-		MessageType: "private",
-		Time:        platformEventTime(interaction.Timestamp),
-		SelfID:      selfID,
-		UserID:      userID,
-		TargetID:    strings.TrimSpace(resolved.MessageID),
-		MessageID:   eventID,
-		Segments: []MessageSegment{{Type: qqFeedbackSegmentType, Data: map[string]string{
-			"opt":     strings.TrimSpace(resolved.FeedbackOpt),
-			"checked": strconv.Itoa(resolved.Checked),
-		}}},
-	}, true
 }
 
 // qqFeedbackFromEvent 取出通知里的反馈动作和平台原始取值。

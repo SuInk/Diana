@@ -409,10 +409,12 @@ type OutgoingMessage struct {
 	ButtonFontSize string
 	// 以下几项只有 QQ 官方机器人认，见 qq_official_extras.go：MarkdownStyle 是正文版式，
 	// Suggestions 是单聊输入框上方的推荐回复，Card 跟在正文后单独发一张图文卡片，
-	// QQKeyboardTemplate 是没有按钮时挂的按钮模板 ID。
+	// QQFeedback 在单聊这条回复下挂赞踩栏（模型收尾时要了才挂），QQKeyboardTemplate 是
+	// 没有按钮时挂的按钮模板 ID。
 	MarkdownStyle      QQMarkdownStyle
 	Suggestions        []string
 	Card               *QQCard
+	QQFeedback         bool
 	QQKeyboardTemplate string
 }
 

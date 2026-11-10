@@ -5169,7 +5169,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if offersButtonsFinalizeField(cfg, event) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField(), messageStyleFinalizeField(), cardFinalizeField())
 			if event.Kind == EventKindPrivate {
-				agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, suggestionsFinalizeField())
+				agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, suggestionsFinalizeField(), feedbackFinalizeField())
 			}
 		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.toolScope().Owner)

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -126,4 +127,31 @@ func qqOfficialEventFromInteraction(eventID string, interaction qqOfficialIntera
 		return MessageEvent{}, false
 	}
 	return event, true
+}
+
+// qqOfficialFeedbackEvent 把单聊的赞踩互动映射成一条通知事件。MessageID 用外层事件 ID，
+// 回应时据此走 event_id 被动回复；TargetID 是被评价的那条机器人消息。
+func qqOfficialFeedbackEvent(eventID string, interaction qqOfficialInteraction, selfID string) (MessageEvent, bool) {
+	eventID = strings.TrimSpace(eventID)
+	userID := strings.TrimSpace(interaction.UserOpenID)
+	if interaction.Data.Type != qqInteractionTypeFeedback || interaction.ChatType != qqInteractionChatC2C ||
+		!strings.HasPrefix(eventID, qqInteractionEventPrefix) || userID == "" {
+		return MessageEvent{}, false
+	}
+	resolved := interaction.Data.Resolved
+	return MessageEvent{
+		Platform:    PlatformQQOfficial,
+		Kind:        EventKindNotice,
+		SubType:     qqFeedbackSubType,
+		MessageType: "private",
+		Time:        platformEventTime(interaction.Timestamp),
+		SelfID:      selfID,
+		UserID:      userID,
+		TargetID:    strings.TrimSpace(resolved.MessageID),
+		MessageID:   eventID,
+		Segments: []MessageSegment{{Type: qqFeedbackSegmentType, Data: map[string]string{
+			"opt":     strings.TrimSpace(resolved.FeedbackOpt),
+			"checked": strconv.Itoa(resolved.Checked),
+		}}},
+	}, true
 }
