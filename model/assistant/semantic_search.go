@@ -123,8 +123,8 @@ func (r *Runtime) enqueueSemanticIndex(event MessageEvent) {
 // session predates ContextNamespace: invalidating the live session would leave
 // an older in-flight vector able to recreate the legacy row's stale embedding.
 func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session string) {
-	// 戳一戳没有可检索的内容，正文只是一句固定的「戳了戳某某」。
-	if strings.TrimSpace(event.MessageID) == "" || event.Kind == EventKindNotice || isPokeHistoryEvent(event) {
+	// 戳一戳、赞踩反馈没有可检索的内容，正文只是一句固定的旁白。
+	if strings.TrimSpace(event.MessageID) == "" || event.Kind == EventKindNotice || isPokeHistoryEvent(event) || isQQFeedbackHistoryEvent(event) {
 		return
 	}
 	session = strings.TrimSpace(session)

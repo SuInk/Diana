@@ -164,22 +164,3 @@ func TestFinalizeButtonsOnlyAsker(t *testing.T) {
 		t.Fatalf("button = %#v", button)
 	}
 }
-
-// 赞踩反馈只记日志：不应答、也不当成对方说的话交给模型。
-func TestQQOfficialFeedbackInteractionIsNotAMessage(t *testing.T) {
-	api := newQQFakeAPI(t)
-	channel := api.channel()
-	called := false
-	channel.handler = func(context.Context, MessageEvent) error {
-		called = true
-		return nil
-	}
-	data, _ := json.Marshal(map[string]any{
-		"id": "interaction-1", "chat_type": qqInteractionChatC2C, "user_openid": "U",
-		"data": map[string]any{"type": qqInteractionTypeFeedback, "resolved": map[string]any{"button_data": "reply", "feedback_opt": "LIKE", "checked": 1, "message_id": "m1"}},
-	})
-	channel.handleInteraction(context.Background(), qqGatewayPayload{ID: qqInteractionEventPrefix + "interaction-1", Data: data})
-	if called || len(api.paths) != 0 {
-		t.Fatalf("called = %v, paths = %v", called, api.paths)
-	}
-}

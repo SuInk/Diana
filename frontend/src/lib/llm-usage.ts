@@ -53,6 +53,7 @@ const purposeLabels: Record<string, string> = {
   welcome_generator: "入群欢迎",
   proactive_message: "主动开口",
   poke_reply: "戳一戳回复",
+  qq_feedback_reply: "赞踩反馈回复",
   romance_greeting: "主动问候",
   reply_suppression_notice: "回复拦截提示",
   upstream_rejection_notice: "上游拒绝提示",

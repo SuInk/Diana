@@ -34,7 +34,8 @@ const (
 	qqInteractionChatC2C   = 2
 
 	// data.type：11 消息按钮、12 单聊快捷菜单要应答；13 是赞踩栏的反馈，不用应答，
-	// 也不是对方说的话。14 起是清空会话、切换模型这类智能体操作，Diana 不处理。
+	// 也不是对方说的话，单聊的转成通知交给运行时（见 qq_feedback.go）。14 起是清空
+	// 会话、切换模型这类智能体操作，Diana 不处理。
 	qqInteractionTypeFeedback = 13
 )
 
@@ -48,6 +49,16 @@ func (c *QQOfficialChannel) handleInteraction(ctx context.Context, payload qqGat
 	if interaction.Data.Type == qqInteractionTypeFeedback {
 		resolved := interaction.Data.Resolved
 		log.Printf("qq: 收到回复反馈 message=%s opt=%s checked=%d user=%s", resolved.MessageID, resolved.FeedbackOpt, resolved.Checked, firstNonEmpty(interaction.UserOpenID, interaction.GroupMemberOpenID))
+		event, ok := qqOfficialFeedbackEvent(payload.ID, interaction, c.Status().SelfID)
+		if !ok {
+			return
+		}
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if handler != nil {
+			_ = handler(ctx, event)
+		}
 		return
 	}
 	if interaction.Data.Type > qqInteractionTypeFeedback {
