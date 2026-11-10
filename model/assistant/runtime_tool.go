@@ -2226,6 +2226,11 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			}
 			items[index].TriggerAt = time.Now().Add(durableReminderRetryDelay(items[index], runErr, items[index].ConsecutiveFailures))
 		} else {
+			if items[index].ConsecutiveFailures > 0 && reminderConnectionFailure(items[index].LastError) {
+				if advanced := advanceConnectionRetries(items, id, startedAt, time.Now()); advanced > 0 {
+					log.Printf("diana reminder connection recovered: id=%s advanced %d backed-off tasks", id, advanced)
+				}
+			}
 			items[index].LastError = ""
 			items[index].ConsecutiveFailures = 0
 			resetRecurringFailureStateAfterSuccess(&items[index])

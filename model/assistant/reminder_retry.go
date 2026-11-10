@@ -19,20 +19,65 @@ const (
 	reminderQueryRetryInitialDelay    = 5 * time.Minute
 	reminderDeliveryRetryInitialDelay = 30 * time.Minute
 	reminderRetryMaximumDelay         = 6 * time.Hour
+	// 断网、DNS 超时这类故障说好就好，重试本身也便宜，不值得退到 6 小时：
+	// 网络恢复后碰上一次抖动，就会按之前攒下的失败次数再等一整轮。
+	reminderConnectionRetryMaximumDelay = 30 * time.Minute
+	// 网络恢复后被提前的任务错开几秒，不同时打出去。
+	reminderRecoveryStagger = 3 * time.Second
 )
 
+var reminderConnectionFailureMarkers = []string{
+	": eof", "unexpected eof", "host resolution failed", "no such host", "i/o timeout",
+	"connection refused", "connection reset", "broken pipe", "network is unreachable",
+	"no route to host", "tls handshake timeout", "context deadline exceeded",
+	"client.timeout exceeded", "timeout awaiting response headers",
+}
+
+// reminderConnectionFailure 判断一条失败是不是连接层面的（断网、DNS、超时）。
+// 按错误文本判：落库的只有 LastError 这段文字，网络恢复时要拿它认出还在退避的任务，
+// 排退避和认任务得是同一个口径。
+func reminderConnectionFailure(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "eof" {
+		return true
+	}
+	for _, marker := range reminderConnectionFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// reminderRetryCeiling 是这次失败最长等多久再试：连接类故障 30 分钟，其余 6 小时；
+// 周期任务再压到自己的周期以内，出了错不该比平时查得还稀。按月的周期远超上限，不参与。
+func reminderRetryCeiling(item Reminder, cause error) time.Duration {
+	ceiling := reminderRetryMaximumDelay
+	if cause != nil && reminderConnectionFailure(cause.Error()) {
+		ceiling = reminderConnectionRetryMaximumDelay
+	}
+	if interval := reminderScheduleInterval(item).Fixed; interval > 0 && interval < ceiling {
+		ceiling = interval
+	}
+	return ceiling
+}
+
 func durableReminderRetryDelay(item Reminder, cause error, failures int) time.Duration {
+	ceiling := reminderRetryCeiling(item, cause)
 	delay := reminderQueryRetryInitialDelay
 	if errors.Is(cause, errOutboundSend) {
 		delay = reminderDeliveryRetryInitialDelay
 	}
+	if delay > ceiling {
+		delay = ceiling
+	}
 	if failures < 1 {
 		failures = 1
 	}
-	for attempt := 1; attempt < failures && delay < reminderRetryMaximumDelay; attempt++ {
+	for attempt := 1; attempt < failures && delay < ceiling; attempt++ {
 		delay *= 2
-		if delay > reminderRetryMaximumDelay {
-			delay = reminderRetryMaximumDelay
+		if delay > ceiling {
+			delay = ceiling
 		}
 	}
 	hash := fnv.New32a()
@@ -40,10 +85,33 @@ func durableReminderRetryDelay(item Reminder, cause error, failures int) time.Du
 	_, _ = hash.Write([]byte(fmt.Sprintf("\x00%d", failures)))
 	permille := int64(1000 + hash.Sum32()%201)
 	jittered := time.Duration(int64(delay) * permille / 1000)
-	if jittered > reminderRetryMaximumDelay {
-		return reminderRetryMaximumDelay
+	if jittered > ceiling {
+		return ceiling
 	}
 	return jittered
+}
+
+// advanceConnectionRetries 在一个任务从连接类故障里恢复时调用：网络通了，其余因同类
+// 故障还在退避的任务提前到现在跑一次，不必各自等完定时器。只认 recoveredAt 之前失败的
+// 任务——之后才失败的说明它那头还没好，留给自己的退避。调用方持有 reminderMu。
+func advanceConnectionRetries(items []Reminder, recoveredID string, recoveredAt, now time.Time) int {
+	advanced := 0
+	for index := range items {
+		item := &items[index]
+		if item.ID == recoveredID || !item.CancelledAt.IsZero() || item.ConsecutiveFailures < 1 {
+			continue
+		}
+		if !reminderConnectionFailure(item.LastError) || !item.LastRunAt.Before(recoveredAt) {
+			continue
+		}
+		at := now.Add(time.Duration(advanced+1) * reminderRecoveryStagger)
+		if !item.TriggerAt.After(at) {
+			continue
+		}
+		item.TriggerAt = at
+		advanced++
+	}
+	return advanced
 }
 
 // storeReminderPending 把任务执行出的结果存下来，发送失败重试时直接补发，不再重跑。

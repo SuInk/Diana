@@ -335,3 +335,85 @@ func TestReminderPrivateFallbackRoutesUnderMultipleProfiles(t *testing.T) {
 		t.Fatalf("failure notice leaked to another profile: %d message(s)", leaked)
 	}
 }
+
+func TestDurableReminderRetryDelayCapsConnectionFailures(t *testing.T) {
+	item := Reminder{ID: "retry-connection"}
+	for _, message := range []string{
+		`抓取 Feed 失败: Get "https://example.com/feed.xml": host resolution failed: lookup example.com: i/o timeout`,
+		`telegram: request failed: EOF`,
+		`Post "https://example.com/v1/responses": dial tcp 192.0.2.1:443: connect: connection refused`,
+	} {
+		if delay := durableReminderRetryDelay(item, errors.New(message), 20); delay != 30*time.Minute {
+			t.Fatalf("connection failure %q delay = %s, want 30m", message, delay)
+		}
+	}
+	if delay := durableReminderRetryDelay(item, errors.New("抓取 Feed 返回 HTTP 404：确认用户名或 Feed 地址是否正确"), 20); delay != 6*time.Hour {
+		t.Fatalf("non-connection failure delay = %s, want 6h", delay)
+	}
+}
+
+func TestDurableReminderRetryDelayNeverExceedsOwnInterval(t *testing.T) {
+	item := Reminder{ID: "retry-interval", IntervalSeconds: 600}
+	if delay := durableReminderRetryDelay(item, errors.New("HTTP 404"), 20); delay != 10*time.Minute {
+		t.Fatalf("delay = %s, want the task's own 10m interval", delay)
+	}
+	deliveryErr := &outboundSendError{Cause: errors.New("send failed")}
+	if delay := durableReminderRetryDelay(item, deliveryErr, 1); delay != 10*time.Minute {
+		t.Fatalf("delivery delay = %s, want the task's own 10m interval", delay)
+	}
+	monthly := Reminder{ID: "retry-monthly", IntervalMonths: 1, IntervalSeconds: 30 * 24 * 3600}
+	if delay := durableReminderRetryDelay(monthly, errors.New("HTTP 404"), 20); delay != 6*time.Hour {
+		t.Fatalf("monthly delay = %s, want 6h", delay)
+	}
+}
+
+func TestAdvanceConnectionRetriesOnlyMovesEarlierConnectionFailures(t *testing.T) {
+	now := time.Now()
+	recoveredAt := now.Add(-time.Second)
+	later := now.Add(5 * time.Hour)
+	items := []Reminder{
+		{ID: "recovered", ConsecutiveFailures: 3, LastError: "EOF", LastRunAt: now.Add(-time.Hour), TriggerAt: later},
+		{ID: "dns", ConsecutiveFailures: 9, LastError: "lookup example.com: i/o timeout", LastRunAt: now.Add(-time.Hour), TriggerAt: later},
+		{ID: "not-found", ConsecutiveFailures: 9, LastError: "抓取 Feed 返回 HTTP 404", LastRunAt: now.Add(-time.Hour), TriggerAt: later},
+		{ID: "failed-after", ConsecutiveFailures: 1, LastError: "EOF", LastRunAt: now, TriggerAt: later},
+		{ID: "cancelled", ConsecutiveFailures: 2, LastError: "EOF", LastRunAt: now.Add(-time.Hour), TriggerAt: later, CancelledAt: now},
+		{ID: "healthy", TriggerAt: later},
+		{ID: "one-time", ConsecutiveFailures: 2, LastError: "telegram: request failed: EOF", TriggerAt: later},
+	}
+	if advanced := advanceConnectionRetries(items, "recovered", recoveredAt, now); advanced != 2 {
+		t.Fatalf("advanced = %d, want 2", advanced)
+	}
+	for _, item := range items {
+		moved := item.TriggerAt.Before(now.Add(time.Minute))
+		if want := item.ID == "dns" || item.ID == "one-time"; moved != want {
+			t.Fatalf("%s moved = %v, want %v", item.ID, moved, want)
+		}
+	}
+	if !items[1].TriggerAt.Before(items[6].TriggerAt) {
+		t.Fatalf("advanced tasks should be staggered: %s vs %s", items[1].TriggerAt, items[6].TriggerAt)
+	}
+}
+
+func TestRecurringReminderRecoveryAdvancesOtherConnectionRetries(t *testing.T) {
+	now := time.Now()
+	later := now.Add(5 * time.Hour)
+	store := &stubReminderStore{items: []Reminder{
+		{ID: "probe", Kind: ReminderKindRepositoryWatch, Repository: "acme/demo", IntervalSeconds: 600, ConsecutiveFailures: 4, LastError: "EOF", LastRunAt: now.Add(-time.Hour)},
+		{ID: "waiting", Kind: ReminderKindRepositoryWatch, Repository: "acme/other", IntervalSeconds: 600, ConsecutiveFailures: 9, LastError: "lookup example.com: i/o timeout", LastRunAt: now.Add(-time.Hour), TriggerAt: later},
+	}}
+	runtime := NewRuntime(BotConfig{}, &scriptedChannel{}, NewPluginManager(), nil, store, nil, nil)
+	if _, err := runtime.finishRecurringReminder("probe", now, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.items[1].TriggerAt; !got.Before(now.Add(time.Minute)) {
+		t.Fatalf("waiting task still scheduled at %s", got)
+	}
+	// 平时的成功不代表网络刚恢复，不去动别的任务。
+	store.items[1].TriggerAt = later
+	if _, err := runtime.finishRecurringReminder("probe", now.Add(time.Second), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.items[1].TriggerAt; !got.Equal(later) {
+		t.Fatalf("healthy success moved waiting task to %s", got)
+	}
+}
