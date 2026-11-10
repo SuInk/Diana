@@ -1402,12 +1402,15 @@ func (s *memoryInboundEventStore) outcomeAndAttempts(id string) (string, int) {
 	return record.outcome, record.item.Attempts
 }
 
-func (s *memoryInboundEventStore) InboundSessionHasNewerPending(_ context.Context, item InboundQueueItem) (bool, error) {
+func (s *memoryInboundEventStore) InboundSessionHasNewerPending(_ context.Context, item InboundQueueItem, within time.Duration) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for id, record := range s.records {
 		other := record.item
 		if id != item.ID && record.state == "pending" && other.Session == item.Session && other.Event.Time > item.Event.Time {
+			if within > 0 && item.Event.Time > 0 && other.Event.Time-item.Event.Time > int64(within/time.Second) {
+				continue
+			}
 			return true, nil
 		}
 	}
@@ -1424,6 +1427,7 @@ func TestInboundBacklogHandoverRules(t *testing.T) {
 		item  InboundQueueItem
 		newer bool
 		owner bool
+		gap   time.Duration
 		want  bool
 	}{
 		{name: "刚进队不交接", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-10 * time.Second)}, newer: true},
@@ -1432,6 +1436,7 @@ func TestInboundBacklogHandoverRules(t *testing.T) {
 		{name: "重试不交接", item: InboundQueueItem{Attempts: 2, EnqueuedAt: now.Add(-time.Minute)}, newer: true},
 		{name: "没有入队时间不交接", item: InboundQueueItem{Attempts: 1}, newer: true},
 		{name: "主人不交接", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-time.Minute)}, newer: true, owner: true},
+		{name: "后面那条隔得远不交接", item: InboundQueueItem{Attempts: 1, EnqueuedAt: now.Add(-time.Minute)}, newer: true, gap: 3 * time.Hour},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1445,6 +1450,8 @@ func TestInboundBacklogHandoverRules(t *testing.T) {
 			item.Event, item.Session = base, "group:123"
 			item.ID, _, _ = store.EnqueueInboundEvent(context.Background(), item.Session, base)
 			if tc.newer {
+				later := later
+				later.Time += int64(tc.gap / time.Second)
 				if _, _, err := store.EnqueueInboundEvent(context.Background(), item.Session, later); err != nil {
 					t.Fatal(err)
 				}
@@ -1456,96 +1463,81 @@ func TestInboundBacklogHandoverRules(t *testing.T) {
 	}
 }
 
-// 积压的 @ 交给后面一条普通消息：只发一份回复，回复对象换回那条 @，后面那条作为同轮消息交给模型。
-func TestInboundBacklogMergesEarlierTriggerIntoLaterMessage(t *testing.T) {
+// 只取和当前消息连成一串的：隔得远的留在包里等紧跟着它的那条，不混进这一轮。
+func TestTakeBacklogMessagesKeepsOnlyContiguousRun(t *testing.T) {
+	runtime := newQueuedTestRuntime(newQueueTestChannel(), newMemoryInboundEventStore(), nil)
+	now := time.Now()
+	base := now.Unix()
+	hold := func(id string, at int64) {
+		event := queuedDirectTestEvent(id, at)
+		runtime.holdBacklogMessage(event, inboundEventPlainText(event), false, now)
+	}
+	ids := func(items []backlogMessage) string {
+		var out []string
+		for _, item := range items {
+			out = append(out, item.Event.MessageID)
+		}
+		return strings.Join(out, ",")
+	}
+	hold("hours-ago", base-3*3600)
+	hold("hours-ago-next", base-3*3600+2)
+	hold("just-now", base-4)
+	hold("just-now-next", base-2)
+
+	if got := ids(runtime.takeBacklogMessages(queuedDirectTestEvent("current", base), now)); got != "just-now,just-now-next" {
+		t.Fatalf("当前消息取走的是 %q，应当只有紧挨着它的那两条", got)
+	}
+	// 几个小时前那两条还在包里，等紧跟着它们的消息来取。
+	if got := ids(runtime.takeBacklogMessages(queuedDirectTestEvent("hours-ago-follow", base-3*3600+4), now)); got != "hours-ago,hours-ago-next" {
+		t.Fatalf("紧跟着旧消息的那条取走的是 %q", got)
+	}
+	if runtime.takeBacklogMessages(queuedDirectTestEvent("later", base+1), now) != nil {
+		t.Fatal("积压包应该已经取空")
+	}
+}
+
+// 直接叫机器人的消息积压了也不交给后面那条：它自己回，后面那条照自己的规则走。
+func TestInboundBacklogDoesNotHandOverDirectTrigger(t *testing.T) {
 	channel := newQueueTestChannel()
-	provider := &capturingLLMProvider{reply: "一起回复"}
+	provider := &capturingLLMProvider{reply: "单独回复"}
 	store := newMemoryInboundEventStore()
 	runtime := newQueuedTestRuntime(channel, store, provider)
 	now := time.Now()
 
-	question := queuedDirectTestEvent("question", now.Add(-time.Minute).Unix())
+	question := queuedDirectTestEvent("question", now.Add(-2*time.Second).Unix())
 	question.RawMessage = "Diana 积压的问题"
 	question.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 积压的问题"}}}
-	chatter := queuedDirectTestEvent("chatter", now.Unix())
-	chatter.UserID = "20002"
-	chatter.RawMessage = "后面随口一句"
-	chatter.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "后面随口一句"}}}
+	second := queuedDirectTestEvent("second", now.Unix())
+	second.UserID = "20002"
+	second.RawMessage = "Diana 第二个问题"
+	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 第二个问题"}}}
 	questionID, _, _ := store.EnqueueInboundEvent(context.Background(), "group:123", question)
-	chatterID, _, _ := store.EnqueueInboundEvent(context.Background(), "group:123", chatter)
+	secondID, _, _ := store.EnqueueInboundEvent(context.Background(), "group:123", second)
 
 	outcome, err := runtime.processInboundQueueItem(context.Background(), InboundQueueItem{
 		ID: questionID, Session: "group:123", Event: question, Attempts: 1, EnqueuedAt: now.Add(-time.Minute),
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || outcome != "replied" {
+		t.Fatalf("积压的 @ outcome=%q err=%v, want replied", outcome, err)
 	}
-	if outcome != "merged_into_backlog_turn" {
-		t.Fatalf("积压消息 outcome=%q, want merged_into_backlog_turn", outcome)
-	}
-	if channel.sentCount() != 0 || len(provider.requestSnapshot().Messages) != 0 {
-		t.Fatal("交接出去的积压消息不该自己调模型或发消息")
+	request := provider.requestSnapshot()
+	if last := request.Messages[len(request.Messages)-1].Content; !strings.Contains(last, "积压的问题") || strings.Contains(last, "积压期间一起到达的消息") {
+		t.Fatalf("积压的 @ 应当单独作答：%q", last)
 	}
 	store.records[questionID].state = "done"
 
 	outcome, err = runtime.processInboundQueueItem(context.Background(), InboundQueueItem{
-		ID: chatterID, Session: "group:123", Event: chatter, Attempts: 1, EnqueuedAt: now,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome != "replied" {
-		t.Fatalf("合并那一轮 outcome=%q, want replied", outcome)
-	}
-	if channel.sentCount() != 1 {
-		t.Fatalf("合并后应只发一份回复，sent=%d", channel.sentCount())
-	}
-	request := provider.requestSnapshot()
-	last := request.Messages[len(request.Messages)-1].Content
-	if !strings.Contains(last, "积压的问题") || !strings.Contains(last, "积压期间一起到达的消息") || !strings.Contains(last, "后面随口一句") {
-		t.Fatalf("回复请求应以积压的 @ 为对象，并带上后面那条：%q", last)
-	}
-	if runtime.takeBacklogMessages(chatter, time.Now()) != nil {
-		t.Fatal("积压包应该已经被取走")
-	}
-}
-
-// 当前这条自己就是触发消息时仍以它为回复对象，积压下来的触发消息作为同轮消息一起交给模型。
-func TestInboundBacklogKeepsCurrentTriggerAsAnchor(t *testing.T) {
-	channel := newQueueTestChannel()
-	provider := &capturingLLMProvider{reply: "一起回复"}
-	store := newMemoryInboundEventStore()
-	runtime := newQueuedTestRuntime(channel, store, provider)
-	now := time.Now()
-
-	first := queuedDirectTestEvent("first", now.Add(-time.Minute).Unix())
-	first.RawMessage = "Diana 第一个问题"
-	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 第一个问题"}}}
-	second := queuedDirectTestEvent("second", now.Unix())
-	second.RawMessage = "Diana 第二个问题"
-	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana 第二个问题"}}}
-	firstID, _, _ := store.EnqueueInboundEvent(context.Background(), "group:123", first)
-	secondID, _, _ := store.EnqueueInboundEvent(context.Background(), "group:123", second)
-
-	if outcome, err := runtime.processInboundQueueItem(context.Background(), InboundQueueItem{
-		ID: firstID, Session: "group:123", Event: first, Attempts: 1, EnqueuedAt: now.Add(-time.Minute),
-	}); err != nil || outcome != "merged_into_backlog_turn" {
-		t.Fatalf("first outcome=%q err=%v", outcome, err)
-	}
-	store.records[firstID].state = "done"
-	if outcome, err := runtime.processInboundQueueItem(context.Background(), InboundQueueItem{
 		ID: secondID, Session: "group:123", Event: second, Attempts: 1, EnqueuedAt: now,
-	}); err != nil || outcome != "replied" {
-		t.Fatalf("second outcome=%q err=%v", outcome, err)
+	})
+	if err != nil || outcome != "replied" {
+		t.Fatalf("第二条 outcome=%q err=%v, want replied", outcome, err)
 	}
-	if channel.sentCount() != 1 {
-		t.Fatalf("sent=%d, want 1", channel.sentCount())
+	if channel.sentCount() != 2 {
+		t.Fatalf("两条 @ 各回一次，sent=%d", channel.sentCount())
 	}
-	request := provider.requestSnapshot()
-	last := request.Messages[len(request.Messages)-1].Content
-	head, backlog, found := strings.Cut(last, "积压期间一起到达的消息")
-	if !found || !strings.Contains(head, "第二个问题") || !strings.Contains(backlog, "第一个问题") {
-		t.Fatalf("应以第二个问题为对象、第一个问题作为积压消息：%q", last)
+	request = provider.requestSnapshot()
+	if last := request.Messages[len(request.Messages)-1].Content; !strings.Contains(last, "第二个问题") || strings.Contains(last, "积压期间一起到达的消息") {
+		t.Fatalf("第二条 @ 不该带着前一条的积压包：%q", last)
 	}
 }
 
@@ -1558,7 +1550,7 @@ func TestInboundBacklogRoutesHeldProactiveCandidatesTogether(t *testing.T) {
 		return provider, nil
 	})
 	held := MessageEvent{
-		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1", Time: time.Now().Add(-time.Minute).Unix(),
+		Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "message-1", Time: time.Now().Add(-2 * time.Second).Unix(),
 		RawMessage: "这个报错应该怎么处理？",
 		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "这个报错应该怎么处理？"}}},
 	}

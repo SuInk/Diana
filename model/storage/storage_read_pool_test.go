@@ -67,7 +67,7 @@ func TestReadOnlyQueriesDoNotQueueBehindWriter(t *testing.T) {
 			return err
 		},
 		"InboundSessionHasNewerPending": func(ctx context.Context) error {
-			_, err := store.InboundSessionHasNewerPending(ctx, item)
+			_, err := store.InboundSessionHasNewerPending(ctx, item, 0)
 			return err
 		},
 		"GroupSeqGap": func(ctx context.Context) error {

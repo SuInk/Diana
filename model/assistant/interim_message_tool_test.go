@@ -160,3 +160,23 @@ func TestInterimReplyIsAuditedBeforeSend(t *testing.T) {
 		t.Fatalf("err = %v, audit calls = %d", err, len(provider.requests))
 	}
 }
+
+// 运行记录的回复内容要带上中途先发出去的话，按发出顺序一条一行。
+func TestReplyRecordTextIncludesInterimMessages(t *testing.T) {
+	cases := []struct {
+		name    string
+		interim []string
+		reply   string
+		want    string
+	}{
+		{name: "没有中途发言时原样", reply: "最终答案", want: "最终答案"},
+		{name: "中途发言排在前面", interim: []string{"这就来，我去查下"}, reply: "查到了", want: "这就来，我去查下\n查到了"},
+		{name: "只有中途发言", interim: []string{"我去查一下", "还在查"}, want: "我去查一下\n还在查"},
+		{name: "最终回复就是中途那句时不重复", interim: []string{"在的"}, reply: "在的", want: "在的"},
+	}
+	for _, tc := range cases {
+		if got := replyRecordText(tc.interim, tc.reply); got != tc.want {
+			t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

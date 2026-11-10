@@ -14,20 +14,28 @@ import (
 )
 
 // 在线时回复生成比消息进来慢，队列按先后一条条处理，机器人就会对着十几分钟前的话接茬。
-// 积压时不再一条条回：排队超过 inboundBacklogHandoverWait、同会话后面还有消息等着的，
+// 积压时不再一条条回：排队超过 inboundBacklogHandoverWait、同会话后面紧跟着还有消息等着的，
 // 只进上下文并登记到会话的积压包里；同会话下一条真正处理的消息把积压包取走，合并成一轮：
-// 有直接触发（@、引用、接话、私聊等）就回最新那条触发消息，其余一起交给模型；都没有就把
-// 可以主动接话的候选一起交给主动回复路由挑。
+// 当前这条是直接触发（@、引用、接话、私聊等）就回它，积压的一起交给模型；不是就把可以
+// 主动接话的候选一起交给主动回复路由挑。直接触发的消息自己不进积压包，各回各的
+// （见 prepareMessageEvent）。
+//
+// 只有一条挨一条、相隔不超过 backlogMergeWindow 的消息才合并，和接话评分的合并窗口是
+// 同一个数。隔得更远的不是同一句话的连发，各回各的：11-10 断网恢复后，有人问「你们不用
+// 宽带吗」，积压包里带着 2.9 小时前的一句「吃了普瑞就有动力了 为什么」，模型丢下眼前的
+// 问题去讲普瑞巴林的药理。
 const (
 	inboundBacklogHandoverWait = 30 * time.Second
+	backlogMergeWindow         = defaultProactiveRouteDebounce
 	// 积压包在会话没有新消息被处理时不会被取走；超过这个时长的就只留在历史里，不再合并作答。
 	backlogMessageRetention = 10 * time.Minute
 	backlogMessageMaxItems  = 20
 )
 
-// InboundBacklogStore 回答「同一会话在这条之后还有没有等着处理的消息」，供积压交接判断用。
+// InboundBacklogStore 回答「同一会话在这条之后 within 以内还有没有等着处理的消息」，供积压
+// 交接判断用。within 按消息发出时间算；不大于 0 或这条消息没有时间时不限。
 type InboundBacklogStore interface {
-	InboundSessionHasNewerPending(ctx context.Context, item InboundQueueItem) (bool, error)
+	InboundSessionHasNewerPending(ctx context.Context, item InboundQueueItem, within time.Duration) (bool, error)
 }
 
 type backlogMessage struct {
@@ -40,8 +48,8 @@ type backlogMessage struct {
 // inboundBacklogShouldHandOver 判断这条消息是不是积压了、应该交给同会话后面的消息一起作答。
 //
 // 只看第一次处理：重试的那条可能已经发出去一半，半路交出去比晚到更糟，重试有自己的上限。
-// 主人的消息不交接：确认码、响应限制这类指令得在自己那一轮生效。交接要求后面确实还有
-// 待处理的消息，保证积压包一定有人来取。
+// 主人的消息不交接：确认码、响应限制这类指令得在自己那一轮生效。交接要求后面
+// backlogMergeWindow 以内确实还有待处理的消息，保证积压包一定有人来取。
 func (r *Runtime) inboundBacklogShouldHandOver(ctx context.Context, item InboundQueueItem, now time.Time) bool {
 	if item.Attempts > 1 || item.EnqueuedAt.IsZero() || now.IsZero() {
 		return false
@@ -60,7 +68,7 @@ func (r *Runtime) inboundBacklogShouldHandOver(ctx context.Context, item Inbound
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	newer, err := store.InboundSessionHasNewerPending(checkCtx, item)
+	newer, err := store.InboundSessionHasNewerPending(checkCtx, item, backlogMergeWindow)
 	if err != nil {
 		log.Printf("diana inbound backlog check failed: %v", err)
 		return false
@@ -91,21 +99,46 @@ func (r *Runtime) holdBacklogMessage(event MessageEvent, text string, suppressed
 	r.backlogMessages[key] = items
 }
 
-// takeBacklogMessages 取走会话的积压包，丢掉放太久的。
+// takeBacklogMessages 从会话的积压包里取走和当前这条连成一串的：从当前消息往回，每条和
+// 后一条相隔不超过 backlogMergeWindow。断开处往前的留在包里，等紧跟着它们的那条来取
+// （同会话几条并行处理时，后面的消息可能先走到这里）；放太久的丢掉，它们已经在历史里。
 func (r *Runtime) takeBacklogMessages(event MessageEvent, now time.Time) []backlogMessage {
 	key := sessionKey(event)
 	r.backlogMu.Lock()
-	items := r.backlogMessages[key]
-	delete(r.backlogMessages, key)
-	r.backlogMu.Unlock()
-	kept := items[:0:0]
-	for _, item := range items {
+	defer r.backlogMu.Unlock()
+	kept := r.backlogMessages[key][:0:0]
+	for _, item := range r.backlogMessages[key] {
 		if item.Event.MessageID == event.MessageID || now.Sub(item.QueuedAt) > backlogMessageRetention {
 			continue
 		}
 		kept = append(kept, item)
 	}
-	return kept
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Event.Time < kept[j].Event.Time })
+	next := event.Time
+	start := len(kept)
+	for start > 0 {
+		at := kept[start-1].Event.Time
+		gap := next - at
+		if gap < 0 {
+			gap = -gap
+		}
+		if at > 0 && next > 0 && time.Duration(gap)*time.Second > backlogMergeWindow {
+			break
+		}
+		if at > 0 {
+			next = at
+		}
+		start--
+	}
+	if start == 0 {
+		delete(r.backlogMessages, key)
+	} else {
+		r.backlogMessages[key] = kept[:start:start]
+	}
+	if start == len(kept) {
+		return nil
+	}
+	return kept[start:]
 }
 
 // mergeBacklogMessages 把积压包和当前消息合并成一轮，返回这一轮的回复对象。
