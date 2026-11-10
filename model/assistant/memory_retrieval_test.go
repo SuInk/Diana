@@ -116,3 +116,52 @@ func TestStaleSummariesRankBelowRecentlyTouchedOnes(t *testing.T) {
 		t.Fatalf("recently touched summary did not outrank the stale one: %#v", scores)
 	}
 }
+
+// 生产上「这鬼天气给我冻成sb了」带进了 19 条记忆，其中 14 条只和它对上了
+// 「了」「给」「这」这类单字。单字不能单独构成相关。
+func TestSingleCharacterOverlapIsNotRelevance(t *testing.T) {
+	now := time.Now()
+	items := []StructuredMemoryItem{
+		{
+			ID: "allowance", Kind: MemoryKindEpisode, Topic: "家庭生活费与扣款", SubjectName: "群友甲",
+			Content:    "群友甲提到父亲向小姨要了两千元给他发生活费，其中一千元被直接扣除。",
+			Confidence: .99, Importance: .62, SourceSession: "group:123", LastVerifiedAt: now,
+		},
+		{
+			ID: "digest", Kind: MemoryKindSummary, Topic: "十月群聊汇总",
+			Content:    "这几天群里讨论了远控架构，有人给出了方案，最后做成了演示。",
+			Confidence: .99, Importance: .95, SourceSession: "group:123", LastVerifiedAt: now,
+		},
+		{
+			ID: "weather", Kind: MemoryKindEpisode, Topic: "出门淋雨",
+			Content:    "群友乙说上周天气突然变冷，出门没带伞淋了雨。",
+			Confidence: .99, Importance: .62, SourceSession: "group:123", LastVerifiedAt: now,
+		},
+	}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "user"}
+	ranked := rankStructuredMemories(items, event, "这鬼天气给我冻成sb了", now)
+	if len(ranked) != 1 || ranked[0].ID != "weather" {
+		t.Fatalf("single-character overlap was treated as relevance: %#v", ranked)
+	}
+}
+
+// 查询本身只有单字时没有词可对，单字命中照旧算数。
+func TestSingleCharacterQueryStillMatches(t *testing.T) {
+	now := time.Now()
+	items := []StructuredMemoryItem{{
+		ID: "cat", Kind: MemoryKindEpisode, Topic: "养宠物",
+		Content:    "群友甲家里养了一只猫。",
+		Confidence: .99, Importance: .7, SourceSession: "group:123", LastVerifiedAt: now,
+	}}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "user"}
+	if ranked := rankStructuredMemories(items, event, "猫", now); len(ranked) != 1 {
+		t.Fatalf("single-character query lost its only match: %#v", ranked)
+	}
+}
+
+func TestMemoryRetrievalTextDropsProtocolMarkers(t *testing.T) {
+	got := memoryRetrievalText(MessageEvent{}, `<diana-quote id="12345"/>你看 所以说是夸你`)
+	if strings.Contains(got, "diana") || strings.Contains(got, "12345") || !strings.Contains(got, "所以说是夸你") {
+		t.Fatalf("retrieval text = %q", got)
+	}
+}
