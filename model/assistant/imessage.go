@@ -92,7 +92,7 @@ func NewIMessageChannel(cfg IMessageConfig) *IMessageChannel {
 		client:      &http.Client{Timeout: 2 * time.Minute},
 		status:      ChannelStatus{Endpoint: imessageEndpointLabel(cfg), UpdatedAt: time.Now()},
 		queues:      map[string]*imessageChatQueue{},
-		mediaClient: netguard.NewPublicHTTPClient(2 * time.Minute),
+		mediaClient: netguard.NewPublicDownloadClient(),
 	}
 }
 

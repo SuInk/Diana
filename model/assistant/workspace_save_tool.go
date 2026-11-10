@@ -328,9 +328,7 @@ func fetchWorkspaceURL(ctx context.Context, raw string) (workspaceMediaPayload, 
 	if parsed != nil {
 		name = path.Base(parsed.Path)
 	}
-	callCtx, cancel := context.WithTimeout(ctx, saveWorkspaceFetchTimeout)
-	defer cancel()
-	cached, _, release, err := acquireMediaDownload(callCtx, netguard.NewPublicHTTPClient(saveWorkspaceFetchTimeout), source, name, "", "public", agent.WorkspaceMediaMaxBytes)
+	cached, _, release, err := acquireMediaDownload(ctx, netguard.NewPublicDownloadClient(), source, name, "", "public", agent.WorkspaceMediaMaxBytes)
 	defer release()
 	if err != nil {
 		return workspaceMediaPayload{}, fmt.Errorf("下载失败：%s", describeVideoContextError(err, agent.WorkspaceMediaMaxBytes))
@@ -493,11 +491,14 @@ func (r *Runtime) readChatMediaSources(ctx context.Context, item MessageEvent, s
 		// 群文件的下载地址是平台适配器查出来的，可能就在本机（适配器自己的文件服务），
 		// 和文件解析插件一样用不挡内网的客户端，并按 adapter 信任域单独建缓存索引，
 		// 不和公网下载混用。视频、语音照旧走挡内网的客户端。
-		client, scope := netguard.NewPublicHTTPClient(saveWorkspaceFetchTimeout), "public"
+		// 公网下载不设总时限，卡死由下载客户端按阶段断开；适配器在本机，仍限总时长。
+		client, scope := netguard.NewPublicDownloadClient(), "public"
+		callCtx, cancel := context.WithCancel(ctx)
 		if segment.Type == "file" {
+			cancel()
 			client, scope = &http.Client{Timeout: saveWorkspaceFetchTimeout}, "adapter"
+			callCtx, cancel = context.WithTimeout(ctx, saveWorkspaceFetchTimeout)
 		}
-		callCtx, cancel := context.WithTimeout(ctx, saveWorkspaceFetchTimeout)
 		cached, _, release, err := acquireMediaDownload(callCtx, client, source, name, platformMediaMD5(item.Platform, segment), scope, agent.WorkspaceMediaMaxBytes)
 		if err == nil {
 			var data []byte

@@ -199,10 +199,8 @@ func formatVideoContextSize(maxBytes int64) string {
 }
 
 func downloadVideoContextSource(ctx context.Context, source string) (string, func(), error) {
-	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
 	identities, _ := ctx.Value(videoMediaIdentitiesKey{}).(map[string]string)
-	path, _, release, err := acquireMediaDownload(callCtx, netguard.NewPublicHTTPClient(30*time.Second), source, "source.mp4", identities[source], "public", videoContextMaxBytes(ctx))
+	path, _, release, err := acquireMediaDownload(ctx, netguard.NewPublicDownloadClient(), source, "source.mp4", identities[source], "public", videoContextMaxBytes(ctx))
 	return path, release, err
 }
 

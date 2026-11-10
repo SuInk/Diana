@@ -416,7 +416,7 @@ func (r *Runtime) askImages(ctx context.Context, event MessageEvent, images []ll
 			return "", fmt.Errorf("vision model returned an empty answer")
 		}
 		if VisionDescriptionRefused(answer) {
-			return "", fmt.Errorf("%w: %s", errVisionImageNotDelivered, truncateRunes(answer, 60))
+			return "", newVisionNotDeliveredError(response.Model, answer)
 		}
 		return answer, nil
 	})

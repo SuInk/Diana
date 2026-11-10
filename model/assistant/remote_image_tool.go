@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 
@@ -79,7 +80,9 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		now := t.runtime.clock()
 		ready, meta, err := loadAvatarImage(ctx, urls[0], now)
 		if err != nil {
-			return "", fmt.Errorf("头像读取或解码失败，不能据此描述画面")
+			// 报错原文要带上：以前只回一句「读取或解码失败」，线上解析超时时谁也看不出原因。
+			log.Printf("diana remote_image view_avatar failed: message_id=%s source=%s err=%v", t.event.MessageID, source, err)
+			return "", fmt.Errorf("头像读取或解码失败，不能据此描述画面：%w", err)
 		}
 		id := fmt.Sprintf("remote_image_%d", len(t.images)+1)
 		t.images[id] = ready

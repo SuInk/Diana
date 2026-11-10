@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"image"
 	"image/color"
 	"image/png"
@@ -217,5 +218,29 @@ func TestSystemPromptTellsBotNotToDenyObservedSelfChanges(t *testing.T) {
 	override := NewRuntime(BotConfig{ID: "qq", PromptOverrides: map[string]string{"reply.self_observation": "自定义的自我核查规则"}}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if got := override.systemPrompt(MessageEvent{Kind: EventKindGroup, GroupID: "1", UserID: "2"}, nil); !strings.Contains(got, "自定义的自我核查规则") || strings.Contains(got, promptSelfObservation) {
 		t.Fatal("改写没有生效")
+	}
+}
+
+// 2026-11-10 线上头像域名解析超时，工具只回「读取或解码失败」，机器人只能说「得让主人
+// 看看」，日志里也没有原因。报错原文必须跟着工具结果回去。
+func TestRemoteImageViewAvatarReportsRealFailure(t *testing.T) {
+	original := fetchAvatarImage
+	fetchAvatarImage = func(context.Context, string, int64) ([]byte, string, http.Header, error) {
+		return nil, "", nil, errors.New("host resolution failed: context deadline exceeded")
+	}
+	t.Cleanup(func() { fetchAvatarImage = original })
+	r := NewRuntime(BotConfig{Platform: PlatformOneBotV11, BotAccount: "10001"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "30001", UserID: "22222", SelfID: "10001"}
+	tool := newDianaRemoteImageTool(r, event)
+
+	output, err := tool.Run(context.Background(), map[string]any{"action": "view_avatar", "avatar_source": avatarSourceBot})
+	if err == nil {
+		t.Fatalf("下载失败却当成成功：%s", output)
+	}
+	if !strings.Contains(err.Error(), "host resolution failed") || !strings.Contains(err.Error(), "不能据此描述画面") {
+		t.Fatalf("报错没带上真实原因：%v", err)
+	}
+	if len(tool.ToolResultParts(output)) != 0 {
+		t.Fatal("失败时不该附图")
 	}
 }
