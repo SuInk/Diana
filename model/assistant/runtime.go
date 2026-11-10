@@ -580,12 +580,14 @@ type Runtime struct {
 	userBrowsers              *browserbox.UserSessionPool
 	media                     *MediaStore
 	members                   *memberCache
-	bodyAccounts              bodyAccountMembership
-	now                       func() time.Time
-	quietNotices              map[string]time.Time
-	resolverDeliveryMu        sync.Mutex
-	resolverDeliverySeq       uint64
-	resolverDeliveries        map[string]resolverDeliveryReservation
+	// crossGroupNonMembers 记跨群参考里查过不在本群的作者，见 crossGroupNonMemberTTL。自带锁。
+	crossGroupNonMembers crossGroupNonMembers
+	bodyAccounts         bodyAccountMembership
+	now                  func() time.Time
+	quietNotices         map[string]time.Time
+	resolverDeliveryMu   sync.Mutex
+	resolverDeliverySeq  uint64
+	resolverDeliveries   map[string]resolverDeliveryReservation
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
 	sem                 chan struct{}

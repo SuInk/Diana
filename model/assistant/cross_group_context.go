@@ -17,7 +17,62 @@ const (
 	// 之后的尾部，不碍缓存，平均每条两三百字；更多的由模型用 chat_history 跨群搜。
 	crossGroupContextResultLimit    = 6
 	crossGroupMembershipCheckBudget = 3 * time.Second
+	// crossGroupNonMemberTTL 是「这个人不在本群」的记忆时长。在群的人查到后进成员缓存，
+	// 不在的以前每条回复都重查一遍：生产上 OneBot 群近半数回复因此等满 3 秒预算才开始
+	// 生成（接入端对群外的人答得慢或干脆不答）。查不到和超时一样记：记错的代价只是这
+	// 十分钟里少带他的几句跨群参考；他在本群一说话，成员缓存有了他，这条记录就不看了。
+	crossGroupNonMemberTTL        = 10 * time.Minute
+	crossGroupNonMemberMaxEntries = 5000
 )
+
+// crossGroupNonMembers 记最近查过、确认不到在本群的作者。零值可用。
+type crossGroupNonMembers struct {
+	mu   sync.Mutex
+	seen map[string]time.Time
+}
+
+func crossGroupNonMemberKey(event MessageEvent, authorID string) string {
+	return strings.TrimSpace(event.ProfileID) + "|" + sessionKey(event) + "|" + authorID
+}
+
+func (c *crossGroupNonMembers) recent(key string, now time.Time) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at, ok := c.seen[key]
+	if ok && now.Sub(at) > crossGroupNonMemberTTL {
+		delete(c.seen, key)
+		return false
+	}
+	return ok
+}
+
+func (c *crossGroupNonMembers) note(key string, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.seen == nil {
+		c.seen = make(map[string]time.Time)
+	}
+	if len(c.seen) >= crossGroupNonMemberMaxEntries {
+		for k, at := range c.seen {
+			if now.Sub(at) > crossGroupNonMemberTTL {
+				delete(c.seen, k)
+			}
+		}
+		for k := range c.seen {
+			if len(c.seen) < crossGroupNonMemberMaxEntries {
+				break
+			}
+			delete(c.seen, k)
+		}
+	}
+	c.seen[key] = now
+}
+
+func (c *crossGroupNonMembers) forget(key string) {
+	c.mu.Lock()
+	delete(c.seen, key)
+	c.mu.Unlock()
+}
 
 // Cross-group context only carries related text whose original author is also
 // a current member of the target group. This keeps the author inside the
@@ -496,14 +551,20 @@ func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAutho
 				continue
 			}
 		}
+		nonMemberKey := crossGroupNonMemberKey(event, authorID)
+		if r.crossGroupNonMembers.recent(nonMemberKey, time.Now()) {
+			continue
+		}
 		wg.Add(1)
 		go func() {
 			defer recoverGoroutinePanic("cross_group_context.go:275")
 			defer wg.Done()
 			member, err := r.getGroupMemberInfoForEvent(ctx, event, event.GroupID, authorID)
 			if err != nil || strings.TrimSpace(member.UserID) != authorID {
+				r.crossGroupNonMembers.note(nonMemberKey, time.Now())
 				return
 			}
+			r.crossGroupNonMembers.forget(nonMemberKey)
 			if r.members != nil {
 				r.members.store(event.GroupID, authorID, memberInfo{
 					Level: parseGroupLevel(member.Level),
