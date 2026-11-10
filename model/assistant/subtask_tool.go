@@ -83,7 +83,7 @@ func (t *dianaSubtaskTool) Name() string { return dianaSubtaskToolName }
 func (t *dianaSubtaskTool) Timeout() time.Duration { return 0 }
 
 func (t *dianaSubtaskTool) Description() string {
-	return `把一个或多个相互独立的小任务交给隔离 Worker。分析材料用 mode=analyze；调查外部事实用 mode=search。多个任务放进一次 tasks 调用，由后端并发执行。Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。旧 question/material 格式继续兼容。`
+	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks，由后端并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。旧 question/material 格式继续兼容。`
 }
 
 func (t *dianaSubtaskTool) InputSchema() map[string]any {

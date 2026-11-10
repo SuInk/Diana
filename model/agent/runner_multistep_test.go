@@ -41,7 +41,7 @@ func TestSystemPromptExplicitlyTriggersParallelSubtasks(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := runner.systemPrompt()
-	for _, want := range []string{"两个以上互不依赖", "一次 subtask", "tasks", "mode=search", "不由你逐个串行 web_search"} {
+	for _, want := range []string{"调研默认交给 subtask（mode=search）", "一次 tasks 并行", "只有一个方向也派一个 Worker", "才自己 web_search"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("subtask trigger rule missing %q: %s", want, prompt)
 		}

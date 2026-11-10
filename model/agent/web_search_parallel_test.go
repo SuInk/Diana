@@ -68,7 +68,7 @@ func TestWebSearchTenQueriesRunBothLanesWithTenConcurrentJobs(t *testing.T) {
 
 func TestWebSearchDescribesIndependentBatchDiscovery(t *testing.T) {
 	description := (&WebSearchTool{}).Description()
-	for _, want := range []string{"优先一次用 queries 批量提交", "最多 10 个", "依赖前一步结果", "urls 批量读原文", "不必凑满"} {
+	for _, want := range []string{"一次用 queries 批量查", "最多 10 个", "依赖前一步结果", "urls 批量读原文", "其余调研交给 subtask"} {
 		if !strings.Contains(description, want) {
 			t.Fatalf("missing batching guidance %q", want)
 		}
