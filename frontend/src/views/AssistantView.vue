@@ -1031,7 +1031,7 @@
                   <button class="btn small" type="button" @click="addReplySplitRule">添加规则</button>
                   <button class="btn small" type="button" :disabled="replySplitResetBusy" @click="resetReplySplitRules">{{ replySplitResetBusy ? "恢复中…" : "恢复默认" }}</button>
                 </div>
-                <span class="hint">命中处另起一条消息发送，一条一个 Go 正则，按行匹配。带捕获组时只把第一个捕获组那一段换成分条，组外的字留在原处；不带捕获组则整段命中换成分条。代码块、行内代码和各类标记不会被拆开；关闭多条发送或本轮要求一条发完时不生效。默认规则：句尾半个「（」后空一格又接着说别的事（这一行后面没有「）」收口），就在「（」后另起一条。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
+                <span class="hint">命中处另起一条消息发送，一条一个 Go 正则，按行匹配。带捕获组时只把第一个捕获组那一段换成分条，组外的字留在原处；不带捕获组则整段命中换成分条。代码块、行内代码和各类标记不会被拆开；关闭多条发送或本轮要求一条发完时不生效。默认规则：半个「（」后面又接着说别的事（至少两个字，这一行后面没有「）」收口），就在「（」后另起一条；「（x」这种只跟一个字的语气尾巴不拆。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
