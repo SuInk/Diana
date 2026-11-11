@@ -139,6 +139,7 @@ type paramDowngrade struct {
 // 严格模式只能按状态码判定，放在后面，否则它会把所有 400 都收走。
 func paramDowngrades() []paramDowngrade {
 	return []paramDowngrade{
+		{name: downgradeFieldCustomTools, rejected: customToolsRejected, strip: stripFreeformTools},
 		{name: downgradeFieldToolChoice, rejected: forcedToolChoiceRejected, strip: stripForcedToolChoice},
 		{name: downgradeFieldReasoning, rejected: openAIReasoningRejected, strip: stripReasoningEffort},
 		{name: downgradeFieldStrictTools, rejected: strictToolsRejected, strip: stripStrictTools},

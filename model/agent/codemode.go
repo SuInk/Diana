@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/SuInk/diana/model/llm"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,26 @@ func (*codeModeTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}}, "required": []string{"code"}, "additionalProperties": false}
 }
 func (*codeModeTool) Timeout() time.Duration { return 120 * time.Second }
+
+// codeModeFreeformHint 只在按原始文本发时接在描述后面：函数调用形态用 fresh 参数。
+const codeModeFreeformHint = "输入就是脚本原文，不加代码块围栏；要绕过网页缓存时第一行写 // @options: {\"fresh\":true}。"
+
+// codeModeGrammar 照抄 Pi（packages/codemode/src/source.ts 的 CODEMODE_SOURCE_GRAMMAR）：
+// 只约束可选的第一行选项，正文不限。约束不在语法本身，在于模型直接写脚本原文，
+// 不必把整段 JS 转义进 JSON 字符串——11-07/08 强制回放里脚本语法错大多是转义、
+// 漏括号这类，在 JSON 字符串里写代码时最容易出。
+const codeModeGrammar = `start: options_source | plain_source
+options_source: OPTIONS_LINE NEWLINE SOURCE
+plain_source: SOURCE
+OPTIONS_LINE: /[ \t]*\/\/ @options:[^\r\n]*/
+NEWLINE: /\r?\n/
+SOURCE: /[\s\S]+/`
+
+// FreeformInput 让支持的上游把 codemode 当成原始文本输入的自定义工具：模型写的
+// 文本就是 code；第一行可以写 `// @options: {"fresh":true}`。
+func (*codeModeTool) FreeformInput() *llm.FreeformTool {
+	return &llm.FreeformTool{Field: "code", Grammar: codeModeGrammar, Hint: codeModeFreeformHint}
+}
 func (*codeModeTool) Run(context.Context, map[string]any) (string, error) {
 	return "", errors.New("codemode requires the Runner permission bridge")
 }
@@ -107,6 +128,7 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 		descriptions[ToolsLoadToolName] = ToolsLoadToolName + schemaSignature(r.loader.InputSchema()) + ": " + r.loader.Description()
 	}
 	var mu sync.Mutex
+	stepsBefore := len(*steps)
 	cacheHits := 0
 	fresh, _ := input["fresh"].(bool)
 	result, err := tool.runtime.Execute(ctx, codemode.Request{Code: input["code"].(string), Store: r.codeModeStore, Tools: names, Descriptions: descriptions, ParallelTools: []string{WebSearchToolName, browserRenderToolName}, MaxCalls: 32, Timeout: 120 * time.Second}, func(callCtx context.Context, name string, raw json.RawMessage) (any, error) {
@@ -227,10 +249,13 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 		return "", err
 	}
 	if !result.OK {
+		// 照 Pi：失败时说清楚出错前哪些工具已经跑过。不说的话模型常整段重写重跑，
+		// 已经成功的查询再查一遍，写操作还会重复执行。
+		ran := codeModeCallSummary((*steps)[stepsBefore:])
 		if result.Error != nil {
-			return "", fmt.Errorf("codemode %s: %s", result.Error.Kind, result.Error.Message)
+			return "", fmt.Errorf("codemode %s: %s；%s", result.Error.Kind, result.Error.Message, ran)
 		}
-		return "", errors.New("codemode script failed")
+		return "", fmt.Errorf("codemode script failed；%s", ran)
 	}
 	r.codeModeStore = result.Store
 	result.Store = nil
@@ -316,4 +341,24 @@ func marshalCodeModeJSON(value any) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
+}
+
+// codeModeCallSummary 列出一段脚本里已经执行过的工具调用和成败，供脚本失败时告诉模型
+// 哪些不用再做（照 Pi 的 "Tool calls made before the failure (they are not undone)"）。
+func codeModeCallSummary(steps []Step) string {
+	if len(steps) == 0 {
+		return "出错前没有执行任何工具调用。"
+	}
+	parts := make([]string, 0, len(steps))
+	for _, step := range steps {
+		status := "成功"
+		switch {
+		case step.Skipped:
+			status = "未执行"
+		case step.Error != "":
+			status = "失败"
+		}
+		parts = append(parts, step.Tool+"（"+status+"）")
+	}
+	return "出错前已执行的调用（不会撤销，成功的结果不必再查）：" + strings.Join(parts, "、") + "。"
 }
