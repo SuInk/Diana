@@ -133,3 +133,71 @@ func TestGeminiStreamTimeoutCoversBodyConsumption(t *testing.T) {
 		t.Fatalf("done=%v text=%q", done, text)
 	}
 }
+
+// TestGeminiStreamSkipsSSECommentLines 验证中转网关夹在流里的 `: ping` 心跳、
+// event:/id: 字段和拆成多行的 data 都按 SSE 规范处理，不再让 genai 报
+// 「invalid stream chunk」。
+func TestGeminiStreamSkipsSSECommentLines(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(": ping\n\n"))
+		_, _ = w.Write([]byte("event: message\nid: 1\n" + geminiPartialChunk))
+		_, _ = w.Write([]byte(":ping\r\n\r\n"))
+		// 按规范一份 data 可以拆成多行，接收方用换行拼回去。
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\n" +
+			"data: \"parts\":[{\"text\":\"呀\"}]},\"finishReason\":\"STOP\"}],\n" +
+			"data: \"usageMetadata\":{\"promptTokenCount\":3,\"candidatesTokenCount\":2}}\n\n"))
+		_, _ = w.Write([]byte(": ping\n\n"))
+	}))
+	defer server.Close()
+	client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := client.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "你好"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	done := false
+	for event := range events {
+		switch event.Type {
+		case ChatEventError:
+			t.Fatalf("stream error = %q", event.Error)
+		case ChatEventDone:
+			done = true
+		}
+		text.WriteString(event.Text)
+	}
+	if !done || text.String() != "你好呀" {
+		t.Fatalf("done=%v text=%q", done, text.String())
+	}
+}
+
+// TestGeminiStreamPassesThroughRawErrorLine 验证流里不带 data: 的错误 JSON 原样交给
+// SDK，仍报成上游错误，而不是被整理成 data 或吞掉。
+func TestGeminiStreamPassesThroughRawErrorLine(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(": ping\n\n"))
+		_, _ = w.Write([]byte(`{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"quota exceeded"}}` + "\n\n"))
+	}))
+	defer server.Close()
+	client, err := newGeminiClient(ProviderConfig{APIKey: "test-key", BaseURL: server.URL, Model: "gemini-test"}, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := client.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "你好"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamErr string
+	for event := range events {
+		if event.Type == ChatEventError {
+			streamErr = event.Error
+		}
+	}
+	if !strings.Contains(streamErr, "quota exceeded") || strings.Contains(streamErr, "invalid stream chunk") {
+		t.Fatalf("stream error = %q", streamErr)
+	}
+}

@@ -4,6 +4,8 @@
 package llm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -368,22 +370,107 @@ func (t geminiStreamTransport) RoundTrip(req *http.Request) (*http.Response, err
 	if recorder == nil || resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return resp, nil
 	}
-	resp.Body = &geminiStreamBody{ReadCloser: resp.Body, recorder: recorder}
+	resp.Body = &geminiStreamBody{closer: resp.Body, reader: bufio.NewReader(resp.Body), recorder: recorder}
 	return resp, nil
 }
 
+// geminiStreamBody 把流式响应体按 SSE 规范整理成 genai 认得的样子再交给它。
+//
+// genai（截至 v1.77.0）按空行切事件，每个事件只看第一个冒号前的字段名，只认 data，
+// 其余一律报「invalid stream chunk」。中转网关常在流里夹 `: ping` 心跳注释、
+// event:/id: 字段，或把一份 data 拆成多行，按规范这些都合法，SDK 却会断流。这里像
+// openAISSEDecoder 那样按规范解析出整个事件：跳过注释和 event/id/retry，多行 data
+// 用换行拼起来，再以一行 `data: ...` 交给 SDK。不认识的行原样转交，上游直接吐的
+// 错误 JSON 仍由 SDK 认成 APIError。
 type geminiStreamBody struct {
-	io.ReadCloser
+	closer   io.Closer
+	reader   *bufio.Reader
 	recorder *geminiStreamReadRecorder
+	data     bytes.Buffer // 当前事件拼好的 data
+	raw      bytes.Buffer // 当前事件里不认识、原样转交的行
+	pending  []byte
+	done     bool
 }
 
 func (b *geminiStreamBody) Read(p []byte) (int, error) {
-	n, err := b.ReadCloser.Read(p)
-	if err != nil && !errors.Is(err, io.EOF) {
-		b.recorder.record(err)
-		return n, io.EOF
+	for len(b.pending) == 0 {
+		if b.done {
+			return 0, io.EOF
+		}
+		line, err := b.reader.ReadBytes('\n')
+		if err != nil {
+			b.done = true
+			if !errors.Is(err, io.EOF) {
+				b.recorder.record(err)
+			}
+		}
+		line = bytes.TrimRight(line, "\r\n")
+		if len(line) == 0 {
+			b.pending = b.dispatch("\n\n")
+		} else {
+			b.addLine(line)
+		}
+		if b.done && len(b.pending) == 0 {
+			// 流尾没有空行收尾（含读断的半个事件）：照原样交出去，SDK 在 EOF 时
+			// 会解析最后这段；半截 JSON 报的错由 streamContentOnce 换成读错误。
+			b.pending = b.dispatch("")
+		}
 	}
-	return n, err
+	n := copy(p, b.pending)
+	b.pending = b.pending[n:]
+	return n, nil
+}
+
+func (b *geminiStreamBody) addLine(line []byte) {
+	name, value, found := bytes.Cut(line, []byte(":"))
+	if !found {
+		name = line
+		value = nil
+	}
+	if len(value) > 0 && value[0] == ' ' {
+		value = value[1:]
+	}
+	switch string(name) {
+	case "":
+		// 冒号开头是注释，网关的心跳就是这种。
+	case "event", "id", "retry":
+	case "data":
+		if len(value) == 0 {
+			return
+		}
+		if b.data.Len() > 0 {
+			b.data.WriteByte('\n')
+		}
+		b.data.Write(value)
+	default:
+		if b.raw.Len() > 0 {
+			b.raw.WriteByte('\n')
+		}
+		b.raw.Write(line)
+	}
+}
+
+// dispatch 交出当前事件并清空；只有注释、字段的事件什么也不交，免得多出的空行
+// 被 SDK 拼进下一个事件。
+func (b *geminiStreamBody) dispatch(terminator string) []byte {
+	defer func() {
+		b.data.Reset()
+		b.raw.Reset()
+	}()
+	var out []byte
+	switch {
+	case b.data.Len() > 0:
+		out = append([]byte("data: "), b.data.Bytes()...)
+	case b.raw.Len() > 0:
+		out = bytes.Clone(b.raw.Bytes())
+	default:
+		return nil
+	}
+	return append(out, terminator...)
+}
+
+func (b *geminiStreamBody) Close() error {
+	return b.closer.Close()
 }
 
 // setGeminiOutputTokenLimit 写入调用方或配置档给的输出上限；没给就不发。
