@@ -63,6 +63,16 @@ test("demo defaults match Go defaults", { skip: !existsSync(goDefaultsURL) && "f
   const rules = (block) => [...block.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
   assert.deepEqual(rules(demoBlock), rules(goBlock));
 });
+test("demo split rules match Go defaults", { skip: !existsSync(goDefaultsURL) && "frontend-only Docker stage has no Go sources" }, () => {
+  const go = readFileSync(new URL("../../../model/assistant/reply_split_rules.go", import.meta.url), "utf8");
+  const demo = readFileSync(new URL("../demo/demo.ts", import.meta.url), "utf8");
+  const goBlock = go.match(/func defaultReplySplitRules\(\) \[\]string \{\n\treturn \[\]string\{([\s\S]*?)\n\t\}/)[1];
+  const rules = (block) => [...block.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+  const goRules = rules(goBlock);
+  for (const line of demo.split("\n").filter((item) => item.includes("reply_split_rules:"))) {
+    assert.deepEqual(rules(line), goRules);
+  }
+});
 test("UI documents current markup", () => {
   assert.ok(source.includes("&lt;diana-single/&gt;"));
   assert.ok(!source.includes("[DIANA_REPLY_SINGLE]"));

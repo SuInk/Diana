@@ -1012,6 +1012,28 @@
                 <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认规则清理漏出的内部控制标记（如 &lt;diana-single/&gt;），同时兼容旧格式。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
               </div>
               <div class="field wide">
+                <label>分条正则</label>
+                <div class="reply-filter-list">
+                  <div v-for="(_, index) in replySplitRulesDraft" :key="index" class="reply-filter-row reply-split-row">
+                    <input
+                      v-model="replySplitRulesDraft[index]"
+                      class="input mono"
+                      type="text"
+                      spellcheck="false"
+                      :aria-label="`分条正则第 ${index + 1} 条`"
+                      placeholder="一条 Go 正则，命中处另起一条消息"
+                    />
+                    <button class="btn small" type="button" :aria-label="`删除分条正则第 ${index + 1} 条`" @click="replySplitRulesDraft.splice(index, 1)">删除</button>
+                  </div>
+                  <p v-if="!replySplitRulesDraft.length" class="muted reply-filter-empty">还没有规则，只按分条标记和换行设置分条。</p>
+                </div>
+                <div class="reply-filter-actions">
+                  <button class="btn small" type="button" @click="addReplySplitRule">添加规则</button>
+                  <button class="btn small" type="button" :disabled="replySplitResetBusy" @click="resetReplySplitRules">{{ replySplitResetBusy ? "恢复中…" : "恢复默认" }}</button>
+                </div>
+                <span class="hint">命中处另起一条消息发送，一条一个 Go 正则，按行匹配。带捕获组时只把第一个捕获组那一段换成分条，组外的字留在原处；不带捕获组则整段命中换成分条。代码块、行内代码和各类标记不会被拆开；关闭多条发送或本轮要求一条发完时不生效。默认规则：半个「（」后面又接着说别的事（至少两个字，这一行后面没有「）」收口），就在「（」后另起一条；「（x」这种只跟一个字的语气尾巴不拆。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
+              </div>
+              <div class="field wide">
                 <label class="switch">
                   <input v-model="form.typing_delay_enabled" type="checkbox" />
                   <span class="track" aria-hidden="true"></span>
@@ -2717,6 +2739,8 @@ const proactiveGroupsDraft = ref("");
 const proactiveGroupIDs = computed(() => parseProactiveGroupIDs(proactiveGroupsDraft.value));
 const replyFilterRulesDraft = ref<string[]>([]);
 const replyFilterResetBusy = ref(false);
+const replySplitRulesDraft = ref<string[]>([]);
+const replySplitResetBusy = ref(false);
 const replyFilterTestOpen = ref(false);
 const replyFilterSample = ref("");
 const replyFilterTestBusy = ref(false);
@@ -5122,6 +5146,7 @@ function setForm(config: BotProfileConfig): void {
   welcomeTemplatesDraft.value = (config.welcome_templates ?? []).join("\n");
   proactiveGroupsDraft.value = (config.proactive_messaging?.group_ids ?? []).join("\n");
   replyFilterRulesDraft.value = [...(config.reply_filter_rules ?? [])];
+  replySplitRulesDraft.value = [...(config.reply_split_rules ?? [])];
   replyFilterTestResult.value = null;
   privateAllowedUsers.value = [...(config.private_admission?.allowed_users ?? [])];
   for (const draft of Object.values(tokenDrafts)) {
@@ -5165,6 +5190,33 @@ function addReplyFilterRule(rule: string): void {
 
 function removeReplyFilterRule(index: number): void {
   replyFilterRulesDraft.value.splice(index, 1);
+}
+
+function addReplySplitRule(): void {
+  replySplitRulesDraft.value.push("");
+  void nextTick(() => {
+    const inputs = document.querySelectorAll<HTMLInputElement>(".reply-split-row input");
+    inputs[inputs.length - 1]?.focus();
+  });
+}
+
+async function resetReplySplitRules(): Promise<void> {
+  if (!form.value || replySplitResetBusy.value) return;
+  const current = form.value;
+  const before = JSON.stringify(replySplitRulesDraft.value);
+  replySplitResetBusy.value = true;
+  try {
+    if (!(await askConfirm({ title: "恢复默认分条正则？", message: "将替换当前分条正则列表，其它配置不变。保存配置后生效。", confirmLabel: "恢复默认" }))) return;
+    const defaults = await getNewBotProfileDefaults(current.platform || "onebot-v11");
+    if (form.value !== current || JSON.stringify(replySplitRulesDraft.value) !== before) return;
+    if (!Array.isArray(defaults.reply_split_rules)) throw new Error("服务端未返回默认分条正则，请升级后重试");
+    replySplitRulesDraft.value = [...defaults.reply_split_rules];
+    toastSuccess("已恢复默认分条正则，保存配置后生效");
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "恢复默认失败");
+  } finally {
+    replySplitResetBusy.value = false;
+  }
 }
 
 async function resetReplyFilterRules(): Promise<void> {
@@ -5446,6 +5498,7 @@ async function save(): Promise<void> {
         .map((item) => item.trim())
         .filter((item) => item !== ""),
       reply_filter_rules: replyFilterRulesDraft.value.map((item) => item.trim()).filter((item) => item !== ""),
+      reply_split_rules: replySplitRulesDraft.value.map((item) => item.trim()).filter((item) => item !== ""),
       welcome_llm_cooldown_seconds: Number(current.welcome_llm_cooldown_seconds) || 0,
       proactive_messaging: proactivePayload(current.proactive_messaging, proactiveGroupsDraft.value),
       // 清空的输入框是空字符串，后端的整数字段读不了；0 表示用默认值。
@@ -5534,6 +5587,7 @@ function editorSnapshot(): string {
     welcomeTemplatesDraft.value,
     proactiveGroupsDraft.value,
     replyFilterRulesDraft.value,
+    replySplitRulesDraft.value,
     privateAllowedUsers.value,
     Object.values(tokenDrafts).map((draft) => draft.value),
     modelRequestTimeoutDraft.value,
