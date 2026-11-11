@@ -224,3 +224,50 @@ func TestConsoleGroupSwitchesIgnoresUnknownLevelPolicy(t *testing.T) {
 		t.Fatalf("非法策略被写进了配置：%#v", gate)
 	}
 }
+
+// 一键恢复聊天模型只清列出来、且确实单独设过模型的群，其余群设置原样保留。
+func TestConsoleGroupSwitchesResetChatModel(t *testing.T) {
+	handler, groups, _ := switchesTestRouter(t)
+	base := assistant.DefaultBotConfig()
+	base.ID = "a"
+	override := &assistant.GroupChatModel{ProfileID: "p", Model: "m"}
+	for _, cfg := range []assistant.GroupConfig{
+		{BotProfileID: "a", GroupID: "10001", Enabled: true, EnabledSet: true, ChatModel: override},
+		{BotProfileID: "a", GroupID: "20002", Enabled: false, EnabledSet: true, ChatModel: override},
+		{BotProfileID: "a", GroupID: "30003", Enabled: true, EnabledSet: true},
+		{BotProfileID: "a", GroupID: "40004", Enabled: true, EnabledSet: true, ChatModel: override},
+	} {
+		if _, err := groups.SaveGroupConfig(cfg, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	rec := postSwitches(t, handler, `{"bot_profile_id":"a","group_ids":["10001","20002","30003","50005"],"reset_chat_model":true}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Updated int `json:"updated"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Updated != 2 {
+		t.Fatalf("updated = %d，只有两个列出的群单独设过模型", response.Updated)
+	}
+	for _, groupID := range []string{"10001", "20002"} {
+		cfg, ok := groups.ConfigForGroup("a", groupID)
+		if !ok || groupChatModelOverridden(cfg.ChatModel) {
+			t.Fatalf("群 %s 应当跟随机器人：%#v", groupID, cfg.ChatModel)
+		}
+	}
+	if cfg, _ := groups.ConfigForGroup("a", "20002"); cfg.Enabled {
+		t.Fatal("恢复模型不该顺手改动群开关")
+	}
+	if cfg, _ := groups.ConfigForGroup("a", "40004"); !groupChatModelOverridden(cfg.ChatModel) {
+		t.Fatal("没列出来的群被动了")
+	}
+	if _, ok := groups.ConfigForGroup("a", "50005"); ok {
+		t.Fatal("没有群配置的群不该凭空补记录")
+	}
+}

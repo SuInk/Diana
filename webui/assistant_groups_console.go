@@ -91,6 +91,9 @@ type consoleGroupSwitchesPayload struct {
 	LevelUnknownPolicy string `json:"level_unknown_policy,omitempty"`
 	// DisabledMode 是停用群的档位，dormant 或 observe，这台机器人所有停用的群共用。
 	DisabledMode string `json:"disabled_mode,omitempty"`
+	// ResetChatModel 清掉 GroupIDs 里各群单独指定的聊天模型，让它们跟随机器人。
+	// 机器人换了主模型后，单独设过的群不会跟着变，这是一次改回来的入口。
+	ResetChatModel bool `json:"reset_chat_model,omitempty"`
 }
 
 // validConsoleGroupID 判断控制台提交的群号能不能当群标识。OneBot 的群号是纯数字，
@@ -159,6 +162,30 @@ func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
 			recordRequestOperation(c, h.logs, "groups_switches", fmt.Sprintf("%s %d 个群", action, updated), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
 		}
 	}
+	if payload.ResetChatModel {
+		base := h.botConfigForProfile(profileID)
+		reset := 0
+		for _, groupID := range payload.GroupIDs {
+			groupID = strings.TrimSpace(groupID)
+			if !validConsoleGroupID(groupID) {
+				continue
+			}
+			cfg, ok := h.groupConfigs.ConfigForGroup(profileID, groupID)
+			if !ok || !groupChatModelOverridden(cfg.ChatModel) {
+				continue
+			}
+			cfg.BotProfileID, cfg.GroupID, cfg.ChatModel = profileID, groupID, nil
+			if _, err := h.groupConfigs.SaveGroupConfig(cfg, base); err != nil {
+				h.writeError(c, http.StatusInternalServerError, "groups_switches", err, groupID, map[string]any{"bot_profile_id": profileID})
+				return
+			}
+			reset++
+		}
+		if reset > 0 {
+			recordRequestOperation(c, h.logs, "groups_switches", fmt.Sprintf("群管理批量恢复 %d 个群的聊天模型跟随机器人", reset), "", map[string]any{"bot_profile_id": profileID, "bot_profile_name": profileName})
+		}
+		updated += reset
+	}
 	response := gin.H{"ok": true, "updated": updated}
 	var warnings []string
 	// 刚把一批群打开：哪几个会被同连接的别的机器人一起接走，现在就说。
@@ -178,6 +205,11 @@ func (h *BotHandler) saveConsoleGroupSwitches(c *gin.Context) {
 		response["warning"] = strings.Join(warnings, " ")
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+// groupChatModelOverridden 与运行时判断群模型是否生效的条件一致：空壳不算覆盖。
+func groupChatModelOverridden(model *assistant.GroupChatModel) bool {
+	return model != nil && (model.Route != nil || model.ProfileID != "" && model.Model != "")
 }
 
 // groupDefaults 把这次请求里的「群默认」项折成一个改配置的函数，顺带给出

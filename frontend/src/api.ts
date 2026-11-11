@@ -771,7 +771,7 @@ export interface GroupGovernance {
 }
 
 export interface BotGroupConfig extends SendRetrySettings {
-  chat_model?: { profile_id: string; model: string };
+  chat_model?: { profile_id: string; model: string; /** 后端整条路由覆盖，前端只用来判断是否单独设过。 */ route?: unknown };
   marked_bot_ids?: string[];
   participation?: import("./lib/participation").ParticipationPreferences;
   bot_profile_id?: string;
@@ -2784,6 +2784,8 @@ export function saveBotGroupSwitches(payload: {
   min_group_level?: number;
   level_unknown_policy?: "allow" | "deny";
   disabled_mode?: "dormant" | "observe";
+  /** 清掉 group_ids 里各群单独指定的聊天模型，改回跟随机器人。 */
+  reset_chat_model?: boolean;
 }): Promise<{ ok: boolean; updated: number; warning?: string }> {
   return requestJSON<{ ok: boolean; updated: number; warning?: string }>("/api/assistant/groups/switches", {
     method: "POST",
