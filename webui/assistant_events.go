@@ -76,6 +76,9 @@ type assistantEventsResponse struct {
 	// 一起没有一个「这个群的预算」可言。
 	ContextBudget   *assistant.ContextBudgetBreakdown  `json:"context_budget,omitempty"`
 	ResidentContext *assistant.ResidentContextSnapshot `json:"resident_context,omitempty"`
+	// RecentRequests 是这个群最近几轮主回复实际发出去的请求，和预算分配并排看。
+	// 同 ContextBudget 一样只在选了群时给，列表模式翻页不重算。
+	RecentRequests *storage.ReplyRequestStats `json:"recent_requests,omitempty"`
 }
 
 // assistantEventGroupItem 在事件数之外补上群名：筛选器只列群号的话，
@@ -452,6 +455,14 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	if budgetRuntime, ok := h.runtime.(contextBudgetRuntime); ok && groupID != "" {
 		breakdown := budgetRuntime.ContextBudgetBreakdownForGroup(profileID, groupID)
 		response.ContextBudget = &breakdown
+	}
+	if groupID != "" && mode != "list" && h.sqlite != nil {
+		// 只看最近一天、最近 50 轮：要的是「现在长什么样」，不是历史均值。
+		if stats, err := h.sqlite.GroupReplyRequestStats(c.Request.Context(), profileID, groupID, time.Now().Add(-24*time.Hour), 50); err == nil && stats.Turns > 0 {
+			response.RecentRequests = &stats
+		} else if err != nil {
+			log.Printf("assistant events: reply request stats failed: %v", err)
+		}
 	}
 	// 常驻上下文不要求选中群：不选群就是这台机器人私聊场景下的底价，选了群再叠上
 	// 分群覆盖和这个会话的便签。它只在概览里给，列表模式每翻一页重算一遍不值当。

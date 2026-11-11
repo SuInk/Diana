@@ -59,6 +59,8 @@ const demoAgentBrowsers = new Map<string, AgentBrowserSettings>();
 
 const demoContextBudget = {
   context_window: 128_000,
+  // 生产里常见：模型配置没填窗口，用的是默认值。
+  context_window_fallback: true,
   allocated: 56_320,
   headroom: 71_680,
   layers: [
@@ -71,6 +73,23 @@ const demoContextBudget = {
     { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
     { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
   ]
+};
+
+// 最近实际请求：续接上线后实际请求比预算分配大得多，演示里也照这个比例给。
+const demoRecentRequests = {
+  since: new Date(Date.now() - 24 * 3600_000).toISOString(),
+  turns: 50,
+  requests: 71,
+  first_input_median: 58_068,
+  first_input_max: 86_333,
+  first_cached_percent: 76.4,
+  all_cached_percent: 84.9,
+  misses: 9,
+  continued: 41,
+  rebuilt: 6,
+  unrecorded: 3,
+  rebuild_reasons: { too_long: 4, no_log: 2 },
+  models: { "devin/swe-2": 47, "gpt-6.1-terra": 3 }
 };
 
 const demoResidentContext = {
@@ -2664,7 +2683,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       // 上下文占比和常驻内容以前在演示里整块缺席：入口那一行永远不出现，
       // 看不出真实排版，也没法点进去看弹窗。
       context_budget: demoContextBudget,
-      resident_context: demoResidentContext
+      resident_context: demoResidentContext,
+      recent_requests: url.searchParams.get("group") ? demoRecentRequests : undefined
     });
   }
   const traceMatch = path.match(/^\/api\/assistant\/events\/([^/]+)\/trace$/);

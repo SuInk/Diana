@@ -596,7 +596,7 @@
     >
       <p class="card-sub context-budget-intro">
         <template v-if="contextBudget">
-          窗口 {{ formatNumber(contextBudget.context_window) }} token，各层合计
+          窗口 {{ formatNumber(contextBudget.context_window) }} token<template v-if="contextBudget.context_window_fallback">（模型配置里没填窗口，这是默认值，不是模型的真实上限）</template>，各层合计
           {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出。
         </template>
         <template v-if="residentContext">
@@ -638,6 +638,37 @@
           </li>
         </ul>
       </template>
+
+      <!-- 预算分配是按配置算的「重新组装时长什么样」。续接时历史在前缀里一路累积，实际
+           请求比它大得多，所以紧跟着放最近实际发出去的请求，两者对着看。 -->
+      <div v-if="recentRequests" class="resident-section">
+        <h3 class="resident-title">最近实际请求</h3>
+        <p class="resident-intro muted">
+          最近 {{ recentRequests.turns }} 轮主回复（一天内），共调用模型 {{ recentRequests.requests }} 次。续接时历史留在前缀里累积，实际请求会比上面的预算分配大。
+        </p>
+        <ul class="budget-legend request-stats">
+          <li>
+            <span class="budget-legend-label">每轮首次请求（中位）</span>
+            <span class="budget-legend-value mono">{{ formatNumber(recentRequests.first_input_median) }}</span>
+            <span class="budget-legend-foot">最大 {{ formatNumber(recentRequests.first_input_max) }} token</span>
+          </li>
+          <li>
+            <span class="budget-legend-label">缓存占比</span>
+            <span class="budget-legend-value mono">{{ formatPercentValue(recentRequests.first_cached_percent) }}</span>
+            <span class="budget-legend-foot">每轮首次请求；含工具步骤 {{ formatPercentValue(recentRequests.all_cached_percent) }}</span>
+          </li>
+          <li>
+            <span class="budget-legend-label">没命中缓存</span>
+            <span class="budget-legend-value mono">{{ recentRequests.misses }} 轮</span>
+            <span class="budget-legend-foot">首次请求命中不到三成</span>
+          </li>
+          <li>
+            <span class="budget-legend-label">续接 / 重组</span>
+            <span class="budget-legend-value mono">{{ recentRequests.continued }} / {{ recentRequests.rebuilt }}</span>
+            <span class="budget-legend-foot">{{ rebuildReasonSummary }}</span>
+          </li>
+        </ul>
+      </div>
 
       <!-- 上面是「窗口怎么切的」，下面是「每轮实际被灌了什么」。放在同一个弹窗里，
            因为看的人问的本来就是同一个问题：这点占比到底装了些什么东西。 -->
@@ -1428,6 +1459,33 @@ function openContextSettings(): void {
 }
 
 const contextBudget = computed(() => response.value?.context_budget ?? null);
+// 和常驻内容一样跟着概览那次请求走，列表翻页时不重算。
+const recentRequests = computed(() => summaryResponse.value?.recent_requests ?? response.value?.recent_requests ?? null);
+
+const rebuildReasonLabels: Record<string, string> = {
+  no_log: "没有上一轮记录",
+  too_long: "续接太长",
+  runner_key_changed: "工具或系统提示变了",
+  head_changed: "人设或配置变了",
+  run_failed: "上一轮失败",
+  empty: "空请求",
+  unknown: "原因未记"
+};
+
+// 重组原因按次数从多到少列；没有续接记录的轮次（升级前、后台入口）单独说一句。
+const rebuildReasonSummary = computed(() => {
+  const stats = recentRequests.value;
+  if (!stats) return "";
+  const parts = Object.entries(stats.rebuild_reasons ?? {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([reason, count]) => `${rebuildReasonLabels[reason] ?? reason} ${count}`);
+  if (stats.unrecorded > 0) parts.push(`未记录 ${stats.unrecorded}`);
+  return parts.length ? `重组原因：${parts.join("、")}` : "全部接着上一轮发";
+});
+
+function formatPercentValue(value: number): string {
+  return `${(Math.round(value * 10) / 10).toFixed(1)}%`;
+}
 
 // 每一层在整条窗口里占的宽度。留白单独算，它是「没有分配出去」的部分。
 // 常驻内容跟着概览那次请求走（服务端缓存 15 秒），不跟列表：翻页重算一遍不值当，
@@ -2337,6 +2395,15 @@ onBeforeUnmount(() => {
   grid-column: 2 / -1;
   color: var(--muted);
   font-size: 12px;
+}
+
+/* 实际请求这几行没有色点，按两列排：标签和数值一行，说明另起一行。 */
+.budget-legend.request-stats li {
+  grid-template-columns: 1fr auto;
+}
+
+.budget-legend.request-stats .budget-legend-foot {
+  grid-column: 1 / -1;
 }
 
 .event-range,
