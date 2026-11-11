@@ -102,11 +102,18 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 // 最晚、还没撤回的一条，没有就是触发消息本身。回复回答的是合并后的整轮，引用却挂在
 // 最早那条上，读的人会以为在回一句早被后话盖过去的旧话（生产 2026-11-03：「我听到了」
 // 之后连发四条点评 opus，回复讲 opus，引用的却是「我听到了」）。
+//
+// 只有表情、没有文字的补充不当锚点：那多半只是个反应，回复接的是前面说的话。挂在
+// 表情下面，读的人会以为在回那张表情（生产 2026-11-12：「你也是」「欲火焚身」之后
+// 又甩了张贴纸，回复「这还差不多」引用的却是那张贴纸）。
 func (r *Runtime) replyAnchorEvent(ctx context.Context, event MessageEvent) MessageEvent {
 	anchor := event
 	for _, supplement := range r.directReplySupplements(ctx) {
 		item := supplement.Event
 		if strings.TrimSpace(item.MessageID) == "" || r.inboundTriggerRecalled(item) {
+			continue
+		}
+		if strings.TrimSpace(historyPlainText(item)) == "" && !pendingEarlierImageOnly(item) {
 			continue
 		}
 		if item.Time >= anchor.Time {

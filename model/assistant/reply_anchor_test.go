@@ -80,3 +80,20 @@ func TestModelMarkerForMergedFollowUpIsKept(t *testing.T) {
 		t.Fatalf("model marker for the merged follow-up was dropped: %#v", channel.sent)
 	}
 }
+
+// 最后补的是一张贴纸：那只是个反应，引用候选停在前面那条有字的补充上
+// （生产 2026-11-12：「欲火焚身」之后甩了张贴纸，回复「这还差不多」挂在了贴纸下面）。
+func TestReplyAnchorSkipsStickerOnlyFollowUp(t *testing.T) {
+	r, _ := replyAnchorTestRuntime(ReplyDecorationAuto)
+	ctx, root, follow := mergedReplyTurn(t, r)
+	sticker := MessageEvent{
+		Kind: EventKindGroup, GroupID: root.GroupID, UserID: root.UserID, MessageID: "10007", Time: 120,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file_id": "s1", "sub_type": "telegram_sticker", "summary": "😆"}}},
+	}
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, sticker, ""); !merged {
+		t.Fatal("sticker follow-up not merged")
+	}
+	if got := r.replyAnchorEvent(ctx, root).MessageID; got != follow.MessageID {
+		t.Fatalf("anchor = %q, want the latest worded follow-up %q", got, follow.MessageID)
+	}
+}
