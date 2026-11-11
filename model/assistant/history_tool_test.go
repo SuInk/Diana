@@ -819,3 +819,59 @@ func TestCrossGroupReadGuardRejectsPlaceholderMember(t *testing.T) {
 		t.Fatal("placeholder member info let the requester read a group they are not in")
 	}
 }
+
+// 照参考 bot：不写 operation，给了条件就按条件查（发送者、关键词叠加取交集），什么都不给
+// 读最近消息；ids 一次读几条原文，找不到的写明。
+func TestDianaChatHistoryToolCombinesFiltersWithoutOperation(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	base := time.Date(2026, 8, 22, 12, 0, 0, 0, time.Local).Unix()
+	for _, event := range []MessageEvent{
+		chatHistoryTextEvent(base, "alice", "Alice", "a-deploy", "今天部署了新版本"),
+		chatHistoryTextEvent(base+10, "bob", "Bob", "b-deploy", "部署挂了"),
+		chatHistoryTextEvent(base+20, "alice", "Alice", "a-lunch", "中午吃什么"),
+		chatHistoryTextEvent(base+30, "bob", "Bob", "b-lunch", "吃面"),
+	} {
+		runtime.remember(event)
+	}
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"})
+	run := func(input map[string]any) dianaChatHistoryResult {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaChatHistoryResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	combined := run(map[string]any{"sender_user_id": "alice", "query": "部署"})
+	if combined.Action != "search" || strings.Join(historyMessageIDsFromItems(combined.Items), ",") != "a-deploy" {
+		t.Fatalf("发送者和关键词应当取交集：action=%s ids=%v", combined.Action, historyMessageIDsFromItems(combined.Items))
+	}
+	if recent := run(map[string]any{"limit": 2}); recent.Action != "recent" {
+		t.Fatalf("什么条件都不给应当读最近消息：%s", recent.Action)
+	}
+
+	byID := run(map[string]any{"ids": []any{"b-lunch", "a-deploy", "missing-1", "a-deploy"}})
+	if byID.Action != "ids" || strings.Join(historyMessageIDsFromItems(byID.Items), ",") != "b-lunch,a-deploy" {
+		t.Fatalf("ids 应当按给定顺序返回、去重：%v", historyMessageIDsFromItems(byID.Items))
+	}
+	if !strings.Contains(byID.Message, "missing-1") {
+		t.Fatalf("找不到的 ID 应当写明：%q", byID.Message)
+	}
+	if byID.Items[0].Text != "吃面" {
+		t.Fatalf("ids 应当返回原文：%#v", byID.Items[0])
+	}
+	tooMany := make([]any, maximumChatHistoryIDs+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("m-%d", i)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"ids": tooMany}); err == nil {
+		t.Fatal("ids 超过上限应当报错")
+	}
+}

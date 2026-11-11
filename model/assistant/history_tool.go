@@ -241,39 +241,61 @@ func (t *dianaChatHistoryTool) Name() string {
 }
 
 func (t *dianaChatHistoryTool) Description() string {
+	// 照参考 bot（mizorewww/pi-extension-telegram-agent 的 tg_messages）写：一个工具、
+	// 筛选条件叠加取交集、给可照抄的参数示例。以前要先选 operation，一次只能做一件事，
+	// 11-12 一条「再试下」连走 recent、recent、search、around、recalls 五步，前两步还是
+	// 在重读上下文里已有的最近消息（每步模型要想 13～60 秒）。
 	// 「别说看不到」防模型不查记录就回「看不到之前的消息」。
 	// speakers/reactions 分开写：曾拿发言排行冒充点赞名单（#553）。
-	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到。` +
-		`问某人说过什么用 search 填 sender_user_id；只知道昵称就填 sender_name（含旧昵称、@用户名），可不带关键词，跨群加 scope=all_groups。` +
-		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充。`
+	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到；最近几十条已经在上下文里，不用再读最近消息。` +
+		`查消息不用选 operation：sender_user_id/sender_name、query、from_time/through_time 或 hours/days、ids 这些条件叠加取交集，一次写全。` +
+		`例：某人说过的话 {"sender_name":"小明","limit":20}；某人某段时间提到某词 {"sender_user_id":"…","query":"部署","days":3,"order":"oldest"}；跨群加 scope=all_groups；` +
+		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}。` +
+		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充；撤回用 recalls。`
 }
 
 // InputSchema 声明参数契约。哪个 operation 配哪些参数写在字段说明里，
 // 比在散文里列一遍内联 JSON 更不容易看漏。range 的分页续读提示在结果的
 // Guidance 里给出，这里不重复。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("overview 长时段抽样供总结；range 按时段逐条；recalls 近24h撤回",
+	return toolObjectSchema(nil, map[string]any{
+		"operation": toolEnumParam("可省略：给了筛选条件就是按条件查，什么都不给读最近消息。overview 长时段抽样供总结；range 按时段逐条；recalls 近24h撤回",
 			"around", "recent", "overview", "range", "search", "recalls", "speakers", "reactions"),
+		"ids":            toolStringArrayParam("要读原文的消息 ID，一次可给多条（最多 20），按给定顺序返回"),
 		"message_id":     toolStringParam("around 的中心消息，默认当前；reactions 查单条"),
 		"before":         toolIntParam("around：锚点前条数", 0, maximumChatHistoryAroundRadius),
 		"after":          toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
-		"query":          toolStringParam("search：关键词；设了 sender_user_id 时可省略，按时间列出此人发言"),
-		"sender_user_id": toolStringParam(`search：只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
-		"sender_name":    toolStringParam("search：不知道账号时按昵称、旧昵称或 @用户名找人，结果的 resolved_senders 列出对应账号"),
+		"query":          toolStringParam("关键词；和发送者、时间叠加取交集，设了发送者时可省略"),
+		"sender_user_id": toolStringParam(`只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
+		"sender_name":    toolStringParam("不知道账号时按昵称、旧昵称或 @用户名找人，结果的 resolved_senders 列出对应账号"),
 		// relevance 曾被拿来断言「最早一条」，见 #457。
-		"order":        toolEnumParam("search 排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
+		"order":        toolEnumParam("排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
-		"group_id":     toolStringParam("search/around：目标群；search 指定群时 scope=current，跨群需开启跨群记忆"),
+		"group_id":     toolStringParam("目标群；指定群时 scope=current，跨群需开启跨群记忆"),
 		"from_time":    toolStringParam(`起始时间，Unix 秒或 "2006-01-02 15:04"`),
-		"through_time": toolStringParam(`range/search 结束时间，格式同 from_time`),
-		"scope": toolEnumParam("all_groups 仅 search，需开启跨群记忆；私聊仅主人",
+		"through_time": toolStringParam(`结束时间，格式同 from_time`),
+		"scope": toolEnumParam("all_groups 跨群检索，需开启跨群记忆；私聊仅主人",
 			"current", "all_groups"),
-		"hours":    toolIntParam("只看最近多少小时；search 不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
+		"hours":    toolIntParam("只看最近多少小时；按条件查不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
 		"days":     toolIntParam("只看最近多少天", 1, 365),
 		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
 		"limit":    toolIntParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
 	})
+}
+
+// chatHistoryFiltered 报告调用里有没有按条件查消息的参数。没写 operation 时，有就按
+// 条件查（search），没有才读最近消息或引用前后文。
+func chatHistoryFiltered(input map[string]any) bool {
+	for _, key := range []string{"query", "sender_user_id", "sender_name", "from_time", "through_time"} {
+		if strings.TrimSpace(configToolString(input, key)) != "" {
+			return true
+		}
+	}
+	if intFromAny(input["hours"]) > 0 || intFromAny(input["days"]) > 0 || chatHistoryBool(input, "all_time") {
+		return true
+	}
+	scope := strings.TrimSpace(configToolString(input, "scope"))
+	return scope != "" && scope != "current"
 }
 
 func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -281,17 +303,24 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		return "", fmt.Errorf("diana chat history: runtime is not configured")
 	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	ids := configToolStringSlice(input, "ids")
+	if len(ids) > 0 && (operation == "" || operation == "ids") {
+		operation = "ids"
+	}
 	if operation == "" {
-		if t.event.Quoted != nil && strings.TrimSpace(t.event.Quoted.MessageID) != "" {
+		switch {
+		case chatHistoryFiltered(input):
+			operation = "search"
+		case t.event.Quoted != nil && strings.TrimSpace(t.event.Quoted.MessageID) != "":
 			operation = "around"
-		} else {
+		default:
 			operation = "recent"
 		}
 	}
 
 	groupID := strings.TrimSpace(configToolString(input, "group_id"))
-	if groupID != "" && operation != "search" && operation != "find" && operation != "around" && operation != "context" {
-		return "", fmt.Errorf("group_id 仅支持 search/around；不能忽略目标群后查询当前会话")
+	if groupID != "" && operation != "search" && operation != "find" && operation != "around" && operation != "context" && operation != "ids" {
+		return "", fmt.Errorf("group_id 仅支持按条件查、ids 和 around；不能忽略目标群后查询当前会话")
 	}
 
 	switch operation {
@@ -304,6 +333,8 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	var result dianaChatHistoryResult
 	var err error
 	switch operation {
+	case "ids":
+		result, err = t.messagesByID(ctx, input, ids)
 	case "around", "context":
 		result, err = t.around(ctx, input)
 	case "recent", "list":
@@ -476,6 +507,70 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 		Items:           items,
 		Total:           len(items),
 	}, nil
+}
+
+// maximumChatHistoryIDs 是 ids 一次最多读几条。
+const maximumChatHistoryIDs = 20
+
+// messagesByID 一次读出几条指定消息的原文。以前要看几条消息只能逐条 around，
+// 每条一步、每步都要等模型想一遍。找的范围和 around 相同：当前会话，或 group_id
+// 指定的群；当前群找不到时按 around 的规矩去允许的群里找。
+func (t *dianaChatHistoryTool) messagesByID(ctx context.Context, input map[string]any, ids []string) (dianaChatHistoryResult, error) {
+	if len(ids) > maximumChatHistoryIDs {
+		return dianaChatHistoryResult{}, fmt.Errorf("ids 一次最多 %d 条", maximumChatHistoryIDs)
+	}
+	scoped := t
+	if groupID := strings.TrimSpace(configToolString(input, "group_id")); groupID != "" && groupID != t.event.GroupID {
+		if err := t.crossGroupSearchError(ctx); err != nil {
+			return dianaChatHistoryResult{}, err
+		}
+		if !newCrossGroupReadGuard(ctx, t).allows(ctx, groupID) {
+			return dianaChatHistoryResult{}, fmt.Errorf("你不在群 %s 里，不能读取那个群的记录", groupID)
+		}
+		copy := *t
+		copy.event.Kind = EventKindGroup
+		copy.event.GroupID = groupID
+		copy.event.replyHistory = nil
+		copy.event.replyHistoryLoaded = false
+		copy.event.Quoted = nil
+		copy.event.SemanticSourceMessageID = ""
+		scoped = &copy
+	}
+	var found []MessageEvent
+	var missing []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if event, ok := scoped.runtime.findSemanticReferenceEvent(ctx, scoped.event, id); ok {
+			found = append(found, event)
+			continue
+		}
+		missing = append(missing, id)
+	}
+	items := scoped.items(ctx, found)
+	for i := range items {
+		items[i].Text = historyToolEventText(found[i])
+		items[i].TextTruncated = false
+		if quoted := found[i].Quoted; quoted != nil {
+			items[i].QuotedText = historyToolQuotedText(quoted)
+			items[i].QuotedTextTruncated = false
+		}
+	}
+	result := dianaChatHistoryResult{
+		OK:      true,
+		Action:  "ids",
+		Message: "已读取指定消息的原文。",
+		Items:   items,
+		Total:   len(items),
+	}
+	if len(missing) > 0 {
+		result.Message += "当前会话找不到：" + strings.Join(missing, "、") + "；来自跨群检索的消息要同时传它的 group_id。"
+	}
+	return result, nil
 }
 
 func (t *dianaChatHistoryTool) recent(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
