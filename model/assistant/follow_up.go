@@ -244,6 +244,8 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 			content = pokeHistoryPromptText(historyEvent, botID, historyEvent.SelfID)
 		} else if isCallHistoryEvent(historyEvent) {
 			content = callHistoryPromptText(historyEvent)
+		} else if isQQFeedbackHistoryEvent(historyEvent) {
+			content = qqFeedbackHistoryPromptText(historyEvent)
 		} else if push {
 			content = subscriptionPushHistoryPromptText(historyEvent)
 		}

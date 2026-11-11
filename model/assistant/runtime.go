@@ -466,13 +466,16 @@ type Runtime struct {
 	moodMu           sync.Mutex
 	moodPersistMu    sync.Mutex
 	// localRoomState 是本地群（local_room.go），第一次用到时建。
-	localRoomsOnce  sync.Once
-	localRoomState  *localRoomHub
-	moods           map[string]*moodState
-	pokeMu          sync.Mutex
-	pokeLastReply   map[string]time.Time
-	pokeLastSent    map[string]time.Time
-	pokeSessionSent map[string][]time.Time
+	localRoomsOnce sync.Once
+	localRoomState *localRoomHub
+	moods          map[string]*moodState
+	pokeMu         sync.Mutex
+	pokeLastReply  map[string]time.Time
+	// qqFeedbackLastReply 记 QQ 官方单聊赞踩反馈上次得到回应的时间，见 qq_feedback.go。
+	qqFeedbackMu        sync.Mutex
+	qqFeedbackLastReply map[string]time.Time
+	pokeLastSent        map[string]time.Time
+	pokeSessionSent     map[string][]time.Time
 	// 跨会话发送的限流账本：按「来源会话×目标」记冷却，按来源会话记窗口内总量。
 	// 自带锁，不受 mu 保护。
 	crossSessionMu          sync.Mutex
@@ -5166,7 +5169,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if offersButtonsFinalizeField(cfg, event) {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, buttonsFinalizeField(), messageStyleFinalizeField(), cardFinalizeField())
 			if event.Kind == EventKindPrivate {
-				agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, suggestionsFinalizeField())
+				agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, suggestionsFinalizeField(), feedbackFinalizeField())
 			}
 		}
 		r.rememberAgentResidencyCatalog(event, registry, relationship.toolScope().Owner)
@@ -8383,6 +8386,9 @@ func (r *Runtime) sendForwardChunksWithResult(ctx context.Context, event Message
 func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 	if event.SubType == "poke" {
 		return r.handlePokeNotice(ctx, event)
+	}
+	if event.SubType == qqFeedbackSubType {
+		return r.handleQQFeedbackNotice(ctx, event)
 	}
 	// 刚加上好友：把之前因为发不出去而存下的私聊补上。这条通知不受群准入和回复
 	// 门槛约束——它不产生新的发言，只是把已经答应过的话送出去。

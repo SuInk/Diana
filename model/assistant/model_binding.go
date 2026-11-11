@@ -59,7 +59,9 @@ const (
 	PurposeSemanticTextRef  = "semantic_text_reference"
 	// 下面两个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
-	PurposePokeReply        = "poke_reply"
+	PurposePokeReply = "poke_reply"
+	// PurposeQQFeedbackReply 是 QQ 官方单聊回复被赞踩后回的那一句，见 qq_feedback.go。
+	PurposeQQFeedbackReply  = "qq_feedback_reply"
 	PurposeWelcomeGenerator = "welcome_generator"
 	// PurposeProactiveMessage 是试验性的主动开口，见 proactive_messaging.go。
 	PurposeProactiveMessage = "proactive_message"
@@ -115,6 +117,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeErrorNotice:             llm.GroupReplyAssist,
 	// 戳一戳的回应就是一次回复，对方戳完在等。
 	PurposePokeReply: llm.GroupReplyAssist,
+	// 被赞踩后回的那一句同理。
+	PurposeQQFeedbackReply: llm.GroupReplyAssist,
 	// 合不合人设要模型写出一句「会」或「不会：原因」，只做判断的模型答不了，归回复辅助。
 	PurposeStickerPersonaFit: llm.GroupReplyAssist,
 

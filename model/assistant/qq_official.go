@@ -718,6 +718,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			if len(msg.Buttons) > 0 {
 				log.Printf("qq: 流式消息不支持按钮，本条按钮未挂上")
 			}
+			if msg.QQFeedback {
+				log.Printf("qq: 流式消息挂不了赞踩栏，本条未挂上")
+			}
 			firstID = id
 			text = ""
 		}
@@ -732,11 +735,12 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if !isGuild && !keyboard {
 			keyboardTemplate = strings.TrimSpace(msg.QQKeyboardTemplate)
 		}
-		// 推荐回复只有单聊有；版式群和单聊都能用。见 qq_official_extras.go。
+		// 推荐回复和赞踩栏只有单聊有；版式群和单聊都能用。见 qq_official_extras.go。
 		c2c := !isGroup && !isGuild
 		suggestions := c2c && len(msg.Suggestions) > 0
+		feedback := c2c && msg.QQFeedback
 		markdownStyle := !isGuild && !msg.MarkdownStyle.isZero()
-		extras := suggestions || markdownStyle
+		extras := suggestions || feedback || markdownStyle
 		if !isGuild {
 			source, mentionIDs := text, []string(nil)
 			if isGroup {
@@ -744,7 +748,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 			}
 			markdownContent, markdown = qqOfficialMarkdownContent(source)
 			if (keyboard || keyboardTemplate != "" || extras || len(mentionIDs) > 0) && !markdown {
-				// 按钮、推荐回复、版式和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
+				// 按钮、推荐回复、赞踩栏、版式和群里的 @ 都只能放在 Markdown 消息上，大白话也得换成 Markdown 发。
 				markdownContent, markdown = qqMarkdownLineBreaks(source), true
 			}
 			markdownContent = qqOfficialRestoreMentions(markdownContent, mentionIDs)
@@ -768,6 +772,9 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 				if suggestions {
 					body["prompt_keyboard"] = qqPromptKeyboard(msg.Suggestions)
 				}
+				if feedback {
+					body["action_button"] = map[string]any{"feedback": true}
+				}
 				if strings.Contains(markdownContent, "qqbot-media://") {
 					// 素材图转存失败时让平台直接报错，而不是发出一条缺图的消息。
 					body["force_verify_image_resource"] = true
@@ -783,9 +790,10 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		}
 		id, err := post(body)
 		if err != nil && extras && markdown && !qqOfficialRetryUseless(err) {
-			// 推荐回复和版式都是文档外的字段，被拒就去掉重发，正文和按钮照旧。
-			log.Printf("qq: 带推荐回复/版式的消息被拒，去掉后重发: %v", err)
+			// 推荐回复、赞踩栏和版式都是文档外的字段，被拒就去掉重发，正文和按钮照旧。
+			log.Printf("qq: 带推荐回复/赞踩/版式的消息被拒，去掉后重发: %v", err)
 			delete(body, "prompt_keyboard")
+			delete(body, "action_button")
 			delete(body["markdown"].(map[string]any), "style")
 			id, err = post(body)
 		}

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -34,7 +35,8 @@ const (
 	qqInteractionChatC2C   = 2
 
 	// data.type：11 消息按钮、12 单聊快捷菜单要应答；13 是赞踩栏的反馈，不用应答，
-	// 也不是对方说的话。14 起是清空会话、切换模型这类智能体操作，Diana 不处理。
+	// 也不是对方说的话，单聊的转成通知交给运行时（见 qq_feedback.go）。14 起是清空
+	// 会话、切换模型这类智能体操作，Diana 不处理。
 	qqInteractionTypeFeedback = 13
 )
 
@@ -48,6 +50,16 @@ func (c *QQOfficialChannel) handleInteraction(ctx context.Context, payload qqGat
 	if interaction.Data.Type == qqInteractionTypeFeedback {
 		resolved := interaction.Data.Resolved
 		log.Printf("qq: 收到回复反馈 message=%s opt=%s checked=%d user=%s", resolved.MessageID, resolved.FeedbackOpt, resolved.Checked, firstNonEmpty(interaction.UserOpenID, interaction.GroupMemberOpenID))
+		event, ok := qqOfficialFeedbackEvent(payload.ID, interaction, c.Status().SelfID)
+		if !ok {
+			return
+		}
+		c.mu.RLock()
+		handler := c.handler
+		c.mu.RUnlock()
+		if handler != nil {
+			_ = handler(ctx, event)
+		}
 		return
 	}
 	if interaction.Data.Type > qqInteractionTypeFeedback {
@@ -115,4 +127,31 @@ func qqOfficialEventFromInteraction(eventID string, interaction qqOfficialIntera
 		return MessageEvent{}, false
 	}
 	return event, true
+}
+
+// qqOfficialFeedbackEvent 把单聊的赞踩互动映射成一条通知事件。MessageID 用外层事件 ID，
+// 回应时据此走 event_id 被动回复；TargetID 是被评价的那条机器人消息。
+func qqOfficialFeedbackEvent(eventID string, interaction qqOfficialInteraction, selfID string) (MessageEvent, bool) {
+	eventID = strings.TrimSpace(eventID)
+	userID := strings.TrimSpace(interaction.UserOpenID)
+	if interaction.Data.Type != qqInteractionTypeFeedback || interaction.ChatType != qqInteractionChatC2C ||
+		!strings.HasPrefix(eventID, qqInteractionEventPrefix) || userID == "" {
+		return MessageEvent{}, false
+	}
+	resolved := interaction.Data.Resolved
+	return MessageEvent{
+		Platform:    PlatformQQOfficial,
+		Kind:        EventKindNotice,
+		SubType:     qqFeedbackSubType,
+		MessageType: "private",
+		Time:        platformEventTime(interaction.Timestamp),
+		SelfID:      selfID,
+		UserID:      userID,
+		TargetID:    strings.TrimSpace(resolved.MessageID),
+		MessageID:   eventID,
+		Segments: []MessageSegment{{Type: qqFeedbackSegmentType, Data: map[string]string{
+			"opt":     strings.TrimSpace(resolved.FeedbackOpt),
+			"checked": strconv.Itoa(resolved.Checked),
+		}}},
+	}, true
 }

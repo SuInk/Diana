@@ -97,8 +97,11 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 		}
 		if index == lastTextChunk && !decoration.LiteralText {
 			msg.Buttons, msg.ButtonFontSize = finalizeButtonsFromContext(ctx).take()
-			msg.Suggestions, msg.Card = finalizeQQExtrasFromContext(ctx).takeLast()
+			var feedback bool
+			msg.Suggestions, msg.Card, feedback = finalizeQQExtrasFromContext(ctx).takeLast()
 			if event.Platform == PlatformQQOfficial {
+				// 赞踩栏只有模型在收尾时要了才挂，而且只挂在单聊。
+				msg.QQFeedback = feedback && event.Kind == EventKindPrivate
 				msg.QQKeyboardTemplate = cfg.QQOfficialKeyboardTemplate
 			}
 		}

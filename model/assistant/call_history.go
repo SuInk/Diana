@@ -27,10 +27,10 @@ func isCallHistoryEvent(event MessageEvent) bool {
 	return event.SubType == callHistorySubType && event.Kind == EventKindPrivate
 }
 
-// isNarrationHistoryEvent 是历史里没有正文的旁白：戳一戳、通话记录。它们的消息 ID 是
+// isNarrationHistoryEvent 是历史里没有正文的旁白：戳一戳、通话记录、回复的赞踩反馈。它们的消息 ID 是
 // 本地编的，平台上没有这条消息，也不是谁说的话。
 func isNarrationHistoryEvent(event MessageEvent) bool {
-	return isPokeHistoryEvent(event) || isCallHistoryEvent(event)
+	return isPokeHistoryEvent(event) || isCallHistoryEvent(event) || isQQFeedbackHistoryEvent(event)
 }
 
 // callHistoryText 是通话记录的正文。

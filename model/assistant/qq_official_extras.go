@@ -12,7 +12,8 @@ import (
 )
 
 // QQ 官方机器人消息上除了按钮还能挂的东西：正文版式（markdown.style）、单聊输入框上方
-// 的推荐回复（prompt_keyboard）、图文卡片（msg_type 8）。和按钮一样，取值和请求体结构都
+// 的推荐回复（prompt_keyboard）、单聊回复下面的赞踩栏（action_button.feedback）、图文卡片
+// （msg_type 8）。赞踩栏不设开关也不默认挂，由模型逐条决定；对方点了之后的处理见 qq_feedback.go。和按钮一样，取值和请求体结构都
 // 定义在源码里，模型在收尾字段里只写内容或挑名字，由 Diana 拼。
 //
 // 来源：markdown.style 的 main_font_size / layout 和 prompt_keyboard 只出现在官方 Go SDK
@@ -23,6 +24,7 @@ const (
 	messageStyleFinalizeFieldName = "message_style"
 	suggestionsFinalizeFieldName  = "suggestions"
 	cardFinalizeFieldName         = "card"
+	feedbackFinalizeFieldName     = "feedback"
 
 	qqMarkdownLayoutCentered = "hide_avatar_and_center"
 	qqMsgTypeCard            = 8
@@ -98,6 +100,23 @@ func cardFinalizeField() agent.FinalizeField {
 	}
 }
 
+func feedbackFinalizeField() agent.FinalizeField {
+	return agent.FinalizeField{
+		Name: feedbackFinalizeFieldName,
+		Description: "单聊里在这条回复下面挂一个赞/踩栏，对方点一下你就能知道这条答得好不好，平时不填。" +
+			"这条回复给出了结论、建议或答案，你想知道对方觉得有没有用时写「是」；闲聊、接话、玩笑不挂。",
+	}
+}
+
+// parseFeedback 解析收尾字段：写了肯定的词才挂。
+func parseFeedback(value string) bool {
+	switch strings.ToLower(strings.Trim(strings.TrimSpace(value), "「」\"'。.")) {
+	case "是", "要", "挂", "好", "对", "true", "yes", "y", "1", "on":
+		return true
+	}
+	return false
+}
+
 // parseMessageStyle 解析收尾字段，认不出的词跳过。
 func parseMessageStyle(value string) QQMarkdownStyle {
 	var style QQMarkdownStyle
@@ -165,13 +184,14 @@ func qqPromptKeyboard(suggestions []string) map[string]any {
 
 type finalizeQQExtrasKey struct{}
 
-// finalizeQQExtras 把收尾时填的版式、推荐回复和卡片带到发送阶段。版式管整条回复，拆成
-// 几条时每条文字都带上；推荐回复和卡片和按钮一样只挂在最后一条文字上。
+// finalizeQQExtras 把收尾时填的版式、推荐回复、赞踩栏和卡片带到发送阶段。版式管整条回复，
+// 拆成几条时每条文字都带上；推荐回复、赞踩栏和卡片和按钮一样只挂在最后一条文字上。
 type finalizeQQExtras struct {
 	mu          sync.Mutex
 	style       QQMarkdownStyle
 	suggestions []string
 	card        *QQCard
+	feedback    bool
 }
 
 func withFinalizeQQExtras(ctx context.Context) (context.Context, *finalizeQQExtras) {
@@ -191,8 +211,9 @@ func (f *finalizeQQExtras) set(fields map[string]string) {
 	style := parseMessageStyle(fields[messageStyleFinalizeFieldName])
 	suggestions := parseSuggestions(fields[suggestionsFinalizeFieldName])
 	card := parseCard(fields[cardFinalizeFieldName])
+	feedback := parseFeedback(fields[feedbackFinalizeFieldName])
 	f.mu.Lock()
-	f.style, f.suggestions, f.card = style, suggestions, card
+	f.style, f.suggestions, f.card, f.feedback = style, suggestions, card, feedback
 	f.mu.Unlock()
 }
 
@@ -205,14 +226,14 @@ func (f *finalizeQQExtras) markdownStyle() QQMarkdownStyle {
 	return f.style
 }
 
-// takeLast 取出只挂在最后一条上的推荐回复和卡片并清空。
-func (f *finalizeQQExtras) takeLast() ([]string, *QQCard) {
+// takeLast 取出只挂在最后一条上的推荐回复、卡片和赞踩栏并清空。
+func (f *finalizeQQExtras) takeLast() ([]string, *QQCard, bool) {
 	if f == nil {
-		return nil, nil
+		return nil, nil, false
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	suggestions, card := f.suggestions, f.card
-	f.suggestions, f.card = nil, nil
-	return suggestions, card
+	suggestions, card, feedback := f.suggestions, f.card, f.feedback
+	f.suggestions, f.card, f.feedback = nil, nil, false
+	return suggestions, card, feedback
 }
