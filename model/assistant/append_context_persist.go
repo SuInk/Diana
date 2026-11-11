@@ -119,16 +119,29 @@ func (d *appendContextDisk) save(key string, record *appendContextLog) {
 	}
 	d.writing[key] = true
 	d.mu.Unlock()
-	go d.flush(dir, key)
+	go func() {
+		defer recoverGoroutinePanic("append_context_persist")
+		d.flush(dir, key)
+	}()
 }
 
 func (d *appendContextDisk) flush(dir, key string) {
-	defer recoverGoroutinePanic("append_context_persist")
+	// 正常退出时 writing 在查到「没有待写」的同一把锁里复位，save 不会漏掉这期间来的
+	// 新记录；中途 panic 时在这里补复位，否则这个会话之后再也不会落盘。
+	finished := false
+	defer func() {
+		if !finished {
+			d.mu.Lock()
+			d.writing[key] = false
+			d.mu.Unlock()
+		}
+	}()
 	for {
 		d.mu.Lock()
 		record, ok := d.pending[key]
 		if !ok {
 			d.writing[key] = false
+			finished = true
 			d.mu.Unlock()
 			return
 		}
