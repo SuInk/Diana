@@ -946,18 +946,17 @@ func TestAmbiguousConfirmationExtendsInboundLease(t *testing.T) {
 		history:  []map[string]any{selfHistoryItem(54530, time.Now(), "续租")},
 	}
 	runtime := newAmbiguousOutcomeRuntime(t, channel)
-	var extendedTo []time.Time
-	ctx := context.WithValue(context.Background(), inboundLeaseExtensionContextKey{}, func(until time.Time) error {
-		extendedTo = append(extendedTo, until)
-		return nil
-	})
+	store := &recordingLeaseStore{memoryInboundEventStore: newMemoryInboundEventStore()}
+	// 领取时的租约已经到期，发送和确认都得真的往后推。
+	ctx := withInboundLeaseExtension(context.Background(), store, "event-1", "worker-1", time.Now().Add(-time.Minute))
 
 	if _, err := runtime.sendOutgoingWithResult(ctx, groupOutcomeEvent(), OutgoingMessage{Text: "续租"}); err != nil {
 		t.Fatalf("sendOutgoingWithResult() error = %v", err)
 	}
-	// 一次在发送开始时，一次在进入确认时；确认不再带重发，只需撑过等回推和查历史。
-	if len(extendedTo) != 2 || time.Until(extendedTo[1]) < 50*time.Second {
-		t.Fatalf("lease extensions = %v", extendedTo)
+	// 发送开始时续一次；进入确认时租约要够撑过等回推和查历史（确认不再带重发），
+	// 前一次已经够用就不必再写库。
+	if len(store.extends) == 0 || time.Until(store.extends[len(store.extends)-1]) < 50*time.Second {
+		t.Fatalf("lease extensions = %v", store.extends)
 	}
 }
 

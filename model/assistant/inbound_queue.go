@@ -214,45 +214,160 @@ type InboundLeaseExtender interface {
 	ExtendInboundLease(ctx context.Context, id string, leaseOwner string, leaseUntil time.Time) error
 }
 
+// ErrInboundLeaseNotHeld 是存储层在租约已不归这个 worker 时返回的错误：租约过期后
+// 这条事件被另一个 worker 领走了，或者已经落了终态。
+var ErrInboundLeaseNotHeld = errors.New("lease is not held by this worker")
+
+// errInboundLeaseLost 表示这一轮处理的租约已经被别人接手，结果不能再发出去：
+// 另一个 worker 正在（或已经）为同一条消息生成并发送回复。
+var errInboundLeaseLost = errors.New("diana: inbound lease lost to another worker")
+
+// inboundLeaseRenewInterval 是处理期间主动续租的间隔。取租约的三分之一：一次续租
+// 因为数据库忙失败了，到期前还有两次机会。
+var inboundLeaseRenewInterval = inboundLeaseDuration / 3
+
 type inboundLeaseExtensionContextKey struct{}
+
+// inboundLease 是一条入站事件在处理期间持有的租约。
+type inboundLease struct {
+	mu       sync.Mutex
+	extender InboundLeaseExtender
+	id       string
+	owner    string
+	held     time.Time
+	lostErr  error
+	finished bool
+}
+
+// extend 把租约推到至少 until。够用的时候不写库；租约已经丢了就直接报丢，不再写库；
+// 处理已经收尾（之后还拿着 ctx 的后台任务）时什么也不做。
+func (l *inboundLease) extend(until time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.finished {
+		return nil
+	}
+	if l.lostErr != nil {
+		return l.lostErr
+	}
+	if !until.After(l.held) {
+		return nil
+	}
+	// 多推一分钟，免得每条分片都写一次库。
+	until = until.Add(time.Minute)
+	extendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := l.extender.ExtendInboundLease(extendCtx, l.id, l.owner, until); err != nil {
+		if errors.Is(err, ErrInboundLeaseNotHeld) {
+			l.lostErr = fmt.Errorf("%w: %v", errInboundLeaseLost, err)
+			return l.lostErr
+		}
+		return err
+	}
+	l.held = until
+	return nil
+}
+
+func (l *inboundLease) lost() bool {
+	if l == nil {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.lostErr != nil
+}
+
+func (l *inboundLease) finish() {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.finished = true
+	l.mu.Unlock()
+}
+
+func newInboundLease(store InboundEventStore, id, leaseOwner string, leaseUntil time.Time) *inboundLease {
+	extender, ok := store.(InboundLeaseExtender)
+	if !ok || strings.TrimSpace(id) == "" {
+		return nil
+	}
+	return &inboundLease{extender: extender, id: id, owner: leaseOwner, held: leaseUntil}
+}
 
 // withInboundLeaseExtension 让这条入站事件的处理链路能延长自己的租约。
 // leaseUntil 是领取时的租约到期时间；够用的时候不写库，只有真要往后推才写。
 func withInboundLeaseExtension(ctx context.Context, store InboundEventStore, id, leaseOwner string, leaseUntil time.Time) context.Context {
-	extender, ok := store.(InboundLeaseExtender)
-	if !ok || strings.TrimSpace(id) == "" {
+	lease := newInboundLease(store, id, leaseOwner, leaseUntil)
+	if lease == nil {
 		return ctx
 	}
-	var mu sync.Mutex
-	held := leaseUntil
-	extend := func(until time.Time) error {
-		mu.Lock()
-		defer mu.Unlock()
-		if !until.After(held) {
-			return nil
-		}
-		// 多推一分钟，免得每条分片都写一次库。
-		until = until.Add(time.Minute)
-		extendCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		if err := extender.ExtendInboundLease(extendCtx, id, leaseOwner, until); err != nil {
-			return err
-		}
-		held = until
-		return nil
+	return context.WithValue(ctx, inboundLeaseExtensionContextKey{}, lease)
+}
+
+// holdInboundLease 在处理一条入站事件期间持续续租。
+//
+// 租约原来只在发送那一刻续：生成回复本身（多轮工具、搜索子任务）跑过 10 分钟，
+// 租约到期，同一条消息被另一个 worker 领走重跑，两轮各发一遍回复。现在处理期间每隔
+// inboundLeaseRenewInterval 续一次。续租发现租约已被接手（数据库连续十分钟写不进、
+// 进程被挂起之类）时停止续租并记下来，发送前的检查会拦住这一轮的所有发送。
+// 不取消处理用的 ctx：处理链路里有任务会在这一轮返回后继续拿着它跑，提前取消会
+// 误伤它们。返回的 stop 必须在处理结束后调用。
+func holdInboundLease(ctx context.Context, store InboundEventStore, id, leaseOwner string, leaseUntil time.Time) (context.Context, *inboundLease, func()) {
+	lease := newInboundLease(store, id, leaseOwner, leaseUntil)
+	if lease == nil {
+		return ctx, nil, func() {}
 	}
-	return context.WithValue(ctx, inboundLeaseExtensionContextKey{}, extend)
+	ctx = context.WithValue(ctx, inboundLeaseExtensionContextKey{}, lease)
+	done := make(chan struct{})
+	go func() {
+		defer recoverGoroutinePanic("inbound.leaseRenew")
+		ticker := time.NewTicker(inboundLeaseRenewInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			err := lease.extend(time.Now().Add(inboundLeaseDuration))
+			if err == nil {
+				continue
+			}
+			if errors.Is(err, errInboundLeaseLost) {
+				log.Printf("diana inbound event %s: %v; its replies will not be sent", id, err)
+				return
+			}
+			log.Printf("diana inbound lease renewal failed, will retry: %v", err)
+		}
+	}()
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			close(done)
+			lease.finish()
+		})
+	}
+	return ctx, lease, stop
 }
 
 // extendInboundLease 把当前入站事件的租约延到至少 now+d；不在入站处理链路里时什么也不做。
-func extendInboundLease(ctx context.Context, d time.Duration) {
-	extend, ok := ctx.Value(inboundLeaseExtensionContextKey{}).(func(time.Time) error)
-	if !ok {
-		return
+// 返回 errInboundLeaseLost 表示租约已被别的 worker 接手，调用方不能再往外发。
+func extendInboundLease(ctx context.Context, d time.Duration) error {
+	lease, ok := ctx.Value(inboundLeaseExtensionContextKey{}).(*inboundLease)
+	if !ok || lease == nil {
+		return nil
 	}
-	if err := extend(time.Now().Add(d)); err != nil {
-		log.Printf("diana inbound lease extension failed: %v", err)
+	err := lease.extend(time.Now().Add(d))
+	if err == nil {
+		return nil
 	}
+	if errors.Is(err, errInboundLeaseLost) {
+		return err
+	}
+	log.Printf("diana inbound lease extension failed: %v", err)
+	return nil
 }
 
 // InboundEventStore persists inbound messages before routing or reply generation.
@@ -740,9 +855,15 @@ func (r *Runtime) runInboundWorker(ctx context.Context, leaseOwner string, store
 			// 自己领到了活，说明队列里可能还有：叫醒一个同伴一起干。没有这一下，
 			// 退避期间的突发消息会被一个 worker 串行地慢慢消化。
 			r.wakeInboundWorkers()
-			outcome, processErr := r.processInboundQueueItem(withInboundLeaseExtension(ctx, store, item.ID, leaseOwner, leaseUntil), item)
+			processCtx, lease, stopLease := holdInboundLease(ctx, store, item.ID, leaseOwner, leaseUntil)
+			outcome, processErr := r.processInboundQueueItem(processCtx, item)
+			stopLease()
 			commitCtx, commitCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			switch {
+			case lease.lost() || errors.Is(processErr, errInboundLeaseLost):
+				// 租约已经被另一个 worker 接手，这条事件的状态归它写；这里什么都不动。
+				log.Printf("diana inbound event %s left to the worker that took over its lease (outcome=%q, err=%v)", item.ID, outcome, processErr)
+				err = nil
 			case processErr == nil && (outcome == inboundOutcomeHandedOffPending || outcome == "merged_into_reply"):
 				err = r.completeHandedOffInbound(commitCtx, store, item, leaseOwner)
 			case processErr == nil:
