@@ -45,6 +45,9 @@ test("model route table exposes live cooling and degraded health states", () => 
   // 健康状态改成行首的点，只在冷却、失败时写字。
   assert.match(source, /class="model-health-dot" :class="modelRouteHealth\(role.key, item.route\).className"/);
   assert.match(source, /class="model-route-alert"/);
+  // 上次调用每行都显示（不只失败时），和测试结果并成模型名下的一行。
+  assert.match(source, /<span v-else class="model-route-last-call"/);
+  assert.match(source, /class="model-route-test"/);
 });
 
 test("model recovery rules are editable and unhealthy routes can be restored immediately", () => {

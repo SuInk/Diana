@@ -627,13 +627,16 @@
                                 <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
                                 <span v-if="role.key === 'image' && imageRouteSupportsAnimation(item.route)" class="badge model-route-capability" title="要动图（GIF）时只会用标了「动图」的模型">动图</span>
                               </span>
-                              <!-- 正常的只留绿点；冷却、近期失败、上次调用失败才写字，一眼扫出要处理的那几行。 -->
-                              <span v-if="modelRouteHealth(role.key, item.route).className === 'warn' || modelRouteHealth(role.key, item.route).className === 'err'" class="model-route-alert" :class="modelRouteHealth(role.key, item.route).className">
-                                {{ shortHealthLabel(modelRouteHealth(role.key, item.route).label) }}
-                                <button v-if="modelRouteCanRecover(role.key, item.route)" class="model-route-recover" type="button" title="立即恢复：清除故障与冷却记录" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)">立即恢复</button>
+                              <!-- 模型名下面统一一行小字：冷却、近期失败时写状态（带「立即恢复」），否则写上次调用；
+                                   刚点过测试再接一段测试结果。每个有模型的行都有这一行，行高一致。 -->
+                              <span v-if="!item.route.follow_chat && item.route.model" class="model-route-meta">
+                                <span v-if="modelRouteHealth(role.key, item.route).className === 'warn' || modelRouteHealth(role.key, item.route).className === 'err'" class="model-route-alert" :class="modelRouteHealth(role.key, item.route).className">
+                                  {{ shortHealthLabel(modelRouteHealth(role.key, item.route).label) }}
+                                  <button v-if="modelRouteCanRecover(role.key, item.route)" class="model-route-recover" type="button" title="立即恢复：清除故障与冷却记录" :aria-label="`立即恢复${role.label}模型 ${item.index + 1}`" :disabled="modelHealthLoading" @click="recoverModelRoute(role.key, item.route)">立即恢复</button>
+                                </span>
+                                <span v-else class="model-route-last-call" :class="modelRouteLastCall(role.key, item.route).className" :title="modelRouteLastCall(role.key, item.route).title">{{ modelRouteLastCall(role.key, item.route).label }}</span>
+                                <span v-if="modelRouteTestResult(role.key, item.route)" class="model-route-test" :class="modelRouteTestResult(role.key, item.route)?.className" :title="modelRouteTestResult(role.key, item.route)?.detail">{{ modelRouteTestResult(role.key, item.route)?.label }}</span>
                               </span>
-                              <span v-else-if="item.route.model && modelRouteLastCall(role.key, item.route).className" class="model-route-alert warn" :title="modelRouteLastCall(role.key, item.route).title">{{ modelRouteLastCall(role.key, item.route).label }}</span>
-                              <span v-if="modelRouteTestResult(role.key, item.route)" class="badge model-test-badge" :class="modelRouteTestResult(role.key, item.route)?.className" :title="modelRouteTestResult(role.key, item.route)?.detail">{{ modelRouteTestResult(role.key, item.route)?.label }}</span>
                             </td>
                             <td v-if="roleForm[role.key]?.routing_strategy === 'weighted'" class="model-route-weight-cell">
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
