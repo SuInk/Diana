@@ -679,9 +679,9 @@ code {
 .model-route-enable-col {
   width: 46px;
 }
-/* 测试、编辑、删除三个按钮；立即恢复挪到异常提示后面。 */
+/* 测试、编辑、删除三个 32px 按钮加两侧各 8px 内边距；按 96px 算会把删除顶出单元格。 */
 .model-route-actions-col {
-  width: 96px;
+  width: 112px;
 }
 
 /* 「参与调度」「后备」分组行：组名说清怎么用，模型行里就不再挂徽标。 */
@@ -736,14 +736,30 @@ code {
   font-size: 11px;
 }
 
-.model-route-alert {
-  display: block;
+/* 模型名下的一行小字：状态或上次调用 · 测试结果；缩进和模型名对齐（点 7px + 间距 8px）。 */
+.model-route-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
   margin: 3px 0 0 15px;
+  color: var(--muted);
   font-size: 11.5px;
+  line-height: 1.5;
 }
 
-.model-route-alert.warn { color: var(--warn); }
-.model-route-alert.err { color: var(--err); }
+.model-route-meta > * + *::before {
+  content: "·";
+  margin-right: 6px;
+  color: var(--muted);
+}
+
+.model-route-alert.warn,
+.model-route-last-call.warn,
+.model-route-test.warn { color: var(--warn); }
+.model-route-alert.err,
+.model-route-test.err { color: var(--err); }
+.model-route-test.ok { color: var(--ok); }
 
 .model-route-recover {
   margin-left: 6px;
@@ -1008,7 +1024,7 @@ code {
   .model-route-table .model-route-group-row td {
     padding: 8px 12px 6px;
   }
-  .model-route-alert {
+  .model-route-meta {
     margin-left: 0;
   }
   .model-route-table tbody tr:last-child {
