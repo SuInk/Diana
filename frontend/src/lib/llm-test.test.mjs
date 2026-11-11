@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { describeLLMTestError, randomTestModel, testModelIDs } from "./llm-test.ts";
+import { describeLLMTestError, modelTestKind, randomTestModel, testModelIDs } from "./llm-test.ts";
 
 const profile = {
   provider: "gemini",
@@ -76,4 +76,24 @@ test("api.ts 补过去向说明的 5xx 不会和测试框的说明叠两遍", ()
 test("connection testing excludes disabled models including the provider default", () => {
  assert.deepEqual(testModelIDs({model:"off",models:[{id:"off",disabled:true},{id:"on"}]}),["on"]);
  assert.equal(randomTestModel({model:"off",models:[{id:"off",disabled:true}]}),"");
+});
+
+test("test kind follows the selected model's capabilities, not just the group", () => {
+  const mixed = {
+    provider: "openai_compatible", group: "default", model: "chat", image_model: "",
+    models: [
+      { id: "chat", input_modalities: ["text"], output_modalities: ["text"] },
+      { id: "eyes", input_modalities: ["text", "image"], output_modalities: ["text"] },
+      { id: "painter", input_modalities: ["text", "image"], output_modalities: ["image"] },
+      { id: "override", output_modalities: ["text"], capabilities_override: { input_modalities: ["text"], output_modalities: ["image"] } }
+    ]
+  };
+  assert.equal(modelTestKind(mixed, "chat"), "text");
+  assert.equal(modelTestKind(mixed, "eyes"), "vision");
+  assert.equal(modelTestKind(mixed, "painter"), "image");
+  assert.equal(modelTestKind(mixed, "override"), "image");
+  assert.equal(modelTestKind(mixed, "unknown"), "text");
+  assert.equal(modelTestKind({ ...mixed, image_model: "custom-img" }, "custom-img"), "image");
+  assert.equal(modelTestKind({ ...mixed, group: "image" }, "chat"), "image");
+  assert.equal(modelTestKind({ ...mixed, group: "vision" }, "unknown"), "vision");
 });

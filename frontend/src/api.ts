@@ -1681,10 +1681,11 @@ export function importConfigProfiles(payload: Pick<LLMConfig, "profiles">): Prom
   });
 }
 
-export function testLLM(message: string, config?: LLMConfig): Promise<GenerateResponse> {
+/** mode 为 vision 时后端会附一张测试图（白底红圆），用来确认图片真的进了模型。 */
+export function testLLM(message: string, config?: LLMConfig, mode: "text" | "vision" = "text"): Promise<GenerateResponse> {
   return requestJSON<GenerateResponse>("/api/llm/test", {
     method: "POST",
-    body: JSON.stringify({ ...(config || {}), message })
+    body: JSON.stringify({ ...(config || {}), message, ...(mode === "vision" ? { mode } : {}) })
   });
 }
 
