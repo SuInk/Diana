@@ -268,11 +268,39 @@ func hasDedicatedModelRole(roles map[string]ModelRole, purpose, group string) bo
 }
 
 // resolveIfFollowChat 把「跟随对话」翻成实际的对话绑定，其余原样返回。
+//
+// 「跟随对话」也可以只是候选表里的一项（FollowChatRoute）：那一项就地展开成对话那一档的全部候选，
+// 前后的独立模型照旧，整档按自己的调度策略选。对话没配好时这一项直接跳过，
+// 剩下的独立模型照常可用；一个都不剩才报「跟随对话但没有可用的对话模型」。
 func resolveIfFollowChat(roles map[string]ModelRole, role ModelRole) (ModelRole, bool) {
-	if !role.FollowChat {
+	if role.FollowChat {
+		return resolveFollowChatRole(roles)
+	}
+	if !modelRoleHasFollowChatRoute(role) {
 		return role, true
 	}
-	return resolveFollowChatRole(roles)
+	chat, chatOK := roles["chat"]
+	chat = withoutFollowChatRoutes(chat)
+	chatOK = chatOK && !chat.FollowChat && modelRoleConfigured(chat)
+	routes := make([]ModelRole, 0, len(role.Fallbacks)+1)
+	for _, route := range modelRoleRouteList(role) {
+		if !route.FollowChatRoute {
+			routes = append(routes, route)
+			continue
+		}
+		if !chatOK || route.Disabled {
+			continue
+		}
+		for index, chatRoute := range modelRoleRouteList(chat) {
+			// 这一项标成后备时，展开出来的对话候选整体都是后备；对话自己的后备照旧。
+			chatRoute.Standby = route.Standby || (index > 0 && chatRoute.Standby)
+			routes = append(routes, chatRoute)
+		}
+	}
+	if len(routes) == 0 {
+		return ModelRole{FollowChat: true}, true
+	}
+	return modelRoleFromRouteList(routes, role), true
 }
 
 // resolveFollowChatRole 返回对话那一档的绑定。对话本身没配好时原样返回 FollowChat，

@@ -1072,13 +1072,18 @@ type BotConfig struct {
 }
 
 type ModelRole struct {
-	FollowChat bool        `json:"follow_chat,omitempty"`
-	ProfileID  string      `json:"profile_id,omitempty"`
-	Group      string      `json:"group,omitempty"`
-	Model      string      `json:"model"`
-	ProviderID string      `json:"provider_id,omitempty"`
-	ModelID    string      `json:"model_id,omitempty"`
-	Fallbacks  []ModelRole `json:"fallbacks,omitempty"`
+	// FollowChat 是整档跟随对话：没有自己的模型，Fallbacks 一律当残留丢掉。
+	FollowChat bool `json:"follow_chat,omitempty"`
+	// FollowChatRoute 标记候选表里「跟随对话」那一行，可以排在任何位置、和独立模型并存，
+	// 选路时就地展开成对话那一档的候选。故意不复用 FollowChat：旧配置里
+	// follow_chat 带着残留后备的写法很常见，必须继续按整档跟随处理。
+	FollowChatRoute bool        `json:"follow_chat_route,omitempty"`
+	ProfileID       string      `json:"profile_id,omitempty"`
+	Group           string      `json:"group,omitempty"`
+	Model           string      `json:"model"`
+	ProviderID      string      `json:"provider_id,omitempty"`
+	ModelID         string      `json:"model_id,omitempty"`
+	Fallbacks       []ModelRole `json:"fallbacks,omitempty"`
 	// Params 只给音视频插槽用：音色、格式、语速、视频尺寸这些不是模型的属性，
 	// 换一个 TTS 模型照样要指定音色。对话类用途用不上，保存时原样丢掉也无妨。
 	// 后备路由不单独带，沿用主路由这一份。
@@ -1121,6 +1126,10 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		if role.FollowChat && key == "chat" {
 			role.FollowChat = false
 		}
+		// 对话自己、音视频插槽都没有可跟随的对话模型，混排里的「跟随对话」一并去掉。
+		if key == "chat" || key == mediaSlotTTS || key == mediaSlotSTT || key == mediaSlotVideo {
+			role = withoutFollowChatRoutes(role)
+		}
 		role = normalizeModelRole(role)
 		if !role.FollowChat {
 			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy, key)
@@ -1136,42 +1145,68 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 	return out
 }
 
+func modelRoleHasFollowChatRoute(role ModelRole) bool {
+	for _, route := range modelRoleRouteList(role) {
+		if route.FollowChatRoute {
+			return true
+		}
+	}
+	return false
+}
+
+// modelRoleRouteList 把主路由和后备摊平成一张按顺序的候选表。
+func modelRoleRouteList(role ModelRole) []ModelRole {
+	primary := role
+	primary.Fallbacks = nil
+	return append([]ModelRole{primary}, role.Fallbacks...)
+}
+
+// modelRoleFromRouteList 是 modelRoleRouteList 的反操作：第一条当主路由，整档的
+// 调度策略、插槽参数和旧版恢复策略沿用 template。
+func modelRoleFromRouteList(routes []ModelRole, template ModelRole) ModelRole {
+	if len(routes) == 0 {
+		return ModelRole{}
+	}
+	role := routes[0]
+	role.Fallbacks = append([]ModelRole(nil), routes[1:]...)
+	role.Params = template.Params
+	role.RoutingStrategy = template.RoutingStrategy
+	role.RecoveryPolicy = template.RecoveryPolicy
+	return role
+}
+
+func withoutFollowChatRoutes(role ModelRole) ModelRole {
+	if !modelRoleHasFollowChatRoute(role) {
+		return role
+	}
+	routes := make([]ModelRole, 0, len(role.Fallbacks)+1)
+	for _, route := range modelRoleRouteList(role) {
+		if !route.FollowChatRoute {
+			routes = append(routes, route)
+		}
+	}
+	return modelRoleFromRouteList(routes, role)
+}
+
+func normalizeModelRoleWeight(weight int) int {
+	return min(max(weight, 0), 1000)
+}
+
 func normalizeModelRole(role ModelRole) ModelRole {
 	if role.FollowChat {
 		return ModelRole{FollowChat: true}
 	}
-	role.ProfileID = strings.TrimSpace(role.ProfileID)
-	role.Group = strings.TrimSpace(role.Group)
-	role.Model = strings.TrimSpace(role.Model)
-	role.ProviderID = strings.TrimSpace(role.ProviderID)
-	role.ModelID = strings.TrimSpace(role.ModelID)
-	role.Params = normalizeModelRoleParams(role.Params)
-	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
-	role.RecoveryPolicy = normalizeModelRecoveryPolicy(role.RecoveryPolicy)
-	switch strings.TrimSpace(role.RoutingStrategy) {
-	case "smart", "failover", "round_robin", "weighted":
-		role.RoutingStrategy = strings.TrimSpace(role.RoutingStrategy)
-	default:
-		role.RoutingStrategy = ""
-	}
-	if role.Weight < 0 {
-		role.Weight = 0
-	}
-	if role.Weight > 1000 {
-		role.Weight = 1000
-	}
-	if role.ProviderID != "" || role.ModelID != "" {
-		role.ProfileID = ""
-		role.Group = ""
-		if role.Model == "" {
-			role.Model = role.ModelID
-		}
-	}
-	if role.Group != "" {
-		role.ProfileID = ""
-	}
 	fallbacks := make([]ModelRole, 0, len(role.Fallbacks))
+	followListed := role.FollowChatRoute
 	for _, fallback := range role.Fallbacks {
+		if fallback.FollowChatRoute {
+			// 「跟随对话」在一张候选表里只出现一次，只带顺序、启停、权重和后备标记。
+			if !followListed {
+				followListed = true
+				fallbacks = append(fallbacks, ModelRole{FollowChatRoute: true, Weight: normalizeModelRoleWeight(fallback.Weight), Disabled: fallback.Disabled, Standby: fallback.Standby})
+			}
+			continue
+		}
 		fallback.FollowChat = false
 		fallback.Fallbacks = nil
 		fallback.Params = nil
@@ -1182,8 +1217,43 @@ func normalizeModelRole(role ModelRole) ModelRole {
 			fallbacks = append(fallbacks, fallback)
 		}
 	}
+	if role.FollowChatRoute {
+		// 表里只剩「跟随对话」一行，就是整档跟随。
+		if len(fallbacks) == 0 {
+			return ModelRole{FollowChat: true}
+		}
+		return ModelRole{FollowChatRoute: true, Weight: normalizeModelRoleWeight(role.Weight), Disabled: role.Disabled, RoutingStrategy: normalizeModelRoutingStrategyName(role.RoutingStrategy), RecoveryPolicy: normalizeModelRecoveryPolicy(role.RecoveryPolicy), Fallbacks: fallbacks}
+	}
+	role.ProfileID = strings.TrimSpace(role.ProfileID)
+	role.Group = strings.TrimSpace(role.Group)
+	role.Model = strings.TrimSpace(role.Model)
+	role.ProviderID = strings.TrimSpace(role.ProviderID)
+	role.ModelID = strings.TrimSpace(role.ModelID)
+	role.Params = normalizeModelRoleParams(role.Params)
+	role.ReasoningEffort = llm.NormalizeReasoningEffortSetting(role.ReasoningEffort)
+	role.RecoveryPolicy = normalizeModelRecoveryPolicy(role.RecoveryPolicy)
+	role.RoutingStrategy = normalizeModelRoutingStrategyName(role.RoutingStrategy)
+	role.Weight = normalizeModelRoleWeight(role.Weight)
+	if role.ProviderID != "" || role.ModelID != "" {
+		role.ProfileID = ""
+		role.Group = ""
+		if role.Model == "" {
+			role.Model = role.ModelID
+		}
+	}
+	if role.Group != "" {
+		role.ProfileID = ""
+	}
 	role.Fallbacks = fallbacks
 	return role
+}
+
+func normalizeModelRoutingStrategyName(strategy string) string {
+	switch strategy = strings.TrimSpace(strategy); strategy {
+	case "smart", "failover", "round_robin", "weighted":
+		return strategy
+	}
+	return ""
 }
 
 func normalizeModelRecoveryPolicy(policy *ModelRecoveryPolicy) *ModelRecoveryPolicy {
@@ -1235,7 +1305,7 @@ func normalizeModelRoleParams(params map[string]string) map[string]string {
 }
 
 func modelRoleConfigured(role ModelRole) bool {
-	if role.FollowChat {
+	if role.FollowChat || role.FollowChatRoute {
 		return true
 	}
 	return ((role.ProfileID != "" || role.Group != "") || (role.ProviderID != "" && role.ModelID != "")) && role.Model != ""

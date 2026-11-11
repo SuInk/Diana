@@ -62,6 +62,10 @@ const ast = ts.createSourceFile("view.ts", parse(source).descriptor.scriptSetup.
 function editorContext(roles) {
   const context = vm.createContext({
     isMediaRole: role => ["tts", "stt", "video"].includes(role),
+    isPurposeRole: role => ["reply_tone", "reply_assist", "background"].includes(role),
+    purposeRoleFallbackLabel: role => role === "reply_assist" ? "后台生成" : "对话",
+    channelOptionsFor: () => [{ value: "__follow_chat__" }, { value: "p1" }, { value: "p2" }],
+    UNSPECIFIED: "__unspecified__", DISABLED: "__disabled__", AUTO_EMBEDDING: "__auto_embedding__",
     defaultFollowChatRoles: ["vision", "intent", "image"],
     roleForm: { value: roles }, modelRouteEditor: { value: null }, modelRouteEditorError: { value: "" },
     modelRouteSearch: { value: "" }, modelRouteStatusFilter: { value: "all" },
@@ -72,7 +76,7 @@ function editorContext(roles) {
     profileCanRouteRoleModel: (_, __, model) => model === "m1" || model === "m2",
     modelOptionsFor: (_, route) => [{ value: route.profile_id === "p2" ? "m2" : "m1" }]
   });
-  for (const name of ["effectiveModelRoutingStrategy", "roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor", "removeRoleRoute", "moveRoleRoute"]) {
+  for (const name of ["isPureFollowChat", "roleCanFollowChat", "roleDefaultsToFollowChat", "modelRouteEditorChannelOptions", "effectiveModelRoutingStrategy", "roleSnapshot", "modelRoleRoutes", "modelRouteIsStandby", "modelRouteProviderLabel", "filteredModelRoutes", "clearModelRouteFilters", "openModelRouteEditor", "setModelRouteEditorChannel", "setModelRouteEditorModel", "applyModelRouteEditor", "removeRoleRoute", "moveRoleRoute"]) {
     const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     assert.ok(fn, name);
     vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -127,7 +131,7 @@ test("adding and editing a fallback keeps its index and scheduling metadata", ()
   assert.equal(roles.chat.profile_id, "p1");
 });
 
-test("inherited models become independent only after a valid route is applied", () => {
+test("adding a model to a follow-only list puts it first and keeps following chat as the next row", () => {
   const roles = { vision: { model: "", follow_chat: true } };
   const context = editorContext(roles);
   context.openModelRouteEditor("vision");
@@ -138,6 +142,54 @@ test("inherited models become independent only after a valid route is applied", 
   context.applyModelRouteEditor();
   assert.equal(roles.vision.follow_chat, undefined);
   assert.equal(roles.vision.model, "m1");
+  assert.equal(roles.vision.fallbacks.length, 1);
+  assert.equal(roles.vision.fallbacks[0].follow_chat, true);
+  // 已经混排后再加的模型追加在末尾，跟随那一行留在原位。
+  context.openModelRouteEditor("vision");
+  context.setModelRouteEditorModel("p2::m2");
+  context.applyModelRouteEditor();
+  assert.deepEqual(Array.from(context.modelRoleRoutes("vision"), ({ route }) => route.follow_chat ? "follow" : route.model), ["m1", "follow", "m2"]);
+});
+
+test("an unset purpose that defaults to chat keeps the follow row when its first model is added", () => {
+  const roles = {};
+  const context = editorContext(roles);
+  assert.ok(!context.modelRouteEditorChannelOptions("reply_tone").some(({ value }) => value === "__follow_chat__"));
+  context.openModelRouteEditor("reply_tone");
+  context.setModelRouteEditorModel("p1::m1");
+  context.applyModelRouteEditor();
+  assert.deepEqual(Array.from(context.modelRoleRoutes("reply_tone"), ({ route }) => route.follow_chat ? "follow" : route.model), ["m1", "follow"]);
+  // 默认跟着后台生成走的用途不能混排跟随对话，添加的模型直接成为独立配置。
+  context.openModelRouteEditor("reply_assist");
+  context.setModelRouteEditorModel("p1::m1");
+  context.applyModelRouteEditor();
+  assert.deepEqual(Array.from(context.modelRoleRoutes("reply_assist"), ({ route }) => route.model), ["m1"]);
+});
+
+test("follow chat is offered once per list, never for chat or media slots, and can be reordered", () => {
+  const roles = { chat: { profile_id: "p1", model: "m1" }, intent: { profile_id: "p1", model: "m1", routing_strategy: "failover" }, tts: { profile_id: "p1", model: "m1" } };
+  const context = editorContext(roles);
+  context.modelRouteEditor.value = { role: "intent", index: 1, adding: true, draft: {} };
+  assert.ok(context.modelRouteEditorChannelOptions("intent").some(({ value }) => value === "__follow_chat__"));
+  assert.ok(!context.modelRouteEditorChannelOptions("chat").some(({ value }) => value === "__follow_chat__"));
+  assert.ok(!context.modelRouteEditorChannelOptions("tts").some(({ value }) => value === "__follow_chat__"));
+  context.openModelRouteEditor("intent");
+  context.setModelRouteEditorChannel("__follow_chat__");
+  context.modelRouteEditor.value.draft.standby = true;
+  context.applyModelRouteEditor();
+  assert.equal(roles.intent.fallbacks[0].follow_chat, true);
+  assert.equal(roles.intent.fallbacks[0].standby, true);
+  assert.equal(roles.intent.fallbacks[0].profile_id, undefined);
+  context.modelRouteEditor.value = { role: "intent", index: 2, adding: true, draft: {} };
+  assert.ok(!context.modelRouteEditorChannelOptions("intent").some(({ value }) => value === "__follow_chat__"));
+  context.moveRoleRoute("intent", 1, 0);
+  assert.equal(roles.intent.follow_chat, true);
+  assert.equal(roles.intent.standby, undefined);
+  assert.equal(roles.intent.routing_strategy, "failover");
+  assert.equal(roles.intent.fallbacks[0].model, "m1");
+  assert.equal(context.effectiveModelRoutingStrategy("intent"), "failover");
+  context.removeRoleRoute("intent", 1);
+  assert.equal(context.isPureFollowChat(roles.intent), true);
 });
 
 test("an incoming configuration update prevents a stale modal from overwriting it", () => {
@@ -337,15 +389,18 @@ test("deleting the first route promotes its successor and preserves purpose sett
   assert.ok(roles.chat.model);
 });
 
-test("route deletion ignores invalid indices and inherited roles", () => {
+test("route deletion ignores invalid indices and unset roles", () => {
   const roles = { chat: { model: "m1" }, vision: { model: "", follow_chat: true } };
   const context = editorContext(roles);
   const before = JSON.stringify(roles);
   context.removeRoleRoute("chat", -1);
   context.removeRoleRoute("chat", 1);
-  context.removeRoleRoute("vision", 0);
+  context.removeRoleRoute("vision", 1);
   context.removeRoleRoute("image", 0);
   assert.equal(JSON.stringify(roles), before);
+  // 「跟随对话」是表里普通的一行，删掉唯一这一行就回到未配置。
+  context.removeRoleRoute("vision", 0);
+  assert.equal(roles.vision, undefined);
 });
 
 

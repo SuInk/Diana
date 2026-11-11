@@ -169,7 +169,7 @@ func (r *Runtime) resolveMediaSlotRoutes(ctx context.Context, slot string, sched
 	routes := make([]mediaSlotRoute, 0, 1+len(role.Fallbacks))
 	seen := map[string]bool{}
 	for _, binding := range append([]ModelRole{role}, role.Fallbacks...) {
-		if binding.Disabled {
+		if binding.Disabled || binding.FollowChatRoute {
 			continue
 		}
 		model := mediaSlotModel(binding)

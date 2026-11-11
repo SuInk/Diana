@@ -99,6 +99,9 @@ func (r *Runtime) ValidateGroupChatModel(model GroupChatModel) error {
 			if i > 0 && len(route.Fallbacks) > 0 {
 				return fmt.Errorf("后备路由不能嵌套")
 			}
+			if route.FollowChatRoute {
+				return fmt.Errorf("群对话路由不能跟随自身；清空 chat_model 恢复机器人继承")
+			}
 			if route.Group != "" {
 				return fmt.Errorf("群独立路由请使用具体提供商和模型")
 			}

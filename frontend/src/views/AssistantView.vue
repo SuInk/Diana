@@ -525,7 +525,7 @@
               <nav class="model-purpose-nav" aria-label="模型用途" role="tablist">
                 <span class="model-purpose-caption">常用</span>
                 <template v-for="item in modelNavItems" :key="item.kind === 'row' ? item.role.key : 'secondary-toggle'">
-                  <span v-if="item.kind === 'group'" class="model-purpose-caption model-purpose-group-caption">细分用途<small :class="{ 'warn-text': secondaryModelRolesMissing }">{{ secondaryModelRolesSummary }}</small></span>
+                  <span v-if="item.kind === 'group'" class="model-purpose-caption model-purpose-group-caption">细分用途<small v-if="secondaryModelRolesProblemCount" class="warn-text">{{ secondaryModelRolesProblemCount }} 异常</small></span>
                   <button
                     v-else
                     :id="`model-purpose-${item.role.key}`"
@@ -556,12 +556,11 @@
                   role="tabpanel"
                   :aria-labelledby="`model-purpose-${role.key}`"
                 >
-                  <!-- 标题、模型来源、调度方式、添加按钮压成一行；调度说明放进下拉框的悬停提示，不再单占一行。
-                       只有一个选项的「模型来源」、只有一个模型时的调度方式都不显示。 -->
+                  <!-- 标题、调度方式、添加按钮压成一行；调度说明放进下拉框的悬停提示，不再单占一行。
+                       只有一个模型时不显示调度方式。「跟随对话」是表里的一行，不另设来源下拉框。 -->
                   <div class="model-purpose-heading">
                     <div class="model-purpose-heading-main">
                       <h3>{{ modelPurposeLabel(role.key) }}</h3>
-                      <AppSelect v-if="role.key !== 'chat' && modelRoleSourceOptions(role.key).length > 1" :id="`model-source-${role.key}`" class="model-heading-select" aria-label="模型来源" :model-value="modelRoleSource(role.key)" :options="modelRoleSourceOptions(role.key)" @update:model-value="(value) => setModelRoleSource(role.key, value)" />
                       <AppSelect v-if="roleForm[role.key] && !modelRoleInherited(role.key) && modelRoleRoutes(role.key).length > 1" :id="`model-strategy-${role.key}`" class="model-heading-select" aria-label="调度方式" :title="modelRoutingDescription(role.key)" :model-value="effectiveModelRoutingStrategy(role.key)" :options="modelRoutingStrategiesFor(role.key)" @update:model-value="(value) => setRoleRoutingStrategy(role.key, value)" />
                     </div>
                     <span class="cluster" style="gap: 6px">
@@ -571,10 +570,23 @@
                       </button>
                     </span>
                   </div>
-                  <div v-if="modelRoleInherited(role.key)" class="model-inherited-state">
-                    <GitBranch :size="22" aria-hidden="true" />
-                    <div><strong>{{ modelInheritedText(role.key) }}</strong></div>
-                    <button class="btn small" type="button" @click="openModelRouteEditor(role.key, 0)">独立配置</button>
+                  <!-- 没单独配置的用途也画成表里的一行，写明默认跟着谁走；添加模型后这一行换成真正的候选。 -->
+                  <div v-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
+                    <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
+                      <colgroup><col class="model-route-order-col" /><col /></colgroup>
+                      <tbody>
+                        <tr class="model-route-list-row model-route-default-row">
+                          <td class="model-route-order-cell"><span class="model-route-order-number">1</span></td>
+                          <td class="model-route-identity">
+                            <span class="model-route-line">
+                              <GitBranch :size="13" class="model-route-follow-icon" aria-hidden="true" />
+                              <strong class="model-route-follow-name">{{ modelInheritedText(role.key) }}</strong>
+                              <span class="model-route-provider">{{ modelInheritedHint(role.key) }}</span>
+                            </span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                   <template v-else>
                     <div v-if="modelRoleRoutes(role.key).length > 6" class="model-list-toolbar">
@@ -608,8 +620,10 @@
                             </td>
                             <td class="model-route-identity">
                               <span class="model-route-line">
-                                <span class="model-health-dot" :class="modelRouteHealth(role.key, item.route).className" :title="modelRouteHealth(role.key, item.route).title" aria-hidden="true"></span>
-                                <button class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
+                                <GitBranch v-if="item.route.follow_chat" :size="13" class="model-route-follow-icon" aria-hidden="true" />
+                                <span v-else class="model-health-dot" :class="modelRouteHealth(role.key, item.route).className" :title="modelRouteHealth(role.key, item.route).title" aria-hidden="true"></span>
+                                <button v-if="item.route.follow_chat" class="model-route-model-name model-route-follow-name" type="button" title="查看对话的模型配置" @click="selectedModelRole = 'chat'">跟随对话</button>
+                                <button v-else class="model-route-model-name mono" type="button" :title="item.route.model" @click="openModelRouteEditor(role.key, item.index)">{{ item.route.model || '请选择模型' }}</button>
                                 <span class="model-route-provider"><Layers v-if="item.route.group" :size="12" aria-hidden="true" />{{ modelRouteProviderLabel(item.route) }}</span>
                                 <span v-if="role.key === 'image' && imageRouteSupportsAnimation(item.route)" class="badge model-route-capability" title="要动图（GIF）时只会用标了「动图」的模型">动图</span>
                               </span>
@@ -626,7 +640,7 @@
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
                             <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
-                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" :title="role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
+                            <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" :title="role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="!item.route.follow_chat" class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           </template>
                           <tr v-if="!filteredModelRoutes(role.key).length"><td :colspan="roleForm[role.key]?.routing_strategy === 'weighted' ? 5 : 4" class="model-list-empty">{{ modelRoleRoutes(role.key).length ? '没有匹配的模型' : '还没有配置模型，点击「添加模型」开始。' }}<button v-if="modelRoleRoutes(role.key).length" class="btn ghost small" type="button" @click="clearModelRouteFilters">清除筛选</button></td></tr>
@@ -2288,8 +2302,9 @@
       <div class="stack model-route-editor">
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
         <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="modelRouteEditorChannelOptions(modelRouteEditor.role)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
-        <div class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
-        <div v-if="roleSupportsReasoning(modelRouteEditor.role)" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
+        <p v-if="modelRouteEditor.draft.follow_chat" class="hint">用对话那一档的模型和后备，换对话模型时跟着一起换；这一行在列表里的位置决定先用它还是先用别的模型。</p>
+        <div v-if="!modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
+        <div v-if="roleSupportsReasoning(modelRouteEditor.role) && !modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
         <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
         <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy === 'weighted' && !modelRouteEditor.draft.standby" class="field"><label for="model-route-editor-weight">调度权重</label><AppNumberInput id="model-route-editor-weight" v-model="modelRouteEditor.draft.weight" :min="1" :max="1000" label="调度权重" :disabled="modelRouteEditor.draft.disabled" /><span class="hint">权重越大，分配到的请求越多，范围 1–1000。</span></div>
         <div class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
@@ -3711,9 +3726,24 @@ function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
   return role === "image" || role === "embedding" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
 }
 
+// 「跟随对话」可以只是候选表里的一行，和独立模型并排；整张表只有这一行时就是整档跟随。
+function isPureFollowChat(assignment?: RoleRoute & { fallbacks?: RoleRoute[] }): boolean {
+  return !!assignment?.follow_chat && !assignment.fallbacks?.length;
+}
+
+// 对话是被跟随的那一档，不能跟随自己；音视频插槽和向量嵌入没有可跟随的对话模型。
+function roleCanFollowChat(role: RoleKey): boolean {
+  return role !== "chat" && role !== "embedding" && !isMediaRole(role);
+}
+
+// 不单独配置时本来就跟着对话走的细分用途：没配时表里那一行就是「跟随对话」，添加模型时把它留下。
+function roleDefaultsToFollowChat(role: RoleKey): boolean {
+  return isPurposeRole(role) && purposeRoleFallbackLabel(role) === "对话";
+}
+
 function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignment["routing_strategy"]> {
   const assignment = roleForm.value[role];
-  if (assignment?.follow_chat && role !== "chat") return effectiveModelRoutingStrategy("chat");
+  if (isPureFollowChat(assignment) && role !== "chat") return effectiveModelRoutingStrategy("chat");
   const strategy = assignment?.routing_strategy?.trim();
   if (strategy === "failover" || strategy === "round_robin" || strategy === "weighted") return strategy;
   return role === "image" || role === "embedding" || isMediaRole(role) ? "failover" : "smart";
@@ -3724,45 +3754,39 @@ function clearModelRouteFilters(): void {
   modelRouteStatusFilter.value = "all";
 }
 
+// 没单独配置、走默认来源的用途。跟随对话不算：它是表里实实在在的一行。
 function modelRoleInherited(role: RoleKey): boolean {
-  return !!roleForm.value[role]?.follow_chat || (!roleForm.value[role] && (role === "media_parse" || role === "embedding" || isPurposeRole(role)));
+  return !roleForm.value[role] && (role === "media_parse" || role === "embedding" || isPurposeRole(role));
 }
 
 function modelRoleSource(role: RoleKey): string {
-  if (roleForm.value[role]?.follow_chat) return FOLLOW_CHAT;
+  if (isPureFollowChat(roleForm.value[role])) return FOLLOW_CHAT;
   if (roleForm.value[role]) return "independent";
   if (role === "media_parse") return FOLLOW_VISION;
   if (role === "embedding") return AUTO_EMBEDDING;
   return isPurposeRole(role) ? UNSPECIFIED : "independent";
 }
 
-// 模型分配里「沿用…」那一块的说明。
+// 没单独配置时表里那一行写什么。
 function modelInheritedText(role: RoleKey): string {
   const source = modelRoleSource(role);
-  if (source === FOLLOW_VISION) return "沿用视觉理解的模型配置";
-  if (source === UNSPECIFIED) return `跟随${purposeRoleFallbackLabel(role)}的模型配置`;
-  if (source === AUTO_EMBEDDING) {
+  if (source === FOLLOW_VISION) return "跟随视觉理解";
+  if (source === UNSPECIFIED) return `跟随${purposeRoleFallbackLabel(role)}`;
+  if (source === AUTO_EMBEDDING) return "自动选用 embedding 分组";
+  return "跟随对话";
+}
+
+function modelInheritedHint(role: RoleKey): string {
+  if (modelRoleSource(role) === AUTO_EMBEDDING) {
     const profile = llmChannels.value.find((channel) => channel.group?.trim() === "embedding" && channel.model?.trim());
-    return profile ? `自动选用 embedding 分组的「${profile.name || profile.id}」· ${profile.model}` : "自动选用 embedding 分组，但提供商里还没有这个分组的配置";
+    return profile ? `当前 ${profile.name || profile.id} · ${profile.model}` : "提供商里还没有这个分组的配置";
   }
-  return "沿用对话的模型配置";
-}
-
-function modelRoleSourceOptions(role: RoleKey): AppSelectOption[] {
-  return [{ value: "independent", label: "独立配置" }, ...channelOptionsFor(role).filter((option) => option.value === FOLLOW_CHAT || option.value === FOLLOW_VISION || option.value === UNSPECIFIED || option.value === AUTO_EMBEDDING)];
-}
-
-function setModelRoleSource(role: RoleKey, value: string): void {
-  if (value === "independent") {
-    if (modelRoleInherited(role) || !roleForm.value[role]) openModelRouteEditor(role, 0);
-    return;
-  }
-  setRoleChannel(role, value);
+  return roleDefaultsToFollowChat(role) ? `${modelRouteProviderLabel({ model: "", follow_chat: true })} · 不单独配置时默认` : "不单独配置时默认，添加模型后换成独立配置";
 }
 
 function modelRoleRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
   const assignment = roleForm.value[role];
-  if (!assignment || assignment.follow_chat) return [];
+  if (!assignment) return [];
   return [assignment, ...(assignment.fallbacks ?? [])].map((route, index) => ({ route, index }));
 }
 
@@ -3772,6 +3796,7 @@ function modelRouteIsStandby(role: RoleKey, index: number): boolean {
 }
 
 function modelRoleRouteSummary(role: RoleKey): string {
+  if (isPureFollowChat(roleForm.value[role])) return "跟随对话";
   if (modelRoleInherited(role)) return modelRoleSource(role) === FOLLOW_VISION ? "跟随视觉理解" : modelRoleSource(role) === UNSPECIFIED ? `跟随${purposeRoleFallbackLabel(role)}` : modelRoleSource(role) === AUTO_EMBEDDING ? "自动" : "跟随对话";
   const routes = modelRoleRoutes(role);
   return `${routes.length} 个模型 · ${routes.filter(({ route }) => !route.disabled).length} 已启用`;
@@ -3783,6 +3808,10 @@ function modelRoutingDescription(role: RoleKey): string {
 }
 
 function modelRouteProviderLabel(route: RoleRoute): string {
+  if (route.follow_chat) {
+    const chat = roleForm.value.chat;
+    return chat?.model ? `当前 ${chat.model}` : "对话还没配模型";
+  }
   if (route.group) return route.group === "default" ? "默认分组" : route.group;
   const provider = [...llmChannels.value, ...builtinSpeechChannels.tts, ...builtinSpeechChannels.stt].find((channel) => channel.id === route.profile_id);
   return provider ? provider.name || llmProviderLabel(provider.provider) : route.profile_id || "尚未选择提供商";
@@ -3806,6 +3835,8 @@ function modelRouteCandidateHealth(role: RoleKey, route: RoleRoute): ModelCandid
 
 function modelRouteHealth(role: RoleKey, route: RoleRoute): ModelRouteHealth {
   if (route.disabled) return { label: "已停用", className: "", title: "这条路由已停用，不参与调度。", cooling: false, degraded: false };
+  // 跟随对话的健康状况看对话那一档，这里不重复标。
+  if (route.follow_chat) return { label: "跟随对话", className: "", title: "使用对话那一档的模型和后备。", cooling: false, degraded: false };
   const profiles = selectedRoleProfiles(role, route);
   if (!profiles.length || !route.model) return { label: "未就绪", className: "warn", title: "没有找到可用于这条路由的提供商或模型。", cooling: false, degraded: false };
   const health = modelRouteCandidateHealth(role, route);
@@ -4034,7 +4065,7 @@ function modelRoleCurrent(role: RoleKey): { title: string; detail: string; class
   const strategy = effectiveModelRoutingStrategy(role);
   const all = modelRoleRoutes(role);
   const ordered = [...all.filter(({ index }) => !modelRouteIsStandby(role, index)), ...all.filter(({ index }) => modelRouteIsStandby(role, index))]
-    .filter(({ route }) => !route.disabled && !!route.model);
+    .filter(({ route }) => !route.disabled && (!!route.model || !!route.follow_chat));
   if (!ordered.length) return { title: "没有可用的模型", detail: "全部停用或未选择模型。", className: "err" };
   if (strategy === "round_robin" || strategy === "weighted") {
     const cooling = ordered.filter(({ route }) => modelRouteHealth(role, route).cooling).length;
@@ -4044,19 +4075,19 @@ function modelRoleCurrent(role: RoleKey): { title: string; detail: string; class
   const primary = ordered[0];
   const current = ordered.find(({ route }) => modelRouteHealth(role, route).className !== "err") ?? primary;
   const provider = modelRouteProviderLabel(current.route);
-  const name = `${current.route.model}${provider ? `（${provider}）` : ""}`;
+  const name = `${current.route.follow_chat ? "跟随对话" : current.route.model}${provider ? `（${provider}）` : ""}`;
   if (current.index === primary.index) {
     return { title: `当前先用主模型：${name}`, detail: "，失败后按顺序换下一个，冷却结束自动回切。", className: "" };
   }
   const primaryHealth = modelRouteHealth(role, primary.route);
   const recover = primaryHealth.label.includes("恢复") ? `，${primaryHealth.label.replace(/^.*·\s*/, "")}后自动回切` : "";
-  return { title: `已切到后备：${name}`, detail: `主模型 ${primary.route.model} 冷却中${recover}。`, className: "warn" };
+  return { title: `已切到后备：${name}`, detail: `主模型 ${primary.route.follow_chat ? "跟随对话" : primary.route.model} 冷却中${recover}。`, className: "warn" };
 }
 
 function filteredModelRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
   const term = modelRouteSearch.value.trim().toLowerCase();
   return modelRoleRoutes(role).filter(({ route, index }) => {
-    if (term && !`${route.model} ${modelRouteProviderLabel(route)}`.toLowerCase().includes(term)) return false;
+    if (term && !`${route.follow_chat ? "跟随对话" : route.model} ${modelRouteProviderLabel(route)}`.toLowerCase().includes(term)) return false;
     const status = modelRouteStatusFilter.value;
     if (status === "disabled") return !!route.disabled;
     if (status === "enabled") return !route.disabled;
@@ -4084,8 +4115,16 @@ function openModelRouteEditor(role: RoleKey, index?: number): void {
 
 function setModelRouteEditorChannel(value: string): void {
   const editor = modelRouteEditor.value;
-  if (!editor || !value || value === FOLLOW_CHAT || value === FOLLOW_VISION) return;
+  if (!editor || !value || value === FOLLOW_VISION) return;
+  if (value === FOLLOW_CHAT) {
+    // 跟随对话这一行不带提供商、模型和思考强度，只留顺序、启停、权重和后备标记。
+    const { weight, disabled, standby } = editor.draft;
+    editor.draft = { model: "", follow_chat: true, weight, disabled, standby };
+    modelRouteEditorError.value = "";
+    return;
+  }
   const draft = editor.draft;
+  delete draft.follow_chat;
   delete draft.profile_id;
   delete draft.group;
   delete draft.provider_id;
@@ -4120,16 +4159,22 @@ function applyModelRouteEditor(): void {
     return;
   }
   const draft = editor.draft;
-  if (!draft.model || !selectedRoleProfiles(editor.role, draft).some((profile) => profileCanRouteRoleModel(profile, editor.role, draft.model))) {
+  if (!draft.follow_chat && (!draft.model || !selectedRoleProfiles(editor.role, draft).some((profile) => profileCanRouteRoleModel(profile, editor.role, draft.model)))) {
     modelRouteEditorError.value = "请选择提供商和该用途可用的模型。";
     return;
   }
-  const route: RoleRoute = { ...draft, weight: Math.max(1, Math.min(1000, Math.round(Number(draft.weight)) || 1)) };
+  const weight = Math.max(1, Math.min(1000, Math.round(Number(draft.weight)) || 1));
+  const route: RoleRoute = draft.follow_chat ? { model: "", follow_chat: true, weight, disabled: draft.disabled, standby: draft.standby } : { ...draft, weight };
   const current = roleForm.value[editor.role];
-  if (editor.index === 0) {
+  const onlyFollowChat = current ? isPureFollowChat(current) : roleDefaultsToFollowChat(editor.role);
+  if (editor.adding && onlyFollowChat && !route.follow_chat) {
+    // 表里只有「跟随对话」一行时，新加的模型排到它前面，跟随留作下一条；不想要再删掉那一行。
     route.standby = undefined;
-    roleForm.value[editor.role] = { ...route, params: current?.params, routing_strategy: current?.follow_chat ? undefined : current?.routing_strategy, fallbacks: current?.follow_chat ? undefined : current?.fallbacks };
-  } else if (current && !current.follow_chat) {
+    roleForm.value[editor.role] = { ...route, params: current?.params, routing_strategy: current?.routing_strategy, fallbacks: [{ model: "", follow_chat: true, weight: current?.weight, disabled: current?.disabled }] };
+  } else if (editor.index === 0) {
+    route.standby = undefined;
+    roleForm.value[editor.role] = { ...route, params: current?.params, routing_strategy: current?.routing_strategy, fallbacks: current?.fallbacks };
+  } else if (current) {
     current.fallbacks ??= [];
     if (editor.adding) current.fallbacks.push(route);
     else current.fallbacks[editor.index - 1] = route;
@@ -4148,7 +4193,8 @@ function modelPurposeIcon(role: RoleKey) {
 
 function modelPurposeSummary(role: RoleKey): string {
   const assignment = roleForm.value[role];
-  if (assignment?.follow_chat) return "跟随对话";
+  if (isPureFollowChat(assignment)) return "跟随对话";
+  if (assignment?.follow_chat) return `跟随对话等 ${modelRoleRoutes(role).length} 个`;
   if (!assignment) return role === "media_parse" ? "跟随视觉理解" : role === "embedding" ? "自动" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
   return assignment.model || "请选择模型";
 }
@@ -4156,8 +4202,8 @@ function modelPurposeSummary(role: RoleKey): string {
 // 左栏每个用途前的健康点：取这个用途所有路由里最差的状态，冷却或近期失败不用点进去就能看到。
 // 跟随别的用途、未启用的不画点。
 function modelPurposeHealth(role: RoleKey): "" | "ok" | "warn" | "err" {
-  if (modelRoleInherited(role) || !roleForm.value[role]) return "";
-  const classes = modelRoleRoutes(role).map(({ route }) => modelRouteHealth(role, route).className);
+  if (modelRoleInherited(role) || !roleForm.value[role] || isPureFollowChat(roleForm.value[role])) return "";
+  const classes = modelRoleRoutes(role).filter(({ route }) => !route.follow_chat).map(({ route }) => modelRouteHealth(role, route).className);
   return classes.includes("err") ? "err" : classes.includes("warn") ? "warn" : "ok";
 }
 
@@ -4173,16 +4219,12 @@ const modelNavItems = computed<ModelNavItem[]>(() => {
   const secondary = visibleModelRoleRows.filter((row) => !primaryModelRoleKeys.includes(row.key));
   return [...primary.map((role) => ({ kind: "row" as const, role })), { kind: "group" }, ...secondary.map((role) => ({ kind: "row" as const, role }))];
 });
+// 「跟随对话」只是每档可选的一种来源，和选具体模型并列，分组标题不再按单独/跟随计数，只在有异常时提示。
 const secondaryModelRoleKeys = computed(() => visibleModelRoleRows.map((row) => row.key).filter((key) => !primaryModelRoleKeys.includes(key)));
-const secondaryModelRolesMissing = computed(() => secondaryModelRoleKeys.value.some((key) => modelPurposeStatus(key).problem));
-const secondaryModelRolesSummary = computed(() => {
-  const keys = secondaryModelRoleKeys.value;
-  const own = keys.filter((key) => !modelRoleInherited(key)).length;
-  const bad = keys.filter((key) => modelPurposeStatus(key).problem).length;
-  return [own ? `${own} 单独` : "", keys.length - own ? `${keys.length - own} 跟随` : "", bad ? `${bad} 异常` : ""].filter(Boolean).join(" · ");
-});
+const secondaryModelRolesProblemCount = computed(() => secondaryModelRoleKeys.value.filter((key) => modelPurposeStatus(key).problem).length);
 
 function modelPurposeStatus(role: RoleKey): { text: string; problem: boolean } {
+  if (isPureFollowChat(roleForm.value[role])) return { text: "跟随对话", problem: false };
   if (modelRoleInherited(role)) return { text: modelRoleRouteSummary(role).replace("视觉理解", "视觉").replace("后台生成", "后台"), problem: false };
   if (!roleForm.value[role]) return isMediaRole(role) ? { text: "未启用", problem: false } : { text: "未配置", problem: true };
   const routes = modelRoleRoutes(role);
@@ -4242,7 +4284,7 @@ async function onModelPurposeKeydown(role: RoleKey, event: KeyboardEvent): Promi
 
 function setRoleRoutingStrategy(role: RoleKey, value: string): void {
   const assignment = roleForm.value[role];
-  if (!assignment || assignment.follow_chat) return;
+  if (!assignment || isPureFollowChat(assignment)) return;
   if (!modelRoutingStrategiesFor(role).some(option => option.value === value)) return;
   assignment.routing_strategy = value === "smart" || value === "failover" || value === "round_robin" || value === "weighted" ? value : undefined;
 }
@@ -4272,7 +4314,7 @@ const incomingModelRoles = ref<BotProfileConfig["model_roles"]>();
 // roleSnapshot 按固定字段顺序拍平，保证服务端回来的那份和页面草稿能直接比。
 function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefined): string {
   const implicit = (key: string, role?: RoleAssignment): boolean => role?.follow_chat === true && defaultFollowChatRoles.includes(key as RoleKey);
-  const route = (item: RoleRoute): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true, item.weight || 1, item.disabled === true, item.standby === true, item.reasoning_effort ?? ""];
+  const route = (item: RoleRoute & { follow_chat_route?: boolean }): unknown[] => [item.profile_id ?? "", item.group ?? "", item.model ?? "", item.provider_id ?? "", item.model_id ?? "", item.follow_chat === true || item.follow_chat_route === true, item.weight || 1, item.disabled === true, item.standby === true, item.reasoning_effort ?? ""];
   const params = (item: RoleAssignment): unknown[] => Object.entries(item.params ?? {}).sort(([a], [b]) => a.localeCompare(b));
   return JSON.stringify(
     Object.keys(roles ?? {})
@@ -4280,7 +4322,8 @@ function roleSnapshot(roles: Record<string, RoleAssignment | undefined> | undefi
       .sort()
       .map((key) => {
         const role = roles?.[key];
-        return role ? [key, role.routing_strategy ?? "", route(role), (role.fallbacks ?? []).map(route), params(role)] : [key];
+        // 整档跟随带着的后备是旧配置的残留，后端也不认，比较时一并忽略。
+        return role ? [key, role.routing_strategy ?? "", route(role), role.follow_chat ? [] : (role.fallbacks ?? []).map(route), params(role)] : [key];
       })
   );
 }
@@ -4303,6 +4346,16 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
   const roles: typeof roleForm.value = {};
   for (const key of orderedRoleKeys(incoming)) {
     const role = incoming[key];
+    // 整档跟随（follow_chat）带的后备是残留，不读；混排里的跟随行（follow_chat_route）在页面里统一记成 follow_chat。
+    if (role.follow_chat && key !== "chat") {
+      roles[key as RoleKey] = { model: "", follow_chat: true };
+      continue;
+    }
+    const followRow = (route: { follow_chat_route?: boolean; weight?: number; disabled?: boolean; standby?: boolean }): RoleRoute => ({ model: "", follow_chat: true, weight: route.weight, disabled: route.disabled, standby: route.standby });
+    if (role.follow_chat_route && key !== "chat") {
+      roles[key as RoleKey] = { ...followRow(role), routing_strategy: role.routing_strategy, params: role.params ? { ...role.params } : undefined, fallbacks: role.fallbacks?.map((fallback) => (fallback.follow_chat_route ? followRow(fallback) : { ...fallback })) };
+      continue;
+    }
     roles[key as RoleKey] = {
       profile_id: role.profile_id,
       group: role.group,
@@ -4314,7 +4367,7 @@ function setRoleForm(source: BotProfileConfig["model_roles"]): void {
       weight: role.weight,
       disabled: role.disabled,
       standby: role.standby,
-      fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback })),
+      fallbacks: role.fallbacks?.map((fallback) => (fallback.follow_chat_route ? followRow(fallback) : { ...fallback })),
       params: role.params ? { ...role.params } : undefined,
       reasoning_effort: role.reasoning_effort || undefined
     };
@@ -4523,7 +4576,13 @@ function roleChannels(role: RoleKey): LLMConfig[] {
 // 添加或编辑一条模型路由时只能选具体的提供商或分组：「跟随」「不指定」「不启用」
 // 都是整档的来源设置，放在「模型来源」和「停用这个插槽」里，选进单条路由没有意义。
 function modelRouteEditorChannelOptions(role: RoleKey): AppSelectOption[] {
-  return channelOptionsFor(role).filter((option) => ![FOLLOW_CHAT, FOLLOW_VISION, UNSPECIFIED, DISABLED, AUTO_EMBEDDING].includes(option.value));
+  const options = channelOptionsFor(role).filter((option) => ![FOLLOW_CHAT, FOLLOW_VISION, UNSPECIFIED, DISABLED, AUTO_EMBEDDING].includes(option.value));
+  // 「跟随对话」可以作为候选表里的一行，和具体模型排在一起；一张表里只放一行。
+  const editing = modelRouteEditor.value;
+  // 没单独配置、本来就跟着对话走的用途，表里那一行已经是跟随对话，也不再重复给。
+  const listed = (!roleForm.value[role] && roleDefaultsToFollowChat(role)) || modelRoleRoutes(role).some(({ route, index }) => route.follow_chat && !(editing && !editing.adding && editing.index === index));
+  if (roleCanFollowChat(role) && !listed) options.unshift({ value: FOLLOW_CHAT, label: "跟随对话", hint: "用对话那一档的模型和后备，换对话模型时跟着一起换" });
+  return options;
 }
 
 function channelOptionsFor(role: RoleKey): AppSelectOption[] {
@@ -4749,7 +4808,7 @@ function addRoleFallback(role: RoleKey): void {
 
 function removeRoleRoute(role: RoleKey, index: number): void {
   const assignment = roleForm.value[role];
-  if (!assignment || assignment.follow_chat) return;
+  if (!assignment) return;
   const { fallbacks = [], params, routing_strategy, ...primary } = assignment;
   const routes: RoleRoute[] = [primary, ...fallbacks];
   if (index < 0 || index >= routes.length) return;
@@ -4763,18 +4822,18 @@ function removeRoleRoute(role: RoleKey, index: number): void {
 }
 
 // 主路由和后备路由是同一张有序列表：下标 0 是主路由，i 是后备 i。
-// 拖动或方向键调整顺序，排到最上面的那条成为主路由。跟随对话时没有自己的路由可排。
+// 拖动或方向键调整顺序，排到最上面的那条成为主路由。「跟随对话」也是其中一行，照样能排。
 // touch 标记这次拖动是手指发起的，由指针事件驱动，不走原生拖放。
 const routeDrag = ref<{ role: RoleKey; from: number; over: number | null; touch?: boolean } | null>(null);
 
 function routeReorderable(role: RoleKey): boolean {
   const assignment = roleForm.value[role];
-  return !!assignment && !assignment.follow_chat && (assignment.fallbacks?.length ?? 0) > 0;
+  return !!assignment && (assignment.fallbacks?.length ?? 0) > 0;
 }
 
 function moveRoleRoute(role: RoleKey, from: number, to: number): void {
   const assignment = roleForm.value[role];
-  if (!assignment || assignment.follow_chat) return;
+  if (!assignment) return;
   // params 属于这个用途而不是某一条路由，换主路由时留在原地，
   // 不能跟着原来的主路由一起挪进后备。
   const { fallbacks = [], params, routing_strategy, ...primary } = assignment;
@@ -5248,28 +5307,29 @@ async function save(): Promise<void> {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
     if (!role && (row.key === "media_parse" || row.key === "embedding" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
-    // 跟随对话的那几档没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
-    if (row.key !== "chat" && role?.follow_chat) continue;
+    // 整档跟随对话没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
+    if (row.key !== "chat" && isPureFollowChat(role)) continue;
+    const primaryFollowsChat = row.key !== "chat" && !!role?.follow_chat;
     const modelError = (message: string) => {
       editorTab.value = "model";
       selectedModelRole.value = row.key;
       toastError(message);
     };
-    if (!role || (!role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
+    if (!role || (!primaryFollowsChat && !role.profile_id && !role.group && !(role.provider_id && role.model_id))) {
       editorTab.value = "model";
       modelError(`${row.label}必须选择提供商和模型`);
       return;
     }
-    if (!role.model.trim()) {
+    if (!primaryFollowsChat && !role.model.trim()) {
       modelError(`${row.label}模型尚未选择`);
       return;
     }
-    if (!role.disabled && !role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
+    if (!primaryFollowsChat && !role.disabled && !role.provider_id && !role.model_id && !roleModelIsSelectable(row.key, role.model.trim())) {
       modelError(`${row.label}模型 ${role.model.trim()} 不在当前提供商的模型列表中，请重新选择`);
       return;
     }
     for (const [index, fallback] of (role.fallbacks ?? []).entries()) {
-      if (fallback.disabled) continue;
+      if (fallback.disabled || (row.key !== "chat" && fallback.follow_chat)) continue;
       if ((!fallback.profile_id && !fallback.group && !(fallback.provider_id && fallback.model_id)) || !fallback.model.trim()) {
         modelError(`${row.label}后备 ${index + 1} 尚未完整选择`);
         return;
@@ -5298,12 +5358,14 @@ async function save(): Promise<void> {
     const modelRoles: BotProfileConfig["model_roles"] = {};
     for (const key of orderedRoleKeys(roleForm.value)) {
       const role = roleForm.value[key as RoleKey];
-      if (key !== "chat" && role?.follow_chat) {
+      if (key !== "chat" && isPureFollowChat(role)) {
         modelRoles[key] = { model: "", follow_chat: true };
         continue;
       }
-      if (role && (role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()) {
+      const followsChat = key !== "chat" && !!role?.follow_chat;
+      if (role && (followsChat || ((role.profile_id || role.group || (role.provider_id && role.model_id)) && role.model.trim()))) {
         modelRoles[key] = {
+        follow_chat_route: followsChat || undefined,
         profile_id: role.profile_id,
         group: role.group,
         model: role.model.trim(),
@@ -5312,7 +5374,8 @@ async function save(): Promise<void> {
         routing_strategy: role.routing_strategy,
         weight: role.weight,
         disabled: role.disabled,
-        fallbacks: role.fallbacks?.map((fallback) => ({ ...fallback, model: fallback.model.trim() })),
+        // 对话自己不能跟随对话，混进来的跟随行保存时去掉（后端也会再去一次）。
+        fallbacks: role.fallbacks?.filter((fallback) => key !== "chat" || !fallback.follow_chat).map((fallback) => (fallback.follow_chat ? { model: "", follow_chat_route: true, weight: fallback.weight, disabled: fallback.disabled, standby: fallback.standby } : { ...fallback, model: fallback.model.trim() })),
         params: role.params,
         reasoning_effort: role.reasoning_effort || undefined
       };
