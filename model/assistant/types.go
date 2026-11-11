@@ -772,9 +772,12 @@ type BotConfig struct {
 	MaiBotReplyStyle string `json:"maibot_reply_style,omitempty"`
 	// ReplyFilterRules 是主人写的正则，命中的内容在发送前从回复里删掉，见 reply_filter.go。
 	// 不带 omitempty：nil 表示没设置过、补上默认规则，空列表表示主人清空了，要原样存住。
-	ReplyFilterRules []string     `json:"reply_filter_rules"`
-	ResponseMode     ResponseMode `json:"response_mode,omitempty"`
-	ReplyStyle       ReplyStyle   `json:"reply_style,omitempty"`
+	ReplyFilterRules []string `json:"reply_filter_rules"`
+	// ReplySplitRules 是分条正则：命中处另起一条消息，见 reply_split_rules.go。
+	// nil / 空列表的区别同 ReplyFilterRules。
+	ReplySplitRules []string     `json:"reply_split_rules"`
+	ResponseMode    ResponseMode `json:"response_mode,omitempty"`
+	ReplyStyle      ReplyStyle   `json:"reply_style,omitempty"`
 	// 下面几项是 SOUL.md 之前的人设字段，只在读旧配置时出现：WithDefaults 把它们
 	// 并进 SystemPrompt 后清空，见 persona_legacy.go。
 	Soul                     *PersonaSoul `json:"soul,omitempty"`
@@ -1566,6 +1569,7 @@ type ConfigPayload struct {
 	ReplyComposer                  string               `json:"reply_composer,omitempty"`
 	MaiBotReplyStyle               string               `json:"maibot_reply_style,omitempty"`
 	ReplyFilterRules               []string             `json:"reply_filter_rules"`
+	ReplySplitRules                []string             `json:"reply_split_rules"`
 	ReplyToneDefault               string               `json:"reply_tone_default,omitempty"`
 	ResponseMode                   ResponseMode         `json:"response_mode,omitempty"`
 	ReplyStyle                     ReplyStyle           `json:"reply_style,omitempty"`
@@ -2264,6 +2268,7 @@ func DefaultBotConfig() BotConfig {
 	return BotConfig{
 		StickerReplyOrder:       StickerReplyOrderBefore,
 		ReplyFilterRules:        defaultReplyFilterRules(),
+		ReplySplitRules:         defaultReplySplitRules(),
 		Name:                    DefaultProfileName,
 		Platform:                DefaultPlatform,
 		Enabled:                 false,
@@ -2405,6 +2410,11 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 		cfg.ReplyComposer = ""
 	}
 	cfg.MaiBotReplyStyle = strings.TrimSpace(cfg.MaiBotReplyStyle)
+	if cfg.ReplySplitRules == nil {
+		cfg.ReplySplitRules = defaults.ReplySplitRules
+	} else {
+		cfg.ReplySplitRules = cleanStrings(cfg.ReplySplitRules)
+	}
 	if cfg.ReplyFilterRules == nil {
 		cfg.ReplyFilterRules = defaults.ReplyFilterRules
 	} else {
@@ -2731,6 +2741,9 @@ func (cfg BotConfig) Validate() error {
 	if err := validateReplyFilterRules(cleanStrings(cfg.ReplyFilterRules)); err != nil {
 		return err
 	}
+	if err := validateReplySplitRules(cleanStrings(cfg.ReplySplitRules)); err != nil {
+		return err
+	}
 	if cfg.OneBotTransport == "" {
 		cfg.OneBotTransport = OneBotTransportReverseWS
 	}
@@ -2911,6 +2924,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplyComposer:                   cfg.ReplyComposer,
 		MaiBotReplyStyle:                cfg.MaiBotReplyStyle,
 		ReplyFilterRules:                cloneReplyFilterRules(cfg.ReplyFilterRules),
+		ReplySplitRules:                 cloneReplyFilterRules(cfg.ReplySplitRules),
 		ReplyToneDefault:                DefaultReplyTone,
 		ResponseMode:                    cfg.ResponseMode,
 		ReplyStyle:                      cfg.ReplyStyle,
@@ -3170,6 +3184,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplyComposer:                   payload.ReplyComposer,
 		MaiBotReplyStyle:                payload.MaiBotReplyStyle,
 		ReplyFilterRules:                cloneReplyFilterRules(payload.ReplyFilterRules),
+		ReplySplitRules:                 cloneReplyFilterRules(payload.ReplySplitRules),
 		ResponseMode:                    payload.ResponseMode,
 		ReplyStyle:                      payload.ReplyStyle,
 		DebugModeEnabled:                copyBoolPointer(payload.DebugModeEnabled),

@@ -288,6 +288,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_tone_default?: string;
   /** 回复过滤正则，每条命中的内容在发送前从回复里删掉。 */
   reply_filter_rules?: string[];
+  reply_split_rules?: string[];
   response_mode?: "quiet" | "assistant" | "standard" | "active" | "super_active" | "custom";
   /** 记录完整模型上下文、工具参数和调用结果；默认关闭。 */
   debug_mode_enabled?: boolean;

@@ -9669,7 +9669,7 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 		body := strings.Join(singleChatReply(reply, 0), "\n")
 		return chunkTextByLength(formatReplyLineBreaks(body, limits.LineBreakMode), limits.ChunkSize)
 	}
-	reply = normalizeExplicitReplyLayout(reply)
+	reply = normalizeExplicitReplyLayout(applyReplySplitRules(limits.SplitRules, reply))
 	if reply == "" {
 		return nil
 	}
@@ -9741,6 +9741,8 @@ type chatSplitLimits struct {
 	LineSplit bool
 	// KeepPeriods 保留句号：语音通话的回复要念出来，句号是断句和停顿的地方。
 	KeepPeriods bool
+	// SplitRules 是主人配置的分条正则，命中处另起一条，见 reply_split_rules.go。
+	SplitRules []string
 }
 
 func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
@@ -9753,6 +9755,7 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 		PreserveSoftNewlines: !natural,
 		PreserveBlankLines:   PlatformSupportsRichText(cfg.Platform),
 		LineSplit:            boolValue(cfg.ReplyLineSplitEnabled, false),
+		SplitRules:           cfg.ReplySplitRules,
 	}
 }
 
