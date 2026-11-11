@@ -50,12 +50,8 @@ func newQQL1124Server(t *testing.T) *qqL1124Server {
 			fmt.Fprint(w, `{"code":0,"msg":"ok","data":{"expiration":80400,"data":[{"mid":"003OUlho2HcRHC","filename":"M500003OUlho2HcRHC003OUlho2HcRHC.mp3","purl":"M500003OUlho2HcRHC.mp3?vkey=abc","vkey":"abc","ekey":"","result":0}]}}`)
 		case r.URL.Path == "/login/check_expired":
 			srv.checkHits.Add(1)
-			// 照搬 Web 层对 bool 的包装：true（已过期）是 code 0。
-			if srv.expired.Load() {
-				fmt.Fprint(w, `{"code":0,"msg":"ok","data":null}`)
-				return
-			}
-			fmt.Fprint(w, `{"code":-1,"msg":"操作失败"}`)
+			// 真实接口：成功统一 code 0，结果在 data.expired。
+			fmt.Fprintf(w, `{"code":0,"msg":"ok","data":{"expired":%t}}`, srv.expired.Load())
 		case r.URL.Path == "/login/refresh_credential":
 			srv.refreshHits.Add(1)
 			// 让并发请求有机会撞在一起。
@@ -215,6 +211,40 @@ func TestQQSelfHostedSkipsRefreshWhileCredentialValid(t *testing.T) {
 	}
 	if srv.checkHits.Load() != 1 || srv.refreshHits.Load() != 0 {
 		t.Fatalf("check_expired %d times, refresh %d times; want 1 and 0", srv.checkHits.Load(), srv.refreshHits.Load())
+	}
+}
+
+// /login/check_expired 成功时统一 code 0，是否过期在 data.expired；旧实现把
+// code 0 当成已过期，会把一份没过期的凭据也拿去续期。这里把线上见过的几种
+// data 形状都固定下来。
+func TestQQSelfHostedCheckExpiredReadsExpiredData(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"过期", `{"code":0,"msg":"ok","data":{"expired":true}}`, true},
+		{"未过期", `{"code":0,"msg":"ok","data":{"expired":false}}`, false},
+		{"data 直接是布尔 true", `{"code":0,"msg":"ok","data":true}`, true},
+		{"data 直接是布尔 false", `{"code":0,"msg":"ok","data":false}`, false},
+		{"旧版 data null", `{"code":0,"msg":"ok","data":null}`, true},
+		{"接口失败", `{"code":-1,"msg":"操作失败"}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				fmt.Fprint(w, tc.body)
+			}))
+			t.Cleanup(server.Close)
+			source := &qqSource{musicuAPI: server.URL + "/official-unused?data=%s", streamCDN: "https://cdn.example.invalid/"}
+			fetcher := &musicFetcher{client: server.Client()}
+			const cookie = "musicid=10001; musickey=Q_H_L_old; refresh_key=rk-old"
+			cfg := qqSelfHostedTestConfig(server.URL, cookie)
+			if got := source.credentialExpired(context.Background(), fetcher, cfg, server.URL, cookie); got != tc.want {
+				t.Fatalf("credentialExpired() = %v, want %v（响应 %s）", got, tc.want, tc.body)
+			}
+		})
 	}
 }
 
