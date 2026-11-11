@@ -19,7 +19,7 @@ function setup(profiles = [{ id: "p1", name: "主提供商", provider: "openai_c
     testLLM: async (message, config, mode = "text") => { calls.push({ mode, message, config }); return { text: "custom reply", usage: { input_tokens: 12, output_tokens: 34 } }; },
     testLLMImage: async (message, config) => { calls.push({ mode: "image", message, config }); return { images: ["https://example.com/result.png"], model: config.model }; }
   });
-  for (const name of ["modelRouteTestKey", "modelRouteTestable", "testModelRoute", "runModelRouteTest"]) {
+  for (const name of ["modelRouteTestKey", "modelRouteTestable", "modelRouteTestDefaultMessage", "setModelRouteTestKind", "testModelRoute", "runModelRouteTest"]) {
     const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name);
     vm.runInContext(ts.transpileModule(fn.getText(ast), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   }
@@ -62,6 +62,22 @@ test("vision routes send the probe image request instead of plain text", async (
   context.testModelRoute("chat", { profile_id: "p1", model: "chat" });
   await context.runModelRouteTest();
   assert.equal(calls[1].mode, "text");
+});
+
+test("switching test kind changes request mode and swaps untouched default messages", async () => {
+  const { context, calls } = setup();
+  context.testModelRoute("chat", { profile_id: "p1", model: "eyes" });
+  const target = context.modelRouteTestTarget.value;
+  assert.equal(target.kind, "text");
+  context.setModelRouteTestKind("vision");
+  assert.equal(target.message, "vision message");
+  await context.runModelRouteTest();
+  assert.equal(calls[0].mode, "vision");
+  target.message = "我自己写的";
+  context.setModelRouteTestKind("image");
+  assert.equal(target.message, "我自己写的");
+  await context.runModelRouteTest();
+  assert.equal(calls[1].mode, "image");
 });
 
 test("empty prompts and duplicate clicks do not trigger requests", async () => {
