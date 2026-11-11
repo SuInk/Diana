@@ -28,6 +28,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -164,43 +165,52 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
-	system, messages := splitSystemPrompt(req.Messages)
-	input := openAIResponsesInput(messages, req.Tools)
-	if len(input) == 0 {
-		return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
+	open := func(req GenerateRequest) (*ssestream.Stream[responses.ResponseStreamEventUnion], error) {
+		system, messages := splitSystemPrompt(req.Messages)
+		input := openAIResponsesInput(messages, req.Tools)
+		if len(input) == 0 {
+			return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
+		}
+		params := responses.ResponseNewParams{
+			Model: shared.ResponsesModel(req.Model),
+			Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
+		}
+		if req.PromptCacheKey != "" {
+			params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
+		}
+		if system != "" {
+			params.Instructions = param.NewOpt(system)
+		}
+		if req.Temperature != nil {
+			params.Temperature = param.NewOpt(*req.Temperature)
+		}
+		if req.ReasoningEffort != "" {
+			params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(req.ReasoningEffort)}
+		}
+		if req.MaxOutputTokens > 0 {
+			params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
+		}
+		params.Tools = openAIResponseTools(req.Tools)
+		params.ToolChoice = openAIResponseToolChoice(req)
+		if len(req.Tools) > 0 {
+			params.ParallelToolCalls = param.NewOpt(false)
+		}
+		return c.client.Responses.NewStreaming(ctx, params, c.sessionAffinityRequestOptions(req.PromptCacheKey)...), nil
 	}
-	params := responses.ResponseNewParams{
-		Model: shared.ResponsesModel(req.Model),
-		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: input},
+	stream, err := open(req)
+	if err != nil {
+		return nil, err
 	}
-	if req.PromptCacheKey != "" {
-		params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
-	}
-	if system != "" {
-		params.Instructions = param.NewOpt(system)
-	}
-	if req.Temperature != nil {
-		params.Temperature = param.NewOpt(*req.Temperature)
-	}
-	if req.ReasoningEffort != "" {
-		params.Reasoning = shared.ReasoningParam{Effort: shared.ReasoningEffort(req.ReasoningEffort)}
-	}
-	if req.MaxOutputTokens > 0 {
-		params.MaxOutputTokens = param.NewOpt(req.MaxOutputTokens)
-	}
-	params.Tools = openAIResponseTools(req.Tools)
-	params.ToolChoice = openAIResponseToolChoice(req)
-	if len(req.Tools) > 0 {
-		params.ParallelToolCalls = param.NewOpt(false)
-	}
-	stream := c.client.Responses.NewStreaming(ctx, params, c.sessionAffinityRequestOptions(req.PromptCacheKey)...)
 	out := make(chan ChatEvent, 8)
 	go func() {
 		defer close(out)
 		defer recoverChatStreamPanic(ctx, out, "openai-compatible responses")
 
-		defer stream.Close()
-		type pendingCall struct{ id, name, arguments string }
+		defer func() { stream.Close() }()
+		type pendingCall struct {
+			id, name, arguments string
+			custom              bool
+		}
 		pending := map[string]*pendingCall{}
 		order := []string{}
 		var completed *GenerateResponse
@@ -215,13 +225,48 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		}
 		emit := func(event ChatEvent) bool { return sendChatEvent(ctx, out, event) }
 		fail := func(message string) { emit(ChatEvent{Type: ChatEventError, Error: message}) }
-		for stream.Next() {
+		// 网关不认自定义工具（DeepSeek 只认 apply_patch）时请求一开头就被拒，什么事件都
+		// 还没收到：这时去掉自定义工具重开一次，并记住这个端点不支持，下次直接按函数发。
+		// 流已经开始吐内容就不能再重来，照常报错。
+		next := stream.Next()
+		if !next && requestHasFreeformTools(req) && customToolsRejected(stream.Err()) {
+			stream.Close()
+			stripped, _ := stripFreeformTools(req)
+			reopened, err := open(stripped)
+			if err != nil {
+				fail(err.Error())
+				return
+			}
+			req, stream = stripped, reopened
+			next = stream.Next()
+			if next {
+				c.rememberSuccessfulDowngrades(req, map[string]bool{downgradeFieldCustomTools: true})
+			}
+		}
+		for ; next; next = stream.Next() {
 			event := stream.Current()
 			switch event.Type {
 			case "response.output_item.added", "response.output_item.done":
 				if event.Type == "response.output_item.done" {
 					if raw := event.Item.RawJSON(); raw != "" {
 						outputItems = append(outputItems, json.RawMessage(raw))
+					}
+				}
+				if event.Item.Type == "custom_tool_call" {
+					if event.Type == "response.output_item.added" && !emit(ChatEvent{Type: ChatEventProgress}) {
+						return
+					}
+					item := event.Item.AsCustomToolCall()
+					call := ensure(item.ID)
+					call.custom = true
+					if item.Name != "" {
+						call.name = item.Name
+					}
+					if item.CallID != "" {
+						call.id = item.CallID
+					}
+					if event.Type == "response.output_item.done" {
+						call.arguments = item.Input
 					}
 				}
 				if event.Item.Type == "function_call" {
@@ -257,6 +302,17 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 				if !emit(ChatEvent{Type: ChatEventProgress}) {
 					return
 				}
+			case "response.custom_tool_call_input.delta":
+				call := ensure(event.ItemID)
+				call.custom = true
+				call.arguments += event.Delta
+				if !emit(ChatEvent{Type: ChatEventProgress}) {
+					return
+				}
+			case "response.custom_tool_call_input.done":
+				call := ensure(event.ItemID)
+				call.custom = true
+				call.arguments = event.Input
 			case "response.function_call_arguments.done":
 				call := ensure(event.ItemID)
 				call.arguments = event.Arguments
@@ -268,6 +324,15 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 				return
 			case "response.completed":
 				for _, item := range event.Response.Output {
+					if item.Type == "custom_tool_call" {
+						value := item.AsCustomToolCall()
+						call := ensure(value.ID)
+						call.custom = true
+						call.id = value.CallID
+						call.name = value.Name
+						call.arguments = value.Input
+						continue
+					}
 					if item.Type != "function_call" {
 						continue
 					}
@@ -306,6 +371,11 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 			if strings.TrimSpace(raw.name) == "" {
 				fail("llm: malformed responses stream: function call name is missing")
 				return
+			}
+			if raw.custom {
+				field := firstNonEmptyString(freeformFields(req.Tools)[raw.name], fieldForCustomCall(raw.name), "input")
+				calls = append(calls, ToolCall{ID: firstNonEmptyString(raw.id, key), Name: nativeToolName(raw.name, req.Tools), Arguments: freeformArguments(field, raw.arguments)})
+				continue
 			}
 			if strings.TrimSpace(raw.arguments) != "" {
 				if err := json.Unmarshal([]byte(raw.arguments), &args); err != nil || args == nil {
@@ -1362,7 +1432,7 @@ func openAIResponseFromEventStream(body []byte) *responses.Response {
 
 func openAIResponseHasFunctionCall(output []responses.ResponseOutputItemUnion) bool {
 	for _, item := range output {
-		if item.Type == "function_call" {
+		if item.Type == "function_call" || item.Type == "custom_tool_call" {
 			return true
 		}
 	}
@@ -2202,7 +2272,7 @@ func repairResponsesFunctionPairs(messages []Message) []Message {
 					ID     string `json:"id"`
 					CallID string `json:"call_id"`
 				}
-				if err := json.Unmarshal(raw, &head); err != nil || head.Type != "function_call" {
+				if err := json.Unmarshal(raw, &head); err != nil || (head.Type != "function_call" && head.Type != "custom_tool_call") {
 					items = append(items, raw)
 					continue
 				}
@@ -2294,9 +2364,12 @@ func responsesFunctionCallID(id string) string {
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
 	messages = inlineTrailingSystemMessages(repairResponsesFunctionPairs(messages))
 	out := make(responses.ResponseInputParam, 0, len(messages))
+	fields := freeformFields(definitions)
+	// custom 记下按自定义工具发的 call_id：结果必须用同型的 custom_tool_call_output。
+	custom := map[string]bool{}
 	for _, msg := range messages {
 		if msg.Role == RoleAssistant && len(msg.ResponsesOutput) > 0 {
-			for _, raw := range msg.ResponsesOutput {
+			for _, raw := range normalizeFreeformItems(msg.ResponsesOutput, fields, custom) {
 				if len(bytes.TrimSpace(raw)) == 0 {
 					continue
 				}
@@ -2306,12 +2379,21 @@ func openAIResponsesInput(messages []Message, definitions []ToolDefinition) resp
 		}
 		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
 			for _, call := range msg.ToolCalls {
+				if field, ok := fields[call.Name]; ok {
+					custom[call.ID] = true
+					out = append(out, responses.ResponseInputItemParamOfCustomToolCall(call.ID, freeformInput(field, call.Arguments), wireToolName(call.Name)))
+					continue
+				}
 				arguments, _ := json.Marshal(call.Arguments)
 				out = append(out, responses.ResponseInputItemParamOfFunctionCall(string(arguments), call.ID, wireToolName(call.Name)))
 			}
 			continue
 		}
 		if msg.Role == RoleTool {
+			if custom[msg.ToolCallID] {
+				out = append(out, responses.ResponseInputItemParamOfCustomToolCallOutput(msg.ToolCallID, msg.Content))
+				continue
+			}
 			out = append(out, responses.ResponseInputItemParamOfFunctionCallOutput(msg.ToolCallID, msg.Content))
 			continue
 		}
@@ -2378,8 +2460,13 @@ func openAIResponsesOutputItems(output []responses.ResponseOutputItemUnion) []js
 }
 
 func openAIResponseTools(definitions []ToolDefinition) []responses.ToolUnionParam {
+	rememberFreeformFields(definitions)
 	tools := make([]responses.ToolUnionParam, 0, len(definitions))
 	for _, definition := range strictToolDefinitions(definitions) {
+		if definition.Freeform != nil {
+			tools = append(tools, openAIResponseCustomTool(definition))
+			continue
+		}
 		tools = append(tools, responses.ToolUnionParam{OfFunction: &responses.FunctionToolParam{
 			Name: wireToolName(definition.Name), Description: param.NewOpt(definition.Description), Parameters: definition.Parameters, Strict: param.NewOpt(definition.Strict),
 		}})
@@ -2389,7 +2476,17 @@ func openAIResponseTools(definitions []ToolDefinition) []responses.ToolUnionPara
 
 func openAIResponseToolCalls(output []responses.ResponseOutputItemUnion, definitions []ToolDefinition) []ToolCall {
 	calls := make([]ToolCall, 0)
+	fields := freeformFields(definitions)
 	for _, item := range output {
+		if item.Type == "custom_tool_call" {
+			custom := item.AsCustomToolCall()
+			if strings.TrimSpace(custom.Name) == "" {
+				continue
+			}
+			field := firstNonEmptyString(fields[custom.Name], fieldForCustomCall(custom.Name), "input")
+			calls = append(calls, ToolCall{ID: firstNonEmptyString(custom.CallID, custom.ID), Name: nativeToolName(custom.Name, definitions), Arguments: freeformArguments(field, custom.Input)})
+			continue
+		}
 		call := item.AsFunctionCall()
 		if strings.TrimSpace(call.Name) == "" {
 			continue

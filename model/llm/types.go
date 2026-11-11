@@ -124,6 +124,19 @@ type ToolDefinition struct {
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters"`
 	Strict      bool           `json:"strict,omitempty"`
+	// Freeform 让支持的上游把这个工具当成「原始文本输入」的自定义工具发（OpenAI
+	// Responses 的 custom tool + Lark 文法），模型直接写文本，不再包进 JSON 字符串。
+	// 模型写的文本落进 Arguments[Freeform.Field]，调用方照常按 Parameters 取参数。
+	// 不支持的上游（其他协议、拒绝自定义工具的网关）照旧按 Parameters 发普通函数工具。
+	Freeform *FreeformTool `json:"-"`
+}
+
+// FreeformTool 描述原始文本输入：Field 是文本落进的参数名，Grammar 是 Lark 文法，
+// Hint 只在按原始文本发时接在工具描述后面（比如怎么写选项行）。
+type FreeformTool struct {
+	Field   string
+	Grammar string
+	Hint    string
 }
 
 type ToolCall struct {

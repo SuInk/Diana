@@ -885,6 +885,12 @@ func (r *ToolRegistry) Definitions() []llm.ToolDefinition {
 	return definitions
 }
 
+// FreeformInputTool 是可以让模型直接写原始文本（不包进 JSON 字符串）的工具，见
+// llm.ToolDefinition.Freeform。上游不支持时照旧按 InputSchema 发普通函数工具。
+type FreeformInputTool interface {
+	FreeformInput() *llm.FreeformTool
+}
+
 // ToolDefinitionFor 渲染一个工具的原生声明。档位界面按它估算常驻的开销，估的就是
 // 请求里真正发出去的那份，不是另算一套。
 func ToolDefinitionFor(tool Tool) llm.ToolDefinition {
@@ -899,7 +905,11 @@ func ToolDefinitionFor(tool Tool) llm.ToolDefinition {
 	if typed, ok := tool.(StrictDecodingTool); ok && typed.PrefersStrictDecoding() {
 		strict = true
 	}
-	return llm.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict}
+	definition := llm.ToolDefinition{Name: tool.Name(), Description: tool.Description(), Parameters: schema, Strict: strict}
+	if freeform, ok := tool.(FreeformInputTool); ok {
+		definition.Freeform = freeform.FreeformInput()
+	}
+	return definition
 }
 
 // ResidencyCost 报告一个工具两档各占多少 token：常驻是整份原生声明，按需是目录里

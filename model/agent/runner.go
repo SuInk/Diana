@@ -1381,6 +1381,12 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
 	}
 
+	// 照 Pi（earendil-works/pi 的 codemode 扩展）只在系统提示词加这一条：codemode 的工具
+	// 描述里讲怎么写，这里讲什么时候该用。以前只写在描述里，生产上 codemode 只占工具
+	// 调用的 2～7%，模型一步一个调用地查历史、读网页，每步都要等它想一遍。
+	if hasTool(codeModeToolName) {
+		rules = append(rules, "- 用 codemode 把互不依赖的几次工具调用一起发（Promise.allSettled）、把要接着做的几步串起来，或从大结果里只挑要用的，不要一次次单独调。")
+	}
 	// 单个工具怎么用写在它自己的描述和参数说明里（docs/tool-descriptions.md）；这里只留
 	// 跨工具的选择和流程。
 	if hasTool(subtaskToolName) {
