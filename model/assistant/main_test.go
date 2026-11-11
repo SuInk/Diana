@@ -36,6 +36,8 @@ func TestMain(m *testing.M) {
 		panic(err)
 	}
 	_ = os.Setenv("APP_DB_PATH", filepath.Join(workspaceRoot, "app.db"))
+	// 续接记录落盘对整包关掉，见 appendContextPersistDisabled。
+	appendContextPersistDisabled.Store(true)
 	// 分词词典是后台异步加载的,不等它就绪的话,选词结果会随测试时序漂移:
 	// 同一条用例可能这次用上词典词、下次只有 n-gram。统一开启并等到就绪,
 	// 测试面对的就是开着词典分词的线上稳态。

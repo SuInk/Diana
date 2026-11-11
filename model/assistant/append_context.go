@@ -202,25 +202,38 @@ func unsentTail(log *appendContextLog, content string) string {
 type appendContextStore struct {
 	mu   sync.Mutex
 	logs map[string]*appendContextLog
+	// loaded 记着哪些会话已经试过从磁盘读回，同一个会话只读一次。
+	loaded map[string]bool
+	// disk 落盘续接记录，见 append_context_persist.go。零值按 APP_DB_PATH 定位。
+	disk appendContextDisk
 }
 
 func (s *appendContextStore) get(key string) *appendContextLog {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.logs[key]
+	if log, ok := s.logs[key]; ok || s.loaded[key] {
+		return log
+	}
+	if s.loaded == nil {
+		s.loaded = map[string]bool{}
+	}
+	s.loaded[key] = true
+	// 进程重启后这个会话第一次回复：记录只在内存里的话只能整份重新组装，首步缓存
+	// 基本落空（11-07～11-09 生产 141 次，四分之三没命中）。从磁盘读回上一次的。
+	log := s.disk.load(key)
+	if log != nil {
+		if s.logs == nil {
+			s.logs = map[string]*appendContextLog{}
+		}
+		s.logs[key] = log
+	}
+	return log
 }
 
 func (s *appendContextStore) put(key string, log *appendContextLog) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.logs == nil {
-		s.logs = map[string]*appendContextLog{}
-	}
-	if log == nil {
-		delete(s.logs, key)
-		return
-	}
-	s.logs[key] = log
+	s.setLocked(key, log)
 }
 
 // restore 把 key 的记录从 written 换回 previous；记录已经被别的轮次换掉时不动。
@@ -230,11 +243,23 @@ func (s *appendContextStore) restore(key string, written, previous *appendContex
 	if s.logs[key] != written {
 		return
 	}
-	if previous == nil {
-		delete(s.logs, key)
-		return
+	s.setLocked(key, previous)
+}
+
+func (s *appendContextStore) setLocked(key string, log *appendContextLog) {
+	if s.logs == nil {
+		s.logs = map[string]*appendContextLog{}
 	}
-	s.logs[key] = previous
+	if s.loaded == nil {
+		s.loaded = map[string]bool{}
+	}
+	s.loaded[key] = true
+	if log == nil {
+		delete(s.logs, key)
+	} else {
+		s.logs[key] = log
+	}
+	s.disk.save(key, log)
 }
 
 // appendContextUndo 记下一次回复尝试写进续接记录的那份和写之前的那份。记录在 Agent
@@ -314,15 +339,22 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey,
-		seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{}, memory: map[string]bool{}, pieces: map[string]bool{}}
+	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)
 	case previous != nil:
 		log.overhead = previous.overhead
 	}
-	for _, message := range resp.Transcript {
+	log.index()
+	return log
+}
+
+// index 从 prefix 算出 seen、sent、latest、memory、pieces 这几张表。它们完全由 prefix 决定，
+// 落盘时只存 prefix，读回来再算一遍。
+func (log *appendContextLog) index() {
+	log.seen, log.sent, log.latest, log.memory, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}, map[string]bool{}
+	for _, message := range log.prefix {
 		content := appendContextText(message)
 		log.seen[content] = true
 		for _, call := range message.ToolCalls {
@@ -354,7 +386,6 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 			}
 		}
 	}
-	return log
 }
 
 // appendContextSentKey 是判断机器人回复是否已在记录里的键，去掉开头的引用标记。
