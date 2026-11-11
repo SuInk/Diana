@@ -107,3 +107,23 @@ test("balancing edits survive incoming model updates and explicit adoption loads
     assert.equal(context.roleForm.value.chat.fallbacks[0].standby, true);
   }
 });
+
+test("loading keeps legacy whole-role follow separate from follow rows mixed into a route list", () => {
+  const context = editorContext();
+  context.setRoleForm({
+    chat: { profile_id: "p", model: "m" },
+    // 旧配置：整档跟随带着残留后备，后端不认这些后备，页面也不能把它们当成混排。
+    vision: { model: "", follow_chat: true, fallbacks: [{ profile_id: "old", model: "old" }] },
+    intent: { model: "", follow_chat_route: true, routing_strategy: "failover", fallbacks: [{ profile_id: "p", model: "m", standby: true }] },
+    background: { profile_id: "p", model: "m", fallbacks: [{ model: "", follow_chat_route: true, disabled: true }] }
+  });
+  const roles = JSON.parse(JSON.stringify(context.roleForm.value));
+  assert.deepEqual(roles.vision, { model: "", follow_chat: true });
+  assert.equal(roles.intent.follow_chat, true);
+  assert.equal(roles.intent.routing_strategy, "failover");
+  assert.equal(roles.intent.fallbacks[0].standby, true);
+  assert.deepEqual(roles.background.fallbacks[0], { model: "", follow_chat: true, disabled: true });
+  // 服务端原样回来的那份和载入后的草稿算作同一版，不误报「别处改过」。
+  context.syncModelRolesWhileEditing({ id: "bot", model_roles: { chat: { profile_id: "p", model: "m" }, vision: { model: "", follow_chat: true, fallbacks: [{ profile_id: "old", model: "old" }] }, intent: { model: "", follow_chat_route: true, routing_strategy: "failover", fallbacks: [{ profile_id: "p", model: "m", standby: true }] }, background: { profile_id: "p", model: "m", fallbacks: [{ model: "", follow_chat_route: true, disabled: true }] } } });
+  assert.equal(context.modelRolesChangedElsewhere.value, false);
+});

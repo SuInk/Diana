@@ -809,19 +809,58 @@ code {
   font-family: var(--font-mono);
 }
 
-/* 超时和看图方式收成一行摘要，点开再改。 */
+/* 超时和看图方式、搜索选项收成一行摘要，点开再改。 */
 .model-role-extras {
   margin-top: 14px;
   font-size: 12.5px;
 }
 
-.model-role-extras > summary {
+.model-role-extras > summary,
+.search-routing-options > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 4px 6px;
+  margin-left: -6px;
+  border-radius: var(--radius-sm);
+  list-style: none;
   cursor: pointer;
   color: var(--text-secondary);
 }
 
-.model-role-extras > summary span {
-  margin-left: 10px;
+.model-role-extras > summary::-webkit-details-marker,
+.search-routing-options > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 用和「用途与调度说明」一样的箭头，焦点框只包住文字，不再撑满整行越出卡片。 */
+.model-role-extras > summary::before,
+.search-routing-options > summary::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.18s ease;
+}
+
+.model-role-extras[open] > summary::before,
+.search-routing-options[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+.model-role-extras > summary:hover,
+.search-routing-options > summary:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.model-role-extras > summary span,
+.search-routing-options > summary span {
+  margin-left: 3px;
   color: var(--accent);
 }
 
@@ -914,34 +953,16 @@ code {
   font-size: 11px;
   line-height: 1.8;
 }
-.model-inherited-state {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 20px 16px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-}
-.model-inherited-state > svg {
+.model-route-follow-icon {
   flex: none;
   color: var(--accent);
 }
-.model-inherited-state > div {
-  flex: 1;
-  min-width: 0;
+.model-route-follow-name {
+  font-family: inherit;
+  font-weight: 600;
 }
-.model-inherited-state strong {
-  font-size: 12px;
-}
-.model-inherited-state p {
-  margin: 7px 0 0;
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.6;
-}
-.model-inherited-state > button {
-  flex: none;
+.model-route-default-row .model-route-follow-name {
+  font-size: 12.5px;
 }
 .model-route-editor {
   gap: 18px;
@@ -1039,12 +1060,6 @@ code {
     display: flex;
     align-items: center;
     justify-content: flex-end;
-  }
-  .model-inherited-state {
-    flex-wrap: wrap;
-  }
-  .model-inherited-state > button {
-    margin-left: 34px;
   }
   .model-route-table td.model-list-empty {
     display: block;
@@ -7447,8 +7462,6 @@ a.nav-action {
 .search-route-warn { color: var(--warn); font-size: 11.5px; white-space: nowrap; }
 .search-route-add { width: auto; min-width: 96px; }
 .search-routing-options { font-size: 12.5px; }
-.search-routing-options > summary { cursor: pointer; color: var(--text-secondary); }
-.search-routing-options > summary span { margin-left: 10px; color: var(--accent); }
 .search-routing-options[open] > summary { margin-bottom: 12px; }
 .model-health-dot {
   flex: none;

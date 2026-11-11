@@ -24,6 +24,7 @@ function loadFunction(name, context) {
     context.accountSafetyRulesDraft ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.accountSafetyRulesDefault ??= { value: FALLBACK_ACCOUNT_SAFETY_RULES };
     context.page ??= { value: "edit" };
+    if (!context.isPureFollowChat) loadFunction("isPureFollowChat", context);
   }
   // 提供商列表在语音两档里还要加上内置服务，用到它的函数都依赖 roleChannels。
   if (["channelOptionsFor", "selectedRoleProfiles", "crossProviderModelOptions"].includes(name) && !context.roleChannels) {
@@ -370,4 +371,38 @@ test("model refresh retains disabled entries and selectors exclude disabled defa
  assert.equal(merged.find(model=>model.id==="off").disabled,true);
  const selectable = context.profileModels({model:"off",image_model:"off",models:merged});
  assert.deepEqual(Array.from(selectable,model=>model.id),["on"]);
+});
+
+// 混排里的跟随行保存成 follow_chat_route；只剩跟随一行的仍存成整档跟随 follow_chat，对话里混进的跟随行去掉。
+test("saving writes mixed follow rows as follow_chat_route and keeps whole-role follow as follow_chat", async () => {
+  let payload;
+  const roleForm = { value: {
+    chat: { profile_id: "p", model: "m", fallbacks: [{ model: "", follow_chat: true }] },
+    vision: { model: "", follow_chat: true },
+    intent: { model: "", follow_chat: true, weight: 2, routing_strategy: "failover", fallbacks: [{ profile_id: "p", model: " m " }] },
+    background: { profile_id: "p", model: "m", fallbacks: [{ model: "", follow_chat: true, standby: true }] }
+  } };
+  const context = vm.createContext({
+    connectionConflict: { value: undefined }, form: { value: { id: "bot-a", platform: "telegram" } },
+    roleForm, visibleModelRoleRows: [], orderedRoleKeys: Object.keys,
+    modelRequestTimeoutDraft: { value: 0 }, walletAutoApproveDraft: { value: "" }, editorTab: { value: "model" }, selectedModelRole: { value: "chat" },
+    sendRetryValidationError: () => "", sendRetryPayload: () => ({}),
+    botImageGenerationLimitsPayload: () => ({}), botVideoGenerationLimitsPayload: () => ({}), mediaGenerationCooldownPayload: () => ({}),
+    isOneBotPlatform: { value: false }, busy: { value: false }, creating: { value: false }, page: { value: "edit" },
+    tokenDrafts: {}, triggersDraft: { value: "" }, welcomeTemplatesDraft: { value: "" }, proactiveGroupsDraft: { value: "" }, proactivePayload: () => undefined, replyFilterRulesDraft: { value: [] }, allowlistDraft: { value: "" }, splitList: () => [], parseTriggerWords,
+    defaultRecallReplyAutoDeleteDelaySeconds: 60, admissionMode: { value: "disabled" }, privateAdmissionMode: { value: "owner_only" }, privateAllowedUsers: { value: [] },
+    toastError: error => assert.fail(error), toastSuccess() {}, profileSet: { value: {} }, residencyPanel: { value: null }, saveMediaBaseURLIfChanged: async () => {},
+    saveBotProfileConfig: async value => { payload = value; return value; }
+  });
+  context.applyConfig = () => {};
+  await loadFunction("save", context)();
+  const roles = JSON.parse(JSON.stringify(payload.model_roles));
+  assert.equal(roles.chat.fallbacks.length, 0);
+  assert.deepEqual(roles.vision, { model: "", follow_chat: true });
+  assert.equal(roles.intent.follow_chat, undefined);
+  assert.equal(roles.intent.follow_chat_route, true);
+  assert.equal(roles.intent.weight, 2);
+  assert.equal(roles.intent.routing_strategy, "failover");
+  assert.equal(roles.intent.fallbacks[0].model, "m");
+  assert.deepEqual(roles.background.fallbacks[0], { model: "", follow_chat_route: true, standby: true });
 });
