@@ -4811,7 +4811,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
 	// 点名的和交接过来的是同一批（见 sender_burst.go）。
 	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
-	event.replyAnchorID = r.replyAnchorEvent(ctx, event).MessageID
+	event.replyQuoteCandidates = r.replyQuoteCandidates(ctx, event)
 	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,

@@ -56,14 +56,32 @@ func TestReplyReferenceSkipsRecalledFollowUp(t *testing.T) {
 	}
 }
 
-func TestReplyDecorationPromptOffersLatestMergedFollowUp(t *testing.T) {
+// auto 档把触发消息和并进来的补充都列成候选，让模型挑回复第一句接的那条。
+func TestReplyDecorationPromptOffersEveryMergedMessage(t *testing.T) {
 	r, _ := replyAnchorTestRuntime(ReplyDecorationAuto)
 	ctx, root, follow := mergedReplyTurn(t, r)
-	root.replyAnchorID = r.replyAnchorEvent(ctx, root).MessageID
+	root.replyQuoteCandidates = r.replyQuoteCandidates(ctx, root)
 
 	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil)
-	if !strings.Contains(prompt, replyMarkerFor(follow.MessageID)) || strings.Contains(prompt, replyMarkerFor(root.MessageID)) {
-		t.Fatalf("auto prompt should offer only the latest merged message:\n%s", prompt)
+	rootAt := strings.Index(prompt, replyMarkerFor(root.MessageID))
+	followAt := strings.Index(prompt, replyMarkerFor(follow.MessageID))
+	if rootAt < 0 || followAt < 0 || rootAt > followAt {
+		t.Fatalf("auto prompt should list the trigger and the follow-up oldest first:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "opus 那版最难听」") || !strings.Contains(prompt, "第一句接的那一条") {
+		t.Fatalf("candidates should carry a snippet and the pick rule:\n%s", prompt)
+	}
+}
+
+// 没有补充时仍是原来那句：指向当前这条消息。
+func TestReplyDecorationPromptSingleCandidateUnchanged(t *testing.T) {
+	r, _ := replyAnchorTestRuntime(ReplyDecorationAuto)
+	root := directedGroupMessage("10001", "user", "我听到了")
+	root.replyQuoteCandidates = r.replyQuoteCandidates(context.Background(), root)
+
+	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil)
+	if !strings.Contains(prompt, replyMarkerFor(root.MessageID)+" 来指向当前这条消息") || strings.Contains(prompt, "候选按时间") {
+		t.Fatalf("single-message turn should keep the plain prompt:\n%s", prompt)
 	}
 }
 
@@ -78,5 +96,26 @@ func TestModelMarkerForMergedFollowUpIsKept(t *testing.T) {
 	}
 	if len(channel.sent) != 1 || channel.sent[0].ReplyMessageID != follow.MessageID {
 		t.Fatalf("model marker for the merged follow-up was dropped: %#v", channel.sent)
+	}
+}
+
+// 补的是一张贴纸：那只是个反应，不进引用候选，on 档自动引用也不挂在它上面
+// （生产 2026-11-12：「欲火焚身」之后甩了张贴纸，回复「这还差不多」挂在了贴纸下面）。
+func TestReplyQuoteCandidatesSkipStickerOnlyFollowUp(t *testing.T) {
+	r, _ := replyAnchorTestRuntime(ReplyDecorationAuto)
+	ctx, root, follow := mergedReplyTurn(t, r)
+	sticker := MessageEvent{
+		Kind: EventKindGroup, GroupID: root.GroupID, UserID: root.UserID, MessageID: "10007", Time: 120,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"file_id": "s1", "sub_type": "telegram_sticker", "summary": "😆"}}},
+	}
+	if _, merged := r.mergeIntoActiveDirectReply(ctx, sticker, ""); !merged {
+		t.Fatal("sticker follow-up not merged")
+	}
+	candidates := r.replyQuoteCandidates(ctx, root)
+	if len(candidates) != 2 || candidates[0].MessageID != root.MessageID || candidates[1].MessageID != follow.MessageID {
+		t.Fatalf("candidates = %#v, want trigger and worded follow-up only", candidates)
+	}
+	if got := r.replyAnchorEvent(ctx, root).MessageID; got != follow.MessageID {
+		t.Fatalf("anchor = %q, want the latest worded follow-up %q", got, follow.MessageID)
 	}
 }

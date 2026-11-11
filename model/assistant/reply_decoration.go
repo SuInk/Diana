@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -98,27 +99,62 @@ func (r *Runtime) autoReferenceBackloggedReply(event MessageEvent) bool {
 	return false
 }
 
-// replyAnchorEvent 是这一轮回复该挂引用的那条消息：同一个人追发并进这一轮的补充里
-// 最晚、还没撤回的一条，没有就是触发消息本身。回复回答的是合并后的整轮，引用却挂在
-// 最早那条上，读的人会以为在回一句早被后话盖过去的旧话（生产 2026-11-03：「我听到了」
-// 之后连发四条点评 opus，回复讲 opus，引用的却是「我听到了」）。
-func (r *Runtime) replyAnchorEvent(ctx context.Context, event MessageEvent) MessageEvent {
-	anchor := event
+// replyQuoteCandidates 是这一轮回复可以挂引用的消息，按时间从旧到新：触发消息本身，
+// 加上同一个人追发并进这一轮、还没撤回的补充。auto 档把它们都列给模型，让模型挑回复
+// 第一句接的那条；以前只给最晚一条，可回复第一句接的常是更早那句（生产 2026-11-12：
+// 「你也是」之后追发「欲火焚身」和一张贴纸，回复「这还差不多」接的是「你也是」，
+// 引用却只能挂在贴纸上）。
+//
+// 只有表情、没有文字的补充不当候选：那多半只是个反应，引用挂在表情下面，读的人会以为
+// 在回那张表情。
+func (r *Runtime) replyQuoteCandidates(ctx context.Context, event MessageEvent) []MessageEvent {
+	candidates := []MessageEvent{event}
 	for _, supplement := range r.directReplySupplements(ctx) {
 		item := supplement.Event
 		if strings.TrimSpace(item.MessageID) == "" || r.inboundTriggerRecalled(item) {
 			continue
 		}
-		if item.Time >= anchor.Time {
-			anchor = item
+		if strings.TrimSpace(historyPlainText(item)) == "" && !pendingEarlierImageOnly(item) {
+			continue
 		}
+		candidates = append(candidates, item)
 	}
-	return anchor
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].Time < candidates[j].Time })
+	return candidates
 }
 
-// replyAnchorMessageID 返回回复构建时定下的引用目标，没定过就是当前消息。
-func replyAnchorMessageID(event MessageEvent) string {
-	return strings.TrimSpace(firstNonEmpty(event.replyAnchorID, event.MessageID))
+// replyAnchorEvent 是 on 档程序自动引用时挂的那条：候选里最晚的一条。程序不看回复
+// 内容，只能按回复回答的是合并后的整轮来挂（生产 2026-11-03：「我听到了」之后连发
+// 四条点评 opus，回复讲 opus，引用的却是「我听到了」）。
+func (r *Runtime) replyAnchorEvent(ctx context.Context, event MessageEvent) MessageEvent {
+	candidates := r.replyQuoteCandidates(ctx, event)
+	return candidates[len(candidates)-1]
+}
+
+// replyQuoteCandidateLimit 是 auto 档提示词里最多列几条引用候选，多了只留最晚的几条。
+const replyQuoteCandidateLimit = 5
+
+// replyQuoteCandidateSnippetRunes 是候选摘录的长度，够认出是哪句就行。
+const replyQuoteCandidateSnippetRunes = 30
+
+// replyQuoteCandidateLines 把可选的引用目标写成「标记：「摘录」」一行一条，交给模型挑。
+func replyQuoteCandidateLines(platform string, candidates []MessageEvent) []string {
+	if len(candidates) > replyQuoteCandidateLimit {
+		candidates = candidates[len(candidates)-replyQuoteCandidateLimit:]
+	}
+	lines := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		id := strings.TrimSpace(item.MessageID)
+		if !replyMarkerIDAcceptable(platform, id) {
+			continue
+		}
+		snippet := truncateRunes(strings.Join(strings.Fields(historyPlainText(item)), " "), replyQuoteCandidateSnippetRunes)
+		if snippet == "" {
+			snippet = "[图片]"
+		}
+		lines = append(lines, "- "+replyMarkerFor(id)+"：「"+snippet+"」")
+	}
+	return lines
 }
 
 // pendingEarlierMessagesLimit 是一轮最多点名承接几条连发。
@@ -284,15 +320,17 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 	case ReplyDecorationAuto:
 		// 平台感知：QQ 官方等平台的 MessageID 不是纯数字，数字校验会把这些平台上
 		// 的提示词全部拦掉，auto 档就永远不会教模型自己写引用（见 replyMarkerIDAcceptable）。
-		// 同一个人追发并进来时候选是最晚那条，回复回答的就是它，见 replyAnchorEvent。
-		if messageID := replyAnchorMessageID(event); replyMarkerIDAcceptable(event.Platform, messageID) {
+		// 同一个人追发并进来时把几条都列出来，由模型挑回复第一句接的那条，见 replyQuoteCandidates。
+		const quoteRules = "整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选，不能猜测、补写或拼接；不能确认目标就省略标记。"
+		if lines := replyQuoteCandidateLines(event.Platform, event.replyQuoteCandidates); len(lines) > 1 {
 			quote = mentionQuoteByModel
-			target := "当前这条消息"
-			if messageID != strings.TrimSpace(event.MessageID) {
-				target = "这一轮里对方最后补的那条消息"
-			}
+			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写一个引用标记；正常一问一答、连续对话时不要引用。"+
+				"这一轮对方连着发了几条，候选按时间从旧到新：\n"+strings.Join(lines, "\n")+
+				"\n要引用就挑你回复第一句接的那一条，不要默认挑最后一条。"+quoteRules)
+		} else if messageID := strings.TrimSpace(event.MessageID); replyMarkerIDAcceptable(event.Platform, messageID) {
+			quote = mentionQuoteByModel
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 "+
-				replyMarkerFor(messageID)+" 来指向"+target+"；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选，不能猜测、补写或拼接；不能确认目标就省略标记。")
+				replyMarkerFor(messageID)+" 来指向当前这条消息；正常一问一答、连续对话时不要引用。"+quoteRules)
 		}
 	}
 	if mentionUserMode(cfg) == ReplyDecorationAuto {
