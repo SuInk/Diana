@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
@@ -1466,8 +1467,8 @@ func TestExtendInboundLeaseOnlyByHolderAndNeverShortens(t *testing.T) {
 		return value
 	}
 
-	if err := store.ExtendInboundLease(ctx, id, "worker-2", time.Now().Add(time.Hour)); err == nil {
-		t.Fatal("another worker extended the lease")
+	if err := store.ExtendInboundLease(ctx, id, "worker-2", time.Now().Add(time.Hour)); !errors.Is(err, assistant.ErrInboundLeaseNotHeld) {
+		t.Fatalf("another worker extending the lease: err = %v, want ErrInboundLeaseNotHeld", err)
 	}
 	extended := time.Now().Add(5 * time.Minute)
 	if err := store.ExtendInboundLease(ctx, id, "worker-1", extended); err != nil {

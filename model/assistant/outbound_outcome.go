@@ -743,7 +743,7 @@ func (r *Runtime) confirmOutboundOutcome(ctx context.Context, event MessageEvent
 	// 被另一个 worker 领走重新生成再发一遍，正是这里要防的重复，所以按确认的上限
 	// 把租约往后推。
 	echoWait, historyTimeout := r.outboundEchoes.timings()
-	extendInboundLease(ctx, echoWait+historyTimeout+time.Minute)
+	_ = extendInboundLease(ctx, echoWait+historyTimeout+time.Minute)
 	messageID, source, confirmErr := r.confirmOutboundDelivered(ctx, event, fingerprint, since)
 	if messageID != "" {
 		r.logOutboundOutcome(event, action, applog.LevelInfo, "outbound_outcome_confirmed", "已确认送达（"+source+"）", "", map[string]any{"outbound_message_id": messageID, "confirmed_by": source})

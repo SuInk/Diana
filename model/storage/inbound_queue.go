@@ -1028,7 +1028,7 @@ func requireInboundLeaseUpdate(result sql.Result, action string, id string) erro
 		return fmt.Errorf("%s inbound event %q: inspect update: %w", action, id, err)
 	}
 	if updated == 0 {
-		return fmt.Errorf("%s inbound event %q: lease is not held by this worker", action, id)
+		return fmt.Errorf("%s inbound event %q: %w", action, id, assistant.ErrInboundLeaseNotHeld)
 	}
 	return nil
 }

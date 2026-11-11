@@ -216,8 +216,11 @@ func (r *Runtime) executeOutboundCall(
 	}
 	// 请求写出去后没等到回执的，先确认有没有送达，不在这里直接重发。
 	call = func(callCtx context.Context) (map[string]any, error) {
-		// 每次真正发之前确认入站租约够撑过这次发送；不够才往后推。
-		extendInboundLease(callCtx, oneBotMediaActionTimeout+time.Minute)
+		// 每次真正发之前确认入站租约够撑过这次发送；不够才往后推。租约已经被别的
+		// worker 接手时不能再发：那边正在为同一条消息回复，这里再发就是重复。
+		if err := extendInboundLease(callCtx, oneBotMediaActionTimeout+time.Minute); err != nil {
+			return nil, err
+		}
 		return r.confirmOutboundOutcome(callCtx, event, action, payloadCall)
 	}
 	if _, _, err := r.outboundChannelForEvent(event); err != nil {
@@ -234,6 +237,9 @@ func (r *Runtime) executeOutboundCall(
 		result, err := call(ctx)
 		if err == nil {
 			r.clearBotMute(event)
+		}
+		if errors.Is(err, errInboundLeaseLost) {
+			return nil, err
 		}
 		if isPermanentOutboundRejection(err) {
 			return nil, r.permanentOutboundSendError(event, action, err)
@@ -313,6 +319,9 @@ func (r *Runtime) executeOutboundCall(
 			// 消息本身无效，退避多少次都一样：直接放下，群里后面的消息照常发。
 			gate.reset()
 			return nil, r.permanentOutboundSendError(event, action, err)
+		}
+		if errors.Is(err, errInboundLeaseLost) {
+			return nil, err
 		}
 		if errors.Is(err, errOutboundOutcomeUnconfirmed) {
 			// 查不清有没有发出去：重发可能刷屏，这一条就此放下，群里后面的消息照常发。
