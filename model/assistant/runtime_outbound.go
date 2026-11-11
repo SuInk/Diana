@@ -294,6 +294,7 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 	}
 	outboundTurnFromContext(ctx).recordSentMessage(msg)
 	r.groupOwnSends.note(event, time.Now())
+	r.sessionSends.note(event, outboundTurnID(ctx), msg, time.Now())
 	// 连发交接据此落定（见 sender_burst.go）。结果不明的发送经回推或历史确认送达后
 	// 也走到这里（confirmOutboundOutcome 返回成功）；确认不了的是
 	// errOutboundOutcomeUnconfirmed 另记为结果不明，不能通过补充消息重排而重发。
