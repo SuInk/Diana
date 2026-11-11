@@ -44,6 +44,13 @@
               <div class="group-scope-buttons">
                 <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(true)">全部启用</button>
                 <button class="btn" type="button" :disabled="bulkBusy || !filteredGroups.length" @click="setAllGroups(false)">全部停用</button>
+                <button
+                  class="btn"
+                  type="button"
+                  :disabled="bulkBusy || !chatModelOverrideGroups.length"
+                  :title="chatModelOverrideGroups.length ? `${chatModelOverrideGroups.length} 个群单独指定了聊天模型` : '没有群单独指定聊天模型'"
+                  @click="resetGroupChatModels"
+                >聊天模型全部跟随机器人</button>
               </div>
               <p class="group-tool-hint">不影响新加入的群。</p>
             </section>
@@ -1738,6 +1745,37 @@ async function setAllGroups(enabled: boolean): Promise<void> {
     const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, group_ids: groupIDs, enabled });
     toastSuccess(`已${enabled ? "启用" : "停用"} ${result.updated} 个群`);
     if (result.warning) toastError(result.warning);
+    await load();
+  } catch (error) {
+    toastError(error instanceof Error ? error.message : "保存失败");
+  } finally {
+    bulkBusy.value = false;
+  }
+}
+
+// 和运行时判断一致：只有填全了的群模型才算覆盖了机器人。
+const chatModelOverrideGroups = computed(() => filteredGroups.value.filter((group) => {
+  const model = group.chat_model;
+  return Boolean(model && (model.route || (model.profile_id && model.model)));
+}));
+
+async function resetGroupChatModels(): Promise<void> {
+  const targets = chatModelOverrideGroups.value;
+  if (!targets.length) {
+    return;
+  }
+  const ok = await askConfirm({
+    title: "聊天模型全部跟随机器人",
+    message: `下面列出的群里有 ${targets.length} 个单独指定了聊天模型：${targets.map((group) => group.group_name || group.group_id).join("、")}。确定清掉这些设置，改用机器人的聊天模型吗？群的其他设置不变。`,
+    confirmLabel: "全部跟随机器人"
+  });
+  if (!ok) {
+    return;
+  }
+  bulkBusy.value = true;
+  try {
+    const result = await saveBotGroupSwitches({ bot_profile_id: botScope.value, group_ids: targets.map((group) => group.group_id), reset_chat_model: true });
+    toastSuccess(`已让 ${result.updated} 个群跟随机器人的聊天模型`);
     await load();
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存失败");
