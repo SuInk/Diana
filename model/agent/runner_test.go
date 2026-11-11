@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -518,6 +520,59 @@ func TestRunnerSkillsCatalogSitsBeforeHistory(t *testing.T) {
 	}
 	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
 		t.Fatalf("current turn is no longer last: %#v", messages)
+	}
+}
+
+// 主人比群成员多几份 skill：目录对两个人是同一份（多出来的注明对谁开放），历史之前那段
+// 和续接校验键都一样，交替说话不再让续接作废；成员去读用不了的那份时直接被拒绝。
+func TestRunnerSkillCatalogIsSameForEverySpeaker(t *testing.T) {
+	dir := t.TempDir()
+	ownerPath := filepath.Join(dir, "SKILL.md")
+	if err := os.WriteFile(ownerPath, []byte("# owner skill body"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	shared := SkillMetadata{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}
+	ownerOnly := SkillMetadata{Name: "another-skill", Description: "Owner only.", Path: ownerPath}
+	audience := map[string]string{"another-skill": "只对主人开放"}
+	run := func(usable []SkillMetadata, locked []SkillMetadata) ([]llm.Message, string, *ToolRegistry) {
+		client := &scriptedClient{}
+		registry := NewToolRegistry()
+		registry.RegisterScopedSkills(nil, usable, nil)
+		registry.SetSkillAudience(audience, locked)
+		runner := &Runner{client: client, cfg: Config{}.WithDefaults(), registry: registry}
+		resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设提示词"},
+			{Role: llm.RoleUser, Content: "【历史参考消息】旧问题"},
+			{Role: llm.RoleUser, Content: "【当前需要回复的消息】用一下 skill"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client.requests[0].Messages, resp.ConversationKey, registry
+	}
+	member, memberKey, memberRegistry := run([]SkillMetadata{shared}, []SkillMetadata{ownerOnly})
+	owner, ownerKey, ownerRegistry := run([]SkillMetadata{shared, ownerOnly}, nil)
+	if memberKey == "" || memberKey != ownerKey {
+		t.Fatalf("续接校验键应当对两个人一样：member=%q owner=%q", memberKey, ownerKey)
+	}
+	if member[2].Content != owner[2].Content {
+		t.Fatalf("历史之前的 skill 目录应当是同一份：\nmember=%q\nowner=%q", member[2].Content, owner[2].Content)
+	}
+	if !strings.Contains(member[2].Content, "- another-skill: Owner only.〔只对主人开放〕") || !strings.Contains(member[2].Content, "- demo-skill: Use demo.\n") {
+		t.Fatalf("目录应当列出全部 skill 并注明开放范围：%q", member[2].Content)
+	}
+	read := func(registry *ToolRegistry) (string, error) {
+		tool, ok := registry.Get("read_skill")
+		if !ok {
+			t.Fatal("read_skill missing")
+		}
+		return tool.Run(context.Background(), map[string]any{"name": "another-skill"})
+	}
+	if _, err := read(memberRegistry); err == nil || !strings.Contains(err.Error(), "只对主人开放") || !strings.Contains(err.Error(), "当前发言者不能用") {
+		t.Fatalf("成员读用不了的 skill 应当被拒绝并说明对谁开放：%v", err)
+	}
+	if output, err := read(ownerRegistry); err != nil || !strings.Contains(output, "owner skill body") {
+		t.Fatalf("主人应当照常读到：%q %v", output, err)
 	}
 }
 

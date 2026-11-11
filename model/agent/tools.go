@@ -153,6 +153,9 @@ type ToolRegistry struct {
 	skillsSet          bool
 	builtinSkills      []SkillMetadata
 	reservedSkillNames []string
+	// skillAudience、lockedSkills 见 SetSkillAudience。
+	skillAudience      map[string]string
+	lockedSkills       []SkillMetadata
 	extensions         ExtensionCatalog
 	parent             *ToolRegistry
 	parentOnly         map[string]bool
@@ -357,6 +360,67 @@ func (r *ToolRegistry) RegisterScopedSkills(builtin, extra []SkillMetadata, rese
 	r.SetSkills(mergeBuiltinSkills(builtin, extra, reservedNames))
 	tools := newLiveSkillTools(r.Skills)
 	r.Register(tools.Read)
+}
+
+// SetSkillAudience 让 skill 目录对同一个会话里的每个发言者都是同一份。
+//
+// 主人能看到底座和插件带的全部自定义 Skill，群成员只有放行的那几份。目录放在历史之前
+// 的稳定段里，以前各人看到的不一样：主人和群友交替说话，这一段来回变，续接每次作废、
+// 整份请求重新组装（11-07～11-09 生产 164 次，首步缓存命中掉到五成）。现在目录列出
+// 全部 skill，不是人人能用的在条目后面注明对谁开放（audience：名字 → 说明）；locked 是
+// 当前发言者用不了的那几份，只进目录，read_skill 读它们时直接拒绝。
+func (r *ToolRegistry) SetSkillAudience(audience map[string]string, locked []SkillMetadata) {
+	notes := make(map[string]string, len(audience))
+	for name, note := range audience {
+		notes[name] = note
+	}
+	r.mu.Lock()
+	r.skillAudience = notes
+	r.lockedSkills = append([]SkillMetadata(nil), locked...)
+	r.mu.Unlock()
+	if _, ok := r.Get("read_skill"); ok {
+		tools := newLiveSkillTools(r.Skills)
+		tools.Read.locked = r.lockedSkillNote
+		r.Register(tools.Read)
+	}
+}
+
+// skillCatalogView 返回目录要列的全部 skill（当前发言者能用的加上用不了的，按名字排）
+// 和各自的开放说明。没设过开放范围时就是能用的那几份。
+func (r *ToolRegistry) skillCatalogView(usable []SkillMetadata) ([]SkillMetadata, map[string]string) {
+	r.mu.RLock()
+	audience := r.skillAudience
+	locked := append([]SkillMetadata(nil), r.lockedSkills...)
+	r.mu.RUnlock()
+	if len(locked) == 0 && len(audience) == 0 {
+		return usable, audience
+	}
+	seen := make(map[string]bool, len(usable))
+	all := append([]SkillMetadata(nil), usable...)
+	for _, skill := range usable {
+		seen[skill.Name] = true
+	}
+	for _, skill := range locked {
+		if !seen[skill.Name] {
+			seen[skill.Name] = true
+			skill.IncludeBody, skill.Resident = false, nil
+			all = append(all, skill)
+		}
+	}
+	sort.SliceStable(all, func(i, j int) bool { return all[i].Name < all[j].Name })
+	return all, audience
+}
+
+// lockedSkillNote 报告这份 skill 是不是当前发言者用不了的，是的话给出对谁开放。
+func (r *ToolRegistry) lockedSkillNote(name string) (string, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, skill := range r.lockedSkills {
+		if skill.Name == name {
+			return r.skillAudience[name], true
+		}
+	}
+	return "", false
 }
 
 // Skills 返回当前注册表关联的 skills。

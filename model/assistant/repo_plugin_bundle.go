@@ -312,6 +312,29 @@ func (p *RepoPlugin) bundleRuntime(ctx context.Context, scope string, cfg agent.
 	return session, scripts, nil
 }
 
+// repoPluginBundleSkills 列出这条消息所在会话里启用的仓库插件带的 skill，只读 SKILL.md，
+// 不起任何进程。主人的注册表由 registerRepoPluginBundles 真正挂上它们；群成员用不了，
+// 但目录里要照样列出来（见 agent.ToolRegistry.SetSkillAudience）。
+func (r *Runtime) repoPluginBundleSkills(event MessageEvent) []agent.SkillMetadata {
+	if r.plugins == nil {
+		return nil
+	}
+	var skills []agent.SkillMetadata
+	for _, state := range r.plugins.List() {
+		value, _, enabled := r.pluginWithSettingsForEvent(state.Manifest.ID, event)
+		plugin, ok := value.(*RepoPlugin)
+		if !ok || !enabled || !pluginSupportsPlatform(state.Manifest, event.Platform) || plugin.bundle == nil {
+			continue
+		}
+		loaded, err := agent.LoadPluginSkills(plugin.manifest.ID, plugin.dir, plugin.source.Origin(), plugin.bundle.skillRoots(), len(plugin.bundle.Scripts) > 0)
+		if err != nil {
+			continue
+		}
+		skills = append(skills, loaded...)
+	}
+	return skills
+}
+
 func (r *Runtime) registerRepoPluginBundles(ctx context.Context, registry *agent.ToolRegistry, cfg agent.Config, event MessageEvent) error {
 	if r.plugins == nil {
 		return nil

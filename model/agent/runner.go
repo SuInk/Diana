@@ -166,7 +166,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	//
 	// 用 user role:这一段是随会话带来的资料,不是恒定的系统约束。
 	skills := SelectSkillBodies(r.registry.Skills(), SkillScanText(req.Messages, r.cfg.SkillTriggerScanDepth))
-	catalog, deliveredSkills := renderSkillsCatalog(residentSkillsOnly(skills), r.cfg.SkillsListBudget)
+	// 目录对同一个会话里的每个发言者是同一份：当前发言者用不了的也列出来并注明对谁开放，
+	// 这一段才不会随发言者来回变（见 ToolRegistry.SetSkillAudience）。
+	catalogSkills, audience := r.registry.skillCatalogView(residentSkillsOnly(skills))
+	catalog, deliveredSkills := renderSkillsCatalog(withSkillAudience(catalogSkills, audience), r.cfg.SkillsListBudget)
 	var stableNotes []string
 	if catalog != "" {
 		stableNotes = append(stableNotes, catalog)
