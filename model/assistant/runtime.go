@@ -2286,7 +2286,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			var parked bool
 			if parked, proactiveCandidates = r.parkProactiveRoute(event, proactiveCandidates); parked {
 				r.updateUserMemory(event, 0)
-				event.routingReason = "等待合并：和这段时间的群消息一起做一次接话评分，结论记在这一批最后那条消息上"
+				event.routingReason = "排队等接话判断：等群里安静下来，和前后几条一起判断一次要不要接话。判定不接话时这里会换成结论；接了话就看机器人回的那条"
 				r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
 				return finishWithoutReply("merged_into_backlog_turn")
 			}
