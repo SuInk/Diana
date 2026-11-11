@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -165,5 +166,39 @@ func TestLLMTestOpenAIDecisionsAdapter(t *testing.T) {
 	}
 	if resp.Provider != llm.ProviderOpenAIDecisions || resp.Text == "" {
 		t.Fatalf("response=%+v", resp)
+	}
+}
+
+type recordingLLMClient struct {
+	got *llm.GenerateRequest
+}
+
+func (c recordingLLMClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	*c.got = req
+	return &llm.GenerateResponse{Text: "红色的圆"}, nil
+}
+
+// 视觉测试必须真的带图：只发文字的话，不认图的通道也能回一句，测了等于没测。
+func TestLLMTestVisionModeAttachesProbeImage(t *testing.T) {
+	store := NewMemoryLLMProfileStore(llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "saved-key", Model: "vision-model"})
+	var got llm.GenerateRequest
+	handler := NewLLMConfigHandlerWithFactory(store, func(llm.ProviderConfig) (llm.LLMClient, error) {
+		return recordingLLMClient{got: &got}, nil
+	})
+	rec := httptest.NewRecorder()
+	testRouter(handler).ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/llm/test", bytes.NewBufferString(`{"message":"图里是什么？","mode":"vision"}`)))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if len(got.Messages) != 1 || len(got.Messages[0].Parts) != 2 {
+		t.Fatalf("messages = %#v", got.Messages)
+	}
+	parts := got.Messages[0].Parts
+	if parts[0].Type != llm.ContentPartText || parts[0].Text != "图里是什么？" {
+		t.Fatalf("text part = %#v", parts[0])
+	}
+	if parts[1].Type != llm.ContentPartImageURL || !strings.HasPrefix(parts[1].ImageURL, "data:image/png;base64,") {
+		t.Fatalf("image part = %#v", parts[1])
 	}
 }

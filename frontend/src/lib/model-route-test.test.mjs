@@ -11,12 +11,12 @@ const ast = ts.createSourceFile("view.ts", script, ts.ScriptTarget.Latest, true,
 function setup(profiles = [{ id: "p1", name: "主提供商", provider: "openai_compatible" }]) {
   const calls = [];
   const context = vm.createContext({
-    modelRouteTestTarget: { value: null }, modelRouteTests: { value: {} }, modelRouteTestMessage: "default message",
+    modelRouteTestTarget: { value: null }, modelRouteTests: { value: {} }, modelRouteTestMessage: "default message", visionTestMessage: "vision message",
     selectedRoleProfiles: () => profiles,
     isMediaRole: role => ["tts", "stt", "video"].includes(role),
     llmProviderLabel: value => value, describeLLMTestError: error => error.message,
     performance: { now: () => 1000 }, toastSuccess: () => {}, toastError: () => {},
-    testLLM: async (message, config) => { calls.push({ mode: "text", message, config }); return { text: "custom reply", usage: { input_tokens: 12, output_tokens: 34 } }; },
+    testLLM: async (message, config, mode = "text") => { calls.push({ mode, message, config }); return { text: "custom reply", usage: { input_tokens: 12, output_tokens: 34 } }; },
     testLLMImage: async (message, config) => { calls.push({ mode: "image", message, config }); return { images: ["https://example.com/result.png"], model: config.model }; }
   });
   for (const name of ["modelRouteTestKey", "modelRouteTestable", "testModelRoute", "runModelRouteTest"]) {
@@ -53,6 +53,17 @@ test("image routes expose testing and show images from the image API", async () 
   assert.equal(context.modelRouteTestTarget.value.results[0].images[0], "https://example.com/result.png");
 });
 
+test("vision routes send the probe image request instead of plain text", async () => {
+  const { context, calls } = setup();
+  context.testModelRoute("vision", { profile_id: "p1", model: "eyes" });
+  assert.equal(context.modelRouteTestTarget.value.message, "vision message");
+  await context.runModelRouteTest();
+  assert.equal(calls[0].mode, "vision");
+  context.testModelRoute("chat", { profile_id: "p1", model: "chat" });
+  await context.runModelRouteTest();
+  assert.equal(calls[1].mode, "text");
+});
+
 test("empty prompts and duplicate clicks do not trigger requests", async () => {
   const { context, calls } = setup();
   context.testModelRoute("chat", { model: "model" });
@@ -64,18 +75,15 @@ test("empty prompts and duplicate clicks do not trigger requests", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("group tests keep each provider result even if one fails", async () => {
-  const { context } = setup([{ id: "p1" }, { id: "p2" }]);
-  context.testLLM = async (_, config) => {
-    if (config.id === "p1") throw new Error("upstream failed");
-    return { text: "second reply" };
-  };
+test("group routes only call the first provider", async () => {
+  const { context, calls } = setup([{ id: "p1" }, { id: "p2" }]);
   context.testModelRoute("chat", { group: "group", model: "model" });
   await context.runModelRouteTest();
   const target = context.modelRouteTestTarget.value;
-  assert.equal(target.results[0].error, "upstream failed");
-  assert.equal(target.results[1].text, "second reply");
-  assert.equal(context.modelRouteTests.value[target.key].label, "1/2 失败");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].config.id, "p1");
+  assert.equal(target.results.length, 1);
+  assert.match(context.modelRouteTests.value[target.key].label, /测试通过/);
 });
 
 test("empty image response is a failure, not a successful generation", async () => {
@@ -86,11 +94,10 @@ test("empty image response is a failure, not a successful generation", async () 
   assert.match(context.modelRouteTestTarget.value.results[0].error, /未返回图片/);
 });
 
-test("closing a running test stops remaining providers and cannot overwrite a new dialog", async () => {
-  const { context } = setup([{ id: "p1" }, { id: "p2" }]);
+test("closing a running test cannot overwrite a new dialog", async () => {
+  const { context } = setup();
   let finish;
-  let requests = 0;
-  context.testLLM = () => { requests++; return new Promise(resolve => { finish = resolve; }); };
+  context.testLLM = () => new Promise(resolve => { finish = resolve; });
   context.testModelRoute("chat", { model: "old" });
   const old = context.modelRouteTestTarget.value;
   const running = context.runModelRouteTest();
@@ -98,9 +105,7 @@ test("closing a running test stops remaining providers and cannot overwrite a ne
   context.testModelRoute("chat", { model: "new" });
   finish({ text: "old result" });
   await running;
-  assert.equal(requests, 1);
   assert.equal(context.modelRouteTestTarget.value.model, "new");
   assert.equal(context.modelRouteTestTarget.value.results.length, 0);
-  assert.equal(context.modelRouteTests.value[old.key].label, "测试已停止");
   assert.equal(old.running, false);
 });

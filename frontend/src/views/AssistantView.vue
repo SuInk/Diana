@@ -2275,7 +2275,8 @@
 
     <Modal v-if="modelRouteTestTarget" :title="`测试${modelPurposeLabel(modelRouteTestTarget.role)}模型 · ${modelRouteTestTarget.model}`" initial-focus="#bot-model-test-message" @close="modelRouteTestTarget = null">
       <div class="stack">
-        <p class="muted">只测试当前路由，不走后备模型，不保存配置，也不向聊天发送。将逐个调用 {{ modelRouteTestTarget.profiles.length }} 个提供商，可能产生费用。</p>
+        <p class="muted">只调用 {{ modelRouteTestTarget.profiles[0].name || llmProviderLabel(modelRouteTestTarget.profiles[0].provider) }} 一次，不走后备模型，不保存配置，也不向聊天发送，可能产生费用。</p>
+        <p v-if="modelRouteTestTarget.role === 'vision'" class="hint">会附一张白底红色圆形的测试图；答得出颜色和形状才说明图片真的传进去了。</p>
         <div class="field">
           <label for="bot-model-test-message">{{ modelRouteTestTarget.role === 'image' ? '生图提示词' : '测试消息' }}</label>
           <textarea id="bot-model-test-message" v-model="modelRouteTestTarget.message" class="textarea" rows="4" :disabled="modelRouteTestTarget.running" :placeholder="modelRouteTestTarget.role === 'image' ? '描述要生成的测试图片…' : '输入要发给模型的消息…'"></textarea>
@@ -2283,7 +2284,6 @@
         <button class="btn primary" type="button" :disabled="modelRouteTestTarget.running || !modelRouteTestTarget.message.trim()" @click="runModelRouteTest">
           {{ modelRouteTestTarget.running ? '测试中…' : modelRouteTestTarget.role === 'image' ? '生成测试图片' : '发送测试' }}
         </button>
-        <p v-if="modelRouteTestTarget.running" class="hint" role="status">正在逐个测试；关闭弹窗不会取消已经发出的请求，但会停止后续提供商测试。</p>
         <div class="stack" aria-live="polite">
           <section v-for="(result, index) in modelRouteTestTarget.results" :key="index" class="model-route-test-output">
             <strong>{{ result.provider }} · {{ result.seconds.toFixed(1) }} 秒</strong>
@@ -2561,7 +2561,7 @@ import {
   type AgentSafeModeCategory
 } from "../lib/agent-mode";
 import { toastError, toastSuccess } from "../lib/toast";
-import { describeLLMTestError } from "../lib/llm-test";
+import { describeLLMTestError, visionTestMessage } from "../lib/llm-test";
 import { channelAccountUnhealthy, channelOperational, channelStatusHint, channelStatusLabel } from "../lib/channel-status";
 import { effectiveReplyTone, FALLBACK_REPLY_TONE, normalizeReplyTone, replyToneOverride } from "../lib/reply-tone";
 import { accountSafetyRulesOverride, effectiveAccountSafetyRules, FALLBACK_ACCOUNT_SAFETY_RULES, normalizeAccountSafetyRules } from "../lib/account-safety-rules";
@@ -3901,7 +3901,7 @@ interface ModelRouteTestResult {
 
 // 测试结果只留在当前页面：它回答的是「刚才这一下能不能调通」，不是健康状态。
 const modelRouteTests = ref<Record<string, ModelRouteTestResult>>({});
-const modelRouteTestMessage = "你好，请只回复「OK」。";
+const modelRouteTestMessage = "hi";
 interface ModelRouteTestOutput {
   provider: string;
   seconds: number;
@@ -3932,7 +3932,7 @@ function modelRouteTestResult(role: RoleKey, route: RoleRoute): ModelRouteTestRe
   return modelRouteTests.value[modelRouteTestKey(role, route)];
 }
 
-// 分组路由逐个测组里的提供商：调度时它们都可能被选中，只测一个说明不了整条路由。
+// 只测路由里的第一个提供商：分组路由逐个测太费钱也太慢，看一眼能不能调通就够了。
 // 直接测这一档，不走降级链，所以测出来的就是它自己的情况。
 function testModelRoute(role: RoleKey, route: RoleRoute): void {
   const key = modelRouteTestKey(role, route);
@@ -3940,8 +3940,8 @@ function testModelRoute(role: RoleKey, route: RoleRoute): void {
   const profiles = selectedRoleProfiles(role, route);
   if (!model || !profiles.length || modelRouteTests.value[key]?.running) return;
   modelRouteTestTarget.value = {
-    key, role, model, profiles: profiles.map(profile => ({ ...profile, model })),
-    message: role === "image" ? "画一只坐在窗边晒太阳的橘猫，简洁插画风格。" : modelRouteTestMessage,
+    key, role, model, profiles: [{ ...profiles[0], model }],
+    message: role === "image" ? "画一只坐在窗边晒太阳的橘猫，简洁插画风格。" : role === "vision" ? visionTestMessage : modelRouteTestMessage,
     running: false, results: []
   };
 }
@@ -3969,7 +3969,8 @@ async function runModelRouteTest(): Promise<void> {
         output.images = result.images;
         output.usage = `${result.model || model} · 已生成 ${result.images.length} 张`;
       } else {
-        const result = await testLLM(message, { ...profile, model });
+        // 视觉理解要真带图测：只发文字的话，不认图的通道也会照样回话。
+        const result = await testLLM(message, { ...profile, model }, target.role === "vision" ? "vision" : "text");
         output.text = result.text;
         if (result.usage) output.usage = `输入 ${result.usage.input_tokens ?? 0} / 输出 ${result.usage.output_tokens ?? 0} tokens`;
       }

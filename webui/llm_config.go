@@ -549,7 +549,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	if testMode == "" && llm.NormalizeProfileGroup(payload.Group) == llm.GroupImage {
 		testMode = "image"
 	}
-	if testMode != "" && testMode != "text" && testMode != "image" {
+	if testMode != "" && testMode != "text" && testMode != "image" && testMode != "vision" {
 		h.writeError(c, 400, "llm_test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
 		return
 	}
@@ -578,7 +578,7 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	if testMode == "" {
 		testMode = "text"
 	}
-	if testMode != "text" && testMode != "image" {
+	if testMode != "text" && testMode != "image" && testMode != "vision" {
 		h.writeError(c, 400, "llm_test", fmt.Errorf("unsupported test mode %q", payload.Mode), payload.Model, nil)
 		return
 	}
@@ -611,8 +611,12 @@ func (h *LLMConfigHandler) test(c *gin.Context) {
 	}
 
 	started := time.Now()
+	message := llm.Message{Role: llm.RoleUser, Content: payload.Message}
+	if testMode == "vision" {
+		message = visionProbeMessage(payload.Message)
+	}
 	resp, err := client.Generate(c.Request.Context(), llm.GenerateRequest{
-		Messages: []llm.Message{{Role: llm.RoleUser, Content: payload.Message}},
+		Messages: []llm.Message{message},
 	})
 	if errors.Is(err, llm.ErrDecisionRequired) {
 		// 判断模型（TypeSafe System One）不生成文本，发一句 ping 永远过不了，而且

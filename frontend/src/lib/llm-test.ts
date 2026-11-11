@@ -3,6 +3,28 @@
 
 import type { LLMConfig } from "../api";
 import { gatewayErrorPage, serverErrorBase } from "./gateway-error.ts";
+import { effectiveModelInfo } from "./model-metadata.ts";
+
+export type LLMTestKind = "text" | "vision" | "image";
+
+export const visionTestMessage = "图里是什么颜色的什么形状？";
+
+/**
+ * 按模型自己的能力选测试方式：只出图的模型拿去跑文字必然失败，能看图的模型只发
+ * 文字又证明不了图片进得去。分组名是用户起的，只作为模型能力没标时的兜底。
+ */
+export function modelTestKind(profile: LLMConfig, modelID: string): LLMTestKind {
+  const id = modelID.trim().toLowerCase();
+  const group = (profile.group ?? "").trim().toLowerCase();
+  if (group === "image" || (id !== "" && id === (profile.image_model ?? "").trim().toLowerCase())) return "image";
+  const info = profile.models?.find(model => model.id.trim().toLowerCase() === id);
+  const effective = info ? effectiveModelInfo(info) : undefined;
+  const input = effective?.input_modalities ?? [];
+  const output = effective?.output_modalities ?? [];
+  if (output.includes("image") && !output.includes("text")) return "image";
+  if (group === "vision" || (input.includes("image") && (output.length === 0 || output.includes("text")))) return "vision";
+  return "text";
+}
 
 export function testModelIDs(profile: LLMConfig): string[] {
   const seen = new Set<string>();

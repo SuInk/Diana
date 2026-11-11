@@ -220,12 +220,31 @@
             这套配置只有一个模型；到「模型列表」里同步或手动添加后可以逐个测。
           </span>
         </div>
+        <div class="field">
+          <label id="llm-test-kind-label">测试方式</label>
+          <div class="segmented" role="radiogroup" aria-labelledby="llm-test-kind-label">
+            <button
+              v-for="option in testKindOptions"
+              :key="option.id"
+              type="button"
+              role="radio"
+              :class="{ active: testKind === option.id }"
+              :aria-checked="testKind === option.id"
+              :disabled="busy"
+              @click="testKindChoice = option.id"
+            >
+              {{ option.label }}
+            </button>
+          </div>
+          <span class="hint">默认按模型标注的能力自动选；能力没标或标错时手动切换。</span>
+        </div>
         <textarea
           v-model="testMessage"
           class="textarea"
           rows="3"
           :placeholder="isImageTest ? '描述要生成的测试图片…' : '输入一句话测试连通…'"
         ></textarea>
+        <p v-if="testKind === 'vision'" class="muted" style="margin: 0; font-size: 12px">会附一张白底红色圆形的测试图；答得出颜色和形状才说明图片真的传进去了。</p>
         <button class="btn primary" type="button" :disabled="busy || !testMessage.trim()" @click="runTest">
           <ImageIcon v-if="isImageTest" :size="15" aria-hidden="true" />
           <Play v-else :size="15" aria-hidden="true" />
@@ -545,7 +564,7 @@ import AppSwitch from "../components/AppSwitch.vue";
 import AppSelect from "../components/AppSelect.vue";
 import type { AppSelectOption } from "../components/AppSelect.vue";
 import EmptyState from "../components/EmptyState.vue";
-import { describeLLMTestError, randomTestModel, testModelIDs } from "../lib/llm-test";
+import { describeLLMTestError, modelTestKind, randomTestModel, testModelIDs, visionTestMessage, type LLMTestKind } from "../lib/llm-test";
 import {
   defaultPresetForProvider,
   detectLLMService,
@@ -665,7 +684,21 @@ const testReply = ref("");
 const testUsage = ref("");
 const testImages = ref<string[]>([]);
 const testError = ref("");
-const isImageTest = computed(() => testTarget.value !== null && groupOf(testTarget.value) === "image");
+// 测试方式跟着弹窗里选中的模型走：同一套配置下常常文字、看图、生图模型混在一起。
+// 手动选过就用手动的；换了测试模型回到自动。
+const testKindChoice = ref<LLMTestKind | "">("");
+const testKindOptions: { id: LLMTestKind; label: string }[] = [
+  { id: "text", label: "文字" },
+  { id: "vision", label: "看图" },
+  { id: "image", label: "生图" }
+];
+const testKind = computed<LLMTestKind>(() => testKindChoice.value || (testTarget.value ? modelTestKind(testTarget.value, testModel.value) : "text"));
+watch(testModel, () => { testKindChoice.value = ""; });
+const isImageTest = computed(() => testKind.value === "image");
+// 换模型时，消息还是上一种测试的默认值就跟着换；用户自己改过的不动。
+watch(testKind, (kind, previous) => {
+  if (previous && testMessage.value.trim() === defaultTestMessage(previous)) testMessage.value = defaultTestMessage(kind);
+});
 
 // 测试用的模型候选＝这套配置存下来的模型列表。profile.model 单独并进去：
 // 它可能是手填后没同步进列表的，漏掉的话原本能测的模型反而选不到了。
@@ -987,17 +1020,6 @@ function groupOf(profile: LLMConfig): string {
   return profile.group?.trim() || "default";
 }
 
-// shouldTestAsImage 判断这次测试该不该走生图路径。
-//
-// 只看分组名会漏：分组名是用户自己起的，线上就有叫「生图」的那一档，它永远等不到
-// group === "image"，于是拿生图模型去跑文本测试，必然失败。所以再看一眼要测的模型
-// 是不是这套配置的生图模型。
-function shouldTestAsImage(profile: LLMConfig): boolean {
-  if (groupOf(profile) === "image") return true;
-  const model = (profile.model ?? "").trim().toLowerCase();
-  const imageModel = (profile.image_model ?? "").trim().toLowerCase();
-  return model !== "" && model === imageModel;
-}
 
 function groupLabel(group: string): string {
   return groupLabels[group] ?? group;
@@ -1018,8 +1040,8 @@ function sectionModelCount(items: LLMConfig[]): number {
   return ids.size;
 }
 
-function defaultTestMessage(profile: LLMConfig): string {
-  return groupOf(profile) === "image" ? "生成小猫" : "hi";
+function defaultTestMessage(kind: LLMTestKind): string {
+  return kind === "image" ? "生成小猫" : kind === "vision" ? visionTestMessage : "hi";
 }
 
 // 同用途组内上下移动；组内顺序就是失败降级的优先级。
@@ -1405,7 +1427,8 @@ async function clearModels(): Promise<void> {
 function openTest(profile: LLMConfig): void {
   testTarget.value = profile;
   testModel.value = randomTestModel(profile);
-  testMessage.value = defaultTestMessage(profile);
+  testKindChoice.value = "";
+  testMessage.value = defaultTestMessage(modelTestKind(profile, testModel.value));
   testReply.value = "";
   testUsage.value = "";
   testImages.value = [];
@@ -1424,13 +1447,14 @@ async function runTest(): Promise<void> {
     // model 用弹窗里选的那个覆盖：后端 /api/llm/test 直接认请求体里的 model，
     // 于是同一套配置能逐个模型验，不用为了测一个模型去改保存的配置。
     const probe = target ? { ...target, model: testModel.value.trim() || target.model } : undefined;
-    if (probe && shouldTestAsImage(probe)) {
+    const kind = testKind.value;
+    if (probe && kind === "image") {
       const result = await testLLMImage(testMessage.value.trim(), probe);
       testImages.value = result.images;
       testUsage.value = `${result.model || probe.model} · 已生成 ${result.images.length} 张`;
       return;
     }
-    const result = await testLLM(testMessage.value.trim(), probe);
+    const result = await testLLM(testMessage.value.trim(), probe, kind === "vision" ? "vision" : "text");
     testReply.value = result.text;
     if (result.usage) {
       testUsage.value = `输入 ${result.usage.input_tokens ?? 0} / 输出 ${result.usage.output_tokens ?? 0} tokens`;
