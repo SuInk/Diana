@@ -40,14 +40,19 @@ func (s *SQLiteStore) RecordInboundEventAudit(ctx context.Context, event assista
 		replyStartedAt = event.At.UTC().UnixNano()
 	}
 	// 接话评分的等待批：入站 worker 登记完就以 merged_into_backlog_turn 收工，评分和回复
-	// 在定时器里跑完才写这里。只有这个占位会被后来的真实结果改写，其余 outcome 照旧由
-	// worker 定。
+	// 在定时器里跑完才写这里。占位会被后来的真实结果改写，其余 outcome 照旧由 worker 定。
+	// 真实结果也可能赶在 worker 收工前到（这一行还在 processing、outcome 还空着），这时
+	// 先把结果填上，CompleteInboundEvent 收工时不再拿占位盖回去。
+	//
+	// 同一条记录会写两次（record 同步写一次，WebUI 的事件监听异步再写一次），占位那次的
+	// 异步写可能晚于真实结果落库。所以占位记录遇到已经有真实结果的行就整行不动，不然
+	// 事件页会出现「结果 ignored、原因却是等待合并」。
 	outcome := strings.TrimSpace(event.Outcome)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET decision = ?, decision_reason = ?, reply_text = ?, processing_error = ?, duration_ms = ?, delivery_json = ?,
     outcome = CASE
-      WHEN outcome = '`+parkedProactiveRouteOutcome+`' AND ? <> '' THEN ?
+      WHEN ? <> '' AND (outcome = '`+parkedProactiveRouteOutcome+`' OR (status = '`+inboundStatusProcessing+`' AND COALESCE(outcome, '') = '')) THEN ?
       ELSE outcome
     END,
     reply_wait_ms = CASE
@@ -65,6 +70,7 @@ WHERE id = (
   ORDER BY created_at DESC, id DESC
   LIMIT 1
 )
+  AND NOT (? = '`+parkedProactiveRouteOutcome+`' AND COALESCE(outcome, '') NOT IN ('', '`+parkedProactiveRouteOutcome+`'))
 `,
 		strings.TrimSpace(event.Decision),
 		strings.TrimSpace(event.Reason),
@@ -78,6 +84,7 @@ WHERE id = (
 		strings.TrimSpace(string(event.Kind)),
 		strings.TrimSpace(event.GroupID),
 		strings.TrimSpace(event.UserID),
+		outcome,
 	)
 	if err != nil {
 		return fmt.Errorf("record inbound event audit: %w", err)

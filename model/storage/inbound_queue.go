@@ -563,6 +563,7 @@ UPDATE inbound_events
 	    lease_owner = ?,
 	    lease_until = ?,
 	    attempts = attempts + 1,
+	    outcome = NULL,
 	    decision = NULL,
 	    decision_reason = NULL,
 	    reply_text = NULL,
@@ -696,13 +697,20 @@ func (s *SQLiteStore) CompleteInboundEvent(ctx context.Context, id string, lease
 		return errors.New("complete inbound event: id and lease owner are required")
 	}
 	now := time.Now().UTC().UnixNano()
+	// 接话评分等待批的占位：定时器那一轮的真实结果可能已经先落库（见
+	// RecordInboundEventAudit），这时保留真实结果。
 	result, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
-SET status = ?, outcome = ?, last_error = NULL,
+SET status = ?,
+    outcome = CASE
+      WHEN ? = '`+parkedProactiveRouteOutcome+`' AND COALESCE(outcome, '') NOT IN ('', '`+parkedProactiveRouteOutcome+`') THEN outcome
+      ELSE ?
+    END,
+    last_error = NULL,
     lease_owner = NULL, lease_until = NULL,
     completed_at = ?, updated_at = ?
 WHERE id = ? AND status = ? AND lease_owner = ?
-`, inboundStatusDone, strings.TrimSpace(outcome), now, now, id, inboundStatusProcessing, leaseOwner)
+`, inboundStatusDone, strings.TrimSpace(outcome), strings.TrimSpace(outcome), now, now, id, inboundStatusProcessing, leaseOwner)
 	if err != nil {
 		return fmt.Errorf("complete inbound event %q: %w", id, err)
 	}

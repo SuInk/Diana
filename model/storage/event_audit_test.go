@@ -50,3 +50,43 @@ func TestRecordInboundEventAuditReplacesParkedOutcome(t *testing.T) {
 		}
 	}
 }
+
+// 同一条记录会写两次（同步一次、事件监听异步一次），等待批的占位那次可能晚于真实结论落库，
+// 真实结论也可能赶在 worker 收工前到。不管先后，事件页都得停在真实结论上。
+func TestRecordInboundEventAuditParkedPlaceholderNeverOverwritesVerdict(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "audit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	at := time.Date(2026, 11, 12, 0, 37, 44, 0, time.UTC)
+	insertLatencyEvent(t, s, "evt-parked", "30001", `{}`, at)
+	if _, err := s.db.Exec(`UPDATE inbound_events SET status = 'processing', outcome = NULL, lease_owner = 'worker-1' WHERE id = 'evt-parked'`); err != nil {
+		t.Fatal(err)
+	}
+	record := func(outcome, reason string) {
+		t.Helper()
+		if err := s.RecordInboundEventAudit(ctx, assistant.EventRecord{
+			Kind: assistant.EventKindGroup, GroupID: "10001", UserID: "20002", MessageID: "30001",
+			Outcome: outcome, Decision: "not_replied", Reason: reason,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(parkedProactiveRouteOutcome, "排队等接话判断")
+	// 定时器那一轮的结论先于 worker 收工落库。
+	record("ignored", "在跟机器人说话：否")
+	// 占位那次的异步写晚到。
+	record(parkedProactiveRouteOutcome, "排队等接话判断")
+	if err := s.CompleteInboundEvent(ctx, "evt-parked", "worker-1", parkedProactiveRouteOutcome); err != nil {
+		t.Fatal(err)
+	}
+	var outcome, reason string
+	if err := s.db.QueryRow(`SELECT outcome, decision_reason FROM inbound_events WHERE id = 'evt-parked'`).Scan(&outcome, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if outcome != "ignored" || reason != "在跟机器人说话：否" {
+		t.Fatalf("outcome=%q reason=%q, want ignored + 真实结论", outcome, reason)
+	}
+}
