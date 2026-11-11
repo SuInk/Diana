@@ -679,9 +679,9 @@ code {
 .model-route-enable-col {
   width: 46px;
 }
-/* 测试、编辑、删除三个按钮；立即恢复挪到异常提示后面。 */
+/* 测试、编辑、删除三个 32px 按钮加两侧各 8px 内边距；按 96px 算会把删除顶出单元格。 */
 .model-route-actions-col {
-  width: 96px;
+  width: 112px;
 }
 
 /* 「参与调度」「后备」分组行：组名说清怎么用，模型行里就不再挂徽标。 */
