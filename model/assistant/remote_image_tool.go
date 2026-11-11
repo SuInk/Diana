@@ -7,6 +7,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -120,6 +121,12 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 			}
 			images = append(images, image)
 		}
+		finish, since, ok := t.runtime.reserveImageSend(t.event, images)
+		if !ok {
+			return remoteImageAlreadySentResult(since), nil
+		}
+		sent := false
+		defer func() { finish(sent) }()
 		shared, paths, err := t.runtime.shareAgentImages(ctx, t.event.Platform, images)
 		if err != nil {
 			return "", err
@@ -132,10 +139,21 @@ func (t *dianaRemoteImageTool) Run(ctx context.Context, input map[string]any) (s
 		if err := t.runtime.sendOutgoing(ctx, t.event, routeOutgoingToEvent(t.event, OutgoingMessage{ImageURLs: shared, ImageAlbum: album})); err != nil {
 			return "", fmt.Errorf("发送图片失败：%w", err)
 		}
+		sent = true
 		return `{"status":"sent","message":"图片已发送到当前会话，不要重复发送。"}`, nil
 	default:
 		return "", fmt.Errorf("action 必须是 view、view_avatar、send 或 send_album")
 	}
+}
+
+// remoteImageAlreadySentResult 告诉模型同一张图刚发过、这次没重发。图确实在聊天里，
+// 可以照常说「上面这张」，只是别再调 send。
+func remoteImageAlreadySentResult(since time.Duration) string {
+	result, _ := json.Marshal(map[string]any{
+		"status":  "already_sent",
+		"message": fmt.Sprintf("同一张图 %d 秒前已经发到当前会话（可能是同时在跑的另一条回复发的），这次没有重发；图就在聊天里，接着用文字说就行，不要再调 send。", int(since.Seconds())),
+	})
+	return string(result)
 }
 
 // remoteImageViewMessage 把「看过」和「发出」分开说清。运行时在每个工具结果后追加

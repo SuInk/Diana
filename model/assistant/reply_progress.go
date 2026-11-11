@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,10 @@ type replyProgress struct {
 	running string
 	// messageID 是这一轮在回答的消息；同一个人后面的消息靠它区分「前一轮」和自己。
 	messageID string
+	// sender / senderID / text 给同群别的轮看：这一轮在回谁的哪句（见 sibling_turns.go）。
+	sender   string
+	senderID string
+	text     string
 }
 
 // startReplyProgress 返回要挂到 Runner 上的观察者（包着原观察者）和停止函数。
@@ -30,9 +35,18 @@ func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, in
 	if outboundTurnFromContext(ctx) == nil {
 		return inner, func() {}
 	}
-	progress := &replyProgress{started: time.Now(), counts: map[string]int{}, messageID: strings.TrimSpace(event.MessageID)}
+	progress := &replyProgress{
+		started:   time.Now(),
+		counts:    map[string]int{},
+		messageID: strings.TrimSpace(event.MessageID),
+		sender:    promptSenderIdentity(event),
+		senderID:  strings.TrimSpace(event.UserID),
+		text:      truncateReplyExcerpt(PlainText(event.Segments), 60),
+	}
 	key := consecutiveReplyKey(event)
+	session := sessionSendLogKey(event)
 	r.registerReplyProgress(key, progress)
+	r.registerSessionReplyProgress(session, progress)
 	observer := func(ctx context.Context, runEvent agent.RunEvent) {
 		progress.observe(runEvent)
 		if inner != nil {
@@ -41,7 +55,39 @@ func (r *Runtime) startReplyProgress(ctx context.Context, event MessageEvent, in
 	}
 	return observer, func() {
 		r.unregisterReplyProgress(key, progress)
+		r.unregisterSessionReplyProgress(session, progress)
 	}
+}
+
+func (r *Runtime) registerSessionReplyProgress(session string, progress *replyProgress) {
+	if session == "" {
+		return
+	}
+	r.replyProgressMu.Lock()
+	defer r.replyProgressMu.Unlock()
+	if r.sessionReplyProgresses == nil {
+		r.sessionReplyProgresses = map[string]map[*replyProgress]struct{}{}
+	}
+	if r.sessionReplyProgresses[session] == nil {
+		r.sessionReplyProgresses[session] = map[*replyProgress]struct{}{}
+	}
+	r.sessionReplyProgresses[session][progress] = struct{}{}
+}
+
+func (r *Runtime) unregisterSessionReplyProgress(session string, progress *replyProgress) {
+	if session == "" {
+		return
+	}
+	r.replyProgressMu.Lock()
+	defer r.replyProgressMu.Unlock()
+	delete(r.sessionReplyProgresses[session], progress)
+	if len(r.sessionReplyProgresses[session]) == 0 {
+		delete(r.sessionReplyProgresses, session)
+	}
+}
+
+func sortReplyProgressByStart(items []*replyProgress) {
+	sort.Slice(items, func(i, j int) bool { return items[i].started.Before(items[j].started) })
 }
 
 func (r *Runtime) registerReplyProgress(key string, progress *replyProgress) {

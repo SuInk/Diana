@@ -415,6 +415,8 @@ type Runtime struct {
 	slangResearch slangResearchState
 	// groupOwnSends 记每个群最近一次自己发话的时间，见 chat_in_preempt.go。自带锁。
 	groupOwnSends groupOwnSendClock
+	// sessionSends 记各会话最近发出去的消息和是哪一轮发的，见 sibling_turns.go。自带锁。
+	sessionSends sessionSendLog
 	// botAvatars 记每台机器人上一次看到的自己头像指纹，见 avatar_freshness.go。
 	// 自带锁，不受 mu 保护。
 	botAvatars     botAvatarMemory
@@ -714,8 +716,13 @@ type Runtime struct {
 	replyTurnMu sync.Mutex
 	replyTurns  map[string]replyTurnRecord
 	// replyProgresses 按发送者记还在跑的回复，见 reply_progress.go。
-	replyProgressMu    sync.Mutex
-	replyProgresses    map[string]map[*replyProgress]struct{}
+	replyProgressMu sync.Mutex
+	replyProgresses map[string]map[*replyProgress]struct{}
+	// sessionReplyProgresses 按会话记还在跑的回复，给同群别的轮看（sibling_turns.go）。
+	sessionReplyProgresses map[string]map[*replyProgress]struct{}
+	// recentImageSends 记各会话刚发出的图，见 recent_image_send.go。
+	recentImageSendMu  sync.Mutex
+	recentImageSends   map[string]recentImageSend
 	replyBatches       map[string]*replyBatchGate
 	unavailableGroupMu sync.RWMutex
 	botMuteMu          sync.RWMutex
@@ -4503,6 +4510,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		// 同群别人叫的、还在跑的几轮：不说的话两轮会把同一件事各做一遍、各发一遍。
+		if note := r.siblingRepliesNote(event); note != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    note,
+				Priority:   llm.MessagePriorityPlugin,
+				AtomicText: true,
+			})
+		}
 		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
 		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
 		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
@@ -5215,7 +5231,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				appendDecision.previousKey = previous.key
 			}
 		}
-		interjections, stopInterjections := r.startDirectReplyInterjections(ctx)
+		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)
+		interjections := combineInterjections(directInterjections, r.startSiblingSendInterjections(ctx, event))
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		identity := callerIdentityForEvent(cfg, event)
 		identity.Background = backgroundRunContext(ctx)
