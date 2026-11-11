@@ -883,15 +883,15 @@ func parseOneBotMessage(raw json.RawMessage, fallback string) []MessageSegment {
 	if len(raw) > 0 && string(raw) != "null" {
 		var segments []MessageSegment
 		if err := json.Unmarshal(raw, &segments); err == nil {
-			return expandMarkdownImages(segments)
+			return dropBrokenDuplicateImages(expandMarkdownImages(segments))
 		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err == nil {
 			// message 字段可能是 CQ 字符串，也可能是 segment 数组，两种格式都支持。
-			return CQToSegments(text)
+			return dropBrokenDuplicateImages(CQToSegments(text))
 		}
 	}
-	return CQToSegments(fallback)
+	return dropBrokenDuplicateImages(CQToSegments(fallback))
 }
 
 // stringifyID 将 OneBot 里可能为数字或字符串的 ID 统一成字符串。
