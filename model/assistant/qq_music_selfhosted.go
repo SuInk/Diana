@@ -197,8 +197,8 @@ func (s *qqSource) freshCredentials(ctx context.Context, f *musicFetcher, cfg mu
 }
 
 // credentialExpired 先看 Cookie 自带的过期时间，看不到再问自建接口。
-// 问不出结果（网络错、接口不认）按没过期处理：拿没坏的凭据去续期，
-// 最坏会把一份好好的 refresh_token 用掉。
+// 问不出结果（网络错、接口自己失败）按没过期处理：宁可这次不续期，
+// 也不拿可能还有效的 refresh_token 去换。
 func (s *qqSource) credentialExpired(ctx context.Context, f *musicFetcher, cfg musicConfig, base, cookie string) bool {
 	values := musicCookieValues(cookie)
 	created, _ := strconv.ParseInt(values["musickey_create_time"], 10, 64)
@@ -219,17 +219,26 @@ func (s *qqSource) credentialExpired(ctx context.Context, f *musicFetcher, cfg m
 	if !f.fetchJSON(ctx, cfg, base+"/login/check_expired", false, s.headers(cfg), &payload) {
 		return false
 	}
-	// 这个接口的返回很拧巴：SDK 方法返回 bool「是否已过期」，Web 层把 true 包成
-	// code 0、data null，false 包成 code -1、msg「操作失败」。所以 code 0 反而
-	// 表示过期。以后若改成直接回 data: true/false，按 data 读。
-	// 注意 null 也能无错解进 bool（得到 false），所以只认字面量 true/false。
-	switch strings.TrimSpace(string(payload.Data)) {
-	case "true":
-		return true
-	case "false":
+	// 0.8.2 的接口成功时统一回 code 0，是否过期在 data.expired：true 已过期、
+	// false 未过期。旧版曾把「已过期」包成 code 0 + data null，保留这条兜底；
+	// 接口自己失败（code != 0）时不能当成过期，否则会拿还有效的 refresh_token
+	// 去换，把一份好凭据换没。
+	if payload.Code != 0 {
 		return false
 	}
-	return payload.Code == 0
+	if data := strings.TrimSpace(string(payload.Data)); data != "" && data != "null" {
+		var check struct {
+			Expired *bool `json:"expired"`
+		}
+		if err := json.Unmarshal(payload.Data, &check); err == nil && check.Expired != nil {
+			return *check.Expired
+		}
+		var expired bool
+		if err := json.Unmarshal(payload.Data, &expired); err == nil {
+			return expired
+		}
+	}
+	return true
 }
 
 // qqSelfHostedCredential 是 /login/refresh_credential 返回的 Credential。Web 层按
