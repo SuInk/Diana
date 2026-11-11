@@ -5258,7 +5258,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}
-			r.recordAppendContextDecision(ctx, appendDecision, continuation, resp, err)
+			r.recordAppendContextDecision(ctx, event, appendDecision, continuation, resp, err)
 		}
 		if err != nil {
 			return "", err

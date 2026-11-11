@@ -348,6 +348,37 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 	return clampContextWindowToConfig(window, cfg)
 }
 
+// promptContextWindowFallback 报告对话模型的窗口是不是没人填、用的兜底常量：配置档里
+// 一个都没写窗口，机器人也没设上限。界面要把这种窗口标出来，免得被当成模型的真实上限。
+func (r *Runtime) promptContextWindowFallback(cfg BotConfig) bool {
+	if cfg.MaxContextTokens > 0 {
+		return false
+	}
+	r.mu.RLock()
+	store := r.llmStore
+	r.mu.RUnlock()
+	if store == nil {
+		return true
+	}
+	set := store.Profiles().WithDefaults()
+	profiles, _ := r.roleBoundProfiles("", set, llm.GroupChat)
+	if len(profiles) == 0 {
+		profiles = llmProfilesInGroup(set, llm.GroupChat)
+	}
+	if len(profiles) == 0 {
+		if current, ok := set.FirstProfile(); ok {
+			profiles = []llm.Profile{current}
+		}
+	}
+	for _, profile := range profiles {
+		cfg := profile.Config.WithDefaults()
+		if _, source := cfg.ResolveContextWindowTokens(); source != llm.ContextWindowSourceFallback || cfg.MaxContextTokens > 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // clampContextWindowToConfig 让机器人/群配置的上限只能收紧：模型窗口是能力上限，
 // 配置里那个数是这个机器人愿意在单次请求上花多少。
 func clampContextWindowToConfig(window int64, cfg BotConfig) int64 {
@@ -688,8 +719,10 @@ type ContextBudgetLayer struct {
 type ContextBudgetBreakdown struct {
 	GroupID string `json:"group_id,omitempty"`
 	// ContextWindow 是这个群实际会用到的模型窗口。
-	ContextWindow int64                `json:"context_window"`
-	Layers        []ContextBudgetLayer `json:"layers"`
+	ContextWindow int64 `json:"context_window"`
+	// ContextWindowFallback 为 true 时窗口没人填，是兜底常量，不代表模型的真实上限。
+	ContextWindowFallback bool                 `json:"context_window_fallback,omitempty"`
+	Layers                []ContextBudgetLayer `json:"layers"`
 	// Allocated 是四层合计，Headroom 是留给系统提示、当前消息、工具结果和输出的余量。
 	Allocated int64 `json:"allocated"`
 	Headroom  int64 `json:"headroom"`
@@ -710,8 +743,9 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 
 	historyCeiling := recentHistoryCeiling(cfg)
 	breakdown := ContextBudgetBreakdown{
-		GroupID:       event.GroupID,
-		ContextWindow: window,
+		GroupID:               event.GroupID,
+		ContextWindow:         window,
+		ContextWindowFallback: r.promptContextWindowFallback(cfg),
 		Layers: []ContextBudgetLayer{
 			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, historyCeiling, true),
 			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),

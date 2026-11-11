@@ -9,8 +9,10 @@ import (
 	"encoding/hex"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
+	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -509,7 +511,7 @@ type appendContextDecision struct {
 // recordAppendContextDecision 在 Runner 跑完后补上 Runner 那一侧的结论：assistant 交了
 // 续接但 Runner 的校验键（系统提示、契约、工具定义三段指纹）对不上时，记下新旧两把键，
 // 一眼看出是哪一段变了。
-func (r *Runtime) recordAppendContextDecision(ctx context.Context, decision appendContextDecision, continuation *agent.Continuation, resp *agent.Response, runErr error) {
+func (r *Runtime) recordAppendContextDecision(ctx context.Context, event MessageEvent, decision appendContextDecision, continuation *agent.Continuation, resp *agent.Response, runErr error) {
 	metadata := map[string]any{
 		"phase":           "append_context",
 		"continued":       false,
@@ -535,6 +537,39 @@ func (r *Runtime) recordAppendContextDecision(ctx context.Context, decision appe
 		message = "只追加上下文：续接上一轮"
 	}
 	r.recordDebugTrace(debugTraceFromContext(ctx), message, metadata)
+	r.recordAppendContextLog(ctx, event, metadata)
+}
+
+// recordAppendContextLog 把这一轮续接还是重组记进运行日志（调试记录不一定开着，也不进
+// 库）。事件页「上下文占比」按群统计最近的实际请求时，靠它说清楚每轮是接着上一轮发的
+// 还是整份重新组装、为什么重组。
+func (r *Runtime) recordAppendContextLog(ctx context.Context, event MessageEvent, decision map[string]any) {
+	writer := r.appLogWriter()
+	if writer == nil {
+		return
+	}
+	entry := applog.Entry{
+		Kind:    applog.KindOperation,
+		Level:   applog.LevelInfo,
+		Action:  "append_context",
+		Message: "主回复上下文续接结论",
+		Actor:   oneBotEventActor(event),
+		Target:  event.MessageID,
+		Metadata: map[string]any{
+			"group_id":      event.GroupID,
+			"profile_id":    event.ProfileID,
+			"message_id":    event.MessageID,
+			"session_kind":  string(event.Kind),
+			"continued":     decision["continued"],
+			"reason":        decision["reason"],
+			"prefix_tokens": decision["prefix_tokens"],
+			"append_tokens": decision["append_tokens"],
+			"full_tokens":   decision["full_tokens"],
+		},
+	}
+	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	_ = writer.AppendLog(logCtx, entry)
 }
 
 // appendContextText 是比较用的消息正文：纯文本消息取 Content，分段消息拼文字段。

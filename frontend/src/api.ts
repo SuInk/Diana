@@ -3367,6 +3367,27 @@ export interface AssistantEventsResponse {
   private_chats: AssistantEventPrivateChat[];
   context_budget?: AssistantContextBudget;
   resident_context?: AssistantResidentContext;
+  recent_requests?: AssistantReplyRequestStats;
+}
+
+/** 一个群最近几轮主回复实际发给模型的请求（选了群时才有）。 */
+export interface AssistantReplyRequestStats {
+  since: string;
+  turns: number;
+  /** 这些轮里主回复调用模型的总次数，工具步骤每步一次。 */
+  requests: number;
+  first_input_median: number;
+  first_input_max: number;
+  /** 缓存占比按 token 加权，0–100。first 只看每轮第一次请求，all 含工具步骤。 */
+  first_cached_percent: number;
+  all_cached_percent: number;
+  /** 第一次请求缓存命中不到三成的轮数。 */
+  misses: number;
+  continued: number;
+  rebuilt: number;
+  unrecorded: number;
+  rebuild_reasons: Record<string, number>;
+  models: Record<string, number>;
 }
 
 export interface AssistantEventGroup {
@@ -3416,6 +3437,8 @@ export interface AssistantContextBudgetLayer {
 export interface AssistantContextBudget {
   group_id?: string;
   context_window: number;
+  /** 窗口没人填、用的兜底常量时为 true，不代表模型的真实上限。 */
+  context_window_fallback?: boolean;
   layers: AssistantContextBudgetLayer[];
   allocated: number;
   headroom: number;
