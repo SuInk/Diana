@@ -53,6 +53,9 @@ type appendContextLog struct {
 	sent   map[string]bool
 	latest map[string]string
 	memory map[string]bool
+	// pieces 是前缀里出现过的每个段（按「【」切）和每个段落（按空行切），续接时
+	// 不带标题的固定说明逐字一样就不再发。
+	pieces map[string]bool
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
@@ -177,13 +180,18 @@ func unsentTail(log *appendContextLog, content string) string {
 	var kept []string
 	for _, block := range splitContextBlocks(content) {
 		title := blockTitle(block)
+		_, items := memoryBlockParts(block)
 		switch {
 		case title == appendContextMentionTitle:
-		case strings.HasPrefix(block, appendContextMemoryTitle):
+		case len(items) > 0 || strings.HasPrefix(block, appendContextMemoryTitle):
 			if rest := unsentMemoryBlock(log, block); rest != "" {
 				kept = append(kept, rest)
 			}
 		case title != "" && log.latest[title] == block:
+			// 带标题的段是状态（对话对象、当前发言者的工具……）：和上文最近那一版一样就不发，
+			// 变了就发新的一版。不能按「出现过」判断：A、B 交替说话时要发回 A 那一版。
+		case title == "" && log.pieces[strings.TrimSpace(block)]:
+			// 不带标题的段是固定说明：发过就不再发。
 		default:
 			kept = append(kept, block)
 		}
@@ -307,7 +315,7 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 		return nil
 	}
 	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey,
-		seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{}, memory: map[string]bool{}}
+		seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{}, memory: map[string]bool{}, pieces: map[string]bool{}}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)
@@ -330,12 +338,15 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 		if isHistoryLine(content) || message.Role == llm.RoleAssistant {
 			continue
 		}
+		for _, paragraph := range strings.Split(content, "\n\n") {
+			log.pieces[strings.TrimSpace(paragraph)] = true
+		}
 		for _, block := range splitContextBlocks(content) {
+			log.pieces[strings.TrimSpace(block)] = true
 			if title := blockTitle(block); title != "" {
 				log.latest[title] = block
 			}
-			if strings.HasPrefix(block, appendContextMemoryTitle) {
-				head, items := memoryBlockParts(block)
+			if head, items := memoryBlockParts(block); len(items) > 0 || strings.HasPrefix(block, appendContextMemoryTitle) {
 				log.memory[head] = true
 				for _, item := range items {
 					log.memory[item] = true
@@ -439,6 +450,9 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		}
 		appended = append(appended, message)
 	}
+	// 当前消息带的注解（群聊篇幅等）、查证提醒和 Runner 加的输出前检查每轮照发，不走
+	// 「发过的不再发」：11-11 回放（swe-2，24 条，terra 盲评）连它们也去掉后回复中位字数
+	// 37 → 59、人设分 3.50 → 2.67，只多省约 540 token。贴着当前消息才压得住篇幅。
 	appended = append(appended[:len(appended)-1:len(appended)-1],
 		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder}, appended[len(appended)-1])
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)

@@ -163,12 +163,90 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 		result.Role != llm.RoleTool || result.ToolCallID != reply.ToolCalls[0].ID {
 		t.Fatalf("first reply missing after the prefix: %#v / %#v", reply, result)
 	}
-	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。
+	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。贴着生成的规则
+	// 每轮照发，见 appendContextContinuation 里的说明。
 	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule {
 		t.Fatalf("current expression reminder missing: %#v", last)
 	}
 	if current := after[len(after)-2]; current.Role != llm.RoleUser || !strings.Contains(appendContextText(current), "吃了吗") {
 		t.Fatalf("current message is not immediately before the reminder: %#v", current)
+	}
+}
+
+// 续接时发过的资料不再发：带记忆条目的段（含画像之后那段）按条去重，无标题的固定说明
+// 发过就不发；当前消息连同它的注解照发；带标题的状态段 A、B 交替时照样发回 A。
+func TestAppendContextSendsOnlyNewContent(t *testing.T) {
+	portrait := "【当前发言者画像结束；其他人的身份以对应姓名的消息或来源为准】\n\n稳定事实、偏好与长期要求：\n- [偏好｜甲] 喜欢猫\n- [偏好｜乙] 不吃香菜"
+	stateA := "【当前消息的对话对象】\n{\"reply_target\":\"a\"}"
+	stateB := "【当前消息的对话对象】\n{\"reply_target\":\"b\"}"
+	fixed := "Telegram 不使用合并转发，也不自动拼接多条消息。"
+	current := func(text string) string {
+		return "【当前需要回复的消息】【当前发言者】甲\n" + text + "\n\n群聊接话：闲聊随口一两句。"
+	}
+	build := func(state, memory, text string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设"},
+			{Role: llm.RoleUser, Content: "[历史 1] 甲: 你好", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: memory},
+			{Role: llm.RoleSystem, Content: state},
+			{Role: llm.RoleSystem, Content: fixed},
+			{Role: llm.RoleUser, Content: current(text)},
+		}
+	}
+	first := build(stateA, portrait, "在吗")
+	log := newAppendContextLog(&agent.Response{Transcript: first, ConversationKey: "k"}, appendContextHeadKey(first), estimateMessagesTokens(first), nil)
+	// 测试消息很短，前缀几轮就会超过「完整组装的两倍」；把 Runner 那侧的开销放大，只测去重。
+	log.overhead = 1 << 20
+
+	// 同一个人、同样的状态，画像段多一条新记忆。
+	second := build(stateA, portrait+"\n- [偏好｜丙] 周末爬山", "吃了吗")
+	continuation, decision := appendContextContinuation(log, second)
+	if continuation == nil {
+		t.Fatalf("没有续接：%s", decision.reason)
+	}
+	var sent []string
+	for _, message := range continuation.Append {
+		sent = append(sent, appendContextText(message))
+	}
+	joined := strings.Join(sent, "\n---\n")
+	for _, unwanted := range []string{"喜欢猫", "不吃香菜", fixed, "reply_target"} {
+		if strings.Contains(joined, unwanted) {
+			t.Fatalf("发过的 %q 又发了一遍：\n%s", unwanted, joined)
+		}
+	}
+	for _, wanted := range []string{"周末爬山", "吃了吗", "群聊接话"} {
+		if !strings.Contains(joined, wanted) {
+			t.Fatalf("新内容 %q 没发：\n%s", wanted, joined)
+		}
+	}
+
+	// 状态 A → B → A：切回 A 时要发回 A 那一版，不能因为「发过」就省掉。
+	log = newAppendContextLog(&agent.Response{Transcript: append(log.prefix, continuation.Append...), ConversationKey: "k", Continued: true}, appendContextHeadKey(first), estimateMessagesTokens(second), log)
+	third := build(stateB, portrait, "那你呢")
+	continuation, _ = appendContextContinuation(log, third)
+	if continuation == nil {
+		t.Fatal("第三轮没有续接")
+	}
+	sentB := false
+	for _, message := range continuation.Append {
+		if strings.Contains(appendContextText(message), "\"b\"") {
+			sentB = true
+		}
+	}
+	if !sentB {
+		t.Fatal("状态变成 B 应当发出")
+	}
+	log = newAppendContextLog(&agent.Response{Transcript: append(log.prefix, continuation.Append...), ConversationKey: "k", Continued: true}, appendContextHeadKey(first), estimateMessagesTokens(third), log)
+	fourth := build(stateA, portrait, "好的")
+	continuation, _ = appendContextContinuation(log, fourth)
+	found := false
+	for _, message := range continuation.Append {
+		if strings.Contains(appendContextText(message), "\"a\"") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("状态切回 A 时应当发回 A 那一版")
 	}
 }
 
