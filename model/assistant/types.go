@@ -295,9 +295,9 @@ type MessageEvent struct {
 	// 和「没算过」。
 	carryOver    []MessageEvent
 	carryOverSet bool
-	// replyAnchorID 是这一轮回复该挂引用的消息，由回复构建时的 replyAnchorEvent 决定；
-	// 为空就是 MessageID 本身。
-	replyAnchorID          string
+	// replyQuoteCandidates 是这一轮回复可以挂引用的消息，由回复构建时的
+	// replyQuoteCandidates 决定；为空时 auto 档只给 MessageID 本身。
+	replyQuoteCandidates   []MessageEvent
 	replyDeliveryMode      replyDeliveryMode
 	replyLineBreakMode     replyLineBreakMode
 	replyAuditImageContext string
