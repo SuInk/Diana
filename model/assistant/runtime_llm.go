@@ -850,8 +850,8 @@ const speakerToolRulesTitle = "【当前发言者适用的工具规则】"
 // 模型与项目地址的披露）收成尾部最前面单独的一段。
 //
 // 它们以前直接写在「当前消息的对话对象」那一段里，单独成段是为了当时续接按段标题
-// 去重（和上一次逐字相同就不重发）。现在整个尾部只用于本轮、每轮原样发出，不进续接
-// 的前缀，这一段每轮都在；没有规则时也写明，读起来不用猜。
+// 去重（和上一次逐字相同就不重发）。现在它随发言者变、属于当轮段，只用于本轮、每轮
+// 原样发出，不进续接的前缀；没有规则时也写明，读起来不用猜。
 func speakerToolRulesBlock(rules string) string {
 	rules = strings.TrimSpace(rules)
 	if rules == "" {
@@ -868,7 +868,14 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 	return joinPromptSections(head, tail)
 }
 
-// systemPromptPartsWithRelationshipAndAgentTools 把系统提示词拆成两段：
+// systemPromptPartsWithRelationshipAndAgentTools 把系统提示词分成头部和尾部两段，尾部是
+// 群级稳定段接当轮段。主回复要把后两者分开放，用 systemPromptSections。
+func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
+	head, group, turn := r.systemPromptSections(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, registry)
+	return head, joinPromptSections(group, turn)
+}
+
+// systemPromptSections 把系统提示词拆成三段：
 //
 //   - head 只依赖机器人配置、本群配置和本轮注册的工具：同一个群里不管谁说话、
 //     说什么，它逐字节相同。它作为第一条 system 消息发出，供应商的前缀缓存
@@ -879,9 +886,17 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 //     消息放在历史之后、当前消息之前。以前这段直接拼在同一条 system 里，换一个
 //     人说话整条 system 就变，Anthropic / Gemini / Responses 把 system 放在所有
 //     消息之前，system 一变，几千 token 的历史缓存也跟着全部作废。
+//   - group 是 tail 里同一个群不随发言者、不随每条消息变的那部分：这个群的说话风格
+//     和约定。它单独成一条消息进续接的前缀，发一次之后命中缓存，变了才补发（见
+//     groupStableMessage）。整个尾部都只给当轮用的时候，swe-2 同群连续 8 轮真实请求的
+//     缓存命中从 93.9% 掉到 80.0%，每轮未命中约 3500 → 7800 token：尾部中位 1.3 万字，
+//     大半跨轮不变却每轮按未命中重发。
+//
+// 只有确认不看发言者、不看当前消息的段才进 group，拿不准的留在 tail。长期保存区清单
+// 内容只随机器人变，但只对主人出现，主人和群友交替说话时这一段时有时无，所以留在 tail。
 //
 // 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
-func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
+func (r *Runtime) systemPromptSections(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (head, group, turn string) {
 	cfg := r.effectiveConfigForEvent(event)
 	// 工具用法提示跟着工具面走：管理员拿到主人那套工具，提示也按主人给。
 	tools := relationship.toolScope()
@@ -1088,7 +1103,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 群聊场景那一句同理：它分「被点名」和「主动接话」两串，以前在 head 里，线上同一
 	// 个群两种轮次交替时，每次切换都让后面约 8 万 token 的历史缓存失效。它打头，
 	// 后面紧跟主动接话的细则，两段读在一起不会打架。
-	// 这一段各自带标题，和上面「当前消息的对话对象」分开读。整个尾部只用于本轮、每轮
+	// 这一段各自带标题，和上面「当前消息的对话对象」分开读。当轮段只用于本轮、每轮
 	// 原样发出，不进续接的前缀（见 markAppendContextTail）。
 	var mode strings.Builder
 	if event.Kind == EventKindGroup {
@@ -1167,9 +1182,12 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	} else if event.voiceCall {
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}
+	// 这个群的说话风格和约定只看是哪个群，进群级稳定段；约定要跟在风格笔记后面
+	// （它的正文里写着「上面风格笔记里有…的也一样不用」）。
 	groupStyle := r.groupStylePrompt(event, cfg)
-	appendPromptSection(&tail, groupStyle)
-	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
+	var groupStable strings.Builder
+	appendPromptSection(&groupStable, groupStyle)
+	appendPromptSection(&groupStable, r.groupRulesPrompt(event, cfg))
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
 	// 腔调、心情和语气锚点另成一段：里面的换行比例、心情逐轮在变，以前跟在群约定后面
 	// 没有标题，一变就连群约定一起重发（每轮约 250 字）。
@@ -1185,7 +1203,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		tail.WriteString("\n【本轮语气】")
 		tail.WriteString(tone.String())
 	}
-	return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
+	return builder.String(), strings.TrimSpace(groupStable.String()), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
 }
 
 // joinPromptSections 用换行拼接非空段落。

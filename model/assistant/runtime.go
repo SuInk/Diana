@@ -4438,7 +4438,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
+	systemHead, systemGroup, systemTail := r.systemPromptSections(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
+	// 群级稳定段单独成一条消息，放在历史之后、当轮内容之前，进续接的前缀。
+	groupStable, hasGroupStable := groupStableMessage(systemGroup)
 	// 图片任务通知和可提及成员名单都随这条消息变：并进尾部那条 system 消息。
 	// 【主人】只在主人出现在这一轮的历史或当前消息里时才有，排在候选名单前面：
 	// 续接按「【」开头的行切段，后面紧跟新段，不会粘上随消息变的行。
@@ -4484,7 +4486,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			// 整块一条：它在历史区之后，和尾部别的内容一样只给这一轮用、不进续接的前缀
+			// 整块一条：它在历史区之后，和尾部别的当轮内容一样只给这一轮用、不进续接的前缀
 			// （见 markAppendContextTail），不用再把块头和检索到的条目拆开。
 			volatile = append(volatile, llm.Message{
 				Role:     llm.RoleUser,
@@ -4664,6 +4666,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
 		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
 		messages = markStablePromptPrefix(messages)
+		if hasGroupStable {
+			messages, hasGroupStable = append(messages, groupStable), false
+		}
 		messages = append(messages, volatile...)
 		volatile = nil
 		for _, candidate := range turnCandidates {
@@ -4705,6 +4710,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	// 插件事实占据权威地位时没有历史那一段，攒下的块直接跟在 system 头部后面。
+	if hasGroupStable {
+		messages = append(messages, groupStable)
+	}
 	messages = append(messages, volatile...)
 	semanticContext := r.semanticReferenceContext(ctx, event)
 	if sourceMessage := semanticReferenceContextMessage(semanticContext); !runtimeLLMMessageEmpty(sourceMessage) {
@@ -5229,7 +5237,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				appendDecision.previousKey = previous.key
 			}
 			// 重新组装的那一轮（没有记录、续不上，或者 Runner 核对指纹后退回完整组装）
-			// 发的是这份 messages：尾部同样标成只用于本轮，这一轮记下的前缀才不含尾部。
+			// 发的是这份 messages：尾部的当轮内容同样标成只用于本轮，这一轮记下的前缀
+			// 里尾部只留群级稳定的那一条。
 			markAppendContextTail(messages, len(messages)-1)
 		}
 		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,

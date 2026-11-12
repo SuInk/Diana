@@ -24,10 +24,13 @@ import (
 // 末尾」和「上一次完整请求末尾」两个检查点，主回复命中只有三到四成。10-27 生产
 // 同群连续 8 轮实测：gpt-6.1-sol 47.4% → 90.9%，deepseek-flash 72.2% → 91.2%。
 //
-// 前缀里只留聊天本身：头部、聊天历史行、机器人自己发出的话和历轮的当前消息。
+// 前缀里只留跨轮基本不变的东西：头部、聊天历史行、机器人自己发出的话、历轮的当前
+// 消息，和同一个群里不随发言者、不随消息变的那条群级稳定说明。
 //   - 新群消息和当前消息追加进前缀；
-//   - 历史区之后、当前消息之前的整段尾部（时间、发言者、对话对象、群约定、语气、
-//     记忆、跨群参考……）只用于本轮（llm.Message.TurnOnly）：每轮按完整组装的结果
+//   - 群级稳定说明（这个群的说话风格和约定，见 groupStableMessage）发一次就留在前缀
+//     里命中缓存：和前缀里最近一份逐字相同就不发，变了整条再追加一次；
+//   - 历史区之后、当前消息之前其余的尾部（时间、发言者、对话对象、语气、记忆、跨群
+//     参考……）每轮都在变，只用于本轮（llm.Message.TurnOnly）：每轮按完整组装的结果
 //     原样发出，不进前缀。重新组装的那一轮同样标记（markAppendContextTail）；
 //   - 一轮里的工具调用和结果不进前缀，只在发言后面留一行「调用过哪些工具」
 //     （见 agent 的 turnTranscript 和 appendContextPrefix）。
@@ -35,8 +38,10 @@ import (
 // 以前尾部留在前缀里，靠一套去重控制体积（带标题的段和上文最近一版相同就不发、固定
 // 说明发过不再发、记忆按条去重）。生产统计每轮续接追加的内容里聊天只占三分之一，
 // 其余是这些每轮在变的状态，约 5 轮就撑到上限被迫重新组装，那一轮缓存不命中、慢约
-// 2 秒。用生产请求实测（swe-2，同群连续 8 轮）：标成只用于本轮不影响缓存命中
-// （93.6%，严格追加是 93.9%）。
+// 2 秒。但也不能把尾部整段都只给当轮用：swe-2 同群连续 8 轮真实请求实测，那样缓存
+// 命中从 93.9% 掉到 80.0%，每轮未命中约 3500 → 7800 token——尾部中位 1.3 万字，大半
+// 跨轮不变却每轮按未命中重发。所以按「变不变」分：跨轮不变的进前缀，每轮都变的才
+// 只给当轮用；分类在组装的源头做（systemPromptSections），不靠事后按文本猜。
 //
 // 请求仍逐轮变长，超过这一轮完整组装的两倍或单次请求上限就重新开一份；头部（人设、
 // 配置）或 Runner 的系统提示、固定说明、工具定义变了也重开。记录落盘，进程重启后
@@ -58,6 +63,8 @@ type appendContextLog struct {
 	// 已经发过的回复。
 	seen map[string]bool
 	sent map[string]bool
+	// stable 是前缀里最近一条群级稳定说明的正文，没有就是空串。
+	stable string
 	// pieces 是前缀里历轮当前消息的每个段落（按空行切）：钉在当前消息末尾的固定注解
 	// （群聊篇幅）上文有过就不再带。
 	pieces map[string]bool
@@ -197,7 +204,9 @@ func appendContextKey(event MessageEvent) string {
 func appendContextHeadKey(messages []llm.Message) string {
 	hash := sha256.New()
 	for _, message := range messages {
-		if message.Role != llm.RoleSystem {
+		// 群级稳定说明不算头部：没有历史时它紧挨着头部，算进去的话它一变、或者下一轮
+		// 有了历史把它隔开，头部指纹就对不上，白白重新组装。
+		if message.Role != llm.RoleSystem || isGroupStableMessage(message) {
 			break
 		}
 		hash.Write([]byte(message.Content))
@@ -259,9 +268,30 @@ func appendContextPrefix(resp *agent.Response) []llm.Message {
 	return append(out, transcript[at:]...)
 }
 
+// groupStableTitle 是群级稳定说明那条消息的第一行，也是认出它的标识：只有
+// groupStableMessage 造得出以它开头的 system 消息。认它靠这一行而不靠另加字段，前缀
+// 落盘再读回来照样认得。
+//
+// 续接时内容变了会在后面再追加一份，旧的那份还留在前缀里，所以这一行要说明以哪份为准。
+const groupStableTitle = "【本群固定说明】下面的内容在这个群里对谁都一样。上文有更早的一份时，以最新这一份为准。"
+
+// groupStableMessage 把群级稳定段（见 systemPromptSections）包成单独一条 system 消息；
+// 没有内容时不成消息。
+func groupStableMessage(content string) (llm.Message, bool) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return llm.Message{}, false
+	}
+	return llm.Message{Role: llm.RoleSystem, Content: groupStableTitle + "\n" + content, Priority: llm.MessagePrioritySystem}, true
+}
+
+func isGroupStableMessage(message llm.Message) bool {
+	return message.Role == llm.RoleSystem && len(message.Parts) == 0 && strings.HasPrefix(message.Content, groupStableTitle+"\n")
+}
+
 // markAppendContextTail 把完整组装的请求里历史区之后、当前消息之前的消息标成只用于
-// 本轮，这一轮记下的前缀就不含尾部，和续接的轮次一样。current 是当前消息的下标。
-// 历史区的终点是缓存断点；没标断点（没有历史）时分不清哪些是尾部，不标。
+// 本轮，群级稳定说明除外：这一轮记下的前缀里尾部只留它，和续接的轮次一样。current 是
+// 当前消息的下标。历史区的终点是缓存断点；没标断点（没有历史）时分不清哪些是尾部，不标。
 func markAppendContextTail(messages []llm.Message, current int) {
 	historyEnd := -1
 	for index, message := range messages {
@@ -273,17 +303,22 @@ func markAppendContextTail(messages []llm.Message, current int) {
 		return
 	}
 	for index := historyEnd + 1; index < current && index < len(messages); index++ {
-		messages[index].TurnOnly = true
+		if !isGroupStableMessage(messages[index]) {
+			messages[index].TurnOnly = true
+		}
 	}
 }
 
-// index 从 prefix 算出 seen、sent、pieces 这几张表。它们完全由 prefix 决定，
+// index 从 prefix 算出 seen、sent、pieces 这几张表和 stable。它们完全由 prefix 决定，
 // 落盘时只存 prefix，读回来再算一遍。
 func (log *appendContextLog) index() {
-	log.seen, log.sent, log.pieces = map[string]bool{}, map[string]bool{}, map[string]bool{}
+	log.seen, log.sent, log.pieces, log.stable = map[string]bool{}, map[string]bool{}, map[string]bool{}, ""
 	var dates historyLineDates
 	for _, message := range log.prefix {
 		content := appendContextText(message)
+		if isGroupStableMessage(message) {
+			log.stable = message.Content
+		}
 		log.seen[content] = true
 		if message.Role == llm.RoleUser {
 			// 历史行按写全日期的形态记：同一条消息在前缀里可能只写了时分秒，到下一轮完整
@@ -329,8 +364,9 @@ func isHistoryLine(content string) bool {
 }
 
 // appendContextContinuation 从这一轮完整组装的消息里挑出要接在记录后面的部分。
-// 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的尾部整段原样带上、标成
-// 只用于本轮；当前消息放最后。返回 nil 表示这一轮不能续接、应当重新组装。
+// 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的群级稳定说明变了才追加、
+// 留在前缀里，其余尾部原样带上、标成只用于本轮；当前消息放最后。返回 nil 表示这一轮
+// 不能续接、应当重新组装。
 //
 // contextLimit 是续接请求的长度上限（token，0 表示不限；主回复传的是
 // appendContextLimit(requestContextLimit())，即单次请求上限减去预留）：续接后的
@@ -358,7 +394,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 	}
 	// 开头连续的 system 是头部，已经由 headKey 核对过、就在前缀里。
 	head := 0
-	for head < len(messages)-1 && messages[head].Role == llm.RoleSystem {
+	for head < len(messages)-1 && messages[head].Role == llm.RoleSystem && !isGroupStableMessage(messages[head]) {
 		head++
 	}
 	var appended []llm.Message
@@ -370,6 +406,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 	// keepReply 记着上一条历史发言调用追加了没有：它的「已发送」结果跟着走，两半要么
 	// 都追加、要么都不追加，否则留下不成对的调用，供应商整轮拒绝。
 	keepReply := false
+	sawStable := false
 	for index, message := range messages[head:] {
 		index += head
 		message.CacheBreakpoint = false
@@ -384,6 +421,15 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 				keepReply = !log.sent[appendContextSentKey(llm.HistoryReplyText(message))]
 			}
 			if keepReply {
+				appended = append(appended, message)
+			}
+			continue
+		}
+		if index > historyEnd && isGroupStableMessage(message) {
+			// 群级稳定说明整条比：和前缀里最近一份逐字相同就不发（它还在前缀里、命中
+			// 缓存），不同就整条追加并留在前缀。不按段、按条目细分去重。
+			sawStable = true
+			if message.Content != log.stable {
 				appended = append(appended, message)
 			}
 			continue
@@ -421,6 +467,12 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 	// 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带：当前消息留在前缀里，注解
 	// 每轮都带就一路累积。11-11 回放去掉后回复中位字数 37 → 59、人设分 3.50 → 2.67，
 	// 当时因此保留；11-12 用户决定去掉，请求体积优先。
+	if log.stable != "" && !sawStable {
+		// 这个群的风格和约定都没了（约定过期、风格被关掉），前缀里那份却还在，模型会
+		// 继续照着做。少见，重新组装一次把它清掉，不为它另写一条「作废」说明。
+		decision.reason = "stable_removed"
+		return nil, decision
+	}
 	// 查证提醒每轮贴在当前消息前面，只用于本轮、不进前缀。查证规则写在头部，续接后
 	// 离当前消息隔着好几轮对话，模型容易凭印象答。11-12 一度去掉：当晚同一时段主回复
 	// 联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
