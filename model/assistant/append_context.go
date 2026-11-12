@@ -373,9 +373,11 @@ func isHistoryLine(content string) bool {
 // 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的尾部去掉上文已有的
 // 参考资料；当前消息原样放最后。返回 nil 表示这一轮不能续接、应当重新组装。
 //
-// currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊篇幅），续接时上文有过就去掉。
-func appendContextContinuation(log *appendContextLog, messages []llm.Message, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
-	decision := appendContextDecision{fullTokens: estimateMessagesTokens(messages)}
+// contextLimit 是机器人或群的「单次请求上下文上限」（token，0 表示不限）：续接后的
+// 请求超过它也重新组装。currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊
+// 篇幅），续接时上文有过就去掉。
+func appendContextContinuation(log *appendContextLog, messages []llm.Message, contextLimit int64, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
+	decision := appendContextDecision{fullTokens: estimateMessagesTokens(messages), contextLimit: contextLimit}
 	switch {
 	case len(messages) == 0:
 		decision.reason = "empty"
@@ -466,6 +468,14 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, cu
 		decision.reason = "too_long"
 		return nil, decision
 	}
+	// 上限必须管住续接。以前续接只看上面那道两倍，配置的上限只在完整组装时参与预算
+	// 分配：11-12 生产 354 轮续接，同一轮完整组装中位 3.1 万 token，实际发出中位
+	// 6.8 万、最大 13 万。超了交给发送层去裁会从中间丢消息，前缀照样断；在这里直接
+	// 重新组装，得到的是一份按预算排好的请求。
+	if contextLimit > 0 && decision.prefixTokens+decision.appendTokens > contextLimit {
+		decision.reason = "context_limit"
+		return nil, decision
+	}
 	return &agent.Continuation{Prefix: log.prefix, Append: appended, Key: log.key}, decision
 }
 
@@ -478,6 +488,8 @@ type appendContextDecision struct {
 	prefixTokens int64
 	appendTokens int64
 	overhead     int64
+	// contextLimit 是这一轮的单次请求上下文上限，0 表示不限。
+	contextLimit int64
 }
 
 // recordAppendContextDecision 在 Runner 跑完后补上 Runner 那一侧的结论：assistant 交了
@@ -492,6 +504,7 @@ func (r *Runtime) recordAppendContextDecision(ctx context.Context, event Message
 		"prefix_tokens":   decision.prefixTokens,
 		"append_tokens":   decision.appendTokens,
 		"overhead_tokens": decision.overhead,
+		"context_limit":   decision.contextLimit,
 	}
 	switch {
 	case runErr != nil:

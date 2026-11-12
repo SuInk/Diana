@@ -1465,6 +1465,7 @@ const recentRequests = computed(() => summaryResponse.value?.recent_requests ?? 
 const rebuildReasonLabels: Record<string, string> = {
   no_log: "没有上一轮记录",
   too_long: "续接太长",
+  context_limit: "超过配置的上下文上限",
   runner_key_changed: "工具或系统提示变了",
   head_changed: "人设或配置变了",
   run_failed: "上一轮失败",
