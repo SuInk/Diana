@@ -28,7 +28,11 @@ const (
 )
 
 // 确实需要超长的写在这里并写明原因。行号会随编辑漂移，所以键用「文件名:描述开头十个字」。
-var toolDescriptionBudgetExemptions = map[string]string{}
+var toolDescriptionBudgetExemptions = map[string]string{
+	// 照参考项目把几种常见查法的示例写进描述，超出的部分就是这些示例；生产回放
+	// 验证的是带示例的这一份，没有单独验证过删掉示例的版本。
+	"history_tool.go:读取本地聊天记录，或": "回放验证过的查询示例",
+}
 
 var toolParamHelper = regexp.MustCompile(`^tool[A-Za-z]*Param$`)
 
