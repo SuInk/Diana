@@ -583,7 +583,7 @@ func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
 }
 
 // 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带，没有过照带；跨群历史续接时
-// 一律不追加，哪怕是这一轮新检索到的。
+// 照常追加，上文已有的不重复。
 func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	note := "群聊接话：闲聊随口一两句。"
 	cross := "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了"
@@ -611,8 +611,16 @@ func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	if last := parts[len(parts)-1]; last != "【当前需要回复的消息】甲: 吃了吗" {
 		t.Fatalf("the repeated note must be dropped from the current message: %q", last)
 	}
-	if strings.Contains(joined, "跨群历史") {
-		t.Fatalf("cross-group lines must not be appended: %q", joined)
+	// 跨群历史照常追加：新检索到的那条要带，上文已有的那条不重复。
+	if !strings.Contains(joined, "新检索到的一条") {
+		t.Fatalf("a new cross-group line must be appended: %q", joined)
+	}
+	// 同一条跨群历史再次被检索到时，上文已有就不再追加。
+	again, _ := appendContextContinuation(log, turn(cross, "【当前需要回复的消息】甲: 吃了吗\n\n"+note), 0, note)
+	for _, message := range again.Append {
+		if strings.Contains(message.Content, "猫又跑了") {
+			t.Fatalf("a cross-group line already in the prefix must not repeat: %q", message.Content)
+		}
 	}
 	// 上文没有过这条注解时照带。
 	fresh := appendTestLog(t, turn(cross, "【当前需要回复的消息】甲: 在吗"), "在的")

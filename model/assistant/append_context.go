@@ -141,9 +141,13 @@ func unsentMemoryBlock(log *appendContextLog, block string) string {
 // unsentTail 去掉一条尾部消息里上文已经有的部分，返回空串表示整条都不用发。
 func unsentTail(log *appendContextLog, content string) string {
 	if isCrossGroupLine(content) {
-		// 跨群历史和记忆条目一样按当前话题检索，每轮检索到的都不同，只去掉上文已有的
-		// 拦不住累积。续接时一律不带，完整组装那一轮照常带。
-		return ""
+		// 跨群历史续接时照常追加，上文已有的那条不再发。曾经（#1543）为了控制体积续接时
+		// 一律不带，结果只有重新组装那一轮能看到跨群内容，跨群联想形同关掉；用户要求
+		// 保留这项能力。体积由续接上限兜住。
+		if log.seen[content] {
+			return ""
+		}
+		return content
 	}
 	var kept []string
 	for _, block := range splitContextBlocks(content) {
