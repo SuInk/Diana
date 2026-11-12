@@ -163,13 +163,20 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 		result.Role != llm.RoleTool || result.ToolCallID != reply.ToolCalls[0].ID {
 		t.Fatalf("first reply missing after the prefix: %#v / %#v", reply, result)
 	}
-	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。贴着生成的规则
-	// 每轮照发，见 appendContextContinuation 里的说明。
-	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule {
-		t.Fatalf("current expression reminder missing: %#v", last)
+	// 输出前检查只在重新组装的那一轮加：续接的请求里上一轮那条还在前缀里，不再重复，
+	// 当前消息就是最后一条。
+	check := "【输出前检查】\n" + replyUnclosedBracketRule
+	checks := 0
+	for _, message := range after {
+		if message.Role == llm.RoleSystem && message.Content == check {
+			checks++
+		}
 	}
-	if current := after[len(after)-2]; current.Role != llm.RoleUser || !strings.Contains(appendContextText(current), "吃了吗") {
-		t.Fatalf("current message is not immediately before the reminder: %#v", current)
+	if checks != 1 {
+		t.Fatalf("the output check must appear exactly once, got %d", checks)
+	}
+	if current := after[len(after)-1]; current.Role != llm.RoleUser || !strings.Contains(appendContextText(current), "吃了吗") {
+		t.Fatalf("current message is not last: %#v", current)
 	}
 }
 
@@ -291,11 +298,11 @@ func TestAppendContextSendsOnlyWhatChanged(t *testing.T) {
 		}
 	}
 
-	// 查证提醒每轮都插在当前消息前面，即使上文已经有一模一样的一条。
+	// 续接不再插查证提醒：追加的最后一条就是当前消息。
 	for _, continuation := range []*agent.Continuation{continueFrom(log, first)} {
 		n := len(continuation.Append)
-		if n < 2 || continuation.Append[n-2].Content != appendContextVerifyReminder || continuation.Append[n-1].Content != "甲: 在吗" {
-			t.Fatalf("verify reminder must sit right before the current message: %q", appended(continuation))
+		if n < 1 || continuation.Append[n-1].Content != "甲: 在吗" || strings.Contains(appended(continuation), "【本轮提醒】") {
+			t.Fatalf("the current message must come last with no reminder: %q", appended(continuation))
 		}
 	}
 
@@ -572,5 +579,45 @@ func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
 				t.Fatalf("regeneration still sees the discarded draft call: %#v", call)
 			}
 		}
+	}
+}
+
+// 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带，没有过照带；跨群历史续接时
+// 一律不追加，哪怕是这一轮新检索到的。
+func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
+	note := "群聊接话：闲聊随口一两句。"
+	cross := "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了"
+	turn := func(crossLine, current string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
+			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: crossLine},
+			{Role: llm.RoleUser, Content: current},
+		}
+	}
+	first := turn(cross, "【当前需要回复的消息】甲: 在吗\n\n"+note)
+	log := appendTestLog(t, first, "在的")
+	second := turn("[跨群历史 2026-10-21 09:00:00] 乙: 新检索到的一条", "【当前需要回复的消息】甲: 吃了吗\n\n"+note)
+
+	continuation, decision := appendContextContinuation(log, second, note)
+	if continuation == nil {
+		t.Fatalf("expected a continuation, reason = %q", decision.reason)
+	}
+	var parts []string
+	for _, message := range continuation.Append {
+		parts = append(parts, message.Content)
+	}
+	joined := strings.Join(parts, "|")
+	if last := parts[len(parts)-1]; last != "【当前需要回复的消息】甲: 吃了吗" {
+		t.Fatalf("the repeated note must be dropped from the current message: %q", last)
+	}
+	if strings.Contains(joined, "跨群历史") {
+		t.Fatalf("cross-group lines must not be appended: %q", joined)
+	}
+	// 上文没有过这条注解时照带。
+	fresh := appendTestLog(t, turn(cross, "【当前需要回复的消息】甲: 在吗"), "在的")
+	continuation, _ = appendContextContinuation(fresh, second, note)
+	if last := continuation.Append[len(continuation.Append)-1].Content; !strings.HasSuffix(last, note) {
+		t.Fatalf("a note not yet in the prefix must stay: %q", last)
 	}
 }

@@ -5225,7 +5225,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages)
+			continuation, appendDecision = appendContextContinuation(previous, messages, cfg.prompt(promptNoteGroupBrevitySpec))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
