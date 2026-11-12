@@ -209,3 +209,34 @@ func TestStickerAssetsKeepTelegramStickerFileID(t *testing.T) {
 		t.Fatalf("backfilled asset=%#v", got)
 	}
 }
+
+// 历史行按哈希单查表情包标注：标过的原样读回（版本一并带回，动图旧标注由调用方判断），
+// 没标过和哈希不合法都当没有。
+func TestGetStickerTagsByHash(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "stickers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	hash := strings.Repeat("3", 64)
+	if _, found, err := store.GetStickerTags(ctx, hash); err != nil || found {
+		t.Fatalf("untagged sticker: found=%v err=%v", found, err)
+	}
+	if err := store.SaveStickerTags(ctx, assistant.StickerTagRecord{
+		ContentSHA256: hash, Gist: " 猫猫歪头装傻 ", Tags: []string{"装傻", "疑惑"}, Category: "动物", Version: assistant.StickerAnnotationVersion,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := store.GetStickerTags(ctx, strings.ToUpper(hash[:1])+hash[1:])
+	if err != nil || !found {
+		t.Fatalf("found=%v err=%v", found, err)
+	}
+	if record.ContentSHA256 != hash || record.Gist != "猫猫歪头装傻" || strings.Join(record.Tags, ",") != "装傻,疑惑" ||
+		record.Category != "动物" || record.Version != assistant.StickerAnnotationVersion {
+		t.Fatalf("record=%#v", record)
+	}
+	if _, found, err := store.GetStickerTags(ctx, "not-a-hash"); err != nil || found {
+		t.Fatalf("invalid hash: found=%v err=%v", found, err)
+	}
+}
