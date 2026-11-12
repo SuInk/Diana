@@ -204,9 +204,14 @@ func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse
 		return nil
 	}
 	transcript := make([]llm.Message, 0, len(request.Messages)+4)
-	transcript = append(transcript, request.Messages...)
-	for index := range transcript {
-		transcript[index].CacheBreakpoint = false
+	// 只用于本轮的内容（跨群参考等）不进下一轮的前缀：前缀里只留后面每轮都会复用的
+	// 内容，缓存才命中得多；下一轮按新的检索结果另放。
+	for _, message := range request.Messages {
+		if message.TurnOnly {
+			continue
+		}
+		message.CacheBreakpoint = false
+		transcript = append(transcript, message)
 	}
 	if response == nil {
 		return transcript
