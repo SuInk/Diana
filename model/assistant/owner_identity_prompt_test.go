@@ -61,7 +61,7 @@ func TestOwnerAccountPromptStableAndDedupedOnAppend(t *testing.T) {
 		t.Fatalf("owner prompt varies by speaker:\n%q\n%q", a, b)
 	}
 
-	log := &appendContextLog{seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{blockTitle(a): a}, memory: map[string]bool{}}
+	log := &appendContextLog{seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{blockTitle(a): a}, pieces: map[string]bool{}}
 	tail := joinPromptSections(a, `【可提及成员候选 JSON】[{"user_id":"30003"}]`)
 	if got := unsentTail(log, tail); strings.Contains(got, "【主人】") {
 		t.Fatalf("unchanged owner block resent: %q", got)

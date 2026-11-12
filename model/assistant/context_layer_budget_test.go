@@ -83,17 +83,20 @@ func TestRequestContextLimitDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-// 照雨夹雪分历史：重新组装只带 min(20000, (上限−16384)/2)，续接涨到上限减 16384。
+// 照雨夹雪分历史：重新组装只带 min(20000, (上限−16384)/2)；续接涨到上限减 4096
+// （续接的预留单独一个常量，不做压缩用不着留 16384）。
 func TestRecentHistoryKeepsRecentSliceAndAppendGrowsToReserve(t *testing.T) {
 	for _, item := range []struct {
 		limit, history, appendLimit int64
 	}{
 		// (64000−16384)/2 = 23808，压到 20000。
-		{limit: DefaultRequestContextTokens, history: 20000, appendLimit: 47616},
-		{limit: 32000, history: 7808, appendLimit: 15616},
-		{limit: 128000, history: 20000, appendLimit: 111616},
-		// 上限比预留还小：历史落到保底，续接上限取 1（每轮重新组装），不能落成表示不限的 0。
-		{limit: 12000, history: minimumRecentHistoryTokens, appendLimit: 1},
+		{limit: DefaultRequestContextTokens, history: 20000, appendLimit: 59904},
+		{limit: 32000, history: 7808, appendLimit: 27904},
+		{limit: 128000, history: 20000, appendLimit: 123904},
+		// 上限比历史的预留还小：历史落到保底，续接照样按上限减 4096。
+		{limit: 12000, history: minimumRecentHistoryTokens, appendLimit: 7904},
+		// 上限比续接的预留还小：续接上限取 1（每轮重新组装），不能落成表示不限的 0。
+		{limit: 4000, history: minimumRecentHistoryTokens, appendLimit: 1},
 	} {
 		if got := recentHistoryBudget(item.limit); got != item.history {
 			t.Fatalf("limit %d: history budget = %d, want %d", item.limit, got, item.history)
@@ -101,6 +104,9 @@ func TestRecentHistoryKeepsRecentSliceAndAppendGrowsToReserve(t *testing.T) {
 		if got := appendContextLimit(item.limit); got != item.appendLimit {
 			t.Fatalf("limit %d: append limit = %d, want %d", item.limit, got, item.appendLimit)
 		}
+	}
+	if got := appendContextLimit(64000); got != 59904 {
+		t.Fatalf("append limit for 64000 = %d, want 59904", got)
 	}
 	// 0 表示不限，续接也不限。
 	if got := appendContextLimit(0); got != 0 {

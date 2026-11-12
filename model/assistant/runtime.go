@@ -4484,8 +4484,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			// 块头（发言者、画像）同一个人连着几轮都一样，照常进前缀；检索到的条目按
-			// 当前消息现查、每轮不同，只给这一轮用，不进续接的前缀（见 splitRetrievedMemory）。
+			// 块头（发言者、画像）同一个人连着几轮都一样，续接时和前缀相同就不发；检索到
+			// 的条目按当前消息现查、每轮不同，只给这一轮用，不进续接的前缀（见
+			// splitRetrievedMemory）。
 			head, retrieved := splitRetrievedMemory(memoryContext)
 			if head != "" {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
@@ -4807,10 +4808,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		})
 	}
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
+		// 时钟每轮都不同，只用于本轮：重新组装那一轮的时间不留在续接的前缀里。
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  clockPrompt,
 			Priority: llm.MessagePrioritySystem,
+			TurnOnly: true,
 		})
 	}
 	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
@@ -5216,11 +5219,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if traceID != "" {
 			traceID = "chat-" + traceID
 		}
-		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
-		// 不再从零核验。本次运行结束后按结果续档或清档。
-		if carryover, ok := r.agentCarryoverMessage(event); ok {
-			messages = append(messages, carryover)
-		}
 		promptSession := r.groupPromptSession(event)
 		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
 		// 后台入口也走这里，它们不接进群聊的记录。
@@ -5234,6 +5232,19 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
+			}
+		}
+		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
+		// 不再从零核验。本次运行结束后按结果续档或清档。
+		//
+		// 放在续接判断之后：它排在当前消息后面，先加的话会被当成当前消息，真正的当前
+		// 消息反倒被算进尾部、续接时标成只用于本轮。存档说的是上一轮没做完的事，只用于
+		// 本轮，不进前缀。
+		if carryover, ok := r.agentCarryoverMessage(event); ok {
+			carryover.TurnOnly = true
+			messages = append(messages, carryover)
+			if continuation != nil {
+				continuation.Append = append(continuation.Append, carryover)
 			}
 		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)

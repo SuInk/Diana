@@ -50,7 +50,9 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 			if err != nil {
 				return req, err
 			}
-			note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data)}
+			// 执行状态和下面的输出前检查每步现算，只用于本轮：不进续接的前缀（见
+			// llm.Message.TurnOnly），所以每次请求都照加，不会越攒越多。
+			note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data), TurnOnly: true}
 			// Keep the current user input last, but never split a native tool batch.
 			at := len(req.Messages)
 			if at > 0 && req.Messages[at-1].Role == llm.RoleUser {
@@ -61,20 +63,10 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 			messages = append(messages, note)
 			req.Messages = append(messages, req.Messages[at:]...)
 			if len(configs) > 0 {
-				// 放在本轮输入和工具目录之后。请求里已经有一模一样的一条就不再加：续接的
-				// 请求带着上一轮的全文，每轮、每步再加一条只是让它在前缀里越攒越多（11-12
-				// 生产每轮约 300 字）。重新组装的那一轮照常带上。
-				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
-				present := false
-				for _, message := range req.Messages {
-					if message.Role == llm.RoleSystem && message.Content == check {
-						present = true
-						break
-					}
-				}
-				if !present {
-					req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check})
-				}
+				// 放在本轮输入和工具目录之后，每次请求都加：它贴着生成位置才有效。11-12
+				// 一度改成「请求里已有一模一样的就不加」，因为那时它留在前缀里每轮攒约
+				// 300 字；现在不进前缀，没有理由省。
+				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec), TurnOnly: true})
 			}
 			return req, nil
 		},
