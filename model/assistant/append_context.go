@@ -126,49 +126,19 @@ func memoryBlockParts(block string) (head string, items []string) {
 	return strings.Join(heads, "\n"), items
 }
 
-// unsentMemoryBlock 只留上文里还没有的记忆条目，小标题跟着它下面还有新条目时才留。
-// 块头变了（换了发言者、画像更新）就带上块头；块头和条目都发过，整块不发。
+// unsentMemoryBlock 续接时不带记忆条目：换了发言者或画像更新时只带块头（标题、当前
+// 发言者、画像），块头发过就整块不发。
+//
+// 以前只去掉上文已有的条目，新条目照发。但条目是按当前话题检索的，每轮都不一样，
+// 「新条目」每轮都有：11-11 生产 106 轮续接里，每轮追加约 8400 字，这一块占 2700 字
+// （32%），真正的聊天内容只有 1300 字，请求续到完整组装的 2.26 倍。完整组装那一轮
+// 仍带检索到的条目；续接期间要用别的记忆，由模型自己查。
 func unsentMemoryBlock(log *appendContextLog, block string) string {
 	head, _ := memoryBlockParts(block)
-	lines := strings.Split(block, "\n")
-	var kept []string
-	fresh := 0
-	for index, line := range lines {
-		switch {
-		case isMemoryItemLine(line):
-			if !log.memory[line] {
-				kept = append(kept, line)
-				fresh++
-			}
-		case index+1 < len(lines) && isMemoryItemLine(lines[index+1]):
-			for next := index + 1; next < len(lines) && isMemoryItemLine(lines[next]); next++ {
-				if !log.memory[lines[next]] {
-					kept = append(kept, line)
-					break
-				}
-			}
-		default:
-			kept = append(kept, line)
-		}
-	}
-	if fresh == 0 && log.memory[head] {
+	if log.memory[head] {
 		return ""
 	}
-	if log.memory[head] {
-		// 同一发言者、同一份画像已经在上文里：只留标题行，后面跟新条目。
-		headLines := map[string]bool{}
-		for _, line := range strings.Split(head, "\n")[1:] {
-			headLines[line] = true
-		}
-		slim := kept[:0]
-		for _, line := range kept {
-			if !headLines[line] {
-				slim = append(slim, line)
-			}
-		}
-		kept = slim
-	}
-	return strings.Join(kept, "\n")
+	return head
 }
 
 // unsentTail 去掉一条尾部消息里上文已经有的部分，返回空串表示整条都不用发。
