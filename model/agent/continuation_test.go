@@ -303,3 +303,19 @@ func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
 		t.Fatalf("latest delivery must win: %q", got["platform"])
 	}
 }
+
+// 只用于本轮的内容（跨群参考）随本轮请求发出，但不进下一轮续接的前缀。
+func TestTranscriptAfterDropsTurnOnlyMessages(t *testing.T) {
+	request := llm.GenerateRequest{Messages: []llm.Message{
+		{Role: llm.RoleSystem, Content: "head"},
+		{Role: llm.RoleUser, Content: "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了", TurnOnly: true},
+		{Role: llm.RoleUser, Content: "current", CacheBreakpoint: true},
+	}}
+	transcript := transcriptAfter(request, nil, "")
+	if len(transcript) != 2 || transcript[0].Content != "head" || transcript[1].Content != "current" || transcript[1].CacheBreakpoint {
+		t.Fatalf("turn-only message must be dropped and breakpoints cleared: %#v", transcript)
+	}
+	if !request.Messages[1].TurnOnly || len(request.Messages) != 3 {
+		t.Fatal("the request itself must not be modified")
+	}
+}

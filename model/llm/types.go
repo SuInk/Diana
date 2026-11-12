@@ -117,6 +117,11 @@ type Message struct {
 	// keeps such a message whole or drops it whole instead of trimming it. The
 	// producer is responsible for shrinking it to fit beforehand.
 	AtomicText bool `json:"-"`
+	// TurnOnly marks context that is only for the current turn (e.g. cross-group
+	// references retrieved for this message). It is sent with this turn's
+	// requests but left out of the transcript the next turn continues from, so
+	// the accumulated prefix only holds content that later turns reuse.
+	TurnOnly bool `json:"-"`
 }
 
 type ToolDefinition struct {

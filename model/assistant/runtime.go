@@ -4484,11 +4484,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			volatile = append(volatile, llm.Message{
-				Role:     llm.RoleUser,
-				Content:  memoryContext,
-				Priority: llm.MessagePriorityMemory,
-			})
+			// 块头（发言者、画像）同一个人连着几轮都一样，照常进前缀；检索到的条目按
+			// 当前消息现查、每轮不同，只给这一轮用，不进续接的前缀（见 splitRetrievedMemory）。
+			head, retrieved := splitRetrievedMemory(memoryContext)
+			if head != "" {
+				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
+			}
+			if retrieved != "" {
+				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory, TurnOnly: true})
+			}
 		}
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
 		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
