@@ -302,11 +302,11 @@ func TestAppendContextSendsOnlyWhatChanged(t *testing.T) {
 		}
 	}
 
-	// 续接不再插查证提醒：追加的最后一条就是当前消息。
+	// 查证提醒每轮贴在当前消息前面，标成只用于本轮（不进前缀）。
 	for _, continuation := range []*agent.Continuation{continueFrom(log, first)} {
 		n := len(continuation.Append)
-		if n < 1 || continuation.Append[n-1].Content != "甲: 在吗" || strings.Contains(appended(continuation), "【本轮提醒】") {
-			t.Fatalf("the current message must come last with no reminder: %q", appended(continuation))
+		if n < 2 || continuation.Append[n-2].Content != appendContextVerifyReminder || !continuation.Append[n-2].TurnOnly || continuation.Append[n-1].Content != "甲: 在吗" {
+			t.Fatalf("verify reminder must sit right before the current message as turn-only: %q", appended(continuation))
 		}
 	}
 

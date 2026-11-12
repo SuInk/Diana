@@ -66,6 +66,9 @@ type appendContextLog struct {
 	historyDate string
 }
 
+// appendContextVerifyReminder 见 appendContextContinuation 里的说明。
+const appendContextVerifyReminder = "【本轮提醒】对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
+
 // appendContextMemoryTitle 是长期记忆块的开头，见 formatStructuredMemoryContextWithTokenBudgetDetailed。
 const appendContextMemoryTitle = "【关系、权限与分层长期记忆"
 
@@ -485,6 +488,11 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 	// 以前它和查证提醒、Runner 的输出前检查每轮照发，三样合计每轮约 620 字，一路留在
 	// 前缀里累积。11-11 回放去掉后回复中位字数 37 → 59、人设分 3.50 → 2.67，当时因此
 	// 保留；11-12 用户决定去掉，请求体积优先。
+	// 查证提醒每轮贴在当前消息前面，只用于本轮、不进前缀。查证规则写在头部，续接后
+	// 离当前消息隔着好几轮对话，模型容易凭印象答。11-12 一度去掉：当晚同一时段主回复
+	// 联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
+	appended = append(appended[:len(appended)-1:len(appended)-1],
+		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder, TurnOnly: true}, appended[len(appended)-1])
 	last := &appended[len(appended)-1]
 	for _, note := range currentNotes {
 		note = strings.TrimSpace(note)
