@@ -11,9 +11,9 @@ import (
 func TestContextLayerBudgetsCapLargeWindows(t *testing.T) {
 	const window int64 = 128000
 
-	// 近期历史没有绝对上限，总量由请求上限管；其余几层在大窗口下被各自的上限压住。
-	if got := recentHistoryBudget(window); got != 70400 {
-		t.Fatalf("history budget = %d, want the 55%% share 70400", got)
+	// 近期历史在大窗口下压在 recentHistoryKeepCeiling；其余几层被各自的上限压住。
+	if got := recentHistoryBudget(window); got != recentHistoryKeepCeiling {
+		t.Fatalf("history budget = %d, want the keep ceiling %d", got, recentHistoryKeepCeiling)
 	}
 	if got := sessionThreadBudget(window); got != sessionThreadTokenCeiling {
 		t.Fatalf("thread budget = %d", got)
@@ -29,9 +29,10 @@ func TestContextLayerBudgetsCapLargeWindows(t *testing.T) {
 func TestContextLayerBudgetsFollowShareOnSmallWindows(t *testing.T) {
 	const window int64 = 8000
 
-	// 小窗口下绝对值是上限不是下限，仍按份额走，不能超发。
-	if got := recentHistoryBudget(window); got != 4400 {
-		t.Fatalf("history budget = %d, want 4400", got)
+	// 小窗口下绝对值是上限不是下限，仍按份额走，不能超发。近期历史扣掉预留后已经
+	// 不剩，落到最小保底。
+	if got := recentHistoryBudget(window); got != minimumRecentHistoryTokens {
+		t.Fatalf("history budget = %d, want the floor %d", got, minimumRecentHistoryTokens)
 	}
 	if got := retrievedMemoryBudget(window); got != 800 {
 		t.Fatalf("retrieved memory budget = %d, want 800", got)
@@ -45,8 +46,8 @@ func TestContextLayerBudgetsFollowShareOnSmallWindows(t *testing.T) {
 	}
 }
 
-// 机器人和群都留空时上限落到 64K；填了谁就用谁，群优先。近期历史只按收紧后的窗口
-// 乘份额算，不再有单独的历史预算。
+// 机器人和群都留空时上限落到 64K；填了谁就用谁，群优先。近期历史只由收紧后的窗口
+// 算出，不再有单独的历史预算。
 func TestRequestContextLimitDefaultsAndOverrides(t *testing.T) {
 	const groupID = "35791"
 	for _, item := range []struct {
@@ -75,14 +76,35 @@ func TestRequestContextLimitDefaultsAndOverrides(t *testing.T) {
 			if window != item.want {
 				t.Fatalf("window = %d, want %d", window, item.want)
 			}
-			if got, want := recentHistoryBudget(window), item.want*recentHistoryTokenShare/contextShareDenominator; got != want {
+			if got, want := recentHistoryBudget(window), max(minimumRecentHistoryTokens, min(recentHistoryKeepCeiling, (item.want-requestContextReserveTokens)/2)); got != want {
 				t.Fatalf("history budget = %d, want %d", got, want)
 			}
 		})
 	}
-	// 64K 默认值下历史拿 55%，即 35200。
-	if got := recentHistoryBudget(DefaultRequestContextTokens); got != 35200 {
-		t.Fatalf("default history budget = %d, want 35200", got)
+}
+
+// 照雨夹雪分历史：重新组装只带 min(20000, (上限−16384)/2)，续接涨到上限减 16384。
+func TestRecentHistoryKeepsRecentSliceAndAppendGrowsToReserve(t *testing.T) {
+	for _, item := range []struct {
+		limit, history, appendLimit int64
+	}{
+		// (64000−16384)/2 = 23808，压到 20000。
+		{limit: DefaultRequestContextTokens, history: 20000, appendLimit: 47616},
+		{limit: 32000, history: 7808, appendLimit: 15616},
+		{limit: 128000, history: 20000, appendLimit: 111616},
+		// 上限比预留还小：历史落到保底，续接上限取 1（每轮重新组装），不能落成表示不限的 0。
+		{limit: 12000, history: minimumRecentHistoryTokens, appendLimit: 1},
+	} {
+		if got := recentHistoryBudget(item.limit); got != item.history {
+			t.Fatalf("limit %d: history budget = %d, want %d", item.limit, got, item.history)
+		}
+		if got := appendContextLimit(item.limit); got != item.appendLimit {
+			t.Fatalf("limit %d: append limit = %d, want %d", item.limit, got, item.appendLimit)
+		}
+	}
+	// 0 表示不限，续接也不限。
+	if got := appendContextLimit(0); got != 0 {
+		t.Fatalf("append limit for unlimited = %d", got)
 	}
 }
 

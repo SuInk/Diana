@@ -736,6 +736,7 @@ func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, e
 		}
 		messages = append(messages, r.renderPromptHistoryEvent(ctx, source, item, cfg, false)...)
 	}
+	messages = compactHistoryLineDates(messages)
 	if clock := r.runtimeClockPrompt(source); clock != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clock, Priority: llm.MessagePrioritySystem})
 	}

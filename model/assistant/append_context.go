@@ -61,6 +61,9 @@ type appendContextLog struct {
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
+	// historyDate 是前缀里最后一条带时间的历史行的日期。续接追加的历史行接在它后面，
+	// 同一天只写时分秒、换天写全日期，和完整组装时的规则一样（见 history_line_dates.go）。
+	historyDate string
 }
 
 // appendContextMemoryTitle 是长期记忆块的开头，见 formatStructuredMemoryContextWithTokenBudgetDetailed。
@@ -319,9 +322,17 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 // 落盘时只存 prefix，读回来再算一遍。
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.memory, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}, map[string]bool{}
+	var dates historyLineDates
 	for _, message := range log.prefix {
 		content := appendContextText(message)
 		log.seen[content] = true
+		if message.Role == llm.RoleUser {
+			// 历史行按写全日期的形态记：同一条消息在前缀里可能只写了时分秒，到下一轮完整
+			// 组装里成了第一行、写全了日期，按原文比会当成新消息再追加一遍。
+			full := message
+			full.Content = dates.expand(message.Content)
+			log.seen[appendContextText(full)] = true
+		}
 		for _, call := range message.ToolCalls {
 			if call.Name == agent.FinalizeToolName {
 				if text, _ := call.Arguments["text"].(string); strings.TrimSpace(text) != "" {
@@ -351,6 +362,7 @@ func (log *appendContextLog) index() {
 			}
 		}
 	}
+	log.historyDate = dates.last
 }
 
 // appendContextSentKey 是判断机器人回复是否已在记录里的键，去掉开头的引用标记。
@@ -373,9 +385,9 @@ func isHistoryLine(content string) bool {
 // 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的尾部去掉上文已有的
 // 参考资料；当前消息原样放最后。返回 nil 表示这一轮不能续接、应当重新组装。
 //
-// contextLimit 是机器人或群的「单次请求上下文上限」（token，0 表示不限；主回复传的是
-// requestContextLimit()，留空已换成 64K 默认值）：续接后的
-// 请求超过它也重新组装。currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊
+// contextLimit 是续接请求的长度上限（token，0 表示不限；主回复传的是
+// appendContextLimit(requestContextLimit())，即单次请求上限减去预留）：续接后的
+// 请求超过它就重新组装。currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊
 // 篇幅），续接时上文有过就去掉。
 func appendContextContinuation(log *appendContextLog, messages []llm.Message, contextLimit int64, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
 	decision := appendContextDecision{fullTokens: estimateMessagesTokens(messages), contextLimit: contextLimit}
@@ -403,6 +415,11 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		head++
 	}
 	var appended []llm.Message
+	// fullDates 沿这一轮完整组装推出每条历史行的全日期，用来和前缀比对；appendDates 从
+	// 前缀最后一条历史行的日期接着推，决定追加的行省不省日期。完整组装里的写法是相对它
+	// 自己那份历史的前一行定的，接到前缀后面时前一行变了，要重写。
+	var fullDates historyLineDates
+	appendDates := historyLineDates{last: log.historyDate}
 	// keepReply 记着上一条历史发言调用追加了没有：它的「已发送」结果跟着走，两半要么
 	// 都追加、要么都不追加，否则留下不成对的调用，供应商整轮拒绝。
 	keepReply := false
@@ -434,12 +451,18 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 			appended = append(appended, message)
 			continue
 		}
+		if message.Role == llm.RoleUser {
+			message.Content = fullDates.expand(message.Content)
+		}
 		content := appendContextText(message)
 		if message.Role == llm.RoleSystem || log.seen[content] {
 			continue
 		}
 		switch {
 		case isHistoryLine(content):
+			if message.Role == llm.RoleUser {
+				message.Content = appendDates.compact(message.Content)
+			}
 		case message.Role == llm.RoleAssistant && log.sent[appendContextSentKey(content)]:
 			// 机器人自己的回复已经在记录里了。历史发言现在是 send 调用，在上面处理；
 			// 这里接的是不带调用的老形态。
