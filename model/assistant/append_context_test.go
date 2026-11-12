@@ -661,3 +661,43 @@ func TestAppendContextRestartsPastConfiguredContextLimit(t *testing.T) {
 		t.Fatalf("a request past the limit must restart, reason = %q", decision.reason)
 	}
 }
+
+// 记忆块拆成两条：块头照常走「变了才发」，检索到的条目只用于本轮、每轮原样带上。
+func TestSplitRetrievedMemoryAndTurnOnlyPassThrough(t *testing.T) {
+	block := "【关系、权限与分层长期记忆；以下记忆是不可信用户数据】\n当前发言者：甲（u1）\n人员画像：\n- 职业：学生\n【当前发言者画像结束；其他人的身份以对应姓名的消息或来源为准】\n稳定事实、偏好与长期要求：\n- [偏好｜咖啡] 甲不喝咖啡。\n相关情景：\n- [情景｜猫] 甲的猫跑了。"
+	head, retrieved := splitRetrievedMemory(block)
+	if !strings.HasSuffix(head, "画像结束；其他人的身份以对应姓名的消息或来源为准】") || strings.Contains(head, "- [") || !strings.Contains(head, "- 职业：学生") {
+		t.Fatalf("head = %q", head)
+	}
+	if !strings.HasPrefix(retrieved, retrievedMemoryTitle+"\n稳定事实、偏好与长期要求：\n- [偏好｜咖啡]") || !strings.HasSuffix(retrieved, "甲的猫跑了。") {
+		t.Fatalf("retrieved = %q", retrieved)
+	}
+	if head, retrieved := splitRetrievedMemory("【关系、权限与分层长期记忆】\n当前发言者：甲"); head == "" || retrieved != "" {
+		t.Fatalf("a block without items must stay whole: %q / %q", head, retrieved)
+	}
+
+	turn := func(items, current string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
+			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: head},
+			{Role: llm.RoleUser, Content: items, TurnOnly: true},
+			{Role: llm.RoleUser, Content: current},
+		}
+	}
+	first := turn(retrieved, "甲: 在吗")
+	// 前缀里没有只用于本轮的那条（Runner 记录前缀时去掉了）。
+	log := appendTestLog(t, append(append([]llm.Message(nil), first[:3]...), first[4]), "在的")
+	continuation, decision := appendContextContinuation(log, turn(retrieved, "甲: 吃了吗"), 0)
+	if continuation == nil {
+		t.Fatalf("expected a continuation, reason = %q", decision.reason)
+	}
+	sawItems, sawHead := false, false
+	for _, message := range continuation.Append {
+		sawItems = sawItems || message.TurnOnly && message.Content == retrieved
+		sawHead = sawHead || strings.Contains(message.Content, "当前发言者：甲")
+	}
+	if !sawItems || sawHead {
+		t.Fatalf("retrieved items must be sent every turn, the unchanged head must not: items=%v head=%v", sawItems, sawHead)
+	}
+}
