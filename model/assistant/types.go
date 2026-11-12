@@ -936,19 +936,11 @@ type BotConfig struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
-	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
-	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
-	// RecentHistoryTokenBudget 限定正式回复提示词里近期聊天历史最多占多少 token。
-	// 0 表示用默认值 16000；可以往上调，但最多到 MaximumRecentHistoryTokenBudget，
-	// 生效值还要再按窗口份额收一次。
-	//
-	// 这里用 token 而不是条数：要钉住的成本、窗口和延迟三样都按 token 计价，而一条
-	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，
-	// 实际开销会在一个数量级的区间里飘。RecentContextLimit 仍按条数配，因为它管的
-	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
-	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
-	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
+	// 0 表示用 DefaultRequestContextTokens（64K），读取一律走 requestContextLimit()。
+	// 它只能收紧不能放宽：配置档说模型只有 32K，这里填 200K 也不会真的发出 200K
+	// 的请求。近期聊天历史按它（收紧后的窗口）的固定份额分配，没有单独的旋钮。
+	MaxContextTokens   int64 `json:"max_context_tokens,omitempty"`
+	RecentContextLimit int   `json:"recent_context_limit,omitempty"`
 	// HistoryBackfillMessageLimit 是断线回补后每个会话最多进回复流程的消息条数，
 	// 只算会触发回复的消息。没排上名额的照样补进上下文历史，但不跑媒体处理和回复——
 	// 保持它小，防的是一批积压消息同时开出一堆图片视频任务。
@@ -1397,7 +1389,6 @@ type GroupConfig struct {
 	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
 	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
 	MaxContextTokens               int64  `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget       int64  `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit             int    `json:"recent_context_limit,omitempty"`
 	MaxReplyChars                  int    `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
@@ -1649,10 +1640,10 @@ type ConfigPayload struct {
 	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
 	LLMSecretMaskingEnabled      *bool `json:"llm_secret_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
-	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
+	// 0 表示用 DefaultRequestContextTokens（64K），读取一律走 requestContextLimit()。
+	// 它只能收紧不能放宽：配置档说模型只有 32K，这里填 200K 也不会真的发出 200K
+	// 的请求。近期聊天历史按它（收紧后的窗口）的固定份额分配，没有单独的旋钮。
 	MaxContextTokens                int64                     `json:"max_context_tokens,omitempty"`
-	RecentHistoryTokenBudget        int64                     `json:"recent_history_token_budget,omitempty"`
 	RecentContextLimit              int                       `json:"recent_context_limit,omitempty"`
 	HistoryBackfillMessageLimit     int                       `json:"history_backfill_message_limit,omitempty"`
 	ContextSummaryThreshold         int                       `json:"context_summary_threshold,omitempty"`
@@ -1825,7 +1816,6 @@ func (cfg GroupConfig) clearInheritedSnapshots(base BotConfig) GroupConfig {
 	}
 	clearInt(&cfg.WelcomeLLMCooldownSeconds, func(c BotConfig) int { return c.WelcomeLLMCooldownSeconds })
 	clearInt64(&cfg.MaxContextTokens, func(c BotConfig) int64 { return c.MaxContextTokens })
-	clearInt64(&cfg.RecentHistoryTokenBudget, func(c BotConfig) int64 { return c.RecentHistoryTokenBudget })
 	clearInt(&cfg.RecentContextLimit, func(c BotConfig) int { return c.RecentContextLimit })
 	clearInt(&cfg.MaxReplyChars, func(c BotConfig) int { return c.MaxReplyChars })
 	clearInt(&cfg.ReplyMaxBubbles, func(c BotConfig) int { return c.ReplyMaxBubbles })
@@ -1915,7 +1905,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.WelcomeEnabled = copyBoolPointer(cfg.WelcomeEnabled)
 	cfg.WelcomeLLMCooldownSeconds = max(0, cfg.WelcomeLLMCooldownSeconds)
 	cfg.MaxContextTokens = max(0, cfg.MaxContextTokens)
-	cfg.RecentHistoryTokenBudget = max(0, cfg.RecentHistoryTokenBudget)
 	cfg.RecentContextLimit = max(0, cfg.RecentContextLimit)
 	cfg.MaxReplyChars = max(0, cfg.MaxReplyChars)
 	cfg.ReplyMaxBubbles = max(0, cfg.ReplyMaxBubbles)
@@ -2329,7 +2318,6 @@ func DefaultBotConfig() BotConfig {
 		TelegramSuppressBotMessages:  boolPointer(true),
 		QQTypingEnabled:              boolPointer(true),
 		NotebookSharedScopeEnabled:   boolPointer(true),
-		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
@@ -2588,9 +2576,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	if cfg.MaxContextTokens < 0 {
 		cfg.MaxContextTokens = 0
-	}
-	if cfg.RecentHistoryTokenBudget < 0 {
-		cfg.RecentHistoryTokenBudget = 0
 	}
 	if cfg.RecentContextLimit < 0 {
 		cfg.RecentContextLimit = defaults.RecentContextLimit
@@ -2999,7 +2984,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(cfg.LLMSecretMaskingEnabled),
 		MaxContextTokens:                cfg.MaxContextTokens,
-		RecentHistoryTokenBudget:        cfg.RecentHistoryTokenBudget,
 		RecentContextLimit:              cfg.RecentContextLimit,
 		HistoryBackfillMessageLimit:     cfg.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
@@ -3257,7 +3241,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(payload.LLMSecretMaskingEnabled),
 		MaxContextTokens:                payload.MaxContextTokens,
-		RecentHistoryTokenBudget:        payload.RecentHistoryTokenBudget,
 		RecentContextLimit:              payload.RecentContextLimit,
 		HistoryBackfillMessageLimit:     payload.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,

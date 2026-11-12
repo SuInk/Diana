@@ -179,7 +179,12 @@ func TestBudgetPretrimChunkShrinksWithKeptHistory(t *testing.T) {
 // 预算，留下的历史平均不少于预算的 85%、最少约 75%。
 func TestActiveGroupHistoryWindowMovesInChunksAtTwentyThousandBudget(t *testing.T) {
 	const budget = 20000
-	runtime := NewRuntime(BotConfig{RecentHistoryTokenBudget: budget, ContextSummaryThreshold: 100000, RecentContextLimit: 50000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	// 历史只按请求上限的份额分：36364 × 55% 向下取整正好是 20000。
+	const contextLimit = 36364
+	if recentHistoryBudget(contextLimit) != budget {
+		t.Fatalf("history budget for %d = %d, want %d", contextLimit, recentHistoryBudget(contextLimit), budget)
+	}
+	runtime := NewRuntime(BotConfig{MaxContextTokens: contextLimit, ContextSummaryThreshold: 100000, RecentContextLimit: 50000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	random := rand.New(rand.NewSource(20260928))
 	now := int64(1790000000)
 	previousStart, previousMove := "", 0

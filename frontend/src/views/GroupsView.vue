@@ -500,17 +500,12 @@
           窗口滚过去自动恢复，不需要手动解除。主人不受额度限制。
         </p>
         <div class="field">
-          <label for="group-history-budget">回复历史 token 预算</label>
-          <input id="group-history-budget" v-model.number="editing.recent_history_token_budget" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_history_token_budget)" />
-          <span v-if="(editing.recent_history_token_budget ?? 0) > 32000" class="hint warn-text">最多只能调到 32000，超过的部分不生效。</span>
-        </div>
-        <div class="field">
           <label for="group-context">历史查询条数上限</label>
           <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_context_limit, ' 条')" />
         </div>
         <div class="field">
           <label for="group-maxcontext">单次请求上下文上限</label>
-          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens)" />
+          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens || 64000)" />
         </div>
         <div class="field">
           <label for="group-maxreply">单条回复上限（字符）</label>
@@ -1836,7 +1831,6 @@ async function saveEditing(): Promise<void> {
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: recallDeleteDelay,
-      recent_history_token_budget: followNumber(current.recent_history_token_budget),
       recent_context_limit: followNumber(current.recent_context_limit),
       max_context_tokens: followNumber(current.max_context_tokens),
       max_reply_chars: followNumber(current.max_reply_chars),

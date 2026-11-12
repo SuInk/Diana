@@ -730,12 +730,12 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
 	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
-	// 由 RecentHistoryTokenBudget 按 token 计。
+	// 按单次请求上下文上限的份额以 token 计，留空的上限是 DefaultRequestContextTokens。
 	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
 		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	}
-	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
-		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
+	if got := cfg.requestContextLimit(); got != DefaultRequestContextTokens {
+		t.Fatalf("request context limit default = %d", got)
 	}
 	if boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("cross group memory default = %v, want off", cfg.CrossGroupMemoryEnabled)

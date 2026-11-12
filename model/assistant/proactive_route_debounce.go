@@ -334,7 +334,7 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	latest := eligible[len(eligible)-1]
 	ctx = withLLMUsageContext(ctx, latest.Event)
 	ctx = r.withDebugTraceContext(ctx, latest.Event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(latest.Event).MaxContextTokens)
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(latest.Event).requestContextLimit())
 	if probe := latest.Event.backlogProbe; probe != nil && strings.TrimSpace(probe.ID) != "" {
 		ctx = withOutboundTurn(ctx, probe.ID)
 	}

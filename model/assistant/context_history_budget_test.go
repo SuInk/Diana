@@ -451,7 +451,8 @@ func TestDropSummarizedHistoryKeepsEventsStillInMemory(t *testing.T) {
 }
 
 func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	// 请求上限填得比任何窗口都大，这里只看窗口本身；留空时的 64K 默认值见末尾。
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 1000000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "20004", UserID: "1", MessageID: "1"}
 	cfg := runtime.effectiveConfigForEvent(event)
 
@@ -484,6 +485,12 @@ func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
 	if history := contextShareBudget(window, recentHistoryTokenShare); history <= contextShareBudget(llm.DefaultContextWindowTokens, recentHistoryTokenShare) {
 		t.Fatalf("recent history budget did not grow with the window: %d", history)
 	}
+
+	// 机器人留空时 200K 的模型窗口也被收到默认的 64K。
+	blank := BotConfig{}
+	if got := runtime.promptContextWindowTokens(event, blank); got != DefaultRequestContextTokens {
+		t.Fatalf("blank-limit window = %d, want %d", got, DefaultRequestContextTokens)
+	}
 }
 
 func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
@@ -502,8 +509,9 @@ func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
 	runtime.mu.Unlock()
 
 	base := runtime.effectiveConfigForEvent(event)
-	if got := runtime.promptContextWindowTokens(event, base); got != 200000 {
-		t.Fatalf("uncapped window = %d, want the model's 200000", got)
+	// 留空时用 64K 默认上限，200K 的模型窗口也被收紧到这里。
+	if got := runtime.promptContextWindowTokens(event, base); got != DefaultRequestContextTokens {
+		t.Fatalf("blank-limit window = %d, want the default %d", got, DefaultRequestContextTokens)
 	}
 
 	capped := base
@@ -574,9 +582,8 @@ func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 		t.Fatalf("group = %q", breakdown.GroupID)
 	}
 	window := breakdown.ContextWindow
-	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123456"})
 	want := map[string]int64{
-		"recent_history":   recentHistoryBudget(window, cfg),
+		"recent_history":   recentHistoryBudget(window),
 		"session_thread":   sessionThreadBudget(window),
 		"retrieved_memory": retrievedMemoryBudget(window),
 		"core_memory":      coreMemoryBudget(window),
@@ -610,11 +617,18 @@ func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 	}
 }
 
-// 大窗口下四层几乎全被绝对上限压住，小窗口下全按份额走——分层预算要表达的正是这件事，
-// 图上那个「上限 16000」还是「窗口 55%」的说明不能反过来。
+// 大窗口下除近期历史外几层全被绝对上限压住，小窗口下全按份额走——分层预算要表达的
+// 正是这件事，图上那个「上限 1200」还是「窗口 15%」的说明不能反过来。近期历史没有
+// 绝对上限，任何窗口下都按份额走。
 func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
 	large := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, layer := range large.ContextBudgetBreakdownForGroup("", "g").Layers {
+		if layer.Key == "recent_history" {
+			if layer.CappedByCeiling || layer.Ceiling != 0 {
+				t.Fatalf("近期历史不该有绝对上限：%#v", layer)
+			}
+			continue
+		}
 		if !layer.CappedByCeiling {
 			t.Fatalf("128K 窗口下 %s 应当被绝对上限压住：%#v", layer.Key, layer)
 		}
@@ -645,30 +659,6 @@ func TestPromptContextWindowRespectsConfigWithoutLLMStore(t *testing.T) {
 	wide := BotConfig{MaxContextTokens: llm.DefaultContextWindowTokens * 4}
 	if got := runtime.promptContextWindowTokens(event, wide); got != llm.DefaultContextWindowTokens {
 		t.Fatalf("window = %d, want the fallback %d", got, llm.DefaultContextWindowTokens)
-	}
-}
-
-// 群级的历史预算要真的生效。它此前只存不用——GroupConfig 有字段、WithDefaults 也
-// 从机器人配置继承了默认值、群组页也有输入框，却没有一行把它拷进生效配置。
-func TestGroupLevelHistoryBudgetReachesEffectiveConfig(t *testing.T) {
-	base := BotConfig{ResponseMode: ResponseModeStandard, RecentHistoryTokenBudget: 16000}.WithDefaults()
-	runtime := NewRuntime(base, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	runtime.SetGroupConfigStore(&stubGroupConfigStore{configs: map[string]GroupConfig{
-		"thrifty": {GroupID: "thrifty", RecentHistoryTokenBudget: 4000},
-	}})
-
-	cfg := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "thrifty"})
-	if cfg.RecentHistoryTokenBudget != 4000 {
-		t.Fatalf("群级历史预算没生效：%d", cfg.RecentHistoryTokenBudget)
-	}
-	// 预算真的收紧了这一层，而不只是配置字段好看。
-	if got := recentHistoryBudget(128000, cfg); got != 4000 {
-		t.Fatalf("近期历史预算 = %d，want 4000", got)
-	}
-	// 没有单独配置的群跟随机器人。
-	other := runtime.effectiveConfigForEvent(MessageEvent{Kind: EventKindGroup, GroupID: "other"})
-	if other.RecentHistoryTokenBudget != 16000 {
-		t.Fatalf("未配置的群没有跟随机器人：%d", other.RecentHistoryTokenBudget)
 	}
 }
 
