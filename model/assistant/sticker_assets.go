@@ -104,6 +104,12 @@ type StickerTagStore interface {
 	SaveStickerTags(context.Context, StickerTagRecord) error
 }
 
+// StickerTagReader 按图片哈希读回一张表情包的标注。found 为 false 表示没标注过；
+// 标注版本原样带回，动图的旧标注算不算数由调用方按手里的图判断。
+type StickerTagReader interface {
+	GetStickerTags(ctx context.Context, contentSHA256 string) (StickerTagRecord, bool, error)
+}
+
 type StickerUsageStore interface {
 	RecordStickerSent(ctx context.Context, session, contentSHA256 string, sentAt int64) error
 }

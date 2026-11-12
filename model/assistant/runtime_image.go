@@ -369,7 +369,7 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 	cancel()
 	lines := make([]string, 0, len(sources))
 	for _, source := range sources {
-		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.historyPromptImageDescriptions(ctx, source)))
+		lines = append(lines, agentImageHistoryPromptTextWithDescriptions(source, event.Time, r.referencedImagePromptDescriptions(ctx, source)))
 	}
 	// 摘要是给理解用的，不是判断依据。没附原图不等于工具也读不到：history_media
 	// 和 match_avatar 都按 message_id 自己去取原图。线上出过一次——引用一张图问
@@ -909,17 +909,24 @@ func historicalAudioCount(event MessageEvent) int {
 // historyImageCachedDescriptions 只同步读取已有缓存；缺失描述只进入后台队列，
 // 不在每轮常规回复的关键路径里等待识图网络调用。
 func (r *Runtime) historyImageCachedDescriptions(ctx context.Context, event MessageEvent) []string {
-	return r.historyImageDescriptionsFor(ctx, event, false)
+	return r.historyImageDescriptionsFor(ctx, event, false, false)
 }
 
 // historyPromptImageDescriptions 是拼进对话历史的版本：自己发过的表情包不带简介。
 // 表情包简介是给检索写的（潜台词、适合什么场合发），放进历史里，模型下一轮就会
 // 回头解释自己刚发的图——线上出过「你让我发表情，我倒发了张钻被窝求贴贴的」。
+// 别人发的表情包只写一句话标注，原因见 historyStickerDescriptionMaxRunes。
 func (r *Runtime) historyPromptImageDescriptions(ctx context.Context, event MessageEvent) []string {
-	return r.historyImageDescriptionsFor(ctx, event, true)
+	return r.historyImageDescriptionsFor(ctx, event, true, true)
 }
 
-func (r *Runtime) historyImageDescriptionsFor(ctx context.Context, event MessageEvent, hideOwnStickers bool) []string {
+// referencedImagePromptDescriptions 给「当前消息引用了这张图、原图又附不上」的场合用：
+// 这时摘要是模型手里唯一的依据，表情包也照旧给完整描述，不换成一句话标注。
+func (r *Runtime) referencedImagePromptDescriptions(ctx context.Context, event MessageEvent) []string {
+	return r.historyImageDescriptionsFor(ctx, event, true, false)
+}
+
+func (r *Runtime) historyImageDescriptionsFor(ctx context.Context, event MessageEvent, hideOwnStickers, briefStickers bool) []string {
 	r.enqueueHistoryImageDescriptions(event)
 	segments := append([]MessageSegment(nil), event.Segments...)
 	own := 0
@@ -929,7 +936,7 @@ func (r *Runtime) historyImageDescriptionsFor(ctx context.Context, event Message
 	if event.Quoted != nil {
 		segments = append(segments, event.Quoted.Segments...)
 	}
-	return r.historyImageSegmentDescriptions(ctx, segments, own)
+	return r.historyImageSegmentDescriptionLines(ctx, segments, own, briefStickers)
 }
 
 func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, segments []MessageSegment) []string {
@@ -940,6 +947,13 @@ func (r *Runtime) historyImageCachedSegmentDescriptions(ctx context.Context, seg
 // 让模型知道那是一句语气、不是要它点评的画面；前 ownSegments 段是机器人自己发的，
 // 其中的表情包只标一句，不带简介。
 func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments []MessageSegment, ownSegments int) []string {
+	return r.historyImageSegmentDescriptionLines(ctx, segments, ownSegments, false)
+}
+
+// historyImageSegmentDescriptionLines 的 briefStickers 只在拼进对话历史时打开：别人发的
+// 表情包优先写资料库里那句标注，没有标注才用截短的通用描述。历史检索、媒体索引这些
+// 靠描述找图的地方不打开，照旧拿完整描述。
+func (r *Runtime) historyImageSegmentDescriptionLines(ctx context.Context, segments []MessageSegment, ownSegments int, briefStickers bool) []string {
 	store := r.recallImageDescriptionStore()
 	var lines []string
 	imageIndex := 0
@@ -951,6 +965,7 @@ func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments 
 		videoFrame := strings.EqualFold(strings.TrimSpace(segment.Data["source_type"]), "video_frame")
 		label := "图片"
 		index := 0
+		briefSticker := false
 		if videoFrame {
 			videoFrameIndex++
 			label = "视频关键帧"
@@ -964,6 +979,13 @@ func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments 
 					lines = append(lines, fmt.Sprintf("%s%d=你自己发的表情包，发出去就算说完了", label, index))
 					continue
 				}
+				briefSticker = briefStickers
+			}
+		}
+		if briefSticker {
+			if gist := r.historyStickerGist(ctx, segment); gist != "" {
+				lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateHistoryStickerDescription(gist)))
+				continue
 			}
 		}
 		description := strings.TrimSpace(segment.Data[recallImageDescriptionKey])
@@ -980,10 +1002,56 @@ func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments 
 			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
 			continue
 		}
+		if briefSticker {
+			lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateHistoryStickerDescription(compactRecallImageDescription(description))))
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
 	}
 	lines = append(lines, historicalNonImageMediaDescriptions(segments)...)
 	return lines
+}
+
+// historyStickerGist 按图片内容哈希取这张表情包在资料库里的一句话标注，没有就返回空串。
+// 查询失败只记日志：标注只是为了省篇幅，拿不到就退回通用描述，不能让历史行少一张图。
+func (r *Runtime) historyStickerGist(ctx context.Context, segment MessageSegment) string {
+	r.mu.RLock()
+	store, _ := r.messageStore.(StickerTagReader)
+	r.mu.RUnlock()
+	if store == nil {
+		return ""
+	}
+	hash, ok := imageSegmentContentSHA256(segment)
+	if !ok {
+		return ""
+	}
+	record, found, err := store.GetStickerTags(ctx, hash)
+	if err != nil {
+		log.Printf("diana history sticker gist load failed: %v", err)
+		return ""
+	}
+	if !found {
+		return ""
+	}
+	// 和表情包检索同一条规则（storage 的 stickerTagCurrent）：动图的旧标注只看过第一帧，
+	// 不算数；静态图的旧标注照用。
+	if record.Version != stickerAnnotationVersion && stickerSegmentIsGIF(segment) {
+		return ""
+	}
+	return strings.Join(strings.Fields(record.Gist), " ")
+}
+
+func stickerSegmentIsGIF(segment MessageSegment) bool {
+	return strings.EqualFold(strings.TrimSpace(segment.Data["cached_mime"]), "image/gif") ||
+		strings.HasSuffix(strings.ToLower(strings.TrimSpace(segment.Data["cached_file"])), ".gif")
+}
+
+func truncateHistoryStickerDescription(value string) string {
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= historyStickerDescriptionMaxRunes {
+		return string(runes)
+	}
+	return string(runes[:historyStickerDescriptionMaxRunes]) + "…"
 }
 
 func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {

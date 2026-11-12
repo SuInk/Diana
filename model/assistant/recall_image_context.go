@@ -37,7 +37,10 @@ const (
 	recallImageDescriptionMaxRunes    = 1600
 	recallImageDescriptionConcurrency = 3
 	// 历史行里的描述比撤回记录短得多：每轮都要重复发送，超长会把上下文预算吃光。
-	historyImageDescriptionMaxRunes     = 400
+	historyImageDescriptionMaxRunes = 400
+	// 历史行里别人发的表情包只留一句：表情包是一句语气，不是要模型点评的画面。生产抽样
+	// 197 条请求，表情包摘要占历史行的 8.5%，每个中位 236 字。
+	historyStickerDescriptionMaxRunes   = 120
 	historyImageDescriptionQueueLimit   = 32
 	historyImageDescriptionReadyLimit   = 2048
 	historyImageDescriptionIdlePoll     = 250 * time.Millisecond

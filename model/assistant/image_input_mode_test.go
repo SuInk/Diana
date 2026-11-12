@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -444,5 +445,76 @@ func TestHistoryPromptHidesOwnStickerDescriptions(t *testing.T) {
 	inbound.Outbound = false
 	if lines := runtime.historyPromptImageDescriptions(context.Background(), inbound); len(lines) != 2 || lines[0] != "表情包1摘要=钻被窝求贴贴，适合晚安时发" {
 		t.Fatalf("someone else's sticker keeps its description: %#v", lines)
+	}
+}
+
+type stickerGistTestStore struct {
+	*recallImageTestStore
+	tags  map[string]StickerTagRecord
+	err   error
+	calls int
+}
+
+func (s *stickerGistTestStore) GetStickerTags(_ context.Context, hash string) (StickerTagRecord, bool, error) {
+	s.calls++
+	if s.err != nil {
+		return StickerTagRecord{}, false, s.err
+	}
+	record, ok := s.tags[hash]
+	return record, ok, nil
+}
+
+// 历史行里别人发的表情包只写资料库那句标注；没有标注才用通用描述，而且截到 120 字。
+// 普通图片、历史检索和「当前消息引用的图」这些靠描述看图的地方照旧拿完整描述。
+func TestHistoryPromptUsesStickerGist(t *testing.T) {
+	tagged, untagged, staleGIF := strings.Repeat("a", 64), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	store := &stickerGistTestStore{recallImageTestStore: newRecallImageTestStore(), tags: map[string]StickerTagRecord{
+		tagged:   {ContentSHA256: tagged, Gist: "猫猫歪头\n装傻", Version: stickerAnnotationVersion},
+		staleGIF: {ContentSHA256: staleGIF, Gist: "只看了第一帧的旧标注"},
+	}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	long := strings.Repeat("长", 300)
+	sticker := func(hash, description string) MessageSegment {
+		return MessageSegment{Type: "image", Data: map[string]string{"sub_type": "1", "summary": "[动画表情]", imageContentSHA256Key: hash, recallImageDescriptionKey: description}}
+	}
+	gif := sticker(staleGIF, "动图的通用描述")
+	gif.Data["cached_mime"] = "image/gif"
+	photo := MessageSegment{Type: "image", Data: map[string]string{imageContentSHA256Key: tagged, recallImageDescriptionKey: long}}
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "40001", UserID: "10001", MessageID: "50001", Segments: []MessageSegment{
+		sticker(tagged, long), sticker(untagged, long), gif, photo,
+	}}
+
+	lines := runtime.historyPromptImageDescriptions(context.Background(), event)
+	want := []string{
+		"表情包1摘要=猫猫歪头 装傻",
+		"表情包2摘要=" + strings.Repeat("长", historyStickerDescriptionMaxRunes) + "…",
+		"表情包3摘要=动图的通用描述",
+		"图片4摘要=" + long,
+	}
+	if !reflect.DeepEqual(lines, want) {
+		t.Fatalf("prompt lines = %#v", lines)
+	}
+	for _, lines := range [][]string{
+		runtime.historyImageCachedDescriptions(context.Background(), event),
+		runtime.referencedImagePromptDescriptions(context.Background(), event),
+	} {
+		if len(lines) != 4 || lines[0] != "表情包1摘要="+long || lines[1] != "表情包2摘要="+long {
+			t.Fatalf("non-history callers keep the full description: %#v", lines)
+		}
+	}
+
+	// 自己发的表情包不查标注；查询出错退回原描述。
+	own := event
+	own.Outbound = true
+	before := store.calls
+	if lines := runtime.historyPromptImageDescriptions(context.Background(), own); lines[0] != "表情包1=你自己发的表情包，发出去就算说完了" || store.calls != before {
+		t.Fatalf("own sticker lines = %#v, gist lookups = %d", lines, store.calls-before)
+	}
+	store.err = errors.New("db busy")
+	short := event
+	short.Segments = []MessageSegment{sticker(tagged, "钻被窝求贴贴")}
+	if lines := runtime.historyPromptImageDescriptions(context.Background(), short); len(lines) != 1 || lines[0] != "表情包1摘要=钻被窝求贴贴" {
+		t.Fatalf("gist lookup failure should fall back: %#v", lines)
 	}
 }

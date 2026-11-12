@@ -443,6 +443,31 @@ ON CONFLICT(content_sha256) DO UPDATE SET gist=excluded.gist, tags=excluded.tags
 	return err
 }
 
+// GetStickerTags 按图片哈希读回一张表情包的标注，主键单查。历史行每张表情包都会调一次，
+// 所以不连 sticker_assets：那张表的主键以 session 打头，只按哈希查要扫全表。
+func (s *SQLiteStore) GetStickerTags(ctx context.Context, contentSHA256 string) (assistant.StickerTagRecord, bool, error) {
+	if s == nil || s.db == nil {
+		return assistant.StickerTagRecord{}, false, nil
+	}
+	hash := strings.ToLower(strings.TrimSpace(contentSHA256))
+	if !validStickerAssetHash(hash) {
+		return assistant.StickerTagRecord{}, false, nil
+	}
+	record := assistant.StickerTagRecord{ContentSHA256: hash}
+	var tags string
+	err := s.eventReader().QueryRowContext(ctx, `
+SELECT gist, tags, COALESCE(category, ''), COALESCE(version, '') FROM sticker_tags WHERE content_sha256 = ?
+`, hash).Scan(&record.Gist, &tags, &record.Category, &record.Version)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return assistant.StickerTagRecord{}, false, nil
+		}
+		return assistant.StickerTagRecord{}, false, fmt.Errorf("load sticker tags: %w", err)
+	}
+	record.Tags = decodeStickerTags(tags)
+	return record, true, nil
+}
+
 // RecordStickerSent 记一次机器人在 session 里发出这张表情包。
 func (s *SQLiteStore) RecordStickerSent(ctx context.Context, session, contentSHA256 string, sentAt int64) error {
 	if s == nil || s.db == nil {
