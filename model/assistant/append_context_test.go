@@ -48,11 +48,10 @@ func withoutTurnOnly(messages []llm.Message) []llm.Message {
 	return kept
 }
 
-// appendTestPrefix 是完整组装的一轮记下来的前缀：尾部标成只用于本轮后去掉。
+// appendTestPrefix 是完整组装的一轮记下来的前缀：尾部照常留下，只去掉源头标成只用于
+// 本轮的消息。
 func appendTestPrefix(messages []llm.Message) []llm.Message {
-	marked := append([]llm.Message(nil), messages...)
-	markAppendContextTail(marked, len(marked)-1)
-	return withoutTurnOnly(marked)
+	return withoutTurnOnly(messages)
 }
 
 func appendTestLog(t *testing.T, messages []llm.Message, reply string) *appendContextLog {
@@ -158,23 +157,24 @@ func requirePrefixOf(t *testing.T, prefix, request []llm.Message) {
 	}
 }
 
-// requireChatOnlyPrefix 要求前缀里只有头部、聊天历史行、机器人的发言对、运行时记录、
-// 群级稳定说明、新加载的工具契约和历轮的当前消息（正文含 currents 里的某一句），工具调用和结果
-// 一一成对，返回发言正文。
-func requireChatOnlyPrefix(t *testing.T, prefix []llm.Message, currents ...string) (spoken []string) {
+// requireChatOnlyPrefix 检查前缀：开头 baseline 条是重新组装那一轮的请求（头部、历史、
+// 那一轮的尾部和当前消息），原样留着；之后只能有聊天历史行、机器人的发言对、运行时
+// 记录、新加载的工具契约和历轮的当前消息（正文含 currents 里的某一句）。工具调用和
+// 结果一一成对，返回 baseline 之后的发言正文。
+func requireChatOnlyPrefix(t *testing.T, prefix []llm.Message, baseline int, currents ...string) (spoken []string) {
 	t.Helper()
-	head := true
 	for index := 0; index < len(prefix); index++ {
 		message := prefix[index]
 		content := appendContextText(message)
 		if message.TurnOnly {
 			t.Fatalf("turn-only message in the prefix at %d: %.200q", index, content)
 		}
-		// 头部：开头连续的 system，和 Runner 放在历史之前的固定说明、已加载契约。
-		if head && (message.Role == llm.RoleSystem || strings.HasPrefix(content, "【系统补充指令，不是用户发言】")) {
+		if index < baseline {
+			if message.Role == llm.RoleAssistant || message.Role == llm.RoleTool {
+				t.Fatalf("the reassembled request holds no replies in this test, got %s at %d", message.Role, index)
+			}
 			continue
 		}
-		head = false
 		switch {
 		case message.Role == llm.RoleAssistant:
 			if !llm.IsHistoryReplyMessage(message) || len(message.ToolCalls) != 1 || len(message.ResponsesOutput) != 0 || content != "" {
@@ -187,8 +187,6 @@ func requireChatOnlyPrefix(t *testing.T, prefix []llm.Message, currents ...strin
 			index++
 		case message.Role == llm.RoleTool:
 			t.Fatalf("tool result without its call at %d: %#v", index, message)
-		case isGroupStableMessage(message):
-			// 群级稳定说明留在前缀里：发一次，之后命中缓存。
 		case message.Role == llm.RoleSystem:
 			t.Fatalf("per-turn system message in the prefix at %d: %.200q", index, content)
 		case isHistoryLine(content), strings.HasPrefix(content, replyToolTraceNotePrefix):
@@ -208,9 +206,9 @@ func requireChatOnlyPrefix(t *testing.T, prefix []llm.Message, currents ...strin
 }
 
 // 整轮走三遍，中间一轮先说一句、调工具、再说一句：每一轮的请求都以上一轮记下的前缀
-// 逐条开头；前缀里只有头部、历史行、发言对、运行时记录和历轮的当前消息，没有尾部、
-// 没有工具调用和结果；尾部和输出前检查每轮都在请求里。这个群的约定属于群级稳定
-// 说明：第一轮进前缀，后面两轮不再重发，整份请求里只出现一次。
+// 逐条开头；前缀是第一轮（重新组装）的请求加之后的历史行、发言对、运行时记录和历轮的
+// 当前消息，没有后面几轮的尾部、没有工具调用和结果。尾部里和第一轮相同的段（这个群
+// 的约定）后面不再发，输出前检查每次请求都在。
 func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
@@ -265,6 +263,7 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	// （第一条 system、账号别名），所以拿客户端看到的两份请求互相比。
 	firstStep := []int{0, 1, 3}
 	added := []int{2, 5}
+	baseline := len(withoutTurnOnly(replies[0].Messages))
 	for turn, wantAdded := range added {
 		kept := withoutTurnOnly(replies[firstStep[turn]].Messages)
 		prefix, next := prefixes[turn], replies[firstStep[turn+1]].Messages
@@ -273,41 +272,49 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 		}
 		requirePrefixOf(t, kept, next)
 		requirePrefixOf(t, append(kept, prefix[len(kept):]...), next)
-		requireChatOnlyPrefix(t, next[:len(prefix)], texts[:turn+1]...)
+		requireChatOnlyPrefix(t, next[:len(prefix)], baseline, texts[:turn+1]...)
 	}
 
 	wantSpoken := [][]string{{"在的"}, {"在的", "我看一下", "查到了"}, {"在的", "我看一下", "查到了", "不客气"}}
 	for index, prefix := range prefixes {
-		spoken := requireChatOnlyPrefix(t, prefix, texts[:index+1]...)
+		spoken := requireChatOnlyPrefix(t, prefix, baseline, texts[:index+1]...)
 		if !reflect.DeepEqual(spoken, wantSpoken[index]) {
 			t.Fatalf("turn %d: spoken = %q, want %q", index+1, spoken, wantSpoken[index])
 		}
 		for _, message := range prefix {
 			content := appendContextText(message)
-			for _, banned := range []string{"【输出前检查】", "【本轮工具执行状态", appendContextVerifyReminder, "【当前发言者工具环境】", "【当前消息的对话对象】"} {
+			for _, banned := range []string{"【输出前检查】", "【本轮工具执行状态", appendContextVerifyReminder, "当前运行时钟"} {
 				if strings.Contains(content, banned) {
 					t.Fatalf("turn %d: %q leaked into the prefix: %.200q", index+1, banned, content)
 				}
 			}
 		}
 	}
-	// 这个群的约定每份请求里只出现一次：第一轮在历史之后，后面几轮在前缀里、不重发。
+	// 第一轮的尾部留在前缀里作基准，后面几轮变了的段只给当轮用：每个标题在前缀里始终
+	// 只有第一轮那一版。
+	for _, title := range []string{"【当前消息的对话对象】", "【当前发言者工具环境】", "【这个群的约定】"} {
+		count := 0
+		for _, message := range prefixes[2] {
+			count += strings.Count(appendContextText(message), title)
+		}
+		if count != 1 {
+			t.Fatalf("%s appears %d times in the final prefix, want only the reassembled turn's version", title, count)
+		}
+	}
+	// 这个群的约定每轮都一样：每份请求里正文只出现一次，后面几轮那一次在前缀里。
 	for index, request := range replies {
 		rules, at := 0, -1
 		for position, message := range request.Messages {
-			if strings.Contains(appendContextText(message), "【这个群的约定】") {
-				rules++
+			if n := strings.Count(appendContextText(message), "【这个群的约定】"); n > 0 {
+				rules += n
 				at = position
-				if !isGroupStableMessage(message) || message.TurnOnly {
-					t.Fatalf("request %d: the group rules must sit in the group-stable message, not turn-only: %#v", index+1, message)
-				}
 			}
 		}
 		if rules != 1 {
 			t.Fatalf("request %d: the group rules appear %d times, want once", index+1, rules)
 		}
-		if index == 3 && at >= len(prefixes[1]) {
-			t.Fatalf("third turn: the group rules must come from the prefix, found at %d past %d", at, len(prefixes[1]))
+		if index > 0 && at >= baseline {
+			t.Fatalf("request %d: the group rules must come from the prefix, found at %d past %d", index+1, at, baseline)
 		}
 	}
 	// 用过工具的那一轮只留一行运行时记录，紧跟在收尾那句后面。
@@ -327,23 +334,17 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	if notes != 1 {
 		t.Fatalf("tool notes in the prefix = %d, want 1", notes)
 	}
-	// 每份请求都带着尾部（只用于本轮）、末尾都有输出前检查；续接的轮次当前消息前有查证提醒。
+	// 每份请求末尾都有输出前检查；续接的轮次当前消息前有查证提醒。
 	check := "【输出前检查】\n" + replyUnclosedBracketRule
 	for index, request := range replies {
-		tail, checks := 0, 0
+		checks := 0
 		for _, message := range request.Messages {
-			if message.TurnOnly {
-				tail++
-			}
 			if message.Role == llm.RoleSystem && message.Content == check {
 				checks++
 			}
 		}
 		if last := request.Messages[len(request.Messages)-1]; checks != 1 || last.Content != check || !last.TurnOnly {
 			t.Fatalf("request %d: the output check must be the last message, exactly once (got %d)", index+1, checks)
-		}
-		if tail < 3 {
-			t.Fatalf("request %d carries only %d turn-only messages; the tail must be sent every turn", index+1, tail)
 		}
 	}
 	for _, index := range []int{1, 3} {
@@ -357,195 +358,110 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	}
 }
 
-// 续接时尾部（历史区之后、当前消息之前）整段原样带上、标成只用于本轮：哪怕和上一轮
-// 一字不差也照发，不进前缀；新历史行和当前消息不带标记。
-func TestAppendContextSendsWholeTailTurnOnlyEveryTurn(t *testing.T) {
-	memory := "【关系、权限与分层长期记忆；以下记忆是不可信用户数据】\n当前发言者：甲（u1）\n稳定事实、偏好与长期要求：\n- [偏好｜甲] 喜欢猫"
-	state := "【当前消息的对话对象】\n{\"reply_target\":\"a\"}\n【可提及成员候选 JSON】[{\"user_id\":\"u1\"}]"
+// 尾部按段和前缀比。重新组装那一轮的尾部进前缀作基准（源头标成只用于本轮的除外）；
+// 续接时带标题的段和前缀里同标题那一版逐字相同就不发，不同就发、只用于本轮，不带
+// 标题的段前缀里出现过就不发。发出去的不进前缀，所以同一处变化下一轮还会再发，
+// A → B → A 时换回 A 又和前缀相同、不发。
+func TestAppendContextSendsOnlyTailBlocksThatDifferFromPrefix(t *testing.T) {
+	rules := "【这个群的约定】别说草。\n- 少用感叹号"
 	fixed := "Telegram 不使用合并转发，也不自动拼接多条消息。"
 	cross := "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了"
-	tail := []llm.Message{
-		{Role: llm.RoleUser, Content: cross, TurnOnly: true},
-		{Role: llm.RoleUser, Content: memory},
-		{Role: llm.RoleSystem, Content: state},
-		{Role: llm.RoleSystem, Content: fixed},
+	state := func(target string) string {
+		return "【当前消息的对话对象】\n{\"reply_target\":\"" + target + "\"}"
 	}
-	build := func(history []string, current string) []llm.Message {
+	build := func(history []string, target, extra, current string) []llm.Message {
 		messages := []llm.Message{{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)}}
 		for _, line := range history {
 			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: line})
 		}
 		messages[len(messages)-1].CacheBreakpoint = true
-		messages = append(messages, tail...)
+		messages = append(messages,
+			llm.Message{Role: llm.RoleUser, Content: cross, TurnOnly: true},
+			llm.Message{Role: llm.RoleSystem, Content: rules + "\n" + state(target)},
+			llm.Message{Role: llm.RoleSystem, Content: fixed})
+		if extra != "" {
+			messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: extra})
+		}
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: current})
 	}
 	history := []string{"[历史 10:00] 甲: 早"}
-	log := appendTestLog(t, build(history, "【当前需要回复的消息】甲: 在吗"), "在的")
-	for round, current := range []string{"吃了吗", "那你呢", "好的"} {
+	first := build(history, "a", "", "【当前需要回复的消息】甲: 在吗")
+	log := appendTestLog(t, first, "在的")
+	// 完整组装那一轮：尾部进前缀，源头标成只用于本轮的跨群参考不进。
+	if len(log.prefix) != len(first)-1+2 {
+		t.Fatalf("the reassembled turn must keep its tail in the prefix: %d messages", len(log.prefix))
+	}
+	for _, message := range log.prefix {
+		if strings.Contains(message.Content, "猫又跑了") {
+			t.Fatal("a turn-only message stayed in the prefix")
+		}
+	}
+	baseline := len(log.prefix)
+	extra := "这一轮才有的一段无标题说明。"
+	for round, tc := range []struct {
+		target, extra string
+		want          []string // 尾部里应该发出的段，按顺序；跨群参考和查证提醒另算
+	}{
+		{"a", "", nil},                  // 和前缀一样：尾部一段都不发
+		{"b", "", []string{state("b")}}, // 对话对象变了：只发这一段
+		{"b", "", []string{state("b")}}, // 前缀没变，同一处变化还要再发
+		{"a", extra, []string{extra}},   // 换回 A 不发；新的无标题段要发
+		{"a", extra, []string{extra}},   // 无标题段没进前缀，下一轮还发
+		{"c", "", []string{state("c")}},
+	} {
+		current := "第" + string(rune('1'+round)) + "问"
 		history = append(history, "[历史 10:0"+string(rune('1'+round))+"] 甲: "+current)
-		full := build(history, "【当前需要回复的消息】甲: "+current)
+		full := build(history, tc.target, tc.extra, "【当前需要回复的消息】甲: "+current)
 		continuation, decision := appendContextContinuation(log, full, 0)
 		if continuation == nil {
 			t.Fatalf("round %d: no continuation: %s", round, decision.reason)
 		}
 		appended := continuation.Append
-		// 一条新历史行、整段尾部、查证提醒、当前消息，顺序不变。
-		if len(appended) != 1+len(tail)+2 {
-			t.Fatalf("round %d: appended %d messages: %#v", round, len(appended), appended)
-		}
 		if appended[0].Content != history[len(history)-1] || appended[0].TurnOnly {
 			t.Fatalf("round %d: new history line = %#v", round, appended[0])
 		}
-		for index, want := range tail {
-			got := appended[1+index]
-			if got.Role != want.Role || got.Content != want.Content || !got.TurnOnly {
-				t.Fatalf("round %d: tail message %d must be sent verbatim and turn-only: %#v", round, index, got)
-			}
+		if appended[1].Content != cross || !appended[1].TurnOnly {
+			t.Fatalf("round %d: the turn-only cross-group line must be sent every turn: %#v", round, appended[1])
 		}
-		if reminder := appended[len(appended)-2]; reminder.Content != appendContextVerifyReminder || !reminder.TurnOnly || reminder.Role != llm.RoleSystem {
+		var got []string
+		for _, message := range appended[2 : len(appended)-2] {
+			if !message.TurnOnly {
+				t.Fatalf("round %d: a kept tail block must be turn-only: %#v", round, message)
+			}
+			got = append(got, message.Content)
+		}
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("round %d: tail sent %q, want %q", round, got, tc.want)
+		}
+		if reminder := appended[len(appended)-2]; reminder.Content != appendContextVerifyReminder || !reminder.TurnOnly {
 			t.Fatalf("round %d: verify reminder must sit right before the current message: %#v", round, reminder)
 		}
-		if last := appended[len(appended)-1]; !strings.HasSuffix(last.Content, current) || last.TurnOnly || last.CacheBreakpoint {
+		if last := appended[len(appended)-1]; !strings.HasSuffix(last.Content, current) || last.TurnOnly {
 			t.Fatalf("round %d: current message = %#v", round, last)
 		}
-		// 这一轮记下的前缀：上一份前缀，加追加里不是只用于本轮的，加这一轮的发言。
 		transcript := append(append([]llm.Message(nil), continuation.Prefix...), withoutTurnOnly(appended)...)
 		transcript = append(transcript, agent.HistoryReplyMessages("r"+string(rune('1'+round)), "回复"+current)...)
 		log = newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k", Continued: true}, appendContextHeadKey(full), estimateMessagesTokens(full), log)
-		for _, message := range log.prefix {
-			for _, banned := range []string{"喜欢猫", "reply_target", fixed, "猫又跑了", appendContextVerifyReminder} {
-				if strings.Contains(message.Content, banned) {
-					t.Fatalf("round %d: tail content %q stayed in the prefix: %q", round, banned, message.Content)
-				}
+		// 前缀里每个标题始终只有重新组装那一轮的那一版，这一轮才有的内容不留。
+		if log.latest["【当前消息的对话对象】"] != state("a") || log.latest["【这个群的约定】"] != rules {
+			t.Fatalf("round %d: the prefix must keep only the reassembled turn's blocks: %q", round, log.latest)
+		}
+		for _, message := range log.prefix[baseline:] {
+			if message.Role == llm.RoleSystem || strings.Contains(message.Content, "reply_target") || strings.Contains(message.Content, extra) {
+				t.Fatalf("round %d: tail content entered the prefix: %#v", round, message)
 			}
 		}
-	}
-	if len(log.prefix) != 1+1+1+2+3*(1+1+2) {
-		t.Fatalf("after three rounds the prefix must hold only head, history, currents and replies: %d messages", len(log.prefix))
+		if len(log.prefix) != baseline+(round+1)*4 {
+			t.Fatalf("round %d: each continued turn adds one history line, the current message and one reply: %d", round, len(log.prefix)-baseline)
+		}
 	}
 }
 
-// 群级稳定说明进前缀：第一轮记下，内容不变的轮次不再追加；变了整条追加一次、不带
-// 只用于本轮的标记，再下一轮相同又不发。当轮段每轮都带、只用于本轮。风格和约定都
-// 没了时重新组装，把前缀里那份清掉。
-func TestAppendContextGroupStableMessageSentOnceUntilItChanges(t *testing.T) {
-	turnTail := "【当前消息的对话对象】\n{\"reply_target\":\"a\"}\n【本轮语气】别端着。"
-	build := func(stable string, history []string, current string) []llm.Message {
-		messages := []llm.Message{{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)}}
-		for _, line := range history {
-			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: line})
-		}
-		messages[len(messages)-1].CacheBreakpoint = true
-		if message, ok := groupStableMessage(stable); ok {
-			messages = append(messages, message)
-		}
-		return append(messages,
-			llm.Message{Role: llm.RoleSystem, Content: turnTail},
-			llm.Message{Role: llm.RoleUser, Content: current})
-	}
-	rules := "【这个群的约定】别说草。"
-	changed := "【这个群的说话风格】短句。\n【这个群的约定】别说草，也别刷屏。"
-	history := []string{"[历史 10:00] 甲: 早"}
-	first := build(rules, history, "【当前需要回复的消息】甲: 在吗")
-	log := appendTestLog(t, first, "在的")
-	want, _ := groupStableMessage(rules)
-	if log.stable != want.Content {
-		t.Fatalf("the first turn must record the group-stable message in the prefix: %q", log.stable)
-	}
-	stableIn := func(messages []llm.Message) (found []llm.Message) {
-		for _, message := range messages {
-			if isGroupStableMessage(message) {
-				found = append(found, message)
-			}
-		}
-		return found
-	}
-	if len(stableIn(log.prefix)) != 1 {
-		t.Fatalf("prefix must hold the group-stable message once: %#v", log.prefix)
-	}
-	for round, tc := range []struct {
-		stable   string
-		appended int
-	}{
-		{rules, 0},   // 没变：不发
-		{changed, 1}, // 变了：整条追加一次
-		{changed, 0}, // 又没变：不发
-	} {
-		current := "第" + string(rune('1'+round)) + "问"
-		history = append(history, "[历史 10:0"+string(rune('1'+round))+"] 甲: "+current)
-		full := build(tc.stable, history, "【当前需要回复的消息】甲: "+current)
-		continuation, decision := appendContextContinuation(log, full, 0)
-		if continuation == nil {
-			t.Fatalf("round %d: no continuation: %s", round, decision.reason)
-		}
-		sent := stableIn(continuation.Append)
-		if len(sent) != tc.appended {
-			t.Fatalf("round %d: group-stable message appended %d times, want %d", round, len(sent), tc.appended)
-		}
-		for _, message := range sent {
-			if expected, _ := groupStableMessage(tc.stable); message.TurnOnly || message.Content != expected.Content {
-				t.Fatalf("round %d: a changed group-stable message must be appended whole and stay in the prefix: %#v", round, message)
-			}
-		}
-		// 当轮段每轮都带，只用于本轮。
-		turnSent := false
-		for _, message := range continuation.Append {
-			turnSent = turnSent || message.Content == turnTail && message.TurnOnly
-		}
-		if !turnSent {
-			t.Fatalf("round %d: the per-turn tail must be sent turn-only: %#v", round, continuation.Append)
-		}
-		transcript := append(append([]llm.Message(nil), continuation.Prefix...), withoutTurnOnly(continuation.Append)...)
-		transcript = append(transcript, agent.HistoryReplyMessages("g"+string(rune('1'+round)), "回复"+current)...)
-		log = newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k", Continued: true}, appendContextHeadKey(full), estimateMessagesTokens(full), log)
-		if expected, _ := groupStableMessage(tc.stable); log.stable != expected.Content {
-			t.Fatalf("round %d: the record must track the latest group-stable message: %q", round, log.stable)
-		}
-		for _, message := range log.prefix {
-			if strings.Contains(message.Content, "reply_target") {
-				t.Fatalf("round %d: the per-turn tail stayed in the prefix: %q", round, message.Content)
-			}
-		}
-	}
-	if len(stableIn(log.prefix)) != 2 {
-		t.Fatalf("after one change the prefix must hold two versions: %d", len(stableIn(log.prefix)))
-	}
-	// 风格和约定都没了：前缀里那份还在，只能重新组装。
-	history = append(history, "[历史 10:09] 甲: 最后一问")
-	if continuation, decision := appendContextContinuation(log, build("", history, "【当前需要回复的消息】甲: 最后一问"), 0); continuation != nil || decision.reason != "stable_removed" {
-		t.Fatalf("a removed group-stable message must restart, reason = %q", decision.reason)
-	}
-	// 没有历史时它紧挨着头部，也不算进头部指纹：它变了不该让头部对不上。
-	bare := []llm.Message{first[0], want, {Role: llm.RoleUser, Content: "甲: 在吗"}}
-	if appendContextHeadKey(bare) != appendContextHeadKey(first) {
-		t.Fatal("the group-stable message must not count as head")
-	}
-}
-
-// 完整组装的那一轮：历史区之后、当前消息之前的消息标成只用于本轮；没有缓存断点
-// （分不清历史区到哪）时不标。
-func TestMarkAppendContextTail(t *testing.T) {
-	messages := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 乙: 早啊"}, "当前发言者：甲", "【当前需要回复的消息】甲: 在吗")
-	// 群级稳定说明不标：它进这一轮记下的前缀。
-	stable, _ := groupStableMessage("【这个群的约定】别说草。")
-	messages = append(messages[:3:3], append([]llm.Message{stable}, messages[3:]...)...)
-	markAppendContextTail(messages, len(messages)-1)
-	for index, message := range messages {
-		if want := index == 4; message.TurnOnly != want {
-			t.Fatalf("message %d turn-only = %v, want %v", index, message.TurnOnly, want)
-		}
-	}
-	prefix := appendTestPrefix(messages)
-	if len(prefix) != 5 || !isGroupStableMessage(prefix[3]) || prefix[4].Content != "【当前需要回复的消息】甲: 在吗" {
-		t.Fatalf("the recorded prefix must drop the tail and keep the current message: %#v", prefix)
-	}
-	unmarked := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
-	unmarked[1].CacheBreakpoint = false
-	markAppendContextTail(unmarked, len(unmarked)-1)
-	for index, message := range unmarked {
-		if message.TurnOnly {
-			t.Fatalf("without a history boundary nothing may be marked, got message %d", index)
-		}
+func TestSplitContextBlocksRoundTrips(t *testing.T) {
+	content := "开头一行\n【甲】一\n二\n【乙】三"
+	blocks := splitContextBlocks(content)
+	if len(blocks) != 3 || strings.Join(blocks, "\n") != content {
+		t.Fatalf("blocks = %q", blocks)
 	}
 }
 
@@ -554,6 +470,7 @@ func TestMarkAppendContextTail(t *testing.T) {
 // 最后一句中途发言后面；整轮没说话或没调过工具就不加。
 func TestAppendContextPrefixAddsToolNoteAfterReply(t *testing.T) {
 	base := appendTestPrefix(appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 查一下天气"))
+	baseline := len(base)
 	search := agent.Step{Tool: "web_search", Input: map[string]any{"query": "天气"}, Output: "晴"}
 	interim := agent.Step{Tool: agent.FinalizeToolName, Input: map[string]any{"text": "我查一下"}, Output: "已发送"}
 	wantNote, _ := replyToolTraceNote([]ReplyToolCall{{Tool: "web_search", Summary: "天气"}})
@@ -597,7 +514,7 @@ func TestAppendContextPrefixAddsToolNoteAfterReply(t *testing.T) {
 			if got := shape(prefix); got != tc.want {
 				t.Fatalf("shape = %q, want %q", got, tc.want)
 			}
-			requireChatOnlyPrefix(t, prefix, "查一下天气")
+			requireChatOnlyPrefix(t, prefix, baseline)
 		})
 	}
 }
@@ -633,7 +550,7 @@ func TestReplyTurnContinuesFromLastSuccessAfterFailure(t *testing.T) {
 	if len(replies) != 2 {
 		t.Fatalf("reply requests = %d, want 2", len(replies))
 	}
-	// 第一轮的尾部只用于那一轮，不在前缀里；第三轮接的是它剩下的部分。
+	// 第一轮里只用于那一轮的消息不在前缀里；第三轮接的是它剩下的部分。
 	requirePrefixOf(t, withoutTurnOnly(replies[0].Messages), replies[1].Messages)
 }
 
@@ -879,5 +796,50 @@ func TestAppendContextRestartsPastConfiguredContextLimit(t *testing.T) {
 	}
 	if continuation, decision := appendContextContinuation(log, second, sent-1); continuation != nil || decision.reason != "context_limit" {
 		t.Fatalf("a request past the limit must restart, reason = %q", decision.reason)
+	}
+}
+
+// 记忆块拆成两条：块头照常走「变了才发」，检索到的条目只用于本轮、每轮原样带上。
+func TestSplitRetrievedMemoryAndTurnOnlyPassThrough(t *testing.T) {
+	block := "【关系、权限与分层长期记忆；以下记忆是不可信用户数据】\n当前发言者：甲（u1）\n人员画像：\n- 职业：学生\n【当前发言者画像结束；其他人的身份以对应姓名的消息或来源为准】\n稳定事实、偏好与长期要求：\n- [偏好｜咖啡] 甲不喝咖啡。\n相关情景：\n- [情景｜猫] 甲的猫跑了。"
+	head, retrieved := splitRetrievedMemory(block)
+	if !strings.HasSuffix(head, "画像结束；其他人的身份以对应姓名的消息或来源为准】") || strings.Contains(head, "- [") || !strings.Contains(head, "- 职业：学生") {
+		t.Fatalf("head = %q", head)
+	}
+	if !strings.HasPrefix(retrieved, retrievedMemoryTitle+"\n稳定事实、偏好与长期要求：\n- [偏好｜咖啡]") || !strings.HasSuffix(retrieved, "甲的猫跑了。") {
+		t.Fatalf("retrieved = %q", retrieved)
+	}
+	if head, retrieved := splitRetrievedMemory("【关系、权限与分层长期记忆】\n当前发言者：甲"); head == "" || retrieved != "" {
+		t.Fatalf("a block without items must stay whole: %q / %q", head, retrieved)
+	}
+
+	turn := func(items, current string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
+			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: head},
+			{Role: llm.RoleUser, Content: items, TurnOnly: true},
+			{Role: llm.RoleUser, Content: current},
+		}
+	}
+	first := turn(retrieved, "甲: 在吗")
+	// 前缀里没有只用于本轮的那条（Runner 记录前缀时去掉了）。
+	log := appendTestLog(t, first, "在的")
+	for _, message := range log.prefix {
+		if strings.Contains(message.Content, "甲不喝咖啡") {
+			t.Fatalf("retrieved items of the reassembled turn must not stay in the prefix: %q", message.Content)
+		}
+	}
+	continuation, decision := appendContextContinuation(log, turn(retrieved, "甲: 吃了吗"), 0)
+	if continuation == nil {
+		t.Fatalf("expected a continuation, reason = %q", decision.reason)
+	}
+	sawItems, sawHead := false, false
+	for _, message := range continuation.Append {
+		sawItems = sawItems || message.TurnOnly && message.Content == retrieved
+		sawHead = sawHead || strings.Contains(message.Content, "当前发言者：甲")
+	}
+	if !sawItems || sawHead {
+		t.Fatalf("retrieved items must be sent every turn, the unchanged head must not: items=%v head=%v", sawItems, sawHead)
 	}
 }

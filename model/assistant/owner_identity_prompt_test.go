@@ -50,14 +50,26 @@ func TestOwnerAccountPromptOnlyWhenOwnerAppears(t *testing.T) {
 	}
 }
 
-// 只要出现，内容只看配置，换谁说话都逐字相同。
-func TestOwnerAccountPromptStableAcrossSpeakers(t *testing.T) {
+// 前缀缓存：只要出现，内容只看配置，换谁说话都逐字相同；续接时上文已有同一版就不重发，
+// 换了主人才把新的一版接上。
+func TestOwnerAccountPromptStableAndDedupedOnAppend(t *testing.T) {
 	cfg := ownerPromptCfg()
 	history := []MessageEvent{ownerPromptEvent("10001")}
 	a := ownerAccountPrompt(cfg, ownerPromptEvent("30003"), history)
 	b := ownerAccountPrompt(cfg, ownerPromptEvent("10001"), history)
 	if a == "" || a != b {
 		t.Fatalf("owner prompt varies by speaker:\n%q\n%q", a, b)
+	}
+
+	log := &appendContextLog{seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{blockTitle(a): a}, pieces: map[string]bool{}}
+	tail := joinPromptSections(a, `【可提及成员候选 JSON】[{"user_id":"30003"}]`)
+	if got := unsentTail(log, tail); strings.Contains(got, "【主人】") {
+		t.Fatalf("unchanged owner block resent: %q", got)
+	}
+	cfg.OwnerID = "60006"
+	changed := ownerAccountPrompt(cfg, ownerPromptEvent("60006"), nil)
+	if got := unsentTail(log, joinPromptSections(changed, `【可提及成员候选 JSON】[]`)); !strings.Contains(got, "60006") {
+		t.Fatalf("new owner block not appended: %q", got)
 	}
 }
 

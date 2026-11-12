@@ -16,6 +16,34 @@ import (
 
 const speakerToolPromptMarker = "【当前发言者工具环境】"
 
+// continuationVolatile 处理续接时 Runner 自己的逐轮消息里的发言者工具环境：和前缀里
+// 最近一版逐字相同就省略，不同才发，发出的那份只用于本轮、不进前缀。
+//
+// 前缀里的那一版是重新组装那一轮留下的基准（之后发的都不进前缀）。生产 234 次完整
+// 组装里这一段连续两次逐字相同占 96%（约 2300 字），每轮都发就每轮都算未命中。按
+// 「最近一版」比而不是「出现过」：前缀里是 A、这一轮是 B 时发 B，换回 A 又和前缀相同。
+func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Message {
+	var latest string
+	for _, messages := range [][]llm.Message{prefix, appended} {
+		for _, message := range messages {
+			if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+				latest = message.Content
+			}
+		}
+	}
+	out := make([]llm.Message, 0, len(volatile))
+	for _, message := range volatile {
+		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+			if latest == message.Content {
+				continue
+			}
+			message.TurnOnly = true
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
 // 只追加续接：下一轮请求 = 上一轮实际发出的请求 + 模型的回复 + 本轮新内容。
 //
 // 经 sub2api 转发的 gpt（ChatGPT Codex 上游）只在两个位置复用缓存：instructions 加
@@ -24,12 +52,11 @@ const speakerToolPromptMarker = "【当前发言者工具环境】"
 // 上一轮的纯追加，所以 gpt 主回复命中只有三到四成。同群连续 8 轮实测：gpt-6.1-sol
 // 47.4% → 90.9%，deepseek-flash 72.2% → 91.2%（历史不再随窗口滑动）。
 //
-// 前缀里只留聊天本身：头部、聊天历史行、机器人自己发出的话和历轮的当前消息（见
-// turnTranscript）。每轮都在变的状态（时间、发言者、记忆、工具环境……）和一轮里的
-// 工具调用、结果都标成只用于本轮（llm.Message.TurnOnly），随当轮请求发出、不进前缀。
-// 以前它们一路留在前缀里：生产统计每轮续接追加的内容里聊天只占三分之一，约 5 轮
-// 就撑到上限被迫重新组装，那一轮缓存不命中、慢约 2 秒。用生产请求实测（swe-2，
-// 同群连续 8 轮）标成只用于本轮不影响命中：93.6%，严格追加是 93.9%。
+// 前缀里留的是重新组装那一轮的请求，加之后各轮的新聊天（见 turnTranscript）。续接的
+// 轮次里，每轮都在变的状态（时间、命中的 skill、和前缀不同的发言者工具环境……）和
+// 一轮里的工具调用、结果都标成只用于本轮（llm.Message.TurnOnly），随当轮请求发出、
+// 不进前缀。以前它们一路留在前缀里：生产统计每轮续接追加的内容里聊天只占三分之一，
+// 约 5 轮就撑到上限被迫重新组装，那一轮缓存不命中、慢约 2 秒。
 
 // conversationKey 是续接前要核对的指纹：系统提示、历史之前的固定说明（skills 目录、
 // 联网调研要求）和工具定义。任何一项变了，上一轮的前缀就不再是这一轮该发的开头，只能
@@ -101,8 +128,8 @@ func deliveredContracts(groups ...[]llm.Message) map[string]string {
 // 前缀判断哪些已经交过。
 //
 // 前缀里有而当前发言者用不了的契约留在原处不动，另用一句话说明。这句话是当前发言者
-// 的状态，只用于本轮、每轮现算：前缀里不留上一位发言者的那句，所以换回能用全部契约
-// 的人说话时不用再明说。
+// 的状态，只用于本轮：它只在续接时才有、从不进前缀，前缀里没有可比的上一版，所以
+// 有用不了的契约时每轮都发，换回能用全部契约的人说话时不用再明说。
 func contractDelta(current []loadedContract, prefix, appended []llm.Message) []llm.Message {
 	delivered := deliveredContracts(prefix, appended)
 	var added []loadedContract
@@ -147,6 +174,7 @@ func shortFingerprint(data []byte) string {
 // continuationMessages 在前缀后接上本轮追加的消息，Runner 自己的逐轮消息插在当前
 // 消息之前，和完整组装时的位置一致。返回值里前缀末尾的下标用作缓存断点。
 func continuationMessages(continuation *Continuation, volatile []llm.Message) ([]llm.Message, int) {
+	volatile = continuationVolatile(continuation.Prefix, continuation.Append, volatile)
 	messages := make([]llm.Message, 0, len(continuation.Prefix)+len(continuation.Append)+len(volatile))
 	messages = append(messages, continuation.Prefix...)
 	for index := range messages {

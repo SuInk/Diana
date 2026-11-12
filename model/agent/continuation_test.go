@@ -66,27 +66,62 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if sent[len(sent)-1].Content != "第二问" {
 		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
 	}
-	// 发言者工具环境每轮都发、只用于本轮：两轮的请求里各有一份，前缀里一份都没有。
-	environments := func(messages []llm.Message) (count int) {
-		for _, message := range messages {
-			if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
-				count++
-				if !message.TurnOnly {
-					t.Fatalf("the speaker environment must be turn-only: %#v", message)
-				}
+	// 发言者工具环境在重新组装那一轮进前缀；第二轮和它相同，不再发，整份请求里只有
+	// 前缀里的那一份。时钟每轮都变，不进前缀。
+	environments := 0
+	for _, message := range sent {
+		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+			environments++
+			if message.TurnOnly {
+				t.Fatalf("the environment kept from the prefix must not be turn-only: %#v", message)
 			}
 		}
-		return count
 	}
-	if environments(client.requests[0].Messages) != 1 || environments(sent) != 1 {
-		t.Fatalf("each request must carry exactly one environment block: %d / %d", environments(client.requests[0].Messages), environments(sent))
+	if environments != 1 {
+		t.Fatalf("unchanged environment repeated: %d blocks", environments)
 	}
 	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
 		for _, message := range transcript {
-			if message.TurnOnly || strings.HasPrefix(message.Content, speakerToolPromptMarker) || strings.HasPrefix(message.Content, RuntimeClockMarker) {
+			if message.TurnOnly || strings.HasPrefix(message.Content, RuntimeClockMarker) {
 				t.Fatalf("turn-only state leaked into the prefix: %#v", message)
 			}
 		}
+	}
+}
+
+// 发言者工具环境和前缀里最近一版相同就省略；不同才发，发出的那份只用于本轮——前缀
+// 不变，所以换回前缀里那一版时又省略。别的逐轮消息不受影响。
+func TestContinuationVolatileSendsChangedEnvironmentTurnOnly(t *testing.T) {
+	env := func(text string) llm.Message {
+		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + "\n" + text}
+	}
+	turnOnly := func(message llm.Message) llm.Message {
+		message.TurnOnly = true
+		return message
+	}
+	a, b := env("A"), env("B")
+	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now", TurnOnly: true}
+	for _, tc := range []struct {
+		name                             string
+		prefix, appended, volatile, want []llm.Message
+	}{
+		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
+		{"changed", []llm.Message{a}, nil, []llm.Message{b, clock}, []llm.Message{turnOnly(b), clock}},
+		{"back to the prefix version", []llm.Message{a}, nil, []llm.Message{a}, []llm.Message{}},
+		{"no baseline", nil, nil, []llm.Message{a}, []llm.Message{turnOnly(a)}},
+		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
+		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{turnOnly(a)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := append([]llm.Message(nil), tc.prefix...)
+			got := continuationVolatile(tc.prefix, tc.appended, tc.volatile)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+			if !reflect.DeepEqual(before, tc.prefix) {
+				t.Fatal("historical prefix mutated")
+			}
+		})
 	}
 }
 

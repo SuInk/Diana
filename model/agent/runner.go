@@ -158,11 +158,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
 	//
-	// volatile 里的每一条都是这一轮的状态（谁在说话、现在几点、这句话命中了哪些
-	// skill），只用于本轮：每轮现算、原样发出，不进下一轮的前缀。以前发言者工具段
-	// 「和上文最近一版相同就省略」，为的是不让它在前缀里重复累积；现在前缀里根本没有它。
+	// 这一段重新组装那一轮进前缀；续接时和前缀里那一版相同就省略，不同才发、只用于
+	// 本轮（见 continuationVolatile）。volatile 里其余几条（现在几点、这句话命中了哪些
+	// skill）每轮都变，源头就标成只用于本轮。
 	if speaker := r.speakerToolPrompt(); speaker != "" {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem, TurnOnly: true})
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem})
 	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
