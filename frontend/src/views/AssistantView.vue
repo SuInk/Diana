@@ -1817,7 +1817,7 @@
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。回复为了命中缓存会接着上一轮的请求往后追加，请求会逐轮变长；填了以后，超过这个数就按预算重新组装。填得越小请求越短，但重新组装那一轮缓存不命中，回复会慢几秒。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>

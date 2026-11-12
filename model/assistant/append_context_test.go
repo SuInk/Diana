@@ -31,7 +31,7 @@ func appendTestTurn(history []string, tailExtra, current string) []llm.Message {
 }
 
 func continueFrom(log *appendContextLog, messages []llm.Message) *agent.Continuation {
-	continuation, _ := appendContextContinuation(log, messages)
+	continuation, _ := appendContextContinuation(log, messages, 0)
 	return continuation
 }
 
@@ -81,12 +81,12 @@ func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
 	log := appendTestLog(t, first, "在的")
 	changed := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 还在吗")
 	changed[0].Content = "换了人设"
-	if continuation, decision := appendContextContinuation(log, changed); continuation != nil || decision.reason != "head_changed" {
+	if continuation, decision := appendContextContinuation(log, changed, 0); continuation != nil || decision.reason != "head_changed" {
 		t.Fatalf("a changed head must restart, reason = %q", decision.reason)
 	}
 	long := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:05] 甲: " + strings.Repeat("很长的一段话。", 400)}, "", "甲: 还在吗")
 	log.prefix = append(log.prefix, llm.Message{Role: llm.RoleUser, Content: strings.Repeat("旧内容。", 3000)})
-	if continuation, decision := appendContextContinuation(log, long); continuation != nil || decision.reason != "too_long" {
+	if continuation, decision := appendContextContinuation(log, long, 0); continuation != nil || decision.reason != "too_long" {
 		t.Fatal("a prefix past the growth limit must restart")
 	}
 }
@@ -105,7 +105,7 @@ func TestAppendContextGrowthCountsRunnerOverhead(t *testing.T) {
 		t.Fatalf("overhead = %d, want %d", fresh.overhead, overhead)
 	}
 	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 甲: 在吗"}, "", "甲: 今天吃什么")
-	continuation, decision := appendContextContinuation(fresh, second)
+	continuation, decision := appendContextContinuation(fresh, second, 0)
 	if continuation == nil {
 		t.Fatalf("a prefix about as long as one full request must continue, reason = %q", decision.reason)
 	}
@@ -207,7 +207,7 @@ func TestAppendContextSendsOnlyNewContent(t *testing.T) {
 
 	// 同一个人、同样的状态，画像段多一条新记忆：续接不带记忆条目，新的也不带。
 	second := build(stateA, portrait+"\n- [偏好｜丙] 周末爬山", "吃了吗")
-	continuation, decision := appendContextContinuation(log, second)
+	continuation, decision := appendContextContinuation(log, second, 0)
 	if continuation == nil {
 		t.Fatalf("没有续接：%s", decision.reason)
 	}
@@ -230,7 +230,7 @@ func TestAppendContextSendsOnlyNewContent(t *testing.T) {
 	// 状态 A → B → A：切回 A 时要发回 A 那一版，不能因为「发过」就省掉。
 	log = newAppendContextLog(&agent.Response{Transcript: append(log.prefix, continuation.Append...), ConversationKey: "k", Continued: true}, appendContextHeadKey(first), estimateMessagesTokens(second), log)
 	third := build(stateB, portrait, "那你呢")
-	continuation, _ = appendContextContinuation(log, third)
+	continuation, _ = appendContextContinuation(log, third, 0)
 	if continuation == nil {
 		t.Fatal("第三轮没有续接")
 	}
@@ -245,7 +245,7 @@ func TestAppendContextSendsOnlyNewContent(t *testing.T) {
 	}
 	log = newAppendContextLog(&agent.Response{Transcript: append(log.prefix, continuation.Append...), ConversationKey: "k", Continued: true}, appendContextHeadKey(first), estimateMessagesTokens(third), log)
 	fourth := build(stateA, portrait, "好的")
-	continuation, _ = appendContextContinuation(log, fourth)
+	continuation, _ = appendContextContinuation(log, fourth, 0)
 	found := false
 	for _, message := range continuation.Append {
 		if strings.Contains(appendContextText(message), "\"a\"") {
@@ -599,7 +599,7 @@ func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	log := appendTestLog(t, first, "在的")
 	second := turn("[跨群历史 2026-10-21 09:00:00] 乙: 新检索到的一条", "【当前需要回复的消息】甲: 吃了吗\n\n"+note)
 
-	continuation, decision := appendContextContinuation(log, second, note)
+	continuation, decision := appendContextContinuation(log, second, 0, note)
 	if continuation == nil {
 		t.Fatalf("expected a continuation, reason = %q", decision.reason)
 	}
@@ -616,8 +616,28 @@ func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	}
 	// 上文没有过这条注解时照带。
 	fresh := appendTestLog(t, turn(cross, "【当前需要回复的消息】甲: 在吗"), "在的")
-	continuation, _ = appendContextContinuation(fresh, second, note)
+	continuation, _ = appendContextContinuation(fresh, second, 0, note)
 	if last := continuation.Append[len(continuation.Append)-1].Content; !strings.HasSuffix(last, note) {
 		t.Fatalf("a note not yet in the prefix must stay: %q", last)
+	}
+}
+
+// 配了「单次请求上下文上限」时续接也要守：续接后的请求超过它就重新组装；0 表示不限，
+// 只看两倍上限。
+func TestAppendContextRestartsPastConfiguredContextLimit(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
+	log := appendTestLog(t, first, "在的")
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:06] 甲: 新的一句"}, "", "甲: 还在吗")
+
+	continuation, decision := appendContextContinuation(log, second, 0)
+	if continuation == nil {
+		t.Fatalf("no limit configured must continue, reason = %q", decision.reason)
+	}
+	sent := decision.prefixTokens + decision.appendTokens
+	if continuation, decision := appendContextContinuation(log, second, sent); continuation == nil {
+		t.Fatalf("a request exactly at the limit must continue, reason = %q", decision.reason)
+	}
+	if continuation, decision := appendContextContinuation(log, second, sent-1); continuation != nil || decision.reason != "context_limit" {
+		t.Fatalf("a request past the limit must restart, reason = %q", decision.reason)
 	}
 }
