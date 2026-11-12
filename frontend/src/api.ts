@@ -427,7 +427,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
-  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   image_generation_cooldown_seconds?: number;
   video_generation_cooldown_seconds?: number;
@@ -796,7 +795,6 @@ export interface BotGroupConfig extends SendRetrySettings {
   /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
-  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
   /** 这个群每天能成功生图的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */

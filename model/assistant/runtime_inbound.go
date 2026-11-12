@@ -192,7 +192,7 @@ func (r *Runtime) HandleEvent(ctx context.Context, event MessageEvent) error {
 
 	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withDebugTraceContext(ctx, event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).requestContextLimit())
 	prepared, text, handled, outcome := r.prepareMessageEvent(ctx, event)
 	if !handled {
 		r.finishSenderTurn(event)

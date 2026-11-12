@@ -960,7 +960,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 	item.Event.backlogProbe = &probe
 	ctx = withLLMUsageContext(ctx, item.Event)
 	ctx = r.withDebugTraceContext(ctx, item.Event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).MaxContextTokens)
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(item.Event).requestContextLimit())
 	// 出站幂等账本按入站事件 ID 记账：失败重跑时已经送达的分片和媒体会被跳过。
 	ctx = withOutboundTurn(ctx, item.ID)
 	// 同一个人先发图、隔几秒再发字，两条各走各的：以前这里会把图并进那句话（先问

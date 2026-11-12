@@ -373,7 +373,8 @@ func isHistoryLine(content string) bool {
 // 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的尾部去掉上文已有的
 // 参考资料；当前消息原样放最后。返回 nil 表示这一轮不能续接、应当重新组装。
 //
-// contextLimit 是机器人或群的「单次请求上下文上限」（token，0 表示不限）：续接后的
+// contextLimit 是机器人或群的「单次请求上下文上限」（token，0 表示不限；主回复传的是
+// requestContextLimit()，留空已换成 64K 默认值）：续接后的
 // 请求超过它也重新组装。currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊
 // 篇幅），续接时上文有过就去掉。
 func appendContextContinuation(log *appendContextLog, messages []llm.Message, contextLimit int64, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
