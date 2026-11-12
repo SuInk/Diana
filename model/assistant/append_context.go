@@ -61,6 +61,10 @@ type appendContextLog struct {
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
+	// model 和 sentAt 是这份请求发给了哪个模型、什么时候发的：上游的前缀缓存跟着它们走，
+	// 见 append_context_cache_life.go。
+	model  string
+	sentAt time.Time
 }
 
 // appendContextVerifyReminder 每轮续接都插在当前消息前面，不参与「和上一版一样就
@@ -341,7 +345,7 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey}
+	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey, model: resp.Model, sentAt: time.Now()}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)

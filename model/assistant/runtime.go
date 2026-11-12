@@ -405,6 +405,8 @@ type Runtime struct {
 	promptCacheProbe promptCacheProbeStore
 	// appendContexts 是只追加模式下每个会话上一轮实际发出的请求，见 append_context.go。
 	appendContexts appendContextStore
+	// appendCacheLife 按模型记着上游前缀缓存大概留多久，过期了就不再续接。
+	appendCacheLife appendContextCacheLife
 	// imageEditSources 记录每个会话最近使用的原图，仅用于诊断；不能作为新请求的
 	// 隐式来源。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
@@ -5222,6 +5224,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		var continuation *agent.Continuation
 		var appendDecision appendContextDecision
 		appendKey, appendHeadKey := "", ""
+		var appendGap time.Duration
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
@@ -5229,6 +5232,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
+				if !previous.sentAt.IsZero() {
+					appendGap = time.Since(previous.sentAt)
+				}
+				if continuation != nil && appendGap > 0 && r.appendCacheLife.expired(previous.model, appendGap) {
+					continuation, appendDecision.reason = nil, "cache_expired"
+				}
 			}
 		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)
@@ -5254,6 +5263,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 重新组装（10-29～30 线上 56 次失败，每次都让下一轮多付一整份未命中）。
 			if err == nil {
 				previous := r.appendContexts.get(appendKey)
+				if resp != nil && resp.Continued && previous != nil && previous.model == resp.Model {
+					r.appendCacheLife.observe(resp.Model, appendGap, resp.Usage, resp.ModelTurns)
+				}
 				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)

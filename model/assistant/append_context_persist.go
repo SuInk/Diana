@@ -54,6 +54,7 @@ type appendContextFile struct {
 	RunKey   string                 `json:"run_key"`
 	HeadKey  string                 `json:"head_key"`
 	Overhead int64                  `json:"overhead"`
+	Model    string                 `json:"model,omitempty"`
 	Prefix   []appendContextMessage `json:"prefix"`
 }
 
@@ -178,7 +179,7 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 		return nil
 	}
 	file := appendContextFile{Version: appendContextFileVersion, Key: key, SavedAt: time.Now().UTC(), RunKey: record.key,
-		HeadKey: record.headKey, Overhead: record.overhead, Prefix: make([]appendContextMessage, len(record.prefix))}
+		HeadKey: record.headKey, Overhead: record.overhead, Model: record.model, Prefix: make([]appendContextMessage, len(record.prefix))}
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
@@ -238,7 +239,7 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 		time.Since(stored.SavedAt) > appendContextFileMaxAge {
 		return nil
 	}
-	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix))}
+	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, model: stored.Model, sentAt: stored.SavedAt, prefix: make([]llm.Message, len(stored.Prefix))}
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
 	}
