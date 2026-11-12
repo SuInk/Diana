@@ -33,7 +33,7 @@ import (
 // 不能往开发机的用户缓存目录里写，也不能读到上一次跑测试留下的记录。
 
 const (
-	appendContextFileVersion = 1
+	appendContextFileVersion = 2
 	// appendContextFileMaxAge 之前的记录不读回：隔了这么久供应商缓存早就过期，群里
 	// 也聊了很多，接着续只会让请求一下子很长。
 	appendContextFileMaxAge = 24 * time.Hour

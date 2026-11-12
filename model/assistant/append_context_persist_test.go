@@ -69,7 +69,6 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		t.Fatalf("键或开销没读回：%q %q %d", loaded.key, loaded.headKey, loaded.overhead)
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
-		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.memory, original.memory) ||
 		!reflect.DeepEqual(loaded.pieces, original.pieces) {
 		t.Fatal("由前缀算出的表和原来不一样")
 	}
@@ -175,7 +174,8 @@ func TestReplyContinuesAcrossRestart(t *testing.T) {
 	if len(firstRequests) != 1 || len(secondRequests) != 1 {
 		t.Fatalf("reply requests = %d / %d", len(firstRequests), len(secondRequests))
 	}
-	prefix, next := firstRequests[0].Messages, secondRequests[0].Messages
+	// 第一轮的尾部只用于那一轮，不在前缀里。
+	prefix, next := withoutTurnOnly(firstRequests[0].Messages), secondRequests[0].Messages
 	if len(next) <= len(prefix) {
 		t.Fatalf("重启后的请求没有接在上一轮后面：%d vs %d", len(next), len(prefix))
 	}

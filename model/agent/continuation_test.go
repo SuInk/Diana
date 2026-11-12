@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -36,10 +35,8 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if first.Continued || len(first.Transcript) < 2 || first.ConversationKey == "" {
 		t.Fatalf("first = %#v", first)
 	}
-	call, result := first.Transcript[len(first.Transcript)-2], first.Transcript[len(first.Transcript)-1]
-	if call.Role != llm.RoleAssistant || len(call.ToolCalls) != 1 || sendText(call.ToolCalls[0]) != "好" ||
-		result.Role != llm.RoleTool || result.ToolCallID != call.ToolCalls[0].ID || result.Content != historyReplyResult {
-		t.Fatalf("a send-only finish must stay a send call with its result: %#v / %#v", call, result)
+	if spoken := transcriptPairs(t, first.Transcript); !reflect.DeepEqual(spoken, []string{"好"}) || first.Transcript[len(first.Transcript)-1].Role != llm.RoleTool {
+		t.Fatalf("a send-only finish must end the transcript as a send call with its result: %q", spoken)
 	}
 	second, err := runner.Run(context.Background(), Request{
 		Messages: continuationTestMessages("第二问"),
@@ -69,14 +66,27 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if sent[len(sent)-1].Content != "第二问" {
 		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
 	}
-	environments := 0
-	for _, message := range sent {
-		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
-			environments++
+	// 发言者工具环境每轮都发、只用于本轮：两轮的请求里各有一份，前缀里一份都没有。
+	environments := func(messages []llm.Message) (count int) {
+		for _, message := range messages {
+			if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
+				count++
+				if !message.TurnOnly {
+					t.Fatalf("the speaker environment must be turn-only: %#v", message)
+				}
+			}
 		}
+		return count
 	}
-	if environments != 1 {
-		t.Fatalf("unchanged environment repeated: %d blocks", environments)
+	if environments(client.requests[0].Messages) != 1 || environments(sent) != 1 {
+		t.Fatalf("each request must carry exactly one environment block: %d / %d", environments(client.requests[0].Messages), environments(sent))
+	}
+	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
+		for _, message := range transcript {
+			if message.TurnOnly || strings.HasPrefix(message.Content, speakerToolPromptMarker) || strings.HasPrefix(message.Content, RuntimeClockMarker) {
+				t.Fatalf("turn-only state leaked into the prefix: %#v", message)
+			}
+		}
 	}
 }
 
@@ -108,90 +118,134 @@ func TestRunnerContinuationFallsBackOnKeyMismatch(t *testing.T) {
 	}
 }
 
-// 只调 send 的收尾原样留成 send 调用加结果，和重新组装时历史里自己的发言同一个形态；
-// 不说话的一轮什么都不留。
-func TestTranscriptAfterKeepsSendOnlyFinishAsCalls(t *testing.T) {
+// transcriptPairs 检查前缀里的工具调用和结果一一成对，并按顺序返回发言正文；出现
+// send 以外的调用、带供应商原始输出的发言都算错。
+func transcriptPairs(t *testing.T, transcript []llm.Message) (spoken []string) {
+	t.Helper()
+	for index := 0; index < len(transcript); index++ {
+		message := transcript[index]
+		switch message.Role {
+		case llm.RoleTool:
+			t.Fatalf("tool result without its call at %d: %#v", index, message)
+		case llm.RoleAssistant:
+			if len(message.ToolCalls) != 1 || !llm.IsHistoryReplyMessage(message) || message.ToolCalls[0].Name != finalizeToolName ||
+				len(message.ResponsesOutput) != 0 || len(message.AnthropicThinking) != 0 || message.ReasoningContent != nil || message.Content != "" {
+				t.Fatalf("assistant message at %d is not a bare history reply: %#v", index, message)
+			}
+			if index+1 >= len(transcript) {
+				t.Fatalf("send call at %d has no result", index)
+			}
+			result := transcript[index+1]
+			if result.Role != llm.RoleTool || result.ToolCallID != message.ToolCalls[0].ID || result.Content != historyReplyResult {
+				t.Fatalf("send call at %d not paired: %#v", index, result)
+			}
+			spoken = append(spoken, sendText(message.ToolCalls[0]))
+			index++
+		}
+	}
+	return spoken
+}
+
+// 一轮对前缀的贡献只有第一步请求里不是只用于本轮的消息，加实际发出的每句话：收尾的
+// 几条各成一对，不说话的一轮什么都不加。
+func TestTurnTranscriptKeepsOnlySpokenText(t *testing.T) {
 	request := llm.GenerateRequest{Messages: continuationTestMessages("问题")}
-	cases := []struct {
+	interim := []Step{
+		{Tool: finalizeToolName, Input: map[string]any{"text": "我去查一下"}, Output: "已发送"},
+		{Tool: "web_search", Input: map[string]any{"query": "x"}, Output: "结果"},
+		{Tool: finalizeToolName, Input: map[string]any{"text": "没发出去的"}, Error: "被拦下"},
+	}
+	for _, tc := range []struct {
 		name  string
-		calls []llm.ToolCall
+		steps []Step
+		final string
 		want  []string
 	}{
-		{"one send", []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "好"}}}, []string{"好"}},
-		{"two sends", []llm.ToolCall{
-			{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "第一条"}},
-			{ID: "s2", Name: finalizeToolName, Arguments: map[string]any{"text": "第二条"}},
-		}, []string{"第一条", "第二条"}},
-		{"silent", []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "", "silent": true}}}, nil},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			transcript := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
-			added := transcript[len(request.Messages):]
-			if tc.want == nil {
-				if len(added) != 0 {
-					t.Fatalf("silent finish left messages behind: %#v", added)
-				}
-				return
-			}
-			if len(added) != 1+len(tc.calls) || len(added[0].ToolCalls) != len(tc.calls) || len(added[0].ResponsesOutput) == 0 {
-				t.Fatalf("send-only finish must keep its native calls: %#v", added)
-			}
-			var got []string
-			for index, call := range added[0].ToolCalls {
-				got = append(got, sendText(call))
-				if result := added[1+index]; result.Role != llm.RoleTool || result.ToolCallID != call.ID || result.Content != historyReplyResult {
-					t.Fatalf("result %d not paired: %#v", index, result)
-				}
-			}
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-// 带别的工具的一步照旧配对：供应商拒绝没有结果的调用。
-func TestTranscriptAfterKeepsMixedCallsPaired(t *testing.T) {
-	request := llm.GenerateRequest{Messages: continuationTestMessages("问题")}
-	calls := []llm.ToolCall{
-		{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
-		{ID: "t1", Name: "web_search", Arguments: map[string]any{"query": "x"}},
-	}
-	added := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: calls}, "")[len(request.Messages):]
-	if len(added) != 3 || len(added[0].ToolCalls) != 2 || added[1].ToolCallID != "s1" || added[2].ToolCallID != "t1" {
-		t.Fatalf("mixed step must keep calls paired with results: %#v", added)
-	}
-}
-
-func TestContinuationVolatileOnlyOmitsLatestUnchangedEnvironment(t *testing.T) {
-	env := func(text string) llm.Message {
-		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + "\n" + text}
-	}
-	a, b := env("A"), env("B")
-	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now"}
-	for _, tc := range []struct {
-		name                             string
-		prefix, appended, volatile, want []llm.Message
-	}{
-		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
-		{"changed", []llm.Message{a}, nil, []llm.Message{b, clock}, []llm.Message{b, clock}},
-		{"restore", []llm.Message{a, b}, nil, []llm.Message{a}, []llm.Message{a}},
-		{"appended supersedes", []llm.Message{a}, []llm.Message{b}, []llm.Message{a}, []llm.Message{a}},
-		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
-		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{a}},
+		{"one send", nil, "好", []string{"好"}},
+		{"two sends", nil, "第一条" + messageBoundaryMarker + "第二条", []string{"第一条", "第二条"}},
+		{"silent", nil, "", nil},
+		{"interim then final", interim, "查到了", []string{"我去查一下", "查到了"}},
+		{"interim then silent", interim, "", []string{"我去查一下"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			before, _ := json.Marshal(tc.prefix)
-			got := continuationVolatile(tc.prefix, tc.appended, tc.volatile)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %#v, want %#v", got, tc.want)
+			transcript := turnTranscript(request, "trace", tc.steps, tc.final)
+			if !reflect.DeepEqual(transcript[:len(request.Messages)], request.Messages) {
+				t.Fatalf("the first request must open the transcript: %#v", transcript)
 			}
-			after, _ := json.Marshal(tc.prefix)
-			if string(before) != string(after) {
-				t.Fatal("historical prefix mutated")
+			if got := transcriptPairs(t, transcript[len(request.Messages):]); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+			if len(transcript) != len(request.Messages)+2*len(tc.want) {
+				t.Fatalf("nothing but the spoken pairs may follow the request: %#v", transcript[len(request.Messages):])
 			}
 		})
+	}
+	// 同一句话在两轮里各说一遍，调用 ID 不能撞。
+	a := turnTranscript(request, "trace-a", nil, "好")
+	b := turnTranscript(request, "trace-b", nil, "好")
+	if a[len(a)-1].ToolCallID == b[len(b)-1].ToolCallID {
+		t.Fatal("the same text in two turns must get different call ids")
+	}
+}
+
+// 先说一句、查一下、再说一句：这一轮各步的请求里工具结果照常可见，记下来的前缀里
+// 没有任何工具调用和结果，只有按顺序的两句发言；下一轮照着它续接。
+func TestRunnerTranscriptDropsToolStepsAndKeepsSpeechOrder(t *testing.T) {
+	var events []string
+	client := &stepsClient{steps: [][]llm.ToolCall{{
+		{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
+		{ID: "search-1", Name: webSearchToolName, Arguments: map[string]any{"query": "天气"}},
+	}}}
+	search := &orderTool{name: webSearchToolName, events: &events}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events)}, NewToolRegistry(search))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("今天天气怎么样")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results := client.toolResults(1); len(results) != 2 {
+		t.Fatalf("the second step must still see this turn's tool results: %#v", results)
+	}
+	var base []llm.Message
+	for _, message := range client.requests[0].Messages {
+		if !message.TurnOnly {
+			message.CacheBreakpoint = false
+			base = append(base, message)
+		}
+	}
+	if len(first.Transcript) != len(base)+4 || !reflect.DeepEqual(first.Transcript[:len(base)], base) {
+		t.Fatalf("the transcript must be the first request minus turn-only messages plus two spoken pairs:\n%#v", first.Transcript)
+	}
+	if got := transcriptPairs(t, first.Transcript); !reflect.DeepEqual(got, []string{"我去查一下", "好了"}) {
+		t.Fatalf("spoken = %q", got)
+	}
+	for _, message := range first.Transcript {
+		if message.ToolName == webSearchToolName || strings.Contains(message.Content, `{"ok":true}`) {
+			t.Fatalf("tool step leaked into the prefix: %#v", message)
+		}
+	}
+	second, err := runner.Run(context.Background(), Request{
+		Messages:     continuationTestMessages("谢谢"),
+		Continuation: &Continuation{Prefix: first.Transcript, Append: []llm.Message{{Role: llm.RoleUser, Content: "谢谢"}}, Key: first.ConversationKey},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.Continued {
+		t.Fatal("matching key must continue")
+	}
+	sent := client.requests[2].Messages
+	for index, message := range first.Transcript {
+		got := sent[index]
+		got.CacheBreakpoint = false
+		if !reflect.DeepEqual(got, message) {
+			t.Fatalf("prefix differs at %d:\n got %#v\nwant %#v", index, got, message)
+		}
+	}
+	if got := transcriptPairs(t, second.Transcript); !reflect.DeepEqual(got, []string{"我去查一下", "好了", "好了"}) {
+		t.Fatalf("spoken after two turns = %q", got)
 	}
 }
 
@@ -267,9 +321,9 @@ func TestRunnerContinuationAppendsNewlyLoadedContract(t *testing.T) {
 	}
 }
 
-// 前缀里有、当前发言者却用不了的契约留在原处，补一句说明；说明只在变化时发，换回
-// 能用的人也要明说。
-func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
+// 前缀里有、当前发言者却用不了的契约留在原处，补一句说明。说明是当前发言者的状态，
+// 只用于本轮：用不了时每轮都发，都能用时不发——前缀里不留上一位发言者的那句。
+func TestContractDeltaMarksAvailabilityTurnOnly(t *testing.T) {
 	platform := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管","inputSchema":{}}`}
 	config := loadedContract{name: "bot_config", raw: `{"name":"bot_config","description":"配置","inputSchema":{}}`}
 	prefix := []llm.Message{
@@ -279,24 +333,17 @@ func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
 	if delta := contractDelta([]loadedContract{platform, config}, prefix, nil); len(delta) != 0 {
 		t.Fatalf("nothing changed, nothing to append: %#v", delta)
 	}
-	// 普通成员：bot_config 用不了。
-	delta := contractDelta([]loadedContract{platform}, prefix, nil)
-	if len(delta) != 1 || delta[0].Role != llm.RoleSystem || !strings.Contains(delta[0].Content, "用不了：bot_config。") {
-		t.Fatalf("blocked contract notice = %#v", delta)
+	// 普通成员：bot_config 用不了，连着两轮都要说。
+	for round := 0; round < 2; round++ {
+		delta := contractDelta([]loadedContract{platform}, prefix, nil)
+		if len(delta) != 1 || delta[0].Role != llm.RoleSystem || !delta[0].TurnOnly || !strings.Contains(delta[0].Content, "用不了：bot_config。") {
+			t.Fatalf("round %d: blocked contract notice = %#v", round, delta)
+		}
 	}
-	prefix = append(prefix, delta...)
-	if delta := contractDelta([]loadedContract{platform}, prefix, nil); len(delta) != 0 {
-		t.Fatalf("the same notice was repeated: %#v", delta)
-	}
-	// 换回管理员：要明说都能用，否则模型沿用上一句。
-	delta = contractDelta([]loadedContract{platform, config}, prefix, nil)
-	if len(delta) != 1 || !strings.Contains(delta[0].Content, "都能用") {
-		t.Fatalf("restored availability notice = %#v", delta)
-	}
-	// 定义变了的契约按新的再发一次。
+	// 定义变了的契约按新的再发一次，这一条留在前缀里。
 	changed := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管（新）","inputSchema":{}}`}
-	delta = contractDelta([]loadedContract{changed, config}, prefix[:2], nil)
-	if len(delta) != 1 || !strings.Contains(delta[0].Content, "群管（新）") || strings.Contains(delta[0].Content, "bot_config") {
+	delta := contractDelta([]loadedContract{changed, config}, prefix, nil)
+	if len(delta) != 1 || delta[0].TurnOnly || !strings.Contains(delta[0].Content, "群管（新）") || strings.Contains(delta[0].Content, "bot_config") {
 		t.Fatalf("changed contract delta = %#v", delta)
 	}
 	if got := deliveredContracts(append(prefix[:2:2], delta...)); got["platform"] != changed.raw {
@@ -305,13 +352,13 @@ func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
 }
 
 // 只用于本轮的内容（跨群参考）随本轮请求发出，但不进下一轮续接的前缀。
-func TestTranscriptAfterDropsTurnOnlyMessages(t *testing.T) {
+func TestTurnTranscriptDropsTurnOnlyMessages(t *testing.T) {
 	request := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: "head"},
 		{Role: llm.RoleUser, Content: "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了", TurnOnly: true},
 		{Role: llm.RoleUser, Content: "current", CacheBreakpoint: true},
 	}}
-	transcript := transcriptAfter(request, nil, "")
+	transcript := turnTranscript(request, "trace", nil, "")
 	if len(transcript) != 2 || transcript[0].Content != "head" || transcript[1].Content != "current" || transcript[1].CacheBreakpoint {
 		t.Fatalf("turn-only message must be dropped and breakpoints cleared: %#v", transcript)
 	}

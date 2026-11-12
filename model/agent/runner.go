@@ -157,8 +157,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 	}
 	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
+	//
+	// volatile 里的每一条都是这一轮的状态（谁在说话、现在几点、这句话命中了哪些
+	// skill），只用于本轮：每轮现算、原样发出，不进下一轮的前缀。以前发言者工具段
+	// 「和上文最近一版相同就省略」，为的是不让它在前缀里重复累积；现在前缀里根本没有它。
 	if speaker := r.speakerToolPrompt(); speaker != "" {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem})
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem, TurnOnly: true})
 	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
@@ -179,6 +183,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Role:     llm.RoleUser,
 			Content:  triggered,
 			Priority: llm.MessagePrioritySystem,
+			TurnOnly: true,
 		})
 	}
 	// The caller may already carry a trusted clock in its own prompt; a second
@@ -188,6 +193,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Role:     llm.RoleSystem,
 			Content:  trustedRuntimeClockPrompt(time.Now()),
 			Priority: llm.MessagePrioritySystem,
+			TurnOnly: true,
 		})
 	}
 	if skillHint := r.explicitSkillPrompt(req, deliveredSkills); skillHint != "" {
@@ -195,6 +201,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Role:     llm.RoleSystem,
 			Content:  skillHint,
 			Priority: llm.MessagePrioritySystem,
+			TurnOnly: true,
 		})
 	}
 	// 联网调研要求逐字不变，只看本轮有没有 web_search，同样放在历史之前。
@@ -213,8 +220,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	convKey := conversationKey(r.systemPrompt(), stableNotesText, r.turnDefinitions(false))
 	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
 	if continued {
-		// 前缀里的契约块原样不动；这一轮多出来的契约和可用性变化接在尾部，随请求
-		// 一起进下一轮的前缀。
+		// 前缀里的契约块原样不动；这一轮多出来的契约接在尾部，随请求一起进下一轮的
+		// 前缀。当前发言者用不了哪些契约只用于本轮。
 		volatile = append(contractDelta(sharedContracts, req.Continuation.Prefix, req.Continuation.Append), volatile...)
 	}
 	// Insert the volatile block just before the final message so the current
@@ -262,10 +269,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		promptTokens += llm.EstimateMessageTokens(message)
 	}
 
-	// lastRequest / lastResponse 是最后一次实际发出的请求和它的回复，收尾时拼成
-	// Response.Transcript 给下一轮续接。
+	// firstRequest 是这一轮第一步准备好的请求，收尾时取它里面不是「只用于本轮」的消息
+	// 作为 Response.Transcript 的开头给下一轮续接（见 turnTranscript）。后面各步多出来的
+	// 工具调用和结果不进前缀。lastRequest 是最后一次实际发出的请求。
+	var firstRequest llm.GenerateRequest
 	var lastRequest llm.GenerateRequest
-	var lastResponse *llm.GenerateResponse
 	var steps []Step
 	var lastText string
 	var lastProvider llm.Provider
@@ -347,7 +355,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			FinishReason:    reason,
 			DurationMS:      duration.Milliseconds(),
 			Sources:         responseSources(text, steps),
-			Transcript:      transcriptAfter(lastRequest, lastResponse, lastText),
+			Transcript:      turnTranscript(firstRequest, traceID, steps, text),
 			ConversationKey: convKey,
 			Continued:       continued,
 			PromptTokens:    promptTokens,
@@ -374,6 +382,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return nil, err
 		}
 		response.Text = ""
+		// 这一轮收尾没说话：前缀里只留中途已经发出去的那几句。
+		response.Transcript = turnTranscript(firstRequest, traceID, steps, "")
 		response.Sources = responseSources("", steps)
 		response.Silent = true
 		response.SilentReason = strings.TrimSpace(action.SilentReason)
@@ -417,9 +427,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			cancel()
 			return fail(prepareErr)
 		}
+		if len(firstRequest.Messages) == 0 {
+			firstRequest = planningRequest
+		}
 		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil {
-			lastRequest, lastResponse = planningRequest, resp
+			lastRequest = planningRequest
 		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
@@ -1054,9 +1067,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	if finishReason == "final" {
 		finishReason = "tool_budget_exhausted"
 	}
+	// 收尾指令只约束这一轮：一步都没发出就走到这里时，这份请求就是下一轮前缀的来源，
+	// 不能把它带进去。
 	messages = append(messages, llm.Message{
-		Role:    llm.RoleUser,
-		Content: finalizationInstruction(finishReason),
+		Role:     llm.RoleUser,
+		Content:  finalizationInstruction(finishReason),
+		TurnOnly: true,
 	})
 	markLoopCacheBreakpoint(messages, stableCacheIndex)
 	finalizationRequest := llm.GenerateRequest{Messages: messages}
@@ -1075,10 +1091,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if prepareErr != nil {
 			return fail(prepareErr)
 		}
-		resp, err = r.client.Generate(ctx, prepared)
-		if err == nil && resp != nil {
-			lastRequest, lastResponse = prepared, resp
+		if len(firstRequest.Messages) == 0 {
+			firstRequest = prepared
 		}
+		resp, err = r.client.Generate(ctx, prepared)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}

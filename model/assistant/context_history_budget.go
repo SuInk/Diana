@@ -46,15 +46,20 @@ func (c BotConfig) requestContextLimit() int64 {
 // 已经装了大半，没续几轮就撞上限，又是一轮缓存不命中。现在重新组装时只占一小段，
 // 留出来的空间给续接慢慢涨，两次重新组装之间隔得更远。
 const (
-	// requestContextReserveTokens 是单次请求上限里给输出、工具结果和 Agent 后续几步
-	// 留的余量：续接涨到上限减去它就重新组装，不压着上限发。和雨夹雪的 reserveTokens 一致。
+	// requestContextReserveTokens 是按上限收紧近期历史时先扣掉的余量，见
+	// recentHistoryBudget。和雨夹雪的 reserveTokens 一致。
 	requestContextReserveTokens int64 = 16384
+	// appendContextReserveTokens 是续接的余量：续接涨到上限减去它就重新组装，不压着
+	// 上限发。以前照搬雨夹雪用 16384，它留那么多是为了超限时生成压缩摘要；这里不做
+	// 压缩，输出空间在发送层另行预留，只需要给这一轮的尾部和工具步骤留一点，留多了
+	// 白白提早重新组装（64000 的上限只能续到 47616）。
+	appendContextReserveTokens int64 = 4096
 	// recentHistoryKeepCeiling 是重新组装时最多保留的近期历史原文。上限较小时按
 	// (上限−预留)/2 收紧，见 recentHistoryBudget。和雨夹雪的 keepRecentTokens 一致。
 	recentHistoryKeepCeiling int64 = 20000
 )
 
-// appendContextLimit 是续接请求的长度上限：单次请求上限减去 requestContextReserveTokens。
+// appendContextLimit 是续接请求的长度上限：单次请求上限减去 appendContextReserveTokens。
 // contextLimit 为 0（不限）时仍返回 0。上限比预留还小时返回 1 而不是 0：
 // appendContextContinuation 把 0 当「不限」，那样小上限反而续接不受约束；1 等于每轮都
 // 重新组装，本来也装不下续接的增长。
@@ -62,7 +67,7 @@ func appendContextLimit(contextLimit int64) int64 {
 	if contextLimit <= 0 {
 		return 0
 	}
-	return max(1, contextLimit-requestContextReserveTokens)
+	return max(1, contextLimit-appendContextReserveTokens)
 }
 
 // 纯百分比预算在大窗口下会失控，所以除近期历史以外的每层在份额之外再加一个

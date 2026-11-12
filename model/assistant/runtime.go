@@ -4484,15 +4484,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			// 块头（发言者、画像）同一个人连着几轮都一样，照常进前缀；检索到的条目按
-			// 当前消息现查、每轮不同，只给这一轮用，不进续接的前缀（见 splitRetrievedMemory）。
-			head, retrieved := splitRetrievedMemory(memoryContext)
-			if head != "" {
-				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
-			}
-			if retrieved != "" {
-				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory, TurnOnly: true})
-			}
+			// 整块一条：它在历史区之后，和尾部别的内容一样只给这一轮用、不进续接的前缀
+			// （见 markAppendContextTail），不用再把块头和检索到的条目拆开。
+			volatile = append(volatile, llm.Message{
+				Role:     llm.RoleUser,
+				Content:  memoryContext,
+				Priority: llm.MessagePriorityMemory,
+			})
 		}
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
 		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
@@ -5216,11 +5214,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if traceID != "" {
 			traceID = "chat-" + traceID
 		}
-		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
-		// 不再从零核验。本次运行结束后按结果续档或清档。
-		if carryover, ok := r.agentCarryoverMessage(event); ok {
-			messages = append(messages, carryover)
-		}
 		promptSession := r.groupPromptSession(event)
 		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
 		// 后台入口也走这里，它们不接进群聊的记录。
@@ -5234,6 +5227,21 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
+			}
+			// 重新组装的那一轮（没有记录、续不上，或者 Runner 核对指纹后退回完整组装）
+			// 发的是这份 messages：尾部同样标成只用于本轮，这一轮记下的前缀才不含尾部。
+			markAppendContextTail(messages, len(messages)-1)
+		}
+		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
+		// 不再从零核验。本次运行结束后按结果续档或清档。
+		//
+		// 放在续接判断之后：它排在当前消息后面，先加的话会被当成当前消息，真正的当前
+		// 消息反倒被算进尾部。存档说的是上一轮没做完的事，只用于本轮，不进前缀。
+		if carryover, ok := r.agentCarryoverMessage(event); ok {
+			carryover.TurnOnly = true
+			messages = append(messages, carryover)
+			if continuation != nil {
+				continuation.Append = append(continuation.Append, carryover)
 			}
 		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)

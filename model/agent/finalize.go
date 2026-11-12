@@ -24,7 +24,7 @@ import (
 // 合并时一并删掉了 silent/silent_reason，「不说话」只剩留空 text 这一步。上线后
 // 模型自选静默从 0.9% 涨到 8%～10%，几乎全是主动接话；把 silent 和一句理由加回来，
 // 回放里同一批线上静默样本从 16～19/21 降到 10/23，正常回复的样本没有一条转成静默。
-// 当时续接历史还把上一轮的回复记成普通发言，11-07 起改回 send 调用，见 transcriptAfter。
+// 当时续接历史还把上一轮的回复记成普通发言，11-07 起改回 send 调用，见 turnTranscript。
 const finalizeToolName = "send"
 
 // legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
@@ -194,7 +194,7 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 			}
 		}
 	}
-	action.Content = strings.Join(parts, "<diana-message/>")
+	action.Content = strings.Join(parts, messageBoundaryMarker)
 	// 老协议的 silent=true 不捡信封之外的正文：模型同一轮里随手写的思考不是回复。
 	// send 明确填了 text（哪怕是空串）也不捡：空 text 就是这一轮不说话，协议里也
 	// 告诉了模型调用旁边的正文不会发出，捡回来会把它随手写的判断发进群里。

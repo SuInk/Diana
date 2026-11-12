@@ -213,8 +213,9 @@ type Response struct {
 	Silent bool `json:"silent,omitempty"`
 	// SilentReason 是静默的来由，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
-	// Transcript 是这一轮最后一次实际发给模型的请求，接上模型的回复和收尾调用的结果。
-	// 下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
+	// Transcript 是下一轮续接的前缀：这一轮第一步请求里不是「只用于本轮」的消息，接上
+	// 机器人这一轮实际发出的每句话（send 调用加「已发送」）。一轮里的工具调用和结果
+	// 不在里面。下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
 	Transcript []llm.Message `json:"-"`
 	// ConversationKey 是本轮系统提示、契约和工具定义的指纹，续接时用来核对。
 	ConversationKey string `json:"-"`
