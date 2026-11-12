@@ -222,7 +222,7 @@ make dev        # 后端 :18080 + Vite 前端 :5173，热更新
 go test ./...   # 后端测试
 ```
 
-提交前保证 `gofmt` 干净、`go mod tidy` 无 diff、后端测试与前端 `vue-tsc` 通过，CI 会检查这几项。目录结构、发布流程等约定见 [AGENTS.md](./AGENTS.md)。
+提交前保证 `gofmt` 干净、`go mod tidy` 无 diff、后端测试与前端 `vue-tsc` 通过，CI 会检查这几项。开发环境、测试和 PR 要求的完整说明见 [CONTRIBUTING.md](./CONTRIBUTING.md)，发布流程等约定见 [AGENTS.md](./AGENTS.md)。
 
 ### 提交 PR
 
