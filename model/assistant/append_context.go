@@ -63,12 +63,6 @@ type appendContextLog struct {
 	overhead int64
 }
 
-// appendContextVerifyReminder 每轮续接都插在当前消息前面，不参与「和上一版一样就
-// 不发」。查证规则写在头部，续接后离当前消息隔着好几轮对话，前几轮又多是直接回答，
-// 模型容易照着接着凭印象答。10-27 回放「我当时不是说过…」那一轮：现布局 5 次查了
-// 2 次，续接不加提醒 3 次查 1 次，加了提醒 6 次都先查聊天记录。
-const appendContextVerifyReminder = "【本轮提醒】对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
-
 // appendContextMemoryTitle 是长期记忆块的开头，见 formatStructuredMemoryContextWithTokenBudgetDetailed。
 const appendContextMemoryTitle = "【关系、权限与分层长期记忆"
 
@@ -126,58 +120,27 @@ func memoryBlockParts(block string) (head string, items []string) {
 	return strings.Join(heads, "\n"), items
 }
 
-// unsentMemoryBlock 只留上文里还没有的记忆条目，小标题跟着它下面还有新条目时才留。
-// 块头变了（换了发言者、画像更新）就带上块头；块头和条目都发过，整块不发。
+// unsentMemoryBlock 续接时不带记忆条目：换了发言者或画像更新时只带块头（标题、当前
+// 发言者、画像），块头发过就整块不发。
+//
+// 以前只去掉上文已有的条目，新条目照发。但条目是按当前话题检索的，每轮都不一样，
+// 「新条目」每轮都有：11-11 生产 106 轮续接里，每轮追加约 8400 字，这一块占 2700 字
+// （32%），真正的聊天内容只有 1300 字，请求续到完整组装的 2.26 倍。完整组装那一轮
+// 仍带检索到的条目；续接期间要用别的记忆，由模型自己查。
 func unsentMemoryBlock(log *appendContextLog, block string) string {
 	head, _ := memoryBlockParts(block)
-	lines := strings.Split(block, "\n")
-	var kept []string
-	fresh := 0
-	for index, line := range lines {
-		switch {
-		case isMemoryItemLine(line):
-			if !log.memory[line] {
-				kept = append(kept, line)
-				fresh++
-			}
-		case index+1 < len(lines) && isMemoryItemLine(lines[index+1]):
-			for next := index + 1; next < len(lines) && isMemoryItemLine(lines[next]); next++ {
-				if !log.memory[lines[next]] {
-					kept = append(kept, line)
-					break
-				}
-			}
-		default:
-			kept = append(kept, line)
-		}
-	}
-	if fresh == 0 && log.memory[head] {
+	if log.memory[head] {
 		return ""
 	}
-	if log.memory[head] {
-		// 同一发言者、同一份画像已经在上文里：只留标题行，后面跟新条目。
-		headLines := map[string]bool{}
-		for _, line := range strings.Split(head, "\n")[1:] {
-			headLines[line] = true
-		}
-		slim := kept[:0]
-		for _, line := range kept {
-			if !headLines[line] {
-				slim = append(slim, line)
-			}
-		}
-		kept = slim
-	}
-	return strings.Join(kept, "\n")
+	return head
 }
 
 // unsentTail 去掉一条尾部消息里上文已经有的部分，返回空串表示整条都不用发。
 func unsentTail(log *appendContextLog, content string) string {
 	if isCrossGroupLine(content) {
-		if log.seen[content] {
-			return ""
-		}
-		return content
+		// 跨群历史和记忆条目一样按当前话题检索，每轮检索到的都不同，只去掉上文已有的
+		// 拦不住累积。续接时一律不带，完整组装那一轮照常带。
+		return ""
 	}
 	var kept []string
 	for _, block := range splitContextBlocks(content) {
@@ -409,7 +372,9 @@ func isHistoryLine(content string) bool {
 // appendContextContinuation 从这一轮完整组装的消息里挑出要接在记录后面的部分。
 // 历史区（缓存断点及之前）只取记录里还没有的群消息；之后的尾部去掉上文已有的
 // 参考资料；当前消息原样放最后。返回 nil 表示这一轮不能续接、应当重新组装。
-func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*agent.Continuation, appendContextDecision) {
+//
+// currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊篇幅），续接时上文有过就去掉。
+func appendContextContinuation(log *appendContextLog, messages []llm.Message, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
 	decision := appendContextDecision{fullTokens: estimateMessagesTokens(messages)}
 	switch {
 	case len(messages) == 0:
@@ -483,11 +448,18 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 		}
 		appended = append(appended, message)
 	}
-	// 当前消息带的注解（群聊篇幅等）、查证提醒和 Runner 加的输出前检查每轮照发，不走
-	// 「发过的不再发」：11-11 回放（swe-2，24 条，terra 盲评）连它们也去掉后回复中位字数
-	// 37 → 59、人设分 3.50 → 2.67，只多省约 540 token。贴着当前消息才压得住篇幅。
-	appended = append(appended[:len(appended)-1:len(appended)-1],
-		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder}, appended[len(appended)-1])
+	// 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带：它和别的固定说明一样只发一次。
+	// 以前它和查证提醒、Runner 的输出前检查每轮照发，三样合计每轮约 620 字，一路留在
+	// 前缀里累积。11-11 回放去掉后回复中位字数 37 → 59、人设分 3.50 → 2.67，当时因此
+	// 保留；11-12 用户决定去掉，请求体积优先。
+	last := &appended[len(appended)-1]
+	for _, note := range currentNotes {
+		note = strings.TrimSpace(note)
+		if note == "" || !log.pieces[note] {
+			continue
+		}
+		last.Content = strings.TrimSuffix(last.Content, "\n\n"+note)
+	}
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)
 	decision.overhead = log.overhead
 	if decision.fullTokens > 0 && decision.prefixTokens+decision.appendTokens > appendContextGrowthLimit*(decision.fullTokens+log.overhead) {

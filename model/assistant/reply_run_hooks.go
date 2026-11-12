@@ -61,10 +61,20 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 			messages = append(messages, note)
 			req.Messages = append(messages, req.Messages[at:]...)
 			if len(configs) > 0 {
-				// 放在本轮输入和工具目录之后，避免续接历史把表达规则盖过。
-				// 不改写历史消息、不拆工具批次，也不事后删正文。
-				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem,
-					Content: "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)})
+				// 放在本轮输入和工具目录之后。请求里已经有一模一样的一条就不再加：续接的
+				// 请求带着上一轮的全文，每轮、每步再加一条只是让它在前缀里越攒越多（11-12
+				// 生产每轮约 300 字）。重新组装的那一轮照常带上。
+				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
+				present := false
+				for _, message := range req.Messages {
+					if message.Role == llm.RoleSystem && message.Content == check {
+						present = true
+						break
+					}
+				}
+				if !present {
+					req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check})
+				}
 			}
 			return req, nil
 		},
