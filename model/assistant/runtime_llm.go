@@ -1090,45 +1090,56 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 群聊场景那一句同理：它分「被点名」和「主动接话」两串，以前在 head 里，线上同一
 	// 个群两种轮次交替时，每次切换都让后面约 8 万 token 的历史缓存失效。它打头，
 	// 后面紧跟主动接话的细则，两段读在一起不会打架。
+	// 这一段各自带标题：续接时带标题的段和上文最近一版相同就不再发（见 unsentTail）。
+	// 以前它们没有自己的标题，全算在上面「当前消息的对话对象」那一段里：那一段开头的
+	// 引用、提及数据逐条消息变化，后面这几百字没变也跟着整段重发（11-12 生产 316 轮
+	// 续接，每轮约 450 字）。
+	var mode strings.Builder
 	if event.Kind == EventKindGroup {
-		tail.WriteString("\n" + groupScopePrompt(event, cfg))
+		mode.WriteString("\n" + groupScopePrompt(event, cfg))
 	}
 	if proactiveTriggered {
-		tail.WriteString("\n")
-		tail.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
-		tail.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
+		mode.WriteString("\n")
+		mode.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
+		mode.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
 	}
 	if event.chatInReply {
-		tail.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
-		tail.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
+		mode.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
+		mode.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
 		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
 		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
-		tail.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
+		mode.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
 	}
 	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
 	// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
 	// 那一句也在这里覆盖 head 里的默认版。
-	appendPromptSection(&tail, replyPresentationOverride(cfg, event))
-	appendPromptSection(&tail, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
+	appendPromptSection(&mode, replyPresentationOverride(cfg, event))
+	appendPromptSection(&mode, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
 	if eventCarriesImages(event) {
 		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
-		tail.WriteString("\n" + cfg.prompt(promptImageReplySpec))
+		mode.WriteString("\n" + cfg.prompt(promptImageReplySpec))
 	}
 	if eventHasNameOnlyFace(event) {
-		tail.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
+		mode.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
 	}
 	// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
 	for _, resp := range pluginResponses {
 		if strings.TrimSpace(resp.Context) == "" {
 			continue
 		}
-		tail.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
+		mode.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
 		break
+	}
+	if mode.Len() > 0 {
+		tail.WriteString("\n【本轮回复方式】")
+		tail.WriteString(mode.String())
 	}
 	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
-	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
+	if relation := strings.TrimSpace(relationshipPermissionContext(relationship, cfg)); relation != "" {
+		appendPromptSection(&tail, "【当前发言者关系】\n"+relation)
+	}
 	// 关联账号紧跟身份那一行：同一个人在别的平台上是谁，随发言者变，只进尾部。
 	appendPromptSection(&tail, r.linkedIdentityPrompt(event, cfg))
 	// github 工具对全群一份定义，谁有授权、授权到哪些仓库按发言者在这里说。
@@ -1164,13 +1175,20 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	appendPromptSection(&tail, groupStyle)
 	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
-	appendPromptSection(&tail, groupVoice)
+	// 腔调、心情和语气锚点另成一段：里面的换行比例、心情逐轮在变，以前跟在群约定后面
+	// 没有标题，一变就连群约定一起重发（每轮约 250 字）。
+	var tone strings.Builder
+	appendPromptSection(&tone, groupVoice)
 	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
-	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle, groupVoice))
-	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
+	appendPromptSection(&tone, styleFilterPrompt(cfg, groupStyle, groupVoice))
+	appendPromptSection(&tone, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&tail, personaClosingAnchor(cfg))
+	appendPromptSection(&tone, personaClosingAnchor(cfg))
+	if tone.Len() > 0 {
+		tail.WriteString("\n【本轮语气】")
+		tail.WriteString(tone.String())
+	}
 	return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
 }
 
