@@ -31,7 +31,7 @@ func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
 	windows := []int64{4096, 8192, 16384, 32768}
 	previous := 0
 	for _, window := range windows {
-		budget := contextShareBudget(window, recentHistoryTokenShare)
+		budget := recentHistoryBudget(window)
 		selected := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", budget)
 		if len(selected) < previous {
 			t.Fatalf("window %d selected %d messages after %d", window, len(selected), previous)
@@ -41,7 +41,7 @@ func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
 			t.Fatalf("window %d split a user/assistant turn: %d messages", window, len(selected))
 		}
 	}
-	selected16K := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", contextShareBudget(16384, recentHistoryTokenShare))
+	selected16K := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", recentHistoryBudget(40000))
 	if len(selected16K) <= 20 {
 		t.Fatalf("16K short-message history still behaves like a 20-message cap: %d", len(selected16K))
 	}
@@ -182,8 +182,8 @@ func TestSemanticReferenceContextIncludesAllTextSources(t *testing.T) {
 }
 
 func TestPromptHistoryCandidateLimitIsDerivedFromTokens(t *testing.T) {
-	low := historyCandidateLimitForBudget(contextShareBudget(4096, recentHistoryTokenShare))
-	high := historyCandidateLimitForBudget(contextShareBudget(32768, recentHistoryTokenShare))
+	low := historyCandidateLimitForBudget(recentHistoryBudget(4096))
+	high := historyCandidateLimitForBudget(recentHistoryBudget(40000))
 	if low == 20 || high == 20 || high <= low {
 		t.Fatalf("candidate limits low=%d high=%d", low, high)
 	}
@@ -482,8 +482,9 @@ func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
 	if window != 200000 {
 		t.Fatalf("window = %d, want the model's 200000", window)
 	}
-	if history := contextShareBudget(window, recentHistoryTokenShare); history <= contextShareBudget(llm.DefaultContextWindowTokens, recentHistoryTokenShare) {
-		t.Fatalf("recent history budget did not grow with the window: %d", history)
+	// 近期历史在大窗口下封顶在 recentHistoryKeepCeiling，不再随窗口一起涨。
+	if history := recentHistoryBudget(window); history != recentHistoryKeepCeiling {
+		t.Fatalf("recent history budget = %d, want the keep ceiling %d", history, recentHistoryKeepCeiling)
 	}
 
 	// 机器人留空时 200K 的模型窗口也被收到默认的 64K。
@@ -617,17 +618,14 @@ func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
 	}
 }
 
-// 大窗口下除近期历史外几层全被绝对上限压住，小窗口下全按份额走——分层预算要表达的
-// 正是这件事，图上那个「上限 1200」还是「窗口 15%」的说明不能反过来。近期历史没有
-// 绝对上限，任何窗口下都按份额走。
+// 大窗口下各层全被绝对上限压住，小窗口下全按份额走——分层预算要表达的
+// 正是这件事，图上那个「上限 1200」还是「窗口 15%」的说明不能反过来。近期历史不按
+// 份额：大窗口下压在 20000，小窗口下按 (窗口−16384)/2，图上写的是这条规则。
 func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
 	large := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	for _, layer := range large.ContextBudgetBreakdownForGroup("", "g").Layers {
-		if layer.Key == "recent_history" {
-			if layer.CappedByCeiling || layer.Ceiling != 0 {
-				t.Fatalf("近期历史不该有绝对上限：%#v", layer)
-			}
-			continue
+		if layer.Key == "recent_history" && (layer.Ceiling != recentHistoryKeepCeiling || layer.Tokens != recentHistoryKeepCeiling) {
+			t.Fatalf("128K 窗口下近期历史应当压在 %d：%#v", recentHistoryKeepCeiling, layer)
 		}
 		if !layer.CappedByCeiling {
 			t.Fatalf("128K 窗口下 %s 应当被绝对上限压住：%#v", layer.Key, layer)

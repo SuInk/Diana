@@ -1534,7 +1534,7 @@ const contextBudgetHeadroomPercent = computed(() => {
 });
 
 function contextBudgetLayerFoot(layer: AssistantContextBudgetLayer): string {
-  const rule = layer.capped_by_ceiling ? `上限 ${formatNumber(layer.ceiling)}` : `窗口 ${layer.share_percent}%`;
+  const rule = layer.capped_by_ceiling ? `上限 ${formatNumber(layer.ceiling)}` : layer.rule || `窗口 ${layer.share_percent}%`;
   return layer.configurable ? `${rule} · 可配` : rule;
 }
 

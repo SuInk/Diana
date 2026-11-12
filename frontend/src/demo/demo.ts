@@ -64,7 +64,7 @@ const demoContextBudget = {
   allocated: 56_320,
   headroom: 71_680,
   layers: [
-    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false, configurable: true },
+    { key: "recent_history", label: "近期对话", share_percent: 0, ceiling: 20_000, rule: "(窗口 − 16384) / 2", tokens: 20_000, capped_by_ceiling: true, configurable: true },
     { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
     { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
     { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },

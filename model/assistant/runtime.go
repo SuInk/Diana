@@ -4652,6 +4652,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, withLaterSenderMessages(turnMessageIDs, replyHistory, event))
+		// 条目缓存里每行都写全日期，拼成这一份之后再统一省掉同一天的日期，见 history_line_dates.go。
+		stableHistory = compactHistoryLineDates(stableHistory)
 		if mediaIndexMessage != nil {
 			messages = append(messages, *mediaIndexMessage)
 		}
@@ -5224,7 +5226,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, cfg.requestContextLimit(), cfg.prompt(promptNoteGroupBrevitySpec))
+			continuation, appendDecision = appendContextContinuation(previous, messages, appendContextLimit(cfg.requestContextLimit()), cfg.prompt(promptNoteGroupBrevitySpec))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key

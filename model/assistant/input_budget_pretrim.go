@@ -358,7 +358,14 @@ func applyBudgetPretrim(req llm.GenerateRequest, drop, clip map[int]bool) llm.Ge
 	}
 	out := make([]llm.Message, 0, len(req.Messages)+1)
 	markerIndex := -1
+	// 历史行同一天的只写时分秒（见 history_line_dates.go）：丢掉开头几行后，留下的第一行
+	// 可能正好是只写时分秒的那种，日期跟着被丢的行一起没了。先按原件推出每行的全日期，
+	// 再按留下的这份重新决定省不省。
+	var expand, compact historyLineDates
 	for i, message := range req.Messages {
+		if message.Role == llm.RoleUser {
+			message.Content = expand.expand(message.Content)
+		}
 		if message.Content == budgetPretrimMarker {
 			markerIndex = len(out)
 		}
@@ -377,6 +384,9 @@ func applyBudgetPretrim(req llm.GenerateRequest, drop, clip map[int]bool) llm.Ge
 		if clip[i] {
 			message.Content = clipHeadTail(message.Content, budgetPretrimClipRunes)
 			message.AtomicText = true
+		}
+		if message.Role == llm.RoleUser {
+			message.Content = compact.compact(message.Content)
 		}
 		out = append(out, message)
 	}

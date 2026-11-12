@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	recentHistoryTokenShare       int64 = 55
 	longTermMemoryTokenShare      int64 = 10
 	compressedSummaryTokenShare   int64 = 15
 	coreMemoryTokenShare          int64 = 5
@@ -26,7 +25,7 @@ const (
 
 // DefaultRequestContextTokens 是机器人和群都没填「单次请求上下文上限」时用的上限。
 // 以前留空等于跟随模型窗口，生产上全是 128K，等于没上限：续接一路追加到十几万
-// token，prefill 又贵又慢。64K 足够装下系统提示、按份额分到的历史和工具结果。
+// token，prefill 又贵又慢。64K 足够装下系统提示、近期历史和工具结果。
 // 和 llm.DefaultMaxContextTokens（配置档没填窗口时的模型能力兜底）是两回事：
 // 那个描述模型能装多少，这个描述机器人愿意单次花多少。
 const DefaultRequestContextTokens int64 = 64000
@@ -40,9 +39,34 @@ func (c BotConfig) requestContextLimit() int64 {
 	return DefaultRequestContextTokens
 }
 
+// 聊天历史照雨夹雪（Pi coding agent）的做法分：重新组装时只带最近一段原文，之后每轮
+// 往后追加，涨到「上限减预留」才再重新组装一次。
+//
+// 以前历史按上限的 55% 分（64000 时 35200），续接又一路涨到上限本身：重新组装那一轮
+// 已经装了大半，没续几轮就撞上限，又是一轮缓存不命中。现在重新组装时只占一小段，
+// 留出来的空间给续接慢慢涨，两次重新组装之间隔得更远。
+const (
+	// requestContextReserveTokens 是单次请求上限里给输出、工具结果和 Agent 后续几步
+	// 留的余量：续接涨到上限减去它就重新组装，不压着上限发。和雨夹雪的 reserveTokens 一致。
+	requestContextReserveTokens int64 = 16384
+	// recentHistoryKeepCeiling 是重新组装时最多保留的近期历史原文。上限较小时按
+	// (上限−预留)/2 收紧，见 recentHistoryBudget。和雨夹雪的 keepRecentTokens 一致。
+	recentHistoryKeepCeiling int64 = 20000
+)
+
+// appendContextLimit 是续接请求的长度上限：单次请求上限减去 requestContextReserveTokens。
+// contextLimit 为 0（不限）时仍返回 0。上限比预留还小时返回 1 而不是 0：
+// appendContextContinuation 把 0 当「不限」，那样小上限反而续接不受约束；1 等于每轮都
+// 重新组装，本来也装不下续接的增长。
+func appendContextLimit(contextLimit int64) int64 {
+	if contextLimit <= 0 {
+		return 0
+	}
+	return max(1, contextLimit-requestContextReserveTokens)
+}
+
 // 纯百分比预算在大窗口下会失控，所以除近期历史以外的每层在份额之外再加一个
-// 绝对上限，取两者较小值。近期历史不再单设上限：窗口已经被请求上限收到 64K
-// 左右，历史只按份额分，想多带历史就调大请求上限，一个旋钮管住总量。
+// 绝对上限，取两者较小值。近期历史不按份额，见 recentHistoryBudget。
 //
 // 这些是上限不是下限：小窗口下份额本来就更小，仍按份额走，不会因为常量比窗口大
 // 而超发。
@@ -69,11 +93,16 @@ func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
 	return budget
 }
 
-// recentHistoryBudget 返回本轮近期历史的 token 预算：窗口（已按请求上限收紧）
-// 乘历史份额。不再有单独的历史上限配置，免得两个旋钮互相打架——以前历史上限
-// 16K、请求上限留空，总量其实没人管。
+// recentHistoryBudget 返回重新组装时近期历史的 token 预算：
+// min(recentHistoryKeepCeiling, (窗口 − requestContextReserveTokens) / 2)，窗口已按请求
+// 上限收紧。64000 时是 20000，32000 时是 7808。上限再小也至少给
+// minimumRecentHistoryTokens，免得小窗口本地模型一条历史都带不上。
 func recentHistoryBudget(contextWindow int64) int64 {
-	return contextShareBudget(contextWindow, recentHistoryTokenShare)
+	if contextWindow <= 0 {
+		contextWindow = llm.DefaultContextWindowTokens
+	}
+	budget := min(recentHistoryKeepCeiling, max(0, contextWindow-requestContextReserveTokens)/2)
+	return max(budget, minimumRecentHistoryTokens)
 }
 
 // sessionThreadBudget 返回会话线程便签的 token 预算。
@@ -394,11 +423,7 @@ func contextShareBudget(contextWindow, share int64) int64 {
 	if contextWindow <= 0 {
 		contextWindow = llm.DefaultContextWindowTokens
 	}
-	budget := contextWindow * share / contextShareDenominator
-	if share == recentHistoryTokenShare && budget < minimumRecentHistoryTokens {
-		return minimumRecentHistoryTokens
-	}
-	return budget
+	return contextWindow * share / contextShareDenominator
 }
 
 func historyCandidateLimitForBudget(budget int64) int {
@@ -572,7 +597,6 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"categories":               contextBudgetCategoryTrace(breakdown),
 		"category_tokens":          categoryTokens,
 		"history_token_budget":     recentHistoryBudget(window),
-		"history_token_share":      contextShareBudget(window, recentHistoryTokenShare),
 		"summary_token_budget":     sessionThreadBudget(window),
 		// 自述也按记忆优先级注入，token 记在 categories 的 memory 里，所以这份
 		// 预算也要把它算上，否则「用了多少 / 计划多少」两个数对不上。
@@ -703,16 +727,19 @@ type ContextBudgetLayer struct {
 	Key string `json:"key"`
 	// Label 是这一层的中文名。
 	Label string `json:"label"`
-	// SharePercent 是这一层的窗口份额，Ceiling 是绝对上限。
+	// SharePercent 是这一层的窗口份额，Ceiling 是绝对上限。近期历史不按份额（为 0），
+	// 规则写在 Rule 里。
 	SharePercent int64 `json:"share_percent"`
 	Ceiling      int64 `json:"ceiling"`
+	// Rule 是不按份额算的层（近期历史）没压到上限时显示的算法说明，其余层留空。
+	Rule string `json:"rule,omitempty"`
 	// Tokens 是两者取小之后本群实际生效的预算。
 	Tokens int64 `json:"tokens"`
 	// CappedByCeiling 说明这一层是被绝对上限压住的，还是窗口份额本来就更小。
 	// 大窗口下几乎全是前者，小窗口下全是后者——这正是分层预算要表达的事。
 	CappedByCeiling bool `json:"capped_by_ceiling"`
 	// Configurable 标记这一层能不能在配置里调。只有近期历史可以（通过「单次请求
-	// 上下文上限」间接调，它本身没有上限，Ceiling 为 0）：其余几层的
+	// 上下文上限」间接调）：其余几层的
 	// 取值由各自的结构决定（便签天然只有几百字、检索层配合 MMR 的条数上限、
 	// 常驻层不参加相关性排序所以必须小而固定），给旋钮也没有对应的失效模式。
 	Configurable bool `json:"configurable"`
@@ -749,7 +776,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 		ContextWindow:         window,
 		ContextWindowFallback: r.promptContextWindowFallback(cfg),
 		Layers: []ContextBudgetLayer{
-			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, 0, true),
+			recentHistoryBudgetLayer(window),
 			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
 			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
 			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
@@ -763,6 +790,20 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 		breakdown.Headroom = 0
 	}
 	return breakdown
+}
+
+// recentHistoryBudgetLayer 是分配图上的近期历史：数值直接取 recentHistoryBudget，
+// 说明照它的算法写，不套份额那一套。
+func recentHistoryBudgetLayer(window int64) ContextBudgetLayer {
+	return ContextBudgetLayer{
+		Key:             "recent_history",
+		Label:           "近期历史",
+		Ceiling:         recentHistoryKeepCeiling,
+		Rule:            fmt.Sprintf("(窗口 − %d) / 2", requestContextReserveTokens),
+		Tokens:          recentHistoryBudget(window),
+		CappedByCeiling: recentHistoryBudget(window) >= recentHistoryKeepCeiling,
+		Configurable:    true,
+	}
 }
 
 func newContextBudgetLayer(key, label string, window, share, ceiling int64, configurable bool) ContextBudgetLayer {

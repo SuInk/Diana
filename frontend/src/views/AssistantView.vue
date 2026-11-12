@@ -1806,12 +1806,12 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <span class="hint">每次请求的总量由「单次请求上下文上限」管：聊天历史按它的 55% 分配，其余留给工具定义、记忆和这一轮的新消息。想看某一轮真实的构成，在<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
+                <span class="hint">每次请求的总量由「单次请求上下文上限」管：重新组装时只带最近约 2 万 token 的聊天记录，之后每轮往后追加，涨到上限减 16384 再重新组装；其余留给工具定义、记忆和这一轮的新消息。想看某一轮真实的构成，在<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空按 64000" />
-                <span class="hint">一次调用最多带多少 token 上下文进去，留空按 64000；比模型窗口大时按模型窗口算，只会收紧不会放宽。聊天历史按它的 55% 分配（64000 时约 35200），想多带历史就调大这里，更早的内容靠摘要、记忆和聊天记录工具找回。回复为了命中缓存会接着上一轮的请求往后追加，请求会逐轮变长，超过这个数就按预算重新组装；重新组装那一轮缓存不命中，回复会慢几秒。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去，留空按 64000；比模型窗口大时按模型窗口算，只会收紧不会放宽。重新组装时只带最近约 2 万 token 的聊天记录（上限较小时为 (上限 − 16384) / 2），更早的内容靠摘要、记忆和聊天记录工具找回。之后回复为了命中缓存会接着上一轮的请求往后追加，请求逐轮变长，涨到上限减 16384 就重新组装；重新组装那一轮缓存不命中，回复会慢几秒。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
