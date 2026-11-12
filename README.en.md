@@ -183,7 +183,7 @@ make dev        # backend :18080 + Vite frontend :5173, hot reload
 go test ./...   # backend tests
 ```
 
-Before committing, make sure `gofmt` is clean, `go mod tidy` produces no diff, and backend tests plus frontend `vue-tsc` pass — CI enforces all of these. Project conventions are in [AGENTS.md](./AGENTS.md).
+Before committing, make sure `gofmt` is clean, `go mod tidy` produces no diff, and backend tests plus frontend `vue-tsc` pass — CI enforces all of these. See [CONTRIBUTING.md](./CONTRIBUTING.md) (in Chinese) for the full guide to the dev environment, tests, and PR requirements; release conventions are in [AGENTS.md](./AGENTS.md).
 
 ### Pull requests
 
