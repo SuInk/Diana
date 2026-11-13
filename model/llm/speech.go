@@ -40,6 +40,7 @@ const (
 	SpeechAPIMiniMax         SpeechAPI = "minimax"
 	SpeechAPIVolcengine      SpeechAPI = "volcengine"
 	SpeechAPIMiMo            SpeechAPI = "mimo"
+	SpeechAPIDeepSeek        SpeechAPI = "deepseek"
 	SpeechAPIGoogleTranslate SpeechAPI = "google_translate"
 	SpeechAPINovelAI         SpeechAPI = "novelai"
 	// SpeechAPICustomHTTP 用请求模板对接其余自建服务：AllTalk、XTTS、VITS、
@@ -58,6 +59,7 @@ var speechAPIHosts = []struct {
 	{"elevenlabs.io", SpeechAPIElevenLabs},
 	{"breeze.blue", SpeechAPIBreeze},
 	{"xiaomimimo.com", SpeechAPIMiMo},
+	{"deepseek.com", SpeechAPIDeepSeek},
 	{"minimax.io", SpeechAPIMiniMax},
 	{"minimax.chat", SpeechAPIMiniMax},
 	{"minimaxi.chat", SpeechAPIMiniMax},
@@ -78,7 +80,7 @@ func KnownSpeechAPI(name string) bool {
 	switch SpeechAPI(name) {
 	case SpeechAPIOpenAI, SpeechAPIElevenLabs, SpeechAPIBreeze, SpeechAPIGPTSoVITS, SpeechAPIGSVI, SpeechAPIAzure, SpeechAPIEdge,
 		SpeechAPIGemini, SpeechAPIDashScope, SpeechAPIFishAudio, SpeechAPIMiniMax, SpeechAPIVolcengine, SpeechAPIMiMo,
-		SpeechAPIGoogleTranslate, SpeechAPINovelAI, SpeechAPICustomHTTP, SpeechAPIWhisperCLI:
+		SpeechAPIDeepSeek, SpeechAPIGoogleTranslate, SpeechAPINovelAI, SpeechAPICustomHTTP, SpeechAPIWhisperCLI:
 		return true
 	}
 	return false
@@ -447,6 +449,8 @@ func TranscribeAudio(ctx context.Context, cfg ProviderConfig, req TranscriptionR
 	case SpeechAPIOpenAI, SpeechAPIElevenLabs:
 	case SpeechAPIMiMo:
 		return transcribeMiMo(ctx, cfg, req, opts, timeout)
+	case SpeechAPIDeepSeek:
+		return transcribeDeepSeek(ctx, cfg, req, filename, opts, timeout)
 	default:
 		return nil, fmt.Errorf("llm: speech api %q cannot transcribe audio", req.API)
 	}

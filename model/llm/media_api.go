@@ -112,7 +112,7 @@ func classifyMediaStatus(status int, body string) MediaErrorKind {
 
 func mediaBodyMentionsPolicy(body string) bool {
 	text := strings.ToLower(body)
-	for _, marker := range []string{"content_policy", "content policy", "moderation_blocked", "safety_violation", "content_filter"} {
+	for _, marker := range []string{"content_policy", "content policy", "moderation_blocked", "safety_violation", "content_filter", "content exists risk"} {
 		if strings.Contains(text, marker) {
 			return true
 		}
