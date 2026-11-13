@@ -113,6 +113,10 @@ func (r *Runtime) voiceSTTConfigForEvent(ctx context.Context, event MessageEvent
 	if duration := route.paramSeconds(mediaParamMaxDuration); duration > 0 {
 		cfg.MaxDuration = duration
 	}
+	// DeepSeek 只收 120 秒以内的音频，更长的上传了也是 400，白花一次上传。
+	if route.speechAPI() == llm.SpeechAPIDeepSeek && cfg.MaxDuration > llm.DeepSeekASRMaxDuration {
+		cfg.MaxDuration = llm.DeepSeekASRMaxDuration
+	}
 	return cfg, true
 }
 

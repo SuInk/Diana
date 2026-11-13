@@ -126,6 +126,9 @@ func synthesizeVendorSpeech(ctx context.Context, cfg ProviderConfig, req SpeechR
 			audio, format, err = synthesizeVolcengine(ctx, client, cfg, req)
 		case SpeechAPIMiMo:
 			audio, format, err = synthesizeMiMo(ctx, client, cfg, req)
+		case SpeechAPIDeepSeek:
+			req.Model = firstNonEmptyString(req.Model, deepSeekTTSModel)
+			audio, format, err = synthesizeDeepSeek(ctx, client, cfg, req)
 		case SpeechAPINovelAI:
 			audio, format, err = synthesizeNovelAI(ctx, client, cfg, req)
 		case SpeechAPICustomHTTP:
@@ -165,6 +168,8 @@ func vendorDefaultBaseURL(api SpeechAPI) string {
 		return defaultVolcengineV1URL
 	case SpeechAPIMiMo:
 		return defaultMiMoBaseURL
+	case SpeechAPIDeepSeek:
+		return defaultDeepSeekBaseURL
 	case SpeechAPINovelAI:
 		return defaultNovelAIBaseURL
 	case SpeechAPIGoogleTranslate:

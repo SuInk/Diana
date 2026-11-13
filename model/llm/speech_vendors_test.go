@@ -54,6 +54,7 @@ func TestResolveSpeechAPIDetectsVendorHosts(t *testing.T) {
 		"https://api.breeze.blue/v1":                          SpeechAPIBreeze,
 		"https://api.breeze.blue.evil.example/v1":             SpeechAPIOpenAI,
 		"https://api.xiaomimimo.com/v1":                       SpeechAPIMiMo,
+		"https://api.deepseek.com":                            SpeechAPIDeepSeek,
 		"https://api.minimax.io/v1":                           SpeechAPIMiniMax,
 		"https://openspeech.bytedance.com/api/v1/tts":         SpeechAPIVolcengine,
 		"https://dashscope.aliyuncs.com/compatible-mode/v1":   SpeechAPIDashScope,
@@ -192,6 +193,70 @@ func TestMiMoSpeechAndTranscription(t *testing.T) {
 	text, err := TranscribeAudio(context.Background(), cfg, TranscriptionRequest{API: SpeechAPIMiMo, Audio: []byte("RIFF")})
 	if err != nil || text.Text != "你好世界" || text.Model != "mimo-v2.5-asr" {
 		t.Fatalf("text=%#v err=%v", text, err)
+	}
+}
+
+func TestDeepSeekSpeechAndTranscription(t *testing.T) {
+	server := vendorServer(t, func(t *testing.T, w http.ResponseWriter, r *http.Request, body []byte) {
+		if r.Header.Get("Authorization") != "Bearer sk-test" {
+			t.Errorf("auth = %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case "/v1/tools/tts":
+			payload := decodeJSONBody(t, body)
+			if _, ok := payload["model"]; ok || payload["text"] != "你好" || payload["voice_id"] != "tide" || payload["format"] != "pcm" {
+				t.Errorf("payload = %#v", payload)
+			}
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = w.Write([]byte{1, 0, 2, 0})
+		case "/v1/tools/asr":
+			if !strings.Contains(string(body), `name="file"; filename="voice.wav"`) || strings.Contains(string(body), `name="model"`) {
+				t.Errorf("multipart body = %q", body)
+			}
+			_, _ = w.Write([]byte(`{"request_id":"r1","text":" 今天天气 ","duration_ms":3200}`))
+		default:
+			t.Errorf("path = %s", r.URL.Path)
+		}
+	})
+	for _, base := range []string{server.URL, server.URL + "/v1/"} {
+		cfg := mediaTestConfig(server.URL)
+		cfg.BaseURL, cfg.Model = base, "deepseek-v4-flash"
+		resp := synthesize(t, cfg, SpeechRequest{API: SpeechAPIDeepSeek, Model: "deepseek-v4-flash", Voice: "tide", Format: "pcm", Input: "你好"})
+		if resp.Format != "wav" || resp.Model != "deepseek-v4-flash" || !strings.HasPrefix(string(resp.Audio), "RIFF") || len(resp.Audio) != 44+4 {
+			t.Fatalf("resp = %#v", resp)
+		}
+		text, err := TranscribeAudio(context.Background(), cfg, TranscriptionRequest{API: SpeechAPIDeepSeek, Model: "deepseek-v4-flash", Audio: []byte("RIFF"), Filename: "voice.wav"})
+		if err != nil || text.Text != "今天天气" || text.Model != "deepseek-v4-flash" || text.Duration != 3200*time.Millisecond {
+			t.Fatalf("text=%#v err=%v", text, err)
+		}
+	}
+}
+
+func TestDeepSeekToolEndpoint(t *testing.T) {
+	for base, want := range map[string]string{
+		"https://api.deepseek.com":              "v1/tools/tts",
+		"https://api.deepseek.com/":             "v1/tools/tts",
+		"https://api.deepseek.com/v1":           "tools/tts",
+		"https://api.deepseek.com/v1/tools/tts": "",
+	} {
+		if got := deepSeekToolEndpoint(base, "tts"); got != want {
+			t.Errorf("%s -> %q, want %q", base, got, want)
+		}
+	}
+}
+
+func TestDeepSeekContentRiskIsContentPolicy(t *testing.T) {
+	server := vendorServer(t, func(t *testing.T, w http.ResponseWriter, r *http.Request, body []byte) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Content Exists Risk","type":"invalid_request_error"}}`))
+	})
+	noMediaRetryWait(t)
+	_, err := SynthesizeSpeech(context.Background(), mediaTestConfig(server.URL), SpeechRequest{API: SpeechAPIDeepSeek, Input: "x"})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if MediaErrorKindOf(err) != MediaErrorContentPolicy {
+		t.Fatalf("err = %v", err)
 	}
 }
 

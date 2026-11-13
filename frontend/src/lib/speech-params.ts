@@ -12,6 +12,7 @@ const speechAPIOptions: AppSelectOption[] = [
   { value: "elevenlabs", label: "ElevenLabs" },
   { value: "breeze", label: "Breeze" },
   { value: "mimo", label: "小米 MiMo" },
+  { value: "deepseek", label: "DeepSeek" },
   { value: "minimax", label: "MiniMax" },
   { value: "volcengine", label: "火山引擎（豆包语音）" },
   { value: "dashscope", label: "阿里云百炼", hint: "qwen-tts、CosyVoice、Sambert" },
@@ -27,11 +28,12 @@ const transcriptionAPIOptions: AppSelectOption[] = [
   { value: "", label: "按地址自动" },
   { value: "openai", label: "OpenAI 兼容（/audio/transcriptions）", hint: "Whisper、硅基流动、Xinference、faster-whisper 等" },
   { value: "elevenlabs", label: "ElevenLabs" },
-  { value: "mimo", label: "小米 MiMo" }
+  { value: "mimo", label: "小米 MiMo" },
+  { value: "deepseek", label: "DeepSeek", hint: "单段 120 秒以内" }
 ];
 // 按服务地址认接口，和后端 ResolveSpeechAPI 的名单一致；界面只用它决定显示哪些参数。
 const speechAPIHosts: [string, string][] = [
-  ["elevenlabs.io", "elevenlabs"], ["breeze.blue", "breeze"], ["xiaomimimo.com", "mimo"], ["minimax.io", "minimax"], ["minimax.chat", "minimax"],
+  ["elevenlabs.io", "elevenlabs"], ["breeze.blue", "breeze"], ["xiaomimimo.com", "mimo"], ["deepseek.com", "deepseek"], ["minimax.io", "minimax"], ["minimax.chat", "minimax"],
   ["minimaxi.chat", "minimax"], ["minimaxi.com", "minimax"], ["openspeech.bytedance.com", "volcengine"],
   ["dashscope.aliyuncs.com", "dashscope"], ["dashscope-intl.aliyuncs.com", "dashscope"], ["fish.audio", "fishaudio"],
   ["fish-audio.cn", "fishaudio"], ["tts.speech.microsoft.com", "azure"], ["generativelanguage.googleapis.com", "gemini"],
@@ -155,7 +157,7 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
     if (api === "openai") fields.push({ key: "prompt", label: "提示词", placeholder: "可选，专有名词" });
     fields.push(
       { key: "timeout_seconds", label: "超时（秒）", placeholder: "90" },
-      { key: "max_duration_seconds", label: "时长上限（秒）", placeholder: "300" },
+      { key: "max_duration_seconds", label: "时长上限（秒）", placeholder: api === "deepseek" ? "120（DeepSeek 上限）" : "300" },
       { key: "private_enabled", label: "私聊语音", placeholder: "转写", options: [{ value: "", label: "转写" }, { value: "false", label: "不转写" }] }
     );
     return fields;
@@ -163,7 +165,7 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
   const fields: MediaParamField[] = [];
   if (!builtin) fields.push({ key: "api", label: "接口", placeholder: "按地址自动", options: speechAPIOptions });
   const voicePlaceholder: Record<string, string> = {
-    openai: "alloy / 说话人", elevenlabs: "voice_id", breeze: "voice_id，如 voc_kgj4fsfnqmf4", mimo: "mimo_default / 冰糖 / 茉莉", minimax: "voice_id，如 female-shaonv",
+    openai: "alloy / 说话人", elevenlabs: "voice_id", breeze: "voice_id，如 voc_kgj4fsfnqmf4", mimo: "mimo_default / 冰糖 / 茉莉", deepseek: "stella（女，默认）/ tide（男）", minimax: "voice_id，如 female-shaonv",
     volcengine: "音色代号，如 BV001_streaming", dashscope: "Cherry / longxiaochun", fishaudio: "声音模型 reference_id",
     azure: "zh-CN-XiaoxiaoNeural", gemini: "Kore / Puck", novelai: "Aini", edge: "zh-CN-XiaoxiaoNeural",
     google_translate: "语言代码，如 zh-CN", gsvi: "整合包里的角色名", custom_http: "填进模板的 {{voice}}"
@@ -176,7 +178,7 @@ export function mediaParamFields(role: string, api: string, builtin = false): Me
   };
   const fallbackFormat: Record<string, string> = { mimo: "wav", custom_http: "wav" };
   if (formats[api]) fields.push({ key: "format", label: "格式", placeholder: "默认", options: formatOptions(formats[api], fallbackFormat[api] ?? "mp3") });
-  if (api !== "google_translate" && api !== "novelai") fields.push({ key: "speed", label: "语速", placeholder: api === "breeze" ? "0.5–2.0，默认 1.0" : "1.0" });
+  if (!["google_translate", "novelai", "deepseek"].includes(api)) fields.push({ key: "speed", label: "语速", placeholder: api === "breeze" ? "0.5–2.0，默认 1.0" : "1.0" });
   if (["openai", "breeze", "mimo", "gemini", "azure"].includes(api)) fields.push({ key: "instructions", label: api === "azure" ? "说话风格" : "语气说明", placeholder: api === "azure" ? "cheerful / sad" : "可选" });
   const extra: Record<string, MediaParamField[]> = {
     breeze: [{ key: "language", label: "语言", placeholder: "可选，如 zh / en" }],
@@ -240,6 +242,7 @@ export const speechServices: SpeechServiceOption[] = [
   { value: "azure", label: "Azure 语音", hint: "地址留空时按下方填的区域拼官方地址", baseURL: "" },
   { value: "gemini", label: "Gemini TTS", hint: "", baseURL: "https://generativelanguage.googleapis.com/v1beta" },
   { value: "mimo", label: "小米 MiMo", hint: "", baseURL: "https://api.xiaomimimo.com/v1", stt: true },
+  { value: "deepseek", label: "DeepSeek", hint: "可直接用对话的 Key；语音识别单段 120 秒以内", baseURL: "https://api.deepseek.com", stt: true },
   { value: "breeze", label: "Breeze", hint: "", baseURL: "https://api.breeze.blue/v1" },
   { value: "novelai", label: "NovelAI", hint: "", baseURL: "https://api.novelai.net" },
   { value: "gpt_sovits", label: "GPT-SoVITS v2（本机）", hint: "api_v2 接口", baseURL: "http://127.0.0.1:9880", local: true },

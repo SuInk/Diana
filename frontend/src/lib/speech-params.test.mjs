@@ -31,6 +31,14 @@ test("changing request templates preserves voice but removes previous request fi
   assert.equal(updateSpeechParam(next, "voice", "  ").voice, undefined);
 });
 
+test("deepseek speech is detected by host and hides unsupported fields", () => {
+  assert.equal(resolveSpeechAPI("", "https://api.deepseek.com"), "deepseek");
+  const tts = mediaParamFields("tts", "deepseek").map(field => field.key);
+  assert.ok(tts.includes("voice"));
+  for (const key of ["speed", "format", "instructions"]) assert.ok(!tts.includes(key), key);
+  assert.ok(mediaParamFields("stt", "deepseek").some(field => field.key === "api" && field.options.some(option => option.value === "deepseek")));
+});
+
 test("video slot shows only the fields the selected vendor needs", () => {
   const keys = api => mediaParamFields("video", api).map(field => field.key);
   assert.deepEqual(keys(""), ["api", "size", "seconds", "timeout_seconds", "poll_interval_seconds"]);
