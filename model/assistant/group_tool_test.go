@@ -200,7 +200,39 @@ func TestDianaOneBotGroupToolSearchesByCardOrNickname(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(raw, `"user_id": "10001"`) || strings.Contains(raw, `"user_id": "10002"`) {
+	if !strings.Contains(raw, `"user_id":"10001"`) || strings.Contains(raw, `"user_id":"10002"`) {
 		t.Fatalf("raw = %s", raw)
+	}
+}
+
+// members 不设条数上限：匹配人数如实报，按整条分页，offset 续读拿到剩下的。
+func TestDianaOneBotGroupToolMembersPagesWithoutCap(t *testing.T) {
+	const total = 130
+	items := make([]any, 0, total)
+	for index := 0; index < total; index++ {
+		items = append(items, map[string]any{"group_id": "20001", "user_id": fmt.Sprintf("%d", 30000+index), "nickname": fmt.Sprintf("成员%d", index)})
+	}
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{"get_group_member_list": {"items": items}}}
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, nil)
+	tool := newDianaGroupTool(runtime, MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20001", UserID: "10001"})
+	list := func(input map[string]any) dianaGroupResult {
+		t.Helper()
+		raw, err := tool.listMembers(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaGroupResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return result
+	}
+	first := list(map[string]any{"operation": "members"})
+	if first.Total != total || len(first.Members) != defaultGroupMemberLimit || first.Page == nil || !first.Page.HasMore || first.Page.NextOffset != defaultGroupMemberLimit {
+		t.Fatalf("first page = total %d members %d page %+v", first.Total, len(first.Members), first.Page)
+	}
+	rest := list(map[string]any{"operation": "members", "limit": 1000, "offset": first.Page.NextOffset})
+	if len(rest.Members) != total-defaultGroupMemberLimit || rest.Page == nil || rest.Page.HasMore || rest.Members[len(rest.Members)-1].UserID != fmt.Sprintf("%d", 30000+total-1) {
+		t.Fatalf("rest page = members %d page %+v", len(rest.Members), rest.Page)
 	}
 }

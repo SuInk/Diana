@@ -19,11 +19,7 @@ import (
 // 只给主人。别的机器人那边的群聊记录对这边的群友来说就是别人家的聊天，谁都能问
 // 就成了窃听；发消息同理。读写都复用现有的链路：读走 chat_history 的同一套实现，
 // 发走 cross_session_message 的投递（准入、屏蔽、限流、好友托管全都照旧）。
-const (
-	dianaCrossPlatformToolName = "cross_platform"
-	// maxCrossPlatformGroups 和 group_list 同一个道理，几百个群全倒进结果只会挤占上下文。
-	maxCrossPlatformGroups = 200
-)
+const dianaCrossPlatformToolName = "cross_platform"
 
 type dianaCrossPlatformTool struct {
 	runtime *Runtime
@@ -51,7 +47,8 @@ func (t *dianaCrossPlatformTool) InputSchema() map[string]any {
 		"query":          toolStringParam("search：关键词；设了 sender_user_id 可省略"),
 		"sender_user_id": toolStringParam("search：只看这个账号发的消息"),
 		"days":           toolIntParam("search：只看最近多少天", 1, 365),
-		"limit":          toolCountParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1),
+		"limit":          toolCountParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit)+"；groups 本页最多几条，默认装得下多少给多少", 1),
+		"offset":         toolCountParam("groups：从第几条起（0 开始），续读时填结果里的 next_offset", 0),
 		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 <diana-message/>；只转附件时可留空"),
 		"forward_media":  toolBoolParam("send：把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	})
@@ -158,12 +155,9 @@ func (t *dianaCrossPlatformTool) groups(ctx context.Context, input map[string]an
 	if source == "group_configs" {
 		payload["note"] = "这个平台没有「列出已加入的群」接口，这里只有控制台里有配置的群，不是全部。"
 	}
-	if len(groups) > maxCrossPlatformGroups {
-		groups = groups[:maxCrossPlatformGroups]
-		payload["groups_truncated"] = true
-	}
-	payload["groups"] = groups
-	return marshalCrossPlatform("groups", payload)
+	// 不设条数上限，按整条分页。
+	payload["ok"], payload["operation"] = true, "groups"
+	return marshalMapListPage(ctx, input, payload, "groups", groups)
 }
 
 // target 解析 profile_id + group_id/user_id。

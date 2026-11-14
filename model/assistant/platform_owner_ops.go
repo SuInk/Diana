@@ -10,9 +10,6 @@ import (
 	"time"
 )
 
-// maxPlatformFriendListItems 和群列表同一个道理：几千个好友全倒进工具结果只会挤占上下文。
-const maxPlatformFriendListItems = 200
-
 type dianaPlatformFriendItem struct {
 	UserID   string `json:"user_id"`
 	Nickname string `json:"nickname,omitempty"`
@@ -94,13 +91,8 @@ func (t *dianaPlatformTool) runOwnerOperation(ctx context.Context, input map[str
 			})
 		}
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
-		payload := map[string]any{"friend_count": len(friends)}
-		if len(friends) > maxPlatformFriendListItems {
-			payload["friends_truncated"] = true
-			friends = friends[:maxPlatformFriendListItems]
-		}
-		payload["friends"] = friends
-		return t.marshal(operation, access, payload)
+		// 不设条数上限，按整条分页，见 marshalPlatformListPage。
+		return marshalPlatformListPage(t, operation, access, map[string]any{"friend_count": len(friends)}, "friends", friends)
 	}
 	return "", fmt.Errorf("operation 不支持：%s", operation)
 }

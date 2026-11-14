@@ -154,3 +154,21 @@ func TestPlatformRecallIsNotOwnerOnly(t *testing.T) {
 		t.Fatalf("非主人看不到 recall：%s", values)
 	}
 }
+
+// 撤回候选提示要全部列出、正文给全，不再只给 5 条、每条 20 字。
+func TestRecallCandidateHintListsAllWithFullText(t *testing.T) {
+	longText := strings.Repeat("这句话说错了", 10)
+	var history []MessageEvent
+	for i := range 8 {
+		history = append(history, MessageEvent{Outbound: true, MessageID: "6000" + itoa(i), RawMessage: longText})
+	}
+	hint := recallCandidateHint(history)
+	for i := range 8 {
+		if !strings.Contains(hint, "6000"+itoa(i)) {
+			t.Fatalf("候选 %d 被漏掉：%s", i, hint)
+		}
+	}
+	if strings.Count(hint, longText) != 8 || strings.Contains(hint, "…") {
+		t.Fatalf("候选正文被截短：%s", hint)
+	}
+}

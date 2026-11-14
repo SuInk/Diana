@@ -92,6 +92,21 @@ func TestDianaRelationshipToolListsCurrentGroupForOwner(t *testing.T) {
 	if len(result.Items) != 2 || result.Items[0].UserID != "10002" || result.Items[1].UserID != "10001" {
 		t.Fatalf("items = %#v", result.Items)
 	}
+	// 没给全时写明总数和续读方式，而不是把截断后的条数当总数报出。
+	if result.Page == nil || result.Page.Total != 3 || !result.Page.HasMore || result.Page.NextOffset != 2 || !strings.Contains(result.Message, "共 3 位") {
+		t.Fatalf("page = %s", raw)
+	}
+	raw, err = tool.Run(context.Background(), map[string]any{"operation": "list", "limit": 2, "offset": 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = dianaRelationshipResult{}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].UserID != "10003" || result.Page.HasMore {
+		t.Fatalf("second page = %s", raw)
+	}
 
 	// 榜单是群内公开互动的统计，普通成员同样可以查询。
 	memberTool := newDianaRelationshipTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10003"})

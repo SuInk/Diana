@@ -16,6 +16,7 @@ import (
 	"log"
 	"math"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -24,9 +25,8 @@ import (
 )
 
 const (
-	dianaStickerToolName             = "sticker"
-	maximumStickerDescriptionLookups = 128
-	stickerDescriptionWorkers        = 3
+	dianaStickerToolName      = "sticker"
+	stickerDescriptionWorkers = 3
 	// 发过的表情包降低再被选中的「欲望」，思路照 vector_meme（core/retriever.py）：
 	// 最近发过的大幅降权，刚发过的再降一截，发得多的持续小幅降权。它在 0～1 的相似度上
 	// 做减法，这里的关键词得分没有上限，改成乘法。
@@ -121,7 +121,12 @@ type stickerToolResult struct {
 	Message    string              `json:"message"`
 	Query      string              `json:"query,omitempty"`
 	Candidates []stickerSearchItem `json:"candidates,omitempty"`
-	Sent       *stickerSearchItem  `json:"sent,omitempty"`
+	// search 的命中统计：TotalMatched 是这次关键词命中的全部候选数（不是本页条数），
+	// RemainingMatched 是本轮还没给过的命中候选数，HasMore 时传 more=true 接着看。
+	TotalMatched     *int               `json:"total_matched,omitempty"`
+	RemainingMatched int                `json:"remaining_matched,omitempty"`
+	HasMore          bool               `json:"has_more,omitempty"`
+	Sent             *stickerSearchItem `json:"sent,omitempty"`
 }
 
 func newDianaStickerTool(runtime *Runtime, event MessageEvent, settings SettingValues) *dianaStickerTool {
@@ -144,7 +149,9 @@ func (t *dianaStickerTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":  toolEnumParam("search 只返回候选；send 发送一张", "search", "send"),
 		"query":      toolStringParam("2～6 个空格分隔的短关键词（情绪、动作、场景、同义词），不写整句；留空随机"),
-		"sticker_id": toolStringParam("本轮 search 返回的候选 id，原样传"),
+		"limit":      toolCountParam("search 这次要几个候选，默认用插件设置的候选返回数量，不设上限", 1),
+		"more":       toolBoolParam("search 时 true 只给本轮还没给过的候选；结果 has_more 时用同样的 query 加 more=true 接着看剩下的命中"),
+		"sticker_id": toolStringParam("本轮 search 返回过的候选 id，原样传"),
 	})
 }
 
@@ -165,25 +172,47 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if err != nil {
 			return "", err
 		}
-		limit := t.settings.Int(stickerSettingSearchResults, 8)
+		limit := chatHistoryCount(input, "limit", t.settings.Int(stickerSettingSearchResults, 8))
+		shownBefore := t.shownCandidateIDs()
+		totalMatched := 0
+		unshownMatched := map[string]bool{}
+		for _, candidate := range candidates {
+			if candidate.Score > 0 {
+				totalMatched++
+				if !shownBefore[candidate.ID] {
+					unshownMatched[candidate.ID] = true
+				}
+			}
+		}
+		if toolInputBool(input, "more") {
+			candidates = slices.DeleteFunc(candidates, func(candidate stickerCandidate) bool { return shownBefore[candidate.ID] })
+		}
 		now := time.Now().Unix()
 		picked, matched := selectStickerCandidates(candidates, limit, now, secureRandomIndex)
 		t.enrichCandidateDescriptions(ctx, picked)
 		t.tagCandidatesInBackground(ctx, picked)
-		t.rememberSearchCandidates(picked)
 		items := stickerSearchItems(picked)
-		var message string
-		switch {
-		case len(items) == 0:
-			message = "本轮没有可用候选；继续正常回应，不要向用户提及内部图库、索引、搜索或工具状态，也不要声称已经发送。"
-		case matched == 0 && query != "":
-			message = fmt.Sprintf("没有关键词命中，以下 %d 个是随机候选；有贴合当前语境的再发，都不合适就不发，也可以换一组关键词再搜。", len(items))
-		case matched < len(items):
-			message = fmt.Sprintf("命中 %d 个候选，另有 %d 个随机补位（matched=false）；请按当前语境结合名称、标签和简介选择。", matched, len(items)-matched)
-		default:
-			message = fmt.Sprintf("找到 %d 个候选；请按当前语境结合名称、标签和简介选择。", len(items))
+		// 候选多到装不下单次结果上限时整条留到下一页：只记下真正给出去的那几张。
+		body, err := marshalToolResultPage(ctx, len(items), 0, 0, func(n int, _ toolResultPage) any {
+			remaining := len(unshownMatched)
+			for _, candidate := range picked[:n] {
+				if unshownMatched[candidate.ID] {
+					remaining--
+				}
+			}
+			return stickerSearchResult(query, items[:n], min(n, matched), totalMatched, remaining)
+		})
+		if err != nil {
+			return "", err
 		}
-		return marshalStickerResult(stickerToolResult{OK: true, Action: "searched", Message: message, Query: query, Candidates: items})
+		var shown struct {
+			Candidates []json.RawMessage `json:"candidates"`
+		}
+		if err := json.Unmarshal([]byte(body), &shown); err != nil {
+			return "", err
+		}
+		t.rememberSearchCandidates(picked[:len(shown.Candidates)])
+		return body, nil
 	case "send":
 		var selected *stickerCandidate
 		if stickerID != "" {
@@ -214,6 +243,46 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 	default:
 		return "", fmt.Errorf("operation 必须是 search 或 send")
 	}
+}
+
+// stickerSearchResult 组装 search 的结果。matched 是本页命中关键词的条数，totalMatched 是
+// 这组关键词的全部命中数，remaining 是本页之后仍然本轮没给过的命中候选数。
+func stickerSearchResult(query string, items []stickerSearchItem, matched, totalMatched, remaining int) stickerToolResult {
+	remaining = max(0, remaining)
+	result := stickerToolResult{OK: true, Action: "searched", Query: query, Candidates: items, RemainingMatched: remaining, HasMore: remaining > 0}
+	if query != "" {
+		result.TotalMatched = &totalMatched
+	}
+	switch {
+	case len(items) == 0:
+		result.Message = "本轮没有可用候选；继续正常回应，不要向用户提及内部图库、索引、搜索或工具状态，也不要声称已经发送。"
+	case matched == 0 && query != "":
+		result.Message = fmt.Sprintf("没有关键词命中，以下 %d 个是随机候选；有贴合当前语境的再发，都不合适就不发，也可以换一组关键词再搜。", len(items))
+	case matched < len(items):
+		result.Message = fmt.Sprintf("本页 %d 个命中候选，另有 %d 个随机补位（matched=false）；请按当前语境结合名称、标签和简介选择。", matched, len(items)-matched)
+	default:
+		result.Message = fmt.Sprintf("本页 %d 个候选；请按当前语境结合名称、标签和简介选择。", len(items))
+	}
+	if query != "" {
+		result.Message += fmt.Sprintf("这组关键词共命中 %d 个", totalMatched)
+		if remaining > 0 {
+			result.Message += fmt.Sprintf("，还有 %d 个命中的本轮没给：同样的 query 加 more=true 再 search 接着看（也可加大 limit），本轮给过的 sticker_id 仍然能发。", remaining)
+		} else {
+			result.Message += "，命中的都给过了。"
+		}
+	}
+	return result
+}
+
+// shownCandidateIDs 是本轮 search 已经给过的候选 id。
+func (t *dianaStickerTool) shownCandidateIDs() map[string]bool {
+	t.searchMu.Lock()
+	defer t.searchMu.Unlock()
+	ids := make(map[string]bool, len(t.searched))
+	for id := range t.searched {
+		ids[id] = true
+	}
+	return ids
 }
 
 // deliver 发出一张选好的表情包：校验缓存文件、占发送名额、发送、记账。到了发送上限时
@@ -338,10 +407,11 @@ func stickerMatchesQuery(candidate stickerCandidate, query string) bool {
 	return false
 }
 
+// rememberSearchCandidates 记下本轮 search 给出去的候选，send 只认这些 id。
+// 本轮多次 search（含 more=true 续读）给过的都留着。
 func (t *dianaStickerTool) rememberSearchCandidates(candidates []stickerCandidate) {
 	t.searchMu.Lock()
 	defer t.searchMu.Unlock()
-	t.searched = make(map[string]stickerCandidate, len(candidates))
 	for _, candidate := range candidates {
 		t.searched[candidate.ID] = candidate
 	}
@@ -534,9 +604,6 @@ func (t *dianaStickerTool) candidates(ctx context.Context, query string) ([]stic
 		candidates = stickerCandidatesFromEvents(events, assetQuery.Session, includeGeneric, semanticScores)
 		// 资产库一次查询就带出了简介；只有退回到聊天记录时才逐张回查。
 		for index := range candidates {
-			if index >= maximumStickerDescriptionLookups {
-				break
-			}
 			lines := t.runtime.historyImageCachedSegmentDescriptions(ctx, []MessageSegment{{Type: "image", Data: map[string]string{
 				"cached_file":         candidates[index].Path,
 				imageContentSHA256Key: candidates[index].Hash,
@@ -1079,7 +1146,7 @@ func stickerSearchItems(candidates []stickerCandidate) []stickerSearchItem {
 		}
 		items = append(items, stickerSearchItem{
 			ID: candidate.ID, Name: candidate.Summary, Tags: candidate.Tags, Category: candidate.Category,
-			Description: truncateRunes(candidate.Description, 240), Matched: candidate.Score > 0,
+			Description: candidate.Description, Matched: candidate.Score > 0,
 			MessageID: candidate.MessageID, Scope: scope,
 		})
 	}

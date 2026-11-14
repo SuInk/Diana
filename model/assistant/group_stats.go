@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -145,7 +144,6 @@ func normalizeReactionEmojis(emojis []string) []string {
 
 const (
 	defaultGroupStatsLimit = 50
-	maximumGroupStatsLimit = 200
 	// defaultGroupStatsDays 是没给时间范围时统计的天数。发言排行只看最近一天通常太短。
 	defaultGroupStatsDays = 7
 )
@@ -155,8 +153,10 @@ type groupStatsResult struct {
 	Action  string `json:"action"`
 	Message string `json:"message"`
 	Window  string `json:"window,omitempty"`
-	// Total 是时间段里参与的人数；Ranks 只列前 limit 个。
+	// Total 是时间段里参与的人数（单条消息的表情回应时是挂了表情的人数）。排行按整条
+	// 分页，Page 写明这一页是第几到第几名、怎么接着读。
 	Total     int                  `json:"total"`
+	Page      *toolResultPage      `json:"page,omitempty"`
 	Ranks     []groupStatsRankItem `json:"ranks,omitempty"`
 	MessageID string               `json:"message_id,omitempty"`
 	Reactions []groupReactionItem  `json:"reactions,omitempty"`
@@ -227,21 +227,33 @@ func (t *dianaChatHistoryTool) speakerStats(ctx context.Context, input map[strin
 		return "", err
 	}
 	from, through := t.statsWindow(input)
-	limit := chatHistoryPositiveInt(input, "limit", defaultGroupStatsLimit, maximumGroupStatsLimit)
-	ranks, total, err := store.RankGroupSpeakers(ctx, sessionKey(t.event), from, through, limit)
+	// 存储层给全部人的排行（limit=0），这里按整条分页，不再只列前几名。
+	ranks, total, err := store.RankGroupSpeakers(ctx, sessionKey(t.event), from, through, 0)
 	if err != nil {
 		return "", fmt.Errorf("统计发言失败：%w", err)
 	}
 	message := fmt.Sprintf("这是本群在这个时间段里的发言排行（按本地记下的消息条数），共 %d 人发过言。", total)
 	if total == 0 {
 		message = "这个时间段本地没有记到任何群消息，可能机器人当时不在群里，不要编造排行。"
-	} else if total > len(ranks) {
-		message += fmt.Sprintf("只列出前 %d 人，要看全部把 limit 调大。", len(ranks))
 	}
 	message += "is_bot=true 的是机器人（包括本群标记过的其他机器人）。这是发言条数，不是点赞数。"
-	return codingToolJSONAny(groupStatsResult{
+	return t.rankPage(ctx, input, groupStatsResult{
 		OK: true, Action: "speakers", Message: message, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
-		Total: total, Ranks: t.rankItems(ranks),
+		Total: total,
+	}, ranks)
+}
+
+// rankPage 把排行按整条分页：名次按全部排行算，从 offset 起最多 limit 条，装不下单次
+// 上限的整条留到下一页。
+func (t *dianaChatHistoryTool) rankPage(ctx context.Context, input map[string]any, result groupStatsResult, ranks []GroupStatsRank) (string, error) {
+	items := t.rankItems(ranks)
+	limit := chatHistoryCount(input, "limit", defaultGroupStatsLimit)
+	return marshalToolResultPage(ctx, len(items), toolPageOffset(input), limit, func(n int, page toolResultPage) any {
+		start := min(page.Offset, len(items))
+		out := result
+		out.Page = &page
+		out.Ranks = items[start : start+n]
+		return out
 	})
 }
 
@@ -276,35 +288,29 @@ func (t *dianaChatHistoryTool) reactionStats(ctx context.Context, input map[stri
 		if len(reactions) == 0 {
 			message = "这条消息上没有记到表情回应。"
 		}
-		return codingToolJSONAny(groupStatsResult{
-			OK: true, Action: "reactions", Message: message + coverage, MessageID: messageID,
-			Total: len(reactions), Reactions: reactions,
+		result := groupStatsResult{OK: true, Action: "reactions", Message: message + coverage, MessageID: messageID, Total: len(reactions)}
+		// 单条消息上的人也按整条分页，不设条数上限（不传 limit 就是全部）。
+		return marshalToolResultPage(ctx, len(reactions), toolPageOffset(input), chatHistoryCount(input, "limit", 0), func(n int, page toolResultPage) any {
+			start := min(page.Offset, len(reactions))
+			out := result
+			out.Page = &page
+			out.Reactions = reactions[start : start+n]
+			return out
 		})
 	}
 	from, through := t.statsWindow(input)
-	limit := chatHistoryPositiveInt(input, "limit", defaultGroupStatsLimit, maximumGroupStatsLimit)
-	ranks, total, err := store.RankReactionGivers(ctx, sessionKey(t.event), from, through, limit)
+	ranks, total, err := store.RankReactionGivers(ctx, sessionKey(t.event), from, through, 0)
 	if err != nil {
 		return "", fmt.Errorf("统计表情回应失败：%w", err)
 	}
 	message := fmt.Sprintf("这是本群在这个时间段里挂表情回应（点赞）的排行，count 是挂出去的表情个数，共 %d 人。", total)
 	if total == 0 {
 		message = "这个时间段没有记到表情回应。不要拿发言排行或别人贴过的名单冒充点赞名单。"
-	} else if total > len(ranks) {
-		message += fmt.Sprintf("只列出前 %d 人，要看全部把 limit 调大。", len(ranks))
 	}
-	return codingToolJSONAny(groupStatsResult{
+	return t.rankPage(ctx, input, groupStatsResult{
 		OK: true, Action: "reactions", Message: message + coverage, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
-		Total: total, Ranks: t.rankItems(ranks),
-	})
-}
-
-func codingToolJSONAny(value any) (string, error) {
-	body, err := json.Marshal(value)
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
+		Total: total,
+	}, ranks)
 }
 
 func cloneToolInput(input map[string]any) map[string]any {

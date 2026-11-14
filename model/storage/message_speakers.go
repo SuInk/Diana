@@ -182,9 +182,10 @@ func (s *SQLiteStore) ListMessageSpeakers(ctx context.Context, query assistant.M
 	if (!query.CrossSession && session == "") || (query.CrossSession && prefix == "") {
 		return nil, nil
 	}
+	// 不设上限：Limit<=0 给全部（SQLite 的 LIMIT -1）。
 	limit := query.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 500
+	if limit <= 0 {
+		limit = -1
 	}
 	where := `session = ?`
 	args := []any{session}

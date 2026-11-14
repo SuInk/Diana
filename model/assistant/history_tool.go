@@ -274,6 +274,7 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"days":     toolIntParam("只看最近多少天", 1, 365),
 		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
 		"limit":    toolCountParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit)+"（range 默认 "+itoa(defaultChatHistoryRangeLimit)+"）；超过单次结果上限时按整条分页，结果里给续读方式", 1),
+		"offset":   toolCountParam("speakers/reactions 从第几条起（0 起），续读时填上次的 next_offset；其余操作用 cursor 或 ids 续读", 0),
 	})
 }
 
@@ -905,29 +906,6 @@ func (t *dianaChatHistoryTool) timeline(ctx context.Context, fromTime, throughTi
 		return mergeSemanticReferenceHistory(stored, filteredMemory), nil
 	}
 	return mergeSemanticReferenceHistory(filteredMemory), nil
-}
-
-func chatHistoryBoundedInt(input map[string]any, key string, fallback, maximum int) int {
-	raw, exists := input[key]
-	if !exists {
-		return fallback
-	}
-	value := intFromAny(raw)
-	if value < 0 {
-		value = 0
-	}
-	if value > maximum {
-		value = maximum
-	}
-	return value
-}
-
-func chatHistoryPositiveInt(input map[string]any, key string, fallback, maximum int) int {
-	value := chatHistoryBoundedInt(input, key, fallback, maximum)
-	if value <= 0 {
-		return fallback
-	}
-	return value
 }
 
 // chatHistoryCount 读模型给的条数，不设上限：要多少给多少，装不下单次结果的

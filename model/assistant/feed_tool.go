@@ -14,10 +14,7 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-const (
-	defaultFeedListLimit = 10
-	maximumFeedListLimit = 30
-)
+const defaultFeedListLimit = 10
 
 // dianaFeedTool 是模型往「动态」页发帖的入口。
 //
@@ -34,7 +31,6 @@ type dianaFeedResult struct {
 	Action  string       `json:"action"`
 	Message string       `json:"message,omitempty"`
 	Post    *FeedPost    `json:"post,omitempty"`
-	Items   []FeedPost   `json:"items,omitempty"`
 	Comment *FeedComment `json:"comment,omitempty"`
 	Likes   *FeedLikes   `json:"likes,omitempty"`
 }
@@ -70,7 +66,8 @@ func (*dianaFeedTool) InputSchema() map[string]any {
 		"reply_to":    toolStringParam("要回复的评论 ID，取自 list；不填为顶层评论"),
 		"liked":       toolBoolParam("false 取消点赞，默认 true"),
 		"needs_reply": toolBoolParam("只列主人评论后你还没回的动态"),
-		"limit":       toolIntParam("返回条数，默认 "+itoa(defaultFeedListLimit), 1, maximumFeedListLimit),
+		"limit":       toolCountParam("list 条数，默认 "+itoa(defaultFeedListLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
+		"offset":      toolCountParam("list 从第几条起（0 起，新的在前），续读时填上次的 next_offset", 0),
 	})
 }
 
@@ -141,27 +138,18 @@ func (t *dianaFeedTool) post(ctx context.Context, store FeedStore, input map[str
 }
 
 func (t *dianaFeedTool) list(ctx context.Context, store FeedStore, input map[string]any) (string, error) {
-	limit := intFromAny(input["limit"])
-	if limit <= 0 {
-		limit = defaultFeedListLimit
-	}
-	if limit > maximumFeedListLimit {
-		limit = maximumFeedListLimit
-	}
+	limit := chatHistoryCount(input, "limit", defaultFeedListLimit)
 	kind := ""
 	if raw := strings.TrimSpace(configToolString(input, "kind")); raw != "" {
 		kind = NormalizeFeedKind(raw)
 	}
-	needsReply := toolInputBool(input, "needs_reply")
-	query := FeedListQuery{ProfileID: strings.TrimSpace(t.event.ProfileID), Kind: kind, Limit: limit}
-	if needsReply {
-		// 过滤发生在取回之后，要多取一些才不会因为大部分帖子都已回复而只剩几条。
-		query.Limit = maximumFeedListLimit * 3
-	}
-	posts, err := store.ListFeedPosts(ctx, query)
+	// 取全部再筛、再分页：needs_reply 的过滤在取回之后，只取一截会漏掉更早的待回动态，
+	// 总数也会报错。
+	posts, err := listAllFeedPosts(ctx, store, FeedListQuery{ProfileID: strings.TrimSpace(t.event.ProfileID), Kind: kind})
 	if err != nil {
 		return "", err
 	}
+	needsReply := toolInputBool(input, "needs_reply")
 	if needsReply {
 		waiting := posts[:0]
 		for _, post := range posts {
@@ -170,15 +158,37 @@ func (t *dianaFeedTool) list(ctx context.Context, store FeedStore, input map[str
 			}
 		}
 		posts = waiting
-		if len(posts) > limit {
-			posts = posts[:limit]
-		}
 	}
-	message := fmt.Sprintf("最近 %d 条", len(posts))
-	if len(posts) == 0 {
+	message := fmt.Sprintf("共 %d 条动态，新的在前", len(posts))
+	switch {
+	case needsReply && len(posts) == 0:
+		message = "没有等你回复的动态"
+	case needsReply:
+		message = fmt.Sprintf("共 %d 条动态等你回复，新的在前", len(posts))
+	case len(posts) == 0:
 		message = "还没有发过动态"
 	}
-	return encodeFeedResult(dianaFeedResult{OK: true, Action: "list", Message: message, Items: posts})
+	return marshalToolResultPage(ctx, len(posts), toolPageOffset(input), limit, func(n int, page toolResultPage) any {
+		start := min(page.Offset, len(posts))
+		return struct {
+			OK      bool       `json:"ok"`
+			Action  string     `json:"action"`
+			Message string     `json:"message"`
+			Items   []FeedPost `json:"items"`
+			toolResultPage
+		}{OK: true, Action: "list", Message: message, Items: posts[start : start+n], toolResultPage: page}
+	})
+}
+
+// listAllFeedPosts 取全部符合条件的动态：存储接口只有 limit，拿满就加倍再取，直到取到的比要的少。
+func listAllFeedPosts(ctx context.Context, store FeedStore, query FeedListQuery) ([]FeedPost, error) {
+	for limit := 64; ; limit *= 2 {
+		query.Limit = limit
+		posts, err := store.ListFeedPosts(ctx, query)
+		if err != nil || len(posts) < limit {
+			return posts, err
+		}
+	}
 }
 
 func (t *dianaFeedTool) comment(ctx context.Context, store FeedStore, input map[string]any) (string, error) {

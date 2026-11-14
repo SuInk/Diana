@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -80,5 +81,33 @@ func TestOneBotRequestProfileIsolation(t *testing.T) {
 	items, err := store.ListOneBotRequests(context.Background(), "bot-a", assistant.OneBotRequestPending, 20)
 	if err != nil || len(items) != 1 || items[0].ProfileID != "bot-a" {
 		t.Fatalf("isolated=%#v err=%v", items, err)
+	}
+}
+
+// TestListOneBotRequestsWithoutLimitReturnsAll limit<=0 给全部，不再静默截到 20/100 条。
+func TestListOneBotRequestsWithoutLimitReturnsAll(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "onebot-request-all.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	now := time.Unix(1_788_300_000, 0)
+	for i := range 130 {
+		request := assistant.OneBotRequestRecord{
+			ProfileID: "bot-1", Platform: assistant.PlatformOneBotV11, SelfID: "42",
+			RequestType: "friend", UserID: strconv.Itoa(10000 + i), Flag: "flag-" + strconv.Itoa(i),
+			Status: assistant.OneBotRequestPending, CreatedAt: now, UpdatedAt: now,
+		}
+		if _, _, err := store.SaveOneBotRequest(context.Background(), request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, err := store.ListOneBotRequests(context.Background(), "bot-1", assistant.OneBotRequestPending, 0)
+	if err != nil || len(items) != 130 {
+		t.Fatalf("got %d err=%v", len(items), err)
+	}
+	items, err = store.ListOneBotRequests(context.Background(), "bot-1", assistant.OneBotRequestPending, 120)
+	if err != nil || len(items) != 120 {
+		t.Fatalf("explicit limit got %d err=%v", len(items), err)
 	}
 }

@@ -154,9 +154,6 @@ func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfil
 	if userID == "" || limit <= 0 {
 		return []assistant.UserFavorabilityChange{}, nil
 	}
-	if limit > 100 {
-		limit = 100
-	}
 	scopeCondition, scopeArgs := favorabilityScopeCondition(botProfileID)
 	if exact {
 		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
@@ -172,7 +169,7 @@ LIMIT ?
 		return nil, err
 	}
 	defer rows.Close()
-	changes := make([]assistant.UserFavorabilityChange, 0, limit)
+	changes := make([]assistant.UserFavorabilityChange, 0, min(limit, 64))
 	for rows.Next() {
 		var change assistant.UserFavorabilityChange
 		var reason, operatorID, groupID, messageID sql.NullString

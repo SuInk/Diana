@@ -72,6 +72,29 @@ func TestRelationshipGetCarriesFiveRecentChangesByDefault(t *testing.T) {
 	}
 }
 
+// TestRelationshipGetSaysWhenOlderChangesRemain 没给全时写明还有更早的；给全时不写。
+func TestRelationshipGetSaysWhenOlderChangesRemain(t *testing.T) {
+	runtime, event := seedRecentChangesRuntime(t, 7)
+	run := func(limit int) dianaRelationshipResult {
+		t.Helper()
+		raw, err := newDianaRelationshipTool(runtime, event).Run(context.Background(), map[string]any{"operation": "get", "history_limit": limit})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaRelationshipResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil || result.Target == nil {
+			t.Fatalf("bad result %s: %v", raw, err)
+		}
+		return result
+	}
+	if got := run(5).Target; len(got.RecentChanges) != 5 || !strings.Contains(got.RecentChangesNote, "history_limit") {
+		t.Fatalf("partial history should say more remain: %+v", got)
+	}
+	if got := run(200).Target; len(got.RecentChanges) != 7 || got.RecentChangesNote != "" {
+		t.Fatalf("full history should be complete without note: %+v", got)
+	}
+}
+
 // TestRelationshipGuidanceMentionsRecentChangesByDefault 回复指引要让模型默认说，而不是压下去。
 //
 // 这条和上一条缺一不可：数据带了、指引却让模型闭嘴，用户看到的仍然是「没查」。

@@ -35,7 +35,7 @@ func TestCapabilityKnowledgeUsesCurrentPlatformOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(raw, `"id": "runtime:platform-output"`) || !strings.Contains(raw, "当前会话运行在 Telegram") {
+	if !strings.Contains(raw, `"id":"runtime:platform-output"`) || !strings.Contains(raw, "当前会话运行在 Telegram") {
 		t.Fatalf("current platform capability missing: %s", raw)
 	}
 	if strings.Contains(raw, "OneBot v11 消息不渲染 Markdown") {
@@ -76,7 +76,7 @@ func TestDefaultPluginManagerExposesCapabilityRAGAndLivePluginStates(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(raw, resolverPluginID) || !strings.Contains(raw, `"source": "plugin_manifest"`) {
+		if !strings.Contains(raw, resolverPluginID) || !strings.Contains(raw, `"source":"plugin_manifest"`) {
 			t.Fatalf("raw=%s", raw)
 		}
 	}
@@ -104,7 +104,7 @@ func TestRuntimeAgentUsesCapabilityRAGForSelfKnowledge(t *testing.T) {
 	if !strings.Contains(reply, "抽取多帧") || len(provider.requests) != 3 {
 		t.Fatalf("reply=%q requests=%d", reply, len(provider.requests))
 	}
-	if !requestMessagesContain(provider.requests[2].Messages, `"id": "core:media"`) {
+	if !requestMessagesContain(provider.requests[2].Messages, `"id":"core:media"`) {
 		t.Fatalf("retrieval missing: %#v", provider.requests[2].Messages)
 	}
 	// 「问会什么先查」写在 capabilities 的描述里，随按需目录一起发。

@@ -22,6 +22,7 @@ type stubFeedStore struct {
 	deleted  string
 	comments []FeedCommentRequest
 	likes    []string
+	posts    []FeedPost
 }
 
 func (s *stubFeedStore) CreateFeedPost(_ context.Context, request FeedPostCreateRequest) (FeedPost, error) {
@@ -29,8 +30,12 @@ func (s *stubFeedStore) CreateFeedPost(_ context.Context, request FeedPostCreate
 	return FeedPost{ID: "post-1", ProfileID: request.ProfileID, Kind: request.Kind, Content: request.Content}, nil
 }
 
-func (s *stubFeedStore) ListFeedPosts(context.Context, FeedListQuery) ([]FeedPost, error) {
-	return nil, nil
+func (s *stubFeedStore) ListFeedPosts(_ context.Context, query FeedListQuery) ([]FeedPost, error) {
+	posts := append([]FeedPost(nil), s.posts...)
+	if query.Limit > 0 && len(posts) > query.Limit {
+		posts = posts[:query.Limit]
+	}
+	return posts, nil
 }
 
 func (s *stubFeedStore) DeleteFeedPost(_ context.Context, _, id string) (FeedPost, error) {
@@ -216,5 +221,69 @@ func TestFeedToolOnlyAcceptsOwnImages(t *testing.T) {
 	}
 	if len(store.created) != 0 {
 		t.Fatalf("nothing may be published: %#v", store.created)
+	}
+}
+
+// list 不设条数上限：存储一次只给 limit 条也要取全，总数如实报，按整条分页；
+// needs_reply 在全部动态里筛，不会因为只取了最近一截漏掉更早的待回动态。
+func TestFeedToolListPagesAllPosts(t *testing.T) {
+	store := &stubFeedStore{}
+	const total = 150
+	for index := 0; index < total; index++ {
+		post := FeedPost{ID: "post-" + strconv.Itoa(index), Content: "第 " + strconv.Itoa(index) + " 条"}
+		if index%10 == 9 {
+			post.Comments = []FeedComment{{ID: "c-" + strconv.Itoa(index), AuthorKind: FeedAuthorAdmin, Content: "看看"}}
+		}
+		store.posts = append(store.posts, post)
+	}
+	tool := feedTestTool(t, store)
+	type listResult struct {
+		Message    string     `json:"message"`
+		Items      []FeedPost `json:"items"`
+		Total      int        `json:"total"`
+		HasMore    bool       `json:"has_more"`
+		NextOffset int        `json:"next_offset"`
+	}
+	run := func(input map[string]any) listResult {
+		t.Helper()
+		out, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result listResult
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatalf("decode %s: %v", out, err)
+		}
+		return result
+	}
+	first := run(map[string]any{"operation": "list"})
+	if first.Total != total || len(first.Items) != defaultFeedListLimit || !first.HasMore || first.NextOffset != defaultFeedListLimit {
+		t.Fatalf("first page = total %d items %d has_more %v next %d", first.Total, len(first.Items), first.HasMore, first.NextOffset)
+	}
+	if !strings.Contains(first.Message, strconv.Itoa(total)) {
+		t.Fatalf("message should report real total: %q", first.Message)
+	}
+	// 加大 limit 后装不下单次上限的整条留到下一页，按 next_offset 读完全部。
+	seen := len(first.Items)
+	for page, offset := 0, first.NextOffset; ; page++ {
+		rest := run(map[string]any{"operation": "list", "limit": 1000, "offset": offset})
+		if rest.Total != total || len(rest.Items) == 0 || rest.Items[0].ID != "post-"+strconv.Itoa(offset) {
+			t.Fatalf("offset %d page = total %d items %d", offset, rest.Total, len(rest.Items))
+		}
+		seen += len(rest.Items)
+		if !rest.HasMore {
+			break
+		}
+		offset = rest.NextOffset
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+	}
+	if seen != total {
+		t.Fatalf("读完全部页共 %d 条，want %d", seen, total)
+	}
+	waiting := run(map[string]any{"operation": "list", "needs_reply": true, "limit": 1000})
+	if waiting.Total != total/10 || len(waiting.Items) == 0 || waiting.Items[0].ID != "post-9" {
+		t.Fatalf("needs_reply = total %d items %d", waiting.Total, len(waiting.Items))
 	}
 }

@@ -86,8 +86,6 @@ const (
 	notebookRevisionLimit = 10
 	// notebookLookupLimit 是自动命中的兜底上限。
 	notebookLookupLimit = 12
-	// notebookListLimit 是列表查询的兜底上限。
-	notebookListLimit = 50
 )
 
 const (
@@ -443,7 +441,8 @@ WHERE e.scope_key IN (` + placeholders(len(scopes)) + `)`
 		args = append(args, kinds...)
 	}
 	statement += ` ORDER BY e.usage_count DESC, e.updated_at DESC LIMIT ?`
-	args = append(args, notebookQueryLimit(query.Limit, notebookListLimit))
+	// 列表不设上限：Limit<=0 给全部（SQLite 的 LIMIT -1），工具按整条分页。
+	args = append(args, notebookListQueryLimit(query.Limit))
 	entries, err := queryNotebookEntries(ctx, s.eventReader(), statement, args...)
 	if err != nil {
 		return nil, err
@@ -648,6 +647,13 @@ func notebookScopeArgs(scopes []string) []any {
 		args = append(args, scope)
 	}
 	return args
+}
+
+func notebookListQueryLimit(requested int) int {
+	if requested <= 0 {
+		return -1
+	}
+	return requested
 }
 
 func notebookQueryLimit(requested, fallback int) int {

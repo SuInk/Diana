@@ -528,11 +528,6 @@ func summarizeRecallMessage(event MessageEvent) string {
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	text = strings.Join(strings.Fields(text), " ")
-	const maxRunes = 24
-	runes := []rune(text)
-	if len(runes) > maxRunes {
-		return string(runes[:maxRunes]) + "…"
-	}
 	if text == "" {
 		return "无文本内容"
 	}
@@ -559,10 +554,8 @@ func (t *dianaPlatformTool) runRecallMessages(ctx context.Context, req governanc
 		item := map[string]any{"message_id": id}
 		if summary != "" {
 			item["summary"] = summary
-			if len(summaryParts) < 5 {
-				summaryParts = append(summaryParts, fmt.Sprintf("%s（%s）", id, summary))
-			}
-		} else if len(summaryParts) < 5 {
+			summaryParts = append(summaryParts, fmt.Sprintf("%s（%s）", id, summary))
+		} else {
 			summaryParts = append(summaryParts, id)
 		}
 		recalledItems = append(recalledItems, item)
@@ -570,9 +563,6 @@ func (t *dianaPlatformTool) runRecallMessages(ctx context.Context, req governanc
 	detailSuffix := ""
 	if len(summaryParts) > 0 {
 		detailSuffix = "：" + strings.Join(summaryParts, "、")
-		if len(recalled) > len(summaryParts) {
-			detailSuffix += " 等"
-		}
 	}
 	message := fmt.Sprintf("已撤回 %d 条消息%s。", len(recalled), detailSuffix)
 	if len(failed) > 0 {

@@ -50,8 +50,12 @@ func (s *stubSelfNoteStore) WriteSelfNote(_ context.Context, request SelfNoteWri
 	return note, nil
 }
 
-func (s *stubSelfNoteStore) ListSelfNotes(_ context.Context, _ string, _ bool, _ int) ([]SelfNote, error) {
-	return append([]SelfNote(nil), s.notes...), nil
+func (s *stubSelfNoteStore) ListSelfNotes(_ context.Context, _ string, _ bool, limit int) ([]SelfNote, error) {
+	notes := append([]SelfNote(nil), s.notes...)
+	if limit > 0 && len(notes) > limit {
+		notes = notes[:limit]
+	}
+	return notes, nil
 }
 
 func (s *stubSelfNoteStore) DeleteSelfNote(_ context.Context, _, id, _, _ string, _ time.Time) (SelfNote, bool, error) {
@@ -219,6 +223,47 @@ func TestSelfNoteToolWritesRevisesAndGuardsPurge(t *testing.T) {
 	disabled := newDianaSelfNoteTool(selfNoteTestRuntime(t, false, store), event, RelationshipPolicy{Owner: true})
 	if _, err := disabled.Run(ctx, map[string]any{"operation": "add", "content": "偷偷记一条"}); err == nil {
 		t.Fatal("disabled tool should fail")
+	}
+}
+
+// list 报真实总数（不是这一页的条数），多出来的按整条分页，offset 续读拿到剩下的；
+// 存储一次只给 limit 条，总数超过首轮请求量时也要取全。
+func TestSelfNoteToolListReportsRealTotalAndPages(t *testing.T) {
+	store := &stubSelfNoteStore{}
+	total := MaximumActiveSelfNotes*2 + 7
+	for index := 0; index < total; index++ {
+		store.notes = append(store.notes, SelfNote{ID: "note-" + itoa(index+1), Content: "第 " + itoa(index+1) + " 条", Status: SelfNoteStatusActive})
+	}
+	tool := newDianaSelfNoteTool(selfNoteTestRuntime(t, true, store), MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-1"}, RelationshipPolicy{Owner: true})
+	type listResult struct {
+		Message    string     `json:"message"`
+		Items      []SelfNote `json:"items"`
+		Total      int        `json:"total"`
+		HasMore    bool       `json:"has_more"`
+		NextOffset int        `json:"next_offset"`
+	}
+	run := func(input map[string]any) listResult {
+		t.Helper()
+		out, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result listResult
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatalf("decode %s: %v", out, err)
+		}
+		return result
+	}
+	first := run(map[string]any{"operation": "list", "limit": 10})
+	if first.Total != total || len(first.Items) != 10 || !first.HasMore || first.NextOffset != 10 {
+		t.Fatalf("first page = %+v", first)
+	}
+	if !strings.Contains(first.Message, itoa(total)) {
+		t.Fatalf("message should report real total %d: %q", total, first.Message)
+	}
+	rest := run(map[string]any{"operation": "list", "limit": 100, "offset": first.NextOffset})
+	if rest.Total != total || len(rest.Items) != total-10 || rest.HasMore || rest.Items[0].ID != "note-11" || rest.Items[len(rest.Items)-1].ID != "note-"+itoa(total) {
+		t.Fatalf("rest page = total %d items %d has_more %v", rest.Total, len(rest.Items), rest.HasMore)
 	}
 }
 

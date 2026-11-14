@@ -6,10 +6,12 @@ package assistant
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"image/png"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestWordCloudCounterHeuristic(t *testing.T) {
@@ -95,5 +97,56 @@ func TestGroupWordCloudToolWithoutStoreOrGroup(t *testing.T) {
 		if err != nil || !strings.Contains(output, `"ok":false`) {
 			t.Fatalf("output = %s, err = %v", output, err)
 		}
+	}
+}
+
+type fakeWordCloudStore struct {
+	cloud GroupWordCloud
+}
+
+func (s *fakeWordCloudStore) AppendMessageEvent(context.Context, string, MessageEvent) error {
+	return nil
+}
+func (s *fakeWordCloudStore) ListRecentMessageEvents(context.Context, string, int) ([]MessageEvent, error) {
+	return nil, nil
+}
+func (s *fakeWordCloudStore) GroupWordCloudFor(context.Context, string, time.Time, string) (GroupWordCloud, error) {
+	return s.cloud, nil
+}
+
+// 词频不再只给前 5 个：limit 不设上限，按整条分页；续读（offset>0）只给词频，不重发图。
+func TestGroupWordCloudToolPagesWordsWithoutResending(t *testing.T) {
+	store := &fakeWordCloudStore{cloud: GroupWordCloud{GroupID: "55501", Messages: 300}}
+	for index := 0; index < 40; index++ {
+		store.cloud.Words = append(store.cloud.Words, GroupWordCloudWord{Text: "词" + itoa(index), Count: 100 - index})
+	}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaGroupWordCloudTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "55501", UserID: "10001"}, SettingValues{})
+	output, err := tool.Run(context.Background(), map[string]any{"offset": 5, "limit": 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaGroupWordCloudResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode %s: %v", output, err)
+	}
+	if !result.OK || result.Page == nil || result.Page.Total != 40 || result.Page.HasMore || len(result.TopWords) != 35 || result.TopWords[0].Text != "词5" || result.TopWords[0].Count != 95 {
+		t.Fatalf("续读结果 = %s", output)
+	}
+	if len(channel.sent) != 0 {
+		t.Fatalf("续读不该再发图：sent=%d", len(channel.sent))
+	}
+	partial, err := tool.Run(context.Background(), map[string]any{"offset": 1, "limit": 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result = dianaGroupWordCloudResult{}
+	if err := json.Unmarshal([]byte(partial), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Page == nil || !result.Page.HasMore || result.Page.NextOffset != 11 || result.Page.RemainingCount != 29 || len(result.TopWords) != 10 {
+		t.Fatalf("分页 = %s", partial)
 	}
 }

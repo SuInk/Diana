@@ -101,7 +101,7 @@ func (t *dianaBrowserHandoffTool) Run(ctx context.Context, input map[string]any)
 	if n := len([]rune(task)); n > browserHandoffTaskMaxRunes {
 		return "", fmt.Errorf("task 有 %d 字，超过 %d 字；写要点就够了", n, browserHandoffTaskMaxRunes)
 	}
-	minutes := chatHistoryPositiveInt(input, "wait_minutes", defaultBrowserHandoffMinutes, maxBrowserHandoffMinutes)
+	minutes := min(chatHistoryCount(input, "wait_minutes", defaultBrowserHandoffMinutes), maxBrowserHandoffMinutes)
 	requester, ok := t.runtime.browserBoxFor(t.cfg).(browserHandoffRequester)
 	if !ok {
 		return "", fmt.Errorf("内置浏览器没有打开，没法请主人在里面操作；可以直接在对话里告诉主人要他做什么")

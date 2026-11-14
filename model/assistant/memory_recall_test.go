@@ -94,8 +94,9 @@ func TestMemoryToolSearchThenReadPreservesEvidence(t *testing.T) {
 	for _, item := range result.Items {
 		if item.ID == "linked" {
 			found = true
-			if item.Content != "" || item.Evidence != "" || len([]rune(item.Snippet)) > 160 {
-				t.Fatal("search did not return compact index")
+			// search 给全文，不再截成片段；证据留给 read。
+			if item.Content != s.neighbors[0].Content || item.Evidence != "" {
+				t.Fatalf("search should return full content without evidence: %+v", item)
 			}
 		}
 	}
@@ -126,5 +127,34 @@ func TestMemoryCompactRecallOnlyWhenRequested(t *testing.T) {
 	}
 	if !(RelationshipPolicy{}).allowedAgentToolNames()[dianaMemoryToolName] {
 		t.Fatal("read-only memory tool unavailable to ordinary users")
+	}
+}
+
+func TestMemoryToolSearchPagesWithOffset(t *testing.T) {
+	r, _, event := recallFixture()
+	tool := &dianaMemoryTool{runtime: r, event: event}
+	type page struct {
+		Items []memoryToolItem `json:"items"`
+		toolResultPage
+	}
+	run := func(input map[string]any) page {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got page
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := run(map[string]any{"operation": "search", "query": "部署阻塞", "limit": 1})
+	if len(first.Items) != 1 || first.Total < 2 || !first.HasMore || first.NextOffset != 1 {
+		t.Fatalf("first page = %+v", first)
+	}
+	rest := run(map[string]any{"operation": "search", "query": "部署阻塞", "offset": first.NextOffset, "limit": 100})
+	if len(rest.Items) != first.Total-1 || rest.HasMore || rest.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("second page = %+v", rest)
 	}
 }

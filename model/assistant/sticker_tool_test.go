@@ -923,3 +923,98 @@ func TestStickerHourlyLimitDefaultsToUnlimited(t *testing.T) {
 		}
 	}
 }
+
+func stickerPagingTestTool(t *testing.T, count int, description string) *dianaStickerTool {
+	t.Helper()
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u", MessageID: "request"}
+	store := &stickerAssetTestStore{stickerHistoryStore: stickerHistoryStore{events: map[string][]MessageEvent{}}}
+	dir := t.TempDir()
+	for index := range count {
+		body := []byte(fmt.Sprintf("sticker-%d", index))
+		path := filepath.Join(dir, fmt.Sprintf("%d.gif", index))
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		store.assets = append(store.assets, StickerAsset{
+			Session: sessionKey(event), Kind: EventKindGroup, GroupID: "g", MessageID: fmt.Sprintf("m%d", index), EventTime: int64(index + 1),
+			Summary: fmt.Sprintf("无语%d", index), Path: path, ContentSHA256: imageBytesSHA256(body),
+			Tagged: true, CategoryKnown: true, Gist: description, Tags: []string{"无语"},
+		})
+	}
+	runtime := NewRuntime(BotConfig{}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	return newDianaStickerTool(runtime, event, SettingValues{stickerSettingSearchResults: 8})
+}
+
+func runStickerSearch(t *testing.T, ctx context.Context, tool *dianaStickerTool, input map[string]any) stickerToolResult {
+	t.Helper()
+	input["operation"] = "search"
+	output, err := tool.Run(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result stickerToolResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("decode %s: %v", output, err)
+	}
+	return result
+}
+
+// 命中多于 limit 时报出全部命中数和剩余数，more=true 续读给出本轮没给过的，读完 has_more=false。
+func TestStickerSearchReportsTotalAndContinuesWithMore(t *testing.T) {
+	tool := stickerPagingTestTool(t, 5, "翻白眼")
+	first := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2})
+	if len(first.Candidates) != 2 || first.TotalMatched == nil || *first.TotalMatched != 5 || first.RemainingMatched != 3 || !first.HasMore ||
+		!strings.Contains(first.Message, "more=true") {
+		t.Fatalf("first = %#v", first)
+	}
+	seen := map[string]bool{}
+	for _, candidate := range first.Candidates {
+		seen[candidate.ID] = true
+	}
+	second := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2, "more": true})
+	if len(second.Candidates) != 2 || second.RemainingMatched != 1 || !second.HasMore {
+		t.Fatalf("second = %#v", second)
+	}
+	third := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2, "more": true})
+	if len(third.Candidates) != 1 || third.RemainingMatched != 0 || third.HasMore || *third.TotalMatched != 5 {
+		t.Fatalf("third = %#v", third)
+	}
+	for _, candidate := range append(second.Candidates, third.Candidates...) {
+		if seen[candidate.ID] {
+			t.Fatalf("candidate %s returned twice", candidate.ID)
+		}
+		seen[candidate.ID] = true
+	}
+	// 本轮前几页给过的 id 仍然能发。
+	for _, candidate := range first.Candidates {
+		if _, ok := tool.searchedCandidate(candidate.ID); !ok {
+			t.Fatalf("first page candidate %s forgotten", candidate.ID)
+		}
+	}
+}
+
+// 简介整段给出，不截断；装不下单次上限的候选整条留到下一页，并计入剩余数。
+func TestStickerSearchKeepsFullDescriptionsAndPagesByBudget(t *testing.T) {
+	description := strings.Repeat("一只猫翻着白眼看向镜头，", 40)
+	tool := stickerPagingTestTool(t, 6, description)
+	ctx := agent.WithToolOutputBudget(context.Background(), 3000)
+	first := runStickerSearch(t, ctx, tool, map[string]any{"query": "无语", "limit": 6})
+	if len(first.Candidates) == 0 || len(first.Candidates) >= 6 || first.RemainingMatched != 6-len(first.Candidates) || !first.HasMore {
+		t.Fatalf("first page = %d candidates remaining=%d", len(first.Candidates), first.RemainingMatched)
+	}
+	if first.Candidates[0].Description != description {
+		t.Fatalf("description was cut: %q", first.Candidates[0].Description)
+	}
+	total := len(first.Candidates)
+	for page := first; page.HasMore; {
+		page = runStickerSearch(t, ctx, tool, map[string]any{"query": "无语", "limit": 6, "more": true})
+		if len(page.Candidates) == 0 {
+			t.Fatalf("empty continuation page: %#v", page)
+		}
+		total += len(page.Candidates)
+	}
+	if total != 6 {
+		t.Fatalf("read %d candidates, want 6", total)
+	}
+}

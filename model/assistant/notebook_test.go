@@ -778,3 +778,57 @@ func TestFormatNotebookLineMarksNonTermKinds(t *testing.T) {
 		t.Fatalf("legacy line = %q", line)
 	}
 }
+
+// list 不设条数上限：总数如实报，按整条分页，offset 续读拿到剩下的。
+func TestNotebookListPagesWithoutCap(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newNotebookRuntime(t, store)
+	event := notebookTestEvent("10001", "")
+	const total = 63
+	for index := 0; index < total; index++ {
+		if _, err := runNotebookTool(t, runtime, event, true, map[string]any{"operation": "upsert", "term": "梗" + itoa(index), "meaning": "第 " + itoa(index) + " 个梗"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tool := newDianaNotebookTool(runtime, event, RelationshipPolicy{Owner: true})
+	list := func(input map[string]any) notebookListResult {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result notebookListResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatalf("decode %s: %v", raw, err)
+		}
+		return result
+	}
+	first := list(map[string]any{"operation": "list", "limit": 10})
+	if first.Total != total || len(first.Items) != 10 || !first.HasMore || first.NextOffset != 10 || first.RemainingCount != total-10 {
+		t.Fatalf("first page = total %d items %d has_more %v next %d", first.Total, len(first.Items), first.HasMore, first.NextOffset)
+	}
+	// 加大 limit 后装不下单次上限的整条留到下一页，按 next_offset 读完全部。
+	seen := map[string]bool{}
+	for _, entry := range first.Items {
+		seen[entry.Term] = true
+	}
+	for page, offset := 0, first.NextOffset; ; page++ {
+		rest := list(map[string]any{"operation": "list", "limit": 1000, "offset": offset})
+		if rest.Total != total || len(rest.Items) == 0 || rest.Offset != offset {
+			t.Fatalf("offset %d page = total %d items %d", offset, rest.Total, len(rest.Items))
+		}
+		for _, entry := range rest.Items {
+			seen[entry.Term] = true
+		}
+		if !rest.HasMore {
+			break
+		}
+		offset = rest.NextOffset
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("两页合起来应覆盖全部 %d 条，实际 %d", total, len(seen))
+	}
+}

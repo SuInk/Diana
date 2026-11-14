@@ -27,13 +27,14 @@ import (
 // 条目挤出前几名。
 
 const (
+	// 建索引时把过长的文档章节按段落切成几块，每块单独一条参考；切开的块都在索引里，
+	// 不丢内容，只影响检索粒度。不是结果裁剪。
 	capabilityReferenceSectionRunes = 1500
-	capabilityReferenceExcerptRunes = 420
+	// 参考资料默认给几条。只是默认值，模型传 reference_limit 可以要更多。
 	defaultCapabilityReferenceLimit = 3
-	detailCapabilityReferenceLimit  = 6
-	// 分数低于第一名这个比例的参考直接不给：命中的只是零散单字，带回去只占上下文。
+	// 分数低于第一名这个比例的不算命中：命中的只是零散单字。这是「算不算命中」的
+	// 相关度门槛，总数按门槛以上的条数报，结果文案里也写明了这条规则。
 	capabilityReferenceRelativeFloor = 0.35
-	capabilityToolDescriptionRunes   = 1200
 )
 
 const (
@@ -55,13 +56,12 @@ type capabilityReferenceDocument struct {
 }
 
 type capabilityReference struct {
-	ID        string  `json:"id"`
-	Title     string  `json:"title"`
-	Source    string  `json:"source"`
-	Path      string  `json:"path,omitempty"`
-	Excerpt   string  `json:"excerpt"`
-	Truncated bool    `json:"truncated,omitempty"`
-	Score     float64 `json:"score"`
+	ID      string  `json:"id"`
+	Title   string  `json:"title"`
+	Source  string  `json:"source"`
+	Path    string  `json:"path,omitempty"`
+	Content string  `json:"content"`
+	Score   float64 `json:"score"`
 }
 
 type capabilityReferenceIndex struct {
@@ -166,10 +166,11 @@ func capabilityReferenceQueryTerms(query string) map[string]float64 {
 	return capabilityTerms(query)
 }
 
-// retrieveCapabilityReferences 在静态语料和本轮工具说明上跑 BM25。
-func retrieveCapabilityReferences(query string, static *capabilityReferenceIndex, dynamic []*capabilityReferenceDocument, limit int, detail bool) []capabilityReference {
+// retrieveCapabilityReferences 在静态语料和本轮工具说明上跑 BM25，按相关度返回
+// 全部命中（门槛见 capabilityReferenceRelativeFloor），每条给整段原文，分页交给调用方。
+func retrieveCapabilityReferences(query string, static *capabilityReferenceIndex, dynamic []*capabilityReferenceDocument) []capabilityReference {
 	queryTerms := capabilityReferenceQueryTerms(query)
-	if len(queryTerms) == 0 || limit <= 0 {
+	if len(queryTerms) == 0 {
 		return nil
 	}
 	documents := make([]*capabilityReferenceDocument, 0, len(static.documents)+len(dynamic))
@@ -225,55 +226,21 @@ func retrieveCapabilityReferences(query string, static *capabilityReferenceIndex
 		}
 		return hits[i].document.ID < hits[j].document.ID
 	})
-	references := make([]capabilityReference, 0, limit)
+	var references []capabilityReference
 	for _, hit := range hits {
-		if len(references) >= limit || hit.score < hits[0].score*capabilityReferenceRelativeFloor {
+		if hit.score < hits[0].score*capabilityReferenceRelativeFloor {
 			break
 		}
-		excerpt, truncated := hit.document.Content, false
-		if !detail {
-			excerpt, truncated = capabilityExcerpt(hit.document.Content, queryTerms, capabilityReferenceExcerptRunes)
-		}
 		references = append(references, capabilityReference{
-			ID:        hit.document.ID,
-			Title:     hit.document.Title,
-			Source:    hit.document.Source,
-			Path:      hit.document.Path,
-			Excerpt:   excerpt,
-			Truncated: truncated,
-			Score:     math.Round(hit.score*100) / 100,
+			ID:      hit.document.ID,
+			Title:   hit.document.Title,
+			Source:  hit.document.Source,
+			Path:    hit.document.Path,
+			Content: hit.document.Content,
+			Score:   math.Round(hit.score*100) / 100,
 		})
 	}
 	return references
-}
-
-// capabilityExcerpt 从命中最密的段落开始截一段，而不是永远截开头：
-// 章节开头常是背景，真正回答问题的那句可能在第三段。
-func capabilityExcerpt(content string, queryTerms map[string]float64, maxRunes int) (string, bool) {
-	if utf8.RuneCountInString(content) <= maxRunes {
-		return content, false
-	}
-	paragraphs := strings.Split(content, "\n\n")
-	best, bestScore := 0, -1.0
-	for index, paragraph := range paragraphs {
-		score := 0.0
-		for term, count := range capabilityTermCounts(paragraph) {
-			score += queryTerms[term] * float64(count)
-		}
-		if score > bestScore {
-			best, bestScore = index, score
-		}
-	}
-	excerpt := strings.Join(paragraphs[best:], "\n\n")
-	prefix := ""
-	if best > 0 {
-		prefix = "…"
-	}
-	runes := []rune(excerpt)
-	if len(runes) <= maxRunes {
-		return prefix + excerpt, best > 0
-	}
-	return prefix + strings.TrimSpace(string(runes[:maxRunes])) + "…", true
 }
 
 // ---- 设计文档 ----
@@ -477,8 +444,6 @@ func splitCapabilityChunks(text string, maxRunes int) []string {
 
 // ---- 内置提示词 ----
 
-const capabilityPromptDefaultRunes = 600
-
 // capabilityPromptReferences 收的是登记表里的默认原文。人设可以逐段改写，
 // 所以这里只说「默认怎么写」，不冒充这台机器人当前实际发出去的那一份。
 func capabilityPromptReferences() []*capabilityReferenceDocument {
@@ -490,7 +455,7 @@ func capabilityPromptReferences() []*capabilityReferenceDocument {
 	documents := make([]*capabilityReferenceDocument, 0, len(specs))
 	for _, spec := range specs {
 		content := "分组：" + labels[spec.Group] + "\n用途：" + strings.TrimSpace(spec.Usage) +
-			"\n默认原文（人设可覆盖）：" + truncateRunes(strings.TrimSpace(spec.Default), capabilityPromptDefaultRunes)
+			"\n默认原文（人设可覆盖）：" + strings.TrimSpace(spec.Default)
 		documents = append(documents, &capabilityReferenceDocument{
 			ID:      "prompt:" + spec.Key,
 			Title:   "内置提示词 › " + spec.Title,
@@ -516,7 +481,7 @@ func capabilityRegistryReferences(registry *agent.ToolRegistry) []*capabilityRef
 			continue
 		}
 		definition := agent.ToolDefinitionFor(tool)
-		content := truncateRunes(strings.TrimSpace(definition.Description), capabilityToolDescriptionRunes)
+		content := strings.TrimSpace(definition.Description)
 		if params := capabilityToolParameters(definition.Parameters); params != "" {
 			content += "\n参数：" + params
 		}
@@ -546,7 +511,7 @@ func capabilityRegistryReferences(registry *agent.ToolRegistry) []*capabilityRef
 			ID:      "skill:" + skill.Name,
 			Title:   "Skill " + skill.Name,
 			Source:  capabilityReferenceSourceSkill,
-			Content: truncateRunes(description, capabilityToolDescriptionRunes),
+			Content: description,
 		})
 	}
 	return documents
@@ -566,7 +531,7 @@ func capabilityToolParameters(schema map[string]any) string {
 	for _, name := range names {
 		property, _ := properties[name].(map[string]any)
 		description, _ := property["description"].(string)
-		description = truncateRunes(strings.Join(strings.Fields(description), " "), 80)
+		description = strings.Join(strings.Fields(description), " ")
 		if description == "" {
 			parts = append(parts, name)
 			continue

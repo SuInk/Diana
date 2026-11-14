@@ -101,12 +101,11 @@ func (r *Runtime) resolveRecallTarget(ctx context.Context, event MessageEvent, m
 	return MessageEvent{}, fmt.Errorf("本次会话里找不到消息 %s：message_id 必须取自我自己发出的消息，不要按内容猜。%s", messageID, recallCandidateHint(history))
 }
 
-// recallCandidateHint 在 message_id 没命中时，把本会话里还能撤回的自家消息列回去。
-// 模型手上没有消息 ID 清单，不给候选它只会再编一个。
+// recallCandidateHint 在 message_id 没命中时，把本会话里还能撤回的自家消息列回去，
+// 全部列出、正文给全。模型手上没有消息 ID 清单，不给候选它只会再编一个。
 func recallCandidateHint(history []MessageEvent) string {
-	const maxCandidates = 5
 	var lines []string
-	for i := len(history) - 1; i >= 0 && len(lines) < maxCandidates; i-- {
+	for i := len(history) - 1; i >= 0; i-- {
 		id := recallableOutboundMessageID(history[i])
 		if id == "" {
 			continue
@@ -125,11 +124,6 @@ func summarizeRecallCandidate(event MessageEvent) string {
 		text = strings.TrimSpace(event.RawMessage)
 	}
 	text = strings.Join(strings.Fields(text), " ")
-	const maxRunes = 20
-	runes := []rune(text)
-	if len(runes) > maxRunes {
-		return string(runes[:maxRunes]) + "…"
-	}
 	if text == "" {
 		return "无文本内容"
 	}

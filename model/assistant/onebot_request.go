@@ -15,8 +15,9 @@ import (
 
 const (
 	dianaOneBotRequestsToolName = "platform_requests"
-	oneBotRequestListLimit      = 20
-	oneBotRequestTextLimit      = 200
+	// oneBotRequestTextLimit 是交给平台的拒绝原因、好友备注的长度上限（QQ 接口约束），
+	// 只截输入，不截给模型看的结果。
+	oneBotRequestTextLimit = 200
 )
 
 type OneBotRequestStatus string
@@ -245,6 +246,8 @@ func (*dianaOneBotRequestsTool) InputSchema() map[string]any {
 		"id":        toolStringParam("approve/reject 必填：请求编号，来自通知或 list"),
 		"reason":    toolStringParam("拒绝群申请/邀请的原因，≤200 字"),
 		"remark":    toolStringParam("同意好友时的备注，≤200 字"),
+		"limit":     toolCountParam("list：本页最多几条，默认装得下多少给多少", 1),
+		"offset":    toolCountParam("list：从第几条起（0 开始），续读时填结果里的 next_offset", 0),
 	})
 }
 
@@ -279,11 +282,11 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 		} else if operation == "sync" {
 			return "", fmt.Errorf("当前平台没有可补拉的请求列表，入群申请只能靠平台推送")
 		}
-		items, err := store.ListOneBotRequests(ctx, profileID, OneBotRequestPending, oneBotRequestListLimit)
+		items, err := store.ListOneBotRequests(ctx, profileID, OneBotRequestPending, 0)
 		if err != nil {
 			return "", err
 		}
-		return marshalOneBotRequestToolResult(operation, items, message)
+		return marshalOneBotRequestListPage(ctx, input, operation, items, message)
 	}
 	if operation != "approve" && operation != "reject" {
 		return "", fmt.Errorf("不支持的 operation %q", operation)
@@ -386,32 +389,49 @@ func oneBotRequestAction(item OneBotRequestRecord, approve bool, input map[strin
 	}
 }
 
-func marshalOneBotRequestToolResult(operation string, items []OneBotRequestRecord, message string) (string, error) {
-	type view struct {
-		ID          string              `json:"id"`
-		RequestType string              `json:"request_type"`
-		SubType     string              `json:"sub_type,omitempty"`
-		UserID      string              `json:"user_id,omitempty"`
-		GroupID     string              `json:"group_id,omitempty"`
-		Comment     string              `json:"comment,omitempty"`
-		Status      OneBotRequestStatus `json:"status"`
-		CreatedAt   string              `json:"created_at"`
-	}
-	result := struct {
-		OK        bool   `json:"ok"`
-		Operation string `json:"operation"`
-		Message   string `json:"message,omitempty"`
-		Items     []view `json:"items"`
-	}{OK: true, Operation: operation, Message: message, Items: make([]view, 0, len(items))}
+type oneBotRequestView struct {
+	ID          string              `json:"id"`
+	RequestType string              `json:"request_type"`
+	SubType     string              `json:"sub_type,omitempty"`
+	UserID      string              `json:"user_id,omitempty"`
+	GroupID     string              `json:"group_id,omitempty"`
+	Comment     string              `json:"comment,omitempty"`
+	Status      OneBotRequestStatus `json:"status"`
+	CreatedAt   string              `json:"created_at"`
+}
+
+type oneBotRequestToolResult struct {
+	OK        bool                `json:"ok"`
+	Operation string              `json:"operation"`
+	Message   string              `json:"message,omitempty"`
+	Items     []oneBotRequestView `json:"items"`
+	// Page 只在 list/sync 时有：待处理请求按整条分页。
+	Page *toolResultPage `json:"page,omitempty"`
+}
+
+func oneBotRequestViews(items []OneBotRequestRecord) []oneBotRequestView {
+	views := make([]oneBotRequestView, 0, len(items))
 	for _, item := range items {
-		result.Items = append(result.Items, view{
+		views = append(views, oneBotRequestView{
 			ID: item.ID, RequestType: item.RequestType, SubType: item.SubType,
-			UserID: item.UserID, GroupID: item.GroupID, Comment: truncateForChat(item.Comment, oneBotRequestTextLimit),
+			UserID: item.UserID, GroupID: item.GroupID, Comment: item.Comment,
 			Status: item.Status, CreatedAt: item.CreatedAt.Format(time.RFC3339),
 		})
 	}
-	encoded, err := json.Marshal(result)
+	return views
+}
+
+func marshalOneBotRequestToolResult(operation string, items []OneBotRequestRecord, message string) (string, error) {
+	encoded, err := json.Marshal(oneBotRequestToolResult{OK: true, Operation: operation, Message: message, Items: oneBotRequestViews(items)})
 	return string(encoded), err
+}
+
+// marshalOneBotRequestListPage 列出待处理请求：附言给全，条数不设上限，按整条分页。
+func marshalOneBotRequestListPage(ctx context.Context, input map[string]any, operation string, items []OneBotRequestRecord, message string) (string, error) {
+	views := oneBotRequestViews(items)
+	return marshalToolResultPage(ctx, len(views), toolPageOffset(input), intFromAny(input["limit"]), func(n int, page toolResultPage) any {
+		return oneBotRequestToolResult{OK: true, Operation: operation, Message: message, Items: views[page.Offset : page.Offset+n], Page: &page}
+	})
 }
 
 // CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。

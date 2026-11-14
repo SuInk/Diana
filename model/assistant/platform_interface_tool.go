@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"sort"
 	"strconv"
@@ -167,6 +168,10 @@ type dianaPlatformTool struct {
 	// crossProfileOwner 标记这是主人从另一台机器人发起的跨机器人操作。event 已经换成
 	// 目标机器人上的会话，发言人在那边没有账号，主人身份只能由发起侧核验后带过来。
 	crossProfileOwner bool
+	// listCtx、listInput 是这次调用的上下文和参数，Run 开头在副本上填好，供
+	// member_list / group_list / friend_list 按整条分页（读 offset、limit 和单次上限）。
+	listCtx   context.Context
+	listInput map[string]any
 }
 
 func newDianaPlatformTool(ctx context.Context, runtime *Runtime, event MessageEvent) *dianaPlatformTool {
@@ -213,6 +218,8 @@ func (t *dianaPlatformTool) InputSchema() map[string]any {
 		"count":              toolIntParam("recall_messages 按 user_id 撤回的条数，默认 10", 1, maxRecallMessagesCount),
 		"name":               toolStringParam("set_group_name：新群名"),
 		"profile_id":         toolStringParam("仅主人：操作另一台机器人（另一个平台）的群，ID 取自 cross_platform 的 bots；默认当前机器人"),
+		"limit":              toolCountParam("member_list/group_list/friend_list：本页最多几条，默认装得下多少给多少", 1),
+		"offset":             toolCountParam("member_list/group_list/friend_list：从第几条起（0 开始），续读时填结果里的 next_offset", 0),
 	}
 	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤群成员消息（普通成员仅可撤自己的）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
@@ -225,6 +232,10 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 	if profileID := strings.TrimSpace(configToolString(input, "profile_id")); profileID != "" && profileID != strings.TrimSpace(t.event.ProfileID) {
 		return t.runCrossProfile(ctx, profileID, input)
 	}
+	// 在副本上记下本次参数，同一个工具实例被并发调用时互不干扰。
+	scoped := *t
+	scoped.listCtx, scoped.listInput = ctx, input
+	t = &scoped
 	owner := t.isOwner(ctx)
 	// 只读操作也按发言人的群身份标：以前群主查成员也被标成 member_read_only，模型把它
 	// 读成「机器人自己没权限」，明明是管理员却拒绝禁言。群管操作在下面按实时核验改写。
@@ -328,14 +339,13 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 			items = append(items, groupMemberToolItem(member))
 		}
 		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
-		return t.marshal(operation, access, map[string]any{
-			"members":              items,
+		return marshalPlatformListPage(t, operation, access, map[string]any{
 			"member_list_complete": directory.Complete,
 			"member_source":        directory.Source,
 			"member_count_known":   directory.TotalKnown,
 			"group_total":          directory.Total,
 			"warnings":             directory.Warnings,
-		})
+		}, "members", items)
 	case platformOpGroupList:
 		return t.runGroupList(callCtx, operation, owner, access)
 	case platformOpAnnounceList:
@@ -381,10 +391,6 @@ func (t *dianaPlatformTool) runRead(ctx context.Context, input map[string]any, o
 	}
 	return "", fmt.Errorf("operation 不支持：%s", operation)
 }
-
-// maxPlatformGroupListItems 限制明细条数：几百个群全倒进工具结果只会挤占上下文，
-// 主人真要全量去控制台的群管理页看。
-const maxPlatformGroupListItems = 200
 
 type dianaPlatformGroupItem struct {
 	GroupID     string `json:"group_id"`
@@ -436,7 +442,8 @@ func (t *dianaPlatformTool) runGroupList(ctx context.Context, operation string, 
 	return t.marshalGroupList(operation, access, owner, groups, nil)
 }
 
-// marshalGroupList 给群列表结果套上可见性规则：群数谁都能看，明细只给主人。
+// marshalGroupList 给群列表结果套上可见性规则：群数谁都能看，明细只给主人，
+// 不设条数上限，按整条分页。
 func (t *dianaPlatformTool) marshalGroupList(operation, access string, owner bool, groups []dianaPlatformGroupItem, extra map[string]any) (string, error) {
 	payload := map[string]any{"group_count": len(groups)}
 	for key, value := range extra {
@@ -446,12 +453,7 @@ func (t *dianaPlatformTool) marshalGroupList(operation, access string, owner boo
 		payload["groups_hidden"] = "群明细只有主人能看，这里只报群数。"
 		return t.marshal(operation, access, payload)
 	}
-	if len(groups) > maxPlatformGroupListItems {
-		payload["groups_truncated"] = true
-		groups = groups[:maxPlatformGroupListItems]
-	}
-	payload["groups"] = groups
-	return t.marshal(operation, access, payload)
+	return marshalPlatformListPage(t, operation, access, payload, "groups", groups)
 }
 
 func (t *dianaPlatformTool) runModeration(ctx context.Context, input map[string]any, operation string, owner bool, access string) (string, error) {
@@ -627,15 +629,43 @@ func (t *dianaPlatformTool) resolveTarget(input map[string]any) string {
 }
 
 func (t *dianaPlatformTool) marshal(operation, access string, extra map[string]any) (string, error) {
-	payload := map[string]any{"ok": true, "operation": operation, "requester_access": access}
-	for key, value := range extra {
-		payload[key] = value
-	}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(platformToolPayload(operation, access, extra))
 	if err != nil {
 		return "", err
 	}
 	return string(body), nil
+}
+
+func platformToolPayload(operation, access string, extra map[string]any) map[string]any {
+	payload := map[string]any{"ok": true, "operation": operation, "requester_access": access}
+	maps.Copy(payload, extra)
+	return payload
+}
+
+// marshalPlatformListPage 把名单类结果按整条分页：条数不设上限，key 下只放本页条目，
+// 并写明 total、has_more、next_offset，单次上限装不下的留给下一页。
+func marshalPlatformListPage[T any](t *dianaPlatformTool, operation, access string, extra map[string]any, key string, items []T) (string, error) {
+	ctx, input := t.listCtx, t.listInput
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return marshalMapListPage(ctx, input, platformToolPayload(operation, access, extra), key, items)
+}
+
+// marshalMapListPage 是 map 形状结果的分页：base 是列表以外的字段，原样保留。
+func marshalMapListPage[T any](ctx context.Context, input, base map[string]any, key string, items []T) (string, error) {
+	return marshalToolResultPage(ctx, len(items), toolPageOffset(input), intFromAny(input["limit"]), func(n int, page toolResultPage) any {
+		out := maps.Clone(base)
+		out[key] = items[page.Offset : page.Offset+n]
+		// 分页字段沿用 toolResultPage 的 JSON 名字，并进同一层。
+		if body, err := json.Marshal(page); err == nil {
+			var fields map[string]any
+			if json.Unmarshal(body, &fields) == nil {
+				maps.Copy(out, fields)
+			}
+		}
+		return out
+	})
 }
 
 // validatePlatformTargetID 只接受账号 ID 形状的目标，昵称一律拒绝。和 reply_block

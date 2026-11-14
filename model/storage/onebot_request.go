@@ -65,8 +65,9 @@ INSERT OR IGNORE INTO onebot_requests (
 
 func (s *SQLiteStore) ListOneBotRequests(ctx context.Context, profileID string, status assistant.OneBotRequestStatus, limit int) ([]assistant.OneBotRequestRecord, error) {
 	profileID = strings.TrimSpace(profileID)
-	if limit <= 0 || limit > 100 {
-		limit = 20
+	// 不设上限：limit<=0 给全部（SQLite 的 LIMIT -1），工具按整条分页。
+	if limit <= 0 {
+		limit = -1
 	}
 	query := `
 SELECT id, profile_id, platform, COALESCE(self_id,''), request_type, COALESCE(sub_type,''),
@@ -86,7 +87,7 @@ WHERE profile_id = ?`
 		return nil, err
 	}
 	defer rows.Close()
-	items := make([]assistant.OneBotRequestRecord, 0, limit)
+	items := make([]assistant.OneBotRequestRecord, 0, max(0, min(limit, 64)))
 	for rows.Next() {
 		item, err := scanOneBotRequest(rows)
 		if err != nil {

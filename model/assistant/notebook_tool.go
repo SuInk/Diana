@@ -7,17 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 )
 
 const dianaNotebookToolName = "notebook"
 
-const (
-	defaultNotebookListLimit = 20
-	maximumNotebookListLimit = 50
-)
+const defaultNotebookListLimit = 20
 
 // dianaNotebookTool 是模型维护笔记本的入口：查、记、改、删、恢复。
 //
@@ -36,9 +32,8 @@ type dianaNotebookResult struct {
 	Action  string `json:"action"`
 	Message string `json:"message,omitempty"`
 	Scope   string `json:"scope,omitempty"`
-	// Entry 是单条操作的结果，Items 是列表和检索的结果。
-	Entry *NotebookEntry  `json:"entry,omitempty"`
-	Items []NotebookEntry `json:"items,omitempty"`
+	// Entry 是单条操作的结果；列表结果另走 notebookListResult，带分页字段。
+	Entry *NotebookEntry `json:"entry,omitempty"`
 	// ReplyGuidance 和 relationship 同理：怎么把结果说出来的约束放在返回值里，
 	// 只在真调用了才付 token，而且正好在要用它的那一刻送到。
 	ReplyGuidance string `json:"reply_guidance,omitempty"`
@@ -82,7 +77,8 @@ func (t *dianaNotebookTool) InputSchema() map[string]any {
 		"global":          toolBoolParam("仅主人：笔记本按会话隔离时写入全局笔记本，默认不传"),
 		"query":           toolStringParam("list：关键词过滤"),
 		"kinds":           toolStringArrayParam("list：类型过滤"),
-		"limit":           toolIntParam("list 条数，默认 "+itoa(defaultNotebookListLimit), 1, maximumNotebookListLimit),
+		"limit":           toolCountParam("list 条数，默认 "+itoa(defaultNotebookListLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
+		"offset":          toolCountParam("list 从第几条起（0 起），续读时填上次的 next_offset", 0),
 		"include_deleted": toolBoolParam("list/get：包含已作废条目"),
 	})
 }
@@ -144,11 +140,11 @@ func (t *dianaNotebookTool) get(ctx context.Context, store NotebookStore, input 
 }
 
 func (t *dianaNotebookTool) list(ctx context.Context, store NotebookStore, input map[string]any) (string, error) {
+	// 存储层取全部匹配条目（Limit=0），总数如实报，这一页装不下的整条留到下一页。
 	entries, err := store.ListNotebookEntries(ctx, NotebookQuery{
 		ScopeKeys:      notebookScopeKeys(t.event),
 		Kinds:          notebookKindFilter(configToolStringSlice(input, "kinds")),
 		Text:           strings.TrimSpace(configToolString(input, "query")),
-		Limit:          notebookListLimit(input),
 		IncludeDeleted: toolInputBool(input, "include_deleted"),
 		Now:            time.Now(),
 	})
@@ -159,12 +155,21 @@ func (t *dianaNotebookTool) list(ctx context.Context, store NotebookStore, input
 	if len(entries) == 0 {
 		message = "当前作用域的笔记本还是空的。"
 	}
-	return marshalDianaNotebookResult(dianaNotebookResult{
-		OK:      true,
-		Action:  "listed",
-		Message: message,
-		Items:   entries,
+	limit := chatHistoryCount(input, "limit", defaultNotebookListLimit)
+	return marshalToolResultPage(ctx, len(entries), toolPageOffset(input), limit, func(n int, page toolResultPage) any {
+		start := min(page.Offset, len(entries))
+		return notebookListResult{OK: true, Action: "listed", Message: message, Items: entries[start : start+n], toolResultPage: page, ReplyGuidance: notebookReplyGuidance}
 	})
+}
+
+// notebookListResult 是 list 的结果：条目给全文，按整条分页。
+type notebookListResult struct {
+	OK      bool            `json:"ok"`
+	Action  string          `json:"action"`
+	Message string          `json:"message,omitempty"`
+	Items   []NotebookEntry `json:"items"`
+	toolResultPage
+	ReplyGuidance string `json:"reply_guidance"`
 }
 
 func (t *dianaNotebookTool) upsert(ctx context.Context, store NotebookStore, input map[string]any) (string, error) {
@@ -376,17 +381,6 @@ func (t *dianaNotebookTool) resolveWritableEntry(ctx context.Context, store Note
 		return scope, entry, nil
 	}
 	return "", NotebookEntry{}, fmt.Errorf("笔记本里没有「%s」", term)
-}
-
-func notebookListLimit(input map[string]any) int {
-	limit, err := strconv.Atoi(strings.TrimSpace(configToolString(input, "limit")))
-	if err != nil || limit <= 0 {
-		return defaultNotebookListLimit
-	}
-	if limit > maximumNotebookListLimit {
-		return maximumNotebookListLimit
-	}
-	return limit
 }
 
 func marshalDianaNotebookResult(result dianaNotebookResult) (string, error) {

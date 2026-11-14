@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -27,7 +26,8 @@ func (t *dianaMemoryTool) InputSchema() map[string]any {
 		"operation": toolEnumParam("search 查索引；read 读单条全文", "search", "read"),
 		"query":     toolStringParam("search 必填：关键词，≤512 字符"),
 		"id":        toolStringParam("read 必填：search 返回的记忆 ID"),
-		"limit":     toolIntParam("search 条数，默认 8", 1, 12),
+		"limit":     toolCountParam("search 条数，默认 8，不设上限；超出单次结果上限时按整条分页", 1),
+		"offset":    toolCountParam("search 从第几条起（0 起），续读时填上次的 next_offset", 0),
 	})
 }
 
@@ -37,7 +37,6 @@ type memoryToolItem struct {
 	Subject         string    `json:"subject,omitempty"`
 	Recorded        string    `json:"recorded"`
 	Entity          string    `json:"entity,omitempty"`
-	Snippet         string    `json:"snippet,omitempty"`
 	Content         string    `json:"content,omitempty"`
 	Evidence        string    `json:"evidence,omitempty"`
 	Origin          string    `json:"origin"`
@@ -61,7 +60,8 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 	op := strings.TrimSpace(configToolString(input, "operation"))
 	text := strings.TrimSpace(configToolString(input, "query"))
 	var id string
-	limit := chatHistoryPositiveInt(input, "limit", 8, 12)
+	limit := chatHistoryCount(input, "limit", 8)
+	offset := toolPageOffset(input)
 	switch op {
 	case "search":
 		if text == "" || len([]rune(text)) > 512 {
@@ -73,7 +73,7 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 			return "", fmt.Errorf("无效的记忆 ID")
 		}
 		text = ""
-		limit = 1
+		limit, offset = 1, 0
 	default:
 		return "", fmt.Errorf("operation 必须为 search 或 read")
 	}
@@ -101,11 +101,7 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 		markLinkedMemorySubjects(query, items)
 		items = rankStructuredMemories(items, t.event, text, query.Now)
 	}
-	result := struct {
-		Items    []memoryToolItem `json:"items"`
-		Limited  bool             `json:"limited"`
-		Guidance string           `json:"guidance"`
-	}{Items: []memoryToolItem{}, Guidance: "检索范围遵循当前记忆开关；空结果可能是不存在、已失效、被新版替代或不可访问。旧记忆不代表当前事实，必要时核对；recorded 是记下的日期，内容里的时间说法相对那一天；证据是提取时的片段，不是完整原始聊天。"}
+	entries := make([]memoryToolItem, 0, len(items))
 	for _, item := range items {
 		origin := "当前会话"
 		if item.SourceSession != query.Session {
@@ -117,27 +113,23 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 			}
 		}
 		// 谁的、什么时候记下的：不给这两样，模型只能把「早上吃了布洛芬」安到当前发言者头上、当成今天。
-		entry := memoryToolItem{ID: item.ID, Topic: item.Topic, Subject: firstNonEmpty(strings.TrimSpace(item.SubjectName), strings.TrimSpace(item.SubjectUserID)), Recorded: memoryRecordedLabel(item.SourceEventTime, item.CreatedAt, time.Now()), Entity: item.Entity, Origin: origin, Version: item.Version, UpdatedAt: item.UpdatedAt, Reason: item.RetrievalReason}
+		// search 也给全文，不再截成片段；read 另外带证据和来源消息。
+		entry := memoryToolItem{ID: item.ID, Topic: item.Topic, Subject: firstNonEmpty(strings.TrimSpace(item.SubjectName), strings.TrimSpace(item.SubjectUserID)), Recorded: memoryRecordedLabel(item.SourceEventTime, item.CreatedAt, time.Now()), Entity: item.Entity, Content: item.Content, Origin: origin, Version: item.Version, UpdatedAt: item.UpdatedAt, Reason: item.RetrievalReason}
 		if op == "read" {
-			entry.Content, entry.Evidence = item.Content, item.Evidence
+			entry.Evidence = item.Evidence
 			if item.SourceSession == query.Session {
 				entry.SourceMessageID = item.SourceMessageID
 			}
-		} else {
-			entry.Snippet = truncateRunes(item.Content, 157)
 		}
-		result.Items = append(result.Items, entry)
-		encoded, _ := json.Marshal(result)
-		if len([]rune(string(encoded))) > 6000 {
-			result.Items = result.Items[:len(result.Items)-1]
-			result.Limited = true
-			break
-		}
-		if len(result.Items) >= limit {
-			result.Limited = len(items) > limit
-			break
-		}
+		entries = append(entries, entry)
 	}
-	body, err := json.Marshal(result)
-	return string(body), err
+	const guidance = "检索范围遵循当前记忆开关；空结果可能是不存在、已失效、被新版替代或不可访问。旧记忆不代表当前事实，必要时核对；recorded 是记下的日期，内容里的时间说法相对那一天；证据是提取时的片段，不是完整原始聊天。"
+	return marshalToolResultPage(ctx, len(entries), offset, limit, func(n int, page toolResultPage) any {
+		start := min(page.Offset, len(entries))
+		return struct {
+			Items []memoryToolItem `json:"items"`
+			toolResultPage
+			Guidance string `json:"guidance"`
+		}{Items: entries[start : start+n], toolResultPage: page, Guidance: guidance}
+	})
 }

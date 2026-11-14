@@ -77,3 +77,45 @@ func TestPlatformToolGroupListUnsupportedOnTelegram(t *testing.T) {
 		t.Fatalf("unsupported platform should not call the API: %#v", calls)
 	}
 }
+
+// 群列表不设条数上限，按整条分页：写明 total/has_more/next_offset，带 offset 续读拿到剩下的。
+func TestPlatformToolGroupListPagesWithOffset(t *testing.T) {
+	channel := newModerationTestChannel("member")
+	items := make([]any, 0, 250)
+	for i := range 250 {
+		items = append(items, map[string]any{"group_id": float64(30000 + i), "group_name": "群" + itoa(i)})
+	}
+	channel.apiResponses["get_group_list"] = map[string]any{"items": items}
+	event := MessageEvent{Kind: EventKindGroup, UserID: "10001", GroupID: "30000", SelfID: "10000", Platform: PlatformOneBotV11}
+	tool, _, _ := platformToolFor(t, BotConfig{OwnerID: "10001", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, event)
+
+	type pageResult struct {
+		GroupCount int                      `json:"group_count"`
+		Groups     []dianaPlatformGroupItem `json:"groups"`
+		toolResultPage
+	}
+	decode := func(input map[string]any) pageResult {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result pageResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	all := decode(map[string]any{"operation": "group_list"})
+	if all.GroupCount != 250 || len(all.Groups) != 250 || all.Total != 250 || all.HasMore {
+		t.Fatalf("超过旧上限 200 的群也要全给：count=%d groups=%d page=%+v", all.GroupCount, len(all.Groups), all.toolResultPage)
+	}
+	first := decode(map[string]any{"operation": "group_list", "limit": 100})
+	if len(first.Groups) != 100 || first.Total != 250 || !first.HasMore || first.NextOffset != 100 || first.RemainingCount != 150 || first.PageNote == "" {
+		t.Fatalf("first page = %+v", first.toolResultPage)
+	}
+	rest := decode(map[string]any{"operation": "group_list", "offset": first.NextOffset, "limit": 1000})
+	if len(rest.Groups) != 150 || rest.HasMore || rest.Groups[0].GroupID != "30100" || rest.Groups[149].GroupID != "30249" {
+		t.Fatalf("rest page = %+v first=%v", rest.toolResultPage, rest.Groups[0])
+	}
+}

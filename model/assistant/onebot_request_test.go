@@ -36,11 +36,11 @@ func (s *memoryOneBotRequestStore) SaveOneBotRequest(_ context.Context, item One
 func (s *memoryOneBotRequestStore) ListOneBotRequests(_ context.Context, profileID string, status OneBotRequestStatus, limit int) ([]OneBotRequestRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]OneBotRequestRecord, 0, limit)
+	out := []OneBotRequestRecord{}
 	for _, item := range s.items {
 		if item.ProfileID == profileID && (status == "" || item.Status == status) {
 			out = append(out, item)
-			if len(out) >= limit {
+			if limit > 0 && len(out) >= limit {
 				break
 			}
 		}
@@ -274,5 +274,41 @@ func TestOneBotRequestPromptIsOwnerOnly(t *testing.T) {
 	nonOwner := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
 	if strings.Contains(nonOwner, promptToolOneBotRequests) {
 		t.Fatalf("request mutation prompt leaked to non-owner: %q", nonOwner)
+	}
+}
+
+// 待处理请求按整条分页，附言给全不截短。
+func TestOneBotRequestListPagesAndKeepsFullComment(t *testing.T) {
+	longComment := strings.Repeat("想", 300)
+	items := make([]OneBotRequestRecord, 0, 30)
+	for i := range 30 {
+		items = append(items, OneBotRequestRecord{ID: "req-" + itoa(i), RequestType: "friend", UserID: "10001", Comment: longComment, Status: OneBotRequestPending, CreatedAt: time.Now()})
+	}
+	type result struct {
+		Items []oneBotRequestView `json:"items"`
+		Page  *toolResultPage     `json:"page"`
+	}
+	decode := func(input map[string]any) result {
+		t.Helper()
+		raw, err := marshalOneBotRequestListPage(context.Background(), input, "list", items, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got result
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := decode(map[string]any{"limit": 20})
+	if len(first.Items) != 20 || first.Page == nil || first.Page.Total != 30 || !first.Page.HasMore || first.Page.NextOffset != 20 {
+		t.Fatalf("first page = %+v", first.Page)
+	}
+	if first.Items[0].Comment != longComment {
+		t.Fatalf("附言被截短：%d 字", len([]rune(first.Items[0].Comment)))
+	}
+	rest := decode(map[string]any{"offset": first.Page.NextOffset})
+	if len(rest.Items) != 10 || rest.Page.HasMore || rest.Items[0].ID != "req-20" {
+		t.Fatalf("rest page = %+v", rest.Page)
 	}
 }
