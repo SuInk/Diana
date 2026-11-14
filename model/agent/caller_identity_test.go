@@ -113,7 +113,7 @@ func TestRunCommandReceivesCallerEnvironment(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        t.TempDir(),
 		timeout:     10 * time.Second,
-		maxBytes:    DefaultMaxToolOutputChars,
+		maxBytes:    ToolOutputMaxChars,
 		sandboxMode: CommandSandboxOff,
 	}
 

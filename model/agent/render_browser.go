@@ -410,8 +410,8 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 	if cfg.MaxTextChars <= 0 {
 		cfg.MaxTextChars = defaultRenderBrowserTextChars
 	}
-	if cfg.MaxTextChars > MaxAllowedToolOutputChars {
-		cfg.MaxTextChars = MaxAllowedToolOutputChars
+	if cfg.MaxTextChars > ToolOutputMaxChars {
+		cfg.MaxTextChars = ToolOutputMaxChars
 	}
 	if cfg.VirtualTimeBudget <= 0 {
 		cfg.VirtualTimeBudget = defaultRenderBrowserVirtualTime
@@ -1243,7 +1243,7 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	}
 	budget := ToolOutputBudget(ctx)
 	if budget <= 0 {
-		budget = DefaultMaxToolOutputChars
+		budget = ToolOutputMaxChars
 	}
 	ctx = WithRenderEngine(ctx, stringFromInput(input, "engine"))
 	if urls := browserRenderURLs(input); len(urls) > 1 {

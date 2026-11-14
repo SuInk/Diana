@@ -211,7 +211,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 			protected:     protected,
 			mcpConfigPath: resolveMCPConfigPath(cfg),
 			timeout:       time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-			maxBytes:      cfg.MaxToolOutputChars,
+			maxBytes:      ToolOutputMaxChars,
 			sandboxMode:   cfg.CommandSandbox,
 			sandbox:       detectCommandSandbox(),
 		})
@@ -537,7 +537,7 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		cdpURL:   cfg.BrowserCDPURL,
 		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
-		maxChars: cfg.MaxToolOutputChars,
+		maxChars: ToolOutputMaxChars,
 		session:  browserTabs.session(cfg.BrowserSessionKey),
 		tabs:     browserTabs,
 		personal: cfg.PersonalBrowser, allowedHosts: cfg.BrowserOperationHosts,
@@ -1373,7 +1373,7 @@ func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool
 		return string(data), false, err
 	}
 	if maxBytes <= 0 {
-		maxBytes = DefaultMaxToolOutputChars
+		maxBytes = ToolOutputMaxChars
 	}
 	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
 	if err != nil {
@@ -1508,7 +1508,7 @@ func (t *ReadFileTool) InputSchema() map[string]any {
 
 // Run 按行读取 Agent 工作目录内的文本文件。
 //
-// 以前只有 max_bytes、永远从头读：runner 又会把工具结果统一截到 MaxToolOutputChars，
+// 以前只有 max_bytes、永远从头读：runner 又会把工具结果统一截到 ToolOutputMaxChars，
 // 于是一个几千行的文件，模型只看得到开头那几百行，剩下的再也够不着——既浪费了上下文
 // 又没读到东西。改成 offset/limit 的分段读，并在结果里写明总行数和下一段从哪开始。
 //

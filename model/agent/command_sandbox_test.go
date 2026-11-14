@@ -125,7 +125,7 @@ func TestRunCommandSandboxBlocksWriteOutsideWorkdir(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        root,
 		timeout:     10 * time.Second,
-		maxBytes:    DefaultMaxToolOutputChars,
+		maxBytes:    ToolOutputMaxChars,
 		sandboxMode: CommandSandboxAuto,
 		sandbox:     sandbox,
 	}
@@ -154,7 +154,7 @@ func TestRunCommandSandboxBlocksNetworkByDefault(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        t.TempDir(),
 		timeout:     10 * time.Second,
-		maxBytes:    DefaultMaxToolOutputChars,
+		maxBytes:    ToolOutputMaxChars,
 		sandboxMode: CommandSandboxAuto,
 		sandbox:     sandbox,
 	}
@@ -177,7 +177,7 @@ func TestRunCommandSandboxAllowsWriteInsideWorkdir(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        root,
 		timeout:     10 * time.Second,
-		maxBytes:    DefaultMaxToolOutputChars,
+		maxBytes:    ToolOutputMaxChars,
 		sandboxMode: CommandSandboxAuto,
 		sandbox:     sandbox,
 	}

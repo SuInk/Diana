@@ -479,7 +479,7 @@ func (r *Runtime) runSearchSubtask(ctx context.Context, event MessageEvent, task
 	for _, tool := range tools {
 		coreTools = append(coreTools, tool.Name())
 	}
-	cfg := agent.Config{SystemPrompt: searchSubtaskSystemPrompt, WorkDir: AgentWorkspaceDir(), MaxToolOutputChars: agent.DefaultMaxToolOutputChars,
+	cfg := agent.Config{SystemPrompt: searchSubtaskSystemPrompt, WorkDir: AgentWorkspaceDir(),
 		ToolTimeoutMS: int(time.Minute / time.Millisecond), FinalizationReserveMS: agent.DefaultFinalizationReserveMS, CoreTools: coreTools}
 	runner, err := agent.NewRunner(slottedAgentLLMProvider{newRuntimeAgentLLMProvider(r, ctx)}, cfg, registry)
 	if err != nil {

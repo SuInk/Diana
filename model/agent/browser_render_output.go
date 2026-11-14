@@ -37,7 +37,7 @@ type browserRenderPayload struct {
 }
 
 func browserRenderOutput(page RenderedPage, find string) (string, error) {
-	return browserRenderOutputWithBudget(page, find, DefaultMaxToolOutputChars)
+	return browserRenderOutputWithBudget(page, find, ToolOutputMaxChars)
 }
 
 func browserRenderOutputWithBudget(page RenderedPage, find string, budget int) (string, error) {

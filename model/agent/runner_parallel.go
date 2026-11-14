@@ -109,7 +109,7 @@ func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, obser
 	inputKeys := sortedInputKeys(action.Input)
 	read.metadata = webSearchRunMetadataFromInput(action.Tool, action.Input)
 	emitRunEvent(ctx, observer, RunEvent{TraceID: traceID, Phase: RunPhaseToolStarted, ModelTurn: modelTurn, ToolCall: ordinal, MaxToolCalls: r.cfg.MaxSteps, Tool: action.Tool, InputKeys: inputKeys, ToolInput: cloneToolInput(action.Input), Metadata: read.metadata})
-	outputLimit := r.toolOutputLimit(read.tool)
+	outputLimit := ToolOutputMaxChars
 	toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
 	if bounded, ok := read.tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
 		toolTimeout = bounded.Timeout()

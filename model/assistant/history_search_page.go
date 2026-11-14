@@ -11,6 +11,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 type historySearchCursor struct {
@@ -49,211 +52,89 @@ func (page historySearchCursor) encode() string {
 	return base64.RawURLEncoding.EncodeToString(body)
 }
 
-// Keep a snippet around the match, including dates located late in OCR text.
-func historyMatchSnippet(text, query string, limit int) string {
-	runes := []rune(strings.TrimSpace(text))
-	if len(runes) <= limit {
-		return string(runes)
+// marshalHistoryResultPage 照 Pi 的做法把结果装进单次上限：条目一律给原文，不缩短
+// 正文、不删图片描述、不抽样；装不下的整条留给下一页（search/range 走 next_cursor，
+// 其余操作列进 unreturned_message_ids），并在 message 里写明本页覆盖哪段、还剩多少、
+// 怎么接着读。
+//
+// 以前按 7600 字预算先砍前后文、再缩短图片描述和正文，最后从尾部丢条目，丢掉的只记
+// 在 clipped_count 里。生产 2026-11-14：模型要 50 条，只拿到 23:53～23:59 的 18 条，
+// 它没翻页，按自己猜的范围改查 23 点以前，正好跳过 23:39 那条要找的预测，回答「没看到」。
+func marshalHistoryResultPage(ctx context.Context, result dianaChatHistoryResult) (string, error) {
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
 	}
-	lower := strings.ToLower(string(runes))
-	index := strings.Index(lower, strings.ToLower(query))
-	start := 0
-	if index >= 0 {
-		position := len([]rune(lower[:index]))
-		start = max(0, position-limit/3)
-	}
-	start = min(start, max(0, len(runes)-limit))
-	end := min(len(runes), start+limit)
-	snippet := string(runes[start:end])
-	if start > 0 {
-		snippet = "…" + snippet
-	}
-	if end < len(runes) {
-		snippet += "…"
-	}
-	return snippet
-}
-
-func (t *dianaChatHistoryTool) searchSnippets(ctx context.Context, events []MessageEvent, query string) []dianaChatHistoryItem {
-	items := t.items(ctx, events)
-	terms := append([]string{query}, structuredMemorySearchTerms(query, 12)...)
-	for i := range items {
-		item := &items[i]
-		full := historyToolEventText(events[i])
-		item.Text = historyMatchSnippet(full, query, 220)
-		item.TextTruncated = strings.TrimSpace(full) != item.Text
-		item.Sender = historyMatchSnippet(item.Sender, "", 64)
-		item.QuotedText = ""
-		item.QuotedTextTruncated = events[i].Quoted != nil && historyToolQuotedText(events[i].Quoted) != ""
-		item.QuotedImageDescriptions = nil
-		descriptions := item.ImageDescriptions
-		item.ImageDescriptions = nil
-		for _, description := range descriptions {
-			for _, term := range terms {
-				if term != "" && strings.Contains(strings.ToLower(description), strings.ToLower(term)) {
-					item.ImageDescriptions = []string{historyMatchSnippet(description, term, 180)}
-					break
-				}
-			}
-			if len(item.ImageDescriptions) > 0 {
-				break
-			}
-		}
-		item.MediaDetailsOmitted = item.ImageCount > 0 || item.QuotedImageCount > 0 || item.VideoCount > 0
-	}
-	return items
-}
-
-func marshalHistoryResultWithBudget(result dianaChatHistoryResult) (string, error) {
-	// Work on a copy: formatting must not consume the caller's evidence.
-	copyJSON, err := json.Marshal(result.Items)
-	if err != nil {
-		return "", err
-	}
-	var cloned []dianaChatHistoryItem
-	if err := json.Unmarshal(copyJSON, &cloned); err != nil {
-		return "", err
-	}
-	result.Items = cloned
-	original := len(result.Items)
-	upstreamLimited := result.Limited
-	mark := func(reason string) {
-		result.Truncated = true
-		result.Limited = true
-		result.TruncationReasons = appendUniqueStrings(result.TruncationReasons, reason)
-	}
-	if result.Limited {
-		mark("upstream_result_limit")
-	}
-	for _, item := range result.Items {
-		if item.TextTruncated {
-			mark("text_snippets")
-		}
-		if item.QuotedTextTruncated {
-			mark("quoted_text_shortened")
-		}
-		if item.MediaDetailsOmitted {
-			mark("media_details_omitted")
+	all := result.Items
+	anchor := -1
+	for i := range all {
+		if result.AnchorMessageID != "" && all[i].MessageID == result.AnchorMessageID {
+			anchor = i
+			break
 		}
 	}
-	if result.Guidance == "" {
-		result.Guidance = "truncated=true 表示内容不完整，truncation_reasons 说明省略内容；不要把缺失当作不存在，也不要仅凭这一页断言最早记录。需要细节时用 around，或缩小 range 时间范围继续核对。"
-	}
-	result.Guidance += " returned_count 是本页实际条数；clipped_count 是本页因预算裁掉的条数；omitted_count 是全部匹配中本页未展示的条数（含先前页）；remaining_count 是游标后待查条数。truncated 和 truncation_reasons 说明正文、媒体或前后文的省略，不能据此认定没有相关证据。"
-	refresh := func() {
-		result.ReturnedCount = len(result.Items)
-		result.ClippedCount = original - len(result.Items)
-		result.OmittedCount = max(0, result.Total-len(result.Items))
-		if result.searchPage != nil {
-			result.TotalIsExact = true
-			page := *result.searchPage
-			result.Offset = page.Offset
-			result.RemainingCount = max(0, result.Total-page.Offset-len(result.Items))
-			result.HasMore = result.RemainingCount > 0
-			result.SearchComplete = !result.HasMore
-			result.Limited = result.Limited || result.HasMore
-			result.NextCursor = ""
-			if result.HasMore && len(result.Items) > 0 {
-				page.Offset += len(result.Items)
-				result.NextCursor = page.encode()
-				if result.Action == "range" {
-					result.NextFromTime = 0
-					last := result.Items[len(result.Items)-1].Time
-					if page.Offset < len(result.rangeTimes) && result.rangeTimes[page.Offset] > last {
-						result.NextFromTime = last + 1
-					}
-				}
-			}
-		} else {
-			result.HasMore = upstreamLimited || result.OmittedCount > 0
-			result.RemainingCount = result.OmittedCount
-			result.TotalIsExact = result.Action != "search"
-		}
-	}
-	for stage := 0; ; stage++ {
-		refresh()
-		body, err := json.Marshal(result)
+	// [low, high) 是本次装下的条目。分页结果从尾部收；around 从离锚点远的一侧收。
+	low, high := 0, len(all)
+	for {
+		page := historyResultPage(result, all, low, high)
+		body, err := json.Marshal(page)
 		if err != nil {
 			return "", err
 		}
-		if len([]rune(string(body))) <= maximumChatHistoryOutputRunes {
+		if utf8.RuneCount(body) <= budget || high-low <= 1 {
 			return string(body), nil
 		}
-		switch stage {
-		case 0:
-			for i := range result.Items {
-				item := &result.Items[i]
-				if len(item.ContextBefore)+len(item.ContextAfter) > 0 {
-					item.ContextBefore, item.ContextAfter = nil, nil
-					mark("surrounding_context_removed")
-				}
-			}
-		case 1:
-			for i := range result.Items {
-				item := &result.Items[i]
-				if len(item.ImageDescriptions)+len(item.QuotedImageDescriptions) > 0 {
-					changed := false
-					for j, text := range item.ImageDescriptions {
-						item.ImageDescriptions[j] = historyMatchSnippet(text, result.Query, 100)
-						changed = changed || item.ImageDescriptions[j] != text
-					}
-					for j, text := range item.QuotedImageDescriptions {
-						item.QuotedImageDescriptions[j] = historyMatchSnippet(text, result.Query, 80)
-						changed = changed || item.QuotedImageDescriptions[j] != text
-					}
-					if changed {
-						item.MediaDetailsOmitted = true
-						mark("media_descriptions_shortened")
-					}
-				}
-			}
-		case 2:
-			for i := range result.Items {
-				item := &result.Items[i]
-				short := historyMatchSnippet(item.Text, result.Query, 100)
-				if short != item.Text {
-					item.Text, item.TextTruncated = short, true
-					mark("text_shortened")
-				}
-				quoted := historyMatchSnippet(item.QuotedText, result.Query, 80)
-				if quoted != item.QuotedText {
-					item.QuotedText = quoted
-					item.QuotedTextTruncated = true
-					mark("quoted_text_shortened")
-				}
-			}
-		case 3:
-			for i := range result.Items {
-				item := &result.Items[i]
-				if len(item.ImageDescriptions)+len(item.QuotedImageDescriptions) > 0 {
-					item.ImageDescriptions, item.QuotedImageDescriptions = nil, nil
-					item.MediaDetailsOmitted = true
-					mark("media_descriptions_removed")
-				}
-			}
-		default:
-			if len(result.Items) <= 1 {
-				return "", fmt.Errorf("历史结果元数据过长，无法在预算内保留引用；请缩小查询")
-			}
-			anchor := -1
-			if result.AnchorMessageID != "" {
-				for i := range result.Items {
-					if result.Items[i].MessageID == result.AnchorMessageID {
-						anchor = i
-						break
-					}
-				}
-			}
-			if anchor >= 0 && anchor >= len(result.Items)-1-anchor {
-				result.Items = result.Items[1:]
-			} else {
-				result.Items = result.Items[:len(result.Items)-1]
-			}
-			if result.searchPage != nil {
-				mark("matches_deferred_to_next_page")
-			} else {
-				mark("matches_omitted")
-			}
+		if anchor >= 0 && anchor-low > high-1-anchor {
+			low++
+		} else {
+			high--
 		}
 	}
+}
+
+// historyResultPage 填好只装 all[low:high] 时的分页字段和续读说明。
+func historyResultPage(result dianaChatHistoryResult, all []dianaChatHistoryItem, low, high int) dianaChatHistoryResult {
+	result.Items = all[low:high]
+	result.ReturnedCount = len(result.Items)
+	cut := len(all) - len(result.Items)
+	if result.searchPage != nil {
+		page := *result.searchPage
+		result.TotalIsExact = true
+		result.Offset = page.Offset
+		result.RemainingCount = max(0, result.Total-page.Offset-len(result.Items))
+		result.HasMore = result.RemainingCount > 0
+		result.SearchComplete = !result.HasMore
+		result.Limited = result.Limited || result.HasMore
+		if result.HasMore && len(result.Items) > 0 {
+			page.Offset += len(result.Items)
+			result.NextCursor = page.encode()
+			if result.Action == "range" {
+				last := result.Items[len(result.Items)-1].Time
+				if page.Offset < len(result.rangeTimes) && result.rangeTimes[page.Offset] > last {
+					result.NextFromTime = last + 1
+				}
+			}
+		}
+	} else {
+		result.TotalIsExact = result.Action != "search"
+		for _, item := range append(append([]dianaChatHistoryItem(nil), all[:low]...), all[high:]...) {
+			result.UnreturnedIDs = append(result.UnreturnedIDs, item.MessageID)
+		}
+		result.RemainingCount = max(len(result.UnreturnedIDs), result.Total-len(result.Items))
+		result.HasMore = result.Limited || result.RemainingCount > 0
+	}
+	if result.HasMore && len(result.Items) > 0 {
+		first, last := result.Items[0].LocalTime, result.Items[len(result.Items)-1].LocalTime
+		if first != "" && last != "" {
+			result.PageWindow = first + " ~ " + last
+		}
+	}
+	if cut > 0 {
+		next := "传 cursor=next_cursor、其他参数不变接着读"
+		if result.searchPage == nil {
+			next = "把 unreturned_message_ids 分批传给 ids 读原文"
+		}
+		result.Message = strings.TrimSpace(result.Message + fmt.Sprintf(" 单次结果上限 %d 字，本页装下 %d 条（%s），另有 %d 条没装下，%s；没读完之前不要断言没有。", agent.ToolOutputMaxChars, len(result.Items), result.PageWindow, cut, next))
+	}
+	return result
 }

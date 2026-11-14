@@ -22,12 +22,12 @@ func TestWebSearchTruncationKeepsSnippetsOverMetadata(t *testing.T) {
 		result.Providers = append(result.Providers, webSearchProviderState{})
 		result.Attempts = append(result.Attempts, webSearchAttempt{Provider: "searxng", Type: "web", QueryHash: strings.Repeat("h", 40), Status: "ok"})
 	}
-	raw, err := (&WebSearchTool{maxBytes: DefaultMaxToolOutputChars}).formatExplorationResult(result)
+	raw, err := (&WebSearchTool{maxBytes: 8_000}).formatExplorationResult(result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len([]rune(raw)); n > DefaultMaxToolOutputChars {
-		t.Fatalf("output runes = %d, want <= %d", n, DefaultMaxToolOutputChars)
+	if n := len([]rune(raw)); n > 8_000 {
+		t.Fatalf("output runes = %d, want <= 8000", n)
 	}
 	var got webSearchResult
 	if err := json.Unmarshal([]byte(raw), &got); err != nil {

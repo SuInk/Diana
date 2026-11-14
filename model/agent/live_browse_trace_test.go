@@ -66,7 +66,7 @@ func TestLiveBrowseTraceReplay(t *testing.T) {
 		search, err := NewWebSearchTool(WebSearchToolOptions{
 			Config:         WebSearchConfig{Providers: providers},
 			Timeout:        60 * time.Second,
-			MaxOutputChars: DefaultMaxToolOutputChars,
+			MaxOutputChars: ToolOutputMaxChars,
 			Renderer:       renderer,
 		})
 		if err != nil {

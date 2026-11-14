@@ -49,7 +49,7 @@ func TestRunnerSearchGuidanceWithoutClaimsSurvivesOutputTruncation(t *testing.T)
 		`{"action":"tool","tool":"web_search","input":{"query":"current state"}}`,
 		`{"action":"final","content":"尚未确认。"}`,
 	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 2, MaxToolOutputChars: 1000}, NewToolRegistry(tool))
+	runner, err := NewRunner(client, Config{MaxSteps: 2}, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}

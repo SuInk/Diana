@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func decodeHistoryPage(t *testing.T, raw string) dianaChatHistoryResult {
@@ -18,49 +20,75 @@ func decodeHistoryPage(t *testing.T, raw string) dianaChatHistoryResult {
 	return result
 }
 
-func TestHistoryBudgetPreserves18MatchesBeforeSurroundings(t *testing.T) {
-	result := dianaChatHistoryResult{OK: true, Action: "search", Query: "快递", Total: 18, searchPage: &historySearchCursor{Version: 1, Scope: historySearchScope("s", "快递", "current", "oldest"), Through: 100}}
-	for i := 0; i < 18; i++ {
-		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), Sender: "用户", Text: strings.Repeat("快递内容", 100), ImageDescriptions: []string{strings.Repeat("图片细节", 500)}, ContextBefore: []dianaChatHistoryItem{{Text: strings.Repeat("旁支话题", 2000)}}})
-	}
-	raw, err := marshalDianaChatHistoryResult(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := decodeHistoryPage(t, raw)
-	if len([]rune(raw)) > maximumChatHistoryOutputRunes || got.ReturnedCount != 18 || got.ClippedCount != 0 || !got.Truncated || !got.SearchComplete || got.HasMore {
-		t.Fatalf("bad counts: %+v", got)
-	}
-	if !strings.Contains(strings.Join(got.TruncationReasons, ","), "surrounding_context_removed") {
-		t.Fatal("missing trimming notice")
-	}
-	if len(result.Items[0].ContextBefore) == 0 {
-		t.Fatal("mutated source evidence")
-	}
-}
-
-func TestHistoryBudgetKeepsOneMatchAndCursorUsesReturnedCount(t *testing.T) {
+// 条目一律给原文：50 条长消息超出单次上限时不缩短任何一条，装不下的整条留给下一页，
+// 游标按实际返回条数推进，message 写明本页覆盖哪段、怎么接着读。
+func TestHistoryPageKeepsWholeItemsAndDefersRest(t *testing.T) {
 	result := dianaChatHistoryResult{OK: true, Action: "search", Total: 100, searchPage: &historySearchCursor{Version: 1, Scope: historySearchScope("s", "q", "current", "oldest"), Through: 100, Offset: 5}}
+	text := strings.Repeat("内容", 300)
+	description := strings.Repeat("图片", 200)
 	for i := 0; i < 50; i++ {
-		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), Sender: strings.Repeat("名", 60), SenderUserID: fmt.Sprint(100000 + i), Text: strings.Repeat("内容", 1000), ImageDescriptions: []string{strings.Repeat("图片", 2000)}})
+		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), LocalTime: fmt.Sprintf("2026-11-13 23:%02d:00 +08:00", 59-i), Sender: "用户", Text: text, ImageDescriptions: []string{description}})
 	}
-	raw, err := marshalDianaChatHistoryResult(result)
+	raw, err := marshalDianaChatHistoryResult(context.Background(), result)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len([]rune(raw)) > agent.ToolOutputMaxChars {
+		t.Fatalf("page exceeds limit: %d", len([]rune(raw)))
+	}
 	got := decodeHistoryPage(t, raw)
-	if got.ReturnedCount < 1 || got.ReturnedCount >= 50 || got.ClippedCount != 50-got.ReturnedCount || !got.HasMore || got.SearchComplete {
-		t.Fatalf("invalid clipping counts: %+v", got)
+	if got.ReturnedCount < 1 || got.ReturnedCount >= 50 || !got.HasMore || got.SearchComplete {
+		t.Fatalf("invalid paging: %+v", got)
+	}
+	for _, item := range got.Items {
+		if item.Text != text || len(item.ImageDescriptions) != 1 || item.ImageDescriptions[0] != description {
+			t.Fatalf("item content was shortened: %+v", item)
+		}
 	}
 	cursor, err := decodeHistorySearchCursor(got.NextCursor)
 	if err != nil || cursor.Offset != 5+got.ReturnedCount || got.RemainingCount != 100-cursor.Offset {
 		t.Fatalf("cursor skipped evidence: %+v %v", cursor, err)
 	}
-	single := result
-	single.Items = result.Items[:1]
-	if raw, err = marshalDianaChatHistoryResult(single); err != nil || len(decodeHistoryPage(t, raw).Items) != 1 {
-		t.Fatalf("single match lost: %v", err)
+	if got.PageWindow != "2026-11-13 23:59:00 +08:00 ~ "+got.Items[len(got.Items)-1].LocalTime || !strings.Contains(got.Message, "next_cursor") {
+		t.Fatalf("page window or continuation missing: %q %q", got.PageWindow, got.Message)
 	}
+}
+
+// 上限内的结果原样给出，没有分页说明。
+func TestHistoryPageFitsWithoutNotice(t *testing.T) {
+	result := dianaChatHistoryResult{OK: true, Action: "search", Total: 18, searchPage: &historySearchCursor{Version: 1, Scope: historySearchScope("s", "快递", "current", "oldest"), Through: 100}}
+	for i := 0; i < 18; i++ {
+		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), Sender: "用户", Text: strings.Repeat("快递内容", 100)})
+	}
+	raw, err := marshalDianaChatHistoryResult(context.Background(), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := decodeHistoryPage(t, raw)
+	if got.ReturnedCount != 18 || !got.SearchComplete || got.HasMore || got.PageWindow != "" || strings.Contains(got.Message, "单次结果上限") {
+		t.Fatalf("bad counts: %+v", got)
+	}
+}
+
+// 不分页的操作装不下时列出没给的消息，让模型用 ids 接着读。
+func TestHistoryPageListsUnreturnedIDsForUnpagedResults(t *testing.T) {
+	result := dianaChatHistoryResult{OK: true, Action: "recent", Total: 60}
+	for i := 0; i < 60; i++ {
+		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), Sender: "用户", Text: strings.Repeat("正文", 300)})
+	}
+	got := decodeHistoryPage(t, mustMarshalHistory(t, result))
+	if len(got.UnreturnedIDs) == 0 || got.ReturnedCount+len(got.UnreturnedIDs) != 60 || got.UnreturnedIDs[0] != fmt.Sprint(got.ReturnedCount) || !strings.Contains(got.Message, "unreturned_message_ids") {
+		t.Fatalf("unreturned ids missing: returned=%d unreturned=%v", got.ReturnedCount, got.UnreturnedIDs)
+	}
+}
+
+func mustMarshalHistory(t *testing.T, result dianaChatHistoryResult) string {
+	t.Helper()
+	raw, err := marshalDianaChatHistoryResult(context.Background(), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
 }
 
 func TestHistorySearchOldestCursorResumesAndRejectsDifferentScope(t *testing.T) {
@@ -84,9 +112,6 @@ func TestHistorySearchOldestCursorResumesAndRejectsDifferentScope(t *testing.T) 
 				t.Fatal("duplicate cursor row")
 			}
 			seen[item.MessageID] = true
-			if len(item.ContextBefore)+len(item.ContextAfter) > 0 {
-				t.Fatal("search expanded context")
-			}
 		}
 		if got.SearchComplete != (page == 2) {
 			t.Fatalf("incorrect completeness: %+v", got)
@@ -162,23 +187,11 @@ func TestHistoryBudgetNeverDropsRequestedAroundAnchor(t *testing.T) {
 		r.Items = append(r.Items, dianaChatHistoryItem{MessageID: fmt.Sprint(i), Sender: strings.Repeat("名", 100), Text: strings.Repeat("正文", 200)})
 	}
 	r.Items[70].MessageID = "anchor"
-	raw, err := marshalDianaChatHistoryResult(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := decodeHistoryPage(t, raw)
+	got := decodeHistoryPage(t, mustMarshalHistory(t, r))
 	for _, item := range got.Items {
 		if item.MessageID == "anchor" {
 			return
 		}
 	}
 	t.Fatal("around anchor was clipped away")
-}
-
-func TestHistoryMatchSnippetKeepsLateOCRMatch(t *testing.T) {
-	text := strings.Repeat("无关地图细节", 100) + "待取件 09-02 18:52" + strings.Repeat("商品说明", 100)
-	snippet := historyMatchSnippet(text, "待取件", 100)
-	if !strings.Contains(snippet, "待取件 09-02 18:52") || len([]rune(snippet)) > 102 {
-		t.Fatalf("lost OCR date: %s", snippet)
-	}
 }

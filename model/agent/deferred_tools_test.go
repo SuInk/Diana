@@ -341,7 +341,7 @@ func TestDeferredContractBoundsAreAtomicAndNeverTruncated(t *testing.T) {
 		t.Fatal("partial load committed")
 	}
 	client := &dispatchTestClient{replies: []*llm.GenerateResponse{loadReply(true, tool.Name())}}
-	runner, _ := NewRunner(client, Config{CoreTools: []string{"common"}, MaxToolOutputChars: 100}, registry)
+	runner, _ := NewRunner(client, Config{CoreTools: []string{"common"}}, registry)
 	result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}})
 	if err != nil {
 		t.Fatal(err)
