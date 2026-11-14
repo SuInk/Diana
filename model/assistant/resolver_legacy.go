@@ -21,6 +21,9 @@ type resolverPlatformResult struct {
 	// DeferToBrowser 表示这条链接按平台接口读不出来，但渲染一次页面多半能读到：
 	// 交给沙盒浏览器，而不是回一句「解析失败」。沙盒浏览器没开时才退回文字说明。
 	DeferToBrowser bool
+	// ModelOnly 表示内容只给模型当上下文，不发群：通用抓取失败时只剩一句
+	// 「未能获取网页内容」的备注和原始地址，发出去就是把给模型的提示播报给群友。
+	ModelOnly bool
 }
 
 func (p *ResolverPlugin) resolveKnownPlatform(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
@@ -37,7 +40,13 @@ func (p *ResolverPlugin) resolveKnownPlatform(ctx context.Context, req PluginReq
 	case resolverPlatformIs(raw, "youtube"):
 		return p.resolveYouTube(ctx, req, raw)
 	default:
-		return resolverPlatformTextResult(p.resolveURL(ctx, raw, legacyResolveOptions()))
+		text, fetched := p.resolveURL(ctx, raw, legacyResolveOptions())
+		result := resolverPlatformTextResult(text)
+		if !fetched {
+			result.ForwardMessages = nil
+			result.ModelOnly = true
+		}
+		return result
 	}
 }
 
