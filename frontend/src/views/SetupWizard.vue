@@ -397,7 +397,6 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import { CheckCircle2, ChevronLeft, ChevronRight, Copy, Dices, LayoutGrid, MessageCircle, Plus, Power, RefreshCw, X, Zap } from "@lucide/vue";
 import {
-  addDeepSeekSearchDefault,
   getConfig,
   getBotPlatforms,
   getBotProfileConfig,
@@ -782,30 +781,13 @@ async function saveAndTestLLM(): Promise<void> {
     const result = await testLLM(llmTestMessage.value.trim());
     llmConfigured.value = true;
     llmTestResult.value = `连通成功：${result.text.slice(0, 40)}`;
-    const searchAdded = await enableDeepSeekSearch(payload.base_url, payload.api_key);
-    toastSuccess(searchAdded ? "提供商已连通，联网搜索和读网页也已用 DeepSeek 开好" : "提供商配置已保存并连通");
+    toastSuccess("提供商配置已保存并连通");
     llmForm.value.api_key = "";
     step.value = 1;
   } catch (error) {
     toastError(error instanceof Error ? error.message : "保存或测试失败");
   } finally {
     busy.value = false;
-  }
-}
-
-/**
- * 填的是 DeepSeek 官方地址时，用同一个 Key 顺带开好 DeepSeek 联网搜索和读网页。
- * 全新部署默认的浏览器搜索要装 Chrome、Exa 公共接口常被限流，新手装好往往搜不了。
- * 失败不拦向导：搜索以后还能在提供商页手动配。
- */
-async function enableDeepSeekSearch(baseURL: string | undefined, apiKey: string | undefined): Promise<boolean> {
-  if (!apiKey) return false;
-  try {
-    const host = new URL(baseURL || "https://api.deepseek.com").hostname.toLowerCase();
-    if (host !== "deepseek.com" && !host.endsWith(".deepseek.com")) return false;
-    return (await addDeepSeekSearchDefault(apiKey)).added;
-  } catch {
-    return false;
   }
 }
 

@@ -579,12 +579,6 @@ export function deleteSearchProvider(id: string): Promise<SearchConfiguration> {
 }
 
 // reorderSearchProviders 提交整个目录的新顺序，ids 必须包含全部提供商。
-// addDeepSeekSearchDefault 让新手向导填了 DeepSeek Key 后顺带开好联网搜索和读网页：
-// 没有 DeepSeek 搜索来源时建一个并排到默认路由第一位，已有就不动。
-export function addDeepSeekSearchDefault(apiKey: string): Promise<{ added: boolean; config: SearchConfiguration }> {
-  return requestJSON<{ added: boolean; config: SearchConfiguration }>("/api/assistant/search-providers/deepseek-default", { method: "POST", body: JSON.stringify({ api_key: apiKey }) });
-}
-
 export function reorderSearchProviders(ids: string[]): Promise<SearchConfiguration> {
   return requestJSON<SearchConfiguration>("/api/assistant/search-providers/order", { method: "PUT", body: JSON.stringify({ ids }) });
 }
