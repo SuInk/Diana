@@ -152,6 +152,7 @@ func (t *pluginResourceTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
 		"path":   toolStringParam("插件根目录内的相对资源路径，可选"),
 		"offset": toolIntParam("起始行，可选"), "limit": toolIntParam("行数，可选"),
+		"char_offset": toolIntParam("单行超过上限时从这一行的第几个字接着读，照结果里给的填"),
 	})
 }
 func (t *pluginResourceTool) Run(ctx context.Context, input map[string]any) (string, error) {

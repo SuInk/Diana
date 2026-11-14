@@ -429,6 +429,9 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 		DurationMS: duration.Milliseconds(),
 		Sandbox:    sandbox.kind,
 	}
+	if err := output.finish(); err != nil {
+		return MemberCommandResult{}, err
+	}
 	outputBudget := req.OutputBudget
 	if outputBudget <= 0 {
 		outputBudget = ToolOutputMaxChars
@@ -441,7 +444,7 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 	result.OutputNotice, result.FullOutputPath = page.Notice, page.FullOutputPath
 	if output.dropped > 0 {
 		result.Truncated = true
-		result.OutputNotice = strings.TrimSpace(fmt.Sprintf("输出超过单文件上限 %d 字节，之后的 %d 字节没有记录下来。%s", limits.FileBytes, output.dropped, result.OutputNotice))
+		result.OutputNotice = strings.TrimSpace(fmt.Sprintf("输出超过单文件上限 %d 字节，只记录了开头和结尾各一半，中间 %d 字节没有记录。%s", limits.FileBytes, output.dropped, result.OutputNotice))
 	}
 	select {
 	case reason := <-exceeded:
@@ -569,43 +572,101 @@ const memberTmpDirName = ".tmp"
 // memberOutputDirName 放没给全的命令完整输出，按保留期清理，不算产物。
 const memberOutputDirName = ".output"
 
+// memberOutputKeep 是 .output 里最多留几份完整输出，更早的删掉。它不占成员配额，
+// 体积靠这个条数和单份上限（单文件上限）兜住。
+const memberOutputKeep = 5
+
 // memberSpill 把完整输出存进个人目录，告诉模型在沙盒里用 sed 按行读。
 func memberSpill(dir string) commandOutputSpill {
 	return func(src *os.File) (string, string, error) {
-		target, err := spillCommandOutputTo(filepath.Join(dir, memberOutputDirName), src)
+		outputDir := filepath.Join(dir, memberOutputDirName)
+		target, err := spillCommandOutputTo(outputDir, src)
 		if err != nil {
 			return "", "", err
 		}
+		rotateMemberOutputs(outputDir, memberOutputKeep, filepath.Base(target))
 		rel := filepath.ToSlash(filepath.Join(memberOutputDirName, filepath.Base(target)))
 		return rel, fmt.Sprintf("用 run_command 跑 sed -n '1,200p' %s 这类命令按行读，或用 grep 在里面查", rel), nil
 	}
 }
 
-// memberOutputFile 把成员命令的输出写进文件，超过单文件上限的部分不再记录，只计数：
-// 容器沙盒的输出经 docker 客户端转写，rlimit 管不到这个文件。
+// rotateMemberOutputs 只留最新的 keep 份完整输出。文件名以时间开头，按名字排即按时间排。
+func rotateMemberOutputs(dir string, keep int, current string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var logs []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".log") {
+			logs = append(logs, entry.Name())
+		}
+	}
+	sort.Strings(logs)
+	for i := 0; i < len(logs)-keep; i++ {
+		if logs[i] != current { // 刚写的这份结果里要引用，不能删
+			_ = os.Remove(filepath.Join(dir, logs[i]))
+		}
+	}
+}
+
+// memberOutputFile 把成员命令的输出写进文件。总量超过 limit 时保留开头一半和结尾一半
+// （结尾用环形缓冲），中间的只计数：报错几乎都在最后，不能只留前面。容器沙盒的输出
+// 经 docker 客户端转写，rlimit 管不到这个文件，所以这里自己兜。
 type memberOutputFile struct {
 	mu      sync.Mutex
 	file    *os.File
-	written int64
 	limit   int64
+	written int64 // 写进文件的开头部分
+	tail    []byte
+	start   int // 环形缓冲里最早一字节的位置
 	dropped int64
 }
 
 func (w *memberOutputFile) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	keep := int64(len(p))
-	if w.limit > 0 {
-		keep = min(keep, max(w.limit-w.written, 0))
+	n := len(p)
+	if w.limit <= 0 {
+		_, err := w.file.Write(p)
+		return n, err
 	}
-	if keep > 0 {
-		if _, err := w.file.Write(p[:keep]); err != nil {
+	headLimit := w.limit - w.limit/2
+	if room := headLimit - w.written; room > 0 {
+		head := p[:min(int64(len(p)), room)]
+		if _, err := w.file.Write(head); err != nil {
 			return 0, err
 		}
-		w.written += keep
+		w.written += int64(len(head))
+		p = p[len(head):]
 	}
-	w.dropped += int64(len(p)) - keep
-	return len(p), nil
+	tailLimit := int(w.limit / 2)
+	for _, b := range p {
+		if len(w.tail) < tailLimit {
+			w.tail = append(w.tail, b)
+			continue
+		}
+		w.tail[w.start] = b
+		w.start = (w.start + 1) % tailLimit
+		w.dropped++
+	}
+	return n, nil
+}
+
+// finish 把结尾那段接到文件后面；中间丢掉了内容时先写一行说明。
+func (w *memberOutputFile) finish() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.dropped > 0 {
+		if _, err := fmt.Fprintf(w.file, "\n…[中间 %d 字节超过单文件上限，没有记录]…\n", w.dropped); err != nil {
+			return err
+		}
+	}
+	if _, err := w.file.Write(w.tail[w.start:]); err != nil {
+		return err
+	}
+	_, err := w.file.Write(w.tail[:w.start])
+	return err
 }
 
 // stageMemberFiles 用 os.Root 把预置脚本（write_files）和授权输入文件（inputs/）安全写进成员目录。
@@ -785,6 +846,11 @@ func memberDirUsage(dir string, limits MemberCommandLimits) memberUsage {
 	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || path == dir {
 			return nil
+		}
+		// .output 是 Diana 替成员存的完整命令输出，按条数轮换、按保留期清理，不占成员配额：
+		// 算进去的话几次大输出就把成员锁在「个人目录超限」里，看门狗也会误杀正常命令。
+		if entry.IsDir() && entry.Name() == memberOutputDirName && filepath.Dir(path) == dir {
+			return filepath.SkipDir
 		}
 		usage.files++
 		if info, err := entry.Info(); err == nil && entry.Type().IsRegular() {

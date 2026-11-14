@@ -207,3 +207,94 @@ func TestFindFilesAndListFilesPageEverything(t *testing.T) {
 		t.Fatalf("list_files saw %d of 450 (以前固定 200 条)", len(names))
 	}
 }
+
+// 单个大文件里大量匹配：超出这一页的只计数；总数照实给出，续读 offset 接得上。
+func TestGrepManyMatchesInOneFile(t *testing.T) {
+	root := t.TempDir()
+	writeTestFile(t, root, "huge.log", strings.Repeat("hit\n", 200000))
+	tool := &GrepTool{root: root}
+	out, err := tool.Run(WithToolOutputBudget(context.Background(), 2000), map[string]any{"pattern": "hit", "context": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(out) > 2000 || !strings.Contains(out, "共 200000 条匹配") || nextOffsetPattern.FindStringSubmatch(firstLines(out, 1)) == nil {
+		t.Fatalf("(%d 字) %s", utf8.RuneCountInString(out), firstLines(out, 3))
+	}
+}
+
+// 超长单行：匹配在行尾也能找到（流式匹配），显示时按字切开并写明 read_file 的 char_offset。
+func TestGrepOverlongLine(t *testing.T) {
+	root := t.TempDir()
+	line := strings.Repeat("长", 300000) + "needle"
+	writeTestFile(t, root, "one.txt", "head\n"+line+"\n")
+	tool := &GrepTool{root: root}
+	out, err := tool.Run(WithToolOutputBudget(context.Background(), 4000), map[string]any{"pattern": "needle$"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(out) > 4000 || !strings.Contains(out, "共 1 条匹配") || !strings.Contains(out, "one.txt:2:") {
+		t.Fatalf("(%d 字) %.200s", utf8.RuneCountInString(out), out)
+	}
+	if !regexp.MustCompile(`read_file path=one.txt offset=2 char_offset=\d+`).MatchString(out) {
+		t.Fatalf("no char_offset continuation: %.300s", out[len(out)-300:])
+	}
+}
+
+// 成员输出超过上限时留开头和结尾，中间写一行说明；报错在最后，不能只留前面。
+func TestMemberOutputKeepsHeadAndTail(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	w := &memberOutputFile{file: file, limit: 100}
+	for i := range 50 {
+		fmt.Fprintf(w, "line-%02d\n", i)
+	}
+	if err := w.finish(); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(file.Name())
+	got := string(data)
+	if !strings.HasPrefix(got, "line-00\n") || !strings.HasSuffix(got, "line-49\n") || !strings.Contains(got, fmt.Sprintf("中间 %d 字节", w.dropped)) || w.dropped != 400-100 {
+		t.Fatalf("dropped=%d output=%q", w.dropped, got)
+	}
+}
+
+// 成员的完整输出存进 .output/，用沙盒里的 sed 读；只留最新几份，不算成员配额、不算产物。
+func TestMemberSpillRotatesAndStaysOutOfQuota(t *testing.T) {
+	dir := t.TempDir()
+	src, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	if _, err := src.WriteString(strings.Repeat("row\n", 5000)); err != nil {
+		t.Fatal(err)
+	}
+	before := snapshotMemberDir(dir)
+	var page commandOutputPage
+	for range memberOutputKeep + 3 {
+		page, err = pageCommandOutput(src, 500, 0, true, memberSpill(dir))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !page.Truncated || !strings.HasPrefix(page.FullOutputPath, memberOutputDirName+"/") || !strings.Contains(page.Notice, "sed -n '1,200p' "+page.FullOutputPath) {
+		t.Fatalf("page = %+v", page)
+	}
+	if data, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(page.FullOutputPath))); err != nil || strings.Count(string(data), "\n") != 5000 {
+		t.Fatalf("full output missing: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(dir, memberOutputDirName))
+	if len(entries) != memberOutputKeep {
+		t.Fatalf("kept %d outputs, want %d", len(entries), memberOutputKeep)
+	}
+	limits := DefaultMemberCommandLimits
+	if usage := memberDirUsage(dir, limits); usage.files != 0 || usage.bytes != 0 {
+		t.Fatalf(".output counted toward quota: %+v", usage)
+	}
+	if files := changedMemberFiles(dir, before, limits); len(files) != 0 {
+		t.Fatalf(".output listed as products: %+v", files)
+	}
+}

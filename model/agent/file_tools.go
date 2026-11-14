@@ -5,6 +5,7 @@ package agent
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -360,8 +361,6 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 		used    int
 		matches int
 		skipped int
-		// pendingEntries 等一个文件扫完再把带后文的条目拼出来。
-		pendingEntries []func()
 	)
 	budget := toolBudget(ctx)
 	err = walkAgentFiles(ctx, base, func(fullPath, rel string, _ fs.FileInfo) error {
@@ -372,23 +371,15 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 			return nil
 		}
 		// 逐行流式读，不设单文件大小上限：以前超过 2 MB 的文件直接跳过，大日志里的匹配查不到。
-		skip, readErr := grepFile(fullPath, expr, around, func(block func() string) {
+		skip, readErr := grepFile(grepScan{path: fullPath, rel: rel, expr: expr, around: around, lineBudget: max(budget/2, 1)}, func() bool {
 			matches++
 			// 总数照数完，正文只留这一页可能用到的：内存跟着单次上限走，不跟着匹配数走。
-			if matches <= offset || (limit > 0 && len(entries) >= limit) || used > budget {
-				return
-			}
-			entries = append(entries, "")
-			index := len(entries) - 1
-			pendingEntries = append(pendingEntries, func() {
-				entries[index] = block()
-				used += utf8.RuneCountInString(entries[index]) + 1
-			})
-		}, rel)
-		for _, finish := range pendingEntries {
-			finish()
-		}
-		pendingEntries = pendingEntries[:0]
+			return matches > offset && (limit <= 0 || len(entries) < limit) && used <= budget
+		}, func(entry string) {
+			// 每条前后文一闭合就记账，超出预算之后的匹配只计数不保留。
+			entries = append(entries, entry)
+			used += utf8.RuneCountInString(entry) + 1
+		})
 		if readErr != nil || skip {
 			// 读不了的单个文件不该让整次检索失败：权限、竞态删除都很常见。
 			skipped++
@@ -415,10 +406,18 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 	return out, err
 }
 
-// grepFile 逐行扫一个文件，每条匹配回调一次：block 在文件扫完后调用，拼出「路径:行号:
-// 内容」和前后各 around 行。开头像二进制（有 NUL）时返回 skip。
-func grepFile(path string, expr *regexp.Regexp, around int, match func(block func() string), rel string) (bool, error) {
-	file, err := os.Open(path)
+type grepScan struct {
+	path, rel  string
+	expr       *regexp.Regexp
+	around     int
+	lineBudget int // 单行最多显示多少字，超出的按字符切开并写明怎么用 read_file 续读
+}
+
+// grepFile 逐行扫一个文件。每条匹配先问 want 要不要留；要留的等前后文齐了交给 add，
+// 格式是「路径:行号: 内容」，前后文行用「-」。开头像二进制（有 NUL）时返回 skip。
+// 超长行流式匹配，只留开头一段：几百 MB 的单行也不会整行读进内存。
+func grepFile(scan grepScan, want func() bool, add func(string)) (bool, error) {
+	file, err := os.Open(scan.path)
 	if err != nil {
 		return false, err
 	}
@@ -434,47 +433,122 @@ func grepFile(path string, expr *regexp.Regexp, around int, match func(block fun
 	}
 	var before []string
 	var open []*block
-	format := func(lineNo int, marker, text string) string {
-		return fmt.Sprintf("%s:%d%s %s", rel, lineNo, marker, text)
-	}
 	for lineNo := 1; ; lineNo++ {
-		line, readErr := reader.ReadString('\n')
-		if line == "" && readErr != nil {
-			if errors.Is(readErr, io.EOF) {
-				return false, nil
+		text, lineBytes, matched, readErr := grepLine(reader, scan.expr)
+		if lineBytes == 0 {
+			if readErr == nil || errors.Is(readErr, io.EOF) {
+				break
 			}
 			return false, readErr
 		}
-		text := strings.TrimRight(strings.TrimSuffix(line, "\n"), "\r")
-		matched := expr.MatchString(text)
+		display := func(marker string) string { return grepDisplayLine(scan, lineNo, marker, text, lineBytes) }
 		kept := open[:0]
 		for _, b := range open {
-			b.lines = append(b.lines, format(lineNo, "-", text))
+			b.lines = append(b.lines, display("-"))
 			if b.after--; b.after > 0 {
 				kept = append(kept, b)
+			} else {
+				add(strings.Join(b.lines, "\n"))
 			}
 		}
 		open = kept
-		if matched {
-			b := &block{lines: append(append([]string(nil), before...), format(lineNo, ":", text)), after: around}
-			match(func() string { return strings.Join(b.lines, "\n") })
-			if around > 0 {
+		if matched && want() {
+			b := &block{lines: append(append([]string(nil), before...), display(":")), after: scan.around}
+			if scan.around > 0 {
 				open = append(open, b)
+			} else {
+				add(b.lines[0])
 			}
 		}
-		if around > 0 {
-			before = append(before, format(lineNo, "-", text))
-			if len(before) > around {
+		if scan.around > 0 {
+			before = append(before, display("-"))
+			if len(before) > scan.around {
 				before = before[1:]
 			}
 		}
 		if readErr != nil {
 			if errors.Is(readErr, io.EOF) {
-				return false, nil
+				break
 			}
 			return false, readErr
 		}
 	}
+	for _, b := range open {
+		add(strings.Join(b.lines, "\n"))
+	}
+	return false, nil
+}
+
+// grepLine 读一行，返回去掉行尾的内容（超长行只有开头 64KiB）、整行字节数和是否匹配。
+func grepLine(reader *bufio.Reader, expr *regexp.Regexp) (string, int, bool, error) {
+	fragment, err := reader.ReadSlice('\n')
+	if !errors.Is(err, bufio.ErrBufferFull) {
+		text := strings.TrimRight(strings.TrimSuffix(string(fragment), "\n"), "\r")
+		return text, len(fragment), len(fragment) > 0 && expr.MatchString(text), err
+	}
+	head := append([]byte(nil), fragment...)
+	rest := &restOfLine{reader: reader}
+	matched := expr.MatchReader(bufio.NewReader(io.MultiReader(bytes.NewReader(head), &trimNewline{rest: rest})))
+	_, _ = io.Copy(io.Discard, rest)
+	return string(head), len(head) + rest.n, matched, rest.err
+}
+
+// grepDisplayLine 排一行结果；超过 lineBudget 字的按字符切开，写明整行多长、怎么用
+// read_file 的 char_offset 接着读。
+func grepDisplayLine(scan grepScan, lineNo int, marker, text string, lineBytes int) string {
+	prefix := fmt.Sprintf("%s:%d%s ", scan.rel, lineNo, marker)
+	// 超长行只读了开头一段，lineBytes 比留下的内容长出不止一个行尾。
+	whole := len(text)+2 >= lineBytes
+	if whole && utf8.RuneCountInString(text) <= scan.lineBudget {
+		return prefix + text
+	}
+	cut := fitLeadingLines(text, scan.lineBudget, false)
+	shown := utf8.RuneCountInString(text[:cut])
+	return fmt.Sprintf("%s%s…[这一行共 %d 字节，只给了前 %d 字；用 read_file path=%s offset=%d char_offset=%d 接着读]", prefix, text[:cut], lineBytes, shown, scan.rel, lineNo, shown)
+}
+
+// restOfLine 把 reader 里当前这一行剩下的部分（含换行）当成一个 Reader，读到换行或文件末尾为止。
+type restOfLine struct {
+	reader  *bufio.Reader
+	pending []byte
+	done    bool
+	n       int
+	err     error
+}
+
+func (r *restOfLine) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		if r.done {
+			return 0, io.EOF
+		}
+		fragment, err := r.reader.ReadSlice('\n')
+		r.pending, r.n = fragment, r.n+len(fragment)
+		if !errors.Is(err, bufio.ErrBufferFull) {
+			r.done = true
+			if err != nil {
+				r.err = err
+			}
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
+}
+
+// trimNewline 去掉行尾的换行再交给正则，和短行用 MatchString 时的口径一致。
+type trimNewline struct {
+	rest *restOfLine
+}
+
+func (t *trimNewline) Read(p []byte) (int, error) {
+	n, err := t.rest.Read(p)
+	if n > 0 && p[n-1] == '\n' && t.rest.done && len(t.rest.pending) == 0 {
+		n--
+		if n > 0 && p[n-1] == '\r' {
+			n--
+		}
+	}
+	return n, err
 }
 
 // pageInput 读出 offset/limit：offset 从 0 起，limit ≤0 表示不限条数、装满单次上限为止。

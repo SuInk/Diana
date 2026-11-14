@@ -5,10 +5,12 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"github.com/SuInk/diana/model/agent"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 不等确认，但先提醒再装：提醒必须早于安装，且写明装了哪些包。
@@ -64,8 +66,9 @@ func TestInstallPackageReportsFailure(t *testing.T) {
 	tool.install = func(context.Context, agent.Config, []string) (string, error) {
 		return "E404 not found", errors.New("npm install 失败")
 	}
+	// 失败时整段结果（npm 输出、报错）在 err 里：Runner 只把 err 交给模型。
 	out, err := tool.Run(context.Background(), map[string]any{"packages": []any{"no-such-pkg"}})
-	if err == nil || !strings.Contains(out, "E404") {
+	if err == nil || out != "" || !strings.Contains(err.Error(), "E404") || !strings.Contains(err.Error(), "npm install 失败") || !json.Valid([]byte(err.Error())) {
 		t.Fatalf("out=%s err=%v", out, err)
 	}
 }

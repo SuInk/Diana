@@ -1509,9 +1509,10 @@ func (t *ReadFileTool) Description() string {
 
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path"}, map[string]any{
-		"path":   toolStringParam("相对路径"),
-		"offset": toolIntParam("起始行，从 1 起"),
-		"limit":  toolIntParam("最多行数，可选；不填时读到单次结果上限为止"),
+		"path":        toolStringParam("相对路径"),
+		"offset":      toolIntParam("起始行，从 1 起"),
+		"limit":       toolIntParam("最多行数，可选；不填时读到单次结果上限为止"),
+		"char_offset": toolIntParam("单行超过上限时，从 offset 那一行的第几个字接着读（从 0 起），照结果里给的填"),
 	})
 }
 
@@ -1563,50 +1564,140 @@ func (t *ReadFileTool) Run(ctx context.Context, input map[string]any) (string, e
 	offset := max(intFromInput(input, "offset", 1), 1)
 	limit := max(intFromInput(input, "limit", 0), 0)
 	budget := toolBudget(ctx)
+	if charOffset := max(intFromInput(input, "char_offset", 0), 0); charOffset > 0 {
+		return readFileLineSegment(file, rel, offset, charOffset, budget)
+	}
 	// 边读边数行，只留下这一页可能用到的：内存跟着单次上限走，不跟着文件大小走。
-	total, selected, firstLineBytes, err := scanFileLines(file, offset, limit, budget)
+	total, selected, err := scanFileLines(file, offset, limit, budget)
 	if err != nil {
 		return "", err
 	}
 	if offset > total {
 		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, total, offset), nil
 	}
-	header := func(n int, partial bool) string {
+	header := func(n int) string {
 		end := offset - 1 + n
 		var out strings.Builder
-		if partial {
-			fmt.Fprintf(&out, "%s 第 %d 行（共 %d 行）这一行有 %d 字节，超过单次结果上限 %d 字，下面只给了开头一段；要看后面的部分用 grep 定位关键字，或用 run_command 按字节切出来。\n", rel, offset, total, firstLineBytes, ToolOutputMaxChars)
-			if offset < total {
-				fmt.Fprintf(&out, "下一行用 offset=%d 继续。\n", offset+1)
-			}
-		} else {
-			fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, total)
-			if end < total {
-				fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", total-end, end+1)
-			}
+		fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, total)
+		if end < total {
+			fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", total-end, end+1)
 		}
 		out.WriteString("\n")
 		return out.String()
 	}
 	result, n, err := fitEntries(len(selected), budget, func(n int) (string, error) {
-		return header(n, false) + strings.Join(selected[:n], "\n"), nil
+		return header(n) + strings.Join(selected[:n], "\n"), nil
 	})
 	if err != nil || n > 1 || utf8.RuneCountInString(result) <= budget {
 		return result, err
 	}
-	// 一行就超过上限（压缩过的 JS、单行 JSON）：按字符给开头一段，说清没给全。
-	line := selected[0]
-	prefix := header(1, true)
-	cut := fitLeadingLines(line, budget-utf8.RuneCountInString(prefix), false)
-	return prefix + line[:cut], nil
+	// 一行就超过上限（压缩过的 JS、单行 JSON）：按字分段读，结果里写明 char_offset。
+	return readFileLineSegment(file, rel, offset, 0, budget)
+}
+
+// readFileLineSegment 读第 lineNo 行从第 charOffset 个字起、能装进 budget 的一段，并写明
+// 这一行多长、下一段的 char_offset。整行流式读，不整行放进内存。
+func readFileLineSegment(file *os.File, rel string, lineNo, charOffset, budget int) (string, error) {
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	reader := bufio.NewReaderSize(file, 64<<10)
+	total := 0
+	skipLine := func() (bool, error) {
+		for {
+			fragment, err := reader.ReadSlice('\n')
+			if !errors.Is(err, bufio.ErrBufferFull) {
+				if len(fragment) > 0 {
+					total++
+				}
+				return err == nil, ignoreEOF(err)
+			}
+		}
+	}
+	for total < lineNo-1 {
+		more, err := skipLine()
+		if err != nil {
+			return "", err
+		}
+		if !more {
+			break
+		}
+	}
+	if total < lineNo-1 {
+		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, total, lineNo), nil
+	}
+	// 表头最长不过一两百字，先留出来，剩下的给正文。
+	room := max(budget-300-utf8.RuneCountInString(rel), 1)
+	var segment strings.Builder
+	lineRunes, used, ended, sawAny := 0, 0, false, false
+	for {
+		r, _, err := reader.ReadRune()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				return "", err
+			}
+			ended = true
+			break
+		}
+		sawAny = true
+		if r == '\n' {
+			break
+		}
+		if r == '\r' && peekNewline(reader) {
+			continue // CRLF 的 \r 不算这一行的内容
+		}
+		if lineRunes >= charOffset && used < room {
+			segment.WriteRune(r)
+			used++
+		}
+		lineRunes++
+	}
+	if sawAny {
+		total++
+	}
+	if !ended {
+		for {
+			more, err := skipLine()
+			if err != nil {
+				return "", err
+			}
+			if !more {
+				break
+			}
+		}
+	}
+	end := min(charOffset+used, lineRunes)
+	var out strings.Builder
+	fmt.Fprintf(&out, "%s 第 %d 行第 %d–%d 字（这一行共 %d 字，文件共 %d 行）\n", rel, lineNo, charOffset, end, lineRunes, total)
+	switch {
+	case end < lineRunes:
+		fmt.Fprintf(&out, "这一行超过单次结果上限 %d 字，没读完，用 offset=%d char_offset=%d 接着读。\n", ToolOutputMaxChars, lineNo, end)
+	case lineNo < total:
+		fmt.Fprintf(&out, "这一行读完了，下一行用 offset=%d 继续。\n", lineNo+1)
+	}
+	out.WriteString("\n")
+	out.WriteString(segment.String())
+	return out.String(), nil
+}
+
+func peekNewline(reader *bufio.Reader) bool {
+	next, err := reader.Peek(1)
+	return err == nil && next[0] == '\n'
+}
+
+func ignoreEOF(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
 }
 
 // scanFileLines 逐行读完整个文件，返回总行数和从第 from 行（从 1 开始）起的若干行：
 // 最多 limit 行（≤0 不限），累计超过 budget 字就不再往下留（总行数照数）。
 // CRLF 当一个换行；结尾的换行不多算一行，免得「共 N 行」比编辑器里看到的多一行。
-func scanFileLines(reader io.Reader, from, limit, budget int) (int, []string, int, error) {
+func scanFileLines(reader io.Reader, from, limit, budget int) (int, []string, error) {
 	buffered := bufio.NewReaderSize(reader, 64<<10)
-	total, used, firstLineBytes := 0, 0, 0
+	total, used := 0, 0
 	// 单行只留够装满预算的字节：几百 MB 的单行文件也不会整行读进内存。
 	keep := (budget + 1) * utf8.UTFMax
 	var selected []string
@@ -1629,18 +1720,15 @@ func scanFileLines(reader io.Reader, from, limit, budget int) (int, []string, in
 			total++
 			if total >= from && (limit <= 0 || len(selected) < limit) && used <= budget {
 				text := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
-				if len(selected) == 0 {
-					firstLineBytes = lineBytes
-				}
 				selected = append(selected, text)
 				used += utf8.RuneCountInString(text) + 1
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return total, selected, firstLineBytes, nil
+			return total, selected, nil
 		}
 		if err != nil {
-			return 0, nil, 0, err
+			return 0, nil, err
 		}
 	}
 }

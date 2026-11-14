@@ -29,7 +29,7 @@ func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":  toolEnumParam("read 读文件；list 列目录；usage 目录体积；disk 磁盘；exec 执行；cleanup 清理自身存储；session_start/send/read/stop/list 管 dev server、REPL 等常驻进程", "read", "list", "usage", "disk", "exec", "cleanup", "session_start", "session_send", "session_read", "session_stop", "session_list"),
 		"path":       toolStringParam("读取或统计的绝对路径；相对路径以 Agent 工作区为基准"),
-		"offset":     toolIntParam("read 的字节偏移或 list 跳过的条数，默认 0", 0, 1000000000),
+		"offset":     toolCountParam("read 的字节偏移或 list 跳过的条数，默认 0", 0),
 		"command":    toolStringParam("exec 的可执行文件绝对路径，如 /bin/sh"),
 		"args":       toolStringArrayParam("exec 的原始参数数组，不自动经过 shell"),
 		"cwd":        toolStringParam("exec 的绝对工作目录，默认 Agent 工作区"),

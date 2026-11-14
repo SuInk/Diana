@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -122,18 +124,39 @@ func firstLines(value string, count int) string {
 	return strings.Join(lines, "\n")
 }
 
-// 一行就超过上限的文件（压缩过的 JS）按字符给开头一段，并说明这一行没给全。
-func TestReadFileToolExplainsOverlongLine(t *testing.T) {
+// 一行就超过上限的文件（压缩过的 JS）按字分段，照 char_offset 一段段接着读能拼回整行，
+// 不需要 run_command（插件 __read、关了命令的配置里都没有它）。
+func TestReadFileToolPagesOverlongLineByCharOffset(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "min.js"), []byte(strings.Repeat("一", 5000)+"\nnext\n"), 0o600); err != nil {
+	line := strings.Repeat("一二三四五", 1000) + "尾"
+	if err := os.WriteFile(filepath.Join(root, "min.js"), []byte(line+"\r\nnext\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	tool := &ReadFileTool{root: root}
-	out, err := tool.Run(WithToolOutputBudget(context.Background(), 1000), map[string]any{"path": "min.js"})
-	if err != nil {
-		t.Fatal(err)
+	ctx := WithToolOutputBudget(context.Background(), 1000)
+	var got strings.Builder
+	input := map[string]any{"path": "min.js"}
+	charOffset := regexp.MustCompile(`offset=1 char_offset=(\d+)`)
+	for page := 0; page < 20; page++ {
+		out, err := tool.Run(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len([]rune(out)) > 1000 || !strings.Contains(out, "这一行共 5001 字") {
+			t.Fatalf("page %d (%d 字): %s", page, len([]rune(out)), firstLines(out, 2))
+		}
+		got.WriteString(out[strings.Index(out, "\n\n")+2:])
+		match := charOffset.FindStringSubmatch(out)
+		if match == nil {
+			if !strings.Contains(out, "下一行用 offset=2") {
+				t.Fatalf("last segment does not point at the next line: %s", firstLines(out, 2))
+			}
+			break
+		}
+		next, _ := strconv.Atoi(match[1])
+		input = map[string]any{"path": "min.js", "offset": 1, "char_offset": next}
 	}
-	if len([]rune(out)) > 1000 || !strings.Contains(out, "只给了开头一段") || !strings.Contains(out, "offset=2") {
-		t.Fatalf("overlong line not explained (%d 字): %s", len([]rune(out)), firstLines(out, 3))
+	if got.String() != line {
+		t.Fatalf("segments joined to %d 字, want %d", len([]rune(got.String())), len([]rune(line)))
 	}
 }

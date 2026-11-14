@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 
@@ -82,7 +83,9 @@ func (t *dianaInstallPackageTool) Run(ctx context.Context, input map[string]any)
 		return "", marshalErr
 	}
 	if err != nil {
-		return string(body), err
+		// 和 run_command 一样把整段结果放进报错：Runner 遇到 err 只把报错交给模型，
+		// 返回值里的 npm 输出、续读说明和完整输出路径会丢掉。
+		return "", errors.New(string(body))
 	}
 	return string(body), nil
 }

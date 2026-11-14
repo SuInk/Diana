@@ -308,7 +308,8 @@ func spillCommandOutputTo(dir string, src *os.File) (string, error) {
 	pruneCommandOutputs(dir, time.Now())
 	var suffix [4]byte
 	_, _ = rand.Read(suffix[:])
-	name := time.Now().Format("20060102-150405") + "-" + hex.EncodeToString(suffix[:]) + ".log"
+	// 时间精确到纳秒放在最前面，按文件名排序就是按写入先后排。
+	name := time.Now().Format("20060102-150405.000000000") + "-" + hex.EncodeToString(suffix[:]) + ".log"
 	target := filepath.Join(dir, name)
 	dst, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
