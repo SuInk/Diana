@@ -535,7 +535,7 @@ export interface HTTPSearchConfig {
 export interface SearchProvider {
   id: string;
   name: string;
-  type: "exa_mcp" | "tavily" | "perplexity" | "tinyfish" | "brave" | "search_mcp" | "browser" | "http";
+  type: "exa_mcp" | "tavily" | "perplexity" | "tinyfish" | "brave" | "deepseek" | "search_mcp" | "browser" | "http";
   url: string;
   tool?: string;
   query_param?: string;

@@ -1321,7 +1321,7 @@ func TestFileParserPluginRespectsMaxFileSize(t *testing.T) {
 func TestFileParserPluginPublishesVideoFormatLimit(t *testing.T) {
 	plugin := NewFileParserPlugin(nil)
 	manifest := plugin.Manifest()
-	if manifest.Version != "0.3.3" {
+	if manifest.Version != "0.3.4" {
 		t.Fatalf("file parser version = %q", manifest.Version)
 	}
 	manager := NewPluginManager(plugin)

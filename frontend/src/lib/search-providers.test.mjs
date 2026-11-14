@@ -40,7 +40,7 @@ test("templates fill known services and browser engines keep their engine name",
 });
 
 test("every keyed service reports a missing key, not only Tavily", () => {
-  for (const type of ["tavily", "perplexity", "tinyfish", "brave"]) assert.equal(searchProviderKeyStatus({ id: type, name: type, type, url: "" }), "待配置密钥");
+  for (const type of ["tavily", "perplexity", "tinyfish", "brave", "deepseek"]) assert.equal(searchProviderKeyStatus({ id: type, name: type, type, url: "" }), "待配置密钥");
   assert.equal(searchProviderKeyStatus({ id: "b", name: "b", type: "brave", url: "", api_key_configured: true }), "已配置密钥");
   assert.equal(searchProviderKeyStatus({ id: "h", name: "h", type: "http", url: "", http_config: { auth_type: "header" } }), "待配置密钥");
   assert.equal(searchProviderKeyStatus({ id: "h", name: "h", type: "http", url: "", http_config: { auth_type: "none" } }), "密钥可选");

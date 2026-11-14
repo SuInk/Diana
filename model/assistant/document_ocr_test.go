@@ -44,7 +44,7 @@ func TestDocumentOCRTaskUsesParallelPageSubagentsAndFinalCall(t *testing.T) {
 	t.Setenv("DIANA_OCR_RENDER_CONCURRENCY", "3")
 	renderer := &fakePDFRenderer{pages: 3}
 	document := scannedPDFDocument{Name: "scan.pdf", Data: []byte("unique scanned pdf")}
-	task := newDocumentOCRTask(renderer, "这份文件讲了什么", []scannedPDFDocument{document}, "")
+	task := newDocumentOCRTask(renderer, "这份文件讲了什么", []scannedPDFDocument{document}, "", nil)
 
 	var calls atomic.Int64
 	var active atomic.Int64
@@ -160,6 +160,56 @@ func TestWASMPDFRendererExtractsTextLayer(t *testing.T) {
 	}
 }
 
+func TestDocumentOCRTaskPrefersRemoteOCRAndFallsBack(t *testing.T) {
+	t.Setenv("DIANA_OCR_CACHE_DIR", t.TempDir())
+	t.Setenv("DIANA_OCR_MAX_PAGES_PER_FILE", "2")
+	var finalPrompt string
+	var imageCalls atomic.Int64
+	services := PluginTaskServices{
+		Generate: func(_ context.Context, req llm.GenerateRequest) (string, error) {
+			if requestContainsImage(req) {
+				imageCalls.Add(1)
+				return "视觉转写", nil
+			}
+			finalPrompt = req.Messages[len(req.Messages)-1].Content
+			return "回答", nil
+		},
+	}
+	remote := func(_ context.Context, document scannedPDFDocument) ([]string, error) {
+		if document.Name == "broken.pdf" {
+			return nil, fmt.Errorf("service busy")
+		}
+		return []string{"远程第一页", "", "远程第三页"}, nil
+	}
+	task := newDocumentOCRTask(&fakePDFRenderer{pages: 1}, "讲了什么", []scannedPDFDocument{{Name: "scan.pdf", Data: []byte("remote ok")}}, "", remote)
+	if _, err := task.Run(context.Background(), services); err != nil {
+		t.Fatal(err)
+	}
+	if imageCalls.Load() != 0 || !strings.Contains(finalPrompt, "远程第一页") || !strings.Contains(finalPrompt, imageOCRNoTextMarker) || strings.Contains(finalPrompt, "远程第三页") {
+		t.Fatalf("image calls=%d prompt=%q", imageCalls.Load(), finalPrompt)
+	}
+	task = newDocumentOCRTask(&fakePDFRenderer{pages: 1}, "讲了什么", []scannedPDFDocument{{Name: "broken.pdf", Data: []byte("remote broken")}}, "", remote)
+	if _, err := task.Run(context.Background(), services); err != nil {
+		t.Fatal(err)
+	}
+	if imageCalls.Load() == 0 && !strings.Contains(finalPrompt, "视觉转写") && nativeMacPDFHelperPath() == "" {
+		t.Fatalf("remote failure did not fall back, prompt=%q", finalPrompt)
+	}
+}
+
+func TestFileParserRemoteOCROnlyWhenDeepSeekSelected(t *testing.T) {
+	plugin := NewFileParserPlugin(nil)
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingDeepSeekAPIKey: "sk"}) != nil {
+		t.Fatal("default backend must not use DeepSeek")
+	}
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingScannedOCR: fileParserScannedOCRDeepSeek}) != nil {
+		t.Fatal("DeepSeek without key must fall back to local OCR")
+	}
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingScannedOCR: fileParserScannedOCRDeepSeek, fileParserSettingDeepSeekAPIKey: "sk"}) == nil {
+		t.Fatal("DeepSeek with key must be used")
+	}
+}
+
 func requestContainsImage(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
 		for _, part := range message.Parts {
@@ -251,4 +301,19 @@ func pdfRenderTestContext(t *testing.T) (context.Context, context.CancelFunc) {
 		return context.WithDeadline(context.Background(), deadline)
 	}
 	return context.WithDeadline(context.Background(), deadline.Add(-time.Until(deadline)/10))
+}
+
+func TestDeepSeekFetchUsesFirstEnabledDeepSeekSearchProvider(t *testing.T) {
+	providers := []SearchProvider{
+		{ID: "a", Type: "deepseek", Disabled: true},
+		{ID: "b", Type: "tavily"},
+		{ID: "c", Type: "deepseek", URL: "https://proxy.example/v1/tools/search"},
+	}
+	key, endpoint := deepSeekFetchFromProviders(providers, map[string]string{"a": "sk-a", "b": "tv", "c": "sk-c"})
+	if key != "sk-c" || endpoint != "https://proxy.example/v1/tools/fetch" {
+		t.Fatalf("key=%q endpoint=%q", key, endpoint)
+	}
+	if key, _ := deepSeekFetchFromProviders(providers[:2], map[string]string{"a": "sk-a"}); key != "" {
+		t.Fatalf("disabled provider used: %q", key)
+	}
 }

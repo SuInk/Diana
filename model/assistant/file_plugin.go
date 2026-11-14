@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/SuInk/diana/model/llm"
 	"github.com/SuInk/diana/model/netguard"
 )
 
@@ -32,6 +33,12 @@ const (
 	fileParserSettingMaxFileBytes      = "max_file_bytes"
 	fileParserSettingMaxVideoFileBytes = "max_video_file_bytes"
 	fileParserSettingMaxChars          = "max_chars"
+	// 扫描版 PDF 的识别方式：vision 是现在的本机 PDFKit + 逐页视觉模型，deepseek 先整份
+	// 交给 DeepSeek OCR，失败再退回 vision。
+	fileParserSettingScannedOCR     = "scanned_ocr_backend"
+	fileParserSettingDeepSeekAPIKey = "deepseek_api_key"
+	fileParserScannedOCRVision      = "vision"
+	fileParserScannedOCRDeepSeek    = "deepseek"
 )
 
 type FileParserPlugin struct {
@@ -40,6 +47,8 @@ type FileParserPlugin struct {
 	maxChars      int
 	pdfRenderer   pdfPageRenderer
 	trustedClient *http.Client
+	// deepSeekBaseURL 只给测试换成假服务，留空走官方地址。
+	deepSeekBaseURL string
 }
 
 type fileRef struct {
@@ -76,8 +85,8 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          fileParserPluginID,
 		Name:        "文件解析",
-		Version:     "0.3.3",
-		Description: "官方内置文件解析插件；按内容识别文本与编码（UTF-8/UTF-16/GBK），支持文本、代码、SVG、PDF、Office（docx/xlsx/pptx）、ODF、EPUB 和视频关键帧。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM。",
+		Version:     "0.3.4",
+		Description: "官方内置文件解析插件；按内容识别文本与编码（UTF-8/UTF-16/GBK），支持文本、代码、SVG、PDF、Office（docx/xlsx/pptx）、ODF、EPUB 和视频关键帧。PDF 在 macOS 使用 PDFKit/Vision，本地原生路径不可用时回退沙盒 PDFium 和视觉 LLM；扫描件也可以改用 DeepSeek OCR 整份识别。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"network:http", "message:read", "file:parse", "llm:multiple", "task:notify"},
@@ -111,7 +120,51 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 				Step:        500,
 				Unit:        "字符",
 			},
+			{
+				Key:         fileParserSettingScannedOCR,
+				Label:       "扫描版 PDF 识别方式",
+				Description: "DeepSeek OCR 整份上传识别，按页计费、通常比逐页视觉模型快；接口失败时自动退回本机识别。",
+				Type:        PluginSettingTypeSelect,
+				Default:     fileParserScannedOCRVision,
+				Options: []PluginSettingOption{
+					{Value: fileParserScannedOCRVision, Label: "本机识别 + 视觉模型逐页转写"},
+					{Value: fileParserScannedOCRDeepSeek, Label: "DeepSeek OCR 接口"},
+				},
+			},
+			{
+				Key:         fileParserSettingDeepSeekAPIKey,
+				Label:       "DeepSeek API Key",
+				Description: "选 DeepSeek OCR 时必填，和对话用的是同一个 Key。",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+			},
 		},
+	}
+}
+
+// fileParserRemoteOCR 按设置返回扫描件的外部 OCR；没选 DeepSeek 或没填 Key 时为 nil。
+func (p *FileParserPlugin) fileParserRemoteOCR(settings SettingValues) documentRemoteOCR {
+	key := strings.TrimSpace(settings.String(fileParserSettingDeepSeekAPIKey, ""))
+	if settings.String(fileParserSettingScannedOCR, fileParserScannedOCRVision) != fileParserScannedOCRDeepSeek || key == "" {
+		return nil
+	}
+	baseURL := p.deepSeekBaseURL
+	return func(ctx context.Context, document scannedPDFDocument) ([]string, error) {
+		name := document.Name
+		if !strings.HasSuffix(strings.ToLower(name), ".pdf") {
+			name += ".pdf"
+		}
+		// 不用 trustedClient：它整体 60 秒超时，DeepSeek 识别一份文件最多要 180 秒。
+		pages, err := llm.DeepSeekOCR(ctx, llm.ProviderConfig{APIKey: key, BaseURL: baseURL}, llm.DeepSeekOCRRequest{Data: document.Data, Filename: name})
+		if err != nil {
+			return nil, err
+		}
+		texts := make([]string, len(pages))
+		for i, page := range pages {
+			texts[i] = page.Text
+		}
+		return texts, nil
 	}
 }
 
@@ -166,7 +219,7 @@ func (p *FileParserPlugin) Handle(ctx context.Context, req PluginRequest) (*Plug
 		return &PluginResponse{
 			Handled: true,
 			Tasks: []PluginTask{
-				newDocumentOCRTask(p.pdfRenderer, req.Text, scannedDocuments, contextText),
+				newDocumentOCRTask(p.pdfRenderer, req.Text, scannedDocuments, contextText, p.fileParserRemoteOCR(req.Settings)),
 			},
 		}, nil
 	}

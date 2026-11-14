@@ -240,6 +240,11 @@ type SandboxedBrowserConfig struct {
 	// 失败才起本地浏览器。截图不受影响。FetchEndpoint 只给测试替换地址用。
 	FetchAPIKey   string
 	FetchEndpoint string
+	// DeepSeekFetchKey 非空时读网页还会试 DeepSeek 的 fetch 接口（见 deepseek_fetch.go）：
+	// 两个都配了先 TinyFish（自带链接和图片列表），再 DeepSeek，最后才起本地浏览器。
+	// DeepSeekFetchEndpoint 留空用官方地址。
+	DeepSeekFetchKey      string
+	DeepSeekFetchEndpoint string
 }
 
 // SandboxedBrowser starts a fresh Chrome/Chromium profile for every render.
@@ -277,15 +282,28 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 	// 渲染时间。
 	forceBrowser := renderEngineFromContext(ctx) == RenderEngineBrowser
 	var fetchErr error
-	if sourceErr == nil && !forceBrowser && strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
-		page, err := fetchTinyFishPage(ctx, b.cfg.FetchAPIKey, b.cfg.FetchEndpoint, rawURL, b.cfg.MaxTextChars)
-		if err == nil {
-			return page, nil
+	if sourceErr == nil && !forceBrowser {
+		fetchers := []func() (RenderedPage, error){}
+		if strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
+			fetchers = append(fetchers, func() (RenderedPage, error) {
+				return fetchTinyFishPage(ctx, b.cfg.FetchAPIKey, b.cfg.FetchEndpoint, rawURL, b.cfg.MaxTextChars)
+			})
 		}
-		if ctx.Err() != nil {
-			return RenderedPage{}, err
+		if strings.TrimSpace(b.cfg.DeepSeekFetchKey) != "" {
+			fetchers = append(fetchers, func() (RenderedPage, error) {
+				return fetchDeepSeekPage(ctx, b.cfg.DeepSeekFetchKey, b.cfg.DeepSeekFetchEndpoint, rawURL, b.cfg.MaxTextChars)
+			})
 		}
-		fetchErr = err
+		for _, fetch := range fetchers {
+			page, err := fetch()
+			if err == nil {
+				return page, nil
+			}
+			if ctx.Err() != nil {
+				return RenderedPage{}, err
+			}
+			fetchErr = errors.Join(fetchErr, err)
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

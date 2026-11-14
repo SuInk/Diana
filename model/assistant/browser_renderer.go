@@ -23,6 +23,10 @@ type BuiltInBrowserRenderer struct {
 	// fetchAPIKey 是搜索设置里的 TinyFish key：有它就先走 fetch 接口读网页，
 	// 失败才起本地浏览器。
 	fetchAPIKey string
+	// deepSeekFetchKey、deepSeekFetchURL 来自搜索设置里的 DeepSeek 来源：TinyFish 没配
+	// 或失败时用它读网页。
+	deepSeekFetchKey string
+	deepSeekFetchURL string
 }
 
 // NewBuiltInBrowserRenderer creates Diana's disposable-browser renderer.
@@ -41,7 +45,7 @@ func (p *BuiltInBrowserRenderer) rendererFor() agent.PageRenderer {
 	// 复用常驻进程：每页仍在独立的隐身上下文里开、用完即销毁，省掉每次 1～2 秒的
 	// Chrome 启动；进程起不来时自动退回一次性浏览器。配了 TinyFish 时先走 fetch 接口，
 	// 失败才用到这里的浏览器。
-	return agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true, FetchAPIKey: p.fetchAPIKey})
+	return agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true, FetchAPIKey: p.fetchAPIKey, DeepSeekFetchKey: p.deepSeekFetchKey, DeepSeekFetchEndpoint: p.deepSeekFetchURL})
 }
 
 // builtInBrowserRenderer 是这一轮用的内置网页读取：搜索设置里配了 TinyFish 且没停用时，
@@ -49,7 +53,37 @@ func (p *BuiltInBrowserRenderer) rendererFor() agent.PageRenderer {
 func (r *Runtime) builtInBrowserRenderer(event MessageEvent) *BuiltInBrowserRenderer {
 	renderer := NewBuiltInBrowserRenderer()
 	renderer.fetchAPIKey = r.tinyFishFetchKey(event)
+	renderer.deepSeekFetchKey, renderer.deepSeekFetchURL = r.deepSeekFetchConfig(event)
 	return renderer
+}
+
+// deepSeekFetchConfig 取搜索设置里第一个没停用、填了 Key 的 DeepSeek 来源，读网页
+// 复用它的 Key，地址由搜索地址推出。没有就返回空串，读网页不走 DeepSeek。
+func (r *Runtime) deepSeekFetchConfig(event MessageEvent) (string, string) {
+	if r == nil || r.plugins == nil {
+		return "", ""
+	}
+	_, settings, ok := r.plugins.PluginWithSettingsForGroup(webSearchPluginID, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
+	if !ok {
+		return "", ""
+	}
+	providers, keys, err := searchProviderCatalog(settings)
+	if err != nil {
+		return "", ""
+	}
+	return deepSeekFetchFromProviders(providers, keys)
+}
+
+func deepSeekFetchFromProviders(providers []SearchProvider, keys map[string]string) (string, string) {
+	for _, provider := range providers {
+		if provider.Type != "deepseek" || provider.Disabled {
+			continue
+		}
+		if key := strings.TrimSpace(keys[provider.ID]); key != "" {
+			return key, agent.DeepSeekFetchURLFor(firstNonEmpty(provider.URL, agent.DeepSeekSearchURL))
+		}
+	}
+	return "", ""
 }
 
 // tinyFishFetchKey 从搜索插件的设置里取 TinyFish key。搜索插件没开、来源列表里把

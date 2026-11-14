@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -126,7 +127,11 @@ func promptOverridesFromContext(ctx context.Context) PromptOverrides {
 	return overrides
 }
 
-func newDocumentOCRTask(renderer pdfPageRenderer, prompt string, documents []scannedPDFDocument, knownContext string) PluginTask {
+// documentRemoteOCR 是整份文件交给外部 OCR 服务识别（目前是 DeepSeek OCR），返回
+// 逐页文字。为 nil 时只走本机 PDFKit 和逐页视觉模型。
+type documentRemoteOCR func(ctx context.Context, document scannedPDFDocument) ([]string, error)
+
+func newDocumentOCRTask(renderer pdfPageRenderer, prompt string, documents []scannedPDFDocument, knownContext string, remote documentRemoteOCR) PluginTask {
 	documents = append([]scannedPDFDocument(nil), documents...)
 	for i := range documents {
 		if documents[i].Hash == "" {
@@ -142,7 +147,7 @@ func newDocumentOCRTask(renderer pdfPageRenderer, prompt string, documents []sca
 		StartedMessage: fmt.Sprintf("已启动文档 OCR 子任务：%s。页面会并行识别，期间不会阻塞群聊", name),
 		Timeout:        time.Duration(envInt("DIANA_OCR_TASK_TIMEOUT_MINUTES", int(defaultOCRTaskTimeout/time.Minute))) * time.Minute,
 		Run: func(ctx context.Context, services PluginTaskServices) (PluginTaskResult, error) {
-			return runDocumentOCRTask(ctx, services, renderer, prompt, documents, knownContext)
+			return runDocumentOCRTask(ctx, services, renderer, prompt, documents, knownContext, remote)
 		},
 	}
 }
@@ -175,7 +180,7 @@ func documentOCRTaskKey(prompt string, documents []scannedPDFDocument) string {
 	return "document_ocr:" + hex.EncodeToString(hash.Sum(nil))
 }
 
-func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, renderer pdfPageRenderer, prompt string, documents []scannedPDFDocument, knownContext string) (PluginTaskResult, error) {
+func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, renderer pdfPageRenderer, prompt string, documents []scannedPDFDocument, knownContext string, remote documentRemoteOCR) (PluginTaskResult, error) {
 	if services.Generate == nil {
 		return PluginTaskResult{}, fmt.Errorf("document OCR: LLM subagent service is unavailable")
 	}
@@ -192,6 +197,16 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 			cached.Name = firstNonEmpty(document.Name, cached.Name)
 			results = append(results, cached)
 			continue
+		}
+		if remote != nil {
+			if result, ok := remoteDocumentOCR(ctx, services, remote, document); ok {
+				results = append(results, result)
+				_ = saveDocumentOCRCache(result)
+				continue
+			}
+			if ctx.Err() != nil {
+				return PluginTaskResult{}, ctx.Err()
+			}
 		}
 		if nativeMacPDFHelperPath() != "" {
 			if services.Report != nil {
@@ -275,6 +290,47 @@ func runDocumentOCRTask(ctx context.Context, services PluginTaskServices, render
 		return PluginTaskResult{}, fmt.Errorf("document OCR final answer: %w", err)
 	}
 	return PluginTaskResult{Reply: reply}, nil
+}
+
+// remoteDocumentOCR 用外部 OCR 服务整份识别一个文件。失败时返回 false，由调用方
+// 退回本机识别和逐页视觉模型，不让一次接口故障把整个任务拖垮。服务按整份文件识别、
+// 按页计费，页数上限只截交给模型的部分。
+func remoteDocumentOCR(ctx context.Context, services PluginTaskServices, remote documentRemoteOCR, document scannedPDFDocument) (documentOCRResult, bool) {
+	if services.Report != nil {
+		services.Report(PluginTaskProgress{Phase: "ocr", Message: fmt.Sprintf("正在用 DeepSeek OCR 识别《%s》", document.Name)})
+	}
+	pages, err := remote(ctx, document)
+	if err != nil || len(pages) == 0 {
+		if err == nil {
+			err = fmt.Errorf("no pages")
+		}
+		log.Printf("diana document ocr: remote OCR for %q failed, falling back: %v", document.Name, err)
+		if services.Report != nil && ctx.Err() == nil {
+			services.Report(PluginTaskProgress{Phase: "ocr", Message: fmt.Sprintf("DeepSeek OCR 识别《%s》失败，改用本机识别", document.Name)})
+		}
+		return documentOCRResult{}, false
+	}
+	limit := envInt("DIANA_OCR_MAX_PAGES_PER_FILE", defaultOCRMaxPagesPerFile)
+	processed := min(len(pages), limit)
+	result := documentOCRResult{
+		Name:           document.Name,
+		Hash:           document.Hash,
+		TotalPages:     len(pages),
+		ProcessedPages: processed,
+		Truncated:      processed < len(pages),
+		Pages:          make([]string, processed),
+	}
+	for i := range processed {
+		text := sanitizeFileTextString(pages[i], defaultOCRPageMaxChars)
+		if text == "" {
+			text = imageOCRNoTextMarker
+		}
+		result.Pages[i] = text
+	}
+	if services.Report != nil {
+		services.Report(PluginTaskProgress{Phase: "ocr", Message: fmt.Sprintf("DeepSeek OCR 识别《%s》已完成：%d/%d 页", document.Name, processed, len(pages)), Completed: processed, Total: processed})
+	}
+	return result, true
 }
 
 func ocrPDFDocument(ctx context.Context, services PluginTaskServices, renderer pdfPageRenderer, document scannedPDFDocument, documentIndex int, documentTotal int) (documentOCRResult, error) {
