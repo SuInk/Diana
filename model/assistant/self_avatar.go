@@ -11,8 +11,8 @@ package assistant
 // 看头像、拿头像当底图的办法两个工具里都现成有，这里只是把它们指给模型。
 //
 // 头像地址不写进提示词：Telegram 这类平台没有公开链接，写了模型也会照着格式编一个。
-// 由 remote_image 的 view_avatar 和 image 的 identity_sources 按平台去取。
-const promptSelfAvatar = "人设没写长相时，你的样子就是自己的头像：被问长相先用 remote_image 的 view_avatar（avatar_source=" + avatarSourceBot + "）看一眼再说，别凭空描述；画你自己用 image 的 edit，identity_sources 填 " + avatarSourceBot + "。人设写了长相的以人设为准。"
+// 由 remote_image 的 view_avatar 和 image 的 avatars 按平台去取。
+const promptSelfAvatar = "人设没写长相时，你的样子就是自己的头像：被问长相先用 remote_image 的 view_avatar（avatar_source=" + avatarSourceBot + "）看一眼再说，别凭空描述；画你自己用 image 的 edit，avatars 填 {\"type\":\"bot\"}。人设写了长相的以人设为准。"
 
 var promptSelfAvatarSpec = registerPrompt(PromptSpec{
 	Key:     "reply.self_avatar",

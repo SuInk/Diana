@@ -252,11 +252,9 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 当前消息里的表情曾把头像顶掉。按名字指人要先查 user_id，模型曾编造 id。
 	// source_message_ids 的「候选图要点名」「重试填最初原图」分别来自 #816、#744。
 	if t.relationship.AllowImageEditing {
-		properties["identity_sources"] = toolStringArrayParam(
-			`点名头像，优先于当前消息里的图：` + avatarSourceSender + `、` + avatarSourceBot + `、` + avatarSourceGroup + `、` +
-				avatarSourceGroupPrefix + `<群号>、` + avatarSourceMemberPrefix + `<user_id>（当前平台账号，按名字指人先查出 id）`)
-		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 identity_sources，重试填最初原图所在消息`)
-		properties["source_labels"] = toolStringArrayParam(`与 identity_sources 一一对应、数量相同，逐张发送时作该图说明`)
+		properties["avatars"] = imageAvatarsParam()
+		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 avatars，重试填最初原图所在消息`)
+		properties["source_labels"] = toolStringArrayParam(`与 avatars 一一对应、数量相同，逐张发送时作该图说明`)
 		properties["source_mode"] = toolEnumParam(`多张参考图：combine 合成一张（默认）；each 逐张各出一张`, "combine", "each")
 	}
 	return toolObjectSchema([]string{"prompt"}, properties)
@@ -324,7 +322,13 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if len([]rune(prompt)) > 12000 {
 		return dianaImageToolRequest{}, fmt.Errorf("prompt 过长，请压缩到 12000 字以内")
 	}
+	// identity_sources 是意图路由那条路内部传的字符串写法，模型那边用 avatars。
 	identitySources := configToolStringSlice(input, "identity_sources")
+	avatarSources, err := imageAvatarSources(input["avatars"])
+	if err != nil {
+		return dianaImageToolRequest{}, err
+	}
+	identitySources = append(identitySources, avatarSources...)
 	sourceMessageIDs := configToolStringSlice(input, "source_message_ids")
 	explicitSources := len(identitySources) > 0 || len(sourceMessageIDs) > 0
 	if operation == "" {
@@ -354,7 +358,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 				operation = "edit"
 				break
 			}
-			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 identity_sources 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
+			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 avatars 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
 		}
 	case "edit":
 	default:
@@ -444,7 +448,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	if request.Operation == "edit" {
 		name = "图片编辑"
 		if len(request.Sources) == 0 {
-			// 显式来源（source_message_ids、identity_sources）优先，「按某人头像的样子改
+			// 显式来源（source_message_ids、avatars）优先，「按某人头像的样子改
 			// 这张图」时点名的头像跟在原图后面一起交给图片模型。都没点名才按当前消息、
 			// 引用消息去找，见 image_edit_source_plan.go。
 			sources, used, err := t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
