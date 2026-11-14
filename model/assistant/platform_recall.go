@@ -44,12 +44,13 @@ func platformSupportsRecall(platform string) bool {
 //
 // messageID 为空时取机器人最近发出的一条。给了 ID 就必须精确命中，命中的还必须是
 // 机器人自己发的——命中别人的消息一律拒绝，这是这个能力的边界，不靠提示词守。
-func (r *Runtime) resolveRecallTarget(event MessageEvent, messageID string) (MessageEvent, error) {
+func (r *Runtime) resolveRecallTarget(ctx context.Context, event MessageEvent, messageID string) (MessageEvent, error) {
 	if r == nil {
 		return MessageEvent{}, fmt.Errorf("运行时不可用")
 	}
 	session := sessionKey(event)
 	r.mu.RLock()
+	store := r.messageStore
 	history := append([]MessageEvent(nil), r.history[session]...)
 	r.mu.RUnlock()
 
@@ -60,19 +61,42 @@ func (r *Runtime) resolveRecallTarget(event MessageEvent, messageID string) (Mes
 				return history[i], nil
 			}
 		}
+		if store != nil {
+			loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			stored, err := store.ListRecentMessageEvents(loadCtx, session, 80)
+			cancel()
+			if err == nil {
+				for i := len(stored) - 1; i >= 0; i-- {
+					if recallableOutboundMessageID(stored[i]) != "" {
+						return stored[i], nil
+					}
+				}
+			}
+		}
 		return MessageEvent{}, fmt.Errorf("本次会话里没有可撤回的消息：要么我还没发过话，要么平台没有返回消息 ID")
+	}
+	checkTarget := func(candidate MessageEvent) (MessageEvent, error) {
+		if !candidate.Outbound {
+			return MessageEvent{}, fmt.Errorf("这条不是我发的，只能撤回我自己发出的消息；要撤回群成员（含当前发言者本人）发出的消息请改用 operation=\"recall_messages\"")
+		}
+		if recallableOutboundMessageID(candidate) == "" {
+			return MessageEvent{}, fmt.Errorf("这条消息没有平台消息 ID，撤不了")
+		}
+		return candidate, nil
 	}
 	for i := len(history) - 1; i >= 0; i-- {
 		if strings.TrimSpace(history[i].MessageID) != messageID {
 			continue
 		}
-		if !history[i].Outbound {
-			return MessageEvent{}, fmt.Errorf("这条不是我发的，只能撤回我自己发出的消息")
+		return checkTarget(history[i])
+	}
+	if lookup, ok := store.(MessageEventLookupStore); ok {
+		loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		found, exists, err := lookup.FindMessageEvent(loadCtx, session, messageID)
+		cancel()
+		if err == nil && exists {
+			return checkTarget(found)
 		}
-		if recallableOutboundMessageID(history[i]) == "" {
-			return MessageEvent{}, fmt.Errorf("这条消息没有平台消息 ID，撤不了")
-		}
-		return history[i], nil
 	}
 	return MessageEvent{}, fmt.Errorf("本次会话里找不到消息 %s：message_id 必须取自我自己发出的消息，不要按内容猜。%s", messageID, recallCandidateHint(history))
 }
@@ -143,12 +167,13 @@ func (t *dianaPlatformTool) runRecall(ctx context.Context, input map[string]any,
 		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, "", err)
 		return "", err
 	}
-	target, err := t.runtime.resolveRecallTarget(t.event, configToolString(input, "message_id"))
+	target, err := t.runtime.resolveRecallTarget(ctx, t.event, configToolString(input, "message_id"))
 	if err != nil {
 		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, "", err)
 		return "", err
 	}
 	messageID := recallableOutboundMessageID(target)
+	summary := summarizeRecallCandidate(target)
 
 	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -162,8 +187,9 @@ func (t *dianaPlatformTool) runRecall(ctx context.Context, input map[string]any,
 	}
 	t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, messageID, nil)
 	return t.marshal(platformOpRecall, access, map[string]any{
-		"message_id": messageID,
-		"data":       data,
-		"message":    "已撤回我自己发出的那条消息。接着把更正内容正常发出来。",
+		"message_id":       messageID,
+		"recalled_summary": summary,
+		"data":             data,
+		"message":          fmt.Sprintf("已撤回我自己发出的消息 %s（%s）。接着把更正内容正常发出来。", messageID, summary),
 	})
 }

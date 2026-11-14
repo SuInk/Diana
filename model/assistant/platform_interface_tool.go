@@ -233,6 +233,9 @@ func (t *dianaPlatformTool) Run(ctx context.Context, input map[string]any) (stri
 		access = platformActor{role: t.runtime.promptSenderGroupRole(ctx, t.event)}.access()
 	}
 	operation := t.CanonicalOperation(input)
+	if operation == platformOpRecallSelfMessages {
+		operation = platformOpRecallMessages
+	}
 	if operation == "" {
 		return "", fmt.Errorf("operation 不能为空")
 	}
@@ -638,7 +641,11 @@ func (t *dianaPlatformTool) marshal(operation, access string, extra map[string]a
 // validatePlatformTargetID 只接受账号 ID 形状的目标，昵称一律拒绝。和 reply_block
 // 同一套判断：@ 结构化信息、引用消息发送者或成员查询给出的都是 ID。
 func validatePlatformTargetID(target string) error {
-	for _, char := range target {
+	trimmed := strings.TrimSpace(target)
+	if strings.HasPrefix(strings.ToLower(trimmed), identityAliasPrefix) {
+		return fmt.Errorf("目标账号标识无法还原为真实账号，请从本轮上下文逐字复制别名或先用 identity_check 核实")
+	}
+	for _, char := range trimmed {
 		if !(char >= '0' && char <= '9' || char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char == '_' || char == '-') {
 			return fmt.Errorf("目标必须是账号 ID，不能使用昵称")
 		}
@@ -840,7 +847,35 @@ func platformAdapterErrorCategory(err error) string {
 	return ""
 }
 
+const platformOpRecallSelfMessages = "recall_self_messages"
+
 // CanonicalOperation 是 Run 实际执行的操作，按操作拦截时用同一套换算。
-func (*dianaPlatformTool) CanonicalOperation(input map[string]any) string {
-	return strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+// 普通群员在当前群明确撤回自己发出的消息（传自己的 user_id 或引用自己的消息）不涉及对他人动用群管权限，
+// 单独归为 recall_self_messages；无参或撤回他人消息仍归为 recall_messages，安全模式照常拦截。
+func (t *dianaPlatformTool) CanonicalOperation(input map[string]any) string {
+	op := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
+	if op == platformOpRecallMessages && t != nil && t.isSelfRecallMessagesInput(input) {
+		return platformOpRecallSelfMessages
+	}
+	return op
+}
+
+func (t *dianaPlatformTool) isSelfRecallMessagesInput(input map[string]any) bool {
+	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" || strings.TrimSpace(t.event.UserID) == "" {
+		return false
+	}
+	if profileID := strings.TrimSpace(configToolString(input, "profile_id")); profileID != "" && profileID != strings.TrimSpace(t.event.ProfileID) {
+		return false
+	}
+	groupID := t.resolveGroupID(input)
+	if strings.TrimSpace(groupID) != strings.TrimSpace(t.event.GroupID) {
+		return false
+	}
+	if userID := strings.TrimSpace(configToolString(input, "user_id")); userID != "" {
+		return userID == strings.TrimSpace(t.event.UserID) && strings.TrimSpace(configToolString(input, "message_id")) == ""
+	}
+	if strings.TrimSpace(configToolString(input, "message_id")) == "" && t.event.Quoted != nil {
+		return strings.TrimSpace(t.event.Quoted.UserID) == strings.TrimSpace(t.event.UserID)
+	}
+	return false
 }

@@ -613,6 +613,8 @@ type Runtime struct {
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
 	// semanticQueryBreaker 在 embedding 服务连续失败时让查询路径快速跳过，见 semantic_query_breaker.go。
 	semanticQueryBreaker semanticQueryBreaker
+	// semanticIndexBreaker 在 embedding 主机长期下线时对后台向量索引做指数退避，防止队列和日志刷屏。
+	semanticIndexBreaker semanticIndexBreaker
 	chatInLastReplyAt    map[string]time.Time
 	// groupLastReplyAt 记各群机器人最后一次发出回复的时间，见 relevance_only_window.go。
 	groupLastReplyAt map[string]time.Time
@@ -2473,6 +2475,12 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		}
 	}
 	r.abandonReplyStream(ctx, event)
+	var silentTurnFinish *modelSilentFinishError
+	if errors.As(err, &silentTurnFinish) && len(interimMessagesSent(replyCtx)) > 0 {
+		// 本轮已通过中途 send(continue=true) 真正发出过回复，收尾再调 send(silent=true)
+		// 或省掉重复正文只是正常结束本轮，不能误标成 ignored_model_silent / not_replied。
+		err = nil
+	}
 	timelineOutcome := "replied"
 	if err != nil {
 		timelineOutcome = "not_replied"
@@ -4874,9 +4882,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			log.Printf("diana model silent finish refused: %s", refused)
 			reply, err = "", nil
 		} else {
-			// 私聊的收尾计数从这一轮学到「机器人这边已经收尾了」，见
-			// notePrivateClosingSilence。
-			r.notePrivateClosingSilence(event, cfg, time.Now())
+			// 只有整轮一句话都没发过才算机器人沉默收尾；中途已经发过话时不能把私聊收尾计数顶满。
+			if len(interimMessagesSent(ctx)) == 0 {
+				r.notePrivateClosingSilence(event, cfg, time.Now())
+			}
 			// 不说话、只回一张表情包：静默收尾时填了 sticker。挑不到、到了上限或者被叫停
 			// 都不补文字，这一轮就是安静的。
 			if query, _ := finalizeSticker.take(); query != "" && r.groupStopDropsReply(event, proactiveTriggered, time.Now()) == nil {
@@ -4950,6 +4959,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 收尾把中途那句原样又写了一遍：对方已经看到了，不再发第二次。
 		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
+	if r.sessionSends.repeatsRecentSibling(ctx, event, reply, time.Now()) {
+		return "", newModelSilentFinishError("收尾和并发另一轮刚发的话重复")
+	}
 	// 回复疲劳只管正常生成的回复；插件直发的内容（链接解析之类）是对方要的东西，不走这一项。
 	ctx = withReplyFatigueAudit(ctx)
 	// maibot 的语气改写此时在后台跑着，审核拿草稿同时进行，放行后再换上改写稿。
@@ -4967,6 +4979,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	reply = adoptDeferredTone(ctx, deferredTone, event, reply)
 	if repeatsInterimMessage(ctx, reply) {
 		return "", newModelSilentFinishError("收尾和中途说过的话重复")
+	}
+	if r.sessionSends.repeatsRecentSibling(ctx, event, reply, time.Now()) {
+		return "", newModelSilentFinishError("收尾和并发另一轮刚发的话重复")
 	}
 	if !prepared.skip && prepared.need.AccountSafety && prepared.err == nil && prepared.reply == reply {
 		sendBaseCtx = withReplyAccountSafetyAudited(sendBaseCtx, reply)
@@ -8341,6 +8356,7 @@ func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageE
 	}
 	outboundTurnFromContext(ctx).recordSentForward(len(nodes))
 	r.groupOwnSends.note(event, time.Now())
+	r.sessionSends.note(event, outboundTurnID(ctx), OutgoingMessage{Text: forwardNodesSessionSummary(nodes)}, time.Now())
 	// 和逐条发送一样：确认送达（含结果不明后确认到的）才算回出去。
 	r.noteSenderTurnDelivered(ctx, event)
 	return result, nil

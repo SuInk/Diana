@@ -354,15 +354,18 @@ func TestDurableReminderRetryDelayCapsConnectionFailures(t *testing.T) {
 
 func TestDurableReminderRetryDelayNeverExceedsOwnInterval(t *testing.T) {
 	item := Reminder{ID: "retry-interval", IntervalSeconds: 600}
-	if delay := durableReminderRetryDelay(item, errors.New("HTTP 404"), 20); delay != 10*time.Minute {
+	if delay := durableReminderRetryDelay(item, errors.New("HTTP 502"), 20); delay != 10*time.Minute {
 		t.Fatalf("delay = %s, want the task's own 10m interval", delay)
+	}
+	if delay := durableReminderRetryDelay(item, errors.New("HTTP 404"), 20); delay != 6*time.Hour {
+		t.Fatalf("permanent 404 delay = %s, want 6h backoff ceiling", delay)
 	}
 	deliveryErr := &outboundSendError{Cause: errors.New("send failed")}
 	if delay := durableReminderRetryDelay(item, deliveryErr, 1); delay != 10*time.Minute {
 		t.Fatalf("delivery delay = %s, want the task's own 10m interval", delay)
 	}
 	monthly := Reminder{ID: "retry-monthly", IntervalMonths: 1, IntervalSeconds: 30 * 24 * 3600}
-	if delay := durableReminderRetryDelay(monthly, errors.New("HTTP 404"), 20); delay != 6*time.Hour {
+	if delay := durableReminderRetryDelay(monthly, errors.New("HTTP 502"), 20); delay != 6*time.Hour {
 		t.Fatalf("monthly delay = %s, want 6h", delay)
 	}
 }

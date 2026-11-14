@@ -21,15 +21,20 @@ import (
 func memberBaseReadRoots() []string {
 	if runtime.GOOS == "darwin" {
 		return []string{
-			"/usr", "/bin", "/sbin", "/System", "/Library/Frameworks",
-			"/private/etc", "/private/var/db/timezone", "/dev",
+			"/usr", "/bin", "/sbin", "/System", "/Library/Frameworks", "/Library/Fonts",
+			// 只放必要的证书、时区和基础解析表，不整片放开 /private/etc（避免暴露 /private/etc/ssh 等）与 /dev/disk*。
+			"/private/etc/ssl", "/private/etc/localtime", "/private/etc/hosts", "/private/etc/resolv.conf",
+			"/private/etc/services", "/private/etc/protocols",
+			"/private/var/db/timezone", "/private/var/select",
+			"/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/dtracehelper", "/dev/fd",
 			// Homebrew 只放程序本体和库，不放 var（数据库、服务数据）和 etc 里的其他配置。
 			"/opt/homebrew/Cellar", "/opt/homebrew/opt", "/opt/homebrew/lib", "/opt/homebrew/share",
 			"/opt/homebrew/Frameworks", "/opt/homebrew/etc/openssl@3", "/opt/homebrew/etc/ca-certificates",
+			"/opt/homebrew/etc/fonts",
 		}
 	}
 	return []string{"/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/etc/ld.so.cache", "/etc/ld.so.conf",
-		"/etc/ld.so.conf.d", "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/localtime"}
+		"/etc/ld.so.conf.d", "/etc/alternatives", "/etc/ssl", "/etc/ca-certificates", "/etc/localtime", "/etc/fonts"}
 }
 
 // memberDarwinDeniedReads 是白名单子路径里仍要挡掉的数据目录：Intel 版 Homebrew
@@ -43,11 +48,15 @@ var memberDarwinDeniedReads = []string{"/usr/local/var", "/usr/local/etc"}
 //     不来。它只泄露「某个路径存在、多大」，读不到内容，也列不出目录。
 //   - 不放 process-fork：sandbox-exec 和 sh 都是 exec 下一个程序，不需要 fork；禁掉
 //     之后 fork 炸弹和逃出进程组的孤儿进程都不存在，进程数恒为 1。
+//   - 显式拒绝高危 Mach IPC（LaunchServices/AppleEvents/剪贴板/钥匙串/后台 URL 会话）和硬链接，
+//     堵住借宿主服务拉起沙盒外进程、偷剪贴板、绕过断网和硬链接系统文件。
 //   - 不放网络，也不放 /tmp 写入，临时文件走成员目录下的 .tmp。
 func memberSandboxExecProfile(spec memberSandboxSpec) string {
 	var builder strings.Builder
-	builder.WriteString("(version 1)(deny default)")
+	builder.WriteString("(version 1)(deny default)(deny file-link)")
 	builder.WriteString("(allow process-exec)(allow signal (target self))(allow sysctl-read)(allow mach-lookup)")
+	writeSBPLDeniedMachServices(&builder, sandboxDeniedEscapeMachServices...)
+	writeSBPLDeniedMachServices(&builder, sandboxDeniedNetProxyMachServices...)
 	builder.WriteString("(allow file-read-metadata)")
 	builder.WriteString(`(allow file-read* (literal "/")`)
 	for _, path := range append(memberBaseReadRoots(), spec.readRoots...) {

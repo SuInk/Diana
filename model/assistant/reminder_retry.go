@@ -49,13 +49,31 @@ func reminderConnectionFailure(message string) bool {
 	return false
 }
 
+var reminderPermanentTargetFailureMarkers = []string{
+	"http 404", "http 410", "status 404", "status 410",
+	"code 404", "code 410", "404 not found", "410 gone",
+}
+
+func reminderPermanentTargetFailure(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	for _, marker := range reminderPermanentTargetFailureMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // reminderRetryCeiling 是这次失败最长等多久再试：连接类故障 30 分钟，其余 6 小时；
 // 周期任务再压到自己的周期以内，出了错不该比平时查得还稀。按月的周期远超上限，不参与；
-// 已判定消息或目标无效的永久拒收也不压到短轮询周期，避免 1 分钟一轮空撞平台。
+// 已判定消息或目标无效的永久拒收以及目标 404/410 均允许突破短轮询周期做指数退避，避免空撞平台或死源刷屏。
 func reminderRetryCeiling(item Reminder, cause error) time.Duration {
 	ceiling := reminderRetryMaximumDelay
 	if cause != nil && reminderConnectionFailure(cause.Error()) && !outboundDeliveryOutcomeUnconfirmed(cause) {
 		ceiling = reminderConnectionRetryMaximumDelay
+	}
+	if cause != nil && reminderPermanentTargetFailure(cause.Error()) {
+		return ceiling
 	}
 	if !isPermanentSendRejection(cause) {
 		if interval := reminderScheduleInterval(item).Fixed; interval > 0 && interval < ceiling {

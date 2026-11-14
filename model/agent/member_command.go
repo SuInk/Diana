@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 )
 
@@ -60,12 +61,44 @@ var DefaultMemberCommandLimits = MemberCommandLimits{
 	ReportFiles: 20,
 }
 
-// memberCommandPrograms 是成员能起的程序。只读的几样文本工具方便模型看看自己生成了
-// 什么；它们在沙盒里同样只看得到白名单路径。
-var memberCommandPrograms = []string{"python3", "python", "node", "ls", "cat", "head", "tail", "wc", "file"}
+// memberCommandPrograms 是成员沙盒允许运行的离线程序。全部在无 shell、禁联网、只读系统白名单、
+// 仅限个人目录写入和资源看门狗的同一套沙盒边界内运行。
+var memberCommandPrograms = []string{
+	// 脚本、数据库与计算
+	"python3", "python", "node", "sqlite3", "bc", "dc",
+	// 音视频、图像、矢量图、排版与 PDF 处理
+	"ffmpeg", "ffprobe", "sips", "magick", "convert", "identify", "dot", "qrencode",
+	"pdftoppm", "pdftotext", "pdfinfo", "qpdf", "pandoc", "chromium",
+	// JSON 与结构化文本处理
+	"jq", "awk", "sed", "grep", "rg", "sort", "uniq", "cut", "tr", "diff", "comm", "paste", "column",
+	// 归档压缩、编码与校验摘要
+	"tar", "gzip", "gunzip", "bzip2", "xz", "zip", "unzip",
+	"base64", "shasum", "sha256sum", "md5", "md5sum", "xxd", "hexdump",
+	// 基础文件检视
+	"ls", "cat", "head", "tail", "wc", "file", "stat",
+}
 
-// MemberCommandPrograms 返回成员可用的程序名，给工具描述用。
+// MemberCommandPrograms 返回成员配置允许的全部程序名。
 func MemberCommandPrograms() []string { return append([]string(nil), memberCommandPrograms...) }
+
+// AvailableMemberCommandPrograms 返回当前沙盒中实际可直接调用的成员程序列表。
+func AvailableMemberCommandPrograms() []string {
+	if detectMemberSandbox().inContainer {
+		return availableMemberContainerPrograms()
+	}
+	var installed []string
+	for _, name := range memberCommandPrograms {
+		if _, err := lookupMemberProgram(name); err == nil {
+			installed = append(installed, name)
+		}
+	}
+	if len(installed) == 0 {
+		return MemberCommandPrograms()
+	}
+	return installed
+}
+
+const memberMaxStdinBytes = 1 << 20
 
 // MemberCommandRequest 是一次成员命令。
 type MemberCommandRequest struct {
@@ -73,6 +106,11 @@ type MemberCommandRequest struct {
 	Dir     string
 	Command string
 	Args    []string
+	Stdin   string
+	// WriteFiles 在命令启动前预写入个人目录（键为相对路径，如 "script.py" 或 "data/in.json"），不计入新产物列表。
+	WriteFiles map[string][]byte
+	// Inputs 将已校验授权的输入文件按文件名放入个人目录的 inputs/ 下，供离线处理。
+	Inputs  map[string][]byte
 	Timeout time.Duration
 	Limits  MemberCommandLimits
 }
@@ -107,9 +145,11 @@ type MemberCommandResult struct {
 // memberSandbox 是成员沙盒的一种实现。
 type memberSandbox struct {
 	kind string
+	// inContainer 表示命令在隔离容器镜像内运行，程序按容器内 PATH 解析，进程环境由容器参数注入。
+	inContainer bool
 	// build 包装命令；spec.dir 已经是解析过符号链接的真实路径。
 	build func(ctx context.Context, spec memberSandboxSpec) *exec.Cmd
-	// view 是沙盒里看到的成员目录路径：bubblewrap 挂到 /work，sandbox-exec 原地不动。
+	// view 是沙盒里看到的成员目录路径：bubblewrap / docker 挂到 /work，sandbox-exec 原地不动。
 	view func(dir string) string
 }
 
@@ -133,24 +173,54 @@ var (
 	memberSandboxFn       = memberSandboxCandidate
 )
 
-// MemberCommandAvailable 报告成员沙盒能不能用。探测只做一次：与主人沙盒一样，这是
-// 进程级的环境事实。
+// MemberCommandAvailable 报告成员沙盒能不能用。
 func MemberCommandAvailable() (kind string, reason string) {
-	sandbox := detectMemberSandbox()
+	sandbox, reason := resolveActiveMemberSandbox()
 	if sandbox.available() {
 		return sandbox.kind, ""
 	}
-	return "", memberSandboxReason
+	return "", reason
 }
 
 func detectMemberSandbox() memberSandbox {
-	memberSandboxOnce.Do(func() {
-		memberSandboxDetected, memberSandboxReason = probeMemberSandbox()
-	})
-	return memberSandboxDetected
+	sandbox, _ := resolveActiveMemberSandbox()
+	return sandbox
 }
 
-func probeMemberSandbox() (memberSandbox, string) {
+func memberSandboxAutoMode() bool {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(memberSandboxBackendEnv)))
+	return mode == "" || mode == "auto"
+}
+
+func resolveActiveMemberSandbox() (memberSandbox, string) {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv(memberSandboxBackendEnv)))
+	if mode == "docker" {
+		cfg, reason := resolveMemberDockerConfig()
+		if reason != "" {
+			return memberSandbox{}, reason
+		}
+		candidate := newMemberDockerSandbox(cfg)
+		if err := memberSandboxProbe(candidate); err != nil {
+			return memberSandbox{}, fmt.Sprintf("docker 成员沙盒试运行失败（%v）", err)
+		}
+		return candidate, ""
+	}
+	if memberSandboxAutoMode() && !isRunningInsideContainer() && (!testing.Testing() || strings.TrimSpace(os.Getenv(memberSandboxImageEnv)) != "") {
+		if dockerSandbox, ok := cachedAutoMemberDockerSandbox(); ok {
+			return dockerSandbox, ""
+		}
+	}
+	return detectNativeMemberSandbox()
+}
+
+func detectNativeMemberSandbox() (memberSandbox, string) {
+	memberSandboxOnce.Do(func() {
+		memberSandboxDetected, memberSandboxReason = probeNativeMemberSandbox()
+	})
+	return memberSandboxDetected, memberSandboxReason
+}
+
+func probeNativeMemberSandbox() (memberSandbox, string) {
 	candidate, reason := memberSandboxFn()
 	if !candidate.available() {
 		return memberSandbox{}, reason
@@ -193,13 +263,20 @@ func runMemberSandboxProbe(sandbox memberSandbox) error {
 	if resolved, err := filepath.EvalSymlinks(root); err == nil {
 		root = resolved
 	}
-	command, err := lookupMemberProgram("true")
-	if err != nil {
-		return err
+	_ = os.MkdirAll(filepath.Join(root, memberTmpDirName), 0o700)
+	command := "true"
+	if !sandbox.inContainer {
+		var err error
+		command, err = lookupMemberProgram("true")
+		if err != nil {
+			return err
+		}
 	}
 	cmd := sandbox.build(ctx, memberSandboxSpec{dir: root, command: command, limits: DefaultMemberCommandLimits})
 	cmd.Dir = root
-	cmd.Env = memberCommandEnv(sandbox.view(root), command)
+	if !sandbox.inContainer {
+		cmd.Env = memberCommandEnv(sandbox.view(root), command)
+	}
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
@@ -218,12 +295,22 @@ func lockMemberDir(dir string) func() {
 }
 
 // RunMemberCommand 在成员沙盒里跑一条命令。沙盒不可用时直接报错，不退回裸跑。
+// 在 auto 模式下，若 Docker 守护进程临时停机或工作区目录未共享给容器虚拟机，自动无感回退到原生系统沙盒。
 func RunMemberCommand(ctx context.Context, req MemberCommandRequest) (MemberCommandResult, error) {
-	sandbox := detectMemberSandbox()
+	sandbox, reason := resolveActiveMemberSandbox()
 	if !sandbox.available() {
-		return MemberCommandResult{}, fmt.Errorf("成员命令沙盒不可用，不能运行：%s", memberSandboxReason)
+		return MemberCommandResult{}, fmt.Errorf("成员命令沙盒不可用，不能运行：%s", reason)
 	}
-	return runMemberCommand(ctx, sandbox, req)
+	res, err := runMemberCommand(ctx, sandbox, req)
+	if sandbox.inContainer && memberSandboxAutoMode() && (err != nil || isDockerInfraFailure(res.ExitCode, res.Output)) {
+		invalidateMemberDockerCache()
+		if native, _ := detectNativeMemberSandbox(); native.available() {
+			if _, lookupErr := lookupMemberProgram(strings.TrimSpace(req.Command)); lookupErr == nil {
+				return runMemberCommand(ctx, native, req)
+			}
+		}
+	}
+	return res, err
 }
 
 func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberCommandRequest) (MemberCommandResult, error) {
@@ -235,9 +322,22 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 	if !memberProgramAllowed(name) {
 		return MemberCommandResult{}, fmt.Errorf("群成员只能运行这些程序：%s", strings.Join(memberCommandPrograms, "、"))
 	}
-	command, err := lookupMemberProgram(name)
-	if err != nil {
-		return MemberCommandResult{}, fmt.Errorf("这台机器上没有 %s", name)
+	if len(req.Stdin) > memberMaxStdinBytes {
+		return MemberCommandResult{}, fmt.Errorf("stdin 超过上限（%d 字节）", memberMaxStdinBytes)
+	}
+	command := name
+	var readRoots []string
+	if sandbox.inContainer {
+		if strings.ContainsAny(name, `/\`) {
+			return MemberCommandResult{}, errors.New("command must be a binary name, not a path")
+		}
+	} else {
+		var err error
+		command, err = lookupMemberProgram(name)
+		if err != nil {
+			return MemberCommandResult{}, fmt.Errorf("这台机器上没有 %s", name)
+		}
+		readRoots = memberInterpreterRoots(command)
 	}
 	if !filepath.IsAbs(req.Dir) {
 		return MemberCommandResult{}, errors.New("member command dir must be absolute")
@@ -263,6 +363,12 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 		return MemberCommandResult{}, err
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
+	if err := installMemberPythonToolkit(tmp); err != nil {
+		return MemberCommandResult{}, err
+	}
+	if err := stageMemberFiles(dir, req.WriteFiles, req.Inputs, limits); err != nil {
+		return MemberCommandResult{}, err
+	}
 	before := snapshotMemberDir(dir)
 
 	timeout := req.Timeout
@@ -275,11 +381,16 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 		dir:       dir,
 		command:   command,
 		args:      req.Args,
-		readRoots: memberInterpreterRoots(command),
+		readRoots: readRoots,
 		limits:    limits,
 	})
 	cmd.Dir = dir
-	cmd.Env = memberCommandEnv(sandbox.view(dir), command)
+	if !sandbox.inContainer {
+		cmd.Env = memberCommandEnv(sandbox.view(dir), command)
+	}
+	if req.Stdin != "" {
+		cmd.Stdin = strings.NewReader(req.Stdin)
+	}
 	output := &cappedBuffer{limit: limits.OutputBytes}
 	cmd.Stdout = output
 	cmd.Stderr = output
@@ -326,6 +437,9 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 		result.ExitCode = -1
 		if exitErr != nil && exitErr.ExitCode() >= 0 {
 			result.ExitCode = exitErr.ExitCode()
+		}
+		if sandbox.inContainer && result.ExitCode == 137 && !result.TimedOut && result.LimitExceeded == "" {
+			result.LimitExceeded = "memory"
 		}
 	}
 	result.Files, result.MoreFiles = changedMemberFiles(dir, before, limits)
@@ -415,21 +529,138 @@ func memberCommandEnv(dir, command string) []string {
 	if runtime.GOOS == "darwin" {
 		path = append(path, "/opt/homebrew/bin")
 	}
+	tmpDir := filepath.Join(dir, memberTmpDirName)
 	return []string{
 		"PATH=" + strings.Join(path, ":"),
 		"HOME=" + dir,
-		"TMPDIR=" + filepath.Join(dir, memberTmpDirName),
+		"TMPDIR=" + tmpDir,
+		"PYTHONPATH=" + filepath.Join(tmpDir, memberPythonLibSubdir),
 		"LANG=C.UTF-8",
 		"LC_ALL=C.UTF-8",
 		"PYTHONDONTWRITEBYTECODE=1",
 		"PYTHONNOUSERSITE=1",
+		"NO_PROXY=*",
 	}
 }
 
 // memberTmpDirName 是成员目录里的临时目录，每次运行前后清空，里面的文件不算产物。
 const memberTmpDirName = ".tmp"
 
-// memberShellArgs 用 /bin/sh 先设好 rlimit 再 exec 目标程序。CPU 和单文件大小两个
+// stageMemberFiles 用 os.Root 把预置脚本（write_files）和授权输入文件（inputs/）安全写进成员目录。
+func stageMemberFiles(dir string, writeFiles, inputs map[string][]byte, limits MemberCommandLimits) error {
+	if len(writeFiles) == 0 && len(inputs) == 0 {
+		return nil
+	}
+	combined := make(map[string][]byte, len(writeFiles)+len(inputs))
+	for rawName, content := range writeFiles {
+		clean, err := cleanMemberStagePath(rawName)
+		if err != nil {
+			return fmt.Errorf("write_files 路径 %q 无效：%w", rawName, err)
+		}
+		combined[clean] = content
+	}
+	for rawName, content := range inputs {
+		base := filepath.Base(filepath.FromSlash(strings.TrimSpace(rawName)))
+		if base == "" || base == "." || base == ".." || strings.HasPrefix(base, ".") {
+			return fmt.Errorf("inputs 文件名 %q 无效", rawName)
+		}
+		clean, err := cleanMemberStagePath(filepath.ToSlash(filepath.Join("inputs", base)))
+		if err != nil {
+			return fmt.Errorf("inputs 路径 %q 无效：%w", rawName, err)
+		}
+		combined[clean] = content
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	keys := make([]string, 0, len(combined))
+	for k := range combined {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, rel := range keys {
+		data := combined[rel]
+		if limits.FileBytes > 0 && int64(len(data)) > limits.FileBytes {
+			return fmt.Errorf("预置文件 %s 大小 %d 字节，超过单文件上限 %d 字节", rel, len(data), limits.FileBytes)
+		}
+		localPath := filepath.FromSlash(rel)
+		if err := mkdirAllInRoot(root, filepath.Dir(localPath)); err != nil {
+			return err
+		}
+		if info, err := root.Lstat(localPath); err == nil && !info.Mode().IsRegular() {
+			return fmt.Errorf("目标路径 %s 已存在非常规文件", rel)
+		}
+		f, err := root.OpenFile(localPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+		if err != nil {
+			return err
+		}
+		_, writeErr := f.Write(data)
+		closeErr := f.Close()
+		if writeErr != nil {
+			return writeErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	usage := memberDirUsage(dir, limits)
+	if usage.bytes > limits.DirBytes || usage.files > limits.DirFiles {
+		return fmt.Errorf("写入预置文件后个人目录占用（%d 字节、%d 个文件）超过上限（%d 字节、%d 个文件）", usage.bytes, usage.files, limits.DirBytes, limits.DirFiles)
+	}
+	return nil
+}
+
+func cleanMemberStagePath(raw string) (string, error) {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(raw, `\`, "/"))
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return "", errors.New("必须是相对路径")
+	}
+	local := filepath.Clean(filepath.FromSlash(trimmed))
+	if !filepath.IsLocal(local) || local == "." {
+		return "", errors.New("不得越出个人目录")
+	}
+	slashed := filepath.ToSlash(local)
+	first, _, _ := strings.Cut(slashed, "/")
+	if first == memberTmpDirName {
+		return "", errors.New("不能写入内部临时目录 .tmp")
+	}
+	return slashed, nil
+}
+
+func mkdirAllInRoot(root *os.Root, relDir string) error {
+	clean := filepath.Clean(relDir)
+	if clean == "." || clean == "" {
+		return nil
+	}
+	parts := strings.Split(filepath.ToSlash(clean), "/")
+	cur := ""
+	for _, part := range parts {
+		if part == "" || part == "." {
+			continue
+		}
+		if cur == "" {
+			cur = part
+		} else {
+			cur = cur + "/" + part
+		}
+		local := filepath.FromSlash(cur)
+		if info, err := root.Lstat(local); err == nil {
+			if !info.IsDir() {
+				return fmt.Errorf("%s 不是目录", cur)
+			}
+			continue
+		}
+		if err := root.Mkdir(local, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// memberShellArgs 用 /bin/sh 先设好 rlimit 再 exec 目标程序。CPU、core dump 禁用和单文件大小两个
 // 平台都认；内存不用 RLIMIT_AS——V8 一启动就要预留几十 GB 地址空间，限了 node 起不来，
 // 内存交给看门狗按 RSS 管。
 func memberShellArgs(spec memberSandboxSpec) []string {
@@ -441,7 +672,7 @@ func memberShellArgs(spec memberSandboxSpec) []string {
 	if blocks <= 0 {
 		blocks = 1
 	}
-	script := fmt.Sprintf(`ulimit -t %d && ulimit -f %d && exec "$@"`, cpu, blocks)
+	script := fmt.Sprintf(`ulimit -c 0 && ulimit -t %d && ulimit -f %d && exec "$@"`, cpu, blocks)
 	return append([]string{"/bin/sh", "-c", script, "sh", spec.command}, spec.args...)
 }
 
@@ -576,7 +807,7 @@ func readMemberFiles(dir string, files []MemberCommandFile, limit int64) []Membe
 	for _, file := range files {
 		name := filepath.FromSlash(file.Name)
 		info, err := root.Lstat(name)
-		if err != nil || !info.Mode().IsRegular() || (limit > 0 && info.Size() > limit) {
+		if err != nil || !info.Mode().IsRegular() || !memberFileSingleHardlink(info) || (limit > 0 && info.Size() > limit) {
 			continue
 		}
 		f, err := root.Open(name)

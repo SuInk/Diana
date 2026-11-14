@@ -49,6 +49,7 @@ const (
 	MaxHTMLCaptureFrames = 600
 	// MaxHTMLCaptureSide 是视口任一边的上限。
 	MaxHTMLCaptureSide = 4096
+	maxCapturedPDFSize = 32 << 20
 )
 
 // htmlCaptureCSP 只放行内联脚本和样式、data/blob 资源、同源字体。
@@ -109,6 +110,27 @@ func CaptureHTMLStill(ctx context.Context, req HTMLCaptureRequest, at time.Durat
 	return shot, size, err
 }
 
+// CaptureHTMLPDF 在三层离线隔离浏览器中将页面虚拟时间推进到 at 后打印为矢量 PDF。
+// 支持 @page CSS 尺寸/页边距、双栏学术排版、内联 SVG 与 Canvas 图表，全程严禁外联与本地文件访问。
+func CaptureHTMLPDF(ctx context.Context, req HTMLCaptureRequest, at time.Duration) ([]byte, error) {
+	var pdfBytes []byte
+	err := withHTMLCaptureSessionMode(ctx, req, true, func(session *htmlCaptureSession) error {
+		const step = 16 * time.Millisecond
+		for t := time.Duration(0); t < at; t += step {
+			if err := session.seek(t); err != nil {
+				return err
+			}
+		}
+		if err := session.seek(at); err != nil {
+			return err
+		}
+		var err error
+		pdfBytes, err = session.printPDF()
+		return err
+	})
+	return pdfBytes, err
+}
+
 // CaptureHTMLFrames 从虚拟时间 0 开始按帧率逐帧截图。
 func CaptureHTMLFrames(ctx context.Context, req HTMLCaptureRequest, opts HTMLFrameOptions) (HTMLCaptureSize, error) {
 	if opts.FPS <= 0 || opts.Frames <= 0 {
@@ -154,6 +176,10 @@ type htmlCaptureSession struct {
 }
 
 func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run func(*htmlCaptureSession) error) error {
+	return withHTMLCaptureSessionMode(ctx, req, false, run)
+}
+
+func withHTMLCaptureSessionMode(ctx context.Context, req HTMLCaptureRequest, headlessPDF bool, run func(*htmlCaptureSession) error) error {
 	if strings.TrimSpace(req.HTML) == "" {
 		return errors.New("html capture: empty html")
 	}
@@ -189,7 +215,12 @@ func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run fun
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 
-	process, err := launchSandboxedChrome(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, SandboxedBrowserConfig{Window: BrowserWindowHidden, ExtraArgs: htmlCaptureExtraArgs()})
+	var process *sandboxedChromeProcess
+	if headlessPDF {
+		process, err = launchHeadlessCaptureChrome(ctx, executable, dirs)
+	} else {
+		process, err = launchSandboxedChrome(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, SandboxedBrowserConfig{Window: BrowserWindowHidden, ExtraArgs: htmlCaptureExtraArgs()})
+	}
 	if err != nil {
 		return err
 	}
@@ -197,11 +228,13 @@ func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run fun
 	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
 	var contextOptions []chromedp.ContextOption
-	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-	if err != nil {
-		return fmt.Errorf("html capture: open headed page: %w", err)
+	if !headlessPDF {
+		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+		if err != nil {
+			return fmt.Errorf("html capture: open headed page: %w", err)
+		}
+		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	}
-	contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
 	browser, cancelBrowser := chromedp.NewContext(allocator, contextOptions...)
 	defer cancelBrowser()
 
@@ -231,6 +264,42 @@ func withHTMLCaptureSession(ctx context.Context, req HTMLCaptureRequest, run fun
 		return fmt.Errorf("html capture: wait fonts: %w", err)
 	}
 	return run(&htmlCaptureSession{ctx: browser, req: req})
+}
+
+// launchHeadlessCaptureChrome 以无头模式启动三层离线隔离浏览器（用于 PDF 矢量打印）：
+//   - 不依赖图形显示或 Xvfb，无桌面的裸 Linux、Docker slim、Termux、macOS 与 Windows 均可直接运行；
+//   - 不带 --no-startup-window，自带初始 about:blank 标签页且不抢夺宿主前台焦点；
+//   - 优先使用现代 --headless=new，遇到旧版 Chromium（< 112）自动回退 --headless，并保留系统沙箱自动降级语义。
+func launchHeadlessCaptureChrome(ctx context.Context, executable string, dirs browserSandboxDirs) (*sandboxedChromeProcess, error) {
+	buildArgs := func(headlessFlag string) []string {
+		args := append([]string{headlessFlag}, sandboxedChromeBaseArgsForMode(dirs.profile, dirs.cache, dirs.crash, false)...)
+		args = append(args,
+			"--remote-debugging-address=127.0.0.1",
+			"--remote-debugging-port=0",
+			"--window-size=1280,960",
+		)
+		args = append(args, htmlCaptureExtraArgs()...)
+		return append(args, "about:blank")
+	}
+	tryFlag := func(headlessFlag string) (*sandboxedChromeProcess, error) {
+		proc, err := launchChromeProcessWithEnv(ctx, executable, dirs.root, buildArgs(headlessFlag), nil)
+		if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
+			clearChromeSingletonLocks(dirs.profile)
+			proc, err = launchChromeProcessWithEnv(ctx, executable, dirs.root, buildArgs(headlessFlag), nil)
+		}
+		return proc, err
+	}
+	proc, err := tryFlag("--headless=new")
+	if err != nil && ctx.Err() == nil && !browserSandboxFailure(err.Error()) {
+		clearChromeSingletonLocks(dirs.profile)
+		if legacyProc, legacyErr := tryFlag("--headless"); legacyErr == nil {
+			return legacyProc, nil
+		}
+	}
+	if err != nil {
+		return nil, WithBrowserSandboxHint(err)
+	}
+	return proc, nil
 }
 
 // htmlCaptureChromeArgs 在沙盒底座上再加断网参数。
@@ -366,6 +435,25 @@ func (s *htmlCaptureSession) capture(jpeg bool) ([]byte, error) {
 	}
 	if len(data) > maxScreenshotBytes {
 		return nil, errors.New("html capture: frame exceeds size limit")
+	}
+	return data, nil
+}
+
+func (s *htmlCaptureSession) printPDF() ([]byte, error) {
+	var data []byte
+	err := chromedp.Run(s.ctx, chromedp.ActionFunc(func(actionCtx context.Context) error {
+		var err error
+		data, _, err = cdppage.PrintToPDF().
+			WithPrintBackground(true).
+			WithPreferCSSPageSize(true).
+			Do(actionCtx)
+		return err
+	}))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxCapturedPDFSize {
+		return nil, errors.New("html capture: pdf exceeds size limit")
 	}
 	return data, nil
 }

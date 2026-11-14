@@ -1225,6 +1225,9 @@ func repositoryPublishEventHasAccess(event MessageEvent, settings SettingValues)
 // 拿到的也只是 Run 本来就放开的那些（公开仓库可读，#576），写入照样按白名单拒。
 // 按人登记会让同一个群里的工具定义随发言者增减，整段前缀缓存跟着作废。
 func repositoryPublishToolExposed(event MessageEvent, settings SettingValues) bool {
+	if repositoryPublishHasPublicReadCredential(settings) {
+		return true
+	}
 	if repositoryPublishEventHasAccess(event, settings) {
 		return true
 	}
@@ -1241,6 +1244,27 @@ func repositoryPublishToolExposed(event MessageEvent, settings SettingValues) bo
 	}
 	managerUsers, _, _, _, err := repositoryPublishEffectiveAccess(settings, legacyUsers, legacyGroups)
 	return err == nil && len(managerUsers) > 0
+}
+
+func repositoryPublishHasPublicReadCredential(settings SettingValues) bool {
+	if strings.TrimSpace(settings.String(repositoryPublishSettingToken, "")) != "" {
+		return true
+	}
+	return repositoryPublishAuthMode(settings) != repositoryPublishAuthToken
+}
+
+func (r *Runtime) repositoryPublishToolExposedForEvent(event MessageEvent, settings SettingValues) bool {
+	if repositoryPublishToolExposed(event, settings) {
+		return true
+	}
+	if r != nil && r.plugins != nil {
+		if _, watchSettings, enabled := r.pluginWithSettingsForEvent(repositoryWatchPluginID, event); enabled {
+			if strings.TrimSpace(watchSettings.String(repositoryWatchSettingToken, "")) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // repositoryPublishGroupApprovers 解析「群 ID = 用户 ID, 用户 ID」。

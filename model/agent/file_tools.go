@@ -323,7 +323,8 @@ type GrepTool struct {
 	protected protectedFiles
 }
 
-func (t *GrepTool) Name() string { return "grep" }
+func (t *GrepTool) Name() string           { return "grep" }
+func (t *GrepTool) CodeModeParallel() bool { return true }
 
 func (t *GrepTool) Description() string {
 	return `在工作目录内按内容检索文件，返回「路径:行号: 内容」。定位代码或配置比逐个 read_file 快。`
@@ -452,7 +453,8 @@ type FindFilesTool struct {
 	protected protectedFiles
 }
 
-func (t *FindFilesTool) Name() string { return "find_files" }
+func (t *FindFilesTool) Name() string           { return "find_files" }
+func (t *FindFilesTool) CodeModeParallel() bool { return true }
 
 func (t *FindFilesTool) Description() string {
 	return `在工作目录内按通配符找文件，返回相对路径。`

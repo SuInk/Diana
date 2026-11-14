@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 )
 
 // 一轮里中途说一句：先说「我去查一下」，接着真的去查，查完再给结果；长任务每做完
@@ -184,6 +185,18 @@ func (t *dianaInterimMessageTool) run(ctx context.Context, input map[string]any,
 		}
 	}
 	ledger.mu.Unlock()
+	if t.runtime != nil && t.runtime.sessionSends.repeatsRecentSibling(ctx, t.event, text, time.Now()) {
+		ledger.mu.Lock()
+		ledger.sent = append(ledger.sent, text)
+		remaining := interimMessageMaxPerTurn - len(ledger.sent)
+		ledger.mu.Unlock()
+		return marshalInterimMessageResult(interimMessageResult{
+			OK:        true,
+			Sent:      text,
+			Remaining: remaining,
+			Message:   "同一会话里你并发的另一条回复刚刚已经发出了完全相同的话，已自动跳过重复发送。若没有其他新内容，直接调 send(silent=true) 结束本轮。",
+		})
+	}
 	var prepared preparedReplyAudit
 	if audited {
 		ledger.mu.Lock()

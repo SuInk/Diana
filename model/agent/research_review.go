@@ -25,11 +25,12 @@ import (
 const (
 	researchReviewEvidenceBudget = 24000
 	researchReviewStepBudget     = 6000
+	researchReviewContextBudget  = 4000
 )
 
-const researchReviewPrompt = `你在核对一条群聊机器人回复草稿的具体细节有没有出处。输入是对方的问题、本轮工具读到的内容（搜索候选和网页正文）以及草稿。
-找出草稿里在工具内容中找不到原文支持、却写成确定事实的具体细节：版本号、日期、数字、价格、规格，更新或功能清单里的条目，出处、归属、谁基于谁。
-不算问题的：常识背景；对问题的复述；草稿已经说明是印象、推测、没查实的部分；工具内容里能找到的内容（意思一致即可，不要求逐字）。
+const researchReviewPrompt = `你在核对一条群聊机器人回复草稿的具体细节有没有出处。输入是对方的问题与近期上文、本轮工具读到的内容（搜索候选、网页正文及其他工具结果）以及草稿。
+找出草稿里在问题上文和工具内容中都找不到原文支持、却写成确定事实的具体细节：版本号、日期、数字、价格、规格，更新或功能清单里的条目，出处、归属、谁基于谁。
+不算问题的：常识背景；对问题、上文或图片描述已有信息的复述与归纳；草稿已经说明是印象、推测、没查实的部分；工具内容里能找到的内容（意思一致即可，不要求逐字）。
 只输出 JSON：{"unsupported":["细节1","细节2"]}，没有就输出 {"unsupported":[]}。每条用草稿里的原词，最多 8 条。`
 
 // researchedThisRun 报告这一轮有没有成功调用过联网检索或网页读取。
@@ -49,10 +50,7 @@ func (r *Runner) reviewUnsupportedDetails(ctx context.Context, history []llm.Mes
 	if draft == "" || evidence == "" {
 		return ""
 	}
-	question := ""
-	if len(history) > 0 {
-		question = history[len(history)-1].Content
-	}
+	question := researchReviewQuestionContext(history)
 	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: researchReviewPrompt},
 		{Role: llm.RoleUser, Content: "【问题】\n" + question + "\n\n【工具内容】\n" + evidence + "\n\n【草稿】\n" + draft},
@@ -61,6 +59,41 @@ func (r *Runner) reviewUnsupportedDetails(ctx context.Context, history []llm.Mes
 		return ""
 	}
 	return parseUnsupportedDetails(resp.Text)
+}
+
+func researchReviewQuestionContext(history []llm.Message) string {
+	if len(history) == 0 {
+		return ""
+	}
+	var chunks []string
+	used := 0
+	for i := len(history) - 1; i >= 0 && len(chunks) < 6; i-- {
+		if history[i].Role != llm.RoleUser && i != len(history)-1 {
+			continue
+		}
+		content := strings.TrimSpace(history[i].Content)
+		if content == "" {
+			continue
+		}
+		runes := []rune(content)
+		if len(chunks) > 0 && used+len(runes) > researchReviewContextBudget {
+			remain := researchReviewContextBudget - used
+			if remain > 120 {
+				chunks = append(chunks, "…"+string(runes[len(runes)-remain:]))
+			}
+			break
+		}
+		if len(chunks) == 0 && len(runes) > researchReviewContextBudget {
+			content = string(runes[len(runes)-researchReviewContextBudget:])
+			runes = []rune(content)
+		}
+		chunks = append(chunks, content)
+		used += len(runes)
+	}
+	for left, right := 0, len(chunks)-1; left < right; left, right = left+1, right-1 {
+		chunks[left], chunks[right] = chunks[right], chunks[left]
+	}
+	return strings.Join(chunks, "\n")
 }
 
 func parseUnsupportedDetails(text string) string {
@@ -105,8 +138,10 @@ func researchReviewEvidence(steps []Step) string {
 			text = webSearchEvidenceText(step.Output)
 		case browserRenderToolName:
 			text = browserRenderEvidenceText(step.Output)
-		default:
+		case "send":
 			continue
+		default:
+			text = step.Output
 		}
 		if text = strings.TrimSpace(text); text == "" {
 			continue

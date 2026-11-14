@@ -104,3 +104,74 @@ func (r *Runtime) embedQueryText(ctx context.Context, cfg llm.ProviderConfig, qu
 	}
 	return vectors[0], nil
 }
+
+const (
+	semanticIndexBreakerThreshold   = 2
+	semanticIndexBreakerInitialWait = time.Minute
+	semanticIndexBreakerMaxWait     = 15 * time.Minute
+)
+
+// semanticIndexBreaker 用于后台向量索引队列：embedding 主机长期下线时按指数退避
+// （1m -> 2m -> 4m -> 8m -> 15m）暂停新文本入队与请求，避免每批等满 20 秒超时并刷屏告警。
+// 编辑消息的 invalidate 墓碑不走此熔断，照常入队删除旧向量。
+type semanticIndexBreaker struct {
+	mu     sync.Mutex
+	states map[string]*semanticQueryBreakerState
+}
+
+func semanticIndexBreakerKey(cfg llm.ProviderConfig) string {
+	return string(cfg.Provider) + "\x00" + cfg.BaseURL + "\x00" + cfg.Model
+}
+
+func (b *semanticIndexBreaker) isCoolingDown(key string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.states[key]
+	if state == nil || state.failures < semanticIndexBreakerThreshold {
+		return false
+	}
+	return now.Before(state.openUntil) || state.probing
+}
+
+func (b *semanticIndexBreaker) allow(key string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.states[key]
+	if state == nil || state.failures < semanticIndexBreakerThreshold {
+		return true
+	}
+	if now.Before(state.openUntil) || state.probing {
+		return false
+	}
+	state.probing = true
+	return true
+}
+
+func (b *semanticIndexBreaker) record(key string, ok bool, now time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if ok {
+		delete(b.states, key)
+		return
+	}
+	if b.states == nil {
+		b.states = make(map[string]*semanticQueryBreakerState)
+	}
+	state := b.states[key]
+	if state == nil {
+		state = &semanticQueryBreakerState{}
+		b.states[key] = state
+	}
+	state.failures++
+	state.probing = false
+	if state.failures >= semanticIndexBreakerThreshold {
+		wait := semanticIndexBreakerInitialWait
+		for step := semanticIndexBreakerThreshold; step < state.failures && wait < semanticIndexBreakerMaxWait; step++ {
+			wait *= 2
+			if wait > semanticIndexBreakerMaxWait {
+				wait = semanticIndexBreakerMaxWait
+			}
+		}
+		state.openUntil = now.Add(wait)
+	}
+}

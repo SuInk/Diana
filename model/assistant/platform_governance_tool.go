@@ -106,8 +106,8 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		// 处置的是发言者本人的发言，不涉及他人；仅当目标经历史/引用核实确系本人时放行。
 		if operation == platformOpRecallMessages && actor.role != "" && !GroupRoleCanConfigure(actor.role) &&
 			strings.TrimSpace(groupID) == strings.TrimSpace(t.event.GroupID) {
-			if candidate, reqErr := t.governanceRequest(input, operation); reqErr == nil &&
-				candidate.target != "" && candidate.target == strings.TrimSpace(t.event.UserID) {
+			if candidate, reqErr := t.governanceRequest(ctx, input, operation); reqErr == nil &&
+				t.isSelfRecallMessagesTarget(groupID, candidate.target) {
 				actor.selfRecall = true
 				authErr = nil
 				preParsedReq = &candidate
@@ -135,7 +135,7 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		req = *preParsedReq
 	} else {
 		var err error
-		req, err = t.governanceRequest(input, operation)
+		req, err = t.governanceRequest(ctx, input, operation)
 		if err != nil {
 			return refuse(req.target, err)
 		}
@@ -188,10 +188,25 @@ type governanceRequest struct {
 	count     int
 	// messageIDs 是 recall_messages 解析出来的待撤回列表，新的在前。
 	messageIDs []string
+	events     map[string]MessageEvent
+}
+
+func (t *dianaPlatformTool) isSelfRecallMessagesTarget(groupID, target string) bool {
+	sender := strings.TrimSpace(t.event.UserID)
+	target = strings.TrimSpace(target)
+	if sender == "" || target == "" || sender != target {
+		return false
+	}
+	if strings.TrimSpace(groupID) != strings.TrimSpace(t.event.GroupID) {
+		return false
+	}
+	base := t.runtime.effectiveConfigForEvent(t.event)
+	selfID := firstNonEmpty(strings.TrimSpace(t.event.SelfID), strings.TrimSpace(base.BotAccount))
+	return selfID == "" || target != selfID
 }
 
 // governanceRequest 按操作校验参数。这一步不碰平台接口，参数不对就在门口拒掉。
-func (t *dianaPlatformTool) governanceRequest(input map[string]any, operation string) (governanceRequest, error) {
+func (t *dianaPlatformTool) governanceRequest(ctx context.Context, input map[string]any, operation string) (governanceRequest, error) {
 	var req governanceRequest
 	switch operation {
 	case platformOpAnnounce:
@@ -229,7 +244,7 @@ func (t *dianaPlatformTool) governanceRequest(input map[string]any, operation st
 			return req, fmt.Errorf("%s 不能超过 %d 字", field, limit)
 		}
 	case platformOpRecallMessages:
-		return t.recallMessagesRequest(input)
+		return t.recallMessagesRequest(ctx, input)
 	case platformOpSetGroupName:
 		req.text = strings.TrimSpace(configToolString(input, "name"))
 		if req.text == "" {
@@ -371,15 +386,19 @@ func governanceSuccessMessage(operation string, req governanceRequest) string {
 //     一律拒绝，模型编一个数字就可能删掉别人正常的话。
 //   - 给了 user_id：取这个人在本会话最近的 count 条。
 //   - 都没给：撤回当前被引用的那条。
-func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governanceRequest, error) {
-	var req governanceRequest
+func (t *dianaPlatformTool) recallMessagesRequest(ctx context.Context, input map[string]any) (governanceRequest, error) {
+	req := governanceRequest{events: map[string]MessageEvent{}}
 	messageID := strings.TrimSpace(configToolString(input, "message_id"))
 	target := strings.TrimSpace(configToolString(input, "user_id"))
 	quoted := ""
 	if t.event.Quoted != nil {
 		quoted = strings.TrimSpace(t.event.Quoted.MessageID)
 	}
-	history := t.runtime.sessionHistorySnapshot(t.event)
+	session := sessionKey(t.event)
+	t.runtime.mu.RLock()
+	store := t.runtime.messageStore
+	history := append([]MessageEvent(nil), t.runtime.history[session]...)
+	t.runtime.mu.RUnlock()
 
 	if messageID == "" && target == "" {
 		if quoted == "" {
@@ -398,6 +417,21 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 				}
 				req.target = strings.TrimSpace(history[i].UserID)
 				req.messageIDs = []string{messageID}
+				req.events[messageID] = history[i]
+				return req, nil
+			}
+		}
+		if lookup, ok := store.(MessageEventLookupStore); ok {
+			loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			found, exists, err := lookup.FindMessageEvent(loadCtx, session, messageID)
+			cancel()
+			if err == nil && exists && !strings.HasPrefix(messageID, localOutboundIDPrefix) {
+				if found.Outbound || (selfID != "" && strings.TrimSpace(found.UserID) == selfID) {
+					return req, fmt.Errorf("那是我自己发出的消息，请改用 operation=\"recall\" 撤回")
+				}
+				req.target = strings.TrimSpace(found.UserID)
+				req.messageIDs = []string{messageID}
+				req.events[messageID] = found
 				return req, nil
 			}
 		}
@@ -407,6 +441,14 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 			}
 			req.target = strings.TrimSpace(t.event.Quoted.UserID)
 			req.messageIDs = []string{messageID}
+			req.events[messageID] = MessageEvent{
+				ProfileID:  t.event.ProfileID,
+				MessageID:  messageID,
+				UserID:     t.event.Quoted.UserID,
+				SenderName: t.event.Quoted.SenderName,
+				RawMessage: t.event.Quoted.RawMessage,
+				Segments:   t.event.Quoted.Segments,
+			}
 			return req, nil
 		}
 		return req, fmt.Errorf("本次会话里找不到消息 %s：message_id 必须取自历史里的消息标识，不要按内容猜", messageID)
@@ -421,20 +463,80 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 		req.count = defaultRecallMessagesCount
 	}
 	req.count = min(req.count, maxRecallMessagesCount)
-	for i := len(history) - 1; i >= 0 && len(req.messageIDs) < req.count; i-- {
-		event := history[i]
+	currentCommandID := strings.TrimSpace(t.event.MessageID)
+	seen := map[string]bool{}
+	collect := func(event MessageEvent) {
+		if len(req.messageIDs) >= req.count {
+			return
+		}
 		id := strings.TrimSpace(event.MessageID)
-		if event.Outbound || id == "" || strings.HasPrefix(id, localOutboundIDPrefix) || isNarrationHistoryEvent(event) {
-			continue
+		if event.Outbound || id == "" || seen[id] || strings.HasPrefix(id, localOutboundIDPrefix) || isNarrationHistoryEvent(event) {
+			return
+		}
+		// 按 user_id 扫最近消息时跳过当前这条「帮我撤回」指令本身，避免把请求消息自己撤了而漏掉前一条目标消息。
+		if currentCommandID != "" && id == currentCommandID {
+			return
 		}
 		if strings.TrimSpace(event.UserID) == target {
+			seen[id] = true
 			req.messageIDs = append(req.messageIDs, id)
+			req.events[id] = event
+		}
+	}
+	for i := len(history) - 1; i >= 0 && len(req.messageIDs) < req.count; i-- {
+		collect(history[i])
+	}
+	if len(req.messageIDs) < req.count && store != nil {
+		if searchStore, ok := store.(MessageHistorySearchStore); ok {
+			loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			found, _, err := searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
+				Session:       session,
+				SenderUserIDs: []string{target},
+				Sort:          "newest",
+				Limit:         req.count + 4,
+			})
+			cancel()
+			if err == nil {
+				for _, item := range found {
+					collect(item)
+				}
+			}
+		}
+		if len(req.messageIDs) < req.count {
+			loadCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			stored, err := store.ListRecentMessageEvents(loadCtx, session, max(200, req.count*6))
+			cancel()
+			if err == nil {
+				for i := len(stored) - 1; i >= 0 && len(req.messageIDs) < req.count; i-- {
+					collect(stored[i])
+				}
+			}
 		}
 	}
 	if len(req.messageIDs) == 0 {
 		return req, fmt.Errorf("本次会话里没有这个账号可撤回的消息")
 	}
 	return req, nil
+}
+
+func summarizeRecallMessage(event MessageEvent) string {
+	text := strings.TrimSpace(DisplaySegmentsText(event.Segments, nil, nil))
+	if text == "" {
+		text = strings.TrimSpace(PlainText(event.Segments))
+	}
+	if text == "" {
+		text = strings.TrimSpace(event.RawMessage)
+	}
+	text = strings.Join(strings.Fields(text), " ")
+	const maxRunes = 24
+	runes := []rune(text)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	if text == "" {
+		return "无文本内容"
+	}
+	return text
 }
 
 // runRecallMessages 逐条撤回。单条失败（超时限、已被别人撤掉）不影响其余的，
@@ -447,17 +549,43 @@ func (t *dianaPlatformTool) runRecallMessages(ctx context.Context, req governanc
 		return "", err
 	}
 	t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecallMessages, access, owner, req.target, nil)
-	message := fmt.Sprintf("已撤回 %d 条消息。", len(recalled))
+	recalledItems := make([]map[string]any, 0, len(recalled))
+	var summaryParts []string
+	for _, id := range recalled {
+		summary := ""
+		if ev, ok := req.events[id]; ok {
+			summary = summarizeRecallMessage(ev)
+		}
+		item := map[string]any{"message_id": id}
+		if summary != "" {
+			item["summary"] = summary
+			if len(summaryParts) < 5 {
+				summaryParts = append(summaryParts, fmt.Sprintf("%s（%s）", id, summary))
+			}
+		} else if len(summaryParts) < 5 {
+			summaryParts = append(summaryParts, id)
+		}
+		recalledItems = append(recalledItems, item)
+	}
+	detailSuffix := ""
+	if len(summaryParts) > 0 {
+		detailSuffix = "：" + strings.Join(summaryParts, "、")
+		if len(recalled) > len(summaryParts) {
+			detailSuffix += " 等"
+		}
+	}
+	message := fmt.Sprintf("已撤回 %d 条消息%s。", len(recalled), detailSuffix)
 	if len(failed) > 0 {
-		message = fmt.Sprintf("已撤回 %d 条，另有 %d 条没撤掉（可能超过平台时限或已被撤回）。", len(recalled), len(failed))
+		message = fmt.Sprintf("已撤回 %d 条%s，另有 %d 条没撤掉（可能超过平台时限或已被撤回）。", len(recalled), detailSuffix, len(failed))
 	}
 	return t.marshal(platformOpRecallMessages, access, map[string]any{
-		"user_id":     req.target,
-		"recalled":    recalled,
-		"failed":      len(failed),
-		"message":     message,
-		"group_id":    t.event.GroupID,
-		"total_found": len(req.messageIDs),
+		"user_id":        req.target,
+		"recalled":       recalled,
+		"recalled_items": recalledItems,
+		"failed":         len(failed),
+		"message":        message,
+		"group_id":       t.event.GroupID,
+		"total_found":    len(req.messageIDs),
 	})
 }
 

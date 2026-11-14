@@ -482,7 +482,7 @@ func (r *Runtime) allowedAgentToolNamesForEvent(event MessageEvent, relationship
 	}
 	_, settings, enabled := r.pluginWithSettingsForEvent(repositoryPublishPluginID, event)
 	// 按群放行、不按人：没授权的人由工具的 Run 拦下，见 repositoryPublishToolExposed。
-	if enabled && repositoryPublishToolExposed(event, settings) {
+	if enabled && r.repositoryPublishToolExposedForEvent(event, settings) {
 		allowed[dianaGitHubToolName] = true
 	}
 	// 管的是仓库订阅，不往仓库里写，所以只认管理人员名单，不看 Issue 写入白名单。

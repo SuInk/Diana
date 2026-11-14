@@ -28,6 +28,11 @@ const codeModeToolName = CodeModeToolName
 // indices and blew the 32 KiB output cap). Headroom stays under the 1 MiB frame.
 const codeModeChildResultBytes = 512 * 1024
 
+// CodeModeParallelTool 标记无状态、纯只读的工具允许在 codemode 脚本内（如 Promise.all）并发执行。
+type CodeModeParallelTool interface {
+	CodeModeParallel() bool
+}
+
 type codeModeTool struct {
 	runtime codemode.Runtime
 }
@@ -118,9 +123,13 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 	names := r.registry.PresentedNames()
 	// 脚本里 ALL_TOOLS 和「tools.X 不存在」的提示用得上签名：和按需目录同一份。
 	descriptions := make(map[string]string, len(names)+1)
+	parallelTools := []string{WebSearchToolName, browserRenderToolName}
 	for _, name := range names {
 		if child, ok := r.registry.Get(name); ok {
 			descriptions[name] = name + toolSignature(child) + ": " + catalogLineDescription(child)
+			if p, ok := child.(CodeModeParallelTool); ok && p.CodeModeParallel() && name != WebSearchToolName && name != browserRenderToolName {
+				parallelTools = append(parallelTools, name)
+			}
 		}
 	}
 	if r.loader != nil {
@@ -131,7 +140,7 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 	stepsBefore := len(*steps)
 	cacheHits := 0
 	fresh, _ := input["fresh"].(bool)
-	result, err := tool.runtime.Execute(ctx, codemode.Request{Code: input["code"].(string), Store: r.codeModeStore, Tools: names, Descriptions: descriptions, ParallelTools: []string{WebSearchToolName, browserRenderToolName}, MaxCalls: 32, Timeout: 120 * time.Second}, func(callCtx context.Context, name string, raw json.RawMessage) (any, error) {
+	result, err := tool.runtime.Execute(ctx, codemode.Request{Code: input["code"].(string), Store: r.codeModeStore, Tools: names, Descriptions: descriptions, ParallelTools: parallelTools, MaxCalls: 32, Timeout: 120 * time.Second}, func(callCtx context.Context, name string, raw json.RawMessage) (any, error) {
 		mu.Lock()
 		action := llmAction{Action: "tool", Tool: name}
 		if err := json.Unmarshal(raw, &action.Input); err != nil {

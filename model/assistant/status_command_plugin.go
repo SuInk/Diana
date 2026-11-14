@@ -102,11 +102,7 @@ func (p *StatusCommandPlugin) takeCooldown(event MessageEvent, now time.Time, co
 	if cooldown > maximumStatusCommandCooldown {
 		cooldown = maximumStatusCommandCooldown
 	}
-	key := strings.Join([]string{
-		strings.TrimSpace(event.Platform),
-		firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID)),
-		sessionKey(event),
-	}, "\x00")
+	key := statusCommandCooldownKey(event)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.lastReply == nil {
@@ -123,6 +119,22 @@ func (p *StatusCommandPlugin) takeCooldown(event MessageEvent, now time.Time, co
 		}
 	}
 	return true
+}
+
+func statusCommandCooldownKey(event MessageEvent) string {
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
+		// 同进程多个机器人同处一群时，一条 #diana 探活共享同一冷却窗口，避免各吐一张一模一样的进程状态卡。
+		return strings.Join([]string{
+			strings.TrimSpace(event.Platform),
+			"group",
+			strings.TrimSpace(event.GroupID),
+		}, "\x00")
+	}
+	return strings.Join([]string{
+		strings.TrimSpace(event.Platform),
+		firstNonEmpty(strings.TrimSpace(event.ProfileID), strings.TrimSpace(event.SelfID)),
+		sessionKey(event),
+	}, "\x00")
 }
 
 // isStatusCommand 判断整条消息是不是这个口令。

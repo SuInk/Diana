@@ -240,6 +240,8 @@ func (t *dianaChatHistoryTool) Name() string {
 	return dianaChatHistoryToolName
 }
 
+func (t *dianaChatHistoryTool) CodeModeParallel() bool { return true }
+
 func (t *dianaChatHistoryTool) Description() string {
 	// 照参考 bot（mizorewww/pi-extension-telegram-agent 的 tg_messages）写：一个工具、
 	// 筛选条件叠加取交集、给可照抄的参数示例。以前要先选 operation，一次只能做一件事，
@@ -250,7 +252,7 @@ func (t *dianaChatHistoryTool) Description() string {
 	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到；最近几十条已经在上下文里，不用再读最近消息。` +
 		`查消息不用选 operation：sender_user_id/sender_name、query、from_time/through_time 或 hours/days、ids 这些条件叠加取交集，一次写全。` +
 		`例：某人说过的话 {"sender_name":"小明","limit":20}；某人某段时间提到某词 {"sender_user_id":"…","query":"部署","days":3,"order":"oldest"}；跨群加 scope=all_groups；` +
-		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}。` +
+		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}；从某条消息读到现在 {"from_message_id":"…"}。` +
 		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充；撤回用 recalls。`
 }
 
@@ -259,15 +261,17 @@ func (t *dianaChatHistoryTool) Description() string {
 // Guidance 里给出，这里不重复。
 func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"operation": toolEnumParam("可省略：给了筛选条件就是按条件查，什么都不给读最近消息。overview 长时段抽样供总结；range 按时段逐条；recalls 近24h撤回",
+		"operation": toolEnumParam("可省略：给了筛选条件就是按条件查，给了 from_message_id/through_message_id 按消息范围读，什么都不给读最近消息。overview 长时段抽样供总结；range 按时段逐条；recalls 近24h撤回",
 			"around", "recent", "overview", "range", "search", "recalls", "speakers", "reactions"),
-		"ids":            toolStringArrayParam("要读原文的消息 ID，一次可给多条（最多 20），按给定顺序返回"),
-		"message_id":     toolStringParam("around 的中心消息，默认当前；reactions 查单条"),
-		"before":         toolIntParam("around：锚点前条数", 0, maximumChatHistoryAroundRadius),
-		"after":          toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
-		"query":          toolStringParam("关键词；和发送者、时间叠加取交集，设了发送者时可省略"),
-		"sender_user_id": toolStringParam(`只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
-		"sender_name":    toolStringParam("不知道账号时按昵称、旧昵称或 @用户名找人，结果的 resolved_senders 列出对应账号"),
+		"ids":                toolStringArrayParam("要读原文的消息 ID，一次可给多条（最多 20），按给定顺序返回"),
+		"message_id":         toolStringParam("around 的中心消息，默认当前；reactions 查单条"),
+		"from_message_id":    toolStringParam("起始消息 ID（含该条），适合『从这条消息开始总结/读取』"),
+		"through_message_id": toolStringParam("结束消息 ID（含该条），默认到当前消息"),
+		"before":             toolIntParam("around：锚点前条数", 0, maximumChatHistoryAroundRadius),
+		"after":              toolIntParam("around：锚点后条数", 0, maximumChatHistoryAroundRadius),
+		"query":              toolStringParam("关键词；和发送者、时间叠加取交集，设了发送者时可省略"),
+		"sender_user_id":     toolStringParam(`只看这个账号发的消息，填账号标识；"self" 表示当前发言者`),
+		"sender_name":        toolStringParam("不知道账号时按昵称、旧昵称或 @用户名找人，结果的 resolved_senders 列出对应账号"),
 		// relevance 曾被拿来断言「最早一条」，见 #457。
 		"order":        toolEnumParam("排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
@@ -298,6 +302,11 @@ func chatHistoryFiltered(input map[string]any) bool {
 	return scope != "" && scope != "current"
 }
 
+func hasMessageIDRange(input map[string]any) bool {
+	return strings.TrimSpace(configToolString(input, "from_message_id")) != "" ||
+		strings.TrimSpace(configToolString(input, "through_message_id")) != ""
+}
+
 func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana chat history: runtime is not configured")
@@ -309,6 +318,8 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 	}
 	if operation == "" {
 		switch {
+		case hasMessageIDRange(input) && !chatHistoryFiltered(input):
+			operation = "range"
 		case chatHistoryFiltered(input):
 			operation = "search"
 		case t.event.Quoted != nil && strings.TrimSpace(t.event.Quoted.MessageID) != "":
@@ -796,6 +807,26 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 // 「总结昨天 12 点到 17 点」这类请求时没有关键词可用，需要的是整段记录。
 func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
 	fromTime, throughTime := t.resolveWindow(input)
+	fromMsgID := strings.TrimSpace(configToolString(input, "from_message_id"))
+	throughMsgID := strings.TrimSpace(configToolString(input, "through_message_id"))
+	if fromMsgID != "" {
+		anchor, found := t.runtime.findSemanticReferenceEvent(ctx, t.event, fromMsgID)
+		if !found {
+			return dianaChatHistoryResult{}, fmt.Errorf("当前会话中找不到起始消息 %s（可能早于入库时间或属于其他会话）", fromMsgID)
+		}
+		if anchor.Time > 0 {
+			fromTime = anchor.Time
+		}
+	}
+	if throughMsgID != "" {
+		anchor, found := t.runtime.findSemanticReferenceEvent(ctx, t.event, throughMsgID)
+		if !found {
+			return dianaChatHistoryResult{}, fmt.Errorf("当前会话中找不到结束消息 %s（可能早于入库时间或属于其他会话）", throughMsgID)
+		}
+		if anchor.Time > 0 {
+			throughTime = anchor.Time
+		}
+	}
 	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), "", "range", "oldest"), From: fromTime, Through: throughTime}
 	if token := configToolString(input, "cursor"); token != "" {
 		decoded, err := decodeHistorySearchCursor(token)
@@ -811,6 +842,22 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 	timeline, err := t.timeline(ctx, page.From, page.Through)
 	if err != nil {
 		return dianaChatHistoryResult{}, err
+	}
+	if fromMsgID != "" {
+		for idx := range timeline {
+			if strings.TrimSpace(timeline[idx].MessageID) == fromMsgID {
+				timeline = timeline[idx:]
+				break
+			}
+		}
+	}
+	if throughMsgID != "" {
+		for idx := len(timeline) - 1; idx >= 0; idx-- {
+			if strings.TrimSpace(timeline[idx].MessageID) == throughMsgID {
+				timeline = timeline[:idx+1]
+				break
+			}
+		}
 	}
 	items := t.items(ctx, timeline)
 	times := make([]int64, len(items))

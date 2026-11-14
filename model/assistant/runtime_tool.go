@@ -2438,7 +2438,7 @@ func (r *Runtime) generateScheduledQueryMessage(ctx context.Context, item Remind
 	if err != nil {
 		return "", err
 	}
-	return "定时订阅结果：\n" + reply, nil
+	return reply, nil
 }
 
 // scheduledQueryRunContextKey survives nested tools changing the usage purpose.
