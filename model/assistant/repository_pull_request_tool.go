@@ -24,14 +24,8 @@ import (
 // 合并状态、改动统计和已有 review；pull_files 读改动文件和 patch；comment 与 review 能
 // 写到 PR 上。写入仍然走草稿加确认码。改 PR 本身（合并、关闭、改标题）不开放。
 const (
-	repositoryPullRequestReviewLimit     = 10
-	repositoryPullRequestReviewBodyLimit = 2_000
-	repositoryPullRequestFilesPerPage    = 100
-	repositoryPullRequestFilesMaxPages   = 30
-	repositoryPullRequestFileListLimit   = 300
-	// repositoryPullRequestPatchLimit 是不传 paths 时每个文件给的 patch 字数；传了
-	// paths 就把单次结果剩下的预算都给这几个文件，见 renderRepositoryDiffFiles。
-	repositoryPullRequestPatchLimit         = 4_000
+	repositoryPullRequestFilesPerPage       = 100
+	repositoryPullRequestFilesMaxPages      = 30
 	repositoryPullRequestReviewCommentLimit = 30
 	repositoryPullRequestReviewMaxPages     = 30
 	repositoryFileDefaultLines              = 400
@@ -94,11 +88,12 @@ type repositoryPullRequestFileView struct {
 	Additions    int    `json:"additions"`
 	Deletions    int    `json:"deletions"`
 	Patch        string `json:"patch,omitempty"`
-	// PatchTruncated 表示 patch 只给了开头一段；PatchOmitted 表示总量用完没给。
+	// PatchTruncated 表示这个文件太大、单次上限只装下 patch 的一段，续读见 message。
 	// PatchUnavailable 是 GitHub 自己没给 patch（二进制文件或 diff 过大）。
 	PatchTruncated   bool `json:"patch_truncated,omitempty"`
-	PatchOmitted     bool `json:"patch_omitted,omitempty"`
 	PatchUnavailable bool `json:"patch_unavailable,omitempty"`
+	// PatchCutRunes 不为 0 时 patch_end_line 那一行超过单次上限，只给了开头，省略了这么多字。
+	PatchCutRunes int `json:"patch_cut_runes,omitempty"`
 	// 只给了 patch 的一段时，说明给的是第几行到第几行（从 1 起）、一共多少行；
 	// 从 hunk 中间接着读时 PatchHunk 是这段所在的 hunk 头，行号靠它算。
 	PatchStartLine  int    `json:"patch_start_line,omitempty"`
@@ -119,12 +114,12 @@ type githubPullRequestReview struct {
 }
 
 type repositoryPullRequestReviewView struct {
-	Author      string    `json:"author,omitempty"`
-	State       string    `json:"state"`
-	Body        string    `json:"body,omitempty"`
-	Truncated   bool      `json:"truncated,omitempty"`
-	URL         string    `json:"url,omitempty"`
-	SubmittedAt time.Time `json:"submitted_at,omitempty"`
+	Author      string               `json:"author,omitempty"`
+	State       string               `json:"state"`
+	Body        string               `json:"body,omitempty"`
+	Lines       *repositoryTextLines `json:"lines,omitempty"`
+	URL         string               `json:"url,omitempty"`
+	SubmittedAt time.Time            `json:"submitted_at,omitempty"`
 }
 
 // repositoryPullRequestReviewComment 是 review 里的一条行内评论。
@@ -171,35 +166,6 @@ func repositoryPullRequestViewFromGitHub(pull githubPullRequest) *repositoryPull
 		view.Author = strings.TrimSpace(pull.User.Login)
 	}
 	return view
-}
-
-// attachPullRequestDetails 给 get 的结果补上 PR 的分支、合并状态和最近几条 review。
-func (t *dianaGitHubTool) attachPullRequestDetails(ctx context.Context, repository string, number int, result *repositoryIssueResult) *repositoryIssueAPIError {
-	pull, apiErr := t.getPullRequest(ctx, repository, number)
-	if apiErr != nil {
-		return apiErr
-	}
-	result.PullRequest = repositoryPullRequestViewFromGitHub(pull)
-	values := url.Values{"per_page": {"100"}}
-	var reviews []githubPullRequestReview
-	if apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d/reviews?%s", repository, number, values.Encode()), nil, &reviews); apiErr != nil {
-		return apiErr
-	}
-	// 接口按提交时间从旧到新返回，保留最近的几条。
-	if len(reviews) > repositoryPullRequestReviewLimit {
-		reviews = reviews[len(reviews)-repositoryPullRequestReviewLimit:]
-		result.ReviewsTruncated = true
-	}
-	result.Reviews = make([]repositoryPullRequestReviewView, 0, len(reviews))
-	for _, review := range reviews {
-		view := repositoryPullRequestReviewView{State: strings.TrimSpace(review.State), URL: review.HTMLURL, SubmittedAt: review.SubmittedAt}
-		if review.User != nil {
-			view.Author = review.User.Login
-		}
-		view.Body, view.Truncated = repositoryIssueDisplayText(review.Body, repositoryPullRequestReviewBodyLimit)
-		result.Reviews = append(result.Reviews, view)
-	}
-	return nil
 }
 
 // pullFiles 读 PR 改动的文件和 patch。review 之前应该先读这里，而不是只看 PR 描述。
@@ -556,14 +522,12 @@ func (t *dianaGitHubTool) readFile(ctx context.Context, repository string, input
 	// 先按空内容量出结果本身占多少，剩下的才是给代码的；续读位置按真正装进去的行算，
 	// 不然 Runner 再截一刀，模型照着提示续读就跳过了中间那段。
 	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
-	window := repositoryFillLines(end-start+1, func(i int) string {
-		return strconv.Itoa(start+i) + "| " + lines[start-1+i]
-	}, end-start+1, room)
-	shownEnd := start + window.Count - 1
-	result.File.EndLine, result.File.Content = shownEnd, window.Text
+	window := takeLines(len(lines), func(i int) string { return strconv.Itoa(i+1) + "| " + lines[i] }, start, end, room, repositoryJSONRunes)
+	shownEnd := window.End
+	result.File.EndLine, result.File.Content = shownEnd, window.Text+"\n"
 	result.Message = fmt.Sprintf("已读取 %s 第 %d-%d 行（共 %d 行）。", content.Path, start, shownEnd, len(lines))
-	if window.Cut {
-		result.Message += fmt.Sprintf(" 第 %d 行太长（压缩过的代码或单行数据），只给了开头一段。", shownEnd)
+	if window.CutRunes > 0 {
+		result.Message += fmt.Sprintf(" 第 %d 行太长（压缩过的代码或单行数据），只给了开头，后面 %d 字没有给出；这一行算读过。", shownEnd, window.CutRunes)
 	}
 	if shownEnd < len(lines) {
 		result.Message += fmt.Sprintf(" 后面还有，要继续读传 start_line=%d。", shownEnd+1)

@@ -111,16 +111,15 @@ type repositoryIssueResult struct {
 	ReplyHint string `json:"reply_hint,omitempty"`
 	// IssueBody 和 Comments 只在 get 返回：update 是整段覆盖，模型不先看一眼原文
 	// 就没法安全地改；以前没有任何操作能把正文和评论读回来。
-	IssueBody          string                       `json:"issue_body,omitempty"`
-	IssueBodyTruncated bool                         `json:"issue_body_truncated,omitempty"`
-	Comments           []repositoryIssueCommentView `json:"comments,omitempty"`
-	CommentsTruncated  bool                         `json:"comments_truncated,omitempty"`
+	// 分页规则见 get；IssueBodyLines 只在正文没有一次给全时出现。
+	IssueBody      string                       `json:"issue_body,omitempty"`
+	IssueBodyLines *repositoryTextLines         `json:"issue_body_lines,omitempty"`
+	Comments       []repositoryIssueCommentView `json:"comments,omitempty"`
 	// PullRequest、Reviews 只在 get 读到 PR 时返回；Files 只在 pull_files 返回。
-	PullRequest      *repositoryPullRequestView        `json:"pull_request,omitempty"`
-	Reviews          []repositoryPullRequestReviewView `json:"reviews,omitempty"`
-	ReviewsTruncated bool                              `json:"reviews_truncated,omitempty"`
-	Files            []repositoryPullRequestFileView   `json:"files,omitempty"`
-	FilesTruncated   bool                              `json:"files_truncated,omitempty"`
+	PullRequest    *repositoryPullRequestView        `json:"pull_request,omitempty"`
+	Reviews        []repositoryPullRequestReviewView `json:"reviews,omitempty"`
+	Files          []repositoryPullRequestFileView   `json:"files,omitempty"`
+	FilesTruncated bool                              `json:"files_truncated,omitempty"`
 	// NextFileOffset 是文件太多、一次没列完时下一次传的 file_offset。
 	NextFileOffset int `json:"next_file_offset,omitempty"`
 	// Commit 只在 commit_files 返回，Comparison 只在 compare_files 返回，Tree 只在 list_files 返回。
@@ -252,7 +251,9 @@ type githubRepositoryIssue struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	ClosedAt    time.Time `json:"closed_at"`
 	PullRequest *struct{} `json:"pull_request,omitempty"`
-	Labels      []struct {
+	// Comments 是评论总数，get 据此只取要用的那几页评论。
+	Comments int `json:"comments"`
+	Labels   []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 }
@@ -274,13 +275,13 @@ type repositoryIssueBatchFailure struct {
 }
 
 // repositoryIssueCommentView 是 get 返回给模型看的评论：去掉了运行时对账用的
-// 隐藏标记，正文按上限截断。
+// 隐藏标记。Lines 只在这条太长、只给了一段时出现。
 type repositoryIssueCommentView struct {
-	Author    string    `json:"author,omitempty"`
-	Body      string    `json:"body"`
-	Truncated bool      `json:"truncated,omitempty"`
-	URL       string    `json:"url,omitempty"`
-	CreatedAt time.Time `json:"created_at,omitempty"`
+	Author    string               `json:"author,omitempty"`
+	Body      string               `json:"body"`
+	Lines     *repositoryTextLines `json:"lines,omitempty"`
+	URL       string               `json:"url,omitempty"`
+	CreatedAt time.Time            `json:"created_at,omitempty"`
 }
 
 type repositoryIssueAPIError struct {
@@ -389,17 +390,19 @@ func (t *dianaGitHubTool) InputSchema() map[string]any {
 		"language":   toolStringParam("repo_search 可选：语言，如 go。"),
 		"sort": toolEnumParam("repo_search 排序，默认 best_match。",
 			"best_match", "stars", "forks", "updated"),
-		"limit":       toolIntParam("repo_search 返回个数，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
-		"path":        toolStringParam("read_file 的文件路径；list_files 的目录，默认根目录。"),
-		"ref":         toolStringParam("分支/标签/SHA，commit_files 必填；默认为默认分支，带 number 时为 PR head。"),
-		"base":        toolStringParam("compare_files 起点。"),
-		"head":        toolStringParam("compare_files 终点。"),
-		"recursive":   toolBoolParam("list_files 是否递归，默认 false。"),
-		"file_offset": toolIntParam("续读：按上次 message 给的值传。", 0, 1_000_000),
-		"patch_line":  toolIntParam("续读：按上次 message 给的值传。", 1, 10_000_000),
-		"start_line":  toolIntParam("read_file 起始行，默认 1。", 1, 10_000_000),
-		"end_line":    toolIntParam("read_file 结束行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
-		"paths":       toolStringArrayParam("只读这些文件或目录的 diff，patch 更完整；默认全部、各给开头一段。"),
+		"limit":         toolIntParam("repo_search 返回个数，默认 "+itoa(repositoryDiscoveryDefaultLimit)+"。", 1, repositoryDiscoveryMaxLimit),
+		"path":          toolStringParam("read_file 的文件路径；list_files 的目录，默认根目录。"),
+		"ref":           toolStringParam("分支/标签/SHA，commit_files 必填；默认为默认分支，带 number 时为 PR head。"),
+		"base":          toolStringParam("compare_files 起点。"),
+		"head":          toolStringParam("compare_files 终点。"),
+		"recursive":     toolBoolParam("list_files 是否递归，默认 false。"),
+		"file_offset":   toolIntParam("续读：按上次 message 给的值传。", 0, 1_000_000),
+		"patch_line":    toolIntParam("续读：按上次 message 给的值传。", 1, 10_000_000),
+		"item_offset":   toolIntParam("get、repo_search 续读：按上次 message 给的值传。", 0, 1_000_000),
+		"commit_offset": toolIntParam("compare_files 续读：按上次 message 给的值传。", 0, 1_000_000),
+		"start_line":    toolIntParam("read_file 起始行，默认 1；get 续读时按 message 给的值传。", 1, 10_000_000),
+		"end_line":      toolIntParam("read_file 结束行，一次最多 "+itoa(repositoryFileMaxLines)+" 行。", 1, 10_000_000),
+		"paths":         toolStringArrayParam("只读这些文件或目录的 diff；默认全部，按整个文件分页。"),
 		"comments": map[string]any{
 			"type":        "array",
 			"description": "review 行内评论，最多 " + itoa(repositoryPullRequestReviewCommentLimit) + " 条，line 须在 patch 内。",
@@ -2410,8 +2413,13 @@ func (t *dianaGitHubTool) update(ctx context.Context, repository string, input m
 	return result
 }
 
-// get 把一个 Issue 的标题、正文和最近评论读回来。update 是整段覆盖，模型不先看
-// 原文就只能凭记忆重写，很容易把原内容冲掉；以前工具里没有任何操作能读正文。
+// get 把一个 Issue（或 PR）的标题、正文、全部评论和 review 读回来。update 是整段覆盖，
+// 模型不先看原文就只能凭记忆重写，很容易把原内容冲掉。
+//
+// 照 Pi 的做法按整条分页：条目依次是正文（item_offset=0）、评论（1 到评论数）、review
+// （接在评论后面），从 item_offset 起整条往单次上限里装，下一条装不下就停在它前面，
+// message 写明续读的 item_offset。只有本页第一条单独都装不下时才按整行切它，续读再加
+// start_line。以前只取最早 20 条评论、正文截到 8000 字、评论截到 2000 字，而且没法翻页。
 func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[string]any) repositoryIssueResult {
 	result := repositoryIssueResult{Operation: "get", Repository: repository, RequestedNumber: repositoryIssueNumber(input)}
 	number := repositoryIssueNumber(input)
@@ -2425,52 +2433,265 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 	if !validRepositoryIssueCanonicalURL(issue.HTMLURL, repository, repositoryIssueResource(issue), issue.Number) {
 		return result.fail("invalid_response", "GitHub 返回了目标仓库之外的 Issue，结果已拒绝。")
 	}
-	values := url.Values{"per_page": {strconv.Itoa(repositoryIssueGetCommentLimit + 1)}}
-	var comments []githubIssueComment
-	if apiErr := t.doJSON(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/issues/%d/comments?%s", repository, number, values.Encode()), nil, &comments); apiErr != nil {
-		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+	// 评论总数用 Issue 自带的 comments 计数，只取这一页要用的那一两页评论，不必每翻
+	// 一页都把全部评论重拉一遍。
+	comments := repositoryCommentPages{tool: t, path: fmt.Sprintf("/repos/%s/issues/%d/comments", repository, number), pages: map[int][]githubIssueComment{}}
+	commentCount := max(issue.Comments, 0)
+	var reviews []githubPullRequestReview
+	if issue.PullRequest != nil {
+		pull, apiErr := t.getPullRequest(ctx, repository, number)
+		if apiErr != nil {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
+		result.PullRequest = repositoryPullRequestViewFromGitHub(pull)
+		if reviews, apiErr = repositoryFetchAllPages[githubPullRequestReview](ctx, t, fmt.Sprintf("/repos/%s/pulls/%d/reviews", repository, number)); apiErr != nil {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
+	}
+	offset, startLine := 0, 1
+	if value, ok := numberValue(input["item_offset"]); ok && value > 0 {
+		offset = int(value)
+	}
+	if value, ok := numberValue(input["start_line"]); ok && value > 1 {
+		startLine = int(value)
+	}
+	total := 1 + commentCount + len(reviews)
+	if offset >= total {
+		return result.fail("invalid_input", fmt.Sprintf("item_offset 超出范围：正文加评论和 review 一共 %d 条（编号 0 到 %d）。", total, total-1))
 	}
 	result.OK = true
 	result.Outcome = "fetched"
 	result.Issue = ptrRepositoryIssueSummary(repositoryIssueSummaryFromGitHub(issue))
-	result.IssueBody, result.IssueBodyTruncated = repositoryIssueDisplayText(issue.Body, repositoryIssueGetBodyLimit)
-	if len(comments) > repositoryIssueGetCommentLimit {
-		comments = comments[:repositoryIssueGetCommentLimit]
-		result.CommentsTruncated = true
-	}
-	result.Comments = make([]repositoryIssueCommentView, 0, len(comments))
-	for _, comment := range comments {
-		view := repositoryIssueCommentView{URL: comment.HTMLURL, CreatedAt: comment.CreatedAt}
-		if comment.User != nil {
-			view.Author = comment.User.Login
+
+	entry := func(index int) (repositoryGetEntry, *repositoryIssueAPIError) {
+		switch {
+		case index == 0:
+			return repositoryGetEntry{text: issue.Body}, nil
+		case index <= commentCount:
+			comment, ok, apiErr := comments.at(ctx, index)
+			if apiErr != nil || !ok {
+				return repositoryGetEntry{}, apiErr
+			}
+			view := repositoryIssueCommentView{URL: comment.HTMLURL, CreatedAt: comment.CreatedAt}
+			if comment.User != nil {
+				view.Author = comment.User.Login
+			}
+			return repositoryGetEntry{text: comment.Body, comment: &view}, nil
+		default:
+			review := reviews[index-1-commentCount]
+			view := repositoryPullRequestReviewView{State: strings.TrimSpace(review.State), URL: review.HTMLURL, SubmittedAt: review.SubmittedAt}
+			if review.User != nil {
+				view.Author = review.User.Login
+			}
+			return repositoryGetEntry{text: review.Body, review: &view}, nil
 		}
-		view.Body, view.Truncated = repositoryIssueDisplayText(comment.Body, repositoryIssueGetCommentBodyLimit)
-		result.Comments = append(result.Comments, view)
 	}
-	result.Message = fmt.Sprintf("已读取 %s#%d 的正文和 %d 条评论。", repository, number, len(result.Comments))
-	if issue.PullRequest != nil {
-		if apiErr := t.attachPullRequestDetails(ctx, repository, number, &result); apiErr != nil {
+	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
+	used, next, nextLine, cut := 0, total, 0, 0
+	for index := offset; index < total; index++ {
+		item, apiErr := entry(index)
+		if apiErr != nil {
 			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 		}
-		result.Message = fmt.Sprintf("已读取 Pull Request %s#%d 的描述、%d 条评论和 %d 条 review。这里没有代码改动，review 或评价代码前先用 pull_files 读 patch。", repository, number, len(result.Comments), len(result.Reviews))
+		if item.comment == nil && item.review == nil && index > 0 {
+			// 评论计数比实际多（刚删了评论）：剩下的评论已经没有了，跳到 review。
+			if index <= commentCount {
+				index = commentCount
+				continue
+			}
+		}
+		lines := strings.Split(repositoryIssueDisplayText(item.text), "\n")
+		from := 1
+		if index == offset {
+			from = startLine
+		}
+		if from > len(lines) {
+			return result.fail("invalid_input", fmt.Sprintf("start_line 超出范围：第 %d 条共 %d 行。", index, len(lines)))
+		}
+		item.set(strings.Join(lines[from-1:], "\n"), from, len(lines), len(lines), 0)
+		if cost := item.runes(); used+cost <= room {
+			item.attach(&result)
+			used += cost
+			continue
+		}
+		if index > offset {
+			next = index
+			break
+		}
+		// 本页第一条单独都装不下：按整行切，续读从同一条的下一行接着；最后一行本身超长
+		// 时只给开头，这一行算读过，省略的字数写进 lines.cut_runes。
+		item.set("", from, from, len(lines), 1)
+		window := takeLines(len(lines), func(i int) string { return lines[i] }, from, len(lines), room-item.runes()-80, repositoryJSONRunes)
+		item.set(window.Text, from, window.End, len(lines), window.CutRunes)
+		item.attach(&result)
+		cut = window.CutRunes
+		if resume := window.ResumeLine(); resume > 0 {
+			next, nextLine = index, resume
+		} else {
+			next = index + 1
+		}
+		break
 	}
+	result.Message = repositoryGetMessage(repository, number, offset, next, nextLine, cut, commentCount, len(reviews), issue.PullRequest != nil)
 	return result
 }
 
-const (
-	repositoryIssueGetBodyLimit        = 8_000
-	repositoryIssueGetCommentLimit     = 20
-	repositoryIssueGetCommentBodyLimit = 2_000
-)
+// repositoryGetEntry 是 get 分页里的一条：正文、一条评论或一条 review。
+type repositoryGetEntry struct {
+	text    string
+	body    string
+	lines   *repositoryTextLines
+	comment *repositoryIssueCommentView
+	review  *repositoryPullRequestReviewView
+}
 
-// repositoryIssueDisplayText 去掉运行时对账用的隐藏标记并按上限截断，给模型看。
-func repositoryIssueDisplayText(text string, limit int) (string, bool) {
-	text = strings.TrimSpace(repositoryIssueAnyMarkerPattern.ReplaceAllString(text, ""))
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text, false
+// repositoryTextLines 说明一段文字只给了第几行到第几行（从 1 起）、一共多少行。
+// 给全的条目不带这个字段。
+type repositoryTextLines struct {
+	StartLine  int `json:"start_line"`
+	EndLine    int `json:"end_line"`
+	TotalLines int `json:"total_lines"`
+	// CutRunes 不为 0 时 end_line 那一行超过单次上限，只给了开头，省略了这么多字。
+	CutRunes int `json:"cut_runes,omitempty"`
+}
+
+func (e *repositoryGetEntry) set(body string, start, end, total, cutRunes int) {
+	e.body, e.lines = body, nil
+	if start > 1 || end < total || cutRunes > 0 {
+		e.lines = &repositoryTextLines{StartLine: start, EndLine: end, TotalLines: total, CutRunes: cutRunes}
 	}
-	return string(runes[:limit]), true
+	switch {
+	case e.comment != nil:
+		e.comment.Body, e.comment.Lines = body, e.lines
+	case e.review != nil:
+		e.review.Body, e.review.Lines = body, e.lines
+	}
+}
+
+// runes 是这一条编码进结果后占的字数。
+func (e *repositoryGetEntry) runes() int {
+	switch {
+	case e.comment != nil:
+		return repositoryJSONValueRunes(e.comment) + 1
+	case e.review != nil:
+		return repositoryJSONValueRunes(e.review) + 1
+	}
+	cost := repositoryJSONRunes(e.body) + len(`,"issue_body":""`)
+	if e.lines != nil {
+		cost += repositoryJSONValueRunes(e.lines) + len(`,"issue_body_lines":`)
+	}
+	return cost
+}
+
+func (e *repositoryGetEntry) attach(result *repositoryIssueResult) {
+	switch {
+	case e.comment != nil:
+		result.Comments = append(result.Comments, *e.comment)
+	case e.review != nil:
+		result.Reviews = append(result.Reviews, *e.review)
+	default:
+		result.IssueBody, result.IssueBodyLines = e.body, e.lines
+	}
+}
+
+// repositoryGetMessage 说清这一页给了哪些条目、后面还有什么、怎么续读。next 是下一页
+// 的 item_offset，等于总条数表示读完了。
+func repositoryGetMessage(repository string, number, offset, next, nextLine, cut int, comments, reviews int, pull bool) string {
+	total := 1 + comments + reviews
+	kind := "Issue"
+	if pull {
+		kind = "Pull Request"
+	}
+	last := next - 1
+	if nextLine > 0 {
+		last = next
+	}
+	var parts []string
+	if offset == 0 {
+		parts = append(parts, "正文")
+	}
+	if from, to := max(offset, 1), min(last, comments); from <= to {
+		parts = append(parts, fmt.Sprintf("评论第 %d-%d 条", from, to))
+	}
+	if from, to := max(offset, comments+1)-comments, last-comments; to >= 1 && from <= to {
+		parts = append(parts, fmt.Sprintf("review 第 %d-%d 条", from, to))
+	}
+	message := fmt.Sprintf("已读取 %s %s#%d 的%s（共 %d 条评论", kind, repository, number, strings.Join(parts, "、"), comments)
+	if pull {
+		message += fmt.Sprintf("、%d 条 review", reviews)
+	}
+	message += "）。"
+	if cut > 0 {
+		item := next
+		if nextLine == 0 {
+			item = next - 1
+		}
+		message += fmt.Sprintf(" 第 %d 条的最后给出的那一行超过单次上限，只给了开头，这一行后面 %d 字没有给出（这一行算读过）。", item, cut)
+	}
+	switch {
+	case nextLine > 0:
+		message += fmt.Sprintf(" 第 %d 条（0 是正文，1-%d 是评论，之后是 review）太长，单次上限只装下前面一部分，传 item_offset=%d、start_line=%d 接着读。", next, comments, next, nextLine)
+	case next < total:
+		message += fmt.Sprintf(" 后面还有 %d 条，传 item_offset=%d 继续读（0 是正文，1-%d 是评论，之后是 review），没读完之前不要断言没有别的评论。", total-next, next, comments)
+	case cut > 0:
+		message += " 除这一行省略的部分外已经读完。"
+	default:
+		message += " 已经读完。"
+	}
+	if pull {
+		message += " 这里没有代码改动，review 或评价代码前先用 pull_files 读 patch。"
+	}
+	return message
+}
+
+// repositoryCommentPages 按需取 Issue 评论：第 i 条（从 1 起）在每页 100 条的第
+// (i-1)/100+1 页，取过的页留着，同一次调用里不重复请求。
+type repositoryCommentPages struct {
+	tool  *dianaGitHubTool
+	path  string
+	pages map[int][]githubIssueComment
+}
+
+func (c *repositoryCommentPages) at(ctx context.Context, index int) (githubIssueComment, bool, *repositoryIssueAPIError) {
+	page := (index-1)/repositoryCommentPageSize + 1
+	batch, loaded := c.pages[page]
+	if !loaded {
+		values := url.Values{"per_page": {strconv.Itoa(repositoryCommentPageSize)}, "page": {strconv.Itoa(page)}}
+		if apiErr := c.tool.doJSON(ctx, http.MethodGet, c.path+"?"+values.Encode(), nil, &batch); apiErr != nil {
+			return githubIssueComment{}, false, apiErr
+		}
+		c.pages[page] = batch
+	}
+	position := (index - 1) % repositoryCommentPageSize
+	if position >= len(batch) {
+		return githubIssueComment{}, false, nil
+	}
+	return batch[position], true, nil
+}
+
+const repositoryCommentPageSize = 100
+
+// repositoryFetchAllPages 按 Link 头逐页取完一个列表接口，不设页数上限。
+func repositoryFetchAllPages[T any](ctx context.Context, t *dianaGitHubTool, path string) ([]T, *repositoryIssueAPIError) {
+	var all []T
+	for page := 1; ; page++ {
+		values := url.Values{"per_page": {"100"}, "page": {strconv.Itoa(page)}}
+		var batch []T
+		headers, apiErr := t.doJSONWithHeaders(ctx, http.MethodGet, path+"?"+values.Encode(), nil, &batch)
+		if apiErr != nil {
+			return nil, apiErr
+		}
+		all = append(all, batch...)
+		lastPage, known := repositoryIssueLastPage(headers.Get("Link"))
+		if !known || page >= lastPage || len(batch) == 0 {
+			return all, nil
+		}
+	}
+}
+
+// repositoryIssueDisplayText 去掉运行时对账用的隐藏标记，给模型看。
+func repositoryIssueDisplayText(text string) string {
+	return strings.TrimSpace(repositoryIssueAnyMarkerPattern.ReplaceAllString(text, ""))
 }
 
 // appendRepositoryIssueBody 把 addition 接到 base 正文末尾。base 里的对账标记先

@@ -23,9 +23,12 @@ import (
 
 const (
 	repositoryDiscoveryDefaultLimit = 5
-	repositoryDiscoveryMaxLimit     = 10
-	repositoryDiscoveryMaxTopics    = 8
-	repositoryDiscoveryQueryLimit   = 200
+	// repositoryDiscoveryMaxLimit 是 GitHub 搜索接口一页最多给的条数。条数多了装不下
+	// 单次上限就按整条分页，见 searchRepositories。
+	repositoryDiscoveryMaxLimit   = 100
+	repositoryDiscoveryQueryLimit = 200
+	// repositoryDiscoveryResultCap 是 GitHub 搜索接口能翻到的结果总数，再往后一律 422。
+	repositoryDiscoveryResultCap = 1000
 	// repositoryDiscoveryStaleAfter 是「久未更新」的门槛。一年没有任何推送的仓库
 	// 不一定不能用，但推荐时必须说出来，不能让用户自己点进仓库页才发现。
 	repositoryDiscoveryStaleAfter = 365 * 24 * time.Hour
@@ -99,6 +102,7 @@ type repositoryDiscoveryInput struct {
 	sort     string
 	sortName string
 	limit    int
+	offset   int
 }
 
 // parseRepositoryDiscoveryInput 解析并本地校验 repo_search 的参数。和 parseSearchInput
@@ -132,6 +136,12 @@ func parseRepositoryDiscoveryInput(input map[string]any) (repositoryDiscoveryInp
 		}
 		parsed.limit = int(value)
 	}
+	if value, present := numberValue(input["item_offset"]); present && value > 0 {
+		if int(value) >= repositoryDiscoveryResultCap {
+			return parsed, redactions, "invalid_input", "GitHub 搜索只给前 " + itoa(repositoryDiscoveryResultCap) + " 个结果，item_offset 不能超过 " + itoa(repositoryDiscoveryResultCap-1) + "；换更具体的关键词或 language 缩小范围。"
+		}
+		parsed.offset = int(value)
+	}
 	return parsed, redactions, "", ""
 }
 
@@ -150,32 +160,53 @@ func (t *dianaGitHubTool) searchRepositories(ctx context.Context, input map[stri
 	if parsed.language != "" {
 		searchQuery += " language:" + parsed.language
 	}
-	values := url.Values{"q": {searchQuery}, "per_page": {itoa(parsed.limit)}}
+	// 统一按每页 100 条取，item_offset 换算成第几页的第几条；续读位置按原始排名算，
+	// 被过滤掉的私有仓库也占位，下一页不会重复或跳过。
+	values := url.Values{"q": {searchQuery}, "per_page": {itoa(repositoryDiscoveryMaxLimit)}, "page": {itoa(parsed.offset/repositoryDiscoveryMaxLimit + 1)}}
 	if parsed.sort != "" {
 		values.Set("sort", parsed.sort)
 		values.Set("order", "desc")
 	}
 	var payload struct {
-		Items []githubRepositoryProfile `json:"items"`
+		TotalCount int                       `json:"total_count"`
+		Items      []githubRepositoryProfile `json:"items"`
 	}
 	if apiErr := t.doJSON(ctx, http.MethodGet, "/search/repositories?"+values.Encode(), nil, &payload); apiErr != nil {
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
-	now := time.Now()
-	items := make([]repositoryProfileView, 0, len(payload.Items))
-	for _, item := range payload.Items {
-		if item.Private || !validRepositoryProfileResponse(item) {
-			continue
-		}
-		items = append(items, repositoryProfileFromGitHub(item, now))
-		if len(items) >= parsed.limit {
-			break
-		}
-	}
 	result.OK = true
 	result.Outcome = "searched"
+	now := time.Now()
+	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - len(repositoryDiscoveryReadingHint) - repositoryOutputReserve
+	items := make([]repositoryProfileView, 0, parsed.limit)
+	used, next := 0, parsed.offset
+	for index := parsed.offset % repositoryDiscoveryMaxLimit; index < len(payload.Items) && len(items) < parsed.limit; index++ {
+		item := payload.Items[index]
+		if item.Private || !validRepositoryProfileResponse(item) {
+			next++
+			continue
+		}
+		view := repositoryProfileFromGitHub(item, now)
+		cost := repositoryJSONValueRunes(view) + 1
+		if len(items) > 0 && used+cost > room {
+			break
+		}
+		items = append(items, view)
+		used += cost
+		next++
+	}
 	result.Repositories = items
-	result.Message = fmt.Sprintf("按%s排序找到 %d 个公开仓库。%s", parsed.sortName, len(items), repositoryDiscoveryReadingHint)
+	result.Message = fmt.Sprintf("按%s排序，GitHub 共找到约 %d 个公开仓库，这次给了第 %d-%d 名里的 %d 个。", parsed.sortName, payload.TotalCount, parsed.offset+1, next, len(items))
+	reachable := min(payload.TotalCount, repositoryDiscoveryResultCap)
+	switch {
+	case len(items) < parsed.limit && next < reachable:
+		result.Message += fmt.Sprintf(" 没给满 limit（单次上限装不下，或到了 GitHub 每页 100 条的边界），传 item_offset=%d 接着看后面的。", next)
+	case next < reachable:
+		result.Message += fmt.Sprintf(" 要看更多就传 item_offset=%d。", next)
+	case next < payload.TotalCount:
+		result.Message += fmt.Sprintf(" GitHub 搜索只给前 %d 个结果，后面的翻不到；要找别的就换更具体的关键词或 language。", repositoryDiscoveryResultCap)
+	}
+	result.Message += repositoryDiscoveryReadingHint
 	return result
 }
 
@@ -247,9 +278,6 @@ func repositoryProfileFromGitHub(profile githubRepositoryProfile, now time.Time)
 	for _, topic := range profile.Topics {
 		if topic = strings.TrimSpace(topic); topic == "" {
 			continue
-		}
-		if len(view.Topics) >= repositoryDiscoveryMaxTopics {
-			break
 		}
 		view.Topics = append(view.Topics, topic)
 	}

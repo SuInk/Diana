@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -195,5 +196,53 @@ func TestBackgroundAgentConcurrentStartHonorsLimit(t *testing.T) {
 	}
 	if started != backgroundAgentPerSession {
 		t.Fatalf("started %d, want %d", started, backgroundAgentPerSession)
+	}
+}
+
+// 后台任务 status 带 id 时，目标、各轮记录和结果合成一份按整行分页，start_line 续读拼回全文。
+func TestBackgroundAgentStatusPagesByWholeLines(t *testing.T) {
+	state := backgroundAgentState{ID: "bg-1", Goal: "查清楚", Phase: "completed", Round: 3, MaxRounds: 3, StartedAt: time.Now()}
+	for i := 1; i <= 3; i++ {
+		state.Notes = append(state.Notes, strings.Repeat(fmt.Sprintf("第%d轮记录", i), 200))
+	}
+	state.Result = strings.Repeat("最终结论。", 300)
+	want := "目标：查清楚"
+	for i, note := range state.Notes {
+		want += fmt.Sprintf("\n第 %d 轮记录：%s", i+1, note)
+	}
+	want += "\n结果：" + state.Result
+
+	var lines []string
+	start := 1
+	for calls := 1; ; calls++ {
+		if calls > 20 {
+			t.Fatal("start_line 续读没有收敛")
+		}
+		raw, err := backgroundAgentStatusPage(state, start, 3_000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len([]rune(raw)) > 3_000 {
+			t.Fatalf("结果 %d 字超出上限", len([]rune(raw)))
+		}
+		var payload struct {
+			Tasks []map[string]any `json:"tasks"`
+		}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			t.Fatal(err)
+		}
+		item := payload.Tasks[0]
+		lines = append(lines, strings.Split(item["detail"].(string), "\n")...)
+		next, ok := item["next_line"].(float64)
+		if !ok {
+			break
+		}
+		if !strings.Contains(item["next"].(string), fmt.Sprintf("start_line=%d", int(next))) {
+			t.Fatalf("续读提示：%q", item["next"])
+		}
+		start = int(next)
+	}
+	if strings.Join(lines, "\n") != want {
+		t.Fatalf("续读拼回来的记录和原文不一致：%d 行", len(lines))
 	}
 }

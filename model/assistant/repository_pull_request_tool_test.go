@@ -14,6 +14,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // repositoryPullRequestTestGitHub 在 Issue 假服务外面补上 PR 相关接口。PR #85 同时是
@@ -158,10 +160,10 @@ func (s *repositoryPullRequestTestGitHub) postsTo(suffix string) []repositoryPub
 	return out
 }
 
-// get 读到 PR 时带上分支、合并状态、改动统计和最近的 review，并提醒先读 pull_files。
+// get 读到 PR 时带上分支、合并状态、改动统计和全部 review，并提醒先读 pull_files。
 func TestRepositoryPullRequestGetIncludesBranchesAndReviews(t *testing.T) {
 	github := newRepositoryPullRequestTestGitHub()
-	for i := 1; i <= repositoryPullRequestReviewLimit+2; i++ {
+	for i := 1; i <= 12; i++ {
 		github.reviews = append(github.reviews, githubPullRequestReview{ID: int64(i), Body: fmt.Sprintf("review %d", i), State: "COMMENTED", HTMLURL: fmt.Sprintf("https://github.com/acme/demo/pull/85#pullrequestreview-%d", i)})
 	}
 	server := httptest.NewServer(http.HandlerFunc(github.handler))
@@ -175,16 +177,17 @@ func TestRepositoryPullRequestGetIncludesBranchesAndReviews(t *testing.T) {
 	if result.PullRequest.HeadRef != "perf/worktree-on-delegation" || result.PullRequest.BaseRef != "main" || result.PullRequest.Additions != 587 {
 		t.Fatalf("pull request=%#v", result.PullRequest)
 	}
-	if len(result.Reviews) != repositoryPullRequestReviewLimit || !result.ReviewsTruncated || result.Reviews[len(result.Reviews)-1].Body != fmt.Sprintf("review %d", repositoryPullRequestReviewLimit+2) {
-		t.Fatalf("reviews=%#v truncated=%v", result.Reviews, result.ReviewsTruncated)
+	if len(result.Reviews) != 12 || result.Reviews[0].Body != "review 1" || result.Reviews[11].Body != "review 12" {
+		t.Fatalf("reviews=%#v", result.Reviews)
 	}
 	if result.IssueBody != "PR 描述" || !strings.Contains(result.Message, "pull_files") {
 		t.Fatalf("message=%q body=%q", result.Message, result.IssueBody)
 	}
 }
 
-// pull_files 分页读全，不传 paths 时每个文件只给开头一段 patch，传 paths 只给这几个文件且更完整。
-func TestRepositoryPullRequestFilesFocusAndLimits(t *testing.T) {
+// pull_files 从 GitHub 分页读全，再按整个文件分页给模型：给出的 patch 都是完整的，
+// 按 file_offset 续读能读全；paths 按目录前缀筛选。
+func TestRepositoryPullRequestFilesFocusAndPaging(t *testing.T) {
 	github := newRepositoryPullRequestTestGitHub()
 	long := strings.Repeat("+line\n", 2_000)
 	github.files = append(github.files, githubPullRequestFile{Filename: "cmd/app.go", Status: "modified", Additions: 2000, Patch: long})
@@ -196,26 +199,44 @@ func TestRepositoryPullRequestFilesFocusAndLimits(t *testing.T) {
 	defer server.Close()
 	tool := repositoryPublishTestTool(server, "review acme/demo PR 85", nil)
 
-	all := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85})
-	if !all.OK || len(all.Files) != len(github.files) {
-		t.Fatalf("分页后应读到全部 %d 个文件，got ok=%v files=%d msg=%q", len(github.files), all.OK, len(all.Files), all.Message)
+	var files []repositoryPullRequestFileView
+	offset := 0
+	for calls := 1; ; calls++ {
+		if calls > 20 {
+			t.Fatal("file_offset 续读没有收敛")
+		}
+		input := map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85}
+		if offset > 0 {
+			input["file_offset"] = offset
+		}
+		page := runRepositoryToolWithBudget(t, tool, agent.ToolOutputMaxChars, input)
+		if !page.OK || len(page.Files) == 0 {
+			t.Fatalf("page=%#v", page)
+		}
+		files = append(files, page.Files...)
+		if !page.FilesTruncated {
+			break
+		}
+		if !strings.Contains(page.Message, fmt.Sprintf("file_offset=%d", page.NextFileOffset)) {
+			t.Fatalf("续读提示：%q", page.Message)
+		}
+		offset = page.NextFileOffset
 	}
-	if !all.Files[0].PatchTruncated || len([]rune(all.Files[0].Patch)) > repositoryPullRequestPatchLimit {
-		t.Fatalf("不传 paths 时长 patch 应只给开头：truncated=%v len=%d", all.Files[0].PatchTruncated, len([]rune(all.Files[0].Patch)))
+	if len(files) != len(github.files) {
+		t.Fatalf("续读应读到全部 %d 个文件，got %d", len(github.files), len(files))
 	}
-	if !strings.Contains(all.Message, "cmd/app.go") || !strings.Contains(all.Message, "paths") {
-		t.Fatalf("没给全的文件要在提示里点名：%q", all.Message)
+	for index, file := range files {
+		if file.PatchTruncated || file.Patch != strings.TrimSuffix(github.files[index].Patch, "\n") {
+			t.Fatalf("%s 的 patch 应完整给出", file.Path)
+		}
 	}
-	if !all.Files[1].PatchUnavailable {
-		t.Fatalf("二进制文件应标记 patch_unavailable：%#v", all.Files[1])
+	if !files[1].PatchUnavailable {
+		t.Fatalf("二进制文件应标记 patch_unavailable：%#v", files[1])
 	}
 
 	focused := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "paths": []any{"cmd"}})
-	if !focused.OK || len(focused.Files) != 1 || focused.Files[0].Path != "cmd/app.go" {
+	if !focused.OK || len(focused.Files) != 1 || focused.Files[0].Path != "cmd/app.go" || focused.Files[0].Patch != strings.TrimSuffix(long, "\n") {
 		t.Fatalf("paths 按目录前缀筛选：%#v", focused.Files)
-	}
-	if got := len([]rune(focused.Files[0].Patch)); got <= repositoryPullRequestPatchLimit {
-		t.Fatalf("传 paths 时 patch 应给得更完整，got %d", got)
 	}
 
 	issue := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 9})

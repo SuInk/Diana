@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +24,7 @@ type repositoryDiscoveryTestGitHub struct {
 	requests []string
 
 	items   []map[string]any
+	total   int
 	profile map[string]any
 }
 
@@ -30,13 +32,16 @@ func (s *repositoryDiscoveryTestGitHub) handler(w http.ResponseWriter, r *http.R
 	s.mu.Lock()
 	s.requests = append(s.requests, r.Method+" "+r.URL.Path)
 	s.queries = append(s.queries, r.URL.Query())
-	items, profile := s.items, s.profile
+	items, profile, total := s.items, s.profile, s.total
 	s.mu.Unlock()
+	if total == 0 {
+		total = len(items)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	switch r.URL.Path {
 	case "/search/repositories":
-		_ = json.NewEncoder(w).Encode(map[string]any{"items": items})
+		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": total, "items": items})
 	case "/repos/acme/demo":
 		_ = json.NewEncoder(w).Encode(profile)
 	default:
@@ -116,7 +121,7 @@ func TestRepositoryDiscoverySearchReportsStarsForksAndFreshness(t *testing.T) {
 	if got := query.Get("q"); !strings.Contains(got, "http router") || !strings.Contains(got, "is:public") || !strings.Contains(got, "language:go") {
 		t.Fatalf("search query=%q", got)
 	}
-	if query.Get("sort") != "stars" || query.Get("order") != "desc" || query.Get("per_page") != "5" {
+	if query.Get("sort") != "stars" || query.Get("order") != "desc" || query.Get("per_page") != "100" || query.Get("page") != "1" {
 		t.Fatalf("search params=%#v", query)
 	}
 
@@ -166,7 +171,7 @@ func TestRepositoryDiscoverySearchRejectsQualifierInjectionWithoutRequest(t *tes
 		{"operation": "repo_search", "query": "router repo:acme/demo"},
 		{"operation": "repo_search", "query": "router", "language": "go rust"},
 		{"operation": "repo_search", "query": "router", "sort": "popularity"},
-		{"operation": "repo_search", "query": "router", "limit": 50},
+		{"operation": "repo_search", "query": "router", "limit": 500},
 		{"operation": "repo_search"},
 	} {
 		result := runRepositoryPublishToolOnce(t, tool, input)
@@ -176,6 +181,56 @@ func TestRepositoryDiscoverySearchRejectsQualifierInjectionWithoutRequest(t *tes
 	}
 	if github.requestCount() != 0 {
 		t.Fatalf("rejected input still reached GitHub: %d requests", github.requestCount())
+	}
+}
+
+// repo_search 按 item_offset 换算 GitHub 的页码，结果装不下单次上限时按整条分页并写明续读位置。
+func TestRepositoryDiscoverySearchPagesByItemOffset(t *testing.T) {
+	var items []map[string]any
+	for i := 0; i < 100; i++ {
+		items = append(items, repositoryDiscoveryTestRepo(fmt.Sprintf("acme/repo%03d", i), 1000-i, 10, time.Hour, map[string]any{"description": strings.Repeat("长简介", 200)}))
+	}
+	github := &repositoryDiscoveryTestGitHub{items: items, total: 250}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryDiscoveryTestTool(server, "owner", repositoryDiscoveryDefaultSettings())
+
+	first := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "repo_search", "query": "router", "limit": 100})
+	if !first.OK || len(first.Repositories) == 0 || len(first.Repositories) >= 100 {
+		t.Fatalf("应按单次上限装整条：%d 个，msg=%q", len(first.Repositories), first.Message)
+	}
+	next := len(first.Repositories)
+	if !strings.Contains(first.Message, fmt.Sprintf("item_offset=%d", next)) {
+		t.Fatalf("要写明续读位置：%q", first.Message)
+	}
+	for _, repo := range first.Repositories {
+		if !strings.HasSuffix(repo.Description, "长简介") {
+			t.Fatalf("简介不应被截断：%q", repo.Description)
+		}
+	}
+
+	second := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "repo_search", "query": "router", "limit": 100, "item_offset": next})
+	if !second.OK || len(second.Repositories) == 0 || second.Repositories[0].Repository != fmt.Sprintf("acme/repo%03d", next) {
+		t.Fatalf("续读应从第 %d 个接上：%#v", next+1, second.Repositories)
+	}
+
+	github.items = items[:3]
+	later := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "repo_search", "query": "router", "item_offset": 230})
+	if query := github.lastQuery(); query.Get("page") != "3" {
+		t.Fatalf("item_offset=230 应取第 3 页：%#v", query)
+	}
+	if !later.OK {
+		t.Fatalf("later=%#v", later)
+	}
+
+	github.items, github.total = items, 5000
+	edge := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "repo_search", "query": "router", "limit": 1, "item_offset": 999})
+	if !edge.OK || strings.Contains(edge.Message, "item_offset=1000") || !strings.Contains(edge.Message, "前 1000 个") {
+		t.Fatalf("GitHub 只给前 1000 个，不能提示翻到第 1000 个之后：%q", edge.Message)
+	}
+	beyond := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "repo_search", "query": "router", "item_offset": 1000})
+	if beyond.OK || beyond.FailureCode != "invalid_input" {
+		t.Fatalf("item_offset=1000 应在本地拒绝：%#v", beyond)
 	}
 }
 

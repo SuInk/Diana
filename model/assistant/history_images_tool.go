@@ -10,14 +10,13 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
-const (
-	dianaHistoryImagesToolName      = "history_media"
-	maximumHistoryImagesPerToolCall = 8
-)
+const dianaHistoryImagesToolName = "history_media"
 
 type dianaHistoryImagesTool struct {
 	runtime *Runtime
@@ -37,6 +36,9 @@ type dianaHistoryImagesTool struct {
 type historyImageSelector struct {
 	MessageID    string
 	ImageIndexes []int
+	// MediaOnly 是续读时 next_items 带回来的：这条消息的文件正文和语音转写上一页
+	// 已经给过，这次只给画面。
+	MediaOnly bool
 }
 
 type dianaHistoryImagesResult struct {
@@ -45,11 +47,21 @@ type dianaHistoryImagesResult struct {
 	Loaded     int                       `json:"loaded"`
 	FocusCrops int                       `json:"focus_crops,omitempty"`
 	Failed     int                       `json:"failed"`
-	Limited    bool                      `json:"limited,omitempty"`
 	Media      []dianaHistoryImageStatus `json:"media"`
 	Text       []string                  `json:"text,omitempty"`
 	Answer     string                    `json:"answer,omitempty"`
-	Message    string                    `json:"message"`
+	// HasMore/RemainingCount/NextItems 是整张分页：这次装不下的画面一张不丢，
+	// 按消息列进 next_items，原样传给 items 就能接着读。
+	HasMore        bool                   `json:"has_more,omitempty"`
+	RemainingCount int                    `json:"remaining_count,omitempty"`
+	NextItems      []historyMediaNextItem `json:"next_items,omitempty"`
+	Message        string                 `json:"message"`
+}
+
+type historyMediaNextItem struct {
+	MessageID    string `json:"message_id"`
+	MediaIndexes []int  `json:"media_indexes"`
+	MediaOnly    bool   `json:"media_only,omitempty"`
 }
 
 type dianaHistoryImageStatus struct {
@@ -87,29 +99,32 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐。`
+		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
 	if t.asksVision() {
-		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
-	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	properties := map[string]any{
-		"file_index":    toolIntParam("配合 pdf_page 选择消息内的文件序号，默认 1", 1, 1000),
+		"file_index":    toolIntParam("只读消息内第几个文件（配合 pdf_page 或 start_line），默认 1", 1, 1000),
+		"start_line":    toolIntParam("文件正文续读：从第几行起，按返回的续读说明传", 1, 100000000),
 		"pdf_page":      toolIntParam("读取 PDF 指定页，从 1 起；长文档从第 1 页开始，按返回的 next_page 继续", 1, 100000),
 		"page_offset":   toolIntParam("页内字符偏移，从 0 起；同一页未读完时用返回的 next_offset 续读", 0, 100000000),
 		"message_id":    toolStringParam("单条消息 ID，不接受路径或 URL"),
 		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id：画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
 		"message_ids":   toolStringArrayParam("多条消息 ID；三种都省略时用当前引用"),
-		"items": toolItemsParam("逐条指定画面序号，与 message_ids 二选一",
-			maximumHistoryImagesPerToolCall,
-			[]string{"message_id"},
-			map[string]any{
+		// 不设条数上限：一次装不下就按整张分页，结果里的 next_items 和这里同形，原样传回即可。
+		"items": describedParam("逐条指定画面序号，与 message_ids 二选一；续读时传上次返回的 next_items", map[string]any{
+			"type": "array",
+			"items": toolObjectSchema([]string{"message_id"}, map[string]any{
 				"message_id":    toolStringParam("消息 ID"),
 				"media_indexes": map[string]any{"type": "array", "description": "画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
+				"media_only":    toolBoolParam("续读时原样传回：这条消息的文件正文和转写已经给过"),
 			}),
+		}),
 		"detail": toolEnumParam("细节档位，认小字用 high", "auto", "low", "high"),
 	}
 	if t.asksVision() {
@@ -132,22 +147,39 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 				}
 			}
 		}
-	} else if input["page_offset"] != nil || input["file_index"] != nil {
-		return "", fmt.Errorf("page_offset/file_index 必须与 pdf_page 一起使用")
+	} else if input["page_offset"] != nil {
+		return "", fmt.Errorf("page_offset 必须与 pdf_page 一起使用")
+	}
+	for _, key := range []string{"file_index", "start_line"} {
+		if value, exists := input[key]; exists && value != nil {
+			if n, err := groupToolInteger(value); err != nil || n <= 0 {
+				return "", fmt.Errorf("%s 不是有效的正整数", key)
+			}
+		}
 	}
 	selectors, err := historyImageSelectors(input, t.event, t.currentDescribed)
 	if err != nil {
 		return "", err
 	}
-	if input["pdf_page"] != nil && len(selectors) != 1 {
-		return "", fmt.Errorf("PDF 分页每次只指定一条消息，再用 file_index 选择文件")
+	if (input["pdf_page"] != nil || input["file_index"] != nil || input["start_line"] != nil) && len(selectors) != 1 {
+		return "", fmt.Errorf("pdf_page、file_index、start_line 每次只指定一条消息，再用 file_index 选择文件")
 	}
 	detail := normalizeHistoryImageDetail(configToolString(input, "detail"))
 	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
-	parts := make([]llm.ContentPart, 0)
 	var loaded []historyLoadedImage
+	// deferred 是这一页装不下、没有下载的画面，原样列进 next_items。
+	var deferred []historyLoadedImage
 	var files []historyFileSource
-	attempted := 0
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
+	}
+	// 画面作为附件交给模型时和文字共用一个单次上限：上限按满篇中文折成 token，每张图
+	// 按请求预算的口径估 token（high 档 8192），下载前先按档位估，装不下的就不下载。
+	tokenLimit := llm.EstimateTextTokens(strings.Repeat("中", budget))
+	countImages := !t.describesOnly()
+	attachedTokens := int64(0)
+	estimate := historyImageTokenCost([]llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "estimate", Detail: detail}})
 
 	followed := make(map[string]bool, len(selectors))
 	for _, selector := range selectors {
@@ -173,8 +205,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if source.Quoted != nil {
 			textSegments = append(textSegments, source.Quoted.Segments...)
 		}
-		result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
-		files = append(files, historyFileSources(selector.MessageID, source)...)
+		if !selector.MediaOnly {
+			result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
+			files = append(files, historyFileSources(selector.MessageID, source)...)
+		}
 		if input["pdf_page"] != nil {
 			continue
 		}
@@ -209,19 +243,11 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			})
 		}
 		for _, index := range indexes {
-			result.Requested++
-			if attempted >= maximumHistoryImagesPerToolCall {
-				result.Limited = true
-				result.Failed++
-				result.Media = append(result.Media, dianaHistoryImageStatus{
-					MessageID:  selector.MessageID,
-					ImageIndex: index,
-					Status:     "skipped",
-					Error:      "超过单次 8 张图片上限，请分批读取",
-				})
+			if countImages && (len(deferred) > 0 || (len(loaded) > 0 && attachedTokens+estimate > tokenLimit)) {
+				deferred = append(deferred, historyLoadedImage{messageID: selector.MessageID, index: index, mediaPos: -1})
 				continue
 			}
-			attempted++
+			result.Requested++
 			ref := images[index-1]
 			segment := ref.segment
 			mediaType := historicalToolImageMediaType(segment)
@@ -270,10 +296,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 					imageParts = append(imageParts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
 				}
 			}
-			parts = append(parts, imageParts...)
-			loaded = append(loaded, historyLoadedImage{messageID: selector.MessageID, index: index, segment: segment})
-			result.FocusCrops += len(imageParts) - 1
-			result.Loaded++
+			if countImages {
+				attachedTokens += historyImageTokenCost(imageParts)
+			}
+			loaded = append(loaded, historyLoadedImage{messageID: selector.MessageID, index: index, segment: segment, parts: imageParts, mediaPos: len(result.Media)})
 			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID:  selector.MessageID,
 				ImageIndex: index,
@@ -288,39 +314,15 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 
 	result.Text = append(result.Text, t.historyFileTexts(ctx, files, input)...)
-	if result.Loaded == 0 && len(result.Text) == 0 {
+	if len(loaded) == 0 && len(deferred) == 0 && len(result.Text) == 0 {
 		return "", fmt.Errorf("历史媒体读取失败：请求的媒体均不可用（%s）", historyImageFailureSummary(result.Media))
 	}
-	result.OK = true
-	result.Message = fmt.Sprintf("已读取 %d 张历史图片或视频关键帧和 %d 条文件/语音文字信息。", result.Loaded, len(result.Text))
-	if result.Loaded > 0 {
-		result.Message += " 真实画面已附加到本次工具观察，请逐张查看后再回答；不要把摘要当成真实画面细节。"
-	}
-	if result.FocusCrops > 0 {
-		result.Message += fmt.Sprintf(" 为了保留小人像和小字细节，已另附加 %d 张原图局部裁剪。", result.FocusCrops)
-	}
-	if result.Failed > 0 {
-		result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
-	}
-	if t.describesOnly() && len(loaded) > 0 {
-		lines := make([]string, 0, len(loaded))
-		mode := imageTextModeFromContext(ctx)
-		for _, item := range loaded {
-			description := ""
-			if mode != nil {
-				description = mode.segmentDescription(ctx, item.segment)
-			}
-			if description == "" {
-				description = "（未能识别出这张图的内容，不要猜它画了什么）"
-			}
-			lines = append(lines, fmt.Sprintf("message_id=%s 第%d张：%s", item.messageID, item.index, description))
+	result, kept := t.historyMediaPage(ctx, result, loaded, deferred, budget, tokenLimit)
+	var parts []llm.ContentPart
+	if !t.describesOnly() {
+		for _, item := range kept {
+			parts = append(parts, item.parts...)
 		}
-		result.Text = append(result.Text, lines...)
-		result.Message = fmt.Sprintf("已取得 %d 张历史图片或视频关键帧的文字描述，在 text 里；描述由视觉模型写成，可能有误。", len(lines))
-		if result.Failed > 0 {
-			result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
-		}
-		parts = nil
 	}
 	if t.asksVision() && len(parts) > 0 {
 		answer, err := t.runtime.askImages(ctx, t.event, parts, configToolString(input, "question"))
@@ -328,10 +330,7 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			return "", fmt.Errorf("历史媒体看图失败：%w", err)
 		}
 		result.Answer = answer
-		result.Message = historyMediaVisionAnswerMessage(result.Loaded)
-		if result.Failed > 0 {
-			result.Message += fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
-		}
+		result.Message = historyMediaVisionAnswerMessage(result.Loaded) + historyMediaFailedNotice(result) + historyMediaRemainingNotice(result)
 		parts = nil
 	}
 	body, err := json.Marshal(result)
@@ -340,6 +339,120 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	t.setResultParts(parts)
 	return string(body), nil
+}
+
+// historyMediaPage 照 Pi 的做法把读到的画面装进单次结果上限：从前往后按整张收，
+// 收下一张会让结果超出上限就停，剩下的连同没下载的 deferred 按消息列进 next_items，
+// 不缩短描述、不丢图；至少收一张，免得一张大图或大描述永远读不出来。附件画面按
+// historyImageTokenCost 计入 tokenLimit，结果 JSON 同时不超过 budget 字。
+//
+// 以前一次最多 8 张，第 9 张起标成 skipped 计入失败，模型常把没看到的当成读不出来。
+func (t *dianaHistoryImagesTool) historyMediaPage(ctx context.Context, base dianaHistoryImagesResult, loaded, deferred []historyLoadedImage, budget int, tokenLimit int64) (dianaHistoryImagesResult, []historyLoadedImage) {
+	var mode *imageTextMode
+	if t.describesOnly() {
+		mode = imageTextModeFromContext(ctx)
+	}
+	all := append(append([]historyLoadedImage(nil), loaded...), deferred...)
+	descriptions := make([]string, 0, len(loaded))
+	best := t.historyMediaRender(base, all, 0, nil)
+	kept := 0
+	imageTokens := int64(0)
+	for keep := 1; keep <= len(loaded); keep++ {
+		item := loaded[keep-1]
+		if t.describesOnly() {
+			description := ""
+			if mode != nil {
+				description = mode.segmentDescription(ctx, item.segment)
+			}
+			if description == "" {
+				description = "（未能识别出这张图的内容，不要猜它画了什么）"
+			}
+			descriptions = append(descriptions, fmt.Sprintf("message_id=%s 第%d张：%s", item.messageID, item.index, description))
+		} else {
+			imageTokens += historyImageTokenCost(item.parts)
+		}
+		page := t.historyMediaRender(base, all, keep, descriptions)
+		if keep > 1 {
+			body, err := json.Marshal(page)
+			if err == nil && (utf8.RuneCount(body) > budget || llm.EstimateTextTokens(string(body))+imageTokens > tokenLimit) {
+				break
+			}
+		}
+		best, kept = page, keep
+	}
+	return best, loaded[:kept]
+}
+
+// historyImageTokenCost 是这些附件在请求预算里占的 token，和编排请求时同一个估算。
+func historyImageTokenCost(parts []llm.ContentPart) int64 {
+	return llm.EstimateMessageTokens(llm.Message{Role: llm.RoleUser, Parts: parts}) - llm.EstimateMessageTokens(llm.Message{Role: llm.RoleUser})
+}
+
+// historyMediaRender 填好只交回 loaded[:keep] 时的计数、画面状态、续读参数和说明。
+func (t *dianaHistoryImagesTool) historyMediaRender(base dianaHistoryImagesResult, loaded []historyLoadedImage, keep int, descriptions []string) dianaHistoryImagesResult {
+	page := base
+	page.OK = true
+	dropped := make(map[int]bool, len(loaded)-keep)
+	for _, item := range loaded[keep:] {
+		// 没下载的画面（mediaPos<0）本来就不在 media 里。
+		if item.mediaPos >= 0 {
+			dropped[item.mediaPos] = true
+		}
+	}
+	page.Media = make([]dianaHistoryImageStatus, 0, len(base.Media)-len(dropped))
+	for position, status := range base.Media {
+		if !dropped[position] {
+			page.Media = append(page.Media, status)
+		}
+	}
+	page.Loaded = keep
+	page.FocusCrops = 0
+	for _, item := range loaded[:keep] {
+		page.FocusCrops += max(0, len(item.parts)-1)
+	}
+	page.Text = append(append([]string(nil), base.Text...), descriptions...)
+	page.RemainingCount = len(loaded) - keep
+	page.HasMore = page.RemainingCount > 0
+	page.NextItems = nil
+	positions := make(map[string]int)
+	for _, item := range loaded[keep:] {
+		position, found := positions[item.messageID]
+		if !found {
+			position = len(page.NextItems)
+			positions[item.messageID] = position
+			// 这条消息的文件正文和转写已经在这一页给过，续读只要画面。
+			page.NextItems = append(page.NextItems, historyMediaNextItem{MessageID: item.messageID, MediaOnly: true})
+		}
+		page.NextItems[position].MediaIndexes = append(page.NextItems[position].MediaIndexes, item.index)
+	}
+	if t.describesOnly() && keep > 0 {
+		page.FocusCrops = 0
+		page.Message = fmt.Sprintf("已取得 %d 张历史图片或视频关键帧的文字描述，在 text 里；描述由视觉模型写成，可能有误。", keep)
+	} else {
+		page.Message = fmt.Sprintf("已读取 %d 张历史图片或视频关键帧和 %d 条文件/语音文字信息。", keep, len(base.Text))
+		if keep > 0 {
+			page.Message += " 真实画面已附加到本次工具观察，请逐张查看后再回答；不要把摘要当成真实画面细节。"
+		}
+		if page.FocusCrops > 0 {
+			page.Message += fmt.Sprintf(" 为了保留小人像和小字细节，已另附加 %d 张原图局部裁剪。", page.FocusCrops)
+		}
+	}
+	page.Message += historyMediaFailedNotice(page) + historyMediaRemainingNotice(page)
+	return page
+}
+
+func historyMediaFailedNotice(result dianaHistoryImagesResult) string {
+	if result.Failed == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" 另有 %d 张读取失败，禁止推测其内容。", result.Failed)
+}
+
+func historyMediaRemainingNotice(result dianaHistoryImagesResult) string {
+	if !result.HasMore {
+		return ""
+	}
+	return fmt.Sprintf(" 单次结果上限 %d 字，本次按整张交回 %d 张，另有 %d 张没装下（不是读取失败）：把 next_items 原样传给 items 接着读；没读完之前不要说看过了全部。", agent.ToolOutputMaxChars, result.Loaded, result.RemainingCount)
 }
 
 type historyFileSource struct {
@@ -368,16 +481,23 @@ func historyFileSources(messageID string, event MessageEvent) []historyFileSourc
 // historyFileTexts 把历史消息里的文件交给文件解析插件读出正文。
 //
 // 解析插件只看当前消息和引用消息，历史里的文件以前只回文件名加「正文尚未解析」，
-// 模型翻到了也读不了。这里按插件的开关和设置走同一套下载与解析，一次调用里的
-// 文件共用一轮的字数预算，不会因为读了几条历史就挤掉对话上下文。
+// 模型翻到了也读不了。这里按插件的开关走同一套下载与解析。照 Pi 的做法，文件按顺序、
+// 按整行装进这次工具结果的单次上限：前面的给全文，装不下的那个给到最后一个装得下的
+// 整行，后面的只列名字，都写明用 file_index、start_line（PDF 用 pdf_page）续读。
+// 以前按文件数平分预算、每个文件掐头去尾，文件多了干脆不展开。
 func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []historyFileSource, options ...map[string]any) []string {
 	if len(files) == 0 {
 		return nil
 	}
-	if len(options) > 0 && options[0]["pdf_page"] != nil {
+	var option map[string]any
+	if len(options) > 0 {
+		option = options[0]
+	}
+	// 指定了 file_index（PDF 分页或按行续读）时只读那一个文件。
+	if option != nil && (option["pdf_page"] != nil || option["file_index"] != nil || option["start_line"] != nil) {
 		index := 1
-		if options[0]["file_index"] != nil {
-			index = intFromAny(options[0]["file_index"])
+		if option["file_index"] != nil {
+			index = intFromAny(option["file_index"])
 		}
 		selected := make([]historyFileSource, 0, 1)
 		for _, file := range files {
@@ -403,6 +523,7 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 		for index, file := range files {
 			found := collectFileRefs(PluginRequest{Event: MessageEvent{ProfileID: t.event.ProfileID, Platform: t.event.Platform, GroupID: file.groupID, Segments: []MessageSegment{file.segment}}})
 			if len(found) == 1 {
+				found[0].MessageID, found[0].FileIndex = file.messageID, file.index
 				refs[index] = &found[0]
 				parsable++
 			}
@@ -416,34 +537,31 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 		return lines
 	}
 	maxBytes := settings.Bytes(fileParserSettingMaxFileBytes, parser.maxBytes)
-	maxChars, expand := fileParserTurnBudget(settings.Int(fileParserSettingMaxChars, parser.maxChars), parsable)
 	channel, _, err := t.runtime.outboundChannelForEvent(t.event)
 	if err != nil {
 		channel = nil
 	}
 	lines = append(lines, strings.TrimSpace(fileContentNotice))
-	parsed := 0
+	startLine := 1
+	if option != nil && option["start_line"] != nil {
+		startLine = max(1, intFromAny(option["start_line"]))
+	}
+	// 给文件正文的预算：单次上限减去说明行和其他结果字段大致占的地方。
+	budget := max(1, toolResultBudget(ctx)-historyFileResultReserve)
+	used := 0
 	for index, file := range files {
 		ref := refs[index]
 		if ref == nil {
 			lines = append(lines, fmt.Sprintf("message_id=%s %s", file.messageID, historicalFileDescription(file.index, file.segment)))
 			continue
 		}
-		if parsed >= expand {
-			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n- %s\n  状态：这次读的文件太多，为了不挤掉对话上下文没有展开；需要时单独读这条消息", file.messageID, file.index, ref.Name))
+		if used >= budget {
+			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n- %s\n  状态：这次结果已经装满单次上限，这个文件没有展开。%s", file.messageID, file.index, ref.Name, fileContinuationHint(*ref, textLineWindow{Start: 1}, 0)))
 			continue
 		}
-		parsed++
-		if len(options) > 0 && options[0]["pdf_page"] != nil {
-			fileIndex := 1
-			if options[0]["file_index"] != nil {
-				fileIndex = intFromAny(options[0]["file_index"])
-			}
-			if file.index != fileIndex {
-				continue
-			}
-			page := intFromAny(options[0]["pdf_page"])
-			offset := intFromAny(options[0]["page_offset"])
+		if option != nil && option["pdf_page"] != nil {
+			page := intFromAny(option["pdf_page"])
+			offset := intFromAny(option["page_offset"])
 			body, err := t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset)
 			if err != nil {
 				body = "读取 PDF 页失败：" + err.Error()
@@ -451,7 +569,11 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n%s", file.messageID, file.index, body))
 			continue
 		}
-		result := parser.parseRef(ctx, channel, *ref, maxBytes, maxChars)
+		result := parser.parseRefLines(ctx, channel, *ref, maxBytes, startLine, budget-used)
+		used += result.Used
+		if result.Partial {
+			used = budget
+		}
 		body := result.Context
 		if result.ScannedPDF != nil {
 			body = fmt.Sprintf("- %s\n  状态：扫描版 PDF，没有文字层，这里读不出正文；让用户引用这条文件消息再问，会转成 OCR 子任务识别", ref.Name)
@@ -461,10 +583,17 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 	return lines
 }
 
+// historyFileResultReserve 是读文件时给说明行、续读提示和其他结果字段留的字数。
+const historyFileResultReserve = 2_000
+
 type historyLoadedImage struct {
 	messageID string
 	index     int
 	segment   MessageSegment
+	// parts 是这张图交给模型的附件（high 档可能另带局部裁剪），mediaPos 是它在
+	// 结果 media 里的位置，分页时整张一起留下或一起挪到下一页。
+	parts    []llm.ContentPart
+	mediaPos int
 }
 
 // unfollowedSemanticSources 取出这条消息指向、还没读过的来源消息，并记成已读，
@@ -576,11 +705,8 @@ func historicalEventHasCurrentImagePayload(event MessageEvent) bool {
 }
 
 func historyImageFailureSummary(statuses []dianaHistoryImageStatus) string {
-	parts := make([]string, 0, min(len(statuses), 8))
+	parts := make([]string, 0, len(statuses))
 	for _, status := range statuses {
-		if len(parts) >= 8 {
-			break
-		}
 		label := "message_id=" + status.MessageID
 		if status.ImageIndex > 0 {
 			label += fmt.Sprintf(" media_index=%d", status.ImageIndex)
@@ -625,7 +751,8 @@ func historyImageSelectors(input map[string]any, event MessageEvent, includeCurr
 			if err != nil {
 				return nil, fmt.Errorf("message_id=%s 的 media_indexes: %w", messageID, err)
 			}
-			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes})
+			mediaOnly, _ := item["media_only"].(bool)
+			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes, MediaOnly: mediaOnly})
 		}
 	}
 	if len(selectors) == 0 {

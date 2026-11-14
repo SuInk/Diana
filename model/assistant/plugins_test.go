@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -639,24 +640,6 @@ func TestSanitizeFileTextKeepsHeadAndTail(t *testing.T) {
 	}
 	if strings.Contains(got, "第050行") {
 		t.Fatalf("middle should be omitted: %q", got)
-	}
-}
-
-func TestFileParserTurnBudgetCapsWholeTurn(t *testing.T) {
-	for _, tc := range []struct{ maxChars, files, perFile, expand int }{
-		{24000, 1, 24000, 1},
-		{24000, 2, 18000, 2},
-		{24000, 5, 7200, 5},
-		{24000, 50, 2000, 18},
-		{1000, 5, 1000, 1},
-	} {
-		perFile, expand := fileParserTurnBudget(tc.maxChars, tc.files)
-		if perFile != tc.perFile || expand != tc.expand {
-			t.Errorf("fileParserTurnBudget(%d, %d) = %d, %d; want %d, %d", tc.maxChars, tc.files, perFile, expand, tc.perFile, tc.expand)
-		}
-		if tc.files > 1 && perFile*expand > tc.maxChars*3/2 {
-			t.Errorf("fileParserTurnBudget(%d, %d) total %d exceeds turn budget", tc.maxChars, tc.files, perFile*expand)
-		}
 	}
 }
 
@@ -1732,5 +1715,44 @@ func TestXiaohongshuVideoCandidateURLsReadsEF4Stream(t *testing.T) {
 	got := xiaohongshuVideoCandidateURLs(note)
 	if len(got) != 2 || got[0] != "https://sns-video.example/a.mp4" {
 		t.Fatalf("EF4 下的视频地址应当被取到：%v", got)
+	}
+}
+
+// 一条消息里的多个文件按顺序、按整行装进预算：前面的给全文，装不下的给到最后一个装得
+// 下的整行并写明从哪行续读，再后面的只列名字；不再按文件数平分、掐头去尾。
+func TestFileParserPluginFillsBudgetByWholeLinesInOrder(t *testing.T) {
+	dir := t.TempDir()
+	var long strings.Builder
+	for i := 1; i <= 400; i++ {
+		fmt.Fprintf(&long, "长文件第 %03d 行\n", i)
+	}
+	files := map[string]string{"a.txt": "短文件全文", "b.txt": long.String(), "c.txt": "第三个文件"}
+	var segments []MessageSegment
+	for _, name := range []string{"a.txt", "b.txt", "c.txt"} {
+		filePath := filepath.Join(dir, name)
+		if err := os.WriteFile(filePath, []byte(files[name]), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		segments = append(segments, MessageSegment{Type: "file", Data: map[string]string{"name": name, "file": filePath}})
+	}
+	resp, err := NewFileParserPlugin(nil).Handle(context.Background(), PluginRequest{
+		Event:    MessageEvent{Kind: EventKindPrivate, MessageID: "m1", Segments: segments},
+		Settings: SettingValues{fileParserSettingMaxChars: float64(2000)},
+	})
+	if err != nil || resp == nil {
+		t.Fatalf("resp=%#v err=%v", resp, err)
+	}
+	got := resp.Context
+	if !strings.Contains(got, "短文件全文") || !strings.Contains(got, "长文件第 001 行") {
+		t.Fatalf("前面的文件应给全文、长文件从第 1 行给：%q", got)
+	}
+	if strings.Contains(got, "中间省略") || strings.Contains(got, "长文件第 400 行") {
+		t.Fatalf("不应掐头去尾：%q", got)
+	}
+	if !strings.Contains(got, "message_id=m1、file_index=2、start_line=") {
+		t.Fatalf("没给完的文件要写明续读位置：%q", got)
+	}
+	if !strings.Contains(got, "c.txt") || !strings.Contains(got, "file_index=3") || strings.Contains(got, "第三个文件") {
+		t.Fatalf("装满后的文件只列名字并写明怎么读：%q", got)
 	}
 }

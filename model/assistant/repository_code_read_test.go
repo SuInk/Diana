@@ -166,20 +166,29 @@ func TestRepositoryReadFileFitsRunnerBudgetAndResumes(t *testing.T) {
 	}
 }
 
-// 一行就超出上限（压缩过的代码）时给开头一段，这一行算读过，续读不会卡在原地。
-func TestRepositoryFillLinesCutsOverlongLine(t *testing.T) {
+// 一行就超出上限（压缩过的代码）时给开头一段并记下省略字数，这一行算读过，续读不会
+// 卡在原地；只剩这一行时没有可续读的了。
+func TestTakeLinesCutsOverlongLine(t *testing.T) {
 	lines := []string{strings.Repeat("x", 500), "next"}
-	window := repositoryFillLines(len(lines), func(i int) string { return lines[i] }, len(lines), 100)
-	if !window.Cut || window.Count != 1 || repositoryJSONRunes(window.Text) > 100 {
+	window := takeLines(len(lines), func(i int) string { return lines[i] }, 1, len(lines), 100, repositoryJSONRunes)
+	if window.CutRunes != 400 || window.End != 1 || window.ResumeLine() != 2 || repositoryJSONRunes(window.Text) > 100 {
 		t.Fatalf("window=%#v", window)
+	}
+	last := takeLines(1, func(i int) string { return lines[i] }, 1, 1, 100, repositoryJSONRunes)
+	if last.CutRunes != 400 || last.ResumeLine() != 0 || last.Whole() {
+		t.Fatalf("最后一行被切后不该再续读同一行：%#v", last)
+	}
+	tail := takeTextLines("短\n"+strings.Repeat("y", 300), 2, 50, plainRunes)
+	if tail.CutRunes != 250 || !tail.Complete() || tail.Whole() || !strings.Contains(tail.Range(), "250 字") {
+		t.Fatalf("tail=%#v", tail)
 	}
 	if got := repositoryJSONRunes("a\"\n<\x01中"); got != 1+2+2+1+6+1 {
 		t.Fatalf("JSON 字数算错：%d", got)
 	}
 }
 
-// pull_files 在上限内分页：文件清单按 file_offset 续列，单个文件的 patch 按 patch_line 续读，
-// 从 hunk 中间接着读时带上 hunk 头。
+// pull_files 在上限内按整个文件分页：装不下就停在下一个文件前面，按 file_offset 续读；
+// 单个文件太大才按 patch_line 切，从 hunk 中间接着读时带上 hunk 头。
 func TestRepositoryPullFilesPagesWithinBudget(t *testing.T) {
 	github := newRepositoryCodeReadTestGitHub()
 	var patch strings.Builder
@@ -195,74 +204,63 @@ func TestRepositoryPullFilesPagesWithinBudget(t *testing.T) {
 	defer server.Close()
 	tool := repositoryPublishTestTool(server, "review acme/demo PR 85", nil)
 
-	seen := map[string]bool{}
-	offset, calls := 0, 0
+	// 按 message 给的续读参数一路读下去：第一个文件太大按 patch_line 切，之后按 file_offset 整文件翻页。
+	patches := map[string][]string{}
+	offset, patchLine, calls := 0, 0, 0
+read:
 	for {
 		calls++
-		if calls > 20 {
-			t.Fatal("文件清单续列没有收敛")
+		if calls > 60 {
+			t.Fatal("续读没有收敛")
 		}
 		input := map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85}
 		if offset > 0 {
 			input["file_offset"] = offset
 		}
-		result := runRepositoryToolWithBudget(t, tool, 8_000, input)
-		if !result.OK || len(result.Files) == 0 {
-			t.Fatalf("result=%#v", result)
-		}
-		for _, file := range result.Files {
-			if seen[file.Path] {
-				t.Fatalf("文件 %s 列了两次", file.Path)
-			}
-			seen[file.Path] = true
-		}
-		if !result.FilesTruncated {
-			break
-		}
-		if !strings.Contains(result.Message, fmt.Sprintf("file_offset=%d", result.NextFileOffset)) {
-			t.Fatalf("续列提示：%q", result.Message)
-		}
-		offset = result.NextFileOffset
-	}
-	if len(seen) != len(github.files) || calls < 2 {
-		t.Fatalf("按 file_offset 续列应该列全 %d 个文件，got %d（%d 次）", len(github.files), len(seen), calls)
-	}
-
-	var lines []string
-	patchLine := 0
-	for calls = 0; ; {
-		calls++
-		if calls > 20 {
-			t.Fatal("patch 续读没有收敛")
-		}
-		input := map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "paths": []any{"cmd/app.go"}}
 		if patchLine > 0 {
 			input["patch_line"] = patchLine
 		}
 		result := runRepositoryToolWithBudget(t, tool, 8_000, input)
-		if !result.OK || len(result.Files) != 1 {
+		if !result.OK || len(result.Files) == 0 {
 			t.Fatalf("result=%#v", result)
 		}
-		file := result.Files[0]
-		if patchLine > 0 && file.PatchHunk != "@@ -1,3 +1,900 @@" {
-			t.Fatalf("从 hunk 中间续读要带上 hunk 头：%q", file.PatchHunk)
+		for index, file := range result.Files {
+			if index > 0 && (file.PatchTruncated || file.PatchStartLine > 1) {
+				t.Fatalf("只有本页第一个文件可以只给一段：%#v", file)
+			}
+			if patchLine > 0 && index == 0 && file.PatchHunk != "@@ -1,3 +1,900 @@" {
+				t.Fatalf("从 hunk 中间续读要带上 hunk 头：%q", file.PatchHunk)
+			}
+			patches[file.Path] = append(patches[file.Path], strings.Split(file.Patch, "\n")...)
 		}
-		lines = append(lines, strings.Split(file.Patch, "\n")...)
-		if !file.PatchTruncated {
-			break
+		first := result.Files[0]
+		switch {
+		case first.PatchTruncated:
+			if first.PatchTotalLines != 901 || !strings.Contains(result.Message, fmt.Sprintf("file_offset=%d、patch_line=%d", offset, first.PatchEndLine+1)) {
+				t.Fatalf("file=%#v message=%q", first, result.Message)
+			}
+			patchLine = first.PatchEndLine + 1
+		case result.FilesTruncated:
+			if !strings.Contains(result.Message, fmt.Sprintf("file_offset=%d", result.NextFileOffset)) {
+				t.Fatalf("续列提示：%q", result.Message)
+			}
+			offset, patchLine = result.NextFileOffset, 0
+		default:
+			break read
 		}
-		if file.PatchTotalLines != 901 || !strings.Contains(result.Message, fmt.Sprintf("patch_line=%d", file.PatchEndLine+1)) {
-			t.Fatalf("file=%#v message=%q", file, result.Message)
-		}
-		patchLine = file.PatchEndLine + 1
 	}
-	if strings.Join(lines, "\n") != github.files[0].Patch || calls < 2 {
-		t.Fatalf("按 patch_line 续读拼回来的 patch 和原文不一致（%d 次）", calls)
+	if len(patches) != len(github.files) || calls < 3 {
+		t.Fatalf("应读全 %d 个文件，got %d（%d 次）", len(github.files), len(patches), calls)
+	}
+	for _, file := range github.files {
+		if strings.Join(patches[file.Filename], "\n") != file.Patch {
+			t.Fatalf("%s 续读拼回来的 patch 和原文不一致", file.Filename)
+		}
 	}
 
-	multi := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "paths": []any{"web"}, "patch_line": 2})
-	if multi.OK || multi.FailureCode != "invalid_input" {
-		t.Fatalf("patch_line 配多个文件应报错：%#v", multi)
+	beyond := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "file_offset": 3, "patch_line": 9})
+	if beyond.OK || beyond.FailureCode != "invalid_input" {
+		t.Fatalf("patch_line 超出该文件的行数应报错：%#v", beyond)
 	}
 }
 
@@ -293,8 +291,8 @@ func TestRepositoryCommitAndCompareFiles(t *testing.T) {
 	if !compare.OK || compare.Comparison == nil || compare.Comparison.Base != "v1.0" || compare.Comparison.Head != "feature/x" {
 		t.Fatalf("compare=%#v", compare)
 	}
-	if len(compare.Comparison.Commits) != repositoryCompareCommitLimit || !compare.Comparison.CommitsTruncated || !strings.HasSuffix(compare.Comparison.Commits[len(compare.Comparison.Commits)-1], " commit 25") {
-		t.Fatalf("commits=%#v", compare.Comparison.Commits)
+	if len(compare.Comparison.Commits) != 25 || compare.Comparison.CommitStart != 1 || compare.Comparison.CommitEnd != 25 || !strings.HasSuffix(compare.Comparison.Commits[24], " commit 25") {
+		t.Fatalf("提交应全部列出：%#v", compare.Comparison.Commits)
 	}
 	if len(compare.Files) != 2 {
 		t.Fatalf("files=%#v", compare.Files)
@@ -356,5 +354,76 @@ func TestRepositoryListFiles(t *testing.T) {
 	missing := runRepositoryToolWithBudget(t, tool, 4_000, map[string]any{"operation": "list_files", "repository": "acme/demo", "path": "nope"})
 	if missing.OK || missing.FailureCode != "not_found" {
 		t.Fatalf("missing=%#v", missing)
+	}
+}
+
+// patch 的最后一行本身超过单次上限时只给开头、记下省略字数，续读提示跳到下一个文件，
+// 不给出超出范围的 patch_line。
+func TestRepositoryPullFilesCutLastPatchLineMovesToNextFile(t *testing.T) {
+	github := newRepositoryCodeReadTestGitHub()
+	github.files = append(github.files,
+		githubPullRequestFile{Filename: "dist/app.min.js", Status: "modified", Additions: 2, Patch: "@@ -1 +1,2 @@\n+a\n+" + strings.Repeat("x", 20_000)},
+		githubPullRequestFile{Filename: "README.md", Status: "modified", Additions: 1, Patch: "@@ -1 +1 @@\n-a\n+b"},
+	)
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "review acme/demo PR 85", nil)
+
+	first := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85})
+	if !first.OK || len(first.Files) != 1 || first.Files[0].PatchEndLine != 2 || !strings.Contains(first.Message, "file_offset=0、patch_line=3") {
+		t.Fatalf("first=%#v %q", first.Files, first.Message)
+	}
+	second := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "patch_line": 3})
+	file := second.Files[0]
+	if !second.OK || file.PatchCutRunes == 0 || file.PatchEndLine != 3 || !file.PatchTruncated {
+		t.Fatalf("被切的最后一行要带 patch_cut_runes：%#v", file)
+	}
+	if strings.Contains(second.Message, "patch_line=4") || !strings.Contains(second.Message, "file_offset=1") || !strings.Contains(second.Message, fmt.Sprintf("%d 字没有给出", file.PatchCutRunes)) {
+		t.Fatalf("应写明省略字数并跳到下一个文件：%q", second.Message)
+	}
+	next := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "file_offset": 1})
+	if !next.OK || len(next.Files) != 1 || next.Files[0].Path != "README.md" {
+		t.Fatalf("next=%#v", next.Files)
+	}
+}
+
+// compare_files 的提交清单按整条分页：commit_offset 续列，列完之后传不小于提交总数的
+// commit_offset 跳过清单读文件；列提交的那几页不夹带文件。
+func TestRepositoryCompareCommitOffsetPages(t *testing.T) {
+	github := newRepositoryCodeReadTestGitHub()
+	github.commitFiles = []githubPullRequestFile{{Filename: "a.go", Status: "modified", Additions: 1, Patch: "@@ -1 +1 @@\n-a\n+b"}}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "比较一下", nil)
+
+	var commits []string
+	offset := 0
+	for calls := 1; ; calls++ {
+		if calls > 20 {
+			t.Fatal("commit_offset 续列没有收敛")
+		}
+		input := map[string]any{"operation": "compare_files", "repository": "acme/demo", "base": "v1.0", "head": "feature/x"}
+		if offset > 0 {
+			input["commit_offset"] = offset
+		}
+		page := runRepositoryToolWithBudget(t, tool, 2_200, input)
+		if !page.OK || page.Comparison == nil {
+			t.Fatalf("page=%#v", page)
+		}
+		commits = append(commits, page.Comparison.Commits...)
+		if page.Comparison.CommitEnd >= 25 {
+			break
+		}
+		if len(page.Files) != 0 || !strings.Contains(page.Message, fmt.Sprintf("commit_offset=%d", page.Comparison.CommitEnd)) {
+			t.Fatalf("列提交的页不给文件、写明续列位置：%#v %q", page.Files, page.Message)
+		}
+		offset = page.Comparison.CommitEnd
+	}
+	if len(commits) != 25 || !strings.HasSuffix(commits[0], " commit 1") || !strings.HasSuffix(commits[24], " commit 25") {
+		t.Fatalf("应按时间顺序列全 25 个提交：%#v", commits)
+	}
+	files := runRepositoryToolWithBudget(t, tool, 2_200, map[string]any{"operation": "compare_files", "repository": "acme/demo", "base": "v1.0", "head": "feature/x", "commit_offset": 25})
+	if !files.OK || len(files.Comparison.Commits) != 0 || len(files.Files) == 0 {
+		t.Fatalf("commit_offset=25 应跳过提交清单直接读文件：%#v", files)
 	}
 }

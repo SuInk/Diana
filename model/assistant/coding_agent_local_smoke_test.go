@@ -81,7 +81,7 @@ func runLocalRealCodingProfileSmoke(t *testing.T, backend, marker string) {
 	}
 	t.Logf("completed: status=%s exit=%d agent=%s result=%s", job.Status, job.ExitCode, job.Agent, job.Result)
 	if job.Status != codingJobStatusSucceeded {
-		t.Fatalf("real CLI failed: %s; log tail: %s", job.Error, strings.Join(codingLogTail(job, 8), "\n"))
+		t.Fatalf("real CLI failed: %s; log tail: %s", job.Error, strings.Join(parseCodingLog(job.LogPath).Actions, "\n"))
 	}
 	if job.Agent != "local-"+backend || strings.TrimSpace(job.Result) != marker {
 		t.Fatalf("wrong agent or missing output")
