@@ -218,7 +218,9 @@ type SandboxedBrowserConfig struct {
 	// Window 决定窗口看不看得见，默认有头隐藏。有头需要一块屏幕，这台机器凑不出来（Linux
 	// 上既没有图形会话也没装 Xvfb，比如 slim 镜像）时渲染直接报错。每次仍是一次性的
 	// 隔离 Profile。
-	Window            BrowserWindow
+	Window BrowserWindow
+	// Headless 直接以无头模式启动，不要屏幕（打印 PDF 用）。
+	Headless          bool
 	Timeout           time.Duration
 	MaxHTMLBytes      int
 	MaxTextChars      int

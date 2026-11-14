@@ -215,27 +215,18 @@ func withHTMLCaptureSessionMode(ctx context.Context, req HTMLCaptureRequest, hea
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 
-	var process *sandboxedChromeProcess
-	if headlessPDF {
-		process, err = launchHeadlessCaptureChrome(ctx, executable, dirs)
-	} else {
-		process, err = launchSandboxedChrome(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, SandboxedBrowserConfig{Window: BrowserWindowHidden, ExtraArgs: htmlCaptureExtraArgs()})
-	}
+	process, err := launchSandboxedChrome(ctx, executable, dirs.root, dirs.profile, dirs.cache, dirs.crash, SandboxedBrowserConfig{Window: BrowserWindowHidden, Headless: headlessPDF, ExtraArgs: htmlCaptureExtraArgs()})
 	if err != nil {
 		return err
 	}
 	defer process.stop()
 	allocator, cancelAllocator := chromedp.NewRemoteAllocator(ctx, process.wsURL, chromedp.NoModifyURL)
 	defer cancelAllocator()
-	var contextOptions []chromedp.ContextOption
-	if !headlessPDF {
-		targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
-		if err != nil {
-			return fmt.Errorf("html capture: open headed page: %w", err)
-		}
-		contextOptions = append(contextOptions, chromedp.WithTargetID(target.ID(targetID)))
+	targetID, err := openBackgroundPage(ctx, process.wsURL, process.window)
+	if err != nil {
+		return fmt.Errorf("html capture: open page: %w", err)
 	}
-	browser, cancelBrowser := chromedp.NewContext(allocator, contextOptions...)
+	browser, cancelBrowser := chromedp.NewContext(allocator, chromedp.WithTargetID(target.ID(targetID)))
 	defer cancelBrowser()
 
 	chromedp.ListenTarget(browser, func(event any) {
@@ -264,42 +255,6 @@ func withHTMLCaptureSessionMode(ctx context.Context, req HTMLCaptureRequest, hea
 		return fmt.Errorf("html capture: wait fonts: %w", err)
 	}
 	return run(&htmlCaptureSession{ctx: browser, req: req})
-}
-
-// launchHeadlessCaptureChrome 以无头模式启动三层离线隔离浏览器（用于 PDF 矢量打印）：
-//   - 不依赖图形显示或 Xvfb，无桌面的裸 Linux、Docker slim、Termux、macOS 与 Windows 均可直接运行；
-//   - 不带 --no-startup-window，自带初始 about:blank 标签页且不抢夺宿主前台焦点；
-//   - 优先使用现代 --headless=new，遇到旧版 Chromium（< 112）自动回退 --headless，并保留系统沙箱自动降级语义。
-func launchHeadlessCaptureChrome(ctx context.Context, executable string, dirs browserSandboxDirs) (*sandboxedChromeProcess, error) {
-	buildArgs := func(headlessFlag string) []string {
-		args := append([]string{headlessFlag}, sandboxedChromeBaseArgsForMode(dirs.profile, dirs.cache, dirs.crash, false)...)
-		args = append(args,
-			"--remote-debugging-address=127.0.0.1",
-			"--remote-debugging-port=0",
-			"--window-size=1280,960",
-		)
-		args = append(args, htmlCaptureExtraArgs()...)
-		return append(args, "about:blank")
-	}
-	tryFlag := func(headlessFlag string) (*sandboxedChromeProcess, error) {
-		proc, err := launchChromeProcessWithEnv(ctx, executable, dirs.root, buildArgs(headlessFlag), nil)
-		if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
-			clearChromeSingletonLocks(dirs.profile)
-			proc, err = launchChromeProcessWithEnv(ctx, executable, dirs.root, buildArgs(headlessFlag), nil)
-		}
-		return proc, err
-	}
-	proc, err := tryFlag("--headless=new")
-	if err != nil && ctx.Err() == nil && !browserSandboxFailure(err.Error()) {
-		clearChromeSingletonLocks(dirs.profile)
-		if legacyProc, legacyErr := tryFlag("--headless"); legacyErr == nil {
-			return legacyProc, nil
-		}
-	}
-	if err != nil {
-		return nil, WithBrowserSandboxHint(err)
-	}
-	return proc, nil
 }
 
 func htmlCaptureExtraArgs() []string {

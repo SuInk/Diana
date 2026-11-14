@@ -614,7 +614,7 @@ type Runtime struct {
 	// semanticQueryBreaker 在 embedding 服务连续失败时让查询路径快速跳过，见 semantic_query_breaker.go。
 	semanticQueryBreaker semanticQueryBreaker
 	// semanticIndexBreaker 在 embedding 主机长期下线时对后台向量索引做指数退避，防止队列和日志刷屏。
-	semanticIndexBreaker semanticIndexBreaker
+	semanticIndexBreaker semanticQueryBreaker
 	chatInLastReplyAt    map[string]time.Time
 	// groupLastReplyAt 记各群机器人最后一次发出回复的时间，见 relevance_only_window.go。
 	groupLastReplyAt map[string]time.Time
@@ -964,6 +964,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		botReplyLoopByKey:       map[string]botReplyLoopState{},
 		privateClosingBySession: map[string]*privateClosingState{},
 		groupStopBySession:      map[string]groupStopState{},
+		semanticIndexBreaker:    semanticQueryBreaker{maxCooldown: 15 * time.Minute},
 		activeDirectReplies:     map[string]*activeDirectReply{},
 		proactiveRouteDebounce:  defaultProactiveRouteDebounce,
 		errorNoticeBursts:       map[string]*errorNoticeBurst{},
