@@ -80,11 +80,6 @@ type outboundImageVerdict struct {
 
 type outboundImageAuditSkippedContextKey struct{}
 
-// withOutboundImageAuditSkipped 让这次发送不审图：已经审过、只是换条路重发的消息用。
-func withOutboundImageAuditSkipped(ctx context.Context) context.Context {
-	return context.WithValue(ctx, outboundImageAuditSkippedContextKey{}, true)
-}
-
 func outboundImageAuditSkipped(ctx context.Context) bool {
 	skipped, _ := ctx.Value(outboundImageAuditSkippedContextKey{}).(bool)
 	return skipped

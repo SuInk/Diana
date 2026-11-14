@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -49,7 +48,7 @@ func assertGenerationBudget(t *testing.T, req llm.GenerateRequest, limit int) {
 }
 
 func TestReplyGenerationBudgetReachesFirstCallWithoutCompression(t *testing.T) {
-	for _, entry := range []string{"plain", "agent", "follow_up"} {
+	for _, entry := range []string{"plain", "follow_up"} {
 		t.Run(entry, func(t *testing.T) {
 			p := &compressionTestProvider{capturingLLMProvider: capturingLLMProvider{reply: "完整简洁的答复"}}
 			rt := NewRuntime(BotConfig{MaxReplyChars: 500}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return p, nil })
@@ -66,9 +65,6 @@ func TestReplyGenerationBudgetReachesFirstCallWithoutCompression(t *testing.T) {
 			case "plain":
 				cfg.AgentEnabled = false
 				reply, err = rt.generateReply(context.Background(), cfg, event, RelationshipPolicy{}, messages, nil)
-			case "agent":
-				cfg.AgentEnabled = false
-				reply, err = rt.generateReplyWithAgentTools(context.Background(), cfg, messages, []agent.Tool{markerProbeTool{}})
 			case "follow_up":
 				reply = rt.followUpComment(context.Background(), followUpKindPlugin, event, "已发送正文")
 			}

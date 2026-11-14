@@ -27,21 +27,6 @@ func personaScopeProfiles() (assistant.BotConfig, assistant.BotConfig, stubBotPr
 	}}
 }
 
-func newPersonaScopeStore(t *testing.T, dir string, source BotProfileSource) *PersistentBotGroupConfigStore {
-	t.Helper()
-	db, err := storage.NewSQLiteStore(filepath.Join(dir, "groups.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
-	store, err := NewPersistentBotGroupConfigStore(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.SetProfileSource(source)
-	return store
-}
-
 // 保存一台机器人的群会顺手归一化整份数据，那一遍不能把当前这台的人设和默认值
 // 糊到别人的群上。老库里正好躺着一批没补过默认值的行，这里就照那个样子造。
 func TestSaveGroupConfigDoesNotTouchOtherProfileGroups(t *testing.T) {

@@ -153,7 +153,7 @@ func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session str
 		cancel()
 		if len([]rune(text)) >= semanticMinTextRunes {
 			embedCfg, ok := r.embeddingProviderConfig(botConfig)
-			if ok && !r.semanticIndexBreaker.isCoolingDown(semanticIndexBreakerKey(embedCfg), time.Now()) {
+			if ok && !r.semanticIndexBreaker.isCoolingDown(semanticBreakerKey(embedCfg), time.Now()) {
 				item.text = text
 				item.embedding = embedCfg
 			}
@@ -261,7 +261,7 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 
 	vectorsByItem := make(map[int][]float32, len(batch))
 	for _, group := range groups {
-		breakerKey := semanticIndexBreakerKey(group.cfg)
+		breakerKey := semanticBreakerKey(group.cfg)
 		if !r.semanticIndexBreaker.allow(breakerKey, time.Now()) {
 			continue
 		}

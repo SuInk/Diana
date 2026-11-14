@@ -1240,33 +1240,6 @@ func imageSegmentCount(segments []MessageSegment) int {
 	return count
 }
 
-// VideoURLs 提取 OneBot 视频段里的远程 URL 或接入端提供的本地绝对路径。
-func VideoURLs(segments []MessageSegment) []string {
-	var out []string
-	seen := map[string]struct{}{}
-	for _, segment := range segments {
-		if segment.Type != "video" {
-			continue
-		}
-		for _, key := range []string{"url", "video_url", "src", "file", "path"} {
-			videoURL := normalizedHTTPURL(segment.Data[key])
-			if videoURL == "" {
-				videoURL = localVideoPath(segment.Data[key])
-			}
-			if videoURL == "" {
-				continue
-			}
-			if _, ok := seen[videoURL]; ok {
-				break
-			}
-			seen[videoURL] = struct{}{}
-			out = append(out, videoURL)
-			break
-		}
-	}
-	return out
-}
-
 func normalizedImageURL(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -1456,14 +1429,6 @@ func parseCQSegment(code string) MessageSegment {
 	return segment
 }
 
-// EscapeCQText 转义 CQ 文本里的特殊字符。
-func EscapeCQText(text string) string {
-	text = strings.ReplaceAll(text, "&", "&amp;")
-	text = strings.ReplaceAll(text, "[", "&#91;")
-	text = strings.ReplaceAll(text, "]", "&#93;")
-	return text
-}
-
 // unescapeCQ 还原 CQ 参数里的转义字符。
 func unescapeCQ(text string) string {
 	replacer := strings.NewReplacer("&#91;", "[", "&#93;", "]", "&amp;", "&", "&#44;", ",")
@@ -1497,22 +1462,4 @@ func stripBotMentions(text string, botAccount string) string {
 		text = strings.ReplaceAll(text, value, "")
 	}
 	return strings.TrimSpace(text)
-}
-
-// oneBotEndpointWithToken 给 OneBot endpoint 补充 access_token 查询参数。
-func oneBotEndpointWithToken(endpoint string, token string) string {
-	if token == "" {
-		return endpoint
-	}
-	parsed, err := url.Parse(endpoint)
-	if err != nil {
-		return endpoint
-	}
-	q := parsed.Query()
-	if q.Get("access_token") == "" {
-		// 反向 WS 的一些部署习惯把 token 放查询参数，这里只在未设置时补上。
-		q.Set("access_token", token)
-		parsed.RawQuery = q.Encode()
-	}
-	return parsed.String()
 }

@@ -1024,43 +1024,6 @@ func chatHistoryBool(input map[string]any, key string) bool {
 	return toolInputBool(input, key)
 }
 
-func chatHistoryReferenceOutsideContext(event MessageEvent, history []MessageEvent) bool {
-	references := append([]string(nil), replyReferenceIDs(event.Segments)...)
-	references = append(references, eventSemanticSourceMessageIDs(event)...)
-	if event.Quoted != nil {
-		references = append(references, event.Quoted.MessageID)
-		references = append(references, quotedSemanticSourceMessageIDs(event.Quoted)...)
-	}
-	for _, messageID := range dedupeStrings(references) {
-		messageID = strings.TrimSpace(messageID)
-		if messageID == "" {
-			continue
-		}
-		found := false
-		for _, item := range history {
-			if strings.TrimSpace(item.MessageID) == messageID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return true
-		}
-	}
-	return false
-}
-
-func chatHistoryItems(events []MessageEvent) []dianaChatHistoryItem {
-	items := make([]dianaChatHistoryItem, 0, len(events))
-	for _, event := range events {
-		if event.Kind == EventKindNotice {
-			continue
-		}
-		items = append(items, chatHistoryItem(event))
-	}
-	return items
-}
-
 func (t *dianaChatHistoryTool) items(ctx context.Context, events []MessageEvent) []dianaChatHistoryItem {
 	items := make([]dianaChatHistoryItem, 0, len(events))
 	cfg := t.runtime.effectiveConfigForEvent(t.event)

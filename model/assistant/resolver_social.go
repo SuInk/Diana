@@ -111,20 +111,6 @@ func resolverNickname() string {
 	)
 }
 
-func hasKnownResolverMediaURL(event MessageEvent, text string) bool {
-	source := strings.Join([]string{text, event.RawMessage, PlainText(event.Segments)}, "\n")
-	for _, raw := range extractURLs(source) {
-		parsed, err := url.Parse(raw)
-		if err != nil {
-			continue
-		}
-		if key, _ := platformKeyAndLabel(parsed.Hostname()); platformSupportsMedia(key) {
-			return true
-		}
-	}
-	return false
-}
-
 func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginRequest, raw string, maxImages int, cacheTTL time.Duration) resolverSocialResult {
 	credentials := resolverCredentials{
 		BiliSessdata: bilibiliSessdata(ctx), DouyinCookie: resolverDouyinCookie(ctx),
@@ -230,15 +216,6 @@ func (p *ResolverPlugin) resolveSocialMediaFresh(ctx context.Context, req Plugin
 		}
 	}
 	return result
-}
-
-func platformNameFromURL(raw string) string {
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "social"
-	}
-	key, _ := platformKeyAndLabel(parsed.Hostname())
-	return firstNonEmpty(key, "social")
 }
 
 func resolverPlatformResourcePrefix(platform string) string {

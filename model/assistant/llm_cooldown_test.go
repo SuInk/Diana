@@ -816,3 +816,20 @@ func TestEffectiveModelRequestTimeoutDefault(t *testing.T) {
 		t.Fatalf("configured = %s", got)
 	}
 }
+
+// remaining 返回候选还要冷却多久，不在冷却中返回 0。
+func (t *llmCooldownTable) remaining(profile llm.Profile) time.Duration {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	entry := t.entries[llmCooldownKey(profile)]
+	if entry == nil {
+		return 0
+	}
+	if left := entry.until.Sub(t.clock()); left > 0 {
+		return left
+	}
+	return 0
+}

@@ -187,7 +187,3 @@ func TestReplyDensityScope(t *testing.T) {
 		t.Fatal("窗口外的回复不该算密")
 	}
 }
-
-func meaninglessAuditVerdict(meaningless bool, reason string) string {
-	return fmt.Sprintf(`{"send_confidence":0.9,"account_safe":true,"count_refusal":false,"reply_loop_meaningless":%v,"reply_loop_purposeless":false,"reply_loop_confidence":0.97,"reply_loop_reason":%q}`, meaningless, reason)
-}

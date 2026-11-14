@@ -30,7 +30,6 @@ import (
 // 中途发言拆回独立的 say 工具，静默从 9/84 涨到 25/84，没用。
 
 const (
-	dianaInterimMessageToolName = "say"
 	// interimMessageMaxPerTurn 是一轮里中途最多说几次：开个头、报两次进度就够了，
 	// 再多就是在把答案拆开发。
 	interimMessageMaxPerTurn = 3
@@ -107,22 +106,6 @@ type dianaInterimMessageTool struct {
 
 func newDianaInterimMessageTool(r *Runtime, event MessageEvent) *dianaInterimMessageTool {
 	return &dianaInterimMessageTool{runtime: r, event: event}
-}
-
-func (t *dianaInterimMessageTool) Name() string { return dianaInterimMessageToolName }
-
-func (t *dianaInterimMessageTool) Description() string {
-	// 「说了去做就得接着做」「旁边的正文不算说过」是事故规则（#812、#912）：
-	// 模型 say 完「我去查」就直接收尾，或把工具调用旁的正文当成已发出。
-	return fmt.Sprintf(`立刻发一句话且本轮不结束，用于动手前说「我去查一下」或长任务报进度。`+
-		`说了去做就必须接着调工具真的做，不能说完就收工。不用来拆分答案：每轮最多 %d 次，每次≤%d 字。`+
-		`说过的话最后不要重复，都说完就 send silent=true。只有调了本工具才算说过，工具调用旁的正文不会发出。`, interimMessageMaxPerTurn, interimMessageMaxRunes)
-}
-
-func (t *dianaInterimMessageTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"text"}, map[string]any{
-		"text": toolStringParam("要立刻发的一句话"),
-	})
 }
 
 type interimMessageResult struct {

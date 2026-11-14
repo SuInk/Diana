@@ -8,13 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/llm"
 )
@@ -196,101 +194,6 @@ func directPluginReply(resp PluginResponse) string {
 	return strings.TrimSpace(resp.Context)
 }
 
-// generateReplyWithAgentTools retains the newer plugin-tool entry point. Plugin
-// tools remain callable even when the full local Agent surface is disabled.
-func (r *Runtime) generateReplyWithAgentTools(ctx context.Context, cfg BotConfig, messages []llm.Message, extraTools []agent.Tool) (string, error) {
-	cfg = cfg.WithDefaults()
-	messages = withReplyGenerationBudgetForConfig(messages, cfg)
-	if cfg.AgentEnabled || len(extraTools) > 0 {
-		agentCfg := agent.Config{
-			WorkDir:                    AgentWorkspaceDir(),
-			SkillRoots:                 cfg.AgentSkillRoots,
-			MCPConfigPath:              cfg.AgentMCPConfigPath,
-			CommandSandbox:             cfg.AgentCommandSandbox,
-			CommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
-			FileWriteEnabled:           cfg.AgentFileWriteEnabled,
-			CommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
-			BrowserCDPURL:              cfg.AgentBrowserCDPURL,
-			BrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
-			// 没有发言者信息，不能假定主人身份或命中截图白名单。
-			BrowserScreenshotDisabled:   true,
-			BrowserOperationDisabled:    true,
-			BrowserScreenshotRestricted: true,
-			BrowserControl:              r.browserControlFor(cfg),
-			DesktopControl:              r.desktopControlFor(cfg),
-			BuiltinBrowser:              r.browserBoxFor(cfg),
-		}
-		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
-		registry := agent.NewToolRegistry()
-		if cfg.AgentEnabled {
-			// 安全模式只借已经起来的底座，不为自己拉起 MCP 进程，见 newAgentRegistry。
-			var base *agent.ToolRegistry
-			var err error
-			if cfg.agentSafeMode() {
-				base = r.cachedAgentRegistry(agentCfg)
-			} else if base, err = r.sharedAgentRegistry(ctx, agentCfg); err != nil {
-				return "", err
-			}
-			if base != nil {
-				registry, err = base.NewView(agentCfg)
-			} else {
-				registry, err = agent.NewDefaultToolRegistry(agentCfg)
-				if err == nil {
-					registry.RegisterScopedSkills(agentCfg.BuiltinSkills, safeModeLocalSkills(agentCfg), agentCfg.ReservedSkillNames)
-				}
-			}
-			if err != nil {
-				return "", err
-			}
-			// 全局关着的 MCP 可能因为别的机器人单独打开而在跑，这台机器人没开就不能用。
-			// 读不到覆盖时退回只按全局开关过滤，不因为配置读失败把工具放出去。
-			overrides, _ := agent.LoadExtensionOverrides(AgentWorkspaceDir(), cfg.ID)
-			registry.ApplyExtensionOverrides(overrides)
-		}
-		for _, tool := range extraTools {
-			registry.Register(tool)
-		}
-		// 旧的非 Agent 路径（AgentEnabled=false，待移除）只有调用方给的插件工具，没有
-		// 安全模式要摘的东西。
-		if cfg.AgentEnabled {
-			applyAgentSafeMode(cfg, registry)
-		}
-		agentClient := newRuntimeAgentLLMProvider(r, ctx)
-		// 这条路径不知道发言者是谁，只有完全公开时才给。
-		if normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone {
-			registry.Register(newDianaRuntimeModelTool(agentClient))
-		}
-		runner, err := agent.NewRunner(agentClient, agentCfg, registry)
-		if err != nil {
-			_ = registry.Close()
-			return "", err
-		}
-		defer runner.Close()
-		resp, err := runner.Run(ctx, agent.Request{Messages: messages})
-		if err != nil {
-			return "", err
-		}
-		return r.prepareGeneratedReply(ctx, cfg, resp.Text)
-	}
-	// 图直接交给对话模型（它不收图时这一轮已经换成了描述，见 image_input_mode.go）；
-	// 只有语音还要走多模态那条路由。
-	group := llm.GroupChat
-	if messagesContainAudio(messages) {
-		group = llm.GroupVision
-	}
-	raw, err := r.runLLMProviderForGroup(ctx, group, func(client LLMProvider) (string, error) {
-		resp, err := client.Generate(ctx, llm.GenerateRequest{Messages: messages})
-		if err != nil {
-			return "", err
-		}
-		return resp.Text, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return r.prepareGeneratedReply(ctx, cfg, raw)
-}
-
 // 第三方插件的 SKILL.md 是仓库作者写的说明，不是查询结果。它可以指导怎么回复，但不能
 // 代替当前用户授权任何有副作用的操作。
 const (
@@ -397,51 +300,6 @@ func (r *Runtime) sendDirectPluginResponse(ctx context.Context, event MessageEve
 		}
 	}
 	cleanupLocalMediaFilesLater(videoURLs, resolverLocalMediaTTL)
-	return nil
-}
-
-func (r *Runtime) sendPluginResponse(ctx context.Context, event MessageEvent, resp PluginResponse) error {
-	r.mu.RLock()
-	sharer := r.localMedia
-	r.mu.RUnlock()
-	videoURLs := make([]string, 0, len(resp.VideoURLs))
-	localPaths := make([]string, 0, len(resp.VideoURLs))
-	for _, value := range resp.VideoURLs {
-		if path := localMediaPath(value); path != "" {
-			if sharer == nil {
-				return fmt.Errorf("diana: local media sharing is not configured")
-			}
-			sharedURL, ok := sharer.Share(path, resolverLocalMediaTTL)
-			if !ok {
-				return fmt.Errorf("diana: cannot share downloaded media %q", filepath.Base(path))
-			}
-			videoURLs = append(videoURLs, sharedURL)
-			localPaths = append(localPaths, path)
-			continue
-		}
-		if value = strings.TrimSpace(value); value != "" {
-			videoURLs = append(videoURLs, value)
-		}
-	}
-	msg := routeOutgoingToEvent(event, OutgoingMessage{
-		Text:      directPluginReply(resp),
-		ImageURLs: append([]string(nil), resp.ImageURLs...),
-		VideoURLs: videoURLs,
-	})
-	cfg := r.effectiveConfigForEvent(event)
-	if event.Kind == EventKindGroup {
-		if replyReferenceMode(cfg) == ReplyDecorationOn {
-			msg.ReplyMessageID = event.MessageID
-		}
-		if mentionUserMode(cfg) == ReplyDecorationOn {
-			msg.MentionUserID = event.UserID
-		}
-	}
-	if err := r.sendOutgoing(ctx, event, msg); err != nil {
-		cleanupLocalMediaFilesLater(localPaths, time.Second)
-		return err
-	}
-	cleanupLocalMediaFilesLater(localPaths, resolverLocalMediaTTL)
 	return nil
 }
 
@@ -1833,28 +1691,6 @@ func composeRepositoryWatchMessageWithTemplate(template, repository, body string
 		"body":       strings.TrimSpace(body),
 	})
 	return trimNotificationSplitMarkers(rendered)
-}
-
-func repositoryWatchRecentContext(history []MessageEvent, limit int) string {
-	if limit <= 0 {
-		limit = 6
-	}
-	if len(history) > limit {
-		history = history[len(history)-limit:]
-	}
-	lines := make([]string, 0, len(history))
-	for _, event := range history {
-		text := strings.TrimSpace(firstNonEmpty(PlainText(event.Segments), event.RawMessage, event.botReply))
-		if text == "" {
-			continue
-		}
-		role := firstNonEmpty(strings.TrimSpace(event.SenderName), strings.TrimSpace(event.UserID), "群成员")
-		if strings.TrimSpace(event.botReply) != "" || assistantHistoryEvent(event, "") {
-			role = "机器人"
-		}
-		lines = append(lines, role+"："+truncateRunes(text, 240))
-	}
-	return strings.Join(lines, "\n")
 }
 
 func renderRepositoryWatchChanges(change repositoryWatchChange) string {

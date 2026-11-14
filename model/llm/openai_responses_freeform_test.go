@@ -34,18 +34,6 @@ func requestTools(t *testing.T, body map[string]any) map[string]map[string]any {
 	return out
 }
 
-func inputTypes(body map[string]any) []string {
-	var types []string
-	items, _ := body["input"].([]any)
-	for _, raw := range items {
-		item, _ := raw.(map[string]any)
-		if kind, _ := item["type"].(string); kind != "" && kind != "message" {
-			types = append(types, kind)
-		}
-	}
-	return types
-}
-
 // 带 Freeform 的工具按自定义工具发（带 Lark 文法），其余照旧是函数工具；模型回的
 // custom_tool_call 还原成参数，第一行 @options 并进参数。
 func TestResponsesSendsFreeformToolAndParsesCustomCall(t *testing.T) {

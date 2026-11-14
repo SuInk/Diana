@@ -16,8 +16,6 @@ import (
 	"github.com/SuInk/diana/model/browserbox"
 )
 
-const agentScopeContextRadius = 1
-
 type agentReplyScope struct {
 	Routed                bool
 	ToolNames             []string
@@ -375,15 +373,6 @@ func groupExtensionOverrides(access map[string]GroupExtensionAccess) map[string]
 	return values
 }
 
-func sortedExtensionIDs(values map[string]bool) []string {
-	ids := make([]string, 0, len(values))
-	for id := range values {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 // agentExtensionBase 取共享扩展底座。主人会话和「有 MCP 放给群成员」时按需拉起；
 // 其余群消息只借用已经起来的底座，不为一句闲聊新起一堆 MCP 进程——借到了也有用：
 // 白名单外的工具名这时能被认出来是没权限，而不是查无此工具。
@@ -724,88 +713,6 @@ func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExte
 		})
 	}
 	return extensions
-}
-
-func (scope agentReplyScope) toolSet() map[string]bool {
-	if !scope.Routed {
-		return nil
-	}
-	selected := make(map[string]bool, len(scope.ToolNames))
-	for _, name := range scope.ToolNames {
-		if name = strings.TrimSpace(name); name != "" {
-			selected[name] = true
-		}
-	}
-	return selected
-}
-
-func withoutAgentTool(names []string, excluded string) []string {
-	excluded = strings.TrimSpace(excluded)
-	filtered := make([]string, 0, len(names))
-	for _, name := range names {
-		if strings.TrimSpace(name) != excluded {
-			filtered = append(filtered, name)
-		}
-	}
-	return filtered
-}
-
-func filterAgentReplyHistory(history []MessageEvent, event MessageEvent, scope agentReplyScope) []MessageEvent {
-	if !scope.Routed {
-		return history
-	}
-	wanted := map[string]bool{}
-	add := func(messageID string) {
-		if messageID = strings.TrimSpace(messageID); messageID != "" {
-			wanted[messageID] = true
-		}
-	}
-	for _, messageID := range scope.ContextMessageIDs {
-		add(messageID)
-	}
-	for _, messageID := range eventSemanticSourceMessageIDs(event) {
-		add(messageID)
-	}
-	for _, messageID := range replyReferenceIDs(event.Segments) {
-		add(messageID)
-	}
-	if event.Quoted != nil {
-		add(event.Quoted.MessageID)
-		for _, messageID := range quotedSemanticSourceMessageIDs(event.Quoted) {
-			add(messageID)
-		}
-		for _, messageID := range replyReferenceIDs(event.Quoted.Segments) {
-			add(messageID)
-		}
-	}
-	if len(wanted) == 0 {
-		return nil
-	}
-
-	include := map[int]bool{}
-	for index, item := range history {
-		if !wanted[strings.TrimSpace(item.MessageID)] {
-			continue
-		}
-		left := index - agentScopeContextRadius
-		if left < 0 {
-			left = 0
-		}
-		right := index + agentScopeContextRadius
-		if right >= len(history) {
-			right = len(history) - 1
-		}
-		for nearby := left; nearby <= right; nearby++ {
-			include[nearby] = true
-		}
-	}
-	filtered := make([]MessageEvent, 0, len(include))
-	for index, item := range history {
-		if include[index] {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
 }
 
 func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scope agentReplyScope, toolsBefore, contextBefore, contextAfter int) {

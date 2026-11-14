@@ -49,10 +49,6 @@ func videoContextMaxBytes(ctx context.Context) int64 {
 	return defaultFileParserMaxVideoBytes
 }
 
-func localVideoPath(value string) string {
-	return localVideoPathWithLimit(value, defaultFileParserMaxVideoBytes)
-}
-
 func localVideoPathWithLimit(value string, maxBytes int64) string {
 	path := strings.TrimSpace(strings.TrimPrefix(value, "file://"))
 	if path == "" || !filepath.IsAbs(path) {

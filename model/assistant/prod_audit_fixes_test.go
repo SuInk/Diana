@@ -263,7 +263,7 @@ func TestGitHubPublicCredentialExposureAndHistoryMessageRange(t *testing.T) {
 }
 
 func TestSemanticIndexBreakerExponentialBackoff(t *testing.T) {
-	var breaker semanticIndexBreaker
+	breaker := semanticQueryBreaker{maxCooldown: 15 * time.Minute}
 	now := time.Now()
 	key := "openai\x00http://leisure:8000\x00bge-m3"
 

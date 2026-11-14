@@ -149,11 +149,6 @@ func cachedVideoFrameURLs(segments []MessageSegment) []string {
 	return out
 }
 
-func cacheImageSegments(ctx context.Context, platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) []MessageSegment {
-	out, _ := cacheImageSegmentsDetailed(ctx, platform, eventTime, targetKind, groupID, userID, messageID, segments)
-	return out
-}
-
 func cacheImageSegmentsDetailed(ctx context.Context, platform string, eventTime int64, targetKind, groupID, userID, messageID string, segments []MessageSegment) ([]MessageSegment, []error) {
 	if len(segments) == 0 {
 		return segments, nil
@@ -392,15 +387,6 @@ func validSHA256(value string) bool {
 	return err == nil
 }
 
-func firstRemoteImageURL(segment MessageSegment) string {
-	for _, key := range []string{"url", "image_url", "src", "file"} {
-		if value := normalizedHTTPURL(segment.Data[key]); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 func firstImageSource(segment MessageSegment) string {
 	for _, key := range []string{"cached_file", "sourcePath", "source_path", "filePath", "file_path", "path", "url", "image_url", "src", "file"} {
 		value := strings.TrimSpace(segment.Data[key])
@@ -558,13 +544,6 @@ func StickerImportDir() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, stickerImportDirName), nil
-}
-
-func historyMediaSession(targetKind, groupID, userID string) string {
-	if targetKind == string(EventKindGroup) || groupID != "" {
-		return "group_" + safeHistoryPart(firstNonEmpty(groupID, "unknown"))
-	}
-	return "private_" + safeHistoryPart(firstNonEmpty(userID, "unknown"))
 }
 
 func safeHistoryPart(value string) string {

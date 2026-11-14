@@ -6,43 +6,12 @@ package assistant
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
-
-func TestGenerateReplyRunsOnlyPluginToolsWhenAgentDisabled(t *testing.T) {
-	provider := &agentSequenceLLMProvider{responses: []string{
-		`{"action":"tool","tool":"plugin.echo","input":{"text":"hello"}}`,
-		`{"action":"final","content":"plugin result used"}`,
-	}}
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	tool := &echoAgentTool{}
-	reply, err := runtime.generateReplyWithAgentTools(
-		context.Background(),
-		BotConfig{AgentEnabled: false}.WithDefaults(),
-		[]llm.Message{{Role: llm.RoleUser, Content: "hello"}},
-		[]agent.Tool{tool},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply != "plugin result used" || tool.calls != 1 {
-		t.Fatalf("reply=%q calls=%d", reply, tool.calls)
-	}
-	if len(provider.requests) == 0 {
-		t.Fatal("provider was not called")
-	}
-	prompt := provider.requests[0].Messages[0].Content
-	if !strings.Contains(prompt, "plugin.echo") || strings.Contains(prompt, "list_files") || strings.Contains(prompt, "run_command") {
-		t.Fatalf("unexpected tool prompt: %s", prompt)
-	}
-}
 
 func TestReplyPathRunsInstalledPluginToolWhenAgentDisabled(t *testing.T) {
 	provider := &agentSequenceLLMProvider{responses: []string{

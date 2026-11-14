@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/SuInk/diana/model/runtimeconfig"
-	"hash/fnv"
 	"io"
 	"log"
 	"path/filepath"
@@ -21,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/SuInk/diana/model/runtimeconfig"
 
 	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
@@ -614,7 +614,7 @@ type Runtime struct {
 	// semanticQueryBreaker 在 embedding 服务连续失败时让查询路径快速跳过，见 semantic_query_breaker.go。
 	semanticQueryBreaker semanticQueryBreaker
 	// semanticIndexBreaker 在 embedding 主机长期下线时对后台向量索引做指数退避，防止队列和日志刷屏。
-	semanticIndexBreaker semanticIndexBreaker
+	semanticIndexBreaker semanticQueryBreaker
 	chatInLastReplyAt    map[string]time.Time
 	// groupLastReplyAt 记各群机器人最后一次发出回复的时间，见 relevance_only_window.go。
 	groupLastReplyAt map[string]time.Time
@@ -696,15 +696,11 @@ type Runtime struct {
 	// 只在内存里：重启后窗口作废，方向上同样偏「多答一句」。
 	groupStopMu        sync.Mutex
 	groupStopBySession map[string]groupStopState
-	proactiveBatchMu   sync.Mutex
-	proactiveBatches   map[string]*proactiveReplyBatch
 	// routeParkMu 守着 routeParks 和 routeFlights：按会话等着做接话评分的候选，以及定时器
 	// 已经取走、还在评分或生成的那几批，见 proactive_route_debounce.go。
-	routeParkMu           sync.Mutex
-	routeParks            map[string]*proactiveRoutePark
-	routeFlights          map[string][]*proactiveRouteFlight
-	proactiveBatchWindow  time.Duration
-	proactiveBatchMaxWait time.Duration
+	routeParkMu  sync.Mutex
+	routeParks   map[string]*proactiveRoutePark
+	routeFlights map[string][]*proactiveRouteFlight
 	// proactiveRouteDebounce 是接话评分前的防抖窗口，见 proactive_route_debounce.go。
 	proactiveRouteDebounce time.Duration
 	// 连续失败时的错误提示节流状态，见 error_notice_burst.go。
@@ -968,10 +964,8 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		botReplyLoopByKey:       map[string]botReplyLoopState{},
 		privateClosingBySession: map[string]*privateClosingState{},
 		groupStopBySession:      map[string]groupStopState{},
-		proactiveBatches:        map[string]*proactiveReplyBatch{},
+		semanticIndexBreaker:    semanticQueryBreaker{maxCooldown: 15 * time.Minute},
 		activeDirectReplies:     map[string]*activeDirectReply{},
-		proactiveBatchWindow:    defaultProactiveReplyBatchWindow,
-		proactiveBatchMaxWait:   defaultProactiveReplyBatchMaxWait,
 		proactiveRouteDebounce:  defaultProactiveRouteDebounce,
 		errorNoticeBursts:       map[string]*errorNoticeBurst{},
 		errorNoticeQuiet:        defaultErrorNoticeBurstQuiet,
@@ -1235,7 +1229,6 @@ func (r *Runtime) Stop() error {
 	if cancel != nil {
 		cancel()
 	}
-	r.clearProactiveReplyBatches()
 	r.clearProactiveRouteParks()
 	r.clearErrorNoticeBursts()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
@@ -2258,10 +2251,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 	}
 	successOutcome := "replied"
-	if handled {
-		// Clear batches left by a runtime started before immediate proactive routing was enabled.
-		r.cancelProactiveReplyBatch(event)
-	}
 	if rootMessageID, merged := r.mergeIntoActiveDirectReply(ctx, event, text); merged {
 		event.routingReason = fmt.Sprintf("已并入同一用户正在生成的回复（触发消息 %s），不再单独判断或发送", rootMessageID)
 		r.record(r.decisionEventRecord(event, text, "merged_into_reply"))
@@ -2282,7 +2271,6 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		proactiveCandidates = append(proactiveCandidates, proactiveReplyCandidate{Event: event, Text: text})
 	}
 	if !handled && len(proactiveCandidates) > 0 {
-		r.cancelProactiveReplyBatch(event)
 		if considerProactive {
 			// 不当场评：登记进等待批，worker 立刻收工，见 proactive_route_debounce.go。
 			var parked bool
@@ -2426,7 +2414,7 @@ func unpromptedReplyTurn(ctx context.Context, event MessageEvent) bool {
 	if event.Kind == EventKindPrivate {
 		return false
 	}
-	return event.proactiveReply || event.chatInReply || len(proactiveReplyTurnFromContext(ctx)) > 0
+	return event.proactiveReply || event.chatInReply
 }
 
 func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
@@ -2560,11 +2548,6 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 			record.Error = ""
 			r.record(record)
 			return "ignored_proactive_reply_quality", nil
-		}
-		if errors.Is(err, errProactiveReplySuperseded) {
-			setEventRecordOutcome(&record, "superseded_proactive")
-			r.record(record)
-			return "superseded_proactive", err
 		}
 		if errors.Is(err, errProactiveRouteTaken) {
 			setEventRecordOutcome(&record, proactiveRouteTakenOutcome)
@@ -3061,14 +3044,6 @@ func participationClosed(cfg BotConfig) bool {
 	}
 	relatedLevel, chatLevel := participation.ratingLevels()
 	return relatedLevel == "off" && chatLevel == "off"
-}
-
-// eventRoutingText 和 routeMessageEvent 里取回复判断文本的口径一致。
-func eventRoutingText(event MessageEvent) string {
-	if text := PlainText(event.Segments); text != "" {
-		return text
-	}
-	return event.RawMessage
 }
 
 func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
@@ -3724,10 +3699,6 @@ const (
 	proactiveBlockerLowValue     = "low_value"
 )
 
-func (decision proactiveReplyDecision) qualifiedBotFollowup() bool {
-	return strings.EqualFold(strings.TrimSpace(decision.Category), "bot_related") && decision.DirectedAtBot
-}
-
 func (decision proactiveReplyDecision) normalizedCategory() string {
 	return strings.ToLower(strings.TrimSpace(decision.Category))
 }
@@ -3781,56 +3752,6 @@ func (decision proactiveReplyDecision) allows(threshold float64, chatIn chatInSe
 	default:
 		return false
 	}
-}
-
-func promoteRequestedResponse(decision *proactiveReplyDecision, event MessageEvent, threshold float64, chatIn chatInSettings) bool {
-	if decision == nil || decision.allows(threshold, chatIn) || !decision.RequestsResponse || decision.Confidence < threshold {
-		return false
-	}
-	if decision.Blocker != proactiveBlockerMissingInfo && decision.Blocker != proactiveBlockerNoCapability {
-		return false
-	}
-	originalReason := strings.TrimSpace(decision.Reason)
-	decision.ShouldReply = true
-	decision.Category = "needs_response"
-	decision.Substantive = true
-	decision.TargetMessageID = strings.TrimSpace(event.MessageID)
-	if decision.TargetMessageID != "" {
-		decision.TurnMessageIDs = []string{decision.TargetMessageID}
-	}
-	decision.Reason = "明确请求交由正式回复与发送前安全审核处理"
-	if originalReason != "" {
-		decision.Reason += "；Intent Recognition 原判断：" + originalReason
-	}
-	return true
-}
-
-func promoteDirectedFollowup(decision *proactiveReplyDecision, event MessageEvent, text string, threshold float64, chatIn chatInSettings) bool {
-	if decision == nil || decision.allows(threshold, chatIn) || !decision.DirectedAtBot || decision.Confidence < threshold {
-		return false
-	}
-	// 用户没有在要求回应，或者路由器不回复的原因跟「条件不够」无关，就不救。
-	// 这两个判断以前是代码扫词表得出的；现在由路由器直接给结论，代码只做取舍。
-	if !decision.RequestsResponse {
-		return false
-	}
-	if decision.Blocker != proactiveBlockerMissingInfo && decision.Blocker != proactiveBlockerNoCapability {
-		return false
-	}
-	originalReason := strings.TrimSpace(decision.Reason)
-	decision.ShouldReply = true
-	decision.Category = "bot_related"
-	decision.Answerable = true
-	decision.Substantive = true
-	decision.TargetMessageID = strings.TrimSpace(event.MessageID)
-	if decision.TargetMessageID != "" {
-		decision.TurnMessageIDs = []string{decision.TargetMessageID}
-	}
-	decision.Reason = "明确追问应由正式回复判断并使用可用工具"
-	if originalReason != "" {
-		decision.Reason += "；路由器原判断：" + originalReason
-	}
-	return true
 }
 
 // socialReplyGuard 是「被点名的社交性搭话也回一句」打开之后追加的规则。
@@ -3981,23 +3902,6 @@ func parseProactiveReplyDecision(raw string) (proactiveReplyDecision, bool) {
 	return decision, true
 }
 
-func proactiveReplySampleAllows(event MessageEvent, text string, chance float64) bool {
-	if chance <= 0 {
-		return false
-	}
-	if chance >= 1 {
-		return true
-	}
-	hash := fnv.New64a()
-	for _, part := range []string{string(event.Kind), event.GroupID, event.UserID, event.MessageID, text} {
-		_, _ = hash.Write([]byte(part))
-		_, _ = hash.Write([]byte{0})
-	}
-	const scale = 1000000
-	score := float64(hash.Sum64()%scale) / scale
-	return score < chance
-}
-
 func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event MessageEvent, err error) {
 	writer := r.appLogWriter()
 	if writer == nil || err == nil {
@@ -4009,26 +3913,6 @@ func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event Mess
 		Action:  "proactive_reply_route",
 		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
-		Actor:   oneBotEventActor(event),
-		Target:  event.MessageID,
-		Metadata: map[string]any{
-			"group_id": event.GroupID,
-			"user_id":  event.UserID,
-		},
-	})
-}
-
-func (r *Runtime) recordProactiveReplyRouteFallback(ctx context.Context, event MessageEvent, routeErr error) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind:    applog.KindOperation,
-		Level:   applog.LevelInfo,
-		Action:  "proactive_reply_route_fallback",
-		Message: "主动回复路由超时，明确公开问题已降级进入回复流程",
-		Detail:  routeErr.Error(),
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -4071,32 +3955,6 @@ func (r *Runtime) recordProactiveReplyRouteDecision(ctx context.Context, event M
 			"decision_allowed":    decisionAllowed,
 			"allowed":             allowed,
 			"raw":                 truncateRunesFromStart(strings.TrimSpace(raw), 240),
-		},
-	})
-}
-
-func (r *Runtime) recordProactiveReplySuperseded(ctx context.Context, event MessageEvent, newer MessageEvent, stage string) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind:    applog.KindOperation,
-		Level:   applog.LevelInfo,
-		Action:  "proactive_reply_superseded",
-		Message: "检测到新的候选消息，旧主动回复候选将交由 LLM 合并重判",
-		Actor:   oneBotEventActor(event),
-		Target:  event.MessageID,
-		Metadata: map[string]any{
-			"group_id":                event.GroupID,
-			"user_id":                 event.UserID,
-			"old_message_id":          event.MessageID,
-			"new_message_id":          newer.MessageID,
-			"new_message_user_id":     newer.UserID,
-			"stage":                   stage,
-			"max_reroutes":            proactiveReplyMaxReroutes,
-			"decision_max_items":      proactiveReplyDecisionMaxItems,
-			"decision_window_seconds": int(proactiveReplyDecisionWindow / time.Second),
 		},
 	})
 }
@@ -4198,7 +4056,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 
 	chatTriggered := r.shouldHandleChat(event, text) || directQuotedReply
 	resolverTriggered := r.shouldHandleResolver(event, text)
-	proactiveTriggered := (event.proactiveReply || len(proactiveReplyTurnFromContext(ctx)) > 0) && !directQuotedReply
+	proactiveTriggered := event.proactiveReply && !directQuotedReply
 	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
 	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
 	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
@@ -7935,10 +7793,6 @@ func withLaterSenderMessages(skip map[string]bool, history []MessageEvent, event
 	return out
 }
 
-func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg OutgoingMessage) {
-	r.rememberOutgoingWithMessageID(ctx, source, msg, "")
-}
-
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
 	msg = r.sharedReplyPrefix(msg)
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, source), source)
@@ -8273,11 +8127,6 @@ func (r *Runtime) sendForwardMessageIDNodes(ctx context.Context, event MessageEv
 		return "", err
 	}
 	return apiMessageID(result), nil
-}
-
-func (r *Runtime) sendForwardNodes(ctx context.Context, event MessageEvent, nodes []map[string]any) error {
-	_, err := r.sendForwardNodesWithResult(ctx, event, nodes)
-	return err
 }
 
 func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageEvent, nodes []map[string]any) (map[string]any, error) {
@@ -9816,63 +9665,6 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 		out = append(out, index+1)
 	}
 	return out
-}
-
-// hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
-func hasUnclosedQuote(runes []rune) bool {
-	depth := 0
-	for _, r := range runes {
-		switch r {
-		case '「', '『', '（', '(', '【', '《', '“':
-			depth++
-		case '」', '』', '）', ')', '】', '》', '”':
-			if depth > 0 {
-				depth--
-			}
-		}
-	}
-	return depth > 0
-}
-
-// endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
-// 一句说完了；聊天里更常见的是整行不带标点收尾（见 replyTrailingPunctuationRule），
-// 同样算说完。
-func endsMidSentence(line string) bool {
-	runes := []rune(line)
-	if len(runes) == 0 {
-		return false
-	}
-	switch runes[len(runes)-1] {
-	case '，', ',', '、', '；', ';', '：', ':', '(', '（', '“', '「':
-		return true
-	}
-	return false
-}
-
-// endsWithBracketTone 判断行尾那个孤零零的「（」是语气词，不是话没说完。
-//
-// 网上用它表示自嘲、心虚、说漏嘴，猫娘那档人设的提示词专门教了这个用法。而
-// endsMidSentence 把行尾的开括号一律当成「这句还没写完」，于是带「（」的那句会被
-// 粘到下一句上——两次独立发言挤进同一个气泡，中间只剩一个换行。
-//
-// 真正的括号插入语不会在开括号后面立刻断行，而且后文一定有个收尾的「）」。所以
-// 后面找不到闭括号时按语气词处理，找得到就还是当没说完。
-func endsWithBracketTone(line string, rest []string) bool {
-	runes := []rune(line)
-	if len(runes) == 0 {
-		return false
-	}
-	switch runes[len(runes)-1] {
-	case '(', '（':
-	default:
-		return false
-	}
-	for _, next := range rest {
-		if strings.ContainsAny(next, "）)") {
-			return false
-		}
-	}
-	return true
 }
 
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」

@@ -183,10 +183,6 @@ func fetchImageAsDataURLs(ctx context.Context, imageURL string) ([]string, error
 	return normalizeLLMImageParts(body, contentType)
 }
 
-func downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, error) {
-	return downloadImageBytesWithLimit(ctx, imageURL, maxLLMImageBytes)
-}
-
 func downloadImageBytesWithLimit(ctx context.Context, imageURL string, maxBytes int64) ([]byte, string, error) {
 	body, contentType, _, err := downloadImageBytesWithHeader(ctx, imageURL, maxBytes)
 	return body, contentType, err

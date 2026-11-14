@@ -36,9 +36,24 @@ type semanticQueryBreakerState struct {
 }
 
 // semanticQueryBreaker 按 embedding 服务地址和模型分别计数，零值可用。
+// maxCooldown 大于零时冷却按失败次数翻倍（1m、2m、4m……封顶 maxCooldown），
+// 给后台向量索引用：embedding 主机长期下线时不必每分钟都等满一次超时。
 type semanticQueryBreaker struct {
-	mu     sync.Mutex
-	states map[string]*semanticQueryBreakerState
+	mu          sync.Mutex
+	states      map[string]*semanticQueryBreakerState
+	maxCooldown time.Duration
+}
+
+func semanticBreakerKey(cfg llm.ProviderConfig) string {
+	return string(cfg.Provider) + "\x00" + cfg.BaseURL + "\x00" + cfg.Model
+}
+
+// isCoolingDown 报告是否处在冷却或探测中，不占探测名额。
+func (b *semanticQueryBreaker) isCoolingDown(key string, now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.states[key]
+	return state != nil && state.failures >= semanticQueryBreakerThreshold && (now.Before(state.openUntil) || state.probing)
 }
 
 // allow 报告这次能不能去请求。冷却结束后只放一个请求去探，其余的继续跳过。
@@ -74,14 +89,18 @@ func (b *semanticQueryBreaker) record(key string, ok bool, now time.Time) {
 	state.failures++
 	state.probing = false
 	if state.failures >= semanticQueryBreakerThreshold {
-		state.openUntil = now.Add(semanticQueryBreakerCooldown)
+		wait := semanticQueryBreakerCooldown
+		for step := semanticQueryBreakerThreshold; b.maxCooldown > 0 && step < state.failures && wait < b.maxCooldown; step++ {
+			wait = min(wait*2, b.maxCooldown)
+		}
+		state.openUntil = now.Add(wait)
 	}
 }
 
 // embedQueryText 把一段查询文本转成向量，带熔断。调用方取消（整轮回复被打断）不算
 // 服务失败。
 func (r *Runtime) embedQueryText(ctx context.Context, cfg llm.ProviderConfig, query string) ([]float32, error) {
-	key := string(cfg.Provider) + "\x00" + cfg.BaseURL + "\x00" + cfg.Model
+	key := semanticBreakerKey(cfg)
 	if !r.semanticQueryBreaker.allow(key, time.Now()) {
 		return nil, errSemanticQueryBreakerOpen
 	}
@@ -103,75 +122,4 @@ func (r *Runtime) embedQueryText(ctx context.Context, cfg llm.ProviderConfig, qu
 		return nil, err
 	}
 	return vectors[0], nil
-}
-
-const (
-	semanticIndexBreakerThreshold   = 2
-	semanticIndexBreakerInitialWait = time.Minute
-	semanticIndexBreakerMaxWait     = 15 * time.Minute
-)
-
-// semanticIndexBreaker 用于后台向量索引队列：embedding 主机长期下线时按指数退避
-// （1m -> 2m -> 4m -> 8m -> 15m）暂停新文本入队与请求，避免每批等满 20 秒超时并刷屏告警。
-// 编辑消息的 invalidate 墓碑不走此熔断，照常入队删除旧向量。
-type semanticIndexBreaker struct {
-	mu     sync.Mutex
-	states map[string]*semanticQueryBreakerState
-}
-
-func semanticIndexBreakerKey(cfg llm.ProviderConfig) string {
-	return string(cfg.Provider) + "\x00" + cfg.BaseURL + "\x00" + cfg.Model
-}
-
-func (b *semanticIndexBreaker) isCoolingDown(key string, now time.Time) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state := b.states[key]
-	if state == nil || state.failures < semanticIndexBreakerThreshold {
-		return false
-	}
-	return now.Before(state.openUntil) || state.probing
-}
-
-func (b *semanticIndexBreaker) allow(key string, now time.Time) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	state := b.states[key]
-	if state == nil || state.failures < semanticIndexBreakerThreshold {
-		return true
-	}
-	if now.Before(state.openUntil) || state.probing {
-		return false
-	}
-	state.probing = true
-	return true
-}
-
-func (b *semanticIndexBreaker) record(key string, ok bool, now time.Time) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if ok {
-		delete(b.states, key)
-		return
-	}
-	if b.states == nil {
-		b.states = make(map[string]*semanticQueryBreakerState)
-	}
-	state := b.states[key]
-	if state == nil {
-		state = &semanticQueryBreakerState{}
-		b.states[key] = state
-	}
-	state.failures++
-	state.probing = false
-	if state.failures >= semanticIndexBreakerThreshold {
-		wait := semanticIndexBreakerInitialWait
-		for step := semanticIndexBreakerThreshold; step < state.failures && wait < semanticIndexBreakerMaxWait; step++ {
-			wait *= 2
-			if wait > semanticIndexBreakerMaxWait {
-				wait = semanticIndexBreakerMaxWait
-			}
-		}
-		state.openUntil = now.Add(wait)
-	}
 }

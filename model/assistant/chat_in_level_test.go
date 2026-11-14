@@ -385,3 +385,33 @@ func TestSocialReplyEnabledFlowsFromGroupConfig(t *testing.T) {
 		t.Fatal("群级关掉的社交性回应没有生效")
 	}
 }
+
+// chatInSettingsFrom 解析开关、档位和自定义覆盖，得到最终生效参数。显式设置的
+// threshold/chance/cooldown 覆盖档位预设，这样“多档位”和“精细自定义”可以共存。
+func chatInSettingsFrom(enabled *bool, level ChatInLevel, threshold, chance float64, cooldownSeconds int) chatInSettings {
+	normalized := level.Normalized()
+	if normalized == "" {
+		normalized = defaultChatInLevel
+	}
+	settings := chatInSettings{Enabled: boolValue(enabled, true), Level: normalized}
+	if normalized == ChatInLevelOff {
+		settings.Enabled = false
+	}
+	preset := chatInLevelPresets[normalized]
+	if preset.Threshold <= 0 {
+		preset = chatInLevelPresets[defaultChatInLevel]
+	}
+	settings.Threshold = preset.Threshold
+	settings.Chance = preset.Chance
+	settings.Cooldown = preset.Cooldown
+	if threshold > 0 && threshold <= 1 {
+		settings.Threshold = threshold
+	}
+	if chance > 0 && chance <= 1 {
+		settings.Chance = chance
+	}
+	if cooldownSeconds > 0 {
+		settings.Cooldown = time.Duration(cooldownSeconds) * time.Second
+	}
+	return settings
+}

@@ -39,8 +39,6 @@ var (
 
 	webSearchDomainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 	webSearchPrivateHost   = regexp.MustCompile(`(?i)\b(?:localhost|(?:[a-z0-9-]+\.)+(?:internal|local)|10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})\b`)
-
-	webSearchOperatorPattern = regexp.MustCompile(`(?i)(^|\s)-?(?:site|inurl|intitle|intext|allintitle|allinurl|filetype|ext|repo|cache|related):`)
 )
 
 type webSearchQueryCandidate struct {

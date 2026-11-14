@@ -149,11 +149,6 @@ func LoadKeepIndex(root, botID string) ([]KeepEntry, error) {
 	return loadKeepIndexDir(root, botDir)
 }
 
-// LoadKeepIndexDir 和 LoadKeepIndex 一样，但直接按 keep/ 下的目录名读。
-func LoadKeepIndexDir(root, botDir string) ([]KeepEntry, error) {
-	return loadKeepIndexDir(root, botDir)
-}
-
 func loadKeepIndexDir(root, botDir string) ([]KeepEntry, error) {
 	data, err := os.ReadFile(keepIndexPath(root, botDir))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -327,15 +322,6 @@ func keepUsage(root, botDir string) int64 {
 		return nil
 	})
 	return total
-}
-
-// KeepUsage 返回一台机器人长期区的已用字节数。
-func KeepUsage(root, botID string) int64 {
-	botDir := KeepBotDir(botID)
-	if botDir == "" {
-		return 0
-	}
-	return keepUsage(root, botDir)
 }
 
 // checkKeepQuota 在往长期区放 adding 字节（其中 replacing 字节是被覆盖掉的旧文件）之前

@@ -357,10 +357,6 @@ func (h *BotHandler) groupAdminSessionFromRequest(c *gin.Context) (groupAdminSes
 	return h.groupAdmin.Session(token)
 }
 
-func (h *BotHandler) groupConfigForResponse(groupID string) assistant.GroupConfig {
-	return h.groupConfigForProfile(groupID, h.runtime.ProfileConfig(""))
-}
-
 func (h *BotHandler) groupConfigForProfile(groupID string, profile assistant.BotConfig) assistant.GroupConfig {
 	if cfg, ok := h.groupConfigs.ConfigForGroup(profile.ID, groupID); ok {
 		return h.groupConfigForAPI(cfg.WithDefaults(groupID, profile))

@@ -283,32 +283,6 @@ var accuracyIssueLabels = map[string]string{
 	"harmful_advice": "可能造成伤害的建议",
 }
 
-// proactiveQualityError 执行现有主动回复的准确性门禁。
-func (r *Runtime) proactiveQualityError(event MessageEvent, decision proactiveReplyQualityDecision, cfg BotConfig) error {
-	switch issue := decision.AccuracyIssue; issue {
-	case "none", "wording":
-		return nil
-	case "":
-	default:
-		if label, blocks := accuracyIssueLabels[issue]; blocks {
-			reason := firstNonEmpty(strings.TrimSpace(decision.Reason), label)
-			return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核（%s）：%s", label, reason)}
-		}
-	}
-	threshold := cfg.ProactiveReplyThreshold
-	if threshold <= 0 || threshold > 1 {
-		threshold = defaultProactiveReplyThreshold
-	}
-	if decision.Confidence >= threshold {
-		return nil
-	}
-	reason := strings.TrimSpace(decision.Reason)
-	if reason == "" {
-		reason = "回复准确度不足"
-	}
-	return &proactiveReplyQualityRejectedError{reason: fmt.Sprintf("主动回复答案未通过准确度审核：%s（发送置信度 %.0f%%，阈值 %.0f%%）", reason, decision.Confidence*100, threshold*100)}
-}
-
 func (r *Runtime) evaluateProactiveReplyQuality(ctx context.Context, event MessageEvent, input, reply string, cfg BotConfig) (replyControlIntent, error) {
 	return r.auditReplyBeforeSend(ctx, event, input, reply, cfg, true)
 }

@@ -59,18 +59,16 @@ const (
 )
 
 var (
-	repositoryIssueCreateMarkerPattern     = regexp.MustCompile(`<!--\s*diana-operation:create:([a-f0-9]{64})(?::[a-f0-9]{64})?\s*-->`)
-	repositoryIssueAnyMarkerPattern        = regexp.MustCompile(`<!--\s*diana-operation:[a-z_]+:[a-f0-9]{64}(?::[a-f0-9]{64})?\s*-->`)
-	repositoryIssueCQPattern               = regexp.MustCompile(`(?i)\[CQ:[^\]]+\]`)
-	repositoryIssueIPv4Pattern             = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
-	repositoryIssueRuntimeIDPattern        = regexp.MustCompile(`(?i)\b(user_id|group_id|message_id|self_id|qq|uin)\b\s*[:=]\s*["']?[A-Za-z0-9_-]{4,}["']?`)
-	repositoryIssueUUIDPattern             = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
-	repositoryIssueURLPattern              = regexp.MustCompile(`https?://[^\s<>"']+`)
-	repositoryIssuePlainRepositoryPattern  = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
-	repositoryIssueGitHubRepositoryPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_./-])(?:https?://)?github\.com/([a-z0-9_.-]*[a-z0-9_-]/[a-z0-9_.-]*[a-z0-9_-])(?:\.git)?(?:/issues(?:/[0-9]+)?/?)?(?:$|\.(?:$|\s)|[^a-z0-9_./-])`)
-	repositoryIssueNumberMentionPattern    = regexp.MustCompile(`(?i)(?:#\s*|issues?\s*(?:#|/)?\s*|工单\s*#?\s*|议题\s*#?\s*)([0-9]+)`)
-	repositoryIssueSearchQualifierPattern  = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])-?(?:repo|org|user|is|state|type|in|label|assignee|author|mentions|milestone|comments|created|updated|closed|no|language|archived|draft|linked|sort):`)
-	repositoryIssueSearchBooleanPattern    = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:AND|OR|NOT)(?:[^A-Za-z0-9_]|$)`)
+	repositoryIssueCreateMarkerPattern    = regexp.MustCompile(`<!--\s*diana-operation:create:([a-f0-9]{64})(?::[a-f0-9]{64})?\s*-->`)
+	repositoryIssueAnyMarkerPattern       = regexp.MustCompile(`<!--\s*diana-operation:[a-z_]+:[a-f0-9]{64}(?::[a-f0-9]{64})?\s*-->`)
+	repositoryIssueCQPattern              = regexp.MustCompile(`(?i)\[CQ:[^\]]+\]`)
+	repositoryIssueIPv4Pattern            = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b`)
+	repositoryIssueRuntimeIDPattern       = regexp.MustCompile(`(?i)\b(user_id|group_id|message_id|self_id|qq|uin)\b\s*[:=]\s*["']?[A-Za-z0-9_-]{4,}["']?`)
+	repositoryIssueUUIDPattern            = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	repositoryIssueURLPattern             = regexp.MustCompile(`https?://[^\s<>"']+`)
+	repositoryIssueNumberMentionPattern   = regexp.MustCompile(`(?i)(?:#\s*|issues?\s*(?:#|/)?\s*|工单\s*#?\s*|议题\s*#?\s*)([0-9]+)`)
+	repositoryIssueSearchQualifierPattern = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])-?(?:repo|org|user|is|state|type|in|label|assignee|author|mentions|milestone|comments|created|updated|closed|no|language|archived|draft|linked|sort):`)
+	repositoryIssueSearchBooleanPattern   = regexp.MustCompile(`(?:^|[^A-Za-z0-9_])(?:AND|OR|NOT)(?:[^A-Za-z0-9_]|$)`)
 )
 
 type dianaGitHubTool struct {
@@ -849,19 +847,6 @@ func repositoryIssueMentionedNumbers(text string) map[int]bool {
 	return result
 }
 
-func repositoryIssueASCIIIdentifier(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 // repositoryIssueFailureRelayHint 跟着每一次失败回去，而不是写在工具描述里。
 //
 // 拒绝的理由都在 message 里：差在哪个身份档、当前是什么身份、想单独放行该改哪项
@@ -1158,38 +1143,6 @@ func repositoryPublishAuthMode(settings SettingValues) string {
 	default:
 		return repositoryPublishAuthToken
 	}
-}
-
-func repositoryPublishValidateEventAccess(event MessageEvent, repository string, owner bool, settings SettingValues) (string, string) {
-	if owner {
-		return "", ""
-	}
-	userAccess, err := repositoryPublishUserAccess(settings.String(repositoryPublishSettingUserAccess, ""))
-	if err != nil {
-		return "invalid_user_repository_access", "用户仓库授权配置无效，请按每行“用户ID = owner/repo, owner/repo”填写。"
-	}
-	groupAccess, err := repositoryPublishGroupAccess(settings.String(repositoryPublishSettingGroupAccess, ""))
-	if err != nil {
-		return "invalid_group_repository_access", "群聊仓库授权配置无效，请按每行“群ID = owner/repo, owner/repo”填写。"
-	}
-	repositoryKey := strings.ToLower(repository)
-	managerUsers, _, draftUsers, draftGroups, effectiveErr := repositoryPublishEffectiveAccess(settings, userAccess, groupAccess)
-	if effectiveErr != nil {
-		return "invalid_repository_access", "Issue 授权配置无效。"
-	}
-	userAllowed := managerUsers[strings.TrimSpace(event.UserID)][repositoryKey] || repositoryPublishUserScopedAllowed(event, draftUsers, repositoryKey)
-	groupAllowed := event.Kind == EventKindGroup && draftGroups[strings.TrimSpace(event.GroupID)][repositoryKey]
-	if !userAllowed && !groupAllowed {
-		return "permission_denied", "当前用户或所在群聊未获授权操作该 GitHub 仓库。"
-	}
-	allowed, err := repositoryPublishAllowlist(settings.String(repositoryPublishSettingAllowlist, ""))
-	if err != nil {
-		return "invalid_allowlist", "仓库写入白名单配置无效，请使用逗号或换行分隔的精确 owner/repo。"
-	}
-	if !allowed[strings.ToLower(repository)] {
-		return "repository_not_allowed", "目标仓库不在“GitHub Issue 与 PR”插件的全局白名单中。"
-	}
-	return "", ""
 }
 
 func repositoryPublishUserHasAccess(userID string, settings SettingValues) bool {

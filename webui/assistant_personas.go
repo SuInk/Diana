@@ -195,5 +195,4 @@ func (h *BotHandler) importPersonas(c *gin.Context) {
 
 var (
 	errPersonaStoreUnavailable = errors.New("人设库存储未配置")
-	errPersonaImportEmpty      = errors.New("文件里没有可导入的人设")
 )

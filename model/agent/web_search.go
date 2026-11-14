@@ -487,41 +487,6 @@ func (t *WebSearchTool) loadProviders() ([]webSearchProviderConfig, error) {
 	return normalizeWebSearchProviders(providers)
 }
 
-func ResolveWebSearchConfigPath(workDir string) string {
-	path := strings.TrimSpace(os.Getenv("DIANA_WEB_SEARCH_CONFIG_FILE"))
-	if path == "" {
-		path = DefaultWebSearchConfigFile
-	}
-	if filepath.IsAbs(path) {
-		return filepath.Clean(path)
-	}
-	if strings.TrimSpace(workDir) == "" {
-		workDir = "."
-	}
-	return filepath.Clean(filepath.Join(workDir, path))
-}
-
-// LoadWebSearchConfig reads the file managed by the WebUI. A missing file uses
-// the built-in provider order so fresh installations work without setup.
-func LoadWebSearchConfig(path string) (WebSearchConfig, error) {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return DefaultWebSearchConfig(), nil
-	}
-	if err != nil {
-		return WebSearchConfig{}, err
-	}
-	providers, err := parseWebSearchProviders(raw)
-	if err != nil {
-		return WebSearchConfig{}, err
-	}
-	providers, err = normalizeWebSearchProviders(providers)
-	if err != nil {
-		return WebSearchConfig{}, err
-	}
-	return WebSearchConfig{Providers: providers}, nil
-}
-
 // NormalizeWebSearchConfig applies the same validation and defaults used at
 // runtime before a configuration is persisted by the WebUI.
 func NormalizeWebSearchConfig(config WebSearchConfig) (WebSearchConfig, error) {
@@ -537,36 +502,6 @@ func NormalizeWebSearchConfig(config WebSearchConfig) (WebSearchConfig, error) {
 
 func DefaultWebSearchConfig() WebSearchConfig {
 	return WebSearchConfig{Providers: defaultWebSearchProviders()}
-}
-
-// TestWebSearchProvider runs one configured provider without changing the
-// active order. API key values are read only from the named environment
-// variable and never included in the returned content.
-func TestWebSearchProvider(ctx context.Context, provider WebSearchProviderConfig, query string) (string, error) {
-	query = strings.TrimSpace(query)
-	if query == "" {
-		return "", errors.New("query is required")
-	}
-	normalized, err := normalizeWebSearchProviders([]webSearchProviderConfig{provider})
-	if err != nil {
-		return "", err
-	}
-	provider = normalized[0]
-	apiKey := ""
-	if provider.APIKeyEnv != "" {
-		apiKey = strings.TrimSpace(os.Getenv(provider.APIKeyEnv))
-		if apiKey == "" {
-			return "", fmt.Errorf("missing environment variable %s", provider.APIKeyEnv)
-		}
-	}
-	testCtx, cancel := context.WithTimeout(ctx, time.Duration(provider.TimeoutMS)*time.Millisecond)
-	defer cancel()
-	tool := &WebSearchTool{maxBytes: DefaultMaxToolOutputChars}
-	content, err := tool.runProvider(testCtx, provider, query, apiKey)
-	if err != nil {
-		return "", errors.New(safeWebSearchError(err, apiKey))
-	}
-	return truncateRunes(strings.TrimSpace(content), 2_000), nil
 }
 
 func parseWebSearchProviders(raw []byte) ([]webSearchProviderConfig, error) {

@@ -119,13 +119,6 @@ func unwrapLLMDecorators(provider LLMProvider) LLMProvider {
 	return provider
 }
 
-func unwrapTransientLLMRetry(provider LLMProvider) LLMProvider {
-	if wrapped, ok := provider.(*transientRetryLLMProvider); ok && wrapped != nil && wrapped.provider != nil {
-		return wrapped.provider
-	}
-	return provider
-}
-
 func (p *transientRetryLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	return generateWithTransientRetry(ctx, p.provider, req, !p.disableRetry)
 }

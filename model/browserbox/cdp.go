@@ -88,11 +88,6 @@ func CloseTab(ctx context.Context, base, id string) error {
 	return cdpHTTP(ctx, http.MethodGet, base+"/json/close/"+url.PathEscape(id), nil)
 }
 
-// ActivateTab 把标签页切到前台。无头模式下它决定谁是「当前页」，实时画面跟着它走。
-func ActivateTab(ctx context.Context, base, id string) error {
-	return cdpHTTP(ctx, http.MethodGet, base+"/json/activate/"+url.PathEscape(id), nil)
-}
-
 // Session 是连到某个标签页的 CDP 会话。调用方负责 Close。
 type Session struct {
 	conn *websocket.Conn

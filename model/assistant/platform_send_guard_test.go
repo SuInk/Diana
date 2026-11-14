@@ -85,10 +85,6 @@ func TestGroupSendStateIsScopedToBot(t *testing.T) {
 	eventA := MessageEvent{Kind: EventKindGroup, ProfileID: "a", Platform: PlatformOneBotV11, GroupID: "same"}
 	eventB := eventA
 	eventB.ProfileID = "b"
-	r.proactiveBatches = map[string]*proactiveReplyBatch{
-		"a": {items: []proactiveReplyCandidate{{Event: eventA}}},
-		"b": {items: []proactiveReplyCandidate{{Event: eventB}}},
-	}
 	if err := r.send(context.Background(), eventA, "first"); !errors.Is(err, errGroupSendUnavailable) {
 		t.Fatalf("missing group not blocked: %v", err)
 	}
@@ -104,9 +100,6 @@ func TestGroupSendStateIsScopedToBot(t *testing.T) {
 	}
 	if a.groupListAttempts() != 1 || b.groupListAttempts() != 1 {
 		t.Fatal("membership did not follow the failing bot")
-	}
-	if r.proactiveBatches["a"] != nil || r.proactiveBatches["b"] == nil {
-		t.Fatal("group block canceled another bot's queued reply")
 	}
 	if r.groupOutboundDelivery(eventA) == r.groupOutboundDelivery(eventB) {
 		t.Fatal("bots share backoff gate")

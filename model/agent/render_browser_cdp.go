@@ -340,29 +340,41 @@ func launchSandboxedChrome(ctx context.Context, executable, root, profileDir, ca
 }
 
 func launchSandboxedChromeWithEnv(ctx context.Context, executable, root, profileDir, cacheDir, crashDir string, cfg SandboxedBrowserConfig, extraEnv []string) (*sandboxedChromeProcess, error) {
-	env, err := resolveBrowserDisplay()
 	// 别处坚持只用有头；Termux 里凑不出屏幕是常态（见 internal/termux），只能退回无头，
 	// 否则手机上网页渲染整个不能用。
-	headless := false
-	if err != nil {
-		if !termux.Detected() {
-			return nil, err
+	headless := cfg.Headless
+	var env []string
+	if !headless {
+		var err error
+		if env, err = resolveBrowserDisplay(); err != nil {
+			if !termux.Detected() {
+				return nil, err
+			}
+			env, headless = nil, true
 		}
-		env, headless = nil, true
 	}
 	env = append(env, extraEnv...)
-	buildArgs := func() []string {
+	launch := func(headlessFlag string) (*sandboxedChromeProcess, error) {
 		args := sandboxedChromeArgsForWindow(profileDir, cacheDir, crashDir, cfg.Window)
 		if headless {
-			args = append([]string{"--headless=new"}, args...)
+			args = append([]string{headlessFlag}, args...)
 		}
-		return append(args, cfg.ExtraArgs...)
+		args = append(args, cfg.ExtraArgs...)
+		process, err := launchChromeProcessWithEnv(ctx, executable, root, args, env)
+		// 「自动」档：沙箱起不来就去掉沙箱再试一次，只试一次（见 BrowserSandboxFallback）。
+		if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
+			clearChromeSingletonLocks(profileDir)
+			process, err = launchChromeProcessWithEnv(ctx, executable, root, args, env)
+		}
+		return process, err
 	}
-	process, err := launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
-	// 「自动」档：沙箱起不来就去掉沙箱再试一次，只试一次（见 BrowserSandboxFallback）。
-	if err != nil && ctx.Err() == nil && BrowserSandboxFallback(err.Error()) {
+	process, err := launch("--headless=new")
+	// 旧版 Chromium（< 112）不认 --headless=new，退回旧无头模式再试一次。
+	if err != nil && headless && ctx.Err() == nil && !browserSandboxFailure(err.Error()) {
 		clearChromeSingletonLocks(profileDir)
-		process, err = launchChromeProcessWithEnv(ctx, executable, root, buildArgs(), env)
+		if legacy, legacyErr := launch("--headless"); legacyErr == nil {
+			process, err = legacy, nil
+		}
 	}
 	if err != nil {
 		return nil, WithBrowserSandboxHint(err)
@@ -404,10 +416,6 @@ func openBackgroundPage(ctx context.Context, browserWSURL string, window Browser
 		return "", errors.New("有头浏览器没有开出页面")
 	}
 	return created.TargetID, nil
-}
-
-func launchChromeProcess(ctx context.Context, executable, root string, args []string) (*sandboxedChromeProcess, error) {
-	return launchChromeProcessWithEnv(ctx, executable, root, args, nil)
 }
 
 func launchChromeProcessWithEnv(ctx context.Context, executable, root string, args, extraEnv []string) (*sandboxedChromeProcess, error) {
