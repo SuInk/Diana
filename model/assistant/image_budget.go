@@ -193,7 +193,7 @@ func fitImagesWithDescriptions(ctx context.Context, req llm.GenerateRequest, bud
 		for end < min(offset+recallImageDescriptionConcurrency, len(positions)-1) && needed > 0 {
 			pos := positions[end]
 			cost := llm.EstimateMessageTokens(llm.Message{Parts: []llm.ContentPart{req.Messages[pos.message].Parts[pos.part]}})
-			needed -= max(1, cost-int64(2*recallImageDescriptionMaxRunes+128))
+			needed -= max(1, cost-int64(2*recallImageDescriptionEstimateRunes+128))
 			end++
 		}
 		batch := positions[offset:end]

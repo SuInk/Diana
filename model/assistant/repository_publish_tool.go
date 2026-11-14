@@ -251,7 +251,9 @@ type githubRepositoryIssue struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 	ClosedAt    time.Time `json:"closed_at"`
 	PullRequest *struct{} `json:"pull_request,omitempty"`
-	Labels      []struct {
+	// Comments 是评论总数，get 据此只取要用的那几页评论。
+	Comments int `json:"comments"`
+	Labels   []struct {
 		Name string `json:"name"`
 	} `json:"labels"`
 }
@@ -2431,10 +2433,10 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 	if !validRepositoryIssueCanonicalURL(issue.HTMLURL, repository, repositoryIssueResource(issue), issue.Number) {
 		return result.fail("invalid_response", "GitHub 返回了目标仓库之外的 Issue，结果已拒绝。")
 	}
-	comments, apiErr := repositoryFetchAllPages[githubIssueComment](ctx, t, fmt.Sprintf("/repos/%s/issues/%d/comments", repository, number))
-	if apiErr != nil {
-		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
-	}
+	// 评论总数用 Issue 自带的 comments 计数，只取这一页要用的那一两页评论，不必每翻
+	// 一页都把全部评论重拉一遍。
+	comments := repositoryCommentPages{tool: t, path: fmt.Sprintf("/repos/%s/issues/%d/comments", repository, number), pages: map[int][]githubIssueComment{}}
+	commentCount := max(issue.Comments, 0)
 	var reviews []githubPullRequestReview
 	if issue.PullRequest != nil {
 		pull, apiErr := t.getPullRequest(ctx, repository, number)
@@ -2453,7 +2455,7 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 	if value, ok := numberValue(input["start_line"]); ok && value > 1 {
 		startLine = int(value)
 	}
-	total := 1 + len(comments) + len(reviews)
+	total := 1 + commentCount + len(reviews)
 	if offset >= total {
 		return result.fail("invalid_input", fmt.Sprintf("item_offset 超出范围：正文加评论和 review 一共 %d 条（编号 0 到 %d）。", total, total-1))
 	}
@@ -2461,30 +2463,43 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 	result.Outcome = "fetched"
 	result.Issue = ptrRepositoryIssueSummary(repositoryIssueSummaryFromGitHub(issue))
 
-	entry := func(index int) repositoryGetEntry {
+	entry := func(index int) (repositoryGetEntry, *repositoryIssueAPIError) {
 		switch {
 		case index == 0:
-			return repositoryGetEntry{text: issue.Body}
-		case index <= len(comments):
-			comment := comments[index-1]
+			return repositoryGetEntry{text: issue.Body}, nil
+		case index <= commentCount:
+			comment, ok, apiErr := comments.at(ctx, index)
+			if apiErr != nil || !ok {
+				return repositoryGetEntry{}, apiErr
+			}
 			view := repositoryIssueCommentView{URL: comment.HTMLURL, CreatedAt: comment.CreatedAt}
 			if comment.User != nil {
 				view.Author = comment.User.Login
 			}
-			return repositoryGetEntry{text: comment.Body, comment: &view}
+			return repositoryGetEntry{text: comment.Body, comment: &view}, nil
 		default:
-			review := reviews[index-1-len(comments)]
+			review := reviews[index-1-commentCount]
 			view := repositoryPullRequestReviewView{State: strings.TrimSpace(review.State), URL: review.HTMLURL, SubmittedAt: review.SubmittedAt}
 			if review.User != nil {
 				view.Author = review.User.Login
 			}
-			return repositoryGetEntry{text: review.Body, review: &view}
+			return repositoryGetEntry{text: review.Body, review: &view}, nil
 		}
 	}
 	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
-	used, next, nextLine, cut := 0, total, 0, false
+	used, next, nextLine, cut := 0, total, 0, 0
 	for index := offset; index < total; index++ {
-		item := entry(index)
+		item, apiErr := entry(index)
+		if apiErr != nil {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
+		if item.comment == nil && item.review == nil && index > 0 {
+			// 评论计数比实际多（刚删了评论）：剩下的评论已经没有了，跳到 review。
+			if index <= commentCount {
+				index = commentCount
+				continue
+			}
+		}
 		lines := strings.Split(repositoryIssueDisplayText(item.text), "\n")
 		from := 1
 		if index == offset {
@@ -2493,7 +2508,7 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 		if from > len(lines) {
 			return result.fail("invalid_input", fmt.Sprintf("start_line 超出范围：第 %d 条共 %d 行。", index, len(lines)))
 		}
-		item.set(strings.Join(lines[from-1:], "\n"), from, len(lines), len(lines))
+		item.set(strings.Join(lines[from-1:], "\n"), from, len(lines), len(lines), 0)
 		if cost := item.runes(); used+cost <= room {
 			item.attach(&result)
 			used += cost
@@ -2503,21 +2518,21 @@ func (t *dianaGitHubTool) get(ctx context.Context, repository string, input map[
 			next = index
 			break
 		}
-		// 本页第一条单独都装不下：按整行切，续读从同一条的下一行接着。
-		item.set("", from, from, len(lines))
-		window := repositoryFillLines(len(lines)-from+1, func(i int) string { return lines[from-1+i] }, len(lines), room-item.runes()-80)
-		end := from - 1 + window.Count
-		item.set(strings.TrimSuffix(window.Text, "\n"), from, end, len(lines))
+		// 本页第一条单独都装不下：按整行切，续读从同一条的下一行接着；最后一行本身超长
+		// 时只给开头，这一行算读过，省略的字数写进 lines.cut_runes。
+		item.set("", from, from, len(lines), 1)
+		window := takeLines(len(lines), func(i int) string { return lines[i] }, from, len(lines), room-item.runes()-80, repositoryJSONRunes)
+		item.set(window.Text, from, window.End, len(lines), window.CutRunes)
 		item.attach(&result)
-		cut = window.Cut
-		if end < len(lines) {
-			next, nextLine = index, end+1
+		cut = window.CutRunes
+		if resume := window.ResumeLine(); resume > 0 {
+			next, nextLine = index, resume
 		} else {
 			next = index + 1
 		}
 		break
 	}
-	result.Message = repositoryGetMessage(repository, number, offset, next, nextLine, cut, len(comments), len(reviews), issue.PullRequest != nil)
+	result.Message = repositoryGetMessage(repository, number, offset, next, nextLine, cut, commentCount, len(reviews), issue.PullRequest != nil)
 	return result
 }
 
@@ -2536,12 +2551,14 @@ type repositoryTextLines struct {
 	StartLine  int `json:"start_line"`
 	EndLine    int `json:"end_line"`
 	TotalLines int `json:"total_lines"`
+	// CutRunes 不为 0 时 end_line 那一行超过单次上限，只给了开头，省略了这么多字。
+	CutRunes int `json:"cut_runes,omitempty"`
 }
 
-func (e *repositoryGetEntry) set(body string, start, end, total int) {
+func (e *repositoryGetEntry) set(body string, start, end, total, cutRunes int) {
 	e.body, e.lines = body, nil
-	if start > 1 || end < total {
-		e.lines = &repositoryTextLines{StartLine: start, EndLine: end, TotalLines: total}
+	if start > 1 || end < total || cutRunes > 0 {
+		e.lines = &repositoryTextLines{StartLine: start, EndLine: end, TotalLines: total, CutRunes: cutRunes}
 	}
 	switch {
 	case e.comment != nil:
@@ -2579,7 +2596,7 @@ func (e *repositoryGetEntry) attach(result *repositoryIssueResult) {
 
 // repositoryGetMessage 说清这一页给了哪些条目、后面还有什么、怎么续读。next 是下一页
 // 的 item_offset，等于总条数表示读完了。
-func repositoryGetMessage(repository string, number, offset, next, nextLine int, cut bool, comments, reviews int, pull bool) string {
+func repositoryGetMessage(repository string, number, offset, next, nextLine, cut int, comments, reviews int, pull bool) string {
 	total := 1 + comments + reviews
 	kind := "Issue"
 	if pull {
@@ -2604,14 +2621,20 @@ func repositoryGetMessage(repository string, number, offset, next, nextLine int,
 		message += fmt.Sprintf("、%d 条 review", reviews)
 	}
 	message += "）。"
+	if cut > 0 {
+		item := next
+		if nextLine == 0 {
+			item = next - 1
+		}
+		message += fmt.Sprintf(" 第 %d 条的最后给出的那一行超过单次上限，只给了开头，这一行后面 %d 字没有给出（这一行算读过）。", item, cut)
+	}
 	switch {
 	case nextLine > 0:
 		message += fmt.Sprintf(" 第 %d 条（0 是正文，1-%d 是评论，之后是 review）太长，单次上限只装下前面一部分，传 item_offset=%d、start_line=%d 接着读。", next, comments, next, nextLine)
-		if cut {
-			message += " 最后一行本身太长，只给了开头一段。"
-		}
 	case next < total:
-		message += fmt.Sprintf(" 给出的条目都是完整的；后面还有 %d 条，传 item_offset=%d 继续读（0 是正文，1-%d 是评论，之后是 review），没读完之前不要断言没有别的评论。", total-next, next, comments)
+		message += fmt.Sprintf(" 后面还有 %d 条，传 item_offset=%d 继续读（0 是正文，1-%d 是评论，之后是 review），没读完之前不要断言没有别的评论。", total-next, next, comments)
+	case cut > 0:
+		message += " 除这一行省略的部分外已经读完。"
 	default:
 		message += " 已经读完。"
 	}
@@ -2620,6 +2643,33 @@ func repositoryGetMessage(repository string, number, offset, next, nextLine int,
 	}
 	return message
 }
+
+// repositoryCommentPages 按需取 Issue 评论：第 i 条（从 1 起）在每页 100 条的第
+// (i-1)/100+1 页，取过的页留着，同一次调用里不重复请求。
+type repositoryCommentPages struct {
+	tool  *dianaGitHubTool
+	path  string
+	pages map[int][]githubIssueComment
+}
+
+func (c *repositoryCommentPages) at(ctx context.Context, index int) (githubIssueComment, bool, *repositoryIssueAPIError) {
+	page := (index-1)/repositoryCommentPageSize + 1
+	batch, loaded := c.pages[page]
+	if !loaded {
+		values := url.Values{"per_page": {strconv.Itoa(repositoryCommentPageSize)}, "page": {strconv.Itoa(page)}}
+		if apiErr := c.tool.doJSON(ctx, http.MethodGet, c.path+"?"+values.Encode(), nil, &batch); apiErr != nil {
+			return githubIssueComment{}, false, apiErr
+		}
+		c.pages[page] = batch
+	}
+	position := (index - 1) % repositoryCommentPageSize
+	if position >= len(batch) {
+		return githubIssueComment{}, false, nil
+	}
+	return batch[position], true, nil
+}
+
+const repositoryCommentPageSize = 100
 
 // repositoryFetchAllPages 按 Link 头逐页取完一个列表接口，不设页数上限。
 func repositoryFetchAllPages[T any](ctx context.Context, t *dianaGitHubTool, path string) ([]T, *repositoryIssueAPIError) {

@@ -31,10 +31,12 @@ const (
 	recallImageDescriptionSourceKey = "cached_description_source"
 	recallImageFailureKey           = "cached_description_failure"
 	// recallImageFailureDetailKey 是随失败种类一起留下的具体原因，见 imageFailureDetail。
-	recallImageFailureDetailKey         = "cached_description_failure_detail"
-	recallImageAttachmentIndexKey       = "recall_attachment_index"
-	recallImageDescriptionVersion       = "recall-image-v1"
-	recallImageDescriptionMaxRunes      = 1600
+	recallImageFailureDetailKey   = "cached_description_failure_detail"
+	recallImageAttachmentIndexKey = "recall_attachment_index"
+	recallImageDescriptionVersion = "recall-image-v1"
+	// recallImageDescriptionEstimateRunes 是一条图片描述的常见长度上界，只用来估算把
+	// 图换成描述能省多少 token（image_budget.go），描述本身不按它截。
+	recallImageDescriptionEstimateRunes = 1600
 	recallImageDescriptionConcurrency   = 3
 	historyImageDescriptionQueueLimit   = 32
 	historyImageDescriptionReadyLimit   = 2048
@@ -173,13 +175,10 @@ func cloneRecallEvents(events []MessageEvent) []MessageEvent {
 	return out
 }
 
+// compactRecallImageDescription 把描述里的换行和连续空白压成单个空格，不截短：以前
+// 超过 1600 字截掉再加「...」，截了也不说，模型把半截描述当成全部。
 func compactRecallImageDescription(value string) string {
-	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
-	runes := []rune(value)
-	if len(runes) > recallImageDescriptionMaxRunes {
-		value = string(runes[:recallImageDescriptionMaxRunes]) + "..."
-	}
-	return value
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 func (r *Runtime) enrichRecallImageDescriptions(ctx context.Context, event MessageEvent, recalls []MessageEvent) []MessageEvent {

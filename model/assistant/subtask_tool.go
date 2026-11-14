@@ -184,6 +184,10 @@ func subtaskBatchPage(results []subtaskResult, budget, reserve int) subtaskBatch
 	for index, result := range results {
 		window := takeTextLines(result.Output, 1, remaining, jsonStringRunes)
 		remaining = max(0, remaining-jsonStringRunes(window.Text))
+		if !window.Whole() {
+			// 照顺序给：这一个没给全，后面的都留到续读，免得顺序乱掉。
+			remaining = 0
+		}
 		result.Output = window.Text
 		switch {
 		case !window.Complete():

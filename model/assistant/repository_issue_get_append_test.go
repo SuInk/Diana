@@ -255,3 +255,46 @@ func TestRepositoryIssueGetPagesThroughAllComments(t *testing.T) {
 		t.Fatalf("item_offset 越界应报错：%#v", beyond)
 	}
 }
+
+// 最后一行本身超过单次上限时只给开头：lines 带上 cut_runes，message 写明省略了多少字，
+// 不会叫模型用同一个 start_line 原地打转；评论只取 item_offset 所在的那一页。
+func TestRepositoryIssueGetCutLastLineAndFetchesOnlyNeededPage(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	github.issues = []githubRepositoryIssue{{
+		Number: 7, Title: "单行日志", Body: "复现：\n" + strings.Repeat("日志", 6_000), State: "open",
+		HTMLURL: "https://github.com/acme/demo/issues/7", UpdatedAt: time.Now().UTC(),
+	}}
+	for i := 1; i <= 250; i++ {
+		github.comments[7] = append(github.comments[7], githubIssueComment{Body: fmt.Sprintf("评论 %d", i), HTMLURL: fmt.Sprintf("https://github.com/acme/demo/issues/7#issuecomment-%d", i)})
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "看看 acme/demo #7", nil)
+
+	first := runRepositoryToolWithBudget(t, tool, 6_000, map[string]any{"operation": "get", "repository": "acme/demo", "number": 7})
+	if !first.OK || first.IssueBodyLines == nil || first.IssueBodyLines.EndLine != 1 || !strings.Contains(first.Message, "start_line=2") {
+		t.Fatalf("第一页应停在超长行前面：%#v %q", first.IssueBodyLines, first.Message)
+	}
+	second := runRepositoryToolWithBudget(t, tool, 6_000, map[string]any{"operation": "get", "repository": "acme/demo", "number": 7, "start_line": 2})
+	lines := second.IssueBodyLines
+	if !second.OK || lines == nil || lines.CutRunes == 0 || lines.EndLine != 2 {
+		t.Fatalf("被切的行要带 cut_runes：%#v", lines)
+	}
+	if !strings.Contains(second.Message, fmt.Sprintf("%d 字没有给出", lines.CutRunes)) || strings.Contains(second.Message, "start_line=") || !strings.Contains(second.Message, "item_offset=1") {
+		t.Fatalf("应写明省略字数并接着读评论：%q", second.Message)
+	}
+
+	github.mu.Lock()
+	github.commentPageRequests = 0
+	github.mu.Unlock()
+	later := runRepositoryToolWithBudget(t, tool, 6_000, map[string]any{"operation": "get", "repository": "acme/demo", "number": 7, "item_offset": 230})
+	if !later.OK || len(later.Comments) != 21 || later.Comments[0].Body != "评论 230" || !strings.Contains(later.Message, "已经读完") {
+		t.Fatalf("later=%d %q", len(later.Comments), later.Message)
+	}
+	github.mu.Lock()
+	requests := github.commentPageRequests
+	github.mu.Unlock()
+	if requests != 1 {
+		t.Fatalf("item_offset=230 只该取第 3 页评论，实际取了 %d 页", requests)
+	}
+}

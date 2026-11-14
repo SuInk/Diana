@@ -27,6 +27,8 @@ const (
 	// 单次上限就按整条分页，见 searchRepositories。
 	repositoryDiscoveryMaxLimit   = 100
 	repositoryDiscoveryQueryLimit = 200
+	// repositoryDiscoveryResultCap 是 GitHub 搜索接口能翻到的结果总数，再往后一律 422。
+	repositoryDiscoveryResultCap = 1000
 	// repositoryDiscoveryStaleAfter 是「久未更新」的门槛。一年没有任何推送的仓库
 	// 不一定不能用，但推荐时必须说出来，不能让用户自己点进仓库页才发现。
 	repositoryDiscoveryStaleAfter = 365 * 24 * time.Hour
@@ -135,6 +137,9 @@ func parseRepositoryDiscoveryInput(input map[string]any) (repositoryDiscoveryInp
 		parsed.limit = int(value)
 	}
 	if value, present := numberValue(input["item_offset"]); present && value > 0 {
+		if int(value) >= repositoryDiscoveryResultCap {
+			return parsed, redactions, "invalid_input", "GitHub 搜索只给前 " + itoa(repositoryDiscoveryResultCap) + " 个结果，item_offset 不能超过 " + itoa(repositoryDiscoveryResultCap-1) + "；换更具体的关键词或 language 缩小范围。"
+		}
 		parsed.offset = int(value)
 	}
 	return parsed, redactions, "", ""
@@ -192,11 +197,14 @@ func (t *dianaGitHubTool) searchRepositories(ctx context.Context, input map[stri
 	}
 	result.Repositories = items
 	result.Message = fmt.Sprintf("按%s排序，GitHub 共找到约 %d 个公开仓库，这次给了第 %d-%d 名里的 %d 个。", parsed.sortName, payload.TotalCount, parsed.offset+1, next, len(items))
+	reachable := min(payload.TotalCount, repositoryDiscoveryResultCap)
 	switch {
-	case len(items) < parsed.limit && next < payload.TotalCount:
+	case len(items) < parsed.limit && next < reachable:
 		result.Message += fmt.Sprintf(" 没给满 limit（单次上限装不下，或到了 GitHub 每页 100 条的边界），传 item_offset=%d 接着看后面的。", next)
-	case next < payload.TotalCount:
+	case next < reachable:
 		result.Message += fmt.Sprintf(" 要看更多就传 item_offset=%d。", next)
+	case next < payload.TotalCount:
+		result.Message += fmt.Sprintf(" GitHub 搜索只给前 %d 个结果，后面的翻不到；要找别的就换更具体的关键词或 language。", repositoryDiscoveryResultCap)
 	}
 	result.Message += repositoryDiscoveryReadingHint
 	return result

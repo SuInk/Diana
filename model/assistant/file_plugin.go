@@ -371,8 +371,9 @@ func (p *FileParserPlugin) parseRefLines(ctx context.Context, channel Channel, r
 		return parsedFileRef{Context: body, Used: plainRunes(window.Text), Partial: !complete}
 	}
 	if looksPDF(ref.Name, contentType, data) {
-		nativeResult, nativeAvailable, nativeErr := runNativeMacPDF(ctx, data, "text", defaultOCRMaxPagesPerFile, defaultOCRPageMaxChars)
+		nativeResult, nativeAvailable, nativeErr := runNativeMacPDF(ctx, data, "text", defaultOCRMaxPagesPerFile, math.MaxInt32)
 		if nativeAvailable && nativeErr == nil && nativeMacPDFHasText(nativeResult) {
+			// 每页不按字数截（以前每页截到 12000 字），超出单次上限的按整行分页续读。
 			pages := max(nativeResult.TotalPages, 1)
 			return content("\n  类型：PDF（macOS PDFKit 文本层）", formatNativeMacPDFText(nativeResult, 0), pages, nativeResult.ProcessedPages < pages)
 		}

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,6 +31,8 @@ type repositoryPublishTestGitHub struct {
 	requests []repositoryPublishTestRequest
 	issues   []githubRepositoryIssue
 	comments map[int][]githubIssueComment
+	// commentPageRequests 记下按页取评论的次数，get 只该取用得到的那几页。
+	commentPageRequests int
 
 	nextIssueNumber int
 	createStatus    int
@@ -100,7 +103,18 @@ func (s *repositoryPublishTestGitHub) handler(w http.ResponseWriter, r *http.Req
 		_ = json.NewEncoder(w).Encode(issue)
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/comments"):
 		number := repositoryPublishTestPathNumber(strings.TrimSuffix(path, "/comments"))
-		_ = json.NewEncoder(w).Encode(s.comments[number])
+		comments := s.comments[number]
+		// 和真实接口一样按 per_page/page 分页；不带参数时给全部。
+		if perPage, _ := strconv.Atoi(r.URL.Query().Get("per_page")); perPage > 0 {
+			page := max(1, atoiOrZero(r.URL.Query().Get("page")))
+			from := min(len(comments), (page-1)*perPage)
+			comments = comments[from:min(len(comments), from+perPage)]
+			s.commentPageRequests++
+		}
+		if comments == nil {
+			comments = []githubIssueComment{}
+		}
+		_ = json.NewEncoder(w).Encode(comments)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/comments"):
 		number := repositoryPublishTestPathNumber(strings.TrimSuffix(path, "/comments"))
 		comment := githubIssueComment{
@@ -121,6 +135,7 @@ func (s *repositoryPublishTestGitHub) handler(w http.ResponseWriter, r *http.Req
 			http.NotFound(w, r)
 			return
 		}
+		issue.Comments = len(s.comments[number])
 		_ = json.NewEncoder(w).Encode(issue)
 	case r.Method == http.MethodPatch && path != "":
 		number := repositoryPublishTestPathNumber(path)
@@ -1277,4 +1292,9 @@ func TestRepositoryGroupPersonalManagerWriteRequiresConfirmation(t *testing.T) {
 	if code, _ := tool.validateWriteAccess("acme/other", false); code != "repository_not_allowed" {
 		t.Fatalf("allowlist ignored: %s", code)
 	}
+}
+
+func atoiOrZero(value string) int {
+	number, _ := strconv.Atoi(value)
+	return number
 }

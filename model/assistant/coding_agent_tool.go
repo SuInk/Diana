@@ -34,7 +34,7 @@ func newDianaCodingTool(runtime *Runtime, event MessageEvent, settings SettingVa
 func (t *dianaCodingTool) Name() string { return dianaCodingToolName }
 
 func (t *dianaCodingTool) Description() string {
-	return `把编码工作交给外部编码 CLI（Claude Code/Codex/ACP）在持久工作区后台执行，仅主人可用。submit 派活，没很快结束就返回任务号，跑完会主动汇报；status 查进度和结果（结果长时按 result_line 续读），tail 看最近动作（更早的按 before_line 往前翻），cancel 终止，followup 在原会话追加指令；agents 列代理配置；decide 在主人对等待点头的操作表态后裁决（怎么说都行，不必让主人报任务号）；approvals 查看或清空常驻放行。适合改代码、修 Bug、跑构建等长任务。`
+	return `把编码工作交给外部编码 CLI（Claude Code/Codex/ACP）在持久工作区后台执行，仅主人可用。submit 派活，没很快结束就返回任务号，跑完会主动汇报；status 查进度和结果（长时按 detail_line 续读），tail 看最近动作（更早的按 before_line 往前翻），cancel 终止，followup 在原会话追加指令；agents 列代理配置；decide 在主人对等待点头的操作表态后裁决（怎么说都行，不必让主人报任务号）；approvals 查看或清空常驻放行。适合改代码、修 Bug、跑构建等长任务。`
 }
 
 func (t *dianaCodingTool) InputSchema() map[string]any {
@@ -47,7 +47,7 @@ func (t *dianaCodingTool) InputSchema() map[string]any {
 		"job_id":      toolStringParam("任务号；status 省略时取最近的任务。"),
 		"tail_lines":  toolIntParam("tail 行数，默认 10；一次放不下时按整行给最近的部分。", 1, 100000),
 		"before_line": toolIntParam("tail 往前翻：只看这一行之前的动作，传上次返回的 tail_first_line。", 1, 100000000),
-		"result_line": toolIntParam("status 续读结果：从第几行开始，传上次返回的 result_next_line。", 1, 100000000),
+		"detail_line": toolIntParam("status 续读：指令、最近动作、结果连起来从第几行开始，传上次返回的 detail_next_line。", 1, 100000000),
 		"offset":      toolIntParam("list 翻页：跳过前几个任务，传上次返回的 next_offset。", 0, 100000),
 		"clear":       toolBoolParam("approvals 专用：清空主人说过「以后都同意」的操作类别。"),
 		"decision":    toolEnumParam("decide 专用：allow 同意这一次，always 同意并以后这类都不再问，deny 拒绝。", "allow", "always", "deny"),
@@ -84,10 +84,10 @@ type dianaCodingJob struct {
 	LastAction  string `json:"last_action,omitempty"`
 	Steps       int    `json:"steps,omitempty"`
 	Result      string `json:"result,omitempty"`
-	// ResultNextLine 不为 0 时 result 只给到前面的整行，从这一行起用 status 的
-	// result_line 续读；ResultTotalLines 是结果全文的行数。
-	ResultNextLine   int     `json:"result_next_line,omitempty"`
-	ResultTotalLines int     `json:"result_total_lines,omitempty"`
+	// DetailNextLine 不为 0 时 instruction、last_action、result 三段连起来只给到前面的
+	// 整行，从这一行起用 status 的 detail_line 续读；DetailTotalLines 是三段一共的行数。
+	DetailNextLine   int     `json:"detail_next_line,omitempty"`
+	DetailTotalLines int     `json:"detail_total_lines,omitempty"`
 	Error            string  `json:"error,omitempty"`
 	Turns            int     `json:"turns,omitempty"`
 	CostUSD          float64 `json:"cost_usd,omitempty"`
@@ -367,7 +367,7 @@ func (t *dianaCodingTool) status(ctx context.Context, input map[string]any) (str
 	case !job.finished():
 		message = "任务还在跑，跑完我会主动汇报。"
 	}
-	body, _, err := codingToolPage(ctx, dianaCodingResult{OK: true, Operation: "status", Job: &view, Message: message}, intFromAny(input["result_line"]))
+	body, _, err := codingToolPage(ctx, dianaCodingResult{OK: true, Operation: "status", Job: &view, Message: message}, intFromAny(input["detail_line"]))
 	return body, err
 }
 
@@ -433,6 +433,8 @@ func (t *dianaCodingTool) tail(ctx context.Context, input map[string]any) (strin
 		lines = value
 	}
 	view := codingJobView(job, nil)
+	// tail 只给动作；指令和结果可能很长，由 status 按整行分页，这里不重复塞进来。
+	view.Instruction, view.Result = "", ""
 	result := dianaCodingResult{OK: true, Operation: "tail", Job: &view}
 	actions := parseCodingLog(job.LogPath).Actions
 	end := len(actions)
@@ -461,6 +463,7 @@ func (t *dianaCodingTool) tail(ctx context.Context, input map[string]any) (strin
 	if len(window.lines) > 0 && first > 1 {
 		result.Message += fmt.Sprintf("这是第 %d–%d 行动作，日志共 %d 行；更早的传 before_line=%d 往前翻。", first, end, len(actions), first)
 	}
+	result.Message += "指令和结果用 status 看。"
 	return codingToolJSON(result)
 }
 
@@ -664,42 +667,61 @@ func codingWorkspaceHint(cfg codingAgentConfig) string {
 	return fmt.Sprintf("后端 %s，最长单次运行 %s。", cfg.Backend, formatCodingDuration(cfg.MaxRuntime))
 }
 
-// codingToolPage 把带任务结果的返回值装进单次上限：结果按整行从 resultLine 起给，
-// 放不下的部分标上 result_next_line，message 写明用 status 的 result_line 续读。
-// complete 说明结果已经给到末尾。以前固定只给前 1500 字，后面的只能靠汇报。
-func codingToolPage(ctx context.Context, result dianaCodingResult, resultLine int) (string, bool, error) {
-	if result.Job == nil || result.Job.Result == "" {
+// codingToolPage 把带任务的返回值装进单次上限。指令、最近动作、结果三段是长文本，
+// 连起来按整行从 startLine 起给，三段各自只放落在这一页里的行；放不下的标上
+// detail_next_line，message 写明用 status 的 detail_line 续读。任务还在跑时也一样
+// 过预算。complete 说明三段都给到了末尾。以前结果固定只给前 1500 字、指令截到 300 字。
+func codingToolPage(ctx context.Context, result dianaCodingResult, startLine int) (string, bool, error) {
+	if result.Job == nil {
 		body, err := codingToolJSON(result)
 		return body, true, err
 	}
-	full := result.Job.Result
+	full := *result.Job
+	fields := []*string{&full.Instruction, &full.LastAction, &full.Result}
+	var lines []string
+	var owner []int
+	for index, field := range fields {
+		if *field == "" {
+			continue
+		}
+		for _, line := range strings.Split(*field, "\n") {
+			lines, owner = append(lines, line), append(owner, index)
+		}
+	}
 	budget := toolResultBudget(ctx)
-	skeleton := *result.Job
-	skeleton.Result, skeleton.ResultNextLine, skeleton.ResultTotalLines = "", 1, 1
+	skeleton := full
+	skeleton.Instruction, skeleton.LastAction, skeleton.Result, skeleton.DetailNextLine, skeleton.DetailTotalLines = "", "", "", 1, 1
 	base := result
 	base.Job = &skeleton
-	base.Message += strings.Repeat("。", 120)
+	base.Message += strings.Repeat("。", 160)
 	raw, err := codingToolJSON(base)
 	if err != nil {
 		return "", false, err
 	}
 	reserve := utf8.RuneCountInString(raw)
 	for {
-		job := *result.Job
+		job := full
 		page := result
 		page.Job = &job
-		window := takeTextLines(full, max(resultLine, 1), max(0, budget-reserve), jsonStringRunes)
-		if window.Start > window.Total {
-			return "", false, fmt.Errorf("任务 %s 的结果共 %d 行，result_line=%d 超出范围", job.ID, window.Total, window.Start)
+		window := takeLines(len(lines), func(i int) string { return lines[i] }, max(startLine, 1), len(lines), max(0, budget-reserve), jsonStringRunes)
+		if len(lines) > 0 && window.Start > window.Total {
+			return "", false, fmt.Errorf("任务 %s 的指令、动作和结果共 %d 行，detail_line=%d 超出范围", job.ID, window.Total, window.Start)
 		}
-		job.Result = window.Text
+		parts := make([][]string, len(fields))
+		if window.End >= window.Start {
+			for offset, line := range strings.Split(window.Text, "\n") {
+				field := owner[window.Start-1+offset]
+				parts[field] = append(parts[field], line)
+			}
+		}
+		job.Instruction, job.LastAction, job.Result = strings.Join(parts[0], "\n"), strings.Join(parts[1], "\n"), strings.Join(parts[2], "\n")
 		if !window.Whole() {
-			job.ResultTotalLines = window.Total
-			page.Message += "结果给出了" + window.Range() + "。"
+			job.DetailTotalLines = window.Total
+			page.Message += "指令、最近动作、结果连起来给出了" + window.Range() + "。"
 		}
 		if !window.Complete() {
-			job.ResultNextLine = window.ResumeLine()
-			page.Message += fmt.Sprintf("还没给完：传 operation=status、job_id=%s、result_line=%d 接着读，读完之前不要当成全文。", job.ID, job.ResultNextLine)
+			job.DetailNextLine = window.ResumeLine()
+			page.Message += fmt.Sprintf("还没给完：传 operation=status、job_id=%s、detail_line=%d 接着读，读完之前不要当成全文。", job.ID, job.DetailNextLine)
 		}
 		body, err := codingToolJSON(page)
 		if err != nil {

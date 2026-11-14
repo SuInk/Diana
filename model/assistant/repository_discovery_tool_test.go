@@ -222,6 +222,16 @@ func TestRepositoryDiscoverySearchPagesByItemOffset(t *testing.T) {
 	if !later.OK {
 		t.Fatalf("later=%#v", later)
 	}
+
+	github.items, github.total = items, 5000
+	edge := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "repo_search", "query": "router", "limit": 1, "item_offset": 999})
+	if !edge.OK || strings.Contains(edge.Message, "item_offset=1000") || !strings.Contains(edge.Message, "前 1000 个") {
+		t.Fatalf("GitHub 只给前 1000 个，不能提示翻到第 1000 个之后：%q", edge.Message)
+	}
+	beyond := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "repo_search", "query": "router", "item_offset": 1000})
+	if beyond.OK || beyond.FailureCode != "invalid_input" {
+		t.Fatalf("item_offset=1000 应在本地拒绝：%#v", beyond)
+	}
 }
 
 // pushed_at 才是「还有没有人维护」。updated_at 改个简介、加个 topic 就会往前跳，

@@ -408,9 +408,9 @@ func applyCodingLogLine(snapshot *codingJobSnapshot, line string) (string, bool)
 			if jsonString(payload, "type") == "item.completed" && text != "" {
 				snapshot.Result = text
 			}
-			return truncateRunes(text, 200), text != ""
+			return text, text != ""
 		case "command_execution":
-			return "执行命令：" + truncateRunes(jsonString(item, "command"), 200), true
+			return "执行命令：" + jsonString(item, "command"), true
 		case "error":
 			return jsonString(item, "message"), true
 		}
@@ -524,7 +524,7 @@ func codingAssistantAction(payload map[string]any) string {
 			texts = append(texts, name)
 		case "text":
 			if text := strings.TrimSpace(jsonString(part, "text")); text != "" {
-				texts = append(texts, truncateRunes(text, 200))
+				texts = append(texts, text)
 			}
 		}
 	}
@@ -532,12 +532,13 @@ func codingAssistantAction(payload map[string]any) string {
 }
 
 // codingToolDetail 从工具入参里挑一个能说明它在动什么的字段。命令和路径就够了，
-// 整个入参打出来会把进度变成日志转储。
+// 整个入参打出来会把进度变成日志转储。挑出来的字段给原文，不截短：发进聊天的进度
+// 心跳自己会截，工具结果里的 tail 按整行分页。
 func codingToolDetail(part map[string]any) string {
 	input, _ := part["input"].(map[string]any)
 	for _, key := range []string{"command", "file_path", "path", "pattern", "url"} {
 		if value := strings.TrimSpace(jsonString(input, key)); value != "" {
-			return truncateRunes(value, 120)
+			return value
 		}
 	}
 	return ""

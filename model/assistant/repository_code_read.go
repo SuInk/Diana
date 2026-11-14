@@ -87,52 +87,6 @@ func repositoryJSONRunes(text string) int {
 	return count
 }
 
-// repositoryJSONPrefix 取 text 开头、JSON 编码后不超过 budget 字的那一段。
-func repositoryJSONPrefix(text string, budget int) string {
-	used := 0
-	for index, r := range text {
-		cost := repositoryJSONRunes(string(r))
-		if used+cost > budget {
-			return text[:index]
-		}
-		used += cost
-	}
-	return text
-}
-
-// repositoryLineWindow 是按整行装进预算的一段文本。
-type repositoryLineWindow struct {
-	Text string
-	// Count 是用掉的行数，续读从下一行开始。
-	Count int
-	// Cut 表示最后一行太长、只给了开头：压缩过的 JS、单行 JSON 常见。这一行仍算用掉，
-	// 否则续读会卡在同一行上原地打转。
-	Cut bool
-}
-
-// repositoryFillLines 从第 0 行起按整行往 budget 里装，最多装 maxLines 行。
-func repositoryFillLines(count int, line func(int) string, maxLines, budget int) repositoryLineWindow {
-	var builder strings.Builder
-	used := 0
-	window := repositoryLineWindow{}
-	for index := 0; index < count && index < maxLines; index++ {
-		text := line(index) + "\n"
-		cost := repositoryJSONRunes(text)
-		if used+cost > budget {
-			if index == 0 && budget > 0 {
-				builder.WriteString(repositoryJSONPrefix(text, budget))
-				window.Count, window.Cut = 1, true
-			}
-			break
-		}
-		builder.WriteString(text)
-		used += cost
-		window.Count = index + 1
-	}
-	window.Text = builder.String()
-	return window
-}
-
 // repositoryDiffOptions 是 pull_files、commit_files、compare_files 共用的筛选和续读参数。
 type repositoryDiffOptions struct {
 	focus []string
@@ -187,7 +141,9 @@ func renderRepositoryDiffFiles(result *repositoryIssueResult, files []githubPull
 	views := make([]repositoryPullRequestFileView, 0, len(candidates))
 	used := 0
 	var partial *repositoryPullRequestFileView
-	partialCut := false
+	// partialNext 是被切的那个文件续读的 patch_line；0 表示它已经读到末尾（最后一行
+	// 超长只给了开头，这一行算读过）。
+	partialNext := 0
 	for index, file := range candidates {
 		view := repositoryPullRequestFileView{
 			Path: file.Filename, PreviousPath: file.PreviousFilename, Status: file.Status,
@@ -220,13 +176,14 @@ func renderRepositoryDiffFiles(result *repositoryIssueResult, files []githubPull
 		}
 		// 本页第一个文件单独都装不下：按整行切，下一页从同一个文件的下一行接着读。
 		view.Patch = ""
-		window := repositoryFillLines(len(lines)-from+1, func(i int) string { return lines[from-1+i] }, len(lines), room-(repositoryJSONValueRunes(view)+1)-80)
-		view.Patch = strings.TrimSuffix(window.Text, "\n")
-		view.PatchStartLine, view.PatchEndLine, view.PatchTotalLines = from, from-1+window.Count, len(lines)
-		view.PatchTruncated = view.PatchEndLine < len(lines) || window.Cut
+		window := takeLines(len(lines), func(i int) string { return lines[i] }, from, len(lines), room-(repositoryJSONValueRunes(view)+1)-80, repositoryJSONRunes)
+		view.Patch = window.Text
+		view.PatchStartLine, view.PatchEndLine, view.PatchTotalLines = from, window.End, len(lines)
+		view.PatchTruncated = !window.Complete() || window.CutRunes > 0
+		view.PatchCutRunes = window.CutRunes
 		view.PatchHunk = repositoryPatchHunkBefore(lines, from)
 		views = append(views, view)
-		partial, partialCut = &views[0], window.Cut
+		partial, partialNext = &views[0], window.ResumeLine()
 		break
 	}
 	result.Files = views
@@ -237,17 +194,20 @@ func renderRepositoryDiffFiles(result *repositoryIssueResult, files []githubPull
 		scope = fmt.Sprintf("paths 匹配的 %d 个文件（共 %d 个）", len(matched), len(files))
 	}
 	note := fmt.Sprintf("改动共%s，这次给了第 %d-%d 个。", scope, options.offset+1, shownEnd)
+	if partial != nil && partial.PatchCutRunes > 0 {
+		note += fmt.Sprintf(" %s 的 patch 第 %d 行超过单次上限，只给了开头，这一行后面 %d 字没有给出（这一行算读过）。", partial.Path, partial.PatchEndLine, partial.PatchCutRunes)
+	}
 	switch {
-	case partial != nil && partial.PatchTruncated:
-		note += fmt.Sprintf(" %s 的 patch 共 %d 行，单次上限只装下第 %d-%d 行，传 file_offset=%d、patch_line=%d（paths 不变）接着读这个文件。", partial.Path, partial.PatchTotalLines, partial.PatchStartLine, partial.PatchEndLine, options.offset, partial.PatchEndLine+1)
-		if partialCut {
-			note += fmt.Sprintf(" 第 %d 行太长，只给了开头一段，这一行算读过。", partial.PatchEndLine)
-		}
+	case partialNext > 0:
+		note += fmt.Sprintf(" %s 的 patch 共 %d 行，单次上限只装下第 %d-%d 行，传 file_offset=%d、patch_line=%d（paths 不变）接着读这个文件。", partial.Path, partial.PatchTotalLines, partial.PatchStartLine, partial.PatchEndLine, options.offset, partialNext)
 	case shownEnd < len(matched):
 		result.FilesTruncated = true
 		result.NextFileOffset = shownEnd
-		note += fmt.Sprintf(" 给出的 patch 都是完整的；后面还有 %d 个文件没给，传 file_offset=%d（paths 不变，不带 patch_line）继续读，没读完之前不要断言其余文件没改什么。", len(matched)-shownEnd, shownEnd)
-	default:
+		if partial == nil {
+			note += " 给出的 patch 都是完整的；"
+		}
+		note += fmt.Sprintf(" 后面还有 %d 个文件没给，传 file_offset=%d（paths 不变，不带 patch_line）继续读，没读完之前不要断言其余文件没改什么。", len(matched)-shownEnd, shownEnd)
+	case partial == nil:
 		note += " patch 都是完整的。"
 	}
 	return note, "", ""
@@ -622,9 +582,9 @@ func (t *dianaGitHubTool) listFiles(ctx context.Context, repository string, inpu
 	result.OK, result.Outcome, result.Tree = true, "fetched", view
 	room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
 	rest := sorted[offset:]
-	window := repositoryFillLines(len(rest), func(i int) string { return rest[i].line() }, len(rest), room)
-	view.Entries = window.Text
-	view.End = offset + window.Count
+	window := takeLines(len(rest), func(i int) string { return rest[i].line() }, 1, len(rest), room, repositoryJSONRunes)
+	view.Entries = window.Text + "\n"
+	view.End = offset + window.End
 	location := "根目录"
 	if dir != "" {
 		location = dir

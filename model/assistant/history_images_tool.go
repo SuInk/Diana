@@ -36,6 +36,9 @@ type dianaHistoryImagesTool struct {
 type historyImageSelector struct {
 	MessageID    string
 	ImageIndexes []int
+	// MediaOnly 是续读时 next_items 带回来的：这条消息的文件正文和语音转写上一页
+	// 已经给过，这次只给画面。
+	MediaOnly bool
 }
 
 type dianaHistoryImagesResult struct {
@@ -58,6 +61,7 @@ type dianaHistoryImagesResult struct {
 type historyMediaNextItem struct {
 	MessageID    string `json:"message_id"`
 	MediaIndexes []int  `json:"media_indexes"`
+	MediaOnly    bool   `json:"media_only,omitempty"`
 }
 
 type dianaHistoryImageStatus struct {
@@ -118,6 +122,7 @@ func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 			"items": toolObjectSchema([]string{"message_id"}, map[string]any{
 				"message_id":    toolStringParam("消息 ID"),
 				"media_indexes": map[string]any{"type": "array", "description": "画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
+				"media_only":    toolBoolParam("续读时原样传回：这条消息的文件正文和转写已经给过"),
 			}),
 		}),
 		"detail": toolEnumParam("细节档位，认小字用 high", "auto", "low", "high"),
@@ -162,7 +167,19 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	detail := normalizeHistoryImageDetail(configToolString(input, "detail"))
 	result := dianaHistoryImagesResult{Media: make([]dianaHistoryImageStatus, 0)}
 	var loaded []historyLoadedImage
+	// deferred 是这一页装不下、没有下载的画面，原样列进 next_items。
+	var deferred []historyLoadedImage
 	var files []historyFileSource
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
+	}
+	// 画面作为附件交给模型时和文字共用一个单次上限：上限按满篇中文折成 token，每张图
+	// 按请求预算的口径估 token（high 档 8192），下载前先按档位估，装不下的就不下载。
+	tokenLimit := llm.EstimateTextTokens(strings.Repeat("中", budget))
+	countImages := !t.describesOnly()
+	attachedTokens := int64(0)
+	estimate := historyImageTokenCost([]llm.ContentPart{{Type: llm.ContentPartImageURL, ImageURL: "estimate", Detail: detail}})
 
 	followed := make(map[string]bool, len(selectors))
 	for _, selector := range selectors {
@@ -188,8 +205,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 		if source.Quoted != nil {
 			textSegments = append(textSegments, source.Quoted.Segments...)
 		}
-		result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
-		files = append(files, historyFileSources(selector.MessageID, source)...)
+		if !selector.MediaOnly {
+			result.Text = append(result.Text, historicalAudioDescriptions(textSegments)...)
+			files = append(files, historyFileSources(selector.MessageID, source)...)
+		}
 		if input["pdf_page"] != nil {
 			continue
 		}
@@ -224,6 +243,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 			})
 		}
 		for _, index := range indexes {
+			if countImages && (len(deferred) > 0 || (len(loaded) > 0 && attachedTokens+estimate > tokenLimit)) {
+				deferred = append(deferred, historyLoadedImage{messageID: selector.MessageID, index: index, mediaPos: -1})
+				continue
+			}
 			result.Requested++
 			ref := images[index-1]
 			segment := ref.segment
@@ -273,6 +296,9 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 					imageParts = append(imageParts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: detail})
 				}
 			}
+			if countImages {
+				attachedTokens += historyImageTokenCost(imageParts)
+			}
 			loaded = append(loaded, historyLoadedImage{messageID: selector.MessageID, index: index, segment: segment, parts: imageParts, mediaPos: len(result.Media)})
 			result.Media = append(result.Media, dianaHistoryImageStatus{
 				MessageID:  selector.MessageID,
@@ -288,14 +314,10 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 
 	result.Text = append(result.Text, t.historyFileTexts(ctx, files, input)...)
-	if len(loaded) == 0 && len(result.Text) == 0 {
+	if len(loaded) == 0 && len(deferred) == 0 && len(result.Text) == 0 {
 		return "", fmt.Errorf("历史媒体读取失败：请求的媒体均不可用（%s）", historyImageFailureSummary(result.Media))
 	}
-	budget := agent.ToolOutputBudget(ctx)
-	if budget <= 0 {
-		budget = agent.ToolOutputMaxChars
-	}
-	result, kept := t.historyMediaPage(ctx, result, loaded, budget)
+	result, kept := t.historyMediaPage(ctx, result, loaded, deferred, budget, tokenLimit)
 	var parts []llm.ContentPart
 	if !t.describesOnly() {
 		for _, item := range kept {
@@ -320,23 +342,24 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 }
 
 // historyMediaPage 照 Pi 的做法把读到的画面装进单次结果上限：从前往后按整张收，
-// 收下一张会让结果超出 budget 就停，剩下的按消息列进 next_items，不缩短描述、不
-// 丢图；至少收一张，免得一张大描述永远读不出来。画面本身作为附件交给模型，不占
-// 文字字数，它的体积由主回复请求统一的图片预算处理（image_budget.go），这里只按
-// 结果 JSON 的字数分页——仅文字描述档里描述进 text，最容易撑满。
+// 收下一张会让结果超出上限就停，剩下的连同没下载的 deferred 按消息列进 next_items，
+// 不缩短描述、不丢图；至少收一张，免得一张大图或大描述永远读不出来。附件画面按
+// historyImageTokenCost 计入 tokenLimit，结果 JSON 同时不超过 budget 字。
 //
 // 以前一次最多 8 张，第 9 张起标成 skipped 计入失败，模型常把没看到的当成读不出来。
-func (t *dianaHistoryImagesTool) historyMediaPage(ctx context.Context, base dianaHistoryImagesResult, loaded []historyLoadedImage, budget int) (dianaHistoryImagesResult, []historyLoadedImage) {
+func (t *dianaHistoryImagesTool) historyMediaPage(ctx context.Context, base dianaHistoryImagesResult, loaded, deferred []historyLoadedImage, budget int, tokenLimit int64) (dianaHistoryImagesResult, []historyLoadedImage) {
 	var mode *imageTextMode
 	if t.describesOnly() {
 		mode = imageTextModeFromContext(ctx)
 	}
+	all := append(append([]historyLoadedImage(nil), loaded...), deferred...)
 	descriptions := make([]string, 0, len(loaded))
-	best := t.historyMediaRender(base, loaded, 0, nil)
+	best := t.historyMediaRender(base, all, 0, nil)
 	kept := 0
+	imageTokens := int64(0)
 	for keep := 1; keep <= len(loaded); keep++ {
+		item := loaded[keep-1]
 		if t.describesOnly() {
-			item := loaded[keep-1]
 			description := ""
 			if mode != nil {
 				description = mode.segmentDescription(ctx, item.segment)
@@ -345,11 +368,13 @@ func (t *dianaHistoryImagesTool) historyMediaPage(ctx context.Context, base dian
 				description = "（未能识别出这张图的内容，不要猜它画了什么）"
 			}
 			descriptions = append(descriptions, fmt.Sprintf("message_id=%s 第%d张：%s", item.messageID, item.index, description))
+		} else {
+			imageTokens += historyImageTokenCost(item.parts)
 		}
-		page := t.historyMediaRender(base, loaded, keep, descriptions)
+		page := t.historyMediaRender(base, all, keep, descriptions)
 		if keep > 1 {
 			body, err := json.Marshal(page)
-			if err == nil && utf8.RuneCount(body) > budget {
+			if err == nil && (utf8.RuneCount(body) > budget || llm.EstimateTextTokens(string(body))+imageTokens > tokenLimit) {
 				break
 			}
 		}
@@ -358,13 +383,21 @@ func (t *dianaHistoryImagesTool) historyMediaPage(ctx context.Context, base dian
 	return best, loaded[:kept]
 }
 
+// historyImageTokenCost 是这些附件在请求预算里占的 token，和编排请求时同一个估算。
+func historyImageTokenCost(parts []llm.ContentPart) int64 {
+	return llm.EstimateMessageTokens(llm.Message{Role: llm.RoleUser, Parts: parts}) - llm.EstimateMessageTokens(llm.Message{Role: llm.RoleUser})
+}
+
 // historyMediaRender 填好只交回 loaded[:keep] 时的计数、画面状态、续读参数和说明。
 func (t *dianaHistoryImagesTool) historyMediaRender(base dianaHistoryImagesResult, loaded []historyLoadedImage, keep int, descriptions []string) dianaHistoryImagesResult {
 	page := base
 	page.OK = true
 	dropped := make(map[int]bool, len(loaded)-keep)
 	for _, item := range loaded[keep:] {
-		dropped[item.mediaPos] = true
+		// 没下载的画面（mediaPos<0）本来就不在 media 里。
+		if item.mediaPos >= 0 {
+			dropped[item.mediaPos] = true
+		}
 	}
 	page.Media = make([]dianaHistoryImageStatus, 0, len(base.Media)-len(dropped))
 	for position, status := range base.Media {
@@ -387,7 +420,8 @@ func (t *dianaHistoryImagesTool) historyMediaRender(base dianaHistoryImagesResul
 		if !found {
 			position = len(page.NextItems)
 			positions[item.messageID] = position
-			page.NextItems = append(page.NextItems, historyMediaNextItem{MessageID: item.messageID})
+			// 这条消息的文件正文和转写已经在这一页给过，续读只要画面。
+			page.NextItems = append(page.NextItems, historyMediaNextItem{MessageID: item.messageID, MediaOnly: true})
 		}
 		page.NextItems[position].MediaIndexes = append(page.NextItems[position].MediaIndexes, item.index)
 	}
@@ -717,7 +751,8 @@ func historyImageSelectors(input map[string]any, event MessageEvent, includeCurr
 			if err != nil {
 				return nil, fmt.Errorf("message_id=%s 的 media_indexes: %w", messageID, err)
 			}
-			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes})
+			mediaOnly, _ := item["media_only"].(bool)
+			selectors = append(selectors, historyImageSelector{MessageID: messageID, ImageIndexes: indexes, MediaOnly: mediaOnly})
 		}
 	}
 	if len(selectors) == 0 {

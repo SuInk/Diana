@@ -514,32 +514,76 @@ func TestTelegramDownloadSkipsFilesOverCloudLimit(t *testing.T) {
 func rememberManyHistoryImages(t *testing.T, count int) *Runtime {
 	t.Helper()
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	segments := make([]MessageSegment, 0, count)
-	for index := 0; index < count; index++ {
-		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte{byte('a' + index)})}})
-	}
-	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "many-images", Segments: segments})
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "many-images", Segments: rememberedHistoryImageSegments(count)})
 	return runtime
 }
 
-// 以前一次最多 8 张，第 9 张起标成 skipped 计入失败；现在没有条数上限。
-func TestHistoryImagesToolHasNoImageCountCap(t *testing.T) {
+// 以前一次最多 8 张，第 9 张起标成 skipped 计入失败；现在没有条数上限，附件画面按
+// token 计入同一个单次上限，装不下的不下载、列进 next_items。续读带回 media_only，
+// 同一条消息的语音转写不再重复给。
+func TestHistoryImagesToolCountsImagesInSingleBudget(t *testing.T) {
 	runtime := rememberManyHistoryImages(t, 12)
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "user-1", MessageID: "voice-and-images", Segments: append([]MessageSegment{
+		{Type: "record", Data: map[string]string{voiceSTTTranscriptKey: "语音里说的话"}},
+	}, rememberedHistoryImageSegments(12)...)})
 	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "reader"})
 	items := tool.InputSchema()["properties"].(map[string]any)["items"].(map[string]any)
 	if _, capped := items["maxItems"]; capped {
 		t.Fatalf("items schema must not cap the count: %#v", items)
 	}
-	output, err := tool.Run(context.Background(), map[string]any{"message_ids": []any{"many-images"}})
-	if err != nil {
-		t.Fatal(err)
+	input := map[string]any{"message_ids": []any{"voice-and-images"}}
+	loaded, transcripts := 0, 0
+	for page := 0; ; page++ {
+		if page > 12 {
+			t.Fatal("pagination did not finish")
+		}
+		output, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaHistoryImagesResult
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatal(err)
+		}
+		parts := tool.ToolResultParts(output)
+		if len(parts) != result.Loaded || result.Failed != 0 || strings.Contains(output, "skipped") {
+			t.Fatalf("page %d: %s", page, output)
+		}
+		if tokens := historyImageTokenCost(parts); result.Loaded > 1 && tokens > llm.EstimateTextTokens(strings.Repeat("中", agent.ToolOutputMaxChars)) {
+			t.Fatalf("page %d 附件 %d token 超出单次上限", page, tokens)
+		}
+		if page == 0 && (result.Loaded >= 12 || !result.HasMore) {
+			t.Fatalf("12 张图按 token 计应分不止一页：%s", output)
+		}
+		loaded += result.Loaded
+		for _, text := range result.Text {
+			if strings.Contains(text, "语音里说的话") {
+				transcripts++
+			}
+		}
+		if !result.HasMore {
+			break
+		}
+		if !result.NextItems[0].MediaOnly {
+			t.Fatalf("next_items 应带 media_only：%#v", result.NextItems)
+		}
+		next := make([]any, 0, len(result.NextItems[0].MediaIndexes))
+		for _, index := range result.NextItems[0].MediaIndexes {
+			next = append(next, index)
+		}
+		input = map[string]any{"items": []any{map[string]any{"message_id": result.NextItems[0].MessageID, "media_indexes": next, "media_only": true}}}
 	}
-	if parts := tool.ToolResultParts(output); len(parts) != 12 {
-		t.Fatalf("parts = %d, want 12", len(parts))
+	if loaded != 12 || transcripts != 1 {
+		t.Fatalf("应读全 12 张、语音转写只给一次：loaded=%d transcripts=%d", loaded, transcripts)
 	}
-	if !strings.Contains(output, `"loaded":12`) || !strings.Contains(output, `"failed":0`) || strings.Contains(output, "next_items") || strings.Contains(output, "skipped") {
-		t.Fatalf("output = %s", output)
+}
+
+func rememberedHistoryImageSegments(count int) []MessageSegment {
+	segments := make([]MessageSegment, 0, count)
+	for index := 0; index < count; index++ {
+		segments = append(segments, MessageSegment{Type: "image", Data: map[string]string{"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte{byte('a' + index)})}})
 	}
+	return segments
 }
 
 // 结果字数装不下时按整张分页：每页的附件和 media 一一对应，next_items 原样传回

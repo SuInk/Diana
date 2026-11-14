@@ -79,41 +79,49 @@ func (w textLineWindow) Range() string {
 // takeTextLines 照 Pi 的做法从第 start 行起按整行装进 budget：下一行装不下就停在
 // 它前面，不缩短行、不跳行。cost 衡量一段文字放进结果后占多少字（纯文本按 rune，
 // 嵌进 JSON 的用 jsonStringRunes）。第一行就装不下时只给它的开头并记下省略多少字，
-// 免得一行超长的文本永远读不出来。
+// 这一行算读过，免得一行超长的文本永远读不出来、续读卡在原地。
 func takeTextLines(text string, start, budget int, cost func(string) int) textLineWindow {
 	lines := []string{}
 	if text != "" {
 		lines = strings.Split(text, "\n")
 	}
+	return takeLines(len(lines), func(i int) string { return lines[i] }, start, len(lines), budget, cost)
+}
+
+// takeLines 是 takeTextLines 的通用版：一共 total 行，第 i 行（从 0 起）由 line(i)
+// 给出，从第 start 行起最多装到第 last 行（都从 1 起）。所有按行分页的工具都走它，
+// 「切过的行算读过、记下省略字数」的语义只有这一份。
+func takeLines(total int, line func(int) string, start, last, budget int, cost func(string) int) textLineWindow {
 	if start < 1 {
 		start = 1
 	}
-	window := textLineWindow{Start: start, End: start - 1, Total: len(lines)}
-	if start > len(lines) {
+	last = min(last, total)
+	window := textLineWindow{Start: start, End: start - 1, Total: total}
+	if start > last {
 		return window
 	}
 	newline := cost("\n")
 	var builder strings.Builder
 	used := 0
-	for index := start - 1; index < len(lines); index++ {
-		line := lines[index]
-		lineCost := cost(line)
+	for index := start - 1; index < last; index++ {
+		text := line(index)
+		lineCost := cost(text)
 		if index > start-1 {
 			lineCost += newline
 		}
 		if used+lineCost > budget {
 			if index == start-1 && budget > 0 {
-				prefix := textPrefixWithin(line, budget, cost)
+				prefix := textPrefixWithin(text, budget, cost)
 				builder.WriteString(prefix)
 				window.End = index + 1
-				window.CutRunes = utf8.RuneCountInString(line) - utf8.RuneCountInString(prefix)
+				window.CutRunes = utf8.RuneCountInString(text) - utf8.RuneCountInString(prefix)
 			}
 			break
 		}
 		if index > start-1 {
 			builder.WriteString("\n")
 		}
-		builder.WriteString(line)
+		builder.WriteString(text)
 		used += lineCost
 		window.End = index + 1
 	}

@@ -166,12 +166,21 @@ func TestRepositoryReadFileFitsRunnerBudgetAndResumes(t *testing.T) {
 	}
 }
 
-// 一行就超出上限（压缩过的代码）时给开头一段，这一行算读过，续读不会卡在原地。
-func TestRepositoryFillLinesCutsOverlongLine(t *testing.T) {
+// 一行就超出上限（压缩过的代码）时给开头一段并记下省略字数，这一行算读过，续读不会
+// 卡在原地；只剩这一行时没有可续读的了。
+func TestTakeLinesCutsOverlongLine(t *testing.T) {
 	lines := []string{strings.Repeat("x", 500), "next"}
-	window := repositoryFillLines(len(lines), func(i int) string { return lines[i] }, len(lines), 100)
-	if !window.Cut || window.Count != 1 || repositoryJSONRunes(window.Text) > 100 {
+	window := takeLines(len(lines), func(i int) string { return lines[i] }, 1, len(lines), 100, repositoryJSONRunes)
+	if window.CutRunes != 400 || window.End != 1 || window.ResumeLine() != 2 || repositoryJSONRunes(window.Text) > 100 {
 		t.Fatalf("window=%#v", window)
+	}
+	last := takeLines(1, func(i int) string { return lines[i] }, 1, 1, 100, repositoryJSONRunes)
+	if last.CutRunes != 400 || last.ResumeLine() != 0 || last.Whole() {
+		t.Fatalf("最后一行被切后不该再续读同一行：%#v", last)
+	}
+	tail := takeTextLines("短\n"+strings.Repeat("y", 300), 2, 50, plainRunes)
+	if tail.CutRunes != 250 || !tail.Complete() || tail.Whole() || !strings.Contains(tail.Range(), "250 字") {
+		t.Fatalf("tail=%#v", tail)
 	}
 	if got := repositoryJSONRunes("a\"\n<\x01中"); got != 1+2+2+1+6+1 {
 		t.Fatalf("JSON 字数算错：%d", got)
@@ -345,5 +354,76 @@ func TestRepositoryListFiles(t *testing.T) {
 	missing := runRepositoryToolWithBudget(t, tool, 4_000, map[string]any{"operation": "list_files", "repository": "acme/demo", "path": "nope"})
 	if missing.OK || missing.FailureCode != "not_found" {
 		t.Fatalf("missing=%#v", missing)
+	}
+}
+
+// patch 的最后一行本身超过单次上限时只给开头、记下省略字数，续读提示跳到下一个文件，
+// 不给出超出范围的 patch_line。
+func TestRepositoryPullFilesCutLastPatchLineMovesToNextFile(t *testing.T) {
+	github := newRepositoryCodeReadTestGitHub()
+	github.files = append(github.files,
+		githubPullRequestFile{Filename: "dist/app.min.js", Status: "modified", Additions: 2, Patch: "@@ -1 +1,2 @@\n+a\n+" + strings.Repeat("x", 20_000)},
+		githubPullRequestFile{Filename: "README.md", Status: "modified", Additions: 1, Patch: "@@ -1 +1 @@\n-a\n+b"},
+	)
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "review acme/demo PR 85", nil)
+
+	first := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85})
+	if !first.OK || len(first.Files) != 1 || first.Files[0].PatchEndLine != 2 || !strings.Contains(first.Message, "file_offset=0、patch_line=3") {
+		t.Fatalf("first=%#v %q", first.Files, first.Message)
+	}
+	second := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "patch_line": 3})
+	file := second.Files[0]
+	if !second.OK || file.PatchCutRunes == 0 || file.PatchEndLine != 3 || !file.PatchTruncated {
+		t.Fatalf("被切的最后一行要带 patch_cut_runes：%#v", file)
+	}
+	if strings.Contains(second.Message, "patch_line=4") || !strings.Contains(second.Message, "file_offset=1") || !strings.Contains(second.Message, fmt.Sprintf("%d 字没有给出", file.PatchCutRunes)) {
+		t.Fatalf("应写明省略字数并跳到下一个文件：%q", second.Message)
+	}
+	next := runRepositoryToolWithBudget(t, tool, 8_000, map[string]any{"operation": "pull_files", "repository": "acme/demo", "number": 85, "file_offset": 1})
+	if !next.OK || len(next.Files) != 1 || next.Files[0].Path != "README.md" {
+		t.Fatalf("next=%#v", next.Files)
+	}
+}
+
+// compare_files 的提交清单按整条分页：commit_offset 续列，列完之后传不小于提交总数的
+// commit_offset 跳过清单读文件；列提交的那几页不夹带文件。
+func TestRepositoryCompareCommitOffsetPages(t *testing.T) {
+	github := newRepositoryCodeReadTestGitHub()
+	github.commitFiles = []githubPullRequestFile{{Filename: "a.go", Status: "modified", Additions: 1, Patch: "@@ -1 +1 @@\n-a\n+b"}}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "比较一下", nil)
+
+	var commits []string
+	offset := 0
+	for calls := 1; ; calls++ {
+		if calls > 20 {
+			t.Fatal("commit_offset 续列没有收敛")
+		}
+		input := map[string]any{"operation": "compare_files", "repository": "acme/demo", "base": "v1.0", "head": "feature/x"}
+		if offset > 0 {
+			input["commit_offset"] = offset
+		}
+		page := runRepositoryToolWithBudget(t, tool, 2_200, input)
+		if !page.OK || page.Comparison == nil {
+			t.Fatalf("page=%#v", page)
+		}
+		commits = append(commits, page.Comparison.Commits...)
+		if page.Comparison.CommitEnd >= 25 {
+			break
+		}
+		if len(page.Files) != 0 || !strings.Contains(page.Message, fmt.Sprintf("commit_offset=%d", page.Comparison.CommitEnd)) {
+			t.Fatalf("列提交的页不给文件、写明续列位置：%#v %q", page.Files, page.Message)
+		}
+		offset = page.Comparison.CommitEnd
+	}
+	if len(commits) != 25 || !strings.HasSuffix(commits[0], " commit 1") || !strings.HasSuffix(commits[24], " commit 25") {
+		t.Fatalf("应按时间顺序列全 25 个提交：%#v", commits)
+	}
+	files := runRepositoryToolWithBudget(t, tool, 2_200, map[string]any{"operation": "compare_files", "repository": "acme/demo", "base": "v1.0", "head": "feature/x", "commit_offset": 25})
+	if !files.OK || len(files.Comparison.Commits) != 0 || len(files.Files) == 0 {
+		t.Fatalf("commit_offset=25 应跳过提交清单直接读文件：%#v", files)
 	}
 }

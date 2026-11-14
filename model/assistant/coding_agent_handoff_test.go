@@ -103,7 +103,7 @@ func TestCodingSubmitPostsLongQuickResultInFull(t *testing.T) {
 	rt, settings, event := codingTestRuntime(t, cli, t.TempDir())
 	result := submitCodingJob(t, newDianaCodingTool(rt, event, settings))
 
-	if result.Job == nil || result.Job.ResultNextLine == 0 || !strings.Contains(result.Message, "全文已经由系统发到聊天里") {
+	if result.Job == nil || result.Job.DetailNextLine == 0 || !strings.Contains(result.Message, "全文已经由系统发到聊天里") {
 		t.Fatalf("长结果应当由代码发全文：%#v %q", result.Job, result.Message)
 	}
 	drainCodingJobs(t, rt)

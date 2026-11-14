@@ -501,3 +501,67 @@ func TestSubtaskSearchToolsKeepBuiltInBrowser(t *testing.T) {
 		t.Fatalf("subtask search tools = %v, want web_search and browser_render", names)
 	}
 }
+
+// 子任务结果按顺序整行装进单次上限，装不下的标 output_next_line；read_id 续读拼回来
+// 和完整结果一致，不重新执行。
+func TestSubtaskBatchPagesAndReadIDContinues(t *testing.T) {
+	var long []string
+	for i := 1; i <= 500; i++ {
+		long = append(long, fmt.Sprintf("调研结论第 %03d 行", i))
+	}
+	results := []subtaskResult{
+		{ID: "a", Status: "ok", Output: "短结论"},
+		{ID: "b", Status: "ok", Output: strings.Join(long, "\n")},
+		{ID: "c", Status: "ok", Output: "第三个结论"},
+	}
+	raw, err := marshalSubtaskBatch(results, 4_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8Count := len([]rune(raw)); utf8Count > 4_000 {
+		t.Fatalf("结果 %d 字超出上限", utf8Count)
+	}
+	var page subtaskBatchResult
+	if err := json.Unmarshal([]byte(raw), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Results[0].Output != "短结论" || page.Results[0].OutputNextLine != 0 {
+		t.Fatalf("前面的结果应给全文：%#v", page.Results[0])
+	}
+	b := page.Results[1]
+	if b.OutputNextLine == 0 || b.OutputTotalLines != 500 || !strings.Contains(page.Message, "read_id") {
+		t.Fatalf("装不下的结果要标续读位置：%#v %q", b, page.Message)
+	}
+	if page.Results[2].OutputNextLine != 1 || page.Results[2].Output != "" {
+		t.Fatalf("后面没装下的从第 1 行续读：%#v", page.Results[2])
+	}
+
+	tool := &dianaSubtaskTool{}
+	tool.storeOutput("b", results[1].Output)
+	got := strings.Split(b.Output, "\n")
+	next := b.OutputNextLine
+	for calls := 1; next > 0; calls++ {
+		if calls > 30 {
+			t.Fatal("read_id 续读没有收敛")
+		}
+		raw, err := tool.readOutput(agent.WithToolOutputBudget(context.Background(), 2_000), "b", next)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response map[string]any
+		if err := json.Unmarshal([]byte(raw), &response); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, strings.Split(response["output"].(string), "\n")...)
+		next = 0
+		if value, ok := response["next_line"].(float64); ok {
+			next = int(value)
+		}
+	}
+	if strings.Join(got, "\n") != results[1].Output {
+		t.Fatalf("read_id 续读拼回来和原文不一致：%d 行", len(got))
+	}
+	if _, err := tool.readOutput(context.Background(), "missing", 1); err == nil {
+		t.Fatal("没有的 id 应报错")
+	}
+}
