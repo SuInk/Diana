@@ -81,19 +81,90 @@ func TestBrowserRenderFindReturnsWholeLines(t *testing.T) {
 
 func TestBrowserRenderFindMatchesMergeAdjacentLines(t *testing.T) {
 	text := "第一行\n价格A 在这\n中间一行\n价格B 在这\n" + strings.Repeat("无关\n", 5) + "价格C\n结尾"
-	matches, starts := browserRenderFindMatches(text, []string{"价格"})
-	if len(matches) != 2 || matches[0] != "第一行\n价格A 在这\n中间一行\n价格B 在这\n无关" || !strings.Contains(matches[1], "价格C") {
-		t.Fatalf("matches = %q", matches)
+	matches := browserRenderFindMatches(text, []string{"价格"})
+	if len(matches) != 2 || matches[0].excerpt != "第一行\n价格A 在这\n中间一行\n价格B 在这\n无关" || !strings.Contains(matches[1].excerpt, "价格C") {
+		t.Fatalf("matches = %#v", matches)
 	}
-	if starts[0] != 0 || !strings.HasPrefix(string([]rune(text)[starts[1]:]), "无关\n价格C") {
-		t.Fatalf("starts = %v", starts)
+	if matches[0].start != 0 || !strings.HasPrefix(string([]rune(text)[matches[1].start:]), "无关\n价格C") {
+		t.Fatalf("starts = %#v", matches)
 	}
 	var many strings.Builder
 	for i := 0; i < 20; i++ {
 		many.WriteString("Price " + strings.Repeat("-", 500) + "\n" + strings.Repeat("=\n", 3))
 	}
-	if got, _ := browserRenderFindMatches(many.String(), []string{"price"}); len(got) != 20 {
+	if got := browserRenderFindMatches(many.String(), []string{"price"}); len(got) != 20 {
 		t.Fatalf("every match must be returned, got %d", len(got))
+	}
+}
+
+// 定价表这类一行挨一行都命中的页面不能并成一整段；单行超长时只取命中附近，完整
+// 内容照 find_offsets 读。每段都不超过上限。
+func TestBrowserRenderFindMatchesStayBounded(t *testing.T) {
+	var table strings.Builder
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&table, "| 套餐 %d | 价格 ¥%d / 月 |\n", i, i*10)
+	}
+	long := strings.Repeat("前文", 3000) + "价格在这里" + strings.Repeat("后文", 3000)
+	for _, text := range []string{table.String(), long} {
+		matches := browserRenderFindMatches(text, []string{"价格"})
+		if len(matches) == 0 {
+			t.Fatal("no matches")
+		}
+		for _, match := range matches {
+			if n := len([]rune(match.excerpt)); n > browserRenderFindMatchChars {
+				t.Fatalf("match has %d runes", n)
+			}
+			if !strings.Contains(match.excerpt, "价格") {
+				t.Fatalf("excerpt lost the hit: %q", match.excerpt)
+			}
+		}
+	}
+	raw, err := browserRenderOutput(RenderedPage{URL: "https://example.com", Text: long}, "价格", 0, 4000)
+	if err != nil || len([]rune(raw)) > 4000 {
+		t.Fatalf("find page over budget: %d %v", len([]rune(raw)), err)
+	}
+}
+
+// 跳转前页面的正文和超长链接也按字分页：单条比整页还长时从中间切开，续读落在
+// 条目内部，拼起来不丢字。
+func TestBrowserRenderSplitsOversizedPreviousPageAndLink(t *testing.T) {
+	previous := strings.Repeat("跳转前的正文", 2000)
+	link := strings.Repeat("超长链接文字", 600)
+	page := RenderedPage{URL: "https://example.com/final", RequestedURL: "https://example.com/start", Text: "最终页正文",
+		Links:         []RenderedLink{{URL: "https://example.com/a", Text: link}},
+		PreviousPages: []RenderedPageSnapshot{{URL: "https://example.com/start", Title: "起始页", Text: previous}}}
+	var gotPrevious, gotLinks strings.Builder
+	for offset, calls := 0, 0; ; calls++ {
+		if calls > 100 {
+			t.Fatal("pagination did not finish")
+		}
+		raw, err := browserRenderOutput(page, "", offset, 2000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := len([]rune(raw)); n > 2000 {
+			t.Fatalf("page has %d runes", n)
+		}
+		var out browserRenderPayload
+		if err := json.Unmarshal([]byte(raw), &out); err != nil {
+			t.Fatal(err)
+		}
+		for _, snapshot := range out.PreviousPages {
+			gotPrevious.WriteString(snapshot.Text)
+		}
+		for _, line := range out.Links {
+			gotLinks.WriteString(line)
+		}
+		if out.NextOffset == 0 {
+			break
+		}
+		offset = out.NextOffset
+	}
+	if gotPrevious.String() != previous {
+		t.Fatalf("previous page text: got %d runes, want %d", len([]rune(gotPrevious.String())), len([]rune(previous)))
+	}
+	if gotLinks.String() != link+" | https://example.com/a" {
+		t.Fatalf("link pages do not add up: %d runes", len([]rune(gotLinks.String())))
 	}
 }
 
@@ -113,7 +184,8 @@ func TestBrowserRenderPagesWholeLinesUntilEverythingIsRead(t *testing.T) {
 	page.PreviousPages = []RenderedPageSnapshot{{URL: "https://example.com/a", Text: strings.Repeat("前", 2000)}, {URL: "https://example.com/b"}, {URL: "https://example.com/c"}, {URL: "https://example.com/d"}}
 	const budget = 3000
 	var gotText []string
-	var links, images, previous, calls int
+	var links, images, calls int
+	previousSeen := map[string]bool{}
 	for offset := 0; ; calls++ {
 		if calls > 200 {
 			t.Fatal("pagination did not finish")
@@ -134,7 +206,9 @@ func TestBrowserRenderPagesWholeLinesUntilEverythingIsRead(t *testing.T) {
 		}
 		links += len(out.Links)
 		images += len(out.Images)
-		previous += len(out.PreviousPages)
+		for _, snapshot := range out.PreviousPages {
+			previousSeen[snapshot.URL] = true
+		}
 		if out.NextOffset == 0 {
 			if out.ReadNotice != "" || out.Truncated {
 				t.Fatalf("last page still says it is partial: %s", raw)
@@ -149,8 +223,8 @@ func TestBrowserRenderPagesWholeLinesUntilEverythingIsRead(t *testing.T) {
 	if strings.Join(gotText, "\n") != page.Text {
 		t.Fatal("text pages do not add up to the full text")
 	}
-	if links != 120 || images != 30 || previous != 4 {
-		t.Fatalf("links=%d images=%d previous=%d", links, images, previous)
+	if links != 120 || images != 30 || len(previousSeen) != 4 {
+		t.Fatalf("links=%d images=%d previous=%d", links, images, len(previousSeen))
 	}
 	for _, chunk := range gotText {
 		if !strings.HasPrefix(chunk, "第 ") || !strings.HasSuffix(chunk, "。") {

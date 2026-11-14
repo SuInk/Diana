@@ -142,7 +142,7 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 				Label:       "每次请求条数",
 				Description: "向支持条数参数的搜索 API 每次要多少条；拿到的结果全部交给模型，装不下时分页。",
 				Type:        PluginSettingTypeNumber,
-				Default:     10,
+				Default:     5,
 				Min:         settingRange(1),
 				Max:         settingRange(10),
 				Step:        1,
@@ -200,7 +200,7 @@ func (p *WebSearchPlugin) Handle(context.Context, PluginRequest) (*PluginRespons
 
 func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, error) {
 	providerTimeout := settings.Int(webSearchSettingProviderTimeout, 12) * int(time.Second/time.Millisecond)
-	maxResults := settings.Int(webSearchSettingMaxResults, 10)
+	maxResults := settings.Int(webSearchSettingMaxResults, 5)
 	totalTimeout := time.Duration(settings.Int(webSearchSettingTotalTimeout, 35)) * time.Second
 	var providers []agent.WebSearchProviderConfig
 	apiKeys := map[string]string{}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -81,13 +82,12 @@ func TestBrowserControlToolsExcludedFromExtensionScope(t *testing.T) {
 	}
 }
 
-func TestBrowserExtReadPassesParamsAndClampsMaxChars(t *testing.T) {
+func TestBrowserExtReadPassesParamsAndPagesFullText(t *testing.T) {
 	bridge := &stubBridge{ready: true, result: browserctl.Result{OK: true, Data: json.RawMessage(`{"text":"正文"}`)}}
-	tool := &BrowserExtReadTool{base: browserControlToolBase{root: t.TempDir(), bridge: bridge}, maxChars: 100}
+	tool := &BrowserExtReadTool{base: browserControlToolBase{root: t.TempDir(), bridge: bridge}}
 	out, err := tool.Run(context.Background(), map[string]any{
-		"tab_id":    float64(7),
-		"selector":  "#main",
-		"max_chars": float64(5000),
+		"tab_id":   float64(7),
+		"selector": "#main",
 	})
 	if err != nil {
 		t.Fatalf("读取失败：%v", err)
@@ -98,8 +98,35 @@ func TestBrowserExtReadPassesParamsAndClampsMaxChars(t *testing.T) {
 	if bridge.last.Op != browserctl.OpPageRead || bridge.last.TabID != 7 || bridge.last.Selector != "#main" {
 		t.Fatalf("指令参数没传对：%+v", bridge.last)
 	}
-	if bridge.last.MaxChars != 100 {
-		t.Fatalf("超过工具上限的 max_chars 应被夹回去，得到 %d", bridge.last.MaxChars)
+	// 长正文按整行分页，照抄 next_offset 能读完。
+	var want strings.Builder
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&want, "第 %d 行\n", i)
+	}
+	data, _ := json.Marshal(map[string]any{"url": "https://example.com", "text": want.String()})
+	bridge.result = browserctl.Result{OK: true, Data: data}
+	ctx := WithToolOutputBudget(context.Background(), 800)
+	var got strings.Builder
+	for offset, calls := 0, 0; ; calls++ {
+		if calls > 100 {
+			t.Fatal("pagination did not finish")
+		}
+		out, err := tool.Run(ctx, map[string]any{"tab_id": float64(7), "offset": offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var page browserPageSnapshot
+		if err := json.Unmarshal([]byte(out), &page); err != nil || len([]rune(out)) > 800 {
+			t.Fatalf("bad page %v: %s", err, out)
+		}
+		got.WriteString(page.Text)
+		if page.NextOffset == 0 {
+			break
+		}
+		offset = page.NextOffset
+	}
+	if got.String() != want.String() {
+		t.Fatal("pages do not add up to the full text")
 	}
 }
 

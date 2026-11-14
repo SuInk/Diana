@@ -42,50 +42,104 @@ type browserRenderPayload struct {
 	FindNote    string `json:"find_note,omitempty"`
 }
 
-// browserRenderSequence 是一页的全部内容，按查找命中、正文、链接、图片、跳转前页面
-// 排成一列。照 Pi 的做法分页：每次从 offset 起按整条装进单次上限，装不下的留到下一
-// 页并写明 next_offset，不缩短、不抽样、不丢。正文按字计位置，一次装不下时按整行切开；
-// 一行比整页上限还长才从行内切，下一页从切口接上。
+// browserRenderSequence 是一页的全部内容，排成一列分段：查找命中、正文、链接、图片，
+// 再是每个跳转前页面（页头一条、正文按字）。照 Pi 的做法分页：每次从 offset 起按整条
+// 装进单次上限，装不下的留到下一页并写明 next_offset，不缩短、不抽样、不丢。
+//
+// 位置怎么数：查找命中、图片、跳转前页面的页头每条占一个位置；正文、链接（一行一条）、
+// 跳转前页面的正文每个字占一个位置。文字段按整行装，一行比整页还长时才从行内切开，
+// 续读位置就落在这一行中间，下一页从切口接上。查找命中有长度上限（见
+// browserRenderFindMatches），图片只有地址和 alt，都不会单条撑破一页。
 //
 // 以前正文截到 8000 字，JSON 超预算时先砍图片、砍链接再把正文减半；链接只给 40 条、
 // 每条 60 字，find 只给 8 段、每段前后 200 字，跳转前页面只给 3 页、每页 1200 字，
 // 批量读取按页数平分预算。模型看到的是被删过的页面，却不知道少了什么。
 type browserRenderSequence struct {
-	page        RenderedPage
-	matches     []string
-	matchStarts []int // 命中段落在正文里的字位置
-	text        []rune
-	links       []string
-	images      []RenderedImage
-	previous    []RenderedPageSnapshot
-	find        string
-	findNote    string
+	page     RenderedPage
+	matches  []browserFindMatch
+	segments []browserRenderSegment
+	find     string
+	findNote string
 }
+
+type browserRenderSegmentKind int
+
+const (
+	segmentMatches browserRenderSegmentKind = iota
+	segmentText
+	segmentLinks
+	segmentImages
+	segmentPreviousHeader
+	segmentPreviousText
+)
+
+// browserRenderSegment 是序列里的一段。文字段（正文、链接、跳转前页面正文）按字计
+// 位置，其余按条。
+type browserRenderSegment struct {
+	kind  browserRenderSegmentKind
+	start int
+	runes []rune
+	count int
+	index int // 跳转前页面的下标
+}
+
+func (seg browserRenderSegment) textual() bool {
+	return seg.kind == segmentText || seg.kind == segmentLinks || seg.kind == segmentPreviousText
+}
+
+func (seg browserRenderSegment) size() int {
+	if seg.textual() {
+		return len(seg.runes)
+	}
+	return seg.count
+}
+
+func (seg browserRenderSegment) end() int { return seg.start + seg.size() }
 
 func newBrowserRenderSequence(page RenderedPage, find string) browserRenderSequence {
 	terms := browserRenderFindTerms(find)
-	seq := browserRenderSequence{
-		page:     page,
-		text:     []rune(page.Text),
-		links:    browserRenderLinks(page, terms),
-		images:   page.Images,
-		previous: page.PreviousPages,
-		find:     find,
-	}
+	seq := browserRenderSequence{page: page, find: find}
 	if len(terms) > 0 {
-		seq.matches, seq.matchStarts = browserRenderFindMatches(page.Text, terms)
+		seq.matches = browserRenderFindMatches(page.Text, terms)
 		if len(seq.matches) == 0 {
 			seq.findNote = "整页正文里没找到 " + strings.Join(terms, "、") + "；页面没写不等于没有，可以从 links 打开相关页面接着找。"
 		}
 	}
+	position := 0
+	add := func(seg browserRenderSegment) {
+		seg.start = position
+		if seg.size() > 0 {
+			seq.segments = append(seq.segments, seg)
+			position = seg.end()
+		}
+	}
+	add(browserRenderSegment{kind: segmentMatches, count: len(seq.matches)})
+	add(browserRenderSegment{kind: segmentText, runes: []rune(page.Text)})
+	add(browserRenderSegment{kind: segmentLinks, runes: []rune(strings.Join(browserRenderLinks(page, terms), "\n"))})
+	add(browserRenderSegment{kind: segmentImages, count: len(page.Images)})
+	for index, previous := range page.PreviousPages {
+		add(browserRenderSegment{kind: segmentPreviousHeader, count: 1, index: index})
+		add(browserRenderSegment{kind: segmentPreviousText, runes: []rune(previous.Text), index: index})
+	}
 	return seq
 }
 
-func (s browserRenderSequence) textStart() int  { return len(s.matches) }
-func (s browserRenderSequence) linkStart() int  { return s.textStart() + len(s.text) }
-func (s browserRenderSequence) imageStart() int { return s.linkStart() + len(s.links) }
-func (s browserRenderSequence) prevStart() int  { return s.imageStart() + len(s.images) }
-func (s browserRenderSequence) total() int      { return s.prevStart() + len(s.previous) }
+func (s browserRenderSequence) total() int {
+	if len(s.segments) == 0 {
+		return 0
+	}
+	return s.segments[len(s.segments)-1].end()
+}
+
+// textStart 是正文第一个字的位置，find_offsets 按它换算。
+func (s browserRenderSequence) textStart() int {
+	for _, seg := range s.segments {
+		if seg.kind == segmentText {
+			return seg.start
+		}
+	}
+	return len(s.matches)
+}
 
 func browserRenderOutput(page RenderedPage, find string, offset, budget int) (string, error) {
 	return newBrowserRenderSequence(page, find).render(offset, budget)
@@ -98,30 +152,46 @@ func (s browserRenderSequence) payload(offset, end int) browserRenderPayload {
 	page.Images = nil
 	page.PreviousPages = nil
 	out := browserRenderPayload{RenderedPage: page, FindNote: s.findNote, Offset: offset, TotalPositions: s.total()}
-	clip := func(start, stop int) (int, int, bool) {
-		lo, hi := max(offset, start), min(end, stop)
-		return lo - start, hi - start, lo < hi
-	}
-	if lo, hi, ok := clip(0, s.textStart()); ok {
-		out.FindMatches = s.matches[lo:hi]
-		for _, start := range s.matchStarts[lo:hi] {
-			out.FindOffsets = append(out.FindOffsets, s.textStart()+start)
+	textUnfinished := false
+	for _, seg := range s.segments {
+		lo, hi := max(offset, seg.start)-seg.start, min(end, seg.end())-seg.start
+		if seg.kind == segmentText && hi < seg.size() {
+			textUnfinished = true
+		}
+		if lo >= hi {
+			continue
+		}
+		switch seg.kind {
+		case segmentMatches:
+			for _, match := range s.matches[lo:hi] {
+				out.FindMatches = append(out.FindMatches, match.excerpt)
+				out.FindOffsets = append(out.FindOffsets, s.textStart()+match.start)
+			}
+		case segmentText:
+			out.Text = strings.TrimRight(string(seg.runes[lo:hi]), "\n")
+		case segmentLinks:
+			for _, line := range strings.Split(strings.TrimRight(string(seg.runes[lo:hi]), "\n"), "\n") {
+				if line != "" {
+					out.Links = append(out.Links, line)
+				}
+			}
+		case segmentImages:
+			out.Images = s.page.Images[lo:hi]
+		case segmentPreviousHeader:
+			previous := s.page.PreviousPages[seg.index]
+			out.PreviousPages = append(out.PreviousPages, RenderedPageSnapshot{URL: previous.URL, Title: previous.Title, Description: previous.Description})
+		case segmentPreviousText:
+			chunk := strings.TrimRight(string(seg.runes[lo:hi]), "\n")
+			last := len(out.PreviousPages) - 1
+			if last >= 0 && out.PreviousPages[last].URL == s.page.PreviousPages[seg.index].URL && lo == 0 {
+				out.PreviousPages[last].Text = chunk
+			} else {
+				out.PreviousPages = append(out.PreviousPages, RenderedPageSnapshot{URL: s.page.PreviousPages[seg.index].URL, Text: chunk, TextOffset: lo})
+			}
 		}
 	}
-	if lo, hi, ok := clip(s.textStart(), s.linkStart()); ok {
-		out.Text = strings.TrimRight(string(s.text[lo:hi]), "\n")
-	}
-	if lo, hi, ok := clip(s.linkStart(), s.imageStart()); ok {
-		out.Links = s.links[lo:hi]
-	}
-	if lo, hi, ok := clip(s.imageStart(), s.prevStart()); ok {
-		out.Images = s.images[lo:hi]
-	}
-	if lo, hi, ok := clip(s.prevStart(), s.total()); ok {
-		out.PreviousPages = s.previous[lo:hi]
-	}
 	// 正文没在这一页读完（或者 HTML 本身超过了下载上限）就算部分读取。
-	out.Truncated = s.page.Truncated || (end < s.linkStart() && len(s.text) > 0)
+	out.Truncated = s.page.Truncated || textUnfinished
 	if end < s.total() {
 		out.NextOffset = end
 		out.ReadNotice = s.readNotice(end)
@@ -131,27 +201,32 @@ func (s browserRenderSequence) payload(offset, end int) browserRenderPayload {
 }
 
 func (s browserRenderSequence) readNotice(next int) string {
+	names := map[browserRenderSegmentKind]string{segmentMatches: "查找命中", segmentText: "正文", segmentLinks: "链接", segmentImages: "图片", segmentPreviousHeader: "跳转前页面", segmentPreviousText: "跳转前页面正文"}
 	var left []string
-	if rest := len(s.text) - max(0, next-s.textStart()); rest > 0 {
-		left = append(left, fmt.Sprintf("正文还有 %d 字", min(rest, len(s.text))))
-	}
-	for _, part := range []struct {
-		name       string
-		start, end int
-	}{{"链接", s.linkStart(), s.imageStart()}, {"图片", s.imageStart(), s.prevStart()}, {"跳转前页面", s.prevStart(), s.total()}} {
-		if rest := part.end - max(next, part.start); rest > 0 {
-			left = append(left, fmt.Sprintf("%s还有 %d 条", part.name, rest))
+	for _, seg := range s.segments {
+		rest := seg.end() - max(next, seg.start)
+		if rest <= 0 {
+			continue
 		}
-	}
-	if next < s.textStart() {
-		left = append([]string{fmt.Sprintf("查找命中还有 %d 段", s.textStart()-next)}, left...)
+		switch {
+		case seg.kind == segmentPreviousHeader:
+			continue
+		case seg.kind == segmentLinks:
+			left = append(left, fmt.Sprintf("链接还有 %d 条", strings.Count(string(seg.runes[seg.size()-rest:]), "\n")+1))
+		case seg.textual():
+			left = append(left, fmt.Sprintf("%s还有 %d 字", names[seg.kind], rest))
+		default:
+			left = append(left, fmt.Sprintf("%s还有 %d 条", names[seg.kind], rest))
+		}
 	}
 	args := map[string]any{"url": firstNonEmptyString(s.page.RequestedURL, s.page.URL), "offset": next}
 	if s.find != "" {
 		args["find"] = s.find
 	}
 	call, _ := json.Marshal(args)
-	return "这一页没给完：" + strings.Join(left, "，") + "。需要后面的内容就再调一次 browser_render，参数 " + string(call) + "（find 保持不变，offset 照抄）。没读到的部分不能当成页面没写。"
+	return "这一页没给完：" + strings.Join(left, "，") + "。需要后面的内容就再调一次 browser_render，参数 " + string(call) + "（find 保持不变，offset 照抄）。" +
+		fmt.Sprintf("%d 分钟内续读用的是这次读到的页面；过了这个时间会重新读取，页面若有变化，位置可能对不上。", int(browserRenderReadTTL.Minutes())) +
+		"没读到的部分不能当成页面没写。"
 }
 
 func (s browserRenderSequence) fits(offset, end, budget int) (string, bool, error) {
@@ -162,8 +237,18 @@ func (s browserRenderSequence) fits(offset, end, budget int) (string, bool, erro
 	return string(data), utf8.RuneCount(data) <= budget, nil
 }
 
-// render 从 offset 起尽量多装：查找命中、链接、图片、跳转前页面按整条装；正文按整行
-// 装，第一行就装不下时才从行内切。至少装一个位置，保证续读一定往前走。
+// segmentAt 返回包含 position 的那一段。
+func (s browserRenderSequence) segmentAt(position int) (browserRenderSegment, bool) {
+	for _, seg := range s.segments {
+		if position >= seg.start && position < seg.end() {
+			return seg, true
+		}
+	}
+	return browserRenderSegment{}, false
+}
+
+// render 从 offset 起尽量多装：按条的段整条装，文字段按整行装；第一条就装不下时，
+// 文字段从行内切开。至少装一个位置，保证续读一定往前走。
 func (s browserRenderSequence) render(offset, budget int) (string, error) {
 	total := s.total()
 	offset = min(max(offset, 0), total)
@@ -195,9 +280,8 @@ func (s browserRenderSequence) render(offset, budget int) (string, error) {
 		out, _, err := s.fits(offset, bounds[lo], budget)
 		return out, err
 	}
-	// 第一条就装不下：正文从行内切，取装得下的最长一段；别的条目只能整条给。
 	end := bounds[0]
-	if offset >= s.textStart() && offset < s.linkStart() {
+	if seg, ok := s.segmentAt(offset); ok && seg.textual() {
 		low, high := offset+1, end
 		for low < high {
 			mid := low + (high-low+1)/2
@@ -215,20 +299,21 @@ func (s browserRenderSequence) render(offset, budget int) (string, error) {
 	return out, err
 }
 
-// nextBoundary 返回从 position 起下一条的结尾：正文是这一行的末尾（含换行），其余
+// nextBoundary 返回从 position 起下一条的结尾：文字段是这一行的末尾（含换行），其余
 // 每条占一个位置。
 func (s browserRenderSequence) nextBoundary(position int) int {
-	if position < s.textStart() || position >= s.linkStart() {
+	seg, ok := s.segmentAt(position)
+	if !ok || !seg.textual() {
 		return position + 1
 	}
-	index := position - s.textStart()
-	for index < len(s.text) && s.text[index] != '\n' {
+	index := position - seg.start
+	for index < len(seg.runes) && seg.runes[index] != '\n' {
 		index++
 	}
-	if index < len(s.text) {
+	if index < len(seg.runes) {
 		index++
 	}
-	return s.textStart() + index
+	return seg.start + index
 }
 
 func browserRenderFindTerms(find string) []string {
@@ -303,9 +388,21 @@ func browserRenderLinks(page RenderedPage, terms []string) []string {
 	return lines
 }
 
+// browserFindMatch 是一段查找命中：摘录和它在正文里的起点（字位置）。
+type browserFindMatch struct {
+	excerpt string
+	start   int
+}
+
+// browserRenderFindMatchChars 是一段命中摘录的长度上限。定价表这类页面一行挨一行都
+// 是命中，按「相邻就合并」会并成一整张表、单条撑破一页；超过上限就不再合并，一段
+// 本身还超长时只给命中所在的行，行也超长时取命中前后各一半。摘录只是定位用的，完整
+// 内容照 find_offsets 从正文读，不会因此丢字。
+const browserRenderFindMatchChars = 1500
+
 // browserRenderFindMatches 在正文里找关键词，取命中所在的整行连同前后各
-// browserRenderMatchContext 行；相邻的命中合并成一段。每段同时返回它在正文里的字位置。
-func browserRenderFindMatches(text string, terms []string) ([]string, []int) {
+// browserRenderMatchContext 行；相邻的命中在不超过上限时合并成一段。
+func browserRenderFindMatches(text string, terms []string) []browserFindMatch {
 	runes := []rune(text)
 	lower := []rune(strings.ToLower(text))
 	if len(lower) != len(runes) {
@@ -324,7 +421,7 @@ func browserRenderFindMatches(text string, terms []string) ([]string, []int) {
 		}
 		return index
 	}
-	type span struct{ start, end int }
+	type span struct{ start, end, hit, hitEnd int }
 	var spans []span
 	for _, term := range terms {
 		needle := []rune(strings.ToLower(term))
@@ -344,30 +441,36 @@ func browserRenderFindMatches(text string, terms []string) ([]string, []int) {
 					end = lineEnd(end + 1)
 				}
 			}
-			spans = append(spans, span{start, end})
+			spans = append(spans, span{start, end, index, index + len(needle)})
 			index += len(needle) - 1
 		}
 	}
 	if len(spans) == 0 {
-		return nil, nil
+		return nil
 	}
 	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
 	merged := []span{spans[0]}
 	for _, item := range spans[1:] {
 		last := &merged[len(merged)-1]
-		if item.start <= last.end+1 {
+		if item.start <= last.end+1 && max(last.end, item.end)-last.start <= browserRenderFindMatchChars {
 			last.end = max(last.end, item.end)
 			continue
 		}
 		merged = append(merged, item)
 	}
-	excerpts := make([]string, len(merged))
-	starts := make([]int, len(merged))
-	for index, item := range merged {
-		excerpts[index] = strings.TrimSpace(string(runes[item.start:item.end]))
-		starts[index] = item.start
+	out := make([]browserFindMatch, 0, len(merged))
+	for _, item := range merged {
+		start, end := item.start, item.end
+		if end-start > browserRenderFindMatchChars {
+			start, end = lineStart(item.hit), lineEnd(item.hitEnd)
+		}
+		if end-start > browserRenderFindMatchChars {
+			half := max(0, browserRenderFindMatchChars-(item.hitEnd-item.hit)) / 2
+			start, end = max(start, item.hit-half), min(end, item.hitEnd+half)
+		}
+		out = append(out, browserFindMatch{excerpt: strings.TrimSpace(string(runes[start:end])), start: start})
 	}
-	return excerpts, starts
+	return out
 }
 
 func runesEqualAt(haystack, needle []rune, at int) bool {

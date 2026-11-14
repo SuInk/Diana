@@ -6,7 +6,13 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -221,5 +227,78 @@ func TestExtractCitationURLsStopsAtChineseText(t *testing.T) {
 		if got[index] != want[index] {
 			t.Fatalf("got=%#v want=%#v", got, want)
 		}
+	}
+}
+
+// pagingSearchClient 每轮从上一条工具结果里取 next_offset 接着翻页，翻完就收尾。
+type pagingSearchClient struct {
+	offsets []int
+}
+
+func (c *pagingSearchClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	next := 0
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		content := req.Messages[i].Content
+		if !strings.Contains(content, "工具 web_search 执行") {
+			continue
+		}
+		match := regexp.MustCompile(`"next_offset":(\d+)`).FindStringSubmatch(content)
+		if match == nil {
+			return &llm.GenerateResponse{Text: `{"action":"final","content":"读完了"}`}, nil
+		}
+		next, _ = strconv.Atoi(match[1])
+		break
+	}
+	c.offsets = append(c.offsets, next)
+	input := map[string]any{"query": "翻页测试", "domains": []any{"example.com"}, "recency": 30, "offset": next}
+	data, _ := json.Marshal(map[string]any{"action": "tool", "tool": WebSearchToolName, "input": input})
+	return &llm.GenerateResponse{Text: string(data)}, nil
+}
+
+// web_search 的 offset、domains、recency 要穿过 Runner 到工具：以前 Runner 只留
+// query/queries，翻页永远回到第一页，第二次还被当成重复调用跳过。
+func TestRunnerPassesWebSearchOffsetAndReadsEveryHit(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if !strings.Contains(fmt.Sprint(body["query"]), "site:example.com") {
+			t.Errorf("domains did not reach the provider: %v", body["query"])
+		}
+		var results []map[string]string
+		for i := 0; i < 30; i++ {
+			results = append(results, map[string]string{"title": fmt.Sprintf("命中 %d", i), "url": fmt.Sprintf("https://example.com/%d", i), "content": strings.Repeat("摘要内容", 300)})
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results})
+	}))
+	defer server.Close()
+	tool, err := NewWebSearchTool(WebSearchToolOptions{
+		Config:  WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "search", Type: "tavily", URL: server.URL}}},
+		APIKeys: map[string]string{"search": "test-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &pagingSearchClient{}
+	runner, err := NewRunner(client, Config{MaxSteps: 20}, NewToolRegistry(tool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "搜一下"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, step := range resp.Steps {
+		if step.Skipped || step.Error != "" {
+			t.Fatalf("step skipped or failed: %#v", step)
+		}
+		for _, match := range regexp.MustCompile(`https://example\.com/\d+`).FindAllString(step.Output, -1) {
+			seen[match] = true
+		}
+	}
+	if len(client.offsets) < 2 || len(seen) != 30 || requests.Load() != 1 {
+		t.Fatalf("offsets=%v hits=%d provider requests=%d", client.offsets, len(seen), requests.Load())
 	}
 }

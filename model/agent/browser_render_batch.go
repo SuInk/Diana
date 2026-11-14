@@ -144,6 +144,26 @@ func (r *browserRenderReads) start(ctx context.Context, engine, url string, rend
 	return entry
 }
 
+// remember 记下一次读成功的页面，给之后的续读用。
+func (r *browserRenderReads) remember(engine, url string, page RenderedPage) {
+	entry := &browserRenderRead{done: make(chan struct{}), page: page, finished: time.Now()}
+	close(entry.done)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.entries == nil {
+		r.entries = map[string]*browserRenderRead{}
+	}
+	for k, old := range r.entries {
+		if len(r.entries) < browserRenderReadMaxEntries {
+			break
+		}
+		if !old.finished.IsZero() {
+			delete(r.entries, k)
+		}
+	}
+	r.entries[browserRenderReadKey(engine, url)] = entry
+}
+
 // await 接上批量读取里发起过的这一页：还在读就等它，刚读成功就直接取。started 为 false
 // 表示没有这样的读取（或者它失败了），调用方照常自己读。
 func (r *browserRenderReads) await(ctx context.Context, engine, url string) (page RenderedPage, err error, started bool) {

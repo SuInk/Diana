@@ -712,10 +712,56 @@ func (t *BrowserSelectTool) Description() string {
 
 func (t *BrowserSelectTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"selector"}, map[string]any{
-		"selector": toolStringParam("<select> 的 CSS 选择器"),
-		"value":    toolStringParam("option 的 value"),
-		"label":    toolStringParam("option 的显示文字，与 value 二选一"),
+		"selector":       toolStringParam("<select> 的 CSS 选择器"),
+		"value":          toolStringParam("option 的 value"),
+		"label":          toolStringParam("option 的显示文字，与 value 二选一"),
+		"options_offset": toolIntParam("没找到选项时列出的候选没给完，照抄上次的 next_options_offset 接着看"),
 	})
+}
+
+// browserSelectMiss 是没找到选项时的结果：候选整条分页，装不下的照 next_options_offset
+// 续看。以前只列前 50 个。
+type browserSelectMiss struct {
+	OK                bool                `json:"ok"`
+	Error             string              `json:"error"`
+	OptionsOffset     int                 `json:"options_offset,omitempty"`
+	TotalOptions      int                 `json:"total_options"`
+	NextOptionsOffset int                 `json:"next_options_offset,omitempty"`
+	ReadNotice        string              `json:"read_notice,omitempty"`
+	Options           []map[string]string `json:"options"`
+}
+
+func browserSelectMissPage(raw []byte, offset, budget int) (string, bool) {
+	var miss browserSelectMiss
+	if json.Unmarshal(raw, &miss) != nil || miss.OK || len(miss.Options) == 0 {
+		return "", false
+	}
+	if budget <= 0 {
+		budget = ToolOutputMaxChars
+	}
+	all := miss.Options
+	offset = min(max(offset, 0), len(all))
+	encode := func(end int) (string, bool) {
+		page := miss
+		page.Options, page.OptionsOffset, page.TotalOptions = all[offset:end], offset, len(all)
+		if end < len(all) {
+			page.NextOptionsOffset = end
+			page.ReadNotice = fmt.Sprintf("候选共 %d 个，这次列到第 %d 个；要看后面的就带 options_offset=%d 再调一次。", len(all), end, end)
+		}
+		data, _ := json.Marshal(page)
+		return string(data), utf8.RuneCount(data) <= budget
+	}
+	lo, hi := offset+1, len(all)
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if _, ok := encode(mid); ok {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	out, _ := encode(min(lo, len(all)))
+	return out, true
 }
 
 func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
@@ -751,6 +797,9 @@ return {ok:true, value: option.value, label: option.text.trim()};
 	raw, err := client.evaluate(ctx, expr)
 	if err != nil {
 		return "", err
+	}
+	if page, ok := browserSelectMissPage(raw, intFromInput(input, "options_offset", 0), ToolOutputBudget(ctx)); ok {
+		return page, nil
 	}
 	return string(raw), nil
 }

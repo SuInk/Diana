@@ -20,6 +20,10 @@ type WebSearchHit struct {
 	Provider    string `json:"provider,omitempty"`
 	// AlsoFrom 是同一网址还在哪些「搜索源: 查询」里出现过，合并去重时记下。
 	AlsoFrom []string `json:"also_from,omitempty"`
+	// SnippetOffset、SnippetChars 只在分页把这条的摘要切开时出现：这一段从摘要的
+	// 第几个字起、摘要一共多少字。
+	SnippetOffset int `json:"snippet_offset,omitempty"`
+	SnippetChars  int `json:"snippet_chars,omitempty"`
 }
 
 type webSearchQueryResponse struct {

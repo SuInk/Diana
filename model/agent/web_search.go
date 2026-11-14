@@ -25,7 +25,7 @@ const (
 	DefaultWebSearchConfigFile      = "web-search.json"
 	defaultWebSearchTimeout         = 35 * time.Second
 	defaultWebSearchProviderTimeout = 12 * time.Second
-	defaultWebSearchMaxResults      = 10
+	defaultWebSearchMaxResults      = 5
 	maxWebSearchResponseBytes       = 2 * 1024 * 1024
 	mcpProtocolVersion              = "2025-03-26"
 )

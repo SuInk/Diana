@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -394,24 +395,55 @@ func dedupeSearchEngineResults(results []searchEngineResult) []searchEngineResul
 }
 
 // fillSearchEngineSnippets 给链接旁边认不出摘要的结果补上摘要：结果页正文里这条标题
-// 之后、下一条结果标题之前的那段。最后一条到正文结尾。
+// 之后、下一条结果标题之前的那段。标题按结果顺序往后找，侧栏里提前出现的同名标题
+// 不会把位置带偏。最后一条后面没有下一条作界，只取标题后面和前面各条摘要同样多的
+// 行（前面没有可比的就取两行），不把页脚和「相关搜索」并进来。
 func fillSearchEngineSnippets(text string, results []searchEngineResult) {
 	starts := make([]int, len(results))
+	from := 0
 	for i, result := range results {
-		starts[i] = strings.Index(text, result.Title)
-	}
-	for i := range results {
-		if results[i].Snippet != "" || starts[i] < 0 {
+		starts[i] = -1
+		if result.Title == "" {
 			continue
 		}
-		from := starts[i] + len(results[i].Title)
-		end := len(text)
-		for j, start := range starts {
-			if j != i && start >= from && start < end {
-				end = start
+		if index := strings.Index(text[from:], result.Title); index >= 0 {
+			starts[i] = from + index
+			from = starts[i] + len(result.Title)
+		}
+	}
+	var lineCounts []int
+	for i := range results {
+		if starts[i] < 0 {
+			continue
+		}
+		begin := starts[i] + len(results[i].Title)
+		end := -1
+		for j := i + 1; j < len(results); j++ {
+			if starts[j] >= begin {
+				end = starts[j]
+				break
 			}
 		}
-		results[i].Snippet = strings.TrimSpace(text[from:end])
+		if end >= 0 {
+			snippet := strings.TrimSpace(text[begin:end])
+			if snippet != "" {
+				lineCounts = append(lineCounts, strings.Count(snippet, "\n")+1)
+			}
+			if results[i].Snippet == "" {
+				results[i].Snippet = snippet
+			}
+			continue
+		}
+		if results[i].Snippet != "" {
+			continue
+		}
+		want := 2
+		if len(lineCounts) > 0 {
+			sort.Ints(lineCounts)
+			want = lineCounts[len(lineCounts)/2]
+		}
+		lines := strings.Split(strings.TrimSpace(text[begin:]), "\n")
+		results[i].Snippet = strings.TrimSpace(strings.Join(lines[:min(want, len(lines))], "\n"))
 	}
 }
 

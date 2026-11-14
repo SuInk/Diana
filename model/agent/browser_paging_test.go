@@ -117,3 +117,81 @@ func TestWebSearchOutputForModelKeepsPagingFirst(t *testing.T) {
 		t.Fatalf("slim output = %.300s", slim)
 	}
 }
+
+// 单页读取在调用方的期限里读，读完记进缓存：续读不重新渲染。
+func TestBrowserRenderContinuationReusesThePage(t *testing.T) {
+	var renders int
+	text := strings.Repeat("一行正文内容\n", 5000)
+	tool := NewBrowserRenderTool(PageRendererFunc(func(_ context.Context, raw string) (RenderedPage, error) {
+		renders++
+		return RenderedPage{RequestedURL: raw, URL: raw, Text: text}, nil
+	}))
+	ctx := WithToolOutputBudget(context.Background(), 3000)
+	first, err := tool.Run(ctx, map[string]any{"url": "https://example.com/doc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page browserRenderPayload
+	if err := json.Unmarshal([]byte(first), &page); err != nil || page.NextOffset == 0 {
+		t.Fatalf("first page: %v %.200s", err, first)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"url": "https://example.com/doc", "offset": page.NextOffset}); err != nil {
+		t.Fatal(err)
+	}
+	if renders != 1 {
+		t.Fatalf("renders = %d, want 1", renders)
+	}
+}
+
+// 没找到选项时候选整条分页，照 next_options_offset 能看完。
+func TestBrowserSelectMissPagesEveryOption(t *testing.T) {
+	var options []map[string]string
+	for i := 0; i < 300; i++ {
+		options = append(options, map[string]string{"value": fmt.Sprintf("v%d", i), "label": fmt.Sprintf("选项 %d", i)})
+	}
+	raw, _ := json.Marshal(map[string]any{"ok": false, "error": "option not found", "options": options})
+	seen := 0
+	for offset, calls := 0, 0; ; calls++ {
+		if calls > 50 {
+			t.Fatal("pagination did not finish")
+		}
+		out, ok := browserSelectMissPage(raw, offset, 1500)
+		if !ok || len([]rune(out)) > 1500 {
+			t.Fatalf("bad page: %v %d", ok, len([]rune(out)))
+		}
+		var page browserSelectMiss
+		if err := json.Unmarshal([]byte(out), &page); err != nil {
+			t.Fatal(err)
+		}
+		for _, option := range page.Options {
+			if option["value"] != fmt.Sprintf("v%d", seen) {
+				t.Fatalf("option %d = %v", seen, option)
+			}
+			seen++
+		}
+		if page.NextOptionsOffset == 0 {
+			break
+		}
+		offset = page.NextOptionsOffset
+	}
+	if seen != 300 {
+		t.Fatalf("saw %d options", seen)
+	}
+	if _, ok := browserSelectMissPage([]byte(`{"ok":true,"value":"v1"}`), 0, 1500); ok {
+		t.Fatal("success result should pass through")
+	}
+}
+
+// 结果页补摘要按结果顺序找标题、以下一条为界；侧栏里提前出现的标题不带偏，最后一条
+// 不吞页脚和相关搜索。
+func TestFillSearchEngineSnippetsBoundsByNextResult(t *testing.T) {
+	text := "侧栏推荐\n第二条标题\n第一条标题\n第一条的摘要\n第二条标题\n第二条的摘要\n第三条标题\n第三条的摘要\n相关搜索\n页脚 版权所有"
+	results := []searchEngineResult{{Title: "第一条标题"}, {Title: "第二条标题"}, {Title: "第三条标题"}}
+	fillSearchEngineSnippets(text, results)
+	want := []string{"第一条的摘要", "第二条的摘要", "第三条的摘要"}
+	for i, result := range results {
+		if result.Snippet != want[i] {
+			t.Fatalf("snippet %d = %q, want %q", i, result.Snippet, want[i])
+		}
+	}
+}

@@ -88,7 +88,9 @@ type RenderedPageSnapshot struct {
 	URL         string `json:"url"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
-	Text        string `json:"text,omitempty"`
+	// TextOffset 只在 browser_render 分页输出里出现：这一段正文从这一页正文的第几个字起。
+	TextOffset int    `json:"text_offset,omitempty"`
+	Text       string `json:"text,omitempty"`
 }
 
 // PageRenderer renders one public HTTP(S) page without using a personal browser profile.
@@ -1218,7 +1220,7 @@ func (t *BrowserRenderTool) InputSchema() map[string]any {
 		"url":    toolStringParam("公网页面地址，或搜索结果的 ref 编号"),
 		"urls":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
 		"find":   toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
-		"offset": toolIntParam("续读位置：上次结果没给完时照抄它的 next_offset，或者填 find_offsets 里的值从那段正文读起；默认从头"),
+		"offset": toolIntParam("续读位置：照抄上次结果的 next_offset，或填 find_offsets 里的值读那段正文（find 要保持不变）；默认从头"),
 		"engine": toolEnumParam("上次读到的正文缺内容、缺图片或页面要 JS 渲染时填 browser，跳过快速读取和缓存、用本地浏览器重新渲染；默认 auto",
 			RenderEngineAuto, RenderEngineBrowser),
 	})
@@ -1238,16 +1240,13 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
 	}
 	// 同一页刚读过（批量里没等到的那页，或者上一次分页读到一半）就接着用那次的结果，
-	// 续读时页面不重新渲染，offset 也对得上。
+	// 续读时页面不重新渲染，offset 也对得上。没读过就照常在调用方的期限里读，读成功
+	// 了记下来给续读用：不走批量的后台期限，快速读取失败退回浏览器时时间照旧够用。
 	engine := renderEngineFromContext(ctx)
 	page, err, started := t.reads.await(ctx, engine, rawURL)
 	if !started {
-		read := t.reads.start(ctx, engine, rawURL, t.renderer.Render)
-		select {
-		case <-read.done:
-			page, err = read.page, read.err
-		case <-ctx.Done():
-			return "", ctx.Err()
+		if page, err = t.renderer.Render(ctx, rawURL); err == nil {
+			t.reads.remember(engine, rawURL, page)
 		}
 	}
 	if err != nil {

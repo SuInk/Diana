@@ -6,6 +6,8 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -87,49 +89,80 @@ func webSearchPageKey(input map[string]any) string {
 	return string(data)
 }
 
-// webSearchPage 从 offset 起尽量多装：命中按整条，content 按整行（第一行就装不下才
-// 从行内切）。位置先数命中，再数 content 的字。至少装一个位置，保证续读往前走。
+// webSearchPage 从 offset 起尽量多装。位置先数命中，再数 content 的字：一条命中占
+// 「1 + 摘要字数」个位置，起点是整条，往后每个位置是摘要里的一个字，所以摘要比整页
+// 还长时能从中间切开，续读落在这条命中内部；content 按整行装，一行装不下才从行内切。
+// 至少装一个位置，保证续读往前走。
+//
+// sources、searches、queries、providers、attempts 这些诊断只放第一页：以前每页都带，
+// 十个查询时光这些就近一万字。Runner 先按单次
+// 上限截原始输出、再给模型精简版，所以按原始输出计量，精简版只会更短。
 func webSearchPage(result webSearchResult, args map[string]any, offset, budget int) (string, error) {
 	if budget <= 0 {
 		budget = ToolOutputMaxChars
 	}
 	hits := result.Results
+	starts := make([]int, len(hits)+1)
+	for i, hit := range hits {
+		starts[i+1] = starts[i] + 1 + utf8.RuneCountInString(hit.Snippet)
+	}
+	hitEnd := starts[len(hits)]
 	content := []rune(result.Content)
-	total := len(hits) + len(content)
+	total := hitEnd + len(content)
 	offset = min(max(offset, 0), total)
 	encode := func(end int) (string, bool, error) {
 		page := result
 		page.Results = nil
 		page.Content = ""
+		if offset > 0 {
+			page.Sources, page.Searches, page.Queries, page.Providers, page.Attempts = nil, nil, nil, nil, nil
+		}
 		page.Offset = offset
 		page.TotalResults = len(hits)
 		page.ContentChars = len(content)
-		if offset < len(hits) {
-			page.Results = hits[offset:min(end, len(hits))]
+		for i, hit := range hits {
+			lo, hi := max(offset, starts[i]), min(end, starts[i+1])
+			if lo >= hi {
+				continue
+			}
+			snippet := []rune(hit.Snippet)
+			from, to := max(lo-starts[i]-1, 0), min(hi-starts[i]-1, len(snippet))
+			if lo == starts[i] {
+				from = 0
+			}
+			if hi == starts[i+1] {
+				to = len(snippet)
+			}
+			if from > 0 || to < len(snippet) {
+				hit.Snippet = string(snippet[from:max(from, to)])
+				hit.SnippetOffset, hit.SnippetChars = from, len(snippet)
+			}
+			page.Results = append(page.Results, hit)
 		}
-		if end > len(hits) {
-			page.Content = string(content[max(offset, len(hits))-len(hits) : end-len(hits)])
+		if end > hitEnd {
+			page.Content = string(content[max(offset, hitEnd)-hitEnd : end-hitEnd])
 		}
 		if end < total {
 			page.NextOffset = end
-			page.ReadNotice = webSearchReadNotice(len(hits), len(content), end, args)
+			page.ReadNotice = webSearchReadNotice(len(hits), len(content), webSearchHitsLeft(starts, end), max(0, total-max(end, hitEnd)), args, end)
 		}
 		data, err := json.Marshal(page)
 		return string(data), utf8.RuneCount(data) <= budget, err
 	}
 	var bounds []int
 	for position := offset; position < total; {
-		if position < len(hits) {
-			position++
+		if position < hitEnd {
+			i := sort.SearchInts(starts, position+1) - 1
+			position = starts[i+1]
 		} else {
-			index := position - len(hits)
+			index := position - hitEnd
 			for index < len(content) && content[index] != '\n' {
 				index++
 			}
 			if index < len(content) {
 				index++
 			}
-			position = len(hits) + index
+			position = hitEnd + index
 		}
 		bounds = append(bounds, position)
 	}
@@ -151,7 +184,8 @@ func webSearchPage(result webSearchResult, args map[string]any, offset, budget i
 	end := bounds[0]
 	if lo >= 0 {
 		end = bounds[lo]
-	} else if offset >= len(hits) {
+	} else {
+		// 第一条就装不下：命中从摘要中间切，content 从行内切，取装得下的最长一段。
 		low, high := offset+1, bounds[0]
 		for low < high {
 			mid := low + (high-low+1)/2
@@ -169,16 +203,24 @@ func webSearchPage(result webSearchResult, args map[string]any, offset, budget i
 	return out, err
 }
 
-func webSearchReadNotice(hits, content, next int, args map[string]any) string {
-	left := ""
-	if rest := hits - next; rest > 0 {
-		left = fmt.Sprintf("还有 %d 条命中", rest)
-	}
-	if rest := content - max(0, next-hits); rest > 0 && content > 0 {
-		if left != "" {
-			left += "，"
+// webSearchHitsLeft 数 end 之后还有几条命中没给完（切在中间的那条也算）。
+func webSearchHitsLeft(starts []int, end int) int {
+	left := 0
+	for i := 0; i+1 < len(starts); i++ {
+		if starts[i+1] > end {
+			left++
 		}
-		left += fmt.Sprintf("搜索源原文还有 %d 字", min(rest, content))
+	}
+	return left
+}
+
+func webSearchReadNotice(hits, content, hitsLeft, contentLeft int, args map[string]any, next int) string {
+	var left []string
+	if hitsLeft > 0 {
+		left = append(left, fmt.Sprintf("命中还有 %d 条（共 %d 条）", hitsLeft, hits))
+	}
+	if contentLeft > 0 && content > 0 {
+		left = append(left, fmt.Sprintf("搜索源原文还有 %d 字", contentLeft))
 	}
 	call := make(map[string]any, len(args)+1)
 	for key, value := range args {
@@ -186,5 +228,7 @@ func webSearchReadNotice(hits, content, next int, args map[string]any) string {
 	}
 	call["offset"] = next
 	data, _ := json.Marshal(call)
-	return "这次结果没给完：" + left + "。需要后面的就再调一次 web_search，参数 " + string(data) + "（其余参数不变，offset 照抄），直接从缓存取，不会重新搜索。没看到的命中不能当成没搜到。"
+	return "这次结果没给完：" + strings.Join(left, "，") + "。需要后面的就再调一次 web_search，参数 " + string(data) + "（其余参数不变，offset 照抄）。" +
+		fmt.Sprintf("%d 分钟内翻页直接取这次的结果，不重新搜索；过了时间会重新搜，结果可能和这一页对不上。", int(webSearchPageTTL.Minutes())) +
+		"没看到的命中不能当成没搜到。"
 }

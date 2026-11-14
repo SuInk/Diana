@@ -1719,16 +1719,18 @@ func explicitUserRequestKind(tool Tool, input map[string]any) string {
 	return ""
 }
 
+// minimalToolInput 只把 web_search 声明过的参数交给工具，模型多填的字段丢掉。
+// 以前只留 query/queries，domains、recency 和翻页用的 offset 都到不了工具：翻页永远
+// 回到第一页，串行路径还会因为签名和上一次相同被当成重复调用跳过。
 func minimalToolInput(toolName string, input map[string]any) map[string]any {
 	if toolName != webSearchToolName {
 		return input
 	}
 	minimal := map[string]any{}
-	if query, ok := input["query"]; ok {
-		minimal["query"] = query
-	}
-	if queries, ok := input["queries"]; ok {
-		minimal["queries"] = queries
+	for key := range WebSearchInputSchema()["properties"].(map[string]any) {
+		if value, ok := input[key]; ok {
+			minimal[key] = value
+		}
 	}
 	return minimal
 }
