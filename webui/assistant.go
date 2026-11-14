@@ -720,7 +720,7 @@ func (h *BotHandler) deleteProfile(c *gin.Context) {
 	}
 	set := h.profiles.Profiles()
 	if len(set.Profiles) <= 1 {
-		h.writeError(c, http.StatusBadRequest, "profile_delete", fmt.Errorf("at least one qqbot profile must remain"), targetID, nil)
+		h.writeError(c, http.StatusBadRequest, "profile_delete", fmt.Errorf("at least one bot profile must remain"), targetID, nil)
 		return
 	}
 	next := set.Delete(targetID)
