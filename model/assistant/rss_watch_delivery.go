@@ -25,8 +25,10 @@ func (r *Runtime) sendRSSWatchTargets(ctx context.Context, item Reminder, messag
 				// 订阅拖成「连续失败」——重新启用之后下一轮自然会投。
 				continue
 			}
-			failures = append(failures, err)
-			continue
+			if !outboundDeliveryOutcomeUnconfirmed(err) {
+				failures = append(failures, err)
+				continue
+			}
 		}
 		completed[key] = true
 		if r.reminders == nil {

@@ -91,7 +91,11 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			NormalizePlatformID(firstNonEmpty(event.Platform, cfg.Platform)) == PlatformQQOfficial {
 			chunk = qqOfficialDropLeadingSenderMention(chunk, event.UserID)
 		}
-		msg := OutgoingMessage{Text: chunk, LiteralText: decoration.LiteralText}
+		msg := OutgoingMessage{
+			Text:              chunk,
+			LiteralText:       decoration.LiteralText,
+			NoPlainAtMentions: subscriptionPushKindFromContext(ctx) != "",
+		}
 		if !decoration.LiteralText && !isStandaloneRecordReply(chunk) {
 			msg.MarkdownStyle = finalizeQQExtrasFromContext(ctx).markdownStyle()
 		}

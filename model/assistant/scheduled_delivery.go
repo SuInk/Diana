@@ -113,14 +113,38 @@ func (r *Runtime) deliverNotice(ctx context.Context, event MessageEvent, text st
 	return r.deliverNoticeWithReply(ctx, event, text, "")
 }
 
+// noticeTextHasExplicitMention 判断通知正文是否已经显式写了 @（例如周期任务里用
+// <diana-at id="…"/> 点名了群里真正要提醒的对象）。有了就不再在开头硬补建任务的人，
+// 避免「A 设任务让机器人提醒 B 睡觉」发出时既 @A 又喊 B。
+func noticeTextHasExplicitMention(text string) bool {
+	return strings.Contains(text, dianaMentionMarkerPrefix) || strings.Contains(text, "[CQ:at,")
+}
+
+// outboundDeliveryOutcomeUnconfirmed 判断发送是否已经交给接入端、只是回执超时未确认。
+// 这类投递和入站回复同一规矩：不能当失败重发，否则已在群里送达的通知会再发第二遍。
+func outboundDeliveryOutcomeUnconfirmed(err error) bool {
+	return err != nil && (errors.Is(err, errOutboundOutcomeUnconfirmed) || errors.Is(err, ErrOutboundOutcomeUnknown))
+}
+
 func (r *Runtime) deliverNoticeWithReply(ctx context.Context, event MessageEvent, text, replyID string) ([]string, error) {
+	mentionUserID := strings.TrimSpace(event.UserID)
+	if event.Kind == EventKindGroup && subscriptionPushKindFromContext(ctx) == "" && noticeTextHasExplicitMention(text) {
+		mentionUserID = ""
+	}
 	send := func() ([]string, error) {
 		cfg := r.effectiveConfigForEvent(event)
-		return r.deliverChunks(ctx, event, splitReply(text, notificationChunkSize), cfg, outboundDecoration{
-			MentionUserID:  strings.TrimSpace(event.UserID),
-			MentionAlways:  true,
+		chunks := splitReply(text, notificationChunkSize)
+		ids, err := r.deliverChunks(ctx, event, chunks, cfg, outboundDecoration{
+			MentionUserID:  mentionUserID,
+			MentionAlways:  mentionUserID != "",
 			ReplyMessageID: replyID,
 		})
+		// 群通知里的订阅者已退群、UIN 无法解析或旧锚点失效导致永久拒收时，去掉 @ 与引用
+		// 按纯文本退回发一次，避免整条订阅卡死在无限重试里。
+		if err != nil && len(ids) == 0 && event.Kind == EventKindGroup && isPermanentSendRejection(err) && (mentionUserID != "" || replyID != "") {
+			return r.deliverChunks(ctx, event, chunks, cfg, outboundDecoration{LiteralText: true})
+		}
+		return ids, err
 	}
 	messageIDs, err := send()
 	if err == nil || !scheduledDelivery(ctx) || !deliveryNotReady(err) {

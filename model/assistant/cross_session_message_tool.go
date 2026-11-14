@@ -86,7 +86,7 @@ func (t *dianaCrossSessionTool) Description() string {
 	if t.owner {
 		base += "主人可指定 user_id 或 group_id，默认发给当前说话人的私聊。"
 	} else {
-		base += "只能发给当前说话的人。"
+		base += "只能发给当前说话的人（本条消息发送者），未填 user_id 即发给当前说话人，绝不能用来联系记忆或跨群上下文里的其他人。"
 	}
 	base += "要把已有的消息（别人的或你自己的，含链接、图片）转过去时填 message_ids，原消息会原样发出，" +
 		"不要自己把正文复述或改写进 message；当前消息引用的那条可以直接用它的 ID。只转原消息时 message 留空。"
@@ -104,6 +104,8 @@ func (t *dianaCrossSessionTool) InputSchema() map[string]any {
 	if t.owner {
 		properties["user_id"] = toolStringParam("私聊目标账号，取自 @ 或成员查询，勿按昵称猜；与 group_id 二选一")
 		properties["group_id"] = toolStringParam("目标群 ID，须是机器人在的其他群；与 user_id 二选一")
+	} else {
+		properties["user_id"] = toolStringParam("私聊目标账号，默认当前说话人；非主人只能填当前说话人或留空，禁止把给别人的话留空发给当前说话人")
 	}
 	return toolObjectSchema(nil, properties)
 }
@@ -200,7 +202,7 @@ func (t *dianaCrossSessionTool) resolveTarget(ctx context.Context, input map[str
 		}
 		return t.resolveGroupTarget(groupID)
 	}
-	if userID != "" && !owner {
+	if userID != "" && userID != strings.TrimSpace(t.event.UserID) && !owner {
 		return crossSessionTarget{}, fmt.Errorf("只能发给当前说话的人；指定别人只有主人能要求")
 	}
 	return t.resolveUserTarget(ctx, userID)

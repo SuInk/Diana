@@ -81,14 +81,18 @@ func interimMessagesSent(ctx context.Context) []string {
 	return append([]string(nil), ledger.sent...)
 }
 
+func interimMessageDedupKey(text string) string {
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(stripChatPeriods(text)), "。."))
+}
+
 // repeatsInterimMessage 报告最终回复是不是就是中途已经说过的某一句。
 func repeatsInterimMessage(ctx context.Context, reply string) bool {
-	reply = strings.TrimSpace(stripChatPeriods(reply))
-	if reply == "" {
+	key := interimMessageDedupKey(reply)
+	if key == "" {
 		return false
 	}
 	for _, sent := range interimMessagesSent(ctx) {
-		if sent == reply {
+		if interimMessageDedupKey(sent) == key {
 			return true
 		}
 	}
@@ -166,6 +170,20 @@ func (t *dianaInterimMessageTool) run(ctx context.Context, input map[string]any,
 	if text == "" {
 		return "", fmt.Errorf("text 不能为空")
 	}
+	dedupKey := interimMessageDedupKey(text)
+	ledger.mu.Lock()
+	for _, prev := range ledger.sent {
+		if interimMessageDedupKey(prev) == dedupKey {
+			remaining := interimMessageMaxPerTurn - len(ledger.sent)
+			ledger.mu.Unlock()
+			return marshalInterimMessageResult(interimMessageResult{
+				OK:        true,
+				Remaining: remaining,
+				Message:   "这句话刚才在本轮已经发过了，没有重复发送。接着把事情做完；如果都说完了就直接 send silent=true。",
+			})
+		}
+	}
+	ledger.mu.Unlock()
 	var prepared preparedReplyAudit
 	if audited {
 		ledger.mu.Lock()

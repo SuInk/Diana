@@ -409,7 +409,8 @@ func TestCrossSessionToolRegistrationScope(t *testing.T) {
 }
 
 // 关系等级不该把这件事挡在门外：「私聊发给我」是群里任何人都会提的要求。
-// 同时，指定别人和指定群的参数只对主人出现在 schema 里。
+// 指定群的 group_id 只对主人暴露；user_id 对非主人也暴露（但执行时只允许填当前说话人或留空），
+// 这样模型想联系跨群上下文里的另一个人时会把对方账号填进 user_id 并被明确拦下，而不是留空误发给当前说话人。
 func TestCrossSessionToolAvailableToNonOwnersWithNarrowerSchema(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{UserID: "555"}, "999", "555")
 	if policy.Owner {
@@ -424,8 +425,8 @@ func TestCrossSessionToolAvailableToNonOwnersWithNarrowerSchema(t *testing.T) {
 	if _, exists := properties["group_id"]; exists {
 		t.Fatal("非主人的 schema 里不该出现 group_id")
 	}
-	if _, exists := properties["user_id"]; exists {
-		t.Fatal("非主人的 schema 里不该出现 user_id")
+	if _, exists := properties["user_id"]; !exists {
+		t.Fatal("非主人的 schema 里应当暴露 user_id 以拦截发错人")
 	}
 	ownerSchema := newDianaCrossSessionTool(runtime, crossSessionGroupSource("999"), true).InputSchema()
 	ownerProperties, _ := ownerSchema["properties"].(map[string]any)
@@ -953,5 +954,30 @@ func TestIdentityPrivacyRestoresMessageIDArray(t *testing.T) {
 	ids, _ := calls[0].Arguments["message_ids"].([]any)
 	if len(ids) != 1 || ids[0] != "70001" {
 		t.Fatalf("别名没有还原：%#v", calls[0].Arguments)
+	}
+}
+
+// 非主人的 InputSchema 也必须显式暴露 user_id：这样模型想给跨群上下文里的另一个人发私信时，
+// 会把那个人的账号填进 user_id 并被明确拦下，而不会因为没有参数可填而静默发给当前说话人。
+func TestCrossSessionToolExposesUserIDToNonOwnerAndAllowsSelfOnly(t *testing.T) {
+	channel := newFriendRosterChannel("555", "777")
+	runtime := crossSessionTestRuntime(channel, BotConfig{})
+	member := newDianaCrossSessionTool(runtime, crossSessionGroupSource("555"), false)
+	props, _ := member.InputSchema()["properties"].(map[string]any)
+	if _, ok := props["user_id"]; !ok {
+		t.Fatalf("non-owner schema missing user_id: %#v", props)
+	}
+	if _, ok := props["group_id"]; ok {
+		t.Fatalf("non-owner schema should not expose group_id: %#v", props)
+	}
+	if _, err := member.Run(context.Background(), map[string]any{"message": "发给我自己", "user_id": "555"}); err != nil {
+		t.Fatalf("explicit self user_id should succeed: %v", err)
+	}
+	if _, err := member.Run(context.Background(), map[string]any{"message": "记得充电", "user_id": "777"}); err == nil {
+		t.Fatal("targeting another user as non-owner must fail")
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || sent[0].UserID != "555" {
+		t.Fatalf("unexpected sent messages: %#v", sent)
 	}
 }

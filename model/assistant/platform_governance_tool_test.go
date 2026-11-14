@@ -201,6 +201,58 @@ func TestPlatformToolRecallMessagesByUser(t *testing.T) {
 	}
 }
 
+// 普通群成员发错消息（如无码图或过 2 分钟时限）时，可在机器人是群管理员的前提下撤回自己的消息，
+// 但绝不能借 recall_messages 撤回别人的消息；机器人自己的消息提示改用 recall。
+func TestPlatformToolMemberCanRecallOwnMessagesOnly(t *testing.T) {
+	channel := newRoleTestChannel(map[string]string{
+		"10000":  "admin",
+		"member": "member",
+		"other":  "member",
+	})
+	event := MessageEvent{
+		Kind:     EventKindGroup,
+		UserID:   "member",
+		GroupID:  "123",
+		SelfID:   "10000",
+		Platform: PlatformOneBotV11,
+		Quoted:   &QuotedMessage{MessageID: "own-1", UserID: "member"},
+	}
+	tool, runtime, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, event)
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, UserID: "member", MessageID: "own-1", RawMessage: "发错图了"})
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, UserID: "other", MessageID: "other-1", RawMessage: "别人的话"})
+	runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, UserID: "10000", MessageID: "bot-1", Outbound: true, RawMessage: "机器人的话"})
+
+	out, err := tool.Run(context.Background(), map[string]any{"operation": "recall_messages"})
+	if err != nil {
+		t.Fatalf("member self recall error = %v", err)
+	}
+	if !strings.Contains(out, `"requester_access":"member_self"`) || !strings.Contains(out, "已撤回 1 条") {
+		t.Fatalf("unexpected self recall output: %s", out)
+	}
+	deleted := recordedCallsByAction(channel.callsSnapshot(), "delete_msg")
+	if len(deleted) != 1 || fmt.Sprint(deleted[0].params["message_id"]) != "own-1" {
+		t.Fatalf("delete_msg calls = %#v", deleted)
+	}
+
+	// 普通成员试图撤回别人的消息必须被拒。
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "recall_messages", "message_id": "other-1"}); err == nil || !strings.Contains(err.Error(), "主人、群主或群管理员") {
+		t.Fatalf("member recalling someone else error = %v", err)
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "recall_messages", "user_id": "other"}); err == nil || !strings.Contains(err.Error(), "主人、群主或群管理员") {
+		t.Fatalf("member recalling someone else by user_id error = %v", err)
+	}
+	if len(recordedCallsByAction(channel.callsSnapshot(), "delete_msg")) != 1 {
+		t.Fatal("refused recall must not call delete_msg")
+	}
+
+	// 群管或主人误用 recall_messages 撤机器人自己的消息时提示改用 recall。
+	adminTool, _, _ := platformToolFor(t, BotConfig{OwnerID: "owner", BotAccount: "10000", Platform: PlatformOneBotV11}, channel, governanceToolEvent(PlatformOneBotV11))
+	adminTool.runtime.remember(MessageEvent{Kind: EventKindGroup, GroupID: "123", SelfID: "10000", Platform: PlatformOneBotV11, UserID: "10000", MessageID: "bot-2", Outbound: true, RawMessage: "机器人的话"})
+	if _, err := adminTool.Run(context.Background(), map[string]any{"operation": "recall_messages", "message_id": "bot-2"}); err == nil || !strings.Contains(err.Error(), `operation="recall"`) {
+		t.Fatalf("bot outbound recall_messages error = %v", err)
+	}
+}
+
 // 能力矩阵：每个平台的每个写操作都要表态，新增平台或操作时这里先红。
 var expectedPlatformWriteOperations = map[string][]string{
 	PlatformOneBotV11: {
