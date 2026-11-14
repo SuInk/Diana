@@ -426,6 +426,11 @@ func TestExplicitIdentitySourceBeatsCurrentMessageImage(t *testing.T) {
 	if len(used) != 1 || used[0].Kind != "member_avatar" || used[0].UserID != "20002" {
 		t.Fatalf("sources_used = %#v", used)
 	}
+	// 模型直接填裸 user_id 也按成员头像取：线上 terra 填过 openid 本身，被当成取不到。
+	urls, used, err = runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{"20002"}})
+	if err != nil || len(urls) != 1 || urls[0] != OneBotMemberAvatarURL("20002") || used[0].Kind != "member_avatar" {
+		t.Fatalf("bare id sources = %#v used=%#v err=%v", urls, used, err)
+	}
 	// 点名的人取不到头像：报错，不退回当前消息里那张图。
 	if _, _, err := runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{avatarSourceMemberPrefix}}); err == nil {
 		t.Fatal("unresolvable identity source silently fell back")
@@ -474,9 +479,9 @@ func TestImageToolOperationFollowsSources(t *testing.T) {
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
 	tool := &dianaImageTool{runtime: runtime, event: event, relationship: policy}
 
-	request, err := tool.prepareRequest(map[string]any{"prompt": "机器人风格", "identity_sources": []any{"member_avatar:20002"}})
-	if err != nil || request.Operation != "edit" {
-		t.Fatalf("missing operation with identity_sources: op=%q err=%v", request.Operation, err)
+	request, err := tool.prepareRequest(map[string]any{"prompt": "机器人风格", "avatars": []any{map[string]any{"type": "member", "id": "20002"}}})
+	if err != nil || request.Operation != "edit" || strings.Join(request.IdentitySources, ",") != "member_avatar:20002" {
+		t.Fatalf("missing operation with avatars: op=%q sources=%#v err=%v", request.Operation, request.IdentitySources, err)
 	}
 	request, err = tool.prepareRequest(map[string]any{"prompt": "机器人风格", "source_message_ids": []any{"123"}})
 	if err != nil || request.Operation != "edit" {
@@ -517,7 +522,7 @@ func TestImageToolResultReportsSourcesUsed(t *testing.T) {
 	}
 	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
 	tool := &dianaImageTool{runtime: runtime, event: event, relationship: policy}
-	request, err := tool.prepareRequest(map[string]any{"prompt": "机器人风格", "identity_sources": []any{"member_avatar:20002"}})
+	request, err := tool.prepareRequest(map[string]any{"prompt": "机器人风格", "avatars": []any{map[string]any{"type": "member", "id": "20002"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,5 +620,28 @@ func TestReplyWaitsForFollowUpImageDescription(t *testing.T) {
 			}
 
 		})
+	}
+}
+
+// avatars 的 type 写在目录签名里，模型不看参数说明也知道怎么填；填错当场报错带正确写法。
+func TestImageAvatarSources(t *testing.T) {
+	got, err := imageAvatarSources([]any{
+		map[string]any{"type": "sender"}, map[string]any{"type": "bot"}, map[string]any{"type": "group"},
+		map[string]any{"type": "group", "id": "30003"}, map[string]any{"type": "member", "id": " 20002 "},
+	})
+	if err != nil || strings.Join(got, ",") != "sender_avatar,bot_avatar,group_avatar,group_avatar:30003,member_avatar:20002" {
+		t.Fatalf("sources = %#v err = %v", got, err)
+	}
+	if got, err := imageAvatarSources(nil); err != nil || got != nil {
+		t.Fatalf("empty = %#v err = %v", got, err)
+	}
+	for _, bad := range []any{
+		[]any{map[string]any{"type": "member"}},
+		[]any{map[string]any{"type": "user_avatar"}},
+		"sender",
+	} {
+		if _, err := imageAvatarSources(bad); err == nil || !strings.Contains(err.Error(), "type") {
+			t.Fatalf("%#v should be rejected with a hint, err = %v", bad, err)
+		}
 	}
 }

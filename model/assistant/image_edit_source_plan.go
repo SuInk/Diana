@@ -18,7 +18,7 @@ import (
 // 工具结果也不说用的是哪张，模型照样告诉大家「用了 Winter 的头像」。
 //
 // 现在分两层：
-//   - 显式：模型给了 identity_sources 或 source_message_ids，就只用它们。它看得到
+//   - 显式：模型给了 avatars（意图路由给 identity_sources）或 source_message_ids，就只用它们。它看得到
 //     上下文里每张图、每个人，比运行时按位置猜准；解析不出来就报错让它改，不悄悄
 //     换成别的图。
 //   - 隐式：模型什么都没点名时才按老顺序找——当前消息、引用（含引用链）、指代解析
@@ -87,7 +87,7 @@ func (r *Runtime) resolveExplicitImageEditSources(ctx context.Context, event Mes
 		avatars, failed := r.avatarIdentitySources(ctx, event, plan.IdentitySources)
 		if len(failed) > 0 {
 			// 点名的头像取不到就当场说，不退回当前消息里的图：那正是事故里的错法。
-			return nil, nil, fmt.Errorf("identity_sources 里 %s 取不到头像（user_id 不对、群号不对，或对方没有可见头像）。这次没有开始画；请核对 user_id 后重新调用，或改用 source_message_ids 指认图片", strings.Join(failed, "、"))
+			return nil, nil, fmt.Errorf("头像 %s 取不到（user_id 不对、群号不对，或对方没有可见头像）。这次没有开始画；发送者自己的头像用 avatars 的 {\"type\":\"sender\"}，其他成员用 {\"type\":\"member\",\"id\":\"<user_id>\"}，核对后重新调用，或改用 source_message_ids 指认图片", strings.Join(failed, "、"))
 		}
 		for _, avatar := range avatars {
 			urls = appendImageEditSourceImages(urls, avatar.URL)

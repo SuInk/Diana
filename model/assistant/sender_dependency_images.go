@@ -378,7 +378,7 @@ func senderDependencyHeader(current MessageEvent, toolHint bool) string {
 		promptSenderIdentity(current) + " 在这条消息之前单独发了下面这些图。本条消息可能在说其中某张，也可能跟它们无关——结合正文和上下文判断；" +
 		"拿不准指的是哪张，就问一句，或在回复里说明你按哪张理解。"
 	if toolHint {
-		header += "它们不会自动当作改图原图：要改、要当素材，把对应的 message_id 填进 image 工具的 source_message_ids；用户说的是某个人的头像时用 identity_sources，别拿这些图顶替。"
+		header += "它们不会自动当作改图原图：要改、要当素材，把对应的 message_id 填进 image 工具的 source_message_ids；用户说的是某个人的头像时用 avatars，别拿这些图顶替。"
 	}
 	return header
 }

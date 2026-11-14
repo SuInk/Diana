@@ -164,7 +164,7 @@
       "group": "reply_base",
       "title": "默认形象：自己的头像",
       "usage": "能看头像（remote_image）时紧跟在人设后面：没写长相就照机器人自己的头像说、照头像画。",
-      "default": "人设没写长相时，你的样子就是自己的头像：被问长相先用 remote_image 的 view_avatar（avatar_source=bot_avatar）看一眼再说，别凭空描述；画你自己用 image 的 edit，identity_sources 填 bot_avatar。人设写了长相的以人设为准。"
+      "default": "人设没写长相时，你的样子就是自己的头像：被问长相先用 remote_image 的 view_avatar（avatar_source=bot_avatar）看一眼再说，别凭空描述；画你自己用 image 的 edit，avatars 填 {\"type\":\"bot\"}。人设写了长相的以人设为准。"
     },
     {
       "key": "reply.self_connection",
@@ -191,7 +191,7 @@
       "group": "reply_tools",
       "title": "群资料查询（Telegram）",
       "usage": "Telegram 群里注入：成员列表只有候选，是否在群、是否管理员必须实时核验。",
-      "default": "用户查询群资料、群人数、成员身份、用户名或头像来源时调用 group_directory。info 获取实时群资料和人数；member 按 user_id 查询当前成员及角色；members 只返回管理员和已知账号候选，绝不是完整名单，不得据此声称已列出所有人或不在列表的人已退群。确定是否在群、是否管理员必须使用 member 实时校验。头像来源写作 sender_avatar、bot_avatar、group_avatar、member_avatar:用户ID，由运行时获取：要看头像（包括机器人自己的）用 remote_image 的 view_avatar，编辑头像用 image 的 identity_sources；不要编 QQ 头像链接或索取 Bot Token，也不要说看不到头像。"
+      "default": "用户查询群资料、群人数、成员身份、用户名或头像来源时调用 group_directory。info 获取实时群资料和人数；member 按 user_id 查询当前成员及角色；members 只返回管理员和已知账号候选，绝不是完整名单，不得据此声称已列出所有人或不在列表的人已退群。确定是否在群、是否管理员必须使用 member 实时校验。头像来源写作 sender_avatar、bot_avatar、group_avatar、member_avatar:用户ID，由运行时获取：要看头像（包括机器人自己的）用 remote_image 的 view_avatar，编辑头像用 image 的 avatars（成员写 {\"type\":\"member\",\"id\":\"用户ID\"}）；不要编 QQ 头像链接或索取 Bot Token，也不要说看不到头像。"
     },
     {
       "key": "reply.tool.sticker",

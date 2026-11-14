@@ -252,11 +252,9 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 当前消息里的表情曾把头像顶掉。按名字指人要先查 user_id，模型曾编造 id。
 	// source_message_ids 的「候选图要点名」「重试填最初原图」分别来自 #816、#744。
 	if t.relationship.AllowImageEditing {
-		properties["identity_sources"] = toolStringArrayParam(
-			`点名头像，优先于当前消息里的图：` + avatarSourceSender + `、` + avatarSourceBot + `、` + avatarSourceGroup + `、` +
-				avatarSourceGroupPrefix + `<群号>、` + avatarSourceMemberPrefix + `<user_id>（当前平台账号，按名字指人先查出 id）`)
-		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 identity_sources，重试填最初原图所在消息`)
-		properties["source_labels"] = toolStringArrayParam(`与 identity_sources 一一对应、数量相同，逐张发送时作该图说明`)
+		properties["avatars"] = imageAvatarsParam()
+		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 avatars，重试填最初原图所在消息`)
+		properties["source_labels"] = toolStringArrayParam(`与 avatars 一一对应、数量相同，逐张发送时作该图说明`)
 		properties["source_mode"] = toolEnumParam(`多张参考图：combine 合成一张（默认）；each 逐张各出一张`, "combine", "each")
 	}
 	return toolObjectSchema([]string{"prompt"}, properties)
@@ -324,7 +322,13 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if len([]rune(prompt)) > 12000 {
 		return dianaImageToolRequest{}, fmt.Errorf("prompt 过长，请压缩到 12000 字以内")
 	}
+	// identity_sources 是意图路由那条路内部传的字符串写法，模型那边用 avatars。
 	identitySources := configToolStringSlice(input, "identity_sources")
+	avatarSources, err := imageAvatarSources(input["avatars"])
+	if err != nil {
+		return dianaImageToolRequest{}, err
+	}
+	identitySources = append(identitySources, avatarSources...)
 	sourceMessageIDs := configToolStringSlice(input, "source_message_ids")
 	explicitSources := len(identitySources) > 0 || len(sourceMessageIDs) > 0
 	if operation == "" {
@@ -354,7 +358,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 				operation = "edit"
 				break
 			}
-			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 identity_sources 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
+			return dianaImageToolRequest{}, fmt.Errorf("operation=\"generate\" 只凭文字生成新图，会忽略 avatars 和 source_message_ids。要以头像或某条消息里的图为底，请改用 operation=\"edit\" 重新调用；确实只想凭文字生成，就去掉这两个参数")
 		}
 	case "edit":
 	default:
@@ -444,7 +448,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	if request.Operation == "edit" {
 		name = "图片编辑"
 		if len(request.Sources) == 0 {
-			// 显式来源（source_message_ids、identity_sources）优先，「按某人头像的样子改
+			// 显式来源（source_message_ids、avatars）优先，「按某人头像的样子改
 			// 这张图」时点名的头像跟在原图后面一起交给图片模型。都没点名才按当前消息、
 			// 引用消息去找，见 image_edit_source_plan.go。
 			sources, used, err := t.runtime.resolveImageEditSources(ctx, t.event, t.sourcePlan(request))
@@ -510,7 +514,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 			}
 			// 成图不引用原消息：像真人画完直接甩图，引用框反倒显得像工单回执。
 			message := OutgoingMessage{ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models}
-			return PluginTaskResult{Messages: dianaImageCaptionThenImages(output.Caption, message)}, nil
+			return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, output.Caption)}, nil
 		},
 	}
 	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
@@ -701,14 +705,14 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 					}
 					outgoing := OutgoingMessage{ImageURLs: shared, GeneratedImageModels: generatedImageModels(usedCfg, operation, len(shared), resp)}
-					// 有标注就每张带上「这是谁的」;没有标注时第一张前先单独发整体说明。
+					// 有标注就每张带上「这是谁的」;没有标注时第一张发完后单独补整体说明。
 					caption := ""
 					if label := labelByURL[batch[0]]; label != "" {
 						outgoing.Text = label
 					} else if streamed == 0 {
 						caption = request.Caption
 					}
-					if sendErr := sendDianaImageMessages(ctx, services, dianaImageCaptionThenImages(caption, outgoing)); sendErr == nil {
+					if sendErr := sendDianaImageMessages(ctx, services, dianaImageImagesThenCaption(outgoing, caption)); sendErr == nil {
 						streamed++
 						continue
 					}
@@ -750,22 +754,28 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	}, nil
 }
 
-// dianaImageCaptionThenImages 把说明文字拆成单独一条排在图片前面：图文挤在一个气泡里
-// 图会被压小，也不像真人先说一句再甩图。
-func dianaImageCaptionThenImages(caption string, images OutgoingMessage) []OutgoingMessage {
+// dianaImageImagesThenCaption 先发图，说明文字单独一条跟在后面：图文挤在一个气泡里
+// 图会被压小；说明排在前面时，图还没出来就先看到一行「某某头像 · 某某版」，像系统
+// 回执，先甩图再补一句才像真人。
+func dianaImageImagesThenCaption(images OutgoingMessage, caption string) []OutgoingMessage {
 	caption = strings.TrimSpace(caption)
 	if caption == "" {
 		return []OutgoingMessage{images}
 	}
-	return []OutgoingMessage{{Text: caption}, images}
+	return []OutgoingMessage{images, {Text: caption}}
 }
 
-// sendDianaImageMessages 只看图片那条是否发出：说明发失败不该让成图并回攒总再发一遍。
+// sendDianaImageMessages 只看图片那条是否发出：图片发失败就不发说明，交给调用方把
+// 成图并回攒总再投递（攒总那条自带说明）；图片发出后说明发失败也不算失败，不然成图会
+// 重发一遍。
 func sendDianaImageMessages(ctx context.Context, services PluginTaskServices, messages []OutgoingMessage) error {
-	for _, message := range messages[:len(messages)-1] {
+	if err := services.Send(ctx, messages[0]); err != nil {
+		return err
+	}
+	for _, message := range messages[1:] {
 		_ = services.Send(ctx, message)
 	}
-	return services.Send(ctx, messages[len(messages)-1])
+	return nil
 }
 
 // dianaImageResultCaption 在结果说明里如实带上少发的张数。逐张模式下超出上限或

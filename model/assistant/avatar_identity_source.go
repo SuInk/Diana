@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -31,6 +32,65 @@ const (
 	avatarSourceSender       = "sender_avatar"
 	avatarSourceMemberPrefix = "member_avatar:"
 )
+
+// image 工具给模型的头像参数。以前是字符串数组 identity_sources，靠 member_avatar:<id>
+// 这类前缀区分来源；按需目录只给模型看一行参数签名，签名里只有 string[]，前缀写法
+// 模型看不到。线上 terra 在 QQ 官方群里直接填了发送者的 openid，回放里还编出了
+// user_avatar、github:SuInk。改成 {type, id} 后，type 的枚举就写在签名里。
+const (
+	imageAvatarTypeSender = "sender"
+	imageAvatarTypeBot    = "bot"
+	imageAvatarTypeGroup  = "group"
+	imageAvatarTypeMember = "member"
+)
+
+func imageAvatarsParam() map[string]any {
+	return describedParam(`用作原图的头像，优先于当前消息里的图。type：sender 发送者，bot 你自己，group 本群（别的群把群号填进 id），member 某个成员（id 填 user_id，当前平台账号，按名字指人先查出 id）`, map[string]any{
+		"type": "array",
+		"items": toolObjectSchema([]string{"type"}, map[string]any{
+			"type": map[string]any{"type": "string", "enum": []string{imageAvatarTypeSender, imageAvatarTypeBot, imageAvatarTypeGroup, imageAvatarTypeMember}},
+			"id":   map[string]any{"type": "string"},
+		}),
+	})
+}
+
+// imageAvatarSources 把 avatars 换成内部的来源写法，填错当场报错让模型改。
+func imageAvatarSources(raw any) ([]string, error) {
+	items, ok := raw.([]any)
+	if raw == nil || (ok && len(items) == 0) {
+		return nil, nil
+	}
+	if !ok {
+		return nil, fmt.Errorf(`avatars 要写成数组，例如 [{"type":"sender"}] 或 [{"type":"member","id":"<user_id>"}]`)
+	}
+	var out []string
+	for _, item := range items {
+		entry, _ := item.(map[string]any)
+		kind, _ := entry["type"].(string)
+		id, _ := entry["id"].(string)
+		id = strings.TrimSpace(id)
+		switch strings.TrimSpace(kind) {
+		case imageAvatarTypeSender:
+			out = append(out, avatarSourceSender)
+		case imageAvatarTypeBot:
+			out = append(out, avatarSourceBot)
+		case imageAvatarTypeGroup:
+			if id == "" {
+				out = append(out, avatarSourceGroup)
+			} else {
+				out = append(out, avatarSourceGroupPrefix+id)
+			}
+		case imageAvatarTypeMember:
+			if id == "" {
+				return nil, fmt.Errorf(`avatars 里 type=member 要在 id 填这个人的 user_id；发送者自己用 {"type":"sender"}`)
+			}
+			out = append(out, avatarSourceMemberPrefix+id)
+		default:
+			return nil, fmt.Errorf("avatars 的 type 只能是 sender、bot、group、member，收到 %q", kind)
+		}
+	}
+	return out, nil
+}
 
 // avatarIdentityImageURLs 把模型点名的来源换成图片地址。
 func (r *Runtime) avatarIdentityImageURLs(ctx context.Context, event MessageEvent, selected []string) []string {
@@ -77,7 +137,7 @@ func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent,
 		if len(out) >= maxAvatarImageSources {
 			break
 		}
-		id := strings.TrimSpace(raw)
+		id := normalizeAvatarIdentitySource(raw)
 		ok := false
 		switch {
 		case id == avatarSourceGroup:
@@ -113,6 +173,20 @@ func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent,
 		}
 	}
 	return out, failed
+}
+
+// normalizeAvatarIdentitySource 把裸 user_id 当成 member_avatar:<id>。模型那边已经
+// 改用 avatars，这里兜意图路由那条路：它的输出格式仍是 identity_sources 字符串。
+// 裸 id 的意思没有歧义：固定来源名和带前缀的写法都不是纯 id，群头像必须写
+// group_avatar:<群号>。
+func normalizeAvatarIdentitySource(raw string) string {
+	id := strings.TrimSpace(raw)
+	switch {
+	case id == "", id == avatarSourceGroup, id == avatarSourceBot, id == avatarSourceSender,
+		strings.Contains(id, ":"):
+		return id
+	}
+	return avatarSourceMemberPrefix + id
 }
 
 // knownDisplayName 从当前会话的历史里找这个人的昵称，找不到就留空，不去打接口。
