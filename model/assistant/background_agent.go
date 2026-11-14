@@ -26,7 +26,9 @@ const (
 	backgroundAgentPerSession = 2
 	backgroundAgentKeepDone   = time.Hour
 	backgroundAgentGoalRunes  = 2000
-	backgroundAgentNoteRunes  = 600
+	// backgroundAgentProgressRunes 只管发进会话的每轮进度消息有多长，记录本身存原文：
+	// 下一轮的请求和 status 都拿完整记录。
+	backgroundAgentProgressRunes = 600
 
 	backgroundAgentProgressTag = "【进度】"
 	backgroundAgentDoneTag     = "【完成】"
@@ -64,7 +66,9 @@ func (r *Runtime) startBackgroundAgent(ctx context.Context, event MessageEvent, 
 	if goal == "" {
 		return "", errors.New("goal is required")
 	}
-	goal = truncateRunes(goal, backgroundAgentGoalRunes)
+	if len([]rune(goal)) > backgroundAgentGoalRunes {
+		return "", fmt.Errorf("goal 超过 %d 字，请写得精炼些，长材料放进文件让任务自己读", backgroundAgentGoalRunes)
+	}
 	if maxRounds <= 0 || maxRounds > backgroundAgentMaxRounds {
 		maxRounds = backgroundAgentMaxRounds
 	}
@@ -138,12 +142,12 @@ func (r *Runtime) runBackgroundAgent(ctx context.Context, state *backgroundAgent
 		if round == state.MaxRounds {
 			return PluginTaskResult{Reply: r.finishBackgroundAgent(state, "exhausted", body)}, nil
 		}
-		note := truncateRunes(body, backgroundAgentNoteRunes)
+		note := strings.TrimSpace(body)
 		r.updateBackgroundAgent(state, func(s *backgroundAgentState) { s.Notes = append(s.Notes, note) })
 		if services.Report != nil {
 			services.Report(PluginTaskProgress{
 				Phase:     "running",
-				Message:   fmt.Sprintf("🔄 后台任务 %s 第 %d/%d 轮：%s", state.ID, round, state.MaxRounds, note),
+				Message:   fmt.Sprintf("🔄 后台任务 %s 第 %d/%d 轮：%s", state.ID, round, state.MaxRounds, truncateRunes(note, backgroundAgentProgressRunes)),
 				Completed: round,
 				Total:     state.MaxRounds,
 			})
@@ -155,7 +159,7 @@ func (r *Runtime) runBackgroundAgent(ctx context.Context, state *backgroundAgent
 func (r *Runtime) finishBackgroundAgent(state *backgroundAgentState, phase, result string) string {
 	snapshot := r.updateBackgroundAgent(state, func(s *backgroundAgentState) {
 		s.Phase = phase
-		s.Result = truncateRunes(result, backgroundAgentNoteRunes)
+		s.Result = strings.TrimSpace(result)
 	})
 	elapsed := formatCodingDuration(time.Since(snapshot.StartedAt))
 	switch {
@@ -164,13 +168,13 @@ func (r *Runtime) finishBackgroundAgent(state *backgroundAgentState, phase, resu
 	case phase == "cancelled":
 		text := fmt.Sprintf("⏹ 后台任务 %s 已停止（%s，做了 %d 轮）。", snapshot.ID, elapsed, len(snapshot.Notes))
 		if len(snapshot.Notes) > 0 {
-			text += "\n停下前的进度：" + snapshot.Notes[len(snapshot.Notes)-1]
+			text += "\n停下前的进度：" + truncateRunes(snapshot.Notes[len(snapshot.Notes)-1], backgroundAgentProgressRunes)
 		}
 		return text
 	case strings.TrimSpace(result) == "":
 		text := fmt.Sprintf("✅ 后台任务 %s 跑满 %d 轮，没有给出最终结论（%s）。", snapshot.ID, snapshot.MaxRounds, elapsed)
 		if len(snapshot.Notes) > 0 {
-			text += "\n最后一轮：" + snapshot.Notes[len(snapshot.Notes)-1]
+			text += "\n最后一轮：" + truncateRunes(snapshot.Notes[len(snapshot.Notes)-1], backgroundAgentProgressRunes)
 		}
 		return text
 	default:

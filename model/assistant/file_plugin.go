@@ -10,11 +10,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +31,6 @@ const (
 	defaultFileParserMaxBytes      = 32 * 1024 * 1024
 	defaultFileParserMaxVideoBytes = 200 * 1024 * 1024
 	defaultFileParserMaxChars      = 24000
-	fileParserMinCharsPerFile      = 2000
 
 	fileParserSettingMaxFileBytes      = "max_file_bytes"
 	fileParserSettingMaxVideoFileBytes = "max_video_file_bytes"
@@ -62,6 +64,10 @@ type fileRef struct {
 	Trusted   bool
 	// Sniff 表示扩展名看不出类型，下载后按内容判断是否为文本，见 file_text.go。
 	Sniff bool
+	// MessageID/FileIndex 是文件所在的消息和它在消息里的序号（从 1 起），一次放不下
+	// 时写进续读说明；正文里的直链没有消息可指，两者为空。
+	MessageID string
+	FileIndex int
 }
 
 // NewFileParserPlugin 创建官方内置文件解析插件。
@@ -112,7 +118,7 @@ func (p *FileParserPlugin) Manifest() PluginManifest {
 			{
 				Key:         fileParserSettingMaxChars,
 				Label:       "提取文本上限",
-				Description: "单个文件提取进 LLM 上下文的最大字符数，超出时保留开头和结尾。同一条消息里有多个文件时合计不超过该值的 1.5 倍，按文件数平分，文件太多时只展开前几个。",
+				Description: "一条消息里的文件合计提取进 LLM 上下文的最大字符数。按文件顺序、按整行装满为止，放不下的部分写明从第几行（PDF 是第几页）续读，模型需要时用历史媒体工具接着读。",
 				Type:        PluginSettingTypeNumber,
 				Default:     defaultFileParserMaxChars,
 				Min:         settingRange(500),
@@ -168,21 +174,6 @@ func (p *FileParserPlugin) fileParserRemoteOCR(settings SettingValues) documentR
 	}
 }
 
-// fileParserTurnBudget 给一轮里的文件分字数，返回每个文件的上限和最多展开几个文件。
-// 文件原文是受保护的插件证据，预算编排时排在聊天历史和长期记忆前面：一次丢五个文件、
-// 每个都按单文件上限塞，挤掉的就是这轮对话本身的上下文。所以一轮合计严格不超过单文件
-// 上限的 1.5 倍，多个文件平分；平分后每个不到 fileParserMinCharsPerFile 字就少展开几个，
-// 而不是每个都切成看不出内容的碎片。
-func fileParserTurnBudget(maxChars int, files int) (perFile int, expand int) {
-	if maxChars <= 0 || files <= 1 {
-		return maxChars, files
-	}
-	total := maxChars * 3 / 2
-	floor := min(maxChars, fileParserMinCharsPerFile)
-	expand = min(files, max(1, total/floor))
-	return min(maxChars, total/expand), expand
-}
-
 func fileParserVideoMaxBytes(settings SettingValues) int64 {
 	return settings.Bytes(fileParserSettingMaxVideoFileBytes, defaultFileParserMaxVideoBytes)
 }
@@ -194,16 +185,28 @@ func (p *FileParserPlugin) Handle(ctx context.Context, req PluginRequest) (*Plug
 		return nil, nil
 	}
 	maxBytes := req.Settings.Bytes(fileParserSettingMaxFileBytes, p.maxBytes)
-	maxChars, expand := fileParserTurnBudget(req.Settings.Int(fileParserSettingMaxChars, p.maxChars), len(refs))
+	// 照 Pi 的做法按文件顺序、按整行装满这一轮的预算：前面的文件给全文，装不下的那个
+	// 给到最后一个装得下的整行，再后面的只列名字，都写明从哪续读。以前按文件数平分
+	// 预算、每个文件掐头去尾，中间丢了多少模型只能看到一句「中间省略」，也没法接着读。
+	budget := req.Settings.Int(fileParserSettingMaxChars, p.maxChars)
+	used := 0
 
 	parts := make([]string, 0, len(refs))
 	scannedDocuments := make([]scannedPDFDocument, 0, len(refs))
-	for i, ref := range refs {
-		if i >= expand {
-			parts = append(parts, fmt.Sprintf("- %s\n  状态：这条消息里文件太多，为了不挤掉对话上下文没有展开；需要时让用户单独发这个文件", ref.Name))
+	for _, ref := range refs {
+		if budget > 0 && used >= budget {
+			parts = append(parts, fmt.Sprintf("- %s\n  状态：这一轮的文件正文已经装满 %d 字，这个文件没有展开。%s", ref.Name, budget, fileContinuationHint(ref, textLineWindow{Start: 1}, 0)))
 			continue
 		}
-		result := p.parseRef(ctx, req.Channel, ref, maxBytes, maxChars)
+		remaining := 0
+		if budget > 0 {
+			remaining = budget - used
+		}
+		result := p.parseRefLines(ctx, req.Channel, ref, maxBytes, 1, remaining)
+		used += result.Used
+		if result.Partial {
+			used = max(used, budget)
+		}
 		if result.Context != "" {
 			parts = append(parts, result.Context)
 		}
@@ -269,11 +272,13 @@ func collectFileRefs(req PluginRequest) []fileRef {
 		add(fileRef{Name: name, URL: rawURL})
 	}
 
-	addSegments := func(groupID string, segments []MessageSegment) {
+	addSegments := func(groupID, messageID string, segments []MessageSegment) {
+		fileIndex := 0
 		for _, segment := range segments {
 			if segment.Type != "file" {
 				continue
 			}
+			fileIndex++
 			name := firstNonEmpty(segment.Data["name"], segment.Data["filename"], segment.Data["file"])
 			raw := firstNonEmpty(segment.Data["url"], segment.Data["download_url"], segment.Data["file_url"], segment.Data["file"], segment.Data["path"])
 			ref := fileRef{
@@ -284,6 +289,9 @@ func collectFileRefs(req PluginRequest) []fileRef {
 				URL:     raw,
 				Trusted: true,
 				Sniff:   isSniffableFileName(name, segment.Data["size"]),
+
+				MessageID: strings.TrimSpace(messageID),
+				FileIndex: fileIndex,
 			}
 			if req.Event.Platform == PlatformOneBotV11 {
 				ref.MD5 = explicitMediaMD5(segment.Data)
@@ -300,9 +308,9 @@ func collectFileRefs(req PluginRequest) []fileRef {
 		}
 	}
 
-	addSegments(req.Event.GroupID, req.Event.Segments)
+	addSegments(req.Event.GroupID, req.Event.MessageID, req.Event.Segments)
 	if req.Event.Quoted != nil {
-		addSegments(firstNonEmpty(req.Event.Quoted.GroupID, req.Event.GroupID), req.Event.Quoted.Segments)
+		addSegments(firstNonEmpty(req.Event.Quoted.GroupID, req.Event.GroupID), req.Event.Quoted.MessageID, req.Event.Quoted.Segments)
 	}
 	// 以前这里用一张 20 个词的表（文件/文档/附件/讲义…外加 pdf、docx、csv 等扩展名）
 	// 去正文里匹配，命中就把最近所有消息里的附件全都拉进来解析。那张表匹配的是聊天
@@ -323,10 +331,15 @@ func collectFileRefs(req PluginRequest) []fileRef {
 type parsedFileRef struct {
 	Context    string
 	ScannedPDF *scannedPDFDocument
+	// Used 是这次放进上下文的正文字数，Handle 据此算后面的文件还剩多少预算。
+	Used int
+	// Partial 说明这个文件没给完：后面的文件不再展开，免得续读时顺序乱掉。
+	Partial bool
 }
 
-// parseRef 下载并解析单个文件引用。
-func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fileRef, maxBytes int64, maxChars int) parsedFileRef {
+// parseRefLines 下载并解析单个文件引用，从第 startLine 行起按整行装进 budget（<=0
+// 不限）。正文一律给原文整行，不掐头去尾；没给完时在正文后写明给到哪、从哪续读。
+func (p *FileParserPlugin) parseRefLines(ctx context.Context, channel Channel, ref fileRef, maxBytes int64, startLine, budget int) parsedFileRef {
 	ref = p.resolveOneBotFile(ctx, channel, ref)
 	if ref.Sniff {
 		maxBytes = min(maxBytes, fileParserSniffMaxBytes)
@@ -335,14 +348,41 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 	if err != nil {
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：%v", ref.Name, source, err)}
 	}
+	// header 是正文前的「类型」「编码」等说明行；pdfPages 不为 0 时续读按页给，
+	// pdfMore 说明 PDF 后面还有页没提取（提取到预算就停了）。
+	content := func(header, text string, pdfPages int, pdfMore bool) parsedFileRef {
+		window := takeTextLines(text, startLine, fileParserLineBudget(budget), plainRunes)
+		body := fmt.Sprintf("- %s\n  地址：%s%s\n%s", ref.Name, source, header, fileContentBlock(ref.Name, window.Text))
+		complete := window.Complete() && !pdfMore
+		if !complete || !window.Whole() {
+			if window.Complete() && pdfMore {
+				body += fmt.Sprintf("\n  范围：给到第 %d 页为止。", pdfContinuationPage(window, false)-1)
+			} else {
+				body += "\n  范围：" + window.Range() + "。"
+			}
+			if !complete {
+				hintWindow := window
+				if pdfPages > 0 {
+					hintWindow.Start = pdfContinuationPage(window, !window.Complete())
+				}
+				body += "后面的内容没有放进来，不要把这段当成全文。" + fileContinuationHint(ref, hintWindow, pdfPages)
+			}
+		}
+		return parsedFileRef{Context: body, Used: plainRunes(window.Text), Partial: !complete}
+	}
 	if looksPDF(ref.Name, contentType, data) {
 		nativeResult, nativeAvailable, nativeErr := runNativeMacPDF(ctx, data, "text", defaultOCRMaxPagesPerFile, defaultOCRPageMaxChars)
 		if nativeAvailable && nativeErr == nil && nativeMacPDFHasText(nativeResult) {
-			text := formatNativeMacPDFText(nativeResult, maxChars)
-			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF（macOS PDFKit 文本层）\n%s", ref.Name, source, fileContentBlock(ref.Name, text))}
+			pages := max(nativeResult.TotalPages, 1)
+			return content("\n  类型：PDF（macOS PDFKit 文本层）", formatNativeMacPDFText(nativeResult, 0), pages, nativeResult.ProcessedPages < pages)
 		}
-		extracted := extractPDFText(ctx, p.pdfRenderer, data, maxChars)
-		text := sanitizeFileTextString(extracted.Text, maxChars)
+		// 从第 1 行读时攒够预算就停，免得几百页的 PDF 为一页的上下文全部过一遍；
+		// 续读时要数到起始行，整份读完。
+		extractLimit := budget
+		if startLine > 1 {
+			extractLimit = 0
+		}
+		extracted := extractPDFText(ctx, p.pdfRenderer, data, extractLimit)
 		if extracted.NeedsOCR() {
 			hash := sha256.Sum256(data)
 			return parsedFileRef{ScannedPDF: &scannedPDFDocument{
@@ -352,18 +392,18 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 				Hash:   hex.EncodeToString(hash[:]),
 			}}
 		}
-		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：PDF\n%s", ref.Name, source, fileContentBlock(ref.Name, text))}
+		return content("\n  类型：PDF", sanitizeFileTextString(extracted.Text, 0), max(extracted.PageCount, 1), extracted.Stopped)
 	}
 	if kind := officeKindFromName(ref.Name); kind != "" && looksZipArchive(data) {
-		extracted, err := extractOfficeText(kind, data, maxChars)
+		extracted, err := extractOfficeText(kind, data, 0)
 		if err != nil {
 			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  状态：解析失败：%v", ref.Name, source, officeKindLabel(kind), err)}
 		}
-		text := sanitizeFileTextString(extracted, maxChars)
+		text := sanitizeFileTextString(extracted, 0)
 		if text == "" {
 			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n  状态：未提取到文本", ref.Name, source, officeKindLabel(kind))}
 		}
-		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：%s\n%s", ref.Name, source, officeKindLabel(kind), fileContentBlock(ref.Name, text))}
+		return content("\n  类型："+officeKindLabel(kind), text, 0, false)
 	}
 	if !looksTextual(ref.Name, contentType, data) {
 		if ref.Sniff {
@@ -380,20 +420,62 @@ func (p *FileParserPlugin) parseRef(ctx context.Context, channel Channel, ref fi
 		}
 	}
 	if looksMarkup(ref.Name, contentType) {
-		// HTML 直接塞原始标签会把上下文撑爆，先抽正文再截断。
-		if text := sanitizeFileTextString(stripMarkupText([]byte(raw), maxChars), maxChars); text != "" {
-			return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：网页文本%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
+		// HTML 直接塞原始标签会把上下文撑爆，先抽正文。
+		if text := sanitizeFileTextString(stripMarkupText([]byte(raw), 0), 0); text != "" {
+			return content("\n  类型：网页文本"+encodingNote, text, 0, false)
 		}
 	}
-	text := sanitizeFileTextString(raw, maxChars)
+	text := sanitizeFileTextString(raw, 0)
 	if text == "" {
 		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  状态：未提取到文本", ref.Name, source)}
 	}
 	if strings.EqualFold(path.Ext(ref.Name), ".svg") {
 		// 标明是源码：模型拿到的是图形元素而不是画面，要从 path、文字和注释里推断画了什么。
-		return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s\n  类型：SVG 矢量图源码%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
+		return content("\n  类型：SVG 矢量图源码"+encodingNote, text, 0, false)
 	}
-	return parsedFileRef{Context: fmt.Sprintf("- %s\n  地址：%s%s\n%s", ref.Name, source, encodingNote, fileContentBlock(ref.Name, text))}
+	return content(encodingNote, text, 0, false)
+}
+
+// fileParserLineBudget 把「<=0 不限」换成 takeTextLines 认的上限。
+func fileParserLineBudget(budget int) int {
+	if budget <= 0 {
+		return math.MaxInt
+	}
+	return budget
+}
+
+// fileContinuationHint 写明没放进来的内容怎么接着读：消息里的文件交给历史媒体工具，
+// PDF 按页（pdfPages 不为 0 时 window.Start 是续读页）、其余按行；正文里的直链没有
+// 消息可指，只能让用户换种方式发。
+func fileContinuationHint(ref fileRef, window textLineWindow, pdfPages int) string {
+	if ref.MessageID == "" || ref.FileIndex <= 0 {
+		return "这是正文里的链接，没有续读入口；需要后面的内容就请用户把文件直接发上来。"
+	}
+	target := fmt.Sprintf("用 %s 传 message_id=%s、file_index=%d", dianaHistoryImagesToolName, ref.MessageID, ref.FileIndex)
+	if pdfPages > 0 {
+		return fmt.Sprintf("PDF 共 %d 页，%s、pdf_page=%d 逐页续读。", pdfPages, target, max(window.Start, 1))
+	}
+	return fmt.Sprintf("%s、start_line=%d 续读。", target, max(window.NextLine(), window.Start))
+}
+
+var pdfPageHeader = regexp.MustCompile(`(?m)^第 (\d+) 页：$`)
+
+// pdfContinuationPage 是续读应从哪一页开始。partial 表示已给出的最后一页可能只给了
+// 一部分，从它重新读；否则从它的下一页读。一页都没给出就从第 1 页读。
+func pdfContinuationPage(window textLineWindow, partial bool) int {
+	last := 0
+	for _, match := range pdfPageHeader.FindAllStringSubmatch(window.Text, -1) {
+		if n, err := strconv.Atoi(match[1]); err == nil {
+			last = n
+		}
+	}
+	if last == 0 {
+		return 1
+	}
+	if partial {
+		return last
+	}
+	return last + 1
 }
 
 func (p *FileParserPlugin) readRef(ctx context.Context, ref fileRef, maxBytes int64) ([]byte, string, string, error) {
@@ -865,6 +947,8 @@ type pdfTextExtraction struct {
 	Text       string
 	PageCount  int
 	Meaningful int
+	// Stopped 说明攒够 maxChars 后提前停了，后面还有页没提取。
+	Stopped bool
 }
 
 func (e pdfTextExtraction) NeedsOCR() bool {
@@ -913,6 +997,7 @@ func extractPDFText(ctx context.Context, renderer pdfPageRenderer, data []byte, 
 			}
 		}
 		if result.Meaningful >= threshold && maxChars > 0 && len([]rune(builder.String())) >= maxChars {
+			result.Stopped = page+1 < result.PageCount
 			break
 		}
 	}

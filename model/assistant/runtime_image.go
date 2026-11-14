@@ -857,7 +857,9 @@ func (r *Runtime) historyImageCachedDescriptions(ctx context.Context, event Mess
 // historyPromptImageDescriptions 是拼进对话历史的版本：自己发过的表情包不带简介。
 // 表情包简介是给检索写的（潜台词、适合什么场合发），放进历史里，模型下一轮就会
 // 回头解释自己刚发的图——线上出过「你让我发表情，我倒发了张钻被窝求贴贴的」。
-// 别人发的表情包只写一句话标注，原因见 historyStickerDescriptionMaxRunes。
+// 别人发的表情包优先写资料库里那句一句话标注：表情包是一句语气，不是要模型点评的
+// 画面（生产抽样 197 条请求，表情包摘要占历史行的 8.5%）。没有标注就照旧给完整描述，
+// 不截短——harness 不裁剪内容，历史太长由 chat_history 自己整条分页。
 func (r *Runtime) historyPromptImageDescriptions(ctx context.Context, event MessageEvent) []string {
 	return r.historyImageDescriptionsFor(ctx, event, true, true)
 }
@@ -893,8 +895,11 @@ func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments 
 }
 
 // historyImageSegmentDescriptionLines 的 briefStickers 只在拼进对话历史时打开：别人发的
-// 表情包优先写资料库里那句标注，没有标注才用截短的通用描述。历史检索、媒体索引这些
+// 表情包优先写资料库里那句标注，没有标注才用完整的通用描述。历史检索、媒体索引这些
 // 靠描述找图的地方不打开，照旧拿完整描述。
+//
+// 描述、表情包标注、语音转写都原样给全文。以前分别截到 400/120/400 字、截了也不说，
+// 模型把半截描述当成全部，回头问「图里还有什么」只能瞎补。
 func (r *Runtime) historyImageSegmentDescriptionLines(ctx context.Context, segments []MessageSegment, ownSegments int, briefStickers bool) []string {
 	store := r.recallImageDescriptionStore()
 	var lines []string
@@ -926,7 +931,7 @@ func (r *Runtime) historyImageSegmentDescriptionLines(ctx context.Context, segme
 		}
 		if briefSticker {
 			if gist := r.historyStickerGist(ctx, segment); gist != "" {
-				lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateHistoryStickerDescription(gist)))
+				lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, gist))
 				continue
 			}
 		}
@@ -944,11 +949,7 @@ func (r *Runtime) historyImageSegmentDescriptionLines(ctx context.Context, segme
 			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
 			continue
 		}
-		if briefSticker {
-			lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateHistoryStickerDescription(compactRecallImageDescription(description))))
-			continue
-		}
-		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, truncateRunes(compactRecallImageDescription(description), historyImageDescriptionMaxRunes)))
+		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, compactRecallImageDescription(description)))
 	}
 	lines = append(lines, historicalNonImageMediaDescriptions(segments)...)
 	return lines
@@ -988,14 +989,6 @@ func stickerSegmentIsGIF(segment MessageSegment) bool {
 		strings.HasSuffix(strings.ToLower(strings.TrimSpace(segment.Data["cached_file"])), ".gif")
 }
 
-func truncateHistoryStickerDescription(value string) string {
-	runes := []rune(strings.TrimSpace(value))
-	if len(runes) <= historyStickerDescriptionMaxRunes {
-		return string(runes)
-	}
-	return string(runes[:historyStickerDescriptionMaxRunes]) + "…"
-}
-
 func historicalNonImageMediaDescriptions(segments []MessageSegment) []string {
 	lines := historicalAudioDescriptions(segments)
 	fileIndex := 0
@@ -1021,7 +1014,7 @@ func historicalAudioDescriptions(segments []MessageSegment) []string {
 			lines = append(lines, fmt.Sprintf("语音%d摘要=尚无可用转写", audioIndex))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, truncateRunes(strings.Join(strings.Fields(transcript), " "), historyImageDescriptionMaxRunes)))
+		lines = append(lines, fmt.Sprintf("语音%d转写=%s", audioIndex, strings.Join(strings.Fields(transcript), " ")))
 	}
 	return lines
 }
@@ -1038,7 +1031,7 @@ func historicalFileDescription(index int, segment MessageSegment) string {
 	description := strings.TrimSpace(firstNonEmpty(segment.Data["summary"], segment.Data["description"], segment.Data["parsed_text"], segment.Data["content"]))
 	line := fmt.Sprintf("文件%d摘要=文件名：%s；格式：%s", index, name, format)
 	if description != "" {
-		line += "；内容摘要：" + truncateRunes(strings.Join(strings.Fields(description), " "), historyImageDescriptionMaxRunes)
+		line += "；内容摘要：" + strings.Join(strings.Fields(description), " ")
 	} else if isSupportedFileName(name) || isSniffableFileName(name, segment.Data["size"]) {
 		line += "；正文尚未解析"
 	} else {

@@ -224,6 +224,19 @@ func TestAgentHistoryLineCarriesVoiceAndSupportedFileDescriptions(t *testing.T) 
 	}
 }
 
+// 以前语音转写和文件摘要在历史行里截到 400 字、截了也不说。
+func TestHistoryMediaLineKeepsFullTranscriptAndFileSummary(t *testing.T) {
+	transcript := strings.Repeat("转", 900)
+	summary := strings.Repeat("摘", 900)
+	lines := historicalNonImageMediaDescriptions([]MessageSegment{
+		{Type: "record", Data: map[string]string{voiceSTTTranscriptKey: transcript}},
+		{Type: "file", Data: map[string]string{"name": "长文.txt", "summary": summary}},
+	})
+	if len(lines) != 2 || lines[0] != "语音1转写="+transcript || !strings.HasSuffix(lines[1], "内容摘要："+summary) {
+		t.Fatalf("history media lines must keep full text: %#v", lines)
+	}
+}
+
 func TestEverySupportedFileFormatGetsHistoryMetadataDescription(t *testing.T) {
 	for extension := range supportedFileExts {
 		name := "fixture" + extension

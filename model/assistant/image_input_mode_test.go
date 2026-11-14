@@ -474,7 +474,8 @@ func TestHistoryPromptUsesStickerGist(t *testing.T) {
 	}}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
-	long := strings.Repeat("长", 300)
+	// 超过以前历史行的 400 字截断：没有标注的表情包和普通图片都要给全文。
+	long := strings.Repeat("长", 500)
 	sticker := func(hash, description string) MessageSegment {
 		return MessageSegment{Type: "image", Data: map[string]string{"sub_type": "1", "summary": "[动画表情]", imageContentSHA256Key: hash, recallImageDescriptionKey: description}}
 	}
@@ -488,7 +489,7 @@ func TestHistoryPromptUsesStickerGist(t *testing.T) {
 	lines := runtime.historyPromptImageDescriptions(context.Background(), event)
 	want := []string{
 		"表情包1摘要=猫猫歪头 装傻",
-		"表情包2摘要=" + strings.Repeat("长", historyStickerDescriptionMaxRunes) + "…",
+		"表情包2摘要=" + long,
 		"表情包3摘要=动图的通用描述",
 		"图片4摘要=" + long,
 	}

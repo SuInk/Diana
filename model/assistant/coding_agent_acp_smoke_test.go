@@ -50,7 +50,7 @@ func TestLocalRealACPAgentSmoke(t *testing.T) {
 		t.Fatalf("write log: %v", err)
 	}
 	snapshot := parseCodingLog(logPath)
-	t.Logf("exit=%d session=%q\n进度：\n%s\n结果：%s", code, snapshot.SessionID, strings.Join(snapshot.Tail, "\n"), snapshot.Result)
+	t.Logf("exit=%d session=%q\n进度：\n%s\n结果：%s", code, snapshot.SessionID, strings.Join(snapshot.Actions, "\n"), snapshot.Result)
 	if code != 0 || !snapshot.Done || snapshot.IsError {
 		t.Fatalf("没有正常完成：exit=%d done=%v error=%v\n%s", code, snapshot.Done, snapshot.IsError, buffer.String())
 	}

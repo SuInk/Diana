@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -168,5 +169,89 @@ func TestRepositoryIssueBatchReportsPartialFailure(t *testing.T) {
 		if draft.Status == "pending" {
 			t.Fatalf("partially executed draft is still pending: %#v", draft)
 		}
+	}
+}
+
+// get 按整条分页读全正文和评论：不丢最早 20 条之后的评论，也不截正文和评论；单条太长
+// 才按整行切，续读用 item_offset 加 start_line，拼回来和原文一致。
+func TestRepositoryIssueGetPagesThroughAllComments(t *testing.T) {
+	github := newRepositoryPublishTestGitHub()
+	var body strings.Builder
+	for i := 1; i <= 600; i++ {
+		fmt.Fprintf(&body, "正文第 %d 行，描述复现步骤和环境。\n", i)
+	}
+	github.issues = []githubRepositoryIssue{{
+		Number: 7, Title: "长讨论", Body: strings.TrimSuffix(body.String(), "\n"), State: "open",
+		HTMLURL: "https://github.com/acme/demo/issues/7", UpdatedAt: time.Now().UTC(),
+	}}
+	for i := 1; i <= 45; i++ {
+		github.comments[7] = append(github.comments[7], githubIssueComment{
+			Body: fmt.Sprintf("第 %d 条评论：%s", i, strings.Repeat("补充信息", 60)), HTMLURL: fmt.Sprintf("https://github.com/acme/demo/issues/7#issuecomment-%d", i),
+		})
+	}
+	server := httptest.NewServer(http.HandlerFunc(github.handler))
+	defer server.Close()
+	tool := repositoryPublishTestTool(server, "看看 acme/demo #7 的讨论", nil)
+
+	var bodyLines []string
+	var comments []string
+	offset, startLine := 0, 0
+	for calls := 1; ; calls++ {
+		if calls > 40 {
+			t.Fatal("续读没有收敛")
+		}
+		input := map[string]any{"operation": "get", "repository": "acme/demo", "number": 7}
+		if offset > 0 {
+			input["item_offset"] = offset
+		}
+		if startLine > 0 {
+			input["start_line"] = startLine
+		}
+		result := runRepositoryToolWithBudget(t, tool, 6_000, input)
+		if !result.OK {
+			t.Fatalf("result=%#v", result)
+		}
+		if result.IssueBody != "" {
+			bodyLines = append(bodyLines, strings.Split(result.IssueBody, "\n")...)
+		}
+		for _, comment := range result.Comments {
+			if comment.Lines != nil {
+				t.Fatalf("短评论不应被切：%#v", comment)
+			}
+			comments = append(comments, comment.Body)
+		}
+		if strings.Contains(result.Message, "已经读完") {
+			break
+		}
+		switch {
+		case result.IssueBodyLines != nil && result.IssueBodyLines.EndLine < result.IssueBodyLines.TotalLines:
+			want := fmt.Sprintf("item_offset=0、start_line=%d", result.IssueBodyLines.EndLine+1)
+			if !strings.Contains(result.Message, want) {
+				t.Fatalf("正文续读提示缺 %q：%q", want, result.Message)
+			}
+			offset, startLine = 0, result.IssueBodyLines.EndLine+1
+		default:
+			next := 1 + len(comments)
+			if !strings.Contains(result.Message, fmt.Sprintf("item_offset=%d", next)) {
+				t.Fatalf("评论续读提示缺 item_offset=%d：%q", next, result.Message)
+			}
+			offset, startLine = next, 0
+		}
+	}
+	if strings.Join(bodyLines, "\n") != github.issues[0].Body {
+		t.Fatalf("续读拼回来的正文和原文不一致：%d 行", len(bodyLines))
+	}
+	if len(comments) != 45 {
+		t.Fatalf("应读到全部 45 条评论，got %d", len(comments))
+	}
+	for i, comment := range comments {
+		if comment != github.comments[7][i].Body {
+			t.Fatalf("第 %d 条评论被改动：%q", i+1, comment)
+		}
+	}
+
+	beyond := runRepositoryPublishToolOnce(t, tool, map[string]any{"operation": "get", "repository": "acme/demo", "number": 7, "item_offset": 46})
+	if beyond.OK || beyond.FailureCode != "invalid_input" {
+		t.Fatalf("item_offset 越界应报错：%#v", beyond)
 	}
 }

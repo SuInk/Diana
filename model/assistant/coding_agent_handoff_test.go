@@ -93,7 +93,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"diana-cli-
 // 代码直接发出去，否则超出的部分谁也看不到。
 func TestCodingSubmitPostsLongQuickResultInFull(t *testing.T) {
 	useTempCodingWorkspace(t)
-	report := "QUICK-START " + strings.Repeat("秒出的长结论。", 400) + " QUICK-END"
+	report := "QUICK-START " + strings.Repeat("秒出的长结论。\n", 4000) + " QUICK-END"
 	line, _ := json.Marshal(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": report, "num_turns": 1, "session_id": "s3"})
 	payload := filepath.Join(t.TempDir(), "result.jsonl")
 	if err := os.WriteFile(payload, append(line, '\n'), 0o600); err != nil {
@@ -103,7 +103,7 @@ func TestCodingSubmitPostsLongQuickResultInFull(t *testing.T) {
 	rt, settings, event := codingTestRuntime(t, cli, t.TempDir())
 	result := submitCodingJob(t, newDianaCodingTool(rt, event, settings))
 
-	if result.Job == nil || !result.Job.ResultTruncated || !strings.Contains(result.Message, "全文已经由系统发到聊天里") {
+	if result.Job == nil || result.Job.ResultNextLine == 0 || !strings.Contains(result.Message, "全文已经由系统发到聊天里") {
 		t.Fatalf("长结果应当由代码发全文：%#v %q", result.Job, result.Message)
 	}
 	drainCodingJobs(t, rt)

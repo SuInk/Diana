@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -27,8 +28,6 @@ const (
 	maximumSubtaskQueryRunes     = 512
 	defaultSubtaskMaxConcurrency = 3
 	maximumSubtaskMaxConcurrency = 4
-	subtaskAnswerMaxRunes        = 1200
-	searchSubtaskAnswerMaxRunes  = 4000
 	subtaskModeAnalyze           = "analyze"
 	subtaskModeSearch            = "search"
 )
@@ -51,17 +50,23 @@ type subtaskRequest struct {
 
 type subtaskBatchResult struct {
 	Results []subtaskResult `json:"results"`
+	// Message 只在有结果没给完时出现，写明用 read_id/start_line 续读。
+	Message string `json:"message,omitempty"`
 }
 
 type subtaskResult struct {
-	ID         string    `json:"id"`
-	Status     string    `json:"status"`
-	Output     string    `json:"output,omitempty"`
-	Error      string    `json:"error,omitempty"`
-	Usage      llm.Usage `json:"usage,omitempty"`
-	ModelTurns int       `json:"model_turns,omitempty"`
-	ToolCalls  int       `json:"tool_calls,omitempty"`
-	DurationMS int64     `json:"duration_ms"`
+	ID     string `json:"id"`
+	Status string `json:"status"`
+	Output string `json:"output,omitempty"`
+	// OutputNextLine 不为 0 时 output 只给到前面的整行，从这一行起用 read_id 续读；
+	// OutputTotalLines 是完整结果的行数。
+	OutputNextLine   int       `json:"output_next_line,omitempty"`
+	OutputTotalLines int       `json:"output_total_lines,omitempty"`
+	Error            string    `json:"error,omitempty"`
+	Usage            llm.Usage `json:"usage,omitempty"`
+	ModelTurns       int       `json:"model_turns,omitempty"`
+	ToolCalls        int       `json:"tool_calls,omitempty"`
+	DurationMS       int64     `json:"duration_ms"`
 }
 
 // dianaSubtaskTool 把相互独立的小任务交给隔离 Worker。analyze 只有一次模型调用；
@@ -71,6 +76,9 @@ type dianaSubtaskTool struct {
 	event   MessageEvent
 	mu      sync.Mutex
 	calls   int
+	// outputs 按任务 id 存这一轮各子任务的完整结果，一次放不下时用 read_id 续读。
+	// 同一轮里 id 重复时后跑的覆盖先跑的。
+	outputs map[string]string
 }
 
 func newDianaSubtaskTool(runtime *Runtime, event MessageEvent) *dianaSubtaskTool {
@@ -102,12 +110,17 @@ func (t *dianaSubtaskTool) InputSchema() map[string]any {
 		"question":        toolStringParam("旧接口：要回答的自足问题。"),
 		"material":        toolStringParam("旧接口：问题所需的全部材料。"),
 		"scope":           toolEnumParam("旧接口使用的模型类型。", "text", "vision"),
+		"read_id":         toolStringParam("续读本轮某个子任务的完整结果：传结果里的 id（旧接口是 legacy），配合 start_line；不会重新执行。"),
+		"start_line":      toolIntParam("配合 read_id：从第几行开始读，从 1 起，传上次返回的 next_line。", 1, 100000000),
 	})
 }
 
 func (t *dianaSubtaskTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("diana subtask: runtime is not configured")
+	}
+	if id := strings.TrimSpace(configToolString(input, "read_id")); id != "" {
+		return t.readOutput(ctx, id, intFromAny(input["start_line"]))
 	}
 	maxTasks, maxConcurrency := t.limits()
 	tasks, batch, err := parseSubtaskRequests(input, maxTasks)
@@ -127,11 +140,114 @@ func (t *dianaSubtaskTool) Run(ctx context.Context, input map[string]any) (strin
 	if concurrency > maxConcurrency {
 		concurrency = maxConcurrency
 	}
-	body, err := json.Marshal(subtaskBatchResult{Results: t.runBatch(ctx, tasks, concurrency)})
+	results := t.runBatch(ctx, tasks, concurrency)
+	for _, result := range results {
+		t.storeOutput(result.ID, result.Output)
+	}
+	return marshalSubtaskBatch(results, toolResultBudget(ctx))
+}
+
+// marshalSubtaskBatch 照 Pi 的做法把各子任务的完整结果按顺序装进单次上限：前面的
+// 给全文，装不下的那个给到最后一个装得下的整行，后面的 output 留空，都标上
+// output_next_line，message 写明怎么用 read_id 续读。以前普通子任务截到 1200 字、
+// 调研截到 4000 字，后面的结论直接没了。
+func marshalSubtaskBatch(results []subtaskResult, budget int) (string, error) {
+	// reserve 是 output 以外的 JSON 骨架和续读说明占的字数：先按去掉 output 的骨架
+	// 估，排完还超就按超出量收紧再排。
+	skeleton := make([]subtaskResult, len(results))
+	for index, result := range results {
+		result.Output, result.OutputNextLine, result.OutputTotalLines = "", 1, 1
+		skeleton[index] = result
+	}
+	raw, err := json.Marshal(subtaskBatchResult{Results: skeleton})
 	if err != nil {
 		return "", fmt.Errorf("diana subtask: encode results: %w", err)
 	}
-	return string(body), nil
+	reserve := utf8.RuneCount(raw) + 200 + 40*len(results)
+	for {
+		body, err := json.Marshal(subtaskBatchPage(results, budget, reserve))
+		if err != nil {
+			return "", fmt.Errorf("diana subtask: encode results: %w", err)
+		}
+		over := utf8.RuneCount(body) - budget
+		if over <= 0 || reserve >= budget {
+			return string(body), nil
+		}
+		reserve += over
+	}
+}
+
+func subtaskBatchPage(results []subtaskResult, budget, reserve int) subtaskBatchResult {
+	page := subtaskBatchResult{Results: make([]subtaskResult, len(results))}
+	remaining := max(0, budget-reserve)
+	var incomplete []string
+	for index, result := range results {
+		window := takeTextLines(result.Output, 1, remaining, jsonStringRunes)
+		remaining = max(0, remaining-jsonStringRunes(window.Text))
+		result.Output = window.Text
+		switch {
+		case !window.Complete():
+			result.OutputNextLine, result.OutputTotalLines = window.ResumeLine(), window.Total
+			incomplete = append(incomplete, fmt.Sprintf("id=%s 从第 %d 行起（共 %d 行）", result.ID, result.OutputNextLine, window.Total))
+		case window.CutRunes > 0:
+			incomplete = append(incomplete, fmt.Sprintf("id=%s 的%s", result.ID, window.Range()))
+		}
+		page.Results[index] = result
+	}
+	if len(incomplete) > 0 {
+		page.Message = fmt.Sprintf("部分结果超出单次上限 %d 字，已按整行给出前面部分，没给出的：%s。用 subtask 传 read_id 和 start_line 续读，不会重新执行；读完之前不要把它当成完整结论。", budget, strings.Join(incomplete, "；"))
+	}
+	return page
+}
+
+// readOutput 续读本轮某个子任务的完整结果。
+func (t *dianaSubtaskTool) readOutput(ctx context.Context, id string, startLine int) (string, error) {
+	t.mu.Lock()
+	output, ok := t.outputs[id]
+	t.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("diana subtask: 本轮没有 id=%s 的子任务结果；续读只能读这一轮已经跑完的子任务", id)
+	}
+	if startLine < 1 {
+		startLine = 1
+	}
+	response := map[string]any{"id": id, "start_line": startLine}
+	reserve := 300
+	for {
+		window := takeTextLines(output, startLine, max(0, toolResultBudget(ctx)-reserve), jsonStringRunes)
+		if startLine > window.Total {
+			return "", fmt.Errorf("diana subtask: id=%s 的结果共 %d 行，start_line=%d 超出范围", id, window.Total, startLine)
+		}
+		response["output"] = window.Text
+		response["total_lines"] = window.Total
+		response["message"] = "已读到结果末尾。"
+		if window.CutRunes > 0 {
+			response["message"] = "已读到结果末尾；" + window.Range() + "。"
+		}
+		delete(response, "next_line")
+		if !window.Complete() {
+			response["next_line"] = window.ResumeLine()
+			response["message"] = fmt.Sprintf("本次给出%s。还没读完：传 read_id=%s、start_line=%d 接着读。", window.Range(), id, window.ResumeLine())
+		}
+		body, err := json.Marshal(response)
+		if err != nil {
+			return "", fmt.Errorf("diana subtask: encode output: %w", err)
+		}
+		over := utf8.RuneCount(body) - toolResultBudget(ctx)
+		if over <= 0 || reserve >= toolResultBudget(ctx) {
+			return string(body), nil
+		}
+		reserve += over
+	}
+}
+
+func (t *dianaSubtaskTool) storeOutput(id, output string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.outputs == nil {
+		t.outputs = map[string]string{}
+	}
+	t.outputs[id] = output
 }
 
 func parseSubtaskRequests(input map[string]any, maxTasks int) ([]subtaskRequest, bool, error) {
@@ -258,7 +374,22 @@ func (t *dianaSubtaskTool) runLegacy(ctx context.Context, task subtaskRequest) (
 	if answer == "" {
 		return "子调用没有得出结论。", nil
 	}
-	return truncateRunes(answer, subtaskAnswerMaxRunes), nil
+	t.storeOutput(task.ID, answer)
+	return legacySubtaskPage(answer, task.ID, toolResultBudget(ctx)), nil
+}
+
+// legacySubtaskPage 是旧接口的纯文本结果：放得下给全文，放不下按整行给前面部分并在
+// 末尾写明怎么续读。
+func legacySubtaskPage(answer, id string, budget int) string {
+	const footerReserve = 200
+	window := takeTextLines(answer, 1, max(0, budget-footerReserve), plainRunes)
+	switch {
+	case window.Whole():
+		return window.Text
+	case window.Complete():
+		return fmt.Sprintf("%s\n\n[结果超出单次上限，本次给出%s]", window.Text, window.Range())
+	}
+	return fmt.Sprintf("%s\n\n[结果超出单次上限，本次给出%s。还没读完：用 subtask 传 read_id=%s、start_line=%d 接着读，不会重新执行]", window.Text, window.Range(), id, window.ResumeLine())
 }
 
 func (t *dianaSubtaskTool) runBatch(ctx context.Context, tasks []subtaskRequest, concurrency int) []subtaskResult {
@@ -322,7 +453,7 @@ func (t *dianaSubtaskTool) runBatchTask(ctx context.Context, task subtaskRequest
 	if task.Mode == subtaskModeAnalyze {
 		callCtx := withLLMUsageContext(ctx, t.event)
 		result.Output, err = t.runtime.runSubtask(callCtx, t.runtime.effectiveConfigForEvent(t.event), task.Group, task.Objective, task.Material)
-		result.Output = truncateRunes(strings.TrimSpace(result.Output), subtaskAnswerMaxRunes)
+		result.Output = strings.TrimSpace(result.Output)
 	} else {
 		evidence := &subtaskSearchEvidence{}
 		response, runErr := t.runtime.runSearchSubtask(ctx, t.event, task, evidence.observe)
@@ -332,7 +463,7 @@ func (t *dianaSubtaskTool) runBatchTask(ctx context.Context, task subtaskRequest
 			result.Output = evidence.partialOutput()
 		}
 		if response != nil {
-			result.Output = truncateRunes(strings.TrimSpace(response.Text), searchSubtaskAnswerMaxRunes)
+			result.Output = strings.TrimSpace(response.Text)
 			result.Usage, result.ModelTurns = response.Usage, response.ModelTurns
 			for _, step := range response.Steps {
 				if !step.Skipped {
@@ -382,11 +513,8 @@ func (e *subtaskSearchEvidence) partialOutput() string {
 	if len(e.outputs) == 0 {
 		return ""
 	}
-	// 最新的结果通常是改过关键词之后的，截断时优先保留。
+	// 全部原样交回，放不下时由 marshalSubtaskBatch 按整行分页、用 read_id 续读。
 	body := strings.Join(e.outputs, "\n\n")
-	if runes := []rune(body); len(runes) > searchSubtaskAnswerMaxRunes {
-		body = string(runes[len(runes)-searchSubtaskAnswerMaxRunes:])
-	}
 	return "Worker 未完成结论，以下是已检索到的原始结果，需自行核对：\n" + body
 }
 

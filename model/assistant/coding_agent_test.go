@@ -140,12 +140,12 @@ func TestParseCodingLogReadsClaudeStreamJSON(t *testing.T) {
 		t.Fatalf("turns=%d cost=%v", snapshot.Turns, snapshot.CostUSD)
 	}
 	// 工具调用要能被认出在动什么，工具结果回填不该刷进进度里。
-	if !strings.Contains(strings.Join(snapshot.Tail, "\n"), "Bash：go test ./...") {
-		t.Fatalf("tail = %#v", snapshot.Tail)
+	if !strings.Contains(strings.Join(snapshot.Actions, "\n"), "Bash：go test ./...") {
+		t.Fatalf("tail = %#v", snapshot.Actions)
 	}
-	for _, line := range snapshot.Tail {
+	for _, line := range snapshot.Actions {
 		if strings.Contains(line, "tool_result") {
-			t.Fatalf("工具结果回填进了进度：%#v", snapshot.Tail)
+			t.Fatalf("工具结果回填进了进度：%#v", snapshot.Actions)
 		}
 	}
 }
@@ -161,11 +161,12 @@ func TestParseCodingLogFallsBackToTailForPlainOutput(t *testing.T) {
 	}
 }
 
-func TestParseCodingLogCapsOverlongLines(t *testing.T) {
+// 单行日志按读取上限读，几十兆的工具输出不会整行进内存；读进来的动作原文不再按进度截短。
+func TestParseCodingLogBoundsOverlongLines(t *testing.T) {
 	path := writeCodingLog(t, strings.Repeat("x", codingJobMaxLineBytes*3))
 	snapshot := parseCodingLog(path)
-	if len(snapshot.Tail) != 1 || len(snapshot.Tail[0]) > codingJobPlainLineRunes*4 {
-		t.Fatalf("超长行没有被截断：%d", len(snapshot.Tail[0]))
+	if len(snapshot.Actions) != 1 || len(snapshot.Actions[0]) != codingJobMaxLineBytes {
+		t.Fatalf("超长行应按读取上限读：%d 行", len(snapshot.Actions))
 	}
 }
 
@@ -209,7 +210,7 @@ func TestParseCodingLogReadsLongResultEvent(t *testing.T) {
 	if snapshot.Turns != 21 || snapshot.CostUSD != 0.79 {
 		t.Fatalf("turns=%d cost=%v", snapshot.Turns, snapshot.CostUSD)
 	}
-	for _, line := range snapshot.Tail {
+	for _, line := range snapshot.Actions {
 		if strings.Contains(line, "{") || strings.Contains(line, "Token") {
 			t.Fatalf("原始 JSON 或工具输出进了进度：%q", line)
 		}
@@ -730,8 +731,7 @@ func TestCodingToolIsDroppedFromNonOwnerRegistry(t *testing.T) {
 }
 
 // TestParseCodingLogKeepsLongPlainAnswerForFallback 钉住自定义后端的退路：它只打纯
-// 文本，拿不到 result 事件时汇报正文靠日志尾巴顶上。进度尾巴按 300 字截，顶上来的
-// 正文不能跟着截，否则最后那段长回答只剩开头。
+// 文本，拿不到 result 事件时汇报正文靠日志尾巴顶上，最后那段长回答和动作行都不截短。
 func TestParseCodingLogKeepsLongPlainAnswerForFallback(t *testing.T) {
 	answer := "PLAIN-START " + strings.Repeat("结论写在一整行里。", 150) + " PLAIN-END"
 	path := writeCodingLog(t, "working...", answer)
@@ -739,10 +739,8 @@ func TestParseCodingLogKeepsLongPlainAnswerForFallback(t *testing.T) {
 	if !strings.Contains(snapshot.Result, "PLAIN-END") {
 		t.Fatalf("长回答被截断了：%d 字", len([]rune(snapshot.Result)))
 	}
-	for _, line := range snapshot.Tail {
-		if len([]rune(line)) > codingJobPlainLineRunes+3 {
-			t.Fatalf("进度尾巴没按 %d 字截：%d 字", codingJobPlainLineRunes, len([]rune(line)))
-		}
+	if len(snapshot.Actions) == 0 || snapshot.Actions[len(snapshot.Actions)-1] != answer {
+		t.Fatalf("动作行应保留原文：%#v", snapshot.Actions)
 	}
 }
 
@@ -778,8 +776,7 @@ func TestLaunchCodingJobReportsLongResultInFull(t *testing.T) {
 	if !strings.Contains(delivered.String(), "LONG-START") || !strings.Contains(delivered.String(), "LONG-END") {
 		t.Fatalf("汇报没送到全文")
 	}
-	view := codingJobView(saved, nil)
-	if !view.ResultTruncated || len([]rune(view.Result)) > codingJobResultPreviewRunes+3 {
-		t.Fatalf("给模型的视图应当只带开头并标明截断：truncated=%v len=%d", view.ResultTruncated, len([]rune(view.Result)))
+	if view := codingJobView(saved, nil); view.Result != saved.Result {
+		t.Fatalf("给模型的视图应带结果全文，分页交给 codingToolPage：%d / %d 字", len([]rune(view.Result)), len([]rune(saved.Result)))
 	}
 }

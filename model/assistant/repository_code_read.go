@@ -33,15 +33,10 @@ const (
 	// 一次给太少，模型得来回续读好几轮，步数预算撑不住一次 review。
 	repositoryToolOutputChars = agent.ToolOutputMaxChars
 	// repositoryOutputReserve 给 message 和续读提示留的字数：内容装完之后才写 message。
-	repositoryOutputReserve = 1_500
-	// repositoryDiffListShare 是文件清单最多占掉的比例，剩下的留给 patch。
-	repositoryDiffListShare = 0.7
-	// repositoryPatchFieldOverhead 是每个文件的 patch 除正文外的字段开销（字段名、行号）。
-	repositoryPatchFieldOverhead = 120
-	// repositoryCompareCommitLimit 是 compare_files 列出的提交数，取最新的几条。
-	repositoryCompareCommitLimit   = 20
-	repositoryCommitMessageLimit   = 2_000
+	repositoryOutputReserve        = 1_500
 	repositoryCompareFileLimitHint = 300
+	// repositoryCompareFileRoom 是提交清单列完后至少还要剩多少字才接着在同一页给文件。
+	repositoryCompareFileRoom = 4_000
 )
 
 // repositoryOutputBudget 是这次结果能用的字数。不在 Runner 里调用（测试、直接调用）
@@ -165,9 +160,11 @@ func parseRepositoryDiffOptions(input map[string]any) (repositoryDiffOptions, st
 // renderRepositoryDiffFiles 把改动文件按预算装进 result.Files，返回写进 message 的说明。
 // 失败时返回错误码和说明，result 不动。
 //
-// 先列文件清单（最多占七成），剩下的给 patch。不传 paths 时每个文件的 patch 只给开头
-// 一段，传了 paths 就把剩下的预算全给这几个文件。patch 按整行截，截断的文件带上
-// patch_start_line、patch_end_line、patch_total_lines，续读用 patch_line。
+// 照 Pi 的做法按整个文件分页：从 file_offset 起逐个文件连同完整 patch 装进去，下一个
+// 装不下就停在它前面，message 写明传 file_offset 从哪继续。以前文件清单占七成、每个
+// 文件的 patch 只给开头 4000 字，模型看到的是一堆半截 diff，常把没给的部分当成没改。
+// 只有本页第一个文件单独都装不下时才按整行切它，带上 patch_start_line 等字段，
+// 续读传同一个 file_offset 加 patch_line。
 func renderRepositoryDiffFiles(result *repositoryIssueResult, files []githubPullRequestFile, options repositoryDiffOptions, budget int) (string, string, string) {
 	matched := make([]githubPullRequestFile, 0, len(files))
 	for _, file := range files {
@@ -175,116 +172,109 @@ func renderRepositoryDiffFiles(result *repositoryIssueResult, files []githubPull
 			matched = append(matched, file)
 		}
 	}
-	if options.patchLine > 0 && len(matched) != 1 {
-		return "", "invalid_input", fmt.Sprintf("patch_line 只能和只匹配一个文件的 paths 一起用；现在 paths 匹配了 %d 个文件。", len(matched))
-	}
 	if options.offset > 0 && options.offset >= len(matched) {
 		return "", "invalid_input", fmt.Sprintf("file_offset 超出范围：一共只有 %d 个文件。", len(matched))
 	}
+	if len(matched) == 0 {
+		result.Files = []repositoryPullRequestFileView{}
+		if len(options.focus) > 0 {
+			return fmt.Sprintf("paths 没有匹配到任何文件（共 %d 个）。", len(files)), "", ""
+		}
+		return "没有改动的文件。", "", ""
+	}
 	candidates := matched[options.offset:]
-	available := budget - repositoryResultRunes(*result) - repositoryOutputReserve
-	listBudget := int(float64(available) * repositoryDiffListShare)
-	views := make([]repositoryPullRequestFileView, 0, min(len(candidates), repositoryPullRequestFileListLimit))
-	listed := 0
-	for _, file := range candidates {
-		// 先按「patch 没给」记上标记再量：预算用完的文件会带着这个标记返回，清单要替它留位置。
+	room := budget - repositoryResultRunes(*result) - repositoryOutputReserve
+	views := make([]repositoryPullRequestFileView, 0, len(candidates))
+	used := 0
+	var partial *repositoryPullRequestFileView
+	partialCut := false
+	for index, file := range candidates {
 		view := repositoryPullRequestFileView{
 			Path: file.Filename, PreviousPath: file.PreviousFilename, Status: file.Status,
-			Additions: file.Additions, Deletions: file.Deletions,
-			PatchUnavailable: file.Patch == "", PatchOmitted: file.Patch != "",
+			Additions: file.Additions, Deletions: file.Deletions, PatchUnavailable: file.Patch == "",
 		}
-		encoded, _ := json.Marshal(view)
-		cost := utf8.RuneCount(encoded) + 1
-		if len(views) >= repositoryPullRequestFileListLimit || (len(views) > 0 && listed+cost > listBudget) {
+		var lines []string
+		from := 1
+		if file.Patch != "" {
+			lines = strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n")
+			if index == 0 && options.patchLine > 0 {
+				from = options.patchLine
+			}
+			if from > len(lines) {
+				return "", "invalid_input", fmt.Sprintf("patch_line 超出范围：%s 的 patch 共 %d 行。", view.Path, len(lines))
+			}
+			view.Patch = strings.Join(lines[from-1:], "\n")
+			if from > 1 {
+				view.PatchStartLine, view.PatchEndLine, view.PatchTotalLines = from, len(lines), len(lines)
+				view.PatchHunk = repositoryPatchHunkBefore(lines, from)
+			}
+		}
+		cost := repositoryJSONValueRunes(view) + 1
+		if used+cost <= room {
+			views = append(views, view)
+			used += cost
+			continue
+		}
+		if index > 0 {
 			break
 		}
+		// 本页第一个文件单独都装不下：按整行切，下一页从同一个文件的下一行接着读。
+		view.Patch = ""
+		window := repositoryFillLines(len(lines)-from+1, func(i int) string { return lines[from-1+i] }, len(lines), room-(repositoryJSONValueRunes(view)+1)-80)
+		view.Patch = strings.TrimSuffix(window.Text, "\n")
+		view.PatchStartLine, view.PatchEndLine, view.PatchTotalLines = from, from-1+window.Count, len(lines)
+		view.PatchTruncated = view.PatchEndLine < len(lines) || window.Cut
+		view.PatchHunk = repositoryPatchHunkBefore(lines, from)
 		views = append(views, view)
-		listed += cost
+		partial, partialCut = &views[0], window.Cut
+		break
 	}
 	result.Files = views
 	shownEnd := options.offset + len(views)
-	if shownEnd < len(matched) {
-		result.FilesTruncated = true
-		result.NextFileOffset = shownEnd
-	}
-
-	patchBudget := budget - repositoryResultRunes(*result) - repositoryOutputReserve
-	perFile := repositoryPullRequestPatchLimit
-	if len(options.focus) > 0 {
-		perFile = patchBudget
-	}
-	var incomplete []string
-	for index := range result.Files {
-		view := &result.Files[index]
-		file := candidates[index]
-		if file.Patch == "" {
-			continue
-		}
-		room := min(perFile, patchBudget-repositoryPatchFieldOverhead)
-		if room <= 0 {
-			incomplete = append(incomplete, view.Path)
-			continue
-		}
-		view.PatchOmitted = false
-		lines := strings.Split(strings.TrimSuffix(file.Patch, "\n"), "\n")
-		from := 1
-		if options.patchLine > 0 {
-			from = options.patchLine
-		}
-		if from > len(lines) {
-			return "", "invalid_input", fmt.Sprintf("patch_line 超出范围：%s 的 patch 共 %d 行。", view.Path, len(lines))
-		}
-		window := repositoryFillLines(len(lines)-from+1, func(i int) string { return lines[from-1+i] }, len(lines), room)
-		view.Patch = strings.TrimSuffix(window.Text, "\n")
-		end := from - 1 + window.Count
-		if from > 1 || end < len(lines) || window.Cut {
-			view.PatchStartLine, view.PatchEndLine, view.PatchTotalLines = from, end, len(lines)
-			view.PatchTruncated = end < len(lines) || window.Cut
-			if from > 1 && !strings.HasPrefix(lines[from-1], "@@") {
-				// 从 hunk 中间接着读时，把这段所在的 hunk 头带上，行号才算得出来。
-				for back := from - 2; back >= 0; back-- {
-					if strings.HasPrefix(lines[back], "@@") {
-						view.PatchHunk = lines[back]
-						break
-					}
-				}
-			}
-		}
-		if view.PatchTruncated {
-			incomplete = append(incomplete, view.Path)
-		}
-		patchBudget -= repositoryJSONRunes(view.Patch) + repositoryPatchFieldOverhead
-	}
 
 	scope := fmt.Sprintf("全部 %d 个文件", len(matched))
 	if len(options.focus) > 0 {
 		scope = fmt.Sprintf("paths 匹配的 %d 个文件（共 %d 个）", len(matched), len(files))
 	}
-	note := "已读取" + scope + "。"
-	if result.FilesTruncated || options.offset > 0 {
-		note += fmt.Sprintf(" 这次列的是第 %d-%d 个。", options.offset+1, shownEnd)
-		if result.FilesTruncated {
-			note += fmt.Sprintf(" 后面还有 %d 个，传 file_offset=%d 继续列。", len(matched)-shownEnd, shownEnd)
+	note := fmt.Sprintf("改动共%s，这次给了第 %d-%d 个。", scope, options.offset+1, shownEnd)
+	switch {
+	case partial != nil && partial.PatchTruncated:
+		note += fmt.Sprintf(" %s 的 patch 共 %d 行，单次上限只装下第 %d-%d 行，传 file_offset=%d、patch_line=%d（paths 不变）接着读这个文件。", partial.Path, partial.PatchTotalLines, partial.PatchStartLine, partial.PatchEndLine, options.offset, partial.PatchEndLine+1)
+		if partialCut {
+			note += fmt.Sprintf(" 第 %d 行太长，只给了开头一段，这一行算读过。", partial.PatchEndLine)
 		}
-	}
-	if len(incomplete) == 1 && len(result.Files) == 1 && len(options.focus) > 0 {
-		view := result.Files[0]
-		if view.PatchTruncated {
-			note += fmt.Sprintf(" %s 的 patch 共 %d 行，这次给了第 %d-%d 行，paths 不变、传 patch_line=%d 接着读。", view.Path, view.PatchTotalLines, view.PatchStartLine, view.PatchEndLine, view.PatchEndLine+1)
-		} else {
-			note += fmt.Sprintf(" %s 的 patch 这次装不下，paths 只传这一个文件再读。", view.Path)
-		}
-	} else if len(incomplete) > 0 {
-		shown := incomplete
-		if len(shown) > 20 {
-			shown = shown[:20]
-		}
-		note += fmt.Sprintf(" 有 %d 个文件的 patch 没有给全：%s。要看全就把这些路径传给 paths 再调一次（每次少传几个，单个文件还没给全就按提示传 patch_line 续读），改动周围的代码用 read_file 读。", len(incomplete), strings.Join(shown, "、"))
-		if len(incomplete) > len(shown) {
-			note += "（只列了前 20 个）"
-		}
+	case shownEnd < len(matched):
+		result.FilesTruncated = true
+		result.NextFileOffset = shownEnd
+		note += fmt.Sprintf(" 给出的 patch 都是完整的；后面还有 %d 个文件没给，传 file_offset=%d（paths 不变，不带 patch_line）继续读，没读完之前不要断言其余文件没改什么。", len(matched)-shownEnd, shownEnd)
+	default:
+		note += " patch 都是完整的。"
 	}
 	return note, "", ""
+}
+
+// repositoryJSONValueRunes 是一个值按结果的编码方式（不转义 <>&）编码后占的字数。
+func repositoryJSONValueRunes(value any) int {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return 0
+	}
+	return utf8.RuneCount(bytes.TrimRight(buffer.Bytes(), "\n"))
+}
+
+// repositoryPatchHunkBefore 从 hunk 中间接着读时，找出这段所在的 hunk 头，行号靠它算。
+func repositoryPatchHunkBefore(lines []string, from int) string {
+	if from <= 1 || strings.HasPrefix(lines[from-1], "@@") {
+		return ""
+	}
+	for back := from - 2; back >= 0; back-- {
+		if strings.HasPrefix(lines[back], "@@") {
+			return lines[back]
+		}
+	}
+	return ""
 }
 
 // repositoryRefPath 把分支、标签或提交拼进接口路径。分支名可以带斜杠，逐段转义。
@@ -320,15 +310,14 @@ type githubCommitDetail struct {
 }
 
 type repositoryCommitView struct {
-	SHA              string   `json:"sha"`
-	URL              string   `json:"url,omitempty"`
-	Author           string   `json:"author,omitempty"`
-	Date             string   `json:"date,omitempty"`
-	Message          string   `json:"message"`
-	MessageTruncated bool     `json:"message_truncated,omitempty"`
-	Additions        int      `json:"additions"`
-	Deletions        int      `json:"deletions"`
-	Parents          []string `json:"parents,omitempty"`
+	SHA       string   `json:"sha"`
+	URL       string   `json:"url,omitempty"`
+	Author    string   `json:"author,omitempty"`
+	Date      string   `json:"date,omitempty"`
+	Message   string   `json:"message"`
+	Additions int      `json:"additions"`
+	Deletions int      `json:"deletions"`
+	Parents   []string `json:"parents,omitempty"`
 }
 
 func repositoryCommitViewFromGitHub(commit githubCommitDetail) *repositoryCommitView {
@@ -340,7 +329,7 @@ func repositoryCommitViewFromGitHub(commit githubCommitDetail) *repositoryCommit
 	if commit.Author != nil && strings.TrimSpace(commit.Author.Login) != "" {
 		view.Author = strings.TrimSpace(commit.Author.Login)
 	}
-	view.Message, view.MessageTruncated = repositoryIssueDisplayText(commit.Commit.Message, repositoryCommitMessageLimit)
+	view.Message = repositoryIssueDisplayText(commit.Commit.Message)
 	for _, parent := range commit.Parents {
 		view.Parents = append(view.Parents, repositoryShortSHA(parent.SHA))
 	}
@@ -416,9 +405,12 @@ type repositoryCompareView struct {
 	AheadBy      int    `json:"ahead_by"`
 	BehindBy     int    `json:"behind_by"`
 	TotalCommits int    `json:"total_commits"`
-	// Commits 每条是「短 SHA 标题」，按时间从旧到新，只留最新的几条。
-	Commits          []string `json:"commits,omitempty"`
-	CommitsTruncated bool     `json:"commits_truncated,omitempty"`
+	// Commits 每条是「短 SHA 标题」，按时间从旧到新，从 commit_offset 起按整条装进单次
+	// 上限；装不下的留给下一页，见 compareFiles。
+	Commits []string `json:"commits,omitempty"`
+	// CommitStart、CommitEnd 是这次列出的提交范围（从 1 起）。
+	CommitStart int `json:"commit_start,omitempty"`
+	CommitEnd   int `json:"commit_end,omitempty"`
 }
 
 // compareFiles 读两个分支、标签或提交之间的改动，对应 GitHub 的 /compare/base...head。
@@ -451,23 +443,55 @@ func (t *dianaGitHubTool) compareFiles(ctx context.Context, repository string, i
 		Base: base, Head: head, URL: compare.HTMLURL, Status: compare.Status,
 		AheadBy: compare.AheadBy, BehindBy: compare.BehindBy, TotalCommits: compare.TotalCommits,
 	}
-	commits := compare.Commits
-	if len(commits) > repositoryCompareCommitLimit {
-		commits = commits[len(commits)-repositoryCompareCommitLimit:]
-		view.CommitsTruncated = true
-	}
-	for _, commit := range commits {
-		title, _, _ := strings.Cut(strings.TrimSpace(commit.Commit.Message), "\n")
-		title, _ = repositoryIssueDisplayText(title, 200)
-		view.Commits = append(view.Commits, repositoryShortSHA(commit.SHA)+" "+title)
-	}
 	result.OK, result.Outcome = true, "fetched"
 	result.Comparison = view
+	// 提交清单只在文件的第一页给：按整条从 commit_offset 装起，装不下就这页只给提交，
+	// 文件留到列完提交之后。以前只留最新 20 条，更早的提交模型根本看不到。
+	commitOffset := 0
+	if value, ok := numberValue(input["commit_offset"]); ok && value > 0 {
+		commitOffset = int(value)
+	}
+	commitsPending, filesDeferred := false, false
+	// commit_offset 不小于提交总数表示跳过提交清单，直接读文件。
+	if options.offset == 0 && options.patchLine == 0 && commitOffset < len(compare.Commits) {
+		rest := compare.Commits[commitOffset:]
+		room := repositoryOutputBudget(ctx) - repositoryResultRunes(result) - repositoryOutputReserve
+		used := 0
+		for _, commit := range rest {
+			title, _, _ := strings.Cut(strings.TrimSpace(commit.Commit.Message), "\n")
+			line := repositoryShortSHA(commit.SHA) + " " + repositoryIssueDisplayText(title)
+			cost := repositoryJSONRunes(line) + 3
+			if len(view.Commits) > 0 && used+cost > room {
+				break
+			}
+			view.Commits = append(view.Commits, line)
+			used += cost
+		}
+		view.CommitStart, view.CommitEnd = commitOffset+1, commitOffset+len(view.Commits)
+		commitsPending = view.CommitEnd < len(compare.Commits)
+		// 提交列完剩的地方太少就不硬塞半个文件进来，下一页专门读文件。
+		filesDeferred = !commitsPending && room-used < repositoryCompareFileRoom
+	}
+	commitNote := ""
+	if view.CommitEnd > 0 {
+		commitNote = fmt.Sprintf("提交共 %d 条，这次列了第 %d-%d 条。", len(compare.Commits), view.CommitStart, view.CommitEnd)
+	}
+	if len(compare.Commits) < compare.TotalCommits {
+		commitNote += fmt.Sprintf(" GitHub 对比接口这次只返回了 %d 条提交（total_commits=%d），其余提交不在这里；要看就换更近的 base 再比。", len(compare.Commits), compare.TotalCommits)
+	}
+	switch {
+	case commitsPending:
+		result.Message = fmt.Sprintf("%s...%s：%s 后面还有 %d 条提交，传 commit_offset=%d 继续列。这页没给改动文件，列完提交后传 commit_offset=%d 跳过提交清单读文件。", base, head, commitNote, len(compare.Commits)-view.CommitEnd, view.CommitEnd, len(compare.Commits))
+		return result
+	case filesDeferred:
+		result.Message = fmt.Sprintf("%s...%s：%s 改动共 %d 个文件，这页装不下了，传 commit_offset=%d 跳过提交清单读文件。", base, head, commitNote, len(compare.Files), len(compare.Commits))
+		return result
+	}
 	note, code, message := renderRepositoryDiffFiles(&result, compare.Files, options, repositoryOutputBudget(ctx))
 	if code != "" {
 		return result.fail(code, message)
 	}
-	result.Message = fmt.Sprintf("%s...%s：%s", base, head, note)
+	result.Message = fmt.Sprintf("%s...%s：%s%s", base, head, commitNote, note)
 	if len(compare.Files) >= repositoryCompareFileLimitHint {
 		result.Message += fmt.Sprintf(" GitHub 的对比接口最多只返回 %d 个文件，实际改动可能更多；缩小范围就换更近的 base，或者逐个提交用 commit_files 读。", repositoryCompareFileLimitHint)
 	}

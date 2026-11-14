@@ -275,7 +275,7 @@ func TestCodingACPSessionReportsConclusionAfterLastTool(t *testing.T) {
 	if snapshot.SessionID != "fake-sess" {
 		t.Fatalf("session = %q", snapshot.SessionID)
 	}
-	tail := strings.Join(snapshot.Tail, "\n")
+	tail := strings.Join(snapshot.Actions, "\n")
 	for _, want := range []string{"会话已建立", "我先跑一下测试。", "执行命令：go test ./...", "计划共 2 项，已完成 1 项"} {
 		if !strings.Contains(tail, want) {
 			t.Fatalf("进度里少了 %q：%q", want, tail)
@@ -354,7 +354,7 @@ func TestCodingACPSessionAsksOwnerForDangerousCommand(t *testing.T) {
 		if !ok || request.Tool != "git push origin main" || request.Detail != "git push origin main" || request.Pattern != "git push" || request.JobID != "code-acp" {
 			t.Fatalf("信箱里的询问不对：%#v", request)
 		}
-		tail := strings.Join(run.snapshot.Tail, "\n")
+		tail := strings.Join(run.snapshot.Actions, "\n")
 		if !strings.Contains(tail, "等主人确认：git push origin main") {
 			t.Fatalf("进度里看不出在等确认：%q", tail)
 		}
@@ -656,7 +656,7 @@ func TestCancelACPCodingJobStopsSessionAndAgent(t *testing.T) {
 		t.Fatalf("launch: %v", err)
 	}
 	waitForCondition(t, 10*time.Second, func() bool {
-		return strings.Contains(strings.Join(parseCodingLog(job.LogPath).Tail, "\n"), "会话已建立")
+		return strings.Contains(strings.Join(parseCodingLog(job.LogPath).Actions, "\n"), "会话已建立")
 	})
 	if _, err := rt.cancelCodingJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("cancel: %v", err)

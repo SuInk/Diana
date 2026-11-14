@@ -38,26 +38,17 @@ const (
 	// codingJobPollInterval 是接回的任务轮询判活的间隔。自己启动的任务不走轮询，
 	// 直接 Wait。
 	codingJobPollInterval = 10 * time.Second
-	codingJobTailLines    = 20
+	// codingJobFallbackLines 是拿不到结构化结果时，拿日志最后几行动作顶汇报正文的行数。
+	codingJobFallbackLines = 20
 	// codingJobMaxLineBytes 要装得下整条 result 事件：最终报告整段就在那一行里，
 	// 长一点的评审报告十几 KB 很常见。以前按 8KB 截，截断的半截 JSON 解析不了，
 	// 结果丢了不说，还把原始 JSON 当进度发进了群。超过上限的只剩几十兆的工具输出，
 	// 那种行整行跳过。
 	codingJobMaxLineBytes = 4 << 20
-	// codingJobPlainLineRunes 是纯文本日志行进进度尾巴时留的长度。
-	codingJobPlainLineRunes = 300
-	// codingJobFallbackLineRunes 是拿不到结构化结果时，拿来顶汇报正文的那几行每行
-	// 留的长度。自定义后端只打纯文本，最后那段长回答就是它的结论，不能按进度的
-	// 300 字截。
-	codingJobFallbackLineRunes = 8000
-	// codingJobResultRunes 是记录里留的结果全文。最终报告就是用户要的那份东西，汇报
-	// 时整段发出去（长的走合并转发），只挡住离谱的长度。以前这里就截到 1500 字，
-	// 「整理成 md 发群里」的报告到群里只剩开头一段。
-	codingJobResultRunes = 20000
-	// codingJobResultPreviewRunes 是给模型和运行日志看的结果长度：工具返回值、错误
-	// 说明、日志详情用它。全文由汇报直接发给人，不必塞进模型的上下文。
-	codingJobResultPreviewRunes = 1500
-	codingJobRetainCount        = 60
+	// codingJobSummaryRunes 是失败说明和运行日志详情里摘的结果开头。两处都只是摘要：
+	// 结果全文另有 job.Result，工具返回值按整行分页交给模型（见 codingToolPage）。
+	codingJobSummaryRunes = 1500
+	codingJobRetainCount  = 60
 )
 
 // CodingJob 是一次编码 CLI 调用的持久记录。
@@ -304,8 +295,9 @@ type codingJobSnapshot struct {
 	Done       bool
 	CostUSD    float64
 	Turns      int
-	Tail       []string
-	UpdatedAt  time.Time
+	// Actions 是日志里读出的全部动作行，原文不截，tail 按整行分页给模型。
+	Actions   []string
+	UpdatedAt time.Time
 }
 
 // parseCodingLog 单遍扫描 Claude Code stream-json 和 Codex JSONL，提取会话、
@@ -321,9 +313,8 @@ func parseCodingLog(path string) codingJobSnapshot {
 	}
 	defer file.Close()
 
-	tail := make([]string, 0, codingJobTailLines)
-	// fallback 和 tail 一一对应，只是不按进度的长度截：拿不到结果时顶汇报正文用。
-	fallback := make([]string, 0, codingJobTailLines)
+	// fallback 是最后几行动作，拿不到结果时顶汇报正文用。
+	fallback := make([]string, 0, codingJobFallbackLines)
 	reader := bufio.NewReaderSize(file, 64<<10)
 	for {
 		line, truncated, err := readBoundedLine(reader)
@@ -334,12 +325,10 @@ func parseCodingLog(path string) codingJobSnapshot {
 		if line != "" {
 			snapshot.Lines++
 			if text, ok := applyCodingLogLine(&snapshot, line); ok && text != "" {
-				action := truncateRunes(text, codingJobPlainLineRunes)
-				snapshot.LastAction = action
-				tail = append(tail, action)
-				fallback = append(fallback, truncateRunes(text, codingJobFallbackLineRunes))
-				if len(tail) > codingJobTailLines {
-					tail = tail[1:]
+				snapshot.LastAction = text
+				snapshot.Actions = append(snapshot.Actions, text)
+				fallback = append(fallback, text)
+				if len(fallback) > codingJobFallbackLines {
 					fallback = fallback[1:]
 				}
 			}
@@ -348,7 +337,6 @@ func parseCodingLog(path string) codingJobSnapshot {
 			break
 		}
 	}
-	snapshot.Tail = tail
 	if snapshot.Result == "" && len(fallback) > 0 {
 		snapshot.Result = strings.Join(fallback, "\n")
 	}
@@ -988,7 +976,7 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	if snapshot.SessionID != "" {
 		job.SessionID = snapshot.SessionID
 	}
-	job.Result = truncateRunes(strings.TrimSpace(snapshot.Result), codingJobResultRunes)
+	job.Result = strings.TrimSpace(snapshot.Result)
 	job.CostUSD = snapshot.CostUSD
 	job.Turns = snapshot.Turns
 	job.FinishedAt = time.Now()
@@ -1002,7 +990,7 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	case snapshot.Done && snapshot.IsError:
 		job.Status = codingJobStatusFailed
 		if job.Error == "" {
-			job.Error = firstNonEmpty(truncateRunes(job.Result, codingJobResultPreviewRunes), "CLI 报告执行失败")
+			job.Error = firstNonEmpty(truncateRunes(job.Result, codingJobSummaryRunes), "CLI 报告执行失败")
 		}
 	case job.ExitCode != 0 && !snapshot.Done:
 		job.Status = codingJobStatusFailed
@@ -1018,7 +1006,7 @@ func (r *Runtime) finalizeCodingJob(ctx context.Context, job CodingJob, timedOut
 	if job.Status != codingJobStatusSucceeded {
 		level, kind = applog.LevelError, applog.KindError
 	}
-	r.recordCodingJobLog(ctx, job, kind, level, "编码任务已结束："+job.Status, truncateRunes(firstNonEmpty(job.Error, job.Result), codingJobResultPreviewRunes))
+	r.recordCodingJobLog(ctx, job, kind, level, "编码任务已结束："+job.Status, truncateRunes(firstNonEmpty(job.Error, job.Result), codingJobSummaryRunes))
 	r.reportCodingJob(ctx, job)
 }
 
@@ -1103,7 +1091,7 @@ func (r *Runtime) cancelCodingJob(ctx context.Context, id string) (CodingJob, er
 	job.Status = codingJobStatusCancelled
 	job.FinishedAt = time.Now()
 	job.Error = "已按要求取消，已完成的改动留在工作区里"
-	job.Result = truncateRunes(strings.TrimSpace(snapshot.Result), codingJobResultRunes)
+	job.Result = strings.TrimSpace(snapshot.Result)
 	if snapshot.SessionID != "" {
 		job.SessionID = snapshot.SessionID
 	}
@@ -1198,16 +1186,4 @@ func (r *Runtime) recordCodingJobLog(ctx context.Context, job CodingJob, kind ap
 			"session":   job.SessionID,
 		},
 	})
-}
-
-// codingLogTail 返回日志尾部若干行，供运行途中查询用。
-func codingLogTail(job CodingJob, lines int) []string {
-	if lines <= 0 || lines > codingJobTailLines {
-		lines = codingJobTailLines
-	}
-	tail := parseCodingLog(job.LogPath).Tail
-	if len(tail) > lines {
-		tail = tail[len(tail)-lines:]
-	}
-	return tail
 }
