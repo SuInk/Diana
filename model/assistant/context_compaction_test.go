@@ -353,7 +353,7 @@ func TestReplyCompactsAndRetriesOnProviderOverflow(t *testing.T) {
 	}
 }
 
-// 小窗口：预留按 1/8 缩，阈值不超过发送层的输入预算，保留量给非历史部分让出空间。
+// 小窗口：预留按 1/4 缩，阈值不超过发送层的输入预算，保留量给非历史部分让出空间。
 func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
 	for _, item := range []struct {
 		window, threshold int64
@@ -362,20 +362,20 @@ func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
 		{window: 32000, threshold: 24000},
 		{window: 128000, threshold: 111616},
 	} {
-		if got := compactionThreshold(item.window); got != item.threshold {
+		if got := compactionThreshold(compactionWindow{Tokens: item.window}); got != item.threshold {
 			t.Fatalf("window %d threshold = %d, want %d", item.window, got, item.threshold)
 		}
-		if limit := llm.InputTokenBudget(item.window, llm.DefaultMaxOutputTokens); compactionThreshold(item.window) > limit {
+		if limit := llm.InputTokenBudget(item.window, llm.DefaultMaxOutputTokens); compactionThreshold(compactionWindow{Tokens: item.window}) > limit {
 			t.Fatalf("window %d threshold exceeds the input budget %d", item.window, limit)
 		}
 	}
-	if got := compactionKeepRecent(128000, 30000); got != compactionKeepRecentTokens {
+	if got := compactionKeepRecent(compactionWindow{Tokens: 128000}, 30000); got != compactionKeepRecentTokens {
 		t.Fatalf("large window keep = %d", got)
 	}
-	if got := compactionKeepRecent(32000, 15000); got != (24000-15000)/2 {
+	if got := compactionKeepRecent(compactionWindow{Tokens: 32000}, 15000); got != (24000-15000)/2 {
 		t.Fatalf("32K keep = %d", got)
 	}
-	if got := compactionKeepRecent(16000, 20000); got != 0 {
+	if got := compactionKeepRecent(compactionWindow{Tokens: 16000}, 20000); got != 0 {
 		t.Fatalf("keep must not go negative: %d", got)
 	}
 }
@@ -413,8 +413,8 @@ func TestReplyCompactionFitsSmallWindows(t *testing.T) {
 			if summaries == 0 || reply == nil {
 				t.Fatalf("summaries=%d reply=%v", summaries, reply != nil)
 			}
-			if got := llm.EstimateRequestInputTokens(*reply); got > compactionThreshold(window) {
-				t.Fatalf("compacted request is %d tokens, over the %d threshold", got, compactionThreshold(window))
+			if got := llm.EstimateRequestInputTokens(*reply); got > compactionThreshold(compactionWindow{Tokens: window}) {
+				t.Fatalf("compacted request is %d tokens, over the %d threshold", got, compactionThreshold(compactionWindow{Tokens: window}))
 			}
 		})
 	}
@@ -422,7 +422,8 @@ func TestReplyCompactionFitsSmallWindows(t *testing.T) {
 
 // 待摘要的部分比摘要模型能接的大时按块逐段更新：每块都带着上一块的结果。
 func TestCompactContextSummarizesInChunks(t *testing.T) {
-	provider := &compactionTestProvider{summary: "## 在聊什么\n- 分块摘要"}
+	// 假摘要要够长：每块都把它带进下一块的请求，预算按它的长度重新算才不会超。
+	provider := &compactionTestProvider{summary: "## 在聊什么\n- 分块摘要" + strings.Repeat("。摘要里的细节", 400)}
 	runtime := NewRuntime(BotConfig{MaxContextTokens: 16000}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	history := compactionTestHistory(400, strings.Repeat("很长的发言内容", 60))
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 500*60}
@@ -434,10 +435,10 @@ func TestCompactContextSummarizesInChunks(t *testing.T) {
 	}
 	for index, req := range provider.requests {
 		prompt := req.Messages[len(req.Messages)-1].Content
-		if index > 0 && !strings.Contains(prompt, "<previous-summary>\n## 在聊什么\n- 分块摘要") {
+		if index > 0 && !strings.Contains(prompt, "<previous-summary>\n## 在聊什么\n- 分块摘要。摘要里的细节") {
 			t.Fatalf("chunk %d did not carry the previous chunk's summary", index)
 		}
-		if got := llm.EstimateRequestInputTokens(req); got > compactionThreshold(16000) {
+		if got := llm.EstimateRequestInputTokens(req); got > compactionThreshold(compactionWindow{Tokens: 16000}) {
 			t.Fatalf("chunk %d request is %d tokens", index, got)
 		}
 	}
@@ -456,8 +457,8 @@ func TestSessionHistoryReconnectsSummaryWhenAnchorIsLost(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	history := compactionTestHistory(50, "话")
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 100*60}
-	runtime.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[19].Time}, "missing-anchor")
-	window := runtime.sessionHistoryWindow(current, history, "bot", 128000)
+	runtime.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[19].Time, UntilKey: messageHistoryDedupeKey(history[19])}, "missing-anchor")
+	window := runtime.sessionHistoryWindow(current, history, "bot", compactionWindow{Tokens: 128000})
 	if len(window) != 30 || window[0].MessageID != history[20].MessageID || runtime.compactionSummary(current) != "旧摘要" {
 		t.Fatalf("window starts at %q (%d), summary %q", firstMessageID(window), len(window), runtime.compactionSummary(current))
 	}
@@ -467,7 +468,7 @@ func TestSessionHistoryReconnectsSummaryWhenAnchorIsLost(t *testing.T) {
 
 	gap := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	gap.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[0].Time - 3600}, "missing-anchor")
-	window = gap.sessionHistoryWindow(current, history, "bot", 128000)
+	window = gap.sessionHistoryWindow(current, history, "bot", compactionWindow{Tokens: 128000})
 	if gap.compactionSummary(current) != "" || len(window) == 0 {
 		t.Fatalf("summary that no longer connects must be dropped: %q, window %d", gap.compactionSummary(current), len(window))
 	}
@@ -479,7 +480,7 @@ func TestPromptContextHistoryReadsBackToAnOldAnchor(t *testing.T) {
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 5000*60}
-	history := compactionTestHistory(historyCandidateLimit(16000)*3, "话")
+	history := compactionTestHistory(historyCandidateLimit(compactionWindow{Tokens: 16000})*3, "话")
 	for _, item := range history {
 		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
 	}
@@ -593,5 +594,36 @@ func TestSideContextHistoryUsesSummaryAndKeptRegion(t *testing.T) {
 	}
 	if !strings.Contains(header.Content, "旧摘要") || !strings.Contains(header.Content, fmt.Sprintf("还有 %d 条", len(history)-len(recent))) {
 		t.Fatalf("header = %q", header.Content)
+	}
+}
+
+// 被摘要的最后一条和保留的第一条在同一秒：锚丢了以后按去重键接回，同一秒的不丢。
+func TestSessionHistoryReconnectsSameSecondMessages(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	history := compactionTestHistory(10, "话")
+	for index := 4; index < 8; index++ {
+		history[index].Time = history[4].Time
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 100*60}
+	runtime.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[5].Time, UntilKey: messageHistoryDedupeKey(history[5])}, "missing-anchor")
+	window := runtime.sessionHistoryWindow(current, history, "bot", compactionWindow{Tokens: 128000})
+	if len(window) != 4 || window[0].MessageID != history[6].MessageID {
+		t.Fatalf("window starts at %q (%d), want the message right after the summarized one", firstMessageID(window), len(window))
+	}
+	// 被摘要的那条自己被撤回了：按时间接，同一秒的宁可多带也不漏。
+	withdrawn := append(append([]MessageEvent(nil), history[:5]...), history[6:]...)
+	runtime2 := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime2.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[5].Time, UntilKey: messageHistoryDedupeKey(history[5])}, "missing-anchor")
+	window = runtime2.sessionHistoryWindow(current, withdrawn, "bot", compactionWindow{Tokens: 128000})
+	if len(window) == 0 || window[0].MessageID != history[4].MessageID {
+		t.Fatalf("withdrawn case starts at %q", firstMessageID(window))
+	}
+}
+
+// 输出上限设得大时，阈值跟着发送层的输入预算收紧。
+func TestCompactionThresholdRespectsMaxOutput(t *testing.T) {
+	window := compactionWindow{Tokens: 128000, MaxOutput: 32000}
+	if got, want := compactionThreshold(window), llm.InputTokenBudget(128000, 32000); got != want {
+		t.Fatalf("threshold = %d, want the input budget %d", got, want)
 	}
 }

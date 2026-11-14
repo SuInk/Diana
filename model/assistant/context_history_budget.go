@@ -44,7 +44,7 @@ func visiblePromptHistory(event MessageEvent, history []MessageEvent) []MessageE
 // 第一条保留的消息）开始的全部历史，不按预算裁剪。体积由压缩控制，见
 // context_compaction.go。
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	window := r.promptContextWindowTokens(event, cfg)
+	window := r.promptCompactionWindow(event, cfg)
 	candidateLimit := historyCandidateLimit(window)
 	session := sessionKey(event)
 	anchorKey := compactionAnchorKey(event)
@@ -139,6 +139,29 @@ func (r *Runtime) setHistoryWindowAnchor(session string, anchor string) {
 // 编排必须对每个候选模型都成立。以前它以 DefaultContextWindowTokens 起算、且只
 // 往下收，于是无论模型多大窗口都出不了 16K——那个常量是「没有配置档时的兜底」，
 // 不该当成所有模型的天花板。
+// promptChatProfiles 是本轮可能被选中的对话模型配置档，挑选顺序与真正发请求时一致：
+// 角色绑定 → 分组 → 当前激活配置。只看角色绑定的话，没配模型角色的部署会一路回落到
+// 兜底常量，等于从来没看过实际在用的模型窗口。带图的轮次也由对话模型回答。
+func (r *Runtime) promptChatProfiles() []llm.Profile {
+	r.mu.RLock()
+	store := r.llmStore
+	r.mu.RUnlock()
+	if store == nil {
+		return nil
+	}
+	set := store.Profiles().WithDefaults()
+	profiles, _ := r.roleBoundProfiles("", set, llm.GroupChat)
+	if len(profiles) == 0 {
+		profiles = llmProfilesInGroup(set, llm.GroupChat)
+	}
+	if len(profiles) == 0 {
+		if current, ok := set.FirstProfile(); ok {
+			profiles = []llm.Profile{current}
+		}
+	}
+	return profiles
+}
+
 func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) int64 {
 	r.mu.RLock()
 	store := r.llmStore
@@ -148,21 +171,7 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		// 返回常量，于是机器人或群配的 max_context_tokens 在这条路径上完全不生效。
 		return clampContextWindowToConfig(llm.DefaultContextWindowTokens, cfg)
 	}
-	// 带图的轮次也由对话模型回答，窗口按对话模型算。
-	group := llm.GroupChat
-	set := store.Profiles().WithDefaults()
-	// 与真正发请求时的挑选顺序保持一致：角色绑定 → 分组 → 当前激活配置。
-	// 只看角色绑定的话，没配模型角色的部署会一路回落到兜底常量，等于从来没看过
-	// 实际在用的模型窗口。
-	profiles, _ := r.roleBoundProfiles("", set, group)
-	if len(profiles) == 0 {
-		profiles = llmProfilesInGroup(set, group)
-	}
-	if len(profiles) == 0 {
-		if current, ok := set.FirstProfile(); ok {
-			profiles = []llm.Profile{current}
-		}
-	}
+	profiles := r.promptChatProfiles()
 	window := int64(0)
 	for _, profile := range profiles {
 		providerWindow := profile.Config.MaxContextTokensWithDefault()
@@ -357,8 +366,8 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 	}
 	metadata := map[string]any{
 		"effective_context_window":  window,
-		"compaction_threshold":      compactionThreshold(window),
-		"keep_recent_tokens":        compactionKeepRecentTokens,
+		"compaction_threshold":      compactionThreshold(r.promptCompactionWindow(event, cfg)),
+		"keep_recent_tokens":        compactionKeepRecent(r.promptCompactionWindow(event, cfg), 0),
 		"estimated_tokens":          total,
 		"category_tokens":           categoryTokens,
 		"history_selected_messages": len(history),
@@ -414,13 +423,14 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	window := r.promptContextWindowTokens(event, cfg)
+	limits := r.promptCompactionWindow(event, cfg)
 	return ContextBudgetBreakdown{
 		GroupID:               event.GroupID,
 		ContextWindow:         window,
 		ContextWindowFallback: r.promptContextWindowFallback(cfg),
-		CompactionThreshold:   compactionThreshold(window),
-		ReserveTokens:         compactionReserve(window),
-		KeepRecentTokens:      compactionKeepRecentTokens,
+		CompactionThreshold:   compactionThreshold(limits),
+		ReserveTokens:         compactionReserve(limits),
+		KeepRecentTokens:      compactionKeepRecent(limits, 0),
 		HasSummary:            event.GroupID != "" && strings.TrimSpace(r.compactionSummary(event)) != "",
 	}
 }

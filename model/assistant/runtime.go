@@ -4679,7 +4679,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
 	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
 	compacted := ""
-	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry)) > compactionThreshold(r.promptContextWindowTokens(event, cfg)) {
+	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry)) > compactionThreshold(r.promptCompactionWindow(event, cfg)) {
 		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
 			messages, replyHistory = next, kept
 			compacted = "threshold"
@@ -5096,7 +5096,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptContextWindowTokens(event, cfg)), cfg.prompt(promptNoteGroupBrevitySpec))
+			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)), cfg.prompt(promptNoteGroupBrevitySpec))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
@@ -8326,7 +8326,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	groupLimit := 0
 	if event.Kind == EventKindGroup {
 		cfg := r.effectiveConfigForEvent(event)
-		groupLimit = historyCandidateLimit(r.promptContextWindowTokens(event, cfg))
+		groupLimit = historyCandidateLimit(r.promptCompactionWindow(event, cfg))
 	}
 	r.mu.Lock()
 	event = r.currentMessageRevisionLocked(event, time.Now())

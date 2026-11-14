@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/SuInk/diana/model/agent"
@@ -50,36 +49,54 @@ const (
 	compactionHeaderContextGroup = "history-header"
 )
 
-func normalizedCompactionWindow(window int64) int64 {
-	if window <= 0 {
+// compactionWindow 是算压缩阈值要用的两个数：模型窗口和为输出留的量。
+type compactionWindow struct {
+	Tokens    int64
+	MaxOutput int64
+}
+
+func (w compactionWindow) tokens() int64 {
+	if w.Tokens <= 0 {
 		return llm.DefaultContextWindowTokens
 	}
-	return window
+	return w.Tokens
 }
 
 // compactionReserve 是 Pi 的 reserveTokens：大窗口 16384，小窗口按 1/4 缩。
-func compactionReserve(window int64) int64 {
-	return min(compactionReserveTokens, normalizedCompactionWindow(window)/compactionReserveDivisor)
+func compactionReserve(window compactionWindow) int64 {
+	return min(compactionReserveTokens, window.tokens()/compactionReserveDivisor)
 }
 
 // compactionThreshold 是触发压缩的请求估算 token 数（Pi 的 contextWindow − reserveTokens），
-// 不超过发送层为输入留的预算：超过它的请求本地校验就会拒。
-func compactionThreshold(window int64) int64 {
-	window = normalizedCompactionWindow(window)
-	return max(1, min(window-compactionReserve(window), llm.InputTokenBudget(window, llm.DefaultMaxOutputTokens)))
+// 不超过发送层为输入留的预算（窗口减输出上限）：超过它的请求本地校验就会拒。
+func compactionThreshold(window compactionWindow) int64 {
+	tokens := window.tokens()
+	return max(1, min(tokens-compactionReserve(window), llm.InputTokenBudget(tokens, window.MaxOutput)))
 }
 
 // compactionKeepRecent 是压缩时原样保留的近期历史：Pi 的 20000，但不超过「阈值减去
 // 非历史部分（系统提示、记忆、当前消息、工具定义）」的一半，保证压完装得下，还留出
 // 一半给之后的追加。小到 0 时 compactionCut 仍会保留最新的一轮。
-func compactionKeepRecent(window, nonHistory int64) int64 {
+func compactionKeepRecent(window compactionWindow, nonHistory int64) int64 {
 	return max(0, min(compactionKeepRecentTokens, (compactionThreshold(window)-nonHistory)/2))
 }
 
 // historyCandidateLimit 返回要从存储读多少条历史：按最小体积换算，读满阈值那么多条，
 // 锚之后的历史一般都在里面。锚不在里面时 promptContextHistory 会再往前读。
-func historyCandidateLimit(window int64) int {
+func historyCandidateLimit(window compactionWindow) int {
 	return int(compactionThreshold(window)/minimumHistoryCandidateTokens) + 8
+}
+
+// promptCompactionWindow 取对话模型的窗口和输出上限。输出上限取候选配置档里最大的
+// 那个（没填按 DefaultMaxOutputTokens），保证每个候选模型都装得下。
+func (r *Runtime) promptCompactionWindow(event MessageEvent, cfg BotConfig) compactionWindow {
+	window := compactionWindow{Tokens: r.promptContextWindowTokens(event, cfg)}
+	for _, profile := range r.promptChatProfiles() {
+		if limit := profile.Config.MaxOutputTokens; limit > window.MaxOutput {
+			window.MaxOutput = limit
+		}
+	}
+	return window
 }
 
 const compactionSummaryPrefix = "【此前的对话历史已压缩为以下摘要；摘要之后是保留下来的原文】\n<summary>\n"
@@ -132,6 +149,8 @@ func compactionAnchorKey(event MessageEvent) string {
 type compactionCheckpoint struct {
 	Summary string
 	Until   int64
+	// UntilKey 是被摘要的最后一条消息的去重键，按它接回，不靠精确到秒的时间。
+	UntilKey string
 }
 
 // compactionState 返回这个会话当前的压缩摘要。群的摘要存在 GroupPromptSession 里，
@@ -143,7 +162,7 @@ func (r *Runtime) compactionState(event MessageEvent) compactionCheckpoint {
 		if s.invalidated {
 			return compactionCheckpoint{}
 		}
-		return compactionCheckpoint{Summary: s.data.Checkpoint, Until: s.data.CheckpointUntil}
+		return compactionCheckpoint{Summary: s.data.Checkpoint, Until: s.data.CheckpointUntil, UntilKey: s.data.CheckpointUntilKey}
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -163,6 +182,7 @@ func (r *Runtime) storeCompaction(event MessageEvent, state compactionCheckpoint
 		if !s.invalidated {
 			s.data.Checkpoint = state.Summary
 			s.data.CheckpointUntil = state.Until
+			s.data.CheckpointUntilKey = state.UntilKey
 			s.data.Anchor = anchor
 			s.saveLocked()
 		}
@@ -181,7 +201,7 @@ func (r *Runtime) storeCompaction(event MessageEvent, state compactionCheckpoint
 // historyCoversCheckpoint 报告已读到的历史够不够用：锚在里面，或者最早一条不晚于
 // 摘要覆盖到的时间（摘要之后的消息一条没漏），或者是冷启动（既没有锚也没有摘要）。
 func historyCoversCheckpoint(history []MessageEvent, anchor string, state compactionCheckpoint) bool {
-	if historyWindowAnchorIndex(history, anchor) >= 0 {
+	if historyWindowAnchorIndex(history, anchor) >= 0 || historyWindowAnchorIndex(history, state.UntilKey) >= 0 {
 		return true
 	}
 	if state.Summary == "" || state.Until <= 0 {
@@ -199,7 +219,7 @@ func historyCoversCheckpoint(history []MessageEvent, anchor string, state compac
 //   - 摘要之后的消息已经不可得（存储里没有了）：摘要作废、清掉，按冷启动处理，
 //     历史开头写明从哪一刻开始载入。
 //   - 冷启动：从最新往回取保留量作为起点。
-func (r *Runtime) sessionHistoryWindow(event MessageEvent, history []MessageEvent, botAccount string, window int64) []MessageEvent {
+func (r *Runtime) sessionHistoryWindow(event MessageEvent, history []MessageEvent, botAccount string, window compactionWindow) []MessageEvent {
 	key := compactionAnchorKey(event)
 	promptSession := r.groupPromptSession(event)
 	if anchor := promptSession.anchor(); anchor != "" {
@@ -214,17 +234,29 @@ func (r *Runtime) sessionHistoryWindow(event MessageEvent, history []MessageEven
 	}
 	state := r.compactionState(event)
 	if state.Summary != "" {
-		if len(history) > 0 && history[0].Time > 0 && history[0].Time <= state.Until {
+		resume := -1
+		if index := historyWindowAnchorIndex(history, state.UntilKey); index >= 0 {
+			// 被摘要的最后一条还在：从它下一条接上，同一秒的消息一条不丢。
+			resume = index + 1
+		} else if len(history) > 0 && history[0].Time > 0 && history[0].Time <= state.Until {
+			// 那一条本身不在了（撤回）：按时间接，同一秒的宁可多带一条也不漏。
+			resume = len(history)
 			for index, item := range history {
-				if item.Time > state.Until {
-					next := messageHistoryDedupeKey(item)
-					r.setHistoryWindowAnchor(key, next)
-					promptSession.rememberAnchor(next)
-					return history[index:]
+				if item.Time >= state.Until {
+					resume = index
+					break
 				}
 			}
-			// 摘要之后还没有新消息。
-			return nil
+		}
+		if resume >= 0 {
+			if resume >= len(history) {
+				// 摘要之后还没有新消息。
+				return nil
+			}
+			next := messageHistoryDedupeKey(history[resume])
+			r.setHistoryWindowAnchor(key, next)
+			promptSession.rememberAnchor(next)
+			return history[resume:]
 		}
 		log.Printf("diana context compaction: summary for %s no longer connects to stored history, dropping it", key)
 		r.storeCompaction(event, compactionCheckpoint{}, anchor)
@@ -365,10 +397,11 @@ var promptContextCompactionUpdateSpec = registerPrompt(PromptSpec{
 // errNothingToCompact 表示历史全部落在保留区里，压缩腾不出地方。
 var errNothingToCompact = errors.New("context compaction: nothing older than the kept recent history")
 
-// compactionLock 返回这个会话的压缩锁：同一个群并发的几次回复只压缩一次。
-func (r *Runtime) compactionLock(key string) *sync.Mutex {
-	lock, _ := r.compactionLocks.LoadOrStore(key, &sync.Mutex{})
-	return lock.(*sync.Mutex)
+// compactionLock 返回这个会话的压缩锁：同一个群并发的几次回复只压缩一次。用容量为
+// 1 的通道当锁，等锁的一方能随 ctx 放弃，摘要模型卡住时不会把后面的回复一起拖住。
+func (r *Runtime) compactionLock(key string) chan struct{} {
+	lock, _ := r.compactionLocks.LoadOrStore(key, make(chan struct{}, 1))
+	return lock.(chan struct{})
 }
 
 // compactContext 压缩一次会话历史：切点之前的部分交给模型写成摘要，存下摘要和新锚，
@@ -389,8 +422,12 @@ func (r *Runtime) compactContext(ctx context.Context, event MessageEvent, cfg Bo
 	}
 	key := compactionAnchorKey(event)
 	lock := r.compactionLock(key)
-	lock.Lock()
-	defer lock.Unlock()
+	select {
+	case lock <- struct{}{}:
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
+	defer func() { <-lock }()
 	if index := historyWindowAnchorIndex(local, r.historyWindowAnchor(key)); index > 0 {
 		return local[index:], r.compactionSummary(event), nil
 	}
@@ -412,18 +449,20 @@ func (r *Runtime) compactContext(ctx context.Context, event MessageEvent, cfg Bo
 	body := strings.TrimSpace(strings.Join(previousBody, "\n"))
 	// 待摘要的部分可能比摘要模型的窗口还大（机器人很久没说话、群里一直在聊）：按块
 	// 切开，逐块增量更新摘要，每块都带着上一块的结果。
-	threshold := compactionThreshold(r.promptContextWindowTokens(event, cfg))
+	threshold := compactionThreshold(r.promptCompactionWindow(event, cfg))
 	// 提示词、标签和消息框架的开销，取两种提示词里长的那个，再留一点余量。
 	overhead := llm.EstimateTextTokens(compactionSystemPrompt) + max(llm.EstimateTextTokens(cfg.prompt(promptContextCompactionSpec)), llm.EstimateTextTokens(cfg.prompt(promptContextCompactionUpdateSpec))) + 512
-	for _, chunk := range compactionChunks(summarized, event, cfg, threshold-overhead-llm.EstimateTextTokens(body)) {
+	// 每块的预算按当前摘要的长度重新算：摘要逐块变长，后面的块要给它让地方。
+	for remaining := summarized; len(remaining) > 0; {
+		chunk, rest := nextCompactionChunk(remaining, event, cfg, threshold-overhead-llm.EstimateTextTokens(body))
 		next, err := r.summarizeCompactionChunk(ctx, cfg, chunk, body)
 		if err != nil {
 			return nil, "", err
 		}
-		body = next
+		body, remaining = next, rest
 	}
 	summary := joinContextSummary(contextSummaryHeader(start, end, count+len(summarized)), []string{body})
-	r.storeCompaction(event, compactionCheckpoint{Summary: summary, Until: last.Time}, messageHistoryDedupeKey(kept[0]))
+	r.storeCompaction(event, compactionCheckpoint{Summary: summary, Until: last.Time, UntilKey: messageHistoryDedupeKey(last)}, messageHistoryDedupeKey(kept[0]))
 	// 压缩后的上下文和上一轮发出的请求不再同前缀，续接记录作废，下一步整份重新组装。
 	r.appendContexts.put(appendContextKey(event), nil)
 	log.Printf("diana context compaction: reason=%s message_id=%s summarized=%d kept=%d", reason, event.MessageID, len(summarized), len(kept))
@@ -431,26 +470,20 @@ func (r *Runtime) compactContext(ctx context.Context, event MessageEvent, cfg Bo
 	return kept, summary, nil
 }
 
-// compactionChunks 把要摘要的历史按估算体积切成几段文字，每段不超过 budget；单条
-// 超过 budget 的独占一段，不截断。
-func compactionChunks(events []MessageEvent, current MessageEvent, cfg BotConfig, budget int64) []string {
-	budget = max(budget, compactionKeepRecentTokens/4)
-	var chunks []string
-	var pending []MessageEvent
+// nextCompactionChunk 从待摘要的历史开头切出一块写成文字，估算体积不超过 budget；
+// 单条超过 budget 的独占一块，不截断。返回这一块和剩下的历史。
+func nextCompactionChunk(events []MessageEvent, current MessageEvent, cfg BotConfig, budget int64) (string, []MessageEvent) {
 	var size int64
-	for _, item := range events {
-		cost := llm.EstimateTextTokens(compactionTranscript([]MessageEvent{item}, current, cfg))
-		if len(pending) > 0 && size+cost > budget {
-			chunks = append(chunks, compactionTranscript(pending, current, cfg))
-			pending, size = nil, 0
+	end := 0
+	for end < len(events) {
+		cost := llm.EstimateTextTokens(compactionTranscript(events[end:end+1], current, cfg))
+		if end > 0 && size+cost > budget {
+			break
 		}
-		pending = append(pending, item)
 		size += cost
+		end++
 	}
-	if len(pending) > 0 {
-		chunks = append(chunks, compactionTranscript(pending, current, cfg))
-	}
-	return chunks
+	return compactionTranscript(events[:end], current, cfg), events[end:]
 }
 
 // summarizeCompactionChunk 照 Pi 的 generateSummary：对话序列化成纯文本放进
@@ -578,7 +611,7 @@ func (r *Runtime) compactReplyMessages(ctx context.Context, event MessageEvent, 
 		}
 	}
 	nonHistory := estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, registry)) - historyTokens
-	keepRecent := compactionKeepRecent(r.promptContextWindowTokens(event, cfg), nonHistory)
+	keepRecent := compactionKeepRecent(r.promptCompactionWindow(event, cfg), nonHistory)
 	kept, summary, err := r.compactContext(ctx, event, cfg, history, keepRecent, reason)
 	if err != nil {
 		if !errors.Is(err, errNothingToCompact) {
@@ -633,7 +666,7 @@ func (r *Runtime) recordContextCompaction(ctx context.Context, event MessageEven
 // 还有消息时，在开头那条说明里写明没带上多少条、要用 chat_history 查。
 func (r *Runtime) sideContextHistory(event MessageEvent, cfg BotConfig) (llm.Message, []MessageEvent) {
 	history := sessionOnlyHistory(r.promptContextHistory(event, cfg))
-	recent := selectRecentHistoryTurns(history, event, cfg.BotAccount, compactionKeepRecent(r.promptContextWindowTokens(event, cfg), 0))
+	recent := selectRecentHistoryTurns(history, event, cfg.BotAccount, compactionKeepRecent(r.promptCompactionWindow(event, cfg), 0))
 	omitted := len(history) - len(recent)
 	summary := strings.TrimSpace(r.compactionSummary(event))
 	var text string

@@ -53,11 +53,11 @@ func TestCompactionThresholdFollowsPi(t *testing.T) {
 		{window: 0, threshold: llm.DefaultContextWindowTokens - 16384},
 		{window: 8000, threshold: 6000},
 	} {
-		if got := compactionThreshold(item.window); got != item.threshold {
+		if got := compactionThreshold(compactionWindow{Tokens: item.window}); got != item.threshold {
 			t.Fatalf("window %d: threshold = %d, want %d", item.window, got, item.threshold)
 		}
 	}
-	if got := historyCandidateLimit(128000); got != int(111616/minimumHistoryCandidateTokens)+8 {
+	if got := historyCandidateLimit(compactionWindow{Tokens: 128000}); got != int(111616/minimumHistoryCandidateTokens)+8 {
 		t.Fatalf("candidate limit = %d", got)
 	}
 }

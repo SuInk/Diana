@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"sort"
 	"strings"
@@ -20,10 +21,11 @@ import (
 )
 
 const (
-	recentTextReferenceWindow     = 10 * time.Minute
+	recentTextReferenceWindow = 10 * time.Minute
+	// semanticTextReferenceMaxRunes 是「当前消息够短才需要补全话题」的判定门槛，不截
+	// 任何内容：长消息本身就是完整意图，不跑这步。
 	semanticTextReferenceMaxRunes = 32
 	semanticTextReferenceMinScore = 0.9
-	semanticTextReferenceLimit    = 24
 )
 
 var (
@@ -113,11 +115,12 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 		Time      int64  `json:"time"`
 		Route     string `json:"route"`
 	}
-	candidates := make([]candidate, 0, semanticTextReferenceLimit)
+	// 候选不限条数、不截字：会话历史、关键词和语义召回的命中全部交给解析模型。
+	var candidates []candidate
 	seen := map[string]bool{}
 	appendCandidate := func(item MessageEvent, route string) {
 		key := firstNonEmpty(strings.TrimSpace(item.MessageID), fmt.Sprintf("%s:%d:%s", item.UserID, item.Time, historyPlainText(item)))
-		if seen[key] || len(candidates) >= semanticTextReferenceLimit {
+		if seen[key] {
 			return
 		}
 		content := strings.TrimSpace(historyPlainText(item))
@@ -125,9 +128,9 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 			return
 		}
 		seen[key] = true
-		candidates = append(candidates, candidate{MessageID: item.MessageID, Sender: item.SenderNameOrID(), Text: truncateRunes(content, 500), Time: item.Time, Route: route})
+		candidates = append(candidates, candidate{MessageID: item.MessageID, Sender: item.SenderNameOrID(), Text: content, Time: item.Time, Route: route})
 	}
-	for index := len(history) - 1; index >= 0 && len(candidates) < 16; index-- {
+	for index := len(history) - 1; index >= 0; index-- {
 		appendCandidate(history[index], "recent")
 	}
 	// The recent window is only the fast lane. Search the complete same-session
@@ -143,14 +146,11 @@ func (r *Runtime) resolveSemanticTextReference(ctx context.Context, event Messag
 		}
 		for _, query := range queries {
 			searchCtx, stop := context.WithTimeout(ctx, 2*time.Second)
-			matched, _, searchErr := searchStore.SearchMessageEvents(searchCtx, MessageHistorySearchQuery{
+			matched := searchMessageEventPages(searchCtx, searchStore, MessageHistorySearchQuery{
 				Session: sessionKey(event), Text: query, Terms: []string{query},
-				FromTime: 0, ThroughTime: currentTime, Limit: semanticTextReferenceLimit,
+				FromTime: 0, ThroughTime: currentTime,
 			})
 			stop()
-			if searchErr != nil {
-				continue
-			}
 			for _, item := range matched {
 				if strings.TrimSpace(item.MessageID) == strings.TrimSpace(event.MessageID) {
 					continue
@@ -467,4 +467,24 @@ func (r *Runtime) recordRecentTextReference(ctx context.Context, event MessageEv
 		Kind: applog.KindOperation, Level: applog.LevelInfo, Action: "text_reference_resolved",
 		Message: "当前消息文本指代已完成确定性解析", Metadata: metadata,
 	})
+}
+
+// searchMessageEventPages 按 Offset 翻页取回检索命中，直到取完或 ctx 到期。到期时
+// 保留已经取到的那几页，不像单次调用那样整段作废：这一步只是给解析模型找候选。
+func searchMessageEventPages(ctx context.Context, store MessageHistorySearchStore, query MessageHistorySearchQuery) []MessageEvent {
+	var all []MessageEvent
+	for {
+		query.Offset = len(all)
+		page, total, err := store.SearchMessageEvents(ctx, query)
+		if err != nil {
+			if len(all) > 0 {
+				log.Printf("diana semantic text reference: keyword %q stopped after %d of %d hits: %v", query.Text, len(all), total, err)
+			}
+			return all
+		}
+		all = append(all, page...)
+		if len(page) == 0 || len(all) >= total {
+			return all
+		}
+	}
 }
