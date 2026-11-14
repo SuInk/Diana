@@ -849,6 +849,9 @@ type BotConfig struct {
 	ReplySuppressionMaxMinutes int `json:"reply_suppression_max_minutes,omitempty"`
 	// BotReplyLoopThreshold 是 30 分钟内判中几次空转就屏蔽该账号。
 	BotReplyLoopThreshold int `json:"bot_reply_loop_threshold,omitempty"`
+	// ReplyFatigueLimit 是对同一个人的回复疲劳攒到多少算满，满了才问这条还回不回。
+	// 正数原样生效、不设上限；0、负数或没填用默认 1.0，见 reply_fatigue.go。
+	ReplyFatigueLimit float64 `json:"reply_fatigue_limit,omitempty"`
 	// ReplyRefusalThreshold 是 30 分钟内对同一账号拒答几次就屏蔽它。
 	ReplyRefusalThreshold    int   `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled *bool `json:"reply_account_safety_audit_master_enabled,omitempty"`
@@ -1606,6 +1609,7 @@ type ConfigPayload struct {
 	ReplySuppressionMinMinutes     int                  `json:"reply_suppression_min_minutes,omitempty"`
 	ReplySuppressionMaxMinutes     int                  `json:"reply_suppression_max_minutes,omitempty"`
 	BotReplyLoopThreshold          int                  `json:"bot_reply_loop_threshold,omitempty"`
+	ReplyFatigueLimit              float64              `json:"reply_fatigue_limit,omitempty"`
 	ReplyRefusalThreshold          int                  `json:"reply_refusal_threshold,omitempty"`
 	ReplySafetyMasterEnabled       *bool                `json:"reply_account_safety_audit_master_enabled,omitempty"`
 	ReplySafetyPrivateEnabled      *bool                `json:"reply_account_safety_audit_private_enabled,omitempty"`
@@ -2316,6 +2320,7 @@ func DefaultBotConfig() BotConfig {
 		ReplySuppressionMinMinutes:   defaultReplySuppressionMinMinutes,
 		ReplySuppressionMaxMinutes:   defaultReplySuppressionMaxMinutes,
 		BotReplyLoopThreshold:        defaultBotReplyLoopThreshold,
+		ReplyFatigueLimit:            defaultReplyFatigueLimit,
 		ReplyRefusalThreshold:        defaultReplyRefusalThreshold,
 		ReplySafetyMasterEnabled:     boolPointer(true),
 		TelegramRichMessages:         boolPointer(false),
@@ -2493,6 +2498,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	cfg.ReplySuppressionMinMinutes = replySuppressionMinMinutes(cfg)
 	cfg.ReplySuppressionMaxMinutes = replySuppressionMaxMinutes(cfg)
 	cfg.BotReplyLoopThreshold = botReplyLoopThreshold(cfg)
+	cfg.ReplyFatigueLimit = replyFatigueLimit(cfg)
 	cfg.ReplyRefusalThreshold = replyRefusalThreshold(cfg)
 	if cfg.InboundGroupConcurrency <= 0 {
 		cfg.InboundGroupConcurrency = defaults.InboundGroupConcurrency
@@ -2940,6 +2946,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		ReplySuppressionMinMinutes:      cfg.ReplySuppressionMinMinutes,
 		ReplySuppressionMaxMinutes:      cfg.ReplySuppressionMaxMinutes,
 		BotReplyLoopThreshold:           cfg.BotReplyLoopThreshold,
+		ReplyFatigueLimit:               cfg.ReplyFatigueLimit,
 		ReplyRefusalThreshold:           cfg.ReplyRefusalThreshold,
 		InboundGroupConcurrency:         cfg.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       cfg.InboundPrivateConcurrency,
@@ -3198,6 +3205,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		ReplySuppressionMinMinutes:      payload.ReplySuppressionMinMinutes,
 		ReplySuppressionMaxMinutes:      payload.ReplySuppressionMaxMinutes,
 		BotReplyLoopThreshold:           payload.BotReplyLoopThreshold,
+		ReplyFatigueLimit:               payload.ReplyFatigueLimit,
 		ReplyRefusalThreshold:           payload.ReplyRefusalThreshold,
 		InboundGroupConcurrency:         payload.InboundGroupConcurrency,
 		InboundPrivateConcurrency:       payload.InboundPrivateConcurrency,

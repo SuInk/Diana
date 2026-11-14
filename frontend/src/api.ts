@@ -336,6 +336,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_suppression_max_minutes?: number;
   /** 30 分钟内判中几次空转就屏蔽；0 或缺省用默认 3。 */
   bot_reply_loop_threshold?: number;
+  /** 回复疲劳攒到多少算满，满了才问这条还回不回；0 或缺省用默认 1.0，不设上限。 */
+  reply_fatigue_limit?: number;
   /** 30 分钟内拒答几次就屏蔽；0 或缺省用默认 4。 */
   reply_refusal_threshold?: number;
   /** 机器人级账号安全审核总开关；开启后主动和直接回复都审核，关闭后都不审核。 */

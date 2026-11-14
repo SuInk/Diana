@@ -1479,6 +1479,22 @@
                 <span class="hint">同时开启空转检测和回复疲劳。反复聊没新意的内容时，可能跳过单条消息；有新内容、提问或做事可以继续回复。</span>
                 <span class="hint">疲劳不会触发定时暂停；空转累计达标后，由下方开关决定是否暂停。</span>
               </div>
+              <div v-if="form.bot_reply_loop_detection_enabled" class="field">
+                <label for="bot-fatigue-limit">疲劳阈值</label>
+                <input
+                  id="bot-fatigue-limit"
+                  v-model.number="form.reply_fatigue_limit"
+                  class="input"
+                  type="number"
+                  min="0.1"
+                  step="0.1"
+                  inputmode="decimal"
+                />
+                <span class="hint">
+                  对同一个人一轮又长又没新意的来回约涨 0.6，短句和有目的的几乎不涨，随时间消退。攒到阈值才开始判断这条要不要回。默认
+                  {{ defaultReplyFatigueLimit }}，调高更耐聊。
+                </span>
+              </div>
               <div class="field wide">
                 <label class="switch">
                   <input v-model="form.reply_suppression_enabled" type="checkbox" />
@@ -3163,6 +3179,8 @@ const defaultBotReplyLoopThreshold = 3;
 const defaultReplyRefusalThreshold = 4;
 const maximumReplySuppressionMinutes = 24 * 60;
 const maximumReplySuppressionThreshold = 20;
+// 回复疲劳阈值的默认值，和后端 reply_fatigue.go 保持一致；不设上限。
+const defaultReplyFatigueLimit = 1;
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——
@@ -5064,6 +5082,7 @@ function setForm(config: BotProfileConfig): void {
     reply_suppression_min_minutes: config.reply_suppression_min_minutes || defaultReplySuppressionMinMinutes,
     reply_suppression_max_minutes: config.reply_suppression_max_minutes || defaultReplySuppressionMaxMinutes,
     bot_reply_loop_threshold: config.bot_reply_loop_threshold || defaultBotReplyLoopThreshold,
+    reply_fatigue_limit: config.reply_fatigue_limit || defaultReplyFatigueLimit,
     reply_refusal_threshold: config.reply_refusal_threshold || defaultReplyRefusalThreshold,
     reply_account_safety_audit_master_enabled: config.reply_account_safety_audit_master_enabled ?? true,
     reply_account_safety_audit_private_enabled: config.reply_account_safety_audit_private_enabled ?? false,
@@ -5502,6 +5521,7 @@ async function save(): Promise<void> {
       reply_suppression_min_minutes: Math.trunc(Number(current.reply_suppression_min_minutes)) || 0,
       reply_suppression_max_minutes: Math.trunc(Number(current.reply_suppression_max_minutes)) || 0,
       bot_reply_loop_threshold: Math.trunc(Number(current.bot_reply_loop_threshold)) || 0,
+      reply_fatigue_limit: Number(current.reply_fatigue_limit) || 0,
       reply_refusal_threshold: Math.trunc(Number(current.reply_refusal_threshold)) || 0,
       recall_reply_auto_delete_delay_seconds: Number.isInteger(recallDeleteDelay)
         ? recallDeleteDelay

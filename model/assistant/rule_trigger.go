@@ -60,7 +60,7 @@ type ruleChanceFactor struct {
 
 // ruleChatChance 返回这条消息的接话概率（0–1）和起作用的系数。history 是本会话
 // 内存里的近期消息，可以含当前这条，按 MessageID 跳过。
-func ruleChatChance(base int, event MessageEvent, text string, history []MessageEvent, botID string, fatigue float64, now time.Time) (float64, []ruleChanceFactor) {
+func ruleChatChance(base int, event MessageEvent, text string, history []MessageEvent, botID string, fatigue, fatigueLimit float64, now time.Time) (float64, []ruleChanceFactor) {
 	if base <= 0 {
 		return 0, nil
 	}
@@ -129,7 +129,8 @@ func ruleChatChance(base int, event MessageEvent, text string, history []Message
 	}
 
 	if fatigue > 0 {
-		add(fmt.Sprintf("对此人回复疲劳 %.2f", fatigue), 1-0.7*math.Min(1, fatigue))
+		// 按这台机器人的疲劳阈值归一化：攒到阈值时压到底，和触发阶段那道闸一起满。
+		add(fmt.Sprintf("对此人回复疲劳 %.2f", fatigue), 1-0.7*math.Min(1, fatigue/fatigueLimit))
 	}
 
 	chance := float64(base) / 100
@@ -277,7 +278,7 @@ func (r *Runtime) routeRuleReply(candidates []proactiveReplyCandidate, cfg BotCo
 				if index < len(candidates)-1 && (!r.admits(cfg, candidate.Event) || r.replyGateBlocksUser(cfg, candidate.Event)) {
 					continue
 				}
-				chance, factors := ruleChatChance(p.RuleChance, candidate.Event, candidate.Text, history, cfg.BotAccount, r.replyFatigueLevel(candidate.Event, now), now)
+				chance, factors := ruleChatChance(p.RuleChance, candidate.Event, candidate.Text, history, cfg.BotAccount, r.replyFatigueLevel(candidate.Event, now), replyFatigueLimit(cfg), now)
 				if chance > bestChance {
 					best, bestChance, bestFactors = index, chance, factors
 				}
