@@ -277,13 +277,13 @@ func TestResolverPluginDownloadsPlatformVideo(t *testing.T) {
 	if len(resp.ImageURLs) != 0 {
 		t.Fatalf("ImageURLs = %#v", resp.ImageURLs)
 	}
-	if resp.Context != "X 推文" {
+	if resp.Context != "识别：小蓝鸟学习版" {
 		t.Fatalf("Context = %q", resp.Context)
 	}
 	if !resp.Forward || len(resp.ForwardMessages) != 2 {
 		t.Fatalf("forward resp = %#v", resp)
 	}
-	if resp.ForwardMessages[0].Text != "X 推文" {
+	if resp.ForwardMessages[0].Text != "识别：小蓝鸟学习版" {
 		t.Fatalf("meta node = %#v", resp.ForwardMessages[0])
 	}
 	if len(resp.ForwardMessages[1].VideoURLs) != 1 || resp.ForwardMessages[1].VideoURLs[0] != "/tmp/diana-test-video.mp4" {

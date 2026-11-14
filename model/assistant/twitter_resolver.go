@@ -11,9 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -471,40 +469,22 @@ func twitterPostHasContent(post twitterPost) bool {
 	return twitterPostHasStructuredMetadata(post) || len(post.Media) > 0
 }
 
-// twitterContextLabel 只给模型标来源；群里看到的合并转发节点不带这个标签。
-const twitterContextLabel = "[X] "
-
-// twitterThreadMarkerPattern 匹配串推末尾单独一行的「1/4」「(2/3)」这类序号。
-var twitterThreadMarkerPattern = regexp.MustCompile(`\n\s*\(?(\d{1,3})\s*/\s*(\d{1,3})\)?\s*$`)
-
-// twitterMetaText 生成推文的转发节点正文：第一行是作者（串推序号跟在后面），
-// 下面直接接正文。不加「识别：」「作者：」「文案：」这类字段前缀。
-func twitterMetaText(post twitterPost) string {
+func twitterMetaText(nickname string, post twitterPost) string {
+	lines := []string{fmt.Sprintf("%s识别：小蓝鸟学习版", nickname)}
 	name := strings.TrimSpace(post.AuthorName)
 	handle := strings.TrimSpace(post.AuthorHandle)
-	header := name
-	if handle != "" {
-		header = strings.TrimSpace(header + " @" + handle)
-	}
-	text := strings.TrimSpace(post.Text)
-	if match := twitterThreadMarkerPattern.FindStringSubmatchIndex(text); match != nil {
-		index, _ := strconv.Atoi(text[match[2]:match[3]])
-		total, _ := strconv.Atoi(text[match[4]:match[5]])
-		if index >= 1 && index <= total {
-			header = strings.TrimSpace(header + fmt.Sprintf(" · %d/%d", index, total))
-			text = strings.TrimSpace(text[:match[0]])
-		}
-	}
 	switch {
-	case header == "" && text == "":
-		return "X 推文"
-	case header == "":
-		return text
-	case text == "":
-		return header
-	default:
-		return header + "\n" + text
+	case name != "" && handle != "":
+		lines = append(lines, fmt.Sprintf("作者：%s (@%s)", name, handle))
+	case name != "":
+		lines = append(lines, "作者："+name)
+	case handle != "":
+		lines = append(lines, "作者：@"+handle)
 	}
+	if text := strings.TrimSpace(post.Text); text != "" {
+		lines = append(lines, "文案："+text)
+	}
+	return strings.Join(lines, "\n")
 }
 
 type resolverPlatformLevelRule struct {
