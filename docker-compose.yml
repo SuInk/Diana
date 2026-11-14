@@ -23,5 +23,6 @@ services:
       - ./data:/app/data
       # 可选：工作区容器（run_command）。把宿主机上 rootless Docker 的 socket 挂进来就能用，
       # 路径一般是 /run/user/<UID>/docker.sock（rootless 用户的 $XDG_RUNTIME_DIR）。
-      # 只能挂 rootless 的 socket；/var/run/docker.sock 等于宿主 root，Diana 会拒绝使用。
+      # 只挂 rootless 的 socket，最好是专门给它建的宿主用户：挂上后 Diana 容器里的所有代码都能控制那个用户。
+      # Linux 宿主的 /var/run/docker.sock 是 root 守护进程，Diana 会拒绝使用。
       # - /run/user/1000/docker.sock:/run/diana-box/docker.sock

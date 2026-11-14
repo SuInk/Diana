@@ -2129,6 +2129,11 @@
                     详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/workbox.md" target="_blank" rel="noopener">工作区容器说明</a>。
                   </span>
                 </div>
+                <div v-if="boxAccess !== 'off'" class="field">
+                  <label for="agent-box-disk">工作区磁盘上限（MB）</label>
+                  <input id="agent-box-disk" v-model.number="form.agent_box_disk_limit_mb" class="input" inputmode="numeric" placeholder="5120" />
+                  <span class="hint">每个会话的 /work 单独算，包括 /work/.output 里的命令输出，默认 5120（5 GB），最小 100。超过后拒绝继续写入：命令不再执行或被停掉，结果里写明用了多少、怎么清理（box_reset、「清空上下文」或删文件）。</span>
+                </div>
                 <div class="field">
                   <label for="agent-timeout">插件脚本超时（毫秒）</label>
                   <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
@@ -2787,6 +2792,7 @@ async function applyAgentDefaults(): Promise<void> {
     form.value.subtask_max_concurrency = defaults.subtask_max_concurrency;
     form.value.agent_command_timeout_ms = defaults.agent_command_timeout_ms;
     if (defaults.agent_box_access) form.value.agent_box_access = defaults.agent_box_access;
+    if (defaults.agent_box_disk_limit_mb) form.value.agent_box_disk_limit_mb = defaults.agent_box_disk_limit_mb;
     toastSuccess("已填入推荐默认值，点「保存配置」后生效");
   } catch (err) {
     toastError(err instanceof Error ? err.message : String(err));
@@ -5124,6 +5130,7 @@ function setForm(config: BotProfileConfig): void {
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
     agent_box_access: config.agent_box_access ?? 'owner',
+    agent_box_disk_limit_mb: config.agent_box_disk_limit_mb ?? 5120,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_desktop_control_enabled: config.agent_desktop_control_enabled ?? false,

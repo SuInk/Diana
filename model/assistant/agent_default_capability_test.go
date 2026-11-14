@@ -223,3 +223,12 @@ func TestLegacyMemberCommandSwitchMigratesToBoxAccess(t *testing.T) {
 		}
 	}
 }
+
+// 工作区磁盘上限默认 5 GB，太小的值抬到最小值。
+func TestBoxDiskLimitDefaults(t *testing.T) {
+	for in, want := range map[int]int{0: 5120, -1: 5120, 10: 100, 2048: 2048} {
+		if got := (BotConfig{AgentBoxDiskLimitMB: in}).WithDefaults().AgentBoxDiskLimitMB; got != want {
+			t.Fatalf("%d → %d, want %d", in, got, want)
+		}
+	}
+}

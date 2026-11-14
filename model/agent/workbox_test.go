@@ -125,9 +125,14 @@ func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
 	}
 }
 
-// running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间。
+// running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间，再加按 testBoxConfig
+// 起出来的网络模式和资源上限。
 func boxInspectReply(image, id, started string) dockerResult {
-	return dockerResult{stdout: []byte("true " + image + " " + id + " " + started + "\n")}
+	return boxInspectReplyShape(image, id, started, "diana-box 1073741824 2000000000 256")
+}
+
+func boxInspectReplyShape(image, id, started, shape string) dockerResult {
+	return dockerResult{stdout: []byte("true " + image + " " + id + " " + started + " " + shape + "\n")}
 }
 
 func TestBoxEnsureLifecycle(t *testing.T) {
@@ -241,8 +246,72 @@ func TestBoxResetRemovesContainerAndVolume(t *testing.T) {
 	}
 }
 
-func offlineTestBox(fake *fakeDocker) *WorkBox {
-	return newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run, "k")
+func fakeTestBox(fake *fakeDocker) *WorkBox {
+	return newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 2, PIDs: 256, Network: true}, fake.run, "k")
+}
+
+// 部署方改了网络开关或资源上限：旧容器的网络模式、内存、CPU、进程数对不上，删掉重建。
+func TestBoxEnsureRecreatesOnShapeChange(t *testing.T) {
+	for name, shape := range map[string]string{
+		"offline container, networked config": "none 1073741824 2000000000 256",
+		"memory changed":                      "diana-box 536870912 2000000000 256",
+		"cpus changed":                        "diana-box 1073741824 1000000000 256",
+		"pids changed":                        "diana-box 1073741824 2000000000 64",
+	} {
+		fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+			if args[0] == "inspect" {
+				return boxInspectReplyShape(BuiltinBoxImage(), "c1", "s", shape)
+			}
+			return dockerResult{}
+		}}
+		b := newWorkBox(testBoxConfig(), fake.run, "k")
+		_ = b.Ensure(context.Background())
+		if got := fake.verbs(); len(got) < 2 || got[1] != "rm" {
+			t.Fatalf("%s: container must be recreated: %v", name, got)
+		}
+	}
+	if b := newWorkBox(testBoxConfig(), nil, "k"); b.wantShape() != "diana-box 1073741824 2000000000 256" {
+		t.Fatalf("wantShape = %q", b.wantShape())
+	}
+	for in, want := range map[string]int64{"1g": 1 << 30, "512m": 512 << 20, "1.5g": 3 << 29, "2048k": 2 << 20, "100b": 100, "4096": 4096} {
+		if got, ok := parseBoxMemory(in); !ok || got != want {
+			t.Fatalf("parseBoxMemory(%q) = %d %v", in, got, ok)
+		}
+	}
+}
+
+// 宿主写不了 IPv6 规则（防火墙脚本退出 7）：关掉容器里的 IPv6 重建，之后只靠 IPv4 规则。
+func TestBoxFallsBackToIPv4OnlyWithoutIPv6Tables(t *testing.T) {
+	t.Cleanup(func() { boxIPv6Off.Store(false) })
+	running, sysctlRuns := false, 0
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		switch {
+		case args[0] == "inspect":
+			if running {
+				return boxInspectReply(BuiltinBoxImage(), "c1", "s")
+			}
+			return dockerResult{code: 1}
+		case args[0] == "rm":
+			running = false
+		case args[0] == "run" && slices.Contains(args, "--rm"):
+			if !boxIPv6Off.Load() {
+				return dockerResult{code: boxFirewallNoIPv6Tables, stderr: "ip6tables-restore: unable to initialize table 'filter'"}
+			}
+		case args[0] == "run":
+			running = true
+			if slices.Contains(args, "net.ipv6.conf.all.disable_ipv6=1") {
+				sysctlRuns++
+			}
+		}
+		return dockerResult{}
+	}}
+	b := newWorkBox(testBoxConfig(), fake.run, "k")
+	if err := b.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !boxIPv6Off.Load() || sysctlRuns != 1 || b.firewalledFor == "" {
+		t.Fatalf("ipv6Off=%v sysctlRuns=%d firewalled=%q verbs=%v", boxIPv6Off.Load(), sysctlRuns, b.firewalledFor, fake.verbs())
+	}
 }
 
 // 124 才是 timeout 到点；137 可能是命令自己被 OOM 杀掉，不能报成超时。
@@ -254,10 +323,10 @@ func TestBoxExecTimeoutCapAndExitCodes(t *testing.T) {
 			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			if slices.Contains(args, boxExecScript) {
-				if got := args[len(args)-4]; args[len(args)-3] == "sleep 9999" && got != "600" {
+				if got := args[len(args)-6]; args[len(args)-5] == "sleep 9999" && got != "600" {
 					t.Errorf("timeout must be capped at 600s, got %s", got)
 				}
-				if out := args[len(args)-2]; !strings.HasPrefix(out, boxOutputDir+"/") || !strings.HasSuffix(out, ".log") {
+				if out := args[len(args)-4]; !strings.HasPrefix(out, boxOutputDir+"/") || !strings.HasSuffix(out, ".log") {
 					t.Errorf("full output must stay in the box, got %s", out)
 				}
 				return dockerResult{code: code}
@@ -265,7 +334,7 @@ func TestBoxExecTimeoutCapAndExitCodes(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := offlineTestBox(fake)
+	b := fakeTestBox(fake)
 	if res, err := b.Exec(context.Background(), "sleep 9999", time.Hour); err != nil || !res.TimedOut {
 		t.Fatalf("124: res=%+v err=%v", res, err)
 	}
@@ -291,7 +360,7 @@ func TestBoxExecRecreatesVanishedContainerOnce(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	if res, err := offlineTestBox(fake).Exec(context.Background(), "true", 0); err != nil || res.ExitCode != 0 || attempts != 2 {
+	if res, err := fakeTestBox(fake).Exec(context.Background(), "true", 0); err != nil || res.ExitCode != 0 || attempts != 2 {
 		t.Fatalf("res=%+v err=%v attempts=%d", res, err, attempts)
 	}
 }
@@ -307,7 +376,7 @@ func TestBoxOutputTail(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	tail, start, size, lines, err := offlineTestBox(fake).OutputTail(context.Background(), "/work/.output/a.log", 8)
+	tail, start, size, lines, err := fakeTestBox(fake).OutputTail(context.Background(), "/work/.output/a.log", 8)
 	if err != nil || string(tail) != "line-11\n" || start != 92 || size != 100 || lines != 12 {
 		t.Fatalf("tail=%q start=%d size=%d lines=%d err=%v", tail, start, size, lines, err)
 	}
@@ -367,13 +436,13 @@ func TestBoxCopyOutEnforcesLimit(t *testing.T) {
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
-			return dockerResult{stdout: []byte("true x\n")}
+			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			return dockerResult{stdout: []byte("/work/out.png\nPNGDATA")}
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run, "k")
+	b := fakeTestBox(fake)
 	real, data, err := b.CopyOut(context.Background(), "out.png", 1024)
 	if err != nil || real != "/work/out.png" || string(data) != "PNGDATA" {
 		t.Fatalf("real=%q data=%q err=%v", real, data, err)
@@ -445,6 +514,12 @@ func TestBoxRealDocker(t *testing.T) {
 		}
 		return res, string(tail)
 	}
+	// 普通命令要马上返回：后台的磁盘检查不能拖住 docker exec。
+	quick := time.Now()
+	run(`true`, 0)
+	if elapsed := time.Since(quick); elapsed > 10*time.Second {
+		t.Fatalf("a trivial command took %v", elapsed)
+	}
 	if res, out := run(`id -u; env | sort | cut -d= -f1 | tr '\n' ' '; touch /etc/x 2>&1 | head -1`, 0); res.ExitCode != 0 || !strings.HasPrefix(out, "1000\n") || !strings.Contains(out, "Read-only") {
 		t.Fatalf("identity/readonly: %+v %q", res, out)
 	}
@@ -465,6 +540,16 @@ func TestBoxRealDocker(t *testing.T) {
 	}
 	if _, out := run(`ps -eo stat=,args= | grep -v '^Z' | grep -c '[s]leep 300' || true`, 0); strings.TrimSpace(out) != "0" {
 		t.Fatalf("timed-out process group must be killed, sleep count %q", out)
+	}
+	// 调用方取消（比如这一轮被打断）：docker exec 客户端被杀不会结束容器里的进程，
+	// Diana 要按 pid 杀掉整组。
+	cancelCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	if _, err := b.Exec(cancelCtx, `(sleep 301 &) ; sleep 301`, 60*time.Second); err == nil {
+		t.Fatal("cancelled command must return the context error")
+	}
+	cancel()
+	if _, out := run(`ps -eo stat=,args= | grep -v '^Z' | grep -c '[s]leep 301' || true`, 0); strings.TrimSpace(out) != "0" {
+		t.Fatalf("cancelled process group must be killed, sleep count %q", out)
 	}
 	if _, err := b.WriteFile(ctx, "inbox/hello.txt", strings.NewReader("hi")); err != nil {
 		t.Fatal(err)
@@ -488,13 +573,15 @@ func TestBoxRealDocker(t *testing.T) {
 	if _, out := run(`wc -l < `+paged.FullOutputPath, 0); strings.TrimSpace(out) != "300000" {
 		t.Fatalf("full output lines in %q = %q", paged.FullOutputPath, out)
 	}
-	// 完整输出只留最新几份。
+	// 完整输出只留最新几份；还在跑的命令（/tmp/.run-<runID> 在）的那份不删，哪怕它最旧。
+	run(`touch /tmp/.run-stillrunning && touch -d 2000-01-01 /work/.output/20000101-000000-stillrunning.log`, 0)
 	for range boxOutputKeep + 5 {
 		run(`true`, 0)
 	}
-	if _, out := run(`ls /work/.output | wc -l`, 0); strings.TrimSpace(out) != strconv.Itoa(boxOutputKeep) {
-		t.Fatalf("output rotation kept %q files", out)
+	if _, out := run(`ls /work/.output | wc -l; ls /work/.output/20000101-000000-stillrunning.log`, 0); out != strconv.Itoa(boxOutputKeep+1)+"\n/work/.output/20000101-000000-stillrunning.log\n" {
+		t.Fatalf("output rotation: %q", out)
 	}
+	run(`rm -f /tmp/.run-stillrunning`, 0)
 	// 容器被外部重启后网络命名空间是新的：下次使用前必须重写防火墙。
 	if res := docker(ctx, dockerCall{args: []string{"restart", "--time", "1", b.container}, timeout: time.Minute}); res.code != 0 {
 		t.Fatalf("restart: %s", res.stderr)
@@ -504,6 +591,32 @@ func TestBoxRealDocker(t *testing.T) {
 	}
 	if _, err := RunBoxCommand(ctx, b, `echo boom >&2; exit 3`, 0); err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), `"exit_code": 3`) {
 		t.Fatalf("failing command: %v", err)
+	}
+	// 磁盘上限：单个文件被 ulimit -f 截住；几个文件加起来超限时运行中被停掉；之后的
+	// 命令和附件写入都被拒绝，删掉文件就恢复。
+	b.SetDiskLimit(20 << 20)
+	if _, err := b.Exec(ctx, `head -c 30M /dev/zero > /work/big`, 0); err != nil {
+		t.Fatal(err)
+	}
+	b.SetDiskLimit(0)
+	if _, out := run(`stat -c %s /work/big; rm -f /work/big`, 0); func() bool { n, err := strconv.Atoi(strings.TrimSpace(out)); return err != nil || n > 20<<20 }() {
+		t.Fatalf("ulimit -f must cap a single file at the limit, size %q", out)
+	}
+	b.SetDiskLimit(20 << 20)
+	stopped, err := b.Exec(ctx, `for i in 1 2 3; do head -c 9M /dev/zero > /work/f$i; done; sleep 30`, 60*time.Second)
+	if err != nil || stopped.DiskFull == nil || stopped.DiskFull.Refused || stopped.Duration > 20*time.Second {
+		t.Fatalf("over-limit command must be stopped mid-run: %+v %v", stopped, err)
+	}
+	refused, err := b.Exec(ctx, `echo should-not-run > /work/ran`, 0)
+	if err != nil || refused.DiskFull == nil || !refused.DiskFull.Refused {
+		t.Fatalf("command over limit must be refused: %+v %v", refused, err)
+	}
+	if _, err := b.WriteFile(ctx, "inbox/more.txt", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "上限") {
+		t.Fatalf("write over limit: %v", err)
+	}
+	b.SetDiskLimit(0)
+	if _, out := run(`ls /work/ran 2>&1; rm -f /work/f1 /work/f2 /work/f3`, 0); !strings.Contains(out, "No such file") {
+		t.Fatalf("refused command ran: %q", out)
 	}
 	if err := b.Reset(ctx); err != nil {
 		t.Fatal(err)
@@ -592,7 +705,7 @@ func TestBoxIdleActionsRecheckUnderLock(t *testing.T) {
 		calls = append(calls, args[0])
 		return dockerResult{}
 	}}
-	b := offlineTestBox(fake)
+	b := fakeTestBox(fake)
 	b.lastUsed.Store(now.Add(-time.Hour).UnixNano())
 	done := b.use() // 粗筛之后有命令开始了
 	if b.StopIfIdle(context.Background(), now, BoxIdleTimeout) {
@@ -613,5 +726,65 @@ func TestBoxIdleActionsRecheckUnderLock(t *testing.T) {
 	}
 	if reset, err := b.ResetIfIdle(context.Background()); !reset || err != nil {
 		t.Fatalf("idle box was not reset: %v", err)
+	}
+}
+
+// /work 超过磁盘上限：开始前就超的不执行（75 + 标记），运行中超的被停掉（只有标记）；
+// 结果里带上用量和上限。上限按 KiB 传给容器里的脚本。
+func TestBoxExecDiskLimit(t *testing.T) {
+	code, marker := boxDiskRefusedExit, "6291456"
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		switch args[0] {
+		case "inspect":
+			return boxInspectReply("x", "c1", "s")
+		case "exec":
+			if slices.Contains(args, boxExecScript) {
+				if got := args[len(args)-2]; got != "5120" {
+					t.Errorf("limit KiB = %s, want 5120", got)
+				}
+				return dockerResult{code: code}
+			}
+			if slices.Contains(args, boxExecCleanupScript) {
+				return dockerResult{stdout: []byte(marker + "\n")}
+			}
+		}
+		return dockerResult{}
+	}}
+	b := fakeTestBox(fake)
+	b.SetDiskLimit(5 << 20)
+	body, err := RunBoxCommand(context.Background(), b, "git clone huge", 0)
+	if err == nil || body != "" || !strings.Contains(err.Error(), `"used": "6.0 GB"`) || !strings.Contains(err.Error(), `"limit": "5 MB"`) || !strings.Contains(err.Error(), "box_reset") {
+		t.Fatalf("refused: %v", err)
+	}
+	code = 137
+	res, err := b.Exec(context.Background(), "dd", 0)
+	if err != nil || res.DiskFull == nil || res.DiskFull.Refused || res.DiskFull.UsedBytes != 6<<30 || res.TimedOut {
+		t.Fatalf("stopped mid-run: %+v %v", res.DiskFull, err)
+	}
+	marker = ""
+	if res, _ := b.Exec(context.Background(), "true", 0); res.DiskFull != nil {
+		t.Fatal("no marker must mean no disk limit hit")
+	}
+	if b.SetDiskLimit(0); b.diskLimitBytes() != DefaultBoxDiskLimitBytes {
+		t.Fatal("zero limit must fall back to the default")
+	}
+}
+
+func TestBoxWriteFileDiskLimit(t *testing.T) {
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		switch args[0] {
+		case "inspect":
+			return boxInspectReply("x", "c1", "s")
+		case "exec":
+			if slices.Contains(args, boxWriteFileScript) {
+				return dockerResult{code: boxDiskRefusedExit, stdout: []byte("10240\n")}
+			}
+		}
+		return dockerResult{}
+	}}
+	b := fakeTestBox(fake)
+	b.SetDiskLimit(10 << 20)
+	if _, err := b.WriteFile(context.Background(), "inbox/a.bin", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "已用 10 MB") || !strings.Contains(err.Error(), "上限 10 MB") {
+		t.Fatalf("write over limit: %v", err)
 	}
 }

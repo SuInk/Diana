@@ -1874,6 +1874,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       subtask_max_concurrency: 3,
       agent_command_timeout_ms: 10000,
       agent_box_access: "owner",
+      agent_box_disk_limit_mb: 5120,
       agent_box_status: { available: false, reason: "Linux 上工作区容器只用 rootless Docker（见 docs/workbox.md），当前守护进程以 root 运行" },
       agent_safe_mode: demoAgentSafeMode
     });

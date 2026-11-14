@@ -14,7 +14,7 @@ import (
 )
 
 // BoxCommandDescription 是 run_command 在 work box 里的说明，对所有人同一份。
-const BoxCommandDescription = `在工作区容器（Linux，/work 持久保存，可联网）里用 bash 运行命令：git clone、curl 下载、rg/grep 检索、python3/node 跑脚本、ffmpeg/imagemagick 处理文件都在这里做。` +
+const BoxCommandDescription = `在工作区容器（Linux，/work 持久保存但有大小上限，可联网）里用 bash 运行命令：git clone、curl 下载、rg/grep 检索、python3/node 跑脚本、ffmpeg/imagemagick 处理文件都在这里做。` +
 	`pip/npm/uv 装的包落在 /work/.home；聊天附件用 inputs 放进 /work/inbox；要发出去的文件交给 send_file 的 path（写 /work/... 路径）。` +
 	`容器连不到本机和内网，只能访问公网；里面没有任何凭据。不用于网页搜索、计时、提醒和后台驻留，这些有专用工具。`
 
@@ -36,6 +36,10 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 	res, err := b.Exec(ctx, command, timeout)
 	if err != nil {
 		return "", err
+	}
+	if res.DiskFull != nil && res.DiskFull.Refused {
+		body, _ := json.MarshalIndent(map[string]any{"disk_limit_exceeded": boxDiskFields(res.DiskFull), "notice": res.DiskFull.Message()}, "", "  ")
+		return "", errors.New(string(body))
 	}
 	result := map[string]any{
 		"exit_code":   res.ExitCode,
@@ -64,12 +68,21 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 	if page.Truncated {
 		result["notice"], result["full_output_path"] = page.Notice, page.FullOutputPath
 	}
+	if res.DiskFull != nil {
+		// 运行中超限被停掉：输出照给，另外写明用了多少、上限多少、怎么清理。
+		result["disk_limit_exceeded"] = boxDiskFields(res.DiskFull)
+		result["disk_notice"] = res.DiskFull.Message()
+	}
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	if res.ExitCode != 0 {
+	if res.ExitCode != 0 || res.DiskFull != nil {
 		return "", errors.New(string(body))
 	}
 	return string(body), nil
+}
+
+func boxDiskFields(u *BoxDiskUsage) map[string]any {
+	return map[string]any{"used": FormatBoxBytes(u.UsedBytes), "limit": FormatBoxBytes(u.LimitBytes), "used_bytes": u.UsedBytes, "limit_bytes": u.LimitBytes}
 }

@@ -41,6 +41,13 @@ const (
 	BoxAccessAll   = "all"
 )
 
+// DefaultBoxDiskLimitMB 是每个会话 /work 卷的默认上限，minBoxDiskLimitMB 是能设的最小值：
+// 镜像里 pip/npm 缓存和一个中等仓库就要上百 MB，再小就什么都干不了。
+const (
+	DefaultBoxDiskLimitMB = agent.DefaultBoxDiskLimitBytes >> 20
+	minBoxDiskLimitMB     = 100
+)
+
 // NormalizeBoxAccess 把配置值归一到三档；留空和不认识的值按「仅主人」，升级后主人
 // 原来能用的 run_command 继续可用。
 func NormalizeBoxAccess(value string) string {
@@ -84,7 +91,12 @@ func (r *Runtime) boxForEvent(event MessageEvent, owner bool) (*agent.WorkBox, e
 	if !r.boxExposed(event, owner) {
 		return nil, errors.New("工作区容器没有打开，或这台机器上 Docker 不可用")
 	}
-	return agent.BoxFor(r.boxKey(event))
+	workBox, err := agent.BoxFor(r.boxKey(event))
+	if err != nil {
+		return nil, err
+	}
+	workBox.SetDiskLimit(int64(r.effectiveConfigForEvent(event).WithDefaults().AgentBoxDiskLimitMB) << 20)
+	return workBox, nil
 }
 
 type boxCommandTool struct {

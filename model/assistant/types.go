@@ -1034,6 +1034,9 @@ type BotConfig struct {
 	// 默认）、all（所有人共用本会话的容器，照雨夹雪 tools.sandbox）。这台机器没有可用的
 	// 隔离运行时时哪一档都不提供，见 agent.BoxStatus。
 	AgentBoxAccess string `json:"agent_box_access,omitempty"`
+	// AgentBoxDiskLimitMB 是每个会话工作区容器 /work 卷的大小上限（MB），默认 5120。
+	// 超限时拒绝继续写入，见 agent.BoxDiskUsage。
+	AgentBoxDiskLimitMB int `json:"agent_box_disk_limit_mb,omitempty"`
 	// LegacyAgentMemberCommandEnabled 是旧的「群成员可运行命令」，只在加载时读：打开过的
 	// 换算成 AgentBoxAccess=all，随后清空，保存时不再输出。一次性迁移，2026-11-15 加入，
 	// 按迁移保留规则留到 2027-05-15 再删。
@@ -1698,6 +1701,7 @@ type ConfigPayload struct {
 	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
 	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
 	AgentBoxAccess                  string                    `json:"agent_box_access,omitempty"`
+	AgentBoxDiskLimitMB             int                       `json:"agent_box_disk_limit_mb,omitempty"`
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
@@ -2677,6 +2681,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	}
 	cfg.LegacyAgentMemberCommandEnabled = false
 	cfg.AgentBoxAccess = NormalizeBoxAccess(cfg.AgentBoxAccess)
+	if cfg.AgentBoxDiskLimitMB <= 0 {
+		cfg.AgentBoxDiskLimitMB = DefaultBoxDiskLimitMB
+	}
+	cfg.AgentBoxDiskLimitMB = max(cfg.AgentBoxDiskLimitMB, minBoxDiskLimitMB)
 	if cfg.AgentCommandTimeoutMS <= 0 {
 		cfg.AgentCommandTimeoutMS = defaults.AgentCommandTimeoutMS
 	}
@@ -3046,6 +3054,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentCommandSandbox:             cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
 		AgentBoxAccess:                  cfg.AgentBoxAccess,
+		AgentBoxDiskLimitMB:             cfg.AgentBoxDiskLimitMB,
 		AgentFileWriteEnabled:           cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
@@ -3304,6 +3313,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
 		AgentBoxAccess:                  payload.AgentBoxAccess,
+		AgentBoxDiskLimitMB:             payload.AgentBoxDiskLimitMB,
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,

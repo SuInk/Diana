@@ -580,6 +580,7 @@ func (h *BotHandler) agentDefaults(c *gin.Context) {
 		"subtask_max_concurrency":  defaults.SubtaskMaxConcurrency,
 		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,
 		"agent_box_access":         assistant.NormalizeBoxAccess(defaults.AgentBoxAccess),
+		"agent_box_disk_limit_mb":  defaults.WithDefaults().AgentBoxDiskLimitMB,
 		// 工作区容器能不能用是这台机器的事实，设置页据此写明哪一档都不提供的原因。
 		"agent_box_status": agentBoxStatus(),
 		// 安全模式关掉什么由后端那张规则表说了算，界面的说明和确认框照它生成。

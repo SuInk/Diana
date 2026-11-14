@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/netip"
 	"os"
@@ -206,11 +207,25 @@ var (
 // boxFirewallScript 用 iptables-restore 一次性替换整张 filter 表：新规则要么整体生效，
 // 要么不生效，不会像「先清空再逐条追加」那样有一段出站全开的窗口。nat 表不动，Docker
 // 内置 DNS 的转发规则在那里。
+//
+// IPv6：box 的网络命名空间里没有 IPv6 就不写；有 IPv6 但宿主内核没有 ip6tables 能用的表
+// 时退出码 7，Diana 用 --sysctl 关掉容器里的 IPv6 重建，见 boxIPv6Off。
 const boxFirewallScript = `set -e
 PATH=/usr/sbin:/sbin:$PATH
 printf '%s' "$1" | iptables-restore -w
-printf '%s' "$2" | ip6tables-restore -w
+if [ -d /proc/sys/net/ipv6 ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6)" != 1 ]; then
+  printf '%s' "$2" | ip6tables-restore -w || exit 7
+fi
 `
+
+// boxFirewallNoIPv6Tables 是防火墙脚本报「宿主不支持 IPv6 表」的退出码。
+const boxFirewallNoIPv6Tables = 7
+
+// boxIPv6Off 记下这台宿主写不了 IPv6 规则：之后起的 box 都用 sysctl 关掉 IPv6，出站
+// 只剩 IPv4，规则就不再依赖 ip6tables。进程级事实，不会中途变好。
+var boxIPv6Off atomic.Bool
+
+var errBoxNoIPv6Tables = errors.New("宿主内核不支持 IPv6 防火墙表")
 
 // boxFirewallRules 生成 iptables-restore 的输入。
 func boxFirewallRules(rejects []string) string {
@@ -277,6 +292,8 @@ type WorkBox struct {
 	// 它是空的，同样会重写一遍。
 	firewalledFor string
 	running       atomic.Int32
+	// diskLimit 是 /work 的上限（字节），见 SetDiskLimit。
+	diskLimit atomic.Int64
 	// lastUsed 是最近一次用 box 的时间（UnixNano），空闲回收按它判断。
 	lastUsed atomic.Int64
 }
@@ -308,6 +325,9 @@ func (b *WorkBox) runArgs() []string {
 		"--label", boxKeyLabel + "=" + hex.EncodeToString([]byte(b.key)),
 	}
 	args = append(args, boxIsolationArgs(b.cfg.Network, b.volume)...)
+	if b.cfg.Network && boxIPv6Off.Load() {
+		args = append(args, "--sysctl", "net.ipv6.conf.all.disable_ipv6=1", "--sysctl", "net.ipv6.conf.default.disable_ipv6=1")
+	}
 	return append(args,
 		"--tmpfs", "/tmp:rw,nosuid,nodev,size=256m",
 		"--memory", b.cfg.Memory,
@@ -345,11 +365,13 @@ func (b *WorkBox) Ensure(ctx context.Context) error {
 }
 
 // boxInspectFormat 一次取出复用判断要的全部字段。
-const boxInspectFormat = "{{.State.Running}} {{.Config.Image}} {{.Id}} {{.State.StartedAt}}"
+const boxInspectFormat = "{{.State.Running}} {{.Config.Image}} {{.Id}} {{.State.StartedAt}} {{.HostConfig.NetworkMode}} {{.HostConfig.Memory}} {{.HostConfig.NanoCpus}} {{.HostConfig.PidsLimit}}"
 
 type boxContainerState struct {
 	exists, running bool
 	image, identity string
+	// shape 是「网络模式 内存字节 NanoCpus 进程数」，和 wantShape 不一致就重建。
+	shape string
 }
 
 func (b *WorkBox) inspect(ctx context.Context) boxContainerState {
@@ -358,15 +380,63 @@ func (b *WorkBox) inspect(ctx context.Context) boxContainerState {
 		return boxContainerState{}
 	}
 	fields := strings.Fields(string(res.stdout))
-	if len(fields) != 4 {
+	if len(fields) != 8 {
 		return boxContainerState{exists: true}
 	}
-	return boxContainerState{exists: true, running: fields[0] == "true", image: fields[1], identity: fields[2] + "|" + fields[3]}
+	return boxContainerState{exists: true, running: fields[0] == "true", image: fields[1], identity: fields[2] + "|" + fields[3], shape: strings.Join(fields[4:], " ")}
+}
+
+// wantShape 是按当前配置起出来的容器在 inspect 里的样子。部署方改了网络开关或资源
+// 上限，旧容器就对不上：尤其是从断网改成联网，旧的 --network none 容器不能带着
+// 「没写防火墙」的状态继续用，反过来也一样。
+func (b *WorkBox) wantShape() string {
+	network := "none"
+	if b.cfg.Network {
+		network = boxNetworkName
+	}
+	memory, ok := parseBoxMemory(b.cfg.Memory)
+	memoryText := strconv.FormatInt(memory, 10)
+	if !ok {
+		memoryText = "?"
+	}
+	return strings.Join([]string{network, memoryText, strconv.FormatInt(int64(math.Round(b.cfg.CPUs*1e9)), 10), strconv.Itoa(b.cfg.PIDs)}, " ")
+}
+
+// parseBoxMemory 按 docker --memory 的规则解析：数字加可选的 b/k/m/g 单位，1024 进制。
+func parseBoxMemory(value string) (int64, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	unit := int64(1)
+	switch {
+	case strings.HasSuffix(value, "g"):
+		unit, value = 1<<30, strings.TrimSuffix(value, "g")
+	case strings.HasSuffix(value, "m"):
+		unit, value = 1<<20, strings.TrimSuffix(value, "m")
+	case strings.HasSuffix(value, "k"):
+		unit, value = 1<<10, strings.TrimSuffix(value, "k")
+	case strings.HasSuffix(value, "b"):
+		value = strings.TrimSuffix(value, "b")
+	}
+	n, err := strconv.ParseFloat(value, 64)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return int64(n * float64(unit)), true
 }
 
 func (b *WorkBox) start(ctx context.Context) error {
+	for attempt := 0; ; attempt++ {
+		err := b.startOnce(ctx)
+		if !errors.Is(err, errBoxNoIPv6Tables) || attempt > 0 {
+			return err
+		}
+		// 宿主写不了 IPv6 规则：关掉容器里的 IPv6 重建一次。
+		boxIPv6Off.Store(true)
+	}
+}
+
+func (b *WorkBox) startOnce(ctx context.Context) error {
 	state := b.inspect(ctx)
-	if state.running && state.image == b.cfg.Image {
+	if state.running && state.image == b.cfg.Image && state.shape == b.wantShape() {
 		if !b.cfg.Network || b.firewalledFor == state.identity {
 			return nil
 		}
@@ -413,7 +483,11 @@ func (b *WorkBox) applyFirewall(ctx context.Context, identity string) error {
 	if identity == "" {
 		return boxErrorf("工作区容器状态读取失败，没有写防火墙")
 	}
-	if res := b.call(ctx, boxControlTimeout, b.firewallArgs()...); res.code != 0 {
+	res := b.call(ctx, boxControlTimeout, b.firewallArgs()...)
+	if res.code == boxFirewallNoIPv6Tables {
+		return errBoxNoIPv6Tables
+	}
+	if res.code != 0 {
 		return boxErrorf("工作区出站防火墙写入失败：%s", strings.TrimSpace(res.stderr))
 	}
 	b.firewalledFor = identity
@@ -537,6 +611,41 @@ type BoxExecResult struct {
 	TimedOut   bool
 	Duration   time.Duration
 	OutputPath string
+	// DiskFull 不为空时，这条命令因为 /work 超过磁盘上限没有运行（Refused）或被停掉。
+	DiskFull *BoxDiskUsage
+}
+
+// BoxDiskUsage 是 /work 的占用和上限，字节。
+type BoxDiskUsage struct {
+	UsedBytes  int64
+	LimitBytes int64
+	// Refused 表示命令还没开始就被拒绝：开始前已经超过上限。
+	Refused bool
+}
+
+// DefaultBoxDiskLimitBytes 是每个会话 /work 卷的默认上限。
+const DefaultBoxDiskLimitBytes = 5 << 30
+
+// boxDiskCheckInterval 是命令运行中检查 /work 占用的间隔（秒）。
+const boxDiskCheckInterval = 3
+
+// boxDiskRefusedExit 是 /work 已经超限、命令或写入没有进行时的退出码（EX_TEMPFAIL）。
+const boxDiskRefusedExit = 75
+
+// SetDiskLimit 设置这个 box 的 /work 上限（字节），≤0 按默认值。box 按「机器人 × 会话」
+// 分，上限是机器人设置，每次使用前由调用方按当前设置刷新。
+func (b *WorkBox) SetDiskLimit(limit int64) {
+	if limit <= 0 {
+		limit = DefaultBoxDiskLimitBytes
+	}
+	b.diskLimit.Store(limit)
+}
+
+func (b *WorkBox) diskLimitBytes() int64 {
+	if limit := b.diskLimit.Load(); limit > 0 {
+		return limit
+	}
+	return DefaultBoxDiskLimitBytes
 }
 
 // boxOutputKeep 是 /work/.output 里最多留几份完整输出，更早的在下一条命令前删掉。
@@ -546,9 +655,38 @@ const boxOutputKeep = 20
 // 并记下它的 pid：超时由 timeout 自己杀整组；调用方取消时 Diana 照 pid 杀组。docker exec
 // 客户端被杀并不会结束容器里的进程，这一步对应雨夹雪里 pi-env 的取消。输出直接写进
 // 容器里的文件，宿主机这边事后只读尾部窗口。
+//
+// 输出文件名以 runID 结尾；轮转时跳过 /tmp/.run-<runID> 还在的那些，正在跑的命令的
+// 日志不会被删。
+//
+// 磁盘上限（$6，KiB）：Docker 的 local 卷驱动没有通用的大小配额，所以在容器里自己管。
+// 开始前 du 一次，已经超限就不跑（写 /tmp/.diskfull-<runID>、退出 75）；运行中后台每
+// $7 秒 du 一次，超限就杀掉整个进程组并留下同样的标记；ulimit -f 再兜住单个文件（dash
+// 的单位是 512 字节）。/work/.output 在 /work 里，一起算。后台检查不能继承 docker exec
+// 的 stdout：继承了的话客户端要等它关掉才返回，每条命令都会拖到超时。
 const boxExecScript = `mkdir -p /work/.output
-ls -1t /work/.output/*.log 2>/dev/null | tail -n +$5 | xargs -r -d '\n' rm -f --
-echo $$ > "/tmp/.run-$1" && exec timeout --kill-after=5 "$2" bash -c "$3" > "$4" 2>&1`
+ls -1t /work/.output/*.log 2>/dev/null | tail -n +$5 | while IFS= read -r f; do
+  id=${f##*-}; id=${id%.log}
+  [ -e "/tmp/.run-$id" ] || rm -f -- "$f"
+done
+used=$(du -sxk /work 2>/dev/null | cut -f1)
+if [ "${used:-0}" -ge "$6" ]; then echo "$used" > "/tmp/.diskfull-$1"; exit 75; fi
+echo $$ > "/tmp/.run-$1" || exit 1
+( while sleep "$7"; do
+    [ -e "/tmp/.run-$1" ] || exit 0
+    used=$(du -sxk /work 2>/dev/null | cut -f1)
+    if [ "${used:-0}" -gt "$6" ]; then
+      echo "$used" > "/tmp/.diskfull-$1"
+      env kill -KILL -- "-$(cat "/tmp/.run-$1")" 2>/dev/null
+      exit 0
+    fi
+  done ) </dev/null >/dev/null 2>&1 &
+ulimit -f $(( $6 * 2 ))
+exec timeout --kill-after=5 "$2" bash -c "$3" > "$4" 2>&1`
+
+// boxExecCleanupScript 删掉 pid 文件（后台检查随之退出），并把磁盘超限标记里的 KiB 数
+// 打出来（没有就什么都不打）。
+const boxExecCleanupScript = `cat "/tmp/.diskfull-$1" 2>/dev/null; rm -f "/tmp/.run-$1" "/tmp/.diskfull-$1"`
 
 // Exec 在 box 里用 bash 跑 command。
 func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duration) (BoxExecResult, error) {
@@ -556,24 +694,26 @@ func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duratio
 		timeout = BoxCommandDefaultTimeout
 	}
 	timeout = min(timeout, BoxCommandMaxTimeout)
+	limit := b.diskLimitBytes()
+	limitKiB := max(limit>>10, 1)
 	defer b.use()()
 	for attempt := 0; ; attempt++ {
 		if err := b.Ensure(ctx); err != nil {
 			return BoxExecResult{}, err
 		}
 		runID := randomBoxRunID()
-		outputPath := fmt.Sprintf("%s/%s-%s.log", boxOutputDir, time.Now().Format("20060102-150405"), runID[:6])
+		outputPath := fmt.Sprintf("%s/%s-%s.log", boxOutputDir, time.Now().Format("20060102-150405"), runID)
 		start := time.Now()
 		res := b.docker(ctx, dockerCall{
-			args:    []string{"exec", "--workdir", BoxWorkDir, b.container, "/bin/sh", "-c", boxExecScript, "sh", runID, strconv.Itoa(int(timeout / time.Second)), command, outputPath, strconv.Itoa(boxOutputKeep)},
+			args: []string{"exec", "--workdir", BoxWorkDir, b.container, "/bin/sh", "-c", boxExecScript, "sh", runID, strconv.Itoa(int(timeout / time.Second)), command, outputPath,
+				strconv.Itoa(boxOutputKeep), strconv.FormatInt(limitKiB, 10), strconv.Itoa(boxDiskCheckInterval)},
 			timeout: timeout + 15*time.Second,
 		})
 		duration := time.Since(start)
 		if ctx.Err() != nil || res.timedOut {
 			b.killRun(runID)
-		} else {
-			_ = b.call(context.Background(), boxControlTimeout, "exec", b.container, "rm", "-f", "/tmp/.run-"+runID)
 		}
+		cleanup := b.call(context.Background(), boxControlTimeout, "exec", b.container, "/bin/sh", "-c", boxExecCleanupScript, "sh", runID)
 		if err := ctx.Err(); err != nil {
 			return BoxExecResult{}, err
 		}
@@ -584,8 +724,15 @@ func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duratio
 			}
 			return BoxExecResult{}, boxErrorf("工作区容器不可用：%s", strings.TrimSpace(res.stderr))
 		}
-		// 124 是 timeout 到点；137 也可能是命令自己被 OOM 杀掉，不能当成超时。
-		return BoxExecResult{ExitCode: res.code, TimedOut: res.code == 124 || res.timedOut, Duration: duration, OutputPath: outputPath}, nil
+		// 124 是 timeout 到点；137 是被 SIGKILL：到点后 TERM 不理、5 秒后被补杀的也是 137，
+		// 所以耗时到了超时时间的 137 算超时，没到的（比如内存超限被 OOM 杀）不算。
+		result := BoxExecResult{ExitCode: res.code, Duration: duration, OutputPath: outputPath}
+		if usedKiB, err := strconv.ParseInt(strings.TrimSpace(string(cleanup.stdout)), 10, 64); err == nil {
+			result.DiskFull = &BoxDiskUsage{UsedBytes: usedKiB << 10, LimitBytes: limit, Refused: res.code == boxDiskRefusedExit}
+			return result, nil
+		}
+		result.TimedOut = res.code == 124 || res.timedOut || (res.code == 137 && duration >= timeout)
+		return result, nil
 	}
 }
 
@@ -626,7 +773,7 @@ func (b *WorkBox) killRun(runID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), boxControlTimeout)
 	defer cancel()
 	pidFile := "/tmp/.run-" + runID
-	_ = b.call(ctx, boxControlTimeout, "exec", b.container, "/bin/sh", "-c", `p=$(cat "$1" 2>/dev/null) && kill -KILL -- "-$p"; rm -f "$1"`, "sh", pidFile)
+	_ = b.call(ctx, boxControlTimeout, "exec", b.container, "/bin/sh", "-c", `p=$(cat "$1" 2>/dev/null) && env kill -KILL -- "-$p"; rm -f "$1"`, "sh", pidFile)
 }
 
 func boxExecInfraFailure(stderr string) bool {
@@ -678,15 +825,52 @@ func (b *WorkBox) WriteFile(ctx context.Context, p string, data io.Reader) (stri
 	if err := b.Ensure(ctx); err != nil {
 		return "", err
 	}
+	limit := b.diskLimitBytes()
 	res := b.docker(ctx, dockerCall{
-		args:    []string{"exec", "--interactive", b.container, "/bin/sh", "-c", `mkdir -p -- "$(dirname -- "$1")" && cat > "$1"`, "sh", target},
+		args:    []string{"exec", "--interactive", b.container, "/bin/sh", "-c", boxWriteFileScript, "sh", target, strconv.FormatInt(max(limit>>10, 1), 10)},
 		stdin:   data,
 		timeout: boxControlTimeout,
 	})
+	if res.code == boxDiskRefusedExit || (res.code != 0 && strings.Contains(strings.ToLower(res.stderr), "file too large")) {
+		usage := BoxDiskUsage{LimitBytes: limit, Refused: true}
+		if usedKiB, err := strconv.ParseInt(strings.TrimSpace(string(res.stdout)), 10, 64); err == nil {
+			usage.UsedBytes = usedKiB << 10
+		}
+		return "", boxErrorf("%s", usage.Message())
+	}
 	if res.code != 0 {
 		return "", boxErrorf("写入工作区失败：%s", strings.TrimSpace(res.stderr))
 	}
 	return target, nil
+}
+
+// boxWriteFileScript 写文件前看 /work 还剩多少，用 ulimit -f 把这次写入限制在剩余空间内；
+// 已经超限时打出已用 KiB 并退出 75。
+const boxWriteFileScript = `used=$(du -sxk /work 2>/dev/null | cut -f1)
+if [ "${used:-0}" -ge "$2" ]; then echo "$used"; exit 75; fi
+mkdir -p -- "$(dirname -- "$1")" || exit 1
+ulimit -f $(( ($2 - ${used:-0}) * 2 ))
+cat > "$1"`
+
+// Message 是写给模型和用户的超限说明：用了多少、上限多少、怎么清理。
+func (u BoxDiskUsage) Message() string {
+	used := "超过上限"
+	if u.UsedBytes > 0 {
+		used = "已用 " + FormatBoxBytes(u.UsedBytes)
+	}
+	action := "这条命令被停掉了"
+	if u.Refused {
+		action = "这次没有执行"
+	}
+	return fmt.Sprintf("工作区 /work %s，上限 %s，%s。可以用 box_reset（主人发「清空上下文」也会清空）清空工作区，或者先删掉不要的文件（比如 rm -rf 用不上的仓库、/work/.home/.cache）再试。", used, FormatBoxBytes(u.LimitBytes), action)
+}
+
+// FormatBoxBytes 把字节数写成人读的 MB / GB。
+func FormatBoxBytes(n int64) string {
+	if n >= 1<<30 {
+		return strconv.FormatFloat(float64(n)/(1<<30), 'f', 1, 64) + " GB"
+	}
+	return strconv.FormatFloat(float64(n)/(1<<20), 'f', 0, 64) + " MB"
 }
 
 // boxCopyOutScript 先取真实路径再校验仍在 /work 内、是普通文件、不超上限才输出
@@ -896,23 +1080,10 @@ func BoxFor(key string) (*WorkBox, error) {
 	if reason != "" {
 		return nil, boxErrorf("工作区容器不可用：%s", reason)
 	}
-	cfg := BoxConfigFromEnv()
-	// 同一个 key 只能有一个 WorkBox：两个实例各拿各的锁，会交错着建容器、写防火墙。
-	created := newWorkBox(cfg, docker, key)
-	for {
-		value, loaded := boxRegistry.LoadOrStore(key, created)
-		if !loaded {
-			return created, nil
-		}
-		existing := value.(*WorkBox)
-		if existing.cfg == cfg {
-			return existing, nil
-		}
-		// 部署方改了设置：换成新配置的实例；输给并发的替换方时重来一遍取它的。
-		if boxRegistry.CompareAndSwap(key, existing, created) {
-			return created, nil
-		}
-	}
+	// 同一个 key 在进程里只有一个 WorkBox：两个实例各拿各的锁，会交错着建容器、写防火墙。
+	// 所以部署方改了 DIANA_BOX_* 设置要重启 Diana 才生效，已经登记的实例不换。
+	value, _ := boxRegistry.LoadOrStore(key, newWorkBox(BoxConfigFromEnv(), docker, key))
+	return value.(*WorkBox), nil
 }
 
 // ---- 空闲回收 --------------------------------------------------------------------
