@@ -1847,7 +1847,7 @@ code {
   margin-right: -10px;
 }
 
-/* 系统滚动条太粗还带箭头：换成细圆角滑块，平时隐藏，鼠标移进侧栏才浮现。
+/* 系统滚动条太粗还带箭头：换成细圆角滑块，平时隐藏，滚动时才浮现（App.vue 加 .scrolling）。
    Chromium 121+ 设了 scrollbar-width/color 就不再认 ::-webkit-scrollbar，
    所以标准属性只给不支持伪元素的浏览器（Firefox）。 */
 .nav-sections::-webkit-scrollbar {
@@ -1871,8 +1871,7 @@ code {
   background-color: transparent;
 }
 
-.app-sidebar:hover .nav-sections::-webkit-scrollbar-thumb,
-.nav-sections:focus-within::-webkit-scrollbar-thumb {
+.nav-sections.scrolling::-webkit-scrollbar-thumb {
   background-color: var(--border-strong);
 }
 
@@ -1888,8 +1887,7 @@ code {
     transition: scrollbar-color 0.15s ease;
   }
 
-  .app-sidebar:hover .nav-sections,
-  .nav-sections:focus-within {
+  .nav-sections.scrolling {
     scrollbar-color: var(--border-strong) transparent;
   }
 }

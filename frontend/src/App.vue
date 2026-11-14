@@ -66,7 +66,7 @@
         </AppSelect>
       </div>
 
-      <nav class="nav-sections" aria-label="主导航">
+      <nav class="nav-sections" :class="{ scrolling: navScrolling }" aria-label="主导航" @scroll.passive="onNavScroll">
         <div v-for="(section, index) in sections" :key="section.group?.id ?? `plain-${index}`" class="nav-section">
           <p v-if="section.group" class="nav-group-title">{{ section.group.label }}</p>
           <button
@@ -325,6 +325,15 @@ const narrowSidebar = ref(sidebarMedia.matches);
 // 侧栏收起状态记在 localStorage，刷新后保持。
 const COLLAPSE_KEY = "dqb-next:sidebar-collapsed";
 const collapsed = ref(window.localStorage.getItem(COLLAPSE_KEY) === "1");
+
+// 导航滚动条只在滚动时浮现，停下一会儿再隐去。
+const navScrolling = ref(false);
+let navScrollTimer = 0;
+function onNavScroll(): void {
+  navScrolling.value = true;
+  window.clearTimeout(navScrollTimer);
+  navScrollTimer = window.setTimeout(() => (navScrolling.value = false), 800);
+}
 
 function toggleCollapsed(): void {
   collapsed.value = !collapsed.value;
@@ -817,6 +826,7 @@ onBeforeUnmount(() => {
   sidebarMedia.removeEventListener("change", syncSidebarMode);
   window.clearInterval(updateIndicatorTimer);
   window.clearTimeout(backendRetryTimer);
+  window.clearTimeout(navScrollTimer);
 });
 useConfigurationRefresh(["bot"], () => loadBotProfiles());
 useConfigurationRefresh(["bot", "llm"], async () => {
