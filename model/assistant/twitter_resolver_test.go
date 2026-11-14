@@ -143,8 +143,11 @@ func TestResolverTwitterBuildsCaptionedMixedForwardWithMultipleVideos(t *testing
 	if resp == nil || !resp.Handled || !resp.Forward {
 		t.Fatalf("resp = %#v", resp)
 	}
-	if resp.Context != "小助手识别：小蓝鸟学习版\n作者：Diana (@DianaVup)\n文案：今天的完整文案" {
+	if resp.Context != "[X] Diana @DianaVup\n今天的完整文案" {
 		t.Fatalf("Context = %q", resp.Context)
+	}
+	if resp.ForwardMessages[0].Text != "Diana @DianaVup\n今天的完整文案" {
+		t.Fatalf("meta node = %q", resp.ForwardMessages[0].Text)
 	}
 	if len(resp.ImageURLs) != 1 || len(resp.VideoURLs) != 3 {
 		t.Fatalf("images = %#v, videos = %#v", resp.ImageURLs, resp.VideoURLs)
@@ -157,6 +160,36 @@ func TestResolverTwitterBuildsCaptionedMixedForwardWithMultipleVideos(t *testing
 		len(resp.ForwardMessages[3].VideoURLs) != 1 ||
 		len(resp.ForwardMessages[4].VideoURLs) != 1 {
 		t.Fatalf("mixed media order = %#v", resp.ForwardMessages)
+	}
+}
+
+// 推文节点只留「作者 + 正文」，串推末尾单独一行的序号挪到作者行。
+func TestTwitterMetaTextLayout(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		post twitterPost
+		want string
+	}{
+		{
+			name: "thread marker",
+			post: twitterPost{AuthorName: "DeepSeek", AuthorHandle: "deepseek_ai", Text: "🚀 New API\n\n🔗 Demo: https://example.com/demo\n\n1/4"},
+			want: "DeepSeek @deepseek_ai · 1/4\n🚀 New API\n\n🔗 Demo: https://example.com/demo",
+		},
+		{name: "inline fraction kept", post: twitterPost{AuthorHandle: "a", Text: "比分 3/1 结束"}, want: "@a\n比分 3/1 结束"},
+		{name: "invalid marker kept", post: twitterPost{AuthorName: "A", Text: "正文\n5/4"}, want: "A\n正文\n5/4"},
+		{name: "media only", post: twitterPost{}, want: "X 推文"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := twitterMetaText(test.post)
+			if got != test.want {
+				t.Fatalf("twitterMetaText() = %q, want %q", got, test.want)
+			}
+			for _, banned := range []string{"识别：", "作者：", "文案："} {
+				if strings.Contains(got, banned) {
+					t.Fatalf("排版里不该出现 %q：%q", banned, got)
+				}
+			}
+		})
 	}
 }
 
@@ -317,7 +350,7 @@ func TestRuntimeLowLevelTwitterMentionIsSilentWithoutLLM(t *testing.T) {
 	}
 	channel := &recordingChannel{}
 	llmCalls := 0
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, enableResolverForTest(NewPluginManager(plugin)), nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls++
 		return &capturingLLMProvider{reply: "不应回复"}, nil
 	})

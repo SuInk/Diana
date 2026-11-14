@@ -17,9 +17,9 @@ const platformOptions = [
 ];
 
 export const resolverDemoManifest: PluginManifest & { can_ask_agent: boolean } = {
-  id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.12",
+  id: "official.nonebot-plugin-resolver-go", name: "链接解析", version: "0.3.13",
   description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书、抖音、微博和小黑盒的图片或视频，展开 X 站内长文正文，并读取 GitHub 仓库、Issue 和 PR 的正文摘要，并解析微博和小黑盒帖子的图文与视频。",
-  official: true, built_in: true, can_ask_agent: true,
+  official: true, built_in: true, default_disabled: true, can_ask_agent: true,
   permissions: ["network:http", "message:read", "message:write", "filesystem:temp", "process:media"],
   settings: [
     { key: "ask_agent", label: "允许 Agent 回复", description: "允许链接解析结果主动进入正式 Agent 回复流程；关闭后仍会解析和发送确定性结果。", type: "bool", default: true },
@@ -38,7 +38,7 @@ export const resolverDemoManifest: PluginManifest & { can_ask_agent: boolean } =
     { key: "timeout_seconds", label: "单链接抓取超时", description: "抓取单个网页标题的最长等待时间。", type: "number", default: 20, min: 2, max: 120, step: 1, unit: "秒" },
     { key: "browser_render", label: "浏览器渲染兜底", description: "直接抓取拿不到内容时，用本机 Chrome（CDP）渲染页面提取标题和摘要，可利用浏览器里的登录态；需要 Chrome 以 --remote-debugging-port 启动。", type: "bool", default: false },
     { key: "browser_cdp_url", label: "Chrome CDP 地址", description: "浏览器渲染兜底连接的 DevTools 地址。", type: "string", default: "http://127.0.0.1:9222" },
-    { key: "enabled_platforms", label: "启用平台", description: "勾选的平台会解析链接并进入模型上下文，默认全部启用。关闭平台只停止解析，不清除登录凭据；凭据可提前配置并独立检测。", type: "multi_select", default: platformOptions.map(option => option.value), options: platformOptions },
+    { key: "enabled_platforms", label: "启用平台", description: "勾选的平台会解析链接并进入模型上下文，默认启用除 GitHub 外的全部平台。关闭平台只停止解析，不清除登录凭据；凭据可提前配置并独立检测。", type: "multi_select", default: platformOptions.map(option => option.value).filter(value => value !== "github"), options: platformOptions },
     { key: "summary_max_runes", label: "摘要长度上限", description: "喂给模型的单条摘要最大字数。", type: "number", default: 140, min: 60, max: 400, step: 10, unit: "字" },
     { key: "cache_ttl_minutes", label: "解析缓存时长", description: "同一链接在缓存有效期内不重复抓取；0 表示关闭缓存。", type: "number", default: 10, min: 0, max: 120, step: 1, unit: "分钟" },
     { key: "user_agent", label: "抓取 User-Agent", description: "直接抓取网页时使用的 UA，留空使用内置 Chrome UA。", type: "string", default: "" },

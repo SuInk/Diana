@@ -231,8 +231,9 @@ func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, 
 	if !ok {
 		return p.resolveTwitterLegacy(ctx, req, raw)
 	}
-	metaText := twitterMetaText(resolverNickname(), post)
-	nodes := []OutgoingMessage{{Text: metaText}}
+	nodeText := twitterMetaText(post)
+	nodes := []OutgoingMessage{{Text: nodeText}}
+	metaText := twitterContextLabel + nodeText
 	// 附带长文的推文在这条路上同样要把正文展开，两条路的可见结果必须一致。
 	if articleText := twitterPostArticleText(post, raw); articleText != "" {
 		nodes = append(nodes, OutgoingMessage{Text: articleText})
@@ -248,7 +249,7 @@ func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, 
 }
 
 func (p *ResolverPlugin) resolveTwitterLegacy(ctx context.Context, req PluginRequest, raw string) resolverPlatformResult {
-	metaText := fmt.Sprintf("%s识别：小蓝鸟学习版", resolverNickname())
+	metaText := "X 推文"
 	if videoPath := p.downloadResolverVideo(ctx, req, raw); videoPath != "" {
 		return resolverPlatformResult{Context: metaText, VideoURLs: []string{videoPath}, ForwardMessages: []OutgoingMessage{{Text: metaText}, {VideoURLs: []string{videoPath}}}}
 	}

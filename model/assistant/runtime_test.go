@@ -583,7 +583,7 @@ func waitForSignal(t *testing.T, signal <-chan struct{}) {
 }
 
 func TestRuntimeShouldHandleKnownPlatformURLWhenResolverEnabled(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, enableResolverForTest(NewDefaultPluginManager()), nil, nil, nil, nil)
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "看这个 https://www.bilibili.com/video/BV1xx411c7mD") {
 		t.Fatal("known platform url should trigger resolver")
 	}
@@ -3538,7 +3538,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}
@@ -3588,7 +3588,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		t.Fatalf("forward nodes = %#v", calls[0].params["messages"])
 	}
 	firstContent := forwardNodeContent(t, nodes[0])
-	if !messageSegmentsContainText(firstContent, "识别：小蓝鸟学习版") {
+	if !messageSegmentsContainText(firstContent, "X 推文") {
 		t.Fatalf("first forward node = %#v", nodes[0])
 	}
 	if !messageSegmentsContainType(forwardNodeContent(t, nodes[1]), "video") {
@@ -3597,7 +3597,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	// recordingChannel 在 Call 开始时记下请求；发送返回后才写回复历史，必须等到后者完成。
 	waitForCondition(t, time.Second, func() bool {
 		for _, item := range runtime.contextHistory(event) {
-			if item.MessageID == "42" && strings.Contains(item.RawMessage, "识别：小蓝鸟学习版") && eventHasSegmentType(item, "video") {
+			if item.MessageID == "42" && strings.Contains(item.RawMessage, "X 推文") && eventHasSegmentType(item, "video") {
 				return true
 			}
 		}
@@ -3609,7 +3609,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 	}
 	var recordedForward bool
 	for _, item := range history {
-		if item.MessageID == "42" && strings.Contains(item.RawMessage, "识别：小蓝鸟学习版") && eventHasSegmentType(item, "video") {
+		if item.MessageID == "42" && strings.Contains(item.RawMessage, "X 推文") && eventHasSegmentType(item, "video") {
 			recordedForward = true
 		}
 	}
@@ -3637,7 +3637,7 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-private-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}
@@ -3703,7 +3703,7 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-mentioned-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}

@@ -828,7 +828,7 @@ func TestReplyToBotTriggersReplyDirectly(t *testing.T) {
 }
 
 func TestRuntimeAssignsInboundPriorities(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, enableResolverForTest(NewDefaultPluginManager()), nil, nil, nil, nil)
 	tests := []struct {
 		name  string
 		event MessageEvent

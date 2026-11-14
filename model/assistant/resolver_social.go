@@ -326,7 +326,7 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		return p.resolveTwitterProfile(ctx, req, raw, handle)
 	}
 	if p.videoDownloader != nil && p.twitterPostFetcher == nil && p.twitterMediaDownloader == nil {
-		result := resolverSocialResult{Handled: true, Context: fmt.Sprintf("%s识别：小蓝鸟学习版", resolverNickname())}
+		result := resolverSocialResult{Handled: true, Context: "X 推文"}
 		return p.attachDownloadedVideo(ctx, req, raw, "x", result)
 	}
 	fetchPost := p.twitterPostFetcher
@@ -337,8 +337,9 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 	if !ok {
 		return p.resolveYTDLPMedia(ctx, req, raw, "X / Twitter")
 	}
-	metaText := twitterMetaText(resolverNickname(), post)
-	nodes := []OutgoingMessage{{Text: metaText}}
+	nodeText := twitterMetaText(post)
+	nodes := []OutgoingMessage{{Text: nodeText}}
+	metaText := twitterContextLabel + nodeText
 	// 推文只放了一个长文链接时，正文全在 article 里；不展开的话群里只能看到一个光链接。
 	if articleText := twitterPostArticleText(post, raw); articleText != "" {
 		nodes = append(nodes, OutgoingMessage{Text: articleText})
@@ -350,9 +351,9 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		if text == "" {
 			continue
 		}
-		label := fmt.Sprintf("作者补充 %d：%s", index+1, text)
-		nodes = append(nodes, OutgoingMessage{Text: label})
-		metaText += "\n\n" + label
+		// 作者的后续推文各占一个转发节点，节点本身就是分隔，不再加「作者补充 N：」。
+		nodes = append(nodes, OutgoingMessage{Text: text})
+		metaText += "\n\n" + fmt.Sprintf("作者补充 %d：%s", index+1, text)
 		post.Media = append(post.Media, reply.Media...)
 	}
 	post.Media = dedupeTwitterMedia(post.Media)

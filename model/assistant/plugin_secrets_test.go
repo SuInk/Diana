@@ -12,7 +12,18 @@ import (
 
 func resolverManager(t *testing.T) *PluginManager {
 	t.Helper()
-	return NewPluginManager(NewResolverPlugin(nil))
+	return enableResolverForTest(NewPluginManager(NewResolverPlugin(nil)))
+}
+
+// enableResolverForTest 打开链接解析的全局默认开关。链接解析默认关闭，
+// 不关心开关本身的测试用它拿到生效设置、触发解析。
+func enableResolverForTest(m *PluginManager) *PluginManager {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.states[resolverPluginID]
+	state.Enabled = true
+	m.states[resolverPluginID] = state
+	return m
 }
 
 // 凭据明文绝不能出现在读接口里。

@@ -236,7 +236,7 @@ func TestDefaultPluginManagerIncludesRepositoryWatch(t *testing.T) {
 	if !enabled || plugin == nil || settings.Int(repositoryWatchSettingTimeout, 0) != repositoryWatchDefaultTimeoutSeconds {
 		t.Fatalf("plugin=%T settings=%#v enabled=%v", plugin, settings, enabled)
 	}
-	if !manager.CanAskAgent(repositoryWatchPluginID, nil, nil) || !manager.CanAskAgent(resolverPluginID, nil, nil) {
+	if !manager.CanAskAgent(repositoryWatchPluginID, nil, nil) || !manager.CanAskAgent(resolverPluginID, map[string]bool{resolverPluginID: true}, nil) {
 		t.Fatal("repository watch and resolver must opt into Agent replies")
 	}
 	if manager.CanAskAgent(messageHistoryPluginID, nil, nil) {

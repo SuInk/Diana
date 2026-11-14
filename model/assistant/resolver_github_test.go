@@ -53,7 +53,7 @@ func TestFormatGitHubRepo(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := formatGitHubRepo(repo)
-	for _, want := range []string{"[GitHub] acme/widget（已归档）", "A small widget toolkit", "★ 1200", "Fork 34", "Go", "MIT", "话题：cli、toolkit", "最近推送：2026-09-30"} {
+	for _, want := range []string{"acme/widget · 已归档\nA small widget toolkit\n★ 1200 · Fork 34 · Go · MIT · 2026-09-30 更新\n#cli #toolkit"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("repo text missing %q:\n%s", want, got)
 		}
@@ -67,7 +67,7 @@ func TestFormatGitHubIssueAndPull(t *testing.T) {
 	}
 	target := githubTarget{Kind: githubTargetIssue, Owner: "acme", Repo: "widget", Number: 9}
 	got := formatGitHubIssue(target, issue)
-	for _, want := range []string{"[GitHub Issue] acme/widget#9 Crash on empty input", "已关闭（不计划处理）", "作者 alice", "3 条评论", "标签：bug、help wanted", "steps: 1. run it 2. boom"} {
+	for _, want := range []string{"acme/widget#9 · Issue · 不计划处理\nCrash on empty input\n@alice · 2026-08-01 · 3 条评论\n🏷 bug · help wanted\n\nsteps:\n\n1. run it\n2. boom"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("issue text missing %q:\n%s", want, got)
 		}
@@ -78,9 +78,25 @@ func TestFormatGitHubIssueAndPull(t *testing.T) {
 		t.Fatal(err)
 	}
 	got = formatGitHubPull(githubTarget{Kind: githubTargetPull, Owner: "acme", Repo: "widget", Number: 10}, pull)
-	for _, want := range []string{"[GitHub PR] acme/widget#10 Fix crash", "已合并", "作者 bob", "fix-crash → main · 3 个文件 +10 −2"} {
+	for _, want := range []string{"acme/widget#10 · PR · 已合并\nFix crash\n@bob · 2026-09-01 · 1 条评论\nfix-crash → main · 3 个文件 +10 −2"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("pull text missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// 排版里不出现字段前缀和来源标签；PR 模板注释去掉、段落保留、多余空行压缩。
+func TestGitHubLayoutHasNoFieldPrefixes(t *testing.T) {
+	issue := githubIssueInfo{Title: "t", State: "open", User: githubUser{Login: "a"}, Labels: []struct {
+		Name string `json:"name"`
+	}{{Name: "bug"}}, Body: "<!-- 模板说明 -->\r\n## 改动\r\n\r\n\r\n\r\n- 一  \r\n- 二"}
+	got := formatGitHubIssue(githubTarget{Kind: githubTargetIssue, Owner: "a", Repo: "b", Number: 1}, issue)
+	if !strings.HasSuffix(got, "\n\n## 改动\n\n- 一\n- 二") {
+		t.Fatalf("body layout = %q", got)
+	}
+	for _, banned := range []string{"[GitHub", "标签：", "话题：", "作者 ", "<!--", "0 条评论"} {
+		if strings.Contains(got, banned) {
+			t.Fatalf("排版里不该出现 %q：%q", banned, got)
 		}
 	}
 }

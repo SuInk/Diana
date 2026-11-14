@@ -76,6 +76,12 @@ func TestPluginProfileSettingsHTTPAndPersistence(t *testing.T) {
 	if restored.MigrateProfileConfigurations([]assistant.BotConfig{{ID: "a"}, {ID: "b"}, {ID: "new"}}) {
 		t.Fatal("SQLite migration marker lost")
 	}
+	// 链接解析默认关闭，机器人要先打开才拿得到生效设置。
+	for _, profile := range []string{"a", "new"} {
+		if _, err := restored.SetEnabledForProfile(id, profile, true); err != nil {
+			t.Fatal(err)
+		}
+	}
 	_, newSettings, _ := restored.PluginWithSettingsForProfile(id, "new")
 	if newSettings.String("douyin_cookie", "") != "test-secret-a" || newSettings.Int("max_images", 0) != 8 {
 		t.Fatal("new profile inherited settings")

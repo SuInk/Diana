@@ -162,7 +162,8 @@ func (p *ResolverPlugin) resolveGitHubMedia(ctx context.Context, req PluginReque
 		recordResolverMediaLog(ctx, req, raw, "github", false, "github api unavailable")
 		return result
 	}
-	result.Context = text
+	result.Context = githubContextLabel + text
+	result.ForwardMessages = []OutgoingMessage{{Text: text}}
 	result.ResourceKeys = []string{target.resourceKey()}
 	recordResolverMediaLog(ctx, req, raw, "github", true, "")
 	return result
@@ -192,32 +193,37 @@ func fetchGitHubText(ctx context.Context, target githubTarget) (string, bool) {
 	return formatGitHubRepo(repo), true
 }
 
+// GitHub 的转发节点只放「标题行 + 一行概况 + 正文」，不加「话题：」「标签：」
+// 这类字段前缀；来源标签 [GitHub] 只放在给模型的上下文里。
+const githubContextLabel = "[GitHub] "
+
 func formatGitHubRepo(repo githubRepoInfo) string {
-	var lines []string
-	title := "[GitHub] " + repo.FullName
+	title := []string{repo.FullName}
 	if repo.Archived {
-		title += "（已归档）"
+		title = append(title, "已归档")
 	}
 	if repo.Fork {
-		title += "（Fork）"
+		title = append(title, "Fork")
 	}
-	lines = append(lines, title)
+	lines := []string{strings.Join(title, " · ")}
 	if description := strings.TrimSpace(repo.Description); description != "" {
 		lines = append(lines, truncateRunes(description, githubDescriptionRuns))
 	}
-	stats := []string{fmt.Sprintf("★ %d", repo.StargazersCount), fmt.Sprintf("Fork %d", repo.ForksCount), fmt.Sprintf("开放 Issue/PR %d", repo.OpenIssuesCount)}
+	stats := []string{fmt.Sprintf("★ %d", repo.StargazersCount), fmt.Sprintf("Fork %d", repo.ForksCount)}
 	if repo.Language != "" {
 		stats = append(stats, repo.Language)
 	}
 	if repo.License != nil {
-		stats = append(stats, firstNonEmpty(repo.License.SPDXID, repo.License.Name))
+		if license := firstNonEmpty(repo.License.SPDXID, repo.License.Name); license != "" && license != "NOASSERTION" {
+			stats = append(stats, license)
+		}
+	}
+	if day := githubDay(repo.PushedAt); day != "" {
+		stats = append(stats, day+" 更新")
 	}
 	lines = append(lines, strings.Join(stats, " · "))
 	if topics := limitStrings(repo.Topics, githubTopicsMaxCount); len(topics) > 0 {
-		lines = append(lines, "话题："+strings.Join(topics, "、"))
-	}
-	if day := githubDay(repo.PushedAt); day != "" {
-		lines = append(lines, "最近推送："+day)
+		lines = append(lines, "#"+strings.Join(topics, " #"))
 	}
 	return strings.Join(lines, "\n")
 }
@@ -227,7 +233,7 @@ func formatGitHubIssue(target githubTarget, issue githubIssueInfo) string {
 	if issue.State == "closed" {
 		state = "已关闭"
 		if issue.StateReason == "not_planned" {
-			state = "已关闭（不计划处理）"
+			state = "不计划处理"
 		}
 	}
 	return githubThreadText("Issue", target, issue, state, "")
@@ -248,16 +254,23 @@ func formatGitHubPull(target githubTarget, pull githubPullInfo) string {
 }
 
 func githubThreadText(label string, target githubTarget, issue githubIssueInfo, state, extra string) string {
-	lines := []string{fmt.Sprintf("[GitHub %s] %s/%s#%d %s", label, target.Owner, target.Repo, target.Number, strings.TrimSpace(issue.Title))}
-	meta := []string{state}
-	if issue.User.Login != "" {
-		meta = append(meta, "作者 "+issue.User.Login)
+	lines := []string{
+		fmt.Sprintf("%s/%s#%d · %s · %s", target.Owner, target.Repo, target.Number, label, state),
+		strings.TrimSpace(issue.Title),
 	}
-	meta = append(meta, fmt.Sprintf("%d 条评论", issue.Comments))
+	meta := make([]string, 0, 3)
+	if issue.User.Login != "" {
+		meta = append(meta, "@"+issue.User.Login)
+	}
 	if day := githubDay(issue.CreatedAt); day != "" {
 		meta = append(meta, day)
 	}
-	lines = append(lines, strings.Join(meta, " · "))
+	if issue.Comments > 0 {
+		meta = append(meta, fmt.Sprintf("%d 条评论", issue.Comments))
+	}
+	if len(meta) > 0 {
+		lines = append(lines, strings.Join(meta, " · "))
+	}
 	if extra != "" {
 		lines = append(lines, extra)
 	}
@@ -268,12 +281,30 @@ func githubThreadText(label string, target githubTarget, issue githubIssueInfo, 
 		}
 	}
 	if labels = limitStrings(labels, githubLabelsMaxCount); len(labels) > 0 {
-		lines = append(lines, "标签："+strings.Join(labels, "、"))
+		lines = append(lines, "🏷 "+strings.Join(labels, " · "))
 	}
-	if body := strings.TrimSpace(issue.Body); body != "" {
-		lines = append(lines, truncateRunes(compactWhitespace(body), githubBodyMaxRunes))
+	if body := githubBodyText(issue.Body); body != "" {
+		lines = append(lines, "", truncateRunes(body, githubBodyMaxRunes))
 	}
 	return strings.Join(lines, "\n")
+}
+
+var (
+	githubHTMLCommentPattern = regexp.MustCompile(`(?s)<!--.*?-->`)
+	githubBlankLinesPattern  = regexp.MustCompile(`\n[ \t]*(\n[ \t]*)+`)
+)
+
+// githubBodyText 保留正文的段落和列表换行：去掉 PR 模板里的 HTML 注释，
+// 连续空行压成一个，行尾空白去掉。
+func githubBodyText(body string) string {
+	body = strings.ReplaceAll(body, "\r\n", "\n")
+	body = githubHTMLCommentPattern.ReplaceAllString(body, "")
+	lines := strings.Split(body, "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(line, " \t")
+	}
+	body = githubBlankLinesPattern.ReplaceAllString(strings.Join(lines, "\n"), "\n\n")
+	return strings.TrimSpace(body)
 }
 
 // githubDay 取 RFC3339 时间戳的日期部分。
