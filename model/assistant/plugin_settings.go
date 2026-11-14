@@ -359,7 +359,7 @@ func normalizeSettingValue(spec PluginSettingSpec, raw any) (any, error) {
 	case PluginSettingTypeSize:
 		number, ok := numberValue(raw)
 		if !ok {
-			return nil, fmt.Errorf("qqbot: setting %q expects a size in bytes", spec.Key)
+			return nil, fmt.Errorf("plugin setting %q expects a size in bytes", spec.Key)
 		}
 		if spec.Min != nil && number < *spec.Min {
 			number = *spec.Min

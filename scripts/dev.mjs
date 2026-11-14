@@ -54,7 +54,6 @@ async function main() {
       BACKEND_HOST: backendHost,
       HOST: backendHost,
       PORT: String(backendPort),
-      QQBOT_GROUP_TEST_ENABLED: envOr("QQBOT_GROUP_TEST_ENABLED", "true"),
     },
   });
 
