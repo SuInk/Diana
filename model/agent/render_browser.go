@@ -240,6 +240,33 @@ type SandboxedBrowserConfig struct {
 	// 失败才起本地浏览器。截图不受影响。FetchEndpoint 只给测试替换地址用。
 	FetchAPIKey   string
 	FetchEndpoint string
+	// PageFetchers 是按顺序试的快速读取接口（TinyFish、DeepSeek），都失败才起本地浏览器。
+	// 非空时取代 FetchAPIKey；顺序由调用方按搜索路由排好。
+	PageFetchers []PageFetchSource
+}
+
+// 快速读取接口的种类。
+const (
+	PageFetchTinyFish = "tinyfish"
+	PageFetchDeepSeek = "deepseek"
+)
+
+// PageFetchSource 是一个读网页的 fetch 接口。Endpoint 留空用该服务的官方地址。
+type PageFetchSource struct {
+	Kind     string
+	APIKey   string
+	Endpoint string
+}
+
+// pageFetchers 返回这次要按顺序试的 fetch 接口：没给列表时沿用 FetchAPIKey（TinyFish）。
+func (cfg SandboxedBrowserConfig) pageFetchers() []PageFetchSource {
+	if len(cfg.PageFetchers) > 0 {
+		return cfg.PageFetchers
+	}
+	if strings.TrimSpace(cfg.FetchAPIKey) != "" {
+		return []PageFetchSource{{Kind: PageFetchTinyFish, APIKey: cfg.FetchAPIKey, Endpoint: cfg.FetchEndpoint}}
+	}
+	return nil
 }
 
 // SandboxedBrowser starts a fresh Chrome/Chromium profile for every render.
@@ -277,15 +304,26 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 	// 渲染时间。
 	forceBrowser := renderEngineFromContext(ctx) == RenderEngineBrowser
 	var fetchErr error
-	if sourceErr == nil && !forceBrowser && strings.TrimSpace(b.cfg.FetchAPIKey) != "" {
-		page, err := fetchTinyFishPage(ctx, b.cfg.FetchAPIKey, b.cfg.FetchEndpoint, rawURL, b.cfg.MaxTextChars)
-		if err == nil {
-			return page, nil
+	if sourceErr == nil && !forceBrowser {
+		for _, source := range b.cfg.pageFetchers() {
+			var page RenderedPage
+			var err error
+			switch source.Kind {
+			case PageFetchTinyFish:
+				page, err = fetchTinyFishPage(ctx, source.APIKey, source.Endpoint, rawURL, b.cfg.MaxTextChars)
+			case PageFetchDeepSeek:
+				page, err = fetchDeepSeekPage(ctx, source.APIKey, source.Endpoint, rawURL, b.cfg.MaxTextChars)
+			default:
+				continue
+			}
+			if err == nil {
+				return page, nil
+			}
+			if ctx.Err() != nil {
+				return RenderedPage{}, err
+			}
+			fetchErr = errors.Join(fetchErr, err)
 		}
-		if ctx.Err() != nil {
-			return RenderedPage{}, err
-		}
-		fetchErr = err
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

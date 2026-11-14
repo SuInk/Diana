@@ -288,6 +288,34 @@ func TestImageOCRHTTPBackendParsesPaddleStyleResponse(t *testing.T) {
 	}
 }
 
+func TestImageOCRDeepSeekBackendUploadsImage(t *testing.T) {
+	var gotPath, gotAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotPath, gotAuth = req.URL.Path, req.Header.Get("Authorization")
+		if req.FormValue("purpose") != "text_recognition" {
+			t.Errorf("purpose = %q", req.FormValue("purpose"))
+		}
+		if _, header, err := req.FormFile("file"); err != nil || header.Filename != "image.png" {
+			t.Errorf("file = %v %v", header, err)
+		}
+		_, _ = w.Write([]byte(`{"pages":[{"index":0,"text":"<｜ref｜>截图文字<｜/ref｜><｜det｜>[[1, 2, 3, 4]]<｜/det｜>","finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	provider := &imageOCRFakeProvider{response: "不该被调用"}
+	runtime := newImageOCRTestRuntime(t, provider, map[string]any{
+		"backend": imageOCRBackendDeepSeek, "http_endpoint": server.URL, "http_api_key": "sk-deepseek",
+	})
+	imageURL := "data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("png-bytes"))
+	notice := runtime.imageOCRContextText(context.Background(), MessageEvent{Kind: EventKindGroup}, imageOCRTestMessage(imageURL))
+	if !strings.Contains(notice, "截图文字") || strings.Contains(notice, "det") {
+		t.Fatalf("notice = %q", notice)
+	}
+	if gotPath != "/v1/tools/ocr" || gotAuth != "Bearer sk-deepseek" || provider.calls.Load() != 0 {
+		t.Fatalf("path=%q auth=%q llm calls=%d", gotPath, gotAuth, provider.calls.Load())
+	}
+}
+
 // RapidOCR 风格（rec_txt 字段）的响应同样能解。
 func TestImageOCRHTTPBackendParsesRecTxtFields(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

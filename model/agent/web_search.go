@@ -670,6 +670,10 @@ func normalizeWebSearchProviders(providers []webSearchProviderConfig) ([]webSear
 			if provider.URL == "" {
 				provider.URL = "https://api.search.brave.com/res/v1/web/search"
 			}
+		case "deepseek":
+			if provider.URL == "" {
+				provider.URL = DeepSeekSearchURL
+			}
 		case WebSearchProviderSearchEngine:
 			// Tool 是引擎名（google、bing……），URL 默认取引擎自己的搜索地址；
 			// 自定义引擎的 URL 是带 {query} 的搜索地址模板。
@@ -756,6 +760,8 @@ func (t *WebSearchTool) runProvider(ctx context.Context, provider webSearchProvi
 		return t.runTinyFish(ctx, provider, query, apiKey)
 	case "brave":
 		return t.runBrave(ctx, provider, query, apiKey)
+	case "deepseek":
+		return t.runDeepSeekSearch(ctx, provider, query, apiKey)
 	case "http":
 		return t.runHTTPSearch(ctx, provider, query, apiKey)
 	case WebSearchProviderSearchEngine:
@@ -1171,6 +1177,52 @@ func (t *WebSearchTool) runTinyFish(ctx context.Context, provider webSearchProvi
 		hits = append(hits, searchAPIHit{Title: item.Title, URL: item.URL, Content: item.Snippet})
 	}
 	return formatSearchAPIHits("TinyFish", hits)
+}
+
+// DeepSeekSearchURL 是 DeepSeek 工具 API 的搜索接口，读网页的 fetch 接口在同一路径下。
+const DeepSeekSearchURL = "https://api.deepseek.com/v1/tools/search"
+
+// runDeepSeekSearch 调 DeepSeek 的 /v1/tools/search。结果里的 summary 是给模型读的
+// 600～800 字摘要，比 100～200 字的 snippet 信息多，优先交给模型；条数上限 50。
+// 语言、站点、时间范围靠查询里的 lang:、site:、after: 操作符，不另设参数。
+func (t *WebSearchTool) runDeepSeekSearch(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
+	if apiKey == "" {
+		return "", errors.New("DeepSeek API key is missing")
+	}
+	if runes := []rune(query); len(runes) > 128 {
+		query = string(runes[:128])
+	}
+	body, err := json.Marshal(map[string]any{"query": query, "count": min(max(provider.MaxResults, 1), 50)})
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.URL, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+	var result struct {
+		Results []struct {
+			Title   string  `json:"title"`
+			URL     string  `json:"url"`
+			Snippet string  `json:"snippet"`
+			Summary string  `json:"summary"`
+			Date    *string `json:"date"`
+		} `json:"results"`
+	}
+	if err := t.doSearchAPI(req, "DeepSeek Search", &result); err != nil {
+		return "", err
+	}
+	hits := make([]searchAPIHit, 0, len(result.Results))
+	for _, item := range result.Results {
+		hit := searchAPIHit{Title: item.Title, URL: item.URL, Content: firstNonEmpty(strings.TrimSpace(item.Summary), item.Snippet)}
+		if item.Date != nil {
+			hit.PublishedDate = *item.Date
+		}
+		hits = append(hits, hit)
+	}
+	return formatSearchAPIHits("DeepSeek Search", hits)
 }
 
 // Brave 用 <strong> 标出命中词，原样交给模型只是噪音。

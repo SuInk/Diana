@@ -36,6 +36,9 @@ const (
 	imageOCRBackendLLM      = "llm"
 	imageOCRBackendLocal    = "local"
 	imageOCRBackendHTTP     = "http"
+	// imageOCRBackendDeepSeek 走 DeepSeek 的 OCR 接口（/v1/tools/ocr），Key 填在
+	// http_api_key，地址留空用官方地址。
+	imageOCRBackendDeepSeek = "deepseek"
 	// 交付方式：默认图片和识别文字一起给对话模型；「仅文字」把图片从消息里
 	// 摘掉、换成识别文本，让不支持看图的对话模型也能处理图片消息（消息里没
 	// 有图片后也不会再切到 vision 分组）。
@@ -82,8 +85,8 @@ func NewImageOCRPlugin(client *http.Client) *ImageOCRPlugin {
 
 func (p *ImageOCRPlugin) Manifest() PluginManifest {
 	return PluginManifest{
-		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.1",
-		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走提供商配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，或本地 tesseract 命令，后两者完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
+		ID: imageOCRPluginID, Name: "图片文字识别", Version: "0.1.2",
+		Description: "聊天图片进入上下文前先做一次文字转写（OCR），识别结果随图片一起交给对话模型；对话模型读图上文字能力弱时可作补充。转写可走提供商配置里的 vision 分组、自托管的 PaddleOCR/RapidOCR 等传统 OCR 服务，DeepSeek OCR 接口，或本地 tesseract 命令，自托管服务和本地命令完全离线。对话模型不支持看图时，可把交付方式改为「仅识别文字」：图片不再交给对话模型，改为 vision 分组的画面描述加 OCR 文字（两者可各自开关，组合或单用）。识别结果按图片内容哈希缓存并落库，同一张图或表情包在不同人、不同群、重启之后都只识别一次。",
 		Official:    true, BuiltIn: true,
 		Permissions: []string{"message:read", "llm:generate"},
 		Settings: []PluginSettingSpec{
@@ -91,6 +94,7 @@ func (p *ImageOCRPlugin) Manifest() PluginManifest {
 				{Value: imageOCRBackendDisabled, Label: "关闭"},
 				{Value: imageOCRBackendLLM, Label: "LLM 视觉转写（vision 分组）"},
 				{Value: imageOCRBackendHTTP, Label: "OCR 服务接口（PaddleOCR/RapidOCR 等，离线）"},
+				{Value: imageOCRBackendDeepSeek, Label: "DeepSeek OCR 接口（按页计费）"},
 				{Value: imageOCRBackendLocal, Label: "本地命令（tesseract 等，离线）"},
 			}},
 			{Key: "delivery", Label: "图片交付方式", Type: PluginSettingTypeSelect, Default: imageOCRDeliveryAttach, Options: []PluginSettingOption{
@@ -99,8 +103,8 @@ func (p *ImageOCRPlugin) Manifest() PluginManifest {
 			}},
 			{Key: "describe_enabled", Label: "仅文字模式下补充画面描述（vision 分组模型）", Type: PluginSettingTypeBool, Default: true},
 			{Key: "model", Label: "指定模型", Type: PluginSettingTypeString, Default: ""},
-			{Key: "http_endpoint", Label: "OCR 服务地址", Type: PluginSettingTypeString, Default: ""},
-			{Key: "http_api_key", Label: "OCR 服务 API Key", Type: PluginSettingTypeString, Default: "", Secret: true},
+			{Key: "http_endpoint", Label: "OCR 服务地址", Description: "OCR 服务接口必填；DeepSeek OCR 留空用 https://api.deepseek.com。", Type: PluginSettingTypeString, Default: ""},
+			{Key: "http_api_key", Label: "OCR 服务 API Key", Description: "DeepSeek OCR 填 DeepSeek 的 API Key，和对话用的是同一个。", Type: PluginSettingTypeString, Default: "", Secret: true},
 			{Key: "local_command", Label: "本地命令", Type: PluginSettingTypeString, Default: "tesseract"},
 			{Key: "local_languages", Label: "本地识别语言", Type: PluginSettingTypeString, Default: "chi_sim+eng"},
 			{Key: "max_images", Label: "单条消息转写图片数上限", Type: PluginSettingTypeNumber, Default: 3, Min: settingRange(1), Max: settingRange(6), Step: 1},
@@ -130,7 +134,11 @@ type imageOCRConfig struct {
 
 // ocrEnabled 表示配置了可用的文字转写后端。
 func (cfg imageOCRConfig) ocrEnabled() bool {
-	return cfg.Backend == imageOCRBackendLLM || cfg.Backend == imageOCRBackendLocal || cfg.Backend == imageOCRBackendHTTP
+	switch cfg.Backend {
+	case imageOCRBackendLLM, imageOCRBackendLocal, imageOCRBackendHTTP, imageOCRBackendDeepSeek:
+		return true
+	}
+	return false
 }
 
 func (cfg imageOCRConfig) textOnly() bool {
@@ -412,17 +420,20 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	var text string
 	var err error
 	switch cfg.Backend {
-	case imageOCRBackendLocal, imageOCRBackendHTTP:
-		// 插件的超时设置只管本地和 HTTP 后端；走模型时受模型请求的单次上限约束，
-		// 不再另套一层。
+	case imageOCRBackendLocal, imageOCRBackendHTTP, imageOCRBackendDeepSeek:
+		// 插件的超时设置只管本地、HTTP 和 DeepSeek 后端；走模型时受模型请求的单次
+		// 上限约束，不再另套一层。
 		timeout := cfg.Timeout
 		if timeout <= 0 {
 			timeout = 90 * time.Second
 		}
 		callCtx, cancel := context.WithTimeout(ctx, timeout)
-		if cfg.Backend == imageOCRBackendLocal {
+		switch cfg.Backend {
+		case imageOCRBackendLocal:
 			text, err = localImageOCRTranscription(callCtx, cfg, imageURL)
-		} else {
+		case imageOCRBackendDeepSeek:
+			text, err = plugin.deepSeekImageOCRTranscription(callCtx, cfg, imageURL)
+		default:
 			text, err = plugin.httpImageOCRTranscription(callCtx, cfg, imageURL)
 		}
 		cancel()
@@ -436,7 +447,7 @@ func (r *Runtime) transcribeContextImage(ctx context.Context, event MessageEvent
 	// 走 vision 分组时，模型拿不到图不会报错，而是回一句「没收到图片」。它和转写结果
 	// 一样是 200，缓存下来同一张图就永远是这个答案，理由见 vision_refusal.go。本地和
 	// HTTP OCR 后端的输出是图里的原文，截图里恰好有这句话时不该误判，所以只查 LLM 后端。
-	if cfg.Backend != imageOCRBackendLocal && cfg.Backend != imageOCRBackendHTTP && VisionDescriptionRefused(text) {
+	if cfg.Backend == imageOCRBackendLLM && VisionDescriptionRefused(text) {
 		log.Printf("diana image ocr: vision model received no image, skipping cache: %s", truncateRunes(text, 60))
 		return ""
 	}
@@ -605,6 +616,28 @@ func (p *ImageOCRPlugin) httpImageOCRTranscription(ctx context.Context, cfg imag
 	var texts []string
 	collectOCRTexts(parsed, &texts)
 	// 收不到任何文字字段按「无可辨文字」处理：不少服务对空图就是返回空结果。
+	return strings.Join(texts, "\n"), nil
+}
+
+// deepSeekImageOCRTranscription 把图片传给 DeepSeek OCR，逐页文字按顺序拼起来。
+func (p *ImageOCRPlugin) deepSeekImageOCRTranscription(ctx context.Context, cfg imageOCRConfig, imageURL string) (string, error) {
+	if cfg.HTTPAPIKey == "" {
+		return "", errors.New("image ocr: deepseek api key is empty")
+	}
+	data, ext, err := imageOCRDataURLBytes(imageURL)
+	if err != nil {
+		return "", err
+	}
+	pages, err := llm.DeepSeekOCR(ctx, llm.ProviderConfig{APIKey: cfg.HTTPAPIKey, BaseURL: cfg.HTTPEndpoint}, llm.DeepSeekOCRRequest{Data: data, Filename: "image" + ext}, llm.WithHTTPClient(p.client))
+	if err != nil {
+		return "", err
+	}
+	texts := make([]string, 0, len(pages))
+	for _, page := range pages {
+		if page.Text != "" {
+			texts = append(texts, page.Text)
+		}
+	}
 	return strings.Join(texts, "\n"), nil
 }
 

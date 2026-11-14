@@ -44,7 +44,7 @@ func TestDocumentOCRTaskUsesParallelPageSubagentsAndFinalCall(t *testing.T) {
 	t.Setenv("DIANA_OCR_RENDER_CONCURRENCY", "3")
 	renderer := &fakePDFRenderer{pages: 3}
 	document := scannedPDFDocument{Name: "scan.pdf", Data: []byte("unique scanned pdf")}
-	task := newDocumentOCRTask(renderer, "这份文件讲了什么", []scannedPDFDocument{document}, "")
+	task := newDocumentOCRTask(renderer, "这份文件讲了什么", []scannedPDFDocument{document}, "", nil)
 
 	var calls atomic.Int64
 	var active atomic.Int64
@@ -160,6 +160,56 @@ func TestWASMPDFRendererExtractsTextLayer(t *testing.T) {
 	}
 }
 
+func TestDocumentOCRTaskPrefersRemoteOCRAndFallsBack(t *testing.T) {
+	t.Setenv("DIANA_OCR_CACHE_DIR", t.TempDir())
+	t.Setenv("DIANA_OCR_MAX_PAGES_PER_FILE", "2")
+	var finalPrompt string
+	var imageCalls atomic.Int64
+	services := PluginTaskServices{
+		Generate: func(_ context.Context, req llm.GenerateRequest) (string, error) {
+			if requestContainsImage(req) {
+				imageCalls.Add(1)
+				return "视觉转写", nil
+			}
+			finalPrompt = req.Messages[len(req.Messages)-1].Content
+			return "回答", nil
+		},
+	}
+	remote := func(_ context.Context, document scannedPDFDocument) ([]string, error) {
+		if document.Name == "broken.pdf" {
+			return nil, fmt.Errorf("service busy")
+		}
+		return []string{"远程第一页", "", "远程第三页"}, nil
+	}
+	task := newDocumentOCRTask(&fakePDFRenderer{pages: 1}, "讲了什么", []scannedPDFDocument{{Name: "scan.pdf", Data: []byte("remote ok")}}, "", remote)
+	if _, err := task.Run(context.Background(), services); err != nil {
+		t.Fatal(err)
+	}
+	if imageCalls.Load() != 0 || !strings.Contains(finalPrompt, "远程第一页") || !strings.Contains(finalPrompt, imageOCRNoTextMarker) || strings.Contains(finalPrompt, "远程第三页") {
+		t.Fatalf("image calls=%d prompt=%q", imageCalls.Load(), finalPrompt)
+	}
+	task = newDocumentOCRTask(&fakePDFRenderer{pages: 1}, "讲了什么", []scannedPDFDocument{{Name: "broken.pdf", Data: []byte("remote broken")}}, "", remote)
+	if _, err := task.Run(context.Background(), services); err != nil {
+		t.Fatal(err)
+	}
+	if imageCalls.Load() == 0 && !strings.Contains(finalPrompt, "视觉转写") && nativeMacPDFHelperPath() == "" {
+		t.Fatalf("remote failure did not fall back, prompt=%q", finalPrompt)
+	}
+}
+
+func TestFileParserRemoteOCROnlyWhenDeepSeekSelected(t *testing.T) {
+	plugin := NewFileParserPlugin(nil)
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingDeepSeekAPIKey: "sk"}) != nil {
+		t.Fatal("default backend must not use DeepSeek")
+	}
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingScannedOCR: fileParserScannedOCRDeepSeek}) != nil {
+		t.Fatal("DeepSeek without key must fall back to local OCR")
+	}
+	if plugin.fileParserRemoteOCR(SettingValues{fileParserSettingScannedOCR: fileParserScannedOCRDeepSeek, fileParserSettingDeepSeekAPIKey: "sk"}) == nil {
+		t.Fatal("DeepSeek with key must be used")
+	}
+}
+
 func requestContainsImage(req llm.GenerateRequest) bool {
 	for _, message := range req.Messages {
 		for _, part := range message.Parts {
@@ -251,4 +301,23 @@ func pdfRenderTestContext(t *testing.T) (context.Context, context.CancelFunc) {
 		return context.WithDeadline(context.Background(), deadline)
 	}
 	return context.WithDeadline(context.Background(), deadline.Add(-time.Until(deadline)/10))
+}
+
+// 读网页的 fetch 接口跟着搜索路由的顺序走，路由外、停用、没 Key 的不用。
+func TestPageFetchSourcesFollowSearchRouteOrder(t *testing.T) {
+	providers := `[{"id":"tf","name":"TinyFish","type":"tinyfish","url":"https://api.search.tinyfish.ai"},` +
+		`{"id":"ds","name":"DeepSeek","type":"deepseek","url":"https://proxy.example/v1/tools/search"},` +
+		`{"id":"ds-off","name":"DeepSeek 2","type":"deepseek","disabled":true},` +
+		`{"id":"ds-nokey","name":"DeepSeek 3","type":"deepseek"},` +
+		`{"id":"tv","name":"Tavily","type":"tavily"}]`
+	keys := `{"tf":"tf-key","ds":"ds-key","ds-off":"x","tv":"tv-key"}`
+	settings := SettingValues{searchProvidersSetting: providers, searchProviderKeysSetting: keys, searchProviderOrderSetting: `["tv","ds","ds-off","ds-nokey","tf"]`}
+	sources := pageFetchSources(settings)
+	if len(sources) != 2 || sources[0].Kind != "deepseek" || sources[0].APIKey != "ds-key" || sources[0].Endpoint != "https://proxy.example/v1/tools/fetch" || sources[1].Kind != "tinyfish" || sources[1].APIKey != "tf-key" {
+		t.Fatalf("sources = %#v", sources)
+	}
+	settings[searchProviderOrderSetting] = `["tv","ds"]`
+	if sources := pageFetchSources(settings); len(sources) != 1 || sources[0].Kind != "deepseek" {
+		t.Fatalf("route without TinyFish: %#v", sources)
+	}
 }

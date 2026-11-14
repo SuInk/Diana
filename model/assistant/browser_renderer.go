@@ -20,9 +20,9 @@ const defaultBrowserRenderURLLimit = 2
 type BuiltInBrowserRenderer struct {
 	renderer agent.PageRenderer
 	maxURLs  int
-	// fetchAPIKey 是搜索设置里的 TinyFish key：有它就先走 fetch 接口读网页，
-	// 失败才起本地浏览器。
-	fetchAPIKey string
+	// fetchers 是按搜索路由排好序的快速读取接口（TinyFish、DeepSeek）：依次试，
+	// 都失败才起本地浏览器。
+	fetchers []agent.PageFetchSource
 }
 
 // NewBuiltInBrowserRenderer creates Diana's disposable-browser renderer.
@@ -39,39 +39,45 @@ func (p *BuiltInBrowserRenderer) rendererFor() agent.PageRenderer {
 		return p.renderer
 	}
 	// 复用常驻进程：每页仍在独立的隐身上下文里开、用完即销毁，省掉每次 1～2 秒的
-	// Chrome 启动；进程起不来时自动退回一次性浏览器。配了 TinyFish 时先走 fetch 接口，
-	// 失败才用到这里的浏览器。
-	return agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true, FetchAPIKey: p.fetchAPIKey})
+	// Chrome 启动；进程起不来时自动退回一次性浏览器。配了 fetch 接口时先走接口，
+	// 都失败才用到这里的浏览器。
+	return agent.NewSandboxedBrowser(agent.SandboxedBrowserConfig{Window: agent.BrowserWindowHidden, ReuseProcess: true, PageFetchers: p.fetchers})
 }
 
-// builtInBrowserRenderer 是这一轮用的内置网页读取：搜索设置里配了 TinyFish 且没停用时，
-// 读网页走它的 fetch 接口。
+// builtInBrowserRenderer 是这一轮用的内置网页读取：搜索路由里能读网页的来源按路由
+// 顺序先试，见 pageFetchSources。
 func (r *Runtime) builtInBrowserRenderer(event MessageEvent) *BuiltInBrowserRenderer {
 	renderer := NewBuiltInBrowserRenderer()
-	renderer.fetchAPIKey = r.tinyFishFetchKey(event)
+	if r != nil && r.plugins != nil {
+		if _, settings, ok := r.plugins.PluginWithSettingsForGroup(webSearchPluginID, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event)); ok {
+			renderer.fetchers = pageFetchSources(settings)
+		}
+	}
 	return renderer
 }
 
-// tinyFishFetchKey 从搜索插件的设置里取 TinyFish key。搜索插件没开、来源列表里把
-// TinyFish 停用了、或者没填 key，都返回空串，读网页照旧走本地浏览器。
-func (r *Runtime) tinyFishFetchKey(event MessageEvent) string {
-	if r == nil || r.plugins == nil {
-		return ""
-	}
-	_, settings, ok := r.plugins.PluginWithSettingsForGroup(webSearchPluginID, r.pluginOverridesForEvent(event), r.pluginSettingOverridesForEvent(event))
-	if !ok {
-		return ""
-	}
-	providers, keys, err := searchProviderCatalog(settings)
+// pageFetchSources 决定读网页先试哪些 fetch 接口、什么顺序。能读网页的搜索来源
+// （TinyFish、DeepSeek）跟着这次生效的搜索路由走：路由里排在前面的先试，路由里关掉的、
+// 来源列表里停用的、没填 Key 的都跳过，所以在搜索设置里调来源顺序就同时调了读网页的顺序。
+func pageFetchSources(settings SettingValues) []agent.PageFetchSource {
+	providers, keys, err := orderedSearchProviders(settings)
 	if err != nil {
-		return ""
+		return nil
 	}
+	var sources []agent.PageFetchSource
 	for _, provider := range providers {
-		if provider.ID == "tinyfish" && provider.Disabled {
-			return ""
+		key := strings.TrimSpace(keys[provider.Name])
+		if key == "" {
+			continue
+		}
+		switch provider.Type {
+		case "tinyfish":
+			sources = append(sources, agent.PageFetchSource{Kind: agent.PageFetchTinyFish, APIKey: key})
+		case "deepseek":
+			sources = append(sources, agent.PageFetchSource{Kind: agent.PageFetchDeepSeek, APIKey: key, Endpoint: agent.DeepSeekFetchURLFor(firstNonEmpty(provider.URL, agent.DeepSeekSearchURL))})
 		}
 	}
-	return strings.TrimSpace(keys["tinyfish"])
+	return sources
 }
 
 func (p *BuiltInBrowserRenderer) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {

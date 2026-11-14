@@ -9,6 +9,7 @@ export const searchProviderTypes = [
   { value: "perplexity", label: "Perplexity Search API", hint: "Perplexity 原始网页搜索结果" },
   { value: "tinyfish", label: "TinyFish Search API", hint: "TinyFish 结构化网页搜索" },
   { value: "brave", label: "Brave Search API", hint: "Brave 独立索引的网页搜索" },
+  { value: "deepseek", label: "DeepSeek Search API", hint: "DeepSeek 工具 API 的网页搜索，也用来读网页" },
   { value: "http", label: "自定义 HTTP API", hint: "GET / POST JSON 接口，可映射结果字段" },
   { value: "search_mcp", label: "自定义搜索 MCP", hint: "指定搜索工具和参数名称" },
   { value: "browser", label: "浏览器搜索", hint: "用隔离浏览器读取搜索结果，需要 Chrome / Chromium" }
@@ -27,6 +28,7 @@ export const searchProviderTemplates: SearchProviderTemplate[] = [
   { id: "tavily", label: "Tavily", hint: "需要 API Key，有免费额度", provider: { name: "Tavily", type: "tavily", ...searchProviderPreset("tavily") } },
   { id: "brave", label: "Brave Search", hint: "需要订阅令牌，独立索引", provider: { name: "Brave Search", type: "brave", ...searchProviderPreset("brave") } },
   { id: "perplexity", label: "Perplexity", hint: "需要 API Key，按次计费", provider: { name: "Perplexity", type: "perplexity", ...searchProviderPreset("perplexity") } },
+  { id: "deepseek", label: "DeepSeek", hint: "需要 API Key，读网页也走它", provider: { name: "DeepSeek", type: "deepseek", ...searchProviderPreset("deepseek") } },
   { id: "tinyfish", label: "TinyFish", hint: "需要 API Key，结构化结果", provider: { name: "TinyFish", type: "tinyfish", ...searchProviderPreset("tinyfish") } },
   { id: "browser-google", label: "Google（浏览器）", hint: "隔离 Chrome 读取，无需密钥", provider: { name: "Google", type: "browser", url: "https://www.google.com/search", tool: "google", query_param: "q", results_param: "" } },
   { id: "browser-bing", label: "Bing（浏览器）", hint: "隔离 Chrome 读取，无需密钥", provider: { name: "Bing", type: "browser", url: "https://www.bing.com/search", tool: "bing", query_param: "q", results_param: "" } },
@@ -39,7 +41,7 @@ export function searchProviderFromTemplate(template: SearchProviderTemplate): Se
 }
 
 export function searchProviderNeedsKey(provider: SearchProvider): boolean {
-  return ["tavily", "perplexity", "tinyfish", "brave"].includes(provider.type) || provider.type === "http" && (provider.http_config?.auth_type ?? "none") !== "none";
+  return ["tavily", "perplexity", "tinyfish", "brave", "deepseek"].includes(provider.type) || provider.type === "http" && (provider.http_config?.auth_type ?? "none") !== "none";
 }
 
 // 列表与路由面板共用的密钥状态；浏览器方式没有密钥，返回空串。
@@ -62,6 +64,7 @@ export function searchProviderPreset(type: SearchProvider["type"]): Partial<Sear
   if (type === "tavily") return { url: "https://api.tavily.com/search", tool: "", query_param: "", results_param: "" };
   if (type === "perplexity") return { url: "https://api.perplexity.ai/search", tool: "", query_param: "", results_param: "" };
   if (type === "tinyfish") return { url: "https://api.search.tinyfish.ai", tool: "", query_param: "", results_param: "" };
+  if (type === "deepseek") return { url: "https://api.deepseek.com/v1/tools/search", tool: "", query_param: "", results_param: "" };
   if (type === "brave") return { url: "https://api.search.brave.com/res/v1/web/search", tool: "", query_param: "", results_param: "" };
   if (type === "browser") return { url: "https://www.google.com/search", tool: "", query_param: "q", results_param: "" };
   if (type === "http") return { url: "", tool: "", query_param: "query", results_param: "count", http_config: { method: "POST", auth_type: "none", title_path: "title" } };
@@ -79,6 +82,7 @@ export function searchProviderKeyHint(provider: SearchProvider): string {
   if (provider.type === "tavily") return "需要 Tavily API Key；新账号可使用服务商提供的免费额度，额度以账户为准。";
   if (provider.type === "perplexity") return "需要 Perplexity API Key（pplx- 开头），按次计费。";
   if (provider.type === "tinyfish") return "需要 TinyFish API Key（X-API-Key），在 agent.tinyfish.ai 控制台获取。";
+  if (provider.type === "deepseek") return "填 DeepSeek 的 API Key，和对话用的是同一个；搜索和读网页各按次计费。读网页按搜索路由里的顺序先试它，失败再用本地浏览器。";
   if (provider.type === "brave") return "需要 Brave Search API 订阅令牌，免费档额度以账户为准。";
   if (provider.type === "http" && provider.http_config?.auth_type === "none") return "当前不发送认证请求头；需要在请求参数传密钥时，可在固定参数里使用 {api_key}。";
   return "按搜索服务要求填写 API Key；已存密钥留空沿用。";
