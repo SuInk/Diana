@@ -59,7 +59,11 @@ const (
 	replyFatigueCost = 0.6
 	// replyFatigueFullRunes 是篇幅权重封顶的字数：对方这句达到这么长才按满额算。
 	replyFatigueFullRunes = 30
-	replyFatigueLimit     = 1.0
+	// defaultReplyFatigueLimit 是总疲劳攒到多少算满，机器人设置里的 reply_fatigue_limit
+	// 可以改，0 或没填用它。满额一轮涨 0.6，默认约两轮没新意的长句就满。
+	defaultReplyFatigueLimit = 1.0
+	// maxReplyFatigueLimit 是可调上限：再大就等于关掉疲劳，那该用「空转和疲劳」开关。
+	maxReplyFatigueLimit = 10.0
 	// replyFatigueReplyGate：疲劳攒满时，对方这句新意或目的任一项不低于它就照回。
 	replyFatigueReplyGate = 0.5
 	// 攒着的目的：每轮按 replyFatigueEngageWeight 混进去，30 分钟时间常数消退，
@@ -130,6 +134,14 @@ func decayReplyFatigueEngage(state replyFatigueState, now time.Time) float64 {
 		return state.Engage
 	}
 	return state.Engage * math.Exp(-elapsed/float64(replyFatigueEngageDecay))
+}
+
+// replyFatigueLimit 返回这台机器人的疲劳阈值：没配或配了非正数用默认，超出上限钳住。
+func replyFatigueLimit(cfg BotConfig) float64 {
+	if !(cfg.ReplyFatigueLimit > 0) {
+		return defaultReplyFatigueLimit
+	}
+	return math.Min(cfg.ReplyFatigueLimit, maxReplyFatigueLimit)
 }
 
 // replyFatigueLevel 返回此刻对这个账号的疲劳，已按时间消退。
@@ -224,11 +236,11 @@ func (r *Runtime) replyFatigueBlocks(ctx context.Context, event MessageEvent, te
 	if !r.replyDensityApplies(event) {
 		return false, ""
 	}
+	cfg := r.effectiveConfigForEvent(event)
 	level, engage := r.replyFatigueSnapshot(event, time.Now())
-	if level < replyFatigueLimit || engage >= replyFatigueEngageGate {
+	if level < replyFatigueLimit(cfg) || engage >= replyFatigueEngageGate {
 		return false, ""
 	}
-	cfg := r.effectiveConfigForEvent(event)
 	// 和意图识别看同一份按时间排的对话：以前只给对方最近 5 条和机器人最近 3 条，
 	// 机器人一次回复拆成好几条发，3 条往往只是上一次回复的后半截，两组也看不出先后。
 	// 这份对话稿只取本群的历史，跨群参考只留给回复正文（#891）。

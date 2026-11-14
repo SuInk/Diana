@@ -98,6 +98,7 @@ type dianaBotConfigSnapshot struct {
 	ReplySuppressionMinMinutes      int                  `json:"reply_suppression_min_minutes"`
 	ReplySuppressionMaxMinutes      int                  `json:"reply_suppression_max_minutes"`
 	BotReplyLoopThreshold           int                  `json:"bot_reply_loop_threshold"`
+	ReplyFatigueLimit               float64              `json:"reply_fatigue_limit"`
 	ReplyRefusalThreshold           int                  `json:"reply_refusal_threshold"`
 	ProactiveReplyRouterPromptChars int                  `json:"proactive_reply_router_prompt_chars,omitempty"`
 	ProactiveReplyPromptChars       int                  `json:"proactive_reply_prompt_chars,omitempty"`
@@ -341,6 +342,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		ReplySuppressionMinMinutes:      replySuppressionMinMinutes(cfg),
 		ReplySuppressionMaxMinutes:      replySuppressionMaxMinutes(cfg),
 		BotReplyLoopThreshold:           botReplyLoopThreshold(cfg),
+		ReplyFatigueLimit:               replyFatigueLimit(cfg),
 		ReplyRefusalThreshold:           replyRefusalThreshold(cfg),
 		ProactiveReplyRouterPromptChars: len([]rune(cfg.participationPreferences().promptWith(cfg.PromptOverrides))),
 		ProactiveReplyPromptChars:       len([]rune(cfg.prompt(promptProactiveReplySpec))),

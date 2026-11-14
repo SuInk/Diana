@@ -108,6 +108,51 @@ func TestReplyFatigueGateSkipsModelBelowLimit(t *testing.T) {
 	}
 }
 
+// 疲劳阈值可按机器人调：没配、乱配回到默认或上限；调低更早拦，调高同样的疲劳不再问模型。
+func TestReplyFatigueLimitConfigurable(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  float64
+	}{
+		{0, defaultReplyFatigueLimit},
+		{-1, defaultReplyFatigueLimit},
+		{1.5, 1.5},
+		{99, maxReplyFatigueLimit},
+	} {
+		if got := replyFatigueLimit(BotConfig{ReplyFatigueLimit: tc.value}); got != tc.want {
+			t.Fatalf("配置 %v 得到阈值 %v，想要 %v", tc.value, got, tc.want)
+		}
+	}
+
+	// 0.96 在默认阈值下没满，阈值调到 0.5 就满了，会去问这条还回不回。
+	provider := &fatigueGateProvider{novelty: "0.1", purpose: "0.1"}
+	r := densityTestRuntime(BotConfig{ReplyFatigueLimit: 0.5}, provider)
+	event := densityTestEvent("m1", "Diana 锦旗绣八个金字")
+	chargeFatigue(r, event, 0.8, time.Now())
+	if blocked, _ := r.replyFatigueBlocks(context.Background(), event, "Diana 锦旗绣八个金字"); !blocked {
+		t.Fatal("阈值调低后 0.96 的疲劳应该算满")
+	}
+
+	// 1.44 在默认阈值下已满，阈值调到 2 就不该拦，也不调模型。
+	provider = &fatigueGateProvider{novelty: "0.1", purpose: "0.1"}
+	r = densityTestRuntime(BotConfig{ReplyFatigueLimit: 2}, provider)
+	chargeFatigue(r, event, 1.2, time.Now())
+	if blocked, _ := r.replyFatigueBlocks(context.Background(), event, "Diana 锦旗绣八个金字"); blocked {
+		t.Fatal("阈值调高后 1.44 的疲劳不该拦")
+	}
+	if provider.gateCalls() != 0 {
+		t.Fatalf("没攒满不该调模型，调了 %d 次", provider.gateCalls())
+	}
+
+	// 老配置没有这个字段：读进来、归一化后还是默认值；设过的值能存能读。
+	if got := (BotConfig{}).WithDefaults().ReplyFatigueLimit; got != defaultReplyFatigueLimit {
+		t.Fatalf("老配置归一化后阈值 %v，想要默认 %v", got, defaultReplyFatigueLimit)
+	}
+	if got := PayloadFromConfig(ConfigFromPayload(ConfigPayload{ReplyFatigueLimit: 1.8}, BotConfig{})).ReplyFatigueLimit; got != 1.8 {
+		t.Fatalf("往返丢了疲劳阈值：%v", got)
+	}
+}
+
 // 攒满后：没新东西也没目的的不回；有新东西的闲聊、提问照回；判断失败放行；主人永远不拦。
 func TestReplyFatigueGateAtLimit(t *testing.T) {
 	for _, tc := range []struct {
@@ -168,7 +213,7 @@ func TestReplyFatigueEngagedPartnerSkipsGate(t *testing.T) {
 		r.recordReplyFatigueSend(event, replyFatigueCharge{Scored: true, Amount: 0.5, Purpose: 0.85}, now)
 	}
 	level, engage := r.replyFatigueSnapshot(event, now)
-	if level < replyFatigueLimit || engage < replyFatigueEngageGate {
+	if level < defaultReplyFatigueLimit || engage < replyFatigueEngageGate {
 		t.Fatalf("疲劳 %.2f 应已攒满、目的 %.2f 应攒够", level, engage)
 	}
 	if blocked, reason := r.replyFatigueBlocks(context.Background(), event, "Diana 要不你再问我吧，先把你的答案带上"); blocked {
