@@ -252,3 +252,24 @@ func TestSecretPrivacyKindIsDeterministicAndAdjacentValuesFound(t *testing.T) {
 		t.Fatalf("adjacent id cards not both masked: %q", want)
 	}
 }
+
+// 线上事故：`"sent":"…token:","remaining":2,"message":"已经发出去了"` 被中文口令规则跨引号截出
+// `,"remaining":2,"message":` 记入全局密码表，导致之后每次 send 工具结果 JSON 都被替换成坏串。
+func TestSecretPrivacyDoesNotCaptureJSONFragmentsAsContextSecrets(t *testing.T) {
+	registry := &secretContextRegistry{}
+	scope := newSecretPrivacyScope("test-salt", nil, registry)
+	poisonCandidate := `{"ok":true,"sent":"看下token:","remaining":2,"message":"已经发出去了，对方看得到。"}`
+	protected := scope.protectRequest(llm.GenerateRequest{Messages: []llm.Message{
+		{Role: llm.RoleTool, Content: poisonCandidate},
+	}})
+	if got := protected.Messages[1].Content; got != poisonCandidate {
+		t.Fatalf("JSON tool output was corrupted: %q", got)
+	}
+	if remembered := registry.snapshot(); len(remembered) != 0 {
+		t.Fatalf("JSON fragment leaked into global secret registry: %#v", remembered)
+	}
+	laterJSON := `{"ok":true,"sent":"看下记录 别真是Blonde（","remaining":2,"message":"已经发出去了，对方看得到。"}`
+	if got := newSecretPrivacyScope("test-salt", nil, registry).protectText(laterJSON); got != laterJSON {
+		t.Fatalf("subsequent interim JSON corrupted: %q", got)
+	}
+}

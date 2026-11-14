@@ -21,8 +21,9 @@ import (
 
 // platformActor 是发起群管操作的人。主人不看群身份；其余人的 role 是刚从平台查到的。
 type platformActor struct {
-	owner bool
-	role  GroupRole
+	owner      bool
+	role       GroupRole
+	selfRecall bool
 }
 
 func (a platformActor) access() string {
@@ -33,6 +34,8 @@ func (a platformActor) access() string {
 		return "group_owner"
 	case a.role == GroupRoleAdmin:
 		return "group_admin"
+	case a.selfRecall:
+		return "member_self"
 	}
 	return "member_read_only"
 }

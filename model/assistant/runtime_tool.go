@@ -1274,6 +1274,10 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 		if errors.Is(err, ErrDeliveryTargetDisabled) {
 			return
 		}
+		if outboundDeliveryOutcomeUnconfirmed(err) {
+			log.Printf("diana scheduled query %s delivery outcome unconfirmed, skip resend: %v", item.ID, err)
+			err = nil
+		}
 		updated, finishErr := r.finishRecurringReminder(item.ID, startedAt, err)
 		if finishErr != nil {
 			r.setError(finishErr.Error())
@@ -1318,6 +1322,11 @@ func (r *Runtime) executeClaimedReminder(ctx context.Context, item Reminder) {
 	// 任务执行期间群或机器人被停用：保留任务和已生成的待投递内容，重新启用后再接上，
 	// 不把配置变更计作发送失败，也不额外发失败告警。
 	if errors.Is(err, ErrDeliveryTargetDisabled) {
+		return
+	}
+	if outboundDeliveryOutcomeUnconfirmed(err) {
+		log.Printf("diana reminder %s delivery outcome unconfirmed, skip resend: %v", item.ID, err)
+		r.markDeliveredReminder(item.ID, time.Now())
 		return
 	}
 	if err != nil {
@@ -1588,10 +1597,13 @@ func (r *Runtime) sendRepositoryWatchChange(ctx context.Context, item Reminder, 
 				// 目标机器人停用了：跳过，别把整条订阅判成失败。
 				continue
 			}
-			if firstErr == nil {
-				firstErr = err
+			if !outboundDeliveryOutcomeUnconfirmed(err) {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
 			}
-			continue
+			log.Printf("diana repository_watch %s delivery to %s outcome unconfirmed, skip resend: %v", item.ID, targetKey, err)
 		}
 		if change != nil && len(messageIDs) > 0 {
 			for key, id := range repositoryWatchAnchorEntries(targetKey, *change, messageIDs[0]) {
@@ -2355,7 +2367,7 @@ var promptScheduledQuerySystemSpec = registerPrompt(PromptSpec{
 	Group:   PromptGroupTasks,
 	Title:   "定时查询 · 执行要求",
 	Usage:   "周期查询类定时任务到点执行时，接在机器人完整系统提示词之后，要求模型真的调工具去查、并用人设语气交结果。",
-	Default: "本次是后台定时订阅执行。需要查资料的，必须实际调用适合的工具完成查询，优先获取最新信息；只是到点提醒用户做某件事的，直接把提醒说出来，不必调用工具；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
+	Default: "本次是后台定时订阅执行。需要查资料的，必须实际调用适合的工具完成查询，优先获取最新信息；只是到点提醒用户做某件事的，直接把提醒说出来，不必调用工具；如果群聊任务明确要求对群里另一位成员说话或提醒对方，先用成员查询确认账号并用 <diana-at id=\"账号\"/> 点名对方；不要创建、修改或删除其他定时任务。最终只返回本次查询结果，并保持当前人设和自然聊天语气，不要写成生硬的系统通告。",
 })
 
 var promptReminderQuerySystemSpec = registerPrompt(PromptSpec{

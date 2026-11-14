@@ -99,9 +99,23 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		return "", fmt.Errorf("群管理操作只能在群里执行")
 	}
 	groupID := t.resolveGroupID(input)
-	actor, err := t.authorizeModeration(ctx, groupID)
-	if err != nil {
-		return refuse("", err)
+	actor, authErr := t.authorizeModeration(ctx, groupID)
+	var preParsedReq *governanceRequest
+	if authErr != nil {
+		// 普通群成员请求机器人撤回「自己」在当前群发出的消息（例如超时限撤不掉的无码图）：
+		// 处置的是发言者本人的发言，不涉及他人；仅当目标经历史/引用核实确系本人时放行。
+		if operation == platformOpRecallMessages && actor.role != "" && !GroupRoleCanConfigure(actor.role) &&
+			strings.TrimSpace(groupID) == strings.TrimSpace(t.event.GroupID) {
+			if candidate, reqErr := t.governanceRequest(input, operation); reqErr == nil &&
+				candidate.target != "" && candidate.target == strings.TrimSpace(t.event.UserID) {
+				actor.selfRecall = true
+				authErr = nil
+				preParsedReq = &candidate
+			}
+		}
+		if authErr != nil {
+			return refuse("", authErr)
+		}
 	}
 	access = actor.access()
 	platform := t.runtime.currentPlatform(t.event)
@@ -116,9 +130,15 @@ func (t *dianaPlatformTool) runGovernance(ctx context.Context, input map[string]
 		return refuse("", fmt.Errorf("设置或取消管理员只有机器人主人和群主能用"))
 	}
 
-	req, err := t.governanceRequest(input, operation)
-	if err != nil {
-		return refuse(req.target, err)
+	var req governanceRequest
+	if preParsedReq != nil {
+		req = *preParsedReq
+	} else {
+		var err error
+		req, err = t.governanceRequest(input, operation)
+		if err != nil {
+			return refuse(req.target, err)
+		}
 	}
 	// 名片、头衔、撤回针对具体的人，走层级约束；公告、精华、全员禁言不针对个人。
 	if err := t.checkModerationTarget(ctx, actor, groupID, req.target, false); err != nil {
@@ -369,17 +389,25 @@ func (t *dianaPlatformTool) recallMessagesRequest(input map[string]any) (governa
 	}
 	if messageID != "" {
 		req.messageID = messageID
-		if messageID == quoted && t.event.Quoted != nil {
-			req.target = strings.TrimSpace(t.event.Quoted.UserID)
-			req.messageIDs = []string{messageID}
-			return req, nil
-		}
+		base := t.runtime.effectiveConfigForEvent(t.event)
+		selfID := firstNonEmpty(strings.TrimSpace(t.event.SelfID), strings.TrimSpace(base.BotAccount))
 		for i := len(history) - 1; i >= 0; i-- {
 			if strings.TrimSpace(history[i].MessageID) == messageID && !strings.HasPrefix(messageID, localOutboundIDPrefix) {
+				if history[i].Outbound || (selfID != "" && strings.TrimSpace(history[i].UserID) == selfID) {
+					return req, fmt.Errorf("那是我自己发出的消息，请改用 operation=\"recall\" 撤回")
+				}
 				req.target = strings.TrimSpace(history[i].UserID)
 				req.messageIDs = []string{messageID}
 				return req, nil
 			}
+		}
+		if messageID == quoted && t.event.Quoted != nil {
+			if selfID != "" && strings.TrimSpace(t.event.Quoted.UserID) == selfID {
+				return req, fmt.Errorf("那是我自己发出的消息，请改用 operation=\"recall\" 撤回")
+			}
+			req.target = strings.TrimSpace(t.event.Quoted.UserID)
+			req.messageIDs = []string{messageID}
+			return req, nil
 		}
 		return req, fmt.Errorf("本次会话里找不到消息 %s：message_id 必须取自历史里的消息标识，不要按内容猜", messageID)
 	}

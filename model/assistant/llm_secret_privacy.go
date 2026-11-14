@@ -91,7 +91,8 @@ var (
 	// secretBearerPattern 认出单独出现的 Bearer 凭据。
 	secretBearerPattern = regexp.MustCompile(`(?i)\bbearer\s+([A-Za-z0-9._~+/=-]{12,})`)
 	// secretCJKPattern 认出聊天里的中文写法：「密码是 xxx」「密钥：xxx」。
-	secretCJKPattern = regexp.MustCompile(`(?i)(?:密码|口令|密钥|秘钥|令牌|token|api ?key)\s*(?:是|为|[:：=])\s*([!-~]{6,})`)
+	// 值要么是整段引号内容，要么是不跨 JSON/分隔符的单段凭据，避免把 `"sent":"…token:","remaining":2` 这种 JSON 结构截进全局密码表。
+	secretCJKPattern = regexp.MustCompile(`(?i)(?:密码|口令|密钥|秘钥|令牌|\btoken\b|\bapi ?key\b)\s*(?:是|为|[:：=])\s*("[^"\\\r\n]{6,}"|'[^'\\\r\n]{6,}'|[^\s,;&"'<>()\[\]{}]{6,})`)
 )
 
 var secretRules = []secretRule{
@@ -121,7 +122,7 @@ func plausibleSecretValue(value string) bool {
 	if strings.HasPrefix(value, secretmask.PlaceholderPrefix) || strings.HasPrefix(value, identityAliasPrefix) {
 		return false
 	}
-	if strings.ContainsAny(value, "<>{}$%`") {
+	if strings.ContainsAny(value, "<>{}$%`\"',;") {
 		return false
 	}
 	digits := true

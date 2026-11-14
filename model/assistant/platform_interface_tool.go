@@ -144,8 +144,8 @@ func (p *PlatformInterfacePlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          platformInterfacePluginID,
 		Name:        "平台接口",
-		Version:     "0.1.4",
-		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、改群名、生成邀请链接、开关全员禁言、撤回成员消息；主人和群主可任免管理员；主人可让机器人退群、查看好友列表，并审批好友与入群申请。支持 OneBot v11、Telegram 与 QQ 官方机器人（QQ 群可撤回自己的消息、禁言和踢人，其余群管在 QQ 频道里可用），平台做不到的操作会明确说明。",
+		Version:     "0.1.5",
+		Description: "官方内置的跨平台群操作能力：读取群资料、成员与公告（Telegram 为当前置顶），撤回机器人自己发出的消息；普通成员在机器人具备管理员身份时可撤回自己在当前群发的消息；主人、群主和群管理员可在机器人具备管理员身份时禁言、解禁、踢人，发删群公告、设精华、改名片和头衔、改群名、生成邀请链接、开关全员禁言、撤回成员消息；主人和群主可任免管理员；主人可让机器人退群、查看好友列表，并审批好友与入群申请。支持 OneBot v11、Telegram 与 QQ 官方机器人（QQ 群可撤回自己的消息、禁言和踢人，其余群管在 QQ 频道里可用），平台做不到的操作会明确说明。",
 		Official:    true,
 		BuiltIn:     true,
 		Permissions: []string{"platform:group:read", "platform:group:moderate:owner"},
@@ -191,7 +191,7 @@ func (t *dianaPlatformTool) Description() string {
 		"结果里的 requester_access 是请求人的权限，不是机器人的。"
 	base += "OneBot 的 member_info 在当前群未查到成员时继续查 QQ 个人资料；profile 只说明账号资料，不能据此断言在群或自动 @。"
 	base += "group_list 查机器人加了几个群，明细只有主人能看，别人问只报群数。"
-	base += "群管操作仅主人、群主、群管理员可用（实时核验），且机器人须是管理员；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
+	base += "群管操作仅主人、群主、群管理员可用（实时核验），但普通群成员也可调 recall_messages 撤回自己在当前群发的消息（均需机器人是管理员）；不能对主人或机器人下手，管理员不能动群主和其他管理员。私聊里不替群管执行。"
 	base += "set_admin/unset_admin 仅主人和群主；leave_group 让机器人退群、friend_list 看好友列表，仅主人。"
 	base += "主人可带 profile_id 操作另一台机器人（另一个平台）上的群。"
 	return base
@@ -214,7 +214,7 @@ func (t *dianaPlatformTool) InputSchema() map[string]any {
 		"name":               toolStringParam("set_group_name：新群名"),
 		"profile_id":         toolStringParam("仅主人：操作另一台机器人（另一个平台）的群，ID 取自 cross_platform 的 bots；默认当前机器人"),
 	}
-	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤成员消息（清刷屏）", operations...)
+	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤群成员消息（普通成员仅可撤自己的）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
 }
 

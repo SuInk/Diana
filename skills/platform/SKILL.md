@@ -23,7 +23,7 @@ Use `platform` as the single cross-platform entry point for group information an
 - `set_card` — change a member's group card; empty `card` clears it. Moderators only.
 - `set_title` — change a member's special title; empty `title` clears it. On QQ only the group owner can do this. Moderators only.
 - `mute_all` / `unmute_all` — turn whole-group mute on or off. Moderators only.
-- `recall_messages` — recall members' messages to clean up floods or ads: one `message_id` from history (or the quoted message), or a `user_id` plus `count` (default 10, max 50) to recall that account's most recent messages seen in this session. Reports how many were recalled and how many failed. Moderators only.
+- `recall_messages` — recall members' messages to clean up floods, ads, or a caller's own mistaken message: one `message_id` from history (or the quoted message), or a `user_id` plus `count` (default 10, max 50) to recall that account's most recent messages seen in this session. Reports how many were recalled and how many failed. Moderators can target members according to the role hierarchy; ordinary members can use it only to recall their own messages in the current group when the bot is a group administrator.
 - `set_group_name` — rename the group to `name`. Moderators only.
 - `invite_link` — create an additional invite link (Telegram; existing links stay valid). Moderators only.
 - `set_admin` / `unset_admin` — appoint or remove a group administrator by `user_id`. Bot owner and group owner only; group administrators cannot appoint each other.

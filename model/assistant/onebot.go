@@ -396,7 +396,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 				"data": map[string]string{"text": msg.Text},
 			})
 		} else {
-			for _, segment := range sendableOneBotSegments(TextToOneBotSegments(msg.Text)) {
+			for _, segment := range sendableOneBotSegments(textToOneBotSegments(msg.Text, !msg.NoPlainAtMentions)) {
 				segments = append(segments, map[string]any{
 					"type": segment.Type,
 					"data": segment.Data,
@@ -1323,13 +1323,21 @@ func normalizedHTTPURL(value string) string {
 
 // TextToOneBotSegments 将文本转换为 OneBot segment 列表。
 func TextToOneBotSegments(text string) []MessageSegment {
+	return textToOneBotSegments(text, true)
+}
+
+func textToOneBotSegments(text string, allowPlainAt bool) []MessageSegment {
 	// 平台中立的提及标记先翻成 CQ at 码，后面照原路走。模型写的是
 	// <diana-at id="ID"/>，OneBot 这边它就是一个 at 段。
 	parsed := CQToSegments(dianaMentionsToCQ(text))
 	segments := make([]MessageSegment, 0, len(parsed)+2)
 	for index, segment := range parsed {
 		if segment.Type == "text" {
-			segments = appendTextWithMentions(segments, segment.Data["text"])
+			if allowPlainAt {
+				segments = appendTextWithMentions(segments, segment.Data["text"])
+			} else {
+				segments = append(segments, segment)
+			}
 			continue
 		}
 		segments = append(segments, segment)

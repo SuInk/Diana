@@ -369,8 +369,12 @@ type OutgoingMessage struct {
 	// LiteralText keeps cached user-authored text from being interpreted as
 	// Diana reply/mention controls or Telegram Markdown during disclosure.
 	LiteralText bool
-	Segments    []MessageSegment
-	ImageURLs   []string
+	// NoPlainAtMentions prevents bare "@<digits>" in external subscription text
+	// (such as GitHub or Twitter handles) from becoming OneBot CQ at segments,
+	// while preserving explicit MentionUserID, <diana-at/>, and CQ media segments.
+	NoPlainAtMentions bool
+	Segments          []MessageSegment
+	ImageURLs         []string
 	// ImageLabels 与 ImageURLs 一一对应，给控制台的事件记录标出每张图是什么
 	// （比如哪个表情包）；不发给平台。
 	ImageLabels []string

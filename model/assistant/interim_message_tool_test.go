@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -60,7 +61,7 @@ func TestInterimMessageToolLimits(t *testing.T) {
 		t.Fatal("a multi-line interim message was accepted")
 	}
 	for i := 0; i < interimMessageMaxPerTurn; i++ {
-		if _, err := tool.Run(ctx, map[string]any{"text": "进度更新"}); err != nil {
+		if _, err := tool.Run(ctx, map[string]any{"text": fmt.Sprintf("进度更新 %d", i+1)}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -178,5 +179,29 @@ func TestReplyRecordTextIncludesInterimMessages(t *testing.T) {
 		if got := replyRecordText(tc.interim, tc.reply); got != tc.want {
 			t.Fatalf("%s: got %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// 同一轮里模型如果把同一句话又 send(continue=true) 了一次，拦截重发，避免群里连出两条一模一样的话。
+func TestInterimMessageToolDeduplicatesSameTurnText(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &qualityTestProvider{reply: `{"send_confidence":0.99,"reason":"ok","account_safe":true}`}
+	runtime := interimTestRuntime(channel, provider)
+	event := interimTestEvent()
+	event.proactiveReply = false
+	tool := newDianaInterimMessageTool(runtime, event)
+	ctx := withInterimMessages(context.Background())
+	setInterimReplyAudit(ctx, event.RawMessage, false)
+
+	first, err := tool.RunReply(ctx, map[string]any{"text": "看下记录 别真是同名条目（"})
+	if err != nil || !strings.Contains(first, `"ok":true`) {
+		t.Fatalf("first RunReply = %s, err = %v", first, err)
+	}
+	second, err := tool.RunReply(ctx, map[string]any{"text": "看下记录 别真是同名条目（。"})
+	if err != nil || !strings.Contains(second, `"ok":true`) || !strings.Contains(second, "已经发过了") {
+		t.Fatalf("second RunReply = %s, err = %v", second, err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text != "看下记录 别真是同名条目（" {
+		t.Fatalf("duplicate interim message reached channel: %#v", sent)
 	}
 }

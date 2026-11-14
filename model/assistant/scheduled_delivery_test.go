@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -270,5 +271,72 @@ func TestDeliveryNotReadyClassification(t *testing.T) {
 	}
 	if notConnected.Error() != "diana: onebot reverse websocket is not connected" {
 		t.Fatalf("原报错文字变了：%q", notConnected.Error())
+	}
+}
+
+// 线上事故：GitHub 用户 100759 给仓库点 Star，通知里的 @100759 被当成 OneBot 群 @ 段，
+// 触发 failed to resolve UID for UIN 100759 永久拒收并每分钟死循环重试。
+func TestSubscriptionPushKeepsExternalNumericHandlesAsPlainText(t *testing.T) {
+	msg := OutgoingMessage{
+		GroupID:           "12345",
+		MentionUserID:     "10002",
+		Text:              "GitHub 动态：SuInk/Diana\nStar +1（36 → 37）\n@100759\nhttps://github.com/SuInk/Diana",
+		NoPlainAtMentions: true,
+	}
+	segments := buildOutgoingSegments(msg)
+	atCount := 0
+	var textJoined strings.Builder
+	for _, seg := range segments {
+		if seg["type"] == "at" {
+			atCount++
+			data, _ := seg["data"].(map[string]string)
+			if data["qq"] != "10002" {
+				t.Fatalf("unexpected OneBot at segment: %#v", seg)
+			}
+		}
+		if seg["type"] == "text" {
+			data, _ := seg["data"].(map[string]string)
+			textJoined.WriteString(data["text"])
+		}
+	}
+	if atCount != 1 || !strings.Contains(textJoined.String(), "@100759") {
+		t.Fatalf("segments = %#v, text = %q", segments, textJoined.String())
+	}
+}
+
+// 群定时订阅正文已经显式 <diana-at/> 点名目标成员时，不再在开头补 @ 建任务的人。
+func TestDeliverNoticeSkipsCreatorMentionWhenExplicitTargetPresent(t *testing.T) {
+	channel := &recordingChannel{}
+	rt := NewRuntime(BotConfig{Platform: PlatformOneBotV11, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{
+		Kind:     EventKindGroup,
+		Platform: PlatformOneBotV11,
+		GroupID:  "12345",
+		UserID:   "10002",
+	}
+	_, err := rt.deliverNoticeWithReply(context.Background(), event, "定时订阅结果：\n<diana-at id=\"10003\"/>都两点啦，该睡咯", "")
+	if err != nil {
+		t.Fatalf("deliverNoticeWithReply() error = %v", err)
+	}
+	sent := channel.sentSnapshot()
+	if len(sent) != 1 || sent[0].MentionUserID != "" {
+		t.Fatalf("creator mention should be suppressed when body already mentions target: %#v", sent)
+	}
+}
+
+// OneBot 发送超时（结果不明）时不能当成可重试失败再次补发；永久拒收的退避不能被 60 秒周期压扁。
+func TestScheduledReminderDoesNotResendUnconfirmedOutcomeAndCapsPermanentBackoff(t *testing.T) {
+	permErr := &outboundSendError{GroupID: "123", Cause: errors.New("failed to resolve UID for UIN 100759"), PermanentRejection: true}
+	fastItem := Reminder{ID: "repo-fast", Kind: ReminderKindRepositoryWatch, IntervalSeconds: 60}
+	if delay := durableReminderRetryDelay(fastItem, permErr, 1); delay < 30*time.Minute {
+		t.Fatalf("permanent rejection backoff clamped to %s, want >= 30m", delay)
+	}
+
+	unconfirmed := fmt.Errorf("%w: onebot send_group_msg timeout: context deadline exceeded", errOutboundOutcomeUnconfirmed)
+	if !outboundDeliveryOutcomeUnconfirmed(unconfirmed) {
+		t.Fatal("expected unconfirmed outcome classification")
+	}
+	if ceiling := reminderRetryCeiling(Reminder{ID: "r1"}, unconfirmed); ceiling != reminderRetryMaximumDelay {
+		t.Fatalf("unconfirmed error treated as connection retry ceiling: %s", ceiling)
 	}
 }

@@ -8048,7 +8048,7 @@ func outgoingSegmentsForHistory(msg OutgoingMessage) []MessageSegment {
 			segments = append(segments, MessageSegment{Type: "text", Data: map[string]string{"text": msg.Text}})
 		}
 	} else {
-		for _, segment := range TextToOneBotSegments(msg.Text) {
+		for _, segment := range textToOneBotSegments(msg.Text, !msg.NoPlainAtMentions) {
 			if segment.Type == "text" && strings.TrimSpace(segment.Data["text"]) == "" {
 				continue
 			}
