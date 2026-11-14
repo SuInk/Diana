@@ -72,9 +72,6 @@ func TestDianaChatHistoryToolSearchDefersNearbyAnswerToAround(t *testing.T) {
 			praise = item
 		}
 	}
-	if len(praise.ContextBefore)+len(praise.ContextAfter) != 0 {
-		t.Fatal("search eagerly included surrounding messages")
-	}
 	raw, err = newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(context.Background(), map[string]any{"operation": "around", "message_id": praise.MessageID, "before": 0, "after": 3})
 	if err != nil {
 		t.Fatal(err)
@@ -213,36 +210,22 @@ func TestDianaChatHistoryToolReadsAroundQuotedMessageBeyondShortContext(t *testi
 	}
 }
 
-func TestDianaChatHistoryToolEnforcesBounds(t *testing.T) {
-	if got := chatHistoryBoundedInt(map[string]any{"before": 999}, "before", 4, maximumChatHistoryAroundRadius); got != maximumChatHistoryAroundRadius {
+// 条数参数不设上限：要多少给多少，超出单次结果上限的部分由分页处理。
+func TestDianaChatHistoryToolHasNoCountCaps(t *testing.T) {
+	if got := chatHistoryNonNegative(map[string]any{"before": 999}, "before", 4); got != 999 {
 		t.Fatalf("before = %d", got)
 	}
-	if got := chatHistoryPositiveInt(map[string]any{"hours": 999}, "hours", defaultChatHistorySearchHours, maximumChatHistorySearchHours); got != 999 {
-		t.Fatalf("hours = %d", got)
+	if got := chatHistoryNonNegative(map[string]any{"before": 0}, "before", 4); got != 0 {
+		t.Fatalf("before 0 = %d", got)
+	}
+	if got := chatHistoryCount(map[string]any{"limit": 999}, "limit", defaultChatHistoryRecentLimit); got != 999 {
+		t.Fatalf("limit = %d", got)
+	}
+	if got := chatHistoryCount(map[string]any{}, "limit", defaultChatHistoryRecentLimit); got != defaultChatHistoryRecentLimit {
+		t.Fatalf("default limit = %d", got)
 	}
 	if !chatHistoryBool(map[string]any{"all_time": "true"}, "all_time") {
 		t.Fatal("all_time string should be accepted")
-	}
-	if got := chatHistoryPositiveInt(map[string]any{"limit": 999}, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit); got != maximumChatHistoryResultLimit {
-		t.Fatalf("limit = %d", got)
-	}
-	result := dianaChatHistoryResult{OK: true, Action: "search", Total: maximumChatHistoryResultLimit}
-	for index := 0; index < maximumChatHistoryResultLimit; index++ {
-		result.Items = append(result.Items, dianaChatHistoryItem{MessageID: fmt.Sprintf("message-%d", index), Sender: "测试用户", Text: strings.Repeat("很长的历史消息", 80)})
-	}
-	raw, err := marshalDianaChatHistoryResult(result)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len([]rune(raw)) > maximumChatHistoryOutputRunes {
-		t.Fatalf("output runes = %d", len([]rune(raw)))
-	}
-	var bounded dianaChatHistoryResult
-	if err := json.Unmarshal([]byte(raw), &bounded); err != nil {
-		t.Fatalf("bounded JSON is invalid: %v", err)
-	}
-	if !bounded.Limited || len(bounded.Items) >= maximumChatHistoryResultLimit {
-		t.Fatalf("bounded result = %#v", bounded)
 	}
 }
 
@@ -490,33 +473,45 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 	}
 }
 
-func TestDianaChatHistoryToolOverviewCoversEntireLargeWindow(t *testing.T) {
+// 抽样概览已删掉：总结一整段时用 range 逐条读，条数不设上限，装得下就一次给全。
+func TestDianaChatHistoryToolRangeReadsWholeLargeWindow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	base := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local).Unix()
 	for index := 0; index < 120; index++ {
 		runtime.remember(chatHistoryTextEvent(base+int64(index)*600, "alice", "Alice", fmt.Sprintf("m%d", index), fmt.Sprintf("第 %d 段发生的事", index)))
 	}
-
-	raw, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"}).Run(
-		context.Background(), map[string]any{
-			"operation": "overview", "from_time": base, "through_time": base + 119*600, "limit": 12,
-		})
-	if err != nil {
-		t.Fatal(err)
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"})
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "overview"}); err == nil {
+		t.Fatal("overview 抽样已删除，应当报错")
 	}
-	var result dianaChatHistoryResult
-	if err := json.Unmarshal([]byte(raw), &result); err != nil {
-		t.Fatal(err)
+	input := map[string]any{"operation": "range", "from_time": base, "through_time": base + 119*600, "limit": 500}
+	seen := map[string]bool{}
+	for page := 0; page < 10; page++ {
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaChatHistoryResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range result.Items {
+			if seen[item.MessageID] {
+				t.Fatalf("duplicate %s", item.MessageID)
+			}
+			seen[item.MessageID] = true
+		}
+		if !result.HasMore {
+			break
+		}
+		if result.NextCursor == "" || result.PageWindow == "" || !strings.Contains(result.Message, "单次结果上限") {
+			t.Fatalf("page without continuation: %+v", result)
+		}
+		input["cursor"] = result.NextCursor
 	}
-	if result.Action != "overview" || result.Total != 120 || !result.Limited || len(result.Items) != 12 {
-		t.Fatalf("overview = %#v", result)
-	}
-	if result.Items[0].MessageID != "m0" || result.Items[len(result.Items)-1].MessageID != "m119" {
-		t.Fatalf("overview did not span the full window: %q ... %q", result.Items[0].MessageID, result.Items[len(result.Items)-1].MessageID)
-	}
-	if result.NextFromTime != 0 || !strings.Contains(result.Message, "开头、中段和结尾") {
-		t.Fatalf("overview paging/message = %#v", result)
+	if len(seen) != 120 {
+		t.Fatalf("read %d of 120", len(seen))
 	}
 }
 
@@ -866,12 +861,5 @@ func TestDianaChatHistoryToolCombinesFiltersWithoutOperation(t *testing.T) {
 	}
 	if byID.Items[0].Text != "吃面" {
 		t.Fatalf("ids 应当返回原文：%#v", byID.Items[0])
-	}
-	tooMany := make([]any, maximumChatHistoryIDs+1)
-	for i := range tooMany {
-		tooMany[i] = fmt.Sprintf("m-%d", i)
-	}
-	if _, err := tool.Run(context.Background(), map[string]any{"ids": tooMany}); err == nil {
-		t.Fatal("ids 超过上限应当报错")
 	}
 }

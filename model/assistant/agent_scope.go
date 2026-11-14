@@ -491,7 +491,7 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 	// Skills 目录和 MCP 配置路径由 GlobalExtensionPaths 在首次使用时固定下来，
 	// 机器人之间不会因为各自填得不同而切到另一套扩展。
 	// 安全模式在最后收窄：它要盖过主人放宽的那些项（扩展管理跟着主人身份打开）。
-	return restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agent.Config{
+	return restrictAgentConfigForMode(cfg, agent.Config{
 		CodeModeEnabled:     true,
 		WorkDir:             AgentWorkspaceDir(),
 		SkillRoots:          cfg.AgentSkillRoots,
@@ -525,24 +525,13 @@ func (r *Runtime) agentRegistryConfig(cfg BotConfig, event MessageEvent, owner b
 		// 长期保存区按机器人分目录，索引里记下是谁让存的。
 		WorkspaceBotID:   firstNonEmpty(event.ProfileID, cfg.ID),
 		WorkspaceActorID: event.UserID,
-	}, owner))
+	})
 }
 
 // browserSessionKey 让同一个对话前后几轮接着用同一个标签页，不同的群、不同的私聊各用
 // 各的：主人在两个群里同时让机器人开网页，两边不会抢同一页。
 func browserSessionKey(cfg BotConfig, event MessageEvent) string {
 	return cfg.ID + "\x00" + sessionKey(event)
-}
-
-// withOwnerAgentLimits 放宽主人的单次工具输出上限。
-//
-// 主人处理后台长表时需要更完整的工具输出；群成员沿用默认输出上限。
-func withOwnerAgentLimits(cfg agent.Config, owner bool) agent.Config {
-	if !owner {
-		return cfg
-	}
-	cfg.MaxToolOutputChars = agent.MaxAllowedToolOutputChars
-	return cfg
 }
 
 // agentRegistryCacheKey 规范化共享底座的配置并给出缓存键。底座只放扩展，按

@@ -310,7 +310,7 @@ func TestCodeModeChildGetsUntruncatedJSON(t *testing.T) {
 		groups[index] = map[string]any{"group_id": index, "usage": map[string]any{"input_tokens": 1000, "note": strings.Repeat("x", 200)}}
 	}
 	data, _ := json.Marshal(map[string]any{"groups": groups})
-	if len(data) <= MaxAllowedToolOutputChars {
+	if len(data) <= ToolOutputMaxChars {
 		t.Fatalf("fixture too small: %d", len(data))
 	}
 	client := &batchClient{first: []llm.ToolCall{{ID: "script", Name: codeModeToolName, Arguments: map[string]any{"code": `const r = await tools.usage_report({}); let sum = 0; for (const g of r.groups) sum += g.usage.input_tokens; return {keys: Object.keys(r), groups: r.groups.length, sum};`}}}}
@@ -324,7 +324,7 @@ func TestCodeModeChildGetsUntruncatedJSON(t *testing.T) {
 		t.Fatalf("script did not see the full object: %+v", results)
 	}
 	for _, step := range response.Steps {
-		if step.Tool == "usage_report" && len([]rune(step.Output)) > MaxAllowedToolOutputChars+200 {
+		if step.Tool == "usage_report" && len([]rune(step.Output)) > ToolOutputMaxChars+200 {
 			t.Fatalf("audit output must stay truncated: %d", len(step.Output))
 		}
 	}

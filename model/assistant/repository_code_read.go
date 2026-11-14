@@ -31,7 +31,7 @@ import (
 const (
 	// repositoryToolOutputChars 是 github 工具向 Runner 要的单次上限。读代码和 diff
 	// 一次给太少，模型得来回续读好几轮，步数预算撑不住一次 review。
-	repositoryToolOutputChars = agent.MaxAllowedToolOutputChars
+	repositoryToolOutputChars = agent.ToolOutputMaxChars
 	// repositoryOutputReserve 给 message 和续读提示留的字数：内容装完之后才写 message。
 	repositoryOutputReserve = 1_500
 	// repositoryDiffListShare 是文件清单最多占掉的比例，剩下的留给 patch。
@@ -43,9 +43,6 @@ const (
 	repositoryCommitMessageLimit   = 2_000
 	repositoryCompareFileLimitHint = 300
 )
-
-// MaxOutputChars 让 Runner 按 github 工具自己的上限截结果，见 agent.OutputBudgetTool。
-func (t *dianaGitHubTool) MaxOutputChars() int { return repositoryToolOutputChars }
 
 // repositoryOutputBudget 是这次结果能用的字数。不在 Runner 里调用（测试、直接调用）
 // 时按工具自己声明的上限算。

@@ -5031,7 +5031,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			agentCfg.ToolResultReminder = cfg.PromptOverrides.text(promptReplyToolResultBrevitySpec)
 			agentCfg.SubtaskResultReminder = cfg.PromptOverrides.text(promptReplySubtaskResultSpec)
 		}
-		agentCfg = restrictAgentConfigForMode(cfg, withOwnerAgentLimits(agentCfg, relationship.toolScope().Owner))
+		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		// send 和其他工具同一步发来时是中途说一句：先说「我去查」再真的去查。
 		interim := newDianaInterimMessageTool(r, event)
 		agentCfg.Interim = func(ctx context.Context, text string) (string, error) {

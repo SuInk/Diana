@@ -85,7 +85,7 @@ func (t *dianaChatHistoryTool) probeTelegramRecalls(ctx context.Context, input m
 	}
 	defer release()
 
-	limit := chatHistoryPositiveInt(input, "limit", defaultChatHistoryRecentLimit, maximumChatHistoryResultLimit)
+	limit := chatHistoryCount(input, "limit", defaultChatHistoryRecentLimit)
 	eligible, knownRecallCount, timelineLimited, loadErr := t.telegramRecallProbeCandidates(probeCtx)
 	now := t.runtime.clock()
 	candidates, recentlyChecked, deferred := account.selectCandidates(t.event.ProfileID, t.event.GroupID, eligible, limit, now)

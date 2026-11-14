@@ -898,7 +898,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			ToolInput:    cloneToolInput(action.Input),
 			Metadata:     toolMetadata,
 		})
-		outputLimit := r.toolOutputLimit(tool)
+		outputLimit := ToolOutputMaxChars
 		toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
 		if bounded, ok := tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
 			toolTimeout = bounded.Timeout()

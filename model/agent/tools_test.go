@@ -78,7 +78,7 @@ func TestRunCommandToolRunsAllowedCommand(t *testing.T) {
 	tool := &RunCommandTool{
 		root:     root,
 		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: DefaultMaxToolOutputChars,
+		maxBytes: ToolOutputMaxChars,
 	}
 	got, err := tool.Run(context.Background(), map[string]any{"command": "go", "args": []any{"version"}})
 	if err != nil {
@@ -162,7 +162,7 @@ func TestRunCommandToolRejectsPathCommand(t *testing.T) {
 	tool := &RunCommandTool{
 		root:     root,
 		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: DefaultMaxToolOutputChars,
+		maxBytes: ToolOutputMaxChars,
 	}
 	if _, err := tool.Run(context.Background(), map[string]any{"command": "../go"}); err == nil {
 		t.Fatal("expected path command error")

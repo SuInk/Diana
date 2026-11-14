@@ -168,7 +168,7 @@ func pluginCommandRunner(cfg Config) *RunCommandTool {
 	return &RunCommandTool{
 		root:     cfg.WorkDir,
 		timeout:  time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-		maxBytes: cfg.MaxToolOutputChars, protected: agentProtectedFiles(cfg),
+		maxBytes: ToolOutputMaxChars, protected: agentProtectedFiles(cfg),
 		sandboxMode: cfg.CommandSandbox, sandbox: detectCommandSandbox(),
 		sandboxNetwork: cfg.CommandSandboxAllowNetwork,
 	}
@@ -248,7 +248,7 @@ func readPluginCommandOutput(file *os.File, maxBytes int, secrets []string) (str
 		return "", false, err
 	}
 	if maxBytes <= 0 {
-		maxBytes = DefaultMaxToolOutputChars
+		maxBytes = ToolOutputMaxChars
 	}
 	lookahead := 0
 	var variants []string

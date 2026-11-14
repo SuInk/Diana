@@ -52,6 +52,12 @@ func toolIntParam(description string, minimum, maximum int) map[string]any {
 	return describedParam(description, map[string]any{"type": "integer", "minimum": minimum, "maximum": maximum})
 }
 
+// toolCountParam 描述只有下限的条数参数。条数不设上限：结果超出单次上限时由工具
+// 按整条分页并写明续读方式。
+func toolCountParam(description string, minimum int) map[string]any {
+	return describedParam(description, map[string]any{"type": "integer", "minimum": minimum})
+}
+
 func toolStringArrayParam(description string) map[string]any {
 	return describedParam(description, map[string]any{
 		"type":  "array",

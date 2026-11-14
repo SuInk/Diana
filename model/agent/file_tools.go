@@ -22,7 +22,7 @@ import (
 const (
 	// defaultGrepLimit 是一次检索最多返回多少条匹配。
 	defaultGrepLimit = 100
-	// maxGrepLimit 是调用方能要到的上限；结果还会再被 MaxToolOutputChars 截一刀。
+	// maxGrepLimit 是调用方能要到的上限；结果还会再被 ToolOutputMaxChars 截一刀。
 	maxGrepLimit = 500
 	// grepMaxLineRunes 是单行最多回传多少字符。压缩过的 JS、日志里一行几万字符是常态，
 	// 整行回传会把一条匹配变成一整个工具结果。

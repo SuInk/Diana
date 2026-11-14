@@ -166,7 +166,7 @@ func TestRunCommandSandboxCannotReadCodingLogin(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        workDir,
 		timeout:     10 * time.Second,
-		maxBytes:    DefaultMaxToolOutputChars,
+		maxBytes:    ToolOutputMaxChars,
 		sandboxMode: CommandSandboxAuto,
 		sandbox:     sandbox,
 		protected:   agentProtectedFiles(cfg),

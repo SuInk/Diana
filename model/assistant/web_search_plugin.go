@@ -295,7 +295,7 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 		Config:         agent.WebSearchConfig{Providers: providers},
 		APIKeys:        apiKeys,
 		Timeout:        totalTimeout,
-		MaxOutputChars: agent.DefaultMaxToolOutputChars,
+		MaxOutputChars: agent.ToolOutputMaxChars,
 		Client:         p.client,
 		Renderer:       renderer,
 	})

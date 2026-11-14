@@ -51,7 +51,7 @@ func (t *dianaCrossPlatformTool) InputSchema() map[string]any {
 		"query":          toolStringParam("search：关键词；设了 sender_user_id 可省略"),
 		"sender_user_id": toolStringParam("search：只看这个账号发的消息"),
 		"days":           toolIntParam("search：只看最近多少天", 1, 365),
-		"limit":          toolIntParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1, maximumChatHistoryResultLimit),
+		"limit":          toolCountParam("recent/search 返回条数，默认 "+itoa(defaultChatHistoryRecentLimit), 1),
 		"message":        toolStringParam("send：完整正文，≤" + itoa(crossSessionMaxRunes) + " 字；分条用 <diana-message/>；只转附件时可留空"),
 		"forward_media":  toolBoolParam("send：把当前消息和它引用的消息里的图片、视频、语音、文件一并发过去"),
 	})
@@ -190,7 +190,8 @@ func (t *dianaCrossPlatformTool) read(ctx context.Context, operation string, inp
 	}
 	history := newDianaChatHistoryTool(t.runtime, target.event)
 	forwarded := map[string]any{}
-	for _, key := range []string{"query", "sender_user_id", "days", "limit"} {
+	// cursor 也要转过去：search 结果给的 next_cursor 不转发就续不上，后面的页永远读不到。
+	for _, key := range []string{"query", "sender_user_id", "days", "limit", "cursor"} {
 		if value, ok := input[key]; ok {
 			forwarded[key] = value
 		}
@@ -209,7 +210,7 @@ func (t *dianaCrossPlatformTool) read(ctx context.Context, operation string, inp
 	}
 	result.Action = operation
 	result.Message = strings.TrimSpace(result.Message + " 这是机器人 " + target.profile.ID + "（" + NormalizePlatformID(target.profile.Platform) + "）那边的会话，不是当前会话。")
-	return marshalDianaChatHistoryResult(result)
+	return marshalDianaChatHistoryResult(ctx, result)
 }
 
 // send 用 cross_session_message 的投递链路发到另一台机器人的会话。目的地的准入、

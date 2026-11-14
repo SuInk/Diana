@@ -45,9 +45,8 @@ func TestHistoryIdentityToolContextAndQuotesSurvivePrivacy(t *testing.T) {
 	tool := &dianaChatHistoryTool{runtime: r, event: current}
 	oldOwner := MessageEvent{UserID: "100001", SenderName: "old owner card", GroupID: "500005", MessageID: "700007", Time: 1, RawMessage: "earlier"}
 	oldBot := MessageEvent{UserID: "200002", SenderName: "old bot card", GroupID: "500005", MessageID: "800008", Time: 2, RawMessage: "reply", Quoted: &QuotedMessage{UserID: "100001", SenderName: "Winter", RawMessage: "question"}}
-	items := tool.items(context.Background(), []MessageEvent{oldBot})
-	items[0].ContextBefore = tool.items(context.Background(), []MessageEvent{oldOwner})
-	if items[0].SenderRole != "bot" || items[0].QuotedSenderRole != "user" || items[0].ContextBefore[0].SenderRole != "user" {
+	items := tool.items(context.Background(), []MessageEvent{oldBot, oldOwner})
+	if items[0].SenderRole != "bot" || items[0].QuotedSenderRole != "user" || items[1].SenderRole != "user" {
 		t.Fatalf("roles missing from nested history: %+v", items)
 	}
 	body, err := json.Marshal(items)
@@ -68,7 +67,7 @@ func TestHistoryIdentityToolContextAndQuotesSurvivePrivacy(t *testing.T) {
 	if err := json.Unmarshal([]byte(text), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded[0].SenderUserID != botAlias || decoded[0].QuotedSenderUserID != ownerAlias || decoded[0].ContextBefore[0].SenderUserID != ownerAlias {
+	if decoded[0].SenderUserID != botAlias || decoded[0].QuotedSenderUserID != ownerAlias || decoded[1].SenderUserID != ownerAlias {
 		t.Fatalf("aliases not consistent across quotes and context: %s", text)
 	}
 }

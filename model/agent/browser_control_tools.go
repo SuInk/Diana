@@ -249,7 +249,7 @@ func (r *ToolRegistry) RegisterBrowserControlTools(root string, cfg Config) {
 	}
 	base := browserControlToolBase{root: root, bridge: cfg.BrowserControl}
 	r.Register(&BrowserExtTabsTool{base: base})
-	r.Register(&BrowserExtReadTool{base: base, maxChars: cfg.MaxToolOutputChars})
+	r.Register(&BrowserExtReadTool{base: base, maxChars: ToolOutputMaxChars})
 	// 写操作的工具照样登记：能不能用由 browserctl 的策略逐条判断，
 	// 拒绝时给的是「当前只读」这种能让模型改做法的原因。
 	r.Register(&BrowserExtOpenTool{base: base})
