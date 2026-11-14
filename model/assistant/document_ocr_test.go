@@ -303,17 +303,21 @@ func pdfRenderTestContext(t *testing.T) (context.Context, context.CancelFunc) {
 	return context.WithDeadline(context.Background(), deadline.Add(-time.Until(deadline)/10))
 }
 
-func TestDeepSeekFetchUsesFirstEnabledDeepSeekSearchProvider(t *testing.T) {
-	providers := []SearchProvider{
-		{ID: "a", Type: "deepseek", Disabled: true},
-		{ID: "b", Type: "tavily"},
-		{ID: "c", Type: "deepseek", URL: "https://proxy.example/v1/tools/search"},
+// 读网页的 fetch 接口跟着搜索路由的顺序走，路由外、停用、没 Key 的不用。
+func TestPageFetchSourcesFollowSearchRouteOrder(t *testing.T) {
+	providers := `[{"id":"tf","name":"TinyFish","type":"tinyfish","url":"https://api.search.tinyfish.ai"},` +
+		`{"id":"ds","name":"DeepSeek","type":"deepseek","url":"https://proxy.example/v1/tools/search"},` +
+		`{"id":"ds-off","name":"DeepSeek 2","type":"deepseek","disabled":true},` +
+		`{"id":"ds-nokey","name":"DeepSeek 3","type":"deepseek"},` +
+		`{"id":"tv","name":"Tavily","type":"tavily"}]`
+	keys := `{"tf":"tf-key","ds":"ds-key","ds-off":"x","tv":"tv-key"}`
+	settings := SettingValues{searchProvidersSetting: providers, searchProviderKeysSetting: keys, searchProviderOrderSetting: `["tv","ds","ds-off","ds-nokey","tf"]`}
+	sources := pageFetchSources(settings)
+	if len(sources) != 2 || sources[0].Kind != "deepseek" || sources[0].APIKey != "ds-key" || sources[0].Endpoint != "https://proxy.example/v1/tools/fetch" || sources[1].Kind != "tinyfish" || sources[1].APIKey != "tf-key" {
+		t.Fatalf("sources = %#v", sources)
 	}
-	key, endpoint := deepSeekFetchFromProviders(providers, map[string]string{"a": "sk-a", "b": "tv", "c": "sk-c"})
-	if key != "sk-c" || endpoint != "https://proxy.example/v1/tools/fetch" {
-		t.Fatalf("key=%q endpoint=%q", key, endpoint)
-	}
-	if key, _ := deepSeekFetchFromProviders(providers[:2], map[string]string{"a": "sk-a"}); key != "" {
-		t.Fatalf("disabled provider used: %q", key)
+	settings[searchProviderOrderSetting] = `["tv","ds"]`
+	if sources := pageFetchSources(settings); len(sources) != 1 || sources[0].Kind != "deepseek" {
+		t.Fatalf("route without TinyFish: %#v", sources)
 	}
 }

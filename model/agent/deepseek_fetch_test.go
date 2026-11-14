@@ -104,7 +104,7 @@ func TestDeepSeekFetchFailuresAreRecognizable(t *testing.T) {
 	}
 }
 
-// TinyFish 失败时接着试 DeepSeek，DeepSeek 成功就不起 Chrome。
+// fetch 接口按给定顺序试：前一个失败接着试下一个，成功就不起 Chrome。
 func TestSandboxedBrowserFallsBackFromTinyFishToDeepSeek(t *testing.T) {
 	resetTinyFishCache(t)
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) }))
@@ -113,14 +113,14 @@ func TestSandboxedBrowserFallsBackFromTinyFishToDeepSeek(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"title": "Docs", "content": "from deepseek"})
 	}))
 	defer deepseek.Close()
-	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", FetchAPIKey: "tf", FetchEndpoint: failing.URL, DeepSeekFetchKey: "sk-ds", DeepSeekFetchEndpoint: deepseek.URL})
+	browser := NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", PageFetchers: []PageFetchSource{{Kind: PageFetchTinyFish, APIKey: "tf", Endpoint: failing.URL}, {Kind: PageFetchDeepSeek, APIKey: "sk-ds", Endpoint: deepseek.URL}}})
 	page, err := browser.Render(context.Background(), tinyFishTestPage)
 	if err != nil || page.Text != "from deepseek" || page.BrowserEngine != "deepseek" {
 		t.Fatalf("page=%#v err=%v", page, err)
 	}
 
 	resetTinyFishCache(t)
-	browser = NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", DeepSeekFetchKey: "sk-ds", DeepSeekFetchEndpoint: failing.URL})
+	browser = NewSandboxedBrowser(SandboxedBrowserConfig{Executable: "/nonexistent/chrome", PageFetchers: []PageFetchSource{{Kind: PageFetchDeepSeek, APIKey: "sk-ds", Endpoint: failing.URL}}})
 	_, err = browser.Render(context.Background(), tinyFishTestPage)
 	if err == nil || !errors.Is(err, errDeepSeekFetch) || !strings.Contains(err.Error(), "/nonexistent/chrome") {
 		t.Fatalf("fallback err = %v", err)

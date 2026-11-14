@@ -82,7 +82,7 @@ export function searchProviderKeyHint(provider: SearchProvider): string {
   if (provider.type === "tavily") return "需要 Tavily API Key；新账号可使用服务商提供的免费额度，额度以账户为准。";
   if (provider.type === "perplexity") return "需要 Perplexity API Key（pplx- 开头），按次计费。";
   if (provider.type === "tinyfish") return "需要 TinyFish API Key（X-API-Key），在 agent.tinyfish.ai 控制台获取。";
-  if (provider.type === "deepseek") return "填 DeepSeek 的 API Key，和对话用的是同一个；搜索和读网页各按次计费，读网页会在本地浏览器之前先试它。";
+  if (provider.type === "deepseek") return "填 DeepSeek 的 API Key，和对话用的是同一个；搜索和读网页各按次计费。读网页按搜索路由里的顺序先试它，失败再用本地浏览器。";
   if (provider.type === "brave") return "需要 Brave Search API 订阅令牌，免费档额度以账户为准。";
   if (provider.type === "http" && provider.http_config?.auth_type === "none") return "当前不发送认证请求头；需要在请求参数传密钥时，可在固定参数里使用 {api_key}。";
   return "按搜索服务要求填写 API Key；已存密钥留空沿用。";
