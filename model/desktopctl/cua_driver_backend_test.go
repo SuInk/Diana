@@ -73,18 +73,6 @@ func (f *fakeCUADriver) last(name string) map[string]any {
 	return nil
 }
 
-func (f *fakeCUADriver) count(name string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	n := 0
-	for _, call := range f.calls {
-		if call.name == name {
-			n++
-		}
-	}
-	return n
-}
-
 func newFakeCUAAdapter() (*ProcessAdapter, *fakeCUADriver) {
 	fake := &fakeCUADriver{image: []byte("\x89PNG fake scene")}
 	backend := &cuaDriverBackend{session: fake, snapshots: map[string]string{}, captures: map[string]string{}, longEdge: map[string]int{}}

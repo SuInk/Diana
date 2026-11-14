@@ -173,10 +173,6 @@ func replySuppressionSendGuardEnabled(ctx context.Context) bool {
 	return guarded
 }
 
-func withoutReplySuppressionSendGuard(ctx context.Context) context.Context {
-	return context.WithValue(ctx, replySuppressionSendGuardKey{}, false)
-}
-
 func withReplySuppressionOutboundGateHeld(ctx context.Context) context.Context {
 	return context.WithValue(ctx, replySuppressionOutboundGateKey{}, true)
 }

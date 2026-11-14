@@ -133,8 +133,3 @@ func overlapsReplyProtected(protected [][]int, start, end int) bool {
 	}
 	return false
 }
-
-// ValidateReplySplitRules 给 WebUI 用，规则同保存时的校验。
-func ValidateReplySplitRules(rules []string) error {
-	return validateReplySplitRules(rules)
-}

@@ -166,16 +166,6 @@ WHERE
 	return event, true, nil
 }
 
-// messageSearchExtra 读取某条消息已有的检索附加文本。
-func (s *SQLiteStore) messageSearchExtra(ctx context.Context, id string) string {
-	defer s.observeStorage(ctx, "messageSearchExtra", "read")()
-	var extra sql.NullString
-	if err := s.eventReader().QueryRowContext(ctx, `SELECT search_extra FROM message_events WHERE id = ?`, id).Scan(&extra); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(extra.String)
-}
-
 // SaveMessageSearchExtra 记录一条消息「正文之外还能被搜到的文本」，目前是图片
 // 描述。描述由后台视觉调用异步生成，消息早就落库了，所以只能事后补写；写完立刻
 // 重建这一行的检索索引，否则新描述要等下次消息更新才进得去。

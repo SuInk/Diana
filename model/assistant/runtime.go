@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/SuInk/diana/model/runtimeconfig"
 	"hash/fnv"
 	"io"
 	"log"
@@ -21,6 +20,8 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+
+	"github.com/SuInk/diana/model/runtimeconfig"
 
 	"github.com/SuInk/diana/internal/secretmask"
 	"github.com/SuInk/diana/model/agent"
@@ -3063,14 +3064,6 @@ func participationClosed(cfg BotConfig) bool {
 	return relatedLevel == "off" && chatLevel == "off"
 }
 
-// eventRoutingText 和 routeMessageEvent 里取回复判断文本的口径一致。
-func eventRoutingText(event MessageEvent) string {
-	if text := PlainText(event.Segments); text != "" {
-		return text
-	}
-	return event.RawMessage
-}
-
 func (r *Runtime) shouldHandleProactiveReply(ctx context.Context, event MessageEvent, text string) bool {
 	_, _, _, allowed := r.routeProactiveReplyBatch(ctx, []proactiveReplyCandidate{{Event: event, Text: text}})
 	return allowed
@@ -3724,10 +3717,6 @@ const (
 	proactiveBlockerLowValue     = "low_value"
 )
 
-func (decision proactiveReplyDecision) qualifiedBotFollowup() bool {
-	return strings.EqualFold(strings.TrimSpace(decision.Category), "bot_related") && decision.DirectedAtBot
-}
-
 func (decision proactiveReplyDecision) normalizedCategory() string {
 	return strings.ToLower(strings.TrimSpace(decision.Category))
 }
@@ -4009,26 +3998,6 @@ func (r *Runtime) recordProactiveReplyRouteError(ctx context.Context, event Mess
 		Action:  "proactive_reply_route",
 		Message: "主动回复判断失败，已保持沉默",
 		Detail:  err.Error(),
-		Actor:   oneBotEventActor(event),
-		Target:  event.MessageID,
-		Metadata: map[string]any{
-			"group_id": event.GroupID,
-			"user_id":  event.UserID,
-		},
-	})
-}
-
-func (r *Runtime) recordProactiveReplyRouteFallback(ctx context.Context, event MessageEvent, routeErr error) {
-	writer := r.appLogWriter()
-	if writer == nil {
-		return
-	}
-	_ = writer.AppendLog(ctx, applog.Entry{
-		Kind:    applog.KindOperation,
-		Level:   applog.LevelInfo,
-		Action:  "proactive_reply_route_fallback",
-		Message: "主动回复路由超时，明确公开问题已降级进入回复流程",
-		Detail:  routeErr.Error(),
 		Actor:   oneBotEventActor(event),
 		Target:  event.MessageID,
 		Metadata: map[string]any{
@@ -7935,10 +7904,6 @@ func withLaterSenderMessages(skip map[string]bool, history []MessageEvent, event
 	return out
 }
 
-func (r *Runtime) rememberOutgoing(ctx context.Context, source MessageEvent, msg OutgoingMessage) {
-	r.rememberOutgoingWithMessageID(ctx, source, msg, "")
-}
-
 func (r *Runtime) rememberOutgoingWithMessageID(ctx context.Context, source MessageEvent, msg OutgoingMessage, messageID string) {
 	msg = r.sharedReplyPrefix(msg)
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, source), source)
@@ -8273,11 +8238,6 @@ func (r *Runtime) sendForwardMessageIDNodes(ctx context.Context, event MessageEv
 		return "", err
 	}
 	return apiMessageID(result), nil
-}
-
-func (r *Runtime) sendForwardNodes(ctx context.Context, event MessageEvent, nodes []map[string]any) error {
-	_, err := r.sendForwardNodesWithResult(ctx, event, nodes)
-	return err
 }
 
 func (r *Runtime) sendForwardNodesWithResult(ctx context.Context, event MessageEvent, nodes []map[string]any) (map[string]any, error) {
@@ -9816,63 +9776,6 @@ func boundaryPositions(runes []rune, match func(rune) bool) []int {
 		out = append(out, index+1)
 	}
 	return out
-}
-
-// hasUnclosedQuote 判断末尾的标点是不是落在没闭合的引号或括号里。
-func hasUnclosedQuote(runes []rune) bool {
-	depth := 0
-	for _, r := range runes {
-		switch r {
-		case '「', '『', '（', '(', '【', '《', '“':
-			depth++
-		case '」', '』', '）', ')', '】', '》', '”':
-			if depth > 0 {
-				depth--
-			}
-		}
-	}
-	return depth > 0
-}
-
-// endsMidSentence 判断这一行是不是停在半句话上。句号、问号、感叹号不算——那是
-// 一句说完了；聊天里更常见的是整行不带标点收尾（见 replyTrailingPunctuationRule），
-// 同样算说完。
-func endsMidSentence(line string) bool {
-	runes := []rune(line)
-	if len(runes) == 0 {
-		return false
-	}
-	switch runes[len(runes)-1] {
-	case '，', ',', '、', '；', ';', '：', ':', '(', '（', '“', '「':
-		return true
-	}
-	return false
-}
-
-// endsWithBracketTone 判断行尾那个孤零零的「（」是语气词，不是话没说完。
-//
-// 网上用它表示自嘲、心虚、说漏嘴，猫娘那档人设的提示词专门教了这个用法。而
-// endsMidSentence 把行尾的开括号一律当成「这句还没写完」，于是带「（」的那句会被
-// 粘到下一句上——两次独立发言挤进同一个气泡，中间只剩一个换行。
-//
-// 真正的括号插入语不会在开括号后面立刻断行，而且后文一定有个收尾的「）」。所以
-// 后面找不到闭括号时按语气词处理，找得到就还是当没说完。
-func endsWithBracketTone(line string, rest []string) bool {
-	runes := []rune(line)
-	if len(runes) == 0 {
-		return false
-	}
-	switch runes[len(runes)-1] {
-	case '(', '（':
-	default:
-		return false
-	}
-	for _, next := range rest {
-		if strings.ContainsAny(next, "）)") {
-			return false
-		}
-	}
-	return true
 }
 
 // isStructuredReplyLine 识别列表项：符号项目符号、有序编号，以及「短标签：内容」

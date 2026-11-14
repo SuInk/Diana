@@ -252,17 +252,6 @@ func normalizePromptOverrides(overrides PromptOverrides) PromptOverrides {
 	return normalized
 }
 
-func copyPromptOverrides(overrides PromptOverrides) PromptOverrides {
-	if len(overrides) == 0 {
-		return nil
-	}
-	copied := make(PromptOverrides, len(overrides))
-	for key, value := range overrides {
-		copied[key] = value
-	}
-	return copied
-}
-
 // validatePromptOverrides 只卡长度。未登记的键不算错：配置可能来自更新的版本，
 // 保存时 normalizePromptOverrides 会把它们滤掉。
 func validatePromptOverrides(overrides PromptOverrides) error {

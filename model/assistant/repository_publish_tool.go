@@ -849,19 +849,6 @@ func repositoryIssueMentionedNumbers(text string) map[int]bool {
 	return result
 }
 
-func repositoryIssueASCIIIdentifier(value string) bool {
-	if value == "" {
-		return false
-	}
-	for _, char := range value {
-		if (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 // repositoryIssueFailureRelayHint 跟着每一次失败回去，而不是写在工具描述里。
 //
 // 拒绝的理由都在 message 里：差在哪个身份档、当前是什么身份、想单独放行该改哪项

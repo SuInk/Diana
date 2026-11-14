@@ -171,23 +171,6 @@ type ActionResult struct {
 // ErrProtocol 表示对端发来的帧不符合协议。
 var ErrProtocol = errors.New("desktop control: 协议错误")
 
-// EncodeFrame 把一帧序列化成待发送的字节。
-func EncodeFrame(frame Frame) ([]byte, error) {
-	return json.Marshal(frame)
-}
-
-// DecodeFrame 解析一帧，并校验帧类型非空。
-func DecodeFrame(payload []byte) (Frame, error) {
-	var frame Frame
-	if err := json.Unmarshal(payload, &frame); err != nil {
-		return Frame{}, err
-	}
-	if strings.TrimSpace(frame.Type) == "" {
-		return Frame{}, ErrProtocol
-	}
-	return frame, nil
-}
-
 func rawJSON(value any) json.RawMessage {
 	if value == nil {
 		return nil

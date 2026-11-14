@@ -375,15 +375,6 @@ func groupExtensionOverrides(access map[string]GroupExtensionAccess) map[string]
 	return values
 }
 
-func sortedExtensionIDs(values map[string]bool) []string {
-	ids := make([]string, 0, len(values))
-	for id := range values {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	return ids
-}
-
 // agentExtensionBase 取共享扩展底座。主人会话和「有 MCP 放给群成员」时按需拉起；
 // 其余群消息只借用已经起来的底座，不为一句闲聊新起一堆 MCP 进程——借到了也有用：
 // 白名单外的工具名这时能被认出来是没权限，而不是查无此工具。
@@ -724,30 +715,6 @@ func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExte
 		})
 	}
 	return extensions
-}
-
-func (scope agentReplyScope) toolSet() map[string]bool {
-	if !scope.Routed {
-		return nil
-	}
-	selected := make(map[string]bool, len(scope.ToolNames))
-	for _, name := range scope.ToolNames {
-		if name = strings.TrimSpace(name); name != "" {
-			selected[name] = true
-		}
-	}
-	return selected
-}
-
-func withoutAgentTool(names []string, excluded string) []string {
-	excluded = strings.TrimSpace(excluded)
-	filtered := make([]string, 0, len(names))
-	for _, name := range names {
-		if strings.TrimSpace(name) != excluded {
-			filtered = append(filtered, name)
-		}
-	}
-	return filtered
 }
 
 func filterAgentReplyHistory(history []MessageEvent, event MessageEvent, scope agentReplyScope) []MessageEvent {

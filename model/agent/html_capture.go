@@ -302,13 +302,6 @@ func launchHeadlessCaptureChrome(ctx context.Context, executable string, dirs br
 	return proc, nil
 }
 
-// htmlCaptureChromeArgs 在沙盒底座上再加断网参数。
-func htmlCaptureChromeArgs(profileDir, cacheDir, crashDir string) []string {
-	args := sandboxedChromeArgs(profileDir, cacheDir, crashDir, sandboxedBrowserConfigWithDefaults(SandboxedBrowserConfig{}))
-	args = append(args, htmlCaptureExtraArgs()...)
-	return append(args, "about:blank")
-}
-
 func htmlCaptureExtraArgs() []string {
 	args := []string{
 		"--force-device-scale-factor=1",

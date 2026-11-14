@@ -651,11 +651,6 @@ func fileRefFromOneBotSegment(base fileRef, data map[string]any) (fileRef, bool)
 	return base, true
 }
 
-// readURL 按大小限制读取远程文件内容。
-func (p *FileParserPlugin) readURL(ctx context.Context, raw string) ([]byte, string, error) {
-	return p.readURLWithClient(ctx, p.client, raw, p.maxBytes)
-}
-
 func (p *FileParserPlugin) readURLWithClient(ctx context.Context, client *http.Client, raw string, maxBytes int64) ([]byte, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
 	if err != nil {
@@ -923,11 +918,6 @@ func extractPDFText(ctx context.Context, renderer pdfPageRenderer, data []byte, 
 	}
 	result.Text = builder.String()
 	return result
-}
-
-// sanitizeFileText 清理并截断文件文本内容。
-func sanitizeFileText(data []byte, maxChars int) string {
-	return sanitizeFileTextString(string(data), maxChars)
 }
 
 func sanitizeFileTextString(text string, maxChars int) string {

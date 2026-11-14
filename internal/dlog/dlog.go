@@ -111,12 +111,6 @@ func (h *compatHandler) WithGroup(_ string) slog.Handler {
 // Leveled helpers for new code. They delegate to the slog default logger,
 // so they respect Init's destination and accept attributes naturally.
 
-func Debug(msg string, args ...any) { slog.Debug(msg, args...) }
-
-func Info(msg string, args ...any) { slog.Info(msg, args...) }
-
-func Warn(msg string, args ...any) { slog.Warn(msg, args...) }
-
 func Error(msg string, args ...any) { slog.Error(msg, args...) }
 
 // Errorf formats like fmt.Errorf, logs at Error level, and returns the

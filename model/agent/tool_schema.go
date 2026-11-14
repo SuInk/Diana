@@ -23,11 +23,6 @@ func toolObjectSchema(required []string, properties map[string]any) map[string]a
 	return schema
 }
 
-// toolEmptySchema 描述不接受参数的工具。
-func toolEmptySchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{})
-}
-
 func toolStringParam(description string) map[string]any {
 	return describedParam(description, map[string]any{"type": "string"})
 }
@@ -53,10 +48,6 @@ func toolStringArrayParam(description string, values ...string) map[string]any {
 	if len(values) > 0 {
 		items["enum"] = values
 	}
-	return describedParam(description, map[string]any{"type": "array", "items": items})
-}
-
-func toolArrayParam(description string, items map[string]any) map[string]any {
 	return describedParam(description, map[string]any{"type": "array", "items": items})
 }
 

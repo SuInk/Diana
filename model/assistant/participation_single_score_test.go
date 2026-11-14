@@ -11,8 +11,6 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func floatPtr(v float64) *float64 { return &v }
-
 // 可回答不再是单独一道闸：它拦的两类消息分别由相关度和闲聊的评分标准接住。
 // 旧配置里存着的 answerability_level 读进来也不再起作用，相关度或闲聊达标就放行。
 func TestAnswerabilityNoLongerGatesReplies(t *testing.T) {

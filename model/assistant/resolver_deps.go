@@ -469,16 +469,6 @@ func probeResolverCommand(name string, versionArgs []string) (string, string, bo
 	return path, version, true
 }
 
-// probeCommandVersion 取版本号首行，拿不到就留空；版本只用于展示。
-func probeCommandVersion(name string, args []string) string {
-	path, err := lookResolverCommand(name)
-	if err != nil {
-		return ""
-	}
-	version, _ := runCommandVersion(path, name, args)
-	return version
-}
-
 // runCommandVersion 执行版本参数。第二个返回值区分「跑通了但没打印版本」和
 // 「根本跑不起来」：前者仍算可用，后者不算。
 func runCommandVersion(path, name string, args []string) (string, bool) {

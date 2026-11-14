@@ -70,20 +70,6 @@ func (m *imageEditSourceMemory) recall(session string, now time.Time) []string {
 	return append([]string(nil), entry.sources...)
 }
 
-// quotedBotTextWithoutImage 判断用户引用的是不是机器人自己的一条不带图的消息，
-// 典型是改图失败通知或「在画了」。
-func (r *Runtime) quotedBotTextWithoutImage(event MessageEvent) bool {
-	if event.Quoted == nil || len(availableImageURLs(event.Quoted.Segments)) > 0 {
-		return false
-	}
-	quotedUser := strings.TrimSpace(event.Quoted.UserID)
-	if quotedUser == "" {
-		return false
-	}
-	botID := firstNonEmpty(strings.TrimSpace(r.effectiveConfigForEvent(event).BotAccount), strings.TrimSpace(event.SelfID))
-	return quotedUser == botID
-}
-
 // quotedChainImageURLs 顺着引用消息自己的引用往上找图。
 //
 // 机器人回复改图请求时会引用用户那条消息，用户那条又引用了原图；用户再引用机器人
@@ -125,15 +111,6 @@ func (r *Runtime) quotedChainImageURLs(ctx context.Context, event MessageEvent) 
 
 // maxImageEditSourceMessages 限制一次改图能指认的消息条数。
 const maxImageEditSourceMessages = 8
-
-// imageEditSourcesFromMessages 取出模型指认的那几条消息里的全部图片，按指认顺序排。
-//
-// 指认的消息里没有图时直接报错，而不是悄悄退回自动猜：模型认错了消息，
-// 让它当场改正，比拿别的图改出一张对不上的结果强。
-func (r *Runtime) imageEditSourcesFromMessages(ctx context.Context, event MessageEvent, messageIDs []string) ([]string, error) {
-	out, _, err := r.imageEditSourcesFromMessagesDetailed(ctx, event, messageIDs)
-	return out, err
-}
 
 // imageEditSourcesFromMessagesDetailed 另外交出每条消息的来历（谁发的、几张图）。
 func (r *Runtime) imageEditSourcesFromMessagesDetailed(ctx context.Context, event MessageEvent, messageIDs []string) ([]string, []imageEditSourceUsed, error) {

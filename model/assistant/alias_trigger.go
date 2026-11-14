@@ -47,11 +47,6 @@ func normalizeAliasTriggerMode(mode AliasTriggerMode) AliasTriggerMode {
 	return defaultAliasTriggerMode
 }
 
-// AliasTriggerModes 返回可选档位，供 WebUI 展示。
-func AliasTriggerModes() []AliasTriggerMode {
-	return []AliasTriggerMode{AliasTriggerLoose, AliasTriggerSmart, AliasTriggerStrict}
-}
-
 // aliasTriggerMode 返回本次生效的匹配模式，未归一化的配置也能安全读取。
 func aliasTriggerMode(cfg BotConfig) AliasTriggerMode {
 	return normalizeAliasTriggerMode(cfg.GroupTriggerMode)

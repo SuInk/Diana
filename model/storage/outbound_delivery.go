@@ -270,18 +270,6 @@ func (s *SQLiteStore) RecordInboundEventSelfEcho(ctx context.Context, echo assis
 	return nil
 }
 
-func inboundTransportKey(event assistant.MessageEvent) string {
-	messageID := strings.TrimSpace(event.MessageID)
-	if messageID == "" {
-		return ""
-	}
-	return strings.Join([]string{
-		assistant.NormalizePlatformID(event.Platform), strings.TrimSpace(event.SelfID),
-		strings.TrimSpace(string(event.Kind)), strings.TrimSpace(event.GroupID),
-		strings.TrimSpace(event.UserID), messageID,
-	}, "\x00")
-}
-
 // OutboundStepDelivered 查询这条入站事件的某个出站步骤是否已经成功送达。
 // 入站队列失败重跑时据此跳过已经发出去的分片和媒体。
 func (s *SQLiteStore) OutboundStepDelivered(ctx context.Context, turnID, stepKey string) (string, bool, error) {

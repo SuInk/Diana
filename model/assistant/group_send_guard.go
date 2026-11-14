@@ -365,10 +365,6 @@ func (r *Runtime) executeOutboundCall(
 
 const outboundPayloadMaxAttempts = 3
 
-func retryOutboundPayloadRejection(ctx context.Context, call func(context.Context) (map[string]any, error)) (map[string]any, error) {
-	return retryOutboundPayloadRejectionBudget(ctx, call, outboundPayloadMaxAttempts)
-}
-
 func retryOutboundPayloadRejectionBudget(ctx context.Context, call func(context.Context) (map[string]any, error), budget int) (map[string]any, error) {
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {

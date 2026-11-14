@@ -1297,10 +1297,6 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
 }
 
-func agentImageHistoryPromptTextAt(event MessageEvent, currentTime int64) string {
-	return agentImageHistoryPromptTextWithDescriptions(event, currentTime, nil)
-}
-
 // agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
 // 只有计数的占位行会让模型在被追问历史媒体时无内容可依，转而编造或退化成寒暄。
 func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime int64, descriptions []string, configs ...BotConfig) string {

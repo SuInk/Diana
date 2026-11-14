@@ -1835,28 +1835,6 @@ func composeRepositoryWatchMessageWithTemplate(template, repository, body string
 	return trimNotificationSplitMarkers(rendered)
 }
 
-func repositoryWatchRecentContext(history []MessageEvent, limit int) string {
-	if limit <= 0 {
-		limit = 6
-	}
-	if len(history) > limit {
-		history = history[len(history)-limit:]
-	}
-	lines := make([]string, 0, len(history))
-	for _, event := range history {
-		text := strings.TrimSpace(firstNonEmpty(PlainText(event.Segments), event.RawMessage, event.botReply))
-		if text == "" {
-			continue
-		}
-		role := firstNonEmpty(strings.TrimSpace(event.SenderName), strings.TrimSpace(event.UserID), "群成员")
-		if strings.TrimSpace(event.botReply) != "" || assistantHistoryEvent(event, "") {
-			role = "机器人"
-		}
-		lines = append(lines, role+"："+truncateRunes(text, 240))
-	}
-	return strings.Join(lines, "\n")
-}
-
 func renderRepositoryWatchChanges(change repositoryWatchChange) string {
 	return renderRepositoryWatchChangesWithTemplates(change, defaultRepositoryWatchTemplates())
 }

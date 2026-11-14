@@ -61,16 +61,6 @@ func (h *liveDampingHarness) send(ctx context.Context, userID, sender, messageID
 	}()
 }
 
-func (h *liveDampingHarness) lastBotText() string {
-	sent := h.channel.sentSnapshot()
-	for i := len(sent) - 1; i >= 0; i-- {
-		if text := strings.TrimSpace(sent[i].Text); text != "" {
-			return text
-		}
-	}
-	return ""
-}
-
 func (h *liveDampingHarness) summary() (replied int, damped int, suppressed int, lines []string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

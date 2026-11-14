@@ -1180,15 +1180,6 @@ func newestReleasesFirst(releases []ReleaseEntry, limit int) []ReleaseEntry {
 	return sorted
 }
 
-func latestStableRelease(releases []ReleaseEntry) ReleaseEntry {
-	for _, release := range releases {
-		if !release.Prerelease && strings.TrimSpace(release.Tag) != "" {
-			return release
-		}
-	}
-	return ReleaseEntry{}
-}
-
 // updateAvailableAgainst 判断当前运行版本是否落后于目标 Release。
 // 当前版本无法解析成语义化版本时（例如没有注入版本号的本地构建），
 // 视为落后于任何正式 Release，让用户可以直接装回正式版本，

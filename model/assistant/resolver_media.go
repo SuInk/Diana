@@ -1233,10 +1233,6 @@ func xiaohongshuVideoCandidateURLs(note map[string]any) []string {
 	return out
 }
 
-func xiaohongshuVideoMasterURL(note map[string]any) string {
-	return firstNonEmptyString(xiaohongshuVideoCandidateURLs(note))
-}
-
 func anyString(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -1352,25 +1348,6 @@ type resolverVideoUpload struct {
 	SizeMB float64
 }
 
-func splitResolverVideoUploads(videoURLs []string) ([]string, []resolverVideoUpload) {
-	direct := make([]string, 0, len(videoURLs))
-	uploads := make([]resolverVideoUpload, 0, 1)
-	for _, videoURL := range videoURLs {
-		path := localMediaPath(videoURL)
-		if path == "" {
-			direct = append(direct, videoURL)
-			continue
-		}
-		info, err := os.Stat(path)
-		if err != nil || info.IsDir() {
-			direct = append(direct, videoURL)
-			continue
-		}
-		uploads = append(uploads, resolverVideoUploadFromInfo(path, info))
-	}
-	return direct, uploads
-}
-
 func resolverVideoUploadFromPath(path string) (resolverVideoUpload, bool) {
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
@@ -1385,20 +1362,6 @@ func resolverVideoUploadFromInfo(path string, info os.FileInfo) resolverVideoUpl
 		Name:   filepath.Base(path),
 		SizeMB: float64(info.Size()) / 1024 / 1024,
 	}
-}
-
-func dedupeResolverVideoUploads(uploads []resolverVideoUpload) []resolverVideoUpload {
-	out := make([]resolverVideoUpload, 0, len(uploads))
-	seen := map[string]bool{}
-	for _, upload := range uploads {
-		key := strings.TrimSpace(upload.Path)
-		if key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		out = append(out, upload)
-	}
-	return out
 }
 
 func localMediaPath(value string) string {

@@ -15,14 +15,6 @@ import (
 	"github.com/SuInk/diana/model/netguard"
 )
 
-// EmbedTexts 调用 OpenAI 兼容的 /embeddings 接口把文本批量转成向量。
-// 返回的向量与输入一一对应。语义检索按可选能力接入:配置档缺失或调用
-// 失败时调用方直接退回词面检索,所以这里只做一次干净的请求,不做重试。
-func EmbedTexts(ctx context.Context, cfg ProviderConfig, texts []string, opts ...ClientOption) ([][]float32, error) {
-	vectors, _, err := EmbedTextsWithUsage(ctx, cfg, texts, opts...)
-	return vectors, err
-}
-
 // EmbedTextsWithUsage 和 EmbedTexts 一样，另外带回上游报的 token 用量，供用量统计。
 func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string, opts ...ClientOption) ([][]float32, Usage, error) {
 	cfg = cfg.WithDefaults()

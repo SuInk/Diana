@@ -1391,11 +1391,6 @@ func (c *TelegramChannel) downloadFileByID(ctx context.Context, fileID string, m
 	return body, remotePath, nil
 }
 
-func writeTelegramHistoryMedia(event MessageEvent, segment MessageSegment, remotePath string, body []byte) (string, error) {
-	category := map[string]string{"image": "image", "video": "video", "record": "audio", "file": "file"}[segment.Type]
-	return writeHistoryMedia(historyMediaWriteRequest{Platform: PlatformTelegram, EventTime: event.Time, TargetKind: string(event.Kind), GroupID: event.GroupID, UserID: event.UserID, MessageID: event.MessageID, Category: category, Source: segment.Data["file_id"], FileName: filepath.Base(firstNonEmpty(segment.Data["name"], remotePath, "media")), Body: body, ContentType: segment.Data["mime"]})
-}
-
 // telegramMentionsBot 判断消息是否 @ 了本机器人。
 //
 // 必须精确匹配 username：只要看到「有 @ 就算」的话，群里任何带邮箱或

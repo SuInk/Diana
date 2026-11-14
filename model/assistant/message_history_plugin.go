@@ -109,17 +109,6 @@ func buildRecallPluginResponse(recalls []MessageEvent, referenceTime int64, disc
 	}
 }
 
-func refreshRecallPluginResponse(resp *PluginResponse, recalls []MessageEvent) {
-	if resp == nil {
-		return
-	}
-	refreshed := buildRecallPluginResponse(recalls, resp.RecallReferenceTime, resp.RecallDisclosure)
-	resp.Context = refreshed.Context
-	resp.ContextImageURLs = refreshed.ContextImageURLs
-	resp.ForwardMessages = refreshed.ForwardMessages
-	resp.RecallEvents = refreshed.RecallEvents
-}
-
 func applyRecallReplyMode(responses []PluginResponse, mode RecallReplyMode) []PluginResponse {
 	out := append([]PluginResponse(nil), responses...)
 	for index := range out {

@@ -378,16 +378,6 @@ func (r *Runtime) agentCurrentHistoricalImageReference(ctx context.Context, even
 	return "【当前消息引用的历史图片仍未附加原图】\n需要看原图或做图片比对时调用工具自行读取（history_media 取原图，match_avatar 比对群成员头像），不要拿下面的摘要当结论，也不要因为没附原图就说做不到。\n" + strings.Join(lines, "\n")
 }
 
-func segmentsWithoutHistoricalStillImages(segments []MessageSegment) []MessageSegment {
-	out := make([]MessageSegment, 0, len(segments))
-	for _, segment := range segments {
-		if !recallStillImageSegment(segment) {
-			out = append(out, segment)
-		}
-	}
-	return out
-}
-
 func unavailableImageSegmentCount(segments []MessageSegment) int {
 	count := 0
 	for _, segment := range segments {
@@ -1293,20 +1283,6 @@ func (r *Runtime) shareLocalMedia(path string) (string, bool) {
 		return "", false
 	}
 	return sharer.Share(path, resolverLocalMediaTTL)
-}
-
-func splitForwardResolverVideoUploads(messages []OutgoingMessage) ([]OutgoingMessage, []resolverVideoUpload) {
-	forwardMessages := make([]OutgoingMessage, 0, len(messages))
-	uploads := make([]resolverVideoUpload, 0)
-	for _, msg := range messages {
-		directVideoURLs, uploadVideos := splitResolverVideoUploads(msg.VideoURLs)
-		msg.VideoURLs = directVideoURLs
-		if !outgoingMessageEmpty(msg) {
-			forwardMessages = append(forwardMessages, msg)
-		}
-		uploads = append(uploads, uploadVideos...)
-	}
-	return forwardMessages, uploads
 }
 
 func resolverVideoUploadNotice(upload resolverVideoUpload) string {

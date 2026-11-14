@@ -19,11 +19,6 @@ type HealthHandler struct {
 	repository string
 }
 
-// NewHealthHandler 创建 HealthHandler；开发构建从 Go 构建信息读取 VCS revision。
-func NewHealthHandler() *HealthHandler {
-	return NewHealthHandlerWithVersion("")
-}
-
 // NewHealthHandlerWithVersion 优先使用 CI 通过 ldflags 注入的 Release 版本。
 func NewHealthHandlerWithVersion(version string) *HealthHandler {
 	version = strings.TrimSpace(version)

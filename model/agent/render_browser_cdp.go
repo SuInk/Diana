@@ -406,10 +406,6 @@ func openBackgroundPage(ctx context.Context, browserWSURL string, window Browser
 	return created.TargetID, nil
 }
 
-func launchChromeProcess(ctx context.Context, executable, root string, args []string) (*sandboxedChromeProcess, error) {
-	return launchChromeProcessWithEnv(ctx, executable, root, args, nil)
-}
-
 func launchChromeProcessWithEnv(ctx context.Context, executable, root string, args, extraEnv []string) (*sandboxedChromeProcess, error) {
 	processCtx, cancel := context.WithCancel(ctx)
 	cmd := procgroup.CommandContext(processCtx, executable, args...)

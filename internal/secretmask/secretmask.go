@@ -19,7 +19,6 @@
 package secretmask
 
 import (
-	"errors"
 	"net/url"
 	"regexp"
 	"sort"
@@ -242,12 +241,6 @@ type redactedError struct {
 
 func (e *redactedError) Error() string { return e.message }
 func (e *redactedError) Unwrap() error { return e.cause }
-
-// IsRedacted 判断这个错误是否已经过 Error 处理。
-func IsRedacted(err error) bool {
-	var target *redactedError
-	return errors.As(err, &target)
-}
 
 // —— 已登记凭据 ——
 

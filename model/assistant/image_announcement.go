@@ -118,8 +118,3 @@ func (s *imageAnnouncementSink) cancelPending() {
 		}
 	}
 }
-
-// drainPendingImageAnnouncement 取走本轮攒下的开场白，供空回复时兜底。
-func drainPendingImageAnnouncement(ctx context.Context) string {
-	return imageAnnouncementSinkFrom(ctx).drain()
-}

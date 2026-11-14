@@ -2635,39 +2635,6 @@ type openAIErrorCapture struct {
 	retryAfter time.Duration
 }
 
-// captureOpenAIErrorBody 创建捕获 OpenAI 错误响应体的中间件。
-func captureOpenAIErrorBody(capture *openAIErrorCapture) option.Middleware {
-	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-		res, err := next(req)
-		if res == nil || res.Body == nil || res.StatusCode < http.StatusBadRequest {
-			return res, err
-		}
-
-		// SDK 解析错误前先复制 body，再放回去，既保留原 SDK 行为也能给用户更清楚的错误。
-		body, readErr := io.ReadAll(res.Body)
-		_ = res.Body.Close()
-		res.Body = io.NopCloser(bytes.NewReader(body))
-		if readErr == nil {
-			capture.statusCode = res.StatusCode
-			capture.body = string(body)
-			capture.retryAfter = parseRetryAfter(res.Header.Get("Retry-After"))
-		}
-		return res, err
-	}
-}
-
-// openAIRequestOptions 构造 OpenAI 请求选项。
-func openAIRequestOptions(userAgent string, headers map[string]string, capture *openAIErrorCapture) []option.RequestOption {
-	opts := []option.RequestOption{option.WithMiddleware(captureOpenAIErrorBody(capture))}
-	for name, value := range normalizeHeaders(headers) {
-		opts = append(opts, option.WithHeader(name, value))
-	}
-	if strings.TrimSpace(userAgent) != "" {
-		opts = append(opts, option.WithHeader("User-Agent", userAgent))
-	}
-	return opts
-}
-
 // openAICompatibleError 规范化 OpenAI-compatible 请求错误。
 // openAIRequestError 保留上游状态码以便判断降级，渲染出的文案和原来完全一致。
 // retryAfter 是上游 Retry-After 头给的等待时间，没给时为 0，不进文案。
