@@ -2057,15 +2057,59 @@ func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, interi
 }
 
 // toolResultReminder 选这一步工具结果后接的提醒：本轮成功跑过 subtask 调研就换成调研版。
+// 这一轮已经中途发出过话时，后面接上原句（见 interimSentReminder）。
 func (r *Runner) toolResultReminder(steps []Step) string {
+	reminder := r.cfg.ToolResultReminder
 	if r.cfg.SubtaskResultReminder != "" {
 		for _, step := range steps {
 			if step.Tool == subtaskToolName && !step.Skipped && step.Error == "" {
-				return r.cfg.SubtaskResultReminder
+				reminder = r.cfg.SubtaskResultReminder
+				break
 			}
 		}
 	}
-	return r.cfg.ToolResultReminder
+	sent := interimSentReminder(steps)
+	if strings.TrimSpace(reminder) == "" {
+		return sent
+	}
+	if sent == "" {
+		return reminder
+	}
+	return reminder + "\n\n" + sent
+}
+
+// interimSentReminder 列出这一轮中途已经发出的话。
+//
+// 「写最终回复前」那条提醒要模型「覆盖用户问到的各项」，可答案往往已经在中途那句里说
+// 完了：11-15 TG 群问小汐怎么不说话，一轮里先中途发了「小汐最后一条是 13 号晚上……
+// 之后两天没说话」，查完工具收尾时又发「小汐最后一次说话是前天晚上……整整两天没冒泡」，
+// 4 秒内同一件事说了两遍。send 的调用结果里写着「只 send 还没说过的内容」，但它埋在
+// 工具结果中间，压不过排在末尾的提醒；原句逐字比对的去重也拦不住换了说法的重复。
+// 所以把发过的原句直接放在末尾提醒里。
+func interimSentReminder(steps []Step) string {
+	var sent []string
+	seen := map[string]bool{}
+	for _, step := range steps {
+		if step.Tool != finalizeToolName || step.Skipped || step.Error != "" {
+			continue
+		}
+		text, _ := step.Input["text"].(string)
+		if text = strings.TrimSpace(text); text == "" || seen[text] {
+			continue
+		}
+		seen[text] = true
+		sent = append(sent, text)
+	}
+	if len(sent) == 0 {
+		return ""
+	}
+	var builder strings.Builder
+	builder.WriteString("【这一轮你已经发出去的话】\n")
+	for _, text := range sent {
+		builder.WriteString("- 「" + text + "」\n")
+	}
+	builder.WriteString("这些对方都已经看到了。最后这条只写上面还没说到的新内容，同一件事别换个说法再讲一遍；上面已经把这一问答完了，就直接 send silent=true。")
+	return builder.String()
 }
 
 // withToolResultReminder 在上一步刚执行过工具时把提醒接在请求末尾，返回新切片，不改动 messages。
