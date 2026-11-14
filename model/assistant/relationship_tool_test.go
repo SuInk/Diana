@@ -238,7 +238,7 @@ func TestRuntimeAgentQueriesMentionedUsersRelationship(t *testing.T) {
 		t.Fatalf("reply = %q", reply)
 	}
 	// 4 次 Agent 调用；主人发来的消息不过发送前审核。
-	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[3].Messages, `"favorability": 5`) {
+	if len(provider.requests) != 4 || !requestMessagesContain(provider.requests[3].Messages, `"favorability":5`) {
 		t.Fatalf("requests = %#v", provider.requests)
 	}
 	for _, want := range []string{"必须先查目标本人", "榜单和画像对群成员公开", "不以隐私拒绝", "不编「隐藏数据」"} {

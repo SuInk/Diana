@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -227,5 +228,90 @@ func TestFeedLikesAreIdempotentPerAuthor(t *testing.T) {
 	}
 	if got, _ := store.ListFeedPosts(ctx, assistant.FeedListQuery{ID: "nope", Limit: 1}); len(got) != 0 {
 		t.Fatalf("ID 过滤：%#v", got)
+	}
+}
+
+// 键集游标 (created_at, id)：同一纳秒发的几条也不重不漏；needs_reply 在 SQL 里按最新一条
+// 评论筛；LatestComments 只挂最新几条、comment_count 是总数；评论按时间正序单独分页。
+func TestFeedKeysetPagingNeedsReplyAndCommentPages(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "feed.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	same := time.Unix(1_788_247_000, 0)
+	var ids []string
+	for i := 0; i < 5; i++ {
+		post, err := store.CreateFeedPost(ctx, assistant.FeedPostCreateRequest{ProfileID: "bot-1", Content: fmt.Sprintf("同一时刻 %d", i), Now: same})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, post.ID)
+	}
+	seen := map[string]bool{}
+	query := assistant.FeedListQuery{ProfileID: "bot-1", Limit: 2}
+	for page := 0; page < 10; page++ {
+		posts, err := store.ListFeedPosts(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(posts) == 0 {
+			break
+		}
+		for _, post := range posts {
+			if seen[post.ID] {
+				t.Fatalf("post %s returned twice", post.ID)
+			}
+			seen[post.ID] = true
+		}
+		last := posts[len(posts)-1]
+		query.Before, query.BeforeID = last.CreatedAt, last.ID
+		if left, err := store.CountFeedPosts(ctx, query); err != nil || left != 5-len(seen) {
+			t.Fatalf("count after cursor = %d, %v (seen %d)", left, err, len(seen))
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("keyset paging saw %d posts, want 5", len(seen))
+	}
+
+	// ids[0]：主人评论后没回 → 待回；ids[1]：主人评论、机器人回了 → 不算待回。
+	for i := 0; i < 4; i++ {
+		if _, err := store.AddFeedComment(ctx, assistant.FeedCommentRequest{PostID: ids[0], AuthorKind: assistant.FeedAuthorAdmin, Content: fmt.Sprintf("评论 %d", i), Now: same.Add(time.Duration(i) * time.Second)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.AddFeedComment(ctx, assistant.FeedCommentRequest{PostID: ids[1], AuthorKind: assistant.FeedAuthorAdmin, Content: "在吗", Now: same}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AddFeedComment(ctx, assistant.FeedCommentRequest{PostID: ids[1], AuthorKind: assistant.FeedAuthorBot, Content: "在", Now: same.Add(time.Second)}); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := store.ListFeedPosts(ctx, assistant.FeedListQuery{ProfileID: "bot-1", NeedsReply: true, LatestComments: 2, Limit: 10})
+	if err != nil || len(waiting) != 1 || waiting[0].ID != ids[0] {
+		t.Fatalf("needs_reply = %#v, err=%v", waiting, err)
+	}
+	if count, _ := store.CountFeedPosts(ctx, assistant.FeedListQuery{ProfileID: "bot-1", NeedsReply: true}); count != 1 {
+		t.Fatalf("needs_reply count = %d", count)
+	}
+	if got := waiting[0]; got.CommentCount != 4 || len(got.Comments) != 2 || got.Comments[0].Content != "评论 2" || got.Comments[1].Content != "评论 3" {
+		t.Fatalf("latest comments = %d %#v", got.CommentCount, got.Comments)
+	}
+
+	commentQuery := assistant.FeedCommentQuery{PostID: ids[0], ProfileID: "bot-1", Limit: 3}
+	firstPage, err := store.ListFeedComments(ctx, commentQuery)
+	if err != nil || len(firstPage) != 3 || firstPage[0].Content != "评论 0" {
+		t.Fatalf("first comment page = %#v, err=%v", firstPage, err)
+	}
+	commentQuery.After, commentQuery.AfterID = firstPage[2].CreatedAt, firstPage[2].ID
+	rest, err := store.ListFeedComments(ctx, commentQuery)
+	if err != nil || len(rest) != 1 || rest[0].Content != "评论 3" {
+		t.Fatalf("rest comments = %#v, err=%v", rest, err)
+	}
+	if left, err := store.CountFeedComments(ctx, commentQuery); err != nil || left != 1 {
+		t.Fatalf("comments left = %d, %v", left, err)
+	}
+	if _, err := store.ListFeedComments(ctx, assistant.FeedCommentQuery{PostID: ids[0], ProfileID: "bot-2"}); !errors.Is(err, assistant.ErrFeedPostNotFound) {
+		t.Fatalf("other profile's post must be not found, err=%v", err)
 	}
 }

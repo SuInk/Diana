@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,7 @@ type stubSelfNoteStore struct {
 	notes    []SelfNote
 	writeErr error
 	purged   int
+	writes   int
 }
 
 func (s *stubSelfNoteStore) WriteSelfNote(_ context.Context, request SelfNoteWriteRequest) (SelfNote, error) {
@@ -35,7 +37,9 @@ func (s *stubSelfNoteStore) WriteSelfNote(_ context.Context, request SelfNoteWri
 		ID: "note-" + itoa(len(s.notes)+1), ProfileID: request.ProfileID,
 		Topic: request.Topic, Content: request.Content, SupersedesID: request.SupersedesID,
 		SourceUserID: request.SourceUserID, Status: SelfNoteStatusActive, Version: 1,
+		CreatedAt: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC).Add(time.Duration(len(s.notes)+s.writes) * time.Minute),
 	}
+	s.writes++
 	if request.SupersedesID != "" {
 		filtered := make([]SelfNote, 0, len(s.notes))
 		for _, existing := range s.notes {
@@ -56,6 +60,39 @@ func (s *stubSelfNoteStore) ListSelfNotes(_ context.Context, _ string, _ bool, l
 		notes = notes[:limit]
 	}
 	return notes, nil
+}
+
+// ListSelfNotesAfter 照 SQLite 的语义：(created_at, id) 旧到新，游标只要严格排在它后面的。
+func (s *stubSelfNoteStore) notesAfter(query SelfNoteListQuery) []SelfNote {
+	notes := make([]SelfNote, 0, len(s.notes))
+	for _, note := range s.notes {
+		if !query.IncludeInactive && note.Status != SelfNoteStatusActive {
+			continue
+		}
+		if !query.After.IsZero() && !note.CreatedAt.After(query.After) && !(note.CreatedAt.Equal(query.After) && note.ID > query.AfterID) {
+			continue
+		}
+		notes = append(notes, note)
+	}
+	sort.SliceStable(notes, func(i, j int) bool {
+		if !notes[i].CreatedAt.Equal(notes[j].CreatedAt) {
+			return notes[i].CreatedAt.Before(notes[j].CreatedAt)
+		}
+		return notes[i].ID < notes[j].ID
+	})
+	return notes
+}
+
+func (s *stubSelfNoteStore) ListSelfNotesAfter(_ context.Context, query SelfNoteListQuery) ([]SelfNote, error) {
+	notes := s.notesAfter(query)
+	if query.Limit > 0 && len(notes) > query.Limit {
+		notes = notes[:query.Limit]
+	}
+	return notes, nil
+}
+
+func (s *stubSelfNoteStore) CountSelfNotes(_ context.Context, query SelfNoteListQuery) (int, error) {
+	return len(s.notesAfter(query)), nil
 }
 
 func (s *stubSelfNoteStore) DeleteSelfNote(_ context.Context, _, id, _, _ string, _ time.Time) (SelfNote, bool, error) {
@@ -226,44 +263,105 @@ func TestSelfNoteToolWritesRevisesAndGuardsPurge(t *testing.T) {
 	}
 }
 
-// list 报真实总数（不是这一页的条数），多出来的按整条分页，offset 续读拿到剩下的；
-// 存储一次只给 limit 条，总数超过首轮请求量时也要取全。
-func TestSelfNoteToolListReportsRealTotalAndPages(t *testing.T) {
+type selfNoteListTestResult struct {
+	Message    string     `json:"message"`
+	Items      []SelfNote `json:"items"`
+	Total      int        `json:"total"`
+	HasMore    bool       `json:"has_more"`
+	Remaining  int        `json:"remaining_count"`
+	NextCursor string     `json:"next_cursor"`
+	PageNote   string     `json:"page_note"`
+}
+
+func runSelfNoteList(t *testing.T, ctx context.Context, tool *dianaSelfNoteTool, input map[string]any) selfNoteListTestResult {
+	t.Helper()
+	out, err := tool.Run(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result selfNoteListTestResult
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode %s: %v", out, err)
+	}
+	return result
+}
+
+func selfNoteListTestTool(t *testing.T, total int, content string) (*dianaSelfNoteTool, *stubSelfNoteStore) {
+	t.Helper()
 	store := &stubSelfNoteStore{}
-	total := MaximumActiveSelfNotes*2 + 7
+	base := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	for index := 0; index < total; index++ {
-		store.notes = append(store.notes, SelfNote{ID: "note-" + itoa(index+1), Content: "第 " + itoa(index+1) + " 条", Status: SelfNoteStatusActive})
+		store.notes = append(store.notes, SelfNote{
+			ID: "note-" + itoa(index+1), Content: content + itoa(index+1), Status: SelfNoteStatusActive,
+			CreatedAt: base.Add(time.Duration(index) * time.Second),
+		})
 	}
 	tool := newDianaSelfNoteTool(selfNoteTestRuntime(t, true, store), MessageEvent{Kind: EventKindPrivate, UserID: "10001", ProfileID: "bot-1"}, RelationshipPolicy{Owner: true})
-	type listResult struct {
-		Message    string     `json:"message"`
-		Items      []SelfNote `json:"items"`
-		Total      int        `json:"total"`
-		HasMore    bool       `json:"has_more"`
-		NextOffset int        `json:"next_offset"`
-	}
-	run := func(input map[string]any) listResult {
-		t.Helper()
-		out, err := tool.Run(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var result listResult
-		if err := json.Unmarshal([]byte(out), &result); err != nil {
-			t.Fatalf("decode %s: %v", out, err)
-		}
-		return result
-	}
-	first := run(map[string]any{"operation": "list", "limit": 10})
-	if first.Total != total || len(first.Items) != 10 || !first.HasMore || first.NextOffset != 10 {
+	return tool, store
+}
+
+// list 报真实总数（不是这一页的条数），多出来的按整条分页，按写入顺序的键集游标续读；
+// 翻页之间删掉、改写已读的条目，后面的页不跳条也不重复（offset 会跳过一条）。
+func TestSelfNoteToolListReportsRealTotalAndPages(t *testing.T) {
+	total := MaximumActiveSelfNotes*2 + 7
+	tool, _ := selfNoteListTestTool(t, total, "第 ")
+	ctx := context.Background()
+	first := runSelfNoteList(t, ctx, tool, map[string]any{"operation": "list", "limit": 10})
+	if first.Total != total || len(first.Items) != 10 || !first.HasMore || first.NextCursor == "" || first.Remaining != total-10 {
 		t.Fatalf("first page = %+v", first)
 	}
 	if !strings.Contains(first.Message, itoa(total)) {
 		t.Fatalf("message should report real total %d: %q", total, first.Message)
 	}
-	rest := run(map[string]any{"operation": "list", "limit": 100, "offset": first.NextOffset})
-	if rest.Total != total || len(rest.Items) != total-10 || rest.HasMore || rest.Items[0].ID != "note-11" || rest.Items[len(rest.Items)-1].ID != "note-"+itoa(total) {
-		t.Fatalf("rest page = total %d items %d has_more %v", rest.Total, len(rest.Items), rest.HasMore)
+	// 读完第一页后删掉其中一条、改写另一条：改写出的新版本排到末尾。
+	if _, err := tool.Run(ctx, map[string]any{"operation": "delete", "id": "note-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"operation": "revise", "id": "note-3", "content": "改写后的第 3 条"}); err != nil {
+		t.Fatal(err)
+	}
+	rest := runSelfNoteList(t, ctx, tool, map[string]any{"operation": "list", "limit": 100, "cursor": first.NextCursor})
+	if rest.HasMore || len(rest.Items) != total-10+1 || rest.Items[0].ID != "note-11" ||
+		rest.Items[len(rest.Items)-2].ID != "note-"+itoa(total) || rest.Items[len(rest.Items)-1].Content != "改写后的第 3 条" {
+		t.Fatalf("rest page = %+v", rest)
+	}
+	if _, err := tool.Run(ctx, map[string]any{"operation": "list", "cursor": "不是游标"}); err == nil {
+		t.Fatal("invalid cursor must fail")
+	}
+}
+
+// 按单次上限切页：上限很小时每页只装下几条，page_note 写明原因，游标续读按顺序拿全。
+func TestSelfNoteToolListSplitsAtOutputBudget(t *testing.T) {
+	const total = 30
+	tool, _ := selfNoteListTestTool(t, total, strings.Repeat("长", 100))
+	ctx := agent.WithToolOutputBudget(context.Background(), 2000)
+	next := 1
+	cursor := ""
+	for page := 0; ; page++ {
+		input := map[string]any{"operation": "list", "limit": 1000}
+		if cursor != "" {
+			input["cursor"] = cursor
+		}
+		result := runSelfNoteList(t, ctx, tool, input)
+		if len(result.Items) == 0 || len(result.Items) >= total || result.Total != total {
+			t.Fatalf("page %d should be cut by budget: %+v", page, result)
+		}
+		for _, note := range result.Items {
+			if note.ID != "note-"+itoa(next) {
+				t.Fatalf("page %d got %s, want note-%d", page, note.ID, next)
+			}
+			next++
+		}
+		if !result.HasMore {
+			break
+		}
+		if !strings.Contains(result.PageNote, "单次结果上限") {
+			t.Fatalf("page note = %q", result.PageNote)
+		}
+		cursor = result.NextCursor
+	}
+	if next != total+1 {
+		t.Fatalf("read %d notes, want %d", next-1, total)
 	}
 }
 

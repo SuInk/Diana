@@ -63,26 +63,21 @@ INSERT OR IGNORE INTO onebot_requests (
 	return stored, rows == 1, nil
 }
 
-func (s *SQLiteStore) ListOneBotRequests(ctx context.Context, profileID string, status assistant.OneBotRequestStatus, limit int) ([]assistant.OneBotRequestRecord, error) {
-	profileID = strings.TrimSpace(profileID)
-	// 不设上限：limit<=0 给全部（SQLite 的 LIMIT -1），工具按整条分页。
+// ListOneBotRequests 按 (created_at, id) 新到旧列出请求。Before 是键集游标，Limit<=0
+// 不设上限（SQLite 的 LIMIT -1）；工具按游标一页页取。
+func (s *SQLiteStore) ListOneBotRequests(ctx context.Context, query assistant.OneBotRequestQuery) ([]assistant.OneBotRequestRecord, error) {
+	limit := query.Limit
 	if limit <= 0 {
 		limit = -1
 	}
-	query := `
+	where, args := oneBotRequestQueryWhere(query)
+	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT id, profile_id, platform, COALESCE(self_id,''), request_type, COALESCE(sub_type,''),
        COALESCE(user_id,''), COALESCE(group_id,''), COALESCE(comment,''), flag, status,
        COALESCE(reason,''), created_at, updated_at, decided_at
 FROM onebot_requests
-WHERE profile_id = ?`
-	args := []any{profileID}
-	if status != "" {
-		query += ` AND status = ?`
-		args = append(args, string(status))
-	}
-	query += ` ORDER BY created_at DESC, id DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.eventReader().QueryContext(ctx, query, args...)
+WHERE `+where+`
+ORDER BY created_at DESC, id DESC LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -96,6 +91,29 @@ WHERE profile_id = ?`
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// CountOneBotRequests 数同一查询（含 Before 游标）匹配的条数，不看 Limit。
+func (s *SQLiteStore) CountOneBotRequests(ctx context.Context, query assistant.OneBotRequestQuery) (int, error) {
+	where, args := oneBotRequestQueryWhere(query)
+	var count int
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM onebot_requests WHERE `+where, args...).Scan(&count)
+	return count, err
+}
+
+func oneBotRequestQueryWhere(query assistant.OneBotRequestQuery) (string, []any) {
+	where := `profile_id = ?`
+	args := []any{strings.TrimSpace(query.ProfileID)}
+	if query.Status != "" {
+		where += ` AND status = ?`
+		args = append(args, string(query.Status))
+	}
+	if query.Before != nil {
+		at := query.Before.At.UnixNano()
+		where += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, at, at, query.Before.ID)
+	}
+	return where, args
 }
 
 func (s *SQLiteStore) GetOneBotRequest(ctx context.Context, profileID, id string) (assistant.OneBotRequestRecord, bool, error) {

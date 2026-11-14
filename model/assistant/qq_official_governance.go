@@ -123,13 +123,51 @@ func qqOfficialDeleteMessagePath(event MessageEvent, messageID string) (string, 
 	return "", fmt.Errorf("缺少会话 ID")
 }
 
+// qqOfficialGuildPageSize 是频道列表接口一页的条数，接口最多给 100。
+const qqOfficialGuildPageSize = 100
+
 // runQQOfficialGuildList 列出机器人加入的 QQ 频道。QQ 群没有列表接口：机器人只在
 // 群里收到消息或群事件时才知道 group_openid，所以结果里要说清楚群不在其中。
+// 接口一页最多 100 个，用 after（上一页最后一个频道 ID）翻完所有页，不只给第一页。
 func (t *dianaPlatformTool) runQQOfficialGuildList(ctx context.Context, operation string, owner bool, access string) (string, error) {
-	data, err := t.callQQOfficial(ctx, "GET", "/users/@me/guilds", map[string]any{"limit": 100})
+	var groups []dianaPlatformGroupItem
+	seen := map[string]bool{}
+	after := ""
+	for {
+		params := map[string]any{"limit": qqOfficialGuildPageSize}
+		if after != "" {
+			params["after"] = after
+		}
+		page, fetched, err := t.fetchQQOfficialGuildPage(ctx, params)
+		if err != nil {
+			t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
+			return "", err
+		}
+		last := ""
+		for _, item := range page {
+			last = item.GroupID
+			if !seen[item.GroupID] {
+				seen[item.GroupID] = true
+				groups = append(groups, item)
+			}
+		}
+		// 不满一页就是最后一页；接口不认 after、原样回同一页时也停，免得空转。
+		if fetched < qqOfficialGuildPageSize || last == "" || last == after {
+			break
+		}
+		after = last
+	}
+	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
+	return t.marshalGroupList(operation, access, owner, groups, map[string]any{
+		"scope_note": "这是机器人加入的 QQ 频道；QQ 群开放平台不提供列表接口，不在其中。",
+	})
+}
+
+// fetchQQOfficialGuildPage 取一页频道，fetched 是接口这一页回了几条（含解析不了的）。
+func (t *dianaPlatformTool) fetchQQOfficialGuildPage(ctx context.Context, params map[string]any) ([]dianaPlatformGroupItem, int, error) {
+	data, err := t.callQQOfficial(ctx, "GET", "/users/@me/guilds", params)
 	if err != nil {
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
-		return "", err
+		return nil, 0, err
 	}
 	// 接口直接回数组，CallAPI 把它原样放在 result 里。
 	var raw []any
@@ -138,9 +176,7 @@ func (t *dianaPlatformTool) runQQOfficialGuildList(ctx context.Context, operatio
 		ok = json.Unmarshal(encoded, &raw) == nil
 	}
 	if !ok {
-		err := fmt.Errorf("频道列表返回格式无法识别")
-		t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", err)
-		return "", err
+		return nil, 0, fmt.Errorf("频道列表返回格式无法识别")
 	}
 	groups := make([]dianaPlatformGroupItem, 0, len(raw))
 	for _, value := range raw {
@@ -155,8 +191,5 @@ func (t *dianaPlatformTool) runQQOfficialGuildList(ctx context.Context, operatio
 		count, _ := strconv.Atoi(strings.TrimSpace(stringFromAny(item["member_count"])))
 		groups = append(groups, dianaPlatformGroupItem{GroupID: id, GroupName: strings.TrimSpace(stringFromAny(item["name"])), MemberCount: count})
 	}
-	t.runtime.recordPlatformInterfaceOperation(t.event, operation, access, owner, "", nil)
-	return t.marshalGroupList(operation, access, owner, groups, map[string]any{
-		"scope_note": "这是机器人加入的 QQ 频道；QQ 群开放平台不提供列表接口，不在其中。",
-	})
+	return groups, len(raw), nil
 }

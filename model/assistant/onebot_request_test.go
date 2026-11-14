@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -33,19 +34,41 @@ func (s *memoryOneBotRequestStore) SaveOneBotRequest(_ context.Context, item One
 	return item, true, nil
 }
 
-func (s *memoryOneBotRequestStore) ListOneBotRequests(_ context.Context, profileID string, status OneBotRequestStatus, limit int) ([]OneBotRequestRecord, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// matching 照 SQLite 实现：按 (created_at, id) 新到旧，Before 之后的才算。
+func (s *memoryOneBotRequestStore) matching(query OneBotRequestQuery) []OneBotRequestRecord {
 	out := []OneBotRequestRecord{}
 	for _, item := range s.items {
-		if item.ProfileID == profileID && (status == "" || item.Status == status) {
-			out = append(out, item)
-			if limit > 0 && len(out) >= limit {
-				break
-			}
+		if item.ProfileID != query.ProfileID || (query.Status != "" && item.Status != query.Status) {
+			continue
 		}
+		if before := query.Before; before != nil && !(item.CreatedAt.Before(before.At) || (item.CreatedAt.Equal(before.At) && item.ID < before.ID)) {
+			continue
+		}
+		out = append(out, item)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if !out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].CreatedAt.After(out[j].CreatedAt)
+		}
+		return out[i].ID > out[j].ID
+	})
+	return out
+}
+
+func (s *memoryOneBotRequestStore) ListOneBotRequests(_ context.Context, query OneBotRequestQuery) ([]OneBotRequestRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.matching(query)
+	if query.Limit > 0 && len(out) > query.Limit {
+		out = out[:query.Limit]
 	}
 	return out, nil
+}
+
+func (s *memoryOneBotRequestStore) CountOneBotRequests(_ context.Context, query OneBotRequestQuery) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.matching(query)), nil
 }
 
 func (s *memoryOneBotRequestStore) GetOneBotRequest(_ context.Context, profileID, id string) (OneBotRequestRecord, bool, error) {
@@ -277,38 +300,111 @@ func TestOneBotRequestPromptIsOwnerOnly(t *testing.T) {
 	}
 }
 
-// 待处理请求按整条分页，附言给全不截短。
-func TestOneBotRequestListPagesAndKeepsFullComment(t *testing.T) {
+type oneBotRequestPageResult struct {
+	Items []oneBotRequestView `json:"items"`
+	Page  *toolCursorPage     `json:"page"`
+}
+
+func newPagedOneBotRequestStore(count int, comment string) *memoryOneBotRequestStore {
+	store := &memoryOneBotRequestStore{}
+	base := time.Unix(1_788_300_000, 0)
+	for i := range count {
+		// 每两条共用一个时间戳，游标要靠 id 区分同一时刻的请求。
+		at := base.Add(time.Duration(i/2) * time.Second)
+		store.items = append(store.items, OneBotRequestRecord{
+			ID: fmt.Sprintf("req-%03d", i), ProfileID: "bot-1", RequestType: "friend", UserID: itoa(10000 + i),
+			Comment: comment, Status: OneBotRequestPending, CreatedAt: at,
+		})
+	}
+	return store
+}
+
+func listOneBotRequestPageForTest(t *testing.T, ctx context.Context, store *memoryOneBotRequestStore, input map[string]any) oneBotRequestPageResult {
+	t.Helper()
+	raw, err := listOneBotRequestPage(ctx, store, input, "bot-1", "list", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limit := agent.ToolOutputBudget(ctx); limit > 0 && len([]rune(raw)) > limit {
+		t.Fatalf("结果 %d 字超过单次上限 %d", len([]rune(raw)), limit)
+	}
+	var got oneBotRequestPageResult
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Page == nil {
+		t.Fatalf("没有分页字段：%s", raw)
+	}
+	return got
+}
+
+// 待处理请求按键集游标整条分页，附言给全不截短；翻页之间处理掉已看过的请求，
+// 后面的页不跳条、不重复（offset 翻页会因列表前移跳过一批）。
+func TestOneBotRequestListCursorSurvivesResolve(t *testing.T) {
 	longComment := strings.Repeat("想", 300)
-	items := make([]OneBotRequestRecord, 0, 30)
-	for i := range 30 {
-		items = append(items, OneBotRequestRecord{ID: "req-" + itoa(i), RequestType: "friend", UserID: "10001", Comment: longComment, Status: OneBotRequestPending, CreatedAt: time.Now()})
-	}
-	type result struct {
-		Items []oneBotRequestView `json:"items"`
-		Page  *toolResultPage     `json:"page"`
-	}
-	decode := func(input map[string]any) result {
-		t.Helper()
-		raw, err := marshalOneBotRequestListPage(context.Background(), input, "list", items, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var got result
-		if err := json.Unmarshal([]byte(raw), &got); err != nil {
-			t.Fatal(err)
-		}
-		return got
-	}
-	first := decode(map[string]any{"limit": 20})
-	if len(first.Items) != 20 || first.Page == nil || first.Page.Total != 30 || !first.Page.HasMore || first.Page.NextOffset != 20 {
+	store := newPagedOneBotRequestStore(30, longComment)
+	ctx := context.Background()
+	first := listOneBotRequestPageForTest(t, ctx, store, map[string]any{"limit": 20})
+	if len(first.Items) != 20 || !first.Page.HasMore || first.Page.RemainingCount != 10 || first.Page.NextCursor == "" {
 		t.Fatalf("first page = %+v", first.Page)
 	}
-	if first.Items[0].Comment != longComment {
-		t.Fatalf("附言被截短：%d 字", len([]rune(first.Items[0].Comment)))
+	if first.Items[0].ID != "req-029" || first.Items[0].Comment != longComment {
+		t.Fatalf("排序或附言不对：%s %d 字", first.Items[0].ID, len([]rune(first.Items[0].Comment)))
 	}
-	rest := decode(map[string]any{"offset": first.Page.NextOffset})
-	if len(rest.Items) != 10 || rest.Page.HasMore || rest.Items[0].ID != "req-20" {
-		t.Fatalf("rest page = %+v", rest.Page)
+	seen := map[string]bool{}
+	for _, item := range first.Items {
+		seen[item.ID] = true
+		if _, err := store.ResolveOneBotRequest(ctx, "bot-1", item.ID, OneBotRequestApproved, "", time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rest := listOneBotRequestPageForTest(t, ctx, store, map[string]any{"cursor": first.Page.NextCursor})
+	if len(rest.Items) != 10 || rest.Page.HasMore || rest.Page.NextCursor != "" {
+		t.Fatalf("rest page = %+v items=%d", rest.Page, len(rest.Items))
+	}
+	for _, item := range rest.Items {
+		if seen[item.ID] {
+			t.Fatalf("重复给了 %s", item.ID)
+		}
+		seen[item.ID] = true
+	}
+	if len(seen) != 30 {
+		t.Fatalf("处理之后再翻页跳条：只看到 %d 条", len(seen))
+	}
+	if _, err := listOneBotRequestPage(ctx, store, map[string]any{"cursor": "not-a-cursor"}, "bot-1", "list", ""); err == nil {
+		t.Fatal("无效游标应该报错")
+	}
+}
+
+// 单次上限装不下时按整条切页：每页都在上限内，续读把剩下的全给齐。
+func TestOneBotRequestListSplitsByOutputBudget(t *testing.T) {
+	store := newPagedOneBotRequestStore(12, strings.Repeat("想", 300))
+	ctx := agent.WithToolOutputBudget(context.Background(), 2500)
+	seen := map[string]bool{}
+	input := map[string]any{}
+	for pages := 0; ; pages++ {
+		if pages > 12 {
+			t.Fatal("翻页没有结束")
+		}
+		got := listOneBotRequestPageForTest(t, ctx, store, input)
+		if len(got.Items) == 0 {
+			t.Fatal("一页一条都没给")
+		}
+		for _, item := range got.Items {
+			if seen[item.ID] {
+				t.Fatalf("重复给了 %s", item.ID)
+			}
+			seen[item.ID] = true
+		}
+		if !got.Page.HasMore {
+			break
+		}
+		if pages == 0 && (len(got.Items) >= 12 || !strings.Contains(got.Page.PageNote, "单次结果上限")) {
+			t.Fatalf("第一页应按上限切开：%d 条 note=%q", len(got.Items), got.Page.PageNote)
+		}
+		input = map[string]any{"cursor": got.Page.NextCursor}
+	}
+	if len(seen) != 12 {
+		t.Fatalf("只拿到 %d 条", len(seen))
 	}
 }

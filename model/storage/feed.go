@@ -139,13 +139,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	return post, nil
 }
 
-// ListFeedPosts 按时间倒序列出动态（新的在前）。
-func (s *SQLiteStore) ListFeedPosts(ctx context.Context, query assistant.FeedListQuery) ([]assistant.FeedPost, error) {
-	defer s.observeStorage(ctx, "ListFeedPosts", "read")()
-	limit := query.Limit
-	if limit <= 0 {
-		limit = 20
-	}
+// feedPostFilter 是列表和计数共用的筛选条件。
+func feedPostFilter(query assistant.FeedListQuery) (string, []any) {
 	var (
 		where []string
 		args  []any
@@ -163,20 +158,42 @@ func (s *SQLiteStore) ListFeedPosts(ctx context.Context, query assistant.FeedLis
 		args = append(args, assistant.NormalizeFeedKind(query.Kind))
 	}
 	if !query.Before.IsZero() {
-		where = append(where, "created_at < ?")
-		args = append(args, query.Before.UnixNano())
+		if beforeID := strings.TrimSpace(query.BeforeID); beforeID != "" {
+			where = append(where, "(created_at < ? OR (created_at = ? AND id < ?))")
+			args = append(args, query.Before.UnixNano(), query.Before.UnixNano(), beforeID)
+		} else {
+			where = append(where, "created_at < ?")
+			args = append(args, query.Before.UnixNano())
+		}
 	}
-	statement := `SELECT id, profile_id, kind, title, content, source_session, source_user_id, created_at FROM feed_posts`
-	if len(where) > 0 {
-		statement += " WHERE " + strings.Join(where, " AND ")
+	if query.NeedsReply {
+		// 最新一条评论（和 attachFeedComments 同一个排序）是主人写的。
+		where = append(where, `(SELECT c.author_kind FROM feed_comments c WHERE c.post_id = feed_posts.id
+ORDER BY c.created_at DESC, c.id DESC LIMIT 1) = ?`)
+		args = append(args, assistant.FeedAuthorAdmin)
 	}
-	statement += " ORDER BY created_at DESC, id DESC LIMIT ?"
+	if len(where) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(where, " AND "), args
+}
+
+// ListFeedPosts 按时间倒序列出动态（新的在前）。
+func (s *SQLiteStore) ListFeedPosts(ctx context.Context, query assistant.FeedListQuery) ([]assistant.FeedPost, error) {
+	defer s.observeStorage(ctx, "ListFeedPosts", "read")()
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	where, args := feedPostFilter(query)
+	statement := `SELECT id, profile_id, kind, title, content, source_session, source_user_id, created_at FROM feed_posts` +
+		where + " ORDER BY created_at DESC, id DESC LIMIT ?"
 	args = append(args, limit)
 	rows, err := s.eventReader().QueryContext(ctx, statement, args...)
 	if err != nil {
 		return nil, err
 	}
-	posts := make([]assistant.FeedPost, 0, limit)
+	posts := make([]assistant.FeedPost, 0, min(limit, 64))
 	for rows.Next() {
 		var post assistant.FeedPost
 		var createdNS int64
@@ -198,13 +215,22 @@ func (s *SQLiteStore) ListFeedPosts(ctx context.Context, query assistant.FeedLis
 	if err := s.attachFeedImages(ctx, posts); err != nil {
 		return nil, err
 	}
-	if err := s.attachFeedComments(ctx, posts); err != nil {
+	if err := s.attachFeedComments(ctx, posts, query.LatestComments); err != nil {
 		return nil, err
 	}
 	if err := s.attachFeedLikes(ctx, posts); err != nil {
 		return nil, err
 	}
 	return posts, nil
+}
+
+// CountFeedPosts 数符合条件（含游标）的动态条数，不看 Limit。
+func (s *SQLiteStore) CountFeedPosts(ctx context.Context, query assistant.FeedListQuery) (int, error) {
+	defer s.observeStorage(ctx, "CountFeedPosts", "read")()
+	where, args := feedPostFilter(query)
+	var count int
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(1) FROM feed_posts`+where, args...).Scan(&count)
+	return count, err
 }
 
 // attachFeedImages 一次查出这一页所有帖子的配图元数据，避免每条帖子各查一次。
@@ -314,35 +340,127 @@ func scanFeedComment(row interface{ Scan(dest ...any) error }) (assistant.FeedCo
 	return comment, nil
 }
 
-// attachFeedComments 一次查出这一页所有帖子的评论，按时间正序挂上去。
-func (s *SQLiteStore) attachFeedComments(ctx context.Context, posts []assistant.FeedPost) error {
+// attachFeedComments 一次查出这一页所有帖子的评论，按时间正序挂上去。latest 大于 0
+// 时每条只挂最新 latest 条；CommentCount 总是这条动态下的评论总数。
+func (s *SQLiteStore) attachFeedComments(ctx context.Context, posts []assistant.FeedPost, latest int) error {
 	if len(posts) == 0 {
 		return nil
 	}
 	index := make(map[string]int, len(posts))
-	placeholders := make([]string, len(posts))
 	args := make([]any, len(posts))
 	for i, post := range posts {
 		index[post.ID] = i
-		placeholders[i] = "?"
 		args[i] = post.ID
 	}
-	rows, err := s.eventReader().QueryContext(ctx, `SELECT `+feedCommentColumns+` FROM feed_comments
-WHERE post_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY created_at, id`, args...)
+	in := placeholders(len(posts))
+	statement := `SELECT ` + feedCommentColumns + ` FROM feed_comments WHERE post_id IN (` + in + `) ORDER BY created_at, id`
+	if latest > 0 {
+		statement = `SELECT ` + feedCommentColumns + ` FROM (
+  SELECT ` + feedCommentColumns + `, ROW_NUMBER() OVER (PARTITION BY post_id ORDER BY created_at DESC, id DESC) AS newest
+  FROM feed_comments WHERE post_id IN (` + in + `)
+) WHERE newest <= ? ORDER BY created_at, id`
+		args = append(args, latest)
+	}
+	rows, err := s.eventReader().QueryContext(ctx, statement, args...)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		comment, err := scanFeedComment(rows)
 		if err != nil {
+			_ = rows.Close()
 			return err
 		}
 		if i, ok := index[comment.PostID]; ok {
 			posts[i].Comments = append(posts[i].Comments, comment)
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	_ = rows.Close()
+	if latest <= 0 {
+		for i := range posts {
+			posts[i].CommentCount = len(posts[i].Comments)
+		}
+		return nil
+	}
+	counts, err := s.eventReader().QueryContext(ctx, `SELECT post_id, COUNT(1) FROM feed_comments WHERE post_id IN (`+in+`) GROUP BY post_id`, args[:len(posts)]...)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = counts.Close() }()
+	for counts.Next() {
+		var postID string
+		var count int
+		if err := counts.Scan(&postID, &count); err != nil {
+			return err
+		}
+		if i, ok := index[postID]; ok {
+			posts[i].CommentCount = count
+		}
+	}
+	return counts.Err()
+}
+
+// feedCommentFilter 是评论分页和计数共用的条件；动态不存在（或不属于该机器人）时
+// 返回 ErrFeedPostNotFound。
+func (s *SQLiteStore) feedCommentFilter(ctx context.Context, query assistant.FeedCommentQuery) (string, []any, error) {
+	postID, profileID := strings.TrimSpace(query.PostID), strings.TrimSpace(query.ProfileID)
+	var exists int
+	if err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(1) FROM feed_posts WHERE id = ? AND (? = '' OR profile_id = ?)`,
+		postID, profileID, profileID).Scan(&exists); err != nil {
+		return "", nil, err
+	}
+	if exists == 0 {
+		return "", nil, assistant.ErrFeedPostNotFound
+	}
+	where, args := " WHERE post_id = ?", []any{postID}
+	if !query.After.IsZero() {
+		where += " AND (created_at > ? OR (created_at = ? AND id > ?))"
+		args = append(args, query.After.UnixNano(), query.After.UnixNano(), strings.TrimSpace(query.AfterID))
+	}
+	return where, args, nil
+}
+
+// ListFeedComments 按时间正序分页读一条动态下的评论。
+func (s *SQLiteStore) ListFeedComments(ctx context.Context, query assistant.FeedCommentQuery) ([]assistant.FeedComment, error) {
+	defer s.observeStorage(ctx, "ListFeedComments", "read")()
+	where, args, err := s.feedCommentFilter(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	limit := query.Limit
+	if limit <= 0 {
+		limit = -1 // SQLite 的 LIMIT -1 是不限条数。
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT `+feedCommentColumns+` FROM feed_comments`+where+` ORDER BY created_at, id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	comments := []assistant.FeedComment{}
+	for rows.Next() {
+		comment, err := scanFeedComment(rows)
+		if err != nil {
+			return nil, err
+		}
+		comments = append(comments, comment)
+	}
+	return comments, rows.Err()
+}
+
+// CountFeedComments 数游标之后（没有游标时是全部）的评论条数。
+func (s *SQLiteStore) CountFeedComments(ctx context.Context, query assistant.FeedCommentQuery) (int, error) {
+	defer s.observeStorage(ctx, "CountFeedComments", "read")()
+	where, args, err := s.feedCommentFilter(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	err = s.eventReader().QueryRowContext(ctx, `SELECT COUNT(1) FROM feed_comments`+where, args...).Scan(&count)
+	return count, err
 }
 
 // AddFeedComment 加一条评论或回复。存在性检查、容量检查和插入在同一个事务里。

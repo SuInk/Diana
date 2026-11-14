@@ -45,7 +45,7 @@ func marshalToolResultPage(ctx context.Context, total, offset, limit int, build 
 		budget = agent.ToolOutputMaxChars
 	}
 	encode := func(n int) (string, bool, error) {
-		body, err := json.Marshal(build(n, toolResultPageFor(total, offset, n, want)))
+		body, err := json.Marshal(build(n, toolResultPageFor(total, offset, n, want, budget, toolResultNextOffsetHint)))
 		if err != nil {
 			return "", false, err
 		}
@@ -76,9 +76,15 @@ func marshalToolResultPage(ctx context.Context, total, offset, limit int, build 
 	return best, nil
 }
 
+// toolResultNextOffsetHint 是默认的续读说明：只改 offset。不建议加大 limit——有的工具
+// （比如词云）offset=0 时会重做一遍有副作用的事。
+func toolResultNextOffsetHint(nextOffset int) string {
+	return fmt.Sprintf("传 offset=%d、其他参数不变接着读", nextOffset)
+}
+
 // toolResultPageFor 填好分页字段。want 是这次本想给的条数（limit 和剩余条数取小），
-// n 是实际装下的条数；n<want 说明是单次上限装不下。
-func toolResultPageFor(total, offset, n, want int) toolResultPage {
+// n 是实际装下的条数；n<want 说明是单次上限（budget 字）装不下。next 给出续读说明。
+func toolResultPageFor(total, offset, n, want, budget int, next func(nextOffset int) string) toolResultPage {
 	page := toolResultPage{Total: total, Offset: offset, ReturnedCount: n, RemainingCount: max(0, total-offset-n)}
 	page.HasMore = page.RemainingCount > 0
 	if !page.HasMore {
@@ -90,9 +96,9 @@ func toolResultPageFor(total, offset, n, want int) toolResultPage {
 	page.NextOffset = offset + n
 	reason := ""
 	if n < want {
-		reason = fmt.Sprintf("单次结果上限 %d 字只装下 %d 条，", agent.ToolOutputMaxChars, n)
+		reason = fmt.Sprintf("单次结果上限 %d 字只装下 %d 条，", budget, n)
 	}
-	page.PageNote = fmt.Sprintf("共 %d 条，本页是第 %d～%d 条，%s还剩 %d 条没给：传 offset=%d、其他参数不变接着读（也可加大 limit）；没读完之前不要断言没有。",
-		total, offset+1, offset+n, reason, page.RemainingCount, page.NextOffset)
+	page.PageNote = fmt.Sprintf("共 %d 条，本页是第 %d～%d 条，%s还剩 %d 条没给：%s；没读完之前不要断言没有。",
+		total, offset+1, offset+n, reason, page.RemainingCount, next(page.NextOffset))
 	return page
 }

@@ -77,8 +77,8 @@ func (t *dianaNotebookTool) InputSchema() map[string]any {
 		"global":          toolBoolParam("仅主人：笔记本按会话隔离时写入全局笔记本，默认不传"),
 		"query":           toolStringParam("list：关键词过滤"),
 		"kinds":           toolStringArrayParam("list：类型过滤"),
-		"limit":           toolCountParam("list 条数，默认 "+itoa(defaultNotebookListLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
-		"offset":          toolCountParam("list 从第几条起（0 起），续读时填上次的 next_offset", 0),
+		"limit":           toolCountParam("list 条数，默认 "+itoa(defaultNotebookListLimit)+"，不设上限；按新到旧，超出单次结果上限时按整条分页", 1),
+		"cursor":          toolStringParam("list 续读时原样传回上次的 next_cursor，其他参数不变"),
 		"include_deleted": toolBoolParam("list/get：包含已作废条目"),
 	})
 }
@@ -139,36 +139,48 @@ func (t *dianaNotebookTool) get(ctx context.Context, store NotebookStore, input 
 	})
 }
 
+// list 按 (created_at, id) 新到旧整条分页，用键集游标续读。不按命中次数排：命中次数
+// 在后台被异步加一，翻页之间名次一变就会跳条或重复。存储层只取这一页。
 func (t *dianaNotebookTool) list(ctx context.Context, store NotebookStore, input map[string]any) (string, error) {
-	// 存储层取全部匹配条目（Limit=0），总数如实报，这一页装不下的整条留到下一页。
-	entries, err := store.ListNotebookEntries(ctx, NotebookQuery{
+	before, err := toolKeysetCursor(input)
+	if err != nil {
+		return "", err
+	}
+	query := NotebookQuery{
 		ScopeKeys:      notebookScopeKeys(t.event),
 		Kinds:          notebookKindFilter(configToolStringSlice(input, "kinds")),
 		Text:           strings.TrimSpace(configToolString(input, "query")),
 		IncludeDeleted: toolInputBool(input, "include_deleted"),
 		Now:            time.Now(),
-	})
+		ByCreated:      true,
+		Before:         before,
+	}
+	matched, err := store.CountNotebookEntries(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	query.Limit = toolKeysetFetchLimit(ctx, chatHistoryCount(input, "limit", defaultNotebookListLimit))
+	entries, err := store.ListNotebookEntries(ctx, query)
 	if err != nil {
 		return "", err
 	}
 	message := ""
-	if len(entries) == 0 {
+	if len(entries) == 0 && before == nil {
 		message = "当前作用域的笔记本还是空的。"
 	}
-	limit := chatHistoryCount(input, "limit", defaultNotebookListLimit)
-	return marshalToolResultPage(ctx, len(entries), toolPageOffset(input), limit, func(n int, page toolResultPage) any {
-		start := min(page.Offset, len(entries))
-		return notebookListResult{OK: true, Action: "listed", Message: message, Items: entries[start : start+n], toolResultPage: page, ReplyGuidance: notebookReplyGuidance}
+	keyAt := func(i int) KeysetCursor { return KeysetCursor{At: entries[i].CreatedAt, ID: entries[i].ID} }
+	return marshalToolCursorPage(ctx, len(entries), matched, keyAt, func(n int, page toolCursorPage) any {
+		return notebookListResult{OK: true, Action: "listed", Message: message, Items: entries[:n], toolCursorPage: page, ReplyGuidance: notebookReplyGuidance}
 	})
 }
 
-// notebookListResult 是 list 的结果：条目给全文，按整条分页。
+// notebookListResult 是 list 的结果：条目给全文，按整条分页，用 next_cursor 续读。
 type notebookListResult struct {
 	OK      bool            `json:"ok"`
 	Action  string          `json:"action"`
 	Message string          `json:"message,omitempty"`
 	Items   []NotebookEntry `json:"items"`
-	toolResultPage
+	toolCursorPage
 	ReplyGuidance string `json:"reply_guidance"`
 }
 

@@ -960,10 +960,11 @@ func runStickerSearch(t *testing.T, ctx context.Context, tool *dianaStickerTool,
 	return result
 }
 
-// 命中多于 limit 时报出全部命中数和剩余数，more=true 续读给出本轮没给过的，读完 has_more=false。
+// 命中多于每页条数（插件设置）时报出全部命中数和剩余数，more=true 续读给出本轮没给过的，读完 has_more=false。
 func TestStickerSearchReportsTotalAndContinuesWithMore(t *testing.T) {
 	tool := stickerPagingTestTool(t, 5, "翻白眼")
-	first := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2})
+	tool.settings = SettingValues{stickerSettingSearchResults: 2}
+	first := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语"})
 	if len(first.Candidates) != 2 || first.TotalMatched == nil || *first.TotalMatched != 5 || first.RemainingMatched != 3 || !first.HasMore ||
 		!strings.Contains(first.Message, "more=true") {
 		t.Fatalf("first = %#v", first)
@@ -972,11 +973,11 @@ func TestStickerSearchReportsTotalAndContinuesWithMore(t *testing.T) {
 	for _, candidate := range first.Candidates {
 		seen[candidate.ID] = true
 	}
-	second := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2, "more": true})
+	second := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "more": true})
 	if len(second.Candidates) != 2 || second.RemainingMatched != 1 || !second.HasMore {
 		t.Fatalf("second = %#v", second)
 	}
-	third := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "limit": 2, "more": true})
+	third := runStickerSearch(t, context.Background(), tool, map[string]any{"query": "无语", "more": true})
 	if len(third.Candidates) != 1 || third.RemainingMatched != 0 || third.HasMore || *third.TotalMatched != 5 {
 		t.Fatalf("third = %#v", third)
 	}
@@ -998,8 +999,9 @@ func TestStickerSearchReportsTotalAndContinuesWithMore(t *testing.T) {
 func TestStickerSearchKeepsFullDescriptionsAndPagesByBudget(t *testing.T) {
 	description := strings.Repeat("一只猫翻着白眼看向镜头，", 40)
 	tool := stickerPagingTestTool(t, 6, description)
+	tool.settings = SettingValues{stickerSettingSearchResults: 6}
 	ctx := agent.WithToolOutputBudget(context.Background(), 3000)
-	first := runStickerSearch(t, ctx, tool, map[string]any{"query": "无语", "limit": 6})
+	first := runStickerSearch(t, ctx, tool, map[string]any{"query": "无语"})
 	if len(first.Candidates) == 0 || len(first.Candidates) >= 6 || first.RemainingMatched != 6-len(first.Candidates) || !first.HasMore {
 		t.Fatalf("first page = %d candidates remaining=%d", len(first.Candidates), first.RemainingMatched)
 	}
@@ -1008,7 +1010,7 @@ func TestStickerSearchKeepsFullDescriptionsAndPagesByBudget(t *testing.T) {
 	}
 	total := len(first.Candidates)
 	for page := first; page.HasMore; {
-		page = runStickerSearch(t, ctx, tool, map[string]any{"query": "无语", "limit": 6, "more": true})
+		page = runStickerSearch(t, ctx, tool, map[string]any{"query": "无语", "more": true})
 		if len(page.Candidates) == 0 {
 			t.Fatalf("empty continuation page: %#v", page)
 		}

@@ -149,7 +149,6 @@ func (t *dianaStickerTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":  toolEnumParam("search 只返回候选；send 发送一张", "search", "send"),
 		"query":      toolStringParam("2～6 个空格分隔的短关键词（情绪、动作、场景、同义词），不写整句；留空随机"),
-		"limit":      toolCountParam("search 这次要几个候选，默认用插件设置的候选返回数量，不设上限", 1),
 		"more":       toolBoolParam("search 时 true 只给本轮还没给过的候选；结果 has_more 时用同样的 query 加 more=true 接着看剩下的命中"),
 		"sticker_id": toolStringParam("本轮 search 返回过的候选 id，原样传"),
 	})
@@ -172,7 +171,9 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if err != nil {
 			return "", err
 		}
-		limit := chatHistoryCount(input, "limit", t.settings.Int(stickerSettingSearchResults, 8))
+		// 每页条数用插件设置的候选返回数量：候选要同步补简介、后台打标签，
+		// 一页给太多会卡到超时、费用暴涨。要更多就 more=true 翻页，不设总数上限。
+		limit := t.settings.Int(stickerSettingSearchResults, 8)
 		shownBefore := t.shownCandidateIDs()
 		totalMatched := 0
 		unshownMatched := map[string]bool{}
@@ -190,7 +191,6 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		now := time.Now().Unix()
 		picked, matched := selectStickerCandidates(candidates, limit, now, secureRandomIndex)
 		t.enrichCandidateDescriptions(ctx, picked)
-		t.tagCandidatesInBackground(ctx, picked)
 		items := stickerSearchItems(picked)
 		// 候选多到装不下单次结果上限时整条留到下一页：只记下真正给出去的那几张。
 		body, err := marshalToolResultPage(ctx, len(items), 0, 0, func(n int, _ toolResultPage) any {
@@ -211,7 +211,10 @@ func (t *dianaStickerTool) Run(ctx context.Context, input map[string]any) (strin
 		if err := json.Unmarshal([]byte(body), &shown); err != nil {
 			return "", err
 		}
-		t.rememberSearchCandidates(picked[:len(shown.Candidates)])
+		given := picked[:len(shown.Candidates)]
+		t.rememberSearchCandidates(given)
+		// 只给真正给出去的那几张打标签。
+		t.tagCandidatesInBackground(ctx, given)
 		return body, nil
 	case "send":
 		var selected *stickerCandidate
@@ -266,7 +269,7 @@ func stickerSearchResult(query string, items []stickerSearchItem, matched, total
 	if query != "" {
 		result.Message += fmt.Sprintf("这组关键词共命中 %d 个", totalMatched)
 		if remaining > 0 {
-			result.Message += fmt.Sprintf("，还有 %d 个命中的本轮没给：同样的 query 加 more=true 再 search 接着看（也可加大 limit），本轮给过的 sticker_id 仍然能发。", remaining)
+			result.Message += fmt.Sprintf("，还有 %d 个命中的本轮没给：同样的 query 加 more=true 再 search 接着看，本轮给过的 sticker_id 仍然能发。", remaining)
 		} else {
 			result.Message += "，命中的都给过了。"
 		}

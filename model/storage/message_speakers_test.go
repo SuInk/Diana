@@ -5,6 +5,7 @@ package storage
 
 import (
 	"context"
+	"strconv"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -106,5 +107,48 @@ func TestBackfillMessageSpeakersCoversExistingHistory(t *testing.T) {
 	}
 	if _, pending := store.messageSpeakersBackfillPending(ctx); pending {
 		t.Fatal("backfill should be marked done")
+	}
+}
+
+// ByUserID 按账号升序键集翻页：翻页之间有人发言（最近发言名次变了）也不跳条、不重复。
+func TestListMessageSpeakersPagesByUserID(t *testing.T) {
+	ctx := context.Background()
+	store := vectorStore(t)
+	session := "tg:group:-10042"
+	const total = 23
+	for i := range total {
+		id := strconv.Itoa(50001 + i)
+		if err := store.AppendMessageEvent(ctx, session, speakerEvent(int64(10+i), id, "阿明"+id, "", "m"+id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	query := assistant.MessageSpeakerQuery{Session: session, Name: "阿明", Limit: 5, ByUserID: true}
+	for page := 0; ; page++ {
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+		got, err := store.ListMessageSpeakers(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) == 0 {
+			break
+		}
+		for i, speaker := range got {
+			if seen[speaker.UserID] || (i > 0 && got[i-1].UserID >= speaker.UserID) {
+				t.Fatalf("第 %d 页顺序或重复不对：%+v", page, got)
+			}
+			seen[speaker.UserID] = true
+		}
+		// 最后一个账号又发了言：按最近发言排的话它会跳到最前，后面的页会错位。
+		last := strconv.Itoa(50001 + total - 1)
+		if err := store.AppendMessageEvent(ctx, session, speakerEvent(int64(1000+page), last, "阿明"+last, "", "again"+strconv.Itoa(page))); err != nil {
+			t.Fatal(err)
+		}
+		query.AfterUserID = got[len(got)-1].UserID
+	}
+	if len(seen) != total {
+		t.Fatalf("翻完只看到 %d 个账号，应为 %d", len(seen), total)
 	}
 }

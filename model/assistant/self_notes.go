@@ -111,6 +111,16 @@ type SelfNoteWriteRequest struct {
 	Now             time.Time
 }
 
+// SelfNoteListQuery 是自述的键集翻页查询。After/AfterID 非空时只取严格排在它后面的
+// （更晚写入，或同一时刻 id 更大）；Limit<=0 表示不限。
+type SelfNoteListQuery struct {
+	ProfileID       string
+	IncludeInactive bool
+	After           time.Time
+	AfterID         string
+	Limit           int
+}
+
 // SelfNoteStore 持久化自述。没有它时整个功能静默失效：注入为空，工具明确报错。
 type SelfNoteStore interface {
 	// WriteSelfNote 追加或改写一条。在册条数已满且不是改写时返回 ErrSelfNoteCapacity。
@@ -118,6 +128,10 @@ type SelfNoteStore interface {
 	// ListSelfNotes 按写入顺序列出在册条目。includeInactive 为真时带上被改写和
 	// 被删掉的版本，供主人审阅修订史。
 	ListSelfNotes(ctx context.Context, profileID string, includeInactive bool, limit int) ([]SelfNote, error)
+	// ListSelfNotesAfter 按写入顺序 (created_at, id) 键集翻页，供工具分页列出。
+	ListSelfNotesAfter(context.Context, SelfNoteListQuery) ([]SelfNote, error)
+	// CountSelfNotes 数游标之后（没有游标时是全部）的条目数，不看 Limit。
+	CountSelfNotes(context.Context, SelfNoteListQuery) (int, error)
 	// DeleteSelfNote 软删除一条。
 	DeleteSelfNote(ctx context.Context, profileID, id, editorUserID, editorName string, now time.Time) (SelfNote, bool, error)
 	// PurgeSelfNotes 软删除该档案下全部在册条目，返回删掉的条数。

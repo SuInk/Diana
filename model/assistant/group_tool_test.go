@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -234,5 +235,90 @@ func TestDianaOneBotGroupToolMembersPagesWithoutCap(t *testing.T) {
 	rest := list(map[string]any{"operation": "members", "limit": 1000, "offset": first.Page.NextOffset})
 	if len(rest.Members) != total-defaultGroupMemberLimit || rest.Page == nil || rest.Page.HasMore || rest.Members[len(rest.Members)-1].UserID != fmt.Sprintf("%d", 30000+total-1) {
 		t.Fatalf("rest page = members %d page %+v", len(rest.Members), rest.Page)
+	}
+}
+
+func groupMembersTestTool(t *testing.T, members []any) (*dianaGroupTool, *Runtime) {
+	t.Helper()
+	channel := &recordingChannel{apiResponses: map[string]map[string]any{"get_group_member_list": {"items": members}}}
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, channel, NewPluginManager(NewPlatformInterfacePlugin()), nil, nil, nil, nil)
+	return newDianaGroupTool(runtime, MessageEvent{Kind: EventKindGroup, SelfID: "10000", GroupID: "20001", UserID: "10001"}), runtime
+}
+
+// 单次上限装不下时按整条切页：每页都在上限内，名片给全，offset 续读拿齐全部。
+func TestDianaOneBotGroupToolMembersSplitByOutputBudget(t *testing.T) {
+	const total = 40
+	card := strings.Repeat("长名片", 40)
+	items := make([]any, 0, total)
+	for index := range total {
+		items = append(items, map[string]any{"group_id": "20001", "user_id": fmt.Sprintf("%d", 30000+index), "nickname": "成员", "card": card})
+	}
+	tool, _ := groupMembersTestTool(t, items)
+	ctx := agent.WithToolOutputBudget(context.Background(), 3000)
+	seen := map[string]bool{}
+	offset := 0
+	for page := 0; ; page++ {
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+		raw, err := tool.listMembers(ctx, map[string]any{"operation": "members", "limit": 1000, "offset": offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if size := len([]rune(raw)); size > 3000 {
+			t.Fatalf("第 %d 页 %d 字超过上限", page, size)
+		}
+		var result dianaGroupResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Page == nil || len(result.Members) == 0 || result.Total != total {
+			t.Fatalf("page = %+v members %d", result.Page, len(result.Members))
+		}
+		for _, member := range result.Members {
+			if seen[member.UserID] || member.Card != card {
+				t.Fatalf("重复或名片被截短：%+v", member)
+			}
+			seen[member.UserID] = true
+		}
+		if !result.Page.HasMore {
+			break
+		}
+		if page == 0 && !strings.Contains(result.Page.PageNote, "单次结果上限") {
+			t.Fatalf("第一页应写明按上限切开：%q", result.Page.PageNote)
+		}
+		offset = result.Page.NextOffset
+	}
+	if len(seen) != total {
+		t.Fatalf("只拿到 %d 人，应为 %d", len(seen), total)
+	}
+}
+
+// 按旧昵称找人时发言人名录按账号一页页翻完，不只取第一页，也不一次全量拉回。
+func TestDianaOneBotGroupToolHistoricalNamesPageThroughDirectory(t *testing.T) {
+	const total = 450
+	members := make([]any, 0, total)
+	speakers := make([]MessageSpeaker, 0, total)
+	for index := range total {
+		id := fmt.Sprintf("%d", 30000+index)
+		members = append(members, map[string]any{"group_id": "20001", "user_id": id, "nickname": "现名" + id})
+		speakers = append(speakers, MessageSpeaker{UserID: id, Names: []string{"现名" + id, "旧名" + id}})
+	}
+	tool, runtime := groupMembersTestTool(t, members)
+	store := &speakerHistoryStore{speakers: speakers}
+	runtime.SetMessageHistoryStore(store)
+	raw, err := tool.listMembers(context.Background(), map[string]any{"operation": "members", "query": "旧名", "limit": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaGroupResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != total || result.Page == nil || !result.Page.HasMore {
+		t.Fatalf("按旧昵称应匹配全部 %d 人：total=%d page=%+v", total, result.Total, result.Page)
+	}
+	if want := total/groupSpeakerPageSize + 1; store.speakerCalls != want {
+		t.Fatalf("名录应分 %d 页取，实际 %d 次", want, store.speakerCalls)
 	}
 }

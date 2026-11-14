@@ -172,6 +172,52 @@ func (s *SQLiteStore) ListSelfNotes(ctx context.Context, profileID string, inclu
 	return notes, rows.Err()
 }
 
+func selfNoteListFilter(query assistant.SelfNoteListQuery) (string, []any) {
+	where, args := ` WHERE profile_id = ?`, []any{strings.TrimSpace(query.ProfileID)}
+	if !query.IncludeInactive {
+		where += ` AND status = 'active'`
+	}
+	if !query.After.IsZero() {
+		where += ` AND (created_at > ? OR (created_at = ? AND id > ?))`
+		args = append(args, query.After.UnixNano(), query.After.UnixNano(), strings.TrimSpace(query.AfterID))
+	}
+	return where, args
+}
+
+// ListSelfNotesAfter 按写入顺序 (created_at, id) 键集翻页。改写会在末尾追加新版本、
+// 删除只改状态，都不会让游标之后的条目挪到游标前面去。
+func (s *SQLiteStore) ListSelfNotesAfter(ctx context.Context, query assistant.SelfNoteListQuery) ([]assistant.SelfNote, error) {
+	defer s.observeStorage(ctx, "ListSelfNotesAfter", "read")()
+	where, args := selfNoteListFilter(query)
+	limit := query.Limit
+	if limit <= 0 {
+		limit = -1 // SQLite 的 LIMIT -1 是不限条数。
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT `+selfNoteColumns+` FROM self_notes`+where+` ORDER BY created_at, id LIMIT ?`, append(args, limit)...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	notes := []assistant.SelfNote{}
+	for rows.Next() {
+		note, err := scanSelfNote(rows)
+		if err != nil {
+			return nil, err
+		}
+		notes = append(notes, note)
+	}
+	return notes, rows.Err()
+}
+
+// CountSelfNotes 数游标之后（没有游标时是全部）的条目数。
+func (s *SQLiteStore) CountSelfNotes(ctx context.Context, query assistant.SelfNoteListQuery) (int, error) {
+	defer s.observeStorage(ctx, "CountSelfNotes", "read")()
+	where, args := selfNoteListFilter(query)
+	var count int
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(1) FROM self_notes`+where, args...).Scan(&count)
+	return count, err
+}
+
 // DeleteSelfNote 软删除一条。已经删过时返回 found=false，让调用方说「可能已经删过」
 // 而不是报错——重复删除是模型常见的重试，不是故障。
 func (s *SQLiteStore) DeleteSelfNote(ctx context.Context, profileID, id, editorUserID, editorName string, now time.Time) (assistant.SelfNote, bool, error) {

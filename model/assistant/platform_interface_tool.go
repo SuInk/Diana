@@ -220,6 +220,7 @@ func (t *dianaPlatformTool) InputSchema() map[string]any {
 		"profile_id":         toolStringParam("仅主人：操作另一台机器人（另一个平台）的群，ID 取自 cross_platform 的 bots；默认当前机器人"),
 		"limit":              toolCountParam("member_list/group_list/friend_list：本页最多几条，默认装得下多少给多少", 1),
 		"offset":             toolCountParam("member_list/group_list/friend_list：从第几条起（0 开始），续读时填结果里的 next_offset", 0),
+		"cursor":             toolStringParam("recall：message_id 没命中时报错会列出可撤回的候选，装不下时照报错里给的 cursor 续看，message_id 照旧"),
 	}
 	properties["operation"] = toolEnumParam("recall 撤回我自己的消息；recall_messages 撤群成员消息（普通成员仅可撤自己的）", operations...)
 	return toolObjectSchema([]string{"operation"}, properties)
@@ -652,17 +653,19 @@ func marshalPlatformListPage[T any](t *dianaPlatformTool, operation, access stri
 	return marshalMapListPage(ctx, input, platformToolPayload(operation, access, extra), key, items)
 }
 
-// marshalMapListPage 是 map 形状结果的分页：base 是列表以外的字段，原样保留。
+// marshalMapListPage 是 map 形状结果的分页：base 是列表以外的字段，原样保留；
+// 分页字段沿用 toolResultPage 的 JSON 名字，并进同一层。
 func marshalMapListPage[T any](ctx context.Context, input, base map[string]any, key string, items []T) (string, error) {
 	return marshalToolResultPage(ctx, len(items), toolPageOffset(input), intFromAny(input["limit"]), func(n int, page toolResultPage) any {
 		out := maps.Clone(base)
 		out[key] = items[page.Offset : page.Offset+n]
-		// 分页字段沿用 toolResultPage 的 JSON 名字，并进同一层。
-		if body, err := json.Marshal(page); err == nil {
-			var fields map[string]any
-			if json.Unmarshal(body, &fields) == nil {
-				maps.Copy(out, fields)
-			}
+		out["total"], out["offset"], out["returned_count"] = page.Total, page.Offset, page.ReturnedCount
+		out["remaining_count"], out["has_more"] = page.RemainingCount, page.HasMore
+		if page.NextOffset > 0 {
+			out["next_offset"] = page.NextOffset
+		}
+		if page.PageNote != "" {
+			out["page_note"] = page.PageNote
 		}
 		return out
 	})

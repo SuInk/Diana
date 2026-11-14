@@ -60,9 +60,22 @@ type OneBotRequestRecord struct {
 	DecidedAt   time.Time           `json:"decided_at,omitempty"`
 }
 
+// OneBotRequestQuery 是请求列表的一次查询。Limit<=0 表示不限。
+type OneBotRequestQuery struct {
+	ProfileID string
+	Status    OneBotRequestStatus
+	// Before 是键集游标：只取严格排在它后面的（更早，或同一时刻 id 更小）。待处理
+	// 请求被同意/拒绝后会离开列表，按 offset 续读会跳过一批，所以按游标翻页。
+	Before *KeysetCursor
+	Limit  int
+}
+
 type OneBotRequestStore interface {
 	SaveOneBotRequest(context.Context, OneBotRequestRecord) (OneBotRequestRecord, bool, error)
-	ListOneBotRequests(ctx context.Context, profileID string, status OneBotRequestStatus, limit int) ([]OneBotRequestRecord, error)
+	// ListOneBotRequests 按 (created_at, id) 新到旧列出，Before 设了时只取排在它后面的。
+	ListOneBotRequests(ctx context.Context, query OneBotRequestQuery) ([]OneBotRequestRecord, error)
+	// CountOneBotRequests 数同一查询（含 Before）一共匹配多少条，不看 Limit。
+	CountOneBotRequests(ctx context.Context, query OneBotRequestQuery) (int, error)
 	GetOneBotRequest(ctx context.Context, profileID, id string) (OneBotRequestRecord, bool, error)
 	ResolveOneBotRequest(ctx context.Context, profileID, id string, status OneBotRequestStatus, reason string, decidedAt time.Time) (OneBotRequestRecord, error)
 }
@@ -247,7 +260,7 @@ func (*dianaOneBotRequestsTool) InputSchema() map[string]any {
 		"reason":    toolStringParam("拒绝群申请/邀请的原因，≤200 字"),
 		"remark":    toolStringParam("同意好友时的备注，≤200 字"),
 		"limit":     toolCountParam("list：本页最多几条，默认装得下多少给多少", 1),
-		"offset":    toolCountParam("list：从第几条起（0 开始），续读时填结果里的 next_offset", 0),
+		"cursor":    toolStringParam("list：续读时原样传回结果里的 next_cursor；中间处理掉的请求不会让后面跳条"),
 	})
 }
 
@@ -282,11 +295,7 @@ func (t *dianaOneBotRequestsTool) Run(ctx context.Context, input map[string]any)
 		} else if operation == "sync" {
 			return "", fmt.Errorf("当前平台没有可补拉的请求列表，入群申请只能靠平台推送")
 		}
-		items, err := store.ListOneBotRequests(ctx, profileID, OneBotRequestPending, 0)
-		if err != nil {
-			return "", err
-		}
-		return marshalOneBotRequestListPage(ctx, input, operation, items, message)
+		return listOneBotRequestPage(ctx, store, input, profileID, operation, message)
 	}
 	if operation != "approve" && operation != "reject" {
 		return "", fmt.Errorf("不支持的 operation %q", operation)
@@ -405,8 +414,8 @@ type oneBotRequestToolResult struct {
 	Operation string              `json:"operation"`
 	Message   string              `json:"message,omitempty"`
 	Items     []oneBotRequestView `json:"items"`
-	// Page 只在 list/sync 时有：待处理请求按整条分页。
-	Page *toolResultPage `json:"page,omitempty"`
+	// Page 只在 list/sync 时有：待处理请求按整条分页，用 next_cursor 续读。
+	Page *toolCursorPage `json:"page,omitempty"`
 }
 
 func oneBotRequestViews(items []OneBotRequestRecord) []oneBotRequestView {
@@ -426,11 +435,27 @@ func marshalOneBotRequestToolResult(operation string, items []OneBotRequestRecor
 	return string(encoded), err
 }
 
-// marshalOneBotRequestListPage 列出待处理请求：附言给全，条数不设上限，按整条分页。
-func marshalOneBotRequestListPage(ctx context.Context, input map[string]any, operation string, items []OneBotRequestRecord, message string) (string, error) {
+// listOneBotRequestPage 列出待处理请求：附言给全，条数不设上限，按 (created_at, id)
+// 键集游标整条分页，存储层只取这一页。
+func listOneBotRequestPage(ctx context.Context, store OneBotRequestStore, input map[string]any, profileID, operation, message string) (string, error) {
+	before, err := toolKeysetCursor(input)
+	if err != nil {
+		return "", err
+	}
+	query := OneBotRequestQuery{ProfileID: profileID, Status: OneBotRequestPending, Before: before}
+	matched, err := store.CountOneBotRequests(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	query.Limit = toolKeysetFetchLimit(ctx, intFromAny(input["limit"]))
+	items, err := store.ListOneBotRequests(ctx, query)
+	if err != nil {
+		return "", err
+	}
 	views := oneBotRequestViews(items)
-	return marshalToolResultPage(ctx, len(views), toolPageOffset(input), intFromAny(input["limit"]), func(n int, page toolResultPage) any {
-		return oneBotRequestToolResult{OK: true, Operation: operation, Message: message, Items: views[page.Offset : page.Offset+n], Page: &page}
+	keyAt := func(i int) KeysetCursor { return KeysetCursor{At: items[i].CreatedAt, ID: items[i].ID} }
+	return marshalToolCursorPage(ctx, len(views), matched, keyAt, func(n int, page toolCursorPage) any {
+		return oneBotRequestToolResult{OK: true, Operation: operation, Message: message, Items: views[:n], Page: &page}
 	})
 }
 

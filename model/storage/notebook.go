@@ -413,42 +413,79 @@ LIMIT ?`
 	return entries, nil
 }
 
-// ListNotebookEntries 按作用域翻笔记本，Text 非空时按关键词过滤。
+// ListNotebookEntries 按作用域翻笔记本，Text 非空时按关键词过滤。默认按命中次数排
+// （控制台用）；ByCreated 时按 (created_at, id) 新到旧排、不再按作用域重排，配合
+// Before 键集翻页——命中次数会在翻页间被后台加一，按它排翻页会跳条或重复。
 func (s *SQLiteStore) ListNotebookEntries(ctx context.Context, query assistant.NotebookQuery) ([]assistant.NotebookEntry, error) {
 	defer s.observeStorage(ctx, "ListNotebookEntries", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
-	scopes := notebookScopeArgs(query.ScopeKeys)
-	if len(scopes) == 0 {
+	where, args := notebookListWhere(query)
+	if where == "" {
 		return nil, nil
 	}
-	statement := `SELECT ` + notebookEntryColumns + ` FROM notebook_entries e
-WHERE e.scope_key IN (` + placeholders(len(scopes)) + `)`
-	args := append([]any{}, scopes...)
-	if !query.IncludeDeleted {
-		statement += ` AND e.status = 'active'`
+	statement := `SELECT ` + notebookEntryColumns + ` FROM notebook_entries e WHERE ` + where
+	if query.ByCreated {
+		statement += ` ORDER BY e.created_at DESC, e.id DESC LIMIT ?`
+	} else {
+		statement += ` ORDER BY e.usage_count DESC, e.updated_at DESC LIMIT ?`
 	}
-	if keyword := assistant.NormalizeNotebookTitle(query.Text); keyword != "" {
-		statement += ` AND (instr(lower(e.term), ?) > 0 OR instr(lower(e.meaning), ?) > 0
-		  OR EXISTS (SELECT 1 FROM notebook_aliases a WHERE a.entry_id = e.id AND instr(a.normalized_alias, ?) > 0))`
-		args = append(args, keyword, keyword, keyword)
-	}
-	// 类型筛选只用于人工翻阅。自动命中从不带它——一条待办和一个梗同样可能是
-	// 这句话需要的上下文，按类型预先筛掉等于替模型决定它该想起什么。
-	if kinds := notebookKindArgs(query.Kinds); len(kinds) > 0 {
-		statement += ` AND e.kind IN (` + placeholders(len(kinds)) + `)`
-		args = append(args, kinds...)
-	}
-	statement += ` ORDER BY e.usage_count DESC, e.updated_at DESC LIMIT ?`
 	// 列表不设上限：Limit<=0 给全部（SQLite 的 LIMIT -1），工具按整条分页。
 	args = append(args, notebookListQueryLimit(query.Limit))
 	entries, err := queryNotebookEntries(ctx, s.eventReader(), statement, args...)
 	if err != nil {
 		return nil, err
 	}
-	assistant.SortNotebookEntriesByScope(entries, query.ScopeKeys)
+	if !query.ByCreated {
+		assistant.SortNotebookEntriesByScope(entries, query.ScopeKeys)
+	}
 	return entries, nil
+}
+
+// CountNotebookEntries 数 ListNotebookEntries 同一查询（含 Before 游标）匹配的条数，不看 Limit。
+func (s *SQLiteStore) CountNotebookEntries(ctx context.Context, query assistant.NotebookQuery) (int, error) {
+	defer s.observeStorage(ctx, "CountNotebookEntries", "read")()
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	where, args := notebookListWhere(query)
+	if where == "" {
+		return 0, nil
+	}
+	var count int
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(*) FROM notebook_entries e WHERE `+where, args...).Scan(&count)
+	return count, err
+}
+
+// notebookListWhere 是列表和计数共用的筛选条件；没有作用域时返回空串。
+func notebookListWhere(query assistant.NotebookQuery) (string, []any) {
+	scopes := notebookScopeArgs(query.ScopeKeys)
+	if len(scopes) == 0 {
+		return "", nil
+	}
+	where := `e.scope_key IN (` + placeholders(len(scopes)) + `)`
+	args := append([]any{}, scopes...)
+	if !query.IncludeDeleted {
+		where += ` AND e.status = 'active'`
+	}
+	if keyword := assistant.NormalizeNotebookTitle(query.Text); keyword != "" {
+		where += ` AND (instr(lower(e.term), ?) > 0 OR instr(lower(e.meaning), ?) > 0
+		  OR EXISTS (SELECT 1 FROM notebook_aliases a WHERE a.entry_id = e.id AND instr(a.normalized_alias, ?) > 0))`
+		args = append(args, keyword, keyword, keyword)
+	}
+	// 类型筛选只用于人工翻阅。自动命中从不带它——一条待办和一个梗同样可能是
+	// 这句话需要的上下文，按类型预先筛掉等于替模型决定它该想起什么。
+	if kinds := notebookKindArgs(query.Kinds); len(kinds) > 0 {
+		where += ` AND e.kind IN (` + placeholders(len(kinds)) + `)`
+		args = append(args, kinds...)
+	}
+	if query.Before != nil {
+		at := query.Before.At.UnixNano()
+		where += ` AND (e.created_at < ? OR (e.created_at = ? AND e.id < ?))`
+		args = append(args, at, at, query.Before.ID)
+	}
+	return where, args
 }
 
 // NotebookEntryDetail 返回单条条目及最近的修订记录。

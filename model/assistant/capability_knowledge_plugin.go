@@ -166,7 +166,7 @@ func (t *dianaCapabilitiesTool) Description() string {
 func (t *dianaCapabilitiesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
 		"query":            toolStringParam("关于能力或机制的问题。"),
-		"limit":            toolCountParam("这次要几条能力条目（items），默认 "+itoa(defaultCapabilityResultLimit)+"，不设上限。", 1),
+		"limit":            toolCountParam("这次要几条能力条目（items），默认 "+itoa(defaultCapabilityResultLimit)+"，不设上限；只续读参考资料时传 0。", 0),
 		"offset":           toolCountParam("能力条目从第几条开始（从 0 起）；items_page.has_more 时填它的 next_offset 接着读。", 0),
 		"reference_limit":  toolCountParam("这次要几条参考资料（references），默认 "+itoa(defaultCapabilityReferenceLimit)+"，不设上限。", 0),
 		"reference_offset": toolCountParam("参考资料从第几条开始（从 0 起）；references_page.has_more 时填它的 next_offset 接着读。", 0),
@@ -196,7 +196,9 @@ func (t *dianaCapabilitiesTool) Run(ctx context.Context, input map[string]any) (
 	if query == "" {
 		return "", fmt.Errorf("query 不能为空")
 	}
-	limit := chatHistoryCount(input, "limit", defaultCapabilityResultLimit)
+	// limit 允许 0：只续读参考资料时不再重发能力条目，否则能力条目占满单次上限，
+	// 参考资料一条也出不来，reference_offset 永远不前进。
+	limit := chatHistoryNonNegative(input, "limit", defaultCapabilityResultLimit)
 	offset := toolPageOffset(input)
 	referenceLimit := chatHistoryNonNegative(input, "reference_limit", defaultCapabilityReferenceLimit)
 	referenceOffset := max(0, intFromAny(input["reference_offset"]))
@@ -212,12 +214,21 @@ func (t *dianaCapabilitiesTool) Run(ctx context.Context, input map[string]any) (
 	referenceOffset = min(referenceOffset, len(references))
 	itemWindow := hits[offset:min(len(hits), offset+limit)]
 	referenceWindow := references[referenceOffset:min(len(references), referenceOffset+referenceLimit)]
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
+	}
+	itemsNext := func(next int) string {
+		return fmt.Sprintf("传 offset=%d、reference_limit=0 只接着读能力条目", next)
+	}
+	referencesNext := func(next int) string {
+		return fmt.Sprintf("传 reference_offset=%d、limit=0 只接着读参考资料", next)
+	}
 	return marshalToolResultPage(ctx, len(itemWindow)+len(referenceWindow), 0, 0, func(n int, _ toolResultPage) any {
 		itemCount := min(n, len(itemWindow))
 		referenceCount := n - itemCount
-		itemsPage := toolResultPageFor(len(hits), offset, itemCount, len(itemWindow))
-		referencesPage := toolResultPageFor(len(references), referenceOffset, referenceCount, len(referenceWindow))
-		referencesPage.PageNote = strings.Replace(referencesPage.PageNote, "传 offset=", "传 reference_offset=", 1)
+		itemsPage := toolResultPageFor(len(hits), offset, itemCount, len(itemWindow), budget, itemsNext)
+		referencesPage := toolResultPageFor(len(references), referenceOffset, referenceCount, len(referenceWindow), budget, referencesNext)
 		return capabilityToolResult{
 			CurrentAccess:    access,
 			OK:               true,

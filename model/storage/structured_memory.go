@@ -691,6 +691,9 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 	if limit > maxStructuredMemoryCandidates {
 		limit = maxStructuredMemoryCandidates
 	}
+	if query.Unlimited {
+		limit = -1 // SQLite 的 LIMIT -1 是不限条数。
+	}
 	subjectUserID := strings.TrimSpace(query.SubjectUserID)
 	args := []any{now.Unix(), strings.TrimSpace(query.Session)}
 	scopeClause := `scope_key = ?`
@@ -858,7 +861,7 @@ LIMIT ?
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	items := make([]assistant.StructuredMemoryItem, 0, limit)
+	items := make([]assistant.StructuredMemoryItem, 0, max(limit, 0))
 	for rows.Next() {
 		item, err := scanStructuredMemory(rows)
 		if err != nil {
@@ -1264,7 +1267,7 @@ LIMIT ?
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-	items := make([]assistant.StructuredMemoryItem, 0, limit)
+	items := make([]assistant.StructuredMemoryItem, 0, max(limit, 0))
 	for rows.Next() {
 		item, err := scanStructuredMemory(rows)
 		if err != nil {

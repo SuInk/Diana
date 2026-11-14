@@ -97,7 +97,7 @@ func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 10)
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,26 @@ func TestSQLiteStoreRecordsRealFavorabilityChangesNewestFirst(t *testing.T) {
 		t.Fatalf("oldest change=%#v", changes[1])
 	}
 
-	limited, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 1)
+	limited, err := store.ListUserFavorabilityChanges(ctx, "", "10002", 0, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(limited) != 1 || limited[0].ID != changes[0].ID {
 		t.Fatalf("limited changes=%#v", limited)
+	}
+	// 键集翻页：beforeID 之后只给更早的，计数同口径。
+	older, err := store.ListUserFavorabilityChanges(ctx, "", "10002", limited[0].ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(older) != 1 || older[0].ID != changes[1].ID {
+		t.Fatalf("older changes=%#v", older)
+	}
+	if total, err := store.CountUserFavorabilityChanges(ctx, "", "10002", 0); err != nil || total != 2 {
+		t.Fatalf("count all = %d, %v", total, err)
+	}
+	if rest, err := store.CountUserFavorabilityChanges(ctx, "", "10002", limited[0].ID); err != nil || rest != 1 {
+		t.Fatalf("count before = %d, %v", rest, err)
 	}
 }
 
@@ -131,7 +145,7 @@ func TestSQLiteStoreDoesNotRecordOwnerProfileInitializationAsChange(t *testing.T
 	if _, err := store.UpdateUserMemory(ctx, assistant.MessageEvent{UserID: "10001"}, assistant.UserMemoryUpdate{OwnerID: "10001"}); err != nil {
 		t.Fatal(err)
 	}
-	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 5)
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 0, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +192,7 @@ func TestSQLiteStoreRecordsOwnerFavorabilityBothWays(t *testing.T) {
 		t.Fatalf("owner favorability should fall below the starting score: %#v", profile)
 	}
 
-	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 10)
+	changes, err := store.ListUserFavorabilityChanges(ctx, "", "10001", 0, 10)
 	if err != nil {
 		t.Fatal(err)
 	}

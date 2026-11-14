@@ -74,7 +74,7 @@ func TestUserMemoryIgnoresLegacyRomanceColumn(t *testing.T) {
 			if err != nil || updated.Favorability != 81 || updated.MessageCount != 2 || len(updated.Memories) != 2 || !reflect.DeepEqual(updated.Portrait, before.Portrait) {
 				t.Fatalf("legacy user update failed: profile=%#v err=%v", updated, err)
 			}
-			changes, err := store.ListUserFavorabilityChanges(ctx, "bot", "user", 10)
+			changes, err := store.ListUserFavorabilityChanges(ctx, "bot", "user", 0, 10)
 			if err != nil || len(changes) != 2 || changes[0].Delta != 1 || changes[0].Before != 80 || changes[0].After != 81 {
 				t.Fatalf("favorability history changed: changes=%#v err=%v", changes, err)
 			}

@@ -140,3 +140,60 @@ func TestSelfNoteCapacityAndProfileIsolation(t *testing.T) {
 		t.Fatalf("bot-2 after purge = %#v, err=%v", other, err)
 	}
 }
+
+// ListSelfNotesAfter 按 (created_at, id) 键集翻页：同一纳秒写入的也不重不漏，
+// 读过的条目被改写（新版本追加在末尾）后，后面的页照样接得上；计数和列表同口径。
+func TestSelfNotesKeysetPaging(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "self-notes.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	ctx := context.Background()
+	same := time.Unix(1_788_247_000, 0)
+	var written []assistant.SelfNote
+	for i := 0; i < 6; i++ {
+		note, err := store.WriteSelfNote(ctx, assistant.SelfNoteWriteRequest{ProfileID: "bot-1", Content: fmt.Sprintf("第 %d 条", i), Now: same})
+		if err != nil {
+			t.Fatal(err)
+		}
+		written = append(written, note)
+	}
+	query := assistant.SelfNoteListQuery{ProfileID: "bot-1", Limit: 4}
+	first, err := store.ListSelfNotesAfter(ctx, query)
+	if err != nil || len(first) != 4 {
+		t.Fatalf("first page = %#v, err=%v", first, err)
+	}
+	// 改写第一页里的一条：旧版本转 superseded，新版本排到最后。
+	revised, err := store.WriteSelfNote(ctx, assistant.SelfNoteWriteRequest{ProfileID: "bot-1", Content: "改写", SupersedesID: first[0].ID, Now: same.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query.After, query.AfterID = first[3].CreatedAt, first[3].ID
+	if left, err := store.CountSelfNotes(ctx, query); err != nil || left != 3 {
+		t.Fatalf("count after cursor = %d, %v", left, err)
+	}
+	rest, err := store.ListSelfNotesAfter(ctx, query)
+	if err != nil || len(rest) != 3 || rest[2].ID != revised.ID {
+		t.Fatalf("rest = %#v, err=%v", rest, err)
+	}
+	seen := map[string]bool{}
+	for _, note := range append(first, rest...) {
+		if seen[note.ID] {
+			t.Fatalf("note %s returned twice", note.ID)
+		}
+		seen[note.ID] = true
+	}
+	for _, note := range written {
+		if !seen[note.ID] {
+			t.Fatalf("note %s skipped", note.ID)
+		}
+	}
+	all := assistant.SelfNoteListQuery{ProfileID: "bot-1", IncludeInactive: true}
+	if total, err := store.CountSelfNotes(ctx, all); err != nil || total != 7 {
+		t.Fatalf("history count = %d, %v", total, err)
+	}
+	if active, err := store.CountSelfNotes(ctx, assistant.SelfNoteListQuery{ProfileID: "bot-1"}); err != nil || active != 6 {
+		t.Fatalf("active count = %d, %v", active, err)
+	}
+}

@@ -64,8 +64,10 @@ type dianaRelationshipSnapshot struct {
 	Owner         bool                     `json:"bot_owner"`
 	HasHistory    bool                     `json:"has_history"`
 	RecentChanges []UserFavorabilityChange `json:"recent_changes,omitempty"`
-	// RecentChangesNote 在还有更早的变化没给时写明怎么接着看。
-	RecentChangesNote string `json:"recent_changes_note,omitempty"`
+	// RecentChangesTotal 是这个人一共有多少次好感度变化记录；RecentChangesPage 写明本页之后
+	// 还剩多少、怎么用 cursor 往更早翻。
+	RecentChangesTotal int             `json:"recent_changes_total,omitempty"`
+	RecentChangesPage  *toolCursorPage `json:"recent_changes_page,omitempty"`
 	// Portrait 和好感度一样是群里公开的：谁都查得到别人的。写画像仍然要权限，
 	// 见 runPortraitOperation。榜单不带它，那是体积考虑，不是可见性。
 	Portrait []UserPortraitTrait `json:"portrait,omitempty"`
@@ -102,7 +104,8 @@ func (t *dianaRelationshipTool) InputSchema() map[string]any {
 		"target_user_id": toolStringParam("目标账号，默认被 @ 者或发言者；set/adjust 必填且不能是主人；画像只能写自己的，写别人的要主人"),
 		"portrait_field": toolEnumParam("画像栏目；residence 只记城市，timezone 填 IANA 名，城市能定时区就一并记", PortraitFieldIDs()...),
 		"portrait_value": toolStringParam("portrait_set：≤30 字第三人称短语；portrait_forget：要删的那一条，省略则清空整栏"),
-		"history_limit":  toolCountParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit)+"，不设上限", 1),
+		"history_limit":  toolCountParam("get 返回的最近变化条数，默认 "+itoa(defaultRelationshipHistoryLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
+		"cursor":         toolStringParam("get 往更早翻变化记录：原样填上一页 recent_changes_page.next_cursor，其他参数不变"),
 		"limit":          toolCountParam("list 条数，默认 "+itoa(defaultRelationshipListLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
 		"offset":         toolCountParam("list 从第几名起（0 起），续读时填上次的 next_offset", 0),
 		"value":          toolIntParam("set：目标好感度", MinimumFavorability, MaximumFavorability),
@@ -132,11 +135,11 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), relationshipHistoryLimit(input), true)
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, member.DisplayName(), true)
 		if err != nil {
 			return "", err
 		}
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
+		return t.marshalWithRecentChanges(ctx, input, dianaRelationshipResult{
 			OK:      true,
 			Action:  "retrieved",
 			Message: "已读取目标用户的关系数据；包含关系统计和人员画像，不包含长期记忆正文。",
@@ -192,11 +195,11 @@ func (t *dianaRelationshipTool) Run(ctx context.Context, input map[string]any) (
 		if err != nil {
 			return "", err
 		}
-		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", relationshipHistoryLimit(input), true)
+		snapshot, err := t.relationshipSnapshot(ctx, targetID, "", true)
 		if err != nil {
 			return "", err
 		}
-		return marshalDianaRelationshipResult(dianaRelationshipResult{
+		return t.marshalWithRecentChanges(ctx, input, dianaRelationshipResult{
 			OK:      true,
 			Action:  "updated",
 			Message: fmt.Sprintf("已由主人将目标用户好感度更新为 %d；未增加互动次数。", value),
@@ -274,7 +277,7 @@ func (t *dianaRelationshipTool) runPortraitOperation(ctx context.Context, operat
 	if !written {
 		return "", fmt.Errorf("保存人员画像失败")
 	}
-	snapshot, err := t.relationshipSnapshot(ctx, targetID, "", 0, true)
+	snapshot, err := t.relationshipSnapshot(ctx, targetID, "", true)
 	if err != nil {
 		return "", err
 	}
@@ -402,7 +405,7 @@ func (t *dianaRelationshipTool) resolveTargetMember(ctx context.Context, targetI
 }
 
 // includePortrait 只管这次要不要把画像塞进结果，与权限无关——画像谁都能看。
-func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, historyLimit int, includePortrait bool) (dianaRelationshipSnapshot, error) {
+func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID string, fallbackName string, includePortrait bool) (dianaRelationshipSnapshot, error) {
 	t.runtime.mu.RLock()
 	store := t.runtime.userMemory
 	t.runtime.mu.RUnlock()
@@ -423,40 +426,23 @@ func (t *dianaRelationshipTool) relationshipSnapshot(ctx context.Context, userID
 	policyConfig := t.runtime.effectiveConfigForEvent(t.event)
 	policyConfig.OwnerID = policyConfig.OwnerIDForEvent(t.event)
 	policy := RelationshipPolicyForConfig(policyConfig, profile, userID)
-	var recentChanges []UserFavorabilityChange
-	recentNote := ""
-	if historyLimit > 0 {
-		if historyStore, ok := store.(UserFavorabilityHistoryStore); ok {
-			// 多取一条判断还有没有更早的，有就写明怎么接着看。
-			recentChanges, err = historyStore.ListUserFavorabilityChanges(ctx, strings.TrimSpace(t.event.ProfileID), userID, historyLimit+1)
-			if err != nil {
-				return dianaRelationshipSnapshot{}, fmt.Errorf("读取好感度变化记录失败: %w", err)
-			}
-			if len(recentChanges) > historyLimit {
-				recentChanges = recentChanges[:historyLimit]
-				recentNote = fmt.Sprintf("只给了最近 %d 次变化，还有更早的；要看就加大 history_limit 再查。", historyLimit)
-			}
-		}
-	}
 	var portrait []UserPortraitTrait
 	if includePortrait {
 		portrait = profile.Portrait
 	}
 	return dianaRelationshipSnapshot{
-		UserID:            userID,
-		DisplayName:       profile.DisplayName,
-		Mention:           mentionMarkerFor(userID),
-		Favorability:      profile.Favorability,
-		MessageCount:      profile.MessageCount,
-		ScheduleLimit:     policy.personalScheduleLimit(),
-		CanGenerateImage:  policy.AllowImageGeneration,
-		CanEditImage:      policy.AllowImageEditing,
-		CanDocumentOCR:    policy.AllowDocumentOCR,
-		Owner:             policy.Owner,
-		HasHistory:        found,
-		RecentChanges:     recentChanges,
-		RecentChangesNote: recentNote,
-		Portrait:          portrait,
+		UserID:           userID,
+		DisplayName:      profile.DisplayName,
+		Mention:          mentionMarkerFor(userID),
+		Favorability:     profile.Favorability,
+		MessageCount:     profile.MessageCount,
+		ScheduleLimit:    policy.personalScheduleLimit(),
+		CanGenerateImage: policy.AllowImageGeneration,
+		CanEditImage:     policy.AllowImageEditing,
+		CanDocumentOCR:   policy.AllowDocumentOCR,
+		Owner:            policy.Owner,
+		HasHistory:       found,
+		Portrait:         portrait,
 	}, nil
 }
 
@@ -484,7 +470,7 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context) (ite
 		// 榜单不带画像，理由是体积不是权限：每人七栏画像会把结果撑到十几 KB，
 		// 而「谁好感度最高」根本用不到。要看某个人的画像，用 operation=get 单查，
 		// 那条路谁都走得通。
-		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), 0, false)
+		item, err := t.relationshipSnapshot(ctx, member.UserID, member.DisplayName(), false)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -510,8 +496,58 @@ func (t *dianaRelationshipTool) listGroupRelationships(ctx context.Context) (ite
 	return items, unchecked, nil
 }
 
-func relationshipHistoryLimit(input map[string]any) int {
-	return chatHistoryCount(input, "history_limit", defaultRelationshipHistoryLimit)
+// marshalWithRecentChanges 给目标用户带上好感度变化记录（新到旧），按 id 键集翻页：
+// 装不下单次上限的整条留给下一页，cursor 只认本页最后一条，翻页之间新增的变化不会让
+// 后面的页重复或跳条。不再靠「加大 history_limit 再查一遍」看更早的。
+func (t *dianaRelationshipTool) marshalWithRecentChanges(ctx context.Context, input map[string]any, result dianaRelationshipResult) (string, error) {
+	t.runtime.mu.RLock()
+	historyStore, ok := t.runtime.userMemory.(UserFavorabilityHistoryStore)
+	t.runtime.mu.RUnlock()
+	if !ok || result.Target == nil {
+		return marshalDianaRelationshipResult(result)
+	}
+	cursor, err := toolKeysetCursor(input)
+	if err != nil {
+		return "", err
+	}
+	var beforeID int64
+	if cursor != nil {
+		if beforeID, err = strconv.ParseInt(cursor.ID, 10, 64); err != nil || beforeID <= 0 {
+			return "", fmt.Errorf("cursor 无效：请原样传回上一页 recent_changes_page.next_cursor，或不传 cursor 从最新的读起")
+		}
+	}
+	profileID, userID := strings.TrimSpace(t.event.ProfileID), result.Target.UserID
+	total, err := historyStore.CountUserFavorabilityChanges(ctx, profileID, userID, 0)
+	if err != nil {
+		return "", fmt.Errorf("读取好感度变化记录失败: %w", err)
+	}
+	matched := total
+	if beforeID > 0 {
+		if matched, err = historyStore.CountUserFavorabilityChanges(ctx, profileID, userID, beforeID); err != nil {
+			return "", fmt.Errorf("读取好感度变化记录失败: %w", err)
+		}
+	}
+	limit := toolKeysetFetchLimit(ctx, chatHistoryCount(input, "history_limit", defaultRelationshipHistoryLimit))
+	changes, err := historyStore.ListUserFavorabilityChanges(ctx, profileID, userID, beforeID, limit)
+	if err != nil {
+		return "", fmt.Errorf("读取好感度变化记录失败: %w", err)
+	}
+	if result.ReplyGuidance == "" {
+		result.ReplyGuidance = relationshipReplyGuidance
+	}
+	return marshalToolCursorPage(ctx, len(changes), matched, func(i int) KeysetCursor {
+		return KeysetCursor{At: changes[i].CreatedAt, ID: strconv.FormatInt(changes[i].ID, 10)}
+	}, func(n int, page toolCursorPage) any {
+		target := *result.Target
+		target.RecentChanges = changes[:n]
+		target.RecentChangesTotal = total
+		if page.HasMore {
+			target.RecentChangesPage = &page
+		}
+		out := result
+		out.Target = &target
+		return out
+	})
 }
 
 func relationshipChangeReason(operation string, input map[string]any) string {

@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // failingRecallChannel 让 delete_msg 固定失败，用来验证「撤不掉就得如实说」。
@@ -162,13 +165,69 @@ func TestRecallCandidateHintListsAllWithFullText(t *testing.T) {
 	for i := range 8 {
 		history = append(history, MessageEvent{Outbound: true, MessageID: "6000" + itoa(i), RawMessage: longText})
 	}
-	hint := recallCandidateHint(history)
+	hint := recallCandidateHint(history, "", agent.ToolOutputMaxChars)
 	for i := range 8 {
 		if !strings.Contains(hint, "6000"+itoa(i)) {
 			t.Fatalf("候选 %d 被漏掉：%s", i, hint)
 		}
 	}
-	if strings.Count(hint, longText) != 8 || strings.Contains(hint, "…") {
-		t.Fatalf("候选正文被截短：%s", hint)
+	if strings.Count(hint, longText) != 8 || strings.Contains(hint, "…") || strings.Contains(hint, "cursor=") {
+		t.Fatalf("候选正文被截短或无故分页：%s", hint)
+	}
+}
+
+// 候选装不下单次上限时按整条分页：每页不超上限、正文给全，按 cursor 续看；期间新发的
+// 消息排在最前，不会让后面的页跳条。
+func TestRecallCandidateHintPagesByBudget(t *testing.T) {
+	longText := strings.Repeat("这句话说错了", 50)
+	var history []MessageEvent
+	for i := range 12 {
+		history = append(history, MessageEvent{Outbound: true, MessageID: itoa(60010 + i), RawMessage: longText})
+	}
+	const budget = 1500
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; ; page++ {
+		if page > 12 {
+			t.Fatal("分页没有前进")
+		}
+		hint := recallCandidateHint(history, cursor, budget)
+		if size := utf8.RuneCountInString(hint); size > budget {
+			t.Fatalf("第 %d 页 %d 字超过上限 %d", page, size, budget)
+		}
+		listed := 0
+		for i := range 12 {
+			if id := itoa(60010 + i); strings.Contains(hint, id+"（") {
+				if seen[id] {
+					t.Fatalf("重复列了 %s", id)
+				}
+				seen[id] = true
+				listed++
+			}
+		}
+		if listed == 0 || strings.Count(hint, longText) != listed {
+			t.Fatalf("第 %d 页没有列出完整候选：%s", page, hint)
+		}
+		index := strings.Index(hint, "cursor=")
+		if index < 0 {
+			break
+		}
+		cursor = hint[index+len("cursor=") : index+len("cursor=")+5]
+		// 翻页之间又发了一条：排在最前，不影响后面的页。
+		history = append(history, MessageEvent{Outbound: true, MessageID: itoa(69000 + page), RawMessage: "新发的"})
+	}
+	if len(seen) != 12 {
+		t.Fatalf("翻完只看到 %d 条候选", len(seen))
+	}
+}
+
+// cursor 只翻候选，不给 message_id 时拒绝：否则会撤回最近一条。
+func TestPlatformRecallCursorRequiresMessageID(t *testing.T) {
+	tool, channel := qqOfficialToolFor(t, MessageEvent{Kind: EventKindPrivate, UserID: "owner"})
+	if _, err := tool.Run(context.Background(), map[string]any{"operation": "recall", "cursor": "60010"}); err == nil || !strings.Contains(err.Error(), "必须同时给 message_id") {
+		t.Fatalf("err = %v", err)
+	}
+	if calls := channel.callsSnapshot(); len(calls) != 0 {
+		t.Fatalf("不该调平台接口：%#v", calls)
 	}
 }

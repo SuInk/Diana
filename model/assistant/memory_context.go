@@ -238,7 +238,48 @@ func memoryRetrievalText(event MessageEvent, current string) string {
 	return strings.Join(parts, " ")
 }
 
+// memoryRankOptions 区分两种用途的排序。
+//
+// 自动注入上下文：常驻档最多 maximumCoreMemoryItems 条、检索档 MMR 选最多 24 条，新近度
+// 看 last_verified_at（命中会回写），长期没命中的旧情景逐步衰减。
+//
+// memory 工具检索翻页（stable）：不设条数上限，按 (得分降序, id 升序) 排，下一页从游标
+// 那一条之后接着给。得分只用翻页之间不变的字段：新近度按记下的时间算、不看
+// last_verified_at（自动注入每轮都会回写它，翻页之间名次就会变），也不做软遗忘衰减
+// （主动检索不该把旧记忆藏起来）；MMR 的去重调分依赖已选集合，同样会让名次随页变化，
+// 不用。
+type memoryRankOptions struct {
+	maxCore     int
+	maxSelected int
+	stable      bool
+}
+
+var (
+	injectionMemoryRank = memoryRankOptions{maxCore: maximumCoreMemoryItems, maxSelected: 24}
+	toolMemoryRank      = memoryRankOptions{stable: true}
+)
+
 func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, query string, now time.Time) []StructuredMemoryItem {
+	return rankStructuredMemoriesWith(items, event, query, now, injectionMemoryRank)
+}
+
+// memoryDedupTerms 是 MMR 去重要用的完整词集；稳定排序不做 MMR，不必切词。
+func memoryDedupTerms(item StructuredMemoryItem, options memoryRankOptions) []string {
+	if options.stable {
+		return nil
+	}
+	return structuredMemoryTermList(structuredMemoryDocument(item))
+}
+
+// memoryRanksBefore 是工具翻页的排序：得分高的在前，同分按 id 升序。
+func memoryRanksBefore(left, right StructuredMemoryItem) bool {
+	if left.RetrievalScore != right.RetrievalScore {
+		return left.RetrievalScore > right.RetrievalScore
+	}
+	return left.ID < right.ID
+}
+
+func rankStructuredMemoriesWith(items []StructuredMemoryItem, event MessageEvent, query string, now time.Time, options memoryRankOptions) []StructuredMemoryItem {
 	analysis := analyzeStructuredMemoryQuery(query)
 	// 文档频率只数查询里有的词，所以每条记忆只挑出命中的查询词；完整词集只有
 	// 去重要用，留给真正进了候选的那几条再算。以前每条记忆都切一整套 n-gram，
@@ -289,8 +330,11 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			score += 0.03
 		}
 		verifiedAt := item.LastVerifiedAt
-		if verifiedAt.IsZero() {
+		if verifiedAt.IsZero() || options.stable {
 			verifiedAt = item.SourceEventTime
+		}
+		if verifiedAt.IsZero() && options.stable {
+			verifiedAt = item.CreatedAt
 		}
 		// 新近度只按龄期算一条曲线。这里以前会先用关键词猜「用户在问最近的事还是
 		// 很久以前的事」再切换两种曲线，那是拿词表判断语义意图——本项目一律不这么
@@ -309,7 +353,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		// 软遗忘：长期没被检索命中的旧情景和摘要逐步退场。只有硬过期时间的话，
 		// 陈年往事会一直和新记忆平等竞争。命中会回写 last_verified_at，所以真正
 		// 常被提起的旧事不会被这条衰减压下去。
-		if recollection && !verifiedAt.IsZero() {
+		if recollection && !verifiedAt.IsZero() && !options.stable {
 			if decay := memoryStalenessDecay(now.Sub(verifiedAt)); decay > 0 {
 				score -= decay
 			}
@@ -339,22 +383,32 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 		if coreCurrentMemory {
 			// 常驻档：长期交互要求和高置信要害事实不该跟检索结果抢名额。「回复永远
 			// 带颜文字」这类要求只在话题相关时才生效是错的，它本来就与话题无关。
-			core = append(core, scoredMemory{item: item, terms: structuredMemoryTermList(structuredMemoryDocument(item))})
+			core = append(core, scoredMemory{item: item, terms: memoryDedupTerms(item, options)})
 			continue
 		}
-		candidates = append(candidates, scoredMemory{item: item, terms: structuredMemoryTermList(structuredMemoryDocument(item))})
+		candidates = append(candidates, scoredMemory{item: item, terms: memoryDedupTerms(item, options)})
+	}
+	if options.stable {
+		ranked := make([]StructuredMemoryItem, 0, len(core)+len(candidates))
+		for _, batch := range [][]scoredMemory{core, candidates} {
+			for _, candidate := range batch {
+				ranked = append(ranked, candidate.item)
+			}
+		}
+		sort.SliceStable(ranked, func(left, right int) bool { return memoryRanksBefore(ranked[left], ranked[right]) })
+		return ranked
 	}
 	sort.SliceStable(core, func(left, right int) bool {
 		return core[left].item.RetrievalScore > core[right].item.RetrievalScore
 	})
-	if len(core) > maximumCoreMemoryItems {
-		core = core[:maximumCoreMemoryItems]
+	if options.maxCore > 0 && len(core) > options.maxCore {
+		core = core[:options.maxCore]
 	}
 
 	// MMR-style selection keeps several useful topics instead of spending the
 	// complete context budget on near-duplicate memories.
 	// 每个候选与已选集合的最大相似度随选入逐条更新，不必每轮都和全部已选重算一遍。
-	selected := make([]scoredMemory, 0, min(24, len(candidates))+len(core))
+	selected := make([]scoredMemory, 0, min(options.maxSelected, len(candidates))+len(core))
 	selected = append(selected, core...)
 	maxSimilarity := make([]float64, len(candidates))
 	for index, candidate := range candidates {
@@ -362,7 +416,7 @@ func rankStructuredMemories(items []StructuredMemoryItem, event MessageEvent, qu
 			maxSimilarity[index] = max(maxSimilarity[index], structuredMemorySimilarity(candidate.terms, existing.terms))
 		}
 	}
-	for len(candidates) > 0 && len(selected) < 24+len(core) {
+	for len(candidates) > 0 && len(selected) < options.maxSelected+len(core) {
 		bestIndex := 0
 		bestScore := math.Inf(-1)
 		for index, candidate := range candidates {

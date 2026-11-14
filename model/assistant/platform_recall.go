@@ -5,9 +5,13 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 机器人说错话之后只能再发一条「当我没说」，错的那条还挂在群里——看到的人多半只看
@@ -44,7 +48,10 @@ func platformSupportsRecall(platform string) bool {
 //
 // messageID 为空时取机器人最近发出的一条。给了 ID 就必须精确命中，命中的还必须是
 // 机器人自己发的——命中别人的消息一律拒绝，这是这个能力的边界，不靠提示词守。
-func (r *Runtime) resolveRecallTarget(ctx context.Context, event MessageEvent, messageID string) (MessageEvent, error) {
+//
+// cursor 只在 message_id 没命中时有用：报错里的候选按单次上限分页，cursor 是上一页
+// 最后一条候选的消息 ID，从它之后（更早的）接着列。
+func (r *Runtime) resolveRecallTarget(ctx context.Context, event MessageEvent, messageID, cursor string) (MessageEvent, error) {
 	if r == nil {
 		return MessageEvent{}, fmt.Errorf("运行时不可用")
 	}
@@ -98,24 +105,69 @@ func (r *Runtime) resolveRecallTarget(ctx context.Context, event MessageEvent, m
 			return checkTarget(found)
 		}
 	}
-	return MessageEvent{}, fmt.Errorf("本次会话里找不到消息 %s：message_id 必须取自我自己发出的消息，不要按内容猜。%s", messageID, recallCandidateHint(history))
+	head := fmt.Sprintf("本次会话里找不到消息 %s：message_id 必须取自我自己发出的消息，不要按内容猜。", messageID)
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
+	}
+	return MessageEvent{}, errors.New(head + recallCandidateHint(history, strings.TrimSpace(cursor), budget-utf8.RuneCountInString(head)))
 }
 
+// recallCandidateNoteReserve 给候选列表末尾的续读说明留的字数。
+const recallCandidateNoteReserve = 200
+
 // recallCandidateHint 在 message_id 没命中时，把本会话里还能撤回的自家消息列回去，
-// 全部列出、正文给全。模型手上没有消息 ID 清单，不给候选它只会再编一个。
-func recallCandidateHint(history []MessageEvent) string {
-	var lines []string
+// 新到旧、正文给全。模型手上没有消息 ID 清单，不给候选它只会再编一个。候选多到装不下
+// budget 字时整条分页：cursor 是上一页最后一条候选的 ID，从它之后接着列，并写明还剩
+// 多少、怎么续读。按 ID 续读而不是按序号：期间新发的消息排在最前，不会把后面挤得错位。
+func recallCandidateHint(history []MessageEvent, cursor string, budget int) string {
+	type candidate struct{ id, line string }
+	var candidates []candidate
 	for i := len(history) - 1; i >= 0; i-- {
 		id := recallableOutboundMessageID(history[i])
 		if id == "" {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s（%s）", id, summarizeRecallCandidate(history[i])))
+		candidates = append(candidates, candidate{id: id, line: fmt.Sprintf("%s（%s）", id, summarizeRecallCandidate(history[i]))})
 	}
-	if len(lines) == 0 {
+	if len(candidates) == 0 {
 		return "本会话里目前没有可撤回的自家消息"
 	}
-	return "可撤回的是：" + strings.Join(lines, "、")
+	start := 0
+	if cursor != "" {
+		start = -1
+		for i, item := range candidates {
+			if item.id == cursor {
+				start = i + 1
+				break
+			}
+		}
+		if start < 0 {
+			return fmt.Sprintf("cursor=%s 对应的消息已不在本会话的近期记录里；不传 cursor 再调一次，从最新的候选看起（共 %d 条）", cursor, len(candidates))
+		}
+		if start >= len(candidates) {
+			return fmt.Sprintf("可撤回的候选已经列完了（共 %d 条），cursor=%s 之后没有更早的", len(candidates), cursor)
+		}
+	}
+	budget -= recallCandidateNoteReserve
+	end, used := start, 0
+	for end < len(candidates) {
+		size := utf8.RuneCountInString(candidates[end].line) + 1
+		if end > start && used+size > budget {
+			break
+		}
+		used += size
+		end++
+	}
+	lines := make([]string, 0, end-start)
+	for _, item := range candidates[start:end] {
+		lines = append(lines, item.line)
+	}
+	hint := fmt.Sprintf("可撤回的共 %d 条（新到旧），这里是第 %d～%d 条：%s", len(candidates), start+1, end, strings.Join(lines, "、"))
+	if remaining := len(candidates) - end; remaining > 0 {
+		hint += fmt.Sprintf("。单次结果上限装不下，还有 %d 条更早的没列：要看就再调 recall，message_id 照旧、传 cursor=%s（没命中不会撤回任何消息）；没看完之前不要断言没有那条", remaining, candidates[end-1].id)
+	}
+	return hint
 }
 
 func summarizeRecallCandidate(event MessageEvent) string {
@@ -161,12 +213,19 @@ func (t *dianaPlatformTool) runRecall(ctx context.Context, input map[string]any,
 		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, "", err)
 		return "", err
 	}
-	target, err := t.runtime.resolveRecallTarget(ctx, t.event, configToolString(input, "message_id"))
+	messageID, cursor := strings.TrimSpace(configToolString(input, "message_id")), strings.TrimSpace(configToolString(input, "cursor"))
+	if cursor != "" && messageID == "" {
+		// message_id 为空会撤回最近一条；cursor 只用来翻候选，不能让翻页变成误撤。
+		err := fmt.Errorf("cursor 只用来翻看可撤回的候选，必须同时给 message_id；没有确定要撤哪条之前不要省略 message_id")
+		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, "", err)
+		return "", err
+	}
+	target, err := t.runtime.resolveRecallTarget(ctx, t.event, messageID, cursor)
 	if err != nil {
 		t.runtime.recordPlatformInterfaceOperation(t.event, platformOpRecall, access, owner, "", err)
 		return "", err
 	}
-	messageID := recallableOutboundMessageID(target)
+	messageID = recallableOutboundMessageID(target)
 	summary := summarizeRecallCandidate(target)
 
 	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)

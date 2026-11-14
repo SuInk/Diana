@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 // 查好感度时默认带上最近几条变更。数据层一直是这么做的（defaultRelationshipHistoryLimit
@@ -72,26 +74,76 @@ func TestRelationshipGetCarriesFiveRecentChangesByDefault(t *testing.T) {
 	}
 }
 
-// TestRelationshipGetSaysWhenOlderChangesRemain 没给全时写明还有更早的；给全时不写。
+func runRelationshipGet(t *testing.T, ctx context.Context, runtime *Runtime, event MessageEvent, input map[string]any) dianaRelationshipResult {
+	t.Helper()
+	input["operation"] = "get"
+	raw, err := newDianaRelationshipTool(runtime, event).Run(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result dianaRelationshipResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil || result.Target == nil {
+		t.Fatalf("bad result %s: %v", raw, err)
+	}
+	return result
+}
+
+// TestRelationshipGetSaysWhenOlderChangesRemain 没给全时写明还剩几条、怎么用 cursor 往更早翻；
+// 给全时不写。
 func TestRelationshipGetSaysWhenOlderChangesRemain(t *testing.T) {
 	runtime, event := seedRecentChangesRuntime(t, 7)
-	run := func(limit int) dianaRelationshipResult {
-		t.Helper()
-		raw, err := newDianaRelationshipTool(runtime, event).Run(context.Background(), map[string]any{"operation": "get", "history_limit": limit})
-		if err != nil {
-			t.Fatal(err)
-		}
-		var result dianaRelationshipResult
-		if err := json.Unmarshal([]byte(raw), &result); err != nil || result.Target == nil {
-			t.Fatalf("bad result %s: %v", raw, err)
-		}
-		return result
+	ctx := context.Background()
+	partial := runRelationshipGet(t, ctx, runtime, event, map[string]any{"history_limit": 5}).Target
+	if len(partial.RecentChanges) != 5 || partial.RecentChangesTotal != 7 || partial.RecentChangesPage == nil ||
+		partial.RecentChangesPage.RemainingCount != 2 || partial.RecentChangesPage.NextCursor == "" ||
+		!strings.Contains(partial.RecentChangesPage.PageNote, "cursor") {
+		t.Fatalf("partial history should say more remain: %+v", partial)
 	}
-	if got := run(5).Target; len(got.RecentChanges) != 5 || !strings.Contains(got.RecentChangesNote, "history_limit") {
-		t.Fatalf("partial history should say more remain: %+v", got)
+	full := runRelationshipGet(t, ctx, runtime, event, map[string]any{"history_limit": 200}).Target
+	if len(full.RecentChanges) != 7 || full.RecentChangesPage != nil {
+		t.Fatalf("full history should be complete without page: %+v", full)
 	}
-	if got := run(200).Target; len(got.RecentChanges) != 7 || got.RecentChangesNote != "" {
-		t.Fatalf("full history should be complete without note: %+v", got)
+}
+
+// 变化记录按 id 键集翻页：翻页之间又新增了变化，往更早翻也不重复、不跳条；
+// 单次上限很小时按整条切页，顺着 cursor 读完全部。
+func TestRelationshipRecentChangesPageByCursor(t *testing.T) {
+	runtime, event := seedRecentChangesRuntime(t, 30)
+	ctx := context.Background()
+	first := runRelationshipGet(t, ctx, runtime, event, map[string]any{"history_limit": 10}).Target
+	if len(first.RecentChanges) != 10 || first.RecentChanges[0].ID != 30 || first.RecentChangesPage == nil {
+		t.Fatalf("first page = %+v", first)
+	}
+	// 翻页之间又发生一次变化：它在最新那头，不影响往更早翻。
+	memory := runtime.userMemory.(*memoryUserMemoryStore)
+	memory.favorabilityChanges["10005"] = append([]UserFavorabilityChange{{ID: 31, UserID: "10005", Delta: 1, Source: "interaction"}}, memory.favorabilityChanges["10005"]...)
+	small := agent.WithToolOutputBudget(ctx, 3000)
+	next := int64(20)
+	cursor := first.RecentChangesPage.NextCursor
+	for page := 0; ; page++ {
+		target := runRelationshipGet(t, small, runtime, event, map[string]any{"history_limit": 1000, "cursor": cursor}).Target
+		if len(target.RecentChanges) == 0 || target.RecentChangesTotal != 31 {
+			t.Fatalf("page %d = %+v", page, target)
+		}
+		for _, change := range target.RecentChanges {
+			if change.ID != next {
+				t.Fatalf("page %d got change %d, want %d", page, change.ID, next)
+			}
+			next--
+		}
+		if target.RecentChangesPage == nil {
+			break
+		}
+		if !strings.Contains(target.RecentChangesPage.PageNote, "单次结果上限") {
+			t.Fatalf("budget-cut page should say so: %q", target.RecentChangesPage.PageNote)
+		}
+		cursor = target.RecentChangesPage.NextCursor
+		if page > 30 {
+			t.Fatal("分页没有前进")
+		}
+	}
+	if next != 0 {
+		t.Fatalf("stopped before the oldest change, next=%d", next)
 	}
 }
 

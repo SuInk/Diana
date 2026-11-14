@@ -188,3 +188,50 @@ func TestCapabilityToolSearchesToolsAttachedForThisTurn(t *testing.T) {
 	}
 	t.Fatalf("attached tool missing from references: %#v", result.References)
 }
+
+// 能力条目占满单次上限、参考资料一条也出不来时，按提示传 limit=0 续读参考资料要能前进、读完。
+func TestCapabilityToolReferencesAdvanceWhenItemsFillBudget(t *testing.T) {
+	tool := NewCapabilityKnowledgePlugin().AgentTools()[0]
+	query := "编码代理能同时跑几个任务"
+	full := runCapabilityTool(t, tool, map[string]any{"query": query, "limit": 1000, "reference_limit": 0})
+	body, _ := json.Marshal(full.Items)
+	// 预算只够放下全部能力条目，参考资料最多挤进一条。
+	ctx := agent.WithToolOutputBudget(context.Background(), utf8.RuneCount(body)+1500)
+	run := func(input map[string]any) capabilityToolResult {
+		t.Helper()
+		raw, err := tool.Run(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result capabilityToolResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := run(map[string]any{"query": query, "limit": 1000, "reference_limit": 1000})
+	if len(first.References) > 1 || !first.ReferencesPage.HasMore || !strings.Contains(first.ReferencesPage.PageNote, "limit=0") {
+		t.Fatalf("expected references crowded out with limit=0 hint: refs=%d page=%#v", len(first.References), first.ReferencesPage)
+	}
+	seen := map[string]bool{}
+	offset := 0
+	for range 50 {
+		page := run(map[string]any{"query": query, "limit": 0, "reference_offset": offset, "reference_limit": 1000})
+		if len(page.Items) != 0 {
+			t.Fatalf("limit=0 still returned %d items", len(page.Items))
+		}
+		for _, reference := range page.References {
+			seen[reference.ID] = true
+		}
+		if !page.ReferencesPage.HasMore {
+			break
+		}
+		if page.ReferencesPage.NextOffset <= offset {
+			t.Fatalf("reference_offset did not advance: %#v", page.ReferencesPage)
+		}
+		offset = page.ReferencesPage.NextOffset
+	}
+	if len(seen) != first.ReferencesPage.Total {
+		t.Fatalf("read %d references, total %d", len(seen), first.ReferencesPage.Total)
+	}
+}
