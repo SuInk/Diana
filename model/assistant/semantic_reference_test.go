@@ -579,14 +579,6 @@ func (s *semanticTimelineStore) FindMessageEvent(_ context.Context, session, mes
 	return MessageEvent{}, false, nil
 }
 
-var _ LLMProvider = (*semanticReferenceTestProvider)(nil)
-
-type semanticReferenceTestProvider struct{}
-
-func (*semanticReferenceTestProvider) Generate(context.Context, llm.GenerateRequest) (*llm.GenerateResponse, error) {
-	return &llm.GenerateResponse{}, nil
-}
-
 type semanticReferenceModelProvider struct {
 	model      string
 	usedModels *[]string
