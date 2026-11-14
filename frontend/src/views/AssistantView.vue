@@ -1487,13 +1487,12 @@
                   class="input"
                   type="number"
                   min="0.1"
-                  :max="maximumReplyFatigueLimit"
                   step="0.1"
                   inputmode="decimal"
                 />
                 <span class="hint">
                   对同一个人一轮又长又没新意的来回约涨 0.6，短句和有目的的几乎不涨，随时间消退。攒到阈值才开始判断这条要不要回。默认
-                  {{ defaultReplyFatigueLimit }}，调高更耐聊，最高 {{ maximumReplyFatigueLimit }}。
+                  {{ defaultReplyFatigueLimit }}，调高更耐聊。
                 </span>
               </div>
               <div class="field wide">
@@ -3180,9 +3179,8 @@ const defaultBotReplyLoopThreshold = 3;
 const defaultReplyRefusalThreshold = 4;
 const maximumReplySuppressionMinutes = 24 * 60;
 const maximumReplySuppressionThreshold = 20;
-// 回复疲劳阈值的默认值与上限，和后端 reply_fatigue.go 保持一致。
+// 回复疲劳阈值的默认值，和后端 reply_fatigue.go 保持一致；不设上限。
 const defaultReplyFatigueLimit = 1;
-const maximumReplyFatigueLimit = 10;
 const platforms = ref<BotPlatform[]>([]);
 
 // 能不能渲染 Markdown 由后端的平台注册表说了算，前端不另维护一份清单——

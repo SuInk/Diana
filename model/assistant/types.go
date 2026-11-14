@@ -850,7 +850,7 @@ type BotConfig struct {
 	// BotReplyLoopThreshold 是 30 分钟内判中几次空转就屏蔽该账号。
 	BotReplyLoopThreshold int `json:"bot_reply_loop_threshold,omitempty"`
 	// ReplyFatigueLimit 是对同一个人的回复疲劳攒到多少算满，满了才问这条还回不回。
-	// 0 或没填用默认 1.0，见 reply_fatigue.go。
+	// 正数原样生效、不设上限；0、负数或没填用默认 1.0，见 reply_fatigue.go。
 	ReplyFatigueLimit float64 `json:"reply_fatigue_limit,omitempty"`
 	// ReplyRefusalThreshold 是 30 分钟内对同一账号拒答几次就屏蔽它。
 	ReplyRefusalThreshold    int   `json:"reply_refusal_threshold,omitempty"`

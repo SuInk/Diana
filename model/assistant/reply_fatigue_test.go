@@ -108,7 +108,7 @@ func TestReplyFatigueGateSkipsModelBelowLimit(t *testing.T) {
 	}
 }
 
-// 疲劳阈值可按机器人调：没配、乱配回到默认或上限；调低更早拦，调高同样的疲劳不再问模型。
+// 疲劳阈值可按机器人调：正数原样生效，没配、非正数回到默认；调低更早拦，调高同样的疲劳不再问模型。
 func TestReplyFatigueLimitConfigurable(t *testing.T) {
 	for _, tc := range []struct {
 		value float64
@@ -117,7 +117,7 @@ func TestReplyFatigueLimitConfigurable(t *testing.T) {
 		{0, defaultReplyFatigueLimit},
 		{-1, defaultReplyFatigueLimit},
 		{1.5, 1.5},
-		{99, maxReplyFatigueLimit},
+		{99, 99},
 	} {
 		if got := replyFatigueLimit(BotConfig{ReplyFatigueLimit: tc.value}); got != tc.want {
 			t.Fatalf("配置 %v 得到阈值 %v，想要 %v", tc.value, got, tc.want)

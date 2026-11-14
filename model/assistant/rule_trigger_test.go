@@ -230,7 +230,7 @@ func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
 	// 一段普通节奏：三个人隔几十秒说一句，上一条 40 秒前。
 	normal := []MessageEvent{msg("a", "u2", 200, "x"), msg("b", "u3", 120, "y"), msg("c", "u2", 40, "z")}
 	chance := func(text string, history []MessageEvent, fatigue float64) float64 {
-		got, _ := ruleChatChance(30, current, text, history, "bot", fatigue, now)
+		got, _ := ruleChatChance(30, current, text, history, "bot", fatigue, defaultReplyFatigueLimit, now)
 		return got
 	}
 
@@ -295,14 +295,21 @@ func TestRuleChatChanceAdjustsByLocalSignals(t *testing.T) {
 	if got := chance("今天食堂的菜还行", normal, 1); got >= 0.3*0.31 {
 		t.Fatalf("full fatigue should cut chance to 30%%, got %v", got)
 	}
+	// 疲劳按机器人的阈值归一化：阈值 3 时 1.5 只算半满，压到 65%；攒到 3 才压到底。
+	if got, _ := ruleChatChance(30, current, "今天食堂的菜还行", normal, "bot", 1.5, 3, now); math.Abs(got-0.3*0.65) > 1e-9 {
+		t.Fatalf("fatigue 1.5 under limit 3 should cut chance to 65%%, got %v", got)
+	}
+	if got, _ := ruleChatChance(30, current, "今天食堂的菜还行", normal, "bot", 3, 3, now); math.Abs(got-0.3*0.3) > 1e-9 {
+		t.Fatalf("fatigue at limit 3 should cut chance to 30%%, got %v", got)
+	}
 
 	if got := chance("今天去哪吃饭？", nil, 0); got > 0.6+1e-9 {
 		t.Fatalf("chance must be capped at twice the base, got %v", got)
 	}
-	if got, _ := ruleChatChance(100, current, "哈哈", busy, "bot", 1, now); got != 1 {
+	if got, _ := ruleChatChance(100, current, "哈哈", busy, "bot", 1, defaultReplyFatigueLimit, now); got != 1 {
 		t.Fatalf("100%% means always, got %v", got)
 	}
-	if got, _ := ruleChatChance(0, current, "在吗？", nil, "bot", 0, now); got != 0 {
+	if got, _ := ruleChatChance(0, current, "在吗？", nil, "bot", 0, defaultReplyFatigueLimit, now); got != 0 {
 		t.Fatalf("0%% means never, got %v", got)
 	}
 }
