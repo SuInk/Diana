@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/hostinfo"
@@ -28,7 +29,7 @@ func (t *hostAccessTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":  toolEnumParam("read 读文件；list 列目录；usage 目录体积；disk 磁盘；exec 执行；cleanup 清理自身存储；session_start/send/read/stop/list 管 dev server、REPL 等常驻进程", "read", "list", "usage", "disk", "exec", "cleanup", "session_start", "session_send", "session_read", "session_stop", "session_list"),
 		"path":       toolStringParam("读取或统计的绝对路径；相对路径以 Agent 工作区为基准"),
-		"offset":     toolIntParam("read 的字节偏移或 list 跳过的条数，默认 0", 0, 1000000000),
+		"offset":     toolCountParam("read 的字节偏移或 list 跳过的条数，默认 0", 0),
 		"command":    toolStringParam("exec 的可执行文件绝对路径，如 /bin/sh"),
 		"args":       toolStringArrayParam("exec 的原始参数数组，不自动经过 shell"),
 		"cwd":        toolStringParam("exec 的绝对工作目录，默认 Agent 工作区"),
@@ -132,53 +133,12 @@ func (t *hostAccessTool) Run(ctx context.Context, input map[string]any) (string,
 			if !info.Mode().IsRegular() {
 				return "", fmt.Errorf("read 仅支持普通文件")
 			}
-			if _, err = f.Seek(int64(offset), io.SeekStart); err != nil {
-				return "", err
-			}
-			body, err := io.ReadAll(io.LimitReader(f, 65537))
-			if err != nil {
-				return "", err
-			}
-			more := len(body) > 65536
-			if more {
-				body = body[:65536]
-			}
-			return hostAccessJSON(map[string]any{"path": path, "content": string(body), "truncated": more, "next_offset": offset + len(body)})
-		}
-		if offset > 100000 {
-			return "", fmt.Errorf("目录分页最多跳过 100000 项，请缩小目录范围")
+			return hostAccessRead(ctx, f, path, offset, info.Size())
 		}
 		if !info.IsDir() {
 			return "", fmt.Errorf("list 需要目录")
 		}
-		// Bounded paging avoids materializing a huge directory in memory.
-		for n := 0; n < offset; {
-			if ctx.Err() != nil {
-				return "", ctx.Err()
-			}
-			step := min(200, offset-n)
-			items, err := f.ReadDir(step)
-			n += len(items)
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return "", err
-			}
-		}
-		entries, err := f.ReadDir(201)
-		if err != nil && err != io.EOF {
-			return "", err
-		}
-		more := len(entries) > 200
-		if more {
-			entries = entries[:200]
-		}
-		items := []map[string]any{}
-		for _, e := range entries {
-			items = append(items, map[string]any{"name": e.Name(), "directory": e.IsDir(), "type": e.Type().String(), "protected": agent.OwnerPathProtected(acfg, filepath.Join(path, e.Name()))})
-		}
-		return hostAccessJSON(map[string]any{"path": path, "entries": items, "truncated": more, "next_offset": offset + len(entries), "note": "目录变化时分页可能变化"})
+		return hostAccessList(ctx, acfg, f, path, offset)
 	default:
 		return "", fmt.Errorf("不支持的 operation %q", op)
 	}
@@ -231,6 +191,98 @@ func hostExecRequest(cfg agent.Config, input map[string]any) (agent.OwnerCommand
 		return agent.OwnerCommand{}, "", fmt.Errorf("purpose 必填：写清这条命令对应用户的哪项请求")
 	}
 	return agent.OwnerCommand{Command: configToolString(input, "command"), Args: args, CWD: cwd}, purpose, nil
+}
+
+// hostReadResult 的字段顺序就是 JSON 里的顺序：续读参数和说明排在正文前面，结果
+// 再长也不会先被截掉。以前用 map，键按字母序排，next_offset 落在 content 后面。
+type hostReadResult struct {
+	Path       string `json:"path"`
+	SizeBytes  int64  `json:"size_bytes"`
+	Offset     int    `json:"offset"`
+	EndOffset  int    `json:"end_offset"`
+	Truncated  bool   `json:"truncated"`
+	NextOffset int    `json:"next_offset,omitempty"`
+	Notice     string `json:"notice,omitempty"`
+	Content    string `json:"content"`
+}
+
+// hostAccessRead 从字节偏移 offset 起读，照 Pi 的做法按整行装进单次上限；一行就超过
+// 上限时按字符切（不切坏 UTF-8），说明里写清下一段从哪个字节起。
+func hostAccessRead(ctx context.Context, f *os.File, path string, offset int, size int64) (string, error) {
+	budget := agent.ToolResultBudget(ctx)
+	if _, err := f.Seek(int64(offset), io.SeekStart); err != nil {
+		return "", err
+	}
+	// 每个字至少一个字节、最多四个：多读这么多足够装满预算，也知道后面还有没有。
+	body, err := io.ReadAll(io.LimitReader(f, int64(budget)*utf8.UTFMax+1))
+	if err != nil {
+		return "", err
+	}
+	text := string(body)
+	return agent.FitTextResult(budget, text, false, true, func(cut int) (string, error) {
+		end := offset + cut
+		result := hostReadResult{Path: path, SizeBytes: size, Offset: offset, EndOffset: end, Content: text[:cut]}
+		if int64(end) < size {
+			result.Truncated, result.NextOffset = true, end
+			partial := ""
+			if cut > 0 && text[cut-1] != '\n' {
+				partial = "这一行太长，只给了开头一段；"
+			}
+			result.Notice = fmt.Sprintf("单次结果上限 %d 字，这次给了第 %d–%d 字节（共 %d 字节）；%s用 offset=%d 接着读。", agent.ToolOutputMaxChars, offset, end, size, partial, end)
+		}
+		return hostAccessJSON(result)
+	})
+}
+
+// hostListBatch 是 list 一次从目录里取多少项来装页；装不下的留给下一页，不是条数上限。
+const hostListBatch = 2000
+
+type hostListResult struct {
+	Path       string           `json:"path"`
+	Offset     int              `json:"offset"`
+	Returned   int              `json:"returned"`
+	Truncated  bool             `json:"truncated"`
+	NextOffset int              `json:"next_offset,omitempty"`
+	Notice     string           `json:"notice"`
+	Entries    []map[string]any `json:"entries"`
+}
+
+// hostAccessList 跳过 offset 项后按单次上限装整条目录项，装不下的写明 next_offset。
+func hostAccessList(ctx context.Context, acfg agent.Config, f *os.File, path string, offset int) (string, error) {
+	for n := 0; n < offset; {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		items, err := f.ReadDir(min(1000, offset-n))
+		n += len(items)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+	}
+	entries, err := f.ReadDir(hostListBatch + 1)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	more := len(entries) > hostListBatch
+	if more {
+		entries = entries[:hostListBatch]
+	}
+	items := make([]map[string]any, 0, len(entries))
+	for _, e := range entries {
+		items = append(items, map[string]any{"name": e.Name(), "directory": e.IsDir(), "type": e.Type().String(), "protected": agent.OwnerPathProtected(acfg, filepath.Join(path, e.Name()))})
+	}
+	out, _, err := agent.FitEntries(len(items), agent.ToolResultBudget(ctx), func(n int) (string, error) {
+		result := hostListResult{Path: path, Offset: offset, Returned: n, Entries: items[:n], Notice: "目录变化时分页可能变化"}
+		if n < len(items) || more {
+			result.Truncated, result.NextOffset = true, offset+n
+			result.Notice = fmt.Sprintf("这次给了第 %d–%d 项，目录里还有更多；用 offset=%d 接着列。目录变化时分页可能变化。", offset+1, offset+n, offset+n)
+		}
+		return hostAccessJSON(result)
+	})
+	return out, err
 }
 
 func hostAccessJSON(v any) (string, error) { b, e := json.Marshal(v); return string(b), e }

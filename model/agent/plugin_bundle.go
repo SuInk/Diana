@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,7 +128,7 @@ func NewPluginResourceTool(id, root string, cfg Config, scripts map[string]Plugi
 	}
 	return &pluginResourceTool{
 		name: PluginToolPrefix(id) + "__read", id: id,
-		reader:  &ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes},
+		reader:  &ReadFileTool{root: root},
 		scripts: entries, workspace: cfg.WorkDir, warnings: append([]string(nil), warnings...),
 	}
 }
@@ -153,6 +152,7 @@ func (t *pluginResourceTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
 		"path":   toolStringParam("插件根目录内的相对资源路径，可选"),
 		"offset": toolIntParam("起始行，可选"), "limit": toolIntParam("行数，可选"),
+		"char_offset": toolIntParam("单行超过上限时从这一行的第几个字接着读，照结果里给的填"),
 	})
 }
 func (t *pluginResourceTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -166,9 +166,9 @@ func (t *pluginResourceTool) Run(ctx context.Context, input map[string]any) (str
 func pluginCommandRunner(cfg Config) *RunCommandTool {
 	cfg = cfg.WithDefaults()
 	return &RunCommandTool{
-		root:     cfg.WorkDir,
-		timeout:  time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-		maxBytes: ToolOutputMaxChars, protected: agentProtectedFiles(cfg),
+		root:        cfg.WorkDir,
+		timeout:     time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
+		protected:   agentProtectedFiles(cfg),
 		sandboxMode: cfg.CommandSandbox, sandbox: detectCommandSandbox(),
 		sandboxNetwork: cfg.CommandSandboxAllowNetwork,
 	}
@@ -239,59 +239,6 @@ func (t *pluginScriptTool) Run(ctx context.Context, input map[string]any) (strin
 	// The sandbox's writable root is always the Agent workspace. A package can
 	// opt into its own cwd for upstream code that relies on relative resources.
 	return runner.run(ctx, input, script.Command, args, cwd)
-}
-
-// Read enough lookahead to redact a secret crossing the output limit, then
-// truncate. Truncating first would expose the beginning of a token.
-func readPluginCommandOutput(file *os.File, maxBytes int, secrets []string) (string, bool, error) {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", false, err
-	}
-	if maxBytes <= 0 {
-		maxBytes = ToolOutputMaxChars
-	}
-	lookahead := 0
-	var variants []string
-	for _, secret := range secrets {
-		if secret == "" {
-			continue
-		}
-		variants = append(variants, secret)
-		encoded, _ := json.Marshal(secret)
-		variants = append(variants, string(encoded[1:len(encoded)-1]))
-		lookahead += max(len(secret), len(encoded))
-	}
-	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+int64(lookahead)+1))
-	if err != nil {
-		return "", false, err
-	}
-	output := string(data)
-	info, err := file.Stat()
-	if err != nil {
-		return "", false, err
-	}
-	more := info.Size() > int64(len(data))
-	if more {
-		partial := 0
-		for _, value := range variants {
-			for n := min(len(value)-1, len(output)); n > partial; n-- {
-				if strings.HasSuffix(output, value[:n]) {
-					partial = n
-					break
-				}
-			}
-		}
-		output = output[:len(output)-partial]
-	}
-	sort.Slice(variants, func(i, j int) bool { return len(variants[i]) > len(variants[j]) })
-	for _, value := range variants {
-		output = strings.ReplaceAll(output, value, "[REDACTED]")
-	}
-	truncated := more || len(output) > maxBytes
-	if len(output) > maxBytes {
-		output = output[:maxBytes]
-	}
-	return output, truncated, nil
 }
 
 func literalCommandEnvironment(overrides map[string]string) []string {

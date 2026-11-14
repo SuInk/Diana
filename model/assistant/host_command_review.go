@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -386,6 +387,9 @@ func (r *Runtime) runReviewedHostCommand(ctx context.Context, event MessageEvent
 	if err != nil {
 		return "", decision, err
 	}
+	// 审核结论随后并进结果，先从预算里给它留出位置，命令输出按剩下的分页。
+	reviewBody, _ := json.Marshal(map[string]any{"review": decision})
+	ctx = agent.WithToolOutputBudget(ctx, agent.ToolResultBudget(ctx)-utf8.RuneCount(reviewBody))
 	out, err := agent.RunOwnerCommand(ctx, cfg, validated)
 	return out, decision, err
 }

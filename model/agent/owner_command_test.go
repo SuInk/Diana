@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestOwnerCommandRejectsObviousWholeMachineDestruction(t *testing.T) {
@@ -81,12 +83,41 @@ func TestOwnerCommandCanAccessHostNetwork(t *testing.T) {
 	}
 }
 
-func TestOwnerCommandOutputIsBounded(t *testing.T) {
-	w := &ownerCommandOutput{}
-	p := []byte(strings.Repeat("x", 100000))
-	n, err := w.Write(p)
-	if err != nil || n != len(p) || len(w.data) != 65536 || !w.truncated {
-		t.Fatal("output limit failed")
+// 主人命令的输出不在内存里截到 64KiB：装不下单次上限时给尾部整行，完整输出落盘，
+// 结果里写明在哪、怎么读。
+func TestOwnerCommandPagesLongOutputAndKeepsFullCopy(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires sh")
+	}
+	request, err := ValidateOwnerCommand(Config{}, OwnerCommand{Command: "/bin/sh", CWD: t.TempDir(), Args: []string{"-c", "i=0; while [ $i -lt 5000 ]; do echo row-$i; i=$((i+1)); done"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := RunOwnerCommand(WithToolOutputBudget(context.Background(), 3000), Config{}, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(raw) > 3000 {
+		t.Fatalf("result %d 字，超过上限", utf8.RuneCountInString(raw))
+	}
+	var result struct {
+		Output         string `json:"output"`
+		Notice         string `json:"notice"`
+		FullOutputPath string `json:"full_output_path"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(result.Output, "row-") || !strings.HasSuffix(result.Output, "row-4999\n") || !strings.Contains(result.Notice, "共 5000 行") {
+		t.Fatalf("tail page wrong: notice=%q output starts %q", result.Notice, result.Output[:20])
+	}
+	t.Cleanup(func() { _ = os.Remove(result.FullOutputPath) })
+	full, err := os.ReadFile(result.FullOutputPath)
+	if err != nil || !strings.HasPrefix(string(full), "row-0\n") || strings.Count(string(full), "\n") != 5000 {
+		t.Fatalf("full output not kept: %v", err)
+	}
+	if !strings.Contains(result.Notice, result.FullOutputPath) {
+		t.Fatalf("notice does not say where the full output is: %q", result.Notice)
 	}
 }
 

@@ -142,7 +142,7 @@ func TestNormalizeWorkspacePathRealWorkspaceSubdir(t *testing.T) {
 func TestReadFileToolAcceptsModelPathForms(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceTestFile(t, root, "outputs/a.txt", "hello")
-	tool := &ReadFileTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &ReadFileTool{root: root}
 	for _, in := range []string{
 		"outputs/a.txt",
 		"./outputs/a.txt ",

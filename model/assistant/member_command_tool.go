@@ -123,6 +123,8 @@ func (t *dianaMemberCommandTool) Run(ctx context.Context, input map[string]any) 
 		Inputs:     stagedInputs,
 		Timeout:    time.Duration(intFromAny(input["timeout_ms"])) * time.Millisecond,
 		Limits:     agent.DefaultMemberCommandLimits,
+		// 输出最多占单次上限的三分之二，其余留给产物列表和其他字段。
+		OutputBudget: agent.ToolResultBudget(ctx) * 2 / 3,
 	})
 	if err != nil {
 		return "", err
@@ -137,13 +139,15 @@ func (t *dianaMemberCommandTool) Run(ctx context.Context, input map[string]any) 
 		"output":      result.Output,
 		"truncated":   result.Truncated,
 		"sandbox":     result.Sandbox,
-		"files":       files,
+	}
+	if result.OutputNotice != "" {
+		body["output_notice"] = result.OutputNotice
+	}
+	if result.FullOutputPath != "" {
+		body["full_output_path"] = filepath.ToSlash(filepath.Join(rel, filepath.FromSlash(result.FullOutputPath)))
 	}
 	if result.LimitExceeded != "" {
 		body["limit_exceeded"] = result.LimitExceeded
-	}
-	if result.MoreFiles > 0 {
-		body["more_files"] = result.MoreFiles
 	}
 	if len(grantErrors) > 0 {
 		body["grant_errors"] = grantErrors
@@ -151,14 +155,23 @@ func (t *dianaMemberCommandTool) Run(ctx context.Context, input map[string]any) 
 	if len(files) > 0 {
 		body["next"] = "用 send_file 的 path 发送 files 里的文件"
 	}
-	encoded, err := json.MarshalIndent(body, "", "  ")
+	// 产物全部登记了凭据；列表按整条装进单次上限，装不下的写明还有几个、怎么查。
+	encoded, _, err := agent.FitEntries(len(files), agent.ToolResultBudget(ctx), func(n int) (string, error) {
+		body["files"] = files[:n]
+		delete(body, "files_notice")
+		if n < len(files) {
+			body["files_notice"] = fmt.Sprintf("这次一共产生 %d 个文件，这里列了前 %d 个；其余的已同样登记可发送，用 run_command 跑 ls -R 查看完整路径。", len(files), n)
+		}
+		out, err := json.MarshalIndent(body, "", "  ")
+		return string(out), err
+	})
 	if err != nil {
 		return "", err
 	}
 	if result.ExitCode != 0 || result.LimitExceeded != "" {
-		return "", errors.New(string(encoded))
+		return "", errors.New(encoded)
 	}
-	return string(encoded), nil
+	return encoded, nil
 }
 
 // grantProduced 给这次新生成的文件登记本群访问凭据。凭据绑的是沙盒那边持锁读出的

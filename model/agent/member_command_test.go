@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -101,7 +102,8 @@ func TestMemberCommandRejectsUnlistedProgram(t *testing.T) {
 	}
 }
 
-// 产物只认这次新增或改过的普通文件：符号链接、.tmp 里的东西和没动过的旧文件都不算。
+// 产物只认这次新增或改过的普通文件：符号链接、.tmp 和 .output 里的东西、没动过的旧文件都不算，
+// 算的全部列出。
 func TestChangedMemberFiles(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) {
@@ -115,12 +117,17 @@ func TestChangedMemberFiles(t *testing.T) {
 	before := snapshotMemberDir(dir)
 	write("out/song.mid", "MThd")
 	write(".tmp/scratch", "x")
+	write(".output/run.log", "full output")
+	for i := range 30 { // 不再只列前 20 个
+		write(fmt.Sprintf("gen/%02d.txt", i), "g")
+	}
 	if err := os.Symlink("/etc/hosts", filepath.Join(dir, "link")); err != nil {
 		t.Fatal(err)
 	}
-	files, more := changedMemberFiles(dir, before, DefaultMemberCommandLimits)
-	if more != 0 || len(files) != 1 || files[0].Name != "out/song.mid" || files[0].Size != 4 || string(files[0].Data) != "MThd" {
-		t.Fatalf("files = %#v more=%d", files, more)
+	files := changedMemberFiles(dir, before, DefaultMemberCommandLimits)
+	last := files[len(files)-1]
+	if len(files) != 31 || last.Name != "out/song.mid" || last.Size != 4 || string(last.Data) != "MThd" {
+		t.Fatalf("files = %d, last = %#v", len(files), last)
 	}
 }
 
@@ -262,13 +269,9 @@ func TestMemberCommandLimits(t *testing.T) {
 	_, dir := memberTestDir(t)
 	limits := DefaultMemberCommandLimits
 	limits.Wall = 2 * time.Second
-	limits.OutputBytes = 64
 	limits.MemoryBytes = 128 << 20
 	limits.FileBytes = 1 << 20
 
-	if r := runMemberPython(t, sandbox, dir, "print('x'*1000)", limits); !r.Truncated || len(r.Output) > 64 {
-		t.Fatalf("output not capped: %d %v", len(r.Output), r.Truncated)
-	}
 	if r := runMemberPython(t, sandbox, dir, "import time\ntime.sleep(10)", limits); !r.TimedOut || r.ExitCode == 0 {
 		t.Fatalf("timeout not enforced: %#v", r)
 	}

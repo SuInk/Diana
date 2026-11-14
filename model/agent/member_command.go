@@ -41,9 +41,7 @@ type MemberCommandLimits struct {
 	FileBytes   int64
 	DirBytes    int64
 	DirFiles    int
-	OutputBytes int
 	Retention   time.Duration
-	ReportFiles int
 }
 
 // DefaultMemberCommandLimits 是成员命令的默认上限。进程数要给 bubblewrap 自己的两三个
@@ -56,9 +54,7 @@ var DefaultMemberCommandLimits = MemberCommandLimits{
 	FileBytes:   20 << 20,
 	DirBytes:    50 << 20,
 	DirFiles:    500,
-	OutputBytes: 8 << 10,
 	Retention:   24 * time.Hour,
-	ReportFiles: 20,
 }
 
 // memberCommandPrograms 是成员沙盒允许运行的离线程序。全部在无 shell、禁联网、只读系统白名单、
@@ -113,6 +109,9 @@ type MemberCommandRequest struct {
 	Inputs  map[string][]byte
 	Timeout time.Duration
 	Limits  MemberCommandLimits
+	// OutputBudget 是 Output 最多占多少字（按 JSON 转义计），≤0 时按 ToolOutputMaxChars。
+	// 装不下时给尾部整行，完整输出存进个人目录的 .output/。
+	OutputBudget int
 }
 
 // MemberCommandFile 是这次运行新增或改过的文件。
@@ -133,13 +132,15 @@ type MemberCommandResult struct {
 	TimedOut   bool     `json:"timed_out"`
 	DurationMS int64    `json:"duration_ms"`
 	// LimitExceeded 说明被看门狗杀掉的原因：memory / processes / disk，没超限时为空。
-	LimitExceeded string              `json:"limit_exceeded,omitempty"`
-	Output        string              `json:"output"`
-	Truncated     bool                `json:"truncated"`
-	Sandbox       string              `json:"sandbox"`
-	Files         []MemberCommandFile `json:"files"`
-	// MoreFiles 是超过 ReportFiles 没列出来的文件数。
-	MoreFiles int `json:"more_files,omitempty"`
+	LimitExceeded string `json:"limit_exceeded,omitempty"`
+	Output        string `json:"output"`
+	Truncated     bool   `json:"truncated"`
+	// OutputNotice 在输出没给全时写明给了哪几行、完整输出在哪、怎么读。
+	OutputNotice string `json:"output_notice,omitempty"`
+	// FullOutputPath 是完整输出相对个人目录的路径，输出没给全时才有。
+	FullOutputPath string              `json:"full_output_path,omitempty"`
+	Sandbox        string              `json:"sandbox"`
+	Files          []MemberCommandFile `json:"files"`
 }
 
 // memberSandbox 是成员沙盒的一种实现。
@@ -391,7 +392,14 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 	if req.Stdin != "" {
 		cmd.Stdin = strings.NewReader(req.Stdin)
 	}
-	output := &cappedBuffer{limit: limits.OutputBytes}
+	// 输出整份落盘，不在内存里设上限；体积由单文件上限兜住，见 memberOutputFile。
+	outputFile, err := os.CreateTemp("", "diana-member-output-*")
+	if err != nil {
+		return MemberCommandResult{}, err
+	}
+	defer func() { _ = os.Remove(outputFile.Name()) }()
+	defer func() { _ = outputFile.Close() }()
+	output := &memberOutputFile{file: outputFile, limit: limits.FileBytes}
 	cmd.Stdout = output
 	cmd.Stderr = output
 
@@ -419,9 +427,24 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 		Command:    name,
 		Args:       append([]string{}, req.Args...),
 		DurationMS: duration.Milliseconds(),
-		Output:     strings.ToValidUTF8(output.String(), ""),
-		Truncated:  output.truncated,
 		Sandbox:    sandbox.kind,
+	}
+	if err := output.finish(); err != nil {
+		return MemberCommandResult{}, err
+	}
+	outputBudget := req.OutputBudget
+	if outputBudget <= 0 {
+		outputBudget = ToolOutputMaxChars
+	}
+	page, err := pageCommandOutput(outputFile, outputBudget, 0, true, memberSpill(dir))
+	if err != nil {
+		return MemberCommandResult{}, err
+	}
+	result.Output, result.Truncated = page.Output, page.Truncated
+	result.OutputNotice, result.FullOutputPath = page.Notice, page.FullOutputPath
+	if output.dropped > 0 {
+		result.Truncated = true
+		result.OutputNotice = strings.TrimSpace(fmt.Sprintf("输出超过单文件上限 %d 字节，只记录了开头和结尾各一半，中间 %d 字节没有记录。%s", limits.FileBytes, output.dropped, result.OutputNotice))
 	}
 	select {
 	case reason := <-exceeded:
@@ -442,7 +465,7 @@ func runMemberCommand(ctx context.Context, sandbox memberSandbox, req MemberComm
 			result.LimitExceeded = "memory"
 		}
 	}
-	result.Files, result.MoreFiles = changedMemberFiles(dir, before, limits)
+	result.Files = changedMemberFiles(dir, before, limits)
 	return result, nil
 }
 
@@ -545,6 +568,106 @@ func memberCommandEnv(dir, command string) []string {
 
 // memberTmpDirName 是成员目录里的临时目录，每次运行前后清空，里面的文件不算产物。
 const memberTmpDirName = ".tmp"
+
+// memberOutputDirName 放没给全的命令完整输出，按保留期清理，不算产物。
+const memberOutputDirName = ".output"
+
+// memberOutputKeep 是 .output 里最多留几份完整输出，更早的删掉。它不占成员配额，
+// 体积靠这个条数和单份上限（单文件上限）兜住。
+const memberOutputKeep = 5
+
+// memberSpill 把完整输出存进个人目录，告诉模型在沙盒里用 sed 按行读。
+func memberSpill(dir string) commandOutputSpill {
+	return func(src *os.File) (string, string, error) {
+		outputDir := filepath.Join(dir, memberOutputDirName)
+		target, err := spillCommandOutputTo(outputDir, src)
+		if err != nil {
+			return "", "", err
+		}
+		rotateMemberOutputs(outputDir, memberOutputKeep, filepath.Base(target))
+		rel := filepath.ToSlash(filepath.Join(memberOutputDirName, filepath.Base(target)))
+		return rel, fmt.Sprintf("用 run_command 跑 sed -n '1,200p' %s 这类命令按行读，或用 grep 在里面查", rel), nil
+	}
+}
+
+// rotateMemberOutputs 只留最新的 keep 份完整输出。文件名以时间开头，按名字排即按时间排。
+func rotateMemberOutputs(dir string, keep int, current string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var logs []string
+	for _, entry := range entries {
+		if entry.Type().IsRegular() && strings.HasSuffix(entry.Name(), ".log") {
+			logs = append(logs, entry.Name())
+		}
+	}
+	sort.Strings(logs)
+	for i := 0; i < len(logs)-keep; i++ {
+		if logs[i] != current { // 刚写的这份结果里要引用，不能删
+			_ = os.Remove(filepath.Join(dir, logs[i]))
+		}
+	}
+}
+
+// memberOutputFile 把成员命令的输出写进文件。总量超过 limit 时保留开头一半和结尾一半
+// （结尾用环形缓冲），中间的只计数：报错几乎都在最后，不能只留前面。容器沙盒的输出
+// 经 docker 客户端转写，rlimit 管不到这个文件，所以这里自己兜。
+type memberOutputFile struct {
+	mu      sync.Mutex
+	file    *os.File
+	limit   int64
+	written int64 // 写进文件的开头部分
+	tail    []byte
+	start   int // 环形缓冲里最早一字节的位置
+	dropped int64
+}
+
+func (w *memberOutputFile) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n := len(p)
+	if w.limit <= 0 {
+		_, err := w.file.Write(p)
+		return n, err
+	}
+	headLimit := w.limit - w.limit/2
+	if room := headLimit - w.written; room > 0 {
+		head := p[:min(int64(len(p)), room)]
+		if _, err := w.file.Write(head); err != nil {
+			return 0, err
+		}
+		w.written += int64(len(head))
+		p = p[len(head):]
+	}
+	tailLimit := int(w.limit / 2)
+	for _, b := range p {
+		if len(w.tail) < tailLimit {
+			w.tail = append(w.tail, b)
+			continue
+		}
+		w.tail[w.start] = b
+		w.start = (w.start + 1) % tailLimit
+		w.dropped++
+	}
+	return n, nil
+}
+
+// finish 把结尾那段接到文件后面；中间丢掉了内容时先写一行说明。
+func (w *memberOutputFile) finish() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.dropped > 0 {
+		if _, err := fmt.Fprintf(w.file, "\n…[中间 %d 字节超过单文件上限，没有记录]…\n", w.dropped); err != nil {
+			return err
+		}
+	}
+	if _, err := w.file.Write(w.tail[w.start:]); err != nil {
+		return err
+	}
+	_, err := w.file.Write(w.tail[:w.start])
+	return err
+}
 
 // stageMemberFiles 用 os.Root 把预置脚本（write_files）和授权输入文件（inputs/）安全写进成员目录。
 func stageMemberFiles(dir string, writeFiles, inputs map[string][]byte, limits MemberCommandLimits) error {
@@ -724,6 +847,11 @@ func memberDirUsage(dir string, limits MemberCommandLimits) memberUsage {
 		if err != nil || path == dir {
 			return nil
 		}
+		// .output 是 Diana 替成员存的完整命令输出，按条数轮换、按保留期清理，不占成员配额：
+		// 算进去的话几次大输出就把成员锁在「个人目录超限」里，看门狗也会误杀正常命令。
+		if entry.IsDir() && entry.Name() == memberOutputDirName && filepath.Dir(path) == dir {
+			return filepath.SkipDir
+		}
 		usage.files++
 		if info, err := entry.Info(); err == nil && entry.Type().IsRegular() {
 			usage.bytes += info.Size()
@@ -777,7 +905,7 @@ func snapshotMemberDir(dir string) map[string]memberFileStamp {
 
 // changedMemberFiles 列出这次运行新增或改过的普通文件。符号链接一律不算：指向白名单
 // 外面的链接在宿主机上解析出来就是别处的文件，不能拿它去发凭据。
-func changedMemberFiles(dir string, before map[string]memberFileStamp, limits MemberCommandLimits) ([]MemberCommandFile, int) {
+func changedMemberFiles(dir string, before map[string]memberFileStamp, limits MemberCommandLimits) []MemberCommandFile {
 	files := []MemberCommandFile{}
 	walkMemberFiles(dir, func(name string, info fs.FileInfo) {
 		old, ok := before[name]
@@ -787,12 +915,7 @@ func changedMemberFiles(dir string, before map[string]memberFileStamp, limits Me
 		files = append(files, MemberCommandFile{Name: name, Size: info.Size()})
 	})
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
-	more := 0
-	if limits.ReportFiles > 0 && len(files) > limits.ReportFiles {
-		more = len(files) - limits.ReportFiles
-		files = files[:limits.ReportFiles]
-	}
-	return readMemberFiles(dir, files, limits.FileBytes), more
+	return readMemberFiles(dir, files, limits.FileBytes)
 }
 
 // readMemberFiles 在成员目录这个根里读出产物：os.Root 不跟随指出根的链接，读不到
@@ -830,7 +953,7 @@ func walkMemberFiles(dir string, visit func(name string, info fs.FileInfo)) {
 		if err != nil {
 			return nil
 		}
-		if entry.IsDir() && path != dir && entry.Name() == memberTmpDirName && filepath.Dir(path) == dir {
+		if entry.IsDir() && path != dir && (entry.Name() == memberTmpDirName || entry.Name() == memberOutputDirName) && filepath.Dir(path) == dir {
 			return filepath.SkipDir
 		}
 		if !entry.Type().IsRegular() {

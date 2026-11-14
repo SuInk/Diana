@@ -6,10 +6,12 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -157,5 +159,57 @@ func TestMemberCommandPythonEndToEnd(t *testing.T) {
 	data, err := toolFileSource(r, event, false, map[string]any{"path": result.Files[0].Path}, 1<<20)
 	if err != nil || string(data) != "MThd\x00\x00\x00\x06\xff" {
 		t.Fatalf("data = %q err = %v", data, err)
+	}
+}
+
+// 产物全部登记；列表按整条装进单次上限，装不下的写明一共几个、怎么看全，输出的续读说明
+// 和完整输出路径原样带给模型。
+func TestMemberCommandListsAllFilesWithinBudget(t *testing.T) {
+	stubMemberCommandAvailable(t, true)
+	r, event := memberCommandTestRuntime(t, true)
+	tool := newDianaMemberCommandTool(r, event)
+	tool.run = func(_ context.Context, req agent.MemberCommandRequest) (agent.MemberCommandResult, error) {
+		if req.OutputBudget <= 0 || req.OutputBudget >= 3000 {
+			t.Errorf("output budget = %d", req.OutputBudget)
+		}
+		var files []agent.MemberCommandFile
+		for i := range 200 {
+			name := fmt.Sprintf("out/file-%03d.txt", i)
+			if err := os.MkdirAll(filepath.Join(req.Dir, "out"), 0o700); err != nil {
+				return agent.MemberCommandResult{}, err
+			}
+			if err := os.WriteFile(filepath.Join(req.Dir, filepath.FromSlash(name)), []byte("x"), 0o600); err != nil {
+				return agent.MemberCommandResult{}, err
+			}
+			files = append(files, agent.MemberCommandFile{Name: name, Size: 1, Data: []byte("x")})
+		}
+		return agent.MemberCommandResult{Command: req.Command, Sandbox: "fake", Output: "tail\n", Truncated: true, OutputNotice: "只给了最后 1 行", FullOutputPath: ".output/run.log", Files: files}, nil
+	}
+	body, err := tool.Run(agent.WithToolOutputBudget(context.Background(), 3000), map[string]any{"command": "python3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if utf8.RuneCountInString(body) > 3000 {
+		t.Fatalf("result %d 字超过上限", utf8.RuneCountInString(body))
+	}
+	var result struct {
+		Files          []memberCommandFileOutput `json:"files"`
+		FilesNotice    string                    `json:"files_notice"`
+		OutputNotice   string                    `json:"output_notice"`
+		FullOutputPath string                    `json:"full_output_path"`
+	}
+	if err := json.Unmarshal([]byte(body), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Files) == 0 || len(result.Files) >= 200 || !strings.Contains(result.FilesNotice, "一共产生 200 个文件") {
+		t.Fatalf("files=%d notice=%q", len(result.Files), result.FilesNotice)
+	}
+	if result.OutputNotice != "只给了最后 1 行" || !strings.HasSuffix(result.FullOutputPath, "/.output/run.log") {
+		t.Fatalf("output notice/path lost: %q %q", result.OutputNotice, result.FullOutputPath)
+	}
+	// 没列出来的文件也登记过，按路径就能用。
+	dir, _ := r.memberCommandDir(event)
+	if content, err := toolTextSource(r, event, false, map[string]any{"path": dir + "/out/file-199.txt"}, 1<<20); err != nil || content != "x" {
+		t.Fatalf("unlisted file not granted: %q %v", content, err)
 	}
 }

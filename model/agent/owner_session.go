@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/SuInk/diana/internal/procgroup"
 )
@@ -31,7 +30,6 @@ const (
 	OwnerSessionMaxLifetime  = 4 * time.Hour
 	OwnerSessionMaxWait      = 15 * time.Second
 	ownerSessionBufferBytes  = 256 << 10
-	ownerSessionReadBytes    = 64 << 10
 	ownerSessionSettle       = 300 * time.Millisecond
 	ownerSessionInputBytes   = 16 << 10
 	ownerSessionStopWait     = 5 * time.Second
@@ -111,7 +109,10 @@ type OwnerSessionResult struct {
 
 // Start 校验并启动一条会话命令，等 wait 时长收第一段输出。request 必须是已经过
 // ValidateOwnerCommand 和审核的那一份，这里再校验一遍，防止中间路径被换掉。
-func (m *OwnerSessions) Start(cfg Config, owner string, request OwnerCommand, wait time.Duration, cancel <-chan struct{}) (OwnerSessionResult, error) {
+//
+// outputBudget 是 Output 字段（按 JSON 转义计）最多占多少字，调用方从单次结果上限里
+// 扣掉其余字段得出；≤0 时按 ToolOutputMaxChars。装不下的整行留给下一次读。
+func (m *OwnerSessions) Start(cfg Config, owner string, request OwnerCommand, wait time.Duration, cancel <-chan struct{}, outputBudget int) (OwnerSessionResult, error) {
 	validated, err := ValidateOwnerCommand(cfg, request)
 	if err != nil {
 		return OwnerSessionResult{}, err
@@ -166,11 +167,11 @@ func (m *OwnerSessions) Start(cfg Config, owner string, request OwnerCommand, wa
 		s.wait()
 	}()
 	s.waitOutput(wait, cancel)
-	return m.snapshot(s), nil
+	return m.snapshot(s, outputBudget), nil
 }
 
 // Send 往会话的 stdin 写一段输入（末尾没有换行时补一个），再等 wait 收输出。
-func (m *OwnerSessions) Send(owner, id, input string, wait time.Duration, cancel <-chan struct{}) (OwnerSessionResult, error) {
+func (m *OwnerSessions) Send(owner, id, input string, wait time.Duration, cancel <-chan struct{}, outputBudget int) (OwnerSessionResult, error) {
 	s, err := m.get(owner, id)
 	if err != nil {
 		return OwnerSessionResult{}, err
@@ -189,18 +190,18 @@ func (m *OwnerSessions) Send(owner, id, input string, wait time.Duration, cancel
 		return OwnerSessionResult{}, fmt.Errorf("写入会话失败：%w", err)
 	}
 	s.waitOutput(wait, cancel)
-	return m.snapshot(s), nil
+	return m.snapshot(s, outputBudget), nil
 }
 
 // Read 取上次之后的新输出；wait > 0 时没有新输出会等一会儿。
-func (m *OwnerSessions) Read(owner, id string, wait time.Duration, cancel <-chan struct{}) (OwnerSessionResult, error) {
+func (m *OwnerSessions) Read(owner, id string, wait time.Duration, cancel <-chan struct{}, outputBudget int) (OwnerSessionResult, error) {
 	s, err := m.get(owner, id)
 	if err != nil {
 		return OwnerSessionResult{}, err
 	}
 	s.touch(m.now())
 	s.waitOutput(wait, cancel)
-	result := m.snapshot(s)
+	result := m.snapshot(s, outputBudget)
 	// 已经结束、输出也读完了的会话就此清掉，不必等空闲超时。
 	if !result.Running && !result.More {
 		m.remove(id)
@@ -208,15 +209,18 @@ func (m *OwnerSessions) Read(owner, id string, wait time.Duration, cancel <-chan
 	return result, nil
 }
 
-// Stop 结束会话的整个进程组，返回剩下没读的输出。
-func (m *OwnerSessions) Stop(owner, id string) (OwnerSessionResult, error) {
+// Stop 结束会话的整个进程组，返回剩下没读的输出。一次装不下时会话留着，剩下的用
+// Read 接着取，读完自动清掉。
+func (m *OwnerSessions) Stop(owner, id string, outputBudget int) (OwnerSessionResult, error) {
 	s, err := m.get(owner, id)
 	if err != nil {
 		return OwnerSessionResult{}, err
 	}
 	s.terminate("stopped")
-	result := m.snapshot(s)
-	m.remove(id)
+	result := m.snapshot(s, outputBudget)
+	if !result.More {
+		m.remove(id)
+	}
 	return result, nil
 }
 
@@ -326,7 +330,9 @@ func (m *OwnerSessions) reap() {
 	}
 }
 
-func (m *OwnerSessions) snapshot(s *ownerSession) OwnerSessionResult {
+// snapshot 交出上次之后的新输出，按整行装进 outputBudget；只有真正交出去的部分才算
+// 送达。以前先按 64KiB 标成已送达，再被 Runner 截到上限，中间那段永远读不到。
+func (m *OwnerSessions) snapshot(s *ownerSession, outputBudget int) OwnerSessionResult {
 	result := m.describe(s)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -337,15 +343,11 @@ func (m *OwnerSessions) snapshot(s *ownerSession) OwnerSessionResult {
 	}
 	end := s.base + int64(len(s.data))
 	chunk := s.data[start-s.base : end-s.base]
-	if len(chunk) > ownerSessionReadBytes {
-		chunk = chunk[:ownerSessionReadBytes]
-		// 别把一个多字节字符切成两半：末尾是残缺的字符就退回去，留给下一次读。
-		for i := 0; i < utf8.UTFMax-1 && len(chunk) > 0; i++ {
-			if r, size := utf8.DecodeLastRune(chunk); r != utf8.RuneError || size > 1 {
-				break
-			}
-			chunk = chunk[:len(chunk)-1]
-		}
+	if outputBudget <= 0 {
+		outputBudget = ToolOutputMaxChars
+	}
+	if n := fitLeadingLines(string(chunk), outputBudget, true); n < len(chunk) {
+		chunk = chunk[:n]
 		result.More = true
 	}
 	s.delivered = start + int64(len(chunk))

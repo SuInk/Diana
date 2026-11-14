@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -84,7 +85,7 @@ func (t *hostAccessTool) session(ctx context.Context, cfg agent.Config, op strin
 		if err != nil {
 			return "", err
 		}
-		result, err := sessions.Start(cfg, owner, validated, hostSessionWait(input, hostSessionDefaultWait), ctx.Done())
+		result, err := sessions.Start(cfg, owner, validated, hostSessionWait(input, hostSessionDefaultWait), ctx.Done(), hostSessionOutputBudget(ctx, validated, review))
 		if err != nil {
 			return "", err
 		}
@@ -120,7 +121,7 @@ func (t *hostAccessTool) session(ctx context.Context, cfg agent.Config, op strin
 		if err != nil {
 			return "", err
 		}
-		result, err := sessions.Send(owner, id, text, hostSessionWait(input, hostSessionDefaultWait), ctx.Done())
+		result, err := sessions.Send(owner, id, text, hostSessionWait(input, hostSessionDefaultWait), ctx.Done(), hostSessionOutputBudget(ctx, current.Command, review))
 		if err != nil {
 			return "", err
 		}
@@ -129,7 +130,8 @@ func (t *hostAccessTool) session(ctx context.Context, cfg agent.Config, op strin
 		if id == "" {
 			return "", fmt.Errorf("session_read 需要 session_id")
 		}
-		result, err := sessions.Read(owner, id, hostSessionWait(input, hostSessionReadWait), ctx.Done())
+		current, _ := findOwnerSessionAny(sessions, owner, id)
+		result, err := sessions.Read(owner, id, hostSessionWait(input, hostSessionReadWait), ctx.Done(), hostSessionOutputBudget(ctx, current.Command, nil))
 		if err != nil {
 			return "", err
 		}
@@ -138,13 +140,31 @@ func (t *hostAccessTool) session(ctx context.Context, cfg agent.Config, op strin
 		if id == "" {
 			return "", fmt.Errorf("session_stop 需要 session_id")
 		}
-		result, err := sessions.Stop(owner, id)
+		current, _ := findOwnerSessionAny(sessions, owner, id)
+		result, err := sessions.Stop(owner, id, hostSessionOutputBudget(ctx, current.Command, nil))
 		if err != nil {
 			return "", err
 		}
 		return hostAccessJSON(map[string]any{"session": result})
 	}
 	return "", fmt.Errorf("不支持的 operation %q", op)
+}
+
+// hostSessionOutputBudget 是会话输出能占的字数：单次结果上限扣掉命令、审核结论和
+// 其余字段，剩下的给 Output，装不下的留给下一次 session_read。
+func hostSessionOutputBudget(ctx context.Context, command agent.OwnerCommand, review any) int {
+	skeleton, _ := hostAccessJSON(map[string]any{"session": agent.OwnerSessionResult{Command: command, ExitCode: new(int), Error: strings.Repeat("x", 200), EndReason: "max_lifetime", Dropped: 1 << 40, More: true, IdleLimit: agent.OwnerSessionIdleTimeout.String(), Lifetime: agent.OwnerSessionMaxLifetime.String()}, "review": review})
+	return max(agent.ToolResultBudget(ctx)-utf8.RuneCountInString(skeleton), 1000)
+}
+
+// findOwnerSessionAny 找会话，不论它是否还在运行。
+func findOwnerSessionAny(sessions *agent.OwnerSessions, owner, id string) (agent.OwnerSessionResult, bool) {
+	for _, session := range sessions.List(owner) {
+		if session.SessionID == strings.TrimSpace(id) {
+			return session, true
+		}
+	}
+	return agent.OwnerSessionResult{}, false
 }
 
 func findOwnerSession(sessions *agent.OwnerSessions, owner, id string) (agent.OwnerSessionResult, error) {

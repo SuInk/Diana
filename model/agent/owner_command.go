@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/SuInk/diana/internal/procgroup"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/SuInk/diana/internal/procgroup"
 )
 
 // OwnerCommand identifies the executable, exact arguments and working directory.
@@ -109,13 +110,19 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 	cmd := procgroup.CommandContext(ctx, request.Command, request.Args...)
 	cmd.Dir = request.CWD
 	cmd.Env = ownerCommandEnv()
-	out := &ownerCommandOutput{}
+	// 输出整份落进临时文件，不在内存里设上限；交给模型时再按整行分页。
+	out, err := os.CreateTemp("", "diana-owner-command-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(out.Name()) }()
+	defer func() { _ = out.Close() }()
 	cmd.Stdout = out
 	cmd.Stderr = out
 	cmd.WaitDelay = time.Second
 	err = cmd.Run()
 	_ = procgroup.Kill(cmd)
-	result := map[string]any{"command": request, "execution_mode": "host_account", "sandbox": false, "exit_code": 0, "output": string(out.data), "truncated": out.truncated, "timed_out": ctx.Err() == context.DeadlineExceeded}
+	result := map[string]any{"command": request, "execution_mode": "host_account", "sandbox": false, "exit_code": 0, "output": "", "truncated": false, "timed_out": ctx.Err() == context.DeadlineExceeded}
 	if err != nil {
 		code := -1
 		if cmd.ProcessState != nil {
@@ -123,14 +130,48 @@ func RunOwnerCommand(ctx context.Context, cfg Config, request OwnerCommand) (str
 		}
 		result["exit_code"] = code
 		result["error"] = err.Error()
-		if guidance := ownerCommandPermissionGuidance(runtime.GOOS, string(out.data)); guidance != nil {
+		if guidance := ownerCommandPermissionGuidance(runtime.GOOS, ownerCommandTail(out)); guidance != nil {
 			guidance["host"], _ = os.Hostname()
 			guidance["executable"], _ = os.Executable()
 			result["permission_guidance"] = guidance
 		}
 	}
+	skeleton, err := json.Marshal(result)
+	if err != nil {
+		return "", err
+	}
+	page, err := pageCommandOutput(out, toolBudget(ctx), utf8.RuneCount(skeleton)+64, true, ownerSpill)
+	if err != nil {
+		return "", err
+	}
+	result["output"], result["truncated"] = page.Output, page.Truncated
+	if page.Truncated {
+		// 键名按字母序排在 output 前面，结果再长也不会先被截掉。
+		result["notice"], result["full_output_path"] = page.Notice, page.FullOutputPath
+	}
 	body, err := json.Marshal(result)
 	return string(body), err
+}
+
+// ownerSpill 把主人命令的完整输出存进系统临时目录，host_access read 读得到。
+func ownerSpill(src *os.File) (string, string, error) {
+	target, err := spillCommandOutputTo(filepath.Join(os.TempDir(), "diana-command-output"), src)
+	if err != nil {
+		return "", "", err
+	}
+	return target, "用 host_access operation=read path=" + target + " 从 offset=0 起读，结果会给出下一段的 next_offset", nil
+}
+
+// ownerCommandTail 取输出末尾一段给权限诊断匹配：报错几乎都在尾部。
+func ownerCommandTail(file *os.File) string {
+	info, err := file.Stat()
+	if err != nil {
+		return ""
+	}
+	start := max(info.Size()-64<<10, 0)
+	buf := make([]byte, info.Size()-start)
+	n, _ := file.ReadAt(buf, start)
+	return string(buf[:n])
 }
 
 // ownerCommandEnv keeps ordinary host identity/path settings, without implicitly
@@ -172,25 +213,6 @@ func ownerCommandsEqual(a, b OwnerCommand) bool {
 	aa, _ := json.Marshal(a)
 	bb, _ := json.Marshal(b)
 	return string(aa) == string(bb)
-}
-
-type ownerCommandOutput struct {
-	mu        sync.Mutex
-	data      []byte
-	truncated bool
-}
-
-func (w *ownerCommandOutput) Write(p []byte) (int, error) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	n := len(p)
-	remaining := 65536 - len(w.data)
-	if n > remaining {
-		w.truncated = true
-		p = p[:remaining]
-	}
-	w.data = append(w.data, p...)
-	return n, nil
 }
 
 // OwnerPathProtected keeps credential/control-plane reads on their existing

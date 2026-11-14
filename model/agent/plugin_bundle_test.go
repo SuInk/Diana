@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,20 +135,31 @@ func TestPluginMCPRegistryCallsNamespacedStdioTool(t *testing.T) {
 	}
 }
 
-func TestPluginOutputRedactsBeforeTruncation(t *testing.T) {
+// 凭据先遮再分页：跨读块边界、落在分页切点上的凭据都不能露出半截。
+func TestRedactCommandOutputAcrossChunks(t *testing.T) {
 	secret := "test-admin-token-0123456789"
-	for _, output := range []string{strings.Repeat("x", 30) + secret + strings.Repeat("z", 100), strings.Repeat(secret, 12) + secret[:10] + strings.Repeat("z", 100)} {
+	for _, pad := range []int{0, 30, 64<<10 - 10, 64<<10 - 1} {
 		file, err := os.CreateTemp(t.TempDir(), "output")
 		if err != nil {
 			t.Fatal(err)
 		}
+		output := strings.Repeat("x", pad) + secret + strings.Repeat(secret, 3) + "z"
 		if _, err := file.WriteString(output); err != nil {
 			t.Fatal(err)
 		}
-		got, truncated, err := readPluginCommandOutput(file, 32, []string{secret})
+		redacted, err := redactCommandOutput(file, []string{secret})
 		file.Close()
-		if err != nil || !truncated || strings.Contains(got, "test-admin") {
-			t.Fatalf("got=%q truncated=%v err=%v", got, truncated, err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := redacted.Seek(0, 0); err != nil {
+			t.Fatal(err)
+		}
+		got, err := io.ReadAll(redacted)
+		redacted.Close()
+		want := strings.Repeat("x", pad) + strings.Repeat("[REDACTED]", 4) + "z"
+		if err != nil || string(got) != want {
+			t.Fatalf("pad=%d got %d bytes, contains secret=%v", pad, len(got), strings.Contains(string(got), "test-admin"))
 		}
 	}
 }
