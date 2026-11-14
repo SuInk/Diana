@@ -510,7 +510,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 			}
 			// 成图不引用原消息：像真人画完直接甩图，引用框反倒显得像工单回执。
 			message := OutgoingMessage{ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models}
-			return PluginTaskResult{Messages: dianaImageCaptionThenImages(output.Caption, message)}, nil
+			return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, output.Caption)}, nil
 		},
 	}
 	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
@@ -701,14 +701,14 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 					}
 					outgoing := OutgoingMessage{ImageURLs: shared, GeneratedImageModels: generatedImageModels(usedCfg, operation, len(shared), resp)}
-					// 有标注就每张带上「这是谁的」;没有标注时第一张前先单独发整体说明。
+					// 有标注就每张带上「这是谁的」;没有标注时第一张发完后单独补整体说明。
 					caption := ""
 					if label := labelByURL[batch[0]]; label != "" {
 						outgoing.Text = label
 					} else if streamed == 0 {
 						caption = request.Caption
 					}
-					if sendErr := sendDianaImageMessages(ctx, services, dianaImageCaptionThenImages(caption, outgoing)); sendErr == nil {
+					if sendErr := sendDianaImageMessages(ctx, services, dianaImageImagesThenCaption(outgoing, caption)); sendErr == nil {
 						streamed++
 						continue
 					}
@@ -750,22 +750,28 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	}, nil
 }
 
-// dianaImageCaptionThenImages 把说明文字拆成单独一条排在图片前面：图文挤在一个气泡里
-// 图会被压小，也不像真人先说一句再甩图。
-func dianaImageCaptionThenImages(caption string, images OutgoingMessage) []OutgoingMessage {
+// dianaImageImagesThenCaption 先发图，说明文字单独一条跟在后面：图文挤在一个气泡里
+// 图会被压小；说明排在前面时，图还没出来就先看到一行「某某头像 · 某某版」，像系统
+// 回执，先甩图再补一句才像真人。
+func dianaImageImagesThenCaption(images OutgoingMessage, caption string) []OutgoingMessage {
 	caption = strings.TrimSpace(caption)
 	if caption == "" {
 		return []OutgoingMessage{images}
 	}
-	return []OutgoingMessage{{Text: caption}, images}
+	return []OutgoingMessage{images, {Text: caption}}
 }
 
-// sendDianaImageMessages 只看图片那条是否发出：说明发失败不该让成图并回攒总再发一遍。
+// sendDianaImageMessages 只看图片那条是否发出：图片发失败就不发说明，交给调用方把
+// 成图并回攒总再投递（攒总那条自带说明）；图片发出后说明发失败也不算失败，不然成图会
+// 重发一遍。
 func sendDianaImageMessages(ctx context.Context, services PluginTaskServices, messages []OutgoingMessage) error {
-	for _, message := range messages[:len(messages)-1] {
+	if err := services.Send(ctx, messages[0]); err != nil {
+		return err
+	}
+	for _, message := range messages[1:] {
 		_ = services.Send(ctx, message)
 	}
-	return services.Send(ctx, messages[len(messages)-1])
+	return nil
 }
 
 // dianaImageResultCaption 在结果说明里如实带上少发的张数。逐张模式下超出上限或

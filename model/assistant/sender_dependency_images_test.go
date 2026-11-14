@@ -426,6 +426,11 @@ func TestExplicitIdentitySourceBeatsCurrentMessageImage(t *testing.T) {
 	if len(used) != 1 || used[0].Kind != "member_avatar" || used[0].UserID != "20002" {
 		t.Fatalf("sources_used = %#v", used)
 	}
+	// 模型直接填裸 user_id 也按成员头像取：线上 terra 填过 openid 本身，被当成取不到。
+	urls, used, err = runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{"20002"}})
+	if err != nil || len(urls) != 1 || urls[0] != OneBotMemberAvatarURL("20002") || used[0].Kind != "member_avatar" {
+		t.Fatalf("bare id sources = %#v used=%#v err=%v", urls, used, err)
+	}
 	// 点名的人取不到头像：报错，不退回当前消息里那张图。
 	if _, _, err := runtime.resolveImageEditSources(context.Background(), event, imageEditSourcePlan{IdentitySources: []string{avatarSourceMemberPrefix}}); err == nil {
 		t.Fatal("unresolvable identity source silently fell back")

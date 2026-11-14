@@ -77,7 +77,7 @@ func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent,
 		if len(out) >= maxAvatarImageSources {
 			break
 		}
-		id := strings.TrimSpace(raw)
+		id := normalizeAvatarIdentitySource(raw)
 		ok := false
 		switch {
 		case id == avatarSourceGroup:
@@ -113,6 +113,20 @@ func (r *Runtime) avatarIdentitySources(ctx context.Context, event MessageEvent,
 		}
 	}
 	return out, failed
+}
+
+// normalizeAvatarIdentitySource 把模型直接填的裸 user_id 当成 member_avatar:<id>。
+// 线上 terra 在 QQ 官方群里填过发送者的 openid 本身，按旧规则直接判为取不到，模型
+// 看到「user_id 不对」就放弃，回了一句「读不到你的头像」。裸 id 的意思没有歧义：
+// 固定来源名和带前缀的写法都不是纯 id，群头像必须写 group_avatar:<群号>。
+func normalizeAvatarIdentitySource(raw string) string {
+	id := strings.TrimSpace(raw)
+	switch {
+	case id == "", id == avatarSourceGroup, id == avatarSourceBot, id == avatarSourceSender,
+		strings.Contains(id, ":"):
+		return id
+	}
+	return avatarSourceMemberPrefix + id
 }
 
 // knownDisplayName 从当前会话的历史里找这个人的昵称，找不到就留空，不去打接口。
