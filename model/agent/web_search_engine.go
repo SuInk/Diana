@@ -23,9 +23,6 @@ const (
 	WebSearchProviderSearchEngine = "search_engine"
 
 	defaultSearchEngineTimeoutMS = 25_000
-	// searchEnginePageTextChars 是结果页正文带给模型的上限。标题和链接已经在 results 里，
-	// 正文只为补上摘要，太长只会挤掉工具输出预算。
-	searchEnginePageTextChars = 3000
 	// searchEngineRedirectTimeout 是还原一条加密跳转链接的等待上限，几条并发一起等。
 	searchEngineRedirectTimeout = 4 * time.Second
 )
@@ -139,12 +136,8 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 	// 只有一条结果时不算：那多半是结果还没填进来、页面框架上先露出的一条链接，真的
 	// 只有一条结果的页面照旧按通用规则等完。
 	readyKey := func(page RenderedPage) string {
-		results := searchEngineResults(engine, page.Links, provider.MaxResults)
-		need := 2
-		if provider.MaxResults == 1 {
-			need = 1
-		}
-		if len(results) < need {
+		results := searchEngineResults(engine, page.Links)
+		if len(results) < 2 {
 			if len(results) == 0 && searchEnginePageBlocked(engine, page, false) {
 				return "blocked"
 			}
@@ -160,7 +153,7 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 	if err != nil {
 		return "", err
 	}
-	results := searchEngineResults(engine, page.Links, provider.MaxResults)
+	results := searchEngineResults(engine, page.Links)
 	if searchEnginePageBlocked(engine, page, len(results) > 0) {
 		return "", errWebSearchBlocked
 	}
@@ -168,21 +161,14 @@ func (t *WebSearchTool) runSearchEngine(ctx context.Context, provider webSearchP
 		return "", fmt.Errorf("%s returned no search results: %w", provider.Tool, errWebSearchNoResults)
 	}
 	results = dedupeSearchEngineResults(t.resolveSearchEngineRedirects(ctx, results))
-	for i := range results {
-		if results[i].Snippet != "" {
-			continue
-		}
-		if start := strings.Index(page.Text, results[i].Title); start >= 0 {
-			results[i].Snippet = truncateText(strings.TrimSpace(page.Text[start+len(results[i].Title):]), 400)
-		}
-	}
+	fillSearchEngineSnippets(page.Text, results)
 
 	// 输出里的每个 URL 都会被当成候选来源：结果页地址不放进来，正文里的网址也去掉协议头
 	// ——那是结果下面印的显示网址（常常只有域名），真正的链接已经在 results 里。
 	formatted, err := json.MarshalIndent(map[string]any{
 		"engine":    provider.Tool,
 		"results":   results,
-		"page_text": webSearchURLPattern.ReplaceAllStringFunc(truncateText(searchEngineResultText(page.Text, results), searchEnginePageTextChars), stripURLScheme),
+		"page_text": webSearchURLPattern.ReplaceAllStringFunc(searchEngineResultText(page.Text, results), stripURLScheme),
 	}, "", "  ")
 	if err != nil {
 		return "", err
@@ -224,10 +210,8 @@ func searchEnginePageBlocked(engine searchEngine, page RenderedPage, hasResults 
 	return false
 }
 
-func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) []searchEngineResult {
-	if limit <= 0 {
-		limit = defaultWebSearchMaxResults
-	}
+// searchEngineResults 取结果页上的全部自然结果，页面列了几条就给几条。
+func searchEngineResults(engine searchEngine, links []RenderedLink) []searchEngineResult {
 	seen := map[string]bool{}
 	var results []searchEngineResult
 	for _, link := range links {
@@ -251,9 +235,6 @@ func searchEngineResults(engine searchEngine, links []RenderedLink, limit int) [
 		}
 		seen[key] = true
 		results = append(results, searchEngineResult{Title: title, URL: normalized, Snippet: link.Snippet})
-		if len(results) >= limit {
-			break
-		}
 	}
 	return results
 }
@@ -393,19 +374,45 @@ func (t *WebSearchTool) resolveSearchEngineRedirects(ctx context.Context, result
 	return results
 }
 
-// dedupeSearchEngineResults 去掉还原之后才看出是同一个地址的结果，保留排在前面的那条。
+// dedupeSearchEngineResults 合并还原之后才看出是同一个地址的结果：留排在前面的那条，
+// 后面那条的摘要不同就接上，不悄悄丢掉。
 func dedupeSearchEngineResults(results []searchEngineResult) []searchEngineResult {
-	seen := map[string]bool{}
+	seen := map[string]int{}
 	out := results[:0]
 	for _, result := range results {
 		key, _ := canonicalWebSearchURL(result.URL)
-		if seen[key] {
+		if kept, ok := seen[key]; ok {
+			if snippet := strings.TrimSpace(result.Snippet); snippet != "" && !strings.Contains(out[kept].Snippet, snippet) {
+				out[kept].Snippet = strings.TrimSpace(out[kept].Snippet + "\n" + snippet)
+			}
 			continue
 		}
-		seen[key] = true
+		seen[key] = len(out)
 		out = append(out, result)
 	}
 	return out
+}
+
+// fillSearchEngineSnippets 给链接旁边认不出摘要的结果补上摘要：结果页正文里这条标题
+// 之后、下一条结果标题之前的那段。最后一条到正文结尾。
+func fillSearchEngineSnippets(text string, results []searchEngineResult) {
+	starts := make([]int, len(results))
+	for i, result := range results {
+		starts[i] = strings.Index(text, result.Title)
+	}
+	for i := range results {
+		if results[i].Snippet != "" || starts[i] < 0 {
+			continue
+		}
+		from := starts[i] + len(results[i].Title)
+		end := len(text)
+		for j, start := range starts {
+			if j != i && start >= from && start < end {
+				end = start
+			}
+		}
+		results[i].Snippet = strings.TrimSpace(text[from:end])
+	}
 }
 
 func stripURLScheme(raw string) string {

@@ -37,7 +37,6 @@ const (
 	// 和浏览器渲染默认超时同一档：fetch 失败退回浏览器时，一次读取最多花两份。
 	tinyFishFetchTimeout      = 25 * time.Second
 	tinyFishFetchMaxBodyBytes = 1 << 20
-	tinyFishFetchMaxChars     = 200_000
 	tinyFishPageCacheTTL      = 15 * time.Minute
 	tinyFishPageCacheEntries  = 32
 )
@@ -82,9 +81,8 @@ func (c *tinyFishPageCache) put(key string, page RenderedPage, now time.Time) {
 }
 
 // fetchTinyFishPage 用 TinyFish 读一页公网网页，返回和浏览器渲染同一形状的结果。
-// endpoint 为空时用 TinyFishFetchURL。maxChars 是交给模型的正文上限，整页另存在
-// FullText 里给 find 用。
-func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, maxChars int) (RenderedPage, error) {
+// endpoint 为空时用 TinyFishFetchURL。正文原样给，browser_render 分页输出。
+func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string) (RenderedPage, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return RenderedPage{}, fmt.Errorf("%w: API key is missing", errTinyFishFetch)
@@ -94,7 +92,7 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	}
 	started := time.Now()
 	if page, ok := tinyFishPages.get(rawURL, started); ok {
-		return withTinyFishTextLimit(page, maxChars), nil
+		return page, nil
 	}
 	if strings.TrimSpace(endpoint) == "" {
 		endpoint = TinyFishFetchURL
@@ -155,18 +153,15 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	}
 	result := decoded.Results[0]
 	full := strings.TrimSpace(result.Text)
-	if runes := []rune(full); len(runes) > tinyFishFetchMaxChars {
-		full = string(runes[:tinyFishFetchMaxChars])
-	}
 	final := rawURL
 	if candidate := tinyFishHTTPURL(firstNonEmpty(result.FinalURL, result.URL)); candidate != "" {
 		final = candidate
 	}
-	links := make([]RenderedLink, 0, min(len(result.Links), maxRenderedPageLinks))
+	links := make([]RenderedLink, 0, len(result.Links))
 	seen := map[string]bool{}
 	for _, link := range result.Links {
 		link = tinyFishHTTPURL(link)
-		if link == "" || seen[link] || len(links) == maxRenderedPageLinks {
+		if link == "" || seen[link] {
 			continue
 		}
 		seen[link] = true
@@ -180,7 +175,7 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 		URL:             final,
 		Title:           strings.TrimSpace(strings.Join(strings.Fields(result.Title), " ")),
 		Description:     strings.TrimSpace(strings.Join(strings.Fields(result.Description), " ")),
-		FullText:        full,
+		Text:            full,
 		Links:           links,
 		Images:          tinyFishImages(result.ImageLinks),
 		BrowserEngine:   "tinyfish",
@@ -189,13 +184,12 @@ func fetchTinyFishPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 		WaitedMS:        time.Since(started).Milliseconds(),
 	}
 	tinyFishPages.put(rawURL, page, time.Now())
-	return withTinyFishTextLimit(page, maxChars), nil
+	return page, nil
 }
 
-// tinyFishImages 按接口给的顺序收图片直链，去重、跳过 SVG（多是图标，也发不出去），
-// 最多 maxRenderedPageImages 张。X 主页会把同一张头像的 _mini/_normal/_bigger/_x96/
-// _200x200/_400x400 都列出来，这些尺寸变体合成一条，留在第一次出现的位置、换成最大
-// 的那张，免得名额被同一张图占满。
+// tinyFishImages 按接口给的顺序收图片直链，去重、跳过 SVG（多是图标，也发不出去）。
+// X 主页会把同一张头像的 _mini/_normal/_bigger/_x96/_200x200/_400x400 都列出来，这些
+// 尺寸变体合成一条，留在第一次出现的位置、换成最大的那张。
 func tinyFishImages(raw []string) []RenderedImage {
 	type candidate struct {
 		url  string
@@ -211,9 +205,6 @@ func tinyFishImages(raw []string) []RenderedImage {
 		key, rank := twimgVariantKey(link)
 		current, exists := best[key]
 		if !exists {
-			if len(order) == maxRenderedPageImages {
-				continue
-			}
 			order = append(order, key)
 		}
 		if !exists || rank > current.rank {
@@ -293,14 +284,4 @@ func tinyFishHTTPURL(raw string) string {
 	}
 	parsed.Fragment = ""
 	return parsed.String()
-}
-
-func withTinyFishTextLimit(page RenderedPage, maxChars int) RenderedPage {
-	if maxChars <= 0 {
-		maxChars = defaultRenderBrowserTextChars
-	}
-	// 和浏览器渲染同一个截断函数，模型看到的截断标记一致。
-	page.Text = truncateText(page.FullText, maxChars)
-	page.Truncated = len([]rune(page.FullText)) > maxChars
-	return page
 }

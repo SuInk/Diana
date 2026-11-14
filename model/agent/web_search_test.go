@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -331,69 +332,75 @@ func TestWebSearchToolDistinguishesTerminalStatuses(t *testing.T) {
 	}
 }
 
-func TestWebSearchToolKeepsStructuredOutputWithinLimit(t *testing.T) {
-	longContent := strings.Repeat("evidence ", 2_000)
+// 搜索源给的长摘要原样交给模型，不再砍到几百字。
+func TestWebSearchToolKeepsLongSnippetWhole(t *testing.T) {
+	longContent := strings.Repeat("evidence ", 1_000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{"results":[{"title":"Result","url":"https://example.com/result","content":%q}]}`, longContent)
 	}))
 	defer server.Close()
 	tool, err := NewWebSearchTool(WebSearchToolOptions{
-		Config:         WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "search", Type: "tavily", URL: server.URL}}},
-		APIKeys:        map[string]string{"search": "test-key"},
-		MaxOutputChars: 2_000,
+		Config:  WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "search", Type: "tavily", URL: server.URL}}},
+		APIKeys: map[string]string{"search": "test-key"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := tool.Run(context.Background(), map[string]any{"query": "bounded"})
+	output, err := tool.Run(context.Background(), map[string]any{"query": "whole"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len([]rune(output)) > 2_000 {
-		t.Fatalf("output runes = %d", len([]rune(output)))
-	}
 	var result webSearchResult
 	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("truncated output is not valid JSON: %v\n%s", err, output)
+		t.Fatalf("output is not valid JSON: %v\n%s", err, output)
 	}
-	if result.Status != "ok" || len(result.Results) == 0 {
+	if result.Status != "ok" || len(result.Results) != 1 || result.Results[0].Snippet != strings.TrimSpace(longContent) || result.NextOffset != 0 {
 		t.Fatalf("result = %#v", result)
 	}
 }
 
-func TestWebSearchToolBoundsEscapedContentWithoutLooping(t *testing.T) {
-	tool := &WebSearchTool{maxBytes: 2_000}
-	result := webSearchResult{
+// 搜索源原文（没解析出命中时的 content）按整行分页，转义后也不超上限，拼起来就是原文。
+func TestWebSearchPageSplitsEscapedContentWithoutLoss(t *testing.T) {
+	result := finishExplorationResult(webSearchResult{
 		Status:  "ok",
 		Content: strings.Repeat("<script>&", 2_000),
 		Sources: []string{"https://example.com/result"},
-	}
-
+	})
 	done := make(chan struct{})
-	var output string
-	var err error
+	var got strings.Builder
+	var failure error
 	go func() {
-		output, err = tool.formatExplorationResult(result)
-		close(done)
+		defer close(done)
+		for offset, calls := 0, 0; calls < 100; calls++ {
+			output, err := webSearchPage(result, map[string]any{"query": "x"}, offset, 2_000)
+			if err != nil {
+				failure = err
+				return
+			}
+			var decoded webSearchResult
+			if err := json.Unmarshal([]byte(output), &decoded); err != nil || len([]rune(output)) > 2_000 || decoded.SourceNotice == "" {
+				failure = fmt.Errorf("invalid page (%d runes): %v", len([]rune(output)), err)
+				return
+			}
+			got.WriteString(decoded.Content)
+			if decoded.NextOffset == 0 {
+				return
+			}
+			offset = decoded.NextOffset
+		}
+		failure = errors.New("pagination did not finish")
 	}()
 	select {
 	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("formatting escaped search content did not terminate")
+	case <-time.After(5 * time.Second):
+		t.Fatal("paging escaped search content did not terminate")
 	}
-	if err != nil {
-		t.Fatal(err)
+	if failure != nil {
+		t.Fatal(failure)
 	}
-	if len([]rune(output)) > tool.maxBytes {
-		t.Fatalf("output runes = %d, want <= %d", len([]rune(output)), tool.maxBytes)
-	}
-	var decoded webSearchResult
-	if err := json.Unmarshal([]byte(output), &decoded); err != nil {
-		t.Fatalf("bounded output is not valid JSON: %v\n%s", err, output)
-	}
-	if decoded.Content == "" || !strings.Contains(decoded.Content, "...truncated...") {
-		t.Fatalf("content was not preserved and truncated: %q", decoded.Content)
+	if got.String() != result.Content {
+		t.Fatalf("content pages add up to %d runes, want %d", len([]rune(got.String())), len([]rune(result.Content)))
 	}
 }
 

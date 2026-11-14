@@ -8,7 +8,7 @@ import (
 
 func TestSearchResultIncludesSourceNoticeWithoutChangingContent(t *testing.T) {
 	content := "Published: 2026-09-03\n转载内容"
-	raw, err := (&WebSearchTool{maxBytes: 4000}).formatExplorationResult(webSearchResult{Status: "ok", Sources: []string{"https://example.com/article"}, Content: content})
+	raw, err := webSearchPage(finishExplorationResult(webSearchResult{Status: "ok", Sources: []string{"https://example.com/article"}, Content: content}), nil, 0, 4000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,8 +29,8 @@ func TestSearchResultIncludesSourceNoticeWithoutChangingContent(t *testing.T) {
 	}
 }
 
-func TestSearchSourceNoticeSurvivesContentTruncation(t *testing.T) {
-	raw, err := (&WebSearchTool{maxBytes: 1000}).formatExplorationResult(webSearchResult{Status: "ok", Content: strings.Repeat("长搜索内容", 1000)})
+func TestSearchSourceNoticeSurvivesContentPaging(t *testing.T) {
+	raw, err := webSearchPage(finishExplorationResult(webSearchResult{Status: "ok", Content: strings.Repeat("长搜索内容", 1000)}), nil, 0, 1000)
 	if err != nil {
 		t.Fatal(err)
 	}

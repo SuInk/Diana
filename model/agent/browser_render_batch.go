@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // 一步只能调一个工具，逐页 browser_render 时模型常读完一页就收尾；通用 agent（opencode、
@@ -199,28 +202,70 @@ func (t *BrowserRenderTool) runBatch(ctx context.Context, urls []string, find st
 	}
 	pages := make([]json.RawMessage, len(urls))
 	failed := 0
+	var sequences []browserRenderSequence
+	var readIndex []int
 	for index, url := range urls {
 		if !done[index] {
 			pages[index] = mustJSON(browserRenderPendingPage{RequestedURL: url, Pending: true, Note: browserRenderPendingNote})
 			continue
 		}
-		var raw []byte
-		err := reads[index].err
-		if err == nil {
-			var output string
-			output, err = browserRenderOutputWithBudget(reads[index].page, find, max(budget/len(urls), 1))
-			raw = []byte(output)
-		}
-		if err != nil {
-			raw, _ = json.Marshal(browserRenderFailure{RequestedURL: url, Error: compactBrowserError(err.Error())})
+		if err := reads[index].err; err != nil {
+			pages[index] = mustJSON(browserRenderFailure{RequestedURL: url, Error: compactBrowserError(err.Error())})
 			failed++
+			continue
 		}
-		pages[index] = raw
+		sequences = append(sequences, newBrowserRenderSequence(reads[index].page, find))
+		readIndex = append(readIndex, index)
+	}
+	used := 0
+	for _, raw := range pages {
+		used += utf8.RuneCount(raw) + 2
+	}
+	shares, err := browserRenderBatchShares(sequences, budget-used-len(`{"pages":[]}`))
+	if err != nil {
+		return "", err
+	}
+	for i, sequence := range sequences {
+		output, err := sequence.render(0, shares[i])
+		if err != nil {
+			return "", err
+		}
+		pages[readIndex[i]] = json.RawMessage(output)
 	}
 	if failed == len(urls) {
 		return "", errors.New("browser_render 这批网址全部打开失败：" + string(mustJSON(pages)))
 	}
 	return string(mustJSON(browserRenderBatch{Pages: pages})), nil
+}
+
+// browserRenderBatchShares 分配批量里每页能占的字数：放得下的页整页给，剩下的再由
+// 放不下的几页均分，各自分页并写明续读方式。以前按页数平分，短页用不完的份额浪费掉，
+// 长页却被截。
+func browserRenderBatchShares(sequences []browserRenderSequence, budget int) ([]int, error) {
+	shares := make([]int, len(sequences))
+	if len(sequences) == 0 {
+		return shares, nil
+	}
+	needs := make([]int, len(sequences))
+	for i, sequence := range sequences {
+		full, err := sequence.render(0, math.MaxInt)
+		if err != nil {
+			return nil, err
+		}
+		needs[i] = utf8.RuneCountInString(full)
+	}
+	order := make([]int, len(sequences))
+	for i := range order {
+		order[i] = i
+	}
+	sort.Slice(order, func(a, b int) bool { return needs[order[a]] < needs[order[b]] })
+	remaining := max(budget, len(sequences))
+	for position, i := range order {
+		fair := remaining / (len(order) - position)
+		shares[i] = min(needs[i], fair)
+		remaining -= shares[i]
+	}
+	return shares, nil
 }
 
 func mustJSON(value any) []byte {

@@ -114,8 +114,9 @@ func TestRenderedMetadataDoesNotDependOnClaimDeclarations(t *testing.T) {
 }
 
 func TestBrowserSourceStageKeepsFindExcerptsAsReadEvidence(t *testing.T) {
-	for _, body := range []string{"", "Public access is available"} {
-		output, err := browserRenderOutput(RenderedPage{Text: body, FullText: "Public access is available"}, "access")
+	long := strings.Repeat("filler line\n", 2000) + "Public access is available"
+	for _, body := range []string{long, "Public access is available"} {
+		output, err := browserRenderOutput(RenderedPage{Text: body}, "access", 0, 1000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -124,7 +125,7 @@ func TestBrowserSourceStageKeepsFindExcerptsAsReadEvidence(t *testing.T) {
 			t.Fatal(err)
 		}
 		want := sourceStagePageRead
-		if body == "" {
+		if body == long {
 			want = sourceStagePagePartial
 		}
 		if len(page.FindMatches) == 0 || page.SourceStage != want {

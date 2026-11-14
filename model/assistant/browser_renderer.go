@@ -5,11 +5,13 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
@@ -249,8 +251,12 @@ func renderedPageContext(page agent.RenderedPage) string {
 			builder.WriteString(previous.Description)
 		}
 		if previous.Text != "" {
+			text, next := agent.FirstTextPage(previous.Text, agent.ToolOutputMaxChars)
 			builder.WriteString("\n    可见正文：\n")
-			builder.WriteString(indentText(previous.Text, "    "))
+			builder.WriteString(indentText(text, "    "))
+			if total := utf8.RuneCountInString(previous.Text); next < total {
+				builder.WriteString(fmt.Sprintf("\n    状态：这一页正文共 %d 字，这里只给了前 %d 字；完整内容在对 %s 调 browser_render 结果的 previous_pages 里", total, next, page.RequestedURL))
+			}
 		}
 	}
 	if page.URL != "" && page.URL != page.RequestedURL {
@@ -266,11 +272,17 @@ func renderedPageContext(page agent.RenderedPage) string {
 		builder.WriteString(page.Description)
 	}
 	if page.Text != "" {
+		// 正文照 browser_render 的分页给第一页，后面的写明怎么续读，不截断了事。
+		text, next := agent.FirstTextPage(page.Text, agent.ToolOutputMaxChars)
 		builder.WriteString("\n  可见正文：\n")
-		builder.WriteString(indentText(page.Text, "  "))
+		builder.WriteString(indentText(text, "  "))
+		if total := utf8.RuneCountInString(page.Text); next < total {
+			call, _ := json.Marshal(map[string]any{"url": page.RequestedURL, "offset": next})
+			builder.WriteString(fmt.Sprintf("\n  状态：正文共 %d 字，这里只给了前 %d 字，后面 %d 字没给；需要就调 browser_render，参数 %s", total, next, total-next, call))
+		}
 	}
 	if page.Truncated {
-		builder.WriteString("\n  状态：正文已按安全上限截断")
+		builder.WriteString("\n  状态：网页超过下载上限，只读到了前面一部分")
 	}
 	if page.Stable {
 		builder.WriteString(fmt.Sprintf("\n  渲染状态：页面已稳定（等待 %dms，检测到 %d 次内容变化、%d 次 DOM 变化）", page.WaitedMS, page.ContentChanges, page.DOMChanges))

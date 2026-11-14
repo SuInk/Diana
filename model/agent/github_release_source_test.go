@@ -48,7 +48,7 @@ func releaseFixtureClient(status int, release githubReleaseRecord) *http.Client 
 func TestGitHubReleaseFailuresAreNotNegativeEvidence(t *testing.T) {
 	for _, status := range []int{403, 404, 429, 500} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {
-			page, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(status, releaseFixture()), "https://github.com/go-gitea/gitea/releases", "https://api.github.com/repos/go-gitea/gitea/releases/latest", 8000)
+			page, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(status, releaseFixture()), "https://github.com/go-gitea/gitea/releases", "https://api.github.com/repos/go-gitea/gitea/releases/latest")
 			if err == nil || page.Text != "" || !strings.Contains(err.Error(), "does not establish") {
 				t.Fatalf("HTTP %d treated as evidence: %+v %v", status, page, err)
 			}
@@ -60,17 +60,17 @@ func TestGitHubReleaseRejectsMismatchedAndIncompleteRecords(t *testing.T) {
 	for _, change := range []func(*githubReleaseRecord){func(r *githubReleaseRecord) { r.HTMLURL = "https://evil.example/release" }, func(r *githubReleaseRecord) { r.PublishedAt = "" }, func(r *githubReleaseRecord) { r.Prerelease = true }, func(r *githubReleaseRecord) { r.Draft = true }, func(r *githubReleaseRecord) { r.HTMLURL = "https://github.com/another/repo/releases/tag/v1.27.3" }} {
 		release := releaseFixture()
 		change(&release)
-		if _, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), "https://github.com/go-gitea/gitea/releases", "https://api.github.com/repos/go-gitea/gitea/releases/latest", 8000); err == nil {
+		if _, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), "https://github.com/go-gitea/gitea/releases", "https://api.github.com/repos/go-gitea/gitea/releases/latest"); err == nil {
 			t.Fatalf("invalid record accepted: %+v", release)
 		}
 	}
 	release := releaseFixture()
 	release.Prerelease = true
-	page, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), release.HTMLURL, "https://api.github.com/repos/go-gitea/gitea/releases/tags/v1.27.3", 1000)
+	page, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), release.HTMLURL, "https://api.github.com/repos/go-gitea/gitea/releases/tags/v1.27.3")
 	if err != nil || !strings.Contains(page.Text, "预发布：true") {
 		t.Fatalf("explicit prerelease lost: %v %s", err, page.Text)
 	}
-	if _, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), release.HTMLURL, "https://api.github.com/repos/go-gitea/gitea/releases/tags/v1.27.2", 1000); err == nil {
+	if _, err := fetchGitHubRelease(context.Background(), releaseFixtureClient(200, release), release.HTMLURL, "https://api.github.com/repos/go-gitea/gitea/releases/tags/v1.27.2"); err == nil {
 		t.Fatal("different tag was accepted")
 	}
 }

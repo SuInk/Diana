@@ -231,11 +231,13 @@ func TestBrowserEvalMasksPageCookies(t *testing.T) {
 	session := "sess" + "0123456789abcdefXYZ"
 	f := newFakeCDP(t, "https://example.com/")
 	f.cookies = []string{session, "zh-CN"}
-	f.evalValue = "lang=zh-CN; SESSDATA=" + session
 	registry := browserToolsFor(t, f, newBrowserTabRegistry(), "bot\x00group:1", 5*time.Second)
 	if _, err := runBrowserTool(context.Background(), registry, "browser_open", map[string]any{"url": "https://example.com/"}); err != nil {
 		t.Fatal(err)
 	}
+	f.mu.Lock()
+	f.evalValue = "lang=zh-CN; SESSDATA=" + session
+	f.mu.Unlock()
 	out, err := runBrowserTool(context.Background(), registry, "browser_eval", map[string]any{"script": "document.cookie"})
 	if err != nil {
 		t.Fatal(err)

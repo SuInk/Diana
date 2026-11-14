@@ -10,9 +10,9 @@ import (
 	"testing"
 )
 
-// Over-budget output must give up diagnostics before evidence: the snippets
-// are what the model checks its answer against.
-func TestWebSearchTruncationKeepsSnippetsOverMetadata(t *testing.T) {
+// 装不下时不再先丢 sources、providers、attempts、queries，也不把摘要砍短：诊断字段每页
+// 都在，命中整条留到下一页。
+func TestWebSearchPageKeepsMetadataAndWholeSnippets(t *testing.T) {
 	result := webSearchResult{Status: "ok", Strategy: "parallel_queries", Budget: webSearchBudget{MaxQueries: 4, QueriesUsed: 4}}
 	for i := 0; i < 8; i++ {
 		url := fmt.Sprintf("https://example.com/hero/%d", i)
@@ -22,7 +22,7 @@ func TestWebSearchTruncationKeepsSnippetsOverMetadata(t *testing.T) {
 		result.Providers = append(result.Providers, webSearchProviderState{})
 		result.Attempts = append(result.Attempts, webSearchAttempt{Provider: "searxng", Type: "web", QueryHash: strings.Repeat("h", 40), Status: "ok"})
 	}
-	raw, err := (&WebSearchTool{maxBytes: 8_000}).formatExplorationResult(result)
+	raw, err := webSearchPage(result, map[string]any{"query": "英雄"}, 0, 8_000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,15 +33,15 @@ func TestWebSearchTruncationKeepsSnippetsOverMetadata(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &got); err != nil {
 		t.Fatal(err)
 	}
-	if !got.Truncated || got.Sources != nil || got.Providers != nil || got.Attempts != nil || got.Queries != nil {
-		t.Fatalf("metadata kept while snippets were cut: %s", raw)
+	if len(got.Sources) != 8 || len(got.Providers) != 8 || len(got.Attempts) != 8 || len(got.Queries) != 8 {
+		t.Fatalf("metadata dropped: %s", raw)
 	}
-	if len(got.Results) != 8 {
-		t.Fatalf("hits = %d, want all 8", len(got.Results))
+	if len(got.Results) == 0 || len(got.Results) == 8 || got.NextOffset != len(got.Results) || got.TotalResults != 8 {
+		t.Fatalf("hits = %d next = %d", len(got.Results), got.NextOffset)
 	}
-	for _, hit := range got.Results {
-		if n := len([]rune(hit.Snippet)); n < searchSnippetFloor {
-			t.Fatalf("snippet shrank to %d runes, want >= %d: %q", n, searchSnippetFloor, hit.Snippet)
+	for i, hit := range got.Results {
+		if hit.Snippet != result.Results[i].Snippet {
+			t.Fatalf("snippet %d was shortened", i)
 		}
 	}
 }

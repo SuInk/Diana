@@ -204,10 +204,7 @@ func (t *WebSearchTool) runHTTPSearch(ctx context.Context, provider WebSearchPro
 			continue
 		}
 		seen[key] = true
-		hits = append(hits, WebSearchHit{URL: normalized, Title: truncateRunes(httpSearchString(item, cfg.TitlePath), 500), Snippet: truncateRunes(httpSearchString(item, cfg.SnippetPath, "snippet", "content", "description"), 4000)})
-		if len(hits) >= provider.MaxResults {
-			break
-		}
+		hits = append(hits, WebSearchHit{URL: normalized, Title: httpSearchString(item, cfg.TitlePath), Snippet: httpSearchString(item, cfg.SnippetPath, "snippet", "content", "description")})
 	}
 	if len(hits) == 0 {
 		return "", fmt.Errorf("HTTP 搜索没有有效结果：%w", errWebSearchNoResults)

@@ -62,7 +62,7 @@ func TestWebSearchToolCallsPerplexityTinyFishAndBrave(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", tc.provider.Name, err)
 		}
-		if !strings.Contains(output, tc.want) || strings.Contains(output, "dropped") || strings.Contains(output, tc.key) {
+		if !strings.Contains(output, tc.want) || (tc.provider.Name == "tinyfish") != strings.Contains(output, "dropped") || strings.Contains(output, tc.key) {
 			t.Fatalf("%s output = %s", tc.provider.Name, output)
 		}
 	}

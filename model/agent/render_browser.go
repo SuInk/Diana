@@ -30,7 +30,6 @@ import (
 const (
 	defaultRenderBrowserTimeout     = 25 * time.Second
 	defaultRenderBrowserHTMLBytes   = 4 * 1024 * 1024
-	defaultRenderBrowserTextChars   = 8000
 	defaultRenderBrowserVirtualTime = 8 * time.Second
 	// 页面稳住 2.5 秒且没有观察窗内到期的一次性回调就收尾（见 settledWithoutScheduledWork）。
 	// 稳定窗是 0.9 秒，这里留它的近三倍：延迟补内容的页面几乎都在稳住后一两秒内再动。
@@ -63,14 +62,12 @@ type RenderedPage struct {
 	PendingRequests int                    `json:"pending_requests,omitempty"`
 	NavigationChain []string               `json:"navigation_chain,omitempty"`
 	PreviousPages   []RenderedPageSnapshot `json:"previous_pages,omitempty"`
-	// Links 是页面上可见的链接。不直接序列化：搜索引擎后端从结果页里取结果用全量，
-	// browser_render 交给模型时挑一部分编进输出，见 browser_render_output.go。
+	// Links 是页面上可见的链接。不直接序列化：browser_render 去重排序后编进输出，
+	// 见 browser_render_output.go。
 	Links []RenderedLink `json:"-"`
 	// Images 是页面上可以直接下载的图片地址：og:image 和正文里的 <img>。用户要发网上的图时，
 	// 模型从这里拿直链交给 remote_image，不必退回截图。
 	Images []RenderedImage `json:"images,omitempty"`
-	// FullText 是截断前的正文，给 browser_render 的 find 在整页里查找。
-	FullText string `json:"-"`
 }
 
 // RenderedLink 是页面上的一个 <a>：解析成绝对地址的 href 和它的可见文字。
@@ -80,19 +77,11 @@ type RenderedLink struct {
 	Text    string
 }
 
-const maxRenderedPageLinks = 300
-
 // RenderedImage 是页面上的一张图：绝对地址和 alt 文字。
 type RenderedImage struct {
 	URL string `json:"url"`
 	Alt string `json:"alt,omitempty"`
 }
-
-// maxRenderedPageImages 限制交给模型的图片数，图标、头像和装饰图多了只会占上下文。
-const maxRenderedPageImages = 12
-
-// maxRenderedFullTextChars 是留给 find 的整页正文上限，够覆盖文档页和定价页。
-const maxRenderedFullTextChars = 200000
 
 // RenderedPageSnapshot preserves meaningful content seen before a redirect.
 type RenderedPageSnapshot struct {
@@ -223,7 +212,6 @@ type SandboxedBrowserConfig struct {
 	Headless          bool
 	Timeout           time.Duration
 	MaxHTMLBytes      int
-	MaxTextChars      int
 	VirtualTimeBudget time.Duration
 	StabilityWindow   time.Duration
 	NetworkIdleWindow time.Duration
@@ -296,7 +284,7 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 	if apiURL, ok := githubReleaseAPIURL(rawURL); ok {
 		releaseCtx, cancelRelease := context.WithTimeout(ctx, timeout)
 		var page RenderedPage
-		page, sourceErr = readGitHubRelease(releaseCtx, rawURL, apiURL, b.cfg.MaxTextChars)
+		page, sourceErr = readGitHubRelease(releaseCtx, rawURL, apiURL)
 		cancelRelease()
 		if sourceErr == nil {
 			return page, nil
@@ -312,9 +300,9 @@ func (b *SandboxedBrowser) Render(ctx context.Context, rawURL string) (RenderedP
 			var err error
 			switch source.Kind {
 			case PageFetchTinyFish:
-				page, err = fetchTinyFishPage(ctx, source.APIKey, source.Endpoint, rawURL, b.cfg.MaxTextChars)
+				page, err = fetchTinyFishPage(ctx, source.APIKey, source.Endpoint, rawURL)
 			case PageFetchDeepSeek:
-				page, err = fetchDeepSeekPage(ctx, source.APIKey, source.Endpoint, rawURL, b.cfg.MaxTextChars)
+				page, err = fetchDeepSeekPage(ctx, source.APIKey, source.Endpoint, rawURL)
 			default:
 				continue
 			}
@@ -406,12 +394,6 @@ func sandboxedBrowserConfigWithDefaults(cfg SandboxedBrowserConfig) SandboxedBro
 	}
 	if cfg.MaxHTMLBytes <= 0 {
 		cfg.MaxHTMLBytes = defaultRenderBrowserHTMLBytes
-	}
-	if cfg.MaxTextChars <= 0 {
-		cfg.MaxTextChars = defaultRenderBrowserTextChars
-	}
-	if cfg.MaxTextChars > ToolOutputMaxChars {
-		cfg.MaxTextChars = ToolOutputMaxChars
 	}
 	if cfg.VirtualTimeBudget <= 0 {
 		cfg.VirtualTimeBudget = defaultRenderBrowserVirtualTime
@@ -809,7 +791,7 @@ func validateSandboxedBrowserURL(ctx context.Context, value string) error {
 	return netguard.ValidatePublicURLStrict(ctx, value)
 }
 
-func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated bool) (RenderedPage, error) {
+func parseRenderedPage(data []byte, requestedURL string, truncated bool) (RenderedPage, error) {
 	document, err := html.Parse(bytes.NewReader(data))
 	if err != nil {
 		return RenderedPage{}, fmt.Errorf("parse rendered page: %w", err)
@@ -827,11 +809,11 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 	if title == "" || (prefix != title && prefix != "" && strings.HasPrefix(fullTitle, prefix) && len(fullTitle) > len(title)) {
 		title = firstNonEmptyString(fullTitle, title)
 	}
-	page.Title = truncateText(title, 300)
-	page.Description = truncateText(firstNonEmptyString(
+	page.Title = title
+	page.Description = strings.TrimSpace(firstNonEmptyString(
 		metaContent(document, "name", "description"),
 		metaContent(document, "property", "og:description"),
-	), 800)
+	))
 	if canonical := firstNonEmptyString(
 		linkHref(document, "canonical"),
 		metaContent(document, "property", "og:url"),
@@ -841,12 +823,7 @@ func parseRenderedPage(data []byte, requestedURL string, maxChars int, truncated
 		}
 	}
 	content := renderedContentRoot(document)
-	fullText := normalizeRenderedText(visibleNodeText(content))
-	page.Text = truncateText(fullText, maxChars)
-	if maxChars > 0 && len([]rune(fullText)) > maxChars {
-		page.Truncated = true
-	}
-	page.FullText = truncateText(fullText, maxRenderedFullTextChars)
+	page.Text = normalizeRenderedText(visibleNodeText(content))
 	if page.Title == "" && page.Description == "" && page.Text == "" {
 		return RenderedPage{}, errors.New("browser rendered an empty page")
 	}
@@ -886,19 +863,19 @@ func renderedPageImages(document *html.Node, base string) []RenderedImage {
 	seen := map[string]bool{}
 	add := func(raw, alt string) {
 		resolved := resolveRenderedPageURL(base, strings.TrimSpace(raw))
-		if resolved == "" || seen[resolved] || len(images) >= maxRenderedPageImages {
+		if resolved == "" || seen[resolved] {
 			return
 		}
 		if path := strings.ToLower(resolved); strings.Contains(path, ".svg") {
 			return
 		}
 		seen[resolved] = true
-		images = append(images, RenderedImage{URL: resolved, Alt: truncateText(normalizeRenderedText(alt), 120)})
+		images = append(images, RenderedImage{URL: resolved, Alt: normalizeRenderedText(alt)})
 	}
 	add(metaContent(document, "property", "og:image"), metaContent(document, "property", "og:image:alt"))
 	var walk func(*html.Node)
 	walk = func(node *html.Node) {
-		if node == nil || len(images) >= maxRenderedPageImages || nodeIsHidden(node) {
+		if node == nil || nodeIsHidden(node) {
 			return
 		}
 		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "img") {
@@ -921,28 +898,38 @@ func renderedImageTooSmall(value string) bool {
 	return err == nil && size < 64
 }
 
+// renderedLinkCardChars 用来认出一条链接所在的「结果卡片」：往上最多三层，取正文不超过
+// 这个长度的最外层祖先。再往上就是整列结果或整页，不再是这一条的摘要。它决定摘要从
+// 哪个元素取，不截摘要本身。
+const renderedLinkCardChars = 1200
+
+// renderedLinkSnippet 取链接所在卡片的整段文字，给搜索引擎结果页当摘要。
+func renderedLinkSnippet(node *html.Node, text string) string {
+	snippet := ""
+	for parent, depth := node.Parent, 0; parent != nil && depth < 3; parent, depth = parent.Parent, depth+1 {
+		context := normalizeRenderedText(visibleNodeText(parent))
+		if len([]rune(context)) > renderedLinkCardChars {
+			break
+		}
+		if len(context) > len(text)+20 {
+			snippet = context
+		}
+	}
+	return snippet
+}
+
 func renderedPageLinks(document *html.Node, base string) []RenderedLink {
 	var links []RenderedLink
 	var walk func(*html.Node)
 	walk = func(node *html.Node) {
-		if node == nil || len(links) >= maxRenderedPageLinks || nodeIsHidden(node) {
+		if node == nil || nodeIsHidden(node) {
 			return
 		}
 		if node.Type == html.ElementNode && strings.EqualFold(node.Data, "a") {
 			if resolved := resolveRenderedPageURL(base, strings.TrimSpace(nodeAttr(node, "href"))); resolved != "" {
 				text := normalizeRenderedText(visibleNodeText(node))
 				if text != "" {
-					snippet := ""
-					for parent, depth := node.Parent, 0; parent != nil && depth < 3; parent, depth = parent.Parent, depth+1 {
-						context := normalizeRenderedText(visibleNodeText(parent))
-						if len([]rune(context)) > 1200 {
-							break
-						}
-						if len(context) > len(text)+20 {
-							snippet = truncateText(context, 600)
-						}
-					}
-					links = append(links, RenderedLink{URL: resolved, Text: truncateText(text, 300), Snippet: snippet})
+					links = append(links, RenderedLink{URL: resolved, Text: text, Snippet: renderedLinkSnippet(node, text)})
 				}
 			}
 			return
@@ -1222,15 +1209,16 @@ func (t *BrowserRenderTool) Name() string { return "browser_render" }
 
 func (t *BrowserRenderTool) Description() string {
 	return `用一次性沙箱浏览器读取公网网页，不带用户登录态。技术、项目能力、价格或版本调研，在搜索定位到出处后用本工具核对一手原文，不能只靠搜索摘要收尾。返回正文和页面上的链接（links），要看站内别的页面就从 links 里取真实网址再打开，不要猜网址。` +
-		`正文截断或只有目录时，填 find 在整页定位关键段落，不能把目录标题当实现依据。GitHub Release 地址改读官方 API 的版本与发布时间。` +
+		`装不下的页面会分页，照结果里的 next_offset 续读；找特定段落填 find 在整页定位，不能把目录标题当实现依据。GitHub Release 地址改读官方 API 的版本与发布时间。` +
 		`要核对几个候选来源时，把 url 填最相关的一个、其余填进 urls 一次并行打开（最多 3 个），不要一页一页地读。`
 }
 
 func (t *BrowserRenderTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"url"}, map[string]any{
-		"url":  toolStringParam("公网页面地址，或搜索结果的 ref 编号"),
-		"urls": map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
-		"find": toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
+		"url":    toolStringParam("公网页面地址，或搜索结果的 ref 编号"),
+		"urls":   map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "同时打开的其他页面地址，和 url 合计最多 3 个"},
+		"find":   toolStringParam("在整页正文里查找的关键词，多个用 | 隔开，如 pricing|价格|套餐"),
+		"offset": toolIntParam("续读位置：上次结果没给完时照抄它的 next_offset，或者填 find_offsets 里的值从那段正文读起；默认从头"),
 		"engine": toolEnumParam("上次读到的正文缺内容、缺图片或页面要 JS 渲染时填 browser，跳过快速读取和缓存、用本地浏览器重新渲染；默认 auto",
 			RenderEngineAuto, RenderEngineBrowser),
 	})
@@ -1249,13 +1237,21 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if urls := browserRenderURLs(input); len(urls) > 1 {
 		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
 	}
-	// 这一页要是上一次批量读取里没等到的那页，接着等它或直接取它的结果，不重开一次。
-	page, err, started := t.reads.await(ctx, renderEngineFromContext(ctx), rawURL)
+	// 同一页刚读过（批量里没等到的那页，或者上一次分页读到一半）就接着用那次的结果，
+	// 续读时页面不重新渲染，offset 也对得上。
+	engine := renderEngineFromContext(ctx)
+	page, err, started := t.reads.await(ctx, engine, rawURL)
 	if !started {
-		page, err = t.renderer.Render(ctx, rawURL)
+		read := t.reads.start(ctx, engine, rawURL, t.renderer.Render)
+		select {
+		case <-read.done:
+			page, err = read.page, read.err
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
 	}
 	if err != nil {
 		return "", err
 	}
-	return browserRenderOutputWithBudget(page, stringFromInput(input, "find"), budget)
+	return browserRenderOutput(page, stringFromInput(input, "find"), intFromInput(input, "offset", 0), budget)
 }

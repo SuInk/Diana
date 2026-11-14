@@ -537,7 +537,6 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		cdpURL:   cfg.BrowserCDPURL,
 		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
-		maxChars: ToolOutputMaxChars,
 		session:  browserTabs.session(cfg.BrowserSessionKey),
 		tabs:     browserTabs,
 		personal: cfg.PersonalBrowser, allowedHosts: cfg.BrowserOperationHosts,

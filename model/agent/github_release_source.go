@@ -49,7 +49,7 @@ type githubReleaseRecord struct {
 	Prerelease  bool   `json:"prerelease"`
 }
 
-func fetchGitHubRelease(ctx context.Context, client *http.Client, requested, apiURL string, maxChars int) (RenderedPage, error) {
+func fetchGitHubRelease(ctx context.Context, client *http.Client, requested, apiURL string) (RenderedPage, error) {
 	started := time.Now()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
@@ -100,14 +100,10 @@ func fetchGitHubRelease(ctx context.Context, client *http.Client, requested, api
 		notice = "内容来自本次读取的 GitHub 官方 latest Release API，不是搜索快照或浏览器 DOM。仅覆盖最新正式发布，不包含全部历史或预发布版本；查询时间不等于发布时间。"
 	}
 	text := fmt.Sprintf("%s\n版本：%s\n名称：%s\n发布时间：%s\n预发布：%t\n发布页面：%s\n官方 API：%s\n\n%s", heading, release.Tag, release.Name, published.UTC().Format(time.RFC3339), release.Prerelease, release.HTMLURL, apiURL, release.Body)
-	if maxChars <= 0 {
-		maxChars = defaultRenderBrowserTextChars
-	}
-	truncated := len([]rune(text)) > maxChars
-	return RenderedPage{RequestedURL: requested, URL: release.HTMLURL, Title: firstNonEmptyString(release.Name, release.Tag), Text: truncateRunes(text, maxChars), Truncated: truncated, SourceType: "github_release_api", SourceURLs: []string{apiURL, release.HTMLURL}, SourceNotice: notice, RetrievedAt: time.Now().UTC().Format(time.RFC3339), Stable: true, StabilityReason: "official_api_snapshot", WaitedMS: time.Since(started).Milliseconds()}, nil
+	return RenderedPage{RequestedURL: requested, URL: release.HTMLURL, Title: firstNonEmptyString(release.Name, release.Tag), Text: text, SourceType: "github_release_api", SourceURLs: []string{apiURL, release.HTMLURL}, SourceNotice: notice, RetrievedAt: time.Now().UTC().Format(time.RFC3339), Stable: true, StabilityReason: "official_api_snapshot", WaitedMS: time.Since(started).Milliseconds()}, nil
 }
 
-func readGitHubRelease(ctx context.Context, requested, apiURL string, maxChars int) (RenderedPage, error) {
+func readGitHubRelease(ctx context.Context, requested, apiURL string) (RenderedPage, error) {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
 	if err := netguard.ValidatePublicURLStrict(ctx, apiURL); err != nil {
@@ -120,5 +116,5 @@ func readGitHubRelease(ctx context.Context, requested, apiURL string, maxChars i
 		}
 		return netguard.ValidatePublicURLStrict(req.Context(), req.URL.String())
 	}
-	return fetchGitHubRelease(ctx, client, requested, apiURL, maxChars)
+	return fetchGitHubRelease(ctx, client, requested, apiURL)
 }

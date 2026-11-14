@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -17,6 +18,8 @@ type WebSearchHit struct {
 	PublishedAt string `json:"published_at,omitempty"`
 	Query       string `json:"query,omitempty"`
 	Provider    string `json:"provider,omitempty"`
+	// AlsoFrom 是同一网址还在哪些「搜索源: 查询」里出现过，合并去重时记下。
+	AlsoFrom []string `json:"also_from,omitempty"`
 }
 
 type webSearchQueryResponse struct {
@@ -26,19 +29,35 @@ type webSearchQueryResponse struct {
 	Error    string `json:"error,omitempty"`
 }
 
-// Run executes model-supplied queries independently. Free search engines are
+// Run 搜索并按整条分页交给模型（见 web_search_page.go）。offset 非零是翻页：同样的
+// 参数刚搜过就直接取那次的完整结果，不重新搜。
+func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, error) {
+	key := webSearchPageKey(input)
+	offset := intFromInput(input, "offset", 0)
+	result, cached := t.pages.get(key)
+	if !cached || offset <= 0 {
+		var err error
+		if result, err = t.search(ctx, input); err != nil {
+			return "", err
+		}
+		t.pages.put(key, result)
+	}
+	return webSearchPage(result, webSearchPageArgs(input), offset, ToolOutputBudget(ctx))
+}
+
+// search executes model-supplied queries independently. Free search engines are
 // split into two lanes that run side by side, each with its own ordered
 // fallback; the batch shares a deadline and total provider-call budget.
-func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, error) {
+func (t *WebSearchTool) search(ctx context.Context, input map[string]any) (webSearchResult, error) {
 	candidates, err := webSearchCandidates(input, t.maxQueries)
 	if err != nil {
-		return "", err
+		return webSearchResult{}, err
 	}
 	ctx = withWebSearchRecency(ctx, intFromInput(input, "recency", 0))
 	providers := t.providers
 	if len(providers) == 0 {
 		if providers, err = t.loadProviders(); err != nil {
-			return "", fmt.Errorf("web search configuration is invalid: %w", err)
+			return webSearchResult{}, fmt.Errorf("web search configuration is invalid: %w", err)
 		}
 	}
 	lanes := webSearchProviderLanes(providers)
@@ -95,13 +114,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			worker := *t
 			worker.providers = job.providers
 			worker.maxProviderCalls = quota
-			// Internal results are merged before enforcing the external output budget.
-			worker.maxBytes = maxWebSearchResponseBytes
-			raw, runErr := worker.runSearchQuery(ctx, map[string]any{"query": candidates[job.query].Query})
-			errors[index] = runErr
-			if runErr == nil {
-				errors[index] = json.Unmarshal([]byte(raw), &results[index])
-			}
+			results[index], errors[index] = worker.runSearchQuery(ctx, map[string]any{"query": candidates[job.query].Query})
 		}(i, job)
 	}
 	wg.Wait()
@@ -155,10 +168,12 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			}
 		}
 	}
-	// Interleave hits by job so output truncation cannot privilege the first
+	// Interleave hits by job so the first page cannot privilege the first
 	// query or engine merely because its results were appended first. Both
-	// lanes often return the same page; keep its first occurrence.
-	hitSeen := map[string]bool{}
+	// lanes often return the same page: keep its first occurrence and fold the
+	// duplicate into it (snippet and where else it was found) instead of
+	// dropping it silently.
+	hitSeen := map[string]int{}
 	for depth := 0; ; depth++ {
 		added := false
 		for _, result := range results {
@@ -168,17 +183,40 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 			added = true
 			hit := result.Results[depth]
 			key, _ := canonicalWebSearchURL(hit.URL)
-			if key != "" && hitSeen[key] {
+			if kept, ok := hitSeen[key]; ok && key != "" {
+				batch.Results[kept] = mergeWebSearchHit(batch.Results[kept], hit)
 				continue
 			}
-			hitSeen[key] = true
+			hitSeen[key] = len(batch.Results)
 			batch.Results = append(batch.Results, hit)
 		}
 		if !added {
 			break
 		}
 	}
-	return t.formatExplorationResult(batch)
+	return finishExplorationResult(batch), nil
+}
+
+// mergeWebSearchHit 把同一网址的另一条命中并进先出现的那条：摘要不同就接在后面，
+// 记下它还出现在哪个查询、哪个搜索源。
+func mergeWebSearchHit(kept, dup WebSearchHit) WebSearchHit {
+	if snippet := strings.TrimSpace(dup.Snippet); snippet != "" && !strings.Contains(kept.Snippet, snippet) {
+		if strings.TrimSpace(kept.Snippet) == "" {
+			kept.Snippet = snippet
+		} else {
+			kept.Snippet += "\n" + snippet
+		}
+	}
+	if kept.Title == "" {
+		kept.Title = dup.Title
+	}
+	if kept.PublishedAt == "" {
+		kept.PublishedAt = dup.PublishedAt
+	}
+	if from := strings.TrimSpace(strings.Trim(dup.Provider+": "+dup.Query, ": ")); from != "" && (dup.Provider != kept.Provider || dup.Query != kept.Query) {
+		kept.AlsoFrom = append(kept.AlsoFrom, from)
+	}
+	return kept
 }
 
 // webSearchProviderLanes 把免费搜索引擎按顺序交错分成两条并行通道（默认是
@@ -221,7 +259,7 @@ func searchHits(content, query, provider string) []WebSearchHit {
 		if result.URL == "" {
 			continue
 		}
-		hits = append(hits, WebSearchHit{Title: result.Title, URL: result.URL, Snippet: truncateText(firstNonEmpty(result.Snippet, result.Content), 600), PublishedAt: result.PublishedDate, Query: query, Provider: provider})
+		hits = append(hits, WebSearchHit{Title: result.Title, URL: result.URL, Snippet: strings.TrimSpace(firstNonEmpty(result.Snippet, result.Content)), PublishedAt: result.PublishedDate, Query: query, Provider: provider})
 	}
 	return hits
 }

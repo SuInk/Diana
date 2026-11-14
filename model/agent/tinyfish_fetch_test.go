@@ -24,8 +24,8 @@ func resetTinyFishCache(t *testing.T) {
 	t.Cleanup(func() { tinyFishPages = previous })
 }
 
-// 读网页照参考 bot 的请求形状发：单个网址、markdown，另外要链接和图片列表；整页存进
-// FullText 给 find 用，交给模型的正文按上限截断。同一网址 15 分钟内不再重抓。
+// 读网页照参考 bot 的请求形状发：单个网址、markdown，另外要链接和图片列表；正文原样
+// 给，不截断。同一网址 15 分钟内不再重抓。
 func TestTinyFishFetchReadsMarkdownAndCachesByURL(t *testing.T) {
 	resetTinyFishCache(t)
 	var calls atomic.Int32
@@ -44,7 +44,7 @@ func TestTinyFishFetchReadsMarkdownAndCachesByURL(t *testing.T) {
 	}))
 	defer server.Close()
 
-	page, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage, 50)
+	page, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,19 +55,19 @@ func TestTinyFishFetchReadsMarkdownAndCachesByURL(t *testing.T) {
 	if len(page.Links) != 2 || page.Links[0].URL != "https://1.1.1.1/docs/v2/intro" || page.Links[1].URL != "https://1.1.1.1/docs/next" {
 		t.Fatalf("links = %#v", page.Links)
 	}
-	if !page.Truncated || !strings.HasPrefix(page.Text, string([]rune(page.FullText)[:50])) || strings.Contains(page.Text, string([]rune(page.FullText)[:51])) || !strings.HasSuffix(page.FullText, "正文正文") {
-		t.Fatalf("text=%q truncated=%v full=%d", page.Text, page.Truncated, len([]rune(page.FullText)))
+	if page.Truncated || page.Text != "# 标题\n"+strings.Repeat("正文", 100) {
+		t.Fatalf("text=%q truncated=%v", page.Text, page.Truncated)
 	}
 
-	again, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage, 1000)
+	again, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("同一网址重抓了 %d 次", calls.Load())
 	}
-	if again.Truncated || again.Text != again.FullText {
-		t.Fatalf("缓存命中后没按这次的上限截断：%#v", again.Truncated)
+	if again.Text != page.Text {
+		t.Fatalf("缓存命中后正文变了：%q", again.Text)
 	}
 }
 
@@ -88,15 +88,15 @@ func TestTinyFishFetchFailuresAreRecognizable(t *testing.T) {
 	defer server.Close()
 
 	for path, want := range map[string]string{"/blocked": "bot_blocked", "/empty": "empty_content", "/limited": "HTTP 429"} {
-		_, err := fetchTinyFishPage(context.Background(), "test-key", server.URL+path, tinyFishTestPage, 100)
+		_, err := fetchTinyFishPage(context.Background(), "test-key", server.URL+path, tinyFishTestPage)
 		if !errors.Is(err, errTinyFishFetch) || !strings.Contains(err.Error(), want) {
 			t.Fatalf("%s: err = %v", path, err)
 		}
 	}
-	if _, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, "http://127.0.0.1/admin", 100); err == nil || errors.Is(err, errTinyFishFetch) {
+	if _, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, "http://127.0.0.1/admin"); err == nil || errors.Is(err, errTinyFishFetch) {
 		t.Fatalf("内网地址应在请求前被拒：%v", err)
 	}
-	if _, err := fetchTinyFishPage(context.Background(), "", server.URL, tinyFishTestPage, 100); !errors.Is(err, errTinyFishFetch) {
+	if _, err := fetchTinyFishPage(context.Background(), "", server.URL, tinyFishTestPage); !errors.Is(err, errTinyFishFetch) {
 		t.Fatalf("没有 key 时 err = %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestTinyFishFetchReturnsImageLinks(t *testing.T) {
 	}))
 	defer server.Close()
 
-	page, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage, 1000)
+	page, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,27 +169,27 @@ func TestTinyFishFetchReturnsImageLinks(t *testing.T) {
 	}
 
 	// 缓存命中也带着图片，browser_render 的输出里能看到直链。
-	cached, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage, 10)
+	cached, err := fetchTinyFishPage(context.Background(), "test-key", server.URL, tinyFishTestPage)
 	if err != nil || len(cached.Images) != len(want) {
 		t.Fatalf("cached images = %#v err=%v", cached.Images, err)
 	}
-	output, err := browserRenderOutput(cached, "")
+	output, err := browserRenderOutput(cached, "", 0, ToolOutputMaxChars)
 	if err != nil || !strings.Contains(output, `"images"`) || !strings.Contains(output, avatar) {
 		t.Fatalf("output = %s err=%v", output, err)
 	}
 }
 
-// 图片列表最多留 maxRenderedPageImages 张，超出的新图不再挤进来，但已占位的图仍能换成更大的尺寸。
-func TestTinyFishImagesCapKeepsUpgradingKnownVariants(t *testing.T) {
+// 图片列表不设条数上限：接口给多少留多少，同一张图的尺寸变体仍合成一条、换成最大的。
+func TestTinyFishImagesKeepEveryImageAndUpgradeVariants(t *testing.T) {
 	var raw []string
 	raw = append(raw, "https://pbs.twimg.com/profile_images/1/A_normal.png")
-	for i := 0; i < maxRenderedPageImages+3; i++ {
+	for i := 0; i < 40; i++ {
 		raw = append(raw, "https://1.1.1.1/img/"+strings.Repeat("x", i+1)+".jpg")
 	}
 	raw = append(raw, "https://pbs.twimg.com/profile_images/1/A.png")
 	images := tinyFishImages(raw)
-	if len(images) != maxRenderedPageImages || images[0].URL != "https://pbs.twimg.com/profile_images/1/A.png" {
-		t.Fatalf("images = %#v", images)
+	if len(images) != 41 || images[0].URL != "https://pbs.twimg.com/profile_images/1/A.png" {
+		t.Fatalf("images = %d first=%q", len(images), images[0].URL)
 	}
 }
 

@@ -31,8 +31,6 @@ const (
 	browserProbeTimeout        = 3 * time.Second
 	browserCaptureTimeout      = 5 * time.Second
 	browserLoadingStableWindow = 5 * time.Second
-	previousPageTextLimit      = 1200
-	maxPreviousPageSnapshots   = 3
 	semanticNetworkGraceFactor = 3
 	// loadingDocumentMinText 是 HTML 还没下载完时肯收尾的最少正文字数。代理出口慢时
 	// GitHub 这类页面卡在 loading，只有标题和一行「Skip to content」，不设下限就拿空壳收尾。
@@ -763,7 +761,7 @@ func (b *SandboxedBrowser) captureObservablePage(ctx context.Context, requestedU
 	if strings.TrimSpace(snapshot.HTML) == "" {
 		return RenderedPage{}, errors.New("browser returned an empty DOM snapshot")
 	}
-	page, err := parseRenderedPage([]byte(snapshot.HTML), requestedURL, b.cfg.MaxTextChars, snapshot.Truncated)
+	page, err := parseRenderedPage([]byte(snapshot.HTML), requestedURL, snapshot.Truncated)
 	if err != nil {
 		return RenderedPage{}, err
 	}
@@ -830,10 +828,10 @@ func appendOrReplaceCapturedPage(captures []capturedBrowserPage, capture capture
 	return append(captures, capture)
 }
 
+// previousPageSnapshots 留下跳转前读到过的每一页，正文原样给，browser_render 分页输出。
 func previousPageSnapshots(captures []capturedBrowserPage, finalURL string) []RenderedPageSnapshot {
-	start := max(0, len(captures)-maxPreviousPageSnapshots)
-	out := make([]RenderedPageSnapshot, 0, len(captures)-start)
-	for _, capture := range captures[start:] {
+	out := make([]RenderedPageSnapshot, 0, len(captures))
+	for _, capture := range captures {
 		page := capture.page
 		if page.URL == "" || page.URL == finalURL {
 			continue
@@ -842,7 +840,7 @@ func previousPageSnapshots(captures []capturedBrowserPage, finalURL string) []Re
 			URL:         page.URL,
 			Title:       page.Title,
 			Description: page.Description,
-			Text:        truncateText(page.Text, previousPageTextLimit),
+			Text:        page.Text,
 		})
 	}
 	return out

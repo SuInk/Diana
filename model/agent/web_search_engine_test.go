@@ -122,7 +122,7 @@ func TestSearchEngineBlockMarkerInBodyNeedsEmptyResults(t *testing.T) {
 }
 
 func TestRenderedPageKeepsVisibleLinks(t *testing.T) {
-	page, err := parseRenderedPage([]byte(`<html><body><a href="/a"><h3>标题</h3><cite>example.com</cite></a><a href="javascript:void(0)">x</a><div hidden><a href="/h">藏起来</a></div></body></html>`), "https://example.com/s", 1000, false)
+	page, err := parseRenderedPage([]byte(`<html><body><a href="/a"><h3>标题</h3><cite>example.com</cite></a><a href="javascript:void(0)">x</a><div hidden><a href="/h">藏起来</a></div></body></html>`), "https://example.com/s", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +195,7 @@ func TestSearchEngineResultsUnwrapAndDeduplicateTranslationLinks(t *testing.T) {
 			{URL: original, Text: "Official pricing"},
 			{URL: translated, Text: "Translate this page"},
 			{URL: "https://example.org/release", Text: "Release notes"},
-		}, 2)
+		})
 		if len(results) != 2 || results[0].URL != original || results[1].URL != "https://example.org/release" {
 			t.Fatalf("duplicate translation consumed source slot: %+v", results)
 		}
@@ -246,7 +246,7 @@ func TestSearchEngineResultsSkipBingBoilerplateLinks(t *testing.T) {
 		{URL: "https://support.microsoft.com/topic/82d20721-2d6f-4012-a13d-d1910ccf203f", Text: "隐私声明"},
 		{URL: "https://support.microsoft.com/en-us/topic/windows-11-version-24h2-update-history-0929c747", Text: "Windows 11 更新历史"},
 	}
-	results := searchEngineResults(searchEngines["bing"], links, 10)
+	results := searchEngineResults(searchEngines["bing"], links)
 	if len(results) != 1 || !strings.Contains(results[0].URL, "windows-11") {
 		t.Fatalf("页脚说明链接不是结果，正常的微软支持页要留着: %+v", results)
 	}
@@ -257,7 +257,7 @@ func TestBingSearchResultsSkipSearchHelpButKeepProductDocumentation(t *testing.T
 		{Text: "了解更多", URL: "https://support.microsoft.com/topic/how-bing-delivers-search-results-d18fc815-ac37-4723-bc67-9229ce3eb6a3?"},
 		{Text: "帮助", URL: "https://support.microsoft.com/topic/82d20721-2d6f-4012-a13d-d1910ccf203f"},
 		{Text: "Windows support", URL: "https://support.microsoft.com/windows"},
-	}, 5)
+	})
 	if len(results) != 1 || results[0].Title != "Windows support" {
 		t.Fatalf("unexpected results: %+v", results)
 	}
