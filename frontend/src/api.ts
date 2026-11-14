@@ -2550,6 +2550,28 @@ export interface SystemVersion {
   head_subject?: string;
   branch?: string;
   behind?: number;
+  manual_update?: ManualUpdateCommand;
+}
+
+// 自更新失败时后端给的兜底命令，与 README 的一键安装/Docker 命令逐字一致。
+// 版本接口和更新失败的错误响应都会带上；源码部署没有。
+export interface ManualUpdateCommand {
+  deployment: "docker" | "host";
+  shell: "sh" | "powershell";
+  command: string;
+  image?: string;
+  note?: string;
+}
+
+// manualUpdateFromError 从更新接口的错误响应里取出兜底命令。
+export function manualUpdateFromError(error: unknown): ManualUpdateCommand | null {
+  if (!(error instanceof ApiError) || !error.responseBody) return null;
+  try {
+    const parsed = JSON.parse(error.responseBody) as { manual_update?: ManualUpdateCommand };
+    return parsed.manual_update?.command ? parsed.manual_update : null;
+  } catch {
+    return null;
+  }
 }
 
 export interface ChangelogEntry {

@@ -65,6 +65,18 @@
         <div class="release-progress-track"><span :style="{ width: `${downloadPercent}%` }"></span></div>
       </div>
       <pre v-if="operationError" class="operation-error mono">{{ operationError }}</pre>
+      <div v-if="operationError && manualUpdate" class="manual-update">
+        <p class="manual-update-title">
+          可以{{ manualUpdate.deployment === "docker" ? "在部署主机上" : "" }}手动运行下面这条命令完成更新（{{ manualUpdate.shell === "powershell" ? "Windows PowerShell" : "终端" }}）：
+        </p>
+        <div class="manual-update-command">
+          <code class="mono">{{ manualUpdate.command }}</code>
+          <button class="btn ghost icon-only small" type="button" title="复制更新命令" aria-label="复制更新命令" @click="copyManualUpdate">
+            <Copy :size="14" aria-hidden="true" />
+          </button>
+        </div>
+        <p v-if="manualUpdate.note" class="manual-update-note">{{ manualUpdate.note }}</p>
+      </div>
       <!-- 两个下拉并排一行；各选项的含义放进下拉里的 hint，平时不占版面。 -->
       <div class="mirror-bar">
         <div class="mirror-field">
@@ -292,10 +304,12 @@ import {
   getUpdatePolicy,
   getUpdateStatus,
   installDownloadedSystemUpdate,
+  manualUpdateFromError,
   pullFromGitHub,
   rollbackSystem,
   saveUpdatePolicy,
   type ChangelogEntry,
+  type ManualUpdateCommand,
   type ReleaseEntry,
   type SystemVersion,
   type UpdateCheckResponse,
@@ -324,6 +338,10 @@ const updating = ref(false);
 const savingPolicy = ref(false);
 const policy = ref<UpdatePolicy>({ channel: "release", auto_download: true, auto_install: false, github_mirror: "direct" });
 const operationError = ref("");
+// 最近一次失败响应带回的兜底命令；状态轮询发现的失败没有响应体，退回版本接口给的那份。
+const failedManualUpdate = ref<ManualUpdateCommand | null>(null);
+const manualUpdate = computed(() => failedManualUpdate.value ?? version.value?.manual_update ?? null);
+watch(operationError, (value) => { if (!value) failedManualUpdate.value = null; });
 let statusPollTimer: number | undefined;
 const installTracking = ref(false);
 let installTarget = "";
@@ -618,6 +636,7 @@ async function downloadUpdate(force = false): Promise<void> {
       : result.downloaded ? `${result.target_commit || "新版本"} 已下载并通过校验，等待安装并重启` : "已是当前通道最新版本");
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "下载更新失败";
+    failedManualUpdate.value = manualUpdateFromError(error);
     toastError(operationError.value);
   } finally {
     window.clearInterval(progressTimer);
@@ -644,6 +663,7 @@ async function confirmInstall(): Promise<void> {
     toastSuccess(`已开始安装并重启 ${result.target_commit || target}`);
   } catch (error) {
     operationError.value = error instanceof Error ? error.message : "安装并重启失败";
+    failedManualUpdate.value = manualUpdateFromError(error);
     toastError(operationError.value);
   } finally {
     updating.value = false;
@@ -787,6 +807,7 @@ async function pollDockerUpdateResult(): Promise<void> {
 
 async function update(): Promise<void> {
   updating.value = true;
+  operationError.value = "";
   try {
     const result = await pullFromGitHub();
     status.value = result.status;
@@ -807,7 +828,9 @@ async function update(): Promise<void> {
     if (checkResult.value) checkResult.value.update_available = false;
     emit("checked", false);
   } catch (error) {
-    toastError(error instanceof Error ? error.message : "更新失败");
+    operationError.value = error instanceof Error ? error.message : "更新失败";
+    failedManualUpdate.value = manualUpdateFromError(error);
+    toastError(operationError.value);
   } finally {
     updating.value = false;
   }
@@ -890,6 +913,17 @@ async function rollback(target: string): Promise<void> {
     toastError(error instanceof Error ? error.message : "版本回退失败");
   } finally {
     updating.value = false;
+  }
+}
+
+async function copyManualUpdate(): Promise<void> {
+  const command = manualUpdate.value?.command;
+  if (!command) return;
+  try {
+    await navigator.clipboard.writeText(command);
+    toastSuccess("已复制更新命令");
+  } catch {
+    toastError("复制失败，请手动选中命令复制");
   }
 }
 
@@ -1018,6 +1052,11 @@ a.version-hero-integrity:hover {
 .release-progress-label { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
 .release-progress-track { height: 7px; overflow: hidden; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-2); }
 .release-progress-track span { display: block; height: 100%; min-width: 2px; background: var(--accent); transition: width 180ms ease; }
+.manual-update { display: grid; gap: 6px; font-size: 12.5px; }
+.manual-update p { margin: 0; }
+.manual-update-note { color: var(--muted); font-size: 12px; }
+.manual-update-command { display: flex; align-items: center; gap: 6px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); }
+.manual-update-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; user-select: all; font-size: 11.5px; }
 .operation-error { margin: 0; padding: 10px; white-space: pre-wrap; color: var(--err); border: 1px solid var(--err); background: var(--err-soft); font-size: 11.5px; }
 
 .update-bar {
