@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
+	"strings"
 	"time"
 	"unicode/utf8"
 )
@@ -27,18 +27,13 @@ func BoxCommandSchema() map[string]any {
 }
 
 // RunBoxCommand 在 box 里跑一条命令，结果照 #1568 的 Pi 规则分页：装不下给尾部整行，
-// 完整输出存进 box 的 /work/.output/，模型在容器里按行读。
+// 写明一共多少行、给了哪几行、怎么续读。完整输出一直留在容器的 /work/.output/ 里，
+// 宿主机只读回尾部窗口，命令刷出多少都不落宿主机磁盘。
 func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time.Duration) (string, error) {
 	if command == "" {
 		return "", errors.New("command is required")
 	}
-	output, err := os.CreateTemp("", "diana-box-output-*")
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = os.Remove(output.Name()) }()
-	defer func() { _ = output.Close() }()
-	res, err := b.Exec(ctx, command, timeout, output)
+	res, err := b.Exec(ctx, command, timeout)
 	if err != nil {
 		return "", err
 	}
@@ -53,9 +48,17 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 	if err != nil {
 		return "", err
 	}
-	page, err := pageCommandOutput(output, toolBudget(ctx), utf8.RuneCount(skeleton)+64, true, boxSpill(ctx, b))
+	budget, overhead := toolBudget(ctx), utf8.RuneCount(skeleton)+64
+	tail, start, size, lines, err := b.OutputTail(ctx, res.OutputPath, outputTailWindow(budget, overhead))
 	if err != nil {
 		return "", err
+	}
+	avail := max(budget-overhead, 0)
+	text := string(tail)
+	page := commandOutputPage{Output: strings.ToValidUTF8(text, "\uFFFD")}
+	if start > 0 || TextCost(text, true) > avail {
+		howToRead := fmt.Sprintf("用 run_command 跑 sed -n '1,200p' %s 这类命令按行读，或用 rg 在里面查", res.OutputPath)
+		page = pageOutputTail(text, start, size, lines, avail, true, res.OutputPath, howToRead)
 	}
 	result["output"], result["truncated"] = page.Output, page.Truncated
 	if page.Truncated {
@@ -69,17 +72,4 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 		return "", errors.New(string(body))
 	}
 	return string(body), nil
-}
-
-func boxSpill(ctx context.Context, b *WorkBox) commandOutputSpill {
-	return func(src *os.File) (string, string, error) {
-		if _, err := src.Seek(0, 0); err != nil {
-			return "", "", err
-		}
-		target, err := b.WriteFile(ctx, fmt.Sprintf("%s/%s.log", boxOutputDir, time.Now().Format("20060102-150405.000")), src)
-		if err != nil {
-			return "", "", err
-		}
-		return target, fmt.Sprintf("用 run_command 跑 sed -n '1,200p' %s 这类命令按行读，或用 rg 在里面查", target), nil
-	}
 }

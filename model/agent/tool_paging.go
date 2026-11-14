@@ -223,7 +223,7 @@ func pageCommandOutput(file *os.File, budget, overhead int, jsonField bool, spil
 	size := info.Size()
 	avail := max(budget-overhead, 0)
 	// 每个字至少一个字节、最多四个；读末尾 4*avail 字节足够装满预算。
-	window := int64(avail)*utf8.UTFMax + 1
+	window := outputTailWindow(budget, overhead)
 	start := max(size-window, 0)
 	if _, err := file.Seek(start, io.SeekStart); err != nil {
 		return commandOutputPage{}, err
@@ -236,13 +236,6 @@ func pageCommandOutput(file *os.File, budget, overhead int, jsonField bool, spil
 	if start == 0 && TextCost(text, jsonField) <= avail {
 		return commandOutputPage{Output: strings.ToValidUTF8(text, "�")}, nil
 	}
-	if start > 0 {
-		// 窗口开头多半落在一行中间，从下一行起算。
-		if i := strings.IndexByte(text, '\n'); i >= 0 && i+1 < len(text) {
-			text = text[i+1:]
-			start += int64(i + 1)
-		}
-	}
 	totalLines, err := countLines(file)
 	if err != nil {
 		return commandOutputPage{}, err
@@ -250,6 +243,24 @@ func pageCommandOutput(file *os.File, budget, overhead int, jsonField bool, spil
 	path, howToRead, err := spill(file)
 	if err != nil {
 		return commandOutputPage{}, err
+	}
+	return pageOutputTail(text, start, size, totalLines, avail, jsonField, path, howToRead), nil
+}
+
+// outputTailWindow 是按预算给尾部时最多要读的字节数：每个字最多四个字节。
+func outputTailWindow(budget, overhead int) int64 {
+	return int64(max(budget-overhead, 0))*utf8.UTFMax + 1
+}
+
+// pageOutputTail 把从第 start 字节起的尾部窗口 text 截成能装进 avail 字的整行，并写明
+// 一共多少行、给了哪几行、完整输出在 path、怎么读。size、totalLines 是完整输出的。
+func pageOutputTail(text string, start, size int64, totalLines, avail int, jsonField bool, path, howToRead string) commandOutputPage {
+	if start > 0 {
+		// 窗口开头多半落在一行中间，从下一行起算。
+		if i := strings.IndexByte(text, '\n'); i >= 0 && i+1 < len(text) {
+			text = text[i+1:]
+			start += int64(i + 1)
+		}
 	}
 	notice := func(firstLine int, from int64, partial string) string {
 		return fmt.Sprintf("输出共 %d 行、%d 字节，超过单次结果上限 %d 字，这里只给了最后第 %d–%d 行（从第 %d 字节起）%s。完整输出已存到 %s，%s。不要把这段当成全部输出。", totalLines, size, ToolOutputMaxChars, firstLine, totalLines, from, partial, path, howToRead)
@@ -266,7 +277,7 @@ func pageCommandOutput(file *os.File, budget, overhead int, jsonField bool, spil
 	if cut > 0 && text[cut-1] != '\n' {
 		partial = "（第一行只给了结尾）"
 	}
-	return commandOutputPage{Output: strings.ToValidUTF8(shown, "�"), Truncated: true, FullOutputPath: path, Notice: notice(totalLines-shownLines+1, start+int64(cut), partial)}, nil
+	return commandOutputPage{Output: strings.ToValidUTF8(shown, "�"), Truncated: true, FullOutputPath: path, Notice: notice(totalLines-shownLines+1, start+int64(cut), partial)}
 }
 
 // countLines 数文件的行数，结尾没有换行的最后一段也算一行。

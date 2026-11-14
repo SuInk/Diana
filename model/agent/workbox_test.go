@@ -4,12 +4,13 @@
 package agent
 
 import (
-	"bytes"
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -91,30 +92,52 @@ func TestBoxRunArgsMatchYujiaxueIsolation(t *testing.T) {
 }
 
 func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
-	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
-		if !strings.Contains(boxFirewallScript, cidr) {
-			t.Fatalf("firewall must reject %s", cidr)
+	previous := boxHostAddresses
+	boxHostAddresses = func() ([]string, []string) { return []string{"203.0.113.7/32"}, []string{"2001:db8::7/128"} }
+	t.Cleanup(func() { boxHostAddresses = previous })
+	b := newWorkBox(testBoxConfig(), nil, "k")
+	args := b.firewallArgs()
+	v4, v6 := args[len(args)-2], args[len(args)-1]
+	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "203.0.113.7/32"} {
+		if !strings.Contains(v4, "-A OUTPUT -d "+cidr+" -j REJECT") {
+			t.Fatalf("IPv4 firewall must reject %s:\n%s", cidr, v4)
 		}
 	}
-	if !strings.Contains(boxFirewallScript, "-o lo -j ACCEPT") {
-		t.Fatal("firewall must keep loopback for Docker's embedded DNS")
+	for _, cidr := range []string{"fc00::/7", "fe80::/10", "::1/128", "2001:db8::7/128"} {
+		if !strings.Contains(v6, "-A OUTPUT -d "+cidr+" -j REJECT") {
+			t.Fatalf("IPv6 firewall must reject %s:\n%s", cidr, v6)
+		}
 	}
-	b := newWorkBox(testBoxConfig(), nil, "k")
-	args := strings.Join(b.firewallArgs(), " ")
+	for _, rules := range []string{v4, v6} {
+		// 整张 filter 表一次提交：以 *filter 开头、COMMIT 结尾，回环先放行，不靠先清空再追加。
+		if !strings.HasPrefix(rules, "*filter\n") || !strings.HasSuffix(rules, "COMMIT\n") || !strings.Contains(rules, "-A OUTPUT -o lo -j ACCEPT") {
+			t.Fatalf("rules must be one atomic iptables-restore table:\n%s", rules)
+		}
+	}
+	if !strings.Contains(boxFirewallScript, "iptables-restore") || !strings.Contains(boxFirewallScript, "ip6tables-restore") || strings.Contains(boxFirewallScript, " -F ") {
+		t.Fatalf("firewall must be applied with iptables-restore, not flush-and-append:\n%s", boxFirewallScript)
+	}
+	joined := strings.Join(args, " ")
 	for _, want := range []string{"--rm", "--network container:" + b.container, "--cap-drop ALL", "--cap-add NET_ADMIN"} {
-		if !strings.Contains(args, want) {
-			t.Fatalf("firewall args missing %q: %s", want, args)
+		if !strings.Contains(joined, want) {
+			t.Fatalf("firewall args missing %q: %s", want, joined)
 		}
 	}
 }
 
+// running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间。
+func boxInspectReply(image, id, started string) dockerResult {
+	return dockerResult{stdout: []byte("true " + image + " " + id + " " + started + "\n")}
+}
+
 func TestBoxEnsureLifecycle(t *testing.T) {
 	running := false
+	started := "2026-11-15T01:00:00Z"
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
 			if running {
-				return dockerResult{stdout: []byte("true " + BuiltinBoxImage() + "\n")}
+				return boxInspectReply(BuiltinBoxImage(), "c1", started)
 			}
 			return dockerResult{code: 1, stderr: "No such object"}
 		case "image":
@@ -134,17 +157,27 @@ func TestBoxEnsureLifecycle(t *testing.T) {
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"inspect", "image inspect", "image inspect", "build", "network inspect", "network create", "volume create", "run", "exec", "run firewall"}
+	// 防火墙在 mkdir 之前写：容器里还没跑过任何东西时出站就已经收紧。
+	want := []string{"inspect", "image inspect", "image inspect", "build", "network inspect", "network create", "volume create", "run", "inspect", "run firewall", "exec"}
 	if got := fake.verbs(); !slices.Equal(got, want) {
 		t.Fatalf("first ensure:\n got %v\nwant %v", got, want)
 	}
-	// 同一进程里第二次使用：容器在跑、镜像对、防火墙已写，只 inspect。
+	// 同一进程里第二次使用：容器还是写防火墙时那个，只 inspect。
 	fake.calls = nil
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := fake.verbs(); !slices.Equal(got, []string{"inspect"}) {
 		t.Fatalf("warm ensure: %v", got)
+	}
+	// 容器被外部重启（ID 不变、启动时间变了）：网络命名空间是新的，规则要重写。
+	started = "2026-11-15T02:00:00Z"
+	fake.calls = nil
+	if err := b.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "run firewall"}) {
+		t.Fatalf("restarted container must get its firewall again: %v", got)
 	}
 	// 新进程接手旧容器：不知道防火墙写没写，重写一遍。
 	fresh := newWorkBox(testBoxConfig(), fake.run, "k")
@@ -158,12 +191,18 @@ func TestBoxEnsureLifecycle(t *testing.T) {
 }
 
 func TestBoxEnsureRemovesContainerWhenFirewallFails(t *testing.T) {
+	running := false
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch {
 		case args[0] == "inspect":
+			if running {
+				return boxInspectReply(BuiltinBoxImage(), "c1", "2026-11-15T01:00:00Z")
+			}
 			return dockerResult{code: 1}
 		case args[0] == "run" && slices.Contains(args, "--rm"):
 			return dockerResult{code: 1, stderr: "iptables: permission denied"}
+		case args[0] == "run":
+			running = true
 		}
 		return dockerResult{}
 	}}
@@ -171,22 +210,21 @@ func TestBoxEnsureRemovesContainerWhenFirewallFails(t *testing.T) {
 	if err := b.Ensure(context.Background()); err == nil || !strings.Contains(err.Error(), "防火墙") {
 		t.Fatalf("want firewall error, got %v", err)
 	}
-	if got := fake.verbs(); got[len(got)-1] != "rm" {
-		t.Fatalf("networked box without firewall must be removed: %v", got)
+	got := fake.verbs()
+	if got[len(got)-1] != "rm" || slices.Contains(got, "exec") {
+		t.Fatalf("networked box without firewall must be removed before anything runs in it: %v", got)
 	}
 }
 
 func TestBoxEnsureRecreatesOnImageChange(t *testing.T) {
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		if args[0] == "inspect" {
-			return dockerResult{stdout: []byte("true diana-box:old\n")}
+			return boxInspectReply("diana-box:old", "c1", "2026-11-15T01:00:00Z")
 		}
 		return dockerResult{}
 	}}
 	b := newWorkBox(testBoxConfig(), fake.run, "k")
-	if err := b.Ensure(context.Background()); err != nil {
-		t.Fatal(err)
-	}
+	_ = b.Ensure(context.Background())
 	if got := fake.verbs(); len(got) < 2 || got[1] != "rm" {
 		t.Fatalf("stale image must be replaced: %v", got)
 	}
@@ -203,26 +241,37 @@ func TestBoxResetRemovesContainerAndVolume(t *testing.T) {
 	}
 }
 
-func TestBoxExecTimeoutAndCancel(t *testing.T) {
+func offlineTestBox(fake *fakeDocker) *WorkBox {
+	return newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run, "k")
+}
+
+// 124 才是 timeout 到点；137 可能是命令自己被 OOM 杀掉，不能报成超时。
+func TestBoxExecTimeoutCapAndExitCodes(t *testing.T) {
+	code := 124
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
-			return dockerResult{stdout: []byte("true x\n")}
+			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			if slices.Contains(args, boxExecScript) {
-				if args[len(args)-2] != "600" {
-					t.Errorf("timeout must be capped at 600s, got %s", args[len(args)-2])
+				if got := args[len(args)-4]; args[len(args)-3] == "sleep 9999" && got != "600" {
+					t.Errorf("timeout must be capped at 600s, got %s", got)
 				}
-				return dockerResult{code: 124, stdout: []byte("partial\n")}
+				if out := args[len(args)-2]; !strings.HasPrefix(out, boxOutputDir+"/") || !strings.HasSuffix(out, ".log") {
+					t.Errorf("full output must stay in the box, got %s", out)
+				}
+				return dockerResult{code: code}
 			}
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run, "k")
-	var out bytes.Buffer
-	res, err := b.Exec(context.Background(), "sleep 9999", time.Hour, &out)
-	if err != nil || !res.TimedOut || out.String() != "partial\n" {
-		t.Fatalf("res=%+v err=%v out=%q", res, err, out.String())
+	b := offlineTestBox(fake)
+	if res, err := b.Exec(context.Background(), "sleep 9999", time.Hour); err != nil || !res.TimedOut {
+		t.Fatalf("124: res=%+v err=%v", res, err)
+	}
+	code = 137
+	if res, err := b.Exec(context.Background(), "oom", 0); err != nil || res.TimedOut || res.ExitCode != 137 {
+		t.Fatalf("137: res=%+v err=%v", res, err)
 	}
 }
 
@@ -231,22 +280,73 @@ func TestBoxExecRecreatesVanishedContainerOnce(t *testing.T) {
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
-			return dockerResult{stdout: []byte("true x\n")}
+			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			if slices.Contains(args, boxExecScript) {
 				attempts++
 				if attempts == 1 {
 					return dockerResult{code: 1, stderr: "Error response from daemon: No such container: diana-box-x"}
 				}
-				return dockerResult{stdout: []byte("ok\n")}
 			}
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run, "k")
-	var out bytes.Buffer
-	if res, err := b.Exec(context.Background(), "true", 0, &out); err != nil || res.ExitCode != 0 || attempts != 2 {
+	if res, err := offlineTestBox(fake).Exec(context.Background(), "true", 0); err != nil || res.ExitCode != 0 || attempts != 2 {
 		t.Fatalf("res=%+v err=%v attempts=%d", res, err, attempts)
+	}
+}
+
+// 输出读回只要尾部窗口：头一行是总字节和总行数，后面是窗口内容，起点按两者推出来。
+func TestBoxOutputTail(t *testing.T) {
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		if args[0] == "exec" && slices.Contains(args, boxOutputTailScript) {
+			if args[len(args)-1] != "8" {
+				t.Errorf("window = %s", args[len(args)-1])
+			}
+			return dockerResult{stdout: []byte("100 12\nline-11\n")}
+		}
+		return dockerResult{}
+	}}
+	tail, start, size, lines, err := offlineTestBox(fake).OutputTail(context.Background(), "/work/.output/a.log", 8)
+	if err != nil || string(tail) != "line-11\n" || start != 92 || size != 100 || lines != 12 {
+		t.Fatalf("tail=%q start=%d size=%d lines=%d err=%v", tail, start, size, lines, err)
+	}
+}
+
+// 同一个 key 并发取 box 只能得到同一个实例，否则两把锁会交错建容器、写防火墙。
+func TestBoxForIsAtomic(t *testing.T) {
+	previous := boxProbe
+	boxProbe = func(BoxConfig) (dockerRunner, string) {
+		return func(context.Context, dockerCall) dockerResult { return dockerResult{} }, ""
+	}
+	boxAvailability.mu.Lock()
+	boxAvailability.checked = time.Time{}
+	boxAvailability.mu.Unlock()
+	t.Cleanup(func() {
+		boxProbe = previous
+		boxAvailability.mu.Lock()
+		boxAvailability.checked = time.Time{}
+		boxAvailability.mu.Unlock()
+		boxRegistry.Delete("concurrent")
+	})
+	var wg sync.WaitGroup
+	got := make([]*WorkBox, 64)
+	for i := range got {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b, err := BoxFor("concurrent")
+			if err != nil {
+				t.Error(err)
+			}
+			got[i] = b
+		}()
+	}
+	wg.Wait()
+	for _, b := range got {
+		if b != got[0] {
+			t.Fatal("concurrent BoxFor returned different boxes for one key")
+		}
 	}
 }
 
@@ -285,19 +385,24 @@ func TestBoxCopyOutEnforcesLimit(t *testing.T) {
 
 func TestBoxDaemonPolicy(t *testing.T) {
 	cases := []struct {
-		goos, info string
-		ok         bool
+		goos, host, security, osName string
+		ok                           bool
 	}{
-		{"linux", `["name=seccomp,profile=builtin","name=rootless"]|Ubuntu 24.04`, true},
-		{"linux", `["name=seccomp,profile=builtin"]|Ubuntu 24.04`, false},
-		{"android", `["name=seccomp"]|Debian`, false},
-		{"linux", `["name=seccomp"]|Docker Desktop`, true},
-		{"darwin", `["name=seccomp,profile=builtin","name=cgroupns"]|Docker Desktop`, true},
-		{"darwin", `["name=seccomp"]|Ubuntu 24.04 (colima)`, true},
+		{"linux", "unix:///run/user/1000/docker.sock", `["name=seccomp","name=rootless"]`, "Ubuntu 24.04", true},
+		{"linux", "unix:///var/run/docker.sock", `["name=seccomp"]`, "Ubuntu 24.04", false},
+		{"android", "unix:///data/docker.sock", `["name=seccomp"]`, "Debian", false},
+		{"linux", "unix:///run/desktop/docker.sock", `["name=seccomp"]`, "Docker Desktop", true},
+		{"darwin", "unix:///var/run/docker-desktop.sock", `["name=seccomp","name=cgroupns"]`, "Docker Desktop", true},
+		{"darwin", "unix:///var/run/colima.sock", `["name=seccomp"]`, "Ubuntu 24.04 LTS", true},
+		{"windows", "npipe:////./pipe/docker_engine", `["name=seccomp"]`, "Docker Desktop", true},
+		// 远端守护进程一律不用，哪怕是 macOS 上连过去、哪怕自称 rootless。
+		{"darwin", "tcp://10.0.0.5:2376", `["name=seccomp"]`, "Ubuntu 24.04", false},
+		{"darwin", "ssh://build@host", `["name=rootless"]`, "Ubuntu 24.04", false},
+		{"linux", "", `["name=rootless"]`, "Ubuntu 24.04", false},
 	}
 	for _, c := range cases {
-		if got := boxDaemonPolicy(c.goos, c.info) == ""; got != c.ok {
-			t.Fatalf("%s %s: ok=%v", c.goos, c.info, got)
+		if got := boxDaemonPolicy(c.goos, c.host, c.security, c.osName) == ""; got != c.ok {
+			t.Fatalf("%+v: ok=%v", c, got)
 		}
 	}
 }
@@ -330,12 +435,15 @@ func TestBoxRealDocker(t *testing.T) {
 	t.Cleanup(func() { _ = b.Reset(context.Background()) })
 	run := func(command string, timeout time.Duration) (BoxExecResult, string) {
 		t.Helper()
-		var out bytes.Buffer
-		res, err := b.Exec(ctx, command, timeout, &out)
+		res, err := b.Exec(ctx, command, timeout)
 		if err != nil {
 			t.Fatalf("%s: %v", command, err)
 		}
-		return res, out.String()
+		tail, _, _, _, err := b.OutputTail(ctx, res.OutputPath, 1<<20)
+		if err != nil {
+			t.Fatalf("%s: %v", command, err)
+		}
+		return res, string(tail)
 	}
 	if res, out := run(`id -u; env | sort | cut -d= -f1 | tr '\n' ' '; touch /etc/x 2>&1 | head -1`, 0); res.ExitCode != 0 || !strings.HasPrefix(out, "1000\n") || !strings.Contains(out, "Read-only") {
 		t.Fatalf("identity/readonly: %+v %q", res, out)
@@ -373,8 +481,26 @@ func TestBoxRealDocker(t *testing.T) {
 	if err != nil || !strings.Contains(body, `"truncated": true`) || !strings.Contains(body, "300000") || !strings.Contains(body, "/work/.output/") {
 		t.Fatalf("paged output: err=%v %.400s", err, body)
 	}
-	if _, out := run(`wc -l < /work/.output/*.log`, 0); strings.TrimSpace(out) != "300000" {
-		t.Fatalf("spilled output lines = %q", out)
+	var paged struct {
+		FullOutputPath string `json:"full_output_path"`
+	}
+	_ = json.Unmarshal([]byte(body), &paged)
+	if _, out := run(`wc -l < `+paged.FullOutputPath, 0); strings.TrimSpace(out) != "300000" {
+		t.Fatalf("full output lines in %q = %q", paged.FullOutputPath, out)
+	}
+	// 完整输出只留最新几份。
+	for range boxOutputKeep + 5 {
+		run(`true`, 0)
+	}
+	if _, out := run(`ls /work/.output | wc -l`, 0); strings.TrimSpace(out) != strconv.Itoa(boxOutputKeep) {
+		t.Fatalf("output rotation kept %q files", out)
+	}
+	// 容器被外部重启后网络命名空间是新的：下次使用前必须重写防火墙。
+	if res := docker(ctx, dockerCall{args: []string{"restart", "--time", "1", b.container}, timeout: time.Minute}); res.code != 0 {
+		t.Fatalf("restart: %s", res.stderr)
+	}
+	if _, out := run(`curl -s -m 5 -o /dev/null -w '%{http_code}' http://host.docker.internal:18080/; echo " $?"`, 0); !strings.HasPrefix(out, "000 ") {
+		t.Fatalf("firewall lost after external restart: %q", out)
 	}
 	if _, err := RunBoxCommand(ctx, b, `echo boom >&2; exit 3`, 0); err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), `"exit_code": 3`) {
 		t.Fatalf("failing command: %v", err)
@@ -452,7 +578,40 @@ func TestStopIdleBoxes(t *testing.T) {
 	if !slices.Equal(removed, want) {
 		t.Fatalf("removed %v, want %v", removed, want)
 	}
-	if idle.firewalled {
+	if idle.firewalledFor != "" {
 		t.Fatal("stopped box must re-apply its firewall next time")
+	}
+}
+
+// 回收方在锁外粗筛之后、动手之前，可能有命令刚开始：StopIfIdle / ResetIfIdle 在锁内
+// 再看一遍，忙着或刚用过就不动。
+func TestBoxIdleActionsRecheckUnderLock(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	var calls []string
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		calls = append(calls, args[0])
+		return dockerResult{}
+	}}
+	b := offlineTestBox(fake)
+	b.lastUsed.Store(now.Add(-time.Hour).UnixNano())
+	done := b.use() // 粗筛之后有命令开始了
+	if b.StopIfIdle(context.Background(), now, BoxIdleTimeout) {
+		t.Fatal("stopped a box with a running command")
+	}
+	if reset, _ := b.ResetIfIdle(context.Background()); reset {
+		t.Fatal("weekly reset wiped a box with a running command")
+	}
+	done()
+	if b.StopIfIdle(context.Background(), time.Now(), BoxIdleTimeout) {
+		t.Fatal("stopped a box that was just used")
+	}
+	if len(calls) != 0 {
+		t.Fatalf("busy box got docker calls: %v", calls)
+	}
+	if !b.StopIfIdle(context.Background(), time.Now().Add(BoxIdleTimeout+time.Minute), BoxIdleTimeout) {
+		t.Fatal("idle box was not stopped")
+	}
+	if reset, err := b.ResetIfIdle(context.Background()); !reset || err != nil {
+		t.Fatalf("idle box was not reset: %v", err)
 	}
 }

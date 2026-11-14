@@ -25,6 +25,13 @@ if [ "$(id -u)" = 0 ]; then
   done
   # Docker 按 root 设的 HOME 是 /root；编码 CLI 的登录态要落在数据卷里。
   export HOME=/app/data/home USER=diana LOGNAME=diana
+  # 工作区容器：挂进来的 rootless Docker socket 归宿主机上那个用户的组（0660），
+  # 降权时把这个组加给 diana，挂上 socket 就能用，不用另做镜像或改宿主权限。
+  box_host=${DIANA_BOX_DOCKER_HOST:-}
+  box_socket=${box_host#unix://}
+  if [ -n "$box_host" ] && [ "$box_socket" != "$box_host" ] && [ -S "$box_socket" ]; then
+    exec setpriv --reuid=diana --regid=diana --groups="$(stat -c %g "$box_socket")" -- "$@"
+  fi
   exec setpriv --reuid=diana --regid=diana --init-groups -- "$@"
 fi
 exec "$@"

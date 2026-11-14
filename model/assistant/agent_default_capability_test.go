@@ -195,3 +195,31 @@ func TestLegacyStepSettingIsIgnored(t *testing.T) {
 		t.Fatal("removed setting still serialized")
 	}
 }
+
+// 旧配置打开过「群成员可运行命令」的，升级后换算成「所有人」；没打开过的按默认仅主人。
+// 迁移后旧键不再输出。
+func TestLegacyMemberCommandSwitchMigratesToBoxAccess(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"agent_member_command_enabled":true}`:  BoxAccessAll,
+		`{"agent_member_command_enabled":false}`: BoxAccessOwner,
+		`{}`:                                     BoxAccessOwner,
+		`{"agent_member_command_enabled":true,"agent_box_access":"off"}`:   BoxAccessOff,
+		`{"agent_member_command_enabled":true,"agent_box_access":"owner"}`: BoxAccessOwner,
+	} {
+		var cfg BotConfig
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			t.Fatal(err)
+		}
+		migrated := cfg.WithDefaults()
+		if migrated.AgentBoxAccess != want {
+			t.Fatalf("%s → %q, want %q", raw, migrated.AgentBoxAccess, want)
+		}
+		body, err := json.Marshal(migrated)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), "agent_member_command_enabled") {
+			t.Fatalf("%s: legacy key still serialized: %s", raw, body)
+		}
+	}
+}

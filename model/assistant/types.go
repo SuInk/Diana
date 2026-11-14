@@ -1034,6 +1034,10 @@ type BotConfig struct {
 	// 默认）、all（所有人共用本会话的容器，照雨夹雪 tools.sandbox）。这台机器没有可用的
 	// 隔离运行时时哪一档都不提供，见 agent.BoxStatus。
 	AgentBoxAccess string `json:"agent_box_access,omitempty"`
+	// LegacyAgentMemberCommandEnabled 是旧的「群成员可运行命令」，只在加载时读：打开过的
+	// 换算成 AgentBoxAccess=all，随后清空，保存时不再输出。一次性迁移，2026-11-15 加入，
+	// 按迁移保留规则留到 2027-05-15 再删。
+	LegacyAgentMemberCommandEnabled bool `json:"agent_member_command_enabled,omitempty"`
 	// AgentFileWriteEnabled 打开 write_file / edit_file / save_to_workspace 和
 	// manage_files 的写操作，默认关闭。
 	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
@@ -2668,6 +2672,10 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SubtaskMaxConcurrency > maximumSubtaskMaxConcurrency {
 		cfg.SubtaskMaxConcurrency = maximumSubtaskMaxConcurrency
 	}
+	if cfg.LegacyAgentMemberCommandEnabled && strings.TrimSpace(cfg.AgentBoxAccess) == "" {
+		cfg.AgentBoxAccess = BoxAccessAll
+	}
+	cfg.LegacyAgentMemberCommandEnabled = false
 	cfg.AgentBoxAccess = NormalizeBoxAccess(cfg.AgentBoxAccess)
 	if cfg.AgentCommandTimeoutMS <= 0 {
 		cfg.AgentCommandTimeoutMS = defaults.AgentCommandTimeoutMS

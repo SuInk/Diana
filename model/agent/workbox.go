@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path"
@@ -192,25 +194,73 @@ func boxIsolationArgs(network bool, volume string) []string {
 	}
 }
 
-// boxFirewallScript 在 box 的网络命名空间里只放行公网：回环（Docker 内置 DNS
-// 127.0.0.11 走它）和已建立的连接放行，私网、宿主机（host.docker.internal 落在
-// 192.168.65.0/24 或 fdc4::/16）、Tailscale 100.64.0.0/10、链路本地、组播一律拒绝。
-// box 自己没有 NET_ADMIN，改不了这些规则。
+// box 出站只放行公网。拒绝的目标：私网、宿主机（Docker Desktop 的 host.docker.internal
+// 落在 192.168.65.0/24 或 fdc4::/16）、Tailscale 100.64.0.0/10、链路本地、组播，再加上
+// 宿主机自己的网卡地址（公网 IP 也算，见 boxHostAddresses）。回环放行：Docker 内置 DNS
+// 127.0.0.11 走它。box 自己没有 NET_ADMIN，改不了这些规则。
+var (
+	boxRejectV4 = []string{"0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15", "224.0.0.0/4", "240.0.0.0/4"}
+	boxRejectV6 = []string{"::/128", "::1/128", "::ffff:0:0/96", "64:ff9b::/96", "fc00::/7", "fe80::/10", "ff00::/8"}
+)
+
+// boxFirewallScript 用 iptables-restore 一次性替换整张 filter 表：新规则要么整体生效，
+// 要么不生效，不会像「先清空再逐条追加」那样有一段出站全开的窗口。nat 表不动，Docker
+// 内置 DNS 的转发规则在那里。
 const boxFirewallScript = `set -e
 PATH=/usr/sbin:/sbin:$PATH
-for t in iptables ip6tables; do
-  $t -w -P OUTPUT ACCEPT
-  $t -w -F OUTPUT
-  $t -w -A OUTPUT -o lo -j ACCEPT
-  $t -w -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-done
-for n in 0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.0.0.0/24 192.168.0.0/16 198.18.0.0/15 224.0.0.0/4 240.0.0.0/4; do
-  iptables -w -A OUTPUT -d "$n" -j REJECT
-done
-for n in ::/128 ::1/128 ::ffff:0:0/96 64:ff9b::/96 fc00::/7 fe80::/10 ff00::/8; do
-  ip6tables -w -A OUTPUT -d "$n" -j REJECT
-done
+printf '%s' "$1" | iptables-restore -w
+printf '%s' "$2" | ip6tables-restore -w
 `
+
+// boxFirewallRules 生成 iptables-restore 的输入。
+func boxFirewallRules(rejects []string) string {
+	var b strings.Builder
+	b.WriteString("*filter\n:INPUT ACCEPT [0:0]\n:FORWARD ACCEPT [0:0]\n:OUTPUT ACCEPT [0:0]\n-A OUTPUT -o lo -j ACCEPT\n")
+	for _, cidr := range rejects {
+		b.WriteString("-A OUTPUT -d " + cidr + " -j REJECT\n")
+	}
+	b.WriteString("COMMIT\n")
+	return b.String()
+}
+
+// boxHostAddresses 是宿主机网卡上的非回环地址，按 /32、/128 加进拒绝名单：宿主机的
+// 公网 IP 不在私网段里，不单独拦的话 box 能经它访问宿主机上监听 0.0.0.0 的服务。
+// Diana 自己跑在容器里时看到的是容器的网卡，拿不到宿主地址，见 docs/workbox.md。
+var boxHostAddresses = func() (v4, v6 []string) {
+	if isRunningInsideContainer() {
+		return nil, nil
+	}
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil, nil
+	}
+	for _, addr := range addrs {
+		prefix, err := netip.ParsePrefix(addr.String())
+		if err != nil || prefix.Addr().IsLoopback() {
+			continue
+		}
+		ip := prefix.Addr().Unmap()
+		if ip.Is4() {
+			v4 = append(v4, ip.String()+"/32")
+		} else {
+			v6 = append(v6, ip.WithZone("").String()+"/128")
+		}
+	}
+	return v4, v6
+}
+
+// isRunningInsideContainer 判断 Diana 自己是不是跑在容器里。
+func isRunningInsideContainer() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("DIANA_DEPLOYMENT")), "docker") {
+		return true
+	}
+	for _, marker := range []string{"/.dockerenv", "/run/.containerenv"} {
+		if _, err := os.Stat(marker); err == nil {
+			return true
+		}
+	}
+	return false
+}
 
 // WorkBox 是一个 work box：容器名和卷名由 key 决定。
 type WorkBox struct {
@@ -220,12 +270,13 @@ type WorkBox struct {
 	container string
 	volume    string
 
-	// lifecycle 串行化 ensure / reset / interrupt（= 雨夹雪的 exclusive）。
+	// lifecycle 串行化 ensure / reset / stop（= 雨夹雪的 exclusive）。
 	lifecycle sync.Mutex
-	// firewalled 表示本进程已经给当前这个容器写过防火墙：Diana 重启后接手旧容器时
-	// 不知道上一个进程有没有写完，所以每个进程第一次用都重写一遍（规则是幂等的）。
-	firewalled bool
-	running    atomic.Int32
+	// firewalledFor 是写防火墙时容器的「ID|启动时间」。规则活在容器的网络命名空间里，
+	// 容器被外部重启后就没了：复用前按 inspect 比对，对不上就重写。新进程接手旧容器时
+	// 它是空的，同样会重写一遍。
+	firewalledFor string
+	running       atomic.Int32
 	// lastUsed 是最近一次用 box 的时间（UnixNano），空闲回收按它判断。
 	lastUsed atomic.Int64
 }
@@ -269,6 +320,7 @@ func (b *WorkBox) runArgs() []string {
 }
 
 func (b *WorkBox) firewallArgs() []string {
+	hostV4, hostV6 := boxHostAddresses()
 	return []string{
 		"run", "--rm",
 		"--network", "container:" + b.container,
@@ -279,7 +331,9 @@ func (b *WorkBox) firewallArgs() []string {
 		"--user", "0:0",
 		"--entrypoint", "/bin/sh",
 		b.cfg.Image,
-		"-c", boxFirewallScript,
+		"-c", boxFirewallScript, "sh",
+		boxFirewallRules(append(append([]string(nil), boxRejectV4...), hostV4...)),
+		boxFirewallRules(append(append([]string(nil), boxRejectV6...), hostV6...)),
 	}
 }
 
@@ -290,20 +344,40 @@ func (b *WorkBox) Ensure(ctx context.Context) error {
 	return b.start(ctx)
 }
 
+// boxInspectFormat 一次取出复用判断要的全部字段。
+const boxInspectFormat = "{{.State.Running}} {{.Config.Image}} {{.Id}} {{.State.StartedAt}}"
+
+type boxContainerState struct {
+	exists, running bool
+	image, identity string
+}
+
+func (b *WorkBox) inspect(ctx context.Context) boxContainerState {
+	res := b.call(ctx, boxControlTimeout, "inspect", "--format", boxInspectFormat, b.container)
+	if res.code != 0 {
+		return boxContainerState{}
+	}
+	fields := strings.Fields(string(res.stdout))
+	if len(fields) != 4 {
+		return boxContainerState{exists: true}
+	}
+	return boxContainerState{exists: true, running: fields[0] == "true", image: fields[1], identity: fields[2] + "|" + fields[3]}
+}
+
 func (b *WorkBox) start(ctx context.Context) error {
-	state := b.call(ctx, boxControlTimeout, "inspect", "--format", "{{.State.Running}} {{.Config.Image}}", b.container)
-	if state.code == 0 && strings.TrimSpace(string(state.stdout)) == "true "+b.cfg.Image {
-		if b.firewalled || !b.cfg.Network {
+	state := b.inspect(ctx)
+	if state.running && state.image == b.cfg.Image {
+		if !b.cfg.Network || b.firewalledFor == state.identity {
 			return nil
 		}
-		if err := b.applyFirewall(ctx); err != nil {
+		if err := b.applyFirewall(ctx, state.identity); err != nil {
 			_ = b.call(ctx, boxControlTimeout, "rm", "--force", b.container)
 			return err
 		}
 		return nil
 	}
-	b.firewalled = false
-	if state.code == 0 {
+	b.firewalledFor = ""
+	if state.exists {
 		_ = b.call(ctx, boxControlTimeout, "rm", "--force", b.container)
 	}
 	if err := b.ensureImage(ctx); err != nil {
@@ -321,24 +395,28 @@ func (b *WorkBox) start(ctx context.Context) error {
 	if res := b.call(ctx, boxControlTimeout, b.runArgs()...); res.code != 0 {
 		return boxErrorf("工作区容器启动失败：%s", strings.TrimSpace(res.stderr))
 	}
-	if res := b.call(ctx, boxControlTimeout, "exec", b.container, "mkdir", "-p", BoxWorkDir+"/.home", boxInboxDir, boxOutputDir); res.code != 0 {
-		return boxErrorf("工作区初始化失败：%s", strings.TrimSpace(res.stderr))
-	}
 	if b.cfg.Network {
-		if err := b.applyFirewall(ctx); err != nil {
-			// 没写上防火墙的联网容器不能留着。
+		// 防火墙在任何别的东西进容器之前写上；没写上的联网容器不能留着。
+		started := b.inspect(ctx)
+		if err := b.applyFirewall(ctx, started.identity); err != nil {
 			_ = b.call(ctx, boxControlTimeout, "rm", "--force", b.container)
 			return err
 		}
 	}
+	if res := b.call(ctx, boxControlTimeout, "exec", b.container, "mkdir", "-p", BoxWorkDir+"/.home", boxInboxDir, boxOutputDir); res.code != 0 {
+		return boxErrorf("工作区初始化失败：%s", strings.TrimSpace(res.stderr))
+	}
 	return nil
 }
 
-func (b *WorkBox) applyFirewall(ctx context.Context) error {
+func (b *WorkBox) applyFirewall(ctx context.Context, identity string) error {
+	if identity == "" {
+		return boxErrorf("工作区容器状态读取失败，没有写防火墙")
+	}
 	if res := b.call(ctx, boxControlTimeout, b.firewallArgs()...); res.code != 0 {
 		return boxErrorf("工作区出站防火墙写入失败：%s", strings.TrimSpace(res.stderr))
 	}
-	b.firewalled = true
+	b.firewalledFor = identity
 	return nil
 }
 
@@ -391,19 +469,16 @@ func (b *WorkBox) ensureNetwork(ctx context.Context) error {
 	return nil
 }
 
-// Interrupt 杀掉容器，下次使用时重建（= 雨夹雪 interrupt）。
-func (b *WorkBox) Interrupt(ctx context.Context) {
-	b.lifecycle.Lock()
-	defer b.lifecycle.Unlock()
-	_ = b.call(ctx, boxControlTimeout, "kill", b.container)
-	b.firewalled = false
-}
-
 // Reset 删容器和卷（= 雨夹雪 reset/remove）。
 func (b *WorkBox) Reset(ctx context.Context) error {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
-	b.firewalled = false
+	return b.removeLocked(ctx)
+}
+
+// removeLocked 删容器和卷，调用方持有 lifecycle。
+func (b *WorkBox) removeLocked(ctx context.Context) error {
+	b.firewalledFor = ""
 	if res := b.call(ctx, boxControlTimeout, "rm", "--force", b.container); res.code != 0 {
 		if b.call(ctx, boxControlTimeout, "inspect", b.container).code == 0 {
 			return boxErrorf("工作区容器删除失败：%s", strings.TrimSpace(res.stderr))
@@ -428,28 +503,55 @@ func (b *WorkBox) use() func() {
 	}
 }
 
-// Stop 删掉容器、保留卷：空闲回收用，下次使用时重建，/work 里的东西还在。
-func (b *WorkBox) Stop(ctx context.Context) {
+// idleLocked 在持有 lifecycle 时复查没有操作在进行、且最近一次使用早于 now-idle。
+// 回收方先在锁外粗筛，真正动手前必须在锁内再看一遍：粗筛之后可能有命令刚开始。
+func (b *WorkBox) idleLocked(now time.Time, idle time.Duration) bool {
+	return b.running.Load() == 0 && now.Sub(time.Unix(0, b.lastUsed.Load())) >= idle
+}
+
+// StopIfIdle 删掉容器、保留卷：空闲回收用，下次使用时重建，/work 里的东西还在。
+func (b *WorkBox) StopIfIdle(ctx context.Context, now time.Time, idle time.Duration) bool {
 	b.lifecycle.Lock()
 	defer b.lifecycle.Unlock()
+	if !b.idleLocked(now, idle) {
+		return false
+	}
 	_ = b.call(ctx, boxControlTimeout, "rm", "--force", b.container)
-	b.firewalled = false
+	b.firewalledFor = ""
+	return true
 }
 
-// BoxExecResult 是一次命令的结果；输出合并 stdout/stderr 写在调用方给的 writer 里。
+// ResetIfIdle 是每周重置用的 Reset：有操作在进行时不动，等下一次检查。
+func (b *WorkBox) ResetIfIdle(ctx context.Context) (bool, error) {
+	b.lifecycle.Lock()
+	defer b.lifecycle.Unlock()
+	if b.running.Load() != 0 {
+		return false, nil
+	}
+	return true, b.removeLocked(ctx)
+}
+
+// BoxExecResult 是一次命令的结果；合并的 stdout/stderr 在容器里的 OutputPath。
 type BoxExecResult struct {
-	ExitCode int
-	TimedOut bool
-	Duration time.Duration
+	ExitCode   int
+	TimedOut   bool
+	Duration   time.Duration
+	OutputPath string
 }
 
-// boxExecScript 让 timeout 成为进程组长（GNU timeout 会 setpgid），记下它的 pid：超时
-// 由 timeout 自己杀整组；调用方取消时 Diana 照 pid 杀组。docker exec 客户端被杀并不会
-// 结束容器里的进程，这一步对应雨夹雪里 pi-env 的取消。
-const boxExecScript = `echo $$ > "/tmp/.run-$1" && exec timeout --kill-after=5 "$2" bash -c "$3" 2>&1`
+// boxOutputKeep 是 /work/.output 里最多留几份完整输出，更早的在下一条命令前删掉。
+const boxOutputKeep = 20
+
+// boxExecScript 先轮转 /work/.output，再让 timeout 成为进程组长（GNU timeout 会 setpgid）
+// 并记下它的 pid：超时由 timeout 自己杀整组；调用方取消时 Diana 照 pid 杀组。docker exec
+// 客户端被杀并不会结束容器里的进程，这一步对应雨夹雪里 pi-env 的取消。输出直接写进
+// 容器里的文件，宿主机这边事后只读尾部窗口。
+const boxExecScript = `mkdir -p /work/.output
+ls -1t /work/.output/*.log 2>/dev/null | tail -n +$5 | xargs -r -d '\n' rm -f --
+echo $$ > "/tmp/.run-$1" && exec timeout --kill-after=5 "$2" bash -c "$3" > "$4" 2>&1`
 
 // Exec 在 box 里用 bash 跑 command。
-func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duration, output io.Writer) (BoxExecResult, error) {
+func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duration) (BoxExecResult, error) {
 	if timeout <= 0 {
 		timeout = BoxCommandDefaultTimeout
 	}
@@ -460,10 +562,10 @@ func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duratio
 			return BoxExecResult{}, err
 		}
 		runID := randomBoxRunID()
+		outputPath := fmt.Sprintf("%s/%s-%s.log", boxOutputDir, time.Now().Format("20060102-150405"), runID[:6])
 		start := time.Now()
 		res := b.docker(ctx, dockerCall{
-			args:    []string{"exec", "--workdir", BoxWorkDir, b.container, "/bin/sh", "-c", boxExecScript, "sh", runID, strconv.Itoa(int(timeout / time.Second)), command},
-			stdout:  output,
+			args:    []string{"exec", "--workdir", BoxWorkDir, b.container, "/bin/sh", "-c", boxExecScript, "sh", runID, strconv.Itoa(int(timeout / time.Second)), command, outputPath, strconv.Itoa(boxOutputKeep)},
 			timeout: timeout + 15*time.Second,
 		})
 		duration := time.Since(start)
@@ -478,15 +580,46 @@ func (b *WorkBox) Exec(ctx context.Context, command string, timeout time.Duratio
 		// 容器中途没了（被重置、Docker 重启）：docker exec 自己报错，重建一次再跑。
 		if res.code != 0 && boxExecInfraFailure(res.stderr) {
 			if attempt == 0 {
-				b.lifecycle.Lock()
-				b.firewalled = false
-				b.lifecycle.Unlock()
 				continue
 			}
 			return BoxExecResult{}, boxErrorf("工作区容器不可用：%s", strings.TrimSpace(res.stderr))
 		}
-		return BoxExecResult{ExitCode: res.code, TimedOut: res.code == 124 || res.code == 137 || res.timedOut, Duration: duration}, nil
+		// 124 是 timeout 到点；137 也可能是命令自己被 OOM 杀掉，不能当成超时。
+		return BoxExecResult{ExitCode: res.code, TimedOut: res.code == 124 || res.timedOut, Duration: duration, OutputPath: outputPath}, nil
 	}
+}
+
+// boxOutputTailScript 输出「总字节 总行数」一行，再输出文件末尾最多 $2 字节。行数照
+// countLines：结尾没有换行的最后一段也算一行。
+const boxOutputTailScript = `f="$1"
+s=$(stat -c %s -- "$f") || exit 3
+l=$(wc -l < "$f")
+if [ "$s" -gt 0 ] && [ "$(tail -c 1 -- "$f" | wc -l)" -eq 0 ]; then l=$((l+1)); fi
+printf '%s %s\n' "$s" "$l"
+tail -c "$2" -- "$f"`
+
+// OutputTail 读容器里一份完整输出的末尾 window 字节，连同它的总字节数、总行数和窗口
+// 起点。整份输出不出容器。
+func (b *WorkBox) OutputTail(ctx context.Context, p string, window int64) (tail []byte, start, size int64, lines int, err error) {
+	defer b.use()()
+	var out bytes.Buffer
+	limited := &limitedWriter{w: &out, n: window + 64}
+	res := b.docker(ctx, dockerCall{
+		args:    []string{"exec", b.container, "/bin/sh", "-c", boxOutputTailScript, "sh", p, strconv.FormatInt(window, 10)},
+		stdout:  limited,
+		timeout: boxControlTimeout,
+	})
+	if res.code != 0 {
+		return nil, 0, 0, 0, boxErrorf("读取命令输出失败：%s", strings.TrimSpace(res.stderr))
+	}
+	header, body, ok := bytes.Cut(out.Bytes(), []byte("\n"))
+	if !ok {
+		return nil, 0, 0, 0, boxErrorf("读取命令输出失败：格式不对")
+	}
+	if _, err := fmt.Sscanf(string(header), "%d %d", &size, &lines); err != nil {
+		return nil, 0, 0, 0, boxErrorf("读取命令输出失败：%v", err)
+	}
+	return body, max(size-int64(len(body)), 0), size, lines, nil
 }
 
 func (b *WorkBox) killRun(runID string) {
@@ -649,11 +782,10 @@ const boxAvailabilityTTL = 30 * time.Second
 // boxProbe 返回 docker runner 或者不可用原因；测试里替换它。
 var boxProbe = probeBoxRuntime
 
-// probeBoxRuntime 检查 docker CLI 和守护进程，并按平台判断隔离够不够：
-//   - Linux（含 Docker 部署、Termux）：照雨夹雪，守护进程必须是 rootless，root 守护进程的
-//     socket 等于把宿主 root 交出去；
-//   - macOS / Windows：Docker Desktop、colima、OrbStack 的守护进程都在独立虚拟机里，
-//     容器逃逸也只到虚拟机，宿主回环由防火墙挡住。
+// probeBoxRuntime 找一个能用的 Docker 守护进程：部署方指定了 DIANA_BOX_DOCKER_HOST 就只
+// 试它；否则先试 docker CLI 的默认连接（DOCKER_HOST、DOCKER_CONTEXT 或当前上下文），
+// Linux 上再试 rootless 的默认 socket $XDG_RUNTIME_DIR/docker.sock。第一个连得上且
+// 过得了 boxDaemonPolicy 的胜出；都不行时报第一个的原因。
 func probeBoxRuntime(cfg BoxConfig) (dockerRunner, string) {
 	// 测试进程不碰本机 Docker（不然每周重置会去清开发机上的 box），只有显式要求的集成测试例外。
 	if testing.Testing() && os.Getenv("DIANA_BOX_DOCKER_TEST") != "1" {
@@ -663,21 +795,72 @@ func probeBoxRuntime(cfg BoxConfig) (dockerRunner, string) {
 	if err != nil {
 		return nil, "这台机器上找不到 docker CLI"
 	}
-	docker := execDocker(dockerBin, cfg.DockerHost)
+	hosts := []string{cfg.DockerHost}
+	if cfg.DockerHost == "" {
+		if socket := rootlessDockerSocket(); socket != "" {
+			hosts = append(hosts, "unix://"+socket)
+		}
+	}
+	firstReason := ""
+	for _, host := range hosts {
+		docker := execDocker(dockerBin, host)
+		reason := checkBoxDaemon(docker, host)
+		if reason == "" {
+			return docker, ""
+		}
+		if firstReason == "" {
+			firstReason = reason
+		}
+	}
+	return nil, firstReason
+}
+
+// rootlessDockerSocket 是 Linux 上 rootless Docker 的默认 socket，不存在时为空。
+func rootlessDockerSocket() string {
+	if runtime.GOOS != "linux" && runtime.GOOS != "android" {
+		return ""
+	}
+	dir := strings.TrimSpace(os.Getenv("XDG_RUNTIME_DIR"))
+	if dir == "" {
+		dir = fmt.Sprintf("/run/user/%d", os.Getuid())
+	}
+	socket := dir + "/docker.sock"
+	if info, err := os.Stat(socket); err != nil || info.Mode()&os.ModeSocket == 0 {
+		return ""
+	}
+	return socket
+}
+
+func checkBoxDaemon(docker dockerRunner, host string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	res := docker(ctx, dockerCall{args: []string{"info", "--format", "{{json .SecurityOptions}}|{{.OperatingSystem}}"}})
 	if res.code != 0 {
-		return nil, "连不上 Docker 守护进程：" + strings.TrimSpace(lastLines(res.stderr, 3))
+		return "连不上 Docker 守护进程：" + strings.TrimSpace(lastLines(res.stderr, 3))
 	}
-	if reason := boxDaemonPolicy(runtime.GOOS, string(res.stdout)); reason != "" {
-		return nil, reason
+	if host == "" {
+		// 没指定地址时问 CLI 自己实际连的是哪儿：DOCKER_HOST 优先，其次是当前上下文。
+		host = strings.TrimSpace(os.Getenv("DOCKER_HOST"))
+		if host == "" {
+			ctxRes := docker(ctx, dockerCall{args: []string{"context", "inspect", "--format", "{{.Endpoints.docker.Host}}"}})
+			host = strings.TrimSpace(string(ctxRes.stdout))
+		}
 	}
-	return docker, ""
+	security, osName, _ := strings.Cut(strings.TrimSpace(string(res.stdout)), "|")
+	return boxDaemonPolicy(runtime.GOOS, host, security, osName)
 }
 
-func boxDaemonPolicy(goos, info string) string {
-	security, osName, _ := strings.Cut(strings.TrimSpace(info), "|")
+// boxDaemonPolicy 判断这个守护进程够不够隔离：
+//   - 必须是本机 socket（unix:// 或 Windows 的 npipe://）。远端守护进程上，容器、防火墙
+//     和宿主地址都是另一台机器的事，Diana 判断不了；
+//   - rootless 守护进程可以（照雨夹雪）；
+//   - 否则只认守护进程跑在虚拟机里的情况：macOS、Windows 上的本机 socket 必然通往虚拟机
+//     （Docker Desktop、colima、OrbStack），Linux 上只认 Docker Desktop。Linux 原生 root
+//     守护进程的 socket 等于宿主 root，不用。
+func boxDaemonPolicy(goos, host, security, osName string) string {
+	if !strings.HasPrefix(host, "unix://") && !strings.HasPrefix(host, "npipe://") {
+		return fmt.Sprintf("工作区容器只用本机的 Docker 守护进程，当前连接的是 %q", host)
+	}
 	if strings.Contains(security, "name=rootless") {
 		return ""
 	}
@@ -714,15 +897,22 @@ func BoxFor(key string) (*WorkBox, error) {
 		return nil, boxErrorf("工作区容器不可用：%s", reason)
 	}
 	cfg := BoxConfigFromEnv()
-	if value, ok := boxRegistry.Load(key); ok {
+	// 同一个 key 只能有一个 WorkBox：两个实例各拿各的锁，会交错着建容器、写防火墙。
+	created := newWorkBox(cfg, docker, key)
+	for {
+		value, loaded := boxRegistry.LoadOrStore(key, created)
+		if !loaded {
+			return created, nil
+		}
 		existing := value.(*WorkBox)
 		if existing.cfg == cfg {
 			return existing, nil
 		}
+		// 部署方改了设置：换成新配置的实例；输给并发的替换方时重来一遍取它的。
+		if boxRegistry.CompareAndSwap(key, existing, created) {
+			return created, nil
+		}
 	}
-	created := newWorkBox(cfg, docker, key)
-	boxRegistry.Store(key, created)
-	return created, nil
 }
 
 // ---- 空闲回收 --------------------------------------------------------------------
@@ -758,10 +948,9 @@ func stopIdleBoxes(ctx context.Context, docker dockerRunner, now time.Time, idle
 		}
 		if value, ok := boxRegistry.Load(string(key)); ok {
 			b := value.(*WorkBox)
-			if b.container != name || b.Busy() || now.Sub(time.Unix(0, b.lastUsed.Load())) < idle {
-				continue
+			if b.container == name {
+				b.StopIfIdle(ctx, now, idle)
 			}
-			b.Stop(ctx)
 			continue
 		}
 		started, err := time.Parse(time.RFC3339Nano, startedText)
@@ -820,10 +1009,10 @@ func RunWeeklyBoxReset(ctx context.Context, now time.Time) {
 			continue
 		}
 		workBox, err := BoxFor(string(key))
-		if err != nil || workBox.volume != name || workBox.Busy() {
+		if err != nil || workBox.volume != name {
 			continue
 		}
-		_ = workBox.Reset(ctx)
+		_, _ = workBox.ResetIfIdle(ctx)
 	}
 }
 
@@ -870,7 +1059,8 @@ func minimalDockerClientEnv() []string {
 			env = append(env, "USERPROFILE="+home)
 		}
 	}
-	for _, key := range []string{"DOCKER_CONFIG", "SYSTEMROOT", "TEMP", "TMP"} {
+	// DOCKER_HOST / DOCKER_CONTEXT 决定 CLI 连哪个守护进程，rootless 部署常用它们指路。
+	for _, key := range []string{"DOCKER_CONFIG", "DOCKER_HOST", "DOCKER_CONTEXT", "XDG_RUNTIME_DIR", "SYSTEMROOT", "TEMP", "TMP"} {
 		if val := strings.TrimSpace(os.Getenv(key)); val != "" {
 			env = append(env, key+"="+val)
 		}

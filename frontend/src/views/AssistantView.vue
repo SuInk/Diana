@@ -2123,9 +2123,9 @@
                   </span>
                   <span class="hint">
                     run_command 在隔离的 Docker 容器里跑 bash：git clone、下载、grep、跑 Python / Node 脚本，产物用 send_file 发出。「所有人」时群成员也能用，同一个群共用一个容器。
-                    每个群、每个私聊各一个容器，/work 持久保存；空闲 15 分钟停掉容器（文件保留），每周一 05:00 和「清空上下文」时清空，也可以让机器人用 box_reset 清空。
+                    每个群、每个私聊各一个容器，每个最多 1 GB 内存、2 核，不设总数上限：选「所有人」时同时在用命令的群越多，同时跑的容器越多。/work 持久保存；空闲 15 分钟停掉容器（文件保留），每周一 05:00 和「清空上下文」时清空，也可以让机器人用 box_reset 清空。
                     容器里没有任何凭据，不挂宿主目录，只能访问公网，连不到本机和内网；单次命令默认 60 秒、最长 600 秒，内存 1 GB。
-                    需要 Docker（macOS 用 Docker Desktop / colima / OrbStack，Linux 只认 rootless Docker），Termux 不支持；第一次使用会在本机构建镜像，要等几分钟。
+                    需要本机的 Docker（macOS 用 Docker Desktop / colima / OrbStack，Linux 只认 rootless Docker，Docker 部署挂上 rootless socket 即可），Termux 不支持；第一次使用会在本机构建镜像，要等几分钟。
                     详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/workbox.md" target="_blank" rel="noopener">工作区容器说明</a>。
                   </span>
                 </div>
