@@ -2046,6 +2046,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.record(r.decisionEventRecord(event, text, "ignored_unavailable_group"))
 		return event, text, false, "ignored_unavailable_group"
 	}
+	event.Segments = promoteTextQQImageURLs(event.Segments)
 	event = r.enrichReplyReference(ctx, event)
 	event = r.enrichForwardMessages(ctx, event)
 	if !r.skipVoiceTranscriptionWhileMuted(event) {
