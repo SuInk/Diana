@@ -303,7 +303,8 @@ func githubThreadText(target githubTarget, issue githubIssueInfo, state, extra s
 		if index >= githubCommentsMaxCount {
 			break
 		}
-		if body := compactWhitespace(comment.Body); body != "" {
+		// 照参考实现只去掉首尾空白，评论里的换行原样保留。
+		if body := strings.TrimSpace(strings.ReplaceAll(comment.Body, "\r\n", "\n")); body != "" {
 			lines = append(lines, fmt.Sprintf("  %s: %s", comment.User.Login, githubTruncate(body, githubCommentMaxRunes)))
 		}
 	}

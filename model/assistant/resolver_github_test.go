@@ -82,7 +82,7 @@ func TestFormatGitHubIssueAndPull(t *testing.T) {
 	want := "acme/widget #9 [已关闭] Crash on empty input\n" +
 		"作者: alice · 评论: 3\n" +
 		"bug, help wanted\n" +
-		"  bob: 能复现 附日志\n" +
+		"  bob: 能复现\n\n附日志\n" +
 		"  carol: " + strings.Repeat("长", 119) + "…\n" +
 		"https://github.com/acme/widget/issues/9"
 	if got := formatGitHubIssue(target, issue, comments); got != want {
