@@ -60,11 +60,10 @@ type PersonalBrowserBridge interface {
 }
 
 type browserToolBase struct {
-	root     string
-	cdpURL   string
-	builtin  BuiltinBrowserBridge
-	timeout  time.Duration
-	maxChars int
+	root    string
+	cdpURL  string
+	builtin BuiltinBrowserBridge
+	timeout time.Duration
 	// session 记着这个对话正在操作哪个标签页。同一个对话的前后几轮共用一份（见
 	// Config.BrowserSessionKey），不同对话各用各的：两个群同时让机器人开网页，不会
 	// 一个刚打开、另一个就把同一页跳走。
@@ -231,7 +230,7 @@ func (t *BrowserOpenTool) Run(ctx context.Context, input map[string]any) (out st
 	if err := t.base.load(ctx, client, pageURL, newTab); err != nil {
 		return "", err
 	}
-	return t.base.pageSnapshot(ctx, client, "")
+	return t.base.pageSnapshot(ctx, client, "", 0)
 }
 
 func openRecovery(newTab bool) pageRecovery {
@@ -303,6 +302,7 @@ func (t *BrowserTextTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
 		"tab_id":   toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector": toolStringParam("CSS 选择器，默认整页"),
+		"offset":   toolIntParam("续读位置：上次结果没给完时照抄它的 next_offset；默认从头"),
 	})
 }
 
@@ -315,7 +315,7 @@ func (t *BrowserTextTool) Run(ctx context.Context, input map[string]any) (out st
 	if err := t.base.validatePersonalPage(ctx, client); err != nil {
 		return "", err
 	}
-	return t.base.pageSnapshot(ctx, client, stringFromInput(input, "selector"))
+	return t.base.pageSnapshot(ctx, client, stringFromInput(input, "selector"), intFromInput(input, "offset", 0))
 }
 
 type BrowserClickTool struct {
@@ -717,7 +717,21 @@ func (frame screenshotFrame) allowed(hosts []string) bool {
 	return true
 }
 
-func (b browserToolBase) pageSnapshot(ctx context.Context, client *cdpClient, selector string) (string, error) {
+// browserPageSnapshot 是读页面文字的结果。正文照 Pi 的做法按整行分页：装不下的留到
+// 下一页，next_offset 和 read_notice 写明怎么接着读。以前 innerText 直接截到上限，
+// 只标一个 truncated，模型不知道后面还有多少、怎么拿。
+type browserPageSnapshot struct {
+	URL        string `json:"url"`
+	Title      string `json:"title"`
+	Selector   string `json:"selector,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+	TotalChars int    `json:"total_chars"`
+	NextOffset int    `json:"next_offset,omitempty"`
+	ReadNotice string `json:"read_notice,omitempty"`
+	Text       string `json:"text"`
+}
+
+func (b browserToolBase) pageSnapshot(ctx context.Context, client *cdpClient, selector string, offset int) (string, error) {
 	if err := b.validatePersonalPage(ctx, client); err != nil {
 		return "", err
 	}
@@ -733,10 +747,9 @@ return {
   url: location.href,
   title: document.title,
   selector,
-  text: text.length > %d ? text.slice(0, %d) : text,
-  truncated: text.length > %d
+  text
 };
-})()`, selectorExpr, b.maxChars, b.maxChars, b.maxChars)
+})()`, selectorExpr)
 	client.navigationObserved.Store(false)
 	raw, err := client.evaluate(ctx, b.personalExpression(expr))
 	if err != nil {
@@ -748,7 +761,25 @@ return {
 	if b.personal != nil && client.navigationObserved.Load() {
 		return "", errors.New("读取期间页面发生跳转，请重读授权页面")
 	}
-	return string(raw), nil
+	var page browserPageSnapshot
+	if err := json.Unmarshal(raw, &page); err != nil {
+		return "", err
+	}
+	text := []rune(page.Text)
+	return pageByLines(text, offset, ToolOutputBudget(ctx), func(chunk string, end int) any {
+		out := page
+		out.Text, out.Offset, out.TotalChars = chunk, min(max(offset, 0), len(text)), len(text)
+		if end < len(text) {
+			out.NextOffset = end
+			args := map[string]any{"offset": end}
+			if selector != "" {
+				args["selector"] = selector
+			}
+			call, _ := json.Marshal(args)
+			out.ReadNotice = fmt.Sprintf("页面文字共 %d 字，这次给到第 %d 字，后面还有 %d 字没给。需要后面的内容就调 browser_text，参数 %s（同一标签页）。没读到的部分不能当成页面没写。", len(text), end, len(text)-end, call)
+		}
+		return out
+	})
 }
 
 func (b browserToolBase) pageClient(ctx context.Context, newTab bool, tabID ...string) (*cdpClient, error) {

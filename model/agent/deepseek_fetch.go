@@ -47,7 +47,7 @@ func DeepSeekFetchURLFor(searchURL string) string {
 
 // fetchDeepSeekPage 用 DeepSeek 读一页公网网页，返回和浏览器渲染同一形状的结果。
 // 整页按 URL 和 TinyFish 共用 15 分钟的缓存。
-func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string, maxChars int) (RenderedPage, error) {
+func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string) (RenderedPage, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return RenderedPage{}, fmt.Errorf("%w: API key is missing", errDeepSeekFetch)
@@ -58,7 +58,7 @@ func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	started := time.Now()
 	cacheKey := "deepseek:" + rawURL
 	if page, ok := tinyFishPages.get(cacheKey, started); ok {
-		return withTinyFishTextLimit(page, maxChars), nil
+		return page, nil
 	}
 	if strings.TrimSpace(endpoint) == "" {
 		endpoint = DeepSeekFetchURL
@@ -111,9 +111,6 @@ func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 	if full == "" {
 		return RenderedPage{}, fmt.Errorf("%w: empty_content", errDeepSeekFetch)
 	}
-	if runes := []rune(full); len(runes) > tinyFishFetchMaxChars {
-		full = string(runes[:tinyFishFetchMaxChars])
-	}
 	page := RenderedPage{
 		SourceType:      "deepseek_fetch",
 		SourceURLs:      []string{rawURL},
@@ -121,7 +118,7 @@ func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 		RequestedURL:    rawURL,
 		URL:             rawURL,
 		Title:           strings.TrimSpace(strings.Join(strings.Fields(decoded.Title), " ")),
-		FullText:        full,
+		Text:            full,
 		Links:           markdownPageLinks(full),
 		Images:          tinyFishImages(markdownMatches(markdownImagePattern, full, 1)),
 		BrowserEngine:   "deepseek",
@@ -130,7 +127,7 @@ func fetchDeepSeekPage(ctx context.Context, apiKey, endpoint, rawURL string, max
 		WaitedMS:        time.Since(started).Milliseconds(),
 	}
 	tinyFishPages.put(cacheKey, page, time.Now())
-	return withTinyFishTextLimit(page, maxChars), nil
+	return page, nil
 }
 
 func markdownMatches(pattern *regexp.Regexp, text string, group int) []string {
@@ -142,7 +139,7 @@ func markdownMatches(pattern *regexp.Regexp, text string, group int) []string {
 	return out
 }
 
-// markdownPageLinks 按出现顺序收正文里的链接，去锚点、去重，最多 maxRenderedPageLinks 条。
+// markdownPageLinks 按出现顺序收正文里的链接，去锚点、去重。
 func markdownPageLinks(text string) []RenderedLink {
 	links := []RenderedLink{}
 	seen := map[string]bool{}
@@ -150,9 +147,6 @@ func markdownPageLinks(text string) []RenderedLink {
 		link := tinyFishHTTPURL(raw)
 		if link == "" || seen[link] {
 			continue
-		}
-		if len(links) == maxRenderedPageLinks {
-			break
 		}
 		seen[link] = true
 		links = append(links, RenderedLink{URL: link})

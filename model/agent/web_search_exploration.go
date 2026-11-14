@@ -70,7 +70,14 @@ type webSearchBudget struct {
 }
 
 type webSearchResult struct {
-	Truncated     bool                      `json:"truncated,omitempty"`
+	// 分页字段见 web_search_page.go，放在最前面：单条过长被 Runner 硬截时续读方式
+	// 还在。Offset 是这一页从第几个位置起（先数命中，再数 content 的字），NextOffset
+	// 非零表示后面还有。
+	Offset        int                       `json:"offset,omitempty"`
+	TotalResults  int                       `json:"total_results"`
+	ContentChars  int                       `json:"content_chars,omitempty"`
+	NextOffset    int                       `json:"next_offset,omitempty"`
+	ReadNotice    string                    `json:"read_notice,omitempty"`
 	Results       []WebSearchHit            `json:"results,omitempty"`
 	Searches      []webSearchQueryResponse  `json:"searches,omitempty"`
 	RetrievedAt   string                    `json:"retrieved_at"`

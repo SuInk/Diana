@@ -139,8 +139,8 @@ func (p *WebSearchPlugin) Manifest() PluginManifest {
 			},
 			{
 				Key:         webSearchSettingMaxResults,
-				Label:       "每次结果上限",
-				Description: "每个搜索源最多返回的结果数量。",
+				Label:       "每次请求条数",
+				Description: "向支持条数参数的搜索 API 每次要多少条；拿到的结果全部交给模型，装不下时分页。",
 				Type:        PluginSettingTypeNumber,
 				Default:     5,
 				Min:         settingRange(1),
@@ -292,12 +292,11 @@ func (p *WebSearchPlugin) AgentTools(settings SettingValues) ([]agent.Tool, erro
 	}
 
 	tool, err := agent.NewWebSearchTool(agent.WebSearchToolOptions{
-		Config:         agent.WebSearchConfig{Providers: providers},
-		APIKeys:        apiKeys,
-		Timeout:        totalTimeout,
-		MaxOutputChars: agent.ToolOutputMaxChars,
-		Client:         p.client,
-		Renderer:       renderer,
+		Config:   agent.WebSearchConfig{Providers: providers},
+		APIKeys:  apiKeys,
+		Timeout:  totalTimeout,
+		Client:   p.client,
+		Renderer: renderer,
 	})
 	if err != nil {
 		return nil, err

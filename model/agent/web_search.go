@@ -32,7 +32,6 @@ const (
 
 type WebSearchTool struct {
 	timeout          time.Duration
-	maxBytes         int
 	maxQueries       int
 	maxProviderCalls int
 	configPath       string
@@ -40,6 +39,9 @@ type WebSearchTool struct {
 	providers        []WebSearchProviderConfig
 	apiKeys          map[string]string
 	renderer         PageRenderer
+	// pages 留着最近几次搜索的完整结果，翻页时直接取，不重新搜。为 nil 时不缓存，
+	// 翻页就重新搜一次。并行查询会复制 WebSearchTool，所以存指针。
+	pages *webSearchPages
 }
 
 // WebSearchToolOptions configures the search tool without exposing provider
@@ -48,7 +50,6 @@ type WebSearchToolOptions struct {
 	Config           WebSearchConfig
 	APIKeys          map[string]string
 	Timeout          time.Duration
-	MaxOutputChars   int
 	MaxQueries       int
 	MaxProviderCalls int
 	Client           *http.Client
@@ -72,8 +73,8 @@ func NewWebSearchTool(options WebSearchToolOptions) (*WebSearchTool, error) {
 	}
 	return &WebSearchTool{
 		timeout:          options.Timeout,
-		maxBytes:         options.MaxOutputChars,
 		maxQueries:       options.MaxQueries,
+		pages:            &webSearchPages{},
 		maxProviderCalls: options.MaxProviderCalls,
 		client:           options.Client,
 		providers:        append([]WebSearchProviderConfig(nil), config.Providers...),
@@ -170,13 +171,14 @@ func WebSearchInputSchema() map[string]any {
 		"queries": toolStringArrayParam("不同查证角度的候选，与 query 合计最多 10 个，按需并行，不必凑满；同样保留实体版本，不拼同义词、不降版本"),
 		"recency": toolNumberParam("可选，只要最近 N 天的结果；问新发布、最新版本时用"),
 		"domains": toolStringArrayParam("可选，只搜这些裸域名，如 blog.google；定位官方发布和文档"),
+		"offset":  toolIntParam("续读位置：上次结果没给完时照抄它的 next_offset，其余参数不变，直接取上次的结果不重新搜"),
 	})
 }
 
 // PrefersStrictDecoding constrains input shape, not factual conclusions.
 func (t *WebSearchTool) PrefersStrictDecoding() bool { return true }
 
-func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any) (string, error) {
+func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any) (webSearchResult, error) {
 	maxQueries := t.maxQueries
 	if maxQueries <= 0 {
 		maxQueries = defaultWebSearchMaxQueries
@@ -186,13 +188,13 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 	}
 	candidates, err := webSearchCandidates(input, maxQueries)
 	if err != nil {
-		return "", err
+		return webSearchResult{}, err
 	}
 	providers := append([]WebSearchProviderConfig(nil), t.providers...)
 	if len(providers) == 0 {
 		providers, err = t.loadProviders()
 		if err != nil {
-			return "", fmt.Errorf("web search configuration is invalid: %w", err)
+			return webSearchResult{}, fmt.Errorf("web search configuration is invalid: %w", err)
 		}
 	}
 
@@ -250,7 +252,7 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 	if usableProviders == 0 {
 		result.Status = "provider_error"
 		result.StopReason = "no_usable_provider"
-		return t.formatExplorationResult(result)
+		return finishExplorationResult(result), nil
 	}
 
 	var bestContent string
@@ -419,7 +421,7 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 		cancelRunning()
 		if found {
 			markWebSearchRemainder(result.Queries, result.Providers, queryIndex, "candidate_sources_found")
-			return t.formatExplorationResult(result)
+			return finishExplorationResult(result), nil
 		}
 		candidate.Outcome = candidateOutcome
 	}
@@ -452,7 +454,7 @@ func (t *WebSearchTool) runSearchQuery(ctx context.Context, input map[string]any
 		result.FallbackUsed = bestQueryIndex > 0 || bestProviderIndex > 0
 	}
 	markWebSearchRemainder(result.Queries, result.Providers, -1, result.StopReason)
-	return t.formatExplorationResult(result)
+	return finishExplorationResult(result), nil
 }
 
 func (t *WebSearchTool) loadProviders() ([]webSearchProviderConfig, error) {
@@ -1077,7 +1079,7 @@ func (t *WebSearchTool) runPerplexity(ctx context.Context, provider webSearchPro
 	return formatSearchAPIHits("Perplexity", hits)
 }
 
-// TinyFish 没有条数参数，一页固定约 10 条，本地截到 MaxResults。
+// TinyFish 没有条数参数，一页固定约 10 条，拿到多少给多少。
 func (t *WebSearchTool) runTinyFish(ctx context.Context, provider webSearchProviderConfig, query, apiKey string) (string, error) {
 	if apiKey == "" {
 		return "", errors.New("TinyFish API key is missing")
@@ -1106,9 +1108,6 @@ func (t *WebSearchTool) runTinyFish(ctx context.Context, provider webSearchProvi
 	}
 	hits := make([]searchAPIHit, 0, len(result.Results))
 	for _, item := range result.Results {
-		if len(hits) == provider.MaxResults {
-			break
-		}
 		hits = append(hits, searchAPIHit{Title: item.Title, URL: item.URL, Content: item.Snippet})
 	}
 	return formatSearchAPIHits("TinyFish", hits)
@@ -1200,120 +1199,16 @@ func (t *WebSearchTool) runBrave(ctx context.Context, provider webSearchProvider
 	return formatSearchAPIHits("Brave Search", hits)
 }
 
-func (t *WebSearchTool) formatExplorationResult(result webSearchResult) (string, error) {
+// finishExplorationResult 补上查询时间、来源阶段、候选编号和来源提示。条目不在这里
+// 裁剪：完整结果进缓存，交给模型时由 webSearchPage 按整条分页。
+func finishExplorationResult(result webSearchResult) webSearchResult {
 	result.RetrievedAt = time.Now().UTC().Format(time.RFC3339)
 	result.SourceStage = searchSourceStage(result)
 	for i := range result.Results {
 		result.Results[i].Ref = searchRef(result.Results[i].URL)
 	}
 	result.SourceNotice = "搜索结果可能来自转载或聚合页面，页面日期不一定是原始内容的真实发布时间。未核实原始来源时，不要据此断言发布时间或‘最新’。本次查询时间不是索引更新时间；搜索空结果不证明页面、版本或事件不存在。精确 URL 可能未收录，应直接读取官方页面或 API。"
-	maxChars := t.maxBytes
-	if maxChars <= 0 {
-		maxChars = ToolOutputMaxChars
-	}
-
-	contentRunes := []rune(strings.TrimSpace(result.Content))
-	result.Content = ""
-	best, err := json.Marshal(result)
-	if err != nil {
-		return "", err
-	}
-	// Preserve a valid JSON envelope. Snippets are the evidence the model
-	// answers from, so diagnostics and duplicated source lists go first;
-	// snippets are only shortened (never below searchSnippetFloor) before
-	// whole hits are dropped. Query outcomes in Searches stay visible longest.
-	for len([]rune(string(best))) > maxChars {
-		result.Truncated = true
-		changed := true
-		switch {
-		case len(result.Results) > 0 && len(result.Sources) > 0:
-			result.Sources = nil
-		case len(result.Providers) > 0:
-			result.Providers = nil
-		case len(result.Attempts) > 0:
-			result.Attempts = nil
-		case len(result.Queries) > 0:
-			result.Queries = nil
-		case shortenSearchSnippets(result.Results, searchSnippetFloor):
-		case len(result.Results) > 1:
-			result.Results = result.Results[:len(result.Results)-1]
-		case len(result.Sources) > 1:
-			result.Sources = result.Sources[:len(result.Sources)-1]
-		case len(result.Results) > 0:
-			result.Results = nil
-		case len(result.Sources) > 0:
-			result.Sources = nil
-		case result.SourceNotice != "":
-			result.SourceNotice = ""
-		case len(result.Searches) > 0:
-			result.Searches = result.Searches[:len(result.Searches)-1]
-		case result.SelectedQuery != "":
-			result.SelectedQuery = ""
-		default:
-			changed = false
-		}
-		if !changed {
-			break
-		}
-		best, err = json.Marshal(result)
-		if err != nil {
-			return "", err
-		}
-	}
-
-	if len(contentRunes) == 0 || len([]rune(string(best))) >= maxChars {
-		return string(best), nil
-	}
-
-	// JSON escaping can expand characters such as '<' to six bytes. Find the
-	// largest content prefix that fits the final serialized output instead of
-	// repeatedly estimating how much text to remove.
-	low, high := 1, min(len(contentRunes), maxChars)
-	for low <= high {
-		mid := low + (high-low)/2
-		result.Content = string(contentRunes[:mid])
-		if mid < len(contentRunes) {
-			result.Content += "\n...truncated..."
-		}
-		candidate, marshalErr := json.Marshal(result)
-		if marshalErr != nil {
-			return "", marshalErr
-		}
-		if len([]rune(string(candidate))) <= maxChars {
-			best = candidate
-			low = mid + 1
-		} else {
-			high = mid - 1
-		}
-	}
-	return string(best), nil
-}
-
-// searchSnippetFloor is the shortest a snippet gets before whole hits are
-// dropped: below roughly this length a snippet degrades to a title and URL
-// breadcrumb and no longer carries checkable detail.
-const searchSnippetFloor = 300
-
-// shortenSearchSnippets trims the longest snippets by a quarter, never below
-// floor, so budget pressure spreads over hits instead of erasing all of them.
-func shortenSearchSnippets(hits []WebSearchHit, floor int) bool {
-	longest := 0
-	for _, hit := range hits {
-		longest = max(longest, len([]rune(hit.Snippet)))
-	}
-	if longest <= floor {
-		return false
-	}
-	limit := max(floor, longest*3/4)
-	changed := false
-	for i := range hits {
-		runes := []rune(hits[i].Snippet)
-		if len(runes) > limit {
-			hits[i].Snippet = string(runes[:limit-1]) + "…"
-			changed = true
-		}
-	}
-	return changed
+	return result
 }
 
 func mergeWebSearchOutcome(current, next string) string {

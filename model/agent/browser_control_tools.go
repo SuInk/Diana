@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/SuInk/diana/model/browserctl"
 )
@@ -96,8 +97,7 @@ func (t *BrowserExtTabsTool) Run(ctx context.Context, input map[string]any) (str
 
 // BrowserExtReadTool 读取页面正文。
 type BrowserExtReadTool struct {
-	base     browserControlToolBase
-	maxChars int
+	base browserControlToolBase
 }
 
 func (t *BrowserExtReadTool) Name() string { return "browser_ext_read" }
@@ -111,27 +111,47 @@ func (t *BrowserExtReadTool) InputSchema() map[string]any {
 		"connection": toolStringParam("连着多个浏览器时点名"),
 		"tab_id":     toolIntParam("标签页 ID，默认当前活动页"),
 		"selector":   toolStringParam("CSS 选择器，默认整页"),
-		"max_chars":  toolIntParam("正文截断长度"),
+		"offset":     toolIntParam("续读位置：上次结果没给完时照抄它的 next_offset；默认从头"),
 	})
 }
 
 func (t *BrowserExtReadTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	connection, tabID := commonInput(input)
-	maxChars := intFromInput(input, "max_chars", t.maxChars)
-	if maxChars <= 0 || maxChars > t.maxChars {
-		maxChars = t.maxChars
-	}
+	selector := stringFromInput(input, "selector")
+	// 扩展不带 max_chars 时交回全文，这里按整行分页：以前让扩展截到上限，后面的
+	// 内容就拿不到了。
 	result, err := t.base.dispatch(ctx, browserctl.Command{
 		Op:         browserctl.OpPageRead,
 		Connection: connection,
 		TabID:      tabID,
-		Selector:   stringFromInput(input, "selector"),
-		MaxChars:   maxChars,
+		Selector:   selector,
 	})
 	if err != nil {
 		return "", err
 	}
-	return jsonOutput(result.Data)
+	var page browserPageSnapshot
+	if err := json.Unmarshal(result.Data, &page); err != nil {
+		return jsonOutput(result.Data)
+	}
+	offset := intFromInput(input, "offset", 0)
+	text := []rune(page.Text)
+	return pageByLines(text, offset, ToolOutputBudget(ctx), func(chunk string, end int) any {
+		out := page
+		out.Text, out.Offset, out.TotalChars = chunk, min(max(offset, 0), len(text)), len(text)
+		if end < len(text) {
+			out.NextOffset = end
+			args := map[string]any{"offset": end}
+			if selector != "" {
+				args["selector"] = selector
+			}
+			if tabID != 0 {
+				args["tab_id"] = tabID
+			}
+			call, _ := json.Marshal(args)
+			out.ReadNotice = fmt.Sprintf("页面文字共 %d 字，这次给到第 %d 字，后面还有 %d 字没给。需要后面的内容就调 browser_ext_read，参数 %s。没读到的部分不能当成页面没写。", len(text), end, len(text)-end, call)
+		}
+		return out
+	})
 }
 
 // BrowserExtOpenTool 在授权站点内导航。
@@ -249,7 +269,7 @@ func (r *ToolRegistry) RegisterBrowserControlTools(root string, cfg Config) {
 	}
 	base := browserControlToolBase{root: root, bridge: cfg.BrowserControl}
 	r.Register(&BrowserExtTabsTool{base: base})
-	r.Register(&BrowserExtReadTool{base: base, maxChars: ToolOutputMaxChars})
+	r.Register(&BrowserExtReadTool{base: base})
 	// 写操作的工具照样登记：能不能用由 browserctl 的策略逐条判断，
 	// 拒绝时给的是「当前只读」这种能让模型改做法的原因。
 	r.Register(&BrowserExtOpenTool{base: base})

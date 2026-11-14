@@ -24,8 +24,6 @@ type Command struct {
 	Text     string `json:"text,omitempty"`
 	// Submit 让 page.type 在输入后回车提交。
 	Submit bool `json:"submit,omitempty"`
-	// MaxChars 限制 page.read 返回的正文长度。
-	MaxChars int `json:"max_chars,omitempty"`
 	// NewTab 让 page.open 开新标签页而不是复用当前页。
 	NewTab bool `json:"new_tab,omitempty"`
 }

@@ -42,8 +42,7 @@ func TestSearchRefStableAndResultsCarryIt(t *testing.T) {
 	if searchRef("https://example.com/a?utm_source=x") != searchRef("https://example.com/a") || !strings.HasPrefix(searchRef("https://example.com/a"), "r") {
 		t.Fatal("ref should follow canonical URL")
 	}
-	tool := &WebSearchTool{}
-	raw, err := tool.formatExplorationResult(webSearchResult{Status: "ok", Results: []WebSearchHit{{URL: "https://example.com/a"}}})
+	raw, err := webSearchPage(finishExplorationResult(webSearchResult{Status: "ok", Results: []WebSearchHit{{URL: "https://example.com/a"}}}), nil, 0, ToolOutputMaxChars)
 	if err != nil || !strings.Contains(raw, `"ref":"`+searchRef("https://example.com/a")+`"`) {
 		t.Fatalf("ref missing: %s %v", raw, err)
 	}

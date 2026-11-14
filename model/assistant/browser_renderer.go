@@ -5,11 +5,13 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/applog"
@@ -224,6 +226,15 @@ func browserRenderableURL(rawURL string) bool {
 	}
 }
 
+// 预读进主回复上下文的第一页：正文和每个跳转前页面各给多少字。保持预读原来的量级
+// （正文 8000 字，跳转前页面列前 3 个、各 1200 字），主回复的上下文体积、缓存命中和费用不变；
+// 后面的部分写明用 browser_render 续读，是分页不是裁剪。
+const (
+	browserPrereadTextChars     = 8000
+	browserPrereadPreviousChars = 1200
+	browserPrereadPreviousPages = 3
+)
+
 func renderedPageContext(page agent.RenderedPage) string {
 	var builder strings.Builder
 	builder.WriteString("- 网页：")
@@ -239,6 +250,10 @@ func renderedPageContext(page agent.RenderedPage) string {
 		builder.WriteString(strings.Join(page.NavigationChain, " -> "))
 	}
 	for index, previous := range page.PreviousPages {
+		if index == browserPrereadPreviousPages {
+			builder.WriteString(fmt.Sprintf("\n  跳转前页面还有 %d 个没列出，在对 %s 调 browser_render 结果的 previous_pages 里", len(page.PreviousPages)-index, page.RequestedURL))
+			break
+		}
 		builder.WriteString(fmt.Sprintf("\n  跳转前页面 %d：%s", index+1, previous.URL))
 		if previous.Title != "" {
 			builder.WriteString("\n    标题：")
@@ -249,8 +264,12 @@ func renderedPageContext(page agent.RenderedPage) string {
 			builder.WriteString(previous.Description)
 		}
 		if previous.Text != "" {
+			text, next := agent.FirstTextPage(previous.Text, browserPrereadPreviousChars)
 			builder.WriteString("\n    可见正文：\n")
-			builder.WriteString(indentText(previous.Text, "    "))
+			builder.WriteString(indentText(text, "    "))
+			if total := utf8.RuneCountInString(previous.Text); next < total {
+				builder.WriteString(fmt.Sprintf("\n    状态：这一页正文共 %d 字，这里只给了前 %d 字；完整内容在对 %s 调 browser_render 结果的 previous_pages 里", total, next, page.RequestedURL))
+			}
 		}
 	}
 	if page.URL != "" && page.URL != page.RequestedURL {
@@ -266,11 +285,17 @@ func renderedPageContext(page agent.RenderedPage) string {
 		builder.WriteString(page.Description)
 	}
 	if page.Text != "" {
+		// 正文照 browser_render 的分页给第一页，后面的写明怎么续读，不截断了事。
+		text, next := agent.FirstTextPage(page.Text, browserPrereadTextChars)
 		builder.WriteString("\n  可见正文：\n")
-		builder.WriteString(indentText(page.Text, "  "))
+		builder.WriteString(indentText(text, "  "))
+		if total := utf8.RuneCountInString(page.Text); next < total {
+			call, _ := json.Marshal(map[string]any{"url": page.RequestedURL, "offset": next})
+			builder.WriteString(fmt.Sprintf("\n  状态：正文共 %d 字，这里只给了前 %d 字，后面 %d 字没给；需要就调 browser_render，参数 %s", total, next, total-next, call))
+		}
 	}
 	if page.Truncated {
-		builder.WriteString("\n  状态：正文已按安全上限截断")
+		builder.WriteString("\n  状态：网页超过下载上限，只读到了前面一部分")
 	}
 	if page.Stable {
 		builder.WriteString(fmt.Sprintf("\n  渲染状态：页面已稳定（等待 %dms，检测到 %d 次内容变化、%d 次 DOM 变化）", page.WaitedMS, page.ContentChanges, page.DOMChanges))

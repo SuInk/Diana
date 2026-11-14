@@ -18,7 +18,7 @@ import (
 
 func TestParseRenderedPageExtractsVisibleContent(t *testing.T) {
 	raw := []byte(`<!doctype html><html><head><title>测试站点</title><meta name="description" content="站点描述"><link rel="canonical" href="/home"></head><body><nav>导航</nav><main><section>仓库文件列表</section><article><nav>无关菜单</nav><div class="toc">无关目录</div><h1>欢迎</h1><script>secret()</script><p>动态正文</p><p hidden>隐藏内容</p></article></main></body></html>`)
-	page, err := parseRenderedPage(raw, "https://example.com/start", 1000, false)
+	page, err := parseRenderedPage(raw, "https://example.com/start", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestParseRenderedPageExpandsOnlyMatchingAbbreviatedTitle(t *testing.T) {
 		{"Short...", "Unrelated headline", "Short..."},
 		{"", "Fallback headline", "Fallback headline"},
 	} {
-		page, err := parseRenderedPage([]byte(`<title>`+tc.title+`</title><meta property="og:title" content="`+tc.og+`"><main>body</main>`), "https://example.com", 1000, false)
+		page, err := parseRenderedPage([]byte(`<title>`+tc.title+`</title><meta property="og:title" content="`+tc.og+`"><main>body</main>`), "https://example.com", false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -54,7 +54,7 @@ func TestParseRenderedPageDoesNotMistakeRecommendationForMainContent(t *testing.
 		`<body><article>Other topic</article><main><h1>Actual post</h1><p>Actual content</p></main></body>`,
 		`<body><main><main><h1>Actual post</h1><p>Actual content</p></main><article>Other topic</article></main></body>`,
 	} {
-		page, err := parseRenderedPage([]byte(raw), "https://example.com/post", 2000, false)
+		page, err := parseRenderedPage([]byte(raw), "https://example.com/post", false)
 		if err != nil {
 			t.Fatal(err)
 		}

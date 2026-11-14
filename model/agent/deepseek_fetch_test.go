@@ -76,14 +76,14 @@ func TestDeepSeekFetchReadsMarkdownLinksAndImages(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"title": " Intro ", "content": "# 标题\n![logo](https://1.1.1.1/a.png)\n见 [下一页](https://1.1.1.1/next#x) 和 [下一页](https://1.1.1.1/next)，[相对](/rel)"})
 	}))
 	defer server.Close()
-	page, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage, 1000)
+	page, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if page.Title != "Intro" || page.SourceType != "deepseek_fetch" || len(page.Links) != 1 || page.Links[0].URL != "https://1.1.1.1/next" || len(page.Images) != 1 || page.Images[0].URL != "https://1.1.1.1/a.png" {
 		t.Fatalf("page = %#v", page)
 	}
-	if _, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage, 1000); err != nil || calls.Load() != 1 {
+	if _, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage); err != nil || calls.Load() != 1 {
 		t.Fatalf("cache miss: calls=%d err=%v", calls.Load(), err)
 	}
 }
@@ -95,11 +95,11 @@ func TestDeepSeekFetchFailuresAreRecognizable(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"message":"no usable content","type":"invalid_request_error"}}`))
 	}))
 	defer server.Close()
-	_, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage, 1000)
+	_, err := fetchDeepSeekPage(context.Background(), "sk-ds", server.URL, tinyFishTestPage)
 	if !errors.Is(err, errDeepSeekFetch) || !strings.Contains(err.Error(), "404") || !strings.Contains(err.Error(), "no usable content") {
 		t.Fatalf("err = %v", err)
 	}
-	if _, err := fetchDeepSeekPage(context.Background(), "", server.URL, tinyFishTestPage, 1000); !errors.Is(err, errDeepSeekFetch) {
+	if _, err := fetchDeepSeekPage(context.Background(), "", server.URL, tinyFishTestPage); !errors.Is(err, errDeepSeekFetch) {
 		t.Fatalf("missing key err = %v", err)
 	}
 }

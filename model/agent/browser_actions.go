@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -694,7 +695,7 @@ func (t *BrowserNavigateTool) Run(ctx context.Context, input map[string]any) (ou
 	}
 	client.settle(ctx)
 	_ = client.waitReady(ctx)
-	return t.base.pageSnapshot(ctx, client, "")
+	return t.base.pageSnapshot(ctx, client, "", 0)
 }
 
 // ---- 下拉框 ----
@@ -711,10 +712,56 @@ func (t *BrowserSelectTool) Description() string {
 
 func (t *BrowserSelectTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"selector"}, map[string]any{
-		"selector": toolStringParam("<select> 的 CSS 选择器"),
-		"value":    toolStringParam("option 的 value"),
-		"label":    toolStringParam("option 的显示文字，与 value 二选一"),
+		"selector":       toolStringParam("<select> 的 CSS 选择器"),
+		"value":          toolStringParam("option 的 value"),
+		"label":          toolStringParam("option 的显示文字，与 value 二选一"),
+		"options_offset": toolIntParam("没找到选项时列出的候选没给完，照抄上次的 next_options_offset 接着看"),
 	})
+}
+
+// browserSelectMiss 是没找到选项时的结果：候选整条分页，装不下的照 next_options_offset
+// 续看。以前只列前 50 个。
+type browserSelectMiss struct {
+	OK                bool                `json:"ok"`
+	Error             string              `json:"error"`
+	OptionsOffset     int                 `json:"options_offset,omitempty"`
+	TotalOptions      int                 `json:"total_options"`
+	NextOptionsOffset int                 `json:"next_options_offset,omitempty"`
+	ReadNotice        string              `json:"read_notice,omitempty"`
+	Options           []map[string]string `json:"options"`
+}
+
+func browserSelectMissPage(raw []byte, offset, budget int) (string, bool) {
+	var miss browserSelectMiss
+	if json.Unmarshal(raw, &miss) != nil || miss.OK || len(miss.Options) == 0 {
+		return "", false
+	}
+	if budget <= 0 {
+		budget = ToolOutputMaxChars
+	}
+	all := miss.Options
+	offset = min(max(offset, 0), len(all))
+	encode := func(end int) (string, bool) {
+		page := miss
+		page.Options, page.OptionsOffset, page.TotalOptions = all[offset:end], offset, len(all)
+		if end < len(all) {
+			page.NextOptionsOffset = end
+			page.ReadNotice = fmt.Sprintf("候选共 %d 个，这次列到第 %d 个；要看后面的就带 options_offset=%d 再调一次。", len(all), end, end)
+		}
+		data, _ := json.Marshal(page)
+		return string(data), utf8.RuneCount(data) <= budget
+	}
+	lo, hi := offset+1, len(all)
+	for lo < hi {
+		mid := lo + (hi-lo+1)/2
+		if _, ok := encode(mid); ok {
+			lo = mid
+		} else {
+			hi = mid - 1
+		}
+	}
+	out, _ := encode(min(lo, len(all)))
+	return out, true
 }
 
 func (t *BrowserSelectTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
@@ -740,7 +787,7 @@ const value = %s, label = %s;
 const options = Array.from(el.options);
 const option = options.find(o => value !== "" ? o.value === value : o.text.trim() === label)
   || (label ? options.find(o => o.text.trim().includes(label)) : null);
-if (!option) return {ok:false, error:"option not found", options: options.slice(0, 50).map(o => ({value:o.value, label:o.text.trim()}))};
+if (!option) return {ok:false, error:"option not found", options: options.map(o => ({value:o.value, label:o.text.trim()}))};
 const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
 setter.call(el, option.value);
 el.dispatchEvent(new Event("input", {bubbles:true}));
@@ -750,6 +797,9 @@ return {ok:true, value: option.value, label: option.text.trim()};
 	raw, err := client.evaluate(ctx, expr)
 	if err != nil {
 		return "", err
+	}
+	if page, ok := browserSelectMissPage(raw, intFromInput(input, "options_offset", 0), ToolOutputBudget(ctx)); ok {
+		return page, nil
 	}
 	return string(raw), nil
 }
@@ -845,6 +895,94 @@ return true;
 
 type BrowserEvalTool struct {
 	base browserToolBase
+	// results 留着装不下的脚本结果，续读时按 result_id 取，不重跑脚本：脚本可能点按钮、
+	// 提交表单，跑第二遍不一定得到同一个结果。
+	results browserEvalResults
+}
+
+const (
+	browserEvalResultTTL     = 10 * time.Minute
+	browserEvalResultEntries = 16
+)
+
+type browserEvalResult struct {
+	text    []rune
+	created time.Time
+}
+
+// browserEvalResults 是 browser_eval 分页用的结果缓存。零值可用。
+type browserEvalResults struct {
+	mu      sync.Mutex
+	seq     int
+	entries map[string]browserEvalResult
+}
+
+func (r *browserEvalResults) put(text []rune) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	if r.entries == nil {
+		r.entries = map[string]browserEvalResult{}
+	}
+	oldest := ""
+	for id, entry := range r.entries {
+		if now.Sub(entry.created) > browserEvalResultTTL {
+			delete(r.entries, id)
+		} else if oldest == "" || entry.created.Before(r.entries[oldest].created) {
+			oldest = id
+		}
+	}
+	if len(r.entries) >= browserEvalResultEntries && oldest != "" {
+		delete(r.entries, oldest)
+	}
+	r.seq++
+	id := fmt.Sprintf("eval-%d", r.seq)
+	r.entries[id] = browserEvalResult{text: text, created: now}
+	return id
+}
+
+func (r *browserEvalResults) get(id string) ([]rune, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entry, ok := r.entries[id]
+	if !ok || time.Since(entry.created) > browserEvalResultTTL {
+		return nil, false
+	}
+	return entry.text, true
+}
+
+// browserEvalPage 是一次装不下的脚本结果的一页。
+type browserEvalPage struct {
+	ResultID   string `json:"result_id"`
+	Offset     int    `json:"offset,omitempty"`
+	TotalChars int    `json:"total_chars"`
+	NextOffset int    `json:"next_offset,omitempty"`
+	ReadNotice string `json:"read_notice,omitempty"`
+	Result     string `json:"result"`
+}
+
+// pagedResult 照 Pi 的做法分页：装得下原样返回，装不下的留在缓存里，按整行一页页给，
+// 并写明怎么接着读。以前直接截到上限，后面的结果就没了。
+func (t *BrowserEvalTool) pagedResult(ctx context.Context, id string, text []rune, offset int) (string, error) {
+	budget := ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = ToolOutputMaxChars
+	}
+	if id == "" {
+		if len(text) <= budget {
+			return string(text), nil
+		}
+		id = t.results.put(text)
+	}
+	return pageByLines(text, offset, budget, func(chunk string, end int) any {
+		page := browserEvalPage{Result: chunk, ResultID: id, Offset: min(max(offset, 0), len(text)), TotalChars: len(text)}
+		if end < len(text) {
+			page.NextOffset = end
+			call, _ := json.Marshal(map[string]any{"result_id": id, "offset": end})
+			page.ReadNotice = fmt.Sprintf("脚本结果共 %d 字，这次给到第 %d 字，后面还有 %d 字没给。接着读就调 browser_eval，参数 %s，不用再带 script，脚本不会重跑。", len(text), end, len(text)-end, call)
+		}
+		return page
+	})
 }
 
 func (t *BrowserEvalTool) Name() string { return "browser_eval" }
@@ -854,8 +992,10 @@ func (t *BrowserEvalTool) Description() string {
 }
 
 func (t *BrowserEvalTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"script"}, map[string]any{
+	return toolObjectSchema(nil, map[string]any{
 		"script":     toolStringParam("JS 表达式；多条语句包成 (() => {…; return x})()"),
+		"result_id":  toolStringParam("续读上次没给完的结果：照抄它的 result_id，配 offset，不填 script"),
+		"offset":     toolIntParam("续读位置，照抄上次结果的 next_offset"),
 		"timeout_ms": toolIntParam(fmt.Sprintf("默认浏览器超时，最多 %d", maxBrowserWaitMS)),
 	})
 }
@@ -863,6 +1003,13 @@ func (t *BrowserEvalTool) InputSchema() map[string]any {
 func (t *BrowserEvalTool) RepeatableCalls() bool { return true }
 
 func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (out string, err error) {
+	if id := stringFromInput(input, "result_id"); id != "" {
+		text, ok := t.results.get(id)
+		if !ok {
+			return "", fmt.Errorf("result_id %s 已过期或不存在（结果只留 %d 分钟）；需要的话重新执行脚本，并在脚本里只取需要的部分", id, int(browserEvalResultTTL.Minutes()))
+		}
+		return t.pagedResult(ctx, id, text, intFromInput(input, "offset", 0))
+	}
 	script := rawStringFromInput(input, "script")
 	if strings.TrimSpace(script) == "" {
 		return "", errors.New("script is required")
@@ -884,11 +1031,7 @@ func (t *BrowserEvalTool) Run(ctx context.Context, input map[string]any) (out st
 	// 常驻浏览器带着主人的登录态，脚本读 document.cookie 就能把会话 Cookie 原样交给
 	// 模型。当前页面的 Cookie 值在结果里一律只给掩码：模型要的是页面数据，不是会话。
 	result := maskCookieValues(string(raw), client.pageCookieValues(ctx))
-	if t.base.maxChars > 0 && utf8.RuneCountInString(result) > t.base.maxChars {
-		runes := []rune(result)
-		result = string(runes[:t.base.maxChars]) + fmt.Sprintf("\n…（结果共 %d 字，已截断；需要的话在脚本里只取需要的部分）", len(runes))
-	}
-	return result, nil
+	return t.pagedResult(ctx, "", []rune(result), 0)
 }
 
 // pageCookieValues 取当前页面能看到的 Cookie 值，包括 HttpOnly 的——脚本读不到它们，

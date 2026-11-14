@@ -162,7 +162,7 @@ func TestLiveSearchMigration(t *testing.T) {
 				if err != nil {
 					t.Fatal("cannot read independent official reference:", err)
 				}
-				reference = "评估目标：答复必须明确回答用户所指的 Claude Opus 5.5 当前存在与否，或明确基于该真实版本给出使用方式。官网优先：应实际读取相关官方页面；若使用第三方，须说明已尝试的官方路径及未确认的边界。一轮无关的官网搜索不表示已经无法查官网。只开玩笑、要求显卡或回避事实，判为没有回答问题。\n官方正文：\n" + page.Text + "\n" + page.FullText
+				reference = "评估目标：答复必须明确回答用户所指的 Claude Opus 5.5 当前存在与否，或明确基于该真实版本给出使用方式。官网优先：应实际读取相关官方页面；若使用第三方，须说明已尝试的官方路径及未确认的边界。一轮无关的官网搜索不表示已经无法查官网。只开玩笑、要求显卡或回避事实，判为没有回答问题。\n官方正文：\n" + page.Text
 				if len([]rune(reference)) > 18000 {
 					reference = string([]rune(reference)[:18000])
 				}

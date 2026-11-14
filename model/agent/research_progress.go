@@ -157,20 +157,42 @@ func researchFirstPartyLooking(host, raw string) bool {
 	return strings.Contains(path, "/docs/") || strings.Contains(path, "/release")
 }
 
+// webSearchModelView 是搜索成功时交给模型的那份：去掉只对排障有用的诊断字段
+// （providers、attempts、budget、queries、strategy、stop_reason、provider、provider_type、
+// fallback_used）。字段顺序和 webSearchResult 一致，分页字段在最前面；紧凑编码，
+// 不会比分页时量过的那份更长。
+type webSearchModelView struct {
+	Offset        int                      `json:"offset,omitempty"`
+	TotalResults  int                      `json:"total_results"`
+	ContentChars  int                      `json:"content_chars,omitempty"`
+	NextOffset    int                      `json:"next_offset,omitempty"`
+	ReadNotice    string                   `json:"read_notice,omitempty"`
+	Results       []WebSearchHit           `json:"results,omitempty"`
+	Searches      []webSearchQueryResponse `json:"searches,omitempty"`
+	RetrievedAt   string                   `json:"retrieved_at"`
+	SourceStage   string                   `json:"source_stage"`
+	SourceNotice  string                   `json:"source_notice,omitempty"`
+	Status        string                   `json:"status"`
+	Query         string                   `json:"query"`
+	SelectedQuery string                   `json:"selected_query,omitempty"`
+	Sources       []string                 `json:"sources,omitempty"`
+	Content       string                   `json:"content,omitempty"`
+}
+
 // webSearchOutputForModel 去掉搜索成功时只对排障有用的诊断字段。原始输出照旧进运行
 // 记录和可观测性元数据，这里只影响模型看到的那一份。
 func webSearchOutputForModel(output string) string {
-	var payload map[string]any
-	if json.Unmarshal([]byte(output), &payload) != nil {
+	var result webSearchResult
+	if json.Unmarshal([]byte(output), &result) != nil || result.Status != "ok" {
 		return output
 	}
-	if status, _ := payload["status"].(string); status != "ok" {
-		return output
-	}
-	for _, key := range []string{"providers", "attempts", "budget", "queries", "strategy", "stop_reason", "provider", "provider_type", "fallback_used"} {
-		delete(payload, key)
-	}
-	slim, err := json.MarshalIndent(payload, "", "  ")
+	slim, err := json.Marshal(webSearchModelView{
+		Offset: result.Offset, TotalResults: result.TotalResults, ContentChars: result.ContentChars,
+		NextOffset: result.NextOffset, ReadNotice: result.ReadNotice, Results: result.Results,
+		Searches: result.Searches, RetrievedAt: result.RetrievedAt, SourceStage: result.SourceStage,
+		SourceNotice: result.SourceNotice, Status: result.Status, Query: result.Query,
+		SelectedQuery: result.SelectedQuery, Sources: result.Sources, Content: result.Content,
+	})
 	if err != nil {
 		return output
 	}

@@ -40,7 +40,7 @@ func TestHTTPSearchGETAndPOSTMapResultsAndRespectLimits(t *testing.T) {
 			defer server.Close()
 			provider := WebSearchProviderConfig{Name: "custom", Type: "http", URL: server.URL + "?existing=keep", QueryParam: "q", ResultsParam: "limit", MaxResults: 2, HTTPConfig: &HTTPSearchConfig{Method: method, AuthType: "header", AuthHeader: "X-Search-Key", Params: map[string]any{"q": "must-be-overridden", "language": "zh"}, ResultsPath: "data.items", URLPath: "page.url", TitlePath: "page.name", SnippetPath: "summaries.0"}}
 			result := ProbeWebSearchProvider(context.Background(), provider, "嘉然 & updates", WebSearchToolOptions{APIKeys: map[string]string{"custom": "private-key"}})
-			if result.Error != "" || result.HTTPStatus != 200 || result.ResultCount != 2 || !strings.Contains(result.Content, "First") || strings.Contains(result.Content, "Beyond limit") || strings.Contains(result.Content, "private-key") {
+			if result.Error != "" || result.HTTPStatus != 200 || result.ResultCount != 3 || !strings.Contains(result.Content, "First") || !strings.Contains(result.Content, "Beyond limit") || strings.Contains(result.Content, "private-key") {
 				t.Fatalf("result=%+v", result)
 			}
 		})

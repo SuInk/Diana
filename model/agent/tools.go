@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -537,7 +538,6 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		cdpURL:   cfg.BrowserCDPURL,
 		builtin:  cfg.BuiltinBrowser,
 		timeout:  timeout,
-		maxChars: ToolOutputMaxChars,
 		session:  browserTabs.session(cfg.BrowserSessionKey),
 		tabs:     browserTabs,
 		personal: cfg.PersonalBrowser, allowedHosts: cfg.BrowserOperationHosts,
@@ -1880,6 +1880,11 @@ func intFromInput(input map[string]any, key string, fallback int) int {
 	case json.Number:
 		if parsed, err := value.Int64(); err == nil {
 			return int(parsed)
+		}
+	case string:
+		// 文本动作协议把参数值都当字符串传，"22600" 这样的续读位置也要认。
+		if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+			return parsed
 		}
 	}
 	return fallback

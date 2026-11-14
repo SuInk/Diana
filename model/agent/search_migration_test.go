@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -119,31 +121,45 @@ func TestSearchRedirectDecodesEscapedSeparators(t *testing.T) {
 	}
 }
 
-func TestParallelSearchLargeResultsFinishWithinOutputBudget(t *testing.T) {
+// 命中按整条分页：每页不超过上限，照抄 next_offset 读完能拿到全部命中，摘要不缩短。
+func TestWebSearchPageReturnsEveryHitAcrossPages(t *testing.T) {
 	result := webSearchResult{Status: "ok", Strategy: "parallel_queries"}
 	for i := 0; i < 32; i++ {
-		result.Results = append(result.Results, WebSearchHit{URL: "https://example.com/" + strings.Repeat("path", i+1), Title: strings.Repeat("title", 100), Snippet: strings.Repeat("长摘要<>\"", 200)})
+		result.Results = append(result.Results, WebSearchHit{URL: fmt.Sprintf("https://example.com/%d", i), Title: strings.Repeat("title", 10), Snippet: strings.Repeat("长摘要<>\"", 20)})
 	}
-	done := make(chan string, 1)
-	go func() {
-		raw, err := (&WebSearchTool{maxBytes: 2000}).formatExplorationResult(result)
-		if err != nil {
-			done <- err.Error()
-		} else {
-			done <- raw
+	args := map[string]any{"query": "q"}
+	seen := 0
+	for offset, calls := 0, 0; ; calls++ {
+		if calls > 40 {
+			t.Fatal("pagination did not finish")
 		}
-	}()
-	select {
-	case raw := <-done:
+		raw, err := webSearchPage(result, args, offset, 2000)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var got webSearchResult
 		if err := json.Unmarshal([]byte(raw), &got); err != nil {
 			t.Fatal(err)
 		}
-		if !got.Truncated || len([]rune(raw)) > 2000 || got.Status != "ok" {
-			t.Fatalf("invalid bounded result: %s", raw)
+		if len([]rune(raw)) > 2000 || got.TotalResults != 32 || got.Status != "ok" {
+			t.Fatalf("invalid page: %s", raw)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("search result formatting failed to terminate")
+		for _, hit := range got.Results {
+			if hit.Snippet != result.Results[seen].Snippet {
+				t.Fatalf("hit %d changed: %q", seen, hit.Snippet)
+			}
+			seen++
+		}
+		if got.NextOffset == 0 {
+			break
+		}
+		if !strings.Contains(got.ReadNotice, fmt.Sprintf(`"offset":%d`, got.NextOffset)) || !strings.Contains(got.ReadNotice, `"query":"q"`) {
+			t.Fatalf("notice does not say how to continue: %s", got.ReadNotice)
+		}
+		offset = got.NextOffset
+	}
+	if seen != 32 {
+		t.Fatalf("saw %d hits, want 32", seen)
 	}
 }
 
@@ -157,27 +173,45 @@ func TestParallelSearchBudgetPreservesEveryQuery(t *testing.T) {
 		}
 		return RenderedPage{URL: raw, Text: "Search results", Links: links}, nil
 	})
-	tool := searchEngineTestTool(t, renderer, "google")
-	tool.maxBytes = 5000
+	var renders atomic.Int32
+	counted := PageRendererFunc(func(ctx context.Context, raw string) (RenderedPage, error) {
+		renders.Add(1)
+		return renderer(ctx, raw)
+	})
+	tool := searchEngineTestTool(t, counted, "google")
 	queries := []string{"alpha", "beta", "gamma", "delta"}
-	raw, err := tool.Run(context.Background(), map[string]any{"queries": queries})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got webSearchResult
-	if err = json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatal(err)
-	}
-	represented := map[string]bool{}
-	for _, hit := range got.Results {
-		represented[hit.Query] = true
+	ctx := WithToolOutputBudget(context.Background(), 8000)
+	represented := map[string]int{}
+	for offset, calls := 0, 0; ; calls++ {
+		if calls > 40 {
+			t.Fatal("pagination did not finish")
+		}
+		raw, err := tool.Run(ctx, map[string]any{"queries": queries, "offset": offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got webSearchResult
+		if err = json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len([]rune(raw)) > 8000 || got.Budget.ProviderCalls != 4 {
+			t.Fatalf("invalid search page: %s", raw)
+		}
+		for _, hit := range got.Results {
+			represented[hit.Query]++
+		}
+		if got.NextOffset == 0 {
+			break
+		}
+		offset = got.NextOffset
 	}
 	for _, query := range queries {
-		if !represented[query] {
-			t.Fatalf("successful query %q lost its discovery hits: %s", query, raw)
+		if represented[query] != 8 {
+			t.Fatalf("query %q returned %d of 8 hits: %v", query, represented[query], represented)
 		}
 	}
-	if !got.Truncated || len([]rune(raw)) > 5000 || got.Budget.ProviderCalls != 4 {
-		t.Fatalf("invalid search budget: %s", raw)
+	// 翻页从缓存取，不重新搜索。
+	if renders.Load() != 4 {
+		t.Fatalf("renders = %d, want 4", renders.Load())
 	}
 }

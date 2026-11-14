@@ -70,7 +70,7 @@ func TestBrowserSearchEncodesQueryAndExtractsPublicResultLinks(t *testing.T) {
 		if err != nil || u.Query().Get("text") != "嘉然 & release" || u.Query().Get("lang") != "zh" {
 			t.Fatalf("query URL=%s", raw)
 		}
-		return parseRenderedPage([]byte(`<html><body><a href="/settings">Settings</a><a hidden href="https://hidden.example">Hidden</a><a href="/url?url=https%3A%2F%2Fexample.org%2Frelease"><h3>Official release</h3></a><a href="https://example.org/release">Duplicate</a><a href="https://news.example/article">News</a><a href="https://third.example">Third</a></body></html>`), raw, 10000, false)
+		return parseRenderedPage([]byte(`<html><body><a href="/settings">Settings</a><a hidden href="https://hidden.example">Hidden</a><a href="/url?url=https%3A%2F%2Fexample.org%2Frelease"><h3>Official release</h3></a><a href="https://example.org/release">Duplicate</a><a href="https://news.example/article">News</a><a href="https://third.example">Third</a></body></html>`), raw, false)
 	})
 	tool, err := NewWebSearchTool(WebSearchToolOptions{Config: WebSearchConfig{Providers: []WebSearchProviderConfig{{Name: "browser", Type: "browser", URL: "https://engine.example/search?lang=zh", QueryParam: "text", MaxResults: 2}}}, Renderer: renderer})
 	if err != nil {
@@ -80,7 +80,7 @@ func TestBrowserSearchEncodesQueryAndExtractsPublicResultLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "example.org/release") || !strings.Contains(output, "news.example/article") || strings.Contains(output, "hidden.example") || strings.Contains(output, "third.example") {
+	if !strings.Contains(output, "example.org/release") || !strings.Contains(output, "news.example/article") || strings.Contains(output, "hidden.example") || !strings.Contains(output, "third.example") {
 		t.Fatalf("output=%s", output)
 	}
 }
