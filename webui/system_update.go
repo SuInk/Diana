@@ -18,6 +18,7 @@ import (
 	"github.com/SuInk/diana/model/applog"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/ghmirror"
+	"github.com/SuInk/diana/model/storage"
 	"github.com/SuInk/diana/model/updater"
 
 	"github.com/gin-gonic/gin"
@@ -257,6 +258,9 @@ func (h *SystemUpdateHandler) version(c *gin.Context) {
 		payload["update_unsupported_reason"] = h.releaseUpdateSupport(false, false, false).Reason
 	}
 	payload["version_label"] = label
+	if manual := h.manualUpdate(payload["deployment_mode"] == "git"); manual != nil {
+		payload["manual_update"] = manual
+	}
 	c.JSON(http.StatusOK, payload)
 }
 
@@ -548,7 +552,7 @@ func (h *SystemUpdateHandler) download(c *gin.Context) {
 	}
 	result, err := h.downloadLatestRelease(c.Request.Context(), request.Force)
 	if err != nil {
-		h.writeUpdateError(c, "system_update_download", err)
+		h.writeManualUpdateError(c, "system_update_download", err)
 		return
 	}
 	message := "更新包已下载并校验"
@@ -577,12 +581,12 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 	}
 	status, err := h.releaseUpdater.Status(c.Request.Context())
 	if err != nil {
-		h.writeUpdateError(c, "system_update_install", err)
+		h.writeManualUpdateError(c, "system_update_install", err)
 		return
 	}
 	latest, err := h.latestChannelRelease(c.Request.Context(), "")
 	if err != nil {
-		h.writeUpdateError(c, "system_update_install", err)
+		h.writeManualUpdateError(c, "system_update_install", err)
 		return
 	}
 	if !downloadReadyForRelease(status, latest.Tag) {
@@ -596,7 +600,7 @@ func (h *SystemUpdateHandler) installDownloaded(c *gin.Context) {
 	}
 	result, err := h.releaseUpdater.InstallDownloaded(c.Request.Context())
 	if err != nil {
-		h.writeUpdateError(c, "system_update_install", err)
+		h.writeManualUpdateError(c, "system_update_install", err)
 		return
 	}
 	recordRequestOperation(c, h.logs, "system_update_install", "已开始安装并重启", result.TargetCommit, nil)
@@ -643,7 +647,7 @@ func (h *SystemUpdateHandler) update(c *gin.Context) {
 		result, err = h.applyLatestUpdate(c.Request.Context(), request.Force)
 	}
 	if err != nil {
-		h.writeUpdateError(c, action, err)
+		h.writeManualUpdateError(c, action, err)
 		return
 	}
 	message := "系统更新已执行"
@@ -1132,15 +1136,54 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 
 // writeUpdateError 记录系统更新错误并返回响应。
 func (h *SystemUpdateHandler) writeUpdateError(c *gin.Context, action string, err error) {
+	h.writeUpdateErrorWith(c, action, err, nil)
+}
+
+// writeManualUpdateError 用于真正动手更新（下载、安装、拉镜像）失败的情况：
+// 除了错误本身，再附上一段能照着执行的手动更新命令，用户不至于卡在一句报错上。
+func (h *SystemUpdateHandler) writeManualUpdateError(c *gin.Context, action string, err error) {
+	if errors.Is(err, updater.ErrUpdateInProgress) {
+		// 另一次更新还在跑，不算失败，不该劝用户手动重装。
+		h.writeUpdateError(c, action, err)
+		return
+	}
+	h.writeUpdateErrorWith(c, action, err, h.manualUpdate(h.gitDeployment(c.Request.Context())))
+}
+
+func (h *SystemUpdateHandler) writeUpdateErrorWith(c *gin.Context, action string, err error, manual *manualUpdateCommand) {
+	write := func(status int, err error) {
+		if manual == nil {
+			writeError(c, status, err)
+			return
+		}
+		c.JSON(status, gin.H{"error": err.Error(), "manual_update": manual})
+	}
 	if errors.Is(err, updater.ErrRemoteNotConfigured) || errors.Is(err, updater.ErrReleaseUpdateUnsupported) {
-		writeError(c, http.StatusBadRequest, errors.New("当前为 Release/Docker 部署，更新由部署环境的镜像更新器管理"))
+		write(http.StatusBadRequest, errors.New("当前为 Release/Docker 部署，更新由部署环境的镜像更新器管理"))
 		return
 	}
+	status := http.StatusBadRequest
 	if errors.Is(err, errInvalidUpdateVersion) {
-		logAndWriteError(c, h.logs, http.StatusInternalServerError, action, err, "", nil)
-		return
+		status = http.StatusInternalServerError
 	}
-	logAndWriteError(c, h.logs, http.StatusBadRequest, action, err, "", nil)
+	recordAppLog(c.Request.Context(), h.logs, storage.AppLogEntry{
+		Kind:    storage.LogKindError,
+		Level:   storage.LogLevelError,
+		Action:  action,
+		Message: err.Error(),
+		Detail:  err.Error(),
+		Actor:   requestActor(c),
+	})
+	write(status, err)
+}
+
+// gitDeployment 报告当前是否为源码（Git）部署，口径与版本接口的 deployment_mode 一致。
+func (h *SystemUpdateHandler) gitDeployment(ctx context.Context) bool {
+	if h.dockerDeployment || (h.releaseUpdater != nil && h.releaseUpdater.Supported()) {
+		return false
+	}
+	status, err := h.updater.Status(ctx)
+	return err == nil && status.RemoteURL != ""
 }
 
 // preferredVersionLabel 在编译版本号和仓库版本标签之间挑一个像版本号的。

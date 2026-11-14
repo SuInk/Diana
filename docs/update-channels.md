@@ -26,6 +26,8 @@ WebUI 回退会在切换版本前关闭并保存自动下载、自动安装策�
 
 自动下载、自动安装仍由各自开关控制。源码构建仍需显式选择切换。Docker 一键安装默认配置独立更新助手：WebUI 的手动更新按钮会请求助手拉取镜像并重建容器，「自动安装并重启」开关默认关闭，开启后后台每 30 分钟检查一次；未安装助手时仍由部署环境更新镜像。GitHub 不可用时现有静态清单回退可能只包含正式版，不能保证发现最新 Beta；恢复连接后重新检查。
 
+WebUI 里下载、安装或请求 Docker 更新失败时，失败提示下方会附一条手动更新命令并可一键复制：完整包部署按当前系统给 README 的一键安装命令（macOS/Linux Shell、Termux、Windows PowerShell 三选一，一键命令只装最新正式版），Docker 部署给 README 的 Docker 命令，并写出与所选通道一致的 `DIANA_IMAGE`（`latest`、`beta` 或 `canary`，沿用 `-slim`）。源码部署不给。命令只在 `webui/system_update_manual.go` 维护，测试逐字核对 README。
+
 ## 发布
 
 ### Canary
