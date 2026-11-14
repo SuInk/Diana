@@ -3,10 +3,14 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestHostAccessReadsOutsideWorkspaceAndRejectsNonOwner(t *testing.T) {
@@ -145,5 +149,55 @@ func TestHostAccessRechecksOwnerAfterConfigurationChange(t *testing.T) {
 	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "list", "path": t.TempDir()}); err == nil {
 		t.Fatal("former owner retained host access")
+	}
+}
+
+// read 按整行装进单次上限，next_offset 排在正文前面；照它一段段接着读，拼起来正好是
+// 整个文件，多字节字符也不会被切坏。以前 map 的键按字母序排，next_offset 落在被 Runner
+// 截掉的正文后面，续读不了。
+func TestHostAccessReadPagesWholeFile(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	path := filepath.Join(t.TempDir(), "big.log")
+	var want strings.Builder
+	for i := range 2000 {
+		fmt.Fprintf(&want, "第 %d 行 <日志> \"引号\"\n", i)
+	}
+	if err := os.WriteFile(path, []byte(want.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &hostAccessTool{runtime: hostAccessTestRuntime(t), event: identityCheckEvent("100001", "owner", "")}
+	ctx := agent.WithToolOutputBudget(context.Background(), 5000)
+	var got strings.Builder
+	offset := 0
+	for page := 0; page < 100; page++ {
+		out, err := tool.Run(ctx, map[string]any{"operation": "read", "path": path, "offset": offset})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if utf8.RuneCountInString(out) > 5000 {
+			t.Fatalf("page %d: %d 字超过上限", page, utf8.RuneCountInString(out))
+		}
+		if strings.Index(out, `"next_offset"`) > strings.Index(out, `"content"`) {
+			t.Fatalf("next_offset placed after content: %.200s", out)
+		}
+		var result struct {
+			Truncated  bool   `json:"truncated"`
+			NextOffset int    `json:"next_offset"`
+			Content    string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(out), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.Truncated && !strings.HasSuffix(result.Content, "\n") {
+			t.Fatalf("page %d not cut on a line boundary", page)
+		}
+		got.WriteString(result.Content)
+		if !result.Truncated {
+			break
+		}
+		offset = result.NextOffset
+	}
+	if got.String() != want.String() {
+		t.Fatalf("pages joined to %d bytes, want %d", got.Len(), want.Len())
 	}
 }

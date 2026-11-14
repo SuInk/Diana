@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,14 +35,14 @@ func newTestOwnerSessions(t *testing.T) *OwnerSessions {
 // 一个 shell 会话能来回输入、读到输出，退出码也能拿回来。
 func TestOwnerSessionRoundTrip(t *testing.T) {
 	m := newTestOwnerSessions(t)
-	started, err := m.Start(Config{}, "bot", ownerSessionShell(t), 0, nil)
+	started, err := m.Start(Config{}, "bot", ownerSessionShell(t), 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !started.Running || started.SessionID == "" {
 		t.Fatalf("Start() = %+v", started)
 	}
-	got, err := m.Send("bot", started.SessionID, "echo hello-$((40+2))", 5*time.Second, nil)
+	got, err := m.Send("bot", started.SessionID, "echo hello-$((40+2))", 5*time.Second, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,16 +50,16 @@ func TestOwnerSessionRoundTrip(t *testing.T) {
 		t.Fatalf("Send() output = %q", got.Output)
 	}
 	// 读过的不再重复给。
-	again, err := m.Read("bot", started.SessionID, 0, nil)
+	again, err := m.Read("bot", started.SessionID, 0, nil, 0)
 	if err != nil || again.Output != "" {
 		t.Fatalf("Read() = %+v, %v; want no repeated output", again, err)
 	}
-	if _, err := m.Send("bot", started.SessionID, "exit 3", time.Second, nil); err != nil {
+	if _, err := m.Send("bot", started.SessionID, "exit 3", time.Second, nil, 0); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		final, err := m.Read("bot", started.SessionID, 200*time.Millisecond, nil)
+		final, err := m.Read("bot", started.SessionID, 200*time.Millisecond, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -73,7 +74,7 @@ func TestOwnerSessionRoundTrip(t *testing.T) {
 		}
 	}
 	// 结束且读完的会话就此清掉。
-	if _, err := m.Read("bot", started.SessionID, 0, nil); err != ErrOwnerSessionNotFound {
+	if _, err := m.Read("bot", started.SessionID, 0, nil, 0); err != ErrOwnerSessionNotFound {
 		t.Fatalf("Read() after drain err = %v", err)
 	}
 }
@@ -81,14 +82,14 @@ func TestOwnerSessionRoundTrip(t *testing.T) {
 // 别的机器人看不到、也碰不了这个会话。
 func TestOwnerSessionIsolatedByOwner(t *testing.T) {
 	m := newTestOwnerSessions(t)
-	started, err := m.Start(Config{}, "bot-a", ownerSessionShell(t), 0, nil)
+	started, err := m.Start(Config{}, "bot-a", ownerSessionShell(t), 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Send("bot-b", started.SessionID, "echo hi", 0, nil); err != ErrOwnerSessionNotFound {
+	if _, err := m.Send("bot-b", started.SessionID, "echo hi", 0, nil, 0); err != ErrOwnerSessionNotFound {
 		t.Fatalf("Send() from other owner err = %v", err)
 	}
-	if _, err := m.Stop("bot-b", started.SessionID); err != ErrOwnerSessionNotFound {
+	if _, err := m.Stop("bot-b", started.SessionID, 0); err != ErrOwnerSessionNotFound {
 		t.Fatalf("Stop() from other owner err = %v", err)
 	}
 	if list := m.List("bot-b"); len(list) != 0 {
@@ -104,23 +105,23 @@ func TestOwnerSessionLimitsRunningSessions(t *testing.T) {
 	shell := ownerSessionShell(t)
 	ids := []string{}
 	for range OwnerSessionMaxRunning {
-		started, err := m.Start(Config{}, "bot", shell, 0, nil)
+		started, err := m.Start(Config{}, "bot", shell, 0, nil, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ids = append(ids, started.SessionID)
 	}
-	if _, err := m.Start(Config{}, "bot", shell, 0, nil); err == nil {
+	if _, err := m.Start(Config{}, "bot", shell, 0, nil, 0); err == nil {
 		t.Fatal("Start() beyond the limit succeeded")
 	}
 	// 另一个机器人有自己的名额。
-	if _, err := m.Start(Config{}, "other", shell, 0, nil); err != nil {
+	if _, err := m.Start(Config{}, "other", shell, 0, nil, 0); err != nil {
 		t.Fatalf("Start() for another owner: %v", err)
 	}
-	if _, err := m.Stop("bot", ids[0]); err != nil {
+	if _, err := m.Stop("bot", ids[0], 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.Start(Config{}, "bot", shell, 0, nil); err != nil {
+	if _, err := m.Start(Config{}, "bot", shell, 0, nil, 0); err != nil {
 		t.Fatalf("Start() after stopping one: %v", err)
 	}
 }
@@ -130,7 +131,7 @@ func TestOwnerSessionBoundsBufferedOutput(t *testing.T) {
 	m := newTestOwnerSessions(t)
 	shell := ownerSessionShell(t)
 	shell.Args = []string{"-c", "i=0; while [ $i -lt 6000 ]; do printf '%063d\\n' $i; i=$((i+1)); done; sleep 30"}
-	started, err := m.Start(Config{}, "bot", shell, 0, nil)
+	started, err := m.Start(Config{}, "bot", shell, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,19 +150,34 @@ func TestOwnerSessionBoundsBufferedOutput(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	first, err := m.Read("bot", started.SessionID, 0, nil)
-	if err != nil {
-		t.Fatal(err)
+	// 每次按整行装进预算，只有交出去的部分才算送达：连起来读完，中间一行不缺。
+	var outputs []string
+	var dropped int64
+	for i := 0; ; i++ {
+		got, err := m.Read("bot", started.SessionID, 0, nil, 6500)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			dropped = got.Dropped
+		}
+		if TextCost(got.Output, true) > 6500 {
+			t.Fatalf("read %d: output cost %d over budget", i, TextCost(got.Output, true))
+		}
+		if got.More && !strings.HasSuffix(got.Output, "\n") {
+			t.Fatalf("read %d not cut on a line boundary", i)
+		}
+		outputs = append(outputs, got.Output)
+		if !got.More {
+			break
+		}
 	}
-	if first.Dropped != 6000*64-ownerSessionBufferBytes || len(first.Output) != ownerSessionReadBytes || !first.More {
-		t.Fatalf("first read dropped=%d len=%d more=%v", first.Dropped, len(first.Output), first.More)
+	if dropped != 6000*64-ownerSessionBufferBytes || len(outputs) < 2 {
+		t.Fatalf("dropped=%d reads=%d", dropped, len(outputs))
 	}
-	second, err := m.Read("bot", started.SessionID, 0, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if second.Dropped != 0 || len(second.Output) != ownerSessionReadBytes {
-		t.Fatalf("second read dropped=%d len=%d", second.Dropped, len(second.Output))
+	all := strings.Join(outputs, "")
+	if len(all) != ownerSessionBufferBytes || !strings.HasSuffix(all, fmt.Sprintf("%063d\n", 5999)) {
+		t.Fatalf("joined reads lost data: %d bytes", len(all))
 	}
 }
 
@@ -171,7 +187,7 @@ func TestOwnerSessionReapsIdleSessions(t *testing.T) {
 	t.Cleanup(m.Close)
 	shell := ownerSessionShell(t)
 	shell.Args = []string{"-c", "sleep 30"}
-	started, err := m.Start(Config{}, "bot", shell, 0, nil)
+	started, err := m.Start(Config{}, "bot", shell, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +213,7 @@ func TestOwnerSessionCloseStopsEverything(t *testing.T) {
 	m := NewOwnerSessions()
 	shell := ownerSessionShell(t)
 	shell.Args = []string{"-c", "sleep 30"}
-	started, err := m.Start(Config{}, "bot", shell, 0, nil)
+	started, err := m.Start(Config{}, "bot", shell, 0, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +224,7 @@ func TestOwnerSessionCloseStopsEverything(t *testing.T) {
 	default:
 		t.Fatal("Close() returned with the session still running")
 	}
-	if _, err := m.Start(Config{}, "bot", shell, 0, nil); err == nil {
+	if _, err := m.Start(Config{}, "bot", shell, 0, nil, 0); err == nil {
 		t.Fatal("Start() after Close succeeded")
 	}
 }
@@ -222,7 +238,7 @@ func TestOwnerSessionRejectsChangedPath(t *testing.T) {
 		t.Skip(err)
 	}
 	shell.Command = link
-	if _, err := m.Start(Config{}, "bot", shell, 0, nil); err == nil {
+	if _, err := m.Start(Config{}, "bot", shell, 0, nil, 0); err == nil {
 		t.Fatal("Start() accepted an unresolved symlink")
 	}
 }

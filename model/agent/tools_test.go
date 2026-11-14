@@ -57,28 +57,12 @@ func TestSafePathRejectsEscapes(t *testing.T) {
 	}
 }
 
-// TestReadFileToolLimitsContent 验证对应功能场景。
-func TestReadFileToolLimitsContent(t *testing.T) {
-	root := t.TempDir()
-	writeTestFile(t, root, "a.txt", "abcdef")
-	tool := &ReadFileTool{root: root, maxBytes: 3}
-	got, err := tool.Run(context.Background(), map[string]any{"path": "a.txt"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// 结果不再包 JSON：字节上限照样生效，截断也照样说明，只是换成一行人话。
-	if !strings.Contains(got, "已在中途截断") || !strings.HasSuffix(got, "abc") {
-		t.Fatalf("unexpected output: %s", got)
-	}
-}
-
 // TestRunCommandToolRunsAllowedCommand 验证命令工具执行白名单命令并返回结构化结果。
 func TestRunCommandToolRunsAllowedCommand(t *testing.T) {
 	root := t.TempDir()
 	tool := &RunCommandTool{
-		root:     root,
-		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: ToolOutputMaxChars,
+		root:    root,
+		timeout: time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
 	}
 	got, err := tool.Run(context.Background(), map[string]any{"command": "go", "args": []any{"version"}})
 	if err != nil {
@@ -103,9 +87,8 @@ func TestRunCommandToolPreservesCompleteFailureOutput(t *testing.T) {
 	}
 	message := strings.Repeat("failure-output-", 80) + "tail-marker"
 	tool := &RunCommandTool{
-		root:     t.TempDir(),
-		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: 32,
+		root:    t.TempDir(),
+		timeout: time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
 	}
 	_, err := tool.Run(context.Background(), map[string]any{
 		"command": "sh",
@@ -127,42 +110,12 @@ func TestRunCommandToolPreservesCompleteFailureOutput(t *testing.T) {
 	}
 }
 
-func TestRunCommandToolStillLimitsSuccessfulOutput(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("requires sh")
-	}
-	message := strings.Repeat("success-output-", 20)
-	tool := &RunCommandTool{
-		root:     t.TempDir(),
-		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: 32,
-	}
-	got, err := tool.Run(context.Background(), map[string]any{
-		"command": "sh",
-		"args":    []any{"-c", `printf '%s' "$1"`, "sh", message},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var payload struct {
-		Truncated bool   `json:"truncated"`
-		Output    string `json:"output"`
-	}
-	if err := json.Unmarshal([]byte(got), &payload); err != nil {
-		t.Fatal(err)
-	}
-	if !payload.Truncated || len(payload.Output) != 32 {
-		t.Fatalf("payload = %#v", payload)
-	}
-}
-
 // TestRunCommandToolRejectsPathCommand 验证命令工具只接受程序名，不接受路径。
 func TestRunCommandToolRejectsPathCommand(t *testing.T) {
 	root := t.TempDir()
 	tool := &RunCommandTool{
-		root:     root,
-		timeout:  time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
-		maxBytes: ToolOutputMaxChars,
+		root:    root,
+		timeout: time.Duration(DefaultCommandTimeoutMS) * time.Millisecond,
 	}
 	if _, err := tool.Run(context.Background(), map[string]any{"command": "../go"}); err == nil {
 		t.Fatal("expected path command error")

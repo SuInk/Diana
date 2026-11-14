@@ -187,7 +187,7 @@ func TestGrepFindsMatchesAndRespectsGlob(t *testing.T) {
 	writeTestFile(t, root, "src/a.go", "package main\nfunc Target() {}\n")
 	writeTestFile(t, root, "src/b.ts", "const Target = 1\n")
 	writeTestFile(t, root, "notes.md", "Target 出现在文档里\n")
-	tool := &GrepTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &GrepTool{root: root}
 
 	out, err := tool.Run(context.Background(), map[string]any{"pattern": "Target"})
 	if err != nil {
@@ -211,7 +211,7 @@ func TestGrepFindsMatchesAndRespectsGlob(t *testing.T) {
 func TestGrepLiteralAndIgnoreCase(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "a.txt", "price is a.b\nPRICE\n")
-	tool := &GrepTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &GrepTool{root: root}
 
 	// 字面量模式下 a.b 里的点不再是「任意字符」。
 	out, err := tool.Run(context.Background(), map[string]any{"pattern": "a.b", "literal": true})
@@ -233,7 +233,7 @@ func TestGrepSkipsBinaryFiles(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, "bin.dat", "needle\x00\x01\x02")
 	writeTestFile(t, root, "text.txt", "needle\n")
-	tool := &GrepTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &GrepTool{root: root}
 	out, err := tool.Run(context.Background(), map[string]any{"pattern": "needle"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -247,7 +247,7 @@ func TestGrepSkipsBinaryFiles(t *testing.T) {
 }
 
 func TestGrepRejectsAnInvalidRegex(t *testing.T) {
-	tool := &GrepTool{root: t.TempDir(), maxBytes: DefaultReadFileMaxBytes}
+	tool := &GrepTool{root: t.TempDir()}
 	if _, err := tool.Run(context.Background(), map[string]any{"pattern": "("}); err == nil {
 		t.Fatal("an invalid regex was accepted")
 	}
@@ -308,22 +308,13 @@ func TestWalkSkipsGitDirectory(t *testing.T) {
 	root := t.TempDir()
 	writeTestFile(t, root, ".git/objects/pack.idx", "needle")
 	writeTestFile(t, root, "a.txt", "needle")
-	tool := &GrepTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &GrepTool{root: root}
 	out, err := tool.Run(context.Background(), map[string]any{"pattern": "needle"})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if strings.Contains(out, ".git") {
 		t.Fatalf(".git was walked:\n%s", out)
-	}
-}
-
-func TestClipRunesDoesNotSplitMultibyteCharacters(t *testing.T) {
-	if got := clipRunes("一二三四五", 3); got != "一二三…" {
-		t.Fatalf("clipRunes = %q", got)
-	}
-	if got := clipRunes("abc", 10); got != "abc" {
-		t.Fatalf("clipRunes = %q", got)
 	}
 }
 

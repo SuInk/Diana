@@ -28,24 +28,42 @@ func writeNumberedFile(t *testing.T, root, name string, lines int) {
 func TestReadFileToolReadsRangesAndPointsAtTheRest(t *testing.T) {
 	root := t.TempDir()
 	writeNumberedFile(t, root, "big.txt", 1000)
-	tool := &ReadFileTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &ReadFileTool{root: root}
 
-	first, err := tool.Run(context.Background(), map[string]any{"path": "big.txt"})
+	// 不传 limit 时读到单次上限为止，按整行切，并说清下一段从哪行起。
+	budget := 2000
+	first, err := tool.Run(WithToolOutputBudget(context.Background(), budget), map[string]any{"path": "big.txt"})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len([]rune(first)) > budget {
+		t.Fatalf("result %d 字，超过上限 %d", len([]rune(first)), budget)
 	}
 	if !strings.Contains(first, "共 1000 行") {
 		t.Fatalf("total line count missing: %s", firstLines(first, 3))
 	}
-	if !strings.Contains(first, "line-0001") || !strings.Contains(first, fmt.Sprintf("line-%04d", defaultReadFileLines)) {
-		t.Fatalf("default window wrong: %s", firstLines(first, 3))
+	body := first[strings.Index(first, "\n\n")+2:]
+	lines := strings.Split(body, "\n")
+	last := lines[len(lines)-1]
+	if lines[0] != "line-0001" || len(last) != len("line-0000") {
+		t.Fatalf("window not cut on whole lines: first=%q last=%q", lines[0], last)
 	}
-	if strings.Contains(first, fmt.Sprintf("line-%04d", defaultReadFileLines+1)) {
-		t.Fatalf("read past the default window: %s", firstLines(first, 3))
+	var end int
+	fmt.Sscanf(last, "line-%d", &end)
+	if end != len(lines) || end >= 1000 {
+		t.Fatalf("window wrong: %d lines, last=%q", len(lines), last)
 	}
 	// 关键：不能只说「截断了」，得说清怎么接着读。
-	if !strings.Contains(first, fmt.Sprintf("offset=%d", defaultReadFileLines+1)) {
+	if !strings.Contains(first, fmt.Sprintf("offset=%d", end+1)) {
 		t.Fatalf("continuation offset missing: %s", firstLines(first, 3))
+	}
+	// 没有条数硬上限：预算够时一次读完整个文件。
+	whole, err := tool.Run(context.Background(), map[string]any{"path": "big.txt"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(whole, "line-1000") || strings.Contains(whole, "还有") {
+		t.Fatalf("whole file not returned: %s", firstLines(whole, 3))
 	}
 
 	// 文件尾部以前完全够不着，现在要能直接跳过去。
@@ -74,7 +92,7 @@ func TestReadFileToolReadsRangesAndPointsAtTheRest(t *testing.T) {
 func TestReadFileToolSpendsBudgetOnContentNotEnvelope(t *testing.T) {
 	root := t.TempDir()
 	writeNumberedFile(t, root, "src.txt", 400)
-	tool := &ReadFileTool{root: root, maxBytes: DefaultReadFileMaxBytes}
+	tool := &ReadFileTool{root: root}
 
 	out, err := tool.Run(context.Background(), map[string]any{"path": "src.txt", "limit": 300})
 	if err != nil {
@@ -102,4 +120,20 @@ func firstLines(value string, count int) string {
 		lines = lines[:count]
 	}
 	return strings.Join(lines, "\n")
+}
+
+// 一行就超过上限的文件（压缩过的 JS）按字符给开头一段，并说明这一行没给全。
+func TestReadFileToolExplainsOverlongLine(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "min.js"), []byte(strings.Repeat("一", 5000)+"\nnext\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &ReadFileTool{root: root}
+	out, err := tool.Run(WithToolOutputBudget(context.Background(), 1000), map[string]any{"path": "min.js"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len([]rune(out)) > 1000 || !strings.Contains(out, "只给了开头一段") || !strings.Contains(out, "offset=2") {
+		t.Fatalf("overlong line not explained (%d 字): %s", len([]rune(out)), firstLines(out, 3))
+	}
 }

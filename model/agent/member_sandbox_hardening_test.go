@@ -77,7 +77,6 @@ func TestCommandSandboxBlocksProxyAndAgentEnvAndSupportsStdin(t *testing.T) {
 	tool := &RunCommandTool{
 		root:        t.TempDir(),
 		timeout:     5 * time.Second,
-		maxBytes:    4096,
 		sandboxMode: CommandSandboxOff,
 	}
 	out, err := tool.Run(context.Background(), map[string]any{
@@ -109,7 +108,7 @@ func TestChangedMemberFilesRejectsHardlinkedFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "genuine.txt"), []byte("ok"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	files, _ := changedMemberFiles(dir, before, DefaultMemberCommandLimits)
+	files := changedMemberFiles(dir, before, DefaultMemberCommandLimits)
 	if len(files) != 1 || files[0].Name != "genuine.txt" {
 		t.Fatalf("hardlinked file was not rejected: %#v", files)
 	}

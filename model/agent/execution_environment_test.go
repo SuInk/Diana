@@ -139,7 +139,7 @@ func TestRunCommandLocalBinLookupRejectsPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nprintf found"), 0700); err != nil {
 		t.Fatal(err)
 	}
-	runner := &RunCommandTool{root: t.TempDir(), timeout: time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{root: t.TempDir(), timeout: time.Second, sandboxMode: CommandSandboxOff}
 	output, err := runner.Run(context.Background(), map[string]any{"command": name})
 	if err != nil || !strings.Contains(output, "found") {
 		t.Fatalf("%s %v", output, err)
@@ -154,7 +154,7 @@ func TestRunCommandLocalBinLookupRejectsPaths(t *testing.T) {
 }
 
 func TestRunCommandRealNode(t *testing.T) {
-	runner := &RunCommandTool{root: t.TempDir(), timeout: 5 * time.Second, maxBytes: 100, sandboxMode: CommandSandboxOff}
+	runner := &RunCommandTool{root: t.TempDir(), timeout: 5 * time.Second, sandboxMode: CommandSandboxOff}
 	if _, err := runner.resolveCommand("node"); err != nil {
 		t.Skip("node is not installed")
 	}

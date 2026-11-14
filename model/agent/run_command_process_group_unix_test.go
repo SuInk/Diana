@@ -36,7 +36,6 @@ func TestRunCommandTimeoutKillsGrandchildren(t *testing.T) {
 			tool := &RunCommandTool{
 				root:        root,
 				timeout:     500 * time.Millisecond,
-				maxBytes:    4096,
 				sandboxMode: mode,
 				sandbox:     sandbox,
 			}

@@ -19,7 +19,8 @@ const (
 	// MaxInstallPackages 限制一次装几个包：要装一长串多半是模型在乱试。
 	MaxInstallPackages    = 8
 	packageInstallTimeout = 5 * time.Minute
-	packageInstallOutput  = 4000
+	// packageInstallOverhead 是结果里除 npm 输出以外的字段（包名、目录、报错）大约占的字数。
+	packageInstallOverhead = 1000
 )
 
 // npmPackageSpec 只收注册表里的包名和可选版本，不收 URL、git 地址、本地路径和
@@ -74,11 +75,23 @@ func InstallNPMPackages(ctx context.Context, cfg Config, packages []string) (str
 	}
 	cmd.Dir = root
 	cmd.Env = env
-	var output cappedBuffer
-	output.limit = packageInstallOutput
-	cmd.Stdout, cmd.Stderr = &output, &output
+	// npm 的错误都在输出尾部；整份落盘，装不下时给尾部整行并写明完整输出在哪。
+	output, err := os.CreateTemp("", "diana-npm-install-*")
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = os.Remove(output.Name()) }()
+	defer func() { _ = output.Close() }()
+	cmd.Stdout, cmd.Stderr = output, output
 	runErr := cmd.Run()
-	text := strings.TrimSpace(output.String())
+	page, err := pageCommandOutput(output, toolBudget(ctx), packageInstallOverhead, true, workspaceSpill(root))
+	if err != nil {
+		return "", err
+	}
+	text := strings.TrimSpace(page.Output)
+	if page.Truncated {
+		text = page.Notice + "\n" + text
+	}
 	if runCtx.Err() == context.DeadlineExceeded {
 		return text, fmt.Errorf("安装超过 %s 未完成，已终止", packageInstallTimeout)
 	}

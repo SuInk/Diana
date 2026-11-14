@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/internal/procgroup"
 	"github.com/SuInk/diana/internal/secretmask"
@@ -188,11 +189,11 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	protected := agentProtectedFiles(cfg)
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
 	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。
-	registry.Register(&ListFilesTool{root: root, limit: cfg.ListDirectoryLimit, protected: protected})
-	registry.Register(&ReadFileTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
+	registry.Register(&ListFilesTool{root: root, protected: protected})
+	registry.Register(&ReadFileTool{root: root, protected: protected})
 	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
 	// 没有它们的话，模型定位一个文件只能靠 list_files 一层层翻或者猜路径。
-	registry.Register(&GrepTool{root: root, maxBytes: cfg.ReadFileMaxBytes, protected: protected})
+	registry.Register(&GrepTool{root: root, protected: protected})
 	registry.Register(&FindFilesTool{root: root, protected: protected})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
@@ -211,7 +212,6 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 			protected:     protected,
 			mcpConfigPath: resolveMCPConfigPath(cfg),
 			timeout:       time.Duration(cfg.CommandTimeoutMS) * time.Millisecond,
-			maxBytes:      ToolOutputMaxChars,
 			sandboxMode:   cfg.CommandSandbox,
 			sandbox:       detectCommandSandbox(),
 		})
@@ -1137,7 +1137,6 @@ func cloneToolAllowlist(values map[string]bool) map[string]bool {
 
 type ListFilesTool struct {
 	root      string
-	limit     int
 	protected protectedFiles
 }
 
@@ -1155,12 +1154,15 @@ func (t *ListFilesTool) Description() string {
 
 func (t *ListFilesTool) InputSchema() map[string]any {
 	return toolObjectSchema(nil, map[string]any{
-		"path": toolStringParam("相对目录，默认根目录"),
+		"path":   toolStringParam("相对目录，默认根目录"),
+		"offset": toolIntParam("跳过前几项，续读时照结果里给的填"),
+		"limit":  toolIntParam("最多条数，可选；不填时装满单次结果上限为止"),
 	})
 }
 
-// Run 列出 Agent 工作目录内的文件。
-func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, error) {
+// Run 列出 Agent 工作目录内的文件，按整条装进单次上限，装不下的写明 next_offset。
+// 以前固定只列 200 条、不能翻页，第 201 个以后的文件模型永远看不到。
+func (t *ListFilesTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		rel = "."
@@ -1176,21 +1178,15 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 	if err != nil {
 		return "", workspaceNotFound(rel, err)
 	}
-	limit := t.limit
-	if limit <= 0 {
-		limit = DefaultListDirectoryLimit
-	}
+	offset, limit := pageInput(input)
 	type entry struct {
 		Name string `json:"name"`
 		Type string `json:"type"`
 		Size int64  `json:"size,omitempty"`
 	}
-	out := make([]entry, 0, min(len(entries), limit))
+	out := []entry{}
 	hidden := 0
-	for i, item := range entries {
-		if i >= limit {
-			break
-		}
+	for _, item := range entries {
 		if t.protected.blocked(filepath.Join(path, item.Name())) {
 			hidden++
 			continue
@@ -1205,31 +1201,56 @@ func (t *ListFilesTool) Run(_ context.Context, input map[string]any) (string, er
 		}
 		out = append(out, row)
 	}
-	body, err := json.MarshalIndent(map[string]any{
-		"path":    rel,
-		"entries": out,
-		// truncated 告诉模型目录没列完，必要时可以继续读更具体路径。
-		"truncated": len(entries) > limit,
-		// 运行时配置不出现在列表里，但也不假装目录是干净的：模型该知道有东西被挡了，
-		// 免得反复去猜文件名。
-		"protected_hidden": hidden,
-	}, "", "  ")
-	if err != nil {
-		return "", err
+	total := len(out)
+	page := out[min(offset, total):]
+	if limit > 0 && len(page) > limit {
+		page = page[:limit]
 	}
-	return string(body), nil
+	result, _, err := fitEntries(len(page), toolBudget(ctx), func(n int) (string, error) {
+		body, err := json.MarshalIndent(struct {
+			Path   string `json:"path"`
+			Total  int    `json:"total"`
+			Notice string `json:"notice"`
+			// 运行时配置不出现在列表里，但也不假装目录是干净的：模型该知道有东西被挡了，
+			// 免得反复去猜文件名。
+			ProtectedHidden int     `json:"protected_hidden"`
+			NextOffset      int     `json:"next_offset,omitempty"`
+			Entries         []entry `json:"entries"`
+		}{
+			Path: rel, Total: total, ProtectedHidden: hidden, Entries: page[:n],
+			Notice:     listNotice(offset, n, total),
+			NextOffset: nextOffsetIfMore(offset+n, total),
+		}, "", "  ")
+		return string(body), err
+	})
+	return result, err
+}
+
+func listNotice(offset, n, total int) string {
+	if n == 0 {
+		if total == 0 {
+			return "目录是空的。"
+		}
+		return fmt.Sprintf("共 %d 项，offset=%d 已经越过最后一项。", total, offset)
+	}
+	return pageWindowNotice("项", offset+1, offset+n, total, fmt.Sprintf("用 offset=%d 接着列", offset+n))
+}
+
+func nextOffsetIfMore(next, total int) int {
+	if next < total {
+		return next
+	}
+	return 0
 }
 
 type ReadFileTool struct {
 	root      string
-	maxBytes  int
 	protected protectedFiles
 }
 
 type RunCommandTool struct {
-	root     string
-	timeout  time.Duration
-	maxBytes int
+	root    string
+	timeout time.Duration
 	// protected 是凭据配置文件。文件工具按它拒绝读写，沙盒按它把这些路径挡在
 	// 命令的视野之外——命令能跑 cat、grep，那是唯一还拦得住的一层。
 	protected protectedFiles
@@ -1325,16 +1346,13 @@ func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command 
 			return "", err
 		}
 	}
-	var output string
-	var truncated bool
-	var readErr error
+	outputFile := commandOutput
 	if len(t.secrets) > 0 {
-		output, truncated, readErr = readPluginCommandOutput(commandOutput, t.maxBytes, t.secrets)
-	} else {
-		output, truncated, readErr = readCommandOutput(commandOutput, t.maxBytes, exitCode != 0)
-	}
-	if readErr != nil {
-		return "", readErr
+		// 先遮凭据再分页：落盘的完整输出和给模型的那一段都不带凭据原文。
+		if outputFile, err = redactCommandOutput(commandOutput, t.secrets); err != nil {
+			return "", err
+		}
+		defer func() { _ = outputFile.Close() }()
 	}
 	result := map[string]any{
 		"command":     command,
@@ -1343,8 +1361,8 @@ func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command 
 		"exit_code":   exitCode,
 		"timed_out":   runCtx.Err() == context.DeadlineExceeded,
 		"duration_ms": duration.Milliseconds(),
-		"truncated":   truncated,
-		"output":      output,
+		"truncated":   false,
+		"output":      "",
 	}
 	// 让「这次到底有没有被隔离」出现在结果里：排查写入失败或网络不通时，
 	// 第一个要确认的就是它。
@@ -1354,6 +1372,20 @@ func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command 
 	} else {
 		result["sandbox"] = "none"
 	}
+	// 成功和失败一样分页：失败时报错原样进上下文，以前不设限，一次编译报错就能塞满。
+	skeleton, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	page, err := pageCommandOutput(outputFile, toolBudget(ctx), utf8.RuneCount(skeleton)+64, true, workspaceSpill(t.root))
+	if err != nil {
+		return "", err
+	}
+	result["output"], result["truncated"] = page.Output, page.Truncated
+	if page.Truncated {
+		// notice 和 full_output_path 按键名排在 output 前面，结果再长也不会先被截掉。
+		result["notice"], result["full_output_path"] = page.Notice, page.FullOutputPath
+	}
 	body, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		return "", err
@@ -1362,28 +1394,6 @@ func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command 
 		return "", errors.New(string(body))
 	}
 	return string(body), nil
-}
-
-func readCommandOutput(file *os.File, maxBytes int, complete bool) (string, bool, error) {
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return "", false, err
-	}
-	if complete {
-		data, err := io.ReadAll(file)
-		return string(data), false, err
-	}
-	if maxBytes <= 0 {
-		maxBytes = ToolOutputMaxChars
-	}
-	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
-	if err != nil {
-		return "", false, err
-	}
-	truncated := len(data) > maxBytes
-	if truncated {
-		data = data[:maxBytes]
-	}
-	return string(data), truncated, nil
 }
 
 // commandFor 按沙盒模式决定这条命令怎么起。require 模式下没有可用沙盒就直接拒绝，
@@ -1494,15 +1504,14 @@ func (t *ReadFileTool) CodeModeParallel() bool { return true }
 // Description 返回读文件工具说明。
 // 二进制和超大文件代码会拒绝，并在错误里指向 view_image / grep / manage_files stat。
 func (t *ReadFileTool) Description() string {
-	return `按行读取工作目录内的文本文件，默认从第 1 行读 ` + fmt.Sprint(defaultReadFileLines) + ` 行；更长时结果会给出续读的 offset。`
+	return `按行读取工作目录内的文本文件，默认从第 1 行读到单次结果上限为止；没读完时结果会给出续读的 offset。`
 }
 
 func (t *ReadFileTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"path"}, map[string]any{
-		"path":      toolStringParam("相对路径"),
-		"offset":    toolIntParam("起始行，从 1 起"),
-		"limit":     toolIntParam("最多行数"),
-		"max_bytes": toolIntParam("最大字节数"),
+		"path":   toolStringParam("相对路径"),
+		"offset": toolIntParam("起始行，从 1 起"),
+		"limit":  toolIntParam("最多行数，可选；不填时读到单次结果上限为止"),
 	})
 }
 
@@ -1514,7 +1523,7 @@ func (t *ReadFileTool) InputSchema() map[string]any {
 //
 // 正文不加行号：Diana 的 Agent 没有按行改文件的工具，行号只会白占预算，
 // 位置信息放表头一行就够，模型据此算下一个 offset。
-func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, error) {
+func (t *ReadFileTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")
@@ -1532,14 +1541,6 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
-	}
-	maxBytes := intFromInput(input, "max_bytes", t.maxBytes)
-	if maxBytes <= 0 || maxBytes > t.maxBytes {
-		// 用户输入只能缩小读取范围，不能突破工具注册时的最大字节限制。
-		maxBytes = t.maxBytes
-	}
-	if info.Size() > readFileScanMaxBytes {
-		return "", fmt.Errorf("%s 有 %d MB，超过按行读取的 %d MB 上限；要找其中的内容请用 grep，要看大小和类型用 manage_files stat", rel, info.Size()>>20, readFileScanMaxBytes>>20)
 	}
 	file, err := os.Open(path)
 	if err != nil {
@@ -1559,67 +1560,87 @@ func (t *ReadFileTool) Run(_ context.Context, input map[string]any) (string, err
 		return "", err
 	}
 
-	offset := intFromInput(input, "offset", 1)
-	if offset < 1 {
-		offset = 1
-	}
-	limit := intFromInput(input, "limit", defaultReadFileLines)
-	if limit <= 0 || limit > maxReadFileLines {
-		limit = defaultReadFileLines
-	}
-	// 边读边数行，只留下要的那一段：以前整个文件读进内存再切，几十 MB 的日志也照读不误。
-	total, selected, err := scanFileLines(file, offset, offset-1+limit)
+	offset := max(intFromInput(input, "offset", 1), 1)
+	limit := max(intFromInput(input, "limit", 0), 0)
+	budget := toolBudget(ctx)
+	// 边读边数行，只留下这一页可能用到的：内存跟着单次上限走，不跟着文件大小走。
+	total, selected, firstLineBytes, err := scanFileLines(file, offset, limit, budget)
 	if err != nil {
 		return "", err
 	}
 	if offset > total {
 		return fmt.Sprintf("%s 共 %d 行，offset=%d 已经越过文件末尾。", rel, total, offset), nil
 	}
-	end := offset - 1 + len(selected)
-	lines := total
-	body := strings.Join(selected, "\n")
-	// 字节上限仍然生效，但它现在是兜底而不是主要手段：一行特别长的文件不该把预算吃光。
-	byteTruncated := false
-	if len(body) > maxBytes {
-		body = string([]rune(body)[:len([]rune(body))*maxBytes/len(body)])
-		byteTruncated = true
+	header := func(n int, partial bool) string {
+		end := offset - 1 + n
+		var out strings.Builder
+		if partial {
+			fmt.Fprintf(&out, "%s 第 %d 行（共 %d 行）这一行有 %d 字节，超过单次结果上限 %d 字，下面只给了开头一段；要看后面的部分用 grep 定位关键字，或用 run_command 按字节切出来。\n", rel, offset, total, firstLineBytes, ToolOutputMaxChars)
+			if offset < total {
+				fmt.Fprintf(&out, "下一行用 offset=%d 继续。\n", offset+1)
+			}
+		} else {
+			fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, total)
+			if end < total {
+				fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", total-end, end+1)
+			}
+		}
+		out.WriteString("\n")
+		return out.String()
 	}
-
-	var out strings.Builder
-	fmt.Fprintf(&out, "%s 第 %d-%d 行（共 %d 行）\n", rel, offset, end, lines)
-	if end < lines {
-		fmt.Fprintf(&out, "还有 %d 行未读，用 offset=%d 继续。\n", lines-end, end+1)
+	result, n, err := fitEntries(len(selected), budget, func(n int) (string, error) {
+		return header(n, false) + strings.Join(selected[:n], "\n"), nil
+	})
+	if err != nil || n > 1 || utf8.RuneCountInString(result) <= budget {
+		return result, err
 	}
-	if byteTruncated {
-		out.WriteString("这一段超过字节上限，已在中途截断。\n")
-	}
-	out.WriteString("\n")
-	out.WriteString(body)
-	return out.String(), nil
+	// 一行就超过上限（压缩过的 JS、单行 JSON）：按字符给开头一段，说清没给全。
+	line := selected[0]
+	prefix := header(1, true)
+	cut := fitLeadingLines(line, budget-utf8.RuneCountInString(prefix), false)
+	return prefix + line[:cut], nil
 }
 
-// scanFileLines 逐行读完整个文件，返回总行数和第 from 到 to 行（从 1 开始、含两端）。
+// scanFileLines 逐行读完整个文件，返回总行数和从第 from 行（从 1 开始）起的若干行：
+// 最多 limit 行（≤0 不限），累计超过 budget 字就不再往下留（总行数照数）。
 // CRLF 当一个换行；结尾的换行不多算一行，免得「共 N 行」比编辑器里看到的多一行。
-func scanFileLines(reader io.Reader, from, to int) (int, []string, error) {
+func scanFileLines(reader io.Reader, from, limit, budget int) (int, []string, int, error) {
 	buffered := bufio.NewReaderSize(reader, 64<<10)
-	total := 0
+	total, used, firstLineBytes := 0, 0, 0
+	// 单行只留够装满预算的字节：几百 MB 的单行文件也不会整行读进内存。
+	keep := (budget + 1) * utf8.UTFMax
 	var selected []string
 	for {
-		line, err := buffered.ReadString('\n')
-		if line != "" {
+		var line []byte
+		lineBytes := 0
+		var err error
+		for {
+			var fragment []byte
+			fragment, err = buffered.ReadSlice('\n')
+			lineBytes += len(fragment)
+			if room := keep - len(line); room > 0 {
+				line = append(line, fragment[:min(len(fragment), room)]...)
+			}
+			if !errors.Is(err, bufio.ErrBufferFull) {
+				break
+			}
+		}
+		if lineBytes > 0 {
 			total++
-			if total >= from && total <= to {
-				if strings.HasSuffix(line, "\n") {
-					line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+			if total >= from && (limit <= 0 || len(selected) < limit) && used <= budget {
+				text := strings.TrimSuffix(strings.TrimSuffix(string(line), "\n"), "\r")
+				if len(selected) == 0 {
+					firstLineBytes = lineBytes
 				}
-				selected = append(selected, line)
+				selected = append(selected, text)
+				used += utf8.RuneCountInString(text) + 1
 			}
 		}
 		if errors.Is(err, io.EOF) {
-			return total, selected, nil
+			return total, selected, firstLineBytes, nil
 		}
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, 0, err
 		}
 	}
 }

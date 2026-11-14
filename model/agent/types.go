@@ -18,20 +18,11 @@ const (
 	// 照 Pi 的做法：上限写死、不按身份放宽或收紧，超出时工具按整条分页并在结果里
 	// 写明怎么续读，不在内部按预算缩短正文、抽样或静默丢条目。中文 2 万字与 Pi 的
 	// 50KB 在 token 量上相当。
-	ToolOutputMaxChars      = 20000
-	DefaultReadFileMaxBytes = 64 * 1024
+	ToolOutputMaxChars = 20000
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
 	// 一个完整文件时经常一次写下去，卡太死会让它退化成反复追加。
 	DefaultFileWriteMaxBytes = 256 * 1024
-	// 读文件默认一次多少行。工具结果统一被截到 ToolOutputMaxChars，一次读太多
-	// 只会在截断处白白丢掉，不如让模型按需要翻页。
-	defaultReadFileLines = 200
-	maxReadFileLines     = 2000
-	// readFileScanMaxBytes 是 read_file 愿意逐行扫的文件上限。再大的文本按行翻页也
-	// 翻不完，该用 grep 找。
-	readFileScanMaxBytes      = 64 << 20
-	DefaultListDirectoryLimit = 200
-	DefaultSkillsListBudget   = 8000
+	DefaultSkillsListBudget  = 8000
 	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
 	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
 	ResidentSkillBodyBudget = 24000
@@ -71,12 +62,10 @@ type Config struct {
 	ResearchDetailReview bool
 	WorkDir              string
 	// MaxSteps is an optional budget for isolated evaluations; zero means unlimited.
-	MaxSteps           int
-	ReadFileMaxBytes   int
-	ListDirectoryLimit int
-	SkillRoots         []string
-	ManagedSkillRoot   string
-	SkillsListBudget   int
+	MaxSteps         int
+	SkillRoots       []string
+	ManagedSkillRoot string
+	SkillsListBudget int
 	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
 	SkillTriggerScanDepth int
 	MCPConfigPath         string
@@ -296,21 +285,11 @@ func (cfg Config) WithDefaults() Config {
 	if cfg.WorkDir == "" {
 		cfg.WorkDir = "."
 	}
-	if cfg.ReadFileMaxBytes <= 0 {
-		cfg.ReadFileMaxBytes = DefaultReadFileMaxBytes
-	}
 	if cfg.FileWriteMaxBytes <= 0 {
 		cfg.FileWriteMaxBytes = DefaultFileWriteMaxBytes
 	}
 	if cfg.FileWriteMaxBytes > MaxAllowedFileWriteMaxBytes {
 		cfg.FileWriteMaxBytes = MaxAllowedFileWriteMaxBytes
-	}
-	if cfg.ReadFileMaxBytes > MaxAllowedReadFileMaxBytes {
-		// 文件读取限制按字节控制，防止工具误读大文件。
-		cfg.ReadFileMaxBytes = MaxAllowedReadFileMaxBytes
-	}
-	if cfg.ListDirectoryLimit <= 0 {
-		cfg.ListDirectoryLimit = DefaultListDirectoryLimit
 	}
 	if cfg.SkillTriggerScanDepth <= 0 {
 		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
