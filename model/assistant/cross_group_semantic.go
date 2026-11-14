@@ -39,7 +39,7 @@ func (r *Runtime) crossGroupSemanticEvents(event MessageEvent, store MessageHist
 	events, err := vectors.SearchMessageEventsByVector(ctx, MessageHistoryVectorQuery{
 		Session: sessionKey(event), SessionPrefix: groupHistorySessionPrefix(event), ExcludeSession: sessionKey(event),
 		Vector: vector, Model: cfg.Model, FromTime: 0, ThroughTime: through,
-		CrossSession: true, MinSimilarity: crossGroupSemanticMinSimilarity,
+		Limit: crossGroupContextSearchLimit, CrossSession: true, MinSimilarity: crossGroupSemanticMinSimilarity,
 	})
 	if err != nil {
 		return nil, "向量检索失败或超时"

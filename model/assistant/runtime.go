@@ -632,12 +632,14 @@ type Runtime struct {
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
 	// contextSummaries 是私聊会话的压缩摘要（群的存在 GroupPromptSession 里），见 context_compaction.go。
-	contextSummaries map[string]string
+	contextSummaries map[string]compactionCheckpoint
 	// historyWindowAnchors 记录每个会话历史的起点（锚），见 context_compaction.go。
 	historyWindowAnchors map[string]string
-	recent               []EventRecord
-	activeMu             sync.Mutex
-	active               int
+	// compactionLocks 让同一个会话同时只有一次压缩，见 context_compaction.go。
+	compactionLocks sync.Map
+	recent          []EventRecord
+	activeMu        sync.Mutex
+	active          int
 	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
 	// 两者都自带锁，不受 mu 保护。
 	llmConcurrency        llmConcurrencyTracker
@@ -962,7 +964,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		chatInLastReplyAt:       map[string]time.Time{},
 		groupLastReplyAt:        map[string]time.Time{},
 		recentClaimSources:      map[string][]claimSourceRecord{},
-		contextSummaries:        map[string]string{},
+		contextSummaries:        map[string]compactionCheckpoint{},
 		activeReminders:         map[string]struct{}{},
 		replySuppressByUser:     map[string]ReplySuppression{},
 		replyOutboundGates:      map[string]*replySuppressionOutboundGate{},
@@ -4677,9 +4679,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
 	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
 	compacted := ""
-	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.lastToolDefinitionTokens(event)) > compactionThreshold(r.promptContextWindowTokens(event, cfg)) {
-		if next, ok := r.compactReplyMessages(ctx, event, cfg, replyHistory, messages, "threshold", &dependencyIndex); ok {
-			messages = next
+	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry)) > compactionThreshold(r.promptContextWindowTokens(event, cfg)) {
+		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
+			messages, replyHistory = next, kept
 			compacted = "threshold"
 		}
 	}
@@ -4706,8 +4708,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 	// 供应商（或本地校验）报上下文超限：照 Pi 压缩一次再重试，只试一次。
 	if llm.IsContextOverflowError(err) && compacted == "" && !authoritativePluginContext && !hasExternalSideEffect(ctx) {
-		if next, ok := r.compactReplyMessages(ctx, event, cfg, replyHistory, messages, "overflow", &dependencyIndex); ok {
-			messages = next
+		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "overflow", &dependencyIndex); ok {
+			messages, replyHistory = next, kept
 			compacted = "overflow"
 			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
 		}

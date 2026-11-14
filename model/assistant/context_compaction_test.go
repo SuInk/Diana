@@ -75,7 +75,7 @@ func TestCompactContextSummarizesOlderHistoryAndMovesAnchor(t *testing.T) {
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 200*60}
 	cfg := runtime.effectiveConfigForEvent(current)
 
-	kept, summary, err := runtime.compactContext(context.Background(), current, cfg, history, "threshold")
+	kept, summary, err := runtime.compactContext(context.Background(), current, cfg, history, compactionKeepRecentTokens, "threshold")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestCompactContextSummarizesOlderHistoryAndMovesAnchor(t *testing.T) {
 	for index := 0; index < 80; index++ {
 		more = append(more, MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10002", MessageID: fmt.Sprintf("n-%03d", index), Time: 1700000000 + int64(300+index)*60, RawMessage: "新的 " + body})
 	}
-	kept2, summary2, err := runtime.compactContext(context.Background(), current, cfg, more, "overflow")
+	kept2, summary2, err := runtime.compactContext(context.Background(), current, cfg, more, compactionKeepRecentTokens, "overflow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,13 +133,13 @@ func TestCompactContextFailureLeavesStateUntouched(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	history := compactionTestHistory(120, strings.Repeat("很长的发言内容", 120))
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 200*60}
-	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, "threshold"); err == nil {
+	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, compactionKeepRecentTokens, "threshold"); err == nil {
 		t.Fatal("expected the summary failure")
 	}
 	if runtime.compactionSummary(current) != "" || runtime.groupPromptSession(current).anchor() != "" {
 		t.Fatal("failed compaction changed the session state")
 	}
-	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history[:3], "threshold"); !errors.Is(err, errNothingToCompact) {
+	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history[:3], compactionKeepRecentTokens, "threshold"); !errors.Is(err, errNothingToCompact) {
 		t.Fatalf("short history err = %v", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestReplyCompactsHistoryWhenOverThreshold(t *testing.T) {
 			}
 		}
 	}
-	if len(summaries) != 1 || len(replies) == 0 {
+	if len(summaries) == 0 || len(replies) == 0 {
 		t.Fatalf("summary calls = %d, reply calls = %d", len(summaries), len(replies))
 	}
 	var sent strings.Builder
@@ -350,5 +350,248 @@ func TestReplyCompactsAndRetriesOnProviderOverflow(t *testing.T) {
 	}
 	if !strings.Contains(sent.String(), "早先的长讨论") || strings.Contains(sent.String(), "第 0 句") {
 		t.Fatal("retried request was not compacted")
+	}
+}
+
+// 小窗口：预留按 1/8 缩，阈值不超过发送层的输入预算，保留量给非历史部分让出空间。
+func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
+	for _, item := range []struct {
+		window, threshold int64
+	}{
+		{window: 16000, threshold: 12000},
+		{window: 32000, threshold: 24000},
+		{window: 128000, threshold: 111616},
+	} {
+		if got := compactionThreshold(item.window); got != item.threshold {
+			t.Fatalf("window %d threshold = %d, want %d", item.window, got, item.threshold)
+		}
+		if limit := llm.InputTokenBudget(item.window, llm.DefaultMaxOutputTokens); compactionThreshold(item.window) > limit {
+			t.Fatalf("window %d threshold exceeds the input budget %d", item.window, limit)
+		}
+	}
+	if got := compactionKeepRecent(128000, 30000); got != compactionKeepRecentTokens {
+		t.Fatalf("large window keep = %d", got)
+	}
+	if got := compactionKeepRecent(32000, 15000); got != (24000-15000)/2 {
+		t.Fatalf("32K keep = %d", got)
+	}
+	if got := compactionKeepRecent(16000, 20000); got != 0 {
+		t.Fatalf("keep must not go negative: %d", got)
+	}
+}
+
+// 主人把上限填成 32000 或窗口只有 16K 时，压完的请求要真的装得下，而不是每轮都压、压完照样超。
+func TestReplyCompactionFitsSmallWindows(t *testing.T) {
+	for _, window := range []int64{16000, 32000} {
+		t.Run(fmt.Sprint(window), func(t *testing.T) {
+			provider := &replyCompactionProvider{}
+			runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, MaxContextTokens: window, LLMIdentityMaskingEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+			store := newMemoryMessageHistoryStore()
+			runtime.SetMessageHistoryStore(store)
+			history := compactionTestHistory(300, strings.Repeat("很长的群聊发言", 30))
+			for _, item := range history {
+				_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+			}
+			current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10002", MessageID: "current", RawMessage: "Diana 帮我看看", Time: 1700000000 + 400*60}
+			runtime.groupPromptSession(current).rememberAnchor(messageHistoryDedupeKey(history[0]))
+			if _, err := runtime.replyTo(context.Background(), current, current.RawMessage); err != nil {
+				t.Fatal(err)
+			}
+			var reply *llm.GenerateRequest
+			summaries := 0
+			for index, req := range provider.requests {
+				if isCompactionRequest(req) {
+					summaries++
+					continue
+				}
+				for _, msg := range req.Messages {
+					if strings.Contains(msg.Content, "【当前需要回复的消息】") {
+						reply = &provider.requests[index]
+					}
+				}
+			}
+			if summaries == 0 || reply == nil {
+				t.Fatalf("summaries=%d reply=%v", summaries, reply != nil)
+			}
+			if got := llm.EstimateRequestInputTokens(*reply); got > compactionThreshold(window) {
+				t.Fatalf("compacted request is %d tokens, over the %d threshold", got, compactionThreshold(window))
+			}
+		})
+	}
+}
+
+// 待摘要的部分比摘要模型能接的大时按块逐段更新：每块都带着上一块的结果。
+func TestCompactContextSummarizesInChunks(t *testing.T) {
+	provider := &compactionTestProvider{summary: "## 在聊什么\n- 分块摘要"}
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 16000}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := compactionTestHistory(400, strings.Repeat("很长的发言内容", 60))
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 500*60}
+	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, 2000, "threshold"); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) < 3 {
+		t.Fatalf("summary calls = %d, want several chunks", len(provider.requests))
+	}
+	for index, req := range provider.requests {
+		prompt := req.Messages[len(req.Messages)-1].Content
+		if index > 0 && !strings.Contains(prompt, "<previous-summary>\n## 在聊什么\n- 分块摘要") {
+			t.Fatalf("chunk %d did not carry the previous chunk's summary", index)
+		}
+		if got := llm.EstimateRequestInputTokens(req); got > compactionThreshold(16000) {
+			t.Fatalf("chunk %d request is %d tokens", index, got)
+		}
+	}
+	all := ""
+	for _, req := range provider.requests {
+		all += req.Messages[len(req.Messages)-1].Content
+	}
+	if !strings.Contains(all, "第 0 句") || !strings.Contains(all, "第 300 句") {
+		t.Fatal("some summarized history never reached the summarizer")
+	}
+}
+
+// 锚丢了（读取范围外、被撤回）但有摘要：从摘要之后第一条接上，不留空档；存储里已经
+// 没有那一段时摘要作废，按冷启动处理。
+func TestSessionHistoryReconnectsSummaryWhenAnchorIsLost(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	history := compactionTestHistory(50, "话")
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 100*60}
+	runtime.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[19].Time}, "missing-anchor")
+	window := runtime.sessionHistoryWindow(current, history, "bot", 128000)
+	if len(window) != 30 || window[0].MessageID != history[20].MessageID || runtime.compactionSummary(current) != "旧摘要" {
+		t.Fatalf("window starts at %q (%d), summary %q", firstMessageID(window), len(window), runtime.compactionSummary(current))
+	}
+	if got := runtime.groupPromptSession(current).anchor(); got != messageHistoryDedupeKey(history[20]) {
+		t.Fatalf("anchor = %q", got)
+	}
+
+	gap := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	gap.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[0].Time - 3600}, "missing-anchor")
+	window = gap.sessionHistoryWindow(current, history, "bot", 128000)
+	if gap.compactionSummary(current) != "" || len(window) == 0 {
+		t.Fatalf("summary that no longer connects must be dropped: %q, window %d", gap.compactionSummary(current), len(window))
+	}
+}
+
+// 锚比按阈值换算的条数还早（机器人很久没说话）：往前多读，直到接上锚。
+func TestPromptContextHistoryReadsBackToAnOldAnchor(t *testing.T) {
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 16000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 5000*60}
+	history := compactionTestHistory(historyCandidateLimit(16000)*3, "话")
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	runtime.groupPromptSession(current).rememberAnchor(messageHistoryDedupeKey(history[5]))
+	got := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
+	if len(got) != len(history)-5 || got[0].MessageID != history[5].MessageID {
+		t.Fatalf("history = %d from %q, want %d from the anchor", len(got), firstMessageID(got), len(history)-5)
+	}
+}
+
+// 重启后从持久化的锚接着带历史，不从冷启动重来。
+func TestPromptContextHistoryRestoresAnchorAfterRestart(t *testing.T) {
+	store := &promptSessionTestStore{memoryMessageHistoryStore: newMemoryMessageHistoryStore(), states: map[string]GroupPromptSession{}}
+	history := compactionTestHistory(40, "话")
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 100*60}
+	first := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	first.SetMessageHistoryStore(store)
+	first.storeCompaction(current, compactionCheckpoint{Summary: "摘要", Until: history[9].Time}, messageHistoryDedupeKey(history[10]))
+	second := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	second.SetMessageHistoryStore(store)
+	got := second.promptContextHistory(current, second.effectiveConfigForEvent(current))
+	if len(got) != 30 || got[0].MessageID != history[10].MessageID {
+		t.Fatalf("restarted history = %d from %q", len(got), firstMessageID(got))
+	}
+}
+
+type slowCompactionProvider struct {
+	compactionTestProvider
+	release chan struct{}
+}
+
+func (p *slowCompactionProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	<-p.release
+	return p.compactionTestProvider.Generate(ctx, req)
+}
+
+// 同一个群并发的两次回复只压缩一次：后到的拿到锁后看到锚已经挪了，直接用存好的结果。
+func TestConcurrentCompactionRunsOnce(t *testing.T) {
+	provider := &slowCompactionProvider{compactionTestProvider: compactionTestProvider{summary: "## 在聊什么\n- 并发"}, release: make(chan struct{})}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := compactionTestHistory(120, strings.Repeat("很长的发言内容", 120))
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 200*60}
+	cfg := runtime.effectiveConfigForEvent(current)
+	var wg sync.WaitGroup
+	kept := make([][]MessageEvent, 2)
+	for index := range kept {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			got, _, err := runtime.compactContext(context.Background(), current, cfg, history, compactionKeepRecentTokens, "threshold")
+			if err != nil {
+				t.Error(err)
+			}
+			kept[index] = got
+		}(index)
+	}
+	close(provider.release)
+	wg.Wait()
+	if len(provider.requests) != 1 {
+		t.Fatalf("summary calls = %d, want 1", len(provider.requests))
+	}
+	if len(kept[0]) != len(kept[1]) || kept[0][0].MessageID != kept[1][0].MessageID {
+		t.Fatal("the two replies saw different kept history")
+	}
+}
+
+// 开着 Agent 时供应商报超限，同样压缩后重试。
+func TestAgentReplyCompactsAndRetriesOnOverflow(t *testing.T) {
+	provider := &overflowOnceProvider{}
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, AgentEnabled: true, LLMIdentityMaskingEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+	history := compactionTestHistory(200, strings.Repeat("很长的群聊发言", 60))
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10002", MessageID: "current", RawMessage: "Diana 帮我看看", Time: 1700000000 + 400*60}
+	runtime.groupPromptSession(current).rememberAnchor(messageHistoryDedupeKey(history[0]))
+	_, _ = runtime.replyTo(context.Background(), current, current.RawMessage)
+	summaries := 0
+	for _, req := range provider.requests {
+		if isCompactionRequest(req) {
+			summaries++
+		}
+	}
+	if summaries != 1 {
+		t.Fatalf("summary calls = %d, want one compaction after the overflow", summaries)
+	}
+	if runtime.groupPromptSession(current).anchor() == messageHistoryDedupeKey(history[0]) {
+		t.Fatal("anchor did not move")
+	}
+}
+
+// 旁路（主动开口、入群欢迎、挑新闻词）只带摘要和保留区，并写明没带上的条数。
+func TestSideContextHistoryUsesSummaryAndKeptRegion(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+	history := compactionTestHistory(600, strings.Repeat("内容", 100))
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 700*60}
+	runtime.storeCompaction(current, compactionCheckpoint{Summary: "旧摘要", Until: history[0].Time - 60}, messageHistoryDedupeKey(history[0]))
+	header, recent := runtime.sideContextHistory(current, runtime.effectiveConfigForEvent(current))
+	if len(recent) == 0 || len(recent) >= len(history) || recent[len(recent)-1].MessageID != history[len(history)-1].MessageID {
+		t.Fatalf("recent = %d", len(recent))
+	}
+	if !strings.Contains(header.Content, "旧摘要") || !strings.Contains(header.Content, fmt.Sprintf("还有 %d 条", len(history)-len(recent))) {
+		t.Fatalf("header = %q", header.Content)
 	}
 }

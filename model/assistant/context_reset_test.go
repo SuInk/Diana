@@ -43,7 +43,7 @@ func TestContextResetExcludesPersistentHistoryFromBothPromptPaths(t *testing.T) 
 	runtime.remember(event)
 	runtime.remember(other)
 	session := sessionKey(event)
-	runtime.contextSummaries[session] = "旧摘要"
+	runtime.contextSummaries[session] = compactionCheckpoint{Summary: "旧摘要"}
 	runtime.agentCarryovers = map[string]agentRunCarryover{agentCarryoverKey(event): {entries: []string{"旧任务"}, at: time.Now()}}
 	runtime.beginReplyTurn(event, time.Now())
 	command := event
@@ -55,7 +55,7 @@ func TestContextResetExcludesPersistentHistoryFromBothPromptPaths(t *testing.T) 
 	runtime.mu.RLock()
 	summary := runtime.contextSummaries[session]
 	runtime.mu.RUnlock()
-	if summary != "" || runtime.compactionSummary(event) != "" {
+	if summary.Summary != "" || runtime.compactionSummary(event) != "" {
 		t.Fatal("old summary retained")
 	}
 	if _, ok := runtime.agentCarryoverMessage(event); ok {

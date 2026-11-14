@@ -146,6 +146,7 @@ func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query ass
 	if (!query.CrossSession && query.Session == "") || (query.CrossSession && query.SessionPrefix == "") {
 		return nil, nil
 	}
+	limit := normalizeMessageHistoryLimit(query.Limit)
 	// A known edit marks its row before the best-effort physical vector delete.
 	// Filtering the row here closes the commit/crash and delete-failure windows:
 	// an old vector can remain on disk temporarily, but it cannot be recalled.
@@ -197,9 +198,8 @@ WHERE `+where, args...)
 		return nil, err
 	}
 	sort.SliceStable(hits, func(left, right int) bool { return hits[left].score > hits[right].score })
-	// Limit 不填就返回全部达到相似度门槛的命中，调用方据此一条不漏地取全。
-	if query.Limit > 0 && len(hits) > query.Limit {
-		hits = hits[:query.Limit]
+	if len(hits) > limit {
+		hits = hits[:limit]
 	}
 	events := make([]assistant.MessageEvent, 0, len(hits))
 	for _, hit := range hits {

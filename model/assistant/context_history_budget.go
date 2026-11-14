@@ -25,12 +25,34 @@ type historyContextTurn struct {
 	hasAssistant bool
 }
 
+// visiblePromptHistory 只留本群（或本会话）的历史，并去掉当前这条消息自己。
+func visiblePromptHistory(event MessageEvent, history []MessageEvent) []MessageEvent {
+	out := history[:0]
+	for _, item := range history {
+		if event.Kind == EventKindGroup && !samePromptGroupScope(event, item) {
+			continue
+		}
+		if strings.TrimSpace(event.MessageID) != "" && item.MessageID == event.MessageID {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
 // promptContextHistory 返回这一轮要带上的会话历史：从锚（会话起点或上次压缩后
 // 第一条保留的消息）开始的全部历史，不按预算裁剪。体积由压缩控制，见
 // context_compaction.go。
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	candidateLimit := historyCandidateLimit(r.promptContextWindowTokens(event, cfg))
+	window := r.promptContextWindowTokens(event, cfg)
+	candidateLimit := historyCandidateLimit(window)
 	session := sessionKey(event)
+	anchorKey := compactionAnchorKey(event)
+	if anchor := r.groupPromptSession(event).anchor(); anchor != "" {
+		r.setHistoryWindowAnchor(anchorKey, anchor)
+	}
+	anchor := r.historyWindowAnchor(anchorKey)
+	checkpoint := r.compactionState(event)
 
 	r.mu.RLock()
 	memory := append([]MessageEvent(nil), r.history[session]...)
@@ -42,36 +64,26 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 	store := r.messageStore
 	r.mu.RUnlock()
 
-	stored := []MessageEvent(nil)
-	if store != nil {
-		loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		var err error
-		stored, err = listContextMessageEvents(loadCtx, store, session, candidateLimit)
-		cancel()
-		if err != nil {
-			log.Printf("diana context history load failed: %v", err)
-		}
-	}
-	history := mergeMessageHistory(memory, stored, candidateLimit)
-	if event.Kind == EventKindGroup {
-		visible := history[:0]
-		for _, item := range history {
-			if samePromptGroupScope(event, item) {
-				visible = append(visible, item)
+	var history []MessageEvent
+	// 机器人很久没说话、群里一直在聊时，锚之后的历史会多过按阈值换算的条数。锚（或
+	// 摘要之后的那段）没读全就加倍往前读，直到接上或存储里已经没有更早的。
+	for limit := candidateLimit; ; limit *= 2 {
+		stored := []MessageEvent(nil)
+		if store != nil {
+			loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			var err error
+			stored, err = listContextMessageEvents(loadCtx, store, session, limit)
+			cancel()
+			if err != nil {
+				log.Printf("diana context history load failed: %v", err)
 			}
 		}
-		history = visible
-	}
-	if strings.TrimSpace(event.MessageID) != "" {
-		filtered := history[:0]
-		for _, item := range history {
-			if item.MessageID != event.MessageID {
-				filtered = append(filtered, item)
-			}
+		history = visiblePromptHistory(event, mergeMessageHistory(memory, stored, limit))
+		if store == nil || len(stored) < limit || historyCoversCheckpoint(history, anchor, checkpoint) {
+			break
 		}
-		history = filtered
 	}
-	selected := r.sessionHistoryWindow(event, history, cfg.BotAccount)
+	selected := r.sessionHistoryWindow(event, history, cfg.BotAccount, window)
 	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
 		return selected
 	}
@@ -407,7 +419,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 		ContextWindow:         window,
 		ContextWindowFallback: r.promptContextWindowFallback(cfg),
 		CompactionThreshold:   compactionThreshold(window),
-		ReserveTokens:         compactionReserveTokens,
+		ReserveTokens:         compactionReserve(window),
 		KeepRecentTokens:      compactionKeepRecentTokens,
 		HasSummary:            event.GroupID != "" && strings.TrimSpace(r.compactionSummary(event)) != "",
 	}

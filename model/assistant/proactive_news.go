@@ -88,8 +88,12 @@ func (r *Runtime) findProactiveNews(ctx context.Context, cfg BotConfig, event Me
 	if search == nil {
 		return proactiveNews{}
 	}
-	// 和生成那一步看同一份会话历史，不另取一个截短的窗口。
-	lines := proactiveNewsChatLines(proactiveGroupHistory(event, sessionOnlyHistory(r.promptContextHistory(event, cfg))), proactiveBotID(event, cfg))
+	// 和生成那一步看同一份上下文：压缩摘要加最近的保留区。
+	header, history := r.sideContextHistory(event, cfg)
+	lines := proactiveNewsChatLines(proactiveGroupHistory(event, history), proactiveBotID(event, cfg))
+	if len(lines) > 0 && header.Content != "" {
+		lines = append([]string{header.Content}, lines...)
+	}
 	if len(lines) == 0 {
 		return proactiveNews{}
 	}

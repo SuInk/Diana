@@ -49,9 +49,9 @@ func TestRequestContextLimitDefaultsAndOverrides(t *testing.T) {
 func TestCompactionThresholdFollowsPi(t *testing.T) {
 	for _, item := range []struct{ window, threshold int64 }{
 		{window: 128000, threshold: 111616},
-		{window: 32000, threshold: 15616},
+		{window: 32000, threshold: 24000},
 		{window: 0, threshold: llm.DefaultContextWindowTokens - 16384},
-		{window: 8000, threshold: 1},
+		{window: 8000, threshold: 6000},
 	} {
 		if got := compactionThreshold(item.window); got != item.threshold {
 			t.Fatalf("window %d: threshold = %d, want %d", item.window, got, item.threshold)

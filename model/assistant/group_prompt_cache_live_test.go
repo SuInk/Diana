@@ -286,8 +286,7 @@ func stableTailCacheFixtures(t *testing.T, nonce string) []stableTailCacheFixtur
 			if factor == "summary" {
 				summaryTurn = turn
 			}
-			r.contextSummaries[sessionKey(e)] = fmt.Sprintf("Synthetic earlier summary revision %d: Alice owns the green notebook; Bob checks the verification record.", summaryTurn)
-			summary := r.contextSummaries[sessionKey(e)]
+			summary := fmt.Sprintf("Synthetic earlier summary revision %d: Alice owns the green notebook; Bob checks the verification record.", summaryTurn)
 			head, tail := r.systemPromptPartsWithRelationshipAndAgentTools(e, nil, false, RelationshipPolicy{}, true, registry)
 			stable, volatile := r.stableGroupHistory(t.Context(), e, cfg, history, true, nil)
 			if len(volatile) != 0 || len(stable) < len(history) || summary == "" {

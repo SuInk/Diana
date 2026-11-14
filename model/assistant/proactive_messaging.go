@@ -726,7 +726,10 @@ func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, e
 		Content:  r.systemPromptWithRelationship(source, nil, false, relationship),
 		Priority: llm.MessagePrioritySystem,
 	}}
-	history := sessionOnlyHistory(r.promptContextHistory(source, cfg))
+	header, history := r.sideContextHistory(source, cfg)
+	if header.Content != "" {
+		messages = append(messages, header)
+	}
 	for _, item := range history {
 		if source.Kind == EventKindGroup && !samePromptGroupScope(source, item) {
 			continue
