@@ -1841,6 +1841,55 @@ code {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  /* 滚动条槽挪进侧栏右内边距：条目和底部那排右缘对齐，出不出滚动条都不跳。 */
+  scrollbar-gutter: stable;
+  margin-right: -10px;
+}
+
+/* 系统滚动条太粗还带箭头：换成细圆角滑块，平时隐藏，滚动时才浮现（App.vue 加 .scrolling）。
+   Chromium 121+ 设了 scrollbar-width/color 就不再认 ::-webkit-scrollbar，
+   所以标准属性只给不支持伪元素的浏览器（Firefox）。 */
+.nav-sections::-webkit-scrollbar {
+  width: 10px;
+}
+
+.nav-sections::-webkit-scrollbar-track,
+.nav-sections::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.nav-sections::-webkit-scrollbar-button {
+  display: none;
+}
+
+.nav-sections::-webkit-scrollbar-thumb {
+  /* 透明边框把滑块收窄到 4px，留出和条目的间距。 */
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: transparent;
+}
+
+.nav-sections.scrolling::-webkit-scrollbar-thumb {
+  background-color: var(--border-strong);
+}
+
+.nav-sections::-webkit-scrollbar-thumb:hover,
+.nav-sections::-webkit-scrollbar-thumb:active {
+  background-color: var(--muted);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  .nav-sections {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 0.15s ease;
+  }
+
+  .nav-sections.scrolling {
+    scrollbar-color: var(--border-strong) transparent;
+  }
 }
 
 .nav-section {
