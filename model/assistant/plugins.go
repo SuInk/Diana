@@ -1561,6 +1561,8 @@ type ResolverPlugin struct {
 	twitterMediaDownloader func(context.Context, twitterMedia) string
 	// douyinDetailFetcher 为空时走真实的抖音接口，测试里注入桩避免打外网。
 	douyinDetailFetcher func(context.Context, string) (douyinMediaDetail, bool, string)
+	// liveRoomFetcher 为空时走真实的直播间接口；platform 取 bilibili / douyin。
+	liveRoomFetcher func(ctx context.Context, platform, roomID, webRID string) (liveRoomInfo, string)
 	// credentialClient 为空时凭据测试走 netguard 的公网客户端，测试里注入桩。
 	credentialClient *http.Client
 }

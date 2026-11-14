@@ -347,8 +347,12 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 }
 
 func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginRequest, raw string) resolverSocialResult {
+	pageURL := resolveBilibiliURL(ctx, raw)
+	if roomID := bilibiliLiveRoomID(pageURL); roomID != "" {
+		return p.resolveLiveRoom(ctx, req, raw, "bilibili", "Bilibili", roomID, "")
+	}
 	result := resolverSocialResult{Handled: true}
-	view, ok := fetchBilibiliView(ctx, raw)
+	view, ok := fetchBilibiliView(ctx, pageURL)
 	if ok {
 		if key := bilibiliResolverResourceKey(view); key != "" {
 			result.ResourceKeys = []string{key}
@@ -389,7 +393,11 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	if p.douyinDetailFetcher != nil {
 		fetchDetail = p.douyinDetailFetcher
 	}
-	detail, ok, status := fetchDetail(ctx, raw)
+	pageURL := douyinPageURL(ctx, raw)
+	if roomID, webRID := douyinLiveTarget(pageURL); roomID != "" || webRID != "" {
+		return p.resolveLiveRoom(ctx, req, raw, "douyin", "抖音", roomID, webRID)
+	}
+	detail, ok, status := fetchDetail(ctx, pageURL)
 	if !ok {
 		result.Failed = true
 		result.Context = "[抖音] 链接已识别，但平台接口解析失败。"
@@ -425,6 +433,17 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	result.Context += "\n媒体下载失败：" + reason
 	recordResolverMediaLog(ctx, req, raw, "douyin", false, reason)
 	return result
+}
+
+// resolveLiveRoom 读直播间信息。直播没有成片，不走视频下载。
+func (p *ResolverPlugin) resolveLiveRoom(ctx context.Context, req PluginRequest, raw, platform, label, roomID, webRID string) resolverSocialResult {
+	fetch := p.liveRoomFetcher
+	if fetch == nil {
+		fetch = fetchLiveRoom
+	}
+	info, status := fetch(ctx, platform, roomID, webRID)
+	recordResolverMediaLog(ctx, req, raw, platform, status == "", firstNonEmpty(status, "live_room"))
+	return liveRoomSocialResult(platform, label, info, status)
 }
 
 func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req PluginRequest, raw string, maxImages int) resolverSocialResult {
@@ -547,11 +566,7 @@ func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail,
 // 网页接口前面的 Argus 网关会拒掉带全套浏览器参数的请求，所以只发精简请求，
 // 拿不到再走移动端 feed 接口。
 func fetchDouyinDetail(ctx context.Context, raw string) (douyinMediaDetail, string) {
-	pageURL := fetchFinalURL(ctx, raw, resolverCommonHeaders())
-	if pageURL == "" {
-		pageURL = raw
-	}
-	match := douyinIDPattern.FindStringSubmatch(pageURL)
+	match := douyinIDPattern.FindStringSubmatch(douyinPageURL(ctx, raw))
 	if len(match) < 2 {
 		return douyinMediaDetail{}, "unsupported_link"
 	}
