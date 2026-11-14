@@ -272,9 +272,12 @@ func TestReplyRefusalConcurrentThresholdBlocksTheExtraReply(t *testing.T) {
 		}
 	}
 
+	// 两条放在同一个人的两个群里：拒答计数和暂停按人算、跨会话共享，正是这里要测的竞态；
+	// 同一会话里第二条可能赶上第一条还在生成，被并进那一轮（merged_into_reply），
+	// 根本走不到暂停判断，测试就时过时不过。
 	results := make(chan string, 2)
 	for index := 0; index < 2; index++ {
-		event := refusalTestEvent(EventKindPrivate, "", "user", fmt.Sprintf("concurrent-%d", index))
+		event := refusalTestEvent(EventKindGroup, fmt.Sprintf("1000%d", index+1), "user", fmt.Sprintf("concurrent-%d", index))
 		go func() {
 			outcome, err := runtime.replyAndRecord(context.Background(), event, event.RawMessage, "replied")
 			if err != nil {
