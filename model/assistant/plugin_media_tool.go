@@ -106,9 +106,21 @@ func (t *dianaPluginMediaTool) Run(ctx context.Context, input map[string]any) (s
 		if t.sent[id] {
 			return encode(map[string]any{"ok": true, "message": "该结果已发送，不再重复发送。"})
 		}
+		reservation, duplicate := t.runtime.reserveResolverDelivery(t.event, resp.ResolverResourceKeys)
+		if duplicate {
+			t.runtime.recordResolverDuplicateSuppressed(ctx, t.event, resp.ResolverResourceKeys)
+			if t.sent == nil {
+				t.sent = map[string]bool{}
+			}
+			t.sent[id] = true
+			return encode(map[string]any{"ok": true, "message": "该链接的解析卡片刚刚已在当前会话自动发出，已跳过重复发送。"})
+		}
+		delivered := false
+		defer func() { t.runtime.finishResolverDelivery(reservation, delivered) }()
 		if _, err := t.runtime.deliverResolverResponse(ctx, t.event, resp); err != nil {
 			return "", err
 		}
+		delivered = true
 		if t.sent == nil {
 			t.sent = map[string]bool{}
 		}

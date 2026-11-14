@@ -33,6 +33,7 @@ const (
 	renderMediaFormatSVG  = "svg"
 
 	renderMediaOutputImage = "image"
+	renderMediaOutputPDF   = "pdf"
 	renderMediaOutputVideo = "video"
 	renderMediaOutputGIF   = "gif"
 
@@ -54,6 +55,7 @@ type renderMediaSize struct{ width, height int }
 // 各输出的默认视口。HTML 图片只定宽度，高度按页面实际长度截整页。
 var renderMediaDefaultSizes = map[string]renderMediaSize{
 	renderMediaOutputImage: {1000, 0},
+	renderMediaOutputPDF:   {1000, 0},
 	renderMediaOutputVideo: {1280, 720},
 	renderMediaOutputGIF:   {640, 360},
 }
@@ -75,9 +77,9 @@ func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 // 导致白屏，所以「资源全内联」必须留在说明里。录制用虚拟时钟，setTimeout/rAF/CSS
 // 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
-	return `把 HTML 页面或 SVG 渲染成图片、视频或 GIF 发到当前会话。` +
+	return `把 HTML 页面或 SVG 渲染成图片、PDF、视频或 GIF 发到当前会话。` +
 		`已有工作目录文件时，直接传 path，由运行时完整读取；不必 read_file 复制正文、打开 file:// 或启动 HTTP 服务。content 与 path 二选一。` +
-		`仅在用户明确要求图片、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
+		`仅在用户明确要求图片、PDF、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
 		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
 		`成品由运行时发送，调用后一句话交代即可。`
 }
@@ -87,7 +89,8 @@ func (t *dianaRenderMediaTool) InputSchema() map[string]any {
 		"format":   map[string]any{"type": "string", "enum": []string{renderMediaFormatHTML, renderMediaFormatSVG}},
 		"content":  toolStringParam("完整 HTML 文档，或以 <svg> 开头的 SVG"),
 		"path":     toolStringParam("工作目录内 HTML/SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件，不是 URL"),
-		"output":   map[string]any{"type": "string", "enum": []string{renderMediaOutputImage, renderMediaOutputVideo, renderMediaOutputGIF}, "description": "image 为 PNG 整页截图，video 为 MP4；默认 image"},
+		"output":   map[string]any{"type": "string", "enum": []string{renderMediaOutputImage, renderMediaOutputPDF, renderMediaOutputVideo, renderMediaOutputGIF}, "description": "image 为 PNG 整页截图，pdf 为矢量排版 PDF，video 为 MP4；默认 image"},
+		"filename": toolStringParam("output=pdf 时的附件文件名，默认 document.pdf"),
 		"duration": map[string]any{"type": "number", "description": "video/gif 时长（秒），默认 4"},
 		"fps":      map[string]any{"type": "integer", "description": "video/gif 帧率，默认 video 24、gif 12，最高 30"},
 		"width":    map[string]any{"type": "integer", "description": "宽度像素，默认 image 1000、video 1280、gif 640"},
@@ -100,6 +103,7 @@ type dianaRenderMediaResult struct {
 	Message  string  `json:"message"`
 	Format   string  `json:"format,omitempty"`
 	Output   string  `json:"output,omitempty"`
+	Filename string  `json:"filename,omitempty"`
 	Width    int     `json:"width,omitempty"`
 	Height   int     `json:"height,omitempty"`
 	Frames   int     `json:"frames,omitempty"`
@@ -108,8 +112,8 @@ type dianaRenderMediaResult struct {
 }
 
 type renderMediaSpec struct {
-	format, output, content string
-	width, height           int
+	format, output, content, filename string
+	width, height                     int
 	// sized 表示调用方显式给了宽或高，SVG 就不再按图形外框自动定尺寸。
 	sized       bool
 	fps, frames int
@@ -133,9 +137,19 @@ func (t *dianaRenderMediaTool) Run(ctx context.Context, input map[string]any) (s
 		return t.fail(ctx, result, "")
 	}
 	ffmpeg := ""
-	if spec.output != renderMediaOutputImage {
+	if spec.output != renderMediaOutputImage && spec.output != renderMediaOutputPDF {
 		if ffmpeg, err = lookResolverCommand("ffmpeg"); err != nil {
 			result.Message = "这台机器没有安装 ffmpeg，出不了视频或 GIF；可以改用 output=image 出静帧。"
+			return t.fail(ctx, result, "")
+		}
+	}
+	if spec.output == renderMediaOutputPDF {
+		result.Filename = spec.filename
+		if platform, platErr := t.runtime.outboundPlatformForEvent(t.event); platErr != nil {
+			result.Message = "PDF 发送失败：" + firstLineOf(platErr.Error())
+			return t.fail(ctx, result, platErr.Error())
+		} else if platform != PlatformTelegram && platform != PlatformQQOfficial && !IsOneBotPlatform(platform) {
+			result.Message = "当前平台暂不支持发送 PDF 文件附件；可以改用 output=image 发送整页高清渲染图。"
 			return t.fail(ctx, result, "")
 		}
 	}
@@ -143,6 +157,31 @@ func (t *dianaRenderMediaTool) Run(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		result.Message = err.Error()
 		return t.fail(ctx, result, "")
+	}
+
+	if spec.output == renderMediaOutputPDF {
+		result.Filename = spec.filename
+		pdfBytes, err := agent.CaptureHTMLPDF(ctx, request, renderMediaStillAt)
+		if err != nil {
+			result.Message = "PDF 渲染失败：" + firstLineOf(err.Error())
+			return t.fail(ctx, result, err.Error())
+		}
+		maxBytes := int64(t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
+		if maxBytes <= 0 || maxBytes > renderMediaMaxOutputBytes {
+			maxBytes = renderMediaMaxOutputBytes
+		}
+		if int64(len(pdfBytes)) > maxBytes {
+			result.Message = fmt.Sprintf("生成的 PDF 有 %.1f MB，超过 %.1f MB 上限。", float64(len(pdfBytes))/(1<<20), float64(maxBytes)/(1<<20))
+			return t.fail(ctx, result, "")
+		}
+		if err := t.runtime.sendFileAttachment(ctx, t.event, spec.filename, pdfBytes); err != nil {
+			result.Message = "PDF 发送失败：" + firstLineOf(err.Error())
+			return t.fail(ctx, result, err.Error())
+		}
+		result.OK, result.Message = true, "PDF 已经发到会话里了。"
+		result.Bytes = int64(len(pdfBytes))
+		t.record(ctx, result, "")
+		return marshalRenderMediaResult(result), nil
 	}
 
 	if spec.output == renderMediaOutputImage {
@@ -217,9 +256,20 @@ func (t *dianaRenderMediaTool) parse(input map[string]any) (renderMediaSpec, err
 	}
 	defaults, ok := renderMediaDefaultSizes[spec.output]
 	if !ok {
-		return spec, errors.New("output 只支持 image、video 或 gif。")
+		return spec, errors.New("output 只支持 image、pdf、video 或 gif。")
 	}
 	var err error
+	if spec.output == renderMediaOutputPDF {
+		rawName := strings.TrimSpace(configToolString(input, "filename"))
+		if rawName == "" {
+			rawName = "document.pdf"
+		} else if !strings.HasSuffix(strings.ToLower(rawName), ".pdf") {
+			rawName += ".pdf"
+		}
+		if spec.filename, err = fileDeliveryName(rawName); err != nil {
+			return spec, err
+		}
+	}
 	spec.content, err = toolTextSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
 	if err != nil {
 		return spec, err
@@ -236,7 +286,7 @@ func (t *dianaRenderMediaTool) parse(input map[string]any) (renderMediaSpec, err
 	if spec.height, err = renderMediaDimension(input, "height", defaults.height, 64, 1920); err != nil {
 		return spec, err
 	}
-	if spec.output == renderMediaOutputImage {
+	if spec.output == renderMediaOutputImage || spec.output == renderMediaOutputPDF {
 		return spec, nil
 	}
 	maxSeconds := min(max(t.settings.Int(fileDeliverySettingMaxVideoSeconds, defaultRenderMediaMaxSeconds), 1), maxRenderMediaMaxSeconds)

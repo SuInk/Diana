@@ -23,13 +23,22 @@ type resolverDeliveryHandle struct {
 	keys  []string
 }
 
+func resolverDeliveryScopeKey(event MessageEvent) string {
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
+		// 群聊按平台+群号共享去重：同一进程里挂在同一群的多个机器人（或同一轮自动解析与
+		// plugin_media send）在短时间内对同一条链接只发一份解析卡片。
+		return strings.TrimSpace(event.Platform) + "\x00group:" + strings.TrimSpace(event.GroupID)
+	}
+	return sessionKey(event)
+}
+
 func (r *Runtime) reserveResolverDelivery(event MessageEvent, resourceKeys []string) (resolverDeliveryHandle, bool) {
 	keys := normalizeResolverResourceKeys(resourceKeys)
 	if len(keys) == 0 {
 		return resolverDeliveryHandle{}, false
 	}
 	now := r.clock()
-	scope := sessionKey(event)
+	scope := resolverDeliveryScopeKey(event)
 	r.resolverDeliveryMu.Lock()
 	defer r.resolverDeliveryMu.Unlock()
 	for key, reservation := range r.resolverDeliveries {

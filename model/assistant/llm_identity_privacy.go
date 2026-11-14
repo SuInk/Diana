@@ -336,6 +336,24 @@ func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.Generate
 	return &copyResponse, nil
 }
 
+// unresolvableIdentityPlaceholder 用于「留空会默认回退到当前发言者」的工具参数：
+// 既不透传伪造别名，也不让空串静默回退把原本给别人的消息或提醒错发给当前发言人。
+const unresolvableIdentityPlaceholder = "im_unresolvable"
+
+func toolDefaultsEmptyIdentityToSpeaker(toolName, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "user_id", "target_user_id":
+	default:
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case dianaCrossSessionToolName, "cross_bot_message", "reminder", "subscription", "schedule", "tasks", "relationship":
+		return true
+	default:
+		return false
+	}
+}
+
 // restoreToolCalls 把工具参数里的别名换回真实标识。参数是任意 JSON 结构，字符串可能
 // 藏在嵌套的对象或数组里，所以要递归走一遍。
 func (s *identityPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.ToolCall {
@@ -350,7 +368,11 @@ func (s *identityPrivacyScope) restoreToolCalls(calls []llm.ToolCall) []llm.Tool
 			for key, value := range call.Arguments {
 				// 执行前校验：身份类参数里还原不出来的别名一律清掉，不放行成垃圾字符串。
 				if cleared, rejected := s.rejectUnresolvableIdentityArgument(key, value); rejected {
-					arguments[key] = cleared
+					if toolDefaultsEmptyIdentityToSpeaker(call.Name, key) {
+						arguments[key] = unresolvableIdentityPlaceholder
+					} else {
+						arguments[key] = cleared
+					}
 					continue
 				}
 				arguments[key] = s.restoreValue(value)

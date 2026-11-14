@@ -1146,6 +1146,8 @@ func (t *ListFilesTool) Name() string {
 	return "list_files"
 }
 
+func (t *ListFilesTool) CodeModeParallel() bool { return true }
+
 // Description 返回列目录工具说明。
 func (t *ListFilesTool) Description() string {
 	return `列出工作目录内的文件。`
@@ -1258,6 +1260,7 @@ func (t *RunCommandTool) InputSchema() map[string]any {
 		"command":    toolStringParam("命令名"),
 		"args":       toolStringArrayParam("参数，不经 shell 解析"),
 		"cwd":        toolStringParam("相对执行目录"),
+		"stdin":      toolStringParam("可选标准输入内容"),
 		"timeout_ms": toolIntParam("超时毫秒"),
 	})
 }
@@ -1304,6 +1307,9 @@ func (t *RunCommandTool) run(ctx context.Context, input map[string]any, command 
 	defer func() { _ = commandOutput.Close() }()
 	cmd.Stdout = commandOutput
 	cmd.Stderr = commandOutput
+	if stdinText, ok := input["stdin"].(string); ok && stdinText != "" {
+		cmd.Stdin = strings.NewReader(stdinText)
+	}
 	start := time.Now()
 	err = cmd.Run()
 	duration := time.Since(start)
@@ -1412,7 +1418,18 @@ func (t *RunCommandTool) commandFor(ctx context.Context, command string, args []
 // 读到的就是命令写的内容。
 func (t *RunCommandTool) sandboxSecrets() []string {
 	_ = os.MkdirAll(DianaStateDir(t.root), 0o700)
-	return t.protected.existingPaths()
+	paths := t.protected.existingPaths()
+	seen := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		seen[filepath.Clean(p)] = true
+	}
+	for _, extra := range hostSensitiveCredentialPaths(t.root) {
+		if !seen[extra] {
+			seen[extra] = true
+			paths = append(paths, extra)
+		}
+	}
+	return paths
 }
 
 // commandEnvironment 是命令继承的环境：Diana 自己的进程环境，去掉凭据。
@@ -1424,11 +1441,32 @@ func (t *RunCommandTool) sandboxSecrets() []string {
 // 跑 env、printenv 时这些就是令牌原文——沙箱挡的是文件，挡不住继承下来的
 // 环境变量。run_command 是给模型在工作区里干活用的，不需要主人的凭据。
 func (t *RunCommandTool) commandEnvironment() []string {
-	return withExecutionSearchPath(commandEnvironmentFor(os.Environ(), t.mcpConfigPath))
+	env := withExecutionSearchPath(commandEnvironmentFor(os.Environ(), t.mcpConfigPath))
+	if !t.sandboxNetwork {
+		env = stripNetworkProxyEnv(env)
+	}
+	return env
+}
+
+func stripNetworkProxyEnv(environ []string) []string {
+	proxyKeys := map[string]bool{
+		"HTTP_PROXY": true, "http_proxy": true,
+		"HTTPS_PROXY": true, "https_proxy": true,
+		"ALL_PROXY": true, "all_proxy": true,
+		"FTP_PROXY": true, "ftp_proxy": true,
+		"SOCKS_PROXY": true, "socks_proxy": true,
+		"NO_PROXY": true, "no_proxy": true,
+	}
+	filtered := environmentWithout(environ, proxyKeys)
+	return append(filtered, "NO_PROXY=*", "no_proxy=*")
 }
 
 func commandEnvironmentFor(environ []string, mcpConfigPath string) []string {
 	drop := secretmask.SensitiveEnvironmentNames(environ)
+	// 剥离宿主认证代理套接字与会话句柄，防止通过 Unix Socket 借用宿主 SSH/GPG 密钥签名。
+	for _, key := range []string{"SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO", "SECURITYSESSIONID"} {
+		drop[key] = true
+	}
 	for _, item := range environ {
 		name, value, _ := strings.Cut(item, "=")
 		if secretmask.URLs(value) != value {
@@ -1450,6 +1488,8 @@ func commandEnvironmentFor(environ []string, mcpConfigPath string) []string {
 func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
+
+func (t *ReadFileTool) CodeModeParallel() bool { return true }
 
 // Description 返回读文件工具说明。
 // 二进制和超大文件代码会拒绝，并在错误里指向 view_image / grep / manage_files stat。

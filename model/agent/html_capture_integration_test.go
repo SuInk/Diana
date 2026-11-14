@@ -98,6 +98,24 @@ func TestHTMLCaptureStillFitsPageHeight(t *testing.T) {
 	}
 }
 
+func TestHTMLCapturePDFPrintsOfflineVectorDocument(t *testing.T) {
+	page := `<!doctype html><html><head><style>
+@page { size: A4; margin: 16mm; }
+body { font-family: serif; column-count: 2; }
+</style></head><body>
+<h1 id="title">Draft</h1>
+<script>setTimeout(() => { document.getElementById('title').textContent = 'Final Paper'; }, 200);</script>
+<p>Two-column academic layout test.</p>
+</body></html>`
+	pdfBytes, err := CaptureHTMLPDF(context.Background(), HTMLCaptureRequest{HTML: page, Width: 1000, Timeout: 30 * time.Second}, 500*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasPrefix(pdfBytes, []byte("%PDF-")) || len(pdfBytes) < 512 {
+		t.Fatalf("invalid pdf output: len=%d prefix=%q", len(pdfBytes), pdfBytes[:min(len(pdfBytes), 16)])
+	}
+}
+
 func decodeCaptureFrame(t *testing.T, data []byte) image.Image {
 	t.Helper()
 	if bytes.HasPrefix(data, []byte("\x89PNG")) {

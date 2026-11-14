@@ -65,21 +65,29 @@ func newDianaMemberCommandTool(r *Runtime, event MessageEvent) *dianaMemberComma
 
 func (t *dianaMemberCommandTool) Name() string { return "run_command" }
 
+const (
+	memberCommandMaxWriteFiles = 16
+	memberCommandMaxInputs     = 10
+)
+
 func (t *dianaMemberCommandTool) Description() string {
 	limits := agent.DefaultMemberCommandLimits
-	return fmt.Sprintf("在你的个人临时目录里运行短时命令生成文件，不经过 shell。只能用 %s；"+
-		"复杂逻辑用 python3 -c 或 node -e 写进脚本文件再跑。断网，只能读系统库和自己目录，"+
-		"单次最长 %d 秒、内存 %d MB、单个文件 %d MB，文件保留 %d 小时。"+
-		"结果的 files 列出新生成的文件，把其中的 path 交给 send_file 发出。",
-		strings.Join(agent.MemberCommandPrograms(), "、"), int(limits.Wall/time.Second), limits.MemoryBytes>>20,
-		limits.FileBytes>>20, int(limits.Retention/time.Hour))
+	return fmt.Sprintf("在个人隔离沙盒里离线运行命令生成或处理文件（无 shell、断网、禁读宿主目录）。可用：%s。"+
+		"支持 write_files 预写脚本、inputs 传入本群已保存附件、stdin 标准输入；"+
+		"Python 预装零依赖库 diana_sandbox（Canvas 导出 PNG/BMP、svg_bar_chart/svg_line_chart/svg_pie_chart、synth_notes/write_wav、MIDIBuilder、describe_numbers）。"+
+		"限 %ds/%dMB 内存/%dMB 单文件，产物从 files 取 path 交 send_file 发出。",
+		strings.Join(agent.AvailableMemberCommandPrograms(), "、"), int(limits.Wall/time.Second), limits.MemoryBytes>>20,
+		limits.FileBytes>>20)
 }
 
 func (t *dianaMemberCommandTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"command"}, map[string]any{
-		"command":    toolStringParam("程序名"),
-		"args":       toolStringArrayParam("参数，不经 shell 解析"),
-		"timeout_ms": toolIntParam("超时毫秒，不超过上限", 1, int(agent.DefaultMemberCommandLimits.Wall/time.Millisecond)),
+		"command":     toolStringParam("程序名（如 python3、node、ffmpeg、sqlite3、jq、sips）"),
+		"args":        toolStringArrayParam("参数，不经 shell 解析"),
+		"stdin":       toolStringParam("可选标准输入文本，直传给进程"),
+		"write_files": map[string]any{"type": "object", "description": "启动前写入个人目录的文件映射（键为相对路径如 \"gen.py\"，值为文本内容）", "additionalProperties": map[string]any{"type": "string"}},
+		"inputs":      toolStringArrayParam("本群已授权的工作目录文件路径（如 save_to_workspace 返回的 path），会复制到沙盒 inputs/<文件名> 供读取"),
+		"timeout_ms":  toolIntParam("超时毫秒，不超过上限", 1, int(agent.DefaultMemberCommandLimits.Wall/time.Millisecond)),
 	})
 }
 
@@ -96,13 +104,25 @@ func (t *dianaMemberCommandTool) Run(ctx context.Context, input map[string]any) 
 	if err != nil {
 		return "", err
 	}
+	writeFiles, err := memberCommandWriteFiles(input)
+	if err != nil {
+		return "", err
+	}
+	stagedInputs, err := t.resolveAuthorizedInputs(input, agent.DefaultMemberCommandLimits.FileBytes)
+	if err != nil {
+		return "", err
+	}
+	stdinText, _ := input["stdin"].(string)
 	root := AgentWorkspaceDir()
 	result, err := t.run(ctx, agent.MemberCommandRequest{
-		Dir:     filepath.Join(root, rel),
-		Command: configToolString(input, "command"),
-		Args:    memberCommandArgs(input),
-		Timeout: time.Duration(intFromAny(input["timeout_ms"])) * time.Millisecond,
-		Limits:  agent.DefaultMemberCommandLimits,
+		Dir:        filepath.Join(root, rel),
+		Command:    configToolString(input, "command"),
+		Args:       memberCommandArgs(input),
+		Stdin:      stdinText,
+		WriteFiles: writeFiles,
+		Inputs:     stagedInputs,
+		Timeout:    time.Duration(intFromAny(input["timeout_ms"])) * time.Millisecond,
+		Limits:     agent.DefaultMemberCommandLimits,
 	})
 	if err != nil {
 		return "", err
@@ -171,4 +191,88 @@ func memberCommandArgs(input map[string]any) []string {
 		}
 	}
 	return args
+}
+
+func memberCommandWriteFiles(input map[string]any) (map[string][]byte, error) {
+	raw, exists := input["write_files"]
+	if !exists || raw == nil {
+		return nil, nil
+	}
+	out := map[string][]byte{}
+	switch typed := raw.(type) {
+	case map[string]string:
+		if len(typed) > memberCommandMaxWriteFiles {
+			return nil, fmt.Errorf("write_files 一次最多 %d 个文件", memberCommandMaxWriteFiles)
+		}
+		for k, v := range typed {
+			out[k] = []byte(v)
+		}
+	case map[string]any:
+		if len(typed) > memberCommandMaxWriteFiles {
+			return nil, fmt.Errorf("write_files 一次最多 %d 个文件", memberCommandMaxWriteFiles)
+		}
+		for k, v := range typed {
+			text, ok := v.(string)
+			if !ok {
+				return nil, fmt.Errorf("write_files[%q] 必须是字符串", k)
+			}
+			out[k] = []byte(text)
+		}
+	default:
+		return nil, errors.New("write_files 必须是文件名到内容的键值对象")
+	}
+	return out, nil
+}
+
+// resolveAuthorizedInputs 校验并读取本群已获授权的工作区文件（如 save_to_workspace 产物），
+// 严格核对本群访问哈希，绝不允许跨群或越权读取受保护文件与主人私有文件。
+func (t *dianaMemberCommandTool) resolveAuthorizedInputs(input map[string]any, limit int64) (map[string][]byte, error) {
+	paths := configToolStringSlice(input, "inputs")
+	if len(paths) == 0 {
+		return nil, nil
+	}
+	if len(paths) > memberCommandMaxInputs {
+		return nil, fmt.Errorf("inputs 一次最多传入 %d 个文件", memberCommandMaxInputs)
+	}
+	cfg := agent.Config{WorkDir: AgentWorkspaceDir()}
+	if t.runtime != nil {
+		cfg.MCPConfigPath = t.runtime.effectiveConfigForEvent(t.event).AgentMCPConfigPath
+	}
+	staged := make(map[string][]byte, len(paths))
+	for _, rawPath := range paths {
+		trimmed := strings.TrimSpace(rawPath)
+		if trimmed == "" {
+			continue
+		}
+		rel, err := agent.NormalizeWorkspacePath(cfg.WorkDir, trimmed)
+		if err != nil {
+			return nil, err
+		}
+		if agent.WorkspaceFileProtected(cfg, rel) {
+			return nil, fmt.Errorf("%s 是受保护的运行时配置，不能传入沙盒", trimmed)
+		}
+		grant, err := t.runtime.workspaceGroupFileGrant(t.event, rel)
+		if err != nil {
+			return nil, err
+		}
+		data, err := agent.ReadWorkspaceFile(cfg.WorkDir, rel, limit)
+		if err != nil {
+			return nil, err
+		}
+		if workspaceAccessHash(data) != grant {
+			return nil, fmt.Errorf("文件 %s 内容已改变，本群原有访问记录不再适用；请从本群原消息重新保存", trimmed)
+		}
+		base := filepath.Base(rel)
+		name := base
+		for suffix := 2; ; suffix++ {
+			if _, exists := staged[name]; !exists {
+				break
+			}
+			ext := filepath.Ext(base)
+			stem := strings.TrimSuffix(base, ext)
+			name = fmt.Sprintf("%s_%d%s", stem, suffix, ext)
+		}
+		staged[name] = data
+	}
+	return staged, nil
 }

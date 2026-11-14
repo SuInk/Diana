@@ -163,6 +163,79 @@ const sandboxProbeTimeout = 5 * time.Second
 
 func (s commandSandbox) available() bool { return s.wrap != nil }
 
+// sandboxDeniedEscapeMachServices 封堵 macOS 上可借宿主守护进程跳出沙盒或窃取宿主凭据的 Mach IPC：
+// LaunchServices / AppleEvents（open 拉起沙盒外无限制进程）、剪贴板、钥匙串与截屏服务。
+var sandboxDeniedEscapeMachServices = []string{
+	"com.apple.coreservices.launchservicesd",
+	"com.apple.coreservices.appleevents",
+	"com.apple.lsd.modifydb",
+	"com.apple.Pasteboard.pboard",
+	"com.apple.securityd",
+	"com.apple.SecurityServer",
+	"com.apple.security.agent",
+	"com.apple.screencapture.interactive",
+}
+
+// sandboxDeniedNetProxyMachServices 封堵断网模式下借系统后台会话代发请求的 Mach IPC。
+// 注意名称列表同时供 memberSandboxExecProfile 复用，不得包含 "network" 子串。
+var sandboxDeniedNetProxyMachServices = []string{
+	"com.apple.nsurlsessiond",
+	"com.apple.cloudd",
+	"com.apple.bird",
+}
+
+func writeSBPLDeniedMachServices(builder *strings.Builder, services ...string) {
+	if len(services) == 0 {
+		return
+	}
+	builder.WriteString("(deny mach-lookup")
+	for _, svc := range services {
+		builder.WriteString(" (global-name " + sbplString(svc) + ")")
+	}
+	builder.WriteString(")")
+}
+
+// hostSensitiveCredentialPaths 返回宿主机上真实存在且不在工作目录内的常见敏感凭据路径，
+// 默认交给沙盒遮蔽，防止命令通过 cat/grep/python 读取 SSH 私钥、云凭据或钥匙串。
+func hostSensitiveCredentialPaths(workRoot string) []string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return nil
+	}
+	cleanWork := filepath.Clean(workRoot)
+	candidates := []string{
+		filepath.Join(home, ".ssh"),
+		filepath.Join(home, ".gnupg"),
+		filepath.Join(home, ".aws"),
+		filepath.Join(home, ".kube"),
+		filepath.Join(home, ".config", "gh"),
+		filepath.Join(home, ".config", "gcloud"),
+		filepath.Join(home, ".cloudflared"),
+		filepath.Join(home, ".docker", "config.json"),
+		filepath.Join(home, ".netrc"),
+		filepath.Join(home, ".npmrc"),
+		filepath.Join(home, ".pypirc"),
+		filepath.Join(home, ".git-credentials"),
+		filepath.Join(home, "Library", "Keychains"),
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, path := range candidates {
+		clean := filepath.Clean(path)
+		if cleanWork != "" && (pathWithin(clean, cleanWork) || pathWithin(cleanWork, clean)) {
+			continue
+		}
+		if _, err := os.Stat(clean); err != nil {
+			continue
+		}
+		if !seen[clean] {
+			seen[clean] = true
+			out = append(out, clean)
+		}
+	}
+	return out
+}
+
 // sandboxExecProfile 生成 SBPL 策略：默认拒绝，只放开跑一个程序所必需的读取和
 // 工作目录内的写入。读取保持宽松是有意的——动态链接、locale、证书散落在系统各处，
 // 逐条放行会让常用命令直接跑不起来；真正的边界是「不能改」和「不能外发」。
@@ -171,13 +244,19 @@ func sandboxExecProfile(root string, allowNetwork bool, secrets []string) string
 	builder.WriteString("(version 1)(deny default)")
 	builder.WriteString("(allow process-exec)(allow process-fork)(allow signal (target self))")
 	builder.WriteString("(allow sysctl-read)(allow mach-lookup)")
+	writeSBPLDeniedMachServices(&builder, sandboxDeniedEscapeMachServices...)
+	if !allowNetwork {
+		writeSBPLDeniedMachServices(&builder, sandboxDeniedNetProxyMachServices...)
+	}
 	builder.WriteString("(allow file-read*)")
 	// 放开读之后再逐条挡掉凭据文件：SBPL 后写的规则覆盖先写的，所以这几行必须留在
 	// (allow file-read*) 后面。白名单里一旦有 cat、grep、head，读取这一层就是唯一
 	// 的边界了。
 	for _, path := range secrets {
-		// 目录（内置浏览器 profile、编码代理登录目录）按子路径整片挡掉。
-		builder.WriteString(fmt.Sprintf("(deny file-read* (%s %s))", sandboxSecretFilter(path), sbplString(path)))
+		for _, variant := range sandboxWritableRoots(path) {
+			// 目录（内置浏览器 profile、编码代理登录目录）按子路径整片挡掉。
+			builder.WriteString(fmt.Sprintf("(deny file-read* (%s %s))", sandboxSecretFilter(path), sbplString(variant)))
+		}
 	}
 	// 写入只开工作目录和临时目录；/dev/null 一类字符设备是命令的常规去处。
 	for _, path := range sandboxWritableRoots(root) {
@@ -187,13 +266,17 @@ func sandboxExecProfile(root string, allowNetwork bool, secrets []string) string
 	// 命令不能把登录态换掉或者挪走。同样要写在放行规则后面才覆盖得住。
 	for _, path := range secrets {
 		if sandboxSecretIsDir(path) {
-			builder.WriteString(fmt.Sprintf("(deny file-write* (subpath %s))", sbplString(path)))
+			for _, variant := range sandboxWritableRoots(path) {
+				builder.WriteString(fmt.Sprintf("(deny file-write* (subpath %s))", sbplString(variant)))
+			}
 		}
 	}
 	builder.WriteString("(allow file-write* (subpath \"/private/tmp\") (subpath \"/private/var/tmp\") (subpath \"/tmp\"))")
 	builder.WriteString("(allow file-write-data (literal \"/dev/null\") (literal \"/dev/stdout\") (literal \"/dev/stderr\"))")
 	if allowNetwork {
 		builder.WriteString("(allow network*)")
+	} else {
+		builder.WriteString("(deny network*)")
 	}
 	return builder.String()
 }
@@ -252,6 +335,7 @@ func wrapWithBubblewrap(bwrapPath string) func(context.Context, string, bool, []
 			"--unshare-pid",
 			"--unshare-ipc",
 			"--unshare-uts",
+			"--unshare-cgroup-try",
 			"--die-with-parent",
 			"--new-session",
 		}

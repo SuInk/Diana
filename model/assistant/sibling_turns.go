@@ -23,17 +23,20 @@ import (
 // 跑的过程中，别的轮发到群里的东西在下一步规划前插进来（siblingSendInterjections）。
 
 const (
-	sessionSendKeep    = 10 * time.Minute
-	sessionSendMaxKeep = 40
+	sessionSendKeep        = 10 * time.Minute
+	sessionSendMaxKeep     = 40
+	siblingDuplicateWindow = 90 * time.Second
+	siblingDuplicateRunes  = 8
 )
 
 type sessionSendRecord struct {
-	at     time.Time
-	turnID string
-	text   string
-	images int
-	videos int
-	audios int
+	at       time.Time
+	turnID   string
+	text     string
+	fullText string
+	images   int
+	videos   int
+	audios   int
 }
 
 // sessionSendLog 记各会话最近发出去的消息，按机器人分开。自带锁。
@@ -56,13 +59,15 @@ func (l *sessionSendLog) note(event MessageEvent, turnID string, msg OutgoingMes
 		return
 	}
 	images, videos, audios := outgoingMediaCounts(msg)
+	cleanText := normalizeSiblingCompareText(msg.Text)
 	record := sessionSendRecord{
-		at:     at,
-		turnID: turnID,
-		text:   truncateReplyExcerpt(stripReplyMarkers(msg.Text), 80),
-		images: images,
-		videos: videos,
-		audios: audios,
+		at:       at,
+		turnID:   turnID,
+		text:     truncateReplyExcerpt(stripReplyMarkers(msg.Text), 80),
+		fullText: cleanText,
+		images:   images,
+		videos:   videos,
+		audios:   audios,
 	}
 	if record.text == "" && images+videos+audios == 0 {
 		return
@@ -103,6 +108,62 @@ func (l *sessionSendLog) after(event MessageEvent, cursor time.Time, ownTurn str
 	return out
 }
 
+func normalizeSiblingCompareText(text string) string {
+	return strings.TrimSpace(stripChatPeriods(stripReplyMarkers(text)))
+}
+
+// repeatsRecentSibling 判断候选回复是否把同会话并发另一轮（在本轮启动之后）刚发出的句子原样复读了一遍。
+// 在本轮启动前已经结束的旧轮次不算并发兄弟轮次；短促应答（不足 8 字）也允许各自正常回应。
+func (l *sessionSendLog) repeatsRecentSibling(ctx context.Context, event MessageEvent, candidate string, now time.Time) bool {
+	ownTurn := strings.TrimSpace(outboundTurnID(ctx))
+	if ownTurn == "" {
+		return false
+	}
+	turnStart, ok := replyTurnStartFromContext(ctx)
+	if !ok || turnStart.IsZero() {
+		return false
+	}
+	key := sessionSendLogKey(event)
+	if key == "" {
+		return false
+	}
+	clean := normalizeSiblingCompareText(candidate)
+	if len([]rune(clean)) < siblingDuplicateRunes {
+		return false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, item := range l.items[key] {
+		if item.turnID == "" || item.turnID == ownTurn {
+			continue
+		}
+		if item.at.Before(turnStart) || now.Sub(item.at) > siblingDuplicateWindow {
+			continue
+		}
+		if item.fullText != "" && item.fullText == clean {
+			return true
+		}
+	}
+	return false
+}
+
+func forwardNodesSessionSummary(nodes []map[string]any) string {
+	var parts []string
+	for _, node := range nodes {
+		data, _ := node["data"].(map[string]any)
+		if data == nil {
+			continue
+		}
+		if text := strings.TrimSpace(forwardNodeContentText(data["content"])); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	if len(parts) > 0 {
+		return fmt.Sprintf("[合并转发×%d] %s", len(nodes), strings.Join(parts, " / "))
+	}
+	return fmt.Sprintf("[合并转发×%d]", len(nodes))
+}
+
 func (s sessionSendRecord) describe() string {
 	parts := make([]string, 0, 4)
 	if s.images > 0 {
@@ -135,7 +196,12 @@ func (r *Runtime) startSiblingSendInterjections(ctx context.Context, event Messa
 	if turn == nil || sessionSendLogKey(event) == "" {
 		return nil
 	}
-	return &siblingSendInterjections{r: r, event: event, turnID: turn.id, cursor: time.Now()}
+	cursor := time.Now()
+	if start, ok := replyTurnStartFromContext(ctx); ok && !start.IsZero() && start.Before(cursor) {
+		// 从本轮入站起点算起，避免识图、跨群预取或路由耗时期间另一轮发出的消息漏进盲区。
+		cursor = start
+	}
+	return &siblingSendInterjections{r: r, event: event, turnID: turn.id, cursor: cursor}
 }
 
 func (s *siblingSendInterjections) Pending() bool {
@@ -168,11 +234,11 @@ func siblingSendsPrompt(records []sessionSendRecord, location *time.Location) st
 		builder.WriteString("\n")
 		images = images || record.images > 0
 	}
-	builder.WriteString("这些是你自己发的，已经在聊天里，大家都看得到。别再发一遍同样的内容")
+	builder.WriteString("上面引号里的句子是你刚真实发进会话里的消息，大家都已经看到了。严禁把上面发过的句子再调 send 重发一遍")
 	if images {
 		builder.WriteString("，同一张图也别再发")
 	}
-	builder.WriteString("；你这轮要说的已经被它说了，就只补没说到的，或者不再重复。提到它时就当是你刚发的。")
+	builder.WriteString("；如果你这轮本来想说的已经被上面涵盖了，直接调 send(silent=true) 结束本轮，或只补充还没说到的新内容。")
 	return builder.String()
 }
 

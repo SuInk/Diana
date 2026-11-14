@@ -152,8 +152,11 @@ func (r *Runtime) enqueueSemanticIndexForSession(event MessageEvent, session str
 		text := semanticIndexText(lookupCtx, r, event)
 		cancel()
 		if len([]rune(text)) >= semanticMinTextRunes {
-			item.text = text
-			item.embedding, _ = r.embeddingProviderConfig(botConfig)
+			embedCfg, ok := r.embeddingProviderConfig(botConfig)
+			if ok && !r.semanticIndexBreaker.isCoolingDown(semanticIndexBreakerKey(embedCfg), time.Now()) {
+				item.text = text
+				item.embedding = embedCfg
+			}
 		}
 	}
 	// 普通短消息从来没有向量，不必排队。已知消息的编辑无论新正文长短
@@ -258,10 +261,15 @@ func (r *Runtime) flushSemanticIndexBatch(batch []semanticIndexItem) {
 
 	vectorsByItem := make(map[int][]float32, len(batch))
 	for _, group := range groups {
+		breakerKey := semanticIndexBreakerKey(group.cfg)
+		if !r.semanticIndexBreaker.allow(breakerKey, time.Now()) {
+			continue
+		}
 		embedCtx, cancel := context.WithTimeout(context.Background(), semanticIndexTimeout)
 		embedCtx = withLLMUsagePurpose(embedCtx, "semantic_index")
 		vectors, err := r.embedTextsFunc()(embedCtx, group.cfg, group.texts)
 		cancel()
+		r.semanticIndexBreaker.record(breakerKey, err == nil && len(vectors) == len(group.texts), time.Now())
 		if err != nil {
 			log.Printf("semantic index embed failed (%d items dropped): %v", len(group.texts), err)
 			r.recordBackgroundFailure("semantic_index_failed", "语义检索的向量生成失败，这批消息以后按语义搜不到", "", err,
