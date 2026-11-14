@@ -1392,6 +1392,17 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }
     return json(demoSearchConfiguration());
   }
+  if (path === '/api/assistant/search-providers/deepseek-default' && method === 'POST') {
+    const key = String(body.api_key ?? '').trim();
+    if (!key) return json({ error: '缺少 DeepSeek API Key' }, 400);
+    if (demoSearchProviders.some(provider => provider.type === 'deepseek')) return json({ added: false, config: demoSearchConfiguration() });
+    const id = `search-${Date.now()}`;
+    demoSearchProviders.push({ id, name: 'DeepSeek', type: 'deepseek', url: 'https://api.deepseek.com/v1/tools/search', tool: '', query_param: '', results_param: '', disabled: false });
+    demoSearchKeys[id] = key;
+    const current = demoSearchConfiguration().default_assignment;
+    demoSearchAssignment = { ...current, provider_ids: [id, ...current.provider_ids] };
+    return json({ added: true, config: demoSearchConfiguration() });
+  }
   if (path === '/api/assistant/search-providers/order' && method === 'PUT') {
     const ids = (body.ids as string[] | undefined) ?? [];
     if (ids.length !== demoSearchProviders.length || ids.some(id => !demoSearchProviders.some(provider => provider.id === id))) return json({ error: '搜索提供商列表已变化，请刷新后再排序' }, 400);

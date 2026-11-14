@@ -435,6 +435,45 @@ func (m *PluginManager) ImportSearchProviders(imported []SearchProvider) error {
 	return nil
 }
 
+// AddDeepSeekSearchDefault 给刚在新手向导里填了 DeepSeek Key 的部署配一个 DeepSeek
+// 搜索来源，并排到默认搜索路由的第一位：全新部署的默认路由是浏览器搜索和 Exa，
+// 浏览器搜索要装 Chrome、Exa 公共接口常被限流，新手装好往往搜不了，读网页也只能起浏览器。
+// DeepSeek 来源进了路由，搜索和读网页（见 pageFetchSources）就都能直接用。
+//
+// 已经有 DeepSeek 来源时什么都不动，返回 false：用户自己配过的来源和路由不替他改。
+// 调用方负责持久化。
+func (m *PluginManager) AddDeepSeekSearchDefault(apiKey string) (bool, error) {
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		return false, fmt.Errorf("缺少 DeepSeek API Key")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state, ok := m.states[webSearchPluginID]
+	if !ok {
+		return false, ErrPluginNotFound
+	}
+	settings := webSearchStateSettings(state)
+	providers, keys, err := searchProviderCatalog(settings)
+	if err != nil {
+		return false, err
+	}
+	if slices.ContainsFunc(providers, func(provider SearchProvider) bool { return provider.Type == "deepseek" }) {
+		return false, nil
+	}
+	route := defaultSearchProviderIDs(settings, providers)
+	providers, id, err := upsertSearchProvider(providers, keys, SearchProvider{Name: "DeepSeek", Type: "deepseek", URL: agent.DeepSeekSearchURL, APIKey: apiKey})
+	if err != nil {
+		return false, err
+	}
+	materializeFreshSearchDefaults(&state)
+	writeSearchProviderState(&state, providers, keys)
+	order, _ := json.Marshal(append([]string{id}, route...))
+	state.Settings[searchProviderOrderSetting] = string(order)
+	m.states[webSearchPluginID] = state
+	return true, nil
+}
+
 // upsertSearchProvider validates provider and applies it to providers/keys in place.
 func upsertSearchProvider(providers []SearchProvider, keys map[string]string, provider SearchProvider) ([]SearchProvider, string, error) {
 	if provider.ID == "" {

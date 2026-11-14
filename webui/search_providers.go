@@ -45,6 +45,36 @@ func (h *BotHandler) saveSearchProvider(c *gin.Context) {
 	c.JSON(http.StatusOK, config)
 }
 
+// addDeepSeekSearchDefault 是新手向导填了 DeepSeek Key 后调的：没有 DeepSeek 搜索来源
+// 时建一个并排到默认路由第一位，已有就不动。
+func (h *BotHandler) addDeepSeekSearchDefault(c *gin.Context) {
+	var body struct {
+		APIKey string `json:"api_key"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_provider_deepseek_default", err, "", nil)
+		return
+	}
+	added, err := h.runtime.Plugins().AddDeepSeekSearchDefault(body.APIKey)
+	if err != nil {
+		h.writeError(c, http.StatusBadRequest, "search_provider_deepseek_default", err, "", nil)
+		return
+	}
+	if added {
+		if err := h.persistState(); err != nil {
+			h.writeError(c, http.StatusInternalServerError, "search_provider_deepseek_default", fmt.Errorf("搜索提供商持久化失败：%w", err), "", nil)
+			return
+		}
+		recordRequestOperation(c, h.logs, "search_provider_save", "新手向导已添加 DeepSeek 搜索", "", map[string]any{"type": "deepseek"})
+	}
+	config, err := h.runtime.Plugins().SearchConfiguration("")
+	if err != nil {
+		h.writeError(c, http.StatusInternalServerError, "search_providers", err, "", nil)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"added": added, "config": config})
+}
+
 // exportSearchProviders 返回含密钥的搜索提供商，供「提供商」页导出文件使用。
 func (h *BotHandler) exportSearchProviders(c *gin.Context) {
 	providers, err := h.runtime.Plugins().ExportSearchProviders()

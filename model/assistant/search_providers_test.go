@@ -627,3 +627,45 @@ func TestFreshInstallSearchDefaultsToBrowsersThenExaAndSurvivesFirstSave(t *test
 		t.Fatalf("legacy api route changed: %v", config.DefaultAssignment.ProviderIDs)
 	}
 }
+
+// 新手向导填了 DeepSeek Key：全新部署多一个 DeepSeek 来源，排在默认路由第一位，读网页
+// 也跟着走它；已经有 DeepSeek 来源时不动用户的配置。
+func TestAddDeepSeekSearchDefaultPrependsToFreshRoute(t *testing.T) {
+	manager := NewDefaultPluginManager()
+	added, err := manager.AddDeepSeekSearchDefault(" sk-ds ")
+	if err != nil || !added {
+		t.Fatalf("added=%v err=%v", added, err)
+	}
+	settings := webSearchStateSettings(manager.states[webSearchPluginID])
+	providers, keys, err := orderedSearchProviders(settings)
+	if err != nil || len(providers) != len(freshSearchProviderIDs)+1 || providers[0].Type != "deepseek" || keys[providers[0].Name] != "sk-ds" {
+		t.Fatalf("providers=%+v err=%v", providers, err)
+	}
+	var rest []string
+	for _, provider := range providers[1:] {
+		rest = append(rest, provider.Name)
+	}
+	if !reflect.DeepEqual(rest, freshSearchProviderIDs) {
+		t.Fatalf("rest of route=%v", rest)
+	}
+	if sources := pageFetchSources(settings); len(sources) != 1 || sources[0].Kind != "deepseek" || sources[0].Endpoint != "https://api.deepseek.com/v1/tools/fetch" {
+		t.Fatalf("fetch sources=%#v", sources)
+	}
+	restored := NewDefaultPluginManager()
+	restored.Restore(manager.Snapshot())
+	config, _ := restored.SearchConfiguration("")
+	if len(config.DefaultAssignment.ProviderIDs) == 0 || config.DefaultAssignment.ProviderIDs[0] != providers[0].Name {
+		t.Fatalf("restored default=%+v", config.DefaultAssignment)
+	}
+
+	again, err := manager.AddDeepSeekSearchDefault("sk-other")
+	if err != nil || again {
+		t.Fatalf("second call added=%v err=%v", again, err)
+	}
+	if _, keys, _ := searchProviderCatalog(webSearchStateSettings(manager.states[webSearchPluginID])); keys[providers[0].Name] != "sk-ds" {
+		t.Fatal("existing DeepSeek key was overwritten")
+	}
+	if _, err := manager.AddDeepSeekSearchDefault(" "); err == nil {
+		t.Fatal("empty key must be rejected")
+	}
+}
