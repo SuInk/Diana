@@ -52,22 +52,3 @@ func (r *Runtime) semanticReferenceContextBlock(ctx context.Context, event Messa
 	}
 	return result
 }
-
-func semanticReferenceAttachmentNotice(context semanticReferencePromptContext, attachedImages int) string {
-	if context.Requested == 0 {
-		return ""
-	}
-	parts := make([]string, 0, 2)
-	if context.TextSources > 0 {
-		parts = append(parts, fmt.Sprintf("已附加 %d 条文字来源，必须逐条核对", context.TextSources))
-	}
-	if attachedImages > 0 {
-		parts = append(parts, fmt.Sprintf("已实际附加 %d 张来源图片，必须逐张查看", attachedImages))
-	} else if context.ExpectedImages > 0 {
-		parts = append(parts, fmt.Sprintf("另有 %d 张来源图片未作为原图附加，只能依据现有摘要；需要视觉细节时调用历史图片工具", context.ExpectedImages))
-	}
-	if len(parts) == 0 {
-		return fmt.Sprintf("语义指代请求了 %d 条历史来源，其中 %d 条已解析，但没有可附加的文字或图片内容", context.Requested, context.Resolved)
-	}
-	return "语义指代来源：" + strings.Join(parts, "；") + "。"
-}

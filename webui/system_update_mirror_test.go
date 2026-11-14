@@ -15,10 +15,9 @@ import (
 )
 
 type recordingMirrorSelector struct {
-	mu       sync.Mutex
-	mode     string
-	probedAt []string
-	results  []ghmirror.ProbeResult
+	mu      sync.Mutex
+	mode    string
+	results []ghmirror.ProbeResult
 }
 
 func (s *recordingMirrorSelector) SetMode(mode string) {

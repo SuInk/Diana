@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -55,28 +53,6 @@ func TestImageURLsExtractsRemoteAndBase64Images(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("got[%d] = %q, want %q", i, got[i], want[i])
 		}
-	}
-}
-
-// TestVideoURLsExtractsRemoteAndLocalVideos 验证视频段能提取远端 URL、本地路径并去重。
-func TestVideoURLsExtractsRemoteAndLocalVideos(t *testing.T) {
-	local := filepath.Join(t.TempDir(), "video.mp4")
-	if err := os.WriteFile(local, []byte("video"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	local, err := filepath.EvalSymlinks(local)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := VideoURLs([]MessageSegment{
-		{Type: "video", Data: map[string]string{"file": "local-cache.mp4"}},
-		{Type: "video", Data: map[string]string{"file": local}},
-		{Type: "video", Data: map[string]string{"url": "https://example.com/a.mp4"}},
-		{Type: "video", Data: map[string]string{"video_url": "https://example.com/a.mp4"}},
-		{Type: "image", Data: map[string]string{"url": "https://example.com/ignore.jpg"}},
-	})
-	if len(got) != 2 || got[0] != local || got[1] != "https://example.com/a.mp4" {
-		t.Fatalf("VideoURLs() = %#v", got)
 	}
 }
 

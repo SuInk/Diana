@@ -16,8 +16,6 @@ import (
 	"github.com/SuInk/diana/model/browserbox"
 )
 
-const agentScopeContextRadius = 1
-
 type agentReplyScope struct {
 	Routed                bool
 	ToolNames             []string
@@ -715,64 +713,6 @@ func (r *Runtime) agentBuiltinExtensions(event MessageEvent) []agent.BuiltinExte
 		})
 	}
 	return extensions
-}
-
-func filterAgentReplyHistory(history []MessageEvent, event MessageEvent, scope agentReplyScope) []MessageEvent {
-	if !scope.Routed {
-		return history
-	}
-	wanted := map[string]bool{}
-	add := func(messageID string) {
-		if messageID = strings.TrimSpace(messageID); messageID != "" {
-			wanted[messageID] = true
-		}
-	}
-	for _, messageID := range scope.ContextMessageIDs {
-		add(messageID)
-	}
-	for _, messageID := range eventSemanticSourceMessageIDs(event) {
-		add(messageID)
-	}
-	for _, messageID := range replyReferenceIDs(event.Segments) {
-		add(messageID)
-	}
-	if event.Quoted != nil {
-		add(event.Quoted.MessageID)
-		for _, messageID := range quotedSemanticSourceMessageIDs(event.Quoted) {
-			add(messageID)
-		}
-		for _, messageID := range replyReferenceIDs(event.Quoted.Segments) {
-			add(messageID)
-		}
-	}
-	if len(wanted) == 0 {
-		return nil
-	}
-
-	include := map[int]bool{}
-	for index, item := range history {
-		if !wanted[strings.TrimSpace(item.MessageID)] {
-			continue
-		}
-		left := index - agentScopeContextRadius
-		if left < 0 {
-			left = 0
-		}
-		right := index + agentScopeContextRadius
-		if right >= len(history) {
-			right = len(history) - 1
-		}
-		for nearby := left; nearby <= right; nearby++ {
-			include[nearby] = true
-		}
-	}
-	filtered := make([]MessageEvent, 0, len(include))
-	for index, item := range history {
-		if include[index] {
-			filtered = append(filtered, item)
-		}
-	}
-	return filtered
 }
 
 func (r *Runtime) recordAgentScope(ctx context.Context, event MessageEvent, scope agentReplyScope, toolsBefore, contextBefore, contextAfter int) {

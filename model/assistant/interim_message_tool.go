@@ -30,7 +30,6 @@ import (
 // 中途发言拆回独立的 say 工具，静默从 9/84 涨到 25/84，没用。
 
 const (
-	dianaInterimMessageToolName = "say"
 	// interimMessageMaxPerTurn 是一轮里中途最多说几次：开个头、报两次进度就够了，
 	// 再多就是在把答案拆开发。
 	interimMessageMaxPerTurn = 3

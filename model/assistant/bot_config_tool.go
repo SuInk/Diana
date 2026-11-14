@@ -347,7 +347,6 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 				return "", e
 			}
 			if changed {
-				t.runtime.cancelProactiveReplyBatch(t.event)
 				t.runtime.recordGroupReplyPolicyChanged(ctx, t.event, role, saved)
 			}
 		} else {

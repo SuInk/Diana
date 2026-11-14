@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -154,31 +153,6 @@ func TestOwnerAgentRegistryReusesSharedExtensionsAcrossRequests(t *testing.T) {
 	}
 	if len(runtime.agentRegistryCache) != 1 {
 		t.Fatalf("shared registry cache entries = %d, want 1", len(runtime.agentRegistryCache))
-	}
-}
-
-func TestFilterAgentReplyHistoryKeepsSelectedReferencesAndNeighbors(t *testing.T) {
-	history := make([]MessageEvent, 0, 10)
-	for index := 1; index <= 10; index++ {
-		history = append(history, MessageEvent{MessageID: "m" + strconv.Itoa(index), RawMessage: "history"})
-	}
-	event := MessageEvent{
-		MessageID:                "current",
-		SemanticSourceMessageID:  "m7",
-		SemanticSourceMessageIDs: []string{"m7", "m9"},
-		Segments:                 []MessageSegment{{Type: "reply", Data: map[string]string{"id": "m2"}}},
-		Quoted:                   &QuotedMessage{MessageID: "m2"},
-	}
-	scope := agentReplyScope{Routed: true, ContextMessageIDs: []string{"m5"}}
-
-	filtered := filterAgentReplyHistory(history, event, scope)
-	got := make([]string, 0, len(filtered))
-	for _, item := range filtered {
-		got = append(got, item.MessageID)
-	}
-	want := "m1,m2,m3,m4,m5,m6,m7,m8,m9,m10"
-	if strings.Join(got, ",") != want {
-		t.Fatalf("filtered IDs = %q, want %q", strings.Join(got, ","), want)
 	}
 }
 

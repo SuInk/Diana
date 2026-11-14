@@ -25,8 +25,6 @@ import (
 const (
 	// qqGroupNoPermissionCode 是「应用无接口访问权限」：白名单接口没开通时返回。
 	qqGroupNoPermissionCode = "11253"
-	// qqGroupMembersPageSize 是成员列表单页上限，返回不足一页也不代表末页，以 next_cursor 为准。
-	qqGroupMembersPageSize = 30
 	// qqGroupBatchLimit 是批量移除、黑名单、禁言单次最多处理的成员数。
 	qqGroupBatchLimit = 20
 	// qqGroupMuteMax 是单次禁言最长时长。

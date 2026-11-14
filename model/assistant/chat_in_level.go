@@ -105,36 +105,6 @@ func (level ChatInLevel) Valid() bool {
 	return level.Normalized() != ""
 }
 
-// chatInSettingsFrom 解析开关、档位和自定义覆盖，得到最终生效参数。显式设置的
-// threshold/chance/cooldown 覆盖档位预设，这样“多档位”和“精细自定义”可以共存。
-func chatInSettingsFrom(enabled *bool, level ChatInLevel, threshold, chance float64, cooldownSeconds int) chatInSettings {
-	normalized := level.Normalized()
-	if normalized == "" {
-		normalized = defaultChatInLevel
-	}
-	settings := chatInSettings{Enabled: boolValue(enabled, true), Level: normalized}
-	if normalized == ChatInLevelOff {
-		settings.Enabled = false
-	}
-	preset := chatInLevelPresets[normalized]
-	if preset.Threshold <= 0 {
-		preset = chatInLevelPresets[defaultChatInLevel]
-	}
-	settings.Threshold = preset.Threshold
-	settings.Chance = preset.Chance
-	settings.Cooldown = preset.Cooldown
-	if threshold > 0 && threshold <= 1 {
-		settings.Threshold = threshold
-	}
-	if chance > 0 && chance <= 1 {
-		settings.Chance = chance
-	}
-	if cooldownSeconds > 0 {
-		settings.Cooldown = time.Duration(cooldownSeconds) * time.Second
-	}
-	return settings
-}
-
 // chatInReplyPrompt 是闲聊插话专用的回复约束。没人在叫机器人，所以这条回复必须靠
 // 内容本身站住，语气也要像顺口接一句，而不是被提问后作答。
 const chatInReplyPrompt = `本次回复是主动插话：没有人 @ 你或向你提问，是你自己判断这里有一句值得说的话。请遵守：
@@ -162,5 +132,3 @@ func (cfg BotConfig) chatInSettings() chatInSettings {
 	p := cfg.participationPreferences()
 	return chatInSettings{Participation: &p, Enabled: p.Desire > 0, Level: p.replyLevel(), Chance: 1, Cooldown: time.Duration(p.CooldownSeconds) * time.Second}
 }
-
-const superActiveReplyPrompt = `本次是超级活跃模式下的主动接话。像一个很愿意参与聊天的群友，顺着当前话题简短回应、接梗、表达感受或自然追问即可，不要求每句话都增加事实或新知识。遵循原有人设，不要复读、套话刷屏、接管话题或强行评价。用户要求安静、话题已经结束、没有相关回应可说时仍保持沉默；不确定的事实交给工具确认，不能编造。`

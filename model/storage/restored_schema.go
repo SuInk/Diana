@@ -734,7 +734,3 @@ func (s *SQLiteStore) LoadReplySuppressions(ctx context.Context) ([]assistant.Re
 func (s *SQLiteStore) SaveReplySuppressions(ctx context.Context, items []assistant.ReplySuppression) error {
 	return s.saveJSON(ctx, replySuppressionsKey, items)
 }
-
-// memoryItemsKindCheck 是 memory_items.kind 当前允许的取值。加类型必须同时改这里、
-// 建表语句和 normalizeMemoryCandidate 的白名单，否则新类型会在写入时被 CHECK 拒掉。
-const memoryItemsKindCheck = `CHECK (kind IN ('fact', 'preference', 'episode', 'instruction', 'summary', 'thread'))`

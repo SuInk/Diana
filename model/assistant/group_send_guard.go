@@ -721,7 +721,6 @@ func (r *Runtime) markGroupSendUnavailable(ctx context.Context, event MessageEve
 	}
 	r.unavailableGroupMu.Unlock()
 
-	r.cancelProactiveReplyBatchesForGroup(event)
 	if alreadyBlocked {
 		return
 	}

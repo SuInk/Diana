@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"strings"
 	"testing"
 	"time"
 )
@@ -55,27 +54,6 @@ func TestSuperActiveIntentAllowsSubstantiveRepliesAndQuestions(t *testing.T) {
 	standard := BotConfig{ResponseMode: ResponseModeStandard}.WithDefaults()
 	if !(proactiveReplyDecision{ShouldReply: true, Confidence: 0.78, Category: "needs_response"}).allows(0.9, standard.chatInSettings()) {
 		t.Fatal("legacy threshold must not override model intent")
-	}
-}
-
-func TestSuperActivePromptsAndQuality(t *testing.T) {
-	cfg := BotConfig{ResponseMode: ResponseModeSuperActive}.WithDefaults()
-	prompt := proactiveReplyRouterPromptForChatIn(defaultProactiveReplyRouterPrompt, cfg.ProactiveReplyExtraCriteria, cfg.chatInSettings(), false)
-	if !strings.Contains(prompt, "闲聊档位：always") || strings.Contains(prompt, "当前群已开启自然插话模式") {
-		t.Fatal("super active must use its own intent policy")
-	}
-	if !strings.Contains(replyQualityPromptForConfig(cfg), "正常的寒暄") {
-		t.Fatal("audit missing social reply policy")
-	}
-	r := &Runtime{}
-	for _, chatIn := range []bool{true, false} {
-		event := MessageEvent{chatInReply: chatIn}
-		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{Confidence: 0.98}, cfg); err != nil {
-			t.Fatal(err)
-		}
-		if err := r.proactiveQualityError(event, proactiveReplyQualityDecision{Confidence: 0.01}, cfg); err == nil {
-			t.Fatal("explicit audit rejection must be preserved")
-		}
 	}
 }
 

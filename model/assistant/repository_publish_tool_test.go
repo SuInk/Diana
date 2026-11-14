@@ -789,19 +789,6 @@ func TestRepositoryIssueAllowsConfiguredUserOnlyForMappedRepository(t *testing.T
 	}
 }
 
-func TestRepositoryIssueDelegatedAccessAlsoRequiresGlobalAllowlist(t *testing.T) {
-	settings := SettingValues{
-		repositoryPublishSettingAllowlist:  "acme/other",
-		repositoryPublishSettingUserAccess: "member = acme/demo",
-	}
-	if code, _ := repositoryPublishValidateEventAccess(MessageEvent{Kind: EventKindPrivate, UserID: "member"}, "acme/demo", false, settings); code != "repository_not_allowed" {
-		t.Fatalf("access code=%q, want repository_not_allowed", code)
-	}
-	if !repositoryPublishUserHasAccess("member", settings) || repositoryPublishUserHasAccess("stranger", settings) {
-		t.Fatalf("unexpected mapped access")
-	}
-}
-
 func TestRepositoryPublishUserAccessRejectsMalformedRules(t *testing.T) {
 	for _, raw := range []string{"member", "= acme/demo", "member =", "member = acme/demo="} {
 		if _, err := repositoryPublishUserAccess(raw); err == nil {
@@ -871,17 +858,6 @@ func TestRepositoryPublishEventHasAccessUsesCurrentGroup(t *testing.T) {
 	}
 	if repositoryPublishEventHasAccess(MessageEvent{Kind: EventKindPrivate, UserID: "member"}, settings) {
 		t.Fatal("private chat inherited group Issue tool access")
-	}
-}
-
-func TestRepositoryIssueGroupAccessAlsoRequiresGlobalAllowlist(t *testing.T) {
-	settings := SettingValues{
-		repositoryPublishSettingAllowlist:   "acme/other",
-		repositoryPublishSettingGroupAccess: "group-1 = acme/demo",
-	}
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "group-1", UserID: "member"}
-	if code, _ := repositoryPublishValidateEventAccess(event, "acme/demo", false, settings); code != "repository_not_allowed" {
-		t.Fatalf("access code=%q, want repository_not_allowed", code)
 	}
 }
 

@@ -1240,33 +1240,6 @@ func imageSegmentCount(segments []MessageSegment) int {
 	return count
 }
 
-// VideoURLs 提取 OneBot 视频段里的远程 URL 或接入端提供的本地绝对路径。
-func VideoURLs(segments []MessageSegment) []string {
-	var out []string
-	seen := map[string]struct{}{}
-	for _, segment := range segments {
-		if segment.Type != "video" {
-			continue
-		}
-		for _, key := range []string{"url", "video_url", "src", "file", "path"} {
-			videoURL := normalizedHTTPURL(segment.Data[key])
-			if videoURL == "" {
-				videoURL = localVideoPath(segment.Data[key])
-			}
-			if videoURL == "" {
-				continue
-			}
-			if _, ok := seen[videoURL]; ok {
-				break
-			}
-			seen[videoURL] = struct{}{}
-			out = append(out, videoURL)
-			break
-		}
-	}
-	return out
-}
-
 func normalizedImageURL(value string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {

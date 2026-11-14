@@ -74,15 +74,7 @@ func isDocumentSectionLabel(line string) bool {
 }
 
 var (
-	replyDocumentHeading  = regexp.MustCompile(`^#{1,6}[ \t]+\S`)
-	replyDocumentTimeItem = regexp.MustCompile(`^[0-9]{1,2}[:：][0-9]{2}`)
+	replyDocumentHeading = regexp.MustCompile(`^#{1,6}[ \t]+\S`)
 )
 
-type documentLineKind int
-
-const (
-	documentProse documentLineKind = iota // 说明段落
-	documentItem                          // 条目：项目符号、编号、表格行、时间点
-	documentLabel                         // 小节标题
-	documentFence                         // 代码围栏占位符
-)
+const ()

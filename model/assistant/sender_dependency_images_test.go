@@ -46,58 +46,6 @@ func dependencyIDs(images []senderDependencyImage) string {
 	return strings.Join(ids, ",")
 }
 
-// 先发图、再发字，两条各是各的：图那条不会被注销、也不会塞进文字那条；
-// 同一个人的两条仍进同一个主动接话批次，由批次一起看。
-func TestMediaOnlyThenTextFromSameSenderStaysTwoMessages(t *testing.T) {
-	store := newMemoryInboundEventStore()
-	runtime := NewRuntime(replyClosedConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return &capturingLLMProvider{reply: `{}`}, nil
-	})
-	runtime.SetInboundEventStore(store)
-	photo := photoEvent("photo-1", "10001", 1000)
-	question := textEvent("q-1", "10001", "这是什么", 1014)
-	for _, event := range []MessageEvent{photo, question} {
-		if _, _, err := store.EnqueueInboundEvent(context.Background(), "group:123456", event); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, event := range []MessageEvent{photo, question} {
-		item := InboundQueueItem{ID: "group:123456:" + event.MessageID, Session: "group:123456", Event: event}
-		if _, err := runtime.processInboundQueueItem(context.Background(), item); err != nil {
-			t.Fatal(err)
-		}
-	}
-	for _, event := range []MessageEvent{photo, question} {
-		if turn, superseded, _ := store.InboundEventSuperseded(context.Background(), event); superseded {
-			t.Fatalf("%s was superseded by %s", event.MessageID, turn)
-		}
-	}
-	for _, item := range runtime.contextHistory(question) {
-		if item.MessageID == "q-1" && (len(item.Segments) != 1 || item.Segments[0].Type != "text") {
-			t.Fatalf("text message got media merged into it: %#v", item.Segments)
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	runtime.mu.Lock()
-	runtime.running, runtime.runCtx = true, ctx
-	runtime.mu.Unlock()
-	if !runtime.enqueueProactiveReply(photo, "") || !runtime.enqueueProactiveReply(question, "这是什么") {
-		t.Fatal("proactive batch refused candidates")
-	}
-	runtime.proactiveBatchMu.Lock()
-	batch := runtime.proactiveBatches[proactiveReplyBatchKey(question)]
-	count := 0
-	if batch != nil {
-		count = len(batch.items)
-	}
-	runtime.proactiveBatchMu.Unlock()
-	if count != 2 {
-		t.Fatalf("proactive batch should see both messages, got %d", count)
-	}
-}
-
 func TestSenderDependencyImagesSelection(t *testing.T) {
 	const now = 10_000
 	question := textEvent("q", "irony", "能不能把 winter 姐姐头像变成机器人风格", now)

@@ -236,14 +236,6 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		r.recordInboundTurnSupersededBeforeSend(ctx, event, turnID)
 		return nil, errInboundTurnSuperseded
 	}
-	if run, ok := proactiveReplyRunFromContext(ctx); ok && run.allowSuperseding {
-		if changed, newer := r.proactiveReplyBatchChanged(run.key, run.generation); changed {
-			if newer != nil {
-				r.recordProactiveReplySuperseded(ctx, event, newer.Event, "before_send")
-			}
-			return nil, errProactiveReplySuperseded
-		}
-	}
 	if r.chatInPreempted(ctx, event) {
 		return nil, errChatInPreemptedByOwnReply
 	}

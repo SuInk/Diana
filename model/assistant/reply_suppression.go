@@ -120,17 +120,6 @@ func (decision botReplyLoopAIDecision) confident() bool {
 	return decision.Confidence >= botReplyLoopAIConfidenceThreshold && decision.Confidence <= 1
 }
 
-type botReplyLoopClassificationPayload struct {
-	CurrentText string `json:"current_text"`
-	// BotReplyText 是机器人刚刚为这条消息发出去的回复。判断挪到回复之后做，就是
-	// 为了能看到它：一来一回摆在一起，才看得出这是不是在为没有内容的话反复接茬。
-	BotReplyText             string   `json:"bot_reply_text,omitempty"`
-	QuotedBotText            string   `json:"quoted_bot_text,omitempty"`
-	TriggerKind              string   `json:"trigger_kind"`
-	RecentSameSenderMessages []string `json:"recent_same_sender_messages,omitempty"`
-	RecentBotReplies         []string `json:"recent_bot_replies,omitempty"`
-}
-
 func consumeReplyControlIntent(reply string) (string, replyControlIntent) {
 	reply, deliveryMode, lines := consumeReplyFormatting(reply)
 	// 拒答标志参与计数但不展示；账号处置标志仅保留旧版兼容解码。

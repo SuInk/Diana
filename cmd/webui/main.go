@@ -56,10 +56,6 @@ var buildVersion = "dev"
 // 保证本地构建也能和最新 Release 做语义化比较。
 var runtimeVersion = version.Resolve(buildVersion)
 
-const (
-	webSearchPluginID = "official.web-search"
-)
-
 const maxHTTPRequestBodyBytes = 8 << 20
 
 // forwardWSOriginTracker 收集当前配置集里正向 ws 配置档的渠道实例。媒体回源

@@ -232,7 +232,7 @@ func backlogReplyTurnFromContext(ctx context.Context) []proactiveReplyCandidate 
 // replyTurnCandidates 是这一轮除了回复对象以外一起作答的全部消息：主动回复批次、同一个人
 // 追发的补充，以及积压合并进来的消息。
 func (r *Runtime) replyTurnCandidates(ctx context.Context) []proactiveReplyCandidate {
-	candidates := append(proactiveReplyTurnFromContext(ctx), r.directReplySupplements(ctx)...)
+	candidates := r.directReplySupplements(ctx)
 	return append(candidates, backlogReplyTurnFromContext(ctx)...)
 }
 

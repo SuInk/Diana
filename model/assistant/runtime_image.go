@@ -74,29 +74,6 @@ func hasReplyCandidateImage(segments []MessageSegment) bool {
 	return false
 }
 
-func promoteNewImageEvidence(decision *proactiveReplyDecision, event MessageEvent, newImageEvidence bool, threshold float64, chatIn chatInSettings) bool {
-	if decision == nil || decision.allows(threshold, chatIn) || !decision.RequestsResponse || decision.Confidence < threshold {
-		return false
-	}
-	if decision.Blocker != proactiveBlockerLowValue || !newImageEvidence {
-		return false
-	}
-	originalReason := strings.TrimSpace(decision.Reason)
-	decision.ShouldReply = true
-	decision.Category = "needs_response"
-	decision.Answerable = true
-	decision.Substantive = true
-	decision.TargetMessageID = strings.TrimSpace(event.MessageID)
-	if decision.TargetMessageID != "" {
-		decision.TurnMessageIDs = []string{decision.TargetMessageID}
-	}
-	decision.Reason = "当前请求附带了此前回答中不存在的新图片证据，不能按文字重复忽略"
-	if originalReason != "" {
-		decision.Reason += "；Intent Recognition 原判断：" + originalReason
-	}
-	return true
-}
-
 func (r *Runtime) replyRuleVoiceCQ(ctx context.Context, event MessageEvent, rule ReplyRule, reply string) (string, error) {
 	if strings.TrimSpace(reply) == "" || isStandaloneRecordReply(reply) {
 		return reply, nil
@@ -277,31 +254,6 @@ func recentHistoryImageIndexes(history []MessageEvent, currentMessageID, senderI
 		selected[index] = true
 	}
 	return selected
-}
-
-func (r *Runtime) agentHistoryImageBatchMessage(ctx context.Context, history []MessageEvent, selected map[int]bool, currentTime int64) (llm.Message, error) {
-	if len(selected) == 0 {
-		return llm.Message{}, nil
-	}
-	var lines []string
-	for index, item := range history {
-		if !selected[index] {
-			continue
-		}
-		line := agentImageHistoryPromptTextWithDescriptions(item, currentTime, r.historyPromptImageDescriptions(ctx, item))
-		if line != "" {
-			lines = append(lines, line)
-		}
-	}
-	text := strings.Join(lines, "\n")
-	if text == "" {
-		return llm.Message{}, nil
-	}
-	return llm.Message{
-		Role:     llm.RoleUser,
-		Content:  text,
-		Priority: llm.MessagePriorityHistory,
-	}, nil
 }
 
 // sourceImagesAllAttached 判断某个引用来源的图片是否都已经以原图形式附给模型。

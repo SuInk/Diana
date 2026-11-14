@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,29 +46,6 @@ func (r *Runtime) SetMessageHistoryStore(store MessageHistoryStore) {
 		state.mu.Unlock()
 	}
 	r.groupPromptSessions = nil
-}
-
-// resolveImageForLLM persists short-lived platform media before encoding it for
-// a multimodal request. Falling back to the original URL keeps older providers
-// working when the local cache cannot fetch a particular image.
-func (r *Runtime) resolveImageForLLM(ctx context.Context, imageURL string) string {
-	r.mu.RLock()
-	store := r.media
-	r.mu.RUnlock()
-	if store == nil {
-		return imageURL
-	}
-	path, err := store.Fetch(ctx, imageURL)
-	if err != nil {
-		log.Printf("media: fetch %s failed: %v", redactURLQuery(imageURL), err)
-		return imageURL
-	}
-	dataURL, err := store.DataURL(path)
-	if err != nil {
-		log.Printf("media: encode %s failed: %v", filepath.Base(path), err)
-		return imageURL
-	}
-	return dataURL
 }
 
 // SetLLMModelLister 注入运行时使用的模型列表读取器。
@@ -1630,44 +1606,6 @@ func quotedPromptText(quoted *QuotedMessage) string {
 	// 【引用发言者身份】{"quoted_sender_user_id":"…"}。线上抽样的 30 条引用里，
 	// 这一行的 role 全是空的，剩下的就只有那个重复的别名——整段是纯冗余。
 	return fmt.Sprintf("【%s】%s: %s", label, sender, strings.TrimSpace(text))
-}
-
-func llmMessageFromEvent(event MessageEvent, text string, options ...any) llm.Message {
-	if len(options) == 0 {
-		return llmMessageFromEventWithImages(event, text, nil)
-	}
-
-	imageOnlyText := "对方只发了这一张图，没配文字。"
-	if value, ok := options[0].(string); ok && strings.TrimSpace(value) != "" {
-		imageOnlyText = strings.TrimSpace(value)
-	}
-	var resolveImage func(string) string
-	if len(options) > 1 {
-		resolveImage, _ = options[1].(func(string) string)
-	}
-
-	text = strings.TrimSpace(text)
-	imageURLs := availableImageURLs(event.Segments)
-	if event.Quoted != nil {
-		imageURLs = append(imageURLs, availableImageURLs(event.Quoted.Segments)...)
-	}
-	if len(imageURLs) == 0 {
-		return llm.Message{Role: llm.RoleUser, Content: text}
-	}
-	if imageOnlyPrompt(text, event) {
-		text = imageOnlyText
-	}
-	parts := make([]llm.ContentPart, 0, len(imageURLs)+1)
-	if text != "" {
-		parts = append(parts, llm.ContentPart{Type: llm.ContentPartText, Text: text})
-	}
-	for _, imageURL := range imageURLs {
-		if resolveImage != nil {
-			imageURL = resolveImage(imageURL)
-		}
-		parts = append(parts, llm.ContentPart{Type: llm.ContentPartImageURL, ImageURL: imageURL, Detail: "high"})
-	}
-	return llm.Message{Role: llm.RoleUser, Content: text, Parts: parts}
 }
 
 func llmMessageFromEventWithVideoFrames(ctx context.Context, event MessageEvent, text string, extraImageURLs []string) llm.Message {

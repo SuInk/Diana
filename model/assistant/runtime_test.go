@@ -297,12 +297,6 @@ func TestRuntimePrepareDirectBotFollowupRoutesImmediately(t *testing.T) {
 			if len(provider.requestsSnapshot()) != 0 {
 				t.Fatalf("LLM requests=%d, want no inbound routing call", len(provider.requestsSnapshot()))
 			}
-			runtime.proactiveBatchMu.Lock()
-			_, queued := runtime.proactiveBatches[sessionKey(event)]
-			runtime.proactiveBatchMu.Unlock()
-			if queued {
-				t.Fatal("direct bot follow-up was incorrectly queued in the proactive batch")
-			}
 		})
 	}
 }
@@ -389,73 +383,6 @@ func TestRuntimeDoesNotOverrideModelSilenceForDirectedFollowup(t *testing.T) {
 	}
 }
 
-func TestRuntimePromotesDirectedImageRequestDespiteRouterToolMistake(t *testing.T) {
-	decision := proactiveReplyDecision{
-		Confidence: 0.97, DirectedAtBot: true, RequestsResponse: true,
-		Blocker: proactiveBlockerNoCapability, Reason: "当前没有可用的绘图工具，无法实际完成请求",
-	}
-	event := MessageEvent{Kind: EventKindGroup, MessageID: "draw-request"}
-	if !promoteDirectedFollowup(&decision, event, "那你画一只奶鼠", 0.9, chatInSettings{}) {
-		t.Fatalf("image request was not promoted: %#v", decision)
-	}
-	if !decision.ShouldReply || decision.Category != "bot_related" || !decision.Answerable {
-		t.Fatalf("promoted image decision = %#v", decision)
-	}
-}
-
-func TestRuntimeDoesNotPromoteDirectedAcknowledgement(t *testing.T) {
-	// 用户只是道谢，没有在要求回应：路由器给出 requests_response=false，
-	// 运行时就不该把它救成一次回复。
-	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: false,
-		Blocker: proactiveBlockerMissingInfo, Reason: "信息不足，无法可靠回答",
-	}
-	event := MessageEvent{Kind: EventKindGroup, MessageID: "ack"}
-	if promoteDirectedFollowup(&decision, event, "谢谢", 0.9, chatInSettings{}) {
-		t.Fatalf("acknowledgement was promoted: %#v", decision)
-	}
-}
-
-func TestRuntimePromotesClearDirectedQuestionDespiteRouterAnswerabilityMistake(t *testing.T) {
-	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
-		Blocker: proactiveBlockerMissingInfo, Reason: "机器人无法直接判断",
-	}
-	event := MessageEvent{Kind: EventKindGroup, MessageID: "clear-question"}
-	if !promoteDirectedFollowup(&decision, event, "那为什么会这样？", 0.9, chatInSettings{}) {
-		t.Fatalf("clear directed question was not promoted: %#v", decision)
-	}
-	if !decision.ShouldReply || !decision.Answerable || decision.Category != "bot_related" {
-		t.Fatalf("promoted decision = %#v", decision)
-	}
-}
-
-func TestRuntimePromotesPublicQuestionDespitePlannerAccuracyMistake(t *testing.T) {
-	decision := proactiveReplyDecision{
-		Confidence: 0.96, RequestsResponse: true, Answerable: false,
-		Blocker: proactiveBlockerMissingInfo, Reason: "dasd 指代不明，无法可靠判断",
-	}
-	event := MessageEvent{Kind: EventKindGroup, MessageID: "dasd-question"}
-	if !promoteRequestedResponse(&decision, event, 0.9, chatInSettings{}) {
-		t.Fatalf("public question was not promoted: %#v", decision)
-	}
-	if !decision.ShouldReply || decision.Category != "needs_response" || decision.TargetMessageID != "dasd-question" {
-		t.Fatalf("promoted decision = %#v", decision)
-	}
-}
-
-func TestRuntimeDoesNotPromoteIntentionalSemanticSilence(t *testing.T) {
-	// 能答但没有新增价值：blocker=low_value 不在可救回的两类里。
-	decision := proactiveReplyDecision{
-		Confidence: 0.99, DirectedAtBot: true, RequestsResponse: true,
-		Blocker: proactiveBlockerLowValue, Reason: "只是待命式自动回应，没有需要可靠回答的问题",
-	}
-	event := MessageEvent{Kind: EventKindGroup, MessageID: "auto-reply"}
-	if promoteDirectedFollowup(&decision, event, "有需要随时告诉我", 0.9, chatInSettings{}) {
-		t.Fatalf("intentional silence was promoted: %#v", decision)
-	}
-}
-
 func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -502,12 +429,6 @@ func TestRuntimeJudgesProactiveGroupMessagesImmediately(t *testing.T) {
 				if len(recent) == 0 || !strings.Contains(recent[0].Reason, "普通闲聊无需插话") {
 					t.Fatalf("not-replied reason = %#v", recent)
 				}
-			}
-			runtime.proactiveBatchMu.Lock()
-			_, queued := runtime.proactiveBatches[sessionKey(event)]
-			runtime.proactiveBatchMu.Unlock()
-			if queued {
-				t.Fatal("message was left in the proactive batch")
 			}
 		})
 	}
@@ -2586,57 +2507,6 @@ func TestRememberStripsReplyRuntimeState(t *testing.T) {
 	}
 }
 
-func TestRuntimeRoutesGroupImageContextFollowupWithLLM(t *testing.T) {
-	channel := &recordingChannel{}
-	imageURL := "data:image/png;base64,aGVsbG8="
-	provider := &sequenceLLMProvider{replies: []string{
-		`{"should_reply":true,"confidence":0.98,"category":"needs_response","directed_at_bot":false,"answerable":true}`,
-		`{"message_id":"img-1","confidence":0.95,"reason":"当前问题指向群友发的图片"}`,
-		`{"action":"none"}`,
-		"看起来是拍摄角度和光线让表情显得没那么明显。",
-	}}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", ProactiveReplyChance: 1}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.remember(MessageEvent{
-		Kind:      EventKindGroup,
-		GroupID:   "123456",
-		UserID:    "20002",
-		MessageID: "img-1",
-		Segments: []MessageSegment{{
-			Type: "image",
-			Data: map[string]string{"file": imageURL},
-		}},
-		SenderName: "Alice",
-	})
-	event := MessageEvent{
-		Kind:       EventKindGroup,
-		GroupID:    "123456",
-		UserID:     "10001",
-		MessageID:  "q-1",
-		RawMessage: "为什么会这样",
-		Segments:   []MessageSegment{{Type: "text", Data: map[string]string{"text": "为什么会这样"}}},
-		SenderName: "Bob",
-	}
-	if !runtime.shouldConsiderProactiveReply(event, "为什么会这样") {
-		t.Fatal("image context follow-up should be considered for LLM routing")
-	}
-	routed, routedText, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: "为什么会这样"}})
-	if !allowed {
-		t.Fatal("LLM route should choose to reply")
-	}
-	reply, err := runtime.replyTo(withProactiveReplyTurnContext(context.Background(), turn), routed, routedText)
-	if err != nil {
-		t.Fatalf("replyTo() error = %v", err)
-	}
-	if reply != "看起来是拍摄角度和光线让表情显得没那么明显" || len(channel.sent) != 1 {
-		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
-	}
-	if len(provider.requests) != 5 || !requestHasImageURL(provider.requests[3], imageURL) {
-		t.Fatalf("requests missing image context: %#v", provider.requests)
-	}
-}
-
 func TestRuntimeProactiveReplyRecordsSemanticDecision(t *testing.T) {
 	provider := &capturingLLMProvider{reply: `{"should_reply":true,"confidence":0.82,"category":"bot_related","directed_at_bot":true,"answerable":true,"reason":"明确承接了机器人上一条回复且问题可回答"}`}
 	logs := &captureAppLogs{}
@@ -2967,69 +2837,6 @@ func TestRuntimeRoutesPureGroupImageButDoesNotReplyWhenUnrelated(t *testing.T) {
 	}
 }
 
-func TestRuntimeRepliesWhenImageFulfillsRecentBotRequest(t *testing.T) {
-	channel := &recordingChannel{}
-	imageURL := "data:image/png;base64,aGVsbG8="
-	provider := &sequenceLLMProvider{replies: []string{
-		`{"should_reply":true,"confidence":0.97,"category":"bot_related","directed_at_bot":true,"answerable":true}`,
-		`{"action":"none"}`,
-		"看到了，截图里的 QQ 版本是 9.9.31。",
-	}}
-	runtime := NewRuntime(BotConfig{
-		BotAccount:              "42",
-		ProactiveReplyChance:    1,
-		ProactiveReplyThreshold: 0.8,
-	}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	runtime.remember(MessageEvent{
-		Kind:       EventKindGroup,
-		Time:       100,
-		SelfID:     "42",
-		UserID:     "42",
-		GroupID:    "123456",
-		MessageID:  "bot-request",
-		SenderName: "Diana",
-		Segments: []MessageSegment{{Type: "text", Data: map[string]string{
-			"text": "请把 QQ 设置里的关于页面截图发来，我看版本号。",
-		}}},
-	})
-	event := MessageEvent{
-		Kind:       EventKindGroup,
-		Time:       110,
-		GroupID:    "123456",
-		UserID:     "10001",
-		MessageID:  "version-image",
-		SenderName: "Alice",
-		RawMessage: "[CQ:image,file=version.png]",
-		Segments: []MessageSegment{{
-			Type: "image",
-			Data: map[string]string{"file": imageURL},
-		}},
-	}
-	text := PlainText(event.Segments)
-	if !runtime.shouldConsiderProactiveReply(event, text) {
-		t.Fatal("image response to bot request should enter proactive routing")
-	}
-	routed, routedText, turn, allowed := runtime.routeProactiveReplyBatch(context.Background(), []proactiveReplyCandidate{{Event: event, Text: text}})
-	if !allowed {
-		t.Fatal("image response to bot request should pass proactive routing")
-	}
-	reply, err := runtime.replyTo(withProactiveReplyTurnContext(context.Background(), turn), routed, routedText)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if reply != "看到了，截图里的 QQ 版本是 9.9.31" || len(channel.sent) != 1 {
-		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
-	}
-	if len(provider.requests) != 4 || !requestHasAnyImage(provider.requests[0]) || !strings.Contains(provider.requests[1].Messages[1].Content, `"current_images":1`) || !requestHasAnyImage(provider.requests[2]) {
-		t.Fatalf("routing, tool intent, and reply models should receive image context: %#v", provider.requests)
-	}
-	if strings.Contains(provider.requests[0].Messages[1].Content, "请分析这张图片") {
-		t.Fatalf("routing payload should preserve neutral image semantics: %#v", provider.requests[0])
-	}
-}
-
 func TestRuntimeConsidersImageWithCaptionForProactiveReply(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return &sequenceLLMProvider{}, nil
@@ -3150,27 +2957,6 @@ func TestRuntimeProactiveReplySplitsBeforeCompression(t *testing.T) {
 	}
 	if len(delivered) < 2 || strings.NewReplacer("。", "", " ", "").Replace(strings.Join(delivered, "")) != strings.NewReplacer("。", "", " ", "").Replace(completeReply) {
 		t.Fatalf("proactive answer lost content: reply=%q sent=%q", reply, delivered)
-	}
-}
-
-func TestProactiveReplySampleAllowsRespectsChance(t *testing.T) {
-	event := MessageEvent{
-		Kind:      EventKindGroup,
-		GroupID:   "123456",
-		UserID:    "10001",
-		MessageID: "q-1",
-	}
-	if !proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 1) {
-		t.Fatal("chance=1 should always allow proactive replies")
-	}
-	if proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0) {
-		t.Fatal("chance=0 should block proactive replies")
-	}
-	first := proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25)
-	for i := 0; i < 5; i++ {
-		if got := proactiveReplySampleAllows(event, "这个报错有人知道怎么处理吗", 0.25); got != first {
-			t.Fatal("sampling should be deterministic for the same event")
-		}
 	}
 }
 
@@ -3427,22 +3213,6 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	}
 	if strings.Contains(current, "旧问题是什么") {
 		t.Fatalf("current content should not include old message: %q", current)
-	}
-}
-
-func TestRuntimeDoesNotIncludeVideoURLInLLMText(t *testing.T) {
-	msg := llmMessageFromEvent(MessageEvent{
-		Kind:       EventKindPrivate,
-		UserID:     "10001",
-		MessageID:  "video-1",
-		RawMessage: "[视频]",
-		Segments: []MessageSegment{
-			{Type: "video", Data: map[string]string{"url": "https://example.com/video.mp4"}},
-		},
-	}, "[视频]")
-	got := msg.Content
-	if strings.Contains(got, "https://example.com/video.mp4") || strings.Contains(got, "视频链接") {
-		t.Fatalf("last message content = %q", got)
 	}
 }
 

@@ -40,12 +40,3 @@ func TestWithLLMUsageContextReplacesPreviousEvent(t *testing.T) {
 		t.Fatalf("usage context = %#v, want second event", state)
 	}
 }
-
-func TestProactiveReplyBatchKeySeparatesProfilesWithoutNamespace(t *testing.T) {
-	first := MessageEvent{Kind: EventKindGroup, ProfileID: "first", GroupID: "group", UserID: "user"}
-	second := first
-	second.ProfileID = "second"
-	if firstKey, secondKey := proactiveReplyBatchKey(first), proactiveReplyBatchKey(second); firstKey == secondKey {
-		t.Fatalf("different profiles shared proactive batch key %q", firstKey)
-	}
-}

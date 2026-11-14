@@ -45,35 +45,6 @@ func TestAvatarSimilarityMatchesResizedCompressedCopy(t *testing.T) {
 	}
 }
 
-func TestNewImageEvidencePromotesLowValueDuplicate(t *testing.T) {
-	event := MessageEvent{
-		Kind: EventKindGroup, GroupID: "group", UserID: "user", MessageID: "current", Time: 200,
-		Segments: []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: "new-image"}}},
-	}
-	history := []MessageEvent{{
-		Kind: EventKindGroup, GroupID: "group", UserID: "bot", MessageID: "answer", Time: 190, Outbound: true,
-		Segments: []MessageSegment{{Type: "image", Data: map[string]string{imageContentSHA256Key: "old-image"}}},
-	}}
-	if !imageEvidenceNewSinceLastBot(event, history, "bot") {
-		t.Fatal("different current image was not treated as new evidence")
-	}
-	decision := proactiveReplyDecision{
-		ShouldReply: false, Confidence: 0.98, Category: "none", Answerable: true,
-		RequestsResponse: true, Blocker: proactiveBlockerLowValue, Reason: "duplicate",
-	}
-	if !promoteNewImageEvidence(&decision, event, true, 0.5, chatInSettings{}) {
-		t.Fatal("new image evidence did not override the low-value duplicate decision")
-	}
-	if !decision.ShouldReply || decision.Category != "needs_response" || decision.TargetMessageID != event.MessageID {
-		t.Fatalf("decision=%#v", decision)
-	}
-
-	history[0].Segments[0].Data[imageContentSHA256Key] = "new-image"
-	if imageEvidenceNewSinceLastBot(event, history, "bot") {
-		t.Fatal("the same previously answered image was treated as new evidence")
-	}
-}
-
 func TestLiveAvatarSimilarity(t *testing.T) {
 	sourcePath := os.Getenv("DIANA_LIVE_AVATAR_SOURCE")
 	candidatePath := os.Getenv("DIANA_LIVE_AVATAR_CANDIDATE")

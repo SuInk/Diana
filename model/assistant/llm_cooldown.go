@@ -236,23 +236,6 @@ func (t *llmCooldownTable) noteCall(profile llm.Profile, ok bool) {
 	t.calls[llmCooldownKey(profile)] = llmCallRecord{at: t.clock(), ok: ok}
 }
 
-// remaining 返回候选还要冷却多久，不在冷却中返回 0。
-func (t *llmCooldownTable) remaining(profile llm.Profile) time.Duration {
-	if t == nil {
-		return 0
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	entry := t.entries[llmCooldownKey(profile)]
-	if entry == nil {
-		return 0
-	}
-	if left := entry.until.Sub(t.clock()); left > 0 {
-		return left
-	}
-	return 0
-}
-
 // llmFailureMark 是一次失败记账的结果，切换日志据此告诉人「什么时候再试它」。
 type llmFailureMark struct {
 	// cooldown 为 0 表示这次没有进入冷却：要么这类失败不冷却，要么连续失败还没到阈值。
