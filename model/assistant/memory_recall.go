@@ -32,7 +32,13 @@ func (r *Runtime) memoryQueryForEvent(ctx context.Context, event MessageEvent, t
 // Exact entity/topic links supply one bounded hop, never a recursive graph
 // walk. The store re-applies visibility, namespace, status and expiry filters.
 func (r *Runtime) expandMemoryAssociations(ctx context.Context, store StructuredMemoryStore, query StructuredMemoryQuery, event MessageEvent, items []StructuredMemoryItem) []StructuredMemoryItem {
-	seeds := rankStructuredMemories(items, event, query.Text, query.Now)
+	rank := injectionMemoryRank
+	if query.Unlimited {
+		// 工具检索翻页：种子也按稳定排序选，翻页之间关联分不随 last_verified_at 变；
+		// 关联到的邻居不设条数上限（linked 继承 Unlimited）。
+		rank = toolMemoryRank
+	}
+	seeds := rankStructuredMemoriesWith(items, event, query.Text, query.Now, rank)
 	linked := query
 	linked.SharedPublicOnly = false
 	linked.Text, linked.SearchTerms = "", nil

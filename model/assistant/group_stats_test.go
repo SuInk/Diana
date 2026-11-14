@@ -251,3 +251,35 @@ func TestLiveChatHistoryPicksReactionsForLikeList(t *testing.T) {
 		}
 	}
 }
+
+// 排行不设条数上限：存储给全部人，工具按整条分页，名次按全部排行算，offset 续读拿到剩下的。
+func TestChatHistorySpeakerStatsPagesWithoutCap(t *testing.T) {
+	store := &fakeGroupStatsStore{}
+	const total = 260
+	for index := 0; index < total; index++ {
+		store.speakers = append(store.speakers, GroupStatsRank{UserID: itoa(30000 + index), Count: total - index})
+	}
+	runtime := NewRuntime(BotConfig{ID: "qq", BotAccount: "90001"}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(store)
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "55501", UserID: "10001", Time: 1_000_000})
+	run := func(input map[string]any) groupStatsResult {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result groupStatsResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatalf("%v: %s", err, raw)
+		}
+		return result
+	}
+	first := run(map[string]any{"operation": "speakers"})
+	if first.Total != total || len(first.Ranks) != defaultGroupStatsLimit || first.Page == nil || !first.Page.HasMore || first.Page.NextOffset != defaultGroupStatsLimit {
+		t.Fatalf("first page = total %d ranks %d page %+v", first.Total, len(first.Ranks), first.Page)
+	}
+	rest := run(map[string]any{"operation": "speakers", "limit": 1000, "offset": first.Page.NextOffset})
+	if len(rest.Ranks) != total-defaultGroupStatsLimit || rest.Page.HasMore || rest.Ranks[0].Rank != defaultGroupStatsLimit+1 || rest.Ranks[len(rest.Ranks)-1].Rank != total {
+		t.Fatalf("rest page = ranks %d page %+v first rank %d", len(rest.Ranks), rest.Page, rest.Ranks[0].Rank)
+	}
+}

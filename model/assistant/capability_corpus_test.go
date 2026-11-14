@@ -14,12 +14,6 @@ import (
 	"github.com/SuInk/diana/model/agent"
 )
 
-type capabilityToolResult struct {
-	KnowledgeVersion string                `json:"knowledge_version"`
-	Items            []capabilitySearchHit `json:"items"`
-	References       []capabilityReference `json:"references"`
-}
-
 func runCapabilityTool(t *testing.T, tool agent.Tool, input map[string]any) capabilityToolResult {
 	t.Helper()
 	raw, err := tool.Run(context.Background(), input)
@@ -62,18 +56,10 @@ func TestCapabilityReferencesRankDesignDocsForMechanismQuestions(t *testing.T) {
 		// 「是怎么」在别的文档标题里也有（「实时画面是怎么来的」），疑问词不能主导排序。
 		"你的记忆是怎么召回的": "docs/memory-recall.md",
 	} {
-		references := retrieveCapabilityReferences(query, index, nil, defaultCapabilityReferenceLimit, false)
+		references := retrieveCapabilityReferences(query, index, nil)
 		if len(references) == 0 || references[0].Path != wantPath {
 			t.Fatalf("query %q top = %#v, want %s", query, references, wantPath)
 		}
-	}
-}
-
-func TestCapabilityReferenceExcerptStartsAtBestParagraph(t *testing.T) {
-	content := strings.Repeat("背景介绍。", 60) + "\n\n" + "编码代理的并发默认是一，同一个工作区不能同时跑两个任务。" + "\n\n" + strings.Repeat("其他说明。", 60)
-	excerpt, truncated := capabilityExcerpt(content, capabilityReferenceQueryTerms("编码代理并发"), 80)
-	if !truncated || !strings.HasPrefix(excerpt, "…编码代理的并发") {
-		t.Fatalf("excerpt = %q truncated=%v", excerpt, truncated)
 	}
 }
 
@@ -123,14 +109,69 @@ func TestCapabilityToolReturnsReferencesAlongsideItems(t *testing.T) {
 	if len(result.References) == 0 || len(result.References) > defaultCapabilityReferenceLimit || result.References[0].Path != "docs/coding-agents.md" {
 		t.Fatalf("references = %#v", result.References)
 	}
+	// 参考资料给整段原文，不再截成摘录。
+	index := staticCapabilityReferenceIndex()
 	for _, reference := range result.References {
-		if runes := utf8.RuneCountInString(reference.Excerpt); runes > capabilityReferenceExcerptRunes+2 {
-			t.Fatalf("brief excerpt has %d runes", runes)
+		for _, document := range index.documents {
+			if document.ID == reference.ID && document.Content != reference.Content {
+				t.Fatalf("reference %s content was cut: %q", reference.ID, reference.Content)
+			}
 		}
 	}
-	detailed := runCapabilityTool(t, tool, map[string]any{"query": "编码代理能同时跑几个任务", "detail": true})
-	if len(detailed.References) == 0 || detailed.References[0].Truncated {
-		t.Fatalf("detail references = %#v", detailed.References)
+	if result.ReferencesPage == nil || result.ReferencesPage.Total < len(result.References) || result.ItemsPage == nil {
+		t.Fatalf("pages = %#v %#v", result.ItemsPage, result.ReferencesPage)
+	}
+}
+
+func TestCapabilityToolPagesItemsAndReferencesWithOffsets(t *testing.T) {
+	tool := NewCapabilityKnowledgePlugin().AgentTools()[0]
+	query := "编码代理能同时跑几个任务"
+	first := runCapabilityTool(t, tool, map[string]any{"query": query, "limit": 1, "reference_limit": 1})
+	if first.ItemsPage.Total < 2 || !first.ItemsPage.HasMore || first.ItemsPage.NextOffset != 1 || len(first.Items) != 1 {
+		t.Fatalf("items page = %#v items=%d", first.ItemsPage, len(first.Items))
+	}
+	if first.ReferencesPage.Total < 2 || !first.ReferencesPage.HasMore || first.ReferencesPage.NextOffset != 1 ||
+		!strings.Contains(first.ReferencesPage.PageNote, "reference_offset=1") {
+		t.Fatalf("references page = %#v", first.ReferencesPage)
+	}
+	rest := runCapabilityTool(t, tool, map[string]any{"query": query, "offset": 1, "limit": 1000, "reference_offset": 1, "reference_limit": 1000})
+	if len(rest.Items) != first.ItemsPage.Total-1 || rest.ItemsPage.HasMore || rest.Items[0].ID == first.Items[0].ID {
+		t.Fatalf("rest items = %d page=%#v", len(rest.Items), rest.ItemsPage)
+	}
+	// 参考资料是整段原文，一次可能装不下全部；顺着 next_offset 读完要拿到全部剩余条目。
+	seen := map[string]bool{first.References[0].ID: true}
+	page := rest
+	for {
+		for _, reference := range page.References {
+			if seen[reference.ID] {
+				t.Fatalf("reference %s returned twice", reference.ID)
+			}
+			seen[reference.ID] = true
+		}
+		if !page.ReferencesPage.HasMore {
+			break
+		}
+		page = runCapabilityTool(t, tool, map[string]any{"query": query, "limit": 1, "reference_offset": page.ReferencesPage.NextOffset, "reference_limit": 1000})
+	}
+	if len(seen) != first.ReferencesPage.Total {
+		t.Fatalf("read %d references, total %d", len(seen), first.ReferencesPage.Total)
+	}
+}
+
+func TestCapabilityToolSplitsOversizedWindowIntoPages(t *testing.T) {
+	tool := NewCapabilityKnowledgePlugin().AgentTools()[0]
+	ctx := agent.WithToolOutputBudget(context.Background(), 3000)
+	raw, err := tool.Run(ctx, map[string]any{"query": "编码代理能同时跑几个任务", "limit": 1, "reference_limit": 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result capabilityToolResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	page := result.ReferencesPage
+	if page.Total <= len(result.References) || !page.HasMore || page.NextOffset != len(result.References) || page.RemainingCount != page.Total-len(result.References) {
+		t.Fatalf("references page = %#v returned=%d", page, len(result.References))
 	}
 }
 
@@ -146,4 +187,51 @@ func TestCapabilityToolSearchesToolsAttachedForThisTurn(t *testing.T) {
 		}
 	}
 	t.Fatalf("attached tool missing from references: %#v", result.References)
+}
+
+// 能力条目占满单次上限、参考资料一条也出不来时，按提示传 limit=0 续读参考资料要能前进、读完。
+func TestCapabilityToolReferencesAdvanceWhenItemsFillBudget(t *testing.T) {
+	tool := NewCapabilityKnowledgePlugin().AgentTools()[0]
+	query := "编码代理能同时跑几个任务"
+	full := runCapabilityTool(t, tool, map[string]any{"query": query, "limit": 1000, "reference_limit": 0})
+	body, _ := json.Marshal(full.Items)
+	// 预算只够放下全部能力条目，参考资料最多挤进一条。
+	ctx := agent.WithToolOutputBudget(context.Background(), utf8.RuneCount(body)+1500)
+	run := func(input map[string]any) capabilityToolResult {
+		t.Helper()
+		raw, err := tool.Run(ctx, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result capabilityToolResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := run(map[string]any{"query": query, "limit": 1000, "reference_limit": 1000})
+	if len(first.References) > 1 || !first.ReferencesPage.HasMore || !strings.Contains(first.ReferencesPage.PageNote, "limit=0") {
+		t.Fatalf("expected references crowded out with limit=0 hint: refs=%d page=%#v", len(first.References), first.ReferencesPage)
+	}
+	seen := map[string]bool{}
+	offset := 0
+	for range 50 {
+		page := run(map[string]any{"query": query, "limit": 0, "reference_offset": offset, "reference_limit": 1000})
+		if len(page.Items) != 0 {
+			t.Fatalf("limit=0 still returned %d items", len(page.Items))
+		}
+		for _, reference := range page.References {
+			seen[reference.ID] = true
+		}
+		if !page.ReferencesPage.HasMore {
+			break
+		}
+		if page.ReferencesPage.NextOffset <= offset {
+			t.Fatalf("reference_offset did not advance: %#v", page.ReferencesPage)
+		}
+		offset = page.ReferencesPage.NextOffset
+	}
+	if len(seen) != first.ReferencesPage.Total {
+		t.Fatalf("read %d references, total %d", len(seen), first.ReferencesPage.Total)
+	}
 }

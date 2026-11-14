@@ -5,11 +5,9 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -20,11 +18,8 @@ import (
 
 const capabilityKnowledgePluginID = "official.capability-knowledge-rag"
 
-const (
-	// 检索条数上下限。schema 文案和下面的夹取引用同一份常量。
-	defaultCapabilityResultLimit = 5
-	maximumCapabilityResultLimit = 8
-)
+// 能力条目默认给几条。只是默认值，模型传 limit 可以要更多，不设上限。
+const defaultCapabilityResultLimit = 5
 
 type CapabilityKnowledgePlugin struct {
 	mu            sync.RWMutex
@@ -170,13 +165,30 @@ func (t *dianaCapabilitiesTool) Description() string {
 
 func (t *dianaCapabilitiesTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"query"}, map[string]any{
-		"query":  toolStringParam("关于能力或机制的问题。"),
-		"limit":  toolIntParam("能力条目数，默认 "+itoa(defaultCapabilityResultLimit)+"。", 1, maximumCapabilityResultLimit),
-		"detail": toolBoolParam("true 时 references 给完整章节，默认只给命中摘录。"),
+		"query":            toolStringParam("关于能力或机制的问题。"),
+		"limit":            toolCountParam("这次要几条能力条目（items），默认 "+itoa(defaultCapabilityResultLimit)+"，不设上限；只续读参考资料时传 0。", 0),
+		"offset":           toolCountParam("能力条目从第几条开始（从 0 起）；items_page.has_more 时填它的 next_offset 接着读。", 0),
+		"reference_limit":  toolCountParam("这次要几条参考资料（references），默认 "+itoa(defaultCapabilityReferenceLimit)+"，不设上限。", 0),
+		"reference_offset": toolCountParam("参考资料从第几条开始（从 0 起）；references_page.has_more 时填它的 next_offset 接着读。", 0),
 	})
 }
 
-func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (string, error) {
+// capabilityToolResult 是 capabilities 的返回。items 和 references 各自分页：
+// 两条道的总数、本页给了几条、还剩几条分别写在 items_page 和 references_page 里。
+type capabilityToolResult struct {
+	CurrentAccess    map[string]any        `json:"current_access"`
+	OK               bool                  `json:"ok"`
+	Action           string                `json:"action"`
+	Query            string                `json:"query"`
+	KnowledgeVersion string                `json:"knowledge_version"`
+	Message          string                `json:"message"`
+	Items            []capabilitySearchHit `json:"items"`
+	ItemsPage        *toolResultPage       `json:"items_page,omitempty"`
+	References       []capabilityReference `json:"references"`
+	ReferencesPage   *toolResultPage       `json:"references_page,omitempty"`
+}
+
+func (t *dianaCapabilitiesTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t == nil || t.plugin == nil {
 		return "", fmt.Errorf("能力知识库未配置")
 	}
@@ -184,42 +196,57 @@ func (t *dianaCapabilitiesTool) Run(_ context.Context, input map[string]any) (st
 	if query == "" {
 		return "", fmt.Errorf("query 不能为空")
 	}
-	limit := defaultCapabilityResultLimit
-	if raw := strings.TrimSpace(configToolString(input, "limit")); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			limit = parsed
-		}
-	}
-	if limit > maximumCapabilityResultLimit {
-		limit = maximumCapabilityResultLimit
-	}
-	detail := toolInputBool(input, "detail")
-	referenceLimit := defaultCapabilityReferenceLimit
-	if detail {
-		referenceLimit = detailCapabilityReferenceLimit
-	}
-	hits := retrieveCapabilityDocuments(query, t.plugin.documents(t.platform, t.platformRules), limit)
-	references := retrieveCapabilityReferences(query, staticCapabilityReferenceIndex(), capabilityRegistryReferences(t.registry), referenceLimit, detail)
+	// limit 允许 0：只续读参考资料时不再重发能力条目，否则能力条目占满单次上限，
+	// 参考资料一条也出不来，reference_offset 永远不前进。
+	limit := chatHistoryNonNegative(input, "limit", defaultCapabilityResultLimit)
+	offset := toolPageOffset(input)
+	referenceLimit := chatHistoryNonNegative(input, "reference_limit", defaultCapabilityReferenceLimit)
+	referenceOffset := max(0, intFromAny(input["reference_offset"]))
+	hits := retrieveCapabilityDocuments(query, t.plugin.documents(t.platform, t.platformRules), 0)
+	references := retrieveCapabilityReferences(query, staticCapabilityReferenceIndex(), capabilityRegistryReferences(t.registry))
 	var access map[string]any
 	if t.accessStatus != nil {
 		access = t.accessStatus()
 	}
-	body, err := json.MarshalIndent(map[string]any{
-		"current_access":    access,
-		"ok":                true,
-		"action":            "retrieved",
-		"query":             query,
-		"knowledge_version": version.Source(),
-		"message":           fmt.Sprintf("能力知识库检索到 %d 条能力条目、%d 条参考资料。请结合当前用户关系权限回答，不要把未解锁能力说成可直接使用。references 是本版本的文档、提示词默认原文和本轮工具说明：据此解释机制时说清出处，资料里没写的实现细节不要编；资料里没写到某个功能，只能说「知识库里没查到」，不能断言 Diana 没有这个功能；提示词可能被人设改写过，只能说「默认是这样」。", len(hits), len(references)),
-		"items":             hits,
-		"references":        references,
-	}, "", "  ")
-	if err != nil {
-		return "", err
+	// 两条道各取模型要的那一段，拼成一个窗口交给 marshalToolResultPage：装不下单次
+	// 上限时从窗口尾部整条留到下一页（先留参考资料，再留能力条目），每条都给原文。
+	offset = min(offset, len(hits))
+	referenceOffset = min(referenceOffset, len(references))
+	itemWindow := hits[offset:min(len(hits), offset+limit)]
+	referenceWindow := references[referenceOffset:min(len(references), referenceOffset+referenceLimit)]
+	budget := agent.ToolOutputBudget(ctx)
+	if budget <= 0 {
+		budget = agent.ToolOutputMaxChars
 	}
-	return string(body), nil
+	itemsNext := func(next int) string {
+		return fmt.Sprintf("传 offset=%d、reference_limit=0 只接着读能力条目", next)
+	}
+	referencesNext := func(next int) string {
+		return fmt.Sprintf("传 reference_offset=%d、limit=0 只接着读参考资料", next)
+	}
+	return marshalToolResultPage(ctx, len(itemWindow)+len(referenceWindow), 0, 0, func(n int, _ toolResultPage) any {
+		itemCount := min(n, len(itemWindow))
+		referenceCount := n - itemCount
+		itemsPage := toolResultPageFor(len(hits), offset, itemCount, len(itemWindow), budget, itemsNext)
+		referencesPage := toolResultPageFor(len(references), referenceOffset, referenceCount, len(referenceWindow), budget, referencesNext)
+		return capabilityToolResult{
+			CurrentAccess:    access,
+			OK:               true,
+			Action:           "retrieved",
+			Query:            query,
+			KnowledgeVersion: version.Source(),
+			Message: fmt.Sprintf("能力知识库共命中 %d 条能力条目、%d 条参考资料，本页给了 %d 条能力条目、%d 条参考资料，没给完的看 items_page / references_page 接着读。"+
+				"请结合当前用户关系权限回答，不要把未解锁能力说成可直接使用。references 是本版本的文档章节、提示词默认原文和本轮工具说明，按相关度排序，相关度不到第一名 %.0f%% 的只命中零散字词、不算命中：据此解释机制时说清出处，资料里没写的实现细节不要编；资料里没写到某个功能，只能说「知识库里没查到」，不能断言 Diana 没有这个功能；提示词可能被人设改写过，只能说「默认是这样」。",
+				len(hits), len(references), itemCount, referenceCount, capabilityReferenceRelativeFloor*100),
+			Items:          itemWindow[:itemCount],
+			ItemsPage:      &itemsPage,
+			References:     referenceWindow[:referenceCount],
+			ReferencesPage: &referencesPage,
+		}
+	})
 }
 
+// retrieveCapabilityDocuments 按相关度返回命中的能力条目；limit<=0 返回全部命中。
 func retrieveCapabilityDocuments(query string, documents []capabilityDocument, limit int) []capabilitySearchHit {
 	queryTerms := capabilityTerms(query)
 	hits := make([]capabilitySearchHit, 0, len(documents))
@@ -245,7 +272,7 @@ func retrieveCapabilityDocuments(query string, documents []capabilityDocument, l
 		}
 		return hits[i].ID < hits[j].ID
 	})
-	if len(hits) > limit {
+	if limit > 0 && len(hits) > limit {
 		hits = hits[:limit]
 	}
 	return hits

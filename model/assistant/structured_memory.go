@@ -176,7 +176,10 @@ type StructuredMemoryQuery struct {
 	SearchTerms     []string
 	Now             time.Time
 	MaxCandidates   int
-	Kinds           []MemoryKind
+	// Unlimited 不设候选条数上限，MaxCandidates 被忽略。只给 memory 工具的检索翻页用：
+	// 工具要报真实总数、翻得完全部命中；自动注入上下文仍按 MaxCandidates 取候选窗口。
+	Unlimited bool
+	Kinds     []MemoryKind
 	// ExcludeKinds 剔除指定类型。回复提示词用它排掉 thread：那一层由专门的通道
 	// 常驻注入，再被相关性检索捞一次就成了重复注入。
 	ExcludeKinds       []MemoryKind

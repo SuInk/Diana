@@ -137,15 +137,38 @@ INSERT INTO user_favorability_changes (
 }
 
 // ListUserFavorabilityChanges returns the newest real score changes first.
-func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
-	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, limit, false)
+// beforeID>0 只取 id 更小（更早）的，供键集翻页。
+func (s *SQLiteStore) ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, beforeID int64, limit int) ([]assistant.UserFavorabilityChange, error) {
+	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, beforeID, limit, false)
 }
 
 func (s *SQLiteStore) ListUserFavorabilityChangesExact(ctx context.Context, botProfileID, userID string, limit int) ([]assistant.UserFavorabilityChange, error) {
-	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, limit, true)
+	return s.listUserFavorabilityChanges(ctx, botProfileID, userID, 0, limit, true)
 }
 
-func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int, exact bool) ([]assistant.UserFavorabilityChange, error) {
+// CountUserFavorabilityChanges 数 beforeID 之前（beforeID<=0 时是全部）的变化条数，
+// 范围和 ListUserFavorabilityChanges 一致。
+func (s *SQLiteStore) CountUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, beforeID int64) (int, error) {
+	defer s.observeStorage(ctx, "CountUserFavorabilityChanges", "read")()
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return 0, nil
+	}
+	scopeCondition, scopeArgs := favorabilityScopeCondition(botProfileID)
+	args := append([]any{userID}, scopeArgs...)
+	if beforeID > 0 {
+		scopeCondition += " AND id < ?"
+		args = append(args, beforeID)
+	}
+	var count int
+	err := s.eventReader().QueryRowContext(ctx, `SELECT COUNT(1) FROM user_favorability_changes WHERE user_id = ?`+scopeCondition, args...).Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, beforeID int64, limit int, exact bool) ([]assistant.UserFavorabilityChange, error) {
 	defer s.observeStorage(ctx, "listUserFavorabilityChanges", "read")()
 	if s == nil || s.db == nil {
 		return nil, nil
@@ -154,12 +177,13 @@ func (s *SQLiteStore) listUserFavorabilityChanges(ctx context.Context, botProfil
 	if userID == "" || limit <= 0 {
 		return []assistant.UserFavorabilityChange{}, nil
 	}
-	if limit > 100 {
-		limit = 100
-	}
 	scopeCondition, scopeArgs := favorabilityScopeCondition(botProfileID)
 	if exact {
 		scopeCondition, scopeArgs = " AND bot_profile_id = ?", []any{botProfileID}
+	}
+	if beforeID > 0 {
+		scopeCondition += " AND id < ?"
+		scopeArgs = append(scopeArgs, beforeID)
 	}
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT id, user_id, delta, before_score, after_score, source, reason, operator_id, group_id, message_id, created_at
@@ -172,7 +196,7 @@ LIMIT ?
 		return nil, err
 	}
 	defer rows.Close()
-	changes := make([]assistant.UserFavorabilityChange, 0, limit)
+	changes := make([]assistant.UserFavorabilityChange, 0, min(limit, 64))
 	for rows.Next() {
 		var change assistant.UserFavorabilityChange
 		var reason, operatorID, groupID, messageID sql.NullString

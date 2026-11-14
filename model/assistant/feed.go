@@ -101,8 +101,10 @@ type FeedPost struct {
 	Title     string      `json:"title,omitempty"`
 	Content   string      `json:"content"`
 	Images    []FeedImage `json:"images"`
-	// Comments 按时间正序，列表接口一并返回。
-	Comments []FeedComment `json:"comments"`
+	// Comments 按时间正序，列表接口一并返回。FeedListQuery.LatestComments 大于 0 时
+	// 只带最新那几条，CommentCount 是这条动态下的评论总数。
+	Comments     []FeedComment `json:"comments"`
+	CommentCount int           `json:"comment_count"`
 	// LikeCount 是赞数；LikedByBot、LikedByAdmin 说明机器人和主人各自点没点。
 	LikeCount    int  `json:"like_count"`
 	LikedByBot   bool `json:"liked_by_bot"`
@@ -141,6 +143,26 @@ type FeedListQuery struct {
 	ProfileID string
 	Kind      string
 	Before    time.Time
+	// BeforeID 和 Before 一起组成键集游标 (created_at, id)：只取严格排在它后面的
+	// （更早，或同一时刻 id 更小）。同一纳秒发的两条也不会被跳过或重复。
+	BeforeID string
+	// NeedsReply 只取最新一条评论是主人写的动态（主人评论了、机器人还没回）。
+	// 在 SQL 里筛，不在取回后筛：取回后再筛只能全量拉回，翻页时还会跳条。
+	NeedsReply bool
+	// LatestComments 大于 0 时每条动态只带最新这么多条评论（仍按时间正序），
+	// 其余用 ListFeedComments 分页读；0 表示全带（控制台）。
+	LatestComments int
+	Limit          int
+}
+
+// FeedCommentQuery 按时间正序分页读一条动态下的评论。After/AfterID 是键集游标
+// (created_at, id)：只取严格排在它后面的（更晚，或同一时刻 id 更大）。
+type FeedCommentQuery struct {
+	PostID string
+	// ProfileID 非空时要求这条动态属于该机器人。
+	ProfileID string
+	After     time.Time
+	AfterID   string
 	Limit     int
 }
 
@@ -148,6 +170,13 @@ type FeedListQuery struct {
 type FeedStore interface {
 	CreateFeedPost(context.Context, FeedPostCreateRequest) (FeedPost, error)
 	ListFeedPosts(context.Context, FeedListQuery) ([]FeedPost, error)
+	// CountFeedPosts 数符合条件（含游标）的动态条数，不看 Limit。
+	CountFeedPosts(context.Context, FeedListQuery) (int, error)
+	// ListFeedComments 按时间正序分页读评论；动态不存在（或不属于该机器人）返回
+	// ErrFeedPostNotFound。
+	ListFeedComments(context.Context, FeedCommentQuery) ([]FeedComment, error)
+	// CountFeedComments 数游标之后（没有游标时是全部）的评论条数。
+	CountFeedComments(context.Context, FeedCommentQuery) (int, error)
 	// DeleteFeedPost 连同配图一起删掉。profileID 为空时不限机器人（控制台在
 	// 「全部机器人」视图里删）。找不到返回 ErrFeedPostNotFound。
 	DeleteFeedPost(ctx context.Context, profileID, id string) (FeedPost, error)

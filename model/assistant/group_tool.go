@@ -11,10 +11,7 @@ import (
 	"strings"
 )
 
-const (
-	defaultGroupMemberLimit = 50
-	maximumGroupMemberLimit = 100
-)
+const defaultGroupMemberLimit = 50
 
 type dianaGroupTool struct {
 	runtime *Runtime
@@ -35,6 +32,8 @@ type dianaGroupResult struct {
 	Total              int                     `json:"total,omitempty"`
 	GroupTotal         int                     `json:"group_total,omitempty"`
 	Limited            bool                    `json:"limited,omitempty"`
+	// Page 是 members 的分页：Total 是匹配人数，装不下的整条留到下一页。
+	Page *toolResultPage `json:"page,omitempty"`
 }
 
 type dianaGroupMemberItem struct {
@@ -83,7 +82,8 @@ func (t *dianaGroupTool) InputSchema() map[string]any {
 		"query":                  toolStringParam("members：按群名片、昵称或账号筛选"),
 		"exclude_current_sender": toolBoolParam("members：排除当前发言者"),
 		"exclude_user_ids":       toolStringArrayParam("members：排除这些账号"),
-		"limit":                  toolIntParam("members 条数，默认 "+itoa(defaultGroupMemberLimit), 1, maximumGroupMemberLimit),
+		"limit":                  toolCountParam("members 条数，默认 "+itoa(defaultGroupMemberLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
+		"offset":                 toolCountParam("members 从第几人起（0 起），续读时填上次的 next_offset", 0),
 	})
 }
 
@@ -169,41 +169,73 @@ func (t *dianaGroupTool) listMembers(ctx context.Context, input map[string]any) 
 
 	// 群名片、昵称会改，名单里只有现名。聊天记录的发言人名录还记着旧昵称和用户名，
 	// 对得上的账号一并算命中（仍须在上面的成员候选里）。
-	historical := map[string]bool{}
-	if query != "" {
-		speakers, _ := t.runtime.resolveSpeakers(ctx, t.event, query, false, 50)
-		for _, speaker := range speakers {
-			historical[speaker.UserID] = true
-		}
+	historical, speakerErr := t.historicalSpeakerIDs(ctx, query)
+	warnings := directory.Warnings
+	if speakerErr != nil {
+		warnings = append(append([]string(nil), warnings...), "发言人名录没查完（"+speakerErr.Error()+"），按旧昵称、@用户名对得上的人可能不全；本页只保证现名匹配是全的。")
 	}
 
-	limit := groupToolLimit(input)
-	items := make([]dianaGroupMemberItem, 0, min(limit, len(members)))
-	matched := 0
+	items := make([]dianaGroupMemberItem, 0, len(members))
 	for _, member := range members {
 		if member.UserID == "" || excluded[member.UserID] || (!oneBotGroupMemberMatches(member, query) && !historical[member.UserID]) {
 			continue
 		}
-		matched++
-		if len(items) >= limit {
-			continue
-		}
 		items = append(items, groupMemberToolItem(member))
 	}
-	message := fmt.Sprintf("已读取当前群成员，匹配 %d 人，返回 %d 人。", matched, len(items))
+	message := fmt.Sprintf("已读取当前群成员，匹配 %d 人。", len(items))
 	if !directory.Complete {
 		message += " 这是当前接口可见的成员候选，不是完整成员名单；membership_verified 未标为 true 的账号可能已离群，不能据此判断权限或声称已 @ 全部成员。核验指定账号请调用 member。"
 	}
-	return marshalDianaGroupResult(dianaGroupResult{
+	result := dianaGroupResult{
 		OK:                 true,
 		Action:             "members",
 		Message:            message,
-		MemberListComplete: &directory.Complete, MemberSource: directory.Source, MemberCountKnown: &directory.TotalKnown, Warnings: directory.Warnings,
-		Members:    items,
-		Total:      matched,
+		MemberListComplete: &directory.Complete, MemberSource: directory.Source, MemberCountKnown: &directory.TotalKnown, Warnings: warnings,
+		Total:      len(items),
 		GroupTotal: directory.Total,
-		Limited:    !directory.Complete || matched > len(items),
+		Limited:    !directory.Complete,
+	}
+	limit := chatHistoryCount(input, "limit", defaultGroupMemberLimit)
+	return marshalToolResultPage(ctx, len(items), toolPageOffset(input), limit, func(n int, page toolResultPage) any {
+		start := min(page.Offset, len(items))
+		out := result
+		out.Page = &page
+		out.Members = items[start : start+n]
+		return out
 	})
+}
+
+// groupSpeakerPageSize 是在发言人名录里按昵称找人时一页取几个账号。
+const groupSpeakerPageSize = 200
+
+// historicalSpeakerIDs 在当前会话的发言人名录里找昵称（含旧昵称）、@用户名对得上的
+// 全部账号。名录可能很大，按账号键集一页页取（排序不随发言变化，翻页间有人说话也不
+// 跳条），不一次全量拉回；查询失败时把已经取到的和错误一起交回，由调用方写进结果。
+func (t *dianaGroupTool) historicalSpeakerIDs(ctx context.Context, query string) (map[string]bool, error) {
+	ids := map[string]bool{}
+	store := t.runtime.speakerStore()
+	if store == nil || query == "" {
+		return ids, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, speakerLookupTimeout)
+	defer cancel()
+	after := ""
+	for {
+		speakers, err := store.ListMessageSpeakers(ctx, MessageSpeakerQuery{
+			Session: sessionKey(t.event), Name: query, Limit: groupSpeakerPageSize, ByUserID: true, AfterUserID: after,
+		})
+		if err != nil {
+			return ids, err
+		}
+		for _, speaker := range t.runtime.dropSelfSpeakers(t.event, speakers) {
+			ids[speaker.UserID] = true
+		}
+		// 不满一页就是最后一页；游标没前进（存储不认 AfterUserID）时也停，免得空转。
+		if len(speakers) < groupSpeakerPageSize || speakers[len(speakers)-1].UserID == after {
+			return ids, nil
+		}
+		after = speakers[len(speakers)-1].UserID
+	}
 }
 
 func oneBotGroupMemberMatches(member OneBotGroupMemberInfo, query string) bool {
@@ -262,17 +294,6 @@ func groupToolStringList(value any) []string {
 		}
 	}
 	return out
-}
-
-func groupToolLimit(input map[string]any) int {
-	limit := intFromAny(input["limit"])
-	if limit <= 0 {
-		limit = defaultGroupMemberLimit
-	}
-	if limit > maximumGroupMemberLimit {
-		limit = maximumGroupMemberLimit
-	}
-	return limit
 }
 
 func marshalDianaGroupResult(result dianaGroupResult) (string, error) {

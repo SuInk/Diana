@@ -4863,12 +4863,28 @@ func (s *memoryUserMemoryStore) UpdateUserMemory(_ context.Context, event Messag
 	return profile, nil
 }
 
-func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, _, userID string, limit int) ([]UserFavorabilityChange, error) {
-	changes := append([]UserFavorabilityChange(nil), s.favorabilityChanges[userID]...)
+// favorabilityChangesBefore 照 SQLite 的语义：新到旧，beforeID>0 只要 id 更小的。
+func (s *memoryUserMemoryStore) favorabilityChangesBefore(userID string, beforeID int64) []UserFavorabilityChange {
+	changes := make([]UserFavorabilityChange, 0, len(s.favorabilityChanges[userID]))
+	for _, change := range s.favorabilityChanges[userID] {
+		if beforeID <= 0 || change.ID < beforeID {
+			changes = append(changes, change)
+		}
+	}
+	sort.SliceStable(changes, func(i, j int) bool { return changes[i].ID > changes[j].ID })
+	return changes
+}
+
+func (s *memoryUserMemoryStore) ListUserFavorabilityChanges(_ context.Context, _, userID string, beforeID int64, limit int) ([]UserFavorabilityChange, error) {
+	changes := s.favorabilityChangesBefore(userID, beforeID)
 	if limit > 0 && len(changes) > limit {
 		changes = changes[:limit]
 	}
 	return changes, nil
+}
+
+func (s *memoryUserMemoryStore) CountUserFavorabilityChanges(_ context.Context, _, userID string, beforeID int64) (int, error) {
+	return len(s.favorabilityChangesBefore(userID, beforeID)), nil
 }
 
 func (s *memoryUserMemoryStore) GetUserMemory(_ context.Context, botProfileID, userID string) (UserMemoryProfile, bool, error) {

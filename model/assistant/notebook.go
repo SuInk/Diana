@@ -240,6 +240,11 @@ type NotebookQuery struct {
 	Limit          int
 	IncludeDeleted bool
 	Now            time.Time
+	// ByCreated 让 ListNotebookEntries 按 (created_at, id) 新到旧排，配合 Before 键集翻页。
+	// 默认的命中次数排序会在翻页间被后台加一，名次一变就跳条或重复。自动命中不用它。
+	ByCreated bool
+	// Before 只在 ByCreated 时有意义：只取严格排在这个位置后面的条目。
+	Before *KeysetCursor
 }
 
 // NotebookStore 是笔记本的持久化契约。没有实现时笔记本整体静默失效：查不到、写不了，
@@ -256,6 +261,8 @@ type NotebookStore interface {
 	NotebookEntryDetail(ctx context.Context, scopeKey, term string) (NotebookEntry, bool, error)
 	// ListNotebookEntries 按作用域列出条目，供人工翻阅和清理。
 	ListNotebookEntries(ctx context.Context, query NotebookQuery) ([]NotebookEntry, error)
+	// CountNotebookEntries 数 ListNotebookEntries 同一查询（含 Before）匹配多少条，不看 Limit。
+	CountNotebookEntries(ctx context.Context, query NotebookQuery) (int, error)
 	// TouchNotebookEntries 记录一次命中。失败只影响冷热排序，不影响回复。
 	TouchNotebookEntries(ctx context.Context, ids []string, at time.Time) error
 }

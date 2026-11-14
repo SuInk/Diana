@@ -11,10 +11,7 @@ import (
 	"strings"
 )
 
-const (
-	defaultSelfNoteListLimit = 20
-	maximumSelfNoteListLimit = 60
-)
+const defaultSelfNoteListLimit = 20
 
 // dianaSelfNoteTool 是模型维护自述的入口。
 //
@@ -27,12 +24,11 @@ type dianaSelfNoteTool struct {
 }
 
 type dianaSelfNoteResult struct {
-	OK      bool       `json:"ok"`
-	Action  string     `json:"action"`
-	Message string     `json:"message,omitempty"`
-	Note    *SelfNote  `json:"note,omitempty"`
-	Items   []SelfNote `json:"items,omitempty"`
-	Removed int        `json:"removed,omitempty"`
+	OK      bool      `json:"ok"`
+	Action  string    `json:"action"`
+	Message string    `json:"message,omitempty"`
+	Note    *SelfNote `json:"note,omitempty"`
+	Removed int       `json:"removed,omitempty"`
 	// ReplyGuidance 只在真调用了才付 token，而且正好在要用它的那一刻送到。
 	ReplyGuidance string `json:"reply_guidance,omitempty"`
 }
@@ -63,7 +59,8 @@ func (*dianaSelfNoteTool) InputSchema() map[string]any {
 		"id":               toolStringParam("revise/delete 必填：条目 ID"),
 		"reason":           toolStringParam("delete：不再成立的原因"),
 		"include_inactive": toolBoolParam("list：包含已改写和删除的历史版本"),
-		"limit":            toolIntParam("list 条数，默认 "+itoa(defaultSelfNoteListLimit), 1, maximumSelfNoteListLimit),
+		"limit":            toolCountParam("list 条数，默认 "+itoa(defaultSelfNoteListLimit)+"，不设上限；超出单次结果上限时按整条分页", 1),
+		"cursor":           toolStringParam("list 续读：原样填上一页的 next_cursor，其他参数不变"),
 	})
 }
 
@@ -151,25 +148,56 @@ func (t *dianaSelfNoteTool) delete(ctx context.Context, store SelfNoteStore, inp
 	return encodeSelfNoteResult(dianaSelfNoteResult{OK: true, Action: "delete", Message: "已删掉这条自述", Note: &note, ReplyGuidance: selfNoteReplyGuidance})
 }
 
+// list 按写入顺序 (created_at, id) 键集翻页：翻页之间有条目被改写、删除或新写入，
+// 都不会让后面的页跳条或重复。
 func (t *dianaSelfNoteTool) list(ctx context.Context, store SelfNoteStore, input map[string]any) (string, error) {
-	limit := intFromAny(input["limit"])
-	if limit <= 0 {
-		limit = defaultSelfNoteListLimit
-	}
-	if limit > maximumSelfNoteListLimit {
-		limit = maximumSelfNoteListLimit
-	}
-	// 历史版本只给主人看：它带着「谁在场时写的」这类来源信息，属于审计视角。
-	includeInactive := toolInputBool(input, "include_inactive") && t.relationship.Owner
-	notes, err := store.ListSelfNotes(ctx, strings.TrimSpace(t.event.ProfileID), includeInactive, limit)
+	limit := chatHistoryCount(input, "limit", defaultSelfNoteListLimit)
+	cursor, err := toolKeysetCursor(input)
 	if err != nil {
 		return "", err
 	}
-	message := fmt.Sprintf("当前有 %d 条自述", len(notes))
-	if len(notes) == 0 {
+	// 历史版本只给主人看：它带着「谁在场时写的」这类来源信息，属于审计视角。
+	query := SelfNoteListQuery{
+		ProfileID:       strings.TrimSpace(t.event.ProfileID),
+		IncludeInactive: toolInputBool(input, "include_inactive") && t.relationship.Owner,
+	}
+	total, err := store.CountSelfNotes(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	matched := total
+	if cursor != nil {
+		query.After, query.AfterID = cursor.At, cursor.ID
+		if matched, err = store.CountSelfNotes(ctx, query); err != nil {
+			return "", err
+		}
+	}
+	query.Limit = toolKeysetFetchLimit(ctx, limit)
+	notes, err := store.ListSelfNotesAfter(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	// 条数报真实总数，不报这一页装了几条。
+	message := fmt.Sprintf("当前有 %d 条自述", total)
+	if query.IncludeInactive {
+		message = fmt.Sprintf("连同历史版本共 %d 条自述", total)
+	}
+	if total == 0 {
 		message = "还没有写过自述"
 	}
-	return encodeSelfNoteResult(dianaSelfNoteResult{OK: true, Action: "list", Message: message, Items: notes, ReplyGuidance: selfNoteReplyGuidance})
+	return marshalToolCursorPage(ctx, len(notes), matched, func(i int) KeysetCursor {
+		return KeysetCursor{At: notes[i].CreatedAt, ID: notes[i].ID}
+	}, func(n int, page toolCursorPage) any {
+		return struct {
+			OK      bool       `json:"ok"`
+			Action  string     `json:"action"`
+			Message string     `json:"message"`
+			Total   int        `json:"total"`
+			Items   []SelfNote `json:"items"`
+			toolCursorPage
+			ReplyGuidance string `json:"reply_guidance"`
+		}{OK: true, Action: "list", Message: message, Total: total, Items: notes[:n], toolCursorPage: page, ReplyGuidance: selfNoteReplyGuidance}
+	})
 }
 
 func (t *dianaSelfNoteTool) purge(ctx context.Context, store SelfNoteStore) (string, error) {

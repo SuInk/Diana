@@ -15,8 +15,12 @@ import (
 )
 
 const (
-	defaultFeedListLimit = 10
-	maximumFeedListLimit = 30
+	defaultFeedListLimit    = 10
+	defaultFeedCommentLimit = 20
+	// feedListLatestComments 是 list 里每条动态带的最新评论条数。全部评论单独分页读
+	// （operation=comments）：一条动态最多 FeedMaxCommentsPerPost 条评论、每条几百字，
+	// 全挂在列表里时单条动态就能超过单次结果上限。
+	feedListLatestComments = 3
 )
 
 // dianaFeedTool 是模型往「动态」页发帖的入口。
@@ -34,7 +38,6 @@ type dianaFeedResult struct {
 	Action  string       `json:"action"`
 	Message string       `json:"message,omitempty"`
 	Post    *FeedPost    `json:"post,omitempty"`
-	Items   []FeedPost   `json:"items,omitempty"`
 	Comment *FeedComment `json:"comment,omitempty"`
 	Likes   *FeedLikes   `json:"likes,omitempty"`
 }
@@ -60,17 +63,19 @@ func (*dianaFeedTool) Description() string {
 
 func (*dianaFeedTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("comment 评论或回复，like 点赞或取消", "post", "list", "delete", "comment", "like"),
+		"operation": toolEnumParam("comments 分页读某条动态的全部评论；comment 评论或回复，like 点赞或取消", "post", "list", "comments", "delete", "comment", "like"),
 		"kind":      toolEnumParam("post 动态（默认）、diary 日记；list 时按类筛选", FeedKindPost, FeedKindDiary),
 		"title":     toolStringParam("标题，可选，最多 " + itoa(FeedTitleMaxRunes) + " 字"),
 		"content":   toolStringParam("post 正文最多 " + itoa(FeedContentMaxRunes) + " 字，comment 内容最多 " + itoa(FeedCommentMaxRunes) + " 字"),
 		"images": toolStringArrayParam("最多 " + itoa(FeedMaxImages) + " 张：" + agent.WorkspaceOutputsDir + "/ 下的图片路径，" +
 			"或 chat:<message_id>[:<序号>]（须是你发的消息）"),
-		"id":          toolStringParam("动态 ID，取自 list"),
-		"reply_to":    toolStringParam("要回复的评论 ID，取自 list；不填为顶层评论"),
+		"id":          toolStringParam("动态 ID，取自 list；comments 必填"),
+		"reply_to":    toolStringParam("要回复的评论 ID，取自 list 或 comments；不填为顶层评论"),
 		"liked":       toolBoolParam("false 取消点赞，默认 true"),
 		"needs_reply": toolBoolParam("只列主人评论后你还没回的动态"),
-		"limit":       toolIntParam("返回条数，默认 "+itoa(defaultFeedListLimit), 1, maximumFeedListLimit),
+		"limit": toolCountParam("list 条数默认 "+itoa(defaultFeedListLimit)+"、comments 条数默认 "+itoa(defaultFeedCommentLimit)+
+			"，不设上限；超出单次结果上限时按整条分页", 1),
+		"cursor": toolStringParam("list/comments 续读：原样填上一页的 next_cursor，其他参数不变"),
 	})
 }
 
@@ -91,6 +96,8 @@ func (t *dianaFeedTool) Run(ctx context.Context, input map[string]any) (string, 
 		return t.post(ctx, store, input)
 	case "list", "get":
 		return t.list(ctx, store, input)
+	case "comments":
+		return t.comments(ctx, store, input)
 	case "delete", "remove":
 		return t.delete(ctx, store, input)
 	case "comment", "reply":
@@ -98,7 +105,7 @@ func (t *dianaFeedTool) Run(ctx context.Context, input map[string]any) (string, 
 	case "like", "unlike":
 		return t.like(ctx, store, input)
 	default:
-		return "", fmt.Errorf("不支持的操作，operation 只能是 post、list、delete、comment 或 like")
+		return "", fmt.Errorf("不支持的操作，operation 只能是 post、list、comments、delete、comment 或 like")
 	}
 }
 
@@ -140,45 +147,111 @@ func (t *dianaFeedTool) post(ctx context.Context, store FeedStore, input map[str
 	return encodeFeedResult(dianaFeedResult{OK: true, Action: "post", Message: "已发布到动态页；提醒一下，这只是发在控制台里，没有发给任何人", Post: &post})
 }
 
+// list 按 (created_at, id) 新到旧键集翻页。needs_reply 在存储层 SQL 里筛：取回后再筛
+// 只能全量拉回；按 offset 翻页时，前一页的动态回复完就离开筛选结果，后面的整体前移，
+// 续读会跳过一批。
 func (t *dianaFeedTool) list(ctx context.Context, store FeedStore, input map[string]any) (string, error) {
-	limit := intFromAny(input["limit"])
-	if limit <= 0 {
-		limit = defaultFeedListLimit
+	limit := chatHistoryCount(input, "limit", defaultFeedListLimit)
+	cursor, err := toolKeysetCursor(input)
+	if err != nil {
+		return "", err
 	}
-	if limit > maximumFeedListLimit {
-		limit = maximumFeedListLimit
+	query := FeedListQuery{
+		ProfileID: strings.TrimSpace(t.event.ProfileID), NeedsReply: toolInputBool(input, "needs_reply"),
+		LatestComments: feedListLatestComments,
 	}
-	kind := ""
 	if raw := strings.TrimSpace(configToolString(input, "kind")); raw != "" {
-		kind = NormalizeFeedKind(raw)
+		query.Kind = NormalizeFeedKind(raw)
 	}
-	needsReply := toolInputBool(input, "needs_reply")
-	query := FeedListQuery{ProfileID: strings.TrimSpace(t.event.ProfileID), Kind: kind, Limit: limit}
-	if needsReply {
-		// 过滤发生在取回之后，要多取一些才不会因为大部分帖子都已回复而只剩几条。
-		query.Limit = maximumFeedListLimit * 3
+	total, err := store.CountFeedPosts(ctx, query)
+	if err != nil {
+		return "", err
 	}
+	matched := total
+	if cursor != nil {
+		query.Before, query.BeforeID = cursor.At, cursor.ID
+		if matched, err = store.CountFeedPosts(ctx, query); err != nil {
+			return "", err
+		}
+	}
+	query.Limit = toolKeysetFetchLimit(ctx, limit)
 	posts, err := store.ListFeedPosts(ctx, query)
 	if err != nil {
 		return "", err
 	}
-	if needsReply {
-		waiting := posts[:0]
-		for _, post := range posts {
-			if last := len(post.Comments) - 1; last >= 0 && post.Comments[last].AuthorKind == FeedAuthorAdmin {
-				waiting = append(waiting, post)
-			}
-		}
-		posts = waiting
-		if len(posts) > limit {
-			posts = posts[:limit]
-		}
-	}
-	message := fmt.Sprintf("最近 %d 条", len(posts))
-	if len(posts) == 0 {
+	message := fmt.Sprintf("共 %d 条动态，新的在前", total)
+	switch {
+	case query.NeedsReply && total == 0:
+		message = "没有等你回复的动态"
+	case query.NeedsReply:
+		message = fmt.Sprintf("共 %d 条动态等你回复，新的在前", total)
+	case total == 0:
 		message = "还没有发过动态"
 	}
-	return encodeFeedResult(dianaFeedResult{OK: true, Action: "list", Message: message, Items: posts})
+	if total > 0 {
+		message += fmt.Sprintf("。每条只带最新 %d 条评论，comment_count 是评论总数；要看全部评论用 operation=comments、id=动态 ID 分页读", feedListLatestComments)
+	}
+	return marshalToolCursorPage(ctx, len(posts), matched, func(i int) KeysetCursor {
+		return KeysetCursor{At: posts[i].CreatedAt, ID: posts[i].ID}
+	}, func(n int, page toolCursorPage) any {
+		return struct {
+			OK      bool       `json:"ok"`
+			Action  string     `json:"action"`
+			Message string     `json:"message"`
+			Total   int        `json:"total"`
+			Items   []FeedPost `json:"items"`
+			toolCursorPage
+		}{OK: true, Action: "list", Message: message, Total: total, Items: posts[:n], toolCursorPage: page}
+	})
+}
+
+// comments 按 (created_at, id) 旧到新键集翻页读一条动态下的评论。
+func (t *dianaFeedTool) comments(ctx context.Context, store FeedStore, input map[string]any) (string, error) {
+	postID := strings.TrimSpace(configToolString(input, "id"))
+	if postID == "" {
+		return "", fmt.Errorf("读评论要带上动态 id，先用 list 查一遍")
+	}
+	cursor, err := toolKeysetCursor(input)
+	if err != nil {
+		return "", err
+	}
+	query := FeedCommentQuery{PostID: postID, ProfileID: strings.TrimSpace(t.event.ProfileID)}
+	total, err := store.CountFeedComments(ctx, query)
+	if errors.Is(err, ErrFeedPostNotFound) {
+		return "", fmt.Errorf("没有这条动态（或不是你发的），先用 list 查一遍")
+	}
+	if err != nil {
+		return "", err
+	}
+	matched := total
+	if cursor != nil {
+		query.After, query.AfterID = cursor.At, cursor.ID
+		if matched, err = store.CountFeedComments(ctx, query); err != nil {
+			return "", err
+		}
+	}
+	query.Limit = toolKeysetFetchLimit(ctx, chatHistoryCount(input, "limit", defaultFeedCommentLimit))
+	comments, err := store.ListFeedComments(ctx, query)
+	if err != nil {
+		return "", err
+	}
+	message := fmt.Sprintf("这条动态共 %d 条评论，旧的在前", total)
+	if total == 0 {
+		message = "这条动态还没有评论"
+	}
+	return marshalToolCursorPage(ctx, len(comments), matched, func(i int) KeysetCursor {
+		return KeysetCursor{At: comments[i].CreatedAt, ID: comments[i].ID}
+	}, func(n int, page toolCursorPage) any {
+		return struct {
+			OK      bool          `json:"ok"`
+			Action  string        `json:"action"`
+			Message string        `json:"message"`
+			PostID  string        `json:"post_id"`
+			Total   int           `json:"total"`
+			Items   []FeedComment `json:"items"`
+			toolCursorPage
+		}{OK: true, Action: "comments", Message: message, PostID: postID, Total: total, Items: comments[:n], toolCursorPage: page}
+	})
 }
 
 func (t *dianaFeedTool) comment(ctx context.Context, store FeedStore, input map[string]any) (string, error) {
@@ -198,7 +271,7 @@ func (t *dianaFeedTool) comment(ctx context.Context, store FeedStore, input map[
 	case errors.Is(err, ErrFeedPostNotFound):
 		return "", fmt.Errorf("没有这条动态（或不是你发的），先用 list 查一遍")
 	case errors.Is(err, ErrFeedCommentNotFound):
-		return "", fmt.Errorf("要回复的评论不在这条动态下，先用 list 查一遍评论 id")
+		return "", fmt.Errorf("要回复的评论不在这条动态下，先用 comments 查一遍评论 id")
 	case errors.Is(err, ErrFeedCommentCapacity):
 		return "", fmt.Errorf("这条动态下的评论已经有 %d 条，到上限了", FeedMaxCommentsPerPost)
 	case err != nil:

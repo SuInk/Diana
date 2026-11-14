@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -129,7 +130,22 @@ func (s *memoryNotebookStore) LookupNotebookEntries(_ context.Context, query Not
 }
 
 func (s *memoryNotebookStore) ListNotebookEntries(_ context.Context, query NotebookQuery) ([]NotebookEntry, error) {
+	items := s.matchingList(query)
+	if query.Limit > 0 && len(items) > query.Limit {
+		items = items[:query.Limit]
+	}
+	return items, nil
+}
+
+func (s *memoryNotebookStore) CountNotebookEntries(_ context.Context, query NotebookQuery) (int, error) {
+	return len(s.matchingList(query)), nil
+}
+
+// matchingList 照 SQLite 实现：默认按作用域、命中次数排；ByCreated 时按
+// (created_at, id) 新到旧排，Before 之后的才算。
+func (s *memoryNotebookStore) matchingList(query NotebookQuery) []NotebookEntry {
 	items := make([]NotebookEntry, 0, len(s.entries))
+	touched := s.touchedSnapshot()
 	for _, scope := range query.ScopeKeys {
 		for _, entry := range s.entries {
 			if entry.ScopeKey != scope {
@@ -138,11 +154,25 @@ func (s *memoryNotebookStore) ListNotebookEntries(_ context.Context, query Noteb
 			if entry.Status == NotebookStatusDeleted && !query.IncludeDeleted {
 				continue
 			}
+			if before := query.Before; query.ByCreated && before != nil &&
+				!(entry.CreatedAt.Before(before.At) || (entry.CreatedAt.Equal(before.At) && entry.ID < before.ID)) {
+				continue
+			}
+			entry.UsageCount += touched[entry.ID]
 			items = append(items, entry)
 		}
 	}
-	SortNotebookEntriesByScope(items, query.ScopeKeys)
-	return items, nil
+	if !query.ByCreated {
+		SortNotebookEntriesByScope(items, query.ScopeKeys)
+		return items
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if !items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].CreatedAt.After(items[j].CreatedAt)
+		}
+		return items[i].ID > items[j].ID
+	})
+	return items
 }
 
 func (s *memoryNotebookStore) NotebookEntryDetail(_ context.Context, scopeKey, term string) (NotebookEntry, bool, error) {
@@ -776,5 +806,124 @@ func TestFormatNotebookLineMarksNonTermKinds(t *testing.T) {
 	legacy := NotebookEntry{Term: "旧条目", Meaning: "升级前记的"}
 	if line := formatNotebookLine(legacy); strings.HasPrefix(line, "[") {
 		t.Fatalf("legacy line = %q", line)
+	}
+}
+
+// seedNotebookEntries 直接往替身里放 count 条，created_at 每两条共用一个时刻，
+// 逼游标靠 id 区分同一时刻的条目。
+func seedNotebookEntries(store *memoryNotebookStore, event MessageEvent, count int, meaning string) {
+	scope := notebookScopeKeys(event)[0]
+	base := time.Unix(1_788_300_000, 0)
+	for index := range count {
+		store.nextID++
+		term := "梗" + itoa(index)
+		store.entries[notebookStoreKey(scope, term)] = NotebookEntry{
+			ID: fmt.Sprintf("notebook-%03d", store.nextID), ScopeKey: scope, Kind: NotebookKindTerm,
+			Term: term, Meaning: meaning, Status: NotebookStatusActive, Version: 1,
+			CreatedAt: base.Add(time.Duration(index/2) * time.Second),
+		}
+	}
+}
+
+func runNotebookList(t *testing.T, ctx context.Context, runtime *Runtime, event MessageEvent, input map[string]any) notebookListResult {
+	t.Helper()
+	raw, err := newDianaNotebookTool(runtime, event, RelationshipPolicy{Owner: true}).Run(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if limit := agent.ToolOutputBudget(ctx); limit > 0 && len([]rune(raw)) > limit {
+		t.Fatalf("结果 %d 字超过单次上限 %d", len([]rune(raw)), limit)
+	}
+	var result notebookListResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("decode %s: %v", raw, err)
+	}
+	return result
+}
+
+// list 按 (created_at, id) 新到旧、用游标续读：翻页之间命中次数被后台加一（原来按
+// usage_count 排，名次一变就跳条或重复），后面的页照样不跳不重。
+func TestNotebookListCursorStableWhenUsageChanges(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newNotebookRuntime(t, store)
+	event := notebookTestEvent("10001", "")
+	const total = 30
+	seedNotebookEntries(store, event, total, "一个梗")
+	ctx := context.Background()
+	first := runNotebookList(t, ctx, runtime, event, map[string]any{"operation": "list", "limit": 10})
+	if len(first.Items) != 10 || !first.HasMore || first.RemainingCount != total-10 || first.NextCursor == "" {
+		t.Fatalf("first page = items %d %+v", len(first.Items), first.toolCursorPage)
+	}
+	if first.Items[0].Term != "梗29" {
+		t.Fatalf("应按新到旧排，第一条是 %s", first.Items[0].Term)
+	}
+	seen := map[string]bool{}
+	for _, entry := range first.Items {
+		seen[entry.ID] = true
+	}
+	// 后面还没读到的条目被大量命中：按命中次数排的话它们会挤到前面、被游标跳过。
+	var hot []string
+	for _, entry := range store.entries {
+		if !seen[entry.ID] {
+			hot = append(hot, entry.ID)
+		}
+	}
+	for range 5 {
+		_ = store.TouchNotebookEntries(ctx, hot[:len(hot)/2], time.Now())
+	}
+	cursor := first.NextCursor
+	for page := 0; cursor != ""; page++ {
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+		rest := runNotebookList(t, ctx, runtime, event, map[string]any{"operation": "list", "limit": 7, "cursor": cursor})
+		for _, entry := range rest.Items {
+			if seen[entry.ID] {
+				t.Fatalf("重复给了 %s", entry.Term)
+			}
+			seen[entry.ID] = true
+		}
+		cursor = rest.NextCursor
+	}
+	if len(seen) != total {
+		t.Fatalf("翻完只看到 %d 条，应为 %d", len(seen), total)
+	}
+}
+
+// 单次上限装不下时按整条切页：每页都在上限内，正文不截短，续读拿齐全部。
+func TestNotebookListSplitsByOutputBudget(t *testing.T) {
+	store := newMemoryNotebookStore()
+	runtime := newNotebookRuntime(t, store)
+	event := notebookTestEvent("10001", "")
+	const total = 12
+	meaning := strings.Repeat("释义", 150)
+	seedNotebookEntries(store, event, total, meaning)
+	ctx := agent.WithToolOutputBudget(context.Background(), 2500)
+	seen := map[string]bool{}
+	input := map[string]any{"operation": "list", "limit": 1000}
+	for page := 0; ; page++ {
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+		result := runNotebookList(t, ctx, runtime, event, input)
+		if len(result.Items) == 0 {
+			t.Fatal("一页一条都没给")
+		}
+		for _, entry := range result.Items {
+			if entry.Meaning != meaning {
+				t.Fatalf("正文被截短：%d 字", len([]rune(entry.Meaning)))
+			}
+			seen[entry.ID] = true
+		}
+		if !result.HasMore {
+			break
+		}
+		if page == 0 && (len(result.Items) >= total || !strings.Contains(result.PageNote, "单次结果上限")) {
+			t.Fatalf("第一页应按上限切开：%d 条 note=%q", len(result.Items), result.PageNote)
+		}
+		input = map[string]any{"operation": "list", "limit": 1000, "cursor": result.NextCursor}
+	}
+	if len(seen) != total {
+		t.Fatalf("只拿到 %d 条，应为 %d", len(seen), total)
 	}
 }

@@ -45,7 +45,7 @@ func (t *dianaBackgroundTaskTool) InputSchema() map[string]any {
 func (t *dianaBackgroundTaskTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	switch inputString(input, "operation") {
 	case "start":
-		id, err := t.runtime.startBackgroundAgent(ctx, t.event, inputString(input, "goal"), chatHistoryBoundedInt(input, "max_rounds", backgroundAgentMaxRounds, backgroundAgentMaxRounds), t.run)
+		id, err := t.runtime.startBackgroundAgent(ctx, t.event, inputString(input, "goal"), chatHistoryCount(input, "max_rounds", backgroundAgentMaxRounds), t.run)
 		if err != nil {
 			return "", err
 		}

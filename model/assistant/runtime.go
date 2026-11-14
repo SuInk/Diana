@@ -158,8 +158,13 @@ type MessageSpeakerQuery struct {
 	SessionPrefix string
 	CrossSession  bool
 	// Name 按昵称（含旧昵称）子串、@用户名或账号匹配；为空时按最近发言列出。
-	Name  string
+	Name string
+	// Limit 是最多几个账号，<=0 不限。
 	Limit int
+	// ByUserID 按账号升序键集翻页：只取账号大于 AfterUserID 的，结果也按账号排。
+	// 默认按最近发言排，发言一来名次就变，只适合取前若干个；要找全的调用方用它一页页取。
+	ByUserID    bool
+	AfterUserID string
 }
 
 // MessageSpeaker 是名录里的一个账号。Names 是它在范围内用过的昵称，最近的在前。
@@ -223,7 +228,11 @@ type UserMemoryStore interface {
 }
 
 type UserFavorabilityHistoryStore interface {
-	ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, limit int) ([]UserFavorabilityChange, error)
+	// ListUserFavorabilityChanges 新到旧（id 倒序）列出变化记录；beforeID>0 时只取 id
+	// 更小（更早）的，供键集翻页。
+	ListUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, beforeID int64, limit int) ([]UserFavorabilityChange, error)
+	// CountUserFavorabilityChanges 数 beforeID 之前（beforeID<=0 时是全部）的变化条数。
+	CountUserFavorabilityChanges(ctx context.Context, botProfileID, userID string, beforeID int64) (int, error)
 }
 
 type ConfigSaver interface {

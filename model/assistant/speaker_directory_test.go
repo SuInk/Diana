@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +45,20 @@ func (s *speakerHistoryStore) ListMessageSpeakers(_ context.Context, query Messa
 		if matched {
 			speaker.ExactMatch = exact
 			out = append(out, speaker)
+		}
+	}
+	// ByUserID 照 SQLite 实现：按账号升序，只取 AfterUserID 之后的，Limit 个一页。
+	if query.ByUserID {
+		sort.Slice(out, func(i, j int) bool { return out[i].UserID < out[j].UserID })
+		kept := out[:0]
+		for _, speaker := range out {
+			if speaker.UserID > query.AfterUserID {
+				kept = append(kept, speaker)
+			}
+		}
+		out = kept
+		if query.Limit > 0 && len(out) > query.Limit {
+			out = out[:query.Limit]
 		}
 	}
 	return out, nil

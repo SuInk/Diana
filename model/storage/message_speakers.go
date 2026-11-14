@@ -173,6 +173,7 @@ func (s *SQLiteStore) BackfillMessageSpeakers(ctx context.Context) error {
 
 // ListMessageSpeakers 在名录里按昵称（含旧昵称）、@用户名或账号找人。Name 为空时
 // 按最近发言列出会话里的人。同一账号的多个昵称合并成一条，最近用的排前面。
+// ByUserID 时按账号升序、从 AfterUserID 之后分页取，调用方一页页翻完。
 func (s *SQLiteStore) ListMessageSpeakers(ctx context.Context, query assistant.MessageSpeakerQuery) ([]assistant.MessageSpeaker, error) {
 	defer s.observeStorage(ctx, "ListMessageSpeakers", "read")()
 	if s == nil || s.db == nil {
@@ -182,9 +183,10 @@ func (s *SQLiteStore) ListMessageSpeakers(ctx context.Context, query assistant.M
 	if (!query.CrossSession && session == "") || (query.CrossSession && prefix == "") {
 		return nil, nil
 	}
+	// 不设上限：Limit<=0 给全部（SQLite 的 LIMIT -1）。
 	limit := query.Limit
-	if limit <= 0 || limit > 500 {
-		limit = 500
+	if limit <= 0 {
+		limit = -1
 	}
 	where := `session = ?`
 	args := []any{session}
@@ -198,11 +200,20 @@ func (s *SQLiteStore) ListMessageSpeakers(ctx context.Context, query assistant.M
 		where += ` AND (LOWER(sender_name) LIKE ? ESCAPE '\' OR LOWER(username) = ? OR user_id = ?)`
 		args = append(args, "%"+escapeMessageHistoryLike(name)+"%", handle, strings.TrimSpace(query.Name))
 	}
+	// ByUserID 按账号键集翻页：排序键不随发言变化，翻页之间有人说话也不跳条。
+	order := `seen DESC`
+	if query.ByUserID {
+		order = `user_id`
+		if after := strings.TrimSpace(query.AfterUserID); after != "" {
+			where += ` AND user_id > ?`
+			args = append(args, after)
+		}
+	}
 	// 先找出命中的账号，再把这些账号在同一范围内用过的全部昵称取回来：只按命中的
 	// 那一行展示，模型就看不出「小明」和「明明」其实是同一个人。
 	idRows, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, MAX(last_seen) AS seen FROM message_speakers WHERE `+where+`
-GROUP BY user_id ORDER BY seen DESC LIMIT ?`, append(args, limit)...)
+GROUP BY user_id ORDER BY `+order+` LIMIT ?`, append(args, limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -269,6 +280,9 @@ ORDER BY last_seen DESC`, append(scopeArgs, ids...)...)
 		out = append(out, *speaker)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if query.ByUserID {
+			return out[i].UserID < out[j].UserID
+		}
 		if out[i].ExactMatch != out[j].ExactMatch {
 			return out[i].ExactMatch
 		}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -463,5 +464,65 @@ func TestNotebookEntryKindRoundTripsAndFilters(t *testing.T) {
 	}
 	if updated.Kind != assistant.NotebookKindEvent || updated.Version != 2 {
 		t.Fatalf("updated = %#v", updated)
+	}
+}
+
+// ByCreated 按 (created_at, id) 新到旧、Before 键集翻页：翻页之间命中次数被加一也
+// 不跳条、不重复；计数和列表用同一套筛选。
+func TestListNotebookEntriesKeysetIgnoresUsageChanges(t *testing.T) {
+	store := newNotebookStore(t)
+	ctx := context.Background()
+	base := time.Unix(1_788_300_000, 0)
+	const total = 25
+	for index := range total {
+		if _, _, err := store.UpsertNotebookEntry(ctx, assistant.NotebookUpsertRequest{
+			ScopeKey: "group:1", Term: "梗" + strconv.Itoa(index), Meaning: "正文",
+			// 每两条共用一个时刻，逼游标靠 id 区分。
+			Now: base.Add(time.Duration(index/2) * time.Second),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := assistant.NotebookQuery{ScopeKeys: []string{"group:1"}, ByCreated: true, Limit: 6}
+	if count, err := store.CountNotebookEntries(ctx, query); err != nil || count != total {
+		t.Fatalf("count = %d err=%v", count, err)
+	}
+	seen := map[string]bool{}
+	for page := 0; ; page++ {
+		if page > total {
+			t.Fatal("分页没有前进")
+		}
+		entries, err := store.ListNotebookEntries(ctx, query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 0 {
+			break
+		}
+		var ids []string
+		for _, entry := range entries {
+			if seen[entry.ID] {
+				t.Fatalf("重复给了 %s", entry.Term)
+			}
+			seen[entry.ID] = true
+		}
+		// 把还没读到的条目全部命中几次：按 usage_count 排的话名次会变。
+		remaining, err := store.ListNotebookEntries(ctx, assistant.NotebookQuery{ScopeKeys: []string{"group:1"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range remaining {
+			if !seen[entry.ID] {
+				ids = append(ids, entry.ID)
+			}
+		}
+		if err := store.TouchNotebookEntries(ctx, ids, base.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		last := entries[len(entries)-1]
+		query.Before = &assistant.KeysetCursor{At: last.CreatedAt, ID: last.ID}
+	}
+	if len(seen) != total {
+		t.Fatalf("翻完只看到 %d 条，应为 %d", len(seen), total)
 	}
 }
