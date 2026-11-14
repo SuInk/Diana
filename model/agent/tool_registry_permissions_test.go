@@ -45,7 +45,7 @@ func TestToolRegistryCatalogIsCompactAndSchemaFree(t *testing.T) {
 		&registryPermissionTool{name: "reminder", description: `创建持久提醒。input: {"delay":"1m"}`},
 	)
 
-	catalog := registry.Catalog(180)
+	catalog := registry.Catalog()
 	if len(catalog) != 2 || catalog[0].Name != "reminder" || catalog[1].Name != "web_search" {
 		t.Fatalf("catalog = %#v", catalog)
 	}

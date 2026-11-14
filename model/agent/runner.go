@@ -173,7 +173,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 目录对同一个会话里的每个发言者是同一份：当前发言者用不了的也列出来并注明对谁开放，
 	// 这一段才不会随发言者来回变（见 ToolRegistry.SetSkillAudience）。
 	catalogSkills, audience := r.registry.skillCatalogView(residentSkillsOnly(skills))
-	catalog, deliveredSkills := renderSkillsCatalog(withSkillAudience(catalogSkills, audience), r.cfg.SkillsListBudget)
+	catalog, deliveredSkills := renderSkillsCatalog(withSkillAudience(catalogSkills, audience))
 	var stableNotes []string
 	if catalog != "" {
 		stableNotes = append(stableNotes, catalog)
@@ -302,7 +302,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		TraceID:        traceID,
 		Phase:          RunPhaseStarted,
 		MaxToolCalls:   r.cfg.MaxSteps,
-		AvailableTools: r.registry.Catalog(0),
+		AvailableTools: r.registry.Catalog(),
 	})
 	// finalizeFields 是最后一次收尾动作带的调用方字段。静默收尾也照样交出去：
 	// 「这一轮不说话，只回一张表情包」是静默加字段表达的，要不要用由调用方决定。

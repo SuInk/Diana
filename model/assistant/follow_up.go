@@ -23,8 +23,6 @@ import (
 
 const (
 	pluginSettingFollowUpPrompt = "follow_up_prompt"
-	followUpReferenceMinRunes   = 800
-	followUpReferenceMaxRunes   = 7200
 )
 
 func followUpPromptSetting() PluginSettingSpec {
@@ -228,9 +226,6 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		cfg.PromptOverrides = overrides
 	}
 	history := r.contextHistory(source)
-	if strings.TrimSpace(reference) != "" {
-		reference = truncateRunes(reference, followUpReferenceRuneBudget(r.promptContextWindowTokens(source, cfg)))
-	}
 	messages := []llm.Message{{
 		Role:     llm.RoleSystem,
 		Content:  r.systemPrompt(source, nil),
@@ -302,17 +297,6 @@ func (r *Runtime) followUpCommentWithReference(ctx context.Context, kind followU
 		return ""
 	}
 	return comment
-}
-
-func followUpReferenceRuneBudget(contextWindowTokens int64) int {
-	budget := int(contextWindowTokens / 10)
-	if budget < followUpReferenceMinRunes {
-		return followUpReferenceMinRunes
-	}
-	if budget > followUpReferenceMaxRunes {
-		return followUpReferenceMaxRunes
-	}
-	return budget
 }
 
 type followUpMediaFrames struct {

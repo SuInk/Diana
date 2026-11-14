@@ -24,7 +24,7 @@ func sendChatEvent(ctx context.Context, out chan<- ChatEvent, event ChatEvent) b
 }
 
 func (c *openAICompatibleClient) streamChatCompletion(ctx context.Context, req GenerateRequest) (<-chan ChatEvent, error) {
-	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
+	req = applyContextLimit(req.withDefaults(c.cfg), c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}

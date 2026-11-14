@@ -46,7 +46,6 @@ func (r *Runtime) clearSessionHistory(event MessageEvent) error {
 	}
 	delete(r.history, session)
 	delete(r.contextSummaries, session)
-	delete(r.contextSummaryMarks, session)
 	delete(r.historyWindowAnchors, session)
 	for key, buffer := range r.groupPromptHistory {
 		if buffer.Session == session {

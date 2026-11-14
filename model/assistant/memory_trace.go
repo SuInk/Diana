@@ -14,18 +14,17 @@ import (
 
 const sessionThreadPromptPrefix = "【当前会话进行状态，用于接上正在聊的事；不要复述它，也不要直接回复它】\n"
 
-// recordTemporaryMemoryContext records only the short-lived state that really
-// survives the final token budget. Ordinary recent chat history stays in the
+// recordTemporaryMemoryContext records the short-lived state injected into
+// this turn. Ordinary recent chat history stays in the
 // message event table and is not duplicated into app_logs on every turn.
 func (r *Runtime) recordTemporaryMemoryContext(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, preload *promptContextPreload) {
 	writer := r.appLogWriter()
 	if writer == nil || preload == nil || strings.TrimSpace(event.MessageID) == "" {
 		return
 	}
-	fitted := llm.FitMessagesToContextBudget(messages, r.promptContextWindowTokens(event, cfg), llm.DefaultMaxOutputTokens)
 	privateStateInjected := false
 	sessionThread := ""
-	for _, message := range fitted {
+	for _, message := range messages {
 		content := strings.TrimSpace(message.Content)
 		switch {
 		case strings.HasPrefix(content, privateThreadStateMarker):

@@ -24,17 +24,13 @@ type promptContextPreload struct {
 	threadState         string
 	threadStates        []ThreadState
 	memoryContext       string
-	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
-	memoryUsage      contextLayerUsage
-	notebookContext  string
-	worldBookContext string
-	selfNoteContext  string
-	walletContext    string
+	notebookContext     string
+	worldBookContext    string
+	selfNoteContext     string
+	walletContext       string
 	// selfFactContext 是按触发词带上的「关于自己的事实」，纯本地匹配，不需要并发。
 	selfFactContext string
-	// selfNoteUsage 是自述层进入全局预算之前的自有账。
-	selfNoteUsage contextLayerUsage
-	mediaIndex    []durableMediaIndexEntry
+	mediaIndex      []durableMediaIndexEntry
 }
 
 // startPromptContextPreload 并发预取几层只读上下文。调用方必须在使用结果前调用
@@ -65,7 +61,7 @@ func (r *Runtime) startPromptContextPreload(
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:56")
 		defer preload.wg.Done()
-		preload.memoryContext, preload.memoryUsage = r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
+		preload.memoryContext = r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 	}()
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:60")
@@ -80,7 +76,7 @@ func (r *Runtime) startPromptContextPreload(
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:72")
 		defer preload.wg.Done()
-		preload.selfNoteContext, preload.selfNoteUsage = r.selfNoteContext(ctx, event)
+		preload.selfNoteContext = r.selfNoteContext(ctx, event)
 	}()
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:wallet")
@@ -103,22 +99,4 @@ func (p *promptContextPreload) wait() {
 		return
 	}
 	p.wg.Wait()
-}
-
-// layerUsage 汇总各层的自有账。authoritativePluginContext 那条路径上 preload 为
-// nil，此时只有便签那份（也多半是零值），照样要能取。
-func (p *promptContextPreload) layerUsage(extra ...contextLayerUsage) []contextLayerUsage {
-	layers := make([]contextLayerUsage, 0, len(extra)+2)
-	for _, usage := range extra {
-		if usage.Layer != "" {
-			layers = append(layers, usage)
-		}
-	}
-	if p != nil && p.memoryUsage.Layer != "" {
-		layers = append(layers, p.memoryUsage)
-	}
-	if p != nil && p.selfNoteUsage.Layer != "" {
-		layers = append(layers, p.selfNoteUsage)
-	}
-	return layers
 }

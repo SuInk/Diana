@@ -53,21 +53,6 @@ func TestProfileFailoverIsLoggedAndThrottled(t *testing.T) {
 	}
 }
 
-// 上下文超限收缩重发要留痕：回复里像是少了前面的聊天记录，原因就在这里。
-func TestContextShrinkIsReported(t *testing.T) {
-	var events []llmEvent
-	ctx := withLLMEventReporter(context.Background(), func(event llmEvent) { events = append(events, event) })
-	provider := &contextOverflowProvider{limit: 20_000}
-	if _, err := generateWithTransientRetryPolicy(ctx, provider,
-		llm.GenerateRequest{Model: "model-x", Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}},
-		true, 0, 0, 0); err != nil {
-		t.Fatalf("shrunk retry should succeed: %v", err)
-	}
-	if len(events) == 0 || events[0].Kind != llmEventContextShrink || events[0].Model != "model-x" || events[0].MaxContextTokens <= 0 {
-		t.Fatalf("events = %#v", events)
-	}
-}
-
 // 后台任务失败的节流按 key 分开：同一件事一分钟一条，不同的事互不影响。
 func TestBackgroundFailureThrottlesPerKey(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

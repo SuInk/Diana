@@ -40,7 +40,7 @@ func TestContextOverflowLimitReadsProviderWindow(t *testing.T) {
 	}
 }
 
-// 撞过一次超限之后记住真实窗口：同一端点同一模型的下一次请求直接按它裁剪，
+// 撞过一次超限之后记住真实窗口：同一端点同一模型的下一次请求按它校验，
 // 不再先吃一个 400。
 func TestOpenAICompatibleLearnsWindowFromOverflow(t *testing.T) {
 	saved := rememberedContextLimits
@@ -76,21 +76,25 @@ func TestOpenAICompatibleLearnsWindowFromOverflow(t *testing.T) {
 	if limit, ok := rememberedContextLimits.get(cfg, "glm-4v-flash"); !ok || limit != 16384 {
 		t.Fatalf("learned = %d, %t; want 16384", limit, ok)
 	}
-	// 每条消息都会新建 client，学到的窗口要跨 client 生效。
+	// 每条消息都会新建 client，学到的窗口要跨 client 生效：同样的请求本地就判超限，
+	// 不再发出去先吃一个 400，也不裁剪消息。
 	client = newOpenAICompatibleClient(cfg, server.Client())
-	if _, err := client.Generate(context.Background(), GenerateRequest{Messages: history}); err != nil {
-		t.Fatal(err)
+	if _, err := client.Generate(context.Background(), GenerateRequest{Messages: history}); !errors.Is(err, ErrContextOverflow) {
+		t.Fatalf("second call err = %v, want local ErrContextOverflow", err)
 	}
-	if len(sizes) != 2 || sizes[1] >= sizes[0] {
-		t.Fatalf("messages sent = %v, want the second request trimmed to the learned window", sizes)
+	if len(sizes) != 1 {
+		t.Fatalf("requests sent = %v, want only the first", sizes)
 	}
-	if got := applyContextBudget(GenerateRequest{Model: "glm-4v-flash", Messages: history}, cfg); got.MaxContextTokens != 16384 {
-		t.Fatalf("budget limit = %d, want the learned 16384", got.MaxContextTokens)
+	if got := applyContextLimit(GenerateRequest{Model: "glm-4v-flash", Messages: history}, cfg); got.MaxContextTokens != 16384 {
+		t.Fatalf("limit = %d, want the learned 16384", got.MaxContextTokens)
+	}
+	if limit, ok := LearnedContextLimit(cfg, "glm-4v-flash"); !ok || limit != 16384 {
+		t.Fatalf("LearnedContextLimit = %d, %t", limit, ok)
 	}
 	// 换个模型不受影响。
 	other := cfg
 	other.Model = "glm-4-plus"
-	if got := applyContextBudget(GenerateRequest{Model: "glm-4-plus", Messages: history}, other); got.MaxContextTokens == 16384 {
+	if got := applyContextLimit(GenerateRequest{Model: "glm-4-plus", Messages: history}, other); got.MaxContextTokens == 16384 {
 		t.Fatal("learned window leaked to another model")
 	}
 }

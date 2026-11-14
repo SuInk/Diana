@@ -22,11 +22,9 @@ import (
 // 没开联网搜索插件、群里聊的都是私事闲扯、或者搜不到，都退回原来的做法。
 
 const (
-	proactiveNewsRecencyDays     = 3
-	proactiveNewsSearchTimeout   = 60 * time.Second
-	proactiveNewsResultMaxRunes  = 3500
-	proactiveNewsHistoryMessages = 40
-	proactiveNewsQueryMaxRunes   = 40
+	proactiveNewsRecencyDays   = 3
+	proactiveNewsSearchTimeout = 60 * time.Second
+	proactiveNewsQueryMaxRunes = 40
 	// proactiveRecentGroupsTTL 是历史会话列表的缓存时长。查一次要扫整张消息表，
 	// 冷场时长最短也有半小时，晚十几分钟发现一个新热起来的群没有关系。
 	proactiveRecentGroupsTTL = 15 * time.Minute
@@ -90,7 +88,8 @@ func (r *Runtime) findProactiveNews(ctx context.Context, cfg BotConfig, event Me
 	if search == nil {
 		return proactiveNews{}
 	}
-	lines := proactiveNewsChatLines(r.proactiveRecentHistory(event), proactiveBotID(event, cfg))
+	// 和生成那一步看同一份会话历史，不另取一个截短的窗口。
+	lines := proactiveNewsChatLines(proactiveGroupHistory(event, sessionOnlyHistory(r.promptContextHistory(event, cfg))), proactiveBotID(event, cfg))
 	if len(lines) == 0 {
 		return proactiveNews{}
 	}
@@ -109,29 +108,37 @@ func (r *Runtime) findProactiveNews(ctx context.Context, cfg BotConfig, event Me
 		log.Printf("diana proactive news search %q failed: %v", query, err)
 		return proactiveNews{Query: query}
 	}
-	return proactiveNews{Query: query, Results: truncateRunesFromStart(strings.TrimSpace(results), proactiveNewsResultMaxRunes)}
+	return proactiveNews{Query: query, Results: strings.TrimSpace(results)}
 }
 
-// proactiveNewsChatLines 取最近几十条群友发言，「昵称：内容」一行一条。机器人自己的
-// 话不带，免得它绕着自己说过的东西找话题。
+// proactiveNewsChatLines 把群友发言写成「昵称：内容」一行一条，全部带上、不截字。
+// 机器人自己的话不带，免得它绕着自己说过的东西找话题。
 func proactiveNewsChatLines(history []MessageEvent, botID string) []string {
 	var lines []string
-	for index := len(history) - 1; index >= 0 && len(lines) < proactiveNewsHistoryMessages; index-- {
-		event := history[index]
+	for _, event := range history {
 		if !proactiveHumanEvent(event, botID) {
 			continue
 		}
-		text := truncateRunes(memoryEventText(event), 200)
+		text := memoryEventText(event)
 		if text == "" {
 			continue
 		}
 		name := firstNonEmpty(strings.TrimSpace(event.SenderName), strings.TrimSpace(event.UserID))
 		lines = append(lines, name+"："+text)
 	}
-	for left, right := 0, len(lines)-1; left < right; left, right = left+1, right-1 {
-		lines[left], lines[right] = lines[right], lines[left]
-	}
 	return lines
+}
+
+// proactiveGroupHistory 只留当前群的消息，和生成那一步的筛法一致。
+func proactiveGroupHistory(event MessageEvent, history []MessageEvent) []MessageEvent {
+	out := make([]MessageEvent, 0, len(history))
+	for _, item := range history {
+		if event.Kind == EventKindGroup && !samePromptGroupScope(event, item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (r *Runtime) pickProactiveNewsQuery(ctx context.Context, event MessageEvent, lines []string) (string, error) {

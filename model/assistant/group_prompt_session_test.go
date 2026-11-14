@@ -103,15 +103,18 @@ func TestGroupPromptCheckpointPersistsAndRestores(t *testing.T) {
 	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, ProfileID: "profile", SelfID: "bot", GroupID: "group"}
 	first := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	first.SetMessageHistoryStore(store)
-	first.contextSummaries[sessionKey(event)] = "Alice 负责上线，Bob 负责回归。"
-	if got, _ := first.promptContextSummary(event, "", 1000); got == "" {
+	first.storeCompaction(event, "Alice 负责上线，Bob 负责回归。", "anchor-key")
+	if got := first.compactionSummary(event); got == "" {
 		t.Fatal("checkpoint was not stored")
 	}
 
 	second := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	second.SetMessageHistoryStore(store)
-	if got, _ := second.promptContextSummary(event, "", 1000); got != "Alice 负责上线，Bob 负责回归。" {
+	if got := second.compactionSummary(event); got != "Alice 负责上线，Bob 负责回归。" {
 		t.Fatalf("restored checkpoint = %q", got)
+	}
+	if got := second.groupPromptSession(event).anchor(); got != "anchor-key" {
+		t.Fatalf("restored anchor = %q", got)
 	}
 }
 

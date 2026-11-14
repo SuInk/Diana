@@ -13,11 +13,11 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestCrossGroupLongTermRelevanceBeatsRecentWeakMatches(t *testing.T) {
+func TestCrossGroupContextKeepsEveryMatchedMessage(t *testing.T) {
 	now := time.Now().Unix()
 	old := crossGroupTestEvent(now-180*86400, "other", "author", "old", "Aurora release Friday")
 	store := &crossGroupHistoryStore{candidates: []MessageEvent{old}}
-	for i := int64(1); i <= crossGroupContextResultLimit+2; i++ {
+	for i := int64(1); i <= 8; i++ {
 		store.candidates = append(store.candidates, crossGroupTestEvent(now-i, "other", "author", string(rune('a'+i)), "Aurora unrelated discussion"))
 	}
 	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, &crossGroupMembershipChannel{allowed: map[string]bool{"current|author": true}}, NewPluginManager(), nil, nil, nil, nil)
@@ -26,8 +26,8 @@ func TestCrossGroupLongTermRelevanceBeatsRecentWeakMatches(t *testing.T) {
 	if store.query.FromTime != 0 || store.query.ExcludeSession != sessionKey(current) {
 		t.Fatalf("query still limited: %+v", store.query)
 	}
-	if len(got) != crossGroupContextResultLimit {
-		t.Fatalf("selected=%d", len(got))
+	if len(got) != len(store.candidates) {
+		t.Fatalf("通过判定的跨群消息应全部带上：selected=%d candidates=%d", len(got), len(store.candidates))
 	}
 	found := false
 	for _, e := range got {
@@ -36,7 +36,7 @@ func TestCrossGroupLongTermRelevanceBeatsRecentWeakMatches(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Fatal("old high-relevance message was displaced by recent weak matches")
+		t.Fatal("old high-relevance message was dropped")
 	}
 }
 
@@ -96,5 +96,66 @@ func TestCrossGroupMoreHintLivesInChatHistory(t *testing.T) {
 	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	if head, _ := r.systemPromptPartsWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, nil); strings.Contains(head, "标着「跨群历史」的行") {
 		t.Fatal("系统提示词里不该再另写跨群历史查更多")
+	}
+}
+
+// pagedSearchStore 模拟存储层的分页：每页最多 pageSize 条，要按 Offset 翻。
+type pagedSearchStore struct {
+	crossGroupHistoryStore
+	pageSize int
+	offsets  []int
+}
+
+func (s *pagedSearchStore) SearchMessageEvents(_ context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.offsets = append(s.offsets, query.Offset)
+	end := min(query.Offset+s.pageSize, len(s.candidates))
+	if query.Offset >= end {
+		return nil, len(s.candidates), nil
+	}
+	return append([]MessageEvent(nil), s.candidates[query.Offset:end]...), len(s.candidates), nil
+}
+
+func TestSearchAllMessageEventsReadsEveryPage(t *testing.T) {
+	store := &pagedSearchStore{pageSize: 3}
+	for i := int64(1); i <= 8; i++ {
+		store.candidates = append(store.candidates, crossGroupTestEvent(i, "other", "author", string(rune('a'+i)), "Aurora"))
+	}
+	got, err := searchAllMessageEvents(context.Background(), store, MessageHistorySearchQuery{Text: "Aurora"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 8 || got[7].MessageID != store.candidates[7].MessageID {
+		t.Fatalf("分页没取全：got=%d offsets=%v", len(got), store.offsets)
+	}
+	if want := []int{0, 3, 6}; len(store.offsets) != len(want) || store.offsets[1] != 3 || store.offsets[2] != 6 {
+		t.Fatalf("offsets=%v want %v", store.offsets, want)
+	}
+}
+
+// timelineHistoryStore 在跨群测试存储上补一条原群时间线，供取前后文。
+type timelineHistoryStore struct {
+	crossGroupHistoryStore
+	timeline []MessageEvent
+}
+
+func (s *timelineHistoryStore) ListMessageEventsBetween(context.Context, string, int64, int64) ([]MessageEvent, error) {
+	return append([]MessageEvent(nil), s.timeline...), nil
+}
+
+func TestCrossGroupNeighborsKeepFullText(t *testing.T) {
+	long := strings.Repeat("前文很长的一句话，", 20)
+	hit := crossGroupTestEvent(100, "other", "author", "hit", "Aurora release Friday")
+	store := &timelineHistoryStore{timeline: []MessageEvent{
+		crossGroupTestEvent(90, "other", "author", "before", long),
+		hit,
+	}}
+	r := NewRuntime(BotConfig{CrossGroupMemoryEnabled: boolPointer(true)}, &crossGroupMembershipChannel{allowed: map[string]bool{"current|author": true}}, NewPluginManager(), nil, nil, nil, nil)
+	current := crossGroupTestEvent(200, "current", "requester", "query", "Aurora release Friday")
+	neighbors := r.crossGroupNeighbors(current, store, []MessageEvent{hit})
+	if len(neighbors) != 1 || len(neighbors[0][0]) != 1 {
+		t.Fatalf("前文没取到：%#v", neighbors)
+	}
+	if got := neighbors[0][0][0].text; got != strings.TrimSpace(long) {
+		t.Fatalf("前文被截短：%q", got)
 	}
 }

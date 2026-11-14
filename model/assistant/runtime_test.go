@@ -603,7 +603,7 @@ func TestLLMNoTextErrorRetryAndFailoverMatrix(t *testing.T) {
 	}
 }
 
-func TestRuntimeCompressesOlderContextAfterThreshold(t *testing.T) {
+func TestRuntimeTrimsInMemoryHistoryAfterThreshold(t *testing.T) {
 	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
 	for i := 1; i <= 6; i++ {
@@ -617,12 +617,8 @@ func TestRuntimeCompressesOlderContextAfterThreshold(t *testing.T) {
 	if len(history) != 3 || history[0].RawMessage != "消息4" || history[2].RawMessage != "消息6" {
 		t.Fatalf("history = %#v", history)
 	}
-	summary := runtime.contextSummary(event)
-	if !strings.Contains(summary, "消息1") || !strings.Contains(summary, "消息3") {
-		t.Fatalf("summary = %q", summary)
-	}
 	runtime.clearSessionHistory(event)
-	if runtime.contextSummary(event) != "" || len(runtime.contextHistory(event)) != 0 {
+	if len(runtime.contextHistory(event)) != 0 {
 		t.Fatalf("context should be cleared")
 	}
 }
@@ -650,12 +646,12 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 
 func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
-	// 按单次请求上下文上限的份额以 token 计，留空的上限是 DefaultRequestContextTokens。
+	// RecentContextLimit 只管内存缓存和旁路回看深度，不进正式提示词；正式提示词的
+	// 历史从锚开始全部带上，留空的单次请求上限跟随模型窗口。
 	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
 		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	}
-	if got := cfg.requestContextLimit(); got != DefaultRequestContextTokens {
+	if got := cfg.requestContextLimit(); got != 0 {
 		t.Fatalf("request context limit default = %d", got)
 	}
 	if boolValue(cfg.CrossGroupMemoryEnabled, true) {

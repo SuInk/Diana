@@ -32,63 +32,27 @@ func (p *imageBudgetProvider) Generate(ctx context.Context, req llm.GenerateRequ
 	window, reserve := p.runtime.imageRequestBudget(ctx, p.group, req)
 	budget := llm.InputTokenBudget(window, reserve)
 	before := llm.PlanInputBudget(req, budget)
-	run := inputBudgetRunFromContext(ctx)
-	if run == nil {
-		run = newInputBudgetRun()
-	}
-	if !before.OverBudget() && run.empty() {
-		return p.provider.Generate(ctx, req)
-	}
-	// 本轮裁过就每步都跑：这一步装得下也要照搬之前丢过的历史、截过的工具结果，
-	// 否则前缀在「裁过」和「没裁」之间来回跳，供应商的前缀缓存每步都断。
-	req, trim := pretrimBudgetText(req, budget, run)
-	if !before.OverBudget() {
+	// 只处理图片：文字一律原样发送，超窗交给上层压缩（context_compaction.go）。
+	// 图片超出时先换成描述、再缩图，实在装不下才换成占位，模型知道那里有图没送到。
+	if before.ImageExcess <= 0 {
 		return p.provider.Generate(ctx, req)
 	}
 	event := MessageEvent{}
 	if usage := llmUsageFromContext(ctx); usage != nil {
 		event = usage.event
 	}
-	textCalls := 0
-	if llm.PlanInputBudget(req, budget).OverBudget() {
-		describeCtx := context.WithValue(ctx, imageBudgetActiveKey{}, true)
-		req = fitBudgetText(describeCtx, req, budget, &textCalls, run, p.runtime.summarizeBudgetText)
-		if llm.PlanInputBudget(req, budget).ImageExcess > 0 {
-			beforeDescriptions := countBudgetImages(req)
-			req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
-				return p.runtime.budgetImageDescription(callCtx, event, source)
-			})
-			// 图片描述占文字额度。只有真的换了图才再过一遍文字，以前这第二遍无条件跑，
-			// 描述一张没换时它只会把第一遍摘不动的那几条再送去摘一次。
-			if countBudgetImages(req) < beforeDescriptions {
-				var more budgetPretrimStats
-				req, more = pretrimBudgetText(req, budget, run)
-				trim = trim.add(more)
-				req = fitBudgetText(describeCtx, req, budget, &textCalls, run, p.runtime.summarizeBudgetText)
-			}
-		}
-		req = lowerOverBudgetImageDetail(req, budget)
-	}
+	describeCtx := context.WithValue(ctx, imageBudgetActiveKey{}, true)
+	req = fitImagesWithDescriptions(describeCtx, req, budget, func(callCtx context.Context, source string) (string, error) {
+		return p.runtime.budgetImageDescription(callCtx, event, source)
+	})
+	req = lowerOverBudgetImageDetail(req, budget)
 	retained := countBudgetImages(req)
 	after := llm.PlanInputBudget(req, budget)
-	// 格式：text/img 是「处理前->处理后/限额」；dropped/clipped 是预裁剪丢掉的历史
-	// 条数和截短的工具结果条数；images 是「原有/换成描述/保留」。
-	log.Printf("diana input budget: message_id=%s budget=%d text=%d->%d/%d img=%d->%d/%d dropped=%d clipped=%d text_summary_calls=%d images=%d/%d/%d", event.MessageID, budget, before.TextTokens, after.TextTokens, after.TextLimit, before.ImageTokens, after.ImageTokens, after.ImageLimit, trim.Dropped, trim.Clipped, textCalls, images, images-retained, retained)
-	if after.OverBudget() {
-		// 描述、摘要、缩图都做完了还是超，就丢，不让整轮失败。
-		//
-		// 以前这里分两种：旧上下文太多就交给供应商裁剪，当前问题本身装不下就报错。
-		// 后一种在线上照样会发生——一轮带十几张截图很常见，用户看到的是一句「超出
-		// 输入预算，未能发出」，一个字的回答都没有。宁可少看几张图、少带点历史，也要
-		// 把这一轮答出来。
-		//
-		// 先丢图：旧消息里的图最先丢，当前这条的图从最后一张往前丢，每张换成一句
-		// 占位，模型知道那里有图没送到，不会假装看过。图丢完还超，剩下的交给供应商
-		// 客户端按上下文上限裁剪（applyContextBudget → fitMessagesToTokenBudget）。
+	log.Printf("diana input budget: message_id=%s budget=%d img=%d->%d/%d images=%d/%d/%d", event.MessageID, budget, before.ImageTokens, after.ImageTokens, after.ImageLimit, images, images-retained, retained)
+	if after.ImageExcess > 0 {
 		var dropped int
 		req, dropped = dropOverBudgetImages(req, budget)
-		remaining := llm.PlanInputBudget(req, budget)
-		log.Printf("diana input budget: message_id=%s still over budget after compression: dropped_images=%d budget=%d text=%d images=%d other=%d over=%t, deferring remainder to provider trim", event.MessageID, dropped, budget, remaining.TextTokens, remaining.ImageTokens, remaining.OtherTokens, remaining.OverBudget())
+		log.Printf("diana input budget: message_id=%s images still over budget, replaced %d with placeholders", event.MessageID, dropped)
 	}
 	return p.provider.Generate(ctx, req)
 }
@@ -122,9 +86,8 @@ func (r *Runtime) imageRequestBudget(ctx context.Context, group string, req llm.
 			}
 		}
 		// 只按首选模型算，不取整条降级链里最小的窗口。以前取最小值：聊天配了 32k 的
-		// 本地备用后，发给 12.8 万窗口主模型的请求也按 32k 卡，判成超预算去调摘要模型，
-		// 线上一轮串行摘要两次、多等 9 秒，压完还是超，最后照样靠供应商裁剪。真降级到
-		// 小窗口模型时，它自己的客户端按自己的上限裁（applyContextBudget）。
+		// 本地备用后，发给 12.8 万窗口主模型的请求也按 32k 卡。真降级到小窗口模型时，
+		// 它自己的客户端按自己的上限校验，超了报上下文超限。
 		if len(profiles) > 0 {
 			cfg := profiles[0].Config
 			if req.Model != "" {

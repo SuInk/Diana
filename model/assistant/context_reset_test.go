@@ -52,7 +52,10 @@ func TestContextResetExcludesPersistentHistoryFromBothPromptPaths(t *testing.T) 
 	if !handled || !strings.Contains(reply, "已清空") {
 		t.Fatalf("reply=%q handled=%v", reply, handled)
 	}
-	if runtime.contextSummary(event) != "" {
+	runtime.mu.RLock()
+	summary := runtime.contextSummaries[session]
+	runtime.mu.RUnlock()
+	if summary != "" || runtime.compactionSummary(event) != "" {
 		t.Fatal("old summary retained")
 	}
 	if _, ok := runtime.agentCarryoverMessage(event); ok {

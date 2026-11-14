@@ -30,10 +30,10 @@ func TestStructuredMemoryLineShowsWhenItWasRecorded(t *testing.T) {
 }
 
 func TestStructuredMemoryBlockExplainsRelativeTime(t *testing.T) {
-	text, _, _ := formatStructuredMemoryContextWithTokenBudgetDetailed(UserMemoryProfile{UserID: "1"}, RelationshipPolicy{}, []StructuredMemoryItem{{
+	text := formatStructuredMemoryContext(UserMemoryProfile{UserID: "1"}, RelationshipPolicy{}, []StructuredMemoryItem{{
 		Kind: MemoryKindEpisode, Topic: "用药", Content: "2026-09-22 上午吃了布洛芬", Confidence: 1, Importance: 1,
 		SourceEventTime: time.Now().AddDate(0, 0, -3),
-	}}, 4000)
+	}})
 	// 时间规则逐字不变，放在稳定头部；记忆块本身只带数据。
 	if strings.Contains(text, structuredMemoryTimeRule) {
 		t.Fatalf("memory block still repeats the time rule: %q", text)

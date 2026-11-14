@@ -30,43 +30,6 @@ type GroupPromptSession struct {
 	History      []GroupPromptHistoryEntry `json:"history,omitempty"`
 }
 
-// promptContextSummary reads the source at assembly time, not the earlier routing
-// snapshot. Taking the session lock before reading prevents an older request from
-// publishing its checkpoint after a newer one. Store I/O never holds r.mu.
-func (r *Runtime) promptContextSummary(event MessageEvent, sessionThread string, budget int64) (string, bool) {
-	s := r.groupPromptSession(event)
-	r.mu.RLock()
-	if s != nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.invalidated {
-			r.mu.RUnlock()
-			return "", false
-		}
-	}
-	var summary string
-	if r.structuredMemory == nil && strings.TrimSpace(sessionThread) == "" {
-		var present bool
-		summary, present = r.contextSummaries[sessionKey(event)]
-		if !present && s != nil {
-			summary = s.data.Checkpoint
-		}
-	}
-	summary, recompressed := r.fitOlderSummaryToBudget(rawMessageWithoutImagePlaceholders(summary), budget)
-	changed := s != nil && s.data.Checkpoint != summary
-	if changed {
-		s.data.Checkpoint = summary
-	}
-	r.mu.RUnlock()
-	if changed {
-		s.saveLocked()
-		if s.invalidated {
-			return "", false
-		}
-	}
-	return summary, recompressed
-}
-
 type GroupPromptHistoryEntry struct {
 	Key        string        `json:"key"`
 	SourceHash string        `json:"source_hash"`
@@ -341,13 +304,6 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range previous {
 		old[entry.Key] = entry
 	}
-	var localHistory []MessageEvent
-	for _, item := range history {
-		if !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
-			localHistory = append(localHistory, item)
-		}
-	}
-	groups, recent := historyContextMetadata(localHistory, event.Time, cfg.BotAccount)
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
@@ -418,10 +374,8 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range next {
 		for _, message := range entry.Messages {
 			message.Priority = llm.MessagePriorityHistory
-			if recent[entry.Key] {
-				message.Priority = llm.MessagePriorityRecentHistory
-			}
-			message.ContextGroup = groups[entry.Key]
+			// 压缩时按这个标记把被摘要的历史原文从请求里摘掉，见 applyCompactionToMessages。
+			message.ContextGroup = historyContextGroupPrefix + entry.Key
 			stable = append(stable, message)
 		}
 	}

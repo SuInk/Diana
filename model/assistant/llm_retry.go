@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -148,9 +147,6 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		maxRetries = 0
 	}
 	attemptTimeout := boundedInitialRetryTimeout(ctx, requestTimeout, maxRetries, retryDelay)
-	// 收缩重试与瞬时重试是两回事，各记各的：一次窗口推断失误不该把网络抖动的
-	// 重试额度也用掉。
-	shrinkAttempts := 0
 	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -188,23 +184,10 @@ func generateWithTransientRetryPolicy(ctx context.Context, provider LLMProvider,
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		// 上下文窗口在目录没给出时是按模型名推断的，推断偏大就会被供应商判为
-		// 超限。这类错误重发原请求没有意义，收缩预算再试一次才有：逐次减半，
-		// 直到落回保守窗口为止。
+		// 超出上下文窗口重发同一个请求没有意义：发送层不裁剪，交给上层压缩较早对话
+		// 后重试（见 context_compaction.go）。
 		if llm.IsContextOverflowError(err) {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, ctxErr
-			}
-			shrunk, ok := shrinkContextForRetry(req, err)
-			if !ok || shrinkAttempts >= maxContextShrinkRetries {
-				return resp, err
-			}
-			log.Printf("diana llm context overflow, retrying with max_context_tokens=%d", shrunk.MaxContextTokens)
-			reportLLMEventFromContext(ctx, llmEvent{Kind: llmEventContextShrink, Model: req.Model, MaxContextTokens: shrunk.MaxContextTokens, Err: err})
-			req = shrunk
-			shrinkAttempts++
-			attempt--
-			continue
+			return resp, err
 		}
 		if err == nil || !enabled || !shouldRetryTransientLLMError(err) {
 			return resp, err
@@ -391,8 +374,6 @@ func newRegistryFailoverLLMProvider(registry *llm.ProviderRegistry, profiles []l
 func (p *registryFailoverLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	ctx = withLLMEventReporter(ctx, p.report)
-
 	order := p.attemptOrder(p.current)
 	var lastErr error
 	for position, index := range order {
@@ -491,8 +472,6 @@ func newProfileFailoverLLMProvider(
 func (p *profileFailoverLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	ctx = withLLMEventReporter(ctx, p.report)
-
 	order := p.cooldowns.order(p.group, len(p.profiles), p.current, func(index int) llm.Profile {
 		return p.profiles[index]
 	})
@@ -562,35 +541,4 @@ func (p *profileFailoverLLMProvider) client(index int) (LLMProvider, error) {
 	p.clientLoaded[index] = true
 	p.clients[index], p.clientErrors[index] = p.factory(p.profiles[index].Config)
 	return p.clients[index], p.clientErrors[index]
-}
-
-// maxContextShrinkRetries 限制收缩次数：128K 起连续减半四次即落到下限，
-// 再多只是拖长这一轮回复的耗时。
-const maxContextShrinkRetries = 4
-
-// contextOverflowFloorTokens 是收缩重试的下限。低于它继续减半只会把当前消息也
-// 裁掉，那时应当如实报错，而不是发一条残缺的请求。
-const contextOverflowFloorTokens int64 = 8192
-
-// shrinkContextForRetry 收缩请求上下文上限，供上下文超限后重试使用。报错里写明了
-// 真实窗口（如智谱的 `max_new_tokens` must be <= 16384）就直接缩到它；读不出来才
-// 减半：首次从配置的窗口起算，已经收缩过就在上次的基础上继续减半。
-func shrinkContextForRetry(req llm.GenerateRequest, err error) (llm.GenerateRequest, bool) {
-	current := req.MaxContextTokens
-	if current <= 0 {
-		current = llm.DefaultMaxContextTokens
-	}
-	if limit, ok := llm.ContextOverflowLimit(err); ok && limit < current {
-		req.MaxContextTokens = limit
-		return req, true
-	}
-	next := current / 2
-	if next < contextOverflowFloorTokens {
-		if current <= contextOverflowFloorTokens {
-			return req, false
-		}
-		next = contextOverflowFloorTokens
-	}
-	req.MaxContextTokens = next
-	return req, true
 }

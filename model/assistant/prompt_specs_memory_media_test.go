@@ -62,25 +62,6 @@ func TestSubtaskPromptOverrideReachesProvider(t *testing.T) {
 	}
 }
 
-func TestSummarizeBudgetTextRendersTargetPlaceholder(t *testing.T) {
-	provider := &subtaskCaptureProvider{reply: "摘要"}
-	runtime := NewRuntime(BotConfig{
-		BotAccount:      "42",
-		PromptOverrides: PromptOverrides{promptBudgetSummarySpec.Key: "压到 {tokens} 以内。"},
-	}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	if _, err := runtime.summarizeBudgetText(context.Background(), "很长的历史", 300); err != nil {
-		t.Fatal(err)
-	}
-	if len(provider.requests) != 1 {
-		t.Fatalf("provider calls = %d", len(provider.requests))
-	}
-	if got := provider.requests[0].Messages[0].Content; !strings.HasSuffix(got, "\n\n压到 300 以内。") {
-		t.Fatalf("budget summary prompt = %q", got)
-	}
-}
-
 // 文档 OCR 跑在后台任务里拿不到配置，覆盖随 ctx 带进去；没带时走默认值。
 func TestDocumentPageOCRReadsOverridesFromContext(t *testing.T) {
 	var captured llm.GenerateRequest

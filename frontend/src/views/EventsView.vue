@@ -596,8 +596,7 @@
     >
       <p class="card-sub context-budget-intro">
         <template v-if="contextBudget">
-          窗口 {{ formatNumber(contextBudget.context_window) }} token<template v-if="contextBudget.context_window_fallback">（模型配置里没填窗口，这是默认值，不是模型的真实上限）</template>，各层合计
-          {{ formatNumber(contextBudget.allocated) }}，其余留给系统提示、当前消息、工具结果与输出。
+          窗口 {{ formatNumber(contextBudget.context_window) }} token<template v-if="contextBudget.context_window_fallback">（模型配置里没填窗口，这是默认值，不是模型的真实上限）</template>。历史、记忆和工具结果全部原样带上，不按层限额；请求快满时才把较早的历史压缩成摘要。
         </template>
         <template v-if="residentContext">
           其中每轮都注入、与当前消息无关的内容合计
@@ -612,39 +611,30 @@
         标签里调。
       </p>
       <template v-if="contextBudget">
-        <div class="budget-bar" role="img" :aria-label="`各层合计 ${contextBudget.allocated} token，留白 ${contextBudget.headroom} token`">
-          <span
-            v-for="segment in contextBudgetSegments"
-            :key="segment.key"
-            class="budget-slice"
-            :class="`budget-slice-${segment.key}`"
-            :style="{ width: `${segment.percent}%` }"
-            :title="`${segment.label} ${segment.tokens} token`"
-          ></span>
-          <span class="budget-slice budget-slice-headroom" :style="{ width: `${contextBudgetHeadroomPercent}%` }"></span>
-        </div>
-        <ul class="budget-legend">
-          <li v-for="layer in contextBudget.layers" :key="layer.key">
-            <span class="budget-dot" :class="`budget-slice-${layer.key}`" aria-hidden="true"></span>
-            <span class="budget-legend-label">{{ layer.label }}</span>
-            <span class="budget-legend-value mono">{{ formatNumber(layer.tokens) }}</span>
-            <span class="budget-legend-foot">{{ contextBudgetLayerFoot(layer) }}</span>
+        <ul class="budget-legend request-stats">
+          <li>
+            <span class="budget-legend-label">压缩阈值</span>
+            <span class="budget-legend-value mono">{{ formatNumber(contextBudget.compaction_threshold) }}</span>
+            <span class="budget-legend-foot">窗口 − {{ formatNumber(contextBudget.reserve_tokens) }}，请求估算超过它就压缩一次</span>
           </li>
           <li>
-            <span class="budget-dot budget-slice-headroom" aria-hidden="true"></span>
-            <span class="budget-legend-label">留白</span>
-            <span class="budget-legend-value mono">{{ formatNumber(contextBudget.headroom) }}</span>
-            <span class="budget-legend-foot">系统提示 / 当前消息 / 工具结果 / 输出</span>
+            <span class="budget-legend-label">压缩时保留原文</span>
+            <span class="budget-legend-value mono">{{ formatNumber(contextBudget.keep_recent_tokens) }}</span>
+            <span class="budget-legend-foot">最近这些 token 的历史原样保留，更早的写成摘要</span>
+          </li>
+          <li>
+            <span class="budget-legend-label">当前状态</span>
+            <span class="budget-legend-value">{{ contextBudget.has_summary ? "已压缩过" : "未压缩" }}</span>
+            <span class="budget-legend-foot">{{ contextBudget.has_summary ? "历史开头是一份摘要，更早的原文用 chat_history 查" : "历史从会话起点起全部原文" }}</span>
           </li>
         </ul>
       </template>
 
-      <!-- 预算分配是按配置算的「重新组装时长什么样」。续接时历史在前缀里一路累积，实际
-           请求比它大得多，所以紧跟着放最近实际发出去的请求，两者对着看。 -->
+      <!-- 上面是压缩规则，下面是最近实际发出去的请求有多大，两者对着看离压缩还有多远。 -->
       <div v-if="recentRequests" class="resident-section">
         <h3 class="resident-title">最近实际请求</h3>
         <p class="resident-intro muted">
-          最近 {{ recentRequests.turns }} 轮主回复（一天内），共调用模型 {{ recentRequests.requests }} 次。续接时历史留在前缀里累积，实际请求会比上面的预算分配大。
+          最近 {{ recentRequests.turns }} 轮主回复（一天内），共调用模型 {{ recentRequests.requests }} 次。请求长到压缩阈值时会压缩一次。
         </p>
         <ul class="budget-legend request-stats">
           <li>
@@ -688,7 +678,6 @@
               <span class="budget-dot" :class="`budget-slice-${block.key}`" aria-hidden="true"></span>
               <span class="resident-label">{{ block.label }}</span>
               <span class="resident-tokens mono">{{ block.content ? `${formatNumber(block.tokens)} token` : "空" }}</span>
-              <span v-if="block.budget" class="resident-budget muted">配额 {{ formatNumber(block.budget) }}</span>
             </button>
             <p v-if="block.note" class="resident-note muted">{{ block.note }}</p>
             <pre v-if="expandedResidentBlocks.has(block.key) && block.content" class="resident-body">{{ block.content }}</pre>
@@ -741,8 +730,7 @@ import {
   type AssistantEventSubtask,
   type AssistantEventRange,
   type AssistantEventResultFilter,
-  type AssistantEventsResponse,
-  type AssistantContextBudgetLayer
+  type AssistantEventsResponse
 } from "../api";
 import { formatClock, formatNumber, formatTime } from "../lib/format";
 import { cacheUtilization, eventPurposeTokens, groupCacheByPurpose } from "../lib/llm-usage";
@@ -1499,7 +1487,7 @@ const contextOpen = ref(false);
 // 入口那一行只报一个数，报「每轮底价」——它才是看的人真正想盯的那个。
 const contextTriggerSummary = computed(() => {
   if (residentContext.value) return `每轮底价 ${formatNumber(residentContext.value.total_tokens)} token`;
-  if (contextBudget.value) return `各层合计 ${formatNumber(contextBudget.value.allocated)} token`;
+  if (contextBudget.value) return `压缩阈值 ${formatNumber(contextBudget.value.compaction_threshold)} token`;
   return "";
 });
 
@@ -1517,26 +1505,6 @@ const contextScopeLabel = computed(() => {
   const group = contextBudget.value?.group_id?.trim() || residentContext.value?.group_id?.trim();
   return group ? ` · 群 ${group}` : " · 未选群（私聊场景）";
 });
-
-const contextBudgetSegments = computed(() => {
-  const budget = contextBudget.value;
-  if (!budget || budget.context_window <= 0) return [];
-  return budget.layers.map((layer) => ({
-    ...layer,
-    percent: (layer.tokens / budget.context_window) * 100
-  }));
-});
-
-const contextBudgetHeadroomPercent = computed(() => {
-  const budget = contextBudget.value;
-  if (!budget || budget.context_window <= 0) return 0;
-  return (budget.headroom / budget.context_window) * 100;
-});
-
-function contextBudgetLayerFoot(layer: AssistantContextBudgetLayer): string {
-  const rule = layer.capped_by_ceiling ? `上限 ${formatNumber(layer.ceiling)}` : layer.rule || `窗口 ${layer.share_percent}%`;
-  return layer.configurable ? `${rule} · 可配` : rule;
-}
 
 function eventKindLabel(kind: string): string {
   const labels: Record<string, string> = { private: "私聊", group: "群聊", notice: "通知", meta: "元事件" };
@@ -2166,15 +2134,6 @@ onBeforeUnmount(() => {
    明度梯度，而不是几种色相：既表达了「同一个整体」，也不会跟四套可选主题色
    里的任何一种撞车。留白用中性色，它不属于任何一层。层是会增减的（自述就是
    后加的），新层在梯度末尾续一档即可。 */
-.budget-bar {
-  display: flex;
-  width: 100%;
-  height: 22px;
-  border-radius: 999px;
-  overflow: hidden;
-  background: var(--surface-2);
-}
-
 .budget-slice {
   display: block;
   height: 100%;
@@ -2202,9 +2161,7 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 
-/* 人设、固定规则、世界书和 Agent 的工具与 Skill 不在比例条的分层里（系统提示和
-   工具定义落在留白那段；世界书有自己的配额），给中性点，免得看的人以为比例条上能
-   找到它们。 */
+/* 人设、固定规则、世界书和 Agent 的工具与 Skill 用中性点。 */
 .budget-dot.budget-slice-soul,
 .budget-dot.budget-slice-persona,
 .budget-dot.budget-slice-prompt_rules,
@@ -2213,11 +2170,6 @@ onBeforeUnmount(() => {
 .budget-dot.budget-slice-agent_tools,
 .budget-dot.budget-slice-skills {
   background: var(--border);
-}
-
-.budget-slice-headroom {
-  background: transparent;
-  min-width: 0;
 }
 
 /* 上下文占比整块收成一行入口：比例条、图例和常驻原文加起来能占掉一屏，
@@ -2329,10 +2281,6 @@ onBeforeUnmount(() => {
   margin-left: auto;
 }
 
-.resident-budget {
-  font-size: 12px;
-}
-
 .resident-note {
   margin: 6px 0 0;
   font-size: 12px;
@@ -2376,10 +2324,6 @@ onBeforeUnmount(() => {
   height: 10px;
   border-radius: 3px;
   align-self: center;
-}
-
-.budget-dot.budget-slice-headroom {
-  background: var(--surface-2);
 }
 
 .budget-legend-label {

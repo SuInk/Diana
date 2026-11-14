@@ -40,7 +40,6 @@ type crossGroupContextTrace struct {
 	KeywordStatus      string
 	SemanticStatus     string
 	DroppedMembership  int
-	DroppedLimit       int
 	DroppedTime        int
 	SelectedMessages   []map[string]any
 }
@@ -87,7 +86,6 @@ func (r *Runtime) recordCrossGroupContextTrace(event MessageEvent, trace crossGr
 			"topic":      trace.DroppedTopic,
 			"text":       trace.DroppedText,
 			"membership": trace.DroppedMembership,
-			"limit":      trace.DroppedLimit,
 			"time":       trace.DroppedTime,
 		}
 		metadata["authors"] = trace.Authors

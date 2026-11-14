@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -258,4 +259,25 @@ func textReferenceEventWithReply(at int64, userID, messageID, text, reply string
 	event := textReferenceEvent(at, userID, messageID, text)
 	event.botReply = reply
 	return event
+}
+
+// 候选历史不限条数、不截字：最早的一条长消息也要原样交给解析模型。
+func TestSemanticTextReferenceSendsEveryHistoryCandidateInFull(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"none","confidence":0.1}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	long := strings.Repeat("很长的一段话题内容", 80)
+	var history []MessageEvent
+	for i := range 40 {
+		history = append(history, textReferenceEvent(int64(100+i), "user-a", fmt.Sprintf("m%02d", i), fmt.Sprintf("第%02d条：%s", i, long)))
+	}
+	event := textReferenceEvent(200, "user-b", "current", "codex")
+	event.ToMe = true
+
+	runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	request := provider.requestSnapshot()
+	for _, want := range []string{"第00条：" + long, "第39条：" + long} {
+		if !requestMessagesContain(request.Messages, want) {
+			t.Fatalf("候选被截断或丢弃：缺少 %.20q", want)
+		}
+	}
 }

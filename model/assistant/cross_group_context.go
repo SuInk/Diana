@@ -12,10 +12,6 @@ import (
 )
 
 const (
-	crossGroupContextSearchLimit = 40
-	// crossGroupContextResultLimit 是常驻带进回复的条数上限。从 4 提到 6：它放在历史
-	// 之后的尾部，不碍缓存，平均每条两三百字；更多的由模型用 chat_history 跨群搜。
-	crossGroupContextResultLimit    = 6
 	crossGroupMembershipCheckBudget = 3 * time.Second
 	// crossGroupNonMemberTTL 是「这个人不在本群」的记忆时长。在群的人查到后进成员缓存，
 	// 不在的以前每条回复都重查一遍：生产上 OneBot 群近半数回复因此等满 3 秒预算才开始
@@ -170,7 +166,7 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 		throughTime = time.Now().Unix()
 	}
 	loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	candidates, _, err := searchStore.SearchMessageEvents(loadCtx, MessageHistorySearchQuery{
+	candidates, err := searchAllMessageEvents(loadCtx, searchStore, MessageHistorySearchQuery{
 		ExcludeSession: sessionKey(event),
 		Session:        sessionKey(event),
 		SessionPrefix:  groupHistorySessionPrefix(event),
@@ -178,7 +174,6 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 		Terms:          terms,
 		FromTime:       0,
 		ThroughTime:    throughTime,
-		Limit:          crossGroupContextSearchLimit,
 		CrossSession:   true,
 	})
 	cancel()
@@ -201,7 +196,7 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 		semanticKeys[key] = true
 		scores[key] += 1 / float64(61+rank)
 	}
-	candidates = mergeSearchResultsRRF(candidates, semantic, 2*crossGroupContextSearchLimit)
+	candidates = mergeSearchResultsRRF(candidates, semantic, 0)
 	if err != nil && len(candidates) == 0 {
 		return finish(nil, "文字检索失败，语义检索未返回可用结果")
 	}
@@ -237,7 +232,7 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 			trace.DroppedText++
 			continue
 		}
-		// Relevance dominates; recency is only a small bonus, not an expiry.
+		// 分数只用于调试记录和同一秒内的排序；通过判定的消息全部带上。
 		hits, total := 0, 0
 		text := strings.ToLower(historyPlainText(candidate))
 		for _, term := range terms {
@@ -265,7 +260,7 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 			trace.AllowedAuthors++
 		}
 	}
-	selected := make([]MessageEvent, 0, crossGroupContextResultLimit)
+	var selected []MessageEvent
 	for authorID, events := range candidatesByAuthor {
 		if allowed[authorID] {
 			selected = append(selected, events...)
@@ -273,21 +268,17 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 			trace.DroppedMembership += len(events)
 		}
 	}
+	// 通过判定的全部带上，按时间排；同一秒的先按相关度、再按键排，保证顺序稳定。
 	sort.SliceStable(selected, func(left, right int) bool {
+		if selected[left].Time != selected[right].Time {
+			return selected[left].Time < selected[right].Time
+		}
 		l, rr := scores[crossGroupCandidateKey(selected[left])], scores[crossGroupCandidateKey(selected[right])]
 		if l != rr {
 			return l > rr
 		}
-		if selected[left].Time != selected[right].Time {
-			return selected[left].Time > selected[right].Time
-		}
 		return crossGroupCandidateKey(selected[left]) < crossGroupCandidateKey(selected[right])
 	})
-	if len(selected) > crossGroupContextResultLimit {
-		trace.DroppedLimit = len(selected) - crossGroupContextResultLimit
-		selected = selected[:crossGroupContextResultLimit]
-	}
-	sort.SliceStable(selected, func(left, right int) bool { return selected[left].Time < selected[right].Time })
 	neighbors := r.crossGroupNeighbors(event, store, selected)
 	for index, item := range selected {
 		if traced {
@@ -304,6 +295,23 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 		}
 	}
 	return finish(selected, "")
+}
+
+// searchAllMessageEvents 按 Offset 翻页把检索命中的全部取回来。存储层每页有上限，
+// 只取第一页就会悄悄丢掉后面的命中；翻到 total 或某页为空为止。
+func searchAllMessageEvents(ctx context.Context, store MessageHistorySearchStore, query MessageHistorySearchQuery) ([]MessageEvent, error) {
+	var all []MessageEvent
+	for {
+		query.Offset = len(all)
+		page, total, err := store.SearchMessageEvents(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page...)
+		if len(page) == 0 || len(all) >= total {
+			return all, nil
+		}
+	}
 }
 
 // loadDeferredCrossGroupContext 在确定要回复之后补上跨群参考。
@@ -339,7 +347,6 @@ const (
 	// crossGroupNeighborWindow 是取原群前后文的时间范围，前后各这么久。
 	crossGroupNeighborWindow = 30 * 60
 	crossGroupNeighborCount  = 2
-	crossGroupNeighborRunes  = 60
 )
 
 // crossGroupNeighborLine 是跨群参考在原群前后的一句话。
@@ -411,14 +418,14 @@ func (r *Runtime) crossGroupNeighbors(event MessageEvent, store MessageHistorySt
 		for _, value := range values {
 			author := strings.TrimSpace(value.UserID)
 			if value.Outbound || (botID != "" && author == botID) {
-				lines = append(lines, crossGroupNeighborLine{speaker: "你", text: truncateRunes(strings.TrimSpace(historyPlainText(value)), crossGroupNeighborRunes)})
+				lines = append(lines, crossGroupNeighborLine{speaker: "你", text: strings.TrimSpace(historyPlainText(value))})
 				continue
 			}
 			if !allowed[author] {
 				lines = append(lines, crossGroupNeighborLine{speaker: "不在本群的人", text: "（内容略）"})
 				continue
 			}
-			lines = append(lines, crossGroupNeighborLine{speaker: strings.TrimSpace(value.SenderNameOrID()), text: truncateRunes(strings.TrimSpace(historyPlainText(value)), crossGroupNeighborRunes)})
+			lines = append(lines, crossGroupNeighborLine{speaker: strings.TrimSpace(value.SenderNameOrID()), text: strings.TrimSpace(historyPlainText(value))})
 		}
 		return lines
 	}
