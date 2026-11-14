@@ -88,7 +88,7 @@ func (t *dianaPluginMediaTool) Run(ctx context.Context, input map[string]any) (s
 		if err != nil {
 			return "", err
 		}
-		if resp == nil || (directPluginReply(*resp) == "" && len(resp.ImageURLs)+len(resp.VideoURLs)+len(resp.ForwardMessages) == 0) {
+		if resp == nil || (resolverVisibleReply(*resp) == "" && len(resp.ImageURLs)+len(resp.VideoURLs)+len(resp.ForwardMessages) == 0) {
 			return encode(map[string]any{"ok": false, "message": "没有可用解析结果；可能受平台或群等级限制。未发送任何内容。"})
 		}
 		if t.results == nil {

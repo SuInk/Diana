@@ -182,6 +182,13 @@ func (r *Runtime) maybeSendPluginFollowUp(ctx context.Context, event MessageEven
 	}
 }
 
+// resolverVisibleReply 是链接解析能发进群的文字。不像 directPluginReply 那样回落到
+// Context：解析的 Context 是给模型的（含抓取失败备注、媒体下载地址），Reply 为空
+// 就表示没有能发的文字。
+func resolverVisibleReply(resp PluginResponse) string {
+	return strings.TrimSpace(resp.Reply)
+}
+
 func directPluginReply(resp PluginResponse) string {
 	if text := strings.TrimSpace(resp.Reply); text != "" {
 		return text

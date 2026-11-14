@@ -1881,6 +1881,8 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 
 	parts := make([]string, 0, len(urls))
 	directParts := make([]string, 0, len(urls))
+	// visibleParts 是通用抓取里能发群的条目；抓取失败的只进 parts（给模型的 Context）。
+	visibleParts := make([]string, 0, len(urls))
 	imageURLs := make([]string, 0)
 	videoURLs := make([]string, 0)
 	forwardMessages := make([]OutgoingMessage, 0)
@@ -1929,7 +1931,9 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			}
 			if strings.TrimSpace(media.Context) != "" {
 				parts = append(parts, media.Context)
-				directParts = append(directParts, media.Context)
+				if !media.ModelOnly {
+					directParts = append(directParts, media.Context)
+				}
 			}
 			imageURLs = append(imageURLs, media.ImageURLs...)
 			videoURLs = append(videoURLs, media.VideoURLs...)
@@ -1964,7 +1968,11 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 			deferredToBrowser = true
 			continue
 		}
-		parts = append(parts, p.resolveURL(ctx, raw, opts))
+		text, fetched := p.resolveURL(ctx, raw, opts)
+		parts = append(parts, text)
+		if fetched {
+			visibleParts = append(visibleParts, text)
+		}
 	}
 	if len(parts) == 0 {
 		if deferredToBrowser {
@@ -1990,12 +1998,14 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		response.Reply = strings.Join(directParts, "\n\n")
 	} else {
 		// Context 前缀是给模型的来源标签，发到群里不该出现「链接解析结果：」这种机器腔。
-		response.Reply = strings.Join(parts, "\n")
+		// 抓取失败的条目只有给模型的备注，留在 Context 里；全失败时 Reply 为空，
+		// 主流程照常交给模型回答，不把备注发进群。
+		response.Reply = strings.Join(visibleParts, "\n")
 	}
 	if mergedForward && len(response.ForwardMessages) == 0 {
 		// 只有文字的结果（GitHub、普通网页标题摘要）同样打包成合并转发，
 		// 不在群里直接铺一大段纯文本。
-		response.ForwardMessages = resolverTextForwardMessages(directParts, parts, response.ImageURLs, response.VideoURLs)
+		response.ForwardMessages = resolverTextForwardMessages(directParts, visibleParts, response.ImageURLs, response.VideoURLs)
 		response.Forward = len(response.ForwardMessages) > 0
 	}
 	p.translateResponse(ctx, req, response)
@@ -2031,11 +2041,34 @@ var (
 	bilibiliVideoIDPattern    = regexp.MustCompile(`(?i)\b(BV[a-z0-9]{10})\b`)
 )
 
+// resolverMediaCQPattern 匹配 OneBot 原始串里的图片、语音、视频、文件、表情段。
+// 这些段的 url= 参数是 QQ 的一次性下载地址，不是群友发的链接；原始串仍要扫，
+// 因为分享卡片（CQ:json / CQ:xml）里的跳转地址只在原始串里。
+var resolverMediaCQPattern = regexp.MustCompile(`\[CQ:(?:image|record|video|file|face|mface|marketface|sticker)(?:,[^\]]*)?\]`)
+
 func extractResolverRequestURLs(req PluginRequest) []string {
-	return dedupeURLs(append(append(
+	urls := dedupeURLs(append(append(
 		extractURLs(req.Text),
-		extractURLs(req.Event.RawMessage)...,
+		extractURLs(resolverMediaCQPattern.ReplaceAllString(req.Event.RawMessage, " "))...,
 	), extractURLs(PlainText(req.Event.Segments))...))
+	return slices.DeleteFunc(urls, isQQMediaURL)
+}
+
+// isQQMediaURL 识别 QQ 图片、语音、文件的下载地址。这类地址带一次性 rkey，
+// 不该当网页抓取：抓不到内容，失败备注和带 rkey 的地址还会被发进群。
+// 分享卡片的预览图也落在这些域名上，同样跳过。
+func isQQMediaURL(raw string) bool {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(parsed.Hostname())
+	for _, suffix := range []string{"multimedia.nt.qq.com.cn", "qpic.cn", "ugcimg.cn"} {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // extractURLs 从消息文本中提取并去重 URL。
@@ -2189,15 +2222,16 @@ func isKnownResolverPlatformHost(host string) bool {
 		hostMatchesDomain(host, "douyin.com")
 }
 
-// resolveURL 获取链接平台、标题和摘要。
-func (p *ResolverPlugin) resolveURL(ctx context.Context, raw string, opts resolveOptions) string {
+// resolveURL 获取链接平台、标题和摘要。fetched 为 false 表示抓取失败，
+// 返回的文字只是给模型的备注，不能发群。
+func (p *ResolverPlugin) resolveURL(ctx context.Context, raw string, opts resolveOptions) (text string, fetched bool) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "- " + raw
+		return "- " + raw, true
 	}
 	platform := platformName(parsed.Hostname())
 	if !opts.fetchTitle {
-		return fmt.Sprintf("- [%s] %s", platform, raw)
+		return fmt.Sprintf("- [%s] %s", platform, raw), true
 	}
 
 	meta, ok := p.fetchPageMeta(ctx, raw, opts)
@@ -2227,7 +2261,7 @@ func (p *ResolverPlugin) resolveURL(ctx context.Context, raw string, opts resolv
 		// 明确告诉模型抓取失败，回复时不至于凭空编造网页内容。
 		builder.WriteString("\n  备注：未能获取网页内容（可能需要登录或被站点风控），不要编造页面内容。")
 	}
-	return builder.String()
+	return builder.String(), ok
 }
 
 // platformName 根据域名识别常见平台名称。

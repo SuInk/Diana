@@ -5062,7 +5062,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 	if resp == nil {
 		return "", nil
 	}
-	reply := directPluginReply(*resp)
+	reply := resolverVisibleReply(*resp)
 	hasMedia := len(resp.ImageURLs) > 0 || len(resp.VideoURLs) > 0 || len(resp.ForwardMessages) > 0
 	if reply == "" && !hasMedia {
 		// 插件触发了却什么都没提取到，这是诊断信息，不该当成发言播报到群里。
@@ -5086,7 +5086,7 @@ func (r *Runtime) replyWithResolverOnly(ctx context.Context, event MessageEvent,
 
 // deliverResolverResponse 按插件声明的形式投递解析结果。
 func (r *Runtime) deliverResolverResponse(ctx context.Context, event MessageEvent, resp PluginResponse) (string, error) {
-	reply := directPluginReply(resp)
+	reply := resolverVisibleReply(resp)
 	switch {
 	case resp.Forward && len(resp.ForwardMessages) > 0:
 		if err := r.sendForwardPluginResponse(ctx, event, resp, r.effectiveConfigForEvent(event)); err != nil {
