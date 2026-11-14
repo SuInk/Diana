@@ -203,13 +203,7 @@ func TestUnresolvableAliasNeverFallsBackToSpeaker(t *testing.T) {
 	}
 }
 
-func TestCrossGroupPersonalReminderFilterAndNoticeMention(t *testing.T) {
-	if !crossGroupLooksLikePersonalReminder("10分钟后提醒我关火") {
-		t.Fatal("expected personal reminder command to be detected")
-	}
-	if crossGroupLooksLikePersonalReminder("我们昨天讨论了 Kubernetes 集群升级方案") {
-		t.Fatal("normal technical discussion falsely flagged as personal reminder")
-	}
+func TestNoticeTextExplicitMention(t *testing.T) {
 	if !noticeTextHasExplicitMention("<diana-at id=\"20002\"/> 该开会啦") {
 		t.Fatal("expected <diana-at> mention to be detected")
 	}

@@ -237,10 +237,6 @@ func (r *Runtime) searchCrossGroupContext(event MessageEvent, store MessageHisto
 			trace.DroppedText++
 			continue
 		}
-		if authorID != strings.TrimSpace(event.UserID) && crossGroupLooksLikePersonalReminder(historyPlainText(candidate)) {
-			trace.DroppedTopic++
-			continue
-		}
 		// Relevance dominates; recency is only a small bonus, not an expiry.
 		hits, total := 0, 0
 		text := strings.ToLower(historyPlainText(candidate))
@@ -537,24 +533,6 @@ func crossGroupTextContext(event MessageEvent) (MessageEvent, bool) {
 	event.SemanticSourceMessageIDs = nil
 	event.crossGroupContext = true
 	return event, true
-}
-
-// crossGroupLooksLikePersonalReminder 挡掉其他成员在外群设过的个人提醒/私聊指令：
-// 带进当前群容易诱发模型把外群已登记或已过期的提醒当成本轮待办去补发私信。
-func crossGroupLooksLikePersonalReminder(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	if trimmed == "" {
-		return false
-	}
-	for _, cue := range []string{"提醒我", "叫我起床", "喊我", "到点叫我", "私聊发我", "私发我", "设个闹钟", "定个闹钟"} {
-		if strings.Contains(trimmed, cue) {
-			return true
-		}
-	}
-	if strings.Contains(trimmed, "提醒") && (strings.Contains(trimmed, "分钟后") || strings.Contains(trimmed, "小时后") || strings.Contains(trimmed, "明天") || strings.Contains(trimmed, "今晚")) {
-		return true
-	}
-	return false
 }
 
 func (r *Runtime) crossGroupCurrentMembers(event MessageEvent, candidatesByAuthor map[string][]MessageEvent) map[string]bool {

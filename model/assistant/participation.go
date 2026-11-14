@@ -355,7 +355,7 @@ var promptParticipationChatInNoteSpec = registerPrompt(PromptSpec{
 	Default: participationChatInNote,
 })
 
-const participationForeignCommand = `指令式消息（开关、改设置、测连通这类口令，例如 ai off、ai on、ai ping、/ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：relevance.directed 填 false，chat_in.score 记 0.00。不管它像不像在指挥本机器人、本机器人能不能执行、前面有没有人这样指挥过它而它回应了，都按这条处理——要本机器人执行就得 @ 或点名。明确指向本机器人时不套用此条。同样地，如果消息开头或正文明确点名、称呼或 @ 了群里另一个机器人或特定成员去提问、求总结、查资料或派活（而没有同时叫本机器人），那也是发给对方的定向请求，relevance.directed 填 false，对其他机器人的派活请求 chat_in.score 记 0.00，不要抢答。其余普通的自然语言群聊仍按上下文判断 chat_in，可以自然评价。`
+const participationForeignCommand = `指令式消息（开关、改设置、测连通这类口令，例如 ai off、ai on、ai ping、/ai off、/查谱、#签到、.r、!help）如果没有 @、引用、回复或点名本机器人，就不是发给本机器人的请求：relevance.directed 填 false，chat_in.score 记 0.00。不管它像不像在指挥本机器人、本机器人能不能执行、前面有没有人这样指挥过它而它回应了，都按这条处理——要本机器人执行就得 @ 或点名。明确指向本机器人时不套用此条。普通的自然语言群聊，即使 @ 或回复了别人，也不是指令，仍按上下文判断 chat_in，可以自然评价。`
 
 var promptParticipationForeignCommandSpec = registerPrompt(PromptSpec{
 	Key:     "routing.participation.foreign_command",
