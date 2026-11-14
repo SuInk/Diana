@@ -164,6 +164,7 @@ func safeModeRegistryForEvent(t *testing.T, mode string, event MessageEvent, rem
 	t.Helper()
 	cfg := DefaultBotConfig()
 	cfg.AgentMode = mode
+	cfg.AgentBoxAccess = BoxAccessAll
 	cfg.AgentMCPConfigPath = filepath.Join(t.TempDir(), "missing-mcp.json")
 	runtime := &Runtime{plugins: NewPluginManager()}
 	if len(reminders) > 0 {
@@ -267,7 +268,7 @@ func TestSafeModeDisablesEveryRuleForOwner(t *testing.T) {
 
 // 标准模式和以前完全一样：高风险工具照常挂上，没有任何停用登记。
 func TestStandardModeKeepsFullAgentSurface(t *testing.T) {
-	forceCommandSandbox(t, true)
+	forceBox(t, true)
 	registry := safeModeTestRegistry(t, AgentModeStandard)
 	for _, name := range []string{"run_command", "write_file", "edit_file", dianaSaveToWorkspaceToolName, dianaCrossSessionToolName, dianaCodingToolName, dianaInstallPackageToolName, "install_skill", "mcp_install"} {
 		if _, ok := registry.Get(name); !ok {
@@ -296,7 +297,7 @@ func TestSafeModeAgentConfigDropsRiskyCapabilitiesButKeepsLimits(t *testing.T) {
 		t.Fatal("安全模式下交互式浏览器工具仍会登记")
 	}
 	owner := runtime.agentRegistryConfig(safe, MessageEvent{}, true)
-	if owner.CommandEnabled || owner.FileWriteEnabled || owner.BuiltinBrowser != nil || owner.BrowserControl != nil || owner.DesktopControl != nil || owner.ExtensionManagement {
+	if owner.FileWriteEnabled || owner.BuiltinBrowser != nil || owner.BrowserControl != nil || owner.DesktopControl != nil || owner.ExtensionManagement {
 		t.Fatalf("安全模式下主人的 Agent 配置仍带高风险能力: %+v", owner)
 	}
 	if owner.MaxSteps != agent.DefaultMaxSteps {

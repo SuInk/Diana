@@ -7,8 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -287,58 +285,6 @@ func TestSemanticIndexBreakerExponentialBackoff(t *testing.T) {
 		t.Fatal("success should reset index breaker")
 	}
 	_ = errors.New
-}
-
-// 组 5：dianaMemberCommandTool 的本群授权 inputs 文件传入与跨群隔离校验。
-func TestMemberCommandAuthorizedInputsAndCrossGroupIsolation(t *testing.T) {
-	stubMemberCommandAvailable(t, true)
-	r, event := memberCommandTestRuntime(t, true)
-	workRoot := AgentWorkspaceDir()
-	relInput := filepath.ToSlash(filepath.Join("saved", "group-a", "report.csv"))
-	absInput := filepath.Join(workRoot, filepath.FromSlash(relInput))
-	if err := os.MkdirAll(filepath.Dir(absInput), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	payload := []byte("col1,col2\n1,2\n")
-	if err := os.WriteFile(absInput, payload, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Remove(absInput) })
-	if err := r.grantWorkspaceGroupFile(event, relInput, payload); err != nil {
-		t.Fatal(err)
-	}
-
-	tool := newDianaMemberCommandTool(r, event)
-	var captured agent.MemberCommandRequest
-	tool.run = func(_ context.Context, req agent.MemberCommandRequest) (agent.MemberCommandResult, error) {
-		captured = req
-		return agent.MemberCommandResult{Command: req.Command, Sandbox: "fake"}, nil
-	}
-	_, err := tool.Run(context.Background(), map[string]any{
-		"command":     "python3",
-		"args":        []any{"analyze.py"},
-		"stdin":       "extra-line",
-		"write_files": map[string]any{"analyze.py": "print('ok')"},
-		"inputs":      []any{relInput},
-	})
-	if err != nil {
-		t.Fatalf("authorized input failed: %v", err)
-	}
-	if string(captured.Inputs["report.csv"]) != string(payload) || string(captured.WriteFiles["analyze.py"]) != "print('ok')" || captured.Stdin != "extra-line" {
-		t.Fatalf("captured request mismatch: %#v", captured)
-	}
-
-	// 另一个群无权通过 inputs 借读本群保存的文件
-	otherGroup := event
-	otherGroup.GroupID = "group-b"
-	otherTool := newDianaMemberCommandTool(r, otherGroup)
-	otherTool.run = tool.run
-	if _, err := otherTool.Run(context.Background(), map[string]any{
-		"command": "python3",
-		"inputs":  []any{relInput},
-	}); err == nil {
-		t.Fatal("other group was allowed to stage group-a's file into member sandbox")
-	}
 }
 
 func TestRenderMediaPDFSpecAndChatHistoryParallel(t *testing.T) {

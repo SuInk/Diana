@@ -11,12 +11,13 @@ import (
 )
 
 func TestLocalExecutionCapabilitiesRemainRequestScoped(t *testing.T) {
-	forceCommandSandbox(t, true)
+	forceBox(t, true)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
-	runtime := NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{OwnerID: "owner", AgentBoxAccess: BoxAccessAll}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	defer runtime.closeAgentRegistryCache()
 	cfg := DefaultBotConfig()
 	cfg.AgentFileWriteEnabled = true
+	cfg.AgentBoxAccess = BoxAccessAll
 	owner, err := runtime.newAgentRegistry(context.Background(), cfg.WithDefaults(), MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)
@@ -59,9 +60,13 @@ func TestLocalExecutionCapabilitiesRemainRequestScoped(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer member.Close()
-	for _, name := range []string{"run_command", "extract_archive", "list_capabilities"} {
+	for _, name := range []string{"extract_archive", "list_capabilities"} {
 		if _, ok := member.Get(name); ok {
 			t.Fatalf("member acquired %s", name)
 		}
+	}
+	// run_command 跑在工作区容器里，照雨夹雪对所有人开放。
+	if _, ok := member.Get("run_command"); !ok {
+		t.Fatal("member missing box run_command")
 	}
 }

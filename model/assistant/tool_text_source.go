@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/agent"
@@ -30,6 +32,12 @@ func toolFileSource(runtime *Runtime, event MessageEvent, owner bool, input map[
 	if path != "" {
 		if strings.TrimSpace(content) != "" {
 			return nil, fmt.Errorf("content 和 path 只能提供一个；已有文件直接用 path，无需 read_file 后复制正文")
+		}
+		// /work/... 是工作区容器里的文件：容器本会话共用，谁都能取。
+		if isBoxPath(path) && runtime.boxExposed(event, owner) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			return runtime.boxFileSource(ctx, event, owner, path, limit)
 		}
 		cfg := agent.Config{WorkDir: AgentWorkspaceDir()}
 		if runtime != nil {

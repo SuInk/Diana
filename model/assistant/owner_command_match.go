@@ -87,7 +87,12 @@ func runOwnerContextReset(r *Runtime, event MessageEvent, _ string) string {
 		log.Printf("diana context reset failed: %v", err)
 		return "清空上下文失败，请稍后重试或检查服务日志。"
 	}
-	return "已清空当前会话上下文；聊天记录、长期记忆和人设仍保留。"
+	// 照雨夹雪 /new：新对话连带清空本会话的工作区容器，别的会话不动。
+	if err := r.resetSessionBox(event); err != nil {
+		log.Printf("diana context reset: work box reset failed: %v", err)
+		return "已清空当前会话上下文，但工作区容器没清掉：" + err.Error()
+	}
+	return "已清空当前会话上下文和工作区容器；聊天记录、长期记忆和人设仍保留。"
 }
 
 func runOwnerHelp(*Runtime, MessageEvent, string) string {

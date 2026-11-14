@@ -40,7 +40,7 @@ Claude Code 支持结构化进度、会话续跑和聊天审批。ACP 代理支�
 
 ## 内置命令执行与 Node.js
 
-内置 Agent 的 `run_command` 独立于编码代理插件：运行工作区里的 Node.js 脚本不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。`run_command` 不再有程序白名单，标准模式下命令沙盒生效时，主人可直接运行 `node` 等工作区命令；它始终断网，要联网的命令（例如访问外部 API 的脚本）走 `host_access`。没有可用沙盒时不提供 `run_command`，命令同样走 `host_access`。Diana 不负责安装 Node.js，实际安装情况应通过能力查询确认；full/slim Docker 镜像均包含 Node.js/npm，本机或旧镜像需按实际环境检查。
+内置 Agent 的 `run_command` 独立于编码代理插件：它在[工作区容器](workbox.md)里用 bash 运行，镜像自带 Node.js、Python、uv、git 等，可联网 `git clone` 和安装依赖，不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。容器看不到宿主工作区；要在宿主机上跑的命令走 `host_access`。
 
 创建或修改脚本需要开启文件写入。执行已有脚本由命令沙盒控制。缺 npm 包用 `install_package`，联网由「允许插件脚本和装包联网」控制。
 

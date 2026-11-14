@@ -120,7 +120,7 @@ func (h *BotHandler) getAdminChat(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"session_id": session.id, "profile_id": profile, "messages": redactedAdminChatMessages(session.messages, redact), "running": session.running,
 		"agent_mode": mode,
 		"title":      adminChatPreview(redact(session.title), 36, "新的管理会话"), "updated_at": session.updated, "created_at": session.createdAt,
-		"command_enabled": mode != assistant.AgentModeSafe && agent.DescribeCommandSandbox(cfg.AgentCommandSandbox).Effective() == "sandboxed", "file_write_enabled": cfg.AgentFileWriteEnabled,
+		"command_enabled": mode != assistant.AgentModeSafe && assistant.NormalizeBoxAccess(cfg.AgentBoxAccess) != assistant.BoxAccessOff && boxStatusOK(), "file_write_enabled": cfg.AgentFileWriteEnabled,
 		"sandbox": cfg.AgentCommandSandbox, "network_enabled": cfg.AgentCommandSandboxAllowNetwork})
 }
 
@@ -310,4 +310,9 @@ func redactedAdminChatMessages(messages []adminChatMessage, redact func(string) 
 		out[i].Content = redact(out[i].Content)
 	}
 	return out
+}
+
+func boxStatusOK() bool {
+	ok, _ := agent.BoxStatus()
+	return ok
 }

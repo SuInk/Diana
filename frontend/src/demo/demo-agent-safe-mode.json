@@ -2,7 +2,7 @@
   {
     "id": "host_exec",
     "label": "本机代码执行",
-    "impact": "主机访问（host_access）、本机命令（run_command）和编码代理停用，浏览器里也不能执行脚本",
+    "impact": "主机访问（host_access）、工作区命令（run_command）和编码代理停用，浏览器里也不能执行脚本",
     "rules": [
       {
         "category": "host_exec",
@@ -12,7 +12,7 @@
       {
         "category": "host_exec",
         "tool": "run_command",
-        "reason": "在本机执行命令"
+        "reason": "在工作区容器里执行命令"
       },
       {
         "category": "host_exec",

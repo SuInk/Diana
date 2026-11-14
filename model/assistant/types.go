@@ -1030,10 +1030,10 @@ type BotConfig struct {
 	// AgentCommandSandboxAllowNetwork 放开沙盒内的网络。默认切断——命令能联网
 	// 就意味着读到的东西能被发出去，白名单挡不住这一层。
 	AgentCommandSandboxAllowNetwork bool `json:"agent_command_sandbox_allow_network,omitempty"`
-	// AgentMemberCommandEnabled 让群里的普通成员也能用 run_command，默认关闭。成员版关在
-	// 更紧的独立沙盒里（读取白名单、只写个人目录、断网、限资源），沙盒不可用时拒绝，
-	// 见 agent.RunMemberCommand。
-	AgentMemberCommandEnabled bool `json:"agent_member_command_enabled,omitempty"`
+	// AgentBoxAccess 决定谁能用工作区容器里的 run_command / box_reset：off、owner（仅主人，
+	// 默认）、all（所有人共用本会话的容器，照雨夹雪 tools.sandbox）。这台机器没有可用的
+	// 隔离运行时时哪一档都不提供，见 agent.BoxStatus。
+	AgentBoxAccess string `json:"agent_box_access,omitempty"`
 	// AgentFileWriteEnabled 打开 write_file / edit_file / save_to_workspace 和
 	// manage_files 的写操作，默认关闭。
 	// 读和写是两档权限：读错文件浪费一次调用，写错文件改的是磁盘。
@@ -1693,7 +1693,7 @@ type ConfigPayload struct {
 	AgentCommandTimeoutMS           int                       `json:"agent_command_timeout_ms,omitempty"`
 	AgentCommandSandbox             string                    `json:"agent_command_sandbox,omitempty"`
 	AgentCommandSandboxAllowNetwork bool                      `json:"agent_command_sandbox_allow_network,omitempty"`
-	AgentMemberCommandEnabled       bool                      `json:"agent_member_command_enabled,omitempty"`
+	AgentBoxAccess                  string                    `json:"agent_box_access,omitempty"`
 	AgentFileWriteEnabled           bool                      `json:"agent_file_write_enabled,omitempty"`
 	AgentBrowserCDPURL              string                    `json:"agent_browser_cdp_url,omitempty"`
 	AgentBrowserTimeoutMS           int                       `json:"agent_browser_timeout_ms,omitempty"`
@@ -2668,6 +2668,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.SubtaskMaxConcurrency > maximumSubtaskMaxConcurrency {
 		cfg.SubtaskMaxConcurrency = maximumSubtaskMaxConcurrency
 	}
+	cfg.AgentBoxAccess = NormalizeBoxAccess(cfg.AgentBoxAccess)
 	if cfg.AgentCommandTimeoutMS <= 0 {
 		cfg.AgentCommandTimeoutMS = defaults.AgentCommandTimeoutMS
 	}
@@ -3036,7 +3037,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentCommandTimeoutMS:           cfg.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             cfg.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: cfg.AgentCommandSandboxAllowNetwork,
-		AgentMemberCommandEnabled:       cfg.AgentMemberCommandEnabled,
+		AgentBoxAccess:                  cfg.AgentBoxAccess,
 		AgentFileWriteEnabled:           cfg.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              cfg.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           cfg.AgentBrowserTimeoutMS,
@@ -3294,7 +3295,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentCommandTimeoutMS:           payload.AgentCommandTimeoutMS,
 		AgentCommandSandbox:             payload.AgentCommandSandbox,
 		AgentCommandSandboxAllowNetwork: payload.AgentCommandSandboxAllowNetwork,
-		AgentMemberCommandEnabled:       payload.AgentMemberCommandEnabled,
+		AgentBoxAccess:                  payload.AgentBoxAccess,
 		AgentFileWriteEnabled:           payload.AgentFileWriteEnabled,
 		AgentBrowserCDPURL:              payload.AgentBrowserCDPURL,
 		AgentBrowserTimeoutMS:           payload.AgentBrowserTimeoutMS,

@@ -1873,6 +1873,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       subtask_max_tasks: 8,
       subtask_max_concurrency: 3,
       agent_command_timeout_ms: 10000,
+      agent_box_access: "owner",
+      agent_box_status: { available: false, reason: "Linux 上工作区容器只用 rootless Docker（见 docs/workbox.md），当前守护进程以 root 运行" },
       agent_safe_mode: demoAgentSafeMode
     });
   if (path === "/api/assistant/agent-mode/impact") return json({ running_coding_jobs: 1, held_tasks: 2 });

@@ -204,8 +204,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
 	// 文件」打开，工具按开关收窄自己的动作列表。
 	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled, keep: newKeepScope(cfg)})
-	// run_command 永远断网：能往外发东西的命令走 host_access，执行前要过审核。
-	// 联网开关只管 install_package 和插件声明的脚本、MCP。
+	// 宿主机上的 run_command 只给评测程序用，永远断网；Diana 的 run_command 在工作区容器里。
 	if cfg.CommandEnabled {
 		registry.Register(&RunCommandTool{
 			root:          root,

@@ -66,6 +66,17 @@ func executionEnvironment(ctx context.Context, registry *ToolRegistry) map[strin
 	}
 	tool, ok := registry.Get("run_command")
 	runner, concrete := tool.(*RunCommandTool)
+	if ok && !concrete {
+		// 工作区容器里的 run_command：程序由 deploy/box/Dockerfile 装好，跟宿主机无关。
+		programs := make([]map[string]any, 0, 4)
+		for _, name := range []string{"node", "npm", "tar", "unzip"} {
+			programs = append(programs, map[string]any{"name": name, "authorized": true, "installed": true})
+		}
+		result["programs"] = programs
+		result["sandbox"] = map[string]any{"effective": "container", "kind": "work box", "network": BoxConfigFromEnv().Network, "network_scope": "public internet only"}
+		result["work_dir"] = BoxWorkDir
+		return result
+	}
 	programs := make([]map[string]any, 0, 4)
 	for _, name := range []string{"node", "npm", "tar", "unzip"} {
 		entry := map[string]any{"name": name, "authorized": false, "installed": false}
