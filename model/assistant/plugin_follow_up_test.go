@@ -440,7 +440,7 @@ func TestFollowUpPluginPromptOverrides(t *testing.T) {
 	for _, kind := range []followUpKind{followUpKindPlugin, followUpKindRepositoryWatch} {
 		for _, groupValue := range []string{"未覆盖", "群内跟评要求", " "} {
 			t.Run(kind.usageTag()+"/"+groupValue, func(t *testing.T) {
-				manager := NewDefaultPluginManager()
+				manager := enableResolverForTest(NewDefaultPluginManager())
 				for _, id := range []string{resolverPluginID, repositoryWatchPluginID} {
 					if _, err := manager.UpdateSettings(id, map[string]any{pluginSettingFollowUpPrompt: id + "专用跟评"}); err != nil {
 						t.Fatal(err)
@@ -499,7 +499,7 @@ func TestLiveFollowUpStaysOnDeliveredContent(t *testing.T) {
 			if tc.name == "github" {
 				kind, id = followUpKindRepositoryWatch, repositoryWatchPluginID
 			}
-			manager := NewDefaultPluginManager()
+			manager := enableResolverForTest(NewDefaultPluginManager())
 			if _, err := manager.UpdateSettings(id, map[string]any{pluginSettingFollowUpPrompt: promptFollowUp}); err != nil {
 				t.Fatal(err)
 			}

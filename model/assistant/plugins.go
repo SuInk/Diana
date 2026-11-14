@@ -1585,12 +1585,15 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          resolverPluginID,
 		Name:        "链接解析",
-		Version:     "0.3.12",
+		Version:     "0.3.13",
 		Description: "官方内置 Go 社交媒体解析器，可提取并发送 B 站、YouTube、X、小红书、抖音、微博和小黑盒的图片或视频，展开 X 站内长文正文，并读取 GitHub 仓库、Issue 和 PR 的正文摘要，并解析微博和小黑盒帖子的图文与视频。",
 		Official:    true,
 		BuiltIn:     true,
-		CanAskAgent: true,
-		Permissions: []string{"network:http", "message:read", "message:write", "filesystem:temp", "process:media"},
+		// 群里贴链接就回一张解析卡片太吵，新装和没开过的机器人默认不解析；
+		// 已经为某个机器人打开过的保持原样。
+		DefaultDisabled: true,
+		CanAskAgent:     true,
+		Permissions:     []string{"network:http", "message:read", "message:write", "filesystem:temp", "process:media"},
 		Settings: []PluginSettingSpec{
 			{
 				Key:         pluginSettingAskAgent,
@@ -1728,9 +1731,9 @@ func (p *ResolverPlugin) Manifest() PluginManifest {
 			{
 				Key:         resolverSettingEnabledPlatforms,
 				Label:       "启用平台",
-				Description: "勾选的平台会解析链接并进入模型上下文，默认全部启用。关闭平台只停止解析，不清除登录凭据；凭据可提前配置并独立检测。",
+				Description: "勾选的平台会解析链接并进入模型上下文，默认启用除 GitHub 外的全部平台。关闭平台只停止解析，不清除登录凭据；凭据可提前配置并独立检测。",
 				Type:        PluginSettingTypeMultiSelect,
-				Default:     resolverPlatformKeys(),
+				Default:     resolverDefaultPlatformKeys(),
 				Options:     resolverPlatformOptions(),
 			},
 			{
@@ -1863,7 +1866,7 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 	}
 	enabledPlatforms := req.Settings.StringSlice(resolverSettingEnabledPlatforms)
 	if _, configured := req.Settings[resolverSettingEnabledPlatforms]; !configured {
-		enabledPlatforms = resolverPlatformKeys()
+		enabledPlatforms = resolverDefaultPlatformKeys()
 	}
 	opts := resolveOptions{
 		fetchTitle:       req.Settings.Bool(resolverSettingFetchTitle, true),
@@ -1989,9 +1992,37 @@ func (p *ResolverPlugin) Handle(ctx context.Context, req PluginRequest) (*Plugin
 		// Context 前缀是给模型的来源标签，发到群里不该出现「链接解析结果：」这种机器腔。
 		response.Reply = strings.Join(parts, "\n")
 	}
+	if mergedForward && len(response.ForwardMessages) == 0 {
+		// 只有文字的结果（GitHub、普通网页标题摘要）同样打包成合并转发，
+		// 不在群里直接铺一大段纯文本。
+		response.ForwardMessages = resolverTextForwardMessages(directParts, parts, response.ImageURLs, response.VideoURLs)
+		response.Forward = len(response.ForwardMessages) > 0
+	}
 	p.translateResponse(ctx, req, response)
 	response.FollowUp = req.Settings.Bool(resolverSettingFollowUpComment, true)
 	return response, nil
+}
+
+// resolverTextForwardMessages 把没有自带转发节点的解析结果拆成节点：每个链接一段文字，
+// 媒体各占一个节点。
+func resolverTextForwardMessages(directParts, parts, imageURLs, videoURLs []string) []OutgoingMessage {
+	sources := directParts
+	if len(sources) == 0 {
+		sources = parts
+	}
+	nodes := make([]OutgoingMessage, 0, len(sources)+len(imageURLs)+len(videoURLs))
+	for _, part := range sources {
+		if text := strings.TrimSpace(part); text != "" {
+			nodes = append(nodes, OutgoingMessage{Text: text})
+		}
+	}
+	for _, imageURL := range imageURLs {
+		nodes = append(nodes, OutgoingMessage{ImageURLs: []string{imageURL}})
+	}
+	for _, videoURL := range videoURLs {
+		nodes = append(nodes, OutgoingMessage{VideoURLs: []string{videoURL}})
+	}
+	return nodes
 }
 
 var (
@@ -2273,6 +2304,17 @@ func resolverPlatformKeys() []string {
 		keys = append(keys, platform.key)
 	}
 	return keys
+}
+
+// resolverPlatformsOffByDefault 是默认不勾选的平台。GitHub 链接在群里多是
+// 顺手贴的仓库地址，自动回一大段仓库简介反而打扰。
+var resolverPlatformsOffByDefault = []string{"github"}
+
+// resolverDefaultPlatformKeys 是「启用平台」没设置过时的取值。
+func resolverDefaultPlatformKeys() []string {
+	return slices.DeleteFunc(resolverPlatformKeys(), func(key string) bool {
+		return slices.Contains(resolverPlatformsOffByDefault, key)
+	})
 }
 
 // resolverPlatformOptions 生成启用平台设置的勾选项。

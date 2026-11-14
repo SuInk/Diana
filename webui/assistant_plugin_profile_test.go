@@ -35,7 +35,13 @@ func TestBotHandlerPluginProfileIsolationPersists(t *testing.T) {
 	h.SetSQLiteStore(store)
 	router := botTestRouter(h)
 	id := assistant.ResolverPluginID
+	// 链接解析默认关闭，先统一打开，再验证单台关闭不串到其他机器人。
 	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+id+"/enabled", strings.NewReader(`{"enabled":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enable all: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/assistant/plugins/"+id+"/enabled?profile=qq-a", strings.NewReader(`{"enabled":false}`)))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("toggle: %d %s", rec.Code, rec.Body.String())
@@ -128,6 +134,10 @@ func TestBotHandlerPluginEnabledForAllProfiles(t *testing.T) {
 		return 0, 0
 	}
 
+	if on, total := counts(); on != 0 || total != 2 {
+		t.Fatalf("default = %d/%d, want 0/2", on, total)
+	}
+	post("/api/assistant/plugins/"+id+"/enabled", `{"enabled":true}`)
 	post("/api/assistant/plugins/"+id+"/enabled?profile=qq-a", `{"enabled":false}`)
 	if on, total := counts(); on != 1 || total != 2 {
 		t.Fatalf("partial = %d/%d, want 1/2", on, total)

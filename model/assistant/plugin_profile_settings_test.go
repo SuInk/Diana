@@ -13,6 +13,8 @@ func TestOrdinaryPluginSettingsAndSecretsAreShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.MigrateProfileConfigurations([]BotConfig{{ID: "a"}, {ID: "b"}})
+	// 迁移把全局开关重置成默认（关闭），没设置过的机器人要靠它才能拿到设置。
+	enableResolverForTest(m)
 	if _, err := m.UpdateSettingsForProfile(resolverPluginID, "a", map[string]any{resolverSettingMaxImages: 6}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +106,8 @@ func TestPluginMigrationPreservesIndependentSettingsAndSwitches(t *testing.T) {
 	if state.ForProfile("a").Settings[resolverSettingDouyinCookie] != "independent" || state.ForProfile("b").Settings[resolverSettingDouyinCookie] != "independent" {
 		t.Fatal("migration overwrote or retained shared settings")
 	}
-	if state.ForProfile("a").Enabled || state.ForProfile("b").Enabled || !state.ForProfile("new").Enabled {
+	// 链接解析默认关闭：迁移前关着的机器人保持关闭，新机器人也按默认值关闭。
+	if state.ForProfile("a").Enabled || state.ForProfile("b").Enabled || state.ForProfile("new").Enabled {
 		t.Fatal("old switches or new defaults incorrect")
 	}
 	if _, err := m.UpdateSettings(resolverPluginID, map[string]any{}); err != nil {
@@ -120,6 +123,9 @@ func TestNewRobotUsesMigratedSharedCredentials(t *testing.T) {
 	t.Setenv("DIANA_YTDLP_COOKIES_FROM_BROWSER", "chrome")
 	m := resolverManager(t)
 	m.MigrateProfileConfigurations([]BotConfig{{ID: "old"}})
+	if _, err := m.SetEnabledForProfile(resolverPluginID, "new", true); err != nil {
+		t.Fatal(err)
+	}
 	_, old, _ := m.PluginWithSettingsForProfile(resolverPluginID, "old")
 	if old.String(resolverSettingDouyinCookie, "") != "environment-cookie" {
 		t.Fatal("old deployment credential not migrated")
@@ -147,6 +153,9 @@ func TestMigrationSeedsSharedSettingsWithoutExistingBots(t *testing.T) {
 	}
 	if m.MigrateProfileConfigurations([]BotConfig{{ID: "new"}}) {
 		t.Fatal("future robot retriggered migration")
+	}
+	if _, err := m.SetEnabledForProfile(resolverPluginID, "new", true); err != nil {
+		t.Fatal(err)
 	}
 	_, settings, _ := m.PluginWithSettingsForProfile(resolverPluginID, "new")
 	if settings.String(resolverSettingDouyinCookie, "") != "old-process-cookie" {

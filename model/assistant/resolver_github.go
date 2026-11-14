@@ -13,11 +13,14 @@ import (
 )
 
 const (
-	githubAPIBase         = "https://api.github.com"
-	githubBodyMaxRunes    = 600
-	githubLabelsMaxCount  = 6
-	githubTopicsMaxCount  = 6
-	githubDescriptionRuns = 300
+	githubAPIBase        = "https://api.github.com"
+	githubBodyMaxRunes   = 600
+	githubLabelsMaxCount = 6
+	githubTopicsMaxCount = 8
+	// 参考实现最多带 3 条评论，每条 120 字。
+	githubCommentsMaxCount = 3
+	githubCommentMaxRunes  = 120
+	githubDescriptionRuns  = 300
 )
 
 type githubTargetKind int
@@ -95,17 +98,20 @@ type githubUser struct {
 }
 
 type githubRepoInfo struct {
-	FullName        string   `json:"full_name"`
-	Description     string   `json:"description"`
-	Language        string   `json:"language"`
-	StargazersCount int      `json:"stargazers_count"`
-	ForksCount      int      `json:"forks_count"`
-	OpenIssuesCount int      `json:"open_issues_count"`
-	Archived        bool     `json:"archived"`
-	Fork            bool     `json:"fork"`
-	PushedAt        string   `json:"pushed_at"`
-	Topics          []string `json:"topics"`
-	License         *struct {
+	FullName         string   `json:"full_name"`
+	HTMLURL          string   `json:"html_url"`
+	Homepage         string   `json:"homepage"`
+	Description      string   `json:"description"`
+	Language         string   `json:"language"`
+	StargazersCount  int      `json:"stargazers_count"`
+	ForksCount       int      `json:"forks_count"`
+	OpenIssuesCount  int      `json:"open_issues_count"`
+	SubscribersCount int      `json:"subscribers_count"`
+	Archived         bool     `json:"archived"`
+	Fork             bool     `json:"fork"`
+	PushedAt         string   `json:"pushed_at"`
+	Topics           []string `json:"topics"`
+	License          *struct {
 		SPDXID string `json:"spdx_id"`
 		Name   string `json:"name"`
 	} `json:"license"`
@@ -113,6 +119,7 @@ type githubRepoInfo struct {
 
 type githubIssueInfo struct {
 	Number      int        `json:"number"`
+	HTMLURL     string     `json:"html_url"`
 	Title       string     `json:"title"`
 	State       string     `json:"state"`
 	StateReason string     `json:"state_reason"`
@@ -125,10 +132,16 @@ type githubIssueInfo struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type githubComment struct {
+	Body string     `json:"body"`
+	User githubUser `json:"user"`
+}
+
 type githubPullInfo struct {
 	githubIssueInfo
 	Merged       bool `json:"merged"`
 	Draft        bool `json:"draft"`
+	Commits      int  `json:"commits"`
 	Additions    int  `json:"additions"`
 	Deletions    int  `json:"deletions"`
 	ChangedFiles int  `json:"changed_files"`
@@ -162,104 +175,120 @@ func (p *ResolverPlugin) resolveGitHubMedia(ctx context.Context, req PluginReque
 		recordResolverMediaLog(ctx, req, raw, "github", false, "github api unavailable")
 		return result
 	}
-	result.Context = text
+	result.Context = githubContextLabel + text.Display
+	if text.Body != "" {
+		// 群里看到的卡片不贴正文，模型跟评时仍需要知道 Issue/PR 在说什么。
+		result.Context += "\n正文：" + truncateRunes(compactWhitespace(text.Body), githubBodyMaxRunes)
+	}
+	result.ForwardMessages = []OutgoingMessage{{Text: text.Display}}
 	result.ResourceKeys = []string{target.resourceKey()}
 	recordResolverMediaLog(ctx, req, raw, "github", true, "")
 	return result
 }
 
-func fetchGitHubText(ctx context.Context, target githubTarget) (string, bool) {
+// githubText 是一次 GitHub 解析的结果：Display 发到群里，Body 只进模型上下文。
+type githubText struct {
+	Display string
+	Body    string
+}
+
+func fetchGitHubText(ctx context.Context, target githubTarget) (githubText, bool) {
 	base := fmt.Sprintf("%s/repos/%s/%s", githubAPIBase, url.PathEscape(target.Owner), url.PathEscape(target.Repo))
 	headers := githubAPIHeaders()
 	switch target.Kind {
-	case githubTargetIssue:
-		var issue githubIssueInfo
-		if !fetchResolverJSON(ctx, fmt.Sprintf("%s/issues/%d", base, target.Number), headers, &issue) || issue.Title == "" {
-			return "", false
+	case githubTargetIssue, githubTargetPull:
+		var comments []githubComment
+		fetchComments := func() []githubComment {
+			// 评论是锦上添花，取不到（限流、没有评论）就不显示。
+			if !fetchResolverJSON(ctx, fmt.Sprintf("%s/issues/%d/comments?per_page=%d", base, target.Number, githubCommentsMaxCount), headers, &comments) {
+				return nil
+			}
+			return comments
 		}
-		return formatGitHubIssue(target, issue), true
-	case githubTargetPull:
+		if target.Kind == githubTargetIssue {
+			var issue githubIssueInfo
+			if !fetchResolverJSON(ctx, fmt.Sprintf("%s/issues/%d", base, target.Number), headers, &issue) || issue.Title == "" {
+				return githubText{}, false
+			}
+			if issue.Comments > 0 {
+				comments = fetchComments()
+			}
+			return githubText{Display: formatGitHubIssue(target, issue, comments), Body: issue.Body}, true
+		}
 		var pull githubPullInfo
 		if !fetchResolverJSON(ctx, fmt.Sprintf("%s/pulls/%d", base, target.Number), headers, &pull) || pull.Title == "" {
-			return "", false
+			return githubText{}, false
 		}
-		return formatGitHubPull(target, pull), true
+		if pull.Comments > 0 {
+			comments = fetchComments()
+		}
+		return githubText{Display: formatGitHubPull(target, pull, comments), Body: pull.Body}, true
 	}
 	var repo githubRepoInfo
 	if !fetchResolverJSON(ctx, base, headers, &repo) || repo.FullName == "" {
-		return "", false
+		return githubText{}, false
 	}
-	return formatGitHubRepo(repo), true
+	return githubText{Display: formatGitHubRepo(repo)}, true
 }
 
+// GitHub 的文字排版照搬 ErisPulse-GitHubParser（wsu2059q/ErisPulse-GitHubParser）
+// 的 TextTemplates：首行标题，一行 · 分隔的统计，一行 | 分隔的信息，最后附链接。
+// 来源标签 [GitHub] 只放在给模型的上下文里。
+const githubContextLabel = "[GitHub] "
+
 func formatGitHubRepo(repo githubRepoInfo) string {
-	var lines []string
-	title := "[GitHub] " + repo.FullName
-	if repo.Archived {
-		title += "（已归档）"
+	lines := []string{repo.FullName}
+	description := strings.TrimSpace(repo.Description)
+	if description == "" {
+		description = "暂无描述"
 	}
-	if repo.Fork {
-		title += "（Fork）"
-	}
-	lines = append(lines, title)
-	if description := strings.TrimSpace(repo.Description); description != "" {
-		lines = append(lines, truncateRunes(description, githubDescriptionRuns))
-	}
-	stats := []string{fmt.Sprintf("★ %d", repo.StargazersCount), fmt.Sprintf("Fork %d", repo.ForksCount), fmt.Sprintf("开放 Issue/PR %d", repo.OpenIssuesCount)}
-	if repo.Language != "" {
-		stats = append(stats, repo.Language)
-	}
+	lines = append(lines, truncateRunes(description, githubDescriptionRuns))
+	lines = append(lines, fmt.Sprintf("★ Stars %s · ⑂ Forks %s · Watchers %s · Issues %s",
+		githubCount(repo.StargazersCount), githubCount(repo.ForksCount), githubCount(repo.SubscribersCount), githubCount(repo.OpenIssuesCount)))
+	language := firstNonEmpty(strings.TrimSpace(repo.Language), "未指定")
+	license := "无"
 	if repo.License != nil {
-		stats = append(stats, firstNonEmpty(repo.License.SPDXID, repo.License.Name))
+		license = firstNonEmpty(strings.TrimSpace(repo.License.SPDXID), strings.TrimSpace(repo.License.Name), license)
 	}
-	lines = append(lines, strings.Join(stats, " · "))
+	info := []string{"语言: " + language, "许可证: " + license}
+	if homepage := strings.TrimSpace(repo.Homepage); homepage != "" {
+		info = append(info, "主页: "+homepage)
+	}
+	info = append(info, "最近推送: "+firstNonEmpty(githubDay(repo.PushedAt), "未知"))
+	lines = append(lines, strings.Join(info, " | "))
 	if topics := limitStrings(repo.Topics, githubTopicsMaxCount); len(topics) > 0 {
-		lines = append(lines, "话题："+strings.Join(topics, "、"))
+		lines = append(lines, strings.Join(topics, ", "))
 	}
-	if day := githubDay(repo.PushedAt); day != "" {
-		lines = append(lines, "最近推送："+day)
+	if repo.HTMLURL != "" {
+		lines = append(lines, repo.HTMLURL)
 	}
 	return strings.Join(lines, "\n")
 }
 
-func formatGitHubIssue(target githubTarget, issue githubIssueInfo) string {
-	state := "开放"
+func formatGitHubIssue(target githubTarget, issue githubIssueInfo, comments []githubComment) string {
+	state := "开启"
 	if issue.State == "closed" {
 		state = "已关闭"
-		if issue.StateReason == "not_planned" {
-			state = "已关闭（不计划处理）"
-		}
 	}
-	return githubThreadText("Issue", target, issue, state, "")
+	return githubThreadText(target, issue, state, "", comments)
 }
 
-func formatGitHubPull(target githubTarget, pull githubPullInfo) string {
-	state := "开放"
+func formatGitHubPull(target githubTarget, pull githubPullInfo, comments []githubComment) string {
+	state := "开启"
 	switch {
 	case pull.Merged:
 		state = "已合并"
 	case pull.State == "closed":
 		state = "已关闭"
-	case pull.Draft:
-		state = "草稿"
 	}
-	extra := fmt.Sprintf("%s → %s · %d 个文件 +%d −%d", pull.Head.Ref, pull.Base.Ref, pull.ChangedFiles, pull.Additions, pull.Deletions)
-	return githubThreadText("PR", target, pull.githubIssueInfo, state, extra)
+	extra := fmt.Sprintf(" · 提交: %d · +%d/-%d · %d 文件", pull.Commits, pull.Additions, pull.Deletions, pull.ChangedFiles)
+	return githubThreadText(target, pull.githubIssueInfo, state, extra, comments)
 }
 
-func githubThreadText(label string, target githubTarget, issue githubIssueInfo, state, extra string) string {
-	lines := []string{fmt.Sprintf("[GitHub %s] %s/%s#%d %s", label, target.Owner, target.Repo, target.Number, strings.TrimSpace(issue.Title))}
-	meta := []string{state}
-	if issue.User.Login != "" {
-		meta = append(meta, "作者 "+issue.User.Login)
-	}
-	meta = append(meta, fmt.Sprintf("%d 条评论", issue.Comments))
-	if day := githubDay(issue.CreatedAt); day != "" {
-		meta = append(meta, day)
-	}
-	lines = append(lines, strings.Join(meta, " · "))
-	if extra != "" {
-		lines = append(lines, extra)
+func githubThreadText(target githubTarget, issue githubIssueInfo, state, extra string, comments []githubComment) string {
+	lines := []string{
+		fmt.Sprintf("%s/%s #%d [%s] %s", target.Owner, target.Repo, target.Number, state, strings.TrimSpace(issue.Title)),
+		fmt.Sprintf("作者: %s · 评论: %s", issue.User.Login, githubCount(issue.Comments)) + extra,
 	}
 	var labels []string
 	for _, item := range issue.Labels {
@@ -268,12 +297,41 @@ func githubThreadText(label string, target githubTarget, issue githubIssueInfo, 
 		}
 	}
 	if labels = limitStrings(labels, githubLabelsMaxCount); len(labels) > 0 {
-		lines = append(lines, "标签："+strings.Join(labels, "、"))
+		lines = append(lines, strings.Join(labels, ", "))
 	}
-	if body := strings.TrimSpace(issue.Body); body != "" {
-		lines = append(lines, truncateRunes(compactWhitespace(body), githubBodyMaxRunes))
+	for index, comment := range comments {
+		if index >= githubCommentsMaxCount {
+			break
+		}
+		// 照参考实现只去掉首尾空白，评论里的换行原样保留。
+		if body := strings.TrimSpace(strings.ReplaceAll(comment.Body, "\r\n", "\n")); body != "" {
+			lines = append(lines, fmt.Sprintf("  %s: %s", comment.User.Login, githubTruncate(body, githubCommentMaxRunes)))
+		}
+	}
+	if issue.HTMLURL != "" {
+		lines = append(lines, issue.HTMLURL)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// githubCount 照参考实现的 _fc：一万以上写成 x.xw，一千以上写成 x.xk。
+func githubCount(value int) string {
+	switch {
+	case value >= 10000:
+		return fmt.Sprintf("%.1fw", float64(value)/10000)
+	case value >= 1000:
+		return fmt.Sprintf("%.1fk", float64(value)/1000)
+	}
+	return fmt.Sprintf("%d", value)
+}
+
+// githubTruncate 照参考实现的 _trunc：超过上限时保留 limit-1 个字再加省略号。
+func githubTruncate(text string, limit int) string {
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= limit {
+		return string(runes)
+	}
+	return string(runes[:limit-1]) + "…"
 }
 
 // githubDay 取 RFC3339 时间戳的日期部分。

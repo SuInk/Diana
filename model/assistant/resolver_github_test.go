@@ -46,50 +46,75 @@ func TestGitHubResourceKey(t *testing.T) {
 	}
 }
 
+// 排版照搬 ErisPulse-GitHubParser 的文字模板。
 func TestFormatGitHubRepo(t *testing.T) {
 	var repo githubRepoInfo
-	payload := `{"full_name":"acme/widget","description":"A small widget toolkit","language":"Go","stargazers_count":1200,"forks_count":34,"open_issues_count":5,"archived":true,"pushed_at":"2026-09-30T08:00:00Z","topics":["cli","toolkit"],"license":{"spdx_id":"MIT","name":"MIT License"}}`
+	payload := `{"full_name":"acme/widget","html_url":"https://github.com/acme/widget","homepage":"https://widget.example","description":"A small widget toolkit","language":"Go","stargazers_count":105200,"forks_count":1234,"subscribers_count":56,"open_issues_count":5,"archived":true,"pushed_at":"2026-09-30T08:00:00Z","topics":["cli","toolkit"],"license":{"spdx_id":"MIT","name":"MIT License"}}`
 	if err := json.Unmarshal([]byte(payload), &repo); err != nil {
 		t.Fatal(err)
 	}
-	got := formatGitHubRepo(repo)
-	for _, want := range []string{"[GitHub] acme/widget（已归档）", "A small widget toolkit", "★ 1200", "Fork 34", "Go", "MIT", "话题：cli、toolkit", "最近推送：2026-09-30"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("repo text missing %q:\n%s", want, got)
-		}
+	want := "acme/widget\n" +
+		"A small widget toolkit\n" +
+		"★ Stars 10.5w · ⑂ Forks 1.2k · Watchers 56 · Issues 5\n" +
+		"语言: Go | 许可证: MIT | 主页: https://widget.example | 最近推送: 2026-09-30\n" +
+		"cli, toolkit\n" +
+		"https://github.com/acme/widget"
+	if got := formatGitHubRepo(repo); got != want {
+		t.Fatalf("repo text =\n%s\nwant\n%s", got, want)
+	}
+
+	empty := formatGitHubRepo(githubRepoInfo{FullName: "a/b"})
+	if empty != "a/b\n暂无描述\n★ Stars 0 · ⑂ Forks 0 · Watchers 0 · Issues 0\n语言: 未指定 | 许可证: 无 | 最近推送: 未知" {
+		t.Fatalf("empty repo text = %q", empty)
 	}
 }
 
 func TestFormatGitHubIssueAndPull(t *testing.T) {
 	var issue githubIssueInfo
-	if err := json.Unmarshal([]byte(`{"title":"Crash on empty input","state":"closed","state_reason":"not_planned","body":"steps:\n\n1. run it\n2. boom","comments":3,"user":{"login":"alice"},"labels":[{"name":"bug"},{"name":"help wanted"}],"created_at":"2026-08-01T00:00:00Z"}`), &issue); err != nil {
+	if err := json.Unmarshal([]byte(`{"html_url":"https://github.com/acme/widget/issues/9","title":"Crash on empty input","state":"closed","state_reason":"not_planned","body":"steps","comments":3,"user":{"login":"alice"},"labels":[{"name":"bug"},{"name":"help wanted"}],"created_at":"2026-08-01T00:00:00Z"}`), &issue); err != nil {
 		t.Fatal(err)
 	}
+	comments := []githubComment{
+		{User: githubUser{Login: "bob"}, Body: "能复现\n\n附日志"},
+		{User: githubUser{Login: "carol"}, Body: strings.Repeat("长", 200)},
+	}
 	target := githubTarget{Kind: githubTargetIssue, Owner: "acme", Repo: "widget", Number: 9}
-	got := formatGitHubIssue(target, issue)
-	for _, want := range []string{"[GitHub Issue] acme/widget#9 Crash on empty input", "已关闭（不计划处理）", "作者 alice", "3 条评论", "标签：bug、help wanted", "steps: 1. run it 2. boom"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("issue text missing %q:\n%s", want, got)
-		}
+	want := "acme/widget #9 [已关闭] Crash on empty input\n" +
+		"作者: alice · 评论: 3\n" +
+		"bug, help wanted\n" +
+		"  bob: 能复现\n\n附日志\n" +
+		"  carol: " + strings.Repeat("长", 119) + "…\n" +
+		"https://github.com/acme/widget/issues/9"
+	if got := formatGitHubIssue(target, issue, comments); got != want {
+		t.Fatalf("issue text =\n%s\nwant\n%s", got, want)
+	}
+	if got := formatGitHubIssue(target, issue, nil); strings.Contains(got, "steps") {
+		t.Fatalf("issue body should stay out of the chat text: %q", got)
 	}
 
 	var pull githubPullInfo
-	if err := json.Unmarshal([]byte(`{"title":"Fix crash","state":"closed","merged":true,"comments":1,"user":{"login":"bob"},"additions":10,"deletions":2,"changed_files":3,"head":{"ref":"fix-crash"},"base":{"ref":"main"},"created_at":"2026-09-01T00:00:00Z"}`), &pull); err != nil {
+	if err := json.Unmarshal([]byte(`{"html_url":"https://github.com/acme/widget/pull/10","title":"Fix crash","state":"closed","merged":true,"commits":2,"comments":1,"user":{"login":"bob"},"additions":10,"deletions":2,"changed_files":3,"head":{"ref":"fix-crash"},"base":{"ref":"main"},"created_at":"2026-09-01T00:00:00Z"}`), &pull); err != nil {
 		t.Fatal(err)
 	}
-	got = formatGitHubPull(githubTarget{Kind: githubTargetPull, Owner: "acme", Repo: "widget", Number: 10}, pull)
-	for _, want := range []string{"[GitHub PR] acme/widget#10 Fix crash", "已合并", "作者 bob", "fix-crash → main · 3 个文件 +10 −2"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("pull text missing %q:\n%s", want, got)
-		}
+	want = "acme/widget #10 [已合并] Fix crash\n" +
+		"作者: bob · 评论: 1 · 提交: 2 · +10/-2 · 3 文件\n" +
+		"https://github.com/acme/widget/pull/10"
+	if got := formatGitHubPull(githubTarget{Kind: githubTargetPull, Owner: "acme", Repo: "widget", Number: 10}, pull, nil); got != want {
+		t.Fatalf("pull text =\n%s\nwant\n%s", got, want)
 	}
 }
 
-func TestGitHubBodyIsTruncated(t *testing.T) {
-	issue := githubIssueInfo{Title: "t", State: "open", Body: strings.Repeat("长", githubBodyMaxRunes*2)}
-	got := formatGitHubIssue(githubTarget{Kind: githubTargetIssue, Owner: "a", Repo: "b", Number: 1}, issue)
-	if n := len([]rune(got)); n > githubBodyMaxRunes+200 {
-		t.Fatalf("text not truncated: %d runes", n)
+func TestGitHubCountAndTruncate(t *testing.T) {
+	for value, want := range map[int]string{999: "999", 1000: "1.0k", 12345: "1.2w", 105200: "10.5w"} {
+		if got := githubCount(value); got != want {
+			t.Errorf("githubCount(%d) = %q, want %q", value, got, want)
+		}
+	}
+	if got := githubTruncate("一二三四五", 5); got != "一二三四五" {
+		t.Errorf("short text truncated: %q", got)
+	}
+	if got := githubTruncate("一二三四五六", 5); got != "一二三四…" {
+		t.Errorf("long text = %q", got)
 	}
 }
 

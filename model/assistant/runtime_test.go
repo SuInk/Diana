@@ -583,7 +583,7 @@ func waitForSignal(t *testing.T, signal <-chan struct{}) {
 }
 
 func TestRuntimeShouldHandleKnownPlatformURLWhenResolverEnabled(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewDefaultPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, enableResolverForTest(NewDefaultPluginManager()), nil, nil, nil, nil)
 	if !runtime.shouldHandle(MessageEvent{Kind: EventKindGroup}, "看这个 https://www.bilibili.com/video/BV1xx411c7mD") {
 		t.Fatal("known platform url should trigger resolver")
 	}
@@ -3538,7 +3538,7 @@ func TestRuntimeResolverOnlySendsAndRecordsWithoutLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}
@@ -3637,7 +3637,7 @@ func TestRuntimeResolverPrivateLinkSkipsLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-private-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}
@@ -3703,7 +3703,7 @@ func TestRuntimeResolverMentionedGroupLinkSkipsLLM(t *testing.T) {
 		}
 		return "/tmp/diana-test-mentioned-video.mp4"
 	}
-	manager := NewPluginManager(plugin)
+	manager := enableResolverForTest(NewPluginManager(plugin))
 	if _, err := manager.UpdateSettings(resolverPluginID, map[string]any{resolverSettingFollowUpComment: false}); err != nil {
 		t.Fatalf("UpdateSettings() error = %v", err)
 	}

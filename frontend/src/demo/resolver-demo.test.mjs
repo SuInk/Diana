@@ -22,7 +22,11 @@ test("resolver demo exposes the complete real settings schema for its settings d
     "enabled_platforms", "summary_max_runes", "cache_ttl_minutes", "user_agent", ...keys,
     "proxy_url", "ytdlp_cookies_from_browser"
   ]);
-  assert.deepEqual(settings.get("enabled_platforms").default, ["bilibili", "youtube", "x", "xiaohongshu", "zhihu", "weibo", "douyin", "heybox", "github"]);
+  // 与后端一致：链接解析整体默认关闭，GitHub 默认不勾选，合并转发默认开启。
+  assert.equal(resolverDemoManifest.default_disabled, true);
+  assert.deepEqual(settings.get("enabled_platforms").default, ["bilibili", "youtube", "x", "xiaohongshu", "zhihu", "weibo", "douyin", "heybox"]);
+  assert.ok(settings.get("enabled_platforms").options.some(option => option.value === "github"));
+  assert.equal(settings.get("merged_forward").default, true);
   assert.deepEqual(settings.get("enabled_platforms").options, settings.get("platform_level_rules").options);
   assert.deepEqual(resolverDemoManifest.settings.filter(spec => spec.secret).map(spec => spec.key), keys.slice(0, 3));
   assert.equal(settings.get("translate").default, false);

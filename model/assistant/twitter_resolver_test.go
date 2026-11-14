@@ -317,7 +317,7 @@ func TestRuntimeLowLevelTwitterMentionIsSilentWithoutLLM(t *testing.T) {
 	}
 	channel := &recordingChannel{}
 	llmCalls := 0
-	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, NewPluginManager(plugin), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", OwnerID: "owner"}, channel, enableResolverForTest(NewPluginManager(plugin)), nil, nil, nil, func() (LLMProvider, error) {
 		llmCalls++
 		return &capturingLLMProvider{reply: "不应回复"}, nil
 	})

@@ -235,7 +235,7 @@ function demoPluginForProfile(plugin: PluginState, profile: string): PluginState
 let plugins: PluginState[] = [
   { manifest: { id: 'official.web-search', name: '联网搜索', version: '0.3.4', description: '为对话提供实时联网搜索。搜索服务在提供商页统一管理，开关与来源按机器人配置。', official: true, built_in: true, permissions: ['network:http', 'llm:tool'], settings: [{ key: 'max_results', label: '每次结果上限', type: 'number', default: 5 }] }, installed: true, enabled: true },
   { manifest: { id: "official.file-parser", name: "文件解析", version: "0.3.0", description: "解析 PDF、图片和文本附件，把结构化内容交给模型。", official: true, built_in: true, permissions: ["文件解析", "消息读取"] }, installed: true, enabled: true },
-  { manifest: resolverDemoManifest, installed: true, enabled: true },
+  { manifest: resolverDemoManifest, installed: true, enabled: false },
   {
     manifest: {
       id: "official.music", name: "音乐增强", version: "0.3.3", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
