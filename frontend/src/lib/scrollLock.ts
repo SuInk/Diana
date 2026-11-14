@@ -40,10 +40,3 @@ export function releaseBodyScroll(): void {
   restorePaddingRight = "";
 }
 
-// 仅供测试重置计数。
-export function resetBodyScrollLock(): void {
-  openCount = 0;
-  restoreRootOverflow = "";
-  restoreBodyOverflow = "";
-  restorePaddingRight = "";
-}

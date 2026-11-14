@@ -56,8 +56,4 @@ export function toastError(message: string): void {
   push("error", message, 5200);
 }
 
-export function toastInfo(message: string): void {
-  push("info", message);
-}
-
 export const toastState = readonly(state);

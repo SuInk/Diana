@@ -137,31 +137,6 @@ export interface LLMModelsResponse {
   models: LLMModelInfo[];
 }
 
-export interface LLMProviderDefinition {
-  maxConcurrency?: number;
-  maxRps?: number;
-  id: string;
-  name: string;
-  protocol: "openai-completions" | "openai-responses" | "anthropic-messages" | "gemini" | string;
-  baseUrl?: string;
-  enabled: boolean;
-}
-
-export interface LLMModelDefinition {
-  id: string;
-  providerId: string;
-  modelId: string;
-  name: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  capabilities?: Record<string, boolean>;
-}
-
-export interface LLMProviderCatalog {
-  providers: LLMProviderDefinition[];
-  models: LLMModelDefinition[];
-}
-
 /** 群聊触发称呼的匹配松紧。loose 出现即触发；smart 在明显是谈论机器人时放行给插话判定；strict 还要求称呼位于句首或句尾。 */
 export type AliasTriggerMode = "loose" | "smart" | "strict";
 
@@ -670,16 +645,6 @@ export interface PluginState {
   runtime_status?: PluginRuntimeStatus;
 }
 
-export interface RepositoryIssueCreateInput {
-  repository: string;
-  title: string;
-  body?: string;
-  labels?: string[];
-  allow_duplicate?: boolean;
-  confirmation_token?: string;
-  candidate_number?: number;
-}
-
 export interface RepositoryIssueSummary {
   number: number;
   title: string;
@@ -962,23 +927,6 @@ export interface ReplyGate {
   quiet_reply?: string;
 }
 
-export interface BotGroupAdminChallengeResponse {
-  group_id: string;
-  user_id: string;
-  expires_at: string;
-  message: string;
-}
-
-export interface BotGroupAdminConfigResponse {
-  profile_id?: string;
-  group_id: string;
-  user_id?: string;
-  token?: string;
-  expires_at?: string;
-  config: BotGroupConfig;
-  plugins: PluginState[];
-}
-
 export interface UpdateStatus {
   root: string;
   branch?: string;
@@ -1190,21 +1138,6 @@ export interface SubagentTask {
   total?: number;
   started_at: string;
   updated_at: string;
-}
-
-export interface OneBotGroupTestResponse {
-  group_id: string;
-  message?: string;
-  message_id?: string;
-  sent: boolean;
-  send_result?: Record<string, unknown>;
-  channel: BotStatus["channel"];
-  recent_events?: NonNullable<BotStatus["recent_events"]>;
-  status: BotStatus;
-}
-
-export interface BotFeatureFlags {
-  group_test: boolean;
 }
 
 export interface BotPlatform {
@@ -1780,24 +1713,6 @@ export function listLLMModels(config: LLMConfig): Promise<LLMModelsResponse> {
   }).finally(() => window.clearTimeout(timer));
 }
 
-export function getLLMProviderCatalog(): Promise<LLMProviderCatalog> {
-  return requestJSON<LLMProviderCatalog>("/api/llm/providers");
-}
-
-export function listProviderModels(providerId: string): Promise<LLMModelsResponse> {
-  return requestJSON<LLMModelsResponse>("/api/llm/providers/models", {
-    method: "POST",
-    body: JSON.stringify({ providerId })
-  });
-}
-
-export function testProviderModel(providerId: string, modelId: string, message: string): Promise<GenerateResponse> {
-  return requestJSON<GenerateResponse>("/api/llm/providers/test", {
-    method: "POST",
-    body: JSON.stringify({ providerId, modelId, message })
-  });
-}
-
 // includeSecrets 只在配置页显式点「查看」时才带上：常规拉取不需要把 token
 // 一起搬到前端，但主人本来就有权改这些凭据，要看时得能看到。
 export function getBotProfileConfig(includeSecrets = false, timeoutMs = 0): Promise<BotProfileConfig> {
@@ -1950,13 +1865,6 @@ export function saveBotProfileConfig(config: BotProfileConfig): Promise<BotProfi
   });
 }
 
-export function cloneBotProfile(id: string): Promise<BotProfileConfig> {
-  return requestJSON<BotProfileConfig>("/api/assistant/config/clone", {
-    method: "POST",
-    body: JSON.stringify({ id })
-  });
-}
-
 export function deleteBotProfile(id: string): Promise<BotProfileConfig> {
   return requestJSON<BotProfileConfig>("/api/assistant/config/delete", {
     method: "POST",
@@ -2012,22 +1920,6 @@ export function retryAssistantEvent(eventID: string): Promise<{ requeued: number
 /** 把最近 24 小时处理失败的消息放回队列重跑，每个会话最多「回补 / 重试条数」条。profile 为空时不按机器人过滤。 */
 export function retryFailedAssistantEvents(profile = ""): Promise<{ requeued: number }> {
   return requestJSON<{ requeued: number }>(`/api/assistant/events/retry-failed?profile=${encodeURIComponent(profile)}`, { method: "POST" });
-}
-
-export function getBotFeatures(): Promise<BotFeatureFlags> {
-  return requestJSON<BotFeatureFlags>("/api/assistant/features");
-}
-
-export function getOneBotGroupTest(groupID: string): Promise<OneBotGroupTestResponse> {
-  const params = new URLSearchParams({ group_id: groupID });
-  return requestJSON<OneBotGroupTestResponse>(`/api/assistant/group-test?${params.toString()}`);
-}
-
-export function sendOneBotGroupTest(groupID: string, message: string): Promise<OneBotGroupTestResponse> {
-  return requestJSON<OneBotGroupTestResponse>("/api/assistant/group-test", {
-    method: "POST",
-    body: JSON.stringify({ group_id: groupID, message })
-  });
 }
 
 export function listPlugins(profile = ""): Promise<PluginState[]> {
@@ -2087,11 +1979,6 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
-}
-export function setAgentResidency(profile: string, id: string, resident: boolean | null): Promise<{ok: boolean}> {
-  const body: Record<string, unknown> = {profile_id: profile, id};
-  if (resident !== null) body.resident = resident;
-  return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
 }
 /** 整份写下常驻名单；ids 传 null 表示退回内置推荐名单，往后跟着版本走。 */
 export function saveAgentResidencyList(profile: string, ids: string[] | null): Promise<{ok: boolean}> {
@@ -2205,13 +2092,6 @@ export function installRepoPluginArchive(file: File, acceptRisk: boolean, commit
   });
 }
 
-export function updateRepoPlugin(id: string, acceptRisk: boolean, commit = ""): Promise<PluginState> {
-  return requestJSON<PluginState>(`/api/assistant/plugins/repo/update/${encodeURIComponent(id)}`, {
-    method: "POST",
-    body: JSON.stringify({ url: "", accept_risk: acceptRisk, commit })
-  });
-}
-
 export function setPluginEnabled(id: string, enabled: boolean, profile = ""): Promise<PluginState> {
   return requestJSON<PluginState>(`/api/assistant/plugins/${encodeURIComponent(id)}/enabled?profile=${encodeURIComponent(profile)}`, {
     method: "POST",
@@ -2293,13 +2173,6 @@ export function testGitHubCredentials(
   });
 }
 
-export function createRepositoryIssue(input: RepositoryIssueCreateInput, profileID = ""): Promise<RepositoryIssueCreateResult> {
-  return requestJSON<RepositoryIssueCreateResult>(`/api/assistant/plugins/repository-publish/issues?profile=${encodeURIComponent(profileID)}`, {
-    method: "POST",
-    body: JSON.stringify(input)
-  });
-}
-
 export function listRepositoryIssueDrafts(status = "all"): Promise<{ drafts: RepositoryIssueDraft[] }> {
   return requestJSON<{ drafts: RepositoryIssueDraft[] }>(`/api/assistant/plugins/repository-publish/drafts?status=${encodeURIComponent(status)}`);
 }
@@ -2346,34 +2219,6 @@ export function installResolverDependency(name: string): Promise<ResolverDepende
     `/api/assistant/plugins/dependencies/${encodeURIComponent(name)}/install`,
     { method: "POST" }
   );
-}
-
-export function requestBotGroupAdminChallenge(groupID: string, userID: string, profileID = ""): Promise<BotGroupAdminChallengeResponse> {
-  return requestJSON<BotGroupAdminChallengeResponse>("/api/assistant/group-admin/challenge", {
-    method: "POST",
-    body: JSON.stringify({ group_id: groupID, user_id: userID, profile_id: profileID })
-  });
-}
-
-export function verifyBotGroupAdmin(groupID: string, userID: string, code: string, profileID = ""): Promise<BotGroupAdminConfigResponse> {
-  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/verify", {
-    method: "POST",
-    body: JSON.stringify({ group_id: groupID, user_id: userID, code, profile_id: profileID })
-  });
-}
-
-export function getBotGroupAdminConfig(token: string): Promise<BotGroupAdminConfigResponse> {
-  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
-    headers: { "X-Diana-Group-Token": token }
-  });
-}
-
-export function saveBotGroupAdminConfig(token: string, config: BotGroupConfig): Promise<BotGroupAdminConfigResponse> {
-  return requestJSON<BotGroupAdminConfigResponse>("/api/assistant/group-admin/config", {
-    method: "POST",
-    headers: { "X-Diana-Group-Token": token },
-    body: JSON.stringify({ config })
-  });
 }
 
 export function getUpdateStatus(): Promise<UpdateStatus> {
@@ -4722,7 +4567,6 @@ export function getGroupWordCloud(groupID: string, range: AssistantEventRange = 
   return requestJSON<GroupWordCloudResponse>(`/api/assistant/groups/${encodeURIComponent(groupID)}/wordcloud?${params.toString()}`);
 }
 
-
 export function codingAgentSetup(agent: string, operation: "status" | "install" | "test" | "login-start" | "login-status" | "login-cancel"): Promise<{installed: boolean; key_configured: boolean; installable: boolean; message: string; login_url?: string; device_code?: string; login_state?: string}> {
   return requestJSON("/api/assistant/plugins/coding-agent/setup", {method: "POST", body: JSON.stringify({agent, operation})});
 }
@@ -4846,10 +4690,6 @@ export function saveBrowserBoxSettings(
 
 export function startBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
   return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("start", botID), { method: "POST" });
-}
-
-export function stopBrowserBox(botID: string): Promise<{ status: BrowserBoxStatus }> {
-  return requestJSON<{ status: BrowserBoxStatus }>(browserBoxPath("stop", botID), { method: "POST" });
 }
 
 /** 回答机器人的交接请求：做完了（done）或做不了（failed），机器人随后接着做。 */
