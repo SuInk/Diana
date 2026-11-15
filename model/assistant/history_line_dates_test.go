@@ -143,3 +143,29 @@ func compactLines(lines ...string) []string {
 	}
 	return out
 }
+
+// 历史行在时间后面带消息 ID，模型才能引用之前的消息；省日期时 ID 原样留着。Telegram
+// 和 QQ 的消息 ID 都是数字，按同一套写。
+func TestHistoryLinePrefixCarriesMessageID(t *testing.T) {
+	base := time.Date(2026, 11, 15, 19, 3, 42, 0, profileLocation(""))
+	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11} {
+		first := historyLinePrefix(MessageEvent{Platform: platform, MessageID: "30101", Time: base.Unix()}) + "甲（10001）: 早"
+		second := historyLinePrefix(MessageEvent{Platform: platform, MessageID: "30102", Time: base.Add(time.Minute).Unix()}) + "乙（10002）: 早啊"
+		if first != "[历史 2026-11-15 19:03:42 #30101] 甲（10001）: 早" {
+			t.Fatalf("%s prefix = %q", platform, first)
+		}
+		got := compactHistoryLineDates([]llm.Message{{Role: llm.RoleUser, Content: first}, {Role: llm.RoleUser, Content: second}})
+		if got[0].Content != first || got[1].Content != "[历史 19:04:42 #30102] 乙（10002）: 早啊" {
+			t.Fatalf("%s compacted = %q / %q", platform, got[0].Content, got[1].Content)
+		}
+		var dates historyLineDates
+		dates.expand(got[0].Content)
+		if full := dates.expand(got[1].Content); full != "[历史 2026-11-15 19:04:42 #30102] 乙（10002）: 早啊" {
+			t.Fatalf("%s expanded = %q", platform, full)
+		}
+	}
+	// 没有消息 ID 的行（戳一戳之类）照旧不写。
+	if got := historyLinePrefix(MessageEvent{Time: base.Unix()}); got != "[历史 2026-11-15 19:03:42] " {
+		t.Fatalf("prefix without id = %q", got)
+	}
+}

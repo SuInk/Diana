@@ -6993,8 +6993,16 @@ func historyLinePrefix(event MessageEvent) string {
 	if event.Time > 0 {
 		label += " " + time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
 	}
+	// 消息 ID 跟在时间后面：回复开头写引用标记就能指向这条（发送层按本会话历史查，
+	// Telegram、QQ 都认）。以前历史行没有 ID，模型只能引用当前这条消息。
+	if id := strings.TrimSpace(event.MessageID); id != "" && replyMarkerIDAcceptable(event.Platform, id) {
+		label += " " + historyLineIDMark + id
+	}
 	return label + "] "
 }
+
+// historyLineIDMark 是历史行开头时间后面、消息 ID 前面的标记。
+const historyLineIDMark = "#"
 
 func historicalFileCount(event MessageEvent) int {
 	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })

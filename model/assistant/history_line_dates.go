@@ -38,6 +38,10 @@ func splitHistoryLineTime(content string) (date, clock, rest string, ok bool) {
 		return "", "", "", false
 	}
 	stamp, rest := body[:end], body[end:]
+	// 时间后面可能跟着消息 ID（「 #12345」），算进 rest，日期照常拆。
+	if mark := strings.Index(stamp, " "+historyLineIDMark); mark >= 0 {
+		stamp, rest = stamp[:mark], stamp[mark:]+rest
+	}
 	switch len(stamp) {
 	case len("2006-01-02 15:04:05"):
 		if _, err := time.Parse("2006-01-02 15:04:05", stamp); err != nil {
