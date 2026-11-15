@@ -79,7 +79,7 @@ func (c *openAICompatibleClient) Generate(ctx context.Context, req GenerateReque
 		}
 	}()
 	req = req.withDefaults(c.cfg)
-	req = applyContextBudget(req, c.cfg)
+	req = applyContextLimit(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
@@ -161,7 +161,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 	req = req.withDefaults(c.cfg)
 	// 流式无法透明重试，因此沿用非流式已经学到的降级结论。
 	req = c.withRememberedDowngrades(req)
-	req = applyContextBudget(req, c.cfg)
+	req = applyContextLimit(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}

@@ -225,7 +225,7 @@ func TestSkillsCatalogDoesNotEnterStablePrompt(t *testing.T) {
 	if strings.Contains(loaded, "demo-skill") || strings.Contains(loaded, "/tmp/demo/SKILL.md") {
 		t.Fatalf("系统提示词里出现了 skill 名称或路径:\n%s", loaded)
 	}
-	if catalog := RenderSkillsCatalog(registry.Skills(), 8000); !strings.Contains(catalog, "demo-skill") {
+	if catalog := RenderSkillsCatalog(registry.Skills()); !strings.Contains(catalog, "demo-skill") {
 		t.Fatalf("目录没渲染出 skill: %s", catalog)
 	}
 }

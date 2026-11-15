@@ -147,12 +147,6 @@ const (
 	// NotebookMaxKeywords 限制触发词个数。
 	NotebookMaxKeywords = 8
 
-	// notebookContextLimit 是自动命中最多注入的条目数。命中一堆说明这条消息
-	// 本来就在聊这些，注太多反而把当前消息挤走。
-	notebookContextLimit = 6
-	// notebookContextBudget 是【笔记】段落的字符预算。
-	notebookContextBudget = 900
-
 	// notebookLookupTimeout 是自动命中查询的超时。查不到就当没有笔记，绝不拖回复。
 	notebookLookupTimeout = 2 * time.Second
 )
@@ -234,9 +228,10 @@ type NotebookQuery struct {
 	ScopeKeys []string
 	// Kinds 为空表示不限类型。控制台按类型筛选时用它，自动命中从不限制类型——
 	// 一条待办和一个梗同样可能是这句话的上下文。
-	Kinds          []NotebookKind
-	Terms          []string
-	Text           string
+	Kinds []NotebookKind
+	Terms []string
+	Text  string
+	// Limit 为 0 时 LookupNotebookEntries 返回全部命中条目，不截条数。
 	Limit          int
 	IncludeDeleted bool
 	Now            time.Time
@@ -500,7 +495,6 @@ func (r *Runtime) notebookContextMatched(ctx context.Context, event MessageEvent
 	entries, err := store.LookupNotebookEntries(lookupCtx, NotebookQuery{
 		ScopeKeys: notebookScopeKeys(event),
 		Text:      text,
-		Limit:     notebookContextLimit,
 		Now:       time.Now(),
 	})
 	cancel()
@@ -556,14 +550,8 @@ const notebookContextPrefix = "【笔记命中，仅用于理解当前消息】\
 func formatNotebookContext(entries []NotebookEntry) string {
 	var builder strings.Builder
 	builder.WriteString(notebookContextPrefix)
-	used := 0
 	for _, entry := range entries {
-		line := "- " + formatNotebookLine(entry)
-		if used+len(line) > notebookContextBudget && used > 0 {
-			break
-		}
-		used += len(line)
-		builder.WriteString(line)
+		builder.WriteString("- " + formatNotebookLine(entry))
 		builder.WriteString("\n")
 	}
 	return strings.TrimRight(builder.String(), "\n")

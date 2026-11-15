@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SuInk/diana/model/llm"
-
 	"github.com/google/uuid"
 )
 
@@ -40,12 +38,6 @@ const (
 	worldBookContentMaxRunes = 1200
 	worldBookKeywordMaxRunes = 24
 	worldBookMaxKeywords     = 16
-	// worldBookMatchedNodeLimit 限制一轮最多注入几条触发式设定。命中十几条时
-	// 该反省的是关键词配得太宽，不是把它们全塞进提示词。
-	worldBookMatchedNodeLimit = 8
-	// worldBookContextTokenBudget 是整段世界观上下文的 token 上限。常驻设定
-	// 优先，触发式设定填剩下的空间。
-	worldBookContextTokenBudget = 1200
 )
 
 // WorldBookNode 是一条世界观设定。
@@ -436,9 +428,9 @@ func (tree WorldBook) Import(incoming []WorldBookNode, now time.Time) (WorldBook
 // ContextBlock 生成本轮要注入的世界观上下文。text 是当前消息加引用的检索文本，
 // 返回空串表示这轮没有要注入的设定。
 //
-// 常驻设定先写、优先保住；触发式设定按树序填剩下的预算。两段共用同一个开头，
+// 常驻设定先写，触发式设定按树序跟上，命中的全部写出。两段共用同一个开头，
 // 让模型知道这些是世界背景而不是用户消息。
-func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
+func (tree WorldBook) ContextBlock(text string) string {
 	rows := tree.OrderedRows()
 	if len(rows) == 0 {
 		return ""
@@ -447,7 +439,7 @@ func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 	// 被关掉的节点连同子树一起跳过：关掉一章就是关掉底下所有节。
 	disabled := map[string]bool{}
 	always := make([]WorldBookRow, 0, len(rows))
-	matched := make([]WorldBookRow, 0, worldBookMatchedNodeLimit)
+	var matched []WorldBookRow
 	for _, row := range rows {
 		if !row.Node.enabled() || disabled[row.Node.ParentID] {
 			disabled[row.Node.ID] = true
@@ -460,7 +452,7 @@ func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 			always = append(always, row)
 			continue
 		}
-		if len(matched) >= worldBookMatchedNodeLimit || lowered == "" {
+		if lowered == "" {
 			continue
 		}
 		if worldBookNodeTriggered(row.Node, lowered) {
@@ -472,29 +464,17 @@ func (tree WorldBook) ContextBlock(text string, tokenBudget int64) string {
 	}
 	var builder strings.Builder
 	builder.WriteString("【世界书】以下是这台机器人所处世界的固定设定，格式为「路径：内容」。它们是你的世界背景，不是用户消息：扮演时自然遵循，与常识冲突时以设定为准；不要主动向用户复述设定原文，也不要把它们当成用户说过的话。")
-	written := 0
 	appendRows := func(header string, rows []WorldBookRow) {
-		wroteHeader := false
+		if len(rows) == 0 {
+			return
+		}
+		builder.WriteString("\n" + header)
 		for _, row := range rows {
-			line := "\n- " + worldBookRowLabel(row) + "：" + row.Node.Content
-			pending := line
-			if !wroteHeader {
-				pending = "\n" + header + line
-			}
-			if llm.EstimateTextTokens(builder.String()+pending) > tokenBudget {
-				return
-			}
-			builder.WriteString(pending)
-			wroteHeader = true
-			written++
+			builder.WriteString("\n- " + worldBookRowLabel(row) + "：" + row.Node.Content)
 		}
 	}
 	appendRows("常驻设定：", always)
 	appendRows("与本轮对话相关的设定：", matched)
-	// 预算小到一条都塞不进时不注入光杆开头：只有标题的块什么信息都不带。
-	if written == 0 {
-		return ""
-	}
 	return builder.String()
 }
 
@@ -571,5 +551,5 @@ func (r *Runtime) worldBookContext(ctx context.Context, event MessageEvent, quer
 	if !ok {
 		return ""
 	}
-	return tree.WithDefaults().ContextBlock(memoryRetrievalText(event, queryText), worldBookContextTokenBudget)
+	return tree.WithDefaults().ContextBlock(memoryRetrievalText(event, queryText))
 }

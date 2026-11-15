@@ -106,27 +106,28 @@ func TestAppendContextRewritesAppendedHistoryDatesAgainstPrefix(t *testing.T) {
 	}
 }
 
-// 预裁剪丢掉开头几行后，留下的第一行要补回日期。
-func TestBudgetPretrimRestoresDateOnFirstSurvivingHistoryLine(t *testing.T) {
-	messages := compactLines(
+// 压缩摘掉开头几行后，留下的第一行要补回日期。
+func TestCompactionRestoresDateOnFirstKeptHistoryLine(t *testing.T) {
+	lines := compactLines(
 		"[历史 2026-11-11 10:00:00] 甲: 一",
 		"[历史 2026-11-11 10:01:00] 乙: 二",
 		"[历史 2026-11-11 10:02:00] 甲: 三",
 	)
-	req := llm.GenerateRequest{Messages: []llm.Message{
-		{Role: llm.RoleUser, Content: messages[0]},
-		{Role: llm.RoleUser, Content: messages[1]},
-		{Role: llm.RoleUser, Content: messages[2]},
-		{Role: llm.RoleUser, Content: "当前", Priority: llm.MessagePriorityCurrent},
-	}}
-	out := applyBudgetPretrim(req, map[int]bool{0: true}, nil)
+	kept := []MessageEvent{{Kind: EventKindGroup, GroupID: "g", UserID: "b", MessageID: "2"}, {Kind: EventKindGroup, GroupID: "g", UserID: "a", MessageID: "3"}}
+	keys := []string{"x", messageHistoryDedupeKey(kept[0]), messageHistoryDedupeKey(kept[1])}
+	messages := make([]llm.Message, 0, 4)
+	for index, line := range lines {
+		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: line, ContextGroup: historyContextGroupPrefix + keys[index]})
+	}
+	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "当前", Priority: llm.MessagePriorityCurrent})
+	out, _ := applyCompactionToMessages(messages, kept, "摘要")
 	var got []string
-	for _, message := range out.Messages {
+	for _, message := range out[1:] {
 		got = append(got, message.Content)
 	}
-	want := []string{budgetPretrimMarker, "[历史 2026-11-11 10:01:00] 乙: 二", "[历史 10:02:00] 甲: 三", "当前"}
+	want := []string{"[历史 2026-11-11 10:01:00] 乙: 二", "[历史 10:02:00] 甲: 三", "当前"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("pretrimmed = %q, want %q", got, want)
+		t.Fatalf("compacted = %q, want %q", got, want)
 	}
 }
 

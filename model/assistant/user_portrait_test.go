@@ -7,8 +7,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/SuInk/diana/model/llm"
 )
 
 func TestNormalizePortraitTraitRejectsUnusableEntries(t *testing.T) {
@@ -173,26 +171,6 @@ func TestUserMemoryContextCarriesPortrait(t *testing.T) {
 	}
 	if strings.Contains(structured, "上周问过怎么配置反向代理") {
 		t.Fatalf("raw message buffer leaked into structured prompt: %s", structured)
-	}
-
-	// 预算够核心加画像时，画像留着。
-	budget := llm.EstimateTextTokens(text)
-	trimmed := fitUserMemoryCoreToTokenBudget(profile, policy, budget)
-	if !strings.Contains(trimmed, "住在杭州") {
-		t.Fatalf("portrait should survive a budget that fits it: %s", trimmed)
-	}
-
-	// 预算连画像都装不下时，才轮到画像让位，关系核心留到最后。
-	tight := llm.EstimateTextTokens(formatUserMemoryContext(UserMemoryProfile{
-		UserID: profile.UserID, DisplayName: profile.DisplayName,
-		Favorability: profile.Favorability, MessageCount: profile.MessageCount,
-	}, policy))
-	squeezed := fitUserMemoryCoreToTokenBudget(profile, policy, tight)
-	if strings.Contains(squeezed, "住在杭州") {
-		t.Fatalf("portrait should be dropped when it does not fit: %s", squeezed)
-	}
-	if !strings.Contains(squeezed, "用户：") {
-		t.Fatalf("发言者标识应当比画像更晚被裁掉: %s", squeezed)
 	}
 }
 

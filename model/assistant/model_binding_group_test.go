@@ -97,7 +97,7 @@ func TestReplyAssistInheritsBackgroundWhenUnset(t *testing.T) {
 		"background": {ProfileID: "gemini", Model: "gemini-flash"},
 		"chat":       {ProfileID: "terra", Model: "gpt-terra"},
 	}
-	for _, purpose := range []string{PurposeContextSummary, PurposeErrorNotice, PurposeReplyIntentRouter} {
+	for _, purpose := range []string{PurposeSemanticTextRef, PurposeErrorNotice, PurposeReplyIntentRouter} {
 		role, ok := modelRoleFor(roles, purpose, llm.GroupReplyAssist)
 		if !ok || role.Model != "gemini-flash" {
 			t.Fatalf("%s 没单独配回复辅助时该沿用后台生成：%#v", purpose, role)
@@ -132,7 +132,7 @@ func TestReplyAssistFollowChatStopsInheritance(t *testing.T) {
 		"reply_assist": {FollowChat: true},
 		"chat":         {ProfileID: "terra", Model: "gpt-terra"},
 	}
-	if role, _ := modelRoleFor(roles, PurposeContextSummary, llm.GroupReplyAssist); role.Model != "gpt-terra" {
+	if role, _ := modelRoleFor(roles, PurposeSemanticTextRef, llm.GroupReplyAssist); role.Model != "gpt-terra" {
 		t.Fatalf("选了跟随对话该用对话模型：%#v", role)
 	}
 	if hasDedicatedModelRole(roles, PurposeSemanticTextRef, llm.GroupReplyAssist) {

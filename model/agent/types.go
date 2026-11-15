@@ -22,10 +22,6 @@ const (
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
 	// 一个完整文件时经常一次写下去，卡太死会让它退化成反复追加。
 	DefaultFileWriteMaxBytes = 256 * 1024
-	DefaultSkillsListBudget  = 8000
-	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
-	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
-	ResidentSkillBodyBudget = 24000
 	// DefaultSkillTriggerScanDepth 是关键词扫描回看的用户消息条数。只看最近几条：
 	// 很久以前提过一次的词不该让那份正文从此每轮都在。
 	DefaultSkillTriggerScanDepth = 2
@@ -65,7 +61,6 @@ type Config struct {
 	MaxSteps         int
 	SkillRoots       []string
 	ManagedSkillRoot string
-	SkillsListBudget int
 	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
 	SkillTriggerScanDepth int
 	MCPConfigPath         string
@@ -293,9 +288,6 @@ func (cfg Config) WithDefaults() Config {
 	}
 	if cfg.SkillTriggerScanDepth <= 0 {
 		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
-	}
-	if cfg.SkillsListBudget <= 0 {
-		cfg.SkillsListBudget = DefaultSkillsListBudget
 	}
 	if cfg.MCPStartupTimeoutMS <= 0 {
 		cfg.MCPStartupTimeoutMS = DefaultMCPStartupTimeoutMS

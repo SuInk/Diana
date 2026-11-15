@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +89,20 @@ func TestProactiveNewsChatLinesSkipsBotAndKeepsOrder(t *testing.T) {
 	got := proactiveNewsChatLines(history, "30001")
 	if strings.Join(got, "|") != "小明：新赛季开了|20002：排位好难" {
 		t.Fatalf("lines = %#v", got)
+	}
+}
+
+// 群友发言全部带给定词模型，长消息也不截字。
+func TestProactiveNewsChatLinesKeepEveryMessageWhole(t *testing.T) {
+	long := strings.Repeat("新版本的每个改动都想聊一聊，", 40)
+	var history []MessageEvent
+	for i := range 60 {
+		history = append(history, MessageEvent{Kind: EventKindGroup, UserID: "20001", SenderName: "小明", Time: int64(1700000000 + i),
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": fmt.Sprintf("%02d%s", i, long)}}}})
+	}
+	got := proactiveNewsChatLines(history, "30001")
+	if len(got) != 60 || got[0] != "小明：00"+long || got[59] != "小明：59"+long {
+		t.Fatalf("lines=%d", len(got))
 	}
 }
 

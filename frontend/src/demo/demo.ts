@@ -61,18 +61,10 @@ const demoContextBudget = {
   context_window: 128_000,
   // 生产里常见：模型配置没填窗口，用的是默认值。
   context_window_fallback: true,
-  allocated: 56_320,
-  headroom: 71_680,
-  layers: [
-    { key: "recent_history", label: "近期对话", share_percent: 0, ceiling: 20_000, rule: "(窗口 − 16384) / 2", tokens: 20_000, capped_by_ceiling: true, configurable: true },
-    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
-    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
-    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },
-    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
-    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
-    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
-    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
-  ]
+  compaction_threshold: 111_616,
+  reserve_tokens: 16_384,
+  keep_recent_tokens: 20_000,
+  has_summary: true
 };
 
 // 最近实际请求：续接上线后实际请求比预算分配大得多，演示里也照这个比例给。
@@ -99,9 +91,9 @@ const demoResidentContext = {
   blocks: [
     { key: "persona", label: "SOUL.md", tokens: 846, content: "# Diana\n\n## 概述\n\nDiana 是一个聊天机器人……", note: "排在系统提示词最前面，只有人能改；群可以整份覆盖。" },
     { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
-    { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
-    { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
-    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
+    { key: "world_book", label: "世界书常驻设定", tokens: 0, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
+    { key: "self_notes", label: "自述", tokens: 0, note: "机器人自己写的自我认知，默认关闭。" },
+    { key: "session_thread", label: "会话便签", tokens: 0, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
     { key: "agent_protocol", label: "Agent 协议与按需工具目录", tokens: 4_310, content: "（演示数据：Agent 协议、按需工具目录、扩展说明和规则。）", note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。取自这个会话最近一轮回复。" },
     { key: "agent_tools", label: "常驻工具定义", tokens: 5_102, content: "web_search\nremember\npoke\ntools_load\ntools_execute\nagent_finalize", note: "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。" },
     { key: "skills", label: "Skill 目录与常驻正文", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。" }

@@ -17,16 +17,11 @@ import (
 	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/applog"
-	"github.com/SuInk/diana/model/llm"
 )
 
 const (
-	structuredMemoryContextBudget = 3200
-	structuredMemoryLoadLimit     = 120
-	sharedPublicMemoryLoadLimit   = 40
-	// maximumCoreMemoryItems 限制常驻档条数。它不参加相关性排序，配额必须小而固定，
-	// 否则「一直带着」的东西会越攒越多。
-	maximumCoreMemoryItems = 8
+	structuredMemoryLoadLimit   = 120
+	sharedPublicMemoryLoadLimit = 40
 	// memoryStalenessGraceDays 之内不做衰减：刚发生的事本来就该参与竞争。
 	memoryStalenessGraceDays = 30
 	// memoryStalenessFullDecayDays 是衰减打满所需的未命中天数。
@@ -59,35 +54,24 @@ func (r *Runtime) memoryContext(ctx context.Context, event MessageEvent, queryTe
 		}
 	}
 	policy := relationshipPolicyForEvent(cfg, profile, event)
-	text, _ := r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
-	return text
+	return r.memoryContextWithProfile(ctx, event, queryText, profile, policy)
 }
 
-// memoryContextWithProfile 同时返回本层的自有账，见 contextLayerUsage。
-func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) (string, contextLayerUsage) {
+// memoryContextWithProfile 渲染这一轮的记忆块：检索到的记忆全部写出，不按 token
+// 配额截断。
+func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEvent, queryText string, profile UserMemoryProfile, policy RelationshipPolicy) string {
 	cfg := r.effectiveConfigForEvent(event)
-	window := r.promptContextWindowTokens(event, cfg)
-	memoryBudget := retrievedMemoryBudget(window) + coreMemoryBudget(window)
 	if profile.UserID == "" {
 		profile = UserMemoryProfile{
 			UserID:      strings.TrimSpace(event.UserID),
 			DisplayName: strings.TrimSpace(event.SenderNameOrID()),
 		}
 	}
-	coreOnly := func(reason string) (string, contextLayerUsage) {
-		text := fitUserMemoryCoreToTokenBudget(profile, policy, memoryBudget)
-		return text, contextLayerUsage{
-			Layer:          "retrieved_memory",
-			Budget:         memoryBudget,
-			SelectedTokens: llm.EstimateTextTokens(text),
-			Reason:         reason,
-		}
-	}
 	r.mu.RLock()
 	store := r.structuredMemory
 	r.mu.RUnlock()
 	if store == nil {
-		return coreOnly(contextLayerReasonFits)
+		return formatUserMemoryContext(profile, policy)
 	}
 
 	queryText = memoryRetrievalText(event, queryText)
@@ -99,8 +83,7 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	if err != nil {
 		cancel()
 		log.Printf("diana structured memory load failed: %v", err)
-		text, usage := formatStructuredMemoryContextWithTokenBudget(profile, policy, nil, memoryBudget)
-		return text, usage
+		return formatStructuredMemoryContext(profile, policy, nil)
 	}
 	if crossGroup || len(crossPlatformPrefixes) > 0 {
 		// A busy local conversation must not exhaust the entire SQL candidate
@@ -142,19 +125,8 @@ func (r *Runtime) memoryContextWithProfile(ctx context.Context, event MessageEve
 	markLinkedMemorySubjects(query, items)
 	ranked := rankStructuredMemories(items, event, queryText, time.Now())
 	r.touchRetrievedMemories(ctx, store, ranked)
-	text, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, ranked, memoryBudget)
-	r.recordRetrievedMemoryContext(ctx, event, selected)
-	// 候选是存储层捞回来的全部，排序阶段（相关性门槛 + MMR 条数上限）先砍一刀，
-	// token 配额再砍一刀。两刀以前都不留痕，于是「记忆没提到某件事」既可能是没
-	// 检索到，也可能是检索到了但没装下，日志里分不出来。
-	usage.CandidateItems = len(items)
-	for _, item := range items {
-		usage.CandidateTokens += llm.EstimateTextTokens(formatStructuredMemoryLine(item))
-	}
-	if usage.Reason == contextLayerReasonFits && len(ranked) < len(items) {
-		usage.Reason = contextLayerReasonRankCap
-	}
-	return text, usage
+	r.recordRetrievedMemoryContext(ctx, event, ranked)
+	return formatStructuredMemoryContext(profile, policy, ranked)
 }
 
 func mergeRetrievedMemoryCandidates(current, additional []StructuredMemoryItem) []StructuredMemoryItem {
@@ -240,8 +212,8 @@ func memoryRetrievalText(event MessageEvent, current string) string {
 
 // memoryRankOptions 区分两种用途的排序。
 //
-// 自动注入上下文：常驻档最多 maximumCoreMemoryItems 条、检索档 MMR 选最多 24 条，新近度
-// 看 last_verified_at（命中会回写），长期没命中的旧情景逐步衰减。
+// 自动注入上下文：常驻档和检索档都不设条数上限（MMR 只决定顺序），新近度看
+// last_verified_at（命中会回写），长期没命中的旧情景逐步衰减。
 //
 // memory 工具检索翻页（stable）：不设条数上限，按 (得分降序, id 升序) 排，下一页从游标
 // 那一条之后接着给。得分只用翻页之间不变的字段：新近度按记下的时间算、不看
@@ -249,13 +221,11 @@ func memoryRetrievalText(event MessageEvent, current string) string {
 // （主动检索不该把旧记忆藏起来）；MMR 的去重调分依赖已选集合，同样会让名次随页变化，
 // 不用。
 type memoryRankOptions struct {
-	maxCore     int
-	maxSelected int
-	stable      bool
+	stable bool
 }
 
 var (
-	injectionMemoryRank = memoryRankOptions{maxCore: maximumCoreMemoryItems, maxSelected: 24}
+	injectionMemoryRank = memoryRankOptions{}
 	toolMemoryRank      = memoryRankOptions{stable: true}
 )
 
@@ -296,7 +266,7 @@ func rankStructuredMemoriesWith(items []StructuredMemoryItem, event MessageEvent
 		terms []string
 	}
 	candidates := make([]scoredMemory, 0, len(items))
-	core := make([]scoredMemory, 0, maximumCoreMemoryItems)
+	var core []scoredMemory
 	for _, item := range items {
 		lexical, strongestField, exactField := structuredMemoryLexicalScore(item, analysis, documentFrequency, len(items))
 		score := item.Importance*0.18 + item.Confidence*0.09 + lexical*0.58
@@ -401,14 +371,11 @@ func rankStructuredMemoriesWith(items []StructuredMemoryItem, event MessageEvent
 	sort.SliceStable(core, func(left, right int) bool {
 		return core[left].item.RetrievalScore > core[right].item.RetrievalScore
 	})
-	if options.maxCore > 0 && len(core) > options.maxCore {
-		core = core[:options.maxCore]
-	}
 
-	// MMR-style selection keeps several useful topics instead of spending the
-	// complete context budget on near-duplicate memories.
+	// MMR 只决定顺序：相近的记忆往后排，不同话题的排前面。所有过了相关性门槛的
+	// 候选都会写进提示词，不按条数截断。
 	// 每个候选与已选集合的最大相似度随选入逐条更新，不必每轮都和全部已选重算一遍。
-	selected := make([]scoredMemory, 0, min(options.maxSelected, len(candidates))+len(core))
+	selected := make([]scoredMemory, 0, len(candidates)+len(core))
 	selected = append(selected, core...)
 	maxSimilarity := make([]float64, len(candidates))
 	for index, candidate := range candidates {
@@ -416,7 +383,7 @@ func rankStructuredMemoriesWith(items []StructuredMemoryItem, event MessageEvent
 			maxSimilarity[index] = max(maxSimilarity[index], structuredMemorySimilarity(candidate.terms, existing.terms))
 		}
 	}
-	for len(candidates) > 0 && len(selected) < options.maxSelected+len(core) {
+	for len(candidates) > 0 {
 		bestIndex := 0
 		bestScore := math.Inf(-1)
 		for index, candidate := range candidates {
@@ -441,18 +408,6 @@ func rankStructuredMemoriesWith(items []StructuredMemoryItem, event MessageEvent
 	return ranked
 }
 
-func formatStructuredMemoryContext(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem) string {
-	// Preserve the legacy helper for focused tests and callers outside prompt
-	// orchestration. Runtime prompts use the model-derived token budget below.
-	text, _ := formatStructuredMemoryContextWithTokenBudget(profile, policy, items, int64(structuredMemoryContextBudget)*2)
-	return text
-}
-
-func formatStructuredMemoryContextWithTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage) {
-	text, usage, _ := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, items, tokenBudget)
-	return text, usage
-}
-
 // structuredMemoryTimeRule 讲清记忆里的时间怎么读。记忆是过去写下的：正文里的
 // 「今天、早上、刚才」相对的是记下那天，不是现在；吃药、生病、喝酒这类一时的状态
 // 过了那天就不能当成正在发生。
@@ -461,7 +416,8 @@ const structuredMemoryTimeRule = "每条记忆的「记于」是写下它的日�
 const portraitContextHeader = "\n人员画像（只属于上方当前发言者；账号等身份不可套给他正在询问的其他人，只在自然相关时用上，不要主动背出来）："
 const portraitContextEnd = "\n【当前发言者画像结束；其他人的身份以对应姓名的消息或来源为准】\n"
 
-func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem, tokenBudget int64) (string, contextLayerUsage, []StructuredMemoryItem) {
+// formatStructuredMemoryContext 写出记忆块。每条都写，不按配额截断。
+func formatStructuredMemoryContext(profile UserMemoryProfile, policy RelationshipPolicy, items []StructuredMemoryItem) string {
 	var builder strings.Builder
 	displayName := strings.TrimSpace(profile.DisplayName)
 	if displayName == "" {
@@ -489,9 +445,7 @@ func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProf
 	//
 	// 关系等级保留：它决定语气，取值稳定（同一个人连续几百条消息都是同一档），不会
 	// 每轮推动后面的内容。
-	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」，被预算
-	// 挤掉的话机器人只能退回泛泛而谈。条数由 portraitFieldSpecs 的容量封顶，长
-	// 度可控，不参与下面各段的裁剪。
+	// 画像和好感度、关系等级一样属于固定核心：它答的是「这个人是谁」。
 	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
 		builder.WriteString(portraitContextHeader)
 		builder.WriteString(lines)
@@ -519,78 +473,16 @@ func formatStructuredMemoryContextWithTokenBudgetDetailed(profile UserMemoryProf
 		}
 		sections[index].items = append(sections[index].items, item)
 	}
-	usage := contextLayerUsage{
-		Layer:       "retrieved_memory",
-		Budget:      tokenBudget,
-		RankedItems: len(items),
-		Reason:      contextLayerReasonFits,
-	}
-	selected := make([]StructuredMemoryItem, 0, len(items))
-	cutAtSection := -1
-sectionsLoop:
-	for sectionIndex, section := range sections {
+	for _, section := range sections {
 		if len(section.items) == 0 {
 			continue
 		}
-		header := "\n" + section.title + "："
-		if llm.EstimateTextTokens(builder.String()+header) > tokenBudget {
-			cutAtSection = sectionIndex
-			break
-		}
-		builder.WriteString(header)
+		builder.WriteString("\n" + section.title + "：")
 		for _, item := range section.items {
-			line := formatStructuredMemoryLine(item)
-			if llm.EstimateTextTokens(builder.String()+line) > tokenBudget {
-				cutAtSection = sectionIndex
-				break sectionsLoop
-			}
-			builder.WriteString(line)
-			usage.SelectedItems++
-			selected = append(selected, item)
+			builder.WriteString(formatStructuredMemoryLine(item))
 		}
 	}
-	// 分段有固定顺序，前面几条长记忆就能让后面整段一条不剩。日志里「这段本来
-	// 就没内容」和「这段被挤掉了」长得一样，必须把被截掉的段名单独记下来。
-	if cutAtSection >= 0 {
-		usage.Reason = contextLayerReasonBudget
-		for _, section := range sections[cutAtSection:] {
-			if len(section.items) > 0 {
-				usage.DroppedSections = append(usage.DroppedSections, section.title)
-			}
-		}
-		if len(usage.DroppedSections) > 1 {
-			usage.Reason = contextLayerReasonSectionCut
-		}
-	}
-	for _, item := range items {
-		usage.RankedTokens += llm.EstimateTextTokens(formatStructuredMemoryLine(item))
-	}
-	// 这里看到的 items 已经是排序后的了，排序前砍掉多少只有调用方知道。先按「候选
-	// 等于排序后」记账，取得到检索总数的调用方再覆盖——否则 dropped 会算成 0，
-	// 明明有候选没装下却显示一条没丢。
-	usage.CandidateItems = usage.RankedItems
-	usage.CandidateTokens = usage.RankedTokens
-	text := strings.TrimSpace(builder.String())
-	usage.SelectedTokens = llm.EstimateTextTokens(text)
-	return text, usage, selected
-}
-
-func fitUserMemoryCoreToTokenBudget(profile UserMemoryProfile, policy RelationshipPolicy, tokenBudget int64) string {
-	core := profile
-	// 原始发言缓冲已经不进提示词了（见 formatUserMemoryContext），这里只剩画像
-	// 可以让。逐条丢弃最近发言那一轮循环随之删掉。
-	text := formatUserMemoryContext(core, policy)
-	if llm.EstimateTextTokens(text) <= tokenBudget {
-		return text
-	}
-	core.Portrait = nil
-	text = formatUserMemoryContext(core, policy)
-	if llm.EstimateTextTokens(text) <= tokenBudget {
-		return text
-	}
-	// Relationship, favorability and interaction count are the fixed core; the
-	// verbose tone lives in the system tail, so there is nothing left to shed.
-	return text
+	return strings.TrimSpace(builder.String())
 }
 
 func formatStructuredMemoryLine(item StructuredMemoryItem) string {
@@ -1046,30 +938,4 @@ func sessionThreadAsOf(item StructuredMemoryItem, now time.Time) string {
 	}
 	written = written.In(now.Location())
 	return "（便签写于 " + written.Format("2006-01-02 15:04") + "（" + chineseWeekday(written.Weekday()) + "）；里面的时间说法都相对那时）\n"
-}
-
-// fitSessionThreadToBudget 把线程便签压进配额。它天然只有几百字，超限说明模型把
-// 已完结话题囤在了 thread 里；这里按行截断即可，不值得再打一次压缩调用。
-func fitSessionThreadToBudget(note string, budget int64) string {
-	note = strings.TrimSpace(note)
-	if note == "" || budget <= 0 {
-		return ""
-	}
-	if llm.EstimateTextTokens(note) <= budget {
-		return note
-	}
-	lines := strings.Split(note, "\n")
-	for len(lines) > 1 && llm.EstimateTextTokens(strings.Join(lines, "\n")) > budget {
-		lines = lines[:len(lines)-1]
-	}
-	trimmed := strings.Join(lines, "\n")
-	if llm.EstimateTextTokens(trimmed) <= budget {
-		return strings.TrimSpace(trimmed)
-	}
-	// 单行也超限时按字符粗裁：估算是每 2 字符约 1 token，留一成余量。
-	limit := int(budget) * 2
-	if limit < 8 {
-		limit = 8
-	}
-	return strings.TrimSpace(truncateRunes(trimmed, limit))
 }

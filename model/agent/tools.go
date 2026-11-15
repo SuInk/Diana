@@ -106,12 +106,11 @@ func ownCatalogDescription(tool Tool) (string, bool) {
 }
 
 // catalogLineDescription 是按需目录和系统提示词目录里的一行说明。工具自己给了目录
-// 说明时整句照用，不按字数预算截：那一句是它量好的，截掉后半句就少了动作清单。
+// 说明时用它，否则用完整描述；只把空白压成一行，不按字数截。按需工具的原生声明
+// 不随请求发出，不支持 function calling 的供应商也只看得到这份目录，截掉的部分
+// 模型就再也读不到。
 func catalogLineDescription(tool Tool) string {
-	if description, ok := ownCatalogDescription(tool); ok {
-		return strings.Join(strings.Fields(description), " ")
-	}
-	return compactToolDescription(tool.Description(), SystemPromptToolDescriptionBudget)
+	return strings.Join(strings.Fields(catalogDescription(tool)), " ")
 }
 
 type ToolCatalogItem struct {
@@ -815,14 +814,12 @@ func (r *ToolRegistry) Names() []string {
 	return r.filterExtensionToolNames(local)
 }
 
-// Catalog returns a compact semantic routing catalog. Input schemas stay out of
-// the router request and are shown only to the answering Agent after selection.
-func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
+// Catalog returns the semantic routing catalog with each tool's full
+// description. Input schemas stay out of the router request and are shown only
+// to the answering Agent after selection.
+func (r *ToolRegistry) Catalog() []ToolCatalogItem {
 	if r == nil {
 		return nil
-	}
-	if descriptionRunes <= 0 {
-		descriptionRunes = 180
 	}
 	names := r.PresentedNames()
 	items := make([]ToolCatalogItem, 0, len(names))
@@ -838,7 +835,7 @@ func (r *ToolRegistry) Catalog(descriptionRunes int) []ToolCatalogItem {
 		description = strings.Join(strings.Fields(description), " ")
 		items = append(items, ToolCatalogItem{
 			Name:        name,
-			Description: truncateRunes(description, descriptionRunes),
+			Description: description,
 		})
 	}
 	return items
@@ -862,7 +859,7 @@ func (r *ToolRegistry) Descriptions() string {
 		builder.WriteString("- ")
 		builder.WriteString(tool.Name())
 		builder.WriteString(": ")
-		builder.WriteString(compactToolDescription(tool.Description(), ToolDescriptionBudget))
+		builder.WriteString(strings.Join(strings.Fields(tool.Description()), " "))
 		builder.WriteByte('\n')
 	}
 	return strings.TrimSpace(builder.String())
@@ -927,10 +924,8 @@ func deferredCatalogLine(tool Tool) string {
 	return "- " + tool.Name() + toolSignature(tool) + ": " + catalogLineDescription(tool) + "\n"
 }
 
-// SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录。每轮请求都会带上
-// 原生工具定义，那里已经有权威描述和 JSON Schema，在提示词里再抄一遍全文只是
-// 在同一个请求里重复同样的文本。短目录仍然让不支持 function calling 的供应商
-// 能用兼容 JSON 协议选对工具。
+// SystemPromptCatalog 为系统提示词渲染一份每行一个工具的目录，描述不截字：不支持
+// function calling 的供应商走兼容 JSON 协议时只看得到这一份。
 func (r *ToolRegistry) SystemPromptCatalog() string {
 	if r == nil {
 		return "无可用工具。"
@@ -954,14 +949,9 @@ func (r *ToolRegistry) SystemPromptCatalog() string {
 	return strings.TrimSpace(builder.String())
 }
 
-// SystemPromptToolDescriptionBudget 把系统提示词里的目录压到大约一行一个工具。
-// 完整的行为约束留在发给模型的工具定义里。
-const SystemPromptToolDescriptionBudget = 120
-
-// ToolDescriptionBudget 是工具清单里单个描述的字数上限。超出会被截断，且
-// compactToolDescription 优先保留 input: 之后的参数示例——被砍掉的恰好是开头
-// 那句「什么时候该用我」。参数契约应当放进 InputSchema，描述留在预算内。
-const ToolDescriptionBudget = 720
+// ResidencyListDescriptionRunes 是控制台档位列表里一行简介的字数。只给界面用，
+// 不进模型：给模型的目录和工具定义都带完整描述，界面展开时也显示完整的 Detail。
+const ResidencyListDescriptionRunes = 120
 
 // schemaAllowsStrictMode 报告这份 schema 能否安全地声明 strict。严格模式要求禁止
 // 额外字段并且每个属性都出现在 required 里；不满足时照样把 schema 发出去（模型
@@ -1001,7 +991,7 @@ func schemaAllowsStrictMode(schema map[string]any) bool {
 	return true
 }
 
-// CompactToolDescription 把工具描述压成目录里的一行，界面和提示词共用同一份压法。
+// CompactToolDescription 把工具描述压成控制台列表里的一行简介，只给界面用。
 func CompactToolDescription(description string, maxRunes int) string {
 	return compactToolDescription(description, maxRunes)
 }

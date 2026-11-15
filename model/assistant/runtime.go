@@ -200,8 +200,9 @@ type MessageHistoryVectorQuery struct {
 	Model          string
 	FromTime       int64
 	ThroughTime    int64
-	Limit          int
-	CrossSession   bool
+	// Limit 为 0 时返回全部达到 MinSimilarity 的命中，不截条数。
+	Limit        int
+	CrossSession bool
 }
 
 // MessageHistoryVectorStore 是语义检索的可选存储能力:向量随消息异步入库,
@@ -630,16 +631,15 @@ type Runtime struct {
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
-	contextSummaries   map[string]string
-	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
-	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
-	// 摘要、又以完整原文进入同一个请求。
-	contextSummaryMarks map[string]int64
-	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
+	// contextSummaries 是私聊会话的压缩摘要（群的存在 GroupPromptSession 里），见 context_compaction.go。
+	contextSummaries map[string]compactionCheckpoint
+	// historyWindowAnchors 记录每个会话历史的起点（锚），见 context_compaction.go。
 	historyWindowAnchors map[string]string
-	recent               []EventRecord
-	activeMu             sync.Mutex
-	active               int
+	// compactionLocks 让同一个会话同时只有一次压缩，见 context_compaction.go。
+	compactionLocks sync.Map
+	recent          []EventRecord
+	activeMu        sync.Mutex
+	active          int
 	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
 	// 两者都自带锁，不受 mu 保护。
 	llmConcurrency        llmConcurrencyTracker
@@ -964,8 +964,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		chatInLastReplyAt:       map[string]time.Time{},
 		groupLastReplyAt:        map[string]time.Time{},
 		recentClaimSources:      map[string][]claimSourceRecord{},
-		contextSummaries:        map[string]string{},
-		contextSummaryMarks:     map[string]int64{},
+		contextSummaries:        map[string]compactionCheckpoint{},
 		activeReminders:         map[string]struct{}{},
 		replySuppressByUser:     map[string]ReplySuppression{},
 		replyOutboundGates:      map[string]*replySuppressionOutboundGate{},
@@ -4218,13 +4217,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
 	olderSummary := ""
 	sessionThread := ""
-	summaryRecompressed := false
-	var threadUsage contextLayerUsage
 	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
 		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
 		// 要用它判断「有没有更早的上下文」，预取到组装阶段才收就晚了。
-		olderSummary = r.contextSummary(event)
+		olderSummary = r.compactionSummary(event)
 		// event 到这里已经不会再被改写，三层要查存储层的只读上下文可以并发预取；
 		// 下面建工具表和跑意图路由的时间正好用来等它们。
 		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship, agentCanFetchMedia)
@@ -4461,30 +4458,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
-			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(sessionThreadPromptPrefix)
-			// 便签只有一条，没有排序阶段：候选就是它本身，装不下只会被截短。
-			threadUsage = contextLayerUsage{
-				Layer:           "session_thread",
-				Budget:          threadBudget,
-				CandidateItems:  1,
-				CandidateTokens: llm.EstimateTextTokens(thread),
-				RankedItems:     1,
-				RankedTokens:    llm.EstimateTextTokens(thread),
-				Reason:          contextLayerReasonFits,
-			}
-			if thread = fitSessionThreadToBudget(thread, threadBudget); thread != "" {
-				threadUsage.SelectedItems = 1
-				threadUsage.SelectedTokens = llm.EstimateTextTokens(thread)
-				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
-					threadUsage.Reason = contextLayerReasonBudget
-				}
-				volatile = append(volatile, llm.Message{
-					Role:       llm.RoleUser,
-					Content:    sessionThreadPromptPrefix + thread,
-					Priority:   llm.MessagePrioritySummary,
-					AtomicText: true,
-				})
-			}
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    sessionThreadPromptPrefix + thread,
+				Priority:   llm.MessagePrioritySummary,
+				AtomicText: true,
+			})
 		}
 		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
 			volatile = append(volatile, llm.Message{
@@ -4499,17 +4478,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:       llm.RoleUser,
 				Content:    sources,
 				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
-		const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
-		summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
-		olderSummary, summaryRecompressed = r.promptContextSummary(event, sessionThread, summaryBudget)
-		if olderSummary != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    summaryPrefix + olderSummary,
-				Priority:   llm.MessagePrioritySummary,
 				AtomicText: true,
 			})
 		}
@@ -4537,6 +4505,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		stableHistory = compactHistoryLineDates(stableHistory)
 		if mediaIndexMessage != nil {
 			messages = append(messages, *mediaIndexMessage)
+		}
+		// 历史开头：压缩过就是摘要，没压缩过写明历史从哪一刻开始载入（见 context_compaction.go）。
+		if header, ok := compactionHeaderMessage(olderSummary, replyHistory); ok {
+			messages = append(messages, header)
 		}
 		messages = append(messages, stableHistory...)
 		volatile = append(volatile, crossGroupTail...)
@@ -4705,7 +4677,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
+	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
+	compacted := ""
+	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry)) > compactionThreshold(r.promptCompactionWindow(event, cfg)) {
+		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
+			messages, replyHistory = next, kept
+			compacted = "threshold"
+		}
+	}
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, compacted, semanticReferenceContext, semanticContext)
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -4726,6 +4706,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx, deferredTone := withDeferredReplyTone(ctx)
 	defer deferredTone.stop()
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+	// 供应商（或本地校验）报上下文超限：照 Pi 压缩一次再重试，只试一次。
+	if llm.IsContextOverflowError(err) && compacted == "" && !authoritativePluginContext && !hasExternalSideEffect(ctx) {
+		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "overflow", &dependencyIndex); ok {
+			messages, replyHistory = next, kept
+			compacted = "overflow"
+			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
+		}
+	}
 	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
 		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
 		// 图段丢了）。别把这句发出去，换成识图描述重来一次。
@@ -5003,9 +4991,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	// 没有入站 worker 的上下文，必须在这里按事件恢复 profile 和用量归属。
 	ctx = withLLMUsageContext(ctx, event)
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)
-	// Agent 每一步都带着完整原件重发，预算层丢过的历史、摘要过的文字要记到这一整次
-	// 回复结束，下一步才能照搬，而不是每步从头裁、从头摘要（见 input_budget_pretrim.go）。
-	ctx = withInputBudgetRun(ctx)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
@@ -5111,7 +5096,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, appendContextLimit(cfg.requestContextLimit()), cfg.prompt(promptNoteGroupBrevitySpec))
+			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)), cfg.prompt(promptNoteGroupBrevitySpec))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
@@ -5586,7 +5571,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "reply_intent_router")
 	payload := r.visualIntentPayloadForContext(ctx, event, text)
 	if registry != nil {
-		payload.AvailableTools = registry.Catalog(180)
+		payload.AvailableTools = registry.Catalog()
 		payload.OlderSummaryAvailable = olderSummaryAvailable
 	}
 	payloadJSON, err := json.Marshal(payload)
@@ -6488,7 +6473,6 @@ func (r *Runtime) enrichForwardMessages(ctx context.Context, event MessageEvent)
 type pendingForwardExpansion struct {
 	id     string
 	parent string
-	depth  int
 }
 
 func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEvent, segments []MessageSegment, rawMessage string) ([]MessageSegment, string) {
@@ -6505,8 +6489,8 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 	for _, id := range ids {
 		queue = append(queue, pendingForwardExpansion{id: id})
 	}
+	// 不限层数和次数：seen 记下入队过的 id，同一个 id 只取一次，套成环也会停。
 	seen := make(map[string]struct{}, len(ids))
-	fetched := 0
 	for len(queue) > 0 {
 		item := queue[0]
 		queue = queue[1:]
@@ -6519,17 +6503,9 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 		if forwardReferenceExpanded(out, item.id) || forwardTextAlreadyExpanded(out, item.id) {
 			continue
 		}
-		if fetched >= maxForwardExpandCount {
-			// 转发能嵌成很深的一棵树，每个节点都是一次 OneBot 调用。到上限就
-			// 停下并留痕，让「内容不全」在日志里看得见，而不是静默截断。
-			r.recordForwardMessageError(ctx, event, item.id,
-				fmt.Errorf("nested forward expansion stopped at %d fetches", maxForwardExpandCount))
-			break
-		}
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": item.id})
 		cancel()
-		fetched++
 		if err != nil {
 			r.recordForwardMessageError(ctx, event, item.id, err)
 			continue
@@ -6551,20 +6527,17 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 		}
 		out = appendUniqueForwardMedia(out, media)
 		markForwardReferenceExpanded(out, item.id)
-		if item.depth >= maxForwardExpandDepth {
-			continue
-		}
 		for _, nested := range nestedForwardReferenceIDs(data) {
 			if _, ok := seen[nested]; ok {
 				continue
 			}
-			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id, depth: item.depth + 1})
+			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id})
 		}
 	}
 	if len(lines) == 0 {
 		return out, rawMessage
 	}
-	text := truncateRunesFromStart(strings.Join(lines, "\n\n"), 6000)
+	text := strings.Join(lines, "\n\n")
 	if strings.TrimSpace(rawMessage) == "" {
 		rawMessage = text
 	} else {
@@ -6650,14 +6623,6 @@ func replyReferenceIDs(segments []MessageSegment) []string {
 	}
 	return out
 }
-
-const (
-	// maxForwardExpandDepth 限制转发套转发的展开层数，maxForwardExpandCount
-	// 限制一条消息总共能触发多少次 get_forward_msg。两者一起兜住恶意或意外
-	// 的深层嵌套：没有上限时，一张层层嵌套的卡片能把一次入站拖成几十次调用。
-	maxForwardExpandDepth = 3
-	maxForwardExpandCount = 8
-)
 
 // nestedForwardReferenceIDs 从一次 get_forward_msg 的返回里，找出还需要再取一次
 // 才能拿到内容的转发引用。
@@ -6957,36 +6922,6 @@ func quotedMessageFromOneBotData(data map[string]any, fallbackID string) *Quoted
 
 func stringFromAny(value any) string {
 	return strings.TrimSpace(stringifyID(value))
-}
-
-// mergeContextSummary 把新压缩掉的历史并进已有摘要，并维护摘要的水位标识。
-// 超出上限时按整行丢弃最旧的记录：按字符截断会把某一条记录切成半句，让模型
-// 读到一个没有主语或没有结论的片段。
-func mergeContextSummary(existing string, events []MessageEvent) string {
-	header, lines := splitContextSummary(existing)
-	start, count := parseContextSummaryHeader(header)
-	end := ""
-	for _, event := range events {
-		line := compactContextEvent(event)
-		if line == "" {
-			continue
-		}
-		lines = append(lines, line)
-		count++
-		label := contextSummaryTimeLabel(event.Time, profileLocation(event.ProfileID))
-		if start == "" {
-			start = label
-		}
-		end = label
-	}
-	if end == "" {
-		_, endFromHeader, found := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(header, contextSummaryHeaderPrefix), "】"), " ~ ")
-		if found {
-			end, _, _ = strings.Cut(endFromHeader, "，共 ")
-		}
-	}
-	rebuilt := contextSummaryHeader(start, end, count)
-	return joinContextSummary(rebuilt, dropOldestContextSummaryLines(rebuilt, lines, contextSummaryMaxRunes))
 }
 
 func compactContextEvent(event MessageEvent) string {
@@ -8387,14 +8322,12 @@ func (r *Runtime) remember(event MessageEvent) {
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	r.mu.Unlock()
 	session := sessionKey(event)
-	// Group context lives for a token-budget epoch, not just RecentContextLimit
-	// messages. Keep enough raw events even when there is no durable store.
+	// 群的内存缓冲要装得下锚之后的全部历史，没有持久存储时它就是唯一来源。
 	groupLimit := 0
 	if event.Kind == EventKindGroup {
 		cfg := r.effectiveConfigForEvent(event)
-		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg)))
+		groupLimit = historyCandidateLimit(r.promptCompactionWindow(event, cfg))
 	}
-	var compressed []MessageEvent
 	r.mu.Lock()
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	session = sessionKey(event)
@@ -8431,22 +8364,18 @@ func (r *Runtime) remember(event MessageEvent) {
 	if !replacedInPlace {
 		history = append(history, event)
 	}
+	// 内存里的会话历史攒够 ContextSummaryThreshold 条，就把最早的一批交给后台抽取
+	// 长期记忆，内存里只留 RecentContextLimit 条。它只是缓存：有持久存储时提示词的
+	// 历史从存储读，不受这里影响（见 promptContextHistory）。
 	cfg := r.effectiveConfigForEventLocked(event)
 	limit := cfg.RecentContextLimit
 	if limit <= 0 {
 		limit = 20
 	}
-	threshold := contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold)
-	if len(history) > threshold {
-		compressCount := len(history) - limit
-		if compressCount > 0 {
+	var compressed []MessageEvent
+	if len(history) > contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold) {
+		if compressCount := len(history) - limit; compressCount > 0 {
 			compressed = append([]MessageEvent(nil), history[:compressCount]...)
-			r.contextSummaries[session] = mergeContextSummary(r.contextSummaries[session], compressed)
-			for _, item := range compressed {
-				if item.Time > r.contextSummaryMarks[session] {
-					r.contextSummaryMarks[session] = item.Time
-				}
-			}
 			history = history[compressCount:]
 		}
 	}
@@ -8479,7 +8408,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	}
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
-	// 彻底休眠的群只在本地合并摘要，不排模型摘要任务。
+	// 彻底休眠的群不排模型摘要任务。
 	if len(compressed) > 0 && !r.groupDormant(event) {
 		r.enqueueContextSummary(session, compressed)
 	}
@@ -8560,32 +8489,6 @@ func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.backlogProactive = nil
 	event.backlogHeld = false
 	return event
-}
-
-func (r *Runtime) contextSummary(event MessageEvent) string {
-	session := sessionKey(event)
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.structuredMemory != nil {
-		// Structured, LLM-generated summaries are persisted and retrieved through
-		// memoryContext. The old raw concatenation remains only as a fallback for
-		// deployments without a structured memory store.
-		return ""
-	}
-	return strings.TrimSpace(r.contextSummaries[session])
-}
-
-// contextSummaryWatermarkLocked 返回本会话摘要已经覆盖到的最后一条历史时间。
-// 它与 contextSummary 用同一个开关：结构化记忆接管摘要时不注入摘要，也就没有
-// 重复注入的问题，此时不应该反过来把存储层的历史裁掉。
-func (r *Runtime) contextSummaryWatermarkLocked(session string) int64 {
-	if r.structuredMemory != nil {
-		return 0
-	}
-	if strings.TrimSpace(r.contextSummaries[session]) == "" {
-		return 0
-	}
-	return r.contextSummaryMarks[session]
 }
 
 // record 记录状态页最近事件。

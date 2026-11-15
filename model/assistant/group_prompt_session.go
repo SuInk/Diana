@@ -20,51 +20,20 @@ import (
 // persist retrieved memories, private thread state, credentials or tool objects.
 // The archive remains authoritative for edits, deletions and context resets.
 type GroupPromptSession struct {
-	Generation  int64    `json:"generation"`
-	Anchor      string   `json:"anchor,omitempty"`
-	Checkpoint  string   `json:"checkpoint,omitempty"`
-	LoadedTools []string `json:"loaded_tools,omitempty"`
+	Generation int64  `json:"generation"`
+	Anchor     string `json:"anchor,omitempty"`
+	Checkpoint string `json:"checkpoint,omitempty"`
+	// CheckpointUntil 是压缩摘要覆盖到的最后一条消息的时间（Unix 秒）。锚丢了时靠它
+	// 找回摘要之后的那段，不让中间留空档，见 context_compaction.go。
+	CheckpointUntil int64 `json:"checkpoint_until,omitempty"`
+	// CheckpointUntilKey 是被摘要的最后一条消息的去重键。时间只精确到秒，同一秒里的
+	// 几条要靠它分清哪条已经进了摘要。
+	CheckpointUntilKey string   `json:"checkpoint_until_key,omitempty"`
+	LoadedTools        []string `json:"loaded_tools,omitempty"`
 	// ToolLastUsed 记着每个已加载工具最近一次加载或调用的时间（Unix 秒），
 	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
 	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`
 	History      []GroupPromptHistoryEntry `json:"history,omitempty"`
-}
-
-// promptContextSummary reads the source at assembly time, not the earlier routing
-// snapshot. Taking the session lock before reading prevents an older request from
-// publishing its checkpoint after a newer one. Store I/O never holds r.mu.
-func (r *Runtime) promptContextSummary(event MessageEvent, sessionThread string, budget int64) (string, bool) {
-	s := r.groupPromptSession(event)
-	r.mu.RLock()
-	if s != nil {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.invalidated {
-			r.mu.RUnlock()
-			return "", false
-		}
-	}
-	var summary string
-	if r.structuredMemory == nil && strings.TrimSpace(sessionThread) == "" {
-		var present bool
-		summary, present = r.contextSummaries[sessionKey(event)]
-		if !present && s != nil {
-			summary = s.data.Checkpoint
-		}
-	}
-	summary, recompressed := r.fitOlderSummaryToBudget(rawMessageWithoutImagePlaceholders(summary), budget)
-	changed := s != nil && s.data.Checkpoint != summary
-	if changed {
-		s.data.Checkpoint = summary
-	}
-	r.mu.RUnlock()
-	if changed {
-		s.saveLocked()
-		if s.invalidated {
-			return "", false
-		}
-	}
-	return summary, recompressed
 }
 
 type GroupPromptHistoryEntry struct {
@@ -341,13 +310,6 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range previous {
 		old[entry.Key] = entry
 	}
-	var localHistory []MessageEvent
-	for _, item := range history {
-		if !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
-			localHistory = append(localHistory, item)
-		}
-	}
-	groups, recent := historyContextMetadata(localHistory, event.Time, cfg.BotAccount)
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
@@ -418,10 +380,8 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range next {
 		for _, message := range entry.Messages {
 			message.Priority = llm.MessagePriorityHistory
-			if recent[entry.Key] {
-				message.Priority = llm.MessagePriorityRecentHistory
-			}
-			message.ContextGroup = groups[entry.Key]
+			// 压缩时按这个标记把被摘要的历史原文从请求里摘掉，见 applyCompactionToMessages。
+			message.ContextGroup = historyContextGroupPrefix + entry.Key
 			stable = append(stable, message)
 		}
 	}

@@ -176,19 +176,21 @@ func (t *verboseTool) Description() string {
 	return "第一句说明工具用途。" + strings.Repeat("后续是只有工具定义才需要携带的详细行为规则。", 30)
 }
 
-func TestSystemPromptCatalogDoesNotRepeatFullDescriptions(t *testing.T) {
+func TestSystemPromptCatalogKeepsFullDescriptions(t *testing.T) {
 	registry := NewToolRegistry(&verboseTool{countingTool{name: "verbose"}})
 	catalog := registry.SystemPromptCatalog()
-	full := registry.Descriptions()
-	if len([]rune(catalog)) >= len([]rune(full)) {
-		t.Fatalf("目录没有比完整清单更短: %d vs %d", len([]rune(catalog)), len([]rune(full)))
+	description := (&verboseTool{}).Description()
+	if !strings.Contains(catalog, "verbose") || !strings.Contains(catalog, description) {
+		t.Fatalf("目录把描述截短了: %s", catalog)
 	}
-	if !strings.Contains(catalog, "verbose") || !strings.Contains(catalog, "第一句说明工具用途") {
-		t.Fatalf("目录丢掉了工具身份: %s", catalog)
+	if items := registry.Catalog(); len(items) != 1 || items[0].Description != description {
+		t.Fatalf("路由目录把描述截短了: %#v", items)
 	}
-	// 权威文本仍然通过工具定义送达模型。
+	if line := deferredCatalogLine(&verboseTool{countingTool{name: "verbose"}}); !strings.Contains(line, description) {
+		t.Fatalf("按需目录把描述截短了: %s", line)
+	}
 	definitions := registry.Definitions()
-	if len(definitions) != 1 || definitions[0].Description != (&verboseTool{}).Description() {
+	if len(definitions) != 1 || definitions[0].Description != description {
 		t.Fatalf("工具定义丢掉了完整描述: %#v", definitions)
 	}
 }

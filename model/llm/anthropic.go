@@ -65,7 +65,7 @@ func (c *anthropicClient) Generate(ctx context.Context, req GenerateRequest) (re
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
 	}
-	req = applyContextBudget(req, c.cfg)
+	req = applyContextLimit(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
@@ -141,7 +141,7 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 			streamEvents = scopeContinuationEvents(ctx, streamEvents, continuationScope(c.cfg, req.Model))
 		}
 	}()
-	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
+	req = applyContextLimit(req.withDefaults(c.cfg), c.cfg)
 	if messagesHaveInputAudio(req.Messages) {
 		return nil, fmt.Errorf("llm: Anthropic provider does not support Diana input_audio messages")
 	}

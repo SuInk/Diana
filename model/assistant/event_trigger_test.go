@@ -320,3 +320,12 @@ func TestEventTriggerFiresThroughInboundPipeline(t *testing.T) {
 		return false
 	})
 }
+
+// 投递给创建者的通知带触发消息全文，不截摘录。
+func TestEventTriggerOriginNoticeCarriesFullMessage(t *testing.T) {
+	long := strings.Repeat("触发消息的完整内容，", 40)
+	notice := eventTriggerOriginNotice(EventTrigger{}, MessageEvent{UserID: "10001", SenderName: "小明", GroupID: "20001"}, long, "正文")
+	if !strings.Contains(notice, "「"+strings.TrimSpace(long)+"」") {
+		t.Fatalf("触发消息被截短：%q", notice)
+	}
+}

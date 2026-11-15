@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -185,5 +186,22 @@ func TestFeedToolLikesAsBot(t *testing.T) {
 	}
 	if len(store.likes) != 2 || store.likes[0] != "bot:p1:true" || store.likes[1] != "bot:p1:false" {
 		t.Fatalf("likes = %#v", store.likes)
+	}
+}
+
+// 动态正文和整串评论都原样带给模型，不截正文、不只留最近几条评论。
+func TestFeedReplyPromptKeepsWholePostAndThread(t *testing.T) {
+	post := FeedPost{Kind: FeedKindDiary, Content: strings.Repeat("今天的日记写得很长。", 300)}
+	for i := range 30 {
+		post.Comments = append(post.Comments, FeedComment{AuthorKind: FeedAuthorAdmin, Content: fmt.Sprintf("第%02d条评论", i)})
+	}
+	prompt := feedReplyPrompt(post, post.Comments[29])
+	if !strings.Contains(prompt, post.Content) {
+		t.Fatal("动态正文被截短")
+	}
+	for _, want := range []string{"第00条评论", "第29条评论"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("评论区缺少 %s", want)
+		}
 	}
 }

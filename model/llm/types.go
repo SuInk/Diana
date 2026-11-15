@@ -70,7 +70,7 @@ const (
 	// DefaultContextWindowTokens 是模型名和目录都推断不出窗口时的兜底值。
 	// 128K 是当前主流模型的下限（GPT-4o、DeepSeek、Qwen、GLM、Llama 3.1 起皆
 	// 如此），按 16K 兜底等于把现代模型当成 2023 年的模型用。真的跑小窗口本地
-	// 模型时，请求超限会被 ErrContextOverflow 识别并自动收缩重试，同时可以在
+	// 模型时，请求超限会被 ErrContextOverflow 识别，上层压缩后重试，同时可以在
 	// WebUI 的「模型上下文窗口」里填写实际值一劳永逸。
 	DefaultContextWindowTokens int64 = 128000
 	DefaultMaxContextTokens    int64 = 128000
@@ -195,9 +195,9 @@ type GenerateRequest struct {
 	// ToolChoice 强制本轮只能调用指定名字的工具。为空时保持供应商默认的自动
 	// 选择；不支持强制选择的供应商按自动处理。
 	ToolChoice string `json:"tool_choice,omitempty"`
-	// MaxContextTokens 覆盖配置档的请求上下文上限。上游只在「上一次请求被供应商
-	// 判为超出上下文」后重试时设置它，用来把请求收缩到更保守的预算；为 0 时按
-	// 配置档取值。
+	// MaxContextTokens 覆盖配置档的请求上下文上限，只能收紧：机器人或群显式配了
+	// 单次请求上限时由上层带下来；为 0 时按配置档取值。消息本身不会被裁剪，超出
+	// 时本地校验报 ErrContextOverflow。
 	MaxContextTokens int64 `json:"-"`
 	// Decision 声明这次调用其实是一道结构化判断题，以及答案该摆回输出 JSON 的
 	// 哪个字段。生成文本的供应商忽略它；只做判断的供应商靠它还原出调用方期待的
@@ -807,7 +807,7 @@ func validateGenerateRequest(req GenerateRequest) error {
 	if req.MaxContextTokens > 0 {
 		inputBudget := InputTokenBudget(req.MaxContextTokens, req.MaxOutputTokens)
 		if estimated := EstimateRequestInputTokens(req); estimated > inputBudget {
-			return fmt.Errorf("llm: fixed prompt and current input require about %d tokens but the input budget is %d; increase max_context_tokens or reduce loaded tool schemas/current input", estimated, inputBudget)
+			return fmt.Errorf("%w: request needs about %d input tokens but the context window leaves %d", ErrContextOverflow, estimated, inputBudget)
 		}
 	}
 	return nil

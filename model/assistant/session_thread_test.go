@@ -7,8 +7,6 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/SuInk/diana/model/llm"
 )
 
 func threadRuntime(items []StructuredMemoryItem) (*Runtime, *testStructuredMemoryStore) {
@@ -104,28 +102,5 @@ func TestMemoryContextExcludesThreadFromRetrieval(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("retrieval query did not exclude the thread kind")
-	}
-}
-
-func TestFitSessionThreadToBudgetDropsOldestLines(t *testing.T) {
-	note := "第一行已完结的旧话题\n第二行仍在推进的事\n第三行还悬着的问题"
-	budget := llm.EstimateTextTokens("第一行已完结的旧话题\n第二行仍在推进的事")
-
-	got := fitSessionThreadToBudget(note, budget)
-	if got == "" || strings.Contains(got, "第三行还悬着的问题") {
-		t.Fatalf("trimmed thread = %q", got)
-	}
-	if llm.EstimateTextTokens(got) > budget {
-		t.Fatalf("trimmed thread still exceeds budget: %d > %d", llm.EstimateTextTokens(got), budget)
-	}
-}
-
-func TestFitSessionThreadToBudgetKeepsShortNote(t *testing.T) {
-	note := "正在讨论记忆分层"
-	if got := fitSessionThreadToBudget(note, 4096); got != note {
-		t.Fatalf("short thread was altered: %q", got)
-	}
-	if got := fitSessionThreadToBudget(note, 0); got != "" {
-		t.Fatalf("zero budget should drop the note, got %q", got)
 	}
 }

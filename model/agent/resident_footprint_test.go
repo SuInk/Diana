@@ -53,7 +53,7 @@ func TestExplicitHintSkipsSkillsWhoseBodyShipped(t *testing.T) {
 	})
 	runner := &Runner{cfg: Config{}.WithDefaults(), registry: registry}
 	req := Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "用 $jukebox 和 $ghost"}}}
-	_, delivered := renderSkillsCatalog(SelectSkillBodies(registry.Skills(), SkillScanText(req.Messages, 0)), 8000)
+	_, delivered := renderSkillsCatalog(SelectSkillBodies(registry.Skills(), SkillScanText(req.Messages, 0)))
 	hint := runner.explicitSkillPrompt(req, delivered)
 	if strings.Contains(hint, "jukebox") || !strings.Contains(hint, "ghost") {
 		t.Fatalf("hint = %q delivered = %v", hint, delivered)

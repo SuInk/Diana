@@ -29,9 +29,6 @@ func (r *Runtime) refreshForwardMedia(ctx context.Context, event MessageEvent, s
 		}
 		media, exists := fetched[id]
 		if !exists {
-			if len(fetched) >= maxForwardExpandCount {
-				continue
-			}
 			fetched[id] = nil
 			callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			response, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": id})
