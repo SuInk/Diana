@@ -14,30 +14,39 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const speakerToolPromptMarker = "【当前发言者工具环境】"
+const speakerToolPromptMarker = "【当前发言者工具环境"
 
-// continuationVolatile 处理续接时 Runner 自己的逐轮消息里的发言者工具环境：和前缀里
-// 最近一版逐字相同就省略，不同才发，发出的那份只用于本轮、不进前缀。
+// speakerToolNoteMarker 开头的那一行每轮指明当前发言者适用哪一版工具环境。
+const speakerToolNoteMarker = "【本轮发言者适用的工具环境】"
+
+// isSpeakerToolEnvironment 认出一版发言者工具环境（标题里带这一版的编号）。
+func isSpeakerToolEnvironment(message llm.Message) bool {
+	return message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+" #")
+}
+
+// continuationVolatile 处理续接时 Runner 自己的逐轮消息里的发言者工具环境：前缀里出现
+// 过的那一版不再发；没出现过的追加并留在前缀里。每轮另有一行只用于本轮的说明，指明
+// 当前发言者适用哪一版。
 //
-// 前缀里的那一版是重新组装那一轮留下的基准（之后发的都不进前缀）。生产 234 次完整
-// 组装里这一段连续两次逐字相同占 96%（约 2300 字），每轮都发就每轮都算未命中。按
-// 「最近一版」比而不是「出现过」：前缀里是 A、这一轮是 B 时发 B，换回 A 又和前缀相同。
+// 工具环境随发言者身份变（主人、管理员、成员各一版），一个群里通常只有两到五版。以前
+// 和前缀里最近一版不同就整块只发当轮：生产 11-14～15 每轮平均重发约 3K 字，换个人说话
+// 就再发一次。现在每一版在会话里只发一次。
 func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Message {
-	var latest string
+	seen := map[string]bool{}
 	for _, messages := range [][]llm.Message{prefix, appended} {
 		for _, message := range messages {
-			if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
-				latest = message.Content
+			if isSpeakerToolEnvironment(message) {
+				seen[message.Content] = true
 			}
 		}
 	}
 	out := make([]llm.Message, 0, len(volatile))
 	for _, message := range volatile {
-		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
-			if latest == message.Content {
+		if isSpeakerToolEnvironment(message) {
+			if seen[message.Content] {
 				continue
 			}
-			message.TurnOnly = true
+			message.TurnOnly = false
 		}
 		out = append(out, message)
 	}

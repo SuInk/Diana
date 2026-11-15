@@ -4316,10 +4316,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
 	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
-	// 图片任务通知和可提及成员名单都随这条消息变：并进尾部那条 system 消息。
-	// 【主人】只在主人出现在这一轮的历史或当前消息里时才有，排在候选名单前面：
-	// 续接按「【」开头的行切段，后面紧跟新段，不会粘上随消息变的行。
-	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, ownerAccountPrompt(cfg, event, replyHistory), r.replyMentionPrompt(cfg, event, replyHistory))
+	// 图片任务通知随这条消息变：并进尾部那条 system 消息。【主人】只在主人出现在这
+	// 一轮的历史或当前消息里时才有。可提及成员名单单独成一条，续接时只追加新成员（见
+	// appendOnlyList）。
+	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, ownerAccountPrompt(cfg, event, replyHistory))
+	mentionList := r.replyMentionPrompt(cfg, event, replyHistory)
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
 	if ruleMatched && strings.TrimSpace(ruleDecision.Rule.LLMProfileID) != "" {
 		ctx = context.WithValue(ctx, replyRuleContextKey{}, strings.TrimSpace(ruleDecision.Rule.LLMProfileID))
@@ -4362,14 +4363,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
 			// 块头（发言者、画像）同一个人连着几轮都一样，续接时和前缀相同就不发；检索到
-			// 的条目按当前消息现查、每轮不同，只给这一轮用，不进续接的前缀（见
-			// splitRetrievedMemory）。
+			// 的条目进前缀，续接时只追加前缀里还没有的（见 unsentListItems）。
 			head, retrieved := splitRetrievedMemory(memoryContext)
 			if head != "" {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
 			}
 			if retrieved != "" {
-				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory, TurnOnly: true})
+				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory})
 			}
 		}
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
@@ -4658,6 +4658,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Content:  systemTail,
 			Priority: llm.MessagePrioritySystem,
 		})
+	}
+	if mentionList != "" {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
 	}
 	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		// 时钟每轮都不同，只用于本轮：重新组装那一轮的时间不留在续接的前缀里。
@@ -6145,10 +6148,8 @@ func formatApproximateAge(age time.Duration) string {
 }
 
 type replyMentionCandidate struct {
-	UserID        string `json:"user_id"`
-	DisplayName   string `json:"display_name,omitempty"`
-	CurrentSender bool   `json:"current_sender,omitempty"`
-	Source        string `json:"source,omitempty"`
+	UserID      string
+	DisplayName string
 }
 
 // currentSenderMentionRule 说明当前发言者这一位由谁来 @。三档说的是三件不同的事，
@@ -6191,7 +6192,7 @@ func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEv
 	displayNames := messageParticipantDisplayNames(identityEvents...)
 	candidates := make([]replyMentionCandidate, 0, 12)
 	indexes := make(map[string]int)
-	add := func(userID, displayName string, current bool, source string) {
+	add := func(userID, displayName string) {
 		userID = strings.TrimSpace(userID)
 		if userID == "" || userID == botID {
 			return
@@ -6200,30 +6201,24 @@ func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEv
 			if candidates[index].DisplayName == "" {
 				candidates[index].DisplayName = strings.TrimSpace(displayName)
 			}
-			candidates[index].CurrentSender = candidates[index].CurrentSender || current
 			return
 		}
 		indexes[userID] = len(candidates)
-		candidates = append(candidates, replyMentionCandidate{
-			UserID:        userID,
-			DisplayName:   strings.TrimSpace(displayName),
-			CurrentSender: current,
-			Source:        source,
-		})
+		candidates = append(candidates, replyMentionCandidate{UserID: userID, DisplayName: strings.TrimSpace(displayName)})
 	}
 
-	add(event.UserID, firstNonEmpty(displayNames[event.UserID], event.SenderName), true, "current_sender")
+	add(event.UserID, firstNonEmpty(displayNames[event.UserID], event.SenderName))
 	for _, userID := range mentionedUserIDs(event.Segments) {
-		add(userID, displayNames[userID], false, "mentioned_in_current_message")
+		add(userID, displayNames[userID])
 	}
 	if event.Quoted != nil {
-		add(event.Quoted.UserID, firstNonEmpty(displayNames[event.Quoted.UserID], event.Quoted.SenderName), false, "quoted_message_sender")
+		add(event.Quoted.UserID, firstNonEmpty(displayNames[event.Quoted.UserID], event.Quoted.SenderName))
 	}
 	for index := len(history) - 1; index >= 0 && len(candidates) < 20; index-- {
 		item := history[index]
-		add(item.UserID, firstNonEmpty(displayNames[item.UserID], item.SenderName), false, "recent_participant")
+		add(item.UserID, firstNonEmpty(displayNames[item.UserID], item.SenderName))
 		for _, userID := range mentionedUserIDs(item.Segments) {
-			add(userID, displayNames[userID], false, "recently_mentioned")
+			add(userID, displayNames[userID])
 		}
 	}
 	return candidates

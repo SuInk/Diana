@@ -158,11 +158,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
 	//
-	// 这一段重新组装那一轮进前缀；续接时和前缀里那一版相同就省略，不同才发、只用于
-	// 本轮（见 continuationVolatile）。volatile 里其余几条（现在几点、这句话命中了哪些
+	// 每一版在会话里只发一次：重新组装那一轮进前缀，续接时前缀里有过的就省略，没有的
+	// 追加并留在前缀里；另有一行只用于本轮的说明指明当前发言者适用哪一版（见
+	// continuationVolatile）。volatile 里其余几条（现在几点、这句话命中了哪些
 	// skill）每轮都变，源头就标成只用于本轮。
 	if speaker := r.speakerToolPrompt(); speaker != "" {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: speaker, Priority: llm.MessagePrioritySystem})
+		id := shortFingerprint([]byte(speaker))
+		volatile = append(volatile,
+			llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + speaker, Priority: llm.MessagePrioritySystem},
+			llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "这一轮的发言者适用上文「工具环境 #" + id + "」那一段；编号不同的段属于别的发言者，对这位不适用。", Priority: llm.MessagePrioritySystem, TurnOnly: true})
 	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
@@ -1512,9 +1516,9 @@ func (r *Runner) sharedToolPredicate() func(string) bool {
 	}
 }
 
-// speakerToolPrompt 是按发言者变化、放在历史之后的那一段：本轮工具预算、只有这位
-// 发言者才有的按需工具目录和对应规则、这些工具已加载的契约。公共模式（SharedTools
-// 为 nil）下返回空。
+// speakerToolPrompt 是按发言者变化、放在历史之后的那一段的正文：本轮工具预算、只有
+// 这位发言者才有的按需工具目录和对应规则、这些工具已加载的契约。标题和这一版的编号
+// 由调用方加上。公共模式（SharedTools 为 nil）或没有内容时返回空。
 func (r *Runner) speakerToolPrompt() string {
 	if r.cfg.SharedTools == nil {
 		return ""
@@ -1554,7 +1558,7 @@ func (r *Runner) speakerToolPrompt() string {
 			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
 		}
 	}
-	return speakerToolPromptMarker + "\n" + strings.Join(sections, "\n\n")
+	return strings.Join(sections, "\n\n")
 }
 
 // dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、
