@@ -363,23 +363,18 @@ func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 		}
 		t.Fatalf("prefix diverges at rune %d:\nmember: %q\nowner:  %q", i, string(a[max(0, i-80):min(len(a), i+160)]), string(b[max(0, i-80):min(len(b), i+160)]))
 	}
-	if strings.Contains(member, promptTaskRepositoryWatch) {
-		t.Fatal("repository watch rule depends on the speaker and must stay in the tail")
+	// 前缀按工具全集渲染：主人专属的规则也在里面，对谁都是同一份。
+	if !strings.Contains(member, promptTaskRepositoryWatch) {
+		t.Fatal("owner-only rules must be in the shared prefix")
 	}
-	foundTail := false
+	note := ""
 	for _, message := range ownerReq.Messages {
-		foundTail = foundTail || strings.Contains(message.Content, "【当前发言者另有的按需工具】")
+		if strings.HasPrefix(message.Content, "【本轮发言者的工具权限】") {
+			note = message.Content
+		}
 	}
-	if !foundTail {
-		var names []string
-		for _, d := range ownerReq.Tools {
-			names = append(names, d.Name)
-		}
-		for i, m := range ownerReq.Messages {
-			c := []rune(m.Content)
-			t.Logf("%d %s %q", i, m.Role, string(c[:min(len(c), 80)]))
-		}
-		t.Fatalf("owner tail lost the speaker tool section; tools=%v", names)
+	if !strings.Contains(note, "都能用") {
+		t.Fatalf("owner permission note = %q", note)
 	}
 }
 

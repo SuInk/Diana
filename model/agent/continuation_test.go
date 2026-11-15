@@ -24,7 +24,7 @@ func continuationTestMessages(current string) []llm.Message {
 // 第二轮续接时，发出的请求必须以第一轮的记录逐条开头，后面才是新内容，当前消息最后。
 func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, SharedTools: map[string]bool{}}, NewToolRegistry())
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, HeadRegistry: NewToolRegistry(&describedTool{"coding", "仅主人"})}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,19 +66,18 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if sent[len(sent)-1].Content != "第二问" {
 		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
 	}
-	// 发言者工具环境在重新组装那一轮进前缀；第二轮和它相同，不再发，整份请求里只有
-	// 前缀里的那一份。时钟每轮都变，不进前缀。
-	environments := 0
+	// 本轮发言者的工具权限每轮一行、只用于本轮：请求里只有这一轮的那一行，不进前缀。
+	notes := 0
 	for _, message := range sent {
-		if isSpeakerToolEnvironment(message) {
-			environments++
-			if message.TurnOnly {
-				t.Fatalf("the environment kept from the prefix must not be turn-only: %#v", message)
+		if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) {
+			notes++
+			if !message.TurnOnly || !strings.Contains(message.Content, "coding") {
+				t.Fatalf("permission note = %#v", message)
 			}
 		}
 	}
-	if environments != 1 {
-		t.Fatalf("unchanged environment repeated: %d blocks", environments)
+	if notes != 1 {
+		t.Fatalf("permission notes in the request: %d", notes)
 	}
 	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
 		for _, message := range transcript {
@@ -86,39 +85,6 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 				t.Fatalf("turn-only state leaked into the prefix: %#v", message)
 			}
 		}
-	}
-}
-
-// 发言者工具环境每一版在会话里只发一次：前缀或本轮已追加的内容里有过就省略，没有
-// 的追加并留在前缀里（不是只用于本轮）。别的逐轮消息不受影响。
-func TestContinuationVolatileSendsEachEnvironmentOnce(t *testing.T) {
-	env := func(id string) llm.Message {
-		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + id}
-	}
-	a, b := env("A"), env("B")
-	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now", TurnOnly: true}
-	note := llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "B", TurnOnly: true}
-	for _, tc := range []struct {
-		name                             string
-		prefix, appended, volatile, want []llm.Message
-	}{
-		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
-		{"new version is kept", []llm.Message{a}, nil, []llm.Message{b, note, clock}, []llm.Message{b, note, clock}},
-		{"older version still in the prefix", []llm.Message{a}, []llm.Message{b}, []llm.Message{a}, []llm.Message{}},
-		{"no baseline", nil, nil, []llm.Message{a}, []llm.Message{a}},
-		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
-		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{a}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			before := append([]llm.Message(nil), tc.prefix...)
-			got := continuationVolatile(tc.prefix, tc.appended, tc.volatile)
-			if !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("got %#v, want %#v", got, tc.want)
-			}
-			if !reflect.DeepEqual(before, tc.prefix) {
-				t.Fatal("historical prefix mutated")
-			}
-		})
 	}
 }
 

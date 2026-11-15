@@ -14,45 +14,6 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-const speakerToolPromptMarker = "【当前发言者工具环境"
-
-// speakerToolNoteMarker 开头的那一行每轮指明当前发言者适用哪一版工具环境。
-const speakerToolNoteMarker = "【本轮发言者适用的工具环境】"
-
-// isSpeakerToolEnvironment 认出一版发言者工具环境（标题里带这一版的编号）。
-func isSpeakerToolEnvironment(message llm.Message) bool {
-	return message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+" #")
-}
-
-// continuationVolatile 处理续接时 Runner 自己的逐轮消息里的发言者工具环境：前缀里出现
-// 过的那一版不再发；没出现过的追加并留在前缀里。每轮另有一行只用于本轮的说明，指明
-// 当前发言者适用哪一版。
-//
-// 工具环境随发言者身份变（主人、管理员、成员各一版），一个群里通常只有两到五版。以前
-// 和前缀里最近一版不同就整块只发当轮：生产 11-14～15 每轮平均重发约 3K 字，换个人说话
-// 就再发一次。现在每一版在会话里只发一次。
-func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Message {
-	seen := map[string]bool{}
-	for _, messages := range [][]llm.Message{prefix, appended} {
-		for _, message := range messages {
-			if isSpeakerToolEnvironment(message) {
-				seen[message.Content] = true
-			}
-		}
-	}
-	out := make([]llm.Message, 0, len(volatile))
-	for _, message := range volatile {
-		if isSpeakerToolEnvironment(message) {
-			if seen[message.Content] {
-				continue
-			}
-			message.TurnOnly = false
-		}
-		out = append(out, message)
-	}
-	return out
-}
-
 // 只追加续接：下一轮请求 = 上一轮实际发出的请求 + 模型的回复 + 本轮新内容。
 //
 // 经 sub2api 转发的 gpt（ChatGPT Codex 上游）只在两个位置复用缓存：instructions 加
@@ -62,7 +23,7 @@ func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Messag
 // 47.4% → 90.9%，deepseek-flash 72.2% → 91.2%（历史不再随窗口滑动）。
 //
 // 前缀里留的是重新组装那一轮的请求，加之后各轮的新聊天（见 turnTranscript）。续接的
-// 轮次里，每轮都在变的状态（时间、命中的 skill、和前缀不同的发言者工具环境……）和
+// 轮次里，每轮都在变的状态（时间、命中的 skill、本轮发言者的工具权限……）和
 // 一轮里的工具调用、结果都标成只用于本轮（llm.Message.TurnOnly），随当轮请求发出、
 // 不进前缀。以前它们一路留在前缀里：生产统计每轮续接追加的内容里聊天只占三分之一，
 // 约 5 轮就撑到上限被迫重新组装，那一轮缓存不命中、慢约 2 秒。
@@ -183,7 +144,6 @@ func shortFingerprint(data []byte) string {
 // continuationMessages 在前缀后接上本轮追加的消息，Runner 自己的逐轮消息插在当前
 // 消息之前，和完整组装时的位置一致。返回值里前缀末尾的下标用作缓存断点。
 func continuationMessages(continuation *Continuation, volatile []llm.Message) ([]llm.Message, int) {
-	volatile = continuationVolatile(continuation.Prefix, continuation.Append, volatile)
 	messages := make([]llm.Message, 0, len(continuation.Prefix)+len(continuation.Append)+len(volatile))
 	messages = append(messages, continuation.Prefix...)
 	for index := range messages {

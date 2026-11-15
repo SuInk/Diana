@@ -219,7 +219,7 @@ func TestNormalizeFamilyCallMapsMemberSubAction(t *testing.T) {
 // 合并前各群会话里记着的是成员名：恢复加载状态时换成族的契约，只出现一次。
 func TestDeferredLoaderRestoresMemberNamesAsFamily(t *testing.T) {
 	registry, _ := familyTestRegistry()
-	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil)
 	loader.restore([]string{"page_open", "page_click", "page"})
 	if !reflect.DeepEqual(loader.order, []string{"page"}) {
 		t.Fatalf("restored as %v", loader.order)
@@ -227,8 +227,8 @@ func TestDeferredLoaderRestoresMemberNamesAsFamily(t *testing.T) {
 	var contracts []struct {
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(loader.loadedContracts(true)), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
-		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(true), err)
+	if err := json.Unmarshal([]byte(loader.loadedContracts()), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
+		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(), err)
 	}
 	if catalog := loader.catalog(); strings.Contains(catalog, "page_open") || !strings.Contains(catalog, "- page(action: ") {
 		t.Fatalf("deferred catalog = %q", catalog)

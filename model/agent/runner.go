@@ -25,7 +25,10 @@ type Runner struct {
 	cfg      Config
 	registry *ToolRegistry
 	// loader 是本次运行的按需加载状态；Run 开始时新建，一个 Runner 不并发执行 Run。
-	loader        *deferredToolLoader
+	loader *deferredToolLoader
+	// headLoader 按渲染用的工具全集（见 Config.HeadRegistry）生成目录和契约；没设
+	// HeadRegistry 时就是 loader。
+	headLoader    *deferredToolLoader
 	codeModeStore map[string]json.RawMessage
 	codeModeReads map[string]codeModeReadSnapshot
 }
@@ -121,9 +124,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	startedAt := time.Now()
 	hooks := &runHookState{hooks: req.Hooks}
-	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.SharedTools, r.cfg.FeaturedTools)
+	r.newLoaders(req.LoadedTools)
 	if r.loader != nil {
-		r.loader.restore(req.LoadedTools)
 		r.loader.onLoad = req.ToolsLoaded
 	}
 	traceID := strings.TrimSpace(req.TraceID)
@@ -148,7 +150,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
 	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	sharedContracts := r.loader.loadedContractList(true)
+	sharedContracts := r.headLoader.loadedContractList()
 	if contracts := renderLoadedContracts(sharedContracts); contracts != "" {
 		contractMessage = &llm.Message{
 			Role:     llm.RoleUser,
@@ -156,17 +158,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Priority: llm.MessagePrioritySystem,
 		}
 	}
-	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
-	//
-	// 每一版在会话里只发一次：重新组装那一轮进前缀，续接时前缀里有过的就省略，没有的
-	// 追加并留在前缀里；另有一行只用于本轮的说明指明当前发言者适用哪一版（见
-	// continuationVolatile）。volatile 里其余几条（现在几点、这句话命中了哪些
-	// skill）每轮都变，源头就标成只用于本轮。
-	if speaker := r.speakerToolPrompt(); speaker != "" {
-		id := shortFingerprint([]byte(speaker))
-		volatile = append(volatile,
-			llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + speaker, Priority: llm.MessagePrioritySystem},
-			llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "这一轮的发言者适用上文「工具环境 #" + id + "」那一段；编号不同的段属于别的发言者，对这位不适用。", Priority: llm.MessagePrioritySystem, TurnOnly: true})
+	// 工具目录、规则和契约按群里的工具全集渲染，换人说话也不变；本轮发言者能用哪些、
+	// 工具预算多少只写一行，只用于本轮（见 speakerPermissionNote）。
+	if note := r.speakerPermissionNote(); note != "" {
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: note, Priority: llm.MessagePrioritySystem, TurnOnly: true})
 	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
@@ -209,7 +204,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		})
 	}
 	// 联网调研要求逐字不变，只看本轮有没有 web_search，同样放在历史之前。
-	if _, available := r.registry.Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
+	if _, available := r.headTools().Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
 		stableNotes = append(stableNotes, webSearchTurnPolicy)
 	}
 	stableNotesText := strings.Join(stableNotes, "\n\n")
@@ -1380,9 +1375,9 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 	return total
 }
 
-// toolRules 按可用工具生成 Agent 规则。hasTool 决定看哪一份工具集：系统提示词只看公共
-// 工具（见 Config.SharedTools），发言者专属工具的规则由 speakerToolPrompt 放进尾部。
-// withBudget=false 时预算数字不写进规则，它按发言者不同。
+// toolRules 按可用工具生成 Agent 规则。hasTool 看渲染用的工具全集（见
+// Config.HeadRegistry）。withBudget=false 时预算数字不写进规则，它按发言者不同，写在
+// speakerPermissionNote 里。
 func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string {
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
@@ -1396,7 +1391,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行，包括用 tools_execute 封装的调用；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
-	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
+	// 设了上限才写预算；按工具全集渲染时上限按发言者可能不同，写进 speakerPermissionNote。
 	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
 	}
@@ -1506,59 +1501,59 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	return rules
 }
 
-// sharedToolPredicate 判断工具是否在注册表里、且属于公共的那一份。
-func (r *Runner) sharedToolPredicate() func(string) bool {
-	return func(name string) bool {
-		if _, ok := r.registry.Get(name); !ok {
-			return false
-		}
-		return r.cfg.SharedTools == nil || r.cfg.SharedTools[name] || r.loader == nil || r.loader.core[name]
+// headTools 是渲染进前缀的工具全集，见 Config.HeadRegistry。
+func (r *Runner) headTools() *ToolRegistry {
+	if r.cfg.HeadRegistry != nil {
+		return r.cfg.HeadRegistry
+	}
+	return r.registry
+}
+
+// newLoaders 建本次运行的按需加载状态：loader 管本轮发言者的执行，headLoader 按工具
+// 全集渲染目录和契约。loaded 是会话里已经加载过的工具。
+func (r *Runner) newLoaders(loaded []string) {
+	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.FeaturedTools)
+	r.headLoader = r.loader
+	head := r.headTools()
+	if head != r.registry {
+		r.headLoader = newDeferredToolLoader(head, r.cfg.CoreTools, r.cfg.FeaturedTools)
+		r.headLoader.restore(loaded)
+	}
+	if r.loader != nil {
+		r.loader.head = head
+		r.loader.restore(loaded)
 	}
 }
 
-// speakerToolPrompt 是按发言者变化、放在历史之后的那一段的正文：本轮工具预算、只有
-// 这位发言者才有的按需工具目录和对应规则、这些工具已加载的契约。标题和这一版的编号
-// 由调用方加上。公共模式（SharedTools 为 nil）或没有内容时返回空。
-func (r *Runner) speakerToolPrompt() string {
-	if r.cfg.SharedTools == nil {
+// speakerPermissionNotePrefix 是每轮那一行工具权限说明的开头。
+const speakerPermissionNotePrefix = "【本轮发言者的工具权限】"
+
+// speakerPermissionNote 是只用于本轮的一行：工具预算，以及前缀里列出的工具中本轮
+// 发言者用不了的那些。前缀按工具全集渲染（见 Config.HeadRegistry），以前按发言者把
+// 专属工具的目录、规则和契约整段放在历史之后，每换一个权限不同的人说话就追加一整版，
+// 生产 11-15 一个群一小时里涨到 2.7 万字。没设 HeadRegistry 时预算在系统提示词里，
+// 这里不写。
+func (r *Runner) speakerPermissionNote() string {
+	if r.cfg.HeadRegistry == nil {
 		return ""
 	}
-	var sections []string
+	head := r.headTools()
+	var parts []string
 	if r.cfg.MaxSteps > 0 {
-		sections = append(sections, fmt.Sprintf("【本轮工具预算】这一条回复内你最多可调用 %d 次工具（并行的每个调用各算一次）。", r.cfg.MaxSteps))
+		parts = append(parts, fmt.Sprintf("这一条回复内最多可调用 %d 次工具（并行的每个调用各算一次）。", r.cfg.MaxSteps))
 	}
-	if r.loader != nil {
-		if catalog := r.loader.speakerCatalog(); catalog != "" {
-			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，按括号里的签名填参数、用 tools_execute 调用：\n"+catalog)
+	var blocked []string
+	for _, name := range head.PresentedNames() {
+		if _, ok := r.registry.Get(name); !ok {
+			blocked = append(blocked, name)
 		}
 	}
-	shared := r.toolRules(r.sharedToolPredicate(), false)
-	seen := make(map[string]bool, len(shared))
-	for _, rule := range shared {
-		seen[rule] = true
+	if len(blocked) > 0 {
+		parts = append(parts, "上面列出的工具里，这位发言者用不了："+strings.Join(blocked, "、")+"。别调用它们，也别说能替对方做这些事。")
+	} else {
+		parts = append(parts, "上面列出的工具这位发言者都能用。")
 	}
-	all := r.toolRules(func(name string) bool {
-		_, ok := r.registry.Get(name)
-		return ok
-	}, false)
-	var extra []string
-	for _, rule := range all {
-		if !seen[rule] {
-			extra = append(extra, rule)
-		}
-	}
-	if len(extra) > 0 {
-		sections = append(sections, "【当前发言者另有的工具规则】\n"+strings.Join(extra, "\n"))
-	}
-	if extensions := RenderExtensionsPrompt(r.registry.Extensions()); extensions != "" {
-		sections = append(sections, extensions)
-	}
-	if r.loader != nil {
-		if contracts := r.loader.loadedContracts(false); contracts != "" {
-			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
-		}
-	}
-	return strings.Join(sections, "\n\n")
+	return speakerPermissionNotePrefix + strings.Join(parts, "")
 }
 
 // dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、
@@ -1577,8 +1572,12 @@ func (r *Runner) systemPrompt() string {
 	if prompt := strings.TrimSpace(r.cfg.SystemPrompt); prompt != "" {
 		return prompt
 	}
-	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
-	hasTool := r.sharedToolPredicate()
+	head := r.headTools()
+	extensionsPrompt := RenderExtensionsPrompt(head.Extensions())
+	hasTool := func(name string) bool {
+		_, ok := head.Get(name)
+		return ok
+	}
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -1587,7 +1586,7 @@ func (r *Runner) systemPrompt() string {
 		}
 		return false
 	}
-	rules := r.toolRules(hasTool, r.cfg.SharedTools == nil)
+	rules := r.toolRules(hasTool, r.cfg.HeadRegistry == nil)
 	rules = append(rules, "- 已经足够回答时只调 send，发出回复并结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
@@ -1600,19 +1599,19 @@ func (r *Runner) systemPrompt() string {
 		// 联网决策先于收尾协议，避免模型先把观点类问题归入直接回答。
 		sections = append(sections[:1], append([]string{"联网与调研：\n" + webSearchDecisionPolicy}, sections[1:]...)...)
 	}
-	if loader := r.loader; loader != nil {
+	if loader := r.headLoader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
 		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
 	} else {
-		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
+		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+head.SystemPromptCatalog())
 	}
 	// 关掉的工具不在上面的目录里，单独列一段：模型不知道它们存在的话，用户点名要用时
 	// 只会以为自己拼错了名字。这段只随机器人配置变，不影响前缀缓存。
-	if disabled := r.registry.DisabledSummary(); disabled != "" {
+	if disabled := head.DisabledSummary(); disabled != "" {
 		sections = append(sections, disabled)
 	}
-	// 扩展清单按发言者能用的扩展不同（主人看得到全部），共享模式下放进尾部。
-	if extensionsPrompt != "" && r.cfg.SharedTools == nil {
+	// 扩展清单同样按工具全集列出，本轮发言者用不了的由 speakerPermissionNote 说明。
+	if extensionsPrompt != "" {
 		sections = append(sections, extensionsPrompt)
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))

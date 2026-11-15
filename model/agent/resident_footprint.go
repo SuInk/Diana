@@ -23,7 +23,7 @@ func (r *Runner) ResidentFootprint() ResidentFootprint {
 		return ResidentFootprint{}
 	}
 	probe := *r
-	probe.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.SharedTools, r.cfg.FeaturedTools)
+	probe.newLoaders(nil)
 	catalog, _ := renderSkillsCatalog(SelectSkillBodies(r.registry.Skills(), ""))
 	return ResidentFootprint{
 		SystemPrompt:  probe.systemPrompt(),

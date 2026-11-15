@@ -208,11 +208,12 @@ func finalizeAction(calls []llm.ToolCall, text string) llmAction {
 
 // turnDefinitions is independent of loaded tools, claim IDs, sources and image state.
 func (r *Runner) turnDefinitions(imagePending bool) []llm.ToolDefinition {
-	definitions := r.registry.Definitions()
+	// 按工具全集给定义（见 Config.HeadRegistry）：常驻工具的定义换人说话也不变。
+	definitions := r.headTools().Definitions()
 	if len(definitions) == 0 {
 		return nil
 	}
-	definitions = r.loader.filter(definitions)
+	definitions = r.headLoader.filter(definitions)
 	return append(definitions, finalizeToolDefinition(imagePending, r.cfg.FinalizeFields...))
 }
 

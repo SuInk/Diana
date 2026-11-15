@@ -29,15 +29,16 @@ const maxLoadedContractChars = 128 * 1024
 type deferredToolLoader struct {
 	registry *ToolRegistry
 	core     map[string]bool
-	// shared 为 nil 时所有工具都算公共；见 Config.SharedTools。
-	shared   map[string]bool
+	// head 是渲染进前缀的工具全集（见 Config.HeadRegistry）：里面有、本轮发言者的注册表
+	// 里没有的工具，调用时按没有权限报错，不说「不存在」。
+	head     *ToolRegistry
 	featured map[string]bool
 	loaded   map[string]map[string]any
 	order    []string
 	onLoad   func([]string)
 }
 
-func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared map[string]bool, featured []string) *deferredToolLoader {
+func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, featured []string) *deferredToolLoader {
 	if registry == nil || len(coreTools) == 0 {
 		return nil
 	}
@@ -53,41 +54,14 @@ func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared ma
 	for _, name := range featured {
 		featuredSet[name] = true
 	}
-	return &deferredToolLoader{registry: registry, core: core, shared: shared, featured: featuredSet, loaded: map[string]map[string]any{}}
+	return &deferredToolLoader{registry: registry, core: core, featured: featuredSet, loaded: map[string]map[string]any{}}
 }
 
-// isShared 判断工具是不是「对谁都一样」的那一份，见 Config.SharedTools。
-func (l *deferredToolLoader) isShared(name string) bool {
-	if l.shared == nil || l.shared[name] {
-		return true
-	}
-	// 工具族的 action 随发言者能用哪些成员而变，只有声明的成员全都是公共的才算公共。
-	family, ok := l.registry.familyByName(name)
-	if !ok {
-		return false
-	}
-	for _, member := range family.Members {
-		if !l.shared[member.Tool] {
-			return false
-		}
-	}
-	return true
-}
-
-// catalog 列出公共的非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
+// catalog 列出非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
 func (l *deferredToolLoader) catalog() string {
-	return l.catalogWhere(true)
-}
-
-// speakerCatalog 列出只有这位发言者才有的按需工具，放在历史之后的尾部。
-func (l *deferredToolLoader) speakerCatalog() string {
-	return l.catalogWhere(false)
-}
-
-func (l *deferredToolLoader) catalogWhere(shared bool) string {
 	var builder strings.Builder
 	for _, name := range l.registry.PresentedNames() {
-		if l.core[name] || l.isShared(name) != shared {
+		if l.core[name] {
 			continue
 		}
 		tool, ok := l.registry.Get(name)
@@ -158,7 +132,7 @@ type loadedContract struct {
 
 // loadedContractList 按加载顺序列出已加载工具的完整契约。shared=true 只收公共工具（放在
 // 历史之前），shared=false 只收发言者专属的（放在尾部）。当前发言者用不了的工具不在内。
-func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
+func (l *deferredToolLoader) loadedContractList() []loadedContract {
 	if l == nil || len(l.order) == 0 {
 		return nil
 	}
@@ -169,9 +143,6 @@ func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
 	}
 	contracts := make([]loadedContract, 0, len(l.order))
 	for _, name := range l.order {
-		if l.isShared(name) != shared {
-			continue
-		}
 		tool, ok := l.registry.Get(name)
 		if !ok {
 			continue
@@ -186,8 +157,8 @@ func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
 }
 
 // loadedContracts 把 loadedContractList 渲染成一个 JSON 数组，没有契约时返回空串。
-func (l *deferredToolLoader) loadedContracts(shared bool) string {
-	return renderLoadedContracts(l.loadedContractList(shared))
+func (l *deferredToolLoader) loadedContracts() string {
+	return renderLoadedContracts(l.loadedContractList())
 }
 
 func renderLoadedContracts(contracts []loadedContract) string {
@@ -328,6 +299,11 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
+	if l.head != nil && l.head != l.registry {
+		if _, listed := l.head.Get(name); listed {
+			return deniedToolError(name)
+		}
+	}
 	return fmt.Errorf("工具 %q 不存在或已禁用；请对照目录重新填 tool_search 的 names，或改用 query 搜", name)
 }
 
@@ -337,6 +313,11 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 func (l *deferredToolLoader) missingToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
+	}
+	if l.head != nil && l.head != l.registry {
+		if _, listed := l.head.Get(name); listed {
+			return deniedToolError(name)
+		}
 	}
 	if l.isSkill(name) {
 		return fmt.Errorf("%q 是技能，不能直接执行：先 tool_search 它读到 SKILL.md，再按说明调用里面提到的工具", name)

@@ -369,7 +369,7 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 		}
 		for _, message := range prefix {
 			content := appendContextText(message)
-			for _, banned := range []string{"【输出前检查】", "【本轮工具执行状态", appendContextVerifyReminder, "当前运行时钟"} {
+			for _, banned := range []string{"【输出前检查】", "【本轮工具执行状态", appendContextVerifyReminder, "当前运行时钟", "【本轮发言者的工具权限】", "【当前发言者工具环境"} {
 				if strings.Contains(content, banned) {
 					t.Fatalf("turn %d: %q leaked into the prefix: %.200q", index+1, banned, content)
 				}
@@ -378,7 +378,7 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	}
 	// 第一轮的尾部留在前缀里作基准，后面几轮变了的段只给当轮用：每个标题在前缀里始终
 	// 只有第一轮那一版。
-	for _, title := range []string{"【当前消息的对话对象】", "【当前发言者工具环境 #", "【这个群的约定】"} {
+	for _, title := range []string{"【当前消息的对话对象】", "【这个群的约定】"} {
 		count := 0
 		for _, message := range prefixes[2] {
 			count += strings.Count(appendContextText(message), title)

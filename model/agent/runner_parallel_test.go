@@ -211,7 +211,7 @@ func TestParallelWrappedReadsPreserveGuards(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			runner.loader = newDeferredToolLoader(registry, []string{"common"}, nil, nil)
+			runner.loader = newDeferredToolLoader(registry, []string{"common"}, nil)
 			name := search.Name()
 			var input any = map[string]any{"query": "news"}
 			switch kind {

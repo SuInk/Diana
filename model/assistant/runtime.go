@@ -4270,6 +4270,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if agentRegistry != nil {
 		defer agentRegistry.Close()
 	}
+	// 前缀按本群的工具全集渲染（主人口径），换人说话不变；执行照旧用本轮发言者的
+	// 注册表，权限在执行时核验（见 agent.Config.HeadRegistry）。
+	headRegistry := agentRegistry
+	if agentRegistry != nil && fullAgentEnabled && !relationship.toolScope().Owner {
+		if owner, err := r.newReplyAgentRegistry(ctx, cfg, ownerRenderEvent(cfg, event), ownerToolScope(relationship), nil); err != nil {
+			log.Printf("diana head tool registry failed, rendering the speaker's own tools: %v", err)
+		} else {
+			headRegistry = owner
+			defer owner.Close()
+		}
+	}
+	ctx = withHeadAgentRegistry(ctx, headRegistry)
 	directAgentDecision := fullAgentEnabled && agentRegistry != nil
 
 	var agentScope agentReplyScope
@@ -4343,7 +4355,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
+	systemHead, systemTail := r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry, headRegistryForPrompt(agentActive, agentRegistry, headRegistry))
 	// 图片任务通知随这条消息变：并进尾部那条 system 消息。【主人】只在主人出现在这
 	// 一轮的历史或当前消息里时才有。可提及成员名单单独成一条，续接时只追加新成员（见
 	// appendOnlyList）。
@@ -4390,13 +4402,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
 		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			// 块头（发言者、画像）同一个人连着几轮都一样，续接时和前缀相同就不发；检索到
-			// 的条目进前缀，续接时只追加前缀里还没有的（见 unsentListItems）。
+			// 块头（发言者、画像）同一个人连着几轮都一样，续接时和前缀相同就不发。
 			head, retrieved := splitRetrievedMemory(memoryContext)
 			if head != "" {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
 			}
-			if retrieved != "" {
+			// 检索到的条目只在 Agent 没跑（用不了 memory 工具）时带上。以前每轮都追加新检索
+			// 到的条目：生产 11-15 每轮平均 6 千字，一个群一小时里涨到 2.6 万字，把聊天历史
+			// 挤到请求的三成以下。小雪的请求里也没有这一块，记忆由模型自己用 memory 查。
+			if retrieved != "" && !memoryToolAvailable(agentActive, agentRegistry) {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory})
 			}
 		}
@@ -5112,14 +5126,18 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
+		head := headAgentRegistryFrom(ctx, registry)
 		// 图片描述会进提示词、又有缓存可改时才挂上，见 image_fix_tool.go。
 		if r.imageDescriptionsInPrompt(cfg) && r.recallImageDescriptionStore() != nil {
 			registry.Register(newDianaImageFixTool(r, event))
+			if head != registry {
+				head.Register(newDianaImageFixTool(r, event))
+			}
 		}
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
-		agentCfg.SharedTools = r.sharedAgentTools(event)
+		agentCfg.HeadRegistry = head
 		agentCfg.FeaturedTools = replyFeaturedTools
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
@@ -5137,6 +5155,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		// 光在提示词里叮嘱不透露不够：工具在手，被追问两句模型还是会去查。
 		if modelDisclosedTo(cfg, relationship.toolScope().Owner) {
 			registry.Register(newDianaRuntimeModelTool(agentClient, event))
+		}
+		if head != registry && modelDisclosedTo(cfg, true) {
+			head.Register(newDianaRuntimeModelTool(agentClient, event))
 		}
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
@@ -5304,6 +5325,9 @@ var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{
+	// 检索到的记忆不再每轮自动带上（见 memoryToolAvailable），目录里写全描述，模型才会
+	// 想到自己去查。
+	dianaMemoryToolName,
 	dianaPluginMediaToolName,
 	dianaStickerToolName,
 	agent.WebSearchToolName,
@@ -5323,26 +5347,6 @@ var replyFeaturedTools = []string{
 	// subtask 压成一行时只剩「交给隔离 Worker」，看不出什么调研该派；web_search
 	// 写全文能批量并行之后，模型就全用它自己查了。两边都写全文才比得出分工。
 	dianaSubtaskToolName,
-}
-
-// speakerVariantTools 是对非主人开放、但描述随发言者不同的工具：放进公共目录会让
-// 前缀按人分叉，所以和主人专属工具一样放到尾部。
-var speakerVariantTools = []string{
-	dianaGitHubToolName,
-	dianaSubscriptionToolName,
-	dianaCrossSessionToolName,
-	"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs", "browser_screenshot",
-}
-
-// sharedAgentTools 是本群非主人发言者都拿得到、且描述对谁都一样的工具：它们的目录行、
-// 规则和契约放进系统提示词，其余按发言者放到尾部（agent.Config.SharedTools）。
-// 只看群配置、不看本轮发言者，所以同一个群里对谁都是同一份。
-func (r *Runtime) sharedAgentTools(event MessageEvent) map[string]bool {
-	shared := r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
-	for _, name := range speakerVariantTools {
-		delete(shared, name)
-	}
-	return shared
 }
 
 type replyRuleDecision struct {

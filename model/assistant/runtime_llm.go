@@ -859,9 +859,23 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 //
 // 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
 func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
+	return r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, registry, nil)
+}
+
+// systemPromptPartsWithHead 同 systemPromptPartsWithRelationshipAndAgentTools；head 非空
+// 时（主回复，见 agent.Config.HeadRegistry）工具规则按这份工具全集、按主人口径写进
+// head，换人说话不变：谁能用哪些由 Agent 每轮一行的权限说明交代，权限在执行时核验。
+// 只有随发言者身份变的披露规则（模型身份、项目地址）留在尾部。
+func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry, head *agent.ToolRegistry) (string, string) {
 	cfg := r.effectiveConfigForEvent(event)
 	// 工具用法提示跟着工具面走：管理员拿到主人那套工具，提示也按主人给。
 	tools := relationship.toolScope()
+	speakerOwner := tools.Owner
+	speakerRegistry := registry
+	if head != nil {
+		registry = head
+		tools.Owner = true
+	}
 	var builder strings.Builder
 	// tail 收集随发言者权限档位变化的段落（主人专属工具规则、按好感度解锁的日程
 	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
@@ -869,6 +883,11 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	var tail strings.Builder
 	// speakerRules 收随发言者变化的工具规则，在尾部单独成段（见 speakerToolRulesBlock）。
 	var speakerRules strings.Builder
+	// ownerRules 收主人专属工具的规则：按工具全集渲染时进 head，否则随发言者进尾部。
+	ownerRules := &speakerRules
+	if head != nil {
+		ownerRules = &builder
+	}
 	tail.WriteString(addressingPrompt(event, cfg))
 	hasTool := func(name string) bool {
 		if registry == nil {
@@ -911,7 +930,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		shared = r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
 	}
 	place := func(names ...string) *strings.Builder {
-		if shared == nil {
+		if shared == nil || head != nil {
 			return &builder
 		}
 		for _, name := range names {
@@ -953,7 +972,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		builder.WriteString("\n" + cfg.promptf(promptAliasSpec, map[string]string{"aliases": aliases}))
 	}
 	if agentEnabled && tools.Owner && hasTool("llm_config") {
-		speakerRules.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
 	}
 	if agentEnabled && hasTool(dianaGitHubToolName) {
 		place(dianaGitHubToolName).WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
@@ -961,16 +980,16 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
 	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
 	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, tools.Owner) {
-		speakerRules.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaOneBotRequestsToolName) {
-		speakerRules.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaIdentityLinksToolName) {
-		speakerRules.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
 	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
-	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
+	if agentEnabled && speakerOwner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
 		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
 			tail.WriteString("\n" + prompt)
 		}
@@ -983,22 +1002,29 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 		}
 	}
 	if agentEnabled && tools.Owner && hasTool("relationship") {
-		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
 	if agentEnabled && tools.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
 	}
 	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
 	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
-		speakerRules.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
+		ownerRules.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
+	hasSpeakerTool := func(name string) bool {
+		if speakerRegistry == nil {
+			return true
+		}
+		_, ok := speakerRegistry.Get(name)
+		return ok
+	}
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
-	case !everyone && !tools.Owner:
+	case !everyone && !speakerOwner:
 		speakerRules.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
-	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
+	case !agentEnabled || !hasSpeakerTool(dianaRuntimeModelToolName):
 	case everyone:
 		place(dianaRuntimeModelToolName).WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	default:
@@ -1006,7 +1032,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 项目地址不对这个人公开时要明说不给链接，随发言者是不是主人分叉，进 tail；
 	// 只答问到的那一项写在 version 的描述里。
-	if agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone && !tools.Owner {
+	if agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone && !speakerOwner {
 		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	if agentEnabled && hasTool(dianaCodingToolName) {
@@ -1118,8 +1144,8 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	// 关联账号紧跟身份那一行：同一个人在别的平台上是谁，随发言者变，只进尾部。
 	appendPromptSection(&tail, r.linkedIdentityPrompt(event, cfg))
 	// github 工具对全群一份定义，谁有授权、授权到哪些仓库按发言者在这里说。
-	if agentEnabled && registry != nil {
-		if tool, ok := registry.Get(dianaGitHubToolName); ok {
+	if agentEnabled && speakerRegistry != nil {
+		if tool, ok := speakerRegistry.Get(dianaGitHubToolName); ok {
 			if github, ok := tool.(*dianaGitHubTool); ok {
 				appendPromptSection(&tail, github.accessPrompt())
 			}
