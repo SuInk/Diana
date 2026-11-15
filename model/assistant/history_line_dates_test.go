@@ -120,7 +120,7 @@ func TestCompactionRestoresDateOnFirstKeptHistoryLine(t *testing.T) {
 		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: line, ContextGroup: historyContextGroupPrefix + keys[index]})
 	}
 	messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "当前", Priority: llm.MessagePriorityCurrent})
-	out, _ := applyCompactionToMessages(messages, kept, "摘要")
+	out, _ := applyCompactionToMessages(messages, kept, compactionCheckpoint{Summary: "摘要"})
 	var got []string
 	for _, message := range out[1:] {
 		got = append(got, message.Content)

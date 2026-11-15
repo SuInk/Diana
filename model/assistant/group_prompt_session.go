@@ -28,8 +28,11 @@ type GroupPromptSession struct {
 	CheckpointUntil int64 `json:"checkpoint_until,omitempty"`
 	// CheckpointUntilKey 是被摘要的最后一条消息的去重键。时间只精确到秒，同一秒里的
 	// 几条要靠它分清哪条已经进了摘要。
-	CheckpointUntilKey string   `json:"checkpoint_until_key,omitempty"`
-	LoadedTools        []string `json:"loaded_tools,omitempty"`
+	CheckpointUntilKey string `json:"checkpoint_until_key,omitempty"`
+	// CheckpointPendingFrom 是滑出窗口、还没写进摘要的第一条消息的去重键，见
+	// compactionCheckpoint.PendingFrom。
+	CheckpointPendingFrom string   `json:"checkpoint_pending_from,omitempty"`
+	LoadedTools           []string `json:"loaded_tools,omitempty"`
 	// ToolLastUsed 记着每个已加载工具最近一次加载或调用的时间（Unix 秒），
 	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
 	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`

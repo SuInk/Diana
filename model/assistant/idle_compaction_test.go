@@ -37,29 +37,27 @@ func (p *compactionTestProvider) requestCount() int {
 	return len(p.requests)
 }
 
-// 请求超过阈值的 85% 时等会话空闲再压：滑走最旧的原文，留下阈值减非历史部分的一半，
-// 摘要请求带 Pi 的输出上限。
-func TestIdleCompactionSlidesWindowWhenQuiet(t *testing.T) {
-	setIdleCompactionDelay(t, 20*time.Millisecond)
+// 请求超过阈值的 85% 时回复生成完马上滑窗（不调模型），留下阈值减非历史部分的一半；
+// 摘要等会话空闲再补，请求带 Pi 的输出上限。
+func TestSlideAfterReplyThenSummarizeWhenIdle(t *testing.T) {
+	setIdleCompactionDelay(t, 300*time.Millisecond)
 	runtime, provider, current := idleCompactionFixture(t)
-	window := runtime.promptCompactionWindow(current, runtime.effectiveConfigForEvent(current))
+	cfg := runtime.effectiveConfigForEvent(current)
+	window := runtime.promptCompactionWindow(current, cfg)
 	threshold := compactionThreshold(window)
 
-	runtime.noteReplyRequestSize(current, window, threshold*80/100, 4000)
-	time.Sleep(100 * time.Millisecond)
+	if runtime.noteReplyRequestSize(current, window, threshold*80/100) {
+		t.Fatal("must not slide below the trigger")
+	}
+	if !runtime.noteReplyRequestSize(current, window, threshold*90/100) {
+		t.Fatal("must slide after the reply above the trigger")
+	}
+	runtime.slideAfterReply(current, cfg, 4000)
+	waitFor(t, func() bool { return runtime.compactionState(current).PendingFrom != "" })
 	if got := provider.requestCount(); got != 0 {
-		t.Fatalf("compacted below the trigger: %d summary calls", got)
+		t.Fatalf("sliding must not call the model: %d calls", got)
 	}
-
-	runtime.noteReplyRequestSize(current, window, threshold*90/100, 4000)
-	waitFor(t, func() bool { return strings.TrimSpace(runtime.compactionSummary(current)) != "" })
-	provider.mu.Lock()
-	maxTokens := provider.requests[0].MaxOutputTokens
-	provider.mu.Unlock()
-	if want := compactionSummaryMaxTokens(window); maxTokens != want || want <= 0 {
-		t.Fatalf("summary MaxOutputTokens = %d, want %d", maxTokens, want)
-	}
-	kept := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
+	kept := runtime.promptContextHistory(current, cfg)
 	if len(kept) == 0 || kept[0].MessageID == "m-000" {
 		t.Fatalf("anchor did not move: %d events from %q", len(kept), firstMessageID(kept))
 	}
@@ -70,24 +68,60 @@ func TestIdleCompactionSlidesWindowWhenQuiet(t *testing.T) {
 	if keep := compactionKeepRecent(window, 4000); keptTokens < keep/2 {
 		t.Fatalf("kept %d tokens of raw history, want about %d", keptTokens, keep)
 	}
+
+	waitFor(t, func() bool { return strings.TrimSpace(runtime.compactionSummary(current)) != "" })
+	provider.mu.Lock()
+	maxTokens := provider.requests[0].MaxOutputTokens
+	provider.mu.Unlock()
+	if want := compactionSummaryMaxTokens(window); maxTokens != want || want <= 0 {
+		t.Fatalf("summary MaxOutputTokens = %d, want %d", maxTokens, want)
+	}
+	if runtime.compactionState(current).PendingFrom != "" {
+		t.Fatal("the owed summary was not cleared")
+	}
 }
 
-// 有回复在跑、或者会话一直来新消息时不算空闲。
-func TestIdleCompactionWaitsForQuietSession(t *testing.T) {
+// 有回复在跑、或者会话一直来新消息时不算空闲，摘要不写。
+func TestIdleSummaryWaitsForQuietSession(t *testing.T) {
 	setIdleCompactionDelay(t, 50*time.Millisecond)
 	runtime, provider, current := idleCompactionFixture(t)
-	window := runtime.promptCompactionWindow(current, runtime.effectiveConfigForEvent(current))
+	cfg := runtime.effectiveConfigForEvent(current)
+	window := runtime.promptCompactionWindow(current, cfg)
+	if _, _, err := runtime.slideContextWindow(context.Background(), current, cfg, runtime.promptContextHistory(current, cfg), compactionKeepRecent(window, 4000), "threshold"); err != nil {
+		t.Fatal(err)
+	}
 	progress := &replyProgress{messageID: "running"}
 	runtime.registerSessionReplyProgress(sessionKey(current), progress)
-	runtime.noteReplyRequestSize(current, window, compactionThreshold(window)*90/100, 4000)
+	if runtime.noteReplyRequestSize(current, window, 0) {
+		t.Fatal("a small request must not slide")
+	}
 	for range 6 {
 		time.Sleep(25 * time.Millisecond)
 		runtime.postponeIdleCompaction(current)
 	}
 	time.Sleep(120 * time.Millisecond)
 	if got := provider.requestCount(); got != 0 {
-		t.Fatalf("compacted while a reply was running: %d summary calls", got)
+		t.Fatalf("summarized while a reply was running: %d summary calls", got)
 	}
 	runtime.unregisterSessionReplyProgress(sessionKey(current), progress)
 	waitFor(t, func() bool { return provider.requestCount() > 0 })
+}
+
+// 补摘要期间又滑过窗：只补到开始时的锚，新滑走的那段仍记着欠着；检查点被换掉
+// （清空了上下文）时这次结果作废。
+func TestCommitSlidSummaryKeepsLaterSlideOwed(t *testing.T) {
+	runtime, _, current := idleCompactionFixture(t)
+	previous := compactionCheckpoint{Summary: "旧摘要", PendingFrom: "m-010"}
+	runtime.storeCompaction(current, previous, "m-080")
+	next := compactionCheckpoint{Summary: "新摘要", Until: 1, UntilKey: "m-039"}
+	if err := runtime.commitSlidSummary(current, previous, next, "m-040"); err != nil {
+		t.Fatal(err)
+	}
+	state := runtime.compactionState(current)
+	if state.Summary != "新摘要" || state.PendingFrom != "m-040" || runtime.groupPromptSession(current).anchor() != "m-080" {
+		t.Fatalf("state = %+v, anchor %q", state, runtime.groupPromptSession(current).anchor())
+	}
+	if err := runtime.commitSlidSummary(current, previous, next, "m-080"); err != errSummaryStale {
+		t.Fatalf("stale commit err = %v", err)
+	}
 }

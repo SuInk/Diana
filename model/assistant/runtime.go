@@ -652,6 +652,8 @@ type Runtime struct {
 	historyWindowAnchors map[string]string
 	// compactionLocks 让同一个会话同时只有一次压缩，见 context_compaction.go。
 	compactionLocks sync.Map
+	// summaryLocks 让同一个会话同时只有一次补摘要，见 context_compaction.go。
+	summaryLocks sync.Map
 	// idleCompactions 是各会话等着的空闲压缩，见 idle_compaction.go。
 	idleCompactions idleCompactions
 	recent          []EventRecord
@@ -4245,13 +4247,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	r.openDirectReply(ctx)
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
-	olderSummary := ""
+	var olderState compactionCheckpoint
 	sessionThread := ""
 	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
 		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
 		// 要用它判断「有没有更早的上下文」，预取到组装阶段才收就晚了。
-		olderSummary = r.compactionSummary(event)
+		olderState = r.compactionState(event)
 		// event 到这里已经不会再被改写，三层要查存储层的只读上下文可以并发预取；
 		// 下面建工具表和跑意图路由的时间正好用来等它们。
 		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship, agentCanFetchMedia)
@@ -4277,7 +4279,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if routingRegistry == nil {
 			routingRegistry = agent.NewToolRegistry()
 		}
-		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderSummary) != "")
+		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderState.Summary) != "")
 		if routed {
 			agentScope = scope
 		}
@@ -4537,7 +4539,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, *mediaIndexMessage)
 		}
 		// 历史开头：压缩过就是摘要，没压缩过写明历史从哪一刻开始载入（见 context_compaction.go）。
-		if header, ok := compactionHeaderMessage(olderSummary, replyHistory); ok {
+		if header, ok := compactionHeaderMessage(olderState, replyHistory); ok {
 			messages = append(messages, header)
 		}
 		messages = append(messages, stableHistory...)
@@ -4732,8 +4734,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
-	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
-	// 平时压缩挪到会话空闲时做（见 idle_compaction.go），这里只在已经超限时兜底。
+	// 滑窗不调模型（见 idle_compaction.go）：已经超过「窗口 − 预留」就当场滑再发；
+	// 接近阈值时这一轮照发，生成完马上滑，下一轮不用在有人等的时候滑。
 	compacted := ""
 	if !authoritativePluginContext {
 		window := r.promptCompactionWindow(event, cfg)
@@ -4743,8 +4745,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				messages, replyHistory = next, kept
 				compacted = "threshold"
 			}
-		} else {
-			r.noteReplyRequestSize(event, window, total, nonHistory)
+		} else if r.noteReplyRequestSize(event, window, total) {
+			defer r.slideAfterReply(event, cfg, nonHistory)
 		}
 	}
 	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, compacted, semanticReferenceContext, semanticContext)
