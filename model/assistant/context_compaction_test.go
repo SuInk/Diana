@@ -67,6 +67,10 @@ func (p *compactionTestProvider) Generate(_ context.Context, req llm.GenerateReq
 	return &llm.GenerateResponse{Text: p.summary}, nil
 }
 
+// testCompactionKeepRecent 是直接调 compactContext 的测试用的保留量，比测试历史小得多，
+// 保证总有一段要被摘要。
+const testCompactionKeepRecent int64 = 20000
+
 func TestCompactContextSummarizesOlderHistoryAndMovesAnchor(t *testing.T) {
 	provider := &compactionTestProvider{summary: "## 在聊什么\n- 群友在排上线顺序"}
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
@@ -75,7 +79,7 @@ func TestCompactContextSummarizesOlderHistoryAndMovesAnchor(t *testing.T) {
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 200*60}
 	cfg := runtime.effectiveConfigForEvent(current)
 
-	kept, summary, err := runtime.compactContext(context.Background(), current, cfg, history, compactionKeepRecentTokens, "threshold")
+	kept, summary, err := runtime.compactContext(context.Background(), current, cfg, history, testCompactionKeepRecent, "threshold")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,7 +118,7 @@ func TestCompactContextSummarizesOlderHistoryAndMovesAnchor(t *testing.T) {
 	for index := 0; index < 80; index++ {
 		more = append(more, MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10002", MessageID: fmt.Sprintf("n-%03d", index), Time: 1700000000 + int64(300+index)*60, RawMessage: "新的 " + body})
 	}
-	kept2, summary2, err := runtime.compactContext(context.Background(), current, cfg, more, compactionKeepRecentTokens, "overflow")
+	kept2, summary2, err := runtime.compactContext(context.Background(), current, cfg, more, testCompactionKeepRecent, "overflow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,13 +137,13 @@ func TestCompactContextFailureLeavesStateUntouched(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	history := compactionTestHistory(120, strings.Repeat("很长的发言内容", 120))
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 200*60}
-	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, compactionKeepRecentTokens, "threshold"); err == nil {
+	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, testCompactionKeepRecent, "threshold"); err == nil {
 		t.Fatal("expected the summary failure")
 	}
 	if runtime.compactionSummary(current) != "" || runtime.groupPromptSession(current).anchor() != "" {
 		t.Fatal("failed compaction changed the session state")
 	}
-	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history[:3], compactionKeepRecentTokens, "threshold"); !errors.Is(err, errNothingToCompact) {
+	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history[:3], testCompactionKeepRecent, "threshold"); !errors.Is(err, errNothingToCompact) {
 		t.Fatalf("short history err = %v", err)
 	}
 }
@@ -393,7 +397,7 @@ func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
 			t.Fatalf("window %d threshold exceeds the input budget %d", item.window, limit)
 		}
 	}
-	if got := compactionKeepRecent(compactionWindow{Tokens: 128000}, 30000); got != compactionKeepRecentTokens {
+	if got := compactionKeepRecent(compactionWindow{Tokens: 128000}, 30000); got != (111616-30000)/2 {
 		t.Fatalf("large window keep = %d", got)
 	}
 	if got := compactionKeepRecent(compactionWindow{Tokens: 32000}, 15000); got != (24000-15000)/2 {
@@ -557,7 +561,7 @@ func TestConcurrentCompactionRunsOnce(t *testing.T) {
 		wg.Add(1)
 		go func(index int) {
 			defer wg.Done()
-			got, _, err := runtime.compactContext(context.Background(), current, cfg, history, compactionKeepRecentTokens, "threshold")
+			got, _, err := runtime.compactContext(context.Background(), current, cfg, history, testCompactionKeepRecent, "threshold")
 			if err != nil {
 				t.Error(err)
 			}

@@ -178,7 +178,7 @@ func TestPromptContextHistoryKeepsEverythingSinceAnchor(t *testing.T) {
 	}
 }
 
-// 冷启动没有锚：从最新往回取 compactionKeepRecentTokens，记下锚，下一轮从同一处开始。
+// 冷启动没有锚：从最新往回取 compactionKeepRecent 的量，记下锚，下一轮从同一处开始。
 func TestPromptContextHistoryColdStartAnchorsRecentWindow(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
@@ -273,7 +273,7 @@ func TestContextBudgetBreakdownReportsCompactionSettings(t *testing.T) {
 	if breakdown.GroupID != "12345" || breakdown.ContextWindow != 100000 {
 		t.Fatalf("breakdown = %+v", breakdown)
 	}
-	if breakdown.CompactionThreshold != 100000-compactionReserveTokens || breakdown.ReserveTokens != compactionReserveTokens || breakdown.KeepRecentTokens != compactionKeepRecentTokens || breakdown.HasSummary {
+	if breakdown.CompactionThreshold != 100000-compactionReserveTokens || breakdown.ReserveTokens != compactionReserveTokens || breakdown.KeepRecentTokens != (100000-compactionReserveTokens)/2 || breakdown.HasSummary {
 		t.Fatalf("breakdown = %+v", breakdown)
 	}
 }

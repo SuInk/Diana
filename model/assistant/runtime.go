@@ -652,6 +652,8 @@ type Runtime struct {
 	historyWindowAnchors map[string]string
 	// compactionLocks 让同一个会话同时只有一次压缩，见 context_compaction.go。
 	compactionLocks sync.Map
+	// idleCompactions 是各会话等着的空闲压缩，见 idle_compaction.go。
+	idleCompactions idleCompactions
 	recent          []EventRecord
 	activeMu        sync.Mutex
 	active          int
@@ -1267,6 +1269,7 @@ func (r *Runtime) Stop() error {
 	}
 	r.clearProactiveRouteParks()
 	r.clearErrorNoticeBursts()
+	r.stopIdleCompactions()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
 	err := r.channel.Close()
 	if inboundDone != nil {
@@ -4730,11 +4733,18 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
 	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
+	// 平时压缩挪到会话空闲时做（见 idle_compaction.go），这里只在已经超限时兜底。
 	compacted := ""
-	if !authoritativePluginContext && estimateReplyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry)) > compactionThreshold(r.promptCompactionWindow(event, cfg)) {
-		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
-			messages, replyHistory = next, kept
-			compacted = "threshold"
+	if !authoritativePluginContext {
+		window := r.promptCompactionWindow(event, cfg)
+		total, nonHistory := replyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry))
+		if total > compactionThreshold(window) {
+			if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
+				messages, replyHistory = next, kept
+				compacted = "threshold"
+			}
+		} else {
+			r.noteReplyRequestSize(event, window, total, nonHistory)
 		}
 	}
 	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, compacted, semanticReferenceContext, semanticContext)
@@ -8393,6 +8403,8 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 // remember 记录当前会话的最近上下文。
 func (r *Runtime) remember(event MessageEvent) {
 	event = withoutReplyRuntimeState(event)
+	// 会话来了新消息就不算空闲，等着的空闲压缩往后推（见 idle_compaction.go）。
+	r.postponeIdleCompaction(event)
 	r.mu.Lock()
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	r.mu.Unlock()
