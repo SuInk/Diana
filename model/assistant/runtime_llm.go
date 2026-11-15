@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -1203,22 +1202,33 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	if len(candidates) == 0 {
 		return ""
 	}
-	payload, err := json.Marshal(candidates)
-	if err != nil {
-		return ""
+	var builder strings.Builder
+	builder.WriteString(replyMentionListTitle)
+	for _, candidate := range candidates {
+		builder.WriteString("\n")
+		builder.WriteString(candidate.UserID)
+		if name := strings.TrimSpace(candidate.DisplayName); name != "" {
+			builder.WriteString("：")
+			builder.WriteString(name)
+		}
 	}
-	return "【可提及成员候选 JSON】" + string(payload)
+	return builder.String()
 }
+
+// replyMentionListTitle 是可提及成员名单那条消息的开头。名单一行一人、只写账号和名字，
+// 续接时只追加前缀里还没有的成员（见 appendOnlyList）。以前是每轮重排、带「是不是当前
+// 发言者、从哪来」标记的 JSON：生产 11-14～15 每轮约 2.4K 字，其中 2.1K 和上一轮不同。
+const replyMentionListTitle = "【可提及成员名单（user_id：名字）】"
 
 // replyMentionRules 是群聊里怎么写真正的 @：只随机器人的引用/提及配置变，放在稳定
 // 头部；本轮的候选名单由 replyMentionPrompt 放在尾部。
 func replyMentionRules(cfg BotConfig) string {
 	return strings.TrimSpace(fmt.Sprintf(`【群聊真实提及规则】
-发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。本轮可提及的成员在尾部「可提及成员候选 JSON」里给出，没有这一段就不 @ 任何人。
+发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。可提及的成员在「可提及成员名单」里给出，名单只增不减；没有名单就不 @ 任何人。
 1. %s
 2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 <diana-at id="成员user_id"/> 提及实际对象。%s
 3. 可以同时提及多人、把标记放在不同位置，发送层按标记位置翻译成真正的提及；不要重复提及同一成员。%s
-4. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
+4. 只能使用名单里出现过的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
 5. 标记只有 <diana-at id="user_id"/> 这一种写法：半角尖括号，id 用半角双引号，以 /> 结尾。写成 @diana-at-user_id、[diana-at:user_id]、<diana-at:user_id> 都不是提及。`,
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
@@ -1802,10 +1812,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	r.mu.RLock()
 	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。
 	history := r.history[session]
-	limit := r.effectiveConfigForEventLocked(event).RecentContextLimit
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := sideHistoryLookback
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}

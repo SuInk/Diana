@@ -333,8 +333,9 @@ func TestSummaryMemoryJobRetrySendsFewerEvents(t *testing.T) {
 }
 
 func TestContextCompressionEnqueuesStructuredSummary(t *testing.T) {
+	setSideHistoryLookback(t, 2)
 	memory := &testStructuredMemoryStore{}
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 2, ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetStructuredMemoryStore(memory)
 	for index, text := range []string{"第一条", "第二条", "第三条", "第四条"} {
 		runtime.remember(MessageEvent{
@@ -698,4 +699,12 @@ func TestSummaryMemoryJobFeedsExistingThreadToModel(t *testing.T) {
 	if !strings.Contains(prompt, "正在挑选镜像线路") {
 		t.Fatalf("已有便签没有进入摘要提示词: %s", prompt)
 	}
+}
+
+// setSideHistoryLookback 在一个测试里临时改旁路回看条数，测完还原。
+func setSideHistoryLookback(t *testing.T, n int) {
+	t.Helper()
+	old := sideHistoryLookback
+	sideHistoryLookback = n
+	t.Cleanup(func() { sideHistoryLookback = old })
 }

@@ -500,10 +500,6 @@
           窗口滚过去自动恢复，不需要手动解除。主人不受额度限制。
         </p>
         <div class="field">
-          <label for="group-context">历史查询条数上限</label>
-          <input id="group-context" v-model.number="editing.recent_context_limit" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.recent_context_limit, ' 条')" />
-        </div>
-        <div class="field">
           <label for="group-maxcontext">单次请求上下文上限</label>
           <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens || '模型窗口')" />
         </div>
@@ -1831,7 +1827,6 @@ async function saveEditing(): Promise<void> {
       forward_reply_enabled: forwardModeOf(current) === "custom" ? true : current.forward_reply_enabled,
       reply_merge_confidence_percent: Number(current.reply_merge_confidence_percent) || 0,
       recall_reply_auto_delete_delay_seconds: recallDeleteDelay,
-      recent_context_limit: followNumber(current.recent_context_limit),
       max_context_tokens: followNumber(current.max_context_tokens),
       max_reply_chars: followNumber(current.max_reply_chars),
       group_triggers: parseTriggerWords(triggersDraft.value),

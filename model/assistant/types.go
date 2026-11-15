@@ -949,8 +949,7 @@ type BotConfig struct {
 	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
 	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
 	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
-	MaxContextTokens   int64 `json:"max_context_tokens,omitempty"`
-	RecentContextLimit int   `json:"recent_context_limit,omitempty"`
+	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
 	// HistoryBackfillMessageLimit 是断线回补后每个会话最多进回复流程的消息条数，
 	// 只算会触发回复的消息。没排上名额的照样补进上下文历史，但不跑媒体处理和回复——
 	// 保持它小，防的是一批积压消息同时开出一堆图片视频任务。
@@ -1406,7 +1405,6 @@ type GroupConfig struct {
 	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
 	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
 	MaxContextTokens               int64  `json:"max_context_tokens,omitempty"`
-	RecentContextLimit             int    `json:"recent_context_limit,omitempty"`
 	MaxReplyChars                  int    `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
@@ -1662,7 +1660,6 @@ type ConfigPayload struct {
 	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
 	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
 	MaxContextTokens                int64                     `json:"max_context_tokens,omitempty"`
-	RecentContextLimit              int                       `json:"recent_context_limit,omitempty"`
 	HistoryBackfillMessageLimit     int                       `json:"history_backfill_message_limit,omitempty"`
 	ContextSummaryThreshold         int                       `json:"context_summary_threshold,omitempty"`
 	CrossGroupMemoryEnabled         *bool                     `json:"cross_group_memory_enabled,omitempty"`
@@ -1835,7 +1832,6 @@ func (cfg GroupConfig) clearInheritedSnapshots(base BotConfig) GroupConfig {
 	}
 	clearInt(&cfg.WelcomeLLMCooldownSeconds, func(c BotConfig) int { return c.WelcomeLLMCooldownSeconds })
 	clearInt64(&cfg.MaxContextTokens, func(c BotConfig) int64 { return c.MaxContextTokens })
-	clearInt(&cfg.RecentContextLimit, func(c BotConfig) int { return c.RecentContextLimit })
 	clearInt(&cfg.MaxReplyChars, func(c BotConfig) int { return c.MaxReplyChars })
 	clearInt(&cfg.ReplyMaxBubbles, func(c BotConfig) int { return c.ReplyMaxBubbles })
 	clearInt(&cfg.DirectReplyChunkSize, func(c BotConfig) int { return c.DirectReplyChunkSize })
@@ -1924,7 +1920,6 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.WelcomeEnabled = copyBoolPointer(cfg.WelcomeEnabled)
 	cfg.WelcomeLLMCooldownSeconds = max(0, cfg.WelcomeLLMCooldownSeconds)
 	cfg.MaxContextTokens = max(0, cfg.MaxContextTokens)
-	cfg.RecentContextLimit = max(0, cfg.RecentContextLimit)
 	cfg.MaxReplyChars = max(0, cfg.MaxReplyChars)
 	cfg.ReplyMaxBubbles = max(0, cfg.ReplyMaxBubbles)
 	cfg.DirectReplyChunkSize = max(0, cfg.DirectReplyChunkSize)
@@ -2341,7 +2336,6 @@ func DefaultBotConfig() BotConfig {
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
-		RecentContextLimit:          40,
 		HistoryBackfillMessageLimit: 3,
 		ContextSummaryThreshold:     100,
 		CrossGroupMemoryEnabled:     boolPointer(false),
@@ -2598,9 +2592,6 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.MaxContextTokens < 0 {
 		cfg.MaxContextTokens = 0
 	}
-	if cfg.RecentContextLimit < 0 {
-		cfg.RecentContextLimit = defaults.RecentContextLimit
-	}
 	if cfg.HistoryBackfillMessageLimit <= 0 {
 		cfg.HistoryBackfillMessageLimit = defaults.HistoryBackfillMessageLimit
 	}
@@ -2610,7 +2601,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ContextSummaryThreshold <= 0 {
 		cfg.ContextSummaryThreshold = defaults.ContextSummaryThreshold
 	}
-	cfg.ContextSummaryThreshold = contextSummaryTriggerThreshold(cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
+	cfg.ContextSummaryThreshold = contextSummaryTriggerThreshold(sideHistoryLookback, cfg.ContextSummaryThreshold)
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
@@ -3015,7 +3006,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(cfg.LLMSecretMaskingEnabled),
 		MaxContextTokens:                cfg.MaxContextTokens,
-		RecentContextLimit:              cfg.RecentContextLimit,
 		HistoryBackfillMessageLimit:     cfg.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		CrossGroupMemoryEnabled:         copyBoolPointer(cfg.CrossGroupMemoryEnabled),
@@ -3274,7 +3264,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(payload.LLMSecretMaskingEnabled),
 		MaxContextTokens:                payload.MaxContextTokens,
-		RecentContextLimit:              payload.RecentContextLimit,
 		HistoryBackfillMessageLimit:     payload.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),

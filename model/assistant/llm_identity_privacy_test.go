@@ -196,12 +196,17 @@ func requestTextForPrivacyTest(req llm.GenerateRequest) string {
 }
 
 func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) string {
-	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
-	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
-	if len(match) < 2 {
-		return ""
+	text := requestTextForPrivacyTest(req)
+	// JSON 里的「user_id + display_name」，或可提及成员名单里的「user_id：名字」一行。
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`),
+		regexp.MustCompile(`(?m)^(im_[a-z_]+_[0-9a-f]+)：` + regexp.QuoteMeta(displayName) + `$`),
+	} {
+		if match := pattern.FindStringSubmatch(text); len(match) == 2 {
+			return match[1]
+		}
 	}
-	return match[1]
+	return ""
 }
 
 func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) string {

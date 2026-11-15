@@ -14,8 +14,9 @@ import (
 )
 
 func TestSemanticReferenceCanSelectAnotherUsersOldVideo(t *testing.T) {
+	setSideHistoryLookback(t, 20)
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"video-old","confidence":0.94,"reason":"用户问的是小明发的视频"}`}}
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(MessageEvent{
@@ -48,6 +49,7 @@ func TestSemanticReferenceCanSelectAnotherUsersOldVideo(t *testing.T) {
 }
 
 func TestSemanticReferenceUsesRoutingProfile(t *testing.T) {
+	setSideHistoryLookback(t, 20)
 	store := &stubLLMProfileStore{set: llm.ProfileSet{
 		Profiles: []llm.Profile{
 			{ID: "main", Group: "default", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "main-model"}},
@@ -55,7 +57,7 @@ func TestSemanticReferenceUsesRoutingProfile(t *testing.T) {
 		},
 	}}
 	usedModels := make([]string, 0, 1)
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	runtime.SetLLMProviderConfigFactory(func(cfg llm.ProviderConfig) (LLMProvider, error) {
 		return &semanticReferenceModelProvider{model: cfg.Model, usedModels: &usedModels}, nil
 	})
@@ -143,7 +145,8 @@ func TestSemanticReferenceCanSelectImageFileOrText(t *testing.T) {
 }
 
 func TestSemanticReferenceTreatsVoiceAsDurableMedia(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 2)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	runtime.remember(MessageEvent{Kind: EventKindGroup, Time: 100, GroupID: "group-1", UserID: "user-1", MessageID: "voice-old", Segments: []MessageSegment{{Type: "record", Data: map[string]string{"transcript": "持久语音内容"}}}})
@@ -168,8 +171,9 @@ func TestSemanticReferenceTreatsVoiceAsDurableMedia(t *testing.T) {
 }
 
 func TestSemanticReferenceAggregatesCrossMessageImages(t *testing.T) {
+	setSideHistoryLookback(t, 20)
 	provider := &sequenceLLMProvider{replies: []string{`{"message_ids":["image-3","image-1","image-2"],"confidence":0.98,"reason":"用户明确指向连发的三张图"}`}}
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	imageURLs := []string{
@@ -280,8 +284,9 @@ func TestSemanticReferenceContextIncludesAllSelectedTextSources(t *testing.T) {
 }
 
 func TestReplyRequestProtectsAllSelectedTextSources(t *testing.T) {
+	setSideHistoryLookback(t, 3)
 	provider := &capturingLLMProvider{reply: "已逐条核对"}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	messageIDs := make([]string, 0, 6)
@@ -367,8 +372,9 @@ func TestSemanticReferenceSkipsExplicitQuoteAndCurrentMedia(t *testing.T) {
 }
 
 func TestSemanticReferenceCanResolveMediaBehindTextQuote(t *testing.T) {
+	setSideHistoryLookback(t, 20)
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"recent-image","confidence":0.96,"reason":"用户说发了，指向刚发送的图片"}`}}
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(MessageEvent{
@@ -399,8 +405,9 @@ func TestSemanticReferenceCanResolveMediaBehindTextQuote(t *testing.T) {
 }
 
 func TestSemanticReferenceFindsPersistedImageBeyondShortContext(t *testing.T) {
+	setSideHistoryLookback(t, 20)
 	provider := &sequenceLLMProvider{replies: []string{`{"message_id":"target-image","confidence":0.98,"reason":"错误回复之前的图片是原任务来源"}`}}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 20, ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	runtime := NewRuntime(BotConfig{BotAccount: "42", ContextSummaryThreshold: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	store := newSemanticTimelineStore()
