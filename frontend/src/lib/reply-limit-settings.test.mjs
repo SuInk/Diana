@@ -22,9 +22,8 @@ test("automatic sticker order stays beside reply controls with explicit options 
   assert.match(section, /:options="stickerReplyOrderOptions"/);
   assert.match(section, /form\.sticker_reply_order = value as 'before' \| 'after' \| 'auto'/);
   assert.ok(section.indexOf('id="bot-sticker-reply-order"') > section.indexOf('id="bot-mention-user-mode"'));
-  assert.match(section, /仅控制自动配图与最终正文的发送顺序，不改变是否配图/);
-  assert.match(section, /Telegram 流式草稿可能提前显示/);
-  assert.match(section, /超时或预算不足会跳过配图，优先发送正文/);
+  assert.match(section, /表情先发还是文字先发/);
+  assert.match(section, /没来得及准备好时会跳过，先发文字/);
   const options = source.match(/const stickerReplyOrderOptions: AppSelectOption\[\] = (\[[\s\S]*?\]);/);
   assert.ok(options);
   assert.deepEqual(JSON.parse(JSON.stringify(vm.runInNewContext(options[1]))), [
@@ -57,8 +56,8 @@ for (const view of ["AssistantView", "GroupsView"]) {
     const source = await readFile(new URL(`../views/${view}.vue`, import.meta.url), "utf8");
     assert.match(source, /允许多条发送/);
     assert.match(source, /reply_preserve_line_breaks/);
-    assert.match(source, /换行不分条/);
-    assert.match(source, /填 4 表示至少 5 条/);
+    assert.match(source, /换行分条发送/);
+    assert.match(source, /回复超过这么多条就改发卡片/);
     assert.doesNotMatch(source, /自然分条超过|>自然分条</);
   });
   test(`${view} shows merged-forward settings only for OneBot`, async () => {

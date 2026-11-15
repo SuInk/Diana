@@ -335,7 +335,7 @@
         <div class="field wide">
           <label for="group-chat-model">本群聊天模型</label>
           <AppSelect id="group-chat-model" :model-value="groupChatModelValue" :options="groupChatModelOptions" searchable search-placeholder="搜索提供商或模型" @update:model-value="setGroupChatModel" />
-          <span class="hint">默认跟随机器人；选择后仅在本群将目标模型排到首位，保留机器人原有模型和后备顺序。跟随聊天的用途也会随之调整。</span>
+          <span class="hint">默认跟随机器人。选了之后本群优先用这个模型，它不可用时仍按机器人原来的顺序换别的。</span>
         </div>
         <div class="field wide">
           <label for="group-persona-source">本群 SOUL.md</label>
@@ -371,7 +371,7 @@
             :options="groupStyleFilterOptions"
             @update:model-value="(value) => { if (editing) editing.style_filter_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">学群友说话时，脏话骂人、擦边、歧视引战和崩人设的烂梗不跟着学；群友的消息照常看。</span>
+          <span class="hint">学群友说话时，不学脏话、擦边、引战和崩人设的烂梗。</span>
         </div>
         <div class="field wide">
           <label for="group-style-filter-rules">本群另外不学的话</label>
@@ -382,7 +382,7 @@
             rows="2"
             placeholder="一行一条，例如：别学本群的「xx」梗"
           ></textarea>
-          <span class="hint">和机器人设置里的自定义规则一起生效，不是替换；本群不学怪话关闭时不生效。</span>
+          <span class="hint">和机器人设置里的规则一起生效，一行一条。</span>
         </div>
         <div class="field wide">
           <label>接话设置</label>
@@ -440,7 +440,7 @@
             inputmode="numeric"
             :placeholder="inheritedPlaceholder(inheritedBot?.welcome_llm_cooldown_seconds, ' 秒')"
           />
-          <span class="hint">冷却期内或生成失败时改发模板池或自定义欢迎词，都没配就这次不欢迎；避免进出群刷屏消耗 Token。</span>
+          <span class="hint">两次用模型写欢迎词至少隔多少秒；冷却期间改用模板或自定义欢迎词，都没配就不欢迎。</span>
         </div>
         <div class="field wide">
           <label for="group-proactive-enabled">本群主动开口</label>
@@ -455,7 +455,7 @@
         <div class="field">
           <label for="group-call-quota">模型额度 · 5 小时调用次数</label>
           <input id="group-call-quota" v-model.number="editing.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">这个群名下的每次模型调用都算，含路由判断和工具步。留空跟随机器人那一档。</span>
+          <span class="hint">本群 5 小时内最多调用模型多少次，留空跟随机器人。</span>
         </div>
         <div class="field">
           <label for="group-image-limit-mode">生图次数 · 本群每天</label>
@@ -465,7 +465,7 @@
             :options="groupDailyLimitOptions('image_generation_daily_group_limit')"
             @update:model-value="(value) => { if (editing) setGroupDailyLimitMode(editing, 'image_generation_daily_group_limit', value); }"
           />
-          <span class="hint">本群每天最多成功生成几次图片，改图也算，失败不算，主人不受限。每人每天的上限在机器人设置里，跨群合计。</span>
+          <span class="hint">本群每天最多出几次图，改图也算，失败不算，主人不受限。</span>
         </div>
         <div v-if="groupDailyLimitMode(editing.image_generation_daily_group_limit) === 'custom'" class="field">
           <label for="group-image-limit">本群每天生图次数</label>
@@ -479,7 +479,7 @@
             :options="groupDailyLimitOptions('video_generation_daily_group_limit')"
             @update:model-value="(value) => { if (editing) setGroupDailyLimitMode(editing, 'video_generation_daily_group_limit', value); }"
           />
-          <span class="hint">本群每天最多生成几段视频，任务被受理后失败也算，提交就被拒的不算，主人不受限。每人每天的上限在机器人设置里。</span>
+          <span class="hint">本群每天最多生成几段视频，提交成功后失败也算，主人不受限。</span>
         </div>
         <div v-if="groupDailyLimitMode(editing.video_generation_daily_group_limit) === 'custom'" class="field">
           <label for="group-video-limit">本群每天视频次数</label>
@@ -535,7 +535,7 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">换行不分条（开启换行分条除外）；开启后只认显式分条标记，关闭后单条发送、超限压缩。本轮用户明确要求优先。</span>
+          <span class="hint">允许把一次回复拆成几条消息发出。关闭后每次只发一条。</span>
         </div>
         <div class="field wide">
           <label for="group-line-split">本群换行分条发送</label>
@@ -545,7 +545,7 @@
             :options="groupLineSplitOptions"
             @update:model-value="(value) => { if (editing) editing.reply_line_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">每换一行另发一条；列表、表格和代码块整块发。本群不允许多条发送时不生效。</span>
+          <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先允许多条发送。</span>
         </div>
         <div class="field wide">
           <label for="group-typing-delay">本群模拟打字延时</label>
@@ -565,12 +565,12 @@
             :options="[{ value: '', label: '跟随机器人' }, { value: 'on', label: '保留换行' }, { value: 'off', label: '收拢普通段落' }]"
             @update:model-value="(value) => { if (editing) editing.reply_preserve_line_breaks = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">仅影响消息内部排版，不改变发送条数；列表、代码、表格保留结构，本轮排版要求优先。</span>
+          <span class="hint">关闭后普通文字的换行会合成一段，不影响发几条。</span>
         </div>
         <div class="field">
           <label for="group-reply-merge-confidence">合并回复置信度阈值（%）</label>
           <input id="group-reply-merge-confidence" v-model.number="editing.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="留空跟随机器人" />
-          <span class="hint">只影响同一用户连续消息的合并，不改变主动接话档位。可填 1–100，越低越容易合并；留空跟随机器人当前设置。</span>
+          <span class="hint">对方在回复前又补了一句时，并进同一次回复。填 1–100，越低越容易合并，留空跟随机器人。</span>
         </div>
         <div class="field wide">
           <label for="group-account-safety">本群账号安全审核</label>
@@ -580,7 +580,7 @@
             :options="groupAccountSafetyOptions"
             @update:model-value="(value) => { if (editing) editing.reply_account_safety_audit_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">关闭后，本群主动插话和直接回复都不做账号安全审核；空转、回复疲劳、拒答和对话收尾仍按各自规则处理。发送前审核不检查准确度或答非所问。</span>
+          <span class="hint">发送前检查回复会不会给账号惹麻烦（封号、风控）。关闭后本群的回复不再检查。</span>
         </div>
         <div class="field wide">
           <div class="field-label-row">
@@ -609,7 +609,7 @@
             :options="groupForwardModeOptions"
             @update:model-value="(value) => { if (editing) setForwardMode(editing, value); }"
           />
-          <span class="hint">允许多条发送时，长回复收进一张卡片。选「本群单独设置」后可以改字数和块数，没填的项跟随机器人。仅 OneBot 支持。</span>
+          <span class="hint">回复太长或条数太多时收进一张合并转发卡片。选「本群单独设置」后可以改触发条件。仅 OneBot 支持。</span>
         </div>
         <div v-if="supportsGroupLevel && forwardModeOf(editing) === 'custom'" class="field">
           <label for="group-forward-len">合并转发字数</label>
@@ -619,7 +619,7 @@
         <div v-if="supportsGroupLevel && forwardModeOf(editing) === 'custom'" class="field">
           <label for="group-forward-chunks">合并转发块数</label>
           <input id="group-forward-chunks" v-model.number="editing.forward_reply_chunk_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" :placeholder="forwardThresholdPlaceholder('forward_reply_chunk_threshold', '条')" />
-          <span class="hint">实际消息数超过此值触发卡片，新建群配置跟随机器人。填 4 表示至少 5 条。不按正文行数计数。</span>
+          <span class="hint">回复超过这么多条就改发卡片，留空跟随机器人。</span>
         </div>
         <div class="field wide">
           <label for="group-recall-delete">本群查看撤回消息后自动撤回回复</label>
@@ -645,7 +645,7 @@
             :placeholder="inheritedPlaceholder(inheritedBot?.recall_reply_auto_delete_delay_seconds || defaultRecallReplyAutoDeleteDelaySeconds, ' 秒')"
           />
         </div>
-        <p class="hint wide">群发送最多尝试 3 次（含首次），间隔 1 秒、2 秒；单条失败不会让整个群冷却。失败记录可在首页错误统计和日志中查看。</p>
+        <p class="hint wide">消息没发出去时自动重发，最多 3 次。</p>
         <div v-for="field in sendRetryFields" :key="field.key" class="field">
           <label :for="`group-${field.key}`">{{ field.label }}</label>
           <input
@@ -671,7 +671,7 @@
         </div>
         <div v-if="extensions.length" class="field wide">
           <label>本群扩展</label>
-          <p class="hint">按群覆盖 MCP 与 Skill：档位不设就跟随机器人，白名单里的人不看档位也能用，黑名单一律不给。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位，「停用」对所有人生效，主人也一样。机器人那一档是默认值——扩展页关掉的服务，在这里给本群选一个档位就能单独用起来；只有扩展页里的全局「服务可用」关掉时，本群怎么选都没用。</p>
+          <p class="hint">单独设置本群谁能用哪些 MCP 和 Skill，不设就跟随机器人。白名单里的人总能用，黑名单里的人总不能用；选「停用」后连主人也不能用；插件页里全局关掉的服务，这里怎么选都用不了。</p>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="item in extensions" :key="item.id" class="row-item group-plugin-row">
               <div class="group-plugin-row-head">
@@ -1194,7 +1194,7 @@ type MutedStepKey = "muted_image_description_enabled" | "muted_voice_transcripti
 const mutedStepItems: { key: MutedStepKey; label: string; fallback: boolean; hint: string }[] = [
   { key: "muted_image_description_enabled", label: "暂停期间识别图片", fallback: true, hint: "关掉能省下识图费用，但这段历史里的图片没有文字描述。" },
   { key: "muted_voice_transcription_enabled", label: "暂停期间语音转文字", fallback: true, hint: "关掉能省下转写费用，但这段历史里的语音没有文字。" },
-  { key: "muted_reply_judgment_enabled", label: "暂停期间回复判断", fallback: false, hint: "开启后照常判断，该回的记为「判断该回，但禁言中未发送」，不生成也不发送。" }
+  { key: "muted_reply_judgment_enabled", label: "暂停期间回复判断", fallback: false, hint: "开启后照常判断要不要回，只记录结果，不会真的回复。" }
 ];
 const mutedReplyPauseDefaults = ref<Record<string, boolean>>({});
 const mutedStepDefaults = ref<Record<MutedStepKey, Record<string, boolean>>>({

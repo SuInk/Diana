@@ -73,7 +73,7 @@ test("demo split rules match Go defaults", { skip: !existsSync(goDefaultsURL) &&
     assert.deepEqual(rules(line), goRules);
   }
 });
-test("UI documents current markup", () => {
-  assert.ok(source.includes("&lt;diana-single/&gt;"));
+test("UI hint offers restoring defaults without legacy markup", () => {
+  assert.ok(source.includes("点「恢复默认」可找回默认规则"));
   assert.ok(!source.includes("[DIANA_REPLY_SINGLE]"));
 });
