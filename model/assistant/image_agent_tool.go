@@ -122,6 +122,9 @@ type dianaImageToolRequest struct {
 	FrameDurationMS int
 	// Aspect 是画幅（square/portrait/landscape），见 dianaImageSize。
 	Aspect string
+	// Sticker 表示成品按 QQ 表情包发（见 OutgoingMessage.ImagesAsStickers），只在
+	// OneBot 会话里可选。
+	Sticker bool
 	// quota 是受理时占下的每日生图次数，任务结束时按实际成功张数结清。
 	quota *mediaGenerationReservation
 }
@@ -196,6 +199,9 @@ func dianaImageStartedMessage(request dianaImageToolRequest, result dianaImageTo
 	if request.Format == llm.ImageFormatGIF {
 		action = "生成动图"
 	}
+	if request.Sticker {
+		action = "做表情包"
+	}
 	if request.Operation == "edit" {
 		action = "编辑图片"
 		// 参考图要等任务真正跑起来才解析得出来，这里说不出确切张数，就不说，
@@ -251,6 +257,11 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// identity_sources 说明里的「优先于当前消息里的图」来自 #816：点名头像时
 	// 当前消息里的表情曾把头像顶掉。按名字指人要先查 user_id，模型曾编造 id。
 	// source_message_ids 的「候选图要点名」「重试填最初原图」分别来自 #816、#744。
+	// 表情包来自群友要求「画完直接发成表情」：以前成品只能按大图发，想存成表情还得
+	// 点开大图再添加。只有 OneBot（QQ）能按表情包的形状发，别的平台不出现这个参数。
+	if IsOneBotPlatform(t.runtime.currentPlatform(t.event)) {
+		properties["sticker"] = toolBoolParam("用户要表情包、贴纸、表情时填 true，成品按 QQ 表情包发出（小图、能直接添加到表情）；普通配图、壁纸、海报不填")
+	}
 	if t.relationship.AllowImageEditing {
 		properties["avatars"] = imageAvatarsParam()
 		properties["source_message_ids"] = toolStringArrayParam(`原图消息 ID，整条的图都用。按用户引用、作者、画面内容和对话关系核对，不能默认选最新或相邻图；有歧义先用 history_media 看图或澄清。替换人物时同时填写底图 ID 和 avatars，重试填最初原图所在消息`)
@@ -401,7 +412,8 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		SourceLabels: sourceLabels, SourceMode: sourceMode,
 		SourceMessageIDs: sourceMessageIDs,
 		Format:           format, FrameCount: frameCount, FrameDurationMS: frameDuration,
-		Aspect: normalizeDianaImageAspect(configToolString(input, "aspect")),
+		Aspect:  normalizeDianaImageAspect(configToolString(input, "aspect")),
+		Sticker: IsOneBotPlatform(t.runtime.currentPlatform(t.event)) && toolInputBool(input, "sticker"),
 	}, nil
 }
 
@@ -513,7 +525,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 				return result, nil
 			}
 			// 成图不引用原消息：像真人画完直接甩图，引用框反倒显得像工单回执。
-			message := OutgoingMessage{ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models}
+			message := OutgoingMessage{ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models, ImagesAsStickers: request.Sticker}
 			return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, output.Caption)}, nil
 		},
 	}
@@ -704,7 +716,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 					if len(localPaths) > 0 {
 						cleanupLocalMediaFilesLater(localPaths, dianaImageMediaTTL)
 					}
-					outgoing := OutgoingMessage{ImageURLs: shared, GeneratedImageModels: generatedImageModels(usedCfg, operation, len(shared), resp)}
+					outgoing := OutgoingMessage{ImageURLs: shared, GeneratedImageModels: generatedImageModels(usedCfg, operation, len(shared), resp), ImagesAsStickers: request.Sticker}
 					// 有标注就每张带上「这是谁的」;没有标注时第一张发完后单独补整体说明。
 					caption := ""
 					if label := labelByURL[batch[0]]; label != "" {
@@ -800,7 +812,7 @@ func dianaImageResultCaption(caption string, delivered, dropped, failed int) str
 func dianaImageTaskKey(event MessageEvent, request dianaImageToolRequest) string {
 	payload := strings.Join(append([]string{
 		sessionKey(event), event.MessageID, request.Operation, request.Prompt, request.SourceMode,
-		request.Format, fmt.Sprint(request.FrameCount), fmt.Sprint(request.FrameDurationMS), request.Aspect,
+		request.Format, fmt.Sprint(request.FrameCount), fmt.Sprint(request.FrameDurationMS), request.Aspect, fmt.Sprint(request.Sticker),
 	}, append(append([]string(nil), request.IdentitySources...), request.SourceMessageIDs...)...), "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return fmt.Sprintf("image:%x", digest[:12])

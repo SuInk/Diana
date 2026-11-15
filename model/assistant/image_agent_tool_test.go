@@ -812,3 +812,51 @@ func TestImagePromptsRequireSubjectWithoutClaimingResult(t *testing.T) {
 		})
 	}
 }
+
+// 群友要「画完直接发成表情」：QQ 上成品按表情包的形状发，别的平台不给这个参数。
+func TestDianaImageToolSendsGeneratedStickerAsQQSticker(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/media" {
+			writeTestPNG(w)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"c3RpY2tlcg=="}]}`))
+	}))
+	defer server.Close()
+	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
+		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: server.URL + "/v1",
+		Model: "gpt-test", ImageModel: "gpt-image-2",
+	})}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), store, nil, nil, nil)
+	runtime.SetMediaStore(mediaStore(t))
+	runtime.SetLocalMediaSharer(&recordingLocalMediaSharer{url: server.URL + "/media"})
+	event := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, GroupID: "20005", UserID: "10001", MessageID: "agent-sticker"}
+	policy := RelationshipPolicyFor(UserMemoryProfile{Favorability: 20, MessageCount: 10}, "owner", event.UserID)
+
+	telegram := newDianaImageTool(context.Background(), runtime, MessageEvent{Kind: EventKindGroup, Platform: PlatformTelegram, GroupID: "-100", UserID: "10001"}, policy)
+	if _, ok := telegram.(*dianaImageTool).InputSchema()["properties"].(map[string]any)["sticker"]; ok {
+		t.Fatal("telegram image tool must not offer sticker")
+	}
+	tool := newDianaImageTool(context.Background(), runtime, event, policy)
+	if _, ok := tool.(*dianaImageTool).InputSchema()["properties"].(map[string]any)["sticker"]; !ok {
+		t.Fatal("QQ image tool must offer sticker")
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"prompt": "一只举着「收到」牌子的柴犬，白底", "sticker": true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForCondition(t, 2*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
+	sent := channel.sentSnapshot()
+	if len(sent) != 2 || !strings.Contains(sent[0].Text, "开始做表情包") {
+		t.Fatalf("sent = %#v", sent)
+	}
+	if !sent[1].ImagesAsStickers || len(sent[1].ImageURLs) != 1 {
+		t.Fatalf("sticker message = %#v", sent[1])
+	}
+	segments := buildOutgoingSegments(sent[1])
+	data, _ := segments[len(segments)-1]["data"].(map[string]string)
+	if segments[len(segments)-1]["type"] != "image" || data["sub_type"] != "1" || data["summary"] != "[动画表情]" {
+		t.Fatalf("segments = %#v", segments)
+	}
+}

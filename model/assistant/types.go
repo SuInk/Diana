@@ -382,8 +382,11 @@ type OutgoingMessage struct {
 	// file_id）。表情包库里的动态/视频贴纸只存了静态缩略图，按文件重发就成了一张
 	// 小图文件；有 ID 时通道直接按原贴纸转发，ID 失效才退回发文件。按地址索引，
 	// 审核拿掉某张图时不用跟着对齐下标。
-	StickerFileIDs       map[string]string
-	ImageAlbum           bool
+	StickerFileIDs map[string]string
+	ImageAlbum     bool
+	// ImagesAsStickers 让 OneBot 把 ImageURLs 按 QQ 表情包发（图片段带 sub_type=1 和
+	// summary），对方看到的是能直接添加到表情的小图。用于生成的表情包；其他平台忽略。
+	ImagesAsStickers     bool
 	GeneratedImageModels []GeneratedImageModel
 	VideoURLs            []string
 	AudioURLs            []string

@@ -387,7 +387,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		return segments
 	}
 	if msg.ImagesFirst {
-		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
+		segments = appendOutgoingImageSegments(segments, msg.ImageURLs, msg.ImagesAsStickers)
 	}
 	if msg.Text != "" {
 		if msg.LiteralText {
@@ -405,7 +405,7 @@ func buildOutgoingSegments(msg OutgoingMessage) []map[string]any {
 		}
 	}
 	if !msg.ImagesFirst {
-		segments = appendOutgoingImageSegments(segments, msg.ImageURLs)
+		segments = appendOutgoingImageSegments(segments, msg.ImageURLs, msg.ImagesAsStickers)
 	}
 	for _, videoURL := range msg.VideoURLs {
 		videoURL = videoFileForOutgoingSegment(videoURL)
@@ -494,16 +494,19 @@ func buildForwardOutgoingSegments(msg OutgoingMessage) []map[string]any {
 	return filtered
 }
 
-func appendOutgoingImageSegments(segments []map[string]any, imageURLs []string) []map[string]any {
+// asStickers 为 true 时按 QQ 表情包的形状发，和 stickerOutgoingMessage 一致。
+func appendOutgoingImageSegments(segments []map[string]any, imageURLs []string, asStickers bool) []map[string]any {
 	for _, imageURL := range imageURLs {
 		imageURL = imageFileForOutgoingSegment(imageURL)
 		if imageURL == "" {
 			continue
 		}
-		segments = append(segments, map[string]any{
-			"type": "image",
-			"data": map[string]string{"file": imageURL},
-		})
+		data := map[string]string{"file": imageURL}
+		if asStickers {
+			data["sub_type"] = "1"
+			data["summary"] = "[动画表情]"
+		}
+		segments = append(segments, map[string]any{"type": "image", "data": data})
 	}
 	return segments
 }
