@@ -267,7 +267,7 @@
                 <div v-else-if="form.onebot_transport === 'forward_ws'" class="field">
                   <label for="bot-onebot-ws">OneBot WebSocket 服务地址</label>
                   <input id="bot-onebot-ws" v-model="form.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700" />
-                  <span class="hint">填接入端的 WebSocket 地址，Diana 会主动连过去，断线自动重连。接入端和 Diana 不在同一台机器时，记得填下方的「媒体回源基址」，否则发不出图片和文件。</span>
+                  <span class="hint">填接入端的 WebSocket 地址，要用同时提供 API 和事件的通用地址（通常是 /）。Diana 会主动连过去，断线自动重连。接入端和 Diana 不在同一台机器时，记得填下方的「媒体回源基址」，否则发不出图片和文件。</span>
                 </div>
                 <template v-else-if="form.onebot_transport === 'http'">
                   <div class="field">
@@ -946,7 +946,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许多条发送</span>
                 </label>
-                <span class="hint">允许把一次回复拆成几条消息发出，更像真人聊天。关闭后每次只发一条。</span>
+                <span class="hint">允许把一次回复拆成几条消息发出，更像真人聊天；普通换行默认不拆，要按行拆就开下面的换行分条。关闭后每次只发一条。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -954,7 +954,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">换行分条发送</span>
                 </label>
-                <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先开「允许多条发送」。</span>
+                <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先开「允许多条发送」；闲聊插话、或本轮要求一条发送时不拆。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1060,7 +1060,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">长回复改用合并转发卡片</span>
                 </label>
-                <span class="hint">回复太长或条数太多时，收进一张合并转发卡片发出，避免刷屏。仅 OneBot 支持。</span>
+                <span class="hint">开了允许多条发送时，回复太长或条数太多就收进一张合并转发卡片发出，避免刷屏。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
@@ -1476,8 +1476,8 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">空转和疲劳</span>
                 </label>
-                <span class="hint">反复聊没新意的话题时，机器人会少回几句；有新内容或提问照常回。</span>
-                <span class="hint">是否因此暂停回复某人，由下面的开关决定。</span>
+                <span class="hint">同时开启空转检测和回复疲劳。反复聊没新意的话题时，机器人会少回几句；有新内容或提问照常回。</span>
+                <span class="hint">空转累计达标时，是否暂停回复由下面的开关决定；疲劳只跳过单条，不会暂停。</span>
               </div>
               <div v-if="form.bot_reply_loop_detection_enabled" class="field">
                 <label for="bot-fatigue-limit">疲劳阈值</label>
@@ -1599,7 +1599,7 @@
               </div>
               <div class="field wide">
                 <label>发送失败重试</label>
-                <span class="hint">消息没发出去时自动重发，最多 3 次。</span>
+                <span class="hint">消息没发出去时自动重发，最多发 3 次（含第一次）。</span>
               </div>
               <div v-for="field in sendRetryFields" :key="field.key" class="field">
                 <label :for="`bot-${field.key}`">{{ field.label }}</label>
@@ -2011,7 +2011,7 @@
                 <input id="subtask-max-concurrency" v-model.number="form.subtask_max_concurrency" class="input" type="number" min="1" max="4" />
               </div>
               <div class="field wide">
-                <span class="hint">机器人同时最多开几个子任务（比如并行搜索），越多越快、越费额度。</span>
+                <span class="hint">机器人同时最多开几个子任务（比如并行搜索），越多越快。</span>
               </div>
               <div v-if="agentMode !== 'standard'" class="field wide">
                 <span class="hint">文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
@@ -2110,7 +2110,7 @@
                     这台机器用不了工作区容器，哪一档都不提供 run_command：{{ agentBoxStatus.reason }}
                   </span>
                   <span class="hint">
-                    让机器人在隔离的 Docker 容器里执行命令（下载、跑脚本等），碰不到这台电脑的文件和内网。每个群、每个私聊各用一个容器。需要本机装好 Docker，第一次使用要等几分钟构建。
+                    让机器人在隔离的 Docker 容器里执行命令（下载、跑脚本等），碰不到这台电脑的文件和内网。每个群、每个私聊各用一个容器；选「所有人」时群成员也能用。需要本机装好 Docker（Linux 只支持 rootless Docker），Termux 不支持；第一次使用要等几分钟构建。
                     详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/workbox.md" target="_blank" rel="noopener">工作区容器说明</a>。
                   </span>
                 </div>

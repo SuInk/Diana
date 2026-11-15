@@ -694,7 +694,7 @@
             :disabled="repoCheckBusy || !!repoPreview"
             @keydown.enter="checkRepoPlugin"
           />
-          <p class="hint">默认装最新版；想装指定版本，用带 /tree/版本号 的链接。</p>
+          <p class="hint">默认装默认分支的最新提交（不是最新 Release）；想装指定版本，用带 /tree/版本号 的链接。</p>
         </div>
         <p v-if="repoInstallError" class="repo-install-error" role="alert">{{ repoInstallError }}</p>
         <div v-if="repoPreview" class="repo-preview">

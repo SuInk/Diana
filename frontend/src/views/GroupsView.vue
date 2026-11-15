@@ -535,7 +535,7 @@
             :options="groupNaturalReplySplitOptions"
             @update:model-value="(value) => { if (editing) editing.natural_reply_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">允许把一次回复拆成几条消息发出。关闭后每次只发一条。</span>
+          <span class="hint">允许把一次回复拆成几条消息发出；普通换行默认不拆，要按行拆就开下面的换行分条。关闭后每次只发一条。</span>
         </div>
         <div class="field wide">
           <label for="group-line-split">本群换行分条发送</label>
@@ -545,7 +545,7 @@
             :options="groupLineSplitOptions"
             @update:model-value="(value) => { if (editing) editing.reply_line_split_enabled = value === '' ? undefined : value === 'on'; }"
           />
-          <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先允许多条发送。</span>
+          <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先允许多条发送；闲聊插话、或本轮要求一条发送时不拆。</span>
         </div>
         <div class="field wide">
           <label for="group-typing-delay">本群模拟打字延时</label>
@@ -609,7 +609,7 @@
             :options="groupForwardModeOptions"
             @update:model-value="(value) => { if (editing) setForwardMode(editing, value); }"
           />
-          <span class="hint">回复太长或条数太多时收进一张合并转发卡片。选「本群单独设置」后可以改触发条件。仅 OneBot 支持。</span>
+          <span class="hint">开了允许多条发送时，回复太长或条数太多就收进一张合并转发卡片。选「本群单独设置」后可以改触发条件。仅 OneBot 支持。</span>
         </div>
         <div v-if="supportsGroupLevel && forwardModeOf(editing) === 'custom'" class="field">
           <label for="group-forward-len">合并转发字数</label>
@@ -645,7 +645,7 @@
             :placeholder="inheritedPlaceholder(inheritedBot?.recall_reply_auto_delete_delay_seconds || defaultRecallReplyAutoDeleteDelaySeconds, ' 秒')"
           />
         </div>
-        <p class="hint wide">消息没发出去时自动重发，最多 3 次。</p>
+        <p class="hint wide">消息没发出去时自动重发，最多发 3 次（含第一次）。</p>
         <div v-for="field in sendRetryFields" :key="field.key" class="field">
           <label :for="`group-${field.key}`">{{ field.label }}</label>
           <input
@@ -671,7 +671,7 @@
         </div>
         <div v-if="extensions.length" class="field wide">
           <label>本群扩展</label>
-          <p class="hint">单独设置本群谁能用哪些 MCP 和 Skill，不设就跟随机器人。白名单里的人总能用，黑名单里的人总不能用；选「停用」后连主人也不能用；插件页里全局关掉的服务，这里怎么选都用不了。</p>
+          <p class="hint">单独设置本群谁能用哪些 MCP 和 Skill，不设就跟随机器人。判定顺序是停用 &gt; 黑名单 &gt; 白名单 &gt; 档位：选「停用」后连主人也不能用，白名单里的人不看档位也能用。机器人那一级关掉的服务，在这里选个档位就能给本群单独开；只有插件页里全局「服务可用」关掉时，本群才彻底用不了。</p>
           <div class="row-list" style="margin-top: 6px">
             <div v-for="item in extensions" :key="item.id" class="row-item group-plugin-row">
               <div class="group-plugin-row-head">

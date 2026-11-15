@@ -57,6 +57,7 @@ for (const view of ["AssistantView", "GroupsView"]) {
     assert.match(source, /允许多条发送/);
     assert.match(source, /reply_preserve_line_breaks/);
     assert.match(source, /换行分条发送/);
+    assert.match(source, /普通换行默认不拆/);
     assert.match(source, /回复超过这么多条就改发卡片/);
     assert.doesNotMatch(source, /自然分条超过|>自然分条</);
   });
