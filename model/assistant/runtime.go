@@ -1839,7 +1839,6 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	overrideIfSet(&cfg.WelcomeLLMCooldownSeconds, groupCfg.WelcomeLLMCooldownSeconds)
 	overrideIfSet(&cfg.MaxContextTokens, groupCfg.MaxContextTokens)
-	overrideIfSet(&cfg.RecentContextLimit, groupCfg.RecentContextLimit)
 	overrideIfSet(&cfg.MaxReplyChars, groupCfg.MaxReplyChars)
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
@@ -8362,13 +8361,10 @@ func (r *Runtime) remember(event MessageEvent) {
 		history = append(history, event)
 	}
 	// 内存里的会话历史攒够 ContextSummaryThreshold 条，就把最早的一批交给后台抽取
-	// 长期记忆，内存里只留 RecentContextLimit 条。它只是缓存：有持久存储时提示词的
+	// 长期记忆，内存里只留 sideHistoryLookback 条。它只是缓存：有持久存储时提示词的
 	// 历史从存储读，不受这里影响（见 promptContextHistory）。
 	cfg := r.effectiveConfigForEventLocked(event)
-	limit := cfg.RecentContextLimit
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := sideHistoryLookback
 	var compressed []MessageEvent
 	if len(history) > contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold) {
 		if compressCount := len(history) - limit; compressCount > 0 {

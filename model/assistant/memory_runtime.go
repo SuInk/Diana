@@ -982,10 +982,16 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 }
 
 // contextSummaryMinIntervalPercent 是两次批量抽取之间至少要攒下的新消息，按
-// RecentContextLimit 的百分比算。触发条数填得不比保留条数大时，旧代码把它夹平到
+// sideHistoryLookback 的百分比算。触发条数填得不比保留条数大时，旧代码把它夹平到
 // 保留条数，于是每来一条消息都触发一次 memory_summary 调用；先留出间隔再夹，两个
 // 配置怎么组合都不会退化。
 const contextSummaryMinIntervalPercent = 50
+
+// sideHistoryLookback 是意图路由、指代解析、记忆门控这些旁路往回看的条数，也是内存
+// 会话缓存保留的条数。以前是机器人和群设置里的「历史查询条数上限」，和「单次请求
+// 上下文上限」并列，看着像两道历史限额；正式回复的历史只由总上限管，这里不再给设置，
+// 取原来的默认值。测试会改它。
+var sideHistoryLookback = 40
 
 // contextSummaryTriggerThreshold 返回真正生效的批量抽取触发条数，保证比保留条数高出
 // 至少一个间隔。

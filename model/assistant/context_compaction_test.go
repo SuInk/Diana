@@ -380,9 +380,9 @@ func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
 	}
 }
 
-// 主人把上限填成 32000 或窗口只有 16K 时，压完的请求要真的装得下，而不是每轮都压、压完照样超。
+// 主人把上限填成最低值 32K 或 48K 时，压完的请求要真的装得下，而不是每轮都压、压完照样超。
 func TestReplyCompactionFitsSmallWindows(t *testing.T) {
-	for _, window := range []int64{16000, 32000} {
+	for _, window := range []int64{minimumRequestContextLimit, 48000} {
 		t.Run(fmt.Sprint(window), func(t *testing.T) {
 			provider := &replyCompactionProvider{}
 			runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, MaxContextTokens: window, LLMIdentityMaskingEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
@@ -424,7 +424,7 @@ func TestReplyCompactionFitsSmallWindows(t *testing.T) {
 func TestCompactContextSummarizesInChunks(t *testing.T) {
 	// 假摘要要够长：每块都把它带进下一块的请求，预算按它的长度重新算才不会超。
 	provider := &compactionTestProvider{summary: "## 在聊什么\n- 分块摘要" + strings.Repeat("。摘要里的细节", 400)}
-	runtime := NewRuntime(BotConfig{MaxContextTokens: 16000}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	runtime := NewRuntime(BotConfig{MaxContextTokens: minimumRequestContextLimit}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
 	history := compactionTestHistory(400, strings.Repeat("很长的发言内容", 60))
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 500*60}
 	if _, _, err := runtime.compactContext(context.Background(), current, runtime.effectiveConfigForEvent(current), history, 2000, "threshold"); err != nil {
@@ -438,7 +438,7 @@ func TestCompactContextSummarizesInChunks(t *testing.T) {
 		if index > 0 && !strings.Contains(prompt, "<previous-summary>\n## 在聊什么\n- 分块摘要。摘要里的细节") {
 			t.Fatalf("chunk %d did not carry the previous chunk's summary", index)
 		}
-		if got := llm.EstimateRequestInputTokens(req); got > compactionThreshold(compactionWindow{Tokens: 16000}) {
+		if got := llm.EstimateRequestInputTokens(req); got > compactionThreshold(compactionWindow{Tokens: minimumRequestContextLimit}) {
 			t.Fatalf("chunk %d request is %d tokens", index, got)
 		}
 	}
@@ -476,11 +476,11 @@ func TestSessionHistoryReconnectsSummaryWhenAnchorIsLost(t *testing.T) {
 
 // 锚比按阈值换算的条数还早（机器人很久没说话）：往前多读，直到接上锚。
 func TestPromptContextHistoryReadsBackToAnOldAnchor(t *testing.T) {
-	runtime := NewRuntime(BotConfig{MaxContextTokens: 16000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{MaxContextTokens: minimumRequestContextLimit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "current", Time: 1700000000 + 5000*60}
-	history := compactionTestHistory(historyCandidateLimit(compactionWindow{Tokens: 16000})*3, "话")
+	history := compactionTestHistory(historyCandidateLimit(compactionWindow{Tokens: minimumRequestContextLimit})*3, "话")
 	for _, item := range history {
 		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
 	}

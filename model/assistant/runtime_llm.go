@@ -1812,10 +1812,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	r.mu.RLock()
 	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。
 	history := r.history[session]
-	limit := r.effectiveConfigForEventLocked(event).RecentContextLimit
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := sideHistoryLookback
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}

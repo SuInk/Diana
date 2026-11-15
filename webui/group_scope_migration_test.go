@@ -144,7 +144,7 @@ func TestMigrateGroupInheritancePersistsBeforeBotChanges(t *testing.T) {
 	// 按旧数据的样子直接塞进存储：没有迁移标记，触发词和回复上限都是机器人当时的值。
 	groups.data = assistant.GroupConfigSet{Groups: []assistant.GroupConfig{{
 		BotProfileID: "bot", GroupID: "1", Enabled: true, EnabledSet: true,
-		GroupTriggers: []string{"Diana"}, MaxReplyChars: 800, RecentContextLimit: 12,
+		GroupTriggers: []string{"Diana"}, MaxReplyChars: 800, MaxContextTokens: 40000,
 	}}}
 	if err := MigrateGroupInheritance(profiles, groups); err != nil {
 		t.Fatal(err)
@@ -153,8 +153,8 @@ func TestMigrateGroupInheritancePersistsBeforeBotChanges(t *testing.T) {
 	if !stored.InheritanceMigrated || len(stored.GroupTriggers) != 0 || stored.MaxReplyChars != 0 {
 		t.Fatalf("snapshot not cleared on disk: %+v", stored)
 	}
-	if stored.RecentContextLimit != 12 {
-		t.Fatalf("real override lost: %d", stored.RecentContextLimit)
+	if stored.MaxContextTokens != 40000 {
+		t.Fatalf("real override lost: %d", stored.MaxContextTokens)
 	}
 	// 再跑一次什么也不动。
 	if err := MigrateGroupInheritance(profiles, groups); err != nil {
