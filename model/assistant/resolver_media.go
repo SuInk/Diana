@@ -177,7 +177,7 @@ func downloadYTDLPVideoFile(ctx context.Context, raw string) string {
 		return ""
 	}
 	outputPattern := filepath.Join(workDir, "video.%(ext)s")
-	cmdCtx, cancel := context.WithTimeout(ctx, defaultPlatformTimeout)
+	cmdCtx, cancel := context.WithTimeout(ctx, resolverSocialBudget)
 	defer cancel()
 	cmd := procgroup.CommandContext(cmdCtx, ytDLPPath, ytDLPFullVideoDownloadArgs(ctx, outputPattern, raw)...)
 	// yt-dlp 会自己去调 ffmpeg，子进程也得能找到这些目录。
@@ -1265,7 +1265,8 @@ func downloadURLToFile(ctx context.Context, raw string, path string, headers map
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client := netguard.NewPublicHTTPClient(defaultPlatformTimeout)
+	// 大文件按带宽要下好几分钟，不能套元数据请求的 60 秒；由解析总预算统一截止。
+	client := netguard.NewPublicHTTPClient(resolverSocialBudget)
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("resolver media download failed for %s: %v", redactURLQuery(raw), err)

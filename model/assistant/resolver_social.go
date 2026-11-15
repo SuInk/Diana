@@ -134,8 +134,17 @@ func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginReque
 		current, stable := resolverCookieFileFingerprint(credentials.YTDLPCookies)
 		return validSharedSocialResult(value) && stable && current == cookieFingerprint
 	}
-	result, err := p.sharedSocial.load(ctx, key, cacheTTL, 2*time.Minute, valid, func(loadCtx context.Context) (resolverSocialResult, error) {
-		value := p.resolveSocialMediaFresh(loadCtx, req, raw, maxImages)
+	result, err := p.sharedSocial.load(ctx, key, cacheTTL, resolverSocialBudget, valid, func(loadCtx context.Context) (resolverSocialResult, error) {
+		// 下载拖到预算截止，loadCtx 一过期整条结果都会被丢掉，标题、作者这些早已
+		// 拿到的元数据跟着没了，只能落到通用网页抓取。给下载提前几秒截止，让它以
+		// 「媒体下载失败」收尾，原生解析结果照常交回。
+		fetchCtx := loadCtx
+		if deadline, ok := loadCtx.Deadline(); ok {
+			var cancel context.CancelFunc
+			fetchCtx, cancel = context.WithDeadline(loadCtx, deadline.Add(-resolverSocialResultReserve))
+			defer cancel()
+		}
+		value := p.resolveSocialMediaFresh(fetchCtx, req, raw, maxImages)
 		return value, loadCtx.Err()
 	})
 	if err != nil {
@@ -143,6 +152,13 @@ func (p *ResolverPlugin) resolveSocialMedia(ctx context.Context, req PluginReque
 	}
 	return result
 }
+
+// resolverSocialBudget 是单条链接原生解析（含下载）的总预算；
+// resolverSocialResultReserve 是其中留给收尾的时间，下载在这之前截止。
+var (
+	resolverSocialBudget        = 5 * time.Minute
+	resolverSocialResultReserve = 5 * time.Second
+)
 
 func resolverCookieFileFingerprint(path string) (string, bool) {
 	if path == "" {
