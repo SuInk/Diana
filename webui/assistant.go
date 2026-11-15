@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/storage"
 
@@ -578,6 +579,10 @@ func (h *BotHandler) agentDefaults(c *gin.Context) {
 		"subtask_max_tasks":        defaults.SubtaskMaxTasks,
 		"subtask_max_concurrency":  defaults.SubtaskMaxConcurrency,
 		"agent_command_timeout_ms": defaults.AgentCommandTimeoutMS,
+		"agent_box_access":         assistant.NormalizeBoxAccess(defaults.AgentBoxAccess),
+		"agent_box_disk_limit_mb":  defaults.WithDefaults().AgentBoxDiskLimitMB,
+		// 工作区容器能不能用是这台机器的事实，设置页据此写明哪一档都不提供的原因。
+		"agent_box_status": agentBoxStatus(),
 		// 安全模式关掉什么由后端那张规则表说了算，界面的说明和确认框照它生成。
 		"agent_safe_mode": assistant.AgentSafeModeCatalog(),
 	})
@@ -1654,4 +1659,9 @@ func (h *BotHandler) lookupGitHubUser(c *gin.Context) {
 	}
 	user := watch.LookupUser(c.Request.Context(), c.Query("login"), settings)
 	c.JSON(http.StatusOK, gin.H{"user": user})
+}
+
+func agentBoxStatus() gin.H {
+	ok, reason := agent.BoxStatus()
+	return gin.H{"available": ok, "reason": reason}
 }

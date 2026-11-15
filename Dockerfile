@@ -74,6 +74,11 @@ COPY --chmod=0755 scripts/docker/diana-cli.sh /usr/local/bin/diana
 # 替换程序（/app 只读，重建容器也会丢），升级靠拉新镜像。日志写进数据目录，
 # 部署标识用于更新策略与容器默认日志目录；应用配置通过 YAML 管理。
 ENV DIANA_DEPLOYMENT=docker
+# 工作区容器（run_command）用的 docker CLI。守护进程不在这个镜像里：把宿主机上 rootless
+# Docker 的 socket 挂到下面这个路径就能用（见 docs/workbox.md 和 docker-compose.yml）；
+# 不挂时 run_command 不提供。不要挂宿主的 /var/run/docker.sock，那是 root 权限。
+COPY --from=docker:29.1.3-cli@sha256:4fa0ee1f3a7e4354c4ea34558b6d4ee32859baf4973d4c8ccc8e7fe3dd730c04 /usr/local/bin/docker /usr/local/bin/docker
+ENV DIANA_BOX_DOCKER_HOST=unix:///run/diana-box/docker.sock
 
 # 完整版运行时：预装 Chromium（网页读取/截图）、Noto CJK 字体、ffmpeg、
 # yt-dlp 与 tesseract 及中英语言包（图片文字识别插件的本地离线后端）。

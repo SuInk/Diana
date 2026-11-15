@@ -1165,6 +1165,10 @@ func (r *Runtime) Start(parent context.Context) error {
 		defer recoverGoroutinePanic("runtime.prewarmAgentRegistries")
 		r.prewarmAgentRegistries(ctx, prewarmConfigs)
 	}()
+	go func() {
+		defer recoverGoroutinePanic("runtime.boxMaintenance")
+		runBoxMaintenance(ctx, prewarmConfigs)
+	}()
 
 	go func() {
 		defer recoverGoroutinePanic("runtime.go:702")
@@ -5265,8 +5269,6 @@ var speakerVariantTools = []string{
 	dianaGitHubToolName,
 	dianaSubscriptionToolName,
 	dianaCrossSessionToolName,
-	// 主人和成员各是一份同名 run_command，描述不同。
-	"run_command",
 	"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs", "browser_screenshot",
 }
 

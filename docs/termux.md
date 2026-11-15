@@ -18,6 +18,7 @@ WebUI「依赖」页的一键安装在 Termux 里执行的就是这两条。Term
 - **没有进程沙盒。** 安卓不给普通 App 开用户命名空间，Chromium 的沙盒起不来，所以在 Termux 里启动的
   Chromium 都带 `--no-sandbox`。页面仍然在 Termux 自己的 App 沙盒里，访问 localhost、内网域名的屏蔽照旧。
   普通 Linux 和 Docker 不受影响，仍然开沙盒。
+- **没有工作区容器。** Termux 里没有 Docker，`run_command` 不提供，见[工作区容器](workbox.md)。
 - **默认无头。** Termux 里装得上 Xvfb，但它的 socket 落在 `$PREFIX/tmp/.X11-unix`，Diana 不去拉它。没有
   图形会话时，网页读取和内置浏览器都改成无头运行。无头更容易被搜索引擎和部分站点认出来、弹验证码。
   内置浏览器的实时画面走 CDP screencast，无头一样能在 WebUI 里看、能接管。

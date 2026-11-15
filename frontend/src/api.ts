@@ -465,8 +465,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** auto / require / off；留空即 auto。 */
   agent_command_sandbox?: string;
   agent_command_sandbox_allow_network?: boolean;
-  /** 群成员可用独立沙盒里的 run_command，默认关闭。 */
-  agent_member_command_enabled?: boolean;
+  /** 工作区容器里的 run_command / box_reset：off / owner（仅主人，默认）/ all。 */
+  agent_box_access?: string;
+  /** 每个会话工作区容器 /work 的大小上限（MB），默认 5120。 */
+  agent_box_disk_limit_mb?: number;
   /** 打开 write_file / edit_file / save_to_workspace 和 manage_files 的写操作。新建配置默认打开。 */
   agent_file_write_enabled?: boolean;
   agent_browser_cdp_url?: string;
@@ -4553,6 +4555,10 @@ export interface AgentRecommendedDefaults {
   subtask_max_tasks: number;
   subtask_max_concurrency: number;
   agent_command_timeout_ms: number;
+  agent_box_access?: string;
+  agent_box_disk_limit_mb?: number;
+  /** 这台机器能不能起工作区容器；不能时 reason 写明原因。 */
+  agent_box_status?: { available: boolean; reason?: string };
   /** 安全模式关掉的能力，按类别排好；界面的说明和确认框照它生成。 */
   agent_safe_mode?: AgentSafeModeCategory[];
 }

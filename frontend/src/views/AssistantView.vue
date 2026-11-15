@@ -2023,7 +2023,7 @@
               </div>
               <template v-if="agentMode === 'standard'">
                 <div class="field wide">
-                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。工作区命令工具 run_command 只对主人开放，且只在下面的命令沙盒生效时提供；工作区工具的限制不影响主人的宿主机工具。</span>
+                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。run_command 在下面的工作区容器里运行，所有人共用；工作区工具的限制不影响主人的宿主机工具（host_access）。</span>
                 </div>
                 <!-- 存量部署升级后不会凭空拿到这些能力（那是静默扩权），所以给一次
                      显式的「填入」：只改表单，仍然要用户自己点保存。 -->
@@ -2084,7 +2084,7 @@
                   </span>
                 </div>
                 <div class="field wide">
-                  <label for="agent-sandbox">命令沙盒（run_command 与插件脚本）</label>
+                  <label for="agent-sandbox">插件脚本沙盒</label>
                   <AppSelect
                     id="agent-sandbox"
                     v-model="commandSandboxMode"
@@ -2095,8 +2095,8 @@
                     ]"
                   />
                   <span class="hint">
-                    run_command 只在沙盒真的生效时提供：关在工作区里、永远断网、执行前不审核。没有沙盒或选了关闭时不提供它，主人的命令改走执行前要审核的 host_access；插件脚本则在「自动」「关闭」下直接执行。
-                    Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。
+                    只管 install_package 和插件声明的脚本、MCP，它们在宿主机上运行；「自动」「关闭」下没有沙盒时直接执行。
+                    Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。run_command 不受它影响。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2105,22 +2105,37 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">允许插件脚本和装包联网</span>
                   </label>
-                  <span class="hint">默认切断。只影响 install_package 和插件声明的脚本、MCP；run_command 始终断网，要联网的命令走 host_access。</span>
+                  <span class="hint">默认切断。只影响 install_package 和插件声明的脚本、MCP；run_command 的联网由工作区容器决定。</span>
                 </div>
                 <div class="field wide">
-                  <label class="switch">
-                    <input v-model="form.agent_member_command_enabled" type="checkbox" />
-                    <span class="track" aria-hidden="true"></span>
-                    <span class="switch-label">群成员可运行命令</span>
-                  </label>
+                  <label for="agent-box-access">工作区容器（run_command）</label>
+                  <AppSelect
+                    id="agent-box-access"
+                    v-model="boxAccess"
+                    :options="[
+                      { value: 'owner', label: '仅主人' },
+                      { value: 'all', label: '所有人' },
+                      { value: 'off', label: '关闭' }
+                    ]"
+                  />
+                  <span v-if="agentBoxStatus && !agentBoxStatus.available" class="hint warn-text">
+                    这台机器用不了工作区容器，哪一档都不提供 run_command：{{ agentBoxStatus.reason }}
+                  </span>
                   <span class="hint">
-                    默认关闭。打开后群里的普通成员也能用 run_command 跑 python3 / node 生成文件，再用 send_file 发出；只在群聊里提供。
-                    成员用的是单独一套更严的沙盒：只读得到系统库、解释器和自己的临时目录，读不到主人家目录、工作区和其他群；只写自己的目录、始终断网，
-                    单次最长 30 秒、内存 512 MB，文件保留 24 小时。本机成员沙盒不可用（Linux 没装 bubblewrap、容器禁用用户命名空间）时成员调用一律拒绝。
+                    run_command 在隔离的 Docker 容器里跑 bash：git clone、下载、grep、跑 Python / Node 脚本，产物用 send_file 发出。「所有人」时群成员也能用，同一个群共用一个容器。
+                    每个群、每个私聊各一个容器，每个最多 1 GB 内存、2 核，不设总数上限：选「所有人」时同时在用命令的群越多，同时跑的容器越多。/work 持久保存；空闲 15 分钟停掉容器（文件保留），每周一 05:00 和「清空上下文」时清空，也可以让机器人用 box_reset 清空。
+                    容器里没有任何凭据，不挂宿主目录，只能访问公网，连不到本机和内网；单次命令默认 60 秒、最长 600 秒，内存 1 GB。
+                    需要本机的 Docker（macOS 用 Docker Desktop / colima / OrbStack，Linux 只认 rootless Docker，Docker 部署挂上 rootless socket 即可），Termux 不支持；第一次使用会在本机构建镜像，要等几分钟。
+                    详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/workbox.md" target="_blank" rel="noopener">工作区容器说明</a>。
                   </span>
                 </div>
+                <div v-if="boxAccess !== 'off'" class="field">
+                  <label for="agent-box-disk">工作区磁盘上限（MB）</label>
+                  <input id="agent-box-disk" v-model.number="form.agent_box_disk_limit_mb" class="input" inputmode="numeric" placeholder="5120" />
+                  <span class="hint">每个会话的 /work 单独算，包括 /work/.output 里的命令输出，默认 5120（5 GB），最小 100。超过后拒绝继续写入：命令不再执行或被停掉，结果里写明用了多少、怎么清理（box_reset、「清空上下文」或删文件）。</span>
+                </div>
                 <div class="field">
-                  <label for="agent-timeout">命令超时（毫秒）</label>
+                  <label for="agent-timeout">插件脚本超时（毫秒）</label>
                   <input id="agent-timeout" v-model.number="form.agent_command_timeout_ms" class="input" inputmode="numeric" />
                 </div>
               </template>
@@ -2776,6 +2791,8 @@ async function applyAgentDefaults(): Promise<void> {
     form.value.subtask_max_tasks = defaults.subtask_max_tasks;
     form.value.subtask_max_concurrency = defaults.subtask_max_concurrency;
     form.value.agent_command_timeout_ms = defaults.agent_command_timeout_ms;
+    if (defaults.agent_box_access) form.value.agent_box_access = defaults.agent_box_access;
+    if (defaults.agent_box_disk_limit_mb) form.value.agent_box_disk_limit_mb = defaults.agent_box_disk_limit_mb;
     toastSuccess("已填入推荐默认值，点「保存配置」后生效");
   } catch (err) {
     toastError(err instanceof Error ? err.message : String(err));
@@ -2788,6 +2805,14 @@ async function applyAgentDefaults(): Promise<void> {
 // 能便宜查到的现场情况（还在跑的编码任务、已启用的 MCP 服务）。确认之前表单不变，
 // 确认之后也只改表单，照常点「保存配置」才生效。
 const agentSafeModeCatalog = ref<AgentSafeModeCategory[]>([]);
+const agentBoxStatus = ref<{ available: boolean; reason?: string } | null>(null);
+// 留空按「仅主人」，和后端 NormalizeBoxAccess 一致。
+const boxAccess = computed<string>({
+  get: () => (["off", "all"].includes(form.value?.agent_box_access ?? "") ? (form.value?.agent_box_access as string) : "owner"),
+  set: (value) => {
+    if (form.value) form.value.agent_box_access = value;
+  }
+});
 const agentMode = computed<AgentMode>(() => normalizeAgentMode(form.value?.agent_mode, form.value?.agent_enabled));
 const agentSafeModeImpacts = computed(() => safeModeImpactLines(agentSafeModeCatalog.value));
 let agentSafeModeCatalogRequest: Promise<void> | null = null;
@@ -2796,6 +2821,7 @@ function loadAgentSafeModeCatalog(): Promise<void> {
     agentSafeModeCatalogRequest = getAgentDefaults()
       .then((defaults) => {
         agentSafeModeCatalog.value = defaults.agent_safe_mode ?? [];
+        agentBoxStatus.value = defaults.agent_box_status ?? null;
       })
       .catch(() => {
         // 拿不到时说明文字退回兜底版本，下次再试。
@@ -5103,7 +5129,8 @@ function setForm(config: BotProfileConfig): void {
     // 沙盒模式后端会归一化后回填；旧配置没有这个字段时按 auto 展示。
     agent_command_sandbox: config.agent_command_sandbox ?? "auto",
     agent_command_sandbox_allow_network: config.agent_command_sandbox_allow_network ?? false,
-    agent_member_command_enabled: config.agent_member_command_enabled ?? false,
+    agent_box_access: config.agent_box_access ?? 'owner',
+    agent_box_disk_limit_mb: config.agent_box_disk_limit_mb ?? 5120,
     agent_file_write_enabled: config.agent_file_write_enabled ?? false,
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_desktop_control_enabled: config.agent_desktop_control_enabled ?? false,

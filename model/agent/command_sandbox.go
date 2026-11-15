@@ -374,3 +374,9 @@ func normalizeCommandSandboxMode(value string) string {
 		return CommandSandboxAuto
 	}
 }
+
+// pathWithin 判断 child 是否等于 parent 或在它下面。
+func pathWithin(parent, child string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	return err == nil && (rel == "." || filepath.IsLocal(rel))
+}

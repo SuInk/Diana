@@ -40,7 +40,9 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 
 黑名单仍然留着，兜两种情况：路径被显式指回工作目录里，以及 `.diana/` 整个目录和根下尚未迁走的旧文件。它们对 `read_file`、`grep`、`find_files`、`write_file`、`edit_file`、`manage_files`、`save_to_workspace` 一律关闭，`list_files` 里也不出现（返回 `protected_hidden` 计数说明有东西被挡）。指向这些文件的软链接同样挡住。要查看或修改走 WebUI 扩展页。
 
-`run_command` 走另一条路：它能跑任意程序，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。macOS 上单个文件只挡得住读、挡不住写（工作目录整体可写），这正是运行时状态收进 `.diana/` 的原因：目录会在放开工作目录写入之后再 `deny file-write*`，白名单里有 `rm`、`mv` 也删不掉、换不掉开关文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
+`run_command` 不在这一节：它跑在[工作区容器](workbox.md)里，容器里没有宿主文件和环境变量，用不着这些遮挡。
+
+插件声明的脚本和 `install_package` 走另一条路：它能跑任意程序，管不到「这个程序能碰什么」，所以凭据文件由命令沙箱单独挡住——macOS 的 `sandbox-exec` 策略在 `allow file-read*` 之后逐条 `deny file-read*`（后写的规则覆盖先写的；目录按 `subpath` 整片挡），Linux 的 bubblewrap 用 `--ro-bind /dev/null` 把文件盖成空文件、用空的 `--tmpfs` 盖住目录。macOS 上单个文件只挡得住读、挡不住写（工作目录整体可写），这正是运行时状态收进 `.diana/` 的原因：目录会在放开工作目录写入之后再 `deny file-write*`，白名单里有 `rm`、`mv` 也删不掉、换不掉开关文件。白名单里配了 `cat`、`grep`、`head` 也读不出令牌，读到的是拒绝或空内容。
 
 挡读清单不止 MCP 配置。启动时还会登记这些凭据落脚点，文件工具和命令沙箱同样不放行：
 
@@ -52,9 +54,9 @@ MCP 配置里存的是访问令牌原文，所以它默认放在 **Agent 工作�
 - 工作目录里编码代理的登录目录 `coding-runtime/auth`、`coding-runtime/state`；
 - yt-dlp 的 cookies 文件（`ytb_cookies.txt`、`DIANA_YTDLP_COOKIES` 或插件设置里的路径，用到时登记）。
 
-**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），这一层就不存在：此时 `run_command` 不注册，主人的命令改走执行前要审核的 `host_access`；插件声明的脚本和 MCP 以 Diana 自己的进程权限裸跑，`require` 模式下则直接拒绝执行。沙箱状态在 WebUI 和启动日志里都能看到。
+**前提是沙箱真的在用。** `command_sandbox` 配成 `off`，或者这台机器上没有可用的 bubblewrap / sandbox-exec 而模式是 `auto`（探测失败时 `auto` 承诺照常执行），这一层就不存在：插件声明的脚本和 MCP 以 Diana 自己的进程权限裸跑，`require` 模式下则直接拒绝执行。沙箱状态在 WebUI 和启动日志里都能看到。
 
-沙箱挡的是文件，挡不住继承下来的环境变量。所以传给 `run_command` 的环境会摘掉这几类变量，跑 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
+沙箱挡的是文件，挡不住继承下来的环境变量。所以传给插件脚本的环境会摘掉这几类变量，跑 `env`、`printenv` 也打不出来：MCP 配置里用 `${NAME}` 引用的（令牌放在进程环境、配置只写引用）；名字像凭据的（含 `TOKEN`、`SECRET`、`KEY`、`PASSWORD`、`COOKIE`、`SESSDATA`、`_CK` 等，例如 `TAVILY_API_KEY`、`DIANA_BILI_SESSDATA`、编码代理的 `api_key_env`；以 `_FILE`、`_PATH`、`_DIR`、`_URL` 结尾的是位置不是凭据，保留）；值里嵌着账号密码的地址（带认证的代理）。stdio 服务子进程自己的环境变量：Linux 的 bubblewrap 另开了 PID 命名空间，命令看不到别的进程的 `/proc/<pid>/environ`；macOS 不向普通进程公开其他进程的环境，沙箱里也起不了 `ps`。
 
 ## 模型侧只见掩码
 
@@ -168,7 +170,7 @@ Skills 和 MCP 的版式和插件页完全一致：同一套卡片，同一条�
 
 这些值由运行时按触发消息填写，不经过模型，模型改不了也伪造不了；隐私代理开着时也是真实 ID。私聊没有 `group_id`；定时任务这类没有触发消息的运行不带这一项。默认关闭：远程服务会因此拿到发言人账号，这是新增的外发。安装工具（对话里让机器人装 MCP）不能打开它，只能在界面上开；预设表单改地址和令牌时保留原来的设置。
 
-`run_command` 起的本地命令（包括 Skill 附带的脚本）总能从环境变量拿到同一份身份：`DIANA_CALLER_PLATFORM`、`DIANA_CALLER_BOT_ID`、`DIANA_CALLER_USER_ID`、`DIANA_CALLER_CHAT_TYPE`、`DIANA_CALLER_IS_OWNER`（`1`/`0`），群聊另有 `DIANA_CALLER_GROUP_ID`，有消息 ID 时另有 `DIANA_CALLER_MESSAGE_ID`。宿主进程里同名的变量会先被去掉，不能冒充调用者。
+插件声明的脚本总能从环境变量拿到同一份身份：`DIANA_CALLER_PLATFORM`、`DIANA_CALLER_BOT_ID`、`DIANA_CALLER_USER_ID`、`DIANA_CALLER_CHAT_TYPE`、`DIANA_CALLER_IS_OWNER`（`1`/`0`），群聊另有 `DIANA_CALLER_GROUP_ID`，有消息 ID 时另有 `DIANA_CALLER_MESSAGE_ID`。宿主进程里同名的变量会先被去掉，不能冒充调用者。
 
 ## 在对话里改
 

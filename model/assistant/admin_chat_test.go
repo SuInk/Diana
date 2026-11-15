@@ -78,7 +78,7 @@ func TestAdminChatInstallsSkillAndMCPOnlyAfterConfirmation(t *testing.T) {
 }
 
 func TestAdminChatPreservesCommandPolicyAndRejectsUnknownProfile(t *testing.T) {
-	forceCommandSandbox(t, true)
+	forceBox(t, false)
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	provider := &agentSequenceLLMProvider{responses: []string{`{"action":"tool","tool":"run_command","input":{"command":"/bin/uname","args":[]}}`, `{"action":"final","content":"命令受限"}`}}
 	r := NewRuntime(BotConfig{ID: "bot"}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
@@ -90,7 +90,8 @@ func TestAdminChatPreservesCommandPolicyAndRejectsUnknownProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resp.Steps) == 0 || !strings.Contains(resp.Steps[0].Error, "binary name") {
+	// 没有 Docker 时管理会话里也没有 run_command，命令只能走 host_access。
+	if len(resp.Steps) == 0 || resp.Steps[0].Error == "" {
 		t.Fatalf("command path accepted: %#v", resp)
 	}
 }
