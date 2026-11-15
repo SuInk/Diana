@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolverAttachDownloadedVideoReturnsMedia(t *testing.T) {
@@ -268,5 +269,32 @@ func TestResolverFailureIsolationAndRedaction(t *testing.T) {
 	result := plugin.attachDownloadedVideo(first, PluginRequest{}, "https://youtu.be/example", "YouTube", resolverSocialResult{Handled: true, Context: "video"})
 	if result.Failed || result.Context != "video" {
 		t.Fatalf("successful fallback leaked errors: %#v", result)
+	}
+}
+
+// 下载拖到预算截止时，已经拿到的原生解析结果不能被丢掉、落到通用网页抓取
+// （2026-11-16 生产上一条 B 站视频下到一半超时，发出去成了「标题：/摘要：」格式）。
+func TestResolverSocialMediaKeepsMetadataWhenDownloadHitsBudget(t *testing.T) {
+	budget, reserve := resolverSocialBudget, resolverSocialResultReserve
+	resolverSocialBudget, resolverSocialResultReserve = 600*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { resolverSocialBudget, resolverSocialResultReserve = budget, reserve })
+	t.Setenv("DIANA_DOUYIN_CK", "")
+	t.Setenv("DOUYIN_CK", "")
+
+	plugin := NewResolverPlugin(nil)
+	plugin.douyinDetailFetcher = func(context.Context, string) (douyinMediaDetail, bool, string) {
+		var detail douyinMediaDetail
+		detail.AwemeID = "12345"
+		detail.Desc = "作品标题"
+		detail.Video.PlayAddr.URI = "v0200"
+		return detail, true, ""
+	}
+	plugin.mediaDownloader = func(ctx context.Context, _ string) string {
+		<-ctx.Done()
+		return ""
+	}
+	result := plugin.resolveSocialMedia(context.Background(), PluginRequest{}, "https://www.douyin.com/video/12345", 9, time.Minute)
+	if !result.Handled || !strings.HasPrefix(result.Context, "[抖音] 作品标题") || !strings.Contains(result.Context, "媒体下载失败") {
+		t.Fatalf("result = %#v", result)
 	}
 }
