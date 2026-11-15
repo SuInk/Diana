@@ -335,7 +335,7 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 		t.Fatalf("tool notes in the prefix = %d, want 1", notes)
 	}
 	// 每份请求末尾都有输出前检查；续接的轮次当前消息前有查证提醒。
-	check := "【输出前检查】\n" + replyUnclosedBracketRule
+	check := "【输出前检查】\n" + replyUnclosedBracketRule + "\n" + promptReplyUnknownReferenceSpec.Default
 	for index, request := range replies {
 		checks := 0
 		for _, message := range request.Messages {
