@@ -80,7 +80,7 @@ func TestHistoryIdentityAutomaticCrossGroupAndMediaPrompts(t *testing.T) {
 		t.Fatal("missing cross-group text")
 	}
 	text := historyPromptTextAt(cross, 2, cfg)
-	if !strings.HasPrefix(text, "[跨群历史 ") || strings.Contains(text, "500005") {
+	if !strings.HasPrefix(text, "[跨群 ") || strings.Contains(text, "500005") {
 		t.Fatalf("wrong cross-group identity or source-group leak: %s", text)
 	}
 	// 角色跟在发送者后面、正文之前，不再是行尾单独一段 JSON。
@@ -137,10 +137,11 @@ func TestHistoryIdentityRuntimeKeepsCrossGroupSelfNickname(t *testing.T) {
 }
 
 func TestCurrentPromptIdentifiesSenderWithoutGroupRoleTags(t *testing.T) {
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "鲁汀", Time: 100}
-	for role, want := range map[GroupRole]string{GroupRoleOwner: "鲁汀（10001）\n", GroupRoleAdmin: "鲁汀（10001）\n", GroupRoleMember: "鲁汀（10001）\n", "": "鲁汀（10001）\n"} {
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001", SenderName: "鲁汀", Time: 100, RawMessage: "禁言他"}
+	for _, role := range []GroupRole{GroupRoleOwner, GroupRoleAdmin, GroupRoleMember, ""} {
 		got := currentPromptTextWithSemanticContext(event, "禁言他", semanticReferenceContext{}, promptAnnotation{SenderGroupRole: role})
-		if !strings.Contains(got, "【当前发言者】"+want) {
+		// 当前消息就是一行「[时间] 发送者: 正文」，群角色不进这一行。
+		if line, _, _ := strings.Cut(got, "\n"); !strings.HasPrefix(line, historyLinePrefix(event)) || !strings.HasSuffix(line, "] 鲁汀（10001）: 禁言他") {
 			t.Fatalf("role %q: %q", role, got)
 		}
 	}

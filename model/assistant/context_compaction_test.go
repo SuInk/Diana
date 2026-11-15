@@ -247,7 +247,7 @@ func TestReplyCompactsHistoryWhenOverThreshold(t *testing.T) {
 			continue
 		}
 		for _, msg := range req.Messages {
-			if strings.Contains(msg.Content, "【当前需要回复的消息】") {
+			if isReplyTurnMarker(msg) {
 				replies = append(replies, req)
 				break
 			}
@@ -276,6 +276,30 @@ func TestReplyCompactsHistoryWhenOverThreshold(t *testing.T) {
 	}
 }
 
+// isCurrentMessageNotes 认出当前消息前那条只给这一轮的注解：只有主回复请求带它。
+func isCurrentMessageNotes(msg llm.Message) bool {
+	return strings.HasPrefix(msg.Content, currentMessageNotesTitle)
+}
+
+// isReplyTurnMarker 认出只有主回复请求才带的那条：本轮注解，或群聊篇幅提醒（没有别的
+// 注解时只有它）。
+func isReplyTurnMarker(msg llm.Message) bool {
+	return isCurrentMessageNotes(msg) || msg.Content == promptNoteGroupBrevitySpec.Default
+}
+
+// currentLineAndNotes 取主回复请求末尾的当前消息那一行，和它前面那条只给这一轮的注解
+// （没有注解时为空）。
+func currentLineAndNotes(messages []llm.Message) (line, notes string) {
+	if len(messages) == 0 {
+		return "", ""
+	}
+	line = messages[len(messages)-1].Content
+	if len(messages) >= 2 && isCurrentMessageNotes(messages[len(messages)-2]) {
+		notes = messages[len(messages)-2].Content
+	}
+	return line, notes
+}
+
 func isCompactionRequest(req llm.GenerateRequest) bool {
 	for _, msg := range req.Messages {
 		if strings.HasPrefix(msg.Content, "<conversation>") {
@@ -293,7 +317,7 @@ type overflowOnceProvider struct {
 func (p *overflowOnceProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	if !isCompactionRequest(req) {
 		for _, msg := range req.Messages {
-			if strings.Contains(msg.Content, "【当前需要回复的消息】") {
+			if isReplyTurnMarker(msg) {
 				p.mu.Lock()
 				first := !p.failed
 				p.failed = true
@@ -334,7 +358,7 @@ func TestReplyCompactsAndRetriesOnProviderOverflow(t *testing.T) {
 			continue
 		}
 		for _, msg := range req.Messages {
-			if strings.Contains(msg.Content, "【当前需要回复的消息】") {
+			if isReplyTurnMarker(msg) {
 				replies++
 				last = req
 				break
@@ -405,7 +429,7 @@ func TestReplyCompactionFitsSmallWindows(t *testing.T) {
 					continue
 				}
 				for _, msg := range req.Messages {
-					if strings.Contains(msg.Content, "【当前需要回复的消息】") {
+					if isReplyTurnMarker(msg) {
 						reply = &provider.requests[index]
 					}
 				}

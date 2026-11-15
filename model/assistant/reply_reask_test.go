@@ -28,7 +28,8 @@ func (p *reaskProvider) Generate(ctx context.Context, req llm.GenerateRequest) (
 	last := ""
 	// 回复风格提示可能追加在工具结果之后，按最近的业务消息识别测试阶段。
 	for i := len(req.Messages) - 1; i >= 0; i-- {
-		content := req.Messages[i].Content
+		// 当前消息那一行按段渲染，@ 后面可能多一个空格。
+		content := strings.Join(strings.Fields(req.Messages[i].Content), " ")
 		if strings.Contains(content, "chat_history 执行成功") || strings.Contains(content, "@42 在吗") || strings.Contains(content, "@42 查一下") {
 			last = content
 			break

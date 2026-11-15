@@ -64,11 +64,42 @@ func appendTestLog(t *testing.T, messages []llm.Message, reply string) *appendCo
 	return log
 }
 
+// appendTestNotes 是当前消息前那条只用于本轮的注解（见 splitCurrentMessageNotes）。
+func appendTestNotes(text string) llm.Message {
+	return llm.Message{Role: llm.RoleUser, Content: currentMessageNotesTitle + "\n" + text, TurnOnly: true}
+}
+
+// appendTestRequest 按真实请求的形态拼一轮：头部、历史区（最后一条带缓存断点）、尾部
+// 说明、这一轮的注解，最后是当前消息那一行。
+func appendTestRequest(history []llm.Message, tail, notes, current string) []llm.Message {
+	messages := []llm.Message{{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)}}
+	messages = append(messages, history...)
+	messages[len(messages)-1].CacheBreakpoint = true
+	messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: appendTestRule + "\n" + tail})
+	if notes != "" {
+		messages = append(messages, appendTestNotes(notes))
+	}
+	return append(messages, llm.Message{Role: llm.RoleUser, Content: current})
+}
+
+func appendTestLines(lines ...string) []llm.Message {
+	var messages []llm.Message
+	for _, line := range lines {
+		messages = append(messages, llm.Message{Role: llm.RoleUser, Content: line})
+	}
+	return messages
+}
+
+// 续接只追加新群消息、整段尾部和当前消息。上一轮的当前消息那一行留在前缀里，这一轮它
+// 在历史区里成了第一行、写全了日期，也不再追加；新追加的历史行接着前缀的日期省掉日期。
 func TestAppendContextAppendsNewHistoryAndWholeTail(t *testing.T) {
-	first := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 乙: 早啊"}, "当前发言者：甲，这一行每轮都会变化，长度也够。", "【当前需要回复的消息】甲: 在吗")
+	first := appendTestRequest(appendTestLines("[2026-11-15 10:00:00 #101] 甲: 早", "[10:01:00 #102] 乙: 早啊"),
+		"当前发言者：甲，这一行每轮都会变化，长度也够。", "被 @ 了。", "[10:02:00 #103] 甲: 在吗")
 	log := appendTestLog(t, first, "在的")
-	second := appendTestTurn([]string{"[历史 10:01] 乙: 早啊", "[历史 10:02] 甲: 在吗", "[历史 10:03] 丙: 吃了吗"}, "当前发言者：丙，这一行每轮都会变化，长度也够。", "【当前需要回复的消息】丙: 吃了吗")
-	second = append(second[:3], append([]llm.Message{{Role: llm.RoleAssistant, Content: "在的"}}, second[3:]...)...)
+	history := appendTestLines("[2026-11-15 10:01:00 #102] 乙: 早啊", "[10:02:00 #103] 甲: 在吗")
+	history = append(history, agent.HistoryReplyMessages("old", "在的")...)
+	history = append(history, appendTestLines("[10:02:30 #104] 乙: 吃了没")...)
+	second := appendTestRequest(history, "当前发言者：丙，这一行每轮都会变化，长度也够。", "引用了一条消息。", "[10:03:00 #105] 丙: 吃了吗")
 	continuation := continueFrom(log, second)
 	if continuation == nil {
 		t.Fatal("expected a continuation")
@@ -78,30 +109,85 @@ func TestAppendContextAppendsNewHistoryAndWholeTail(t *testing.T) {
 		got = append(got, string(message.Role)+":"+message.Content)
 	}
 	joined := strings.Join(got, "|")
-	for _, want := range []string{"[历史 10:02] 甲: 在吗", "[历史 10:03] 丙: 吃了吗", appendTestRule + "\n当前发言者：丙"} {
+	for _, want := range []string{"user:[10:02:30 #104] 乙: 吃了没", appendTestRule + "\n当前发言者：丙", currentMessageNotesTitle + "\n引用了一条消息。"} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("missing %q in %q", want, joined)
 		}
 	}
-	for _, unwanted := range []string{"乙: 早啊", "assistant:在的", "人设头部"} {
+	for _, unwanted := range []string{"乙: 早啊", "#103", "在吗", "人设头部", "被 @ 了"} {
 		if strings.Contains(joined, unwanted) {
 			t.Fatalf("%q should not be appended again: %q", unwanted, joined)
 		}
 	}
-	if last := continuation.Append[len(continuation.Append)-1]; last.Content != "【当前需要回复的消息】丙: 吃了吗" || last.CacheBreakpoint {
+	for _, message := range continuation.Append {
+		if llm.IsHistoryReplyMessage(message) {
+			t.Fatalf("own reply appended again: %#v", message)
+		}
+		if strings.HasPrefix(message.Content, currentMessageNotesTitle) && !message.TurnOnly {
+			t.Fatalf("this turn's notes must stay turn-only: %#v", message)
+		}
+	}
+	if last := continuation.Append[len(continuation.Append)-1]; last.Content != "[10:03:00 #105] 丙: 吃了吗" || last.CacheBreakpoint || last.TurnOnly {
 		t.Fatalf("current message must stay last: %#v", last)
 	}
 }
 
-func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
-	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
+// 重新组装那一轮的当前消息那一行进了前缀；下一轮同一条消息在历史区里成了历史行，
+// 写法和前缀里那行有出入（写全了日期、补上了图片描述）也只按消息 ID 认，不再追加第二遍。
+func TestAppendContextSkipsPreviousCurrentLineByMessageID(t *testing.T) {
+	first := appendTestRequest(appendTestLines("[2026-11-15 09:59:00 #300] 乙: 早"), "当前发言者：甲。", "被 @ 了。", "[10:05:00 #301] 甲: 在吗")
 	log := appendTestLog(t, first, "在的")
-	changed := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 还在吗")
+	if !log.ids["301"] {
+		t.Fatalf("the current line of the reassembled turn must be indexed by id: %v", log.ids)
+	}
+	for _, notes := range log.prefix {
+		if strings.HasPrefix(notes.Content, currentMessageNotesTitle) {
+			t.Fatalf("this turn's notes entered the prefix: %q", notes.Content)
+		}
+	}
+	for _, again := range []string{
+		"[2026-11-15 10:05:00 #301] 甲: 在吗",
+		"[2026-11-15 10:05:00 #301] 甲: 在吗\n【图片描述】一只猫",
+	} {
+		history := append(appendTestLines(again), agent.HistoryReplyMessages("r1", "在的")...)
+		history = append(history, appendTestLines("[10:05:40 #302] 乙: 来了")...)
+		second := appendTestRequest(history, "当前发言者：甲。", "", "[10:06:00 #303] 甲: 吃了吗")
+		continuation := continueFrom(log, second)
+		if continuation == nil {
+			t.Fatal("expected a continuation")
+		}
+		var lines []string
+		for _, message := range continuation.Append {
+			if isHistoryLine(message.Content) {
+				lines = append(lines, message.Content)
+			}
+		}
+		if want := []string{"[10:05:40 #302] 乙: 来了", "[10:06:00 #303] 甲: 吃了吗"}; !reflect.DeepEqual(lines, want) {
+			t.Fatalf("appended lines = %q, want %q (history line %q)", lines, want, again)
+		}
+		transcript := append(append([]llm.Message(nil), continuation.Prefix...), withoutTurnOnly(continuation.Append)...)
+		next := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k", Continued: true}, log.headKey, estimateMessagesTokens(second), log)
+		count := 0
+		for _, message := range next.prefix {
+			if historyLineMessageID(message.Content) == "301" {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Fatalf("message 301 appears %d times in the next prefix", count)
+		}
+	}
+}
+
+func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
+	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
+	log := appendTestLog(t, first, "在的")
+	changed := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 还在吗")
 	changed[0].Content = "换了人设"
 	if continuation, decision := appendContextContinuation(log, changed, 0); continuation != nil || decision.reason != "head_changed" {
 		t.Fatalf("a changed head must restart, reason = %q", decision.reason)
 	}
-	long := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:05] 甲: " + strings.Repeat("很长的一段话。", 400)}, "", "甲: 还在吗")
+	long := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:05:00] 甲: " + strings.Repeat("很长的一段话。", 400)}, "", "甲: 还在吗")
 	log.prefix = append(log.prefix, llm.Message{Role: llm.RoleUser, Content: strings.Repeat("旧内容。", 3000)})
 	if continuation, decision := appendContextContinuation(log, long, 0); continuation != nil || decision.reason != "too_long" {
 		t.Fatal("a prefix past the growth limit must restart")
@@ -111,7 +197,7 @@ func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
 // 续接前缀是 Runner 发出的整份请求，含它自己加的系统提示、契约和工具段；上限要
 // 按同一口径比，否则这些占一半时续一两轮就判 too_long（11-02 生产 46% 的主回复）。
 func TestAppendContextGrowthCountsRunnerOverhead(t *testing.T) {
-	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
+	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
 	full := estimateMessagesTokens(first)
 	runnerPart := llm.Message{Role: llm.RoleSystem, Content: strings.Repeat("工具契约。", 2000)}
 	overhead := llm.EstimateMessageTokens(runnerPart)
@@ -121,7 +207,7 @@ func TestAppendContextGrowthCountsRunnerOverhead(t *testing.T) {
 	if fresh.overhead != overhead {
 		t.Fatalf("overhead = %d, want %d", fresh.overhead, overhead)
 	}
-	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:01] 甲: 在吗"}, "", "甲: 今天吃什么")
+	second := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:01:00] 甲: 在吗"}, "", "甲: 今天吃什么")
 	continuation, decision := appendContextContinuation(fresh, second, 0)
 	if continuation == nil {
 		t.Fatalf("a prefix about as long as one full request must continue, reason = %q", decision.reason)
@@ -365,7 +451,7 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 func TestAppendContextSendsOnlyTailBlocksThatDifferFromPrefix(t *testing.T) {
 	rules := "【这个群的约定】别说草。\n- 少用感叹号"
 	fixed := "Telegram 不使用合并转发，也不自动拼接多条消息。"
-	cross := "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了"
+	cross := "[跨群 2026-10-20 10:00:00] 甲: 猫又跑了"
 	state := func(target string) string {
 		return "【当前消息的对话对象】\n{\"reply_target\":\"" + target + "\"}"
 	}
@@ -384,8 +470,8 @@ func TestAppendContextSendsOnlyTailBlocksThatDifferFromPrefix(t *testing.T) {
 		}
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: current})
 	}
-	history := []string{"[历史 10:00] 甲: 早"}
-	first := build(history, "a", "", "【当前需要回复的消息】甲: 在吗")
+	history := []string{"[10:00:00] 甲: 早"}
+	first := build(history, "a", "", "甲: 在吗")
 	log := appendTestLog(t, first, "在的")
 	// 完整组装那一轮：尾部进前缀，源头标成只用于本轮的跨群参考不进。
 	if len(log.prefix) != len(first)-1+2 {
@@ -410,8 +496,8 @@ func TestAppendContextSendsOnlyTailBlocksThatDifferFromPrefix(t *testing.T) {
 		{"c", "", []string{state("c")}},
 	} {
 		current := "第" + string(rune('1'+round)) + "问"
-		history = append(history, "[历史 10:0"+string(rune('1'+round))+"] 甲: "+current)
-		full := build(history, tc.target, tc.extra, "【当前需要回复的消息】甲: "+current)
+		history = append(history, "[10:0"+string(rune('1'+round))+":00] 甲: "+current)
+		full := build(history, tc.target, tc.extra, "甲: "+current)
 		continuation, decision := appendContextContinuation(log, full, 0)
 		if continuation == nil {
 			t.Fatalf("round %d: no continuation: %s", round, decision.reason)
@@ -469,7 +555,7 @@ func TestSplitContextBlocksRoundTrips(t *testing.T) {
 // 历史里那行逐字相同：放在收尾那句的第一条后面，中途发言排在它前面；收尾没说话就放在
 // 最后一句中途发言后面；整轮没说话或没调过工具就不加。
 func TestAppendContextPrefixAddsToolNoteAfterReply(t *testing.T) {
-	base := appendTestPrefix(appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 查一下天气"))
+	base := appendTestPrefix(appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 查一下天气"))
 	baseline := len(base)
 	search := agent.Step{Tool: "web_search", Input: map[string]any{"query": "天气"}, Output: "晴"}
 	interim := agent.Step{Tool: agent.FinalizeToolName, Input: map[string]any{"text": "我查一下"}, Output: "已发送"}
@@ -558,17 +644,17 @@ func TestReplyTurnContinuesFromLastSuccessAfterFailure(t *testing.T) {
 // 消息按 reply 段渲染成带引用标记的 assistant 行，续接时不能再追加一遍。
 func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
 	const reply = "对，正好四个全是 y，y 家军实锤了"
-	first := appendTestTurn([]string{"[历史 10:07:03] 池宇健: 我发现活跃的bot都是y开头的"}, "", "【当前需要回复的消息】池宇健: 我发现活跃的bot都是y开头的")
+	first := appendTestTurn([]string{"[10:07:03] 池宇健: 我发现活跃的bot都是y开头的"}, "", "池宇健: 我发现活跃的bot都是y开头的")
 	transcript := append(append([]llm.Message(nil), first...), llm.Message{Role: llm.RoleAssistant, Content: reply})
 	log := newAppendContextLog(&agent.Response{Transcript: transcript, ConversationKey: "k"}, appendContextHeadKey(first), estimateMessagesTokens(first), nil)
 	if log == nil {
 		t.Fatal("log not created")
 	}
 	second := appendTestTurn([]string{
-		"[历史 10:07:03] 池宇健: 我发现活跃的bot都是y开头的",
-		"[历史 10:07:17] 池宇健: 幽夜 月白 yuki 柚子",
-		"[历史 10:07:58] suakitsu: 你们四个y  是要起y吗？",
-	}, "", "【当前需要回复的消息】suakitsu: 你们四个y  是要起y吗？")
+		"[10:07:03] 池宇健: 我发现活跃的bot都是y开头的",
+		"[10:07:17] 池宇健: 幽夜 月白 yuki 柚子",
+		"[10:07:58] suakitsu: 你们四个y  是要起y吗？",
+	}, "", "suakitsu: 你们四个y  是要起y吗？")
 	second = append(second[:3], append([]llm.Message{{Role: llm.RoleAssistant, Content: `<diana-quote id="im_message_ab257222a6f8"/>` + reply}}, second[3:]...)...)
 	continuation := continueFrom(log, second)
 	if continuation == nil {
@@ -598,9 +684,9 @@ func TestAppendContextSkipsOwnReplyRenderedWithQuoteMarker(t *testing.T) {
 // 历史里自己的发言是 send 调用加「已发送」：记录里已有的那句两半都不再追加，新的那句
 // 两半一起追加，不留不成对的调用。
 func TestAppendContextKeepsHistoryReplyPairsTogether(t *testing.T) {
-	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 在吗")
+	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
 	log := appendTestLog(t, first, "在的")
-	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:02] 乙: 吃了吗"}, "", "【当前需要回复的消息】乙: 吃了吗")
+	second := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:02:00] 乙: 吃了吗"}, "", "乙: 吃了吗")
 	old := agent.HistoryReplyMessages("old", `<diana-quote id="im_message_1"/>在的`)
 	fresh := agent.HistoryReplyMessages("new", "刚吃完")
 	history := append(append([]llm.Message{second[1]}, old...), second[2])
@@ -723,47 +809,47 @@ func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
 	}
 }
 
-// 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带，没有过照带；跨群参考每轮
+// 群聊篇幅提醒单独一条、不只用于本轮：上文有过就不再带，没有过照带；跨群参考每轮
 // 现查、原样带上，哪怕上一轮带过同一条（它不进前缀，见 llm.Message.TurnOnly）。
 func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	note := "群聊接话：闲聊随口一两句。"
-	cross := "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了"
+	cross := "[跨群 2026-10-20 10:00:00] 甲: 猫又跑了"
 	turn := func(crossLine, current string) []llm.Message {
 		return []llm.Message{
 			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
-			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: "[10:00:00] 甲: 早", CacheBreakpoint: true},
 			{Role: llm.RoleUser, Content: crossLine, TurnOnly: true},
+			{Role: llm.RoleUser, Content: note},
 			{Role: llm.RoleUser, Content: current},
 		}
 	}
-	first := turn(cross, "【当前需要回复的消息】甲: 在吗\n\n"+note)
-	log := appendTestLog(t, first, "在的")
-	second := turn("[跨群历史 2026-10-21 09:00:00] 乙: 新检索到的一条", "【当前需要回复的消息】甲: 吃了吗\n\n"+note)
+	log := appendTestLog(t, turn(cross, "[10:01:00] 甲: 在吗"), "在的")
+	second := turn("[跨群 2026-10-21 09:00:00] 乙: 新检索到的一条", "[10:02:00] 甲: 吃了吗")
 
-	continuation, decision := appendContextContinuation(log, second, 0, note)
+	continuation, decision := appendContextContinuation(log, second, 0)
 	if continuation == nil {
 		t.Fatalf("expected a continuation, reason = %q", decision.reason)
 	}
 	var parts []string
-	for _, message := range continuation.Append {
-		parts = append(parts, message.Content)
-	}
-	joined := strings.Join(parts, "|")
-	if last := parts[len(parts)-1]; last != "【当前需要回复的消息】甲: 吃了吗" {
-		t.Fatalf("the repeated note must be dropped from the current message: %q", last)
-	}
-	// 跨群参考照带，并且保留「只用于本轮」的标记。
 	crossKept := false
 	for _, message := range continuation.Append {
+		parts = append(parts, message.Content)
+		if message.Content == note {
+			t.Fatalf("the note already in the prefix must not be resent: %q", parts)
+		}
 		if strings.Contains(message.Content, "新检索到的一条") {
 			crossKept = message.TurnOnly
 		}
 	}
+	if last := parts[len(parts)-1]; last != "[10:02:00] 甲: 吃了吗" {
+		t.Fatalf("the current line must stay last and unchanged: %q", last)
+	}
+	// 跨群参考照带，并且保留「只用于本轮」的标记。
 	if !crossKept {
-		t.Fatalf("this turn's cross-group line must be appended and stay turn-only: %q", joined)
+		t.Fatalf("this turn's cross-group line must be appended and stay turn-only: %q", parts)
 	}
 	// 同一条跨群参考再次检索到时也照带：上一轮那条没留在前缀里。
-	again, _ := appendContextContinuation(log, turn(cross, "【当前需要回复的消息】甲: 吃了吗\n\n"+note), 0, note)
+	again, _ := appendContextContinuation(log, turn(cross, "[10:02:00] 甲: 吃了吗"), 0)
 	found := false
 	for _, message := range again.Append {
 		found = found || strings.Contains(message.Content, "猫又跑了")
@@ -771,20 +857,26 @@ func TestAppendContextDropsRepeatedNoteAndCrossGroupLines(t *testing.T) {
 	if !found {
 		t.Fatal("a cross-group line retrieved again must be sent again")
 	}
-	// 上文没有过这条注解时照带。
-	fresh := appendTestLog(t, turn(cross, "【当前需要回复的消息】甲: 在吗"), "在的")
-	continuation, _ = appendContextContinuation(fresh, second, 0, note)
-	if last := continuation.Append[len(continuation.Append)-1].Content; !strings.HasSuffix(last, note) {
-		t.Fatalf("a note not yet in the prefix must stay: %q", last)
+	// 上文没有过这条提醒时照带。
+	withoutNote := turn(cross, "[10:01:00] 甲: 在吗")
+	withoutNote = append(withoutNote[:3], withoutNote[4:]...)
+	fresh := appendTestLog(t, withoutNote, "在的")
+	continuation, _ = appendContextContinuation(fresh, second, 0)
+	sent := false
+	for _, message := range continuation.Append {
+		sent = sent || message.Content == note
+	}
+	if !sent {
+		t.Fatal("a note not yet in the prefix must be sent")
 	}
 }
 
 // 配了「单次请求上下文上限」时续接也要守：续接后的请求超过它就重新组装；0 表示不限，
 // 只看两倍上限。
 func TestAppendContextRestartsPastConfiguredContextLimit(t *testing.T) {
-	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "甲: 在吗")
+	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
 	log := appendTestLog(t, first, "在的")
-	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:06] 甲: 新的一句"}, "", "甲: 还在吗")
+	second := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:06:00] 甲: 新的一句"}, "", "甲: 还在吗")
 
 	continuation, decision := appendContextContinuation(log, second, 0)
 	if continuation == nil {
@@ -817,7 +909,7 @@ func TestSplitRetrievedMemoryAndAppendOnlyNewItems(t *testing.T) {
 	turn := func(items, current string) []llm.Message {
 		return []llm.Message{
 			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
-			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: "[10:00:00] 甲: 早", CacheBreakpoint: true},
 			{Role: llm.RoleUser, Content: head},
 			{Role: llm.RoleUser, Content: items},
 			{Role: llm.RoleUser, Content: current},
@@ -862,7 +954,7 @@ func TestAppendContextMentionListAppendsOnlyNewMembers(t *testing.T) {
 	turn := func(list, current string) []llm.Message {
 		return []llm.Message{
 			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
-			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleUser, Content: "[10:00:00] 甲: 早", CacheBreakpoint: true},
 			{Role: llm.RoleSystem, Content: list},
 			{Role: llm.RoleUser, Content: current},
 		}

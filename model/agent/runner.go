@@ -1989,7 +1989,15 @@ func currentUserRequestText(req Request) string {
 			continue
 		}
 		text := strings.TrimSpace(message.Content)
-		for _, marker := range []string{"\n\n【被引用的消息】", "\n\n【指代判断选中的历史消息】", "【合并转发 "} {
+		// 当前消息是一行「[时间 #消息ID] 发送者: 正文」，取冒号后面的原话。
+		if strings.HasPrefix(text, "[") {
+			if end := strings.Index(text, "] "); end > 0 {
+				if colon := strings.Index(text[end:], ": "); colon > 0 {
+					text = strings.TrimSpace(text[end+colon+len(": "):])
+				}
+			}
+		}
+		for _, marker := range []string{"\n【被引用的消息】", "\n【指代判断选中的历史消息】", "【合并转发 "} {
 			if markerIndex := strings.Index(text, marker); markerIndex >= 0 {
 				text = text[:markerIndex]
 			}

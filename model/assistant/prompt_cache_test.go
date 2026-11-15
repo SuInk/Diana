@@ -35,7 +35,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 	if first != second {
 		t.Fatalf("history line drifted between turns: %q vs %q", first, second)
 	}
-	want := "[历史 " + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] 轩诺: 旧问题"
+	want := "[" + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] 轩诺: 旧问题"
 	if first != want {
 		t.Fatalf("history line = %q, want %q", first, want)
 	}
@@ -44,7 +44,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 	}
 	cross := event
 	cross.crossGroupContext = true
-	if got := historyPromptTextAt(cross, 1100); !strings.HasPrefix(got, "[跨群历史 ") {
+	if got := historyPromptTextAt(cross, 1100); !strings.HasPrefix(got, "[跨群 ") {
 		t.Fatalf("cross-group history line = %q", got)
 	}
 	media := agentImageHistoryPromptTextWithDescriptions(MessageEvent{
@@ -53,7 +53,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 		MessageID:  "m-2",
 		Segments:   []MessageSegment{{Type: "image", Data: map[string]string{}}},
 	}, 1100, nil)
-	if !strings.HasPrefix(media, "[历史 ") || strings.Contains(media, "距当前") {
+	if !strings.HasPrefix(media, "["+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] ") || strings.Contains(media, "距当前") {
 		t.Fatalf("media history line = %q", media)
 	}
 }
@@ -65,11 +65,11 @@ func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
 	build := func(clock string) llm.GenerateRequest {
 		return llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "稳定人设与规则"},
-			{Role: llm.RoleUser, Content: "[历史 2026-09-03 10:00:00] 小林: 旧问题"},
+			{Role: llm.RoleUser, Content: "[2026-09-03 10:00:00] 小林: 旧问题"},
 			{Role: llm.RoleAssistant, Content: "旧回复", CacheBreakpoint: true},
 			{Role: llm.RoleSystem, Content: "关系等级：熟悉"},
 			{Role: llm.RoleSystem, Content: clock},
-			{Role: llm.RoleUser, Content: "【当前需要回复的消息】新问题"},
+			{Role: llm.RoleUser, Content: "新问题"},
 		}}
 	}
 	first := observePromptCachePayload(build("当前运行时钟：10:00:00"))
@@ -93,7 +93,7 @@ func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
 
 	// 真正的前缀断裂仍然要报：历史被改写时命中率是真的会掉。
 	broken := build("当前运行时钟：10:00:31")
-	broken.Messages[1].Content = "[历史 2026-09-03 10:00:00] 小林: 改写过的旧问题"
+	broken.Messages[1].Content = "[2026-09-03 10:00:00] 小林: 改写过的旧问题"
 	real := comparePromptCachePayload(first, observePromptCachePayload(broken))
 	if real.Segment != "messages" || real.MessageIndex != 0 || real.Expected(first) {
 		t.Fatalf("a real history rewrite must still be reported: %#v", real)

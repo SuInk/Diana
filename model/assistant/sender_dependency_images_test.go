@@ -602,7 +602,7 @@ func TestReplyWaitsForFollowUpImageDescription(t *testing.T) {
 			checked := false
 			provider.reply = func(req llm.GenerateRequest) string {
 				body := requestText(req)
-				if strings.Contains(body, "【当前需要回复的消息】") {
+				if strings.Contains(body, currentMessageNotesTitle) || strings.Contains(body, promptNoteGroupBrevitySpec.Default) {
 					checked = true
 					if !strings.Contains(body, "七个动漫人物在室内合照") || !strings.Contains(body, "最近上下文中的图片") {
 						t.Error("reply started without follow-up description")

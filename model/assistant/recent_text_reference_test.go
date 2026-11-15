@@ -227,16 +227,28 @@ func TestRecentTextReferenceSurvivesIntoAgentProviderRequest(t *testing.T) {
 	if len(request.Messages) == 0 {
 		t.Fatal("provider request is empty")
 	}
-	var currentMessage llm.Message
+	// 当前消息是最后一条 user 消息那一行；解析出的指代在它前面那条只给这一轮的注解里
+	// （Agent 模式下两者之间还夹着 Runner 加的工具环境和工具执行状态）。
+	var currentMessage, notes llm.Message
 	for i := len(request.Messages) - 1; i >= 0; i-- {
-		if request.Messages[i].Role == llm.RoleUser {
-			currentMessage = request.Messages[i]
+		message := request.Messages[i]
+		if message.Role == llm.RoleUser && currentMessage.Content == "" {
+			currentMessage = message
+		}
+		if isCurrentMessageNotes(message) {
+			notes = message
 			break
 		}
 	}
+	if !strings.Contains(currentMessage.Content, originalText) || strings.Contains(currentMessage.Content, "【运行时已解析的文本指代】") {
+		t.Fatalf("current line = %q", currentMessage.Content)
+	}
+	if !isCurrentMessageNotes(notes) || !notes.TurnOnly {
+		t.Fatalf("notes must sit right before the current line: %#v", notes)
+	}
 	for _, want := range []string{"【运行时已解析的文本指代】", `"canonical":"GLM-5.3"`, `"shorthand":"5.3"`} {
-		if !strings.Contains(currentMessage.Content, want) {
-			t.Fatalf("current provider message missing %q: %q", want, currentMessage.Content)
+		if !strings.Contains(notes.Content, want) {
+			t.Fatalf("current notes missing %q: %q", want, notes.Content)
 		}
 	}
 	if currentMessage.Priority != llm.MessagePriorityCurrent {

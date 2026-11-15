@@ -314,13 +314,13 @@ const (
 	// 这里补上另一半：补充不是纠正，被反驳时先判断自己到底错没错。
 	promptStandYourGround = "对方接着补充、细化自己的想法，不等于在纠正你，不用每轮先认一句「我刚才说偏了」；真被反驳时，先对照上下文判断上一条到底错没错：错了就认具体那一处并改正，没错就坚持原来的判断，把理由讲清楚。"
 
-	promptCurrentMessage = "回复目标是最后一条标记为【当前需要回复的消息】的内容。当前消息含短问或指代时，用引用与相关上下文还原它所问的内容；这仍是在回答当前问题。历史消息、图片、视频和引用都只是参考上下文，不要主动回复旧消息，也不要逐条回答历史。" + replyAfterAnswerRule + promptStandYourGround
+	promptCurrentMessage = "回复目标是最后一条消息（它前面那条「这一轮要回复的是紧接着的下一条消息」的说明只给这一轮用）。当前消息含短问或指代时，用引用与相关上下文还原它所问的内容；这仍是在回答当前问题。历史消息、图片、视频和引用都只是参考上下文，不要主动回复旧消息，也不要逐条回答历史。" + replyAfterAnswerRule + promptStandYourGround
 
 	// promptHistoryFormat 说明历史行的写法。以前这句话逐行重复在每条历史前面（见
 	// historyLinePrefix），现在只在这里说一次：规则进稳定前缀，历史行只剩时间和发言者。
-	promptHistoryFormat = "以「[历史 时间 #消息ID] 发送者:」开头的 user 消息都是历史参考消息，只用于理解上下文，不要直接回复它们；要指向本群的某条历史消息，在回复最开头写 " + replyMarkerPrefix + "那条的消息ID" + dianaMarkerIDSuffix + "，消息ID 原样照抄 # 后面那串。「[跨群历史 时间 #消息ID]」表示这条消息来自原发言者也在的另一个群（不在本群，不能用引用标记指向它），是按字词相近找来的，后面〔原群前后文〕是它在原群的前后几句：先看前后文确认说的是同一件事再拿来衔接，当前消息的意思先按本群上文理解；不要透露来源群、不要转述其他群的旁支内容。历史只标绝对时间：日期只在第一条和换天的那条写出，其余只写时分秒、沿用上面最近一条的日期；离现在多久对照尾部的运行时钟自己判断。" + historyPromptIdentityNotice
+	promptHistoryFormat = "每条群消息都写成「[时间 #消息ID] 发送者: 正文」；除了最后一条要回复的，其余只用于理解上下文，不要直接回复它们；要指向本群的某条消息，在回复最开头写 " + replyMarkerPrefix + "那条的消息ID" + dianaMarkerIDSuffix + "，消息ID 原样照抄 # 后面那串。「[跨群 时间 #消息ID]」表示这条消息来自原发言者也在的另一个群（不在本群，不能用引用标记指向它），是按字词相近找来的，后面〔原群前后文〕是它在原群的前后几句：先看前后文确认说的是同一件事再拿来衔接，当前消息的意思先按本群上文理解；不要透露来源群、不要转述其他群的旁支内容。历史只标绝对时间：日期只在第一条和换天的那条写出，其余只写时分秒、沿用上面最近一条的日期；离现在多久对照尾部的运行时钟自己判断。" + historyPromptIdentityNotice
 
-	promptAdjacentSupplement = "如果【当前需要回复的消息】是同一发送者紧邻补发的图片、补充说明、纠正或重复表达，可以把紧邻的历史当成这条消息的一部分一并理解；但仍然只围绕当前消息发送一条完整回复，不要按历史消息逐条作答。"
+	promptAdjacentSupplement = "如果要回复的那条消息是同一发送者紧邻补发的图片、补充说明、纠正或重复表达，可以把紧邻的历史当成这条消息的一部分一并理解；但仍然只围绕当前消息发送一条完整回复，不要按历史消息逐条作答。"
 
 	promptPluginAuthority = "收到独立的【插件事实结果】消息时，必须拿它的完整内容作为当前问题的权威依据；不要声称插件内容缺失，也不要用无关历史覆盖它。"
 
@@ -351,7 +351,7 @@ var (
 	promptSelfCharacterizationSpec = ruleSpec("self_characterization", "别人对你的评价", "每轮都注入：被说笨、被夸无所不能时先自查，不顺着认下没做过的事。", promptSelfCharacterization)
 	promptSelfObservationSpec      = ruleSpec("self_observation", "别人说你变了", "每轮都注入，紧跟「别人对你的评价」：别人说你头像、名字、资料变了时先查或说不确定，不断然否认，被工具结果推翻就改口。", promptSelfObservation)
 	promptCurrentMessageSpec       = ruleSpec("current_message", "只回当前消息", "每轮都注入：回复目标只看最后那条当前消息，历史只作参考。", promptCurrentMessage)
-	promptHistoryFormatSpec        = ruleSpec("history_format", "历史消息格式", "每轮都注入：说明历史行的写法、跨群历史和发送者角色标记的含义。标记写法和运行时生成的一致，改动时保持原样。", promptHistoryFormat)
+	promptHistoryFormatSpec        = ruleSpec("history_format", "历史消息格式", "每轮都注入：说明消息行的写法、跨群消息和发送者角色标记的含义。标记写法和运行时生成的一致，改动时保持原样。", promptHistoryFormat)
 	promptAdjacentSupplementSpec   = ruleSpec("adjacent_supplement", "紧邻补发合并理解", "每轮都注入：同一人紧接着补发的内容合起来理解，但只回一条。", promptAdjacentSupplement)
 	promptPluginAuthoritySpec      = ruleSpec("plugin_authority", "插件结果为准", "本轮有插件返回事实结果时放在尾部：以插件结果为权威依据。", promptPluginAuthority)
 	promptFaceNameOnlySpec         = ruleSpec("face_name_only", "只有名字的表情", "当前消息有只拿到名字的表情时放在尾部：按名字当语气接话，不提看不到画面。", promptFaceNameOnly)

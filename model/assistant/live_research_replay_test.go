@@ -104,9 +104,9 @@ func TestLiveResearchReplay(t *testing.T) {
 			prompt := runtime.systemPromptWithRelationshipAndAgentTools(event, nil, false, RelationshipPolicy{}, true, registry)
 			messages := []llm.Message{{Role: llm.RoleSystem, Content: prompt}}
 			for i, text := range test.history {
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("[历史 2026-10-06 05:59:%02d] 群友%d: %s", i, i+1, text)})
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: fmt.Sprintf("[2026-10-06 05:59:%02d] 群友%d: %s", i, i+1, text)})
 			}
-			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "【当前需要回复的消息】群友3: miku 对吗"})
+			messages = append(messages, llm.Message{Role: llm.RoleUser, Content: "[2026-10-06 06:00:00] 群友3: miku 对吗"})
 			runner, err := agent.NewRunner(client, agent.Config{MaxSteps: 8}, registry)
 			if err != nil {
 				t.Fatal(err)
@@ -221,12 +221,12 @@ func TestLiveLatestCommitReplay(t *testing.T) {
 			messages := []llm.Message{
 				{Role: llm.RoleSystem, Content: prompt},
 				{Role: llm.RoleSystem, Content: "当前时间：2026-11-01 21:00:00 UTC+08:00。"},
-				{Role: llm.RoleUser, Content: "[历史] 小雪：我的代码在 https://github.com/mizorewww/pi-extension-telegram-agent"},
+				{Role: llm.RoleUser, Content: "小雪：我的代码在 https://github.com/mizorewww/pi-extension-telegram-agent"},
 				{Role: llm.RoleUser, Content: "【提问者画像】error 的 GitHub 用户名为 suink。"},
-				{Role: llm.RoleUser, Content: "[历史] 群友：看一下雨夹雪 github 最新提交"},
-				{Role: llm.RoleUser, Content: "[历史] 小雪：雨夹雪最新提交是 gpui-kit-material 的 Merge performance round 3。"},
+				{Role: llm.RoleUser, Content: "群友：看一下雨夹雪 github 最新提交"},
+				{Role: llm.RoleUser, Content: "小雪：雨夹雪最新提交是 gpui-kit-material 的 Merge performance round 3。"},
 				{Role: llm.RoleAssistant, Content: "小雪仓库最新一笔是文档瘦身。"},
-				{Role: llm.RoleUser, Content: "【当前需要回复的消息】miku 雨夹雪的"},
+				{Role: llm.RoleUser, Content: "群友: miku 雨夹雪的"},
 			}
 			if path := strings.TrimSpace(os.Getenv("DIANA_TEST_RESEARCH_HISTORY")); path != "" {
 				data, err := os.ReadFile(path)
@@ -343,9 +343,9 @@ func TestLiveOnlineResearchReplay(t *testing.T) {
 	}
 	resp, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: prompt},
-		{Role: llm.RoleUser, Content: "[历史] 群友1: openai不是出luna版了吗"},
-		{Role: llm.RoleUser, Content: "[历史] 群友2: 没有对公众开放，只是内部邀请测试。"},
-		{Role: llm.RoleUser, Content: "【当前需要回复的消息】群友3: miku 对吗"},
+		{Role: llm.RoleUser, Content: "群友1: openai不是出luna版了吗"},
+		{Role: llm.RoleUser, Content: "群友2: 没有对公众开放，只是内部邀请测试。"},
+		{Role: llm.RoleUser, Content: "[2026-10-06 06:00:00] 群友3: miku 对吗"},
 	}, Observer: func(_ context.Context, event agent.RunEvent) {
 		if event.Phase == agent.RunPhaseToolCompleted {
 			t.Logf("tool=%s stage=%v error=%q", event.Tool, event.Metadata["source_stage"], event.Error)

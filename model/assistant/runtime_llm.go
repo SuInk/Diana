@@ -1262,6 +1262,46 @@ func renderPromptTemplate(template string, values map[string]string) string {
 	return rendered
 }
 
+// currentMessageLine 是当前消息的那一行，和它下一轮作为历史的写法相同（照雨夹雪：一条
+// 消息只渲染一次，当前消息就是追加的最后一行）。纯图片、只叫了一声的消息没有文字，
+// 写个占位，好让这一行有时间、消息 ID 和发送者。
+func currentMessageLine(event MessageEvent) string {
+	if line := historyPromptTextAt(event, event.Time); line != "" {
+		return line
+	}
+	placeholder := "（没有文字）"
+	if hasImageSegment(event.Segments) {
+		placeholder = "[图片]"
+	}
+	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + placeholder
+}
+
+// currentMessageNotesTitle 是当前消息注解那一条的开头。
+const currentMessageNotesTitle = "【这一轮要回复的是本轮最后一条消息；以下是只给这一轮的说明】"
+
+// splitCurrentMessageNotes 把组装好的当前消息拆成「这条消息那一行」和「这一轮的注解」。
+// 那一行按前面最后一条消息行的日期省日期，和它下一轮作为历史时一样；注解单独成一条只
+// 用于本轮的消息。message 不是以 line 开头时不拆。
+func splitCurrentMessageNotes(message llm.Message, line string, dates *historyLineDates) (*llm.Message, llm.Message, bool) {
+	content := strings.TrimSpace(message.Content)
+	if line == "" || !strings.HasPrefix(content, line) {
+		return nil, message, false
+	}
+	rest := strings.TrimSpace(content[len(line):])
+	compacted := dates.compact(line)
+	message.Content = compacted
+	for index := range message.Parts {
+		if message.Parts[index].Type == llm.ContentPartText && strings.TrimSpace(message.Parts[index].Text) == content {
+			message.Parts[index].Text = compacted
+		}
+	}
+	if rest == "" {
+		return nil, message, true
+	}
+	notes := llm.Message{Role: llm.RoleUser, Content: currentMessageNotesTitle + "\n" + rest, Priority: message.Priority, TurnOnly: true}
+	return &notes, message, true
+}
+
 func historyPromptText(event MessageEvent) string {
 	return historyPromptTextAt(event, 0)
 }
@@ -1522,6 +1562,8 @@ func currentPromptText(event MessageEvent, text string) string {
 // 告诉模型该怎么接。
 func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext, annotation promptAnnotation) string {
 	text = strings.TrimSpace(text)
+	// 原话已经在消息那一行里，注解里不再重复。
+	original := text
 	botID := annotation.botID(event)
 	wakeGuidanceAttached := false
 	hasAtSegment := eventHasSegmentType(event, "at")
@@ -1577,19 +1619,20 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		text += "\n\n【媒体状态】" + notice
 	}
-	quotedCoveredBySemanticBlock := event.Quoted != nil && event.Quoted.Semantic && len(eventSemanticSourceMessageIDs(event)) > 0
-	if quoted := quotedPromptText(event.Quoted); quoted != "" && !quotedCoveredBySemanticBlock {
-		text += "\n\n" + quoted
-	}
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	if event.Kind == EventKindGroup {
-		if note := annotation.Overrides.text(promptNoteGroupBrevitySpec); note != "" {
-			text += "\n\n" + note
-		}
+	// 第一段是这条消息本身那一行（含被引用的消息），后面是这一轮的注解：组装请求时
+	// 拆成两条，注解只用于本轮（见 splitCurrentMessageNotes）。
+	notes := strings.TrimSpace(text)
+	if strings.TrimSpace(original) != "" {
+		notes = strings.TrimSpace(strings.TrimPrefix(notes, strings.TrimSpace(original)))
 	}
-	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
+	line := currentMessageLine(event)
+	if notes == "" {
+		return line
+	}
+	return line + "\n\n" + notes
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {

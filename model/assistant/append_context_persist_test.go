@@ -40,7 +40,7 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	reasoning := "opaque"
 	prefix := []llm.Message{
 		{Role: llm.RoleSystem, Content: "人设", Priority: llm.MessagePrioritySystem},
-		{Role: llm.RoleUser, Content: "[历史 1] 甲: 你好", CacheBreakpoint: true, Priority: llm.MessagePriorityHistory, ContextGroup: "g", AtomicText: true},
+		{Role: llm.RoleUser, Content: "[2026-11-15 10:00:00 #1] 甲: 你好", CacheBreakpoint: true, Priority: llm.MessagePriorityHistory, ContextGroup: "g", AtomicText: true},
 		{Role: llm.RoleUser, Content: "【关系、权限与分层长期记忆】\n- [偏好｜甲] 喜欢猫"},
 		{Role: llm.RoleAssistant, ContinuationScope: "responses:model", ReasoningContent: &reasoning,
 			ResponsesOutput:   []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"abc"}`)},
@@ -69,7 +69,8 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		t.Fatalf("键或开销没读回：%q %q %d", loaded.key, loaded.headKey, loaded.overhead)
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
-		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.pieces, original.pieces) {
+		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.pieces, original.pieces) ||
+		!reflect.DeepEqual(loaded.ids, original.ids) || !loaded.ids["1"] || loaded.historyDate != "2026-11-15" {
 		t.Fatal("由前缀算出的表和原来不一样")
 	}
 	// 同一个会话只读一次盘：读回后就在内存里。

@@ -19,7 +19,7 @@ func TestIdentityAliasesStayStableAfterLeavingWindow(t *testing.T) {
 	first := base
 	first.UserID, first.MessageID = "3000003", "-77700001"
 	scope1 := identityPrivacyScopeFromContext(runtime.withIdentityPrivacyContext(context.Background(), first, nil))
-	line := "[跨群历史] 远野（3000003）: 看 message_id=-77700001，价格 1999 元"
+	line := "[跨群] 远野（3000003）: 看 message_id=-77700001，价格 1999 元"
 	before := scope1.protectText(line)
 	if strings.Contains(before, "3000003") || strings.Contains(before, "77700001") || !strings.Contains(before, "1999") {
 		t.Fatalf("第一轮脱敏不对: %s", before)

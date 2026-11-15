@@ -130,7 +130,7 @@ func TestCrossGroupContextReachesReplyPromptAfterRouting(t *testing.T) {
 		t.Fatal(err)
 	}
 	prompt := provider.joined()
-	if !strings.Contains(prompt, "[跨群历史 ") || !strings.Contains(prompt, "图片缓存修复已经部署到测试机器") {
+	if !strings.Contains(prompt, "[跨群 ") || !strings.Contains(prompt, "图片缓存修复已经部署到测试机器") {
 		t.Fatalf("回复提示词里没有跨群联想：searches=%d\n%s", store.searches(), prompt)
 	}
 	if got := store.searches(); got != 1 {

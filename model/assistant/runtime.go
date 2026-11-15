@@ -4705,6 +4705,28 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
+	// 当前消息拆成两条：这条消息那一行（和下一轮作为历史时同一种写法，进前缀），和这一轮
+	// 的注解（只用于本轮，放在它前面，最后一条仍是这条消息、图片照旧挂在它上面）。
+	var lineDates historyLineDates
+	for _, message := range messages {
+		if message.Role == llm.RoleUser {
+			lineDates.step(message.Content)
+		}
+	}
+	if notes, line, ok := splitCurrentMessageNotes(currentMessage, currentMessageLine(event), &lineDates); ok {
+		// 群聊篇幅提醒是固定的一段，单独一条、不标只用于本轮：完整组装那一轮进前缀，
+		// 续接时前缀里有过就不再发（unsentTail 按段比对）。它要离生成近才管用（见
+		// promptNoteGroupBrevitySpec），所以放在注解前面，不挪进头部。
+		if event.Kind == EventKindGroup {
+			if note := cfg.prompt(promptNoteGroupBrevitySpec); note != "" {
+				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: note, Priority: llm.MessagePriorityCurrent})
+			}
+		}
+		if notes != nil {
+			messages = append(messages, *notes)
+		}
+		currentMessage = line
+	}
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
 	// 照 Pi：请求估算超过「窗口 − 预留」时先压缩一次较早的历史，再发。
@@ -5128,7 +5150,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)), cfg.prompt(promptNoteGroupBrevitySpec))
+			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
@@ -6978,7 +7000,7 @@ func truncateRunesFromStart(text string, maxRunes int) string {
 }
 
 // historyLinePrefix 是每条历史行的开头：「[历史 2026-09-03 14:05:00] 」，跨群来源
-// 换成「[跨群历史 …] 」。两种标记的含义由 promptHistoryFormat 在 system 头部说明一次。
+// 换成「[跨群 …] 」。两种标记的含义由 promptHistoryFormat 在 system 头部说明一次。
 //
 // 以前每行都带一整句「历史参考消息，仅用于理解上下文，不要直接回复这条历史消息」
 // 外加「距当前：约 N 分钟」。前者是几十个 token 的固定开销，几百条历史下能吃掉
@@ -6986,23 +7008,37 @@ func truncateRunesFromStart(text string, maxRunes int) string {
 // 整段历史因此永远无法命中前缀缓存。现在只标绝对时间：它不随请求时间变化，
 // 「离现在多久」由尾部的运行时钟给模型自己对照。
 func historyLinePrefix(event MessageEvent) string {
-	label := "[历史"
+	// 照雨夹雪：一条消息只有一种写法「[时间 #消息ID] 发送者: 正文」，不标「历史」——
+	// 当前这条消息也是这一行，下一轮原样留在前缀里，不用改写。别的群来的消息标「跨群」。
+	label := "["
 	if event.crossGroupContext {
-		label = "[跨群历史"
+		label = crossGroupLineLabel
 	}
 	if event.Time > 0 {
-		label += " " + time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
+		if label != "[" {
+			label += " "
+		}
+		label += time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
 	}
 	// 消息 ID 跟在时间后面：回复开头写引用标记就能指向这条（发送层按本会话历史查，
 	// Telegram、QQ 都认）。以前历史行没有 ID，模型只能引用当前这条消息。
 	if id := strings.TrimSpace(event.MessageID); id != "" && replyMarkerIDAcceptable(event.Platform, id) {
-		label += " " + historyLineIDMark + id
+		if label != "[" {
+			label += " "
+		}
+		label += historyLineIDMark + id
+	}
+	if label == "[" {
+		return ""
 	}
 	return label + "] "
 }
 
-// historyLineIDMark 是历史行开头时间后面、消息 ID 前面的标记。
+// historyLineIDMark 是消息行开头时间后面、消息 ID 前面的标记。
 const historyLineIDMark = "#"
+
+// crossGroupLineLabel 是别的群来的消息行的开头。
+const crossGroupLineLabel = "[跨群"
 
 func historicalFileCount(event MessageEvent) int {
 	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })

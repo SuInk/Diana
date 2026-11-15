@@ -70,7 +70,7 @@ func TestGroupSkillCatalogIsIdenticalForEverySpeaker(t *testing.T) {
 		}
 		resp, err := runner.Run(context.Background(), agent.Request{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "人设"},
-			{Role: llm.RoleUser, Content: "【当前需要回复的消息】在吗"},
+			{Role: llm.RoleUser, Content: "甲: 在吗"},
 		}})
 		if err != nil {
 			t.Fatalf("%s: %v", who.name, err)

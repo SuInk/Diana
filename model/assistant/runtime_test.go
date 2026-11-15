@@ -1303,7 +1303,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 			t.Fatalf("system prompt missing expressive writing guidance %q: %q", want, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "当前需要回复的消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
+	if !strings.Contains(prompt, "回复目标是最后一条消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
 		t.Fatalf("system prompt missing current-message guidance: %q", prompt)
 	}
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
@@ -1989,16 +1989,16 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 	if reply != provider.reply || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "Diana") {
+	got, notes := currentLineAndNotes(provider.request.Messages)
+	if !strings.Contains(got, "Diana") {
 		t.Fatalf("last message content = %q", got)
 	}
 	if !strings.Contains(got, "@42") {
 		t.Fatalf("机器人自己的 @ 应当留在原文里：%q", got)
 	}
-	// 「这个 @ 指的是你」由注解点明，正文照旧。
-	if !strings.Contains(got, "那个 @ 指的就是你") {
-		t.Fatalf("没有告诉模型这条消息 @ 了它：%q", got)
+	// 「这个 @ 指的是你」由当前消息前那条注解点明，正文照旧。
+	if !strings.Contains(notes, "那个 @ 指的就是你") || strings.Contains(got, "那个 @ 指的就是你") {
+		t.Fatalf("没有告诉模型这条消息 @ 了它：%q / %q", notes, got)
 	}
 }
 
@@ -2245,14 +2245,14 @@ func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	got := provider.request.Messages[len(provider.request.Messages)-1].Content
+	got, notes := currentLineAndNotes(provider.request.Messages)
 	// 纯 @ 会附上唤醒指引：它明确禁止「我在」这类报到，并要求接住上文；
-	// 原话（那个 @）仍然留在正文里。
-	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42") {
+	// 原话（那个 @）仍然留在正文那一行里，指引在它前面的注解里。
+	if !strings.Contains(got, "@42") {
 		t.Fatalf("last message content = %q", got)
 	}
-	if !strings.Contains(got, "别回「我在」") {
-		t.Fatalf("纯 @ 没有附上唤醒指引：%q", got)
+	if !strings.Contains(notes, "别回「我在」") {
+		t.Fatalf("纯 @ 没有附上唤醒指引：%q", notes)
 	}
 }
 
@@ -2278,11 +2278,16 @@ func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	got := provider.request.Messages[len(provider.request.Messages)-1].Content
-	// 引用标记和 @ 都是原话的一部分，一并留着；注解只负责说明它们各指什么。
-	for _, want := range []string{"【当前需要回复的消息】", "<diana-quote id=\"abc\"/>", "@42", "那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
+	got, notes := currentLineAndNotes(provider.request.Messages)
+	// 引用标记和 @ 都是原话的一部分，留在那一行里；注解只负责说明它们各指什么。
+	for _, want := range []string{"<diana-quote id=\"abc\"/>", "@42"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("last message content = %q, missing %q", got, want)
+		}
+	}
+	for _, want := range []string{"那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("current notes = %q, missing %q", notes, want)
 		}
 	}
 }
@@ -3161,15 +3166,16 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		t.Fatalf("messages = %#v", provider.request.Messages)
 	}
 	// 当前消息之前还夹着尾部时钟等 system 消息，历史行必须按内容定位而不是固定下标。
+	historyLabel := "[" + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] "
 	history := ""
 	for _, message := range provider.request.Messages {
-		if strings.HasPrefix(message.Content, "[历史 ") {
+		if strings.HasPrefix(message.Content, historyLabel) {
 			history = message.Content
 			break
 		}
 	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.HasPrefix(history, "[历史 "+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] Alice（im_user_") || !strings.Contains(history, "）: 旧问题是什么") {
+	if !strings.HasPrefix(history, historyLabel+"Alice（im_user_") || !strings.Contains(history, "）: 旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
 	// 历史行只标绝对时间：「距当前」随请求时间变化，会让整段历史无法命中前缀缓存。
@@ -3183,7 +3189,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		if message.Role == llm.RoleSystem && strings.Contains(message.Content, promptHistoryFormat) {
 			explained = true
 		}
-		if strings.HasPrefix(message.Content, "[历史 ") {
+		if strings.HasPrefix(message.Content, historyLabel) {
 			historyIndex = index
 		}
 		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "当前好感度：") {
@@ -3200,13 +3206,14 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	if !provider.request.Messages[historyIndex].CacheBreakpoint {
 		t.Fatalf("last history message must carry the stable cache breakpoint: %#v", provider.request.Messages[historyIndex])
 	}
-	if strings.Contains(history, "【当前需要回复的消息】") {
-		t.Fatalf("history should not be marked current: %q", history)
+	if strings.Contains(history, "新问题是什么") || historyIndex == len(provider.request.Messages)-1 {
+		t.Fatalf("history should not hold the current message: %q", history)
 	}
-	if !strings.Contains(current, "【当前需要回复的消息】") || !strings.Contains(current, "新问题是什么") {
-		t.Fatalf("current content = %q", current)
+	// 当前消息是最后一条，写法和历史行一样：「[时间] 发送者: 正文」，同一天只写时分秒。
+	if want := "[" + time.Unix(1120, 0).Local().Format("15:04:05") + "] "; !strings.HasPrefix(current, want) || !strings.HasSuffix(current, ": 新问题是什么") {
+		t.Fatalf("current content = %q, want prefix %q", current, want)
 	}
-	if !strings.Contains(current, "【消息时间：") {
+	if strings.Contains(current, "【消息时间：") || strings.Contains(current, "【当前需要回复的消息】") {
 		t.Fatalf("current timing = %q", current)
 	}
 	if strings.Contains(current, "旧问题是什么") {

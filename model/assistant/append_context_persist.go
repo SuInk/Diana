@@ -33,7 +33,8 @@ import (
 // 不能往开发机的用户缓存目录里写，也不能读到上一次跑测试留下的记录。
 
 const (
-	appendContextFileVersion = 2
+	// 3 起消息行改成「[时间 #消息ID]」，当前消息也是这一行：旧记录里的前缀和新写法对不上，不读回。
+	appendContextFileVersion = 3
 	// appendContextFileMaxAge 之前的记录不读回：隔了这么久供应商缓存早就过期，群里
 	// 也聊了很多，接着续只会让请求一下子很长。
 	appendContextFileMaxAge = 24 * time.Hour
