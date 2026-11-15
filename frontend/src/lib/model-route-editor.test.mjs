@@ -11,7 +11,7 @@ test("media preprocessing lives only in context settings", () => {
   assert.equal(source.match(/<h2>媒体预处理<\/h2>/g)?.length, 1);
   assert.ok(source.indexOf("<h2>媒体预处理</h2>") > source.indexOf("editorTab === 'context'"));
   assert.ok(source.indexOf("<h2>媒体预处理</h2>") < source.indexOf("editorTab === 'advanced'"));
-  assert.match(source, /「模型分配」的「媒体解析」/);
+  assert.match(source, /的「媒体解析」里选/);
 });
 
 test("privacy proxy lives only in context settings", () => {

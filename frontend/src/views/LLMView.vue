@@ -36,7 +36,7 @@
         <div class="card-header">
           <div>
             <h2>模型提供商</h2>
-            <span class="card-sub">同组内顺序即降级优先级。</span>
+            <span class="card-sub">同一分组里排在前面的优先用，出错时依次换下一个。</span>
           </div>
         </div>
         <div class="card-body stack" style="gap: 14px">
@@ -291,7 +291,7 @@
             <div v-if="!mediaOnly" class="field">
               <label for="llm-channel-group">渠道分组（可选）</label>
               <input id="llm-channel-group" v-model="form.group" class="input" placeholder="例如 主力、备用" />
-              <span class="hint">同组自动轮换降级。</span>
+              <span class="hint">分组相同的提供商互为备用，一个出错自动换下一个。</span>
             </div>
             <div v-if="!mediaOnly" class="field">
               <label for="llm-provider-kind">接入类型</label>
@@ -340,8 +340,8 @@
               <span v-else class="hint">
                 {{ selectedPreset?.hint }}；{{
                   supportsAPIStyle
-                    ? "请填写完整 API 根地址，包括服务要求的 `/v1` 等路径。"
-                    : "原生协议留空即走官方地址，只有走代理或自建网关时才需要填。"
+                    ? "填完整的接口地址，记得带上 /v1 这类路径。"
+                    : "一般留空用官方地址，走代理或自建网关时再填。"
                 }}
               </span>
             </div>
@@ -475,7 +475,7 @@
                 <button class="btn small ghost header-add" type="button" @click="addHeader"><Plus :size="14" aria-hidden="true" />添加请求头</button>
               </div>
               <span class="hint">
-                原样附在每个会话请求上，同名覆盖内置头。已保存的值不回显，留空沿用。
+                每次请求都会带上这些请求头，同名的会替换默认值。已保存的值不显示，留空保持不变。
               </span>
             </div>
             <div v-if="form.provider === 'openai_compatible'" class="field wide">
@@ -493,18 +493,18 @@
                 @input="clearInvalid('user_agent')"
               />
               <span class="hint">
-                网关需要认特定客户端时再改，<code>originator</code> 填在请求头里。
+                一般不用改，网关只认特定客户端时再改。
               </span>
             </div>
             <div class="field">
               <label for="llm-max-concurrency">最大并发请求</label>
               <input id="llm-max-concurrency" v-model="form.max_concurrency" class="input" type="number" min="0" max="10000" step="1" />
-              <span class="hint">0 为不限，共用的机器人一起排队。</span>
+              <span class="hint">同时最多发几个请求，0 为不限；用这套配置的机器人一起排队。</span>
             </div>
             <div class="field">
               <label for="llm-max-rps">每秒请求上限（RPS）</label>
               <input id="llm-max-rps" v-model="form.max_rps" class="input" type="number" min="0" max="10000" step="0.001" />
-              <span class="hint">0 为不限，最小 0.001。</span>
+              <span class="hint">每秒最多发几个请求，0 为不限，可填小数（最小 0.001）。</span>
             </div>
           </div>
         </section>
@@ -958,7 +958,7 @@ const voiceSections = computed(() => {
     { role: "stt", label: "语音识别", hint: "把收到的语音转成文字", empty: "还没有配置语音识别。", items: profiles.value.filter((profile) => profileServesVoice(profile, "stt")) }
   ];
   const pending = profiles.value.filter((profile) => groupOf(profile) === speechGroup && !profile.speech_params?.tts && !profile.speech_params?.stt);
-  if (pending.length > 0) sections.push({ role: "pending", label: "待配置", hint: "在语音分组里，但还没开语音合成或识别参数", empty: "", items: pending });
+  if (pending.length > 0) sections.push({ role: "pending", label: "待配置", hint: "还没选用途，编辑后选语音合成或识别即可", empty: "", items: pending });
   return sections;
 });
 const voiceProfileCount = computed(() => profiles.value.filter((profile) => profile.speech_params?.tts || profile.speech_params?.stt || voiceGroups.has(groupOf(profile))).length);
@@ -966,7 +966,7 @@ const voiceProfileCount = computed(() => profiles.value.filter((profile) => prof
 const builtinVoiceServices = [
   { label: "Edge 朗读", role: "tts", hint: "免费，不要 Key，不用建提供商；音色用 zh-CN-XiaoxiaoNeural 这类名字" },
   { label: "谷歌翻译朗读", role: "tts", hint: "免费，不要 Key，不用建提供商；只能选语言不能选音色" },
-  { label: "本机 Whisper（whisper.cpp）", role: "stt", hint: "调用本机的 whisper-cli 命令，需要自行安装并下载模型文件" }
+  { label: "本机 Whisper（whisper.cpp）", role: "stt", hint: "在本机识别，需要自己安装 whisper.cpp 并下载模型文件" }
 ];
 
 const speechRoleLabels: Record<string, string> = { tts: "语音合成", stt: "语音识别", video: "视频生成" };
@@ -1131,16 +1131,16 @@ const effectiveContextHint = computed(() => {
   const profile = editingProfile.value;
   const window = profile?.effective_context_window_tokens;
   if (profile?.context_window_source === "user" && window) {
-    return `当前生效 ${window.toLocaleString("en-US")}，这套配置统一用它。`;
+    return `当前生效 ${window.toLocaleString("en-US")}，这套配置的所有模型都用它。`;
   }
   if (profile?.context_window_source === "model" && window) {
-    return `当前默认模型使用手动设置的 ${window.toLocaleString("en-US")} Token；切换模型时使用对应的设置。`;
+    return `当前默认模型手动设成了 ${window.toLocaleString("en-US")}，换模型时按那个模型的设置。`;
   }
   const fallback = window ? window.toLocaleString("en-US") : "内置兜底值";
   const reference = profile?.catalog_context_window_tokens
     ? `模型清单里 ${profile.model} 写的是 ${profile.catalog_context_window_tokens.toLocaleString("en-US")}，可以照着填。`
     : "";
-  return `留空时优先使用每个模型的手动窗口；未设置的模型按 ${fallback} 计算。${reference}`;
+  return `留空就按每个模型自己的设置，没设置的按 ${fallback} 算。${reference}`;
 });
 
 // 这套配置被哪些用途在用：改窗口会一起影响它们，所以列出来。

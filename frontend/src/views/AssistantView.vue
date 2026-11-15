@@ -236,7 +236,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">共享连接时显示角色名前缀</span>
                   </label>
-                  <span class="hint">多个角色共用 QQ 时，给这台机器人的群聊文字加上「【{{ form.name || '机器人名称' }}】」。私聊不加；独立使用一个角色时不加。名字和触发词用于点名，建议各角色使用不同称呼。</span>
+                  <span class="hint">多个角色共用一个 QQ 时，群聊消息前加上「【{{ form.name || '机器人名称' }}】」，方便区分是谁在说话。私聊不加。</span>
                 </div>
                 <div v-if="form.connection_profile_id" class="hint">
                   正在复用「{{ connectionSourceName(form) }}」的连接，使用同一个平台账号。
@@ -267,17 +267,17 @@
                 <div v-else-if="form.onebot_transport === 'forward_ws'" class="field">
                   <label for="bot-onebot-ws">OneBot WebSocket 服务地址</label>
                   <input id="bot-onebot-ws" v-model="form.onebot_ws_endpoint" class="input mono" placeholder="ws://127.0.0.1:6700" />
-                  <span class="hint">Diana 主动连接接入端的 WS 服务，请使用同时提供 API 和事件的通用地址（通常为 /）。断线后自动重连。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器（host.docker.internal）部署无需额外配置，跨机或反向代理部署请在下方填写媒体回源基址。</span>
+                  <span class="hint">填接入端的 WebSocket 地址，要用同时提供 API 和事件的通用地址（通常是 /）。Diana 会主动连过去，断线自动重连。接入端和 Diana 不在同一台机器时，记得填下方的「媒体回源基址」，否则发不出图片和文件。</span>
                 </div>
                 <template v-else-if="form.onebot_transport === 'http'">
                   <div class="field">
                     <label for="bot-onebot-http">OneBot HTTP API 地址</label>
                     <input id="bot-onebot-http" v-model="form.onebot_http_url" class="input mono" placeholder="http://127.0.0.1:5700" />
-                    <span class="hint">Diana 调用接入端的 HTTP API。事件上报地址填写接入端能访问的 Diana 地址 + /onebot/v11/http。发送文件/图片时接入端按这里的主机名回源拉取媒体：同机或容器部署无需额外配置，跨机或反向代理部署请在下方填写媒体回源基址。</span>
+                    <span class="hint">填接入端的 HTTP 地址；接入端的事件上报地址填 Diana 的地址加 /onebot/v11/http。不在同一台机器时，记得填下方的「媒体回源基址」。</span>
                   </div>
                   <SecretField id="bot-onebot-http-secret" v-model="oneBotHTTPSecretDraft"
                     label="HTTP 事件签名密钥" placeholder="与接入端 HTTP POST 的 secret 一致"
-                    hint="必填；用于校验 X-Signature（HMAC-SHA1）。API 的 Access Token 在下方单独配置。"
+                    hint="必填，和接入端里设置的上报密钥保持一致。"
                     :configured="form.onebot_http_secret_configured"
                     :revealed="tokenRevealed.onebot_http_secret" :busy="tokenRevealBusy === 'onebot_http_secret'"
                     @toggle-reveal="toggleTokenReveal('onebot_http_secret')" />
@@ -324,7 +324,7 @@
                 <div class="field wide">
                   <label for="bot-media-base-url">媒体回源基址</label>
                   <input id="bot-media-base-url" v-model="mediaBaseURLDraft" class="input mono" placeholder="留空自动推断，例如 http://192.168.1.10:18080/media/resolver" :disabled="mediaBaseURLLoading" />
-                  <span class="hint">发送文件/图片时，接入端按这个地址回源拉取媒体，所有机器人共用这一项。留空时按接入方式自动推断：反向 ws 用握手地址，正向 ws / HTTP 用接入端地址推主机名 + Diana 的 Web 端口。当前生效来源：{{ mediaBaseURLSourceLabel }}。</span>
+                  <span class="hint">接入端从这个地址下载 Diana 要发的图片和文件，所有机器人共用。一般留空自动识别；接入端和 Diana 不在同一台机器、或走了反向代理时再填。当前：{{ mediaBaseURLSourceLabel }}。</span>
                   <p v-if="mediaBaseURLError" class="error" role="alert">{{ mediaBaseURLError }}</p>
                 </div>
                 </template>
@@ -334,7 +334,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">显示「对方正在输入」</span>
                   </label>
-                  <span class="hint">默认开启。私聊准备回复时通过 set_input_status 显示输入状态，需要支持该接口的实现；QQ 群聊不支持，不支持的接入端会自动跳过。</span>
+                  <span class="hint">默认开启。私聊回复前让对方看到「对方正在输入」，群聊不显示；接入端不支持时自动跳过。</span>
                 </div>
               </template>
               <template v-else-if="currentPlatform === 'telegram'">
@@ -369,7 +369,7 @@
                     placeholder="留空使用官方 https://api.telegram.org"
                     autocomplete="off"
                   />
-                  <span class="hint">部署了本地 Bot API server 时填写，可绕过 50MB 上传限制。</span>
+                  <span class="hint">自己部署了 Bot API 服务时填写，可以发超过 50MB 的文件。</span>
                 </div>
               </template>
 
@@ -431,7 +431,7 @@
                   v-model="iMessageWebhookDraft"
                   label="Webhook 密钥"
                   placeholder="留空保存时自动生成"
-                  hint="BlueBubbles 的 webhook 不签名，Diana 只认回调地址里 ?token= 带着的这个值，不接受服务器密码。"
+                  hint="填在 BlueBubbles 回调地址的 ?token= 后面，用来确认消息是从你的 Mac 发来的。不要填服务器密码。"
                   :configured="form.imessage_webhook_token_configured"
                   :revealed="tokenRevealed.imessage_webhook_token"
                   :busy="tokenRevealBusy === 'imessage_webhook_token'"
@@ -440,7 +440,7 @@
                 <div class="field">
                   <label for="bot-imessage-poll">轮询兜底（秒）</label>
                   <input id="bot-imessage-poll" v-model.number="form.imessage_poll_seconds" class="input" type="number" min="0" max="3600" step="1" inputmode="numeric" placeholder="留空只用 webhook" />
-                  <span class="hint">Mac 访问不到 Diana、webhook 打不进来时，按这个间隔主动拉新消息。留空只用 webhook，填写时最短 5 秒。</span>
+                  <span class="hint">Mac 推不过来消息时，Diana 每隔这么多秒主动去取一次。留空表示只等 Mac 推送，最短 5 秒。</span>
                 </div>
                 <div class="field">
                   <button class="btn" type="button" :disabled="iMessageTesting" @click="probeIMessageServer">测试连接</button>
@@ -480,13 +480,13 @@
                   />
                   <AccountNameHint :user-id="form.owner_id" :profile="form.id" />
                   <OwnerBindPanel v-if="form.platform === 'qq-official'" v-model="form.owner_id" :profile="creating ? '' : form.id" />
-                  <span v-if="form.platform === 'telegram'" class="hint">支持数字 ID、用户名或 @用户名，不区分用户名大小写；按 Telegram 发送者账号核验，不按显示昵称。用户名变更后需更新此处。</span>
+                  <span v-if="form.platform === 'telegram'" class="hint">填数字 ID 或用户名（带不带 @ 都行），不是显示昵称。改了用户名要回来更新。</span>
                   <span class="hint">不需要聊天内管理或管理员快速登录时可以留空。</span>
                 </div>
                 <div class="field wide">
                   <label>管理员账号</label>
                   <BotMarkerList :key="`admins-${form.id}`" v-model="form.admin_ids" item-label="管理员" input-label="管理员账号 ID" :placeholder="form.platform === 'telegram' ? '数字用户 ID 或 @用户名，逗号分隔' : '账号 ID，逗号分隔'" />
-                  <span class="hint">管理员拥有宿主命令、插件开关、配置和扩展管理等全部管理权限，宿主命令同样先经模型审核；称呼、好感度和额度照普通用户，也不能增减管理员。控制台的「管理员快速登录」仍只认主人。主人也可以在聊天里说「把 12345 设为管理员」。</span>
+                  <span class="hint">管理员能在聊天里管配置、插件和执行命令，但不能增减管理员，额度和好感度照普通用户算。主人也可以在聊天里说「把 12345 设为管理员」。</span>
                 </div>
                 <div class="field wide">
                   <label class="switch">
@@ -743,7 +743,7 @@
             <div class="card-body form-grid">
               <div class="field wide">
                 <AppSwitch v-model="form.llm_streaming_enabled">流式调用模型（默认开启）</AppSwitch>
-                <span class="hint">可统计首 token 时延，Telegram 私聊能预览回复；服务不支持时自动改普通调用。</span>
+                <span class="hint">边生成边接收，Telegram 私聊能看到回复逐字出现；服务不支持时自动关掉。</span>
               </div>
               <div class="field">
                 <label for="bot-model-disclosure">谁能问出所用模型</label>
@@ -795,9 +795,9 @@
             </div>
             <div class="card-body">
               <div class="form-grid model-recovery-grid">
-                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">限流、5xx、断连时先原地重试，间隔翻倍。</span></label>
+                <label class="field"><span>瞬时错误重试次数</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_retries" :min="0" :max="3" :show-controls="false" label="瞬时错误重试次数" @update:model-value="(value) => setModelRecoveryPolicyField('transient_retries', value)" /><span class="hint">遇到限流、服务器出错或断连时，先在同一个模型上重试几次。</span></label>
                 <label class="field"><span>重试间隔（毫秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().retry_delay_milliseconds" :min="0" :max="10000" :show-controls="false" label="重试间隔" @update:model-value="(value) => setModelRecoveryPolicyField('retry_delay_milliseconds', value)" /></label>
-                <label class="field"><span>连续失败几次后冷却</span><AppNumberInput :model-value="modelRecoveryPolicy().failures_before_cooldown ?? 3" :min="1" :max="10" :show-controls="false" label="连续失败几次后冷却" @update:model-value="(value) => setModelRecoveryPolicyField('failures_before_cooldown', value)" /><span class="hint">没到次数只换这一次。</span></label>
+                <label class="field"><span>连续失败几次后冷却</span><AppNumberInput :model-value="modelRecoveryPolicy().failures_before_cooldown ?? 3" :min="1" :max="10" :show-controls="false" label="连续失败几次后冷却" @update:model-value="(value) => setModelRecoveryPolicyField('failures_before_cooldown', value)" /><span class="hint">连续失败到这个次数，这个模型暂停一段时间不用。</span></label>
                 <label class="field"><span>瞬时错误首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().transient_cooldown_seconds" :min="0" :max="3600" :show-controls="false" label="瞬时错误首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('transient_cooldown_seconds', value)" /></label>
                 <label class="field"><span>限流/鉴权首次冷却（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().status_cooldown_seconds" :min="0" :max="86400" :show-controls="false" label="限流鉴权首次冷却" @update:model-value="(value) => setModelRecoveryPolicyField('status_cooldown_seconds', value)" /></label>
                 <label class="field"><span>单次冷却上限（秒）</span><AppNumberInput :model-value="modelRecoveryPolicy().max_cooldown_seconds" :min="1" :max="86400" :show-controls="false" label="单次冷却上限" @update:model-value="(value) => setModelRecoveryPolicyField('max_cooldown_seconds', value)" /></label>
@@ -806,7 +806,7 @@
                 <AppSwitch :model-value="modelRecoveryPolicy().respect_retry_after" @update:model-value="(value) => setModelRecoveryPolicyField('respect_retry_after', value)">优先采用上游 Retry-After</AppSwitch>
                 <button v-if="modelRecoveryIsCustom()" class="btn small ghost" type="button" @click="resetModelRecoveryPolicy">恢复默认规则</button>
               </div>
-              <p class="hint">鉴权失败、额度用完会立即冷却，再失败按指数退避。</p>
+              <p class="hint">密钥失效或额度用完时立即暂停，恢复后又失败则暂停更久。</p>
             </div>
           </section>
         </div>
@@ -847,7 +847,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">自动抑制 Telegram Bot 消息</span>
                 </label>
-                <span class="hint">默认开启。由模型结合上下文判断其他 Bot 是否提到了自己，不要求 @；未提到或无法确认时保持静默。</span>
+                <span class="hint">默认开启。其他机器人的消息只在话里提到它时才回，不要求 @；拿不准就不回。</span>
               </div>
             </div>
           </section>
@@ -866,15 +866,15 @@
               </div>
               <div v-if="form.participation?.trigger_mode !== 'rules' && form.participation?.trigger_mode !== 'random'" class="field wide participation-prompt">
                 <label>接话评分提示词</label>
-                <span class="hint">两个框前后接起来就是整份评分提示词，按拼进去的顺序排。改完在下面预览发给模型的原样内容。</span>
+                <span class="hint">两个框连起来就是判断「要不要接话」用的提示词，改完可以在下面预览。</span>
                 <div class="participation-prompt-part">
                   <span class="participation-prompt-title">回应提问</span>
-                  <span class="hint">开场两段，加上怎么判断是不是在跟它说话。</span>
+                  <span class="hint">开头部分：怎么判断别人是不是在跟它说话。</span>
                   <PromptSectionsEditor name="回应提问提示词" title-prefix="接话评分 · " :keys="relevancePromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                 </div>
                 <div class="participation-prompt-part">
                   <span class="participation-prompt-title">主动闲聊</span>
-                  <span class="hint">闲聊分怎么给，以及收尾：通用规则、输出格式、补充判据段头收尾、用户消息开头、解析失败时的重问和判断模型的分档。</span>
+                  <span class="hint">结尾部分：闲聊时怎么打分、输出格式等。</span>
                   <PromptSectionsEditor name="主动闲聊提示词" title-prefix="接话评分 · " :keys="chatPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                 </div>
                 <ParticipationPromptPreview :config="form" />
@@ -914,7 +914,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">Rich Messages 富消息</span>
                 </label>
-                <span class="hint">默认关闭。开启后为标题、列表和表格使用原生结构；API 明确不支持时回退普通消息。部分客户端可能显示“不支持”，服务端无法检测，确认自己的客户端能正常显示再开启。含提及或剧透的消息暂走普通富文本。</span>
+                <span class="hint">默认关闭。开启后标题、列表和表格按 Telegram 原生格式显示。部分客户端会显示「不支持」，先确认自己的客户端能正常显示再开。</span>
               </div>
               <template v-if="currentPlatform === 'qq-official'">
                 <div class="field">
@@ -923,18 +923,18 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">单聊显示「对方正在输入」</span>
                   </label>
-                  <span class="hint">默认关闭。每条消息只发一次，最长显示 60 秒；平台没说明它占不占同一条消息的回复次数，回复条数多时可能先用完额度。</span>
+                  <span class="hint">默认关闭。回复前显示「正在输入」，最长 60 秒。可能占用每条消息的回复次数，回复多的场景慎开。</span>
                 </div>
                 <div class="field">
                   <label for="bot-qq-keyboard-template">按钮模板 ID</label>
                   <input id="bot-qq-keyboard-template" v-model.trim="form.qq_official_keyboard_template" class="input mono" placeholder="留空不挂" autocomplete="off" />
-                  <span class="hint">在 q.qq.com 申请通过的按钮模板。模型这条回复没填按钮时，挂上这组固定按钮；没开通自定义按钮的机器人可以用它。</span>
+                  <span class="hint">填 q.qq.com 审核通过的按钮模板 ID。回复没带按钮时，挂上这组固定按钮。</span>
                 </div>
               </template>
               <div class="field">
                 <label for="bot-maxinput">单次输入上限（字符）</label>
                 <input id="bot-maxinput" v-model.number="form.max_input_chars" class="input" inputmode="numeric" />
-                <span class="hint">留空或 -1 不限制（默认），或填 1000 以上。超长消息模型只读到开头，并被告知可以按需读全文。</span>
+                <span class="hint">超长消息只给模型看开头这么多字，需要时它会再去读全文。留空不限制，填写时至少 1000。</span>
               </div>
               <div class="field">
                 <label for="bot-maxreply">单条回复上限（字符）</label>
@@ -946,7 +946,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许多条发送</span>
                 </label>
-                <span class="hint">仅显式分条标记另发消息；普通换行不分条，除非开启下面的换行分条。关闭后单条发送，超限压缩。本轮用户明确要求优先。</span>
+                <span class="hint">允许把一次回复拆成几条消息发出，更像真人聊天；普通换行默认不拆，要按行拆就开下面的换行分条。关闭后每次只发一条。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -954,7 +954,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">换行分条发送</span>
                 </label>
-                <span class="hint">消息内每换一行就另发一条；列表、表格和代码块整块发，连同引出它的那一行。需先允许多条发送；闲聊插话和本轮要求一条发送时不生效。</span>
+                <span class="hint">每一行单独发一条；列表、表格和代码块不拆开。需要先开「允许多条发送」；闲聊插话、或本轮要求一条发送时不拆。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -962,7 +962,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">保留普通段落换行</span>
                 </label>
-                <span class="hint">关闭时收拢普通说明的换行，保留已有标点，缺少分隔时补逗号或空格；列表、代码、表格保留结构。本轮排版要求优先。</span>
+                <span class="hint">关闭后，普通文字的换行会合成一段；列表、表格和代码块不受影响。</span>
               </div>
               <div class="field wide">
                 <label>回复过滤正则</label>
@@ -1012,7 +1012,7 @@
                     <pre class="reply-filter-result">{{ replyFilterTestResult.result || "（整条被删光，这一轮不发送）" }}</pre>
                   </template>
                 </div>
-                <span class="hint">发送前把命中的内容从回复里删掉，一条一个 Go 正则，按行匹配（^ $ 对应行首行尾，分条发送的每条各算一行），代码块、行内代码和分条、@、引用标记不会被删，Markdown 格式原样保留。不开「单独设置回复口吻」也生效。整条回复被删光时这一轮不发送。提示词管不住的口癖可以在这里兜底。默认规则清理漏出的内部控制标记（如 &lt;diana-single/&gt;），同时兼容旧格式。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
+                <span class="hint">回复里匹配到的内容发送前删掉，每行一条正则，适合去掉改不掉的口头禅。整条被删光就不发。点「恢复默认」可找回默认规则。</span>
               </div>
               <div class="field wide">
                 <label>分条正则</label>
@@ -1034,7 +1034,7 @@
                   <button class="btn small" type="button" @click="addReplySplitRule">添加规则</button>
                   <button class="btn small" type="button" :disabled="replySplitResetBusy" @click="resetReplySplitRules">{{ replySplitResetBusy ? "恢复中…" : "恢复默认" }}</button>
                 </div>
-                <span class="hint">命中处另起一条消息发送，一条一个 Go 正则，按行匹配。带捕获组时只把第一个捕获组那一段换成分条，组外的字留在原处；不带捕获组则整段命中换成分条。代码块、行内代码和各类标记不会被拆开；关闭多条发送或本轮要求一条发完时不生效。默认规则：半个「（」后面又接着说别的事（至少两个字，这一行后面没有「）」收口），就在「（」后另起一条；「（x」这种只跟一个字的语气尾巴不拆。规则可以改也可以删，清空后不会自动补回；点击「恢复默认」可重新填入当前版本的默认规则，保存配置后生效。</span>
+                <span class="hint">回复里匹配到的位置另起一条发送，每行一条正则。需要先开「允许多条发送」。点「恢复默认」可找回默认规则。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1042,12 +1042,12 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">模拟打字延时</span>
                 </label>
-                <span class="hint">连发时按下一条的字数停顿，像边打边发。不低于分段发送间隔，单次最长 6 秒；第一条不额外等待。</span>
+                <span class="hint">连发多条时，按下一条的字数停顿一会儿，像真人边打字边发。</span>
               </div>
               <div class="field">
                 <label for="bot-interval">分段发送间隔（毫秒）</label>
                 <input id="bot-interval" v-model.number="form.send_chunk_interval_ms" class="input" inputmode="numeric" placeholder="留空按 1200" />
-                <span class="hint">连续多段之间的停顿，过快容易触发风控。开启模拟打字延时后作为最短停顿。</span>
+                <span class="hint">连发多条之间至少停多久，发太快容易被平台风控。</span>
               </div>
               <div class="field">
                 <label for="bot-typing-speed">打字速度（毫秒/字）</label>
@@ -1060,17 +1060,17 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">长回复改用合并转发卡片</span>
                 </label>
-                <span class="hint">允许多条发送时，按下面的字数或块数把整轮回复收进一张卡片。关闭后一律不发卡片。仅 OneBot 支持。</span>
+                <span class="hint">开了允许多条发送时，回复太长或条数太多就收进一张合并转发卡片发出，避免刷屏。仅 OneBot 支持。</span>
               </div>
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-len">合并转发字数</label>
                 <input id="bot-forward-len" v-model.number="form.forward_reply_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按字数触发" />
-                <span class="hint">整轮正文超过此值触发卡片；新建机器人默认 240 字。</span>
+                <span class="hint">回复超过这么多字就改发卡片，默认 240。</span>
               </div>
               <div v-if="isOneBotPlatform && form.forward_reply_enabled" class="field">
                 <label for="bot-forward-chunks">合并转发块数</label>
                 <input id="bot-forward-chunks" v-model.number="form.forward_reply_chunk_threshold" class="input" type="number" min="1" step="1" inputmode="numeric" placeholder="留空不按块数触发" />
-                <span class="hint">实际消息数超过此值触发卡片；新建机器人默认 5，即至少 6 条。填 4 表示至少 5 条。不按正文行数计数。</span>
+                <span class="hint">回复超过这么多条就改发卡片，默认 5（即 6 条起）。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-reference-mode">群聊引用原消息</label>
@@ -1100,12 +1100,12 @@
                   :options="stickerReplyOrderOptions"
                   @update:model-value="(value) => { if (form) form.sticker_reply_order = value as 'before' | 'after' | 'auto'; }"
                 />
-                <span class="hint">仅控制自动配图与最终正文的发送顺序，不改变是否配图；Telegram 流式草稿可能提前显示。先发表情时仅短暂等待选图和审核，准备超时或预算不足会跳过配图，优先发送正文；已开始投递则按平台正常发送及确认流程等待，不保证固定耗时。</span>
+                <span class="hint">回复带表情时，表情先发还是文字先发。表情没来得及准备好时会跳过，先发文字。</span>
               </div>
               <div class="field">
                 <label for="bot-reply-merge-confidence">合并回复置信度阈值（%）</label>
                 <input id="bot-reply-merge-confidence" v-model.number="form.reply_merge_confidence_percent" class="input" type="number" min="1" max="100" step="1" inputmode="numeric" placeholder="75" />
-                <span class="hint">同一用户的补充、纠正或重复消息达到此置信度时，并入正在生成的回复。越低越容易合并；留空默认 75%。独立问题和无法确定的消息不会合并。</span>
+                <span class="hint">对方在机器人回复前又补了一句时，把它并进同一次回复。数值越低越容易合并，留空默认 75。</span>
               </div>
             </div>
           </section>
@@ -1133,7 +1133,7 @@
                   :options="privateAdmissionModeOptions"
                   @update:model-value="setPrivateAdmissionMode($event as 'disabled' | 'all' | 'owner_only' | 'whitelist')"
                 />
-                <span class="hint">私聊默认仅主人，可按需启用所有人或白名单。旧配置若显示“关闭”，主人也会被拦截，请切换到“仅主人”恢复私聊；切换后不能在这里重新关闭。QQ 官方机器人尚未绑定主人时，仅“绑定主人”流程可用，绑定后才会放行主人私聊；其他平台请先填写主人用户 ID。被拦截的私聊和私聊通知静默忽略，不排队、不预处理、不调模型。</span>
+                <span class="hint">谁私聊机器人会得到回复，默认仅主人；其他人的私聊直接忽略。选「仅主人」前先在上面填好主人账号（QQ 官方机器人走「绑定主人」）。</span>
               </div>
               <div v-if="privateAdmissionMode === 'whitelist'" class="field wide">
                 <label for="bot-private-allowed-users">私聊白名单</label>
@@ -1189,29 +1189,29 @@
               <div class="field">
                 <label for="bot-call-quota">模型额度 · 5 小时调用次数</label>
                 <input id="bot-call-quota" v-model.number="form.model_call_quota" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                <span class="hint">每个群单独计，一个群刷满不会把别的群一起饿死；群配置里填了就以群为准。这个群名下的每次模型调用都算，含路由判断和工具步，不只是最终那句回复。主人不受限。</span>
+                <span class="hint">每个群 5 小时内最多调用模型多少次，各群分开算，主人不受限。群管理里单独设置过的群以群设置为准。</span>
               </div>
               <div class="field">
                 <label for="bot-daily-limit-tz">生图、视频次数 · 重置时区</label>
                 <AppSelect id="bot-daily-limit-tz" :model-value="form.daily_limit_timezone ?? ''" @update:model-value="form.daily_limit_timezone = $event" :options="timezoneOptions(form.daily_limit_timezone, '跟随机器人时区')" searchable search-placeholder="搜索城市、地区或 UTC 偏移" />
-                <span class="hint">每天的次数在所选时区的本地零点重置。地区时区自动遵循夏令时，切换日可能是 23 或 25 小时；固定 UTC 偏移全年不变。留空跟随「运行」里的机器人时区。</span>
+                <span class="hint">每天次数在这个时区的零点清零，留空跟随机器人时区。</span>
               </div>
               <div class="field wide">
                 <div class="form-grid">
                   <div class="field">
                     <label for="bot-image-group-limit">生图次数 · 每群每天</label>
                     <input id="bot-image-group-limit" v-model.number="form.image_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                    <span class="hint">每个群每天最多成功生成几次图片，改图也算一次，逐张改几张算几次；失败、被拒不算。群配置里填了就以群为准。</span>
+                    <span class="hint">每个群每天最多出几次图，改图也算，失败的不算。群管理里单独设置过的群以群设置为准。</span>
                   </div>
                   <div class="field">
                     <label for="bot-image-user-limit">生图次数 · 每人每天</label>
                     <input id="bot-image-user-limit" v-model.number="form.image_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                    <span class="hint">每个人每天最多成功生成几次，跨群和私聊合计。用完后机器人会如实告诉对方今天的次数已用完。主人不受限，也不占别人的次数。</span>
+                    <span class="hint">每个人每天最多出几次图，群聊私聊合计，主人不受限。</span>
                   </div>
                   <div class="field">
                     <label for="bot-image-cooldown">生图冷却（秒）</label>
                     <input id="bot-image-cooldown" v-model.number="form.image_generation_cooldown_seconds" class="input" type="number" min="0" max="86400" step="1" placeholder="0 不冷却" />
-                    <span class="hint">每人独立、跨群和私聊共享；生图或改图成功后计时，失败不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
+                    <span class="hint">同一个人两次出图至少隔多少秒，主人不受限，填 0 不限制。</span>
                   </div>
                 </div>
               </div>
@@ -1220,17 +1220,17 @@
                   <div class="field">
                     <label for="bot-video-group-limit">视频次数 · 每群每天</label>
                     <input id="bot-video-group-limit" v-model.number="form.video_generation_daily_group_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                    <span class="hint">每个群每天最多生成几段视频。任务一旦被视频接口受理就算一次，之后渲染失败、超时也算（那时已经在计费）；提交时就被拒的不算。群配置里填了就以群为准。</span>
+                    <span class="hint">每个群每天最多生成几段视频。提交成功就算一次，之后失败也算（已经计费）。群管理里单独设置过的群以群设置为准。</span>
                   </div>
                   <div class="field">
                     <label for="bot-video-user-limit">视频次数 · 每人每天</label>
                     <input id="bot-video-user-limit" v-model.number="form.video_generation_daily_user_limit" class="input" type="number" min="0" step="1" inputmode="numeric" placeholder="留空不限" />
-                    <span class="hint">每个人每天最多生成几段视频，跨群和私聊合计，和生图分开计数。主人不受限，也不占别人的次数。</span>
+                    <span class="hint">每个人每天最多生成几段视频，群聊私聊合计，和出图分开算，主人不受限。</span>
                   </div>
                   <div class="field">
                     <label for="bot-video-cooldown">视频冷却（秒）</label>
                     <input id="bot-video-cooldown" v-model.number="form.video_generation_cooldown_seconds" class="input" type="number" min="0" max="86400" step="1" placeholder="0 不冷却" />
-                    <span class="hint">每人独立、跨群和私聊共享，与生图分开。任务结束后计时，受理后的失败仍占用；提交被拒不占用。处理中不能重复发起，主人不受限。0 关闭，最多 86400 秒。</span>
+                    <span class="hint">同一个人两次生成视频至少隔多少秒，主人不受限，填 0 不限制。</span>
                   </div>
                 </div>
               </div>
@@ -1285,7 +1285,7 @@
                   inputmode="numeric"
                   placeholder="默认 300"
                 />
-                <span class="hint">冷却期内或生成失败时改发模板池或自定义欢迎词，都没配就这次不欢迎；避免进出群刷屏消耗 Token。</span>
+                <span class="hint">同一个群两次用模型写欢迎词至少隔多少秒；冷却期间改用模板或自定义欢迎词，都没配就不欢迎。</span>
               </div>
             </div>
           </section>
@@ -1306,7 +1306,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">开启主动开口（试验）</span>
                 </label>
-                <span class="hint">机器人所在的群都会参与，不想要的群在群管理里单独关掉。到点后先让模型看最近的聊天，觉得没什么值得说就不发；生成期间有人说话、被叫停或禁言都会作废。群里发之前照常过账号安全审核。每次决定都记在事件里。</span>
+                <span class="hint">群里冷场时，机器人会自己找话题聊几句，没什么可说就不发。对所有群生效，不想要的群在群管理里单独关。</span>
               </div>
               <template v-if="form.proactive_messaging.enabled">
                 <div v-if="proactiveGroupIDs.length" class="field wide">
@@ -1320,12 +1320,12 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">群里冷场时联网找新鲜事聊</span>
                   </label>
-                  <span class="hint">开口前按群里平时聊的东西搜最近几天的新闻，挑一条群友会感兴趣的随口聊起来；群里聊的都是私事闲扯就不搜。需要开着联网搜索插件，没开就照常只接之前的话题。</span>
+                  <span class="hint">开口时搜一条群友可能感兴趣的新闻来聊，需要开着联网搜索插件。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>
                   <input id="bot-proactive-group-idle" v-model.number="form.proactive_messaging.group_idle_minutes" class="input" type="number" min="30" max="10080" step="10" inputmode="numeric" placeholder="默认 120" />
-                  <span class="hint">只在冷场前三小时里有人在聊时才算冷场；两天没人说话的群不去叫醒。说了没人接就不再说，等有人说话再算。</span>
+                  <span class="hint">之前有人在聊、安静了这么久才算冷场；说了没人接就不再说。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-daily">每个会话每天最多几次</label>
@@ -1408,7 +1408,7 @@
                   class="textarea"
                   rows="14"
                 ></textarea>
-                <span class="hint">当前显示实际生效的内置规则；修改后作为自定义范围保存。恢复成内置原文会继续跟随系统默认。只影响账号安全结论，不改变拒答、空转和对话收尾判断。</span>
+                <span class="hint">发送前检查回复会不会给账号惹麻烦（封号、风控），这里写检查规则。改回内置原文就继续跟随系统默认。</span>
               </div>
               <div class="field wide participation-prompts">
                 <div class="participation-prompt-part">
@@ -1418,7 +1418,7 @@
                 </div>
                 <div class="participation-prompt-part">
                   <span class="participation-prompt-title">判断表</span>
-                  <span class="hint">审核用的是只做判断的模型时，不看上面那段，而是逐题回答这张表：每题一段说明，是非题再写清什么算「是」、什么算「否」。</span>
+                  <span class="hint">审核模型是只做判断的分类模型时，用这张问题表代替上面那段。</span>
                   <PromptSectionsEditor name="发送前审核判断表" title-prefix="审核判断 · " :keys="auditDecisionPromptKeys" :model-value="form.prompt_overrides" @update:model-value="value => { if (form) form.prompt_overrides = value; }" />
                 </div>
               </div>
@@ -1476,8 +1476,8 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">空转和疲劳</span>
                 </label>
-                <span class="hint">同时开启空转检测和回复疲劳。反复聊没新意的内容时，可能跳过单条消息；有新内容、提问或做事可以继续回复。</span>
-                <span class="hint">疲劳不会触发定时暂停；空转累计达标后，由下方开关决定是否暂停。</span>
+                <span class="hint">同时开启空转检测和回复疲劳。反复聊没新意的话题时，机器人会少回几句；有新内容或提问照常回。</span>
+                <span class="hint">空转累计达标时，是否暂停回复由下面的开关决定；疲劳只跳过单条，不会暂停。</span>
               </div>
               <div v-if="form.bot_reply_loop_detection_enabled" class="field">
                 <label for="bot-fatigue-limit">疲劳阈值</label>
@@ -1595,11 +1595,11 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">出错时仍用人设回一句</span>
                 </label>
-                <span class="hint">默认关闭。开启后，回复失败时让模型用机器人自己的口吻说一句没接住，不带错误原文和前缀；模型本身用不了或改写失败就保持静默。连续失败的汇总不发。</span>
+                <span class="hint">默认关闭。回复出错时用人设的口吻说一句没接住，不把报错发给群友。</span>
               </div>
               <div class="field wide">
                 <label>发送失败重试</label>
-                <span class="hint">每条最多尝试 3 次（含首次），间隔 1 秒、2 秒。明确拒收立即停止；最终失败计入首页错误并写入日志，后续消息照常处理。</span>
+                <span class="hint">消息没发出去时自动重发，最多发 3 次（含第一次）。</span>
               </div>
               <div v-for="field in sendRetryFields" :key="field.key" class="field">
                 <label :for="`bot-${field.key}`">{{ field.label }}</label>
@@ -1648,7 +1648,7 @@
                 >
                   单独设置回复口吻
                 </AppSwitch>
-                <span class="hint">Diana 先完成内容判断和工具调用，再根据下面的口吻整理最终说法。它不会改动事实、结论和必要细节，已学到的本群说话风格仍会一起生效。使用的模型在「模型与搜索 → 回复口吻」里单独选择。</span>
+                <span class="hint">想好要说什么之后，再按下面的口吻改写一遍，只改说法不改内容。改写用的模型在「模型」标签的「回复口吻」里选。</span>
               </div>
               <div v-if="form.reply_composer === 'maibot'" class="field wide">
                 <ReplyToneEditor v-model="replyToneDraft" />
@@ -1672,7 +1672,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">允许它写自述</span>
                 </label>
-                <span class="hint">它会把自己注意到的说话习惯、偏好和毛病记成一条条自述，每轮带在请求尾部。自述改不动 SOUL.md、权限和安全边界；最多 24 条，每条 120 字。写下的条目在「小窝 → 自述」里查看、删除或清空。默认关闭，保存配置后生效。</span>
+                <span class="hint">默认关闭。让它把自己注意到的说话习惯和毛病记下来，之后照着改。记下的内容在「小窝 → 自述」里查看和删除。</span>
               </div>
             </div>
           </section>
@@ -1691,12 +1691,12 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">给她一个小窝</span>
                 </label>
-                <span class="hint">开启后，侧边栏「小窝」里可以给她发零花钱、看她的账本。全是虚拟账本，不接任何真实支付；达到单笔审批门槛时要你点头。默认关闭，保存配置后生效。</span>
+                <span class="hint">默认关闭。开启后可以在「小窝」里给她发零花钱、看账本。只是虚拟的，不涉及真实支付。</span>
               </div>
               <div v-if="form.own_space_enabled" class="field">
                 <label for="bot-wallet-auto-approve">单笔审批门槛（元）</label>
                 <input id="bot-wallet-auto-approve" v-model.number="walletAutoApproveDraft" class="input" type="number" min="0" step="0.01" inputmode="decimal" placeholder="默认 200；0：每笔都确认" />
-                <span class="hint">单笔低于此金额且余额足够时自动记账；达到或超过时私聊问主人，回一句同意就行。0 表示每笔都确认。仅虚拟零花钱，不涉及真实支付。</span>
+                <span class="hint">单笔花费到这个数就先私聊问主人，填 0 每笔都问。</span>
               </div>
             </div>
           </section>
@@ -1715,7 +1715,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">主人评论后自动回复</span>
                 </label>
-                <span class="hint">你在动态页评论后，它会用当前人设在后台回一两句。每条评论会调用一次模型，所以默认关闭；回复不带任何工具，同一条动态两次回复之间至少隔几秒，每台机器人每天最多回 50 条（重启后重新计数）。关闭时它不会自动回复，只在下次翻动态时才看到评论。保存配置后生效。</span>
+                <span class="hint">默认关闭。你在动态下评论后，它会回你一两句，每天最多 50 条。每条评论会调用一次模型。</span>
               </div>
             </div>
           </section>
@@ -1772,7 +1772,7 @@
                   :disabled="!form.style_filter_enabled"
                   placeholder="一行一条，例如：&#10;别学「典」「急了」这类嘲讽梗&#10;别跟着叫人「老婆」"
                 ></textarea>
-                <span class="hint">追加在上面四类后面，最多 20 条、每条 100 字；群里另加的和这里的一起生效。关掉「不学怪话」时不生效。</span>
+                <span class="hint">除了上面几类，再补充一些不想让它学的说法，一行一条，最多 20 条。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1780,7 +1780,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">戳一戳回应</span>
                 </label>
-                <span class="hint">被戳一戳时按人设和关系亲疏回一句短的（仅 OneBot 平台）。同一个人 90 秒内连戳只回第一下。</span>
+                <span class="hint">被戳一戳时回一句（仅 OneBot）。同一个人连着戳只回一次。</span>
               </div>
             </div>
           </section>
@@ -1805,7 +1805,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">这台机器人使用世界书</span>
                 </label>
-                <span class="hint">世界书是全局一本、所有机器人共用，条目在「档案 → 世界书」里增删改（立即生效）；这个开关只管当前机器人用不用，随配置一起保存。书是空的时开着也不注入任何内容。</span>
+                <span class="hint">世界书所有机器人共用一本，在「记忆 → 世界书」里编辑；这里只决定这台机器人用不用。</span>
               </div>
             </div>
           </section>
@@ -1854,8 +1854,8 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">自动下载视频并提取关键帧</span>
                 </label>
-                <span class="hint">关闭后保留媒体索引和已有缓存；普通图片不再后台调用模型，视频不再预下载或抽帧。主动读取、引用分析及工具调用仍可按需解析；远程媒体过期后可能无法读取。</span>
-                <span class="hint">图片描述、视频帧描述和模型 OCR 用的是<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>里「模型分配」的「媒体解析」。文本文件提取和本地 OCR 不消耗模型额度。</span>
+                <span class="hint">关闭后不再自动看群里的图片和视频，被问到时才去看，可以省模型额度。</span>
+                <span class="hint">看图看视频用的模型在<a href="#" @click.prevent="editorTab = 'model'">「模型」标签</a>的「媒体解析」里选。</span>
               </div>
             </div>
           </section>
@@ -1940,7 +1940,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">词典分词</span>
                 </label>
-                <span class="hint">用中文词典切出真实词参与记忆与历史检索，排序更准；词典常驻约 130MB 内存，开启立即生效，关闭需重启进程。</span>
+                <span class="hint">搜聊天记录和记忆时更准，多占约 130MB 内存；关闭要重启 Diana 才生效。</span>
               </div>
               <div class="field wide memory-settings">
                 <label class="switch">
@@ -1948,7 +1948,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">消息经向量化后可按意思检索历史（“有什么吃的推荐”能找到“凤爪味道不错”）。用的模型在<a href="#" @click.prevent="editorTab = 'model'; selectedModelRole = 'embedding'">「模型」标签</a>的「向量嵌入」里选，不选时自动用提供商里 embedding 分组的第一个配置档；每条消息会调用一次向量化接口。</span>
+                <span class="hint">按意思搜聊天记录，比如搜「有什么吃的推荐」能找到「凤爪味道不错」。每条消息会多调用一次向量模型，模型在<a href="#" @click.prevent="editorTab = 'model'; selectedModelRole = 'embedding'">「模型」标签</a>的「向量嵌入」里选。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -1977,7 +1977,7 @@
               <div class="field wide">
                 <label for="bot-backfill-limit">回补 / 重试条数</label>
                 <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
-                <span class="hint">重启或断线重连后，每个会话最多补回复多少条消息，只算会触发回复的（私聊、@ 机器人、引用机器人、称呼命中）。断线期间的其余消息照样补进上下文历史，但不做图片、语音处理也不回复。运行记录里「重试失败」也按这个数，每个会话只重跑最近几条失败消息。默认 3，媒体较多的群建议保持较小。</span>
+                <span class="hint">重启或断线恢复后，每个群或私聊最多补回几条错过的 @ 和私聊，默认 3。</span>
               </div>
             </div>
           </section>
@@ -1996,11 +1996,11 @@
               <div class="field wide">
                 <label for="agent-mode">Agent 模式</label>
                 <AppSelect id="agent-mode" v-model="agentModeSelection" :options="agentModeOptions" />
-                <span class="hint">两种模式下 Agent 都开着。标准模式给全部能力；安全模式防的是网页、转发的聊天记录、群消息里夹带的指令把主人的会话带偏，所以对主人本人也生效，会关掉：</span>
+                <span class="hint">标准模式能力全开。安全模式防止网页或群消息里夹带的指令带偏机器人，连主人也一起限制，会关掉：</span>
                 <ul class="hint agent-mode-impacts">
                   <li v-for="line in agentSafeModeImpacts" :key="line">{{ line }}</li>
                 </ul>
-                <span class="hint">查资料、记忆、提醒订阅、画图和读取工作区文件两种模式都照常。新建的机器人默认标准模式，安全模式只在你在这里选择后开启。</span>
+                <span class="hint">查资料、记忆、提醒、画图和读文件两种模式都能用。新建机器人默认标准模式。</span>
               </div>
               <div class="field">
                 <label for="subtask-max-tasks">单轮最多子任务数（≤16）</label>
@@ -2011,14 +2011,14 @@
                 <input id="subtask-max-concurrency" v-model.number="form.subtask_max_concurrency" class="input" type="number" min="1" max="4" />
               </div>
               <div class="field wide">
-                <span class="hint">搜索与分析子任务按机器人分别限制。任务调用可以主动降低并发，但不能突破这里的配置；实际执行仍受服务端全局并发限制。</span>
+                <span class="hint">机器人同时最多开几个子任务（比如并行搜索），越多越快。</span>
               </div>
               <div v-if="agentMode !== 'standard'" class="field wide">
                 <span class="hint">文件写入、浏览器和命令沙盒这些设置在安全模式下不起作用，切回标准模式后按原来的值生效。</span>
               </div>
               <template v-if="agentMode === 'standard'">
                 <div class="field wide">
-                  <span class="hint">标准模式下，主人和 WebUI 管理员默认可操作宿主机：读写文件、执行命令、联网和安装软件，常规任务无需逐条审批。权限等于 Diana 的运行账号；需要收紧时切换安全模式。run_command 在下面的工作区容器里运行，所有人共用；工作区工具的限制不影响主人的宿主机工具（host_access）。</span>
+                  <span class="hint">标准模式下，主人和管理员可以让机器人直接操作这台电脑：读写文件、执行命令、装软件，权限和运行 Diana 的账号一样。要收紧就切到安全模式。</span>
                 </div>
                 <!-- 存量部署升级后不会凭空拿到这些能力（那是静默扩权），所以给一次
                      显式的「填入」：只改表单，仍然要用户自己点保存。 -->
@@ -2039,9 +2039,7 @@
                     <span class="switch-label">允许写入文件（write_file / edit_file / save_to_workspace / manage_files）</span>
                   </label>
                   <span class="hint">
-                    新建的机器人默认打开：写入锁在数据目录下的 workspace 内，碰不到配置和数据库。
-                    包括把聊天图片、网址文件存进来，以及挪动、复制、删除（删除只挪进 .trash 回收站）。
-                    读取、检索、按名字找文件、查看文件信息不受这个开关影响，始终可用。
+                    默认打开。只能写 Diana 工作区里的文件，碰不到配置和数据库；删除的文件先进回收站。读文件不受这个开关影响。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2051,8 +2049,7 @@
                     <span class="switch-label">允许使用浏览器控制扩展（browser_ext_*）</span>
                   </label>
                   <span class="hint">
-                    默认关闭。那组工具操作的是你自己浏览器里的页面，带着你的登录态，所以逐台机器人显式打开。
-                    还要在「浏览器」页打开「我自己的 Chrome」并授权站点，两边都开才真的能用；两个浏览器都开着时按那一页的优先级先用排在前面的。
+                    默认关闭。让机器人操作你自己 Chrome 里的网页（带着你的登录状态）。还要在「浏览器」页连上自己的 Chrome 并授权网站。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2062,8 +2059,7 @@
                     <span class="switch-label">允许使用桌面控制（desktop_*）</span>
                   </label>
                   <span class="hint">
-                    默认关闭。那组工具查看并操作运行 Diana 的这台 Mac 上的窗口，只对主人开放，安全模式下不可用。
-                    还要在「设置 → 桌面控制」打开总开关，两边都开才真的能用；要它动手点击、输入，再在那一页打开「点击与输入」。
+                    默认关闭。让机器人看和操作这台 Mac 上的窗口，只有主人能用。还要在「设置 → 桌面控制」里打开总开关。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2073,9 +2069,7 @@
                     <span class="switch-label">禁止这台机器人使用内置浏览器</span>
                   </label>
                   <span class="hint">
-                    默认允许：只要「浏览器」页的来源选的是「Diana 内置」，browser_open / browser_text / browser_click 这组工具就连到它上面，
-                    带着你在里面登录过的站点。这组工具只有主人能用，群成员拿不到（他们只有一次性隔离渲染，临时 profile、用完即删）；
-                    你在那一页按下接管时，连主人也当场碰不到它。勾上这一项表示这台机器人彻底不碰它。
+                    默认允许主人通过机器人使用 Diana 内置浏览器（带着你在里面登录过的网站），群成员用不了。勾上后这台机器人完全不用它。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2090,8 +2084,7 @@
                     ]"
                   />
                   <span class="hint">
-                    只管 install_package 和插件声明的脚本、MCP，它们在宿主机上运行；「自动」「关闭」下没有沙盒时直接执行。
-                    Linux 需要 <code>bubblewrap</code>，macOS 用系统自带的 <code>sandbox-exec</code>。run_command 不受它影响。
+                    插件脚本和装软件在这台电脑上运行时，是否放进沙盒隔离。Linux 需要装 <code>bubblewrap</code>，macOS 自带。
                   </span>
                 </div>
                 <div class="field wide">
@@ -2100,7 +2093,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">允许插件脚本和装包联网</span>
                   </label>
-                  <span class="hint">默认切断。只影响 install_package 和插件声明的脚本、MCP；run_command 的联网由工作区容器决定。</span>
+                  <span class="hint">默认关闭。插件脚本和装软件时能不能联网。</span>
                 </div>
                 <div class="field wide">
                   <label for="agent-box-access">工作区容器（run_command）</label>
@@ -2117,17 +2110,14 @@
                     这台机器用不了工作区容器，哪一档都不提供 run_command：{{ agentBoxStatus.reason }}
                   </span>
                   <span class="hint">
-                    run_command 在隔离的 Docker 容器里跑 bash：git clone、下载、grep、跑 Python / Node 脚本，产物用 send_file 发出。「所有人」时群成员也能用，同一个群共用一个容器。
-                    每个群、每个私聊各一个容器，每个最多 1 GB 内存、2 核，不设总数上限：选「所有人」时同时在用命令的群越多，同时跑的容器越多。/work 持久保存；空闲 15 分钟停掉容器（文件保留），每周一 05:00 和「清空上下文」时清空，也可以让机器人用 box_reset 清空。
-                    容器里没有任何凭据，不挂宿主目录，只能访问公网，连不到本机和内网；单次命令默认 60 秒、最长 600 秒，内存 1 GB。
-                    需要本机的 Docker（macOS 用 Docker Desktop / colima / OrbStack，Linux 只认 rootless Docker，Docker 部署挂上 rootless socket 即可），Termux 不支持；第一次使用会在本机构建镜像，要等几分钟。
+                    让机器人在隔离的 Docker 容器里执行命令（下载、跑脚本等），碰不到这台电脑的文件和内网。每个群、每个私聊各用一个容器；选「所有人」时群成员也能用。需要本机装好 Docker（Linux 只支持 rootless Docker），Termux 不支持；第一次使用要等几分钟构建。
                     详见 <a href="https://github.com/SuInk/Diana/blob/main/docs/workbox.md" target="_blank" rel="noopener">工作区容器说明</a>。
                   </span>
                 </div>
                 <div v-if="boxAccess !== 'off'" class="field">
                   <label for="agent-box-disk">工作区磁盘上限（MB）</label>
                   <input id="agent-box-disk" v-model.number="form.agent_box_disk_limit_mb" class="input" inputmode="numeric" placeholder="5120" />
-                  <span class="hint">每个会话的 /work 单独算，包括 /work/.output 里的命令输出，默认 5120（5 GB），最小 100。超过后拒绝继续写入：命令不再执行或被停掉，结果里写明用了多少、怎么清理（box_reset、「清空上下文」或删文件）。</span>
+                  <span class="hint">每个群或私聊的容器最多存多少 MB 文件，默认 5120（5 GB）。满了就不能再写，需要清理。</span>
                 </div>
                 <div class="field">
                   <label for="agent-timeout">插件脚本超时（毫秒）</label>
@@ -2152,12 +2142,12 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">调试模式</span>
                 </label>
-                <span class="hint">记录完整模型上下文、工具参数、工具结果和调用链，在事件页查看，内容可能包含聊天隐私。默认开启；记录存在数据目录的 debug-traces 下，不占数据库，按调试日志保留天数清理。</span>
+                <span class="hint">默认开启。记下每次回复的完整过程，方便在「记录」页排查问题；内容可能包含聊天隐私。</span>
               </div>
               <div class="field">
                 <label for="bot-timezone">机器人时区</label>
                 <AppSelect id="bot-timezone" :model-value="form.timezone ?? ''" @update:model-value="form.timezone = $event" :options="timezoneOptions(form.timezone, '跟随系统默认')" searchable search-placeholder="搜索城市、地区或 UTC 偏移" />
-                <span class="hint">地区时区会按日期自动切换夏令时，所示 UTC 偏移是当前值；固定 UTC 偏移全年不变。告诉模型的当前时间、回复时段、每日次数的零点、「明天八点」的换算和聊天记录上的时间都按它。留空时先看 TZ 环境变量，再用服务器本地时区；服务器是 UTC（Docker 默认）时按 UTC+8。</span>
+                <span class="hint">机器人眼里的「现在几点」、提醒时间和每日次数清零都按这个时区。留空用服务器时区，服务器是 UTC 时按北京时间。</span>
               </div>
               <div class="field">
                 <label for="bot-concurrency">全局并发数</label>
@@ -2203,7 +2193,7 @@
               <div class="cluster">
                 <button class="btn small primary" type="button" :disabled="promptFileBusy" @click="applyPromptYamlEdit">应用</button>
                 <button class="btn small" type="button" :disabled="promptFileBusy" @click="promptYamlEditing = false">取消</button>
-                <span class="hint">应用后和导入一样整份替换，保存配置才生效。没写到的段落用默认值，这一版没有的段落会跳过。</span>
+                <span class="hint">应用后整份替换当前配置，没写到的项用默认值。点「保存配置」才生效。</span>
               </div>
             </div>
             <div v-else-if="promptOverridesOpen" class="card-body">
@@ -2354,7 +2344,7 @@
       <div class="stack model-route-editor">
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
         <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="modelRouteEditorChannelOptions(modelRouteEditor.role)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
-        <p v-if="modelRouteEditor.draft.follow_chat" class="hint">用对话那一档的模型和后备，换对话模型时跟着一起换；这一行在列表里的位置决定先用它还是先用别的模型。</p>
+        <p v-if="modelRouteEditor.draft.follow_chat" class="hint">用对话模型，换对话模型时跟着一起换；在列表里的位置决定先用谁。</p>
         <div v-if="!modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
         <div v-if="roleSupportsReasoning(modelRouteEditor.role) && !modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
         <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
@@ -3560,7 +3550,7 @@ const modelRoleRows: ModelRoleRow[] = [
   {
     key: "chat",
     label: "对话",
-    description: "正式回复和入群欢迎用的模型。其他用途在提供商一栏选「跟随对话」时，直接沿用这里的提供商、模型和后备路由，模型一栏随之锁定。"
+    description: "机器人聊天回复用的模型。其他用途选「跟随对话」时也用这里的模型。"
   },
   {
     key: "vision",
@@ -3572,14 +3562,13 @@ const modelRoleRows: ModelRoleRow[] = [
     key: "media_parse",
     label: "媒体解析",
     sublabel: "可选",
-    description: "图片描述、视频帧描述和模型 OCR 使用的模型。未指定时沿用视觉理解；文本提取和本地 OCR 不消耗模型额度。"
+    description: "看图片、视频和识别图中文字用的模型。不指定时沿用视觉理解。"
   },
   {
     key: "intent",
     label: "意图识别",
     description:
-      "判定当前这一轮该不该说话、说出去的这句能不能发：主动接话判定、回复疲劳判断和发送前审核。问的都是是非、单选和打分，" +
-      "发请求时带着判断题表，所以这一档可以绑 TypeSafe Jev、OpenAI Decisions 这类只做判断的模型。写字的活在「回复辅助」和「后台生成」两档。"
+      "判断该不该接话、回复能不能发出去。只做判断、不写文字，可以选专门的判断模型。"
   }
 ];
 // 生图和其余几档不是一类活——那些都在读和写文字，它只出图——排在最后，不夹在
@@ -3595,23 +3584,21 @@ const purposeRoleRows: ModelRoleRow[] = [
     key: "reply_tone",
     label: "回复口吻",
     sublabel: "最终表达",
-    description: "内容和工具调用完成后，把完整草稿整理成最终聊天口吻。不指定时跟随对话；单独指定时适合使用响应快、成本低的文字模型。"
+    description: "把想好的回复改写成最终的聊天口吻。不指定时跟随对话，单独指定时选个快且便宜的模型就行。"
   },
   {
     key: "background",
     label: "后台生成",
     sublabel: "好感度 · 记忆",
     description:
-      "好感度评估、长期记忆抽取与归纳和 RSS 订阅判定。它们都要写出成段文字，判断模型答不了；" +
-      "都在回复之外异步执行，慢一点没关系，适合指一个便宜的模型。不指定时跟随对话。"
+      "评估好感度、整理长期记忆、筛选订阅推送。在后台慢慢做，不影响回复速度，适合选便宜的模型。不指定时跟随对话。"
   },
   {
     key: "reply_assist",
     label: "回复辅助",
     sublabel: "指代 · 摘要 · 提示",
     description:
-      "语义指代、话题合并、上下文摘要、转发内容安全、戳一戳回应，以及出错、被拦、收声时发给用户的那句提示改写。" +
-      "它们都在这一轮回复发出之前同步执行，模型慢，回复就跟着慢——选一个响应快、能写文字的模型，不需要判断题表。不指定时沿用后台生成。"
+      "回复前的准备工作：理解指代、总结较早的聊天、回应戳一戳、写出错时的提示语等。它慢回复就慢，选个响应快的模型。不指定时沿用后台生成。"
   }
 ];
 
@@ -3624,8 +3611,7 @@ const embeddingRoleRow: ModelRoleRow = {
   label: "向量嵌入",
   sublabel: "语义检索",
   description:
-    "把消息转成向量，按意思检索历史（「有什么吃的推荐」能找到「凤爪味道不错」）。只在机器人设置里开了「语义检索」时调用。" +
-    "不指定时自动用提供商里 embedding 分组的第一个配置档。换模型后，之前的消息要等重新向量化后才能按语义搜到。"
+    "按意思搜聊天记录用的模型，只在开了「语义检索」时才用。不指定时自动选提供商里第一个向量模型。换模型后，旧消息要等重新处理完才能搜到。"
 };
 
 const mediaRoleRows: ModelRoleRow[] = [
@@ -3634,23 +3620,21 @@ const mediaRoleRows: ModelRoleRow[] = [
     label: "语音合成",
     sublabel: "可选 · TTS",
     description:
-      "把文字合成为语音消息：配了就有 tts 工具，发送模式选常驻时回复都转语音。支持 OpenAI 兼容、ElevenLabs、Breeze、MiMo、MiniMax、火山、百炼、Fish Audio、Azure、Gemini、NovelAI、GPT-SoVITS、GSVI，" +
-      "官方地址会自动认出接口；免费的 Edge 朗读和谷歌翻译朗读不用建提供商，其余自建服务用「自定义请求模板」。"
+      "让机器人能发语音消息。支持 OpenAI 兼容、ElevenLabs、MiniMax、火山、百炼、Azure、GPT-SoVITS 等；免费的 Edge 朗读和谷歌翻译朗读不用另配提供商。"
   },
   {
     key: "stt",
     label: "语音识别",
     sublabel: "可选 · STT",
     description:
-      "把收到的语音转写成文字给上下文用，配了就转写。支持 OpenAI 兼容的 /audio/transcriptions（Whisper、硅基流动、Xinference 等）、ElevenLabs、MiMo，" +
-      "也可以选内置的「本机 Whisper」调用 whisper.cpp 命令。"
+      "把收到的语音转成文字，机器人才听得懂。支持 Whisper 等 OpenAI 兼容服务、ElevenLabs、MiMo，也可以用内置的「本机 Whisper」。"
   },
   {
     key: "video",
     label: "视频生成",
     sublabel: "可选",
     description:
-      "文生视频、图生视频，直连可灵、Vidu、Seedance、Runway、Luma、MiniMax 等厂商的任务接口，也支持 Sora 格式和自定义格式。配好后有生图权限的人（群成员也一样）可以让机器人生成视频，任务在后台跑完再发出来，每个任务计入群的模型调用额度；不配则不提供这项能力。"
+      "让机器人能按文字或图片生成视频，支持可灵、Vidu、Seedance、Runway、Luma、MiniMax 等。能出图的人都能用，生成好了再发出来。不配就没有这项能力。"
   }
 ];
 
@@ -4677,7 +4661,7 @@ function channelOptionsFor(role: RoleKey): AppSelectOption[] {
   if (role === "media_parse") base.push({ value: FOLLOW_VISION, label: "跟随视觉理解", hint: "不单独绑定媒体解析模型" });
   // 对话是被跟随的那一档，不能跟随自己；音视频插槽没有可跟随的对话模型。
   if (isMediaRole(role)) base.push({ value: DISABLED, label: "不启用", hint: "不配置这项能力" });
-  if (role === "embedding") base.push({ value: AUTO_EMBEDDING, label: "自动", hint: "用提供商里 embedding 分组的第一个配置档" });
+  if (role === "embedding") base.push({ value: AUTO_EMBEDDING, label: "自动", hint: "自动用提供商里第一个向量模型" });
   if (isPurposeRole(role)) {
     base.push({ value: UNSPECIFIED, label: `不指定，跟随${purposeRoleFallbackLabel(role)}`, hint: "不单独绑定，换模型时跟着一起换" });
   }

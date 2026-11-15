@@ -10,7 +10,7 @@
   <div v-show="extensionTab === 'plugins'" class="plugins-view">
     <header class="view-header plugins-view-header">
       <div class="view-title">
-        <p>{{ botScope ? "插件开关按机器人独立，配置全局共享" : "共享插件配置 · 这里的开关统一所有机器人，选择机器人后可单独调整" }}</p>
+        <p>{{ botScope ? "开关只管这个机器人，插件设置所有机器人共用" : "这里的开关对所有机器人生效，选中某个机器人后可单独调整" }}</p>
       </div>
       <div class="view-actions">
         <div class="plugin-search">
@@ -256,7 +256,7 @@
       @pointerdown="onSettingsPointerDown"
       @close="closeSettings"
     >
-      <p v-if="settingsSpecs.length" class="hint">设置和凭据全局共享；保存或恢复默认会影响使用此插件的所有机器人。</p>
+      <p v-if="settingsSpecs.length" class="hint">这些设置所有机器人共用，保存或恢复默认会影响每个用到这个插件的机器人。</p>
       <section v-if="settingsTarget.runtime_status" class="plugin-settings-section-head plugin-runtime-status" data-runtime-status-detail>
         <div class="cluster">
           <h3>运行状态</h3>
@@ -292,7 +292,7 @@
       </details>
 
       <p v-if="settingsSpecs.length" class="hint">所有机器人共用此插件配置，启用状态各自独立。</p>
-      <p v-if="settingsTarget.shared_config_source" class="hint">当前共享配置迁移自机器人 {{ settingsTarget.shared_config_source }}，旧的独立配置仍保留在存储中。</p>
+      <p v-if="settingsTarget.shared_config_source" class="hint">这份共用设置是从机器人 {{ settingsTarget.shared_config_source }} 的设置迁过来的，原来那份还保留着。</p>
       <div v-if="isGitHubSettings" class="segmented github-settings-tabs" role="tablist" aria-label="GitHub 仓库设置">
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'config'" :class="{ active: githubSettingsTab === 'config' }" @click="githubSettingsTab = 'config'">配置信息</button>
         <button type="button" role="tab" :aria-selected="githubSettingsTab === 'repositories'" :class="{ active: githubSettingsTab === 'repositories' }" @click="githubSettingsTab = 'repositories'">仓库管理</button>
@@ -468,8 +468,8 @@
           <div class="resolver-platform-heading"><h3>解析平台与 Cookie</h3>
           <button class="btn small" type="button" data-settings-action :disabled="savingSettings || resolverTesting" @click="testAllResolverCredentials">{{ resolverTesting ? "检测中…" : "一键检测" }}</button>
           </div>
-          <p class="hint">点击胶囊启停，右侧铅笔编辑 Cookie；圆点表示凭据状态。改动统一保存。</p>
-          <p class="hint">打开设置自动检测已配置凭据；一键检测可重新检查，公开解析平台无需登录检测。</p>
+          <p class="hint">点平台名开关解析，点铅笔填 Cookie，圆点颜色表示登录状态。改完点底部「保存」。</p>
+          <p class="hint">打开设置时会自动检测已填的 Cookie，也可以点「一键检测」重查；不用登录的平台无需检测。</p>
         <div class="resolver-platform-list">
           <template v-for="platform in resolverPlatformRows" :key="platform.value">
             <ResolverCookieEditor v-if="platform.value === 'youtube'" :ref="setResolverCookieEditor" :path="String(settingsForm.ytdlp_cookies_path || '')" :disabled="savingSettings" :enabled="resolverPlatformEnabled(platform.value)" @saved="settingsForm.ytdlp_cookies_path = $event">
@@ -497,7 +497,7 @@
               <Modal v-if="platform.credential && editingResolverPlatform === platform.value" :title="`${platform.name} · Cookie`" :initial-focus="`#setting-${platform.credential.key}`" @pointerdown="onSettingsPointerDown" @close="editingResolverPlatform = ''">
                 <p class="hint">完成后回到设置，点击底部「保存」统一生效。</p>
                 <PluginSettingField :spec="platform.credential.spec" :form="settingsForm" :clearing="clearSecrets.includes(platform.credential.key)" :secret-configured="secretConfigured(platform.credential.key)" :secret-placeholder="secretPlaceholder(platform.credential.key)" @toggle-clear="toggleClearSecret" @blur="onResolverBlur" />
-                <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">当前为未保存草稿，检测通过后仍需点击底部保存。</p>
+                <p v-if="String(settingsForm[platform.credential.key] || '').trim()" class="hint">还没保存，检测通过后也要点底部「保存」。</p>
                 <p v-if="resolverCheckMessage(platform.credential.key)" class="hint" role="status">{{ resolverCheckMessage(platform.credential.key) }}</p>
                 <template #footer>
                   <button class="btn" type="button" :data-resolver-test="platform.credential.key" :disabled="!resolverCanTest(platform.credential.key)" @click="resolverChecks.test(platform.credential.key)">检测登录</button>
@@ -523,7 +523,7 @@
           <h3>高级抓取设置</h3>
           <div class="stack plugin-settings-form">
             <template v-for="spec in resolverGroups.advanced" :key="spec.key">
-              <PluginSettingField v-if="spec.key === 'ytdlp_cookies_path'" :spec="{ ...spec, label: '外部 Cookie 文件路径（可选）', description: '由 WebUI 管理 Cookie 时无需填写。' }" :form="settingsForm" />
+              <PluginSettingField v-if="spec.key === 'ytdlp_cookies_path'" :spec="{ ...spec, label: '外部 Cookie 文件路径（可选）', description: '已在本页填了 Cookie 就不用填。' }" :form="settingsForm" />
               <PluginSettingField v-else :spec="spec" :form="settingsForm" :clearing="clearSecrets.includes(spec.key)" :secret-configured="secretConfigured(spec.key)" :secret-placeholder="secretPlaceholder(spec.key)" @toggle-clear="toggleClearSecret" />
             </template>
           </div>
@@ -575,7 +575,7 @@
       <div v-if="isGitHubSettings && githubSettingsTab === 'records'" class="github-run-records">
         <div class="plugin-settings-section-head">
           <h3>运行记录</h3>
-          <p>Issue 草稿、提出人、日期和详细内容在这里查看；仓库检查和 Issue 创建的操作审计在日志页查看。</p>
+          <p>这里看 Issue 草稿、提出人和详情；仓库检查、创建 Issue 的操作记录去日志页看。</p>
         </div>
         <RepositoryIssueDraftList />
         <div class="github-run-records-actions">
@@ -681,7 +681,7 @@
             :disabled="repoCheckBusy || !!repoPreview"
             @change="pickRepoArchive"
           />
-          <p class="hint">支持 .zip / .tar.gz，最大 64MB。diana.plugin.json 放在包的根目录或唯一的顶层文件夹里即可，GitHub 的「Download ZIP」也能直接用。</p>
+          <p class="hint">支持 .zip / .tar.gz，最大 64MB，包里要有 diana.plugin.json。GitHub 上「Download ZIP」下载的包可以直接传。</p>
         </div>
         <div v-else class="field">
           <label for="repo-plugin-url">GitHub 仓库链接</label>
@@ -694,7 +694,7 @@
             :disabled="repoCheckBusy || !!repoPreview"
             @keydown.enter="checkRepoPlugin"
           />
-          <p class="hint">默认安装默认分支最新提交；用 /tree/版本tag 的链接可以固定版本、复现安装。</p>
+          <p class="hint">默认装默认分支的最新提交（不是最新 Release）；想装指定版本，用带 /tree/版本号 的链接。</p>
         </div>
         <p v-if="repoInstallError" class="repo-install-error" role="alert">{{ repoInstallError }}</p>
         <div v-if="repoPreview" class="repo-preview">
@@ -714,7 +714,7 @@
           </p>
           <section class="repo-preview-section">
             <h3>作者声明的权限（{{ repoPreview.permissions.length }} 项）</h3>
-            <p class="hint">这是插件作者的声明，Diana 目前不据此限制插件，见下方风险说明。</p>
+            <p class="hint">这些是作者自己写的，Diana 不会照此限制插件，详见下方风险说明。</p>
             <ul class="repo-permission-list">
               <li v-for="permission in repoPreview.permissions" :key="permission.id" :class="{ sensitive: permission.sensitive }">
                 <span>{{ permission.label }}</span>
@@ -731,7 +731,7 @@
                 <span v-if="spec.secret" class="badge warn">凭据</span>
               </li>
             </ul>
-            <p class="hint">凭据类设置安装后请到插件设置里配置；读接口不回传明文。</p>
+            <p class="hint">密钥、Cookie 这类设置装好后到插件设置里填，保存后不会再明文显示。</p>
           </section>
           <p v-if="repoPreview.installed" class="repo-install-error" role="alert">
             <template v-if="repoPreview.installed.built_in">
@@ -976,7 +976,7 @@ const permissionsTarget = ref<PluginState | null>(null);
 const dependencyHints: Record<string, string> = {
   [resolverPluginID]: "缺少这些命令时，对应平台的解析会失败；可直接在这里安装。",
   [groupRelationsPluginID]:
-    "关系图优先使用中文字体直接出图；缺失时可一键下载，首次出图也会自动补齐。浏览器截图作为备用路径。"
+    "画关系图需要中文字体；没有的话可以一键下载，第一次画图时也会自动补上。"
 };
 
 function dependenciesFor(pluginID: string): ResolverDependency[] {
@@ -1072,8 +1072,8 @@ const stickerSettingsTab = ref<"config" | "library">("config");
 const testingMusic = ref(false);
 const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
 const musicPlatforms = [
-  { key: "netease", label: "网易云音乐", guide: "公开试听可直接使用；会员歌曲建议填写自建 NeteaseCloudMusicApi，并从浏览器登录 Cookie 中复制 MUSIC_U 的值。" },
-  { key: "qq", label: "QQ 音乐", guide: "可直接填写浏览器登录后的完整 Cookie；通常应包含 uin 或 qqmusic_uin，以及 qm_keyst 或 qqmusic_key。也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可选。" },
+  { key: "netease", label: "网易云音乐", guide: "不填也能放可试听的歌；要放会员歌曲，在浏览器登录网易云后复制 Cookie 里 MUSIC_U 的值，并建议配一个自建 NeteaseCloudMusicApi。" },
+  { key: "qq", label: "QQ 音乐", guide: "在浏览器登录 QQ 音乐后，把完整 Cookie 复制进来即可；也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可不填。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
 // 启用和顺序放在曲库列表上，不再在下方「播放」里重复一份。
