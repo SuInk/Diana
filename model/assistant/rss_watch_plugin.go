@@ -571,9 +571,10 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 				images = append(images, photoURL)
 			}
 		}
+		// X 帖子没有标题。以前拿正文前 120 字加「...」充当标题，和正文开头对不上，
+		// 原文推送时把这段又发了一遍。
 		feed.Items = append(feed.Items, rssWatchItem{
 			ID:          id,
-			Title:       truncateRunes(text, 120),
 			Link:        strings.TrimSpace(entry.URL),
 			Author:      author,
 			Content:     text,

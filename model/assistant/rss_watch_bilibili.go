@@ -227,8 +227,10 @@ type bilibiliDynamicItem struct {
 	Type    string `json:"type"`
 	Modules struct {
 		Author struct {
-			Name  string `json:"name"`
-			PubTS int64  `json:"pub_ts"`
+			Name string `json:"name"`
+			// B 站这个字段有时给数字、有时给字符串（2026-11-15 生产上是 "1763..."），
+			// 按 int64 解码会让整个动态订阅建不起来。
+			PubTS json.Number `json:"pub_ts"`
 		} `json:"module_author"`
 		Dynamic bilibiliDynamicBody `json:"module_dynamic"`
 		Tag     *struct {
@@ -357,8 +359,8 @@ func (p *RSSWatchPlugin) fetchBilibiliDynamic(ctx context.Context, feedURL strin
 			ID: entry.IDStr, Title: cleanFeedText(title, 500), Link: link, Author: author,
 			Content: cleanFeedText(text, 4000), Images: compactStrings(images),
 		}
-		if entry.Modules.Author.PubTS > 0 {
-			item.PublishedAt = time.Unix(entry.Modules.Author.PubTS, 0)
+		if pubTS, err := entry.Modules.Author.PubTS.Int64(); err == nil && pubTS > 0 {
+			item.PublishedAt = time.Unix(pubTS, 0)
 		}
 		feed.Items = append(feed.Items, item)
 	}

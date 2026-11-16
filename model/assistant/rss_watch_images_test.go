@@ -237,6 +237,21 @@ func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
 	}
 }
 
+// 长推文原文推送时开头那段只出现一次。以前标题是正文前 120 字加「...」，和正文对不上，
+// 推送里整段发了两遍。
+func TestRSSWatchLongTweetTextNotRepeated(t *testing.T) {
+	long := strings.Repeat("长推文正文", 40)
+	body := []byte(`{"code":200,"results":[{"id":"77777777","url":"https://x.com/someone/status/77777777","text":"` + long + `"}]}`)
+	feed, err := parseTwitterStatusesFeed(body)
+	if err != nil || len(feed.Items) != 1 {
+		t.Fatalf("feed=%#v err=%v", feed, err)
+	}
+	got := rssWatchUnfilteredText(feed.Items[0])
+	if strings.Count(got, "长推文正文长推文正文") != strings.Count(long, "长推文正文长推文正文") || got != long+"\nhttps://x.com/someone/status/77777777" {
+		t.Fatalf("text = %q", got)
+	}
+}
+
 // Exercise the real fetch/cache boundary: parser-only tests miss JSON data loss.
 func TestRSSWatchCachedFeedKeepsPhotosOutOfJudgePayload(t *testing.T) {
 	const body = `{"code":200,"results":[{"id":"2111110176485052665","url":"https://x.com/animecorner_ac/status/2111110176485052665","text":"New visual","media":{"photos":[{"url":"https://pbs.twimg.com/media/A.jpg"},{"url":"https://pbs.twimg.com/media/B.png"}]}}]}`
