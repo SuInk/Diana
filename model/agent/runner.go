@@ -151,8 +151,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var contractMessage *llm.Message
 	// 工具目录、规则和契约按群里的工具全集渲染，换人说话也不变；本轮发言者能用哪些、
 	// 工具预算多少只写一行，只用于本轮（见 speakerPermissionNote）。
-	if note := r.speakerPermissionNote(); note != "" {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: note, Priority: llm.MessagePrioritySystem, TurnOnly: true})
+	// 只追加：前缀里最近一版和这一轮一样就不发，变了才追加新的一版、留在前缀里。
+	if note := r.speakerPermissionNote(); note != "" && latestPermissionNote(req.Continuation) != note {
+		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: note, Priority: llm.MessagePrioritySystem})
 	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
@@ -254,6 +255,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages...)
 	}
+	messages = turnOnlyAfterCurrent(messages, stableCacheIndex)
 
 	var promptTokens int64
 	for _, message := range messages {
@@ -1193,6 +1195,51 @@ func callerCacheBreakpoint(messages []llm.Message) int {
 
 // markLoopCacheBreakpoint 让最新一条消息上始终有一个滚动缓存断点，这样每个规划
 // 步都能读到上一步写入的缓存前缀；稳定前缀上的断点保持不动。
+// turnOnlyAfterCurrent 把稳定前缀之后、当前消息之前那些只用于本轮的消息（尾部状态块、
+// 查证提醒、时钟、权限说明）按原顺序挪到当前消息后面，其余消息位置不变。
+//
+// 下一轮续接的前缀是这一轮去掉只用于本轮的消息、再接上回复。它们夹在新历史和当前消息
+// 之间时，下一轮请求从它们的位置起就和这一轮不同，当前消息得重发一遍；挪到当前消息
+// 后面，下一轮能一直复用到当前消息为止。11-17 用 swe-2 回放 30 条生产请求、gpt-6.1-sol
+// 盲评：挪后 13 胜、原样 11 胜、6 平，可接受 20/30 对 19/30，看不出变差。
+func turnOnlyAfterCurrent(messages []llm.Message, stableIndex int) []llm.Message {
+	last := len(messages) - 1
+	start := max(stableIndex+1, 0)
+	if last <= start {
+		return messages
+	}
+	out := make([]llm.Message, 0, len(messages))
+	out = append(out, messages[:start]...)
+	var moved []llm.Message
+	for _, message := range messages[start:last] {
+		if message.TurnOnly {
+			moved = append(moved, message)
+			continue
+		}
+		out = append(out, message)
+	}
+	if len(moved) == 0 {
+		return messages
+	}
+	// 和当前消息同一优先级的（当前消息拆出来的注解，开头写着「上面最后一条聊天记录是这
+	// 一轮要回复的消息」）挪过去后紧跟着当前消息，其余照原来的顺序排在后面。
+	out = append(out, messages[last])
+	if priority := messages[last].Priority; priority != 0 {
+		for _, message := range moved {
+			if message.Priority == priority {
+				out = append(out, message)
+			}
+		}
+		for _, message := range moved {
+			if message.Priority != priority {
+				out = append(out, message)
+			}
+		}
+		return out
+	}
+	return append(out, moved...)
+}
+
 func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 	if len(messages) == 0 {
 		return
@@ -1200,6 +1247,14 @@ func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 	for index := range messages {
 		if index != stableIndex {
 			messages[index].CacheBreakpoint = false
+		}
+	}
+	// 移动的断点打在最后一条会留进前缀的消息上：第一步是当前消息（后面只用于本轮的那些
+	// 下一轮不带，见 turnOnlyAfterCurrent），之后各步是最新的工具结果。
+	for index := len(messages) - 1; index >= 0; index-- {
+		if !messages[index].TurnOnly {
+			messages[index].CacheBreakpoint = true
+			return
 		}
 	}
 	messages[len(messages)-1].CacheBreakpoint = true
@@ -1549,6 +1604,19 @@ func (r *Runner) speakerPermissionNote() string {
 		parts = append(parts, "上面列出的工具这位发言者都能用。")
 	}
 	return speakerPermissionNotePrefix + strings.Join(parts, "")
+}
+
+// latestPermissionNote 是续接前缀里最近的那一行工具权限说明，没有续接或没有这一行时为空。
+func latestPermissionNote(continuation *Continuation) string {
+	if continuation == nil {
+		return ""
+	}
+	for index := len(continuation.Prefix) - 1; index >= 0; index-- {
+		if content := continuation.Prefix[index].Content; strings.HasPrefix(content, speakerPermissionNotePrefix) {
+			return content
+		}
+	}
+	return ""
 }
 
 // dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、

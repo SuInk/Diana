@@ -101,7 +101,7 @@ func TestSpeakerToolsShareOnePrefix(t *testing.T) {
 	}
 	note := func(req llm.GenerateRequest) string {
 		for _, message := range req.Messages {
-			if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) && message.TurnOnly {
+			if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) {
 				return message.Content
 			}
 		}

@@ -63,21 +63,21 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 			t.Fatalf("prefix differs at %d:\n got %#v\nwant %#v", index, got, message)
 		}
 	}
-	if sent[len(sent)-1].Content != "第二问" {
-		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
+	if sent[lastKeptIndex(sent)].Content != "第二问" {
+		t.Fatalf("current message is not the last kept message: %#v", sent)
 	}
-	// 本轮发言者的工具权限每轮一行、只用于本轮：请求里只有这一轮的那一行，不进前缀。
+	// 本轮发言者的工具权限只追加：第一轮那一行进了前缀，第二轮没变就不再发。
 	notes := 0
 	for _, message := range sent {
 		if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) {
 			notes++
-			if !message.TurnOnly || !strings.Contains(message.Content, "coding") {
+			if message.TurnOnly || !strings.Contains(message.Content, "coding") {
 				t.Fatalf("permission note = %#v", message)
 			}
 		}
 	}
 	if notes != 1 {
-		t.Fatalf("permission notes in the request: %d", notes)
+		t.Fatalf("permission notes in the request: %d, want the first turn's one only", notes)
 	}
 	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
 		for _, message := range transcript {

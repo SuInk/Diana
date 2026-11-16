@@ -293,7 +293,12 @@ func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 	return false
 }
 
-func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
+// quoteRuleInHead 为真时，单条消息的引用规则写在系统头部（replyQuoteRule），这里不再
+// 每轮带着当前消息 ID 重写一遍：主回复请求只追加，逐轮变的一句会让整段重发。
+// replyQuoteRule 是主回复系统头部里的引用规则，见 replyDecorationPrompt。
+const replyQuoteRule = "要不要引用由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 <diana-quote id=\"消息ID\"/> 指向你回的那条，消息ID 原样照抄那条聊天记录 # 后面那串；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现，不能猜测、补写或拼接；不能确认目标就省略标记。"
+
+func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent, quoteRuleInHead bool) string {
 	if event.Kind == EventKindPrivate {
 		// 私聊没有引用和 @ 的概念，但连发同样会被取代（sender_burst.go），
 		// 承接前几条的提示照样要给。
@@ -327,7 +332,9 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写一个引用标记；正常一问一答、连续对话时不要引用。"+
 				"这一轮对方连着发了几条，候选按时间从旧到新：\n"+strings.Join(lines, "\n")+
 				"\n要引用就挑你回复第一句接的那一条，不要默认挑最后一条。"+quoteRules)
-		} else if messageID := strings.TrimSpace(event.MessageID); replyMarkerIDAcceptable(event.Platform, messageID) {
+		} else if messageID := strings.TrimSpace(event.MessageID); quoteRuleInHead && replyMarkerIDAcceptable(event.Platform, messageID) {
+			quote = mentionQuoteByModel
+		} else if replyMarkerIDAcceptable(event.Platform, messageID) {
 			quote = mentionQuoteByModel
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 "+
 				replyMarkerFor(messageID)+" 来指向当前这条消息；正常一问一答、连续对话时不要引用。"+quoteRules)

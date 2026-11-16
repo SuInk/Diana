@@ -67,8 +67,25 @@ var promptIdentityPrivacySpec = registerPrompt(PromptSpec{
 	Contract: llmIdentityPrivacyContract,
 })
 
-// identityAlias 拼出某个角色的别名前缀，例如 im_message_。
+// identityAliasRoleLetters 是别名里各角色的缩写。别名在历史里每行都有（发言人一个、
+// 消息 ID 一个），11-16 生产主回复平均每条请求出现 614 次、约 4.5 千 token；角色写全、
+// 哈希 12 位时一个账号别名约 7 token，缩成一个字母、哈希 8 位约 5 token。共同前缀
+// im_ 不缩：防伪造（neutralizeIdentityMarkers）和还原都靠它认出别名，u_、m_ 这种在
+// 正文和变量名里太常见。
+var identityAliasRoleLetters = map[string]string{"bot": "b", "user": "u", "group": "g", "message": "m"}
+
+// identityAliasHashBytes 是别名哈希的字节数（8 位十六进制）。同一个 scope 里撞了时，后
+// 登记的那个用 identityAliasLongHashBytes。
+const (
+	identityAliasHashBytes     = 4
+	identityAliasLongHashBytes = 6
+)
+
+// identityAlias 拼出某个角色的别名前缀，例如 im_m_。
 func identityAlias(role string) string {
+	if letter := identityAliasRoleLetters[role]; letter != "" {
+		return identityAliasPrefix + letter + "_"
+	}
 	return identityAliasPrefix + role + "_"
 }
 
@@ -76,7 +93,7 @@ func identityAlias(role string) string {
 func identityAliasRoleList() string {
 	parts := make([]string, 0, len(identityAliasRoles))
 	for _, role := range identityAliasRoles {
-		parts = append(parts, identityAliasPrefix+role)
+		parts = append(parts, strings.TrimSuffix(identityAlias(role), "_"))
 	}
 	return strings.Join(parts, "、")
 }
@@ -490,7 +507,10 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00" + role + "\x00" + realID))
-	alias := identityAlias(role) + hex.EncodeToString(sum[:6])
+	alias := identityAlias(role) + hex.EncodeToString(sum[:identityAliasHashBytes])
+	if other, taken := s.aliasToReal[alias]; taken && other != realID {
+		alias = identityAlias(role) + hex.EncodeToString(sum[:identityAliasLongHashBytes])
+	}
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	s.known.remember(realID, role)
@@ -539,7 +559,10 @@ func (s *identityPrivacyScope) registerMessageID(realID string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00message\x00" + realID))
-	alias := identityAlias("message") + hex.EncodeToString(sum[:6])
+	alias := identityAlias("message") + hex.EncodeToString(sum[:identityAliasHashBytes])
+	if other, taken := s.aliasToReal[alias]; taken && other != realID {
+		alias = identityAlias("message") + hex.EncodeToString(sum[:identityAliasLongHashBytes])
+	}
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
 	s.known.remember(realID, "message")

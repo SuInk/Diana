@@ -748,6 +748,27 @@ var (
 	promptSpeakerTimezoneStaleSpec = tailSpec("speaker_timezone.stale", "发言者时区记录较旧", "时区记录超过一定时间时接在记录时间后面，提醒约时间前先确认。", promptSpeakerTimezoneStale)
 )
 
+// replyClockRule 是主回复头部的时间规则。开头是 agent.RuntimeClockMarker：Runner 看到它
+// 就不再自己补一条精确到秒的时钟（见 agent.messagesCarryRuntimeClock）。
+const replyClockRule = agent.RuntimeClockMarker + "现在的时间以最后一条聊天记录的时间为准，日期和星期看最近一条【日期】。这是机器人所在机器的可信时钟；被问到几点、今天几号、星期几时直接按它回答，不要猜训练数据的日期，也不要说看不到时钟。"
+
+// replyDatePrompt 是主回复尾部的【日期】：只写到日期和星期，一天才变一次，只追加的
+// 续接里没变就不重发。对方记过时区时接上他那边的时区说明。
+func (r *Runtime) replyDatePrompt(event MessageEvent) string {
+	cfg := r.effectiveConfigForEvent(event)
+	if !boolValue(cfg.PromptInjectTime, true) {
+		return ""
+	}
+	now := r.clock().In(cfg.Location())
+	_, zoneOffset := now.Zone()
+	var builder strings.Builder
+	builder.WriteString("【日期】今天是 " + now.Format("2006-01-02") + " " + chineseWeekday(now.Weekday()) + "（UTC" + formatUTCOffset(zoneOffset) + "）")
+	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
+		appendPromptSection(&builder, speaker)
+	}
+	return strings.TrimSpace(builder.String())
+}
+
 // runtimeClockPrompt 返回本轮的可信实时时间提示。返回值每次调用都不同，只能作为尾部
 // 独立 system 消息注入；拼进人设提示词会让那段最长的前缀每秒失效一次。
 func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
@@ -1064,6 +1085,23 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	if agentEnabled {
 		appendPromptSection(&builder, toolExecutionStatusRule)
 	}
+	// 群聊篇幅规则几乎不变，放在头部；以前单独一条放在当前消息前面，见
+	// promptNoteGroupBrevitySpec。
+	if event.Kind == EventKindGroup {
+		appendPromptSection(&builder, cfg.prompt(promptNoteGroupBrevitySpec))
+	}
+	// 主回复请求只追加（见 append_context.go）：以前每轮贴在尾部重发的固定说明——先查
+	// 再答、输出前检查——放进头部，只发一次。
+	if agentEnabled {
+		appendPromptSection(&builder, replyVerifyRule)
+		appendPromptSection(&builder, replyOutputCheck(cfg))
+	}
+	if head != nil && boolValue(cfg.PromptInjectTime, true) {
+		appendPromptSection(&builder, replyClockRule)
+	}
+	if head != nil && event.Kind == EventKindGroup && replyReferenceMode(cfg) == ReplyDecorationAuto {
+		appendPromptSection(&builder, replyQuoteRule)
+	}
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
 		// 静默只有 send silent=true 这一个出口，没开 Agent 时说了也做不到。
@@ -1171,16 +1209,32 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}
 	groupStyle := r.groupStylePrompt(event, cfg)
-	appendPromptSection(&tail, groupStyle)
-	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
+	groupRules := r.groupRulesPrompt(event, cfg)
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
+	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
+	styleFilter := styleFilterPrompt(cfg, groupStyle, groupVoice)
+	mood := r.moodToneForConfig(cfg, event.ProfileID)
+	if head != nil {
+		// 主回复请求只追加：群风格、群约定、本群消息长度、「这几类不学」和语气锚点只随
+		// 群和配置变，放进头部只发一次（头部按哈希锁定，变了等下次重新组装再换）。尾部
+		// 只留逐轮会变的心情，变了才追加一版。
+		for _, section := range []string{groupStyle, groupRules, groupVoice, styleFilter, personaClosingAnchor(cfg)} {
+			appendPromptSection(&builder, section)
+		}
+		if mood != "" {
+			tail.WriteString("\n【本轮语气】\n")
+			tail.WriteString(mood)
+		}
+		return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
+	}
+	appendPromptSection(&tail, groupStyle)
+	appendPromptSection(&tail, groupRules)
 	// 腔调、心情和语气锚点另成一段：里面的换行比例、心情逐轮在变，以前跟在群约定后面
 	// 没有标题，一变就连群约定一起重发（每轮约 250 字）。
 	var tone strings.Builder
 	appendPromptSection(&tone, groupVoice)
-	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
-	appendPromptSection(&tone, styleFilterPrompt(cfg, groupStyle, groupVoice))
-	appendPromptSection(&tone, r.moodToneForConfig(cfg, event.ProfileID))
+	appendPromptSection(&tone, styleFilter)
+	appendPromptSection(&tone, mood)
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
 	appendPromptSection(&tone, personaClosingAnchor(cfg))
@@ -1301,7 +1355,7 @@ func currentMessageLine(event MessageEvent) string {
 }
 
 // currentMessageNotesTitle 是当前消息注解那一条的开头。
-const currentMessageNotesTitle = "【这一轮要回复的是本轮最后一条消息；以下是只给这一轮的说明】"
+const currentMessageNotesTitle = "【下一条消息的附注，只用于理解它】"
 
 // splitCurrentMessageNotes 把组装好的当前消息拆成「这条消息那一行」和「这一轮的注解」。
 // 那一行按前面最后一条消息行的日期省日期，和它下一轮作为历史时一样；注解单独成一条只
@@ -1322,7 +1376,9 @@ func splitCurrentMessageNotes(message llm.Message, line string, dates *historyLi
 	if rest == "" {
 		return nil, message, true
 	}
-	notes := llm.Message{Role: llm.RoleUser, Content: currentMessageNotesTitle + "\n" + rest, Priority: message.Priority, TurnOnly: true}
+	// 附注和消息那一行一样只追加、留在前缀里：主回复请求只追加（见 append_context.go）。
+	// 标题写成「下一条消息的附注」，这一轮之后作为历史读也不会错。
+	notes := llm.Message{Role: llm.RoleUser, Content: currentMessageNotesTitle + "\n" + rest, Priority: message.Priority}
 	return &notes, message, true
 }
 
@@ -1430,11 +1486,14 @@ var (
 	// 安检人员砸的」这种辟谣句收尾。10-29 的样本删掉整段系统提示、send 描述、视觉答案里的
 	// 推测和历史都还是 5/6 以上带这句，是模型自己的倾向，只有在这里点名才压得住（8/8 → 0/8）。
 	// 只管顺口的猜测；正经问「是真的吗」照样先去查，回放里召回传闻 4/4 仍然先搜。
+	//
+	// 11-17 起放进群聊会话的系统头部。只追加上下文之后，它本来就只在整份重组那一轮进前缀、
+	// 续接时不再发，离生成越来越远，和放在头部差不多；放进头部之后不再随重组重发。
 	promptNoteGroupBrevitySpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.group_brevity",
 		Group:   PromptGroupReplyRules,
 		Title:   "当前消息注解 · 群聊篇幅",
-		Usage:   "群聊里每条当前消息都补在最后，紧挨生成：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
+		Usage:   "群聊会话写在系统提示里：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
 		Default: "群聊接话：闲聊随口一两句、几十字就够，不挨个点评，不说教，不劝人休息；问技术、要办法时照常答全。有人讲方案、问你看法时说你自己的判断：看到漏洞、没提到的风险或更好的做法就直说，带上理由；确实没问题就简短认可，别把对方的话换个说法复述一遍；对方只是在补充自己的想法时，不用回头认错。群友顺口猜一句「X 了？」「是不是 Y」时，按常理直接说你觉得像不像、更可能是什么；别拿「图里看不出」「不能确定是……」「没有证据说明」这种辟谣句收尾，没人要你下定论，没看到的经过也不用声明。",
 	})
 	promptNoteReplySpec = registerPrompt(PromptSpec{

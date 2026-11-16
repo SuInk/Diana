@@ -119,7 +119,7 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 	switch p.calls {
 	case 1:
-		p.alias = regexp.MustCompile(`im_user_[0-9a-f]+`).FindString(requestText)
+		p.alias = regexp.MustCompile(`im_u_[0-9a-f]+`).FindString(requestText)
 		if p.alias == "" {
 			return nil, fmt.Errorf("current speaker alias missing from request: %s", requestText)
 		}

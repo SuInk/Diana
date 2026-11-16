@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
@@ -22,7 +23,7 @@ type toolExecutionRecord struct {
 // This temporary request context is rebuilt from actual callbacks; it is never
 // saved as user speech, a notebook fact, or another source for history search.
 // It is evidence guidance, not a semantic factuality classifier.
-func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
+func newReplyRunHooks() agent.RunHooks {
 	var records []toolExecutionRecord
 	return agent.RunHooks{
 		AfterToolCall: func(_ context.Context, step agent.Step) {
@@ -48,18 +49,6 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 				if req, err = withToolExecutionStatus(req, records); err != nil {
 					return req, err
 				}
-			}
-			if len(configs) > 0 {
-				// 放在本轮输入和工具目录之后，每次请求都加：它贴着生成位置才有效。11-12
-				// 一度改成「请求里已有一模一样的就不加」，因为那时它留在前缀里每轮攒约
-				// 300 字；现在不进前缀，没有理由省。
-				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
-				for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
-					if rule := configs[0].prompt(spec); rule != "" {
-						check += "\n" + rule
-					}
-				}
-				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check, TurnOnly: true})
 			}
 			return req, nil
 		},
@@ -94,6 +83,22 @@ func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRec
 	messages = append(messages, note)
 	req.Messages = append(messages, req.Messages[at:]...)
 	return req, nil
+}
+
+// replyOutputCheck 是主回复系统头部里的【输出前检查】：找不到来由的指代先查再答、没查过
+// 别说查过、算数先算对。以前每一步请求都贴在最后、只用于本轮，连同括号用法再说一遍；
+// 11-17 起请求只追加，挪进头部只发一次，括号用法头部本来就有，不再重复。
+func replyOutputCheck(cfg BotConfig) string {
+	var rules []string
+	for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
+		if rule := cfg.prompt(spec); rule != "" {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) == 0 {
+		return ""
+	}
+	return "【输出前检查】\n" + strings.Join(rules, "\n")
 }
 
 // promptReplyUnknownReferenceSpec 跟在【输出前检查】后面。群友提起好几天前聊过、已经不在

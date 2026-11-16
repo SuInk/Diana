@@ -395,7 +395,7 @@ func TestPendingEarlierMessageAcceptsImageOnly(t *testing.T) {
 	if len(earlier) != 1 || earlier[0].MessageID != "photo" {
 		t.Fatalf("image-only earlier message not pending: %#v", earlier)
 	}
-	if prompt := replyDecorationPrompt(BotConfig{}, question, []MessageEvent{photo, question}); !strings.Contains(prompt, "他刚发了一张图") {
+	if prompt := replyDecorationPrompt(BotConfig{}, question, []MessageEvent{photo, question}, false); !strings.Contains(prompt, "他刚发了一张图") {
 		t.Fatalf("decoration prompt = %q", prompt)
 	}
 	if got := pendingEarlierMessages([]MessageEvent{stickerEvent("s", "irony", 1000), question}, question, pendingEarlierMessagesLimit); len(got) != 0 {

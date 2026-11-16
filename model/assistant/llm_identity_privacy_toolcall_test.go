@@ -136,7 +136,7 @@ func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 		if strings.Contains(masked, "1145141919") || strings.Contains(masked, "810975") || strings.Contains(masked, "2233445566") {
 			t.Fatalf("message id leaked: %q -> %q", sample, masked)
 		}
-		if !strings.Contains(masked, "im_message_") {
+		if !strings.Contains(masked, "im_m_") {
 			t.Fatalf("message id not aliased: %q -> %q", sample, masked)
 		}
 		if restored := scope.restoreText(masked); restored != sample {

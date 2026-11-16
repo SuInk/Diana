@@ -146,8 +146,8 @@ func TestRunnerShipsTriggeredSkillBodyInTrailingUserMessage(t *testing.T) {
 	if messages[index].Role != llm.RoleUser {
 		t.Fatalf("skills 块的 role = %q，应该是 user", messages[index].Role)
 	}
-	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
-		t.Fatalf("当前轮不再是最后一条: %#v", messages)
+	if !strings.Contains(messages[lastKeptIndex(messages)].Content, "【当前需要回复的消息】") {
+		t.Fatalf("当前轮不再是最后一条留进前缀的消息: %#v", messages)
 	}
 	if strings.Contains(runner.systemPrompt(), "jukebox") {
 		t.Fatal("skill 又漏进系统提示词了")

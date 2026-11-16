@@ -75,6 +75,7 @@ func (r *Runtime) noteReplyRequestSize(event MessageEvent, window compactionWind
 // 读历史，发送不用等它。
 func (r *Runtime) slideAfterReply(event MessageEvent, cfg BotConfig, nonHistory int64) {
 	go func() {
+		defer recoverGoroutinePanic("context_slide_after_reply")
 		ctx, cancel := context.WithTimeout(r.backgroundContext(), slideAfterReplyTimeout)
 		defer cancel()
 		window := r.promptCompactionWindow(event, cfg)

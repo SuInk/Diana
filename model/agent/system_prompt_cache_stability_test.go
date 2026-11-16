@@ -59,8 +59,8 @@ func TestLoadedToolsDoNotChangePrefix(t *testing.T) {
 				if !strings.Contains(messages[0].Content, "- alpha(") || !strings.Contains(messages[0].Content, "- beta(") {
 					t.Fatal("fixed deferred catalog lost")
 				}
-				if messages[len(messages)-1].Content != current.Content || !messages[len(messages)-1].CacheBreakpoint {
-					t.Fatal("current input must remain last with rolling cache breakpoint")
+				if kept := lastKeptIndex(messages); messages[kept].Content != current.Content || !messages[kept].CacheBreakpoint {
+					t.Fatal("current input must remain the last kept message with the rolling cache breakpoint")
 				}
 				stable := tc.stable
 				if tc.stable > 1 && !messages[stable].CacheBreakpoint {

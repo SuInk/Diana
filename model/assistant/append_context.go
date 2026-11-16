@@ -83,8 +83,10 @@ type appendContextLog struct {
 	historyDate string
 }
 
-// appendContextVerifyReminder 见 appendContextContinuation 里的说明。
-const appendContextVerifyReminder = "【本轮提醒】对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
+// replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度
+// 去掉时，当晚同一时段主回复联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
+// 11-17 起请求只追加，每轮重发的说明都挪进头部。
+const replyVerifyRule = "对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
 
 type appendContextStore struct {
 	mu   sync.Mutex
@@ -496,15 +498,17 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 			continue
 		}
 		if index > historyEnd {
-			// 源头就标成只用于本轮的（跨群参考、检索到的记忆条目、时钟）每轮原样带上：
-			// 上一轮那份没有留在前缀里。其余的去掉前缀里已有的段，剩下的也只给当轮用。
+			// 只追加：尾部的状态块（关系、对话对象、群身份、会话状态……）和前缀里同一标题
+			// 最近的那一版相同就不发；变了就把新的一版追加进去、留在前缀里，旧的不撤，相当于
+			// 在后面补一条修订。以前变了的只给当轮用（TurnOnly），下一轮请求就不是上一轮的
+			// 纯追加，从它的位置起整段重发。源头仍标成只用于本轮的（一轮之内的收尾说明等）
+			// 原样带上。
 			if !message.TurnOnly && len(message.Parts) == 0 {
 				message.Content = unsentTail(log, message.Content)
 				if strings.TrimSpace(message.Content) == "" {
 					continue
 				}
 			}
-			message.TurnOnly = true
 			appended = append(appended, message)
 			continue
 		}
@@ -534,11 +538,6 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		}
 		appended = append(appended, message)
 	}
-	// 查证提醒每轮贴在当前消息前面，只用于本轮、不进前缀。查证规则写在头部，续接后
-	// 离当前消息隔着好几轮对话，模型容易凭印象答。11-12 一度去掉：当晚同一时段主回复
-	// 联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
-	appended = append(appended[:len(appended)-1:len(appended)-1],
-		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder, TurnOnly: true}, appended[len(appended)-1])
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)
 	decision.overhead = log.overhead
 	// 上限必须管住续接。以前续接只看「完整组装的两倍」那道线，配置的上限只在完整组装时参与预算

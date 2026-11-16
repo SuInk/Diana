@@ -338,20 +338,33 @@ func isCurrentMessageNotes(msg llm.Message) bool {
 // isReplyTurnMarker 认出只有主回复请求才带的那条：本轮注解，或群聊篇幅提醒（没有别的
 // 注解时只有它）。
 func isReplyTurnMarker(msg llm.Message) bool {
-	return isCurrentMessageNotes(msg) || msg.Content == promptNoteGroupBrevitySpec.Default
+	return isCurrentMessageNotes(msg) || (msg.Role == llm.RoleSystem && strings.Contains(msg.Content, promptNoteGroupBrevitySpec.Default))
 }
 
-// currentLineAndNotes 取主回复请求末尾的当前消息那一行，和它前面那条只给这一轮的注解
-// （没有注解时为空）。
+// currentLineAndNotes 取主回复请求里当前消息那一行，和那条只给这一轮的注解（没有注解时
+// 为空）。Runtime 组装出来时注解在当前消息前面、当前消息最后；Runner 发出去时只用于
+// 本轮的消息挪到了当前消息后面，注解紧跟着它（见 agent 的 turnOnlyAfterCurrent）。
 func currentLineAndNotes(messages []llm.Message) (line, notes string) {
 	if len(messages) == 0 {
 		return "", ""
 	}
-	line = messages[len(messages)-1].Content
-	if len(messages) >= 2 && isCurrentMessageNotes(messages[len(messages)-2]) {
-		notes = messages[len(messages)-2].Content
+	for index := len(messages) - 1; index >= 0; index-- {
+		if !isCurrentMessageNotes(messages[index]) {
+			continue
+		}
+		if index == len(messages)-2 {
+			return messages[len(messages)-1].Content, messages[index].Content
+		}
+		if index > 0 {
+			return messages[index-1].Content, messages[index].Content
+		}
 	}
-	return line, notes
+	for index := len(messages) - 1; index >= 0; index-- {
+		if !messages[index].TurnOnly {
+			return messages[index].Content, ""
+		}
+	}
+	return messages[len(messages)-1].Content, ""
 }
 
 func isCompactionRequest(req llm.GenerateRequest) bool {

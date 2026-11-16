@@ -4401,16 +4401,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
-		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
-			// 块头（发言者、画像）同一个人连着几轮都一样，续接时和前缀相同就不发。
+		// 记忆块（发言者画像、检索到的条目）只在 Agent 没跑、用不了 memory 工具时带上。
+		// 以前每轮都追加新检索到的条目：生产 11-15 每轮平均 6 千字，一个群一小时里涨到
+		// 2.6 万字，把聊天历史挤到请求的三成以下。画像那段每换一个人说话就重发一次，是
+		// 每轮动态部分里的一块；要用时 relationship 工具能查到对方画像。小雪的请求里也
+		// 没有这一块，记忆由模型自己查。
+		if memoryContext := contextPreload.memoryContext; memoryContext != "" && !memoryToolAvailable(agentActive, agentRegistry) {
 			head, retrieved := splitRetrievedMemory(memoryContext)
 			if head != "" {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
 			}
-			// 检索到的条目只在 Agent 没跑（用不了 memory 工具）时带上。以前每轮都追加新检索
-			// 到的条目：生产 11-15 每轮平均 6 千字，一个群一小时里涨到 2.6 万字，把聊天历史
-			// 挤到请求的三成以下。小雪的请求里也没有这一块，记忆由模型自己用 memory 查。
-			if retrieved != "" && !memoryToolAvailable(agentActive, agentRegistry) {
+			if retrieved != "" {
 				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory})
 			}
 		}
@@ -4704,7 +4705,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if mentionList != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
 	}
-	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
+	if headRegistryForPrompt(agentActive, agentRegistry, headRegistry) != nil {
+		// 主回复请求只追加：不再每轮发一条精确到秒的时钟。几点几分看最后一条聊天记录的
+		// 时间（头部规则见 replyClockRule），这里只发日期，一天变一次，没变就不重发。
+		if datePrompt := r.replyDatePrompt(event); datePrompt != "" {
+			messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: datePrompt, Priority: llm.MessagePrioritySystem})
+		}
+	} else if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		// 时钟每轮都不同，只用于本轮：重新组装那一轮的时间不留在续接的前缀里。
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
@@ -4717,7 +4724,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 点名的和交接过来的是同一批（见 sender_burst.go）。
 	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
 	event.replyQuoteCandidates = r.replyQuoteCandidates(ctx, event)
-	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
+	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory, headRegistryForPrompt(agentActive, agentRegistry, headRegistry) != nil); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  decorationPrompt,
@@ -4733,14 +4740,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 	}
 	if notes, line, ok := splitCurrentMessageNotes(currentMessage, currentMessageLine(event), &lineDates); ok {
-		// 群聊篇幅提醒是固定的一段，单独一条、不标只用于本轮：完整组装那一轮进前缀，
-		// 续接时前缀里有过就不再发（unsentTail 按段比对）。它要离生成近才管用（见
-		// promptNoteGroupBrevitySpec），所以放在注解前面，不挪进头部。
-		if event.Kind == EventKindGroup {
-			if note := cfg.prompt(promptNoteGroupBrevitySpec); note != "" {
-				messages = append(messages, llm.Message{Role: llm.RoleUser, Content: note, Priority: llm.MessagePriorityCurrent})
-			}
-		}
+		// 群聊篇幅规则在系统头部（见 promptNoteGroupBrevitySpec）。
 		if notes != nil {
 			messages = append(messages, *notes)
 		}
@@ -5208,7 +5208,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		identity := callerIdentityForEvent(cfg, event)
 		identity.Background = backgroundRunContext(ctx)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, identity), agent.Request{
-			Hooks:         newReplyRunHooks(cfg),
+			Hooks:         newReplyRunHooks(),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,

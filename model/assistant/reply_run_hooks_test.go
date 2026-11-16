@@ -12,27 +12,22 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
+// 【输出前检查】写在系统头部、只发一次（主回复请求只追加），不再重复头部已有的括号用法；
+// 钩子在没执行过工具时什么都不加，请求原样发出。
+func TestReplyOutputCheckLivesInHeadNotHooks(t *testing.T) {
 	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
 		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
-		hooks := newReplyRunHooks(cfg)
+		check := replyOutputCheck(cfg)
+		if strings.Contains(check, rule) || strings.Count(check, promptReplyUnknownReferenceSpec.Default) != 1 {
+			t.Fatalf("output check = %q", check)
+		}
 		req := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "old context", CacheBreakpoint: true},
 			{Role: llm.RoleUser, Content: "current"},
 		}}
-		for i := 0; i < 2; i++ {
-			got, err := hooks.PrepareRequest(context.Background(), req)
-			if err != nil || len(got.Messages) != 3 || strings.Count(got.Messages[2].Content, rule) != 1 {
-				t.Fatalf("expression reminder missing or duplicated: %+v err=%v", got, err)
-			}
-			for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
-				if strings.Count(got.Messages[2].Content, spec.Default) != 1 || !got.Messages[2].TurnOnly {
-					t.Fatalf("%s reminder missing, duplicated or kept in the prefix: %+v", spec.Key, got.Messages[2])
-				}
-			}
-			if len(req.Messages) != 2 || got.Messages[1].Content != "current" || !got.Messages[0].CacheBreakpoint {
-				t.Fatal("expression reminder changed history, current input or cache prefix")
-			}
+		got, err := newReplyRunHooks().PrepareRequest(context.Background(), req)
+		if err != nil || len(got.Messages) != 2 || got.Messages[1].Content != "current" {
+			t.Fatalf("hooks must leave a request without tool calls untouched: %+v err=%v", got, err)
 		}
 	}
 }

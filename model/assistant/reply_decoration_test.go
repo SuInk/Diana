@@ -121,17 +121,17 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 	// on/off 由程序控制，明确禁止模型再生成引用控制标记。
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
 		decided := BotConfig{ReplyReferenceMode: mode, MentionUserMode: mode}.WithDefaults()
-		if prompt := replyDecorationPrompt(decided, event, nil); !strings.Contains(prompt, "不要生成或复制任何引用控制标记") || strings.Contains(prompt, "本次是否引用原消息由你自己决定") {
+		if prompt := replyDecorationPrompt(decided, event, nil, false); !strings.Contains(prompt, "不要生成或复制任何引用控制标记") || strings.Contains(prompt, "本次是否引用原消息由你自己决定") {
 			t.Fatalf("mode %s must prohibit model-selected references: %q", mode, prompt)
 		}
 	}
 	// 默认就是 auto，所以默认配置反过来必须带上这份判断依据。
-	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil); prompt == "" {
+	if prompt := replyDecorationPrompt(BotConfig{}.WithDefaults(), event, nil, false); prompt == "" {
 		t.Fatal("default config is auto now, it must carry the decoration guidance")
 	}
 
 	cfg := BotConfig{ReplyReferenceMode: ReplyDecorationAuto, MentionUserMode: ReplyDecorationAuto}.WithDefaults()
-	prompt := replyDecorationPrompt(cfg, event, nil)
+	prompt := replyDecorationPrompt(cfg, event, nil, false)
 	if !strings.Contains(prompt, replyMarkerFor("1244393238")+"") {
 		t.Fatalf("auto prompt is missing the current message marker: %q", prompt)
 	}
@@ -139,7 +139,7 @@ func TestReplyDecorationPromptOnlyGuidesAutoMode(t *testing.T) {
 		t.Fatalf("auto prompt is missing the sender mention hint: %q", prompt)
 	}
 	// 私聊没有引用和 @ 的概念，不该占用上下文。
-	if direct := replyDecorationPrompt(cfg, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, nil); direct != "" {
+	if direct := replyDecorationPrompt(cfg, MessageEvent{Kind: EventKindPrivate, UserID: "10001"}, nil, false); direct != "" {
 		t.Fatalf("private chat should not emit decoration guidance: %q", direct)
 	}
 }
@@ -153,7 +153,7 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	earlier := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "u1", MessageID: "111", Time: 9995,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "commit提交也不用每次都推"}}}}
 
-	prompt := replyDecorationPrompt(cfg, current, []MessageEvent{earlier, current})
+	prompt := replyDecorationPrompt(cfg, current, []MessageEvent{earlier, current}, false)
 	if !strings.Contains(prompt, "你还没有回复") || !strings.Contains(prompt, "commit提交也不用每次都推") {
 		t.Fatalf("连发未回时应点出上一条:%s", prompt)
 	}
@@ -165,7 +165,7 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	// 中间隔着机器人回复,说明上一条已经回过,不算连发未回。
 	botReply := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "bot", MessageID: "150", Time: 9997, Outbound: true,
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "收到"}}}}
-	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{earlier, botReply, current})
+	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{earlier, botReply, current}, false)
 	if strings.Contains(prompt, "你还没有回复") {
 		t.Fatalf("已回复过的不该再提示承接:%s", prompt)
 	}
@@ -173,7 +173,7 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	// 隔太久的两条消息是两个话题,不绑在一起。
 	stale := earlier
 	stale.Time = current.Time - int64(pendingEarlierMessageWindow/time.Second) - 1
-	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{stale, current})
+	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{stale, current}, false)
 	if strings.Contains(prompt, "你还没有回复") {
 		t.Fatalf("超出连发窗口不该提示:%s", prompt)
 	}
@@ -181,7 +181,7 @@ func TestReplyDecorationPromptAnchorsPendingEarlierMessage(t *testing.T) {
 	// 别人的消息不算自己的连发。
 	other := earlier
 	other.UserID = "u2"
-	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{other, current})
+	prompt = replyDecorationPrompt(cfg, current, []MessageEvent{other, current}, false)
 	if strings.Contains(prompt, "你还没有回复") {
 		t.Fatalf("他人消息不该触发承接提示:%s", prompt)
 	}
@@ -198,7 +198,7 @@ func TestPendingEarlierMessageTreatsBareWakeAsNudgeWithoutGreeting(t *testing.T)
 		{Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "u1", MessageID: "333", Time: 10000,
 			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "Diana"}}}},
 	} {
-		prompt := replyDecorationPrompt(cfg, current, []MessageEvent{earlier, current})
+		prompt := replyDecorationPrompt(cfg, current, []MessageEvent{earlier, current}, false)
 		for _, want := range []string{"理解为催你回应上一条", "直接自然回答上一条的实质内容", "不要另外输出“在的”"} {
 			if !strings.Contains(prompt, want) {
 				t.Fatalf("裸唤醒补答缺少 %q: %s", want, prompt)
@@ -317,7 +317,7 @@ func TestReplyDecorationPromptCrowdUsesQuoteWhenAvailable(t *testing.T) {
 		event,
 	}
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationAuto, ReplyDecorationOn} {
-		prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: mode}, event, history)
+		prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: mode}, event, history, false)
 		if !strings.Contains(prompt, "2 个人") || !strings.Contains(prompt, "再 @ 一遍是重复点名") {
 			t.Fatalf("reference=%s 热闹时应改用引用：%s", mode, prompt)
 		}
@@ -389,13 +389,13 @@ func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
 		event,
 	}
 	cfg := BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}
-	prompt := replyDecorationPrompt(cfg, event, history)
+	prompt := replyDecorationPrompt(cfg, event, history, false)
 	if !strings.Contains(prompt, "2 个人") {
 		t.Fatalf("提示词里没有算出来的插话人数：%s", prompt)
 	}
 	// 关掉和总是 @ 两种模式不需要这条规则，模型不该被告知怎么判断。
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
-		off := replyDecorationPrompt(BotConfig{MentionUserMode: mode, ReplyReferenceMode: ReplyDecorationOff}, event, history)
+		off := replyDecorationPrompt(BotConfig{MentionUserMode: mode, ReplyReferenceMode: ReplyDecorationOff}, event, history, false)
 		if strings.Contains(off, "个人在说话") {
 			t.Fatalf("mode %s 不该带 @ 判断规则：%s", mode, off)
 		}
@@ -539,7 +539,7 @@ func TestReplyDecorationPromptTellsFollowUpNotToRepeat(t *testing.T) {
 		{GroupID: "g", UserID: "bot", MessageID: "3002", Time: now - 20, Outbound: true},
 		event,
 	}
-	prompt := replyDecorationPrompt(cfg, event, history)
+	prompt := replyDecorationPrompt(cfg, event, history, false)
 	if !strings.Contains(prompt, "接着上一条往下说") || !strings.Contains(prompt, "不要再重讲一遍") {
 		t.Fatalf("应当要求接着上一条说,而不是重讲：%s", prompt)
 	}
@@ -559,14 +559,14 @@ func TestReplyDecorationPromptGuidesQQOfficialAutoMode(t *testing.T) {
 		Platform: PlatformQQOfficial, Kind: EventKindGroup,
 		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
 	}
-	prompt := replyDecorationPrompt(cfg, event, nil)
+	prompt := replyDecorationPrompt(cfg, event, nil, false)
 	if !strings.Contains(prompt, replyMarkerFor(qqOfficialProbeID)+"") {
 		t.Fatalf("auto prompt is missing the qq official message marker: %q", prompt)
 	}
 	// 同一条消息在 OneBot 语义下（无平台标记的旧事件）行为不变：提示词照旧按
 	// 数字校验给出或拦截。
 	numeric := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "10001", MessageID: "1244393238"}
-	if prompt := replyDecorationPrompt(cfg, numeric, nil); !strings.Contains(prompt, replyMarkerFor("1244393238")+"") {
+	if prompt := replyDecorationPrompt(cfg, numeric, nil, false); !strings.Contains(prompt, replyMarkerFor("1244393238")+"") {
 		t.Fatalf("numeric prompt regressed: %q", prompt)
 	}
 }
@@ -580,7 +580,7 @@ func TestQQOfficialReplyDropsLeadingSenderMention(t *testing.T) {
 		GroupID: "g-qq", UserID: "member-1", MessageID: qqOfficialProbeID,
 	}
 	history := []MessageEvent{{Platform: PlatformQQOfficial, GroupID: "g-qq", UserID: "member-2", MessageID: "m1"}, event}
-	prompt := replyDecorationPrompt(cfg, event, history)
+	prompt := replyDecorationPrompt(cfg, event, history, false)
 	if !strings.Contains(prompt, "本次不要 @ 发送者") || strings.Contains(prompt, mentionMarkerFor("member-1")) {
 		t.Fatalf("QQ 官方不该再教模型 @ 发送者：%s", prompt)
 	}
@@ -619,7 +619,7 @@ func TestOneBotReplyStillOffersSenderMention(t *testing.T) {
 	now := int64(1_700_000_000)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
 	history := []MessageEvent{{GroupID: "g", UserID: "2", MessageID: "m1", Time: now - 30}, event}
-	prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}, event, history)
+	prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}, event, history, false)
 	if !strings.Contains(prompt, mentionMarkerFor("1")) {
 		t.Fatalf("OneBot 群不该受影响：%s", prompt)
 	}

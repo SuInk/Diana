@@ -121,7 +121,7 @@ func TestHistoryIdentityRuntimeKeepsCrossGroupSelfNickname(t *testing.T) {
 	}
 	for _, request := range provider.requests {
 		for _, message := range request.Messages {
-			if strings.Contains(message.Content, "old bot card") && strings.Contains(message.Content, historySenderTagBot) && strings.Contains(message.Content, "im_bot_") {
+			if strings.Contains(message.Content, "old bot card") && strings.Contains(message.Content, historySenderTagBot) && strings.Contains(message.Content, "im_b_") {
 				return
 			}
 		}

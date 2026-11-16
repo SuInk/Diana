@@ -1303,7 +1303,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 			t.Fatalf("system prompt missing expressive writing guidance %q: %q", want, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "回复目标是最后一条消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
+	if !strings.Contains(prompt, "回复目标是最后一条聊天记录") || !strings.Contains(prompt, "不要主动回复旧消息") {
 		t.Fatalf("system prompt missing current-message guidance: %q", prompt)
 	}
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
@@ -3175,7 +3175,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		}
 	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.HasPrefix(history, historyLabel+"Alice（im_user_") || !strings.Contains(history, "）: 旧问题是什么") {
+	if !strings.HasPrefix(history, historyLabel+"Alice（im_u_") || !strings.Contains(history, "）: 旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
 	// 历史行只标绝对时间：「距当前」随请求时间变化，会让整段历史无法命中前缀缓存。
@@ -4224,7 +4224,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		t.Fatalf("available identity images = %#v", payload.AvailableIdentityImages)
 	}
 	identity := payload.AvailableIdentityImages[0]
-	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "im_user_") {
+	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "im_u_") {
 		t.Fatalf("identity image = %#v", identity)
 	}
 	if strings.Contains(requestTextForPrivacyTest(request), "10001") {

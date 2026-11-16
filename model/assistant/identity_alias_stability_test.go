@@ -109,7 +109,7 @@ func TestAccountAliasDoesNotChangeWithOwnership(t *testing.T) {
 		if first == "" {
 			first = alias
 		}
-		if alias != first || !strings.HasPrefix(alias, "im_user_") {
+		if alias != first || !strings.HasPrefix(alias, "im_u_") {
 			t.Fatalf("role=%s changed stable account alias: %s != %s", role, alias, first)
 		}
 		if got := scope.restoreText(alias); got != "71001" {
