@@ -4743,15 +4743,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			log.Printf("diana model silent finish refused: %s", refused)
 			reply, err = "", nil
 		} else {
-			// 只有整轮一句话都没发过才算机器人沉默收尾；中途已经发过话时不能把私聊收尾计数顶满。
-			if len(interimMessagesSent(ctx)) == 0 {
-				r.notePrivateClosingSilence(event, cfg, time.Now())
-			}
 			// 不说话、只回一张表情包：静默收尾时填了 sticker。挑不到、到了上限或者被叫停
 			// 都不补文字，这一轮就是安静的。
-			if query, _ := finalizeSticker.take(); query != "" && r.groupStopDropsReply(event, proactiveTriggered, time.Now()) == nil {
+			stickerQuery, _ := finalizeSticker.take()
+			// 只有整轮一句话都没发过、也没打算回表情包才算机器人沉默收尾；中途已经发过话、
+			// 或者用一张表情包接了话时，不能把私聊收尾计数顶满。
+			if len(interimMessagesSent(ctx)) == 0 && stickerQuery == "" {
+				r.notePrivateClosingSilence(event, cfg, time.Now())
+			}
+			if stickerQuery != "" && r.groupStopDropsReply(event, proactiveTriggered, time.Now()) == nil {
 				_ = r.withReplySuppressionOutboundGate(ctx, event, func(sendCtx context.Context) error {
-					r.sendFinalizeSticker(sendCtx, event, query, false)
+					r.sendFinalizeSticker(sendCtx, event, stickerQuery, false)
 					return nil
 				})
 			}

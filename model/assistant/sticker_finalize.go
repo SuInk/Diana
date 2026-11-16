@@ -80,6 +80,8 @@ func stickerFinalizeFields(order StickerReplyOrder) []agent.FinalizeField {
 func stickerFinalizeField() agent.FinalizeField {
 	return agent.FinalizeField{
 		Name: stickerFinalizeFieldName,
+		// 只回一张表情包时 text 留空：静默收尾时运行时照样把它发出去，见 replyTo。
+		Delivers: true,
 		// 「配不配由你判断」「挑不到就不发」是回放里触发率和误发的平衡点，别删。
 		// 以前「像群友一样用」「只甩表情包就回一张」「发完不解释」写在系统提示词 promptToolSticker 里。
 		Description: "想配表情包时像群友一样填 2～6 个空格分隔的短关键词，如「得意 叉腰」；对方只甩来表情包时回一张常更自然。有正文时一起发，只回图就 text 留空。挑不到就不发，配不配由你按聊天判断。发完不解释，正文不写[狗头]这类文字表情。",

@@ -254,6 +254,43 @@ func TestEmptySendWithoutSilentIsSentBackOnce(t *testing.T) {
 	}
 }
 
+// 只填了会单独发出去的字段（表情包）、正文留空，是「只回一张图」，不是忘了写正文：
+// 不退回去，直接按静默收尾把字段交给调用方。线上 11-16 一张贴纸被这样打回重写成了文字。
+// 不会单独发出去的字段（比如只决定先后的 sticker_order）照旧退回一次。
+func TestEmptySendWithDeliveredFieldIsNotSentBack(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		fields   []FinalizeField
+		args     map[string]any
+		requests int
+	}{
+		{"delivers", []FinalizeField{{Name: "sticker", Delivers: true}}, map[string]any{"text": "", "sticker": "害羞 贴贴"}, 1},
+		{"blank delivered field", []FinalizeField{{Name: "sticker", Delivers: true}}, map[string]any{"text": "", "sticker": " "}, 2},
+		{"field does not deliver", []FinalizeField{{Name: "sticker", Delivers: true}, {Name: "sticker_order"}}, map[string]any{"text": "", "sticker_order": "before"}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &stepsClient{steps: [][]llm.ToolCall{
+				{{ID: "send-1", Name: finalizeToolName, Arguments: tc.args}},
+				{{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": "", "silent": true}}},
+			}}
+			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, FinalizeFields: tc.fields}, NewToolRegistry())
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "[表情包]"}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !resp.Silent || len(client.requests) != tc.requests {
+				t.Fatalf("silent = %v, requests = %d, want %d", resp.Silent, len(client.requests), tc.requests)
+			}
+			if tc.requests == 1 && resp.FinalizeFields["sticker"] != "害羞 贴贴" {
+				t.Fatalf("finalize fields = %#v", resp.FinalizeFields)
+			}
+		})
+	}
+}
+
 func TestEmptySendTwiceEndsSilent(t *testing.T) {
 	client := &stepsClient{steps: [][]llm.ToolCall{
 		{{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": ""}}},

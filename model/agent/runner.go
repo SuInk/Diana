@@ -710,7 +710,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				// 空正文但没填 silent=true：先退回去一次，要么补上正文，要么明确表态不回复。
 				// 只退一次，再空就按不说话收尾，不会来回转圈。本轮已经发过中途发言时空 send
 				// 就是「该说的都说了」，照常收尾。
-				if action.emptySend && !emptySendRepaired && !sentInterimThisRun(steps) {
+				if action.emptySend && !emptySendRepaired && !sentInterimThisRun(steps) && !r.deliversFinalizeField(finalizeFields) {
 					emptySendRepaired = true
 					reason := "send 的 text 是空的，空正文不会发出任何消息。要回复就把话写进 text 重新 send；确实不该回复就重新 send，填 silent=true 并在 silent_reason 写一句原因。"
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "send 正文为空且未填 silent")
@@ -1763,6 +1763,16 @@ func (r *Runner) finalizeFieldValues(action llmAction) map[string]string {
 		return nil
 	}
 	return values
+}
+
+// deliversFinalizeField 报告这次 send 有没有填调用方会单独发出去的字段（见 FinalizeField.Delivers）。
+func (r *Runner) deliversFinalizeField(values map[string]string) bool {
+	for _, field := range r.cfg.FinalizeFields {
+		if field.Delivers && strings.TrimSpace(values[field.Name]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 type llmAction struct {
