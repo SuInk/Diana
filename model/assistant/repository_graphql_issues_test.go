@@ -28,6 +28,9 @@ type graphQLRepoServer struct {
 	pullQueries   []string
 	events        [][]map[string]any
 	eventPages    []string
+	// viewerLogin 非空时回答 viewer 查询；带 createdBy 的 issue 查询返回 ownIssuePages。
+	viewerLogin   string
+	ownIssuePages [][]map[string]any
 }
 
 func (s *graphQLRepoServer) handler(w http.ResponseWriter, r *http.Request) {
@@ -45,20 +48,29 @@ func (s *graphQLRepoServer) handler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var body struct {
+			Query     string         `json:"query"`
 			Variables map[string]any `json:"variables"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
+		if strings.Contains(body.Query, "viewer") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"viewer": map[string]any{"login": s.viewerLogin}}})
+			return
+		}
 		s.graphQLVars = append(s.graphQLVars, body.Variables)
 		page := 0
 		if after, _ := body.Variables["after"].(string); after != "" {
 			page, _ = strconv.Atoi(strings.TrimPrefix(after, "cursor-"))
 		}
+		pages := s.issuePages
+		if createdBy, _ := body.Variables["createdBy"].(string); createdBy != "" {
+			pages = s.ownIssuePages
+		}
 		nodes := []map[string]any{}
-		if page < len(s.issuePages) {
-			nodes = s.issuePages[page]
+		if page < len(pages) {
+			nodes = pages[page]
 		}
 		repository := map[string]any{"issues": map[string]any{
-			"pageInfo": map[string]any{"hasNextPage": page+1 < len(s.issuePages), "endCursor": fmt.Sprintf("cursor-%d", page+1)},
+			"pageInfo": map[string]any{"hasNextPage": page+1 < len(pages), "endCursor": fmt.Sprintf("cursor-%d", page+1)},
 			"nodes":    nodes,
 		}}
 		if s.nameWithOwner != "" {
@@ -226,6 +238,33 @@ func TestRepositoryIssueRecentScanUsesGraphQL(t *testing.T) {
 	server.mu.Unlock()
 	if _, apiErr := tool.listRecentIssues(context.Background(), "acme/demo"); apiErr == nil || apiErr.Code != "idempotency_scan_incomplete" {
 		t.Fatalf("超过翻页上限应报扫描不完整：%#v", apiErr)
+	}
+}
+
+// microsoft/vscode 这种几十万条 issue 的仓库：防重复只翻本账号发的 issue，能翻完；
+// 全仓库扫描翻不完时交回最近更新的那一批，给查相似用。以前创建一直卡在
+// idempotency_scan_incomplete。
+func TestRepositoryIssueOwnScanFitsHugeRepository(t *testing.T) {
+	now := time.Now().UTC()
+	server := &graphQLRepoServer{viewerLogin: "diana-bot", ownIssuePages: [][]map[string]any{{graphQLIssueNode(7, "OPEN", now, nil)}}}
+	for i := 0; i <= repositoryIssueListMaxPages; i++ {
+		server.issuePages = append(server.issuePages, []map[string]any{graphQLIssueNode(100+i, "OPEN", now, nil)})
+	}
+	httpServer := httptest.NewServer(http.HandlerFunc(server.handler))
+	defer httpServer.Close()
+	tool := newDianaGitHubTool(NewRuntime(BotConfig{OwnerID: "owner"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil),
+		MessageEvent{Kind: EventKindPrivate, UserID: "owner"}, newRepositoryPublishPlugin(httpServer.Client(), httpServer.URL),
+		SettingValues{repositoryPublishSettingToken: "test-token", repositoryPublishSettingAllowlist: "acme/demo", repositoryPublishSettingTimeout: 5})
+	own, apiErr, scannedAll := tool.listOwnIssues(context.Background(), "acme/demo")
+	if apiErr != nil || scannedAll || len(own) != 1 || own[0].Number != 7 {
+		t.Fatalf("own issues = %#v err=%v scannedAll=%v", own, apiErr, scannedAll)
+	}
+	if got, _ := server.graphQLVars[0]["createdBy"].(string); got != "diana-bot" {
+		t.Fatalf("own scan must filter by the credential's account: %#v", server.graphQLVars[0])
+	}
+	recent, apiErr := tool.listRecentIssues(context.Background(), "acme/demo")
+	if apiErr == nil || apiErr.Code != "idempotency_scan_incomplete" || len(recent) != repositoryIssueListMaxPages {
+		t.Fatalf("a huge repository must hand back the newest pages and report incomplete: %d issues, err=%v", len(recent), apiErr)
 	}
 }
 

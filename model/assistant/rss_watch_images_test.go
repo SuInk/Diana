@@ -202,7 +202,7 @@ func TestRSSWatchTelegramImageFailureKeepsTextAndReportsError(t *testing.T) {
 
 func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
 	body := []byte(`{"code":200,"results":[
-  {"id":"11111111","url":"https://x.com/original/status/11111111","text":"Original visual","reposted_by":{"screen_name":"subscriber"},"media":{"photos":[{"url":"https://pbs.twimg.com/media/repost.jpg"}]}},
+  {"id":"11111111","url":"https://x.com/original/status/11111111","text":"Original visual","author":{"screen_name":"original"},"reposted_by":{"screen_name":"subscriber"},"media":{"photos":[{"url":"https://pbs.twimg.com/media/repost.jpg"}]}},
   {"id":"22222222","url":"https://x.com/commenter/status/22222222","text":"Look at this","quote":{"url":"https://x.com/artist/status/33333333","raw_text":{"text":"Quoted visual"},"author":{"screen_name":"artist"},"media":{"photos":[{"url":"https://pbs.twimg.com/media/quote.jpg"}]},"quote":{"text":"Nested","media":{"photos":[{"url":"https://pbs.twimg.com/media/nested.jpg"}]}}}},
   {"id":"44444444","text":"Own and quoted photos","media":{"photos":[{"url":"https://pbs.twimg.com/media/own.jpg"}]},"quote":{"url":"https://x.com/artist/status/55555555","text":"Quoted photos","media":{"photos":[{"url":"https://pbs.twimg.com/media/own.jpg"},{"url":"https://pbs.twimg.com/media/quote.jpg"},{"url":"https://pbs.twimg.com/media/extra.jpg"}]}}},
   {"id":"66666666","text":"Unavailable quote","quote":null}
@@ -213,6 +213,10 @@ func TestRSSWatchRepostsAndQuotesKeepPhotos(t *testing.T) {
 	}
 	if got := rssWatchReplyImages("https://x.com/original/status/11111111", feed.Items); !strings.Contains(got, "repost.jpg") || strings.Contains(got, "quote.jpg") {
 		t.Fatal(got)
+	}
+	// 转推写明原作者，不能像订阅的人自己发的。
+	if got := feed.Items[0].Content; got != "转推 @original：\nOriginal visual" || strings.Contains(feed.Items[2].Content, "转推") {
+		t.Fatalf("repost content = %q", got)
 	}
 	quoted := feed.Items[1]
 	if !strings.Contains(quoted.Content, "引用推文 @artist\nQuoted visual\nhttps://x.com/artist/status/33333333") || strings.Contains(quoted.Content, "Nested") {
