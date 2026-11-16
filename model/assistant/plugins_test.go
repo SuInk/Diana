@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -192,6 +193,23 @@ func TestXiaohongshuShortLinkDomains(t *testing.T) {
 		if key, _ := platformKeyAndLabel(host); key != "xiaohongshu" {
 			t.Fatalf("platformKeyAndLabel(%q) = %q, want xiaohongshu", host, key)
 		}
+	}
+}
+
+// course2md 之类的 markdown 笔记把链接写成 [url](url)，还附带一串 ?t= 时间戳链接。
+// 以前 "](" 把两个地址拼成一个坏地址，时间戳链接又把解析条数上限占满。
+func TestExtractURLsMarkdownBilibiliNote(t *testing.T) {
+	text := "- 来源：[https://www.bilibili.com/video/BV1WwWZ6hE7D](https://www.bilibili.com/video/BV1WwWZ6hE7D)\n" +
+		"## [00:01](https://www.bilibili.com/video/BV1WwWZ6hE7D?t=1)\n" +
+		"## [00:52](https://www.bilibili.com/video/BV1WwWZ6hE7D?t=52)\n" +
+		"## [01:30](https://www.bilibili.com/video/BV1WwWZ6hE7D?p=2&t=90)\n"
+	got := extractURLs(text)
+	want := []string{
+		"https://www.bilibili.com/video/BV1WwWZ6hE7D",
+		"https://www.bilibili.com/video/BV1WwWZ6hE7D?p=2&t=90",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("extractURLs() = %q, want %q", got, want)
 	}
 }
 
