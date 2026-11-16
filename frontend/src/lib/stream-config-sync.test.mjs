@@ -57,7 +57,7 @@ test("a configuration change from elsewhere refreshes open pages; junk frames ar
 test("bot results and trace progress both reach live-event subscribers, one call per frame", () => {
   const { emit, exports } = streamHarness();
   const seen = [];
-  const stop = exports.onLiveEvent(ref => seen.push(`${ref.message_id}:${ref.kind}`));
+  const stop = exports.onLiveEvent((ref, source) => seen.push(`${ref.message_id}:${source}`));
   emit("bot_event", JSON.stringify({ at: "2026-11-17T10:00:00Z", kind: "group", message_id: "30001", handled: true }));
   // 同一时刻来的两条都要送到，不能只剩最后一条。
   emit("bot_event", JSON.stringify({ at: "2026-11-17T10:00:00Z", kind: "group", message_id: "30002", handled: true }));
@@ -65,5 +65,5 @@ test("bot results and trace progress both reach live-event subscribers, one call
   emit("event_progress", "not json");
   stop();
   emit("event_progress", JSON.stringify({ kind: "group", message_id: "30004" }));
-  assert.deepEqual(seen, ["30001:group", "30002:group", "30003:group"]);
+  assert.deepEqual(seen, ["30001:result", "30002:result", "30003:progress"]);
 });

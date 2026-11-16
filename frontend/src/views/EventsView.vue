@@ -1972,16 +1972,29 @@ function showLatestEvents(): void {
 }
 
 // 新事件不自动插进列表（正在读的内容别往下跳），但列表里已有的那条得跟上：处理结果
-// 出来时（bot_event），以及中途调用链每多一步时（event_progress），都按消息号把这一条
-// 原地重拉；展开着的调用链一起重拉。推送本身只拿来定位，token、模型、步骤这些都不在里面。
-// 「有新事件」只在当前筛选下真有列表里没有的事件时才亮，见 checkForNewEvents。
+// 出来时（bot_event）按消息号把这一条原地重拉；中途调用链每多一步（event_progress）
+// 只重拉展开着的调用链，收起的卡片看不到步骤，不拉。推送本身只拿来定位，token、
+// 模型、步骤这些都不在里面。「有新事件」只在当前筛选下真有列表里没有的事件时才亮，
+// 见 checkForNewEvents。
+function listedEventsFor(ref: LiveEventRef): AssistantEventDetail[] {
+  return events.value.filter((event) => isSameLiveEvent(event, ref));
+}
+
+function traceExpanded(event: AssistantEventDetail): boolean {
+  return Boolean(traceOpen.value[event.id] || event.subtasks?.some((task) => subtaskTraceOpen.value[task.task_id]));
+}
+
 const liveSync = createLiveEventSync({
   delayMs: LIVE_EVENT_SYNC_DELAY_MS,
-  isListed: (ref) => events.value.some((event) => isSameLiveEvent(event, ref)),
+  isListed: (ref) => listedEventsFor(ref).length > 0,
+  isExpanded: (ref) => listedEventsFor(ref).some(traceExpanded),
   refresh: (ref) => void refreshListedEvent(ref),
+  refreshTrace: (ref) => {
+    for (const event of listedEventsFor(ref)) if (traceExpanded(event)) void fetchTrace(event, false);
+  },
   checkForNew: () => void checkForNewEvents()
 });
-const stopLiveEvents = onLiveEvent((ref) => liveSync.push(ref));
+const stopLiveEvents = onLiveEvent((ref, source) => liveSync.push(ref, source));
 
 async function refreshListedEvent(ref: LiveEventRef): Promise<void> {
   const messageID = ref.message_id?.trim();
@@ -1999,7 +2012,7 @@ async function refreshListedEvent(ref: LiveEventRef): Promise<void> {
     if (index < 0) continue;
     const previous = events.value[index];
     events.value[index] = { ...item, memories: item.memories ?? previous.memories, temporary_memories: item.temporary_memories ?? previous.temporary_memories };
-    if (traceOpen.value[item.id] || events.value[index].subtasks?.some((task) => subtaskTraceOpen.value[task.task_id])) {
+    if (traceExpanded(events.value[index])) {
       void fetchTrace(events.value[index], false);
     } else {
       traceLoaded.value = { ...traceLoaded.value, [item.id]: false };

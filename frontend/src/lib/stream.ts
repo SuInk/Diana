@@ -5,7 +5,7 @@ import { reactive, readonly } from "vue";
 import { scopeStatsSnapshot } from "../api";
 import { notifyConfigurationChanged, type ConfigurationKind } from "./configuration-sync";
 import type { BotStatus, StatsSnapshot } from "../api";
-import type { LiveEventRef } from "./live-events";
+import type { LiveEventRef, LiveEventSource } from "./live-events";
 
 export type BotEvent = NonNullable<BotStatus["recent_events"]>[number];
 
@@ -26,17 +26,17 @@ const state = reactive<StreamState>({
 });
 
 // 事件页要逐条处理推送：只看「最新一条」的话，同一时刻到的几条会互相挤掉。
-const liveEventListeners = new Set<(ref: LiveEventRef) => void>();
+const liveEventListeners = new Set<(ref: LiveEventRef, source: LiveEventSource) => void>();
 
-function notifyLiveEvent(ref: LiveEventRef): void {
-  for (const listener of liveEventListeners) listener(ref);
+function notifyLiveEvent(ref: LiveEventRef, source: LiveEventSource): void {
+  for (const listener of liveEventListeners) listener(ref, source);
 }
 
 /**
  * 订阅事件的结果（bot_event）和调用链进度（event_progress），返回取消函数。
  * 两种推送都只拿来定位事件，内容由页面按消息号重新拉。
  */
-export function onLiveEvent(listener: (ref: LiveEventRef) => void): () => void {
+export function onLiveEvent(listener: (ref: LiveEventRef, source: LiveEventSource) => void): () => void {
   liveEventListeners.add(listener);
   return () => liveEventListeners.delete(listener);
 }
@@ -64,7 +64,7 @@ function handleBotEvent(raw: string): void {
   try {
     const event = JSON.parse(raw) as BotEvent;
     state.events = [event, ...state.events].slice(0, MAX_LIVE_EVENTS);
-    notifyLiveEvent(event);
+    notifyLiveEvent(event, "result");
   } catch {
     /* 忽略坏帧 */
   }
@@ -72,7 +72,7 @@ function handleBotEvent(raw: string): void {
 
 function handleEventProgress(raw: string): void {
   try {
-    notifyLiveEvent(JSON.parse(raw) as LiveEventRef);
+    notifyLiveEvent(JSON.parse(raw) as LiveEventRef, "progress");
   } catch {
     /* 忽略坏帧 */
   }
