@@ -56,6 +56,19 @@ type appendContextFile struct {
 	HeadKey  string                 `json:"head_key"`
 	Overhead int64                  `json:"overhead"`
 	Prefix   []appendContextMessage `json:"prefix"`
+	// Definitions 是锁定头部的工具定义，见 appendContextLog.definitions。
+	Definitions []appendContextToolDefinition `json:"definitions,omitempty"`
+}
+
+// appendContextToolDefinition 落盘一份工具定义。llm.ToolDefinition 的 Freeform 不进
+// JSON，直接存的话读回来 codemode 会从自定义工具变回普通函数，锁定的头部就不再逐字
+// 相同。
+type appendContextToolDefinition struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Parameters  map[string]any    `json:"parameters"`
+	Strict      bool              `json:"strict,omitempty"`
+	Freeform    *llm.FreeformTool `json:"freeform,omitempty"`
 }
 
 type appendContextMessage struct {
@@ -184,6 +197,10 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
+	for _, definition := range record.definitions {
+		file.Definitions = append(file.Definitions, appendContextToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	}
 	var buffer bytes.Buffer
 	zw := gzip.NewWriter(&buffer)
 	if err := json.NewEncoder(zw).Encode(file); err != nil {
@@ -243,6 +260,10 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix))}
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
+	}
+	for _, definition := range stored.Definitions {
+		record.definitions = append(record.definitions, llm.ToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
 	}
 	record.index()
 	return record

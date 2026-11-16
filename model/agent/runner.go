@@ -207,8 +207,14 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			contractMessage.Content += "\n\n" + stableNotesText
 		}
 	}
-	convKey := conversationKey(r.systemPrompt(), stableNotesText, r.turnDefinitions(false))
-	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
+	headDefinitions := r.turnDefinitions(false)
+	convKey := conversationKey(r.systemPrompt(), stableNotesText, headDefinitions)
+	// 头部锁定时不比会话键：前缀里的系统提示和固定说明、调用方存的工具定义原样用。
+	locked := req.Continuation != nil && len(req.Continuation.Definitions) > 0
+	continued := req.Continuation != nil && (locked || req.Continuation.Key == convKey) && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
+	if continued && locked {
+		convKey, headDefinitions = req.Continuation.Key, req.Continuation.Definitions
+	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
 	// 前缀缓存读到最后一个断点为止，因此断点打在稳定前缀的末尾：系统提示词、
@@ -343,6 +349,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Transcript:      turnTranscript(firstRequest, traceID, steps, text),
 			ConversationKey: convKey,
 			Continued:       continued,
+			Definitions:     headDefinitions,
 			PromptTokens:    promptTokens,
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
@@ -404,7 +411,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if req.Interjections != nil {
 			messages = append(messages, req.Interjections.Take()...)
 		}
-		definitions := r.turnDefinitions(imageTaskQueued)
+		definitions := headDefinitions
+		if imageTaskQueued {
+			definitions = r.turnDefinitions(true)
+		}
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.toolResultReminder(steps)), Tools: definitions})

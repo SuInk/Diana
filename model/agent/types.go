@@ -181,6 +181,10 @@ type Continuation struct {
 	Prefix []llm.Message
 	Append []llm.Message
 	Key    string
+	// Definitions 是会话第一次组装时的工具定义。非空表示头部按哈希锁定：Runner 不再拿
+	// 本轮渲染出的系统提示、固定说明和工具定义去比 Key，前缀和这份定义原样复用，
+	// 本轮渲染出来的头部就算变了也不用，等调用方因为别的原因重新组装时再换。
+	Definitions []llm.ToolDefinition
 }
 
 type Response struct {
@@ -207,6 +211,9 @@ type Response struct {
 	ConversationKey string `json:"-"`
 	// Continued 表示这一轮是在上一轮的请求后面续接的。
 	Continued bool `json:"continued,omitempty"`
+	// Definitions 是这个会话头部的工具定义（不含本轮途中因排了生图任务而改的收尾
+	// 定义），调用方存下来，下一轮续接时放进 Continuation.Definitions 锁定头部。
+	Definitions []llm.ToolDefinition `json:"-"`
 	// PromptTokens 是这一轮第一次请求的消息估算 token 数，含 Runner 自己加的系统
 	// 提示、已加载契约和尾部工具段。调用方只看得到自己组装的那部分，续接时拿它
 	// 判断请求比完整组装长了多少。

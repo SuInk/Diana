@@ -49,7 +49,9 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		{Role: llm.RoleTool, Content: "已发送", ToolCallID: "c1", ToolName: "send"},
 		{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "看图"}, {Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,AA"}}},
 	}
-	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234}
+	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234,
+		definitions: []llm.ToolDefinition{{Name: "codemode", Description: "跑脚本", Parameters: map[string]any{"type": "object"},
+			Freeform: &llm.FreeformTool{Field: "code", Grammar: "start: /.+/", Hint: "写脚本"}}}}
 	original.index()
 
 	var store appendContextStore
@@ -64,6 +66,10 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.prefix, original.prefix) {
 		t.Fatalf("读回的前缀和原来不一样：\n got %#v\nwant %#v", loaded.prefix, original.prefix)
+	}
+	// 锁定头部的工具定义要逐字读回，Freeform 也不能丢。
+	if !reflect.DeepEqual(loaded.definitions, original.definitions) {
+		t.Fatalf("定义没读回：%#v", loaded.definitions)
 	}
 	if loaded.key != original.key || loaded.headKey != original.headKey || loaded.overhead != original.overhead {
 		t.Fatalf("键或开销没读回：%q %q %d", loaded.key, loaded.headKey, loaded.overhead)

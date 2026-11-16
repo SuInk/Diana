@@ -62,6 +62,10 @@ type appendContextLog struct {
 	prefix  []llm.Message
 	key     string
 	headKey string
+	// definitions 是这份记录重新组装那一轮的工具定义。和前缀里的系统提示、固定说明
+	// 一起构成锁定的头部：续接期间本轮渲染出来的头部变了也不用，见
+	// appendContextContinuation。老记录没有它，退回按 headKey 核对。
+	definitions []llm.ToolDefinition
 	// seen 是前缀里出现过的整条消息正文，判断历史行是不是新的；sent 是机器人
 	// 已经发过的回复；latest 是每个段标题在前缀里最近的那一版。
 	seen   map[string]bool
@@ -228,7 +232,11 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey}
+	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey, definitions: resp.Definitions}
+	if resp.Continued && previous != nil {
+		// 续接用的是锁定的头部，记录接着锁它，不换成本轮渲染出来的那份。
+		log.headKey = previous.headKey
+	}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)
@@ -436,8 +444,14 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		decision.reason = "no_log"
 		return nil, decision
 	case appendContextHeadKey(messages) != log.headKey:
-		decision.reason = "head_changed"
-		return nil, decision
+		if len(log.definitions) == 0 {
+			decision.reason = "head_changed"
+			return nil, decision
+		}
+		// 头部按哈希锁定：会话里第一次组装时的人设、系统提示和工具定义原样复用。本轮
+		// 渲染出来的头部变了不用，只记下来；超长、滑窗这些本来就要重新组装的时候再换。
+		// 放进头部的东西必须是真的不变的，变了就是该挪去尾部的信号，从 head_locked 查。
+		decision.headLocked = appendContextHeadKey(messages)
 	}
 	historyEnd := -1
 	for index, message := range messages {
@@ -545,13 +559,16 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		decision.reason = "context_limit"
 		return nil, decision
 	}
-	return &agent.Continuation{Prefix: log.prefix, Append: appended, Key: log.key}, decision
+	return &agent.Continuation{Prefix: log.prefix, Append: appended, Key: log.key, Definitions: log.definitions}, decision
 }
 
 // appendContextDecision 记下这一轮为什么续接或没续接，写进调试轨迹。10-28 上线后
 // 群聊连续两轮都没续上，却看不出是哪道校验拦的，所以每轮都留一条。
 type appendContextDecision struct {
-	reason       string
+	reason string
+	// headLocked 非空表示本轮渲染出的头部和锁定的不同（值是本轮的头部哈希），续接仍按
+	// 锁定的头部发。
+	headLocked   string
 	previousKey  string
 	fullTokens   int64
 	prefixTokens int64
@@ -574,6 +591,9 @@ func (r *Runtime) recordAppendContextDecision(ctx context.Context, event Message
 		"append_tokens":   decision.appendTokens,
 		"overhead_tokens": decision.overhead,
 		"context_limit":   decision.contextLimit,
+	}
+	if decision.headLocked != "" {
+		metadata["head_locked"] = decision.headLocked
 	}
 	switch {
 	case runErr != nil:

@@ -194,6 +194,36 @@ func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
 	}
 }
 
+// 头部按哈希锁定：记录里存了工具定义时，本轮渲染出来的头部变了也接着续，前缀和定义
+// 都用锁定的那份，变了的哈希记在 headLocked 里；续出来的新记录仍锁旧头部。
+func TestAppendContextLocksHeadOnceAssembled(t *testing.T) {
+	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
+	log := appendTestLog(t, first, "在的")
+	log.definitions = []llm.ToolDefinition{{Name: "send", Parameters: map[string]any{"type": "object"}}}
+	changed := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:01:00] 甲: 在吗"}, "", "甲: 还在吗")
+	changed[0].Content = "换了人设" + strings.Repeat("。", 2000)
+	continuation, decision := appendContextContinuation(log, changed, 0)
+	if continuation == nil {
+		t.Fatalf("a locked head must keep continuing, reason = %q", decision.reason)
+	}
+	if decision.headLocked != appendContextHeadKey(changed) || !reflect.DeepEqual(continuation.Definitions, log.definitions) {
+		t.Fatalf("locked = %q, definitions = %#v", decision.headLocked, continuation.Definitions)
+	}
+	if !strings.HasPrefix(continuation.Prefix[0].Content, "人设头部") {
+		t.Fatalf("prefix head = %q", continuation.Prefix[0].Content)
+	}
+	for _, message := range continuation.Append {
+		if strings.Contains(message.Content, "换了人设") {
+			t.Fatal("the newly rendered head must not be sent")
+		}
+	}
+	next := newAppendContextLog(&agent.Response{Transcript: append(continuation.Prefix, continuation.Append...), ConversationKey: "k", Continued: true,
+		Definitions: continuation.Definitions}, appendContextHeadKey(changed), decision.fullTokens, log)
+	if next.headKey != log.headKey || !reflect.DeepEqual(next.definitions, log.definitions) {
+		t.Fatal("a continued record must keep the locked head")
+	}
+}
+
 // 续接前缀是 Runner 发出的整份请求，含它自己加的系统提示、契约和工具段；上限要
 // 按同一口径比，否则这些占一半时续一两轮就判 too_long（11-02 生产 46% 的主回复）。
 func TestAppendContextGrowthCountsRunnerOverhead(t *testing.T) {

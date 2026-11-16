@@ -116,6 +116,43 @@ func TestRunnerContinuationFallsBackOnKeyMismatch(t *testing.T) {
 	}
 }
 
+// 头部锁定时会话键对不上也续接：前缀里的旧头部和调用方存的工具定义原样发，本轮
+// 渲染出来的不用，返回的键和定义也还是锁定的那份。
+func TestRunnerContinuationLockedHeadIgnoresKeyMismatch(t *testing.T) {
+	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("先说一句")})
+	if err != nil || len(fresh.Definitions) == 0 {
+		t.Fatalf("fresh run must report its head definitions: %v", err)
+	}
+	locked := append(append([]llm.ToolDefinition(nil), fresh.Definitions...), llm.ToolDefinition{Name: "locked_marker", Parameters: map[string]any{"type": "object"}})
+	resp, err := runner.Run(context.Background(), Request{
+		Messages: continuationTestMessages("问题"),
+		Continuation: &Continuation{
+			Prefix:      []llm.Message{{Role: llm.RoleSystem, Content: "锁定的旧头部"}},
+			Append:      []llm.Message{{Role: llm.RoleUser, Content: "问题"}},
+			Key:         "locked-key",
+			Definitions: locked,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Continued || resp.ConversationKey != "locked-key" || len(resp.Definitions) != len(locked) {
+		t.Fatalf("a locked head must continue under the locked key: continued=%v key=%q", resp.Continued, resp.ConversationKey)
+	}
+	request := client.requests[len(client.requests)-1]
+	if request.Messages[0].Content != "锁定的旧头部" {
+		t.Fatalf("head = %q", request.Messages[0].Content)
+	}
+	if !reflect.DeepEqual(request.Tools, locked) {
+		t.Fatalf("tools must be the locked definitions: %#v", request.Tools)
+	}
+}
+
 // transcriptPairs 检查前缀里的工具调用和结果一一成对，并按顺序返回发言正文；出现
 // send 以外的调用、带供应商原始输出的发言都算错。
 func transcriptPairs(t *testing.T, transcript []llm.Message) (spoken []string) {
