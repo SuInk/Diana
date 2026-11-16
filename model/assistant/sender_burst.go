@@ -745,6 +745,8 @@ func (r *Runtime) claimSenderBurst(ctx context.Context, event MessageEvent, text
 		r.recordHandedOff(event, text, outcome)
 		return event, outcome, true
 	}
+	// 前一条刚进回复入口、还没决定接不接补充时，等它表态再判。
+	r.awaitUndecidedDirectReply(ctx, event)
 	// 预处理时前一条可能还没开始生成，那时比不了；现在它开始生成了，补判一次。
 	// 预处理阶段已经和这一轮判过的不再重复问。
 	if root, ok := r.activeDirectReplyRoot(event); ok && root != strings.TrimSpace(event.MessageID) && !r.senderTurnMergeCheckedAgainst(event, root) {

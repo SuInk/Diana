@@ -610,20 +610,25 @@ func TestReplyMergeDoesNotOpenBeforePluginDispatchFinishes(t *testing.T) {
 	if _, merged := r.mergeIntoActiveDirectReply(context.Background(), follow, follow.RawMessage); merged {
 		t.Fatal("unresolved plugin path accepted a question")
 	}
-	if _, err := r.replyAndRecord(context.Background(), follow, follow.RawMessage, "replied"); err != nil {
-		t.Fatal(err)
-	}
+	// 追问在回复入口等 root 表态；root 走插件固定结果收尾后它自己回答，不并进去。
+	followDone := make(chan error, 1)
+	go func() {
+		_, err := r.replyAndRecord(context.Background(), follow, follow.RawMessage, "replied")
+		followDone <- err
+	}()
 	close(plugin.release)
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatal(err)
+	for _, wait := range []chan error{done, followDone} {
+		select {
+		case err := <-wait:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("plugin result or follow-up stalled")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("plugin result stalled")
 	}
 	sent := channel.sentSnapshot()
-	if len(sent) != 2 || sent[1].Text != "固定插件结果" {
+	if len(sent) != 2 || sent[0].Text != "固定插件结果" {
 		t.Fatalf("fixed result or dialogue lost: %#v", sent)
 	}
 }
