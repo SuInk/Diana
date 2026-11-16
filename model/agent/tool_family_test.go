@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -223,12 +222,6 @@ func TestDeferredLoaderRestoresMemberNamesAsFamily(t *testing.T) {
 	loader.restore([]string{"page_open", "page_click", "page"})
 	if !reflect.DeepEqual(loader.order, []string{"page"}) {
 		t.Fatalf("restored as %v", loader.order)
-	}
-	var contracts []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(loader.loadedContracts()), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
-		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(), err)
 	}
 	if catalog := loader.catalog(); strings.Contains(catalog, "page_open") || !strings.Contains(catalog, "- page(action: ") {
 		t.Fatalf("deferred catalog = %q", catalog)

@@ -26,7 +26,7 @@ type Runner struct {
 	registry *ToolRegistry
 	// loader 是本次运行的按需加载状态；Run 开始时新建，一个 Runner 不并发执行 Run。
 	loader *deferredToolLoader
-	// headLoader 按渲染用的工具全集（见 Config.HeadRegistry）生成目录和契约；没设
+	// headLoader 按渲染用的工具全集（见 Config.HeadRegistry）生成目录和工具定义；没设
 	// HeadRegistry 时就是 loader。
 	headLoader    *deferredToolLoader
 	codeModeStore map[string]json.RawMessage
@@ -144,20 +144,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Priority: llm.MessagePrioritySystem,
 	})
 	var volatile []llm.Message
-	// 已加载工具的契约放在调用方开头的 system 之后、历史之前。它按群持久、只在
-	// 加载新工具时追加，变化几乎总和发言者权限切换同时发生——那时工具目录（第一条
-	// system）已经变了，前缀本来就从那里断。放在尾部则每条消息都要重算它（生产
-	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
-	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
+	// 历史之前的固定说明（skills 目录、联网调研要求）。已加载工具的契约以前也常驻在
+	// 这里（生产 11-15 平均 7.7 千字），现在不放：要用的工具当轮 tool_search 取定义，
+	// 参数填错时 tools_execute 也会把定义交回来。显式使用带标记的 user，避免无历史时
+	// 被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	sharedContracts := r.headLoader.loadedContractList()
-	if contracts := renderLoadedContracts(sharedContracts); contracts != "" {
-		contractMessage = &llm.Message{
-			Role:     llm.RoleUser,
-			Content:  sharedContractsMessage(contracts),
-			Priority: llm.MessagePrioritySystem,
-		}
-	}
 	// 工具目录、规则和契约按群里的工具全集渲染，换人说话也不变；本轮发言者能用哪些、
 	// 工具预算多少只写一行，只用于本轮（见 speakerPermissionNote）。
 	if note := r.speakerPermissionNote(); note != "" {
@@ -218,11 +209,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	convKey := conversationKey(r.systemPrompt(), stableNotesText, r.turnDefinitions(false))
 	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
-	if continued {
-		// 前缀里的契约块原样不动；这一轮多出来的契约接在尾部，随请求一起进下一轮的
-		// 前缀。当前发言者用不了哪些契约只用于本轮。
-		volatile = append(contractDelta(sharedContracts, req.Continuation.Prefix, req.Continuation.Append), volatile...)
-	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
 	// 前缀缓存读到最后一个断点为止，因此断点打在稳定前缀的末尾：系统提示词、
@@ -1510,14 +1496,13 @@ func (r *Runner) headTools() *ToolRegistry {
 }
 
 // newLoaders 建本次运行的按需加载状态：loader 管本轮发言者的执行，headLoader 按工具
-// 全集渲染目录和契约。loaded 是会话里已经加载过的工具。
+// 全集渲染目录和工具定义。loaded 是会话里已经加载过的工具。
 func (r *Runner) newLoaders(loaded []string) {
 	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.FeaturedTools)
 	r.headLoader = r.loader
 	head := r.headTools()
 	if head != r.registry {
 		r.headLoader = newDeferredToolLoader(head, r.cfg.CoreTools, r.cfg.FeaturedTools)
-		r.headLoader.restore(loaded)
 	}
 	if r.loader != nil {
 		r.loader.head = head
@@ -1601,7 +1586,7 @@ func (r *Runner) systemPrompt() string {
 	}
 	if loader := r.headLoader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、最后一行只列了名字、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
 	} else {
 		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+head.SystemPromptCatalog())
 	}

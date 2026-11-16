@@ -920,11 +920,9 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		}
 		return false
 	}
-	// 工具规则跟着「本群成员能不能用」走：成员都拿得到的工具，规则进稳定头部；主人
-	// 专属的写进尾部，免得主人和群友交替时前缀从这里分叉。github、subscription、
-	// cross_session_message 的工具定义随发言者变，定义留在尾部的按需目录里（见
-	// sharedAgentTools），但规则文本对谁都一样。以前规则跟着定义一起进了尾部：11-01～02
-	// 生产主回复尾部这几段约 2K 字，八成请求都带、每次重算。
+	// 主回复按工具全集渲染（head 非空）时规则全部进稳定头部。旁路不渲染全集，工具规则
+	// 跟着「本群成员能不能用」走：成员都拿得到的进头部，主人专属的写进尾部，免得主人
+	// 和群友交替时前缀从这里分叉。
 	shared := map[string]bool(nil)
 	if registry != nil {
 		shared = r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})

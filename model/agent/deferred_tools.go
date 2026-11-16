@@ -57,9 +57,24 @@ func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, featured 
 	return &deferredToolLoader{registry: registry, core: core, featured: featuredSet, loaded: map[string]map[string]any{}}
 }
 
+// catalogTokenBudget 照 Pi codemode 的 inlineBudget（默认 3000 token）：按需目录里
+// 带签名和说明的工具行合计不超过它。生产 11-15 41 个工具全写出来约 1.4 万字，比
+// 聊天历史还占地方。
+const catalogTokenBudget int64 = 3000
+
 // catalog 列出非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
+//
+// 照 Pi 的 selectCatalog：带签名和说明的行按估算开销从小到大放，放到预算用完为止；
+// 放不下的只在最后一行列名字，要用先 tool_search 取定义。FeaturedTools 总是写全：
+// 「什么时候该用」只写在它们的描述里，只列名字模型就想不到去用。只随注册表变，
+// 换人说话、加载工具都不变。
 func (l *deferredToolLoader) catalog() string {
-	var builder strings.Builder
+	type entry struct {
+		name, line string
+		cost       int64
+		featured   bool
+	}
+	var entries []entry
 	for _, name := range l.registry.PresentedNames() {
 		if l.core[name] {
 			continue
@@ -68,11 +83,41 @@ func (l *deferredToolLoader) catalog() string {
 		if !ok {
 			continue
 		}
-		if l.featured[name] {
-			builder.WriteString("- " + name + toolSignature(tool) + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
-			continue
+		line := deferredCatalogLine(tool)
+		entries = append(entries, entry{name: name, line: line, cost: llm.EstimateTextTokens(line), featured: l.featured[name]})
+	}
+	order := make([]int, len(entries))
+	for index := range order {
+		order[index] = index
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		left, right := entries[order[a]], entries[order[b]]
+		if left.featured != right.featured {
+			return left.featured
 		}
-		builder.WriteString(deferredCatalogLine(tool))
+		return left.cost < right.cost
+	})
+	shown := make(map[string]bool, len(entries))
+	remaining := catalogTokenBudget
+	for _, index := range order {
+		item := entries[index]
+		if !item.featured && item.cost > remaining {
+			break
+		}
+		remaining -= item.cost
+		shown[item.name] = true
+	}
+	var builder strings.Builder
+	var unlisted []string
+	for _, item := range entries {
+		if shown[item.name] {
+			builder.WriteString(item.line)
+		} else {
+			unlisted = append(unlisted, item.name)
+		}
+	}
+	if len(unlisted) > 0 {
+		builder.WriteString("- 另外还有（只列名字，要用先 " + ToolsLoadToolName + " 取定义）：" + strings.Join(unlisted, "、") + "\n")
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -90,7 +135,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的，先 tool_search 再调。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的、或目录里只列了名字的，先 tool_search 再调。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -122,54 +167,6 @@ func (l *deferredToolLoader) restore(names []string) {
 		}
 		l.loaded[name] = schema
 	}
-}
-
-// loadedContract 是一份已加载工具的完整契约，raw 是它发给模型的 JSON。
-type loadedContract struct {
-	name string
-	raw  string
-}
-
-// loadedContractList 按加载顺序列出已加载工具的完整契约。shared=true 只收公共工具（放在
-// 历史之前），shared=false 只收发言者专属的（放在尾部）。当前发言者用不了的工具不在内。
-func (l *deferredToolLoader) loadedContractList() []loadedContract {
-	if l == nil || len(l.order) == 0 {
-		return nil
-	}
-	type contract struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		InputSchema map[string]any `json:"inputSchema"`
-	}
-	contracts := make([]loadedContract, 0, len(l.order))
-	for _, name := range l.order {
-		tool, ok := l.registry.Get(name)
-		if !ok {
-			continue
-		}
-		raw, err := json.Marshal(contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
-		if err != nil {
-			continue
-		}
-		contracts = append(contracts, loadedContract{name: name, raw: string(raw)})
-	}
-	return contracts
-}
-
-// loadedContracts 把 loadedContractList 渲染成一个 JSON 数组，没有契约时返回空串。
-func (l *deferredToolLoader) loadedContracts() string {
-	return renderLoadedContracts(l.loadedContractList())
-}
-
-func renderLoadedContracts(contracts []loadedContract) string {
-	if len(contracts) == 0 {
-		return ""
-	}
-	raws := make([]string, len(contracts))
-	for index, contract := range contracts {
-		raws[index] = contract.raw
-	}
-	return "[" + strings.Join(raws, ",") + "]"
 }
 
 func executeInputSchema() map[string]any {

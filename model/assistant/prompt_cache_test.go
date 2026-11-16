@@ -314,7 +314,7 @@ func TestReplyToolDefinitionsStableAcrossGroupSpeakers(t *testing.T) {
 }
 
 // 主人和群友在同一个群里交替说话时，发给模型的工具定义、Agent system 和人设头部
-// 必须逐字相同：主人专属工具、预算和规则都在历史之后的尾部（agent.Config.SharedTools）。
+// 必须逐字相同：前缀按工具全集渲染，预算和本轮用不了哪些在每轮一行的权限说明里（agent.Config.HeadRegistry）。
 func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	workDir := t.TempDir()

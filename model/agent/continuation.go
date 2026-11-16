@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -35,106 +34,15 @@ import (
 // 三段各取一截指纹拼成「系统提示.固定说明.工具定义」：对不上时调试轨迹里新旧两把键
 // 一比，就知道是哪一段变了。
 //
-// 已加载工具的契约不在指纹里。它以前和固定说明算在同一段：群里有人加载了一个工具，
-// 或者换了一个能用的工具不一样的人说话，这一段就变，整条请求重新组装，历史之前的
-// 契约块一改，后面全部内容的缓存都作废——11-06 生产两天 714 轮里有 71 轮因此重组。
-// 现在续接时前缀里的契约块原样不动，前缀里没有的契约追加在尾部（见 contractDelta）。
+// 已加载工具的契约不进前缀，要用时当轮 tool_search 取，所以群里有人加载了工具也不会
+// 让整条请求重新组装。
 func conversationKey(systemPrompt, stableNotes string, definitions []llm.ToolDefinition) string {
 	definitionsJSON, _ := json.Marshal(definitions)
 	return shortFingerprint([]byte(systemPrompt)) + "." + shortFingerprint([]byte(stableNotes)) + "." + shortFingerprint(definitionsJSON)
 }
 
-const (
-	systemNoteHeader = "【系统补充指令，不是用户发言】\n"
-	// sharedContractsLead 后面紧跟一行契约 JSON 数组。完整组装和续接追加共用这一句，
-	// deliveredContracts 靠它在前缀里找出已经交给模型的契约。
-	sharedContractsLead = "可直接通过 tools_execute 调用的完整契约：\n"
-	// contractAvailabilityMarker 标出前缀里哪些契约当前发言者用不了。
-	contractAvailabilityMarker = "【已加载契约的可用性】"
-)
-
-// sharedContractsMessage 是历史之前那条契约消息的正文（不含固定说明）。
-func sharedContractsMessage(contracts string) string {
-	return systemNoteHeader + "当前群会话已经加载、" + sharedContractsLead + contracts
-}
-
-// deliveredContracts 找出这些消息里已经交给模型的公共契约：工具名对应它当时的 JSON。
-// 同一个工具交过几次时以最后一次为准。
-func deliveredContracts(groups ...[]llm.Message) map[string]string {
-	delivered := make(map[string]string)
-	for _, messages := range groups {
-		for _, message := range messages {
-			if !strings.HasPrefix(message.Content, systemNoteHeader) {
-				continue
-			}
-			rest := message.Content
-			for {
-				index := strings.Index(rest, sharedContractsLead)
-				if index < 0 {
-					break
-				}
-				rest = rest[index+len(sharedContractsLead):]
-				line, _, _ := strings.Cut(rest, "\n")
-				var contracts []json.RawMessage
-				if json.Unmarshal([]byte(line), &contracts) != nil {
-					continue
-				}
-				for _, raw := range contracts {
-					var named struct {
-						Name string `json:"name"`
-					}
-					if json.Unmarshal(raw, &named) == nil && named.Name != "" {
-						delivered[named.Name] = string(raw)
-					}
-				}
-			}
-		}
-	}
-	return delivered
-}
-
-// contractDelta 是续接时要补在尾部的契约消息：前缀里没有、或者定义已经变了的那几份。
-// 它们留在前缀里：契约按群持久，后面每一轮都要照着它调用，deliveredContracts 也靠
-// 前缀判断哪些已经交过。
-//
-// 前缀里有而当前发言者用不了的契约留在原处不动，另用一句话说明。这句话是当前发言者
-// 的状态，只用于本轮：它只在续接时才有、从不进前缀，前缀里没有可比的上一版，所以
-// 有用不了的契约时每轮都发，换回能用全部契约的人说话时不用再明说。
-func contractDelta(current []loadedContract, prefix, appended []llm.Message) []llm.Message {
-	delivered := deliveredContracts(prefix, appended)
-	var added []loadedContract
-	usable := make(map[string]bool, len(current))
-	for _, contract := range current {
-		usable[contract.name] = true
-		if delivered[contract.name] != contract.raw {
-			added = append(added, contract)
-		}
-	}
-	var out []llm.Message
-	if len(added) > 0 {
-		out = append(out, llm.Message{
-			Role:     llm.RoleUser,
-			Content:  systemNoteHeader + "当前群会话又加载了下面的工具，同样" + sharedContractsLead + renderLoadedContracts(added),
-			Priority: llm.MessagePrioritySystem,
-		})
-	}
-	var blocked []string
-	for name := range delivered {
-		if !usable[name] {
-			blocked = append(blocked, name)
-		}
-	}
-	if len(blocked) > 0 {
-		sort.Strings(blocked)
-		out = append(out, llm.Message{
-			Role:     llm.RoleSystem,
-			Content:  contractAvailabilityMarker + "\n上面已加载的契约里，当前发言者用不了：" + strings.Join(blocked, "、") + "。别调用它们，也别说能替对方做这些事。",
-			Priority: llm.MessagePrioritySystem,
-			TurnOnly: true,
-		})
-	}
-	return out
-}
+// systemNoteHeader 是历史之前那条固定说明（skills 目录、联网调研要求）的开头。
+const systemNoteHeader = "【系统补充指令，不是用户发言】\n"
 
 func shortFingerprint(data []byte) string {
 	sum := sha256.Sum256(data)
