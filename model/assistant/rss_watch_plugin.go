@@ -457,6 +457,11 @@ type twitterStatusesResponse struct {
 			ScreenName string `json:"screen_name"`
 		} `json:"author"`
 		Media twitterStatusMedia `json:"media"`
+		// RepostedBy 非空表示这是一条转推：author 是原作者，reposted_by 是转推的人
+		//（订阅的那个号）。
+		RepostedBy *struct {
+			ScreenName string `json:"screen_name"`
+		} `json:"reposted_by"`
 		Quote *struct {
 			URL     string          `json:"url"`
 			Text    string          `json:"text"`
@@ -529,8 +534,19 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 		if handle := strings.TrimSpace(entry.Author.ScreenName); handle != "" && author == "" {
 			author = "@" + handle
 		}
-		// FxTwitter places ordinary reposts at the top level (with reposted_by
-		// metadata). Quoted tweets instead carry their own text and media.
+		// 普通转推在时间线里和原创平级，作者是原作者，只靠 reposted_by 区分。推送抬头
+		// 写的是订阅的账号，不在正文里写明的话，转推就像是订阅的人自己发的：生产
+		// 11-16 订阅 @mizorewww，转推的 @qian_crypto 那条被当成本人发的推了。
+		// 引用推文则带着自己的正文和媒体，在下面展开。
+		if entry.RepostedBy != nil && strings.TrimSpace(entry.RepostedBy.ScreenName) != "" {
+			original := strings.TrimSpace(entry.Author.ScreenName)
+			if original != "" {
+				original = "@" + original
+			} else {
+				original = firstNonEmpty(author, "原作者")
+			}
+			text = "转推 " + original + "：\n" + text
+		}
 		photos := slices.Clone(entry.Media.Photos)
 		videos := slices.Clone(entry.Media.Videos)
 		if quote := entry.Quote; quote != nil {
@@ -555,9 +571,10 @@ func parseTwitterStatusesFeed(body []byte) (parsedFeed, error) {
 				images = append(images, photoURL)
 			}
 		}
+		// X 帖子没有标题。以前拿正文前 120 字加「...」充当标题，和正文开头对不上，
+		// 原文推送时把这段又发了一遍。
 		feed.Items = append(feed.Items, rssWatchItem{
 			ID:          id,
-			Title:       truncateRunes(text, 120),
 			Link:        strings.TrimSpace(entry.URL),
 			Author:      author,
 			Content:     text,

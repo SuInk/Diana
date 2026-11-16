@@ -2255,14 +2255,17 @@ func (t *dianaGitHubTool) create(ctx context.Context, repository string, input m
 	unlock := t.plugin.operationLock(operationKey)
 	defer unlock()
 
-	issues, apiErr := t.listRecentIssues(ctx, repository)
+	// 防重复只需要看本凭据的账号自己发过的 issue：标记只会出现在它们里面。以前把整个
+	// 仓库的 issue 翻一遍，microsoft/vscode 这种几十万条的仓库永远翻不完，创建一直卡在
+	// idempotency_scan_incomplete。
+	own, apiErr, scannedAll := t.listOwnIssues(ctx, repository)
 	if apiErr != nil {
 		if apiErr.Code == "repository_renamed" {
 			return result.fail(apiErr.Code, repositoryIssueRenamedMessage(repository, apiErr.RenamedTo))
 		}
 		return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
 	}
-	if existing, ok := repositoryIssueWithAnyMarker(issues, marker, legacyMarker); ok {
+	if existing, ok := repositoryIssueWithAnyMarker(own, marker, legacyMarker); ok {
 		t.plugin.clearOperationUncertain(operationKey)
 		result.OK = true
 		result.Outcome = "reused"
@@ -2272,12 +2275,20 @@ func (t *dianaGitHubTool) create(ctx context.Context, repository string, input m
 		return result
 	}
 	if operationID != "" {
-		if _, ok := repositoryIssueWithMarkerPrefix(issues, markerPrefix); ok {
+		if _, ok := repositoryIssueWithMarkerPrefix(own, markerPrefix); ok {
 			return result.fail("operation_id_conflict", "operation_id 已用于不同的创建内容；请更新原 Issue 或使用新的 operation_id。")
 		}
 	}
 	if t.plugin.operationUncertain(operationKey) {
 		return result.fail("pending_reconciliation", "此前写入结果仍不确定；为避免重复创建，本操作只允许继续对账，请稍后再试或使用新的 operation_id。")
+	}
+	// 相似 issue 只是提醒：仓库太大翻不完时，用最近更新的那一批比对，不拦创建。
+	issues := own
+	if !scannedAll {
+		issues, apiErr = t.listRecentIssues(ctx, repository)
+		if apiErr != nil && apiErr.Code != "idempotency_scan_incomplete" {
+			return result.fail(apiErr.Code, t.failureMessage(apiErr.Code))
+		}
 	}
 	candidates := similarRepositoryIssues(issues, title, labels, time.Now(), 5)
 	if len(candidates) > 0 {
@@ -2868,8 +2879,12 @@ func (t *dianaGitHubTool) listRecentIssues(ctx context.Context, repository strin
 		return nil, apiErr
 	}
 	lastPage, paginationKnown := repositoryIssueLastPage(headers.Get("Link"))
+	var incomplete *repositoryIssueAPIError
 	if !paginationKnown || lastPage > repositoryIssueListMaxPages {
-		return nil, &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}
+		// 翻不完时把最近更新的这一批交回去，同时报不完整：查重提醒用得上，
+		// 要求完整的调用方按错误处理。
+		incomplete = &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}
+		lastPage = min(max(lastPage, 1), repositoryIssueListMaxPages)
 	}
 	for page := 2; page <= lastPage; page++ {
 		items, _, apiErr := readPage(page)
@@ -2887,7 +2902,7 @@ func (t *dianaGitHubTool) listRecentIssues(ctx context.Context, repository strin
 			issues = append(issues, issue)
 		}
 	}
-	return issues, nil
+	return issues, incomplete
 }
 
 const repositoryPublishNameGraphQLQuery = `query($owner: String!, $name: String!) {
@@ -2953,19 +2968,62 @@ func (t *dianaGitHubTool) graphQLRepositoryName(ctx context.Context, repository 
 	return current
 }
 
-const repositoryPublishIssuesGraphQLQuery = `query($owner: String!, $name: String!, $after: String) {
+const repositoryPublishIssuesGraphQLQuery = `query($owner: String!, $name: String!, $after: String, $createdBy: String) {
   repository(owner: $owner, name: $name) {
     nameWithOwner
-    issues(first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    issues(first: 100, after: $after, filterBy: {createdBy: $createdBy}, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes { number title body state url updatedAt closedAt labels(first: 20) { nodes { name } } }
     }
   }
 }`
 
+const repositoryViewerGraphQLQuery = `query { viewer { login } }`
+
+// listOwnIssues 列出本凭据的账号在这个仓库发过的 issue，给防重复标记用。查不到账号
+// （没有凭据、GraphQL 不可用）时退回全仓库扫描，scannedAll 为 true 表示交回的是全仓库
+// 的列表，调用方查相似时不用再扫一遍。
+func (t *dianaGitHubTool) listOwnIssues(ctx context.Context, repository string) (issues []githubRepositoryIssue, apiErr *repositoryIssueAPIError, scannedAll bool) {
+	if login := t.viewerLogin(ctx, repository); login != "" {
+		if issues, apiErr, used := t.listIssuesGraphQLBy(ctx, repository, login); used {
+			return issues, apiErr, false
+		}
+	}
+	issues, apiErr = t.listRecentIssues(ctx, repository)
+	return issues, apiErr, true
+}
+
+// viewerLogin 是这个仓库所用凭据的 GitHub 账号；取不到返回空串。
+func (t *dianaGitHubTool) viewerLogin(ctx context.Context, repository string) string {
+	if t == nil || t.plugin == nil || t.plugin.client == nil {
+		return ""
+	}
+	token, credentialErr := t.repositoryPublishCredential(ctx, repository)
+	if credentialErr != nil || strings.TrimSpace(token) == "" {
+		return ""
+	}
+	var data struct {
+		Viewer struct {
+			Login string `json:"login"`
+		} `json:"viewer"`
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, t.requestTimeout())
+	defer cancel()
+	if err := postGitHubGraphQL(requestCtx, t.plugin.client, t.plugin.baseURL, token, "Diana-Repository-Issues", repositoryViewerGraphQLQuery, map[string]any{}, &data); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(data.Viewer.Login)
+}
+
 // listIssuesGraphQL 用 GraphQL 列出仓库全部 issue（不含 PR）。used=false 表示没有可用凭据或
 // 查询失败，调用方退回 REST。
 func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository string) ([]githubRepositoryIssue, *repositoryIssueAPIError, bool) {
+	return t.listIssuesGraphQLBy(ctx, repository, "")
+}
+
+// listIssuesGraphQLBy 同 listIssuesGraphQL；createdBy 非空时只列这个账号发的 issue。
+// 翻不完时交回已读到的、最近更新的那一批，同时报 idempotency_scan_incomplete。
+func (t *dianaGitHubTool) listIssuesGraphQLBy(ctx context.Context, repository, createdBy string) ([]githubRepositoryIssue, *repositoryIssueAPIError, bool) {
 	if t == nil || t.plugin == nil || t.plugin.client == nil {
 		return nil, nil, false
 	}
@@ -2977,7 +3035,10 @@ func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository stri
 	if credentialErr != nil || strings.TrimSpace(token) == "" {
 		return nil, nil, false
 	}
-	variables := map[string]any{"owner": owner, "name": name, "after": nil}
+	variables := map[string]any{"owner": owner, "name": name, "after": nil, "createdBy": nil}
+	if createdBy != "" {
+		variables["createdBy"] = createdBy
+	}
 	var issues []githubRepositoryIssue
 	for page := 1; page <= repositoryIssueListMaxPages; page++ {
 		var data struct {
@@ -3040,7 +3101,7 @@ func (t *dianaGitHubTool) listIssuesGraphQL(ctx context.Context, repository stri
 		}
 		variables["after"] = data.Repository.Issues.PageInfo.EndCursor
 	}
-	return nil, &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}, true
+	return issues, &repositoryIssueAPIError{Code: "idempotency_scan_incomplete"}, true
 }
 
 func (t *dianaGitHubTool) getIssue(ctx context.Context, repository string, number int) (githubRepositoryIssue, *repositoryIssueAPIError) {
@@ -3138,7 +3199,7 @@ func repositoryIssueLastPage(linkHeader string) (int, bool) {
 func (t *dianaGitHubTool) reconcileIssueMarker(repository, marker string) (githubRepositoryIssue, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), min(t.requestTimeout(), 10*time.Second))
 	defer cancel()
-	issues, apiErr := t.listRecentIssues(ctx, repository)
+	issues, apiErr, _ := t.listOwnIssues(ctx, repository)
 	if apiErr != nil {
 		return githubRepositoryIssue{}, false
 	}

@@ -77,7 +77,7 @@ func TestBilibiliDynamicFeedSkipsPinned(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"code":0,"data":{"items":[
 {"id_str":"900","modules":{"module_tag":{"text":"置顶"},"module_author":{"name":"测试UP","pub_ts":100},"module_dynamic":{"desc":{"text":"pinned"}}}},
-{"id_str":"902","modules":{"module_author":{"name":"测试UP","pub_ts":300},"module_dynamic":{"major":{"archive":{"title":"新视频","desc":"简介","cover":"//i0.hdslb.com/a.jpg","jump_url":"//www.bilibili.com/video/BV1xx411c7mD"}}}}},
+{"id_str":"902","modules":{"module_author":{"name":"测试UP","pub_ts":"300"},"module_dynamic":{"major":{"archive":{"title":"新视频","desc":"简介","cover":"//i0.hdslb.com/a.jpg","jump_url":"//www.bilibili.com/video/BV1xx411c7mD"}}}}},
 {"id_str":"901","modules":{"module_author":{"name":"测试UP","pub_ts":200},"module_dynamic":{"desc":{"text":"转一下"}}},"orig":{"modules":{"module_author":{"name":"别人"},"module_dynamic":{"desc":{"text":"原文"}}}}}
 ]}}`))
 	})
@@ -89,6 +89,10 @@ func TestBilibiliDynamicFeedSkipsPinned(t *testing.T) {
 		t.Fatalf("feed=%+v", feed)
 	}
 	video := feed.Items[0]
+	// pub_ts 给成字符串也要认。
+	if !video.PublishedAt.Equal(time.Unix(300, 0)) || feed.Items[1].PublishedAt.Unix() != 200 {
+		t.Fatalf("published = %v / %v", video.PublishedAt, feed.Items[1].PublishedAt)
+	}
 	if video.ID != "902" || video.Title != "投稿视频：新视频" || video.Link != "https://www.bilibili.com/video/BV1xx411c7mD" || len(video.Images) != 1 || video.Images[0] != "https://i0.hdslb.com/a.jpg" {
 		t.Fatalf("video=%+v", video)
 	}
