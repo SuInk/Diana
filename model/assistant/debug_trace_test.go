@@ -248,3 +248,24 @@ func TestImageTaskPreservesDebugTraceAcrossBackgroundContext(t *testing.T) {
 		t.Fatalf("got %d image traces, want generation and edit", count)
 	}
 }
+
+// 调用链每写一步都要通知事件页，事件页才能把正在看的那条跟上，不用等这一轮结束。
+// 没有消息号的事件进不了事件列表，不播；没写进调试记录（没有轨迹状态）的也不播。
+func TestDebugTraceNotifiesEventProgress(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nil, nil, nil, nil, nil, nil)
+	runtime.SetAppLogWriter(&captureAppLogs{})
+	var got []EventProgress
+	runtime.SetEventProgressListener(func(progress EventProgress) { got = append(got, progress) })
+
+	event := MessageEvent{Platform: "qq", ProfileID: "bot-a", Kind: EventKindGroup, GroupID: "10001", UserID: "20002", MessageID: " 30003 "}
+	state := &debugTraceState{event: event}
+	runtime.recordDebugTrace(state, "模型请求", map[string]any{"phase": "llm_request"})
+	runtime.recordDebugTrace(state, "工具调用完成", map[string]any{"phase": "agent_tool_completed"})
+	runtime.recordDebugTrace(&debugTraceState{event: MessageEvent{Kind: EventKindGroup, GroupID: "10001"}}, "无消息号", map[string]any{})
+	runtime.recordDebugTrace(nil, "无轨迹", map[string]any{})
+
+	want := EventProgress{ProfileID: "bot-a", Platform: "qq", Kind: EventKindGroup, GroupID: "10001", UserID: "20002", MessageID: "30003"}
+	if len(got) != 2 || got[0] != want || got[1] != want {
+		t.Fatalf("progress = %#v, want two of %#v", got, want)
+	}
+}

@@ -398,6 +398,20 @@ func DescribeEventOutcome(outcome string) (decision string, reason string, handl
 }
 
 type EventListener func(EventRecord)
+
+// EventProgress 说明某条入站消息的调试调用链刚追加了一步。它只带定位这条事件的
+// 字段，不带步骤内容：事件页收到后按消息号自己重拉，权限和脱敏都走原来的接口。
+type EventProgress struct {
+	ProfileID string    `json:"profile_id,omitempty"`
+	Platform  string    `json:"platform,omitempty"`
+	Kind      EventKind `json:"kind,omitempty"`
+	GroupID   string    `json:"group_id,omitempty"`
+	UserID    string    `json:"user_id,omitempty"`
+	MessageID string    `json:"message_id"`
+}
+
+// EventProgressListener 接收调用链进度通知，见 SetEventProgressListener。
+type EventProgressListener func(EventProgress)
 type PrivateMessageInterceptor func(context.Context, MessageEvent, string) bool
 
 type Runtime struct {
@@ -587,6 +601,7 @@ type Runtime struct {
 	lastError                 string
 	updatedAt                 time.Time
 	eventListener             EventListener
+	eventProgressListener     EventProgressListener
 	privateMessageInterceptor PrivateMessageInterceptor
 	browserControl            agent.BrowserControlBridge
 	desktopControl            agent.DesktopControlBridge
@@ -777,6 +792,15 @@ func (r *Runtime) SetGroupConfigStore(store GroupConfigStore) {
 func (r *Runtime) SetEventListener(listener EventListener) {
 	r.mu.Lock()
 	r.eventListener = listener
+	r.mu.Unlock()
+}
+
+// SetEventProgressListener 注入调用链进度监听。事件结果（EventListener）要等一轮
+// 处理完才有；模型请求、工具调用这些步骤是中途一条条写进调试记录的，事件页靠这条
+// 通知把正在看的那一条跟上，不用等结果或手动刷新。
+func (r *Runtime) SetEventProgressListener(listener EventProgressListener) {
+	r.mu.Lock()
+	r.eventProgressListener = listener
 	r.mu.Unlock()
 }
 

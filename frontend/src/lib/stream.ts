@@ -5,6 +5,7 @@ import { reactive, readonly } from "vue";
 import { scopeStatsSnapshot } from "../api";
 import { notifyConfigurationChanged, type ConfigurationKind } from "./configuration-sync";
 import type { BotStatus, StatsSnapshot } from "../api";
+import type { LiveEventRef } from "./live-events";
 
 export type BotEvent = NonNullable<BotStatus["recent_events"]>[number];
 
@@ -13,7 +14,6 @@ interface StreamState {
   status: BotStatus | null;
   stats: StatsSnapshot | null;
   events: BotEvent[];
-  lastEventAt: string | null;
 }
 
 const MAX_LIVE_EVENTS = 60;
@@ -22,9 +22,24 @@ const state = reactive<StreamState>({
   connected: false,
   status: null,
   stats: null,
-  events: [],
-  lastEventAt: null
+  events: []
 });
+
+// 事件页要逐条处理推送：只看「最新一条」的话，同一时刻到的几条会互相挤掉。
+const liveEventListeners = new Set<(ref: LiveEventRef) => void>();
+
+function notifyLiveEvent(ref: LiveEventRef): void {
+  for (const listener of liveEventListeners) listener(ref);
+}
+
+/**
+ * 订阅事件的结果（bot_event）和调用链进度（event_progress），返回取消函数。
+ * 两种推送都只拿来定位事件，内容由页面按消息号重新拉。
+ */
+export function onLiveEvent(listener: (ref: LiveEventRef) => void): () => void {
+  liveEventListeners.add(listener);
+  return () => liveEventListeners.delete(listener);
+}
 
 let source: EventSource | null = null;
 let started = false;
@@ -49,7 +64,15 @@ function handleBotEvent(raw: string): void {
   try {
     const event = JSON.parse(raw) as BotEvent;
     state.events = [event, ...state.events].slice(0, MAX_LIVE_EVENTS);
-    state.lastEventAt = event.at;
+    notifyLiveEvent(event);
+  } catch {
+    /* 忽略坏帧 */
+  }
+}
+
+function handleEventProgress(raw: string): void {
+  try {
+    notifyLiveEvent(JSON.parse(raw) as LiveEventRef);
   } catch {
     /* 忽略坏帧 */
   }
@@ -84,6 +107,7 @@ function connect(): void {
   source.addEventListener("status", (event) => handleStatus((event as MessageEvent<string>).data));
   source.addEventListener("stats", (event) => handleStats((event as MessageEvent<string>).data));
   source.addEventListener("bot_event", (event) => handleBotEvent((event as MessageEvent<string>).data));
+  source.addEventListener("event_progress", (event) => handleEventProgress((event as MessageEvent<string>).data));
   source.addEventListener("config_changed", (event) => handleConfigChanged((event as MessageEvent<string>).data));
 }
 
@@ -99,7 +123,6 @@ export function startEventStream(): void {
       state.status = demoStatus;
       state.stats = demoStats;
       state.events = demoEvents;
-      state.lastEventAt = demoEvents[0]?.at ?? null;
     });
     return;
   }

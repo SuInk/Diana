@@ -738,7 +738,8 @@ import { askConfirm } from "../lib/confirm";
 import { compactID, displayMessageText, displayChatIdentity } from "../lib/message-display";
 import { currentView, navigate } from "../router";
 import { recordsActionsHost } from "../lib/records-actions";
-import { stream, type BotEvent } from "../lib/stream";
+import { onLiveEvent, stream } from "../lib/stream";
+import { createLiveEventSync, hasUnlistedNewest, isSameLiveEvent, type LiveEventRef } from "../lib/live-events";
 import { toastError, toastSuccess } from "../lib/toast";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
@@ -794,6 +795,8 @@ const loading = ref(true);
 const loadingMore = ref(false);
 const EVENT_PAGE_SIZE = 30;
 const REACTIVATE_REFRESH_INTERVAL_MS = 30_000;
+// 同一条事件连续推送合并后再重拉；调用链一轮能写几十步。
+const LIVE_EVENT_SYNC_DELAY_MS = 800;
 let lastLoadedAt = 0;
 
 function memoryKindLabel(kind?: string): string {
@@ -1968,29 +1971,21 @@ function showLatestEvents(): void {
   void load(true);
 }
 
-watch(
-  () => stream.lastEventAt,
-  (value) => {
-    if (!value) return;
-    pendingLiveEvents.value = true;
-    const record = stream.events[0];
-    if (record) void refreshSettledEvent(record);
-  }
-);
+// 新事件不自动插进列表（正在读的内容别往下跳），但列表里已有的那条得跟上：处理结果
+// 出来时（bot_event），以及中途调用链每多一步时（event_progress），都按消息号把这一条
+// 原地重拉；展开着的调用链一起重拉。推送本身只拿来定位，token、模型、步骤这些都不在里面。
+// 「有新事件」只在当前筛选下真有列表里没有的事件时才亮，见 checkForNewEvents。
+const liveSync = createLiveEventSync({
+  delayMs: LIVE_EVENT_SYNC_DELAY_MS,
+  isListed: (ref) => events.value.some((event) => isSameLiveEvent(event, ref)),
+  refresh: (ref) => void refreshListedEvent(ref),
+  checkForNew: () => void checkForNewEvents()
+});
+const stopLiveEvents = onLiveEvent((ref) => liveSync.push(ref));
 
-// 新事件不自动插进列表（正在读的内容别往下跳），但列表里已有的那条处理完了得跟上：
-// 等待处理的卡片、展开着的调用链都停在旧样子，以前只能整页刷新。
-// SSE 推的是处理结果那一刻的快照，token、模型这些列表字段它没有，所以按消息号把这一条重拉一遍。
-async function refreshSettledEvent(record: BotEvent): Promise<void> {
-  const messageID = record.message_id?.trim();
+async function refreshListedEvent(ref: LiveEventRef): Promise<void> {
+  const messageID = ref.message_id?.trim();
   if (!messageID) return;
-  const sameEvent = (event: AssistantEventDetail) =>
-    event.message_id === messageID &&
-    event.kind === record.kind &&
-    (event.group_id ?? "") === (record.group_id ?? "") &&
-    (event.user_id ?? "") === (record.user_id ?? "") &&
-    (!record.profile_id || !event.profile_id || event.profile_id === record.profile_id);
-  if (!events.value.some(sameEvent)) return;
   const generation = loadGeneration;
   let fresh: AssistantEventsResponse;
   try {
@@ -2012,6 +2007,24 @@ async function refreshSettledEvent(record: BotEvent): Promise<void> {
   }
 }
 
+// 推送说的事件列表里没有，可能是别的群、别的机器人，或被结果、搜索筛掉的：按当前筛选
+// 取最新一条核实，它不在列表里才亮按钮。
+async function checkForNewEvents(): Promise<void> {
+  if (pendingLiveEvents.value || loading.value) return;
+  const generation = loadGeneration;
+  const group = selectedGroup.value;
+  let latest: AssistantEventsResponse;
+  try {
+    latest = await getAssistantEvents(selectedRange.value, selectedResult.value, 1, 1,
+      group.startsWith(USER_PREFIX) ? "" : group.replace(GROUP_PREFIX, ""), botScope.value,
+      group.startsWith(USER_PREFIX) ? group.slice(USER_PREFIX.length) : "", searchTerm.value, "list");
+  } catch {
+    return;
+  }
+  if (generation !== loadGeneration) return;
+  if (hasUnlistedNewest(latest.events[0], events.value.map((event) => event.id))) pendingLiveEvents.value = true;
+}
+
 onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);
   void load(true);
@@ -2031,6 +2044,8 @@ onDeactivated(() => {
   loadingMore.value = false;
 });
 onBeforeUnmount(() => {
+  stopLiveEvents();
+  liveSync.dispose();
   loadGeneration++;
   eventsAbort?.abort();
   document.removeEventListener("keydown", onImageKeydown);

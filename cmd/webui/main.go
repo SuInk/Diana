@@ -611,6 +611,7 @@ func main() {
 		statsCollector.Observe(event)
 		eventHub.PublishBotEvent(event)
 	})
+	botRuntime.SetEventProgressListener(eventHub.PublishEventProgress)
 	// 没有启用的机器人时 Start 返回 ErrBotDisabled，不算错误。
 	if err := botRuntime.Start(ctx); err != nil && !errors.Is(err, assistant.ErrBotDisabled) {
 		log.Printf("assistant start skipped: %v", err)
