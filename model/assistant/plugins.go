@@ -2038,7 +2038,8 @@ func resolverTextForwardMessages(directParts, parts, imageURLs, videoURLs []stri
 }
 
 var (
-	urlPattern                = regexp.MustCompile(`https?://[^\s<>"'，。！？、]+`)
+	// 方括号不进 URL：markdown 链接 [https://a](https://a) 里的 "](" 会把两个地址拼成一个坏地址。
+	urlPattern                = regexp.MustCompile(`https?://[^\s<>"'，。！？、\[\]]+`)
 	bareXiaohongshuURLPattern = regexp.MustCompile(`(?i)(^|[^a-z0-9._@-])((?:www\.)?(?:xhslink\.(?:com|cn)|xiaohongshu\.com)/[^\s<>"'，。！？、]+)`)
 	bilibiliVideoIDPattern    = regexp.MustCompile(`(?i)\b(BV[a-z0-9]{10})\b`)
 )
@@ -2173,6 +2174,13 @@ func resolverURLDedupeKey(raw string) string {
 	parsed, err := url.Parse(normalizeResolverURL(raw))
 	if err != nil {
 		return raw
+	}
+	// 同一 B 站视频带不同 ?t= 时间戳的链接是同一个视频，只按 BV 号和分 P 去重，
+	// 否则一条视频笔记会把解析条数上限全占满。
+	if host := strings.ToLower(parsed.Hostname()); host == "bilibili.com" || strings.HasSuffix(host, ".bilibili.com") {
+		if bvid := bilibiliBVID(parsed.String()); bvid != "" {
+			return "bilibili:" + bvid + ":p" + strconv.Itoa(bilibiliPageFromURL(parsed.String()))
+		}
 	}
 	parsed.Fragment = ""
 	return parsed.String()
