@@ -32,12 +32,14 @@ import (
 //   - 会话起点：群聊没有「会话开始」，冷启动（没有锚）时从最新往回取保留量作为起点，
 //     并在历史开头写明更早的消息没有载入。
 //   - 时机：Pi 在超限时同步写摘要；这里滑窗和写摘要分开，有人等回复时只滑窗。
-//   - 保留量：不照 Pi 只留 2 万，保留「阈值减去非历史部分」的一半，原文占大头。
 //   - 小窗口：Pi 的 16384 是按大窗口定的。窗口小时预留按 1/4 缩，阈值不超过发送层的
 //     输入预算，否则滑完照样超限。
 const (
 	// compactionReserveTokens 对应 Pi 的 reserveTokens（默认 16384）。
 	compactionReserveTokens int64 = 16384
+	// compactionKeepRecentTokens 对应 Pi 的 keepRecentTokens（默认 20000），见
+	// compactionKeepRecent。
+	compactionKeepRecentTokens int64 = 20000
 	// compactionReserveDivisor 让小窗口的预留按比例缩：窗口的 1/4，最多 16384（64K 及
 	// 以上的窗口就是 Pi 的原值）。
 	compactionReserveDivisor int64 = 4
@@ -90,11 +92,15 @@ func compactionSummaryMaxTokens(window compactionWindow) int64 {
 	return max(1, limit)
 }
 
-// compactionKeepRecent 是压缩时原样保留的近期历史：「阈值减去非历史部分（系统提示、
-// 记忆、当前消息、工具定义）」的一半。不照 Pi 只留 2 万：聊天里最重要的是原文，压完
-// 原文仍占请求的大头，另一半留给之后的追加。小到 0 时 compactionCut 仍会保留最新的一轮。
+// compactionKeepRecent 是滑窗时原样保留的近期历史：照 Pi 的 keepRecentTokens 留 2 万，
+// 小窗口不超过「阈值减去非历史部分」的一半。小到 0 时 compactionCut 仍会保留最新的一轮。
+//
+// 以前大窗口也留一半，想让压完后原文仍占大头。可每次滑窗之后整段历史都得重新发，留
+// 得越多、离阈值越近，滑得就越勤：11-16 生产 128K 窗口一轮约追加 3 千 token，留一半
+// 时约 8 轮滑一次，滑窗重发的量占第一步请求的一成以上；留 2 万约 15 轮一次，减半。
+// 雨夹雪（Pi）也是留约 2 万。
 func compactionKeepRecent(window compactionWindow, nonHistory int64) int64 {
-	return max(0, (compactionThreshold(window)-nonHistory)/2)
+	return max(0, min(compactionKeepRecentTokens, (compactionThreshold(window)-nonHistory)/2))
 }
 
 // historyCandidateLimit 返回要从存储读多少条历史：按最小体积换算，读满阈值那么多条，

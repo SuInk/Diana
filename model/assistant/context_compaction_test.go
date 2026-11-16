@@ -448,7 +448,7 @@ func TestCompactionSizesShrinkWithSmallWindows(t *testing.T) {
 			t.Fatalf("window %d threshold exceeds the input budget %d", item.window, limit)
 		}
 	}
-	if got := compactionKeepRecent(compactionWindow{Tokens: 128000}, 30000); got != (111616-30000)/2 {
+	if got := compactionKeepRecent(compactionWindow{Tokens: 128000}, 30000); got != compactionKeepRecentTokens {
 		t.Fatalf("large window keep = %d", got)
 	}
 	if got := compactionKeepRecent(compactionWindow{Tokens: 32000}, 15000); got != (24000-15000)/2 {

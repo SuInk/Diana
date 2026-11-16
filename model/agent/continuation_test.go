@@ -124,11 +124,7 @@ func TestRunnerContinuationLockedHeadIgnoresKeyMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fresh, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("先说一句")})
-	if err != nil || len(fresh.Definitions) == 0 {
-		t.Fatalf("fresh run must report its head definitions: %v", err)
-	}
-	locked := append(append([]llm.ToolDefinition(nil), fresh.Definitions...), llm.ToolDefinition{Name: "locked_marker", Parameters: map[string]any{"type": "object"}})
+	locked := []llm.ToolDefinition{{Name: "locked_marker", Parameters: map[string]any{"type": "object"}}}
 	resp, err := runner.Run(context.Background(), Request{
 		Messages: continuationTestMessages("问题"),
 		Continuation: &Continuation{

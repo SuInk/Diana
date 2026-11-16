@@ -46,17 +46,11 @@ import (
 // 靠人工给段归类分不准，所以按段和前缀比：相同不发，不同只给当轮。前缀里每个标题
 // 只有重新组装那一轮的那一版，不会累积。
 //
-// 请求仍逐轮变长，超过这一轮完整组装的两倍或单次请求上限就重新开一份；头部（人设、
-// 配置）或 Runner 的系统提示、固定说明、工具定义变了也重开。记录落盘，进程重启后
+// 请求逐轮变长，超过单次请求上限就重新开一份。头部按哈希锁定，变了不重开（见
+// appendContextContinuation）。以前还有一道「超过这一轮完整组装的两倍」：完整组装那时
+// 有自己的预算，比续接小得多；现在完整组装就是锚之后的全部历史，和续接一样大，这道
+// 线只会在滑窗之间多逼出一次白白的重新组装。记录落盘，进程重启后
 // 接着续（见 append_context_persist.go）。
-
-// appendContextGrowthLimit 是续接请求相对这一轮完整组装的长度上限倍数。
-//
-// 「完整组装」要算上 Runner 自己加的系统提示、已加载工具契约和发言者工具段（记在
-// overhead 里）。以前只拿助手这一侧的消息比，而续接前缀是整份请求：11-02 生产里
-// 这两块各占一半，前缀续一两轮就超过「两倍」，46% 的主回复因 too_long 重新组装，
-// 首步命中 swe-2 从续接时的 53% 掉到 19%、terra 从 74% 掉到 34%。
-const appendContextGrowthLimit = 2
 
 type appendContextLog struct {
 	prefix  []llm.Message
@@ -547,11 +541,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder, TurnOnly: true}, appended[len(appended)-1])
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)
 	decision.overhead = log.overhead
-	if decision.fullTokens > 0 && decision.prefixTokens+decision.appendTokens > appendContextGrowthLimit*(decision.fullTokens+log.overhead) {
-		decision.reason = "too_long"
-		return nil, decision
-	}
-	// 上限必须管住续接。以前续接只看上面那道两倍，配置的上限只在完整组装时参与预算
+	// 上限必须管住续接。以前续接只看「完整组装的两倍」那道线，配置的上限只在完整组装时参与预算
 	// 分配：11-12 生产 354 轮续接，同一轮完整组装中位 3.1 万 token，实际发出中位
 	// 6.8 万、最大 13 万。超了交给发送层去裁会从中间丢消息，前缀照样断；在这里直接
 	// 重新组装，得到的是一份按预算排好的请求。

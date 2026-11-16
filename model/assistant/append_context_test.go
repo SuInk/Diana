@@ -179,7 +179,7 @@ func TestAppendContextSkipsPreviousCurrentLineByMessageID(t *testing.T) {
 	}
 }
 
-func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
+func TestAppendContextRestartsWhenHeadChangesOrPassesLimit(t *testing.T) {
 	first := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 在吗")
 	log := appendTestLog(t, first, "在的")
 	changed := appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 还在吗")
@@ -189,8 +189,12 @@ func TestAppendContextRestartsWhenHeadChangesOrGrowsTooLong(t *testing.T) {
 	}
 	long := appendTestTurn([]string{"[10:00:00] 甲: 早", "[10:05:00] 甲: " + strings.Repeat("很长的一段话。", 400)}, "", "甲: 还在吗")
 	log.prefix = append(log.prefix, llm.Message{Role: llm.RoleUser, Content: strings.Repeat("旧内容。", 3000)})
-	if continuation, decision := appendContextContinuation(log, long, 0); continuation != nil || decision.reason != "too_long" {
-		t.Fatal("a prefix past the growth limit must restart")
+	// 只看单次请求上限：续接比完整组装长多少都不重开，超过上限才重开。
+	if continuation, decision := appendContextContinuation(log, long, 0); continuation == nil {
+		t.Fatalf("growth alone must not restart, reason = %q", decision.reason)
+	}
+	if continuation, decision := appendContextContinuation(log, long, 3000); continuation != nil || decision.reason != "context_limit" {
+		t.Fatal("a prefix past the context limit must restart")
 	}
 }
 

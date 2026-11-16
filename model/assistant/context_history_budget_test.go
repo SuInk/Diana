@@ -273,7 +273,7 @@ func TestContextBudgetBreakdownReportsCompactionSettings(t *testing.T) {
 	if breakdown.GroupID != "12345" || breakdown.ContextWindow != 100000 {
 		t.Fatalf("breakdown = %+v", breakdown)
 	}
-	if breakdown.CompactionThreshold != 100000-compactionReserveTokens || breakdown.ReserveTokens != compactionReserveTokens || breakdown.KeepRecentTokens != (100000-compactionReserveTokens)/2 || breakdown.HasSummary {
+	if breakdown.CompactionThreshold != 100000-compactionReserveTokens || breakdown.ReserveTokens != compactionReserveTokens || breakdown.KeepRecentTokens != compactionKeepRecentTokens || breakdown.HasSummary {
 		t.Fatalf("breakdown = %+v", breakdown)
 	}
 }
