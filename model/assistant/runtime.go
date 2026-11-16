@@ -429,8 +429,6 @@ type Runtime struct {
 	promptCacheProbe promptCacheProbeStore
 	// appendContexts 是只追加模式下每个会话上一轮实际发出的请求，见 append_context.go。
 	appendContexts appendContextStore
-	// replyKeepalives 空闲时给主回复的前缀缓存保活，见 reply_cache_keepalive.go。
-	replyKeepalives replyKeepalives
 	// imageEditSources 记录每个会话最近使用的原图，仅用于诊断；不能作为新请求的
 	// 隐式来源。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory

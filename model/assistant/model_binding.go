@@ -18,9 +18,6 @@ import (
 const (
 	PurposeMediaParse = "media_parse"
 	PurposeReply      = "reply"
-	// PurposeReplyKeepalive 是主回复空闲时的缓存保活，见 reply_cache_keepalive.go。它不
-	// 选模型，原样重发上一次主回复请求，用途只用来单独记账。
-	PurposeReplyKeepalive = "reply_keepalive"
 	// PurposeReplyTone 只负责把已经完整的草稿整理成最终口吻，因此可以单独绑定
 	// 一个更快、更便宜的文字模型。
 	PurposeReplyTone             = "reply_tone"
@@ -96,7 +93,6 @@ var llmPurposeGroup = map[string]string{
 	// 上下文压缩照 Pi 用会话模型自己写摘要：它接得住整段窗口，判断模型窗口小、
 	// 写不了长摘要。见 context_compaction.go。
 	PurposeContextSummary: llm.GroupChat,
-	PurposeReplyKeepalive: llm.GroupChat,
 
 	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
 	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。

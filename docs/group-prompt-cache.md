@@ -7,7 +7,7 @@
 核对日期：2026-09-19。参考的是项目自身文档、源码和官方 API 文档。
 
 - [Manus：Context Engineering for AI Agents](https://manus.im/blog/Context-Engineering-for-AI-Agents-Lessons-from-Building-Manus)：保持历史与观察只追加、序列化确定；动态增删工具会破坏缓存，并让历史工具调用失去定义。本项目保留按需加载以控制初始工具体积，加载后则在同群后续轮次保留。
-- [Aider：Prompt caching](https://aider.chat/docs/usage/caching.html)：将系统提示词、只读文件、仓库映射等组织成可缓存材料。这里对应稳定系统头部与已渲染群历史。保活也照它的 `--cache-keepalive-pings` 做了，见下面「空闲保活」。
+- [Aider：Prompt caching](https://aider.chat/docs/usage/caching.html)：将系统提示词、只读文件、仓库映射等组织成可缓存材料。这里对应稳定系统头部与已渲染群历史；没有增加收费的定时保活请求。
 - [Sub2API 会话调度源码](https://github.com/Wei-Shaw/sub2api/blob/main/backend/internal/service/openai_gateway_scheduling.go)：显式会话信号先查请求头（`session-id`、`session_id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`），再回落到请求体的 `prompt_cache_key`，无显式信号时才按内容推导。工具和首条消息变化可能影响内容推导。本项目补充稳定、匿名的路由键，并按同一摘要写入请求头。
 - [OpenAI：Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)：缓存需要匹配实际渲染前缀，工具定义和设置也参与匹配；路由键不能代替稳定内容，更不能保证缓存永久驻留。
 - [OpenCode V2：Compaction](https://opencode.ai/v2/docs/compaction)：在完整请求接近窗口时生成可校验检查点，保留近期原文；固定系统提示和工具定义本身超限时，压缩历史无济于事。
@@ -78,14 +78,6 @@ Yuki 的短期状态还采用极小预算、TTL 和版本校验，但其全局 `
   - 10-27 生产三个群各 12 轮模拟，每轮增长从约 1.05 万字降到约 5000 字，剩下主要是新记忆条目（约 1550）、新群消息（约 1070）和新跨群条目（约 800）。
   - 只追加对话、尾部一律不发也试过：每轮只增长约 1000 字，但 15 轮回放有 2 轮出错——缺了本轮路由说明，被 @ 之后的下一轮误判成「没人叫我」而沉默；少了按当前消息检索的记忆，也少了一次查证。所以状态段变了要补，记忆和跨群按条补。
 - 头部按哈希锁定：一份记录重新组装那一轮的人设与头部 system、Runner 的系统提示和固定说明、工具定义（`agent.Continuation.Definitions`，落盘时连 `Freeform` 一起存）就是这个会话的头部。之后每轮原样复用，本轮渲染出的头部哪怕变了也不发，只在续接决定里记 `head_locked`（本轮头部的哈希），用来查哪些内容不该放在头部。头部只在本来就要重新组装的时候换新：滑窗、空闲补摘要、续接超过这一轮完整组装的两倍或单次上限、上一轮失败、没有记录。所以主人改了人设或工具配置，要到下一次重新组装才生效。没存工具定义的老记录仍按指纹核对，变了就重组。定时查询、事件触发这些后台入口不参与续接。
-
-### 空闲保活
-
-swe-2 这类经 sub2api 的模型缓存 5 分钟就过期。2026-11-16 生产 swe-2 主回复里，43% 的第一步离同群上一次调用超过 5 分钟，整份请求全部未命中。主回复成功后，按会话记下最后一次实际发出的请求（隐私代理换过别名、带着同一个 `PromptCacheKey`），此后每 270 秒原样重发一次，输出上限 16，直到最后一次真实主回复后 30 分钟（`reply_cache_keepalive.go`）。新的主回复会重新计时，换成新的请求。记账用途是 `reply_keepalive`，单独统计。
-
-- 实测（11-17，devin/swe-2，同一份 6.75 万 token 的生产请求）：4 分半时保活一次，9 分钟后续接命中 100%；不保活的对照组 9 分钟后命中 0%；1 分钟内续接命中 100%。
-- 窗口取 30 分钟：11-16 隔 5 分钟以上才来的 115 轮里，80 轮在 30 分钟内，30–60 分钟只再多 13 轮。
-- 账：一次保活约读 7 万命中 token，按 DeepSeek Flash 价（命中每百万 0.006 美元、未命中 0.30 美元）约 0.0004 美元；一次过期整份重付约 0.021 美元。DeepSeek 自己的硬盘缓存不会 5 分钟过期，保活对它多余但很便宜。
 
 为什么需要它：经 sub2api 转发的 gpt（ChatGPT Codex 上游）只在「instructions 加工具定义末尾」和「上一次完整请求末尾」两个位置复用缓存。2026-10-27 用一条 4.7 万 token 的生产请求实测：完全相同或纯末尾追加命中 46848，改动 input 里任何一处（第 0 条、80%、95% 位置）都只剩 18304。逐轮重新组装的请求从来不是上一条的纯追加，生产上同一会话连续请求每条都恰好命中 18432，gpt 主回复命中只有三到四成。
 
