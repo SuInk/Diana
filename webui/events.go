@@ -84,6 +84,11 @@ func (h *EventHub) PublishBotEvent(event assistant.EventRecord) {
 	h.Publish("bot_event", event)
 }
 
+// PublishEventProgress 广播一条事件调用链进度：某条消息的处理又走了一步。
+func (h *EventHub) PublishEventProgress(progress assistant.EventProgress) {
+	h.Publish("event_progress", progress)
+}
+
 // PublishConfigChanged 广播一条配置变更通知。
 //
 // kind 对应前端的配置分区（bot / llm），只说「哪一块变了」，不带配置内容：

@@ -175,6 +175,30 @@ func (r *Runtime) writeDebugTrace(state *debugTraceState, sequence int64, messag
 		Target:   strings.TrimSpace(state.event.MessageID),
 		Metadata: metadata,
 	})
+	r.notifyEventProgress(state.event)
+}
+
+// notifyEventProgress 在调用链写入一步后通知事件页。没有消息号的事件进不了事件列表，
+// 不播。
+func (r *Runtime) notifyEventProgress(event MessageEvent) {
+	messageID := strings.TrimSpace(event.MessageID)
+	if messageID == "" {
+		return
+	}
+	r.mu.RLock()
+	listener := r.eventProgressListener
+	r.mu.RUnlock()
+	if listener == nil {
+		return
+	}
+	listener(EventProgress{
+		ProfileID: event.ProfileID,
+		Platform:  event.Platform,
+		Kind:      event.Kind,
+		GroupID:   event.GroupID,
+		UserID:    event.UserID,
+		MessageID: messageID,
+	})
 }
 
 func sanitizeDebugGenerateRequest(req llm.GenerateRequest) llm.GenerateRequest {
