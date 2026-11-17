@@ -221,6 +221,9 @@ type FinalizeField struct {
 	Description string
 	// Enum 非空时字段只能取这几个值，由 provider 在解码层约束。
 	Enum []string
+	// Delivers 表示调用方会把这个字段单独发出去（例如表情包）：填了它、正文留空的
+	// send 是「只发这个」，不是忘了写正文，不再退回去要模型补正文或表态。
+	Delivers bool
 }
 
 type Step struct {

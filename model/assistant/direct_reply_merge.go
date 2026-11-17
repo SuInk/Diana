@@ -17,6 +17,11 @@ import (
 
 const directReplyMergeRetention = 2 * time.Minute
 
+// directReplyPendingWait 是后到那条等前一条表态的上限。前一条登记回复之后、开放合并
+// 之前还要做识图、语义指代解析、插件这几步，线上通常几秒；等不到就各回各的，
+// 不为了少回一条把后到那条一直挂着。
+const directReplyPendingWait = 15 * time.Second
+
 // Only semantically related messages can merge; confidence is a secondary gate.
 const defaultReplyMergeConfidencePercent = 75
 
@@ -33,16 +38,28 @@ func normalizeReplyMergeConfidencePercent(value int) int {
 var errDirectReplySupplemented = errors.New("diana: direct reply received a same-turn supplement")
 
 type activeDirectReply struct {
-	token       uint64
-	turnID      string
-	root        MessageEvent
-	startedAt   time.Time
-	generation  uint64
-	accepting   bool
-	opened      bool
+	token      uint64
+	turnID     string
+	root       MessageEvent
+	startedAt  time.Time
+	generation uint64
+	accepting  bool
+	opened     bool
+	// undecided 在「已登记、还没决定开不开放」期间不为空，表态（开放、封口或结束）时关闭，
+	// 同一个人后到的那条在回复入口等它，见 awaitUndecidedDirectReply。
+	undecided   chan struct{}
 	supplements []proactiveReplyCandidate
 	// interjections 不为空时 Agent 正在跑，补充直接接进这一轮，见 direct_reply_interjection.go。
 	interjections *directReplyInterjections
+}
+
+// decideLocked 记下这一轮能不能再接补充，并叫醒等它表态的后到消息；调用方持有 replyInterruptMu。
+func (active *activeDirectReply) decideLocked(accepting bool) {
+	active.accepting, active.opened = accepting, true
+	if active.undecided != nil {
+		close(active.undecided)
+		active.undecided = nil
+	}
 }
 
 type directReplyRunContextKey struct{}
@@ -101,12 +118,15 @@ func (r *Runtime) beginDirectReply(ctx context.Context, event MessageEvent, read
 	}
 	accepting := len(ready) == 0 || ready[0]
 	active := &activeDirectReply{token: token, turnID: turnID, root: event, startedAt: startedAt, accepting: accepting, opened: accepting}
+	if !accepting {
+		active.undecided = make(chan struct{})
+	}
 	r.activeDirectReplies[key] = active
 	r.replyInterruptMu.Unlock()
 	ctx = context.WithValue(ctx, directReplyRunContextKey{}, directReplyRunContext{key: key, token: token, active: active})
 	return ctx, func() {
 		r.replyInterruptMu.Lock()
-		active.accepting = false
+		active.decideLocked(false)
 		if active := r.activeDirectReplies[key]; active != nil && active.token == token {
 			delete(r.activeDirectReplies, key)
 		}
@@ -123,7 +143,7 @@ func (r *Runtime) openDirectReply(ctx context.Context) {
 	}
 	r.replyInterruptMu.Lock()
 	if active := run.active; active != nil && active.token == run.token && !active.opened {
-		active.accepting, active.opened = true, true
+		active.decideLocked(true)
 	}
 	r.replyInterruptMu.Unlock()
 }
@@ -173,7 +193,7 @@ func (r *Runtime) directReplyHasNewSupplements(ctx context.Context) bool {
 	}
 	// This is the final send gate. Seal atomically with the generation check so
 	// classification cannot accept a supplement after this answer is committed.
-	active.accepting, active.opened = false, true
+	active.decideLocked(false)
 	return false
 }
 
@@ -212,9 +232,43 @@ func (r *Runtime) sealDirectReply(ctx context.Context) {
 	}
 	r.replyInterruptMu.Lock()
 	if active := run.active; active != nil && active.token == run.token {
-		active.accepting, active.opened = false, true
+		active.decideLocked(false)
 	}
 	r.replyInterruptMu.Unlock()
+}
+
+// awaitUndecidedDirectReply 处理同一个人连发时的一段空窗：更早那条已经进了回复入口、
+// 登记了回复，但还在识图、语义指代解析、插件这几步里，没决定走不走可重生成的对话路径，
+// 所以既不能被接走（已经在回复），也还不接补充。后到这条这时进回复入口，以前直接
+// 自己开一轮，两条各回一遍（11-16 私聊连发两张表情包，各回了一句意思一样的话）。
+//
+// 现在后到这条在这里有上限地等它表态：开放了就照常判一次合并，封口、结束或者超时
+// 就各回各的。只等同一个人、消息更早的那一轮，不会两条互相等。
+func (r *Runtime) awaitUndecidedDirectReply(ctx context.Context, event MessageEvent) {
+	key := directReplyMergeKey(event)
+	messageID := strings.TrimSpace(event.MessageID)
+	if key == "" || messageID == "" {
+		return
+	}
+	r.replyInterruptMu.Lock()
+	var undecided chan struct{}
+	if active := r.activeDirectReplies[key]; active != nil && active.undecided != nil && strings.TrimSpace(active.root.MessageID) != messageID && time.Since(active.startedAt) <= directReplyMergeRetention {
+		root, turn := r.senderTurnLocked(key, strings.TrimSpace(active.root.MessageID)), r.senderTurnLocked(key, messageID)
+		if root != nil && turn != nil && burstEarlier(root, active.root, turn, event) {
+			undecided = active.undecided
+		}
+	}
+	r.replyInterruptMu.Unlock()
+	if undecided == nil {
+		return
+	}
+	timer := time.NewTimer(directReplyPendingWait)
+	defer timer.Stop()
+	select {
+	case <-undecided:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 func (r *Runtime) mergeIntoActiveDirectReply(ctx context.Context, event MessageEvent, text string) (string, bool) {

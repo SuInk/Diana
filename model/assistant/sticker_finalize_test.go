@@ -24,9 +24,11 @@ type stickerFinalizeLLMProvider struct {
 	personaVerdict string
 	personaCheck   func(context.Context) error
 	silent         bool
-	order          string
-	sawField       bool
-	sawOrder       bool
+	// emptyText 是只回表情包的另一种写法：text 留空、不填 silent。
+	emptyText bool
+	order     string
+	sawField  bool
+	sawOrder  bool
 }
 
 func (p *stickerFinalizeLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
@@ -58,6 +60,9 @@ func (p *stickerFinalizeLLMProvider) Generate(ctx context.Context, req llm.Gener
 		arguments := map[string]any{"content": response.Text}
 		if p.silent {
 			arguments = map[string]any{"content": "", "silent": true, "silent_reason": "一张图就够了"}
+		}
+		if p.emptyText {
+			arguments = map[string]any{"text": ""}
 		}
 		if p.order != "" {
 			arguments[stickerOrderFieldName] = p.order
@@ -282,6 +287,43 @@ func TestReplyExplicitSilentFinalizeNeverSendsSticker(t *testing.T) {
 				t.Fatalf("explicit silent must not send: order=%s keywords=%s sent=%#v", configOrder, keywords, sent)
 			}
 		}
+	}
+}
+
+// 只回一张表情包（text 留空、填了 sticker）不是漏写正文：一次就把表情包发出去，
+// 不退回去要模型补文字；私聊也不因此记成「已经道过别」。线上 11-16 对方甩来一张
+// 贴纸，模型想回一张，被当成空 send 打回，改成了一句话。
+func TestReplyStickerOnlyFinalizeSendsStickerWithoutRepair(t *testing.T) {
+	withFastSendTiming(t)
+	path := filepath.Join(t.TempDir(), "hug.gif")
+	body := []byte("hug-sticker")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	channel := &recordingChannel{}
+	provider := &stickerFinalizeLLMProvider{capturingLLMProvider: capturingLLMProvider{reply: "贴贴"}, sticker: "害羞 贴贴", emptyText: true, personaVerdict: "会"}
+	rt := NewRuntime(BotConfig{AgentEnabled: true}.WithDefaults(), channel, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", MessageID: "hug", RawMessage: "[动画表情]"}
+	rt.SetMessageHistoryStore(&stickerHistoryStore{events: map[string][]MessageEvent{sessionKey(event): {{
+		Kind: EventKindPrivate, UserID: "10001", MessageID: "s", Time: 1,
+		Segments: []MessageSegment{{Type: "image", Data: map[string]string{"summary": "[贴贴]", "cached_file": path, imageContentSHA256Key: imageBytesSHA256(body)}}},
+	}}}})
+	_, err := rt.replyTo(context.Background(), event, event.RawMessage)
+	var silent *modelSilentFinishError
+	if !errors.As(err, &silent) {
+		t.Fatalf("err = %v, want silent finish with a sticker", err)
+	}
+	if strings.Contains(requestText(provider.request), "send 的 text 是空的") {
+		t.Fatal("sticker-only send was sent back as an empty send")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sentStickerPath(sent[0]) != path {
+		t.Fatalf("sent = %#v", sent)
+	}
+	rt.privateClosingMu.Lock()
+	state := rt.privateClosingBySession[privateClosingKey(event)]
+	rt.privateClosingMu.Unlock()
+	if state != nil && state.count > 0 {
+		t.Fatalf("sticker reply counted as closing silence: %#v", state)
 	}
 }
 
