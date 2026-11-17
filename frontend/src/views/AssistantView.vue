@@ -914,7 +914,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">Rich Messages 富消息</span>
                 </label>
-                <span class="hint">默认关闭。开启后标题、列表和表格按 Telegram 原生格式显示。部分客户端会显示「不支持」，先确认自己的客户端能正常显示再开。</span>
+                <span class="hint">默认关闭。开启后只有带标题、列表或表格的回复才用 Telegram 原生富消息，普通聊天照常发。部分客户端会显示「不支持」，先确认自己的客户端能正常显示再开。</span>
               </div>
               <template v-if="currentPlatform === 'qq-official'">
                 <div class="field">

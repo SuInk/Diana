@@ -266,3 +266,35 @@ func TestTelegramRichBlocksFallBackOnUnparsedDelimiters(t *testing.T) {
 		}
 	}
 }
+
+// 开关打开只表示允许：entities 能原样表达的回复照发 sendMessage，
+// 只有标题、列表、表格（含引用里嵌套的）才换 sendRichMessage。
+func TestTelegramRichOnlyWhenStructureNeedsIt(t *testing.T) {
+	for _, tc := range []struct{ text, method string }{
+		{"哈哈好呀", "sendMessage"},
+		{"**重点**是 `go test`，见 [文档](https://example.com)", "sendMessage"},
+		{"第一段\n\n第二段", "sendMessage"},
+		{"```go\nfmt.Println(1)\n```", "sendMessage"},
+		{"> 引用一句\n\n回一句", "sendMessage"},
+		{"## 标题\n\n正文", "sendRichMessage"},
+		{"- 一\n- 二", "sendRichMessage"},
+		{"| a | b |\n| - | - |\n| 1 | 2 |", "sendRichMessage"},
+		{"> - 引用里的列表", "sendRichMessage"},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			var got []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = append(got, r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:])
+				_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"message_id": 42}})
+			}))
+			defer server.Close()
+			channel := NewTelegramChannel(TelegramConfig{BotToken: "test", APIBaseURL: server.URL, RichMessages: true})
+			if err := channel.Send(context.Background(), OutgoingMessage{GroupID: "-123", Text: tc.text}); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, []string{tc.method}) {
+				t.Fatalf("calls=%v want %s", got, tc.method)
+			}
+		})
+	}
+}

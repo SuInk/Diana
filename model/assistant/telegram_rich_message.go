@@ -34,7 +34,7 @@ func (c *TelegramChannel) sendTextWithRichFallback(ctx context.Context, msg Outg
 	enabled := c.cfg.RichMessages
 	c.mu.RUnlock()
 	if enabled && !msg.LiteralText {
-		if blocks, ok := telegramRichBlocks(msg.Text); ok {
+		if blocks, ok := telegramRichBlocks(msg.Text); ok && telegramRichNeeded(blocks) {
 			params := map[string]any{
 				"chat_id":      plain["chat_id"],
 				"rich_message": map[string]any{"blocks": blocks, "skip_entity_detection": true},
@@ -51,6 +51,25 @@ func (c *TelegramChannel) sendTextWithRichFallback(ctx context.Context, msg Outg
 		}
 	}
 	return c.CallAPI(ctx, "sendMessage", plain)
+}
+
+// 开关只表示允许用富消息。段落里的加粗、链接、行内代码，以及代码块、引用，
+// entities 路径都能原样表达；只有标题、列表、表格在那边会降成加粗行、
+// 「•」文本和等宽块，这时才值得换 sendRichMessage。普通闲聊照发 sendMessage，
+// 不让不支持富消息的客户端为一句话显示「不支持的消息」。
+func telegramRichNeeded(blocks []any) bool {
+	for _, block := range blocks {
+		entry, _ := block.(map[string]any)
+		switch entry["type"] {
+		case "heading", "list", "table":
+			return true
+		case "blockquote":
+			if nested, _ := entry["blocks"].([]any); telegramRichNeeded(nested) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Typed blocks avoid Telegram's Markdown-specific math and escaping rules.
