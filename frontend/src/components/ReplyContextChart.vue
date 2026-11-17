@@ -26,48 +26,32 @@
            小块就是一条细线。右边清单按请求顺序列出每块的数字，两种占比都写。 -->
       <div class="rc-chart">
         <figure class="rc-col">
-          <div class="rc-column" :style="{height: `${columnHeight}px`}" role="img" :aria-label="`实际：窗口 ${windowSize} token，请求 ${breakdown.total_tokens}`">
+          <div class="rc-column" :style="{height: `${columnHeight}px`}" role="img" :aria-label="`上下文窗口 ${windowSize} token`">
             <span v-for="segment in breakdown.segments" :key="segment.kind + segment.name" class="rc-fill" :class="segment.kind"
-              :style="{height: `${(columnHeight * segment.tokens) / windowSize}px`}" :title="`${segment.name}：${formatNumber(segment.tokens)} token`"></span>
+              :style="{height: `${(columnHeight * fullTokensOf(segment)) / windowSize}px`}" :title="`${segment.name}：${formatNumber(fullTokensOf(segment))} token`"></span>
           </div>
-          <figcaption>实际</figcaption>
-        </figure>
-        <figure class="rc-col">
-          <div class="rc-column" :style="{height: `${columnHeight}px`}" role="img" :aria-label="`历史涨满时（推算）：请求 ${fullTotal} token`">
-            <span v-for="segment in breakdown.segments" :key="segment.kind + segment.name" class="rc-fill" :class="segment.kind"
-              :style="{height: `${(columnHeight * fullTokensOf(segment)) / windowSize}px`}" :title="`${segment.name}：${formatNumber(fullTokensOf(segment))} token（推算）`"></span>
-          </div>
-          <figcaption>历史涨满时<br />（推算）</figcaption>
+          <figcaption>上下文窗口</figcaption>
         </figure>
         <div class="rc-list-wrap"><table class="rc-list">
-          <thead>
-            <tr><th scope="col" rowspan="2">块（按请求顺序）</th><th scope="colgroup" colspan="4">实际</th><th scope="colgroup" colspan="2">历史涨满时（推算）</th></tr>
-            <tr><th scope="col">token</th><th scope="col">占请求</th><th scope="col">占窗口</th><th scope="col">本轮新发</th><th scope="col">token</th><th scope="col">占请求</th></tr>
-          </thead>
+          <thead><tr><th scope="col">块（按请求顺序）</th><th scope="col">token</th><th scope="col">占窗口</th><th scope="col">本轮新发</th></tr></thead>
           <tbody>
             <tr v-for="segment in breakdown.segments" :key="segment.kind + segment.name">
-              <th scope="row"><i class="rc-swatch" :class="segment.kind"></i>{{ segment.name }}</th>
-              <td class="mono">{{ formatNumber(segment.tokens) }}</td>
-              <td class="mono">{{ percentOf(segment.tokens, breakdown.total_tokens) }}</td>
-              <td class="mono">{{ percentOf(segment.tokens, windowSize) }}</td>
-              <td class="mono">{{ formatNumber(segment.new_tokens) }}</td>
+              <th scope="row"><i class="rc-swatch" :class="segment.kind"></i>{{ segment.name }}<small v-if="segment.kind === 'history'">涨到压缩阈值为止；上一轮实际 {{ formatNumber(segment.tokens) }}</small></th>
               <td class="mono">{{ formatNumber(fullTokensOf(segment)) }}</td>
-              <td class="mono">{{ percentOf(fullTokensOf(segment), fullTotal) }}</td>
+              <td class="mono">{{ percentOf(fullTokensOf(segment), windowSize) }}</td>
+              <td class="mono">{{ formatNumber(segment.new_tokens) }}</td>
             </tr>
             <tr class="rc-free-row">
-              <th scope="row"><i class="rc-swatch free"></i>窗口剩余</th>
-              <td class="mono">{{ formatNumber(Math.max(0, windowSize - breakdown.total_tokens)) }}</td>
-              <td class="mono">—</td>
-              <td class="mono">{{ percentOf(Math.max(0, windowSize - breakdown.total_tokens), windowSize) }}</td>
-              <td class="mono">—</td>
+              <th scope="row"><i class="rc-swatch free"></i>压缩预留<small>请求超过压缩阈值就压缩，这一截留给回复和工具结果</small></th>
               <td class="mono">{{ formatNumber(Math.max(0, windowSize - fullTotal)) }}</td>
+              <td class="mono">{{ percentOf(Math.max(0, windowSize - fullTotal), windowSize) }}</td>
               <td class="mono">—</td>
             </tr>
           </tbody>
         </table></div>
       </div>
       <p class="hint">
-        两根竖条整列都是模型的上下文窗口，每块高度严格按占窗口的比例画，不设保底。「历史涨满时」是推算：其余各块按实际大小，聊天历史涨到压缩阈值为止（再多就压缩）。「本轮新发」是和上一轮实际请求比，从头开始逐条相同的算沿用，其余算新发；沿用的部分才可能命中缓存。各块是本地估算，和供应商实计的差是分词器不同。<template v-if="limit">单次请求上限 {{ formatNumber(limit) }} token，超过就重新组装一次。</template>
+        竖条整列是模型的上下文窗口，每块高度严格按占窗口的比例画，不设保底。空出来的地方都是给聊天历史涨的，所以聊天历史画到压缩阈值（再多就压缩），其余各块按上一轮实际大小。「本轮新发」是和上一轮实际请求比，从头开始逐条相同的算沿用，其余算新发；沿用的部分才可能命中缓存。各块是本地估算，和供应商实计的差是分词器不同。<template v-if="limit">单次请求上限 {{ formatNumber(limit) }} token，超过就重新组装一次。</template>
         平均了最近 24 小时 {{ breakdown.sessions }} 个会话<template v-if="breakdown.saved_at">，最新一份记于 {{ formatTime(breakdown.saved_at) }}</template>。
       </p>
     </template>
@@ -166,6 +150,7 @@ defineExpose({ reload: load });
 .rc-list th,.rc-list td{padding:5px 6px;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent);text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .rc-list thead th{color:var(--muted);font-weight:500;font-size:12px}
 .rc-list th[scope=row],.rc-list thead th:first-child{text-align:left;white-space:normal;font-weight:400;color:var(--text)}
+.rc-list th small{display:block;margin-left:16px;color:var(--muted);font-size:11.5px}
 .rc-list .rc-swatch{margin-right:6px;vertical-align:-1px}
 .rc-swatch.free{background:transparent;border-style:dashed;border-color:var(--muted)}
 .rc-free-row th,.rc-free-row td{color:var(--muted)}
