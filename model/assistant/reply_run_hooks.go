@@ -67,8 +67,10 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 				// 一度改成「请求里已有一模一样的就不加」，因为那时它留在前缀里每轮攒约
 				// 300 字；现在不进前缀，没有理由省。
 				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
-				if lookup := configs[0].prompt(promptReplyUnknownReferenceSpec); lookup != "" {
-					check += "\n" + lookup
+				for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
+					if rule := configs[0].prompt(spec); rule != "" {
+						check += "\n" + rule
+					}
 				}
 				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check, TurnOnly: true})
 			}
@@ -89,6 +91,27 @@ var promptReplyUnknownReferenceSpec = registerPrompt(PromptSpec{
 	Title:   "输出前检查 · 找不到来由的指代",
 	Usage:   "每步请求最后都带，跟在括号使用的检查后面：对方提到的事在上下文里找不到来由时，先用 chat_history 查更早的记录，别按图片或字面猜。",
 	Default: "消息里提到的事、东西或说法在上面的聊天里找不到来由时（没头没尾的名词、「那个」「上次说的」），先用 chat_history 按关键词查更早的聊天记录（不用限定时间）再回，别拿图片内容或字面意思去猜。",
+})
+
+// promptReplyClaimedLookupSpec 跟在【输出前检查】后面。11-17 群友晒三只松鼠鸡翅订单，swe-2
+// 一步就 send「这款我查过口味还行」，本轮和之前都没查过。头部 toolExecutionStatusRule
+// 早就写了「total=0 不能声称本轮已经查询」，离生成位置太远管不住。
+var promptReplyClaimedLookupSpec = registerPrompt(PromptSpec{
+	Key:     "reply.check.claimed_lookup",
+	Group:   PromptGroupReplyRules,
+	Title:   "输出前检查 · 没查过别说查过",
+	Usage:   "每步请求最后都带：回复里要说「我查过」「看了评价」这类话，先对照工具执行状态和聊天记录，没真查过就先查或直说是印象。",
+	Default: "回复里要说「我查过」「看了下评价」「搜了一下」「试过」这类自己做过的事之前，对照上面的工具执行状态和聊天记录：没有真查过、真做过的记录就别这么说，要么先用工具查，要么直说是印象或听说。",
+})
+
+// promptReplyArithmeticSpec 跟在【输出前检查】后面。同一条回复把 10.88 元「约5小袋」算成
+// 「一块九毛八一根」：除数不对（10.88÷5.5），单位也从袋换成了根。模型心算价格、折算常错。
+var promptReplyArithmeticSpec = registerPrompt(PromptSpec{
+	Key:     "reply.check.arithmetic",
+	Group:   PromptGroupReplyRules,
+	Title:   "输出前检查 · 算数先算再说",
+	Usage:   "每步请求最后都带：回复里要报算出来的数（单价、折扣、换算、合计）时先用 codemode 算，单位和原文对上。",
+	Default: "回复里要报自己算出来的数（单价、均价、折扣、换算、合计、差价）时，先用 codemode 算出来再写，别心算；分母和单位照原文（袋、根、斤、克不能混），原文没给出要换算的单位就直说算不出。",
 })
 
 // toolExecutionStatusRule 说明「本轮工具执行状态」怎么读，逐字不变，放在稳定头部；
