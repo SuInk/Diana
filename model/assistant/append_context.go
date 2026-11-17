@@ -81,6 +81,8 @@ type appendContextLog struct {
 	// historyDate 是前缀里最后一条带时间的历史行的日期。续接追加的历史行接在它后面，
 	// 同一天只写时分秒、换天写全日期，和完整组装时的规则一样（见 history_line_dates.go）。
 	historyDate string
+	// savedAt 是这份记录记下的时间，上下文占比条上显示「几分钟前的请求」。
+	savedAt time.Time
 }
 
 // replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度
@@ -228,7 +230,7 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey, definitions: resp.Definitions}
+	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey, definitions: resp.Definitions, savedAt: time.Now()}
 	if resp.Continued && previous != nil {
 		// 续接用的是锁定的头部，记录接着锁它，不换成本轮渲染出来的那份。
 		log.headKey = previous.headKey

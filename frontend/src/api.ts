@@ -236,6 +236,10 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
   llm_identity_body_account_mapping_enabled?: boolean;
   llm_secret_masking_enabled?: boolean;
+  /** 主回复只追加续接：每轮在上一轮实际发出的请求后面接上新消息；不设等同开启。 */
+  reply_append_only_enabled?: boolean;
+  /** 固定说明（群身份、发言者、别名）放进锁定的头部，不在每轮尾部重发；不设等同开启。 */
+  reply_stable_head_enabled?: boolean;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
@@ -1979,6 +1983,15 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
+/** 上下文占比条的一块：head 是锁定的头部，tail 是逐轮追加的尾部。 */
+export interface ReplyContextSegment { name: string; part: "head" | "tail"; tokens: number }
+export interface ReplyContextBreakdown { session: string; group_id?: string; user_id?: string; saved_at?: string; total_tokens: number; segments: ReplyContextSegment[]; context_window: number; compaction_threshold: number }
+export interface ReplyContextSession { session: string; group_id?: string; user_id?: string; saved_at?: string }
+export function getReplyContext(profile: string, session = ""): Promise<{sessions: ReplyContextSession[]; breakdown?: ReplyContextBreakdown}> {
+  const params = new URLSearchParams({profile});
+  if (session) params.set("session", session);
+  return requestJSON(`/api/assistant/reply-context?${params.toString()}`);
+}
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
 }

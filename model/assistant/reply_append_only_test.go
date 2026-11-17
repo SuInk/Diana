@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -64,32 +64,6 @@ func appendOnlyConversation() (lines []struct{ user, name, text string }, replie
 		}
 	}
 	return lines, replies
-}
-
-// appendOnlyBlock 把一条消息归到一个块，统计占比用。
-var appendOnlyTitle = regexp.MustCompile(`^【([^】]{1,24})】`)
-
-func appendOnlyBlock(index int, message llm.Message, headEnd int) string {
-	content := appendContextText(message)
-	switch {
-	case index == 0:
-		return "Runner 系统提示（协议、按需目录、规则）"
-	case index < headEnd:
-		return "头部（人设、回复规则、群风格）"
-	case message.Role == llm.RoleAssistant || message.Role == llm.RoleTool:
-		return "机器人发言（send 调用和「已发送」）"
-	case strings.HasPrefix(content, currentMessageNotesTitle):
-		return "【下一条消息的附注】"
-	case isHistoryLine(content):
-		return "聊天消息行"
-	}
-	if match := appendOnlyTitle.FindStringSubmatch(content); match != nil {
-		return "【" + match[1] + "】"
-	}
-	if message.Role == llm.RoleSystem {
-		return "其他 system 段"
-	}
-	return "其他 user 段"
 }
 
 // 主回复请求只追加：每一轮第一步的请求必须以上一轮第一步的请求原样开头（再接上上一轮
@@ -172,15 +146,15 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 					request.Messages[prefix].Role, appendContextText(request.Messages[prefix]))
 			}
 		}
-		block := shares["工具定义"]
+		block := shares[replyContextToolsName]
 		if block == nil {
 			block = &share{}
-			shares["工具定义"] = block
+			shares[replyContextToolsName] = block
 		}
 		block.total += toolTokens
 		total += toolTokens
 		for index, message := range request.Messages {
-			name := appendOnlyBlock(index, message, headEnd)
+			name := replyContextBlockName(index, message, headEnd)
 			block := shares[name]
 			if block == nil {
 				block = &share{}
@@ -214,9 +188,93 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 		fmt.Fprintf(&table, "%-34s %8d %6.1f%% %10d %7.1f%%\n", name, block.total/requestCount, 100*float64(block.total)/float64(total), block.dynamic/continued, 100*float64(block.dynamic)/float64(max(dynamic, 1)))
 	}
 	t.Log("\n" + table.String())
+	// 设置页的占比条读的就是续接记录：最后一轮的请求，头部在前、尾部在后。记录里没有
+	// 只用于那一轮的段（工具执行状态、收尾指令），多了机器人发的那句，合计和那一轮请求
+	// 差不多。
+	breakdown, ok := runtime.ReplyContextBreakdownFor("", "group:20001")
+	if !ok || len(breakdown.Segments) < 4 || breakdown.Segments[0].Name != replyContextToolsName {
+		t.Fatalf("breakdown = %+v, ok = %v", breakdown, ok)
+	}
+	seenTail := false
+	for _, segment := range breakdown.Segments {
+		if segment.Part == "tail" {
+			seenTail = true
+		} else if seenTail {
+			t.Fatalf("head segment %q after the tail: %+v", segment.Name, breakdown.Segments)
+		}
+	}
+	last := requests[len(requests)-1]
+	lastTokens := toolTokens
+	for _, message := range last.Messages {
+		lastTokens += llm.EstimateMessageTokens(message)
+	}
+	if breakdown.TotalTokens < lastTokens*9/10 || breakdown.TotalTokens > lastTokens*11/10 || breakdown.CompactionThreshold <= 0 {
+		t.Fatalf("breakdown total %d, last request %d, threshold %d", breakdown.TotalTokens, lastTokens, breakdown.CompactionThreshold)
+	}
+	if sessions := runtime.ReplyContextSessions(""); len(sessions) != 1 || sessions[0].GroupID != "20001" {
+		t.Fatalf("sessions = %+v", sessions)
+	}
 	// 动态部分里不是新消息的（状态块、附注、日期……）每轮平均不超过这个数。
 	const nonChatDynamicBudget = 100
 	if extra := (dynamic - newChat) / continued; extra > nonChatDynamicBudget {
 		t.Fatalf("each continued turn sends %d tokens beyond the new chat, budget %d:\n%s", extra, nonChatDynamicBudget, table.String())
+	}
+}
+
+// 关掉「只追加续接」后每轮重新组装：上一轮的当前消息改写成历史行，第二轮请求不再以
+// 第一轮请求原样开头。
+func TestReplyAppendOnlySwitchOff(t *testing.T) {
+	provider := &appendOnlyProvider{reply: "嗯"}
+	off := false
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", ReplyAppendOnly: &off}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	base := interimTestEvent().Time
+	for index, text := range []string{"Diana 早", "Diana 吃了吗"} {
+		event := MessageEvent{Kind: EventKindGroup, SelfID: "42", GroupID: "20001", UserID: "10101", SenderName: "Alice",
+			MessageID: fmt.Sprintf("switch-%d", index), Time: base + int64(index)*600, RawMessage: text,
+			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}, proactiveReply: true}
+		if _, err := runtime.replyTo(t.Context(), event, text); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("requests = %d", len(provider.requests))
+	}
+	first, second := provider.requests[0].Messages, provider.requests[1].Messages
+	current := appendContextText(first[len(first)-1])
+	for _, message := range second {
+		if appendContextText(message) == current {
+			t.Fatalf("second request still carries the first turn's current message verbatim: %.120q", current)
+		}
+	}
+	// 记录照样记下，占比条还看得到。
+	if _, ok := runtime.ReplyContextBreakdownFor("", "group:20001"); !ok {
+		t.Fatal("no breakdown with append-only off")
+	}
+}
+
+// 关掉「固定说明进头部」后系统提示照旧按发言者分头部和尾部。
+func TestReplyStableHeadSwitchOff(t *testing.T) {
+	head := agent.NewToolRegistry()
+	if headRegistryForPrompt(BotConfig{}, true, head) != head {
+		t.Fatal("stable head should default on")
+	}
+	off := false
+	if headRegistryForPrompt(BotConfig{ReplyStableHead: &off}, true, head) != nil {
+		t.Fatal("stable head switch ignored")
+	}
+}
+
+func TestReplyContextSessionEvent(t *testing.T) {
+	for session, want := range map[string]MessageEvent{
+		"group:20001":    {Kind: EventKindGroup, GroupID: "20001"},
+		"tg:group:-1004": {Kind: EventKindGroup, GroupID: "-1004", ContextNamespace: "tg"},
+		"private:10101":  {Kind: EventKindPrivate, UserID: "10101"},
+	} {
+		got := replyContextSessionEvent("p", session)
+		if got.Kind != want.Kind || got.GroupID != want.GroupID || got.UserID != want.UserID || got.ContextNamespace != want.ContextNamespace || got.ProfileID != "p" {
+			t.Fatalf("%s: %+v", session, got)
+		}
 	}
 }

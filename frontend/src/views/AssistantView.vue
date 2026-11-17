@@ -1829,6 +1829,25 @@
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
                 <span class="hint">每次最多带多少 token，留空跟随模型窗口（最低 32768）。快满时较早的聊天会压缩成摘要，需要时还能翻回原文。</span>
               </div>
+              <div class="field wide">
+                <ReplyContextChart :profile="form.id || ''" />
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_append_only_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">只追加续接（默认开启）</span>
+                </label>
+                <span class="hint">每轮在上一轮实际发出的请求后面接上新消息，前面的内容一字不改，供应商的前缀缓存才命中得上。关掉后每轮按窗口重新组装整份请求，缓存基本只命中头部，费用和首字延迟都会上去；排查「是不是续接带歪了」时可以临时关掉对比。</span>
+              </div>
+              <div class="field wide">
+                <label class="switch">
+                  <input v-model="form.reply_stable_head_enabled" type="checkbox" />
+                  <span class="track" aria-hidden="true"></span>
+                  <span class="switch-label">固定说明进头部（默认开启）</span>
+                </label>
+                <span class="hint">群身份、发言者、配置别名这些不随消息变的说明写进锁定的头部，只发一次。关掉后它们回到每轮的尾部、贴着当前消息重发，每轮多几百 token。</span>
+              </div>
             </div>
           </section>
 
@@ -2550,6 +2569,7 @@ import RandomRepeatControls from "../components/RandomRepeatControls.vue";
 import ParticipationControls from "../components/ParticipationControls.vue";
 import BotMarkerList from "../components/BotMarkerList.vue";
 import AgentResidencyPanel from "../components/AgentResidencyPanel.vue";
+import ReplyContextChart from "../components/ReplyContextChart.vue";
 import PromptOverridesEditor from "../components/PromptOverridesEditor.vue";
 
 // 发送前审核的提示词和判断表，放在行为页「安全与审核」里，各合成一个框改。
@@ -5157,6 +5177,8 @@ function setForm(config: BotProfileConfig): void {
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
     llm_secret_masking_enabled: config.llm_secret_masking_enabled ?? true,
+    reply_append_only_enabled: config.reply_append_only_enabled ?? true,
+    reply_stable_head_enabled: config.reply_stable_head_enabled ?? true,
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,

@@ -1953,6 +1953,32 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
+  if (path === "/api/assistant/reply-context") {
+    // 数字照生产群聊一轮真实主回复请求的量级：头部近两万，历史占大头。
+    const sessions = [
+      { session: "group:100200301", group_id: "100200301", saved_at: new Date(Date.now() - 3 * 60_000).toISOString() },
+      { session: "group:100200418", group_id: "100200418", saved_at: new Date(Date.now() - 42 * 60_000).toISOString() },
+      { session: "private:200300401", user_id: "200300401", saved_at: new Date(Date.now() - 5 * 3_600_000).toISOString() }
+    ];
+    const wanted = url.searchParams.get("session") || sessions[0].session;
+    const picked = sessions.find((item) => item.session === wanted) ?? sessions[0];
+    const scaleBy = picked === sessions[0] ? 1 : picked === sessions[1] ? 0.55 : 0.2;
+    const tail = (tokens: number) => Math.round(tokens * scaleBy);
+    const segments = [
+      { name: "工具定义", part: "head", tokens: 1217 },
+      { name: "Runner 系统提示（协议、按需目录、规则）", part: "head", tokens: 6706 },
+      { name: "头部（人设、回复规则、群风格）", part: "head", tokens: 9489 },
+      { name: "【当前发言者适用的工具规则】", part: "tail", tokens: 576 },
+      { name: "聊天消息行", part: "tail", tokens: tail(14820) },
+      { name: "【可提及成员名单】", part: "tail", tokens: tail(412) },
+      { name: "【日期】", part: "tail", tokens: 38 },
+      { name: "【下一条消息的附注】", part: "tail", tokens: tail(1260) },
+      { name: "机器人发言（send 调用和「已发送」）", part: "tail", tokens: tail(2310) },
+      { name: "其他 system 段", part: "tail", tokens: tail(860) }
+    ];
+    const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
+    return json({ sessions, breakdown: { ...picked, total_tokens: total, segments, context_window: 200000, compaction_threshold: 98304 } });
+  }
   if (path === "/api/assistant/agent-residency") {
     if (method === "POST") {
       if (body.reset) {

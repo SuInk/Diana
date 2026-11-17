@@ -257,7 +257,7 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 		time.Since(stored.SavedAt) > appendContextFileMaxAge {
 		return nil
 	}
-	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix))}
+	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, savedAt: stored.SavedAt, prefix: make([]llm.Message, len(stored.Prefix))}
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
 	}

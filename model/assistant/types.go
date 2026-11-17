@@ -916,7 +916,13 @@ type BotConfig struct {
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	// ReplyAppendOnly 是主回复的「只追加续接」：每轮在上一轮实际发出的请求后面接上新
+	// 消息，不重新组装，前缀缓存才命中得上。ReplyStableHead 是「固定说明进头部」：群身份、
+	// 发言者、别名这些不随消息变的说明放进锁定的头部，不在每轮尾部重发。都是未设置按开，
+	// 在「上下文」页的占比条下面关。
+	ReplyAppendOnly           *bool `json:"reply_append_only_enabled,omitempty"`
+	ReplyStableHead           *bool `json:"reply_stable_head_enabled,omitempty"`
+	LLMIdentityMaskingEnabled *bool `json:"llm_identity_masking_enabled,omitempty"`
 	// LLMIdentityBodyAccounts 让隐私代理连正文里直接写的账号数字一起换成别名：只换
 	// 核实过是本群成员的号，其余数字原样保留。隐私代理关掉时它不起作用。
 	LLMIdentityBodyAccounts *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
@@ -1656,6 +1662,8 @@ type ConfigPayload struct {
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	ReplyAppendOnly              *bool `json:"reply_append_only_enabled,omitempty"`
+	ReplyStableHead              *bool `json:"reply_stable_head_enabled,omitempty"`
 	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
 	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
 	LLMSecretMaskingEnabled      *bool `json:"llm_secret_masking_enabled,omitempty"`
@@ -3006,6 +3014,8 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMStreamingEnabled:             copyBoolPointer(cfg.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
+		ReplyAppendOnly:                 copyBoolPointer(cfg.ReplyAppendOnly),
+		ReplyStableHead:                 copyBoolPointer(cfg.ReplyStableHead),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(cfg.LLMSecretMaskingEnabled),
@@ -3264,6 +3274,8 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMStreamingEnabled:             copyBoolPointer(payload.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           payload.RecallReplyTTLSeconds,
+		ReplyAppendOnly:                 copyBoolPointer(payload.ReplyAppendOnly),
+		ReplyStableHead:                 copyBoolPointer(payload.ReplyStableHead),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(payload.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(payload.LLMSecretMaskingEnabled),

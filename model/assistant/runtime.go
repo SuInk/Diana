@@ -4355,7 +4355,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemHead, systemTail := r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry, headRegistryForPrompt(agentActive, agentRegistry, headRegistry))
+	systemHead, systemTail := r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry, headRegistryForPrompt(cfg, agentActive, headRegistry))
 	// 图片任务通知随这条消息变：并进尾部那条 system 消息。【主人】只在主人出现在这
 	// 一轮的历史或当前消息里时才有。可提及成员名单单独成一条，续接时只追加新成员（见
 	// appendOnlyList）。
@@ -4705,7 +4705,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if mentionList != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
 	}
-	if headRegistryForPrompt(agentActive, agentRegistry, headRegistry) != nil {
+	if headRegistryForPrompt(cfg, agentActive, headRegistry) != nil {
 		// 主回复请求只追加：不再每轮发一条精确到秒的时钟。几点几分看最后一条聊天记录的
 		// 时间（头部规则见 replyClockRule），这里只发日期，一天变一次，没变就不重发。
 		if datePrompt := r.replyDatePrompt(event); datePrompt != "" {
@@ -4724,7 +4724,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 点名的和交接过来的是同一批（见 sender_burst.go）。
 	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
 	event.replyQuoteCandidates = r.replyQuoteCandidates(ctx, event)
-	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory, headRegistryForPrompt(agentActive, agentRegistry, headRegistry) != nil); decorationPrompt != "" {
+	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory, headRegistryForPrompt(cfg, agentActive, headRegistry) != nil); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  decorationPrompt,
@@ -5183,7 +5183,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)))
+			if replyAppendOnlyEnabled(cfg) {
+				continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)))
+			} else {
+				appendDecision = appendContextDecision{reason: "disabled", fullTokens: estimateMessagesTokens(messages)}
+			}
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
