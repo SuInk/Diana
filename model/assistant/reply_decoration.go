@@ -6,7 +6,6 @@ package assistant
 import (
 	"context"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -474,7 +473,8 @@ func mentionDecorationRule(userID string, otherSpeakers int, justAnswered bool, 
 		return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里只有 TA 在说话,你们是一对一在接话,不用 @；" +
 			"只有隔了很久才回、对方可能已经走开时才写 " + mention + "。"
 	}
-	crowd := "刚才这段时间里群里除了 TA 还有 " + strconv.Itoa(otherSpeakers) + " 个人在说话"
+	// 不写确切人数：只追加以后，人数一变就要追加一版新的规则，而规则本身只分有没有别人。
+	crowd := "刚才这段时间里群里除了 TA 还有别人在说话"
 	switch quote {
 	case mentionQuoteAutomatic:
 		return "本次不要 @ 发送者：" + crowd + ",但程序会引用 TA 的消息,引用本身就会提醒 TA,再 @ 一遍是重复点名。"

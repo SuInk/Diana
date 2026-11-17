@@ -11,7 +11,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/SuInk/diana/model/llm"
 )
@@ -103,6 +105,10 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 	})
 	lines, replies := appendOnlyConversation()
 	base := interimTestEvent().Time
+	// 时钟跟着消息时间走：每条消息隔 40 秒，机器人在消息后 5 秒答完。用墙上时钟的话，
+	// 整段对话几毫秒跑完，隔了几条的消息都会被当成「回答之前补的」连续消息。
+	var clock atomic.Int64
+	runtime.now = func() time.Time { return time.Unix(clock.Load(), 0) }
 	event := func(index int) MessageEvent {
 		line := lines[index]
 		return MessageEvent{Kind: EventKindGroup, SelfID: "42", GroupID: "20001", UserID: line.user, SenderName: line.name,
@@ -120,6 +126,7 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 		provider.reply = reply
 		provider.mu.Unlock()
 		current := event(index)
+		clock.Store(current.Time + 5)
 		if _, err := runtime.replyTo(t.Context(), current, current.RawMessage); err != nil {
 			t.Fatalf("turn %d: %v", turns+1, err)
 		}
@@ -208,7 +215,7 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 	}
 	t.Log("\n" + table.String())
 	// 动态部分里不是新消息的（状态块、附注、日期……）每轮平均不超过这个数。
-	const nonChatDynamicBudget = 300
+	const nonChatDynamicBudget = 100
 	if extra := (dynamic - newChat) / continued; extra > nonChatDynamicBudget {
 		t.Fatalf("each continued turn sends %d tokens beyond the new chat, budget %d:\n%s", extra, nonChatDynamicBudget, table.String())
 	}

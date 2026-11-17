@@ -4099,8 +4099,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	proactiveTriggered := event.proactiveReply && !directQuotedReply
 	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
 	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
-	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
-	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
+	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, r.clock())
+	defer func() { r.finishReplyTurn(event, reply, r.clock()) }()
 	cleanText := r.cleanInput(event, text)
 	cleanText = truncateInputText(cleanText, event.MessageID, cfg.MaxInputChars)
 	setInterimReplyAudit(ctx, cleanText, proactiveTriggered)

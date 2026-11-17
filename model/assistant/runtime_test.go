@@ -711,6 +711,8 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 		DisplayName:  "Alice",
 		Favorability: 16,
 		MessageCount: 7,
+		// 没有画像时这一段不发（只剩名字和账号），见 formatUserMemoryContext。
+		Portrait: []UserPortraitTrait{{Field: PortraitFieldResidence, Value: "杭州"}},
 		Memories: []UserMemoryItem{
 			{Text: "我最近在看漫展"},
 		},

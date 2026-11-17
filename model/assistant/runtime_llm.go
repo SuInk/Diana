@@ -67,6 +67,26 @@ func (r *Runtime) llmModelLister() LLMModelLister {
 	}
 }
 
+// replySpeakerLineRule 代替尾部逐轮的「正在和你说话的是…」：那一句每换一个发言者就要
+// 追加一版，而最后一条聊天记录本来就写着是谁。
+const replySpeakerLineRule = "群聊历史以“昵称（用户 ID）: 内容”标注发言者，正在和你说话的就是最后一条聊天记录的发言者；回复时不要把这个前缀带进去。"
+
+// replyGroupHeadRules 是主回复头部模式下群聊里随发言者、随消息变的几句说明的固定版：
+// 发言者前缀、配置别名、群身份。尾部原来每换一个发言者或每命中一次别名就重发一遍，
+// 只追加以后每次都是一版新的追加；改成头部一句，尾部只留群主、管理员的群身份。
+// 用户改过对应提示词时仍走尾部原样。
+func replyGroupHeadRules(cfg BotConfig) string {
+	var rules []string
+	if boolValue(cfg.PromptInjectGroupSender, true) && !cfg.PromptOverrides.isCustomized(promptGroupSenderSpec) {
+		rules = append(rules, replySpeakerLineRule)
+	}
+	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" && !cfg.PromptOverrides.isCustomized(promptMatchedAliasSpec) {
+		rules = append(rules, "你的配置别名："+aliases+"。消息里出现这些词只说明是在叫你、触发了这一轮，不代表要删掉或替换这个词，也不代表它一定指别人。")
+	}
+	rules = append(rules, replySpeakerGroupRule)
+	return strings.Join(rules, "\n")
+}
+
 func quotedPromptItems(items []string) string {
 	quoted := make([]string, 0, len(items))
 	for _, item := range items {
@@ -1102,6 +1122,10 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	if head != nil && event.Kind == EventKindGroup && replyReferenceMode(cfg) == ReplyDecorationAuto {
 		appendPromptSection(&builder, replyQuoteRule)
 	}
+	// 群聊里随发言者变的说明，固定的部分进头部，尾部只在有内容时追加，见 replyGroupHeadRules。
+	if head != nil && event.Kind == EventKindGroup {
+		appendPromptSection(&builder, replyGroupHeadRules(cfg))
+	}
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
 		// 静默只有 send silent=true 这一个出口，没开 Agent 时说了也做不到。
@@ -1187,14 +1211,17 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 			}
 		}
 	}
-	appendPromptSection(&tail, r.currentSpeakerGroupContext(event, cfg))
+	appendPromptSection(&tail, r.speakerGroupContext(event, cfg, head != nil))
 	if event.Kind == EventKindGroup {
-		if boolValue(cfg.PromptInjectGroupSender, true) {
+		// 头部模式下这两句用的是 replyGroupHeadRules 里的固定版。
+		senderInHead := head != nil && !cfg.PromptOverrides.isCustomized(promptGroupSenderSpec)
+		aliasesInHead := head != nil && !cfg.PromptOverrides.isCustomized(promptMatchedAliasSpec)
+		if !senderInHead && boolValue(cfg.PromptInjectGroupSender, true) {
 			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
 				"sender": promptSenderIdentity(event),
 			}))
 		}
-		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
+		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" && !aliasesInHead {
 			appendPromptSection(&tail, cfg.promptf(promptMatchedAliasSpec, map[string]string{"aliases": matched}))
 		}
 	}

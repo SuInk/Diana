@@ -281,8 +281,9 @@ func TestMentionDecorationRuleFollowsCrowd(t *testing.T) {
 	busy := mentionDecorationRule("123456", 3, false, mentionQuoteNone)
 	// 写法要和「群聊真实提及规则」一致，都用平台中立的标记：既不教裸 @数字，
 	// 也不教 OneBot 方言的 CQ 码——Telegram 群里那只会把字面量发出去。
-	if !strings.Contains(busy, "3 个人") || !strings.Contains(busy, "<diana-at id=\"123456\"/>") {
-		t.Fatalf("热闹时应当给出人数并要求用提及标记点名：%s", busy)
+	// 不写确切人数：只追加以后人数一变就要追加一版新规则。
+	if !strings.Contains(busy, "还有别人在说话") || strings.Contains(busy, "3 个人") || !strings.Contains(busy, "<diana-at id=\"123456\"/>") {
+		t.Fatalf("热闹时应当说明有别人在说话并要求用提及标记点名：%s", busy)
 	}
 	for _, unwanted := range []string{"写 @123456", "[CQ:at"} {
 		if strings.Contains(busy, unwanted) {
@@ -318,7 +319,7 @@ func TestReplyDecorationPromptCrowdUsesQuoteWhenAvailable(t *testing.T) {
 	}
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationAuto, ReplyDecorationOn} {
 		prompt := replyDecorationPrompt(BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: mode}, event, history, false)
-		if !strings.Contains(prompt, "2 个人") || !strings.Contains(prompt, "再 @ 一遍是重复点名") {
+		if !strings.Contains(prompt, "还有别人在说话") || !strings.Contains(prompt, "再 @ 一遍是重复点名") {
 			t.Fatalf("reference=%s 热闹时应改用引用：%s", mode, prompt)
 		}
 	}
@@ -379,7 +380,7 @@ func TestChatReplyStillFollowsMentionMode(t *testing.T) {
 	}
 }
 
-// auto 模式下这条规则要真的进到提示词里，并且带上算出来的人数。
+// auto 模式下这条规则要真的进到提示词里，并且按算出来的人数选热闹那一档。
 func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
 	now := int64(1_700_000_000)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "1", MessageID: "m3", Time: now}
@@ -390,13 +391,13 @@ func TestReplyDecorationPromptCarriesMentionCrowd(t *testing.T) {
 	}
 	cfg := BotConfig{MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationOff}
 	prompt := replyDecorationPrompt(cfg, event, history, false)
-	if !strings.Contains(prompt, "2 个人") {
-		t.Fatalf("提示词里没有算出来的插话人数：%s", prompt)
+	if !strings.Contains(prompt, "还有别人在说话") {
+		t.Fatalf("提示词里没有按插话人数选的规则：%s", prompt)
 	}
 	// 关掉和总是 @ 两种模式不需要这条规则，模型不该被告知怎么判断。
 	for _, mode := range []ReplyDecorationMode{ReplyDecorationOn, ReplyDecorationOff} {
 		off := replyDecorationPrompt(BotConfig{MentionUserMode: mode, ReplyReferenceMode: ReplyDecorationOff}, event, history, false)
-		if strings.Contains(off, "个人在说话") {
+		if strings.Contains(off, "在说话") {
 			t.Fatalf("mode %s 不该带 @ 判断规则：%s", mode, off)
 		}
 	}
