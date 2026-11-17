@@ -58,6 +58,15 @@ type appendContextFile struct {
 	Prefix   []appendContextMessage `json:"prefix"`
 	// Definitions 是锁定头部的工具定义，见 appendContextLog.definitions。
 	Definitions []appendContextToolDefinition `json:"definitions,omitempty"`
+	// Request 是这份记录那一轮第一步实际发给模型的请求（含只用于本轮的段），
+	// RequestTools 是它带的工具定义，RequestInputTokens 是供应商报回的输入用量。
+	// 只给设置页的请求构成用，续接不读它们。老文件没有，构成那里就不算这个会话。
+	Request             []appendContextMessage        `json:"request,omitempty"`
+	RequestTools        []appendContextToolDefinition `json:"request_tools,omitempty"`
+	RequestInputTokens  int64                         `json:"request_input_tokens,omitempty"`
+	RequestCachedTokens int64                         `json:"request_cached_tokens,omitempty"`
+	RequestReused       int                           `json:"request_reused,omitempty"`
+	RequestMismatch     string                        `json:"request_mismatch,omitempty"`
 }
 
 // appendContextToolDefinition 落盘一份工具定义。llm.ToolDefinition 的 Freeform 不进
@@ -197,10 +206,13 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
-	for _, definition := range record.definitions {
-		file.Definitions = append(file.Definitions, appendContextToolDefinition{Name: definition.Name, Description: definition.Description,
-			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	file.Definitions = appendContextToolDefinitionsFrom(record.definitions)
+	for _, message := range record.request.Messages {
+		file.Request = append(file.Request, appendContextMessageFrom(message))
 	}
+	file.RequestTools = appendContextToolDefinitionsFrom(record.request.Tools)
+	file.RequestInputTokens, file.RequestCachedTokens, file.RequestReused = record.requestInputTokens, record.requestCachedTokens, record.requestReused
+	file.RequestMismatch = record.requestMismatch
 	var buffer bytes.Buffer
 	zw := gzip.NewWriter(&buffer)
 	if err := json.NewEncoder(zw).Encode(file); err != nil {
@@ -261,10 +273,13 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
 	}
-	for _, definition := range stored.Definitions {
-		record.definitions = append(record.definitions, llm.ToolDefinition{Name: definition.Name, Description: definition.Description,
-			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	record.definitions = toolDefinitionsFromAppendContext(stored.Definitions)
+	for _, message := range stored.Request {
+		record.request.Messages = append(record.request.Messages, message.toMessage())
 	}
+	record.request.Tools = toolDefinitionsFromAppendContext(stored.RequestTools)
+	record.requestInputTokens, record.requestCachedTokens, record.requestReused = stored.RequestInputTokens, stored.RequestCachedTokens, stored.RequestReused
+	record.requestMismatch = stored.RequestMismatch
 	record.index()
 	return record
 }
@@ -317,4 +332,22 @@ func (stored appendContextMessage) toMessage() llm.Message {
 		message.ToolCalls = append(message.ToolCalls, llm.ToolCall{ThoughtSignature: call.ThoughtSignature, ID: call.ID, Name: call.Name, Arguments: call.Arguments})
 	}
 	return message
+}
+
+func appendContextToolDefinitionsFrom(definitions []llm.ToolDefinition) []appendContextToolDefinition {
+	var stored []appendContextToolDefinition
+	for _, definition := range definitions {
+		stored = append(stored, appendContextToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	}
+	return stored
+}
+
+func toolDefinitionsFromAppendContext(stored []appendContextToolDefinition) []llm.ToolDefinition {
+	var definitions []llm.ToolDefinition
+	for _, definition := range stored {
+		definitions = append(definitions, llm.ToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	}
+	return definitions
 }

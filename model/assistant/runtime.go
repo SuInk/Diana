@@ -5206,6 +5206,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				continuation.Append = append(continuation.Append, carryover)
 			}
 		}
+		// 记下这一轮第一个实际送到供应商的请求，设置页的请求构成按它分块。
+		var requestRecorder *replyRequestRecorder
+		if appendKey != "" {
+			ctx, requestRecorder = withReplyRequestRecorder(ctx)
+		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		interjections := combineInterjections(directInterjections, r.startSiblingSendInterjections(ctx, event))
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
@@ -5230,6 +5235,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			if err == nil {
 				previous := r.appendContexts.get(appendKey)
 				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
+				if request, usage, ok := requestRecorder.first(); ok && written != nil {
+					written.noteReplyRequest(request, usage, resp.Continued, previous)
+				}
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}

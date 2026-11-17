@@ -278,6 +278,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
+	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	// Streaming must be the last wrapper added so it sits closest to the real
 	// provider. The other decorators expose Generate only and would otherwise
@@ -305,6 +306,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
+	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	run = r.withLLMStreamingRun(ctx, run)
 	_, _ = run(provider)
@@ -564,6 +566,7 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
+	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	if timeout := r.configForContext(ctx).ModelRequestTimeout; timeout > 0 {
 		next := run

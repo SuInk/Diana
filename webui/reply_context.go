@@ -5,40 +5,32 @@ package webui
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/gin-gonic/gin"
 )
 
-// replyContextRuntime 给机器人设置「上下文」页的占比条：哪些会话有上一轮的主回复请求，
-// 某个会话那份请求按块各占多少。
+// replyContextRuntime 给机器人设置「上下文」页的占比条：这台机器人各会话上一轮主回复
+// 请求平均下来，按块各占多少。
 type replyContextRuntime interface {
-	ReplyContextSessions(profileID string) []assistant.ReplyContextSession
-	ReplyContextBreakdownFor(profileID, session string) (assistant.ReplyContextBreakdown, bool)
+	ReplyContextOverview(profileID string) (assistant.ReplyContextBreakdown, bool, error)
 }
 
-// replyContext 列出会话，并给出选中会话（没选就是最近的那个）的请求构成。
 func (h *BotHandler) replyContext(c *gin.Context) {
 	r, ok := h.runtime.(replyContextRuntime)
 	if !ok {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "上下文占比不可用"})
 		return
 	}
-	profileID := c.Query("profile")
-	sessions := r.ReplyContextSessions(profileID)
-	if sessions == nil {
-		sessions = []assistant.ReplyContextSession{}
+	breakdown, found, err := r.ReplyContextOverview(c.Query("profile"))
+	if err != nil {
+		// 实际请求和续接前缀对不上：如实报错，不画一张和真实组装不符的图。
+		c.JSON(http.StatusConflict, gin.H{"error": "请求构成对账失败：" + err.Error()})
+		return
 	}
-	session := strings.TrimSpace(c.Query("session"))
-	if session == "" && len(sessions) > 0 {
-		session = sessions[0].Session
-	}
-	response := gin.H{"sessions": sessions}
-	if session != "" {
-		if breakdown, found := r.ReplyContextBreakdownFor(profileID, session); found {
-			response["breakdown"] = breakdown
-		}
+	response := gin.H{}
+	if found {
+		response["breakdown"] = breakdown
 	}
 	c.JSON(http.StatusOK, response)
 }

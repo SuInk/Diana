@@ -1983,14 +1983,12 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
-/** 上下文占比条的一块：head 是锁定的头部，tail 是逐轮追加的尾部。 */
-export interface ReplyContextSegment { name: string; part: "head" | "tail"; tokens: number }
-export interface ReplyContextBreakdown { session: string; group_id?: string; user_id?: string; saved_at?: string; total_tokens: number; segments: ReplyContextSegment[]; context_window: number; compaction_threshold: number }
-export interface ReplyContextSession { session: string; group_id?: string; user_id?: string; saved_at?: string }
-export function getReplyContext(profile: string, session = ""): Promise<{sessions: ReplyContextSession[]; breakdown?: ReplyContextBreakdown}> {
-  const params = new URLSearchParams({profile});
-  if (session) params.set("session", session);
-  return requestJSON(`/api/assistant/reply-context?${params.toString()}`);
+/** 请求构成的一块，按它在真实请求里的身份分：prefix 锁定的头部，history 只追加的聊天历史，state 进前缀的状态段，turn_only 只用于本轮、下一轮撤掉的段。 */
+export interface ReplyContextSegment { name: string; kind: "prefix" | "history" | "state" | "turn_only"; tokens: number; /** 这一轮新发的部分：和上一轮实际请求开头相同的不算。 */ new_tokens: number }
+export interface ReplyContextBreakdown { sessions: number; saved_at?: string; total_tokens: number; new_tokens: number; input_tokens?: number; cached_tokens?: number; segments: ReplyContextSegment[]; context_window: number; compaction_threshold: number }
+/** 这台机器人各会话上一轮主回复请求平均下来的构成；最近 24 小时没回复过就没有 breakdown。 */
+export function getReplyContext(profile: string): Promise<{breakdown?: ReplyContextBreakdown}> {
+  return requestJSON(`/api/assistant/reply-context?${new URLSearchParams({profile}).toString()}`);
 }
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);

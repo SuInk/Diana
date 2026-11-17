@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -166,7 +167,7 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 			if turn > 0 && index >= prefix {
 				block.dynamic += tokens
 				dynamic += tokens
-				if name == "聊天消息行" || strings.HasPrefix(name, "机器人发言") {
+				if name == replyContextHistoryName {
 					newChat += tokens
 				}
 			}
@@ -188,29 +189,52 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 		fmt.Fprintf(&table, "%-34s %8d %6.1f%% %10d %7.1f%%\n", name, block.total/requestCount, 100*float64(block.total)/float64(total), block.dynamic/continued, 100*float64(block.dynamic)/float64(max(dynamic, 1)))
 	}
 	t.Log("\n" + table.String())
-	// 设置页的占比条读的就是续接记录：最后一轮的请求，头部在前、尾部在后。记录里没有
-	// 只用于那一轮的段（工具执行状态、收尾指令），多了机器人发的那句，合计和那一轮请求
-	// 差不多。
-	breakdown, ok := runtime.ReplyContextBreakdownFor("", "group:20001")
-	if !ok || len(breakdown.Segments) < 4 || breakdown.Segments[0].Name != replyContextToolsName {
-		t.Fatalf("breakdown = %+v, ok = %v", breakdown, ok)
+	// 设置页的请求构成按最后一轮第一步实际发出的请求分块：合计和模型收到的那份逐 token
+	// 一致，头部在前，只用于本轮的段标成 turn_only。
+	breakdown, ok, err := runtime.ReplyContextBreakdownFor("", "group:20001")
+	if err != nil || !ok || len(breakdown.Segments) < 4 || breakdown.Segments[0].Name != replyContextToolsName {
+		t.Fatalf("breakdown = %+v, ok = %v, err = %v", breakdown, ok, err)
 	}
 	seenTail := false
 	for _, segment := range breakdown.Segments {
-		if segment.Part == "tail" {
+		if segment.Kind != "prefix" {
 			seenTail = true
 		} else if seenTail {
 			t.Fatalf("head segment %q after the tail: %+v", segment.Name, breakdown.Segments)
 		}
 	}
 	last := requests[len(requests)-1]
-	lastTokens := toolTokens
+	lastTokens := llm.EstimateToolDefinitionsTokens(last.Tools)
 	for _, message := range last.Messages {
 		lastTokens += llm.EstimateMessageTokens(message)
 	}
-	if breakdown.TotalTokens < lastTokens*9/10 || breakdown.TotalTokens > lastTokens*11/10 || breakdown.CompactionThreshold <= 0 {
+	if breakdown.TotalTokens != lastTokens || breakdown.CompactionThreshold <= 0 {
 		t.Fatalf("breakdown total %d, last request %d, threshold %d", breakdown.TotalTokens, lastTokens, breakdown.CompactionThreshold)
 	}
+	// 演示模式的请求构成（frontend/src/demo/demo.ts）照抄这一行，换了组装要重新抄。
+	segmentsJSON, _ := json.Marshal(breakdown.Segments)
+	t.Logf("请求构成：%s", segmentsJSON)
+	// 续接的轮次，沿用的部分就是上一轮实际请求：这一轮新发的只是一小截。
+	if breakdown.NewTokens <= 0 || breakdown.NewTokens*5 > breakdown.TotalTokens {
+		t.Fatalf("new tokens %d of %d", breakdown.NewTokens, breakdown.TotalTokens)
+	}
+	// 对账：下一轮实际请求要以这一轮的原样开头，改了一条就记下不一致，设置页报错。
+	log := runtime.appendContexts.get("\x00group:20001")
+	next := log.request
+	next.Messages = append(slices.Clone(log.request.Messages), llm.Message{Role: llm.RoleUser, Content: "新消息"})
+	probe := &appendContextLog{}
+	if probe.noteReplyRequest(next, llm.Usage{}, true, log); probe.requestMismatch != "" || probe.requestReused == 0 {
+		t.Fatalf("clean continuation flagged: %q reused %d", probe.requestMismatch, probe.requestReused)
+	}
+	next.Messages[2].Content += "（被改过）"
+	if probe.noteReplyRequest(next, llm.Usage{}, true, log); probe.requestMismatch == "" {
+		t.Fatal("a changed message in a continued request should be flagged")
+	}
+	log.requestMismatch = probe.requestMismatch
+	if _, _, err := runtime.ReplyContextOverview(""); err == nil {
+		t.Fatal("overview should surface the mismatch")
+	}
+	log.requestMismatch = ""
 	if sessions := runtime.ReplyContextSessions(""); len(sessions) != 1 || sessions[0].GroupID != "20001" {
 		t.Fatalf("sessions = %+v", sessions)
 	}
@@ -249,7 +273,7 @@ func TestReplyAppendOnlySwitchOff(t *testing.T) {
 		}
 	}
 	// 记录照样记下，占比条还看得到。
-	if _, ok := runtime.ReplyContextBreakdownFor("", "group:20001"); !ok {
+	if _, ok, err := runtime.ReplyContextBreakdownFor("", "group:20001"); !ok || err != nil {
 		t.Fatal("no breakdown with append-only off")
 	}
 }

@@ -81,8 +81,17 @@ type appendContextLog struct {
 	// historyDate 是前缀里最后一条带时间的历史行的日期。续接追加的历史行接在它后面，
 	// 同一天只写时分秒、换天写全日期，和完整组装时的规则一样（见 history_line_dates.go）。
 	historyDate string
-	// savedAt 是这份记录记下的时间，上下文占比条上显示「几分钟前的请求」。
-	savedAt time.Time
+	// savedAt 是这份记录记下的时间。request 是那一轮第一步实际发给模型的请求（含只
+	// 用于本轮的段和工具定义），requestInputTokens 是供应商报回的输入用量。这三项只给
+	// 设置页的请求构成用，续接不读。
+	savedAt             time.Time
+	request             llm.GenerateRequest
+	requestInputTokens  int64
+	requestCachedTokens int64
+	// requestReused 是 request 开头和上一轮实际请求逐条相同的消息条数；requestMismatch
+	// 是续接了却和上一轮实际请求对不上的原因，空表示对得上。见 noteReplyRequest。
+	requestReused   int
+	requestMismatch string
 }
 
 // replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度
