@@ -15,9 +15,11 @@ import (
 
 // pendingOpenGatePlugin 卡住 root 这一轮在「已登记回复、还没开放合并」那段（线上是
 // 语义指代解析那次模型调用，约 5 秒），不给结果，root 随后照常走对话路径。
+// 合并后 root 会带着补充重来一版，插件再被调用一次，只有第一次卡住。
 type pendingOpenGatePlugin struct {
 	rootID           string
 	entered, release chan struct{}
+	once             *sync.Once
 }
 
 func (p pendingOpenGatePlugin) Manifest() PluginManifest {
@@ -26,6 +28,11 @@ func (p pendingOpenGatePlugin) Manifest() PluginManifest {
 
 func (p pendingOpenGatePlugin) Handle(ctx context.Context, req PluginRequest) (*PluginResponse, error) {
 	if req.Event.MessageID != p.rootID {
+		return nil, nil
+	}
+	first := false
+	p.once.Do(func() { first = true })
+	if !first {
 		return nil, nil
 	}
 	close(p.entered)
@@ -74,7 +81,7 @@ func TestFollowUpWaitsForPendingDirectReplyToOpen(t *testing.T) {
 	first := privateEvent("10001", "344", "这个猫猫")
 	second := privateEvent("10001", "345", "还有这个")
 	second.Time = first.Time + 1
-	gate := pendingOpenGatePlugin{rootID: first.MessageID, entered: make(chan struct{}), release: make(chan struct{})}
+	gate := pendingOpenGatePlugin{rootID: first.MessageID, entered: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
 	followDone := make(chan struct{})
 	provider := &pendingOpenReplyProvider{followDone: followDone}
 	disabled := false
