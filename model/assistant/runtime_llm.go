@@ -81,7 +81,7 @@ func replyGroupHeadRules(cfg BotConfig) string {
 		rules = append(rules, replySpeakerLineRule)
 	}
 	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" && !cfg.PromptOverrides.isCustomized(promptMatchedAliasSpec) {
-		rules = append(rules, "你的配置别名："+aliases+"。消息里出现这些词只说明是在叫你、触发了这一轮，不代表要删掉或替换这个词，也不代表它一定指别人。")
+		rules = append(rules, "你的配置别名："+aliases+"。消息里出现这些词会触发这一轮，但这只说明触发来源，不代表要删掉或替换这个词，也不代表它一定指别人。")
 	}
 	rules = append(rules, replySpeakerGroupRule)
 	return strings.Join(rules, "\n")
