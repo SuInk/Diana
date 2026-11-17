@@ -127,6 +127,8 @@ type identityPrivacyScope struct {
 	overrides PromptOverrides
 	// known 是进程级的号码名单：新登记的号码记进去，正文里见过的号码照名单替换。
 	known *identityAliasRegistry
+	// conversation 是这一轮所属的会话（sessionKey），短号码按它记在 known 里。
+	conversation string
 }
 
 type identityPrivacyProvider struct {
@@ -287,6 +289,11 @@ func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event
 		scope.known = &r.identityAliases
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
+	scope.mu.Lock()
+	if scope.conversation == "" {
+		scope.conversation = sessionKey(event)
+	}
+	scope.mu.Unlock()
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "user")
@@ -513,7 +520,7 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 	}
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
-	s.known.remember(realID, role)
+	s.known.remember(s.conversation, realID, role)
 	return alias
 }
 
@@ -565,7 +572,7 @@ func (s *identityPrivacyScope) registerMessageID(realID string) string {
 	}
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
-	s.known.remember(realID, "message")
+	s.known.remember(s.conversation, realID, "message")
 	return alias
 }
 

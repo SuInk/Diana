@@ -44,9 +44,8 @@ func (p *appendOnlyProvider) Generate(_ context.Context, req llm.GenerateRequest
 // appendOnlyConversation 是一段合成的群聊：几个人轮流说话，机器人隔几条接一句。账号都是
 // 合成的。
 func appendOnlyConversation() (lines []struct{ user, name, text string }, replies map[int]string) {
-	// 七位：隐私代理的全局别名表只记七位以上的号码（identityAliasRegistryMinDigits），更短
-	// 的只在本轮出现时才换，前几轮留下的旧块里会变回真实号码。
-	people := []struct{ user, name string }{{"1000101", "Alice"}, {"1000102", "Bob"}, {"1000103", "Carol"}, {"1000104", "Dave"}}
+	// 五位的老号码：全局别名表不收，靠按会话记住，前几轮留下的旧块里才不会变回真实号码。
+	people := []struct{ user, name string }{{"10101", "Alice"}, {"10102", "Bob"}, {"10103", "Carol"}, {"10104", "Dave"}}
 	texts := []string{
 		"早上好", "今天谁去食堂", "我去，帮你带饭吗", "Diana 你吃了吗", "我刚看到一个新的开源项目",
 		"链接发一下", "https://example.com/project", "Diana 这个项目是干嘛的", "看着像个笔记工具",
