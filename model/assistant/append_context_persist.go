@@ -67,6 +67,10 @@ type appendContextFile struct {
 	RequestCachedTokens int64                         `json:"request_cached_tokens,omitempty"`
 	RequestReused       int                           `json:"request_reused,omitempty"`
 	RequestMismatch     string                        `json:"request_mismatch,omitempty"`
+	// IdentitySent、SecretSent 是前缀里每段正文经两个隐私代理发出去的样子，见
+	// privacySentRecord。老文件没有，读回后这些正文按当时的号码表重新替换。
+	IdentitySent []privacySentRecord `json:"identity_sent,omitempty"`
+	SecretSent   []privacySentRecord `json:"secret_sent,omitempty"`
 }
 
 // appendContextToolDefinition 落盘一份工具定义。llm.ToolDefinition 的 Freeform 不进
@@ -213,6 +217,7 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 	file.RequestTools = appendContextToolDefinitionsFrom(record.request.Tools)
 	file.RequestInputTokens, file.RequestCachedTokens, file.RequestReused = record.requestInputTokens, record.requestCachedTokens, record.requestReused
 	file.RequestMismatch = record.requestMismatch
+	file.IdentitySent, file.SecretSent = record.identitySent, record.secretSent
 	var buffer bytes.Buffer
 	zw := gzip.NewWriter(&buffer)
 	if err := json.NewEncoder(zw).Encode(file); err != nil {
@@ -280,6 +285,7 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 	record.request.Tools = toolDefinitionsFromAppendContext(stored.RequestTools)
 	record.requestInputTokens, record.requestCachedTokens, record.requestReused = stored.RequestInputTokens, stored.RequestCachedTokens, stored.RequestReused
 	record.requestMismatch = stored.RequestMismatch
+	record.identitySent, record.secretSent = stored.IdentitySent, stored.SecretSent
 	record.index()
 	return record
 }

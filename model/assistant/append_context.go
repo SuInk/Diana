@@ -92,6 +92,11 @@ type appendContextLog struct {
 	// 是续接了却和上一轮实际请求对不上的原因，空表示对得上。见 noteReplyRequest。
 	requestReused   int
 	requestMismatch string
+	// identitySent、secretSent 是前缀里每段正文经隐私代理发出去的样子，随记录落盘，
+	// 重启后读回放回代理，见 privacySentRecord。privacyRestored 保证只放回一次。
+	identitySent    []privacySentRecord
+	secretSent      []privacySentRecord
+	privacyRestored sync.Once
 }
 
 // replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度

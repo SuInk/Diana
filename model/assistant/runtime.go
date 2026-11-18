@@ -5198,6 +5198,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
+			// 重启后读回的记录：前缀发出去的样子放回隐私代理，发出的字节和重启前一样。
+			r.restorePrivacySent(previous, sessionKey(event))
 			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)))
 			appendDecision.previousKey = ""
 			if previous != nil {
@@ -5249,6 +5251,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 				if request, usage, ok := requestRecorder.first(); ok && written != nil {
 					written.noteReplyRequest(request, usage, resp.Continued, previous)
 				}
+				r.notePrivacySent(written, sessionKey(event))
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}

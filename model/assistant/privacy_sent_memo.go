@@ -6,7 +6,11 @@ package assistant
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"sync"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // privacySentMemoEntries 是每一代记住的正文段数，满了整代轮换（同 magpie 的 allowkept）。
@@ -83,4 +87,136 @@ func privacySentRoute(ctx context.Context) string {
 		return sessionKey(state.event)
 	}
 	return ""
+}
+
+// privacySentRecord 是跟着续接记录落盘的一段发过的正文（append_context_persist.go）。
+// 续接记录读回的是换号之前的原文，重启后号码表是空的，同一段原文会换出另一个样子：
+// 11-18 那次重启后几个小时边学边断，就是这么来的。所以前缀里每段正文发出去的样子也
+// 一起存下，读回时放回 privacySentMemo，重启前后发出去的字节一样。Same 表示发出去的
+// 就是原文，不再重复存一遍。
+type privacySentRecord struct {
+	Key     string            `json:"key"`
+	Text    string            `json:"text,omitempty"`
+	Same    bool              `json:"same,omitempty"`
+	Restore map[string]string `json:"restore,omitempty"`
+}
+
+// records 取出 texts 里在 route 上发过的那些。
+func (m *privacySentMemo[T]) records(route string, texts []string, encode func(T) map[string]string) []privacySentRecord {
+	var out []privacySentRecord
+	seen := map[[sha256.Size]byte]bool{}
+	for _, text := range texts {
+		key := privacySentKey(route, text)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		sent, ok := m.get(route, text)
+		if !ok {
+			continue
+		}
+		record := privacySentRecord{Key: hex.EncodeToString(key[:]), Restore: encode(sent.restore)}
+		if sent.text == text {
+			record.Same = true
+		} else {
+			record.Text = sent.text
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
+// restoreRecords 把落盘的发过的正文放回来。texts 是同一份前缀的原文，Same 的记录靠它
+// 找回正文。
+func (m *privacySentMemo[T]) restoreRecords(route string, texts []string, records []privacySentRecord, decode func(map[string]string) T) {
+	if m == nil || route == "" || len(records) == 0 {
+		return
+	}
+	raw := map[string]string{}
+	for _, text := range texts {
+		key := privacySentKey(route, text)
+		raw[hex.EncodeToString(key[:])] = text
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, record := range records {
+		text, ok := raw[record.Key]
+		if !ok {
+			continue
+		}
+		sent := privacySent[T]{text: record.Text, restore: decode(record.Restore)}
+		if record.Same {
+			sent.text = text
+		}
+		var key [sha256.Size]byte
+		if decoded, err := hex.DecodeString(record.Key); err == nil && len(decoded) == len(key) {
+			copy(key[:], decoded)
+			m.putLocked(key, sent)
+		}
+	}
+}
+
+// privacySentTexts 是一份前缀里隐私代理会逐段替换的正文：消息正文、多段内容的文字和
+// 工具调用参数里的字符串（密钥代理连参数一起换）。
+func privacySentTexts(messages []llm.Message) []string {
+	var texts []string
+	add := func(text string) {
+		if strings.TrimSpace(text) != "" {
+			texts = append(texts, text)
+		}
+	}
+	for _, message := range messages {
+		add(message.Content)
+		for _, part := range message.Parts {
+			add(part.Text)
+		}
+		for _, call := range message.ToolCalls {
+			walkStrings(call.Arguments, add)
+		}
+	}
+	return texts
+}
+
+func identitySentRestore(restore map[string]string) map[string]string { return restore }
+
+func encodeSecretSentRestore(restore map[string]secretPrivacyEntry) map[string]string {
+	if len(restore) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(restore))
+	for placeholder, entry := range restore {
+		out[placeholder] = entry.kind + "\x00" + entry.value
+	}
+	return out
+}
+
+func decodeSecretSentRestore(stored map[string]string) map[string]secretPrivacyEntry {
+	out := make(map[string]secretPrivacyEntry, len(stored))
+	for placeholder, packed := range stored {
+		kind, value, _ := strings.Cut(packed, "\x00")
+		out[placeholder] = secretPrivacyEntry{kind: kind, value: value}
+	}
+	return out
+}
+
+// notePrivacySent 把这份前缀发出去的样子记进续接记录，随它落盘。
+func (r *Runtime) notePrivacySent(log *appendContextLog, route string) {
+	if log == nil || route == "" {
+		return
+	}
+	texts := privacySentTexts(log.prefix)
+	log.identitySent = r.identitySent.records(route, texts, identitySentRestore)
+	log.secretSent = r.secretSent.records(route, texts, encodeSecretSentRestore)
+}
+
+// restorePrivacySent 把读回的续接记录里发过的正文放回隐私代理，每份记录只放一次。
+func (r *Runtime) restorePrivacySent(log *appendContextLog, route string) {
+	if log == nil || route == "" || (len(log.identitySent) == 0 && len(log.secretSent) == 0) {
+		return
+	}
+	log.privacyRestored.Do(func() {
+		texts := privacySentTexts(log.prefix)
+		r.identitySent.restoreRecords(route, texts, log.identitySent, identitySentRestore)
+		r.secretSent.restoreRecords(route, texts, log.secretSent, decodeSecretSentRestore)
+	})
 }

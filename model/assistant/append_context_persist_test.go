@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,4 +194,83 @@ func TestReplyContinuesAcrossRestart(t *testing.T) {
 			t.Fatalf("重启后前缀在第 %d 条分叉：\n got %s: %.200q\nwant %s: %.200q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
 		}
 	}
+}
+
+// 续接记录读回的是换号之前的原文，重启后号码表是空的：第一轮还不认识、按原号发出去的
+// 号码，重启后这一轮认识了，没有落盘的「发过的正文」就会被换成别名，前缀从那里断开
+// （11-18 canary.33 重启后的几个小时）。发过的正文随记录落盘，重启后照原样发。
+func TestReplyPrivacyBytesSurviveRestart(t *testing.T) {
+	enableAppendContextPersist(t)
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	enabled := true
+	newRuntime := func(reply string) (*Runtime, *sequenceLLMProvider) {
+		provider := &sequenceLLMProvider{replies: []string{`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"` + reply + `"}}]`}}
+		runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", LLMIdentityMaskingEnabled: &enabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+			return provider, nil
+		})
+		return runtime, provider
+	}
+	replyRequest := func(t *testing.T, provider *sequenceLLMProvider) llm.GenerateRequest {
+		t.Helper()
+		var out []llm.GenerateRequest
+		for _, request := range provider.requestsSnapshot() {
+			if len(request.Tools) > 0 {
+				out = append(out, request)
+			}
+		}
+		if len(out) != 1 {
+			t.Fatalf("reply requests = %d", len(out))
+		}
+		return out[0]
+	}
+	const text = "老群友 4671742 昨天也问过"
+	before, firstProvider := newRuntime("在的")
+	first := interimTestEvent()
+	first.MessageID, first.RawMessage = "restart-1", text
+	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
+	if _, err := before.replyTo(t.Context(), first, first.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	before.appendContexts.disk.waitIdle()
+	firstRequest := replyRequest(t, firstProvider)
+	if !strings.Contains(llmMessagesText(firstRequest.Messages), "4671742") {
+		t.Fatal("test setup: the number is unknown in the first turn and goes out as written")
+	}
+
+	after, secondProvider := newRuntime("吃过了")
+	before.mu.Lock()
+	after.aliasSalt = before.aliasSalt
+	before.mu.Unlock()
+	after.remember(first)
+	// 重启后这个号自己来说话，号码表认识它了。
+	second := interimTestEvent()
+	second.UserID, second.SenderName = "4671742", "Bob"
+	second.MessageID, second.RawMessage, second.Time = "restart-2", "我来了", first.Time+30
+	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "我来了"}}}
+	if _, err := after.replyTo(t.Context(), second, second.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	after.appendContexts.disk.waitIdle()
+	prefix, next := withoutTurnOnly(firstRequest.Messages), replyRequest(t, secondProvider).Messages
+	if len(next) <= len(prefix) {
+		t.Fatalf("重启后的请求没有接在上一轮后面：%d vs %d", len(next), len(prefix))
+	}
+	for index, message := range prefix {
+		got, want := next[index], message
+		if got.Role != want.Role || appendContextText(got) != appendContextText(want) {
+			t.Fatalf("重启后发出的前缀在第 %d 条分叉：\n got %s: %.300q\nwant %s: %.300q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
+		}
+	}
+	if strings.Contains(appendContextText(next[len(next)-1]), "4671742") {
+		t.Fatalf("new text must use this turn's aliases: %q", appendContextText(next[len(next)-1]))
+	}
+}
+
+func llmMessagesText(messages []llm.Message) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(appendContextText(message))
+		builder.WriteString("\n")
+	}
+	return builder.String()
 }
