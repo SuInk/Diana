@@ -292,8 +292,35 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 // 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用；
 // 3 起表情包摘要换成一句话标注；4 起同一天的历史行只写时分秒（缓存条目里仍写全日期，
 // 拼成一份历史后由 compactHistoryLineDates 统一省掉，加一是让旧条目跟着这一版一起换掉）；
-// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」。
-const historyRenderVersion = 5
+// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」；6 起被引用的消息在
+// 窗口里时不再展开、媒体行不重复消息 ID。
+const historyRenderVersion = 6
+
+// quotableHistoryIDs 是这一份历史里写成「[时间 #消息ID] 发送者: 正文」、模型能按 ID 对上
+// 的那些消息。引用的那条在其中时历史行不再展开它（见 historyQuotedText）。机器人自己的
+// 发言写成 send 调用、没有 ID，戳一戳、订阅推送这类行也不带 ID，跳过或不同群的消息根本
+// 不在历史里，这些被引用时照旧展开。
+func quotableHistoryIDs(event MessageEvent, cfg BotConfig, history []MessageEvent, skip map[string]bool) map[string]bool {
+	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
+	ids := map[string]bool{}
+	for _, item := range history {
+		id := strings.TrimSpace(item.MessageID)
+		switch {
+		case !historyLineShowsID(item), item.MessageID == event.MessageID, skip[item.MessageID],
+			item.crossGroupContext, event.Kind == EventKindGroup && !samePromptGroupScope(event, item),
+			strings.TrimSpace(item.botReply) != "", assistantHistoryEvent(item, botID),
+			isPokeHistoryEvent(item), isCallHistoryEvent(item), isQQFeedbackHistoryEvent(item), isSubscriptionPushEvent(item):
+			continue
+		}
+		ids[id] = true
+	}
+	return ids
+}
+
+// quotesWindowLine 表示 item 引用的那条就在 ids 里（见 quotableHistoryIDs）。
+func quotesWindowLine(item MessageEvent, ids map[string]bool) bool {
+	return item.Quoted != nil && !item.Quoted.Semantic && ids[strings.TrimSpace(item.Quoted.MessageID)]
+}
 
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
@@ -317,7 +344,9 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
+	inWindow := quotableHistoryIDs(event, cfg, history, skip)
 	for _, item := range history {
+		item.quotedInWindow = quotesWindowLine(item, inWindow)
 		if item.MessageID != "" && (item.MessageID == event.MessageID || skip[item.MessageID]) {
 			continue
 		}
@@ -339,12 +368,13 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		// Source data, not asynchronous image descriptions or request-relative
 		// timestamps, controls replacement. Edits must become visible immediately.
 		source, _ := json.Marshal(struct {
-			Event  MessageEvent
-			Reply  string
-			Direct bool
-			Bot    string
-			Render int
-		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion})
+			Event          MessageEvent
+			Reply          string
+			Direct         bool
+			Bot            string
+			Render         int
+			QuotedInWindow bool
+		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion, item.quotedInWindow})
 		hash := promptCacheHash(string(source))
 		entry, ok := old[key]
 		if !ok || entry.SourceHash != hash {

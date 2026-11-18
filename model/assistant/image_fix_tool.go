@@ -38,7 +38,7 @@ func (t *dianaImageFixTool) Description() string {
 
 func (t *dianaImageFixTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"message_id", "fix"}, map[string]any{
-		"message_id": toolStringParam("那张图所在消息的 message_id，照抄【媒体 message_id=…】里的值"),
+		"message_id": toolStringParam("那张图所在消息的 message_id，照抄那条消息行首 # 后面的 ID（行首没有 # 时照抄【媒体 message_id=…】里的值）"),
 		"fix":        toolStringParam("一句完整的正确说法，有旧说法一并点出，如「这是舞萌的百合咲，不是蔚蓝档案的白洲梓」"),
 	})
 }

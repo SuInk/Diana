@@ -7088,16 +7088,22 @@ func historyLinePrefix(event MessageEvent) string {
 	}
 	// 消息 ID 跟在时间后面：回复开头写引用标记就能指向这条（发送层按本会话历史查，
 	// Telegram、QQ 都认）。以前历史行没有 ID，模型只能引用当前这条消息。
-	if id := strings.TrimSpace(event.MessageID); id != "" && replyMarkerIDAcceptable(event.Platform, id) {
+	if historyLineShowsID(event) {
 		if label != "[" {
 			label += " "
 		}
-		label += historyLineIDMark + id
+		label += historyLineIDMark + strings.TrimSpace(event.MessageID)
 	}
 	if label == "[" {
 		return ""
 	}
 	return label + "] "
+}
+
+// historyLineShowsID 表示这条消息的行首会写出「#消息ID」。
+func historyLineShowsID(event MessageEvent) bool {
+	id := strings.TrimSpace(event.MessageID)
+	return id != "" && replyMarkerIDAcceptable(event.Platform, id)
 }
 
 // historyLineIDMark 是消息行开头时间后面、消息 ID 前面的标记。
