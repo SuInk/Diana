@@ -227,6 +227,10 @@ func appendContextHeadKey(messages []llm.Message) string {
 		if message.Role != llm.RoleSystem {
 			break
 		}
+		if _, _, ok := appendOnlyList(message.Content); ok {
+			// 头部里的只追加名单（可提及成员）：新条目续接时追加，不算头部变了。
+			continue
+		}
 		hash.Write([]byte(message.Content))
 		hash.Write([]byte{0})
 	}
@@ -472,6 +476,15 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		head++
 	}
 	var appended []llm.Message
+	// 头部里的只追加名单（可提及成员）：头部锁定不重发，前缀里没有的条目追加在后面。
+	for _, message := range messages[:head] {
+		if _, _, ok := appendOnlyList(message.Content); ok {
+			if message.Content = unsentListItems(log, message.Content); message.Content != "" {
+				message.CacheBreakpoint, message.TurnOnly = false, false
+				appended = append(appended, message)
+			}
+		}
+	}
 	// fullDates 沿这一轮完整组装推出每条历史行的全日期，用来和前缀比对；appendDates 从
 	// 前缀最后一条历史行的日期接着推，决定追加的行省不省日期。完整组装里的写法是相对它
 	// 自己那份历史的前一行定的，接到前缀后面时前一行变了，要重写。

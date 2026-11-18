@@ -4379,6 +4379,13 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 再统一放到后面——语义上它们就是「理解当前消息所需的背景」，离当前消息更近
 	// 反而更合适。预算裁剪按 Priority 走，不看位置，各层的让位顺序不受影响。
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
+	// 主回复头部模式下，可提及成员名单紧跟头部、算头部的一部分：组装那一轮整份放这里，
+	// 续接时只把前缀里没有的成员追加在后面（见 appendContextContinuation）。名单不算进
+	// 头部哈希，来了新成员头部也不算变。
+	mentionInHead := mentionList != "" && headRegistryForPrompt(agentActive, headRegistry) != nil
+	if mentionInHead {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
+	}
 	var dependency *senderDependencyContext
 	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
@@ -4707,7 +4714,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	if mentionList != "" {
+	if mentionList != "" && !mentionInHead {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
 	}
 	if headRegistryForPrompt(agentActive, headRegistry) != nil {

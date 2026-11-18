@@ -367,14 +367,14 @@ func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 	if !strings.Contains(member, promptTaskRepositoryWatch) {
 		t.Fatal("owner-only rules must be in the shared prefix")
 	}
-	note := ""
+	// 群友用不了哪些写在头部，不再每轮一行权限说明。
+	if !strings.Contains(member, "【只对主人开放的工具】") {
+		t.Fatal("owner-only tool list must be in the shared prefix")
+	}
 	for _, message := range ownerReq.Messages {
 		if strings.HasPrefix(message.Content, "【本轮发言者的工具权限】") {
-			note = message.Content
+			t.Fatalf("per-turn permission note is gone: %q", message.Content)
 		}
-	}
-	if !strings.Contains(note, "都能用") {
-		t.Fatalf("owner permission note = %q", note)
 	}
 }
 

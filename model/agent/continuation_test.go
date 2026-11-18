@@ -66,19 +66,6 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if sent[lastKeptIndex(sent)].Content != "第二问" {
 		t.Fatalf("current message is not the last kept message: %#v", sent)
 	}
-	// 本轮发言者的工具权限只追加：第一轮那一行进了前缀，第二轮没变就不再发。
-	notes := 0
-	for _, message := range sent {
-		if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) {
-			notes++
-			if message.TurnOnly || !strings.Contains(message.Content, "coding") {
-				t.Fatalf("permission note = %#v", message)
-			}
-		}
-	}
-	if notes != 1 {
-		t.Fatalf("permission notes in the request: %d, want the first turn's one only", notes)
-	}
 	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
 		for _, message := range transcript {
 			if message.TurnOnly || strings.HasPrefix(message.Content, RuntimeClockMarker) {

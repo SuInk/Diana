@@ -143,8 +143,8 @@ type Config struct {
 	CoreTools []string
 	// HeadRegistry 是渲染进系统提示词、工具定义和历史之前契约块的工具全集：同一个群里
 	// 对谁都是这一份（主人、管理员、成员能用的都列出来），换人说话前缀不变。它只用来
-	// 渲染、从不执行：执行照旧走本轮发言者自己的注册表，权限在执行时核验；本轮发言者
-	// 用不了哪些，由历史之后一行只用于本轮的说明列出（见 speakerPermissionNote）。
+	// 渲染、从不执行：执行照旧走本轮发言者自己的注册表，权限在执行时核验，本轮发言者
+	// 用不了的调用时回没有权限（见 deniedToolError）。
 	// nil 时用执行注册表。
 	HeadRegistry *ToolRegistry
 	// FeaturedTools 在按需目录里写完整描述而不是压成一行：常用、或者「什么时候该用」

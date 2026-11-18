@@ -1959,15 +1959,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const segments = [
       {name: "工具定义", kind: "prefix", tokens: 1217, new_tokens: 0},
       {name: "Runner 系统提示（协议、按需目录、规则）", kind: "prefix", tokens: 6706, new_tokens: 0},
-      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 9491, new_tokens: 0},
+      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 11285, new_tokens: 0},
       {name: "【系统补充指令，不是用户发言】", kind: "state", tokens: 283, new_tokens: 0},
       {name: "其他 user 段", kind: "state", tokens: 21, new_tokens: 0},
       {name: "聊天历史（只追加）", kind: "history", tokens: 996, new_tokens: 168},
-      {name: "【当前发言者适用的工具规则】", kind: "state", tokens: 576, new_tokens: 0},
-      {name: "【可提及成员名单（user_id：名字）】", kind: "state", tokens: 54, new_tokens: 0},
+      {name: "【当前消息的对话对象】", kind: "state", tokens: 205, new_tokens: 0},
       {name: "【日期】", kind: "state", tokens: 27, new_tokens: 0},
-      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78},
-      {name: "【本轮发言者的工具权限】", kind: "state", tokens: 178, new_tokens: 0}
+      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78}
     ];
     const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
     const fresh = segments.reduce((sum, segment) => sum + segment.new_tokens, 0);

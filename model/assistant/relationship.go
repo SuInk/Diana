@@ -254,10 +254,22 @@ func relationshipPermissionContext(policy RelationshipPolicy, configs ...BotConf
 		context += "\n" + currentSpeakerIdentityMarker + overrides.text(promptSpeakerNotOwnerSpec)
 	}
 	if len(configs) > 0 {
-		status := capabilityAccessStatus(configs[0], policy.Manages())
-		context += "\n宿主机访问能力存在；当前状态：" + status["host_access"].(map[string]any)["reason"].(string) + "。仅在用户问及或请求相关操作时说明，不主动罗列权限。"
+		context += "\n" + hostAccessLine(configs[0], policy.Manages())
 	}
 	return context
+}
+
+func hostAccessLine(cfg BotConfig, manages bool) string {
+	status := capabilityAccessStatus(cfg, manages)
+	return "宿主机访问能力存在；当前状态：" + status["host_access"].(map[string]any)["reason"].(string) + "。仅在用户问及或请求相关操作时说明，不主动罗列权限。"
+}
+
+// hostAccessHeadRule 是主回复头部里宿主机访问那一句：两种状态都写，按【当前发言者身份】
+// 挑。以前跟着好感度、身份写在尾部，换人说话就整段重发。
+func hostAccessHeadRule(cfg BotConfig) string {
+	manager := capabilityAccessStatus(cfg, true)["host_access"].(map[string]any)["reason"].(string)
+	other := capabilityAccessStatus(cfg, false)["host_access"].(map[string]any)["reason"].(string)
+	return "宿主机访问能力存在。【当前发言者身份】是主人或主人指定的管理员时：" + manager + "；其他人：" + other + "。仅在用户问及或请求相关操作时说明，不主动罗列权限。"
 }
 
 // capabilityPermissionRule 对谁都一样，放在稳定头部；按发言者变的权限数据留在尾部。

@@ -149,12 +149,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 参数填错时 tools_execute 也会把定义交回来。显式使用带标记的 user，避免无历史时
 	// 被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	// 工具目录、规则和契约按群里的工具全集渲染，换人说话也不变；本轮发言者能用哪些、
-	// 工具预算多少只写一行，只用于本轮（见 speakerPermissionNote）。
-	// 只追加：前缀里最近一版和这一轮一样就不发，变了才追加新的一版、留在前缀里。
-	if note := r.speakerPermissionNote(); note != "" && latestPermissionNote(req.Continuation) != note {
-		volatile = append(volatile, llm.Message{Role: llm.RoleSystem, Content: note, Priority: llm.MessagePrioritySystem})
-	}
+	// 工具目录、规则、契约和预算按群里的工具全集渲染，换人说话也不变。本轮发言者用不了
+	// 的工具调用时当场回「没有权限」（见 deniedToolError），不再每轮写一行权限说明。
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
 	// DeepSeek 主回复里它约 1K 字，相邻两轮逐字相同却每轮重算。
@@ -1427,9 +1423,8 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 }
 
 // toolRules 按可用工具生成 Agent 规则。hasTool 看渲染用的工具全集（见
-// Config.HeadRegistry）。withBudget=false 时预算数字不写进规则，它按发言者不同，写在
-// speakerPermissionNote 里。
-func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string {
+// Config.HeadRegistry）。
+func (r *Runner) toolRules(hasTool func(string) bool) []string {
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -1442,8 +1437,8 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行，包括用 tools_execute 封装的调用；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
-	// 设了上限才写预算；按工具全集渲染时上限按发言者可能不同，写进 speakerPermissionNote。
-	if withBudget && r.cfg.MaxSteps > 0 {
+	// 设了上限才写预算。主回复里主人和群友的上限相同，所以它也在不变的头部里。
+	if r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
 	}
 
@@ -1575,50 +1570,6 @@ func (r *Runner) newLoaders(loaded []string) {
 	}
 }
 
-// speakerPermissionNotePrefix 是每轮那一行工具权限说明的开头。
-const speakerPermissionNotePrefix = "【本轮发言者的工具权限】"
-
-// speakerPermissionNote 是只用于本轮的一行：工具预算，以及前缀里列出的工具中本轮
-// 发言者用不了的那些。前缀按工具全集渲染（见 Config.HeadRegistry），以前按发言者把
-// 专属工具的目录、规则和契约整段放在历史之后，每换一个权限不同的人说话就追加一整版，
-// 生产 11-15 一个群一小时里涨到 2.7 万字。没设 HeadRegistry 时预算在系统提示词里，
-// 这里不写。
-func (r *Runner) speakerPermissionNote() string {
-	if r.cfg.HeadRegistry == nil {
-		return ""
-	}
-	head := r.headTools()
-	var parts []string
-	if r.cfg.MaxSteps > 0 {
-		parts = append(parts, fmt.Sprintf("这一条回复内最多可调用 %d 次工具（并行的每个调用各算一次）。", r.cfg.MaxSteps))
-	}
-	var blocked []string
-	for _, name := range head.PresentedNames() {
-		if _, ok := r.registry.Get(name); !ok {
-			blocked = append(blocked, name)
-		}
-	}
-	if len(blocked) > 0 {
-		parts = append(parts, "上面列出的工具里，这位发言者用不了："+strings.Join(blocked, "、")+"。别调用它们，也别说能替对方做这些事。")
-	} else {
-		parts = append(parts, "上面列出的工具这位发言者都能用。")
-	}
-	return speakerPermissionNotePrefix + strings.Join(parts, "")
-}
-
-// latestPermissionNote 是续接前缀里最近的那一行工具权限说明，没有续接或没有这一行时为空。
-func latestPermissionNote(continuation *Continuation) string {
-	if continuation == nil {
-		return ""
-	}
-	for index := len(continuation.Prefix) - 1; index >= 0; index-- {
-		if content := continuation.Prefix[index].Content; strings.HasPrefix(content, speakerPermissionNotePrefix) {
-			return content
-		}
-	}
-	return ""
-}
-
 // dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、
 // 按已加载的契约校验，再把对工具族的调用换回成员工具和成员自己的参数。
 func (r *Runner) dispatchAction(action llmAction) (llmAction, error) {
@@ -1649,7 +1600,7 @@ func (r *Runner) systemPrompt() string {
 		}
 		return false
 	}
-	rules := r.toolRules(hasTool, r.cfg.HeadRegistry == nil)
+	rules := r.toolRules(hasTool)
 	rules = append(rules, "- 已经足够回答时只调 send，发出回复并结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
@@ -1673,7 +1624,7 @@ func (r *Runner) systemPrompt() string {
 	if disabled := head.DisabledSummary(); disabled != "" {
 		sections = append(sections, disabled)
 	}
-	// 扩展清单同样按工具全集列出，本轮发言者用不了的由 speakerPermissionNote 说明。
+	// 扩展清单同样按工具全集列出，本轮发言者用不了的调用时回没有权限。
 	if extensionsPrompt != "" {
 		sections = append(sections, extensionsPrompt)
 	}

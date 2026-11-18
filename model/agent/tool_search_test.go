@@ -58,7 +58,7 @@ func TestLegacyToolsLoadNameStillDispatches(t *testing.T) {
 }
 
 // 前缀按工具全集渲染：主人和群友交替说话时，工具定义、Agent system、人设和已加载
-// 契约逐字相同；谁能用哪些、预算多少只在每轮一行的权限说明里。
+// 契约和预算逐字相同；谁能用哪些不再每轮写一行，用不了的调用时回没有权限。
 func TestSpeakerToolsShareOnePrefix(t *testing.T) {
 	ownerTools := func() []Tool {
 		return []Tool{&describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"}, &describedTool{"coding", "把编码工作交给外部 CLI，仅主人"}, &describedTool{"run_command", "执行白名单命令"}, &describedTool{"write_file", "写文件"}}
@@ -78,7 +78,7 @@ func TestSpeakerToolsShareOnePrefix(t *testing.T) {
 		}
 		return client.requests[0]
 	}
-	member := capture(20, &describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"})
+	member := capture(32, &describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"})
 	owner := capture(32, ownerTools()...)
 	prefix := func(req llm.GenerateRequest) string {
 		var builder strings.Builder
@@ -96,22 +96,15 @@ func TestSpeakerToolsShareOnePrefix(t *testing.T) {
 	if prefix(member) != prefix(owner) {
 		t.Fatalf("owner and member prefixes differ:\n%s\n---\n%s", prefix(member), prefix(owner))
 	}
-	if !strings.Contains(prefix(owner), "- coding(") || !strings.Contains(prefix(owner), "编写或修复代码时") || strings.Contains(prefix(owner), "最多可调用") {
-		t.Fatalf("the prefix must list every tool and no per-speaker budget:\n%s", prefix(owner))
+	if !strings.Contains(prefix(owner), "- coding(") || !strings.Contains(prefix(owner), "编写或修复代码时") || !strings.Contains(prefix(owner), "最多调用 32 次工具") {
+		t.Fatalf("the prefix must list every tool and the budget:\n%s", prefix(owner))
 	}
-	note := func(req llm.GenerateRequest) string {
+	for _, req := range []llm.GenerateRequest{owner, member} {
 		for _, message := range req.Messages {
-			if strings.HasPrefix(message.Content, speakerPermissionNotePrefix) {
-				return message.Content
+			if strings.HasPrefix(message.Content, "【本轮发言者的工具权限】") {
+				t.Fatalf("per-turn permission note is gone: %q", message.Content)
 			}
 		}
-		return ""
-	}
-	if got := note(owner); !strings.Contains(got, "最多可调用 32 次") || !strings.Contains(got, "都能用") {
-		t.Fatalf("owner note = %q", got)
-	}
-	if got := note(member); !strings.Contains(got, "最多可调用 20 次") || !strings.Contains(got, "coding、run_command、write_file") {
-		t.Fatalf("member note = %q", got)
 	}
 	// 群友点名调用前缀里列着、自己用不了的工具：说没有权限，不说工具不存在。
 	loader := newDeferredToolLoader(NewToolRegistry(&describedTool{"tts", "语音"}), []string{finalizeToolName}, nil)

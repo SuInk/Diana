@@ -881,6 +881,110 @@ func speakerToolRulesBlock(rules string) string {
 	return speakerToolRulesTitle + "\n这一段只说明当前发言者；没再出现时沿用上面最近的一次，换了规则不同的人说话会重新给出。\n" + rules
 }
 
+// ownerSplitDisclosureRules 是主回复头部里模型身份、项目地址的披露规则。以前按发言者
+// 是不是主人写一份放在尾部【当前发言者适用的工具规则】里，主人和群友交替说话就来回
+// 追加；现在两种说法都写进头部，模型照【当前发言者身份】挑。管理员拿的是主人那套工具，
+// 这里也按主人算。
+func ownerSplitDisclosureRules(cfg BotConfig, modelEveryone, hasRuntimeModel, repositoryHidden bool) string {
+	var rules []string
+	switch {
+	case modelEveryone && hasRuntimeModel:
+		rules = append(rules, cfg.prompt(promptToolRuntimeModelSpec))
+	case modelEveryone:
+	case hasRuntimeModel:
+		rules = append(rules, "【当前发言者身份】是主人或主人指定的管理员时："+cfg.prompt(promptToolRuntimeModelSpec)+"\n其他人问起时："+cfg.prompt(promptModelUndisclosedSpec))
+	default:
+		rules = append(rules, cfg.prompt(promptModelUndisclosedSpec))
+	}
+	if repositoryHidden {
+		rules = append(rules, "【当前发言者身份】不是主人、也不是主人指定的管理员时："+cfg.prompt(promptToolVersionNoRepositorySpec))
+	}
+	return strings.Join(rules, "\n")
+}
+
+// ownerOnlyToolsRule 是主回复头部里「哪些工具群友用不了」那一句：目录按全集列，群友
+// 用不了的名单只随机器人和群的配置变，写在头部。以前每轮在历史后面写一行【本轮发言者的
+// 工具权限】，主人和群友交替说话就来回追加。群友真调了，执行时也会回没有权限。
+func ownerOnlyToolsRule(head *agent.ToolRegistry, shared map[string]bool) string {
+	if head == nil || shared == nil {
+		return ""
+	}
+	var names []string
+	for _, name := range head.PresentedNames() {
+		if !shared[name] {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	return "【只对主人开放的工具】" + strings.Join(names, "、") + "。只有【当前发言者身份】是主人或主人指定的管理员时能用；其他人要你做这些事，直接说需要主人来做，不要调用，也别说能替对方做。"
+}
+
+func pluginResponsesHaveContext(responses []PluginResponse) bool {
+	for _, resp := range responses {
+		if strings.TrimSpace(resp.Context) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// replyModeHeadRules 是主回复头部里【本轮回复方式】各种情况的细则，只随配置和会话类型
+// 变：尾部 replyModeLabels 写这一轮是哪几种，模型照标签到这里找。换行分条按这个会话
+// 平常的发法写，这一轮不一样时尾部另写一句覆盖。
+func replyModeHeadRules(cfg BotConfig, event MessageEvent) string {
+	rules := []string{"【本轮回复方式的细则】尾部【本轮回复方式】写着哪几种情况，就照下面对应的那几条做；没写到的不适用。"}
+	rules = append(rules, "「路由放行」："+strings.TrimSpace(cfg.prompt(promptProactiveReplySpec))+cfg.prompt(promptProactiveToolResultSpec))
+	if event.Kind == EventKindGroup {
+		rules = append(rules, "「闲聊插话」："+cfg.prompt(promptChatInPacingSpec)+cfg.prompt(promptChatInReplySpec)+cfg.prompt(promptChatInNoAgreementSpec))
+	}
+	rules = append(rules,
+		"「带图片」："+cfg.prompt(promptImageReplySpec),
+		"「有只拿到名字的表情」："+cfg.prompt(promptFaceNameOnlySpec),
+		"「有插件结果」："+cfg.prompt(promptPluginAuthoritySpec))
+	if split := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, MessageEvent{Kind: event.Kind, ProfileID: event.ProfileID})); split != "" {
+		rules = append(rules, split)
+	}
+	return strings.Join(rules, "\n")
+}
+
+// replyModeLabels 是尾部【本轮回复方式】里这一轮的情况标签，对应 replyModeHeadRules。
+// 本轮分条方式和头部写的平常发法不同时，把这一轮的说法写全。
+func replyModeLabels(cfg BotConfig, event MessageEvent, proactiveTriggered bool, pluginResponses []PluginResponse) string {
+	var labels []string
+	if proactiveTriggered {
+		labels = append(labels, "「路由放行」")
+	}
+	if event.chatInReply {
+		labels = append(labels, "「闲聊插话」")
+	}
+	if eventCarriesImages(event) {
+		labels = append(labels, "「带图片」")
+	}
+	if eventHasNameOnlyFace(event) {
+		labels = append(labels, "「有只拿到名字的表情」")
+	}
+	if pluginResponsesHaveContext(pluginResponses) {
+		labels = append(labels, "「有插件结果」")
+	}
+	var lines []string
+	if len(labels) > 0 {
+		lines = append(lines, "这一轮："+strings.Join(labels, "、")+"。")
+	}
+	if override := replyPresentationOverride(cfg, event); override != "" {
+		lines = append(lines, override)
+	}
+	usual := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, MessageEvent{Kind: event.Kind, ProfileID: event.ProfileID}))
+	if current := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)); current != usual {
+		if current == "" {
+			current = "这一轮不按换行拆条，上面那条换行怎么发不适用。"
+		}
+		lines = append(lines, "这一轮的换行分条和平常不同，以这一条为准："+current)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
 // 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
 // 用 systemPromptPartsWithRelationshipAndAgentTools 把两段分开放。
@@ -1063,7 +1167,13 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		_, ok := speakerRegistry.Get(name)
 		return ok
 	}
+	repositoryHidden := agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
+	case head != nil:
+		// 主回复头部按全集写：两种说法都写进头部，按【当前发言者身份】挑，换人说话不用
+		// 再追加一段。权限照旧在执行时核验：非主人拿不到 runtime_model。
+		appendPromptSection(&builder, ownerSplitDisclosureRules(cfg, everyone, agentEnabled && hasTool(dianaRuntimeModelToolName), repositoryHidden))
+		appendPromptSection(&builder, ownerOnlyToolsRule(head, shared))
 	case !everyone && !speakerOwner:
 		speakerRules.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
 	case !agentEnabled || !hasSpeakerTool(dianaRuntimeModelToolName):
@@ -1074,7 +1184,7 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	}
 	// 项目地址不对这个人公开时要明说不给链接，随发言者是不是主人分叉，进 tail；
 	// 只答问到的那一项写在 version 的描述里。
-	if agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone && !speakerOwner {
+	if repositoryHidden && head == nil && !speakerOwner {
 		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	if agentEnabled && hasTool(dianaCodingToolName) {
@@ -1162,37 +1272,41 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	if event.Kind == EventKindGroup {
 		mode.WriteString("\n" + groupScopePrompt(event, cfg))
 	}
-	if proactiveTriggered {
-		mode.WriteString("\n")
-		mode.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
-		mode.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
-	}
-	if event.chatInReply {
-		mode.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
-		mode.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
-		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
-		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
-		mode.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
-	}
-	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
-	// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
-	// 那一句也在这里覆盖 head 里的默认版。
-	appendPromptSection(&mode, replyPresentationOverride(cfg, event))
-	appendPromptSection(&mode, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
-	if eventCarriesImages(event) {
-		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
-		mode.WriteString("\n" + cfg.prompt(promptImageReplySpec))
-	}
-	if eventHasNameOnlyFace(event) {
-		mode.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
-	}
-	// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
-	for _, resp := range pluginResponses {
-		if strings.TrimSpace(resp.Context) == "" {
-			continue
+	if head != nil {
+		// 主回复头部模式：各种情况的细则逐字不变，写进头部（replyModeHeadRules），尾部
+		// 只写这一轮是哪几种情况。以前细则跟着变的那几行一起在尾部，对话对象或接话
+		// 方式一变，几百字的固定说明就整段重发。
+		appendPromptSection(&builder, replyModeHeadRules(cfg, event))
+		appendPromptSection(&mode, replyModeLabels(cfg, event, proactiveTriggered, pluginResponses))
+	} else {
+		if proactiveTriggered {
+			mode.WriteString("\n")
+			mode.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
+			mode.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
 		}
-		mode.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
-		break
+		if event.chatInReply {
+			mode.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
+			mode.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
+			// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
+			// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
+			mode.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
+		}
+		// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
+		// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
+		// 那一句也在这里覆盖 head 里的默认版。
+		appendPromptSection(&mode, replyPresentationOverride(cfg, event))
+		appendPromptSection(&mode, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
+		if eventCarriesImages(event) {
+			// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+			mode.WriteString("\n" + cfg.prompt(promptImageReplySpec))
+		}
+		if eventHasNameOnlyFace(event) {
+			mode.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
+		}
+		// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
+		if pluginResponsesHaveContext(pluginResponses) {
+			mode.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
+		}
 	}
 	if mode.Len() > 0 {
 		tail.WriteString("\n【本轮回复方式】")
@@ -1201,7 +1315,13 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
-	if relation := strings.TrimSpace(relationshipPermissionContext(relationship, cfg)); relation != "" {
+	if head != nil {
+		// 宿主机访问那一句两种状态都写进头部，尾部只留好感度和身份。
+		appendPromptSection(&builder, hostAccessHeadRule(cfg))
+		if relation := strings.TrimSpace(relationshipPermissionContext(relationship)); relation != "" {
+			appendPromptSection(&tail, "【当前发言者关系】\n"+relation)
+		}
+	} else if relation := strings.TrimSpace(relationshipPermissionContext(relationship, cfg)); relation != "" {
 		appendPromptSection(&tail, "【当前发言者关系】\n"+relation)
 	}
 	// 关联账号紧跟身份那一行：同一个人在别的平台上是谁，随发言者变，只进尾部。
@@ -1264,7 +1384,9 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 			tail.WriteString("\n【本轮语气】\n")
 			tail.WriteString(mood)
 		}
-		return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
+		// 随发言者变的工具规则都已按全集写进头部（ownerSplitDisclosureRules），尾部不再
+		// 带【当前发言者适用的工具规则】。
+		return builder.String(), strings.TrimSpace(tail.String())
 	}
 	appendPromptSection(&tail, onDemand)
 	appendPromptSection(&tail, groupStyle)
