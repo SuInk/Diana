@@ -106,3 +106,71 @@ func TestBotConfigBehaviorForwardDefaultMatchesSender(t *testing.T) {
 		t.Fatalf("reported forward default differs from sender: %v", values["forward_reply_enabled"])
 	}
 }
+
+// 机器人级「全局关掉合并转发」时，单独设置过的群要点名，并能一并清掉。
+func TestBotConfigBehaviorBotScopeReportsAndClearsGroupOverrides(t *testing.T) {
+	cfg := BotConfig{ID: "b", OwnerID: "b-owner", ForwardReplyEnabled: boolPointer(true), ForwardReplyThreshold: 800}
+	saver := &participationToolSaver{cfg: cfg}
+	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, saver, nil)
+	r.SetProfiles(ProfileSet{Profiles: []BotConfig{cfg}})
+	store := &testWritableGroupConfigStore{}
+	threshold := 400
+	for _, group := range []GroupConfig{
+		{BotProfileID: "b", GroupID: "10001", ForwardReplyEnabled: boolPointer(true), ForwardReplyThreshold: &threshold},
+		{BotProfileID: "b", GroupID: "10002", ForwardReplyThreshold: &threshold},
+		{BotProfileID: "other", GroupID: "10003", ForwardReplyEnabled: boolPointer(true)},
+	} {
+		if _, err := store.SaveGroupConfig(group, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.SetGroupConfigStore(store)
+	event := MessageEvent{Kind: EventKindPrivate, ProfileID: "b", UserID: "b-owner"}
+	groupEvent := MessageEvent{ProfileID: "b", Platform: PlatformOneBotV11, Kind: EventKindGroup, GroupID: "10001", UserID: "b-owner"}
+
+	raw, err := newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "scope": "bot", "behavior": map[string]any{"forward_reply_enabled": false}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Message  string `json:"message"`
+		Behavior struct {
+			GroupOverrides []behaviorGroupOverride `json:"group_overrides"`
+		} `json:"behavior"`
+	}
+	if err := json.Unmarshal([]byte(raw), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(response.Message, "10001") || strings.Contains(response.Message, "10002") || strings.Contains(response.Message, "10003") {
+		t.Fatalf("message should name only the overriding group: %s", response.Message)
+	}
+	if len(response.Behavior.GroupOverrides) != 1 || response.Behavior.GroupOverrides[0].Values["forward_reply_enabled"] != true {
+		t.Fatalf("group_overrides = %+v", response.Behavior.GroupOverrides)
+	}
+	if !boolValue(r.effectiveConfigForEvent(groupEvent).ForwardReplyEnabled, false) {
+		t.Fatal("without clearing, the group override should still win")
+	}
+
+	raw, err = newDianaBotConfigTool(r, event).Run(context.Background(), map[string]any{"operation": "update", "scope": "bot", "behavior": map[string]any{"forward_reply_enabled": false}, "clear_group_overrides": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, "已清掉 1 个群") || strings.Contains(raw, "仍按群里的值") {
+		t.Fatalf("clear response = %s", raw)
+	}
+	group, _ := store.ConfigForGroup("b", "10001")
+	if group.ForwardReplyEnabled != nil || group.ForwardReplyThreshold != nil {
+		t.Fatalf("override not cleared: %+v", group)
+	}
+	if boolValue(r.effectiveConfigForEvent(groupEvent).ForwardReplyEnabled, true) {
+		t.Fatal("group should follow the bot-level off switch")
+	}
+	if other, _ := store.ConfigForGroup("other", "10003"); !boolValue(other.ForwardReplyEnabled, false) {
+		t.Fatal("cleared another bot's group")
+	}
+
+	groupTool := newDianaBotConfigTool(r, groupEvent)
+	if _, err := groupTool.Run(context.Background(), map[string]any{"operation": "update", "behavior": map[string]any{"typing_delay_enabled": true}, "clear_group_overrides": true}); err == nil {
+		t.Fatal("group scope accepted clear_group_overrides")
+	}
+}

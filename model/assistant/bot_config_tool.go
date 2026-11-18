@@ -48,6 +48,7 @@ func (*dianaBotConfigTool) InputSchema() map[string]any {
 		"welcome_templates":            toolStringArrayParam("欢迎模板池，最多 50 条，每条最多 200 字。"),
 		"welcome_llm_cooldown_seconds": toolIntParam("每群 LLM 欢迎冷却秒数；0 使用机器人或系统默认值，冷却期间回落文本。", 0, 86400),
 		"behavior":                     behaviorSettingsSchema(),
+		"clear_group_overrides":        toolBoolParam("仅 scope=bot 且带 behavior 时可用：同时清掉各群对这些项的单独设置，让机器人级的值在所有群生效。单独设置过的群列在返回的 behavior.group_overrides 里。"),
 		"group_settings":               groupSettingsSchema(),
 		"plugin":                       toolStringParam("get 时查看该插件 ID 的详细设置：可改的键、类型、选项和当前生效值。"),
 		"plugin_settings":              pluginSettingsSchema(),
@@ -140,10 +141,12 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 	prefs := effective.participationPreferences()
 	minimum := group.MinimumReplyMemberLevel
 	var stagedKeys []string
+	var clearedGroups []string
+	var behavior []behaviorValue
 	if op == "update" {
 		allowed := map[string]bool{"operation": true, "scope": true, "section": true, "desire_level": true, "relevance_level": true, "chat_level": true, "proactive_mode": true, "rule_chance": true, "cooldown_seconds": true, "minimum_reply_member_level": true,
 			"welcome_enabled": true, "welcome_message": true, "welcome_mode": true, "welcome_templates": true, "welcome_llm_cooldown_seconds": true,
-			"behavior": true, "group_settings": true, "plugin_settings": true, "plugin": true, "fields": true, "list_fields": true}
+			"behavior": true, "clear_group_overrides": true, "group_settings": true, "plugin_settings": true, "plugin": true, "fields": true, "list_fields": true}
 		for key := range input {
 			if !allowed[key] {
 				return "", fmt.Errorf("不支持配置项 %q", key)
@@ -296,7 +299,6 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 		if err != nil {
 			return "", err
 		}
-		var behavior []behaviorValue
 		if raw, ok := input["behavior"]; ok {
 			behavior, err = parseBehaviorSettings(raw, scope)
 			if err != nil {
@@ -304,6 +306,10 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 			}
 			update.Behavior = behavior
 			changed = true
+		}
+		clearGroupOverrides, _ := input["clear_group_overrides"].(bool)
+		if clearGroupOverrides && (scope != "bot" || len(behavior) == 0) {
+			return "", fmt.Errorf("clear_group_overrides 只能在 scope=bot 修改 behavior 时使用")
 		}
 		if participationChanged {
 			update.Participation = copyParticipation(&prefs)
@@ -367,6 +373,12 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 					return "", err
 				}
 			}
+			if clearGroupOverrides {
+				clearedGroups, err = t.runtime.clearBehaviorGroupOverrides(base.ID, behaviorKeys(behavior))
+				if err != nil {
+					return "", err
+				}
+			}
 		}
 		if scope == "group" {
 			effective = t.runtime.effectiveConfigForEvent(t.event)
@@ -391,9 +403,18 @@ func (t *dianaBotConfigTool) Run(ctx context.Context, input map[string]any) (out
 		behaviorView = behaviorSettingsView(effective, &group)
 	} else {
 		behaviorView = behaviorSettingsView(effective, nil)
+		behaviorView["group_overrides"] = t.runtime.behaviorGroupOverrides(base.ID, nil)
 	}
 	if op == "update" {
 		message = "已保存并应用机器人设置"
+		if len(clearedGroups) > 0 {
+			message += fmt.Sprintf("；已清掉 %d 个群（%s）对这些项的单独设置，现在都跟随机器人", len(clearedGroups), strings.Join(clearedGroups, "、"))
+		}
+		if keys := behaviorKeys(behavior); scope == "bot" && len(keys) > 0 {
+			if remaining := behaviorGroupIDs(t.runtime.behaviorGroupOverrides(base.ID, keys)); len(remaining) > 0 {
+				message += fmt.Sprintf("；但 %d 个群（%s）单独设置了这些项，仍按群里的值，机器人级的改动在这些群不生效。要所有群都生效，带 clear_group_overrides=true 再改一次", len(remaining), strings.Join(remaining, "、"))
+			}
+		}
 		if len(stagedKeys) > 0 {
 			message = fmt.Sprintf("连接类改动 %s 已暂存，未生效；请主人在下一条消息里确认，确认后用 operation=confirm 应用（%d 分钟内有效）", strings.Join(stagedKeys, "、"), int(pendingBotFieldsTTL/time.Minute))
 		}
@@ -473,6 +494,54 @@ func proactiveModeView(p ParticipationPreferences) map[string]any {
 		view["chat_threshold"] = threshold
 	}
 	return view
+}
+
+func behaviorGroupIDs(overrides []behaviorGroupOverride) []string {
+	ids := make([]string, 0, len(overrides))
+	for _, override := range overrides {
+		ids = append(ids, override.GroupID)
+	}
+	return ids
+}
+
+// behaviorGroupOverrides 列出这台机器人单独设置了 keys 的群；存储列不出群时为空。
+func (r *Runtime) behaviorGroupOverrides(profileID string, keys []string) []behaviorGroupOverride {
+	r.mu.RLock()
+	lister, _ := r.groupConfigs.(groupConfigLister)
+	r.mu.RUnlock()
+	if lister == nil {
+		return []behaviorGroupOverride{}
+	}
+	return behaviorGroupOverrides(profileID, lister.Groups().Groups, keys)
+}
+
+// clearBehaviorGroupOverrides 清掉各群对 keys 的单独设置，返回改动过的群号。
+func (r *Runtime) clearBehaviorGroupOverrides(profileID string, keys []string) ([]string, error) {
+	overrides := r.behaviorGroupOverrides(profileID, keys)
+	if len(overrides) == 0 {
+		return nil, nil
+	}
+	r.mu.RLock()
+	writer, ok := r.groupConfigs.(GroupConfigWriter)
+	r.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("当前未接入可写的群配置存储，无法清掉群级设置")
+	}
+	base := r.ProfileConfig(profileID)
+	values := clearBehaviorValues(keys)
+	cleared := make([]string, 0, len(overrides))
+	for _, override := range overrides {
+		group, found := writer.ConfigForGroup(profileID, override.GroupID)
+		if !found {
+			continue
+		}
+		group = applyBehaviorToGroup(group, base, values)
+		if _, err := writer.SaveGroupConfig(group, base); err != nil {
+			return cleared, fmt.Errorf("清掉群 %s 的单独设置失败：%w", override.GroupID, err)
+		}
+		cleared = append(cleared, override.GroupID)
+	}
+	return cleared, nil
 }
 
 func behaviorKeys(values []behaviorValue) []string {
