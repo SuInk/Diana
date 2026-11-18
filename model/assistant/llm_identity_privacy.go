@@ -134,6 +134,8 @@ type identityPrivacyScope struct {
 type identityPrivacyProvider struct {
 	provider LLMProvider
 	scope    *identityPrivacyScope
+	// sent 是进程级的发过的正文，见 privacySentMemo；restore 是那段正文里别名到真实号码的对照。
+	sent *privacySentMemo[map[string]string]
 }
 
 // IdentityAliasSaltStore 持久化脱敏别名的盐。
@@ -335,7 +337,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 		scope.known = &r.identityAliases
 	}
 	return func(provider LLMProvider) (string, error) {
-		return run(&identityPrivacyProvider{provider: provider, scope: scope})
+		return run(&identityPrivacyProvider{provider: provider, scope: scope, sent: &r.identitySent})
 	}
 }
 
@@ -346,7 +348,7 @@ func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.Generate
 	if p.scope == nil {
 		return p.provider.Generate(ctx, req)
 	}
-	protected := p.scope.protectRequest(req)
+	protected := p.scope.protectRequestSent(req, p.sent, privacySentRoute(ctx))
 	response, err := p.provider.Generate(withIdentityPrivacyScope(ctx, p.scope), protected)
 	if err != nil || response == nil {
 		return response, err
@@ -624,16 +626,22 @@ func isE164PhoneIdentifier(value string) bool {
 }
 
 func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {
+	return s.protectRequestSent(req, nil, "")
+}
+
+// protectRequestSent 和 protectRequest 一样，正文在 route 上发过的照发过的样子发。
+func (s *identityPrivacyScope) protectRequestSent(req llm.GenerateRequest, sent *privacySentMemo[map[string]string], route string) llm.GenerateRequest {
+	protectText := func(text string) string { return s.protectSentText(text, sent, route) }
 	protected := req
 	protected.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
 		protectedMessage := message
-		protectedMessage.Content = s.protectText(message.Content)
+		protectedMessage.Content = protectText(message.Content)
 		if len(message.Parts) > 0 {
 			protectedMessage.Parts = make([]llm.ContentPart, len(message.Parts))
 			for partIndex, part := range message.Parts {
 				protectedPart := part
-				protectedPart.Text = s.protectText(part.Text)
+				protectedPart.Text = protectText(part.Text)
 				protectedMessage.Parts[partIndex] = protectedPart
 			}
 		}
@@ -691,6 +699,36 @@ func (s *identityPrivacyScope) protectValue(value any) any {
 		return out
 	}
 	return value
+}
+
+// protectSentText 是 protectText，正文在 route 上发过的照发过的样子发。
+func (s *identityPrivacyScope) protectSentText(text string, sent *privacySentMemo[map[string]string], route string) string {
+	if sent == nil || route == "" || strings.TrimSpace(text) == "" {
+		return s.protectText(text)
+	}
+	if before, ok := sent.get(route, text); ok {
+		// 正文里的结构化账号照常登记，后面没发过的正文和工具参数还要用。
+		s.discoverStructuredIDs(text)
+		s.mu.Lock()
+		for alias, realID := range before.restore {
+			if _, known := s.aliasToReal[alias]; !known {
+				s.aliasToReal[alias] = realID
+			}
+		}
+		s.mu.Unlock()
+		return before.text
+	}
+	out := s.protectText(text)
+	restore := map[string]string{}
+	s.mu.Lock()
+	for _, alias := range identityPrivacyAliasTokenPattern.FindAllString(out, -1) {
+		if realID, ok := s.aliasToReal[alias]; ok {
+			restore[alias] = realID
+		}
+	}
+	s.mu.Unlock()
+	sent.put(route, text, privacySent[map[string]string]{text: out, restore: restore})
+	return out
 }
 
 func (s *identityPrivacyScope) protectText(text string) string {
