@@ -420,6 +420,9 @@ type Runtime struct {
 	identityAliases identityAliasRegistry
 	// secretContextValues 记住只能靠上下文认出来的敏感值，见 secretContextRegistry。
 	secretContextValues secretContextRegistry
+	// identitySent、secretSent 是两个隐私代理发过的正文，见 privacySentMemo。
+	identitySent        privacySentMemo[map[string]string]
+	secretSent          privacySentMemo[map[string]secretPrivacyEntry]
 	mu                  sync.RWMutex
 	modelConfigMu       sync.Mutex
 	modelRoutingMu      sync.Mutex
