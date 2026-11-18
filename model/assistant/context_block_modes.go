@@ -20,17 +20,16 @@ const (
 )
 
 const (
-	ContextBlockCrossGroup   = "cross_group"
-	ContextBlockNotebook     = "notebook"
-	ContextBlockSelfNote     = "self_note"
-	ContextBlockWallet       = "wallet"
-	ContextBlockMediaIndex   = "media_index"
-	ContextBlockWorldBook    = "world_book"
-	ContextBlockMood         = "mood"
-	ContextBlockGroupStyle   = "group_style"
-	ContextBlockGroupRules   = "group_rules"
-	ContextBlockLinkPolicy   = "link_policy"
-	ContextBlockSourceRecall = "source_recall"
+	ContextBlockCrossGroup = "cross_group"
+	ContextBlockNotebook   = "notebook"
+	ContextBlockSelfNote   = "self_note"
+	ContextBlockWallet     = "wallet"
+	ContextBlockMediaIndex = "media_index"
+	ContextBlockWorldBook  = "world_book"
+	ContextBlockMood       = "mood"
+	ContextBlockGroupStyle = "group_style"
+	ContextBlockGroupRules = "group_rules"
+	ContextBlockLinkPolicy = "link_policy"
 )
 
 // contextBlockOnDemandHints 是能按需的块和按需时告诉模型的查法，按这个顺序写进头部。
@@ -46,7 +45,7 @@ var contextBlockOnDemandHints = []struct{ key, hint string }{
 var contextBlockKeys = map[string]bool{
 	ContextBlockCrossGroup: true, ContextBlockNotebook: true, ContextBlockSelfNote: true, ContextBlockWallet: true,
 	ContextBlockMediaIndex: true, ContextBlockWorldBook: true, ContextBlockMood: true, ContextBlockGroupStyle: true,
-	ContextBlockGroupRules: true, ContextBlockLinkPolicy: true, ContextBlockSourceRecall: true,
+	ContextBlockGroupRules: true, ContextBlockLinkPolicy: true,
 }
 
 func contextBlockOnDemandAllowed(key string) bool {

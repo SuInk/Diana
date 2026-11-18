@@ -4523,7 +4523,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		if sources := r.claimSourceContext(event); sources != "" && contextBlockIncluded(cfg, ContextBlockSourceRecall) {
+		if sources := r.claimSourceContext(event); sources != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    sources,

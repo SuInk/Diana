@@ -3237,8 +3237,7 @@ const contextBlockDefinitions: { key: string; label: string; hint: string; onDem
   { key: "mood", label: "心情", hint: "【本轮语气】里的心情，随时间和互动变。", onDemand: false, feature: () => (form.value?.mood_enabled ? "" : "情绪系统没开") },
   { key: "group_style", label: "群说话风格", hint: "学到的这个群的说话风格，在头部。", onDemand: false, feature: () => (form.value?.expression_learning_enabled ? "" : "风格学习没开") },
   { key: "group_rules", label: "群约定", hint: "群管理里给这个群写的约定，在头部。", onDemand: false },
-  { key: "link_policy", label: "链接策略", hint: "联网结论要不要附链接，跟着联网搜索插件的设置。", onDemand: false },
-  { key: "source_recall", label: "上一轮的来源链接", hint: "前几轮联网查到的链接，有人要链接时照着给。", onDemand: false }
+  { key: "link_policy", label: "链接策略", hint: "联网结论要不要附链接，跟着联网搜索插件的设置。", onDemand: false }
 ];
 const contextBlockRows = computed(() => contextBlockDefinitions.map((block) => ({
   key: block.key,
