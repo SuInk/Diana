@@ -70,6 +70,29 @@ func TestExplicitSilentSkipsInterimDelivery(t *testing.T) {
 	}
 }
 
+// silent 和 continue 一起填时按不说话收尾，不再续一步把模型推去写最终回复。
+func TestSilentSendWithContinueEndsTurn(t *testing.T) {
+	client := &silentFinalizeClient{arguments: map[string]any{
+		"silent": true, "silent_reason": "他在叫别的机器人，不是叫我", "continue": true, "text": "不该发出的正文",
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4,
+		Interim: func(context.Context, string) (string, error) {
+			t.Fatal("silent send must not be delivered")
+			return "", nil
+		},
+	}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "小雪？"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || resp.Text != "" || len(client.requests) != 1 {
+		t.Fatalf("resp = %#v, requests = %d", resp, len(client.requests))
+	}
+}
+
 func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, req)
 	return &llm.GenerateResponse{

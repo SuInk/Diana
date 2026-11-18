@@ -468,7 +468,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 一下今天的新闻」「我查一下数字人民币最近的官方消息」都是这样收的工）。照中途
 		// 发言发出去，再给模型一步；连续两次只说不做就不再续，按收尾处理。这句常常就是一
 		// 整条回复，走 InterimReply 先过审核（见 Config.InterimReply）。
-		if onlySendCalls(resp.ToolCalls) && sendContinues(resp.ToolCalls) && r.cfg.Interim != nil && continueOnlySends < maxContinueOnlySends {
+		//
+		// 全是 silent 的 send 不续：模型已经决定不说话，continue 是顺手填的。11-17 TG 群有
+		// 人喊别的机器人「小雪？」，第一步判了「他在叫小雪bot，不是叫我」并 silent，却也填了
+		// continue；续出来的那步被末尾「写最终回复前」推着，硬答了一句。
+		if onlySendCalls(resp.ToolCalls) && sendContinues(resp.ToolCalls) && !allSendsSilent(resp.ToolCalls) && r.cfg.Interim != nil && continueOnlySends < maxContinueOnlySends {
 			continueOnlySends++
 			deliver := r.cfg.InterimReply
 			if deliver == nil {
@@ -2234,6 +2238,16 @@ func sendContinues(calls []llm.ToolCall) bool {
 		}
 	}
 	return false
+}
+
+// allSendsSilent 报告这一步的 send 是不是都填了 silent=true。
+func allSendsSilent(calls []llm.ToolCall) bool {
+	for _, call := range calls {
+		if silent, _ := call.Arguments["silent"].(bool); call.Name == finalizeToolName && !silent {
+			return false
+		}
+	}
+	return true
 }
 
 // sendCallIndices 返回一步里 send 调用的下标。

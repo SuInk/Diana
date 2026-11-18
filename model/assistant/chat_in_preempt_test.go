@@ -76,6 +76,24 @@ func TestChatInPreemptOnlyAffectsUnaddressedSameGroupReplies(t *testing.T) {
 	}
 }
 
+// 11-17 线上那次：同群里被直接追问的回复先发出去，另一个人的主动接话照样发。
+func TestChatInNotDroppedByDirectedReplyDuringTurn(t *testing.T) {
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
+	chatInCtx := chatInReplyCtx(time.Now().Add(-time.Second), "turn-chat-in")
+	directed := chatInPreemptEvent("10001", "u1", "m1", false)
+	if _, err := runtime.sendOutgoingWithResult(chatInReplyCtx(time.Now(), "turn-directed"), directed, OutgoingMessage{GroupID: "10001", Text: "C++20 主要就模块、协程和 ranges"}); err != nil {
+		t.Fatal(err)
+	}
+	chatIn := chatInPreemptEvent("10001", "u2", "m2", true)
+	if _, err := runtime.sendOutgoingWithResult(chatInCtx, chatIn, OutgoingMessage{GroupID: "10001", Text: "这仨都是同一个模型的变体"}); err != nil {
+		t.Fatalf("chat-in after a directed reply err = %v, want sent", err)
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 2 {
+		t.Fatalf("sent %d messages, want 2", len(sent))
+	}
+}
+
 func TestChatInPreemptOutcomeDescribed(t *testing.T) {
 	decision, reason, handled := DescribeEventOutcome("superseded_proactive_own_reply")
 	if decision != "not_replied" || reason != chatInPreemptedReason || handled {
