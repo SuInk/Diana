@@ -749,3 +749,25 @@ func splitRetrievedMemory(block string) (head, retrieved string) {
 	}
 	return strings.TrimSpace(block), ""
 }
+
+// appendContinuationOverLimit 报告这一轮接着上一轮续的话会不会超过上限。
+//
+// 续接的请求是上一轮的前缀加这一轮追加的，比这一轮完整组装的大：前缀里攒着每轮的
+// 回复、工具备注和当时的尾部。以前滑窗只看完整组装：续接撞上限重新组装时，完整组装
+// 还没到阈值、不滑，重组出来照样有八成多，几轮后又撞上。11-18 生产 swe-2 385 轮里
+// 121 轮是这样整份重发的，重组后的完整组装中位 8.3 万、上限 11.2 万，约 5 轮撞一次。
+// 照 Pi：请求到了阈值就滑窗，重组时从「摘要 + 近 2 万原文」重新开始。
+func (r *Runtime) appendContinuationOverLimit(ctx context.Context, event MessageEvent, messages []llm.Message, limit int64) bool {
+	if limit <= 0 {
+		return false
+	}
+	if purpose := llmUsagePurposeFromContext(ctx); purpose != "" && purpose != PurposeReply {
+		return false
+	}
+	previous := r.appendContexts.get(appendContextKey(event))
+	if previous == nil {
+		return false
+	}
+	_, decision := appendContextContinuation(previous, messages, limit)
+	return decision.reason == "context_limit"
+}

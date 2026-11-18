@@ -721,3 +721,61 @@ func TestCompactionThresholdRespectsMaxOutput(t *testing.T) {
 		t.Fatalf("threshold = %d, want the input budget %d", got, want)
 	}
 }
+
+// 续接的请求是上一轮的前缀加这一轮追加的，比完整组装大。完整组装还没到阈值、续接
+// 却要撞上限时也滑窗，重组时从「摘要 + 近期原文」重新开始，不是原样重组、几轮后又撞。
+func TestReplySlidesWhenContinuationWouldPassLimit(t *testing.T) {
+	provider := &replyCompactionProvider{}
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, MaxContextTokens: 60000, LLMIdentityMaskingEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+	history := compactionTestHistory(300, strings.Repeat("群聊发言", 12))
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10002", MessageID: "current", RawMessage: "Diana 帮我看看", Time: 1700000000 + 400*60}
+	anchor := messageHistoryDedupeKey(history[0])
+	runtime.setHistoryWindowAnchor(compactionAnchorKey(current), anchor)
+	runtime.groupPromptSession(current).rememberAnchor(anchor)
+	cfg := runtime.effectiveConfigForEvent(current)
+	threshold := compactionThreshold(runtime.promptCompactionWindow(current, cfg))
+	// 上一轮的前缀已经攒到快到上限，这一轮再追加就超。
+	previous := &appendContextLog{key: "previous-run", definitions: []llm.ToolDefinition{{Name: "send"}},
+		prefix: []llm.Message{{Role: llm.RoleSystem, Content: strings.Repeat("前缀", int(threshold))}}}
+	previous.index()
+	runtime.appendContexts.put(appendContextKey(current), previous)
+	if _, err := runtime.replyTo(context.Background(), current, current.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	runtime.stopIdleCompactions()
+	if runtime.groupPromptSession(current).anchor() == anchor {
+		t.Fatal("anchor did not move: the rebuild after the continuation limit must slide too")
+	}
+}
+
+// 续接没到上限时照旧不滑：完整组装也没到阈值，滑了只会让下一次重组白白少带历史。
+func TestReplyKeepsHistoryWhenContinuationFits(t *testing.T) {
+	provider := &replyCompactionProvider{}
+	runtime := NewRuntime(BotConfig{GroupTriggers: []string{"Diana"}, MaxContextTokens: 60000, LLMIdentityMaskingEnabled: boolPointer(false)}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+	history := compactionTestHistory(300, strings.Repeat("群聊发言", 12))
+	for _, item := range history {
+		_ = store.AppendMessageEvent(context.Background(), sessionKey(item), item)
+	}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SelfID: "10002", MessageID: "current", RawMessage: "Diana 帮我看看", Time: 1700000000 + 400*60}
+	anchor := messageHistoryDedupeKey(history[0])
+	runtime.setHistoryWindowAnchor(compactionAnchorKey(current), anchor)
+	runtime.groupPromptSession(current).rememberAnchor(anchor)
+	previous := &appendContextLog{key: "previous-run", definitions: []llm.ToolDefinition{{Name: "send"}},
+		prefix: []llm.Message{{Role: llm.RoleSystem, Content: "短前缀"}}}
+	previous.index()
+	runtime.appendContexts.put(appendContextKey(current), previous)
+	if _, err := runtime.replyTo(context.Background(), current, current.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	runtime.stopIdleCompactions()
+	if runtime.groupPromptSession(current).anchor() != anchor {
+		t.Fatal("history slid although neither the full request nor the continuation is over the limit")
+	}
+}
