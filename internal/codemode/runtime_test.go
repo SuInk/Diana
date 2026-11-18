@@ -77,7 +77,8 @@ func TestRuntimeLimits(t *testing.T) {
 		{"budget", `try { await tools.read({}); } catch {} return 1`, "host_limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			timeout := 2 * time.Second
+			// output 要写满 1600 万字才触发上限，-race 下解释器慢好几倍，2 秒会先超时。
+			timeout := 30 * time.Second
 			if tc.kind == "timeout" {
 				timeout = 150 * time.Millisecond
 			}

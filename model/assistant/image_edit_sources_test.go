@@ -171,6 +171,8 @@ func TestImageToolEditResolvesSourcesBeforeQueueing(t *testing.T) {
 	if got := runtime.imageEditSources.recall(sessionKey(withImage), time.Now()); strings.Join(got, ",") != editSourceOriginal {
 		t.Fatalf("remembered sources = %#v", got)
 	}
+	// 后台任务会读包级配置，等它跑完再结束，免得和后面改全局量的测试竞争。
+	waitForCondition(t, 3*time.Second, func() bool { return runtime.activeSubagentTaskCount() == 0 })
 }
 
 func TestPublicChatErrorMessageForImageEditFailures(t *testing.T) {
