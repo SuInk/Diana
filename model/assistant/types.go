@@ -483,17 +483,21 @@ type Reminder struct {
 	// Timezone 是建这条任务时用的时区（IANA 名，发言者记过时区就是他的，否则是机器人
 	// 时区）。「每周一」「每月 1 号」按它数日子，之后改机器人时区不会让已有任务挪天。
 	// 空值是这个字段之前的旧记录，按锚点自带的时区排，保持升级前的行为。
-	Timezone                string    `json:"timezone,omitempty"`
-	LastRunAt               time.Time `json:"last_run_at,omitempty"`
-	CancelledAt             time.Time `json:"cancelled_at,omitempty"`
-	LastError               string    `json:"last_error,omitempty"`
-	ConsecutiveFailures     int       `json:"consecutive_failures,omitempty"`
-	LastFailureStage        string    `json:"last_failure_stage,omitempty"`
-	LastErrorFingerprint    string    `json:"last_error_fingerprint,omitempty"`
-	FailureAlertedAt        time.Time `json:"failure_alerted_at,omitempty"`
-	RecoveryNoticePending   bool      `json:"recovery_notice_pending,omitempty"`
-	PendingDelivery         string    `json:"pending_delivery,omitempty"`
-	PendingDeliveredTargets []string  `json:"pending_delivered_targets,omitempty"`
+	Timezone              string    `json:"timezone,omitempty"`
+	LastRunAt             time.Time `json:"last_run_at,omitempty"`
+	CancelledAt           time.Time `json:"cancelled_at,omitempty"`
+	LastError             string    `json:"last_error,omitempty"`
+	ConsecutiveFailures   int       `json:"consecutive_failures,omitempty"`
+	LastFailureStage      string    `json:"last_failure_stage,omitempty"`
+	LastErrorFingerprint  string    `json:"last_error_fingerprint,omitempty"`
+	FailureAlertedAt      time.Time `json:"failure_alerted_at,omitempty"`
+	RecoveryNoticePending bool      `json:"recovery_notice_pending,omitempty"`
+	PendingDelivery       string    `json:"pending_delivery,omitempty"`
+	// PendingDeliveredTargets 记已经投完的目标；「目标#步骤」形式的条目记一条消息里
+	// 已经送达的那几段（文字、某张图），补投时跳过，见 subscription_delivery_progress.go。
+	PendingDeliveredTargets []string `json:"pending_delivered_targets,omitempty"`
+	// PendingDeliveryAttempts 是同一份待投内容已经投失败的次数，到上限就丢弃不再补投。
+	PendingDeliveryAttempts int `json:"pending_delivery_attempts,omitempty"`
 	// PendingRepositoryAnchorsJSON 保存补投所需的 Issue/PR 编号与状态。
 	PendingRepositoryAnchorsJSON string `json:"pending_repository_anchors,omitempty"`
 	// PendingDeliveryReference 是仓库通知补投成功后生成跟评所需的私有参考资料。

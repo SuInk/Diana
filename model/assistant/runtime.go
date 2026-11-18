@@ -7618,6 +7618,7 @@ func (r *Runtime) sendChannelWithRetry(ctx context.Context, msg OutgoingMessage,
 }
 
 func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMessage, attempts int, events ...MessageEvent) (map[string]any, error) {
+	// 每一步都经 deliveryProgressStep：订阅补投时已经送达的文字或图片不再发第二遍。
 	var result map[string]any
 	if strings.TrimSpace(msg.Text) != "" {
 		text := msg
@@ -7625,7 +7626,9 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 		text.VideoURLs = nil
 		text.AudioURLs = nil
 		var err error
-		result, err = r.sendChannelPayloadWithRetry(ctx, text, attempts)
+		result, err = deliveryProgressStep(ctx, "text", func() (map[string]any, error) {
+			return r.sendChannelPayloadWithRetry(ctx, text, attempts)
+		})
 		if err != nil {
 			return nil, err
 		}
@@ -7642,15 +7645,17 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 			part.GeneratedImageModels = msg.GeneratedImageModels[index : index+1]
 		}
 		part.VideoURLs = nil
-		imageResult, err := r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		imageResult, err := deliveryProgressStep(ctx, fmt.Sprintf("image:%d", index), func() (map[string]any, error) {
+			return r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		})
 		if err != nil {
 			return result, err
 		}
-		if len(events) > 0 {
+		if len(events) > 0 && imageResult != nil {
 			r.rememberImageModels(events[0], part, apiMessageID(imageResult))
 		}
 	}
-	for _, video := range msg.VideoURLs {
+	for index, video := range msg.VideoURLs {
 		part := msg
 		part.AudioURLs = nil
 		part.Text = ""
@@ -7658,16 +7663,20 @@ func (r *Runtime) sendTelegramStepsWithRetry(ctx context.Context, msg OutgoingMe
 		part.MentionUserID = ""
 		part.ImageURLs = nil
 		part.VideoURLs = []string{video}
-		if _, err := r.sendChannelPayloadWithRetry(ctx, part, attempts); err != nil {
+		if _, err := deliveryProgressStep(ctx, fmt.Sprintf("video:%d", index), func() (map[string]any, error) {
+			return r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		}); err != nil {
 			return result, err
 		}
 	}
-	for _, audio := range msg.AudioURLs {
+	for index, audio := range msg.AudioURLs {
 		part := msg
 		part.Text, part.MentionUserID = "", ""
 		part.ImageURLs, part.VideoURLs = nil, nil
 		part.AudioURLs = []string{audio}
-		sent, err := r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		sent, err := deliveryProgressStep(ctx, fmt.Sprintf("audio:%d", index), func() (map[string]any, error) {
+			return r.sendChannelPayloadWithRetry(ctx, part, attempts)
+		})
 		if err != nil {
 			return result, err
 		}
@@ -8991,6 +9000,7 @@ func (r *Runtime) storeRSSWatchProgress(id string, sources []ReminderFeedSource,
 		}
 		applyRSSWatchSources(item, sources)
 		item.PendingDeliveredTargets = nil
+		item.PendingDeliveryAttempts = 0
 		item.PendingDelivery = strings.TrimSpace(pending)
 		if item.PendingDelivery != "" {
 			item.PendingSince = time.Now()

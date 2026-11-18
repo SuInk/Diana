@@ -454,6 +454,10 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 			return nil, err
 		}
 		result, err := c.sendMedia(ctx, chatID, msg.MessageThreadID, method, field, image, msg.ReplyMessageID)
+		if err != nil && telegramURLFetchRejected(err) && telegramRemoteHTTPURL(image) {
+			log.Printf("telegram: image URL fetch rejected, uploading a local copy: chat_id=%s err=%v", chatID, err)
+			result, err = c.sendRemoteImageUpload(ctx, chatID, msg.MessageThreadID, image, msg.ReplyMessageID)
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -2079,6 +2079,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 				items[index].LastError = runErr.Error()
 				items[index].ConsecutiveFailures++
 			}
+			dropRSSWatchPendingAfterMaxAttempts(&items[index])
 			items[index].TriggerAt = time.Now().Add(durableReminderRetryDelay(items[index], runErr, items[index].ConsecutiveFailures))
 		} else {
 			if items[index].ConsecutiveFailures > 0 && reminderConnectionFailure(items[index].LastError) {
@@ -2093,6 +2094,7 @@ func (r *Runtime) finishRecurringReminder(id string, startedAt time.Time, runErr
 			items[index].PendingDeliveryReference = ""
 			items[index].PendingRepositoryAnchorsJSON = ""
 			items[index].PendingDeliveredTargets = nil
+			items[index].PendingDeliveryAttempts = 0
 			items[index].PendingSince = time.Time{}
 			items[index].TriggerAt = nextRecurringTrigger(items[index], startedAt, time.Now())
 		}
