@@ -263,6 +263,21 @@ func appendTestReplyRequests(provider *sequenceLLMProvider) []llm.GenerateReques
 	return replies
 }
 
+// requireStrictPrefix 要求 next 以 previous 整份逐条开头（只追加），而且比它长。
+// 只用于本轮的标记和缓存断点不算内容。
+func requireStrictPrefix(t *testing.T, previous, next []llm.Message) {
+	t.Helper()
+	if len(next) <= len(previous) {
+		t.Fatalf("request does not extend the previous one: %d vs %d", len(next), len(previous))
+	}
+	for index, want := range previous {
+		got := next[index]
+		if got.Role != want.Role || appendContextText(got) != appendContextText(want) || !reflect.DeepEqual(got.ToolCalls, want.ToolCalls) || got.ToolCallID != want.ToolCallID {
+			t.Fatalf("request rewrites the previous one at %d:\n got %s: %.200q\nwant %s: %.200q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
+		}
+	}
+}
+
 // requirePrefixOf 要求 request 以 prefix 逐条开头，而且比它长。
 func requirePrefixOf(t *testing.T, prefix, request []llm.Message) {
 	t.Helper()
@@ -277,60 +292,10 @@ func requirePrefixOf(t *testing.T, prefix, request []llm.Message) {
 	}
 }
 
-// requireChatOnlyPrefix 检查前缀：开头 baseline 条是重新组装那一轮的请求（头部、历史、
-// 那一轮的尾部和当前消息），原样留着；之后只能有聊天历史行、机器人的发言对、运行时
-// 记录、新加载的工具契约、变了才追加的状态块和历轮的当前消息（正文含 currents 里的
-// 某一句），没有只用于本轮的消息。工具调用和
-// 结果一一成对，返回 baseline 之后的发言正文。
-func requireChatOnlyPrefix(t *testing.T, prefix []llm.Message, baseline int, currents ...string) (spoken []string) {
-	t.Helper()
-	for index := 0; index < len(prefix); index++ {
-		message := prefix[index]
-		content := appendContextText(message)
-		if message.TurnOnly {
-			t.Fatalf("turn-only message in the prefix at %d: %.200q", index, content)
-		}
-		if index < baseline {
-			if message.Role == llm.RoleAssistant || message.Role == llm.RoleTool {
-				t.Fatalf("the reassembled request holds no replies in this test, got %s at %d", message.Role, index)
-			}
-			continue
-		}
-		switch {
-		case message.Role == llm.RoleAssistant:
-			if !llm.IsHistoryReplyMessage(message) || len(message.ToolCalls) != 1 || len(message.ResponsesOutput) != 0 || content != "" {
-				t.Fatalf("assistant message at %d is not a bare send call: %#v", index, message)
-			}
-			if index+1 >= len(prefix) || prefix[index+1].Role != llm.RoleTool || prefix[index+1].ToolCallID != message.ToolCalls[0].ID || prefix[index+1].Content != "已发送" {
-				t.Fatalf("send call at %d has no matching result", index)
-			}
-			spoken = append(spoken, llm.HistoryReplyText(message))
-			index++
-		case message.Role == llm.RoleTool:
-			t.Fatalf("tool result without its call at %d: %#v", index, message)
-		case message.Role == llm.RoleSystem, strings.HasPrefix(content, "【"):
-			// 只追加：尾部的状态块变了就追加新的一版，留在前缀里。
-		case isHistoryLine(content), strings.HasPrefix(content, replyToolTraceNotePrefix):
-		case strings.HasPrefix(content, "【系统补充指令，不是用户发言】") && strings.Contains(content, "又加载了下面的工具"):
-			// 群里新加载的工具契约留在前缀里：它按群持久，后面每一轮都照着它调用。
-		default:
-			current := false
-			for _, text := range currents {
-				current = current || strings.Contains(content, text)
-			}
-			if !current {
-				t.Fatalf("unexpected message in the prefix at %d: %s %.300q", index, message.Role, content)
-			}
-		}
-	}
-	return spoken
-}
-
-// 整轮走三遍，中间一轮先说一句、调工具、再说一句：每一轮的请求都以上一轮记下的前缀
-// 逐条开头；前缀是第一轮（重新组装）的请求加之后的历史行、发言对、运行时记录和历轮的
-// 当前消息，没有后面几轮的尾部、没有工具调用和结果。尾部里和第一轮相同的段（这个群
-// 的约定）后面不再发，输出前检查每次请求都在。
-func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
+// 整轮走三遍，中间一轮先说一句、调工具、再说一句：每一次请求（同一轮的各步、两轮
+// 之间）都以上一次请求整份开头，工具调用和结果留在前缀里。尾部里和第一轮相同的段
+// （这个群的约定）后面不再发，输出前检查每次请求都在头部。
+func TestReplyRequestsAreStrictPrefixes(t *testing.T) {
 	channel := &recordingChannel{}
 	provider := &sequenceLLMProvider{replies: []string{
 		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"在的"}}]`,
@@ -379,37 +344,24 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 	if !sawResult {
 		t.Fatal("the second step of a turn must still see that turn's tool result")
 	}
-	// 每一轮记下的前缀 = 这一轮第一步的请求去掉只用于本轮的消息，加这一轮的发言（和
-	// 一行工具记录）；下一轮的请求以它逐条开头。模型客户端看到的请求经过隐私代理改写
-	// （第一条 system、账号别名），所以拿客户端看到的两份请求互相比。
-	firstStep := []int{0, 1, 3}
-	added := []int{2, 5}
-	baseline := len(withoutTurnOnly(replies[0].Messages))
-	for turn, wantAdded := range added {
-		kept := withoutTurnOnly(replies[firstStep[turn]].Messages)
-		prefix, next := prefixes[turn], replies[firstStep[turn+1]].Messages
-		if len(prefix) != len(kept)+wantAdded {
-			t.Fatalf("turn %d: prefix = %d messages, want the %d kept ones plus %d", turn+1, len(prefix), len(kept), wantAdded)
-		}
-		requirePrefixOf(t, kept, next)
-		requirePrefixOf(t, append(kept, prefix[len(kept):]...), next)
-		requireChatOnlyPrefix(t, next[:len(prefix)], baseline, texts[:turn+1]...)
+	// 只追加（照雨夹雪）：每一次请求都以上一次请求整份开头，同一轮的各步之间和两轮
+	// 之间都是。前缀里留着上一轮的工具调用和结果、当轮的状态块，后面只接新的。模型
+	// 客户端看到的请求经过隐私代理改写，所以拿客户端看到的请求互相比。
+	for index := 1; index < len(replies); index++ {
+		requireStrictPrefix(t, replies[index-1].Messages, replies[index].Messages)
 	}
-
-	wantSpoken := [][]string{{"在的"}, {"在的", "我看一下", "查到了"}, {"在的", "我看一下", "查到了", "不客气"}}
+	baseline := len(withoutTurnOnly(replies[0].Messages))
 	for index, prefix := range prefixes {
-		spoken := requireChatOnlyPrefix(t, prefix, baseline, texts[:index+1]...)
-		if !reflect.DeepEqual(spoken, wantSpoken[index]) {
-			t.Fatalf("turn %d: spoken = %q, want %q", index+1, spoken, wantSpoken[index])
+		if last := prefix[len(prefix)-2]; llm.HistoryReplyText(last) != [...]string{"在的", "查到了", "不客气"}[index] {
+			t.Fatalf("turn %d: the prefix must end with the closing reply, got %#v", index+1, last)
 		}
-		for _, message := range prefix {
-			content := appendContextText(message)
-			for _, banned := range []string{"【本轮工具执行状态", "【当前发言者工具环境"} {
-				if strings.Contains(content, banned) {
-					t.Fatalf("turn %d: %q leaked into the prefix: %.200q", index+1, banned, content)
-				}
-			}
-		}
+	}
+	toolSeen := false
+	for _, message := range prefixes[2] {
+		toolSeen = toolSeen || message.Role == llm.RoleTool && message.ToolCallID == "t1"
+	}
+	if !toolSeen {
+		t.Fatal("the tool result of the second turn must stay in later prefixes")
 	}
 	// 这个群的约定每轮都一样：每份请求里正文只出现一次，后面几轮那一次在前缀里。
 	for index, request := range replies {
@@ -426,23 +378,6 @@ func TestReplyTurnsContinueWithChatOnlyPrefix(t *testing.T) {
 		if index > 0 && at >= baseline {
 			t.Fatalf("request %d: the group rules must come from the prefix, found at %d past %d", index+1, at, baseline)
 		}
-	}
-	// 用过工具的那一轮只留一行运行时记录，紧跟在收尾那句后面。
-	notes := 0
-	for index, message := range prefixes[2] {
-		if !strings.HasPrefix(message.Content, replyToolTraceNotePrefix) {
-			continue
-		}
-		notes++
-		if want, _ := replyToolTraceNote([]ReplyToolCall{{Tool: "version"}}); message.Content != want.Content || message.Role != want.Role {
-			t.Fatalf("tool note = %q", message.Content)
-		}
-		if before := prefixes[2][index-2]; llm.HistoryReplyText(before) != "查到了" {
-			t.Fatalf("the tool note must follow the closing reply, got %#v", before)
-		}
-	}
-	if notes != 1 {
-		t.Fatalf("tool notes in the prefix = %d, want 1", notes)
 	}
 	// 输出前检查和查证提醒在头部：每份请求恰好一次，而且都在头部那条 system 里，不在尾部。
 	check := "【输出前检查】\n" + promptReplyUnknownReferenceSpec.Default + "\n" + promptReplyClaimedLookupSpec.Default + "\n" + promptReplyArithmeticSpec.Default
@@ -562,60 +497,6 @@ func TestSplitContextBlocksRoundTrips(t *testing.T) {
 	blocks := splitContextBlocks(content)
 	if len(blocks) != 3 || strings.Join(blocks, "\n") != content {
 		t.Fatalf("blocks = %q", blocks)
-	}
-}
-
-// 前缀里工具调用和结果都不留，只在发言后面补一行「调用过哪些工具」，和重新组装时
-// 历史里那行逐字相同：放在收尾那句的第一条后面，中途发言排在它前面；收尾没说话就放在
-// 最后一句中途发言后面；整轮没说话或没调过工具就不加。
-func TestAppendContextPrefixAddsToolNoteAfterReply(t *testing.T) {
-	base := appendTestPrefix(appendTestTurn([]string{"[10:00:00] 甲: 早"}, "", "甲: 查一下天气"))
-	baseline := len(base)
-	search := agent.Step{Tool: "web_search", Input: map[string]any{"query": "天气"}, Output: "晴"}
-	interim := agent.Step{Tool: agent.FinalizeToolName, Input: map[string]any{"text": "我查一下"}, Output: "已发送"}
-	wantNote, _ := replyToolTraceNote([]ReplyToolCall{{Tool: "web_search", Summary: "天气"}})
-	spoken := func(texts ...string) []llm.Message {
-		transcript := append([]llm.Message(nil), base...)
-		for index, text := range texts {
-			transcript = append(transcript, agent.HistoryReplyMessages("p"+string(rune('1'+index)), text)...)
-		}
-		return transcript
-	}
-	shape := func(prefix []llm.Message) string {
-		var parts []string
-		for _, message := range prefix[len(base):] {
-			switch {
-			case message.Role == llm.RoleAssistant:
-				parts = append(parts, "说:"+llm.HistoryReplyText(message))
-			case message.Role == llm.RoleTool:
-			case message.Content == wantNote.Content && message.Role == wantNote.Role:
-				parts = append(parts, "记录")
-			default:
-				parts = append(parts, "?"+message.Content)
-			}
-		}
-		return strings.Join(parts, "|")
-	}
-	for _, tc := range []struct {
-		name  string
-		steps []agent.Step
-		texts []string
-		want  string
-	}{
-		{"tool then reply", []agent.Step{search}, []string{"晴天"}, "说:晴天|记录"},
-		{"reply in two bubbles", []agent.Step{search}, []string{"晴天", "记得防晒"}, "说:晴天|记录|说:记得防晒"},
-		{"interim, tool, reply", []agent.Step{interim, search}, []string{"我查一下", "晴天"}, "说:我查一下|说:晴天|记录"},
-		{"interim, tool, silent", []agent.Step{interim, search}, []string{"我查一下"}, "说:我查一下|记录"},
-		{"tool, silent", []agent.Step{search}, nil, ""},
-		{"no tool", nil, []string{"在的"}, "说:在的"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			prefix := appendContextPrefix(&agent.Response{Transcript: spoken(tc.texts...), Steps: tc.steps})
-			if got := shape(prefix); got != tc.want {
-				t.Fatalf("shape = %q, want %q", got, tc.want)
-			}
-			requireChatOnlyPrefix(t, prefix, baseline)
-		})
 	}
 }
 
