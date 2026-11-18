@@ -73,10 +73,35 @@ func marshalHistoryResultPage(ctx context.Context, result dianaChatHistoryResult
 			break
 		}
 	}
-	// [low, high) 是本次装下的条目。分页结果从尾部收；around 从离锚点远的一侧收。
+	marshal := func(low, high int) (string, bool, error) {
+		body, err := json.Marshal(historyResultPage(result, all, low, high, budget))
+		return string(body), utf8.RuneCount(body) <= budget, err
+	}
+	// 分页结果从尾部收：二分找装得下的最多条数。以前一条条减、每次整页重新序列化，
+	// limit 给到上千条时要序列化成千上万次。
+	if anchor < 0 {
+		body, fits, err := marshal(0, len(all))
+		if err != nil || fits || len(all) <= 1 {
+			return body, err
+		}
+		lo, hi := 1, len(all)-1 // lo 一定要给（至少一条），hi 之后的都装不下
+		for lo < hi {
+			mid := (lo + hi + 1) / 2
+			if _, fits, err := marshal(0, mid); err != nil {
+				return "", err
+			} else if fits {
+				lo = mid
+			} else {
+				hi = mid - 1
+			}
+		}
+		body, _, err = marshal(0, lo)
+		return body, err
+	}
+	// [low, high) 是本次装下的条目。around 从离锚点远的一侧收。
 	low, high := 0, len(all)
 	for {
-		page := historyResultPage(result, all, low, high)
+		page := historyResultPage(result, all, low, high, budget)
 		body, err := json.Marshal(page)
 		if err != nil {
 			return "", err
@@ -84,7 +109,7 @@ func marshalHistoryResultPage(ctx context.Context, result dianaChatHistoryResult
 		if utf8.RuneCount(body) <= budget || high-low <= 1 {
 			return string(body), nil
 		}
-		if anchor >= 0 && anchor-low > high-1-anchor {
+		if anchor-low > high-1-anchor {
 			low++
 		} else {
 			high--
@@ -93,7 +118,7 @@ func marshalHistoryResultPage(ctx context.Context, result dianaChatHistoryResult
 }
 
 // historyResultPage 填好只装 all[low:high] 时的分页字段和续读说明。
-func historyResultPage(result dianaChatHistoryResult, all []dianaChatHistoryItem, low, high int) dianaChatHistoryResult {
+func historyResultPage(result dianaChatHistoryResult, all []dianaChatHistoryItem, low, high, budget int) dianaChatHistoryResult {
 	result.Items = all[low:high]
 	result.ReturnedCount = len(result.Items)
 	cut := len(all) - len(result.Items)
@@ -134,7 +159,7 @@ func historyResultPage(result dianaChatHistoryResult, all []dianaChatHistoryItem
 		if result.searchPage == nil {
 			next = "把 unreturned_message_ids 分批传给 ids 读原文"
 		}
-		result.Message = strings.TrimSpace(result.Message + fmt.Sprintf(" 单次结果上限 %d 字，本页装下 %d 条（%s），另有 %d 条没装下，%s；没读完之前不要断言没有。", agent.ToolOutputMaxChars, len(result.Items), result.PageWindow, cut, next))
+		result.Message = strings.TrimSpace(result.Message + fmt.Sprintf(" 单次结果上限 %d 字，本页装下 %d 条（%s），另有 %d 条没装下，%s；没读完之前不要断言没有。", budget, len(result.Items), result.PageWindow, cut, next))
 	}
 	return result
 }

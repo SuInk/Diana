@@ -16,11 +16,14 @@ import (
 const (
 	dianaChatHistoryToolName      = "chat_history"
 	defaultChatHistoryRecentLimit = 20
+	// defaultChatHistoryLimit 是读消息（recent、按条件查、按时段读）的默认条数，照
+	// 雨夹雪 tg_messages 的默认 100。以前 recent/search 20、range 60，生产 2026-11-18
+	// 「总结这周」每天只读到零点后几分钟。
+	defaultChatHistoryLimit       = 100
 	defaultChatHistoryBefore      = 10
 	defaultChatHistoryAfter       = 10
 	defaultChatHistorySearchHours = 24
 	maximumChatHistorySearchHours = 24 * 365 * 100
-	defaultChatHistoryRangeLimit  = 60
 	chatHistoryLookupTimeout      = 3 * time.Second
 )
 
@@ -242,7 +245,7 @@ func (t *dianaChatHistoryTool) Description() string {
 	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到；最近几十条已经在上下文里，不用再读最近消息。` +
 		`查消息不用选 operation：sender_user_id/sender_name、query、from_time/through_time 或 hours/days、ids 这些条件叠加取交集，一次写全。` +
 		`例：某人说过的话 {"sender_name":"小明","limit":20}；某人某段时间提到某词 {"sender_user_id":"…","query":"部署","days":3,"order":"oldest"}；跨群加 scope=all_groups；` +
-		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}；从某条消息读到现在 {"from_message_id":"…"}。` +
+		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}；从某条消息往后读 {"from_message_id":"…","order":"oldest"}。` +
 		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充；撤回用 recalls。`
 }
 
@@ -273,7 +276,7 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"hours":    toolIntParam("只看最近多少小时；按条件查不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
 		"days":     toolIntParam("只看最近多少天", 1, 365),
 		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
-		"limit":    toolCountParam("返回条数，默认 "+itoa(defaultChatHistoryRecentLimit)+"（range 默认 "+itoa(defaultChatHistoryRangeLimit)+"）；超过单次结果上限时按整条分页，结果里给续读方式", 1),
+		"limit":    toolCountParam("返回条数，默认 "+itoa(defaultChatHistoryLimit)+"；超过单次结果上限时按整条分页，结果里给续读方式", 1),
 		"offset":   toolCountParam("speakers/reactions 从第几条起（0 起），续读时填上次的 next_offset；其余操作用 cursor 或 ids 续读", 0),
 	})
 }
@@ -496,7 +499,7 @@ func (t *dianaChatHistoryTool) messagesByID(ctx context.Context, input map[strin
 }
 
 func (t *dianaChatHistoryTool) recent(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
-	limit := chatHistoryCount(input, "limit", defaultChatHistoryRecentLimit)
+	limit := chatHistoryCount(input, "limit", defaultChatHistoryLimit)
 	t.runtime.mu.RLock()
 	store := t.runtime.messageStore
 	memory := append([]MessageEvent(nil), t.runtime.history[sessionKey(t.event)]...)
@@ -560,7 +563,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	if len([]rune(query)) > 512 {
 		return dianaChatHistoryResult{}, fmt.Errorf("检索关键词过长，请缩短至 512 字以内")
 	}
-	limit := chatHistoryCount(input, "limit", defaultChatHistoryRecentLimit)
+	limit := chatHistoryCount(input, "limit", defaultChatHistoryLimit)
 	order := firstNonEmpty(strings.TrimSpace(configToolString(input, "order")), "newest")
 	if order != "newest" && order != "oldest" && order != "relevance" {
 		return dianaChatHistoryResult{}, fmt.Errorf("order 必须是 newest、oldest 或 relevance")
@@ -716,7 +719,20 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 
 // window 按时间段完整列出当前会话的消息。search 只能按关键词命中，回答
 // 「总结昨天 12 点到 17 点」这类请求时没有关键词可用，需要的是整段记录。
+//
+// 排序照 order，默认 newest，和雨夹雪 tg_messages 默认 desc 一样。以前这里写死从旧
+// 到新、静默忽略 newest：生产 2026-11-18「总结这周」按天传 newest，每天拿到的都是
+// 零点后 5～10 分钟，最新的消息一条没看到。
 func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
+	order := firstNonEmpty(strings.TrimSpace(configToolString(input, "order")), "newest")
+	switch order {
+	case "relevance":
+		// 没有关键词时没有相关性可言，和 search 一样退回 newest。
+		order = "newest"
+	case "newest", "oldest":
+	default:
+		return dianaChatHistoryResult{}, fmt.Errorf("order 必须是 newest、oldest 或 relevance")
+	}
 	fromTime, throughTime := t.resolveWindow(input)
 	fromMsgID := strings.TrimSpace(configToolString(input, "from_message_id"))
 	throughMsgID := strings.TrimSpace(configToolString(input, "through_message_id"))
@@ -738,18 +754,18 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 			throughTime = anchor.Time
 		}
 	}
-	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), "", "range", "oldest"), From: fromTime, Through: throughTime}
+	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), "", "range", order), From: fromTime, Through: throughTime}
 	if token := configToolString(input, "cursor"); token != "" {
 		decoded, err := decodeHistorySearchCursor(token)
 		if err != nil || decoded.Scope != page.Scope {
-			return dianaChatHistoryResult{}, fmt.Errorf("无效时间线游标")
+			return dianaChatHistoryResult{}, fmt.Errorf("无效时间线游标，续读时 order 要和上一页相同")
 		}
 		page = decoded
 	}
 	if page.From > page.Through {
 		return dianaChatHistoryResult{}, fmt.Errorf("起始时间不得晚于结束时间")
 	}
-	limit := chatHistoryCount(input, "limit", defaultChatHistoryRangeLimit)
+	limit := chatHistoryCount(input, "limit", defaultChatHistoryLimit)
 	timeline, err := t.timeline(ctx, page.From, page.Through)
 	if err != nil {
 		return dianaChatHistoryResult{}, err
@@ -771,19 +787,26 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 		}
 	}
 	items := t.items(ctx, timeline)
-	times := make([]int64, len(items))
-	for i := range items {
-		times[i] = items[i].Time
+	message := "已按时间从新到旧读取本地记录，最新的在前；是否读完以 has_more 为准。"
+	var times []int64
+	if order == "newest" {
+		slices.Reverse(items)
+	} else {
+		// next_from_time 只对从旧到新读有意义：从新到旧续读用 next_cursor。
+		times = make([]int64, len(items))
+		for i := range items {
+			times[i] = items[i].Time
+		}
+		message = "已按时间从旧到新读取本地记录；是否读完以 has_more 为准。"
 	}
 	total := len(items)
 	start := min(page.Offset, total)
 	items = items[start:min(start+limit, total)]
-	message := "已按时间从旧到新读取本地记录；是否读完以 has_more 为准。"
 	if total == 0 {
 		message = "这个时间段在本地记录里没有消息，可能当时没人说话，或机器人那会儿不在这个会话里；不要凭空编造内容。"
 	}
 	return dianaChatHistoryResult{
-		OK: true, Action: "range", Order: "oldest", Items: items, Total: total,
+		OK: true, Action: "range", Order: order, Items: items, Total: total,
 		Window: chatHistoryWindowLabel(page.From, page.Through, profileLocation(t.event.ProfileID)), searchPage: &page, rangeTimes: times,
 		Message:  message,
 		Guidance: "有 next_cursor 时使用 range 和 cursor 续查，游标固定时间范围且不会跳过同一秒的消息。next_from_time 仅在时间边界无重复时提供。has_more=true 时还没读完，不得据此断言没有其他记录。",

@@ -73,7 +73,7 @@ func TestRuntimeLimits(t *testing.T) {
 	r := testRuntime(t)
 	for _, tc := range []struct{ name, code, kind string }{
 		{"timeout", `while (true) {}`, "timeout"},
-		{"output", `return 'x'.repeat(40000)`, "output_limit"},
+		{"output", `const chunk='x'.repeat(900000); for (let i=0;i<20;i++) text(chunk); return 1`, "script"},
 		{"budget", `try { await tools.read({}); } catch {} return 1`, "host_limit"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -89,9 +89,23 @@ func TestRuntimeLimits(t *testing.T) {
 				t.Fatal(err)
 			}
 			if result.OK || result.Error == nil || result.Error.Kind != tc.kind {
-				t.Fatalf("result: %+v", result)
+				t.Fatalf("ok=%v error=%+v", result.OK, result.Error)
 			}
 		})
+	}
+}
+
+// 输出上限照 Pi 只防失控：几十 KB 的结果照常返回，交给 agent 那层按 max_output_tokens 截。
+func TestRuntimeAllowsLargeOutput(t *testing.T) {
+	r := testRuntime(t)
+	result, err := r.Execute(t.Context(), Request{Code: `return 'x'.repeat(200000)`, Timeout: 2 * time.Second}, func(context.Context, string, json.RawMessage) (any, error) {
+		return nil, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || len(result.Value) < 200000 {
+		t.Fatalf("result ok=%v error=%+v len=%d", result.OK, result.Error, len(result.Value))
 	}
 }
 

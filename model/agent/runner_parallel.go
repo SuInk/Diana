@@ -36,6 +36,8 @@ type parallelRead struct {
 	output       string
 	err          error
 	metadata     map[string]any
+	// outputBudget 不为零时替代 ToolOutputMaxChars 交给工具做分页，见 codeModeChildOutputBudget。
+	outputBudget int
 }
 
 // Resolve the execution target without replacing the provider's call envelope.
@@ -114,7 +116,11 @@ func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, obser
 	if bounded, ok := read.tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
 		toolTimeout = bounded.Timeout()
 	}
-	toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
+	budget := outputLimit
+	if read.outputBudget > 0 {
+		budget = read.outputBudget
+	}
+	toolCtx, cancel := contextWithToolBudget(WithToolOutputBudget(ctx, budget), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 	startedAt := time.Now()
 	err := r.registry.OperationDisabledError(action.Tool, action.Input)
 	if err == nil {

@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -327,6 +328,31 @@ func TestCodeModeChildGetsUntruncatedJSON(t *testing.T) {
 		if step.Tool == "usage_report" && len([]rune(step.Output)) > ToolOutputMaxChars+200 {
 			t.Fatalf("audit output must stay truncated: %d", len(step.Output))
 		}
+	}
+}
+
+type codeModeBudgetTool struct{}
+
+func (codeModeBudgetTool) Name() string        { return "budget_probe" }
+func (codeModeBudgetTool) Description() string { return "reports its output budget" }
+func (codeModeBudgetTool) Run(ctx context.Context, _ map[string]any) (string, error) {
+	return fmt.Sprintf(`{"budget":%d}`, ToolOutputBudget(ctx)), nil
+}
+
+// 照 Pi：脚本里的子调用不按给模型的 2 万字分页，生产 2026-11-18 脚本按天读群聊，
+// chat_history 每页只装 50 条。
+func TestCodeModeChildPagesWithScriptBudget(t *testing.T) {
+	script := testCodeModeTool(t)
+	client := &batchClient{first: []llm.ToolCall{
+		{ID: "script", Name: codeModeToolName, Arguments: map[string]any{"code": `return (await tools.budget_probe({})).budget;`}},
+	}}
+	runner, _ := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(script, codeModeBudgetTool{}))
+	if _, err := runner.Run(t.Context(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "read"}}}); err != nil {
+		t.Fatal(err)
+	}
+	results := toolResults(client.requests[1])
+	if len(results) != 1 || !strings.Contains(results[0].Content, fmt.Sprint(codeModeChildOutputBudget)) {
+		t.Fatalf("budgets = %+v", results)
 	}
 }
 
