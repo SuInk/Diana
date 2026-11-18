@@ -46,22 +46,20 @@ import (
 // 靠人工给段归类分不准，所以按段和前缀比：相同不发，不同只给当轮。前缀里每个标题
 // 只有重新组装那一轮的那一版，不会累积。
 //
-// 请求仍逐轮变长，超过这一轮完整组装的两倍或单次请求上限就重新开一份；头部（人设、
-// 配置）或 Runner 的系统提示、固定说明、工具定义变了也重开。记录落盘，进程重启后
+// 请求逐轮变长，超过单次请求上限就重新开一份。头部按哈希锁定，变了不重开（见
+// appendContextContinuation）。以前还有一道「超过这一轮完整组装的两倍」：完整组装那时
+// 有自己的预算，比续接小得多；现在完整组装就是锚之后的全部历史，和续接一样大，这道
+// 线只会在滑窗之间多逼出一次白白的重新组装。记录落盘，进程重启后
 // 接着续（见 append_context_persist.go）。
-
-// appendContextGrowthLimit 是续接请求相对这一轮完整组装的长度上限倍数。
-//
-// 「完整组装」要算上 Runner 自己加的系统提示、已加载工具契约和发言者工具段（记在
-// overhead 里）。以前只拿助手这一侧的消息比，而续接前缀是整份请求：11-02 生产里
-// 这两块各占一半，前缀续一两轮就超过「两倍」，46% 的主回复因 too_long 重新组装，
-// 首步命中 swe-2 从续接时的 53% 掉到 19%、terra 从 74% 掉到 34%。
-const appendContextGrowthLimit = 2
 
 type appendContextLog struct {
 	prefix  []llm.Message
 	key     string
 	headKey string
+	// definitions 是这份记录重新组装那一轮的工具定义。和前缀里的系统提示、固定说明
+	// 一起构成锁定的头部：续接期间本轮渲染出来的头部变了也不用，见
+	// appendContextContinuation。老记录没有它，退回按 headKey 核对。
+	definitions []llm.ToolDefinition
 	// seen 是前缀里出现过的整条消息正文，判断历史行是不是新的；sent 是机器人
 	// 已经发过的回复；latest 是每个段标题在前缀里最近的那一版。
 	seen   map[string]bool
@@ -70,6 +68,10 @@ type appendContextLog struct {
 	// pieces 是前缀里出现过的每个段（按「【」切）和每个段落（按空行切）：续接时不带
 	// 标题的段逐字一样就不再发，钉在当前消息末尾的固定注解（群聊篇幅）也靠它判断。
 	pieces map[string]bool
+	// ids 是前缀里已经出现过的消息行的消息 ID：同一条消息上一轮是当前消息、这一轮成了
+	// 历史行，写法相同就靠 seen 认出；写法有出入（后来补的图片描述、日期省没省）也靠它
+	// 认出，不再追加第二遍。
+	ids map[string]bool
 	// listItems 是前缀里已经出现过的只追加名单条目（检索到的记忆、可提及成员），按
 	// 「名单标题 + 条目行」记：续接时名单只追加这里没有的条目。
 	listItems map[string]bool
@@ -79,10 +81,28 @@ type appendContextLog struct {
 	// historyDate 是前缀里最后一条带时间的历史行的日期。续接追加的历史行接在它后面，
 	// 同一天只写时分秒、换天写全日期，和完整组装时的规则一样（见 history_line_dates.go）。
 	historyDate string
+	// savedAt 是这份记录记下的时间。request 是那一轮第一步实际发给模型的请求（含只
+	// 用于本轮的段和工具定义），requestInputTokens 是供应商报回的输入用量。这三项只给
+	// 设置页的请求构成用，续接不读。
+	savedAt             time.Time
+	request             llm.GenerateRequest
+	requestInputTokens  int64
+	requestCachedTokens int64
+	// requestReused 是 request 开头和上一轮实际请求逐条相同的消息条数；requestMismatch
+	// 是续接了却和上一轮实际请求对不上的原因，空表示对得上。见 noteReplyRequest。
+	requestReused   int
+	requestMismatch string
+	// identitySent、secretSent 是前缀里每段正文经隐私代理发出去的样子，随记录落盘，
+	// 重启后读回放回代理，见 privacySentRecord。privacyRestored 保证只放回一次。
+	identitySent    []privacySentRecord
+	secretSent      []privacySentRecord
+	privacyRestored sync.Once
 }
 
-// appendContextVerifyReminder 见 appendContextContinuation 里的说明。
-const appendContextVerifyReminder = "【本轮提醒】对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
+// replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度
+// 去掉时，当晚同一时段主回复联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
+// 11-17 起请求只追加，每轮重发的说明都挪进头部。
+const replyVerifyRule = "对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
 
 type appendContextStore struct {
 	mu   sync.Mutex
@@ -212,6 +232,10 @@ func appendContextHeadKey(messages []llm.Message) string {
 		if message.Role != llm.RoleSystem {
 			break
 		}
+		if _, _, ok := appendOnlyList(message.Content); ok {
+			// 头部里的只追加名单（可提及成员）：新条目续接时追加，不算头部变了。
+			continue
+		}
 		hash.Write([]byte(message.Content))
 		hash.Write([]byte{0})
 	}
@@ -224,7 +248,11 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey}
+	log := &appendContextLog{prefix: appendContextPrefix(resp), key: resp.ConversationKey, headKey: headKey, definitions: resp.Definitions, savedAt: time.Now()}
+	if resp.Continued && previous != nil {
+		// 续接用的是锁定的头部，记录接着锁它，不换成本轮渲染出来的那份。
+		log.headKey = previous.headKey
+	}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)
@@ -324,10 +352,16 @@ func unsentTail(log *appendContextLog, content string) string {
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}
 	log.listItems = map[string]bool{}
+	log.ids = map[string]bool{}
 	var dates historyLineDates
 	for _, message := range log.prefix {
 		content := appendContextText(message)
 		log.seen[content] = true
+		if message.Role == llm.RoleUser {
+			if id := historyLineMessageID(content); id != "" {
+				log.ids[id] = true
+			}
+		}
 		if message.Role == llm.RoleUser {
 			// 历史行按写全日期的形态记：同一条消息在前缀里可能只写了时分秒，到下一轮完整
 			// 组装里成了第一行、写全了日期，按原文比会当成新消息再追加一遍。
@@ -380,9 +414,32 @@ func appendContextSentKey(text string) string {
 	return strings.TrimSpace(rest)
 }
 
-// isHistoryLine 认出群聊历史行（stableGroupHistory 渲染的每条消息都以它开头）。
+// isHistoryLine 认出消息行（stableGroupHistory 渲染的每条消息、当前消息都以「[时间」开头）。
 func isHistoryLine(content string) bool {
-	return strings.HasPrefix(content, "[历史")
+	if strings.HasPrefix(content, crossGroupLineLabel) || historyLineMessageID(content) != "" {
+		return true
+	}
+	_, _, _, ok := splitHistoryLineTime(content)
+	return ok
+}
+
+// historyLineMessageID 取消息行开头的消息 ID，没有就返回空串。没有时间的行写成「[#ID]」。
+func historyLineMessageID(content string) string {
+	if !strings.HasPrefix(content, "[") {
+		return ""
+	}
+	end := strings.IndexByte(content, ']')
+	if end < 0 {
+		return ""
+	}
+	if strings.HasPrefix(content, "["+historyLineIDMark) {
+		return content[len("["+historyLineIDMark):end]
+	}
+	mark := strings.Index(content[:end], " "+historyLineIDMark)
+	if mark < 0 {
+		return ""
+	}
+	return content[mark+len(" "+historyLineIDMark) : end]
 }
 
 // appendContextContinuation 从这一轮完整组装的消息里挑出要接在记录后面的部分。
@@ -391,9 +448,8 @@ func isHistoryLine(content string) bool {
 //
 // contextLimit 是续接请求的长度上限（token，0 表示不限；主回复传的是
 // appendContextLimit(requestContextLimit())，即单次请求上限减去预留）：续接后的
-// 请求超过它就重新组装。currentNotes 是完整组装时钉在当前消息末尾的固定注解（群聊
-// 篇幅），续接时上文有过就去掉。
-func appendContextContinuation(log *appendContextLog, messages []llm.Message, contextLimit int64, currentNotes ...string) (*agent.Continuation, appendContextDecision) {
+// 请求超过它就重新组装。
+func appendContextContinuation(log *appendContextLog, messages []llm.Message, contextLimit int64) (*agent.Continuation, appendContextDecision) {
 	decision := appendContextDecision{fullTokens: estimateMessagesTokens(messages), contextLimit: contextLimit}
 	switch {
 	case len(messages) == 0:
@@ -404,8 +460,14 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		decision.reason = "no_log"
 		return nil, decision
 	case appendContextHeadKey(messages) != log.headKey:
-		decision.reason = "head_changed"
-		return nil, decision
+		if len(log.definitions) == 0 {
+			decision.reason = "head_changed"
+			return nil, decision
+		}
+		// 头部按哈希锁定：会话里第一次组装时的人设、系统提示和工具定义原样复用。本轮
+		// 渲染出来的头部变了不用，只记下来；超长、滑窗这些本来就要重新组装的时候再换。
+		// 放进头部的东西必须是真的不变的，变了就是该挪去尾部的信号，从 head_locked 查。
+		decision.headLocked = appendContextHeadKey(messages)
 	}
 	historyEnd := -1
 	for index, message := range messages {
@@ -419,6 +481,15 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		head++
 	}
 	var appended []llm.Message
+	// 头部里的只追加名单（可提及成员）：头部锁定不重发，前缀里没有的条目追加在后面。
+	for _, message := range messages[:head] {
+		if _, _, ok := appendOnlyList(message.Content); ok {
+			if message.Content = unsentListItems(log, message.Content); message.Content != "" {
+				message.CacheBreakpoint, message.TurnOnly = false, false
+				appended = append(appended, message)
+			}
+		}
+	}
 	// fullDates 沿这一轮完整组装推出每条历史行的全日期，用来和前缀比对；appendDates 从
 	// 前缀最后一条历史行的日期接着推，决定追加的行省不省日期。完整组装里的写法是相对它
 	// 自己那份历史的前一行定的，接到前缀后面时前一行变了，要重写。
@@ -456,15 +527,17 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 			continue
 		}
 		if index > historyEnd {
-			// 源头就标成只用于本轮的（跨群参考、检索到的记忆条目、时钟）每轮原样带上：
-			// 上一轮那份没有留在前缀里。其余的去掉前缀里已有的段，剩下的也只给当轮用。
+			// 只追加：尾部的状态块（关系、对话对象、群身份、会话状态……）和前缀里同一标题
+			// 最近的那一版相同就不发；变了就把新的一版追加进去、留在前缀里，旧的不撤，相当于
+			// 在后面补一条修订。以前变了的只给当轮用（TurnOnly），下一轮请求就不是上一轮的
+			// 纯追加，从它的位置起整段重发。源头仍标成只用于本轮的（一轮之内的收尾说明等）
+			// 原样带上。
 			if !message.TurnOnly && len(message.Parts) == 0 {
 				message.Content = unsentTail(log, message.Content)
 				if strings.TrimSpace(message.Content) == "" {
 					continue
 				}
 			}
-			message.TurnOnly = true
 			appended = append(appended, message)
 			continue
 		}
@@ -473,6 +546,9 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		}
 		content := appendContextText(message)
 		if message.Role == llm.RoleSystem || log.seen[content] {
+			continue
+		}
+		if id := historyLineMessageID(content); id != "" && log.ids[id] {
 			continue
 		}
 		switch {
@@ -491,29 +567,9 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		}
 		appended = append(appended, message)
 	}
-	// 当前消息末尾的固定注解（群聊篇幅）上文有过就不再带：当前消息留在前缀里，注解
-	// 每轮都带就一路累积。11-11 回放去掉后回复中位字数 37 → 59、人设分 3.50 → 2.67，
-	// 当时因此保留；11-12 用户决定去掉，请求体积优先。
-	// 查证提醒每轮贴在当前消息前面，只用于本轮、不进前缀。查证规则写在头部，续接后
-	// 离当前消息隔着好几轮对话，模型容易凭印象答。11-12 一度去掉：当晚同一时段主回复
-	// 联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
-	appended = append(appended[:len(appended)-1:len(appended)-1],
-		llm.Message{Role: llm.RoleSystem, Content: appendContextVerifyReminder, TurnOnly: true}, appended[len(appended)-1])
-	last := &appended[len(appended)-1]
-	for _, note := range currentNotes {
-		note = strings.TrimSpace(note)
-		if note == "" || !log.pieces[note] {
-			continue
-		}
-		last.Content = strings.TrimSuffix(last.Content, "\n\n"+note)
-	}
 	decision.prefixTokens, decision.appendTokens = estimateMessagesTokens(log.prefix), estimateMessagesTokens(appended)
 	decision.overhead = log.overhead
-	if decision.fullTokens > 0 && decision.prefixTokens+decision.appendTokens > appendContextGrowthLimit*(decision.fullTokens+log.overhead) {
-		decision.reason = "too_long"
-		return nil, decision
-	}
-	// 上限必须管住续接。以前续接只看上面那道两倍，配置的上限只在完整组装时参与预算
+	// 上限必须管住续接。以前续接只看「完整组装的两倍」那道线，配置的上限只在完整组装时参与预算
 	// 分配：11-12 生产 354 轮续接，同一轮完整组装中位 3.1 万 token，实际发出中位
 	// 6.8 万、最大 13 万。超了交给发送层去裁会从中间丢消息，前缀照样断；在这里直接
 	// 重新组装，得到的是一份按预算排好的请求。
@@ -521,13 +577,16 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 		decision.reason = "context_limit"
 		return nil, decision
 	}
-	return &agent.Continuation{Prefix: log.prefix, Append: appended, Key: log.key}, decision
+	return &agent.Continuation{Prefix: log.prefix, Append: appended, Key: log.key, Definitions: log.definitions}, decision
 }
 
 // appendContextDecision 记下这一轮为什么续接或没续接，写进调试轨迹。10-28 上线后
 // 群聊连续两轮都没续上，却看不出是哪道校验拦的，所以每轮都留一条。
 type appendContextDecision struct {
-	reason       string
+	reason string
+	// headLocked 非空表示本轮渲染出的头部和锁定的不同（值是本轮的头部哈希），续接仍按
+	// 锁定的头部发。
+	headLocked   string
 	previousKey  string
 	fullTokens   int64
 	prefixTokens int64
@@ -550,6 +609,9 @@ func (r *Runtime) recordAppendContextDecision(ctx context.Context, event Message
 		"append_tokens":   decision.appendTokens,
 		"overhead_tokens": decision.overhead,
 		"context_limit":   decision.contextLimit,
+	}
+	if decision.headLocked != "" {
+		metadata["head_locked"] = decision.headLocked
 	}
 	switch {
 	case runErr != nil:

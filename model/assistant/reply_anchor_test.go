@@ -62,7 +62,7 @@ func TestReplyDecorationPromptOffersEveryMergedMessage(t *testing.T) {
 	ctx, root, follow := mergedReplyTurn(t, r)
 	root.replyQuoteCandidates = r.replyQuoteCandidates(ctx, root)
 
-	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil)
+	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil, false)
 	rootAt := strings.Index(prompt, replyMarkerFor(root.MessageID))
 	followAt := strings.Index(prompt, replyMarkerFor(follow.MessageID))
 	if rootAt < 0 || followAt < 0 || rootAt > followAt {
@@ -79,7 +79,7 @@ func TestReplyDecorationPromptSingleCandidateUnchanged(t *testing.T) {
 	root := directedGroupMessage("10001", "user", "我听到了")
 	root.replyQuoteCandidates = r.replyQuoteCandidates(context.Background(), root)
 
-	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil)
+	prompt := replyDecorationPrompt(r.effectiveConfigForEvent(root), root, nil, false)
 	if !strings.Contains(prompt, replyMarkerFor(root.MessageID)+" 来指向当前这条消息") || strings.Contains(prompt, "候选按时间") {
 		t.Fatalf("single-message turn should keep the plain prompt:\n%s", prompt)
 	}

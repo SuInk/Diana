@@ -80,8 +80,12 @@ func (p *quotedCorrectionProvider) Generate(ctx context.Context, req llm.Generat
 		if !found {
 			p.t.Error("regenerated request lost quoted 80W correction")
 		}
-		last := req.Messages[len(req.Messages)-1].Content
-		if !strings.Contains(last, "本轮已接受的后续请求") || !strings.Contains(last, "按80W算吧") {
+		// 最后一条是要回复的那条消息那一行，本轮接受的纠正在它前面那条只给这一轮的注解里。
+		notes := ""
+		if n := len(req.Messages); n >= 2 && isCurrentMessageNotes(req.Messages[n-2]) {
+			notes = req.Messages[n-2].Content
+		}
+		if !strings.Contains(notes, "本轮已接受的后续请求") || !strings.Contains(notes, "按80W算吧") {
 			p.t.Error("final user message reverted to the original parameters")
 		}
 		resp.Text = "按80W计算，一小时耗电0.08度"

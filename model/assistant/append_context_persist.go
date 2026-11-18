@@ -33,7 +33,8 @@ import (
 // 不能往开发机的用户缓存目录里写，也不能读到上一次跑测试留下的记录。
 
 const (
-	appendContextFileVersion = 2
+	// 3 起消息行改成「[时间 #消息ID]」，当前消息也是这一行：旧记录里的前缀和新写法对不上，不读回。
+	appendContextFileVersion = 3
 	// appendContextFileMaxAge 之前的记录不读回：隔了这么久供应商缓存早就过期，群里
 	// 也聊了很多，接着续只会让请求一下子很长。
 	appendContextFileMaxAge = 24 * time.Hour
@@ -55,6 +56,32 @@ type appendContextFile struct {
 	HeadKey  string                 `json:"head_key"`
 	Overhead int64                  `json:"overhead"`
 	Prefix   []appendContextMessage `json:"prefix"`
+	// Definitions 是锁定头部的工具定义，见 appendContextLog.definitions。
+	Definitions []appendContextToolDefinition `json:"definitions,omitempty"`
+	// Request 是这份记录那一轮第一步实际发给模型的请求（含只用于本轮的段），
+	// RequestTools 是它带的工具定义，RequestInputTokens 是供应商报回的输入用量。
+	// 只给设置页的请求构成用，续接不读它们。老文件没有，构成那里就不算这个会话。
+	Request             []appendContextMessage        `json:"request,omitempty"`
+	RequestTools        []appendContextToolDefinition `json:"request_tools,omitempty"`
+	RequestInputTokens  int64                         `json:"request_input_tokens,omitempty"`
+	RequestCachedTokens int64                         `json:"request_cached_tokens,omitempty"`
+	RequestReused       int                           `json:"request_reused,omitempty"`
+	RequestMismatch     string                        `json:"request_mismatch,omitempty"`
+	// IdentitySent、SecretSent 是前缀里每段正文经两个隐私代理发出去的样子，见
+	// privacySentRecord。老文件没有，读回后这些正文按当时的号码表重新替换。
+	IdentitySent []privacySentRecord `json:"identity_sent,omitempty"`
+	SecretSent   []privacySentRecord `json:"secret_sent,omitempty"`
+}
+
+// appendContextToolDefinition 落盘一份工具定义。llm.ToolDefinition 的 Freeform 不进
+// JSON，直接存的话读回来 codemode 会从自定义工具变回普通函数，锁定的头部就不再逐字
+// 相同。
+type appendContextToolDefinition struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Parameters  map[string]any    `json:"parameters"`
+	Strict      bool              `json:"strict,omitempty"`
+	Freeform    *llm.FreeformTool `json:"freeform,omitempty"`
 }
 
 type appendContextMessage struct {
@@ -183,6 +210,14 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
+	file.Definitions = appendContextToolDefinitionsFrom(record.definitions)
+	for _, message := range record.request.Messages {
+		file.Request = append(file.Request, appendContextMessageFrom(message))
+	}
+	file.RequestTools = appendContextToolDefinitionsFrom(record.request.Tools)
+	file.RequestInputTokens, file.RequestCachedTokens, file.RequestReused = record.requestInputTokens, record.requestCachedTokens, record.requestReused
+	file.RequestMismatch = record.requestMismatch
+	file.IdentitySent, file.SecretSent = record.identitySent, record.secretSent
 	var buffer bytes.Buffer
 	zw := gzip.NewWriter(&buffer)
 	if err := json.NewEncoder(zw).Encode(file); err != nil {
@@ -239,10 +274,18 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 		time.Since(stored.SavedAt) > appendContextFileMaxAge {
 		return nil
 	}
-	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix))}
+	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, savedAt: stored.SavedAt, prefix: make([]llm.Message, len(stored.Prefix))}
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
 	}
+	record.definitions = toolDefinitionsFromAppendContext(stored.Definitions)
+	for _, message := range stored.Request {
+		record.request.Messages = append(record.request.Messages, message.toMessage())
+	}
+	record.request.Tools = toolDefinitionsFromAppendContext(stored.RequestTools)
+	record.requestInputTokens, record.requestCachedTokens, record.requestReused = stored.RequestInputTokens, stored.RequestCachedTokens, stored.RequestReused
+	record.requestMismatch = stored.RequestMismatch
+	record.identitySent, record.secretSent = stored.IdentitySent, stored.SecretSent
 	record.index()
 	return record
 }
@@ -295,4 +338,22 @@ func (stored appendContextMessage) toMessage() llm.Message {
 		message.ToolCalls = append(message.ToolCalls, llm.ToolCall{ThoughtSignature: call.ThoughtSignature, ID: call.ID, Name: call.Name, Arguments: call.Arguments})
 	}
 	return message
+}
+
+func appendContextToolDefinitionsFrom(definitions []llm.ToolDefinition) []appendContextToolDefinition {
+	var stored []appendContextToolDefinition
+	for _, definition := range definitions {
+		stored = append(stored, appendContextToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	}
+	return stored
+}
+
+func toolDefinitionsFromAppendContext(stored []appendContextToolDefinition) []llm.ToolDefinition {
+	var definitions []llm.ToolDefinition
+	for _, definition := range stored {
+		definitions = append(definitions, llm.ToolDefinition{Name: definition.Name, Description: definition.Description,
+			Parameters: definition.Parameters, Strict: definition.Strict, Freeform: definition.Freeform})
+	}
+	return definitions
 }

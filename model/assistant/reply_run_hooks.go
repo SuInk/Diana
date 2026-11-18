@@ -6,22 +6,25 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
+// toolExecutionRecord 是本轮一次工具调用的回执。
+type toolExecutionRecord struct {
+	Tool   string            `json:"tool"`
+	Status string            `json:"status"`
+	Target map[string]string `json:"target,omitempty"`
+}
+
 // Keep execution state separate from the model's account of what it has done.
 // This temporary request context is rebuilt from actual callbacks; it is never
 // saved as user speech, a notebook fact, or another source for history search.
 // It is evidence guidance, not a semantic factuality classifier.
-func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
-	type execution struct {
-		Tool   string            `json:"tool"`
-		Status string            `json:"status"`
-		Target map[string]string `json:"target,omitempty"`
-	}
-	var records []execution
+func newReplyRunHooks() agent.RunHooks {
+	var records []toolExecutionRecord
 	return agent.RunHooks{
 		AfterToolCall: func(_ context.Context, step agent.Step) {
 			status := "success"
@@ -38,45 +41,64 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 					target[key] = truncateChatHistoryText(value, 100)
 				}
 			}
-			records = append(records, execution{Tool: step.Tool, Status: status, Target: target})
+			records = append(records, toolExecutionRecord{Tool: step.Tool, Status: status, Target: target})
 		},
 		PrepareRequest: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateRequest, error) {
-			start := max(0, len(records)-12)
-			data, err := json.Marshal(struct {
-				Total   int         `json:"total"`
-				Omitted int         `json:"omitted"`
-				Recent  []execution `json:"recent"`
-			}{len(records), start, records[start:]})
-			if err != nil {
-				return req, err
-			}
-			// 执行状态和下面的输出前检查每步现算，只用于本轮：不进续接的前缀（见
-			// llm.Message.TurnOnly），所以每次请求都照加，不会越攒越多。
-			note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data), TurnOnly: true}
-			// Keep the current user input last, but never split a native tool batch.
-			at := len(req.Messages)
-			if at > 0 && req.Messages[at-1].Role == llm.RoleUser {
-				at--
-			}
-			messages := make([]llm.Message, 0, len(req.Messages)+1)
-			messages = append(messages, req.Messages[:at]...)
-			messages = append(messages, note)
-			req.Messages = append(messages, req.Messages[at:]...)
-			if len(configs) > 0 {
-				// 放在本轮输入和工具目录之后，每次请求都加：它贴着生成位置才有效。11-12
-				// 一度改成「请求里已有一模一样的就不加」，因为那时它留在前缀里每轮攒约
-				// 300 字；现在不进前缀，没有理由省。
-				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
-				for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
-					if rule := configs[0].prompt(spec); rule != "" {
-						check += "\n" + rule
-					}
+			if len(records) > 0 {
+				var err error
+				if req, err = withToolExecutionStatus(req, records); err != nil {
+					return req, err
 				}
-				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check, TurnOnly: true})
 			}
 			return req, nil
 		},
 	}
+}
+
+// withToolExecutionStatus 把本轮工具回执插在最后一条用户消息之前，原生工具批次不拆开。
+//
+// 本轮还没执行过工具时不加。以前第一步也带一条 total=0：它插在当前消息前面，第二步
+// 当前消息后面接上了工具调用，这条挪到工具结果之后，于是从第一步的这个位置起，当前
+// 消息和之后的内容第二步全要重发。生产 11-16 同一轮后续步骤重新组装的部分里，从这里
+// 断开的约占三分之一。
+func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRecord) (llm.GenerateRequest, error) {
+	start := max(0, len(records)-12)
+	data, err := json.Marshal(struct {
+		Total   int                   `json:"total"`
+		Omitted int                   `json:"omitted"`
+		Recent  []toolExecutionRecord `json:"recent"`
+	}{len(records), start, records[start:]})
+	if err != nil {
+		return req, err
+	}
+	// 只用于本轮：不进续接的前缀（见 llm.Message.TurnOnly），所以每步照加，不会越攒越多。
+	note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data), TurnOnly: true}
+	// Keep the current user input last, but never split a native tool batch.
+	at := len(req.Messages)
+	if at > 0 && req.Messages[at-1].Role == llm.RoleUser {
+		at--
+	}
+	messages := make([]llm.Message, 0, len(req.Messages)+1)
+	messages = append(messages, req.Messages[:at]...)
+	messages = append(messages, note)
+	req.Messages = append(messages, req.Messages[at:]...)
+	return req, nil
+}
+
+// replyOutputCheck 是主回复系统头部里的【输出前检查】：找不到来由的指代先查再答、没查过
+// 别说查过、算数先算对。以前每一步请求都贴在最后、只用于本轮，连同括号用法再说一遍；
+// 11-17 起请求只追加，挪进头部只发一次，括号用法头部本来就有，不再重复。
+func replyOutputCheck(cfg BotConfig) string {
+	var rules []string
+	for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
+		if rule := cfg.prompt(spec); rule != "" {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) == 0 {
+		return ""
+	}
+	return "【输出前检查】\n" + strings.Join(rules, "\n")
 }
 
 // promptReplyUnknownReferenceSpec 跟在【输出前检查】后面。群友提起好几天前聊过、已经不在
@@ -116,4 +138,4 @@ var promptReplyArithmeticSpec = registerPrompt(PromptSpec{
 
 // toolExecutionStatusRule 说明「本轮工具执行状态」怎么读，逐字不变，放在稳定头部；
 // 每步变化的回执 JSON 留在尾部。
-const toolExecutionStatusRule = "「本轮工具执行状态」由运行时生成，不是资料正文。success 仅表示对应工具返回成功，具体结论仍须核对其结果、对象、实际范围和完整性；failed/not_executed 不算查证成功。total=0 表示本轮尚无工具执行回执，不表示已有历史事实都无效，但不能声称本轮已经查询或完成操作。旧回复中的自述不等于执行回执，也不是人物资料或统计的独立证据。"
+const toolExecutionStatusRule = "「本轮工具执行状态」由运行时生成，不是资料正文。success 仅表示对应工具返回成功，具体结论仍须核对其结果、对象、实际范围和完整性；failed/not_executed 不算查证成功。没有这一段表示本轮还没有工具执行回执，不表示已有历史事实都无效，但不能声称本轮已经查询或完成操作。旧回复中的自述不等于执行回执，也不是人物资料或统计的独立证据。"

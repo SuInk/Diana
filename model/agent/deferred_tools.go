@@ -29,15 +29,16 @@ const maxLoadedContractChars = 128 * 1024
 type deferredToolLoader struct {
 	registry *ToolRegistry
 	core     map[string]bool
-	// shared 为 nil 时所有工具都算公共；见 Config.SharedTools。
-	shared   map[string]bool
+	// head 是渲染进前缀的工具全集（见 Config.HeadRegistry）：里面有、本轮发言者的注册表
+	// 里没有的工具，调用时按没有权限报错，不说「不存在」。
+	head     *ToolRegistry
 	featured map[string]bool
 	loaded   map[string]map[string]any
 	order    []string
 	onLoad   func([]string)
 }
 
-func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared map[string]bool, featured []string) *deferredToolLoader {
+func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, featured []string) *deferredToolLoader {
 	if registry == nil || len(coreTools) == 0 {
 		return nil
 	}
@@ -53,52 +54,70 @@ func newDeferredToolLoader(registry *ToolRegistry, coreTools []string, shared ma
 	for _, name := range featured {
 		featuredSet[name] = true
 	}
-	return &deferredToolLoader{registry: registry, core: core, shared: shared, featured: featuredSet, loaded: map[string]map[string]any{}}
+	return &deferredToolLoader{registry: registry, core: core, featured: featuredSet, loaded: map[string]map[string]any{}}
 }
 
-// isShared 判断工具是不是「对谁都一样」的那一份，见 Config.SharedTools。
-func (l *deferredToolLoader) isShared(name string) bool {
-	if l.shared == nil || l.shared[name] {
-		return true
-	}
-	// 工具族的 action 随发言者能用哪些成员而变，只有声明的成员全都是公共的才算公共。
-	family, ok := l.registry.familyByName(name)
-	if !ok {
-		return false
-	}
-	for _, member := range family.Members {
-		if !l.shared[member.Tool] {
-			return false
-		}
-	}
-	return true
-}
+// catalogTokenBudget 照 Pi codemode 的 inlineBudget（默认 3000 token）：按需目录里
+// 带签名和说明的工具行合计不超过它。生产 11-15 41 个工具全写出来约 1.4 万字，比
+// 聊天历史还占地方。
+const catalogTokenBudget int64 = 3000
 
-// catalog 列出公共的非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
+// catalog 列出非常驻工具，不看本轮已加载的状态：系统提示词要保持稳定才能命中缓存。
+//
+// 照 Pi 的 selectCatalog：带签名和说明的行按估算开销从小到大放，放到预算用完为止；
+// 放不下的只在最后一行列名字，要用先 tool_search 取定义。FeaturedTools 总是写全：
+// 「什么时候该用」只写在它们的描述里，只列名字模型就想不到去用。只随注册表变，
+// 换人说话、加载工具都不变。
 func (l *deferredToolLoader) catalog() string {
-	return l.catalogWhere(true)
-}
-
-// speakerCatalog 列出只有这位发言者才有的按需工具，放在历史之后的尾部。
-func (l *deferredToolLoader) speakerCatalog() string {
-	return l.catalogWhere(false)
-}
-
-func (l *deferredToolLoader) catalogWhere(shared bool) string {
-	var builder strings.Builder
+	type entry struct {
+		name, line string
+		cost       int64
+		featured   bool
+	}
+	var entries []entry
 	for _, name := range l.registry.PresentedNames() {
-		if l.core[name] || l.isShared(name) != shared {
+		if l.core[name] {
 			continue
 		}
 		tool, ok := l.registry.Get(name)
 		if !ok {
 			continue
 		}
-		if l.featured[name] {
-			builder.WriteString("- " + name + toolSignature(tool) + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
-			continue
+		line := deferredCatalogLine(tool)
+		entries = append(entries, entry{name: name, line: line, cost: llm.EstimateTextTokens(line), featured: l.featured[name]})
+	}
+	order := make([]int, len(entries))
+	for index := range order {
+		order[index] = index
+	}
+	sort.SliceStable(order, func(a, b int) bool {
+		left, right := entries[order[a]], entries[order[b]]
+		if left.featured != right.featured {
+			return left.featured
 		}
-		builder.WriteString(deferredCatalogLine(tool))
+		return left.cost < right.cost
+	})
+	shown := make(map[string]bool, len(entries))
+	remaining := catalogTokenBudget
+	for _, index := range order {
+		item := entries[index]
+		if !item.featured && item.cost > remaining {
+			break
+		}
+		remaining -= item.cost
+		shown[item.name] = true
+	}
+	var builder strings.Builder
+	var unlisted []string
+	for _, item := range entries {
+		if shown[item.name] {
+			builder.WriteString(item.line)
+		} else {
+			unlisted = append(unlisted, item.name)
+		}
+	}
+	if len(unlisted) > 0 {
+		builder.WriteString("- 另外还有（只列名字，要用先 " + ToolsLoadToolName + " 取定义）：" + strings.Join(unlisted, "、") + "\n")
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -116,7 +135,7 @@ func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.Tool
 	}
 	return append(out,
 		llm.ToolDefinition{Name: ToolsLoadToolName, Description: l.Description(), Parameters: l.InputSchema()},
-		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的，先 tool_search 再调。", Parameters: executeInputSchema()},
+		llm.ToolDefinition{Name: ToolsExecuteToolName, Description: "执行按需目录里的工具：name 填目录里的名字，input 按目录里括号内的参数签名填（? 结尾的可省）。签名写着「参数多，先 tool_search 取定义」的、或目录里只列了名字的，先 tool_search 再调。", Parameters: executeInputSchema()},
 	)
 }
 
@@ -148,57 +167,6 @@ func (l *deferredToolLoader) restore(names []string) {
 		}
 		l.loaded[name] = schema
 	}
-}
-
-// loadedContract 是一份已加载工具的完整契约，raw 是它发给模型的 JSON。
-type loadedContract struct {
-	name string
-	raw  string
-}
-
-// loadedContractList 按加载顺序列出已加载工具的完整契约。shared=true 只收公共工具（放在
-// 历史之前），shared=false 只收发言者专属的（放在尾部）。当前发言者用不了的工具不在内。
-func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
-	if l == nil || len(l.order) == 0 {
-		return nil
-	}
-	type contract struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		InputSchema map[string]any `json:"inputSchema"`
-	}
-	contracts := make([]loadedContract, 0, len(l.order))
-	for _, name := range l.order {
-		if l.isShared(name) != shared {
-			continue
-		}
-		tool, ok := l.registry.Get(name)
-		if !ok {
-			continue
-		}
-		raw, err := json.Marshal(contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
-		if err != nil {
-			continue
-		}
-		contracts = append(contracts, loadedContract{name: name, raw: string(raw)})
-	}
-	return contracts
-}
-
-// loadedContracts 把 loadedContractList 渲染成一个 JSON 数组，没有契约时返回空串。
-func (l *deferredToolLoader) loadedContracts(shared bool) string {
-	return renderLoadedContracts(l.loadedContractList(shared))
-}
-
-func renderLoadedContracts(contracts []loadedContract) string {
-	if len(contracts) == 0 {
-		return ""
-	}
-	raws := make([]string, len(contracts))
-	for index, contract := range contracts {
-		raws[index] = contract.raw
-	}
-	return "[" + strings.Join(raws, ",") + "]"
 }
 
 func executeInputSchema() map[string]any {
@@ -328,6 +296,11 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
 	}
+	if l.head != nil && l.head != l.registry {
+		if _, listed := l.head.Get(name); listed {
+			return deniedToolError(name)
+		}
+	}
 	return fmt.Errorf("工具 %q 不存在或已禁用；请对照目录重新填 tool_search 的 names，或改用 query 搜", name)
 }
 
@@ -337,6 +310,11 @@ func (l *deferredToolLoader) unavailableToolError(name string) error {
 func (l *deferredToolLoader) missingToolError(name string) error {
 	if l.registry.PolicyDenied(name) {
 		return l.registry.denialError(name)
+	}
+	if l.head != nil && l.head != l.registry {
+		if _, listed := l.head.Get(name); listed {
+			return deniedToolError(name)
+		}
 	}
 	if l.isSkill(name) {
 		return fmt.Errorf("%q 是技能，不能直接执行：先 tool_search 它读到 SKILL.md，再按说明调用里面提到的工具", name)

@@ -431,6 +431,7 @@ func (h *BotHandler) registerRoutes(router gin.IRouter, base string) {
 	router.POST(base+"/imessage/test", h.testIMessageServer)
 	router.GET(base+"/agent-residency", h.agentResidency)
 	router.POST(base+"/agent-residency", h.setAgentResidency)
+	router.GET(base+"/reply-context", h.replyContext)
 	router.GET(base+"/plugins/dependencies", h.pluginDependencies)
 	router.POST(base+"/plugins/dependencies/:name/install", h.installPluginDependency)
 	router.POST(base+"/plugins/:id/install", h.installPlugin)

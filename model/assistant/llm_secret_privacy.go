@@ -276,6 +276,9 @@ type secretPrivacyScope struct {
 	// contextValues 是本次请求里靠上下文认出来的值，正文别处原样出现时一起换掉。
 	contextValues map[string]bool
 	entries       map[string]secretPrivacyEntry
+	// sent、route：正文在 route 上发过的照发过的样子发，见 privacySentMemo。
+	sent  *privacySentMemo[map[string]secretPrivacyEntry]
+	route string
 	// spans 缓存每段正文按形态认出的结果：一次请求先认一遍收集上下文值，再认一遍
 	// 替换，历史有一百多条，不必跑两遍正则。
 	spans map[string][]secretSpan
@@ -328,6 +331,34 @@ func (s *secretPrivacyScope) discover(text string) {
 		s.mu.Unlock()
 		s.known.remember(value)
 	}
+}
+
+// protectSentText 是 protectText，正文在 route 上发过的照发过的样子发。
+func (s *secretPrivacyScope) protectSentText(text string) string {
+	if s.sent == nil || s.route == "" || strings.TrimSpace(text) == "" {
+		return s.protectText(text)
+	}
+	if before, ok := s.sent.get(s.route, text); ok {
+		s.mu.Lock()
+		for placeholder, entry := range before.restore {
+			if _, known := s.entries[placeholder]; !known {
+				s.entries[placeholder] = entry
+			}
+		}
+		s.mu.Unlock()
+		return before.text
+	}
+	out := s.protectText(text)
+	restore := map[string]secretPrivacyEntry{}
+	s.mu.Lock()
+	for placeholder, entry := range s.entries {
+		if strings.Contains(out, placeholder) {
+			restore[placeholder] = entry
+		}
+	}
+	s.mu.Unlock()
+	s.sent.put(s.route, text, privacySent[map[string]secretPrivacyEntry]{text: out, restore: restore})
+	return out
 }
 
 func (s *secretPrivacyScope) protectText(text string) string {
@@ -402,12 +433,12 @@ func (s *secretPrivacyScope) protectRequest(req llm.GenerateRequest) llm.Generat
 	protected.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
 		protectedMessage := message
-		protectedMessage.Content = s.protectText(message.Content)
+		protectedMessage.Content = s.protectSentText(message.Content)
 		if len(message.Parts) > 0 {
 			protectedMessage.Parts = make([]llm.ContentPart, len(message.Parts))
 			for partIndex, part := range message.Parts {
 				protectedPart := part
-				protectedPart.Text = s.protectText(part.Text)
+				protectedPart.Text = s.protectSentText(part.Text)
 				protectedMessage.Parts[partIndex] = protectedPart
 			}
 		}
@@ -416,7 +447,7 @@ func (s *secretPrivacyScope) protectRequest(req llm.GenerateRequest) llm.Generat
 			protectedMessage.ToolCalls = make([]llm.ToolCall, len(message.ToolCalls))
 			for callIndex, call := range message.ToolCalls {
 				protectedCall := call
-				protectedCall.Arguments = mapStrings(call.Arguments, s.protectText)
+				protectedCall.Arguments = mapStrings(call.Arguments, s.protectSentText)
 				protectedMessage.ToolCalls[callIndex] = protectedCall
 			}
 		}
@@ -631,6 +662,8 @@ type secretPrivacyProvider struct {
 	overrides PromptOverrides
 	local     map[string]bool
 	known     *secretContextRegistry
+	// sent 是进程级的发过的正文，见 privacySentMemo；restore 是那段正文里占位符的对照。
+	sent *privacySentMemo[map[string]secretPrivacyEntry]
 }
 
 func (r *Runtime) withLLMSecretPrivacyRun(ctx context.Context, run llmProviderRunFunc) llmProviderRunFunc {
@@ -644,7 +677,7 @@ func (r *Runtime) withLLMSecretPrivacyRun(ctx context.Context, run llmProviderRu
 	salt := r.identityAliasSalt(ctx)
 	local := secretPrivacyLocalFromContext(ctx)
 	return func(provider LLMProvider) (string, error) {
-		return run(&secretPrivacyProvider{provider: provider, salt: salt, overrides: cfg.PromptOverrides, local: local, known: &r.secretContextValues})
+		return run(&secretPrivacyProvider{provider: provider, salt: salt, overrides: cfg.PromptOverrides, local: local, known: &r.secretContextValues, sent: &r.secretSent})
 	}
 }
 
@@ -656,6 +689,7 @@ func (p *secretPrivacyProvider) Generate(ctx context.Context, req llm.GenerateRe
 	// 从原文重新换一遍，同一个值得到同一个占位符。
 	scope := newSecretPrivacyScope(p.salt, p.local, p.known)
 	scope.overrides = p.overrides
+	scope.sent, scope.route = p.sent, privacySentRoute(ctx)
 	response, err := p.provider.Generate(ctx, scope.protectRequest(req))
 	if err != nil || response == nil {
 		return response, err

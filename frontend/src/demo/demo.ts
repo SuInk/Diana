@@ -1953,6 +1953,24 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
+  if (path === "/api/assistant/reply-context") {
+    // 照抄 TestReplyRequestsAreAppendOnly 最后一轮的真实组装（合成的 4 人 22 条群聊，测试日志
+    // 里那行「请求构成」），组装改了要重新抄，不要手填。群聊短，所以聊天历史占比小。
+    const segments = [
+      {name: "工具定义", kind: "prefix", tokens: 1217, new_tokens: 0},
+      {name: "Runner 系统提示（协议、按需目录、规则）", kind: "prefix", tokens: 6706, new_tokens: 0},
+      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 11285, new_tokens: 0},
+      {name: "【系统补充指令，不是用户发言】", kind: "state", tokens: 283, new_tokens: 0},
+      {name: "其他 user 段", kind: "state", tokens: 21, new_tokens: 0},
+      {name: "聊天历史（只追加）", kind: "history", tokens: 996, new_tokens: 168},
+      {name: "【当前消息的对话对象】", kind: "state", tokens: 205, new_tokens: 0},
+      {name: "【日期】", kind: "state", tokens: 27, new_tokens: 0},
+      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78}
+    ];
+    const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
+    const fresh = segments.reduce((sum, segment) => sum + segment.new_tokens, 0);
+    return json({ breakdown: { sessions: 1, saved_at: new Date(Date.now() - 3 * 60_000).toISOString(), total_tokens: total, new_tokens: fresh, segments, context_window: 200000, compaction_threshold: 111616 } });
+  }
   if (path === "/api/assistant/agent-residency") {
     if (method === "POST") {
       if (body.reset) {

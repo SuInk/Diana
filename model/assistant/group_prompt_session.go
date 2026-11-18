@@ -28,8 +28,11 @@ type GroupPromptSession struct {
 	CheckpointUntil int64 `json:"checkpoint_until,omitempty"`
 	// CheckpointUntilKey 是被摘要的最后一条消息的去重键。时间只精确到秒，同一秒里的
 	// 几条要靠它分清哪条已经进了摘要。
-	CheckpointUntilKey string   `json:"checkpoint_until_key,omitempty"`
-	LoadedTools        []string `json:"loaded_tools,omitempty"`
+	CheckpointUntilKey string `json:"checkpoint_until_key,omitempty"`
+	// CheckpointPendingFrom 是滑出窗口、还没写进摘要的第一条消息的去重键，见
+	// compactionCheckpoint.PendingFrom。
+	CheckpointPendingFrom string   `json:"checkpoint_pending_from,omitempty"`
+	LoadedTools           []string `json:"loaded_tools,omitempty"`
 	// ToolLastUsed 记着每个已加载工具最近一次加载或调用的时间（Unix 秒），
 	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
 	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`
@@ -288,8 +291,9 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 // historyRenderVersion 进渲染缓存的源哈希：历史的渲染形态变了就加一，已存的条目
 // 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用；
 // 3 起表情包摘要换成一句话标注；4 起同一天的历史行只写时分秒（缓存条目里仍写全日期，
-// 拼成一份历史后由 compactHistoryLineDates 统一省掉，加一是让旧条目跟着这一版一起换掉）。
-const historyRenderVersion = 4
+// 拼成一份历史后由 compactHistoryLineDates 统一省掉，加一是让旧条目跟着这一版一起换掉）；
+// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」。
+const historyRenderVersion = 5
 
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
@@ -319,11 +323,9 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		}
 		if item.crossGroupContext {
 			if boolValue(cfg.CrossGroupMemoryEnabled, false) {
-				// 跨群参考按当前消息现查，只给这一轮用，不进续接的前缀（见 llm.Message.TurnOnly）。
-				for _, message := range r.renderPromptHistoryEvent(ctx, event, item, cfg, direct) {
-					message.TurnOnly = true
-					volatile = append(volatile, message)
-				}
+				// 跨群参考按当前消息现查。主回复请求只追加：查到的几行和历史一样留在前缀里，
+				// 下一轮没变就不重发（见 append_context.go）。
+				volatile = append(volatile, r.renderPromptHistoryEvent(ctx, event, item, cfg, direct)...)
 			}
 			continue
 		}

@@ -136,7 +136,7 @@ func TestDurableMediaIndexAliasesMessageIDs(t *testing.T) {
 	if !strings.Contains(index, "1730247241") {
 		t.Fatalf("fixture lost the image: %q", index)
 	}
-	if protected := scope.protectText(index); strings.Contains(protected, "1730247241") || !strings.Contains(protected, "im_message_") {
+	if protected := scope.protectText(index); strings.Contains(protected, "1730247241") || !strings.Contains(protected, "im_m_") {
 		t.Fatalf("real message id reached the model: %q", protected)
 	}
 }

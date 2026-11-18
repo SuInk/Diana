@@ -76,10 +76,22 @@ func TestLiveOwnerNewlineReplay(t *testing.T) {
 			arms["B"] = b
 		case "owner":
 			b := cloneReplayRequest(fixture.Request)
+			// 旧样本的当前消息带「【当前需要回复的消息】」；新样本里它是最后一条 user 消息，
+			// 前面紧挨着这一轮的注解，插在注解前面。
 			current := -1
 			for i := range b.Messages {
 				if b.Messages[i].Role == llm.RoleUser && strings.Contains(b.Messages[i].Content, "【当前需要回复的消息】") {
 					current = i
+				}
+			}
+			if current < 0 {
+				for i := range b.Messages {
+					if b.Messages[i].Role == llm.RoleUser {
+						current = i
+					}
+				}
+				if current > 0 && isCurrentMessageNotes(b.Messages[current-1]) {
+					current--
 				}
 			}
 			if current < 0 {

@@ -561,7 +561,7 @@ func exportStickerReplayForLabeling(t *testing.T, samples []stickerReplaySample,
 				continue
 			}
 			// 用户侧除了聊天记录还有记忆、常用表达这些注入说明，盲标只看真实对话。
-			if message.Role == llm.RoleUser && !strings.HasPrefix(message.Content, "[历史") &&
+			if message.Role == llm.RoleUser && !strings.HasPrefix(message.Content, "[历史") && !isHistoryLine(message.Content) &&
 				!strings.Contains(message.Content, "【当前需要回复的消息】") {
 				continue
 			}

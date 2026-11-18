@@ -137,10 +137,10 @@ func TestImageFailureNoticeSeparatesReasons(t *testing.T) {
 	// 原图还在请求里时，绝不能替模型断言「你看不了图」：识图失败的是 vision 分组，
 	// chat 分组可能是另一个完全能读图的模型。
 	attached := imageFailureNotice(event, true)
-	if !strings.Contains(attached, "原图仍附在本条消息里") {
+	if !strings.Contains(attached, "原图附在要回复的那条消息上") {
 		t.Fatalf("attached notice lost the raw image hint:\n%s", attached)
 	}
-	if strings.Contains(notice, "原图仍附在本条消息里") {
+	if strings.Contains(notice, "原图附在要回复的那条消息上") {
 		t.Fatalf("unattached notice should not claim the raw image is present:\n%s", notice)
 	}
 	for _, text := range []string{notice, attached} {

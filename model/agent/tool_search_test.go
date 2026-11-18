@@ -27,7 +27,7 @@ func TestToolSearchQueryFindsByKeyword(t *testing.T) {
 		&describedTool{"llm_config", "切换 Diana 模型，不动供应商地址和密钥。"},
 		&describedTool{"tts", "把文字合成语音发出去。"},
 	)
-	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil)
 	output, err := loader.Run(context.Background(), map[string]any{"query": "把他禁言"})
 	if err != nil || !strings.Contains(output, `"name":"platform"`) || strings.Contains(output, `"name":"tts"`) {
 		t.Fatalf("query output=%s err=%v", output, err)
@@ -45,7 +45,7 @@ func TestToolSearchQueryFindsByKeyword(t *testing.T) {
 
 func TestLegacyToolsLoadNameStillDispatches(t *testing.T) {
 	registry := NewToolRegistry(&describedTool{"tts", "语音"})
-	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil)
 	action, err := loader.dispatch(llmAction{Action: "tool", Tool: LegacyToolsLoadName, Input: map[string]any{"names": []any{"tts"}}})
 	if err != nil || action.Tool != ToolsLoadToolName {
 		t.Fatalf("legacy name dispatched to %q err=%v", action.Tool, err)
@@ -57,16 +57,19 @@ func TestLegacyToolsLoadNameStillDispatches(t *testing.T) {
 	}
 }
 
-// 公共工具进系统提示词，发言者专属工具的目录、规则、契约和预算都在历史之后：
-// 主人和群友交替说话时，工具定义、Agent system 和人设逐字相同。
-func TestSpeakerToolsStayOutOfSharedPrefix(t *testing.T) {
-	shared := map[string]bool{"tts": true, "say": true}
+// 前缀按工具全集渲染：主人和群友交替说话时，工具定义、Agent system、人设和已加载
+// 契约和预算逐字相同；谁能用哪些不再每轮写一行，用不了的调用时回没有权限。
+func TestSpeakerToolsShareOnePrefix(t *testing.T) {
+	ownerTools := func() []Tool {
+		return []Tool{&describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"}, &describedTool{"coding", "把编码工作交给外部 CLI，仅主人"}, &describedTool{"run_command", "执行白名单命令"}, &describedTool{"write_file", "写文件"}}
+	}
+	head := NewToolRegistry(ownerTools()...)
 	persona := llm.Message{Role: llm.RoleSystem, Content: "人设", Priority: llm.MessagePrioritySystem}
 	history := llm.Message{Role: llm.RoleUser, Content: "历史", CacheBreakpoint: true}
 	current := llm.Message{Role: llm.RoleUser, Content: "当前", Priority: llm.MessagePriorityCurrent}
 	capture := func(steps int, tools ...Tool) llm.GenerateRequest {
 		client := &scriptedClient{}
-		runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), CoreTools: []string{finalizeToolName}, SharedTools: shared, MaxSteps: steps}, NewToolRegistry(tools...))
+		runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), CoreTools: []string{finalizeToolName}, HeadRegistry: head, MaxSteps: steps}, NewToolRegistry(tools...))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -75,8 +78,8 @@ func TestSpeakerToolsStayOutOfSharedPrefix(t *testing.T) {
 		}
 		return client.requests[0]
 	}
-	member := capture(20, &describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"})
-	owner := capture(32, &describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"}, &describedTool{"coding", "把编码工作交给外部 CLI，仅主人"}, &describedTool{"run_command", "执行白名单命令"}, &describedTool{"write_file", "写文件"})
+	member := capture(32, &describedTool{"tts", "语音"}, &describedTool{"say", "中途说一句"})
+	owner := capture(32, ownerTools()...)
 	prefix := func(req llm.GenerateRequest) string {
 		var builder strings.Builder
 		for _, definition := range req.Tools {
@@ -93,19 +96,21 @@ func TestSpeakerToolsStayOutOfSharedPrefix(t *testing.T) {
 	if prefix(member) != prefix(owner) {
 		t.Fatalf("owner and member prefixes differ:\n%s\n---\n%s", prefix(member), prefix(owner))
 	}
-	if strings.Contains(prefix(owner), "coding") || strings.Contains(prefix(owner), "最多可调用 32") {
-		t.Fatal("speaker-only catalog or budget leaked into the shared prefix")
+	if !strings.Contains(prefix(owner), "- coding(") || !strings.Contains(prefix(owner), "编写或修复代码时") || !strings.Contains(prefix(owner), "最多调用 32 次工具") {
+		t.Fatalf("the prefix must list every tool and the budget:\n%s", prefix(owner))
 	}
-	var tail string
-	for _, message := range owner.Messages {
-		if strings.Contains(message.Content, "【本轮工具预算】") {
-			tail = message.Content
+	for _, req := range []llm.GenerateRequest{owner, member} {
+		for _, message := range req.Messages {
+			if strings.HasPrefix(message.Content, "【本轮发言者的工具权限】") {
+				t.Fatalf("per-turn permission note is gone: %q", message.Content)
+			}
 		}
 	}
-	for _, want := range []string{"最多可调用 32 次", "- coding(", "编写或修复代码时", "当前发言者已经加载"} {
-		if !strings.Contains(tail, want) {
-			t.Fatalf("owner tail misses %q:\n%s", want, tail)
-		}
+	// 群友点名调用前缀里列着、自己用不了的工具：说没有权限，不说工具不存在。
+	loader := newDeferredToolLoader(NewToolRegistry(&describedTool{"tts", "语音"}), []string{finalizeToolName}, nil)
+	loader.head = head
+	if _, err := loader.dispatch(llmAction{Action: "tool", Tool: ToolsExecuteToolName, Input: map[string]any{"name": "coding", "input": map[string]any{}}}); err == nil || !strings.Contains(err.Error(), "没有权限") {
+		t.Fatalf("calling a listed tool without permission: %v", err)
 	}
 }
 
@@ -113,7 +118,7 @@ func TestSpeakerToolsStayOutOfSharedPrefix(t *testing.T) {
 // 参数不合法才交回契约。
 func TestDeferredToolRunsWithoutSeparateSearch(t *testing.T) {
 	registry := NewToolRegistry(&describedTool{"say", "中途说一句"}, &countingTool{name: "strict"})
-	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{finalizeToolName}, nil)
 	if action, err := loader.dispatch(llmAction{Action: "tool", Tool: "say", Input: map[string]any{}}); err != nil || action.Tool != "say" {
 		t.Fatalf("direct call: tool=%q err=%v", action.Tool, err)
 	}

@@ -19,7 +19,7 @@ func TestIdentityAliasesStayStableAfterLeavingWindow(t *testing.T) {
 	first := base
 	first.UserID, first.MessageID = "3000003", "-77700001"
 	scope1 := identityPrivacyScopeFromContext(runtime.withIdentityPrivacyContext(context.Background(), first, nil))
-	line := "[跨群历史] 远野（3000003）: 看 message_id=-77700001，价格 1999 元"
+	line := "[跨群] 远野（3000003）: 看 message_id=-77700001，价格 1999 元"
 	before := scope1.protectText(line)
 	if strings.Contains(before, "3000003") || strings.Contains(before, "77700001") || !strings.Contains(before, "1999") {
 		t.Fatalf("第一轮脱敏不对: %s", before)
@@ -41,15 +41,46 @@ func TestIdentityAliasesStayStableAfterLeavingWindow(t *testing.T) {
 	}
 }
 
-// 短号码不进全局名单：Telegram 六位递增的消息 ID 收进来，正文里同样的数字也会被换掉。
-func TestIdentityAliasRegistrySkipsShortNumbers(t *testing.T) {
+// 短号码不进全局名单：Telegram 六位递增的消息 ID 收进来，别的群正文里同样的数字也会
+// 被换掉。它只记在出现它的会话里，那个会话的后几轮照样认得，旧块不会变回真实号码。
+func TestIdentityAliasRegistryKeepsShortNumbersPerConversation(t *testing.T) {
 	var registry identityAliasRegistry
-	registry.remember("265075", "message")
-	registry.remember("12345678", "user")
-	if _, ok := registry.role("265075"); ok {
-		t.Fatal("六位号码不该进全局名单")
+	registry.remember("group:1", "265075", "message")
+	registry.remember("group:1", "12345678", "user")
+	if role, ok := registry.role("group:1", "265075"); !ok || role != "message" {
+		t.Fatalf("同一会话应当记住六位号码: %q %v", role, ok)
 	}
-	if role, ok := registry.role("12345678"); !ok || role != "user" {
-		t.Fatalf("八位号码应当记住: %q %v", role, ok)
+	if _, ok := registry.role("group:2", "265075"); ok {
+		t.Fatal("六位号码不该带到别的会话")
+	}
+	if _, ok := registry.role("", "265075"); ok {
+		t.Fatal("没有会话时不该认得六位号码")
+	}
+	if role, ok := registry.role("group:2", "12345678"); !ok || role != "user" {
+		t.Fatalf("八位号码应当全局记住: %q %v", role, ok)
+	}
+}
+
+// 五位的老 QQ 号这一轮不在窗口里，前几轮留下的那一行仍换成同一个别名。
+func TestShortIdentityAliasesStayStableWithinConversation(t *testing.T) {
+	enabled := true
+	runtime := NewRuntime(BotConfig{LLMIdentityMaskingEnabled: &enabled}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	base := MessageEvent{Kind: EventKindGroup, Platform: PlatformOneBotV11, SelfID: "2000002", GroupID: "5000005", Time: 1}
+	first := base
+	first.UserID, first.MessageID = "10101", "m-1"
+	line := "[10:00] Alice（10101）: 早"
+	before := identityPrivacyScopeFromContext(runtime.withIdentityPrivacyContext(context.Background(), first, nil)).protectText(line)
+	if strings.Contains(before, "10101") {
+		t.Fatalf("第一轮脱敏不对: %s", before)
+	}
+	next := base
+	next.UserID, next.MessageID = "10102", "m-2"
+	if after := identityPrivacyScopeFromContext(runtime.withIdentityPrivacyContext(context.Background(), next, nil)).protectText(line); after != before {
+		t.Fatalf("同一会话旧行脱敏结果变了:\n%s\n%s", before, after)
+	}
+	other := next
+	other.GroupID = "6000006"
+	if got := identityPrivacyScopeFromContext(runtime.withIdentityPrivacyContext(context.Background(), other, nil)).protectText("价格 10101 元"); got != "价格 10101 元" {
+		t.Fatalf("别的群里的同样数字不该被换: %s", got)
 	}
 }

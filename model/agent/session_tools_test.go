@@ -12,7 +12,7 @@ import (
 
 func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
 	registry := NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}, &countingTool{name: "admin"})
-	loader := newDeferredToolLoader(registry, []string{"common"}, nil, nil)
+	loader := newDeferredToolLoader(registry, []string{"common"}, nil)
 	definitions := append(registry.Definitions(), finalizeToolDefinition(false))
 	first := loader.filter(definitions)
 	loader.restore([]string{"rare", "admin", "rare", "gone"})
@@ -23,11 +23,10 @@ func TestSessionToolDefinitionsAppendAndRestoreOnlyAllowedTools(t *testing.T) {
 	if got := toolDefinitionNames(next); !reflect.DeepEqual(got, []string{"common", finalizeToolName, ToolsLoadToolName, ToolsExecuteToolName}) {
 		t.Fatal(got)
 	}
-	contracts := loader.loadedContracts(true)
-	if !strings.Contains(contracts, `"name":"rare"`) || !strings.Contains(contracts, `"name":"admin"`) {
-		t.Fatalf("restored contracts = %s", contracts)
+	if !reflect.DeepEqual(loader.order, []string{"rare", "admin"}) {
+		t.Fatalf("restored = %v", loader.order)
 	}
-	member := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}), []string{"common"}, nil, nil)
+	member := newDeferredToolLoader(NewToolRegistry(&countingTool{name: "common"}, &countingTool{name: "rare"}), []string{"common"}, nil)
 	member.restore(loader.order)
 	if !reflect.DeepEqual(member.order, []string{"rare"}) {
 		t.Fatalf("permissions bypassed: %v", member.order)
@@ -69,21 +68,11 @@ func TestRunnerRestoresDiscoveredToolsOnNewRun(t *testing.T) {
 	if string(previous) != string(next) {
 		t.Fatal("restoring a tool rewrote provider definitions")
 	}
-	messages := secondClient.requests[0].Messages
-	if strings.Contains(messages[0].Content, `"name":"rare"`) {
-		t.Fatal("restored schema leaked into stable prompt")
-	}
-	found := false
-	for _, message := range messages[1 : len(messages)-1] {
-		if strings.Contains(message.Content, `"name":"rare"`) && strings.Contains(message.Content, `"inputSchema":`) {
-			found = true
-			if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem {
-				t.Fatalf("restored contract must stay inline and retain system budget priority: %#v", message)
-			}
+	// 恢复的只是加载状态，契约不进提示词（要用时当轮 tool_search 取）。
+	for _, message := range secondClient.requests[0].Messages {
+		if strings.Contains(message.Content, `"inputSchema":`) {
+			t.Fatalf("restored schema leaked into the prompt: %.200q", message.Content)
 		}
-	}
-	if !found {
-		t.Fatal("restored schema missing from volatile tail")
 	}
 }
 
