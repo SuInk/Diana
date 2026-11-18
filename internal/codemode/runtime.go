@@ -22,7 +22,6 @@ import (
 const (
 	maxFrameBytes    = 1024 * 1024
 	maxArgumentBytes = 64 * 1024
-	maxOutputBytes   = 32 * 1024
 	maxStoreBytes    = 512 * 1024
 )
 
@@ -371,8 +370,9 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 	return finish(doneOK, doneHasValue, donePayload, doneWrites, output, req.Store)
 }
 
-// finish shapes the model-facing result: text output only, a size cap that never
-// splits JSON, and the store merged with this run's writes.
+// finish shapes the model-facing result: text output only (the embedded prelude
+// caps runaway output like Pi; agent bounds what the model sees), and the store
+// merged with this run's writes.
 func finish(ok, hasValue bool, payload, writes string, output []string, previous map[string]json.RawMessage) (Result, error) {
 	var result Result
 	for _, text := range output {
@@ -398,9 +398,6 @@ func finish(ok, hasValue bool, payload, writes string, output []string, previous
 			}
 			result.Value = json.RawMessage(payload)
 		}
-	}
-	if data, err := json.Marshal(result); err != nil || len(data) > maxOutputBytes {
-		return failure("output_limit", "script output exceeds 32768 bytes; select fewer fields or rows"), nil
 	}
 	if !ok {
 		return result, nil

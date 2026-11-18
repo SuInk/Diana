@@ -247,6 +247,7 @@ func TestGitHubPublicCredentialExposureAndHistoryMessageRange(t *testing.T) {
 	raw, err := histTool.Run(context.Background(), map[string]any{
 		"from_message_id":    "102",
 		"through_message_id": "103",
+		"order":              "oldest",
 	})
 	if err != nil {
 		t.Fatalf("chat_history message range failed: %v", err)

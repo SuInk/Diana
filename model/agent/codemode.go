@@ -28,6 +28,13 @@ const codeModeToolName = CodeModeToolName
 // indices and blew the 32 KiB output cap). Headroom stays under the 1 MiB frame.
 const codeModeChildResultBytes = 512 * 1024
 
+// codeModeChildOutputBudget 是脚本里子调用的分页上限（字），替代给模型的
+// ToolOutputMaxChars。照 Pi：嵌套调用拿工具的完整结构化结果，不受单次结果上限，
+// 由脚本自己筛字段、数条数后再输出；以前子调用也按 2 万字分页，chat_history 一页
+// 只装 50 条，脚本按天读一周时每天只拿到零点后几分钟。按每字最多 4 字节折算，再给
+// 工具在正文外拼的说明和元数据留两成，保证分页后仍在 codeModeChildResultBytes 以内。
+const codeModeChildOutputBudget = codeModeChildResultBytes / 5
+
 // CodeModeParallelTool 标记无状态、纯只读的工具允许在 codemode 脚本内（如 Promise.all）并发执行。
 type CodeModeParallelTool interface {
 	CodeModeParallel() bool
@@ -87,12 +94,12 @@ func (*codeModeTool) Description() string {
 	return "异步 JavaScript 编排：多步调用、循环或筛选大结果时用；只调一次就直接调原工具。await tools.<名字>({参数}) 调按需目录里的工具，参数照目录里括号内的签名填，不用 tool_search；结果是解析好的 JSON，结构不明先 return Object.keys(r)，只 return 需要的字段。例：const p=await tools.browser_render({url}); return p.title; store/load 跨脚本存小状态。仅 web_search/browser_render 可并发。无 Node/联网；发送、终止、图片在脚本外调用。"
 }
 func (*codeModeTool) InputSchema() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}}, "required": []string{"code"}, "additionalProperties": false}
+	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 1, "description": "结果给你的上限，默认 10000 token；超出时只给首尾"}}, "required": []string{"code"}, "additionalProperties": false}
 }
 func (*codeModeTool) Timeout() time.Duration { return 120 * time.Second }
 
 // codeModeFreeformHint 只在按原始文本发时接在描述后面：函数调用形态用 fresh 参数。
-const codeModeFreeformHint = "输入就是脚本原文，不加代码块围栏；要绕过网页缓存时第一行写 // @options: {\"fresh\":true}。"
+const codeModeFreeformHint = "输入就是脚本原文，不加代码块围栏；可选第一行 // @options: {\"max_output_tokens\":10000,\"fresh\":true}：结果默认给 1 万 token，超出只给首尾；fresh 绕过网页缓存。"
 
 // codeModeGrammar 照抄 Pi（packages/codemode/src/source.ts 的 CODEMODE_SOURCE_GRAMMAR）：
 // 只约束可选的第一行选项，正文不限。约束不在语法本身，在于模型直接写脚本原文，
@@ -225,7 +232,7 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 		}
 		*lastSignature = signature
 		ordinal := *toolCalls
-		read := parallelRead{tool: child, action: action}
+		read := parallelRead{tool: child, action: action, outputBudget: codeModeChildOutputBudget}
 		if cacheHit {
 			read.cachedOutput = &cached.output
 		}
@@ -269,10 +276,14 @@ func (r *Runner) runCodeMode(ctx context.Context, tool *codeModeTool, input map[
 	r.codeModeStore = result.Store
 	result.Store = nil
 	result.Value = compactCodeModeValue(result.Value)
-	return marshalCodeModeJSON(struct {
+	output, err := marshalCodeModeJSON(struct {
 		codemode.Result
 		CacheHits int `json:"cache_hits,omitempty"`
 	}{result, cacheHits})
+	if err != nil {
+		return "", err
+	}
+	return r.codeModeModelOutput(output, codeModeOutputBudget(input)), nil
 }
 
 // compactCodeModeValue drops null object members before the value reaches model

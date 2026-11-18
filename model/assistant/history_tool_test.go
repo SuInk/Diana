@@ -424,7 +424,8 @@ func TestDianaChatHistoryToolRangeListsWholeWindow(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(historyMessageIDsFromItems(result.Items), ","); got != "inside-1,inside-2" {
+	// 默认 newest，和 tg_messages 默认 desc 一样最新的在前。
+	if got := strings.Join(historyMessageIDsFromItems(result.Items), ","); got != "inside-2,inside-1" {
 		t.Fatalf("range message ids = %q", got)
 	}
 	if result.Total != 2 || result.Limited {
@@ -448,7 +449,7 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 
 	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"})
 	raw, err := tool.Run(context.Background(), map[string]any{
-		"operation": "range", "from_time": base, "through_time": base + 3600, "limit": 2,
+		"operation": "range", "from_time": base, "through_time": base + 3600, "limit": 2, "order": "oldest",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -465,7 +466,7 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 	}
 
 	raw, err = tool.Run(context.Background(), map[string]any{
-		"operation": "range", "from_time": first.NextFromTime, "through_time": base + 3600, "limit": 2,
+		"operation": "range", "from_time": first.NextFromTime, "through_time": base + 3600, "limit": 2, "order": "oldest",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -476,6 +477,44 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 	}
 	if got := strings.Join(historyMessageIDsFromItems(second.Items), ","); got != "m3,m4" {
 		t.Fatalf("second page = %q", got)
+	}
+}
+
+// 不带关键词按时段读时要照 order=newest 从末尾往前读、按游标接着往前翻。生产
+// 2026-11-18「总结这周」按天传 newest，这里却写死从旧到新，每天只拿到零点后几分钟。
+func TestDianaChatHistoryToolRangeHonorsNewestOrder(t *testing.T) {
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
+	base := time.Date(2026, 8, 19, 0, 0, 0, 0, time.Local).Unix()
+	for index := 1; index <= 5; index++ {
+		runtime.remember(chatHistoryTextEvent(base+int64(index)*3600, "alice", "Alice", fmt.Sprintf("m%d", index), fmt.Sprintf("消息 %d", index)))
+	}
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1"})
+	input := map[string]any{"from_time": "2026-08-19 00:00:00", "through_time": "2026-08-19 23:59:59", "order": "newest", "limit": 2}
+	var pages []string
+	for range 5 {
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page := decodeHistoryPage(t, raw)
+		if page.Order != "newest" || page.NextFromTime != 0 {
+			t.Fatalf("page = %+v", page)
+		}
+		pages = append(pages, strings.Join(historyMessageIDsFromItems(page.Items), ","))
+		if !page.HasMore {
+			break
+		}
+		input["cursor"] = page.NextCursor
+	}
+	if got := strings.Join(pages, "|"); got != "m5,m4|m3,m2|m1" {
+		t.Fatalf("pages = %q", got)
+	}
+	// 游标绑定排序：换了 order 的续读要报错，不能悄悄换方向。
+	input["order"] = "oldest"
+	if _, err := tool.Run(context.Background(), input); err == nil {
+		t.Fatal("cursor reused with a different order")
 	}
 }
 

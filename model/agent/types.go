@@ -14,7 +14,9 @@ import (
 const (
 	// DefaultMaxSteps 为零表示不限制工具调用次数。
 	DefaultMaxSteps = 0
-	// ToolOutputMaxChars 是每次工具结果回给模型的唯一上限，所有人、所有工具一样，
+	// ToolOutputMaxChars 是每次工具结果回给模型的上限，所有人、所有工具一样（codemode
+	// 照 Pi 另有 max_output_tokens，见 codeModeModelOutput；脚本里的子调用按
+	// codeModeChildOutputBudget 分页），
 	// 照 Pi 的做法：上限写死、不按身份放宽或收紧，超出时工具按整条分页并在结果里
 	// 写明怎么续读，不在内部按预算缩短正文、抽样或静默丢条目。中文 2 万字与 Pi 的
 	// 50KB 在 token 量上相当。

@@ -946,9 +946,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			output = toolExecutionErrorForModel(action.Tool, record.Error)
 		} else {
 			record.Output = truncateToolOutput(output, outputLimit)
-			if action.Tool == ToolsLoadToolName {
+			if action.Tool == ToolsLoadToolName || action.Tool == codeModeToolName {
 				// Loader enforces its own bound atomically; truncating a JSON
-				// contract would mark unseen parameters as loaded.
+				// contract would mark unseen parameters as loaded. codemode 照 Pi
+				// 有自己的上限，见 codeModeModelOutput。
 				record.Output = output
 			}
 			output = record.Output
