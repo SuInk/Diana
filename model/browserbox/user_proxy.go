@@ -22,6 +22,7 @@ import (
 type userBrowserProxy struct {
 	url         string
 	hosts       []string
+	anyPublic   bool
 	server      *http.Server
 	transport   *http.Transport
 	mu          sync.Mutex
@@ -29,12 +30,13 @@ type userBrowserProxy struct {
 	closed      bool
 }
 
-func newUserBrowserProxy(hosts []string) (*userBrowserProxy, error) {
+// anyPublic 是群友沙箱：不看网站白名单，任何公网地址都放行，内网照样由 netguard 拦。
+func newUserBrowserProxy(hosts []string, anyPublic bool) (*userBrowserProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
 	}
-	p := &userBrowserProxy{url: "http://" + listener.Addr().String(), hosts: agent.NormalizeBrowserScreenshotHosts(hosts), connections: map[net.Conn]bool{}}
+	p := &userBrowserProxy{url: "http://" + listener.Addr().String(), hosts: agent.NormalizeBrowserScreenshotHosts(hosts), anyPublic: anyPublic, connections: map[net.Conn]bool{}}
 	p.transport = http.DefaultTransport.(*http.Transport).Clone()
 	p.transport.Proxy = nil
 	p.transport.DialContext = netguard.DialPublicContextStrict
@@ -48,6 +50,9 @@ func (p *userBrowserProxy) allowed(rawURL string) bool {
 	parsed, err := url.Parse(rawURL)
 	if err != nil || parsed.User != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 		return false
+	}
+	if p.anyPublic {
+		return parsed.Host != ""
 	}
 	value := strings.ToLower(parsed.Host)
 	defaultPort := "80"
@@ -68,7 +73,7 @@ func (p *userBrowserProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL == nil || r.URL.Scheme != "http" || !p.allowed(r.URL.String()) || netguard.ValidatePublicURLStrict(r.Context(), r.URL.String()) != nil {
-		http.Error(w, "网站不在个人浏览器白名单内或不是公网地址", http.StatusForbidden)
+		http.Error(w, "网站不在浏览器允许范围内或不是公网地址", http.StatusForbidden)
 		return
 	}
 	request := r.Clone(r.Context())
@@ -93,7 +98,7 @@ func (p *userBrowserProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (p *userBrowserProxy) connect(w http.ResponseWriter, r *http.Request) {
 	if !p.allowed("https://"+r.Host) || netguard.ValidatePublicURLStrict(r.Context(), "https://"+r.Host) != nil {
-		http.Error(w, "登录跳转的网站不在个人浏览器白名单内或不是公网地址", http.StatusForbidden)
+		http.Error(w, "跳转的网站不在浏览器允许范围内或不是公网地址", http.StatusForbidden)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)

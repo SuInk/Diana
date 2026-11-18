@@ -1076,6 +1076,10 @@ type BotConfig struct {
 	// （见 RelationshipPolicy.allowedAgentToolNames），群成员拿不到这组工具，只有
 	// 主人能驱动它；用户按下接管时连主人也当场失效。
 	AgentBrowserBoxDisabled bool `json:"agent_browser_box_disabled,omitempty"`
+	// AgentSandboxBrowserDisabled 关掉群友的沙箱浏览器。沙箱是按会话起的一次性
+	// Chrome，不带任何登录态、只能连公网，群成员（以及没开个人浏览器的私聊）让机器人
+	// 在网页上点、填、翻页时用它。默认开，写成「关闭」同 AgentBrowserBoxDisabled。
+	AgentSandboxBrowserDisabled bool `json:"agent_sandbox_browser_disabled,omitempty"`
 
 	// Weixin* 全部由扫码登录写入，界面不能手填：token 只有腾讯服务端发得出来。
 	WeixinBotToken string `json:"weixin_bot_token,omitempty"`
@@ -1718,6 +1722,7 @@ type ConfigPayload struct {
 	AgentBrowserControlEnabled      bool                      `json:"agent_browser_control_enabled,omitempty"`
 	AgentDesktopControlEnabled      bool                      `json:"agent_desktop_control_enabled,omitempty"`
 	AgentBrowserBoxDisabled         bool                      `json:"agent_browser_box_disabled,omitempty"`
+	AgentSandboxBrowserDisabled     bool                      `json:"agent_sandbox_browser_disabled,omitempty"`
 
 	// 微信只回显绑定的是哪个号；token 只在显式索取时回传，保存时永远不从 payload 读。
 	WeixinBotID              string `json:"weixin_bot_id,omitempty"`
@@ -3065,6 +3070,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		AgentBrowserControlEnabled:      cfg.AgentBrowserControlEnabled,
 		AgentDesktopControlEnabled:      cfg.AgentDesktopControlEnabled,
 		AgentBrowserBoxDisabled:         cfg.AgentBrowserBoxDisabled,
+		AgentSandboxBrowserDisabled:     cfg.AgentSandboxBrowserDisabled,
 
 		// 微信只回显绑定的是哪个号，token 只在显式索取时回传。
 		WeixinBotID:              cfg.WeixinBotID,
@@ -3324,6 +3330,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		AgentBrowserControlEnabled:      payload.AgentBrowserControlEnabled,
 		AgentDesktopControlEnabled:      payload.AgentDesktopControlEnabled,
 		AgentBrowserBoxDisabled:         payload.AgentBrowserBoxDisabled,
+		AgentSandboxBrowserDisabled:     payload.AgentSandboxBrowserDisabled,
 	}.WithDefaults()
 	if cfg.OneBotHTTPSecret == "" {
 		cfg.OneBotHTTPSecret = existing.OneBotHTTPSecret

@@ -571,6 +571,12 @@ return {
 	if err != nil {
 		return "", err
 	}
+	if t.base.sandbox {
+		var scrolled map[string]any
+		if json.Unmarshal(raw, &scrolled) == nil && scrolled["ok"] == true {
+			return t.base.sandboxState(ctx, client, 0, map[string]any{"scrolled": scrolled})
+		}
+	}
 	return string(raw), nil
 }
 
@@ -635,6 +641,9 @@ return true;
 		}
 	}
 	client.settle(ctx)
+	if t.base.sandbox {
+		return t.base.sandboxState(ctx, client, 0, map[string]any{"key": strings.TrimSpace(key), "repeat": repeat})
+	}
 	return client.pageState(ctx, map[string]any{"key": strings.TrimSpace(key), "repeat": repeat})
 }
 
@@ -870,17 +879,29 @@ return true;
 	for {
 		// 等的过程中页面可能正在跳转，执行上下文被销毁时的报错不算失败，下一轮再看；
 		// 页面卡死或崩了就不用再等了。
-		raw, err := client.evaluate(ctx, expr)
+		var raw json.RawMessage
+		if t.base.sandbox {
+			// 沙箱的内容常在 iframe 里，哪个 frame 里出现都算。
+			raw, err = client.evaluateInFrames(ctx, expr)
+		} else {
+			raw, err = client.evaluate(ctx, expr)
+		}
 		if failure := client.pageFailure(); failure != nil {
 			return "", failure
 		}
 		if err == nil {
 			var found bool
 			if json.Unmarshal(raw, &found) == nil && found {
+				if t.base.sandbox {
+					return t.base.sandboxState(ctx, client, 0, map[string]any{"found": true, "waited_ms": time.Since(started).Milliseconds()})
+				}
 				return client.pageState(ctx, map[string]any{"found": true, "waited_ms": time.Since(started).Milliseconds()})
 			}
 		}
 		if time.Now().After(deadline) {
+			if t.base.sandbox {
+				return t.base.sandboxState(ctx, client, 0, map[string]any{"found": false, "waited_ms": time.Since(started).Milliseconds()})
+			}
 			return client.pageState(ctx, map[string]any{"found": false, "waited_ms": time.Since(started).Milliseconds()})
 		}
 		select {

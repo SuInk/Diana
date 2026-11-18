@@ -540,6 +540,9 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		tabs:     browserTabs,
 		personal: cfg.PersonalBrowser, allowedHosts: cfg.BrowserOperationHosts,
 	}
+	if sandbox, ok := cfg.PersonalBrowser.(PublicSandboxBrowser); ok && sandbox.PublicSandbox() {
+		base.sandbox = true
+	}
 	if !cfg.BrowserOperationDisabled {
 		r.Register(&BrowserOpenTool{base: base})
 		r.Register(&BrowserTextTool{base: base})
@@ -547,7 +550,15 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		r.Register(&BrowserTypeTool{base: base})
 		if cfg.PersonalBrowser != nil {
 			r.Register(&PersonalBrowserTabsTool{base: base})
-		} else {
+		}
+		if base.sandbox {
+			// 沙箱没有登录态，滚动、按键、前进后退、等待都放开；脚本（eval）和下拉框
+			// 选择器这类直接动 DOM 的不给，点选靠编号。
+			r.Register(&BrowserScrollTool{base: base})
+			r.Register(&BrowserPressKeyTool{base: base})
+			r.Register(&BrowserNavigateTool{base: base})
+			r.Register(&BrowserWaitTool{base: base})
+		} else if cfg.PersonalBrowser == nil {
 			r.Register(&BrowserTabsTool{base: base})
 			r.Register(&BrowserScrollTool{base: base})
 			r.Register(&BrowserPressKeyTool{base: base})
@@ -560,8 +571,17 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 	if !cfg.BrowserScreenshotDisabled {
 		r.Register(&BrowserScreenshotTool{base: base, restricted: cfg.BrowserScreenshotRestricted, allowedHosts: cfg.BrowserScreenshotHosts, protected: agentProtectedFiles(cfg)})
 	}
-	r.RegisterFamily(BrowserToolFamily())
+	family := BrowserToolFamily()
+	if base.sandbox {
+		family.Description = sandboxBrowserFamilyDescription
+	}
+	r.RegisterFamily(family)
 }
+
+// sandboxBrowserFamilyDescription 是群友拿到的 browser：不带登录态的公网沙箱，同一个
+// 会话里前后几轮共用同一个页面。browser_render 只读一次、不能点，答题、小游戏、翻页
+// 这类要在页面上一步步操作的事要用它。
+const sandboxBrowserFamilyDescription = "操作不带登录态的公网沙箱浏览器，同一个会话里一直是同一个页面，可以一步步点下去：测试题、小游戏、表单、要点「下一页」「展开」的页面都用它，browser_render 只能读一次、不能点。每步结果带 elements 清单，形如 [3]<button>开始测试</button>，click/type 填 index 按编号操作；截图上的编号框和清单对应，画在 canvas 上的内容看截图按 x/y 点。嵌入的 iframe 也会列出来。"
 
 // BrowserToolFamilyName 是交互式浏览器对模型呈现的工具名。
 const BrowserToolFamilyName = "browser"

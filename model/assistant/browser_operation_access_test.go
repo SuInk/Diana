@@ -30,7 +30,8 @@ func TestBrowserOperationAccessOnlyGrantsOwnPrivateSession(t *testing.T) {
 		{"owner", MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "other"}, true, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := BotConfig{AgentMode: AgentModeStandard, AgentBrowserOperationAccess: policy, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: "whitelist", AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}, AllowedGroups: []string{"g"}}}.WithDefaults()
+			// 这里只看个人浏览器的授权边界；群友的公网沙箱另有测试。
+			cfg := BotConfig{AgentMode: AgentModeStandard, AgentSandboxBrowserDisabled: true, AgentBrowserOperationAccess: policy, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: "whitelist", AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}, AllowedGroups: []string{"g"}}}.WithDefaults()
 			registry, err := runtime.newAgentRegistry(context.Background(), cfg, tc.event, RelationshipPolicy{Owner: tc.owner})
 			if err != nil {
 				t.Fatal(err)
@@ -65,7 +66,7 @@ func TestBrowserOperationAndScreenshotModesRemainIndependent(t *testing.T) {
 	event := MessageEvent{Kind: EventKindPrivate, UserID: "member"}
 	for _, operations := range []string{"", "all", "disabled", "whitelist"} {
 		for _, screenshots := range []string{"owner_only", "disabled", "whitelist"} {
-			cfg := BotConfig{AgentBrowserOperationAccess: BrowserOperationAccess{Mode: operations, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: screenshots, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}}.WithDefaults()
+			cfg := BotConfig{AgentSandboxBrowserDisabled: true, AgentBrowserOperationAccess: BrowserOperationAccess{Mode: operations, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: screenshots, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}}.WithDefaults()
 			registry, err := runtime.newAgentRegistry(context.Background(), cfg, event, RelationshipPolicy{})
 			if err != nil {
 				t.Fatal(err)

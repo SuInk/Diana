@@ -79,7 +79,7 @@ func TestUserBrowserPoolEvictsIdleProfilesWithinProcessLimit(t *testing.T) {
 
 func TestUserProxyMatchesExactHostsAndRejectsPrivateOptIn(t *testing.T) {
 	t.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "1")
-	proxy, err := newUserBrowserProxy([]string{"example.com", "127.0.0.1:1234"})
+	proxy, err := newUserBrowserProxy([]string{"example.com", "127.0.0.1:1234"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestUserProxyChecksLoginRedirectsAndBackgroundRequests(t *testing.T) {
 		_, _ = w.Write([]byte("login page"))
 	}))
 	defer upstream.Close()
-	proxy, err := newUserBrowserProxy([]string{"93.184.216.34"})
+	proxy, err := newUserBrowserProxy([]string{"93.184.216.34"}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -39,7 +39,7 @@ func TestBrowserScreenshotAccessInRequestRegistries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := BotConfig{ID: tc.name, OwnerID: "owner", AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: tc.mode, AllowedUsers: []string{" member ", "member", ""}, AllowedHosts: []string{" Example.COM ", "example.com"}, AllowedGroups: []string{" group ", "group"}}}.WithDefaults()
+			cfg := BotConfig{AgentSandboxBrowserDisabled: true, ID: tc.name, OwnerID: "owner", AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: tc.mode, AllowedUsers: []string{" member ", "member", ""}, AllowedHosts: []string{" Example.COM ", "example.com"}, AllowedGroups: []string{" group ", "group"}}}.WithDefaults()
 			registry, err := runtime.newAgentRegistry(context.Background(), cfg, MessageEvent{ProfileID: cfg.ID, UserID: tc.user}, RelationshipPolicy{Owner: tc.owner})
 			if err != nil {
 				t.Fatal(err)
@@ -113,7 +113,7 @@ func TestAuthorizedBrowserScreenshotStillHonorsTakeover(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	runtime := &Runtime{}
 	runtime.SetBrowserBox(screenshotTakeoverBrowser{})
-	cfg := BotConfig{AgentMode: AgentModeStandard, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: BrowserScreenshotWhitelist, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}}.WithDefaults()
+	cfg := BotConfig{AgentSandboxBrowserDisabled: true, AgentMode: AgentModeStandard, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: BrowserScreenshotWhitelist, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}}.WithDefaults()
 	registry, err := runtime.newAgentRegistry(context.Background(), cfg, MessageEvent{UserID: "owner"}, RelationshipPolicy{Owner: true})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestAuthorizedBrowserScreenshotStillHonorsTakeover(t *testing.T) {
 
 func TestBrowserScreenshotAccessDoesNotChangeSharedExtensionScope(t *testing.T) {
 	runtime := &Runtime{}
-	cfg := BotConfig{}.WithDefaults()
+	cfg := BotConfig{AgentSandboxBrowserDisabled: true}.WithDefaults()
 	owner := runtime.agentRegistryConfig(cfg, MessageEvent{UserID: "owner"}, true).ExtensionScope()
 	cfg.AgentBrowserScreenshotAccess = BrowserScreenshotAccess{Mode: BrowserScreenshotWhitelist, AllowedUsers: []string{"member"}, AllowedHosts: []string{"example.com"}}
 	member := runtime.agentRegistryConfig(cfg, MessageEvent{UserID: "member"}, false)
@@ -158,7 +158,7 @@ func TestBrowserScreenshotAccessRequiresExplicitGroupAndHostScopes(t *testing.T)
 		{"owner-outside-scopes", MessageEvent{Kind: EventKindGroup, UserID: "owner", GroupID: "other"}, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cfg := BotConfig{AgentBrowserScreenshotAccess: access}.WithDefaults()
+			cfg := BotConfig{AgentSandboxBrowserDisabled: true, AgentBrowserScreenshotAccess: access}.WithDefaults()
 			registry, err := runtime.newAgentRegistry(context.Background(), cfg, tc.event, RelationshipPolicy{Owner: tc.owner})
 			if err != nil {
 				t.Fatal(err)

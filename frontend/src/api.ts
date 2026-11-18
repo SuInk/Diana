@@ -481,6 +481,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 允许这台机器人使用桌面控制（desktop_*）。默认关闭，还要打开「设置 → 桌面控制」的总开关。 */
   agent_desktop_control_enabled?: boolean;
   agent_browser_box_disabled?: boolean;
+  agent_sandbox_browser_disabled?: boolean;
 }
 
 export interface PluginSettingOption {
