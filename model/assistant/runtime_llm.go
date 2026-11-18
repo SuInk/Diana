@@ -894,10 +894,12 @@ func ownerSplitDisclosureRules(cfg BotConfig, modelEveryone, hasRuntimeModel, re
 	case hasRuntimeModel:
 		rules = append(rules, "【当前发言者身份】是主人或主人指定的管理员时："+cfg.prompt(promptToolRuntimeModelSpec)+"\n其他人问起时："+cfg.prompt(promptModelUndisclosedSpec))
 	default:
-		rules = append(rules, cfg.prompt(promptModelUndisclosedSpec))
+		rules = append(rules, "【当前发言者身份】不是主人、也不是主人指定的管理员时："+cfg.prompt(promptModelUndisclosedSpec))
 	}
 	if repositoryHidden {
-		rules = append(rules, "【当前发言者身份】不是主人、也不是主人指定的管理员时："+cfg.prompt(promptToolVersionNoRepositorySpec))
+		// 只写其他人那一半的话，swe-2 回放里主人问仓库 3 次有 2 次也说不公开，主人那一半要明写。
+		rules = append(rules, "【当前发言者身份】是主人或主人指定的管理员时：问项目地址、源码仓库就调用 version，把 repository_url 原样发出来。\n"+
+			"其他人："+cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	return strings.Join(rules, "\n")
 }
@@ -905,16 +907,18 @@ func ownerSplitDisclosureRules(cfg BotConfig, modelEveryone, hasRuntimeModel, re
 // ownerOnlyToolsRule 是主回复头部里「哪些工具群友用不了」那一句：目录按全集列，群友
 // 用不了的名单只随机器人和群的配置变，写在头部。以前每轮在历史后面写一行【本轮发言者的
 // 工具权限】，主人和群友交替说话就来回追加。群友真调了，执行时也会回没有权限。
-func ownerOnlyToolsRule(head *agent.ToolRegistry, shared map[string]bool) string {
+// late 是建 Runner 时才注册、这时还不在 head 里的主人专属工具。
+func ownerOnlyToolsRule(head *agent.ToolRegistry, shared map[string]bool, late ...string) string {
 	if head == nil || shared == nil {
 		return ""
 	}
 	var names []string
-	for _, name := range head.PresentedNames() {
+	for _, name := range append(head.PresentedNames(), late...) {
 		if !shared[name] {
 			names = append(names, name)
 		}
 	}
+	sort.Strings(names)
 	if len(names) == 0 {
 		return ""
 	}
@@ -1172,8 +1176,14 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	case head != nil:
 		// 主回复头部按全集写：两种说法都写进头部，按【当前发言者身份】挑，换人说话不用
 		// 再追加一段。权限照旧在执行时核验：非主人拿不到 runtime_model。
-		appendPromptSection(&builder, ownerSplitDisclosureRules(cfg, everyone, agentEnabled && hasTool(dianaRuntimeModelToolName), repositoryHidden))
-		appendPromptSection(&builder, ownerOnlyToolsRule(head, shared))
+		// runtime_model 要等建 Runner 时才注册（它要用主回复的模型客户端），这里还查不到；
+		// 头部那份对主人总会注册，所以 Agent 开着就当它在。
+		appendPromptSection(&builder, ownerSplitDisclosureRules(cfg, everyone, agentEnabled, repositoryHidden))
+		ownerOnly := []string(nil)
+		if agentEnabled && !everyone {
+			ownerOnly = append(ownerOnly, dianaRuntimeModelToolName)
+		}
+		appendPromptSection(&builder, ownerOnlyToolsRule(head, shared, ownerOnly...))
 	case !everyone && !speakerOwner:
 		speakerRules.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
 	case !agentEnabled || !hasSpeakerTool(dianaRuntimeModelToolName):

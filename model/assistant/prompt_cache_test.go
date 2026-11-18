@@ -387,3 +387,44 @@ func (p *agentRequestRecorder) Generate(_ context.Context, req llm.GenerateReque
 	}
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"action":"final","content":"好"}`}, nil
 }
+
+// runtime_model 要到建 Runner 时才注册，组装提示词时还查不到；只对主人公开模型时，
+// 头部仍要写主人那种说法，并把它列进主人专属工具，不能变成对谁都「不透露」。
+func TestReplyHeadModelDisclosureOwnerOnly(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
+	workDir := t.TempDir()
+	cfg := standardModeBotConfig()
+	cfg.BotAccount, cfg.OwnerID = "10000", "10001"
+	cfg.GroupTriggers = []string{"Diana"}
+	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
+	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
+	cfg.ReplySafetyMasterEnabled = boolPointer(false)
+	cfg.ModelDisclosure = ModelDisclosureOwner
+	provider := &agentRequestRecorder{}
+	runtime := NewRuntime(cfg, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	defer runtime.closeAgentRegistryCache()
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "20002", SelfID: "10000", MessageID: "m1", RawMessage: "Diana 你是什么模型", Platform: PlatformOneBotV11, Time: time.Now().Unix()}
+	if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	var head strings.Builder
+	for _, message := range provider.agent.Messages {
+		if message.Role != llm.RoleSystem {
+			break
+		}
+		head.WriteString(message.Content + "\n")
+	}
+	prefix := head.String()
+	if !strings.Contains(prefix, "是主人或主人指定的管理员时："+promptToolRuntimeModel) {
+		t.Fatal("head must tell owners to look the model up")
+	}
+	if !strings.Contains(prefix, "其他人问起时："+promptModelUndisclosed) {
+		t.Fatal("head must keep the model hidden from everyone else")
+	}
+	_, list, _ := strings.Cut(prefix, "【只对主人开放的工具】")
+	if list, _, _ = strings.Cut(list, "。"); !strings.Contains(list, dianaRuntimeModelToolName) {
+		t.Fatalf("runtime_model missing from owner-only tools: %q", list)
+	}
+}
