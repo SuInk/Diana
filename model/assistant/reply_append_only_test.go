@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -242,51 +241,6 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 	const nonChatDynamicBudget = 100
 	if extra := (dynamic - newChat) / continued; extra > nonChatDynamicBudget {
 		t.Fatalf("each continued turn sends %d tokens beyond the new chat, budget %d:\n%s", extra, nonChatDynamicBudget, table.String())
-	}
-}
-
-// 关掉「只追加续接」后每轮重新组装：上一轮的当前消息改写成历史行，第二轮请求不再以
-// 第一轮请求原样开头。
-func TestReplyAppendOnlySwitchOff(t *testing.T) {
-	provider := &appendOnlyProvider{reply: "嗯"}
-	off := false
-	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", ReplyAppendOnly: &off}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	base := interimTestEvent().Time
-	for index, text := range []string{"Diana 早", "Diana 吃了吗"} {
-		event := MessageEvent{Kind: EventKindGroup, SelfID: "42", GroupID: "20001", UserID: "10101", SenderName: "Alice",
-			MessageID: fmt.Sprintf("switch-%d", index), Time: base + int64(index)*600, RawMessage: text,
-			Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}, proactiveReply: true}
-		if _, err := runtime.replyTo(t.Context(), event, text); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(provider.requests) != 2 {
-		t.Fatalf("requests = %d", len(provider.requests))
-	}
-	first, second := provider.requests[0].Messages, provider.requests[1].Messages
-	current := appendContextText(first[len(first)-1])
-	for _, message := range second {
-		if appendContextText(message) == current {
-			t.Fatalf("second request still carries the first turn's current message verbatim: %.120q", current)
-		}
-	}
-	// 记录照样记下，占比条还看得到。
-	if _, ok, err := runtime.ReplyContextBreakdownFor("", "group:20001"); !ok || err != nil {
-		t.Fatal("no breakdown with append-only off")
-	}
-}
-
-// 关掉「固定说明进头部」后系统提示照旧按发言者分头部和尾部。
-func TestReplyStableHeadSwitchOff(t *testing.T) {
-	head := agent.NewToolRegistry()
-	if headRegistryForPrompt(BotConfig{}, true, head) != head {
-		t.Fatal("stable head should default on")
-	}
-	off := false
-	if headRegistryForPrompt(BotConfig{ReplyStableHead: &off}, true, head) != nil {
-		t.Fatal("stable head switch ignored")
 	}
 }
 

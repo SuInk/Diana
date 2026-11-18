@@ -45,10 +45,9 @@ func ownerRenderEvent(cfg BotConfig, event MessageEvent) MessageEvent {
 }
 
 // headRegistryForPrompt 是系统提示词按哪份工具全集写规则：只有 Agent 在跑、而且另建了
-// 全集时才按全集写，否则照旧按发言者分头部和尾部。机器人关了「固定说明进头部」时也
-// 照旧：群身份、发言者、别名这些说明回到每轮的尾部。
-func headRegistryForPrompt(cfg BotConfig, agentActive bool, head *agent.ToolRegistry) *agent.ToolRegistry {
-	if !agentActive || head == nil || !replyStableHeadEnabled(cfg) {
+// 全集时才按全集写，否则照旧按发言者分头部和尾部。
+func headRegistryForPrompt(agentActive bool, head *agent.ToolRegistry) *agent.ToolRegistry {
+	if !agentActive || head == nil {
 		return nil
 	}
 	return head
@@ -61,15 +60,4 @@ func memoryToolAvailable(agentActive bool, registry *agent.ToolRegistry) bool {
 	}
 	_, ok := registry.Get(dianaMemoryToolName)
 	return ok
-}
-
-// replyStableHeadEnabled 是「固定说明进头部」开关，未设置按开。
-func replyStableHeadEnabled(cfg BotConfig) bool {
-	return boolValue(cfg.ReplyStableHead, true)
-}
-
-// replyAppendOnlyEnabled 是「只追加续接」开关，未设置按开。关掉后每轮都按窗口重新组装
-// 主回复请求，续接记录照样记下，上下文占比条还看得到上一轮的请求。
-func replyAppendOnlyEnabled(cfg BotConfig) bool {
-	return boolValue(cfg.ReplyAppendOnly, true)
 }

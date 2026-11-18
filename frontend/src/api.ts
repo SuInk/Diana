@@ -236,10 +236,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
   llm_identity_body_account_mapping_enabled?: boolean;
   llm_secret_masking_enabled?: boolean;
-  /** 主回复只追加续接：每轮在上一轮实际发出的请求后面接上新消息；不设等同开启。 */
-  reply_append_only_enabled?: boolean;
-  /** 固定说明（群身份、发言者、别名）放进锁定的头部，不在每轮尾部重发；不设等同开启。 */
-  reply_stable_head_enabled?: boolean;
   /** 主回复里几块背景各自怎么带：always 总是（默认）、on_demand 按需（不带，提示模型用工具查）、off 关闭。没设的按总是。 */
   context_block_modes?: Record<string, "always" | "on_demand" | "off">;
   disabled_groups?: string[];

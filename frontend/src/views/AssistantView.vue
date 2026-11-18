@@ -1832,27 +1832,11 @@
               <div class="field wide">
                 <ReplyContextChart :profile="form.id || ''" />
               </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_append_only_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">只追加续接（默认开启）</span>
-                </label>
-                <span class="hint">每轮在上一轮实际发出的请求后面接上新消息，前面的内容一字不改，供应商的前缀缓存才命中得上。关掉后每轮按窗口重新组装整份请求，缓存基本只命中头部，费用和首字延迟都会上去；排查「是不是续接带歪了」时可以临时关掉对比。</span>
-              </div>
-              <div class="field wide">
-                <label class="switch">
-                  <input v-model="form.reply_stable_head_enabled" type="checkbox" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">固定说明进头部（默认开启）</span>
-                </label>
-                <span class="hint">群身份、发言者、配置别名这些不随消息变的说明写进锁定的头部，只发一次。关掉后它们回到每轮的尾部、贴着当前消息重发，每轮多几百 token。</span>
-              </div>
             </div>
           </section>
 
           <!-- 每轮带进上下文的内容：几块背景各自选总是 / 按需 / 关闭。按需只给有工具能查回
-               同样内容的块，其余只有总是和关闭。这里只管带不带，功能开关还在各自原处。 -->
+               同样内容的块，其余只有总是和关闭。跨群、跨平台记忆的开关管召回范围，也放在这里。 -->
           <section class="card">
             <div class="card-header">
               <div>
@@ -1861,6 +1845,20 @@
               </div>
             </div>
             <div class="card-body context-blocks">
+              <div class="context-block-row">
+                <div class="context-block-text">
+                  <strong>跨群记忆</strong>
+                  <span class="hint">公共事实和摘要按相关性跨群召回，无需共同成员；别的群的原始聊天仍要求原发言者也在当前群。</span>
+                </div>
+                <label class="switch"><input v-model="form.cross_group_memory_enabled" type="checkbox" aria-label="跨群记忆" /><span class="track" aria-hidden="true"></span></label>
+              </div>
+              <div class="context-block-row">
+                <div class="context-block-text">
+                  <strong>跨平台记忆</strong>
+                  <span class="hint">和其他平台的机器人共享非敏感的群公共记忆，双方都要开；不合并会话上下文。</span>
+                </div>
+                <label class="switch"><input v-model="form.cross_platform_memory_enabled" type="checkbox" aria-label="跨平台记忆" /><span class="track" aria-hidden="true"></span></label>
+              </div>
               <div v-for="block in contextBlockRows" :key="block.key" class="context-block-row">
                 <div class="context-block-text">
                   <strong :id="`context-block-${block.key}`">{{ block.label }}</strong>
@@ -1957,24 +1955,10 @@
             <div class="card-header">
               <div>
                 <h2>记忆</h2>
-                <span class="card-sub">长期记忆一直开着；这里管记忆共享、检索和笔记本自动学习</span>
+                <span class="card-sub">长期记忆一直开着；这里管检索和笔记本自动学习，跨群、跨平台共享在「上下文」页</span>
               </div>
             </div>
             <div class="card-body form-grid">
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.cross_group_memory_enabled" type="checkbox" title="公共事实和摘要按相关性跨群召回，无需共同成员；原始聊天仍要求原发言者也在当前群" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">跨群记忆</span>
-                </label>
-              </div>
-              <div class="field wide memory-settings">
-                <label class="switch">
-                  <input v-model="form.cross_platform_memory_enabled" type="checkbox" title="需要双方机器人都开跨平台记忆；仅共享非敏感群公共记忆，不合并会话上下文" />
-                  <span class="track" aria-hidden="true"></span>
-                  <span class="switch-label">跨平台记忆</span>
-                </label>
-              </div>
               <div class="field wide memory-settings">
                 <label class="switch">
                   <input v-model="form.dict_segment_enabled" type="checkbox" />
@@ -5232,8 +5216,6 @@ function setForm(config: BotProfileConfig): void {
     llm_identity_masking_enabled: config.llm_identity_masking_enabled ?? true,
     llm_identity_body_account_mapping_enabled: config.llm_identity_body_account_mapping_enabled ?? true,
     llm_secret_masking_enabled: config.llm_secret_masking_enabled ?? true,
-    reply_append_only_enabled: config.reply_append_only_enabled ?? true,
-    reply_stable_head_enabled: config.reply_stable_head_enabled ?? true,
     context_block_modes: { ...(config.context_block_modes ?? {}) },
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
