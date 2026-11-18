@@ -21,11 +21,7 @@ import (
 // 上一轮的纯追加，所以 gpt 主回复命中只有三到四成。同群连续 8 轮实测：gpt-6.1-sol
 // 47.4% → 90.9%，deepseek-flash 72.2% → 91.2%（历史不再随窗口滑动）。
 //
-// 前缀里留的是重新组装那一轮的请求，加之后各轮的新聊天（见 turnTranscript）。续接的
-// 轮次里，每轮都在变的状态（时间、命中的 skill、本轮发言者的工具权限……）和
-// 一轮里的工具调用、结果都标成只用于本轮（llm.Message.TurnOnly），随当轮请求发出、
-// 不进前缀。以前它们一路留在前缀里：生产统计每轮续接追加的内容里聊天只占三分之一，
-// 约 5 轮就撑到上限被迫重新组装，那一轮缓存不命中、慢约 2 秒。
+// 前缀是上一轮最后一次实际发出的整份请求加收尾那句（见 turnTranscript），什么都不拿掉。
 
 // conversationKey 是续接前要核对的指纹：系统提示、历史之前的固定说明（skills 目录、
 // 联网调研要求）和工具定义。任何一项变了，上一轮的前缀就不再是这一轮该发的开头，只能
@@ -72,17 +68,20 @@ func continuationMessages(continuation *Continuation, volatile []llm.Message) ([
 // messageBoundaryMarker 是一次收尾里几条消息之间的分隔，见 finalizeAction。
 const messageBoundaryMarker = "<diana-message/>"
 
-// turnTranscript 是下一轮的前缀：这一轮第一步请求里不是「只用于本轮」的消息，接上
-// 机器人这一轮实际发出的每句话。
+// turnTranscript 是下一轮的前缀：这一轮最后一次实际发出的整份请求，接上收尾时说的话。
 //
-// 一轮里的工具调用和结果不进前缀：它们在当轮各步照常可见，下一轮只需要知道「说了
-// 什么」，查过什么由调用方另记一行（见 assistant 的 replyToolTraceNote）。以前记的是
-// 最后一步实际发出的整份请求，每一步的调用、结果、工具执行状态都留在前缀里一路累积。
+// 照雨夹雪的硬约束「永不改写已存在的 provider prefix；动态内容只以新 suffix 追加」：
+// 每一步请求都是下一步的严格前缀，下一轮又接着这一轮最后一步的请求，工具调用和结果、
+// 当轮的时间与附注、运行时提醒都留着。经 sub2api 的 gpt 只认「instructions + 工具」和
+// 「上一次完整请求」两个缓存点：11 月起尾部和工具调用标成只用于本轮、下一轮拿掉，
+// 11-18 用当天同群 32 条真实请求按顺序重放 terra，每轮都只命中工具和 instructions 那
+// 17536，平均 18%。以前拿掉它们是怕前缀长得太快撞上限；现在撞上限就滑窗，重组从摘要
+// 加近期原文开始（见 assistant 的 appendContinuationOverLimit）。
 //
-// 发出的话写成和重新组装时历史里自己的发言同一个形态（HistoryReplyMessages：send 调用
+// 收尾那句写成和重新组装时历史里自己的发言同一个形态（HistoryReplyMessages：send 调用
 // 加「已发送」），不带供应商的原始输出（ResponsesOutput、思考内容）：那里面可能还有
-// 没留下结果的 function_call，带上就成了不成对的调用，供应商整轮拒绝。中途发的话
-// （steps 里成功的 send）在前、收尾的在后，顺序和发出时一致；不说话的一轮什么都不加。
+// 没留下结果的 function_call，带上就成了不成对的调用，供应商整轮拒绝。中途发的话已经
+// 作为 send 调用和结果在请求里。收尾不说话就什么都不加。
 //
 // 10-28（#1255）曾把这里还原成普通 assistant 发言：那时 send 刚删掉 silent 字段，不说话
 // 只能留空 text，前缀里的「send + 已发送」让模型把新一轮读成刚说过，同批线上静默样本
@@ -90,19 +89,17 @@ const messageBoundaryMarker = "<diana-message/>"
 // 11-06 线上样本：静默样本 swe-2 24/48 → 20/48、terra 17/21 → 17/21，正常回复样本静默
 // swe-2 2/48 → 0/48、terra 26/152 → 30/152（同一批样本两边都静默），没有复现；留成纯文本
 // 反倒让离当前消息最近的那句发言成了模型照着学的纯文本收尾。
-func turnTranscript(first llm.GenerateRequest, traceID string, steps []Step, finalText string) []llm.Message {
-	if len(first.Messages) == 0 {
+func turnTranscript(last llm.GenerateRequest, traceID string, finalText string) []llm.Message {
+	if len(last.Messages) == 0 {
 		return nil
 	}
-	transcript := make([]llm.Message, 0, len(first.Messages)+4)
-	for _, message := range first.Messages {
-		if message.TurnOnly {
-			continue
-		}
+	transcript := make([]llm.Message, 0, len(last.Messages)+4)
+	for _, message := range last.Messages {
 		message.CacheBreakpoint = false
+		message.TurnOnly = false
 		transcript = append(transcript, message)
 	}
-	spoken := InterimSendTexts(steps)
+	var spoken []string
 	for _, part := range strings.Split(finalText, messageBoundaryMarker) {
 		if part = strings.TrimSpace(part); part != "" {
 			spoken = append(spoken, part)
@@ -115,19 +112,4 @@ func turnTranscript(first llm.GenerateRequest, traceID string, steps []Step, fin
 		transcript = append(transcript, HistoryReplyMessages(id, text)...)
 	}
 	return transcript
-}
-
-// InterimSendTexts 按发出的先后返回这一轮中途已经发出去的话：steps 里成功的 send。
-// 收尾那一句不在 steps 里。
-func InterimSendTexts(steps []Step) []string {
-	var texts []string
-	for _, step := range steps {
-		if step.Tool != finalizeToolName || step.Skipped || step.Error != "" {
-			continue
-		}
-		if text := sendText(llm.ToolCall{Arguments: step.Input}); text != "" {
-			texts = append(texts, text)
-		}
-	}
-	return texts
 }
