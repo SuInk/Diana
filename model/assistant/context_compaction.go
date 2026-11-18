@@ -744,6 +744,7 @@ func (r *Runtime) compactReplyMessages(ctx context.Context, event MessageEvent, 
 	// 滑走的那段等会话空闲时再补进摘要。
 	r.scheduleIdleCompaction(event)
 	next, positions := applyCompactionToMessages(messages, kept, state)
+	next = expandQuotesOfSlidOut(next, event, cfg, history, kept)
 	if track != nil && *track >= 0 && *track < len(positions) {
 		*track = positions[*track]
 	}
@@ -813,4 +814,31 @@ func (r *Runtime) sideContextHistory(event MessageEvent, cfg BotConfig) (llm.Mes
 	}
 	header := llm.Message{Role: llm.RoleUser, Content: text, Priority: llm.MessagePrioritySummary, AtomicText: true, ContextGroup: compactionHeaderContextGroup}
 	return header, recent
+}
+
+// expandQuotesOfSlidOut 把被引用的那条刚被滑走的历史行补上引用展开：这些行组装时被引用的
+// 消息还在窗口里，没有展开（见 historyQuotedText），滑窗摘掉原文后这一轮就看不到引用的
+// 内容了。下一轮按新窗口重渲染，本来就会展开。
+func expandQuotesOfSlidOut(messages []llm.Message, event MessageEvent, cfg BotConfig, history, kept []MessageEvent) []llm.Message {
+	before := quotableHistoryIDs(event, cfg, history, nil)
+	after := quotableHistoryIDs(event, cfg, kept, nil)
+	expand := map[string]string{}
+	for _, item := range kept {
+		if quotesWindowLine(item, before) && !quotesWindowLine(item, after) {
+			if quoted := quotedPromptText(item.Quoted); quoted != "" {
+				expand[historyContextGroupPrefix+messageHistoryDedupeKey(item)] = quoted
+			}
+		}
+	}
+	if len(expand) == 0 {
+		return messages
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		message := &messages[index]
+		if quoted, ok := expand[message.ContextGroup]; ok && message.Role == llm.RoleUser {
+			message.Content += "\n" + quoted
+			delete(expand, message.ContextGroup)
+		}
+	}
+	return messages
 }

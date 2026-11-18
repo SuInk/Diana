@@ -7,6 +7,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // 被引用的那条就在这一份历史窗口里时，历史行只留引用标记，不再把原文抄一遍；滑出窗口
@@ -34,6 +36,14 @@ func TestHistoryQuoteExpandsOnlyOutsideWindow(t *testing.T) {
 	if !strings.Contains(inWindow, "<diana-quote ") {
 		t.Fatalf("the reply line must still point at the quoted message:\n%s", inWindow)
 	}
+	// 机器人自己的发言写成 send 调用、没有 #ID，引用它时照旧展开。
+	own := quoted
+	own.UserID, own.SenderName = "10000", "嘉然"
+	ownReply := reply
+	ownReply.Quoted = &QuotedMessage{MessageID: "50001", UserID: "10000", SenderName: "嘉然", Segments: quoted.Segments}
+	if bot := render([]MessageEvent{own, ownReply}); !strings.Contains(bot, "【被引用的消息】") {
+		t.Fatalf("a quote of the bot's own send must be expanded:\n%s", bot)
+	}
 	outside := render([]MessageEvent{reply})
 	if !strings.Contains(outside, "【被引用的消息】") || !strings.Contains(outside, "今天晚饭吃火锅") {
 		t.Fatalf("a quote outside the window must be expanded:\n%s", outside)
@@ -47,5 +57,25 @@ func TestHistoryMediaLineDoesNotRepeatMessageID(t *testing.T) {
 	line := agentImageHistoryPromptTextWithDescriptions(event, 0, []string{"图片1摘要=一只猫"})
 	if !strings.Contains(line, "#50001") || strings.Count(line, "50001") != 1 || !strings.Contains(line, "【图片×1】") {
 		t.Fatalf("media line = %q", line)
+	}
+}
+
+// 轮内滑窗摘掉被引用的那条时，留下的引用行补上展开。
+func TestExpandQuotesOfSlidOut(t *testing.T) {
+	cfg := BotConfig{BotAccount: "10000"}
+	current := MessageEvent{Kind: EventKindGroup, GroupID: "30001", SelfID: "10000", MessageID: "50003", ProfileID: "p1"}
+	quoted := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "10002", SelfID: "10000", MessageID: "50001", Time: 1700000000, ProfileID: "p1",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "今天晚饭吃火锅"}}}}
+	reply := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "10003", SelfID: "10000", MessageID: "50002", Time: 1700000060, ProfileID: "p1",
+		Quoted: &QuotedMessage{MessageID: "50001", UserID: "10002", SenderName: "甲", Segments: quoted.Segments}}
+	group := historyContextGroupPrefix + messageHistoryDedupeKey(reply)
+	messages := []llm.Message{{Role: llm.RoleUser, Content: "算我一个", ContextGroup: group}}
+	out := expandQuotesOfSlidOut(messages, current, cfg, []MessageEvent{quoted, reply}, []MessageEvent{reply})
+	if !strings.Contains(out[0].Content, "【被引用的消息】") || !strings.Contains(out[0].Content, "今天晚饭吃火锅") {
+		t.Fatalf("slid-out quote not expanded: %q", out[0].Content)
+	}
+	kept := expandQuotesOfSlidOut([]llm.Message{{Role: llm.RoleUser, Content: "算我一个", ContextGroup: group}}, current, cfg, []MessageEvent{quoted, reply}, []MessageEvent{quoted, reply})
+	if kept[0].Content != "算我一个" {
+		t.Fatalf("quote still in window must stay unexpanded: %q", kept[0].Content)
 	}
 }

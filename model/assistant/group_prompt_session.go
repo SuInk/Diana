@@ -296,6 +296,32 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 // 窗口里时不再展开、媒体行不重复消息 ID。
 const historyRenderVersion = 6
 
+// quotableHistoryIDs 是这一份历史里写成「[时间 #消息ID] 发送者: 正文」、模型能按 ID 对上
+// 的那些消息。引用的那条在其中时历史行不再展开它（见 historyQuotedText）。机器人自己的
+// 发言写成 send 调用、没有 ID，戳一戳、订阅推送这类行也不带 ID，跳过或不同群的消息根本
+// 不在历史里，这些被引用时照旧展开。
+func quotableHistoryIDs(event MessageEvent, cfg BotConfig, history []MessageEvent, skip map[string]bool) map[string]bool {
+	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
+	ids := map[string]bool{}
+	for _, item := range history {
+		id := strings.TrimSpace(item.MessageID)
+		switch {
+		case !historyLineShowsID(item), item.MessageID == event.MessageID, skip[item.MessageID],
+			item.crossGroupContext, event.Kind == EventKindGroup && !samePromptGroupScope(event, item),
+			strings.TrimSpace(item.botReply) != "", assistantHistoryEvent(item, botID),
+			isPokeHistoryEvent(item), isCallHistoryEvent(item), isQQFeedbackHistoryEvent(item), isSubscriptionPushEvent(item):
+			continue
+		}
+		ids[id] = true
+	}
+	return ids
+}
+
+// quotesWindowLine 表示 item 引用的那条就在 ids 里（见 quotableHistoryIDs）。
+func quotesWindowLine(item MessageEvent, ids map[string]bool) bool {
+	return item.Quoted != nil && !item.Quoted.Semantic && ids[strings.TrimSpace(item.Quoted.MessageID)]
+}
+
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
 // Removed/edited events deliberately invalidate the prefix instead of retaining
@@ -318,15 +344,9 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
-	// 窗口里有哪些消息：引用的那条也在窗口里时，历史行不再展开它（见 historyQuotedText）。
-	inWindow := map[string]bool{}
+	inWindow := quotableHistoryIDs(event, cfg, history, skip)
 	for _, item := range history {
-		if item.MessageID != "" && !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
-			inWindow[item.MessageID] = true
-		}
-	}
-	for _, item := range history {
-		item.quotedInWindow = item.Quoted != nil && !item.Quoted.Semantic && inWindow[strings.TrimSpace(item.Quoted.MessageID)]
+		item.quotedInWindow = quotesWindowLine(item, inWindow)
 		if item.MessageID != "" && (item.MessageID == event.MessageID || skip[item.MessageID]) {
 			continue
 		}

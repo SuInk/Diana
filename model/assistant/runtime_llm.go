@@ -1580,7 +1580,7 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 // 一份主回复请求里，155 处引用展开有 150 处是窗口里已有的消息，占历史的四成。被引用
 // 的消息已经滑出窗口才展开。
 func historyQuotedText(event MessageEvent, text string) string {
-	if event.quotedInWindow && strings.Contains(text, "<diana-quote ") {
+	if event.quotedInWindow && strings.Contains(text, replyMarkerPrefix+strings.TrimSpace(event.Quoted.MessageID)+`"`) {
 		return ""
 	}
 	return quotedPromptText(event.Quoted)
@@ -1619,7 +1619,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
 	// 行首已经有「#消息ID」时只写种类和数量，不再重复一遍 ID。
 	summary := historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount)
-	if strings.Contains(historyLinePrefix(event), historyLineIDMark+strings.TrimSpace(event.MessageID)) && strings.TrimSpace(event.MessageID) != "" {
+	if historyLineShowsID(event) {
 		line += "\n【" + summary + "】"
 	} else {
 		line += "\n【媒体 message_id=" + messageID + "：" + summary + "】"
