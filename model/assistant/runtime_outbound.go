@@ -82,9 +82,19 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			lastTextChunk = index
 		}
 	}
+	progress, _ := deliveryProgressFromContext(ctx)
 	for index, chunk := range chunks {
 		if strings.TrimSpace(chunk) == "" {
 			continue
+		}
+		// 订阅补投：上一轮已经送达的分段不再发。仍按已发计数，@ 和引用不会挪到后一段。
+		chunkKey := ""
+		if progress != nil {
+			chunkKey = deliveryChunkKey(index, chunk)
+			if progress.delivered(chunkKey) {
+				sentChunks++
+				continue
+			}
 		}
 		typingIndicatorFromContext(ctx).resume()
 		if sentChunks == 0 && event.Kind == EventKindGroup && !decoration.LiteralText &&
@@ -165,11 +175,12 @@ func (r *Runtime) deliverChunks(ctx context.Context, event MessageEvent, chunks 
 			}
 			sendCtx = withContinuousOutboundDelivery(ctx)
 		}
-		result, err := r.sendOutgoingWithResult(sendCtx, event, msg)
+		result, err := r.sendOutgoingWithResult(withDeliveryProgressScope(sendCtx, chunkKey), event, msg)
 		releaseMedia()
 		if err != nil {
 			return messageIDs, err
 		}
+		progress.record(chunkKey)
 		if messageID := apiMessageID(result); messageID != "" {
 			messageIDs = append(messageIDs, messageID)
 		}

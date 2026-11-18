@@ -625,6 +625,7 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		item.FeedMediaMode, item.FeedMediaFailure = mediaMode, mediaFailure
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
 		item.PendingDelivery, item.PendingSince, item.LastError, item.ConsecutiveFailures = "", time.Time{}, "", 0
+		item.PendingDeliveryAttempts = 0
 		applyRSSWatchSources(item, sources)
 		if sourcesChanged || strings.TrimSpace(item.Message) == "" {
 			item.Message = rssWatchMessage(sources)
