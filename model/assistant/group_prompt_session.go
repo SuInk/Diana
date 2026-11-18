@@ -292,8 +292,9 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 // 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用；
 // 3 起表情包摘要换成一句话标注；4 起同一天的历史行只写时分秒（缓存条目里仍写全日期，
 // 拼成一份历史后由 compactHistoryLineDates 统一省掉，加一是让旧条目跟着这一版一起换掉）；
-// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」。
-const historyRenderVersion = 5
+// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」；6 起被引用的消息在
+// 窗口里时不再展开、媒体行不重复消息 ID。
+const historyRenderVersion = 6
 
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
@@ -317,7 +318,15 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
+	// 窗口里有哪些消息：引用的那条也在窗口里时，历史行不再展开它（见 historyQuotedText）。
+	inWindow := map[string]bool{}
 	for _, item := range history {
+		if item.MessageID != "" && !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
+			inWindow[item.MessageID] = true
+		}
+	}
+	for _, item := range history {
+		item.quotedInWindow = item.Quoted != nil && !item.Quoted.Semantic && inWindow[strings.TrimSpace(item.Quoted.MessageID)]
 		if item.MessageID != "" && (item.MessageID == event.MessageID || skip[item.MessageID]) {
 			continue
 		}
@@ -339,12 +348,13 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		// Source data, not asynchronous image descriptions or request-relative
 		// timestamps, controls replacement. Edits must become visible immediately.
 		source, _ := json.Marshal(struct {
-			Event  MessageEvent
-			Reply  string
-			Direct bool
-			Bot    string
-			Render int
-		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion})
+			Event          MessageEvent
+			Reply          string
+			Direct         bool
+			Bot            string
+			Render         int
+			QuotedInWindow bool
+		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion, item.quotedInWindow})
 		hash := promptCacheHash(string(source))
 		entry, ok := old[key]
 		if !ok || entry.SourceHash != hash {

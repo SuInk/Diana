@@ -1569,10 +1569,21 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" {
 		return ""
 	}
-	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+	if quoted := historyQuotedText(event, text); quoted != "" {
 		text += "\n" + quoted
 	}
 	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
+}
+
+// historyQuotedText 是历史行里被引用消息的展开。被引用的那条就在这一份历史窗口里、
+// 正文开头又有指向它的引用标记时不再展开：原文和图片摘要上面已经有一遍。11-19 生产
+// 一份主回复请求里，155 处引用展开有 150 处是窗口里已有的消息，占历史的四成。被引用
+// 的消息已经滑出窗口才展开。
+func historyQuotedText(event MessageEvent, text string) string {
+	if event.quotedInWindow && strings.Contains(text, "<diana-quote ") {
+		return ""
+	}
+	return quotedPromptText(event.Quoted)
 }
 
 // agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
@@ -1587,7 +1598,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 		return ""
 	}
 	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
-	if quoted := quotedPromptText(event.Quoted); quoted != "" {
+	if quoted := historyQuotedText(event, text); quoted != "" {
 		quoted = rawMessageWithoutImagePlaceholders(quoted)
 		if text != "" {
 			text += "\n"
@@ -1606,7 +1617,13 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	// 原件」和一整句怎么调用 history_media 都写一遍，每条带图的历史要多付
 	// 近百个 token——群里表情包一条接一条，这笔开销比正文还大。「摘要不等于看过
 	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
-	line += "\n【媒体 message_id=" + messageID + "：" + historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount) + "】"
+	// 行首已经有「#消息ID」时只写种类和数量，不再重复一遍 ID。
+	summary := historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount)
+	if strings.Contains(historyLinePrefix(event), historyLineIDMark+strings.TrimSpace(event.MessageID)) && strings.TrimSpace(event.MessageID) != "" {
+		line += "\n【" + summary + "】"
+	} else {
+		line += "\n【媒体 message_id=" + messageID + "：" + summary + "】"
+	}
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}

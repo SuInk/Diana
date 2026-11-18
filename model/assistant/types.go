@@ -321,6 +321,9 @@ type MessageEvent struct {
 	replyHistory        []MessageEvent
 	replyHistoryLoaded  bool
 	crossGroupContext   bool
+	// quotedInWindow 表示这条消息引用的那条也在这一份历史窗口里，渲染时不再展开被引用的
+	// 原文（见 historyQuotedText）。
+	quotedInWindow bool
 	// crossGroupAgeSeconds 是这条跨群参考比当前消息早多少秒，渲染成「约N小时前」。
 	crossGroupAgeSeconds int64
 	// crossGroupLoaded 表示这一轮的跨群参考已经检索过（可能一条都没有），别再查一次。

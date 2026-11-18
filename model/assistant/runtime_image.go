@@ -877,7 +877,8 @@ func (r *Runtime) historyImageDescriptionsFor(ctx context.Context, event Message
 	if hideOwnStickers && event.Outbound {
 		own = len(segments)
 	}
-	if event.Quoted != nil {
+	// 被引用的那条在窗口里时它的图上面已经描述过（见 historyQuotedText）。
+	if event.Quoted != nil && !event.quotedInWindow {
 		segments = append(segments, event.Quoted.Segments...)
 	}
 	return r.historyImageSegmentDescriptionLines(ctx, segments, own, briefStickers)
