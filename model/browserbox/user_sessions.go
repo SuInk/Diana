@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -26,15 +27,22 @@ const personalBrowserIdleTimeout = 5 * time.Minute
 type UserSessionPool struct {
 	root       string
 	executable func() string
-	mu         sync.Mutex
-	profiles   map[string]*userBrowserProfile
-	active     map[*UserBrowserSession]bool
-	slots      chan struct{}
-	changed    chan struct{}
+	// sandbox 是给群友用的公网沙箱：按会话分 profile、任何公网网站都能开、关掉就删
+	// profile，不留登录态。个人浏览器那种按发送者长期保存 profile 的池子这里是 false。
+	sandbox  bool
+	mu       sync.Mutex
+	profiles map[string]*userBrowserProfile
+	active   map[*UserBrowserSession]bool
+	slots    chan struct{}
+	changed  chan struct{}
 }
 
 type userBrowserProfile struct {
-	gate     chan struct{}
+	gate    chan struct{}
+	dataDir string
+	// tabID 是沙箱这个会话上一轮停在的标签页：群里下一句「选 B」要接着点同一页。
+	// 个人浏览器每轮从自己打开的页开始，不用它。
+	tabID    string
 	manager  *Bot
 	proxy    *userBrowserProxy
 	hosts    []string
@@ -44,6 +52,21 @@ type userBrowserProfile struct {
 
 func NewUserSessionPool(dataDir string, executable func() string) *UserSessionPool {
 	return &UserSessionPool{root: filepath.Join(dataDir, "user-browsers"), executable: executable, profiles: map[string]*userBrowserProfile{}, active: map[*UserBrowserSession]bool{}, slots: make(chan struct{}, 4), changed: make(chan struct{}, 1)}
+}
+
+// NewSandboxSessionPool 是群友沙箱浏览器的池子。profile 只活在一次会话里：进程关掉
+// 就删目录，启动时也先清掉上次异常退出留下的目录。进程数单独限 3 个，不和个人浏览器
+// 抢名额。
+func NewSandboxSessionPool(dataDir string, executable func() string) *UserSessionPool {
+	root := filepath.Join(dataDir, "sandbox-browsers")
+	_ = os.RemoveAll(root)
+	return &UserSessionPool{root: root, executable: executable, sandbox: true, profiles: map[string]*userBrowserProfile{}, active: map[*UserBrowserSession]bool{}, slots: make(chan struct{}, 3), changed: make(chan struct{}, 1)}
+}
+
+// NewSandboxRequest 按「机器人 + 平台 + 会话」取沙箱：同一个群里谁让机器人点的都是
+// 同一个页面，前一个人点到一半，后一个人能接着说「下一题选 B」。
+func (p *UserSessionPool) NewSandboxRequest(profile, platform, conversation string) *UserBrowserSession {
+	return p.NewRequest(profile, platform, conversation, nil)
 }
 
 func userBrowserScope(profile, platform, user string) string {
@@ -61,7 +84,8 @@ func (p *UserSessionPool) NewRequest(profile, platform, user string, hosts []str
 		entry = &userBrowserProfile{gate: make(chan struct{}, 1)}
 		p.profiles[key] = entry
 	}
-	s := &UserBrowserSession{pool: p, entry: entry, gate: entry.gate, dataDir: filepath.Join(p.root, key), hosts: append([]string(nil), hosts...), closed: make(chan struct{})}
+	entry.dataDir = filepath.Join(p.root, key)
+	s := &UserBrowserSession{pool: p, entry: entry, gate: entry.gate, dataDir: entry.dataDir, hosts: append([]string(nil), hosts...), closed: make(chan struct{})}
 	p.active[s] = true
 	return s
 }
@@ -91,7 +115,7 @@ func (p *UserSessionPool) Stop() {
 func (p *UserSessionPool) closeProfile(profile *userBrowserProfile) {
 	p.mu.Lock()
 	manager, proxy := profile.manager, profile.proxy
-	profile.manager, profile.proxy = nil, nil
+	profile.manager, profile.proxy, profile.tabID = nil, nil, ""
 	if profile.idle != nil {
 		profile.idle.Stop()
 		profile.idle = nil
@@ -103,6 +127,9 @@ func (p *UserSessionPool) closeProfile(profile *userBrowserProfile) {
 	}
 	if proxy != nil {
 		proxy.Close()
+	}
+	if p.sandbox && profile.dataDir != "" {
+		_ = os.RemoveAll(profile.dataDir)
 	}
 	p.notifyChanged()
 }
@@ -217,7 +244,7 @@ func (s *UserBrowserSession) Endpoint(ctx context.Context) (string, error) {
 		s.releaseLease()
 		return "", err
 	}
-	proxy, err := newUserBrowserProxy(s.hosts)
+	proxy, err := newUserBrowserProxy(s.hosts, s.pool.sandbox)
 	if err != nil {
 		<-s.pool.slots
 		s.releaseLease()
@@ -231,6 +258,12 @@ func (s *UserBrowserSession) Endpoint(ctx context.Context) (string, error) {
 	}
 	// Disable multiplexing across different origins through an allowed TLS tunnel.
 	managerOwner.extraArgs = []string{"--proxy-server=" + proxy.url, "--proxy-bypass-list=<-loopback>", "--disable-quic", "--disable-http2", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"}
+	if s.pool.sandbox {
+		// 沙箱里没有登录态可偷，关掉站点隔离换来跨域 iframe 和主页面同进程：B 站小游戏
+		// 这类页面整个内容都在别的域名的 iframe 里，同进程才能逐个 frame 编号元素、
+		// 一次截图看全。
+		managerOwner.extraArgs = append(managerOwner.extraArgs, "--disable-site-isolation-trials", "--disable-features=IsolateOrigins,site-per-process")
+	}
 	if err := manager.Start(ctx); err != nil {
 		manager.Stop()
 		proxy.Close()
@@ -245,8 +278,32 @@ func (s *UserBrowserSession) Endpoint(ctx context.Context) (string, error) {
 	return manager.CDPURL(), nil
 }
 
-func (s *UserBrowserSession) CurrentTab() string      { s.mu.Lock(); defer s.mu.Unlock(); return s.tabID }
-func (s *UserBrowserSession) SetCurrentTab(id string) { s.mu.Lock(); defer s.mu.Unlock(); s.tabID = id }
+// PublicSandbox 告诉 agent 这是公网沙箱：任何公网网站都能开（代理那层仍拦内网），
+// 不按个人浏览器的网站白名单检查。
+func (s *UserBrowserSession) PublicSandbox() bool { return s.pool.sandbox }
+
+func (s *UserBrowserSession) CurrentTab() string {
+	s.mu.Lock()
+	tab := s.tabID
+	s.mu.Unlock()
+	if tab == "" && s.pool.sandbox {
+		s.pool.mu.Lock()
+		tab = s.entry.tabID
+		s.pool.mu.Unlock()
+	}
+	return tab
+}
+
+func (s *UserBrowserSession) SetCurrentTab(id string) {
+	s.mu.Lock()
+	s.tabID = id
+	s.mu.Unlock()
+	if s.pool.sandbox {
+		s.pool.mu.Lock()
+		s.entry.tabID = id
+		s.pool.mu.Unlock()
+	}
+}
 
 // Caller holds s.mu and the profile gate if leased.
 func (s *UserBrowserSession) releaseLease() {

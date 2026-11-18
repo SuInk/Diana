@@ -2098,6 +2098,16 @@
                   </span>
                 </div>
                 <div class="field wide">
+                  <label class="switch">
+                    <input v-model="form.agent_sandbox_browser_disabled" type="checkbox" />
+                    <span class="track" aria-hidden="true"></span>
+                    <span class="switch-label">禁止群友使用沙箱浏览器</span>
+                  </label>
+                  <span class="hint">
+                    默认允许。群友让机器人在网页上点按钮、填表、做测试题时，每个群或私聊各开一个临时浏览器，不带任何登录状态、只能访问公网，空闲 5 分钟自动关掉并清空。安全模式下、或「浏览器」页的个人浏览器权限里操作权限选了停用时不开。
+                  </span>
+                </div>
+                <div class="field wide">
                   <label for="agent-sandbox">插件脚本沙盒</label>
                   <AppSelect
                     id="agent-sandbox"
@@ -5173,6 +5183,7 @@ function setForm(config: BotProfileConfig): void {
     agent_browser_control_enabled: config.agent_browser_control_enabled ?? false,
     agent_desktop_control_enabled: config.agent_desktop_control_enabled ?? false,
     agent_browser_box_disabled: config.agent_browser_box_disabled ?? false,
+    agent_sandbox_browser_disabled: config.agent_sandbox_browser_disabled ?? false,
     reply_reference_mode: config.reply_reference_mode ?? "auto",
     model_disclosure: config.model_disclosure ?? "everyone",
     repository_disclosure: config.repository_disclosure ?? "everyone",

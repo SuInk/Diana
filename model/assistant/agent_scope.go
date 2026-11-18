@@ -62,6 +62,20 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 		agentCfg.BrowserControl = nil
 		agentCfg.BrowserCDPURL = ""
 		agentCfg.BrowserToolsDisabled = false
+	} else if !relationship.Owner && cfg.sandboxBrowserEnabled() {
+		// 没开个人浏览器的群友拿公网沙箱：不带任何登录态，只能连公网，所以不按网站
+		// 白名单收；截图只交回画面、不落盘。
+		personal = r.sandboxBrowserFor(cfg, event)
+		agentCfg.PersonalBrowser = personal
+		agentCfg.BuiltinBrowser = nil
+		agentCfg.BrowserControl = nil
+		agentCfg.BrowserCDPURL = ""
+		agentCfg.BrowserToolsDisabled = false
+		agentCfg.BrowserOperationDisabled = false
+		agentCfg.BrowserOperationHosts = nil
+		agentCfg.BrowserScreenshotDisabled = false
+		agentCfg.BrowserScreenshotRestricted = true
+		agentCfg.BrowserScreenshotHosts = nil
 	}
 	transferred := false
 	defer func() {
@@ -133,6 +147,11 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	if allowed != nil && personal != nil {
 		for _, name := range []string{"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs"} {
 			allowed[name] = true
+		}
+		if personal.PublicSandbox() {
+			for _, name := range []string{"browser_scroll", "browser_press_key", "browser_navigate", "browser_wait"} {
+				allowed[name] = true
+			}
 		}
 	}
 	memberExtensions := []string{}

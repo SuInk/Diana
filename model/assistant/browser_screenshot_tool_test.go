@@ -130,7 +130,7 @@ func TestPublicScreenshotIsBuiltInAndDoesNotGrantLoggedBrowser(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	tools := newBuiltInBrowserRenderer(screenshotBrowserStub{data: assistantScreenshotPNG(t)}).AgentTools()
 	{
-		cfg := BotConfig{AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: BrowserScreenshotDisabled}}.WithDefaults()
+		cfg := BotConfig{AgentSandboxBrowserDisabled: true, AgentBrowserScreenshotAccess: BrowserScreenshotAccess{Mode: BrowserScreenshotDisabled}}.WithDefaults()
 		registry, err := (&Runtime{}).newAgentRegistry(context.Background(), cfg, MessageEvent{UserID: "member"}, RelationshipPolicy{}, tools...)
 		if err != nil {
 			t.Fatal(err)

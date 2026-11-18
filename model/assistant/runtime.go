@@ -611,6 +611,7 @@ type Runtime struct {
 	browserBox                BuiltinBrowserProvider
 	browserSource             func() string
 	userBrowsers              *browserbox.UserSessionPool
+	sandboxBrowsers           *browserbox.UserSessionPool
 	media                     *MediaStore
 	members                   *memberCache
 	// crossGroupNonMembers 记跨群参考里查过不在本群的作者，见 crossGroupNonMemberTTL。自带锁。
@@ -880,6 +881,25 @@ func (r *Runtime) SetUserBrowsers(pool *browserbox.UserSessionPool) {
 	r.mu.Lock()
 	r.userBrowsers = pool
 	r.mu.Unlock()
+}
+
+// sandboxBrowserEnabled：沙箱默认开；单独关掉、安全模式，或浏览器操作权限整个停用
+// （「包括主人」都不让操作网页）时不开。
+func (cfg BotConfig) sandboxBrowserEnabled() bool {
+	return !cfg.AgentSandboxBrowserDisabled && !cfg.agentSafeMode() && cfg.AgentBrowserOperationAccess.WithDefaults().Mode != BrowserAccessDisabled
+}
+
+// sandboxBrowserFor 给群友一个按会话隔离的公网沙箱浏览器：同一个群（或同一个私聊）
+// 前后几轮接着用同一个页面，不同会话互不相干，空闲 5 分钟或进程名额被占满时连 profile
+// 一起删掉。
+func (r *Runtime) sandboxBrowserFor(cfg BotConfig, event MessageEvent) *browserbox.UserBrowserSession {
+	r.mu.Lock()
+	if r.sandboxBrowsers == nil {
+		r.sandboxBrowsers = browserbox.NewSandboxSessionPool(filepath.Dir(AgentWorkspaceDir()), nil)
+	}
+	pool := r.sandboxBrowsers
+	r.mu.Unlock()
+	return pool.NewSandboxRequest(cfg.ID, string(NormalizePlatformID(firstNonEmpty(string(event.Platform), string(cfg.Platform)))), sessionKey(event))
 }
 
 func (r *Runtime) personalBrowserFor(cfg BotConfig, event MessageEvent, hosts []string) *browserbox.UserBrowserSession {
@@ -1264,6 +1284,7 @@ func (r *Runtime) Stop() error {
 	inboundDone := r.inboundDone
 	memoryDone := r.memoryDone
 	userBrowsers := r.userBrowsers
+	sandboxBrowsers := r.sandboxBrowsers
 	r.cancel = nil
 	r.runCtx = nil
 	r.running = false
@@ -1294,6 +1315,9 @@ func (r *Runtime) Stop() error {
 	r.closeAgentRegistryCache()
 	if userBrowsers != nil {
 		userBrowsers.Stop()
+	}
+	if sandboxBrowsers != nil {
+		sandboxBrowsers.Stop()
 	}
 	r.closeHostSessions()
 	return err

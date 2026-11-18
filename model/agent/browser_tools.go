@@ -71,6 +71,39 @@ type browserToolBase struct {
 	tabs         *browserTabRegistry
 	personal     PersonalBrowserBridge
 	allowedHosts []string
+	// sandbox 是群友用的公网沙箱（PublicSandboxBrowser）：没有登录态，任何公网网站都
+	// 能开，内网由沙箱代理拦；页面结果按 browser-use 的做法给可点元素编号。
+	sandbox bool
+}
+
+// PublicSandboxBrowser 是 PersonalBrowserBridge 的可选标记：实现它并返回 true 的是
+// 不带登录态的公网沙箱，不按个人浏览器的网站白名单检查。
+type PublicSandboxBrowser interface {
+	PublicSandbox() bool
+}
+
+// pageAllowed 判断个人浏览器或沙箱能不能停在这个地址上。个人浏览器只认白名单网站；
+// 沙箱只要求是 http(s)，是不是公网由沙箱代理在网络层把关（重定向、子资源一起管）。
+func (b browserToolBase) pageAllowed(rawURL string) bool {
+	if b.sandbox {
+		parsed, err := url.Parse(rawURL)
+		return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.User == nil && parsed.Host != ""
+	}
+	return browserScreenshotHostAllowed(rawURL, b.allowedHosts)
+}
+
+// frameAllowed 是 pageAllowed 套到整棵 frame 树上。沙箱里 about:blank、about:srcdoc
+// 这类空白子 frame 很常见（广告位、懒加载的 iframe），它们不连网，放过。
+func (b browserToolBase) frameAllowed(frame screenshotFrame) bool {
+	if !b.pageAllowed(frame.Frame.URL) && !(b.sandbox && frame.Frame.URL != "" && strings.HasPrefix(frame.Frame.URL, "about:")) {
+		return false
+	}
+	for _, child := range frame.ChildFrames {
+		if !b.frameAllowed(child) {
+			return false
+		}
+	}
+	return true
 }
 
 // defaultScreenshotPath 是没指定 path 时截图落盘的位置，按对话分文件。
@@ -93,6 +126,9 @@ type browserSession struct {
 	targetID string
 	lastUsed time.Time
 	now      func() time.Time
+	// elementTarget/elementState 是沙箱最近一次交给模型的元素编号，按编号点击时用。
+	elementTarget string
+	elementState  browserElementState
 }
 
 func (s *browserSession) clock() time.Time {
@@ -137,7 +173,7 @@ func (s *browserSession) lastUsedAt() time.Time {
 // checkURL 在机器人主动打开一个地址之前过一遍用户设的站点黑名单。
 func (b browserToolBase) checkURL(pageURL string) error {
 	if b.personal != nil {
-		if !browserScreenshotHostAllowed(pageURL, b.allowedHosts) {
+		if !b.pageAllowed(pageURL) {
 			return errors.New("网站不在个人浏览器操作白名单内")
 		}
 		return netguard.ValidatePublicURLStrict(context.Background(), pageURL)
@@ -331,14 +367,18 @@ func (t *BrowserClickTool) Description() string {
 }
 
 func (t *BrowserClickTool) InputSchema() map[string]any {
-	return toolObjectSchema(nil, map[string]any{
+	props := map[string]any{
 		"tab_id":      toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector":    toolStringParam("CSS 选择器"),
 		"x":           toolNumberParam("视口 CSS 像素，同截图坐标"),
 		"y":           toolNumberParam("视口 CSS 像素"),
 		"button":      toolEnumParam("默认 left", "left", "right", "middle"),
 		"click_count": toolIntParam("双击填 2"),
-	})
+	}
+	if t.base.sandbox {
+		props["index"] = toolIntParam("元素编号，来自最近一次结果的 elements 清单或截图上的编号框；优先用它")
+	}
+	return toolObjectSchema(nil, props)
 }
 
 // RepeatableCalls 见 RepeatableTool：同一个「下一页」按钮连点两次是正常操作。
@@ -348,8 +388,10 @@ func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (out s
 	selector := stringFromInput(input, "selector")
 	x, hasX := numberFromInput(input, "x")
 	y, hasY := numberFromInput(input, "y")
-	if selector == "" && !(hasX && hasY) {
-		return "", errors.New("selector or x/y is required")
+	_, hasIndex := numberFromInput(input, "index")
+	hasIndex = hasIndex && t.base.sandbox
+	if selector == "" && !(hasX && hasY) && !hasIndex {
+		return "", errors.New("index, selector or x/y is required")
 	}
 	button := strings.ToLower(stringFromInput(input, "button"))
 	switch button {
@@ -370,6 +412,18 @@ func (t *BrowserClickTool) Run(ctx context.Context, input map[string]any) (out s
 	defer t.base.release(client, &err)
 	if err := t.base.validatePersonalPage(ctx, client); err != nil {
 		return "", err
+	}
+	if hasIndex {
+		el, err := t.base.elementByIndex(ctx, client, intFromInput(input, "index", -1))
+		if err != nil {
+			return "", err
+		}
+		x, y = el.centre()
+		if err := client.mouseClick(ctx, x, y, button, clicks); err != nil {
+			return "", err
+		}
+		client.settle(ctx)
+		return t.base.sandboxState(ctx, client, 0, map[string]any{"clicked": el.line()})
 	}
 	if selector != "" {
 		// 先滚到视口中间再取坐标。点击点被别的元素盖住（弹层、吸顶栏）时真实点击
@@ -406,6 +460,9 @@ return {ok:true, x, y};
 			if err := t.base.validatePersonalPage(ctx, client); err != nil {
 				return "", err
 			}
+			if t.base.sandbox {
+				return t.base.sandboxState(ctx, client, 0, map[string]any{"clicked": selector, "synthetic": true})
+			}
 			return client.pageState(ctx, map[string]any{"clicked": selector, "synthetic": true})
 		}
 		x, y = located.X, located.Y
@@ -418,6 +475,9 @@ return {ok:true, x, y};
 	result := map[string]any{"clicked_at": map[string]float64{"x": x, "y": y}}
 	if selector != "" {
 		result["clicked"] = selector
+	}
+	if t.base.sandbox {
+		return t.base.sandboxState(ctx, client, 0, result)
 	}
 	if err := t.base.validatePersonalPage(ctx, client); err != nil {
 		return "", err
@@ -438,13 +498,17 @@ func (t *BrowserTypeTool) Description() string {
 }
 
 func (t *BrowserTypeTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"text"}, map[string]any{
+	props := map[string]any{
 		"tab_id":      toolStringParam("标签页 ID，来自标签页列表；省略时用当前页"),
 		"selector":    toolStringParam("输入框 CSS 选择器，默认当前焦点"),
 		"text":        toolStringParam(""),
 		"clear":       toolBoolParam("先清空原内容，默认 true"),
 		"press_enter": toolBoolParam("输入后回车"),
-	})
+	}
+	if t.base.sandbox {
+		props["index"] = toolIntParam("输入框的元素编号，来自最近一次结果的 elements 清单；优先用它")
+	}
+	return toolObjectSchema([]string{"text"}, props)
 }
 
 func (t *BrowserTypeTool) RepeatableCalls() bool { return true }
@@ -459,6 +523,9 @@ func (t *BrowserTypeTool) Run(ctx context.Context, input map[string]any) (out st
 	defer t.base.release(client, &err)
 	if err := t.base.validatePersonalPage(ctx, client); err != nil {
 		return "", err
+	}
+	if _, ok := numberFromInput(input, "index"); ok && t.base.sandbox {
+		return t.typeAtIndex(ctx, client, intFromInput(input, "index", -1), text, input)
 	}
 	// 聚焦和清空在页面里做，文字本身用 Input.insertText 送进去：直接改 value 的话
 	// React、Vue 这类受控输入框不认，页面上看着填了，提交出去还是空的。清空用原生
@@ -513,10 +580,43 @@ return {ok:true};
 	if selector != "" {
 		result["selector"] = selector
 	}
+	if t.base.sandbox {
+		return t.base.sandboxState(ctx, client, 0, result)
+	}
 	if err := t.base.validatePersonalPage(ctx, client); err != nil {
 		return "", err
 	}
 	return client.pageState(ctx, result)
+}
+
+// typeAtIndex 是沙箱按编号输入：先真实点一下让它获得焦点（iframe 里的输入框也一样），
+// 再在它所在的 frame 里清空，文字照常用 Input.insertText 送进去。
+func (t *BrowserTypeTool) typeAtIndex(ctx context.Context, client *cdpClient, index int, text string, input map[string]any) (string, error) {
+	el, err := t.base.elementByIndex(ctx, client, index)
+	if err != nil {
+		return "", err
+	}
+	x, y := el.centre()
+	if err := client.mouseClick(ctx, x, y, "left", 1); err != nil {
+		return "", err
+	}
+	if boolFromInput(input, "clear", true) {
+		if err := client.focusClear(ctx, el.FrameID); err != nil {
+			return "", err
+		}
+	}
+	if text != "" {
+		if err := client.call(ctx, "Input.insertText", map[string]any{"text": text}, nil); err != nil {
+			return "", err
+		}
+	}
+	if boolFromInput(input, "press_enter", false) {
+		if err := client.pressKey(ctx, "Enter"); err != nil {
+			return "", err
+		}
+		client.settle(ctx)
+	}
+	return t.base.sandboxState(ctx, client, 0, map[string]any{"typed_chars": utf8.RuneCountInString(text), "typed_into": el.line()})
 }
 
 type BrowserScreenshotTool struct {
@@ -533,6 +633,9 @@ func (t *BrowserScreenshotTool) RepeatableCalls() bool { return true }
 func (t *BrowserScreenshotTool) Name() string { return "browser_screenshot" }
 
 func (t *BrowserScreenshotTool) Description() string {
+	if t.base.sandbox {
+		return `截取沙箱浏览器当前页面并附加真实画面，可点元素框出并标上编号，和返回的 elements 清单一致。`
+	}
 	return `截取已打开的登录浏览器页面并附加真实画面。url 必须是已打开标签页的完整地址，不会打开、点击或输入网页；公开网页请用 webpage_screenshot。多个页面时必须明确指定 url 或 tab_id。`
 }
 
@@ -573,7 +676,7 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 		}
 	}
 	requestedURL := stringFromInput(input, "url")
-	if t.restricted && !browserScreenshotHostAllowed(requestedURL, t.allowedHosts) {
+	if t.restricted && !t.base.sandbox && !browserScreenshotHostAllowed(requestedURL, t.allowedHosts) {
 		return "", errors.New("请明确指定授权网站上已打开页面的完整 HTTP(S) URL")
 	}
 	ctx, cancel := context.WithTimeout(ctx, t.base.timeout)
@@ -586,8 +689,15 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return "", err
 	}
+	tabID := stringFromInput(input, "tab_id")
+	if t.base.sandbox && requestedURL == "" && tabID == "" {
+		tabID = t.base.personal.CurrentTab()
+		if tabID == "" {
+			return "", errors.New("沙箱浏览器还没打开网页，先用 browser 的 open 打开")
+		}
+	}
 	var target browserTarget
-	if t.base.personal == nil && requestedURL == "" && stringFromInput(input, "tab_id") == "" {
+	if t.base.personal == nil && requestedURL == "" && tabID == "" {
 		target, err = t.base.pickTarget(ctx, endpoint, false)
 	} else {
 		filtered := []browserTarget{}
@@ -596,7 +706,7 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 				filtered = append(filtered, candidate)
 			}
 		}
-		target, err = screenshotTarget(filtered, requestedURL, stringFromInput(input, "tab_id"))
+		target, err = screenshotTarget(filtered, requestedURL, tabID)
 	}
 	if err != nil {
 		return "", err
@@ -619,8 +729,18 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if before.FrameTree.Frame.URL != target.URL {
 		return "", errors.New("页面已切换，请重新指定截图页面")
 	}
-	if t.restricted && (!before.FrameTree.allowed(t.allowedHosts) || (t.base.personal != nil && !before.FrameTree.allowed(t.base.allowedHosts))) {
+	if t.restricted && !t.frameAllowed(before.FrameTree) {
 		return "", errors.New("页面或嵌入页面不在截图网站授权范围内")
+	}
+	// 沙箱照 browser-use：截图上框出可点元素并标编号，和返回的 elements 清单一一对应。
+	var marked *browserElementState
+	if t.base.sandbox {
+		client.targetID = target.ID
+		if state, err := t.base.collectElements(ctx, client); err == nil {
+			marked = &state
+			unmark := client.markElements(ctx, before.FrameTree.Frame.ID, state)
+			defer unmark()
+		}
 	}
 	client.navigationObserved.Store(false)
 	var result struct {
@@ -633,7 +753,10 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	if err := client.call(ctx, "Page.getFrameTree", nil, &after); err != nil {
 		return "", err
 	}
-	if client.navigationObserved.Load() || before.FrameTree.Frame.URL != after.FrameTree.Frame.URL || (t.restricted && (!after.FrameTree.allowed(t.allowedHosts) || (t.base.personal != nil && !after.FrameTree.allowed(t.base.allowedHosts)))) {
+	// 沙箱里没有要护着的登录页，iframe 里的单页应用切路由、动画插拔 iframe 都很常见，
+	// 只认主页面换没换；frame 树仍要全是网页地址。
+	navigated := client.navigationObserved.Load() && !t.base.sandbox
+	if navigated || before.FrameTree.Frame.URL != after.FrameTree.Frame.URL || (t.restricted && !t.frameAllowed(after.FrameTree)) {
 		return "", errors.New("截图期间页面发生跳转或授权范围变化，请重试")
 	}
 	// A human may take over while the capture is in flight. Do not expose that image.
@@ -651,6 +774,9 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 		return "", err
 	}
 	body := map[string]any{"url": after.FrameTree.Frame.URL, "tab_id": target.ID, "bytes": len(data)}
+	if marked != nil {
+		body["elements"] = marked.lines()
+	}
 	// Members receive only these captured bytes, never access to a workspace path.
 	if !t.restricted {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
@@ -700,9 +826,22 @@ type screenshotFrameTree struct {
 }
 type screenshotFrame struct {
 	Frame struct {
+		ID  string `json:"id"`
 		URL string `json:"url"`
 	} `json:"frame"`
 	ChildFrames []screenshotFrame `json:"childFrames"`
+}
+
+// frameAllowed 是截图前后对整棵 frame 树的授权检查：沙箱只看是不是网页地址；其余
+// 要同时落在截图授权网站里，个人浏览器还要落在它自己的操作白名单里。
+func (t *BrowserScreenshotTool) frameAllowed(tree screenshotFrame) bool {
+	if t.base.sandbox {
+		return t.base.frameAllowed(tree)
+	}
+	if !tree.allowed(t.allowedHosts) {
+		return false
+	}
+	return t.base.personal == nil || tree.allowed(t.base.allowedHosts)
 }
 
 func (frame screenshotFrame) allowed(hosts []string) bool {
@@ -732,6 +871,9 @@ type browserPageSnapshot struct {
 }
 
 func (b browserToolBase) pageSnapshot(ctx context.Context, client *cdpClient, selector string, offset int) (string, error) {
+	if b.sandbox && selector == "" {
+		return b.sandboxState(ctx, client, offset, nil)
+	}
 	if err := b.validatePersonalPage(ctx, client); err != nil {
 		return "", err
 	}
@@ -1045,7 +1187,7 @@ func (b browserToolBase) validatePersonalPage(ctx context.Context, client *cdpCl
 	if err := client.call(ctx, "Page.getFrameTree", nil, &frames); err != nil {
 		return err
 	}
-	if !frames.FrameTree.allowed(b.allowedHosts) {
+	if !b.frameAllowed(frames.FrameTree) {
 		return errors.New("页面或嵌入页面不在个人浏览器操作白名单内")
 	}
 	return nil
@@ -1071,7 +1213,7 @@ func (b browserToolBase) pickPersonalOrOwnerTarget(ctx context.Context, endpoint
 	}
 	for _, target := range targets {
 		if target.Type == "page" && target.ID == tabID && target.WebSocketDebuggerURL != "" {
-			if pageURL == "" && !browserScreenshotHostAllowed(target.URL, b.allowedHosts) {
+			if pageURL == "" && !b.pageAllowed(target.URL) && !(b.sandbox && isBlankBrowserTarget(target.URL)) {
 				return browserTarget{}, errors.New("请先打开白名单网站，或指定自己的有效标签页")
 			}
 			b.personal.SetCurrentTab(target.ID)
@@ -1101,7 +1243,7 @@ func (t *PersonalBrowserTabsTool) Run(ctx context.Context, input map[string]any)
 	}
 	result := []map[string]string{}
 	for _, target := range targets {
-		if target.Type != "page" || !browserScreenshotHostAllowed(target.URL, t.base.allowedHosts) {
+		if target.Type != "page" || !t.base.pageAllowed(target.URL) {
 			continue
 		}
 		result = append(result, map[string]string{"tab_id": target.ID, "url": target.URL, "title": target.Title})
@@ -1115,6 +1257,12 @@ func (t *PersonalBrowserTabsTool) Run(ctx context.Context, input map[string]any)
 func (b browserToolBase) personalExpression(expr string) string {
 	if b.personal == nil {
 		return expr
+	}
+	if b.sandbox {
+		return fmt.Sprintf(`(() => {
+ if (!['http:','https:'].includes(location.protocol)) throw new Error("页面不是网页地址");
+ return (%s);
+ })()`, expr)
 	}
 	hosts, _ := json.Marshal(b.allowedHosts)
 	return fmt.Sprintf(`(() => {
