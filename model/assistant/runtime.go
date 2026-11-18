@@ -4076,7 +4076,10 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event.replyAuditImageContext = currentImageGrounding
 		}
 	}
-	event = r.loadDeferredCrossGroupContext(event)
+	// 跨群消息设成按需或关闭时不去拉：拉了也不带。
+	if contextBlockIncluded(cfg, ContextBlockCrossGroup) {
+		event = r.loadDeferredCrossGroupContext(event)
+	}
 	markReplyStage(ctx, replyStageCrossGroupReady, time.Now())
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
@@ -4445,7 +4448,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
 		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
-		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
+		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" && contextBlockIncluded(cfg, ContextBlockWorldBook) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    worldBookContext,
@@ -4464,7 +4467,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
 		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
-		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
+		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" && contextBlockIncluded(cfg, ContextBlockSelfNote) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    selfNoteContext,
@@ -4473,7 +4476,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			})
 		}
 		// 零花钱是关于她自己的事实，和自述同级，按记忆优先级让位。
-		if walletContext := contextPreload.walletContext; walletContext != "" {
+		if walletContext := contextPreload.walletContext; walletContext != "" && contextBlockIncluded(cfg, ContextBlockWallet) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    walletContext,
@@ -4483,7 +4486,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
-		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
+		if notebookContext := contextPreload.notebookContext; notebookContext != "" && contextBlockIncluded(cfg, ContextBlockNotebook) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    notebookContext,
@@ -4494,7 +4497,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 掉出历史窗口的媒体索引只在窗口往前滑时才变，放在历史之前跟着前缀缓存走；
 		// 挂在历史优先级上，预算紧张时跟着旧历史一起让位。
 		var mediaIndexMessage *llm.Message
-		if directAgentDecision && agentCanFetchMedia {
+		if directAgentDecision && agentCanFetchMedia && contextBlockIncluded(cfg, ContextBlockMediaIndex) {
 			if mediaIndex := renderDurableMediaIndex(ctx, contextPreload.mediaIndex, replyHistory); mediaIndex != "" {
 				mediaIndexMessage = &llm.Message{
 					Role:       llm.RoleUser,
@@ -4512,7 +4515,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
+		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" && contextBlockIncluded(cfg, ContextBlockLinkPolicy) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    linkPolicy,
@@ -4520,7 +4523,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		if sources := r.claimSourceContext(event); sources != "" {
+		if sources := r.claimSourceContext(event); sources != "" && contextBlockIncluded(cfg, ContextBlockSourceRecall) {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    sources,
@@ -4558,7 +4561,9 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			messages = append(messages, header)
 		}
 		messages = append(messages, stableHistory...)
-		volatile = append(volatile, crossGroupTail...)
+		if contextBlockIncluded(cfg, ContextBlockCrossGroup) {
+			volatile = append(volatile, crossGroupTail...)
+		}
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
 		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
 		messages = markStablePromptPrefix(messages)

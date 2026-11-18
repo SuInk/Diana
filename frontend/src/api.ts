@@ -240,6 +240,8 @@ export interface BotProfileConfig extends SendRetrySettings {
   reply_append_only_enabled?: boolean;
   /** 固定说明（群身份、发言者、别名）放进锁定的头部，不在每轮尾部重发；不设等同开启。 */
   reply_stable_head_enabled?: boolean;
+  /** 主回复里几块背景各自怎么带：always 总是（默认）、on_demand 按需（不带，提示模型用工具查）、off 关闭。没设的按总是。 */
+  context_block_modes?: Record<string, "always" | "on_demand" | "off">;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;

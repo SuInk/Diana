@@ -7585,3 +7585,12 @@ a.nav-action {
 .field-label-action {
   margin-left: auto;
 }
+
+/* 机器人「上下文」页的「每轮带进上下文的内容」：一行一块，左边说明，右边三档。 */
+.context-blocks { display: flex; flex-direction: column; gap: 0; }
+.context-block-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.context-block-row:last-child { border-bottom: 0; }
+.context-block-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.context-block-text strong { font-size: 13.5px; font-weight: 600; }
+.context-block-row .segmented { flex: none; }
+@media (max-width: 640px) { .context-block-row { flex-direction: column; align-items: stretch; } }

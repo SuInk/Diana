@@ -1238,17 +1238,26 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	} else if event.voiceCall {
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}
-	groupStyle := r.groupStylePrompt(event, cfg)
-	groupRules := r.groupRulesPrompt(event, cfg)
+	// 群风格、群约定、心情可以在「上下文」页按块关掉（context_block_modes.go）。
+	var groupStyle, groupRules, mood string
+	if contextBlockIncluded(cfg, ContextBlockGroupStyle) {
+		groupStyle = r.groupStylePrompt(event, cfg)
+	}
+	if contextBlockIncluded(cfg, ContextBlockGroupRules) {
+		groupRules = r.groupRulesPrompt(event, cfg)
+	}
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
 	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
 	styleFilter := styleFilterPrompt(cfg, groupStyle, groupVoice)
-	mood := r.moodToneForConfig(cfg, event.ProfileID)
+	if contextBlockIncluded(cfg, ContextBlockMood) {
+		mood = r.moodToneForConfig(cfg, event.ProfileID)
+	}
+	onDemand := contextBlockOnDemandPrompt(cfg)
 	if head != nil {
 		// 主回复请求只追加：群风格、群约定、本群消息长度、「这几类不学」和语气锚点只随
 		// 群和配置变，放进头部只发一次（头部按哈希锁定，变了等下次重新组装再换）。尾部
 		// 只留逐轮会变的心情，变了才追加一版。
-		for _, section := range []string{groupStyle, groupRules, groupVoice, styleFilter, personaClosingAnchor(cfg)} {
+		for _, section := range []string{onDemand, groupStyle, groupRules, groupVoice, styleFilter, personaClosingAnchor(cfg)} {
 			appendPromptSection(&builder, section)
 		}
 		if mood != "" {
@@ -1257,6 +1266,7 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		}
 		return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
 	}
+	appendPromptSection(&tail, onDemand)
 	appendPromptSection(&tail, groupStyle)
 	appendPromptSection(&tail, groupRules)
 	// 腔调、心情和语气锚点另成一段：里面的换行比例、心情逐轮在变，以前跟在群约定后面

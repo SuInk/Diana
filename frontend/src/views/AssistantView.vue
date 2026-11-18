@@ -1851,6 +1851,28 @@
             </div>
           </section>
 
+          <!-- 每轮带进上下文的内容：几块背景各自选总是 / 按需 / 关闭。按需只给有工具能查回
+               同样内容的块，其余只有总是和关闭。这里只管带不带，功能开关还在各自原处。 -->
+          <section class="card">
+            <div class="card-header">
+              <div>
+                <h2>每轮带进上下文的内容</h2>
+                <span class="card-subtitle">总是：每轮带上。按需：不带，头部一句话告诉模型要用时拿哪个工具查，省上下文。关闭：不带也不提示。</span>
+              </div>
+            </div>
+            <div class="card-body context-blocks">
+              <div v-for="block in contextBlockRows" :key="block.key" class="context-block-row">
+                <div class="context-block-text">
+                  <strong :id="`context-block-${block.key}`">{{ block.label }}</strong>
+                  <span class="hint">{{ block.hint }}<template v-if="block.featureOff">（{{ block.featureOff }}，现在没有内容）</template></span>
+                </div>
+                <div class="segmented" role="radiogroup" :aria-labelledby="`context-block-${block.key}`">
+                  <button v-for="option in block.options" :key="option.id" type="button" role="radio" :class="{ active: contextBlockMode(block.key) === option.id }" :aria-checked="contextBlockMode(block.key) === option.id" @click="setContextBlockMode(block.key, option.id)">{{ option.label }}</button>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- 媒体预处理：决定图片、视频如何转成可供上下文使用的文字。用哪个模型在「模型」页。 -->
           <section class="card">
             <div class="card-header">
@@ -3201,6 +3223,40 @@ const editorTabs = [
 type EditorTab = (typeof editorTabs)[number]["key"];
 const editorTab = ref<EditorTab>("access");
 const residencyPanel = ref<InstanceType<typeof AgentResidencyPanel> | null>(null);
+
+// 「每轮带进上下文的内容」：键和后端 context_block_modes.go 一致。onDemand 的块才给「按需」。
+type ContextBlockMode = "always" | "on_demand" | "off";
+const contextBlockModeLabels: Record<ContextBlockMode, string> = { always: "总是", on_demand: "按需", off: "关闭" };
+const contextBlockDefinitions: { key: string; label: string; hint: string; onDemand: boolean; feature?: () => string }[] = [
+  { key: "cross_group", label: "跨群消息", hint: "别的群里和这条相关的聊天。按需时用 chat_history 查所有群。", onDemand: true, feature: () => (form.value?.cross_group_memory_enabled ? "" : "跨群记忆没开") },
+  { key: "notebook", label: "笔记命中", hint: "笔记本里和这条消息对上的词条、群里的叫法。按需时用 notebook 查。", onDemand: true },
+  { key: "self_note", label: "自述", hint: "它自己记下的自我认知。按需时用 self_note 查。", onDemand: true, feature: () => (form.value?.self_note_enabled ? "" : "自述没开") },
+  { key: "wallet", label: "零花钱", hint: "小窝里的零花钱余额。按需时用 wallet 查。", onDemand: true, feature: () => (form.value?.own_space_enabled ? "" : "小窝没开") },
+  { key: "media_index", label: "更早的图片与文件索引", hint: "掉出聊天窗口的图片和文件。按需时用 history_media 查。", onDemand: true },
+  { key: "world_book", label: "世界书", hint: "常驻和触发的世界观设定。没有查世界书的工具，只能总是带或关掉。", onDemand: false, feature: () => (form.value?.world_book_enabled ? "" : "世界书没开") },
+  { key: "mood", label: "心情", hint: "【本轮语气】里的心情，随时间和互动变。", onDemand: false, feature: () => (form.value?.mood_enabled ? "" : "情绪系统没开") },
+  { key: "group_style", label: "群说话风格", hint: "学到的这个群的说话风格，在头部。", onDemand: false, feature: () => (form.value?.expression_learning_enabled ? "" : "风格学习没开") },
+  { key: "group_rules", label: "群约定", hint: "群管理里给这个群写的约定，在头部。", onDemand: false },
+  { key: "link_policy", label: "链接策略", hint: "联网结论要不要附链接，跟着联网搜索插件的设置。", onDemand: false },
+  { key: "source_recall", label: "上一轮的来源链接", hint: "前几轮联网查到的链接，有人要链接时照着给。", onDemand: false }
+];
+const contextBlockRows = computed(() => contextBlockDefinitions.map((block) => ({
+  key: block.key,
+  label: block.label,
+  hint: block.hint,
+  featureOff: block.feature?.() ?? "",
+  options: (block.onDemand ? ["always", "on_demand", "off"] : ["always", "off"]).map((id) => ({ id: id as ContextBlockMode, label: contextBlockModeLabels[id as ContextBlockMode] }))
+})));
+function contextBlockMode(key: string): ContextBlockMode {
+  return form.value?.context_block_modes?.[key] ?? "always";
+}
+function setContextBlockMode(key: string, mode: ContextBlockMode): void {
+  if (!form.value) return;
+  const modes = { ...(form.value.context_block_modes ?? {}) };
+  if (mode === "always") delete modes[key];
+  else modes[key] = mode;
+  form.value.context_block_modes = modes;
+}
 const defaultRecallReplyAutoDeleteDelaySeconds = 60;
 const maximumRecallReplyAutoDeleteDelaySeconds = 60 * 60;
 // 临时响应屏蔽的默认值与上限，和后端 types.go 里的同名常量保持一致。
@@ -5179,6 +5235,7 @@ function setForm(config: BotProfileConfig): void {
     llm_secret_masking_enabled: config.llm_secret_masking_enabled ?? true,
     reply_append_only_enabled: config.reply_append_only_enabled ?? true,
     reply_stable_head_enabled: config.reply_stable_head_enabled ?? true,
+    context_block_modes: { ...(config.context_block_modes ?? {}) },
     group_trigger_mode: config.group_trigger_mode ?? "smart",
     refusal_strategy: config.refusal_strategy ?? "smart",
     prompt_inject_time: config.prompt_inject_time ?? true,
