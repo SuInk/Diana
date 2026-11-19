@@ -67,25 +67,8 @@ var promptIdentityPrivacySpec = registerPrompt(PromptSpec{
 	Contract: llmIdentityPrivacyContract,
 })
 
-// identityAliasRoleLetters 是别名里各角色的缩写。别名在历史里每行都有（发言人一个、
-// 消息 ID 一个），11-16 生产主回复平均每条请求出现 614 次、约 4.5 千 token；角色写全、
-// 哈希 12 位时一个账号别名约 7 token，缩成一个字母、哈希 8 位约 5 token。共同前缀
-// im_ 不缩：防伪造（neutralizeIdentityMarkers）和还原都靠它认出别名，u_、m_ 这种在
-// 正文和变量名里太常见。
-var identityAliasRoleLetters = map[string]string{"bot": "b", "user": "u", "group": "g", "message": "m"}
-
-// identityAliasHashBytes 是别名哈希的字节数（8 位十六进制）。同一个 scope 里撞了时，后
-// 登记的那个用 identityAliasLongHashBytes。
-const (
-	identityAliasHashBytes     = 4
-	identityAliasLongHashBytes = 6
-)
-
-// identityAlias 拼出某个角色的别名前缀，例如 im_m_。
+// identityAlias 拼出某个角色的别名前缀，例如 im_message_。
 func identityAlias(role string) string {
-	if letter := identityAliasRoleLetters[role]; letter != "" {
-		return identityAliasPrefix + letter + "_"
-	}
 	return identityAliasPrefix + role + "_"
 }
 
@@ -93,7 +76,7 @@ func identityAlias(role string) string {
 func identityAliasRoleList() string {
 	parts := make([]string, 0, len(identityAliasRoles))
 	for _, role := range identityAliasRoles {
-		parts = append(parts, strings.TrimSuffix(identityAlias(role), "_"))
+		parts = append(parts, identityAliasPrefix+role)
 	}
 	return strings.Join(parts, "、")
 }
@@ -127,15 +110,11 @@ type identityPrivacyScope struct {
 	overrides PromptOverrides
 	// known 是进程级的号码名单：新登记的号码记进去，正文里见过的号码照名单替换。
 	known *identityAliasRegistry
-	// conversation 是这一轮所属的会话（sessionKey），短号码按它记在 known 里。
-	conversation string
 }
 
 type identityPrivacyProvider struct {
 	provider LLMProvider
 	scope    *identityPrivacyScope
-	// sent 是进程级的发过的正文，见 privacySentMemo；restore 是那段正文里别名到真实号码的对照。
-	sent *privacySentMemo[map[string]string]
 }
 
 // IdentityAliasSaltStore 持久化脱敏别名的盐。
@@ -291,11 +270,6 @@ func (r *Runtime) withIdentityPrivacyContextVerifying(ctx context.Context, event
 		scope.known = &r.identityAliases
 		ctx = withIdentityPrivacyScope(ctx, scope)
 	}
-	scope.mu.Lock()
-	if scope.conversation == "" {
-		scope.conversation = sessionKey(event)
-	}
-	scope.mu.Unlock()
 	scope.register(cfg.OwnerIDForEvent(event), "bot_owner")
 	scope.register(firstNonEmpty(cfg.BotAccount, event.SelfID), "bot")
 	scope.register(event.UserID, "user")
@@ -337,7 +311,7 @@ func (r *Runtime) withLLMIdentityPrivacyRun(ctx context.Context, run llmProvider
 		scope.known = &r.identityAliases
 	}
 	return func(provider LLMProvider) (string, error) {
-		return run(&identityPrivacyProvider{provider: provider, scope: scope, sent: &r.identitySent})
+		return run(&identityPrivacyProvider{provider: provider, scope: scope})
 	}
 }
 
@@ -348,7 +322,7 @@ func (p *identityPrivacyProvider) Generate(ctx context.Context, req llm.Generate
 	if p.scope == nil {
 		return p.provider.Generate(ctx, req)
 	}
-	protected := p.scope.protectRequestSent(req, p.sent, privacySentRoute(ctx))
+	protected := p.scope.protectRequest(req)
 	response, err := p.provider.Generate(withIdentityPrivacyScope(ctx, p.scope), protected)
 	if err != nil || response == nil {
 		return response, err
@@ -516,13 +490,10 @@ func (s *identityPrivacyScope) register(realID string, role string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00" + role + "\x00" + realID))
-	alias := identityAlias(role) + hex.EncodeToString(sum[:identityAliasHashBytes])
-	if other, taken := s.aliasToReal[alias]; taken && other != realID {
-		alias = identityAlias(role) + hex.EncodeToString(sum[:identityAliasLongHashBytes])
-	}
+	alias := identityAlias(role) + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
-	s.known.remember(s.conversation, realID, role)
+	s.known.remember(realID, role)
 	return alias
 }
 
@@ -568,13 +539,10 @@ func (s *identityPrivacyScope) registerMessageID(realID string) string {
 		return alias
 	}
 	sum := sha256.Sum256([]byte(s.salt + "\x00message\x00" + realID))
-	alias := identityAlias("message") + hex.EncodeToString(sum[:identityAliasHashBytes])
-	if other, taken := s.aliasToReal[alias]; taken && other != realID {
-		alias = identityAlias("message") + hex.EncodeToString(sum[:identityAliasLongHashBytes])
-	}
+	alias := identityAlias("message") + hex.EncodeToString(sum[:6])
 	s.realToAlias[realID] = alias
 	s.aliasToReal[alias] = realID
-	s.known.remember(s.conversation, realID, "message")
+	s.known.remember(realID, "message")
 	return alias
 }
 
@@ -626,22 +594,16 @@ func isE164PhoneIdentifier(value string) bool {
 }
 
 func (s *identityPrivacyScope) protectRequest(req llm.GenerateRequest) llm.GenerateRequest {
-	return s.protectRequestSent(req, nil, "")
-}
-
-// protectRequestSent 和 protectRequest 一样，正文在 route 上发过的照发过的样子发。
-func (s *identityPrivacyScope) protectRequestSent(req llm.GenerateRequest, sent *privacySentMemo[map[string]string], route string) llm.GenerateRequest {
-	protectText := func(text string) string { return s.protectSentText(text, sent, route) }
 	protected := req
 	protected.Messages = make([]llm.Message, len(req.Messages))
 	for index, message := range req.Messages {
 		protectedMessage := message
-		protectedMessage.Content = protectText(message.Content)
+		protectedMessage.Content = s.protectText(message.Content)
 		if len(message.Parts) > 0 {
 			protectedMessage.Parts = make([]llm.ContentPart, len(message.Parts))
 			for partIndex, part := range message.Parts {
 				protectedPart := part
-				protectedPart.Text = protectText(part.Text)
+				protectedPart.Text = s.protectText(part.Text)
 				protectedMessage.Parts[partIndex] = protectedPart
 			}
 		}
@@ -699,36 +661,6 @@ func (s *identityPrivacyScope) protectValue(value any) any {
 		return out
 	}
 	return value
-}
-
-// protectSentText 是 protectText，正文在 route 上发过的照发过的样子发。
-func (s *identityPrivacyScope) protectSentText(text string, sent *privacySentMemo[map[string]string], route string) string {
-	if sent == nil || route == "" || strings.TrimSpace(text) == "" {
-		return s.protectText(text)
-	}
-	if before, ok := sent.get(route, text); ok {
-		// 正文里的结构化账号照常登记，后面没发过的正文和工具参数还要用。
-		s.discoverStructuredIDs(text)
-		s.mu.Lock()
-		for alias, realID := range before.restore {
-			if _, known := s.aliasToReal[alias]; !known {
-				s.aliasToReal[alias] = realID
-			}
-		}
-		s.mu.Unlock()
-		return before.text
-	}
-	out := s.protectText(text)
-	restore := map[string]string{}
-	s.mu.Lock()
-	for _, alias := range identityPrivacyAliasTokenPattern.FindAllString(out, -1) {
-		if realID, ok := s.aliasToReal[alias]; ok {
-			restore[alias] = realID
-		}
-	}
-	s.mu.Unlock()
-	sent.put(route, text, privacySent[map[string]string]{text: out, restore: restore})
-	return out
 }
 
 func (s *identityPrivacyScope) protectText(text string) string {

@@ -50,7 +50,7 @@ func TestLiveParentheticalAsideReplay(t *testing.T) {
 		t.Fatal("expected the current execution-status note at the end of this fixture")
 	}
 	req.Messages = append(req.Messages[:last], req.Messages[last+1:]...)
-	req, err = newReplyRunHooks().PrepareRequest(context.Background(), req)
+	req, err = newReplyRunHooks(BotConfig{}).PrepareRequest(context.Background(), req)
 	if err != nil {
 		t.Fatal(err)
 	}

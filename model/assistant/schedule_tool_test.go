@@ -266,7 +266,7 @@ func TestRuntimeAgentCanCreateScheduledQuery(t *testing.T) {
 	}
 	foundTool := false
 	for _, msg := range provider.requests[1].Messages {
-		if strings.Contains(msg.Content, "subscription") {
+		if strings.Contains(msg.Content, "schedule") {
 			foundTool = true
 			break
 		}

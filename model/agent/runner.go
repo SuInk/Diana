@@ -25,10 +25,7 @@ type Runner struct {
 	cfg      Config
 	registry *ToolRegistry
 	// loader 是本次运行的按需加载状态；Run 开始时新建，一个 Runner 不并发执行 Run。
-	loader *deferredToolLoader
-	// headLoader 按渲染用的工具全集（见 Config.HeadRegistry）生成目录和工具定义；没设
-	// HeadRegistry 时就是 loader。
-	headLoader    *deferredToolLoader
+	loader        *deferredToolLoader
 	codeModeStore map[string]json.RawMessage
 	codeModeReads map[string]codeModeReadSnapshot
 }
@@ -124,8 +121,9 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	}
 	startedAt := time.Now()
 	hooks := &runHookState{hooks: req.Hooks}
-	r.newLoaders(req.LoadedTools)
+	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.SharedTools, r.cfg.FeaturedTools)
 	if r.loader != nil {
+		r.loader.restore(req.LoadedTools)
 		r.loader.onLoad = req.ToolsLoaded
 	}
 	traceID := strings.TrimSpace(req.TraceID)
@@ -144,13 +142,32 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		Priority: llm.MessagePrioritySystem,
 	})
 	var volatile []llm.Message
-	// 历史之前的固定说明（skills 目录、联网调研要求）。已加载工具的契约以前也常驻在
-	// 这里（生产 11-15 平均 7.7 千字），现在不放：要用的工具当轮 tool_search 取定义，
-	// 参数填错时 tools_execute 也会把定义交回来。显式使用带标记的 user，避免无历史时
-	// 被适配器合并回 leading system。
+	// 已加载工具的契约放在调用方开头的 system 之后、历史之前。它按群持久、只在
+	// 加载新工具时追加，变化几乎总和发言者权限切换同时发生——那时工具目录（第一条
+	// system）已经变了，前缀本来就从那里断。放在尾部则每条消息都要重算它（生产
+	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
+	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	// 工具目录、规则、契约和预算按群里的工具全集渲染，换人说话也不变。本轮发言者用不了
-	// 的工具调用时当场回「没有权限」（见 deniedToolError），不再每轮写一行权限说明。
+	sharedContracts := r.loader.loadedContractList(true)
+	if contracts := renderLoadedContracts(sharedContracts); contracts != "" {
+		contractMessage = &llm.Message{
+			Role:     llm.RoleUser,
+			Content:  sharedContractsMessage(contracts),
+			Priority: llm.MessagePrioritySystem,
+		}
+	}
+	// 按发言者变化的工具段（预算、专属工具目录、规则和契约）放在历史之后。
+	//
+	// 每一版在会话里只发一次：重新组装那一轮进前缀，续接时前缀里有过的就省略，没有的
+	// 追加并留在前缀里；另有一行只用于本轮的说明指明当前发言者适用哪一版（见
+	// continuationVolatile）。volatile 里其余几条（现在几点、这句话命中了哪些
+	// skill）每轮都变，源头就标成只用于本轮。
+	if speaker := r.speakerToolPrompt(); speaker != "" {
+		id := shortFingerprint([]byte(speaker))
+		volatile = append(volatile,
+			llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + speaker, Priority: llm.MessagePrioritySystem},
+			llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "这一轮的发言者适用上文「工具环境 #" + id + "」那一段；编号不同的段属于别的发言者，对这位不适用。", Priority: llm.MessagePrioritySystem, TurnOnly: true})
+	}
 	// skills 目录和常驻正文只随机器人、群的 skill 配置变，放在历史之前跟着前缀缓存走；
 	// 只有本轮按关键词命中的正文逐轮变，留在尾部。以前整段都在尾部：10-27 生产
 	// DeepSeek 主回复里它约 1K 字，相邻两轮逐字相同却每轮重算。
@@ -192,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		})
 	}
 	// 联网调研要求逐字不变，只看本轮有没有 web_search，同样放在历史之前。
-	if _, available := r.headTools().Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
+	if _, available := r.registry.Get(webSearchToolName); available && strings.TrimSpace(r.cfg.SystemPrompt) == "" {
 		stableNotes = append(stableNotes, webSearchTurnPolicy)
 	}
 	stableNotesText := strings.Join(stableNotes, "\n\n")
@@ -204,13 +221,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			contractMessage.Content += "\n\n" + stableNotesText
 		}
 	}
-	headDefinitions := r.turnDefinitions(false)
-	convKey := conversationKey(r.systemPrompt(), stableNotesText, headDefinitions)
-	// 头部锁定时不比会话键：前缀里的系统提示和固定说明、调用方存的工具定义原样用。
-	locked := req.Continuation != nil && len(req.Continuation.Definitions) > 0
-	continued := req.Continuation != nil && (locked || req.Continuation.Key == convKey) && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
-	if continued && locked {
-		convKey, headDefinitions = req.Continuation.Key, req.Continuation.Definitions
+	convKey := conversationKey(r.systemPrompt(), stableNotesText, r.turnDefinitions(false))
+	continued := req.Continuation != nil && req.Continuation.Key == convKey && len(req.Continuation.Prefix) > 0 && len(req.Continuation.Append) > 0
+	if continued {
+		// 前缀里的契约块原样不动；这一轮多出来的契约接在尾部，随请求一起进下一轮的
+		// 前缀。当前发言者用不了哪些契约只用于本轮。
+		volatile = append(contractDelta(sharedContracts, req.Continuation.Prefix, req.Continuation.Append), volatile...)
 	}
 	// Insert the volatile block just before the final message so the current
 	// turn stays last, which downstream priority handling depends on.
@@ -251,7 +267,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, volatile...)
 		messages = append(messages, req.Messages...)
 	}
-	messages = turnOnlyAfterCurrent(messages, stableCacheIndex)
 
 	var promptTokens int64
 	for _, message := range messages {
@@ -347,7 +362,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Transcript:      turnTranscript(firstRequest, traceID, steps, text),
 			ConversationKey: convKey,
 			Continued:       continued,
-			Definitions:     headDefinitions,
 			PromptTokens:    promptTokens,
 		}
 		emitRunEvent(ctx, req.Observer, RunEvent{
@@ -409,10 +423,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if req.Interjections != nil {
 			messages = append(messages, req.Interjections.Take()...)
 		}
-		definitions := headDefinitions
-		if imageTaskQueued {
-			definitions = r.turnDefinitions(true)
-		}
+		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
 		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.toolResultReminder(steps)), Tools: definitions})
@@ -1196,51 +1207,6 @@ func callerCacheBreakpoint(messages []llm.Message) int {
 
 // markLoopCacheBreakpoint 让最新一条消息上始终有一个滚动缓存断点，这样每个规划
 // 步都能读到上一步写入的缓存前缀；稳定前缀上的断点保持不动。
-// turnOnlyAfterCurrent 把稳定前缀之后、当前消息之前那些只用于本轮的消息（尾部状态块、
-// 查证提醒、时钟、权限说明）按原顺序挪到当前消息后面，其余消息位置不变。
-//
-// 下一轮续接的前缀是这一轮去掉只用于本轮的消息、再接上回复。它们夹在新历史和当前消息
-// 之间时，下一轮请求从它们的位置起就和这一轮不同，当前消息得重发一遍；挪到当前消息
-// 后面，下一轮能一直复用到当前消息为止。11-17 用 swe-2 回放 30 条生产请求、gpt-6.1-sol
-// 盲评：挪后 13 胜、原样 11 胜、6 平，可接受 20/30 对 19/30，看不出变差。
-func turnOnlyAfterCurrent(messages []llm.Message, stableIndex int) []llm.Message {
-	last := len(messages) - 1
-	start := max(stableIndex+1, 0)
-	if last <= start {
-		return messages
-	}
-	out := make([]llm.Message, 0, len(messages))
-	out = append(out, messages[:start]...)
-	var moved []llm.Message
-	for _, message := range messages[start:last] {
-		if message.TurnOnly {
-			moved = append(moved, message)
-			continue
-		}
-		out = append(out, message)
-	}
-	if len(moved) == 0 {
-		return messages
-	}
-	// 和当前消息同一优先级的（当前消息拆出来的注解，开头写着「上面最后一条聊天记录是这
-	// 一轮要回复的消息」）挪过去后紧跟着当前消息，其余照原来的顺序排在后面。
-	out = append(out, messages[last])
-	if priority := messages[last].Priority; priority != 0 {
-		for _, message := range moved {
-			if message.Priority == priority {
-				out = append(out, message)
-			}
-		}
-		for _, message := range moved {
-			if message.Priority != priority {
-				out = append(out, message)
-			}
-		}
-		return out
-	}
-	return append(out, moved...)
-}
-
 func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 	if len(messages) == 0 {
 		return
@@ -1248,14 +1214,6 @@ func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 	for index := range messages {
 		if index != stableIndex {
 			messages[index].CacheBreakpoint = false
-		}
-	}
-	// 移动的断点打在最后一条会留进前缀的消息上：第一步是当前消息（后面只用于本轮的那些
-	// 下一轮不带，见 turnOnlyAfterCurrent），之后各步是最新的工具结果。
-	for index := len(messages) - 1; index >= 0; index-- {
-		if !messages[index].TurnOnly {
-			messages[index].CacheBreakpoint = true
-			return
 		}
 	}
 	messages[len(messages)-1].CacheBreakpoint = true
@@ -1427,9 +1385,10 @@ func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
 	return total
 }
 
-// toolRules 按可用工具生成 Agent 规则。hasTool 看渲染用的工具全集（见
-// Config.HeadRegistry）。
-func (r *Runner) toolRules(hasTool func(string) bool) []string {
+// toolRules 按可用工具生成 Agent 规则。hasTool 决定看哪一份工具集：系统提示词只看公共
+// 工具（见 Config.SharedTools），发言者专属工具的规则由 speakerToolPrompt 放进尾部。
+// withBudget=false 时预算数字不写进规则，它按发言者不同。
+func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string {
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -1442,8 +1401,8 @@ func (r *Runner) toolRules(hasTool func(string) bool) []string {
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
 	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行，包括用 tools_execute 封装的调用；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
-	// 设了上限才写预算。主回复里主人和群友的上限相同，所以它也在不变的头部里。
-	if r.cfg.MaxSteps > 0 {
+	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
+	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
 	}
 
@@ -1552,27 +1511,59 @@ func (r *Runner) toolRules(hasTool func(string) bool) []string {
 	return rules
 }
 
-// headTools 是渲染进前缀的工具全集，见 Config.HeadRegistry。
-func (r *Runner) headTools() *ToolRegistry {
-	if r.cfg.HeadRegistry != nil {
-		return r.cfg.HeadRegistry
+// sharedToolPredicate 判断工具是否在注册表里、且属于公共的那一份。
+func (r *Runner) sharedToolPredicate() func(string) bool {
+	return func(name string) bool {
+		if _, ok := r.registry.Get(name); !ok {
+			return false
+		}
+		return r.cfg.SharedTools == nil || r.cfg.SharedTools[name] || r.loader == nil || r.loader.core[name]
 	}
-	return r.registry
 }
 
-// newLoaders 建本次运行的按需加载状态：loader 管本轮发言者的执行，headLoader 按工具
-// 全集渲染目录和工具定义。loaded 是会话里已经加载过的工具。
-func (r *Runner) newLoaders(loaded []string) {
-	r.loader = newDeferredToolLoader(r.registry, r.cfg.CoreTools, r.cfg.FeaturedTools)
-	r.headLoader = r.loader
-	head := r.headTools()
-	if head != r.registry {
-		r.headLoader = newDeferredToolLoader(head, r.cfg.CoreTools, r.cfg.FeaturedTools)
+// speakerToolPrompt 是按发言者变化、放在历史之后的那一段的正文：本轮工具预算、只有
+// 这位发言者才有的按需工具目录和对应规则、这些工具已加载的契约。标题和这一版的编号
+// 由调用方加上。公共模式（SharedTools 为 nil）或没有内容时返回空。
+func (r *Runner) speakerToolPrompt() string {
+	if r.cfg.SharedTools == nil {
+		return ""
+	}
+	var sections []string
+	if r.cfg.MaxSteps > 0 {
+		sections = append(sections, fmt.Sprintf("【本轮工具预算】这一条回复内你最多可调用 %d 次工具（并行的每个调用各算一次）。", r.cfg.MaxSteps))
 	}
 	if r.loader != nil {
-		r.loader.head = head
-		r.loader.restore(loaded)
+		if catalog := r.loader.speakerCatalog(); catalog != "" {
+			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，按括号里的签名填参数、用 tools_execute 调用：\n"+catalog)
+		}
 	}
+	shared := r.toolRules(r.sharedToolPredicate(), false)
+	seen := make(map[string]bool, len(shared))
+	for _, rule := range shared {
+		seen[rule] = true
+	}
+	all := r.toolRules(func(name string) bool {
+		_, ok := r.registry.Get(name)
+		return ok
+	}, false)
+	var extra []string
+	for _, rule := range all {
+		if !seen[rule] {
+			extra = append(extra, rule)
+		}
+	}
+	if len(extra) > 0 {
+		sections = append(sections, "【当前发言者另有的工具规则】\n"+strings.Join(extra, "\n"))
+	}
+	if extensions := RenderExtensionsPrompt(r.registry.Extensions()); extensions != "" {
+		sections = append(sections, extensions)
+	}
+	if r.loader != nil {
+		if contracts := r.loader.loadedContracts(false); contracts != "" {
+			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
+		}
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 // dispatchAction 把模型的一次调用解开成真正要执行的工具：先拆 tools_execute 的信封、
@@ -1591,12 +1582,8 @@ func (r *Runner) systemPrompt() string {
 	if prompt := strings.TrimSpace(r.cfg.SystemPrompt); prompt != "" {
 		return prompt
 	}
-	head := r.headTools()
-	extensionsPrompt := RenderExtensionsPrompt(head.Extensions())
-	hasTool := func(name string) bool {
-		_, ok := head.Get(name)
-		return ok
-	}
+	extensionsPrompt := RenderExtensionsPrompt(r.registry.Extensions())
+	hasTool := r.sharedToolPredicate()
 	hasAnyTool := func(names ...string) bool {
 		for _, name := range names {
 			if hasTool(name) {
@@ -1605,7 +1592,7 @@ func (r *Runner) systemPrompt() string {
 		}
 		return false
 	}
-	rules := r.toolRules(hasTool)
+	rules := r.toolRules(hasTool, r.cfg.SharedTools == nil)
 	rules = append(rules, "- 已经足够回答时只调 send，发出回复并结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
@@ -1618,19 +1605,19 @@ func (r *Runner) systemPrompt() string {
 		// 联网决策先于收尾协议，避免模型先把观点类问题归入直接回答。
 		sections = append(sections[:1], append([]string{"联网与调研：\n" + webSearchDecisionPolicy}, sections[1:]...)...)
 	}
-	if loader := r.headLoader; loader != nil {
+	if loader := r.loader; loader != nil {
 		// 常驻工具的说明已经在请求的工具定义里，这里不再重复列一遍。
-		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、最后一行只列了名字、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
+		sections = append(sections, "按需加载的工具（没有随请求带完整定义，通过 tools_execute 调用：name 填下面的名字，input 按名字后括号里的参数签名填，? 结尾的参数可省，参数合法就直接执行。签名写着「参数多，先 tool_search 取定义」、或某个参数的含义拿不准时，才用 "+ToolsLoadToolName+" 取完整描述和 inputSchema。目录名称不是可直接调用的 function。说「做不到」「没这个功能」之前先看这份目录，有能做到的工具就拿来用）：\n"+loader.catalog())
 	} else {
-		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+head.SystemPromptCatalog())
+		sections = append(sections, "可用工具（完整说明和参数以请求中的工具定义为准）：\n"+r.registry.SystemPromptCatalog())
 	}
 	// 关掉的工具不在上面的目录里，单独列一段：模型不知道它们存在的话，用户点名要用时
 	// 只会以为自己拼错了名字。这段只随机器人配置变，不影响前缀缓存。
-	if disabled := head.DisabledSummary(); disabled != "" {
+	if disabled := r.registry.DisabledSummary(); disabled != "" {
 		sections = append(sections, disabled)
 	}
-	// 扩展清单同样按工具全集列出，本轮发言者用不了的调用时回没有权限。
-	if extensionsPrompt != "" {
+	// 扩展清单按发言者能用的扩展不同（主人看得到全部），共享模式下放进尾部。
+	if extensionsPrompt != "" && r.cfg.SharedTools == nil {
 		sections = append(sections, extensionsPrompt)
 	}
 	sections = append(sections, "规则：\n"+strings.Join(rules, "\n"))
@@ -2007,15 +1994,7 @@ func currentUserRequestText(req Request) string {
 			continue
 		}
 		text := strings.TrimSpace(message.Content)
-		// 当前消息是一行「[时间 #消息ID] 发送者: 正文」，取冒号后面的原话。
-		if strings.HasPrefix(text, "[") {
-			if end := strings.Index(text, "] "); end > 0 {
-				if colon := strings.Index(text[end:], ": "); colon > 0 {
-					text = strings.TrimSpace(text[end+colon+len(": "):])
-				}
-			}
-		}
-		for _, marker := range []string{"\n【被引用的消息】", "\n【指代判断选中的历史消息】", "【合并转发 "} {
+		for _, marker := range []string{"\n\n【被引用的消息】", "\n\n【指代判断选中的历史消息】", "【合并转发 "} {
 			if markerIndex := strings.Index(text, marker); markerIndex >= 0 {
 				text = text[:markerIndex]
 			}

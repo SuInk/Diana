@@ -35,7 +35,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 	if first != second {
 		t.Fatalf("history line drifted between turns: %q vs %q", first, second)
 	}
-	want := "[" + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] 轩诺: 旧问题"
+	want := "[历史 " + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] 轩诺: 旧问题"
 	if first != want {
 		t.Fatalf("history line = %q, want %q", first, want)
 	}
@@ -44,7 +44,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 	}
 	cross := event
 	cross.crossGroupContext = true
-	if got := historyPromptTextAt(cross, 1100); !strings.HasPrefix(got, "[跨群 ") {
+	if got := historyPromptTextAt(cross, 1100); !strings.HasPrefix(got, "[跨群历史 ") {
 		t.Fatalf("cross-group history line = %q", got)
 	}
 	media := agentImageHistoryPromptTextWithDescriptions(MessageEvent{
@@ -53,7 +53,7 @@ func TestHistoryLineIsByteStableAcrossTurns(t *testing.T) {
 		MessageID:  "m-2",
 		Segments:   []MessageSegment{{Type: "image", Data: map[string]string{}}},
 	}, 1100, nil)
-	if !strings.HasPrefix(media, "["+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] ") || strings.Contains(media, "距当前") {
+	if !strings.HasPrefix(media, "[历史 ") || strings.Contains(media, "距当前") {
 		t.Fatalf("media history line = %q", media)
 	}
 }
@@ -65,11 +65,11 @@ func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
 	build := func(clock string) llm.GenerateRequest {
 		return llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "稳定人设与规则"},
-			{Role: llm.RoleUser, Content: "[2026-09-03 10:00:00] 小林: 旧问题"},
+			{Role: llm.RoleUser, Content: "[历史 2026-09-03 10:00:00] 小林: 旧问题"},
 			{Role: llm.RoleAssistant, Content: "旧回复", CacheBreakpoint: true},
 			{Role: llm.RoleSystem, Content: "关系等级：熟悉"},
 			{Role: llm.RoleSystem, Content: clock},
-			{Role: llm.RoleUser, Content: "新问题"},
+			{Role: llm.RoleUser, Content: "【当前需要回复的消息】新问题"},
 		}}
 	}
 	first := observePromptCachePayload(build("当前运行时钟：10:00:00"))
@@ -93,7 +93,7 @@ func TestPromptCacheProbeIgnoresExpectedTailChurn(t *testing.T) {
 
 	// 真正的前缀断裂仍然要报：历史被改写时命中率是真的会掉。
 	broken := build("当前运行时钟：10:00:31")
-	broken.Messages[1].Content = "[2026-09-03 10:00:00] 小林: 改写过的旧问题"
+	broken.Messages[1].Content = "[历史 2026-09-03 10:00:00] 小林: 改写过的旧问题"
 	real := comparePromptCachePayload(first, observePromptCachePayload(broken))
 	if real.Segment != "messages" || real.MessageIndex != 0 || real.Expected(first) {
 		t.Fatalf("a real history rewrite must still be reported: %#v", real)
@@ -314,7 +314,7 @@ func TestReplyToolDefinitionsStableAcrossGroupSpeakers(t *testing.T) {
 }
 
 // 主人和群友在同一个群里交替说话时，发给模型的工具定义、Agent system 和人设头部
-// 必须逐字相同：前缀按工具全集渲染，预算和本轮用不了哪些在每轮一行的权限说明里（agent.Config.HeadRegistry）。
+// 必须逐字相同：主人专属工具、预算和规则都在历史之后的尾部（agent.Config.SharedTools）。
 func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
 	workDir := t.TempDir()
@@ -363,18 +363,23 @@ func TestReplyPrefixSameForOwnerAndMember(t *testing.T) {
 		}
 		t.Fatalf("prefix diverges at rune %d:\nmember: %q\nowner:  %q", i, string(a[max(0, i-80):min(len(a), i+160)]), string(b[max(0, i-80):min(len(b), i+160)]))
 	}
-	// 前缀按工具全集渲染：主人专属的规则也在里面，对谁都是同一份。
-	if !strings.Contains(member, promptTaskRepositoryWatch) {
-		t.Fatal("owner-only rules must be in the shared prefix")
+	if strings.Contains(member, promptTaskRepositoryWatch) {
+		t.Fatal("repository watch rule depends on the speaker and must stay in the tail")
 	}
-	// 群友用不了哪些写在头部，不再每轮一行权限说明。
-	if !strings.Contains(member, "【只对主人开放的工具】") {
-		t.Fatal("owner-only tool list must be in the shared prefix")
-	}
+	foundTail := false
 	for _, message := range ownerReq.Messages {
-		if strings.HasPrefix(message.Content, "【本轮发言者的工具权限】") {
-			t.Fatalf("per-turn permission note is gone: %q", message.Content)
+		foundTail = foundTail || strings.Contains(message.Content, "【当前发言者另有的按需工具】")
+	}
+	if !foundTail {
+		var names []string
+		for _, d := range ownerReq.Tools {
+			names = append(names, d.Name)
 		}
+		for i, m := range ownerReq.Messages {
+			c := []rune(m.Content)
+			t.Logf("%d %s %q", i, m.Role, string(c[:min(len(c), 80)]))
+		}
+		t.Fatalf("owner tail lost the speaker tool section; tools=%v", names)
 	}
 }
 
@@ -386,45 +391,4 @@ func (p *agentRequestRecorder) Generate(_ context.Context, req llm.GenerateReque
 		p.agent = req
 	}
 	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"action":"final","content":"好"}`}, nil
-}
-
-// runtime_model 要到建 Runner 时才注册，组装提示词时还查不到；只对主人公开模型时，
-// 头部仍要写主人那种说法，并把它列进主人专属工具，不能变成对谁都「不透露」。
-func TestReplyHeadModelDisclosureOwnerOnly(t *testing.T) {
-	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
-	workDir := t.TempDir()
-	cfg := standardModeBotConfig()
-	cfg.BotAccount, cfg.OwnerID = "10000", "10001"
-	cfg.GroupTriggers = []string{"Diana"}
-	cfg.AgentSkillRoots = []string{filepath.Join(workDir, "skills")}
-	cfg.AgentMCPConfigPath = filepath.Join(workDir, "missing-mcp.json")
-	cfg.ReplySafetyMasterEnabled = boolPointer(false)
-	cfg.ModelDisclosure = ModelDisclosureOwner
-	provider := &agentRequestRecorder{}
-	runtime := NewRuntime(cfg, &recordingChannel{}, NewDefaultPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-		return provider, nil
-	})
-	defer runtime.closeAgentRegistryCache()
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "30001", UserID: "20002", SelfID: "10000", MessageID: "m1", RawMessage: "Diana 你是什么模型", Platform: PlatformOneBotV11, Time: time.Now().Unix()}
-	if _, err := runtime.replyTo(context.Background(), event, event.RawMessage); err != nil {
-		t.Fatal(err)
-	}
-	var head strings.Builder
-	for _, message := range provider.agent.Messages {
-		if message.Role != llm.RoleSystem {
-			break
-		}
-		head.WriteString(message.Content + "\n")
-	}
-	prefix := head.String()
-	if !strings.Contains(prefix, "是主人或主人指定的管理员时："+promptToolRuntimeModel) {
-		t.Fatal("head must tell owners to look the model up")
-	}
-	if !strings.Contains(prefix, "其他人问起时："+promptModelUndisclosed) {
-		t.Fatal("head must keep the model hidden from everyone else")
-	}
-	_, list, _ := strings.Cut(prefix, "【只对主人开放的工具】")
-	if list, _, _ = strings.Cut(list, "。"); !strings.Contains(list, dianaRuntimeModelToolName) {
-		t.Fatalf("runtime_model missing from owner-only tools: %q", list)
-	}
 }

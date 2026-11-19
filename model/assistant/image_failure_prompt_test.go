@@ -39,26 +39,18 @@ func (p *blindVisionProvider) Generate(_ context.Context, req llm.GenerateReques
 	return asSendReply(req, &llm.GenerateResponse{Model: "blind", Text: "好的喵"}), nil
 }
 
-// currentMessages 取每次主回复请求里的当前消息：这一轮的注解，和它后面的当前消息那一行
-// （Agent 模式下 Runner 会在两者之间插入发言者工具环境、工具执行状态）。
-func (p *blindVisionProvider) currentMessages() (notes, lines []llm.Message) {
+func (p *blindVisionProvider) currentMessages() []llm.Message {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	var out []llm.Message
 	for _, request := range p.requests {
-		for index, message := range request.Messages {
-			if message.Role != llm.RoleUser || !isCurrentMessageNotes(message) {
-				continue
-			}
-			for _, next := range request.Messages[index+1:] {
-				if next.Role == llm.RoleUser && !strings.HasPrefix(next.Content, "【") {
-					notes = append(notes, message)
-					lines = append(lines, next)
-					break
-				}
+		for _, message := range request.Messages {
+			if message.Role == llm.RoleUser && strings.Contains(message.Content, "【当前需要回复的消息】") {
+				out = append(out, message)
 			}
 		}
 	}
-	return notes, lines
+	return out
 }
 
 // TestReplyPromptExplainsImageFailure 端到端跑一遍真实回复路径：视觉模型说没收到图时，
@@ -83,20 +75,18 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	messages, lines := provider.currentMessages()
+	messages := provider.currentMessages()
 	if len(messages) == 0 {
 		t.Fatal("the chat model never received the current message")
 	}
 	found := false
-	for index, message := range messages {
+	for _, message := range messages {
 		if !strings.Contains(message.Content, "【图片处理情况") {
 			continue
 		}
 		found = true
-		// 说明在这一轮的注解里，用户的原话和原图在紧跟其后的那一行上。
-		line := lines[index]
-		if !strings.Contains(line.Content, event.RawMessage) || strings.Contains(line.Content, "【图片处理情况") {
-			t.Fatalf("the notice replaced the user's own text:\n%s", line.Content)
+		if !strings.Contains(message.Content, event.RawMessage) {
+			t.Fatalf("the notice replaced the user's own text:\n%s", message.Content)
 		}
 		for _, want := range []string{"图没能送进识图模型", "不要说没收到图片"} {
 			if !strings.Contains(message.Content, want) {
@@ -104,10 +94,10 @@ func TestReplyPromptExplainsImageFailure(t *testing.T) {
 			}
 		}
 		// 原图还挂在这条消息上，所以措辞不能替模型断言它看不了图。
-		if !llmMessageHasImagePart(line) {
-			t.Fatalf("the raw image left the current message:\n%s", line.Content)
+		if !llmMessageHasImagePart(message) {
+			t.Fatalf("the raw image left the current message:\n%s", message.Content)
 		}
-		if !strings.Contains(message.Content, "原图附在要回复的那条消息上") {
+		if !strings.Contains(message.Content, "原图仍附在本条消息里") {
 			t.Fatalf("notice ignored the still-attached image:\n%s", message.Content)
 		}
 	}

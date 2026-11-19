@@ -93,7 +93,7 @@ func TestPromptHistoryPreservesCachedCrossGroupIdentityWithoutSearching(t *testi
 
 // 线上那次：群里刚聊完 issue，主人说「我又忘了」，跨群检索捞到他在另一个群问的
 // 「我又忘了滚木啥意思了」。接话评分的对话稿不标来源，这句被当成本群 38 分钟前说的。
-// 判断类的调用只看本会话；跨群参考仍留给回复正文，那里带「[跨群 …]」标记。
+// 判断类的调用只看本会话；跨群参考仍留给回复正文，那里带「[跨群历史]」标记。
 func TestJudgementPayloadsExcludeCrossGroupReferences(t *testing.T) {
 	cfg := BotConfig{BotAccount: "10001", CrossGroupMemoryEnabled: boolPointer(true)}
 	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

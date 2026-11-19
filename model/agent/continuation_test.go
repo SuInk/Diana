@@ -24,7 +24,7 @@ func continuationTestMessages(current string) []llm.Message {
 // 第二轮续接时，发出的请求必须以第一轮的记录逐条开头，后面才是新内容，当前消息最后。
 func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, HeadRegistry: NewToolRegistry(&describedTool{"coding", "仅主人"})}, NewToolRegistry())
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2, SharedTools: map[string]bool{}}, NewToolRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +63,22 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 			t.Fatalf("prefix differs at %d:\n got %#v\nwant %#v", index, got, message)
 		}
 	}
-	if sent[lastKeptIndex(sent)].Content != "第二问" {
-		t.Fatalf("current message is not the last kept message: %#v", sent)
+	if sent[len(sent)-1].Content != "第二问" {
+		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
+	}
+	// 发言者工具环境在重新组装那一轮进前缀；第二轮和它相同，不再发，整份请求里只有
+	// 前缀里的那一份。时钟每轮都变，不进前缀。
+	environments := 0
+	for _, message := range sent {
+		if isSpeakerToolEnvironment(message) {
+			environments++
+			if message.TurnOnly {
+				t.Fatalf("the environment kept from the prefix must not be turn-only: %#v", message)
+			}
+		}
+	}
+	if environments != 1 {
+		t.Fatalf("unchanged environment repeated: %d blocks", environments)
 	}
 	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
 		for _, message := range transcript {
@@ -72,6 +86,39 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 				t.Fatalf("turn-only state leaked into the prefix: %#v", message)
 			}
 		}
+	}
+}
+
+// 发言者工具环境每一版在会话里只发一次：前缀或本轮已追加的内容里有过就省略，没有
+// 的追加并留在前缀里（不是只用于本轮）。别的逐轮消息不受影响。
+func TestContinuationVolatileSendsEachEnvironmentOnce(t *testing.T) {
+	env := func(id string) llm.Message {
+		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + id}
+	}
+	a, b := env("A"), env("B")
+	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now", TurnOnly: true}
+	note := llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "B", TurnOnly: true}
+	for _, tc := range []struct {
+		name                             string
+		prefix, appended, volatile, want []llm.Message
+	}{
+		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
+		{"new version is kept", []llm.Message{a}, nil, []llm.Message{b, note, clock}, []llm.Message{b, note, clock}},
+		{"older version still in the prefix", []llm.Message{a}, []llm.Message{b}, []llm.Message{a}, []llm.Message{}},
+		{"no baseline", nil, nil, []llm.Message{a}, []llm.Message{a}},
+		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
+		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{a}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := append([]llm.Message(nil), tc.prefix...)
+			got := continuationVolatile(tc.prefix, tc.appended, tc.volatile)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %#v, want %#v", got, tc.want)
+			}
+			if !reflect.DeepEqual(before, tc.prefix) {
+				t.Fatal("historical prefix mutated")
+			}
+		})
 	}
 }
 
@@ -100,39 +147,6 @@ func TestRunnerContinuationFallsBackOnKeyMismatch(t *testing.T) {
 		if message.Content == "旧的" {
 			t.Fatal("stale prefix leaked into the request")
 		}
-	}
-}
-
-// 头部锁定时会话键对不上也续接：前缀里的旧头部和调用方存的工具定义原样发，本轮
-// 渲染出来的不用，返回的键和定义也还是锁定的那份。
-func TestRunnerContinuationLockedHeadIgnoresKeyMismatch(t *testing.T) {
-	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 2}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	locked := []llm.ToolDefinition{{Name: "locked_marker", Parameters: map[string]any{"type": "object"}}}
-	resp, err := runner.Run(context.Background(), Request{
-		Messages: continuationTestMessages("问题"),
-		Continuation: &Continuation{
-			Prefix:      []llm.Message{{Role: llm.RoleSystem, Content: "锁定的旧头部"}},
-			Append:      []llm.Message{{Role: llm.RoleUser, Content: "问题"}},
-			Key:         "locked-key",
-			Definitions: locked,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resp.Continued || resp.ConversationKey != "locked-key" || len(resp.Definitions) != len(locked) {
-		t.Fatalf("a locked head must continue under the locked key: continued=%v key=%q", resp.Continued, resp.ConversationKey)
-	}
-	request := client.requests[len(client.requests)-1]
-	if request.Messages[0].Content != "锁定的旧头部" {
-		t.Fatalf("head = %q", request.Messages[0].Content)
-	}
-	if !reflect.DeepEqual(request.Tools, locked) {
-		t.Fatalf("tools must be the locked definitions: %#v", request.Tools)
 	}
 }
 
@@ -280,32 +294,92 @@ func contractTestRunner(t *testing.T, client llm.LLMClient, names ...string) *Ru
 	return runner
 }
 
-// 已加载工具的契约不进前缀：群里又加载了一个工具，续接照旧，请求里也没有契约块。
-// 以前契约常驻在历史之前（生产 11-15 平均 7.7 千字），要用的工具现在当轮 tool_search 取。
-func TestRunnerContinuationKeepsContractsOutOfPrefix(t *testing.T) {
+func contractMessagesIn(messages []llm.Message) (blocks []string) {
+	for _, message := range messages {
+		if strings.HasPrefix(message.Content, systemNoteHeader) && strings.Contains(message.Content, sharedContractsLead) {
+			blocks = append(blocks, message.Content)
+		}
+	}
+	return blocks
+}
+
+// 群里又加载了一个工具时，续接照旧：历史之前的契约块一个字不改，新契约接在尾部，
+// 再下一轮不重复发。以前契约算在续接指纹里，多加载一个工具就整条重新组装，契约块
+// 排在历史之前，它一变后面的缓存全部作废。
+func TestRunnerContinuationAppendsNewlyLoadedContract(t *testing.T) {
 	client := &silentFinalizeClient{arguments: map[string]any{"text": "好"}}
 	runner := contractTestRunner(t, client, "platform", "bot_config")
 	first, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("第一问"), LoadedTools: []string{"platform"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := runner.Run(context.Background(), Request{
-		Messages:     continuationTestMessages("第二问"),
-		LoadedTools:  []string{"platform", "bot_config"},
-		Continuation: &Continuation{Prefix: first.Transcript, Append: []llm.Message{{Role: llm.RoleUser, Content: "第二问"}}, Key: first.ConversationKey},
-	})
-	if err != nil {
-		t.Fatal(err)
+	if blocks := contractMessagesIn(first.Transcript); len(blocks) != 1 || !strings.Contains(blocks[0], `"name":"platform"`) || strings.Contains(blocks[0], "bot_config") {
+		t.Fatalf("first contract blocks = %q", blocks)
 	}
-	if !second.Continued {
-		t.Fatal("loading one more tool must not break the continuation")
-	}
-	for _, request := range client.requests {
-		for _, message := range request.Messages {
-			if strings.Contains(message.Content, `"inputSchema"`) {
-				t.Fatalf("a loaded contract was sent in the prompt: %.200q", message.Content)
-			}
+	next := func(prefix []llm.Message, key, current string) *Response {
+		t.Helper()
+		resp, err := runner.Run(context.Background(), Request{
+			Messages:     continuationTestMessages(current),
+			LoadedTools:  []string{"platform", "bot_config"},
+			Continuation: &Continuation{Prefix: prefix, Append: []llm.Message{{Role: llm.RoleUser, Content: current}}, Key: key},
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
+		if !resp.Continued {
+			t.Fatalf("loading one more tool must not break the continuation (key %s -> %s)", key, resp.ConversationKey)
+		}
+		return resp
+	}
+	second := next(first.Transcript, first.ConversationKey, "第二问")
+	sent := client.requests[1].Messages
+	for index, message := range first.Transcript {
+		got := sent[index]
+		got.CacheBreakpoint = false
+		if !reflect.DeepEqual(got, message) {
+			t.Fatalf("prefix changed at %d:\n got %#v\nwant %#v", index, got, message)
+		}
+	}
+	blocks := contractMessagesIn(sent)
+	if len(blocks) != 2 || !strings.Contains(blocks[1], `"name":"bot_config"`) || strings.Contains(blocks[1], `"name":"platform"`) {
+		t.Fatalf("the new contract must be appended alone: %q", blocks)
+	}
+	if sent[len(sent)-1].Content != "第二问" {
+		t.Fatalf("current message is not last: %#v", sent[len(sent)-1])
+	}
+	next(second.Transcript, second.ConversationKey, "第三问")
+	if blocks := contractMessagesIn(client.requests[2].Messages); len(blocks) != 2 {
+		t.Fatalf("a delivered contract was sent again: %d blocks", len(blocks))
+	}
+}
+
+// 前缀里有、当前发言者却用不了的契约留在原处，补一句说明。说明是当前发言者的状态，
+// 只用于本轮：用不了时每轮都发，都能用时不发——前缀里不留上一位发言者的那句。
+func TestContractDeltaMarksAvailabilityTurnOnly(t *testing.T) {
+	platform := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管","inputSchema":{}}`}
+	config := loadedContract{name: "bot_config", raw: `{"name":"bot_config","description":"配置","inputSchema":{}}`}
+	prefix := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设"},
+		{Role: llm.RoleUser, Content: sharedContractsMessage(renderLoadedContracts([]loadedContract{platform, config})) + "\n\n## Skills"},
+	}
+	if delta := contractDelta([]loadedContract{platform, config}, prefix, nil); len(delta) != 0 {
+		t.Fatalf("nothing changed, nothing to append: %#v", delta)
+	}
+	// 普通成员：bot_config 用不了，连着两轮都要说。
+	for round := 0; round < 2; round++ {
+		delta := contractDelta([]loadedContract{platform}, prefix, nil)
+		if len(delta) != 1 || delta[0].Role != llm.RoleSystem || !delta[0].TurnOnly || !strings.Contains(delta[0].Content, "用不了：bot_config。") {
+			t.Fatalf("round %d: blocked contract notice = %#v", round, delta)
+		}
+	}
+	// 定义变了的契约按新的再发一次，这一条留在前缀里。
+	changed := loadedContract{name: "platform", raw: `{"name":"platform","description":"群管（新）","inputSchema":{}}`}
+	delta := contractDelta([]loadedContract{changed, config}, prefix, nil)
+	if len(delta) != 1 || delta[0].TurnOnly || !strings.Contains(delta[0].Content, "群管（新）") || strings.Contains(delta[0].Content, "bot_config") {
+		t.Fatalf("changed contract delta = %#v", delta)
+	}
+	if got := deliveredContracts(append(prefix[:2:2], delta...)); got["platform"] != changed.raw {
+		t.Fatalf("latest delivery must win: %q", got["platform"])
 	}
 }
 

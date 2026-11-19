@@ -143,12 +143,11 @@ type Config struct {
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
-	// HeadRegistry 是渲染进系统提示词、工具定义和历史之前契约块的工具全集：同一个群里
-	// 对谁都是这一份（主人、管理员、成员能用的都列出来），换人说话前缀不变。它只用来
-	// 渲染、从不执行：执行照旧走本轮发言者自己的注册表，权限在执行时核验，本轮发言者
-	// 用不了的调用时回没有权限（见 deniedToolError）。
-	// nil 时用执行注册表。
-	HeadRegistry *ToolRegistry
+	// SharedTools 列出「按需目录里对谁都一样」的工具：它们的目录行和使用规则进系统
+	// 提示词，已加载契约放在历史之前。注册表里其余工具（主人专属、群管理员才放开的
+	// 扩展等）按发言者变化，目录行、规则和契约都放进历史之后的尾部，免得主人和群友
+	// 交替说话时整段前缀缓存从工具目录处断开。nil 表示全部当作公共工具。
+	SharedTools map[string]bool
 	// FeaturedTools 在按需目录里写完整描述而不是压成一行：常用、或者「什么时候该用」
 	// 只写在描述里的工具（戳一戳、群管），压短了模型就不会想到去加载。
 	FeaturedTools []string
@@ -183,10 +182,6 @@ type Continuation struct {
 	Prefix []llm.Message
 	Append []llm.Message
 	Key    string
-	// Definitions 是会话第一次组装时的工具定义。非空表示头部按哈希锁定：Runner 不再拿
-	// 本轮渲染出的系统提示、固定说明和工具定义去比 Key，前缀和这份定义原样复用，
-	// 本轮渲染出来的头部就算变了也不用，等调用方因为别的原因重新组装时再换。
-	Definitions []llm.ToolDefinition
 }
 
 type Response struct {
@@ -213,9 +208,6 @@ type Response struct {
 	ConversationKey string `json:"-"`
 	// Continued 表示这一轮是在上一轮的请求后面续接的。
 	Continued bool `json:"continued,omitempty"`
-	// Definitions 是这个会话头部的工具定义（不含本轮途中因排了生图任务而改的收尾
-	// 定义），调用方存下来，下一轮续接时放进 Continuation.Definitions 锁定头部。
-	Definitions []llm.ToolDefinition `json:"-"`
 	// PromptTokens 是这一轮第一次请求的消息估算 token 数，含 Runner 自己加的系统
 	// 提示、已加载契约和尾部工具段。调用方只看得到自己组装的那部分，续接时拿它
 	// 判断请求比完整组装长了多少。

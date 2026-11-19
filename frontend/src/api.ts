@@ -236,8 +236,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
   llm_identity_body_account_mapping_enabled?: boolean;
   llm_secret_masking_enabled?: boolean;
-  /** 主回复里几块背景各自怎么带：always 总是（默认）、on_demand 按需（不带，提示模型用工具查）、off 关闭。没设的按总是。 */
-  context_block_modes?: Record<string, "always" | "on_demand" | "off">;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
@@ -1982,13 +1980,6 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
-/** 请求构成的一块，按它在真实请求里的身份分：prefix 锁定的头部，history 只追加的聊天历史，state 进前缀的状态段，turn_only 只用于本轮、下一轮撤掉的段。 */
-export interface ReplyContextSegment { name: string; kind: "prefix" | "history" | "state" | "turn_only"; tokens: number; /** 这一轮新发的部分：和上一轮实际请求开头相同的不算。 */ new_tokens: number }
-export interface ReplyContextBreakdown { sessions: number; saved_at?: string; total_tokens: number; new_tokens: number; input_tokens?: number; cached_tokens?: number; segments: ReplyContextSegment[]; context_window: number; compaction_threshold: number }
-/** 这台机器人各会话上一轮主回复请求平均下来的构成；最近 24 小时没回复过就没有 breakdown。 */
-export function getReplyContext(profile: string): Promise<{breakdown?: ReplyContextBreakdown}> {
-  return requestJSON(`/api/assistant/reply-context?${new URLSearchParams({profile}).toString()}`);
-}
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
 }

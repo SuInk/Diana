@@ -210,13 +210,6 @@ func (r *Runtime) promptSenderGroupRole(ctx context.Context, event MessageEvent)
 // currentSpeakerGroupContext 只描述当前群、当前发言者，不为展示触发接口查询。
 // 消息未带身份且无有效缓存时保留未知，不能套用权限展示的普通成员回落值。
 func (r *Runtime) currentSpeakerGroupContext(event MessageEvent, cfg BotConfig) string {
-	return r.speakerGroupContext(event, cfg, false)
-}
-
-// speakerGroupContext 在 privilegedOnly 时只给群主和管理员写这一段：主回复请求只追加，
-// 普通成员和未知每换一个发言者就要追加一版，却说不出什么，头部改写一句
-// replySpeakerGroupRule 说明没写的怎么看。
-func (r *Runtime) speakerGroupContext(event MessageEvent, cfg BotConfig, privilegedOnly bool) string {
 	if event.Kind != EventKindGroup || strings.TrimSpace(event.GroupID) == "" || strings.TrimSpace(event.UserID) == "" {
 		return ""
 	}
@@ -231,9 +224,6 @@ func (r *Runtime) speakerGroupContext(event MessageEvent, cfg BotConfig, privile
 			}
 		}
 	}
-	if privilegedOnly && role != GroupRoleOwner && role != GroupRoleAdmin {
-		return ""
-	}
 	label := GroupRoleLabel(role)
 	if label == "" {
 		label = "未知"
@@ -242,9 +232,6 @@ func (r *Runtime) speakerGroupContext(event MessageEvent, cfg BotConfig, privile
 		"group_id": event.GroupID, "user_id": event.UserID, "role": label, "source": source,
 	})
 }
-
-// replySpeakerGroupRule 是主回复头部模式下群身份的固定说明，见 speakerGroupContext。
-const replySpeakerGroupRule = "发言者是群主或管理员时，消息附近会有一段【当前发言者群身份】；没有这段的按普通群成员看待（也可能没核验过）。群身份不代表机器人主人身份，群管操作仍由工具实时核验。"
 
 var promptCurrentSpeakerGroupSpec = tailSpec("speaker_group_identity", "当前发言者的群身份", "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。",
 	"【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。仅描述本轮当前群，不代表机器人主人身份；群管操作仍由工具实时核验。",

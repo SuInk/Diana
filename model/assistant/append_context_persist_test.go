@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -41,7 +40,7 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	reasoning := "opaque"
 	prefix := []llm.Message{
 		{Role: llm.RoleSystem, Content: "人设", Priority: llm.MessagePrioritySystem},
-		{Role: llm.RoleUser, Content: "[2026-11-15 10:00:00 #1] 甲: 你好", CacheBreakpoint: true, Priority: llm.MessagePriorityHistory, ContextGroup: "g", AtomicText: true},
+		{Role: llm.RoleUser, Content: "[历史 1] 甲: 你好", CacheBreakpoint: true, Priority: llm.MessagePriorityHistory, ContextGroup: "g", AtomicText: true},
 		{Role: llm.RoleUser, Content: "【关系、权限与分层长期记忆】\n- [偏好｜甲] 喜欢猫"},
 		{Role: llm.RoleAssistant, ContinuationScope: "responses:model", ReasoningContent: &reasoning,
 			ResponsesOutput:   []json.RawMessage{json.RawMessage(`{"type":"reasoning","encrypted_content":"abc"}`)},
@@ -50,9 +49,7 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		{Role: llm.RoleTool, Content: "已发送", ToolCallID: "c1", ToolName: "send"},
 		{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "看图"}, {Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,AA"}}},
 	}
-	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234,
-		definitions: []llm.ToolDefinition{{Name: "codemode", Description: "跑脚本", Parameters: map[string]any{"type": "object"},
-			Freeform: &llm.FreeformTool{Field: "code", Grammar: "start: /.+/", Hint: "写脚本"}}}}
+	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234}
 	original.index()
 
 	var store appendContextStore
@@ -68,16 +65,11 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	if !reflect.DeepEqual(loaded.prefix, original.prefix) {
 		t.Fatalf("读回的前缀和原来不一样：\n got %#v\nwant %#v", loaded.prefix, original.prefix)
 	}
-	// 锁定头部的工具定义要逐字读回，Freeform 也不能丢。
-	if !reflect.DeepEqual(loaded.definitions, original.definitions) {
-		t.Fatalf("定义没读回：%#v", loaded.definitions)
-	}
 	if loaded.key != original.key || loaded.headKey != original.headKey || loaded.overhead != original.overhead {
 		t.Fatalf("键或开销没读回：%q %q %d", loaded.key, loaded.headKey, loaded.overhead)
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
-		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.pieces, original.pieces) ||
-		!reflect.DeepEqual(loaded.ids, original.ids) || !loaded.ids["1"] || loaded.historyDate != "2026-11-15" {
+		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.pieces, original.pieces) {
 		t.Fatal("由前缀算出的表和原来不一样")
 	}
 	// 同一个会话只读一次盘：读回后就在内存里。
@@ -194,83 +186,4 @@ func TestReplyContinuesAcrossRestart(t *testing.T) {
 			t.Fatalf("重启后前缀在第 %d 条分叉：\n got %s: %.200q\nwant %s: %.200q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
 		}
 	}
-}
-
-// 续接记录读回的是换号之前的原文，重启后号码表是空的：第一轮还不认识、按原号发出去的
-// 号码，重启后这一轮认识了，没有落盘的「发过的正文」就会被换成别名，前缀从那里断开
-// （11-18 canary.33 重启后的几个小时）。发过的正文随记录落盘，重启后照原样发。
-func TestReplyPrivacyBytesSurviveRestart(t *testing.T) {
-	enableAppendContextPersist(t)
-	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
-	enabled := true
-	newRuntime := func(reply string) (*Runtime, *sequenceLLMProvider) {
-		provider := &sequenceLLMProvider{replies: []string{`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"` + reply + `"}}]`}}
-		runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", LLMIdentityMaskingEnabled: &enabled}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
-			return provider, nil
-		})
-		return runtime, provider
-	}
-	replyRequest := func(t *testing.T, provider *sequenceLLMProvider) llm.GenerateRequest {
-		t.Helper()
-		var out []llm.GenerateRequest
-		for _, request := range provider.requestsSnapshot() {
-			if len(request.Tools) > 0 {
-				out = append(out, request)
-			}
-		}
-		if len(out) != 1 {
-			t.Fatalf("reply requests = %d", len(out))
-		}
-		return out[0]
-	}
-	const text = "老群友 4671742 昨天也问过"
-	before, firstProvider := newRuntime("在的")
-	first := interimTestEvent()
-	first.MessageID, first.RawMessage = "restart-1", text
-	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
-	if _, err := before.replyTo(t.Context(), first, first.RawMessage); err != nil {
-		t.Fatal(err)
-	}
-	before.appendContexts.disk.waitIdle()
-	firstRequest := replyRequest(t, firstProvider)
-	if !strings.Contains(llmMessagesText(firstRequest.Messages), "4671742") {
-		t.Fatal("test setup: the number is unknown in the first turn and goes out as written")
-	}
-
-	after, secondProvider := newRuntime("吃过了")
-	before.mu.Lock()
-	after.aliasSalt = before.aliasSalt
-	before.mu.Unlock()
-	after.remember(first)
-	// 重启后这个号自己来说话，号码表认识它了。
-	second := interimTestEvent()
-	second.UserID, second.SenderName = "4671742", "Bob"
-	second.MessageID, second.RawMessage, second.Time = "restart-2", "我来了", first.Time+30
-	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "我来了"}}}
-	if _, err := after.replyTo(t.Context(), second, second.RawMessage); err != nil {
-		t.Fatal(err)
-	}
-	after.appendContexts.disk.waitIdle()
-	prefix, next := withoutTurnOnly(firstRequest.Messages), replyRequest(t, secondProvider).Messages
-	if len(next) <= len(prefix) {
-		t.Fatalf("重启后的请求没有接在上一轮后面：%d vs %d", len(next), len(prefix))
-	}
-	for index, message := range prefix {
-		got, want := next[index], message
-		if got.Role != want.Role || appendContextText(got) != appendContextText(want) {
-			t.Fatalf("重启后发出的前缀在第 %d 条分叉：\n got %s: %.300q\nwant %s: %.300q", index, got.Role, appendContextText(got), want.Role, appendContextText(want))
-		}
-	}
-	if strings.Contains(appendContextText(next[len(next)-1]), "4671742") {
-		t.Fatalf("new text must use this turn's aliases: %q", appendContextText(next[len(next)-1]))
-	}
-}
-
-func llmMessagesText(messages []llm.Message) string {
-	var builder strings.Builder
-	for _, message := range messages {
-		builder.WriteString(appendContextText(message))
-		builder.WriteString("\n")
-	}
-	return builder.String()
 }

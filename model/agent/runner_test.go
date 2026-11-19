@@ -518,8 +518,8 @@ func TestRunnerSkillsCatalogSitsBeforeHistory(t *testing.T) {
 	if catalogIndex != 2 || !strings.Contains(messages[1].Content, "人设提示词") || !strings.Contains(messages[3].Content, "旧问题") {
 		t.Fatalf("catalog should sit between the persona and history, got %d: %#v", catalogIndex, messages)
 	}
-	if !strings.Contains(messages[lastKeptIndex(messages)].Content, "【当前需要回复的消息】") {
-		t.Fatalf("current turn is no longer the last kept message: %#v", messages)
+	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
+		t.Fatalf("current turn is no longer last: %#v", messages)
 	}
 }
 
@@ -595,8 +595,7 @@ func TestRunnerKeepsTrustedRuntimeClockOutsideStableProtocol(t *testing.T) {
 		t.Fatalf("requests = %#v", client.requests)
 	}
 	protocol := client.requests[0].Messages[0].Content
-	// 只用于本轮的时钟挪到了当前消息后面（见 turnOnlyAfterCurrent）。
-	clock := client.requests[0].Messages[len(client.requests[0].Messages)-1].Content
+	clock := client.requests[0].Messages[1].Content
 	if strings.Contains(protocol, "当前运行时钟") {
 		t.Fatalf("volatile clock leaked into stable protocol: %s", protocol)
 	}
@@ -621,13 +620,12 @@ func TestRunnerAppendsVolatileClockAfterCallerPrompt(t *testing.T) {
 	if !strings.Contains(messages[1].Content, "人设提示词") || !strings.Contains(messages[2].Content, "【历史参考消息】") {
 		t.Fatalf("caller prompt was displaced: %#v", messages)
 	}
-	// 只用于本轮的时钟挪到当前消息后面，下一轮前缀能一直复用到当前消息。
-	if lastKeptIndex(messages) != 3 || !strings.Contains(messages[len(messages)-1].Content, RuntimeClockMarker) {
-		t.Fatalf("clock is not after the current turn: %#v", messages)
+	if !strings.Contains(messages[3].Content, RuntimeClockMarker) {
+		t.Fatalf("clock is not in the trailing block: %#v", messages)
 	}
 	// 当前消息必须仍是最后一条，下游按最后下标判定当前轮。
-	if !strings.Contains(messages[lastKeptIndex(messages)].Content, "【当前需要回复的消息】") {
-		t.Fatalf("current turn is no longer the last kept message: %#v", messages)
+	if !strings.Contains(messages[len(messages)-1].Content, "【当前需要回复的消息】") {
+		t.Fatalf("current turn is no longer last: %#v", messages)
 	}
 }
 
@@ -1327,14 +1325,4 @@ func TestUnboundedToolStillInheritsCancellation(t *testing.T) {
 	if !ok || !got.Equal(want) {
 		t.Fatal("explicit parent deadline was detached")
 	}
-}
-
-// lastKeptIndex 是最后一条会留进续接前缀的消息：当前消息。只用于本轮的消息排在它后面。
-func lastKeptIndex(messages []llm.Message) int {
-	for index := len(messages) - 1; index >= 0; index-- {
-		if !messages[index].TurnOnly {
-			return index
-		}
-	}
-	return len(messages) - 1
 }

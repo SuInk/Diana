@@ -218,7 +218,7 @@ var imageFailureExplanations = map[string]*PromptSpec{
 }
 
 var (
-	promptImageFailureAttachedSpec = imageFailureSpec("attached", "识图失败但原图仍在", "识图失败、但原图仍附在这一轮请求里时追加：能看到就正常回应。", "原图附在要回复的那条消息上：你能看到就当普通图片正常回应，不必提这段说明。")
+	promptImageFailureAttachedSpec = imageFailureSpec("attached", "识图失败但原图仍在", "识图失败、但原图仍附在这一轮请求里时追加：能看到就正常回应。", "原图仍附在本条消息里：你能看到就当普通图片正常回应，不必提这段说明。")
 	// 以前这里要求「一句日常说法带过，不解释原因」，结果线上只会说「图没加载出来，
 	// 你重发一下」，谁也看不出是识图出了什么问题。现在要求照实报错。
 	promptImageFailureGuidanceSpec = imageFailureSpec("guidance", "识图失败时怎么说", "有图识别失败时附在说明末尾：看不到就照实说明是识图哪里出了问题，不说对方没发图。",

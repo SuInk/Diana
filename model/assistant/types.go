@@ -916,10 +916,7 @@ type BotConfig struct {
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	// ContextBlockModes 按块设主回复要不要带：always（默认）、on_demand（不带，头部提示用
-	// 工具查）、off。键和规则见 context_block_modes.go。
-	ContextBlockModes         map[string]string `json:"context_block_modes,omitempty"`
-	LLMIdentityMaskingEnabled *bool             `json:"llm_identity_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
 	// LLMIdentityBodyAccounts 让隐私代理连正文里直接写的账号数字一起换成别名：只换
 	// 核实过是本群成员的号，其余数字原样保留。隐私代理关掉时它不起作用。
 	LLMIdentityBodyAccounts *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
@@ -1660,13 +1657,12 @@ type ConfigPayload struct {
 	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
 	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
 	// 显式 false 保留用户选择，未配置时使用默认值。
-	LLMStreamingEnabled          *bool             `json:"llm_streaming_enabled,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool             `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int               `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	ContextBlockModes            map[string]string `json:"context_block_modes,omitempty"`
-	LLMIdentityMaskingEnabled    *bool             `json:"llm_identity_masking_enabled,omitempty"`
-	LLMIdentityBodyAccounts      *bool             `json:"llm_identity_body_account_mapping_enabled,omitempty"`
-	LLMSecretMaskingEnabled      *bool             `json:"llm_secret_masking_enabled,omitempty"`
+	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
+	LLMSecretMaskingEnabled      *bool `json:"llm_secret_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
 	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
 	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
@@ -3015,7 +3011,6 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMStreamingEnabled:             copyBoolPointer(cfg.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
-		ContextBlockModes:               normalizeContextBlockModes(cfg.ContextBlockModes),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(cfg.LLMSecretMaskingEnabled),
@@ -3275,7 +3270,6 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMStreamingEnabled:             copyBoolPointer(payload.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           payload.RecallReplyTTLSeconds,
-		ContextBlockModes:               normalizeContextBlockModes(payload.ContextBlockModes),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(payload.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(payload.LLMSecretMaskingEnabled),
@@ -3520,7 +3514,7 @@ const (
 	defaultPromptWakeOnly            = "对方只是叫了你一声（@ 你或者喊了你的名字），没说别的。这不是在问你在不在——别回「我在」「在呢」「怎么了」这类应答，那是接线员不是熟人。先看前面几条在聊什么：话没说完就接着说，刚才在闹就继续闹，对方像是要你注意某件事就说那件事。实在没有上文可接，就说一句有内容的短话——一句吐槽、一个反应、一个具体的问题都行，别只报到。不要复述这条规则，也不要解释自己为什么被叫。"
 )
 
-const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合要回复的那条消息覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
 const (
 	defaultProactiveReplyChance    = 1.0

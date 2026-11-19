@@ -52,6 +52,8 @@ func visiblePromptHistory(event MessageEvent, history []MessageEvent) []MessageE
 // context_compaction.go。
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
 	window := r.promptCompactionWindow(event, cfg)
+	candidateLimit := historyCandidateLimit(window)
+	session := sessionKey(event)
 	anchorKey := compactionAnchorKey(event)
 	if anchor := r.groupPromptSession(event).anchor(); anchor != "" {
 		r.setHistoryWindowAnchor(anchorKey, anchor)
@@ -59,9 +61,35 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 	anchor := r.historyWindowAnchor(anchorKey)
 	checkpoint := r.compactionState(event)
 
-	history := r.loadSessionHistory(event, window, func(history []MessageEvent) bool {
-		return historyCoversCheckpoint(history, anchor, checkpoint)
-	})
+	r.mu.RLock()
+	memory := append([]MessageEvent(nil), r.history[session]...)
+	if event.Kind == EventKindGroup {
+		if buffer, ok := r.groupPromptHistory[groupPromptSessionKey(event)]; ok {
+			memory = append([]MessageEvent(nil), buffer.Events...)
+		}
+	}
+	store := r.messageStore
+	r.mu.RUnlock()
+
+	var history []MessageEvent
+	// 机器人很久没说话、群里一直在聊时，锚之后的历史会多过按阈值换算的条数。锚（或
+	// 摘要之后的那段）没读全就加倍往前读，直到接上或存储里已经没有更早的。
+	for limit := candidateLimit; ; limit *= 2 {
+		stored := []MessageEvent(nil)
+		if store != nil {
+			loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			var err error
+			stored, err = listContextMessageEvents(loadCtx, store, session, limit)
+			cancel()
+			if err != nil {
+				log.Printf("diana context history load failed: %v", err)
+			}
+		}
+		history = visiblePromptHistory(event, mergeMessageHistory(memory, stored, limit))
+		if store == nil || len(stored) < limit || historyCoversCheckpoint(history, anchor, checkpoint) {
+			break
+		}
+	}
 	selected := r.sessionHistoryWindow(event, history, cfg.BotAccount, window)
 	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
 		return selected
@@ -75,48 +103,10 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 				crossGroup = append(crossGroup, item)
 			}
 		}
-	} else if store := r.currentMessageStore(); store != nil {
+	} else if store != nil {
 		crossGroup = r.crossGroupContextEvents(event, store)
 	}
 	return mergeCrossGroupContextHistory(selected, crossGroup)
-}
-
-func (r *Runtime) currentMessageStore() MessageHistoryStore {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.messageStore
-}
-
-// loadSessionHistory 读这个会话的历史（内存缓冲合并存储）。covers 报告读到的够不够：
-// 不够就加倍往前读，直到够了或存储里已经没有更早的。机器人很久没说话、群里一直在聊
-// 时，锚之后的历史会多过按阈值换算的条数。
-func (r *Runtime) loadSessionHistory(event MessageEvent, window compactionWindow, covers func([]MessageEvent) bool) []MessageEvent {
-	session := sessionKey(event)
-	r.mu.RLock()
-	memory := append([]MessageEvent(nil), r.history[session]...)
-	if event.Kind == EventKindGroup {
-		if buffer, ok := r.groupPromptHistory[groupPromptSessionKey(event)]; ok {
-			memory = append([]MessageEvent(nil), buffer.Events...)
-		}
-	}
-	store := r.messageStore
-	r.mu.RUnlock()
-	for limit := historyCandidateLimit(window); ; limit *= 2 {
-		stored := []MessageEvent(nil)
-		if store != nil {
-			loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			var err error
-			stored, err = listContextMessageEvents(loadCtx, store, session, limit)
-			cancel()
-			if err != nil {
-				log.Printf("diana context history load failed: %v", err)
-			}
-		}
-		history := visiblePromptHistory(event, mergeMessageHistory(memory, stored, limit))
-		if store == nil || len(stored) < limit || covers(history) {
-			return history
-		}
-	}
 }
 
 // historyWindowAnchorIndex 返回锚在历史里的下标；锚为空或已经不在历史里（被撤回、

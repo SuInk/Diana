@@ -92,7 +92,7 @@ func TestPromptSenderOpaqueIDPrivacy(t *testing.T) {
 				}
 				protected := scope.protectRequest(llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: content}}})
 				text := requestTextForPrivacyTest(protected)
-				if strings.Contains(text, userID) || !strings.Contains(text, "Alice（im_u_") {
+				if strings.Contains(text, userID) || !strings.Contains(text, "Alice（im_user_") {
 					t.Fatalf("%s leaked or lost opaque sender identity: %s", name, text)
 				}
 				if restored := scope.restoreText(protected.Messages[len(protected.Messages)-1].Content); restored != content {

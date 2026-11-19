@@ -395,7 +395,7 @@ func TestPendingEarlierMessageAcceptsImageOnly(t *testing.T) {
 	if len(earlier) != 1 || earlier[0].MessageID != "photo" {
 		t.Fatalf("image-only earlier message not pending: %#v", earlier)
 	}
-	if prompt := replyDecorationPrompt(BotConfig{}, question, []MessageEvent{photo, question}, false); !strings.Contains(prompt, "他刚发了一张图") {
+	if prompt := replyDecorationPrompt(BotConfig{}, question, []MessageEvent{photo, question}); !strings.Contains(prompt, "他刚发了一张图") {
 		t.Fatalf("decoration prompt = %q", prompt)
 	}
 	if got := pendingEarlierMessages([]MessageEvent{stickerEvent("s", "irony", 1000), question}, question, pendingEarlierMessagesLimit); len(got) != 0 {
@@ -602,7 +602,7 @@ func TestReplyWaitsForFollowUpImageDescription(t *testing.T) {
 			checked := false
 			provider.reply = func(req llm.GenerateRequest) string {
 				body := requestText(req)
-				if strings.Contains(body, currentMessageNotesTitle) || strings.Contains(body, promptNoteGroupBrevitySpec.Default) {
+				if strings.Contains(body, "【当前需要回复的消息】") {
 					checked = true
 					if !strings.Contains(body, "七个动漫人物在室内合照") || !strings.Contains(body, "最近上下文中的图片") {
 						t.Error("reply started without follow-up description")
