@@ -19,7 +19,7 @@ func TestReplyTailReminderCarriesChecks(t *testing.T) {
 	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
 		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
 		check := replyTailReminder(cfg, group)
-		if !strings.HasPrefix(check, "【输出前检查】\n") || strings.Contains(check, rule) {
+		if !strings.HasPrefix(check, "【输出前检查】\n") || strings.Count(check, rule) != 1 {
 			t.Fatalf("output check = %q", check)
 		}
 		for _, want := range []string{replyVerifyRule, promptNoteGroupBrevitySpec.Default, promptReplyNoEchoSpec.Default, promptReplyUnknownReferenceSpec.Default, promptReplyClaimedLookupSpec.Default, promptReplyArithmeticSpec.Default} {
