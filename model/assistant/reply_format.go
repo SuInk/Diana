@@ -28,22 +28,35 @@ var (
 )
 
 // markdownToPlain 把 Markdown 标记降级为可读的纯文本，保留 <diana-message/> 分段标记。
+//
+// 代码围栏整块原样留着，连 ``` 行一起：分条要靠围栏认出代码块、整块不拆
+// （reply_code_fence.go），围栏在这里删掉的话，一段 SVG 会按行拆成几十条刷屏
+// （11-19 QQ 群一条 6K 字的 SVG 发成了 57 条）。纯文本平台上的 ``` 行等分完条、
+// 真正发出前再去掉，见 stripCodeFenceLines。块里的内容也不做 Markdown 降级：
+// 代码里的 * # - 是代码，不是格式。
 func markdownToPlain(text string) string {
 	explicitLayout := strings.Contains(text, notificationSplitMarker) || strings.Contains(text, notificationLineMarker)
 	if explicitLayout {
 		text = restoreExplicitReplyLines(text)
 		text = strings.ReplaceAll(text, notificationSplitMarker, "\n"+notificationSplitMarker+"\n")
 	}
+	text, fences := maskFencedCodeBlocks(text)
+	text = markdownProseToPlain(text)
+	for index, block := range fences {
+		text = strings.Replace(text, codeFencePlaceholder(index), block, 1)
+	}
+	if explicitLayout {
+		text = encodeExplicitMarkdownLayout(text)
+	}
+	return text
+}
+
+func markdownProseToPlain(text string) string {
 	if !strings.ContainsAny(text, "*#`[]_->") {
-		if explicitLayout {
-			return encodeExplicitMarkdownLayout(text)
-		}
 		return text
 	}
 	// 分隔线要在列表符号之前处理，避免 "---" 被当成列表项。
 	text = mdRulePattern.ReplaceAllString(text, "")
-	// 代码围栏只去掉 ``` 行本身，代码内容原样保留。
-	text = mdCodeFencePattern.ReplaceAllString(text, "")
 	text = mdInlineCodePattern.ReplaceAllString(text, "$1")
 	text = mdBoldPattern.ReplaceAllString(text, "$1$2")
 	text = mdHeadingPattern.ReplaceAllString(text, "")
@@ -64,11 +77,7 @@ func markdownToPlain(text string) string {
 	})
 	text = plainMarkdownBullets(text)
 	text = mdQuotePattern.ReplaceAllString(text, "")
-	text = mdExtraBlankPattern.ReplaceAllString(text, "\n\n")
-	if explicitLayout {
-		text = encodeExplicitMarkdownLayout(text)
-	}
-	return text
+	return mdExtraBlankPattern.ReplaceAllString(text, "\n\n")
 }
 
 // plainMarkdownBullets 把无序列表换成纯文本里读得顺的写法：顶层连续的项目编成
@@ -99,6 +108,26 @@ func plainMarkdownBullets(text string) string {
 		lines[i] = strconv.Itoa(number) + ". " + item
 	}
 	return strings.Join(lines, "\n")
+}
+
+// deliveredReplyText 是一条回复在这台机器人上实际发出去的样子，算长度用：纯文本平台的
+// 围栏行发出前会去掉（见 sendOutgoingWithResult），不算进字数。
+func deliveredReplyText(cfg BotConfig, text string) string {
+	plain := markdownToPlainForConfig(cfg)
+	text = normalizeReply(text, 0, plain)
+	if plain {
+		text = stripCodeFenceLines(text)
+	}
+	return text
+}
+
+// stripCodeFenceLines 去掉 ``` 行，代码内容原样保留：纯文本平台显示不了围栏，留着
+// 只会以字面量出现。只在分完条、真正发出前用（见 markdownToPlain）。
+func stripCodeFenceLines(text string) string {
+	if !strings.Contains(text, "```") {
+		return text
+	}
+	return strings.TrimSpace(mdCodeFencePattern.ReplaceAllString(text, ""))
 }
 
 func encodeExplicitMarkdownLayout(text string) string {

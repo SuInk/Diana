@@ -277,12 +277,17 @@ func joinReplyLengthPlan(parts []string) string {
 }
 
 func (r *Runtime) replyLengthIssue(cfg BotConfig, event MessageEvent, body string) string {
-	parts := splitEventChatReply(normalizeReply(body, 0, markdownToPlainForConfig(cfg)), cfg, event)
+	plain := markdownToPlainForConfig(cfg)
+	parts := splitEventChatReply(normalizeReply(body, 0, plain), cfg, event)
 	// These parts have already been normalized; do not interpret plain code as
 	// Markdown a second time when measuring it.
 	renderedConfig := cfg
 	renderedConfig.MarkdownToPlain = boolPointer(false)
 	for i, part := range parts {
+		if plain {
+			// 纯文本平台的围栏行发出前才去掉（见 markdownToPlain），不算字数。
+			part = stripCodeFenceLines(part)
+		}
 		if issue := r.replyPartLimitIssue(renderedConfig, event, part); issue != "" {
 			return fmt.Sprintf("第 %d 条: %s", i+1, issue)
 		}
@@ -297,7 +302,7 @@ func (r *Runtime) protectedReplyPartError(cfg BotConfig, event MessageEvent, par
 		if issue := r.replyPartLimitIssue(cfg, event, block); issue != "" {
 			return fmt.Errorf("%w: protected code: %s", errReplyCompression, issue)
 		}
-		codeRunes += replyCompressionRunes(normalizeReply(block, 0, markdownToPlainForConfig(cfg)))
+		codeRunes += replyCompressionRunes(deliveredReplyText(cfg, block))
 		rendered, _ := renderTelegramOutgoingText(normalizeReply(block, 0, markdownToPlainForConfig(cfg)), nil, nil)
 		codeUnits += utf16Length(rendered)
 	}

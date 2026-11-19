@@ -185,7 +185,8 @@ func TestReplyCompressionProtectsCodeAndMedia(t *testing.T) {
 	}
 	p = &compressionTestProvider{outputs: []string{"已处理", code}}
 	got, err = compressionTestRuntime(p).prepareGeneratedReply(context.Background(), BotConfig{MaxReplyChars: 10, MarkdownToPlain: boolPointer(true)}, replySingleMarker+strings.Repeat("说明", 30)+notificationLineMarker+code)
-	if err != nil || got != replySingleMarker+"print(1)" || len(p.requests) != 2 {
+	// 纯文本平台的围栏留到发出前才去（见 markdownToPlain），这里还在。
+	if err != nil || got != replySingleMarker+code || len(p.requests) != 2 {
 		t.Fatalf("plain-text conversion lost protected code: %q %v", got, err)
 	}
 	// 上限小到连一个字符加上围栏都装不下时拆不了，仍然报错，也不能拿去压缩。
@@ -272,8 +273,8 @@ func TestOversizedCodeBlockSplitsIntoFencedMessages(t *testing.T) {
 					continue
 				}
 				if tc.plain {
-					if strings.Contains(part, "```") {
-						t.Fatalf("plain part %d kept fences", index)
+					if strings.Count(part, "```") != 2 || strings.Contains(stripCodeFenceLines(part), "```") {
+						t.Fatalf("plain part %d must be one fenced block until delivery strips it: %q", index, part)
 					}
 				} else if strings.Count(part, "```go") != 1 || strings.Count(part, "```") != 2 {
 					t.Fatalf("part %d is not one valid fenced block: %q", index, part)
