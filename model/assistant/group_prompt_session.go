@@ -357,11 +357,7 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		}
 		if item.crossGroupContext {
 			if boolValue(cfg.CrossGroupMemoryEnabled, false) {
-				// 跨群参考按当前消息现查，只给这一轮用，不进续接的前缀（见 llm.Message.TurnOnly）。
-				for _, message := range r.renderPromptHistoryEvent(ctx, event, item, cfg, direct) {
-					message.TurnOnly = true
-					volatile = append(volatile, message)
-				}
+				volatile = append(volatile, r.renderPromptHistoryEvent(ctx, event, item, cfg, direct)...)
 			}
 			continue
 		}

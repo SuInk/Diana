@@ -73,7 +73,6 @@ type appendContextMessage struct {
 	ContextGroup      string              `json:"context_group,omitempty"`
 	CacheBreakpoint   bool                `json:"cache_breakpoint,omitempty"`
 	AtomicText        bool                `json:"atomic_text,omitempty"`
-	TurnOnly          bool                `json:"turn_only,omitempty"`
 }
 
 type appendContextCall struct {
@@ -276,7 +275,7 @@ func appendContextMessageFrom(message llm.Message) appendContextMessage {
 		ContinuationScope: message.ContinuationScope, AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent,
 		Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCallID: message.ToolCallID, ToolName: message.ToolName,
 		ToolError: message.ToolError, ResponsesOutput: message.ResponsesOutput, Priority: message.Priority, ContextGroup: message.ContextGroup,
-		CacheBreakpoint: message.CacheBreakpoint, AtomicText: message.AtomicText, TurnOnly: message.TurnOnly,
+		CacheBreakpoint: message.CacheBreakpoint, AtomicText: message.AtomicText,
 	}
 	for _, call := range message.ToolCalls {
 		stored.ToolCalls = append(stored.ToolCalls, appendContextCall{ThoughtSignature: call.ThoughtSignature, ID: call.ID, Name: call.Name, Arguments: call.Arguments})
@@ -289,7 +288,7 @@ func (stored appendContextMessage) toMessage() llm.Message {
 		ContinuationScope: stored.ContinuationScope, AnthropicThinking: stored.AnthropicThinking, ReasoningContent: stored.ReasoningContent,
 		Role: stored.Role, Content: stored.Content, Parts: stored.Parts, ToolCallID: stored.ToolCallID, ToolName: stored.ToolName,
 		ToolError: stored.ToolError, ResponsesOutput: stored.ResponsesOutput, Priority: stored.Priority, ContextGroup: stored.ContextGroup,
-		CacheBreakpoint: stored.CacheBreakpoint, AtomicText: stored.AtomicText, TurnOnly: stored.TurnOnly,
+		CacheBreakpoint: stored.CacheBreakpoint, AtomicText: stored.AtomicText,
 	}
 	for _, call := range stored.ToolCalls {
 		message.ToolCalls = append(message.ToolCalls, llm.ToolCall{ThoughtSignature: call.ThoughtSignature, ID: call.ID, Name: call.Name, Arguments: call.Arguments})
