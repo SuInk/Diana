@@ -261,7 +261,6 @@ func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, eve
 		}
 		messages = append(messages, r.renderPromptHistoryEvent(ctx, source, item, cfg, false)...)
 	}
-	messages = compactHistoryLineDates(messages)
 	if clock := r.runtimeClockPrompt(source); clock != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clock, Priority: llm.MessagePrioritySystem})
 	}

@@ -3301,8 +3301,6 @@ export interface AssistantContextBudgetLayer {
   label: string;
   share_percent: number;
   ceiling: number;
-  /** 不按份额算的层（近期历史）没压到上限时显示的算法说明。 */
-  rule?: string;
   tokens: number;
   capped_by_ceiling: boolean;
   configurable: boolean;
