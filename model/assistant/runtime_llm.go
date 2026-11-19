@@ -1228,16 +1228,10 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	if agentEnabled {
 		appendPromptSection(&builder, toolExecutionStatusRule)
 	}
-	// 群聊篇幅规则几乎不变，放在头部；以前单独一条放在当前消息前面，见
-	// promptNoteGroupBrevitySpec。
-	if event.Kind == EventKindGroup {
+	// 先查再答、群聊篇幅和输出前检查：走 Runner 时每一步贴在请求最后（见
+	// replyTailReminder），头部不再写；不走 Runner 的群聊没有那一条，篇幅规则留在头部。
+	if event.Kind == EventKindGroup && !agentEnabled {
 		appendPromptSection(&builder, cfg.prompt(promptNoteGroupBrevitySpec))
-	}
-	// 主回复请求只追加（见 append_context.go）：以前每轮贴在尾部重发的固定说明——先查
-	// 再答、输出前检查——放进头部，只发一次。
-	if agentEnabled {
-		appendPromptSection(&builder, replyVerifyRule)
-		appendPromptSection(&builder, replyOutputCheck(cfg))
 	}
 	if head != nil && boolValue(cfg.PromptInjectTime, true) {
 		appendPromptSection(&builder, replyClockRule)
@@ -1676,13 +1670,13 @@ var (
 	// 推测和历史都还是 5/6 以上带这句，是模型自己的倾向，只有在这里点名才压得住（8/8 → 0/8）。
 	// 只管顺口的猜测；正经问「是真的吗」照样先去查，回放里召回传闻 4/4 仍然先搜。
 	//
-	// 11-17 起放进群聊会话的系统头部。只追加上下文之后，它本来就只在整份重组那一轮进前缀、
-	// 续接时不再发，离生成越来越远，和放在头部差不多；放进头部之后不再随重组重发。
+	// 11-17 起放进系统头部只发一次，离生成太远，v0.9.11 上线后 swe-2 开始复述群友原话；
+	// 走 Runner 时挪回每步请求最后的【输出前检查】（见 replyTailReminder）。
 	promptNoteGroupBrevitySpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.group_brevity",
 		Group:   PromptGroupReplyRules,
 		Title:   "当前消息注解 · 群聊篇幅",
-		Usage:   "群聊会话写在系统提示里：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
+		Usage:   "群聊每步请求最后的输出前检查里带上：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
 		Default: "群聊接话：闲聊随口一两句、几十字就够，不挨个点评，不说教，不劝人休息；问技术、要办法时照常答全。有人讲方案、问你看法时说你自己的判断：看到漏洞、没提到的风险或更好的做法就直说，带上理由；确实没问题就简短认可，别把对方的话换个说法复述一遍；对方只是在补充自己的想法时，不用回头认错。群友顺口猜一句「X 了？」「是不是 Y」时，按常理直接说你觉得像不像、更可能是什么；别拿「图里看不出」「不能确定是……」「没有证据说明」这种辟谣句收尾，没人要你下定论，没看到的经过也不用声明。",
 	})
 	promptNoteReplySpec = registerPrompt(PromptSpec{
