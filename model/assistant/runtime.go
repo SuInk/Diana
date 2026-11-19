@@ -1888,6 +1888,7 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	overrideIfSet(&cfg.WelcomeLLMCooldownSeconds, groupCfg.WelcomeLLMCooldownSeconds)
 	overrideIfSet(&cfg.MaxContextTokens, groupCfg.MaxContextTokens)
+	overrideIfSet(&cfg.RecentHistoryTokenBudget, groupCfg.RecentHistoryTokenBudget)
 	overrideIfSet(&cfg.RecentContextLimit, groupCfg.RecentContextLimit)
 	overrideIfSet(&cfg.MaxReplyChars, groupCfg.MaxReplyChars)
 	if groupCfg.NaturalReplySplitEnabled != nil {
@@ -5161,7 +5162,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			continuation, appendDecision = appendContextContinuation(previous, messages, cfg.requestContextLimit(), cfg.prompt(promptNoteGroupBrevitySpec))
+			continuation, appendDecision = appendContextContinuation(previous, messages, cfg.MaxContextTokens, cfg.prompt(promptNoteGroupBrevitySpec))
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
@@ -8439,7 +8440,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	groupLimit := 0
 	if event.Kind == EventKindGroup {
 		cfg := r.effectiveConfigForEvent(event)
-		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg)))
+		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg))
 	}
 	var compressed []MessageEvent
 	r.mu.Lock()
