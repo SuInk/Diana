@@ -5262,6 +5262,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
 			Continuation:  continuation,
+			TailReminder:  replyTailReminder(cfg, event),
 		})
 		stopInterjections()
 		stopProgress()

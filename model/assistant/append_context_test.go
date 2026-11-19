@@ -347,8 +347,9 @@ func TestReplyRequestsAreStrictPrefixes(t *testing.T) {
 	// 只追加（照雨夹雪）：每一次请求都以上一次请求整份开头，同一轮的各步之间和两轮
 	// 之间都是。前缀里留着上一轮的工具调用和结果、当轮的状态块，后面只接新的。模型
 	// 客户端看到的请求经过隐私代理改写，所以拿客户端看到的请求互相比。
+	// 【输出前检查】例外：每步贴在最后、只给那一步看（见 replyTailReminder），拿掉再比。
 	for index := 1; index < len(replies); index++ {
-		requireStrictPrefix(t, replies[index-1].Messages, replies[index].Messages)
+		requireStrictPrefix(t, withoutOutputCheck(t, replies[index-1].Messages), withoutOutputCheck(t, replies[index].Messages))
 	}
 	baseline := len(withoutTurnOnly(replies[0].Messages))
 	for index, prefix := range prefixes {
@@ -379,20 +380,17 @@ func TestReplyRequestsAreStrictPrefixes(t *testing.T) {
 			t.Fatalf("request %d: the group rules must come from the prefix, found at %d past %d", index+1, at, baseline)
 		}
 	}
-	// 输出前检查和查证提醒在头部：每份请求恰好一次，而且都在头部那条 system 里，不在尾部。
-	check := "【输出前检查】\n" + promptReplyUnknownReferenceSpec.Default + "\n" + promptReplyClaimedLookupSpec.Default + "\n" + promptReplyArithmeticSpec.Default
+	// 输出前检查（含查证提醒）每份请求恰好一次，在最后一条：只给那一步看，不进前缀。
 	for index, request := range replies {
-		for _, want := range []string{check, replyVerifyRule} {
-			count, at := 0, -1
-			for position, message := range request.Messages {
-				if n := strings.Count(message.Content, want); n > 0 {
-					count += n
-					at = position
-				}
+		count, at := 0, -1
+		for position, message := range request.Messages {
+			if n := strings.Count(message.Content, "【输出前检查】"); n > 0 {
+				count += n
+				at = position
 			}
-			if count != 1 || request.Messages[at].Role != llm.RoleSystem || at >= baseline {
-				t.Fatalf("request %d: %.20q must sit once in the head, got %d at %d", index+1, want, count, at)
-			}
+		}
+		if count != 1 || at != len(request.Messages)-1 || !strings.Contains(request.Messages[at].Content, replyVerifyRule) {
+			t.Fatalf("request %d: the output check must sit once at the end, got %d at %d of %d", index+1, count, at, len(request.Messages))
 		}
 	}
 
@@ -876,4 +874,13 @@ func TestAppendContextMentionListAppendsOnlyNewMembers(t *testing.T) {
 	if sent == nil || sent.TurnOnly || sent.Content != replyMentionListTitle+"\n10003：丙" {
 		t.Fatalf("only the new member must be appended and kept: %+v", sent)
 	}
+}
+
+// withoutOutputCheck 拿掉主回复请求最后那条【输出前检查】，它必须在。
+func withoutOutputCheck(t *testing.T, messages []llm.Message) []llm.Message {
+	t.Helper()
+	if len(messages) == 0 || !strings.HasPrefix(messages[len(messages)-1].Content, "【输出前检查】") {
+		t.Fatal("a reply request must end with the output check")
+	}
+	return messages[:len(messages)-1]
 }

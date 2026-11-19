@@ -12,14 +12,20 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 【输出前检查】写在系统头部、只发一次（主回复请求只追加），不再重复头部已有的括号用法；
-// 钩子在没执行过工具时什么都不加，请求原样发出。
-func TestReplyOutputCheckLivesInHeadNotHooks(t *testing.T) {
+// 【输出前检查】每步贴在请求最后（agent.Request.TailReminder），不重复头部已有的括号用法；
+// 群聊才带篇幅规则。钩子在没执行过工具时什么都不加，请求原样发出。
+func TestReplyTailReminderCarriesChecks(t *testing.T) {
+	group := MessageEvent{Kind: EventKindGroup}
 	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
 		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
-		check := replyOutputCheck(cfg)
-		if strings.Contains(check, rule) || strings.Count(check, promptReplyUnknownReferenceSpec.Default) != 1 {
+		check := replyTailReminder(cfg, group)
+		if !strings.HasPrefix(check, "【输出前检查】\n") || strings.Contains(check, rule) {
 			t.Fatalf("output check = %q", check)
+		}
+		for _, want := range []string{replyVerifyRule, promptNoteGroupBrevitySpec.Default, promptReplyNoEchoSpec.Default, promptReplyUnknownReferenceSpec.Default, promptReplyClaimedLookupSpec.Default, promptReplyArithmeticSpec.Default} {
+			if strings.Count(check, want) != 1 {
+				t.Fatalf("output check must carry %.20q once: %q", want, check)
+			}
 		}
 		req := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "old context", CacheBreakpoint: true},
@@ -29,6 +35,10 @@ func TestReplyOutputCheckLivesInHeadNotHooks(t *testing.T) {
 		if err != nil || len(got.Messages) != 2 || got.Messages[1].Content != "current" {
 			t.Fatalf("hooks must leave a request without tool calls untouched: %+v err=%v", got, err)
 		}
+	}
+	private := replyTailReminder(BotConfig{}, MessageEvent{Kind: EventKindPrivate})
+	if strings.Contains(private, promptNoteGroupBrevitySpec.Default) || !strings.Contains(private, promptReplyNoEchoSpec.Default) {
+		t.Fatalf("private output check = %q", private)
 	}
 }
 
