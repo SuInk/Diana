@@ -416,7 +416,7 @@ func TestMentionPromptAgreesWithDecorationMode(t *testing.T) {
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
 	// 规则在稳定头部（replyMentionRules），尾部只带本轮的候选名单。
-	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), replyMentionListTitle+"\n10001") {
+	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), "【可提及成员候选 JSON】") {
 		t.Fatal("tail lost the mention candidates")
 	}
 
@@ -456,7 +456,7 @@ func TestMentionPromptDropsSendLayerClausesWhenNothingIsAdded(t *testing.T) {
 		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}},
 	}
 	// 规则在稳定头部（replyMentionRules），尾部只带本轮的候选名单。
-	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), replyMentionListTitle+"\n10001") {
+	if !strings.Contains(runtime.replyMentionPrompt(BotConfig{}, event, nil), "【可提及成员候选 JSON】") {
 		t.Fatal("tail lost the mention candidates")
 	}
 	quiet := BotConfig{BotAccount: "42", MentionUserMode: ReplyDecorationAuto, ReplyReferenceMode: ReplyDecorationAuto}.WithDefaults()

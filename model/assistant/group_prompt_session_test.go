@@ -15,8 +15,7 @@ import (
 )
 
 func TestGroupHistoryDoesNotShrinkAtLegacyMessageThreshold(t *testing.T) {
-	setSideHistoryLookback(t, 3)
-	r := NewRuntime(BotConfig{ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	r := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	e := MessageEvent{Kind: EventKindGroup, GroupID: "one", UserID: "member", Time: 1000}
 	for i := 0; i < 12; i++ {
 		item := e

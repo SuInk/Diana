@@ -48,8 +48,7 @@ func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
 }
 
 func TestPromptContextHistoryKeepsStoredHistoryWithoutSummary(t *testing.T) {
-	setSideHistoryLookback(t, 20)
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 20, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 
@@ -80,13 +79,9 @@ func TestPromptContextHistoryKeepsStoredHistoryWithoutSummary(t *testing.T) {
 func TestPromptContextWindowRespectsConfigWithoutLLMStore(t *testing.T) {
 	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g"}
-	cfg := BotConfig{MaxContextTokens: 40000}
-	if got := runtime.promptContextWindowTokens(event, cfg); got != 40000 {
-		t.Fatalf("window = %d, want 40000", got)
-	}
-	// 总上限最低 32K，填得更小按 32K 算。
-	if got := runtime.promptContextWindowTokens(event, BotConfig{MaxContextTokens: 8000}); got != minimumRequestContextLimit {
-		t.Fatalf("window = %d, want the minimum %d", got, minimumRequestContextLimit)
+	cfg := BotConfig{MaxContextTokens: 8000}
+	if got := runtime.promptContextWindowTokens(event, cfg); got != 8000 {
+		t.Fatalf("window = %d, want 8000", got)
 	}
 	// 比兜底常量还大的配置不放宽窗口，只收紧。
 	wide := BotConfig{MaxContextTokens: llm.DefaultContextWindowTokens * 4}
@@ -285,8 +280,7 @@ func TestContextSummaryDoesNotCompactOnEveryMessage(t *testing.T) {
 		limit = 10
 		total = 60
 	)
-	setSideHistoryLookback(t, limit)
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: limit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: limit, ContextSummaryThreshold: limit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	base := int64(1700000000)
 	batches, previous := 0, 0
 	for index := 0; index < total; index++ {

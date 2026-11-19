@@ -14,15 +14,8 @@ import (
 // 以前留空时落到 64K 的默认上限，再按各层份额切；现在照 Pi，窗口就是模型窗口，
 // 只在快满时压缩一次（见 context_compaction.go），不再预先限额。
 func (c BotConfig) requestContextLimit() int64 {
-	if c.MaxContextTokens <= 0 {
-		return 0
-	}
-	return max(c.MaxContextTokens, minimumRequestContextLimit)
+	return max(0, c.MaxContextTokens)
 }
-
-// minimumRequestContextLimit 是总上下文上限能设的最小值。上限只设一个总数、不给各块
-// 单独限额；再小的话系统提示和工具说明就占满了，聊天历史放不进几句。
-const minimumRequestContextLimit = 32 * 1024
 
 type historyContextTurn struct {
 	events       []MessageEvent

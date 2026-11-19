@@ -604,8 +604,7 @@ func TestLLMNoTextErrorRetryAndFailoverMatrix(t *testing.T) {
 }
 
 func TestRuntimeTrimsInMemoryHistoryAfterThreshold(t *testing.T) {
-	setSideHistoryLookback(t, 3)
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
 	for i := 1; i <= 6; i++ {
 		next := event
@@ -625,8 +624,7 @@ func TestRuntimeTrimsInMemoryHistoryAfterThreshold(t *testing.T) {
 }
 
 func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
-	setSideHistoryLookback(t, 2)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{
@@ -648,10 +646,10 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 
 func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	// 旁路回看条数（sideHistoryLookback）只管内存缓存和旁路回看深度，不进正式提示词；
-	// 正式提示词的历史从锚开始全部带上，留空的单次请求上限跟随模型窗口。
-	if sideHistoryLookback != 40 || cfg.ContextSummaryThreshold != 100 {
-		t.Fatalf("context defaults = lookback %d threshold %d", sideHistoryLookback, cfg.ContextSummaryThreshold)
+	// RecentContextLimit 只管内存缓存和旁路回看深度，不进正式提示词；正式提示词的
+	// 历史从锚开始全部带上，留空的单次请求上限跟随模型窗口。
+	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
+		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	}
 	if got := cfg.requestContextLimit(); got != 0 {
 		t.Fatalf("request context limit default = %d", got)
@@ -2074,7 +2072,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 		}
 	}
 	// 这份配置是默认档（auto），所以第 1 条应当是「发送层不会自动 @」那一版。
-	for _, want := range []string{"群聊真实提及规则", milkAlias + "：Alice", currentAlias + "：Bob", "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "按标记位置翻译成真正的提及"} {
+	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "按标记位置翻译成真正的提及"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
@@ -4055,8 +4053,7 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 }
 
 func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
-	setSideHistoryLookback(t, 20)
-	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "10001",
@@ -4084,14 +4081,13 @@ func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
 }
 
 func TestRuntimeImageEditSourcePriority(t *testing.T) {
-	setSideHistoryLookback(t, 20)
 	const (
 		currentImage = "https://example.test/current.jpg"
 		quotedImage  = "https://example.test/quoted.jpg"
 	)
 	recentImage := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
 	newRuntimeWithRecentImage := func() *Runtime {
-		runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		runtime.remember(MessageEvent{
 			Kind:      EventKindPrivate,
 			UserID:    "10001",
@@ -4323,8 +4319,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 }
 
 func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
-	setSideHistoryLookback(t, 20)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	image := MessageEvent{
 		Kind:       EventKindGroup,
 		GroupID:    "20005",

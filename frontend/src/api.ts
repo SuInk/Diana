@@ -420,6 +420,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   daily_limit_timezone?: string;
   /** 机器人时区（IANA 名）：当前时间、回复时段、每日次数、提醒换算都按它；留空读 TZ，再用本机时区，本机是 UTC 时按 Asia/Shanghai。 */
   timezone?: string;
+  recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
@@ -770,6 +771,7 @@ export interface BotGroupConfig extends SendRetrySettings {
   image_generation_daily_group_limit?: number | null;
   /** 这个群每天能生成视频的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
   video_generation_daily_group_limit?: number | null;
+  recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
   natural_reply_split_enabled?: boolean;

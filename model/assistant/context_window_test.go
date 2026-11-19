@@ -19,12 +19,9 @@ func TestRequestContextLimitDefaultsAndOverrides(t *testing.T) {
 		want       int64
 	}{
 		{name: "都留空跟随模型窗口", want: 0},
-		{name: "机器人填了", botLimit: 40000, want: 40000},
-		{name: "群填了", botLimit: 64000, groupLimit: 40000, want: 40000},
+		{name: "机器人填了", botLimit: 32000, want: 32000},
+		{name: "群填了", botLimit: 32000, groupLimit: 12000, want: 12000},
 		{name: "只有群填了", groupLimit: 48000, want: 48000},
-		// 总上限最低 32K，填得更小按 32K 算。
-		{name: "填得太小按最低值", botLimit: 32000, want: minimumRequestContextLimit},
-		{name: "群填得太小按最低值", botLimit: 64000, groupLimit: 12000, want: minimumRequestContextLimit},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			runtime := NewRuntime(BotConfig{MaxContextTokens: item.botLimit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)

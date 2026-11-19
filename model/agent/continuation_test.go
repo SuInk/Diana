@@ -70,7 +70,7 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	// 前缀里的那一份。时钟每轮都变，不进前缀。
 	environments := 0
 	for _, message := range sent {
-		if isSpeakerToolEnvironment(message) {
+		if message.Role == llm.RoleSystem && strings.HasPrefix(message.Content, speakerToolPromptMarker+"\n") {
 			environments++
 			if message.TurnOnly {
 				t.Fatalf("the environment kept from the prefix must not be turn-only: %#v", message)
@@ -89,25 +89,28 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	}
 }
 
-// 发言者工具环境每一版在会话里只发一次：前缀或本轮已追加的内容里有过就省略，没有
-// 的追加并留在前缀里（不是只用于本轮）。别的逐轮消息不受影响。
-func TestContinuationVolatileSendsEachEnvironmentOnce(t *testing.T) {
-	env := func(id string) llm.Message {
-		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + " #" + id + "】\n" + id}
+// 发言者工具环境和前缀里最近一版相同就省略；不同才发，发出的那份只用于本轮——前缀
+// 不变，所以换回前缀里那一版时又省略。别的逐轮消息不受影响。
+func TestContinuationVolatileSendsChangedEnvironmentTurnOnly(t *testing.T) {
+	env := func(text string) llm.Message {
+		return llm.Message{Role: llm.RoleSystem, Content: speakerToolPromptMarker + "\n" + text}
+	}
+	turnOnly := func(message llm.Message) llm.Message {
+		message.TurnOnly = true
+		return message
 	}
 	a, b := env("A"), env("B")
 	clock := llm.Message{Role: llm.RoleSystem, Content: RuntimeClockMarker + "now", TurnOnly: true}
-	note := llm.Message{Role: llm.RoleSystem, Content: speakerToolNoteMarker + "B", TurnOnly: true}
 	for _, tc := range []struct {
 		name                             string
 		prefix, appended, volatile, want []llm.Message
 	}{
 		{"same", []llm.Message{a}, nil, []llm.Message{a, clock}, []llm.Message{clock}},
-		{"new version is kept", []llm.Message{a}, nil, []llm.Message{b, note, clock}, []llm.Message{b, note, clock}},
-		{"older version still in the prefix", []llm.Message{a}, []llm.Message{b}, []llm.Message{a}, []llm.Message{}},
-		{"no baseline", nil, nil, []llm.Message{a}, []llm.Message{a}},
+		{"changed", []llm.Message{a}, nil, []llm.Message{b, clock}, []llm.Message{turnOnly(b), clock}},
+		{"back to the prefix version", []llm.Message{a}, nil, []llm.Message{a}, []llm.Message{}},
+		{"no baseline", nil, nil, []llm.Message{a}, []llm.Message{turnOnly(a)}},
 		{"clock not deduped", []llm.Message{clock}, nil, []llm.Message{clock}, []llm.Message{clock}},
-		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{a}},
+		{"user cannot suppress", []llm.Message{{Role: llm.RoleUser, Content: a.Content}}, nil, []llm.Message{a}, []llm.Message{turnOnly(a)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := append([]llm.Message(nil), tc.prefix...)

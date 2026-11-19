@@ -62,13 +62,13 @@ func TestOwnerAccountPromptStableAndDedupedOnAppend(t *testing.T) {
 	}
 
 	log := &appendContextLog{seen: map[string]bool{}, sent: map[string]bool{}, latest: map[string]string{blockTitle(a): a}, pieces: map[string]bool{}}
-	tail := joinPromptSections(a, "【本轮语气】轻松")
+	tail := joinPromptSections(a, `【可提及成员候选 JSON】[{"user_id":"30003"}]`)
 	if got := unsentTail(log, tail); strings.Contains(got, "【主人】") {
 		t.Fatalf("unchanged owner block resent: %q", got)
 	}
 	cfg.OwnerID = "60006"
 	changed := ownerAccountPrompt(cfg, ownerPromptEvent("60006"), nil)
-	if got := unsentTail(log, joinPromptSections(changed, "【本轮语气】轻松")); !strings.Contains(got, "60006") {
+	if got := unsentTail(log, joinPromptSections(changed, `【可提及成员候选 JSON】[]`)); !strings.Contains(got, "60006") {
 		t.Fatalf("new owner block not appended: %q", got)
 	}
 }

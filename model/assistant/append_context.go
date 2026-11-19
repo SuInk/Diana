@@ -31,10 +31,8 @@ import (
 //   - 续接的轮次，尾部每条消息按以「【」开头的行切成段：带标题的段和前缀里同一标题
 //     的那一版逐字相同就不发，不带标题的段前缀里出现过就不发；剩下的拼回一条，只用于
 //     本轮（llm.Message.TurnOnly），不进前缀（见 unsentTail）；
-//   - 源头就标成只用于本轮的（跨群参考、时钟、查证提醒）每轮原样带上，哪一轮都不进
-//     前缀；
-//   - 只追加的名单（检索到的记忆、可提及成员）只追加前缀里还没有的条目，追加的留在
-//     前缀里（见 unsentListItems）；
+//   - 源头就标成只用于本轮的（跨群参考、检索到的记忆条目、时钟、查证提醒）每轮原样
+//     带上，哪一轮都不进前缀；
 //   - 一轮里的工具调用和结果不进前缀，只在发言后面留一行「调用过哪些工具」
 //     （见 agent 的 turnTranscript 和 appendContextPrefix）。
 //
@@ -70,9 +68,6 @@ type appendContextLog struct {
 	// pieces 是前缀里出现过的每个段（按「【」切）和每个段落（按空行切）：续接时不带
 	// 标题的段逐字一样就不再发，钉在当前消息末尾的固定注解（群聊篇幅）也靠它判断。
 	pieces map[string]bool
-	// listItems 是前缀里已经出现过的只追加名单条目（检索到的记忆、可提及成员），按
-	// 「名单标题 + 条目行」记：续接时名单只追加这里没有的条目。
-	listItems map[string]bool
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
@@ -323,7 +318,6 @@ func unsentTail(log *appendContextLog, content string) string {
 // 落盘时只存 prefix，读回来再算一遍。
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}
-	log.listItems = map[string]bool{}
 	var dates historyLineDates
 	for _, message := range log.prefix {
 		content := appendContextText(message)
@@ -346,14 +340,6 @@ func (log *appendContextLog) index() {
 			log.sent[appendContextSentKey(message.Content)] = true
 		}
 		if isHistoryLine(content) || message.Role == llm.RoleAssistant {
-			continue
-		}
-		if title, isItem, ok := appendOnlyList(content); ok {
-			for _, line := range strings.Split(content, "\n")[1:] {
-				if isItem(line) {
-					log.listItems[title+"\x00"+strings.TrimSpace(line)] = true
-				}
-			}
 			continue
 		}
 		for _, paragraph := range strings.Split(content, "\n\n") {
@@ -441,16 +427,6 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message, co
 				keepReply = !log.sent[appendContextSentKey(llm.HistoryReplyText(message))]
 			}
 			if keepReply {
-				appended = append(appended, message)
-			}
-			continue
-		}
-		if _, _, ok := appendOnlyList(message.Content); index > historyEnd && ok {
-			// 只追加的名单（检索到的记忆、可提及成员）：前缀里有过的条目不再发，新的追加并
-			// 留在前缀里。生产 11-14～15 431 轮主回复，检索记忆每轮平均 40 条、7.8K 字，其中
-			// 86.7% 是这个群前几轮已经带过的。
-			if message.Content = unsentListItems(log, message.Content); message.Content != "" {
-				message.TurnOnly = false
 				appended = append(appended, message)
 			}
 			continue
@@ -633,50 +609,12 @@ func isMemoryItemLine(line string) bool {
 	return strings.HasPrefix(line, "- [")
 }
 
-// appendOnlyList 认出只追加的名单消息，返回名单标题和条目行的判断。
-func appendOnlyList(content string) (title string, isItem func(string) bool, ok bool) {
-	switch {
-	case strings.HasPrefix(content, retrievedMemoryTitle):
-		return retrievedMemoryTitle, isMemoryItemLine, true
-	case strings.HasPrefix(content, replyMentionListTitle):
-		return replyMentionListTitle, func(line string) bool { return strings.TrimSpace(line) != "" }, true
-	}
-	return "", nil, false
-}
-
-// unsentListItems 去掉名单里前缀已经有的条目，返回空串表示没有新条目。分段小标题只在
-// 它下面还有新条目时保留。
-func unsentListItems(log *appendContextLog, content string) string {
-	title, isItem, _ := appendOnlyList(content)
-	lines := strings.Split(content, "\n")
-	kept := []string{lines[0]}
-	var pending []string
-	for _, line := range lines[1:] {
-		if !isItem(line) {
-			// 分段小标题：只记最近的一个，跳过的段的小标题不带出去。
-			pending = []string{line}
-			continue
-		}
-		if log.listItems[title+"\x00"+strings.TrimSpace(line)] {
-			continue
-		}
-		kept = append(kept, pending...)
-		pending = nil
-		kept = append(kept, line)
-	}
-	if len(kept) == 1 {
-		return ""
-	}
-	return strings.Join(kept, "\n")
-}
-
 // splitRetrievedMemory 把记忆块拆成块头（标题、当前发言者、画像）和检索到的条目。
 // 条目从第一个条目行或它上面的分段小标题开始，一直到末尾，前面补一行标题。
 //
-// 条目按当前话题检索、每轮都不一样，单独成一条消息：完整组装那一轮整条进前缀，续接
-// 时只追加前缀里没有的条目（见 unsentListItems），不再每轮整块重发。块头同一个人连
-// 着几轮都一样，照常走按段比较。11-13 回放（swe-2，30 条）里续接时干脆不带条目，模型
-// 一次都没有主动调 memory 去查，所以条目不能省，只能不重复。
+// 条目按当前话题检索、每轮都不一样，单独成一条只用于本轮的消息：重新组装那一轮的
+// 条目也不留在前缀里。块头同一个人连着几轮都一样，照常走按段比较。11-13 回放（swe-2，
+// 30 条）里续接时干脆不带条目，模型一次都没有主动调 memory 去查，所以每轮都带。
 func splitRetrievedMemory(block string) (head, retrieved string) {
 	lines := strings.Split(block, "\n")
 	for index, line := range lines {

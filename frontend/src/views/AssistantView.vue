@@ -1822,12 +1822,17 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <span class="hint">每次回复会带上最近的聊天记录、记忆和工具结果，总量不超过下面的「单次请求上下文上限」。想看某一轮具体带了什么，去<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
+                <span class="hint">每次请求的总量由「单次请求上下文上限」管：重新组装时只带最近约 2 万 token 的聊天记录，之后每轮往后追加，涨到上限减 4096 再重新组装；其余留给工具定义、记忆和这一轮的新消息。想看某一轮真实的构成，在<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">每次最多带多少 token，留空跟随模型窗口（最低 32768）。快满时较早的聊天会压缩成摘要，需要时还能翻回原文。</span>
+                <span class="hint">一次调用最多带多少 token 上下文进去，留空跟随模型窗口；比模型窗口大时按模型窗口算，只会收紧不会放宽。历史、记忆和工具结果都原样带上，不预先限额；请求估算超过「上限 − 16384」时，把最近约 2 万 token 之前的聊天记录压缩成一份摘要（多一次模型调用，那一轮缓存不命中），更早的原文靠聊天记录工具找回。</span>
+              </div>
+              <div class="field">
+                <label for="bot-context">历史查询条数上限</label>
+                <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
+                <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
               </div>
             </div>
           </section>
