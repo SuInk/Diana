@@ -91,46 +91,21 @@ func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRec
 	return req, nil
 }
 
-// replyTailReminder 是主回复每一步请求最后那一条【输出前检查】（agent.Request.TailReminder）：
-// 先查再答、群聊篇幅、别复述原话、找不到来由的指代先查、没查过别说查过、算数先算对。
-// 只给那一步看，不进前缀，下一步、下一轮重新接一份。
-//
-// 11-17 起请求只追加，这几段挪进系统头部只发一次（#1580、#1582），离生成越来越远。v0.9.11
-// 11-19 06:05 上线后嘉然（swe-2）开头照抄群友刚说的话、原样重发自己说过的话：同群 06:05
-// 后 42 条回复有 6 条以对方原话开头，之前三天每天四五百条里只有 2～10 条。swe-2 只认
-// 贴着生成的说明，同一句放系统头部几乎不起作用（见 promptReplyUnknownReferenceSpec 的
-// 回放），所以挪回尾部。只给当步看不伤缓存：terra 合成请求每轮拿掉上一轮的提醒和一直
-// 留着它，命中一样。
-func replyTailReminder(cfg BotConfig, event MessageEvent) string {
-	rules := []string{replyVerifyRule}
-	if event.Kind == EventKindGroup {
-		rules = append(rules, cfg.prompt(promptNoteGroupBrevitySpec))
-	}
-	for _, spec := range []*PromptSpec{promptReplyNoEchoSpec, promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
-		rules = append(rules, cfg.prompt(spec))
-	}
-	var kept []string
-	for _, rule := range rules {
-		if rule = strings.TrimSpace(rule); rule != "" {
-			kept = append(kept, rule)
+// replyOutputCheck 是主回复系统头部里的【输出前检查】：找不到来由的指代先查再答、没查过
+// 别说查过、算数先算对。以前每一步请求都贴在最后、只用于本轮，连同括号用法再说一遍；
+// 11-17 起请求只追加，挪进头部只发一次，括号用法头部本来就有，不再重复。
+func replyOutputCheck(cfg BotConfig) string {
+	var rules []string
+	for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
+		if rule := cfg.prompt(spec); rule != "" {
+			rules = append(rules, rule)
 		}
 	}
-	if len(kept) == 0 {
+	if len(rules) == 0 {
 		return ""
 	}
-	return "【输出前检查】\n" + strings.Join(kept, "\n")
+	return "【输出前检查】\n" + strings.Join(rules, "\n")
 }
-
-// promptReplyNoEchoSpec 跟在【输出前检查】里。v0.9.11 上线当天 swe-2 在群里接话，开头先把
-// 对方那句原样抄一遍（「不是说能操比吗，GTA6 可能还是得……」），或者照抄图片描述里的句子、
-// 把自己几分钟前的回复再发一遍。
-var promptReplyNoEchoSpec = registerPrompt(PromptSpec{
-	Key:     "reply.check.no_echo",
-	Group:   PromptGroupReplyRules,
-	Title:   "输出前检查 · 别复述原话",
-	Usage:   "每步请求最后都带：回复开头别照抄对方刚说的话、聊天记录或图片描述里的原句，也别把自己发过的话再发一遍。",
-	Default: "回复别以对方刚说的那句话开头，也别照抄聊天记录、图片描述里的原句；你自己发过的话不要再发一遍。直接说你的新内容。",
-})
 
 // promptReplyUnknownReferenceSpec 跟在【输出前检查】后面。群友提起好几天前聊过、已经不在
 // 上下文里的事（11-15「还好没买眼镜 可惜没买杯子」指的是 11-10 的对赌单），chat_history

@@ -1957,16 +1957,15 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     // 照抄 TestReplyRequestsAreAppendOnly 最后一轮的真实组装（合成的 4 人 22 条群聊，测试日志
     // 里那行「请求构成」），组装改了要重新抄，不要手填。群聊短，所以聊天历史占比小。
     const segments = [
-      {name: "工具定义", kind: "prefix", tokens: 1254, new_tokens: 0},
-      {name: "Runner 系统提示（协议、按需目录、规则）", kind: "prefix", tokens: 6701, new_tokens: 0},
-      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 10851, new_tokens: 0},
+      {name: "工具定义", kind: "prefix", tokens: 1217, new_tokens: 0},
+      {name: "Runner 系统提示（协议、按需目录、规则）", kind: "prefix", tokens: 6706, new_tokens: 0},
+      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 11285, new_tokens: 0},
       {name: "【系统补充指令，不是用户发言】", kind: "state", tokens: 283, new_tokens: 0},
       {name: "其他 user 段", kind: "state", tokens: 21, new_tokens: 0},
       {name: "聊天历史（只追加）", kind: "history", tokens: 996, new_tokens: 168},
       {name: "【当前消息的对话对象】", kind: "state", tokens: 205, new_tokens: 0},
       {name: "【日期】", kind: "state", tokens: 27, new_tokens: 0},
-      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78},
-      {name: "【输出前检查】", kind: "turn_only", tokens: 562, new_tokens: 562}
+      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78}
     ];
     const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
     const fresh = segments.reduce((sum, segment) => sum + segment.new_tokens, 0);

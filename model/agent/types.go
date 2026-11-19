@@ -175,10 +175,6 @@ type Request struct {
 	// 按 Messages 重新组装，而是在上一轮实际发出的请求后面接着发，见 continuation.go。
 	// 对不上就照常用 Messages。
 	Continuation *Continuation
-	// TailReminder 不为空时，每一步请求都在最后接上这一条，只给那一步看：不进 Messages，
-	// 也不进 Response.Transcript（下一轮的前缀）。离生成最近的说明 swe-2 才照做，放进前缀
-	// 一次或系统头部基本不管用，见 assistant 的 replyTailReminder。
-	TailReminder string
 }
 
 // Continuation 是「只追加」续接上一轮所需的东西：上一轮 Response.Transcript、本轮

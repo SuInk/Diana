@@ -261,65 +261,6 @@ func TestRunnerRequestsArePurePrefixes(t *testing.T) {
 	}
 }
 
-// TailReminder 每一步都接在请求最后、只给那一步看：拿掉它之后各步仍是严格前缀，
-// 前缀（Transcript）里一条都没有，下一轮续接也照样每步带一条。
-func TestRunnerTailReminderOnlyEndsEachRequest(t *testing.T) {
-	const reminder = "【输出前检查】别复述对方原话"
-	var events []string
-	client := &stepsClient{steps: [][]llm.ToolCall{{
-		{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
-		{ID: "search-1", Name: webSearchToolName, Arguments: map[string]any{"query": "天气"}},
-	}}}
-	search := &orderTool{name: webSearchToolName, events: &events}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events)}, NewToolRegistry(search))
-	if err != nil {
-		t.Fatal(err)
-	}
-	first, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("今天天气怎么样"), TailReminder: reminder})
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, err := runner.Run(context.Background(), Request{
-		Messages:     continuationTestMessages("谢谢"),
-		Continuation: &Continuation{Prefix: first.Transcript, Append: []llm.Message{{Role: llm.RoleUser, Content: "谢谢"}}, Key: first.ConversationKey},
-		TailReminder: reminder,
-	})
-	if err != nil || !second.Continued {
-		t.Fatalf("matching key must continue: %v", err)
-	}
-	if len(client.requests) < 3 {
-		t.Fatalf("want several steps over two turns, got %d requests", len(client.requests))
-	}
-	var stripped [][]llm.Message
-	for index, request := range client.requests {
-		count := 0
-		for _, message := range request.Messages {
-			count += strings.Count(message.Content, reminder)
-		}
-		last := request.Messages[len(request.Messages)-1]
-		if count != 1 || last.Content != reminder || last.Role != llm.RoleSystem {
-			t.Fatalf("request %d must end with the reminder exactly once: count=%d last=%#v", index, count, last)
-		}
-		stripped = append(stripped, request.Messages[:len(request.Messages)-1])
-	}
-	for _, message := range append(append([]llm.Message(nil), first.Transcript...), second.Transcript...) {
-		if strings.Contains(message.Content, reminder) {
-			t.Fatal("the reminder must not enter the prefix")
-		}
-	}
-	for index := 1; index < len(stripped); index++ {
-		before, after := stripped[index-1], stripped[index]
-		for position, message := range before {
-			got, want := after[position], message
-			got.CacheBreakpoint, want.CacheBreakpoint = false, false
-			got.TurnOnly, want.TurnOnly = false, false
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("request %d rewrites request %d at message %d", index, index-1, position)
-			}
-		}
-	}
-}
-
 func contractTestRunner(t *testing.T, client llm.LLMClient, names ...string) *Runner {
 	t.Helper()
 	tools := []Tool{&countingTool{name: "common"}}

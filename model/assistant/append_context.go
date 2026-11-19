@@ -99,8 +99,9 @@ type appendContextLog struct {
 	privacyRestored sync.Once
 }
 
-// replyVerifyRule 是【输出前检查】的第一条（见 replyTailReminder）。11-12 一度
+// replyVerifyRule 在主回复的系统头部。以前每轮贴在当前消息前面、只用于本轮：11-12 一度
 // 去掉时，当晚同一时段主回复联网的轮次从前六天的 9%～37% 掉到 3%（89 轮里 3 轮）。
+// 11-17 起请求只追加，每轮重发的说明都挪进头部。
 const replyVerifyRule = "对方提到以前说过、做过的事，或者涉及你拿不准的事实时，先用聊天记录、记忆或搜索查一下再回答，别凭印象。"
 
 type appendContextStore struct {

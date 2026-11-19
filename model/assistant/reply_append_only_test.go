@@ -106,12 +106,7 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 		}
 		turns++
 	}
-	// 【输出前检查】每步贴在最后、只给那一步看（见 replyTailReminder），拿掉再量。
-	var requests []llm.GenerateRequest
-	for _, request := range provider.requests {
-		request.Messages = withoutOutputCheck(t, request.Messages)
-		requests = append(requests, request)
-	}
+	requests := provider.requests
 	if len(requests) != turns || turns < 6 {
 		t.Fatalf("reply requests = %d for %d turns", len(requests), turns)
 	}
@@ -207,8 +202,7 @@ func TestReplyRequestsAreAppendOnly(t *testing.T) {
 			t.Fatalf("head segment %q after the tail: %+v", segment.Name, breakdown.Segments)
 		}
 	}
-	// 请求构成按实际发出的那份算，含最后那条【输出前检查】。
-	last := provider.requests[len(provider.requests)-1]
+	last := requests[len(requests)-1]
 	lastTokens := llm.EstimateToolDefinitionsTokens(last.Tools)
 	for _, message := range last.Messages {
 		lastTokens += llm.EstimateMessageTokens(message)

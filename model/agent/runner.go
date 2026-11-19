@@ -424,7 +424,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			cancel()
 			return fail(prepareErr)
 		}
-		resp, err := r.client.Generate(planningCtx, withTailReminder(planningRequest, req.TailReminder))
+		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil {
 			lastRequest = planningRequest
 		}
@@ -1091,7 +1091,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			return fail(prepareErr)
 		}
 		finalizationRequest.Messages = prepared.Messages
-		resp, err = r.client.Generate(ctx, withTailReminder(prepared, req.TailReminder))
+		resp, err = r.client.Generate(ctx, prepared)
 		if err == nil && resp != nil {
 			lastRequest = prepared
 		}
@@ -1261,18 +1261,6 @@ func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 		}
 	}
 	messages[len(messages)-1].CacheBreakpoint = true
-}
-
-// withTailReminder 把 Request.TailReminder 接在这一步要发出的请求最后。返回的是副本：
-// 对话和 lastRequest 都用接之前的那份，下一步、下一轮都看不到这一条，下一步再接新的。
-func withTailReminder(request llm.GenerateRequest, reminder string) llm.GenerateRequest {
-	if strings.TrimSpace(reminder) == "" {
-		return request
-	}
-	messages := make([]llm.Message, 0, len(request.Messages)+1)
-	messages = append(messages, request.Messages...)
-	request.Messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: reminder, Priority: llm.MessagePrioritySystem, TurnOnly: true})
-	return request
 }
 
 // appendAssistantEcho 只在模型确实产出了文本时把它写回对话。只带原生工具调用的
