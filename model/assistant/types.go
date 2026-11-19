@@ -950,9 +950,9 @@ type BotConfig struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
-	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
-	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
+	// 0 表示用 DefaultRequestContextTokens（64K），读取一律走 requestContextLimit()。
+	// 它只能收紧不能放宽：配置档说模型只有 32K，这里填 200K 也不会真的发出 200K
+	// 的请求。近期聊天历史按它（收紧后的窗口）的固定份额分配，没有单独的旋钮。
 	MaxContextTokens   int64 `json:"max_context_tokens,omitempty"`
 	RecentContextLimit int   `json:"recent_context_limit,omitempty"`
 	// HistoryBackfillMessageLimit 是断线回补后每个会话最多进回复流程的消息条数，
@@ -1666,9 +1666,9 @@ type ConfigPayload struct {
 	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
 	LLMSecretMaskingEnabled      *bool `json:"llm_secret_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
-	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
-	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
+	// 0 表示用 DefaultRequestContextTokens（64K），读取一律走 requestContextLimit()。
+	// 它只能收紧不能放宽：配置档说模型只有 32K，这里填 200K 也不会真的发出 200K
+	// 的请求。近期聊天历史按它（收紧后的窗口）的固定份额分配，没有单独的旋钮。
 	MaxContextTokens                int64                     `json:"max_context_tokens,omitempty"`
 	RecentContextLimit              int                       `json:"recent_context_limit,omitempty"`
 	HistoryBackfillMessageLimit     int                       `json:"history_backfill_message_limit,omitempty"`

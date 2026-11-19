@@ -91,11 +91,11 @@ func TestResidentSkillShipsItsBody(t *testing.T) {
 	if err := os.WriteFile(path, []byte("---\nname: demo\ndescription: d\n---\n\n照这三步做完。"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	deferred := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path}})
+	deferred := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path}}, 8000)
 	if strings.Contains(deferred, "照这三步做完") {
 		t.Fatalf("按需档不该带正文:\n%s", deferred)
 	}
-	resident := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, IncludeBody: true}})
+	resident := RenderSkillsCatalog([]SkillMetadata{{Name: "demo", Description: "d", Path: path, IncludeBody: true}}, 8000)
 	if !strings.Contains(resident, "照这三步做完") || !strings.Contains(resident, "Resident skill: demo") {
 		t.Fatalf("常驻档没带正文:\n%s", resident)
 	}

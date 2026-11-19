@@ -59,11 +59,11 @@ func (cfg ProviderConfig) ResolveMaxOutputTokens(_ string) (int64, MaxOutputToke
 }
 
 // withImplicitMaxOutputTokens 在调用方和配置档都没给上限时，把代发值写进请求。
-// 必须在 applyContextLimit 之后调用：校验只为输出预留 DefaultMaxOutputTokens，
-// 代发值不参与校验，否则 128K 的兜底窗口会被 128K 的输出上限整个吃掉。
+// 必须在 applyContextBudget 之后调用：预算只为输出预留 DefaultMaxOutputTokens，
+// 代发值不参与预算，否则 128K 的兜底窗口会被 128K 的输出上限整个吃掉。
 //
 // clampToContext 为 true 时按上下文剩余空间收紧：这些协议把输出算在窗口里，
-// 输入加上限超过窗口会被拒。本地校验已经保证至少留出 DefaultMaxOutputTokens。
+// 输入加上限超过窗口会被拒。预算已经保证至少留出 DefaultMaxOutputTokens。
 //
 // provider 由适配器按自己的协议给出，不信配置里的 Provider：直接构造的配置可能没填。
 func (cfg ProviderConfig) withImplicitMaxOutputTokens(provider Provider, req GenerateRequest, clampToContext bool) GenerateRequest {

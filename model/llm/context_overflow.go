@@ -4,7 +4,6 @@
 package llm
 
 import (
-	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,8 +12,8 @@ import (
 )
 
 // contextOverflowMarkers 覆盖各家供应商对「请求超出模型上下文」的措辞。窗口靠
-// 模型名推断出来的部分终究是推断：推错时必须能识别出来，交给上层压缩后重试，
-// 而不是让这一轮回复直接失败。
+// 模型名推断出来的部分终究是推断：推错时必须能识别出来并收缩重试，而不是让这
+// 一轮回复直接失败。
 var contextOverflowMarkers = []string{
 	"context_length_exceeded",
 	"context length exceeded",
@@ -29,8 +28,6 @@ var contextOverflowMarkers = []string{
 	"request exceeds the maximum allowed number of tokens",
 	"token count exceeds",
 	"exceed context window",
-	// ErrContextOverflow 自己的措辞：流式接口把错误转成字符串传出来，errors.Is 认不到。
-	"context window exceeded",
 	"上下文长度",
 	"超出模型上下文",
 	// HuggingFace TGI 的措辞，智谱 glm-4v-flash 这类部署原样透出：
@@ -40,7 +37,7 @@ var contextOverflowMarkers = []string{
 }
 
 // contextOverflowLimitPatterns 从超限报错里读出模型真实的窗口。读得出来就一次缩到位，
-// 下一轮按真实窗口算压缩阈值，不用每轮都先撞一次 400。
+// 不必从 128K 一路减半、每一步都白吃一个 400。
 var contextOverflowLimitPatterns = []*regexp.Regexp{
 	regexp.MustCompile("max_new_tokens`?\\s*must be <=\\s*(\\d+)"),
 	regexp.MustCompile(`maximum context length is (\d+)`),
@@ -109,7 +106,7 @@ func (m *contextLimitMemo) get(cfg ProviderConfig, model string) (int64, bool) {
 	return entry.limit, true
 }
 
-// learn 从超限报错里读出窗口并记住；读不出来就什么都不记。
+// learn 从超限报错里读出窗口并记住；读不出来就什么都不记，交给调用方减半重试。
 func (m *contextLimitMemo) learn(cfg ProviderConfig, model string, err error) {
 	limit, ok := ContextOverflowLimit(err)
 	if !ok {
@@ -123,23 +120,10 @@ func (m *contextLimitMemo) learn(cfg ProviderConfig, model string, err error) {
 	m.learned[contextLimitKey(cfg, model)] = learnedContextLimit{limit: limit, at: m.clock()}
 }
 
-// ErrContextOverflow 是本地校验发现请求超出上下文窗口时的错误。发送层不再裁剪
-// 消息，超窗的请求原样拒绝，由上层按 Pi 的做法压缩后重试。
-var ErrContextOverflow = errors.New("llm: context window exceeded")
-
-// LearnedContextLimit 返回之前从超限报错里学到的这个模型的真实窗口。上层算压缩
-// 阈值时要用它，否则会按偏大的配置窗口一路追加，每轮都先撞一次超限。
-func LearnedContextLimit(cfg ProviderConfig, model string) (int64, bool) {
-	return rememberedContextLimits.get(cfg, model)
-}
-
 // IsContextOverflowError 判断错误是否为「请求超出模型上下文窗口」。
 func IsContextOverflowError(err error) bool {
 	if err == nil {
 		return false
-	}
-	if errors.Is(err, ErrContextOverflow) {
-		return true
 	}
 	text := strings.ToLower(err.Error())
 	for _, marker := range contextOverflowMarkers {

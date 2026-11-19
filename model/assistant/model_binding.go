@@ -90,9 +90,6 @@ var llmPurposeGroup = map[string]string{
 	PurposeWelcomeGenerator: llm.GroupChat,
 	// 主动开口也是她在说话，和普通回复用同一个模型。
 	PurposeProactiveMessage: llm.GroupChat,
-	// 上下文压缩照 Pi 用会话模型自己写摘要：它接得住整段窗口，判断模型窗口小、
-	// 写不了长摘要。见 context_compaction.go。
-	PurposeContextSummary: llm.GroupChat,
 
 	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
 	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
@@ -105,12 +102,13 @@ var llmPurposeGroup = map[string]string{
 	PurposeOutboundImageSafety: llm.GroupVision,
 
 	// 回复辅助：这一轮回复发出之前同步跑的旁路调用，模型慢，回复就跟着慢。
-	// 语义指代、话题合并、语义去重要写出文字；提示改写的结果直接
+	// 语义指代、话题合并、语义去重和上下文摘要要写出文字；提示改写的结果直接
 	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
 	// 留在这里，人设由 withUserFacingPersona 补上。
 	PurposeSemanticReference:       llm.GroupReplyAssist,
 	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
+	PurposeContextSummary:          llm.GroupReplyAssist,
 	PurposeForwardContentSafety:    llm.GroupReplyAssist,
 	PurposeReplyAccountSafety:      llm.GroupReplyAssist,
 	PurposeReplySuppression:        llm.GroupReplyAssist,

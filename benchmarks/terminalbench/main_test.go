@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/llm"
@@ -12,6 +13,22 @@ import (
 type fakeClient struct {
 	calls  int
 	limits []int64
+}
+
+func TestTaskSurvivesToolHistoryBudget(t *testing.T) {
+	task := "Write period,severity,count; use the reference date 2025-08-12."
+	messages := []llm.Message{{Role: llm.RoleSystem, Content: "Agent rules", Priority: llm.MessagePrioritySystem}, taskMessage(task)}
+	for i := 0; i < 20; i++ {
+		messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: strings.Repeat("old observation ", 200)})
+	}
+	messages = append(messages, llm.Message{Role: llm.RoleTool, Content: "latest tool result"})
+	kept := llm.FitMessagesToContextBudget(messages, 2048, 512)
+	for _, m := range kept {
+		if m.Content == task {
+			return
+		}
+	}
+	t.Fatal("current benchmark task was lost after tool history accumulated")
 }
 
 func (f *fakeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {

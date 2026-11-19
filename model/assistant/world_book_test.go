@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func TestWorldBookSaveAddsAndUpdates(t *testing.T) {
@@ -134,7 +136,7 @@ func TestWorldBookContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
 		{ID: "menu", ParentID: "world", Title: "目录"},
 	}}.WithDefaults()
 
-	block := tree.ContextBlock("明天去码头钓鱼")
+	block := tree.ContextBlock("明天去码头钓鱼", worldBookContextTokenBudget)
 	if !strings.Contains(block, "常驻设定") || !strings.Contains(block, "枝江") {
 		t.Fatalf("always-on entry missing: %q", block)
 	}
@@ -149,7 +151,7 @@ func TestWorldBookContextBlockInjectsAlwaysOnAndMatched(t *testing.T) {
 	}
 
 	// 没命中触发词时只剩常驻段。
-	quiet := tree.ContextBlock("随便聊聊")
+	quiet := tree.ContextBlock("随便聊聊", worldBookContextTokenBudget)
 	if strings.Contains(quiet, "相关的设定") {
 		t.Fatalf("matched section rendered without hits: %q", quiet)
 	}
@@ -165,7 +167,7 @@ func TestWorldBookContextBlockDisabledChapterSkipsSubtree(t *testing.T) {
 		{ID: "leaf", ParentID: "chapter", Title: "细节", Content: "已废弃的设定。", AlwaysOn: true},
 		{ID: "alive", Title: "现行", Content: "仍然生效的设定。", AlwaysOn: true},
 	}}.WithDefaults()
-	block := tree.ContextBlock("")
+	block := tree.ContextBlock("", worldBookContextTokenBudget)
 	if strings.Contains(block, "已废弃") {
 		t.Fatalf("disabled subtree injected: %q", block)
 	}
@@ -174,31 +176,36 @@ func TestWorldBookContextBlockDisabledChapterSkipsSubtree(t *testing.T) {
 	}
 }
 
-func TestWorldBookContextBlockWritesEveryEntry(t *testing.T) {
+func TestWorldBookContextBlockHonorsTokenBudget(t *testing.T) {
 	long := strings.Repeat("设定内容很长。", 40)
 	tree := WorldBook{Nodes: []WorldBookNode{
 		{ID: "a", Title: "甲", Content: long, AlwaysOn: true},
 		{ID: "b", Title: "乙", Content: long, AlwaysOn: true},
 		{ID: "c", Title: "丙", Content: long, AlwaysOn: true},
 	}}.WithDefaults()
-	block := tree.ContextBlock("")
-	for _, title := range []string{"甲", "乙", "丙"} {
-		if !strings.Contains(block, title) {
-			t.Fatalf("entry %s missing", title)
-		}
+	// 预算取「刚好装下开头和第一条」：后两条必须被裁掉。
+	first := tree.ContextBlock("", 1<<20)
+	budget := llm.EstimateTextTokens(first[:strings.Index(first, "乙")-len("\n- ")])
+	block := tree.ContextBlock("", budget)
+	if block == "" || !strings.Contains(block, "甲") {
+		t.Fatal("budget dropped everything including the first entry")
 	}
-	if strings.Count(block, long) != 3 {
-		t.Fatal("entry content was shortened")
+	if strings.Contains(block, "乙") || strings.Contains(block, "丙") {
+		t.Fatalf("budget was not enforced: %d runes", len([]rune(block)))
+	}
+	// 一条都塞不下时不注入光杆开头。
+	if got := tree.ContextBlock("", 10); got != "" {
+		t.Fatalf("tiny budget produced header-only block: %q", got)
 	}
 }
 
 func TestWorldBookContextBlockEmptyTree(t *testing.T) {
-	if got := (WorldBook{}).ContextBlock("枝江"); got != "" {
+	if got := (WorldBook{}).ContextBlock("枝江", worldBookContextTokenBudget); got != "" {
 		t.Fatalf("empty tree produced context: %q", got)
 	}
 	// 只有目录节点、没有可注入内容时同样安静。
 	tree := WorldBook{Nodes: []WorldBookNode{{ID: "menu", Title: "目录"}}}.WithDefaults()
-	if got := tree.ContextBlock("目录"); got != "" {
+	if got := tree.ContextBlock("目录", worldBookContextTokenBudget); got != "" {
 		t.Fatalf("catalog-only tree produced context: %q", got)
 	}
 }
@@ -230,7 +237,7 @@ func TestWorldBookNodesFromSillyTavernMapFormat(t *testing.T) {
 	if result.Imported != 3 || len(tree.Nodes) != 3 {
 		t.Fatalf("import result = %#v", result)
 	}
-	block := tree.ContextBlock("去码头看看")
+	block := tree.ContextBlock("去码头看看", worldBookContextTokenBudget)
 	if !strings.Contains(block, "枝江") || !strings.Contains(block, "常年有雾") {
 		t.Fatalf("block = %q", block)
 	}
@@ -271,15 +278,15 @@ func TestWorldBookSecondaryKeywordsAndLogic(t *testing.T) {
 	}}.WithDefaults()
 
 	// 主词命中但副词不在场：不注入。
-	if block := tree.ContextBlock("你玩过龙腾世纪吗"); block != "" {
+	if block := tree.ContextBlock("你玩过龙腾世纪吗", worldBookContextTokenBudget); block != "" {
 		t.Fatalf("secondary miss injected: %q", block)
 	}
 	// 主词和任一副词同时在场：注入。
-	if block := tree.ContextBlock("枝江有龙吗"); !strings.Contains(block, "灯塔") {
+	if block := tree.ContextBlock("枝江有龙吗", worldBookContextTokenBudget); !strings.Contains(block, "灯塔") {
 		t.Fatalf("secondary hit not injected: %q", block)
 	}
 	// 只有副词、没有主词：不注入。
-	if block := tree.ContextBlock("枝江天气怎么样"); block != "" {
+	if block := tree.ContextBlock("枝江天气怎么样", worldBookContextTokenBudget); block != "" {
 		t.Fatalf("secondary alone injected: %q", block)
 	}
 

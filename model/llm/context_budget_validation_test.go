@@ -5,7 +5,6 @@ package llm
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -63,8 +62,7 @@ func runBudgetAdapter(t *testing.T, client budgetProtocolClient, req GenerateReq
 	return nil
 }
 
-// 超出窗口的请求不裁剪、不发出，本地报 ErrContextOverflow，错误里不带正文。
-func TestBudgetAdaptersRejectOversizedRequestWithoutSending(t *testing.T) {
+func TestBudgetAdaptersShrinkPlainOrRejectAtomicCurrentInput(t *testing.T) {
 	for _, protocol := range []string{"responses", "chat", "anthropic", "gemini"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream_%v", protocol, stream), func(t *testing.T) {
@@ -75,28 +73,38 @@ func TestBudgetAdaptersRejectOversizedRequestWithoutSending(t *testing.T) {
 				}))
 				defer server.Close()
 				client := budgetAdapterClient(t, protocol, ProviderConfig{Model: "test-model", APIKey: "test-key", BaseURL: server.URL, ContextWindowTokens: 2048, MaxContextTokens: 2048, MaxOutputTokens: 128}, server.Client())
-				current := "head " + strings.Repeat("A", 12000) + " critical middle requirement " + strings.Repeat("B", 12000) + " tail"
-				err := runBudgetAdapter(t, client, GenerateRequest{Messages: []Message{
-					{Role: RoleSystem, Content: "system"},
-					{Role: RoleUser, Content: "history", Priority: MessagePriorityHistory},
-					{Role: RoleUser, Content: current, Priority: MessagePriorityCurrent},
-				}}, stream)
-				if !errors.Is(err, ErrContextOverflow) {
-					t.Fatalf("want ErrContextOverflow, got %v", err)
+				for _, atomicText := range []bool{false, true} {
+					current := "head " + strings.Repeat("A", 12000) + " critical middle requirement " + strings.Repeat("B", 12000) + " tail"
+					req := GenerateRequest{Messages: []Message{
+						{Role: RoleSystem, Content: "system"},
+						{Role: RoleUser, Content: "history", Priority: MessagePriorityHistory},
+						{Role: RoleUser, Content: current, Priority: MessagePriorityCurrent, AtomicText: atomicText},
+					}}
+					before := calls.Load()
+					err := runBudgetAdapter(t, client, req, stream)
+					if !atomicText {
+						// Plain text is shortened and sent (#518); the stub server answers 418.
+						if calls.Load() == before {
+							t.Fatalf("shortened plain current input never reached HTTP: %v", err)
+						}
+						continue
+					}
+					if err == nil || !strings.Contains(err.Error(), "input budget") {
+						t.Fatalf("want local capacity error (atomic=%v), got %v", atomicText, err)
+					}
+					if strings.Contains(err.Error(), "critical middle") {
+						t.Fatal("capacity error leaked input content")
+					}
 				}
-				if strings.Contains(err.Error(), "critical middle") {
-					t.Fatal("overflow error leaked input content")
-				}
-				if calls.Load() != 0 {
-					t.Fatalf("oversized request reached HTTP %d times", calls.Load())
+				if calls.Load() == 0 {
+					t.Fatal("plain current input should have been shortened and sent")
 				}
 			})
 		}
 	}
 }
 
-// 装得下的请求逐字发出：历史、工具批次都不动。
-func TestBudgetAdaptersSendFittingRequestVerbatim(t *testing.T) {
+func TestBudgetAdaptersSendIntactCurrentAfterOptionalContextIsDropped(t *testing.T) {
 	for _, protocol := range []string{"responses", "chat", "anthropic", "gemini"} {
 		for _, stream := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/stream_%v", protocol, stream), func(t *testing.T) {
@@ -107,37 +115,83 @@ func TestBudgetAdaptersSendFittingRequestVerbatim(t *testing.T) {
 						t.Error(err)
 					}
 					bodies <- string(body)
+					// No provider response simulation is needed: the request itself is
+					// the assertion target, and 418 prevents transparent retries.
 					w.WriteHeader(http.StatusTeapot)
 				}))
 				defer server.Close()
-				client := budgetAdapterClient(t, protocol, ProviderConfig{Model: "test-model", APIKey: "test-key", BaseURL: server.URL, ContextWindowTokens: 64000, MaxContextTokens: 64000, MaxOutputTokens: 128}, server.Client())
-				history := strings.Repeat("optional_history ", 2000)
-				_ = runBudgetAdapter(t, client, GenerateRequest{
-					Tools: []ToolDefinition{{Name: "lookup", Parameters: map[string]any{"type": "object"}}},
-					Messages: []Message{
-						{Role: RoleSystem, Content: "system"},
-						{Role: RoleUser, Content: history, Priority: MessagePriorityHistory},
-						{Role: RoleAssistant, Priority: MessagePriorityHistory, ToolCalls: []ToolCall{
-							{ID: "budget-call-a", Name: "lookup", Arguments: map[string]any{"query": "a"}},
-							{ID: "budget-call-b", Name: "lookup", Arguments: map[string]any{"query": "b"}},
-						}},
-						{Role: RoleTool, Priority: MessagePriorityHistory, ToolCallID: "budget-call-a", ToolName: "lookup", Content: "first result"},
-						{Role: RoleTool, Priority: MessagePriorityHistory, ToolCallID: "budget-call-b", ToolName: "lookup", Content: "second result"},
-						{Role: RoleUser, Content: "CURRENT", Priority: MessagePriorityCurrent},
-					},
-				}, stream)
+				client := budgetAdapterClient(t, protocol, ProviderConfig{Model: "test-model", APIKey: "test-key", BaseURL: server.URL, ContextWindowTokens: 2048, MaxContextTokens: 2048, MaxOutputTokens: 128}, server.Client())
+				current := "CURRENT_HEAD " + strings.Repeat("A", 1200) + " CURRENT_MIDDLE_REQUIREMENT " + strings.Repeat("B", 1200) + " CURRENT_TAIL"
+				_ = runBudgetAdapter(t, client, GenerateRequest{Messages: []Message{
+					{Role: RoleSystem, Content: "system"},
+					{Role: RoleUser, Content: strings.Repeat("optional_history ", 5000), Priority: MessagePriorityHistory},
+					{Role: RoleUser, Content: current, Priority: MessagePriorityCurrent},
+				}}, stream)
 				var captured string
 				select {
 				case captured = <-bodies:
 				default:
 					t.Fatal("fitting request did not reach the provider")
 				}
-				for _, want := range []string{strings.TrimSpace(history), "budget-call-a", "budget-call-b", "first result", "second result", "CURRENT"} {
-					if !strings.Contains(captured, want) {
-						t.Fatalf("wire lost %.40q", want)
-					}
+				if !strings.Contains(captured, current) {
+					t.Fatal("provider wire lost current input or its middle requirement")
+				}
+				if strings.Contains(captured, strings.Repeat("optional_history ", 5000)) {
+					t.Fatal("optional history was not reduced to fit")
 				}
 			})
+		}
+	}
+}
+
+func TestBudgetAdaptersKeepParallelToolBatchWhole(t *testing.T) {
+	for _, protocol := range []string{"responses", "chat", "anthropic", "gemini"} {
+		for _, stream := range []bool{false, true} {
+			for _, payloadSize := range []int{8000, 80000} {
+				t.Run(fmt.Sprintf("%s/stream_%v/payload_%d", protocol, stream, payloadSize), func(t *testing.T) {
+					bodies := make(chan string, 1)
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Error(err)
+						}
+						bodies <- string(body)
+						w.WriteHeader(http.StatusTeapot)
+					}))
+					defer server.Close()
+					client := budgetAdapterClient(t, protocol, ProviderConfig{Model: "test-model", APIKey: "test-key", BaseURL: server.URL, ContextWindowTokens: 10000, MaxContextTokens: 10000, MaxOutputTokens: 128}, server.Client())
+					req := GenerateRequest{
+						Tools: []ToolDefinition{{Name: "lookup", Parameters: map[string]any{"type": "object"}}},
+						Messages: []Message{
+							{Role: RoleSystem, Content: strings.Repeat("S", 25000)},
+							{Role: RoleUser, Content: "old question", Priority: MessagePriorityHistory},
+							{Role: RoleAssistant, Priority: MessagePriorityHistory, ContextGroup: "batch", ToolCalls: []ToolCall{
+								{ID: "budget-call-a", Name: "lookup", Arguments: map[string]any{"payload": strings.Repeat("P", payloadSize)}},
+								{ID: "budget-call-b", Name: "lookup", Arguments: map[string]any{"query": "short"}},
+							}},
+							{Role: RoleTool, Priority: MessagePriorityHistory, ToolCallID: "budget-call-a", ToolName: "lookup", Content: "first result", ContextGroup: "batch"},
+							{Role: RoleTool, Priority: MessagePriorityHistory, ToolCallID: "budget-call-b", ToolName: "lookup", Content: "second result"},
+							{Role: RoleUser, Content: "current", Priority: MessagePriorityCurrent},
+						},
+					}
+					_ = runBudgetAdapter(t, client, req, stream)
+					var body string
+					select {
+					case body = <-bodies:
+					default:
+						t.Fatal("fitting request did not reach the provider")
+					}
+					want := 2 // Each call ID occurs once in its call and once in its result.
+					if payloadSize == 80000 {
+						want = 0 // The oversized optional batch must be dropped whole.
+					}
+					for _, id := range []string{"budget-call-a", "budget-call-b"} {
+						if got := strings.Count(body, id); got != want {
+							t.Fatalf("wire has partial batch for %s: count=%d want=%d", id, got, want)
+						}
+					}
+				})
+			}
 		}
 	}
 }

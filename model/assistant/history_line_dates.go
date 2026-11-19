@@ -15,7 +15,7 @@ import (
 //
 // 几百条历史里同一个日期重复几百遍，每行白付十来个 token。参考的雨夹雪是换天时单独
 // 插一行「--- 日期 ---」；这里改在换天那一行自己写全，效果一样，不多一条消息，也不用
-// 让续接、压缩去认一种新的分隔消息。
+// 让续接、预裁剪去认一种新的分隔消息。
 //
 // 渲染时（historyLinePrefix）每行照旧写全日期，渲染缓存按条目自己的源数据算，不依赖
 // 前一行；省不省日期在拼成一份历史之后统一决定（compactHistoryLineDates）。这样同一批
@@ -76,7 +76,7 @@ func (d *historyLineDates) step(content string) (date, clock, rest string, sameD
 	return date, clock, rest, sameDay, true
 }
 
-// expand 返回这一行写全日期的形态。续接比对「这一行上文有没有」、压缩摘掉开头几行
+// expand 返回这一行写全日期的形态。续接比对「这一行上文有没有」、预裁剪丢掉开头几行
 // 之前，都先换成这个形态：同一条消息在不同的一份历史里前一行不同，省不省日期也就不同。
 func (d *historyLineDates) expand(content string) string {
 	date, clock, rest, _, ok := d.step(content)

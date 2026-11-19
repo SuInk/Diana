@@ -201,7 +201,7 @@ func manyDeploymentMemories(count int) []StructuredMemoryItem {
 	return items
 }
 
-// 候选超过自动注入的 120 条加载窗口时，工具照样报真实总数；
+// 候选超过自动注入的 120 条窗口、命中超过排序的 24 条名额时，工具照样报真实总数；
 // 单次上限很小时按整条切页，翻页之间注入路径回写了 last_verified_at（名次本会变），
 // 顺着 cursor 仍不重不漏读完全部。
 func TestMemoryToolSearchReadsPastInjectionCaps(t *testing.T) {
@@ -211,9 +211,8 @@ func TestMemoryToolSearchReadsPastInjectionCaps(t *testing.T) {
 	store.items = manyDeploymentMemories(total)
 	r.SetStructuredMemoryStore(store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "g", UserID: "10001"}
-	// 自动注入不再按条数截：加载窗口里过了相关性门槛的都在。
-	if injected := rankStructuredMemories(store.items[:structuredMemoryLoadLimit], event, "部署阻塞", time.Now()); len(injected) > structuredMemoryLoadLimit || len(injected) <= 24 {
-		t.Fatalf("自动注入条数 = %d", len(injected))
+	if injected := rankStructuredMemories(store.items[:structuredMemoryLoadLimit], event, "部署阻塞", time.Now()); len(injected) > 24+maximumCoreMemoryItems {
+		t.Fatalf("自动注入路径的名额不该变：%d 条", len(injected))
 	}
 	tool := &dianaMemoryTool{runtime: r, event: event}
 	ctx := agent.WithToolOutputBudget(context.Background(), 4000)

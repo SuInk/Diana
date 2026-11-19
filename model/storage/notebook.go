@@ -84,6 +84,8 @@ const (
 	// notebookRevisionLimit 是单条条目返回的修订记录条数。修订史用来看「最近怎么
 	// 变的」，不是审计日志。
 	notebookRevisionLimit = 10
+	// notebookLookupLimit 是自动命中的兜底上限。
+	notebookLookupLimit = 12
 )
 
 const (
@@ -400,12 +402,9 @@ func (s *SQLiteStore) LookupNotebookEntries(ctx context.Context, query assistant
 	statement := `SELECT ` + notebookEntryColumns + ` FROM notebook_entries e
 WHERE e.scope_key IN (` + placeholders(len(scopes)) + `) AND e.status = 'active'
   AND (` + strings.Join(conditions, " OR ") + `)
-ORDER BY e.usage_count DESC, e.updated_at DESC`
-	// Limit 不填就返回全部命中：自动注入要一条不漏，只有「查有没有」的调用才传 1。
-	if query.Limit > 0 {
-		statement += "\nLIMIT ?"
-		args = append(args, query.Limit)
-	}
+ORDER BY e.usage_count DESC, e.updated_at DESC
+LIMIT ?`
+	args = append(args, notebookQueryLimit(query.Limit, notebookLookupLimit))
 	entries, err := queryNotebookEntries(ctx, s.eventReader(), statement, args...)
 	if err != nil {
 		return nil, err
@@ -690,6 +689,13 @@ func notebookScopeArgs(scopes []string) []any {
 func notebookListQueryLimit(requested int) int {
 	if requested <= 0 {
 		return -1
+	}
+	return requested
+}
+
+func notebookQueryLimit(requested, fallback int) int {
+	if requested <= 0 || requested > fallback {
+		return fallback
 	}
 	return requested
 }

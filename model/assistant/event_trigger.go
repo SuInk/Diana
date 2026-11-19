@@ -59,6 +59,8 @@ const (
 	maximumEventTriggerKeywords  = 10
 	maximumEventTriggerUsers     = 20
 	maximumEventTriggerPattern   = 200
+	// eventTriggerContextRunes 是投递给创建者时附带的触发消息摘录长度。
+	eventTriggerContextRunes = 120
 )
 
 // EventTrigger 是事件触发任务的条件和动作，序列化进 Reminder.EventTriggerJSON。
@@ -398,7 +400,7 @@ func eventTriggerOriginNotice(spec EventTrigger, event MessageEvent, text, body 
 	if spec.Event == eventTriggerEventMemberJoin {
 		head = fmt.Sprintf("触发了：%s 进了%s", who, strings.TrimSuffix(where, "里"))
 	} else {
-		head = fmt.Sprintf("触发了：%s 在%s说「%s」", who, where, strings.TrimSpace(text))
+		head = fmt.Sprintf("触发了：%s 在%s说「%s」", who, where, truncateRunes(text, eventTriggerContextRunes))
 	}
 	return head + "\n" + body
 }
@@ -527,7 +529,7 @@ func (r *Runtime) expireEventTriggers(ctx context.Context, now time.Time) time.T
 		return next
 	}
 	for _, item := range notices {
-		text := fmt.Sprintf("你设的触发任务 %s 到期了，一次都没触发，已自动收掉：%s", item.ID, strings.TrimSpace(item.Message))
+		text := fmt.Sprintf("你设的触发任务 %s 到期了，一次都没触发，已自动收掉：%s", item.ID, truncateRunes(item.Message, eventTriggerContextRunes))
 		if err := r.sendSubscriberNotice(ctx, r.sourceEventForReminder(item), text); err != nil {
 			log.Printf("diana event trigger %s expiry notice failed: %v", item.ID, err)
 		}

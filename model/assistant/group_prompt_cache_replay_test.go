@@ -691,6 +691,12 @@ func TestGroupPromptTraceReplayBudgetPreflight(t *testing.T) {
 		if budget[arm].ContextLimit != llm.DefaultMaxContextTokens || budget[arm].InputBudget != llm.InputTokenBudget(llm.DefaultMaxContextTokens, cfg.MaxOutputTokens) || budget[arm].Estimated != llm.EstimateRequestInputTokens(request) {
 			t.Fatal("preflight does not use the adapter's default limit and estimator")
 		}
+		// The exported fitter shares fitMessagesToTokenBudget with the adapters.
+		// Account for tool choice as well as schemas in the fixed reserve.
+		fixed := llm.EstimateRequestInputTokens(llm.GenerateRequest{Tools: request.Tools, ToolChoice: request.ToolChoice})
+		if fitted := llm.FitMessagesToContextBudget(request.Messages, budget[arm].ContextLimit, cfg.MaxOutputTokens+fixed); !reflect.DeepEqual(fitted, request.Messages) {
+			t.Fatal("accepted arm lost content in the production message fitter")
+		}
 	}
 	if budget[1].Estimated <= budget[0].Estimated {
 		t.Fatal("fixture must expose added tail framing")

@@ -472,7 +472,7 @@ func TestRunnerStopsAfterTerminalTool(t *testing.T) {
 func TestRunnerPromptKeepsSkillsOutOfStableProtocol(t *testing.T) {
 	registry := NewToolRegistry(&SkillsReadTool{})
 	registry.SetSkills([]SkillMetadata{{Name: "demo-skill", Description: "Use demo.", Path: "/tmp/demo/SKILL.md"}})
-	runner := &Runner{cfg: Config{}.WithDefaults(), registry: registry}
+	runner := &Runner{cfg: Config{SkillsListBudget: 8000}.WithDefaults(), registry: registry}
 	protocol := runner.systemPrompt()
 	hint := runner.explicitSkillPrompt(Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "请用 $demo-skill"}}}, nil)
 	if strings.Contains(protocol, "demo-skill") || strings.Contains(protocol, "Available skills") {
@@ -576,12 +576,18 @@ func TestRunnerSkillCatalogIsSameForEverySpeaker(t *testing.T) {
 	}
 }
 
-func TestToolDescriptionsKeepFullTextForAgentProtocol(t *testing.T) {
+func TestToolDescriptionsAreCompactedForAgentProtocol(t *testing.T) {
 	description := strings.Repeat("very long tool guidance ", 100) + "input: {\"query\":\"string\"}"
 	registry := NewToolRegistry(&longDescriptionTestTool{description: description})
-	full := registry.Descriptions()
-	if !strings.Contains(full, strings.Join(strings.Fields(description), " ")) {
-		t.Fatalf("工具清单把描述截短了：%d runes", len([]rune(full)))
+	compact := registry.Descriptions()
+	if !strings.Contains(compact, `input: {"query":"string"}`) {
+		t.Fatalf("compact description lost its input schema: %q", compact)
+	}
+	if len([]rune(compact)) > 760 {
+		t.Fatalf("compact description is still too large: %d runes", len([]rune(compact)))
+	}
+	if !strings.Contains(compact, "... input:") {
+		t.Fatalf("purpose was not compacted ahead of the complete input schema: %q", compact)
 	}
 }
 

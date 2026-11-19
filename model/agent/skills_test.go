@@ -5,7 +5,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -22,7 +21,7 @@ func TestLoadSkillsAndReadTool(t *testing.T) {
 	if len(skills) != 1 || skills[0].Name != "demo-skill" {
 		t.Fatalf("skills = %#v", skills)
 	}
-	catalog := RenderSkillsCatalog(skills)
+	catalog := RenderSkillsCatalog(skills, 8000)
 	if !strings.Contains(catalog, "demo-skill") || !strings.Contains(catalog, "read_skill") {
 		t.Fatalf("catalog did not include skill guidance: %s", catalog)
 	}
@@ -106,32 +105,4 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
-}
-
-// 目录和常驻正文全部带上：skill 再多、正文再长也不截、不改成「请先 read_skill」。
-func TestRenderSkillsCatalogKeepsEveryEntryAndResidentBody(t *testing.T) {
-	resident := true
-	body := strings.Repeat("resident body line\n", 3000)
-	var skills []SkillMetadata
-	for i := range 300 {
-		skills = append(skills, SkillMetadata{Name: fmt.Sprintf("skill-%03d", i), Description: strings.Repeat("d", 100)})
-	}
-	skills = append(skills,
-		SkillMetadata{Name: "big-a", Description: "a", Content: body, Resident: &resident, IncludeBody: true},
-		SkillMetadata{Name: "big-b", Description: "b", Content: body, Resident: &resident, IncludeBody: true},
-	)
-	catalog, delivered := renderSkillsCatalog(skills)
-	if !strings.Contains(catalog, "skill-299") {
-		t.Fatal("目录被截断")
-	}
-	if strings.Count(catalog, strings.TrimSpace(body)) != 2 || !delivered["big-a"] || !delivered["big-b"] {
-		t.Fatalf("常驻正文没有全部带上：delivered=%v", delivered)
-	}
-	triggered := renderTriggeredSkillBodies([]SkillMetadata{
-		{Name: "hit-a", Content: body, IncludeBody: true},
-		{Name: "hit-b", Content: body, IncludeBody: true},
-	}, map[string]bool{})
-	if strings.Count(triggered, strings.TrimSpace(body)) != 2 {
-		t.Fatal("命中的 skill 正文没有全部带上")
-	}
 }

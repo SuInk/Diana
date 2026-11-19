@@ -76,7 +76,7 @@ func (c *geminiClient) Generate(ctx context.Context, req GenerateRequest) (resul
 		}
 	}()
 	req = req.withDefaults(c.cfg)
-	req = applyContextLimit(req, c.cfg)
+	req = applyContextBudget(req, c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
@@ -139,7 +139,7 @@ func (c *geminiClient) Stream(ctx context.Context, req GenerateRequest) (streamE
 			streamEvents = scopeContinuationEvents(ctx, streamEvents, continuationScope(c.cfg, req.Model))
 		}
 	}()
-	req = applyContextLimit(req.withDefaults(c.cfg), c.cfg)
+	req = applyContextBudget(req.withDefaults(c.cfg), c.cfg)
 	if err := validateGenerateRequest(req); err != nil {
 		return nil, err
 	}

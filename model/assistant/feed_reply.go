@@ -30,6 +30,10 @@ const (
 	feedReplyDailyLimit = 50
 	// feedReplyMaxRounds 限制一次触发最多连补几轮，防止运行期间被持续追加评论拖成死循环。
 	feedReplyMaxRounds = 3
+	// feedReplyPostContextRunes 是给模型看的动态正文长度上限，日记可以很长，回一句话不需要全文。
+	feedReplyPostContextRunes = 1200
+	// feedReplyThreadContext 是带给模型的最近评论条数。
+	feedReplyThreadContext = 12
 )
 
 type feedReplyState struct {
@@ -224,13 +228,16 @@ func feedReplyPrompt(post FeedPost, pending FeedComment) string {
 	if post.Title != "" {
 		b.WriteString("标题：" + post.Title + "\n")
 	}
-	// 正文和评论区全部带上，不截字、不只取最近几条。
-	b.WriteString(post.Content + "\n")
+	b.WriteString(truncateRunesPlain(post.Content, feedReplyPostContextRunes) + "\n")
 	if len(post.Images) > 0 {
 		b.WriteString(fmt.Sprintf("（配了 %d 张图）\n", len(post.Images)))
 	}
+	comments := post.Comments
+	if len(comments) > feedReplyThreadContext {
+		comments = comments[len(comments)-feedReplyThreadContext:]
+	}
 	b.WriteString("\n评论区（按时间）：\n")
-	for _, comment := range post.Comments {
+	for _, comment := range comments {
 		who := "主人"
 		if comment.AuthorKind == FeedAuthorBot {
 			who = "你"

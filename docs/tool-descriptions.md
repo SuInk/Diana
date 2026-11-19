@@ -6,7 +6,7 @@
 
 ## 主描述（`Description()`）
 
-- **第一句就是摘要**，说这个工具做什么，最好不超过 40 字。按需工具的目录带完整描述、不截字，但模型主要靠这一句决定加不加载。
+- **第一句就是摘要**，说这个工具做什么，最好不超过 40 字。按需工具的目录只截前 120 字（`SystemPromptToolDescriptionBudget`），模型靠这一句决定加不加载。
 - 第一句写成动宾句（「找仓库、搜索和管理 GitHub Issues……」），不要压成「GitHub 仓库、Issue 和 PR：……」这种名词清单。回放里 github 的第一句这样一压，主人让改好感度时 gpt-6-sol 有 6/10 次先拿 github 随便搜一个词，换回动宾句后 0/8。
 - 后面只写模型不说就会做错的约束，每条一个短句：
   - 和相近工具的分工（「一次性提醒用 reminder」），只写一次，不在参数里重复。
@@ -29,7 +29,7 @@
 
 - 填错的情况由代码校验并返回具体原因（「interval 最短 5m」「月请写 mo」），模型看到错误再改。比把每种边界提前写进说明省得多，也不会漂移。
 - 单个工具怎么用（什么时候调、参数怎么填、调完怎么说）只写在这个工具自己的定义里，不在系统提示词另写一段。参照 mizorewww/pi-extension-telegram-agent：系统提示词只放共享协议、跨工具规则和人设，工具用法由工具定义自己说。
-  - 按需工具的目录带完整描述，不截字。「什么时候该用」要在模型加载之前就看得到的（模型不等吩咐自己写的 notebook、self_note，开局前就要 set 的 thread_state），放进 `replyFeaturedTools`，目录写全文。
+  - 按需工具的目录只截前 120 字。「什么时候该用」要在模型加载之前就看得到的（模型不等吩咐自己写的 notebook、self_note，开局前就要 set 的 thread_state），放进 `replyFeaturedTools`，目录写全文。
   - 调完之后才用得上的话（「图还没画好，说清准备画什么」）跟着工具结果给，模型正好在写回复时读到，例如 image 的 `pending_note`、version 的 `reply_guidance`。
   - 参数多、目录标了「先 tool_search 取定义」的（bot_config、subscription），模型总会先读完整定义，细节放参数说明即可。
 - 跨工具的流程（subtask 和 web_search 怎么分工、render 和 image 怎么选、文件存好了才能说存好了）放系统提示词的规则段，用 `hasAnyTool` 判断工具在场时才带。

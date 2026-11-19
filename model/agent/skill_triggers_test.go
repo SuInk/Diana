@@ -50,11 +50,11 @@ func TestKeywordHitShipsTheBodyWithoutReadSkill(t *testing.T) {
 	path := writeSkillFile(t, dir, "name: jukebox\ndescription: 点歌流程\nkeywords: 点歌", "第一步：问清歌名。")
 	skills := []SkillMetadata{{Name: "jukebox", Description: "点歌流程", Path: path, Keywords: []string{"点歌"}}}
 
-	hit := RenderSkillsCatalog(SelectSkillBodies(skills, "帮我点歌"))
+	hit := RenderSkillsCatalog(SelectSkillBodies(skills, "帮我点歌"), 8000)
 	if !strings.Contains(hit, "第一步：问清歌名。") {
 		t.Fatalf("命中关键词没带正文:\n%s", hit)
 	}
-	miss := RenderSkillsCatalog(SelectSkillBodies(skills, "今天天气不错"))
+	miss := RenderSkillsCatalog(SelectSkillBodies(skills, "今天天气不错"), 8000)
 	if strings.Contains(miss, "第一步") {
 		t.Fatalf("没命中却带了正文:\n%s", miss)
 	}
@@ -69,11 +69,11 @@ func TestConfiguredTierOverridesKeywords(t *testing.T) {
 	path := writeSkillFile(t, dir, "name: jukebox\ndescription: d\nkeywords: 点歌", "第一步：问清歌名。")
 	deferred, resident := false, true
 
-	off := RenderSkillsCatalog(SelectSkillBodies([]SkillMetadata{{Name: "jukebox", Description: "d", Path: path, Keywords: []string{"点歌"}, Resident: &deferred}}, "帮我点歌"))
+	off := RenderSkillsCatalog(SelectSkillBodies([]SkillMetadata{{Name: "jukebox", Description: "d", Path: path, Keywords: []string{"点歌"}, Resident: &deferred}}, "帮我点歌"), 8000)
 	if strings.Contains(off, "第一步") {
 		t.Fatalf("配成按需却因为关键词带上了正文:\n%s", off)
 	}
-	on := RenderSkillsCatalog(SelectSkillBodies([]SkillMetadata{{Name: "jukebox", Description: "d", Path: path, Resident: &resident}}, "今天天气不错"))
+	on := RenderSkillsCatalog(SelectSkillBodies([]SkillMetadata{{Name: "jukebox", Description: "d", Path: path, Resident: &resident}}, "今天天气不错"), 8000)
 	if !strings.Contains(on, "第一步") {
 		t.Fatalf("配成常驻却没带正文:\n%s", on)
 	}
@@ -84,7 +84,7 @@ func TestExplicitMentionShipsTheBody(t *testing.T) {
 	dir := t.TempDir()
 	path := writeSkillFile(t, dir, "name: jukebox\ndescription: d", "第一步：问清歌名。")
 	skills := []SkillMetadata{{Name: "jukebox", Description: "d", Path: path}}
-	got := RenderSkillsCatalog(SelectSkillBodies(skills, "用一下 $jukebox"))
+	got := RenderSkillsCatalog(SelectSkillBodies(skills, "用一下 $jukebox"), 8000)
 	if !strings.Contains(got, "第一步") {
 		t.Fatalf("点名没带正文:\n%s", got)
 	}

@@ -145,7 +145,7 @@ func TestRepoPluginBundleOwnerScopeSecretsAndLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer registry.Close()
-	if !strings.Contains(agent.RenderSkillsCatalog(registry.Skills()), "alice.bundle:accounts") {
+	if !strings.Contains(agent.RenderSkillsCatalog(registry.Skills(), 8000), "alice.bundle:accounts") {
 		t.Fatalf("skills=%v", registry.Skills())
 	}
 	catalog, ok := registry.Get("list_capabilities")

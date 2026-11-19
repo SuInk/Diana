@@ -505,7 +505,7 @@
         </div>
         <div class="field">
           <label for="group-maxcontext">单次请求上下文上限</label>
-          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens || '模型窗口')" />
+          <input id="group-maxcontext" v-model.number="editing.max_context_tokens" class="input" inputmode="numeric" :placeholder="inheritedPlaceholder(inheritedBot?.max_context_tokens || 64000)" />
         </div>
         <div class="field">
           <label for="group-maxreply">单条回复上限（字符）</label>

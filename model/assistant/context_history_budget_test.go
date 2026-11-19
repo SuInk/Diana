@@ -9,6 +9,114 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
+func TestRecentHistoryUsesTokenWindowInsteadOfTwentyMessages(t *testing.T) {
+	history := make([]MessageEvent, 0, 160)
+	for index := 0; index < 80; index++ {
+		history = append(history, MessageEvent{
+			Kind:       EventKindGroup,
+			Time:       int64(1000 + index*2),
+			UserID:     "user-1",
+			MessageID:  fmt.Sprintf("u-%d", index),
+			SenderName: "Alice",
+			RawMessage: fmt.Sprintf("第%d个很短的问题", index),
+		})
+		history = append(history, MessageEvent{
+			Kind:      EventKindGroup,
+			Time:      int64(1001 + index*2),
+			MessageID: fmt.Sprintf("a-%d", index),
+			botReply:  fmt.Sprintf("第%d个简短回答", index),
+		})
+	}
+
+	windows := []int64{4096, 8192, 16384, 32768}
+	previous := 0
+	for _, window := range windows {
+		budget := recentHistoryBudget(window)
+		selected := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", budget)
+		if len(selected) < previous {
+			t.Fatalf("window %d selected %d messages after %d", window, len(selected), previous)
+		}
+		previous = len(selected)
+		if len(selected)%2 != 0 {
+			t.Fatalf("window %d split a user/assistant turn: %d messages", window, len(selected))
+		}
+	}
+	selected16K := selectRecentHistoryTurns(history, MessageEvent{Time: 2000}, "bot", recentHistoryBudget(40000))
+	if len(selected16K) <= 20 {
+		t.Fatalf("16K short-message history still behaves like a 20-message cap: %d", len(selected16K))
+	}
+}
+
+// 历史顶到预算后，窗口起点必须在多轮之间保持不动，只在装不下时一次性回落；
+// 否则每来一条消息最旧的一轮就被挤掉，整段历史的前缀缓存每轮都断。
+func TestAnchoredHistoryWindowKeepsStartStableAcrossTurns(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	var history []MessageEvent
+	turn := func(index int) []MessageEvent {
+		return []MessageEvent{
+			{Kind: EventKindGroup, GroupID: "g", Time: int64(1000 + index*10), UserID: "user-1", MessageID: fmt.Sprintf("u-%d", index), SenderName: "Alice", RawMessage: fmt.Sprintf("第%d个很短的问题", index)},
+			{Kind: EventKindGroup, GroupID: "g", Time: int64(1001 + index*10), MessageID: fmt.Sprintf("a-%d", index), botReply: fmt.Sprintf("第%d个简短回答", index)},
+		}
+	}
+	for index := 0; index < 60; index++ {
+		history = append(history, turn(index)...)
+	}
+	// Size the fixture by complete turns so added identity metadata does not
+	// accidentally remove the growth room this anchoring test depends on.
+	budget := groupHistoryContextTurns(turn(0), 1005, "bot")[0].estimated * 20
+	current := func() MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "g", Time: history[len(history)-1].Time + 5}
+	}
+	full := selectRecentHistoryTurns(history, current(), "bot", budget)
+	if len(full) == len(history) {
+		t.Fatalf("test needs a truncated window, got all %d events", len(history))
+	}
+
+	first := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	if len(first) == 0 || len(first) >= len(full) {
+		t.Fatalf("re-anchored window should sit below the full budget: %d vs %d", len(first), len(full))
+	}
+	anchor := first[0].MessageID
+	stableTurns := 0
+	for index := 60; index < 200; index++ {
+		history = append(history, turn(index)...)
+		window := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+		if window[len(window)-1].MessageID != fmt.Sprintf("a-%d", index) {
+			t.Fatalf("window must always end at the newest message: %q", window[len(window)-1].MessageID)
+		}
+		if window[0].MessageID == anchor {
+			stableTurns++
+			continue
+		}
+		if stableTurns < 3 {
+			t.Fatalf("anchor moved after only %d stable turns", stableTurns)
+		}
+		// 回落后窗口变短，起点前移到低水位。
+		if len(window) >= len(full) {
+			t.Fatalf("re-anchored window should shrink to the low watermark: %d vs %d", len(window), len(full))
+		}
+		anchor = window[0].MessageID
+		stableTurns = 0
+	}
+	if stableTurns == 0 && anchor == "" {
+		t.Fatal("anchor never settled")
+	}
+
+	// 临时收紧的预算只取尾巴，不动锚：下一轮正常预算仍从原起点开始。
+	before := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	focused := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget/4)
+	after := runtime.anchoredHistoryWindow("s", history, current(), "bot", budget, budget)
+	if len(focused) >= len(before) || before[0].MessageID != after[0].MessageID || len(before) != len(after) {
+		t.Fatalf("focused turn must not move the anchor: before=%d focused=%d after=%d", len(before), len(focused), len(after))
+	}
+
+	// 历史全部装得下时不需要锚。
+	short := history[len(history)-4:]
+	if window := runtime.anchoredHistoryWindow("s", short, current(), "bot", budget, budget); len(window) != len(short) || runtime.historyWindowAnchor("s") != "" {
+		t.Fatalf("fully fitting history must clear the anchor: %d / %q", len(window), runtime.historyWindowAnchor("s"))
+	}
+}
+
 func TestRecentHistoryStopsBeforeOversizedOlderTurn(t *testing.T) {
 	history := []MessageEvent{
 		{Kind: EventKindPrivate, Time: 1, UserID: "u", MessageID: "old-u", RawMessage: strings.Repeat("很长的旧问题", 500)},
@@ -22,7 +130,7 @@ func TestRecentHistoryStopsBeforeOversizedOlderTurn(t *testing.T) {
 	}
 }
 
-func TestRecentHistoryKeepsOversizedNewestTurn(t *testing.T) {
+func TestRecentHistoryKeepsOversizedNewestTurnForFinalCompaction(t *testing.T) {
 	history := []MessageEvent{
 		{Kind: EventKindPrivate, Time: 1, UserID: "u", MessageID: "old-u", RawMessage: "旧问题"},
 		{Kind: EventKindPrivate, Time: 2, MessageID: "old-a", botReply: "旧回答"},
@@ -35,6 +143,14 @@ func TestRecentHistoryKeepsOversizedNewestTurn(t *testing.T) {
 	}
 }
 
+func TestPromptHistoryCandidateLimitIsDerivedFromTokens(t *testing.T) {
+	low := historyCandidateLimitForBudget(recentHistoryBudget(4096))
+	high := historyCandidateLimitForBudget(recentHistoryBudget(40000))
+	if low == 20 || high == 20 || high <= low {
+		t.Fatalf("candidate limits low=%d high=%d", low, high)
+	}
+}
+
 func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
 	stored := []MessageEvent{
 		{Kind: EventKindPrivate, Time: 10, MessageID: "old", RawMessage: "旧消息"},
@@ -44,6 +160,185 @@ func TestTokenHistoryMergeKeepsTrueNewestTimeline(t *testing.T) {
 	got := mergeMessageHistory(memory, stored, 2)
 	if len(got) != 2 || got[0].MessageID != "middle" || got[1].MessageID != "new" {
 		t.Fatalf("merged timeline = %#v", got)
+	}
+}
+
+func TestRecordPromptContextBudgetEmitsCategoryBreakdown(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := &Runtime{}
+	runtime.SetAppLogWriter(logs)
+	event := MessageEvent{
+		Kind:      EventKindGroup,
+		GroupID:   "20001",
+		UserID:    "10001",
+		MessageID: "30001",
+		Time:      1700000200,
+	}
+	cfg := BotConfig{DebugModeEnabled: boolPointer(true), BotAccount: "90001"}
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: "人设与规则", Priority: llm.MessagePrioritySystem},
+		{Role: llm.RoleUser, Content: "【较早上下文压缩摘要】" + strings.Repeat("旧事", 50), Priority: llm.MessagePrioritySummary},
+		{Role: llm.RoleUser, Content: "【长期记忆】关系等级：熟人", Priority: llm.MessagePriorityMemory},
+		{Role: llm.RoleUser, Content: "更早的一句话", Priority: llm.MessagePriorityHistory},
+		{Role: llm.RoleUser, Content: "刚刚说的话", Priority: llm.MessagePriorityRecentHistory},
+		{Role: llm.RoleUser, Content: "现在的问题", Priority: llm.MessagePriorityCurrent},
+	}
+	history := []MessageEvent{
+		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29998", Time: 1700000100, RawMessage: "更早的一句话"},
+		{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29999", Time: 1700000180, RawMessage: "刚刚说的话"},
+	}
+	semantic := semanticReferencePromptContext{Requested: 6, Resolved: 6, TextSources: 6}
+	sources := semanticReferenceContext{RequestedSourceCount: 6, ResolvedSourceCount: 6, TextSourceCount: 6, AttachedImageCount: 0, MissingSourceCount: 0}
+
+	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, semantic, sources, false, []contextLayerUsage{{
+		Layer: "retrieved_memory", Budget: 2400, CandidateItems: 40, CandidateTokens: 6000,
+		RankedItems: 24, RankedTokens: 3600, SelectedItems: 9, SelectedTokens: 2380,
+		Reason: contextLayerReasonBudget,
+	}})
+
+	entries := logs.entriesSnapshot()
+	if len(entries) != 1 || entries[0].Action != "context_budget" {
+		t.Fatalf("unexpected debug entries: %+v", entries)
+	}
+	metadata := entries[0].Metadata
+	for _, key := range []string{
+		"effective_context_window", "output_reserve", "safety_reserve", "input_budget",
+		"requested_tokens", "selected_tokens", "dropped_tokens", "over_budget",
+		"categories", "layers", "summary", "history_selected_turns", "history_earliest_time",
+		"history_latest_time", "semantic_attached_images", "semantic_missing_sources",
+	} {
+		if _, ok := metadata[key]; !ok {
+			t.Fatalf("budget breakdown missing %q: %+v", key, metadata)
+		}
+	}
+
+	// layers 记的是各层在送进全局预算之前自己丢了什么。categories 只能说明成品
+	// 消息进全局预算后没再挨刀，说明不了层内配额有没有截断候选，两者缺一不可。
+	layers, ok := metadata["layers"].([]map[string]any)
+	if !ok || len(layers) != 1 {
+		t.Fatalf("层内账没上报: %+v", metadata["layers"])
+	}
+	for _, key := range []string{"candidate_tokens", "ranked_tokens", "selected_tokens", "dropped_tokens"} {
+		if _, ok := layers[0][key].(int64); !ok {
+			t.Fatalf("层内账缺 %s: %+v", key, layers[0])
+		}
+	}
+	if layers[0]["layer"] != "retrieved_memory" || layers[0]["dropped_tokens"].(int64) != 3620 {
+		t.Fatalf("层内账 = %+v", layers[0])
+	}
+	if layers[0]["reason_text"] != "本层 token 配额用尽，尾部候选未装入" {
+		t.Fatalf("层内丢弃原因没有可读文案: %+v", layers[0])
+	}
+
+	categories, ok := metadata["categories"].([]map[string]any)
+	if !ok || len(categories) == 0 {
+		t.Fatalf("categories not reported: %+v", metadata["categories"])
+	}
+	selected := int64(0)
+	names := map[string]bool{}
+	for _, category := range categories {
+		name, _ := category["category"].(string)
+		names[name] = true
+		if _, ok := category["reason_text"].(string); !ok {
+			t.Fatalf("%s missing reason_text: %+v", name, category)
+		}
+		for _, key := range []string{"requested_tokens", "selected_tokens", "dropped_tokens"} {
+			if _, ok := category[key].(int64); !ok {
+				t.Fatalf("%s missing %s: %+v", name, key, category)
+			}
+		}
+		selected += category["selected_tokens"].(int64)
+	}
+	for _, want := range []string{"system", "summary", "memory", "history", "recent_history", "current"} {
+		if !names[want] {
+			t.Fatalf("category %q missing from trace: %+v", want, names)
+		}
+	}
+	if budget, _ := metadata["input_budget"].(int64); selected > budget {
+		t.Fatalf("categories selected %d tokens over input budget %d", selected, budget)
+	}
+
+	summary, ok := metadata["summary"].(map[string]any)
+	if !ok {
+		t.Fatalf("summary trace missing: %+v", metadata["summary"])
+	}
+	if present, _ := summary["present"].(bool); !present {
+		t.Fatalf("summary should be reported as present: %+v", summary)
+	}
+	if recompressed, _ := summary["recompressed"].(bool); recompressed {
+		t.Fatalf("summary fits the window and must not be reported as recompressed: %+v", summary)
+	}
+	if attached, _ := metadata["semantic_attached_images"].(int); attached != 0 {
+		t.Fatalf("semantic_attached_images = %v", metadata["semantic_attached_images"])
+	}
+}
+
+func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
+	logs := &captureAppLogs{}
+	runtime := &Runtime{}
+	runtime.SetAppLogWriter(logs)
+	runtime.recordPromptContextBudget(
+		context.Background(),
+		MessageEvent{Kind: EventKindGroup, MessageID: "30002"},
+		BotConfig{DebugModeEnabled: boolPointer(false)},
+		[]llm.Message{{Role: llm.RoleUser, Content: "在吗", Priority: llm.MessagePriorityCurrent}},
+		nil,
+		semanticReferencePromptContext{},
+		semanticReferenceContext{},
+		false,
+		nil,
+	)
+	if entries := logs.entriesSnapshot(); len(entries) != 0 {
+		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
+	}
+}
+
+func TestPromptContextHistoryDropsHistoryAlreadyCoveredBySummary(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 4, ContextSummaryThreshold: 6}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newMemoryMessageHistoryStore()
+	runtime.SetMessageHistoryStore(store)
+
+	base := int64(1700000000)
+	newEvent := func(index int) MessageEvent {
+		return MessageEvent{
+			Kind:       EventKindPrivate,
+			GroupID:    "",
+			UserID:     "10001",
+			SenderName: "Alice",
+			MessageID:  fmt.Sprintf("msg-%02d", index),
+			Time:       base + int64(index)*60,
+			RawMessage: fmt.Sprintf("第 %d 句历史", index),
+		}
+	}
+	// remember 会在超过阈值时把最旧的一批压进摘要，同时把它们从内存历史移走，
+	// 但存储层仍然保留全部原文。
+	for index := 0; index < 10; index++ {
+		runtime.remember(newEvent(index))
+	}
+
+	session := sessionKey(newEvent(0))
+	runtime.mu.RLock()
+	summary := strings.TrimSpace(runtime.contextSummaries[session])
+	watermark := runtime.contextSummaryMarks[session]
+	memoryDepth := len(runtime.history[session])
+	runtime.mu.RUnlock()
+	if summary == "" || watermark <= 0 {
+		t.Fatalf("expected a summary with a watermark, got %q / %d", summary, watermark)
+	}
+	if stored, _ := store.ListRecentMessageEvents(context.Background(), session, 0); len(stored) != 10 {
+		t.Fatalf("store should still hold every raw event, got %d", len(stored))
+	}
+
+	current := newEvent(10)
+	history := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
+
+	if len(history) != memoryDepth {
+		t.Fatalf("prompt history = %d events, want the %d still-raw ones", len(history), memoryDepth)
+	}
+	for _, event := range history {
+		if event.Time <= watermark {
+			t.Fatalf("event %q at %d is already covered by the summary (watermark %d)", event.MessageID, event.Time, watermark)
+		}
 	}
 }
 
@@ -71,6 +366,223 @@ func TestPromptContextHistoryKeepsStoredHistoryWithoutSummary(t *testing.T) {
 
 	if len(history) != 5 {
 		t.Fatalf("without a summary every stored event must stay available, got %d", len(history))
+	}
+}
+
+func TestDropSummarizedHistoryKeepsEventsStillInMemory(t *testing.T) {
+	base := int64(1700000000)
+	event := func(id string, offset int64) MessageEvent {
+		return MessageEvent{Kind: EventKindGroup, GroupID: "20003", UserID: "1", MessageID: id, Time: base + offset}
+	}
+	// 与水位同秒、但仍留在内存历史里的事件属于原始窗口，不能被当成已摘要。
+	memory := []MessageEvent{event("keep-same-second", 120)}
+	history := []MessageEvent{event("old", 60), event("keep-same-second", 120), event("new", 180)}
+
+	filtered := dropSummarizedHistory(history, memory, base+120)
+
+	if len(filtered) != 2 || filtered[0].MessageID != "keep-same-second" || filtered[1].MessageID != "new" {
+		t.Fatalf("filtered = %#v", filtered)
+	}
+	if same := dropSummarizedHistory(history, memory, 0); len(same) != 3 {
+		t.Fatalf("no watermark must be a no-op, got %d", len(same))
+	}
+	unknownTime := []MessageEvent{{Kind: EventKindGroup, MessageID: "no-time"}}
+	if kept := dropSummarizedHistory(unknownTime, nil, base+120); len(kept) != 1 {
+		t.Fatal("events without a timestamp must be kept")
+	}
+}
+
+func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
+	// 请求上限填得比任何窗口都大，这里只看窗口本身；留空时的 64K 默认值见末尾。
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 1000000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20004", UserID: "1", MessageID: "1"}
+	cfg := runtime.effectiveConfigForEvent(event)
+
+	// 没有配置档时按兜底窗口走。
+	if got := runtime.promptContextWindowTokens(event, cfg); got != llm.DefaultContextWindowTokens {
+		t.Fatalf("fallback window = %d, want %d", got, llm.DefaultContextWindowTokens)
+	}
+
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		Profiles: []llm.Profile{{
+			ID:    "p1",
+			Name:  "chat",
+			Group: llm.GroupChat,
+			Config: llm.ProviderConfig{
+				Provider:            llm.ProviderOpenAICompatible,
+				Model:               "big-window-model",
+				APIKey:              "k",
+				ContextWindowTokens: 200000,
+			},
+		}},
+	}}
+	runtime.mu.Lock()
+	runtime.llmStore = store
+	runtime.mu.Unlock()
+
+	window := runtime.promptContextWindowTokens(event, cfg)
+	if window != 200000 {
+		t.Fatalf("window = %d, want the model's 200000", window)
+	}
+	// 近期历史在大窗口下封顶在 recentHistoryKeepCeiling，不再随窗口一起涨。
+	if history := recentHistoryBudget(window); history != recentHistoryKeepCeiling {
+		t.Fatalf("recent history budget = %d, want the keep ceiling %d", history, recentHistoryKeepCeiling)
+	}
+
+	// 机器人留空时 200K 的模型窗口也被收到默认的 64K。
+	blank := BotConfig{}
+	if got := runtime.promptContextWindowTokens(event, blank); got != DefaultRequestContextTokens {
+		t.Fatalf("blank-limit window = %d, want %d", got, DefaultRequestContextTokens)
+	}
+}
+
+func TestBotContextCapOnlyTightensTheModelWindow(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	event := MessageEvent{Kind: EventKindGroup, GroupID: "20005", UserID: "1", MessageID: "1"}
+	store := &stubLLMProfileStore{set: llm.ProfileSet{
+		Profiles: []llm.Profile{{
+			ID: "p1", Name: "chat", Group: llm.GroupChat,
+			Config: llm.ProviderConfig{
+				Provider: llm.ProviderOpenAICompatible, Model: "m", APIKey: "k", ContextWindowTokens: 200000,
+			},
+		}},
+	}}
+	runtime.mu.Lock()
+	runtime.llmStore = store
+	runtime.mu.Unlock()
+
+	base := runtime.effectiveConfigForEvent(event)
+	// 留空时用 64K 默认上限，200K 的模型窗口也被收紧到这里。
+	if got := runtime.promptContextWindowTokens(event, base); got != DefaultRequestContextTokens {
+		t.Fatalf("blank-limit window = %d, want the default %d", got, DefaultRequestContextTokens)
+	}
+
+	capped := base
+	capped.MaxContextTokens = 32768
+	if got := runtime.promptContextWindowTokens(event, capped); got != 32768 {
+		t.Fatalf("capped window = %d, want 32768", got)
+	}
+
+	// 上限只能收紧：填得比模型窗口还大不会真的放宽。
+	oversized := base
+	oversized.MaxContextTokens = 1000000
+	if got := runtime.promptContextWindowTokens(event, oversized); got != 200000 {
+		t.Fatalf("oversized cap widened the window to %d", got)
+	}
+}
+
+func TestContextBudgetCapReachesTheGenerateRequest(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	provider := &capturingLLMProvider{reply: "ok"}
+
+	// 没有上限时请求不带覆盖值，按配置档窗口结算。
+	plain := runtime.withContextBudgetCapRun(context.Background(), func(client LLMProvider) (string, error) {
+		_, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		return "", err
+	})
+	if err := func() error { _, err := plain(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 0 {
+		t.Fatalf("uncapped request carried MaxContextTokens=%d", got)
+	}
+
+	// 配了上限时一路带到 Generate，Agent 的后续轮次同样受约束。
+	ctx := withContextBudgetCap(context.Background(), 32768)
+	capped := runtime.withContextBudgetCapRun(ctx, func(client LLMProvider) (string, error) {
+		_, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
+		return "", err
+	})
+	if err := func() error { _, err := capped(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 32768 {
+		t.Fatalf("capped request MaxContextTokens = %d, want 32768", got)
+	}
+
+	// 超限收缩重试设的更小值不能被上限顶回去。
+	shrunk := runtime.withContextBudgetCapRun(ctx, func(client LLMProvider) (string, error) {
+		_, err := client.Generate(ctx, llm.GenerateRequest{
+			Messages:         []llm.Message{{Role: llm.RoleUser, Content: "在吗"}},
+			MaxContextTokens: 8192,
+		})
+		return "", err
+	})
+	if err := func() error { _, err := shrunk(provider); return err }(); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requestSnapshot().MaxContextTokens; got != 8192 {
+		t.Fatalf("cap overrode the shrink retry: %d", got)
+	}
+}
+
+// 分配图必须和运行时真正用的预算函数一致。图自己实现一份 min(份额, 上限)，
+// 改了预算逻辑而忘了改图，图就开始骗人。
+func TestContextBudgetBreakdownMatchesRuntimeBudgets(t *testing.T) {
+	runtime := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	breakdown := runtime.ContextBudgetBreakdownForGroup("", "123456")
+	if breakdown.GroupID != "123456" {
+		t.Fatalf("group = %q", breakdown.GroupID)
+	}
+	window := breakdown.ContextWindow
+	want := map[string]int64{
+		"recent_history":   recentHistoryBudget(window),
+		"session_thread":   sessionThreadBudget(window),
+		"retrieved_memory": retrievedMemoryBudget(window),
+		"core_memory":      coreMemoryBudget(window),
+		"self_notes":       selfNoteBudget(window),
+	}
+	if len(breakdown.Layers) != len(want) {
+		t.Fatalf("layers = %#v", breakdown.Layers)
+	}
+	var sum int64
+	for _, layer := range breakdown.Layers {
+		expected, ok := want[layer.Key]
+		if !ok {
+			t.Fatalf("unexpected layer %q", layer.Key)
+		}
+		if layer.Tokens != expected {
+			t.Fatalf("layer %s = %d, want %d", layer.Key, layer.Tokens, expected)
+		}
+		sum += layer.Tokens
+	}
+	if breakdown.Allocated != sum {
+		t.Fatalf("allocated = %d, want %d", breakdown.Allocated, sum)
+	}
+	if breakdown.Headroom != window-sum {
+		t.Fatalf("headroom = %d, want %d", breakdown.Headroom, window-sum)
+	}
+	// 只有近期历史可配，另外三层的取值由各自结构决定，给旋钮没有对应的失效模式。
+	for _, layer := range breakdown.Layers {
+		if layer.Configurable != (layer.Key == "recent_history") {
+			t.Fatalf("layer %s configurable = %v", layer.Key, layer.Configurable)
+		}
+	}
+}
+
+// 大窗口下各层全被绝对上限压住，小窗口下全按份额走——分层预算要表达的
+// 正是这件事，图上那个「上限 1200」还是「窗口 15%」的说明不能反过来。近期历史不按
+// 份额：大窗口下压在 20000，小窗口下按 (窗口−16384)/2，图上写的是这条规则。
+func TestContextBudgetBreakdownReportsWhichBoundApplies(t *testing.T) {
+	large := NewRuntime(BotConfig{MaxContextTokens: 128000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	for _, layer := range large.ContextBudgetBreakdownForGroup("", "g").Layers {
+		if layer.Key == "recent_history" && (layer.Ceiling != recentHistoryKeepCeiling || layer.Tokens != recentHistoryKeepCeiling) {
+			t.Fatalf("128K 窗口下近期历史应当压在 %d：%#v", recentHistoryKeepCeiling, layer)
+		}
+		if !layer.CappedByCeiling {
+			t.Fatalf("128K 窗口下 %s 应当被绝对上限压住：%#v", layer.Key, layer)
+		}
+	}
+	small := NewRuntime(BotConfig{MaxContextTokens: 8000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	breakdown := small.ContextBudgetBreakdownForGroup("", "g")
+	for _, layer := range breakdown.Layers {
+		if layer.CappedByCeiling {
+			t.Fatalf("8K 窗口下 %s 应当按份额走：%#v", layer.Key, layer)
+		}
+	}
+	// 小窗口也不能被四层吃干净，否则系统提示和当前消息没地方放。
+	if breakdown.Headroom <= 0 {
+		t.Fatalf("8K 窗口没有留白：%#v", breakdown)
 	}
 }
 
@@ -109,196 +621,50 @@ func TestContextSummaryTriggerThresholdKeepsAnInterval(t *testing.T) {
 	}
 }
 
-func TestRecordPromptContextBudgetReportsSizesAndThreshold(t *testing.T) {
-	logs := &captureAppLogs{}
-	runtime := &Runtime{}
-	runtime.SetAppLogWriter(logs)
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "30001", Time: 1700000200}
-	cfg := BotConfig{DebugModeEnabled: boolPointer(true), BotAccount: "90001"}
-	messages := []llm.Message{
-		{Role: llm.RoleSystem, Content: "人设与规则", Priority: llm.MessagePrioritySystem},
-		{Role: llm.RoleUser, Content: "【长期记忆】关系等级：熟人", Priority: llm.MessagePriorityMemory},
-		{Role: llm.RoleUser, Content: "更早的一句话", Priority: llm.MessagePriorityHistory},
-		{Role: llm.RoleUser, Content: "现在的问题", Priority: llm.MessagePriorityCurrent},
-	}
-	history := []MessageEvent{{Kind: EventKindGroup, GroupID: "20001", UserID: "10001", MessageID: "29998", Time: 1700000100, RawMessage: "更早的一句话"}}
-	runtime.recordPromptContextBudget(context.Background(), event, cfg, messages, history, "threshold", semanticReferencePromptContext{}, semanticReferenceContext{})
-	entries := logs.entriesSnapshot()
-	if len(entries) != 1 || entries[0].Action != "context_budget" {
-		t.Fatalf("unexpected debug entries: %+v", entries)
-	}
-	metadata := entries[0].Metadata
-	for _, key := range []string{"effective_context_window", "compaction_threshold", "keep_recent_tokens", "estimated_tokens", "category_tokens", "history_selected_turns", "history_earliest_time", "compacted"} {
-		if _, ok := metadata[key]; !ok {
-			t.Fatalf("trace missing %q: %+v", key, metadata)
-		}
-	}
-	if metadata["compaction_threshold"] != llm.DefaultContextWindowTokens-compactionReserveTokens || metadata["compacted"] != "threshold" {
-		t.Fatalf("trace = %+v", metadata)
-	}
-}
-
-func TestRecordPromptContextBudgetStaysSilentWithoutDebugMode(t *testing.T) {
-	logs := &captureAppLogs{}
-	runtime := &Runtime{}
-	runtime.SetAppLogWriter(logs)
-	runtime.recordPromptContextBudget(context.Background(), MessageEvent{Kind: EventKindGroup, MessageID: "30002"}, BotConfig{DebugModeEnabled: boolPointer(false)},
-		[]llm.Message{{Role: llm.RoleUser, Content: "在吗", Priority: llm.MessagePriorityCurrent}}, nil, "", semanticReferencePromptContext{}, semanticReferenceContext{})
-	if entries := logs.entriesSnapshot(); len(entries) != 0 {
-		t.Fatalf("debug mode is off, expected no trace, got %+v", entries)
-	}
-}
-
-// 锚之后的历史全部带上，不再按两万 token 的窗口丢掉旧的那一截。
-func TestPromptContextHistoryKeepsEverythingSinceAnchor(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	store := newMemoryMessageHistoryStore()
-	runtime.SetMessageHistoryStore(store)
-	base := int64(1700000000)
-	current := MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "10001", MessageID: "current", Time: base + 100000}
-	session := sessionKey(current)
-	const total = 600
-	for index := 0; index < total; index++ {
-		_ = store.AppendMessageEvent(context.Background(), session, MessageEvent{
-			Kind: EventKindGroup, GroupID: "20002", UserID: fmt.Sprintf("1%04d", index%7), SenderName: "Alice",
-			MessageID: fmt.Sprintf("stored-%03d", index), Time: base + int64(index)*60,
-			RawMessage: fmt.Sprintf("第 %d 句 %s", index, strings.Repeat("内容", 60)),
-		})
-	}
-	anchorEvent := MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "10000", MessageID: "stored-000"}
-	runtime.setHistoryWindowAnchor(compactionAnchorKey(current), messageHistoryDedupeKey(anchorEvent))
-	history := runtime.promptContextHistory(current, runtime.effectiveConfigForEvent(current))
-	if len(history) != total || history[0].MessageID != "stored-000" {
-		t.Fatalf("history = %d events from %q, want all %d from the anchor", len(history), firstMessageID(history), total)
-	}
-}
-
-// 冷启动没有锚：从最新往回取 compactionKeepRecentTokens，记下锚，下一轮从同一处开始。
-func TestPromptContextHistoryColdStartAnchorsRecentWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	store := newMemoryMessageHistoryStore()
-	runtime.SetMessageHistoryStore(store)
-	base := int64(1700000000)
-	current := MessageEvent{Kind: EventKindGroup, GroupID: "20003", UserID: "10001", MessageID: "current", Time: base + 100000}
-	session := sessionKey(current)
-	for index := 0; index < 600; index++ {
-		_ = store.AppendMessageEvent(context.Background(), session, MessageEvent{
-			Kind: EventKindGroup, GroupID: "20003", UserID: fmt.Sprintf("1%04d", index%7), SenderName: "Alice",
-			MessageID: fmt.Sprintf("stored-%03d", index), Time: base + int64(index)*60,
-			RawMessage: fmt.Sprintf("第 %d 句 %s", index, strings.Repeat("内容", 60)),
-		})
-	}
-	cfg := runtime.effectiveConfigForEvent(current)
-	first := runtime.promptContextHistory(current, cfg)
-	if len(first) == 0 || len(first) == 600 {
-		t.Fatalf("cold start loaded %d events, want a recent window", len(first))
-	}
-	_ = store.AppendMessageEvent(context.Background(), session, MessageEvent{Kind: EventKindGroup, GroupID: "20003", UserID: "10002", MessageID: "stored-new", Time: base + 99999, RawMessage: "新的一句"})
-	second := runtime.promptContextHistory(current, cfg)
-	if second[0].MessageID != first[0].MessageID || len(second) != len(first)+1 {
-		t.Fatalf("anchor moved: first starts %q (%d), second starts %q (%d)", first[0].MessageID, len(first), second[0].MessageID, len(second))
-	}
-}
-
-func firstMessageID(history []MessageEvent) string {
-	if len(history) == 0 {
-		return ""
-	}
-	return history[0].MessageID
-}
-
-func TestPromptContextWindowFollowsTheModelWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "20004", UserID: "1", MessageID: "1"}
-	cfg := runtime.effectiveConfigForEvent(event)
-	if got := runtime.promptContextWindowTokens(event, cfg); got != llm.DefaultContextWindowTokens {
-		t.Fatalf("fallback window = %d, want %d", got, llm.DefaultContextWindowTokens)
-	}
-	runtime.mu.Lock()
-	runtime.llmStore = &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{{
-		ID: "p1", Name: "chat", Group: llm.GroupChat,
-		Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "big-window-model", APIKey: "k", ContextWindowTokens: 200000},
-	}}}}
-	runtime.mu.Unlock()
-	// 留空时不再收到 64K：窗口就是模型窗口，快满了才压缩。
-	if got := runtime.promptContextWindowTokens(event, cfg); got != 200000 {
-		t.Fatalf("window = %d, want the model's 200000", got)
-	}
-	capped := cfg
-	capped.MaxContextTokens = 32768
-	if got := runtime.promptContextWindowTokens(event, capped); got != 32768 {
-		t.Fatalf("capped window = %d, want 32768", got)
-	}
-	oversized := cfg
-	oversized.MaxContextTokens = 1000000
-	if got := runtime.promptContextWindowTokens(event, oversized); got != 200000 {
-		t.Fatalf("oversized cap widened the window to %d", got)
-	}
-}
-
-func TestContextBudgetCapReachesTheGenerateRequest(t *testing.T) {
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	provider := &capturingLLMProvider{reply: "ok"}
-	plain := runtime.withContextBudgetCapRun(context.Background(), func(client LLMProvider) (string, error) {
-		_, err := client.Generate(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
-		return "", err
-	})
-	if _, err := plain(provider); err != nil {
-		t.Fatal(err)
-	}
-	if got := provider.requestSnapshot().MaxContextTokens; got != 0 {
-		t.Fatalf("uncapped request carried MaxContextTokens=%d", got)
-	}
-	ctx := withContextBudgetCap(context.Background(), 32768)
-	capped := runtime.withContextBudgetCapRun(ctx, func(client LLMProvider) (string, error) {
-		_, err := client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}})
-		return "", err
-	})
-	if _, err := capped(provider); err != nil {
-		t.Fatal(err)
-	}
-	if got := provider.requestSnapshot().MaxContextTokens; got != 32768 {
-		t.Fatalf("capped request MaxContextTokens = %d, want 32768", got)
-	}
-}
-
-func TestContextBudgetBreakdownReportsCompactionSettings(t *testing.T) {
-	runtime := NewRuntime(BotConfig{MaxContextTokens: 100000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	breakdown := runtime.ContextBudgetBreakdownForGroup("", "12345")
-	if breakdown.GroupID != "12345" || breakdown.ContextWindow != 100000 {
-		t.Fatalf("breakdown = %+v", breakdown)
-	}
-	if breakdown.CompactionThreshold != 100000-compactionReserveTokens || breakdown.ReserveTokens != compactionReserveTokens || breakdown.KeepRecentTokens != compactionKeepRecentTokens || breakdown.HasSummary {
-		t.Fatalf("breakdown = %+v", breakdown)
-	}
-}
-
-// TestContextSummaryDoesNotCompactOnEveryMessage 盯住一个会自锁的配置组合：触发条数
-// 不比保留条数大时，每来一条消息都触发一次批量抽取。这里数内存历史回落的次数。
+// TestContextSummaryDoesNotCompactOnEveryMessage 盯住一个会自锁的配置组合。触发条数
+// 不比保留条数大时，压缩量曾经恒为 len(history)-limit == 1：历史被钉死在保留条数上，
+// 此后每来一条消息都超出一条、都触发一次压缩和一次 memory_summary 调用，再也回不去。
+// 群组页能调保留条数却没有触发条数这个字段，这个组合在真实配置里够得着。
 func TestContextSummaryDoesNotCompactOnEveryMessage(t *testing.T) {
 	const (
 		limit = 10
 		total = 60
 	)
 	runtime := NewRuntime(BotConfig{RecentContextLimit: limit, ContextSummaryThreshold: limit}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+
 	base := int64(1700000000)
-	batches, previous := 0, 0
+	session := ""
+	compactions := 0
+	previous := int64(0)
 	for index := 0; index < total; index++ {
-		event := MessageEvent{Kind: EventKindPrivate, UserID: "10001", SenderName: "Alice", MessageID: fmt.Sprintf("msg-%02d", index), Time: base + int64(index)*60, RawMessage: fmt.Sprintf("第 %d 句", index)}
-		runtime.remember(event)
-		runtime.mu.RLock()
-		length := len(runtime.history[sessionKey(event)])
-		runtime.mu.RUnlock()
-		if length < previous {
-			batches++
+		event := MessageEvent{
+			Kind:       EventKindPrivate,
+			UserID:     "10001",
+			SenderName: "Alice",
+			MessageID:  fmt.Sprintf("msg-%02d", index),
+			Time:       base + int64(index)*60,
+			RawMessage: fmt.Sprintf("第 %d 句", index),
 		}
-		previous = length
+		if session == "" {
+			session = sessionKey(event)
+		}
+		runtime.remember(event)
+		// 压缩发生在 remember() 内部，历史长度在两次观测之间不会回落，只会钉在保留
+		// 条数上，所以按长度数不出压缩次数。改看水位：每压一次它都会前移。
+		runtime.mu.RLock()
+		current := runtime.contextSummaryMarks[session]
+		runtime.mu.RUnlock()
+		if current > previous {
+			compactions++
+		}
+		previous = current
 	}
-	if batches == 0 {
-		t.Fatal("这个组合下完全没有触发批量抽取，内存历史会无限增长")
+
+	if compactions == 0 {
+		t.Fatal("这个组合下完全没有触发压缩，历史会无限增长")
 	}
 	interval := limit * contextSummaryMinIntervalPercent / 100
-	if maximum := total/interval + 1; batches > maximum {
-		t.Fatalf("触发 %d 次，超过间隔允许的 %d 次", batches, maximum)
+	if maximum := total/interval + 1; compactions > maximum {
+		t.Fatalf("压缩触发 %d 次，超过间隔允许的 %d 次：压缩量又退化了", compactions, maximum)
 	}
 }

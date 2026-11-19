@@ -107,9 +107,9 @@ func TestModelRequestTimeoutParentCancellationWins(t *testing.T) {
 	}
 }
 
-func TestModelRequestTimeoutRenewsOnRetry(t *testing.T) {
-	{
-		t.Run("transient", func(t *testing.T) {
+func TestModelRequestTimeoutRenewsOnRetryAndShrink(t *testing.T) {
+	for _, shrink := range []bool{false, true} {
+		t.Run(fmt.Sprint("shrink=", shrink), func(t *testing.T) {
 			calls := 0
 			provider := modelTimeoutTestProvider{run: func(ctx context.Context, _ llm.GenerateRequest) (*llm.GenerateResponse, error) {
 				calls++
@@ -123,6 +123,9 @@ func TestModelRequestTimeoutRenewsOnRetry(t *testing.T) {
 				case <-time.After(110 * time.Millisecond):
 				}
 				if calls == 1 {
+					if shrink {
+						return nil, errors.New("maximum context length exceeded")
+					}
 					return nil, errors.New("502 bad gateway")
 				}
 				return &llm.GenerateResponse{Text: "ok"}, nil
@@ -854,27 +857,89 @@ func TestAgentTransientRetryPreservesCompletedToolResults(t *testing.T) {
 	}
 }
 
-// 发送层不再裁剪：超限时重发同一个请求没有意义，原样把错误交给上层压缩后重试，
-// 不收缩窗口、不在这一层重发。
+// 窗口按模型名推断有可能偏大；被供应商判为超限时必须收缩重试，而不是让这一轮
+// 回复直接失败。
 type contextOverflowProvider struct {
+	limit    int64
 	requests []llm.GenerateRequest
 }
 
 func (p *contextOverflowProvider) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	p.requests = append(p.requests, req)
-	return nil, fmt.Errorf("this model's maximum context length is 32000 tokens")
+	budget := req.MaxContextTokens
+	if budget <= 0 {
+		budget = llm.DefaultMaxContextTokens
+	}
+	if budget > p.limit {
+		return nil, fmt.Errorf("this model's maximum context length is %d tokens", p.limit)
+	}
+	return &llm.GenerateResponse{Text: "ok"}, nil
 }
 
-func TestContextOverflowIsReturnedWithoutRetry(t *testing.T) {
-	provider := &contextOverflowProvider{}
+func TestContextOverflowShrinksBudgetAndRetries(t *testing.T) {
+	provider := &contextOverflowProvider{limit: 32000}
+	resp, err := generateWithTransientRetryPolicy(context.Background(), provider,
+		llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}},
+		true, 0, 0, 0)
+	if err != nil {
+		t.Fatalf("overflow was not recovered: %v", err)
+	}
+	if resp == nil || resp.Text != "ok" {
+		t.Fatalf("resp = %#v", resp)
+	}
+	if len(provider.requests) < 2 {
+		t.Fatalf("expected at least one retry, got %d attempts", len(provider.requests))
+	}
+	if first := provider.requests[0].MaxContextTokens; first != 0 {
+		t.Fatalf("first attempt must use the profile budget, got %d", first)
+	}
+	last := provider.requests[len(provider.requests)-1].MaxContextTokens
+	if last <= 0 || last > provider.limit {
+		t.Fatalf("final attempt budget = %d, want a positive value within %d", last, provider.limit)
+	}
+}
+
+func TestContextOverflowStopsAtTheFloorInsteadOfLooping(t *testing.T) {
+	// 供应商窗口小到收缩也救不回来时，如实报错而不是无限重试。
+	provider := &contextOverflowProvider{limit: 512}
 	_, err := generateWithTransientRetryPolicy(context.Background(), provider,
 		llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "在吗"}}},
-		true, 3, 0, 0)
-	if !llm.IsContextOverflowError(err) {
-		t.Fatalf("err = %v, want the overflow", err)
+		true, 0, 0, 0)
+	if err == nil {
+		t.Fatal("expected the unrecoverable overflow to surface")
 	}
-	if len(provider.requests) != 1 || provider.requests[0].MaxContextTokens != 0 {
-		t.Fatalf("requests = %#v, want one untouched request", provider.requests)
+	if !llm.IsContextOverflowError(err) {
+		t.Fatalf("error lost its context-overflow identity: %v", err)
+	}
+	if len(provider.requests) > maxContextShrinkRetries+1 {
+		t.Fatalf("shrink retries were not bounded: %d attempts", len(provider.requests))
+	}
+}
+
+func TestShrinkContextForRetryHalvesDownToTheFloor(t *testing.T) {
+	req := llm.GenerateRequest{}
+	seen := []int64{}
+	for {
+		next, ok := shrinkContextForRetry(req, nil)
+		if !ok {
+			break
+		}
+		req = next
+		seen = append(seen, req.MaxContextTokens)
+		if len(seen) > 10 {
+			t.Fatalf("shrink did not terminate: %v", seen)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("shrink never produced a smaller budget")
+	}
+	for index := 1; index < len(seen); index++ {
+		if seen[index] >= seen[index-1] {
+			t.Fatalf("budget did not shrink monotonically: %v", seen)
+		}
+	}
+	if last := seen[len(seen)-1]; last != contextOverflowFloorTokens {
+		t.Fatalf("final budget = %d, want the floor %d", last, contextOverflowFloorTokens)
 	}
 }
 
@@ -981,6 +1046,21 @@ func TestTimeoutNoticeStillNamesTheProfile(t *testing.T) {
 		if !strings.Contains(notice, want) {
 			t.Fatalf("notice=%q must mention %q", notice, want)
 		}
+	}
+}
+
+// 报错里写明了真实窗口（智谱 glm-4v-flash 的 16384）就一次缩到位，不再从 128K 减半
+// 四次、每次都白吃一个 400。
+func TestShrinkContextForRetryJumpsToReportedWindow(t *testing.T) {
+	err := errors.New("400 Bad Request: Input validation error: `inputs` tokens + `max_new_tokens` must be <= 16384. Given: 20017 `inputs` tokens and 1024 `max_new_tokens`")
+	next, ok := shrinkContextForRetry(llm.GenerateRequest{MaxContextTokens: 128000}, err)
+	if !ok || next.MaxContextTokens != 16384 {
+		t.Fatalf("shrunk = %d, %t; want 16384", next.MaxContextTokens, ok)
+	}
+	// 已经按报错的窗口发过还超限（估算偏小），就退回减半。
+	again, ok := shrinkContextForRetry(next, err)
+	if !ok || again.MaxContextTokens != 8192 {
+		t.Fatalf("second shrink = %d, %t; want 8192", again.MaxContextTokens, ok)
 	}
 }
 

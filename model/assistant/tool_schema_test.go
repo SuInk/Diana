@@ -70,6 +70,19 @@ func TestEveryAgentToolDeclaresInputSchema(t *testing.T) {
 	}
 }
 
+func TestAgentToolDescriptionsSurviveCompaction(t *testing.T) {
+	// 提示词里的工具清单会把描述压到 agentToolDescriptionBudget 字。超了就会被
+	// 截断，而 compactToolDescription 优先保 input: 之后的部分，被砍掉的正好是
+	// 开头「什么时候该用我」——原生 function calling 那条路又是全量发送，
+	// 同一段文字在两个通道行为不一致。
+	for _, tool := range dianaAgentTools(t) {
+		if length := len([]rune(tool.Description())); length > agent.ToolDescriptionBudget {
+			t.Errorf("%s 的描述 %d 字，超过 %d 字预算，会在提示词清单里被截断",
+				tool.Name(), length, agent.ToolDescriptionBudget)
+		}
+	}
+}
+
 func TestAgentToolDescriptionsDropInlineJSONExamples(t *testing.T) {
 	// 参数格式一旦回到散文里的内联 JSON，schema 就又变成了摆设。
 	for _, tool := range dianaAgentTools(t) {

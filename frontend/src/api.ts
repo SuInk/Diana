@@ -3281,6 +3281,8 @@ export interface AssistantResidentContextBlock {
   key: string;
   label: string;
   tokens: number;
+  /** 这块所在层的 token 配额；0 表示它不单独占一层配额。 */
+  budget?: number;
   content?: string;
   note?: string;
 }
@@ -3294,18 +3296,26 @@ export interface AssistantResidentContext {
   note?: string;
 }
 
+export interface AssistantContextBudgetLayer {
+  key: string;
+  label: string;
+  share_percent: number;
+  ceiling: number;
+  /** 不按份额算的层（近期历史）没压到上限时显示的算法说明。 */
+  rule?: string;
+  tokens: number;
+  capped_by_ceiling: boolean;
+  configurable: boolean;
+}
+
 export interface AssistantContextBudget {
   group_id?: string;
   context_window: number;
   /** 窗口没人填、用的兜底常量时为 true，不代表模型的真实上限。 */
   context_window_fallback?: boolean;
-  /** 请求估算超过它就把较早的历史压缩成摘要（窗口减 reserve_tokens）。 */
-  compaction_threshold: number;
-  reserve_tokens: number;
-  /** 压缩时原样保留的近期历史 token。 */
-  keep_recent_tokens: number;
-  /** 这个会话已经压缩过，历史开头是一份摘要。 */
-  has_summary: boolean;
+  layers: AssistantContextBudgetLayer[];
+  allocated: number;
+  headroom: number;
 }
 
 export function getAssistantEvents(

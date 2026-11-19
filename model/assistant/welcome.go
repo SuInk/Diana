@@ -229,6 +229,9 @@ var promptWelcomeGeneratorSpec = registerPrompt(PromptSpec{
 	Default: welcomeGeneratorPrompt,
 })
 
+// welcomeHistoryLimit 是带给欢迎生成的最近群聊条数：够看出大家在聊什么就行。
+const welcomeHistoryLimit = 20
+
 // generateWelcomeWithLLM 像普通回复一样生成欢迎：同一份系统提示词（人设、群风格、
 // 和新人的关系）、最近的群聊历史、对话模型；只是不开工具，一轮出结果。
 // 输出做基本清洗，非法输出由调用方回落。
@@ -248,9 +251,9 @@ func (r *Runtime) generateWelcomeWithLLM(ctx context.Context, cfg BotConfig, eve
 		Content:  r.systemPromptWithRelationship(source, nil, false, relationship),
 		Priority: llm.MessagePrioritySystem,
 	}}
-	header, history := r.sideContextHistory(source, cfg)
-	if header.Content != "" {
-		messages = append(messages, header)
+	history := sessionOnlyHistory(r.promptContextHistory(source, cfg))
+	if len(history) > welcomeHistoryLimit {
+		history = history[len(history)-welcomeHistoryLimit:]
 	}
 	for _, item := range history {
 		if !samePromptGroupScope(source, item) {

@@ -6,7 +6,6 @@ package storage
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -125,30 +124,6 @@ func TestNotebookLookupMatchesTermsAndAliases(t *testing.T) {
 	}
 	if len(hits) != 1 {
 		t.Fatalf("按词精确检索失败: %+v", hits)
-	}
-}
-
-// 自动命中不传 Limit 时一条不漏；以前存储层兜底只给 12 条。
-func TestNotebookLookupWithoutLimitReturnsEveryMatch(t *testing.T) {
-	ctx := context.Background()
-	store := newNotebookStore(t)
-	now := time.Unix(1700000000, 0)
-	var text string
-	for i := range 20 {
-		term := fmt.Sprintf("梗%02d", i)
-		text += term + " "
-		upsertNotebook(t, store, assistant.NotebookUpsertRequest{ScopeKey: "group:1", Term: term, Meaning: "释义", Now: now})
-	}
-	hits, err := store.LookupNotebookEntries(ctx, assistant.NotebookQuery{ScopeKeys: []string{"group:1"}, Text: text})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hits) != 20 {
-		t.Fatalf("hits = %d，期望全部 20 条", len(hits))
-	}
-	hits, err = store.LookupNotebookEntries(ctx, assistant.NotebookQuery{ScopeKeys: []string{"group:1"}, Text: text, Limit: 1})
-	if err != nil || len(hits) != 1 {
-		t.Fatalf("显式 Limit=1 应只返回一条：%d %v", len(hits), err)
 	}
 }
 

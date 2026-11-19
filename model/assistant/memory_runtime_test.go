@@ -141,16 +141,14 @@ func TestStructuredMemoryRankingExcludesUnrelatedFacts(t *testing.T) {
 	}
 }
 
-// 记忆块不按 token 配额截断：再长的记忆也整条写出。
-func TestStructuredMemoryFormatterWritesEveryItem(t *testing.T) {
-	long := strings.Repeat("很长的记忆内容", 500)
+func TestStructuredMemoryDetailedFormatterReturnsOnlyInjectedItems(t *testing.T) {
 	items := []StructuredMemoryItem{
 		{ID: "short", Kind: MemoryKindFact, Topic: "饮食", Content: "喜欢清淡口味", Confidence: 0.95},
-		{ID: "long", Kind: MemoryKindFact, Topic: "超长", Content: long, Confidence: 0.95},
+		{ID: "long", Kind: MemoryKindFact, Topic: "超长", Content: strings.Repeat("很长的记忆内容", 500), Confidence: 0.95},
 	}
-	text := formatStructuredMemoryContext(UserMemoryProfile{UserID: "user-1"}, RelationshipPolicy{Score: 10}, items)
-	if !strings.Contains(text, "喜欢清淡口味") || !strings.Contains(text, long) {
-		t.Fatalf("memory block dropped or shortened an item: %d runes", len([]rune(text)))
+	_, usage, selected := formatStructuredMemoryContextWithTokenBudgetDetailed(UserMemoryProfile{UserID: "user-1"}, RelationshipPolicy{Score: 10}, items, 300)
+	if usage.SelectedItems != 1 || len(selected) != 1 || selected[0].ID != "short" {
+		t.Fatalf("usage=%#v selected=%#v", usage, selected)
 	}
 }
 
@@ -349,8 +347,8 @@ func TestContextCompressionEnqueuesStructuredSummary(t *testing.T) {
 	if job.Kind != MemoryJobSummary || job.Session != "group:123" || len(job.Events) != 2 || job.Events[0].MessageID != "第一条" || job.Events[1].MessageID != "第二条" {
 		t.Fatalf("summary job = %#v", job)
 	}
-	if runtime.compactionSummary(MessageEvent{Kind: EventKindGroup, GroupID: "123"}) != "" {
-		t.Fatal("memory batching must not write a context summary")
+	if runtime.contextSummary(MessageEvent{Kind: EventKindGroup, GroupID: "123"}) != "" {
+		t.Fatal("raw concatenated summary should be hidden when structured memory is enabled")
 	}
 }
 

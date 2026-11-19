@@ -981,28 +981,6 @@ func (r *Runtime) enqueueEventMemory(event MessageEvent, text string) {
 	}
 }
 
-// contextSummaryMinIntervalPercent 是两次批量抽取之间至少要攒下的新消息，按
-// RecentContextLimit 的百分比算。触发条数填得不比保留条数大时，旧代码把它夹平到
-// 保留条数，于是每来一条消息都触发一次 memory_summary 调用；先留出间隔再夹，两个
-// 配置怎么组合都不会退化。
-const contextSummaryMinIntervalPercent = 50
-
-// contextSummaryTriggerThreshold 返回真正生效的批量抽取触发条数，保证比保留条数高出
-// 至少一个间隔。
-func contextSummaryTriggerThreshold(limit, threshold int) int {
-	if limit <= 0 {
-		limit = 20
-	}
-	if threshold <= 0 {
-		threshold = limit * 2
-	}
-	interval := max(1, limit*contextSummaryMinIntervalPercent/100)
-	if minimum := limit + interval; threshold < minimum {
-		threshold = minimum
-	}
-	return threshold
-}
-
 func (r *Runtime) enqueueContextSummary(session string, events []MessageEvent) {
 	if strings.TrimSpace(session) == "" || len(events) == 0 {
 		return

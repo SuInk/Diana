@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -259,57 +258,4 @@ func textReferenceEventWithReply(at int64, userID, messageID, text, reply string
 	event := textReferenceEvent(at, userID, messageID, text)
 	event.botReply = reply
 	return event
-}
-
-// 候选历史不限条数、不截字：最早的一条长消息也要原样交给解析模型。
-func TestSemanticTextReferenceSendsEveryHistoryCandidateInFull(t *testing.T) {
-	provider := &capturingLLMProvider{reply: `{"action":"none","confidence":0.1}`}
-	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
-	long := strings.Repeat("很长的一段话题内容", 80)
-	var history []MessageEvent
-	for i := range 40 {
-		history = append(history, textReferenceEvent(int64(100+i), "user-a", fmt.Sprintf("m%02d", i), fmt.Sprintf("第%02d条：%s", i, long)))
-	}
-	event := textReferenceEvent(200, "user-b", "current", "codex")
-	event.ToMe = true
-
-	runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
-	request := provider.requestSnapshot()
-	for _, want := range []string{"第00条：" + long, "第39条：" + long} {
-		if !requestMessagesContain(request.Messages, want) {
-			t.Fatalf("候选被截断或丢弃：缺少 %.20q", want)
-		}
-	}
-}
-
-type pagedSearchStore struct {
-	*memoryMessageHistoryStore
-	pages [][]MessageEvent
-	total int
-}
-
-func (s *pagedSearchStore) SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
-	index := 0
-	for consumed := 0; index < len(s.pages) && consumed < query.Offset; index++ {
-		consumed += len(s.pages[index])
-	}
-	if index >= len(s.pages) {
-		return nil, s.total, ctx.Err()
-	}
-	if index == 2 {
-		return nil, s.total, context.DeadlineExceeded
-	}
-	return s.pages[index], s.total, nil
-}
-
-// 关键词命中按页取全；中途超时也保留已取到的几页，不整段作废。
-func TestSearchMessageEventPagesKeepsFetchedPagesOnTimeout(t *testing.T) {
-	page := func(prefix string) []MessageEvent {
-		return []MessageEvent{textReferenceEvent(1, "u", prefix+"1", "a"), textReferenceEvent(2, "u", prefix+"2", "b")}
-	}
-	store := &pagedSearchStore{pages: [][]MessageEvent{page("p"), page("q"), page("r")}, total: 6}
-	got := searchMessageEventPages(context.Background(), store, MessageHistorySearchQuery{Text: "x"})
-	if len(got) != 4 || got[3].MessageID != "q2" {
-		t.Fatalf("pages = %d", len(got))
-	}
 }

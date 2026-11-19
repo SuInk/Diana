@@ -2,20 +2,44 @@ package llm
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
 
-// 调用方收紧的上下文上限一路带到 Generate 和 Stream：超出时两条路都在本地报
-// ErrContextOverflow，不发请求、不降图片细节。
 func TestRegistryContextCapReachesGenerateAndStream(t *testing.T) {
-	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		w.WriteHeader(http.StatusTeapot)
+		var body struct {
+			Input []struct {
+				Content []struct {
+					Type   string `json:"type"`
+					Detail string `json:"detail"`
+				} `json:"content"`
+			} `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		images := 0
+		for _, item := range body.Input {
+			for _, part := range item.Content {
+				if part.Type == "input_image" {
+					images++
+					if part.Detail != "low" {
+						t.Error("request context cap was lost")
+					}
+				}
+			}
+		}
+		if images != 2 {
+			t.Errorf("images=%d", images)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+		fmt.Fprint(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":1,\"total_tokens\":101}}}\n\ndata: [DONE]\n\n")
 	}))
 	defer server.Close()
 	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "test", APIKey: "test", APIFormat: APIFormatResponses, BaseURL: server.URL, ContextWindowTokens: 128000}
@@ -25,25 +49,17 @@ func TestRegistryContextCapReachesGenerateAndStream(t *testing.T) {
 	}
 	client := RegistryClient{Registry: registry, Selection: selection}
 	req := GenerateRequest{MaxContextTokens: 8000, MaxOutputTokens: 1024, Messages: []Message{{Role: RoleUser, Content: "look", Parts: []ContentPart{{Type: ContentPartText, Text: "look"}, {Type: ContentPartImageURL, ImageURL: "https://example.test/1.jpg", Detail: "high"}, {Type: ContentPartImageURL, ImageURL: "https://example.test/2.jpg", Detail: "high"}}}}}
-	if _, err := client.Generate(context.Background(), req); !errors.Is(err, ErrContextOverflow) {
-		t.Fatalf("generate err = %v, want ErrContextOverflow", err)
+	if _, err := client.Generate(context.Background(), req); err != nil {
+		t.Fatal(err)
 	}
 	stream, err := client.Stream(context.Background(), req)
-	message := ""
 	if err != nil {
-		message = err.Error()
-	} else {
-		for event := range stream {
-			if event.Type == ChatEventError {
-				message = event.Error
-			}
+		t.Fatal(err)
+	}
+	for event := range stream {
+		if event.Type == ChatEventError {
+			t.Fatal(event.Error)
 		}
-	}
-	if !IsContextOverflowError(errors.New(message)) {
-		t.Fatalf("stream error = %q, want the context overflow", message)
-	}
-	if calls != 0 {
-		t.Fatalf("oversized request reached HTTP %d times", calls)
 	}
 }
 
@@ -86,5 +102,13 @@ func TestModalityBudgetCountsToolsAndReservesAudio(t *testing.T) {
 	after := PlanInputBudget(req, 20000)
 	if before.OtherTokens <= 0 || after.TextTokens <= before.TextTokens || after.OtherTokens != before.OtherTokens {
 		t.Fatalf("before=%+v after=%+v", before, after)
+	}
+}
+
+func TestTextOverageDoesNotLowerFewImages(t *testing.T) {
+	message := Message{Role: RoleUser, Content: strings.Repeat("x", 60000), Parts: []ContentPart{{Type: ContentPartText, Text: strings.Repeat("x", 60000)}, {Type: ContentPartImageURL, ImageURL: "image", Detail: "high"}}}
+	got := lowerProtectedImageDetailToFit([]Message{message}, 20000)
+	if got[0].Parts[1].Detail != "high" {
+		t.Fatal("text overage lowered image quality")
 	}
 }

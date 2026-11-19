@@ -1826,8 +1826,8 @@
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
-                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
-                <span class="hint">一次调用最多带多少 token 上下文进去，留空跟随模型窗口；比模型窗口大时按模型窗口算，只会收紧不会放宽。历史、记忆和工具结果都原样带上，不预先限额；请求估算超过「上限 − 16384」时，把最近约 2 万 token 之前的聊天记录压缩成一份摘要（多一次模型调用，那一轮缓存不命中），更早的原文靠聊天记录工具找回。</span>
+                <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空按 64000" />
+                <span class="hint">一次调用最多带多少 token 上下文进去，留空按 64000；比模型窗口大时按模型窗口算，只会收紧不会放宽。重新组装时只带最近约 2 万 token 的聊天记录（上限较小时为 (上限 − 16384) / 2），更早的内容靠摘要、记忆和聊天记录工具找回。之后回复为了命中缓存会接着上一轮的请求往后追加，请求逐轮变长，涨到上限减 4096 就重新组装；重新组装那一轮缓存不命中，回复会慢几秒。</span>
               </div>
               <div class="field">
                 <label for="bot-context">历史查询条数上限</label>
