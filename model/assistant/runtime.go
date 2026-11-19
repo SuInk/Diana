@@ -4793,7 +4793,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if !authoritativePluginContext {
 		window := r.promptCompactionWindow(event, cfg)
 		total, nonHistory := replyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry))
-		if total > compactionThreshold(window) || r.appendContinuationOverLimit(ctx, event, messages, compactionThreshold(window)) {
+		if total > compactionThreshold(window) {
 			if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
 				messages, replyHistory = next, kept
 				compacted = "threshold"

@@ -66,15 +66,12 @@ func TestRunnerContinuationIsPureAppend(t *testing.T) {
 	if sent[lastKeptIndex(sent)].Content != "第二问" {
 		t.Fatalf("current message is not the last kept message: %#v", sent)
 	}
-	// 上一轮的时钟这类当轮状态也留在前缀里，这一轮另发新的。
-	clocks := 0
-	for _, message := range sent {
-		if strings.HasPrefix(message.Content, RuntimeClockMarker) {
-			clocks++
+	for _, transcript := range [][]llm.Message{first.Transcript, second.Transcript} {
+		for _, message := range transcript {
+			if message.TurnOnly || strings.HasPrefix(message.Content, RuntimeClockMarker) {
+				t.Fatalf("turn-only state leaked into the prefix: %#v", message)
+			}
 		}
-	}
-	if clocks != 2 {
-		t.Fatalf("clock notes in the second request = %d, want last turn's and this turn's", clocks)
 	}
 }
 
@@ -167,23 +164,31 @@ func transcriptPairs(t *testing.T, transcript []llm.Message) (spoken []string) {
 	return spoken
 }
 
-// 一轮对前缀的贡献是最后一次实际发出的整份请求，接上收尾说的话：收尾的几条各成一对，
-// 不说话的一轮什么都不加。
-func TestTurnTranscriptIsLastRequestPlusFinalSpeech(t *testing.T) {
+// 一轮对前缀的贡献只有第一步请求里不是只用于本轮的消息，加实际发出的每句话：收尾的
+// 几条各成一对，不说话的一轮什么都不加。
+func TestTurnTranscriptKeepsOnlySpokenText(t *testing.T) {
 	request := llm.GenerateRequest{Messages: continuationTestMessages("问题")}
+	interim := []Step{
+		{Tool: finalizeToolName, Input: map[string]any{"text": "我去查一下"}, Output: "已发送"},
+		{Tool: "web_search", Input: map[string]any{"query": "x"}, Output: "结果"},
+		{Tool: finalizeToolName, Input: map[string]any{"text": "没发出去的"}, Error: "被拦下"},
+	}
 	for _, tc := range []struct {
 		name  string
+		steps []Step
 		final string
 		want  []string
 	}{
-		{"one send", "好", []string{"好"}},
-		{"two sends", "第一条" + messageBoundaryMarker + "第二条", []string{"第一条", "第二条"}},
-		{"silent", "", nil},
+		{"one send", nil, "好", []string{"好"}},
+		{"two sends", nil, "第一条" + messageBoundaryMarker + "第二条", []string{"第一条", "第二条"}},
+		{"silent", nil, "", nil},
+		{"interim then final", interim, "查到了", []string{"我去查一下", "查到了"}},
+		{"interim then silent", interim, "", []string{"我去查一下"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			transcript := turnTranscript(request, "trace", tc.final)
+			transcript := turnTranscript(request, "trace", tc.steps, tc.final)
 			if !reflect.DeepEqual(transcript[:len(request.Messages)], request.Messages) {
-				t.Fatalf("the last request must open the transcript: %#v", transcript)
+				t.Fatalf("the first request must open the transcript: %#v", transcript)
 			}
 			if got := transcriptPairs(t, transcript[len(request.Messages):]); !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("got %q, want %q", got, tc.want)
@@ -194,23 +199,23 @@ func TestTurnTranscriptIsLastRequestPlusFinalSpeech(t *testing.T) {
 		})
 	}
 	// 同一句话在两轮里各说一遍，调用 ID 不能撞。
-	a := turnTranscript(request, "trace-a", "好")
-	b := turnTranscript(request, "trace-b", "好")
+	a := turnTranscript(request, "trace-a", nil, "好")
+	b := turnTranscript(request, "trace-b", nil, "好")
 	if a[len(a)-1].ToolCallID == b[len(b)-1].ToolCallID {
 		t.Fatal("the same text in two turns must get different call ids")
 	}
 }
 
-// 先说一句、查一下、再说一句，下一轮接着续：每一次请求都以上一次请求整份开头（经 sub2api
-// 的 gpt 只认「上一次完整请求」这个缓存点），工具调用和结果、中途那句都留在前缀里。
-func TestRunnerRequestsArePurePrefixes(t *testing.T) {
+// 先说一句、查一下、再说一句：这一轮各步的请求里工具结果照常可见，记下来的前缀里
+// 没有任何工具调用和结果，只有按顺序的两句发言；下一轮照着它续接。
+func TestRunnerTranscriptDropsToolStepsAndKeepsSpeechOrder(t *testing.T) {
 	var events []string
 	client := &stepsClient{steps: [][]llm.ToolCall{{
 		{ID: "send-1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
 		{ID: "search-1", Name: webSearchToolName, Arguments: map[string]any{"query": "天气"}},
 	}}}
 	search := &orderTool{name: webSearchToolName, events: &events}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events), ToolResultReminder: "工具跑完了，挑要点回复"}, NewToolRegistry(search))
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events)}, NewToolRegistry(search))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,19 +226,23 @@ func TestRunnerRequestsArePurePrefixes(t *testing.T) {
 	if results := client.toolResults(1); len(results) != 2 {
 		t.Fatalf("the second step must still see this turn's tool results: %#v", results)
 	}
-	last := client.requests[len(client.requests)-1].Messages
-	if len(first.Transcript) != len(last)+2 {
-		t.Fatalf("the transcript must be the last request plus the final pair:\n%#v", first.Transcript)
+	var base []llm.Message
+	for _, message := range client.requests[0].Messages {
+		if !message.TurnOnly {
+			message.CacheBreakpoint = false
+			base = append(base, message)
+		}
 	}
-	if got := transcriptPairs(t, first.Transcript[len(last):]); !reflect.DeepEqual(got, []string{"好了"}) {
-		t.Fatalf("final speech = %q", got)
+	if len(first.Transcript) != len(base)+4 || !reflect.DeepEqual(first.Transcript[:len(base)], base) {
+		t.Fatalf("the transcript must be the first request minus turn-only messages plus two spoken pairs:\n%#v", first.Transcript)
 	}
-	toolSeen := false
+	if got := transcriptPairs(t, first.Transcript); !reflect.DeepEqual(got, []string{"我去查一下", "好了"}) {
+		t.Fatalf("spoken = %q", got)
+	}
 	for _, message := range first.Transcript {
-		toolSeen = toolSeen || message.ToolName == webSearchToolName
-	}
-	if !toolSeen {
-		t.Fatal("this turn's tool calls and results must stay in the prefix")
+		if message.ToolName == webSearchToolName || strings.Contains(message.Content, `{"ok":true}`) {
+			t.Fatalf("tool step leaked into the prefix: %#v", message)
+		}
 	}
 	second, err := runner.Run(context.Background(), Request{
 		Messages:     continuationTestMessages("谢谢"),
@@ -245,19 +254,16 @@ func TestRunnerRequestsArePurePrefixes(t *testing.T) {
 	if !second.Continued {
 		t.Fatal("matching key must continue")
 	}
-	for index := 1; index < len(client.requests); index++ {
-		before, after := client.requests[index-1].Messages, client.requests[index].Messages
-		if len(after) <= len(before) {
-			t.Fatalf("request %d does not extend request %d: %d vs %d messages", index, index-1, len(after), len(before))
+	sent := client.requests[2].Messages
+	for index, message := range first.Transcript {
+		got := sent[index]
+		got.CacheBreakpoint = false
+		if !reflect.DeepEqual(got, message) {
+			t.Fatalf("prefix differs at %d:\n got %#v\nwant %#v", index, got, message)
 		}
-		for position, message := range before {
-			got, want := after[position], message
-			got.CacheBreakpoint, want.CacheBreakpoint = false, false
-			got.TurnOnly, want.TurnOnly = false, false
-			if !reflect.DeepEqual(got, want) {
-				t.Fatalf("request %d rewrites request %d at message %d:\n got %#v\nwant %#v", index, index-1, position, got, want)
-			}
-		}
+	}
+	if got := transcriptPairs(t, second.Transcript); !reflect.DeepEqual(got, []string{"我去查一下", "好了", "好了"}) {
+		t.Fatalf("spoken after two turns = %q", got)
 	}
 }
 
@@ -303,18 +309,18 @@ func TestRunnerContinuationKeepsContractsOutOfPrefix(t *testing.T) {
 	}
 }
 
-// 只用于本轮的内容（跨群参考）发出去了也留在前缀里：前缀是最后一次请求的整份。
-func TestTurnTranscriptKeepsTurnOnlyMessages(t *testing.T) {
+// 只用于本轮的内容（跨群参考）随本轮请求发出，但不进下一轮续接的前缀。
+func TestTurnTranscriptDropsTurnOnlyMessages(t *testing.T) {
 	request := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: "head"},
 		{Role: llm.RoleUser, Content: "[跨群历史 2026-10-20 10:00:00] 甲: 猫又跑了", TurnOnly: true},
 		{Role: llm.RoleUser, Content: "current", CacheBreakpoint: true},
 	}}
-	transcript := turnTranscript(request, "trace", "")
-	if len(transcript) != 3 || transcript[1].TurnOnly || transcript[2].CacheBreakpoint {
-		t.Fatalf("every message stays, flags cleared: %#v", transcript)
+	transcript := turnTranscript(request, "trace", nil, "")
+	if len(transcript) != 2 || transcript[0].Content != "head" || transcript[1].Content != "current" || transcript[1].CacheBreakpoint {
+		t.Fatalf("turn-only message must be dropped and breakpoints cleared: %#v", transcript)
 	}
-	if !request.Messages[1].TurnOnly || !request.Messages[2].CacheBreakpoint {
+	if !request.Messages[1].TurnOnly || len(request.Messages) != 3 {
 		t.Fatal("the request itself must not be modified")
 	}
 }

@@ -263,11 +263,40 @@ func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64,
 	return log
 }
 
-// appendContextPrefix 是下一轮续接的前缀：Runner 记下的这一轮最后一次实际发出的整份
-// 请求加收尾那句（见 agent 的 turnTranscript）。这一轮的工具调用和结果本身就在里面，
-// 不再另补「调用过哪些工具」那一行（重新组装时历史里照旧有，见 tool_call_memory.go）。
+// appendContextPrefix 是下一轮续接的前缀：Runner 记下的这一轮（第一步请求里不是只用于
+// 本轮的消息，加机器人实际发出的每句话），再补一行这一轮调用过哪些工具。
+//
+// 工具调用和结果本身不进前缀，但模型下一轮要知道上一轮查过什么（见 tool_call_memory.go
+// 开头的两次线上事故）。这一行和重新组装时历史里的那行用同一个函数生成，位置也一样：
+// 重新组装时记录挂在这一轮跑完后发出的第一条消息上，也就是收尾那句的第一条后面；
+// 中途发言是跑的过程中发的，排在它前面。收尾没说话、只有中途发言时放在最后一句
+// 后面；整轮没说话就不加——「你发上面这条回复前」无从说起，重新组装时也没有这一行。
 func appendContextPrefix(resp *agent.Response) []llm.Message {
-	return resp.Transcript
+	transcript := resp.Transcript
+	calls := replyToolCalls(resp.Steps)
+	if len(calls) > replyToolTraceLimit {
+		calls = calls[len(calls)-replyToolTraceLimit:]
+	}
+	note, ok := replyToolTraceNote(calls)
+	if !ok {
+		return transcript
+	}
+	// 这一轮的发言在末尾，每句是 send 调用加「已发送」两条。
+	spoken := 0
+	for spoken < len(transcript) && llm.IsHistoryReplyMessage(transcript[len(transcript)-1-spoken]) {
+		spoken++
+	}
+	if spoken == 0 {
+		return transcript
+	}
+	at := len(transcript)
+	if interim := 2 * len(agent.InterimSendTexts(resp.Steps)); interim < spoken {
+		at = len(transcript) - spoken + interim + 2
+	}
+	out := make([]llm.Message, 0, len(transcript)+1)
+	out = append(out, transcript[:at]...)
+	out = append(out, note)
+	return append(out, transcript[at:]...)
 }
 
 // blockTitle 取段开头的「【…】」作为同一段的标识；不以「【」开头的段没有标题。
@@ -719,26 +748,4 @@ func splitRetrievedMemory(block string) (head, retrieved string) {
 		}
 	}
 	return strings.TrimSpace(block), ""
-}
-
-// appendContinuationOverLimit 报告这一轮接着上一轮续的话会不会超过上限。
-//
-// 续接的请求是上一轮的前缀加这一轮追加的，比这一轮完整组装的大：前缀里攒着每轮的
-// 回复、工具备注和当时的尾部。以前滑窗只看完整组装：续接撞上限重新组装时，完整组装
-// 还没到阈值、不滑，重组出来照样有八成多，几轮后又撞上。11-18 生产 swe-2 385 轮里
-// 121 轮是这样整份重发的，重组后的完整组装中位 8.3 万、上限 11.2 万，约 5 轮撞一次。
-// 照 Pi：请求到了阈值就滑窗，重组时从「摘要 + 近 2 万原文」重新开始。
-func (r *Runtime) appendContinuationOverLimit(ctx context.Context, event MessageEvent, messages []llm.Message, limit int64) bool {
-	if limit <= 0 {
-		return false
-	}
-	if purpose := llmUsagePurposeFromContext(ctx); purpose != "" && purpose != PurposeReply {
-		return false
-	}
-	previous := r.appendContexts.get(appendContextKey(event))
-	if previous == nil {
-		return false
-	}
-	_, decision := appendContextContinuation(previous, messages, limit)
-	return decision.reason == "context_limit"
 }

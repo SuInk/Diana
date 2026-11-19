@@ -258,8 +258,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		promptTokens += llm.EstimateMessageTokens(message)
 	}
 
-	// lastRequest 是最后一次实际发出的请求，收尾时整份作为 Response.Transcript 的开头
-	// 给下一轮续接（见 turnTranscript）。
+	// firstRequest 是这一轮第一步准备好的请求，收尾时取它里面不是「只用于本轮」的消息
+	// 作为 Response.Transcript 的开头给下一轮续接（见 turnTranscript）。后面各步多出来的
+	// 工具调用和结果不进前缀。lastRequest 是最后一次实际发出的请求。
+	var firstRequest llm.GenerateRequest
 	var lastRequest llm.GenerateRequest
 	var steps []Step
 	var lastText string
@@ -342,7 +344,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			FinishReason:    reason,
 			DurationMS:      duration.Milliseconds(),
 			Sources:         responseSources(text, steps),
-			Transcript:      turnTranscript(lastRequest, traceID, text),
+			Transcript:      turnTranscript(firstRequest, traceID, steps, text),
 			ConversationKey: convKey,
 			Continued:       continued,
 			Definitions:     headDefinitions,
@@ -371,7 +373,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		response.Text = ""
 		// 这一轮收尾没说话：前缀里只留中途已经发出去的那几句。
-		response.Transcript = turnTranscript(lastRequest, traceID, "")
+		response.Transcript = turnTranscript(firstRequest, traceID, steps, "")
 		response.Sources = responseSources("", steps)
 		response.Silent = true
 		response.SilentReason = strings.TrimSpace(action.SilentReason)
@@ -411,18 +413,15 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if imageTaskQueued {
 			definitions = r.turnDefinitions(true)
 		}
-		// 工具结果提醒和调用方加的运行时附注（工具执行状态）发出去就留在对话里：每一步
-		// 请求都是下一步的严格前缀，下一轮又接着这一轮最后一步的请求（见 turnTranscript）。
-		messages = withToolResultReminder(messages, r.toolResultReminder(steps))
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: messages, Tools: definitions})
-		if prepareErr == nil {
-			messages = planningRequest.Messages
-		}
+		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.toolResultReminder(steps)), Tools: definitions})
 		if prepareErr != nil {
 			cancel()
 			return fail(prepareErr)
+		}
+		if len(firstRequest.Messages) == 0 {
+			firstRequest = planningRequest
 		}
 		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil {
@@ -1090,11 +1089,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		if prepareErr != nil {
 			return fail(prepareErr)
 		}
-		finalizationRequest.Messages = prepared.Messages
-		resp, err = r.client.Generate(ctx, prepared)
-		if err == nil && resp != nil {
-			lastRequest = prepared
+		if len(firstRequest.Messages) == 0 {
+			firstRequest = prepared
 		}
+		resp, err = r.client.Generate(ctx, prepared)
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
 		}
@@ -1252,8 +1250,8 @@ func markLoopCacheBreakpoint(messages []llm.Message, stableIndex int) {
 			messages[index].CacheBreakpoint = false
 		}
 	}
-	// 移动的断点打在最后一条不是只用于本轮的消息上：第一步是当前消息，之后各步是最新
-	// 的工具结果。后面那几条也会留进下一次请求，断点打在哪只影响显式缓存的供应商少存一截。
+	// 移动的断点打在最后一条会留进前缀的消息上：第一步是当前消息（后面只用于本轮的那些
+	// 下一轮不带，见 turnOnlyAfterCurrent），之后各步是最新的工具结果。
 	for index := len(messages) - 1; index >= 0; index-- {
 		if !messages[index].TurnOnly {
 			messages[index].CacheBreakpoint = true

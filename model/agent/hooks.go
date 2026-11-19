@@ -17,8 +17,7 @@ import (
 // Callbacks must honor cancellation and must not mutate their input snapshots.
 type RunHooks struct {
 	// PrepareRequest runs before every model request, including forced finalization.
-	// Returned messages stay in the conversation: every request must be a strict
-	// prefix of the next one (see turnTranscript), so add only what is new.
+	// Returned changes affect that request only, not the canonical conversation.
 	PrepareRequest func(context.Context, llm.GenerateRequest) (llm.GenerateRequest, error)
 	// BeforeToolCall runs on resolved tools and normalized arguments. An error
 	// blocks execution and is returned to the model as a failed tool result.
@@ -95,7 +94,7 @@ func (h *runHookState) prepare(ctx context.Context, request llm.GenerateRequest)
 	if h.hooks.PrepareRequest == nil {
 		return request, nil
 	}
-	// The callback gets its own copy; the runner adopts what it returns.
+	// Isolate append/replacement of messages from the run's persisted transcript.
 	request.Messages = append([]llm.Message(nil), request.Messages...)
 	request.Tools = append([]llm.ToolDefinition(nil), request.Tools...)
 	return h.hooks.PrepareRequest(ctx, request)

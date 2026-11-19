@@ -25,8 +25,6 @@ type toolExecutionRecord struct {
 // It is evidence guidance, not a semantic factuality classifier.
 func newReplyRunHooks() agent.RunHooks {
 	var records []toolExecutionRecord
-	// noted 是已经写进对话的记录条数：附注发出去就留在对话里（请求只追加），每次只补新的。
-	noted := 0
 	return agent.RunHooks{
 		AfterToolCall: func(_ context.Context, step agent.Step) {
 			status := "success"
@@ -46,12 +44,11 @@ func newReplyRunHooks() agent.RunHooks {
 			records = append(records, toolExecutionRecord{Tool: step.Tool, Status: status, Target: target})
 		},
 		PrepareRequest: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateRequest, error) {
-			if len(records) > noted {
+			if len(records) > 0 {
 				var err error
-				if req, err = withToolExecutionStatus(req, records[noted:], noted); err != nil {
+				if req, err = withToolExecutionStatus(req, records); err != nil {
 					return req, err
 				}
-				noted = len(records)
 			}
 			return req, nil
 		},
@@ -64,21 +61,18 @@ func newReplyRunHooks() agent.RunHooks {
 // 当前消息后面接上了工具调用，这条挪到工具结果之后，于是从第一步的这个位置起，当前
 // 消息和之后的内容第二步全要重发。生产 11-16 同一轮后续步骤重新组装的部分里，从这里
 // 断开的约占三分之一。
-//
-// 附注发出去就留在对话里、下一轮也在前缀里（请求只追加），所以只写这一步新执行的：
-// before 是之前各步已经写过的条数。
-func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRecord, before int) (llm.GenerateRequest, error) {
-	// 一步调了很多工具时只列最后 12 条，其余记个数。
+func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRecord) (llm.GenerateRequest, error) {
 	start := max(0, len(records)-12)
 	data, err := json.Marshal(struct {
 		Total   int                   `json:"total"`
-		Omitted int                   `json:"omitted,omitempty"`
-		New     []toolExecutionRecord `json:"new"`
-	}{before + len(records), start, records[start:]})
+		Omitted int                   `json:"omitted"`
+		Recent  []toolExecutionRecord `json:"recent"`
+	}{len(records), start, records[start:]})
 	if err != nil {
 		return req, err
 	}
-	note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data)}
+	// 只用于本轮：不进续接的前缀（见 llm.Message.TurnOnly），所以每步照加，不会越攒越多。
+	note := llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: "【本轮工具执行状态，由运行时生成】\n" + string(data), TurnOnly: true}
 	// Keep the current user input last, but never split a native tool batch.
 	at := len(req.Messages)
 	if at > 0 && req.Messages[at-1].Role == llm.RoleUser {
