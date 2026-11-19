@@ -26,7 +26,8 @@ func TestMemoryContextHasNoPerTurnCounters(t *testing.T) {
 			MessageCount: messages,
 			Favorability: favorability,
 		}
-		return formatStructuredMemoryContext(profile, policy, nil)
+		text, _, _ := formatStructuredMemoryContextWithTokenBudgetDetailed(profile, policy, nil, 3200)
+		return text
 	}
 
 	first := build(43, 100)

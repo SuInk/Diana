@@ -267,17 +267,19 @@ func fileExists(path string) bool {
 // 这份目录按会话变——skill 可以按机器人、按群分档开放，装一个卸一个也会改它。放进
 // 系统提示词就等于每换一个群、每装一个 skill 都把整条 prompt 的前缀缓存作废，和
 // 之前 loadedContracts 夹在中段是同一个坑。调用方把它挂在消息尾部的易变块里。
-func RenderSkillsCatalog(skills []SkillMetadata) string {
-	catalog, _ := renderSkillsCatalog(skills)
+func RenderSkillsCatalog(skills []SkillMetadata, budget int) string {
+	catalog, _ := renderSkillsCatalog(skills, budget)
 	return catalog
 }
 
 // renderSkillsCatalog 额外返回正文真正写进去的那几份。IncludeBody 只是判定，正文
-// 读不出来就没有下发，「先 read_skill」的提示要按实际下发的算。目录和常驻正文
-// 全部带上，不设字数上限。
-func renderSkillsCatalog(skills []SkillMetadata) (string, map[string]bool) {
+// 读不出来或超了预算就没有下发，「先 read_skill」的提示要按实际下发的算。
+func renderSkillsCatalog(skills []SkillMetadata, budget int) (string, map[string]bool) {
 	if len(skills) == 0 {
 		return "", nil
+	}
+	if budget <= 0 {
+		budget = DefaultSkillsListBudget
 	}
 	var builder strings.Builder
 	builder.WriteString("## Skills\n")
@@ -285,7 +287,12 @@ func renderSkillsCatalog(skills []SkillMetadata) (string, map[string]bool) {
 	builder.WriteString("### Available skills\n")
 	var resident []SkillMetadata
 	for _, skill := range skills {
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description))
+		line := fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
+		if builder.Len()+len(line) > budget {
+			builder.WriteString("- ... additional skills omitted because the skills context budget was reached.\n")
+			break
+		}
+		builder.WriteString(line)
 		if skill.IncludeBody {
 			resident = append(resident, skill)
 		}
@@ -296,12 +303,18 @@ func renderSkillsCatalog(skills []SkillMetadata) (string, map[string]bool) {
 	builder.WriteString("- When a `SKILL.md` references relative files, resolve them relative to the directory of the `path` returned by `read_skill`.\n")
 	// 常驻 skill 的正文直接跟在目录后面:用户把它配成常驻,就是因为「要用时再读」
 	// 在长上下文里读不到。正文在这里给全,模型不必再 read_skill。
+	remaining := ResidentSkillBodyBudget
 	delivered := map[string]bool{}
 	for _, skill := range resident {
 		body := strings.TrimSpace(skillBody(skill))
 		if body == "" {
 			continue
 		}
+		if len(body) > remaining {
+			builder.WriteString(fmt.Sprintf("\n### %s (resident, body too long)\nCall `read_skill` with %q: it is marked resident but its body did not fit the budget.\n", skill.Name, skill.Name))
+			continue
+		}
+		remaining -= len(body)
 		delivered[skill.Name] = true
 		builder.WriteString("\n### Resident skill: " + skill.Name + "\n")
 		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")
@@ -346,14 +359,16 @@ func residentSkillsOnly(skills []SkillMetadata) []SkillMetadata {
 // delivered 会被补上这些名字，供显式点名提示判断是否已经给了正文。
 func renderTriggeredSkillBodies(skills []SkillMetadata, delivered map[string]bool) string {
 	var builder strings.Builder
+	remaining := ResidentSkillBodyBudget
 	for _, skill := range skills {
 		if skill.Resident != nil || !skill.IncludeBody || delivered[skill.Name] {
 			continue
 		}
 		body := strings.TrimSpace(skillBody(skill))
-		if body == "" {
+		if body == "" || len(body) > remaining {
 			continue
 		}
+		remaining -= len(body)
 		delivered[skill.Name] = true
 		builder.WriteString("### Skill matched this turn: " + skill.Name + "\n")
 		builder.WriteString("Its full `SKILL.md` follows; do not call `read_skill` for it.\n\n")

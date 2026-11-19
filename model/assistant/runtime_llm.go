@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"sort"
@@ -65,26 +66,6 @@ func (r *Runtime) llmModelLister() LLMModelLister {
 	return func(ctx context.Context, cfg llm.ProviderConfig) ([]llm.ModelInfo, error) {
 		return defaultLLMModelLister(ctx, cfg)
 	}
-}
-
-// replySpeakerLineRule 代替尾部逐轮的「正在和你说话的是…」：那一句每换一个发言者就要
-// 追加一版，而最后一条聊天记录本来就写着是谁。
-const replySpeakerLineRule = "群聊历史以“昵称（用户 ID）: 内容”标注发言者，正在和你说话的就是最后一条聊天记录的发言者；回复时不要把这个前缀带进去。"
-
-// replyGroupHeadRules 是主回复头部模式下群聊里随发言者、随消息变的几句说明的固定版：
-// 发言者前缀、配置别名、群身份。尾部原来每换一个发言者或每命中一次别名就重发一遍，
-// 只追加以后每次都是一版新的追加；改成头部一句，尾部只留群主、管理员的群身份。
-// 用户改过对应提示词时仍走尾部原样。
-func replyGroupHeadRules(cfg BotConfig) string {
-	var rules []string
-	if boolValue(cfg.PromptInjectGroupSender, true) && !cfg.PromptOverrides.isCustomized(promptGroupSenderSpec) {
-		rules = append(rules, replySpeakerLineRule)
-	}
-	if aliases := quotedPromptItems(cfg.GroupTriggers); aliases != "" && !cfg.PromptOverrides.isCustomized(promptMatchedAliasSpec) {
-		rules = append(rules, "你的配置别名："+aliases+"。消息里出现这些词会触发这一轮，但这只说明触发来源，不代表要删掉或替换这个词，也不代表它一定指别人。")
-	}
-	rules = append(rules, replySpeakerGroupRule)
-	return strings.Join(rules, "\n")
 }
 
 func quotedPromptItems(items []string) string {
@@ -278,7 +259,6 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
-	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	// Streaming must be the last wrapper added so it sits closest to the real
 	// provider. The other decorators expose Generate only and would otherwise
@@ -306,7 +286,6 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
-	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	run = r.withLLMStreamingRun(ctx, run)
 	_, _ = run(provider)
@@ -566,7 +545,6 @@ func (r *Runtime) runLLMRouterProviderWithRetry(ctx context.Context, retryTransi
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
-	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	if timeout := r.configForContext(ctx).ModelRequestTimeout; timeout > 0 {
 		next := run
@@ -771,27 +749,6 @@ var (
 	promptSpeakerTimezoneStaleSpec = tailSpec("speaker_timezone.stale", "发言者时区记录较旧", "时区记录超过一定时间时接在记录时间后面，提醒约时间前先确认。", promptSpeakerTimezoneStale)
 )
 
-// replyClockRule 是主回复头部的时间规则。开头是 agent.RuntimeClockMarker：Runner 看到它
-// 就不再自己补一条精确到秒的时钟（见 agent.messagesCarryRuntimeClock）。
-const replyClockRule = agent.RuntimeClockMarker + "现在的时间以最后一条聊天记录的时间为准，日期和星期看最近一条【日期】。这是机器人所在机器的可信时钟；被问到几点、今天几号、星期几时直接按它回答，不要猜训练数据的日期，也不要说看不到时钟。"
-
-// replyDatePrompt 是主回复尾部的【日期】：只写到日期和星期，一天才变一次，只追加的
-// 续接里没变就不重发。对方记过时区时接上他那边的时区说明。
-func (r *Runtime) replyDatePrompt(event MessageEvent) string {
-	cfg := r.effectiveConfigForEvent(event)
-	if !boolValue(cfg.PromptInjectTime, true) {
-		return ""
-	}
-	now := r.clock().In(cfg.Location())
-	_, zoneOffset := now.Zone()
-	var builder strings.Builder
-	builder.WriteString("【日期】今天是 " + now.Format("2006-01-02") + " " + chineseWeekday(now.Weekday()) + "（UTC" + formatUTCOffset(zoneOffset) + "）")
-	if speaker := r.speakerTimezonePrompt(event, now); speaker != "" {
-		appendPromptSection(&builder, speaker)
-	}
-	return strings.TrimSpace(builder.String())
-}
-
 // runtimeClockPrompt 返回本轮的可信实时时间提示。返回值每次调用都不同，只能作为尾部
 // 独立 system 消息注入；拼进人设提示词会让那段最长的前缀每秒失效一次。
 func (r *Runtime) runtimeClockPrompt(event MessageEvent) string {
@@ -881,114 +838,6 @@ func speakerToolRulesBlock(rules string) string {
 	return speakerToolRulesTitle + "\n这一段只说明当前发言者；没再出现时沿用上面最近的一次，换了规则不同的人说话会重新给出。\n" + rules
 }
 
-// ownerSplitDisclosureRules 是主回复头部里模型身份、项目地址的披露规则。以前按发言者
-// 是不是主人写一份放在尾部【当前发言者适用的工具规则】里，主人和群友交替说话就来回
-// 追加；现在两种说法都写进头部，模型照【当前发言者身份】挑。管理员拿的是主人那套工具，
-// 这里也按主人算。
-func ownerSplitDisclosureRules(cfg BotConfig, modelEveryone, hasRuntimeModel, repositoryHidden bool) string {
-	var rules []string
-	switch {
-	case modelEveryone && hasRuntimeModel:
-		rules = append(rules, cfg.prompt(promptToolRuntimeModelSpec))
-	case modelEveryone:
-	case hasRuntimeModel:
-		rules = append(rules, "【当前发言者身份】是主人或主人指定的管理员时："+cfg.prompt(promptToolRuntimeModelSpec)+"\n其他人问起时："+cfg.prompt(promptModelUndisclosedSpec))
-	default:
-		rules = append(rules, "【当前发言者身份】不是主人、也不是主人指定的管理员时："+cfg.prompt(promptModelUndisclosedSpec))
-	}
-	if repositoryHidden {
-		// 只写其他人那一半的话，swe-2 回放里主人问仓库 3 次有 2 次也说不公开，主人那一半要明写。
-		rules = append(rules, "【当前发言者身份】是主人或主人指定的管理员时：问项目地址、源码仓库就调用 version，把 repository_url 原样发出来。\n"+
-			"其他人："+cfg.prompt(promptToolVersionNoRepositorySpec))
-	}
-	return strings.Join(rules, "\n")
-}
-
-// ownerOnlyToolsRule 是主回复头部里「哪些工具群友用不了」那一句：目录按全集列，群友
-// 用不了的名单只随机器人和群的配置变，写在头部。以前每轮在历史后面写一行【本轮发言者的
-// 工具权限】，主人和群友交替说话就来回追加。群友真调了，执行时也会回没有权限。
-// late 是建 Runner 时才注册、这时还不在 head 里的主人专属工具。
-func ownerOnlyToolsRule(head *agent.ToolRegistry, shared map[string]bool, late ...string) string {
-	if head == nil || shared == nil {
-		return ""
-	}
-	var names []string
-	for _, name := range append(head.PresentedNames(), late...) {
-		if !shared[name] {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	if len(names) == 0 {
-		return ""
-	}
-	return "【只对主人开放的工具】" + strings.Join(names, "、") + "。只有【当前发言者身份】是主人或主人指定的管理员时能用；其他人要你做这些事，直接说需要主人来做，不要调用，也别说能替对方做。"
-}
-
-func pluginResponsesHaveContext(responses []PluginResponse) bool {
-	for _, resp := range responses {
-		if strings.TrimSpace(resp.Context) != "" {
-			return true
-		}
-	}
-	return false
-}
-
-// replyModeHeadRules 是主回复头部里【本轮回复方式】各种情况的细则，只随配置和会话类型
-// 变：尾部 replyModeLabels 写这一轮是哪几种，模型照标签到这里找。换行分条按这个会话
-// 平常的发法写，这一轮不一样时尾部另写一句覆盖。
-func replyModeHeadRules(cfg BotConfig, event MessageEvent) string {
-	rules := []string{"【本轮回复方式的细则】尾部【本轮回复方式】写着哪几种情况，就照下面对应的那几条做；没写到的不适用。"}
-	rules = append(rules, "「路由放行」："+strings.TrimSpace(cfg.prompt(promptProactiveReplySpec))+cfg.prompt(promptProactiveToolResultSpec))
-	if event.Kind == EventKindGroup {
-		rules = append(rules, "「闲聊插话」："+cfg.prompt(promptChatInPacingSpec)+cfg.prompt(promptChatInReplySpec)+cfg.prompt(promptChatInNoAgreementSpec))
-	}
-	rules = append(rules,
-		"「带图片」："+cfg.prompt(promptImageReplySpec),
-		"「有只拿到名字的表情」："+cfg.prompt(promptFaceNameOnlySpec),
-		"「有插件结果」："+cfg.prompt(promptPluginAuthoritySpec))
-	if split := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, MessageEvent{Kind: event.Kind, ProfileID: event.ProfileID})); split != "" {
-		rules = append(rules, split)
-	}
-	return strings.Join(rules, "\n")
-}
-
-// replyModeLabels 是尾部【本轮回复方式】里这一轮的情况标签，对应 replyModeHeadRules。
-// 本轮分条方式和头部写的平常发法不同时，把这一轮的说法写全。
-func replyModeLabels(cfg BotConfig, event MessageEvent, proactiveTriggered bool, pluginResponses []PluginResponse) string {
-	var labels []string
-	if proactiveTriggered {
-		labels = append(labels, "「路由放行」")
-	}
-	if event.chatInReply {
-		labels = append(labels, "「闲聊插话」")
-	}
-	if eventCarriesImages(event) {
-		labels = append(labels, "「带图片」")
-	}
-	if eventHasNameOnlyFace(event) {
-		labels = append(labels, "「有只拿到名字的表情」")
-	}
-	if pluginResponsesHaveContext(pluginResponses) {
-		labels = append(labels, "「有插件结果」")
-	}
-	var lines []string
-	if len(labels) > 0 {
-		lines = append(lines, "这一轮："+strings.Join(labels, "、")+"。")
-	}
-	if override := replyPresentationOverride(cfg, event); override != "" {
-		lines = append(lines, override)
-	}
-	usual := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, MessageEvent{Kind: event.Kind, ProfileID: event.ProfileID}))
-	if current := replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)); current != usual {
-		if current == "" {
-			current = "这一轮不按换行拆条，上面那条换行怎么发不适用。"
-		}
-		lines = append(lines, "这一轮的换行分条和平常不同，以这一条为准："+current)
-	}
-	return strings.Join(lines, "\n")
-}
-
 // systemPromptWithRelationshipAndAgentTools 返回整段系统提示词（稳定头部 + 发言者
 // 尾部），给只发一条 system 消息的旁路（定时订阅、后续评论）和测试用。主回复链路
 // 用 systemPromptPartsWithRelationshipAndAgentTools 把两段分开放。
@@ -1011,23 +860,9 @@ func (r *Runtime) systemPromptWithRelationshipAndAgentTools(event MessageEvent, 
 //
 // 语气锚点留在 tail 末尾的理由和以前一样：离生成越近越管用，现在它离得更近了。
 func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry *agent.ToolRegistry) (string, string) {
-	return r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentEnabled, registry, nil)
-}
-
-// systemPromptPartsWithHead 同 systemPromptPartsWithRelationshipAndAgentTools；head 非空
-// 时（主回复，见 agent.Config.HeadRegistry）工具规则按这份工具全集、按主人口径写进
-// head，换人说话不变：谁能用哪些由 Agent 每轮一行的权限说明交代，权限在执行时核验。
-// 只有随发言者身份变的披露规则（模型身份、项目地址）留在尾部。
-func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses []PluginResponse, proactiveTriggered bool, relationship RelationshipPolicy, agentEnabled bool, registry, head *agent.ToolRegistry) (string, string) {
 	cfg := r.effectiveConfigForEvent(event)
 	// 工具用法提示跟着工具面走：管理员拿到主人那套工具，提示也按主人给。
 	tools := relationship.toolScope()
-	speakerOwner := tools.Owner
-	speakerRegistry := registry
-	if head != nil {
-		registry = head
-		tools.Owner = true
-	}
 	var builder strings.Builder
 	// tail 收集随发言者权限档位变化的段落（主人专属工具规则、按好感度解锁的日程
 	// 工具规则）。注入条件保持原样，只是不写进 head：夹在中间会让它后面几千 token
@@ -1035,11 +870,6 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	var tail strings.Builder
 	// speakerRules 收随发言者变化的工具规则，在尾部单独成段（见 speakerToolRulesBlock）。
 	var speakerRules strings.Builder
-	// ownerRules 收主人专属工具的规则：按工具全集渲染时进 head，否则随发言者进尾部。
-	ownerRules := &speakerRules
-	if head != nil {
-		ownerRules = &builder
-	}
 	tail.WriteString(addressingPrompt(event, cfg))
 	hasTool := func(name string) bool {
 		if registry == nil {
@@ -1072,15 +902,17 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		}
 		return false
 	}
-	// 主回复按工具全集渲染（head 非空）时规则全部进稳定头部。旁路不渲染全集，工具规则
-	// 跟着「本群成员能不能用」走：成员都拿得到的进头部，主人专属的写进尾部，免得主人
-	// 和群友交替时前缀从这里分叉。
+	// 工具规则跟着「本群成员能不能用」走：成员都拿得到的工具，规则进稳定头部；主人
+	// 专属的写进尾部，免得主人和群友交替时前缀从这里分叉。github、subscription、
+	// cross_session_message 的工具定义随发言者变，定义留在尾部的按需目录里（见
+	// sharedAgentTools），但规则文本对谁都一样。以前规则跟着定义一起进了尾部：11-01～02
+	// 生产主回复尾部这几段约 2K 字，八成请求都带、每次重算。
 	shared := map[string]bool(nil)
 	if registry != nil {
 		shared = r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
 	}
 	place := func(names ...string) *strings.Builder {
-		if shared == nil || head != nil {
+		if shared == nil {
 			return &builder
 		}
 		for _, name := range names {
@@ -1122,7 +954,7 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		builder.WriteString("\n" + cfg.promptf(promptAliasSpec, map[string]string{"aliases": aliases}))
 	}
 	if agentEnabled && tools.Owner && hasTool("llm_config") {
-		ownerRules.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolLLMConfigSpec))
 	}
 	if agentEnabled && hasTool(dianaGitHubToolName) {
 		place(dianaGitHubToolName).WriteString("\n" + cfg.prompt(promptToolRepositoryIssuesSpec))
@@ -1130,16 +962,16 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	// 群管动作只对主人、群主和群管理员出现在工具 schema 里；提示词跟着 schema 走，且必须
 	// 进随发言者变化的尾部，不能写进按前缀缓存的稳定头部（否则不同身份的提示词会提前分叉）。
 	if agentEnabled && hasTool(dianaPlatformToolName) && platformModerationShown(registry, tools.Owner) {
-		ownerRules.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolPlatformModerationSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaOneBotRequestsToolName) {
-		ownerRules.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolOneBotRequestsSpec))
 	}
 	if agentEnabled && tools.Owner && hasTool(dianaIdentityLinksToolName) {
-		ownerRules.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptToolIdentityLinksSpec))
 	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
-	if agentEnabled && speakerOwner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
+	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
 		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
 			tail.WriteString("\n" + prompt)
 		}
@@ -1152,41 +984,22 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 		}
 	}
 	if agentEnabled && tools.Owner && hasTool("relationship") {
-		ownerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerRelationshipTargetSpec))
 	}
 	if agentEnabled && tools.Owner && hasAnyTool("tasks", "reminder", dianaSubscriptionToolName) {
-		ownerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptOwnerTaskTargetSpec))
 	}
 	// 仓库订阅只对管理人员开放（subscription 按发言者收不收 github 这一种），成员都能用
 	// subscription 也不代表这段对谁都在，所以固定进尾部，不能跟着 place 进头部。
 	if agentEnabled && hasSubscriptionKind(subscriptionKindGitHub) {
-		ownerRules.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
+		speakerRules.WriteString("\n" + cfg.prompt(promptTaskRepositoryWatchSpec))
 	}
 	// 模型身份的规则在 everyone 下对谁都一样，进 head；owner 下随发言者是不是
 	// 主人分叉，进 tail，免得主人和普通成员的前缀提前分叉。
-	hasSpeakerTool := func(name string) bool {
-		if speakerRegistry == nil {
-			return true
-		}
-		_, ok := speakerRegistry.Get(name)
-		return ok
-	}
-	repositoryHidden := agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone
 	switch everyone := normalizeModelDisclosure(cfg.ModelDisclosure) == ModelDisclosureEveryone; {
-	case head != nil:
-		// 主回复头部按全集写：两种说法都写进头部，按【当前发言者身份】挑，换人说话不用
-		// 再追加一段。权限照旧在执行时核验：非主人拿不到 runtime_model。
-		// runtime_model 要等建 Runner 时才注册（它要用主回复的模型客户端），这里还查不到；
-		// 头部那份对主人总会注册，所以 Agent 开着就当它在。
-		appendPromptSection(&builder, ownerSplitDisclosureRules(cfg, everyone, agentEnabled, repositoryHidden))
-		ownerOnly := []string(nil)
-		if agentEnabled && !everyone {
-			ownerOnly = append(ownerOnly, dianaRuntimeModelToolName)
-		}
-		appendPromptSection(&builder, ownerOnlyToolsRule(head, shared, ownerOnly...))
-	case !everyone && !speakerOwner:
+	case !everyone && !tools.Owner:
 		speakerRules.WriteString("\n" + cfg.prompt(promptModelUndisclosedSpec))
-	case !agentEnabled || !hasSpeakerTool(dianaRuntimeModelToolName):
+	case !agentEnabled || !hasTool(dianaRuntimeModelToolName):
 	case everyone:
 		place(dianaRuntimeModelToolName).WriteString("\n" + cfg.prompt(promptToolRuntimeModelSpec))
 	default:
@@ -1194,7 +1007,7 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	}
 	// 项目地址不对这个人公开时要明说不给链接，随发言者是不是主人分叉，进 tail；
 	// 只答问到的那一项写在 version 的描述里。
-	if repositoryHidden && head == nil && !speakerOwner {
+	if agentEnabled && hasTool(dianaVersionToolName) && normalizeRepositoryDisclosure(cfg.RepositoryDisclosure) != RepositoryDisclosureEveryone && !tools.Owner {
 		speakerRules.WriteString("\n" + cfg.prompt(promptToolVersionNoRepositorySpec))
 	}
 	if agentEnabled && hasTool(dianaCodingToolName) {
@@ -1228,21 +1041,6 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	if agentEnabled {
 		appendPromptSection(&builder, toolExecutionStatusRule)
 	}
-	// 先查再答、群聊篇幅和输出前检查：走 Runner 时每一步贴在请求最后（见
-	// replyTailReminder），头部不再写；不走 Runner 的群聊没有那一条，篇幅规则留在头部。
-	if event.Kind == EventKindGroup && !agentEnabled {
-		appendPromptSection(&builder, cfg.prompt(promptNoteGroupBrevitySpec))
-	}
-	if head != nil && boolValue(cfg.PromptInjectTime, true) {
-		appendPromptSection(&builder, replyClockRule)
-	}
-	if head != nil && event.Kind == EventKindGroup && replyReferenceMode(cfg) == ReplyDecorationAuto {
-		appendPromptSection(&builder, replyQuoteRule)
-	}
-	// 群聊里随发言者变的说明，固定的部分进头部，尾部只在有内容时追加，见 replyGroupHeadRules。
-	if head != nil && event.Kind == EventKindGroup {
-		appendPromptSection(&builder, replyGroupHeadRules(cfg))
-	}
 	builder.WriteString("\n" + refusalStrategyPrompt(cfg.RefusalStrategy, cfg))
 	if agentEnabled {
 		// 静默只有 send silent=true 这一个出口，没开 Agent 时说了也做不到。
@@ -1268,87 +1066,63 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	// 群聊场景那一句同理：它分「被点名」和「主动接话」两串，以前在 head 里，线上同一
 	// 个群两种轮次交替时，每次切换都让后面约 8 万 token 的历史缓存失效。它打头，
 	// 后面紧跟主动接话的细则，两段读在一起不会打架。
-	// 这一段各自带标题：续接时带标题的段和上文最近一版相同就不再发（见 unsentTail）。
-	// 以前它们没有自己的标题，全算在上面「当前消息的对话对象」那一段里：那一段开头的
-	// 引用、提及数据逐条消息变化，后面这几百字没变也跟着整段重发（11-12 生产 316 轮
-	// 续接，每轮约 450 字）。
-	var mode strings.Builder
 	if event.Kind == EventKindGroup {
-		mode.WriteString("\n" + groupScopePrompt(event, cfg))
+		tail.WriteString("\n" + groupScopePrompt(event, cfg))
 	}
-	if head != nil {
-		// 主回复头部模式：各种情况的细则逐字不变，写进头部（replyModeHeadRules），尾部
-		// 只写这一轮是哪几种情况。以前细则跟着变的那几行一起在尾部，对话对象或接话
-		// 方式一变，几百字的固定说明就整段重发。
-		appendPromptSection(&builder, replyModeHeadRules(cfg, event))
-		appendPromptSection(&mode, replyModeLabels(cfg, event, proactiveTriggered, pluginResponses))
-	} else {
-		if proactiveTriggered {
-			mode.WriteString("\n")
-			mode.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
-			mode.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
-		}
-		if event.chatInReply {
-			mode.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
-			mode.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
-			// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
-			// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
-			mode.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
-		}
-		// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
-		// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
-		// 那一句也在这里覆盖 head 里的默认版。
-		appendPromptSection(&mode, replyPresentationOverride(cfg, event))
-		appendPromptSection(&mode, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
-		if eventCarriesImages(event) {
-			// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
-			mode.WriteString("\n" + cfg.prompt(promptImageReplySpec))
-		}
-		if eventHasNameOnlyFace(event) {
-			mode.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
-		}
-		// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
-		if pluginResponsesHaveContext(pluginResponses) {
-			mode.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
-		}
+	if proactiveTriggered {
+		tail.WriteString("\n")
+		tail.WriteString(strings.TrimSpace(cfg.prompt(promptProactiveReplySpec)))
+		tail.WriteString("\n" + cfg.prompt(promptProactiveToolResultSpec))
 	}
-	if mode.Len() > 0 {
-		tail.WriteString("\n【本轮回复方式】")
-		tail.WriteString(mode.String())
+	if event.chatInReply {
+		tail.WriteString("\n" + cfg.prompt(promptChatInPacingSpec))
+		tail.WriteString("\n" + cfg.prompt(promptChatInReplySpec))
+		// 线上 6% 的插话以「确实/没错/对，/是的」开头：模型无话可说时最省力的出路
+		// 就是赞同对方，再给这个无法核实的判断补一段听起来内行的理由。
+		tail.WriteString("\n" + cfg.prompt(promptChatInNoAgreementSpec))
+	}
+	// 换行分条的说明在闲聊插话那一轮不出现（那一轮只认显式分条标记），所以也随轮次变，
+	// 跟着进 tail；条件和发送层一致，不变。本轮发送方式和配置默认不同时，分条规则的
+	// 那一句也在这里覆盖 head 里的默认版。
+	appendPromptSection(&tail, replyPresentationOverride(cfg, event))
+	appendPromptSection(&tail, replyLineSplitPrompt(chatSplitLimitsForEvent(cfg, event)))
+	if eventCarriesImages(event) {
+		// 逐条消息变化，压到尾部，别把前面几千 token 的稳定规则挤出前缀缓存。
+		tail.WriteString("\n" + cfg.prompt(promptImageReplySpec))
+	}
+	if eventHasNameOnlyFace(event) {
+		tail.WriteString("\n" + cfg.prompt(promptFaceNameOnlySpec))
+	}
+	// 插件有没有返回事实结果是这一轮的事，写进 head 会让有插件结果的那轮前缀分叉。
+	for _, resp := range pluginResponses {
+		if strings.TrimSpace(resp.Context) == "" {
+			continue
+		}
+		tail.WriteString("\n" + cfg.prompt(promptPluginAuthoritySpec))
+		break
 	}
 	// 会变的内容全部进 tail，按易变程度从低到高排列：权限档位段落和发送者昵称在
 	// 同一发言者的连续消息之间保持稳定，命中别名则逐条消息都不同。tail 由调用方放
 	// 在历史之后，所以这里怎么变都不影响 head 和历史的前缀缓存。
-	if head != nil {
-		// 宿主机访问那一句两种状态都写进头部，尾部只留好感度和身份。
-		appendPromptSection(&builder, hostAccessHeadRule(cfg))
-		if relation := strings.TrimSpace(relationshipPermissionContext(relationship)); relation != "" {
-			appendPromptSection(&tail, "【当前发言者关系】\n"+relation)
-		}
-	} else if relation := strings.TrimSpace(relationshipPermissionContext(relationship, cfg)); relation != "" {
-		appendPromptSection(&tail, "【当前发言者关系】\n"+relation)
-	}
+	appendPromptSection(&tail, relationshipPermissionContext(relationship, cfg))
 	// 关联账号紧跟身份那一行：同一个人在别的平台上是谁，随发言者变，只进尾部。
 	appendPromptSection(&tail, r.linkedIdentityPrompt(event, cfg))
 	// github 工具对全群一份定义，谁有授权、授权到哪些仓库按发言者在这里说。
-	if agentEnabled && speakerRegistry != nil {
-		if tool, ok := speakerRegistry.Get(dianaGitHubToolName); ok {
+	if agentEnabled && registry != nil {
+		if tool, ok := registry.Get(dianaGitHubToolName); ok {
 			if github, ok := tool.(*dianaGitHubTool); ok {
 				appendPromptSection(&tail, github.accessPrompt())
 			}
 		}
 	}
-	appendPromptSection(&tail, r.speakerGroupContext(event, cfg, head != nil))
+	appendPromptSection(&tail, r.currentSpeakerGroupContext(event, cfg))
 	if event.Kind == EventKindGroup {
-		// 头部模式下这两句用的是 replyGroupHeadRules 里的固定版。
-		senderInHead := head != nil && !cfg.PromptOverrides.isCustomized(promptGroupSenderSpec)
-		aliasesInHead := head != nil && !cfg.PromptOverrides.isCustomized(promptMatchedAliasSpec)
-		if !senderInHead && boolValue(cfg.PromptInjectGroupSender, true) {
+		if boolValue(cfg.PromptInjectGroupSender, true) {
 			appendPromptSection(&tail, renderPromptTemplate(cfg.prompt(promptGroupSenderSpec), map[string]string{
 				"sender": promptSenderIdentity(event),
 			}))
 		}
-		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" && !aliasesInHead {
+		if matched := quotedPromptItems(matchedGroupAliases(event, cfg, event.RawMessage)); matched != "" {
 			appendPromptSection(&tail, cfg.promptf(promptMatchedAliasSpec, map[string]string{"aliases": matched}))
 		}
 	}
@@ -1362,52 +1136,17 @@ func (r *Runtime) systemPromptPartsWithHead(event MessageEvent, pluginResponses 
 	} else if event.voiceCall {
 		appendPromptSection(&tail, cfg.prompt(promptVoiceCallSpec))
 	}
-	// 群风格、群约定、心情可以在「上下文」页按块关掉（context_block_modes.go）。
-	var groupStyle, groupRules, mood string
-	if contextBlockIncluded(cfg, ContextBlockGroupStyle) {
-		groupStyle = r.groupStylePrompt(event, cfg)
-	}
-	if contextBlockIncluded(cfg, ContextBlockGroupRules) {
-		groupRules = r.groupRulesPrompt(event, cfg)
-	}
-	groupVoice := r.groupLengthNormPrompt(event, cfg)
-	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
-	styleFilter := styleFilterPrompt(cfg, groupStyle, groupVoice)
-	if contextBlockIncluded(cfg, ContextBlockMood) {
-		mood = r.moodToneForConfig(cfg, event.ProfileID)
-	}
-	onDemand := contextBlockOnDemandPrompt(cfg)
-	if head != nil {
-		// 主回复请求只追加：群风格、群约定、本群消息长度、「这几类不学」和语气锚点只随
-		// 群和配置变，放进头部只发一次（头部按哈希锁定，变了等下次重新组装再换）。尾部
-		// 只留逐轮会变的心情，变了才追加一版。
-		for _, section := range []string{onDemand, groupStyle, groupRules, groupVoice, styleFilter, personaClosingAnchor(cfg)} {
-			appendPromptSection(&builder, section)
-		}
-		if mood != "" {
-			tail.WriteString("\n【本轮语气】\n")
-			tail.WriteString(mood)
-		}
-		// 随发言者变的工具规则都已按全集写进头部（ownerSplitDisclosureRules），尾部不再
-		// 带【当前发言者适用的工具规则】。
-		return builder.String(), strings.TrimSpace(tail.String())
-	}
-	appendPromptSection(&tail, onDemand)
+	groupStyle := r.groupStylePrompt(event, cfg)
 	appendPromptSection(&tail, groupStyle)
-	appendPromptSection(&tail, groupRules)
-	// 腔调、心情和语气锚点另成一段：里面的换行比例、心情逐轮在变，以前跟在群约定后面
-	// 没有标题，一变就连群约定一起重发（每轮约 250 字）。
-	var tone strings.Builder
-	appendPromptSection(&tone, groupVoice)
-	appendPromptSection(&tone, styleFilter)
-	appendPromptSection(&tone, mood)
+	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
+	groupVoice := r.groupLengthNormPrompt(event, cfg)
+	appendPromptSection(&tail, groupVoice)
+	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
+	appendPromptSection(&tail, styleFilterPrompt(cfg, groupStyle, groupVoice))
+	appendPromptSection(&tail, r.moodToneForConfig(cfg, event.ProfileID))
 	// 语气锚点必须留在最后：前面的工具规则、权限说明和拒答流程都是公文体，离生成
 	// 最近的一段最容易被模仿，这里重新把语域拉回配置的表达风格。
-	appendPromptSection(&tone, personaClosingAnchor(cfg))
-	if tone.Len() > 0 {
-		tail.WriteString("\n【本轮语气】")
-		tail.WriteString(tone.String())
-	}
+	appendPromptSection(&tail, personaClosingAnchor(cfg))
 	return builder.String(), joinPromptSections(speakerToolRulesBlock(speakerRules.String()), strings.TrimSpace(tail.String()))
 }
 
@@ -1446,33 +1185,22 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	if len(candidates) == 0 {
 		return ""
 	}
-	var builder strings.Builder
-	builder.WriteString(replyMentionListTitle)
-	for _, candidate := range candidates {
-		builder.WriteString("\n")
-		builder.WriteString(candidate.UserID)
-		if name := strings.TrimSpace(candidate.DisplayName); name != "" {
-			builder.WriteString("：")
-			builder.WriteString(name)
-		}
+	payload, err := json.Marshal(candidates)
+	if err != nil {
+		return ""
 	}
-	return builder.String()
+	return "【可提及成员候选 JSON】" + string(payload)
 }
-
-// replyMentionListTitle 是可提及成员名单那条消息的开头。名单一行一人、只写账号和名字，
-// 续接时只追加前缀里还没有的成员（见 appendOnlyList）。以前是每轮重排、带「是不是当前
-// 发言者、从哪来」标记的 JSON：生产 11-14～15 每轮约 2.4K 字，其中 2.1K 和上一轮不同。
-const replyMentionListTitle = "【可提及成员名单（user_id：名字）】"
 
 // replyMentionRules 是群聊里怎么写真正的 @：只随机器人的引用/提及配置变，放在稳定
 // 头部；本轮的候选名单由 replyMentionPrompt 放在尾部。
 func replyMentionRules(cfg BotConfig) string {
 	return strings.TrimSpace(fmt.Sprintf(`【群聊真实提及规则】
-发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。可提及的成员在「可提及成员名单」里给出，名单只增不减；没有名单就不 @ 任何人。
+发送层支持真正的 @。正文内容和 @ 对象必须由你在同一次最终回复中统一决定，禁止按姓名关键词机械匹配。本轮可提及的成员在尾部「可提及成员候选 JSON」里给出，没有这一段就不 @ 任何人。
 1. %s
 2. 如果当前发言者只是通过触发词或 @ 叫你回应另一位成员，不要为了礼貌额外 @ 当前发言者：可以直接回答；需要明确回应对象时，写 <diana-at id="成员user_id"/> 提及实际对象。%s
 3. 可以同时提及多人、把标记放在不同位置，发送层按标记位置翻译成真正的提及；不要重复提及同一成员。%s
-4. 只能使用名单里出现过的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
+4. 只能使用候选 JSON 中存在的 user_id，不得根据昵称猜账号；不要把标记放进代码块，也不要自己写平台专用的提及写法。
 5. 标记只有 <diana-at id="user_id"/> 这一种写法：半角尖括号，id 用半角双引号，以 /> 结尾。写成 @diana-at-user_id、[diana-at:user_id]、<diana-at:user_id> 都不是提及。`,
 		currentSenderMentionRule(cfg),
 		autoDecorationCancelClause(cfg),
@@ -1506,48 +1234,6 @@ func renderPromptTemplate(template string, values map[string]string) string {
 	return rendered
 }
 
-// currentMessageLine 是当前消息的那一行，和它下一轮作为历史的写法相同（照雨夹雪：一条
-// 消息只渲染一次，当前消息就是追加的最后一行）。纯图片、只叫了一声的消息没有文字，
-// 写个占位，好让这一行有时间、消息 ID 和发送者。
-func currentMessageLine(event MessageEvent) string {
-	if line := historyPromptTextAt(event, event.Time); line != "" {
-		return line
-	}
-	placeholder := "（没有文字）"
-	if hasImageSegment(event.Segments) {
-		placeholder = "[图片]"
-	}
-	return historyLinePrefix(event) + promptSenderIdentity(event) + ": " + placeholder
-}
-
-// currentMessageNotesTitle 是当前消息注解那一条的开头。
-const currentMessageNotesTitle = "【下一条消息的附注，只用于理解它】"
-
-// splitCurrentMessageNotes 把组装好的当前消息拆成「这条消息那一行」和「这一轮的注解」。
-// 那一行按前面最后一条消息行的日期省日期，和它下一轮作为历史时一样；注解单独成一条只
-// 用于本轮的消息。message 不是以 line 开头时不拆。
-func splitCurrentMessageNotes(message llm.Message, line string, dates *historyLineDates) (*llm.Message, llm.Message, bool) {
-	content := strings.TrimSpace(message.Content)
-	if line == "" || !strings.HasPrefix(content, line) {
-		return nil, message, false
-	}
-	rest := strings.TrimSpace(content[len(line):])
-	compacted := dates.compact(line)
-	message.Content = compacted
-	for index := range message.Parts {
-		if message.Parts[index].Type == llm.ContentPartText && strings.TrimSpace(message.Parts[index].Text) == content {
-			message.Parts[index].Text = compacted
-		}
-	}
-	if rest == "" {
-		return nil, message, true
-	}
-	// 附注和消息那一行一样只追加、留在前缀里：主回复请求只追加（见 append_context.go）。
-	// 标题写成「下一条消息的附注」，这一轮之后作为历史读也不会错。
-	notes := llm.Message{Role: llm.RoleUser, Content: currentMessageNotesTitle + "\n" + rest, Priority: message.Priority}
-	return &notes, message, true
-}
-
 func historyPromptText(event MessageEvent) string {
 	return historyPromptTextAt(event, 0)
 }
@@ -1563,21 +1249,10 @@ func historyPromptTextAt(event MessageEvent, currentTime int64, configs ...BotCo
 	if text == "" {
 		return ""
 	}
-	if quoted := historyQuotedText(event, text); quoted != "" {
+	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		text += "\n" + quoted
 	}
 	return historyLinePrefix(event) + promptSenderIdentity(event) + historySenderTag(event, configs...) + ": " + text
-}
-
-// historyQuotedText 是历史行里被引用消息的展开。被引用的那条就在这一份历史窗口里、
-// 正文开头又有指向它的引用标记时不再展开：原文和图片摘要上面已经有一遍。11-19 生产
-// 一份主回复请求里，155 处引用展开有 150 处是窗口里已有的消息，占历史的四成。被引用
-// 的消息已经滑出窗口才展开。
-func historyQuotedText(event MessageEvent, text string) string {
-	if event.quotedInWindow && strings.Contains(text, replyMarkerPrefix+strings.TrimSpace(event.Quoted.MessageID)+`"`) {
-		return ""
-	}
-	return quotedPromptText(event.Quoted)
 }
 
 // agentImageHistoryPromptTextWithDescriptions 在媒体计数之外附上已缓存的图片和视频关键帧描述。
@@ -1592,7 +1267,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 		return ""
 	}
 	text := rawMessageWithoutImagePlaceholders(PlainText(event.Segments))
-	if quoted := historyQuotedText(event, text); quoted != "" {
+	if quoted := quotedPromptText(event.Quoted); quoted != "" {
 		quoted = rawMessageWithoutImagePlaceholders(quoted)
 		if text != "" {
 			text += "\n"
@@ -1611,13 +1286,7 @@ func agentImageHistoryPromptTextWithDescriptions(event MessageEvent, currentTime
 	// 原件」和一整句怎么调用 history_media 都写一遍，每条带图的历史要多付
 	// 近百个 token——群里表情包一条接一条，这笔开销比正文还大。「摘要不等于看过
 	// 原件」和「怎么取原件」在 promptToolHistoryImages 里只说一次就够了。
-	// 行首已经有「#消息ID」时只写种类和数量，不再重复一遍 ID。
-	summary := historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount)
-	if historyLineShowsID(event) {
-		line += "\n【" + summary + "】"
-	} else {
-		line += "\n【媒体 message_id=" + messageID + "：" + summary + "】"
-	}
+	line += "\n【媒体 message_id=" + messageID + "：" + historicalMediaSummary(imageCount, videoCount, videoFrameCount, audioCount, fileCount) + "】"
 	if len(descriptions) > 0 {
 		line += "\n" + strings.Join(descriptions, "\n")
 	}
@@ -1669,14 +1338,11 @@ var (
 	// 安检人员砸的」这种辟谣句收尾。10-29 的样本删掉整段系统提示、send 描述、视觉答案里的
 	// 推测和历史都还是 5/6 以上带这句，是模型自己的倾向，只有在这里点名才压得住（8/8 → 0/8）。
 	// 只管顺口的猜测；正经问「是真的吗」照样先去查，回放里召回传闻 4/4 仍然先搜。
-	//
-	// 11-17 起放进系统头部只发一次，离生成太远，v0.9.11 上线后 swe-2 开始复述群友原话；
-	// 走 Runner 时挪回每步请求最后的【输出前检查】（见 replyTailReminder）。
 	promptNoteGroupBrevitySpec = registerPrompt(PromptSpec{
 		Key:     "reply.note.group_brevity",
 		Group:   PromptGroupReplyRules,
 		Title:   "当前消息注解 · 群聊篇幅",
-		Usage:   "群聊每步请求最后的输出前检查里带上：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
+		Usage:   "群聊里每条当前消息都补在最后，紧挨生成：闲聊压篇幅、不说教；讲方案、问看法时说自己的判断，不复述附和；顺口的猜测按常理接，不辟谣；正事照常答全。",
 		Default: "群聊接话：闲聊随口一两句、几十字就够，不挨个点评，不说教，不劝人休息；问技术、要办法时照常答全。有人讲方案、问你看法时说你自己的判断：看到漏洞、没提到的风险或更好的做法就直说，带上理由；确实没问题就简短认可，别把对方的话换个说法复述一遍；对方只是在补充自己的想法时，不用回头认错。群友顺口猜一句「X 了？」「是不是 Y」时，按常理直接说你觉得像不像、更可能是什么；别拿「图里看不出」「不能确定是……」「没有证据说明」这种辟谣句收尾，没人要你下定论，没看到的经过也不用声明。",
 	})
 	promptNoteReplySpec = registerPrompt(PromptSpec{
@@ -1828,8 +1494,6 @@ func currentPromptText(event MessageEvent, text string) string {
 // 告诉模型该怎么接。
 func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourceContext semanticReferenceContext, annotation promptAnnotation) string {
 	text = strings.TrimSpace(text)
-	// 原话已经在消息那一行里，注解里不再重复。
-	original := text
 	botID := annotation.botID(event)
 	wakeGuidanceAttached := false
 	hasAtSegment := eventHasSegmentType(event, "at")
@@ -1885,20 +1549,19 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	if notice := strings.TrimSpace(event.imageContextNotice); notice != "" {
 		text += "\n\n【媒体状态】" + notice
 	}
+	quotedCoveredBySemanticBlock := event.Quoted != nil && event.Quoted.Semantic && len(eventSemanticSourceMessageIDs(event)) > 0
+	if quoted := quotedPromptText(event.Quoted); quoted != "" && !quotedCoveredBySemanticBlock {
+		text += "\n\n" + quoted
+	}
 	if reference := recentTextReferencePrompt(event.recentTextReference); reference != "" {
 		text += "\n\n" + reference
 	}
-	// 第一段是这条消息本身那一行（含被引用的消息），后面是这一轮的注解：组装请求时
-	// 拆成两条，注解只用于本轮（见 splitCurrentMessageNotes）。
-	notes := strings.TrimSpace(text)
-	if strings.TrimSpace(original) != "" {
-		notes = strings.TrimSpace(strings.TrimPrefix(notes, strings.TrimSpace(original)))
+	if event.Kind == EventKindGroup {
+		if note := annotation.Overrides.text(promptNoteGroupBrevitySpec); note != "" {
+			text += "\n\n" + note
+		}
 	}
-	line := currentMessageLine(event)
-	if notes == "" {
-		return line
-	}
-	return line + "\n\n" + notes
+	return "【当前需要回复的消息】" + contextMessageTiming(event.Time, profileLocation(event.ProfileID)) + "【当前发言者】" + promptSenderIdentity(event) + "\n" + text
 }
 
 func quotedPromptText(quoted *QuotedMessage) string {
@@ -2121,7 +1784,10 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	r.mu.RLock()
 	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。
 	history := r.history[session]
-	limit := sideHistoryLookback
+	limit := r.effectiveConfigForEventLocked(event).RecentContextLimit
+	if limit <= 0 {
+		limit = 20
+	}
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}

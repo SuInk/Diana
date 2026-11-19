@@ -14,9 +14,9 @@ import (
 
 // 常驻上下文快照：把「每轮都会注入、不看当前消息内容」的那几块原文摆出来。
 //
-// 上下文概览（ContextBudgetBreakdownForGroup）答的是「窗口多大、什么时候压缩」，
-// 只有数字。真要回答「它每轮到底被灌了些什么」，得把原文摆出来——这正是改人设、
-// 查串味、算 token 账时要看的。
+// 预算分配图（ContextBudgetBreakdownForGroup）答的是「窗口怎么切的」，调试记录里的
+// layers 答的是「这一轮各层装了多少、丢了什么」，两者都只有数字。真要回答「它每轮
+// 到底被灌了些什么」，得把原文摆出来——这正是改人设、查串味、算 token 账时要看的。
 //
 // 按发言者或当前消息变化的那几层不在这里：检索记忆按相关性召回、常驻核心记忆按
 // 发言者取（见 memory_context.go 里 coreCurrentMemory 的判定）、笔记本和世界书的
@@ -38,7 +38,10 @@ type ResidentContextBlock struct {
 	Key   string `json:"key"`
 	Label string `json:"label"`
 	// Tokens 是这块正文的估算 token。估法和编排请求时用的是同一个函数，数字对得上。
-	Tokens  int64  `json:"tokens"`
+	Tokens int64 `json:"tokens"`
+	// Budget 是这块所在层的 token 配额；0 表示这块不单独占一层配额（人设和固定
+	// 规则属于系统提示词，跟着请求预算走，不在分层配额里）。
+	Budget  int64  `json:"budget,omitempty"`
 	Content string `json:"content,omitempty"`
 	// Note 说明这块为什么是空的、或者它的数字要怎么读。
 	Note string `json:"note,omitempty"`
@@ -90,10 +93,12 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 	})
 	snapshot.appendBlock(ResidentContextBlock{
 		Key: ResidentBlockWorldBook, Label: "世界书常驻设定", Content: r.worldBookContext(ctx, event, ""),
-		Note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。",
+		Budget: worldBookContextTokenBudget,
+		Note:   "只含标了「常驻」的节点；按关键词触发的设定要命中才进。",
 	})
+	selfNotes, _ := r.selfNoteContext(ctx, event)
 	snapshot.appendBlock(ResidentContextBlock{
-		Key: ResidentBlockSelfNotes, Label: "自述", Content: r.selfNoteContext(ctx, event),
+		Key: ResidentBlockSelfNotes, Label: "自述", Content: selfNotes, Budget: selfNoteBudget(window),
 		Note: "机器人自己写的自我认知，默认关闭。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
@@ -101,7 +106,7 @@ func (r *Runtime) ResidentContextForGroup(ctx context.Context, profileID, groupI
 		Note: "开了小窝且记过账时注入余额和最近几笔。",
 	})
 	snapshot.appendBlock(ResidentContextBlock{
-		Key: ResidentBlockSessionNote, Label: "会话便签", Content: r.sessionThreadNote(ctx, event),
+		Key: ResidentBlockSessionNote, Label: "会话便签", Content: r.sessionThreadNote(ctx, event), Budget: sessionThreadBudget(window),
 		Note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。",
 	})
 	if cfg.AgentEnabled {

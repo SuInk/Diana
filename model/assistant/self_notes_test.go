@@ -127,15 +127,15 @@ func TestSelfNoteContextHonorsStoreAndConfigGate(t *testing.T) {
 	store := &stubSelfNoteStore{notes: []SelfNote{{ID: "n1", Topic: "说话方式", Content: "一句说完就不铺三句"}}}
 
 	// 没配存储时整层静默失效：注入为空，聊天链路不感知这个功能。
-	if block := selfNoteTestRuntime(t, true, nil).selfNoteContext(context.Background(), event); block != "" {
-		t.Fatalf("context without store = %q", block)
+	if block, usage := selfNoteTestRuntime(t, true, nil).selfNoteContext(context.Background(), event); block != "" || usage.Layer != "" {
+		t.Fatalf("context without store = %q usage=%#v", block, usage)
 	}
 	// 开关默认关着：装了存储也不注入，升级不会让机器人突然开始自我改写。
-	if block := selfNoteTestRuntime(t, false, store).selfNoteContext(context.Background(), event); block != "" {
+	if block, _ := selfNoteTestRuntime(t, false, store).selfNoteContext(context.Background(), event); block != "" {
 		t.Fatalf("disabled context = %q", block)
 	}
 
-	block := selfNoteTestRuntime(t, true, store).selfNoteContext(context.Background(), event)
+	block, usage := selfNoteTestRuntime(t, true, store).selfNoteContext(context.Background(), event)
 	if !strings.Contains(block, "一句说完就不铺三句") || !strings.Contains(block, "说话方式") {
 		t.Fatalf("enabled context = %q", block)
 	}
@@ -147,6 +147,9 @@ func TestSelfNoteContextHonorsStoreAndConfigGate(t *testing.T) {
 	if !strings.Contains(block, "以人设为准") || !strings.Contains(block, "SOUL.md") {
 		t.Fatalf("missing soul precedence: %q", block)
 	}
+	if usage.Layer != "self_notes" || usage.SelectedItems != 1 || usage.Reason != contextLayerReasonFits {
+		t.Fatalf("usage = %#v", usage)
+	}
 }
 
 // 自述是每台机器人一本：拿不到机器人身份时整层关闭，不写也不读那个共享的空桶，
@@ -156,8 +159,8 @@ func TestSelfNoteRequiresBotIdentity(t *testing.T) {
 	runtime := selfNoteTestRuntime(t, true, store)
 	anonymous := MessageEvent{Kind: EventKindPrivate, UserID: "10001"}
 
-	if block := runtime.selfNoteContext(context.Background(), anonymous); block != "" {
-		t.Fatalf("anonymous context = %q", block)
+	if block, usage := runtime.selfNoteContext(context.Background(), anonymous); block != "" || usage.Layer != "" {
+		t.Fatalf("anonymous context = %q usage=%#v", block, usage)
 	}
 	tool := newDianaSelfNoteTool(runtime, anonymous, RelationshipPolicy{Owner: true})
 	if _, err := tool.Run(context.Background(), map[string]any{"operation": "add", "content": "记一条"}); err == nil {
@@ -168,17 +171,25 @@ func TestSelfNoteRequiresBotIdentity(t *testing.T) {
 	}
 }
 
-// 自述全部写出，不按配额截掉尾部几条。
-func TestSelfNoteContextWritesEveryNote(t *testing.T) {
-	notes := make([]SelfNote, 0, MaximumActiveSelfNotes)
-	for index := 0; index < MaximumActiveSelfNotes; index++ {
-		notes = append(notes, SelfNote{ID: itoa(index), Topic: "说话方式", Content: strings.Repeat("很长的一条自我观察", 6) + itoa(index)})
+func TestSelfNoteContextStopsAtLayerBudget(t *testing.T) {
+	notes := make([]SelfNote, 0, 8)
+	for index := 0; index < 8; index++ {
+		notes = append(notes, SelfNote{ID: itoa(index), Topic: "说话方式", Content: strings.Repeat("很长的一条自我观察", 6)})
 	}
-	block := formatSelfNoteContext(notes)
-	for _, note := range notes {
-		if !strings.Contains(block, note.Content) {
-			t.Fatalf("note %s missing", note.ID)
-		}
+	// 预算刚够开头（约 160 token）加两三行：尾部几条必须被挡在外面，而且要记账。
+	block, usage := formatSelfNoteContext(notes, 220)
+	if block == "" {
+		t.Fatal("expected a truncated block, got none")
+	}
+	if usage.SelectedItems == 0 || usage.SelectedItems >= len(notes) {
+		t.Fatalf("selected = %d of %d", usage.SelectedItems, len(notes))
+	}
+	if usage.Reason != contextLayerReasonBudget {
+		t.Fatalf("reason = %q", usage.Reason)
+	}
+	// 预算小到一条都装不下时不注入光杆开头：只有标题的块什么信息都不带。
+	if block, usage := formatSelfNoteContext(notes, 120); block != "" || usage.SelectedItems != 0 {
+		t.Fatalf("tiny budget block = %q usage=%#v", block, usage)
 	}
 }
 

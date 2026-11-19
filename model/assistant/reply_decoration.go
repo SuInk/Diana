@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -292,12 +293,7 @@ func botJustAnsweredSender(history []MessageEvent, event MessageEvent) bool {
 	return false
 }
 
-// quoteRuleInHead 为真时，单条消息的引用规则写在系统头部（replyQuoteRule），这里不再
-// 每轮带着当前消息 ID 重写一遍：主回复请求只追加，逐轮变的一句会让整段重发。
-// replyQuoteRule 是主回复系统头部里的引用规则，见 replyDecorationPrompt。
-const replyQuoteRule = "要不要引用由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 <diana-quote id=\"消息ID\"/> 指向你回的那条，消息ID 原样照抄那条聊天记录 # 后面那串；正常一问一答、连续对话时不要引用。整段标记必须写在最开头，正文里不要出现，不能猜测、补写或拼接；不能确认目标就省略标记。"
-
-func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent, quoteRuleInHead bool) string {
+func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageEvent) string {
 	if event.Kind == EventKindPrivate {
 		// 私聊没有引用和 @ 的概念，但连发同样会被取代（sender_burst.go），
 		// 承接前几条的提示照样要给。
@@ -325,15 +321,13 @@ func replyDecorationPrompt(cfg BotConfig, event MessageEvent, history []MessageE
 		// 平台感知：QQ 官方等平台的 MessageID 不是纯数字，数字校验会把这些平台上
 		// 的提示词全部拦掉，auto 档就永远不会教模型自己写引用（见 replyMarkerIDAcceptable）。
 		// 同一个人追发并进来时把几条都列出来，由模型挑回复第一句接的那条，见 replyQuoteCandidates。
-		const quoteRules = "整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选或本群历史行里 # 后面的消息 ID，不能猜测、补写或拼接；不能确认目标就省略标记。"
+		const quoteRules = "整段标记必须写在最开头，正文里不要出现。引用标识只能逐字复制本轮提供的候选，不能猜测、补写或拼接；不能确认目标就省略标记。"
 		if lines := replyQuoteCandidateLines(event.Platform, event.replyQuoteCandidates); len(lines) > 1 {
 			quote = mentionQuoteByModel
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写一个引用标记；正常一问一答、连续对话时不要引用。"+
 				"这一轮对方连着发了几条，候选按时间从旧到新：\n"+strings.Join(lines, "\n")+
 				"\n要引用就挑你回复第一句接的那一条，不要默认挑最后一条。"+quoteRules)
-		} else if messageID := strings.TrimSpace(event.MessageID); quoteRuleInHead && replyMarkerIDAcceptable(event.Platform, messageID) {
-			quote = mentionQuoteByModel
-		} else if replyMarkerIDAcceptable(event.Platform, messageID) {
+		} else if messageID := strings.TrimSpace(event.MessageID); replyMarkerIDAcceptable(event.Platform, messageID) {
 			quote = mentionQuoteByModel
 			appendPromptSection(&builder, "本次是否引用原消息由你自己决定：话题跳转、隔了几轮才回应、或群里同时有多个话题时，在回复最开头写 "+
 				replyMarkerFor(messageID)+" 来指向当前这条消息；正常一问一答、连续对话时不要引用。"+quoteRules)
@@ -473,8 +467,7 @@ func mentionDecorationRule(userID string, otherSpeakers int, justAnswered bool, 
 		return "本次是否 @ 发送者由你自己决定：刚才这段时间里群里只有 TA 在说话,你们是一对一在接话,不用 @；" +
 			"只有隔了很久才回、对方可能已经走开时才写 " + mention + "。"
 	}
-	// 不写确切人数：只追加以后，人数一变就要追加一版新的规则，而规则本身只分有没有别人。
-	crowd := "刚才这段时间里群里除了 TA 还有别人在说话"
+	crowd := "刚才这段时间里群里除了 TA 还有 " + strconv.Itoa(otherSpeakers) + " 个人在说话"
 	switch quote {
 	case mentionQuoteAutomatic:
 		return "本次不要 @ 发送者：" + crowd + ",但程序会引用 TA 的消息,引用本身就会提醒 TA,再 @ 一遍是重复点名。"

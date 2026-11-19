@@ -610,7 +610,7 @@ func TestListEventsFiltersByGroupAndReportsContextBudget(t *testing.T) {
 	if payload.ContextBudget == nil {
 		t.Fatal("筛了群却没给上下文预算")
 	}
-	if payload.ContextBudget.GroupID != "111" || payload.ContextBudget.CompactionThreshold <= 0 {
+	if payload.ContextBudget.GroupID != "111" || len(payload.ContextBudget.Layers) == 0 {
 		t.Fatalf("context budget = %#v", payload.ContextBudget)
 	}
 

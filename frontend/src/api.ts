@@ -236,8 +236,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   /** 隐私代理开着时，正文里直接写的本群成员账号也换成别名；不设等同开启。 */
   llm_identity_body_account_mapping_enabled?: boolean;
   llm_secret_masking_enabled?: boolean;
-  /** 主回复里几块背景各自怎么带：always 总是（默认）、on_demand 按需（不带，提示模型用工具查）、off 关闭。没设的按总是。 */
-  context_block_modes?: Record<string, "always" | "on_demand" | "off">;
   disabled_groups?: string[];
   /** 新加入的群默认工不工作；逐群开关在群管理里，一个群一份。 */
   group_admission?: GroupAdmission;
@@ -406,6 +404,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   image_generation_cooldown_seconds?: number;
   video_generation_cooldown_seconds?: number;
@@ -422,6 +421,7 @@ export interface BotProfileConfig extends SendRetrySettings {
   daily_limit_timezone?: string;
   /** 机器人时区（IANA 名）：当前时间、回复时段、每日次数、提醒换算都按它；留空读 TZ，再用本机时区，本机是 UTC 时按 Asia/Shanghai。 */
   timezone?: string;
+  recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
@@ -766,12 +766,14 @@ export interface BotGroupConfig extends SendRetrySettings {
   /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
+  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
   /** 这个群每天能成功生图的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
   image_generation_daily_group_limit?: number | null;
   /** 这个群每天能生成视频的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
   video_generation_daily_group_limit?: number | null;
+  recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
   natural_reply_split_enabled?: boolean;
@@ -1982,13 +1984,6 @@ export function testAgentBrowser(profile: string, cdpURL: string): Promise<{conn
 
 /** 常驻档位的一行：一个内置工具，或者一条 MCP 服务。resident 不带表示跟随默认档。 */
 export interface AgentResidencyEntry { id: string; kind: "tool" | "mcp" | "plugin"; name: string; description?: string; detail?: string; tools?: string[]; default: boolean; resident?: boolean; resident_tokens?: number; deferred_tokens?: number; parent?: string; stale?: boolean }
-/** 请求构成的一块，按它在真实请求里的身份分：prefix 锁定的头部，history 只追加的聊天历史，state 进前缀的状态段，turn_only 只用于本轮、下一轮撤掉的段。 */
-export interface ReplyContextSegment { name: string; kind: "prefix" | "history" | "state" | "turn_only"; tokens: number; /** 这一轮新发的部分：和上一轮实际请求开头相同的不算。 */ new_tokens: number }
-export interface ReplyContextBreakdown { sessions: number; saved_at?: string; total_tokens: number; new_tokens: number; input_tokens?: number; cached_tokens?: number; segments: ReplyContextSegment[]; context_window: number; compaction_threshold: number }
-/** 这台机器人各会话上一轮主回复请求平均下来的构成；最近 24 小时没回复过就没有 breakdown。 */
-export function getReplyContext(profile: string): Promise<{breakdown?: ReplyContextBreakdown}> {
-  return requestJSON(`/api/assistant/reply-context?${new URLSearchParams({profile}).toString()}`);
-}
 export function listAgentResidency(profile = ""): Promise<{items: AgentResidencyEntry[]; listed?: boolean}> {
   return requestJSON(`/api/assistant/agent-residency?profile=${encodeURIComponent(profile)}`);
 }
@@ -3288,6 +3283,8 @@ export interface AssistantResidentContextBlock {
   key: string;
   label: string;
   tokens: number;
+  /** 这块所在层的 token 配额；0 表示它不单独占一层配额。 */
+  budget?: number;
   content?: string;
   note?: string;
 }
@@ -3301,18 +3298,24 @@ export interface AssistantResidentContext {
   note?: string;
 }
 
+export interface AssistantContextBudgetLayer {
+  key: string;
+  label: string;
+  share_percent: number;
+  ceiling: number;
+  tokens: number;
+  capped_by_ceiling: boolean;
+  configurable: boolean;
+}
+
 export interface AssistantContextBudget {
   group_id?: string;
   context_window: number;
   /** 窗口没人填、用的兜底常量时为 true，不代表模型的真实上限。 */
   context_window_fallback?: boolean;
-  /** 请求估算超过它就把较早的历史压缩成摘要（窗口减 reserve_tokens）。 */
-  compaction_threshold: number;
-  reserve_tokens: number;
-  /** 压缩时原样保留的近期历史 token。 */
-  keep_recent_tokens: number;
-  /** 这个会话已经压缩过，历史开头是一份摘要。 */
-  has_summary: boolean;
+  layers: AssistantContextBudgetLayer[];
+  allocated: number;
+  headroom: number;
 }
 
 export function getAssistantEvents(

@@ -6,7 +6,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -109,8 +108,7 @@ func TestToolHookBlocksNativeCallAndPreservesFailure(t *testing.T) {
 	}
 }
 
-// 钩子加的附注发出去就留在对话里，下一次请求接着它（每次请求都是下一次的严格前缀）。
-func TestPrepareHookRunsAtBudgetFinalizationAndKeepsWhatItAdded(t *testing.T) {
+func TestPrepareHookRunsAtBudgetFinalizationWithoutAccumulatingContext(t *testing.T) {
 	client := &scriptedClient{responses: []string{`{"action":"tool","tool":"lookup","input":{}}`, "done"}}
 	runner, _ := NewRunner(client, Config{MaxSteps: 1}, NewToolRegistry(&countingTool{name: "lookup"}))
 	prepared := 0
@@ -118,16 +116,12 @@ func TestPrepareHookRunsAtBudgetFinalizationAndKeepsWhatItAdded(t *testing.T) {
 		Messages: []llm.Message{{Role: llm.RoleUser, Content: "query"}},
 		Hooks: RunHooks{PrepareRequest: func(_ context.Context, req llm.GenerateRequest) (llm.GenerateRequest, error) {
 			prepared++
-			seen := 0
 			for _, m := range req.Messages {
-				if m.Content == "state 1" {
-					seen++
+				if m.Content == "temporary state" {
+					t.Fatal("temporary context leaked into canonical history")
 				}
 			}
-			if want := min(prepared-1, 1); seen != want {
-				t.Fatalf("preparation %d sees the first note %d times, want %d", prepared, seen, want)
-			}
-			req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: fmt.Sprintf("state %d", prepared)})
+			req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: "temporary state"})
 			return req, nil
 		}},
 	})

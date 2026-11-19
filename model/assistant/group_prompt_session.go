@@ -20,23 +20,51 @@ import (
 // persist retrieved memories, private thread state, credentials or tool objects.
 // The archive remains authoritative for edits, deletions and context resets.
 type GroupPromptSession struct {
-	Generation int64  `json:"generation"`
-	Anchor     string `json:"anchor,omitempty"`
-	Checkpoint string `json:"checkpoint,omitempty"`
-	// CheckpointUntil 是压缩摘要覆盖到的最后一条消息的时间（Unix 秒）。锚丢了时靠它
-	// 找回摘要之后的那段，不让中间留空档，见 context_compaction.go。
-	CheckpointUntil int64 `json:"checkpoint_until,omitempty"`
-	// CheckpointUntilKey 是被摘要的最后一条消息的去重键。时间只精确到秒，同一秒里的
-	// 几条要靠它分清哪条已经进了摘要。
-	CheckpointUntilKey string `json:"checkpoint_until_key,omitempty"`
-	// CheckpointPendingFrom 是滑出窗口、还没写进摘要的第一条消息的去重键，见
-	// compactionCheckpoint.PendingFrom。
-	CheckpointPendingFrom string   `json:"checkpoint_pending_from,omitempty"`
-	LoadedTools           []string `json:"loaded_tools,omitempty"`
+	Generation  int64    `json:"generation"`
+	Anchor      string   `json:"anchor,omitempty"`
+	Checkpoint  string   `json:"checkpoint,omitempty"`
+	LoadedTools []string `json:"loaded_tools,omitempty"`
 	// ToolLastUsed 记着每个已加载工具最近一次加载或调用的时间（Unix 秒），
 	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
 	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`
 	History      []GroupPromptHistoryEntry `json:"history,omitempty"`
+}
+
+// promptContextSummary reads the source at assembly time, not the earlier routing
+// snapshot. Taking the session lock before reading prevents an older request from
+// publishing its checkpoint after a newer one. Store I/O never holds r.mu.
+func (r *Runtime) promptContextSummary(event MessageEvent, sessionThread string, budget int64) (string, bool) {
+	s := r.groupPromptSession(event)
+	r.mu.RLock()
+	if s != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.invalidated {
+			r.mu.RUnlock()
+			return "", false
+		}
+	}
+	var summary string
+	if r.structuredMemory == nil && strings.TrimSpace(sessionThread) == "" {
+		var present bool
+		summary, present = r.contextSummaries[sessionKey(event)]
+		if !present && s != nil {
+			summary = s.data.Checkpoint
+		}
+	}
+	summary, recompressed := r.fitOlderSummaryToBudget(rawMessageWithoutImagePlaceholders(summary), budget)
+	changed := s != nil && s.data.Checkpoint != summary
+	if changed {
+		s.data.Checkpoint = summary
+	}
+	r.mu.RUnlock()
+	if changed {
+		s.saveLocked()
+		if s.invalidated {
+			return "", false
+		}
+	}
+	return summary, recompressed
 }
 
 type GroupPromptHistoryEntry struct {
@@ -290,37 +318,9 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 
 // historyRenderVersion 进渲染缓存的源哈希：历史的渲染形态变了就加一，已存的条目
 // 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用；
-// 3 起表情包摘要换成一句话标注；4 起同一天的历史行只写时分秒（缓存条目里仍写全日期，
-// 拼成一份历史后由 compactHistoryLineDates 统一省掉，加一是让旧条目跟着这一版一起换掉）；
-// 5 起照雨夹雪写成「[时间 #消息ID] 发送者: 正文」，不再标「历史」；6 起被引用的消息在
-// 窗口里时不再展开、媒体行不重复消息 ID。
-const historyRenderVersion = 6
-
-// quotableHistoryIDs 是这一份历史里写成「[时间 #消息ID] 发送者: 正文」、模型能按 ID 对上
-// 的那些消息。引用的那条在其中时历史行不再展开它（见 historyQuotedText）。机器人自己的
-// 发言写成 send 调用、没有 ID，戳一戳、订阅推送这类行也不带 ID，跳过或不同群的消息根本
-// 不在历史里，这些被引用时照旧展开。
-func quotableHistoryIDs(event MessageEvent, cfg BotConfig, history []MessageEvent, skip map[string]bool) map[string]bool {
-	botID := firstNonEmpty(strings.TrimSpace(cfg.BotAccount), strings.TrimSpace(event.SelfID))
-	ids := map[string]bool{}
-	for _, item := range history {
-		id := strings.TrimSpace(item.MessageID)
-		switch {
-		case !historyLineShowsID(item), item.MessageID == event.MessageID, skip[item.MessageID],
-			item.crossGroupContext, event.Kind == EventKindGroup && !samePromptGroupScope(event, item),
-			strings.TrimSpace(item.botReply) != "", assistantHistoryEvent(item, botID),
-			isPokeHistoryEvent(item), isCallHistoryEvent(item), isQQFeedbackHistoryEvent(item), isSubscriptionPushEvent(item):
-			continue
-		}
-		ids[id] = true
-	}
-	return ids
-}
-
-// quotesWindowLine 表示 item 引用的那条就在 ids 里（见 quotableHistoryIDs）。
-func quotesWindowLine(item MessageEvent, ids map[string]bool) bool {
-	return item.Quoted != nil && !item.Quoted.Semantic && ids[strings.TrimSpace(item.Quoted.MessageID)]
-}
+// 3～6 是 v0.9.11 前后试过又退回的形态（表情包一句话标注、同天只写时分秒、雨夹雪格式、
+// 引用不展开），7 起回到 2 的形态，加一是让那几版存下的条目全部重渲染。
+const historyRenderVersion = 7
 
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
@@ -341,19 +341,22 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range previous {
 		old[entry.Key] = entry
 	}
+	var localHistory []MessageEvent
+	for _, item := range history {
+		if !item.crossGroupContext && (event.Kind != EventKindGroup || samePromptGroupScope(event, item)) {
+			localHistory = append(localHistory, item)
+		}
+	}
+	groups, recent := historyContextMetadata(localHistory, event.Time, cfg.BotAccount)
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
-	inWindow := quotableHistoryIDs(event, cfg, history, skip)
 	for _, item := range history {
-		item.quotedInWindow = quotesWindowLine(item, inWindow)
 		if item.MessageID != "" && (item.MessageID == event.MessageID || skip[item.MessageID]) {
 			continue
 		}
 		if item.crossGroupContext {
 			if boolValue(cfg.CrossGroupMemoryEnabled, false) {
-				// 跨群参考按当前消息现查。主回复请求只追加：查到的几行和历史一样留在前缀里，
-				// 下一轮没变就不重发（见 append_context.go）。
 				volatile = append(volatile, r.renderPromptHistoryEvent(ctx, event, item, cfg, direct)...)
 			}
 			continue
@@ -368,13 +371,12 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		// Source data, not asynchronous image descriptions or request-relative
 		// timestamps, controls replacement. Edits must become visible immediately.
 		source, _ := json.Marshal(struct {
-			Event          MessageEvent
-			Reply          string
-			Direct         bool
-			Bot            string
-			Render         int
-			QuotedInWindow bool
-		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion, item.quotedInWindow})
+			Event  MessageEvent
+			Reply  string
+			Direct bool
+			Bot    string
+			Render int
+		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion})
 		hash := promptCacheHash(string(source))
 		entry, ok := old[key]
 		if !ok || entry.SourceHash != hash {
@@ -412,8 +414,10 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 	for _, entry := range next {
 		for _, message := range entry.Messages {
 			message.Priority = llm.MessagePriorityHistory
-			// 压缩时按这个标记把被摘要的历史原文从请求里摘掉，见 applyCompactionToMessages。
-			message.ContextGroup = historyContextGroupPrefix + entry.Key
+			if recent[entry.Key] {
+				message.Priority = llm.MessagePriorityRecentHistory
+			}
+			message.ContextGroup = groups[entry.Key]
 			stable = append(stable, message)
 		}
 	}

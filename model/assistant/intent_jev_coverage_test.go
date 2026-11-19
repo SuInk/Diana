@@ -69,13 +69,13 @@ func TestTextPurposesStayOffIntent(t *testing.T) {
 		PurposeMemoryExtract:        llm.GroupBackground,
 		PurposeMemorySummary:        llm.GroupBackground,
 		PurposeRelationshipEvaluate: llm.GroupBackground,
-		// 上下文压缩照 Pi 用会话模型写摘要。
-		PurposeContextSummary:   "chat",
-		PurposeDirectReplyTopic: llm.GroupReplyAssist,
-		PurposeErrorNotice:      llm.GroupReplyAssist,
-		PurposeReplySuppression: llm.GroupReplyAssist,
-		PurposePokeReply:        llm.GroupReplyAssist,
-		PurposeQQFeedbackReply:  llm.GroupReplyAssist,
+		PurposeContextSummary:       llm.GroupReplyAssist,
+		PurposeDirectReplyTopic:     llm.GroupReplyAssist,
+		PurposeSemanticTextRef:      llm.GroupReplyAssist,
+		PurposeErrorNotice:          llm.GroupReplyAssist,
+		PurposeReplySuppression:     llm.GroupReplyAssist,
+		PurposePokeReply:            llm.GroupReplyAssist,
+		PurposeQQFeedbackReply:      llm.GroupReplyAssist,
 	}
 	for purpose, want := range writers {
 		if got := ModelBindingGroupOf(purpose); got != want {

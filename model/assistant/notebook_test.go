@@ -244,28 +244,6 @@ func runNotebookTool(t *testing.T, runtime *Runtime, event MessageEvent, owner b
 	return result, nil
 }
 
-// 命中多少条就注入多少条，正文也不截：漏掉一条，模型就会把那个说法当成不认识。
-func TestNotebookContextInjectsEveryMatchedEntryInFull(t *testing.T) {
-	store := newMemoryNotebookStore()
-	runtime := newNotebookRuntime(t, store)
-	terms := []string{"甲梗", "乙梗", "丙梗", "丁梗", "戊梗", "己梗", "庚梗", "辛梗", "壬梗", "癸梗"}
-	meaning := strings.Repeat("很长的解释", 70)
-	for _, term := range terms {
-		if _, _, err := store.UpsertNotebookEntry(context.Background(), NotebookUpsertRequest{
-			ScopeKey: "group:20002", Term: term, Meaning: term + meaning, Now: time.Now(),
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	text := strings.Join(terms, " ")
-	block := runtime.notebookContext(context.Background(), notebookTestEvent("10005", text), text)
-	for _, term := range terms {
-		if !strings.Contains(block, term+meaning) {
-			t.Fatalf("命中的 %s 没有完整注入：%q", term, block)
-		}
-	}
-}
-
 // 笔记本的价值在自动命中：用户不会为了一个梗特意说「查一下笔记本」，模型也不会主动去
 // 查一个它以为自己认识的词。
 func TestNotebookContextInjectsMatchedEntries(t *testing.T) {

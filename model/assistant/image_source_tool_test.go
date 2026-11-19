@@ -353,8 +353,7 @@ func TestImageToolsReachGroupMembers(t *testing.T) {
 	}
 	prompt := provider.requests[len(provider.requests)-1].Messages[0].Content
 	for _, name := range []string{dianaRenderToolName, dianaGroupRelationsToolName, dianaImageSourceToolName} {
-		// 目录有 token 预算（见 agent 的 catalogTokenBudget），放不下的只列名字。
-		if !strings.Contains(prompt, "\n- "+name+"(") && !strings.Contains(prompt, "、"+name) && !strings.Contains(prompt, "）："+name) {
+		if !strings.Contains(prompt, "\n- "+name+"(") {
 			t.Errorf("群成员的工具表里没有 %s", name)
 		}
 	}

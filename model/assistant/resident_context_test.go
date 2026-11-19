@@ -60,7 +60,7 @@ func TestResidentContextSnapshotCarriesEveryAlwaysOnBlock(t *testing.T) {
 		t.Fatalf("keyword-triggered node leaked into the resident snapshot: %q", world.Content)
 	}
 	notes := residentBlock(snapshot, ResidentBlockSelfNotes)
-	if !strings.Contains(notes.Content, "一句说完就不铺三句") {
+	if !strings.Contains(notes.Content, "一句说完就不铺三句") || notes.Budget <= 0 {
 		t.Fatalf("self notes = %#v", notes)
 	}
 

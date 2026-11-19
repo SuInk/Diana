@@ -119,7 +119,7 @@ func (p *privacyRoundTripProvider) Generate(_ context.Context, req llm.GenerateR
 	}
 	switch p.calls {
 	case 1:
-		p.alias = regexp.MustCompile(`im_u_[0-9a-f]+`).FindString(requestText)
+		p.alias = regexp.MustCompile(`im_user_[0-9a-f]+`).FindString(requestText)
 		if p.alias == "" {
 			return nil, fmt.Errorf("current speaker alias missing from request: %s", requestText)
 		}
@@ -196,17 +196,12 @@ func requestTextForPrivacyTest(req llm.GenerateRequest) string {
 }
 
 func privacyAliasForDisplayName(req llm.GenerateRequest, displayName string) string {
-	text := requestTextForPrivacyTest(req)
-	// JSON 里的「user_id + display_name」，或可提及成员名单里的「user_id：名字」一行。
-	for _, pattern := range []*regexp.Regexp{
-		regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`),
-		regexp.MustCompile(`(?m)^(im_[a-z_]+_[0-9a-f]+)：` + regexp.QuoteMeta(displayName) + `$`),
-	} {
-		if match := pattern.FindStringSubmatch(text); len(match) == 2 {
-			return match[1]
-		}
+	pattern := regexp.MustCompile(`"user_id"\s*:\s*"(im_[a-z_]+_[0-9a-f]+)"\s*,\s*"display_name"\s*:\s*"` + regexp.QuoteMeta(displayName) + `"`)
+	match := pattern.FindStringSubmatch(requestTextForPrivacyTest(req))
+	if len(match) < 2 {
+		return ""
 	}
-	return ""
+	return match[1]
 }
 
 func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) string {
@@ -216,24 +211,4 @@ func privacyAliasForIdentitySource(req llm.GenerateRequest, source string) strin
 		return ""
 	}
 	return match[1]
-}
-
-// 历史行里的消息 ID 也换成别名；模型照抄别名写引用标记，换回来就是真实 ID，发送层
-// 按它在本会话历史里找到那条消息（Telegram、QQ 一样）。
-func TestHistoryLineMessageIDIsAliasedAndRestoredInQuote(t *testing.T) {
-	for _, platform := range []string{PlatformTelegram, PlatformOneBotV11} {
-		history := MessageEvent{Platform: platform, Kind: EventKindGroup, GroupID: "20001", UserID: "10001", SenderName: "甲", MessageID: "3010101", Time: 1794745100, RawMessage: "明天第一场我猜 1:2"}
-		scope := newIdentityPrivacyScopeWithSalt("salt")
-		scope.registerEvent(history)
-		line := historyLinePrefix(history) + promptSenderIdentity(history) + ": 明天第一场我猜 1:2"
-		protected := scope.protectText(line)
-		if strings.Contains(protected, "3010101") || !strings.Contains(protected, "#"+identityAlias("message")) {
-			t.Fatalf("%s history line = %q", platform, protected)
-		}
-		alias := protected[strings.Index(protected, "#")+1 : strings.Index(protected, "]")]
-		reply := scope.restoreText(replyMarkerFor(alias) + "你当时猜的是 1:2")
-		if id, _, ok := consumeOutgoingReplyControl(reply); !ok || id != "3010101" {
-			t.Fatalf("%s restored quote = %q (id %q)", platform, reply, id)
-		}
-	}
 }

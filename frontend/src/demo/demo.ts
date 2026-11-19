@@ -61,10 +61,18 @@ const demoContextBudget = {
   context_window: 128_000,
   // 生产里常见：模型配置没填窗口，用的是默认值。
   context_window_fallback: true,
-  compaction_threshold: 111_616,
-  reserve_tokens: 16_384,
-  keep_recent_tokens: 20_000,
-  has_summary: true
+  allocated: 56_320,
+  headroom: 71_680,
+  layers: [
+    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false, configurable: true },
+    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
+    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
+    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },
+    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
+    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
+    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
+  ]
 };
 
 // 最近实际请求：续接上线后实际请求比预算分配大得多，演示里也照这个比例给。
@@ -91,9 +99,9 @@ const demoResidentContext = {
   blocks: [
     { key: "persona", label: "SOUL.md", tokens: 846, content: "# Diana\n\n## 概述\n\nDiana 是一个聊天机器人……", note: "排在系统提示词最前面，只有人能改；群可以整份覆盖。" },
     { key: "prompt_rules", label: "固定提示词规则", tokens: 8_021, content: "（演示数据：这里是按「全部工具都注册」展开的规则正文。）", note: "按「全部工具都注册」计算，是上限；实际注入哪几条随本轮注册的工具增减。随发言者变化的那段（权限、昵称、语气锚点）在请求尾部，不在这里。" },
-    { key: "world_book", label: "世界书常驻设定", tokens: 0, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
-    { key: "self_notes", label: "自述", tokens: 0, note: "机器人自己写的自我认知，默认关闭。" },
-    { key: "session_thread", label: "会话便签", tokens: 0, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
+    { key: "world_book", label: "世界书常驻设定", tokens: 0, budget: 1_200, note: "只含标了「常驻」的节点；按关键词触发的设定要命中才进。" },
+    { key: "self_notes", label: "自述", tokens: 0, budget: 1_200, note: "机器人自己写的自我认知，默认关闭。" },
+    { key: "session_thread", label: "会话便签", tokens: 0, budget: 1_200, note: "这个会话「聊到哪一步」的便签，由后台随对话滚动更新。" },
     { key: "agent_protocol", label: "Agent 协议与按需工具目录", tokens: 4_310, content: "（演示数据：Agent 协议、按需工具目录、扩展说明和规则。）", note: "按需工具只进这份目录（名字加一句用途），要用时先 tools_load。取自这个会话最近一轮回复。" },
     { key: "agent_tools", label: "常驻工具定义", tokens: 5_102, content: "web_search\nremember\npoke\ntools_load\ntools_execute\nagent_finalize", note: "这些工具每一步都带完整 schema，数字按 schema 估算，正文只列名字。从机器人配置「上下文」的常驻名单里拿掉，就会挪进上面的目录。" },
     { key: "skills", label: "Skill 目录与常驻正文", tokens: 430, content: "（演示数据：Skill 目录。）", note: "只含配成常驻的 Skill 正文；声明了触发词的要命中才带，不在底价里。" }
@@ -170,7 +178,7 @@ const oneBotProfile: BotProfileConfig = {
   reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   reply_account_safety_audit_default: FALLBACK_ACCOUNT_SAFETY_RULES,
-  proactive_reply_chance: 1, proactive_reply_threshold: 0.9, max_reply_chars: 0,
+  proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
   sticker_reply_order: "before",
   reply_split_rules: [String.raw`（([ \t\x{3000}]*)[^）\n]{2,}$`],
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
@@ -406,8 +414,8 @@ const telegramGroups: BotGroupSummary[] = [
   { group_id: "-1001002003", group_name: "Telegram 频道讨论（演示）", avatar_url: demoGroupAvatar, member_count: 42, max_member_count: 200000, enabled: true, configured: true, joined: true, bot_profile_id: "bot-telegram" }
 ];
 const groups: BotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
-  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", chat_model: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", chat_model: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
@@ -1953,25 +1961,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
-  if (path === "/api/assistant/reply-context") {
-    // 照抄 TestReplyRequestsAreAppendOnly 最后一轮的真实组装（合成的 4 人 22 条群聊，测试日志
-    // 里那行「请求构成」），组装改了要重新抄，不要手填。群聊短，所以聊天历史占比小。
-    const segments = [
-      {name: "工具定义", kind: "prefix", tokens: 1254, new_tokens: 0},
-      {name: "Runner 系统提示（协议、按需目录、规则）", kind: "prefix", tokens: 6701, new_tokens: 0},
-      {name: "头部（人设、回复规则、群风格）", kind: "prefix", tokens: 10851, new_tokens: 0},
-      {name: "【系统补充指令，不是用户发言】", kind: "state", tokens: 283, new_tokens: 0},
-      {name: "其他 user 段", kind: "state", tokens: 21, new_tokens: 0},
-      {name: "聊天历史（只追加）", kind: "history", tokens: 996, new_tokens: 168},
-      {name: "【当前消息的对话对象】", kind: "state", tokens: 205, new_tokens: 0},
-      {name: "【日期】", kind: "state", tokens: 27, new_tokens: 0},
-      {name: "其他 system 段", kind: "state", tokens: 312, new_tokens: 78},
-      {name: "【输出前检查】", kind: "turn_only", tokens: 562, new_tokens: 562}
-    ];
-    const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
-    const fresh = segments.reduce((sum, segment) => sum + segment.new_tokens, 0);
-    return json({ breakdown: { sessions: 1, saved_at: new Date(Date.now() - 3 * 60_000).toISOString(), total_tokens: total, new_tokens: fresh, segments, context_window: 200000, compaction_threshold: 111616 } });
-  }
   if (path === "/api/assistant/agent-residency") {
     if (method === "POST") {
       if (body.reset) {

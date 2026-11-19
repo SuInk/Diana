@@ -268,14 +268,11 @@ func formatUserMemoryContext(profile UserMemoryProfile, policy RelationshipPolic
 	// 也不再列「已授权能力」：那份清单对谁都一样，摆在这里只会被当成特权复述出去。
 	// 能力问题由 capabilities 负责；语气要求和恋爱关系同样由
 	// relationshipPermissionContext 统一给出，不在这里重复。
-	// 没有画像时这一段只剩名字和账号，最后一条聊天记录本来就写着，不发。
-	lines := FormatPortraitLines(profile.Portrait)
-	if lines == "" {
-		return ""
+	if lines := FormatPortraitLines(profile.Portrait); lines != "" {
+		builder.WriteString(portraitContextHeader)
+		builder.WriteString(lines)
+		builder.WriteString(portraitContextEnd)
 	}
-	builder.WriteString(portraitContextHeader)
-	builder.WriteString(lines)
-	builder.WriteString(portraitContextEnd)
 	// 这里不再列 profile.Memories。那份东西是原始发言的环形缓冲，不是长期记忆：
 	// 没有模型参与，不做相关性检索，@ 和回复标记也原样留着。同群聊天时它和最近
 	// 历史逐条重复，跨群带过去的也只是几句原话。真正的长期记忆由结构化记忆检索

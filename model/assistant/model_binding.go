@@ -56,6 +56,7 @@ const (
 	// 发给用户的通知正文），归后台生成或回复辅助。
 	PurposeRSSWatchJudge    = "rss_watch_judge"
 	PurposeDirectReplyTopic = "direct_reply_topic"
+	PurposeSemanticTextRef  = "semantic_text_reference"
 	// 下面两个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
 	PurposePokeReply = "poke_reply"
@@ -89,9 +90,6 @@ var llmPurposeGroup = map[string]string{
 	PurposeWelcomeGenerator: llm.GroupChat,
 	// 主动开口也是她在说话，和普通回复用同一个模型。
 	PurposeProactiveMessage: llm.GroupChat,
-	// 上下文压缩照 Pi 用会话模型自己写摘要：它接得住整段窗口，判断模型窗口小、
-	// 写不了长摘要。见 context_compaction.go。
-	PurposeContextSummary: llm.GroupChat,
 
 	// 意图识别：判定当前这一轮该不该说话、说出去的这句能不能发。问的都是是非、
 	// 单选和打分，发请求时带着判断题表，所以这一档可以绑只做判断的模型。
@@ -104,11 +102,13 @@ var llmPurposeGroup = map[string]string{
 	PurposeOutboundImageSafety: llm.GroupVision,
 
 	// 回复辅助：这一轮回复发出之前同步跑的旁路调用，模型慢，回复就跟着慢。
-	// 语义指代、话题合并、语义去重要写出文字；提示改写的结果直接
+	// 语义指代、话题合并、语义去重和上下文摘要要写出文字；提示改写的结果直接
 	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
 	// 留在这里，人设由 withUserFacingPersona 补上。
 	PurposeSemanticReference:       llm.GroupReplyAssist,
+	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
+	PurposeContextSummary:          llm.GroupReplyAssist,
 	PurposeForwardContentSafety:    llm.GroupReplyAssist,
 	PurposeReplyAccountSafety:      llm.GroupReplyAssist,
 	PurposeReplySuppression:        llm.GroupReplyAssist,
@@ -255,6 +255,20 @@ func inheritedGroupRole(roles map[string]ModelRole, purpose, groupKey string) (M
 		}
 	}
 	return ModelRole{}, false
+}
+
+// hasDedicatedModelRole 说明这个用途有没有落到对话以外的模型上。可选的预处理靠它
+// 决定跑不跑：只能用对话模型时宁可不跑，别让一道可有可无的工序花主回复的钱。
+func hasDedicatedModelRole(roles map[string]ModelRole, purpose, group string) bool {
+	groupKey := modelRoleKeyForGroup(group)
+	if groupKey == "chat" || roles[groupKey].FollowChat {
+		return false
+	}
+	role, ok := roles[strings.TrimSpace(purpose)]
+	if !ok {
+		role, ok = inheritedGroupRole(roles, purpose, groupKey)
+	}
+	return ok && !role.FollowChat && modelRoleConfigured(role)
 }
 
 // resolveIfFollowChat 把「跟随对话」翻成实际的对话绑定，其余原样返回。

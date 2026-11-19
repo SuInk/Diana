@@ -9,8 +9,8 @@ import "strings"
 //
 // 不从模型清单或 models.dev 推断：第三方目录某一刻的数据一旦参与计算，就和用户
 // 手填的值分不清，目录一变生效值也跟着变。界面上新建配置默认就填 128000，要更准就
-// 按模型改。填大了也有退路：超限报错里写了真实窗口就记住（context_overflow.go），
-// 上层按它算压缩阈值，这一轮压缩后重试。
+// 按模型改。填大了也有退路：超限报错里写了真实窗口就一次缩到位并记住
+// （context_overflow.go），没写就逐次减半重试。
 
 // ContextWindowSource 说明生效的窗口是从哪来的，供界面如实标注。
 type ContextWindowSource string

@@ -116,6 +116,7 @@ type dianaBotConfigSnapshot struct {
 	LLMIdentityMaskingEnabled    bool            `json:"llm_identity_masking_enabled"`
 	LLMIdentityBodyAccounts      bool            `json:"llm_identity_body_account_mapping_enabled"`
 	LLMSecretMaskingEnabled      bool            `json:"llm_secret_masking_enabled"`
+	RecentContextLimit           int             `json:"recent_context_limit"`
 	ContextSummaryThreshold      int             `json:"context_summary_threshold"`
 	CrossGroupMemoryEnabled      bool            `json:"cross_group_memory_enabled"`
 	CrossPlatformMemoryEnabled   bool            `json:"cross_platform_memory_enabled"`
@@ -358,6 +359,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		LLMIdentityMaskingEnabled:       llmIdentityMaskingEnabled(cfg),
 		LLMIdentityBodyAccounts:         llmIdentityBodyAccountMappingEnabled(cfg),
 		LLMSecretMaskingEnabled:         llmSecretMaskingEnabled(cfg),
+		RecentContextLimit:              cfg.RecentContextLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		CrossGroupMemoryEnabled:         boolValue(cfg.CrossGroupMemoryEnabled, false),
 		CrossPlatformMemoryEnabled:      boolValue(cfg.CrossPlatformMemoryEnabled, false),

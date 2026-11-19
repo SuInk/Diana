@@ -200,9 +200,8 @@ type MessageHistoryVectorQuery struct {
 	Model          string
 	FromTime       int64
 	ThroughTime    int64
-	// Limit 为 0 时返回全部达到 MinSimilarity 的命中，不截条数。
-	Limit        int
-	CrossSession bool
+	Limit          int
+	CrossSession   bool
 }
 
 // MessageHistoryVectorStore 是语义检索的可选存储能力:向量随消息异步入库,
@@ -420,9 +419,6 @@ type Runtime struct {
 	identityAliases identityAliasRegistry
 	// secretContextValues 记住只能靠上下文认出来的敏感值，见 secretContextRegistry。
 	secretContextValues secretContextRegistry
-	// identitySent、secretSent 是两个隐私代理发过的正文，见 privacySentMemo。
-	identitySent        privacySentMemo[map[string]string]
-	secretSent          privacySentMemo[map[string]secretPrivacyEntry]
 	mu                  sync.RWMutex
 	modelConfigMu       sync.Mutex
 	modelRoutingMu      sync.Mutex
@@ -650,19 +646,16 @@ type Runtime struct {
 	// recentClaimSources 记录最近几轮联网结论实际引用的来源。人设默认不罗列链接，
 	// 但有人追问「链接呢」时必须能原样给出，而不是重新搜一遍或者编一个。
 	recentClaimSources map[string][]claimSourceRecord
-	// contextSummaries 是私聊会话的压缩摘要（群的存在 GroupPromptSession 里），见 context_compaction.go。
-	contextSummaries map[string]compactionCheckpoint
-	// historyWindowAnchors 记录每个会话历史的起点（锚），见 context_compaction.go。
+	contextSummaries   map[string]string
+	// contextSummaryMarks 记录每个会话已经被折进压缩摘要的最后一条历史时间。
+	// 存储层不会因为内存历史被压缩而删掉原文，没有水位就会出现同一批历史既以
+	// 摘要、又以完整原文进入同一个请求。
+	contextSummaryMarks map[string]int64
+	// historyWindowAnchors 记录每个会话近期历史窗口的起点（见 anchoredHistoryWindow）。
 	historyWindowAnchors map[string]string
-	// compactionLocks 让同一个会话同时只有一次压缩，见 context_compaction.go。
-	compactionLocks sync.Map
-	// summaryLocks 让同一个会话同时只有一次补摘要，见 context_compaction.go。
-	summaryLocks sync.Map
-	// idleCompactions 是各会话等着的空闲压缩，见 idle_compaction.go。
-	idleCompactions idleCompactions
-	recent          []EventRecord
-	activeMu        sync.Mutex
-	active          int
+	recent               []EventRecord
+	activeMu             sync.Mutex
+	active               int
 	// llmConcurrency 数的是在飞的模型调用，llmUsage 数它们花掉的 token。
 	// 两者都自带锁，不受 mu 保护。
 	llmConcurrency        llmConcurrencyTracker
@@ -1015,7 +1008,8 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		chatInLastReplyAt:       map[string]time.Time{},
 		groupLastReplyAt:        map[string]time.Time{},
 		recentClaimSources:      map[string][]claimSourceRecord{},
-		contextSummaries:        map[string]compactionCheckpoint{},
+		contextSummaries:        map[string]string{},
+		contextSummaryMarks:     map[string]int64{},
 		activeReminders:         map[string]struct{}{},
 		replySuppressByUser:     map[string]ReplySuppression{},
 		replyOutboundGates:      map[string]*replySuppressionOutboundGate{},
@@ -1295,7 +1289,6 @@ func (r *Runtime) Stop() error {
 	}
 	r.clearProactiveRouteParks()
 	r.clearErrorNoticeBursts()
-	r.stopIdleCompactions()
 	// 先取消 context 再关闭 channel，Connect/readLoop 会尽快从阻塞读里退出。
 	err := r.channel.Close()
 	if inboundDone != nil {
@@ -1895,6 +1888,8 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	overrideIfSet(&cfg.WelcomeLLMCooldownSeconds, groupCfg.WelcomeLLMCooldownSeconds)
 	overrideIfSet(&cfg.MaxContextTokens, groupCfg.MaxContextTokens)
+	overrideIfSet(&cfg.RecentHistoryTokenBudget, groupCfg.RecentHistoryTokenBudget)
+	overrideIfSet(&cfg.RecentContextLimit, groupCfg.RecentContextLimit)
 	overrideIfSet(&cfg.MaxReplyChars, groupCfg.MaxReplyChars)
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
@@ -4103,10 +4098,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			event.replyAuditImageContext = currentImageGrounding
 		}
 	}
-	// 跨群消息设成按需或关闭时不去拉：拉了也不带。
-	if contextBlockIncluded(cfg, ContextBlockCrossGroup) {
-		event = r.loadDeferredCrossGroupContext(event)
-	}
+	event = r.loadDeferredCrossGroupContext(event)
 	markReplyStage(ctx, replyStageCrossGroupReady, time.Now())
 	replyHistory := r.promptContextHistory(event, cfg)
 	ctx = r.withReplyIdentityPrivacyContext(ctx, event, replyHistory)
@@ -4129,8 +4121,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	proactiveTriggered := event.proactiveReply && !directQuotedReply
 	// 同一个人紧接着又说了一条时，把上一轮的痕迹取出来交给提示词，让这一轮当追问
 	// 接住而不是把同一件事重答一遍。登记必须在生成之前：并发的两路要能互相看见。
-	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, r.clock())
-	defer func() { r.finishReplyTurn(event, reply, r.clock()) }()
+	previousTurn, hasPreviousTurn := r.beginReplyTurn(event, time.Now())
+	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
 	cleanText = truncateInputText(cleanText, event.MessageID, cfg.MaxInputChars)
 	setInterimReplyAudit(ctx, cleanText, proactiveTriggered)
@@ -4277,13 +4269,15 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	}
 	r.openDirectReply(ctx)
 	fullAgentEnabled := cfg.AgentEnabled && !authoritativePluginContext
-	var olderState compactionCheckpoint
+	olderSummary := ""
 	sessionThread := ""
+	summaryRecompressed := false
+	var threadUsage contextLayerUsage
 	var contextPreload *promptContextPreload
 	if !authoritativePluginContext {
 		// contextSummary 只读内存里的压缩摘要，不做 I/O，留在原处：下面的意图路由
 		// 要用它判断「有没有更早的上下文」，预取到组装阶段才收就晚了。
-		olderState = r.compactionState(event)
+		olderSummary = r.contextSummary(event)
 		// event 到这里已经不会再被改写，三层要查存储层的只读上下文可以并发预取；
 		// 下面建工具表和跑意图路由的时间正好用来等它们。
 		contextPreload = r.startPromptContextPreload(ctx, event, cleanText, userProfile, relationship, agentCanFetchMedia)
@@ -4300,18 +4294,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	if agentRegistry != nil {
 		defer agentRegistry.Close()
 	}
-	// 前缀按本群的工具全集渲染（主人口径），换人说话不变；执行照旧用本轮发言者的
-	// 注册表，权限在执行时核验（见 agent.Config.HeadRegistry）。
-	headRegistry := agentRegistry
-	if agentRegistry != nil && fullAgentEnabled && !relationship.toolScope().Owner {
-		if owner, err := r.newReplyAgentRegistry(ctx, cfg, ownerRenderEvent(cfg, event), ownerToolScope(relationship), nil); err != nil {
-			log.Printf("diana head tool registry failed, rendering the speaker's own tools: %v", err)
-		} else {
-			headRegistry = owner
-			defer owner.Close()
-		}
-	}
-	ctx = withHeadAgentRegistry(ctx, headRegistry)
 	directAgentDecision := fullAgentEnabled && agentRegistry != nil
 
 	var agentScope agentReplyScope
@@ -4321,7 +4303,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		if routingRegistry == nil {
 			routingRegistry = agent.NewToolRegistry()
 		}
-		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderState.Summary) != "")
+		intent, scope, routed := r.routeReplyIntent(ctx, event, cleanText, routingRegistry, strings.TrimSpace(olderSummary) != "")
 		if routed {
 			agentScope = scope
 		}
@@ -4385,12 +4367,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		r.recordAgentScope(ctx, event, agentScope, toolsBefore, contextBefore, len(replyHistory))
 	}
 	agentActive := agentRegistry != nil && (!agentScope.Routed || agentRegistry.Len() > 0)
-	systemHead, systemTail := r.systemPromptPartsWithHead(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry, headRegistryForPrompt(agentActive, headRegistry))
-	// 图片任务通知随这条消息变：并进尾部那条 system 消息。【主人】只在主人出现在这
-	// 一轮的历史或当前消息里时才有。可提及成员名单单独成一条，续接时只追加新成员（见
-	// appendOnlyList）。
-	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, ownerAccountPrompt(cfg, event, replyHistory))
-	mentionList := r.replyMentionPrompt(cfg, event, replyHistory)
+	systemHead, systemTail := r.systemPromptPartsWithRelationshipAndAgentTools(event, pluginResponses, proactiveTriggered, relationship, agentActive, agentRegistry)
+	// 图片任务通知和可提及成员名单都随这条消息变：并进尾部那条 system 消息。
+	// 【主人】只在主人出现在这一轮的历史或当前消息里时才有，排在候选名单前面：
+	// 续接按「【」开头的行切段，后面紧跟新段，不会粘上随消息变的行。
+	systemTail = joinPromptSections(systemTail, asyncImageTaskNotice, ownerAccountPrompt(cfg, event, replyHistory), r.replyMentionPrompt(cfg, event, replyHistory))
 	ruleDecision, ruleMatched := r.evaluateReplyRules(ctx, event, cleanText, replyHistory, cfg)
 	if ruleMatched && strings.TrimSpace(ruleDecision.Rule.LLMProfileID) != "" {
 		ctx = context.WithValue(ctx, replyRuleContextKey{}, strings.TrimSpace(ruleDecision.Rule.LLMProfileID))
@@ -4406,13 +4387,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 再统一放到后面——语义上它们就是「理解当前消息所需的背景」，离当前消息更近
 	// 反而更合适。预算裁剪按 Priority 走，不看位置，各层的让位顺序不受影响。
 	messages := []llm.Message{{Role: llm.RoleSystem, Content: systemHead, Priority: llm.MessagePrioritySystem}}
-	// 主回复头部模式下，可提及成员名单紧跟头部、算头部的一部分：组装那一轮整份放这里，
-	// 续接时只把前缀里没有的成员追加在后面（见 appendContextContinuation）。名单不算进
-	// 头部哈希，来了新成员头部也不算变。
-	mentionInHead := mentionList != "" && headRegistryForPrompt(agentActive, headRegistry) != nil
-	if mentionInHead {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
-	}
 	var dependency *senderDependencyContext
 	dependencyIndex := -1
 	volatile := pluginContextMessages(ctx, pluginResponses)
@@ -4438,19 +4412,12 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 便签填上：被裁掉的历史不该只剩离散事实点，叙事线索也要有人接。两者互斥，
 		// 没有存储层的部署仍然走旧的流水摘要。
 		sessionThread = contextPreload.sessionThread
-		// 记忆块（发言者画像、检索到的条目）只在 Agent 没跑、用不了 memory 工具时带上。
-		// 以前每轮都追加新检索到的条目：生产 11-15 每轮平均 6 千字，一个群一小时里涨到
-		// 2.6 万字，把聊天历史挤到请求的三成以下。画像那段每换一个人说话就重发一次，是
-		// 每轮动态部分里的一块；要用时 relationship 工具能查到对方画像。小雪的请求里也
-		// 没有这一块，记忆由模型自己查。
-		if memoryContext := contextPreload.memoryContext; memoryContext != "" && !memoryToolAvailable(agentActive, agentRegistry) {
-			head, retrieved := splitRetrievedMemory(memoryContext)
-			if head != "" {
-				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: head, Priority: llm.MessagePriorityMemory})
-			}
-			if retrieved != "" {
-				volatile = append(volatile, llm.Message{Role: llm.RoleUser, Content: retrieved, Priority: llm.MessagePriorityMemory})
-			}
+		if memoryContext := contextPreload.memoryContext; memoryContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:     llm.RoleUser,
+				Content:  memoryContext,
+				Priority: llm.MessagePriorityMemory,
+			})
 		}
 		// 「刚答过同一个人」跟当前消息同级，不跟着历史让位：它约束的是这一轮怎么说，
 		// 被预算挤掉就等于没写——而它要防的恰恰是把上一轮内容重说一遍。
@@ -4482,7 +4449,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 世界观设定和长期记忆同级：都是「理解这条消息所需的背景」。常驻设定在
 		// 同一棵树不变时逐轮稳定，触发式设定随消息变化，和检索记忆的易变程度一致。
-		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" && contextBlockIncluded(cfg, ContextBlockWorldBook) {
+		if worldBookContext := contextPreload.worldBookContext; worldBookContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    worldBookContext,
@@ -4501,7 +4468,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 自述和世界书同级：世界书是「我活在什么世界里」，自述是「我注意到的我自己」。
 		// 两者都是理解这条消息所需的背景，都在尾部按记忆优先级让位，都不得覆盖人设。
-		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" && contextBlockIncluded(cfg, ContextBlockSelfNote) {
+		if selfNoteContext := contextPreload.selfNoteContext; selfNoteContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    selfNoteContext,
@@ -4510,7 +4477,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			})
 		}
 		// 零花钱是关于她自己的事实，和自述同级，按记忆优先级让位。
-		if walletContext := contextPreload.walletContext; walletContext != "" && contextBlockIncluded(cfg, ContextBlockWallet) {
+		if walletContext := contextPreload.walletContext; walletContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    walletContext,
@@ -4520,7 +4487,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		}
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
-		if notebookContext := contextPreload.notebookContext; notebookContext != "" && contextBlockIncluded(cfg, ContextBlockNotebook) {
+		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    notebookContext,
@@ -4531,7 +4498,7 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		// 掉出历史窗口的媒体索引只在窗口往前滑时才变，放在历史之前跟着前缀缓存走；
 		// 挂在历史优先级上，预算紧张时跟着旧历史一起让位。
 		var mediaIndexMessage *llm.Message
-		if directAgentDecision && agentCanFetchMedia && contextBlockIncluded(cfg, ContextBlockMediaIndex) {
+		if directAgentDecision && agentCanFetchMedia {
 			if mediaIndex := renderDurableMediaIndex(ctx, contextPreload.mediaIndex, replyHistory); mediaIndex != "" {
 				mediaIndexMessage = &llm.Message{
 					Role:       llm.RoleUser,
@@ -4542,14 +4509,32 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			}
 		}
 		if thread := strings.TrimSpace(sessionThread); thread != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    sessionThreadPromptPrefix + thread,
-				Priority:   llm.MessagePrioritySummary,
-				AtomicText: true,
-			})
+			threadBudget := sessionThreadBudget(r.promptContextWindowTokens(event, cfg)) - llm.EstimateTextTokens(sessionThreadPromptPrefix)
+			// 便签只有一条，没有排序阶段：候选就是它本身，装不下只会被截短。
+			threadUsage = contextLayerUsage{
+				Layer:           "session_thread",
+				Budget:          threadBudget,
+				CandidateItems:  1,
+				CandidateTokens: llm.EstimateTextTokens(thread),
+				RankedItems:     1,
+				RankedTokens:    llm.EstimateTextTokens(thread),
+				Reason:          contextLayerReasonFits,
+			}
+			if thread = fitSessionThreadToBudget(thread, threadBudget); thread != "" {
+				threadUsage.SelectedItems = 1
+				threadUsage.SelectedTokens = llm.EstimateTextTokens(thread)
+				if threadUsage.SelectedTokens < threadUsage.CandidateTokens {
+					threadUsage.Reason = contextLayerReasonBudget
+				}
+				volatile = append(volatile, llm.Message{
+					Role:       llm.RoleUser,
+					Content:    sessionThreadPromptPrefix + thread,
+					Priority:   llm.MessagePrioritySummary,
+					AtomicText: true,
+				})
+			}
 		}
-		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" && contextBlockIncluded(cfg, ContextBlockLinkPolicy) {
+		if linkPolicy := r.replyLinkPolicyContext(event); linkPolicy != "" {
 			volatile = append(volatile, llm.Message{
 				Role:       llm.RoleUser,
 				Content:    linkPolicy,
@@ -4562,6 +4547,17 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				Role:       llm.RoleUser,
 				Content:    sources,
 				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
+		const summaryPrefix = "【较早上下文压缩摘要，仅用于理解背景，不要直接回复摘要】\n"
+		summaryBudget := contextShareBudget(r.promptContextWindowTokens(event, cfg), compressedSummaryTokenShare) - llm.EstimateTextTokens(summaryPrefix)
+		olderSummary, summaryRecompressed = r.promptContextSummary(event, sessionThread, summaryBudget)
+		if olderSummary != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    summaryPrefix + olderSummary,
+				Priority:   llm.MessagePrioritySummary,
 				AtomicText: true,
 			})
 		}
@@ -4585,19 +4581,11 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			r.supersedeDependencyImageTurns(ctx, event, images)
 		}
 		stableHistory, crossGroupTail := r.stableGroupHistory(ctx, event, cfg, replyHistory, directAgentDecision, withLaterSenderMessages(turnMessageIDs, replyHistory, event))
-		// 条目缓存里每行都写全日期，拼成这一份之后再统一省掉同一天的日期，见 history_line_dates.go。
-		stableHistory = compactHistoryLineDates(stableHistory)
 		if mediaIndexMessage != nil {
 			messages = append(messages, *mediaIndexMessage)
 		}
-		// 历史开头：压缩过就是摘要，没压缩过写明历史从哪一刻开始载入（见 context_compaction.go）。
-		if header, ok := compactionHeaderMessage(olderState, replyHistory); ok {
-			messages = append(messages, header)
-		}
 		messages = append(messages, stableHistory...)
-		if contextBlockIncluded(cfg, ContextBlockCrossGroup) {
-			volatile = append(volatile, crossGroupTail...)
-		}
+		volatile = append(volatile, crossGroupTail...)
 		// 历史到此结束：这是本轮请求里最后一段逐轮稳定的内容，缓存断点打在这里。
 		// 显式缓存的供应商（Anthropic）按它写入和读取，自动前缀缓存的供应商忽略。
 		messages = markStablePromptPrefix(messages)
@@ -4741,68 +4729,27 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	if mentionList != "" && !mentionInHead {
-		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: mentionList, Priority: llm.MessagePrioritySystem})
-	}
-	if headRegistryForPrompt(agentActive, headRegistry) != nil {
-		// 主回复请求只追加：不再每轮发一条精确到秒的时钟。几点几分看最后一条聊天记录的
-		// 时间（头部规则见 replyClockRule），这里只发日期，一天变一次，没变就不重发。
-		if datePrompt := r.replyDatePrompt(event); datePrompt != "" {
-			messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: datePrompt, Priority: llm.MessagePrioritySystem})
-		}
-	} else if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
-		// 时钟每轮都不同，只用于本轮：重新组装那一轮的时间不留在续接的前缀里。
+	if clockPrompt := r.runtimeClockPrompt(event); clockPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  clockPrompt,
 			Priority: llm.MessagePrioritySystem,
-			TurnOnly: true,
 		})
 	}
 	// 点名承接哪几条连发由这里决定，同时把还卡在路由里的那几条接过来：提示词里
 	// 点名的和交接过来的是同一批（见 sender_burst.go）。
 	event.carryOver, event.carryOverSet = r.claimCarryOver(ctx, event, replyHistory), true
 	event.replyQuoteCandidates = r.replyQuoteCandidates(ctx, event)
-	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory, headRegistryForPrompt(agentActive, headRegistry) != nil); decorationPrompt != "" {
+	if decorationPrompt := replyDecorationPrompt(cfg, event, replyHistory); decorationPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:     llm.RoleSystem,
 			Content:  decorationPrompt,
 			Priority: llm.MessagePrioritySystem,
 		})
 	}
-	// 当前消息拆成两条：这条消息那一行（和下一轮作为历史时同一种写法，进前缀），和这一轮
-	// 的注解（只用于本轮，放在它前面，最后一条仍是这条消息、图片照旧挂在它上面）。
-	var lineDates historyLineDates
-	for _, message := range messages {
-		if message.Role == llm.RoleUser {
-			lineDates.step(message.Content)
-		}
-	}
-	if notes, line, ok := splitCurrentMessageNotes(currentMessage, currentMessageLine(event), &lineDates); ok {
-		// 群聊篇幅规则在系统头部（见 promptNoteGroupBrevitySpec）。
-		if notes != nil {
-			messages = append(messages, *notes)
-		}
-		currentMessage = line
-	}
 	messages = append(messages, currentMessage)
 	r.recordTemporaryMemoryContext(ctx, event, cfg, messages, contextPreload)
-	// 滑窗不调模型（见 idle_compaction.go）：已经超过「窗口 − 预留」就当场滑再发；
-	// 接近阈值时这一轮照发，生成完马上滑，下一轮不用在有人等的时候滑。
-	compacted := ""
-	if !authoritativePluginContext {
-		window := r.promptCompactionWindow(event, cfg)
-		total, nonHistory := replyRequestTokens(messages, r.replyFixedOverheadTokens(event, agentRegistry))
-		if total > compactionThreshold(window) || r.appendContinuationOverLimit(ctx, event, messages, compactionThreshold(window)) {
-			if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "threshold", &dependencyIndex); ok {
-				messages, replyHistory = next, kept
-				compacted = "threshold"
-			}
-		} else if r.noteReplyRequestSize(event, window, total) {
-			defer r.slideAfterReply(event, cfg, nonHistory)
-		}
-	}
-	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, compacted, semanticReferenceContext, semanticContext)
+	r.recordPromptContextBudget(ctx, event, cfg, messages, replyHistory, semanticReferenceContext, semanticContext, summaryRecompressed, contextPreload.layerUsage(threadUsage))
 
 	replyCfg := cfg
 	replyCfg.AgentEnabled = agentActive
@@ -4823,14 +4770,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	ctx, deferredTone := withDeferredReplyTone(ctx)
 	defer deferredTone.stop()
 	reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
-	// 供应商（或本地校验）报上下文超限：照 Pi 压缩一次再重试，只试一次。
-	if llm.IsContextOverflowError(err) && compacted == "" && !authoritativePluginContext && !hasExternalSideEffect(ctx) {
-		if next, kept, ok := r.compactReplyMessages(ctx, event, cfg, agentRegistry, replyHistory, messages, "overflow", &dependencyIndex); ok {
-			messages, replyHistory = next, kept
-			compacted = "overflow"
-			reply, err = r.generateReply(ctx, replyCfg, event, relationship, messages, agentRegistry)
-		}
-	}
 	if err == nil && dependencyIndex >= 0 && dependency.pixels && VisionDescriptionRefused(reply) && !hasExternalSideEffect(ctx) {
 		// 附了原图，模型却回「没收到图片」：这条视觉链路送不进图（模型不支持、网关把
 		// 图段丢了）。别把这句发出去，换成识图描述重来一次。
@@ -5110,6 +5049,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 	// 没有入站 worker 的上下文，必须在这里按事件恢复 profile 和用量归属。
 	ctx = withLLMUsageContext(ctx, event)
 	messages = withReplyGenerationBudgetForConfig(messages, cfg)
+	// Agent 每一步都带着完整原件重发，预算层丢过的历史、摘要过的文字要记到这一整次
+	// 回复结束，下一步才能照搬，而不是每步从头裁、从头摘要（见 input_budget_pretrim.go）。
+	ctx = withInputBudgetRun(ctx)
 	if _, initialized := identityPrivacyStateFromContext(ctx); !initialized {
 		ctx = r.withIdentityPrivacyContext(ctx, event, r.contextHistory(event))
 	}
@@ -5165,18 +5107,14 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			}
 			ownsRegistry = true
 		}
-		head := headAgentRegistryFrom(ctx, registry)
 		// 图片描述会进提示词、又有缓存可改时才挂上，见 image_fix_tool.go。
 		if r.imageDescriptionsInPrompt(cfg) && r.recallImageDescriptionStore() != nil {
 			registry.Register(newDianaImageFixTool(r, event))
-			if head != registry {
-				head.Register(newDianaImageFixTool(r, event))
-			}
 		}
 		// 常驻名单要等注册表建好才算得出来：名单记的是插件、MCP 服务和工具的 ID，
 		// 得知道这一轮到底注册了哪些工具、哪条 MCP 和插件各带了哪几个。
 		agentCfg.CoreTools = r.agentCoreTools(event, registry)
-		agentCfg.HeadRegistry = head
+		agentCfg.SharedTools = r.sharedAgentTools(event)
 		agentCfg.FeaturedTools = replyFeaturedTools
 		if _, ok := registry.Get(dianaStickerToolName); ok {
 			agentCfg.FinalizeFields = append(agentCfg.FinalizeFields, stickerFinalizeFields(cfg.StickerReplyOrder)...)
@@ -5195,9 +5133,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if modelDisclosedTo(cfg, relationship.toolScope().Owner) {
 			registry.Register(newDianaRuntimeModelTool(agentClient, event))
 		}
-		if head != registry && modelDisclosedTo(cfg, true) {
-			head.Register(newDianaRuntimeModelTool(agentClient, event))
-		}
 		agentRunner, err := agent.NewRunner(agentClient, agentCfg, registry)
 		if err != nil {
 			if ownsRegistry {
@@ -5213,6 +5148,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if traceID != "" {
 			traceID = "chat-" + traceID
 		}
+		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
+		// 不再从零核验。本次运行结束后按结果续档或清档。
+		if carryover, ok := r.agentCarryoverMessage(event); ok {
+			messages = append(messages, carryover)
+		}
 		promptSession := r.groupPromptSession(event)
 		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
 		// 后台入口也走这里，它们不接进群聊的记录。
@@ -5222,31 +5162,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
-			// 重启后读回的记录：前缀发出去的样子放回隐私代理，发出的字节和重启前一样。
-			r.restorePrivacySent(previous, sessionKey(event))
-			continuation, appendDecision = appendContextContinuation(previous, messages, compactionThreshold(r.promptCompactionWindow(event, cfg)))
+			continuation, appendDecision = appendContextContinuation(previous, messages)
 			appendDecision.previousKey = ""
 			if previous != nil {
 				appendDecision.previousKey = previous.key
 			}
-		}
-		// 上一条回复预算耗尽时留下的工具观察存档,注入后模型直接续跑,
-		// 不再从零核验。本次运行结束后按结果续档或清档。
-		//
-		// 放在续接判断之后：它排在当前消息后面，先加的话会被当成当前消息，真正的当前
-		// 消息反倒被算进尾部、续接时标成只用于本轮。存档说的是上一轮没做完的事，只用于
-		// 本轮，不进前缀。
-		if carryover, ok := r.agentCarryoverMessage(event); ok {
-			carryover.TurnOnly = true
-			messages = append(messages, carryover)
-			if continuation != nil {
-				continuation.Append = append(continuation.Append, carryover)
-			}
-		}
-		// 记下这一轮第一个实际送到供应商的请求，设置页的请求构成按它分块。
-		var requestRecorder *replyRequestRecorder
-		if appendKey != "" {
-			ctx, requestRecorder = withReplyRequestRecorder(ctx)
 		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)
 		interjections := combineInterjections(directInterjections, r.startSiblingSendInterjections(ctx, event))
@@ -5254,7 +5174,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		identity := callerIdentityForEvent(cfg, event)
 		identity.Background = backgroundRunContext(ctx)
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, identity), agent.Request{
-			Hooks:         newReplyRunHooks(),
+			Hooks:         newReplyRunHooks(cfg),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,
@@ -5262,7 +5182,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
 			Continuation:  continuation,
-			TailReminder:  replyTailReminder(cfg, event),
 		})
 		stopInterjections()
 		stopProgress()
@@ -5273,10 +5192,6 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			if err == nil {
 				previous := r.appendContexts.get(appendKey)
 				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
-				if request, usage, ok := requestRecorder.first(); ok && written != nil {
-					written.noteReplyRequest(request, usage, resp.Continued, previous)
-				}
-				r.notePrivacySent(written, sessionKey(event))
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}
@@ -5376,9 +5291,6 @@ var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{
-	// 检索到的记忆不再每轮自动带上（见 memoryToolAvailable），目录里写全描述，模型才会
-	// 想到自己去查。
-	dianaMemoryToolName,
 	dianaPluginMediaToolName,
 	dianaStickerToolName,
 	agent.WebSearchToolName,
@@ -5401,6 +5313,26 @@ var replyFeaturedTools = []string{
 	// send_file 只列名字时，swe-2 把 6K 字的 SVG 源码直接贴进正文（11-19 QQ 群拆成 57 条刷屏），
 	// 之后又不调工具就说「文件发好了」。描述里「长代码、SVG 别塞进正文」得让它看得到。
 	dianaFileDeliveryToolName,
+}
+
+// speakerVariantTools 是对非主人开放、但描述随发言者不同的工具：放进公共目录会让
+// 前缀按人分叉，所以和主人专属工具一样放到尾部。
+var speakerVariantTools = []string{
+	dianaGitHubToolName,
+	dianaSubscriptionToolName,
+	dianaCrossSessionToolName,
+	"browser_open", "browser_text", "browser_click", "browser_type", "browser_tabs", "browser_screenshot",
+}
+
+// sharedAgentTools 是本群非主人发言者都拿得到、且描述对谁都一样的工具：它们的目录行、
+// 规则和契约放进系统提示词，其余按发言者放到尾部（agent.Config.SharedTools）。
+// 只看群配置、不看本轮发言者，所以同一个群里对谁都是同一份。
+func (r *Runtime) sharedAgentTools(event MessageEvent) map[string]bool {
+	shared := r.allowedAgentToolNamesForEvent(event, RelationshipPolicy{})
+	for _, name := range speakerVariantTools {
+		delete(shared, name)
+	}
+	return shared
 }
 
 type replyRuleDecision struct {
@@ -5693,7 +5625,7 @@ func (r *Runtime) routeReplyIntent(ctx context.Context, event MessageEvent, text
 	ctx = withLLMUsagePurpose(withLLMUsageContext(ctx, event), "reply_intent_router")
 	payload := r.visualIntentPayloadForContext(ctx, event, text)
 	if registry != nil {
-		payload.AvailableTools = registry.Catalog()
+		payload.AvailableTools = registry.Catalog(180)
 		payload.OlderSummaryAvailable = olderSummaryAvailable
 	}
 	payloadJSON, err := json.Marshal(payload)
@@ -6265,8 +6197,10 @@ func formatApproximateAge(age time.Duration) string {
 }
 
 type replyMentionCandidate struct {
-	UserID      string
-	DisplayName string
+	UserID        string `json:"user_id"`
+	DisplayName   string `json:"display_name,omitempty"`
+	CurrentSender bool   `json:"current_sender,omitempty"`
+	Source        string `json:"source,omitempty"`
 }
 
 // currentSenderMentionRule 说明当前发言者这一位由谁来 @。三档说的是三件不同的事，
@@ -6309,7 +6243,7 @@ func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEv
 	displayNames := messageParticipantDisplayNames(identityEvents...)
 	candidates := make([]replyMentionCandidate, 0, 12)
 	indexes := make(map[string]int)
-	add := func(userID, displayName string) {
+	add := func(userID, displayName string, current bool, source string) {
 		userID = strings.TrimSpace(userID)
 		if userID == "" || userID == botID {
 			return
@@ -6318,24 +6252,30 @@ func (r *Runtime) replyMentionCandidates(event MessageEvent, history []MessageEv
 			if candidates[index].DisplayName == "" {
 				candidates[index].DisplayName = strings.TrimSpace(displayName)
 			}
+			candidates[index].CurrentSender = candidates[index].CurrentSender || current
 			return
 		}
 		indexes[userID] = len(candidates)
-		candidates = append(candidates, replyMentionCandidate{UserID: userID, DisplayName: strings.TrimSpace(displayName)})
+		candidates = append(candidates, replyMentionCandidate{
+			UserID:        userID,
+			DisplayName:   strings.TrimSpace(displayName),
+			CurrentSender: current,
+			Source:        source,
+		})
 	}
 
-	add(event.UserID, firstNonEmpty(displayNames[event.UserID], event.SenderName))
+	add(event.UserID, firstNonEmpty(displayNames[event.UserID], event.SenderName), true, "current_sender")
 	for _, userID := range mentionedUserIDs(event.Segments) {
-		add(userID, displayNames[userID])
+		add(userID, displayNames[userID], false, "mentioned_in_current_message")
 	}
 	if event.Quoted != nil {
-		add(event.Quoted.UserID, firstNonEmpty(displayNames[event.Quoted.UserID], event.Quoted.SenderName))
+		add(event.Quoted.UserID, firstNonEmpty(displayNames[event.Quoted.UserID], event.Quoted.SenderName), false, "quoted_message_sender")
 	}
 	for index := len(history) - 1; index >= 0 && len(candidates) < 20; index-- {
 		item := history[index]
-		add(item.UserID, firstNonEmpty(displayNames[item.UserID], item.SenderName))
+		add(item.UserID, firstNonEmpty(displayNames[item.UserID], item.SenderName), false, "recent_participant")
 		for _, userID := range mentionedUserIDs(item.Segments) {
-			add(userID, displayNames[userID])
+			add(userID, displayNames[userID], false, "recently_mentioned")
 		}
 	}
 	return candidates
@@ -6587,6 +6527,7 @@ func (r *Runtime) enrichForwardMessages(ctx context.Context, event MessageEvent)
 type pendingForwardExpansion struct {
 	id     string
 	parent string
+	depth  int
 }
 
 func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEvent, segments []MessageSegment, rawMessage string) ([]MessageSegment, string) {
@@ -6603,8 +6544,8 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 	for _, id := range ids {
 		queue = append(queue, pendingForwardExpansion{id: id})
 	}
-	// 不限层数和次数：seen 记下入队过的 id，同一个 id 只取一次，套成环也会停。
 	seen := make(map[string]struct{}, len(ids))
+	fetched := 0
 	for len(queue) > 0 {
 		item := queue[0]
 		queue = queue[1:]
@@ -6617,9 +6558,17 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 		if forwardReferenceExpanded(out, item.id) || forwardTextAlreadyExpanded(out, item.id) {
 			continue
 		}
+		if fetched >= maxForwardExpandCount {
+			// 转发能嵌成很深的一棵树，每个节点都是一次 OneBot 调用。到上限就
+			// 停下并留痕，让「内容不全」在日志里看得见，而不是静默截断。
+			r.recordForwardMessageError(ctx, event, item.id,
+				fmt.Errorf("nested forward expansion stopped at %d fetches", maxForwardExpandCount))
+			break
+		}
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		data, err := r.callOneBotAPIForEvent(callCtx, event, "get_forward_msg", map[string]any{"id": item.id})
 		cancel()
+		fetched++
 		if err != nil {
 			r.recordForwardMessageError(ctx, event, item.id, err)
 			continue
@@ -6641,17 +6590,20 @@ func (r *Runtime) enrichForwardSegmentSet(ctx context.Context, event MessageEven
 		}
 		out = appendUniqueForwardMedia(out, media)
 		markForwardReferenceExpanded(out, item.id)
+		if item.depth >= maxForwardExpandDepth {
+			continue
+		}
 		for _, nested := range nestedForwardReferenceIDs(data) {
 			if _, ok := seen[nested]; ok {
 				continue
 			}
-			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id})
+			queue = append(queue, pendingForwardExpansion{id: nested, parent: item.id, depth: item.depth + 1})
 		}
 	}
 	if len(lines) == 0 {
 		return out, rawMessage
 	}
-	text := strings.Join(lines, "\n\n")
+	text := truncateRunesFromStart(strings.Join(lines, "\n\n"), 6000)
 	if strings.TrimSpace(rawMessage) == "" {
 		rawMessage = text
 	} else {
@@ -6737,6 +6689,14 @@ func replyReferenceIDs(segments []MessageSegment) []string {
 	}
 	return out
 }
+
+const (
+	// maxForwardExpandDepth 限制转发套转发的展开层数，maxForwardExpandCount
+	// 限制一条消息总共能触发多少次 get_forward_msg。两者一起兜住恶意或意外
+	// 的深层嵌套：没有上限时，一张层层嵌套的卡片能把一次入站拖成几十次调用。
+	maxForwardExpandDepth = 3
+	maxForwardExpandCount = 8
+)
 
 // nestedForwardReferenceIDs 从一次 get_forward_msg 的返回里，找出还需要再取一次
 // 才能拿到内容的转发引用。
@@ -7038,6 +6998,36 @@ func stringFromAny(value any) string {
 	return strings.TrimSpace(stringifyID(value))
 }
 
+// mergeContextSummary 把新压缩掉的历史并进已有摘要，并维护摘要的水位标识。
+// 超出上限时按整行丢弃最旧的记录：按字符截断会把某一条记录切成半句，让模型
+// 读到一个没有主语或没有结论的片段。
+func mergeContextSummary(existing string, events []MessageEvent) string {
+	header, lines := splitContextSummary(existing)
+	start, count := parseContextSummaryHeader(header)
+	end := ""
+	for _, event := range events {
+		line := compactContextEvent(event)
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+		count++
+		label := contextSummaryTimeLabel(event.Time, profileLocation(event.ProfileID))
+		if start == "" {
+			start = label
+		}
+		end = label
+	}
+	if end == "" {
+		_, endFromHeader, found := strings.Cut(strings.TrimSuffix(strings.TrimPrefix(header, contextSummaryHeaderPrefix), "】"), " ~ ")
+		if found {
+			end, _, _ = strings.Cut(endFromHeader, "，共 ")
+		}
+	}
+	rebuilt := contextSummaryHeader(start, end, count)
+	return joinContextSummary(rebuilt, dropOldestContextSummaryLines(rebuilt, lines, contextSummaryMaxRunes))
+}
+
 func compactContextEvent(event MessageEvent) string {
 	text := PlainText(event.Segments)
 	if strings.TrimSpace(text) == "" && !hasImageSegment(event.Segments) {
@@ -7070,7 +7060,7 @@ func truncateRunesFromStart(text string, maxRunes int) string {
 }
 
 // historyLinePrefix 是每条历史行的开头：「[历史 2026-09-03 14:05:00] 」，跨群来源
-// 换成「[跨群 …] 」。两种标记的含义由 promptHistoryFormat 在 system 头部说明一次。
+// 换成「[跨群历史 …] 」。两种标记的含义由 promptHistoryFormat 在 system 头部说明一次。
 //
 // 以前每行都带一整句「历史参考消息，仅用于理解上下文，不要直接回复这条历史消息」
 // 外加「距当前：约 N 分钟」。前者是几十个 token 的固定开销，几百条历史下能吃掉
@@ -7078,43 +7068,15 @@ func truncateRunesFromStart(text string, maxRunes int) string {
 // 整段历史因此永远无法命中前缀缓存。现在只标绝对时间：它不随请求时间变化，
 // 「离现在多久」由尾部的运行时钟给模型自己对照。
 func historyLinePrefix(event MessageEvent) string {
-	// 照雨夹雪：一条消息只有一种写法「[时间 #消息ID] 发送者: 正文」，不标「历史」——
-	// 当前这条消息也是这一行，下一轮原样留在前缀里，不用改写。别的群来的消息标「跨群」。
-	label := "["
+	label := "[历史"
 	if event.crossGroupContext {
-		label = crossGroupLineLabel
+		label = "[跨群历史"
 	}
 	if event.Time > 0 {
-		if label != "[" {
-			label += " "
-		}
-		label += time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
-	}
-	// 消息 ID 跟在时间后面：回复开头写引用标记就能指向这条（发送层按本会话历史查，
-	// Telegram、QQ 都认）。以前历史行没有 ID，模型只能引用当前这条消息。
-	if historyLineShowsID(event) {
-		if label != "[" {
-			label += " "
-		}
-		label += historyLineIDMark + strings.TrimSpace(event.MessageID)
-	}
-	if label == "[" {
-		return ""
+		label += " " + time.Unix(event.Time, 0).In(profileLocation(event.ProfileID)).Format("2006-01-02 15:04:05")
 	}
 	return label + "] "
 }
-
-// historyLineShowsID 表示这条消息的行首会写出「#消息ID」。
-func historyLineShowsID(event MessageEvent) bool {
-	id := strings.TrimSpace(event.MessageID)
-	return id != "" && replyMarkerIDAcceptable(event.Platform, id)
-}
-
-// historyLineIDMark 是消息行开头时间后面、消息 ID 前面的标记。
-const historyLineIDMark = "#"
-
-// crossGroupLineLabel 是别的群来的消息行的开头。
-const crossGroupLineLabel = "[跨群"
 
 func historicalFileCount(event MessageEvent) int {
 	return historicalSegmentCount(event, func(segment MessageSegment) bool { return segment.Type == "file" })
@@ -8469,18 +8431,18 @@ func (r *Runtime) handleNotice(ctx context.Context, event MessageEvent) error {
 // remember 记录当前会话的最近上下文。
 func (r *Runtime) remember(event MessageEvent) {
 	event = withoutReplyRuntimeState(event)
-	// 会话来了新消息就不算空闲，等着的空闲压缩往后推（见 idle_compaction.go）。
-	r.postponeIdleCompaction(event)
 	r.mu.Lock()
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	r.mu.Unlock()
 	session := sessionKey(event)
-	// 群的内存缓冲要装得下锚之后的全部历史，没有持久存储时它就是唯一来源。
+	// Group context lives for a token-budget epoch, not just RecentContextLimit
+	// messages. Keep enough raw events even when there is no durable store.
 	groupLimit := 0
 	if event.Kind == EventKindGroup {
 		cfg := r.effectiveConfigForEvent(event)
-		groupLimit = historyCandidateLimit(r.promptCompactionWindow(event, cfg))
+		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg))
 	}
+	var compressed []MessageEvent
 	r.mu.Lock()
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	session = sessionKey(event)
@@ -8517,15 +8479,22 @@ func (r *Runtime) remember(event MessageEvent) {
 	if !replacedInPlace {
 		history = append(history, event)
 	}
-	// 内存里的会话历史攒够 ContextSummaryThreshold 条，就把最早的一批交给后台抽取
-	// 长期记忆，内存里只留 sideHistoryLookback 条。它只是缓存：有持久存储时提示词的
-	// 历史从存储读，不受这里影响（见 promptContextHistory）。
 	cfg := r.effectiveConfigForEventLocked(event)
-	limit := sideHistoryLookback
-	var compressed []MessageEvent
-	if len(history) > contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold) {
-		if compressCount := len(history) - limit; compressCount > 0 {
+	limit := cfg.RecentContextLimit
+	if limit <= 0 {
+		limit = 20
+	}
+	threshold := contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold)
+	if len(history) > threshold {
+		compressCount := len(history) - limit
+		if compressCount > 0 {
 			compressed = append([]MessageEvent(nil), history[:compressCount]...)
+			r.contextSummaries[session] = mergeContextSummary(r.contextSummaries[session], compressed)
+			for _, item := range compressed {
+				if item.Time > r.contextSummaryMarks[session] {
+					r.contextSummaryMarks[session] = item.Time
+				}
+			}
 			history = history[compressCount:]
 		}
 	}
@@ -8558,7 +8527,7 @@ func (r *Runtime) remember(event MessageEvent) {
 	}
 	r.mu.Unlock()
 	r.persistMessageEvent(event)
-	// 彻底休眠的群不排模型摘要任务。
+	// 彻底休眠的群只在本地合并摘要，不排模型摘要任务。
 	if len(compressed) > 0 && !r.groupDormant(event) {
 		r.enqueueContextSummary(session, compressed)
 	}
@@ -8639,6 +8608,32 @@ func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.backlogProactive = nil
 	event.backlogHeld = false
 	return event
+}
+
+func (r *Runtime) contextSummary(event MessageEvent) string {
+	session := sessionKey(event)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.structuredMemory != nil {
+		// Structured, LLM-generated summaries are persisted and retrieved through
+		// memoryContext. The old raw concatenation remains only as a fallback for
+		// deployments without a structured memory store.
+		return ""
+	}
+	return strings.TrimSpace(r.contextSummaries[session])
+}
+
+// contextSummaryWatermarkLocked 返回本会话摘要已经覆盖到的最后一条历史时间。
+// 它与 contextSummary 用同一个开关：结构化记忆接管摘要时不注入摘要，也就没有
+// 重复注入的问题，此时不应该反过来把存储层的历史裁掉。
+func (r *Runtime) contextSummaryWatermarkLocked(session string) int64 {
+	if r.structuredMemory != nil {
+		return 0
+	}
+	if strings.TrimSpace(r.contextSummaries[session]) == "" {
+		return 0
+	}
+	return r.contextSummaryMarks[session]
 }
 
 // record 记录状态页最近事件。

@@ -77,7 +77,7 @@ func TestLiveIndependentSearchUsesBatch(t *testing.T) {
 	resp, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: prompt},
 		{Role: llm.RoleSystem, Content: "当前时间：2026-11-02 00:00 UTC+08:00。"},
-		{Role: llm.RoleUser, Content: "群友: " + event.RawMessage},
+		{Role: llm.RoleUser, Content: "【当前需要回复的消息】" + event.RawMessage},
 	}})
 	if err != nil {
 		t.Fatal(err)

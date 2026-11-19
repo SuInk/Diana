@@ -31,9 +31,8 @@ func (c *currentRequirementContinuationClient) Generate(ctx context.Context, req
 }
 
 // Exercise real JSON tool observations and both planning/finalization requests.
-// The original task stays pinned as current input. The adapter never shortens
-// or drops anything: a request that does not fit fails with ErrContextOverflow
-// locally so the caller can compact and retry.
+// The original task stays pinned as current input; when it cannot fit even
+// alone, the adapter shortens it rather than failing the turn (#518).
 func TestRunnerKeepsOriginalCurrentRequirementAcrossContinuationBudget(t *testing.T) {
 	for _, phase := range []string{"planning", "finalization"} {
 		for _, tooSmall := range []bool{false, true} {
@@ -59,7 +58,7 @@ func TestRunnerKeepsOriginalCurrentRequirementAcrossContinuationBudget(t *testin
 					}}})
 				}))
 				defer server.Close()
-				window := int64(200000)
+				window := int64(32768)
 				if tooSmall {
 					window = 2048
 				}
@@ -108,8 +107,12 @@ func TestRunnerKeepsOriginalCurrentRequirementAcrossContinuationBudget(t *testin
 					}
 				}
 				if tooSmall {
-					if !llm.IsContextOverflowError(err) || httpCalls.Load() != 0 {
-						t.Fatalf("oversized request should fail locally with the overflow: err=%v http_calls=%d", err, httpCalls.Load())
+					if err != nil || response == nil || response.Text != "done" || httpCalls.Load() != 1 {
+						t.Fatalf("oversized current input should be shortened and sent: response=%+v err=%v http_calls=%d", response, err, httpCalls.Load())
+					}
+					body := <-bodies
+					if !strings.Contains(body, "CURRENT_HEAD") || strings.Contains(body, "old optional history") {
+						t.Fatal("shortened payload lost the current task head or kept optional history")
 					}
 					return
 				}
@@ -120,8 +123,8 @@ func TestRunnerKeepsOriginalCurrentRequirementAcrossContinuationBudget(t *testin
 					t.Fatalf("http_calls=%d", httpCalls.Load())
 				}
 				body := <-bodies
-				if !strings.Contains(body, original) || !strings.Contains(body, strings.TrimSpace(history)) {
-					t.Fatal("provider payload changed the current task or dropped history")
+				if !strings.Contains(body, original) || strings.Contains(body, history) {
+					t.Fatal("provider payload changed the current task or retained oversized optional history")
 				}
 			})
 		}

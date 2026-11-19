@@ -24,6 +24,10 @@ const (
 	// DefaultFileWriteMaxBytes 是单次写入的默认上限。比读的上限大一些：模型生成
 	// 一个完整文件时经常一次写下去，卡太死会让它退化成反复追加。
 	DefaultFileWriteMaxBytes = 256 * 1024
+	DefaultSkillsListBudget  = 8000
+	// ResidentSkillBodyBudget 是常驻 skill 正文在一次请求里的总字符上限。超出的那几个
+	// 只留目录行,退回 read_skill,不会把整轮上下文撑爆。
+	ResidentSkillBodyBudget = 24000
 	// DefaultSkillTriggerScanDepth 是关键词扫描回看的用户消息条数。只看最近几条：
 	// 很久以前提过一次的词不该让那份正文从此每轮都在。
 	DefaultSkillTriggerScanDepth = 2
@@ -63,6 +67,7 @@ type Config struct {
 	MaxSteps         int
 	SkillRoots       []string
 	ManagedSkillRoot string
+	SkillsListBudget int
 	// SkillTriggerScanDepth 是关键词扫描回看的用户消息条数。
 	SkillTriggerScanDepth int
 	MCPConfigPath         string
@@ -143,12 +148,11 @@ type Config struct {
 	// CoreTools 是每一步都带完整定义的工具；其余工具按需加载，见 deferred_tools.go。
 	// 留空时全部工具都带完整定义。
 	CoreTools []string
-	// HeadRegistry 是渲染进系统提示词、工具定义和历史之前契约块的工具全集：同一个群里
-	// 对谁都是这一份（主人、管理员、成员能用的都列出来），换人说话前缀不变。它只用来
-	// 渲染、从不执行：执行照旧走本轮发言者自己的注册表，权限在执行时核验，本轮发言者
-	// 用不了的调用时回没有权限（见 deniedToolError）。
-	// nil 时用执行注册表。
-	HeadRegistry *ToolRegistry
+	// SharedTools 列出「按需目录里对谁都一样」的工具：它们的目录行和使用规则进系统
+	// 提示词，已加载契约放在历史之前。注册表里其余工具（主人专属、群管理员才放开的
+	// 扩展等）按发言者变化，目录行、规则和契约都放进历史之后的尾部，免得主人和群友
+	// 交替说话时整段前缀缓存从工具目录处断开。nil 表示全部当作公共工具。
+	SharedTools map[string]bool
 	// FeaturedTools 在按需目录里写完整描述而不是压成一行：常用、或者「什么时候该用」
 	// 只写在描述里的工具（戳一戳、群管），压短了模型就不会想到去加载。
 	FeaturedTools []string
@@ -175,10 +179,6 @@ type Request struct {
 	// 按 Messages 重新组装，而是在上一轮实际发出的请求后面接着发，见 continuation.go。
 	// 对不上就照常用 Messages。
 	Continuation *Continuation
-	// TailReminder 不为空时，每一步请求都在最后接上这一条，只给那一步看：不进 Messages，
-	// 也不进 Response.Transcript（下一轮的前缀）。离生成最近的说明 swe-2 才照做，放进前缀
-	// 一次或系统头部基本不管用，见 assistant 的 replyTailReminder。
-	TailReminder string
 }
 
 // Continuation 是「只追加」续接上一轮所需的东西：上一轮 Response.Transcript、本轮
@@ -187,10 +187,6 @@ type Continuation struct {
 	Prefix []llm.Message
 	Append []llm.Message
 	Key    string
-	// Definitions 是会话第一次组装时的工具定义。非空表示头部按哈希锁定：Runner 不再拿
-	// 本轮渲染出的系统提示、固定说明和工具定义去比 Key，前缀和这份定义原样复用，
-	// 本轮渲染出来的头部就算变了也不用，等调用方因为别的原因重新组装时再换。
-	Definitions []llm.ToolDefinition
 }
 
 type Response struct {
@@ -209,17 +205,13 @@ type Response struct {
 	Silent bool `json:"silent,omitempty"`
 	// SilentReason 是静默的来由，只用于事件记录和日志，不发给用户。
 	SilentReason string `json:"silent_reason,omitempty"`
-	// Transcript 是下一轮续接的前缀：这一轮第一步请求里不是「只用于本轮」的消息，接上
-	// 机器人这一轮实际发出的每句话（send 调用加「已发送」）。一轮里的工具调用和结果
-	// 不在里面。下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
+	// Transcript 是这一轮最后一次实际发给模型的请求，接上模型的回复和收尾调用的结果。
+	// 下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
 	Transcript []llm.Message `json:"-"`
 	// ConversationKey 是本轮系统提示、契约和工具定义的指纹，续接时用来核对。
 	ConversationKey string `json:"-"`
 	// Continued 表示这一轮是在上一轮的请求后面续接的。
 	Continued bool `json:"continued,omitempty"`
-	// Definitions 是这个会话头部的工具定义（不含本轮途中因排了生图任务而改的收尾
-	// 定义），调用方存下来，下一轮续接时放进 Continuation.Definitions 锁定头部。
-	Definitions []llm.ToolDefinition `json:"-"`
 	// PromptTokens 是这一轮第一次请求的消息估算 token 数，含 Runner 自己加的系统
 	// 提示、已加载契约和尾部工具段。调用方只看得到自己组装的那部分，续接时拿它
 	// 判断请求比完整组装长了多少。
@@ -304,6 +296,9 @@ func (cfg Config) WithDefaults() Config {
 	}
 	if cfg.SkillTriggerScanDepth <= 0 {
 		cfg.SkillTriggerScanDepth = DefaultSkillTriggerScanDepth
+	}
+	if cfg.SkillsListBudget <= 0 {
+		cfg.SkillsListBudget = DefaultSkillsListBudget
 	}
 	if cfg.MCPStartupTimeoutMS <= 0 {
 		cfg.MCPStartupTimeoutMS = DefaultMCPStartupTimeoutMS

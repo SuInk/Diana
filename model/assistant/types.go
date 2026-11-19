@@ -321,9 +321,6 @@ type MessageEvent struct {
 	replyHistory        []MessageEvent
 	replyHistoryLoaded  bool
 	crossGroupContext   bool
-	// quotedInWindow 表示这条消息引用的那条也在这一份历史窗口里，渲染时不再展开被引用的
-	// 原文（见 historyQuotedText）。
-	quotedInWindow bool
 	// crossGroupAgeSeconds 是这条跨群参考比当前消息早多少秒，渲染成「约N小时前」。
 	crossGroupAgeSeconds int64
 	// crossGroupLoaded 表示这一轮的跨群参考已经检索过（可能一条都没有），别再查一次。
@@ -919,10 +916,7 @@ type BotConfig struct {
 	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
 	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
 	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	// ContextBlockModes 按块设主回复要不要带：always（默认）、on_demand（不带，头部提示用
-	// 工具查）、off。键和规则见 context_block_modes.go。
-	ContextBlockModes         map[string]string `json:"context_block_modes,omitempty"`
-	LLMIdentityMaskingEnabled *bool             `json:"llm_identity_masking_enabled,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
 	// LLMIdentityBodyAccounts 让隐私代理连正文里直接写的账号数字一起换成别名：只换
 	// 核实过是本群成员的号，其余数字原样保留。隐私代理关掉时它不起作用。
 	LLMIdentityBodyAccounts *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
@@ -956,10 +950,19 @@ type BotConfig struct {
 	Timezone string `json:"timezone,omitempty"`
 
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
-	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
-	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
+	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens int64 `json:"max_context_tokens,omitempty"`
+	// RecentHistoryTokenBudget 限定正式回复提示词里近期聊天历史最多占多少 token。
+	// 0 表示用默认值 16000；可以往上调，但最多到 MaximumRecentHistoryTokenBudget，
+	// 生效值还要再按窗口份额收一次。
+	//
+	// 这里用 token 而不是条数：要钉住的成本、窗口和延迟三样都按 token 计价，而一条
+	// 群消息可能是十几 token 的表情占位，也可能是三千 token 的长粘贴——按条数配，
+	// 实际开销会在一个数量级的区间里飘。RecentContextLimit 仍按条数配，因为它管的
+	// 是路由、指代和记忆门控这些「往回数 N 条」的旁路，那里条数才是对的单位。
+	RecentHistoryTokenBudget int64 `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit       int   `json:"recent_context_limit,omitempty"`
 	// HistoryBackfillMessageLimit 是断线回补后每个会话最多进回复流程的消息条数，
 	// 只算会触发回复的消息。没排上名额的照样补进上下文历史，但不跑媒体处理和回复——
 	// 保持它小，防的是一批积压消息同时开出一堆图片视频任务。
@@ -1419,6 +1422,8 @@ type GroupConfig struct {
 	// VideoGenerationDailyGroupLimit 是这个群每天能生成视频的次数，三态同上。
 	VideoGenerationDailyGroupLimit *int64 `json:"video_generation_daily_group_limit,omitempty"`
 	MaxContextTokens               int64  `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget       int64  `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit             int    `json:"recent_context_limit,omitempty"`
 	MaxReplyChars                  int    `json:"max_reply_chars,omitempty"`
 	// 分条和合并转发的四个阈值加一个开关。群和群的说话节奏不一样：一个技术群
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
@@ -1663,18 +1668,18 @@ type ConfigPayload struct {
 	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
 	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
 	// 显式 false 保留用户选择，未配置时使用默认值。
-	LLMStreamingEnabled          *bool             `json:"llm_streaming_enabled,omitempty"`
-	RecallReplyAutoDeleteEnabled *bool             `json:"recall_reply_auto_delete_enabled,omitempty"`
-	RecallReplyTTLSeconds        int               `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
-	ContextBlockModes            map[string]string `json:"context_block_modes,omitempty"`
-	LLMIdentityMaskingEnabled    *bool             `json:"llm_identity_masking_enabled,omitempty"`
-	LLMIdentityBodyAccounts      *bool             `json:"llm_identity_body_account_mapping_enabled,omitempty"`
-	LLMSecretMaskingEnabled      *bool             `json:"llm_secret_masking_enabled,omitempty"`
+	LLMStreamingEnabled          *bool `json:"llm_streaming_enabled,omitempty"`
+	RecallReplyAutoDeleteEnabled *bool `json:"recall_reply_auto_delete_enabled,omitempty"`
+	RecallReplyTTLSeconds        int   `json:"recall_reply_auto_delete_delay_seconds,omitempty"`
+	LLMIdentityMaskingEnabled    *bool `json:"llm_identity_masking_enabled,omitempty"`
+	LLMIdentityBodyAccounts      *bool `json:"llm_identity_body_account_mapping_enabled,omitempty"`
+	LLMSecretMaskingEnabled      *bool `json:"llm_secret_masking_enabled,omitempty"`
 	// MaxContextTokens 限定这个机器人单次请求最多用掉多少上下文 token。
-	// 0 表示跟随模型窗口，读取一律走 requestContextLimit()。它只能收紧不能放宽：
-	// 配置档说模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。请求估算超过
-	// 「它 − 16384」时压缩一次较早的历史（见 context_compaction.go）。
+	// 0 表示不额外限制，跟随提供商配置档的窗口。它只能收紧不能放宽：配置档说
+	// 模型只有 32K，这里填 200K 也不会真的发出 200K 的请求。
 	MaxContextTokens                int64                     `json:"max_context_tokens,omitempty"`
+	RecentHistoryTokenBudget        int64                     `json:"recent_history_token_budget,omitempty"`
+	RecentContextLimit              int                       `json:"recent_context_limit,omitempty"`
 	HistoryBackfillMessageLimit     int                       `json:"history_backfill_message_limit,omitempty"`
 	ContextSummaryThreshold         int                       `json:"context_summary_threshold,omitempty"`
 	CrossGroupMemoryEnabled         *bool                     `json:"cross_group_memory_enabled,omitempty"`
@@ -1848,6 +1853,8 @@ func (cfg GroupConfig) clearInheritedSnapshots(base BotConfig) GroupConfig {
 	}
 	clearInt(&cfg.WelcomeLLMCooldownSeconds, func(c BotConfig) int { return c.WelcomeLLMCooldownSeconds })
 	clearInt64(&cfg.MaxContextTokens, func(c BotConfig) int64 { return c.MaxContextTokens })
+	clearInt64(&cfg.RecentHistoryTokenBudget, func(c BotConfig) int64 { return c.RecentHistoryTokenBudget })
+	clearInt(&cfg.RecentContextLimit, func(c BotConfig) int { return c.RecentContextLimit })
 	clearInt(&cfg.MaxReplyChars, func(c BotConfig) int { return c.MaxReplyChars })
 	clearInt(&cfg.ReplyMaxBubbles, func(c BotConfig) int { return c.ReplyMaxBubbles })
 	clearInt(&cfg.DirectReplyChunkSize, func(c BotConfig) int { return c.DirectReplyChunkSize })
@@ -1936,6 +1943,8 @@ func (cfg GroupConfig) WithDefaults(groupID string, base BotConfig) GroupConfig 
 	cfg.WelcomeEnabled = copyBoolPointer(cfg.WelcomeEnabled)
 	cfg.WelcomeLLMCooldownSeconds = max(0, cfg.WelcomeLLMCooldownSeconds)
 	cfg.MaxContextTokens = max(0, cfg.MaxContextTokens)
+	cfg.RecentHistoryTokenBudget = max(0, cfg.RecentHistoryTokenBudget)
+	cfg.RecentContextLimit = max(0, cfg.RecentContextLimit)
 	cfg.MaxReplyChars = max(0, cfg.MaxReplyChars)
 	cfg.ReplyMaxBubbles = max(0, cfg.ReplyMaxBubbles)
 	cfg.DirectReplyChunkSize = max(0, cfg.DirectReplyChunkSize)
@@ -2349,9 +2358,11 @@ func DefaultBotConfig() BotConfig {
 		TelegramSuppressBotMessages:  boolPointer(true),
 		QQTypingEnabled:              boolPointer(true),
 		NotebookSharedScopeEnabled:   boolPointer(true),
+		RecentHistoryTokenBudget:     DefaultRecentHistoryTokenBudget,
 		// 40 而不是 20：这个上限只管路由、指代消解和记忆门控这些旁路的回看深度，
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
+		RecentContextLimit:          40,
 		HistoryBackfillMessageLimit: 3,
 		ContextSummaryThreshold:     100,
 		CrossGroupMemoryEnabled:     boolPointer(false),
@@ -2608,6 +2619,12 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.MaxContextTokens < 0 {
 		cfg.MaxContextTokens = 0
 	}
+	if cfg.RecentHistoryTokenBudget < 0 {
+		cfg.RecentHistoryTokenBudget = 0
+	}
+	if cfg.RecentContextLimit < 0 {
+		cfg.RecentContextLimit = defaults.RecentContextLimit
+	}
 	if cfg.HistoryBackfillMessageLimit <= 0 {
 		cfg.HistoryBackfillMessageLimit = defaults.HistoryBackfillMessageLimit
 	}
@@ -2617,7 +2634,7 @@ func (cfg BotConfig) WithDefaults() BotConfig {
 	if cfg.ContextSummaryThreshold <= 0 {
 		cfg.ContextSummaryThreshold = defaults.ContextSummaryThreshold
 	}
-	cfg.ContextSummaryThreshold = contextSummaryTriggerThreshold(sideHistoryLookback, cfg.ContextSummaryThreshold)
+	cfg.ContextSummaryThreshold = contextSummaryTriggerThreshold(cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	if cfg.CrossGroupMemoryEnabled == nil {
 		cfg.CrossGroupMemoryEnabled = boolPointer(false)
 	}
@@ -3018,11 +3035,12 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		LLMStreamingEnabled:             copyBoolPointer(cfg.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(cfg.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           cfg.RecallReplyTTLSeconds,
-		ContextBlockModes:               normalizeContextBlockModes(cfg.ContextBlockModes),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(cfg.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(cfg.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(cfg.LLMSecretMaskingEnabled),
 		MaxContextTokens:                cfg.MaxContextTokens,
+		RecentHistoryTokenBudget:        cfg.RecentHistoryTokenBudget,
+		RecentContextLimit:              cfg.RecentContextLimit,
 		HistoryBackfillMessageLimit:     cfg.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         cfg.ContextSummaryThreshold,
 		CrossGroupMemoryEnabled:         copyBoolPointer(cfg.CrossGroupMemoryEnabled),
@@ -3278,11 +3296,12 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		LLMStreamingEnabled:             copyBoolPointer(payload.LLMStreamingEnabled),
 		RecallReplyAutoDeleteEnabled:    copyBoolPointer(payload.RecallReplyAutoDeleteEnabled),
 		RecallReplyTTLSeconds:           payload.RecallReplyTTLSeconds,
-		ContextBlockModes:               normalizeContextBlockModes(payload.ContextBlockModes),
 		LLMIdentityMaskingEnabled:       copyBoolPointer(payload.LLMIdentityMaskingEnabled),
 		LLMIdentityBodyAccounts:         copyBoolPointer(payload.LLMIdentityBodyAccounts),
 		LLMSecretMaskingEnabled:         copyBoolPointer(payload.LLMSecretMaskingEnabled),
 		MaxContextTokens:                payload.MaxContextTokens,
+		RecentHistoryTokenBudget:        payload.RecentHistoryTokenBudget,
+		RecentContextLimit:              payload.RecentContextLimit,
 		HistoryBackfillMessageLimit:     payload.HistoryBackfillMessageLimit,
 		ContextSummaryThreshold:         payload.ContextSummaryThreshold,
 		CrossGroupMemoryEnabled:         copyBoolPointer(payload.CrossGroupMemoryEnabled),
@@ -3523,7 +3542,7 @@ const (
 	defaultPromptWakeOnly            = "对方只是叫了你一声（@ 你或者喊了你的名字），没说别的。这不是在问你在不在——别回「我在」「在呢」「怎么了」这类应答，那是接线员不是熟人。先看前面几条在聊什么：话没说完就接着说，刚才在闹就继续闹，对方像是要你注意某件事就说那件事。实在没有上文可接，就说一句有内容的短话——一句吐槽、一个反应、一个具体的问题都行，别只报到。不要复述这条规则，也不要解释自己为什么被叫。"
 )
 
-const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合要回复的那条消息覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
+const defaultProactiveReplyPrompt = "本次回复已通过语义相关性与可回答性判断：只回应路由器选中的当前一轮。若存在【当前同轮补充消息】，必须结合【当前需要回复的消息】覆盖这一轮里的全部实质问题、要求和约束；最终给出一轮简洁完整的回答，需要分条时可以使用 " + notificationSplitMarker + "，不要遗漏前面补发的内容。不要回答轮外历史，不要总结全局上下文，不要解释来龙去脉。"
 
 const (
 	defaultProactiveReplyChance    = 1.0

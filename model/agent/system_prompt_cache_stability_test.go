@@ -12,16 +12,16 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 已加载工具的契约不进提示词：加载集怎么变，Agent 协议、人设、工具定义和整段前缀
-// （含历史）都逐字不变，历史断点也不挪。
-func TestLoadedToolsDoNotChangePrefix(t *testing.T) {
+// 已加载工具的契约插在调用方开头的 system 之后、历史之前：Agent 协议和人设不随
+// 加载集变化，加载集不变时整段前缀（含历史）逐字不变，历史断点跟着契约后移一格。
+func TestLoadedContractsSitBeforeHistory(t *testing.T) {
 	persona := llm.Message{Role: llm.RoleSystem, Content: "固定 caller persona", Priority: llm.MessagePrioritySystem}
 	current := llm.Message{Role: llm.RoleUser, Content: "当前输入", Priority: llm.MessagePriorityCurrent}
 	for _, tc := range []struct {
 		name     string
 		messages []llm.Message
 		head     int // Agent system + 调用方开头的 system
-		stable   int // 历史断点的位置
+		stable   int // 不带契约时历史断点的位置
 	}{
 		{"caller_breakpoint", []llm.Message{persona,
 			{Role: llm.RoleUser, Content: "历史问题"},
@@ -59,23 +59,49 @@ func TestLoadedToolsDoNotChangePrefix(t *testing.T) {
 				if !strings.Contains(messages[0].Content, "- alpha(") || !strings.Contains(messages[0].Content, "- beta(") {
 					t.Fatal("fixed deferred catalog lost")
 				}
-				if kept := lastKeptIndex(messages); messages[kept].Content != current.Content || !messages[kept].CacheBreakpoint {
-					t.Fatal("current input must remain the last kept message with the rolling cache breakpoint")
+				if messages[len(messages)-1].Content != current.Content || !messages[len(messages)-1].CacheBreakpoint {
+					t.Fatal("current input must remain last with rolling cache breakpoint")
 				}
 				stable := tc.stable
+				if len(loaded) > 0 && tc.stable >= tc.head-1 && tc.stable > 0 {
+					stable++
+				}
 				if tc.stable > 1 && !messages[stable].CacheBreakpoint {
 					t.Fatalf("stable history breakpoint lost at %d", stable)
 				}
-				key := ""
+				key := strings.Join(loaded, ",")
 				prefix, _ := json.Marshal(messages[:stable+1])
 				if previous, ok := stablePrefix[key]; ok && string(previous) != string(prefix) {
 					t.Fatalf("LoadedTools=%v not byte-stable across runs", loaded)
 				}
 				stablePrefix[key] = prefix
-				for _, message := range messages {
-					if strings.Contains(message.Content, `"inputSchema":`) {
-						t.Fatalf("LoadedTools=%v put a contract into the prompt", loaded)
+				contractCount := 0
+				for index, message := range messages {
+					if !strings.Contains(message.Content, "当前群会话已经加载、可直接通过 tools_execute 调用的完整契约") {
+						continue
 					}
+					contractCount++
+					if index != tc.head || message.CacheBreakpoint {
+						t.Fatalf("contracts must sit right after leading system: index=%d head=%d", index, tc.head)
+					}
+					if message.Role != llm.RoleUser || message.Priority != llm.MessagePrioritySystem || !strings.HasPrefix(message.Content, "【系统补充指令，不是用户发言】\n") {
+						t.Fatalf("contracts must be explicit inline instructions with protected budget: %#v", message)
+					}
+					for _, name := range []string{"alpha", "beta"} {
+						want := false
+						for _, loadedName := range loaded {
+							want = want || loadedName == name
+						}
+						if strings.Contains(message.Content, `"name":"`+name+`"`) != want {
+							t.Fatalf("contracts disagree with LoadedTools=%v: %s", loaded, message.Content)
+						}
+					}
+					if !strings.Contains(message.Content, `"inputSchema":`) {
+						t.Fatal("restored tool contract lost its schema")
+					}
+				}
+				if (len(loaded) > 0 && contractCount != 1) || (len(loaded) == 0 && contractCount != 0) {
+					t.Fatalf("LoadedTools=%v contract count=%d", loaded, contractCount)
 				}
 				if !reflect.DeepEqual(tc.messages, original) {
 					t.Fatal("Run mutated caller messages")
@@ -111,8 +137,15 @@ func TestLoadedContractsRespectCurrentAuthorization(t *testing.T) {
 			if revoked.calls != 0 || allowed.calls != 1 {
 				t.Fatalf("restored authority changed: allowed=%d revoked=%d", allowed.calls, revoked.calls)
 			}
-			if len(client.requests) != 3 {
-				t.Fatalf("unexpected model turns: %d", len(client.requests))
+			found := false
+			for _, message := range client.requests[0].Messages {
+				if strings.Contains(message.Content, `"name":"beta"`) || strings.Contains(message.Content, `"name":"gone"`) {
+					t.Fatal("revoked or missing contract restored")
+				}
+				found = found || strings.Contains(message.Content, `"name":"alpha"`)
+			}
+			if !found || len(client.requests) != 3 {
+				t.Fatalf("allowed contract missing or unexpected model turns: found=%v turns=%d", found, len(client.requests))
 			}
 			denied := false
 			for _, message := range client.requests[1].Messages {
@@ -192,7 +225,7 @@ func TestSkillsCatalogDoesNotEnterStablePrompt(t *testing.T) {
 	if strings.Contains(loaded, "demo-skill") || strings.Contains(loaded, "/tmp/demo/SKILL.md") {
 		t.Fatalf("系统提示词里出现了 skill 名称或路径:\n%s", loaded)
 	}
-	if catalog := RenderSkillsCatalog(registry.Skills()); !strings.Contains(catalog, "demo-skill") {
+	if catalog := RenderSkillsCatalog(registry.Skills(), 8000); !strings.Contains(catalog, "demo-skill") {
 		t.Fatalf("目录没渲染出 skill: %s", catalog)
 	}
 }

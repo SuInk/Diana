@@ -169,7 +169,7 @@ func TestLiveRenderDeliveryIntent(t *testing.T) {
 			resp, err := runner.Run(ctx, agent.Request{Messages: []llm.Message{
 				{Role: llm.RoleSystem, Content: prompt},
 				{Role: llm.RoleUser, Content: "【历史背景】" + tc.history},
-				{Role: llm.RoleUser, Content: "[2026-11-15 10:00:00] 甲（10001）: " + tc.request},
+				{Role: llm.RoleUser, Content: "【当前需要回复的消息】" + tc.request},
 			}})
 			if err != nil {
 				t.Fatal(err)

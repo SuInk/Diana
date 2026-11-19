@@ -12,33 +12,23 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 【输出前检查】每步贴在请求最后（agent.Request.TailReminder），不重复头部已有的括号用法；
-// 群聊才带篇幅规则。钩子在没执行过工具时什么都不加，请求原样发出。
-func TestReplyTailReminderCarriesChecks(t *testing.T) {
-	group := MessageEvent{Kind: EventKindGroup}
+func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
 	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
 		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
-		check := replyTailReminder(cfg, group)
-		if !strings.HasPrefix(check, "【输出前检查】\n") || strings.Count(check, rule) != 1 {
-			t.Fatalf("output check = %q", check)
-		}
-		for _, want := range []string{replyVerifyRule, promptNoteGroupBrevitySpec.Default, promptReplyNoEchoSpec.Default, promptReplyUnknownReferenceSpec.Default, promptReplyClaimedLookupSpec.Default, promptReplyArithmeticSpec.Default} {
-			if strings.Count(check, want) != 1 {
-				t.Fatalf("output check must carry %.20q once: %q", want, check)
-			}
-		}
+		hooks := newReplyRunHooks(cfg)
 		req := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "old context", CacheBreakpoint: true},
 			{Role: llm.RoleUser, Content: "current"},
 		}}
-		got, err := newReplyRunHooks().PrepareRequest(context.Background(), req)
-		if err != nil || len(got.Messages) != 2 || got.Messages[1].Content != "current" {
-			t.Fatalf("hooks must leave a request without tool calls untouched: %+v err=%v", got, err)
+		for i := 0; i < 2; i++ {
+			got, err := hooks.PrepareRequest(context.Background(), req)
+			if err != nil || len(got.Messages) != 4 || strings.Count(got.Messages[3].Content, rule) != 1 {
+				t.Fatalf("expression reminder missing or duplicated: %+v err=%v", got, err)
+			}
+			if len(req.Messages) != 2 || got.Messages[2].Content != "current" || !got.Messages[0].CacheBreakpoint {
+				t.Fatal("expression reminder changed history, current input or cache prefix")
+			}
 		}
-	}
-	private := replyTailReminder(BotConfig{}, MessageEvent{Kind: EventKindPrivate})
-	if strings.Contains(private, promptNoteGroupBrevitySpec.Default) || !strings.Contains(private, promptReplyNoEchoSpec.Default) {
-		t.Fatalf("private output check = %q", private)
 	}
 }
 
@@ -46,9 +36,8 @@ func TestReplyRunHooksUseActualExecutionAndKeepPrivateInputsOut(t *testing.T) {
 	hooks := newReplyRunHooks()
 	ctx := context.Background()
 	request := llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: "stable", CacheBreakpoint: true}, {Role: llm.RoleUser, Content: "current"}}}
-	// 还没执行过工具时不加回执：第一步插在当前消息前面的话，第二步当前消息起全要重发。
 	first, err := hooks.PrepareRequest(ctx, request)
-	if err != nil || len(first.Messages) != 2 || first.Messages[1].Content != "current" {
+	if err != nil || !strings.Contains(first.Messages[1].Content, `"total":0`) {
 		t.Fatalf("request=%+v err=%v", first, err)
 	}
 	hooks.AfterToolCall(ctx, agent.Step{Tool: "chat_history", Input: map[string]any{"scope": "current", "group_id": "group-1", "token": "secret", "query": "private question"}, Error: "denied", Skipped: true})
@@ -67,14 +56,9 @@ func TestReplyRunHooksUseActualExecutionAndKeepPrivateInputsOut(t *testing.T) {
 		hooks.AfterToolCall(ctx, agent.Step{Tool: "lookup"})
 	}
 	bounded, _ := hooks.PrepareRequest(ctx, request)
-	// 附注发出去就留在对话里，下一次只写新执行的：这 20 条里列最后 12 条，前面的已经写过。
-	if note := bounded.Messages[1].Content; !strings.Contains(note, `"total":21`) || !strings.Contains(note, `"omitted":8`) || strings.Contains(note, "chat_history") {
-		t.Fatalf("execution note must list only the new, bounded records: %s", note)
+	if !strings.Contains(bounded.Messages[1].Content, `"omitted":9`) {
+		t.Fatal("unbounded execution context")
 	}
-	if again, _ := hooks.PrepareRequest(ctx, request); len(again.Messages) != 2 {
-		t.Fatal("nothing new ran: no second note")
-	}
-	hooks.AfterToolCall(ctx, agent.Step{Tool: "lookup"})
 	batch := llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "one", Name: "lookup"}, {ID: "two", Name: "lookup"}}},
 		{Role: llm.RoleTool, ToolCallID: "one"},

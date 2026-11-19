@@ -589,7 +589,7 @@ func (r *Runtime) replyInLocalRoom(ctx context.Context, room LocalRoom, member s
 	ctx = withWebChatSink(ctx, sink)
 	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withDebugTraceContext(ctx, event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).requestContextLimit())
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	if event.ToMe {
 		r.noteDirectedInbound(event)
 	}

@@ -817,7 +817,7 @@ func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *ag
 			ID:          state.ID,
 			Kind:        kind,
 			Name:        state.Name,
-			Description: agent.CompactToolDescription(state.Description, agent.ResidencyListDescriptionRunes),
+			Description: agent.CompactToolDescription(state.Description, agent.SystemPromptToolDescriptionBudget),
 			Detail:      strings.TrimSpace(state.Description),
 			Tools:       tools,
 		}
@@ -837,7 +837,7 @@ func (r *Runtime) rememberAgentResidencyCatalog(event MessageEvent, registry *ag
 		}
 		entry := AgentResidencyEntry{ID: agent.ToolResidentID(name), Kind: "tool", Name: name, Parent: owner[name]}
 		if tool, ok := registry.Get(name); ok {
-			entry.Description = agent.CompactToolDescription(tool.Description(), agent.ResidencyListDescriptionRunes)
+			entry.Description = agent.CompactToolDescription(tool.Description(), agent.SystemPromptToolDescriptionBudget)
 			entry.Detail = strings.Join(strings.Fields(tool.Description()), " ")
 			entry.ResidentTokens, entry.DeferredTokens = agent.ResidencyCost(tool)
 		}

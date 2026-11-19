@@ -8,6 +8,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 // 自述：机器人自己记下的「我是什么样的」。
@@ -36,6 +38,13 @@ const (
 	// MaximumActiveSelfNotes 限制在册条数。撞上限时写入直接报错，让模型去改
 	// 已有的那条，而不是静默淘汰最旧的一条——最旧的往往正是最根本的那条。
 	MaximumActiveSelfNotes = 24
+	// selfNoteTokenCeiling 是这一层的绝对 token 上限。算法：开头的标注约 160
+	// token，一条典型自述（二十来个字）约 25 token，24 条装得下还有余量。
+	//
+	// 它不按「24 条 × 120 字」的极端值给（那要 2900 token，一层常驻上下文吃掉这么多
+	// 不值）：真撞上限时尾部几条不注入，账记在 contextLayerUsage 的 layer_budget 上。
+	// 长期顶满说明该写短点，而不是该调大。
+	selfNoteTokenCeiling int64 = 1200
 	// selfNoteLoadTimeout 是加载超时。查不到就当没有自述，绝不拖回复。
 	selfNoteLoadTimeout = 2 * time.Second
 )
@@ -177,29 +186,62 @@ func NormalizeSelfNoteContent(raw string) string {
 	return truncateRunesPlain(content, SelfNoteContentMaxRunes)
 }
 
-// selfNoteContext 渲染本轮要注入的自述段落。
+// selfNoteContext 渲染本轮要注入的自述段落，并给出这一层的自有账。
 //
 // 它不参加相关性检索：自我认知和「这条消息在聊什么」无关，每轮都注入，和常驻
-// 核心记忆同一个性质。所有生效的自述全部写出，不按配额截断。
-func (r *Runtime) selfNoteContext(ctx context.Context, event MessageEvent) string {
+// 核心记忆同一个性质。
+func (r *Runtime) selfNoteContext(ctx context.Context, event MessageEvent) (string, contextLayerUsage) {
 	if !r.selfNoteEnabled(event) {
-		return ""
+		return "", contextLayerUsage{}
 	}
 	store := r.selfNoteStore()
 	loadCtx, cancel := context.WithTimeout(ctx, selfNoteLoadTimeout)
 	defer cancel()
 	notes, err := store.ListSelfNotes(loadCtx, strings.TrimSpace(event.ProfileID), false, MaximumActiveSelfNotes)
 	if err != nil || len(notes) == 0 {
-		return ""
+		return "", contextLayerUsage{}
 	}
-	return formatSelfNoteContext(notes)
+	cfg := r.effectiveConfigForEvent(event)
+	budget := selfNoteBudget(r.promptContextWindowTokens(event, cfg))
+	return formatSelfNoteContext(notes, budget)
 }
 
-func formatSelfNoteContext(notes []SelfNote) string {
+// formatSelfNoteContext 按预算拼出段落。预算小到一条都装不下时不注入光杆开头。
+func formatSelfNoteContext(notes []SelfNote, budget int64) (string, contextLayerUsage) {
+	usage := contextLayerUsage{
+		Layer:          "self_notes",
+		Budget:         budget,
+		CandidateItems: len(notes),
+		RankedItems:    len(notes),
+		Reason:         contextLayerReasonFits,
+	}
+	lines := make([]string, 0, len(notes))
+	for _, note := range notes {
+		line := "- " + NormalizeSelfNoteTopic(note.Topic) + "：" + strings.TrimSpace(note.Content)
+		lines = append(lines, line)
+		usage.CandidateTokens += llm.EstimateTextTokens(line)
+	}
+	usage.RankedTokens = usage.CandidateTokens
 	var builder strings.Builder
 	builder.WriteString(selfNoteContextPrefix)
-	for _, note := range notes {
-		builder.WriteString("- " + NormalizeSelfNoteTopic(note.Topic) + "：" + strings.TrimSpace(note.Content) + "\n")
+	written := 0
+	for _, line := range lines {
+		if llm.EstimateTextTokens(builder.String()+line) > budget {
+			usage.Reason = contextLayerReasonBudget
+			break
+		}
+		builder.WriteString(line)
+		builder.WriteString("\n")
+		written++
 	}
-	return strings.TrimRight(builder.String(), "\n")
+	if written == 0 {
+		usage.Reason = contextLayerReasonBudget
+		return "", usage
+	}
+	block := strings.TrimRight(builder.String(), "\n")
+	usage.SelectedItems = written
+	for _, line := range lines[:written] {
+		usage.SelectedTokens += llm.EstimateTextTokens(line)
+	}
+	return block, usage
 }

@@ -319,7 +319,7 @@ func (r *Runtime) replyAsOwner(ctx context.Context, event MessageEvent, text str
 	ctx = withWebChatSink(ctx, sink)
 	ctx = withLLMUsageContext(ctx, event)
 	ctx = r.withDebugTraceContext(ctx, event)
-	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).requestContextLimit())
+	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	r.noteDirectedInbound(event)
 	r.noteSenderTurnArrival(event)
 	prepared, routedText, handled, outcome := r.prepareMessageEvent(ctx, event)

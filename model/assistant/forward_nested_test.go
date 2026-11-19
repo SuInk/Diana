@@ -194,50 +194,26 @@ func TestRuntimeStopsOnCyclicForwardReferences(t *testing.T) {
 	}
 }
 
-// 深层嵌套一路展到底：不设层数和次数上限，最深一层的内容也要带给模型。
-func TestRuntimeExpandsDeeplyNestedForwardsCompletely(t *testing.T) {
+// 深层嵌套要在上限处停住，不能让一条消息触发无限多次 OneBot 调用。
+func TestRuntimeLimitsNestedForwardDepth(t *testing.T) {
 	responses := map[string]map[string]any{}
-	const depthCount = 12
-	for depth := range depthCount {
+	for depth := range 10 {
 		id := fmt.Sprintf("forward-%d", depth)
 		next := fmt.Sprintf("forward-%d", depth+1)
 		responses[id] = map[string]any{"messages": []any{forwardRefNode("甲", next, "[聊天记录]")}}
 	}
-	responses[fmt.Sprintf("forward-%d", depthCount)] = map[string]any{"messages": []any{textNode("乙", "最深一层的正文")}}
 	channel := &forwardChannel{responses: responses}
 	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
 
-	got := runtime.enrichForwardMessages(context.Background(), MessageEvent{
+	runtime.enrichForwardMessages(context.Background(), MessageEvent{
 		Kind:     EventKindGroup,
 		GroupID:  "123",
 		UserID:   "10001",
 		Segments: []MessageSegment{{Type: "forward", Data: map[string]string{"id": "forward-0"}}},
 	})
 
-	if requested := channel.requestedIDs(); len(requested) != depthCount+1 {
-		t.Fatalf("展开次数 = %d，期望 %d：%#v", len(requested), depthCount+1, requested)
-	}
-	if !strings.Contains(got.RawMessage, "最深一层的正文") {
-		t.Fatalf("最深一层内容丢失：%q", got.RawMessage)
-	}
-}
-
-// 合并转发正文再长也整段带上，不截字。
-func TestRuntimeKeepsLongForwardTextWhole(t *testing.T) {
-	long := strings.Repeat("很长的转发正文。", 1500)
-	channel := &forwardChannel{responses: map[string]map[string]any{
-		"forward-long": {"messages": []any{textNode("甲", long)}},
-	}}
-	runtime := NewRuntime(BotConfig{}, channel, NewPluginManager(), nil, nil, nil, nil)
-
-	got := runtime.enrichForwardMessages(context.Background(), MessageEvent{
-		Kind:     EventKindGroup,
-		GroupID:  "123",
-		UserID:   "10001",
-		Segments: []MessageSegment{{Type: "forward", Data: map[string]string{"id": "forward-long"}}},
-	})
-
-	if !strings.Contains(got.RawMessage, long) {
-		t.Fatalf("长转发被截短：len=%d", len([]rune(got.RawMessage)))
+	// 第 0 层是入口，往下最多再展 maxForwardExpandDepth 层。
+	if got := channel.requestedIDs(); len(got) != maxForwardExpandDepth+1 {
+		t.Fatalf("展开层数 = %d，期望 %d：%#v", len(got), maxForwardExpandDepth+1, got)
 	}
 }

@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -10,19 +11,94 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// requestContextLimit 返回机器人或群显式配置的单次请求上下文上限，0 表示跟随模型窗口。
-// 以前留空时落到 64K 的默认上限，再按各层份额切；现在照 Pi，窗口就是模型窗口，
-// 只在快满时压缩一次（见 context_compaction.go），不再预先限额。
-func (c BotConfig) requestContextLimit() int64 {
-	if c.MaxContextTokens <= 0 {
-		return 0
+const (
+	recentHistoryTokenShare       int64 = 55
+	longTermMemoryTokenShare      int64 = 10
+	compressedSummaryTokenShare   int64 = 15
+	coreMemoryTokenShare          int64 = 5
+	selfNoteTokenShare            int64 = 5
+	contextShareDenominator       int64 = 100
+	minimumHistoryCandidateTokens int64 = 16
+	minimumRecentHistoryTokens    int64 = 512
+	maximumHistoryCandidates            = 4096
+	recentHistoryPriorityTurns          = 3
+)
+
+// 纯百分比预算在大窗口下会失控：55% × 128K 等于每条群消息都注入 70K 历史。历史的
+// 价值曲线衰减极快，最近几百条几乎就是全部价值，再往前是白付 prefill 的钱和延迟，
+// 还会稀释注意力。所以每层在份额之外再加一个绝对上限，取两者较小值。
+//
+// 这些是上限不是下限：小窗口下份额本来就更小，仍按份额走，不会因为常量比窗口大
+// 而超发。
+const (
+	// DefaultRecentHistoryTokenBudget 是近期聊天历史的默认绝对上限，约合普通群聊
+	// 300–600 条。它按群聊场景估算，没有实测支撑，所以做成可配置而不是常量：
+	// 长期只用到一半说明虚高，长期顶满说明该调大。
+	DefaultRecentHistoryTokenBudget int64 = 16000
+	// MaximumRecentHistoryTokenBudget 是配置能放宽到的最高值。只有窗口份额兜底时，
+	// 在 128K 窗口里填上窗口大小会让每条群消息带进 70K、几百上千条、跨一个多月的
+	// 历史——生产上就这样把正式回复顶到了 10 万 token。再往上的历史价值已经可以
+	// 忽略，要更远的内容走摘要、记忆和聊天记录工具。
+	MaximumRecentHistoryTokenBudget int64 = 32000
+	// sessionThreadTokenCeiling 限制会话线程便签。它天然只有几百字，撞上限通常
+	// 说明模型把已完结话题囤在了 thread 里，而不是预算不够。
+	sessionThreadTokenCeiling int64 = 1200
+	// retrievedMemoryTokenCeiling 限制按相关性检索出来的长期记忆。配合 MMR 的 24
+	// 条上限，平均每条约 100 token。
+	retrievedMemoryTokenCeiling int64 = 2400
+	// coreMemoryTokenCeiling 限制常驻注入的核心记忆（长期交互要求和高置信要害
+	// 事实）。它不参加相关性排序，所以配额必须小而固定。
+	coreMemoryTokenCeiling int64 = 600
+	// 自述的绝对上限在 self_notes.go 里（selfNoteTokenCeiling）：条数上限和正文
+	// 长度上限都在那边，三个数一起改才对得上。
+)
+
+// contextLayerBudget 取「份额」和「绝对上限」中较小的那个。
+func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
+	budget := contextShareBudget(contextWindow, share)
+	if ceiling > 0 && budget > ceiling {
+		return ceiling
 	}
-	return max(c.MaxContextTokens, minimumRequestContextLimit)
+	return budget
 }
 
-// minimumRequestContextLimit 是总上下文上限能设的最小值。上限只设一个总数、不给各块
-// 单独限额；再小的话系统提示和工具说明就占满了，聊天历史放不进几句。
-const minimumRequestContextLimit = 32 * 1024
+// recentHistoryCeiling 返回近期历史的绝对上限：没填按默认值，填得再大也不超过
+// MaximumRecentHistoryTokenBudget。
+func recentHistoryCeiling(cfg BotConfig) int64 {
+	ceiling := cfg.RecentHistoryTokenBudget
+	if ceiling <= 0 {
+		ceiling = DefaultRecentHistoryTokenBudget
+	}
+	return min(ceiling, MaximumRecentHistoryTokenBudget)
+}
+
+// recentHistoryBudget 返回本轮近期历史的 token 预算。绝对上限之外还要再按窗口
+// 份额收一次，否则单群配置能绕过小窗口的保护。
+func recentHistoryBudget(contextWindow int64, cfg BotConfig) int64 {
+	return contextLayerBudget(contextWindow, recentHistoryTokenShare, recentHistoryCeiling(cfg))
+}
+
+// sessionThreadBudget 返回会话线程便签的 token 预算。
+func sessionThreadBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, compressedSummaryTokenShare, sessionThreadTokenCeiling)
+}
+
+// retrievedMemoryBudget 返回按相关性检索的长期记忆预算。
+func retrievedMemoryBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, longTermMemoryTokenShare, retrievedMemoryTokenCeiling)
+}
+
+// coreMemoryBudget 返回常驻核心记忆预算。它同时受 5% 份额约束，避免 8K 本地模型上
+// 两个固定项合起来把历史挤到墙角。
+func coreMemoryBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, coreMemoryTokenShare, coreMemoryTokenCeiling)
+}
+
+// selfNoteBudget 返回自述层的预算。它和核心记忆同级：都是每轮常驻、不参加相关性
+// 排序的固定项，所以份额必须小而固定。
+func selfNoteBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, selfNoteTokenShare, selfNoteTokenCeiling)
+}
 
 type historyContextTurn struct {
 	events       []MessageEvent
@@ -32,66 +108,21 @@ type historyContextTurn struct {
 	hasAssistant bool
 }
 
-// visiblePromptHistory 只留本群（或本会话）的历史，并去掉当前这条消息自己。
-func visiblePromptHistory(event MessageEvent, history []MessageEvent) []MessageEvent {
-	out := history[:0]
-	for _, item := range history {
-		if event.Kind == EventKindGroup && !samePromptGroupScope(event, item) {
-			continue
-		}
-		if strings.TrimSpace(event.MessageID) != "" && item.MessageID == event.MessageID {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
-}
-
-// promptContextHistory 返回这一轮要带上的会话历史：从锚（会话起点或上次压缩后
-// 第一条保留的消息）开始的全部历史，不按预算裁剪。体积由压缩控制，见
-// context_compaction.go。
+// promptContextHistory loads a token-derived candidate window, then keeps
+// complete recent turns from newest to oldest. RecentContextLimit remains
+// available to legacy history tools, but no longer defines the normal prompt.
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	window := r.promptCompactionWindow(event, cfg)
-	anchorKey := compactionAnchorKey(event)
-	if anchor := r.groupPromptSession(event).anchor(); anchor != "" {
-		r.setHistoryWindowAnchor(anchorKey, anchor)
+	fullBudget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
+	// 就着眼前这张图问一句时收紧历史：答案几乎全在图里，长历史是白付的 prefill。
+	budget := visionFocusedHistoryBudget(fullBudget, event, PlainText(event.Segments))
+	if event.Kind == EventKindGroup {
+		// A one-off image question must not replace a warm group prefix with a
+		// shorter window. The final provider budget still enforces image costs.
+		budget = fullBudget
 	}
-	anchor := r.historyWindowAnchor(anchorKey)
-	checkpoint := r.compactionState(event)
-
-	history := r.loadSessionHistory(event, window, func(history []MessageEvent) bool {
-		return historyCoversCheckpoint(history, anchor, checkpoint)
-	})
-	selected := r.sessionHistoryWindow(event, history, cfg.BotAccount, window)
-	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
-		return selected
-	}
-	// The session window covers this session only. Preserve the cross-group
-	// references already selected during routing instead of silently losing them.
-	var crossGroup []MessageEvent
-	if event.replyHistoryLoaded {
-		for _, item := range event.replyHistory {
-			if item.crossGroupContext {
-				crossGroup = append(crossGroup, item)
-			}
-		}
-	} else if store := r.currentMessageStore(); store != nil {
-		crossGroup = r.crossGroupContextEvents(event, store)
-	}
-	return mergeCrossGroupContextHistory(selected, crossGroup)
-}
-
-func (r *Runtime) currentMessageStore() MessageHistoryStore {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.messageStore
-}
-
-// loadSessionHistory 读这个会话的历史（内存缓冲合并存储）。covers 报告读到的够不够：
-// 不够就加倍往前读，直到够了或存储里已经没有更早的。机器人很久没说话、群里一直在聊
-// 时，锚之后的历史会多过按阈值换算的条数。
-func (r *Runtime) loadSessionHistory(event MessageEvent, window compactionWindow, covers func([]MessageEvent) bool) []MessageEvent {
+	candidateLimit := historyCandidateLimitForBudget(budget)
 	session := sessionKey(event)
+
 	r.mu.RLock()
 	memory := append([]MessageEvent(nil), r.history[session]...)
 	if event.Kind == EventKindGroup {
@@ -100,27 +131,148 @@ func (r *Runtime) loadSessionHistory(event MessageEvent, window compactionWindow
 		}
 	}
 	store := r.messageStore
+	summaryWatermark := r.contextSummaryWatermarkLocked(session)
 	r.mu.RUnlock()
-	for limit := historyCandidateLimit(window); ; limit *= 2 {
-		stored := []MessageEvent(nil)
-		if store != nil {
-			loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			var err error
-			stored, err = listContextMessageEvents(loadCtx, store, session, limit)
-			cancel()
-			if err != nil {
-				log.Printf("diana context history load failed: %v", err)
-			}
-		}
-		history := visiblePromptHistory(event, mergeMessageHistory(memory, stored, limit))
-		if store == nil || len(stored) < limit || covers(history) {
-			return history
+
+	stored := []MessageEvent(nil)
+	if store != nil {
+		loadCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		var err error
+		stored, err = listContextMessageEvents(loadCtx, store, session, candidateLimit)
+		cancel()
+		if err != nil {
+			log.Printf("diana token-budget history load failed: %v", err)
 		}
 	}
+	history := mergeMessageHistory(memory, stored, candidateLimit)
+	if event.Kind == EventKindGroup {
+		visible := history[:0]
+		for _, item := range history {
+			if samePromptGroupScope(event, item) {
+				visible = append(visible, item)
+			}
+		}
+		history = visible
+	} else {
+		history = dropSummarizedHistory(history, memory, summaryWatermark)
+	}
+	if strings.TrimSpace(event.MessageID) != "" {
+		filtered := history[:0]
+		for _, item := range history {
+			if item.MessageID != event.MessageID {
+				filtered = append(filtered, item)
+			}
+		}
+		history = filtered
+	}
+	anchorKey := session
+	promptSession := r.groupPromptSession(event)
+	if promptSession != nil {
+		anchorKey = groupPromptSessionKey(event)
+		if anchor := promptSession.anchor(); anchor != "" {
+			r.setHistoryWindowAnchor(anchorKey, anchor)
+		}
+	}
+	selected := r.anchoredHistoryWindow(anchorKey, history, event, cfg.BotAccount, fullBudget, budget)
+	promptSession.rememberAnchor(r.historyWindowAnchor(anchorKey))
+	if !boolValue(cfg.CrossGroupMemoryEnabled, false) {
+		return selected
+	}
+	// The anchored window covers this session only. Preserve the cross-group
+	// references already selected during routing instead of silently losing them.
+	var crossGroup []MessageEvent
+	if event.replyHistoryLoaded {
+		for _, item := range event.replyHistory {
+			if item.crossGroupContext {
+				crossGroup = append(crossGroup, item)
+			}
+		}
+	} else if store != nil {
+		crossGroup = r.crossGroupContextEvents(event, store)
+	}
+	return mergeCrossGroupContextHistory(selected, crossGroup)
 }
 
-// historyWindowAnchorIndex 返回锚在历史里的下标；锚为空或已经不在历史里（被撤回、
-// 清空了上下文）返回 -1，调用方按冷启动重新锚定。
+// historyWindowLowWatermarkPercent 是重新锚定时窗口占预算的比例。窗口从这里开始
+// 逐轮长到预算上限，再一次性回落，中间这段时间前缀逐字节不变。取 75%：留下的
+// 历史平均约占预算的 87%、最少约 75%，和预裁剪那边成段丢历史的保留量对齐；
+// 近期历史预算 20000 的活跃群里，重锚之间仍隔着八九十条消息。以前取 70%，最少
+// 只留七成。
+const historyWindowLowWatermarkPercent int64 = 75
+
+// contextSummaryMinIntervalPercent 是两次上下文压缩之间至少要攒下的新消息，按
+// RecentContextLimit 的百分比算。
+//
+// 压缩量是「触发条数减去保留条数」，这两个配置本来各管各的：一个说什么时候压，
+// 一个说压完留多少。但触发条数填得不比保留条数大时，旧代码把它夹平到保留条数，
+// 压缩量就恒为 1——历史被钉死在保留条数上，此后每来一条消息都超出一条、都触发
+// 一次压缩和一次 memory_summary 调用，再也回不去。群组页能调保留条数却没有触发
+// 条数这个字段，机器人级默认是 100，所以「群里把保留条数调到 100 以上」这个组合
+// 在真实配置里够得着。
+//
+// 现在改成先给触发条数留出一个间隔再夹，两个配置怎么组合都不会退化。取 50%：
+// 压完回落到保留条数，要再攒够一半才压下一次，和 historyWindowLowWatermarkPercent
+// 那边压缩后留出增长空间是同一个意思。
+const contextSummaryMinIntervalPercent = 50
+
+// contextSummaryTriggerThreshold 返回真正生效的压缩触发条数。它保证触发点比保留
+// 条数高出至少一个间隔，压缩量因此恒为正。
+func contextSummaryTriggerThreshold(limit, threshold int) int {
+	if limit <= 0 {
+		limit = 20
+	}
+	if threshold <= 0 {
+		threshold = limit * 2
+	}
+	interval := limit * contextSummaryMinIntervalPercent / 100
+	if interval < 1 {
+		interval = 1
+	}
+	if minimum := limit + interval; threshold < minimum {
+		threshold = minimum
+	}
+	return threshold
+}
+
+// anchoredHistoryWindow 给近期历史窗口加滞回，让窗口的起点在多轮之间保持不动。
+//
+// 没有它时窗口是「从最新往回填满预算」：历史一旦顶到预算，每来一条新消息，最旧
+// 的一轮就被挤出去，窗口起点每轮前移一格。供应商的前缀缓存按字节前缀匹配，起点
+// 一动，整段历史从第一条起就对不上——活跃群里历史长期顶满预算，等于每轮都在为
+// 一万多 token 的历史付全价 prefill。
+//
+// 现在每个会话记住窗口起点（锚）。只要从锚到当前仍装得下预算，窗口就固定从锚
+// 开始、只在尾部增长；装不下了才把锚往前挪到低水位，让窗口重新有增长空间。
+// 历史全部装得下时不需要锚，也就不留状态。
+//
+// focusedBudget 是本轮临时收紧的预算（对着刚发的图问一句时不需要长历史）：只在
+// 锚定好的窗口上再取一段尾巴，不改锚本身，下一轮正常消息仍然沿用原窗口。
+func (r *Runtime) anchoredHistoryWindow(session string, history []MessageEvent, current MessageEvent, botAccount string, budget, focusedBudget int64) []MessageEvent {
+	window := selectRecentHistoryTurns(history, current, botAccount, budget)
+	anchor := r.historyWindowAnchor(session)
+	switch {
+	case len(window) == 0:
+		r.setHistoryWindowAnchor(session, "")
+	case historyWindowAnchorIndex(window, anchor) >= 0:
+		window = window[historyWindowAnchorIndex(window, anchor):]
+	case len(window) == len(history):
+		// 全部装得下：窗口起点就是历史起点，天然稳定。
+		r.setHistoryWindowAnchor(session, "")
+	default:
+		if low := selectRecentHistoryTurns(window, current, botAccount, budget*historyWindowLowWatermarkPercent/100); len(low) > 0 {
+			window = low
+		}
+		r.setHistoryWindowAnchor(session, messageHistoryDedupeKey(window[0]))
+	}
+	if focusedBudget < budget {
+		window = selectRecentHistoryTurns(window, current, botAccount, focusedBudget)
+	}
+	return window
+}
+
+// historyWindowAnchorIndex 返回锚在窗口里的下标；锚为空或已经不在窗口里返回 -1。
+// 锚不在窗口里有两种情况：它比窗口起点还老（从锚到当前已经装不下预算），或者
+// 那条消息被撤回、被摘要折掉了。两种都该重新锚定。
 func historyWindowAnchorIndex(window []MessageEvent, anchor string) int {
 	if anchor == "" {
 		return -1
@@ -156,29 +308,6 @@ func (r *Runtime) setHistoryWindowAnchor(session string, anchor string) {
 // 编排必须对每个候选模型都成立。以前它以 DefaultContextWindowTokens 起算、且只
 // 往下收，于是无论模型多大窗口都出不了 16K——那个常量是「没有配置档时的兜底」，
 // 不该当成所有模型的天花板。
-// promptChatProfiles 是本轮可能被选中的对话模型配置档，挑选顺序与真正发请求时一致：
-// 角色绑定 → 分组 → 当前激活配置。只看角色绑定的话，没配模型角色的部署会一路回落到
-// 兜底常量，等于从来没看过实际在用的模型窗口。带图的轮次也由对话模型回答。
-func (r *Runtime) promptChatProfiles() []llm.Profile {
-	r.mu.RLock()
-	store := r.llmStore
-	r.mu.RUnlock()
-	if store == nil {
-		return nil
-	}
-	set := store.Profiles().WithDefaults()
-	profiles, _ := r.roleBoundProfiles("", set, llm.GroupChat)
-	if len(profiles) == 0 {
-		profiles = llmProfilesInGroup(set, llm.GroupChat)
-	}
-	if len(profiles) == 0 {
-		if current, ok := set.FirstProfile(); ok {
-			profiles = []llm.Profile{current}
-		}
-	}
-	return profiles
-}
-
 func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) int64 {
 	r.mu.RLock()
 	store := r.llmStore
@@ -188,14 +317,24 @@ func (r *Runtime) promptContextWindowTokens(event MessageEvent, cfg BotConfig) i
 		// 返回常量，于是机器人或群配的 max_context_tokens 在这条路径上完全不生效。
 		return clampContextWindowToConfig(llm.DefaultContextWindowTokens, cfg)
 	}
-	profiles := r.promptChatProfiles()
+	// 带图的轮次也由对话模型回答，窗口按对话模型算。
+	group := llm.GroupChat
+	set := store.Profiles().WithDefaults()
+	// 与真正发请求时的挑选顺序保持一致：角色绑定 → 分组 → 当前激活配置。
+	// 只看角色绑定的话，没配模型角色的部署会一路回落到兜底常量，等于从来没看过
+	// 实际在用的模型窗口。
+	profiles, _ := r.roleBoundProfiles("", set, group)
+	if len(profiles) == 0 {
+		profiles = llmProfilesInGroup(set, group)
+	}
+	if len(profiles) == 0 {
+		if current, ok := set.FirstProfile(); ok {
+			profiles = []llm.Profile{current}
+		}
+	}
 	window := int64(0)
 	for _, profile := range profiles {
 		providerWindow := profile.Config.MaxContextTokensWithDefault()
-		// 从超限报错里学到过真实窗口就按它算，否则每轮都会先撞一次超限再压缩。
-		if learned, ok := llm.LearnedContextLimit(profile.Config, profile.Config.Model); ok && (providerWindow <= 0 || learned < providerWindow) {
-			providerWindow = learned
-		}
 		if providerWindow <= 0 {
 			continue
 		}
@@ -240,13 +379,35 @@ func (r *Runtime) promptContextWindowFallback(cfg BotConfig) bool {
 	return true
 }
 
-// clampContextWindowToConfig 让机器人/群显式配置的上限只能收紧：模型窗口是能力上限，
-// 配置里那个数是这个机器人愿意在单次请求上花多少。没配就跟随模型窗口。
+// clampContextWindowToConfig 让机器人/群配置的上限只能收紧：模型窗口是能力上限，
+// 配置里那个数是这个机器人愿意在单次请求上花多少。
 func clampContextWindowToConfig(window int64, cfg BotConfig) int64 {
-	if limit := cfg.requestContextLimit(); limit > 0 && limit < window {
-		return limit
+	if cfg.MaxContextTokens > 0 && cfg.MaxContextTokens < window {
+		return cfg.MaxContextTokens
 	}
 	return window
+}
+
+func contextShareBudget(contextWindow, share int64) int64 {
+	if contextWindow <= 0 {
+		contextWindow = llm.DefaultContextWindowTokens
+	}
+	budget := contextWindow * share / contextShareDenominator
+	if share == recentHistoryTokenShare && budget < minimumRecentHistoryTokens {
+		return minimumRecentHistoryTokens
+	}
+	return budget
+}
+
+func historyCandidateLimitForBudget(budget int64) int {
+	limit := int(budget/minimumHistoryCandidateTokens) + 8
+	if limit < 1 {
+		limit = 1
+	}
+	if limit > maximumHistoryCandidates {
+		limit = maximumHistoryCandidates
+	}
+	return limit
 }
 
 func selectRecentHistoryTurns(history []MessageEvent, current MessageEvent, botAccount string, budget int64) []MessageEvent {
@@ -259,7 +420,9 @@ func selectRecentHistoryTurns(history []MessageEvent, current MessageEvent, botA
 	for index := len(turns) - 1; index >= 0; index-- {
 		turn := turns[index]
 		if turn.estimated > remaining {
-			// 最新的一轮再大也要带上：丢了它模型就像没看见刚发的消息。
+			// Always pass the newest turn to the final request budgeter. It can
+			// compact an oversized turn, while dropping it here makes the model
+			// appear to forget the message that was just sent.
 			if first == len(turns) && index == len(turns)-1 {
 				first = index
 			}
@@ -312,6 +475,23 @@ func groupHistoryContextTurns(history []MessageEvent, currentTime int64, botAcco
 	return turns
 }
 
+func historyContextMetadata(history []MessageEvent, currentTime int64, botAccount string) (map[string]string, map[string]bool) {
+	groups := make(map[string]string, len(history))
+	recent := make(map[string]bool, len(history))
+	turns := groupHistoryContextTurns(history, currentTime, botAccount)
+	recentFrom := max(0, len(turns)-recentHistoryPriorityTurns)
+	for turnIndex, turn := range turns {
+		groupID := "history-turn-" + fmt.Sprint(turnIndex)
+		for _, event := range turn.events {
+			if key := messageHistoryDedupeKey(event); key != "" {
+				groups[key] = groupID
+				recent[key] = turnIndex >= recentFrom
+			}
+		}
+	}
+	return groups, recent
+}
+
 func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, assistantEvent bool) int64 {
 	text := ""
 	if strings.TrimSpace(event.botReply) != "" {
@@ -335,9 +515,7 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 	return cost
 }
 
-// recordPromptContextBudget 把这一轮上下文的体积写进调试记录：窗口、压缩阈值、
-// 各类内容的估算 token，以及历史从哪一刻开始。没有任何裁剪可报，只有账。
-func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, compacted string, semantic semanticReferencePromptContext, sources semanticReferenceContext) {
+func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEvent, cfg BotConfig, messages []llm.Message, history []MessageEvent, semantic semanticReferencePromptContext, sources semanticReferenceContext, summaryRecompressed bool, layers []contextLayerUsage) {
 	if !debugModeEnabled(cfg) {
 		return
 	}
@@ -349,10 +527,8 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"system": 0, "plugin_and_tools": 0, "memory": 0,
 		"summary": 0, "history": 0, "current": 0,
 	}
-	var total int64
 	for _, message := range messages {
 		cost := llm.EstimateMessageTokens(message)
-		total += cost
 		switch message.Priority {
 		case llm.MessagePriorityCurrent:
 			categoryTokens["current"] += cost
@@ -381,25 +557,40 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 			latest = item.Time
 		}
 	}
+	breakdown := llm.PlanContextBudget(messages, window, llm.DefaultMaxOutputTokens)
 	metadata := map[string]any{
-		"effective_context_window":  window,
-		"compaction_threshold":      compactionThreshold(r.promptCompactionWindow(event, cfg)),
-		"keep_recent_tokens":        compactionKeepRecent(r.promptCompactionWindow(event, cfg), 0),
-		"estimated_tokens":          total,
-		"category_tokens":           categoryTokens,
+		"effective_context_window": breakdown.ContextWindow,
+		"output_reserve":           breakdown.OutputReserve,
+		"safety_reserve":           breakdown.SafetyReserve,
+		"input_budget":             breakdown.InputBudget,
+		"requested_tokens":         breakdown.RequestedTokens,
+		"selected_tokens":          breakdown.SelectedTokens,
+		"dropped_tokens":           breakdown.DroppedTokens,
+		"over_budget":              breakdown.OverBudget,
+		"categories":               contextBudgetCategoryTrace(breakdown),
+		"category_tokens":          categoryTokens,
+		"history_token_budget":     recentHistoryBudget(window, cfg),
+		"history_token_share":      contextShareBudget(window, recentHistoryTokenShare),
+		"summary_token_budget":     sessionThreadBudget(window),
+		// 自述也按记忆优先级注入，token 记在 categories 的 memory 里，所以这份
+		// 预算也要把它算上，否则「用了多少 / 计划多少」两个数对不上。
+		"memory_token_budget":       retrievedMemoryBudget(window) + coreMemoryBudget(window) + selfNoteBudget(window),
 		"history_selected_messages": len(history),
 		"history_selected_turns":    len(groupHistoryContextTurns(history, event.Time, cfg.BotAccount)),
 		"history_earliest_time":     earliest,
 		"history_latest_time":       latest,
-		"compaction_summary":        strings.TrimSpace(r.compactionSummary(event)) != "",
-		"compacted":                 compacted,
-		"semantic_requested":        semantic.Requested,
-		"semantic_resolved":         semantic.Resolved,
-		"semantic_text_sources":     semantic.TextSources,
-		"semantic_expected_images":  semantic.ExpectedImages,
-		"semantic_attached_images":  sources.AttachedImageCount,
-		"semantic_missing_sources":  sources.MissingSourceCount,
-		"message_id":                event.MessageID,
+		"summary":                   contextBudgetSummaryTrace(breakdown, sessionThreadBudget(window), summaryRecompressed),
+		// categories 是各层拼完之后、全局预算再裁一刀的结果；layers 是每层在送进
+		// 全局预算之前自己丢了什么。少了后者，categories 里的 fits_budget 只能说明
+		// 「成品消息没再挨刀」，说明不了层内配额有没有截断候选。
+		"layers":                   contextLayerUsageTrace(layers),
+		"semantic_requested":       semantic.Requested,
+		"semantic_resolved":        semantic.Resolved,
+		"semantic_text_sources":    semantic.TextSources,
+		"semantic_expected_images": semantic.ExpectedImages,
+		"semantic_attached_images": sources.AttachedImageCount,
+		"semantic_missing_sources": sources.MissingSourceCount,
+		"message_id":               event.MessageID,
 	}
 	logCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
@@ -407,31 +598,140 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		Kind:     applog.KindDebug,
 		Level:    applog.LevelInfo,
 		Action:   "context_budget",
-		Message:  "上下文已编排",
+		Message:  "上下文预算已编排",
 		Actor:    "chat_context",
 		Target:   strings.TrimSpace(event.MessageID),
 		Metadata: metadata,
 	})
 }
 
-// ContextBudgetBreakdown 是某个会话当前的上下文概览：窗口多大、什么时候压缩、
-// 压缩时保留多少近期原文。照 Pi，平时不分层限额，全部原样带上。
+// contextBudgetReasonText keeps the debug trace readable in the WebUI without
+// forcing the log reader to memorize the machine-readable slugs.
+func contextBudgetReasonText(reason string) string {
+	switch reason {
+	case llm.ContextBudgetReasonFits:
+		return "完整保留"
+	case llm.ContextBudgetReasonTrimmed:
+		return "超出可用额度，内容已按预算裁剪"
+	case llm.ContextBudgetReasonOldestTurnCut:
+		return "输入预算不足，最旧的完整轮次未装入"
+	case llm.ContextBudgetReasonBudgetExceeded:
+		return "输入预算已用尽，本类内容被丢弃"
+	default:
+		return reason
+	}
+}
+
+func contextBudgetCategoryTrace(breakdown llm.ContextBudgetBreakdown) []map[string]any {
+	categories := make([]map[string]any, 0, len(breakdown.Categories))
+	for _, category := range breakdown.Categories {
+		categories = append(categories, map[string]any{
+			"category":           category.Category,
+			"priority":           category.Priority,
+			"requested_messages": category.RequestedMessages,
+			"selected_messages":  category.SelectedMessages,
+			"dropped_messages":   category.DroppedMessages,
+			"trimmed_messages":   category.TrimmedMessages,
+			"requested_tokens":   category.RequestedTokens,
+			"selected_tokens":    category.SelectedTokens,
+			"dropped_tokens":     category.DroppedTokens,
+			"reason":             category.Reason,
+			"reason_text":        contextBudgetReasonText(category.Reason),
+		})
+	}
+	return categories
+}
+
+// contextBudgetSummaryTrace reports the compressed-summary block separately,
+// because a silently shortened summary loses entity relations and time bounds
+// in a way a plain token count does not make obvious.
+func contextBudgetSummaryTrace(breakdown llm.ContextBudgetBreakdown, target int64, recompressed bool) map[string]any {
+	trace := map[string]any{
+		"present":          false,
+		"target_tokens":    target,
+		"requested_tokens": int64(0),
+		"selected_tokens":  int64(0),
+		"recompressed":     recompressed,
+		"dropped":          false,
+	}
+	for _, category := range breakdown.Categories {
+		if category.Category != llm.ContextBudgetCategoryName(llm.MessagePrioritySummary) {
+			continue
+		}
+		trace["present"] = category.RequestedMessages > 0
+		trace["requested_tokens"] = category.RequestedTokens
+		trace["selected_tokens"] = category.SelectedTokens
+		// 注入前已经重新压缩过，或请求预算层又裁了一刀，都算摘要被缩短。
+		trace["recompressed"] = recompressed || category.TrimmedMessages > 0
+		trace["dropped"] = category.DroppedMessages > 0
+		trace["reason"] = category.Reason
+		trace["reason_text"] = contextBudgetReasonText(category.Reason)
+	}
+	return trace
+}
+
+// dropSummarizedHistory 去掉已经被折进压缩摘要、却仍留在存储层的原文。
+// 摘要与原文同时进入一个请求，既浪费预算，也让模型看到同一段对话的两个版本。
+// 仍在内存历史里的事件一律保留：内存历史就是「还没被压缩」的定义，即使它与最后
+// 一条被压缩的消息同秒，也属于原始窗口。
+func dropSummarizedHistory(history, memory []MessageEvent, watermark int64) []MessageEvent {
+	if watermark <= 0 || len(history) == 0 {
+		return history
+	}
+	retained := make(map[string]bool, len(memory))
+	for _, event := range memory {
+		if key := messageHistoryDedupeKey(event); key != "" {
+			retained[key] = true
+		}
+	}
+	filtered := make([]MessageEvent, 0, len(history))
+	for _, event := range history {
+		// 时间未知的事件无法与水位比较，保留它比丢掉它安全。
+		if event.Time > 0 && event.Time <= watermark && !retained[messageHistoryDedupeKey(event)] {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	return filtered
+}
+
+// ContextBudgetLayer 是上下文预算里的一层，用于对外展示。
+type ContextBudgetLayer struct {
+	// Key 供前端上色和排序，不随文案改动。
+	Key string `json:"key"`
+	// Label 是这一层的中文名。
+	Label string `json:"label"`
+	// SharePercent 是这一层的窗口份额，Ceiling 是绝对上限。
+	SharePercent int64 `json:"share_percent"`
+	Ceiling      int64 `json:"ceiling"`
+	// Tokens 是两者取小之后本群实际生效的预算。
+	Tokens int64 `json:"tokens"`
+	// CappedByCeiling 说明这一层是被绝对上限压住的，还是窗口份额本来就更小。
+	// 大窗口下几乎全是前者，小窗口下全是后者——这正是分层预算要表达的事。
+	CappedByCeiling bool `json:"capped_by_ceiling"`
+	// Configurable 标记这一层能不能在配置里调。只有近期历史可以：另外三层的
+	// 取值由各自的结构决定（便签天然只有几百字、检索层配合 MMR 的条数上限、
+	// 常驻层不参加相关性排序所以必须小而固定），给旋钮也没有对应的失效模式。
+	Configurable bool `json:"configurable"`
+}
+
+// ContextBudgetBreakdown 是某个会话当前的上下文预算分配。
 type ContextBudgetBreakdown struct {
 	GroupID string `json:"group_id,omitempty"`
 	// ContextWindow 是这个群实际会用到的模型窗口。
 	ContextWindow int64 `json:"context_window"`
 	// ContextWindowFallback 为 true 时窗口没人填，是兜底常量，不代表模型的真实上限。
-	ContextWindowFallback bool `json:"context_window_fallback,omitempty"`
-	// CompactionThreshold 是请求估算超过它就压缩一次的 token 数（窗口减 ReserveTokens）。
-	CompactionThreshold int64 `json:"compaction_threshold"`
-	ReserveTokens       int64 `json:"reserve_tokens"`
-	// KeepRecentTokens 是压缩时原样保留的近期历史。
-	KeepRecentTokens int64 `json:"keep_recent_tokens"`
-	// HasSummary 表示这个会话已经压缩过，历史开头是一份摘要。
-	HasSummary bool `json:"has_summary"`
+	ContextWindowFallback bool                 `json:"context_window_fallback,omitempty"`
+	Layers                []ContextBudgetLayer `json:"layers"`
+	// Allocated 是四层合计，Headroom 是留给系统提示、当前消息、工具结果和输出的余量。
+	Allocated int64 `json:"allocated"`
+	Headroom  int64 `json:"headroom"`
 }
 
-// ContextBudgetBreakdownForGroup 按机器人和群算出当前的上下文概览。profileID 要带上：
+// ContextBudgetBreakdownForGroup 按机器人和群算出当前的预算分配。
+//
+// 它复用运行时真正用的那几个预算函数，不另算一遍：分配图一旦自己实现一份
+// min(份额, 上限)，改了预算逻辑而忘了改图，图就开始骗人。profileID 要带上：
 // 几台机器人时不带就落回默认配置，窗口和分群覆盖都是别人的。
 func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) ContextBudgetBreakdown {
 	event := MessageEvent{Kind: EventKindGroup, GroupID: strings.TrimSpace(groupID), ProfileID: strings.TrimSpace(profileID)}
@@ -440,14 +740,38 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 	}
 	cfg := r.effectiveConfigForEvent(event)
 	window := r.promptContextWindowTokens(event, cfg)
-	limits := r.promptCompactionWindow(event, cfg)
-	return ContextBudgetBreakdown{
+
+	historyCeiling := recentHistoryCeiling(cfg)
+	breakdown := ContextBudgetBreakdown{
 		GroupID:               event.GroupID,
 		ContextWindow:         window,
 		ContextWindowFallback: r.promptContextWindowFallback(cfg),
-		CompactionThreshold:   compactionThreshold(limits),
-		ReserveTokens:         compactionReserve(limits),
-		KeepRecentTokens:      compactionKeepRecent(limits, 0),
-		HasSummary:            event.GroupID != "" && strings.TrimSpace(r.compactionSummary(event)) != "",
+		Layers: []ContextBudgetLayer{
+			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, historyCeiling, true),
+			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
+			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
+			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
+			newContextBudgetLayer("self_notes", "自述", window, selfNoteTokenShare, selfNoteTokenCeiling, false),
+		},
+	}
+	for _, layer := range breakdown.Layers {
+		breakdown.Allocated += layer.Tokens
+	}
+	if breakdown.Headroom = window - breakdown.Allocated; breakdown.Headroom < 0 {
+		breakdown.Headroom = 0
+	}
+	return breakdown
+}
+
+func newContextBudgetLayer(key, label string, window, share, ceiling int64, configurable bool) ContextBudgetLayer {
+	tokens := contextLayerBudget(window, share, ceiling)
+	return ContextBudgetLayer{
+		Key:             key,
+		Label:           label,
+		SharePercent:    share,
+		Ceiling:         ceiling,
+		Tokens:          tokens,
+		CappedByCeiling: ceiling > 0 && contextShareBudget(window, share) > ceiling,
+		Configurable:    configurable,
 	}
 }

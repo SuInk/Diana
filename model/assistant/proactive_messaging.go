@@ -63,11 +63,11 @@ const (
 	// proactiveStartupDelay 让启动后的第一轮晚一点：连接、历史回补都还没就绪时
 	// 看到的「最后一条消息」不准。
 	proactiveStartupDelay = 3 * time.Minute
-	// proactiveHistoryLimit 只用于巡检时数冷场、退避和「生成期间有没有人说话」，
-	// 不进模型：给模型看的历史走 promptContextHistory，和正常回复同一份。
-	proactiveHistoryLimit  = 200
-	proactiveRunTimeout    = 3 * time.Minute
-	proactiveMaxReplyRunes = 400
+	proactiveHistoryLimit = 200
+	// proactivePromptHistoryLimit 是带给模型的最近消息条数，够看出之前在聊什么就行。
+	proactivePromptHistoryLimit = 30
+	proactiveRunTimeout         = 3 * time.Minute
+	proactiveMaxReplyRunes      = 400
 
 	proactiveSkipMarker = "[SKIP]"
 )
@@ -518,7 +518,7 @@ func proactiveBotID(event MessageEvent, cfg BotConfig) string {
 }
 
 // proactiveRecentHistory 读这个会话最近的消息：内存里的窗口加库里的记录。只用来数
-// 时间和标记（不进模型），不走 promptContextHistory 的锚点，免得巡检挪动正常回复的缓存窗口。
+// 时间和标记，不走 promptContextHistory 的锚点，免得巡检挪动正常回复的缓存窗口。
 func (r *Runtime) proactiveRecentHistory(event MessageEvent) []MessageEvent {
 	session := sessionKey(event)
 	r.mu.RLock()
@@ -726,9 +726,9 @@ func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, e
 		Content:  r.systemPromptWithRelationship(source, nil, false, relationship),
 		Priority: llm.MessagePrioritySystem,
 	}}
-	header, history := r.sideContextHistory(source, cfg)
-	if header.Content != "" {
-		messages = append(messages, header)
+	history := sessionOnlyHistory(r.promptContextHistory(source, cfg))
+	if len(history) > proactivePromptHistoryLimit {
+		history = history[len(history)-proactivePromptHistoryLimit:]
 	}
 	for _, item := range history {
 		if source.Kind == EventKindGroup && !samePromptGroupScope(source, item) {
@@ -736,7 +736,6 @@ func (r *Runtime) generateProactiveMessage(ctx context.Context, cfg BotConfig, e
 		}
 		messages = append(messages, r.renderPromptHistoryEvent(ctx, source, item, cfg, false)...)
 	}
-	messages = compactHistoryLineDates(messages)
 	if clock := r.runtimeClockPrompt(source); clock != "" {
 		messages = append(messages, llm.Message{Role: llm.RoleSystem, Content: clock, Priority: llm.MessagePrioritySystem})
 	}

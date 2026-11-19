@@ -23,7 +23,7 @@ const (
 )
 
 func newEditSourceRuntime() *Runtime {
-	return NewRuntime(BotConfig{BotAccount: editSourceBotID}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	return NewRuntime(BotConfig{BotAccount: editSourceBotID, RecentContextLimit: 40}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 }
 
 func editSourceText(id, userID, text string, extra ...MessageSegment) MessageEvent {
@@ -197,12 +197,11 @@ func TestPublicChatErrorMessageForImageEditFailures(t *testing.T) {
 // 模型自己做指代：认出原图在哪几条消息里，按 message_id 交给工具。多条消息、
 // 一条消息多张图都要按指认顺序全部带上，而不是只取第一张。
 func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
-	setSideHistoryLookback(t, 40)
 	store := &stubLLMProfileStore{set: llm.NewProfileSet(llm.ProviderConfig{
 		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: "https://example.invalid/v1",
 		Model: "gpt-test", ImageModel: "gpt-image-2",
 	})}
-	runtime := NewRuntime(BotConfig{BotAccount: editSourceBotID}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: editSourceBotID, RecentContextLimit: 40}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	const (
 		secondA = "data:image/png;base64,c2Vjb25kLWE="
 		secondB = "data:image/png;base64,c2Vjb25kLWI="

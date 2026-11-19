@@ -65,7 +65,7 @@ func (s *speakerHistoryStore) ListMessageSpeakers(_ context.Context, query Messa
 }
 
 func newSpeakerTestRuntime(store *speakerHistoryStore) *Runtime {
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	return runtime
 }
@@ -86,7 +86,6 @@ func runChatHistorySearch(t *testing.T, runtime *Runtime, input map[string]any) 
 // Telegram 里只知道昵称（还是旧昵称）也能按人查聊天记录：昵称经名录解析成账号再过滤，
 // 有精确命中时不把「小明的猫」这种子串命中并进来。
 func TestChatHistorySearchResolvesSenderName(t *testing.T) {
-	setSideHistoryLookback(t, 3)
 	store := &speakerHistoryStore{speakers: []MessageSpeaker{
 		{UserID: "50001", Names: []string{"明明同学", "小明"}, Username: "ming_cat"},
 		{UserID: "50002", Names: []string{"小明的猫"}},
@@ -114,7 +113,6 @@ func TestChatHistorySearchResolvesSenderName(t *testing.T) {
 
 // 模型把昵称误填进 sender_user_id 时按昵称处理；真账号照旧直通。
 func TestChatHistorySearchTreatsNicknameInSenderUserID(t *testing.T) {
-	setSideHistoryLookback(t, 3)
 	store := &speakerHistoryStore{speakers: []MessageSpeaker{{UserID: "50001", Names: []string{"小明"}}}}
 	runtime := newSpeakerTestRuntime(store)
 
@@ -134,7 +132,6 @@ func TestChatHistorySearchTreatsNicknameInSenderUserID(t *testing.T) {
 }
 
 func TestChatHistorySearchUnknownSenderNameErrors(t *testing.T) {
-	setSideHistoryLookback(t, 3)
 	runtime := newSpeakerTestRuntime(&speakerHistoryStore{})
 	_, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "-10042"}).Run(context.Background(), map[string]any{"operation": "search", "sender_name": "不存在"})
 	if err == nil || !strings.Contains(err.Error(), "不存在") {
@@ -145,7 +142,6 @@ func TestChatHistorySearchUnknownSenderNameErrors(t *testing.T) {
 // 消息里点到的人：@、引用作者、正文里写出的昵称（含旧昵称）和 @用户名都算，
 // 当前发言者、机器人自己和太短的昵称不算。
 func TestMentionedSubjectUserIDs(t *testing.T) {
-	setSideHistoryLookback(t, 3)
 	store := &speakerHistoryStore{speakers: []MessageSpeaker{
 		{UserID: "50001", Names: []string{"明明同学", "小明"}},
 		{UserID: "50002", Names: []string{"a"}},

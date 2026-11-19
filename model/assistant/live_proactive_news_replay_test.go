@@ -113,7 +113,7 @@ func TestLiveProactiveNewsReplay(t *testing.T) {
 			defer cancel()
 
 			record := map[string]any{"index": index, "group": sample.Group[len(sample.Group)-4:], "gap_h": sample.GapH}
-			lines := proactiveNewsChatLines(proactiveGroupHistory(target, sessionOnlyHistory(runtime.promptContextHistory(target, cfg))), cfg.BotAccount)
+			lines := proactiveNewsChatLines(runtime.proactiveRecentHistory(target), cfg.BotAccount)
 			if n := len(lines); n > 12 {
 				record["chat_tail"] = lines[n-12:]
 			} else {
@@ -132,7 +132,7 @@ func TestLiveProactiveNewsReplay(t *testing.T) {
 				if err != nil {
 					record["search_error"] = err.Error()
 				}
-				news.Results = strings.TrimSpace(results)
+				news.Results = truncateRunesFromStart(strings.TrimSpace(results), proactiveNewsResultMaxRunes)
 			}
 			record["query"] = news.Query
 			record["results_head"] = truncateRunes(news.Results, 600)

@@ -48,8 +48,7 @@ func TestResponsesKeepsMultiImageInputBeforeTrailingSystem(t *testing.T) {
 				hasQuestion = hasQuestion || strings.Contains(part.Text, "CURRENT_QUESTION")
 			}
 		}
-		// 装得下就原样发：图片细节不被悄悄降成 low。
-		if images != 8 || low != 0 || !hasQuestion {
+		if images != 18 || low != 18 || !hasQuestion {
 			t.Errorf("outgoing input lost current turn: images=%d low=%d question=%v", images, low, hasQuestion)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -63,7 +62,7 @@ func TestResponsesKeepsMultiImageInputBeforeTrailingSystem(t *testing.T) {
 	}
 	input := Message{Role: RoleUser, Content: "CURRENT_QUESTION " + strings.Repeat("测试", 3000)}
 	input.Parts = append(input.Parts, ContentPart{Type: ContentPartText, Text: input.Content})
-	for i := 0; i < 8; i++ {
+	for i := 0; i < 18; i++ {
 		input.Parts = append(input.Parts, ContentPart{Type: ContentPartImageURL, ImageURL: fmt.Sprintf("https://example.test/%d.jpg", i), Detail: "high"})
 	}
 	for _, explicit := range []bool{false, true} {
@@ -71,6 +70,12 @@ func TestResponsesKeepsMultiImageInputBeforeTrailingSystem(t *testing.T) {
 			input.Priority = MessagePriorityCurrent
 		}
 		messages := []Message{{Role: RoleSystem, Content: strings.Repeat("规则", 600)}, input, {Role: RoleSystem, Content: "🍅：西红柿 / tomato"}}
+		plan := PlanContextBudget(messages, 128000, 1024)
+		for _, category := range plan.Categories {
+			if category.Category == "current" && category.DroppedMessages != 0 {
+				t.Fatalf("current input dropped: %+v", plan)
+			}
+		}
 		response, err := (RegistryClient{Registry: registry, Selection: selection}).Generate(context.Background(), GenerateRequest{Messages: messages})
 		if err != nil || response.Text != "ok" {
 			t.Fatalf("response=%+v err=%v", response, err)

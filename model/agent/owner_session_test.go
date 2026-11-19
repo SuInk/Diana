@@ -172,10 +172,8 @@ func TestOwnerSessionBoundsBufferedOutput(t *testing.T) {
 			break
 		}
 	}
-	// Start 有时已经交出了开头一小段（那段算送达），所以被挤掉的量按「总量 − 缓冲 −
-	// 启动时交出的」算，不能写死成「总量 − 缓冲」。
-	if dropped != 6000*64-ownerSessionBufferBytes-int64(len(started.Output)) || len(outputs) < 2 {
-		t.Fatalf("dropped=%d started=%d reads=%d", dropped, len(started.Output), len(outputs))
+	if dropped != 6000*64-ownerSessionBufferBytes || len(outputs) < 2 {
+		t.Fatalf("dropped=%d reads=%d", dropped, len(outputs))
 	}
 	all := strings.Join(outputs, "")
 	if len(all) != ownerSessionBufferBytes || !strings.HasSuffix(all, fmt.Sprintf("%063d\n", 5999)) {

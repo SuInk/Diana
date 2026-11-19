@@ -603,9 +603,8 @@ func TestLLMNoTextErrorRetryAndFailoverMatrix(t *testing.T) {
 	}
 }
 
-func TestRuntimeTrimsInMemoryHistoryAfterThreshold(t *testing.T) {
-	setSideHistoryLookback(t, 3)
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+func TestRuntimeCompressesOlderContextAfterThreshold(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
 	for i := 1; i <= 6; i++ {
 		next := event
@@ -618,15 +617,18 @@ func TestRuntimeTrimsInMemoryHistoryAfterThreshold(t *testing.T) {
 	if len(history) != 3 || history[0].RawMessage != "消息4" || history[2].RawMessage != "消息6" {
 		t.Fatalf("history = %#v", history)
 	}
+	summary := runtime.contextSummary(event)
+	if !strings.Contains(summary, "消息1") || !strings.Contains(summary, "消息3") {
+		t.Fatalf("summary = %q", summary)
+	}
 	runtime.clearSessionHistory(event)
-	if len(runtime.contextHistory(event)) != 0 {
+	if runtime.contextSummary(event) != "" || len(runtime.contextHistory(event)) != 0 {
 		t.Fatalf("context should be cleared")
 	}
 }
 
 func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
-	setSideHistoryLookback(t, 2)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{
@@ -648,13 +650,13 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 
 func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	// 旁路回看条数（sideHistoryLookback）只管内存缓存和旁路回看深度，不进正式提示词；
-	// 正式提示词的历史从锚开始全部带上，留空的单次请求上限跟随模型窗口。
-	if sideHistoryLookback != 40 || cfg.ContextSummaryThreshold != 100 {
-		t.Fatalf("context defaults = lookback %d threshold %d", sideHistoryLookback, cfg.ContextSummaryThreshold)
+	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
+	// 由 RecentHistoryTokenBudget 按 token 计。
+	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
+		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
 	}
-	if got := cfg.requestContextLimit(); got != 0 {
-		t.Fatalf("request context limit default = %d", got)
+	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
+		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
 	}
 	if boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("cross group memory default = %v, want off", cfg.CrossGroupMemoryEnabled)
@@ -711,8 +713,6 @@ func TestRuntimeAddsUserMemoryContextToLLMPrompt(t *testing.T) {
 		DisplayName:  "Alice",
 		Favorability: 16,
 		MessageCount: 7,
-		// 没有画像时这一段不发（只剩名字和账号），见 formatUserMemoryContext。
-		Portrait: []UserPortraitTrait{{Field: PortraitFieldResidence, Value: "杭州"}},
 		Memories: []UserMemoryItem{
 			{Text: "我最近在看漫展"},
 		},
@@ -1305,7 +1305,7 @@ func TestRuntimeSystemPromptMentionsHomophoneJokes(t *testing.T) {
 			t.Fatalf("system prompt missing expressive writing guidance %q: %q", want, prompt)
 		}
 	}
-	if !strings.Contains(prompt, "回复目标是最后一条聊天记录") || !strings.Contains(prompt, "不要主动回复旧消息") {
+	if !strings.Contains(prompt, "当前需要回复的消息") || !strings.Contains(prompt, "不要主动回复旧消息") {
 		t.Fatalf("system prompt missing current-message guidance: %q", prompt)
 	}
 	if !strings.Contains(prompt, "同一发送者紧邻补发") || !strings.Contains(prompt, "发送一条完整回复") || !strings.Contains(prompt, "不要按历史消息逐条作答") {
@@ -1991,16 +1991,16 @@ func TestRuntimeKeepsMentionAndGroupTriggerInPrompt(t *testing.T) {
 	if reply != provider.reply || len(channel.sent) != 1 {
 		t.Fatalf("reply=%q sent=%#v", reply, channel.sent)
 	}
-	got, notes := currentLineAndNotes(provider.request.Messages)
-	if !strings.Contains(got, "Diana") {
+	got := provider.request.Messages[len(provider.request.Messages)-1].Content
+	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "Diana") {
 		t.Fatalf("last message content = %q", got)
 	}
 	if !strings.Contains(got, "@42") {
 		t.Fatalf("机器人自己的 @ 应当留在原文里：%q", got)
 	}
-	// 「这个 @ 指的是你」由当前消息前那条注解点明，正文照旧。
-	if !strings.Contains(notes, "那个 @ 指的就是你") || strings.Contains(got, "那个 @ 指的就是你") {
-		t.Fatalf("没有告诉模型这条消息 @ 了它：%q / %q", notes, got)
+	// 「这个 @ 指的是你」由注解点明，正文照旧。
+	if !strings.Contains(got, "那个 @ 指的就是你") {
+		t.Fatalf("没有告诉模型这条消息 @ 了它：%q", got)
 	}
 }
 
@@ -2076,7 +2076,7 @@ func TestRuntimeGroupLLMCanChooseMultipleMentionTargets(t *testing.T) {
 		}
 	}
 	// 这份配置是默认档（auto），所以第 1 条应当是「发送层不会自动 @」那一版。
-	for _, want := range []string{"群聊真实提及规则", milkAlias + "：Alice", currentAlias + "：Bob", "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "按标记位置翻译成真正的提及"} {
+	for _, want := range []string{"群聊真实提及规则", `"user_id":"` + milkAlias + `"`, `"display_name":"Alice"`, `"user_id":"` + currentAlias + `"`, "可以同时提及多人", "发送层不会自动 @ 任何人", "可以直接回答", "按标记位置翻译成真正的提及"} {
 		if !strings.Contains(systemPrompt.String(), want) {
 			t.Fatalf("system prompt missing %q: %s", want, systemPrompt.String())
 		}
@@ -2247,14 +2247,14 @@ func TestRuntimeMentionOnlyUsesFallbackPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	got, notes := currentLineAndNotes(provider.request.Messages)
+	got := provider.request.Messages[len(provider.request.Messages)-1].Content
 	// 纯 @ 会附上唤醒指引：它明确禁止「我在」这类报到，并要求接住上文；
-	// 原话（那个 @）仍然留在正文那一行里，指引在它前面的注解里。
-	if !strings.Contains(got, "@42") {
+	// 原话（那个 @）仍然留在正文里。
+	if !strings.Contains(got, "【当前需要回复的消息】") || !strings.Contains(got, "@42") {
 		t.Fatalf("last message content = %q", got)
 	}
-	if !strings.Contains(notes, "别回「我在」") {
-		t.Fatalf("纯 @ 没有附上唤醒指引：%q", notes)
+	if !strings.Contains(got, "别回「我在」") {
+		t.Fatalf("纯 @ 没有附上唤醒指引：%q", got)
 	}
 }
 
@@ -2280,16 +2280,11 @@ func TestRuntimeKeepsReplyAndMentionInCurrentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replyTo() error = %v", err)
 	}
-	got, notes := currentLineAndNotes(provider.request.Messages)
-	// 引用标记和 @ 都是原话的一部分，留在那一行里；注解只负责说明它们各指什么。
-	for _, want := range []string{"<diana-quote id=\"abc\"/>", "@42"} {
+	got := provider.request.Messages[len(provider.request.Messages)-1].Content
+	// 引用标记和 @ 都是原话的一部分，一并留着；注解只负责说明它们各指什么。
+	for _, want := range []string{"【当前需要回复的消息】", "<diana-quote id=\"abc\"/>", "@42", "那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("last message content = %q, missing %q", got, want)
-		}
-	}
-	for _, want := range []string{"那个 @ 指的就是你", "当前消息包含引用/回复标记"} {
-		if !strings.Contains(notes, want) {
-			t.Fatalf("current notes = %q, missing %q", notes, want)
 		}
 	}
 }
@@ -3168,16 +3163,15 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		t.Fatalf("messages = %#v", provider.request.Messages)
 	}
 	// 当前消息之前还夹着尾部时钟等 system 消息，历史行必须按内容定位而不是固定下标。
-	historyLabel := "[" + time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05") + "] "
 	history := ""
 	for _, message := range provider.request.Messages {
-		if strings.HasPrefix(message.Content, historyLabel) {
+		if strings.HasPrefix(message.Content, "[历史 ") {
 			history = message.Content
 			break
 		}
 	}
 	current := provider.request.Messages[len(provider.request.Messages)-1].Content
-	if !strings.HasPrefix(history, historyLabel+"Alice（im_u_") || !strings.Contains(history, "）: 旧问题是什么") {
+	if !strings.HasPrefix(history, "[历史 "+time.Unix(1000, 0).Local().Format("2006-01-02 15:04:05")+"] Alice（im_user_") || !strings.Contains(history, "）: 旧问题是什么") {
 		t.Fatalf("history content = %q", history)
 	}
 	// 历史行只标绝对时间：「距当前」随请求时间变化，会让整段历史无法命中前缀缓存。
@@ -3191,7 +3185,7 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 		if message.Role == llm.RoleSystem && strings.Contains(message.Content, promptHistoryFormat) {
 			explained = true
 		}
-		if strings.HasPrefix(message.Content, historyLabel) {
+		if strings.HasPrefix(message.Content, "[历史 ") {
 			historyIndex = index
 		}
 		if message.Role == llm.RoleSystem && strings.Contains(message.Content, "当前好感度：") {
@@ -3208,14 +3202,13 @@ func TestRuntimeMarksHistoryAsReferenceAndCurrentAsTarget(t *testing.T) {
 	if !provider.request.Messages[historyIndex].CacheBreakpoint {
 		t.Fatalf("last history message must carry the stable cache breakpoint: %#v", provider.request.Messages[historyIndex])
 	}
-	if strings.Contains(history, "新问题是什么") || historyIndex == len(provider.request.Messages)-1 {
-		t.Fatalf("history should not hold the current message: %q", history)
+	if strings.Contains(history, "【当前需要回复的消息】") {
+		t.Fatalf("history should not be marked current: %q", history)
 	}
-	// 当前消息是最后一条，写法和历史行一样：「[时间] 发送者: 正文」，同一天只写时分秒。
-	if want := "[" + time.Unix(1120, 0).Local().Format("15:04:05") + "] "; !strings.HasPrefix(current, want) || !strings.HasSuffix(current, ": 新问题是什么") {
-		t.Fatalf("current content = %q, want prefix %q", current, want)
+	if !strings.Contains(current, "【当前需要回复的消息】") || !strings.Contains(current, "新问题是什么") {
+		t.Fatalf("current content = %q", current)
 	}
-	if strings.Contains(current, "【消息时间：") || strings.Contains(current, "【当前需要回复的消息】") {
+	if !strings.Contains(current, "【消息时间：") {
 		t.Fatalf("current timing = %q", current)
 	}
 	if strings.Contains(current, "旧问题是什么") {
@@ -4064,8 +4057,7 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 }
 
 func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
-	setSideHistoryLookback(t, 20)
-	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "10001",
@@ -4093,14 +4085,13 @@ func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
 }
 
 func TestRuntimeImageEditSourcePriority(t *testing.T) {
-	setSideHistoryLookback(t, 20)
 	const (
 		currentImage = "https://example.test/current.jpg"
 		quotedImage  = "https://example.test/quoted.jpg"
 	)
 	recentImage := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
 	newRuntimeWithRecentImage := func() *Runtime {
-		runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		runtime.remember(MessageEvent{
 			Kind:      EventKindPrivate,
 			UserID:    "10001",
@@ -4226,7 +4217,7 @@ func TestRuntimeVisualIntentTreatsMentionedMemberAvatarAsAvailableIdentityImage(
 		t.Fatalf("available identity images = %#v", payload.AvailableIdentityImages)
 	}
 	identity := payload.AvailableIdentityImages[0]
-	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "im_u_") {
+	if identity.Source != "mentioned_member_avatar" || identity.UserID != identityAlias || !strings.HasPrefix(identity.UserID, "im_user_") {
 		t.Fatalf("identity image = %#v", identity)
 	}
 	if strings.Contains(requestTextForPrivacyTest(request), "10001") {
@@ -4332,8 +4323,7 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 }
 
 func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
-	setSideHistoryLookback(t, 20)
-	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	image := MessageEvent{
 		Kind:       EventKindGroup,
 		GroupID:    "20005",

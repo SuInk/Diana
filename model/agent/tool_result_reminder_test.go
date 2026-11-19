@@ -75,27 +75,3 @@ func TestToolResultReminderSwitchesAfterSubtask(t *testing.T) {
 		t.Fatalf("no subtask reminder = %q, want brief", got)
 	}
 }
-
-func TestToolResultReminderListsInterimSends(t *testing.T) {
-	runner := &Runner{cfg: Config{ToolResultReminder: "brief"}}
-	steps := []Step{
-		{Tool: finalizeToolName, Input: map[string]any{"text": "小汐两天没说话了"}},
-		{Tool: webSearchToolName},
-		{Tool: finalizeToolName, Input: map[string]any{"text": "审核没过"}, Error: "blocked"},
-		{Tool: finalizeToolName, Input: map[string]any{"text": "小汐两天没说话了"}},
-	}
-	got := runner.toolResultReminder(steps)
-	if !strings.HasPrefix(got, "brief\n\n【这一轮你已经发出去的话】") {
-		t.Fatalf("reminder = %q", got)
-	}
-	if strings.Count(got, "「小汐两天没说话了」") != 1 || strings.Contains(got, "审核没过") {
-		t.Fatalf("want each sent line once and no failed send: %q", got)
-	}
-	runner.cfg.ToolResultReminder = ""
-	if got := runner.toolResultReminder(steps); !strings.HasPrefix(got, "【这一轮你已经发出去的话】") {
-		t.Fatalf("without reminder = %q", got)
-	}
-	if got := runner.toolResultReminder([]Step{{Tool: webSearchToolName}}); got != "" {
-		t.Fatalf("no sends = %q", got)
-	}
-}
