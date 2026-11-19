@@ -11,13 +11,20 @@ reply prompt construction from:
 - `prompts/zh-CN/maisaka_replyer.prompt`
 - `src/config/official_configs.py`
 
+`splitter.go` adapts the rule-based response splitter at
+`b7f36825463413c47e61d44fe8a93427f6fe5a6f`:
+
+- `src/chat/utils/utils.py` (`_split_into_sentence_segments`,
+  `_merge_processed_segments_to_max_count`, `_finish_response`)
+- `src/config/official_configs.py` (`ResponseSplitterConfig` defaults)
+
 The adapted files retain the upstream GNU GPL version 3 license reproduced in
 `LICENSE`. They are not covered solely by Diana's Limited Redistribution
 License. No license change to unrelated Diana code is implied.
 
 The port contains only the text replyer boundary: prompt assembly, visible chat
 history, reply reference, target message, attention text and default reply
-style. It does not include MaiBot's planner, scheduler, database, model client,
+style, plus the rule-based sentence splitter used before delivery. It does not include MaiBot's planner, scheduler, database, model client,
 delivery service, learning system or expression database.
 
 Diana first completes its normal content and tool pass. The finished draft is
