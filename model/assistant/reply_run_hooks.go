@@ -92,7 +92,7 @@ func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRec
 }
 
 // replyTailReminder 是主回复每一步请求最后那一条【输出前检查】（agent.Request.TailReminder）：
-// 先查再答、群聊篇幅、括号使用、别复述原话、找不到来由的指代先查、没查过别说查过、算数先算对。
+// 先查再答、群聊篇幅、别复述原话、找不到来由的指代先查、没查过别说查过、算数先算对。
 // 只给那一步看，不进前缀，下一步、下一轮重新接一份。
 //
 // 11-17 起请求只追加，这几段挪进系统头部只发一次（#1580、#1582），离生成越来越远。v0.9.11
@@ -101,16 +101,12 @@ func withToolExecutionStatus(req llm.GenerateRequest, records []toolExecutionRec
 // 贴着生成的说明，同一句放系统头部几乎不起作用（见 promptReplyUnknownReferenceSpec 的
 // 回放），所以挪回尾部。只给当步看不伤缓存：terra 合成请求每轮拿掉上一轮的提醒和一直
 // 留着它，命中一样。
-//
-// 括号使用（promptReplyUnclosedBracketSpec）v0.9.10 起就在这条尾部提醒里，v0.9.11 挪进
-// 头部、#1602 挪回时漏了它：11-19 升级后 TG 群里又冒出整条包在括号里的「（盯）」「（等他讲）」。
-// 头部 replyPresentationPrompt 里那份照旧留着。
 func replyTailReminder(cfg BotConfig, event MessageEvent) string {
 	rules := []string{replyVerifyRule}
 	if event.Kind == EventKindGroup {
 		rules = append(rules, cfg.prompt(promptNoteGroupBrevitySpec))
 	}
-	for _, spec := range []*PromptSpec{promptReplyUnclosedBracketSpec, promptReplyNoEchoSpec, promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
+	for _, spec := range []*PromptSpec{promptReplyNoEchoSpec, promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
 		rules = append(rules, cfg.prompt(spec))
 	}
 	var kept []string
