@@ -5,6 +5,7 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +66,105 @@ func TestRecentTextReferenceReportsGenuineAmbiguity(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt=%q missing %q", prompt, want)
 		}
+	}
+}
+
+func TestSemanticTextReferenceRestoresOmittedTopic(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.97,"resolved":"询问 Tibo 宣布给 Codex 的 banked reset 会在今天还是明天到账","source_message_ids":["topic"],"reason":"当前问重置时间，历史仍在讨论 Tibo 的 Codex reset"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{textReferenceEvent(100, "user-a", "topic", "Tibo 说会给 Codex 做一次 banked reset")}
+	event := textReferenceEvent(120, "user-b", "current", "今天或者明天会重置吗？")
+	event.ToMe = true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	if reference == nil || reference.Method != "semantic_context" || !strings.Contains(reference.Canonical, "Tibo") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+}
+
+func TestSemanticTextReferenceAllowsCrossUserClarificationWithoutMergingReplies(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.99,"resolved":"继续回答大眼小手尚未解决的问题：Tibo 给 Codex 的 banked reset 是今天还是明天到账","source_message_ids":["question","clarification"],"reason":"当前成员在回答机器人上一轮的澄清问题"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{
+		textReferenceEvent(100, "user-a", "question", "今天或者明天会重置吗？"),
+		textReferenceEvent(105, "bot", "clarification", "你指 Astra、Codex 还是别的？"),
+	}
+	event := textReferenceEvent(110, "user-b", "current", "codex")
+	event.ToMe = true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	if reference == nil || !strings.Contains(reference.Canonical, "尚未解决") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+	if keyA, keyB := directReplyMergeKey(history[0]), directReplyMergeKey(event); keyA == keyB {
+		t.Fatal("cross-user clarification unexpectedly entered active reply merge identity")
+	}
+}
+
+func TestSemanticTextReferenceSearchesFullSessionAndExcludesCurrentMessage(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.98,"resolved":"询问 Tibo 给 Codex 的 full banked reset 是否会在今天或明天到账","source_message_ids":["old-reset"],"reason":"全历史命中同群重置公告"}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	store := &semanticTextReferenceSearchStore{currentID: "current", result: textReferenceEvent(10, "user-a", "old-reset", "Tibo 宣布 Codex full banked reset 将在 end of day 落地")}
+	runtime.SetMessageHistoryStore(store)
+	event := textReferenceEvent(1_000_000, "user-a", "current", "今天或者明天会重置吗？")
+	event.Kind, event.GroupID, event.ToMe = EventKindGroup, "group", true
+
+	reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, []MessageEvent{textReferenceEvent(999_999, "user-b", "noise", "午饭吃什么")})
+	if reference == nil || !strings.Contains(reference.Canonical, "Tibo") || !strings.Contains(reference.Canonical, "Codex") {
+		t.Fatalf("reference=%#v", reference)
+	}
+	if store.calls == 0 {
+		t.Fatal("full-session search was not called")
+	}
+	request := provider.requestSnapshot()
+	if !requestMessagesContain(request.Messages, "old-reset") {
+		t.Fatalf("full-history candidate missing from reranker request: %#v", request)
+	}
+}
+
+type semanticTextReferenceSearchStore struct {
+	calls     int
+	currentID string
+	result    MessageEvent
+}
+
+func (s *semanticTextReferenceSearchStore) AppendMessageEvent(context.Context, string, MessageEvent) error {
+	return nil
+}
+func (s *semanticTextReferenceSearchStore) ListRecentMessageEvents(context.Context, string, int) ([]MessageEvent, error) {
+	return nil, nil
+}
+func (s *semanticTextReferenceSearchStore) SearchMessageEvents(_ context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	s.calls++
+	if strings.Contains(query.Text, "重置") {
+		return []MessageEvent{s.result}, 1, nil
+	}
+	return nil, 0, nil
+}
+
+func semanticReferenceTestConfig() BotConfig {
+	return BotConfig{ModelRoles: map[string]ModelRole{
+		"reply_assist": {ProfileID: "router", Model: "router-model"},
+	}}
+}
+
+// 语义指代是可有可无的预处理：只绑了意图识别、回复辅助和后台生成都没指定时，
+// 调用会落到对话模型上，这时宁可不跑。
+func TestSemanticTextReferenceSkipsWhenOnlyChatWouldServe(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"resolve","confidence":0.99,"resolved":"x","source_message_ids":["topic"]}`}
+	runtime := NewRuntime(BotConfig{ModelRoles: map[string]ModelRole{
+		"chat":   {ProfileID: "chat", Model: "chat-model"},
+		"intent": {ProfileID: "router", Model: "router-model"},
+	}}, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	history := []MessageEvent{textReferenceEvent(100, "user-a", "topic", "Tibo 说会给 Codex 做一次 banked reset")}
+	event := textReferenceEvent(120, "user-b", "current", "今天或者明天会重置吗？")
+	event.ToMe = true
+
+	if reference := runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history); reference != nil {
+		t.Fatalf("只有对话模型可用时不该跑语义指代：%#v", reference)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("不该发出模型请求：%d", provider.calls)
 	}
 }
 
@@ -174,4 +274,57 @@ func textReferenceEventWithReply(at int64, userID, messageID, text, reply string
 	event := textReferenceEvent(at, userID, messageID, text)
 	event.botReply = reply
 	return event
+}
+
+// 候选历史不限条数、不截字：最早的一条长消息也要原样交给解析模型。
+func TestSemanticTextReferenceSendsEveryHistoryCandidateInFull(t *testing.T) {
+	provider := &capturingLLMProvider{reply: `{"action":"none","confidence":0.1}`}
+	runtime := NewRuntime(semanticReferenceTestConfig(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+	long := strings.Repeat("很长的一段话题内容", 80)
+	var history []MessageEvent
+	for i := range 40 {
+		history = append(history, textReferenceEvent(int64(100+i), "user-a", fmt.Sprintf("m%02d", i), fmt.Sprintf("第%02d条：%s", i, long)))
+	}
+	event := textReferenceEvent(200, "user-b", "current", "codex")
+	event.ToMe = true
+
+	runtime.resolveSemanticTextReference(context.Background(), event, event.RawMessage, history)
+	request := provider.requestSnapshot()
+	for _, want := range []string{"第00条：" + long, "第39条：" + long} {
+		if !requestMessagesContain(request.Messages, want) {
+			t.Fatalf("候选被截断或丢弃：缺少 %.20q", want)
+		}
+	}
+}
+
+type pagedSearchStore struct {
+	*memoryMessageHistoryStore
+	pages [][]MessageEvent
+	total int
+}
+
+func (s *pagedSearchStore) SearchMessageEvents(ctx context.Context, query MessageHistorySearchQuery) ([]MessageEvent, int, error) {
+	index := 0
+	for consumed := 0; index < len(s.pages) && consumed < query.Offset; index++ {
+		consumed += len(s.pages[index])
+	}
+	if index >= len(s.pages) {
+		return nil, s.total, ctx.Err()
+	}
+	if index == 2 {
+		return nil, s.total, context.DeadlineExceeded
+	}
+	return s.pages[index], s.total, nil
+}
+
+// 关键词命中按页取全；中途超时也保留已取到的几页，不整段作废。
+func TestSearchMessageEventPagesKeepsFetchedPagesOnTimeout(t *testing.T) {
+	page := func(prefix string) []MessageEvent {
+		return []MessageEvent{textReferenceEvent(1, "u", prefix+"1", "a"), textReferenceEvent(2, "u", prefix+"2", "b")}
+	}
+	store := &pagedSearchStore{pages: [][]MessageEvent{page("p"), page("q"), page("r")}, total: 6}
+	got := searchMessageEventPages(context.Background(), store, MessageHistorySearchQuery{Text: "x"})
+	if len(got) != 4 || got[3].MessageID != "q2" {
+		t.Fatalf("pages = %d", len(got))
+	}
 }

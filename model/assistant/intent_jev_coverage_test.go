@@ -72,6 +72,7 @@ func TestTextPurposesStayOffIntent(t *testing.T) {
 		// 上下文压缩照 Pi 用会话模型写摘要。
 		PurposeContextSummary:   "chat",
 		PurposeDirectReplyTopic: llm.GroupReplyAssist,
+		PurposeSemanticTextRef:  llm.GroupReplyAssist,
 		PurposeErrorNotice:      llm.GroupReplyAssist,
 		PurposeReplySuppression: llm.GroupReplyAssist,
 		PurposePokeReply:        llm.GroupReplyAssist,
