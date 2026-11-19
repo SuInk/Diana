@@ -477,8 +477,7 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 // 不带关键词按时段读时要照 order=newest 从末尾往前读、按游标接着往前翻。生产
 // 2026-11-18「总结这周」按天传 newest，这里却写死从旧到新，每天只拿到零点后几分钟。
 func TestDianaChatHistoryToolRangeHonorsNewestOrder(t *testing.T) {
-	setSideHistoryLookback(t, 3)
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100, RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	base := time.Date(2026, 8, 19, 0, 0, 0, 0, time.Local).Unix()
 	for index := 1; index <= 5; index++ {

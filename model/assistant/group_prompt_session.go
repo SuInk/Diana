@@ -318,8 +318,9 @@ func (s *groupPromptSession) rememberAnchor(anchor string) {
 
 // historyRenderVersion 进渲染缓存的源哈希：历史的渲染形态变了就加一，已存的条目
 // 下一轮按新形态重渲染，不会新旧两种形态混在一份请求里。2 起机器人发言是 send 调用；
-// 3 起表情包摘要换成一句话标注。
-const historyRenderVersion = 3
+// 3～6 是 v0.9.11 前后试过又退回的形态（表情包一句话标注、同天只写时分秒、雨夹雪格式、
+// 引用不展开），7 起回到 2 的形态，加一是让那几版存下的条目全部重渲染。
+const historyRenderVersion = 7
 
 // stableGroupHistory reuses each rendered public event across turns/restarts.
 // The previous ordering wins for surviving entries; late backfills append.
