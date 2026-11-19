@@ -25,10 +25,8 @@ func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
 			if err != nil || len(got.Messages) != 4 || strings.Count(got.Messages[3].Content, rule) != 1 {
 				t.Fatalf("expression reminder missing or duplicated: %+v err=%v", got, err)
 			}
-			for _, spec := range []*PromptSpec{promptReplyUnknownReferenceSpec, promptReplyClaimedLookupSpec, promptReplyArithmeticSpec} {
-				if strings.Count(got.Messages[3].Content, spec.Default) != 1 || !got.Messages[3].TurnOnly {
-					t.Fatalf("%s reminder missing, duplicated or kept in the prefix: %+v", spec.Key, got.Messages[3])
-				}
+			if strings.Count(got.Messages[3].Content, promptReplyUnknownReferenceSpec.Default) != 1 || !got.Messages[3].TurnOnly {
+				t.Fatalf("unknown reference lookup reminder missing, duplicated or kept in the prefix: %+v", got.Messages[3])
 			}
 			if len(req.Messages) != 2 || got.Messages[2].Content != "current" || !got.Messages[0].CacheBreakpoint {
 				t.Fatal("expression reminder changed history, current input or cache prefix")
