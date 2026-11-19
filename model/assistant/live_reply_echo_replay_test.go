@@ -26,7 +26,10 @@ import (
 //   - tail      请求最后接上当前的【输出前检查】
 //   - tail_rule 同 tail，但不带「别复述原话」这一条，量这条本身有没有用
 //   - tail_1602 同 tail，但不带括号使用：#1602 那版尾部提醒
+//   - deliver   同 tail，并把录下请求里按需目录只列名字的 send_file 换成完整一行（replyFeaturedTools）
 //
+// 交付类统计：file 是调了 send_file（tools_execute、codemode 或 tool_search 取它的定义），
+// paste 是把 <svg 这类源码直接贴进正文，claim 是没调 send_file 却说「发好了」「发了」。
 // 另外数括号：aside 是整条或句中出现成对括号的旁白（「（盯）」「终于下班了（累死）」），
 // trail 是句尾单独挂一个「（」。
 // swe-2 是免费额度、和生产共用一个号：串行跑，一批别超过 20 次。
@@ -53,11 +56,14 @@ func TestLiveReplyEchoReplay(t *testing.T) {
 	full := replyTailReminder(BotConfig{}, group)
 	withoutRule := strings.Replace(full, "\n"+promptReplyNoEchoSpec.Default, "", 1)
 	withoutBracket := strings.Replace(full, "\n"+promptReplyUnclosedBracketSpec.Default, "", 1)
+	fileTool := &dianaFileDeliveryTool{}
+	fileLine := "- " + dianaFileDeliveryToolName + "(filename: string, content?: string, path?: string, preview?: boolean): " + fileTool.Description() + "\n"
+	claim := regexp.MustCompile(`发好了|已经发了|发出来了|发在群里了|文件发了|文件来了`)
 	aside := regexp.MustCompile(`[（(][^（()）]{1,20}[）)]`)
 	quote := regexp.MustCompile(`<diana-quote[^>]*/>|<diana-at[^>]*/>`)
 	speaker := regexp.MustCompile(`^\[[^\]]*\]\s*[^:：]*[:：]\s*`)
 
-	type tally struct{ runs, echo, repeat, silent, aside, trail int }
+	type tally struct{ runs, echo, repeat, silent, aside, trail, file, paste, claim int }
 	totals := map[string]*tally{}
 	for _, path := range paths {
 		raw, err := os.ReadFile(path)
@@ -91,6 +97,9 @@ func TestLiveReplyEchoReplay(t *testing.T) {
 				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: full, Priority: llm.MessagePrioritySystem})
 			case "tail_rule":
 				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: withoutRule, Priority: llm.MessagePrioritySystem})
+			case "deliver":
+				req.Messages[0].Content = featureCatalogTool(req.Messages[0].Content, dianaFileDeliveryToolName, fileLine)
+				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: full, Priority: llm.MessagePrioritySystem})
 			case "tail_1602":
 				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Content: withoutBracket, Priority: llm.MessagePrioritySystem})
 			}
@@ -107,6 +116,9 @@ func TestLiveReplyEchoReplay(t *testing.T) {
 				var calls []string
 				for _, call := range resp.ToolCalls {
 					name := call.Name
+					if raw, _ := json.Marshal(call.Arguments); call.Name != "send" && strings.Contains(string(raw), dianaFileDeliveryToolName) {
+						name += "(" + dianaFileDeliveryToolName + ")"
+					}
 					if call.Name == "send" {
 						text, _ = call.Arguments["text"].(string)
 						if silent, _ := call.Arguments["silent"].(bool); silent {
@@ -136,6 +148,18 @@ func TestLiveReplyEchoReplay(t *testing.T) {
 				if clean == "" {
 					counts.silent++
 				}
+				usedFile := strings.Contains(strings.Join(calls, ","), dianaFileDeliveryToolName)
+				pasted := strings.Contains(clean, "<svg") || strings.Contains(clean, "</svg>")
+				claimed := !usedFile && claim.MatchString(clean)
+				if usedFile {
+					counts.file++
+				}
+				if pasted {
+					counts.paste++
+				}
+				if claimed {
+					counts.claim++
+				}
 				hasAside := aside.MatchString(clean)
 				hasTrail := strings.HasSuffix(clean, "（") || strings.HasSuffix(clean, "(")
 				if hasAside {
@@ -144,13 +168,29 @@ func TestLiveReplyEchoReplay(t *testing.T) {
 				if hasTrail {
 					counts.trail++
 				}
-				t.Logf("%-9s %-34s echo=%-5v repeat=%-5v aside=%-5v trail=%-5v calls=%s text=%s", variant, filepath.Base(path), echo, repeat, hasAside, hasTrail, strings.Join(calls, ","), truncateRunes(clean, 90))
+				t.Logf("%-9s %-34s echo=%-5v repeat=%-5v aside=%-5v trail=%-5v file=%-5v paste=%-5v claim=%-5v calls=%s text=%s", variant, filepath.Base(path), echo, repeat, hasAside, hasTrail, usedFile, pasted, claimed, strings.Join(calls, ","), truncateRunes(clean, 90))
 			}
 		}
 	}
 	for _, variant := range variants {
 		if counts := totals[variant]; counts != nil {
-			t.Logf("SUMMARY %-9s runs=%d echo=%d repeat=%d aside=%d trail=%d silent_or_tool=%d", variant, counts.runs, counts.echo, counts.repeat, counts.aside, counts.trail, counts.silent)
+			t.Logf("SUMMARY %-9s runs=%d echo=%d repeat=%d aside=%d trail=%d silent_or_tool=%d file=%d paste=%d claim=%d", variant, counts.runs, counts.echo, counts.repeat, counts.aside, counts.trail, counts.silent, counts.file, counts.paste, counts.claim)
 		}
 	}
+}
+
+// featureCatalogTool 把按需目录最后一行「只列名字」里的 name 挪出来，写成完整一行。
+func featureCatalogTool(system, name, line string) string {
+	const unlisted = "- 另外还有（只列名字"
+	at := strings.Index(system, unlisted)
+	if at < 0 {
+		return system
+	}
+	end := strings.Index(system[at:], "\n")
+	if end < 0 {
+		end = len(system) - at
+	}
+	listing := system[at : at+end]
+	trimmed := strings.Replace(strings.Replace(listing, "、"+name, "", 1), name+"、", "", 1)
+	return system[:at] + line + trimmed + system[at+end:]
 }

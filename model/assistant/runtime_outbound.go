@@ -214,6 +214,17 @@ func (r *Runtime) sendOutgoingWithResult(ctx context.Context, event MessageEvent
 		msg = r.applyOutgoingReplyMarker(ctx, event, msg)
 		msg = r.normalizeOutgoingMentions(event, msg)
 		msg = r.resolveOutgoingMentionNames(event, msg)
+		// 纯文本平台的代码围栏留到这里才去：分条要靠它把代码整块留在一条里。
+		if strings.Contains(msg.Text, "```") {
+			// 平台按实际发出去的通道算：默认配置可能属于另一个平台（多通道时）。
+			cfg := r.effectiveConfigForEvent(event)
+			if platform, err := r.outboundPlatformForEvent(event); err == nil && platform != "" {
+				cfg.Platform = platform
+			}
+			if markdownToPlainForConfig(cfg) {
+				msg.Text = stripCodeFenceLines(msg.Text)
+			}
+		}
 	}
 	if blockedErr := r.blockedGroupSendError(event); blockedErr != nil {
 		return nil, blockedErr

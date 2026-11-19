@@ -9,7 +9,7 @@ import (
 )
 
 func (r *Runtime) replyPartLimitIssue(cfg BotConfig, event MessageEvent, part string) string {
-	part = normalizeReply(part, 0, markdownToPlainForConfig(cfg))
+	part = deliveredReplyText(cfg, part)
 	if cfg.MaxReplyChars > 0 && replyCompressionRunes(part) > cfg.MaxReplyChars {
 		return fmt.Sprintf("正文超过单条 %d 字符上限", cfg.MaxReplyChars)
 	}

@@ -5398,6 +5398,9 @@ var replyFeaturedTools = []string{
 	// subtask 压成一行时只剩「交给隔离 Worker」，看不出什么调研该派；web_search
 	// 写全文能批量并行之后，模型就全用它自己查了。两边都写全文才比得出分工。
 	dianaSubtaskToolName,
+	// send_file 只列名字时，swe-2 把 6K 字的 SVG 源码直接贴进正文（11-19 QQ 群拆成 57 条刷屏），
+	// 之后又不调工具就说「文件发好了」。描述里「长代码、SVG 别塞进正文」得让它看得到。
+	dianaFileDeliveryToolName,
 }
 
 type replyRuleDecision struct {

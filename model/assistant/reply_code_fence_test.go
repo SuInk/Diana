@@ -145,12 +145,35 @@ func TestMaskFencedCodeBlocksLeavesPlainTextAlone(t *testing.T) {
 }
 
 // 纯文本平台在 normalizeReply 阶段就把围栏删掉了，这一层应当什么都不做。
-func TestSplitChatReplyUnaffectedAfterMarkdownDowngrade(t *testing.T) {
-	plain := markdownToPlain("看这段：\n```python\nprint(hello)\n```\n就这样")
-	if strings.Contains(plain, "```") {
-		t.Fatalf("降级没删掉围栏：%q", plain)
+// 11-19 QQ 群（OneBot，纯文本）一条带 ```svg 的回复按行拆成了 57 条：降级把围栏删在了
+// 分条之前。现在围栏留到分条以后，发出前才去掉；块里的 * # - 也不当 Markdown 处理。
+func TestPlainTextDowngradeKeepsCodeBlockInOneMessage(t *testing.T) {
+	code := "<svg viewBox=\"0 0 10 10\">\n  <defs>\n    <path id=\"a\" d=\"M0 0\"/>\n  </defs>\n  # not a heading\n  - not a bullet **x**\n</svg>"
+	reply := "存成 .svg 用浏览器打开：\n\n```svg\n" + code + "\n```"
+	inputs := map[string]string{
+		"newlines":    reply,
+		"explicit_br": strings.ReplaceAll(reply, "\n", notificationLineMarker),
 	}
-	if parts := splitChatReply(plain, chatSplitLimits{}); len(parts) == 0 {
-		t.Fatal("降级后的文本分条为空")
+	for name, input := range inputs {
+		for _, lineSplit := range []bool{false, true} {
+			parts := splitChatReply(normalizeReply(input, 0, true), chatSplitLimits{LineSplit: lineSplit})
+			var codeParts []string
+			for _, part := range parts {
+				if strings.Contains(part, "<svg") || strings.Contains(part, "</svg>") {
+					codeParts = append(codeParts, part)
+				}
+			}
+			if len(codeParts) != 1 || !strings.Contains(stripCodeFenceLines(codeParts[0]), code) {
+				t.Fatalf("%s line_split=%v: code must stay whole in one message: %q", name, lineSplit, parts)
+			}
+			for _, part := range parts {
+				if strings.Contains(stripCodeFenceLines(part), "```") {
+					t.Fatalf("%s: fence left after stripping: %q", name, part)
+				}
+			}
+		}
+	}
+	if got := stripCodeFenceLines("看这段：\n```python\nprint(hello)\n```"); got != "看这段：\nprint(hello)" {
+		t.Fatalf("stripCodeFenceLines = %q", got)
 	}
 }

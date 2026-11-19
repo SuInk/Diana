@@ -820,7 +820,7 @@ func (c *QQOfficialChannel) SendWithResult(ctx context.Context, msg OutgoingMess
 		if err != nil && markdown && !qqOfficialRetryUseless(err) {
 			// Markdown 被拒（没开权限、链接域名未报备等）就降成纯文本再发一次，
 			// 宁可丢格式也不能丢整条回复。
-			plain := map[string]any{"content": markdownToPlain(text), "msg_type": 0}
+			plain := map[string]any{"content": stripCodeFenceLines(markdownToPlain(text)), "msg_type": 0}
 			if ref, ok := body["message_reference"]; ok {
 				plain["message_reference"] = ref
 			}

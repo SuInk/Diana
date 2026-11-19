@@ -12,6 +12,10 @@ import (
 func TestMarkdownToPlainStripsCommonSyntax(t *testing.T) {
 	input := "# 标题\n\n**重点**内容和`代码`，还有[链接](https://example.com)。\n\n- 苹果\n- 香蕉\n\n> 引用一句\n\n---\n\n```go\nfmt.Println(\"hi\")\n```\n"
 	got := markdownToPlain(input)
+	if !strings.Contains(got, "```go") {
+		t.Fatalf("code fence must survive until delivery:\n%s", got)
+	}
+	got = stripCodeFenceLines(got)
 
 	for _, banned := range []string{"**", "# ", "```", "](", "> "} {
 		if strings.Contains(got, banned) {
