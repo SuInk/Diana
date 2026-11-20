@@ -77,7 +77,13 @@ type dianaGroupRelationsResult struct {
 	Range        string `json:"range,omitempty"`
 	Participants int    `json:"participants,omitempty"`
 	Messages     int    `json:"messages,omitempty"`
+	// Truncated 说明扫描撞到了条数上限，图只反映最近这一段；以前存储层标了但工具没往外说，
+	// 「all」范围的结果被当成了全部历史。
+	Truncated bool `json:"truncated,omitempty"`
 }
+
+// relationTruncatedNote 是扫描撞到条数上限时给模型的说明。
+const relationTruncatedNote = "这段时间消息太多，关系图只统计了最近的一部分消息，更早的互动没有计入；扩大统计范围也不会多算。"
 
 func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
@@ -118,7 +124,11 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		return marshalRelationsResult(result), nil
 	}
 	if centerID != "" && centerID != botID && graph.CenterID != centerID {
-		result := dianaGroupRelationsResult{Message: "这段时间本群没有这位成员的发言记录，无法以其为中心画互动圈；可以扩大统计时间范围。", Range: rangeID}
+		message := "这段时间本群没有这位成员的发言记录，无法以其为中心画互动圈；可以扩大统计时间范围。"
+		if graph.Truncated {
+			message = "统计到的最近一部分消息里没有这位成员的发言，无法以其为中心画互动圈。" + relationTruncatedNote
+		}
+		result := dianaGroupRelationsResult{Message: message, Range: rangeID, Truncated: graph.Truncated}
 		t.recordRelationsOutcome(ctx, result, "")
 		return marshalRelationsResult(result), nil
 	}
@@ -171,6 +181,7 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 			Range:        rangeID,
 			Participants: graph.Participants,
 			Messages:     graph.Messages,
+			Truncated:    graph.Truncated,
 		}
 		t.recordRelationsOutcome(ctx, result, fmt.Sprintf("直接渲染：%v；浏览器渲染：%v", rasterErr, browserErr))
 		return marshalRelationsResult(result), nil
@@ -185,6 +196,10 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 		Range:        rangeID,
 		Participants: graph.Participants,
 		Messages:     graph.Messages,
+		Truncated:    graph.Truncated,
+	}
+	if graph.Truncated {
+		result.Message += relationTruncatedNote
 	}
 	t.recordRelationsOutcome(ctx, result, "")
 	return marshalRelationsResult(result), nil

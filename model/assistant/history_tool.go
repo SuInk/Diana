@@ -268,10 +268,10 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		// relevance 曾被拿来断言「最早一条」，见 #457。
 		"order":        toolEnumParam("排序，默认 newest；relevance 不能分页，不能证明最早", "newest", "oldest", "relevance"),
 		"cursor":       toolStringParam("续查时原样传回 next_cursor，其他参数不变"),
-		"group_id":     toolStringParam("目标群；指定群时 scope=current，跨群需开启跨群记忆"),
+		"group_id":     toolStringParam("目标群（按条件查、ids、around、speakers、reactions）；指定群时 scope=current，跨群需开启跨群记忆"),
 		"from_time":    toolStringParam(`起始时间，Unix 秒或 "2006-01-02 15:04"`),
 		"through_time": toolStringParam(`结束时间，格式同 from_time`),
-		"scope": toolEnumParam("all_groups 跨群检索，需开启跨群记忆；私聊仅主人",
+		"scope": toolEnumParam("all_groups 跨群检索或统计（speakers/reactions 合并各群按人计），需开启跨群记忆；私聊仅主人",
 			"current", "all_groups"),
 		"hours":    toolIntParam("只看最近多少小时；按条件查不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
 		"days":     toolIntParam("只看最近多少天", 1, 365),
@@ -291,6 +291,17 @@ func chatHistoryFiltered(input map[string]any) bool {
 	}
 	if intFromAny(input["hours"]) > 0 || intFromAny(input["days"]) > 0 || chatHistoryBool(input, "all_time") {
 		return true
+	}
+	scope := strings.TrimSpace(configToolString(input, "scope"))
+	return scope != "" && scope != "current"
+}
+
+// chatHistoryContentFiltered 报告调用里有没有时间以外的筛选：关键词、发送者或跨群范围。
+func chatHistoryContentFiltered(input map[string]any) bool {
+	for _, key := range []string{"query", "sender_user_id", "sender_name"} {
+		if strings.TrimSpace(configToolString(input, key)) != "" {
+			return true
+		}
 	}
 	scope := strings.TrimSpace(configToolString(input, "scope"))
 	return scope != "" && scope != "current"
@@ -323,16 +334,31 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		}
 	}
 
-	groupID := strings.TrimSpace(configToolString(input, "group_id"))
-	if groupID != "" && operation != "search" && operation != "find" && operation != "around" && operation != "context" && operation != "ids" {
-		return "", fmt.Errorf("group_id 仅支持按条件查、ids 和 around；不能忽略目标群后查询当前会话")
+	// 显式写了 recent/range 又带了筛选条件时改走按条件查：recent 和 range 只认时间与
+	// 消息范围，以前 {"operation":"range","sender_user_id":…} 会静默返回所有人的消息，
+	// scope=all_groups 也只读当前会话，结果还不说明。search 没有关键词时自己退回 range。
+	switch operation {
+	case "recent", "list":
+		if chatHistoryFiltered(input) || hasMessageIDRange(input) {
+			operation = "search"
+		}
+	case "range", "timeline", "between", "window":
+		if chatHistoryContentFiltered(input) {
+			operation = "search"
+		}
 	}
 
+	// 统计自己认 scope 和 group_id，放在 group_id 的限制前面。
 	switch operation {
 	case "speakers", "speaker_stats":
 		return t.speakerStats(ctx, input)
 	case "reactions", "likes":
 		return t.reactionStats(ctx, input)
+	}
+
+	groupID := strings.TrimSpace(configToolString(input, "group_id"))
+	if groupID != "" && operation != "search" && operation != "find" && operation != "around" && operation != "context" && operation != "ids" {
+		return "", fmt.Errorf("group_id 仅支持按条件查、ids、around、speakers 和 reactions；不能忽略目标群后查询当前会话")
 	}
 
 	var result dianaChatHistoryResult
@@ -365,6 +391,14 @@ func (t *dianaChatHistoryTool) Run(ctx context.Context, input map[string]any) (s
 		result.Message = strings.TrimSpace(result.Message) + " " + t.idNotice()
 	}
 	return marshalDianaChatHistoryResult(ctx, result)
+}
+
+// aroundWidenSteps 是 around 读前后文时逐级放宽的时间窗；都不够时再往前读到最早、
+// 往后读到现在。
+var aroundWidenSteps = []struct{ lookback, lookahead time.Duration }{
+	{semanticReferenceQuotedLookback, semanticReferenceQuotedLookahead},
+	{3 * 24 * time.Hour, 24 * time.Hour},
+	{30 * 24 * time.Hour, 7 * 24 * time.Hour},
 }
 
 func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any) (dianaChatHistoryResult, error) {
@@ -410,24 +444,50 @@ func (t *dianaChatHistoryTool) around(ctx context.Context, input map[string]any)
 	}
 	before := chatHistoryNonNegative(input, "before", defaultChatHistoryBefore)
 	after := chatHistoryNonNegative(input, "after", defaultChatHistoryAfter)
-	timeline, err := t.timeline(
-		ctx,
-		anchor.Time-int64(semanticReferenceQuotedLookback/time.Second),
-		anchor.Time+int64(semanticReferenceQuotedLookahead/time.Second),
-	)
-	if err != nil {
-		return dianaChatHistoryResult{}, err
-	}
-	timeline = mergeSemanticReferenceHistory(timeline, []MessageEvent{anchor})
+	// 先读锚点前 6 小时、后 30 分钟；冷清的群里凑不够 before/after 条就逐级放宽，
+	// 直到条数够了或读到全部历史。以前固定窗口，before=20 在冷清群里只给三五条，
+	// 结果还不说明是被时间窗截掉的。
+	now := time.Now().Unix()
+	var timeline []MessageEvent
 	anchorIndex := -1
-	for index := range timeline {
-		if strings.TrimSpace(timeline[index].MessageID) == messageID {
-			anchorIndex = index
+	from := anchor.Time - int64(aroundWidenSteps[0].lookback/time.Second)
+	through := anchor.Time + int64(aroundWidenSteps[0].lookahead/time.Second)
+	for step := 0; ; step++ {
+		loaded, err := t.timeline(ctx, from, through)
+		if err != nil {
+			return dianaChatHistoryResult{}, err
+		}
+		timeline = mergeSemanticReferenceHistory(loaded, []MessageEvent{anchor})
+		anchorIndex = -1
+		for index := range timeline {
+			if strings.TrimSpace(timeline[index].MessageID) == messageID {
+				anchorIndex = index
+				break
+			}
+		}
+		if anchorIndex < 0 {
+			return dianaChatHistoryResult{}, fmt.Errorf("当前会话中无法定位消息 %s 的相邻记录", messageID)
+		}
+		// 窗口已经读到现在时，后面不够 after 条只是还没人说话，不用再放宽。
+		enoughBefore := anchorIndex >= before || from <= 0
+		enoughAfter := len(timeline)-anchorIndex-1 >= after || through >= now
+		if enoughBefore && enoughAfter {
 			break
 		}
-	}
-	if anchorIndex < 0 {
-		return dianaChatHistoryResult{}, fmt.Errorf("当前会话中无法定位消息 %s 的相邻记录", messageID)
+		// 哪一侧够了就不再往那边放宽，免得锚点是最早一条时把到现在的全部消息都读一遍。
+		next := step + 1
+		if !enoughBefore {
+			from = 0
+			if next < len(aroundWidenSteps) {
+				from = anchor.Time - int64(aroundWidenSteps[next].lookback/time.Second)
+			}
+		}
+		if !enoughAfter {
+			through = max(now, anchor.Time)
+			if next < len(aroundWidenSteps) {
+				through = anchor.Time + int64(aroundWidenSteps[next].lookahead/time.Second)
+			}
+		}
 	}
 	left := anchorIndex - before
 	if left < 0 {
@@ -597,6 +657,12 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	// （生产 2026-11-05：「心海」7 天内 3 条、24 小时内 0 条）。
 	if !hasChatHistoryTimeValue(input, "from_time") && intFromAny(input["days"]) <= 0 && intFromAny(input["hours"]) <= 0 {
 		from = 0
+	}
+	// from_message_id/through_message_id 收窄到那两条消息的时间；以前按条件查时这两个
+	// 参数被忽略，「从这条往后谁提过部署」查的是全部历史。
+	from, through, err = t.narrowWindowByMessageIDs(ctx, input, from, through)
+	if err != nil {
+		return dianaChatHistoryResult{}, err
 	}
 	page := historySearchCursor{Version: 1, Scope: historySearchScope(sessionKey(t.event), query+"\x00"+sender, scope, order), From: from, Through: through}
 	if cursor := configToolString(input, "cursor"); cursor != "" {
@@ -811,6 +877,33 @@ func (t *dianaChatHistoryTool) window(ctx context.Context, input map[string]any)
 		Message:  message,
 		Guidance: "有 next_cursor 时使用 range 和 cursor 续查，游标固定时间范围且不会跳过同一秒的消息。next_from_time 仅在时间边界无重复时提供。has_more=true 时还没读完，不得据此断言没有其他记录。",
 	}, nil
+}
+
+// narrowWindowByMessageIDs 把时间窗收窄到 from_message_id 到 through_message_id 之间，
+// 消息在当前会话（或 group_id 指定的群）里找不到时报错，不静默忽略。
+func (t *dianaChatHistoryTool) narrowWindowByMessageIDs(ctx context.Context, input map[string]any, from, through int64) (int64, int64, error) {
+	for _, bound := range []struct {
+		key, label string
+		start      bool
+	}{{"from_message_id", "起始", true}, {"through_message_id", "结束", false}} {
+		id := strings.TrimSpace(configToolString(input, bound.key))
+		if id == "" {
+			continue
+		}
+		anchor, found := t.runtime.findSemanticReferenceEvent(ctx, t.event, id)
+		if !found {
+			return 0, 0, fmt.Errorf("当前会话中找不到%s消息 %s（可能早于入库时间或属于其他会话；其他群的消息要同时传 group_id）", bound.label, id)
+		}
+		if anchor.Time <= 0 {
+			continue
+		}
+		if bound.start {
+			from = max(from, anchor.Time)
+		} else {
+			through = min(through, anchor.Time)
+		}
+	}
+	return from, through, nil
 }
 
 // resolveWindow 解析检索时间窗。from_time、through_time 既收 Unix 秒也收本地
@@ -1338,10 +1431,15 @@ func (t *dianaChatHistoryTool) resolveSearchSenders(ctx context.Context, senderI
 	if len(speakers) == 0 {
 		return nil, nil, "", fmt.Errorf("聊天记录里没有昵称、旧昵称或用户名含「%s」的发言人；换个写法，或不填 sender_name、把昵称放进 query 做全文检索", senderName)
 	}
+	candidates := len(preferExactSpeakers(speakers, 0))
 	resolved := preferExactSpeakers(speakers, maximumResolvedSenders)
 	note := ""
 	if len(resolved) > 1 {
 		note = "昵称对应多个账号，结果是 resolved_senders 里这些人的合并；只看其中一人时改用 sender_user_id。"
+	}
+	// 以前超出合并上限的账号直接丢掉不说，模型会把只含前几个人的结果当成全部。
+	if dropped := candidates - len(resolved); dropped > 0 {
+		note += fmt.Sprintf("另有 %d 个账号的昵称也匹配，没有合并进来（一次最多 %d 个）；换更准确的昵称，或用 sender_user_id 查他们。", dropped, maximumResolvedSenders)
 	}
 	return speakerIDs(resolved), resolved, note, nil
 }

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 )
@@ -44,20 +45,31 @@ type MessageReactionRow struct {
 	At        int64  `json:"at"`
 }
 
-// GroupStatsRank 是排行里的一行：某人在时间段里的条数。
+// GroupStatsRank 是排行里的一行：某人在时间段里的条数。存储层按会话分开给，Session 是
+// 这一行所在的群会话；跨群统计时由工具按权限筛掉读不了的群，再按人合并。
 type GroupStatsRank struct {
+	Session  string `json:"session,omitempty"`
 	UserID   string `json:"user_id"`
 	UserName string `json:"user_name,omitempty"`
 	Count    int    `json:"count"`
 }
 
-// GroupStatsStore 由持久化层实现。session 是 sessionKey 的结果；时间都是 Unix 秒，
-// until 为 0 表示到现在。排行返回的第二个值是时间段里参与的总人数。
+// GroupStatsQuery 是排行的统计范围。给了 SessionPrefix 就统计这个前缀下的所有群（跨群），
+// 否则只统计 Session 这一个群。时间都是 Unix 秒，Until 为 0 表示到现在。
+type GroupStatsQuery struct {
+	Session       string
+	SessionPrefix string
+	Since         int64
+	Until         int64
+}
+
+// GroupStatsStore 由持久化层实现。session 是 sessionKey 的结果。排行按会话和人分组，
+// 返回全部行，按条数从多到少。
 type GroupStatsStore interface {
 	RecordMessageReaction(ctx context.Context, reaction MessageReaction) error
 	ListMessageReactions(ctx context.Context, session, messageID string) ([]MessageReactionRow, error)
-	RankReactionGivers(ctx context.Context, session string, since, until int64, limit int) ([]GroupStatsRank, int, error)
-	RankGroupSpeakers(ctx context.Context, session string, since, until int64, limit int) ([]GroupStatsRank, int, error)
+	RankReactionGivers(ctx context.Context, query GroupStatsQuery) ([]GroupStatsRank, error)
+	RankGroupSpeakers(ctx context.Context, query GroupStatsQuery) ([]GroupStatsRank, error)
 }
 
 const (
@@ -155,7 +167,9 @@ type groupStatsResult struct {
 	Window  string `json:"window,omitempty"`
 	// Total 是时间段里参与的人数（单条消息的表情回应时是挂了表情的人数）。排行按整条
 	// 分页，Page 写明这一页是第几到第几名、怎么接着读。
-	Total     int                  `json:"total"`
+	Total int `json:"total"`
+	// Groups 是跨群统计时实际计入的群数。
+	Groups    int                  `json:"groups,omitempty"`
 	Page      *toolResultPage      `json:"page,omitempty"`
 	Ranks     []groupStatsRankItem `json:"ranks,omitempty"`
 	MessageID string               `json:"message_id,omitempty"`
@@ -177,9 +191,6 @@ type groupReactionItem struct {
 }
 
 func (t *dianaChatHistoryTool) groupStatsStore() (GroupStatsStore, error) {
-	if t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
-		return nil, fmt.Errorf("群统计只在群聊中可用")
-	}
 	t.runtime.mu.RLock()
 	store, ok := t.runtime.messageStore.(GroupStatsStore)
 	t.runtime.mu.RUnlock()
@@ -187,6 +198,106 @@ func (t *dianaChatHistoryTool) groupStatsStore() (GroupStatsStore, error) {
 		return nil, fmt.Errorf("本地聊天记录没有开启持久化，无法统计")
 	}
 	return store, nil
+}
+
+// groupStatsScope 是一次统计实际覆盖的范围。
+type groupStatsScope struct {
+	query GroupStatsQuery
+	// prefix 非空表示跨群：会话键去掉它就是群号。
+	prefix string
+	label  string
+	guard  *crossGroupReadGuard
+}
+
+// resolveGroupStatsScope 照 search 的口径认 scope 和 group_id：
+// 默认当前群；group_id 指定某个群；scope=all_groups 统计这个机器人所在的全部群。
+// 以前统计只看当前群，模型传了 scope=all_groups 也照样只拿到本群人数，还当成了
+// 跨群结果（生产 2026-11-20「算跨群」回了同一个 39 人）。
+func (t *dianaChatHistoryTool) resolveGroupStatsScope(ctx context.Context, input map[string]any) (groupStatsScope, error) {
+	scope := strings.TrimSpace(configToolString(input, "scope"))
+	crossGroup := scope == "all_groups" || scope == "cross_group" || scope == "groups"
+	if scope != "" && scope != "current" && !crossGroup {
+		return groupStatsScope{}, fmt.Errorf("scope 必须是 current 或 all_groups")
+	}
+	groupID := strings.TrimSpace(configToolString(input, "group_id"))
+	if groupID != "" && crossGroup {
+		return groupStatsScope{}, fmt.Errorf("指定 group_id 时 scope 必须为 current；all_groups 表示全部可见群，不能同时指定单群")
+	}
+	current := t.event.Kind == EventKindGroup && strings.TrimSpace(t.event.GroupID) != ""
+	switch {
+	case crossGroup:
+		if err := t.crossGroupSearchError(ctx); err != nil {
+			return groupStatsScope{}, err
+		}
+		prefix := groupHistorySessionPrefix(t.event)
+		return groupStatsScope{query: GroupStatsQuery{SessionPrefix: prefix}, prefix: prefix, label: "同一机器人的所有群", guard: newCrossGroupReadGuard(ctx, t)}, nil
+	case groupID != "" && (!current || groupID != strings.TrimSpace(t.event.GroupID)):
+		if err := t.crossGroupSearchError(ctx); err != nil {
+			return groupStatsScope{}, err
+		}
+		if !newCrossGroupReadGuard(ctx, t).allows(ctx, groupID) {
+			return groupStatsScope{}, fmt.Errorf("你不在群 %s 里，不能统计这个群", groupID)
+		}
+		scoped := t.event
+		scoped.Kind, scoped.GroupID = EventKindGroup, groupID
+		return groupStatsScope{query: GroupStatsQuery{Session: sessionKey(scoped)}, label: "群 " + groupID}, nil
+	case current:
+		return groupStatsScope{query: GroupStatsQuery{Session: sessionKey(t.event)}, label: "本群"}, nil
+	}
+	return groupStatsScope{}, fmt.Errorf("私聊里没有本群可统计；要统计群，传 group_id 指定群，或 scope=all_groups 统计全部群（需开启跨群记忆，私聊仅主人）")
+}
+
+// mergeRanks 把存储层按会话分开的行按人合并。跨群时先筛掉提问者读不了的群；
+// 名字取这个人发言最多的那个群里的名字。返回合并后的排行、覆盖的群数和被筛掉的群数。
+func (scope groupStatsScope) mergeRanks(ctx context.Context, rows []GroupStatsRank) ([]GroupStatsRank, int, int) {
+	groups, dropped := map[string]bool{}, map[string]bool{}
+	byUser := map[string]*GroupStatsRank{}
+	best := map[string]int{}
+	var order []string
+	for _, row := range rows {
+		if scope.prefix != "" {
+			groupID := strings.TrimPrefix(row.Session, scope.prefix)
+			if scope.guard != nil && !scope.guard.allows(ctx, groupID) {
+				dropped[row.Session] = true
+				continue
+			}
+		}
+		groups[row.Session] = true
+		merged, ok := byUser[row.UserID]
+		if !ok {
+			merged = &GroupStatsRank{UserID: row.UserID}
+			byUser[row.UserID] = merged
+			order = append(order, row.UserID)
+		}
+		merged.Count += row.Count
+		if row.UserName != "" && row.Count > best[row.UserID] {
+			best[row.UserID] = row.Count
+			merged.UserName = row.UserName
+		}
+	}
+	out := make([]GroupStatsRank, 0, len(order))
+	for _, userID := range order {
+		out = append(out, *byUser[userID])
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Count != out[j].Count {
+			return out[i].Count > out[j].Count
+		}
+		return out[i].UserID < out[j].UserID
+	})
+	return out, len(groups), len(dropped)
+}
+
+// coverageNote 说明统计覆盖了几个群，跨群时还要说清楚是不是全部。
+func (scope groupStatsScope) coverageNote(groups, dropped int) string {
+	if scope.prefix == "" {
+		return ""
+	}
+	note := fmt.Sprintf("跨群统计覆盖本地有记录的 %d 个群，同一个人在多个群的条数已合并、只算一人。", groups)
+	if dropped > 0 {
+		note += fmt.Sprintf("另有 %d 个群你不在里面，没有计入。", dropped)
+	}
+	return note + "只算得到机器人在群里时本地记下的消息。"
 }
 
 // statsWindow 解析统计时间段：没给任何时间参数时默认最近 7 天。
@@ -226,20 +337,27 @@ func (t *dianaChatHistoryTool) speakerStats(ctx context.Context, input map[strin
 	if err != nil {
 		return "", err
 	}
+	scope, err := t.resolveGroupStatsScope(ctx, input)
+	if err != nil {
+		return "", err
+	}
 	from, through := t.statsWindow(input)
-	// 存储层给全部人的排行（limit=0），这里按整条分页，不再只列前几名。
-	ranks, total, err := store.RankGroupSpeakers(ctx, sessionKey(t.event), from, through, 0)
+	scope.query.Since, scope.query.Until = from, through
+	rows, err := store.RankGroupSpeakers(ctx, scope.query)
 	if err != nil {
 		return "", fmt.Errorf("统计发言失败：%w", err)
 	}
-	message := fmt.Sprintf("这是本群在这个时间段里的发言排行（按本地记下的消息条数），共 %d 人发过言。", total)
+	ranks, groups, dropped := scope.mergeRanks(ctx, rows)
+	total := len(ranks)
+	message := fmt.Sprintf("这是%s在这个时间段里的发言排行（按本地记下的消息条数），共 %d 人发过言。", scope.label, total)
 	if total == 0 {
 		message = "这个时间段本地没有记到任何群消息，可能机器人当时不在群里，不要编造排行。"
 	}
-	message += "is_bot=true 的是机器人（包括本群标记过的其他机器人）。这是发言条数，不是点赞数。"
+	message += scope.coverageNote(groups, dropped)
+	message += "is_bot=true 的是机器人（包括标记过的其他机器人）。这是发言条数，不是点赞数。"
 	return t.rankPage(ctx, input, groupStatsResult{
 		OK: true, Action: "speakers", Message: message, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
-		Total: total,
+		Total: total, Groups: groups,
 	}, ranks)
 }
 
@@ -263,9 +381,16 @@ func (t *dianaChatHistoryTool) reactionStats(ctx context.Context, input map[stri
 	if err != nil {
 		return "", err
 	}
+	scope, err := t.resolveGroupStatsScope(ctx, input)
+	if err != nil {
+		return "", err
+	}
 	const coverage = "表情回应是从功能上线后才开始记录的，更早的点赞查不到；Telegram 只有机器人是群管理员时才收得到；取消掉的表情不计入；QQ 的表情是表情编号（例如 76 是赞）。"
 	if messageID := configToolString(input, "message_id"); messageID != "" {
-		rows, err := store.ListMessageReactions(ctx, sessionKey(t.event), messageID)
+		if scope.prefix != "" {
+			return "", fmt.Errorf("查单条消息的表情回应要传它所在群的 group_id，不能用 scope=all_groups")
+		}
+		rows, err := store.ListMessageReactions(ctx, scope.query.Session, messageID)
 		if err != nil {
 			return "", fmt.Errorf("读取表情回应失败：%w", err)
 		}
@@ -299,17 +424,20 @@ func (t *dianaChatHistoryTool) reactionStats(ctx context.Context, input map[stri
 		})
 	}
 	from, through := t.statsWindow(input)
-	ranks, total, err := store.RankReactionGivers(ctx, sessionKey(t.event), from, through, 0)
+	scope.query.Since, scope.query.Until = from, through
+	rows, err := store.RankReactionGivers(ctx, scope.query)
 	if err != nil {
 		return "", fmt.Errorf("统计表情回应失败：%w", err)
 	}
-	message := fmt.Sprintf("这是本群在这个时间段里挂表情回应（点赞）的排行，count 是挂出去的表情个数，共 %d 人。", total)
+	ranks, groups, dropped := scope.mergeRanks(ctx, rows)
+	total := len(ranks)
+	message := fmt.Sprintf("这是%s在这个时间段里挂表情回应（点赞）的排行，count 是挂出去的表情个数，共 %d 人。", scope.label, total)
 	if total == 0 {
 		message = "这个时间段没有记到表情回应。不要拿发言排行或别人贴过的名单冒充点赞名单。"
 	}
 	return t.rankPage(ctx, input, groupStatsResult{
-		OK: true, Action: "reactions", Message: message + coverage, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
-		Total: total,
+		OK: true, Action: "reactions", Message: message + scope.coverageNote(groups, dropped) + coverage, Window: chatHistoryWindowLabel(from, through, profileLocation(t.event.ProfileID)),
+		Total: total, Groups: groups,
 	}, ranks)
 }
 
