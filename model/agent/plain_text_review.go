@@ -7,42 +7,58 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/SuInk/diana/model/llm"
 )
 
-// 退回一次后仍写纯文本时的完成度复核。
+// 收尾前的完成度复核：回复里说在做、做完了或马上会自动完成的事，本轮工具记录里
+// 有没有对应的调用（Config.UnfinishedClaimReview）。
 //
-// Config.PlainTextNotSent 原先在第二次纯文本时直接静默，挡的是「在画了，画好自动发
-// 出来」这种一个工具都没调的空口承诺。可 11-08 生产一天 9 轮这样静默，全是写好的正常
-// 回复：deepseek-v4-pro 85 轮里 30 轮先写纯文本、退回后 7 轮还是纯文本，内容就是把
-// 第一次的话换个说法，图片表情的接话、整段客服记录总结、查完资料的结论都丢了。
+// 11-08 起它只管「退回一次后仍写纯文本」：原先第二次纯文本直接静默，挡的是「在画了，
+// 画好自动发出来」这种一个工具都没调的空口承诺，可生产一天 9 轮这样静默全是写好的正常
+// 回复，所以改成先复核、说了没做才静默。
 //
-// 所以第二次纯文本不再直接丢，先单独问一次模型：草稿里说正在做、已经做了或马上会做的
-// 事，本轮工具记录里有没有对应的调用。没有对应调用才静默；其余按正常 send 收尾，
-// 照常过发送前审核和联网细节复核。复核只看本轮工具记录和对方这条消息，不判断回复
-// 好不好、该不该回。复核调用失败或输出看不懂时放行：这一步要防的是空口承诺，而
-// 发出去之前还有发送前审核；把整条回复吞掉才是这次要修的问题。
+// 11-20 起中途发言（send 填 continue、和工具同一步的 send）整个去掉，一轮只在做完以后
+// 发一次：11-18～20 线上 1239 步只调 send 填了 continue，下一步真去调工具的只有 100 步，
+// 其余是把整条回复当中途发言发出去，再续一步说一遍或改成不说话，群里看着一会儿一句、
+// 多出来的步骤约占回复输入 token 的三成。可光去掉 continue，「我查一下」就成了最终回复
+// （10-27 线上出过），所以复核从纯文本扩到每次要发出去的收尾：查出来先退回去，让模型
+// 要么现在调用工具去做、要么照实说；退回后还有就这一轮不说话。复核只看本轮工具记录
+// 和对方这条消息，不判断回复好不好、该不该回。复核调用失败或输出看不懂时放行：发出去
+// 之前还有发送前审核，把整条回复吞掉不该是复核出错的代价。
 const (
 	plainTextReviewStepBudget  = 400
 	plainTextReviewStepsBudget = 6000
+	// 近期对话取最后这么多条非 system 消息，每条压到 claimReviewMessageBudget 字：复核只需要
+	// 知道前几轮发起过什么任务、说过什么，不需要完整历史。
+	claimReviewRecentMessages = 16
+	claimReviewMessageBudget  = 300
 )
 
-const plainTextReviewPrompt = `你在检查一条聊天机器人回复草稿有没有「说了却没做」。输入是对方的消息、机器人本轮实际调用过的工具记录，以及草稿。
-找出草稿里声称机器人自己正在做、已经做完或马上会自动完成的操作（画图、搜索查询、设置提醒、修改配置、发送文件、读取记录等），而工具记录里没有对应成功调用的那一项。
-不算问题的：普通聊天、接话、表情回应；凭常识或上下文直接回答、总结、解释；向对方提问或请对方补充；拒绝或说明做不到；建议对方自己去做；工具记录里能找到对应调用的操作。
+const plainTextReviewPrompt = `你在检查一条聊天机器人回复草稿有没有「说了却没做」。输入是近期对话（含机器人前几轮的发言和工具调用）、对方这条消息、机器人本轮实际调用过的工具记录，以及草稿。
+找出草稿里声称机器人自己正在做、已经做完或马上会自动完成的操作（画图、搜索查询、设置提醒、修改配置、发送文件、读取记录等），而本轮工具记录和近期对话里都没有对应调用的那一项。
+不算问题的：普通聊天、接话、表情回应；看了、听了、读了对方发来的图片、表情、语音或文字（机器人直接就能看到，不需要工具）；凭常识或上下文直接回答、总结、解释；向对方提问或请对方补充；拒绝或说明做不到；建议对方自己去做；本轮工具记录里能找到对应调用的操作；近期对话里已经发起、还在后台进行的任务（比如之前排队的图片「还在画」「好了会自动发出来」）。
 只输出 JSON：{"unfinished":"草稿原话里没做到的那一项"}，没有就输出 {"unfinished":""}。`
 
-// reviewPlainTextCompletion 返回草稿里说了却没做的操作；没有、或复核失败时返回空串。
-func (r *Runner) reviewPlainTextCompletion(ctx context.Context, history []llm.Message, draft string, steps []Step) string {
+// unfinishedClaimReason 是退回后收尾仍说了却没做、这一轮不说话时记下的原因前缀。
+const unfinishedClaimReason = "回复说了却没做，退回一次后仍是这样，没有发出："
+
+// unfinishedClaimRepair 是复核查出说了却没做时退回给模型的话。
+func unfinishedClaimRepair(unfinished string) string {
+	return "这条没有发出：「" + unfinished + "」本轮并没有做。要做就现在调用对应工具（按需工具用 tools_execute），做完再 send；做不到或不打算做就照实说，不要说正在做、做好了或会做。"
+}
+
+// reviewUnfinishedClaim 返回草稿里说了却没做的操作；没有、或复核失败时返回空串。
+func (r *Runner) reviewUnfinishedClaim(ctx context.Context, history []llm.Message, draft string, steps []Step) string {
 	draft = strings.TrimSpace(draft)
 	if draft == "" {
 		return ""
 	}
 	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: plainTextReviewPrompt},
-		{Role: llm.RoleUser, Content: "【对方的消息】\n" + lastUserMessage(history) + "\n\n【本轮工具记录】\n" + plainTextReviewSteps(steps) + "\n\n【草稿】\n" + draft},
+		{Role: llm.RoleUser, Content: "【近期对话】\n" + claimReviewRecent(history) + "\n\n【对方的消息】\n" + lastUserMessage(history) + "\n\n【本轮工具记录】\n" + plainTextReviewSteps(steps) + "\n\n【草稿】\n" + draft},
 	}})
 	if err != nil || resp == nil {
 		return ""
@@ -62,6 +78,44 @@ func parseUnfinishedClaim(text string) string {
 		return ""
 	}
 	return strings.TrimSpace(verdict.Unfinished)
+}
+
+// claimReviewRecent 把历史末尾几条非 system 消息压成一行一条：前几轮机器人发起的任务
+// （图片排队、提醒）要在这里看得到，不然「还在画，好了会自动发出来」会被当成没做。
+func claimReviewRecent(history []llm.Message) string {
+	var lines []string
+	for index := len(history) - 1; index >= 0 && len(lines) < claimReviewRecentMessages; index-- {
+		message := history[index]
+		if message.Role == llm.RoleSystem {
+			continue
+		}
+		var parts []string
+		if text := strings.TrimSpace(message.Content); text != "" {
+			parts = append(parts, text)
+		}
+		for _, part := range message.Parts {
+			if part.Type == llm.ContentPartText && strings.TrimSpace(part.Text) != "" {
+				parts = append(parts, strings.TrimSpace(part.Text))
+			}
+		}
+		for _, call := range message.ToolCalls {
+			input, _ := json.Marshal(call.Arguments)
+			parts = append(parts, "调用 "+call.Name+" "+string(input))
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		line := strings.Join(parts, " ")
+		if runes := []rune(line); len(runes) > claimReviewMessageBudget {
+			line = string(runes[:claimReviewMessageBudget]) + "…"
+		}
+		lines = append(lines, "- "+string(message.Role)+"："+line)
+	}
+	if len(lines) == 0 {
+		return "（没有）"
+	}
+	slices.Reverse(lines)
+	return strings.Join(lines, "\n")
 }
 
 // lastUserMessage 取最后一条用户消息：请求末尾常常是运行时追加的 system 提醒。

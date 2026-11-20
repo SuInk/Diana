@@ -16,7 +16,7 @@ import (
 )
 
 // 组 1：并发轮次重复正文去重与中途发言后静默收尾状态验证。
-func TestSiblingDuplicateSendDedupeAndInterimSilentFinish(t *testing.T) {
+func TestSiblingDuplicateSendDedupe(t *testing.T) {
 	var tracker sessionSendLog
 	now := time.Now()
 	turnStart := now.Add(-2 * time.Second)
@@ -37,19 +37,6 @@ func TestSiblingDuplicateSendDedupeAndInterimSilentFinish(t *testing.T) {
 		t.Fatal("same turn should not block itself as sibling")
 	}
 
-	channel := &recordingChannel{}
-	runtime := NewRuntime(BotConfig{OwnerID: "999", AgentEnabled: true}, channel, NewPluginManager(), nil, nil, nil, nil)
-	runtime.sessionSends.note(event, "turn-sibling", OutgoingMessage{Text: "这条内容兄弟轮次刚发过一遍"}, now)
-
-	replyCtx := withReplyTurnStart(withOutboundTurn(withInterimMessages(context.Background()), "turn-current"), turnStart)
-	tool := newDianaInterimMessageTool(runtime, event)
-	out, err := tool.Run(replyCtx, map[string]any{"text": "这条内容兄弟轮次刚发过一遍"})
-	if err != nil {
-		t.Fatalf("interim dedupe returned error: %v", err)
-	}
-	if !strings.Contains(out, `"ok":true`) || len(channel.sentSnapshot()) != 0 {
-		t.Fatalf("duplicate interim message should be skipped idempotently, sent=%#v out=%s", channel.sentSnapshot(), out)
-	}
 }
 
 // 组 1：群聊多 Bot Profile 下 #diana 状态命令冷却与链接解析去重共享。

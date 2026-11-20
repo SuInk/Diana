@@ -148,7 +148,7 @@ func TestReplyContinuesAcrossRestart(t *testing.T) {
 		return out
 	}
 	before, firstProvider := newRuntime("在的")
-	first := interimTestEvent()
+	first := appendContextTestEvent()
 	first.MessageID, first.RawMessage = "restart-1", "在吗"
 	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}}
 	if _, err := before.replyTo(t.Context(), first, first.RawMessage); err != nil {
@@ -163,7 +163,7 @@ func TestReplyContinuesAcrossRestart(t *testing.T) {
 	before.mu.Unlock()
 	// 新进程里内存历史是空的，把第一轮那两条补回去，和正式启动时从库里读回历史一样。
 	after.remember(first)
-	second := interimTestEvent()
+	second := appendContextTestEvent()
 	second.MessageID, second.RawMessage, second.Time = "restart-2", "吃了吗", first.Time+30
 	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "吃了吗"}}}
 	if _, err := after.replyTo(t.Context(), second, second.RawMessage); err != nil {

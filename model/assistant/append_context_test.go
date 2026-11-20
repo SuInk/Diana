@@ -125,13 +125,13 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
-	first := interimTestEvent()
+	first := appendContextTestEvent()
 	first.MessageID, first.RawMessage = "append-1", "在吗"
 	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}}
 	if _, err := runtime.replyTo(t.Context(), first, first.RawMessage); err != nil {
 		t.Fatal(err)
 	}
-	second := interimTestEvent()
+	second := appendContextTestEvent()
 	second.MessageID, second.RawMessage, second.Time = "append-2", "吃了吗", first.Time+30
 	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "吃了吗"}}}
 	if _, err := runtime.replyTo(t.Context(), second, second.RawMessage); err != nil {
@@ -378,12 +378,12 @@ func TestReplyTurnContinuesFromLastSuccessAfterFailure(t *testing.T) {
 		return provider, nil
 	})
 	turn := func(id, text string, at int64) {
-		event := interimTestEvent()
+		event := appendContextTestEvent()
 		event.MessageID, event.RawMessage, event.Time = id, text, at
 		event.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": text}}}
 		_, _ = runtime.replyTo(t.Context(), event, text)
 	}
-	base := interimTestEvent().Time
+	base := appendContextTestEvent().Time
 	turn("keep-1", "在吗", base)
 	failing = true
 	turn("keep-2", "失败这条", base+30)
@@ -574,5 +574,19 @@ func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
 				t.Fatalf("regeneration still sees the discarded draft call: %#v", call)
 			}
 		}
+	}
+}
+
+func appendContextTestEvent() MessageEvent {
+	return MessageEvent{
+		Kind:           EventKindGroup,
+		SelfID:         "42",
+		GroupID:        "20001",
+		UserID:         "10001",
+		MessageID:      "append-1",
+		SenderName:     "Alice",
+		RawMessage:     "帮我查下端口怎么被占了",
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "帮我查下端口怎么被占了"}}},
+		proactiveReply: true,
 	}
 }

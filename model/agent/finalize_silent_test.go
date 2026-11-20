@@ -51,48 +51,6 @@ func TestExplicitSilentDropsConflictingPayload(t *testing.T) {
 	}
 }
 
-func TestExplicitSilentSkipsInterimDelivery(t *testing.T) {
-	runner, err := NewRunner(&silentFinalizeClient{}, Config{WorkDir: t.TempDir(),
-		Interim: func(context.Context, string) (string, error) {
-			t.Fatal("silent send must not invoke delivery")
-			return "", nil
-		},
-	}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls := []llm.ToolCall{{Name: finalizeToolName, Arguments: map[string]any{
-		"text": "</antml:parameter>", "silent": true, "continue": true,
-	}}}
-	done, steps := runner.sendInterim(context.Background(), calls, []int{0}, nil)
-	if done[0] == "" || len(steps) != 0 {
-		t.Fatalf("done = %#v, steps = %#v", done, steps)
-	}
-}
-
-// silent 和 continue 一起填时按不说话收尾，不再续一步把模型推去写最终回复。
-func TestSilentSendWithContinueEndsTurn(t *testing.T) {
-	client := &silentFinalizeClient{arguments: map[string]any{
-		"silent": true, "silent_reason": "他在叫别的机器人，不是叫我", "continue": true, "text": "不该发出的正文",
-	}}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4,
-		Interim: func(context.Context, string) (string, error) {
-			t.Fatal("silent send must not be delivered")
-			return "", nil
-		},
-	}, NewToolRegistry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "小雪？"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !resp.Silent || resp.Text != "" || len(client.requests) != 1 {
-		t.Fatalf("resp = %#v, requests = %d", resp, len(client.requests))
-	}
-}
-
 func (c *silentFinalizeClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
 	c.requests = append(c.requests, req)
 	return &llm.GenerateResponse{
@@ -170,17 +128,12 @@ func (c *interimSendClient) Generate(_ context.Context, req llm.GenerateRequest)
 	return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "send-2", Name: finalizeToolName, Arguments: map[string]any{"text": "查到了"}}}}, nil
 }
 
-// send 和其他工具同一步发来：send 走 Interim 立刻发出，工具照常执行，本轮继续；
-// 两个调用都拿到真实结果，不会被回成「没有执行」。
-func TestSendWithOtherToolsIsInterim(t *testing.T) {
+// send 和其他工具同一步发来：send 不发，工具照常执行，模型收到「这次 send 没有发出」，
+// 看过结果再单独 send。一轮只在做完以后说一次。
+func TestSendBesideOtherToolsIsNotSent(t *testing.T) {
 	client := &interimSendClient{}
 	lookup := &countingTool{name: "lookup"}
-	var said []string
-	cfg := Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: func(_ context.Context, text string) (string, error) {
-		said = append(said, text)
-		return "已经发出去了", nil
-	}}
-	runner, err := NewRunner(client, cfg, NewToolRegistry(lookup))
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4}, NewToolRegistry(lookup))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,19 +141,21 @@ func TestSendWithOtherToolsIsInterim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Join(said, "|") != "我去查一下" || lookup.calls != 1 || resp.Text != "查到了" || resp.Silent {
-		t.Fatalf("said = %q, lookup = %d, resp = %#v", said, lookup.calls, resp)
+	if lookup.calls != 1 || resp.Text != "查到了" || resp.Silent {
+		t.Fatalf("lookup = %d, resp = %#v", lookup.calls, resp)
+	}
+	for _, step := range resp.Steps {
+		if step.Tool == finalizeToolName {
+			t.Fatalf("send beside a tool was delivered: %#v", step)
+		}
 	}
 	var results []string
 	for _, message := range client.requests[1].Messages {
 		if message.Role == llm.RoleTool {
 			results = append(results, message.ToolCallID+"="+message.Content)
-			if message.ToolError {
-				t.Fatalf("tool result marked as error: %#v", message)
-			}
 		}
 	}
-	if len(results) != 2 || !strings.HasPrefix(results[0], "say-1=已经发出去了") {
+	if len(results) != 2 || !strings.HasPrefix(results[0], "say-1=这次 send 没有发出") {
 		t.Fatalf("tool results = %q", results)
 	}
 }
@@ -305,10 +260,13 @@ func TestFinalizeToolDefinitionIsSend(t *testing.T) {
 	if _, ok := properties["content"]; ok {
 		t.Fatalf("send still declares the legacy content field: %#v", properties)
 	}
-	for _, want := range []string{"silent", "silent_reason", "continue"} {
+	for _, want := range []string{"silent", "silent_reason"} {
 		if _, ok := properties[want]; !ok {
 			t.Fatalf("send must declare %s: %#v", want, properties)
 		}
+	}
+	if _, ok := properties["continue"]; ok {
+		t.Fatalf("send must not offer continue: mid-turn messages are gone: %#v", properties)
 	}
 	required := map[string]bool{}
 	for _, name := range definition.Parameters["required"].([]string) {

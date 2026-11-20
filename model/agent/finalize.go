@@ -13,8 +13,9 @@ import (
 )
 
 // finalizeToolName 是模型说话的唯一出口。一步里只有 send 时这几条就是本轮的
-// 回复，本轮结束；和别的工具同一步发来时，它是动手前那句「我去查一下」，立刻发出、
-// 本轮继续（Config.Interim）。silent=true、正文留空就是这一轮不说话。
+// 回复，本轮结束；和别的工具同一步发来时不发，模型看过工具结果再 send。一轮只在
+// 做完以后说一次，不再有中途发言（为什么见 plain_text_review.go）。silent=true、正文
+// 留空就是这一轮不说话。
 //
 // 以前说话分成 say（中途一句）和 agent_finalize（收尾，带 silent/silent_reason）。
 // 10-27 用 gpt-6.1-sol 回放 36 条生产首步：把收尾改成「纯文本即结束、只有静默才调
@@ -30,12 +31,11 @@ const finalizeToolName = "send"
 // legacyFinalizeToolName 是改名前的收尾工具，只用来认出老历史和文本里的信封。
 const legacyFinalizeToolName = "agent_finalize"
 
-// legacyInterimToolName 是并进 send 之前的中途发言工具。
+// legacyInterimToolName 是并进 send 之前的中途发言工具，只用来认出老历史里的调用。
 //
-// 11-07 试过把它拆回来（send 去掉 continue、say 常驻）：swe-2 回放里 continue 误用没
-// 了，但线上原本有回复的闲聊静默从 9/84 涨到 25/84，「在画了」空口承诺也回来了；
-// send 改名 reply 也压不住静默。所以保留 continue，改成给 continue 那句补审核，见
-// Config.InterimReply。
+// 11-07 试过把它拆回来（send 去掉 continue、say 常驻）：线上原本有回复的闲聊静默从
+// 9/84 涨到 25/84，「在画了」空口承诺也回来了。11-20 把中途发言整个去掉，空口承诺改由
+// 收尾前的复核挡，见 plain_text_review.go。
 const legacyInterimToolName = "say"
 
 // FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。
@@ -67,9 +67,6 @@ const plainTextNotSentPrompt = "这段普通文本没有发出去，对方什么
 // plainTextNotSentReason 是退回后仍写空的纯文本、按静默结束时记下的原因。
 const plainTextNotSentReason = "退回一次后仍只写了普通文本，没有调用 send，没有发出"
 
-// plainTextUnfinishedReason 是退回后仍写纯文本、复核发现说了却没做时记下的原因前缀。
-const plainTextUnfinishedReason = "退回一次后仍只写了普通文本，复核发现说了却没做，没有发出："
-
 // errEmptyFinalize 标记协议修复重试耗尽后，模型收尾时仍未给出任何正文的失败。
 // 上层按运行失败处理：事件中心记 failed，不再发送「没有生成有效回复」类兜底文案。
 var errEmptyFinalize = errors.New("empty_finalize: 模型收尾时未提供任何正文")
@@ -85,7 +82,7 @@ func findFinalizeCall(calls []llm.ToolCall) (llm.ToolCall, bool) {
 	return llm.ToolCall{}, false
 }
 
-// onlySendCalls 报告这一步是不是只调了 send：是就收尾，否则 send 是中途发言。
+// onlySendCalls 报告这一步是不是只调了 send：是就收尾；和别的工具同一步的 send 不发。
 func onlySendCalls(calls []llm.ToolCall) bool {
 	for _, call := range calls {
 		if call.Name != finalizeToolName {
@@ -120,7 +117,6 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 		"text":          toolStringParam("正文，按会话要求附链接；勿写JSON。拒绝要说出来"),
 		"silent":        toolBoolParam("true 则本轮不发消息、text 留空。仅无话可说、已道别或当前消息不是对你说的时用，拒绝要说出来"),
 		"silent_reason": toolStringParam("不回复的原因，只进日志"),
-		"continue":      toolBoolParam("还要接着调用工具时填 true：这句先发出去，本轮继续，下一步必须真的调用工具；不填就是本轮的最终回复，发完就结束"),
 	}
 	required := []string{"text"}
 	// Runtime guards enforce conditional requirements without mutating schemas.
@@ -133,7 +129,7 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 	}
 	return llm.ToolDefinition{
 		Name:        finalizeToolName,
-		Description: "发消息给对方，立刻发出。只调 send 就结束本轮；和其他工具同一步调用时，是动手前说的一句话，本轮继续，说了去做就必须真的做。工具调用旁的正文不会发出，要说的话都写进 send。联网调研正文附实际来源链接；用户或会话明确禁用链接时不附。按原说法的实际条件核对外部事实是否被已读原文直接支持；不要添加条件来赞同原说法，发现冲突先纠正，证据缺口继续核对或限定对应事实。目录、搜索摘要、页面没有提及均不证明功能存在或不存在，缺证据只说本次未确认。不能补出未读到的工具名、委托或并发机制。具体技术、项目能力、版本与价格先搜索核实。未读取自身项目实现时，架构建议写成条件。",
+		Description: "发消息给对方，发完本轮结束，一轮只发这一次。要查、要做的先调用工具做完再 send；和其他工具同一步调用的 send 不会发出。工具调用旁的正文不会发出，要说的话都写进 send。联网调研正文附实际来源链接；用户或会话明确禁用链接时不附。按原说法的实际条件核对外部事实是否被已读原文直接支持；不要添加条件来赞同原说法，发现冲突先纠正，证据缺口继续核对或限定对应事实。目录、搜索摘要、页面没有提及均不证明功能存在或不存在，缺证据只说本次未确认。不能补出未读到的工具名、委托或并发机制。具体技术、项目能力、版本与价格先搜索核实。未读取自身项目实现时，架构建议写成条件。",
 		Parameters:  toolObjectSchema(required, properties),
 		// 畸形的收尾是唯一一种必然要花掉一整轮修复的协议错误，值得在解码层约束。
 		Strict: true,
@@ -142,7 +138,7 @@ func finalizeToolDefinition(imagePending bool, extra ...FinalizeField) llm.ToolD
 
 // finalizeBuiltinFields 是信封自带的字段；调用方追加的字段不能和它们重名。content、
 // silent、silent_reason 是改名前 agent_finalize 的字段，老历史和文本信封里还会出现。
-var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "continue": {}, "claims": {}}
+var finalizeBuiltinFields = map[string]struct{}{"text": {}, "content": {}, "task_state": {}, "silent": {}, "silent_reason": {}, "claims": {}}
 
 // finalizeAction 把一步里的 send 调用合成内部的 final 动作：几次 send 各成一条消息，
 // 附加字段取第一次填写的值。正文为空且不是图片任务时就是这一轮不说话：silent=true
