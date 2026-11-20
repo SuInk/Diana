@@ -115,6 +115,79 @@ func TestInboundQueueDeduplicatesAcrossContextNamespaces(t *testing.T) {
 	}
 }
 
+// 机器人换号后新号的消息号会和旧号同一会话里的老消息撞上。新消息必须照常入队，
+// 老消息的历史也不能被覆盖。
+func TestInboundQueueAcceptsReusedMessageIDFromNewBotAccount(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "reused-message-id.db"))
+	defer func() { _ = store.Close() }()
+	const session = "profile-a:private:10002"
+	privateEvent := func(selfID, text string, eventTime int64) assistant.MessageEvent {
+		event := telegramInboundTestEvent("555", text, eventTime)
+		event.Kind = assistant.EventKindPrivate
+		event.GroupID = ""
+		event.UserID = "10002"
+		event.SelfID = selfID
+		return event
+	}
+
+	oldEvent := privateEvent("10001", "旧号的消息", 100)
+	oldID, inserted, err := store.EnqueueInboundEvent(ctx, session, oldEvent)
+	if err != nil || !inserted {
+		t.Fatalf("old enqueue id=%q inserted=%v err=%v", oldID, inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", time.Now().Add(time.Minute))
+	if err != nil || !ok || item.ID != oldID {
+		t.Fatalf("claim old item=%#v ok=%v err=%v", item, ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, oldID, "worker-1", "replied"); err != nil {
+		t.Fatal(err)
+	}
+
+	newEvent := privateEvent("10003", "新号的消息", 200)
+	newID, inserted, err := store.EnqueueInboundEvent(ctx, session, newEvent)
+	if err != nil || !inserted || newID == oldID {
+		t.Fatalf("new account enqueue id=%q inserted=%v err=%v, old=%q", newID, inserted, err, oldID)
+	}
+	if count := pendingInboundCount(t, store); count != 1 {
+		t.Fatalf("pending count=%d, want the new account message queued", count)
+	}
+	againID, inserted, err := store.EnqueueInboundEvent(ctx, session, newEvent)
+	if err != nil || inserted || againID != newID {
+		t.Fatalf("redelivery id=%q inserted=%v err=%v, want %q", againID, inserted, err, newID)
+	}
+	// 处理时写历史要落到同一行，不能回头改老消息。
+	newEvent.RawMessage = "新号的消息（补了转写）"
+	if err := store.AppendMessageEvent(ctx, session, newEvent); err != nil {
+		t.Fatal(err)
+	}
+
+	texts := map[string]string{}
+	rows, err := store.db.QueryContext(ctx, `SELECT id, payload FROM message_events WHERE message_id = ?`, "555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id, payload string
+		if err := rows.Scan(&id, &payload); err != nil {
+			t.Fatal(err)
+		}
+		var event assistant.MessageEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			t.Fatal(err)
+		}
+		texts[id] = event.RawMessage
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{oldID: "旧号的消息", newID: "新号的消息（补了转写）"}
+	if !reflect.DeepEqual(texts, want) {
+		t.Fatalf("history rows=%v, want %v", texts, want)
+	}
+}
+
 func TestInboundQueueEditRefreshesPendingHistoryAndPayload(t *testing.T) {
 	ctx := context.Background()
 	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "pending-edit.db"))

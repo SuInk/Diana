@@ -50,7 +50,6 @@ func (s *SQLiteStore) AppendMessageEventRevision(ctx context.Context, session st
 	if err != nil {
 		return assistant.MessageEvent{}, false, err
 	}
-	id := persistedMessageID(session, event)
 	eventTime := event.Time
 	if eventTime <= 0 {
 		eventTime = time.Now().Unix()
@@ -65,6 +64,10 @@ func (s *SQLiteStore) AppendMessageEventRevision(ctx context.Context, session st
 	}
 	defer observeTransaction("AppendMessageEvent")()
 	defer func() { _ = tx.Rollback() }()
+	id, err := resolveMessageEventID(ctx, tx, session, event)
+	if err != nil {
+		return assistant.MessageEvent{}, false, err
+	}
 	writeResult, err := tx.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, profile_id, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at, context_generation)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -821,6 +824,46 @@ func persistedMessageID(session string, event assistant.MessageEvent) string {
 		return session + ":" + strings.TrimSpace(event.MessageID)
 	}
 	return session + ":" + uuid.NewString()
+}
+
+// messageEventIDQuerier 让 ID 判定既能跑在事务里也能跑在连接池上。
+type messageEventIDQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// resolveMessageEventID 给一条消息挑 message_events / inbound_events 用的 ID。
+//
+// 默认 ID 是「会话 + 平台消息号」，不含机器人账号。机器人换号以后（Telegram 换
+// token、QQ 换号），新号的消息号会从头或重新分配，跟旧号同一会话里的老消息撞上：
+// 以前入队时 INSERT OR IGNORE 被老行挡住，新消息被当成重复整条丢掉，还把老行的
+// 内容覆盖了。所以默认 ID 已被另一个账号（或另一个平台）的消息占着时，改用带上
+// 本条账号的 ID；同一条消息再来一次会算出同一个 ID，入队去重和后续写历史照常对得上。
+func resolveMessageEventID(ctx context.Context, q messageEventIDQuerier, session string, event assistant.MessageEvent) (string, error) {
+	id := persistedMessageID(session, event)
+	if strings.TrimSpace(event.MessageID) == "" {
+		return id, nil
+	}
+	tag := strings.TrimSpace(event.SelfID)
+	if tag == "" {
+		tag = strings.TrimSpace(event.Platform)
+	}
+	if tag == "" {
+		// 本条不知道自己来自哪个账号，没法区分，沿用默认 ID。
+		return id, nil
+	}
+	var payload string
+	err := q.QueryRowContext(ctx, `SELECT payload FROM message_events WHERE id = ?`, id).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		return id, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check message id owner: %w", err)
+	}
+	var stored assistant.MessageEvent
+	if json.Unmarshal([]byte(payload), &stored) != nil || sameInboundTransport(event, stored) {
+		return id, nil
+	}
+	return id + "@" + tag, nil
 }
 
 func normalizeMessageHistoryLimit(limit int) int {
