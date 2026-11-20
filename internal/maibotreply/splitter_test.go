@@ -65,9 +65,24 @@ func TestMergeToThreeMessages(t *testing.T) {
 	}
 }
 
-func TestMergeKeepsWholeTextWhenTooManySentences(t *testing.T) {
-	text := "一，二，三，四，五，六，七，八，九"
-	if got := Merge(SplitSentences(text, never)); len(got) != 1 || got[0] != text {
-		t.Fatalf("over %d sentences should stay whole: %q", MaxSentenceNum, got)
+func TestMergeKeepsManySentencesToThree(t *testing.T) {
+	got := Merge(SplitSentences("一，二，三，四，五，六，七，八，九，十", never))
+	if len(got) != MaxSplitNum || strings.Join(got, "，") != "一，二，三，四，五，六，七，八，九，十" {
+		t.Fatalf("many sentences should still merge to %d messages: %q", MaxSplitNum, got)
+	}
+}
+
+func TestMergeCutsAtLineBreaks(t *testing.T) {
+	segments := []Segment{
+		{Text: "第一行前半", Separator: "，"}, {Text: "第一行后半", Separator: "\n"},
+		{Text: "第二行", Separator: "\n"},
+		{Text: "第三行前半", Separator: "，"}, {Text: "第三行后半", Separator: "\n"},
+		{Text: "第四行"},
+	}
+	got := Merge(segments)
+	// 按字数均分的目标落在第 8、17 字附近，最近的换行是第一行末和第二行末。
+	want := []string{"第一行前半，第一行后半", "第二行", "第三行前半，第三行后半\n第四行"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }

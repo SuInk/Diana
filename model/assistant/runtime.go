@@ -9681,8 +9681,8 @@ var maiBotProtectedSpan = regexp.MustCompile(`[ \t]*(?:\[CQ:[^\]]*\]|<diana-[^>]
 const maiBotKeptSpace = '\u00a0'
 
 // maiBotSplitReply 照 MaiBot 对整条回复断一次句。前面按换行、空行切出来的每一块
-// 在 MaiBot 那里本来就是换行处断开的句子，所以一起计数：总共超过 MaxSentenceNum 句
-// 就整条不拆，否则合到最多 MaxSplitNum 条。11-20 线上一条讲 LCS 的四行回复先按行切成
+// 在 MaiBot 那里本来就是换行处断开的句子，所以一起计数，整条回复合到最多
+// MaxSplitNum 条，分界尽量落在换行处。11-20 线上一条讲 LCS 的四行回复先按行切成
 // 四块、每块各自再拆，最后发了九条，连 max(a, b) 都从逗号处断开了。多行的块（清单、
 // 代码、引出它们的那一行）当一句，不从中间拆。
 func maiBotSplitReply(bubbles []string) []string {
