@@ -59,6 +59,40 @@ func TestHistorySearchChronologicalPagesKeepTimestampTiesAndScope(t *testing.T) 
 	}
 }
 
+// 单个词带着拆出的子词（工具层 Terms）时，按时间排也先给整词命中的：生产上「ai味」
+// 拆出「ai」，只按时间排时几千条只带 ai 的新消息把说「AI 味」的那条埋没了。
+func TestHistorySearchChronologicalRanksWholeTermBeforeSubterms(t *testing.T) {
+	ctx := context.Background()
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "subterms.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events := []assistant.MessageEvent{historySearchEvent(10, "one", "target", "bot", "那个去AI味的 skill 地址发你了")}
+	for i := 0; i < 8; i++ {
+		events = append(events, historySearchEvent(int64(20+i), "one", fmt.Sprint("ai-", i), "sender", "AI 今天又降价了"))
+	}
+	for _, event := range events {
+		if err := s.AppendMessageEvent(ctx, "bot:group:one", event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ftsAvailable := s.historyFTS
+	s.stopWALMaintenance()
+	for _, useFTS := range []bool{false, true} {
+		if useFTS && !ftsAvailable {
+			continue
+		}
+		s.historyFTS = useFTS
+		rows, total, err := s.SearchMessageEvents(ctx, assistant.MessageHistorySearchQuery{
+			Session: "bot:group:one", Text: "ai味", Terms: []string{"ai"}, ThroughTime: 100, Limit: 3, Sort: "newest",
+		})
+		if err != nil || total != len(events) || len(rows) == 0 || rows[0].MessageID != "target" {
+			t.Fatalf("fts=%v total=%d rows=%v err=%v, want target first", useFTS, total, rows, err)
+		}
+	}
+}
+
 func TestHistorySearchChronologicalRanksAllWordMatchesFirst(t *testing.T) {
 	ctx := context.Background()
 	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "tiers.db"))
