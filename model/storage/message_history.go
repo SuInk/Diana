@@ -517,7 +517,7 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	// 翻不到。这里先按命中了几个词分档，档内仍按时间，总数和翻页口径不变。
 	var words []string
 	if query.Sort == "oldest" || query.Sort == "newest" {
-		words = historySearchWords(query.Text)
+		words = historySearchWords(query.Text, terms)
 	}
 	if s.historyFTS {
 		if events, total, ok, err := s.searchMessageEventsFTS(ctx, where, args, terms, words, limit, query.Sort, query.Offset); ok {
@@ -645,8 +645,11 @@ func historySearchTerms(query assistant.MessageHistorySearchQuery) []string {
 }
 
 // historySearchWords 取查询里按空格分开的词，用来给按时间排序的结果按命中词数
-// 分档。只有一个词时分档没有意义，返回 nil。
-func historySearchWords(text string) []string {
+// 分档。只有一个词时，若检索还带着从它拆出的子词（工具层的 Terms），也按这一个词
+// 分档：「ai味」会拆出「ai」，两者 OR 起来按时间排，几千条只提到 ai 的新消息会把
+// 真正说「AI 味」的那几条埋到翻不到的地方（11-20 生产上查「去ai味」的链接，命中
+// 5945 条、前几页全是只带 ai 的）。没有子词的单个词分档没有意义，返回 nil。
+func historySearchWords(text string, terms []string) []string {
 	seen := make(map[string]struct{})
 	var words []string
 	for _, word := range strings.Fields(strings.ToLower(text)) {
@@ -661,6 +664,9 @@ func historySearchWords(text string) []string {
 		if len(words) == maxHistorySearchTierWords {
 			break
 		}
+	}
+	if len(words) == 1 && len(terms) > 1 {
+		return words
 	}
 	if len(words) < 2 {
 		return nil
@@ -846,16 +852,13 @@ func (s *SQLiteStore) searchMessageEventsFTS(ctx context.Context, where string, 
 	scopedWhere := prefixMessageHistoryColumns(where)
 	offset = max(0, offset)
 
-	// 分档词各自单独 MATCH，只在多词按时间排序时用上；拼不出 token 的词跳过。
+	// 分档词各自单独 MATCH，只在按时间排序时用上；拼不出 token 的词跳过。
 	var tierMatches []any
 	if order == "oldest" || order == "newest" {
 		for _, word := range words {
 			if tierMatch := messageHistoryFTSQuery([]string{word}); tierMatch != "" {
 				tierMatches = append(tierMatches, tierMatch)
 			}
-		}
-		if len(tierMatches) < 2 {
-			tierMatches = nil
 		}
 	}
 	pageSQL, countSQL := messageHistoryFTSStatements(scopedWhere, order, len(tierMatches))
