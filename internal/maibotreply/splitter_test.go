@@ -57,17 +57,17 @@ func TestSplitSentencesMergesPairsWhenRandomAllows(t *testing.T) {
 	}
 }
 
-func TestProcessMergesToThreeMessages(t *testing.T) {
-	got := Process("一，二，三，四，五，六，七", never)
+func TestMergeToThreeMessages(t *testing.T) {
+	got := Merge(SplitSentences("一，二，三，四，五，六，七", never))
 	want := []string{"一，二，三", "四，五", "六，七"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("got %q want %q", got, want)
 	}
 }
 
-func TestProcessKeepsWholeTextWhenTooManySentences(t *testing.T) {
+func TestMergeKeepsWholeTextWhenTooManySentences(t *testing.T) {
 	text := "一，二，三，四，五，六，七，八，九"
-	if got := Process(text, never); len(got) != 1 || got[0] != text {
+	if got := Merge(SplitSentences(text, never)); len(got) != 1 || got[0] != text {
 		t.Fatalf("over %d sentences should stay whole: %q", MaxSentenceNum, got)
 	}
 }

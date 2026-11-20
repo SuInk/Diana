@@ -9575,22 +9575,22 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 				pieces = splitReplyBlocks(part)
 			}
 		}
+		var bubbles []string
 		for _, segment := range pieces {
 			segment = formatReplyLineBreaks(segment, limits.LineBreakMode)
 			if !limits.PreserveBlankLines && limits.LineBreakMode != replyLinesPreserve {
 				segment = collapseReplyBlankLinesOutsideCode(segment)
 			}
-			if segment == "" {
-				continue
+			if segment != "" {
+				bubbles = append(bubbles, segment)
 			}
-			sentences := []string{segment}
-			if maiBotSplitApplies(limits, segment) {
-				sentences = maiBotSplitSentences(segment)
-			}
-			for _, sentence := range sentences {
-				// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
-				out = append(out, chunkTextByLength(sentence, limits.ChunkSize)...)
-			}
+		}
+		if maiBotSplitApplies(limits) {
+			bubbles = maiBotSplitReply(bubbles)
+		}
+		for _, bubble := range bubbles {
+			// 长度兜底不受条数上限约束：它守的是平台发不发得出去，不是好不好看。
+			out = append(out, chunkTextByLength(bubble, limits.ChunkSize)...)
 		}
 	}
 	return out
@@ -9637,7 +9637,7 @@ type chatSplitLimits struct {
 	// SplitRules 是主人配置的分条正则，命中处另起一条，见 reply_split_rules.go。
 	SplitRules []string
 	// MaiBotSplit 照 MaiBot 的规则断句：在逗号、句号、分号、空格和换行处拆开，越长越
-	// 倾向拆，一段最多三条。模型很少自己写空行或分条标记，只按那些拆的话群里全是一整段
+	// 倾向拆，一条回复最多三条。模型很少自己写空行或分条标记，只按那些拆的话群里全是一整段
 	// 的长消息，不像人说话。只在纯文本平台、允许多条发送时打开，见 maiBotSplitApplies。
 	MaiBotSplit bool
 }
@@ -9671,7 +9671,8 @@ var maiBotSplitDisabled atomic.Bool
 // maiBotProtectedSpan 是断句时不能从中间切开的片段：CQ 码（参数用逗号分隔）、Diana 的
 // 内嵌标记（属性之间有空格）和网址，连同两边的空格——@ 和引用后面跟着的那句话要
 // 和它留在同一条里。MaiBot 用同样的办法保护颜文字；它的 @ 和引用不在正文里，不用管这些。
-var maiBotProtectedSpan = regexp.MustCompile(`[ \t]*(?:\[CQ:[^\]]*\]|<diana-[^>]*>|https?://[^\s，。、；！？）」』】]+)[ \t]*`)
+// 圆括号里的内容也整段保留：「max(a, b)」「（见上，第二条）」从括号中间断开就读不懂了。
+var maiBotProtectedSpan = regexp.MustCompile(`[ \t]*(?:\[CQ:[^\]]*\]|<diana-[^>]*>|https?://[^\s，。、；！？）」』】]+|\([^()\n]*\)|（[^（）\n]*）)[ \t]*`)
 
 // maiBotKeptSpace 是断句时不当分隔符的空格。MaiBot 把空格当停顿，只在两边都是字母
 // 数字、或挨着破折号时不拆。可模型写中文时习惯在英文词、数字和符号两边留空格：「你问
@@ -9679,8 +9680,29 @@ var maiBotProtectedSpan = regexp.MustCompile(`[ \t]*(?:\[CQ:[^\]]*\]|<diana-[^>]
 // 制」开头的一条。所以这里只有两边都是汉字（或假名、谚文）的空格才算停顿，其余不拆。
 const maiBotKeptSpace = '\u00a0'
 
+// maiBotSplitReply 照 MaiBot 对整条回复断一次句。前面按换行、空行切出来的每一块
+// 在 MaiBot 那里本来就是换行处断开的句子，所以一起计数：总共超过 MaxSentenceNum 句
+// 就整条不拆，否则合到最多 MaxSplitNum 条。11-20 线上一条讲 LCS 的四行回复先按行切成
+// 四块、每块各自再拆，最后发了九条，连 max(a, b) 都从逗号处断开了。多行的块（清单、
+// 代码、引出它们的那一行）当一句，不从中间拆。
+func maiBotSplitReply(bubbles []string) []string {
+	var segments []maibotreply.Segment
+	for _, bubble := range bubbles {
+		parts := []maibotreply.Segment{{Text: bubble}}
+		if !strings.Contains(bubble, "\n") {
+			parts = maiBotSplitSentences(bubble)
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		parts[len(parts)-1].Separator = "\n"
+		segments = append(segments, parts...)
+	}
+	return maibotreply.Merge(segments)
+}
+
 // maiBotSplitSentences 先把不能切的片段换成单个私用区字符，断完句再换回来。
-func maiBotSplitSentences(text string) []string {
+func maiBotSplitSentences(text string) []maibotreply.Segment {
 	var spans []string
 	masked := maiBotProtectedSpan.ReplaceAllStringFunc(text, func(span string) string {
 		spans = append(spans, span)
@@ -9695,10 +9717,9 @@ func maiBotSplitSentences(text string) []string {
 			runes[index] = maiBotKeptSpace
 		}
 	}
-	sentences := maibotreply.Process(string(runes), maiBotSplitRandom)
-	for index, sentence := range sentences {
+	restore := func(text string) string {
 		var restored strings.Builder
-		for _, r := range sentence {
+		for _, r := range text {
 			if slot := int(r) - 0xF0000; slot >= 0 && slot < len(spans) {
 				restored.WriteString(spans[slot])
 				continue
@@ -9708,9 +9729,14 @@ func maiBotSplitSentences(text string) []string {
 			}
 			restored.WriteRune(r)
 		}
-		sentences[index] = strings.TrimSpace(restored.String())
+		return restored.String()
 	}
-	return sentences
+	segments := maibotreply.SplitSentences(string(runes), maiBotSplitRandom)
+	for index := range segments {
+		segments[index].Text = strings.TrimSpace(restore(segments[index].Text))
+		segments[index].Separator = restore(segments[index].Separator)
+	}
+	return segments
 }
 
 // maiBotCJKLetter 报告 r 是不是汉字、假名或谚文：这几种文字之间的空格才是停顿。
@@ -9719,12 +9745,11 @@ func maiBotCJKLetter(r rune) bool {
 }
 
 // maiBotSplitApplies 排除不该按句拆的回复：本轮要求一条发、语音通话（要念出来）、
-// 行程清单这类文档、合并转发卡片和保留原样换行的回复。只拆单行的话：多行的是前面
-// 按块切出来的清单、小节、引用、代码或带链接的说明，整块发才看得懂（MaiBot 没有这些
-// 排版，它在换行处也拆）。
-func maiBotSplitApplies(limits chatSplitLimits, segment string) bool {
+// 行程清单这类文档、合并转发卡片、保留原样换行的回复，以及主人开了「换行分条」的
+// （一行一条，不再合并或细拆）。
+func maiBotSplitApplies(limits chatSplitLimits) bool {
 	return limits.MaiBotSplit && !maiBotSplitDisabled.Load() && !limits.SingleMessage && !limits.KeepPeriods && !limits.Document &&
-		!limits.KeepProseLines && !strings.Contains(segment, "\n")
+		!limits.KeepProseLines && !limits.LineSplit
 }
 
 // boundaryPositions returns positions immediately after top-level matching

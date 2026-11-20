@@ -91,3 +91,31 @@ func TestMaiBotSplitLeavesBlocksAndRichTextAlone(t *testing.T) {
 		t.Fatalf("single-message turn was split: %q", got)
 	}
 }
+
+// 11-20 线上：一条讲 LCS 的四行回复先按行切成四块、每块各自断句，发了九条，
+// max(dp[i-1][j], dp[i][j-1]) 也从逗号处断开。MaiBot 对整条回复计数：超过 8 句就整条
+// 不拆，否则最多三条；括号里不断。
+func TestMaiBotSplitCountsSentencesAcrossLines(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	reply := "最长公共子序列，经典动态规划题：两个序列里按原有顺序都出现、但位置不要求连续的最长公共部分，比如 \"ABCBDAB\" 和 \"BDCABA\" 的 LCS 是 \"BCBA\"，长度4。\n核心是二维 dp 表，dp[i][j] 表示 s1 前 i 个字符和 s2 前 j 个字符的 LCS 长度：\ns1[i-1] == s2[j-1] 时 dp[i][j] = dp[i-1][j-1] + 1\n否则 dp[i][j] = max(dp[i-1][j], dp[i][j-1])\n时间空间都是 O(m*n)，要还原具体序列就从 dp[m][n] 往回走，相等就斜着走并收下那个字符。Python 十几行就能写完，要代码我给你"
+	got := splitEventChatReply(reply, cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) > 3 {
+		t.Fatalf("one reply should become at most 3 messages, got %d: %q", len(got), got)
+	}
+	if joined := strings.Join(got, "\n"); !strings.Contains(joined, "max(dp[i-1][j], dp[i][j-1])") {
+		t.Fatalf("split inside parentheses: %q", got)
+	}
+}
+
+func TestMaiBotSplitMergesShortLinesToThree(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	got := splitEventChatReply("先说结论能用\n价格也还行\n就是有点吵\n晚上别开", cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) < 2 || len(got) > 3 {
+		t.Fatalf("four short lines should merge to 2-3 messages: %q", got)
+	}
+	if joined := strings.Join(got, "\n"); !strings.Contains(joined, "价格也还行") || !strings.Contains(joined, "晚上别开") {
+		t.Fatalf("lost text: %q", got)
+	}
+}
