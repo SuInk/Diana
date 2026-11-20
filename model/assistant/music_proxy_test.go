@@ -47,13 +47,17 @@ func TestMusicProxyRefusesToFallBackToDirect(t *testing.T) {
 		{SettingValues{musicSettingProxyMode: musicProxyResolver}, "链接解析没填「解析代理」"},
 		{SettingValues{musicSettingProxyMode: musicProxyCustom, musicSettingProxyURL: "ftp://user:hunter2@proxy.example:21"}, "只支持"},
 	} {
-		_, err := fetcher.httpClient(musicConfigFromSettings(tc.settings), true)
+		_, err := fetcher.httpClient(musicConfigFromSettings(tc.settings), true, "u.y.qq.com")
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Fatalf("httpClient(%v) error = %v, want %q", tc.settings, err, tc.want)
 		}
 		if err != nil && strings.Contains(err.Error(), "hunter2") {
 			t.Fatalf("proxy password leaked into error: %v", err)
 		}
+	}
+	// 只代理 QQ 音乐时，代理没配好不该连累网易云。
+	if _, err := fetcher.httpClient(musicConfigFromSettings(SettingValues{musicSettingProxyMode: musicProxyCustom}), true, "music.163.com"); err != nil {
+		t.Fatalf("netease should stay direct when only QQ is proxied: %v", err)
 	}
 }
 
