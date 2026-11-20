@@ -24,11 +24,11 @@ const dianaGroupRelationsToolName = "group_relations"
 // GroupRelationStore 是消息存储里能算关系图的那部分能力。做成可选接口：
 // 换一个不支持的存储实现时，工具自己说「这个部署不支持」，而不是整个运行时起不来。
 type GroupRelationStore interface {
-	GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (GroupRelationGraph, error)
+	GroupRelationGraphFor(ctx context.Context, namespace, groupID string, since time.Time, botID string) (GroupRelationGraph, error)
 }
 
 type groupRelationCenteredStore interface {
-	GroupRelationGraphCenteredOn(ctx context.Context, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error)
+	GroupRelationGraphCenteredOn(ctx context.Context, namespace, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error)
 }
 
 type dianaGroupRelationsTool struct {
@@ -114,7 +114,7 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	botID := firstNonEmpty(strings.TrimSpace(t.event.SelfID), strings.TrimSpace(cfg.BotAccount))
 	centerID := strings.TrimSpace(configToolString(input, "center_id"))
-	graph, err := loadGroupRelationGraph(ctx, store, t.event.GroupID, since, botID, centerID)
+	graph, err := loadGroupRelationGraph(ctx, store, t.event.ContextNamespace, t.event.GroupID, since, botID, centerID)
 	if err != nil {
 		return "", fmt.Errorf("统计关系图失败：%w", err)
 	}
@@ -205,12 +205,12 @@ func (t *dianaGroupRelationsTool) Run(ctx context.Context, input map[string]any)
 	return marshalRelationsResult(result), nil
 }
 
-func loadGroupRelationGraph(ctx context.Context, store GroupRelationStore, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error) {
+func loadGroupRelationGraph(ctx context.Context, store GroupRelationStore, namespace, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error) {
 	if centerID == "" || centerID == botID {
-		return store.GroupRelationGraphFor(ctx, groupID, since, botID)
+		return store.GroupRelationGraphFor(ctx, namespace, groupID, since, botID)
 	}
 	if centered, ok := store.(groupRelationCenteredStore); ok {
-		return centered.GroupRelationGraphCenteredOn(ctx, groupID, since, botID, centerID)
+		return centered.GroupRelationGraphCenteredOn(ctx, namespace, groupID, since, botID, centerID)
 	}
 	return GroupRelationGraph{}, fmt.Errorf("当前消息存储不支持以指定成员为中心画互动圈")
 }

@@ -23,6 +23,12 @@ type relationSeed struct {
 
 func seedRelationEvents(t *testing.T, store *SQLiteStore, groupID string, at time.Time, seeds []relationSeed) {
 	t.Helper()
+	seedRelationEventsIn(t, store, "group:"+groupID, groupID, at, seeds)
+}
+
+// seedRelationEventsIn 把消息记到指定会话下，模拟同一个群里另一台机器人记的那份。
+func seedRelationEventsIn(t *testing.T, store *SQLiteStore, session, groupID string, at time.Time, seeds []relationSeed) {
+	t.Helper()
 	ctx := context.Background()
 	for index, seed := range seeds {
 		segments := []map[string]any{}
@@ -40,11 +46,11 @@ func seedRelationEvents(t *testing.T, store *SQLiteStore, groupID string, at tim
 		if err != nil {
 			t.Fatal(err)
 		}
-		id := groupID + "-" + seed.userID + "-" + string(rune('a'+index))
+		id := session + "-" + seed.userID + "-" + string(rune('a'+index))
 		if _, err := store.db.ExecContext(ctx, `
 INSERT INTO message_events (id, session, kind, group_id, user_id, message_id, sender_name, event_time, text, payload, created_at)
 VALUES (?, ?, 'group', ?, ?, ?, ?, ?, '', ?, ?)
-`, id, "group:"+groupID, groupID, seed.userID, id, seed.name, at.Unix(), string(encoded), at.Format(time.RFC3339Nano)); err != nil {
+`, id, session, groupID, seed.userID, id, seed.name, at.Unix(), string(encoded), at.Format(time.RFC3339Nano)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,20 +77,27 @@ func TestGroupRelationGraphCountsInteractions(t *testing.T) {
 	})
 	// 另一个群的消息不该混进来
 	seedRelationEvents(t, store, "g2", now, []relationSeed{{userID: "9001", name: "Mallory", toMe: true}})
+	// 同一个群里另一台机器人记的那份也不该混进来，否则每条都算两遍
+	seedRelationEventsIn(t, store, "other:group:g1", "g1", now, []relationSeed{
+		{userID: "1001", name: "Alice", toMe: true},
+		{userID: "9002", name: "Eve", toMe: true},
+	})
+	// 带本机器人命名空间的当前写法要算进来
+	seedRelationEventsIn(t, store, "bot:group:g1", "g1", now, []relationSeed{{userID: "1004", name: "Dave"}})
 
-	graph, err := store.GroupRelationGraphFor(context.Background(), "g1", now.Add(-time.Hour), "42")
+	graph, err := store.GroupRelationGraphFor(context.Background(), "bot", "g1", now.Add(-time.Hour), "42")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if graph.BotID != "42" {
 		t.Fatalf("bot = %q", graph.BotID)
 	}
-	if graph.Messages != 5 || graph.Participants != 4 {
-		t.Fatalf("messages = %d, participants = %d, want 5 / 4", graph.Messages, graph.Participants)
+	if graph.Messages != 6 || graph.Participants != 5 {
+		t.Fatalf("messages = %d, participants = %d, want 6 / 5", graph.Messages, graph.Participants)
 	}
 	for _, node := range graph.Nodes {
-		if node.UserID == "9001" {
-			t.Fatal("别的群的人混进了这张图")
+		if node.UserID == "9001" || node.UserID == "9002" {
+			t.Fatalf("别的群或别的机器人记的人混进了这张图：%s", node.UserID)
 		}
 	}
 	// 中心节点排在最前，图从它画起。
@@ -137,7 +150,7 @@ func TestGroupRelationGraphDropsEdgesToTrimmedNodes(t *testing.T) {
 	seeds = append(seeds, relationSeed{userID: "1002", name: "Quiet", mentions: []string{"1001"}})
 	seedRelationEvents(t, store, "g3", now, seeds)
 
-	graph, err := store.GroupRelationGraphFor(context.Background(), "g3", now.Add(-time.Hour), "42")
+	graph, err := store.GroupRelationGraphFor(context.Background(), "bot", "g3", now.Add(-time.Hour), "42")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +172,7 @@ func TestGroupRelationGraphEmptyGroup(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	graph, err := store.GroupRelationGraphFor(context.Background(), "nobody", time.Now().Add(-time.Hour), "42")
+	graph, err := store.GroupRelationGraphFor(context.Background(), "bot", "nobody", time.Now().Add(-time.Hour), "42")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +180,7 @@ func TestGroupRelationGraphEmptyGroup(t *testing.T) {
 	if graph.Nodes == nil || graph.Edges == nil || len(graph.Nodes) != 0 || len(graph.Edges) != 0 {
 		t.Fatalf("graph = %#v", graph)
 	}
-	if _, err := store.GroupRelationGraphFor(context.Background(), "", time.Now(), "42"); err != nil {
+	if _, err := store.GroupRelationGraphFor(context.Background(), "bot", "", time.Now(), "42"); err != nil {
 		t.Fatalf("空群号不该报错：%v", err)
 	}
 }
@@ -197,7 +210,7 @@ VALUES ('', '1001', 'Alice', 37, 1, '[]', '2026-01-01T00:00:00Z')`); err != nil 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	started := time.Now()
-	graph, err := store.GroupRelationGraphFor(ctx, "g1", time.Time{}, "42")
+	graph, err := store.GroupRelationGraphFor(ctx, "bot", "g1", time.Time{}, "42")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +228,38 @@ VALUES ('', '1001', 'Alice', 37, 1, '[]', '2026-01-01T00:00:00Z')`); err != nil 
 	}
 	if favorability != 37 {
 		t.Fatalf("favorability = %d, want 37; nodes=%#v", favorability, graph.Nodes)
+	}
+}
+
+// 好感度按机器人分开：别的机器人对这个人的好感不能冒充成这台的；自己那台有记录时
+// 优先用它，没有时才用多机器人之前写的空命名空间旧画像。
+func TestGroupRelationGraphFavorabilityIsPerBot(t *testing.T) {
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "relations-favor.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	now := time.Now()
+	seedRelationEventsIn(t, store, "bot:group:g1", "g1", now, []relationSeed{{userID: "1001", name: "Alice"}, {userID: "1002", name: "Bob"}})
+	for _, row := range []struct {
+		bot, user string
+		score     int
+	}{{"", "1001", 37}, {"other", "1001", 90}, {"other", "1002", 80}, {"bot", "1002", 12}, {"", "1002", 60}} {
+		if _, err := store.db.Exec(`INSERT INTO user_profiles (bot_profile_id, user_id, display_name, favorability, message_count, memories, updated_at)
+VALUES (?, ?, '', ?, 1, '[]', '2026-01-01T00:00:00Z')`, row.bot, row.user, row.score); err != nil {
+			t.Fatal(err)
+		}
+	}
+	graph, err := store.GroupRelationGraphFor(context.Background(), "bot", "g1", now.Add(-time.Hour), "42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, node := range graph.Nodes {
+		got[node.UserID] = node.Favorability
+	}
+	if got["1001"] != 37 || got["1002"] != 12 {
+		t.Fatalf("favorability = %v, want 1001→37（旧画像兜底）1002→12（本机器人）", got)
 	}
 }
 
@@ -236,7 +281,7 @@ func TestGroupRelationGraphCenteredOnMember(t *testing.T) {
 	seeds = append(seeds, relationSeed{userID: "19999", name: "Quiet", mentions: []string{"20000"}})
 	seedRelationEvents(t, store, "g5", now, seeds)
 
-	graph, err := store.GroupRelationGraphCenteredOn(context.Background(), "g5", now.Add(-time.Hour), "42", "19999")
+	graph, err := store.GroupRelationGraphCenteredOn(context.Background(), "bot", "g5", now.Add(-time.Hour), "42", "19999")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +299,7 @@ func TestGroupRelationGraphCenteredOnMember(t *testing.T) {
 		t.Fatalf("中心的边丢了：%#v", graph.Edges)
 	}
 
-	fallback, err := store.GroupRelationGraphCenteredOn(context.Background(), "g5", now.Add(-time.Hour), "42", "88888")
+	fallback, err := store.GroupRelationGraphCenteredOn(context.Background(), "bot", "g5", now.Add(-time.Hour), "42", "88888")
 	if err != nil {
 		t.Fatal(err)
 	}

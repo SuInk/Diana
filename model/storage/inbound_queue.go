@@ -971,11 +971,14 @@ LIMIT 1
 	}
 	gap := assistant.GroupSeqGap{Known: true, PreviousSeq: previousSeq, PreviousTime: previousTime}
 	if selfID := strings.TrimSpace(query.SelfID); selfID != "" {
+		// 和上面找上一条 seq 一样只数这台机器人记的：两个配置共用一个连接时，机器人
+		// 自己的每条消息会按两个命名空间各存一份，不分开数就把缺口扣成负数，回补被跳过。
 		if err := s.eventReader().QueryRowContext(ctx, `
 SELECT COUNT(*)
 FROM message_events
 WHERE kind = ? AND group_id = ? AND user_id = ? AND event_time >= ? AND event_time <= ?
-`, string(assistant.EventKindGroup), groupID, selfID, previousTime, query.EventTime).Scan(&gap.SelfMessages); err != nil {
+  AND (? = '' OR COALESCE(profile_id, json_extract(payload, '$.profile_id'), '') IN (?, ''))
+`, string(assistant.EventKindGroup), groupID, selfID, previousTime, query.EventTime, profileID, profileID).Scan(&gap.SelfMessages); err != nil {
 			return assistant.GroupSeqGap{}, fmt.Errorf("group seq gap %q: count self messages: %w", groupID, err)
 		}
 	}

@@ -110,7 +110,7 @@ func (s *fakeWordCloudStore) AppendMessageEvent(context.Context, string, Message
 func (s *fakeWordCloudStore) ListRecentMessageEvents(context.Context, string, int) ([]MessageEvent, error) {
 	return nil, nil
 }
-func (s *fakeWordCloudStore) GroupWordCloudFor(context.Context, string, time.Time, string) (GroupWordCloud, error) {
+func (s *fakeWordCloudStore) GroupWordCloudFor(context.Context, string, string, time.Time, string) (GroupWordCloud, error) {
 	return s.cloud, nil
 }
 

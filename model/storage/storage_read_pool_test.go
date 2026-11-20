@@ -93,7 +93,7 @@ func TestReadOnlyQueriesDoNotQueueBehindWriter(t *testing.T) {
 		},
 		"GroupStyle": func(ctx context.Context) error { _, _, err := store.GroupStyle(ctx, "bot", "g1"); return err },
 		"GroupRelationGraphFor": func(ctx context.Context) error {
-			_, err := store.GroupRelationGraphFor(ctx, "g1", time.Time{}, "bot")
+			_, err := store.GroupRelationGraphFor(ctx, "bot", "g1", time.Time{}, "bot")
 			return err
 		},
 		"ListStickerAssets": func(ctx context.Context) error {

@@ -17,7 +17,8 @@ const groupWordCloudScanLimit = 30000
 
 // GroupWordCloudFor 统计一个群一段时间内的高频词。机器人自己的发言（outbound
 // 或者就是 botID 发的）不算：词云要看的是群友在聊什么。
-func (s *SQLiteStore) GroupWordCloudFor(ctx context.Context, groupID string, since time.Time, botID string) (assistant.GroupWordCloud, error) {
+// namespace 是机器人的会话命名空间（配置 ID），只数这台机器人记下的消息。
+func (s *SQLiteStore) GroupWordCloudFor(ctx context.Context, namespace, groupID string, since time.Time, botID string) (assistant.GroupWordCloud, error) {
 	cloud := assistant.GroupWordCloud{GroupID: strings.TrimSpace(groupID), Words: []assistant.GroupWordCloudWord{}}
 	counter := assistant.NewWordCloudCounter()
 	cloud.Segmenter = counter.Segmenter()
@@ -32,17 +33,18 @@ func (s *SQLiteStore) GroupWordCloudFor(ctx context.Context, groupID string, sin
 	}
 	botID = strings.TrimSpace(botID)
 
-	// 走 idx_message_events_kind_group_time；撤回通知会以 :notice: 行再存一份
+	// 走 idx_message_events_session_time；撤回通知会以 :notice: 行再存一份
 	// 原文，不排除的话撤回过的消息算两遍。
+	current, legacy := groupEventSessions(namespace, cloud.GroupID)
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT COALESCE(user_id, ''), COALESCE(text, '')
 FROM message_events
-WHERE kind = ? AND group_id = ? AND event_time >= ? AND id NOT LIKE '%:notice:%'
+WHERE session IN (?, ?) AND kind = ? AND event_time >= ? AND id NOT LIKE '%:notice:%'
   AND COALESCE(text, '') != ''
   AND NOT (json_valid(payload) AND COALESCE(json_extract(payload, '$.outbound'), 0) = 1)
 ORDER BY event_time DESC
 LIMIT ?
-`, string(assistant.EventKindGroup), cloud.GroupID, sinceUnix, groupWordCloudScanLimit+1)
+`, current, legacy, string(assistant.EventKindGroup), sinceUnix, groupWordCloudScanLimit+1)
 	if err != nil {
 		return assistant.GroupWordCloud{}, fmt.Errorf("query group word cloud: %w", err)
 	}
