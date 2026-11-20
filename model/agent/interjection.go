@@ -20,10 +20,10 @@ type Interjections interface {
 // 照常收尾，后面的补充交给调用方。
 const maxInterjectionRedos = 2
 
-// finalStep 报告这一步是不是收尾：只调了 send 且没要求续，或者文本协议下给出了最终答案。
+// finalStep 报告这一步是不是收尾：只调了 send，或者文本协议下给出了最终答案。
 func finalStep(resp *llm.GenerateResponse, text string, declared ...FinalizeField) bool {
 	if len(resp.ToolCalls) > 0 {
-		return onlySendCalls(resp.ToolCalls) && !sendContinues(resp.ToolCalls)
+		return onlySendCalls(resp.ToolCalls)
 	}
 	action, ok := parseAction(text, declared...)
 	return (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(text))

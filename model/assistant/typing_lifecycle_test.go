@@ -369,7 +369,7 @@ func TestTypingLifecycleFinalSendFailureStaysPaused(t *testing.T) {
 
 func TestTypingLifecycleInterimFailureResumes(t *testing.T) {
 	withFastSendTiming(t)
-	for _, name := range []string{"say", "install", "coding_notice", "coding_body"} {
+	for _, name := range []string{"install", "coding_notice", "coding_body"} {
 		t.Run(name, func(t *testing.T) {
 			channel := &typingLifecycleChannel{transport: func(context.Context) error { return errors.New("请先添加对方为好友") }}
 			indicator := newLifecycleTypingIndicator(t, channel)
@@ -377,12 +377,6 @@ func TestTypingLifecycleInterimFailureResumes(t *testing.T) {
 			event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "10001"}
 			ctx := withTypingIndicator(t.Context(), indicator)
 			switch name {
-			case "say":
-				ctx = context.WithValue(ctx, interimMessageContextKey{}, &interimMessageLedger{})
-				tool := &dianaInterimMessageTool{runtime: runtime, event: event}
-				if _, err := tool.Run(ctx, map[string]any{"text": "稍等"}); err == nil {
-					t.Fatal("expected send failure")
-				}
 			case "install":
 				tool := &dianaInstallPackageTool{runtime: runtime, event: event}
 				if tool.announce(ctx, "稍等") {

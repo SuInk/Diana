@@ -39,7 +39,7 @@ func TestAsideTextBesideSearchRequiresSend(t *testing.T) {
 		steps: [][]llm.ToolCall{{searchCall("s1", "a")}, {searchCall("s2", "b")}, {searchCall("s3", "c")}},
 	}
 	search := &orderTool{name: WebSearchToolName, events: &events}
-	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 6, Interim: interimRecorder(&events)}, NewToolRegistry(search))
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 6}, NewToolRegistry(search))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestAsideTextBesideSearchRequiresSend(t *testing.T) {
 	}
 }
 
-// 只有显式 send 的正文会发出；短旁白、长正文和标记都不会隐式发送。
+// 工具调用旁的正文都不会发出：短旁白、长正文、标记不会隐式发送，同一步的 send 也不发。
 func TestToolAsideOnlyExplicitSendIsSent(t *testing.T) {
 	long := strings.Repeat("上一条我凭印象断言了", 7)
 	for name, tc := range map[string]struct {
@@ -68,7 +68,7 @@ func TestToolAsideOnlyExplicitSendIsSent(t *testing.T) {
 	}{
 		"short search": {text: "先查证下这件事本身的来龙去脉再回答", calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},
 		"side effect":  {text: "我去定个提醒", calls: []llm.ToolCall{{ID: "r1", Name: "remind", Arguments: map[string]any{}}}, want: "run:remind"},
-		"send present": {text: "旁白", calls: []llm.ToolCall{{ID: "x", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查"}}, searchCall("s1", "a")}, want: "send:我去查|run:web_search"},
+		"send present": {text: "旁白", calls: []llm.ToolCall{{ID: "x", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查"}}, searchCall("s1", "a")}, want: "run:web_search"},
 		"long":         {text: long, calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},
 		"bracket":      {text: "[搜索 参展商名单]", calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},
 		"marker":       {text: "diana-finalize 不需要补充", calls: []llm.ToolCall{searchCall("s1", "a")}, want: "run:web_search"},
@@ -78,7 +78,7 @@ func TestToolAsideOnlyExplicitSendIsSent(t *testing.T) {
 			var events []string
 			client := &asideClient{texts: []string{tc.text}, steps: [][]llm.ToolCall{tc.calls}}
 			registry := NewToolRegistry(&orderTool{name: WebSearchToolName, events: &events}, &orderTool{name: "remind", events: &events})
-			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, Interim: interimRecorder(&events)}, registry)
+			runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4}, registry)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -279,7 +278,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
-	continueOnlySends := 0
+	// claimReviews 数这一轮做过几次「说了却没做」复核：第一次查出来退回去，第二次还有就不发。
+	claimReviews := 0
 	interjectionRedos := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
@@ -457,27 +457,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			DurationMS:   modelDuration.Milliseconds(),
 			Usage:        usage,
 		})
-		// 只调 send 却填了 continue：这句是动手前的「我去查一下」，模型以为说完还能接着
-		// 做。按收尾处理的话这一轮就停在这句上，承诺的事从没发生（10-27/28 线上「我查
-		// 一下今天的新闻」「我查一下数字人民币最近的官方消息」都是这样收的工）。照中途
-		// 发言发出去，再给模型一步；连续两次只说不做就不再续，按收尾处理。这句常常就是一
-		// 整条回复，走 InterimReply 先过审核（见 Config.InterimReply）。
-		//
-		// 全是 silent 的 send 不续：模型已经决定不说话，continue 是顺手填的。11-17 TG 群有
-		// 人喊别的机器人「小雪？」，第一步判了「他在叫小雪bot，不是叫我」并 silent，却也填了
-		// continue；续出来的那步被末尾「写最终回复前」推着，硬答了一句。
-		if onlySendCalls(resp.ToolCalls) && sendContinues(resp.ToolCalls) && !allSendsSilent(resp.ToolCalls) && r.cfg.Interim != nil && continueOnlySends < maxContinueOnlySends {
-			continueOnlySends++
-			deliver := r.cfg.InterimReply
-			if deliver == nil {
-				deliver = r.cfg.Interim
-			}
-			var sent map[int]string
-			sent, steps = r.sendInterimVia(ctx, deliver, resp.ToolCalls, sendCallIndices(resp.ToolCalls), steps)
-			nativeProtocol = true
-			messages = appendToolRepair(messages, resp, sent, lastText, "")
-			continue
-		}
 		// 收尾这一步回来时同一个人又补了一句：答案还没发出去，带着补充重做这一步，
 		// 合成一份答案，不先发一条没看到补充的回复。下一圈开头会把补充接进上下文。
 		if req.Interjections != nil && interjectionRedos < maxInterjectionRedos && req.Interjections.Pending() && finalStep(resp, lastText, r.cfg.FinalizeFields...) {
@@ -489,25 +468,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		var nativeCall llm.ToolCall
 		nativeCallIndex := 0
 		var parallelDropNotice string
-		// interimDone 按调用下标记这一步里当作中途发言已经发出的 send：它们的调用结果
-		// 是真实的，不能和被跳过的调用一样回「没有执行」。不按调用 ID 记：有的供应商
-		// 回的 ID 是空串，同一步的几个调用会撞在一起。
-		//
-		// 同一步只有检索类工具时 send 立刻发出，「我去查一下」要赶在慢检索之前；带副作用
-		// 的工具先执行，成功了才发——否则「定好了」先发出去，提醒却建失败了。
-		var interimDone map[int]string
-		var interimHeld []int
-		if nativeToolCall && !onlySendCalls(resp.ToolCalls) {
-			if sendIndices := sendCallIndices(resp.ToolCalls); interimSendsEarly(resp.ToolCalls) {
-				interimDone, steps = r.sendInterim(ctx, resp.ToolCalls, sendIndices, steps)
-			} else if r.cfg.Interim != nil {
-				interimHeld = sendIndices
-			}
-		}
 		if nativeToolCall {
 			nativeProtocol = true
-			// 只调 send 就是收尾；和其他工具一起来时 send 已经作为中途发言发出，
-			// 这一步执行真正的工具。
+			// 只调 send 就是收尾；和其他工具一起来时 send 不发，这一步执行真正的工具，
+			// 模型看过结果再 send。
 			selected := 0
 			for index, call := range resp.ToolCalls {
 				if call.Name != finalizeToolName {
@@ -531,7 +495,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if len(resp.ToolCalls) > 1 && nativeToolCall {
 				dropped := make([]string, 0, len(resp.ToolCalls)-1)
 				for index, call := range resp.ToolCalls {
-					if _, sent := interimDone[index]; index != selected && !sent && !slices.Contains(interimHeld, index) {
+					if index != selected && call.Name != finalizeToolName {
 						dropped = append(dropped, call.Name)
 					}
 				}
@@ -573,10 +537,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				for index, call := range resp.ToolCalls {
 					read, executed := results[index]
 					var content string
-					sent, interim := interimDone[index]
 					switch {
-					case interim:
-						content = sent
 					case executed:
 						modelOutput := read.output
 						if read.err == nil && read.action.Tool == WebSearchToolName {
@@ -588,7 +549,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					default:
 						content = "本次调用没有执行：本轮工具步数已用完。"
 					}
-					messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !interim && (!executed || read.err != nil)})
+					messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !executed || read.err != nil})
 				}
 				if guidance := parallelReadGuidance(reads, steps, r.remainingToolCalls(toolCalls)); guidance != "" {
 					messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
@@ -628,7 +589,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			plainTextRepaired = true
 			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
+			messages = appendToolRepair(messages, resp, lastText, reason)
 			continue
 		}
 		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
@@ -639,14 +600,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			if !plainTextRepaired {
 				plainTextRepaired = true
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "普通文本没有发出")
-				messages = appendToolRepair(messages, resp, interimDone, lastText, plainTextNotSentPrompt)
+				messages = appendToolRepair(messages, resp, lastText, plainTextNotSentPrompt)
 				continue
 			}
 			if strings.TrimSpace(lastText) == "" {
 				return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
-			}
-			if unfinished := r.reviewPlainTextCompletion(ctx, req.Messages, lastText, steps); unfinished != "" {
-				return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextUnfinishedReason + unfinished}, "plain_text_not_sent")
 			}
 			action = llmAction{Action: "final", Content: strings.TrimSpace(lastText)}
 			ok = true
@@ -658,7 +616,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			}
 			if feedback != "" {
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, feedback)
-				messages = appendToolRepair(messages, resp, interimDone, lastText, feedback)
+				messages = appendToolRepair(messages, resp, lastText, feedback)
 				continue
 			}
 		}
@@ -695,13 +653,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					continue
 				}
 				// 空正文但没填 silent=true：先退回去一次，要么补上正文，要么明确表态不回复。
-				// 只退一次，再空就按不说话收尾，不会来回转圈。本轮已经发过中途发言时空 send
-				// 就是「该说的都说了」，照常收尾。
-				if action.emptySend && !emptySendRepaired && !sentInterimThisRun(steps) && !r.deliversFinalizeField(finalizeFields) {
+				// 只退一次，再空就按不说话收尾，不会来回转圈。
+				if action.emptySend && !emptySendRepaired && !r.deliversFinalizeField(finalizeFields) {
 					emptySendRepaired = true
 					reason := "send 的 text 是空的，空正文不会发出任何消息。要回复就把话写进 text 重新 send；确实不该回复就重新 send，填 silent=true 并在 silent_reason 写一句原因。"
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "send 正文为空且未填 silent")
-					messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
+					messages = appendToolRepair(messages, resp, lastText, reason)
 					continue
 				}
 				// 模型 send 了空正文，这一轮不说话：没有正文，也就没有排版、证据账本和
@@ -720,6 +677,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 						break
 					}
 					continue
+				}
+			}
+			// 说了却没做的不发：「我查一下」「在画了」「定好了」这类话，本轮工具记录里要有
+			// 对应的调用。复核让模型判断，不看关键词，见 plain_text_review.go。第一次查出来
+			// 退回去，让它要么真去做、要么照实说；第二次还有就这一轮不说话——空口承诺发出去
+			// 比不说更糟。
+			if r.cfg.UnfinishedClaimReview && claimReviews < 2 {
+				claimReviews++
+				if unfinished := r.reviewUnfinishedClaim(ctx, req.Messages, action.Content, steps); unfinished != "" {
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复说了却没做："+unfinished)
+					if claimReviews == 1 {
+						messages = appendToolRepair(messages, resp, lastText, unfinishedClaimRepair(unfinished))
+						continue
+					}
+					return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: unfinishedClaimReason + unfinished}, "unfinished_claim")
 				}
 			}
 			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就
@@ -771,7 +743,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			reason := dispatchErr.Error()
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: reason, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, interimDone, lastText, reason)
+			messages = appendToolRepair(messages, resp, lastText, reason)
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -818,7 +790,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendToolRepair(messages, resp, interimDone, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
+			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -835,7 +807,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			duplicateErr := "连续重复的相同工具调用已跳过；请使用上一条工具结果、调整参数或直接给出最终回复"
 			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: duplicateErr, Skipped: true})
 			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, duplicateErr)
-			messages = appendToolRepair(messages, resp, interimDone, lastText, duplicateErr)
+			messages = appendToolRepair(messages, resp, lastText, duplicateErr)
 			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 				finishReason = "protocol_repair_exhausted"
 				break
@@ -849,7 +821,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, interimDone, lastText, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -864,7 +836,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
 				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, interimDone, lastText, limitErr)
+				messages = appendToolRepair(messages, resp, lastText, limitErr)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
 					break
@@ -997,15 +969,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 			}
 		}
-		if len(interimHeld) > 0 && err == nil {
-			var held map[int]string
-			held, steps = r.sendInterim(ctx, resp.ToolCalls, interimHeld, steps)
-			if interimDone == nil {
-				interimDone = held
-			} else {
-				maps.Copy(interimDone, held)
-			}
-		}
 		if nativeToolCall {
 			assistantMessage := llm.Message{
 				Role:              llm.RoleAssistant,
@@ -1021,10 +984,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			for index, call := range resp.ToolCalls {
 				content := observationText
 				skipped := index != nativeCallIndex
-				if sent, interim := interimDone[index]; interim {
-					content, skipped = sent, false
-				} else if err != nil && slices.Contains(interimHeld, index) {
-					content = "这句没有发出：同一步的 " + nativeCall.Name + " 失败了，看过结果再决定怎么说。"
+				if skipped && call.Name == finalizeToolName {
+					content = "这次 send 没有发出：同一步还有其他工具。看过结果后再 send。"
 				} else if skipped {
 					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
 				}
@@ -1472,11 +1433,6 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	}
 	if hasTool("run_command") && hasAnyTool("write_file", "edit_file") {
 		rules = append(rules, "- 编写或修复代码时，根据用户要求验证实际入口、关键行为和边界情况；语法检查通过不等于行为正确。测试失败后保留原失败用例，查明原因、修改实现并重跑；不能通过削弱断言或替换失败场景来宣称修复。最终改动后重跑相关验证；仍有失败或未验证的要求时，在最终回复中明确说明。")
-	}
-	if r.cfg.Interim != nil {
-		// 中途说一句：send 和其他工具同一步调用，把「说」和「结束」分开。上面那条禁止
-		// 未执行承诺的规则管的是最终答复；这句发的是「正在做」，说完必须接着做。
-		rules = append(rules, "- 要先查、先做几步才能回答时，可以在调用工具的同一步里 send 一句正在做什么，这句立刻发出、本轮继续；长任务每完成一个阶段可以再这样报一句进度。说了「去做」就必须真的调用工具。中途这句不是分条发答案用的，一轮最多 3 次、每次一句短话；对方已经看到的话最后不要重复，全都说完了就 send silent=true。")
 	}
 	// 线上出过：主人让把生成的图存进工作目录，模型手里只有 write_file，就存了一份
 	// 文字描述，然后在没有任何成功调用的情况下回了一句「存好了」。
@@ -2038,18 +1994,14 @@ func truncateRunes(value string, limit int) string {
 
 // appendToolRepair preserves every original call ID, including skipped parallel calls,
 // so native provider continuation remains valid even when dispatch is rejected.
-func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, interimDone map[int]string, text, reason string) []llm.Message {
+func appendToolRepair(messages []llm.Message, resp *llm.GenerateResponse, text, reason string) []llm.Message {
 	if len(resp.ToolCalls) == 0 {
 		messages = appendAssistantEcho(messages, text)
 		return append(messages, llm.Message{Role: llm.RoleUser, Content: reason})
 	}
 	// 带上作用域：之后切到别的配置档时，这批调用才会被识别成外来历史。
 	messages = append(messages, llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: resp.ToolCalls, ResponsesOutput: resp.ResponsesOutput, ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent})
-	for index, call := range resp.ToolCalls {
-		if sent, interim := interimDone[index]; interim {
-			messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, Content: sent})
-			continue
-		}
+	for _, call := range resp.ToolCalls {
 		messages = append(messages, llm.Message{Role: llm.RoleTool, ToolName: call.Name, ToolCallID: call.ID, ToolError: true, Content: "本次调用未执行：" + reason})
 	}
 	return messages
@@ -2110,84 +2062,6 @@ func (r *Runner) remainingToolCalls(used int) int {
 	return max(0, r.cfg.MaxSteps-used)
 }
 
-// sendInterim 把 indices 指向的 send 当作中途发言立刻发出，按调用下标返回每个调用的结果。
-// 没配 Interim 时不发，结果留空，由调用处按「没有执行」回给模型。
-func (r *Runner) sendInterim(ctx context.Context, calls []llm.ToolCall, indices []int, steps []Step) (map[int]string, []Step) {
-	return r.sendInterimVia(ctx, r.cfg.Interim, calls, indices, steps)
-}
-
-// sendInterimVia 和 sendInterim 一样，只是用 deliver 发。
-func (r *Runner) sendInterimVia(ctx context.Context, deliver func(context.Context, string) (string, error), calls []llm.ToolCall, indices []int, steps []Step) (map[int]string, []Step) {
-	if deliver == nil {
-		return nil, steps
-	}
-	done := map[int]string{}
-	for _, index := range indices {
-		call := calls[index]
-		if silent, _ := call.Arguments["silent"].(bool); silent {
-			done[index] = "未发送：silent=true"
-			continue
-		}
-		text := sendText(call)
-		record := Step{Index: len(steps) + 1, Tool: finalizeToolName, Input: cloneToolInput(call.Arguments)}
-		output, err := deliver(ctx, text)
-		if err != nil {
-			record.Error = err.Error()
-			output = "没有发出：" + err.Error()
-		} else {
-			record.Output = output
-		}
-		steps = append(steps, record)
-		done[index] = output
-	}
-	return done, steps
-}
-
-// maxContinueOnlySends 是一轮里「只调 send + continue」最多续几次。
-const maxContinueOnlySends = 2
-
-// sendContinues 报告这一步的 send 里有没有填 continue=true。
-func sendContinues(calls []llm.ToolCall) bool {
-	for _, call := range calls {
-		if continues, _ := call.Arguments["continue"].(bool); continues {
-			return true
-		}
-	}
-	return false
-}
-
-// allSendsSilent 报告这一步的 send 是不是都填了 silent=true。
-func allSendsSilent(calls []llm.ToolCall) bool {
-	for _, call := range calls {
-		if silent, _ := call.Arguments["silent"].(bool); call.Name == finalizeToolName && !silent {
-			return false
-		}
-	}
-	return true
-}
-
-// sendCallIndices 返回一步里 send 调用的下标。
-func sendCallIndices(calls []llm.ToolCall) []int {
-	var indices []int
-	for index, call := range calls {
-		if call.Name == finalizeToolName {
-			indices = append(indices, index)
-		}
-	}
-	return indices
-}
-
-// interimSendsEarly 报告同一步的中途发言能不能先于工具发出：其余调用全是检索类（含
-// 查工具的 tool_search）时可以，检索失败了也只是没查到，不会让先说的话变成假话。
-func interimSendsEarly(calls []llm.ToolCall) bool {
-	for _, call := range calls {
-		if call.Name != finalizeToolName && call.Name != ToolsLoadToolName && !parallelReadTools[call.Name] {
-			return false
-		}
-	}
-	return true
-}
-
 // normalizeLegacySendCalls 把照老历史发来的 agent_finalize、say 原生调用改名成 send。
 // 它们已经不在工具列表里，原样往下走会撞上「工具不存在」，白花一轮修复。老收尾的
 // silent=true 就是不说话，改成空 text；say 的参数本来就是 text。
@@ -2215,14 +2089,4 @@ func (r *Runner) normalizeLegacySendCalls(calls []llm.ToolCall) []llm.ToolCall {
 		return calls
 	}
 	return out
-}
-
-// sentInterimThisRun 判断本轮是否已经有中途发言真的发出去了。
-func sentInterimThisRun(steps []Step) bool {
-	for _, step := range steps {
-		if step.Tool == finalizeToolName && !step.Skipped && step.Error == "" {
-			return true
-		}
-	}
-	return false
 }

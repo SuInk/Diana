@@ -2486,8 +2486,7 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
-	// 中途发言的账本挂在这一层：收尾写运行记录时要知道这一轮先说过什么（replyTo 里沿用它）。
-	replyCtx := withInterimMessages(withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start))
+	replyCtx := withReplyTurnStart(withExternalSideEffectLedger(withReplyTriggerGate(withReplySuppressionSendGuard(ctx))), start)
 	// 工具一写外部系统就同步给连发交接：这一轮哪怕随后出错、什么都没发，也不能再算
 	// 交出去——否则被放回队列重跑时，工具会再调一遍（见 sender_burst.go）。
 	if successOutcome == "replied" || successOutcome == "replied_direct_followup" || event.proactiveReply || event.chatInReply {
@@ -2527,12 +2526,6 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		}
 	}
 	r.abandonReplyStream(ctx, event)
-	var silentTurnFinish *modelSilentFinishError
-	if errors.As(err, &silentTurnFinish) && len(interimMessagesSent(replyCtx)) > 0 {
-		// 本轮已通过中途 send(continue=true) 真正发出过回复，收尾再调 send(silent=true)
-		// 或省掉重复正文只是正常结束本轮，不能误标成 ignored_model_silent / not_replied。
-		err = nil
-	}
 	timelineOutcome := "replied"
 	if err != nil {
 		timelineOutcome = "not_replied"
@@ -2545,8 +2538,6 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 	// 出错也要带上：resolver 可能已经把图发出去了才在后面某步失败，这时事件页
 	// 只写「处理异常」会让人以为什么都没发。
 	record.Delivery = outboundTurnFromContext(replyCtx).delivery()
-	// 中途已经发出去的话先记上：这一轮后面出错、静默或被接走，记录里也要看得到它说过什么。
-	record.Reply = replyRecordText(interimMessagesSent(replyCtx), "")
 	if err != nil {
 		if errors.Is(err, errChatInReplyDeclined) {
 			setEventRecordOutcome(&record, "ignored_no_natural_reply")
@@ -2772,7 +2763,7 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		r.record(record)
 		return outcome, nil
 	}
-	record.Reply = replyRecordText(interimMessagesSent(replyCtx), reply)
+	record.Reply = reply
 	r.setError("")
 	r.record(record)
 	r.markGroupReplied(event)
@@ -2849,32 +2840,6 @@ func (r *Runtime) eventDisplayNameResolver(event MessageEvent) AtMentionNameReso
 		return nil
 	}
 	return func(userID string) string { return names[strings.TrimSpace(userID)] }
-}
-
-// replyRecordText 是运行记录里的回复内容：这一轮中途先发出去的话（「这就来，我去查下」）
-// 按发出顺序排在前面，最终回复在后，一条一行。以前只记最终回复，记录里看不出机器人
-// 中途说过话。最终回复就是中途某一句时不重复记。
-func replyRecordText(interim []string, reply string) string {
-	lines := make([]string, 0, len(interim)+1)
-	final := strings.TrimSpace(reply)
-	repeated := false
-	for _, sent := range interim {
-		sent = strings.TrimSpace(sent)
-		if sent == "" {
-			continue
-		}
-		if sent == strings.TrimSpace(stripChatPeriods(final)) {
-			repeated = true
-		}
-		lines = append(lines, sent)
-	}
-	if len(lines) == 0 {
-		return reply
-	}
-	if final != "" && !repeated {
-		lines = append(lines, final)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func setEventRecordOutcome(record *EventRecord, outcome string) {
@@ -4114,8 +4079,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 图片任务可能由前置视觉意图路由直接预约，也可能在后面的 Agent 工具循环里
 	// 预约。整轮一开始就挂上 sink，才能保证两条路径都等主回复发送成功后再启动。
 	ctx, imageAnnouncements := withImageAnnouncementSink(ctx)
-	// 中途发言（say 工具）的账本：收尾时要知道这一轮已经说过什么，见 interim_message_tool.go。
-	ctx = withInterimMessages(ctx)
 	defer imageAnnouncements.cancelPending()
 
 	chatTriggered := r.shouldHandleChat(event, text) || directQuotedReply
@@ -4127,7 +4090,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	defer func() { r.finishReplyTurn(event, reply, time.Now()) }()
 	cleanText := r.cleanInput(event, text)
 	cleanText = truncateInputText(cleanText, event.MessageID, cfg.MaxInputChars)
-	setInterimReplyAudit(ctx, cleanText, proactiveTriggered)
 	if reply, handled := r.handleOwnerCommand(event, cleanText); handled {
 		// owner 指令优先级最高，避免“切模型/禁群”等管理命令被普通 LLM 回复吞掉。
 		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
@@ -4798,9 +4760,8 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 			// 不说话、只回一张表情包：静默收尾时填了 sticker。挑不到、到了上限或者被叫停
 			// 都不补文字，这一轮就是安静的。
 			stickerQuery, _ := finalizeSticker.take()
-			// 只有整轮一句话都没发过、也没打算回表情包才算机器人沉默收尾；中途已经发过话、
-			// 或者用一张表情包接了话时，不能把私聊收尾计数顶满。
-			if len(interimMessagesSent(ctx)) == 0 && stickerQuery == "" {
+			// 用一张表情包接了话时不算机器人沉默收尾，不能把私聊收尾计数顶满。
+			if stickerQuery == "" {
 				r.notePrivateClosingSilence(event, cfg, time.Now())
 			}
 			if stickerQuery != "" && r.groupStopDropsReply(event, proactiveTriggered, time.Now()) == nil {
@@ -4858,10 +4819,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else if pending := imageAnnouncements.drain(); pending != "" {
 			// 用户这条消息只是要图，模型没有别的可说——开场白就是这一轮的回复。
 			reply = pending
-		} else if len(interimMessagesSent(ctx)) > 0 {
-			// 该说的已经在中途说过了（和工具同一步的 send），收尾没有新内容是正常的，
-			// 不要再补一句「没有生成有效回复」。
-			return "", newModelSilentFinishError("中途已经说过了")
 		} else if silenceRefusedForPlugin && nestedForwardPluginResponse(pluginResponses) == nil {
 			// 插件结果只是给模型的上下文，模型既选了静默又没写出正文，硬补
 			// 「没有生成有效回复」等于把一句系统提示发进群里，什么也没交代。
@@ -4869,10 +4826,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		} else {
 			reply = "我这边没有生成有效回复。"
 		}
-	}
-	if repeatsInterimMessage(ctx, reply) {
-		// 收尾把中途那句原样又写了一遍：对方已经看到了，不再发第二次。
-		return "", newModelSilentFinishError("收尾和中途说过的话重复")
 	}
 	if r.sessionSends.repeatsRecentSibling(ctx, event, reply, time.Now()) {
 		return "", newModelSilentFinishError("收尾和并发另一轮刚发的话重复")
@@ -4892,9 +4845,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 		return "", err
 	}
 	reply = adoptDeferredTone(ctx, deferredTone, event, reply)
-	if repeatsInterimMessage(ctx, reply) {
-		return "", newModelSilentFinishError("收尾和中途说过的话重复")
-	}
 	if r.sessionSends.repeatsRecentSibling(ctx, event, reply, time.Now()) {
 		return "", newModelSilentFinishError("收尾和并发另一轮刚发的话重复")
 	}
@@ -5089,16 +5039,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			agentCfg.SubtaskResultReminder = cfg.PromptOverrides.text(promptReplySubtaskResultSpec)
 		}
 		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
-		// send 和其他工具同一步发来时是中途说一句：先说「我去查」再真的去查。
-		interim := newDianaInterimMessageTool(r, event)
-		agentCfg.Interim = func(ctx context.Context, text string) (string, error) {
-			return interim.Run(ctx, map[string]any{"text": text})
-		}
-		agentCfg.InterimReply = func(ctx context.Context, text string) (string, error) {
-			return interim.RunReply(ctx, map[string]any{"text": text})
-		}
-		// 说话只走 send：纯文本退回一次，再写纯文本就不发（见 agent.Config.PlainTextNotSent）。
+		// 说话只走 send：纯文本退回一次，再写纯文本就当 send 收尾（见 agent.Config.PlainTextNotSent）。
+		// 一轮只在做完以后说一次，发出去之前复核说了的事做没做，空口承诺不发
+		// （见 agent.Config.UnfinishedClaimReview）。
 		agentCfg.PlainTextNotSent = true
+		agentCfg.UnfinishedClaimReview = !unfinishedClaimReviewDisabled.Load()
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {
@@ -9714,6 +9659,10 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 
 // maiBotSplitRandom 决定 MaiBot 断句时相邻两句合不合，测试换成固定值。
 var maiBotSplitRandom = rand.Float64
+
+// unfinishedClaimReviewDisabled 整包测试关掉收尾前的「说了却没做」复核：复核要多调一次
+// 模型，按脚本回复的假模型会被它吃掉一条。复核本身在 model/agent 里测。
+var unfinishedClaimReviewDisabled atomic.Bool
 
 // maiBotSplitDisabled 整包测试关掉 MaiBot 断句：大量用例按整句比对发出的文本，和分条
 // 无关。测分条的用例自己打开，见 withMaiBotSplit。

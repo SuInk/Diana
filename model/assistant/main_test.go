@@ -26,6 +26,8 @@ func TestMain(m *testing.M) {
 	// MaiBot 断句对整包关掉，见 maiBotSplitDisabled；随机数固定成 0.5，打开它的用例
 	// 期望值才不会随机跳：十来个字以内的短句合在一起，再长就在每个标点处拆开。
 	maiBotSplitDisabled.Store(true)
+	// 收尾前的「说了却没做」复核同样整包关掉，见 unfinishedClaimReviewDisabled。
+	unfinishedClaimReviewDisabled.Store(true)
 	maiBotSplitRandom = func() float64 { return 0.5 }
 	// 机器人没填时区、本机又是裸 UTC 时按北京时间（见 DefaultBotLocation）。CI 就是
 	// 这种环境，而大量用例拿进程本地时间算期望值；显式设 TZ=UTC 让两者一致。按北京
