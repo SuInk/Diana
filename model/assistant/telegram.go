@@ -413,10 +413,10 @@ func (c *TelegramChannel) SendWithResult(ctx context.Context, msg OutgoingMessag
 		if utf16Length(text) > telegramTextLimit {
 			return nil, fmt.Errorf("telegram: 文本超过单条消息上限，请降低回复字符上限或允许分条")
 		}
+		// 不关链接预览：RSS 推送和回复里的链接照 Telegram 默认出摘要卡片。
 		params := map[string]any{
-			"chat_id":                  chatID,
-			"text":                     text,
-			"disable_web_page_preview": true,
+			"chat_id": chatID,
+			"text":    text,
 		}
 		if threadID := strings.TrimSpace(msg.MessageThreadID); threadID != "" {
 			params["message_thread_id"] = threadID
