@@ -908,6 +908,31 @@ func TestQQPlayableURLJoinsPurlAndReportsEmptyAsUnavailable(t *testing.T) {
 	}
 }
 
+// QQ 搜索接口对未登录请求回 HTTP 200 + code 2001，要报成「填 Cookie」，不能笼统说请求失败。
+func TestQQSearchRejectionExplainsLogin(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"code":0,"req_0":{"code":2001,"data":{"body":{"item_song":[]}}}}`)
+	}))
+	t.Cleanup(server.Close)
+	source := &qqSource{musicuAPI: server.URL + "?data=%s"}
+	fetcher := &musicFetcher{client: server.Client()}
+	for _, tc := range []struct {
+		cfg  musicConfig
+		want string
+	}{
+		{musicConfigFromSettings(SettingValues{}), "请在 QQ 音乐设置里填 Cookie"},
+		{musicConfigFromSettings(SettingValues{}).withSourceCookie("qq", "uin=12345"), "Cookie 可能已失效"},
+	} {
+		ctx, diagnostics := withMusicDiagnostics(context.Background())
+		if _, ok := source.Search(ctx, fetcher, tc.cfg, "晴天"); ok {
+			t.Fatal("rejected search should not succeed")
+		}
+		if got := diagnostics.credentialProblem(); !strings.Contains(got, tc.want) {
+			t.Fatalf("credentialProblem() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
 // 有的接口回的是 jsonp 或带 BOM 的 text/html。只按 Content-Type 判断会解不出来。
 func TestUnwrapJSONPayloadStripsWrappers(t *testing.T) {
 	cases := map[string]string{
