@@ -151,6 +151,13 @@ func TestTelegramSendsTextToChat(t *testing.T) {
 	if calls[0].Params["text"] != "你好" {
 		t.Fatalf("text 错误：%v", calls[0].Params["text"])
 	}
+	// 链接要出摘要卡片：不能关预览。
+	if _, disabled := calls[0].Params["disable_web_page_preview"]; disabled {
+		t.Fatal("link preview must stay on")
+	}
+	if _, set := calls[0].Params["link_preview_options"]; set {
+		t.Fatal("link preview must stay on")
+	}
 }
 
 func TestTelegramSendsRepliesIntoForumTopic(t *testing.T) {
