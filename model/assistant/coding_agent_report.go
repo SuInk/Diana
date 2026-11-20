@@ -258,7 +258,7 @@ func (r *Runtime) deliverCodingReportBody(ctx context.Context, event MessageEven
 	cfg := r.effectiveConfigForEvent(event)
 	// 不看「自然分条」：那是聊天回复要不要拆开说的偏好，关掉它的机器人照样不想被
 	// 几千字的报告刷屏。
-	if IsOneBotPlatform(platform) && boolValue(cfg.ForwardReplyEnabled, true) {
+	if IsOneBotPlatform(platform) && boolValue(cfg.ForwardReplyEnabled, false) {
 		_, err := r.sendForwardReplyWithResult(ctx, event, body, cfg)
 		if err == nil {
 			return nil

@@ -56,7 +56,7 @@ var behaviorSettings = []behaviorSetting{
 		func(g *GroupConfig) **bool { return &g.NaturalReplySplitEnabled }, func(c *BotConfig) **bool { return &c.NaturalReplySplitEnabled }),
 	boolBehavior("typing_delay_enabled", "按字数模拟打字延迟再发出", false,
 		func(g *GroupConfig) **bool { return &g.TypingDelayEnabled }, func(c *BotConfig) **bool { return &c.TypingDelayEnabled }),
-	withGroupClear(boolBehavior("forward_reply_enabled", "超长回复改用合并转发卡片发送", true,
+	withGroupClear(boolBehavior("forward_reply_enabled", "超长回复改用合并转发卡片发送", false,
 		func(g *GroupConfig) **bool { return &g.ForwardReplyEnabled }, func(c *BotConfig) **bool { return &c.ForwardReplyEnabled }),
 		// 两个阈值是「本群单独设置」的一部分：只清开关、留着阈值，WebUI 仍把这个群
 		// 认成单独设置，下次在群设置页保存就又把开关写回 true。

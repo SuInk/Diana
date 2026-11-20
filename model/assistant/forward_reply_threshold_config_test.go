@@ -136,8 +136,8 @@ func TestBotForwardSwitch(t *testing.T) {
 	if got := (BotConfig{ForwardReplyThreshold: 300}).WithDefaults().ForwardReplyEnabled; got == nil || !*got {
 		t.Fatalf("legacy bot with a threshold must read as on, got %v", got)
 	}
-	if got := DefaultBotConfig().WithDefaults().ForwardReplyEnabled; got == nil || !*got {
-		t.Fatal("new bots start with forward cards on")
+	if got := DefaultBotConfig().WithDefaults().ForwardReplyEnabled; got == nil || *got {
+		t.Fatal("new bots start with forward cards off")
 	}
 
 	off := BotConfig{ForwardReplyThreshold: 140, ForwardReplyEnabled: boolPointer(false)}.WithDefaults()

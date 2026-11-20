@@ -2334,7 +2334,7 @@ func DefaultBotConfig() BotConfig {
 		MaxReplyChars:                3500,
 		ReplyMaxBubbles:              replyMaxChatBubbles,
 		ForwardReplyChunkThreshold:   forwardReplyChunkCountThreshold,
-		ForwardReplyEnabled:          boolPointer(true),
+		ForwardReplyEnabled:          boolPointer(false),
 		DirectReplyChunkSize:         chatReplyChunkSize,
 		ForwardReplyThreshold:        defaultForwardReplyThreshold,
 		RecallReplyMode:              RecallReplyModeOriginalForward,

@@ -7994,7 +7994,7 @@ const forwardReplyChunkCountThreshold = 5
 // 未设置或非正数表示无上限，不触发对应条件。
 // shouldUseForwardReplyFor 先看合并转发总开关，再按两个阈值判断。
 func shouldUseForwardReplyFor(cfg BotConfig, reply string, chunks []string) bool {
-	if !boolValue(cfg.ForwardReplyEnabled, true) {
+	if !boolValue(cfg.ForwardReplyEnabled, false) {
 		return false
 	}
 	return shouldUseForwardReply(reply, chunks, cfg.ForwardReplyThreshold, cfg.ForwardReplyChunkThreshold)
