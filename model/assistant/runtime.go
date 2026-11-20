@@ -9673,10 +9673,11 @@ var maiBotSplitDisabled atomic.Bool
 // 和它留在同一条里。MaiBot 用同样的办法保护颜文字；它的 @ 和引用不在正文里，不用管这些。
 var maiBotProtectedSpan = regexp.MustCompile(`[ \t]*(?:\[CQ:[^\]]*\]|<diana-[^>]*>|https?://[^\s，。、；！？）」』】]+)[ \t]*`)
 
-// maiBotLatinSpace 是挨着英文字母或数字的空格。MaiBot 只在两边都是字母数字时不拆，
-// 但模型写中文时习惯在英文词两边留空格（「你问的是 Ice 吧」），照拆会把一个词单独
-// 发成一条，所以这里两边有一边是字母数字就不拆。
-const maiBotLatinSpace = '\u00a0'
+// maiBotKeptSpace 是断句时不当分隔符的空格。MaiBot 把空格当停顿，只在两边都是字母
+// 数字、或挨着破折号时不拆。可模型写中文时习惯在英文词、数字和符号两边留空格：「你问
+// 的是 Ice 吧」会把一个词单独发成一条，11-20 线上「邀请制 + 考核制」拆成了以「+ 考核
+// 制」开头的一条。所以这里只有两边都是汉字（或假名、谚文）的空格才算停顿，其余不拆。
+const maiBotKeptSpace = '\u00a0'
 
 // maiBotSplitSentences 先把不能切的片段换成单个私用区字符，断完句再换回来。
 func maiBotSplitSentences(text string) []string {
@@ -9690,8 +9691,8 @@ func maiBotSplitSentences(text string) []string {
 		if r != ' ' {
 			continue
 		}
-		if index > 0 && maiBotASCIIAlnum(runes[index-1]) || index+1 < len(runes) && maiBotASCIIAlnum(runes[index+1]) {
-			runes[index] = maiBotLatinSpace
+		if index == 0 || index+1 == len(runes) || !maiBotCJKLetter(runes[index-1]) || !maiBotCJKLetter(runes[index+1]) {
+			runes[index] = maiBotKeptSpace
 		}
 	}
 	sentences := maibotreply.Process(string(runes), maiBotSplitRandom)
@@ -9702,7 +9703,7 @@ func maiBotSplitSentences(text string) []string {
 				restored.WriteString(spans[slot])
 				continue
 			}
-			if r == maiBotLatinSpace {
+			if r == maiBotKeptSpace {
 				r = ' '
 			}
 			restored.WriteRune(r)
@@ -9712,8 +9713,9 @@ func maiBotSplitSentences(text string) []string {
 	return sentences
 }
 
-func maiBotASCIIAlnum(r rune) bool {
-	return r < 0x80 && (unicode.IsLetter(r) || unicode.IsDigit(r))
+// maiBotCJKLetter 报告 r 是不是汉字、假名或谚文：这几种文字之间的空格才是停顿。
+func maiBotCJKLetter(r rune) bool {
+	return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
 }
 
 // maiBotSplitApplies 排除不该按句拆的回复：本轮要求一条发、语音通话（要念出来）、
