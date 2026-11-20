@@ -2139,6 +2139,9 @@ export interface MusicConnectionStatus {
   label: string;
   search_ok: boolean;
   playable: boolean;
+  // 拿到地址后实测下载开头一小段；海外出口被 QQ 音乐 CDN 拒绝只在这一步暴露。
+  downloadable: boolean;
+  proxied: boolean;
   api_configured: boolean;
   cookie_configured: boolean;
   login?: CredentialCheck;
@@ -2148,12 +2151,20 @@ export interface MusicConnectionStatus {
   message: string;
 }
 
+// 音乐代理实际落在哪；地址只有协议、主机和端口，不含账号密码。
+export interface MusicProxyStatus {
+  mode: string;
+  ok: boolean;
+  address?: string;
+  message: string;
+}
+
 export function testMusicConnections(
   settings: Record<string, unknown>,
   clearSecrets: string[] = [],
   profileID = ""
-): Promise<{ sources: MusicConnectionStatus[] }> {
-  return requestJSON<{ sources: MusicConnectionStatus[] }>(`/api/assistant/plugins/music/test?profile=${encodeURIComponent(profileID)}`, {
+): Promise<{ sources: MusicConnectionStatus[]; proxy?: MusicProxyStatus }> {
+  return requestJSON<{ sources: MusicConnectionStatus[]; proxy?: MusicProxyStatus }>(`/api/assistant/plugins/music/test?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
   });

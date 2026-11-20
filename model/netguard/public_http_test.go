@@ -144,3 +144,34 @@ func TestPublicDownloadClientStopsOnlyWhenBodyStalls(t *testing.T) {
 		t.Fatalf("stalled download took %v to stop", elapsed)
 	}
 }
+
+// 管理员配的代理常在 127.0.0.1：连代理这一跳要放行，但目标地址照旧按公网规则校验，
+// 没被选中的私网地址也照旧拒绝。
+func TestPublicHTTPClientViaProxyOnlyOpensTheChosenProxy(t *testing.T) {
+	t.Setenv(allowPrivateFetchesEnv, "false")
+	var seen string
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = r.URL.String()
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer proxy.Close()
+	proxyURL, _ := url.Parse(proxy.URL)
+	client := NewPublicHTTPClientVia(5*time.Second, func(req *http.Request) (*url.URL, error) {
+		if req.URL.Hostname() == "1.1.1.1" {
+			return proxyURL, nil
+		}
+		return nil, nil
+	})
+
+	resp, err := client.Get("http://1.1.1.1/song.m4a")
+	if err != nil {
+		t.Fatalf("proxied public request: %v", err)
+	}
+	resp.Body.Close()
+	if seen != "http://1.1.1.1/song.m4a" {
+		t.Fatalf("proxy saw %q, want the absolute target URL", seen)
+	}
+	if _, err := client.Get(proxy.URL); err == nil {
+		t.Fatal("a private target must stay blocked even when it is the proxy address")
+	}
+}

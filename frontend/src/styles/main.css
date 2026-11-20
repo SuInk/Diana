@@ -4699,6 +4699,7 @@ a.nav-action {
 }
 
 .music-sources,
+.music-proxy,
 .music-playback {
   display: grid;
   gap: 8px;
@@ -4708,6 +4709,7 @@ a.nav-action {
   margin-top: 12px;
 }
 
+.music-proxy,
 .music-playback {
   margin-top: 18px;
   padding-top: 16px;
@@ -4715,6 +4717,7 @@ a.nav-action {
 }
 
 .music-sources h3,
+.music-proxy h3,
 .music-playback h3 {
   margin: 0;
   font-size: 14px;
