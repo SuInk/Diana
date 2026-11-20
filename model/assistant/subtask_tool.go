@@ -87,9 +87,6 @@ func newDianaSubtaskTool(runtime *Runtime, event MessageEvent) *dianaSubtaskTool
 
 func (t *dianaSubtaskTool) Name() string { return dianaSubtaskToolName }
 
-// 多步子任务不设总时长上限；单次模型和工具调用各自超时，父级取消仍生效。
-func (t *dianaSubtaskTool) Timeout() time.Duration { return 0 }
-
 func (t *dianaSubtaskTool) Description() string {
 	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks，由后端并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。旧 question/material 格式继续兼容。`
 }
@@ -612,7 +609,7 @@ func (r *Runtime) runSearchSubtask(ctx context.Context, event MessageEvent, task
 		coreTools = append(coreTools, tool.Name())
 	}
 	cfg := agent.Config{SystemPrompt: searchSubtaskSystemPrompt, WorkDir: AgentWorkspaceDir(),
-		ToolTimeoutMS: int(time.Minute / time.Millisecond), FinalizationReserveMS: agent.DefaultFinalizationReserveMS, CoreTools: coreTools}
+		FinalizationReserveMS: agent.DefaultFinalizationReserveMS, CoreTools: coreTools}
 	runner, err := agent.NewRunner(slottedAgentLLMProvider{newRuntimeAgentLLMProvider(r, ctx)}, cfg, registry)
 	if err != nil {
 		_ = registry.Close()

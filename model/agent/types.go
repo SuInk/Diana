@@ -38,7 +38,6 @@ const (
 	DefaultMCPToolTimeoutMS         = 60_000
 	DefaultCommandTimeoutMS         = 10_000
 	DefaultBrowserTimeoutMS         = 15_000
-	DefaultToolTimeoutMS            = 60_000
 	DefaultFinalizationReserveMS    = 20_000
 	DefaultProtocolRepairLimit      = 3
 	MaxAllowedReadFileMaxBytes      = 512 * 1024
@@ -123,8 +122,12 @@ type Config struct {
 	// WorkspaceBotID 是这张工具表所属的机器人（配置档 ID），决定长期保存区落在
 	// keep/<机器人>/ 下；留空时长期区不可写。WorkspaceActorID 是本轮发言者，记进
 	// 长期区索引的 saved_by。两者都随事件变化，不进扩展底座的缓存键。
-	WorkspaceBotID        string `json:"-"`
-	WorkspaceActorID      string `json:"-"`
+	WorkspaceBotID   string `json:"-"`
+	WorkspaceActorID string `json:"-"`
+	// ToolTimeoutMS 是 Runner 给单次工具调用加的期限，默认 0 不加：工具各自的请求、
+	// 命令、浏览器、MCP 超时管着自己，父级取消照样生效。统一套 60 秒会把本来就慢的
+	// 正常调用掐掉——11-20 一张密字长截图逐字转写要 3500 token、约 110 秒，两次都
+	// 在 60 秒处被掐。只有测试和需要硬上限的调用方才显式给正数。
 	ToolTimeoutMS         int
 	FinalizationReserveMS int
 	ProtocolRepairLimit   int
@@ -315,8 +318,8 @@ func (cfg Config) WithDefaults() Config {
 	if cfg.BrowserTimeoutMS > MaxAllowedBrowserTimeoutMS {
 		cfg.BrowserTimeoutMS = MaxAllowedBrowserTimeoutMS
 	}
-	if cfg.ToolTimeoutMS <= 0 {
-		cfg.ToolTimeoutMS = DefaultToolTimeoutMS
+	if cfg.ToolTimeoutMS < 0 {
+		cfg.ToolTimeoutMS = 0
 	}
 	if cfg.ToolTimeoutMS > MaxAllowedToolTimeoutMS {
 		cfg.ToolTimeoutMS = MaxAllowedToolTimeoutMS

@@ -1249,71 +1249,52 @@ func TestAppendToolRepairKeepsContinuationScope(t *testing.T) {
 	}
 }
 
-type boundedResearchTestTool struct{ remaining time.Duration }
+type deadlineProbeTool struct {
+	hasDeadline bool
+	remaining   time.Duration
+}
 
-func (*boundedResearchTestTool) Name() string           { return "research" }
-func (*boundedResearchTestTool) Description() string    { return "bounded research" }
-func (*boundedResearchTestTool) Timeout() time.Duration { return time.Second }
-func (t *boundedResearchTestTool) Run(ctx context.Context, _ map[string]any) (string, error) {
-	deadline, _ := ctx.Deadline()
+func (*deadlineProbeTool) Name() string        { return "research" }
+func (*deadlineProbeTool) Description() string { return "multi-step research" }
+func (t *deadlineProbeTool) Run(ctx context.Context, _ map[string]any) (string, error) {
+	var deadline time.Time
+	deadline, t.hasDeadline = ctx.Deadline()
 	t.remaining = time.Until(deadline)
 	return "ok", nil
 }
-func TestRunnerUsesToolBudgetWithinParentDeadline(t *testing.T) {
-	for _, parentLimit := range []time.Duration{0, 100 * time.Millisecond} {
-		tool := &boundedResearchTestTool{}
-		client := &scriptedClient{responses: []string{`{"action":"tool","tool":"research","input":{}}`, `{"action":"final","content":"done"}`}}
-		runner, err := NewRunner(client, Config{MaxSteps: 4, ToolTimeoutMS: 1, FinalizationReserveMS: 1}, NewToolRegistry(tool))
-		if err != nil {
-			t.Fatal(err)
-		}
-		ctx := context.Background()
-		if parentLimit > 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, parentLimit)
-			defer cancel()
-		}
-		_, err = runner.Run(ctx, Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "research"}}})
-		runner.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if tool.remaining <= time.Millisecond {
-			t.Fatalf("tool was cut to generic timeout: %s", tool.remaining)
-		}
-		if parentLimit > 0 && tool.remaining >= parentLimit {
-			t.Fatalf("tool escaped parent deadline: %s", tool.remaining)
-		}
-		if parentLimit == 0 && tool.remaining < 500*time.Millisecond {
-			t.Fatalf("tool budget not applied: %s", tool.remaining)
-		}
-	}
-}
 
-type unboundedResearchTestTool struct{ hasDeadline bool }
-
-func (*unboundedResearchTestTool) Name() string           { return "research" }
-func (*unboundedResearchTestTool) Description() string    { return "multi-step research" }
-func (*unboundedResearchTestTool) Timeout() time.Duration { return 0 }
-func (t *unboundedResearchTestTool) Run(ctx context.Context, _ map[string]any) (string, error) {
-	_, t.hasDeadline = ctx.Deadline()
-	return "ok", nil
-}
-func TestRunnerDoesNotAddDeadlineToUnboundedTool(t *testing.T) {
-	tool := &unboundedResearchTestTool{}
+func runDeadlineProbe(t *testing.T, ctx context.Context, cfg Config) *deadlineProbeTool {
+	t.Helper()
+	tool := &deadlineProbeTool{}
 	client := &scriptedClient{responses: []string{`{"action":"tool","tool":"research","input":{}}`, `{"action":"final","content":"done"}`}}
-	runner, err := NewRunner(client, Config{MaxSteps: 4, ToolTimeoutMS: 1}, NewToolRegistry(tool))
+	cfg.MaxSteps = 4
+	runner, err := NewRunner(client, cfg, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer runner.Close()
-	if _, err = runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "research"}}}); err != nil {
+	if _, err := runner.Run(ctx, Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "research"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if tool.hasDeadline {
-		t.Fatal("runner added a deadline to a tool without a total time limit")
+	return tool
+}
+
+// 默认不给单次工具调用加期限：密字长截图逐字转写要 110 秒，统一 60 秒会把它掐掉。
+func TestRunnerDoesNotAddDeadlineToToolCallsByDefault(t *testing.T) {
+	if tool := runDeadlineProbe(t, context.Background(), Config{}); tool.hasDeadline {
+		t.Fatalf("runner added a %s deadline to a tool call", tool.remaining)
 	}
 }
+
+func TestRunnerExplicitToolTimeoutStaysWithinParentDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	tool := runDeadlineProbe(t, ctx, Config{ToolTimeoutMS: 1000, FinalizationReserveMS: 1})
+	if !tool.hasDeadline || tool.remaining >= 100*time.Millisecond {
+		t.Fatalf("explicit tool timeout escaped the parent deadline: %v %s", tool.hasDeadline, tool.remaining)
+	}
+}
+
 func TestUnboundedToolStillInheritsCancellation(t *testing.T) {
 	parent, cancel := context.WithCancel(context.Background())
 	ctx, cleanup := contextWithToolBudget(parent, 0, time.Second)
