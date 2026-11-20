@@ -65,8 +65,6 @@ const (
 	PurposeWelcomeGenerator = "welcome_generator"
 	// PurposeProactiveMessage 是试验性的主动开口，见 proactive_messaging.go。
 	PurposeProactiveMessage = "proactive_message"
-	// PurposeImageFixGate 判断群友是不是在纠正某张图认错了，见 image_fix_gate.go。
-	PurposeImageFixGate = "image_fix_gate"
 	// PurposeQQJoinReview 是入群自动审批插件让模型判断一条入群申请。
 	PurposeQQJoinReview = "qq_join_review"
 	// PurposeOutboundImageSafety 是出站图片审核：发图前让识图模型逐张判账号风险，
@@ -125,7 +123,6 @@ var llmPurposeGroup = map[string]string{
 	// 下面这些也是判定，但眼下还没有各自的判断题表，先留在回复辅助：归进意图
 	// 识别只会让它们在绑判断模型时每次先失败一次再降级。题表补上再挪过去。
 	PurposeReplyIntentRouter: llm.GroupReplyAssist,
-	PurposeImageFixGate:      llm.GroupReplyAssist,
 	PurposeReplyRuleRouter:   llm.GroupReplyAssist,
 	PurposeBotReplyLoop:      llm.GroupReplyAssist,
 	// 来电判断时对方在等接听，和回复辅助一样要快；要从群列表里挑出群号，不是是非题。

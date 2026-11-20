@@ -159,7 +159,7 @@ func (r *Runtime) bridgeCallInviteLLM(ctx context.Context, profileID, text, imag
 		Caller   string `json:"caller"`
 		GroupID  any    `json:"group_id"`
 	}
-	if !decodeImageFixJSON(raw, &verdict) {
+	if !decodeLooseJSONObject(raw, &verdict) {
 		return bridgeCallInvite{}, errBridgeCallInviteFormat
 	}
 	invite := bridgeCallInvite{incoming: verdict.Incoming, group: verdict.Kind == "group", caller: strings.TrimSpace(verdict.Caller), how: how}
@@ -281,4 +281,15 @@ func (r *Runtime) bridgeCallGroupLister(profileID string) func(context.Context) 
 		}
 		return groups, nil
 	}
+}
+
+// decodeLooseJSONObject 取模型输出里第一个「{」到最后一个「}」之间的 JSON，容忍代码块和前后废话。
+func decodeLooseJSONObject(raw string, target any) bool {
+	raw = strings.TrimSpace(stripJSONCodeFence(raw))
+	start := strings.Index(raw, "{")
+	end := strings.LastIndex(raw, "}")
+	if start < 0 || end < start {
+		return false
+	}
+	return json.Unmarshal([]byte(raw[start:end+1]), target) == nil
 }
