@@ -1407,7 +1407,7 @@ func (h *BotHandler) testMusicConnections(c *gin.Context) {
 		h.writeError(c, http.StatusInternalServerError, "plugin_music_test", errors.New("music plugin has unexpected implementation"), "official.music", nil)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"sources": music.TestConnections(c.Request.Context(), settings)})
+	c.JSON(http.StatusOK, gin.H{"sources": music.TestConnections(c.Request.Context(), settings), "proxy": music.ProxyStatus(settings)})
 }
 
 func (h *BotHandler) testResolverCredentials(c *gin.Context) {

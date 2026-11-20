@@ -1064,7 +1064,7 @@ func TestMusicConnectionTestPutsInvalidLoginInMessage(t *testing.T) {
 	if results[0].Login == nil || results[0].Login.State != CredentialError {
 		t.Fatalf("netease login = %#v, want error from the unreachable account API", results[0].Login)
 	}
-	if !results[0].Playable || results[0].Message != "搜索与播放地址获取正常" {
+	if !results[0].Playable || results[0].Message != "搜索、取地址和下载音频都正常" {
 		t.Fatalf("netease connection = %#v", results[0])
 	}
 	if results[1].Login != nil {
