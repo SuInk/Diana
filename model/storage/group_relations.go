@@ -45,15 +45,16 @@ type relationEventPayload struct {
 	} `json:"quoted"`
 }
 
-// GroupRelationGraphFor 统计一个群以机器人为中心的关系图。
-func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, groupID string, since time.Time, botID string) (assistant.GroupRelationGraph, error) {
-	return s.GroupRelationGraphCenteredOn(ctx, groupID, since, botID, "")
+// GroupRelationGraphFor 统计一个群以机器人为中心的关系图。namespace 是机器人的
+// 会话命名空间（配置 ID），只数这台机器人记下的消息。
+func (s *SQLiteStore) GroupRelationGraphFor(ctx context.Context, namespace, groupID string, since time.Time, botID string) (assistant.GroupRelationGraph, error) {
+	return s.GroupRelationGraphCenteredOn(ctx, namespace, groupID, since, botID, "")
 }
 
 // GroupRelationGraphCenteredOn 统计关系图并以 centerID 为中心；centerID 为空时
 // 中心就是机器人。边还是全群的边，换中心只换「从谁的角度看」，所以中心这个人
 // 必须留在节点里——他发言再少也不能被人数上限截掉，否则他的边全被丢了。
-func (s *SQLiteStore) GroupRelationGraphCenteredOn(ctx context.Context, groupID string, since time.Time, botID, centerID string) (assistant.GroupRelationGraph, error) {
+func (s *SQLiteStore) GroupRelationGraphCenteredOn(ctx context.Context, namespace, groupID string, since time.Time, botID, centerID string) (assistant.GroupRelationGraph, error) {
 	graph := assistant.GroupRelationGraph{
 		GroupID: strings.TrimSpace(groupID),
 		BotID:   strings.TrimSpace(botID),
@@ -72,14 +73,15 @@ func (s *SQLiteStore) GroupRelationGraphCenteredOn(ctx context.Context, groupID 
 		sinceUnix = since.Unix()
 	}
 
+	current, legacy := groupEventSessions(namespace, graph.GroupID)
 	// 要扫一段时间内整群的消息 payload，放在写连接上会把入队堵住，走读池。
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT COALESCE(user_id, ''), COALESCE(sender_name, ''), payload
 FROM message_events
-WHERE group_id = ? AND event_time >= ?
+WHERE session IN (?, ?) AND event_time >= ?
 ORDER BY event_time DESC
 LIMIT ?
-`, graph.GroupID, sinceUnix, groupRelationScanLimit+1)
+`, current, legacy, sinceUnix, groupRelationScanLimit+1)
 	if err != nil {
 		return assistant.GroupRelationGraph{}, fmt.Errorf("query group relations: %w", err)
 	}
@@ -161,14 +163,14 @@ LIMIT ?
 			graph.CenterID = centerID
 		}
 	}
-	graph.Nodes = s.buildRelationNodes(ctx, messages, names, graph.BotID, graph.CenterID)
+	graph.Nodes = s.buildRelationNodes(ctx, namespace, messages, names, graph.BotID, graph.CenterID)
 	graph.Edges = relationEdgesAmong(graph.Nodes, weights)
 	return graph, nil
 }
 
 // buildRelationNodes 按发言数取前 N 个人，并补上好感度。机器人和选中的中心无论
 // 发言多少都要在——一个是默认原点，一个是这次的原点。
-func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[string]int, names map[string]string, botID, centerID string) []assistant.GroupRelationNode {
+func (s *SQLiteStore) buildRelationNodes(ctx context.Context, namespace string, messages map[string]int, names map[string]string, botID, centerID string) []assistant.GroupRelationNode {
 	nodes := make([]assistant.GroupRelationNode, 0, len(messages))
 	for userID, count := range messages {
 		nodes = append(nodes, assistant.GroupRelationNode{UserID: userID, DisplayName: names[userID], Messages: count, IsBot: userID == botID && botID != ""})
@@ -188,27 +190,32 @@ func (s *SQLiteStore) buildRelationNodes(ctx context.Context, messages map[strin
 	if len(nodes) > groupRelationMaxNodes {
 		nodes = nodes[:groupRelationMaxNodes]
 	}
-	s.fillRelationFavorability(ctx, nodes)
+	s.fillRelationFavorability(ctx, namespace, nodes)
 	return nodes
 }
 
 // fillRelationFavorability 一次查完这些人的好感度。逐个查会在四十个人的图上
-// 打四十次库。
-func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, nodes []assistant.GroupRelationNode) {
+// 打四十次库。好感度按机器人分开存，只取这台机器人的；多机器人之前写的画像
+// bot_profile_id 是空串，自己那台没有时用它兜底。以前对全部机器人取 MAX，
+// 别的机器人对这个人的好感会冒充成这台的。
+func (s *SQLiteStore) fillRelationFavorability(ctx context.Context, namespace string, nodes []assistant.GroupRelationNode) {
 	if len(nodes) == 0 {
 		return
 	}
+	namespace = strings.TrimSpace(namespace)
 	placeholders := make([]string, 0, len(nodes))
-	args := make([]any, 0, len(nodes))
+	args := []any{namespace}
 	for _, node := range nodes {
 		placeholders = append(placeholders, "?")
 		args = append(args, node.UserID)
 	}
+	args = append(args, namespace)
+	// 自己那台的行排在后面，下面逐行覆盖时就是它说了算。
 	rows, err := s.eventReader().QueryContext(ctx, `
-SELECT user_id, MAX(favorability), COALESCE(MAX(display_name), '')
+SELECT user_id, favorability, COALESCE(display_name, '')
 FROM user_profiles
-WHERE user_id IN (`+strings.Join(placeholders, ",")+`)
-GROUP BY user_id
+WHERE bot_profile_id IN (?, '') AND user_id IN (`+strings.Join(placeholders, ",")+`)
+ORDER BY (bot_profile_id = ?) ASC
 `, args...)
 	if err != nil {
 		// 好感度只是装饰，查不到不该让整张图失败。
@@ -224,7 +231,9 @@ GROUP BY user_id
 			return
 		}
 		favorability[userID] = score
-		profileNames[userID] = name
+		if strings.TrimSpace(name) != "" {
+			profileNames[userID] = name
+		}
 	}
 	for index := range nodes {
 		nodes[index].Favorability = favorability[nodes[index].UserID]

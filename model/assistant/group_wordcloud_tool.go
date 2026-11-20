@@ -19,7 +19,7 @@ const dianaGroupWordCloudToolName = "group_wordcloud"
 
 // GroupWordCloudStore 是消息存储里能数词频的那部分能力。
 type GroupWordCloudStore interface {
-	GroupWordCloudFor(ctx context.Context, groupID string, since time.Time, botID string) (GroupWordCloud, error)
+	GroupWordCloudFor(ctx context.Context, namespace, groupID string, since time.Time, botID string) (GroupWordCloud, error)
 }
 
 type dianaGroupWordCloudTool struct {
@@ -84,7 +84,7 @@ func (t *dianaGroupWordCloudTool) Run(ctx context.Context, input map[string]any)
 
 	cfg := t.runtime.effectiveConfigForEvent(t.event)
 	botID := firstNonEmpty(strings.TrimSpace(t.event.SelfID), strings.TrimSpace(cfg.BotAccount))
-	cloud, err := store.GroupWordCloudFor(ctx, t.event.GroupID, since, botID)
+	cloud, err := store.GroupWordCloudFor(ctx, t.event.ContextNamespace, t.event.GroupID, since, botID)
 	if err != nil {
 		return "", fmt.Errorf("统计词云失败：%w", err)
 	}

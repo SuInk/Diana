@@ -17,14 +17,14 @@ type relationToolStore struct {
 	graph                    GroupRelationGraph
 }
 
-func (s *relationToolStore) GroupRelationGraphFor(_ context.Context, groupID string, since time.Time, botID string) (GroupRelationGraph, error) {
+func (s *relationToolStore) GroupRelationGraphFor(_ context.Context, _, groupID string, since time.Time, botID string) (GroupRelationGraph, error) {
 	s.groupID, s.botID, s.since = groupID, botID, since
 	return s.graph, nil
 }
 
 type centeredRelationToolStore struct{ relationToolStore }
 
-func (s *centeredRelationToolStore) GroupRelationGraphCenteredOn(_ context.Context, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error) {
+func (s *centeredRelationToolStore) GroupRelationGraphCenteredOn(_ context.Context, _, groupID string, since time.Time, botID, centerID string) (GroupRelationGraph, error) {
 	s.groupID, s.botID, s.centerID, s.since = groupID, botID, centerID, since
 	return s.graph, nil
 }
@@ -42,7 +42,7 @@ func TestLoadGroupRelationGraphCenter(t *testing.T) {
 	for _, center := range []string{"", "bot", "member"} {
 		t.Run(center, func(t *testing.T) {
 			store := &centeredRelationToolStore{}
-			if _, err := loadGroupRelationGraph(context.Background(), store, "current-group", since, "bot", center); err != nil {
+			if _, err := loadGroupRelationGraph(context.Background(), store, "bot-profile", "current-group", since, "bot", center); err != nil {
 				t.Fatal(err)
 			}
 			want := ""
@@ -55,10 +55,10 @@ func TestLoadGroupRelationGraphCenter(t *testing.T) {
 		})
 	}
 	legacy := &relationToolStore{}
-	if _, err := loadGroupRelationGraph(context.Background(), legacy, "g", since, "bot", "member"); err == nil {
+	if _, err := loadGroupRelationGraph(context.Background(), legacy, "bot-profile", "g", since, "bot", "member"); err == nil {
 		t.Fatal("unsupported store silently used bot center")
 	}
-	if _, err := loadGroupRelationGraph(context.Background(), legacy, "g", since, "bot", ""); err != nil {
+	if _, err := loadGroupRelationGraph(context.Background(), legacy, "bot-profile", "g", since, "bot", ""); err != nil {
 		t.Fatal(err)
 	}
 }

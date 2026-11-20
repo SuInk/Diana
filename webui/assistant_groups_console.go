@@ -376,7 +376,7 @@ func (h *BotHandler) groupRelationGraph(c *gin.Context) {
 	}
 	config := h.botConfigForProfile(profileID)
 	botID := strings.TrimSpace(config.BotAccount)
-	graph, err := h.sqlite.GroupRelationGraphCenteredOn(c.Request.Context(), groupID, since, botID, c.Query("center"))
+	graph, err := h.sqlite.GroupRelationGraphCenteredOn(c.Request.Context(), profileID, groupID, since, botID, c.Query("center"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -425,7 +425,7 @@ func (h *BotHandler) groupWordCloud(c *gin.Context) {
 		return
 	}
 	botID := strings.TrimSpace(h.botConfigForProfile(profileID).BotAccount)
-	cloud, err := h.sqlite.GroupWordCloudFor(c.Request.Context(), groupID, since, botID)
+	cloud, err := h.sqlite.GroupWordCloudFor(c.Request.Context(), profileID, groupID, since, botID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

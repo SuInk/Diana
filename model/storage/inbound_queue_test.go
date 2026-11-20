@@ -1390,6 +1390,12 @@ func TestGroupSeqGapCountsMissingMessagesExcludingBotReplies(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// 共用连接的另一个配置也在自己的会话里记了机器人这条回复，不能把它再扣一次。
+	if err := store.AppendMessageEvent(ctx, "profile-b:group:1", assistant.MessageEvent{
+		Kind: assistant.EventKindGroup, GroupID: "1", UserID: "42", MessageID: "self-1", Time: 1020, RawMessage: "reply", ProfileID: "profile-b",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	gap, err := store.GroupSeqGap(ctx, assistant.GroupSeqGapQuery{
 		ProfileID: "profile-a", GroupID: "1", SelfID: "42", Seq: 106, EventTime: 1100, Since: 0,
