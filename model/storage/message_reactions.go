@@ -111,65 +111,68 @@ ORDER BY reacted_at, user_id, emoji`, strings.TrimSpace(session), strings.TrimSp
 }
 
 // RankReactionGivers 统计时间段里谁挂的表情最多。一条消息上挂两个表情算两次。
-func (s *SQLiteStore) RankReactionGivers(ctx context.Context, session string, since, until int64, limit int) ([]assistant.GroupStatsRank, int, error) {
+// 按会话分开计数，跨群合并由调用方做（要先按权限筛掉读不了的群）。
+func (s *SQLiteStore) RankReactionGivers(ctx context.Context, query assistant.GroupStatsQuery) ([]assistant.GroupStatsRank, error) {
 	defer s.observeStorage(ctx, "RankReactionGivers", "read")()
 	if s == nil || s.db == nil {
-		return nil, 0, nil
-	}
-	if until <= 0 {
-		until = time.Now().Unix()
+		return nil, nil
 	}
 	return s.groupStatsRank(ctx, `
-SELECT user_id AS rank_user, MAX(user_name) AS rank_name, COUNT(*) AS rank_count FROM message_reactions
-WHERE session = ? AND reacted_at >= ? AND reacted_at <= ?
-GROUP BY user_id`, strings.TrimSpace(session), since, until, limit)
+SELECT session AS rank_session, user_id AS rank_user, MAX(user_name) AS rank_name, COUNT(*) AS rank_count FROM message_reactions
+WHERE %s AND reacted_at >= ? AND reacted_at <= ?
+GROUP BY session, user_id`, query)
 }
 
 // RankGroupSpeakers 统计时间段里谁发言最多，数的是本地记下的群消息条数。
-// 名字取这个人最近一条消息上的群名片或昵称。
-func (s *SQLiteStore) RankGroupSpeakers(ctx context.Context, session string, since, until int64, limit int) ([]assistant.GroupStatsRank, int, error) {
+// 名字取这个人在该群最近一条消息上的群名片或昵称。按会话分开计数，同 RankReactionGivers。
+func (s *SQLiteStore) RankGroupSpeakers(ctx context.Context, query assistant.GroupStatsQuery) ([]assistant.GroupStatsRank, error) {
 	defer s.observeStorage(ctx, "RankGroupSpeakers", "read")()
 	if s == nil || s.db == nil {
-		return nil, 0, nil
-	}
-	if until <= 0 {
-		until = time.Now().Unix()
+		return nil, nil
 	}
 	return s.groupStatsRank(ctx, `
-SELECT counted.user_id AS rank_user,
+SELECT counted.session AS rank_session, counted.user_id AS rank_user,
        (SELECT latest.sender_name FROM message_events AS latest
         WHERE latest.session = counted.session AND latest.user_id = counted.user_id AND latest.kind = 'group'
         ORDER BY latest.event_time DESC LIMIT 1) AS rank_name,
        COUNT(*) AS rank_count
 FROM message_events AS counted
-WHERE counted.session = ? AND counted.kind = 'group' AND counted.event_time >= ? AND counted.event_time <= ?
+WHERE %s AND counted.kind = 'group' AND counted.event_time >= ? AND counted.event_time <= ?
   AND COALESCE(counted.user_id, '') != ''
-GROUP BY counted.user_id`, strings.TrimSpace(session), since, until, limit)
+GROUP BY counted.session, counted.user_id`, query)
 }
 
-// groupStatsRank 跑一条「按人分组计数」的查询，按条数从多到少取前 limit 个，并返回总人数。
-func (s *SQLiteStore) groupStatsRank(ctx context.Context, grouped string, session string, since, until int64, limit int) ([]assistant.GroupStatsRank, int, error) {
-	// 每条分组查询都把列命名成 rank_user / rank_name / rank_count，这里统一排序。
-	rows, err := s.eventReader().QueryContext(ctx, `SELECT rank_user, COALESCE(rank_name, ''), rank_count FROM (`+grouped+`)
-ORDER BY rank_count DESC, rank_user`, session, since, until)
+// groupStatsRank 跑一条「按会话和人分组计数」的查询，按条数从多到少返回全部行。
+// grouped 里的 %s 填会话条件：给了 SessionPrefix 就是这个前缀下的所有群，否则是单个 Session。
+func (s *SQLiteStore) groupStatsRank(ctx context.Context, grouped string, query assistant.GroupStatsQuery) ([]assistant.GroupStatsRank, error) {
+	session, prefix := strings.TrimSpace(query.Session), strings.TrimSpace(query.SessionPrefix)
+	condition, target := "session = ?", session
+	if prefix != "" {
+		condition, target = `session LIKE ? ESCAPE '\'`, escapeMessageHistoryLike(prefix)+"%"
+	} else if session == "" {
+		return nil, nil
+	}
+	if strings.Contains(grouped, "counted.") {
+		condition = "counted." + condition
+	}
+	until := query.Until
+	if until <= 0 {
+		until = time.Now().Unix()
+	}
+	// 每条分组查询都把列命名成 rank_session / rank_user / rank_name / rank_count，这里统一排序。
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT rank_session, rank_user, COALESCE(rank_name, ''), rank_count FROM (`+fmt.Sprintf(grouped, condition)+`)
+ORDER BY rank_count DESC, rank_user, rank_session`, target, query.Since, until)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var all []assistant.GroupStatsRank
 	for rows.Next() {
 		var rank assistant.GroupStatsRank
-		if err := rows.Scan(&rank.UserID, &rank.UserName, &rank.Count); err != nil {
-			return nil, 0, err
+		if err := rows.Scan(&rank.Session, &rank.UserID, &rank.UserName, &rank.Count); err != nil {
+			return nil, err
 		}
 		all = append(all, rank)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, 0, err
-	}
-	total := len(all)
-	if limit > 0 && len(all) > limit {
-		all = all[:limit]
-	}
-	return all, total, nil
+	return all, rows.Err()
 }

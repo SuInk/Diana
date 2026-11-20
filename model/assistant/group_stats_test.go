@@ -23,6 +23,7 @@ type fakeGroupStatsStore struct {
 	givers    []GroupStatsRank
 	rows      []MessageReactionRow
 	lastRange [2]int64
+	lastQuery GroupStatsQuery
 	appended  int
 }
 
@@ -44,19 +45,13 @@ func (s *fakeGroupStatsStore) RecordMessageReaction(_ context.Context, r Message
 func (s *fakeGroupStatsStore) ListMessageReactions(context.Context, string, string) ([]MessageReactionRow, error) {
 	return s.rows, nil
 }
-func (s *fakeGroupStatsStore) RankReactionGivers(_ context.Context, _ string, since, until int64, limit int) ([]GroupStatsRank, int, error) {
-	s.lastRange = [2]int64{since, until}
-	return limitRanks(s.givers, limit), len(s.givers), nil
+func (s *fakeGroupStatsStore) RankReactionGivers(_ context.Context, query GroupStatsQuery) ([]GroupStatsRank, error) {
+	s.lastRange, s.lastQuery = [2]int64{query.Since, query.Until}, query
+	return s.givers, nil
 }
-func (s *fakeGroupStatsStore) RankGroupSpeakers(_ context.Context, _ string, since, until int64, limit int) ([]GroupStatsRank, int, error) {
-	s.lastRange = [2]int64{since, until}
-	return limitRanks(s.speakers, limit), len(s.speakers), nil
-}
-func limitRanks(ranks []GroupStatsRank, limit int) []GroupStatsRank {
-	if limit > 0 && len(ranks) > limit {
-		return ranks[:limit]
-	}
-	return ranks
+func (s *fakeGroupStatsStore) RankGroupSpeakers(_ context.Context, query GroupStatsQuery) ([]GroupStatsRank, error) {
+	s.lastRange, s.lastQuery = [2]int64{query.Since, query.Until}, query
+	return s.speakers, nil
 }
 
 // Telegram 推的 new_reaction 是完整集合：整体替换，普通表情、自定义表情和付费星星都要认出来。
@@ -281,5 +276,72 @@ func TestChatHistorySpeakerStatsPagesWithoutCap(t *testing.T) {
 	rest := run(map[string]any{"operation": "speakers", "limit": 1000, "offset": first.Page.NextOffset})
 	if len(rest.Ranks) != total-defaultGroupStatsLimit || rest.Page.HasMore || rest.Ranks[0].Rank != defaultGroupStatsLimit+1 || rest.Ranks[len(rest.Ranks)-1].Rank != total {
 		t.Fatalf("rest page = ranks %d page %+v first rank %d", len(rest.Ranks), rest.Page, rest.Ranks[0].Rank)
+	}
+}
+
+// 「算跨群」：speakers 要认 scope=all_groups，同一个人在多个群只算一人，读不了的群要说明；
+// 跨群记忆没开时直接报错，不能静默退回本群（生产 2026-11-20 回了同一个 39 人）。
+func TestChatHistorySpeakerStatsCrossGroup(t *testing.T) {
+	store := &fakeGroupStatsStore{speakers: []GroupStatsRank{
+		{Session: "group:100", UserID: "10001", UserName: "Mio", Count: 5},
+		{Session: "group:200", UserID: "10001", UserName: "Mio2", Count: 9},
+		{Session: "group:200", UserID: "10002", UserName: "RR", Count: 3},
+		{Session: "group:300", UserID: "10003", UserName: "Yuki", Count: 2},
+	}}
+	newRuntime := func(crossGroup bool) *Runtime {
+		cfg := BotConfig{ID: "qq", BotAccount: "90001", OwnerID: "10009", CrossGroupMemoryEnabled: boolPointer(crossGroup)}.WithDefaults()
+		runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		runtime.SetMessageHistoryStore(store)
+		return runtime
+	}
+	runtime := newRuntime(true)
+	run := func(event MessageEvent, input map[string]any) (groupStatsResult, error) {
+		t.Helper()
+		raw, err := newDianaChatHistoryTool(runtime, event).Run(context.Background(), input)
+		if err != nil {
+			return groupStatsResult{}, err
+		}
+		var result groupStatsResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatalf("%v: %s", err, raw)
+		}
+		return result, nil
+	}
+	owner := MessageEvent{Kind: EventKindGroup, GroupID: "100", UserID: "10009", Time: 1_000_000}
+	result, err := run(owner, map[string]any{"operation": "speakers", "scope": "all_groups"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if store.lastQuery.SessionPrefix != "group:" || store.lastQuery.Session != "" {
+		t.Fatalf("跨群统计的范围 = %#v", store.lastQuery)
+	}
+	if result.Total != 3 || result.Groups != 3 || result.Ranks[0].UserID != "10001" || result.Ranks[0].Count != 14 || result.Ranks[0].UserName != "Mio2" || !strings.Contains(result.Message, "3 个群") {
+		t.Fatalf("跨群发言排行 = %#v", result)
+	}
+
+	// 指定单群：会话键换成那个群。
+	if _, err := run(owner, map[string]any{"operation": "speakers", "group_id": "200"}); err != nil {
+		t.Fatal(err)
+	}
+	if store.lastQuery.Session != "group:200" || store.lastQuery.SessionPrefix != "" {
+		t.Fatalf("指定群统计的范围 = %#v", store.lastQuery)
+	}
+
+	// 主人私聊也能跨群统计；不给范围时报错并说明怎么传。
+	private := MessageEvent{Kind: EventKindPrivate, UserID: "10009", Time: 1_000_000}
+	if result, err := run(private, map[string]any{"operation": "speakers", "scope": "all_groups"}); err != nil || result.Total != 3 {
+		t.Fatalf("主人私聊跨群统计 = %#v err=%v", result, err)
+	}
+	if _, err := run(private, map[string]any{"operation": "speakers"}); err == nil || !strings.Contains(err.Error(), "group_id") {
+		t.Fatalf("私聊不给范围应报错并提示 group_id，得到 %v", err)
+	}
+
+	// 跨群记忆关掉：明确报错，不退回本群。
+	runtime = newRuntime(false)
+	if _, err := run(owner, map[string]any{"operation": "speakers", "scope": "all_groups"}); err == nil || !strings.Contains(err.Error(), "跨群记忆未开启") {
+		t.Fatalf("跨群记忆关闭时应报错，得到 %v", err)
+	}
+	if _, err := run(owner, map[string]any{"operation": "reactions", "group_id": "200"}); err == nil {
+		t.Fatal("跨群记忆关闭时不能统计别的群")
 	}
 }

@@ -125,6 +125,12 @@ func TestNotebookLookupMatchesTermsAndAliases(t *testing.T) {
 	if len(hits) != 1 {
 		t.Fatalf("按词精确检索失败: %+v", hits)
 	}
+
+	// get 按别名也要查得到，否则模型以为没有、照提示再 upsert 出一条重复条目。
+	entry, found, err := store.NotebookEntryDetail(ctx, "group:1", "dxls")
+	if err != nil || !found || entry.Term != "带薪拉屎" || len(entry.Revisions) == 0 {
+		t.Fatalf("按别名读条目 = %+v found=%v err=%v", entry, found, err)
+	}
 }
 
 // 同一个词在本群和全局都有释义时，本群那条说了算：全局笔记本是兜底，不是覆盖。

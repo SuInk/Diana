@@ -500,6 +500,18 @@ func (s *SQLiteStore) NotebookEntryDetail(ctx context.Context, scopeKey, term st
 		return assistant.NotebookEntry{}, false, nil
 	}
 	entry, found, err := notebookEntryByTerm(ctx, s.eventReader(), scope, normalized)
+	if err == nil && !found {
+		// 条目名没对上再按别名找：别名是同一条目的其他写法，以前按别名查回「没有」，
+		// 模型就照提示 upsert 出一条重复条目。
+		var entries []assistant.NotebookEntry
+		entries, err = queryNotebookEntries(ctx, s.eventReader(),
+			`SELECT `+notebookEntryColumns+` FROM notebook_entries e WHERE e.scope_key = ? AND EXISTS (
+SELECT 1 FROM notebook_aliases a WHERE a.entry_id = e.id AND a.normalized_alias = ?) ORDER BY e.status = 'deleted', e.updated_at DESC LIMIT 1`,
+			scope, normalized)
+		if len(entries) > 0 {
+			entry, found = entries[0], true
+		}
+	}
 	if err != nil || !found {
 		return assistant.NotebookEntry{}, false, err
 	}

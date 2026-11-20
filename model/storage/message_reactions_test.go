@@ -65,15 +65,15 @@ func TestSQLiteStoreMessageReactionsReplaceAndToggle(t *testing.T) {
 	}
 
 	record(assistant.MessageReaction{MessageID: "m2", UserID: "bob", Emojis: []string{"76", "66"}, Added: true, At: 200})
-	ranks, total, err := store.RankReactionGivers(ctx, session, 0, 0, 10)
+	ranks, err := store.RankReactionGivers(ctx, assistant.GroupStatsQuery{Session: session})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if total != 1 || len(ranks) != 1 || ranks[0].UserID != "bob" || ranks[0].Count != 3 || ranks[0].UserName != "Bob" {
-		t.Fatalf("点赞排行 = %#v total=%d", ranks, total)
+	if len(ranks) != 1 || ranks[0].UserID != "bob" || ranks[0].Count != 3 || ranks[0].UserName != "Bob" || ranks[0].Session != session {
+		t.Fatalf("点赞排行 = %#v", ranks)
 	}
 	// 时间段过滤：只看 150 之后挂上的。
-	ranks, _, err = store.RankReactionGivers(ctx, session, 150, 0, 10)
+	ranks, err = store.RankReactionGivers(ctx, assistant.GroupStatsQuery{Session: session, Since: 150})
 	if err != nil || len(ranks) != 1 || ranks[0].Count != 2 {
 		t.Fatalf("按时间过滤的点赞排行 = %#v err=%v", ranks, err)
 	}
@@ -82,7 +82,8 @@ func TestSQLiteStoreMessageReactionsReplaceAndToggle(t *testing.T) {
 	}
 }
 
-// 发言排行数的是本地记下的群消息：不算撤回等通知，不跨群，名字取最近一条。
+// 发言排行数的是本地记下的群消息：不算撤回等通知，名字取最近一条；单群不混进别的群，
+// 给前缀时按群分开返回。
 func TestSQLiteStoreRankGroupSpeakers(t *testing.T) {
 	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "app.db"))
@@ -107,17 +108,27 @@ func TestSQLiteStoreRankGroupSpeakers(t *testing.T) {
 	add("bot:group:1", "bob", "Bob", "4", 260, assistant.EventKindNotice)
 	add("bot:group:2", "carol", "Carol", "5", 250, assistant.EventKindGroup)
 
-	ranks, total, err := store.RankGroupSpeakers(ctx, "bot:group:1", 0, 0, 10)
+	add("other:group:1", "dave", "Dave", "6", 250, assistant.EventKindGroup)
+	ranks, err := store.RankGroupSpeakers(ctx, assistant.GroupStatsQuery{Session: "bot:group:1"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []assistant.GroupStatsRank{{UserID: "alice", UserName: "Alice新名片", Count: 3}, {UserID: "bob", UserName: "Bob", Count: 1}}
-	if total != 2 || !reflect.DeepEqual(ranks, want) {
-		t.Fatalf("发言排行 = %#v total=%d", ranks, total)
+	want := []assistant.GroupStatsRank{{Session: "bot:group:1", UserID: "alice", UserName: "Alice新名片", Count: 3}, {Session: "bot:group:1", UserID: "bob", UserName: "Bob", Count: 1}}
+	if !reflect.DeepEqual(ranks, want) {
+		t.Fatalf("发言排行 = %#v", ranks)
 	}
-	ranks, total, err = store.RankGroupSpeakers(ctx, "bot:group:1", 150, 0, 1)
-	if err != nil || total != 2 || len(ranks) != 1 || ranks[0].UserID != "alice" || ranks[0].Count != 2 {
-		t.Fatalf("时间段与条数限制 = %#v total=%d err=%v", ranks, total, err)
+	ranks, err = store.RankGroupSpeakers(ctx, assistant.GroupStatsQuery{Session: "bot:group:1", Since: 150})
+	if err != nil || len(ranks) != 2 || ranks[0].UserID != "alice" || ranks[0].Count != 2 {
+		t.Fatalf("时间段过滤 = %#v err=%v", ranks, err)
+	}
+	// 跨群：同一机器人前缀下的群都算，别的机器人命名空间不混进来。
+	ranks, err = store.RankGroupSpeakers(ctx, assistant.GroupStatsQuery{SessionPrefix: "bot:group:"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = append(want, assistant.GroupStatsRank{Session: "bot:group:2", UserID: "carol", UserName: "Carol", Count: 1})
+	if !reflect.DeepEqual(ranks, want) {
+		t.Fatalf("跨群发言排行 = %#v", ranks)
 	}
 }
 

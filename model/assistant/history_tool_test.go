@@ -901,3 +901,59 @@ func TestDianaChatHistoryToolCombinesFiltersWithoutOperation(t *testing.T) {
 		t.Fatalf("ids 应当返回原文：%#v", byID.Items[0])
 	}
 }
+
+// 显式写了 range/recent 又带筛选条件时不能静默丢条件；按条件查也要认消息范围；
+// around 在冷清的群里要放宽时间窗凑够条数。
+func TestDianaChatHistoryToolHonorsFiltersAndBoundsEverywhere(t *testing.T) {
+	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	store := newSemanticTimelineStore()
+	runtime.SetMessageHistoryStore(store)
+	base := time.Now().Add(-10 * 24 * time.Hour).Unix()
+	day := int64(24 * 3600)
+	for _, event := range []MessageEvent{
+		chatHistoryTextEvent(base, "alice", "Alice", "a-old", "上周部署过一次"),
+		chatHistoryTextEvent(base+2*day, "bob", "Bob", "b-mid", "部署挂了"),
+		chatHistoryTextEvent(base+4*day, "alice", "Alice", "a-new", "今天又部署了"),
+		chatHistoryTextEvent(base+4*day+10, "bob", "Bob", "b-new", "吃面"),
+	} {
+		runtime.remember(event)
+	}
+	tool := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "group-1", Time: time.Now().Unix()})
+	run := func(input map[string]any) dianaChatHistoryResult {
+		t.Helper()
+		raw, err := tool.Run(context.Background(), input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result dianaChatHistoryResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	ids := func(result dianaChatHistoryResult) string {
+		return strings.Join(historyMessageIDsFromItems(result.Items), ",")
+	}
+
+	if got := run(map[string]any{"operation": "range", "sender_user_id": "alice", "days": 30}); got.Action != "search" || ids(got) != "a-new,a-old" {
+		t.Fatalf("range 带发送者应当按条件查：action=%s ids=%s", got.Action, ids(got))
+	}
+	if got := run(map[string]any{"operation": "recent", "query": "部署"}); got.Action != "search" || ids(got) != "a-new,b-mid,a-old" {
+		t.Fatalf("recent 带关键词应当按条件查：action=%s ids=%s", got.Action, ids(got))
+	}
+	if got := run(map[string]any{"query": "部署", "from_message_id": "b-mid"}); ids(got) != "a-new,b-mid" {
+		t.Fatalf("按条件查应当认 from_message_id：ids=%s", ids(got))
+	}
+	if got := run(map[string]any{"query": "部署", "through_message_id": "b-mid"}); ids(got) != "b-mid,a-old" {
+		t.Fatalf("按条件查应当认 through_message_id：ids=%s", ids(got))
+	}
+	if _, err := tool.Run(context.Background(), map[string]any{"query": "部署", "from_message_id": "missing"}); err == nil {
+		t.Fatal("找不到起始消息时应当报错，不能忽略")
+	}
+
+	// 前后两条都隔了两天，固定的 6 小时窗口只能读到锚点自己。
+	around := run(map[string]any{"operation": "around", "message_id": "b-mid", "before": 1, "after": 1})
+	if ids(around) != "a-old,b-mid,a-new" {
+		t.Fatalf("around 应当放宽时间窗凑够条数：ids=%s", ids(around))
+	}
+}
