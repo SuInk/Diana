@@ -604,7 +604,8 @@ func TestLLMNoTextErrorRetryAndFailoverMatrix(t *testing.T) {
 }
 
 func TestRuntimeCompressesOlderContextAfterThreshold(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 5}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "123", UserID: "10001"}
 	for i := 1; i <= 6; i++ {
 		next := event
@@ -628,7 +629,8 @@ func TestRuntimeCompressesOlderContextAfterThreshold(t *testing.T) {
 }
 
 func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 2)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newMemoryMessageHistoryStore()
 	runtime.SetMessageHistoryStore(store)
 	event := MessageEvent{
@@ -650,13 +652,10 @@ func TestRuntimeLoadsPersistentMessageHistory(t *testing.T) {
 
 func TestDefaultBotConfigKeepsFortyMessagesAndCompressesAtOneHundred(t *testing.T) {
 	cfg := DefaultBotConfig()
-	// RecentContextLimit 只管旁路回看深度，不进正式提示词；正式提示词的历史预算
-	// 由 RecentHistoryTokenBudget 按 token 计。
-	if cfg.RecentContextLimit != 40 || cfg.ContextSummaryThreshold != 100 {
-		t.Fatalf("context defaults = recent %d threshold %d", cfg.RecentContextLimit, cfg.ContextSummaryThreshold)
-	}
-	if cfg.RecentHistoryTokenBudget != DefaultRecentHistoryTokenBudget {
-		t.Fatalf("history token budget default = %d", cfg.RecentHistoryTokenBudget)
+	// 旁路回看条数只管内存缓存和旁路回看深度，不进正式提示词；正式提示词的历史预算
+	// 按 token 计（recentHistoryBudget）。
+	if sideHistoryLookback != 40 || cfg.ContextSummaryThreshold != 100 {
+		t.Fatalf("context defaults = lookback %d threshold %d", sideHistoryLookback, cfg.ContextSummaryThreshold)
 	}
 	if boolValue(cfg.CrossGroupMemoryEnabled, true) {
 		t.Fatalf("cross group memory default = %v, want off", cfg.CrossGroupMemoryEnabled)
@@ -4058,7 +4057,8 @@ func TestRuntimeImageEditCanUseMentionedMemberAvatar(t *testing.T) {
 }
 
 func TestRuntimePrivateImageEditPrefersOwnAvatarOverRecentImage(t *testing.T) {
-	runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 20)
+	runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.remember(MessageEvent{
 		Kind:      EventKindPrivate,
 		UserID:    "10001",
@@ -4092,7 +4092,8 @@ func TestRuntimeImageEditSourcePriority(t *testing.T) {
 	)
 	recentImage := "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(tinyJPEGBytes(t))
 	newRuntimeWithRecentImage := func() *Runtime {
-		runtime := NewRuntime(BotConfig{BotAccount: "10000", RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+		setSideHistoryLookback(t, 20)
+		runtime := NewRuntime(BotConfig{BotAccount: "10000"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 		runtime.remember(MessageEvent{
 			Kind:      EventKindPrivate,
 			UserID:    "10001",
@@ -4324,7 +4325,8 @@ func TestRuntimeImageOperationLogsSubmittedAndIntentPrompts(t *testing.T) {
 }
 
 func TestRuntimeVisualIntentIncludesRecentTextEditRequirements(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 20)
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	image := MessageEvent{
 		Kind:       EventKindGroup,
 		GroupID:    "20005",

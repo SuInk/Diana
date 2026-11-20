@@ -855,7 +855,8 @@ func TestRuntimeCachesIncomingVideoThenRoutesFollowupToItsFrames(t *testing.T) {
 		`{"action":"none","prompt":""}`,
 		"视频里是测试画面。",
 	}}
-	runtime := NewRuntime(BotConfig{BotAccount: "42", RecentContextLimit: 20}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	setSideHistoryLookback(t, 20)
+	runtime := NewRuntime(BotConfig{BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	prepared, _, handled, _ := runtime.prepareMessageEvent(context.Background(), MessageEvent{

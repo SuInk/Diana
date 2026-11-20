@@ -81,7 +81,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 				GroupTriggers:              []string{"Diana"},
 				WelcomeEnabled:             &welcomeEnabled,
 				WelcomeMessage:             "欢迎 {user_id}",
-				RecentContextLimit:         8,
+				MaxContextTokens:           8000,
 				MaxReplyChars:              1200,
 				NaturalInterjectionEnabled: &naturalInterjectionEnabled,
 				PluginOverrides:            map[string]bool{"official.file-parser-go": true},
@@ -99,7 +99,7 @@ func TestSQLiteStorePersistsConfigsAndPluginStates(t *testing.T) {
 		t.Fatalf("LoadBotGroupConfigs() ok=%v err=%v", ok, err)
 	}
 	gotGroup, ok := gotGroupConfigs.ConfigForGroup("", "123456")
-	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.PluginSettingOverrides["official.file-parser-go"]["max_file_kb"] != float64(512) || gotGroup.RecentContextLimit != 8 || gotGroup.NaturalInterjectionEnabled == nil || !*gotGroup.NaturalInterjectionEnabled {
+	if !ok || !gotGroup.PluginOverrides["official.file-parser-go"] || gotGroup.PluginSettingOverrides["official.file-parser-go"]["max_file_kb"] != float64(512) || gotGroup.MaxContextTokens != 8000 || gotGroup.NaturalInterjectionEnabled == nil || !*gotGroup.NaturalInterjectionEnabled {
 		t.Fatalf("gotGroupConfigs = %#v", gotGroupConfigs)
 	}
 

@@ -404,7 +404,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   recall_reply_auto_delete_enabled?: boolean;
   recall_reply_auto_delete_delay_seconds?: number;
   max_context_tokens?: number;
-  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   image_generation_cooldown_seconds?: number;
   video_generation_cooldown_seconds?: number;
@@ -421,7 +420,6 @@ export interface BotProfileConfig extends SendRetrySettings {
   daily_limit_timezone?: string;
   /** 机器人时区（IANA 名）：当前时间、回复时段、每日次数、提醒换算都按它；留空读 TZ，再用本机时区，本机是 UTC 时按 Asia/Shanghai。 */
   timezone?: string;
-  recent_context_limit?: number;
   /** 断线或重启后，每个会话最多补处理最近多少条消息；默认 3，最大 100。 */
   history_backfill_message_limit?: number;
   /** 持久化提取稳定事实、偏好和会话摘要；缺省等价于开启。 */
@@ -766,14 +764,12 @@ export interface BotGroupConfig extends SendRetrySettings {
   /** LLM 欢迎词每群冷却秒数；不设跟随机器人。 */
   welcome_llm_cooldown_seconds?: number;
   max_context_tokens?: number;
-  recent_history_token_budget?: number;
   /** 滚动 5 小时窗口里的模型调用次数上限；留空或 0 表示不限。 */
   model_call_quota?: number;
   /** 这个群每天能成功生图的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
   image_generation_daily_group_limit?: number | null;
   /** 这个群每天能生成视频的次数：不带跟随机器人，0 本群不限，正数是本群上限。 */
   video_generation_daily_group_limit?: number | null;
-  recent_context_limit?: number;
   max_reply_chars?: number;
   /** 本群的自然分条开关；不设表示跟随机器人。 */
   natural_reply_split_enabled?: boolean;
@@ -1991,6 +1987,14 @@ export function listAgentResidency(profile = ""): Promise<{items: AgentResidency
 export function saveAgentResidencyList(profile: string, ids: string[] | null): Promise<{ok: boolean}> {
   const body: Record<string, unknown> = ids === null ? {profile_id: profile, reset: true} : {profile_id: profile, ids};
   return requestJSON("/api/assistant/agent-residency", {method: "POST", body: JSON.stringify(body)});
+}
+
+// 机器人设置「每轮带什么」的柱形图：各会话上一轮主回复第一步实际请求平均成一次的构成。
+export interface ReplyContextSegment { name: string; kind: "prefix" | "history" | "changing"; tokens: number; /** 这一轮新发的部分：和同一会话上一轮请求开头相同的不算。 */ new_tokens: number }
+export interface ReplyContextBreakdown { sessions: number; saved_at?: string; total_tokens: number; new_tokens: number; input_tokens?: number; cached_tokens?: number; segments: ReplyContextSegment[]; context_window: number }
+
+export function getReplyContext(profile: string): Promise<{breakdown?: ReplyContextBreakdown}> {
+  return requestJSON(`/api/assistant/reply-context?${new URLSearchParams({profile}).toString()}`);
 }
 
 export function installPlugin(id: string): Promise<PluginState> {
@@ -3305,7 +3309,6 @@ export interface AssistantContextBudgetLayer {
   ceiling: number;
   tokens: number;
   capped_by_ceiling: boolean;
-  configurable: boolean;
 }
 
 export interface AssistantContextBudget {

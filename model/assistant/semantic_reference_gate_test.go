@@ -14,7 +14,8 @@ import (
 func mediaGateRuntime(t *testing.T, events ...MessageEvent) *Runtime {
 	t.Helper()
 	store := newSemanticTimelineStore()
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 2}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 2)
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	for _, event := range events {
 		if err := store.AppendMessageEvent(context.Background(), sessionKey(event), event); err != nil {
@@ -59,7 +60,7 @@ func TestSemanticReferenceSkippedForTextOnlySessions(t *testing.T) {
 	// 纯文字会话没有任何可解析的媒体，两种模式都不该付一次前置调用。
 	// 非 agent 模式以前是短路成「每条消息都跑」，这正是要修掉的固定开销。
 	for _, agentEnabled := range []bool{true, false} {
-		cfg := BotConfig{AgentEnabled: agentEnabled, RecentContextLimit: 2}.WithDefaults()
+		cfg := BotConfig{AgentEnabled: agentEnabled}.WithDefaults()
 		if runtime.shouldResolveSemanticReference(ctx, cfg, event, false) {
 			t.Fatalf("router fired on a text-only session (agent=%v)", agentEnabled)
 		}
@@ -77,13 +78,13 @@ func TestSemanticReferenceStillRunsWithoutAgentToolAccess(t *testing.T) {
 
 	// 非 agent 模式下 historyPromptTextAt 会整条丢掉纯图片历史，模型连图存在都不
 	// 知道，所以只要历史里有媒体就必须前置解析。
-	nonAgent := BotConfig{AgentEnabled: false, RecentContextLimit: 2}.WithDefaults()
+	nonAgent := BotConfig{AgentEnabled: false}.WithDefaults()
 	if !runtime.shouldResolveSemanticReference(ctx, nonAgent, event, false) {
 		t.Fatal("non-agent mode skipped resolution while history still holds media")
 	}
 
 	// agent 模式但工具被关系等级挡掉时同样没有取图手段，仍要回退到路由器。
-	agent := BotConfig{AgentEnabled: true, RecentContextLimit: 2}.WithDefaults()
+	agent := BotConfig{AgentEnabled: true}.WithDefaults()
 	if !runtime.shouldResolveSemanticReference(ctx, agent, event, false) {
 		t.Fatal("agent without tool access skipped resolution")
 	}
@@ -139,7 +140,7 @@ func TestDurableMediaIndexAliasesMessageIDs(t *testing.T) {
 }
 
 func TestDurableMediaIndexSkipsMediaStillInHistory(t *testing.T) {
-	// RecentContextLimit=2 时最近两条仍在窗口里，模型已经看得到，不该重复列出来。
+	// 旁路回看 2 条时最近两条仍在窗口里，模型已经看得到，不该重复列出来。
 	runtime := mediaGateRuntime(t,
 		gateTextEvent("m1", 1, "第一条"),
 		gateImageEvent("img-recent", 2),
@@ -166,7 +167,8 @@ func TestSemanticReferenceCachesNegativeDecisions(t *testing.T) {
 		`{"message_ids":[],"confidence":0.2,"reason":"措辞没有指向任何历史消息"}`,
 	}}
 	calls := 0
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	setSideHistoryLookback(t, 20)
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		calls++
 		return provider, nil
 	})
@@ -194,7 +196,8 @@ func TestSemanticReferenceRejectsLowConfidenceSelections(t *testing.T) {
 	provider := &sequenceLLMProvider{replies: []string{
 		`{"message_ids":["img-1"],"confidence":0.6,"reason":"可能是这张"}`,
 	}}
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 20}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+	setSideHistoryLookback(t, 20)
+	runtime := NewRuntime(BotConfig{}.WithDefaults(), nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
 		return provider, nil
 	})
 	runtime.remember(gateImageEvent("img-1", 1))

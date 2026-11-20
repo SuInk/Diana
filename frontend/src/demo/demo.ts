@@ -64,14 +64,14 @@ const demoContextBudget = {
   allocated: 56_320,
   headroom: 71_680,
   layers: [
-    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false, configurable: true },
-    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false, configurable: true },
-    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false, configurable: true },
-    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false, configurable: true },
-    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
-    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true, configurable: true },
-    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false, configurable: false },
-    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false, configurable: false }
+    { key: "recent_history", label: "近期对话", share_percent: 26, ceiling: 40_000, tokens: 33_280, capped_by_ceiling: false },
+    { key: "retrieved_memory", label: "检索记忆", share_percent: 8, ceiling: 12_000, tokens: 10_240, capped_by_ceiling: false },
+    { key: "core_memory", label: "核心记忆", share_percent: 4, ceiling: 6_000, tokens: 5_120, capped_by_ceiling: false },
+    { key: "world_book", label: "世界书", share_percent: 3, ceiling: 4_000, tokens: 3_840, capped_by_ceiling: false },
+    { key: "session_thread", label: "会话便签", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true },
+    { key: "self_notes", label: "自述", share_percent: 1, ceiling: 1_200, tokens: 1_200, capped_by_ceiling: true },
+    { key: "persona", label: "人设", share_percent: 1, ceiling: 2_000, tokens: 846, capped_by_ceiling: false },
+    { key: "prompt_rules", label: "提示词规则", share_percent: 1, ceiling: 9_000, tokens: 594, capped_by_ceiling: false }
   ]
 };
 
@@ -178,7 +178,7 @@ const oneBotProfile: BotProfileConfig = {
   reply_composer: "maibot", maibot_reply_style: "", reply_tone_default: FALLBACK_REPLY_TONE,
   debug_mode_enabled: true, bot_reply_loop_detection_enabled: true, reply_semantic_dedup_enabled: true, reply_suppression_enabled: true, prompt_inject_time: false,
   reply_account_safety_audit_default: FALLBACK_ACCOUNT_SAFETY_RULES,
-  proactive_reply_chance: 1, proactive_reply_threshold: 0.9, recent_context_limit: 40, max_reply_chars: 0,
+  proactive_reply_chance: 1, proactive_reply_threshold: 0.9, max_reply_chars: 0,
   sticker_reply_order: "before",
   reply_split_rules: [String.raw`（([ \t\x{3000}]*)[^）\n]{2,}$`],
   image_generation_daily_group_limit: 30, image_generation_daily_user_limit: 5,
@@ -414,8 +414,8 @@ const telegramGroups: BotGroupSummary[] = [
   { group_id: "-1001002003", group_name: "Telegram 频道讨论（演示）", avatar_url: demoGroupAvatar, member_count: 42, max_member_count: 200000, enabled: true, configured: true, joined: true, bot_profile_id: "bot-telegram" }
 ];
 const groups: BotGroupSummary[] = [
-  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", recent_context_limit: 50, model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
-  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", chat_model: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, recent_context_limit: 40, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
+  { group_id: "100200301", group_name: "产品讨论（演示）", avatar_url: demoGroupAvatar, member_count: 186, max_member_count: 500, enabled: true, configured: true, joined: true, group_triggers: ["Diana", "diana"], system_prompt: "以准确、简洁的方式参与产品和工程讨论。", model_call_quota: 400, image_generation_daily_group_limit: 50, video_generation_daily_group_limit: 0, quota_call_limit: 400, quota_calls_used: 168, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, reply_gate: { active_hours_enabled: true, active_start: "08:00", active_end: "23:30", timezone: "Asia/Shanghai", blocked_users: ["100200999"], owner_bypass: true }, plugin_overrides: { "official.repository-watch": true }, updated_at: before(12) },
+  { group_id: "100200418", group_name: "日常交流（演示）", avatar_url: demoGroupAvatar, member_count: 74, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["Diana"], system_prompt: "自然参与闲聊，事实不确定时优先搜索。", chat_model: { profile_id: "llm-intent", model: "gpt-5.6-terra" }, quota_call_limit: 400, quota_calls_used: 400, proactive_reply_chance: 1, proactive_reply_threshold: 0.9, plugin_overrides: {}, updated_at: before(28) },
   { group_id: "100200519", group_name: "设计讨论（演示）", avatar_url: demoGroupAvatar, member_count: 52, max_member_count: 200, enabled: true, configured: true, joined: true, group_triggers: ["画一张", "Diana"], system_prompt: "优先理解视觉需求，并在生图前补齐必要约束。", reply_gate: { active_hours_enabled: true, active_start: "09:00", active_end: "22:00", timezone: "Asia/Shanghai", blocked_users: ["100200888", "100200889"] }, updated_at: before(45) },
   { group_id: "100200627", group_name: "只读观察群（演示）", avatar_url: demoGroupAvatar, member_count: 318, max_member_count: 500, enabled: false, configured: true, joined: true, group_triggers: [], system_prompt: "仅记录事件，不主动回复。", plugin_overrides: {}, updated_at: before(90) }
 ];
@@ -1961,6 +1961,22 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       }
     });
   if (path.startsWith("/api/assistant/plugins/dependencies/") && path.endsWith("/install")) return json({ dependency: dependencies[0], resolver: dependencies });
+  if (path === "/api/assistant/reply-context") {
+    // 示意数据：块的种类和先后照后端 replyContextSegments 的分法，大小是演示用的量级。
+    const segments = [
+      {name: "工具定义", kind: "prefix", tokens: 1254, new_tokens: 0},
+      {name: "Runner 系统提示", kind: "prefix", tokens: 6701, new_tokens: 0},
+      {name: "头部（人设、规则）", kind: "prefix", tokens: 10851, new_tokens: 0},
+      {name: "聊天历史", kind: "history", tokens: 14620, new_tokens: 2310},
+      {name: "【关系、权限与分层长期记忆】", kind: "changing", tokens: 1830, new_tokens: 1830},
+      {name: "【当前消息的对话对象】", kind: "changing", tokens: 205, new_tokens: 205},
+      {name: "其他段落", kind: "changing", tokens: 312, new_tokens: 312},
+      {name: "当前消息", kind: "changing", tokens: 96, new_tokens: 96}
+    ];
+    const total = segments.reduce((sum, segment) => sum + segment.tokens, 0);
+    const fresh = segments.reduce((sum, segment) => sum + segment.new_tokens, 0);
+    return json({ breakdown: { sessions: 3, saved_at: new Date(Date.now() - 3 * 60_000).toISOString(), total_tokens: total, new_tokens: fresh, input_tokens: 37420, cached_tokens: 31744, segments, context_window: 128000 } });
+  }
   if (path === "/api/assistant/agent-residency") {
     if (method === "POST") {
       if (body.reset) {
