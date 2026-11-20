@@ -113,9 +113,6 @@ func (r *Runner) runParallelRead(ctx context.Context, hooks *runHookState, obser
 	emitRunEvent(ctx, observer, RunEvent{TraceID: traceID, Phase: RunPhaseToolStarted, ModelTurn: modelTurn, ToolCall: ordinal, MaxToolCalls: r.cfg.MaxSteps, Tool: action.Tool, InputKeys: inputKeys, ToolInput: cloneToolInput(action.Input), Metadata: read.metadata})
 	outputLimit := ToolOutputMaxChars
 	toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
-	if bounded, ok := read.tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
-		toolTimeout = bounded.Timeout()
-	}
 	budget := outputLimit
 	if read.outputBudget > 0 {
 		budget = read.outputBudget

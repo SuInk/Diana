@@ -96,7 +96,6 @@ func (*codeModeTool) Description() string {
 func (*codeModeTool) InputSchema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"code": map[string]any{"type": "string", "description": "Async JavaScript function body; return the relevant fields, not entire tool responses."}, "fresh": map[string]any{"type": "boolean", "description": "Bypass this request's two-minute successful webpage-result cache."}, "max_output_tokens": map[string]any{"type": "integer", "minimum": 1, "description": "结果给你的上限，默认 10000 token；超出时只给首尾"}}, "required": []string{"code"}, "additionalProperties": false}
 }
-func (*codeModeTool) Timeout() time.Duration { return 120 * time.Second }
 
 // codeModeFreeformHint 只在按原始文本发时接在描述后面：函数调用形态用 fresh 参数。
 const codeModeFreeformHint = "输入就是脚本原文，不加代码块围栏；可选第一行 // @options: {\"max_output_tokens\":10000,\"fresh\":true}：结果默认给 1 万 token，超出只给首尾；fresh 绕过网页缓存。"

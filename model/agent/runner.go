@@ -863,9 +863,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		})
 		outputLimit := ToolOutputMaxChars
 		toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
-		if bounded, ok := tool.(ToolTimeout); ok && bounded.Timeout() >= 0 {
-			toolTimeout = bounded.Timeout()
-		}
 		toolCtx, toolCancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
 		toolStartedAt := time.Now()
 		var output string
