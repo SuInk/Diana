@@ -38,12 +38,19 @@ var (
 	splitSeparators      = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '\n': true}
 )
 
-// Process 是 MaiBot 规则断句的整条流程：断句、句子太多时保留原文、再合并到
-// MaxSplitNum 条以内。random 返回 [0,1) 的随机数，MaiBot 用它决定相邻两句合不合。
-func Process(text string, random func() float64) []string {
-	segments := SplitSentences(text, random)
+// Merge 是断句之后的流程：句子太多时保留原文、否则合并到 MaxSplitNum 条以内。
+// segments 可以来自好几段 SplitSentences：MaiBot 对整条回复只做一次这一步，条数
+// 上限和「太多就不拆」管的是整条回复，不是其中一行。
+func Merge(segments []Segment) []string {
 	if len(segments) > MaxSentenceNum {
-		return []string{strings.TrimSpace(text)}
+		var whole strings.Builder
+		for index, segment := range segments {
+			whole.WriteString(segment.Text)
+			if index < len(segments)-1 {
+				whole.WriteString(segment.Separator)
+			}
+		}
+		return []string{strings.TrimSpace(whole.String())}
 	}
 	merged := MergeToMaxCount(segments, MaxSplitNum)
 	out := make([]string, 0, len(merged))
@@ -51,9 +58,6 @@ func Process(text string, random func() float64) []string {
 		if text := strings.TrimSpace(segment.Text); text != "" {
 			out = append(out, text)
 		}
-	}
-	if len(out) == 0 {
-		return []string{strings.TrimSpace(text)}
 	}
 	return out
 }
