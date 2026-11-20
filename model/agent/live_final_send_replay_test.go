@@ -46,7 +46,7 @@ func TestLiveFinalSendReplay(t *testing.T) {
 					reason, _ := call.Arguments["silent_reason"].(string)
 					name += "(silent:" + truncateForLog(reason, 80) + ")"
 				} else {
-					name += "「" + truncateForLog(sendText(call), 70) + "」"
+					name += fmt.Sprintf("「%s」(%d 字)", truncateForLog(sendText(call), 70), len([]rune(sendText(call))))
 				}
 			}
 			calls = append(calls, name)
@@ -102,6 +102,11 @@ func TestLiveFinalSendReplay(t *testing.T) {
 						line += " | 第二步 ERROR " + err.Error()
 					} else {
 						line += " | 第二步 " + describe(second)
+						if onlySendCalls(second.ToolCalls) {
+							if again := finalizeAction(second.ToolCalls, second.Text); !again.Silent {
+								line += " | 再复核「" + runner.reviewUnfinishedClaim(context.Background(), req.Messages, again.Content, nil) + "」"
+							}
+						}
 					}
 				}
 			}
