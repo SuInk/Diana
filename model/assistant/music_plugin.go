@@ -135,6 +135,8 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 		switch {
 		case !status.SearchOK && diagnostics.proxyProblem() != "":
 			status.Message = diagnostics.proxyProblem()
+		case !status.SearchOK && diagnostics.credentialProblem() != "":
+			status.Message = diagnostics.credentialProblem()
 		case status.Playable && !status.Downloadable:
 			status.Message = firstNonEmpty(diagnostics.proxyProblem(), "能取得播放地址，但下载音频失败，请检查网络出口")
 		case status.Playable && loginInvalid:
