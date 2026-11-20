@@ -350,7 +350,7 @@ func dianaBotConfigFromConfig(cfg BotConfig) dianaBotConfigSnapshot {
 		MaxInputChars:                   cfg.MaxInputChars,
 		MaxReplyChars:                   cfg.MaxReplyChars,
 		DirectReplyChunkSize:            cfg.DirectReplyChunkSize,
-		ForwardReplyEnabled:             boolValue(cfg.ForwardReplyEnabled, true),
+		ForwardReplyEnabled:             boolValue(cfg.ForwardReplyEnabled, false),
 		ForwardReplyThreshold:           cfg.ForwardReplyThreshold,
 		RecallReplyMode:                 cfg.RecallReplyMode,
 		RecallReplyAutoDeleteEnabled:    boolValue(cfg.RecallReplyAutoDeleteEnabled, false),

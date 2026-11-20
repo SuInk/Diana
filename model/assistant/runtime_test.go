@@ -1754,6 +1754,7 @@ func TestRuntimeDefaultForwardChunkThreshold(t *testing.T) {
 			channel := &recordingChannel{}
 			cfg := DefaultBotConfig()
 			cfg.BotAccount = "42"
+			cfg.ForwardReplyEnabled = boolPointer(true)
 			runtime := NewRuntime(cfg, channel, NewPluginManager(), nil, nil, nil, nil)
 			err := runtime.send(context.Background(), MessageEvent{
 				Kind:      EventKindGroup,
