@@ -857,6 +857,10 @@ func (r *Runtime) historyImageCachedDescriptions(ctx context.Context, event Mess
 // historyPromptImageDescriptions 是拼进对话历史的版本：自己发过的表情包不带简介。
 // 表情包简介是给检索写的（潜台词、适合什么场合发），放进历史里，模型下一轮就会
 // 回头解释自己刚发的图——线上出过「你让我发表情，我倒发了张钻被窝求贴贴的」。
+// historyImageDescriptionPending 是图还没描述完时摘要的占位。带着它的历史条目不进
+// 稳定缓存，见 stableGroupHistory。
+const historyImageDescriptionPending = "尚无缓存描述"
+
 func (r *Runtime) historyPromptImageDescriptions(ctx context.Context, event MessageEvent) []string {
 	return r.historyImageDescriptionsFor(ctx, event, true)
 }
@@ -922,7 +926,7 @@ func (r *Runtime) historyImageSegmentDescriptions(ctx context.Context, segments 
 			}
 		}
 		if description == "" {
-			lines = append(lines, fmt.Sprintf("%s%d摘要=尚无缓存描述", label, index))
+			lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, historyImageDescriptionPending))
 			continue
 		}
 		lines = append(lines, fmt.Sprintf("%s%d摘要=%s", label, index, compactRecallImageDescription(description)))
