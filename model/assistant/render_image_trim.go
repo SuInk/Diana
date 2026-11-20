@@ -8,6 +8,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"strings"
 )
 
 // 截图的高度是命令行给死的窗口高度，不是内容高度。一张两行的表格照样出一整屏，
@@ -17,10 +18,22 @@ import (
 // 不如拍完之后把底部纯背景色的部分裁掉。背景色是模板里自己定的，已知量。
 const renderTrimPaddingPx = 24
 
+// renderPageBackground 是模板 body 的背景色。不取左上角像素：没有内边距的 SVG 页，
+// 左上角是图自己的颜色。
+var renderPageBackground = color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+
+// renderTrimPadding 是裁完留的边。文档留一点呼吸；没有标题的 SVG 自带画布，贴边裁。
+func renderTrimPadding(format, title string) int {
+	if format == renderFormatSVG && strings.TrimSpace(title) == "" {
+		return 0
+	}
+	return renderTrimPaddingPx
+}
+
 // trimRenderScreenshot 裁掉底部和右侧的纯背景区域。
 //
 // 裁不动就原样返回：这一步是让图好看，不该因为它失败就让整张图发不出去。
-func trimRenderScreenshot(raw []byte) []byte {
+func trimRenderScreenshot(raw []byte, padding int) []byte {
 	decoded, err := png.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return raw
@@ -29,8 +42,7 @@ func trimRenderScreenshot(raw []byte) []byte {
 	if bounds.Empty() {
 		return raw
 	}
-	// 左上角必然是页面背景：模板给 .render-root 留了内边距，那一格一定是空白。
-	background := decoded.At(bounds.Min.X, bounds.Min.Y)
+	background := renderPageBackground
 	bottom := lastContentRow(decoded, bounds, background)
 	right := lastContentColumn(decoded, bounds, background)
 	if bottom < bounds.Min.Y || right < bounds.Min.X {
@@ -41,8 +53,8 @@ func trimRenderScreenshot(raw []byte) []byte {
 	cropped := image.Rect(
 		bounds.Min.X,
 		bounds.Min.Y,
-		min(right+1+renderTrimPaddingPx, bounds.Max.X),
-		min(bottom+1+renderTrimPaddingPx, bounds.Max.Y),
+		min(right+1+padding, bounds.Max.X),
+		min(bottom+1+padding, bounds.Max.Y),
 	)
 	if cropped == bounds {
 		return raw

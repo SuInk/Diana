@@ -34,10 +34,12 @@ const (
 type dianaRenderTool struct {
 	runtime *Runtime
 	event   MessageEvent
+
+	*renderPreviewer
 }
 
-func newDianaRenderTool(runtime *Runtime, event MessageEvent) agent.Tool {
-	return &dianaRenderTool{runtime: runtime, event: event}
+func newDianaRenderTool(runtime *Runtime, event MessageEvent) *dianaRenderTool {
+	return &dianaRenderTool{runtime: runtime, event: event, renderPreviewer: &renderPreviewer{}}
 }
 
 func (t *dianaRenderTool) Name() string { return dianaRenderToolName }
@@ -45,38 +47,39 @@ func (t *dianaRenderTool) Name() string { return dianaRenderToolName }
 // 「五子棋盘用 svg」来自线上：mermaid/Markdown 画棋盘坐标会错位。出图要起浏览器，
 // 一两句话的内容别用它。
 func (t *dianaRenderTool) Description() string {
-	return `把表格、流程图、结构图或 SVG 渲染成一张图片发到当前会话。` +
+	return `把表格、流程图、结构图或 SVG 渲染成一张图片发到当前会话。` + renderPreviewDescription +
 		`渲染有权使用的工作目录文件时直接传 path，与 content 二选一，不必读取后复制全文。` +
 		`仅在用户明确要求图片、图表或棋盘等画面时使用；普通问答、榜单、参数对比默认文字，不为美化排版自行出图，也不拿效果图冒充改了界面或代码。五子棋盘用 svg。` +
 		`图由运行时发送，调用后一句话交代，不复述图里的内容。`
 }
 
 func (t *dianaRenderTool) InputSchema() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"path": toolStringParam("工作目录内 Markdown、Mermaid 或 SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件"),
-			"format": map[string]any{
-				"type": "string",
-				"enum": []string{renderFormatMarkdown, renderFormatMermaid, renderFormatSVG},
-			},
-			"content": map[string]any{
-				"type":        "string",
-				"description": "GitHub 风格 Markdown、mermaid 源码或以 <svg> 开头的 SVG",
-			},
-			"title": map[string]any{
-				"type":        "string",
-				"description": "图片顶部标题",
-			},
+	properties := map[string]any{
+		"path": toolStringParam("工作目录内 Markdown、Mermaid 或 SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件"),
+		"format": map[string]any{
+			"type": "string",
+			"enum": []string{renderFormatMarkdown, renderFormatMermaid, renderFormatSVG},
 		},
-		"required": []string{"format"},
+		"content": map[string]any{
+			"type":        "string",
+			"description": "GitHub 风格 Markdown、mermaid 源码或以 <svg> 开头的 SVG",
+		},
+		"title": map[string]any{
+			"type":        "string",
+			"description": "图片顶部标题",
+		},
 	}
+	for name, schema := range renderPreviewSchema() {
+		properties[name] = schema
+	}
+	return map[string]any{"type": "object", "properties": properties, "required": []string{"format"}}
 }
 
 type dianaRenderResult struct {
 	OK      bool   `json:"ok"`
 	Message string `json:"message"`
 	Format  string `json:"format,omitempty"`
+	Review  string `json:"review,omitempty"`
 }
 
 func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string, error) {
@@ -130,7 +133,13 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 		return t.fail(ctx, format, "渲染失败："+firstLineOf(err.Error()), err.Error())
 	}
 
-	if err := t.runtime.sendPNGImage(ctx, t.event, trimRenderScreenshot(shot)); err != nil {
+	if preview, forced := t.wantPreview(format == renderFormatSVG, input); preview {
+		result := dianaRenderResult{OK: true, Format: format}
+		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, trimRenderScreenshot(shot, renderTrimPadding(format, title)), configToolString(input, "expect"), forced)
+		t.record(ctx, result, "")
+		return marshalRenderResult(result), nil
+	}
+	if err := t.runtime.sendPNGImage(ctx, t.event, trimRenderScreenshot(shot, renderTrimPadding(format, title))); err != nil {
 		return "", fmt.Errorf("发送图片失败：%w", err)
 	}
 	result := dianaRenderResult{OK: true, Message: "图片已经发到会话里了。", Format: format}
@@ -166,7 +175,7 @@ func (r *Runtime) renderContentPNG(ctx context.Context, event MessageEvent, form
 	if err != nil {
 		return nil, fmt.Errorf("渲染失败：%s", firstLineOf(err.Error()))
 	}
-	return trimRenderScreenshot(shot), nil
+	return trimRenderScreenshot(shot, renderTrimPadding(format, title)), nil
 }
 
 // sendPNGImage 按实际通道投递：Telegram 使用临时文件 multipart 上传，

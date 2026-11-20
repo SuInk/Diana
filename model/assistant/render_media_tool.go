@@ -65,10 +65,12 @@ type dianaRenderMediaTool struct {
 	event    MessageEvent
 	settings SettingValues
 	owner    bool
+
+	*renderPreviewer
 }
 
 func newDianaRenderMediaTool(runtime *Runtime, event MessageEvent, settings SettingValues, relationship RelationshipPolicy) *dianaRenderMediaTool {
-	return &dianaRenderMediaTool{runtime: runtime, event: event, settings: settings, owner: relationship.Owner}
+	return &dianaRenderMediaTool{runtime: runtime, event: event, settings: settings, owner: relationship.Owner, renderPreviewer: &renderPreviewer{}}
 }
 
 func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
@@ -77,7 +79,7 @@ func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 // 导致白屏，所以「资源全内联」必须留在说明里。录制用虚拟时钟，setTimeout/rAF/CSS
 // 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
-	return `把 HTML 页面或 SVG 渲染成图片、PDF、视频或 GIF 发到当前会话。` +
+	return `把 HTML 页面或 SVG 渲染成图片、PDF、视频或 GIF 发到当前会话。` + renderPreviewDescription +
 		`已有工作目录文件时，直接传 path，由运行时完整读取；不必 read_file 复制正文、打开 file:// 或启动 HTTP 服务。content 与 path 二选一。` +
 		`仅在用户明确要求图片、PDF、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
 		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
@@ -85,7 +87,7 @@ func (t *dianaRenderMediaTool) Description() string {
 }
 
 func (t *dianaRenderMediaTool) InputSchema() map[string]any {
-	return toolObjectSchema([]string{"format"}, map[string]any{
+	properties := map[string]any{
 		"format":   map[string]any{"type": "string", "enum": []string{renderMediaFormatHTML, renderMediaFormatSVG}},
 		"content":  toolStringParam("完整 HTML 文档，或以 <svg> 开头的 SVG"),
 		"path":     toolStringParam("工作目录内 HTML/SVG 文件路径，与 content 二选一；群成员仅限本群保存的文件，不是 URL"),
@@ -95,7 +97,11 @@ func (t *dianaRenderMediaTool) InputSchema() map[string]any {
 		"fps":      map[string]any{"type": "integer", "description": "video/gif 帧率，默认 video 24、gif 12，最高 30"},
 		"width":    map[string]any{"type": "integer", "description": "宽度像素，默认 image 1000、video 1280、gif 640"},
 		"height":   map[string]any{"type": "integer", "description": "高度像素，默认 video 720、gif 360；image 省略截整页"},
-	})
+	}
+	for name, schema := range renderPreviewSchema() {
+		properties[name] = schema
+	}
+	return toolObjectSchema([]string{"format"}, properties)
 }
 
 type dianaRenderMediaResult struct {
@@ -109,6 +115,7 @@ type dianaRenderMediaResult struct {
 	Frames   int     `json:"frames,omitempty"`
 	Duration float64 `json:"duration,omitempty"`
 	Bytes    int64   `json:"bytes,omitempty"`
+	Review   string  `json:"review,omitempty"`
 }
 
 type renderMediaSpec struct {
@@ -157,6 +164,20 @@ func (t *dianaRenderMediaTool) Run(ctx context.Context, input map[string]any) (s
 	if err != nil {
 		result.Message = err.Error()
 		return t.fail(ctx, result, "")
+	}
+
+	// 预览一律截静帧：视频、GIF、PDF 也先看第一屏画对没有。
+	if preview, forced := t.wantPreview(spec.format == renderMediaFormatSVG && spec.output == renderMediaOutputImage, input); preview {
+		png, size, err := agent.CaptureHTMLStill(ctx, request, renderMediaStillAt)
+		if err != nil {
+			result.Message = "渲染失败：" + firstLineOf(err.Error())
+			return t.fail(ctx, result, err.Error())
+		}
+		result.OK = true
+		result.Width, result.Height = size.Width, size.Height
+		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, png, configToolString(input, "expect"), forced)
+		t.record(ctx, result, "")
+		return marshalRenderMediaResult(result), nil
 	}
 
 	if spec.output == renderMediaOutputPDF {

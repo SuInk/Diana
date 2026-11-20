@@ -114,7 +114,7 @@ func TestRenderMarkdownHighDensityIntegration(t *testing.T) {
 		t.Fatalf("table reaches screenshot edge: right=%d width=%d", right, bounds.Max.X)
 	}
 	if output := os.Getenv("DIANA_CJK_FONT_TEST_OUTPUT"); output != "" {
-		if err := os.WriteFile(filepath.Join(output, "markdown-hidpi.png"), trimRenderScreenshot(raw), 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(output, "markdown-hidpi.png"), trimRenderScreenshot(raw, renderTrimPaddingPx), 0600); err != nil {
 			t.Fatal(err)
 		}
 	}

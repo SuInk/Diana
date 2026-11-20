@@ -60,6 +60,10 @@ func buildRenderPage(format, content, title string) (string, error) {
 		// 一团重叠的标签。给 mermaid 页面一个固定宽度的画布，让它有地方铺。
 		rootClass += " render-root-mermaid"
 	}
+	if format == renderFormatSVG && heading == "" {
+		// SVG 自带画布和背景，文档那圈内边距截出来就是一道白框。
+		rootClass += " render-root-bare"
+	}
 	return fmt.Sprintf(renderPageTemplate, renderPageCSS, rootClass, heading, body, script), nil
 }
 
@@ -76,7 +80,11 @@ func renderPageBody(format, content string) (string, error) {
 		// 尖括号（比如 A-->|是|B 里的箭头）不转义会被当成标签。
 		return `<pre class="mermaid">` + html.EscapeString(content) + `</pre>`, nil
 	case renderFormatSVG:
-		return sanitizeRenderSVG(content)
+		cleaned, err := sanitizeRenderSVG(content)
+		if err != nil {
+			return "", err
+		}
+		return sizeSVGFromViewBox(cleaned), nil
 	}
 	return "", fmt.Errorf("render: 不支持的格式 %q", format)
 }
@@ -114,6 +122,27 @@ var (
 //
 // 用正则而不是解析器是有意的：这里不需要理解 SVG，只需要在几类危险构造上
 // 一律拒绝或删除。宁可把合法但少见的写法也删掉，也不要漏掉一种绕过写法。
+var (
+	svgRootTagPattern  = regexp.MustCompile(`(?is)^\s*<svg\b[^>]*>`)
+	svgRootSizePattern = regexp.MustCompile(`(?i)\s(width|height)\s*=`)
+	svgViewBoxPattern  = regexp.MustCompile(`(?i)\sviewBox\s*=\s*["']\s*[-\d.eE]+[\s,]+[-\d.eE]+[\s,]+([\d.eE]+)[\s,]+([\d.eE]+)\s*["']`)
+)
+
+// sizeSVGFromViewBox 给只写了 viewBox 的 SVG 按 viewBox 补上宽高。不补的话它在收缩
+// 宽度的画布里宽度是 0，整张截出来是白的；以前靠画布的最小宽度撑成 320 像素宽的小图。
+func sizeSVGFromViewBox(svg string) string {
+	root := svgRootTagPattern.FindString(svg)
+	if root == "" || svgRootSizePattern.MatchString(root) {
+		return svg
+	}
+	box := svgViewBoxPattern.FindStringSubmatch(root)
+	if box == nil {
+		return svg
+	}
+	index := strings.Index(strings.ToLower(svg), "<svg") + len("<svg")
+	return svg[:index] + ` width="` + box[1] + `" height="` + box[2] + `"` + svg[index:]
+}
+
 func sanitizeRenderSVG(source string) (string, error) {
 	if !svgRootPattern.MatchString(source) {
 		return "", fmt.Errorf("render: svg 必须以 <svg> 开头")
@@ -205,6 +234,8 @@ body {
 .render-root-mermaid { display: block; width: 1000px; }
 .render-root-mermaid .mermaid { width: 100%; }
 .render-root-mermaid svg { max-width: 100%; height: auto; }
+.render-root-bare { min-width: 0; padding: 0; line-height: 0; }
+.render-root-bare svg { display: block; max-width: 1000px; height: auto; }
 .render-title { margin: 0 0 18px; font-size: 20px; font-weight: 600; }
 h1, h2, h3, h4 { margin: 20px 0 10px; font-weight: 600; line-height: 1.3; }
 h1 { font-size: 22px; } h2 { font-size: 19px; } h3 { font-size: 17px; } h4 { font-size: 15px; }
