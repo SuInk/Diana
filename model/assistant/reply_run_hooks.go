@@ -63,8 +63,11 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 			if len(configs) > 0 {
 				// 放在本轮输入和工具目录之后，避免续接历史把表达规则盖过。
 				// 不改写历史消息、不拆工具批次，也不事后删正文。
-				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem,
-					Content: "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)})
+				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
+				if PlatformSupportsRichText(configs[0].Platform) {
+					check += "\n" + configs[0].prompt(promptReplyRichTextLayoutSpec)
+				}
+				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check})
 			}
 			return req, nil
 		},

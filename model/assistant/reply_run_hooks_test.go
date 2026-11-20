@@ -69,3 +69,21 @@ func TestReplyRunHooksUseActualExecutionAndKeepPrivateInputsOut(t *testing.T) {
 		t.Fatal("execution context split a native tool batch")
 	}
 }
+
+// 会渲染 Markdown 的平台在尾部多一句排版检查，纯文本平台不加。
+func TestReplyRunHooksAddRichTextLayoutOnlyWhereRendered(t *testing.T) {
+	for _, tc := range []struct {
+		platform string
+		want     bool
+	}{{PlatformTelegram, true}, {PlatformOneBotV11, false}} {
+		hooks := newReplyRunHooks(BotConfig{Platform: tc.platform})
+		got, err := hooks.PrepareRequest(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "current"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := got.Messages[len(got.Messages)-1].Content
+		if strings.Contains(last, replyRichTextLayoutRule) != tc.want {
+			t.Fatalf("%s: rich text layout check present=%v, want %v", tc.platform, !tc.want, tc.want)
+		}
+	}
+}

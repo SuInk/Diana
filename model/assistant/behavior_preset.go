@@ -137,6 +137,13 @@ const replySegmentationMarkerOnlyRule = "当前关闭多条发送：默认只发
 // 出处口头点名就够。
 const replyProportionRule = "按当前这一问给最小但足够的回答，直接回答不等于全面展开。宽泛地问推荐什么、怎么玩、怎么选、应该先做什么时，先选一个合适的方向或核心方案，加上真正影响选择的理由就停，让对方能判断是否合意；不要默认写完整攻略、逐时日程、所有备选或一整套注意事项。带有天数、预算、同行者等条件，只表示答案必须符合这些条件，不等于要求穷举细节。只有明确要求详细攻略、完整步骤、多个选项比较或后续追问某项细节时才展开相应部分；不要为了简短省略回答所必需的操作或关键风险；不确定的地方用一个词带过（比如「一般」「大概」），不要把保留意见一层层叠上去。技术问题也只解决问到的范围：问怎么查原因就给检查方法，不自动延伸到所有修复和清理操作。信息足够时先给答案，允许一句话说明合理假设；缺少决定性条件才问当前最关键的一两项，不把整份信息采集表一次丢给对方。答到能满足这一问就结束，不固定附加追问、总结或‘我还可以帮你细化’。不要在回复里罗列参考链接或来源清单；需要交代出处时口头点名，对方追问再给链接。"
 
+// replyRichTextLayoutRule 贴在尾部的输出前检查里，只在会渲染 Markdown 的平台。头部
+// 已经写了「Telegram 会渲染 Markdown、有结构的内容用 Markdown 排版」，swe-2 照样写成
+// 一整块：11-20 用 14 条 Telegram 讲资料的请求回放，原样 0/10 条有小标题、2/10 用
+// 列表、1 条拿「•」当列表；尾部加上这句后 6/11 有加粗小标题、6/11 用列表、不再用
+// 「•」，平均字数 419→409 没有变长。
+const replyRichTextLayoutRule = "这条会按 Markdown 渲染成富文本。讲资料、做对比、分几件事说的时候：每件事单独一段，段与段之间空一行；每段开头写一个 **加粗的短标题**；一段里并列的几项用「- 」列表，不用「•」。一两句话的闲聊照常说，不加格式。"
+
 // 回复表达规则的覆盖登记。带发送控制标记（分条、消息内换行、模式前缀）的几段，
 // 标记由发送层解析，界面上改措辞时标记本身必须原样保留。
 const replyMarkerUsage = "里面的发送控制标记要原样保留，写错了分条和换行会失效。"
@@ -156,6 +163,7 @@ var (
 	promptReplyDocumentDeliverySpec     = styleSpec("document_delivery", "长文分组", "每轮注入：详细长文按主要部分分条，部分内部换行排版。"+replyMarkerUsage, replyDocumentDeliveryRule)
 	// replyDeliveryChoiceRule 定义在 reply_delivery_mode.go，只在这里用，登记也放这里。
 	promptReplyDeliveryChoiceSpec = styleSpec("delivery_choice", "本轮发送方式", "每轮都注入：用户本轮要求一次发完或分条发时，用哪个前缀标记覆盖默认设置。"+replyMarkerUsage, replyDeliveryChoiceRule)
+	promptReplyRichTextLayoutSpec = styleSpec("rich_text_layout", "富文本排版", "只在 Telegram 这类会渲染 Markdown 的平台每轮注入：讲资料分几件事时分段、加粗小标题、用列表。", replyRichTextLayoutRule)
 	promptReplyProportionSpec     = styleSpec("proportion", "回答的篇幅", "每轮注入：按这一问给最小但足够的回答，不罗列参考链接。", replyProportionRule)
 )
 
