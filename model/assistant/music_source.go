@@ -171,7 +171,8 @@ func (d *musicDiagnostics) credentialProblem() string {
 	return d.credential
 }
 
-func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) (*http.Client, error) {
+// host 是这次请求的目标：代理没配好只拦范围内的曲库，范围外的照常直连。
+func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool, host string) (*http.Client, error) {
 	if f != nil && f.client != nil {
 		return f.client, nil
 	}
@@ -180,7 +181,10 @@ func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) (*http.Client, 
 	}
 	proxy, err := f.proxyFunc(cfg)
 	if err != nil {
-		return nil, err
+		if cfg.Proxy.covers(host) {
+			return nil, err
+		}
+		proxy = nil
 	}
 	return netguard.NewPublicHTTPClientVia(cfg.Timeout, proxy), nil
 }
@@ -195,7 +199,7 @@ func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint st
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	client, err := f.httpClient(cfg, guarded)
+	client, err := f.httpClient(cfg, guarded, req.URL.Hostname())
 	if err != nil {
 		recordMusicFailure(ctx, "%v", err)
 		recordMusicProxyProblem(ctx, err.Error())
