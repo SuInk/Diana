@@ -32,7 +32,7 @@ var (
 	splitSepThenNewline  = regexp.MustCompile(`([，,。;\s])\s*\n`)
 	splitInlineNewlines  = regexp.MustCompile(`[^\S\r\n]*[\r\n]+[^\S\r\n]*`)
 	splitQuoteCharacters = map[rune]bool{'"': true, '\'': true, '“': true, '”': true, '‘': true, '’': true, '「': true, '」': true, '『': true, '』': true}
-	splitSeparators      = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '\n': true}
+	splitSeparators      = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '；': true, '\n': true}
 )
 
 // Merge 把断出来的句子合到最多 MaxSplitNum 条。segments 可以来自好几段
@@ -43,9 +43,9 @@ var (
 // 所以句子再多也合到三条。原文里有换行时，条与条的分界尽量落在换行处，不从一行
 // 中间断开；没有换行就照 MaiBot 按句数均分。
 func Merge(segments []Segment) []string {
-	merged := MergeToMaxCount(segments, MaxSplitNum)
-	if cuts := lineBreakCuts(segments, MaxSplitNum); cuts != nil {
-		merged = mergeAtCuts(segments, cuts)
+	merged := segments
+	if len(segments) > MaxSplitNum {
+		merged = mergeAtCuts(segments, bestCuts(segments, MaxSplitNum))
 	}
 	out := make([]string, 0, len(merged))
 	for _, segment := range merged {
@@ -56,43 +56,60 @@ func Merge(segments []Segment) []string {
 	return out
 }
 
-// lineBreakCuts 在换行处挑至多 maxCount-1 个分界（分界 i 表示第 i 句之后断开），
-// 挑离按字数均分的位置最近的那几个。没有换行、或句子本来就不超过 maxCount 时返回 nil。
-func lineBreakCuts(segments []Segment, maxCount int) []int {
-	if len(segments) <= maxCount || maxCount <= 1 {
-		return nil
+// cutPenalty 是在这种分隔符处断开的代价，按总字数的比例算：换行、句号、分号是一句话
+// 说完的地方，逗号和空格只是停顿，从那里断开容易把一件事劈成两条。
+func cutPenalty(separator string) float64 {
+	switch separator {
+	case "\n":
+		return 0
+	case "。", "；", ";":
+		return 0.05
+	default:
+		return 0.25
 	}
-	ends := make([]int, len(segments)) // ends[i] 是到第 i 句为止的累计字数
-	var candidates []int
+}
+
+// bestCuts 在 2 到 maxCount 组里挑总代价最小的分法（分界 i 表示第 i 句之后断开）。
+// 代价是每条字数偏离平均值的比例之和，加上每个分界的 cutPenalty：既不留一条孤零零
+// 的短尾巴，也尽量不从逗号处把一件事断开。11-20 线上一条讲 RSI 的回复按句数均分，
+// 把「0 到 100 衡量涨跌势头」和「过 70 算超买」拆进两条，最后剩一条「天天敲键盘的
+// 熟客」，真正换话题的分号反而没用上。
+func bestCuts(segments []Segment, maxCount int) []int {
+	ends := make([]int, len(segments))
 	total := 0
 	for index, segment := range segments {
 		total += len([]rune(segment.Text))
 		ends[index] = total
-		if index < len(segments)-1 && segment.Separator == "\n" {
-			candidates = append(candidates, index)
-		}
 	}
-	if len(candidates) == 0 {
+	if total == 0 {
 		return nil
 	}
-	if len(candidates) <= maxCount-1 {
-		return candidates
-	}
-	var cuts []int
-	next := 0
-	for part := 1; part < maxCount; part++ {
-		target := total * part / maxCount
-		best := -1
-		// 后面还要留够候选给剩下的分界。
-		for pos := next; pos <= len(candidates)-(maxCount-part); pos++ {
-			if best < 0 || abs(ends[candidates[pos]]-target) < abs(ends[candidates[best]]-target) {
-				best = pos
+	var best []int
+	bestCost := -1.0
+	var search func(start, groups int, cuts []int, cost float64)
+	search = func(start, groups int, cuts []int, cost float64) {
+		// start 是这一组第一句的下标；groups 是含这一组在内还剩几组。
+		if groups == 1 {
+			full := append(append([]int(nil), cuts...), len(segments)-1)
+			sum, previous := 0.0, 0
+			for _, end := range full {
+				size := ends[end] - previous
+				previous = ends[end]
+				sum += absFloat(float64(size)-float64(total)/float64(len(full))) / float64(total)
 			}
+			if final := cost + sum; bestCost < 0 || final < bestCost {
+				bestCost, best = final, append([]int(nil), cuts...)
+			}
+			return
 		}
-		cuts = append(cuts, candidates[best])
-		next = best + 1
+		for end := start; end <= len(segments)-groups; end++ {
+			search(end+1, groups-1, append(cuts, end), cost+cutPenalty(segments[end].Separator))
+		}
 	}
-	return cuts
+	for groups := 2; groups <= maxCount && groups <= len(segments); groups++ {
+		search(0, groups, nil, 0)
+	}
+	return best
 }
 
 func mergeAtCuts(segments []Segment, cuts []int) []Segment {
@@ -112,7 +129,7 @@ func mergeAtCuts(segments []Segment, cuts []int) []Segment {
 	return merged
 }
 
-func abs(value int) int {
+func absFloat(value float64) float64 {
 	if value < 0 {
 		return -value
 	}
@@ -236,33 +253,6 @@ func SplitSentences(text string, random func() float64) []Segment {
 		}
 	}
 	return out
-}
-
-// MergeToMaxCount 把句子均匀分成至多 maxCount 组，组内补回句间分隔符。
-func MergeToMaxCount(segments []Segment, maxCount int) []Segment {
-	if len(segments) <= maxCount {
-		return segments
-	}
-	if maxCount <= 0 {
-		return nil
-	}
-	var merged []Segment
-	start := 0
-	for group := 0; group < maxCount; group++ {
-		remaining, groups := len(segments)-start, maxCount-group
-		size := (remaining + groups - 1) / groups
-		end := start + size
-		var text strings.Builder
-		for index := start; index < end; index++ {
-			text.WriteString(segments[index].Text)
-			if index < end-1 {
-				text.WriteString(segments[index].Separator)
-			}
-		}
-		merged = append(merged, Segment{Text: text.String(), Separator: segments[end-1].Separator})
-		start = end
-	}
-	return merged
 }
 
 func splitAlnum(r rune) bool {

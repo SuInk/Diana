@@ -57,18 +57,22 @@ func TestSplitSentencesMergesPairsWhenRandomAllows(t *testing.T) {
 	}
 }
 
-func TestMergeToThreeMessages(t *testing.T) {
-	got := Merge(SplitSentences("一，二，三，四，五，六，七", never))
-	want := []string{"一，二，三", "四，五", "六，七"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("got %q want %q", got, want)
+// 分界按字数均衡、优先落在句号分号换行处：几个逗号短句合成两条，不按句数切出
+// 一条孤零零的尾巴。
+func TestMergeBalancesByLength(t *testing.T) {
+	got := Merge(SplitSentences("一，二，三，四，五，六，七，八，九，十", never))
+	if len(got) < 2 || len(got) > MaxSplitNum || strings.Join(got, "，") != "一，二，三，四，五，六，七，八，九，十" {
+		t.Fatalf("got %q", got)
 	}
 }
 
-func TestMergeKeepsManySentencesToThree(t *testing.T) {
-	got := Merge(SplitSentences("一，二，三，四，五，六，七，八，九，十", never))
-	if len(got) != MaxSplitNum || strings.Join(got, "，") != "一，二，三，四，五，六，七，八，九，十" {
-		t.Fatalf("many sentences should still merge to %d messages: %q", MaxSplitNum, got)
+// 11-20 线上：真正换话题的是全角分号，从那里断开，不从逗号处把「0 到 100 衡量涨跌
+// 势头，过 70 算超买」拆进两条。
+func TestMergePrefersSemicolonOverComma(t *testing.T) {
+	got := Merge(SplitSentences("俩常见意思，看语境：炒股说的是相对强弱指标，零到一百衡量涨跌势头，过七十算超买、低于三十算超卖；上班摸鱼受伤那个是重复性劳损，腱鞘炎腕管综合征都算，天天敲键盘的熟客", never))
+	want := []string{"俩常见意思，看语境：炒股说的是相对强弱指标，零到一百衡量涨跌势头，过七十算超买、低于三十算超卖", "上班摸鱼受伤那个是重复性劳损，腱鞘炎腕管综合征都算，天天敲键盘的熟客"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q want %q", got, want)
 	}
 }
 
@@ -79,10 +83,9 @@ func TestMergeCutsAtLineBreaks(t *testing.T) {
 		{Text: "第三行前半", Separator: "，"}, {Text: "第三行后半", Separator: "\n"},
 		{Text: "第四行"},
 	}
-	got := Merge(segments)
-	// 按字数均分的目标落在第 8、17 字附近，最近的换行是第一行末和第二行末。
-	want := []string{"第一行前半，第一行后半", "第二行", "第三行前半，第三行后半\n第四行"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("got %q want %q", got, want)
+	for _, message := range Merge(segments) {
+		if strings.HasSuffix(message, "前半") || strings.HasPrefix(message, "第一行后半") || strings.HasPrefix(message, "第三行后半") {
+			t.Fatalf("cut inside a line: %q", Merge(segments))
+		}
 	}
 }

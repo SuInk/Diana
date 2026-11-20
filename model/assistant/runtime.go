@@ -9561,6 +9561,9 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 		return nil
 	}
 	var out []string
+	// 模型自己写了 <diana-message/> 就是它定好的分条，照着发，不再按 MaiBot 细拆：
+	// 11-20 线上一条回复分成两段，每段又各拆两三条，最后发了五条。
+	explicitSplit := strings.Contains(reply, notificationSplitMarker)
 	for _, part := range strings.Split(reply, notificationSplitMarker) {
 		part = strings.TrimSpace(restoreExplicitReplyLines(part))
 		pieces := []string{part}
@@ -9585,7 +9588,7 @@ func splitChatReplyKeepingPeriods(reply string, limits chatSplitLimits) []string
 				bubbles = append(bubbles, segment)
 			}
 		}
-		if maiBotSplitApplies(limits) {
+		if maiBotSplitApplies(limits) && !explicitSplit {
 			bubbles = maiBotSplitReply(bubbles)
 		}
 		for _, bubble := range bubbles {
