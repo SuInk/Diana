@@ -436,6 +436,11 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 		return result
 	}
 	result.ImageURLs = singleURL(firstNonEmptyString(detail.Video.Cover.URLList))
+	if douyinDetailTooLong(ctx, detail) {
+		result.Context += fmt.Sprintf("\n视频时长 %d 分钟，超过限制（%d 秒），未下载。", detail.Video.Duration/60000, resolverVideoMaxDuration(ctx))
+		recordResolverMediaLog(ctx, req, raw, "douyin", false, "duration limit")
+		return result
+	}
 	if p.videoDownloader != nil || p.mediaDownloader != nil {
 		return p.attachDownloadedVideo(ctx, req, raw, "douyin", result)
 	}
@@ -446,7 +451,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
 	result.Failed = true
-	result.Context += "\n媒体下载失败：" + reason
+	result.Context += resolverPublicDownloadFailure
 	recordResolverMediaLog(ctx, req, raw, "douyin", false, reason)
 	return result
 }
@@ -550,7 +555,7 @@ func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRe
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
 	result.Failed = true
-	result.Context += "\n媒体下载失败：" + reason
+	result.Context += resolverPublicDownloadFailure
 	recordResolverMediaLog(ctx, req, raw, platform, false, reason)
 	return result
 }
@@ -566,6 +571,9 @@ type douyinMediaDetail struct {
 		PlayAddr struct {
 			URI string `json:"uri"`
 		} `json:"play_addr"`
+		// Duration 单位是毫秒。
+		Duration int64                `json:"duration"`
+		BitRate  []douyinVideoBitRate `json:"bit_rate"`
 	} `json:"video"`
 	Images []struct {
 		URLList []string `json:"url_list"`
@@ -680,6 +688,11 @@ func xiaohongshuMediaImageURLs(note map[string]any) []string {
 }
 
 // 只呈现实际捕获的技术错误；没有细节时明确说明，不根据配置猜原因。
+// resolverPublicDownloadFailure 是下载失败时进群的说法。下载器的原始报错（yt-dlp
+// 的英文 stderr、HTTP 状态这些）只写运行日志，不进解析结果：结果会原样发成转发卡片，
+// 模型也会照着复述。
+const resolverPublicDownloadFailure = "\n媒体下载失败。"
+
 func resolverDownloadFailureHint(ctx context.Context, raw string) string {
 	if detail := resolverFailureDetail(ctx); detail != "" {
 		return detail

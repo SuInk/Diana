@@ -31,7 +31,7 @@ const (
 	defaultVideoMaxMB       = 200
 	defaultVideoMaxDuration = 15 * 60
 	defaultVideoMaxHeight   = 720
-	douyinPlayURL           = "https://aweme.snssdk.com/aweme/v1/play/?video_id=%s&ratio=1080p&line=0"
+	douyinPlayURL           = "https://aweme.snssdk.com/aweme/v1/play/?video_id=%s&ratio=%s&line=0"
 	// 2026-09 抖音在 detail 接口前加了 Argus 网关：带浏览器全套参数的请求会被拒为
 	// "Uifid Not Found"，补上 uifid 头之后又要 "Signature Not Found"。以 open.douyin.com
 	// 为来源、只带 aweme_id 和 aid 的精简请求不走这道校验，不需要 Cookie 和签名。
@@ -361,8 +361,8 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	if douyinDetailIsImagePost(detail) {
 		return ""
 	}
-	uri := strings.TrimSpace(detail.Video.PlayAddr.URI)
-	if uri == "" {
+	if douyinDetailTooLong(ctx, detail) {
+		log.Printf("resolver douyin video too long: %dms > %ds", detail.Video.Duration, resolverVideoMaxDuration(ctx))
 		return ""
 	}
 	headers := resolverCommonHeaders()
@@ -373,18 +373,103 @@ func downloadDouyinMediaDetailFile(ctx context.Context, detail douyinMediaDetail
 	if cookie := resolverDouyinCookie(ctx); cookie != "" {
 		headers["Cookie"] = cookie
 	}
-	return downloadGenericVideoFile(ctx, douyinPlayAddrURL(uri), headers)
+	maxHeight := resolverVideoMaxHeight(ctx)
+	// 作品带了码率档就按清晰度和大小上限挑一档；挑出来的档下不动时不退回
+	// play 接口，那边只会给同一份或更大的文件。
+	if candidates := douyinVideoCandidates(detail.Video.BitRate, maxHeight, resolverVideoDownloadMaxBytes(ctx)); len(candidates) > 0 {
+		for _, candidate := range candidates {
+			for _, raw := range candidate.PlayAddr.URLList {
+				if path := downloadGenericVideoFile(ctx, raw, headers); path != "" {
+					return path
+				}
+			}
+		}
+		return ""
+	}
+	uri := strings.TrimSpace(detail.Video.PlayAddr.URI)
+	if uri == "" {
+		return ""
+	}
+	return downloadGenericVideoFile(ctx, douyinPlayAddrURL(uri, maxHeight), headers)
+}
+
+// douyinVideoBitRate 是 detail 里 video.bit_rate 的一档。
+type douyinVideoBitRate struct {
+	GearName string `json:"gear_name"`
+	Format   string `json:"format"`
+	IsH265   int    `json:"is_h265"`
+	BitRate  int64  `json:"bit_rate"`
+	PlayAddr struct {
+		URLList  []string `json:"url_list"`
+		DataSize int64    `json:"data_size"`
+		Width    int      `json:"width"`
+		Height   int      `json:"height"`
+	} `json:"play_addr"`
+}
+
+// shortSide 是这一档的「几 p」：竖屏 720x1280 算 720p。
+func (b douyinVideoBitRate) shortSide() int {
+	if b.PlayAddr.Width > 0 && b.PlayAddr.Width < b.PlayAddr.Height {
+		return b.PlayAddr.Width
+	}
+	return b.PlayAddr.Height
+}
+
+// douyinVideoCandidates 挑出清晰度、大小都在上限内的码率档，按清晰度从高到低，
+// 同清晰度先 H.264、再按码率从高到低。dash 档是分离的音视频流，不能单独当成片下。
+// maxHeight、maxBytes 为 0 表示不限；接口没给大小的档不按大小筛，下载时仍会限流截断。
+func douyinVideoCandidates(rates []douyinVideoBitRate, maxHeight int, maxBytes int64) []douyinVideoBitRate {
+	var out []douyinVideoBitRate
+	for _, rate := range rates {
+		if strings.EqualFold(rate.Format, "dash") || len(rate.PlayAddr.URLList) == 0 {
+			continue
+		}
+		if maxHeight > 0 && rate.shortSide() > maxHeight {
+			continue
+		}
+		if maxBytes > 0 && rate.PlayAddr.DataSize > maxBytes {
+			continue
+		}
+		out = append(out, rate)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if a, b := out[i].shortSide(), out[j].shortSide(); a != b {
+			return a > b
+		}
+		if out[i].IsH265 != out[j].IsH265 {
+			return out[i].IsH265 == 0
+		}
+		return out[i].BitRate > out[j].BitRate
+	})
+	return out
+}
+
+// douyinDetailTooLong 判断作品时长是否超过管理员设置的上限；接口没给时长时不拦。
+func douyinDetailTooLong(ctx context.Context, detail douyinMediaDetail) bool {
+	return detail.Video.Duration > 0 && detail.Video.Duration > int64(resolverVideoMaxDuration(ctx))*1000
 }
 
 // douyinPlayAddrURL 把 play_addr 的 uri 换成可以直接下载的地址。
 //
 // uri 通常是 video_id，要拼到 play 接口上；但有些作品回的是完整的 CDN 地址，
 // 那时再拼一次只会让 play 接口收到一个 URL 当 video_id，返回 0 字节。
-func douyinPlayAddrURL(uri string) string {
+func douyinPlayAddrURL(uri string, maxHeight int) string {
 	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") {
 		return uri
 	}
-	return fmt.Sprintf(douyinPlayURL, uri)
+	return fmt.Sprintf(douyinPlayURL, uri, douyinPlayRatio(maxHeight))
+}
+
+// douyinPlayRatio 把清晰度上限换成 play 接口认的 ratio，最低给 540p。
+func douyinPlayRatio(maxHeight int) string {
+	switch {
+	case maxHeight <= 0 || maxHeight >= 1080:
+		return "1080p"
+	case maxHeight >= 720:
+		return "720p"
+	default:
+		return "540p"
+	}
 }
 
 // douyinWebHeaders 组装抖音网页接口的请求头。配置了 Cookie 就一并带上：匿名请求
