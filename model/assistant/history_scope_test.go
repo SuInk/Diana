@@ -48,7 +48,7 @@ func TestLiveHistoryScopeReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	productionHooks := newReplyRunHooks()
+	productionHooks := newReplyRunHooks(event.Kind)
 	verified := false
 	rejected := 0
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

@@ -15,7 +15,7 @@ import (
 // This temporary request context is rebuilt from actual callbacks; it is never
 // saved as user speech, a notebook fact, or another source for history search.
 // It is evidence guidance, not a semantic factuality classifier.
-func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
+func newReplyRunHooks(kind EventKind, configs ...BotConfig) agent.RunHooks {
 	type execution struct {
 		Tool   string            `json:"tool"`
 		Status string            `json:"status"`
@@ -66,6 +66,9 @@ func newReplyRunHooks(configs ...BotConfig) agent.RunHooks {
 				check := "【输出前检查】\n" + configs[0].prompt(promptReplyUnclosedBracketSpec)
 				if PlatformSupportsRichText(configs[0].Platform) {
 					check += "\n" + configs[0].prompt(promptReplyRichTextLayoutSpec)
+				}
+				if kind == EventKindGroup {
+					check += "\n" + configs[0].prompt(promptReplyCasualTakeSpec)
 				}
 				req.Messages = append(req.Messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: check})
 			}

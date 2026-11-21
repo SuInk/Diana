@@ -165,7 +165,7 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 	}
 	// 请求级表达提醒在当前消息之后；上一轮的提醒仍原样留在缓存前缀里。贴着生成的规则
 	// 每轮照发，见 appendContextContinuation 里的说明。
-	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule {
+	if last := after[len(after)-1]; last.Role != llm.RoleSystem || last.Content != "【输出前检查】\n"+replyUnclosedBracketRule+"\n"+replyCasualTakeRule {
 		t.Fatalf("current expression reminder missing: %#v", last)
 	}
 	if current := after[len(after)-2]; current.Role != llm.RoleUser || !strings.Contains(appendContextText(current), "吃了吗") {
