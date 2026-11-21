@@ -96,3 +96,22 @@ func TestMergeCutsAtLineBreaks(t *testing.T) {
 		}
 	}
 }
+
+// 11-21 线上：两行回复，第二行逗号多，按长度均衡从第二行的逗号处切开，换行反而并进了
+// 第一条的气泡里。行数不超过上限时，每个换行都必须是分界。
+func TestMergeAlwaysCutsAtNewlineWithinLimit(t *testing.T) {
+	segments := []Segment{
+		{Text: "一天一本还想天天玩", Separator: "，"}, {Text: "那只能挑薄的买（）", Separator: "\n"},
+		{Text: "认真的话就听书", Separator: "，"}, {Text: "通勤吃饭洗漱的时候挂着", Separator: "，"},
+		{Text: "一天听完一本不难", Separator: "，"}, {Text: "眼睛该玩照玩"},
+	}
+	got := Merge(segments)
+	if len(got) < 2 || len(got) > MaxSplitNum || got[0] != "一天一本还想天天玩，那只能挑薄的买（）" {
+		t.Fatalf("newline should end the first message: %q", got)
+	}
+	for _, message := range got {
+		if strings.Contains(message, "\n") {
+			t.Fatalf("newline merged into a bubble: %q", got)
+		}
+	}
+}

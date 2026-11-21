@@ -112,6 +112,52 @@ func TestMaiBotSplitCountsSentencesAcrossLines(t *testing.T) {
 	}
 }
 
+// 11-21 线上：「……挑薄的买（）⏎认真的话就听书，通勤……」发成两条，第一条气泡里
+// 带着换行。换行是模型要的分条，必须落在两条之间。
+func TestMaiBotSplitKeepsLineBreakAsBoundary(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	got := splitEventChatReply("一天一本还想天天玩，那只能挑薄的买（）\n认真的话就听书，通勤吃饭洗漱的时候挂着，一天听完一本不难，眼睛该玩照玩", cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) < 2 || got[0] != "一天一本还想天天玩，那只能挑薄的买（）" {
+		t.Fatalf("line break should end the first message: %q", got)
+	}
+	for _, message := range got {
+		if strings.Contains(message, "\n") {
+			t.Fatalf("line break merged into a bubble: %q", got)
+		}
+	}
+}
+
+// 11-21 线上：「（）」是模型当句末语气用的空括号，后面另起一句时在这里分条，括号留在
+// 前一条末尾；去句号、去文字表情都不能把它删掉。半角「()」跟在标识符后面是函数调用，不拆。
+func TestMaiBotSplitBreaksAfterEmptyParensKeepingThem(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	group := MessageEvent{Kind: EventKindGroup}
+	got := splitEventChatReply("那说明你快乐阈值已经验证过两次了（）这次要是还想要那份期待感就充", cfg, group)
+	want := []string{"那说明你快乐阈值已经验证过两次了（）", "这次要是还想要那份期待感就充"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("got %q want %q", got, want)
+	}
+	got = splitEventChatReply("一天一本还想天天玩，那只能挑薄的买（）\n认真的话就听书", cfg, group)
+	if len(got) < 2 || !strings.HasSuffix(got[len(got)-2], "挑薄的买（）") || got[len(got)-1] != "认真的话就听书" {
+		t.Fatalf("empty parens at line end must stay: %q", got)
+	}
+	for _, reply := range []string{"行吧（）", "行吧()", "笑死。（）", "好的（）。"} {
+		got := splitEventChatReply(reply, cfg, group)
+		if len(got) != 1 || !strings.Contains(got[0], "（）") && !strings.Contains(got[0], "()") {
+			t.Fatalf("%q: empty parens were dropped: %q", reply, got)
+		}
+	}
+	for _, text := range []string{"直接调 f()就行，参数都不用传，返回值就是你要的那个列表", "空括号在结尾不用拆（）", "空括号后面是标点（），照常在逗号处断"} {
+		for _, segment := range maiBotSplitSentences(text) {
+			if segment.Text == "f()" || strings.HasPrefix(segment.Text, "就行") || segment.Text == "，" || strings.HasPrefix(segment.Text, "，") {
+				t.Fatalf("%q: wrong cut: %q", text, maiBotSplitSentences(text))
+			}
+		}
+	}
+}
+
 func TestMaiBotSplitMergesShortLinesToThree(t *testing.T) {
 	withMaiBotSplit(t)
 	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()

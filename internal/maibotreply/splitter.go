@@ -64,7 +64,8 @@ func cutPenalty(separator string) float64 {
 	switch separator {
 	case "\n":
 		return 0
-	case "。", "；", ";":
+	case "。", "；", ";", "":
+		// 空分隔符是调用方在句末语气（比如空括号「（）」）后面断开的，按句末算。
 		return 0.05
 	default:
 		return 0.25
@@ -76,13 +77,24 @@ func cutPenalty(separator string) float64 {
 // 的短尾巴，也尽量不从逗号处把一件事断开。11-20 线上一条讲 RSI 的回复按句数均分，
 // 把「0 到 100 衡量涨跌势头」和「过 70 算超买」拆进两条，最后剩一条「天天敲键盘的
 // 熟客」，真正换话题的分号反而没用上。
+//
+// 换行是模型自己要的分条（提示词也这么告诉它），MaiBot 里换行处一定断开，所以换行
+// 不参与长度均衡：行数不超过 maxCount 时每个换行都是分界，再在行内补分界凑长度；
+// 行数更多时只在换行处挑分界，不从一行中间断开。11-21 线上一条两行回复，第二行
+// 逗号多，按长度均衡从第二行的逗号处切开，换行反而并进了第一条的气泡里。
 func bestCuts(segments []Segment, maxCount int) []int {
 	ends := make([]int, len(segments))
 	total := 0
+	var newlines []int
 	for index, segment := range segments {
 		total += len([]rune(segment.Text))
 		ends[index] = total
+		if segment.Separator == "\n" && index < len(segments)-1 {
+			newlines = append(newlines, index)
+		}
 	}
+	mustCutNewlines := len(newlines)+1 <= maxCount
+	onlyNewlines := !mustCutNewlines
 	if total == 0 {
 		return nil
 	}
@@ -92,6 +104,9 @@ func bestCuts(segments []Segment, maxCount int) []int {
 	search = func(start, groups int, cuts []int, cost float64) {
 		// start 是这一组第一句的下标；groups 是含这一组在内还剩几组。
 		if groups == 1 {
+			if mustCutNewlines && !containsAll(cuts, newlines) {
+				return
+			}
 			full := append(append([]int(nil), cuts...), len(segments)-1)
 			sum, previous := 0.0, 0
 			for _, end := range full {
@@ -105,6 +120,9 @@ func bestCuts(segments []Segment, maxCount int) []int {
 			return
 		}
 		for end := start; end <= len(segments)-groups; end++ {
+			if onlyNewlines && segments[end].Separator != "\n" {
+				continue
+			}
 			search(end+1, groups-1, append(cuts, end), cost+cutPenalty(segments[end].Separator))
 		}
 	}
@@ -112,6 +130,17 @@ func bestCuts(segments []Segment, maxCount int) []int {
 		search(0, groups, nil, 0)
 	}
 	return best
+}
+
+// containsAll 报告 cuts 是否包含 want 里的每个分界。两者都按升序排列。
+func containsAll(cuts, want []int) bool {
+	index := 0
+	for _, cut := range cuts {
+		if index < len(want) && cut == want[index] {
+			index++
+		}
+	}
+	return index == len(want)
 }
 
 func mergeAtCuts(segments []Segment, cuts []int) []Segment {

@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/SuInk/diana/model/runtimeconfig"
 
@@ -9714,8 +9715,53 @@ func maiBotSplitReply(bubbles []string) []string {
 	return maibotreply.Merge(segments)
 }
 
-// maiBotSplitSentences 先把不能切的片段换成单个私用区字符，断完句再换回来。
+// maiBotEmptyParenCut 是空括号「（）」后面断开时的分隔符：括号是模型当语气用的，
+// 留在前一条末尾，分界处不吞任何字符。合并时按句末停顿算（见 maibotreply.cutPenalty）。
+const maiBotEmptyParenCut = ""
+
+// maiBotEmptyParen 认出后面还接着话的空括号。半角「()」前面是字母数字时是函数调用
+// （f()就行），不算。
+var maiBotEmptyParen = regexp.MustCompile(`（）|\(\)`)
+
+// maiBotSplitSentences 先在空括号后面断开（括号留在前一句），再逐段断句。11-21 线上
+// 「已经验证过两次了（）这次要是还想要……」整段挤在一个气泡里：空括号是模型的
+// 句末语气，后面另起一句，用户要的是在这里分条、但别删括号。
 func maiBotSplitSentences(text string) []maibotreply.Segment {
+	var segments []maibotreply.Segment
+	pieces := splitAfterEmptyParens(text)
+	for index, piece := range pieces {
+		parts := maiBotSplitSentencePiece(piece)
+		if len(parts) > 0 && index < len(pieces)-1 {
+			parts[len(parts)-1].Separator = maiBotEmptyParenCut
+		}
+		segments = append(segments, parts...)
+	}
+	return segments
+}
+
+// splitAfterEmptyParens 在后面紧跟着字的空括号处切开，括号留在前一段。后面是标点、
+// 空白或已到结尾的不切：那里本来就有断句点，或者没有下一句。
+func splitAfterEmptyParens(text string) []string {
+	var pieces []string
+	start := 0
+	for _, match := range maiBotEmptyParen.FindAllStringIndex(text, -1) {
+		if text[match[0]] == '(' && match[0] > 0 {
+			if previous, _ := utf8.DecodeLastRuneInString(text[:match[0]]); previous < utf8.RuneSelf && (unicode.IsLetter(previous) || unicode.IsDigit(previous) || previous == '_') {
+				continue
+			}
+		}
+		next, _ := utf8.DecodeRuneInString(text[match[1]:])
+		if match[1] == len(text) || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
+			continue
+		}
+		pieces = append(pieces, text[start:match[1]])
+		start = match[1]
+	}
+	return append(pieces, text[start:])
+}
+
+// maiBotSplitSentencePiece 先把不能切的片段换成单个私用区字符，断完句再换回来。
+func maiBotSplitSentencePiece(text string) []maibotreply.Segment {
 	var spans []string
 	masked := maiBotProtectedSpan.ReplaceAllStringFunc(text, func(span string) string {
 		spans = append(spans, span)
