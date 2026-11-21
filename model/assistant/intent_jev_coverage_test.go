@@ -71,7 +71,6 @@ func TestTextPurposesStayOffIntent(t *testing.T) {
 		PurposeRelationshipEvaluate: llm.GroupBackground,
 		PurposeContextSummary:       llm.GroupReplyAssist,
 		PurposeDirectReplyTopic:     llm.GroupReplyAssist,
-		PurposeSemanticTextRef:      llm.GroupReplyAssist,
 		PurposeErrorNotice:          llm.GroupReplyAssist,
 		PurposeReplySuppression:     llm.GroupReplyAssist,
 		PurposePokeReply:            llm.GroupReplyAssist,
