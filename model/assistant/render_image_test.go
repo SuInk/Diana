@@ -148,7 +148,7 @@ func TestTrimRenderScreenshotCropsBackground(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	trimmed := trimRenderScreenshot(buffer.Bytes())
+	trimmed := trimRenderScreenshot(buffer.Bytes(), renderTrimPaddingPx)
 	decoded, err := png.Decode(bytes.NewReader(trimmed))
 	if err != nil {
 		t.Fatal(err)
@@ -176,11 +176,11 @@ func TestTrimRenderScreenshotKeepsBlankImage(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := buffer.Bytes()
-	if got := trimRenderScreenshot(raw); !bytes.Equal(got, raw) {
+	if got := trimRenderScreenshot(raw, renderTrimPaddingPx); !bytes.Equal(got, raw) {
 		t.Fatal("全背景的图应当原样返回")
 	}
 	// 不是 PNG 也不该炸，原样退回去让上层报真正的错。
-	if got := trimRenderScreenshot([]byte("not a png")); string(got) != "not a png" {
+	if got := trimRenderScreenshot([]byte("not a png"), renderTrimPaddingPx); string(got) != "not a png" {
 		t.Fatal("解不开的数据应当原样返回")
 	}
 }
@@ -271,6 +271,57 @@ func TestBuildRenderPageGivesMermaidLayoutWidth(t *testing.T) {
 		}
 		if strings.Contains(page, `class="render-root render-root-mermaid"`) {
 			t.Fatalf("%s 页面不该被撑成固定宽度", tc.name)
+		}
+	}
+}
+
+// SVG 自带画布和背景：没有标题时页面不留内边距、裁边贴着图裁，不然四周是一圈不对称
+// 的白框（11-21 回放画熊，左上 60 多像素白边、右下 24 像素）。带标题照旧留白。
+func TestRenderSVGHasNoWhiteFrame(t *testing.T) {
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>`
+	bare, _ := buildRenderPage(renderFormatSVG, svg, "")
+	titled, _ := buildRenderPage(renderFormatSVG, svg, "标题")
+	if !strings.Contains(bare, "render-root-bare") || strings.Contains(titled, `render-root-bare"`) {
+		t.Fatal("only an untitled SVG page drops the document padding")
+	}
+	if renderTrimPadding(renderFormatSVG, "") != 0 || renderTrimPadding(renderFormatSVG, "标题") != renderTrimPaddingPx || renderTrimPadding(renderFormatMarkdown, "") != renderTrimPaddingPx {
+		t.Fatal("only an untitled SVG is trimmed flush")
+	}
+
+	// 左上角是图自己的颜色（天蓝），右下是页面白底：要裁到图的边上，一像素不留。
+	canvas := image.NewRGBA(image.Rect(0, 0, 200, 150))
+	for y := 0; y < 150; y++ {
+		for x := 0; x < 200; x++ {
+			canvas.Set(x, y, color.RGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff})
+			if x < 120 && y < 90 {
+				canvas.Set(x, y, color.RGBA{R: 0xc0, G: 0xe6, B: 0xfc, A: 0xff})
+			}
+		}
+	}
+	var buffer bytes.Buffer
+	if err := png.Encode(&buffer, canvas); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := png.Decode(bytes.NewReader(trimRenderScreenshot(buffer.Bytes(), 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := decoded.Bounds(); got.Dx() != 120 || got.Dy() != 90 {
+		t.Fatalf("SVG should be trimmed flush to its canvas: %v", got)
+	}
+}
+
+// 只写 viewBox 的 SVG 按 viewBox 补宽高，写了宽或高的原样不动。
+func TestSizeSVGFromViewBox(t *testing.T) {
+	cases := map[string]string{
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500"><rect/></svg>`:  `<svg width="800" height="500" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 500"><rect/></svg>`,
+		`<svg viewBox="0 0 800 600" width="400"><rect/></svg>`:                         `<svg viewBox="0 0 800 600" width="400"><rect/></svg>`,
+		`<svg stroke-width="2" viewBox="0,0,30,20"><rect width="5"/></svg>`:            `<svg width="30" height="20" stroke-width="2" viewBox="0,0,30,20"><rect width="5"/></svg>`,
+		`<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`: `<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>`,
+	}
+	for input, want := range cases {
+		if got := sizeSVGFromViewBox(input); got != want {
+			t.Errorf("sizeSVGFromViewBox(%s) = %s, want %s", input, got, want)
 		}
 	}
 }

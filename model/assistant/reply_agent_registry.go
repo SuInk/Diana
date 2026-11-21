@@ -65,6 +65,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		if !relationship.Owner || cfg.agentSafeMode() {
 			deniedTools = append(deniedTools, hostAccessToolName)
 		}
+		render := newDianaRenderTool(r, event)
 		extraTools := []agent.Tool{
 			newDianaChatHistoryTool(r, event).withRecallSink(recallSink),
 			newDianaHistoryImagesTool(r, event).withImageInput(imageTextOnly, imageMode),
@@ -83,7 +84,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			newDianaReplyBlockTool(r, event),
 			newDianaReminderTool(r, event),
 			newDianaEventTriggerTool(r, event),
-			newDianaRenderTool(r, event),
+			render,
 			// 只读、无参数，但仍是主人专属：主机名、磁盘路径、硬件型号
 			// 不该对群里所有人可见。靠 allowedAgentToolNames 不收录它来实现。
 			newDianaHostStatsTool(r, event),
@@ -180,7 +181,9 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			if _, settings, enabled := r.pluginWithSettingsForEvent(fileDeliveryPluginID, event); enabled {
 				extraTools = append(extraTools, newDianaFileDeliveryTool(r, event, settings, relationship))
 				if settings.Bool(fileDeliverySettingRenderMedia, true) {
-					extraTools = append(extraTools, newDianaRenderMediaTool(r, event, settings, relationship))
+					media := newDianaRenderMediaTool(r, event, settings, relationship)
+					media.renderPreviewer = render.renderPreviewer // 用哪个预览、用哪个发都算数
+					extraTools = append(extraTools, media)
 				}
 			}
 		}
