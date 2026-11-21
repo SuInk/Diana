@@ -173,6 +173,77 @@ func TestReplyTurnsContinueAppendOnly(t *testing.T) {
 	}
 }
 
+// 11-21 生产 Telegram 群：上一轮答过的「量子计算」在续接请求里又作为历史行排到了那次
+// 回复后面，模型读成对方又问了一遍，19 秒后换个说法再答一次。第二轮只能追加之后的
+// 新消息，不能把上一轮的当前消息再追加一遍。
+func TestReplyTurnContinuationDoesNotRepeatAnsweredMessage(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{
+		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"量子计算破的是椭圆曲线签名"}}]`,
+		`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"确实跟初衷不一样了"}}]`,
+	}}
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	first := appendContextTestEvent()
+	first.MessageID, first.RawMessage = "append-1", "量子计算会不会打穿BTC"
+	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": first.RawMessage}}}
+	runtime.remember(first)
+	if _, err := runtime.replyTo(t.Context(), first, first.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	second := appendContextTestEvent()
+	second.MessageID, second.RawMessage, second.Time = "append-2", "感觉完全跟初衷违背了", first.Time+20
+	second.UserID, second.SenderName = "10002", "Bob"
+	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": second.RawMessage}}}
+	runtime.remember(second)
+	if _, err := runtime.replyTo(t.Context(), second, second.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	var replies []llm.GenerateRequest
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Tools) > 0 {
+			replies = append(replies, request)
+		}
+	}
+	if len(replies) != 2 {
+		t.Fatalf("reply requests = %d, want 2", len(replies))
+	}
+	before, after := replies[0].Messages, replies[1].Messages
+	if len(after) <= len(before) {
+		t.Fatalf("second request did not extend the first: %d vs %d", len(after), len(before))
+	}
+	for _, message := range after[len(before):] {
+		if strings.Contains(appendContextText(message), "量子计算会不会打穿BTC") {
+			t.Fatalf("answered message appended again after its reply: %.300q", appendContextText(message))
+		}
+	}
+}
+
+// 一次 send 写了两行，发出去是两条消息，下一轮历史里是各自的两句发言；它们已经在
+// 前缀里了，不能再追加一遍。
+func TestAppendContextSkipsOwnReplySplitIntoMessages(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: P=NP 是什么")
+	log := appendTestLog(t, first, "P 是能快速算出来的问题\n至于加密单飞，确实难")
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:02] 乙: 吃了吗"}, "", "【当前需要回复的消息】乙: 吃了吗")
+	history := []llm.Message{second[1]}
+	history = append(history, agent.HistoryReplyMessages("a", `<diana-quote id="im_message_1"/>P 是能快速算出来的问题`)...)
+	history = append(history, agent.HistoryReplyMessages("b", "至于加密单飞，确实难")...)
+	history = append(history, second[2])
+	second[2].CacheBreakpoint = false
+	history[len(history)-1].CacheBreakpoint = true
+	second = append(append([]llm.Message{second[0]}, history...), second[3:]...)
+	continuation := continueFrom(log, second)
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	for _, message := range continuation.Append {
+		if llm.IsHistoryReplyMessage(message) {
+			t.Fatalf("already-sent split reply appended again: %#v", continuation.Append)
+		}
+	}
+}
+
 // 续接时发过的资料不再发：带记忆条目的段（含画像之后那段）按条去重，无标题的固定说明
 // 发过就不发；当前消息连同它的注解照发；带标题的状态段 A、B 交替时照样发回 A。
 func TestAppendContextSendsOnlyNewContent(t *testing.T) {

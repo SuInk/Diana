@@ -55,6 +55,8 @@ type appendContextFile struct {
 	HeadKey  string                 `json:"head_key"`
 	Overhead int64                  `json:"overhead"`
 	Prefix   []appendContextMessage `json:"prefix"`
+	// Answered 见 appendContextLog.answered。老文件没有这一项，读回后照旧续接。
+	Answered []string `json:"answered,omitempty"`
 }
 
 type appendContextMessage struct {
@@ -71,6 +73,7 @@ type appendContextMessage struct {
 	ResponsesOutput   []json.RawMessage   `json:"responses_output,omitempty"`
 	Priority          llm.MessagePriority `json:"priority,omitempty"`
 	ContextGroup      string              `json:"context_group,omitempty"`
+	SourceKey         string              `json:"source_key,omitempty"`
 	CacheBreakpoint   bool                `json:"cache_breakpoint,omitempty"`
 	AtomicText        bool                `json:"atomic_text,omitempty"`
 }
@@ -178,7 +181,7 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 		return nil
 	}
 	file := appendContextFile{Version: appendContextFileVersion, Key: key, SavedAt: time.Now().UTC(), RunKey: record.key,
-		HeadKey: record.headKey, Overhead: record.overhead, Prefix: make([]appendContextMessage, len(record.prefix))}
+		HeadKey: record.headKey, Overhead: record.overhead, Prefix: make([]appendContextMessage, len(record.prefix)), Answered: record.answeredKeys()}
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
@@ -238,7 +241,10 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 		time.Since(stored.SavedAt) > appendContextFileMaxAge {
 		return nil
 	}
-	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix))}
+	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix)), answered: map[string]bool{}}
+	for _, key := range stored.Answered {
+		record.answered[key] = true
+	}
 	for index, message := range stored.Prefix {
 		record.prefix[index] = message.toMessage()
 	}
@@ -274,7 +280,7 @@ func appendContextMessageFrom(message llm.Message) appendContextMessage {
 	stored := appendContextMessage{
 		ContinuationScope: message.ContinuationScope, AnthropicThinking: message.AnthropicThinking, ReasoningContent: message.ReasoningContent,
 		Role: message.Role, Content: message.Content, Parts: message.Parts, ToolCallID: message.ToolCallID, ToolName: message.ToolName,
-		ToolError: message.ToolError, ResponsesOutput: message.ResponsesOutput, Priority: message.Priority, ContextGroup: message.ContextGroup,
+		ToolError: message.ToolError, ResponsesOutput: message.ResponsesOutput, Priority: message.Priority, ContextGroup: message.ContextGroup, SourceKey: message.SourceKey,
 		CacheBreakpoint: message.CacheBreakpoint, AtomicText: message.AtomicText,
 	}
 	for _, call := range message.ToolCalls {
@@ -287,7 +293,7 @@ func (stored appendContextMessage) toMessage() llm.Message {
 	message := llm.Message{
 		ContinuationScope: stored.ContinuationScope, AnthropicThinking: stored.AnthropicThinking, ReasoningContent: stored.ReasoningContent,
 		Role: stored.Role, Content: stored.Content, Parts: stored.Parts, ToolCallID: stored.ToolCallID, ToolName: stored.ToolName,
-		ToolError: stored.ToolError, ResponsesOutput: stored.ResponsesOutput, Priority: stored.Priority, ContextGroup: stored.ContextGroup,
+		ToolError: stored.ToolError, ResponsesOutput: stored.ResponsesOutput, Priority: stored.Priority, ContextGroup: stored.ContextGroup, SourceKey: stored.SourceKey,
 		CacheBreakpoint: stored.CacheBreakpoint, AtomicText: stored.AtomicText,
 	}
 	for _, call := range stored.ToolCalls {

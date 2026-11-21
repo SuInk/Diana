@@ -236,6 +236,16 @@ func (r *Runtime) replyTurnCandidates(ctx context.Context) []proactiveReplyCandi
 	return append(candidates, backlogReplyTurnFromContext(ctx)...)
 }
 
+// replyAnsweredKeys 是这一轮回答的聊天消息：当前消息加上同轮补充和积压合并进来的，
+// 按历史去重键记，见 appendContextLog.answered。
+func (r *Runtime) replyAnsweredKeys(ctx context.Context, event MessageEvent) []string {
+	keys := []string{messageHistoryDedupeKey(event)}
+	for _, candidate := range r.replyTurnCandidates(ctx) {
+		keys = append(keys, messageHistoryDedupeKey(candidate.Event))
+	}
+	return keys
+}
+
 // backlogReplyRequestText 把积压合并进来的消息接在当前问题后面。
 func backlogReplyRequestText(original string, event MessageEvent, turn []proactiveReplyCandidate) string {
 	if len(turn) == 0 {

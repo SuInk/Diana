@@ -5144,7 +5144,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			if err == nil {
 				r.recordReplyContext(event, cfg, requestRecorder)
 				previous := r.appendContexts.get(appendKey)
-				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
+				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous, r.replyAnsweredKeys(ctx, event)...)
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}
