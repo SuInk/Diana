@@ -27,12 +27,14 @@ type Segment struct {
 }
 
 var (
-	splitBlankLines      = regexp.MustCompile(`\n\s*\n+`)
-	splitNewlineThenSep  = regexp.MustCompile(`\n\s*([，,。;\s])`)
-	splitSepThenNewline  = regexp.MustCompile(`([，,。;\s])\s*\n`)
-	splitInlineNewlines  = regexp.MustCompile(`[^\S\r\n]*[\r\n]+[^\S\r\n]*`)
-	splitQuoteCharacters = map[rune]bool{'"': true, '\'': true, '“': true, '”': true, '‘': true, '’': true, '「': true, '」': true, '『': true, '』': true}
-	splitSeparators      = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '；': true, '\n': true}
+	splitBlankLines     = regexp.MustCompile(`\n\s*\n+`)
+	splitNewlineThenSep = regexp.MustCompile(`\n\s*([，,。;\s])`)
+	splitSepThenNewline = regexp.MustCompile(`([，,。;\s])\s*\n`)
+	splitInlineNewlines = regexp.MustCompile(`[^\S\r\n]*[\r\n]+[^\S\r\n]*`)
+	// splitQuotePairs 是开引号到收引号的对照。MaiBot 要求收尾的引号和开头的是同一个字符，
+	// 中文引号「」“”永远配不上，开了一个引号后面整段都不再断句。
+	splitQuotePairs = map[rune]rune{'"': '"', '\'': '\'', '“': '”', '‘': '’', '「': '」', '『': '』'}
+	splitSeparators = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '；': true, '\n': true}
 )
 
 // Merge 把断出来的句子合到最多 MaxSplitNum 条。segments 可以来自好几段
@@ -137,7 +139,7 @@ func absFloat(value float64) float64 {
 }
 
 // SplitSentences 在 ，, 。; 空格和换行处断句，分隔符不留在句子里，再按原文长度
-// 概率性地把相邻句合回去：越长越倾向于拆开。换行一定拆；引号里、冒号旁、
+// 概率性地把相邻句合回去：越长越倾向于拆开。换行一定拆；成对引号里、冒号旁、
 // 英文和数字之间的空格、破折号旁的空格不拆。
 func SplitSentences(text string, random func() float64) []Segment {
 	text = splitBlankLines.ReplaceAllString(text, "\n")
@@ -157,18 +159,21 @@ func SplitSentences(text string, random func() float64) []Segment {
 	}
 
 	insideQuote := make([]bool, len(runes))
-	inQuote := false
-	var quoteChar rune
+	var closeQuote rune
 	for index, char := range runes {
-		if splitQuoteCharacters[char] {
-			if !inQuote {
-				inQuote, quoteChar = true, char
-			} else if char == quoteChar || (char == '"' || char == '\'') && (quoteChar == '"' || quoteChar == '\'') {
-				inQuote, quoteChar = false, 0
-			}
+		if closeQuote != 0 && char == closeQuote {
+			closeQuote = 0
 			continue
 		}
-		insideQuote[index] = inQuote
+		if closeQuote == 0 {
+			// 两个字母中间的 ' 是撇号（it's、don't），不是引号。
+			apostrophe := char == '\'' && index > 0 && index+1 < len(runes) && unicode.IsLetter(runes[index-1]) && unicode.IsLetter(runes[index+1])
+			if close, ok := splitQuotePairs[char]; ok && !apostrophe {
+				closeQuote = close
+				continue
+			}
+		}
+		insideQuote[index] = closeQuote != 0
 	}
 
 	var segments []Segment
