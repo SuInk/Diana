@@ -2076,10 +2076,6 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		return event, "", false, outcome
 	}
 	event, text, handled, outcome := r.routeMessageEvent(ctx, event)
-	if !handled && outcome != "ignored_bot_message" {
-		// 不回的消息里，群友之间也会互相纠正图片认错了；只看引用了图的，见 image_fix_gate.go。
-		r.startQuotedImageFixGate(ctx, event)
-	}
 	if handled && event.mutedJudgeOnly != "" {
 		// 被禁言但照常做了回复判断，判断认为该回：到这里为止，不生成也不发送。
 		event.routingReason = event.mutedJudgeOnly + "；回复判断认为这条该回，暂停期间不生成也不发送"
