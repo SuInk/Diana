@@ -67,7 +67,7 @@ func TestRSSWatchRetrySkipsDeliveredTelegramText(t *testing.T) {
 		Platform: PlatformTelegram, ProfileID: "a", GroupID: "-10012345", IntervalSeconds: 900}
 	store := &stubReminderStore{items: []Reminder{item}}
 	r := NewRuntime(BotConfig{ID: "a", Platform: PlatformTelegram, SendRetryAttempts: 1}, channel, NewDefaultPluginManager(), nil, store, nil, nil)
-	message := "New visual" + rssWatchReplyImages("x", []rssWatchItem{{Images: []string{"https://pbs.twimg.com/media/A.jpg"}}}) + "\n订阅 rss"
+	message := "New visual" + rssWatchReplyImages("x", []rssWatchItem{{Images: []string{"https://pbs.twimg.com/media/A.jpg"}}})
 	if err := r.sendRSSWatchTargets(context.Background(), item, message); err == nil {
 		t.Fatal("image failure was hidden")
 	}

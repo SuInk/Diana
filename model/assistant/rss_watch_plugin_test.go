@@ -310,7 +310,7 @@ func TestRuntimeRSSWatchCoversSeveralSourcesWithOneRule(t *testing.T) {
 		t.Fatalf("sent=%#v", channel.sent)
 	}
 	notice := channel.sent[0].Text
-	if !strings.Contains(notice, "RSS 站点甲") || !strings.Contains(notice, "RSS 站点乙") || strings.Count(notice, "订阅 "+item.ID) != 1 {
+	if !strings.Contains(notice, "RSS 站点甲") || !strings.Contains(notice, "RSS 站点乙") || strings.Contains(notice, item.ID) {
 		t.Fatalf("notice=%q", notice)
 	}
 	stored := ReminderFeedSources(store.items[0])

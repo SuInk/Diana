@@ -84,7 +84,7 @@ func TestRSSWatchReplyImagesRejectsForeignHostsAndEscapes(t *testing.T) {
 }
 
 func TestRSSWatchNoticeWithImageBecomesImageSegment(t *testing.T) {
-	text := "Twitter @animecorner_ac\n赛博朋克：边缘行者 2 主视觉公布\n订阅 ec02c05a" +
+	text := "Twitter @animecorner_ac\n赛博朋克：边缘行者 2 主视觉公布" +
 		rssWatchReplyImages("x", []rssWatchItem{{ID: "2110448153912840594", Images: []string{"https://pbs.twimg.com/media/HUnUbt9XgAA-hEo.jpg?name=orig"}}})
 	var found bool
 	for _, chunk := range splitReply(text, notificationChunkSize) {

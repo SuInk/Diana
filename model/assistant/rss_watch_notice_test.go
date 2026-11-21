@@ -52,9 +52,9 @@ func TestRSSWatchNoticeHeaderNamesPlatformAndAccount(t *testing.T) {
 	}
 }
 
-// 整条通知只发一条：抬头、正文、订阅 ID 之间不能再有「换一条消息发」的标记。
+// 整条通知只发一条：抬头和正文之间不能再有「换一条消息发」的标记。
 func TestRSSWatchNoticeIsASingleMessage(t *testing.T) {
-	notice := "Twitter @thsottiaux\n博主发布了消息\n订阅 7c53d9d7"
+	notice := "Twitter @thsottiaux\n博主发布了消息"
 	if strings.Contains(notice, notificationSplitMarker) {
 		t.Fatal("通知里不该再有分条标记")
 	}

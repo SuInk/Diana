@@ -224,6 +224,7 @@ func TestRSSSharedWorkStillDeliversToBothRobots(t *testing.T) {
 	b := a
 	b.ID = "tg-watch"
 	b.ProfileID = "tg"
+	b.GroupID = "200"
 	b.Platform = PlatformTelegram
 	tasks := &stubReminderStore{items: []Reminder{a, b}}
 	qq, tg := &recordingChannel{}, &recordingChannel{}
@@ -243,7 +244,7 @@ func TestRSSSharedWorkStillDeliversToBothRobots(t *testing.T) {
 	if len(qq.sentSnapshot()) != 1 || len(tg.sentSnapshot()) != 1 {
 		t.Fatal("one subscriber lost its delivery")
 	}
-	if !strings.Contains(qq.sentSnapshot()[0].Text, a.ID) || !strings.Contains(tg.sentSnapshot()[0].Text, b.ID) {
+	if qq.sentSnapshot()[0].GroupID != a.GroupID || tg.sentSnapshot()[0].GroupID != b.GroupID {
 		t.Fatal("subscriber delivery identities crossed")
 	}
 	for _, item := range tasks.items {
