@@ -1157,12 +1157,6 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		if !role.FollowChat {
 			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy, key)
 		}
-		// 向量嵌入可以整档关闭：没选模型时也要留住这个标记，否则读回来就成了「自动」，
-		// 照旧去连提供商里第一个向量模型。关闭后语义检索退回只按关键词搜。
-		if key == llm.GroupEmbedding && role.Disabled && !modelRoleConfigured(role) {
-			out[key] = ModelRole{Disabled: true}
-			continue
-		}
 		// 可绑定的键从 4 个扩到「5 个分组 + 17 个用途」，见 model_binding.go。
 		if isModelBindingKey(key) && modelRoleConfigured(role) {
 			out[key] = role

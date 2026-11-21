@@ -573,7 +573,7 @@
                     </span>
                   </div>
                   <!-- 没单独配置的用途也画成表里的一行，写明默认跟着谁走；添加模型后这一行换成真正的候选。 -->
-                  <!-- 向量嵌入可以整档关闭：不再调用向量模型，语义检索开关照旧，搜聊天记录退回只按关键词。选过的模型留着，开启后照旧。 -->
+                  <!-- 向量嵌入只给语义检索用：这里的关闭和「上下文 → 记忆 → 语义检索」是同一个开关，关掉后不调用向量模型、只按关键词搜。选过的模型留着，开启后照旧。 -->
                   <div v-if="embeddingOff(role.key)" class="model-route-table-wrap">
                     <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
                       <colgroup><col class="model-route-order-col" /><col /></colgroup>
@@ -584,7 +584,7 @@
                             <span class="model-route-line">
                               <PowerOff :size="13" class="model-route-follow-icon" aria-hidden="true" />
                               <strong class="model-route-follow-name">已关闭</strong>
-                              <span class="model-route-provider">不调用向量模型，搜聊天记录只按关键词</span>
+                              <span class="model-route-provider">不调用向量模型，搜聊天记录只按关键词；和「上下文」页的语义检索是同一个开关</span>
                             </span>
                           </td>
                         </tr>
@@ -3844,21 +3844,14 @@ function clearModelRouteFilters(): void {
   modelRouteStatusFilter.value = "all";
 }
 
-// 向量嵌入整档关闭：存成 disabled 的一档，后端不再找向量模型，语义检索退回只按关键词。
-// 向量嵌入只能配一个模型，这一档的 disabled 就是整档关闭。
+// 向量嵌入只给语义检索用，两处只留一个开关：模型页的关闭 / 开启就是语义检索开关，
+// 状态永远一致，不会出现「语义检索开着、其实没在用向量」。
 function embeddingOff(role: RoleKey): boolean {
-  return role === "embedding" && !!roleForm.value.embedding?.disabled;
+  return role === "embedding" && !!form.value && !form.value.semantic_search_enabled;
 }
 
 function setEmbeddingOff(off: boolean): void {
-  const current = roleForm.value.embedding;
-  if (off) {
-    roleForm.value.embedding = { ...(current ?? { model: "" }), disabled: true };
-    return;
-  }
-  // 关闭前选过模型就恢复它，没选过就回到「自动」。
-  if (current?.model?.trim()) roleForm.value.embedding = { ...current, disabled: false };
-  else delete roleForm.value.embedding;
+  if (form.value) form.value.semantic_search_enabled = !off;
 }
 
 // 没单独配置、走默认来源的用途。跟随对话不算：它是表里实实在在的一行。
@@ -5467,8 +5460,6 @@ async function save(): Promise<void> {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
     if (!role && (row.key === "media_parse" || row.key === "embedding" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
-    // 向量嵌入整档关闭时可以不选模型。
-    if (embeddingOff(row.key) && !role?.model.trim()) continue;
     // 整档跟随对话没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && isPureFollowChat(role)) continue;
     const primaryFollowsChat = row.key !== "chat" && !!role?.follow_chat;
@@ -5522,11 +5513,6 @@ async function save(): Promise<void> {
       const role = roleForm.value[key as RoleKey];
       if (key !== "chat" && isPureFollowChat(role)) {
         modelRoles[key] = { model: "", follow_chat: true };
-        continue;
-      }
-      // 向量嵌入整档关闭、没选过模型：只存关闭标记，否则读回来又成了「自动」。
-      if (key === "embedding" && role?.disabled && !role.model.trim()) {
-        modelRoles[key] = { model: "", disabled: true };
         continue;
       }
       const followsChat = key !== "chat" && !!role?.follow_chat;
