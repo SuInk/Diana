@@ -175,20 +175,18 @@ func splitReplyBlocks(text string) []string {
 // 兜底：一条消息里只有几句普通的话、中间用换行隔开的，拆成几条发。
 //
 // 富文本平台的一条消息本来就是一篇排过版的 Markdown：空行分段、标题、表格都正常
-// 渲染，所以只拆「每一行都是普通话」的那种。只要有一行是列表、编号、「标签：内容」、
+// 渲染，所以只拆「每一行都是普通话」的那种。只要有一行是列表、编号、成串的「标签：内容」、
 // 引导语、小节标题、引用或链接，或者带代码、空行分段，整条原样留着。纯文本平台的
 // 气泡渲染不了这些，走 splitReplyBlocks 按块切。
 func splitPlainProseLines(text string) []string {
 	if strings.Contains(text, "```") {
 		return []string{text}
 	}
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
+	raw := strings.Split(text, "\n")
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			return []string{text}
-		}
-		if line != strings.TrimLeft(line, " \t") || !isPlainProseReplyLine(trimmed) {
+		if trimmed == "" || line != strings.TrimLeft(line, " \t") {
 			return []string{text}
 		}
 		lines = append(lines, trimmed)
@@ -196,11 +194,20 @@ func splitPlainProseLines(text string) []string {
 	if len(lines) < 2 {
 		return []string{text}
 	}
+	for index := range lines {
+		if !isPlainProseReplyLine(lines, index) {
+			return []string{text}
+		}
+	}
 	return lines
 }
 
-func isPlainProseReplyLine(line string) bool {
-	if isStructuredReplyLine(line) || isReplyBlockLeadIn(line) {
+// isPlainProseReplyLine 判断第 index 行是不是普通的话。「短标签：内容」和
+// splitReplyBlocks 一样，成串出现才算清单；单独一行的「它学了啥倒是能答：……」
+// 是一句话。11-21 Telegram 上两句话因为第二句带冒号被整条挤进一个气泡。
+func isPlainProseReplyLine(lines []string, index int) bool {
+	line := lines[index]
+	if isReplyListBlockLine(lines, index) || isReplyBlockLeadIn(line) {
 		return false
 	}
 	if strings.HasPrefix(line, ">") || strings.Contains(line, "://") {

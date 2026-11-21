@@ -213,3 +213,18 @@ func TestPlainProseSplitPromptMatchesDelivery(t *testing.T) {
 		}
 	}
 }
+
+// 富文本平台：单独一行带冒号的话照样是普通的话，两句分两条发；成串的「标签：内容」
+// 才算清单，整条保留排版。
+func TestRichTextSplitsLoneLabeledSentence(t *testing.T) {
+	cfg := BotConfig{Platform: PlatformTelegram}.WithDefaults()
+	reply := "参数量官方没公布，准不准没人知道" + notificationLineMarker + "它学了啥倒是能答：主打编码和知识工作"
+	got := splitEventChatReply(reply, cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) != 2 || got[1] != "它学了啥倒是能答：主打编码和知识工作" {
+		t.Fatalf("lone labeled sentence kept whole: %q", got)
+	}
+	list := "看了下两家" + notificationLineMarker + "价格：一样" + notificationLineMarker + "速度：A 快"
+	if got := splitEventChatReply(list, cfg, MessageEvent{Kind: EventKindGroup}); len(got) != 1 {
+		t.Fatalf("labeled list was split: %q", got)
+	}
+}
