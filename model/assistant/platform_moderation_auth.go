@@ -233,9 +233,14 @@ func (r *Runtime) currentSpeakerGroupContext(event MessageEvent, cfg BotConfig) 
 	})
 }
 
-var promptCurrentSpeakerGroupSpec = tailSpec("speaker_group_identity", "当前发言者的群身份", "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。",
-	"【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。仅描述本轮当前群，不代表机器人主人身份；群管操作仍由工具实时核验。",
+var promptCurrentSpeakerGroupSpec = tailSpec("speaker_group_identity", "当前发言者的群身份", "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。这一段只放数据，含义说明在头部（speakerGroupIdentityRule）。",
+	"【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。",
 	PromptVar{Name: "user_id", Description: "当前发言者账号"},
 	PromptVar{Name: "group_id", Description: "当前群账号"},
 	PromptVar{Name: "role", Description: "群主、管理员、群成员或未知"},
 	PromptVar{Name: "source", Description: "平台消息、短期缓存或未核验"})
+
+// speakerGroupIdentityRule 是尾部【当前发言者群身份】的含义说明，逐字不变，放在群聊的
+// 稳定头部。以前写在那一段末尾：换个人说话整段就变，续接时连同这句说明一起重发，
+// 11-21 生产 swe-2 主回复里平均每条请求叠着好几份。
+const speakerGroupIdentityRule = "尾部「当前发言者群身份」那一段只描述本轮当前群里这位发言者的群身份，不代表机器人主人身份；群管操作仍由工具实时核验。"

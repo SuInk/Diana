@@ -31,6 +31,8 @@ import (
 //     对话对象、本轮路由说明这类状态段在切换时会补上，连着几轮一样就不重复；
 //   - 长期记忆按条、跨群历史按条，只发上文里还没有的；同一发言者的画像不重发；
 //   - 可提及成员候选不发：按最近发言排序、几乎每轮都变，同样的 ID 历史行里都有。
+//   - 实时时钟那条按句比：时间每轮都变，后面「这是可信实时时间……」「按他的当地时间说……」
+//     这些说明逐字不变，发过就只发带时间的那几句（见 unsentClock）。
 // 段和条目都整块保留，不按行删，免得读起来缺头少尾。10-27 生产三个群各 12 轮模拟，
 // 每轮增长从约 1.05 万字降到约 5000 字，主要是新记忆、新群消息和新跨群条目。
 //
@@ -59,6 +61,8 @@ type appendContextLog struct {
 	// pieces 是前缀里出现过的每个段（按「【」切）和每个段落（按空行切），续接时
 	// 不带标题的固定说明逐字一样就不再发。
 	pieces map[string]bool
+	// clockSentences 是前缀里实时时钟那条消息按句拆开的每一句，见 unsentClock。
+	clockSentences map[string]bool
 	// sentLines 是已发回复按行拆开的每一行：一次 send 写了几行，发出去拆成几条，
 	// 下一轮历史里就是几句各自的发言，整段比对不上。
 	sentLines map[string]bool
@@ -180,8 +184,51 @@ func unsentMemoryBlock(log *appendContextLog, block string) string {
 	return strings.Join(kept, "\n")
 }
 
+// clockSentences 把实时时钟那条消息按行、按句号拆成句子，句号留在句尾。
+func clockSentences(content string) [][]string {
+	var lines [][]string
+	for _, line := range strings.Split(content, "\n") {
+		var sentences []string
+		for rest := line; rest != ""; {
+			end := strings.Index(rest, "。")
+			if end < 0 {
+				sentences = append(sentences, rest)
+				break
+			}
+			end += len("。")
+			sentences = append(sentences, rest[:end])
+			rest = rest[end:]
+		}
+		lines = append(lines, sentences)
+	}
+	return lines
+}
+
+// unsentClock 只留实时时钟里上文没有的句子。时钟每轮都变，整段比永远对不上，以前
+// 每轮续接都把「这是机器人所在机器提供的可信实时时间……」和发言者时区的换算说明
+// 整段重发一遍：11-21 生产 swe-2 主回复里平均每条请求叠着两三份。句子是从模板逐字
+// 渲染出来的，带时间、时区这些值的句子每轮不同照发，固定说明发过一次就不再发。
+func unsentClock(log *appendContextLog, content string) string {
+	var kept []string
+	for _, sentences := range clockSentences(content) {
+		var line strings.Builder
+		for _, sentence := range sentences {
+			if !log.clockSentences[strings.TrimSpace(sentence)] {
+				line.WriteString(sentence)
+			}
+		}
+		if strings.TrimSpace(line.String()) != "" {
+			kept = append(kept, line.String())
+		}
+	}
+	return strings.Join(kept, "\n")
+}
+
 // unsentTail 去掉一条尾部消息里上文已经有的部分，返回空串表示整条都不用发。
 func unsentTail(log *appendContextLog, content string) string {
+	if strings.Contains(content, agent.RuntimeClockMarker) {
+		return unsentClock(log, content)
+	}
 	if isCrossGroupLine(content) {
 		if log.seen[content] {
 			return ""
@@ -409,11 +456,11 @@ func sentReplyLines(text string) []string {
 	return lines
 }
 
-// index 从 prefix 算出 seen、sent、sentLines、latest、memory、pieces 这几张表。它们完全由
+// index 从 prefix 算出 seen、sent、sentLines、latest、memory、pieces、clockSentences 这几张表。它们完全由
 // prefix 决定，落盘时只存 prefix，读回来再算一遍；answered 不由 prefix 决定，单独落盘。
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.memory, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}, map[string]bool{}
-	log.sentLines = map[string]bool{}
+	log.sentLines, log.clockSentences = map[string]bool{}, map[string]bool{}
 	if log.answered == nil {
 		log.answered = map[string]bool{}
 	}
@@ -439,6 +486,13 @@ func (log *appendContextLog) index() {
 		}
 		if isHistoryLine(content) || message.Role == llm.RoleAssistant {
 			continue
+		}
+		if message.Role == llm.RoleSystem && strings.Contains(content, agent.RuntimeClockMarker) {
+			for _, sentences := range clockSentences(content) {
+				for _, sentence := range sentences {
+					log.clockSentences[strings.TrimSpace(sentence)] = true
+				}
+			}
 		}
 		for _, paragraph := range strings.Split(content, "\n\n") {
 			log.pieces[strings.TrimSpace(paragraph)] = true

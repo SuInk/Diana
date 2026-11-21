@@ -426,6 +426,38 @@ func TestAppendContextSendsSpeakerToolRulesOnlyWhenTheyChange(t *testing.T) {
 		t.Fatalf("a speaker without the rules must get an explicit empty block: %q", joined)
 	}
 }
+
+// 实时时钟每轮都变，续接时只发带时间的句子，固定说明发过一次就不再发。
+func TestAppendContextSendsOnlyNewClockSentences(t *testing.T) {
+	clock := func(at string) string {
+		return "当前时间：2026-11-21 " + at + " 星期六\n" + agent.RuntimeClockMarker + "2026-11-21 " + at + "（时区 +08，UTC+08:00）。这是可信实时时间；直接据此回答。\n" +
+			"当前发言者所在时区：Asia/Tokyo；他那边现在是 " + at + "。换算由你来做。这条时区记于 2026-11-01（20 天前），不是实时位置。"
+	}
+	turn := func(at, current string) []llm.Message {
+		return []llm.Message{
+			{Role: llm.RoleSystem, Content: "人设头部" + strings.Repeat("。", 2000)},
+			{Role: llm.RoleUser, Content: "[历史 10:00] 甲: 早", CacheBreakpoint: true},
+			{Role: llm.RoleSystem, Content: clock(at)},
+			{Role: llm.RoleUser, Content: current},
+		}
+	}
+	log := appendTestLog(t, turn("17:26:43", "甲: 几点了"), "五点半")
+	continuation := continueFrom(log, turn("17:29:06", "甲: 现在呢"))
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	var got string
+	for _, message := range continuation.Append {
+		if strings.Contains(message.Content, agent.RuntimeClockMarker) {
+			got = message.Content
+		}
+	}
+	want := "当前时间：2026-11-21 17:29:06 星期六\n" + agent.RuntimeClockMarker + "2026-11-21 17:29:06（时区 +08，UTC+08:00）。\n当前发言者所在时区：Asia/Tokyo；他那边现在是 17:29:06。"
+	if got != want {
+		t.Fatalf("clock = %q, want %q", got, want)
+	}
+}
+
 func TestSplitContextBlocksRoundTrips(t *testing.T) {
 	content := "开头一行\n【甲】一\n二\n【乙】三"
 	blocks := splitContextBlocks(content)
