@@ -68,9 +68,11 @@ func (s *SQLiteStore) EnqueueInboundEvent(ctx context.Context, session string, e
 	defer observeTransaction("EnqueueInboundEvent")()
 	defer func() { _ = tx.Rollback() }()
 
-	if duplicate, found, findErr := findDuplicateInboundHistory(ctx, tx, event); findErr != nil {
+	duplicate, found, findErr := findDuplicateInboundHistory(ctx, tx, event)
+	if findErr != nil {
 		return "", false, findErr
-	} else if found {
+	}
+	if found {
 		editApplied := false
 		currentEvent := event
 		if event.Edited && editedInboundSupersedes(event, duplicate.Event) {
@@ -97,6 +99,13 @@ WHERE id = ? AND status = ?
 			s.refreshEditedMessageIndexes(ctx, duplicate.ID, duplicate.Session, currentEvent)
 		}
 		return duplicate.ID, false, nil
+	}
+	// 不是同一条消息的重投，但默认 ID 可能被换号前的老消息占着，见 resolveMessageEventID。
+	// 没有消息号的事件用内容哈希当 ID，本来就不会撞号。
+	if strings.TrimSpace(event.MessageID) != "" {
+		if id, err = resolveMessageEventID(ctx, tx, session, event); err != nil {
+			return "", false, err
+		}
 	}
 
 	createdAt := now.Format(time.RFC3339Nano)
