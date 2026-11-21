@@ -1097,7 +1097,9 @@ func (h *SystemUpdateHandler) changelogList(c *gin.Context) {
 	} else if !cached && strings.EqualFold(owner, defaultReleaseOwner) && strings.EqualFold(repo, defaultReleaseRepo) {
 		releases, err = h.fetchStaticReleaseManifest(c.Request.Context())
 	}
-	releases = newestReleasesFirst(releases, 10)
+	// 不在这里截断：前端按所选通道筛完再取前几条。先截最新 10 条的话，连着十几个
+	// Canary 就会把正式版全挤掉，Release 通道的版本历史和回退范围都只剩当前版本。
+	releases = newestReleasesFirst(releases)
 	if !cached && len(releases) == 0 && err == nil {
 		err = errors.New("尚无版本历史缓存，请点击检查更新")
 	}
@@ -1211,15 +1213,11 @@ func deploymentMode(gitAvailable bool) string {
 	return "release"
 }
 
-// newestReleasesFirst 按发布时间倒序后截取前 limit 个。GitHub 列表接口对同一版本核心的
-// 预发布按字符串排序（canary.9 排在 canary.12 前面），直接截前 10 个会把最新的 Canary
-// 挤到后面甚至截掉，所以要多拉一页再自己排。
-func newestReleasesFirst(releases []ReleaseEntry, limit int) []ReleaseEntry {
+// newestReleasesFirst 按发布时间倒序。GitHub 列表接口对同一版本核心的预发布按字符串
+// 排序（canary.9 排在 canary.12 前面），不自己排的话最新的 Canary 会落到后面。
+func newestReleasesFirst(releases []ReleaseEntry) []ReleaseEntry {
 	sorted := slices.Clone(releases)
 	slices.SortStableFunc(sorted, func(a, b ReleaseEntry) int { return b.Date.Compare(a.Date) })
-	if len(sorted) > limit {
-		sorted = sorted[:limit]
-	}
 	return sorted
 }
 

@@ -30,8 +30,8 @@
         </div>
         <p v-if="updateUnsupportedReason" class="update-unsupported-note">{{ updateUnsupportedReason }}</p>
         <div class="version-hero-meta">
-          <span v-if="checkResult?.latest_published_at">
-            {{ checkResult.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(checkResult.latest_published_at) }}
+          <span v-if="heroPublishedAt">
+            {{ checkResult?.update_available || switchToRelease ? "新版本" : "" }}发布于 {{ formatDateTime(heroPublishedAt) }}
           </span>
           <span v-if="checkResult?.checked_at && !checking" :title="formatDateTime(checkResult.checked_at)">
             {{ formatRelativeTime(checkResult.checked_at) }}检查过
@@ -209,7 +209,7 @@
 
         <template v-else-if="kind === 'releases'">
           <p v-if="!channelReleases.length" class="muted" style="font-size: 12.5px; margin: 0">{{ releases.length ? "当前更新通道暂无可用版本。" : "暂无 Release 记录。" }}</p>
-          <ul v-else class="changelog-list release-list version-history-list" :class="{ 'with-rollback': deploymentMode === 'git' || releaseSelfUpdate }">
+          <ul v-else class="changelog-list release-list version-history-list">
             <li v-for="release in channelReleases" :key="release.tag" class="release-item">
               <div class="release-row">
                 <span class="cluster" style="gap: 7px">
@@ -218,7 +218,6 @@
                   <span v-if="release.prerelease" class="badge warn">预发布</span>
                 </span>
                 <span class="release-side">
-                  <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
                   <span class="release-actions">
                     <button
                       v-if="canRollbackTo(release)"
@@ -241,6 +240,7 @@
                       <Copy :size="14" aria-hidden="true" />
                     </button>
                   </span>
+                  <span class="muted changelog-date">{{ formatDateTime(release.date) }}</span>
                 </span>
               </div>
               <template v-if="releaseNoteLines(release).length">
@@ -408,13 +408,27 @@ const currentTag = computed(() => {
   return raw.split("+")[0].split("（")[0].trim();
 });
 
-// 版本历史只列出所选通道能更新到的版本，规则与服务端挑选更新候选一致；当前运行的
-// 版本总是保留，否则切到 Release 后就找不到自己正在跑的那个 Beta 了。
-const channelReleases = computed(() => releases.value.filter((release) =>
-  release.tag === currentTag.value || releaseAllowedOnChannel(release, policy.value.channel || "release")));
+// 没有新版本时，最新版本可能比当前运行的还旧（Release 通道上跑着 Canary），
+// 这时显示它的发布时间会张冠李戴，改用当前版本自己的发布时间。
+const heroPublishedAt = computed(() => {
+  const result = checkResult.value;
+  if (!result) return "";
+  if (result.update_available || switchToRelease.value || result.latest_version === currentTag.value) {
+    return result.latest_published_at || "";
+  }
+  return releases.value.find((release) => release.tag === currentTag.value)?.date || "";
+});
 
 // 先固定 GitHub 最新 5 个稳定 Release，再判断其中哪些比当前版本旧。
 const rollbackTags = computed(() => latestRollbackReleaseTags(releases.value));
+
+// 版本历史只列出所选通道能更新到的版本，规则与服务端挑选更新候选一致；当前运行的
+// 版本总是保留，否则切到 Release 后就找不到自己正在跑的那个 Beta 了。
+// 后端返回整页（最多 30 条），这里先按通道筛再截：先截再筛会让一串 Canary 把正式版挤没。
+// 回退范围里的稳定版不受 10 条限制，否则 Canary 通道前 10 条全是 Canary，回退按钮无处可放。
+const channelReleases = computed(() => releases.value
+  .filter((release) => release.tag === currentTag.value || releaseAllowedOnChannel(release, policy.value.channel || "release"))
+  .filter((release, index) => index < 10 || rollbackTags.value.has(release.tag)));
 
 function canRollbackTo(release: ReleaseEntry): boolean {
   if (deploymentMode.value !== "git" && !releaseSelfUpdate.value) return false;
@@ -1142,17 +1156,16 @@ a.version-hero-integrity:hover {
   }
 }
 
-/* 固定操作列宽度，让各行日期对齐成一列。 */
+/* 日期贴最右边对齐成一列，按钮放在日期左侧；不给按钮预留空列，
+   否则不能回退的那几行日期会悬在中间。 */
 .release-actions {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
   gap: 4px;
-  min-width: 60px;
 }
 
-.version-history-list.with-rollback .release-actions {
-  min-width: 98px;
+.release-actions:empty {
+  display: none;
 }
 
 
