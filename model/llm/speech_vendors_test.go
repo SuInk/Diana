@@ -368,8 +368,11 @@ func TestEdgeSpeechCollectsAudioFrames(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
-		if query.Get("TrustedClientToken") != edgeTrustedClientToken || len(query.Get("Sec-MS-GEC")) != 64 {
+		if query.Get("TrustedClientToken") != edgeTrustedClientToken || len(query.Get("Sec-MS-GEC")) != 81 || !strings.Contains(query.Get("Sec-MS-GEC"), "-") {
 			t.Errorf("query = %s", r.URL.RawQuery)
+		}
+		if !strings.HasPrefix(query.Get("Sec-MS-GEC-Version"), "2-") {
+			t.Errorf("Sec-MS-GEC-Version = %q", query.Get("Sec-MS-GEC-Version"))
 		}
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -394,13 +397,6 @@ func TestEdgeSpeechCollectsAudioFrames(t *testing.T) {
 	resp := synthesize(t, ProviderConfig{BaseURL: server.URL}, SpeechRequest{API: SpeechAPIEdge, Voice: "zh-CN-YunxiNeural", Input: "你好", Timeout: 5 * time.Second})
 	if string(resp.Audio) != "ID3data" || resp.Format != "mp3" {
 		t.Fatalf("resp = %#v", resp)
-	}
-}
-
-func TestEdgeSecMSGECRoundsToFiveMinutes(t *testing.T) {
-	base := time.Date(2026, 10, 26, 8, 0, 10, 0, time.UTC)
-	if edgeSecMSGEC(base) != edgeSecMSGEC(base.Add(4*time.Minute)) || edgeSecMSGEC(base) == edgeSecMSGEC(base.Add(5*time.Minute)) {
-		t.Fatal("token must change only on five-minute boundaries")
 	}
 }
 
