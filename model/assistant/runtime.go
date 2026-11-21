@@ -1022,6 +1022,7 @@ func NewRuntime(cfg BotConfig, channel Channel, plugins *PluginManager, llmStore
 		botReplyLoopByKey:       map[string]botReplyLoopState{},
 		privateClosingBySession: map[string]*privateClosingState{},
 		groupStopBySession:      map[string]groupStopState{},
+		semanticQueryBreaker:    semanticQueryBreaker{maxCooldown: semanticQueryBreakerMaxCooldown},
 		semanticIndexBreaker:    semanticQueryBreaker{maxCooldown: 15 * time.Minute},
 		activeDirectReplies:     map[string]*activeDirectReply{},
 		proactiveRouteDebounce:  defaultProactiveRouteDebounce,

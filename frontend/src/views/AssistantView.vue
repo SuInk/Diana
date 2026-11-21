@@ -565,13 +565,33 @@
                     </div>
                     <span class="cluster" style="gap: 6px">
                       <button v-if="isMediaRole(role.key) && roleForm[role.key]" type="button" class="btn ghost small" @click="clearRole(role.key)">停用</button>
-                      <button v-if="!roleSingleRoute(role.key) || !modelRoleRoutes(role.key).length" class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
+                      <button v-if="role.key === 'embedding' && form && !embeddingOff(role.key)" type="button" class="btn ghost small" @click="form.semantic_search_enabled = false">关闭</button>
+                      <button v-if="embeddingOff(role.key) && form" type="button" class="btn small primary" @click="form.semantic_search_enabled = true">开启</button>
+                      <button v-if="!embeddingOff(role.key) && (!roleSingleRoute(role.key) || !modelRoleRoutes(role.key).length)" class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
                         <Plus :size="14" aria-hidden="true" />添加
                       </button>
                     </span>
                   </div>
                   <!-- 没单独配置的用途也画成表里的一行，写明默认跟着谁走；添加模型后这一行换成真正的候选。 -->
-                  <div v-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
+                  <!-- 向量嵌入只给语义检索用：关掉就是关掉语义检索，不再调用向量模型；选过的模型留着，开启后照旧。 -->
+                  <div v-if="embeddingOff(role.key)" class="model-route-table-wrap">
+                    <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
+                      <colgroup><col class="model-route-order-col" /><col /></colgroup>
+                      <tbody>
+                        <tr class="model-route-list-row model-route-default-row">
+                          <td class="model-route-order-cell"><span class="model-route-order-number">—</span></td>
+                          <td class="model-route-identity">
+                            <span class="model-route-line">
+                              <PowerOff :size="13" class="model-route-follow-icon" aria-hidden="true" />
+                              <strong class="model-route-follow-name">已关闭</strong>
+                              <span class="model-route-provider">不做语义检索，也不调用向量模型；聊天记录只按关键词搜</span>
+                            </span>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div v-else-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
                     <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
                       <colgroup><col class="model-route-order-col" /><col /></colgroup>
                       <tbody>
@@ -3824,6 +3844,11 @@ function clearModelRouteFilters(): void {
   modelRouteStatusFilter.value = "all";
 }
 
+// 向量嵌入只给语义检索用，「关闭」就是关掉语义检索，和上下文页的开关是同一个设置。
+function embeddingOff(role: RoleKey): boolean {
+  return role === "embedding" && !!form.value && !form.value.semantic_search_enabled;
+}
+
 // 没单独配置、走默认来源的用途。跟随对话不算：它是表里实实在在的一行。
 function modelRoleInherited(role: RoleKey): boolean {
   return !roleForm.value[role] && (role === "media_parse" || role === "embedding" || isPurposeRole(role));
@@ -4285,6 +4310,7 @@ function modelPurposeSummary(role: RoleKey): string {
   const assignment = roleForm.value[role];
   if (isPureFollowChat(assignment)) return "跟随对话";
   if (assignment?.follow_chat) return `跟随对话等 ${modelRoleRoutes(role).length} 个`;
+  if (embeddingOff(role)) return "关闭";
   if (!assignment) return role === "media_parse" ? "跟随视觉理解" : role === "embedding" ? "自动" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
   return assignment.model || "请选择模型";
 }
@@ -4292,7 +4318,7 @@ function modelPurposeSummary(role: RoleKey): string {
 // 左栏每个用途前的健康点：取这个用途所有路由里最差的状态，冷却或近期失败不用点进去就能看到。
 // 跟随别的用途、未启用的不画点。
 function modelPurposeHealth(role: RoleKey): "" | "ok" | "warn" | "err" {
-  if (modelRoleInherited(role) || !roleForm.value[role] || isPureFollowChat(roleForm.value[role])) return "";
+  if (embeddingOff(role) || modelRoleInherited(role) || !roleForm.value[role] || isPureFollowChat(roleForm.value[role])) return "";
   const classes = modelRoleRoutes(role).filter(({ route }) => !route.follow_chat).map(({ route }) => modelRouteHealth(role, route).className);
   return classes.includes("err") ? "err" : classes.includes("warn") ? "warn" : "ok";
 }
@@ -4314,6 +4340,7 @@ const secondaryModelRoleKeys = computed(() => visibleModelRoleRows.map((row) => 
 const secondaryModelRolesProblemCount = computed(() => secondaryModelRoleKeys.value.filter((key) => modelPurposeStatus(key).problem).length);
 
 function modelPurposeStatus(role: RoleKey): { text: string; problem: boolean } {
+  if (embeddingOff(role)) return { text: "关闭", problem: false };
   if (isPureFollowChat(roleForm.value[role])) return { text: "跟随对话", problem: false };
   if (modelRoleInherited(role)) return { text: modelRoleRouteSummary(role).replace("视觉理解", "视觉").replace("后台生成", "后台"), problem: false };
   if (!roleForm.value[role]) return isMediaRole(role) ? { text: "未启用", problem: false } : { text: "未配置", problem: true };
