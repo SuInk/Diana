@@ -685,13 +685,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			// 比不说更糟。
 			if r.cfg.UnfinishedClaimReview && claimReviews < 2 {
 				claimReviews++
-				if unfinished := r.reviewUnfinishedClaim(ctx, req.Messages, action.Content, steps); unfinished != "" {
+				verdict := r.reviewUnfinishedClaim(ctx, req.Messages, action.Content, steps)
+				if unfinished := verdict.Unfinished; unfinished != "" {
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复说了却没做："+unfinished)
 					if claimReviews == 1 {
 						messages = appendToolRepair(messages, resp, lastText, unfinishedClaimRepair(unfinished))
 						continue
 					}
 					return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: unfinishedClaimReason + unfinished}, "unfinished_claim")
+				}
+				// 漏答只退回第一次，第二次照发：11-21 问「幸福者退让的来源和含义」只答了来源，
+				// 素材里明明有含义。
+				if verdict.Missing != "" && claimReviews == 1 {
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复漏答："+verdict.Missing)
+					messages = appendToolRepair(messages, resp, lastText, missingAnswerRepair(verdict.Missing))
+					continue
 				}
 			}
 			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就

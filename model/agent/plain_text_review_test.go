@@ -17,7 +17,7 @@ func TestUnfinishedClaimReviewSeesAvailableTools(t *testing.T) {
 	client := &scriptedClient{responses: []string{`{"unfinished":"我这没沙盒跑不了"}`}}
 	tool := &longDescriptionTestTool{description: "在工作区容器里用 bash 跑命令。python3/node 都有"}
 	runner := &Runner{client: client, registry: NewToolRegistry(tool)}
-	got := runner.reviewUnfinishedClaim(context.Background(), []llm.Message{{Role: llm.RoleUser, Content: "帮我算 e*pi 到 1000 位"}}, "我这没沙盒跑不了", nil)
+	got := runner.reviewUnfinishedClaim(context.Background(), []llm.Message{{Role: llm.RoleUser, Content: "帮我算 e*pi 到 1000 位"}}, "我这没沙盒跑不了", nil).Unfinished
 	if got != "我这没沙盒跑不了" {
 		t.Fatalf("verdict = %q", got)
 	}
