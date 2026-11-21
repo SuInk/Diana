@@ -8814,11 +8814,9 @@ func (r *Runtime) runClaimedRSSWatch(ctx context.Context, item Reminder) (time.T
 			notices = append(notices, notice)
 		}
 	}
-	// 多个来源命中也只发一条：抬头分段写清是谁，末行留一个订阅 ID。
-	message := ""
-	if len(notices) > 0 {
-		message = strings.Join(notices, "\n\n") + "\n订阅 " + item.ID
-	}
+	// 多个来源命中也只发一条：抬头分段写清是谁。不带订阅 ID：群里的人用不上，
+	// 退订、改规则时机器人用 list 按账号找。
+	message := strings.Join(notices, "\n\n")
 	if err := r.storeRSSWatchProgress(item.ID, sources, message); err != nil {
 		return startedAt, err
 	}
@@ -8933,7 +8931,7 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 // 以前抬头是「RSS 订阅 <ID>：<来源>」，而且单独占一条消息发。三个问题：平台明
 // 明存在 FeedSource 里却没写出来，推特订阅也显示成「RSS 订阅」；订阅 ID 是退订
 // 时才用得上的东西，却顶在最显眼的位置；一条通知拆成两条刷屏。现在平台和账号
-// 放抬头，ID 退到末行，正文接在抬头后面同一条发出。多来源订阅每段各带一个抬头，
+// 放抬头，ID 不再发进聊天，正文接在抬头后面同一条发出。多来源订阅每段各带一个抬头，
 // 这样一条消息里也分得清哪段是谁发的。
 func rssWatchNoticeHeader(source ReminderFeedSource, feedName string) string {
 	feedName = strings.TrimSpace(feedName)
