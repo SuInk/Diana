@@ -218,7 +218,8 @@ func TestResolverFailuresDoNotClaimDedupeKeys(t *testing.T) {
 	}
 }
 
-func TestTwitterFailureReportsTechnicalErrors(t *testing.T) {
+// 下载器的原始报错只写运行日志；群里只说下载失败，也不去猜代理、上限之类的原因。
+func TestTwitterFailureHidesTechnicalErrors(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell fixture")
 	}
@@ -233,9 +234,12 @@ func TestTwitterFailureReportsTechnicalErrors(t *testing.T) {
 		return twitterPost{}, false
 	}
 	result := plugin.resolveTwitterMedia(context.Background(), PluginRequest{}, "https://x.com/performaiEN/status/2115726834834837644")
-	for _, want := range []string{"host resolution failed", "i/o timeout", "No video could be found in this tweet"} {
-		if !strings.Contains(result.Context, want) {
-			t.Fatalf("missing %q in %s", want, result.Context)
+	if !strings.Contains(result.Context, "媒体下载失败。") {
+		t.Fatalf("missing failure notice in %s", result.Context)
+	}
+	for _, leaked := range []string{"host resolution failed", "i/o timeout", "No video could be found in this tweet"} {
+		if strings.Contains(result.Context, leaked) {
+			t.Fatalf("technical error %q leaked into %s", leaked, result.Context)
 		}
 	}
 	if !result.Failed || validSharedSocialResult(result) {
@@ -321,5 +325,23 @@ func TestResolveDouyinMediaSkipsOverlongVideo(t *testing.T) {
 	}
 	if result.Failed || !strings.Contains(result.Context, "超过限制") || strings.Contains(result.Context, "下载失败") {
 		t.Fatalf("result = %#v", result)
+	}
+}
+
+// yt-dlp 的英文报错只进运行日志，不能跟着解析结果发进群。
+func TestAttachDownloadedVideoHidesDownloaderError(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	plugin.mediaDownloader = func(ctx context.Context, _ string) string {
+		recordResolverFailure(ctx, "yt-dlp 下载", "exit status 1: ERROR: [Douyin] 1: Fresh cookies (not necessarily logged in) are needed")
+		return ""
+	}
+	result := plugin.attachDownloadedVideo(context.Background(), PluginRequest{}, "https://www.douyin.com/video/12345", "douyin", resolverSocialResult{Handled: true, Context: "[抖音] 作品标题"})
+	if !result.Failed || !strings.HasSuffix(result.Context, "媒体下载失败。") {
+		t.Fatalf("result = %#v", result)
+	}
+	for _, leaked := range []string{"yt-dlp", "exit status", "Fresh cookies"} {
+		if strings.Contains(result.Context, leaked) {
+			t.Fatalf("解析结果带出了下载器原文 %q：%s", leaked, result.Context)
+		}
 	}
 }

@@ -451,7 +451,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
 	result.Failed = true
-	result.Context += "\n媒体下载失败：" + reason
+	result.Context += resolverPublicDownloadFailure
 	recordResolverMediaLog(ctx, req, raw, "douyin", false, reason)
 	return result
 }
@@ -555,7 +555,7 @@ func (p *ResolverPlugin) attachDownloadedVideo(ctx context.Context, req PluginRe
 	}
 	reason := resolverDownloadFailureHint(ctx, raw)
 	result.Failed = true
-	result.Context += "\n媒体下载失败：" + reason
+	result.Context += resolverPublicDownloadFailure
 	recordResolverMediaLog(ctx, req, raw, platform, false, reason)
 	return result
 }
@@ -688,6 +688,11 @@ func xiaohongshuMediaImageURLs(note map[string]any) []string {
 }
 
 // 只呈现实际捕获的技术错误；没有细节时明确说明，不根据配置猜原因。
+// resolverPublicDownloadFailure 是下载失败时进群的说法。下载器的原始报错（yt-dlp
+// 的英文 stderr、HTTP 状态这些）只写运行日志，不进解析结果：结果会原样发成转发卡片，
+// 模型也会照着复述。
+const resolverPublicDownloadFailure = "\n媒体下载失败。"
+
 func resolverDownloadFailureHint(ctx context.Context, raw string) string {
 	if detail := resolverFailureDetail(ctx); detail != "" {
 		return detail
