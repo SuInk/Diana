@@ -119,3 +119,14 @@ func TestMaiBotSplitMergesShortLinesToThree(t *testing.T) {
 		t.Fatalf("lost text: %q", got)
 	}
 }
+
+// 模型自己用 <diana-message/> 分了条就照着发：11-20 线上两段各被再拆，发成了五条。
+func TestMaiBotSplitRespectsExplicitMessageMarkers(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	reply := "这视频说的是真的，原文我读了：有人发推夸新模型的对话体验，说只要订阅能在任何工具里用就回来了，官方回了一句十二月二号迈出第一步<diana-message/>意思是十二月二号开始把订阅额度开放给第三方工具用，但具体支持哪些、怎么开没说。底下已经有人求别只给一家了，等十二月二号看落地范围"
+	got := splitEventChatReply(reply, cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) != 2 {
+		t.Fatalf("explicit markers should give exactly 2 messages, got %d: %q", len(got), got)
+	}
+}
