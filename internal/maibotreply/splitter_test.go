@@ -30,10 +30,17 @@ func TestSplitSentencesKeepsQuotesColonsAndLatinSpaces(t *testing.T) {
 		text string
 		want []string
 	}{
-		"quote":      {"他说「先这样，回头再改」然后走了", []string{"他说「先这样，回头再改」然后走了"}},
-		"colon":      {"结论：，这个不行", []string{"结论：，这个不行"}},
-		"latin pair": {"用 Go 1.26 跑的", []string{"用", "Go 1.26", "跑的"}},
-		"dash":       {"上午 - 下午都在", []string{"上午 - 下午都在"}},
+		"quote": {"他说「先这样，回头再改」然后走了", []string{"他说「先这样，回头再改」然后走了"}},
+		// 收引号和开引号不是同一个字符：引号关上以后照常断句。
+		"after corner quote": {"他说「先这样，回头再改」，然后走了", []string{"他说「先这样，回头再改」", "然后走了"}},
+		"after curly quote":  {"他回了句“行，你定”，就下线了", []string{"他回了句“行，你定”", "就下线了"}},
+		"nested quote":       {"「他说『好，走』，我就走了」，后来", []string{"「他说『好，走』，我就走了」", "后来"}},
+		"apostrophe":         {"it's fine，没事", []string{"it's fine", "没事"}},
+		// 11-21 线上：英文引号里的撇号被当成收引号，引号提前关上，提示词从逗号处拆成两条。
+		"apostrophe in quote": {"提示词是：\"keep each character's hair color recognizable, dynamic funny scene\"，过了的就是这版", []string{"提示词是：\"keep each character's hair color recognizable, dynamic funny scene\"", "过了的就是这版"}},
+		"colon":               {"结论：，这个不行", []string{"结论：，这个不行"}},
+		"latin pair":          {"用 Go 1.26 跑的", []string{"用", "Go 1.26", "跑的"}},
+		"dash":                {"上午 - 下午都在", []string{"上午 - 下午都在"}},
 	} {
 		got := texts(SplitSentences(tc.text, never))
 		if strings.Join(got, "|") != strings.Join(tc.want, "|") {
