@@ -39,7 +39,10 @@ func (r *Runtime) noteRouteCall(ctx context.Context, group string, profile llm.P
 }
 
 // imageRouteProfile 还原生图候选对应的提供商配置档：冷却表按配置档 ID 和模型记，
-// 和智能切换排序时查的是同一把键。
+// 和智能切换排序时查的是同一把键。模型取生图模型：没单独配生图用途时，候选是对话
+// 配置档，Config.Model 是对话模型，拿它做键会把生图的成败记到对话模型头上。
 func imageRouteProfile(cfg llm.ProviderConfig) llm.Profile {
-	return llm.Profile{ID: cfg.RequestLimitID, Config: cfg}
+	profile := llm.Profile{ID: cfg.RequestLimitID, Config: cfg}
+	profile.Config.Model = cfg.ImageModelWithDefault()
+	return profile
 }

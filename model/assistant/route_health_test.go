@@ -56,11 +56,29 @@ func TestSmartImageRoutingSkipsCoolingRoute(t *testing.T) {
 	roles := map[string]ModelRole{llm.GroupImage: {ProfileID: "a", Model: "img-a", Fallbacks: []ModelRole{{ProfileID: "b", Model: "img-b"}}}}
 	r := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	ctx := context.Background()
+	// 生图候选的配置和 resolveImageProviderConfigs 一样：生图模型就是路由选的模型。
+	primary := set.Profiles[0].Config
+	primary.ImageModel = primary.Model
 	for range 3 {
-		r.noteRouteCall(ctx, llm.GroupImage, imageRouteProfile(set.Profiles[0].Config), fmt.Errorf("upstream: %w", context.DeadlineExceeded), false)
+		r.noteRouteCall(ctx, llm.GroupImage, imageRouteProfile(primary), fmt.Errorf("upstream: %w", context.DeadlineExceeded), false)
 	}
 	profiles, err := r.scheduledRoleProfiles(ctx, "image", set, llm.GroupImage, normalizeModelRoles(roles))
 	if err != nil || len(profiles) != 2 || profiles[0].ID != "b" {
 		t.Fatalf("profiles=%v err=%v; the cooling primary must move behind the fallback", profiles, err)
+	}
+}
+
+// 没单独配生图用途时，候选是对话配置档：生图失败要记在生图模型上，不能把对话模型冷却掉。
+func TestImageCooldownDoesNotHitChatModel(t *testing.T) {
+	r := &Runtime{}
+	cfg := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "chat-model", ImageModel: "gpt-image", RequestLimitID: "p"}
+	for range 3 {
+		r.noteRouteCall(context.Background(), llm.GroupImage, imageRouteProfile(cfg), fmt.Errorf("upstream: %w", context.DeadlineExceeded), false)
+	}
+	chat := llm.Profile{ID: "p", Config: llm.ProviderConfig{Model: "chat-model"}}
+	image := llm.Profile{ID: "p", Config: llm.ProviderConfig{Model: "gpt-image"}}
+	health := r.llmCooldowns.snapshot([]llm.Profile{chat, image})
+	if health[0].remaining > 0 || health[1].remaining == 0 {
+		t.Fatalf("chat cooling=%v image cooling=%v", health[0].remaining, health[1].remaining)
 	}
 }

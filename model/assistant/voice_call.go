@@ -225,7 +225,11 @@ func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime
 	note := r.mediaRouteNoter(ctx, mediaSlotTTS)
 	for _, route := range routes {
 		err := r.synthesizeCallSpeech(ctx, route, text, c.streamWAV, tracked)
-		note(route, err)
+		// 已经交出过音频再失败，多半是通话那头写不进去（对方挂了、连接断了），不是
+		// 这条语音路由的问题，不记冷却。
+		if err == nil || !emitted {
+			note(route, err)
+		}
 		if err == nil {
 			return nil
 		}
