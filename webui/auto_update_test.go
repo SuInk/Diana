@@ -73,7 +73,8 @@ func TestChangelogPrefersReleases(t *testing.T) {
 }
 
 // TestChangelogOrdersReleasesByPublishTime 复现 GitHub 把 canary.2 排在 canary.12 前面的返回顺序，
-// 版本历史要按发布时间倒序，且最新的那个不能因为只取前 10 个被截掉。
+// 版本历史要按发布时间倒序；连着十几个 Canary 也不能把更早的正式版截掉，
+// 否则 Release 通道筛完只剩当前版本。
 func TestChangelogOrdersReleasesByPublishTime(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	var perPage string
@@ -83,6 +84,7 @@ func TestChangelogOrdersReleasesByPublishTime(t *testing.T) {
 		for _, n := range []int{9, 8, 7, 6, 5, 4, 3, 2, 12, 11, 10, 1} {
 			items = append(items, fmt.Sprintf(`{"tag_name":"v1.1.0-canary.%d","prerelease":true,"published_at":"2026-07-26T%02d:00:00Z"}`, n, n))
 		}
+		items = append(items, `{"tag_name":"v1.0.0","prerelease":false,"published_at":"2026-07-25T00:00:00Z"}`)
 		_, _ = w.Write([]byte("[" + strings.Join(items, ",") + "]"))
 	}))
 	defer github.Close()
@@ -110,7 +112,7 @@ func TestChangelogOrdersReleasesByPublishTime(t *testing.T) {
 	for _, release := range payload.Releases {
 		tags = append(tags, strings.TrimPrefix(release.Tag, "v1.1.0-"))
 	}
-	want := "canary.12 canary.11 canary.10 canary.9 canary.8 canary.7 canary.6 canary.5 canary.4 canary.3"
+	want := "canary.12 canary.11 canary.10 canary.9 canary.8 canary.7 canary.6 canary.5 canary.4 canary.3 canary.2 canary.1 v1.0.0"
 	if got := strings.Join(tags, " "); got != want {
 		t.Fatalf("order = %s\nwant  = %s", got, want)
 	}
