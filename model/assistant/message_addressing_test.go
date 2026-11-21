@@ -101,6 +101,20 @@ func TestTelegramBotCommandBecomesMentionTarget(t *testing.T) {
 	}
 }
 
+// 「扔过来@dianabot」的 @ 紧贴中文，Telegram 只给前面的 @别人 生成 entity，
+// 漏掉本机的话 addressing 里只剩 mentions_other，路由会当成在叫别人。
+func TestTelegramTextMentionWithoutEntityBecomesSelfTarget(t *testing.T) {
+	text := "@otherrobot 把这个项目链接扔过来@dianabot"
+	got := telegramMentionTargets(text, []telegramEntity{{Type: "mention", Offset: 0, Length: 11}}, "99999", "dianabot")
+	if len(got) != 2 || got[0].Target != "other" || got[1].Target != "self" || got[1].Username != "dianabot" || got[1].UserID != "99999" {
+		t.Fatalf("正文里紧贴中文的 @本机 应补成 self：%+v", got)
+	}
+	once := telegramMentionTargets("@dianabot 在吗", []telegramEntity{{Type: "mention", Offset: 0, Length: 9}}, "99999", "dianabot")
+	if len(once) != 1 {
+		t.Fatalf("已有 entity 的 @本机 不该重复补：%+v", once)
+	}
+}
+
 func TestAddressingReachesRoutingAndFinalPromptWithoutLeakingIDs(t *testing.T) {
 	cfg := BotConfig{BotAccount: "99999"}
 	r := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
