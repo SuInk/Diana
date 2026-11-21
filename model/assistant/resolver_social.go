@@ -436,6 +436,11 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 		return result
 	}
 	result.ImageURLs = singleURL(firstNonEmptyString(detail.Video.Cover.URLList))
+	if douyinDetailTooLong(ctx, detail) {
+		result.Context += fmt.Sprintf("\n视频时长 %d 分钟，超过限制（%d 秒），未下载。", detail.Video.Duration/60000, resolverVideoMaxDuration(ctx))
+		recordResolverMediaLog(ctx, req, raw, "douyin", false, "duration limit")
+		return result
+	}
 	if p.videoDownloader != nil || p.mediaDownloader != nil {
 		return p.attachDownloadedVideo(ctx, req, raw, "douyin", result)
 	}
@@ -566,6 +571,9 @@ type douyinMediaDetail struct {
 		PlayAddr struct {
 			URI string `json:"uri"`
 		} `json:"play_addr"`
+		// Duration 单位是毫秒。
+		Duration int64                `json:"duration"`
+		BitRate  []douyinVideoBitRate `json:"bit_rate"`
 	} `json:"video"`
 	Images []struct {
 		URLList []string `json:"url_list"`

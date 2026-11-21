@@ -121,12 +121,78 @@ func TestDouyinDetailIsImagePostByImages(t *testing.T) {
 }
 
 func TestDouyinPlayAddrURL(t *testing.T) {
-	if got := douyinPlayAddrURL("v0200fg10000dan6mufog65kc7fg7hr0"); !strings.Contains(got, "video_id=v0200fg10000dan6mufog65kc7fg7hr0") {
-		t.Fatalf("video_id 形式应拼到 play 接口，实际 %s", got)
+	if got := douyinPlayAddrURL("v0200fg10000dan6mufog65kc7fg7hr0", 720); !strings.Contains(got, "video_id=v0200fg10000dan6mufog65kc7fg7hr0") || !strings.Contains(got, "ratio=720p") {
+		t.Fatalf("video_id 形式应按清晰度上限拼到 play 接口，实际 %s", got)
+	}
+	if got := douyinPlayAddrURL("v0200", 0); !strings.Contains(got, "ratio=1080p") {
+		t.Fatalf("不限清晰度时应取 1080p，实际 %s", got)
 	}
 	// 已经是完整地址时再拼一次，play 接口只会回 0 字节。
 	direct := "https://sf11-cdn-tos.douyinstatic.com/obj/ies-music/7640489378485209865.mp3"
-	if got := douyinPlayAddrURL(direct); got != direct {
+	if got := douyinPlayAddrURL(direct, 720); got != direct {
 		t.Fatalf("完整地址应原样下载，实际 %s", got)
+	}
+}
+
+func douyinTestBitRate(gear, format string, h265, width, height int, size int64) douyinVideoBitRate {
+	var rate douyinVideoBitRate
+	rate.GearName, rate.Format, rate.IsH265 = gear, format, h265
+	rate.BitRate = size / 1000
+	rate.PlayAddr.Width, rate.PlayAddr.Height, rate.PlayAddr.DataSize = width, height, size
+	rate.PlayAddr.URLList = []string{"https://example.invalid/" + gear + "-" + format}
+	return rate
+}
+
+// 24 分钟竖屏长视频：1080p 225MB 超过 200MB 上限，要退到上限内最清楚的 mp4 档。
+func TestDouyinVideoCandidatesRespectLimits(t *testing.T) {
+	rates := []douyinVideoBitRate{
+		douyinTestBitRate("normal_1080_0", "mp4", 0, 1080, 1920, 225271537),
+		douyinTestBitRate("normal_1080_0", "dash", 0, 1080, 1920, 215762301),
+		douyinTestBitRate("normal_540_0", "mp4", 0, 576, 1024, 188618114),
+		douyinTestBitRate("normal_720_0", "mp4", 0, 720, 1280, 173588839),
+		douyinTestBitRate("720_1_1", "mp4", 1, 720, 1280, 132794962),
+		douyinTestBitRate("low_720_0", "dash", 0, 720, 1280, 148699328),
+		douyinTestBitRate("540_2_1", "mp4", 1, 576, 1024, 65762738),
+	}
+	got := douyinVideoCandidates(rates, 720, 200<<20)
+	var gears []string
+	for _, rate := range got {
+		if rate.Format == "dash" {
+			t.Fatalf("dash 档不能当成片下载：%#v", rate)
+		}
+		gears = append(gears, rate.GearName)
+	}
+	if want := "normal_720_0,720_1_1,normal_540_0,540_2_1"; strings.Join(gears, ",") != want {
+		t.Fatalf("候选顺序 = %v，想要 %s", gears, want)
+	}
+
+	if got := douyinVideoCandidates(rates, 0, 200<<20); len(got) == 0 || got[0].GearName != "normal_720_0" {
+		t.Fatalf("不限清晰度时 1080p 超大小，应退到 720p，实际 %#v", got)
+	}
+	if got := douyinVideoCandidates(rates, 0, 0); got[0].GearName != "normal_1080_0" {
+		t.Fatalf("都不限时应取 1080p，实际 %#v", got)
+	}
+	if got := douyinVideoCandidates(rates, 720, 50<<20); len(got) != 0 {
+		t.Fatalf("没有档在大小上限内时应为空，实际 %#v", got)
+	}
+}
+
+func TestDouyinDetailTooLong(t *testing.T) {
+	ctx := withResolverMediaLimits(context.Background(), 200, 15*60, 720)
+	var detail douyinMediaDetail
+	detail.Video.Duration = 1434645
+	if !douyinDetailTooLong(ctx, detail) {
+		t.Fatal("24 分钟应超过 15 分钟上限")
+	}
+	if path := downloadDouyinMediaDetailFile(ctx, detail); path != "" {
+		t.Fatalf("超时长不该下载，实际 %q", path)
+	}
+	detail.Video.Duration = 60000
+	if douyinDetailTooLong(ctx, detail) {
+		t.Fatal("1 分钟不该超限")
+	}
+	detail.Video.Duration = 0
+	if douyinDetailTooLong(ctx, detail) {
+		t.Fatal("没给时长时不拦")
 	}
 }

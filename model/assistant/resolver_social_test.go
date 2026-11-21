@@ -298,3 +298,28 @@ func TestResolverSocialMediaKeepsMetadataWhenDownloadHitsBudget(t *testing.T) {
 		t.Fatalf("result = %#v", result)
 	}
 }
+
+func TestResolveDouyinMediaSkipsOverlongVideo(t *testing.T) {
+	plugin := NewResolverPlugin(nil)
+	plugin.douyinDetailFetcher = func(context.Context, string) (douyinMediaDetail, bool, string) {
+		var detail douyinMediaDetail
+		detail.AwemeID = "12345"
+		detail.Desc = "长视频"
+		detail.Video.PlayAddr.URI = "v0200"
+		detail.Video.Duration = 24 * 60 * 1000
+		return detail, true, ""
+	}
+	downloaded := false
+	plugin.mediaDownloader = func(context.Context, string) string {
+		downloaded = true
+		return ""
+	}
+	ctx := withResolverMediaLimits(context.Background(), 200, 15*60, 720)
+	result := plugin.resolveDouyinMedia(ctx, PluginRequest{}, "https://www.douyin.com/video/12345", 9)
+	if downloaded {
+		t.Fatal("超时长的视频不该下载")
+	}
+	if result.Failed || !strings.Contains(result.Context, "超过限制") || strings.Contains(result.Context, "下载失败") {
+		t.Fatalf("result = %#v", result)
+	}
+}
