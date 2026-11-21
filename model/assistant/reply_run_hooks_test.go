@@ -15,7 +15,7 @@ import (
 func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
 	for _, rule := range []string{replyUnclosedBracketRule, "只调整括号里的补充，保留句末语气符号。"} {
 		cfg := BotConfig{PromptOverrides: PromptOverrides{promptReplyUnclosedBracketSpec.Key: rule}}
-		hooks := newReplyRunHooks(cfg)
+		hooks := newReplyRunHooks("", cfg)
 		req := llm.GenerateRequest{Messages: []llm.Message{
 			{Role: llm.RoleSystem, Content: "old context", CacheBreakpoint: true},
 			{Role: llm.RoleUser, Content: "current"},
@@ -33,7 +33,7 @@ func TestReplyRunHooksRefreshExpressionBoundary(t *testing.T) {
 }
 
 func TestReplyRunHooksUseActualExecutionAndKeepPrivateInputsOut(t *testing.T) {
-	hooks := newReplyRunHooks()
+	hooks := newReplyRunHooks("")
 	ctx := context.Background()
 	request := llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleSystem, Content: "stable", CacheBreakpoint: true}, {Role: llm.RoleUser, Content: "current"}}}
 	first, err := hooks.PrepareRequest(ctx, request)
@@ -76,7 +76,7 @@ func TestReplyRunHooksAddRichTextLayoutOnlyWhereRendered(t *testing.T) {
 		platform string
 		want     bool
 	}{{PlatformTelegram, true}, {PlatformOneBotV11, false}} {
-		hooks := newReplyRunHooks(BotConfig{Platform: tc.platform})
+		hooks := newReplyRunHooks("", BotConfig{Platform: tc.platform})
 		got, err := hooks.PrepareRequest(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "current"}}})
 		if err != nil {
 			t.Fatal(err)
@@ -84,6 +84,24 @@ func TestReplyRunHooksAddRichTextLayoutOnlyWhereRendered(t *testing.T) {
 		last := got.Messages[len(got.Messages)-1].Content
 		if strings.Contains(last, replyRichTextLayoutRule) != tc.want {
 			t.Fatalf("%s: rich text layout check present=%v, want %v", tc.platform, !tc.want, tc.want)
+		}
+	}
+}
+
+// 闲聊表态只贴在群聊的尾部检查里，私聊不加。
+func TestReplyRunHooksAddCasualTakeOnlyInGroups(t *testing.T) {
+	for _, tc := range []struct {
+		kind EventKind
+		want bool
+	}{{EventKindGroup, true}, {EventKindPrivate, false}} {
+		hooks := newReplyRunHooks(tc.kind, BotConfig{Platform: PlatformTelegram})
+		got, err := hooks.PrepareRequest(context.Background(), llm.GenerateRequest{Messages: []llm.Message{{Role: llm.RoleUser, Content: "current"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := got.Messages[len(got.Messages)-1].Content
+		if strings.Contains(last, replyCasualTakeRule) != tc.want {
+			t.Fatalf("%s: casual take present=%v, want %v", tc.kind, !tc.want, tc.want)
 		}
 	}
 }

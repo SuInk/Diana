@@ -144,6 +144,14 @@ const replyProportionRule = "按当前这一问给最小但足够的回答，直
 // 「•」，平均字数 419→409 没有变长。
 const replyRichTextLayoutRule = "这条会按 Markdown 渲染成富文本。讲资料、做对比、分几件事说的时候：每件事单独一段，段与段之间空一行；每段开头写一个 **加粗的短标题**；一段里并列的几项用「- 」列表，不用「•」。一两句话的闲聊照常说，不加格式。"
 
+// replyCasualTakeRule 贴在群聊尾部的输出前检查里。人设写着「很少超过 20 字、先甩反应」，
+// 当前消息后的群聊篇幅注解也写了「闲聊几十字就够」，swe-2 照样把每句闲聊写成 40–80 字的
+// 「结论 + 理由 + 补充」，像在给群友讲解，只学到句尾的「（」。11-21 用 10 条 Telegram 闲聊
+// 回放：把篇幅注解改写成「先表态、不科普」反而更长（41→65 字），尾部重申整段人设口吻也没变；
+// 这一句贴在最后，盲评人设符合度 2.5→3.7、像真人 4/10→8/10，平均字数 34→24；要查资料、
+// 找链接的两条照常给列表或去调搜索。
+const replyCasualTakeRule = "这条如果是闲聊：只回一句你自己的反应或态度（附和、不服、吐槽、好奇、羡慕），20 字以内；不解释原因、不补背景、不复述群里已经说过的事实。真有第二句想说就换行另起一条。问技术、要办法、让你查东西时不受这条限制。"
+
 // 回复表达规则的覆盖登记。带发送控制标记（分条、消息内换行、模式前缀）的几段，
 // 标记由发送层解析，界面上改措辞时标记本身必须原样保留。
 const replyMarkerUsage = "里面的发送控制标记要原样保留，写错了分条和换行会失效。"
@@ -164,6 +172,7 @@ var (
 	// replyDeliveryChoiceRule 定义在 reply_delivery_mode.go，只在这里用，登记也放这里。
 	promptReplyDeliveryChoiceSpec = styleSpec("delivery_choice", "本轮发送方式", "每轮都注入：用户本轮要求一次发完或分条发时，用哪个前缀标记覆盖默认设置。"+replyMarkerUsage, replyDeliveryChoiceRule)
 	promptReplyRichTextLayoutSpec = styleSpec("rich_text_layout", "富文本排版", "只在 Telegram 这类会渲染 Markdown 的平台每轮注入：讲资料分几件事时分段、加粗小标题、用列表。", replyRichTextLayoutRule)
+	promptReplyCasualTakeSpec     = styleSpec("casual_take", "闲聊表态", "只在群聊每轮注入：闲聊只回一句自己的反应或态度，20 字以内，不解释、不复述；查资料、要办法不受限。", replyCasualTakeRule)
 	promptReplyProportionSpec     = styleSpec("proportion", "回答的篇幅", "每轮注入：按这一问给最小但足够的回答，不罗列参考链接。", replyProportionRule)
 )
 

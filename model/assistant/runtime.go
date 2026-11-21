@@ -5126,7 +5126,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			runCtx, requestRecorder = withReplyRequestRecorder(runCtx)
 		}
 		resp, err := agentRunner.Run(agent.WithCallerIdentity(runCtx, identity), agent.Request{
-			Hooks:         newReplyRunHooks(cfg),
+			Hooks:         newReplyRunHooks(event.Kind, cfg),
 			Messages:      messages,
 			TraceID:       traceID,
 			Observer:      observer,
