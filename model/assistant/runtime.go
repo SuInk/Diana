@@ -2219,7 +2219,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	// 本群的任务，发回设置处的照常执行。
 	r.dispatchEventTriggers(ctx, event, text, event.mutedJudgeOnly == "")
 	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
-	if r.isOwnerContextResetCommand(event, text) && r.admits(r.effectiveConfigForEvent(event), event) {
+	if (r.isOwnerContextResetCommand(event, text) || r.isRecallCommand(event, text)) && r.admits(r.effectiveConfigForEvent(event), event) {
 		return event, text, true, "replied"
 	}
 	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
@@ -4027,6 +4027,16 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 	// 本地重置命令不需要加载旧上下文、调用模型或登记续聊状态。
 	if r.isOwnerContextResetCommand(event, text) {
 		reply, _ := r.handleOwnerCommand(event, r.cleanInput(event, text))
+		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
+			return "", err
+		}
+		return reply, nil
+	}
+	// /recall 同理：固定动作，不加载上下文也不调模型；成功时不回话。
+	if reply, handled := r.handleRecallCommand(ctx, event, text); handled {
+		if reply == "" {
+			return "", nil
+		}
 		if err := r.send(withoutReplyTriggerGate(ctx), event, reply); err != nil {
 			return "", err
 		}
