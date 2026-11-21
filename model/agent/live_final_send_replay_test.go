@@ -93,7 +93,7 @@ func TestLiveFinalSendReplay(t *testing.T) {
 		if onlySendCalls(first.ToolCalls) {
 			action := finalizeAction(first.ToolCalls, first.Text)
 			if !action.Silent {
-				unfinished := runner.reviewUnfinishedClaim(context.Background(), req.Messages, action.Content, nil)
+				unfinished := runner.reviewUnfinishedClaim(context.Background(), req.Messages, action.Content, nil).Unfinished
 				line += " | 复核「" + unfinished + "」"
 				if unfinished != "" {
 					req.Messages = appendToolRepair(req.Messages, first, first.Text, unfinishedClaimRepair(unfinished))
@@ -104,7 +104,7 @@ func TestLiveFinalSendReplay(t *testing.T) {
 						line += " | 第二步 " + describe(second)
 						if onlySendCalls(second.ToolCalls) {
 							if again := finalizeAction(second.ToolCalls, second.Text); !again.Silent {
-								line += " | 再复核「" + runner.reviewUnfinishedClaim(context.Background(), req.Messages, again.Content, nil) + "」"
+								line += " | 再复核「" + runner.reviewUnfinishedClaim(context.Background(), req.Messages, again.Content, nil).Unfinished + "」"
 							}
 						}
 					}

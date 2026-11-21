@@ -314,6 +314,36 @@ func TestUnfinishedClaimReviewBouncesSendThenSendsResult(t *testing.T) {
 	}
 }
 
+// 漏答对方问到的事：第一次退回让它补上，第二次复核还说漏答也照发，不因漏答静默。
+func TestClaimReviewBouncesMissingAnswerOnce(t *testing.T) {
+	client := &mixedReplyClient{responses: []*llm.GenerateResponse{
+		{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "出自网络"}}}},
+		{Text: `{"unfinished":"","missing":"含义"}`},
+		{ToolCalls: []llm.ToolCall{{ID: "s2", Name: finalizeToolName, Arguments: map[string]any{"text": "出自网络，意思是先退一步"}}}},
+		{Text: `{"unfinished":"","missing":"含义"}`},
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true, UnfinishedClaimReview: true}, NewToolRegistry(&recordingSearchTool{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "这个梗的来源和含义"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Silent || resp.Text != "出自网络，意思是先退一步" || len(client.requests) != 4 {
+		t.Fatalf("requests=%d response=%#v", len(client.requests), resp)
+	}
+	var bounce string
+	for _, message := range client.requests[2].Messages {
+		if message.Role == llm.RoleTool && message.ToolCallID == "s1" {
+			bounce = message.Content
+		}
+	}
+	if !strings.Contains(bounce, missingAnswerRepair("含义")) {
+		t.Fatalf("send was not bounced with the missing question: %q", bounce)
+	}
+}
+
 // 没开复核（子任务等调用方）时 send 照常收尾，不多花一次调用。
 func TestSendWithoutClaimReviewFinishesDirectly(t *testing.T) {
 	client := &mixedReplyClient{responses: []*llm.GenerateResponse{
