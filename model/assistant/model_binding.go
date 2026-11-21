@@ -56,7 +56,6 @@ const (
 	// 发给用户的通知正文），归后台生成或回复辅助。
 	PurposeRSSWatchJudge    = "rss_watch_judge"
 	PurposeDirectReplyTopic = "direct_reply_topic"
-	PurposeSemanticTextRef  = "semantic_text_reference"
 	// 下面两个也是写给用户看的话，以前不在表里：旁路调用查不到归属就按意图识别
 	// 取模型，意图识别绑了只做判断的模型时，它们每次都先失败一次再降级。
 	PurposePokeReply = "poke_reply"
@@ -104,7 +103,6 @@ var llmPurposeGroup = map[string]string{
 	// 发进聊天，而且往往是对话模型刚出错的时候——再绕回对话模型最不稳，所以也
 	// 留在这里，人设由 withUserFacingPersona 补上。
 	PurposeSemanticReference:       llm.GroupReplyAssist,
-	PurposeSemanticTextRef:         llm.GroupReplyAssist,
 	PurposeDirectReplyTopic:        llm.GroupReplyAssist,
 	PurposeContextSummary:          llm.GroupReplyAssist,
 	PurposeForwardContentSafety:    llm.GroupReplyAssist,
@@ -252,20 +250,6 @@ func inheritedGroupRole(roles map[string]ModelRole, purpose, groupKey string) (M
 		}
 	}
 	return ModelRole{}, false
-}
-
-// hasDedicatedModelRole 说明这个用途有没有落到对话以外的模型上。可选的预处理靠它
-// 决定跑不跑：只能用对话模型时宁可不跑，别让一道可有可无的工序花主回复的钱。
-func hasDedicatedModelRole(roles map[string]ModelRole, purpose, group string) bool {
-	groupKey := modelRoleKeyForGroup(group)
-	if groupKey == "chat" || roles[groupKey].FollowChat {
-		return false
-	}
-	role, ok := roles[strings.TrimSpace(purpose)]
-	if !ok {
-		role, ok = inheritedGroupRole(roles, purpose, groupKey)
-	}
-	return ok && !role.FollowChat && modelRoleConfigured(role)
 }
 
 // resolveIfFollowChat 把「跟随对话」翻成实际的对话绑定，其余原样返回。

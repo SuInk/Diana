@@ -135,11 +135,4 @@ func TestReplyAssistFollowChatStopsInheritance(t *testing.T) {
 	if role, _ := modelRoleFor(roles, PurposeContextSummary, llm.GroupReplyAssist); role.Model != "gpt-terra" {
 		t.Fatalf("选了跟随对话该用对话模型：%#v", role)
 	}
-	if hasDedicatedModelRole(roles, PurposeSemanticTextRef, llm.GroupReplyAssist) {
-		t.Fatal("跟随对话不算单独指定")
-	}
-	delete(roles, "reply_assist")
-	if !hasDedicatedModelRole(roles, PurposeSemanticTextRef, llm.GroupReplyAssist) {
-		t.Fatal("沿用后台生成那一档算单独指定")
-	}
 }
