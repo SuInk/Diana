@@ -201,7 +201,14 @@ func noteMusicProxyProblem(ctx context.Context, cfg musicConfig, endpoint string
 	proxied := cfg.Proxy.covers(parsed.Hostname())
 	switch {
 	case proxied && transportErr != nil:
-		recordMusicProxyProblem(ctx, fmt.Sprintf("经音乐代理请求失败，代理可能连不上或拒绝转发：%v", transportErr))
+		// *url.Error 会带出完整请求地址，QQ CDN 地址里有 vkey 和 Cookie 主人的 uin；
+		// 这段提示会进工具结果、可能被转述到群里，只留底层原因。
+		cause := transportErr
+		var urlErr *url.Error
+		if errors.As(transportErr, &urlErr) && urlErr.Err != nil {
+			cause = urlErr.Err
+		}
+		recordMusicProxyProblem(ctx, fmt.Sprintf("经音乐代理请求失败，代理可能连不上或拒绝转发：%v", cause))
 	case proxied && status == http.StatusForbidden:
 		recordMusicProxyProblem(ctx, "已经过音乐代理，但 CDN 仍返回 403，代理出口不在中国大陆；香港、新加坡、日本等出口不一定能绕过，请换中国大陆出口的代理")
 	case !proxied && status == http.StatusForbidden && musicQQHost(parsed.Hostname()):

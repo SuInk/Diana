@@ -483,6 +483,8 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		reason := "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"
 		if problem := diagnostics.credentialProblem(); problem != "" {
 			reason = "各家曲库都拿不到可播放的音频；" + problem
+		} else if problem := diagnostics.proxyProblem(); problem != "" {
+			reason = "各家曲库都拿不到可播放的音频；" + problem
 		} else if notes := p.membershipNotes(ctx, cfg); notes != "" {
 			reason = "各家曲库都拿不到可播放的音频；" + notes
 		}
@@ -607,6 +609,11 @@ func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, ite
 	path, err := p.downloadAudio(ctx, cfg, item)
 	if err != nil {
 		log.Printf("music download failed: source=%s song=%s: %v", item.Source, item.ID, err)
+		// 代理没配好、出口不在大陆这类提示要带出去，聊天里才知道该去改代理；其余错误
+		// 带着本机缓存路径，只进日志。
+		if diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics); diagnostics.proxyProblem() != "" {
+			return "", fmt.Errorf("下载音频失败：%s", diagnostics.proxyProblem())
+		}
 		return "", fmt.Errorf("下载音频失败")
 	}
 	if len(platforms) > 0 && NormalizePlatformID(platforms[0]) == PlatformTelegram {
@@ -775,10 +782,16 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 			if problem := diagnostics.credentialProblem(); problem != "" {
 				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
 			}
+			if problem := diagnostics.proxyProblem(); problem != "" {
+				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
+			}
 			if notes := t.plugin.membershipNotes(ctx, cfg); notes != "" {
 				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址：%s", query, notes)
 			}
 			return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；可能需要对应平台的有效会员 Cookie，或该曲目受版权/地区限制", query)
+		}
+		if problem := diagnostics.proxyProblem(); problem != "" {
+			return "", fmt.Errorf("搜索《%s》时曲库请求失败：%s", query, problem)
 		}
 		if diagnostics.failed() {
 			return "", fmt.Errorf("搜索《%s》时曲库请求异常，请稍后重试或检查曲库配置", query)

@@ -5,9 +5,11 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -111,6 +113,39 @@ func TestMusicDirectQQForbiddenSuggestsProxy(t *testing.T) {
 	noteMusicProxyProblem(ctx, musicConfig{}, "https://m701.music.126.net/a.mp3", http.StatusForbidden, nil)
 	if diagnostics.proxyProblem() != "" {
 		t.Fatalf("netease 403 should not blame the exit: %q", diagnostics.proxyProblem())
+	}
+}
+
+// 聊天里点歌下载失败时也要带出代理提示，不然只看得到「下载音频失败」。
+func TestPrepareSongVoiceSurfacesProxyProblem(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := "http://" + listener.Addr().String()
+	listener.Close()
+	cfg := musicConfigFromSettings(SettingValues{
+		musicSettingProxyMode:  musicProxyCustom,
+		musicSettingProxyURL:   closed,
+		musicSettingProxyScope: musicProxyScopeAll,
+		musicSettingTimeout:    5,
+	})
+	cfg.OutputDir = t.TempDir()
+	ctx, _ := withMusicDiagnostics(context.Background())
+	_, err = NewMusicPlugin(nil).prepareSongVoice(ctx, cfg, song{Source: "qq", ID: "1", PlayURL: "http://1.1.1.1/song.m4a"})
+	if err == nil || !strings.Contains(err.Error(), "代理可能连不上") {
+		t.Fatalf("err = %v, want the proxy hint", err)
+	}
+}
+
+// 经代理请求失败的提示只留底层原因，不带出请求地址里的 vkey 和 uin。
+func TestMusicProxyProblemDropsRequestURL(t *testing.T) {
+	cfg := musicConfigFromSettings(SettingValues{musicSettingProxyMode: musicProxyCustom, musicSettingProxyURL: "http://127.0.0.1:1", musicSettingProxyScope: musicProxyScopeAll})
+	ctx, diagnostics := withMusicDiagnostics(context.Background())
+	endpoint := "https://ws.stream.qqmusic.qq.com/C400.m4a?vkey=secret&uin=12345"
+	noteMusicProxyProblem(ctx, cfg, endpoint, 0, &url.Error{Op: "Get", URL: endpoint, Err: errors.New("proxyconnect tcp: connection refused")})
+	if problem := diagnostics.proxyProblem(); !strings.Contains(problem, "connection refused") || strings.Contains(problem, "vkey") || strings.Contains(problem, "uin=") {
+		t.Fatalf("problem = %q", problem)
 	}
 }
 
