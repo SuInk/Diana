@@ -49,6 +49,8 @@ type mediaSlotRoute struct {
 	Params map[string]string
 	// API 是内置语音服务固定的接口形态；普通提供商留空，按参数和地址判断。
 	API llm.SpeechAPI
+	// Profile 是这条路由对应的提供商配置档（模型换成这条路由的），记冷却用，见 noteRouteCall。
+	Profile llm.Profile
 }
 
 // speechAPI 是这条路由实际走的语音接口：内置服务固定，其余先看参数，再按地址认。
@@ -203,7 +205,9 @@ func newMediaSlotRoute(profile llm.Profile, model, slot string, params map[strin
 			}
 		}
 	}
-	route := mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: merged}
+	keyed := profile
+	keyed.Config.Model = model
+	route := mediaSlotRoute{Name: profile.Name, Config: profile.Config.WithDefaults(), Model: model, Params: merged, Profile: keyed}
 	if builtin, ok := builtinSpeechProfileByID(profile.ID); ok {
 		route.API = builtin.API
 	}
@@ -240,7 +244,14 @@ var errMediaSlotNotConfigured = errors.New("模型分配里没有配置这个插
 // runMediaSlot 按路由顺序调用，失败了换下一条。调用方取消和内容被拒不换：
 // 前者没人在等了，后者换一家多半照样被拒，只会多扣一次钱。视频任务一旦可能已经
 // 在服务端建好（llm.VideoJobMayBeBilled），也不换：再提交一遍就是两份钱，只如实报错。
-func runMediaSlot[T any](ctx context.Context, routes []mediaSlotRoute, label string, call func(mediaSlotRoute) (T, error)) (T, mediaSlotRoute, error) {
+// mediaRouteNoter 给 runMediaSlot 记每条路由的成败，见 noteRouteCall。
+func (r *Runtime) mediaRouteNoter(ctx context.Context, slot string) func(mediaSlotRoute, error) {
+	return func(route mediaSlotRoute, err error) {
+		r.noteRouteCall(ctx, slot, route.Profile, err, err != nil && llm.MediaErrorKindOf(err) == llm.MediaErrorContentPolicy)
+	}
+}
+
+func runMediaSlot[T any](ctx context.Context, routes []mediaSlotRoute, label string, note func(mediaSlotRoute, error), call func(mediaSlotRoute) (T, error)) (T, mediaSlotRoute, error) {
 	var zero T
 	if len(routes) == 0 {
 		return zero, mediaSlotRoute{}, fmt.Errorf("%s：%w", label, errMediaSlotNotConfigured)
@@ -251,6 +262,9 @@ func runMediaSlot[T any](ctx context.Context, routes []mediaSlotRoute, label str
 			return zero, route, err
 		}
 		result, err := call(route)
+		if note != nil {
+			note(route, err)
+		}
 		if err == nil {
 			return result, route, nil
 		}
@@ -276,7 +290,7 @@ func (r *Runtime) recordMediaSlotUsage(ctx context.Context, route mediaSlotRoute
 // synthesizeSpeech 用语音合成插槽把文字合成为音频。format 非空时盖过插槽上的格式，
 // 给那些只收得下某种格式的调用方用。
 func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*llm.SpeechResponse, error) {
-	resp, _, err := runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotTTS, true), "语音合成", func(route mediaSlotRoute) (*llm.SpeechResponse, error) {
+	resp, _, err := runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotTTS, true), "语音合成", r.mediaRouteNoter(ctx, mediaSlotTTS), func(route mediaSlotRoute) (*llm.SpeechResponse, error) {
 		started := time.Now()
 		resp, err := llm.SynthesizeSpeech(ctx, route.Config, llm.SpeechRequest{
 			API:          route.speechAPI(),
@@ -300,7 +314,7 @@ func (r *Runtime) synthesizeSpeech(ctx context.Context, text, format string) (*l
 // transcribeAudio 用语音识别插槽转写一段音频。language 非空时盖过插槽上的语言。
 // 返回实际应答的那条路由：后备顶上时，缓存和记录要记在后备的模型名下。
 func (r *Runtime) transcribeAudio(ctx context.Context, audio []byte, filename, language string) (*llm.TranscriptionResponse, mediaSlotRoute, error) {
-	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotSTT, true), "语音识别", func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
+	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotSTT, true), "语音识别", r.mediaRouteNoter(ctx, mediaSlotSTT), func(route mediaSlotRoute) (*llm.TranscriptionResponse, error) {
 		started := time.Now()
 		if route.speechAPI() == llm.SpeechAPIWhisperCLI {
 			return transcribeWithWhisperCLI(ctx, route, audio)
@@ -347,7 +361,7 @@ func (route mediaSlotRoute) videoGenerator() (llm.VideoGenerator, error) {
 
 // generateVideo 用视频生成插槽跑完一个异步任务，返回成品和实际用到的路由。
 func (r *Runtime) generateVideo(ctx context.Context, req llm.VideoGenerateRequest, onProgress func(llm.VideoJob)) (*llm.VideoResult, mediaSlotRoute, error) {
-	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotVideo, true), "视频生成", func(route mediaSlotRoute) (*llm.VideoResult, error) {
+	return runMediaSlot(ctx, r.resolveMediaSlotRoutes(ctx, mediaSlotVideo, true), "视频生成", r.mediaRouteNoter(ctx, mediaSlotVideo), func(route mediaSlotRoute) (*llm.VideoResult, error) {
 		generator, err := route.videoGenerator()
 		if err != nil {
 			return nil, err

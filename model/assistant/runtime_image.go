@@ -468,6 +468,7 @@ func (r *Runtime) generateImageWithFailover(ctx context.Context, req llm.ImageGe
 		cancel()
 		duration := time.Since(started)
 		r.recordImageDebugTrace(ctx, cfg, "image_generate", imageGenerateTraceRequest(request), resp, err, duration)
+		r.noteRouteCall(ctx, llm.GroupImage, imageRouteProfile(cfg), err, err != nil && imageFailureStopsFailover(err))
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_generate", duration)
 			if animation && !imageResponseIsGIF(resp) {
@@ -566,6 +567,7 @@ func (r *Runtime) editImageWithFailover(ctx context.Context, req llm.ImageEditRe
 		cancel()
 		duration := time.Since(started)
 		r.recordImageDebugTrace(ctx, cfg, "image_edit", map[string]any{"model": request.Model, "prompt": request.Prompt, "size": request.Size, "n": request.N, "image_count": len(request.Images)}, resp, err, duration)
+		r.noteRouteCall(ctx, llm.GroupImage, imageRouteProfile(cfg), err, err != nil && imageFailureStopsFailover(err))
 		if err == nil {
 			r.recordImageUsage(ctx, cfg, resp, "image_edit", duration)
 			return resp, cfg, nil

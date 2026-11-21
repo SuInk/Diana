@@ -12,24 +12,13 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-func supportsSmartModelRouting(key string) bool {
-	switch strings.ToLower(strings.TrimSpace(key)) {
-	case llm.GroupImage, llm.GroupTTS, llm.GroupSTT, llm.GroupVideo:
-		return false
-	default:
-		return true
-	}
-}
-
-func effectiveModelRoutingStrategy(strategy string, keys ...string) string {
+// effectiveModelRoutingStrategy 把空策略落成智能切换。生图、语音、视频以前固定主备：
+// 它们不记冷却，智能切换没有数据可用；现在也记进冷却表（见 noteRouteCall），所有用途
+// 一样默认智能。
+func effectiveModelRoutingStrategy(strategy string) string {
 	switch strategy = strings.TrimSpace(strategy); strategy {
 	case "failover", "round_robin", "weighted":
 		return strategy
-	}
-	for _, key := range keys {
-		if !supportsSmartModelRouting(key) {
-			return "failover"
-		}
 	}
 	return "smart"
 }
@@ -71,7 +60,7 @@ func (r *Runtime) scheduledRoleProfiles(ctx context.Context, purpose string, set
 	if !ok {
 		return profiles, nil
 	}
-	strategy := effectiveModelRoutingStrategy(role.RoutingStrategy, purpose, group)
+	strategy := effectiveModelRoutingStrategy(role.RoutingStrategy)
 	if strategy == "failover" {
 		return profiles, nil
 	}

@@ -439,7 +439,7 @@ func TestModelRoutingAllStrategiesShareHealthAvoidance(t *testing.T) {
 	}
 }
 
-func TestModelRoutingSmartNormalizationAndUnsupportedMedia(t *testing.T) {
+func TestModelRoutingSmartNormalizationAndMedia(t *testing.T) {
 	role := ModelRole{ProfileID: "a", Model: "m", RoutingStrategy: "smart", Fallbacks: []ModelRole{{ProfileID: "b", Model: "m"}}}
 	for _, strategy := range []string{"", "smart", "failover", "round_robin", "weighted", "unknown"} {
 		input := role
@@ -461,28 +461,25 @@ func TestModelRoutingSmartNormalizationAndUnsupportedMedia(t *testing.T) {
 			t.Fatalf("round trip=%+v err=%v", output, err)
 		}
 	}
+	// 生图、语音、视频也记冷却了（见 noteRouteCall）：智能切换保留，冷却中的主模型挪到后面，
+	// 和对话一样，也不进轮询调度。
 	for _, slot := range []string{llm.GroupImage, mediaSlotTTS, mediaSlotSTT, mediaSlotVideo} {
 		t.Run(slot, func(t *testing.T) {
 			roles := normalizeModelRoles(map[string]ModelRole{"chat": role, slot: role, "vision": role})
-			if roles[slot].RoutingStrategy != "failover" || roles["vision"].RoutingStrategy != "smart" {
+			if roles[slot].RoutingStrategy != "smart" || roles["vision"].RoutingStrategy != "smart" {
 				t.Fatalf("roles=%+v", roles)
 			}
-			for _, inherited := range []bool{false, true} {
-				r, _, set := routingTestRuntime(t, role)
-				roles = map[string]ModelRole{"chat": role, slot: role}
-				if inherited {
-					roles[slot] = ModelRole{FollowChat: true}
+			r, _, set := routingTestRuntime(t, role)
+			// 额度用完一次就进冷却；500 要攒够次数，这里只验证排序。
+			r.llmCooldowns.markFailure(set.Profiles[0], errors.New("429 Too Many Requests: quota exceeded"))
+			for range 2 {
+				profiles, err := r.scheduledRoleProfiles(context.Background(), slot, set, slot, map[string]ModelRole{"chat": role, slot: role})
+				if err != nil || len(profiles) != 2 || profiles[0].ID != "b" {
+					t.Fatalf("profiles=%v err=%v; the cooling primary must move behind the fallback", profiles, err)
 				}
-				r.llmCooldowns.markFailure(set.Profiles[0], errors.New("HTTP 500"))
-				for range 2 {
-					profiles, err := r.scheduledRoleProfiles(context.Background(), slot, set, slot, roles)
-					if err != nil || len(profiles) != 2 || profiles[0].ID != "a" {
-						t.Fatalf("inherited=%v profiles=%v err=%v", inherited, profiles, err)
-					}
-				}
-				if len(r.modelRouteSchedules) != 0 {
-					t.Fatal("unsupported smart entered weighted scheduling")
-				}
+			}
+			if len(r.modelRouteSchedules) != 0 {
+				t.Fatal("smart routing entered weighted scheduling")
 			}
 		})
 	}
@@ -549,11 +546,9 @@ func TestModelRoutingDefaultSmartAndExplicitFailover(t *testing.T) {
 	for _, key := range []string{"chat", "vision", "intent", llm.GroupImage, mediaSlotTTS, mediaSlotSTT, mediaSlotVideo} {
 		role := ModelRole{ProfileID: "a", Model: "m"}
 		normalized := normalizeModelRoles(map[string]ModelRole{key: role})[key]
+		// 生图、语音、视频也记冷却了（见 noteRouteCall），和对话一样默认智能。
 		want := "smart"
-		if !supportsSmartModelRouting(key) {
-			want = "failover"
-		}
-		if normalized.RoutingStrategy != want || effectiveModelRoutingStrategy("", key) != want {
+		if normalized.RoutingStrategy != want || effectiveModelRoutingStrategy("") != want {
 			t.Fatalf("key=%s normalized=%+v", key, normalized)
 		}
 	}

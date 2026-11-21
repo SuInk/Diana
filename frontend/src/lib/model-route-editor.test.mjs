@@ -312,12 +312,12 @@ test("smart is the effective default and explicit failover round-trips", () => {
   assert.equal(context.roleForm.value.vision.follow_chat, true);
 });
 
-test("unsupported media has no smart option and smart retains explicit standby", () => {
+test("image and media offer smart routing by default and smart retains explicit standby", () => {
   const context = schedulingContext({ chat: { model: "m1", routing_strategy: "smart", fallbacks: [{ model: "m2" }, { model: "m2", standby: true }] }, image: { model: "m1" } });
-  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.modelRoutingStrategiesFor(role).some(option => option.value === "smart"), false);
+  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.modelRoutingStrategiesFor(role).some(option => option.value === "smart"), true);
   context.setRoleRoutingStrategy("image", "smart");
-  assert.equal(context.roleForm.value.image.routing_strategy, undefined);
-  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.effectiveModelRoutingStrategy(role), "failover");
+  assert.equal(context.roleForm.value.image.routing_strategy, "smart");
+  for (const role of ["image", "tts", "stt", "video"]) assert.equal(context.effectiveModelRoutingStrategy(role), "smart");
   assert.equal(context.modelRouteIsStandby("chat", 1), false);
   assert.equal(context.modelRouteIsStandby("chat", 2), true);
   assert.match(context.modelRoutingDescription("chat"), /按配置顺序/);

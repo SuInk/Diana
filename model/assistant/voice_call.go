@@ -222,8 +222,10 @@ func (c *VoiceCall) Synthesize(ctx context.Context, text string, chunk func(mime
 		return chunk(mime, data)
 	}
 	var errs []error
+	note := r.mediaRouteNoter(ctx, mediaSlotTTS)
 	for _, route := range routes {
 		err := r.synthesizeCallSpeech(ctx, route, text, c.streamWAV, tracked)
+		note(route, err)
 		if err == nil {
 			return nil
 		}

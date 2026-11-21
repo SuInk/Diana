@@ -1114,7 +1114,7 @@ type ModelRole struct {
 	// ReasoningEffort 是这条模型路由的思考强度，空表示交给模型默认。
 	// 主路由和后备路由分别保存；发送时按实际模型支持的档位适配。
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	// 空策略默认智能；独立图片和音视频默认主备。failover 显式选择主备。
+	// 空策略默认智能（所有用途都是）；failover 显式选择主备。
 	RoutingStrategy string `json:"routing_strategy,omitempty"`
 	// RecoveryPolicy 只用于读取短暂存在过的用途级旧配置。WithDefaults 会把第一份
 	// 旧值迁移到机器人级 ModelRecoveryPolicy，并从用途路由中移除。
@@ -1155,7 +1155,7 @@ func normalizeModelRoles(roles map[string]ModelRole) map[string]ModelRole {
 		}
 		role = normalizeModelRole(role)
 		if !role.FollowChat {
-			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy, key)
+			role.RoutingStrategy = effectiveModelRoutingStrategy(role.RoutingStrategy)
 		}
 		// 向量嵌入可以整档关闭：没选模型时也要留住这个标记，否则读回来就成了「自动」，
 		// 照旧去连提供商里第一个向量模型。关闭后语义检索退回只按关键词搜。
