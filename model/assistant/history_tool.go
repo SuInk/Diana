@@ -242,9 +242,13 @@ func (t *dianaChatHistoryTool) Description() string {
 	// 在重读上下文里已有的最近消息（每步模型要想 13～60 秒）。
 	// 「别说看不到」防模型不查记录就回「看不到之前的消息」。
 	// speakers/reactions 分开写：曾拿发言排行冒充点赞名单（#553）。
+	// 「对方说了时间才加」：11-20 生产 56 次检索里模型自己加了 19 次 days/hours，「你在
+	// 雨夹雪群里找找」照着参数说明里的「默认 24 小时」填了 hours=24，用户追问「查久一点」
+	// 才放宽；以前示例里的 "days":3 也在教它限时。
 	return `读取本地聊天记录，或做群发言/表情统计。引用指代、上文不够或问长期历史时先查，别说看不到；最近几十条已经在上下文里，不用再读最近消息。` +
 		`查消息不用选 operation：sender_user_id/sender_name、query、from_time/through_time 或 hours/days、ids 这些条件叠加取交集，一次写全。` +
-		`例：某人说过的话 {"sender_name":"小明","limit":20}；某人某段时间提到某词 {"sender_user_id":"…","query":"部署","days":3,"order":"oldest"}；跨群加 scope=all_groups；` +
+		`时间条件只在对方说了时间时才加，不加就查全部历史；大家常记不准是什么时候说的，别自己估一个范围。` +
+		`例：某人说过的话 {"sender_name":"小明","limit":20}；某人提到某词 {"sender_user_id":"…","query":"部署"}；对方说了「这三天」才加 {"days":3}；跨群加 scope=all_groups；` +
 		`看几条消息原文 {"ids":["…","…"]}；看某条前后文 {"operation":"around","message_id":"…"}；从某条消息往后读 {"from_message_id":"…","order":"oldest"}。` +
 		`发言排行用 speakers，点赞/表情回应用 reactions，两者不能互相冒充；撤回用 recalls。`
 }
@@ -273,8 +277,8 @@ func (t *dianaChatHistoryTool) InputSchema() map[string]any {
 		"through_time": toolStringParam(`结束时间，格式同 from_time`),
 		"scope": toolEnumParam("all_groups 跨群检索或统计（speakers/reactions 合并各群按人计），需开启跨群记忆；私聊仅主人",
 			"current", "all_groups"),
-		"hours":    toolIntParam("只看最近多少小时；按条件查不填时间时查全部历史，其余默认 24 小时", 1, 24*365),
-		"days":     toolIntParam("只看最近多少天", 1, 365),
+		"hours":    toolIntParam("只看最近多少小时；对方说了时间才填，不填时按条件查全部历史", 1, 24*365),
+		"days":     toolIntParam("只看最近多少天；对方说了时间才填，不填时按条件查全部历史", 1, 365),
 		"all_time": toolBoolParam("查全部历史，忽略 hours/days"),
 		"limit":    toolCountParam("返回条数，默认 "+itoa(defaultChatHistoryLimit)+"；超过单次结果上限时按整条分页，结果里给续读方式", 1),
 		"offset":   toolCountParam("speakers/reactions 从第几条起（0 起），续读时填上次的 next_offset；其余操作用 cursor 或 ids 续读", 0),
