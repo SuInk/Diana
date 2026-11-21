@@ -147,7 +147,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 平均 7K 多字），2026-10-25 统计 224 对同群相邻请求里它单独变化只有 3 次。
 	// 显式使用带标记的 user，避免无历史时被适配器合并回 leading system。
 	var contractMessage *llm.Message
-	sharedContracts := r.loader.loadedContractList(true)
+	// 公共目录写在 Runner 自己的系统提示词里（见 systemPrompt），调用方换了提示词就没有。
+	sharedContracts := r.loader.loadedContractList(true, strings.TrimSpace(r.cfg.SystemPrompt) == "")
 	if contracts := renderLoadedContracts(sharedContracts); contracts != "" {
 		contractMessage = &llm.Message{
 			Role:     llm.RoleUser,
@@ -1500,7 +1501,7 @@ func (r *Runner) speakerToolPrompt() string {
 		sections = append(sections, extensions)
 	}
 	if r.loader != nil {
-		if contracts := r.loader.loadedContracts(false); contracts != "" {
+		if contracts := r.loader.loadedContracts(false, true); contracts != "" {
 			sections = append(sections, "当前发言者已经加载、可直接通过 tools_execute 调用的完整契约：\n"+contracts)
 		}
 	}

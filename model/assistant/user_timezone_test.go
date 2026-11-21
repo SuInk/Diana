@@ -98,7 +98,8 @@ func TestSpeakerTimezonePromptConvertsForTheOtherSide(t *testing.T) {
 	// 人会搬家：记了很久的时区要提示先确认一次。
 	event.userProfile.Portrait[1].UpdatedAt = now.Add(-PortraitTimezoneStaleAfter - 24*time.Hour)
 	stale := runtime.speakerTimezonePrompt(event, now)
-	if !strings.Contains(stale, "记录较旧") || !strings.Contains(stale, "个月前") {
+	// 「记录较旧」和记录时间同一句：续接按句去重时不会被当成发过的固定话丢掉。
+	if !strings.Contains(stale, "记录较旧") || !strings.Contains(stale, "个月前") || !strings.Contains(stale, "不是实时位置；记录较旧") {
 		t.Fatalf("stale record prompt = %q", stale)
 	}
 	if clock := runtime.runtimeClockPrompt(event); !strings.Contains(clock, "Europe/Berlin") || !strings.Contains(clock, "2026-09-16 09:00") {

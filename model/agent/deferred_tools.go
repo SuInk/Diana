@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -84,6 +85,27 @@ func (l *deferredToolLoader) speakerCatalog() string {
 	return l.catalogWhere(false)
 }
 
+// catalogLine 是目录里这个工具冒号后面的那段说明。
+func (l *deferredToolLoader) catalogLine(name string, tool Tool) string {
+	if l.featured[name] {
+		return strings.Join(strings.Fields(catalogDescription(tool)), " ")
+	}
+	return catalogLineDescription(tool)
+}
+
+// catalogShowsFullDescription 报告目录那一行是否已经是这个工具的完整描述。目录不管
+// 加没加载都在同一份请求里（公共工具在头部、专属工具在尾部的发言者工具段），这时
+// 已加载契约只带 inputSchema，不再把同一段描述抄第二遍：11-21 生产 swe-2 主回复里
+// 这样重复的描述平均每条请求约 1500 字。目录截短过的照旧带完整描述。
+// 名字本身也得在目录里：按工具族成员名加载时，目录列的是族名，成员名不在目录里。
+func (l *deferredToolLoader) catalogShowsFullDescription(name string, tool Tool) bool {
+	if l.core[name] || !slices.Contains(l.registry.PresentedNames(), name) {
+		return false
+	}
+	full := strings.Join(strings.Fields(tool.Description()), " ")
+	return full != "" && l.catalogLine(name, tool) == full
+}
+
 func (l *deferredToolLoader) catalogWhere(shared bool) string {
 	var builder strings.Builder
 	for _, name := range l.registry.PresentedNames() {
@@ -94,11 +116,7 @@ func (l *deferredToolLoader) catalogWhere(shared bool) string {
 		if !ok {
 			continue
 		}
-		if l.featured[name] {
-			builder.WriteString("- " + name + toolSignature(tool) + ": " + strings.Join(strings.Fields(catalogDescription(tool)), " ") + "\n")
-			continue
-		}
-		builder.WriteString(deferredCatalogLine(tool))
+		builder.WriteString("- " + name + toolSignature(tool) + ": " + l.catalogLine(name, tool) + "\n")
 	}
 	return strings.TrimSpace(builder.String())
 }
@@ -158,13 +176,15 @@ type loadedContract struct {
 
 // loadedContractList 按加载顺序列出已加载工具的完整契约。shared=true 只收公共工具（放在
 // 历史之前），shared=false 只收发言者专属的（放在尾部）。当前发言者用不了的工具不在内。
-func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
+// catalogShown 表示同一份请求里带着对应的按需目录：调用方换了自己的系统提示词时公共
+// 目录不在，契约照旧带完整描述。
+func (l *deferredToolLoader) loadedContractList(shared, catalogShown bool) []loadedContract {
 	if l == nil || len(l.order) == 0 {
 		return nil
 	}
 	type contract struct {
 		Name        string         `json:"name"`
-		Description string         `json:"description"`
+		Description string         `json:"description,omitempty"`
 		InputSchema map[string]any `json:"inputSchema"`
 	}
 	contracts := make([]loadedContract, 0, len(l.order))
@@ -176,7 +196,11 @@ func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
 		if !ok {
 			continue
 		}
-		raw, err := json.Marshal(contract{Name: name, Description: tool.Description(), InputSchema: l.loaded[name]})
+		description := tool.Description()
+		if catalogShown && l.catalogShowsFullDescription(name, tool) {
+			description = ""
+		}
+		raw, err := json.Marshal(contract{Name: name, Description: description, InputSchema: l.loaded[name]})
 		if err != nil {
 			continue
 		}
@@ -186,8 +210,8 @@ func (l *deferredToolLoader) loadedContractList(shared bool) []loadedContract {
 }
 
 // loadedContracts 把 loadedContractList 渲染成一个 JSON 数组，没有契约时返回空串。
-func (l *deferredToolLoader) loadedContracts(shared bool) string {
-	return renderLoadedContracts(l.loadedContractList(shared))
+func (l *deferredToolLoader) loadedContracts(shared, catalogShown bool) string {
+	return renderLoadedContracts(l.loadedContractList(shared, catalogShown))
 }
 
 func renderLoadedContracts(contracts []loadedContract) string {
