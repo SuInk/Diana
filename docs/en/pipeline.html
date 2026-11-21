@@ -75,7 +75,7 @@
           <li><div class="flow-node"><strong>Reconnected</strong><p>Replay cutoff = disconnect time − 30 minutes, looking back at most 24 hours.</p></div></li>
           <li><div class="flow-node"><strong>Three backfills</strong><p>After 1 second, then again at +1 and +5 minutes. Walks the group list and recent contacts, 100 per page and at most 200 per session, one session at a time.</p></div></li>
           <li><div class="flow-node"><strong>Deduplicate</strong><p>Compared with queued and stored messages, so nothing is processed twice.</p></div></li>
-          <li class="q"><div class="flow-node"><strong>Should this one take part in replies?</strong><p>Only the newest N per session (<code>history_backfill_message_limit</code>, default 3) that would have triggered a reply directly are queued normally.</p></div><div class="flow-exits"><span class="flow-exit"><b>The rest</b>fill in history only, no replies</span></div></li>
+          <li class="q"><div class="flow-node"><strong>Should this one take part in replies?</strong><p>Only the newest N per session (<code>history_backfill_message_limit</code>, default 1) that would have triggered a reply directly are queued normally.</p></div><div class="flow-exits"><span class="flow-exit"><b>The rest</b>fill in history only, no replies</span></div></li>
           <li class="end"><div class="flow-node"><strong>Queued normally</strong></div></li>
         </ol>
         <div class="callout"><strong>Why only the newest few</strong><p>Coming back after an hour offline and answering a hundred stored group messages one by one would flood the chat. The recovered history still goes into context; it just does not trigger replies.</p></div>
