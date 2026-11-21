@@ -4773,7 +4773,7 @@ export interface GroupStyle {
   manual: boolean;
   /** 本群单独关掉了风格：不自动学，也不带进回复，笔记留着。 */
   disabled?: boolean;
-  /** 最近一次自动学习读了多少条群友消息。 */
+  /** 最近一次自动学习读了多少条群友消息；整体风格是归纳了几个群的笔记。 */
   sample_count?: number;
   updated_at: string;
 }
@@ -4784,6 +4784,9 @@ export interface GroupStyleResponse {
   learning_enabled: boolean;
   max_runes: number;
 }
+
+/** 整体风格那一行的群号：接口和群风格相同，见 model/assistant/global_style.go。 */
+export const GLOBAL_STYLE_GROUP_ID = "*";
 
 function groupStylePath(groupID: string, profileID: string, suffix = ""): string {
   const params = new URLSearchParams();

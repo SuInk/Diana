@@ -41,6 +41,11 @@ func TestGroupStyleRoundTrip(t *testing.T) {
 	if _, found, _ := store.GroupStyle(ctx, "other-bot", "g1"); found {
 		t.Fatal("style leaked across bots")
 	}
+	_ = store.SaveGroupStyle(ctx, assistant.GroupStyle{ProfileID: "bot", GroupID: assistant.GlobalStyleGroupID, Text: "整体", UpdatedAt: at})
+	_ = store.SaveGroupStyle(ctx, assistant.GroupStyle{ProfileID: "other-bot", GroupID: "g2", Text: "别的机器人", UpdatedAt: at})
+	if list, err := store.GroupStyles(ctx, "bot"); err != nil || len(list) != 2 || list[0].ProfileID != "bot" || !list[0].UpdatedAt.Equal(at) {
+		t.Fatalf("list = %#v err=%v", list, err)
+	}
 	if err := store.DeleteGroupStyle(ctx, "bot", "g1"); err != nil {
 		t.Fatal(err)
 	}
