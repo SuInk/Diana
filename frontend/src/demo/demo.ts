@@ -238,7 +238,7 @@ let plugins: PluginState[] = [
   { manifest: resolverDemoManifest, installed: true, enabled: false },
   {
     manifest: {
-      id: "official.music", name: "音乐增强", version: "0.3.3", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
+      id: "official.music", name: "音乐增强", version: "0.3.4", description: "群里分享的音乐链接直接下成一条语音发出来；开启点歌后，模型也能按用户要求搜歌并发送。网易云、QQ 音乐并列，一家放不出来自动换下一家。仅 OneBot v11 支持语音。", official: true, built_in: true, permissions: ["模型工具", "网络请求", "文件写入", "消息发送"],
       settings: [
         { key: "enabled_sources", label: "启用曲库", type: "multi_select", default: ["netease", "qq"], options: [{ value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "一首歌在这家是会员专享、在那家能试听是常事。勾多几家，一家放不出来就自动换下一家。" },
         { key: "preferred_source", label: "曲库优先级", type: "select", default: "", options: [{ value: "", label: "自动" }, { value: "netease", label: "网易云音乐" }, { value: "qq", label: "QQ 音乐" }], description: "点歌时先问哪家。自动按实测登录态排：会员有效的先问，登录但不是会员的其次，没填或失效的最后。选了某家就固定先问它。分享链接始终用链接自己的平台。" },
@@ -246,6 +246,9 @@ let plugins: PluginState[] = [
         { key: "netease_cookie", label: "网易云 MUSIC_U Cookie", type: "string", default: "", secret: true, description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。" },
         { key: "qq_api_base", label: "QQ 音乐自建 API 地址", type: "string", default: "", description: "自建 QQMusicApi 的地址，Node 版和 L-1124 版都认。留空走官方接口，无登录态时多数曲目取不到播放地址。" },
         { key: "qq_cookie", label: "QQ 音乐 Cookie", type: "string", default: "", secret: true, description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。" },
+        { key: "proxy_mode", label: "音乐代理", type: "select", default: "", global_only: true, options: [{ value: "", label: "不使用" }, { value: "custom", label: "自定义地址" }, { value: "resolver", label: "沿用链接解析的代理" }, { value: "system", label: "系统代理（HTTPS_PROXY 等环境变量）" }], description: "部署机在海外时，QQ 音乐 CDN 会拒绝下载音频（403），需要经中国大陆出口的代理。只影响曲库的官方接口和音频下载，自建 API 照旧直连。" },
+        { key: "proxy_url", label: "代理地址", type: "string", default: "", secret: true, global_only: true, show_when: { key: "proxy_mode", values: ["custom"] }, description: "支持 http://、https://、socks5://、socks5h://，可带账号密码，例如 socks5://user:pass@1.2.3.4:1080。" },
+        { key: "proxy_scope", label: "代理范围", type: "select", default: "qq", global_only: true, options: [{ value: "qq", label: "仅 QQ 音乐" }, { value: "all", label: "全部曲库" }], show_when: { key: "proxy_mode", values: ["custom", "resolver", "system"] }, description: "网易云在海外通常能直接下载，默认只让 QQ 音乐走代理。" },
         { key: "bitrate", label: "音质", type: "select", default: "320000", options: [{ value: "128000", label: "标准 128k" }, { value: "192000", label: "较高 192k" }, { value: "320000", label: "极高 320k" }], description: "只对网易云的自建 API 生效；其余情况由平台自己决定码率。" },
         { key: "max_duration_seconds", label: "最长时长", type: "number", default: 600, min: 30, max: 1800, step: 30, unit: "秒" },
         { key: "max_file_mb", label: "最大文件", type: "number", default: 20, min: 1, max: 100, step: 1, unit: "MB" },
@@ -1030,6 +1033,16 @@ const demoFeed: import("../api").FeedPost[] = [
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
+}
+
+// demo 里的「解析代理」填了 127.0.0.1:7890、系统没设代理变量，切换来源能看到两种提示。
+function demoMusicProxyStatus(mode: string): { mode: string; ok: boolean; address?: string; message: string } {
+  switch (mode) {
+    case "custom": return { mode, ok: false, message: "音乐代理选了自定义地址，但代理地址没填" };
+    case "resolver": return { mode, ok: true, address: "http://127.0.0.1:7890", message: "QQ 音乐经 http://127.0.0.1:7890 出站（来自链接解析的「解析代理」）" };
+    case "system": return { mode, ok: false, message: "音乐代理选了系统代理，但进程环境变量里没有 HTTPS_PROXY / HTTP_PROXY，或 QQ 音乐域名被 NO_PROXY 排除" };
+    default: return { mode, ok: true, message: "未使用代理，所有曲库直连" };
+  }
 }
 
 function bodyOf(init?: RequestInit): Record<string, unknown> {
@@ -2151,19 +2164,20 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({
       sources: [
         {
-          source: "netease", label: "网易云音乐", search_ok: true, playable: true, api_configured: false, cookie_configured: true,
+          source: "netease", label: "网易云音乐", search_ok: true, playable: true, downloadable: true, proxied: false, api_configured: false, cookie_configured: true,
           login: { key: "netease_cookie", label: "网易云 MUSIC_U", configured: true, state: "valid", account: "云村村民", message: "已登录，会员账号" },
           tier: "member",
-          message: "搜索与播放地址获取正常"
+          message: "搜索、取地址和下载音频都正常"
         },
         {
-          source: "qq", label: "QQ 音乐", search_ok: true, playable: false, api_configured: false, cookie_configured: true,
+          source: "qq", label: "QQ 音乐", search_ok: true, playable: false, downloadable: false, proxied: false, api_configured: false, cookie_configured: true,
           login: { key: "qq_cookie", label: "QQ 音乐 Cookie", configured: true, state: "valid", message: "已登录，绿钻已于 2026-05-02 到期" },
           tier: "expired",
           membership_end: "2026-05-02",
           message: "能搜到歌，但测试曲取不到播放地址，多半是会员已到期"
         }
-      ]
+      ],
+      proxy: demoMusicProxyStatus(String((body.settings as Record<string, unknown> | undefined)?.proxy_mode ?? ""))
     });
   }
   const pluginMatch = path.match(/^\/api\/assistant\/plugins\/([^/]+)\/(install|uninstall|enabled|settings)$/);

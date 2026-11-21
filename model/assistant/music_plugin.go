@@ -71,12 +71,16 @@ type MusicPlugin struct {
 // MusicConnectionStatus is safe to return to the settings page. It reports
 // capability and configuration state without ever echoing credentials.
 type MusicConnectionStatus struct {
-	Source           string `json:"source"`
-	Label            string `json:"label"`
-	SearchOK         bool   `json:"search_ok"`
-	Playable         bool   `json:"playable"`
-	APIConfigured    bool   `json:"api_configured"`
-	CookieConfigured bool   `json:"cookie_configured"`
+	Source   string `json:"source"`
+	Label    string `json:"label"`
+	SearchOK bool   `json:"search_ok"`
+	Playable bool   `json:"playable"`
+	// Downloadable 是拿到地址后实测下载开头一小段的结果，海外出口被 CDN 拒绝只在这一步暴露。
+	Downloadable bool `json:"downloadable"`
+	// Proxied 表示这家的请求走了音乐代理。
+	Proxied          bool `json:"proxied"`
+	APIConfigured    bool `json:"api_configured"`
+	CookieConfigured bool `json:"cookie_configured"`
 	// Login 只在填了 Cookie 时出现，是账号接口的实测结果。
 	Login *CredentialCheck `json:"login,omitempty"`
 	// Tier 是账号档位，设置页拿它显示状态并按和点歌时一样的规则排顺序。
@@ -85,8 +89,8 @@ type MusicConnectionStatus struct {
 	Message       string `json:"message"`
 }
 
-// TestConnections performs one small real query per source. It deliberately
-// stops after resolving a playable URL and does not download the audio file.
+// TestConnections performs one small real query per source. After resolving a
+// playable URL it fetches only the first kilobyte, never the whole audio file.
 func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValues) []MusicConnectionStatus {
 	cfg := musicConfigFromSettings(settings)
 	results := make([]MusicConnectionStatus, 0, len(p.sources))
@@ -103,7 +107,9 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 			results = append(results, status)
 			continue
 		}
+		status.Proxied = cfg.Proxy.enabled() && (cfg.Proxy.Scope == musicProxyScopeAll || source.Key() == "qq")
 		testCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		testCtx, diagnostics := withMusicDiagnostics(testCtx)
 		if checker, ok := source.(musicLoginChecker); ok && status.CookieConfigured {
 			login := checker.CheckLogin(testCtx, p.fetcher, cfg)
 			// 测试刚问过的结果顺手记下，自动排序就不用再问一遍。
@@ -119,15 +125,24 @@ func (p *MusicPlugin) TestConnections(ctx context.Context, settings SettingValue
 		found, ok := source.Search(testCtx, p.fetcher, cfg, "晴天 周杰伦")
 		status.SearchOK = ok
 		if ok {
-			status.Playable = source.PlayableURL(testCtx, p.fetcher, cfg, found.ID) != ""
+			if playURL := source.PlayableURL(testCtx, p.fetcher, cfg, found.ID); playURL != "" {
+				status.Playable = true
+				status.Downloadable = p.fetcher.probeAudio(testCtx, cfg, playURL, map[string]string{"User-Agent": resolverUserAgent(), "Referer": source.Referer()})
+			}
 		}
 		cancel()
 		loginInvalid := status.Login != nil && status.Login.State == CredentialInvalid
 		switch {
+		case !status.SearchOK && diagnostics.proxyProblem() != "":
+			status.Message = diagnostics.proxyProblem()
+		case !status.SearchOK && diagnostics.credentialProblem() != "":
+			status.Message = diagnostics.credentialProblem()
+		case status.Playable && !status.Downloadable:
+			status.Message = firstNonEmpty(diagnostics.proxyProblem(), "能取得播放地址，但下载音频失败，请检查网络出口")
 		case status.Playable && loginInvalid:
-			status.Message = "能取得播放地址，但登录态无效，会员歌曲会放不了"
+			status.Message = "能下载音频，但登录态无效，会员歌曲会放不了"
 		case status.Playable:
-			status.Message = "搜索与播放地址获取正常"
+			status.Message = "搜索、取地址和下载音频都正常"
 		case status.SearchOK && loginInvalid:
 			status.Message = "搜索正常，但登录态无效，取不到播放地址"
 		case status.SearchOK && status.Login != nil && status.Login.MembershipExpired:
@@ -157,6 +172,7 @@ type musicConfig struct {
 	FFmpegPath      string
 	SilkEncoder     string
 	SilkBitrate     int
+	Proxy           musicProxyConfig
 }
 
 func (c musicConfig) sourceOptions(key string) musicSourceOptions {
@@ -187,7 +203,7 @@ func NewMusicPlugin(client *http.Client) *MusicPlugin {
 			return procgroup.CommandContext(ctx, name, args...).CombinedOutput()
 		},
 	}
-	plugin.fetcher = &musicFetcher{client: client, saveCookie: plugin.saveSourceCookie}
+	plugin.fetcher = &musicFetcher{client: client, saveCookie: plugin.saveSourceCookie, resolverProxy: plugin.resolverProxySetting}
 	return plugin
 }
 
@@ -227,11 +243,26 @@ func (p *MusicPlugin) saveSourceCookie(ctx context.Context, source, cookie strin
 	return nil
 }
 
+// resolverProxySetting 读链接解析的全局「解析代理」。它本来就是所有机器人共用的一份。
+func (p *MusicPlugin) resolverProxySetting() string {
+	p.mu.RLock()
+	runtime := p.runtime
+	p.mu.RUnlock()
+	if runtime == nil || runtime.plugins == nil {
+		return ""
+	}
+	state, ok := runtime.plugins.Get(resolverPluginID)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(SettingValues(state.Settings).String(resolverSettingProxyURL, ""))
+}
+
 func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.3.3",
+		Version:     "0.3.4",
 		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 和 QQ 官方机器人发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
@@ -284,6 +315,43 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Default:     "",
 				Secret:      true,
 				Description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。",
+			},
+			{
+				Key:     musicSettingProxyMode,
+				Label:   "音乐代理",
+				Type:    PluginSettingTypeSelect,
+				Default: musicProxyOff,
+				Options: []PluginSettingOption{
+					{Value: musicProxyOff, Label: "不使用"},
+					{Value: musicProxyCustom, Label: "自定义地址"},
+					{Value: musicProxyResolver, Label: "沿用链接解析的代理"},
+					{Value: musicProxySystem, Label: "系统代理（HTTPS_PROXY 等环境变量）"},
+				},
+				Description: "部署机在海外时，QQ 音乐 CDN 会拒绝下载音频（403），需要经中国大陆出口的代理。只影响曲库的官方接口和音频下载，自建 API 照旧直连。",
+				GlobalOnly:  true,
+			},
+			{
+				Key:         musicSettingProxyURL,
+				Label:       "代理地址",
+				Type:        PluginSettingTypeString,
+				Default:     "",
+				Secret:      true,
+				GlobalOnly:  true,
+				ShowWhen:    &PluginSettingCondition{Key: musicSettingProxyMode, Values: []string{musicProxyCustom}},
+				Description: "支持 http://、https://、socks5://、socks5h://，可带账号密码，例如 socks5://user:pass@1.2.3.4:1080。",
+			},
+			{
+				Key:     musicSettingProxyScope,
+				Label:   "代理范围",
+				Type:    PluginSettingTypeSelect,
+				Default: musicProxyScopeQQ,
+				Options: []PluginSettingOption{
+					{Value: musicProxyScopeQQ, Label: "仅 QQ 音乐"},
+					{Value: musicProxyScopeAll, Label: "全部曲库"},
+				},
+				GlobalOnly:  true,
+				ShowWhen:    &PluginSettingCondition{Key: musicSettingProxyMode, Values: []string{musicProxyCustom, musicProxyResolver, musicProxySystem}},
+				Description: "网易云在海外通常能直接下载，默认只让 QQ 音乐走代理。",
 			},
 			{
 				Key:     musicSettingBitrate,
@@ -415,6 +483,8 @@ func (p *MusicPlugin) Handle(ctx context.Context, req PluginRequest) (*PluginRes
 		reason := "各家曲库都拿不到可播放的音频，可能是会员或独家曲目"
 		if problem := diagnostics.credentialProblem(); problem != "" {
 			reason = "各家曲库都拿不到可播放的音频；" + problem
+		} else if problem := diagnostics.proxyProblem(); problem != "" {
+			reason = "各家曲库都拿不到可播放的音频；" + problem
 		} else if notes := p.membershipNotes(ctx, cfg); notes != "" {
 			reason = "各家曲库都拿不到可播放的音频；" + notes
 		}
@@ -539,6 +609,11 @@ func (p *MusicPlugin) prepareSongVoice(ctx context.Context, cfg musicConfig, ite
 	path, err := p.downloadAudio(ctx, cfg, item)
 	if err != nil {
 		log.Printf("music download failed: source=%s song=%s: %v", item.Source, item.ID, err)
+		// 代理没配好、出口不在大陆这类提示要带出去，聊天里才知道该去改代理；其余错误
+		// 带着本机缓存路径，只进日志。
+		if diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics); diagnostics.proxyProblem() != "" {
+			return "", fmt.Errorf("下载音频失败：%s", diagnostics.proxyProblem())
+		}
 		return "", fmt.Errorf("下载音频失败")
 	}
 	if len(platforms) > 0 && NormalizePlatformID(platforms[0]) == PlatformTelegram {
@@ -583,8 +658,15 @@ func (p *MusicPlugin) downloadAudio(ctx context.Context, cfg musicConfig, item s
 	if source, ok := p.sourceByKey(item.Source); ok {
 		headers["Referer"] = source.Referer()
 	}
+	diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics)
+	if diagnostics == nil {
+		ctx, diagnostics = withMusicDiagnostics(ctx)
+	}
 	if !p.fetcher.downloadToFile(ctx, cfg, item.PlayURL, path, headers) {
 		cleanupLocalMediaFile(path)
+		if problem := diagnostics.proxyProblem(); problem != "" {
+			return "", fmt.Errorf("下载音频失败：%s", problem)
+		}
 		return "", fmt.Errorf("下载音频失败")
 	}
 	return path, nil
@@ -700,10 +782,16 @@ func (t *dianaMusicTool) Run(ctx context.Context, input map[string]any) (string,
 			if problem := diagnostics.credentialProblem(); problem != "" {
 				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
 			}
+			if problem := diagnostics.proxyProblem(); problem != "" {
+				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；%s", query, problem)
+			}
 			if notes := t.plugin.membershipNotes(ctx, cfg); notes != "" {
 				return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址：%s", query, notes)
 			}
 			return "", fmt.Errorf("已找到《%s》，但启用的曲库都没有返回可播放地址；可能需要对应平台的有效会员 Cookie，或该曲目受版权/地区限制", query)
+		}
+		if problem := diagnostics.proxyProblem(); problem != "" {
+			return "", fmt.Errorf("搜索《%s》时曲库请求失败：%s", query, problem)
 		}
 		if diagnostics.failed() {
 			return "", fmt.Errorf("搜索《%s》时曲库请求异常，请稍后重试或检查曲库配置", query)
@@ -779,6 +867,7 @@ func musicConfigFromSettings(settings SettingValues) musicConfig {
 		FFmpegPath:      firstNonEmpty(strings.TrimSpace(os.Getenv("DIANA_TTS_FFMPEG_PATH")), "ffmpeg"),
 		SilkEncoder:     strings.TrimSpace(settings.String(musicSettingSilkEncoder, "")),
 		SilkBitrate:     musicSilkBitrate,
+		Proxy:           musicProxyConfigFromSettings(settings),
 	}
 }
 

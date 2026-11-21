@@ -278,12 +278,30 @@ func (s *qqSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig,
 	if !s.musicu(ctx, f, cfg, request, &payload) {
 		return song{}, false
 	}
+	if payload.Req0.Code != 0 {
+		problem := qqSearchRejected(payload.Req0.Code, cfg.sourceOptions(s.Key()).Cookie != "")
+		recordMusicFailure(ctx, "%s", problem)
+		recordMusicCredentialProblem(ctx, problem)
+		return song{}, false
+	}
 	for _, entry := range payload.Req0.Data.Body.ItemSong {
 		if found, ok := entry.toSong(); ok {
 			return found, true
 		}
 	}
 	return song{}, false
+}
+
+// qqSearchRejected 解释搜索接口的业务错误码。实测不带 Cookie 搜索返回 2001，
+// 带有效登录态的同一请求返回 0，所以 2001 按「要登录」报。
+func qqSearchRejected(code int, hasCookie bool) string {
+	switch {
+	case code == 2001 && !hasCookie:
+		return "QQ 音乐拒绝了未登录的搜索（code 2001），请在 QQ 音乐设置里填 Cookie"
+	case code == 2001:
+		return "QQ 音乐拒绝了搜索（code 2001），Cookie 可能已失效，请重新登录 QQ 音乐后复制 Cookie"
+	}
+	return fmt.Sprintf("QQ 音乐搜索接口返回错误（code %d）", code)
 }
 
 type qqSongDetailResponse struct {
