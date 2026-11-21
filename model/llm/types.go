@@ -107,6 +107,9 @@ type Message struct {
 	// ContextGroup keeps related optional messages atomic during token fitting.
 	// It is local orchestration metadata and is never sent to providers.
 	ContextGroup string `json:"-"`
+	// SourceKey 是这条历史消息来自哪条聊天消息（调用方的去重键）。只在本地编排时用，
+	// 不发给供应商。
+	SourceKey string `json:"-"`
 	// CacheBreakpoint marks the last message of a stable prompt prefix.
 	// Providers with explicit prompt caching place a cache breakpoint after this
 	// message; providers with automatic prefix caching ignore it.

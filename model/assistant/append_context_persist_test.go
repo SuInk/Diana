@@ -49,7 +49,7 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		{Role: llm.RoleTool, Content: "已发送", ToolCallID: "c1", ToolName: "send"},
 		{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "看图"}, {Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,AA"}}},
 	}
-	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234}
+	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234, answered: map[string]bool{"group|1|甲|m1": true}}
 	original.index()
 
 	var store appendContextStore
@@ -70,7 +70,8 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
 		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.memory, original.memory) ||
-		!reflect.DeepEqual(loaded.pieces, original.pieces) {
+		!reflect.DeepEqual(loaded.pieces, original.pieces) || !reflect.DeepEqual(loaded.sentLines, original.sentLines) ||
+		!reflect.DeepEqual(loaded.answered, original.answered) {
 		t.Fatal("由前缀算出的表和原来不一样")
 	}
 	// 同一个会话只读一次盘：读回后就在内存里。

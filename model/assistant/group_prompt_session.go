@@ -421,6 +421,7 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 				message.Priority = llm.MessagePriorityRecentHistory
 			}
 			message.ContextGroup = groups[entry.Key]
+			message.SourceKey = entry.Key
 			stable = append(stable, message)
 		}
 	}

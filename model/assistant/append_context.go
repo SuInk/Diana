@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -58,6 +59,14 @@ type appendContextLog struct {
 	// pieces 是前缀里出现过的每个段（按「【」切）和每个段落（按空行切），续接时
 	// 不带标题的固定说明逐字一样就不再发。
 	pieces map[string]bool
+	// sentLines 是已发回复按行拆开的每一行：一次 send 写了几行，发出去拆成几条，
+	// 下一轮历史里就是几句各自的发言，整段比对不上。
+	sentLines map[string]bool
+	// answered 是前缀里当作【当前需要回复的消息】或同轮补充答过的聊天消息（历史
+	// 去重键）。续接时它们不再作为历史行追加：追加的东西都排在上一轮回复后面，
+	// 模型读到的就是「答完以后对方又问了一遍」，换个说法再答一次。11-21 生产
+	// Telegram 群 13:02 量子计算、13:49 F1 排位赛两次重复都是这样来的。
+	answered map[string]bool
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
@@ -337,37 +346,96 @@ func appendContextHeadKey(messages []llm.Message) string {
 
 // newAppendContextLog 记下这一轮的请求供下一轮续接。fullTokens 是这一轮助手侧完整
 // 组装的估算；previous 是续接所接的那份记录，用来沿用 overhead。
-func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64, previous *appendContextLog) *appendContextLog {
+// answered 是这一轮回答的聊天消息（当前消息和同轮补充的历史去重键）；续接时并上
+// previous 的，重新组装时前缀里以前答过的都已经是历史行，只记这一轮的。
+func newAppendContextLog(resp *agent.Response, headKey string, fullTokens int64, previous *appendContextLog, answered ...string) *appendContextLog {
 	if resp == nil || len(resp.Transcript) == 0 || resp.ConversationKey == "" {
 		return nil
 	}
-	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey}
+	log := &appendContextLog{prefix: resp.Transcript, key: resp.ConversationKey, headKey: headKey, answered: map[string]bool{}}
 	switch {
 	case !resp.Continued:
 		log.overhead = max(0, resp.PromptTokens-fullTokens)
 	case previous != nil:
 		log.overhead = previous.overhead
+		for key := range previous.answered {
+			log.answered[key] = true
+		}
+	}
+	for _, key := range answered {
+		if key != "" {
+			log.answered[key] = true
+		}
 	}
 	log.index()
 	return log
 }
 
-// index 从 prefix 算出 seen、sent、latest、memory、pieces 这几张表。它们完全由 prefix 决定，
-// 落盘时只存 prefix，读回来再算一遍。
+// answeredKeys 按落盘顺序列出 answered。
+func (log *appendContextLog) answeredKeys() []string {
+	keys := make([]string, 0, len(log.answered))
+	for key := range log.answered {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// alreadySent 报告机器人的这句发言是不是已经在记录里：整句发过，或者它的每一行
+// 都是某次发过的回复里的一行（一次 send 拆成几条发出去的情形）。
+func (log *appendContextLog) alreadySent(text string) bool {
+	key := appendContextSentKey(text)
+	if log.sent[key] {
+		return true
+	}
+	lines := sentReplyLines(key)
+	for _, line := range lines {
+		if !log.sentLines[line] {
+			return false
+		}
+	}
+	return len(lines) > 0
+}
+
+// sentReplyLines 把一段回复拆成去掉首尾空白的非空行，分条标记也算换行。
+func sentReplyLines(text string) []string {
+	text = strings.NewReplacer(notificationSplitMarker, "\n", notificationLineMarker, "\n").Replace(text)
+	var lines []string
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// index 从 prefix 算出 seen、sent、sentLines、latest、memory、pieces 这几张表。它们完全由
+// prefix 决定，落盘时只存 prefix，读回来再算一遍；answered 不由 prefix 决定，单独落盘。
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.memory, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}, map[string]bool{}
+	log.sentLines = map[string]bool{}
+	if log.answered == nil {
+		log.answered = map[string]bool{}
+	}
+	markSent := func(text string) {
+		key := appendContextSentKey(text)
+		log.sent[key] = true
+		for _, line := range sentReplyLines(key) {
+			log.sentLines[line] = true
+		}
+	}
 	for _, message := range log.prefix {
 		content := appendContextText(message)
 		log.seen[content] = true
 		for _, call := range message.ToolCalls {
 			if call.Name == agent.FinalizeToolName {
 				if text, _ := call.Arguments["text"].(string); strings.TrimSpace(text) != "" {
-					log.sent[appendContextSentKey(text)] = true
+					markSent(text)
 				}
 			}
 		}
 		if message.Role == llm.RoleAssistant && strings.TrimSpace(message.Content) != "" {
-			log.sent[appendContextSentKey(message.Content)] = true
+			markSent(message.Content)
 		}
 		if isHistoryLine(content) || message.Role == llm.RoleAssistant {
 			continue
@@ -449,7 +517,7 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 			if message.Role == llm.RoleAssistant {
 				// 机器人自己的发言：记录里已经有了（上一轮真实的 send，或重新组装时拼的
 				// 发言调用，或老记录里的普通发言）就不再追加。
-				keepReply = !log.sent[appendContextSentKey(llm.HistoryReplyText(message))]
+				keepReply = !log.alreadySent(llm.HistoryReplyText(message))
 			}
 			if keepReply {
 				appended = append(appended, message)
@@ -466,13 +534,17 @@ func appendContextContinuation(log *appendContextLog, messages []llm.Message) (*
 			appended = append(appended, message)
 			continue
 		}
+		if message.SourceKey != "" && log.answered[message.SourceKey] {
+			// 上一轮的当前消息：前缀里它就在那一轮回复前面，不再排到回复后面。
+			continue
+		}
 		content := appendContextText(message)
 		if message.Role == llm.RoleSystem || log.seen[content] {
 			continue
 		}
 		switch {
 		case isHistoryLine(content):
-		case message.Role == llm.RoleAssistant && log.sent[appendContextSentKey(content)]:
+		case message.Role == llm.RoleAssistant && log.alreadySent(content):
 			// 机器人自己的回复已经在记录里了。历史发言现在是 send 调用，在上面处理；
 			// 这里接的是不带调用的老形态。
 			continue
