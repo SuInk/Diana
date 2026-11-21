@@ -206,6 +206,15 @@ func (r *Runtime) transcribeVoiceSegment(ctx context.Context, event MessageEvent
 			return record.Transcript, audioHash, time.Duration(record.DurationMS) * time.Millisecond, true, "", nil
 		}
 	}
+	// 缓存键用原始字节算，SILK 转码放在查完缓存之后，命中就不用再找 OneBot 转一次。
+	body, format, err = r.ffmpegReadableVoice(ctx, event, segment, body, format, cfg.MaxBytes)
+	if err != nil {
+		code := "silk_transcode_failed"
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			code = voiceSTTContextCode(ctxErr)
+		}
+		return "", audioHash, 0, false, code, err
+	}
 	workDir, err := os.MkdirTemp("", "diana-stt-")
 	if err != nil {
 		return "", audioHash, 0, false, "temp_failed", err
@@ -306,6 +315,47 @@ func materializeVoiceBytes(ctx context.Context, r *Runtime, event MessageEvent, 
 	return body, filepath.Ext(strings.Split(source, "?")[0]), err
 }
 
+// silkVoiceBytes 认 QQ 语音用的腾讯 SILK v3：文件头是「#!SILK_V3」，QQ 发的前面
+// 还多一个 0x02。扩展名写的是 .amr，但 ffmpeg 解不了这种封装。
+func silkVoiceBytes(body []byte) bool {
+	const magic = "#!SILK_V3"
+	if len(body) > 0 && body[0] == 0x02 {
+		body = body[1:]
+	}
+	return len(body) >= len(magic) && string(body[:len(magic)]) == magic
+}
+
+// ffmpegReadableVoice 把 ffmpeg 读不了的 SILK 交给 OneBot 客户端的
+// get_record out_format=wav 转码（SnowLuma、NapCat 都自带能解 SILK 的 ffmpeg），
+// 别的格式原样返回。
+func (r *Runtime) ffmpegReadableVoice(ctx context.Context, event MessageEvent, segment MessageSegment, body []byte, format string, maxBytes int64) ([]byte, string, error) {
+	if !silkVoiceBytes(body) {
+		return body, format, nil
+	}
+	token := firstNonEmpty(segment.Data["file"], segment.Data["file_id"], segment.Data["id"])
+	if token == "" {
+		return nil, "", errors.New("silk voice has no OneBot file token to transcode")
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	response, err := r.callOneBotAPIForEvent(callCtx, event, "get_record", map[string]any{"file": token, "out_format": "wav"})
+	if err != nil {
+		return nil, "", fmt.Errorf("transcode silk voice via get_record: %w", err)
+	}
+	encoded := strings.TrimSpace(stringFromAny(response["base64"]))
+	if encoded == "" {
+		return nil, "", errors.New("transcode silk voice via get_record: OneBot returned no base64 audio")
+	}
+	wav, err := decodeBase64MediaSource("base64://"+encoded, maxBytes)
+	if err != nil {
+		return nil, "", fmt.Errorf("transcode silk voice via get_record: %w", err)
+	}
+	if silkVoiceBytes(wav) {
+		return nil, "", errors.New("transcode silk voice via get_record: OneBot returned SILK again")
+	}
+	return wav, ".wav", nil
+}
+
 func voiceCharacteristicQuestion(text string) bool {
 	text = strings.ToLower(strings.TrimSpace(text))
 	if text == "" {
@@ -400,6 +450,10 @@ func (r *Runtime) voiceSourceAnalysisParts(ctx context.Context, event MessageEve
 
 func (r *Runtime) voiceSourceAnalysisWAV(ctx context.Context, event MessageEvent, segment MessageSegment, cfg voiceSTTConfig) ([]byte, error) {
 	body, format, err := materializeVoiceBytes(ctx, r, event, segment, cfg.MaxBytes)
+	if err != nil {
+		return nil, err
+	}
+	body, format, err = r.ffmpegReadableVoice(ctx, event, segment, body, format, cfg.MaxBytes)
 	if err != nil {
 		return nil, err
 	}
