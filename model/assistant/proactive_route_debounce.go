@@ -361,6 +361,7 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 		r.record(r.decisionEventRecord(event, text, proactiveRouteTakenOutcome))
 		return
 	}
+	r.recordProactiveBatchRouted(eligible, event)
 	r.mu.RLock()
 	sem := r.sem
 	r.mu.RUnlock()
@@ -393,6 +394,42 @@ func (r *Runtime) recordProactiveBatchIgnored(batch []proactiveReplyCandidate, r
 		event.routingReason = "和这段时间的群消息一起做了接话评分，结论是不接话（原因记在这一批最后那条消息上）"
 		r.record(r.decisionEventRecord(event, candidate.Text, outcome))
 	}
+}
+
+// recordProactiveBatchRouted 是整批评完决定接话时，给 routed 以外那几条换掉「排队等接话判断」
+// 的占位：跟着 routed 那一轮一起回的（backlogTurn）指向那条，没被选上的记成不回。
+// 不换的话回复和调用链挂在别的消息上，这几条就一直挂着「还在等判断」。
+func (r *Runtime) recordProactiveBatchRouted(batch []proactiveReplyCandidate, routed MessageEvent) {
+	joined := make(map[string]bool, len(routed.backlogTurn))
+	for _, candidate := range routed.backlogTurn {
+		joined[candidate.Event.MessageID] = true
+	}
+	for _, candidate := range batch {
+		if candidate.Event.MessageID == routed.MessageID {
+			continue
+		}
+		event := candidate.Event
+		if joined[event.MessageID] {
+			event.routingReason = proactiveBatchJoinedReason(routed.MessageID)
+			r.record(r.decisionEventRecord(event, candidate.Text, "merged_into_backlog_turn"))
+			continue
+		}
+		event.routingReason = fmt.Sprintf("和这段时间的群消息一起做了接话评分，这一批选了消息 %s 来回，这条没被选上，不单独回", routed.MessageID)
+		r.record(r.decisionEventRecord(event, candidate.Text, "ignored"))
+	}
+}
+
+// recordProactiveBatchJoined 是直接叫机器人的消息把等待批接走时，给接走的几条换掉占位。
+func (r *Runtime) recordProactiveBatchJoined(batch []proactiveReplyCandidate, target MessageEvent) {
+	for _, candidate := range batch {
+		event := candidate.Event
+		event.routingReason = proactiveBatchJoinedReason(target.MessageID) + "；那条直接叫了机器人，这几条不再单独评分"
+		r.record(r.decisionEventRecord(event, candidate.Text, "merged_into_backlog_turn"))
+	}
+}
+
+func proactiveBatchJoinedReason(targetMessageID string) string {
+	return fmt.Sprintf("并进了消息 %s 那一轮一起处理，回没回、回了什么看那条", targetMessageID)
 }
 
 // splitBurstReplies 按逐条判断挑出这一轮要回的消息：burst="k" 那几条判为在跟机器人说话的，加上

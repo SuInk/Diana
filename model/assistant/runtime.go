@@ -2324,6 +2324,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		// 等着做接话评分的那几条并进这一轮，不再另评一次、另回一遍。
 		if parked := r.takeProactiveRoutePark(event); len(parked) > 0 {
 			event.backlogTurn = mergeProactiveRouteCandidates(parked, event.backlogTurn)
+			r.recordProactiveBatchJoined(parked, event)
 		}
 	}
 	proactiveCandidates := append([]proactiveReplyCandidate(nil), event.backlogProactive...)
@@ -2336,18 +2337,21 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			var parked bool
 			if parked, proactiveCandidates = r.parkProactiveRoute(event, proactiveCandidates); parked {
 				r.updateUserMemory(event, 0)
-				event.routingReason = "排队等接话判断：等群里安静下来，和前后几条一起判断一次要不要接话。判定不接话时这里会换成结论；接了话就看机器人回的那条"
+				event.routingReason = "排队等接话判断：等群里安静下来，和前后几条一起判断一次要不要接话。评完这里会换成结论"
 				r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
 				return finishWithoutReply("merged_into_backlog_turn")
 			}
 		}
 		routed, routedText, allowed := r.resolveProactiveRoute(ctx, event, proactiveCandidates)
+		// 当场评的这一批里可能有之前登记进等待批、挂着占位的，结论要一起落下去。
 		if allowed {
+			r.recordProactiveBatchRouted(proactiveCandidates, routed)
 			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
 			markReplyStage(ctx, replyStageDecided, time.Now())
 			r.prefetchCrossGroupContext(event)
 		} else {
+			r.recordProactiveBatchIgnored(proactiveCandidates, event, "ignored")
 			event.routingReason = routed.routingReason
 		}
 	}

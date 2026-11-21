@@ -276,11 +276,51 @@ func TestProactiveRouteParkTakenByDirectMessage(t *testing.T) {
 	if len(event.backlogTurn) != 1 || event.backlogTurn[0].Event.MessageID != "message-1" {
 		t.Fatalf("等着的候选应该并进这一轮：%+v", event.backlogTurn)
 	}
+	if record := latestEventRecord(runtime, "message-1"); !strings.Contains(record.Reason, "message-2") || strings.Contains(record.Reason, "排队等接话判断") {
+		t.Fatalf("接走的候选应该指向 @ 那条，不能还挂着占位：%+v", record)
+	}
 	time.Sleep(400 * time.Millisecond)
 	for i := range provider.requestsSnapshot() {
 		if strings.Contains(routerInput(provider, i), "有人知道怎么配代理吗") && strings.Contains(routerInput(provider, i), "本批群消息") {
 			t.Fatal("已经并进 @ 那一轮，不该再单独评分")
 		}
+	}
+}
+
+func latestEventRecord(runtime *Runtime, messageID string) EventRecord {
+	runtime.mu.RLock()
+	defer runtime.mu.RUnlock()
+	for _, record := range runtime.recent {
+		if record.MessageID == messageID {
+			return record
+		}
+	}
+	return EventRecord{}
+}
+
+// 整批评完决定接话：跟着那一轮一起回的指向回复对象，没被选上的记成不回，都不再挂着占位。
+func TestRecordProactiveBatchRoutedSettlesPlaceholders(t *testing.T) {
+	runtime, _, _ := parkTestRuntime(t, BotConfig{BotAccount: "42"})
+	now := time.Now()
+	batch := []proactiveReplyCandidate{
+		{Event: debounceTestEvent("message-1", "user-1", "早上好", now), Text: "早上好"},
+		{Event: debounceTestEvent("message-2", "user-2", "这个怎么配", now), Text: "这个怎么配"},
+		{Event: debounceTestEvent("message-3", "user-3", "我也想知道", now), Text: "我也想知道"},
+	}
+	routed := batch[1].Event
+	routed.backlogTurn = batch[2:]
+	runtime.recordProactiveBatchRouted(batch, routed)
+
+	if record := latestEventRecord(runtime, "message-2"); record.MessageID != "" {
+		t.Fatalf("回复对象自己的结果由回复那一轮记：%+v", record)
+	}
+	joined := latestEventRecord(runtime, "message-3")
+	if joined.Outcome != "merged_into_backlog_turn" || !strings.Contains(joined.Reason, "message-2") {
+		t.Fatalf("一起回的那条应该指向回复对象：%+v", joined)
+	}
+	skipped := latestEventRecord(runtime, "message-1")
+	if skipped.Outcome != "ignored" || !strings.Contains(skipped.Reason, "没被选上") {
+		t.Fatalf("没被选上的应该记成不回：%+v", skipped)
 	}
 }
 
