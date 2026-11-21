@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -32,8 +31,6 @@ const (
 	// edge_version 选项换成新版本号，不用等发版。
 	edgeChromiumVersion = "143.0.3650.75"
 	dashScopeSpeechPath = "/api-ws/v1/inference"
-	// windowsEpochOffset 是 1601-01-01 到 1970-01-01 的秒数，Sec-MS-GEC 按 Windows 时间算。
-	windowsEpochOffset = 11644473600
 )
 
 func speechWebsocketDialer(timeout time.Duration) *websocket.Dialer {
@@ -57,15 +54,6 @@ func websocketURL(base, fallback, path string) string {
 	}
 	parsed.RawQuery = ""
 	return parsed.String()
-}
-
-// edgeSecMSGEC 是 Edge 朗读接口要求的时间令牌：Windows 时间按五分钟取整，
-// 换成 100 纳秒单位后和客户端令牌一起做 SHA-256。
-func edgeSecMSGEC(now time.Time) string {
-	seconds := now.Unix() + windowsEpochOffset
-	seconds -= seconds % 300
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%d%s", seconds*10000000, edgeTrustedClientToken)))
-	return strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
 func randomHex(n int) string {
@@ -99,7 +87,7 @@ func synthesizeEdge(ctx context.Context, cfg ProviderConfig, req SpeechRequest, 
 			"TrustedClientToken": {edgeTrustedClientToken},
 			"ConnectionId":       {strings.ReplaceAll(uuid.NewString(), "-", "")},
 			"Sec-MS-GEC":         {edgeSecMSGEC(time.Now().Add(skew))},
-			"Sec-MS-GEC-Version": {"1-" + version},
+			"Sec-MS-GEC-Version": {"2-" + version},
 		}
 		var resp *http.Response
 		var err error
