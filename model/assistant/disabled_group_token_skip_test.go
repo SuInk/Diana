@@ -131,6 +131,10 @@ func (s *stubGroupStyleStore) GroupStyle(context.Context, string, string) (Group
 	return GroupStyle{}, false, nil
 }
 
+func (s *stubGroupStyleStore) GroupStyles(context.Context, string) ([]GroupStyle, error) {
+	return nil, nil
+}
+
 func (s *stubGroupStyleStore) SaveGroupStyle(context.Context, GroupStyle) error { return nil }
 
 func (s *stubGroupStyleStore) DeleteGroupStyle(context.Context, string, string) error { return nil }

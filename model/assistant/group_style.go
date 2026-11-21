@@ -60,6 +60,8 @@ type GroupStyle struct {
 // GroupStyleStore 是风格笔记的持久化界面。
 type GroupStyleStore interface {
 	GroupStyle(ctx context.Context, profileID, groupID string) (GroupStyle, bool, error)
+	// GroupStyles 列出这台机器人的所有风格记录（含整体风格那一行），归纳整体风格时用。
+	GroupStyles(ctx context.Context, profileID string) ([]GroupStyle, error)
 	SaveGroupStyle(ctx context.Context, style GroupStyle) error
 	DeleteGroupStyle(ctx context.Context, profileID, groupID string) error
 }
@@ -147,12 +149,13 @@ func (r *Runtime) observeGroupStyle(event MessageEvent) {
 			log.Printf("diana group style load failed: %v", err)
 			return
 		}
-		if found && (style.Disabled || style.Manual || now.Sub(style.UpdatedAt) < groupStyleRefreshAfter) {
-			return
+		if !found || !style.Disabled && !style.Manual && now.Sub(style.UpdatedAt) >= groupStyleRefreshAfter {
+			if _, err := r.learnGroupStyle(ctx, event); err != nil && !errors.Is(err, ErrGroupStyleNotEnoughMessages) && !errors.Is(err, ErrGroupStyleBusy) {
+				log.Printf("diana group style learn failed: %v", err)
+			}
 		}
-		if _, err := r.learnGroupStyle(ctx, event); err != nil && !errors.Is(err, ErrGroupStyleNotEnoughMessages) {
-			log.Printf("diana group style learn failed: %v", err)
-		}
+		// 本群学完（或不用学）再看整体风格要不要重新归纳，见 global_style.go。
+		r.refreshGlobalStyle(ctx, event.ProfileID, now)
 	}()
 }
 
@@ -325,16 +328,28 @@ func (r *Runtime) cachedGroupStyle(event MessageEvent) (GroupStyle, bool) {
 	return style, found
 }
 
-// groupStylePrompt 是回复尾部那段「这个群的说话风格」，没有笔记时返回空串。
+// groupStylePrompt 是回复尾部那段说话风格。群里有自己的笔记就用本群的；本群还没学到
+// 或者是私聊，用整体风格兜底；本群单独关掉了风格就什么都不带。都没有时返回空串。
 func (r *Runtime) groupStylePrompt(event MessageEvent, cfg BotConfig) string {
-	if event.Kind != EventKindGroup || !boolValue(cfg.ExpressionLearningEnabled, false) {
+	if !boolValue(cfg.ExpressionLearningEnabled, false) {
 		return ""
 	}
-	style, found := r.cachedGroupStyle(event)
+	if event.Kind == EventKindGroup && strings.TrimSpace(event.GroupID) != "" {
+		style, found := r.cachedGroupStyle(event)
+		if found && style.Disabled {
+			return ""
+		}
+		if found && strings.TrimSpace(style.Text) != "" {
+			return cfg.promptf(promptGroupStyleSpec, map[string]string{"style": strings.TrimSpace(style.Text)})
+		}
+	}
+	global := event
+	global.GroupID = GlobalStyleGroupID
+	style, found := r.cachedGroupStyle(global)
 	if !found || style.Disabled || strings.TrimSpace(style.Text) == "" {
 		return ""
 	}
-	return cfg.promptf(promptGroupStyleSpec, map[string]string{"style": strings.TrimSpace(style.Text)})
+	return cfg.promptf(promptGlobalStyleSpec, map[string]string{"style": strings.TrimSpace(style.Text)})
 }
 
 // GroupStyleForProfile 给控制台读一个群的风格笔记。
@@ -397,8 +412,12 @@ func (r *Runtime) storeGroupStyle(ctx context.Context, store GroupStyleStore, st
 	return style, true, nil
 }
 
-// RelearnGroupStyle 由控制台发起，立刻重学一次，手动改过的也覆盖。
+// RelearnGroupStyle 由控制台发起，立刻重学一次，手动改过的也覆盖。群号是
+// GlobalStyleGroupID 时重新归纳整体风格。
 func (r *Runtime) RelearnGroupStyle(ctx context.Context, profileID, groupID string) (GroupStyle, error) {
+	if strings.TrimSpace(groupID) == GlobalStyleGroupID {
+		return r.learnGlobalStyle(ctx, strings.TrimSpace(profileID))
+	}
 	return r.learnGroupStyle(ctx, MessageEvent{Kind: EventKindGroup, ProfileID: strings.TrimSpace(profileID), GroupID: strings.TrimSpace(groupID)})
 }
 

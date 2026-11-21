@@ -1748,8 +1748,11 @@
                 </label>
                 <span class="hint">
                   每个群大约一天学一次：让后台模型读最近的群友消息，写一小段这个群怎么说话（口头禅和梗的意思、句子长短、标点和表情习惯、怎么互相调侃），回复时带上，让它越来越像这个群的人。
-                  学到的在「群管理」里编辑群时能看到，可以手动改或重新学。每个群每天多一次后台模型调用；关掉或不回复的群不学。
+                  学到的在「群管理」里编辑群时能看到，可以手动改或重新学。另外每天把各群的笔记归纳成一段整体风格，给还没学到的群和私聊用。每个群每天多一次后台模型调用，整体风格再多一次；关掉或不回复的群不学。
                 </span>
+              </div>
+              <div v-if="form.expression_learning_enabled && !creating && form.id" class="field wide">
+                <GroupStylePanel :profile-id="form.id" :group-id="GLOBAL_STYLE_GROUP_ID" />
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2504,6 +2507,7 @@ import { sendRetryFields, sendRetryPayload, sendRetryValidationError } from "../
 import { timezoneOptions } from "../lib/timezone-options";
 import { botImageGenerationLimitsPayload, botVideoGenerationLimitsPayload, mediaGenerationCooldownPayload } from "../lib/media-generation-quota";
 import {
+  GLOBAL_STYLE_GROUP_ID,
   deleteBotProfile,
   generatePersona,
   assistReplyFilterRule,
@@ -2555,6 +2559,7 @@ import {
 import SearchRoutingPanel from "../components/SearchRoutingPanel.vue";
 import AccountNameHint from "../components/AccountNameHint.vue";
 import OwnerBindPanel from "../components/OwnerBindPanel.vue";
+import GroupStylePanel from "../components/GroupStylePanel.vue";
 import { builtinSpeechAPIs, mediaParamFields, resolveSpeechAPI, isSpeechBehaviorParam, updateSpeechParam, type MediaParamField } from "../lib/speech-params";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import AppNumberInput from "../components/AppNumberInput.vue";

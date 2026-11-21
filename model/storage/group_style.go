@@ -14,7 +14,8 @@ import (
 	"github.com/SuInk/diana/model/assistant"
 )
 
-// 风格笔记：每个机器人、每个群一行「这个群怎么说话」。manual 标记主人手动改过，
+// 风格笔记：每个机器人、每个群一行「这个群怎么说话」；群号是 assistant.GlobalStyleGroupID
+// 的那一行是各群归纳出来的整体风格。manual 标记主人手动改过，
 // 自动学习不再覆盖它；disabled 标记这个群单独关掉了风格，这时 text 可以是空的。
 //
 // 旧的表达学习按整句计数，存在 group_expressions 表里。那些计数都是从聊天里算出来的，
@@ -62,6 +63,30 @@ func (s *SQLiteStore) GroupStyle(ctx context.Context, profileID, groupID string)
 	style.Disabled = disabled != 0
 	style.UpdatedAt = time.Unix(updated, 0)
 	return style, true, nil
+}
+
+// GroupStyles 列出一台机器人的所有风格记录，含整体风格那一行。
+func (s *SQLiteStore) GroupStyles(ctx context.Context, profileID string) ([]assistant.GroupStyle, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `SELECT group_id, text, manual, disabled, sample_count, updated_at FROM group_styles WHERE profile_id = ?`, strings.TrimSpace(profileID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var styles []assistant.GroupStyle
+	for rows.Next() {
+		style := assistant.GroupStyle{ProfileID: strings.TrimSpace(profileID)}
+		var manual, disabled int
+		var updated int64
+		if err := rows.Scan(&style.GroupID, &style.Text, &manual, &disabled, &style.SampleCount, &updated); err != nil {
+			return nil, err
+		}
+		style.Manual, style.Disabled, style.UpdatedAt = manual != 0, disabled != 0, time.Unix(updated, 0)
+		styles = append(styles, style)
+	}
+	return styles, rows.Err()
 }
 
 // SaveGroupStyle 写一个群的风格笔记，已有就覆盖。

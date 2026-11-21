@@ -25,6 +25,18 @@ func (s *memoryGroupStyleStore) GroupStyle(_ context.Context, profileID, groupID
 	return style, ok, nil
 }
 
+func (s *memoryGroupStyleStore) GroupStyles(_ context.Context, profileID string) ([]GroupStyle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var styles []GroupStyle
+	for _, style := range s.styles {
+		if style.ProfileID == profileID {
+			styles = append(styles, style)
+		}
+	}
+	return styles, nil
+}
+
 func (s *memoryGroupStyleStore) SaveGroupStyle(_ context.Context, style GroupStyle) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

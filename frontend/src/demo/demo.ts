@@ -423,7 +423,11 @@ const groups: BotGroupSummary[] = [
 // 机器人见过的人从画像里取名，没见过的走 OneBot get_stranger_info；演示模式两条路
 // 都没有，用这张表补上画像里没有的号。
 const demoLearnedStyle = "这个群说话很碎，一条消息大多十来个字，想到哪说到哪，连着发好几条很常见，基本不打句号。口头禅是「绷不住了」「哥几个」「这么强」，震惊时发「啊？」，捧场用「确实」「可以」。爱用 QQ 表情「吃瓜」「坐牢」代替表态。调侃很直接，互相叫外号、阴阳两句都不算事，但不会真骂人。聊代码和部署时会突然正经，贴报错、给链接，说完又回到玩梗。";
-const demoGroupStyles = new Map<string, import("../api").GroupStyle>([["100200301", { profile_id: "bot-onebot", group_id: "100200301", text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date(Date.now() - 5 * 3600_000).toISOString() }]]);
+const demoGlobalStyle = "一条消息大多十来个字，想到哪说到哪，常连着发两三条，基本不打句号。几个群都爱说「绷不住了」「确实」，震惊时发「啊？」。开玩笑直接但不真骂人，说正事时会贴报错、给链接，说完又回到闲聊。";
+const demoGroupStyles = new Map<string, import("../api").GroupStyle>([
+  ["100200301", { profile_id: "bot-onebot", group_id: "100200301", text: demoLearnedStyle, manual: false, sample_count: 286, updated_at: new Date(Date.now() - 5 * 3600_000).toISOString() }],
+  ["*", { profile_id: "bot-onebot", group_id: "*", text: demoGlobalStyle, manual: false, sample_count: 3, updated_at: new Date(Date.now() - 3 * 3600_000).toISOString() }]
+]);
 
 const demoJoinStrategies: { strategy_id: string; group_openids?: string[]; group_ids?: string[]; whitelist_user_count: number; is_enable: "on" | "off"; expire_at: string; remark: string }[] = [
   { strategy_id: "st_demo1", group_openids: ["D7A4E09C3B2F48A1965C0E7B13F2A8D4"], whitelist_user_count: 128, is_enable: "on", expire_at: "2027-06-30T00:00:00+08:00", remark: "老成员回群白名单" },
@@ -2205,7 +2209,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const base = { profile_id: "", group_id: key, disabled: current?.disabled, updated_at: new Date().toISOString() };
     if (styleMatch[2] === "/relearn" && method === "POST") {
       await new Promise((resolve) => setTimeout(resolve, 800));
-      store({ ...base, text: demoLearnedStyle, manual: false, sample_count: 286 });
+      store(key === "*" ? { ...base, text: demoGlobalStyle, manual: false, sample_count: 3 } : { ...base, text: demoLearnedStyle, manual: false, sample_count: 286 });
       return reply();
     }
     if (styleMatch[2] === "/enabled" && method === "PUT") {

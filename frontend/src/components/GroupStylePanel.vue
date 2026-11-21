@@ -1,14 +1,18 @@
 <script setup lang="ts">
 import { computed, ref, useId, watch } from "vue";
 import { RefreshCw, RotateCcw, Save } from "@lucide/vue";
-import { getGroupStyle, relearnGroupStyle, saveGroupStyle, setGroupStyleEnabled, type GroupStyleResponse } from "../api";
+import { GLOBAL_STYLE_GROUP_ID, getGroupStyle, relearnGroupStyle, saveGroupStyle, setGroupStyleEnabled, type GroupStyleResponse } from "../api";
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 
 // 本群说话风格：模型读群聊写的一段「这个群怎么说话」，回复时带上。这段不是群配置，
 // 是运行时学到的东西，所以自己加载、自己保存，不跟着群配置的「保存」走。
+// 群号传 GLOBAL_STYLE_GROUP_ID 时是机器人设置页上的整体风格：从各群笔记归纳，给还没
+// 学到的群和私聊兜底，接口和开关规矩都一样。
 const props = defineProps<{ profileId: string; groupId: string }>();
 const id = useId();
+const global = computed(() => props.groupId === GLOBAL_STYLE_GROUP_ID);
+const scopeName = computed(() => (global.value ? "整体" : "本群"));
 
 const data = ref<GroupStyleResponse | null>(null);
 const draft = ref("");
@@ -48,12 +52,13 @@ const dirty = computed(() => draft.value.trim() !== (style.value?.text ?? "").tr
 
 const status = computed(() => {
   const current = style.value;
-  if (current?.disabled) return "本群已关闭";
+  if (current?.disabled) return `${scopeName.value}已关闭`;
   if (!current || !hasNote.value) return "还没学到";
   const day = new Date(current.updated_at);
   const when = Number.isNaN(day.getTime()) ? "" : ` · ${day.getMonth() + 1} 月 ${day.getDate()} 日`;
   if (current.manual) return `手动写的${when}`;
-  return `自动学到${when}${current.sample_count ? ` · 读了 ${current.sample_count} 条` : ""}`;
+  const read = current.sample_count ? (global.value ? ` · 归纳了 ${current.sample_count} 个群` : ` · 读了 ${current.sample_count} 条`) : "";
+  return `自动学到${when}${read}`;
 });
 
 async function save(text: string, message: string): Promise<void> {
@@ -76,7 +81,7 @@ async function toggle(event: Event): Promise<void> {
     const unsaved = draft.value;
     apply(await setGroupStyleEnabled(props.groupId, props.profileId, input.checked));
     draft.value = unsaved;
-    toastSuccess(input.checked ? "本群的风格已打开" : "本群的风格已关闭，笔记留着");
+    toastSuccess(input.checked ? `${scopeName.value}风格已打开` : `${scopeName.value}风格已关闭，笔记留着`);
   } catch (error) {
     input.checked = enabled.value;
     toastError(error instanceof Error ? error.message : "切换失败");
@@ -91,13 +96,13 @@ function relearnWarning(): string {
   if (style.value?.manual) lost.push("你手动写的这段会被覆盖");
   else if (hasNote.value) lost.push("现在这段会被覆盖");
   if (dirty.value) lost.push("还没保存的修改也会丢掉");
-  const head = "会用后台模型重新读最近的群聊，写一段新的风格笔记，要等十几秒。";
+  const head = global.value ? "会用后台模型重新读各群的风格笔记，归纳一段新的整体风格，要等十几秒。" : "会用后台模型重新读最近的群聊，写一段新的风格笔记，要等十几秒。";
   return lost.length ? `${head}${lost.join("，")}。` : head;
 }
 
 async function relearn(): Promise<void> {
   const confirmed = await askConfirm({
-    title: "重新学习本群风格？",
+    title: `重新学习${scopeName.value}风格？`,
     message: relearnWarning(),
     confirmLabel: "重新学习",
     danger: Boolean(style.value?.manual) || dirty.value
@@ -118,12 +123,12 @@ async function relearn(): Promise<void> {
 <template>
   <div class="group-style">
     <div class="group-style-head">
-      <label :for="id">本群说话风格</label>
+      <label :for="id">{{ global ? "整体说话风格" : "本群说话风格" }}</label>
       <span class="badge" :class="{ accent: enabled && hasNote && !style?.manual, warn: enabled && style?.manual }">{{ loading ? "读取中…" : status }}</span>
-      <label class="switch group-style-switch" :title="enabled ? '本群带上风格笔记' : '本群不用风格笔记'">
+      <label class="switch group-style-switch" :title="enabled ? `${scopeName}带上风格笔记` : `${scopeName}不用风格笔记`">
         <input type="checkbox" :checked="enabled" :disabled="loading || !!loadError || busy" @change="toggle" />
         <span class="track" aria-hidden="true"></span>
-        <span class="switch-label">本群启用</span>
+        <span class="switch-label">{{ scopeName }}启用</span>
       </label>
     </div>
     <p v-if="loadError" class="hint">读取失败：{{ loadError }}</p>
@@ -135,7 +140,7 @@ async function relearn(): Promise<void> {
         :class="{ muted: !enabled }"
         rows="5"
         :maxlength="maxRunes"
-        placeholder="还没学到。群里聊够几十条之后，大约一天学一次；也可以点「重新学习」，或者自己写一段。"
+        :placeholder="global ? '还没归纳。至少两个群学到风格之后，大约一天归纳一次；也可以点「重新学习」，或者自己写一段。' : '还没学到。群里聊够几十条之后，大约一天学一次；也可以点「重新学习」，或者自己写一段。'"
       ></textarea>
       <div class="group-style-actions">
         <span class="hint">{{ length }} / {{ maxRunes }}</span>
@@ -153,8 +158,10 @@ async function relearn(): Promise<void> {
         </button>
       </div>
       <span class="hint">
-        风格学习打开时，每个群大约一天学一次：读最近的群友消息，写一段这个群怎么说话，回复时带上。手动改过的不会被自动覆盖，点「重新学习」会覆盖。
-        <template v-if="!enabled"><strong>本群已关闭风格：不自动学，也不带进回复，这段留着，打开后接着用。</strong></template>
+        <template v-if="global">把各群学到的风格放在一起，归纳出大多数群共同的说话习惯，大约一天一次；只在一个群流行的梗不写进来。群里有自己的风格就用自己的，还没学到的群和私聊用这一段。手动改过的不会被自动覆盖，点「重新学习」会覆盖。</template>
+        <template v-else>风格学习打开时，每个群大约一天学一次：读最近的群友消息，写一段这个群怎么说话，回复时带上；还没学到时用机器人设置里的「整体说话风格」。手动改过的不会被自动覆盖，点「重新学习」会覆盖。</template>
+        <template v-if="!enabled && global"><strong>整体风格已关闭：不自动归纳，也不带进回复，这段留着，打开后接着用。</strong></template>
+        <template v-else-if="!enabled"><strong>本群已关闭风格：不自动学，也不带进回复（也不用整体风格），这段留着，打开后接着用。</strong></template>
         <template v-else-if="data && !data.learning_enabled"><strong>这台机器人没开「风格学习」，这段现在不会带进回复。</strong></template>
       </span>
     </template>

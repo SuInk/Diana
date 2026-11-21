@@ -16,6 +16,7 @@ import (
 )
 
 // 群管理页上的「本群说话风格」：看模型学到的那段、手动改、点一下重新学，或者本群单独关掉。
+// 群号写成 assistant.GlobalStyleGroupID（「*」）就是机器人设置页上的整体风格，接口一样。
 
 // groupStyleRuntime 做成可选接口：测试里的假运行时不必为此实现三个空方法。
 type groupStyleRuntime interface {
@@ -126,7 +127,7 @@ func (h *BotHandler) relearnGroupStyle(c *gin.Context) {
 	style, err := runtime.RelearnGroupStyle(ctx, profileID, groupID)
 	if err != nil {
 		status := statusUpstreamFailed
-		if errors.Is(err, assistant.ErrGroupStyleNotEnoughMessages) || errors.Is(err, assistant.ErrGroupStyleBusy) {
+		if errors.Is(err, assistant.ErrGroupStyleNotEnoughMessages) || errors.Is(err, assistant.ErrGlobalStyleNotEnoughGroups) || errors.Is(err, assistant.ErrGroupStyleBusy) {
 			status = http.StatusConflict
 		}
 		c.JSON(status, gin.H{"error": err.Error()})
