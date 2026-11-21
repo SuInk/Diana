@@ -227,8 +227,8 @@ func TestDeferredLoaderRestoresMemberNamesAsFamily(t *testing.T) {
 	var contracts []struct {
 		Name string `json:"name"`
 	}
-	if err := json.Unmarshal([]byte(loader.loadedContracts(true)), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
-		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(true), err)
+	if err := json.Unmarshal([]byte(loader.loadedContracts(true, false)), &contracts); err != nil || len(contracts) != 1 || contracts[0].Name != "page" {
+		t.Fatalf("contracts = %s (%v)", loader.loadedContracts(true, false), err)
 	}
 	if catalog := loader.catalog(); strings.Contains(catalog, "page_open") || !strings.Contains(catalog, "- page(action: ") {
 		t.Fatalf("deferred catalog = %q", catalog)

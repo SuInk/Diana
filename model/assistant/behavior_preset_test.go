@@ -283,6 +283,11 @@ func TestSystemPromptKeepsPerMessageContentOutOfTheCacheablePrefix(t *testing.T)
 		if strings.Contains(head, "【当前发言者群身份】") || !strings.Contains(tail, "群身份："+GroupRoleLabel(NormalizeGroupRole(role))) {
 			t.Fatal("current group identity must stay in dynamic tail")
 		}
+		// 历史行格式和群身份段的含义说明逐字不变，放在头部，尾部只留数据。
+		if !strings.Contains(head, groupHistoryPrefixRule) || !strings.Contains(head, speakerGroupIdentityRule) ||
+			strings.Contains(tail, "回复时不要把这个前缀带进去") || strings.Contains(tail, "不代表机器人主人身份") {
+			t.Fatal("fixed group explanations must live in the head, not the tail")
+		}
 	}
 
 	alice := prompt("1", "Alice", "diana 在吗")
