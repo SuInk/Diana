@@ -821,7 +821,7 @@ func directReplyOutcome(event MessageEvent, successOutcome string) bool {
 // 只是各回各的），也不能把一条指令吞掉。
 func (r *Runtime) burstChatMessage(event MessageEvent, text string) bool {
 	text = firstNonEmpty(strings.TrimSpace(text), directedInboundText(event))
-	if r.statusCommandActive(event, text) {
+	if r.statusCommandActive(event, text) || r.isRecallCommand(event, text) {
 		return false
 	}
 	if r.repositoryApprovalCodePending(event, text) {
