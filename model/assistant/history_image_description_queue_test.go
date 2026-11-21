@@ -425,3 +425,26 @@ func TestHistoryImageDescriptionKeepsGenericPromptWithoutSticker(t *testing.T) {
 		})
 	}
 }
+
+// 回复前看完图：上下文里刚发出、还没描述的图，渲染历史前先等它描述完，不拿
+// 「尚无缓存描述」去回答。群里正忙（后台识图不开工）时也一样。
+func TestPromptHistoryWaitsForUndescribedImages(t *testing.T) {
+	provider := &queueVisionProvider{}
+	runtime, _ := newQueueTestRuntime(t, provider, 5*time.Second, time.Hour)
+	item, _ := multiImageEvent(t, "bot-edited-image", 1)
+	current := MessageEvent{Kind: EventKindGroup, GroupID: item.GroupID, UserID: "user-2", MessageID: "ask-text", Time: item.Time + 38}
+
+	runtime.incActive(1)
+	defer runtime.incActive(-1)
+	runtime.beginHistoryImageDescriptionForeground()
+	defer runtime.endHistoryImageDescriptionForeground()
+
+	stable, _ := runtime.stableGroupHistory(context.Background(), current, runtime.effectiveConfigForEvent(current), []MessageEvent{item}, true, nil)
+	var text strings.Builder
+	for _, message := range stable {
+		text.WriteString(message.Content)
+	}
+	if strings.Contains(text.String(), historyImageDescriptionPending) || !strings.Contains(text.String(), "识图的描述") {
+		t.Fatalf("history rendered before the image was described: %q", text.String())
+	}
+}

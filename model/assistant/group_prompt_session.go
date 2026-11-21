@@ -348,6 +348,9 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		}
 	}
 	groups, recent := historyContextMetadata(localHistory, event.Time, cfg.BotAccount)
+	if direct {
+		r.awaitPromptHistoryImages(ctx, event, history, old)
+	}
 	entries := make(map[string]GroupPromptHistoryEntry, len(history))
 	var order []string
 	var volatile []llm.Message
@@ -379,7 +382,7 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		}{withoutReplyRuntimeState(item), item.botReply, direct, cfg.BotAccount, historyRenderVersion})
 		hash := promptCacheHash(string(source))
 		entry, ok := old[key]
-		if !ok || entry.SourceHash != hash {
+		if !ok || entry.SourceHash != hash || historyEntryImagePending(entry) {
 			entry = GroupPromptHistoryEntry{Key: key, SourceHash: hash, Messages: r.renderPromptHistoryEvent(ctx, event, item, cfg, direct)}
 		}
 		if _, exists := entries[key]; !exists {
@@ -422,6 +425,45 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 		}
 	}
 	return stable, volatile
+}
+
+// awaitPromptHistoryImages 在回复前把上下文里还没描述的图看完：要渲染进历史、带图
+// 却还没有描述的条目，一起加急识图，最多等 replyImageDescriptionWait。11-20 线上
+// Diana 18:48:43 发出改图，群友 18:49:21 问「文字是什么」，那张图的历史条目只有
+// 「尚无缓存描述」，模型去看了群友的原图，把原图的字说成改图的。条目又是渲染一次
+// 就缓存的，描述 18:51 补上以后这一条照旧是占位。等不完的条目带着占位渲染，下一轮
+// 重画（historyEntryImagePending），不会一直停在占位上。
+func (r *Runtime) awaitPromptHistoryImages(ctx context.Context, event MessageEvent, history []MessageEvent, rendered map[string]GroupPromptHistoryEntry) {
+	var pending []MessageEvent
+	for _, item := range history {
+		if item.crossGroupContext || historicalStillImageCount(item) == 0 || (item.MessageID != "" && item.MessageID == event.MessageID) {
+			continue
+		}
+		if entry, ok := rendered[messageHistoryDedupeKey(item)]; ok && !historyEntryImagePending(entry) {
+			continue
+		}
+		if r.historyImageDescriptionsGivenUp(item) {
+			// 自动路径已经放弃的图（下不下来、识图一直失败）不每轮再等一遍。
+			continue
+		}
+		pending = append(pending, item)
+	}
+	if len(pending) == 0 {
+		return
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, replyImageDescriptionWait)
+	defer cancel()
+	r.awaitHistoryImageDescriptions(waitCtx, pending...)
+}
+
+// historyEntryImagePending 报告这条渲染好的历史里还有图没描述。
+func historyEntryImagePending(entry GroupPromptHistoryEntry) bool {
+	for _, message := range entry.Messages {
+		if strings.Contains(message.Content, "摘要="+historyImageDescriptionPending) {
+			return true
+		}
+	}
+	return false
 }
 
 // historyReplyMessages 把机器人自己发过的一句话写成 send 调用加「已发送」，不写成

@@ -90,6 +90,27 @@ func (r *Runtime) enqueueHistoryImageDescriptions(event MessageEvent) {
 	r.enqueueHistoryImageDescriptionsWithPolicy(event, false, false)
 }
 
+// historyImageDescriptionsGivenUp 报告这条消息里的图是否都已经失败到自动路径放弃。
+func (r *Runtime) historyImageDescriptionsGivenUp(event MessageEvent) bool {
+	r.historyImageDescMu.Lock()
+	defer r.historyImageDescMu.Unlock()
+	found := false
+	for _, segment := range event.Segments {
+		if !historyDescribableImageSegment(segment) {
+			continue
+		}
+		hash, ok := imageSegmentContentSHA256(segment)
+		if !ok {
+			continue
+		}
+		found = true
+		if r.historyImageDescFailed[hash].count < historyImageDescriptionMaxFailures {
+			return false
+		}
+	}
+	return found
+}
+
 // enqueueHistoryImageDescriptionsNow 不看时间，用于用户/模型真的在读这张图的路径。
 func (r *Runtime) enqueueHistoryImageDescriptionsNow(event MessageEvent) {
 	r.enqueueHistoryImageDescriptionsWithPolicy(event, true, false)
