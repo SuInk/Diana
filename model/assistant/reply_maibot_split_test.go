@@ -57,6 +57,10 @@ func TestMaiBotSplitKeepsMarkupLinksAndLatinWords(t *testing.T) {
 		// 11-20 线上：「+」两边的空格被当成停顿，拆出一条以「+ 考核制」开头的消息。
 		"symbol space": {"馒头就是 M-Team（m-team.cc），国内最大的 PT 站之一，邀请制 + 考核制，资源量在全类型 PT 站里算头部", []string{"邀请制 + 考核制"}},
 		"digit space":  {"一年回 2600 正好保本，你这融资方案是零息债券，利息全靠群友情谊", []string{"一年回 2600 正好保本"}},
+		// 11-21 线上：书名里的逗号被当停顿，拆成「…那本《反派」和「我把女二养成病娇》的…」。
+		"book title":  {"搜了搜了，还真有：渔别源是个网文作者，写明末千里行同人和病娇百合那本《反派，我把女二养成病娇》的；城倾山是知乎答主，答过原神4.2剧情评价那条", []string{"《反派，我把女二养成病娇》"}},
+		"lenticular":  {"群公告写了，进群先看置顶，【新人须知，第三条】别发广告，不然直接踢，管理员不会提醒第二次", []string{"【新人须知，第三条】"}},
+		"angle title": {"这首歌收在专辑里，叫〈夜航，星〉那首，副歌那段特别好听，你可以先听这一首再决定要不要整张听", []string{"〈夜航，星〉"}},
 	} {
 		got := splitEventChatReply(tc.reply, cfg, group)
 		for _, keep := range tc.keep {
