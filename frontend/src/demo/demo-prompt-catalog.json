@@ -100,7 +100,7 @@
       "group": "reply_base",
       "title": "群聊发言者",
       "usage": "群聊里「注入发言者」打开时，放在历史之后，告诉模型这一轮是谁在说话。",
-      "default": "当前是 群聊，正在和你说话的是「{sender}」；历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。群聊里尽量简短。",
+      "default": "当前是 群聊，正在和你说话的是「{sender}」。群聊里尽量简短。",
       "vars": [
         {
           "name": "sender",
@@ -1039,8 +1039,8 @@
       "key": "reply.speaker_group_identity",
       "group": "reply_tail",
       "title": "当前发言者的群身份",
-      "usage": "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。",
-      "default": "【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。仅描述本轮当前群，不代表机器人主人身份；群管操作仍由工具实时核验。",
+      "usage": "仅在群聊尾部注入当前发言者的群身份与来源，不遍历历史成员，也不额外查询平台。这一段只放数据，含义说明在头部（speakerGroupIdentityRule）。",
+      "default": "【当前发言者群身份】账号：{user_id}；当前群：{group_id}；群身份：{role}；来源：{source}。",
       "vars": [
         {
           "name": "user_id",

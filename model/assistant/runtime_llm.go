@@ -1038,6 +1038,9 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	builder.WriteString(capabilityPermissionRule)
 	builder.WriteString("\n" + cfg.prompt(promptMessageAddressingSpec))
 	if event.Kind == EventKindGroup {
+		// 历史行格式和群身份段的含义逐字不变，以前跟着尾部的发言者、群身份数据每换一个人
+		// 说话重发一遍。
+		appendPromptSection(&builder, groupHistoryPrefixRule+speakerGroupIdentityRule)
 		appendPromptSection(&builder, replyMentionRules(cfg))
 	}
 	if agentEnabled {
@@ -1193,6 +1196,9 @@ func (r *Runtime) replyMentionPrompt(cfg BotConfig, event MessageEvent, history 
 	}
 	return "【可提及成员候选 JSON】" + string(payload)
 }
+
+// groupHistoryPrefixRule 说明群聊历史行的发言者前缀，以前写在尾部「群聊发言者」模板里。
+const groupHistoryPrefixRule = "群聊历史消息以“昵称（用户 ID）: 内容”标注发言者，回复时不要把这个前缀带进去。"
 
 // replyMentionRules 是群聊里怎么写真正的 @：只随机器人的引用/提及配置变，放在稳定
 // 头部；本轮的候选名单由 replyMentionPrompt 放在尾部。
