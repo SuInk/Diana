@@ -9640,7 +9640,7 @@ type chatSplitLimits struct {
 	KeepPeriods bool
 	// SplitRules 是主人配置的分条正则，命中处另起一条，见 reply_split_rules.go。
 	SplitRules []string
-	// MaiBotSplit 照 MaiBot 的规则断句：在句号、分号、空格和换行处拆开（不在逗号处拆），越长越
+	// MaiBotSplit 照 MaiBot 的规则断句：在逗号、句号、分号、空格和换行处拆开，越长越
 	// 倾向拆，一条回复最多三条。模型很少自己写空行或分条标记，只按那些拆的话群里全是一整段
 	// 的长消息，不像人说话。只在纯文本平台、允许多条发送时打开，见 maiBotSplitApplies。
 	MaiBotSplit bool
