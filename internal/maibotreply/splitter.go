@@ -34,7 +34,9 @@ var (
 	// splitQuotePairs 是开引号到收引号的对照。MaiBot 要求收尾的引号和开头的是同一个字符，
 	// 中文引号「」“”永远配不上，开了一个引号后面整段都不再断句。
 	splitQuotePairs = map[rune]rune{'"': '"', '\'': '\'', '“': '”', '‘': '’', '「': '」', '『': '』'}
-	splitSeparators = map[rune]bool{'，': true, ',': true, ' ': true, '。': true, ';': true, '；': true, '\n': true}
+	// splitSeparators 比 MaiBot 少了逗号（，,）：逗号是一句话中间的停顿，从那里分条
+	// 群里看着像话说一半就发出去了（11-21 用户反馈「分号这种才要分条，逗号不用」）。
+	splitSeparators = map[rune]bool{' ': true, '。': true, ';': true, '；': true, '\n': true}
 )
 
 // Merge 把断出来的句子合到最多 MaxSplitNum 条。segments 可以来自好几段
@@ -59,7 +61,7 @@ func Merge(segments []Segment) []string {
 }
 
 // cutPenalty 是在这种分隔符处断开的代价，按总字数的比例算：换行、句号、分号是一句话
-// 说完的地方，逗号和空格只是停顿，从那里断开容易把一件事劈成两条。
+// 说完的地方，汉字间的空格只是停顿，从那里断开容易把一件事劈成两条。
 func cutPenalty(separator string) float64 {
 	switch separator {
 	case "\n":
@@ -73,7 +75,7 @@ func cutPenalty(separator string) float64 {
 
 // bestCuts 在 2 到 maxCount 组里挑总代价最小的分法（分界 i 表示第 i 句之后断开）。
 // 代价是每条字数偏离平均值的比例之和，加上每个分界的 cutPenalty：既不留一条孤零零
-// 的短尾巴，也尽量不从逗号处把一件事断开。11-20 线上一条讲 RSI 的回复按句数均分，
+// 的短尾巴，也尽量不从停顿处把一件事断开。11-20 线上一条讲 RSI 的回复按句数均分，
 // 把「0 到 100 衡量涨跌势头」和「过 70 算超买」拆进两条，最后剩一条「天天敲键盘的
 // 熟客」，真正换话题的分号反而没用上。
 func bestCuts(segments []Segment, maxCount int) []int {
@@ -138,7 +140,7 @@ func absFloat(value float64) float64 {
 	return value
 }
 
-// SplitSentences 在 ，, 。; 空格和换行处断句，分隔符不留在句子里，再按原文长度
+// SplitSentences 在 。；; 空格和换行处断句（MaiBot 还在逗号处断，这里不断），分隔符不留在句子里，再按原文长度
 // 概率性地把相邻句合回去：越长越倾向于拆开。换行一定拆；成对引号里、冒号旁、
 // 英文和数字之间的空格、破折号旁的空格不拆。
 func SplitSentences(text string, random func() float64) []Segment {
@@ -193,7 +195,8 @@ func SplitSentences(text string, random func() float64) []Segment {
 			}
 			if canSplit && char == ' ' && index > 0 && index < len(runes)-1 {
 				prev, next := runes[index-1], runes[index+1]
-				if prev == '-' || prev == '—' || next == '-' || next == '—' {
+				// 逗号不分条，跟在逗号后面的空格也不该分条。
+				if prev == '-' || prev == '—' || next == '-' || next == '—' || prev == ',' || prev == '，' {
 					canSplit = false
 				} else if splitAlnum(prev) && splitAlnum(next) {
 					canSplit = false
