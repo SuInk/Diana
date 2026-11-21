@@ -3800,8 +3800,9 @@ function resetModelRecoveryPolicy(): void {
   if (form.value) delete form.value.model_recovery_policy;
 }
 
-function modelRoutingStrategiesFor(role: RoleKey): AppSelectOption[] {
-  return role === "image" || role === "embedding" || isMediaRole(role) ? modelRoutingStrategies.filter(option => option.value !== "smart") : modelRoutingStrategies;
+// 生图、语音、视频的失败也记进冷却表了，所有用途都能选智能切换。
+function modelRoutingStrategiesFor(_role: RoleKey): AppSelectOption[] {
+  return modelRoutingStrategies;
 }
 
 // 「跟随对话」可以只是候选表里的一行，和独立模型并排；整张表只有这一行时就是整档跟随。
@@ -3824,7 +3825,7 @@ function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignmen
   if (isPureFollowChat(assignment) && role !== "chat") return effectiveModelRoutingStrategy("chat");
   const strategy = assignment?.routing_strategy?.trim();
   if (strategy === "failover" || strategy === "round_robin" || strategy === "weighted") return strategy;
-  return role === "image" || role === "embedding" || isMediaRole(role) ? "failover" : "smart";
+  return "smart";
 }
 
 function clearModelRouteFilters(): void {
