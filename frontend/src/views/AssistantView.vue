@@ -565,45 +565,27 @@
                     </div>
                     <span class="cluster" style="gap: 6px">
                       <button v-if="isMediaRole(role.key) && roleForm[role.key]" type="button" class="btn ghost small" @click="clearRole(role.key)">停用</button>
-                      <button v-if="role.key === 'embedding' && !embeddingOff(role.key)" type="button" class="btn ghost small" @click="setEmbeddingOff(true)">关闭</button>
-                      <button v-if="embeddingOff(role.key)" type="button" class="btn small primary" @click="setEmbeddingOff(false)">开启</button>
-                      <button v-if="!embeddingOff(role.key) && (!roleSingleRoute(role.key) || !modelRoleRoutes(role.key).length)" class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
+                      <button v-if="!roleSingleRoute(role.key) || !modelRoleRoutes(role.key).length" class="btn small primary" type="button" @click="openModelRouteEditor(role.key)">
                         <Plus :size="14" aria-hidden="true" />添加
                       </button>
                     </span>
                   </div>
                   <!-- 没单独配置的用途也画成表里的一行，写明默认跟着谁走；添加模型后这一行换成真正的候选。 -->
-                  <!-- 向量嵌入只给语义检索用：这里的关闭和「上下文 → 记忆 → 语义检索」是同一个开关，关掉后不调用向量模型、只按关键词搜。选过的模型留着，开启后照旧。 -->
-                  <div v-if="embeddingOff(role.key)" class="model-route-table-wrap">
+                  <!-- 向量嵌入只给语义检索用：这一行的启用开关就是「上下文 → 记忆 → 语义检索」，关掉后不调用向量模型、只按关键词搜。 -->
+                  <div v-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
                     <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
-                      <colgroup><col class="model-route-order-col" /><col /></colgroup>
+                      <colgroup><col class="model-route-order-col" /><col /><col v-if="role.key === 'embedding'" class="model-route-enable-col" /></colgroup>
                       <tbody>
-                        <tr class="model-route-list-row model-route-default-row">
-                          <td class="model-route-order-cell"><span class="model-route-order-number">—</span></td>
-                          <td class="model-route-identity">
-                            <span class="model-route-line">
-                              <PowerOff :size="13" class="model-route-follow-icon" aria-hidden="true" />
-                              <strong class="model-route-follow-name">已关闭</strong>
-                              <span class="model-route-provider">不调用向量模型，搜聊天记录只按关键词；和「上下文」页的语义检索是同一个开关</span>
-                            </span>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  <div v-else-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
-                    <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
-                      <colgroup><col class="model-route-order-col" /><col /></colgroup>
-                      <tbody>
-                        <tr class="model-route-list-row model-route-default-row">
+                        <tr class="model-route-list-row model-route-default-row" :class="{ 'is-disabled': embeddingOff(role.key) }">
                           <td class="model-route-order-cell"><span class="model-route-order-number">1</span></td>
                           <td class="model-route-identity">
                             <span class="model-route-line">
                               <GitBranch :size="13" class="model-route-follow-icon" aria-hidden="true" />
                               <strong class="model-route-follow-name">{{ modelInheritedText(role.key) }}</strong>
-                              <span class="model-route-provider">{{ modelInheritedHint(role.key) }}</span>
+                              <span class="model-route-provider">{{ embeddingOff(role.key) ? "已关闭：不调用向量模型，搜聊天记录只按关键词" : modelInheritedHint(role.key) }}</span>
                             </span>
                           </td>
+                          <td v-if="role.key === 'embedding'" class="model-route-enable-cell"><AppSwitch :model-value="!embeddingOff(role.key)" :aria-label="`${role.label}启用`" compact @update:model-value="(value) => setEmbeddingOff(!value)" /></td>
                         </tr>
                       </tbody>
                     </table>
@@ -630,7 +612,7 @@
                           <tr
                             class="model-route-list-row"
                             :data-route-slot="`${role.key}:${item.index}`"
-                            :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled }"
+                            :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled || embeddingOff(role.key) }"
                             @dragover="(event) => onRouteDragOver(role.key, item.index, event)"
                             @drop="(event) => onRouteDrop(role.key, item.index, event)"
                           >
@@ -662,7 +644,7 @@
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
-                            <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
+                            <td class="model-route-enable-cell"><AppSwitch :model-value="role.key === 'embedding' ? !embeddingOff(role.key) : !item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => role.key === 'embedding' ? setEmbeddingOff(!value) : setRoleRouteDisabled(role.key, item.index, !value)" /></td>
                             <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" :title="role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="!item.route.follow_chat" class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           </template>
@@ -3844,14 +3826,17 @@ function clearModelRouteFilters(): void {
   modelRouteStatusFilter.value = "all";
 }
 
-// 向量嵌入只给语义检索用，两处只留一个开关：模型页的关闭 / 开启就是语义检索开关，
+// 向量嵌入只给语义检索用，两处只留一个开关：模型页这一行的启用开关就是语义检索开关，
 // 状态永远一致，不会出现「语义检索开着、其实没在用向量」。
 function embeddingOff(role: RoleKey): boolean {
-  return role === "embedding" && !!form.value && !form.value.semantic_search_enabled;
+  return role === "embedding" && ((!!form.value && !form.value.semantic_search_enabled) || !!roleForm.value.embedding?.disabled);
 }
 
+// 向量嵌入只有一个模型，它那一行的启用开关也走这里；以前单独停用过这一行的，开启时一并恢复。
 function setEmbeddingOff(off: boolean): void {
   if (form.value) form.value.semantic_search_enabled = !off;
+  const route = roleForm.value.embedding;
+  if (!off && route?.disabled) route.disabled = undefined;
 }
 
 // 没单独配置、走默认来源的用途。跟随对话不算：它是表里实实在在的一行。
