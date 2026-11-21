@@ -1438,7 +1438,7 @@ func telegramMentionsBot(text string, entities []telegramEntity, selfID, botUser
 			}
 		}
 	}
-	return false
+	return telegramTextMentionsSelf(text, entities, botUsername)
 }
 
 // telegramEntityText 按 entity 的 UTF-16 偏移取原文，越界时返回 false。

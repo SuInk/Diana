@@ -987,6 +987,14 @@ func TestTelegramMentionMustMatchBotUsername(t *testing.T) {
 		{"纯邮箱不算", "联系 a@b.com", nil, false},
 		{"文本里有@但无实体", "价格 @ 100", nil, false},
 		{"大小写不敏感", "@Diana_Bot hi", []telegramEntity{{Type: "mention", Offset: 0, Length: 10}}, true},
+		// Telegram 不给 @ 紧贴中文的写法生成 entity，按正文兜底。
+		{"@紧贴中文无实体", "把这个项目链接扔过来@diana_bot", nil, true},
+		{"@紧贴中文无实体大小写", "嘉然在吗@Diana_Bot？", nil, true},
+		{"正文@别人的实体之后还紧贴本机", "@someone_else 扔过来@diana_bot", []telegramEntity{{Type: "mention", Offset: 0, Length: 13}}, true},
+		{"更长的用户名不算", "看看@diana_bot2 的", nil, false},
+		{"邮箱形态不算", "发到 me@diana_bot", nil, false},
+		{"链接里不算", "t.me/x?start=@diana_bot", nil, false},
+		{"落在链接实体里不算", "看 https://x.io/@diana_bot", []telegramEntity{{Type: "url", Offset: 2, Length: 23}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
