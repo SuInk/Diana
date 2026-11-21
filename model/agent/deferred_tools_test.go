@@ -396,7 +396,13 @@ func TestDeferredRunnerPreservesCrossCuttingBehavior(t *testing.T) {
 					}
 				}
 				var events []RunEvent
-				runner, _ := NewRunner(client, Config{CoreTools: []string{"common"}, MaxSteps: 10, ToolTimeoutMS: 1}, NewToolRegistry(&countingTool{name: "common"}, tool))
+				// 只有专测超时的用例才给 1 毫秒：race 模式下其他用例的工具（比如计数的搜索）
+				// 也会被这 1 毫秒掐掉，次数对不上。
+				timeoutMS := 0
+				if kind == "timeout" {
+					timeoutMS = 1
+				}
+				runner, _ := NewRunner(client, Config{CoreTools: []string{"common"}, MaxSteps: 10, ToolTimeoutMS: timeoutMS}, NewToolRegistry(&countingTool{name: "common"}, tool))
 				result, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}, Observer: func(_ context.Context, e RunEvent) { events = append(events, e) }})
 				if err != nil {
 					t.Fatal(err)

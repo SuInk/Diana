@@ -202,6 +202,9 @@ func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
 		Model: "gpt-test", ImageModel: "gpt-image-2",
 	})}
 	runtime := NewRuntime(BotConfig{BotAccount: editSourceBotID}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	// enqueue 起的后台生图任务要在测试结束前跑完：它失败时还会读配置，拖到后面的
+	// 测试里会和那边改全局变量的清理函数撞上（v0.9.13 标签的 race 测试就挂在这里）。
+	t.Cleanup(func() { waitSubagentTasksIdle(t, runtime) })
 	const (
 		secondA = "data:image/png;base64,c2Vjb25kLWE="
 		secondB = "data:image/png;base64,c2Vjb25kLWI="
@@ -244,6 +247,18 @@ func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
 	}
 	if count := runtime.activeSubagentTaskCount(); count != queuedBefore {
 		t.Fatalf("queued %d extra tasks with wrong source messages", count-queuedBefore)
+	}
+}
+
+// waitSubagentTasksIdle 等这个 Runtime 上的后台任务都结束（任务做完失败处理才摘掉）。
+func waitSubagentTasksIdle(t *testing.T, runtime *Runtime) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for runtime.activeSubagentTaskCount() > 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("%d background tasks still running", runtime.activeSubagentTaskCount())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
