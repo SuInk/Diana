@@ -249,11 +249,11 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 「我这边不能指定 GIF」。gif 只能 generate，上游的 edits 不支持。
 	if t.relationship.AllowImageGeneration {
 		if t.animation {
-			properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）。要 SVG、矢量图时填 svg：先出图再描成 SVG 文件，和图一起发；描摹适合扁平插画、图标、logo，prompt 写明扁平矢量插画风格、干净色块、清晰轮廓", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF, dianaImageFormatSVG)
+			properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）。要 SVG、矢量图时填 svg（扁平插画、图标、logo 描得最好，prompt 写扁平矢量风格、干净色块、清晰轮廓）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF, dianaImageFormatSVG)
 			properties["frame_count"] = toolIntParam("gif 总帧数，省略为 9", llm.ImageGIFMinFrames, llm.ImageGIFMaxFrames)
 			properties["frame_duration_ms"] = toolIntParam("gif 每帧毫秒数，省略为 200", llm.ImageGIFMinFrameDurationMS, llm.ImageGIFMaxFrameDurationMS)
 		} else {
-			properties["format"] = toolEnumParam("成品格式，省略为 png。当前没有能出动图的图片模型，做不了 GIF。要 SVG、矢量图时填 svg：先出图再描成 SVG 文件，和图一起发；描摹适合扁平插画、图标、logo，prompt 写明扁平矢量插画风格、干净色块、清晰轮廓", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, dianaImageFormatSVG)
+			properties["format"] = toolEnumParam("成品格式，省略为 png。当前没有能出动图的图片模型，做不了 GIF。要 SVG、矢量图时填 svg（扁平插画、图标、logo 描得最好，prompt 写扁平矢量风格、干净色块、清晰轮廓）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, dianaImageFormatSVG)
 		}
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
