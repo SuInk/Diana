@@ -6,6 +6,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +39,63 @@ func TestEmbedQueryTextStopsCallingAfterConsecutiveFailures(t *testing.T) {
 	other.Model = "embed-v2"
 	if _, err := r.embedQueryText(context.Background(), other, "跨群查询"); errors.Is(err, errSemanticQueryBreakerOpen) {
 		t.Fatal("别的模型不该被同一个熔断挡住")
+	}
+}
+
+// 冷却过后的探测在后台跑：那条回复照旧不等，探测成功后恢复正常请求。
+func TestEmbedQueryTextProbesInBackground(t *testing.T) {
+	r := &Runtime{}
+	var failing atomic.Bool
+	failing.Store(true)
+	probed := make(chan struct{}, 4)
+	r.embedTexts = func(context.Context, llm.ProviderConfig, []string) ([][]float32, error) {
+		if failing.Load() {
+			return nil, errors.New("dial timeout")
+		}
+		probed <- struct{}{}
+		return [][]float32{{0.1}}, nil
+	}
+	cfg := llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, BaseURL: "http://embed.invalid/v1", Model: "embed-v1"}
+	for range semanticQueryBreakerThreshold {
+		_, _ = r.embedQueryText(context.Background(), cfg, "跨群查询")
+	}
+	key := semanticBreakerKey(cfg)
+	r.semanticQueryBreaker.mu.Lock()
+	r.semanticQueryBreaker.states[key].openUntil = time.Now().Add(-time.Second)
+	r.semanticQueryBreaker.mu.Unlock()
+	failing.Store(false)
+	if _, err := r.embedQueryText(context.Background(), cfg, "跨群查询"); !errors.Is(err, errSemanticQueryBreakerOpen) {
+		t.Fatalf("探测那一次也该直接返回，实际 %v", err)
+	}
+	select {
+	case <-probed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("后台没有去探测")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for r.semanticQueryBreaker.tripped(key) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if vector, err := r.embedQueryText(context.Background(), cfg, "跨群查询"); err != nil || len(vector) != 1 {
+		t.Fatalf("探测成功后应恢复：vector=%v err=%v", vector, err)
+	}
+}
+
+// 冷却按失败次数翻倍，封顶 semanticQueryBreakerMaxCooldown：主机长期离线时不必每分钟探一次。
+func TestSemanticQueryBreakerBacksOff(t *testing.T) {
+	b := semanticQueryBreaker{maxCooldown: semanticQueryBreakerMaxCooldown}
+	now := time.Unix(1_700_000_000, 0)
+	for range semanticQueryBreakerThreshold + 3 {
+		b.record("k", false, now)
+	}
+	if b.allow("k", now.Add(5*time.Minute)) {
+		t.Fatal("连续失败五次后冷却应已翻到 8 分钟")
+	}
+	for range 10 {
+		b.record("k", false, now)
+	}
+	if !b.allow("k", now.Add(semanticQueryBreakerMaxCooldown+time.Second)) {
+		t.Fatal("冷却不该超过上限")
 	}
 }
 

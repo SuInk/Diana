@@ -393,6 +393,32 @@ func TestEmbeddingProviderConfigFollowsModelRole(t *testing.T) {
 	}
 }
 
+// 向量嵌入整档关闭：不选模型也要留住关闭标记，不能读回来又成了「自动」；关闭后语义
+// 检索开关照旧开着，但不再连向量模型，搜索退回只按关键词。
+func TestEmbeddingRoleCanBeTurnedOff(t *testing.T) {
+	roles := normalizeModelRoles(map[string]ModelRole{llm.GroupEmbedding: {Disabled: true}})
+	if role, ok := roles[llm.GroupEmbedding]; !ok || !role.Disabled {
+		t.Fatalf("disabled embedding role was dropped: %+v", roles)
+	}
+	profiles := &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "embed", Name: "embed", Group: llm.GroupEmbedding, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k"}},
+	}}}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), profiles, nil, nil, nil)
+	enabled := true
+	off := BotConfig{SemanticSearchEnabled: &enabled, ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {Disabled: true}}}
+	if cfg, ok := runtime.embeddingProviderConfig(off); ok {
+		t.Fatalf("turned-off embedding still resolved to %+v", cfg)
+	}
+	if runtime.semanticSearchActive(off) {
+		t.Fatal("semantic search must fall back to keywords while embedding is off")
+	}
+	// 关闭时保留着选过的模型：照样不用它。
+	kept := BotConfig{SemanticSearchEnabled: &enabled, ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {ProfileID: "embed", Model: "embed-v1", Disabled: true}}}
+	if _, ok := runtime.embeddingProviderConfig(kept); ok {
+		t.Fatal("a disabled embedding role with a model must stay off")
+	}
+}
+
 func TestSemanticIndexBatchEmbedsPerModel(t *testing.T) {
 	store := newSemanticRevisionStore()
 	runtime := newSemanticRuntime(t, true, store, nil)

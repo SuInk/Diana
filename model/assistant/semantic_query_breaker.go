@@ -22,9 +22,14 @@ import (
 // 连着失败 semanticQueryBreakerThreshold 次就认定服务不可用，接下来
 // semanticQueryBreakerCooldown 内直接返回错误，调用方照旧只用词面结果。冷却过后放一次
 // 请求去探，成功就恢复，失败再冷却一轮。后台建索引不走这里：它不在关键路径上，等得起。
+//
+// 探测放在后台：以前冷却一过，下一条回复就亲自去探、等满超时。11-20～21 生产 embedding
+// 主机离线 7 天，跨群检索里 356 次等满 3 秒，大约每分钟就有一条回复白等一次。现在
+// 探测那一次也直接返回，后台再去请求；冷却按失败次数翻倍到 semanticQueryBreakerMaxCooldown。
 const (
-	semanticQueryBreakerThreshold = 2
-	semanticQueryBreakerCooldown  = time.Minute
+	semanticQueryBreakerThreshold   = 2
+	semanticQueryBreakerCooldown    = time.Minute
+	semanticQueryBreakerMaxCooldown = 30 * time.Minute
 )
 
 var errSemanticQueryBreakerOpen = errors.New("embedding 服务连续失败，暂时跳过语义检索")
@@ -54,6 +59,14 @@ func (b *semanticQueryBreaker) isCoolingDown(key string, now time.Time) bool {
 	defer b.mu.Unlock()
 	state := b.states[key]
 	return state != nil && state.failures >= semanticQueryBreakerThreshold && (now.Before(state.openUntil) || state.probing)
+}
+
+// tripped 报告这个服务是否已经被判定为不可用（之后放行的只会是探测）。
+func (b *semanticQueryBreaker) tripped(key string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	state := b.states[key]
+	return state != nil && state.failures >= semanticQueryBreakerThreshold
 }
 
 // allow 报告这次能不能去请求。冷却结束后只放一个请求去探，其余的继续跳过。
@@ -101,7 +114,24 @@ func (b *semanticQueryBreaker) record(key string, ok bool, now time.Time) {
 // 服务失败。
 func (r *Runtime) embedQueryText(ctx context.Context, cfg llm.ProviderConfig, query string) ([]float32, error) {
 	key := semanticBreakerKey(cfg)
+	probe := r.semanticQueryBreaker.tripped(key)
 	if !r.semanticQueryBreaker.allow(key, time.Now()) {
+		return nil, errSemanticQueryBreakerOpen
+	}
+	if probe {
+		// 这一次只是探服务恢复没有：后台去请求，回复照旧不等。
+		embed := r.embedTextsFunc()
+		// 不随这一轮取消（探测要跑完才知道恢复没有），但保留用量归属；探测里 panic
+		// 也要记一次失败放出探测名额，否则熔断会一直卡在「探测中」。
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), semanticQueryTimeout)
+		go func() {
+			ok := false
+			defer func() { r.semanticQueryBreaker.record(key, ok, time.Now()) }()
+			defer recoverGoroutinePanic("runtime.semanticQueryProbe")
+			defer cancel()
+			vectors, err := embed(probeCtx, cfg, []string{query})
+			ok = err == nil && len(vectors) == 1 && len(vectors[0]) > 0
+		}()
 		return nil, errSemanticQueryBreakerOpen
 	}
 	vectors, err := r.embedTextsFunc()(ctx, cfg, []string{query})

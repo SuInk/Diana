@@ -571,19 +571,24 @@
                     </span>
                   </div>
                   <!-- 没单独配置的用途也画成表里的一行，写明默认跟着谁走；添加模型后这一行换成真正的候选。 -->
-                  <div v-if="modelRoleInherited(role.key)" class="model-route-table-wrap">
+                  <!-- 向量嵌入可以像视频生成一样不启用：这一行的开关、编辑弹窗里的「不启用」都改这一档；语义检索开关不动，开着也只按关键词搜。 -->
+                  <div v-if="modelRoleInherited(role.key) || (embeddingOff(role.key) && !roleForm[role.key]?.model)" class="model-route-table-wrap">
                     <table class="model-route-table" :aria-label="`${modelPurposeLabel(role.key)}模型列表`">
-                      <colgroup><col class="model-route-order-col" /><col /></colgroup>
+                      <colgroup><col class="model-route-order-col" /><col /><template v-if="role.key === 'embedding'"><col class="model-route-enable-col" /><col class="model-route-actions-col" /></template></colgroup>
                       <tbody>
-                        <tr class="model-route-list-row model-route-default-row">
+                        <tr class="model-route-list-row model-route-default-row" :class="{ 'is-disabled': embeddingOff(role.key) }">
                           <td class="model-route-order-cell"><span class="model-route-order-number">1</span></td>
                           <td class="model-route-identity">
                             <span class="model-route-line">
                               <GitBranch :size="13" class="model-route-follow-icon" aria-hidden="true" />
-                              <strong class="model-route-follow-name">{{ modelInheritedText(role.key) }}</strong>
-                              <span class="model-route-provider">{{ modelInheritedHint(role.key) }}</span>
+                              <strong class="model-route-follow-name">{{ embeddingOff(role.key) ? "未启用" : modelInheritedText(role.key) }}</strong>
+                              <span class="model-route-provider">{{ embeddingOff(role.key) ? "不调用向量模型，搜聊天记录只按关键词" : modelInheritedHint(role.key) }}</span>
                             </span>
                           </td>
+                          <template v-if="role.key === 'embedding'">
+                            <td class="model-route-enable-cell"><AppSwitch :model-value="!embeddingOff(role.key)" :aria-label="`${role.label}启用`" compact @update:model-value="(value) => setEmbeddingOff(!value)" /></td>
+                            <td class="model-route-actions"><button class="btn icon-only small ghost" type="button" :aria-label="`选择${role.label}模型`" title="选择模型，或选自动 / 不启用" @click="openModelRouteEditor(role.key)"><Pencil :size="14" aria-hidden="true" /></button></td>
+                          </template>
                         </tr>
                       </tbody>
                     </table>
@@ -610,7 +615,7 @@
                           <tr
                             class="model-route-list-row"
                             :data-route-slot="`${role.key}:${item.index}`"
-                            :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled }"
+                            :class="{ ...routeDragClasses(role.key, item.index), 'is-disabled': item.route.disabled || embeddingOff(role.key) }"
                             @dragover="(event) => onRouteDragOver(role.key, item.index, event)"
                             @drop="(event) => onRouteDrop(role.key, item.index, event)"
                           >
@@ -642,7 +647,7 @@
                               <span v-if="modelRouteIsStandby(role.key, item.index)" class="muted">—</span>
                               <AppNumberInput v-else :model-value="item.route.weight || 1" :min="1" :max="1000" :label="`${role.label}模型 ${item.index + 1} 权重`" :disabled="item.route.disabled" compact @update:model-value="(value) => setRoleRouteWeight(role.key, item.index, value)" />
                             </td>
-                            <td class="model-route-enable-cell"><AppSwitch :model-value="!item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => setRoleRouteDisabled(role.key, item.index, !value)" /></td>
+                            <td class="model-route-enable-cell"><AppSwitch :model-value="role.key === 'embedding' ? !embeddingOff(role.key) : !item.route.disabled" :aria-label="`${role.label}模型 ${item.index + 1} 启用`" compact @update:model-value="(value) => role.key === 'embedding' ? setEmbeddingOff(!value) : setRoleRouteDisabled(role.key, item.index, !value)" /></td>
                             <td class="model-route-actions"><button v-if="modelRouteTestable(role.key, item.route)" class="btn icon-only small ghost" type="button" :aria-label="`测试调用${role.label}模型 ${item.index + 1}`" :title="role.key === 'image' ? '测试生图：填写提示词并预览图片' : '测试调用：自定义消息并查看回复'" :disabled="modelRouteTestResult(role.key, item.route)?.running" @click="testModelRoute(role.key, item.route)"><Play :size="14" aria-hidden="true" /></button><button v-if="!item.route.follow_chat" class="btn icon-only small ghost" type="button" :aria-label="`编辑${role.label}模型 ${item.index + 1}`" title="编辑模型" @click="openModelRouteEditor(role.key, item.index)"><Pencil :size="14" aria-hidden="true" /></button><button class="btn icon-only small ghost" type="button" :aria-label="`删除${role.label}模型 ${item.index + 1}`" title="删除模型" @click="removeRoleRoute(role.key, item.index)"><Trash2 :size="14" aria-hidden="true" /></button></td>
                           </tr>
                           </template>
@@ -2356,19 +2361,21 @@
       </div>
     </Modal>
 
-    <Modal v-if="modelRouteEditor" :title="`${modelRouteEditor.adding ? '添加' : '编辑'}${modelPurposeLabel(modelRouteEditor.role)}模型`" initial-focus="#model-route-editor-provider" @close="modelRouteEditor = null">
+    <Modal v-if="modelRouteEditor" :title="`${modelRouteEditor.role === 'embedding' ? '选择' : modelRouteEditor.adding ? '添加' : '编辑'}${modelPurposeLabel(modelRouteEditor.role)}模型`" initial-focus="#model-route-editor-provider" @close="modelRouteEditor = null">
       <div class="stack model-route-editor">
         <p class="muted">选择提供商和模型，并设置它在当前用途中的调度方式。</p>
-        <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="routeSelectionValue(modelRouteEditor.draft)" :options="modelRouteEditorChannelOptions(modelRouteEditor.role)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
+        <div class="field"><label for="model-route-editor-provider">提供商 / 分组</label><AppSelect id="model-route-editor-provider" :model-value="modelRouteEditor.source ?? routeSelectionValue(modelRouteEditor.draft)" :options="modelRouteEditorChannelOptions(modelRouteEditor.role)" searchable search-placeholder="搜索提供商或分组" placeholder="选择提供商 / 分组" @update:model-value="setModelRouteEditorChannel" /></div>
         <p v-if="modelRouteEditor.draft.follow_chat" class="hint">用对话模型，换对话模型时跟着一起换；在列表里的位置决定先用谁。</p>
-        <div v-if="!modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
+        <p v-if="modelRouteEditor.source === DISABLED" class="hint">不启用后不调用向量模型，语义检索开着也只按关键词搜。</p>
+        <p v-else-if="modelRouteEditor.source === AUTO_EMBEDDING" class="hint">{{ modelInheritedHint("embedding") }}</p>
+        <div v-if="!modelRouteEditor.draft.follow_chat && !modelRouteEditor.source" class="field"><label for="model-route-editor-model">模型</label><AppSelect id="model-route-editor-model" :model-value="modelRouteEditor.draft.model" :options="modelOptionsFor(modelRouteEditor.role, modelRouteEditor.draft)" searchable search-placeholder="搜索模型" placeholder="选择模型" @update:model-value="setModelRouteEditorModel" /></div>
         <div v-if="roleSupportsReasoning(modelRouteEditor.role) && !modelRouteEditor.draft.follow_chat" class="field"><label for="model-route-editor-reasoning">思考强度</label><AppSelect id="model-route-editor-reasoning" :model-value="modelRouteEditor.draft.reasoning_effort ?? ''" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.reasoning_effort = value || undefined; }" :options="roleReasoningOptions(modelRouteEditor.role, modelRouteEditor.draft)" /><span class="hint">仅用于这条模型路由，切换模型时使用各自的设置。</span></div>
         <div v-if="effectiveModelRoutingStrategy(modelRouteEditor.role) !== 'failover' && modelRouteEditor.index > 0" class="field"><AppSwitch v-model="modelRouteEditor.draft.standby">仅作后备</AppSwitch><span class="hint">关闭时参与当前策略调度；开启后只在参与渠道全部失败时使用。</span></div>
         <div v-if="roleForm[modelRouteEditor.role]?.routing_strategy === 'weighted' && !modelRouteEditor.draft.standby" class="field"><label for="model-route-editor-weight">调度权重</label><AppNumberInput id="model-route-editor-weight" v-model="modelRouteEditor.draft.weight" :min="1" :max="1000" label="调度权重" :disabled="modelRouteEditor.draft.disabled" /><span class="hint">权重越大，分配到的请求越多，范围 1–1000。</span></div>
-        <div class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
+        <div v-if="!modelRouteEditor.source" class="field"><AppSwitch :model-value="!modelRouteEditor.draft.disabled" @update:model-value="(value) => { if (modelRouteEditor) modelRouteEditor.draft.disabled = !value || undefined; }">启用模型</AppSwitch></div>
         <p v-if="modelRouteEditorError" class="warn-text" role="alert">{{ modelRouteEditorError }}</p>
       </div>
-      <template #footer><span class="muted model-route-editor-save-hint">修改后，点击页面「保存配置」生效。</span><button class="btn" type="button" @click="modelRouteEditor = null">取消</button><button class="btn primary" type="button" @click="applyModelRouteEditor">{{ modelRouteEditor.adding ? '添加' : '应用修改' }}</button></template>
+      <template #footer><span class="muted model-route-editor-save-hint">修改后，点击页面「保存配置」生效。</span><button class="btn" type="button" @click="modelRouteEditor = null">取消</button><button class="btn primary" type="button" @click="applyModelRouteEditor">{{ modelRouteEditor.source ? '确定' : modelRouteEditor.adding ? '添加' : '应用修改' }}</button></template>
     </Modal>
 
     <MessageRelayManager
@@ -3755,7 +3762,8 @@ const modelRouteStatusOptions = [
   { value: "cooling", label: "冷却中" },
   { value: "degraded", label: "近期失败" }
 ];
-const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; draft: RoleRoute; baseline: string } | null>(null);
+// source 只给向量嵌入用：在弹窗里选「自动」或「不启用」时记在这里，不落到 draft 上。
+const modelRouteEditor = ref<{ role: RoleKey; index: number; adding: boolean; draft: RoleRoute; baseline: string; source?: string } | null>(null);
 const modelRouteEditorError = ref("");
 watch(selectedModelRole, clearModelRouteFilters);
 const modelRoutingStrategies = [
@@ -3822,6 +3830,24 @@ function effectiveModelRoutingStrategy(role: RoleKey): NonNullable<RoleAssignmen
 function clearModelRouteFilters(): void {
   modelRouteSearch.value = "";
   modelRouteStatusFilter.value = "all";
+}
+
+// 向量嵌入可以像视频生成一样「不启用」：存成 disabled 的一档，后端不再找向量模型。
+// 和语义检索开关分开：语义检索开着时退回只按关键词搜。向量嵌入只有一个模型，这一档的
+// disabled 就是整档不启用。
+function embeddingOff(role: RoleKey): boolean {
+  return role === "embedding" && !!roleForm.value.embedding?.disabled;
+}
+
+function setEmbeddingOff(off: boolean): void {
+  const current = roleForm.value.embedding;
+  if (off) {
+    roleForm.value.embedding = { ...(current ?? { model: "" }), disabled: true };
+    return;
+  }
+  // 停用前选过模型就恢复它，没选过就回到「自动」。
+  if (current?.model?.trim()) roleForm.value.embedding = { ...current, disabled: undefined };
+  else delete roleForm.value.embedding;
 }
 
 // 没单独配置、走默认来源的用途。跟随对话不算：它是表里实实在在的一行。
@@ -4199,13 +4225,23 @@ function openModelRouteEditor(role: RoleKey, index?: number): void {
   delete (draft as RoleAssignment).routing_strategy;
   delete draft.follow_chat;
   draft.weight ??= 1;
-  modelRouteEditor.value = { role, index: target, adding, draft, baseline: roleSnapshot({ [role]: roleForm.value[role] }) };
+  // 向量嵌入只有一个模型：弹窗里还能选「自动」和「不启用」，打开时停在当前状态上。
+  const source = role !== "embedding" ? undefined : embeddingOff(role) ? DISABLED : !roleForm.value[role] ? AUTO_EMBEDDING : undefined;
+  modelRouteEditor.value = { role, index: target, adding, draft, baseline: roleSnapshot({ [role]: roleForm.value[role] }), source };
   modelRouteEditorError.value = "";
 }
 
 function setModelRouteEditorChannel(value: string): void {
   const editor = modelRouteEditor.value;
   if (!editor || !value || value === FOLLOW_VISION) return;
+  if (editor.role === "embedding" && (value === DISABLED || value === AUTO_EMBEDDING)) {
+    editor.source = value;
+    modelRouteEditorError.value = "";
+    return;
+  }
+  editor.source = undefined;
+  // 从「不启用」改选具体提供商就是要用它，模型这一条不能还带着停用标记。
+  if (editor.role === "embedding") delete editor.draft.disabled;
   if (value === FOLLOW_CHAT) {
     // 跟随对话这一行不带提供商、模型和思考强度，只留顺序、启停、权重和后备标记。
     const { weight, disabled, standby } = editor.draft;
@@ -4248,6 +4284,17 @@ function applyModelRouteEditor(): void {
     modelRouteEditorError.value = "模型配置已在别处更新，请关闭后重新打开编辑。";
     return;
   }
+  if (editor.source === DISABLED) {
+    setEmbeddingOff(true);
+    modelRouteEditor.value = null;
+    return;
+  }
+  if (editor.source === AUTO_EMBEDDING) {
+    delete roleForm.value.embedding;
+    setEmbeddingOff(false);
+    modelRouteEditor.value = null;
+    return;
+  }
   const draft = editor.draft;
   if (!draft.follow_chat && (!draft.model || !selectedRoleProfiles(editor.role, draft).some((profile) => profileCanRouteRoleModel(profile, editor.role, draft.model)))) {
     modelRouteEditorError.value = "请选择提供商和该用途可用的模型。";
@@ -4269,6 +4316,8 @@ function applyModelRouteEditor(): void {
     if (editor.adding) current.fallbacks.push(route);
     else current.fallbacks[editor.index - 1] = route;
   }
+  // 向量嵌入选了具体模型就是要用它：顺手打开，免得加完模型还关着。
+  if (editor.role === "embedding" && !route.disabled) setEmbeddingOff(false);
   clearModelRouteFilters();
   modelRouteEditor.value = null;
 }
@@ -4285,6 +4334,7 @@ function modelPurposeSummary(role: RoleKey): string {
   const assignment = roleForm.value[role];
   if (isPureFollowChat(assignment)) return "跟随对话";
   if (assignment?.follow_chat) return `跟随对话等 ${modelRoleRoutes(role).length} 个`;
+  if (embeddingOff(role)) return "未启用";
   if (!assignment) return role === "media_parse" ? "跟随视觉理解" : role === "embedding" ? "自动" : isPurposeRole(role) ? `跟随${purposeRoleFallbackLabel(role)}` : isMediaRole(role) ? "未启用" : "尚未配置";
   return assignment.model || "请选择模型";
 }
@@ -4292,7 +4342,7 @@ function modelPurposeSummary(role: RoleKey): string {
 // 左栏每个用途前的健康点：取这个用途所有路由里最差的状态，冷却或近期失败不用点进去就能看到。
 // 跟随别的用途、未启用的不画点。
 function modelPurposeHealth(role: RoleKey): "" | "ok" | "warn" | "err" {
-  if (modelRoleInherited(role) || !roleForm.value[role] || isPureFollowChat(roleForm.value[role])) return "";
+  if (embeddingOff(role) || modelRoleInherited(role) || !roleForm.value[role] || isPureFollowChat(roleForm.value[role])) return "";
   const classes = modelRoleRoutes(role).filter(({ route }) => !route.follow_chat).map(({ route }) => modelRouteHealth(role, route).className);
   return classes.includes("err") ? "err" : classes.includes("warn") ? "warn" : "ok";
 }
@@ -4314,6 +4364,7 @@ const secondaryModelRoleKeys = computed(() => visibleModelRoleRows.map((row) => 
 const secondaryModelRolesProblemCount = computed(() => secondaryModelRoleKeys.value.filter((key) => modelPurposeStatus(key).problem).length);
 
 function modelPurposeStatus(role: RoleKey): { text: string; problem: boolean } {
+  if (embeddingOff(role)) return { text: "未启用", problem: false };
   if (isPureFollowChat(roleForm.value[role])) return { text: "跟随对话", problem: false };
   if (modelRoleInherited(role)) return { text: modelRoleRouteSummary(role).replace("视觉理解", "视觉").replace("后台生成", "后台"), problem: false };
   if (!roleForm.value[role]) return isMediaRole(role) ? { text: "未启用", problem: false } : { text: "未配置", problem: true };
@@ -4672,6 +4723,13 @@ function modelRouteEditorChannelOptions(role: RoleKey): AppSelectOption[] {
   // 没单独配置、本来就跟着对话走的用途，表里那一行已经是跟随对话，也不再重复给。
   const listed = (!roleForm.value[role] && roleDefaultsToFollowChat(role)) || modelRoleRoutes(role).some(({ route, index }) => route.follow_chat && !(editing && !editing.adding && editing.index === index));
   if (roleCanFollowChat(role) && !listed) options.unshift({ value: FOLLOW_CHAT, label: "跟随对话", hint: "用对话那一档的模型和后备，换对话模型时跟着一起换" });
+  // 向量嵌入只有一个模型，整档的「自动」「不启用」也在这里选。
+  if (role === "embedding") {
+    options.unshift(
+      { value: AUTO_EMBEDDING, label: "自动", hint: "自动用提供商里第一个向量模型" },
+      { value: DISABLED, label: "不启用", hint: "不调用向量模型，搜聊天记录只按关键词" }
+    );
+  }
   return options;
 }
 
@@ -5428,6 +5486,8 @@ async function save(): Promise<void> {
     const role = roleForm.value[row.key];
     // 细分用途和媒体解析都可以留空：留空表示跟随它所属的那一档。
     if (!role && (row.key === "media_parse" || row.key === "embedding" || purposeRoleKeys.includes(row.key as (typeof purposeRoleKeys)[number]) || isMediaRole(row.key))) continue;
+    // 向量嵌入不启用时可以不选模型。
+    if (row.key === "embedding" && role?.disabled && !role.model.trim()) continue;
     // 整档跟随对话没有自己的提供商和模型，跳过校验；对话本身没有这个选项。
     if (row.key !== "chat" && isPureFollowChat(role)) continue;
     const primaryFollowsChat = row.key !== "chat" && !!role?.follow_chat;
@@ -5481,6 +5541,11 @@ async function save(): Promise<void> {
       const role = roleForm.value[key as RoleKey];
       if (key !== "chat" && isPureFollowChat(role)) {
         modelRoles[key] = { model: "", follow_chat: true };
+        continue;
+      }
+      // 向量嵌入不启用、没选过模型：只存不启用标记，否则读回来又成了「自动」。
+      if (key === "embedding" && role?.disabled && !role.model.trim()) {
+        modelRoles[key] = { model: "", disabled: true };
         continue;
       }
       const followsChat = key !== "chat" && !!role?.follow_chat;
