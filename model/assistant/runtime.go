@@ -5251,13 +5251,17 @@ func (p *runtimeAgentLLMProvider) Generate(ctx context.Context, req llm.Generate
 //
 // image_fix 也常驻：它要在模型口头认错的同一步被调用，放进按需目录就得先 tool_search，
 // 模型不会为「顺手记一笔」多走这一步。定义对谁都一样，不影响前缀缓存。
-var replyAgentCoreTools = []string{agent.FinalizeToolName, dianaImageFixToolName, agent.CodeModeToolName}
+//
+// web_search 11-21 起常驻：按需时要查就得 tools_execute 套一层，swe-2 嫌麻烦，直接 send
+// 「搜不到」「看了眼」。11-20～21 生产 swe-2 主回复只有 19% 的轮次调过工具，「说了没做」
+// 19/340 全出在它身上。同批里查过事实的 swe-2 请求回放，见 PR 正文。雨夹雪的 search
+// 也是直接给的原生工具。
+var replyAgentCoreTools = []string{agent.FinalizeToolName, agent.WebSearchToolName, dianaImageFixToolName, agent.CodeModeToolName}
 
 // replyFeaturedTools 在按需目录里写完整描述，见 replyAgentCoreTools。
 var replyFeaturedTools = []string{
 	dianaPluginMediaToolName,
 	dianaStickerToolName,
-	agent.WebSearchToolName,
 	dianaHistoryImagesToolName,
 	dianaImageToolName,
 	dianaChatHistoryToolName,

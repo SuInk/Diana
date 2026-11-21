@@ -83,6 +83,13 @@ func TestCodeModeToolIsResident(t *testing.T) {
 	}
 }
 
+// web_search 直接给：按需时要套一层 tools_execute，swe-2 常常干脆不搜就答。
+func TestWebSearchToolIsResident(t *testing.T) {
+	if !slices.Contains(replyAgentCoreTools, agent.WebSearchToolName) || slices.Contains(replyFeaturedTools, agent.WebSearchToolName) {
+		t.Fatalf("core=%v featured=%v", replyAgentCoreTools, replyFeaturedTools)
+	}
+}
+
 type imageFixVisionProvider struct {
 	mu          sync.Mutex
 	instruction string
