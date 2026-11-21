@@ -115,7 +115,7 @@ type dianaImageToolRequest struct {
 	// WorkspaceStem 是成品在工作目录 outputs/ 里的文件名前缀，受理时定下来，
 	// 这样受理结果里就能告诉模型图会存到哪。为空表示不落盘。
 	WorkspaceStem string
-	// Format 是成品格式（png/jpeg/webp/gif），空值用上游默认。FrameCount、
+	// Format 是成品格式（png/jpeg/webp/gif/svg），空值用上游默认；svg 见 dianaImageFormatSVG。FrameCount、
 	// FrameDurationMS 只在 gif 时生效，零值用上游默认。
 	Format          string
 	FrameCount      int
@@ -136,6 +136,8 @@ type dianaImageTaskOutput struct {
 	// Delivered 表示图片已在执行过程中逐张发出,Caption 只剩失败/超限说明
 	//（可能为空）,调用方不要再做一次汇总投递。
 	Delivered bool
+	// SVGFiles 是 format=svg 时描好的矢量文件，跟在图后面发。
+	SVGFiles []dianaImageSVGFile
 }
 
 func newDianaImageTool(ctx context.Context, runtime *Runtime, event MessageEvent, relationship RelationshipPolicy) agent.Tool {
@@ -164,7 +166,10 @@ func (t *dianaImageTool) Description() string {
 	if len(operations) == 0 {
 		operations = append(operations, "无")
 	}
-	return `异步生成或编辑图片，后台完成后自动发送。当前可用：` + strings.Join(operations, "、") + `。受理后运行时会告诉用户开始处理，你直接写文字回复，不等图、不重复调用、不再说「正在处理」。用户要先查资料的，先查完，prompt 只写已确认的事实。说用了哪些原图以结果 sources_used 为准。quota_exceeded 为 true 时照 notice 转告，不换途径出图。`
+	// SVG 那句要排在目录截断前：用户说「画个 xx 的 svg」时模型默认手写 SVG，只拼得出
+	// 几何图形。只在 format 枚举里加 svg 时回放 0/9；加上这句后明说要 svg 的请求 3/3 改用
+	// 生图转矢量，历史里一直手写、或点名比赛手写的仍会手写。
+	return `异步生成或编辑图片，后台完成后自动发送。人物、动物、场景这类插画要 SVG 时也用它，填 format=svg 先出图再描成矢量文件；手写 SVG 只适合图表、图标和简单几何。当前可用：` + strings.Join(operations, "、") + `。受理后运行时会告诉用户开始处理，你直接写文字回复，不等图、不重复调用、不再说「正在处理」。用户要先查资料的，先查完，prompt 只写已确认的事实。说用了哪些原图以结果 sources_used 为准。quota_exceeded 为 true 时照 notice 转告，不换途径出图。`
 }
 
 // imageAnnouncementSubjectMaxRunes 是开场白里能带上的画面描述长度上限。
@@ -244,11 +249,11 @@ func (t *dianaImageTool) InputSchema() map[string]any {
 	// 「我这边不能指定 GIF」。gif 只能 generate，上游的 edits 不支持。
 	if t.relationship.AllowImageGeneration {
 		if t.animation {
-			properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF)
+			properties["format"] = toolEnumParam("成品格式，省略为 png。用户要动图、GIF 时填 gif（只限 generate，prompt 里写清动作怎么变化）。要 SVG、矢量图时填 svg（扁平插画、图标、logo 描得最好，prompt 写扁平矢量风格、干净色块、清晰轮廓）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF, dianaImageFormatSVG)
 			properties["frame_count"] = toolIntParam("gif 总帧数，省略为 9", llm.ImageGIFMinFrames, llm.ImageGIFMaxFrames)
 			properties["frame_duration_ms"] = toolIntParam("gif 每帧毫秒数，省略为 200", llm.ImageGIFMinFrameDurationMS, llm.ImageGIFMaxFrameDurationMS)
 		} else {
-			properties["format"] = toolEnumParam("成品格式，省略为 png。当前没有能出动图的图片模型，做不了 GIF", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP)
+			properties["format"] = toolEnumParam("成品格式，省略为 png。当前没有能出动图的图片模型，做不了 GIF。要 SVG、矢量图时填 svg（扁平插画、图标、logo 描得最好，prompt 写扁平矢量风格、干净色块、清晰轮廓）", llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, dianaImageFormatSVG)
 		}
 	}
 	// 要编辑谁的头像由你来判断：运行时不去读用户的措辞，只负责把你点名的 id 换成
@@ -401,6 +406,10 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 	if format == llm.ImageFormatGIF && !t.animation {
 		return dianaImageToolRequest{}, fmt.Errorf("当前没有能出动图的图片模型，做不了 GIF。照实告诉用户，或去掉 format 出静态图")
 	}
+	sticker := IsOneBotPlatform(t.runtime.currentPlatform(t.event)) && toolInputBool(input, "sticker")
+	if format == dianaImageFormatSVG && sticker {
+		return dianaImageToolRequest{}, fmt.Errorf("svg 是矢量文件，不能当表情包发；按用户要的二选一")
+	}
 	sourceLabels := configToolStringSlice(input, "source_labels")
 	if len(sourceLabels) != len(identitySources) {
 		// 数量对不上就整组丢弃:错位的标注比没有标注更糟(把 A 的头像标成 B)。
@@ -413,7 +422,7 @@ func (t *dianaImageTool) prepareRequest(input map[string]any) (dianaImageToolReq
 		SourceMessageIDs: sourceMessageIDs,
 		Format:           format, FrameCount: frameCount, FrameDurationMS: frameDuration,
 		Aspect:  normalizeDianaImageAspect(configToolString(input, "aspect")),
-		Sticker: IsOneBotPlatform(t.runtime.currentPlatform(t.event)) && toolInputBool(input, "sticker"),
+		Sticker: sticker,
 	}, nil
 }
 
@@ -425,9 +434,9 @@ func dianaImageFormatInput(input map[string]any, operation string) (string, int,
 	case "":
 	case "jpg":
 		format = llm.ImageFormatJPEG
-	case llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF:
+	case llm.ImageFormatPNG, llm.ImageFormatJPEG, llm.ImageFormatWebP, llm.ImageFormatGIF, dianaImageFormatSVG:
 	default:
-		return "", 0, 0, fmt.Errorf("format 只能是 png、jpeg、webp 或 gif")
+		return "", 0, 0, fmt.Errorf("format 只能是 png、jpeg、webp、gif 或 svg")
 	}
 	if format == llm.ImageFormatGIF && operation != "generate" {
 		return "", 0, 0, fmt.Errorf("gif 动图只能用 operation=\"generate\" 凭文字生成，图片接口不支持把原图改成动图。要做动图就把原图内容写进 prompt 改用 generate；要改原图就去掉 format")
@@ -526,7 +535,16 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 			}
 			// 成图不引用原消息：像真人画完直接甩图，引用框反倒显得像工单回执。
 			message := OutgoingMessage{ImageURLs: output.ImageURLs, GeneratedImageModels: output.Models, ImagesAsStickers: request.Sticker}
-			return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, output.Caption)}, nil
+			if len(output.SVGFiles) == 0 {
+				return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, output.Caption)}, nil
+			}
+			// 有 SVG 时先发图再发文件：文件消息没有缩略图，先看到画面才知道文件是什么。
+			if services.Send != nil && services.Send(ctx, message) == nil {
+				note := joinDianaImageNotes(output.Caption, t.runtime.sendGeneratedSVGFiles(ctx, t.event, request.WorkspaceStem, output.SVGFiles))
+				return PluginTaskResult{Delivered: true, Reply: note}, nil
+			}
+			note := joinDianaImageNotes(output.Caption, t.runtime.sendGeneratedSVGFiles(ctx, t.event, request.WorkspaceStem, output.SVGFiles))
+			return PluginTaskResult{Messages: dianaImageImagesThenCaption(message, note)}, nil
 		},
 	}
 	reservation := t.runtime.reservePluginTasksForTurn(ctx, t.event, []PluginTask{task})
@@ -613,7 +631,7 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 			Prompt:          submittedPrompt,
 			Size:            dianaImageSize(request.Format, request.Aspect),
 			N:               1,
-			OutputFormat:    request.Format,
+			OutputFormat:    upstreamImageFormat(request.Format),
 			FrameCount:      request.FrameCount,
 			FrameDurationMS: request.FrameDurationMS,
 		})
@@ -654,7 +672,8 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 		// 逐张模式且能中途投递时,完成一张立刻发一张:用户马上看到成果,
 		// 也不再需要「正在编辑第 N/M 张」这种带内部味道的进度播报——
 		// 图片本身就是进度。发不出去再退回攒总。
-		streaming := request.SourceMode == dianaImageSourceModeEach && len(batches) > 1 && services.Send != nil
+		// svg 要等图到齐再转、图和文件成对发，不逐张发。
+		streaming := request.SourceMode == dianaImageSourceModeEach && len(batches) > 1 && services.Send != nil && request.Format != dianaImageFormatSVG
 		botCfg := t.runtime.effectiveConfigForEvent(t.event)
 		editPrompt := func(batch []string) string {
 			// 只有一次交出多张图（combine）才需要说明顺序；逐张模式每次只有一张。
@@ -759,11 +778,17 @@ func (t *dianaImageTool) execute(ctx context.Context, request dianaImageToolRequ
 	}
 	t.runtime.recordImageOperation(ctx, t.event, action, message, prompt, submittedPrompt, cfg.ImageModelWithDefault(), len(images), sourceCount)
 	succeeded = true
-	return dianaImageTaskOutput{
+	output := dianaImageTaskOutput{
 		Caption:   dianaImageResultCaption(request.Caption, len(sharedImages), dropped, failed),
 		ImageURLs: sharedImages,
 		Models:    models,
-	}, nil
+	}
+	if request.Format == dianaImageFormatSVG {
+		var note string
+		output.SVGFiles, note = t.runtime.vectorizeGeneratedImages(ctx, request.WorkspaceStem, images)
+		output.Caption = joinDianaImageNotes(output.Caption, note)
+	}
+	return output, nil
 }
 
 // dianaImageImagesThenCaption 先发图，说明文字单独一条跟在后面：图文挤在一个气泡里
@@ -1020,15 +1045,7 @@ func (r *Runtime) persistGeneratedImages(ctx context.Context, event MessageEvent
 }
 
 func (r *Runtime) persistGeneratedImage(ctx context.Context, event MessageEvent, stem string, index, total int, image string, now time.Time) {
-	var (
-		data []byte
-		err  error
-	)
-	if remote := normalizedHTTPURL(image); remote != "" {
-		data, _, err = downloadImageBytesWithLimit(ctx, remote, dianaImageMaxDecodedSize)
-	} else {
-		data, _, err = decodeInlineHistoryImage(image)
-	}
+	data, err := loadGeneratedImage(ctx, image)
 	if err != nil {
 		log.Printf("diana image: 成品存进工作目录失败（取图）：%v", err)
 		return
@@ -1044,6 +1061,16 @@ func (r *Runtime) persistGeneratedImage(ctx context.Context, event MessageEvent,
 		return
 	}
 	log.Printf("diana image: 成品已存进工作目录 %s", saved.Path)
+}
+
+// loadGeneratedImage 取回图片接口给的成图：可能是网址，也可能是内联的 data URL。
+func loadGeneratedImage(ctx context.Context, image string) ([]byte, error) {
+	if remote := normalizedHTTPURL(image); remote != "" {
+		data, _, err := downloadImageBytesWithLimit(ctx, remote, dianaImageMaxDecodedSize)
+		return data, err
+	}
+	data, _, err := decodeInlineHistoryImage(image)
+	return data, err
 }
 
 // generatedImageExtension 给生成图片定扩展名：先按字节认，认不出再看接口报的类型，
