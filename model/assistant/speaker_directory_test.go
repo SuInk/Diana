@@ -64,8 +64,10 @@ func (s *speakerHistoryStore) ListMessageSpeakers(_ context.Context, query Messa
 	return out, nil
 }
 
-func newSpeakerTestRuntime(store *speakerHistoryStore) *Runtime {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+func newSpeakerTestRuntime(t *testing.T, store *speakerHistoryStore) *Runtime {
+	t.Helper()
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(store)
 	return runtime
 }
@@ -90,7 +92,7 @@ func TestChatHistorySearchResolvesSenderName(t *testing.T) {
 		{UserID: "50001", Names: []string{"明明同学", "小明"}, Username: "ming_cat"},
 		{UserID: "50002", Names: []string{"小明的猫"}},
 	}}
-	runtime := newSpeakerTestRuntime(store)
+	runtime := newSpeakerTestRuntime(t, store)
 
 	result := runChatHistorySearch(t, runtime, map[string]any{"operation": "search", "sender_name": "小明"})
 	if got := strings.Join(store.query.SenderUserIDs, ","); got != "50001" {
@@ -114,7 +116,7 @@ func TestChatHistorySearchResolvesSenderName(t *testing.T) {
 // 模型把昵称误填进 sender_user_id 时按昵称处理；真账号照旧直通。
 func TestChatHistorySearchTreatsNicknameInSenderUserID(t *testing.T) {
 	store := &speakerHistoryStore{speakers: []MessageSpeaker{{UserID: "50001", Names: []string{"小明"}}}}
-	runtime := newSpeakerTestRuntime(store)
+	runtime := newSpeakerTestRuntime(t, store)
 
 	result := runChatHistorySearch(t, runtime, map[string]any{"operation": "search", "sender_user_id": "小明"})
 	if got := strings.Join(store.query.SenderUserIDs, ","); got != "50001" || !strings.Contains(result.Message, "不是账号") {
@@ -132,7 +134,7 @@ func TestChatHistorySearchTreatsNicknameInSenderUserID(t *testing.T) {
 }
 
 func TestChatHistorySearchUnknownSenderNameErrors(t *testing.T) {
-	runtime := newSpeakerTestRuntime(&speakerHistoryStore{})
+	runtime := newSpeakerTestRuntime(t, &speakerHistoryStore{})
 	_, err := newDianaChatHistoryTool(runtime, MessageEvent{Kind: EventKindGroup, GroupID: "-10042"}).Run(context.Background(), map[string]any{"operation": "search", "sender_name": "不存在"})
 	if err == nil || !strings.Contains(err.Error(), "不存在") {
 		t.Fatalf("unknown name should explain: %v", err)
@@ -149,7 +151,7 @@ func TestMentionedSubjectUserIDs(t *testing.T) {
 		{UserID: "40000", Names: []string{"提问者"}},
 		{UserID: "90000", Names: []string{"机器人"}},
 	}}
-	runtime := newSpeakerTestRuntime(store)
+	runtime := newSpeakerTestRuntime(t, store)
 	event := MessageEvent{Kind: EventKindGroup, GroupID: "-10042", UserID: "40000", SelfID: "90000"}
 
 	got := runtime.mentionedSubjectUserIDs(context.Background(), event, "提问者想问小明喜欢什么，a 也说说，机器人你知道吗")

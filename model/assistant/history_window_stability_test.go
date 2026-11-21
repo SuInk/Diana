@@ -173,13 +173,14 @@ func TestBudgetPretrimChunkShrinksWithKeptHistory(t *testing.T) {
 	}
 }
 
-// 近期历史预算 20000 的活跃群：每分钟三条左右、每条几十 token。这时总输入离输入
+// 近期历史预算 16000（固定值）的活跃群：每分钟三条左右、每条几十 token。这时总输入离输入
 // 预算很远，裁历史的是锚定窗口（anchoredHistoryWindow）而不是预裁剪。走完整的
 // remember → promptContextHistory，确认窗口开头连续上百条消息不动、每次都不超
 // 预算，留下的历史平均不少于预算的 85%、最少约 75%。
-func TestActiveGroupHistoryWindowMovesInChunksAtTwentyThousandBudget(t *testing.T) {
-	const budget = 20000
-	runtime := NewRuntime(BotConfig{RecentHistoryTokenBudget: budget, ContextSummaryThreshold: 100000, RecentContextLimit: 50000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+func TestActiveGroupHistoryWindowMovesInChunksAtDefaultBudget(t *testing.T) {
+	budget := recentHistoryTokenCeiling
+	setSideHistoryLookback(t, 50000)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100000}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	random := rand.New(rand.NewSource(20260928))
 	now := int64(1790000000)
 	previousStart, previousMove := "", 0
@@ -215,7 +216,7 @@ func TestActiveGroupHistoryWindowMovesInChunksAtTwentyThousandBudget(t *testing.
 			continue
 		}
 		requests++
-		ratio := float64(used) / budget
+		ratio := float64(used) / float64(budget)
 		ratioSum += ratio
 		minRatio = min(minRatio, ratio)
 		if start != previousStart {

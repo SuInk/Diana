@@ -430,6 +430,8 @@ type Runtime struct {
 	promptCacheProbe promptCacheProbeStore
 	// appendContexts 是只追加模式下每个会话上一轮实际发出的请求，见 append_context.go。
 	appendContexts appendContextStore
+	// replyContexts 是设置页柱形图用的每个会话上一轮主回复请求的构成，见 reply_context_breakdown.go。
+	replyContexts replyContextStore
 	// imageEditSources 记录每个会话最近使用的原图，仅用于诊断；不能作为新请求的
 	// 隐式来源。自带锁，不受 mu 保护。
 	imageEditSources imageEditSourceMemory
@@ -1890,8 +1892,6 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	}
 	overrideIfSet(&cfg.WelcomeLLMCooldownSeconds, groupCfg.WelcomeLLMCooldownSeconds)
 	overrideIfSet(&cfg.MaxContextTokens, groupCfg.MaxContextTokens)
-	overrideIfSet(&cfg.RecentHistoryTokenBudget, groupCfg.RecentHistoryTokenBudget)
-	overrideIfSet(&cfg.RecentContextLimit, groupCfg.RecentContextLimit)
 	overrideIfSet(&cfg.MaxReplyChars, groupCfg.MaxReplyChars)
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
@@ -5120,7 +5120,12 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		observer, stopProgress := r.startReplyProgress(ctx, event, r.agentRunObserver(event))
 		identity := callerIdentityForEvent(cfg, event)
 		identity.Background = backgroundRunContext(ctx)
-		resp, err := agentRunner.Run(agent.WithCallerIdentity(ctx, identity), agent.Request{
+		runCtx := ctx
+		var requestRecorder *replyRequestRecorder
+		if appendKey != "" {
+			runCtx, requestRecorder = withReplyRequestRecorder(runCtx)
+		}
+		resp, err := agentRunner.Run(agent.WithCallerIdentity(runCtx, identity), agent.Request{
 			Hooks:         newReplyRunHooks(cfg),
 			Messages:      messages,
 			TraceID:       traceID,
@@ -5137,6 +5142,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 接着它续，失败那条消息会作为新历史追加进去。以前直接清空，下一轮只能整段
 			// 重新组装（10-29～30 线上 56 次失败，每次都让下一轮多付一整份未命中）。
 			if err == nil {
+				r.recordReplyContext(event, cfg, requestRecorder)
 				previous := r.appendContexts.get(appendKey)
 				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous)
 				r.appendContexts.put(appendKey, written)
@@ -8382,12 +8388,12 @@ func (r *Runtime) remember(event MessageEvent) {
 	event = r.currentMessageRevisionLocked(event, time.Now())
 	r.mu.Unlock()
 	session := sessionKey(event)
-	// Group context lives for a token-budget epoch, not just RecentContextLimit
+	// Group context lives for a token-budget epoch, not just sideHistoryLookback
 	// messages. Keep enough raw events even when there is no durable store.
 	groupLimit := 0
 	if event.Kind == EventKindGroup {
 		cfg := r.effectiveConfigForEvent(event)
-		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg))
+		groupLimit = historyCandidateLimitForBudget(recentHistoryBudget(r.promptContextWindowTokens(event, cfg)))
 	}
 	var compressed []MessageEvent
 	r.mu.Lock()
@@ -8427,10 +8433,7 @@ func (r *Runtime) remember(event MessageEvent) {
 		history = append(history, event)
 	}
 	cfg := r.effectiveConfigForEventLocked(event)
-	limit := cfg.RecentContextLimit
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := sideHistoryLookback
 	threshold := contextSummaryTriggerThreshold(limit, cfg.ContextSummaryThreshold)
 	if len(history) > threshold {
 		compressCount := len(history) - limit

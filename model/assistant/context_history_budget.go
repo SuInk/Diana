@@ -31,15 +31,12 @@ const (
 // 这些是上限不是下限：小窗口下份额本来就更小，仍按份额走，不会因为常量比窗口大
 // 而超发。
 const (
-	// DefaultRecentHistoryTokenBudget 是近期聊天历史的默认绝对上限，约合普通群聊
-	// 300–600 条。它按群聊场景估算，没有实测支撑，所以做成可配置而不是常量：
-	// 长期只用到一半说明虚高，长期顶满说明该调大。
-	DefaultRecentHistoryTokenBudget int64 = 16000
-	// MaximumRecentHistoryTokenBudget 是配置能放宽到的最高值。只有窗口份额兜底时，
-	// 在 128K 窗口里填上窗口大小会让每条群消息带进 70K、几百上千条、跨一个多月的
-	// 历史——生产上就这样把正式回复顶到了 10 万 token。再往上的历史价值已经可以
-	// 忽略，要更远的内容走摘要、记忆和聊天记录工具。
-	MaximumRecentHistoryTokenBudget int64 = 32000
+	// recentHistoryTokenCeiling 是近期聊天历史的绝对上限，约合普通群聊 300–600 条。
+	// 以前能单独配（最高 32000），和「单次请求上下文上限」并排像两道历史限额；现在
+	// 上下文大小只留那一个设置，这里固定。在 128K 窗口里只按份额走会让每条群消息
+	// 带进 70K、几百上千条、跨一个多月的历史——生产上就这样把正式回复顶到过 10 万
+	// token。更远的内容走摘要、记忆和聊天记录工具。
+	recentHistoryTokenCeiling int64 = 16000
 	// sessionThreadTokenCeiling 限制会话线程便签。它天然只有几百字，撞上限通常
 	// 说明模型把已完结话题囤在了 thread 里，而不是预算不够。
 	sessionThreadTokenCeiling int64 = 1200
@@ -53,6 +50,12 @@ const (
 	// 长度上限都在那边，三个数一起改才对得上。
 )
 
+// sideHistoryLookback 是路由、指代消解和记忆门控这些旁路往回看的条数，也是内存里
+// 每个会话缓存的条数。它不进正式提示词。取 40 而不是 20：20 条在稍热闹一点的群里
+// 就不够被指代的消息留在窗口里，而这些调用的单条开销很小。以前能按机器人和群配
+// （「历史查询条数上限」），和上下文大小并排像两道历史限额，现在固定。
+var sideHistoryLookback = 40
+
 // contextLayerBudget 取「份额」和「绝对上限」中较小的那个。
 func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
 	budget := contextShareBudget(contextWindow, share)
@@ -62,20 +65,10 @@ func contextLayerBudget(contextWindow, share, ceiling int64) int64 {
 	return budget
 }
 
-// recentHistoryCeiling 返回近期历史的绝对上限：没填按默认值，填得再大也不超过
-// MaximumRecentHistoryTokenBudget。
-func recentHistoryCeiling(cfg BotConfig) int64 {
-	ceiling := cfg.RecentHistoryTokenBudget
-	if ceiling <= 0 {
-		ceiling = DefaultRecentHistoryTokenBudget
-	}
-	return min(ceiling, MaximumRecentHistoryTokenBudget)
-}
-
-// recentHistoryBudget 返回本轮近期历史的 token 预算。绝对上限之外还要再按窗口
-// 份额收一次，否则单群配置能绕过小窗口的保护。
-func recentHistoryBudget(contextWindow int64, cfg BotConfig) int64 {
-	return contextLayerBudget(contextWindow, recentHistoryTokenShare, recentHistoryCeiling(cfg))
+// recentHistoryBudget 返回本轮近期历史的 token 预算：绝对上限之外还要再按窗口
+// 份额收一次，小窗口下不会因为常量比窗口大而超发。
+func recentHistoryBudget(contextWindow int64) int64 {
+	return contextLayerBudget(contextWindow, recentHistoryTokenShare, recentHistoryTokenCeiling)
 }
 
 // sessionThreadBudget 返回会话线程便签的 token 预算。
@@ -109,10 +102,10 @@ type historyContextTurn struct {
 }
 
 // promptContextHistory loads a token-derived candidate window, then keeps
-// complete recent turns from newest to oldest. RecentContextLimit remains
-// available to legacy history tools, but no longer defines the normal prompt.
+// complete recent turns from newest to oldest. sideHistoryLookback only bounds
+// side lookups; it does not define the normal prompt.
 func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []MessageEvent {
-	fullBudget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg), cfg)
+	fullBudget := recentHistoryBudget(r.promptContextWindowTokens(event, cfg))
 	// 就着眼前这张图问一句时收紧历史：答案几乎全在图里，长历史是白付的 prefill。
 	budget := visionFocusedHistoryBudget(fullBudget, event, PlainText(event.Segments))
 	if event.Kind == EventKindGroup {
@@ -201,7 +194,7 @@ func (r *Runtime) promptContextHistory(event MessageEvent, cfg BotConfig) []Mess
 const historyWindowLowWatermarkPercent int64 = 75
 
 // contextSummaryMinIntervalPercent 是两次上下文压缩之间至少要攒下的新消息，按
-// RecentContextLimit 的百分比算。
+// 保留条数（sideHistoryLookback）的百分比算。
 //
 // 压缩量是「触发条数减去保留条数」，这两个配置本来各管各的：一个说什么时候压，
 // 一个说压完留多少。但触发条数填得不比保留条数大时，旧代码把它夹平到保留条数，
@@ -569,7 +562,7 @@ func (r *Runtime) recordPromptContextBudget(ctx context.Context, event MessageEv
 		"over_budget":              breakdown.OverBudget,
 		"categories":               contextBudgetCategoryTrace(breakdown),
 		"category_tokens":          categoryTokens,
-		"history_token_budget":     recentHistoryBudget(window, cfg),
+		"history_token_budget":     recentHistoryBudget(window),
 		"history_token_share":      contextShareBudget(window, recentHistoryTokenShare),
 		"summary_token_budget":     sessionThreadBudget(window),
 		// 自述也按记忆优先级注入，token 记在 categories 的 memory 里，所以这份
@@ -709,10 +702,6 @@ type ContextBudgetLayer struct {
 	// CappedByCeiling 说明这一层是被绝对上限压住的，还是窗口份额本来就更小。
 	// 大窗口下几乎全是前者，小窗口下全是后者——这正是分层预算要表达的事。
 	CappedByCeiling bool `json:"capped_by_ceiling"`
-	// Configurable 标记这一层能不能在配置里调。只有近期历史可以：另外三层的
-	// 取值由各自的结构决定（便签天然只有几百字、检索层配合 MMR 的条数上限、
-	// 常驻层不参加相关性排序所以必须小而固定），给旋钮也没有对应的失效模式。
-	Configurable bool `json:"configurable"`
 }
 
 // ContextBudgetBreakdown 是某个会话当前的上下文预算分配。
@@ -741,17 +730,16 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 	cfg := r.effectiveConfigForEvent(event)
 	window := r.promptContextWindowTokens(event, cfg)
 
-	historyCeiling := recentHistoryCeiling(cfg)
 	breakdown := ContextBudgetBreakdown{
 		GroupID:               event.GroupID,
 		ContextWindow:         window,
 		ContextWindowFallback: r.promptContextWindowFallback(cfg),
 		Layers: []ContextBudgetLayer{
-			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, historyCeiling, true),
-			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling, false),
-			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling, false),
-			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling, false),
-			newContextBudgetLayer("self_notes", "自述", window, selfNoteTokenShare, selfNoteTokenCeiling, false),
+			newContextBudgetLayer("recent_history", "近期历史", window, recentHistoryTokenShare, recentHistoryTokenCeiling),
+			newContextBudgetLayer("session_thread", "会话便签", window, compressedSummaryTokenShare, sessionThreadTokenCeiling),
+			newContextBudgetLayer("retrieved_memory", "检索记忆", window, longTermMemoryTokenShare, retrievedMemoryTokenCeiling),
+			newContextBudgetLayer("core_memory", "常驻记忆", window, coreMemoryTokenShare, coreMemoryTokenCeiling),
+			newContextBudgetLayer("self_notes", "自述", window, selfNoteTokenShare, selfNoteTokenCeiling),
 		},
 	}
 	for _, layer := range breakdown.Layers {
@@ -763,7 +751,7 @@ func (r *Runtime) ContextBudgetBreakdownForGroup(profileID, groupID string) Cont
 	return breakdown
 }
 
-func newContextBudgetLayer(key, label string, window, share, ceiling int64, configurable bool) ContextBudgetLayer {
+func newContextBudgetLayer(key, label string, window, share, ceiling int64) ContextBudgetLayer {
 	tokens := contextLayerBudget(window, share, ceiling)
 	return ContextBudgetLayer{
 		Key:             key,
@@ -772,6 +760,5 @@ func newContextBudgetLayer(key, label string, window, share, ceiling int64, conf
 		Ceiling:         ceiling,
 		Tokens:          tokens,
 		CappedByCeiling: ceiling > 0 && contextShareBudget(window, share) > ceiling,
-		Configurable:    configurable,
 	}
 }

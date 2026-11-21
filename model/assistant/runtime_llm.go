@@ -259,6 +259,7 @@ func (r *Runtime) runLLMProviderForGroup(ctx context.Context, group string, run 
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
+	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	// Streaming must be the last wrapper added so it sits closest to the real
 	// provider. The other decorators expose Generate only and would otherwise
@@ -286,6 +287,7 @@ func (r *Runtime) wrapLLMProviderForContext(ctx context.Context, provider LLMPro
 	run = r.withImageBudgetRun(group, run)
 	run = r.withDebugTraceRun(ctx, run)
 	run = r.withPromptCacheProbeRun(ctx, run)
+	run = withReplyRequestRecordRun(ctx, run)
 	run = r.withLLMUsageAccountingRun(ctx, run)
 	run = r.withLLMStreamingRun(ctx, run)
 	_, _ = run(provider)
@@ -1784,10 +1786,7 @@ func (r *Runtime) sessionContextHistory(event MessageEvent) ([]MessageEvent, Mes
 	r.mu.RLock()
 	// 返回副本，生成回复时遍历历史不会和新消息写入互相影响。
 	history := r.history[session]
-	limit := r.effectiveConfigForEventLocked(event).RecentContextLimit
-	if limit <= 0 {
-		limit = 20
-	}
+	limit := sideHistoryLookback
 	if len(history) > limit {
 		history = history[len(history)-limit:]
 	}

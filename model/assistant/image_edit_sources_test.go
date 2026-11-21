@@ -23,7 +23,7 @@ const (
 )
 
 func newEditSourceRuntime() *Runtime {
-	return NewRuntime(BotConfig{BotAccount: editSourceBotID, RecentContextLimit: 40}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	return NewRuntime(BotConfig{BotAccount: editSourceBotID}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 }
 
 func editSourceText(id, userID, text string, extra ...MessageSegment) MessageEvent {
@@ -201,7 +201,7 @@ func TestImageToolEditUsesModelSelectedSourceMessages(t *testing.T) {
 		Provider: llm.ProviderOpenAICompatible, APIKey: "secret", BaseURL: "https://example.invalid/v1",
 		Model: "gpt-test", ImageModel: "gpt-image-2",
 	})}
-	runtime := NewRuntime(BotConfig{BotAccount: editSourceBotID, RecentContextLimit: 40}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
+	runtime := NewRuntime(BotConfig{BotAccount: editSourceBotID}, nilChannel{}, NewPluginManager(), store, nil, nil, nil)
 	const (
 		secondA = "data:image/png;base64,c2Vjb25kLWE="
 		secondB = "data:image/png;base64,c2Vjb25kLWI="

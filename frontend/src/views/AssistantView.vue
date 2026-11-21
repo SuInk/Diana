@@ -1822,23 +1822,15 @@
             </div>
             <div class="card-body form-grid">
               <div class="field wide">
-                <span class="hint">下面几项分的是同一个模型窗口：历史占一块，工具定义占一块，剩下才是这一轮的新消息。想看某一轮真实的构成，在<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
-              </div>
-              <div class="field">
-                <label for="bot-history-budget">回复历史 token 预算</label>
-                <input id="bot-history-budget" v-model.number="form.recent_history_token_budget" class="input" inputmode="numeric" placeholder="留空按 16000" />
-                <span class="hint">正式回复里聊天历史最多占多少 token，16000 大致相当于普通群聊 300–600 条。最多只能调到 32000，同时不超过模型窗口的 55%。更早的内容靠摘要、记忆和聊天记录工具找回。</span>
-                <span v-if="(form.recent_history_token_budget ?? 0) > 32000" class="hint warn-text">超过 32000 的部分不生效，按 32000 算。</span>
+                <span class="hint">每次回复会带上最近的聊天记录、记忆和工具结果，总量不超过下面的「单次请求上下文上限」。想看某一轮具体带了什么，去<a href="#" @click.prevent="navigate('events')">运行记录</a>里。</span>
               </div>
               <div class="field">
                 <label for="bot-maxcontext">单次请求上下文上限</label>
                 <input id="bot-maxcontext" v-model.number="form.max_context_tokens" class="input" inputmode="numeric" placeholder="留空跟随模型窗口" />
                 <span class="hint">一次调用最多带多少 token 上下文进去。留空按提供商配置档的模型窗口，填了只会收紧不会放宽。</span>
               </div>
-              <div class="field">
-                <label for="bot-context">历史查询条数上限</label>
-                <input id="bot-context" v-model.number="form.recent_context_limit" class="input" inputmode="numeric" />
-                <span class="hint">意图路由、指代消解和记忆门控这些旁路往回看几条，不影响正式回复的历史长度。</span>
+              <div class="field wide">
+                <ReplyContextChart :profile="form.id || ''" />
               </div>
             </div>
           </section>
@@ -2492,6 +2484,7 @@
 </template>
 
 <script setup lang="ts">
+import ReplyContextChart from "../components/ReplyContextChart.vue";
 import { formatRelative } from "../lib/format";
 import { reasoningOptions } from "../lib/reasoning-options";
 import { parseTriggerWords, formatTriggerWords } from "../lib/trigger-words";

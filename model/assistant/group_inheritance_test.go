@@ -55,9 +55,9 @@ func TestExplicitGroupSettingsStillOverride(t *testing.T) {
 // 保留。旧版欢迎开关的 false 不落盘，读回来的 nil 按关闭处理，机器人开着欢迎时不能
 // 让这批群升级后突然开始欢迎。
 func TestLegacyGroupSnapshotsAreClearedOnlyWhenEqualToBot(t *testing.T) {
-	bot := BotConfig{ID: "bot", GroupTriggers: []string{"Diana"}, WelcomeEnabled: true, MaxReplyChars: 800, RecentContextLimit: 30}.WithDefaults()
+	bot := BotConfig{ID: "bot", GroupTriggers: []string{"Diana"}, WelcomeEnabled: true, MaxReplyChars: 800, MaxContextTokens: 30000}.WithDefaults()
 	var legacy GroupConfig
-	raw := `{"bot_profile_id":"bot","group_id":"1","enabled":true,"group_triggers":["Diana"],"max_reply_chars":800,"recent_context_limit":12}`
+	raw := `{"bot_profile_id":"bot","group_id":"1","enabled":true,"group_triggers":["Diana"],"max_reply_chars":800,"max_context_tokens":12000}`
 	if err := json.Unmarshal([]byte(raw), &legacy); err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +68,8 @@ func TestLegacyGroupSnapshotsAreClearedOnlyWhenEqualToBot(t *testing.T) {
 	if len(migrated.GroupTriggers) != 0 || migrated.MaxReplyChars != 0 {
 		t.Fatalf("snapshots equal to the bot must follow it: triggers=%v max=%d", migrated.GroupTriggers, migrated.MaxReplyChars)
 	}
-	if migrated.RecentContextLimit != 12 {
-		t.Fatalf("a value different from the bot is a real override, got %d", migrated.RecentContextLimit)
+	if migrated.MaxContextTokens != 12000 {
+		t.Fatalf("a value different from the bot is a real override, got %d", migrated.MaxContextTokens)
 	}
 	if migrated.WelcomeEnabled == nil || *migrated.WelcomeEnabled {
 		t.Fatalf("legacy group without welcome must stay off while the bot welcomes, got %v", migrated.WelcomeEnabled)
@@ -82,8 +82,8 @@ func TestLegacyGroupSnapshotsAreClearedOnlyWhenEqualToBot(t *testing.T) {
 	}
 
 	// 拿别的机器人归一化时不迁：拿错了 base，会把真的单独设置当快照清掉。
-	other := BotConfig{ID: "other", RecentContextLimit: 12}.WithDefaults()
-	if got := legacy.WithDefaults("1", other); got.InheritanceMigrated || got.RecentContextLimit != 12 {
+	other := BotConfig{ID: "other", MaxContextTokens: 12000}.WithDefaults()
+	if got := legacy.WithDefaults("1", other); got.InheritanceMigrated || got.MaxContextTokens != 12000 {
 		t.Fatalf("migrated against the wrong bot: %+v", got)
 	}
 }

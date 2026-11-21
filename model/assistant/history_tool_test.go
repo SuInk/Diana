@@ -15,7 +15,8 @@ import (
 )
 
 func TestDianaChatHistoryToolRecentKeepsNewestEventsWhenMemoryExceedsLimit(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	for index := 1; index <= 6; index++ {
@@ -39,7 +40,8 @@ func TestDianaChatHistoryToolRecentKeepsNewestEventsWhenMemoryExceedsLimit(t *te
 }
 
 func TestDianaChatHistoryToolSearchDefersNearbyAnswerToAround(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	base := time.Date(2026, 8, 22, 12, 46, 45, 0, time.Local).Unix()
@@ -157,7 +159,8 @@ func historyMessageIDsFromItems(items []dianaChatHistoryItem) []string {
 }
 
 func TestDianaChatHistoryToolReadsAroundQuotedMessageBeyondShortContext(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	for _, event := range []MessageEvent{
@@ -318,9 +321,9 @@ func TestRuntimeAgentCanQueryHistoryAroundCurrentQuote(t *testing.T) {
 			return "", fmt.Errorf("unexpected LLM call %d", call)
 		}
 	}
+	setSideHistoryLookback(t, 3)
 	runtime := NewRuntime(BotConfig{
 		BotAccount:              "10000",
-		RecentContextLimit:      3,
 		ContextSummaryThreshold: 3,
 		AgentEnabled:            true,
 	}, &recordingChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
@@ -399,7 +402,8 @@ func (s *capturingHistorySearchStore) SearchMessageEvents(_ context.Context, que
 
 // 「总结昨天 12 点到 17 点」这类请求没有关键词可检索，需要按时间段整段列出。
 func TestDianaChatHistoryToolRangeListsWholeWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	noon := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
@@ -433,7 +437,8 @@ func TestDianaChatHistoryToolRangeListsWholeWindow(t *testing.T) {
 
 // 时间段没读完时要给出续读起点，别让模型只拿前一批就下结论。
 func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	base := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
@@ -477,7 +482,8 @@ func TestDianaChatHistoryToolRangePagesWithNextFromTime(t *testing.T) {
 // 不带关键词按时段读时要照 order=newest 从末尾往前读、按游标接着往前翻。生产
 // 2026-11-18「总结这周」按天传 newest，这里却写死从旧到新，每天只拿到零点后几分钟。
 func TestDianaChatHistoryToolRangeHonorsNewestOrder(t *testing.T) {
-	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100, RecentContextLimit: 3}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	base := time.Date(2026, 8, 19, 0, 0, 0, 0, time.Local).Unix()
 	for index := 1; index <= 5; index++ {
@@ -513,7 +519,8 @@ func TestDianaChatHistoryToolRangeHonorsNewestOrder(t *testing.T) {
 
 // 抽样概览已删掉：总结一整段时用 range 逐条读，条数不设上限，装得下就一次给全。
 func TestDianaChatHistoryToolRangeReadsWholeLargeWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	base := time.Date(2026, 8, 31, 0, 0, 0, 0, time.Local).Unix()
 	for index := 0; index < 120; index++ {
@@ -555,7 +562,8 @@ func TestDianaChatHistoryToolRangeReadsWholeLargeWindow(t *testing.T) {
 
 // 时间段真的没消息时要说清是「没记录」，而不是让模型以为工具坏了或去编内容。
 func TestDianaChatHistoryToolRangeReportsEmptyWindow(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	runtime.remember(chatHistoryTextEvent(time.Date(2026, 8, 19, 20, 0, 0, 0, time.Local).Unix(), "alice", "Alice", "night", "晚上的消息"))
 
@@ -580,7 +588,8 @@ func TestDianaChatHistoryToolRangeReportsEmptyWindow(t *testing.T) {
 
 // 没有 query 的 search 不该报错让模型以为记录是空的，直接按时间段列出来。
 func TestDianaChatHistoryToolSearchWithoutQueryFallsBackToRange(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	noon := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local).Unix()
 	runtime.remember(chatHistoryTextEvent(noon+600, "alice", "Alice", "inside", "窗口内"))
@@ -628,7 +637,8 @@ func TestChatHistoryTimeValueParsesLocalStringsAndUnixSeconds(t *testing.T) {
 
 // 只给日期的 through_time 要覆盖整天，否则「到昨天」会被截在零点。
 func TestDianaChatHistoryToolRangeTreatsDateOnlyThroughAsWholeDay(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	runtime.SetMessageHistoryStore(newSemanticTimelineStore())
 	runtime.remember(chatHistoryTextEvent(time.Date(2026, 8, 19, 22, 0, 0, 0, time.Local).Unix(), "alice", "Alice", "late", "深夜消息"))
 
@@ -856,7 +866,8 @@ func TestCrossGroupReadGuardRejectsPlaceholderMember(t *testing.T) {
 // 照参考 bot：不写 operation，给了条件就按条件查（发送者、关键词叠加取交集），什么都不给
 // 读最近消息；ids 一次读几条原文，找不到的写明。
 func TestDianaChatHistoryToolCombinesFiltersWithoutOperation(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	base := time.Date(2026, 8, 22, 12, 0, 0, 0, time.Local).Unix()
@@ -905,7 +916,8 @@ func TestDianaChatHistoryToolCombinesFiltersWithoutOperation(t *testing.T) {
 // 显式写了 range/recent 又带筛选条件时不能静默丢条件；按条件查也要认消息范围；
 // around 在冷清的群里要放宽时间窗凑够条数。
 func TestDianaChatHistoryToolHonorsFiltersAndBoundsEverywhere(t *testing.T) {
-	runtime := NewRuntime(BotConfig{RecentContextLimit: 3, ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	setSideHistoryLookback(t, 3)
+	runtime := NewRuntime(BotConfig{ContextSummaryThreshold: 100}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	store := newSemanticTimelineStore()
 	runtime.SetMessageHistoryStore(store)
 	base := time.Now().Add(-10 * 24 * time.Hour).Unix()
