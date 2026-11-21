@@ -121,12 +121,16 @@ func (r *Runtime) embedQueryText(ctx context.Context, cfg llm.ProviderConfig, qu
 	if probe {
 		// 这一次只是探服务恢复没有：后台去请求，回复照旧不等。
 		embed := r.embedTextsFunc()
+		// 不随这一轮取消（探测要跑完才知道恢复没有），但保留用量归属；探测里 panic
+		// 也要记一次失败放出探测名额，否则熔断会一直卡在「探测中」。
+		probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), semanticQueryTimeout)
 		go func() {
+			ok := false
+			defer func() { r.semanticQueryBreaker.record(key, ok, time.Now()) }()
 			defer recoverGoroutinePanic("runtime.semanticQueryProbe")
-			probeCtx, cancel := context.WithTimeout(context.Background(), semanticQueryTimeout)
 			defer cancel()
 			vectors, err := embed(probeCtx, cfg, []string{query})
-			r.semanticQueryBreaker.record(key, err == nil && len(vectors) == 1 && len(vectors[0]) > 0, time.Now())
+			ok = err == nil && len(vectors) == 1 && len(vectors[0]) > 0
 		}()
 		return nil, errSemanticQueryBreakerOpen
 	}
