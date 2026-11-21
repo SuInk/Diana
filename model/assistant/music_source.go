@@ -115,6 +115,8 @@ type musicFetcher struct {
 	// saveCookie 把续期后的 Cookie 写回插件设置，见 MusicPlugin.saveSourceCookie。
 	// 为空时（测试里直接构造的 fetcher）只在内存里用新 Cookie。
 	saveCookie func(ctx context.Context, source, cookie string) error
+	// resolverProxy 读链接解析的「解析代理」，音乐代理选「沿用链接解析」时用。
+	resolverProxy func() string
 }
 
 type musicDiagnosticsKey struct{}
@@ -124,6 +126,8 @@ type musicDiagnostics struct {
 	// credential 是凭据已过期、自动续期又失败时给用户看的那句话。只记第一次：
 	// 一轮里每次请求都会撞上同一个原因。
 	credential string
+	// proxy 是出口相关的提示：代理连不上、经代理仍被 CDN 拒绝、没配代理却撞上 403。
+	proxy string
 }
 
 func withMusicDiagnostics(ctx context.Context) (context.Context, *musicDiagnostics) {
@@ -147,6 +151,19 @@ func recordMusicCredentialProblem(ctx context.Context, message string) {
 	}
 }
 
+func recordMusicProxyProblem(ctx context.Context, message string) {
+	if diagnostics, _ := ctx.Value(musicDiagnosticsKey{}).(*musicDiagnostics); diagnostics != nil && diagnostics.proxy == "" {
+		diagnostics.proxy = message
+	}
+}
+
+func (d *musicDiagnostics) proxyProblem() string {
+	if d == nil {
+		return ""
+	}
+	return d.proxy
+}
+
 func (d *musicDiagnostics) credentialProblem() string {
 	if d == nil {
 		return ""
@@ -154,14 +171,22 @@ func (d *musicDiagnostics) credentialProblem() string {
 	return d.credential
 }
 
-func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool) *http.Client {
+// host 是这次请求的目标：代理没配好只拦范围内的曲库，范围外的照常直连。
+func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool, host string) (*http.Client, error) {
 	if f != nil && f.client != nil {
-		return f.client
+		return f.client, nil
 	}
-	if guarded {
-		return netguard.NewPublicHTTPClient(cfg.Timeout)
+	if !guarded {
+		return &http.Client{Timeout: cfg.Timeout}, nil
 	}
-	return &http.Client{Timeout: cfg.Timeout}
+	proxy, err := f.proxyFunc(cfg)
+	if err != nil {
+		if cfg.Proxy.covers(host) {
+			return nil, err
+		}
+		proxy = nil
+	}
+	return netguard.NewPublicHTTPClientVia(cfg.Timeout, proxy), nil
 }
 
 func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint string, guarded bool, headers map[string]string) (*http.Response, bool) {
@@ -174,15 +199,27 @@ func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint st
 	for key, value := range headers {
 		req.Header.Set(key, value)
 	}
-	resp, err := f.httpClient(cfg, guarded).Do(req)
+	client, err := f.httpClient(cfg, guarded, req.URL.Hostname())
+	if err != nil {
+		recordMusicFailure(ctx, "%v", err)
+		recordMusicProxyProblem(ctx, err.Error())
+		return nil, false
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("music request failed for %s: %v", redactURLQuery(endpoint), err)
 		recordMusicFailure(ctx, "请求 %s 失败：%v", redactURLQuery(endpoint), err)
+		if guarded {
+			noteMusicProxyProblem(ctx, cfg, endpoint, 0, err)
+		}
 		return nil, false
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		log.Printf("music bad status for %s: %s", redactURLQuery(endpoint), resp.Status)
 		recordMusicFailure(ctx, "请求 %s 返回 %s", redactURLQuery(endpoint), resp.Status)
+		if guarded {
+			noteMusicProxyProblem(ctx, cfg, endpoint, resp.StatusCode, nil)
+		}
 		resp.Body.Close()
 		return nil, false
 	}
@@ -260,6 +297,22 @@ func (f *musicFetcher) downloadToFile(ctx context.Context, cfg musicConfig, raw,
 		log.Printf("music write failed for %s: written=%d err=%v", redactURLQuery(raw), written, err)
 		return false
 	}
+	return true
+}
+
+// probeAudio 只取音频开头 1KB，确认 CDN 肯放行。海外出口的 403 只在这一步出现，
+// 搜索和取地址都是好的，不实测下载就会把「放不出来」报成「正常」。
+func (f *musicFetcher) probeAudio(ctx context.Context, cfg musicConfig, raw string, headers map[string]string) bool {
+	probe := map[string]string{"Range": "bytes=0-1023"}
+	for key, value := range headers {
+		probe[key] = value
+	}
+	resp, ok := f.request(ctx, cfg, raw, true, probe)
+	if !ok {
+		return false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
 	return true
 }
 

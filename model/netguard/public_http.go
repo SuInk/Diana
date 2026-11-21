@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -30,11 +31,39 @@ const publicHostLookupTimeout = 10 * time.Second
 // NewPublicHTTPClient returns a client that only connects to public HTTP(S)
 // destinations and revalidates every redirect target.
 func NewPublicHTTPClient(timeout time.Duration) *http.Client {
+	return NewPublicHTTPClientVia(timeout, nil)
+}
+
+// ProxyFunc 给一个请求挑代理，返回 nil 表示直连。只能交给它管理员自己配的地址。
+type ProxyFunc func(*http.Request) (*url.URL, error)
+
+// NewPublicHTTPClientVia 和 NewPublicHTTPClient 一样只放行公网目标，但可以经管理员
+// 配置的代理出站。目标地址照旧在发出前和每次跳转时校验；放宽的只有「连代理」这
+// 一跳——代理常在 127.0.0.1 或内网，按公网规则会被挡掉。代理 ProxyFunc 选中哪个
+// 地址，拨号时就只认那个地址，别的私网地址仍然拒绝。
+func NewPublicHTTPClientVia(timeout time.Duration, proxy ProxyFunc) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	// Untrusted URL fetches intentionally ignore process HTTP proxy variables.
 	// A local proxy would otherwise become an SSRF hop outside this guard.
 	transport.Proxy = nil
 	transport.DialContext = guardedDialContext
+	if proxy != nil {
+		proxies := &chosenProxies{}
+		transport.Proxy = func(req *http.Request) (*url.URL, error) {
+			chosen, err := proxy(req)
+			if err != nil || chosen == nil {
+				return nil, err
+			}
+			proxies.allow(chosen)
+			return chosen, nil
+		}
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			if proxies.allowed(address) {
+				return (&net.Dialer{Timeout: publicDialTimeout}).DialContext(ctx, network, address)
+			}
+			return guardedDialContext(ctx, network, address)
+		}
+	}
 	return &http.Client{
 		Timeout:   timeout,
 		Transport: &publicRoundTripper{base: transport},
@@ -68,6 +97,31 @@ func NewPublicDownloadClient() *http.Client {
 	guarded.base.(*http.Transport).ResponseHeaderTimeout = downloadResponseHeaderTimeout
 	guarded.stall = downloadStallTimeout
 	return client
+}
+
+// chosenProxies 记下 ProxyFunc 实际选过的代理地址，拨号时只给这些地址开口子。
+type chosenProxies struct {
+	mu        sync.Mutex
+	addresses map[string]bool
+}
+
+func (p *chosenProxies) allow(proxy *url.URL) {
+	port := proxy.Port()
+	if port == "" {
+		port = map[string]string{"http": "80", "https": "443", "socks5": "1080", "socks5h": "1080"}[proxy.Scheme]
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.addresses == nil {
+		p.addresses = map[string]bool{}
+	}
+	p.addresses[net.JoinHostPort(proxy.Hostname(), port)] = true
+}
+
+func (p *chosenProxies) allowed(address string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.addresses[address]
 }
 
 type publicRoundTripper struct {

@@ -437,6 +437,23 @@
             </li>
           </ul>
         </section>
+        <section class="music-proxy">
+          <h3>网络代理</h3>
+          <p class="hint">设置后点上方「测试全部」，会实测下载每家开头一小段音频。</p>
+          <p v-if="musicProxyStatus && settingsForm.proxy_mode" class="music-source-detail" :class="musicProxyStatus.ok ? '' : 'err'" role="status">{{ musicProxyStatus.message }}</p>
+          <div class="stack plugin-settings-form">
+            <PluginSettingField
+              v-for="spec in musicProxySpecs"
+              :key="spec.key"
+              :spec="spec"
+              :form="settingsForm"
+              :clearing="clearSecrets.includes(spec.key)"
+              :secret-configured="secretConfigured(spec.key)"
+              :secret-placeholder="secretPlaceholder(spec.key)"
+              @toggle-clear="toggleClearSecret"
+            />
+          </div>
+        </section>
         <section class="music-playback">
           <h3>播放</h3>
           <div class="stack plugin-settings-form">
@@ -925,6 +942,7 @@ import {
   type ResolverDependency,
   type BotGroupSummary,
   type MusicConnectionStatus,
+  type MusicProxyStatus,
   type CredentialCheck,
   type CredentialState
 } from "../api";
@@ -1071,13 +1089,15 @@ const isStickerSettings = computed(() => settingsTarget.value?.manifest.id === s
 const stickerSettingsTab = ref<"config" | "library">("config");
 const testingMusic = ref(false);
 const musicTestResults = ref<Record<string, MusicConnectionStatus>>({});
+const musicProxyStatus = ref<MusicProxyStatus | null>(null);
 const musicPlatforms = [
   { key: "netease", label: "网易云音乐", guide: "不填也能放可试听的歌；要放会员歌曲，在浏览器登录网易云后复制 Cookie 里 MUSIC_U 的值，并建议配一个自建 NeteaseCloudMusicApi。" },
   { key: "qq", label: "QQ 音乐", guide: "在浏览器登录 QQ 音乐后，把完整 Cookie 复制进来即可；也可以填 QQMusicApi 导出的 musicid/musickey。自建 API 可不填。" },
 ] as const;
 const musicCredentialKeys = new Set(musicPlatforms.flatMap((item) => [`${item.key}_api_base`, `${item.key}_cookie`]));
 // 启用和顺序放在曲库列表上，不再在下方「播放」里重复一份。
-const musicListOwnedKeys = new Set([...musicCredentialKeys, "enabled_sources", "preferred_source"]);
+const musicProxyKeys = ["proxy_mode", "proxy_url", "proxy_scope"];
+const musicListOwnedKeys = new Set([...musicCredentialKeys, ...musicProxyKeys, "enabled_sources", "preferred_source"]);
 const musicNumberKeys = new Set(["max_duration_seconds", "max_file_mb", "timeout_seconds"]);
 const musicAdvancedKeys = new Set(["silk_encoder_path"]);
 // 开关在前、音质次之，三个数字并一行，很少改的路径收进「高级」；后端新加的设置项落在 lead 末尾，不会被漏掉。
@@ -1090,6 +1110,11 @@ const musicPlaybackSpecs = computed(() => {
     advanced: rest.filter((spec) => musicAdvancedKeys.has(spec.key)),
   };
 });
+// 代理三项单独成一节，地址和范围只在选了代理来源时出现。
+const musicProxySpecs = computed(() =>
+  musicProxyKeys
+    .map((key) => musicSpec(key))
+    .filter((spec): spec is PluginSettingSpec => !!spec && (!spec.show_when || spec.show_when.values.includes(String(settingsForm.value[spec.show_when.key] ?? "")))));
 const musicAutoOrder = computed(() => String(settingsForm.value.preferred_source ?? "") === "");
 const musicExpanded = ref("");
 const musicEnabledSources = computed<string[]>(() => {
@@ -1121,6 +1146,13 @@ watch(settingsTarget, (target) => {
   musicExpanded.value = "";
   if (target?.manifest.id !== musicPluginID) return;
   musicExpanded.value = musicPlatforms.find((item) => musicSourceEnabled(item.key) && !musicCookieConfigured(item.key))?.key ?? "";
+  void testMusicSettings(true);
+});
+
+// 换了代理来源就静默重测：沿用链接解析、系统代理有没有配上，只有后端看得到。
+watch(() => settingsForm.value.proxy_mode, (mode, previous) => {
+  if (!isMusicSettings.value || previous === undefined || mode === previous) return;
+  musicProxyStatus.value = null;
   void testMusicSettings(true);
 });
 
@@ -1181,7 +1213,7 @@ function musicCredentialHint(source: string): string {
 function musicStatusClass(source: string): string {
   const result = musicTestResults.value[source];
   if (!musicSourceEnabled(source) || !result) return "";
-  if (!result.search_ok) return "err";
+  if (!result.search_ok || (result.playable && !result.downloadable)) return "err";
   switch (result.tier) {
     case "member": return result.playable ? "accent" : "warn";
     case "invalid": return "err";
@@ -1198,6 +1230,8 @@ function musicStatusLabel(source: string): string {
     return musicCookieConfigured(source) ? "已填 Cookie · 未测试" : "游客 · 未填 Cookie";
   }
   if (!result.search_ok) return "连不上";
+  // 地址拿到了但 CDN 不给下，多半是出口 IP 被拒，和账号无关，别再显示会员状态。
+  if (result.playable && !result.downloadable) return result.proxied ? "经代理仍下载失败" : "下载被拒";
   switch (result.tier) {
     case "member": return "会员有效";
     case "expired": return result.membership_end ? `会员 ${result.membership_end} 到期` : "会员已到期";
@@ -1225,9 +1259,10 @@ async function testMusicSettings(quiet = false): Promise<void> {
     const response = await testMusicConnections(buildSettingsPayload(), clearSecrets.value);
     if (settingsTarget.value !== target) return;
     musicTestResults.value = Object.fromEntries(response.sources.map((item) => [item.source, item]));
+    musicProxyStatus.value = response.proxy ?? null;
     if (quiet) return;
-    const playable = response.sources.filter((item) => item.playable).length;
-    playable > 0 ? toastSuccess(`${playable} 家曲库可正常取得播放地址`) : toastError("没有曲库能取得播放地址，展开各家看具体原因");
+    const playable = response.sources.filter((item) => item.playable && item.downloadable).length;
+    playable > 0 ? toastSuccess(`${playable} 家曲库能正常下载音频`) : toastError("没有曲库能下载音频，展开各家看具体原因");
   } catch (error) {
     if (!quiet) toastError(error instanceof Error ? error.message : "音乐连接测试失败");
   } finally {
