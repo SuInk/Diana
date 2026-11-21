@@ -1439,7 +1439,7 @@ const failedCount = computed(() => summary.value.errors);
 async function retryAllFailed(): Promise<void> {
   const ok = await askConfirm({
     title: "重试失败的消息",
-    message: "将把最近 24 小时处理失败的消息重新处理一遍：每个会话只取最近几条（默认 3，可在机器人设置的「回补 / 重试条数」调整），可能一次触发多条回复。",
+    message: "将把最近 24 小时处理失败的消息重新处理一遍：每个会话只取最近几条（默认 1，可在机器人设置的「回补 / 重试条数」调整），可能一次触发多条回复。",
     confirmLabel: "开始重试"
   });
   if (!ok) return;

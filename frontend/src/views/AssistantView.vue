@@ -1987,7 +1987,7 @@
               </div>
               <div class="field wide">
                 <label for="bot-backfill-limit">回补 / 重试条数</label>
-                <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="3" />
+                <input id="bot-backfill-limit" v-model.number="form.history_backfill_message_limit" class="input" inputmode="numeric" min="1" max="100" placeholder="1" />
                 <span class="hint">重启或断线恢复后，每个群或私聊最多补回几条错过的 @ 和私聊，默认 3。</span>
               </div>
             </div>

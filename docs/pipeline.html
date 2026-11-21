@@ -73,7 +73,7 @@
           <li><div class="flow-node"><strong>重新连上</strong><p>重放截止时间 = 断线时刻 − 30 分钟，最多回看 24 小时。</p></div></li>
           <li><div class="flow-node"><strong>补拉三次</strong><p>1 秒后补一次，+1 分钟、+5 分钟再各补一次。遍历群列表和最近联系人，每页 100 条、每会话上限 200 条，逐个会话串行拉。</p></div></li>
           <li><div class="flow-node"><strong>去重</strong><p>和已入队、已入库的消息比对，同一条不会处理两次。</p></div></li>
-          <li class="q"><div class="flow-node"><strong>这条要不要参与回复？</strong><p>每个会话只有最新 N 条（<code>history_backfill_message_limit</code>，默认 3）、且本来就会直接触发的消息正常入队。</p></div><div class="flow-exits"><span class="flow-exit"><b>其余</b>只补进历史，不接话</span></div></li>
+          <li class="q"><div class="flow-node"><strong>这条要不要参与回复？</strong><p>每个会话只有最新 N 条（<code>history_backfill_message_limit</code>，默认 1）、且本来就会直接触发的消息正常入队。</p></div><div class="flow-exits"><span class="flow-exit"><b>其余</b>只补进历史，不接话</span></div></li>
           <li class="end"><div class="flow-node"><strong>正常入队</strong></div></li>
         </ol>
         <div class="callout"><strong>为什么只回最新几条</strong><p>掉线一小时回来，对攒下的上百条群聊逐条接话只会刷屏。补回来的历史照样进上下文，只是不再逐条触发回复。</p></div>

@@ -2363,7 +2363,7 @@ func DefaultBotConfig() BotConfig {
 		// 不进正式提示词。20 条在稍热闹一点的群里就不够被指代的消息留在窗口里，
 		// 而这些调用的单条开销很小，放宽的代价远小于解不出指代的代价。
 		RecentContextLimit:          40,
-		HistoryBackfillMessageLimit: 3,
+		HistoryBackfillMessageLimit: 1,
 		ContextSummaryThreshold:     100,
 		CrossGroupMemoryEnabled:     boolPointer(false),
 		CrossPlatformMemoryEnabled:  boolPointer(false),
