@@ -137,20 +137,3 @@ func TestRenderMediaToolAllowedForNonOwners(t *testing.T) {
 		t.Fatal("render_media should be available to non-owners; owner_only is enforced by the plugin setting")
 	}
 }
-
-// 只写 viewBox 的 SVG 在收缩容器里会算成 0 宽、截出白图，要按 viewBox 补上宽高。
-func TestSVGWithIntrinsicSize(t *testing.T) {
-	cases := []struct{ in, want string }{
-		{`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600"><rect/></svg>`, `<svg width="800" height="600" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600"><rect/></svg>`},
-		{"\n<SVG viewBox='-10,-10 320.5 200'>", "\n<SVG width=\"320.5\" height=\"200\" viewBox='-10,-10 320.5 200'>"},
-		{`<svg viewBox="0 0 800 600" width="400">`, `<svg viewBox="0 0 800 600" width="400">`},
-		{`<svg viewBox="0 0 800 600" stroke-width="2">`, `<svg width="800" height="600" viewBox="0 0 800 600" stroke-width="2">`},
-		{`<svg><rect viewBox="0 0 1 1"/></svg>`, `<svg><rect viewBox="0 0 1 1"/></svg>`},
-		{`<svg viewBox="0 0 0 600">`, `<svg viewBox="0 0 0 600">`},
-	}
-	for _, tc := range cases {
-		if got := svgWithIntrinsicSize(tc.in); got != tc.want {
-			t.Errorf("svgWithIntrinsicSize(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}

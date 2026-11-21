@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -384,13 +383,13 @@ func buildRenderMediaRequest(ctx context.Context, spec renderMediaSpec) (agent.H
 	request := agent.HTMLCaptureRequest{Width: spec.width, Height: spec.height, MaxHeight: 4000, Timeout: renderMediaCaptureTimeout}
 	page := spec.content
 	if spec.format == renderMediaFormatSVG {
-		built, err := buildRenderPage(renderFormatSVG, svgWithIntrinsicSize(spec.content), "")
+		built, err := buildRenderPage(renderFormatSVG, spec.content, "")
 		if err != nil {
 			return request, errors.New(renderContentErrorMessage(renderFormatSVG, err))
 		}
-		// 成品就是这张图本身：去掉 render 卡片的最小宽度和内边距，不然小图偏左、
-		// 给了尺寸时整张图被内边距挤得右下角出界。
-		page = insertHeadHTML(built, `<style>.render-root{min-width:0;padding:0}.render-root>svg{display:block}</style>`)
+		// render 页面给画布留了最小宽度，小图会偏在左边、右侧空一大块；这里按
+		// 图形本身收边。
+		page = insertHeadHTML(built, `<style>.render-root{min-width:0}</style>`)
 		// 没给尺寸时视口先给足，量完图形外框再收；给了就按给的来。
 		if !spec.sized {
 			request.FitSelector = "#render-root"
@@ -407,37 +406,6 @@ func buildRenderMediaRequest(ctx context.Context, spec renderMediaSpec) (agent.H
 	}
 	request.HTML, request.FontFiles = page, fontFiles
 	return request, nil
-}
-
-var (
-	svgRootTagPattern   = regexp.MustCompile(`(?is)^\s*<svg\b[^>]*>`)
-	svgWidthAttrPattern = regexp.MustCompile(`(?is)\swidth\s*=`)
-	svgViewBoxPattern   = regexp.MustCompile(`(?is)\sviewBox\s*=\s*["']\s*[-+\d.eE]+[\s,]+[-+\d.eE]+[\s,]+([-+\d.eE]+)[\s,]+([-+\d.eE]+)\s*["']`)
-)
-
-// svgWithIntrinsicSize 给只写了 viewBox、没写 width 的根 <svg> 补上 viewBox 的
-// 宽高。这种 SVG 在会收缩的容器里宽度按 100% 算成 0，截出来是一张白图；模型
-// 手写的 SVG 常常只给 viewBox。
-func svgWithIntrinsicSize(source string) string {
-	root := svgRootTagPattern.FindStringIndex(source)
-	if root == nil {
-		return source
-	}
-	tag := source[root[0]:root[1]]
-	if svgWidthAttrPattern.MatchString(tag) {
-		return source
-	}
-	box := svgViewBoxPattern.FindStringSubmatch(tag)
-	if box == nil {
-		return source
-	}
-	width, errW := strconv.ParseFloat(box[1], 64)
-	height, errH := strconv.ParseFloat(box[2], 64)
-	if errW != nil || errH != nil || width <= 0 || height <= 0 {
-		return source
-	}
-	at := strings.Index(strings.ToLower(source), "<svg") + len("<svg")
-	return source[:at] + fmt.Sprintf(` width="%s" height="%s"`, box[1], box[2]) + source[at:]
 }
 
 // encodeRenderMedia 逐帧截图落盘，再交给 ffmpeg 编码成 MP4 或 GIF。
