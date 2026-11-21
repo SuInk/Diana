@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -96,7 +97,11 @@ func (l *deferredToolLoader) catalogLine(name string, tool Tool) string {
 // 加没加载都在同一份请求里（公共工具在头部、专属工具在尾部的发言者工具段），这时
 // 已加载契约只带 inputSchema，不再把同一段描述抄第二遍：11-21 生产 swe-2 主回复里
 // 这样重复的描述平均每条请求约 1500 字。目录截短过的照旧带完整描述。
+// 名字本身也得在目录里：按工具族成员名加载时，目录列的是族名，成员名不在目录里。
 func (l *deferredToolLoader) catalogShowsFullDescription(name string, tool Tool) bool {
+	if l.core[name] || !slices.Contains(l.registry.PresentedNames(), name) {
+		return false
+	}
 	full := strings.Join(strings.Fields(tool.Description()), " ")
 	return full != "" && l.catalogLine(name, tool) == full
 }

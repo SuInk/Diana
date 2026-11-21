@@ -797,7 +797,10 @@ func (r *Runtime) speakerTimezonePrompt(event MessageEvent, now time.Time) strin
 			"age":           formatApproximateAge(now.Sub(recordedAt)),
 		})
 		if now.Sub(recordedAt) >= PortraitTimezoneStaleAfter {
-			recorded += cfg.prompt(promptSpeakerTimezoneStaleSpec)
+			// 「记录较旧」接在记录时间那句里、不单独成句：续接时实时时钟按句去重（见
+			// unsentClock），单独一句的固定话发过一次就不再发，换成另一位记录同样过期的
+			// 人说话时模型就看不到这条提醒了。
+			recorded = strings.TrimSuffix(strings.TrimSpace(recorded), "。") + "；" + cfg.prompt(promptSpeakerTimezoneStaleSpec)
 		}
 	}
 	return cfg.promptf(promptSpeakerTimezoneSpec, map[string]string{
