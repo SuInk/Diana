@@ -38,10 +38,11 @@ const (
 	claimReviewMessageBudget  = 300
 )
 
-const plainTextReviewPrompt = `你在检查一条聊天机器人回复草稿有没有「说了却没做」。输入是近期对话（含机器人前几轮的发言和工具调用）、对方这条消息、机器人本轮实际调用过的工具记录，以及草稿。
-找出草稿里声称机器人自己正在做、已经做完或马上会自动完成的操作（画图、搜索查询、设置提醒、修改配置、发送文件、读取记录等），而本轮工具记录和近期对话里都没有对应调用的那一项。
+const plainTextReviewPrompt = `你在检查一条聊天机器人回复草稿有没有「说了却没做」。输入是近期对话（含机器人前几轮的发言和工具调用）、对方这条消息、机器人本轮实际调用过的工具记录、机器人这一轮能用的工具，以及草稿。
+找出草稿里声称机器人自己正在做、已经做完或马上会自动完成的操作（画图、搜索查询、跑代码或算出结果、设置提醒、修改配置、发送文件、读取记录等），而本轮工具记录和近期对话里都没有对应调用的那一项。
+草稿说自己没有某个能力、用不了某样东西（比如「没沙盒跑不了」「查不了」「没法发文件」），而能用的工具里明明有能做这件事的，也算，输出那句话。
 草稿是机器人这一轮唯一、也是最后一条消息，发完就不会再说。所以草稿说还有下文、却没写出来的也算（比如「先说下天气」后面只有天气，「景点和住宿下一条发」「剩下的稍后补上」），输出那句话。
-不算问题的：普通聊天、接话、表情回应；看了、听了、读了对方发来的图片、表情、语音或文字（机器人直接就能看到，不需要工具）；凭常识或上下文直接回答、总结、解释；向对方提问或请对方补充；拒绝或说明做不到；建议对方自己去做；本轮工具记录里能找到对应调用的操作；近期对话里已经发起、还在后台进行的任务（比如之前排队的图片「还在画」「好了会自动发出来」）。
+不算问题的：普通聊天、接话、表情回应；看了、听了、读了对方发来的图片、表情、语音或文字（机器人直接就能看到，不需要工具）；凭常识或上下文直接回答、总结、解释；向对方提问或请对方补充；能用的工具里确实没有、如实说做不到；拒绝；建议对方自己去做；本轮工具记录里能找到对应调用的操作；近期对话里已经发起、还在后台进行的任务（比如之前排队的图片「还在画」「好了会自动发出来」）。
 只输出 JSON：{"unfinished":"草稿原话里没做到的那一项"}，没有就输出 {"unfinished":""}。`
 
 // unfinishedClaimReason 是退回后收尾仍说了却没做、这一轮不说话时记下的原因前缀。
@@ -60,12 +61,42 @@ func (r *Runner) reviewUnfinishedClaim(ctx context.Context, history []llm.Messag
 	}
 	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: plainTextReviewPrompt},
-		{Role: llm.RoleUser, Content: "【近期对话】\n" + claimReviewRecent(history) + "\n\n【对方的消息】\n" + lastUserMessage(history) + "\n\n【本轮工具记录】\n" + plainTextReviewSteps(steps) + "\n\n【草稿】\n" + draft},
+		{Role: llm.RoleUser, Content: "【近期对话】\n" + claimReviewRecent(history) + "\n\n【对方的消息】\n" + lastUserMessage(history) + "\n\n【本轮工具记录】\n" + plainTextReviewSteps(steps) + "\n\n【能用的工具】\n" + claimReviewTools(r.registry) + "\n\n【草稿】\n" + draft},
 	}})
 	if err != nil || resp == nil {
 		return ""
 	}
 	return parseUnfinishedClaim(resp.Text)
+}
+
+// claimReviewTools 列出这一轮能用的工具，每个带描述的第一句：复核要靠它分辨「没沙盒
+// 跑不了」是实话还是推托。11-20 线上 run_command 一直可用，回复却说没沙盒，还把
+// 别人消息里的数字说成自己算的，复核看不到工具清单，当成「说明做不到」放过了。
+func claimReviewTools(registry *ToolRegistry) string {
+	var lines []string
+	for _, name := range registry.Names() {
+		tool, ok := registry.Get(name)
+		if !ok || name == finalizeToolName {
+			continue
+		}
+		lines = append(lines, "- "+name+"："+firstClause(tool.Description()))
+	}
+	if len(lines) == 0 {
+		return "（无）"
+	}
+	return strings.Join(lines, "\n")
+}
+
+// firstClause 取描述到第一个句号为止，最多 60 字。
+func firstClause(description string) string {
+	description = strings.TrimSpace(description)
+	if index := strings.IndexAny(description, "。.\n"); index > 0 {
+		description = description[:index]
+	}
+	if runes := []rune(description); len(runes) > 60 {
+		description = string(runes[:60])
+	}
+	return description
 }
 
 func parseUnfinishedClaim(text string) string {
