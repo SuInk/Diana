@@ -133,9 +133,9 @@ func (t *dianaRenderTool) Run(ctx context.Context, input map[string]any) (string
 		return t.fail(ctx, format, "渲染失败："+firstLineOf(err.Error()), err.Error())
 	}
 
-	if preview, forced := t.wantPreview(format == renderFormatSVG, input); preview {
+	if wantPreview(input) {
 		result := dianaRenderResult{OK: true, Format: format}
-		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, trimRenderScreenshot(shot, renderTrimPadding(format, title)), configToolString(input, "expect"), forced)
+		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, trimRenderScreenshot(shot, renderTrimPadding(format, title)), configToolString(input, "expect"))
 		t.record(ctx, result, "")
 		return marshalRenderResult(result), nil
 	}

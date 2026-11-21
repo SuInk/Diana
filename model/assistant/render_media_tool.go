@@ -80,9 +80,9 @@ func (t *dianaRenderMediaTool) Name() string { return dianaRenderMediaToolName }
 // 动画都按帧推进，从 0 秒录 duration 秒。
 func (t *dianaRenderMediaTool) Description() string {
 	return `把 HTML 页面或 SVG 渲染成图片、PDF、视频或 GIF 发到当前会话。` + renderPreviewDescription +
-		`已有工作目录文件时，直接传 path，由运行时完整读取；不必 read_file 复制正文、打开 file:// 或启动 HTTP 服务。content 与 path 二选一。` +
-		`仅在用户明确要求图片、PDF、效果图、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
-		`页面离线运行，外链脚本、样式、字体、图片、CDN 库都加载不到，资源须内联；svg 不能有脚本。` +
+		`已有文件直接传 path，不必 read_file 复制正文；content 与 path 二选一。` +
+		`仅在用户明确要求图片、PDF、视频或 GIF 等成品时使用；普通回复默认文字，修改界面或配色不等于要求发效果图，不得用渲染图代替实际修改。要源码文件用 send_file。` +
+		`页面离线运行，外链脚本、样式、字体、图片都加载不到，资源须内联；svg 不能有脚本。` +
 		`成品由运行时发送，调用后一句话交代即可。`
 }
 
@@ -167,7 +167,7 @@ func (t *dianaRenderMediaTool) Run(ctx context.Context, input map[string]any) (s
 	}
 
 	// 预览一律截静帧：视频、GIF、PDF 也先看第一屏画对没有。
-	if preview, forced := t.wantPreview(spec.format == renderMediaFormatSVG && spec.output == renderMediaOutputImage, input); preview {
+	if wantPreview(input) {
 		png, size, err := agent.CaptureHTMLStill(ctx, request, renderMediaStillAt)
 		if err != nil {
 			result.Message = "渲染失败：" + firstLineOf(err.Error())
@@ -175,7 +175,7 @@ func (t *dianaRenderMediaTool) Run(ctx context.Context, input map[string]any) (s
 		}
 		result.OK = true
 		result.Width, result.Height = size.Width, size.Height
-		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, png, configToolString(input, "expect"), forced)
+		result.Review, result.Message = t.preview(ctx, t.runtime, t.event, png, configToolString(input, "expect"))
 		t.record(ctx, result, "")
 		return marshalRenderMediaResult(result), nil
 	}
