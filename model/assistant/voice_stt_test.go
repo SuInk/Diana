@@ -5,8 +5,10 @@ package assistant
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -242,6 +244,88 @@ func TestOneBotRecordSourceResolution(t *testing.T) {
 	got, key := mediaSourceFromOneBotData(response, target)
 	if got != "https://media.example/voice.amr" || key != "url" {
 		t.Fatalf("source=%q key=%q", got, key)
+	}
+}
+
+// silkRecordChannel 模拟 SnowLuma：get_record 带 out_format 时返回转码后的 base64。
+type silkRecordChannel struct {
+	nilChannel
+	wav   []byte
+	calls atomic.Int32
+}
+
+func (c *silkRecordChannel) CallAPI(_ context.Context, action string, params map[string]any) (map[string]any, error) {
+	if action != "get_record" || params["out_format"] != "wav" {
+		return nil, errors.New("unsupported")
+	}
+	c.calls.Add(1)
+	return map[string]any{"file": "https://multimedia.example/voice.amr", "out_format": "wav", "base64": base64.StdEncoding.EncodeToString(c.wav)}, nil
+}
+
+func TestSilkVoiceBytes(t *testing.T) {
+	for _, tc := range []struct {
+		body []byte
+		want bool
+	}{
+		{append([]byte{0x02}, "#!SILK_V3\x0c\x00"...), true},
+		{[]byte("#!SILK_V3\x0c\x00"), true},
+		{[]byte("#!AMR\n"), false},
+		{[]byte("RIFF....WAVE"), false},
+		{[]byte{0x02}, false},
+	} {
+		if got := silkVoiceBytes(tc.body); got != tc.want {
+			t.Fatalf("silkVoiceBytes(%q)=%v, want %v", tc.body, got, tc.want)
+		}
+	}
+}
+
+// QQ 语音是 SILK，扩展名却是 .amr，ffmpeg 解不了：要先让 OneBot 客户端转成 wav
+// 再转写。生产上曾经每条 QQ 语音都报 unsupported_or_corrupt。
+func TestVoiceSTTTranscodesQQSilkThroughOneBot(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg is unavailable")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "晚上好"})
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	wavPath := filepath.Join(dir, "converted.wav")
+	writeSilentWAV(t, wavPath, 1600)
+	wav, err := os.ReadFile(wavPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	silkPath := filepath.Join(dir, "7c08e80e.amr")
+	if err := os.WriteFile(silkPath, append([]byte{0x02}, "#!SILK_V3\x0c\x00not-really-audio"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profile := llm.Profile{ID: "whisper", Name: "whisper", Group: "stt", Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, APIKey: "k", BaseURL: server.URL}}
+	runtime := mediaSlotTestRuntime(t, map[string]ModelRole{"stt": {ProfileID: "whisper", Model: "whisper-test"}}, profile)
+	channel := &silkRecordChannel{wav: wav}
+	runtime.channel = channel
+	event := MessageEvent{Kind: EventKindPrivate, Platform: PlatformOneBotV11, UserID: "10001", MessageID: "voice-silk", Segments: []MessageSegment{{Type: "record", Data: map[string]string{"file": silkPath}}}}
+
+	got := runtime.prepareIncomingVoice(context.Background(), event)
+	if transcript := got.Segments[0].Data[voiceSTTTranscriptKey]; transcript != "晚上好" {
+		t.Fatalf("transcript=%q error_code=%q", transcript, got.Segments[0].Data["stt_error_code"])
+	}
+	if channel.calls.Load() != 1 {
+		t.Fatalf("get_record calls=%d, want 1", channel.calls.Load())
+	}
+}
+
+func TestFFmpegReadableVoiceLeavesOtherFormatsAlone(t *testing.T) {
+	runtime := NewRuntime(BotConfig{}, nil, nil, nil, nil, nil, nil)
+	body := []byte("RIFF....WAVE")
+	got, format, err := runtime.ffmpegReadableVoice(context.Background(), MessageEvent{}, MessageSegment{Type: "record"}, body, ".wav", 1<<20)
+	if err != nil || format != ".wav" || string(got) != string(body) {
+		t.Fatalf("body=%q format=%q err=%v", got, format, err)
+	}
+	if _, _, err := runtime.ffmpegReadableVoice(context.Background(), MessageEvent{}, MessageSegment{Type: "record"}, []byte("#!SILK_V3"), ".amr", 1<<20); err == nil {
+		t.Fatal("silk without OneBot file token should fail instead of reaching ffmpeg")
 	}
 }
 
