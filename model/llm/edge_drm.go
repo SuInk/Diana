@@ -1,5 +1,31 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
+//
+// The Sec-MS-GEC v2 algorithm in this file is ported from node-edge-tts
+// (https://github.com/SchneeHertz/node-edge-tts, src/drm.ts), which is
+// distributed under the following license:
+//
+// MIT License
+//
+// Copyright (c) 2022 SchneeHertz
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
 
 package llm
 
@@ -14,8 +40,8 @@ import (
 
 // Sec-MS-GEC v2 的算法来自 Edge 浏览器朗读接口。v2 token 是
 // "<16 位 CS64>-<64 位 SHA-256>"，SHA-256 的输入带一段固定前缀；
-// CS64 是一组 32 位乘法和 rol16 混淆。算法实现参考 MIT 许可的
-// node-edge-tts（src/drm.ts），没有引入其运行时依赖。
+// CS64 是一组 32 位乘法和 rol16 混淆。算法移植自 node-edge-tts（许可见文件头），
+// 没有引入其运行时依赖。
 const (
 	edgeSecMSGECPrefix = "Copyright (C) Microsoft Corporation. All rights reserved."
 	// windowsEpochOffset 是 1601-01-01 到 1970-01-01 的秒数。
