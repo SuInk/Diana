@@ -57,6 +57,10 @@ func TestMaiBotSplitKeepsMarkupLinksAndLatinWords(t *testing.T) {
 		// 11-20 线上：「+」两边的空格被当成停顿，拆出一条以「+ 考核制」开头的消息。
 		"symbol space": {"馒头就是 M-Team（m-team.cc），国内最大的 PT 站之一，邀请制 + 考核制，资源量在全类型 PT 站里算头部", []string{"邀请制 + 考核制"}},
 		"digit space":  {"一年回 2600 正好保本，你这融资方案是零息债券，利息全靠群友情谊", []string{"一年回 2600 正好保本"}},
+		// 11-21 线上：书名里的逗号被当停顿，拆成「…那本《反派」和「我把女二养成病娇》的…」。
+		"book title":  {"搜了搜了，还真有：渔别源是个网文作者，写明末千里行同人和病娇百合那本《反派，我把女二养成病娇》的；城倾山是知乎答主，答过原神4.2剧情评价那条", []string{"《反派，我把女二养成病娇》"}},
+		"lenticular":  {"群公告写了，进群先看置顶，【新人须知，第三条】别发广告，不然直接踢，管理员不会提醒第二次", []string{"【新人须知，第三条】"}},
+		"angle title": {"这首歌收在专辑里，叫〈夜航，星〉那首，副歌那段特别好听，你可以先听这一首再决定要不要整张听", []string{"〈夜航，星〉"}},
 	} {
 		got := splitEventChatReply(tc.reply, cfg, group)
 		for _, keep := range tc.keep {
@@ -128,5 +132,41 @@ func TestMaiBotSplitRespectsExplicitMessageMarkers(t *testing.T) {
 	got := splitEventChatReply(reply, cfg, MessageEvent{Kind: EventKindGroup})
 	if len(got) != 2 {
 		t.Fatalf("explicit markers should give exactly 2 messages, got %d: %q", len(got), got)
+	}
+}
+
+// 断句只能落在成对符号、代码、链接、提及、数字之外。逐句检查（不经合并），
+// 保证这些片段在任何一种合并结果里都不会被劈开。
+func TestMaiBotSplitSentencesNeverCutsInsideUnits(t *testing.T) {
+	for name, tc := range map[string]struct{ reply, keep string }{
+		"corner quote":       {"他说「好的，明天见」然后就走了，留下我们几个面面相觑，不知道怎么办才好", "「好的，明天见」"},
+		"white corner quote": {"书里写『风起了，该走了』这句很出名，后来被很多人引用，现在都快成梗了", "『风起了，该走了』"},
+		"double quote":       {"他回了一句“行，你说了算”就下线了，后来再也没上过线，群里都在猜怎么了", "“行，你说了算”"},
+		"single quote":       {"标题叫‘慢一点，再慢一点’的那篇，写得挺好的，推荐你有空去看看", "‘慢一点，再慢一点’"},
+		"ascii quote":        {"他说 \"ok, fine\" 然后走了，大家都没反应过来，过了好一会儿才有人说话", "\"ok, fine\""},
+		"full paren":         {"这个函数（见上面，第二段）有问题，调用的时候会空指针，你先别用它", "（见上面，第二段）"},
+		"ascii paren":        {"直接写 max(a, b) 就行，不用自己比较，标准库里早就有了，放心用", "max(a, b)"},
+		"inline code":        {"把 `a, b := f()` 改成先判断错误，不然会吞掉报错，排查的时候很难找", "`a, b := f()`"},
+		"markdown link":      {"详情看[发布说明，第三节](https://example.com/notes)那里写清楚了，照着升级就行", "[发布说明，第三节]"},
+		"url":                {"文档在这里https://example.com/a,b?c=1;d=2，照着第三节改就行，改完再跑一次", "https://example.com/a,b?c=1;d=2"},
+		"email":              {"有问题发邮件到 help@example.com 就行，一般当天回复，周末可能慢一点", "help@example.com"},
+		"plain mention":      {"@嘉然 你刚才说的那个网站打不开了，能不能再发一次链接，我这边一直报错", "@嘉然 你刚才说的"},
+		"decimal":            {"原神4.2的剧情评价两极分化，有人说是神作，有人说一般，看个人口味吧", "原神4.2的剧情"},
+		"version":            {"升到 v0.9.11 以后就好了，旧版本那个问题已经修掉了，记得重启一下", "v0.9.11"},
+		"ellipsis":           {"这个嘛……我也不太确定，你最好去问问群主，他应该知道得比较清楚", "这个嘛……我也不太确定"},
+		"dash":               {"结论就一句——别买，等降价再说，现在这个价格明显是在割韭菜", "结论就一句——别买"},
+		"emoji":              {"笑死我了😂😂你这操作太秀了，我直接截图发朋友圈了，不介意吧", "笑死我了😂😂你这操作太秀了"},
+		"kaomoji":            {"好耶(๑•̀ㅂ•́)و✧今天终于下班了，晚上可以好好打游戏了，谁来一起", "好耶(๑•̀ㅂ•́)و✧今天终于下班了"},
+		"kaomoji comma":      {"别催了啦(；´Д`)，马上就写完了，再给我十分钟就好，真的就十分钟", "(；´Д`)"},
+	} {
+		var texts []string
+		found := false
+		for _, segment := range maiBotSplitSentences(tc.reply) {
+			texts = append(texts, segment.Text)
+			found = found || strings.Contains(segment.Text, tc.keep)
+		}
+		if !found {
+			t.Errorf("%s: %q was cut apart: %q", name, tc.keep, texts)
+		}
 	}
 }
