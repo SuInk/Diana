@@ -229,6 +229,9 @@ jobs:
           name: frontend-next-dist
           path: frontend/dist
           if-no-files-found: error
+          # 只在同一次运行里交给 build 用，留 3 天够重跑失败的作业。
+          # Actions 产物存储是整个账号共享的配额，默认 90 天会把它堆满。
+          retention-days: 3
 
   desktop-helper:
     name: Build macOS desktop helper
@@ -248,6 +251,7 @@ jobs:
           name: desktop-helper-macos
           path: release/desktop/desktopctl-helper
           if-no-files-found: error
+          retention-days: 3
 
   build:
     name: Build WebUI
@@ -381,7 +385,10 @@ jobs:
           legacy_frontend "${package_dir}"
           tar -czf "dist/${package_name}.tar.gz" -C release/package "${package_name}"
 
+      # 完整包只有 release 作业会下载，条件和 release 保持一致：PR 和不发 Canary 的
+      # main 推送只验交叉编译能过，不再把六个平台的安装包存进账号的产物配额。
       - name: Upload release artifacts
+        if: startsWith(github.ref, 'refs/tags/v') || needs.build-version.outputs.canary == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: diana-package-${{ matrix.suffix }}
@@ -390,6 +397,7 @@ jobs:
             dist/diana-windows-*.exe
             dist/diana-windows-*.zip
           if-no-files-found: error
+          retention-days: 3
 
   # PR 上只验「Dockerfile 还能编过」，不推镜像，所以不必排在 Go Test 之后，
   # 也不必为此在 QEMU 里模拟跑一遍 arm64——两个变体各一次 amd64 构建就够了。
