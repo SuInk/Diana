@@ -25,13 +25,14 @@ type dianaMemoryTool struct {
 
 func (t *dianaMemoryTool) Name() string { return dianaMemoryToolName }
 func (t *dianaMemoryTool) Description() string {
-	return "查阅已提取的长期记忆：先 search 拿索引，再 read 读全文和证据。未命中可换词，不要编造历史；原始聊天用 chat_history。"
+	return "查阅已提取的长期记忆：先 search 拿索引，再 read 读全文和证据。未命中可换词，不要编造历史；原始聊天用 chat_history。记忆是后台提炼的，会记错：有人指出某条记错了，核实属实后用 forget 删掉，别只口头认错。"
 }
 func (t *dianaMemoryTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
-		"operation": toolEnumParam("search 查索引；read 读单条全文", "search", "read"),
+		"operation": toolEnumParam("search 查索引；read 读单条全文；forget 删掉一条记错或过时的记忆", "search", "read", "forget"),
 		"query":     toolStringParam("search 必填：关键词，≤512 字符"),
-		"id":        toolStringParam("read 必填：search 返回的记忆 ID"),
+		"id":        toolStringParam("read、forget 必填：search 返回的记忆 ID"),
+		"reason":    toolStringParam("forget 必填：哪里记错了、怎么核实的，≤200 字符"),
 		"limit":     toolCountParam("search 条数，默认 8，不设上限；超出单次结果上限时按整条分页", 1),
 		"cursor":    toolStringParam("search 续读：原样填上一页的 next_cursor，query 等其他参数不变"),
 	})
@@ -125,8 +126,10 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 		}
 		text = ""
 		limit = 1
+	case "forget":
+		return t.forget(ctx, store, strings.TrimSpace(configToolString(input, "id")), strings.TrimSpace(configToolString(input, "reason")))
 	default:
-		return "", fmt.Errorf("operation 必须为 search 或 read")
+		return "", fmt.Errorf("operation 必须为 search、read 或 forget")
 	}
 	query := r.memoryQueryForEvent(ctx, t.event, text, 0)
 	if op == "read" {
@@ -219,4 +222,74 @@ func (t *dianaMemoryTool) Run(ctx context.Context, input map[string]any) (string
 			Guidance string `json:"guidance"`
 		}{Items: entries[:n], Total: total, toolCursorPage: page, Guidance: guidance}
 	})
+}
+
+// forget 删掉一条记错或过时的记忆。
+//
+// 记忆出错时以前只有本人开口门控才会删，旁人指出记错了，机器人只能口头认错，下一轮
+// 这条照旧注入、照旧被当成事实。现在核实属实后能直接删，但谁都能删就成了给别人抹
+// 记忆的口子，所以按群管的规矩限人：本人、机器人主人和管理员，本群约定谁都能撤（和
+// 门控一致），其余只有本群群主、群管理员能删本群记下的记忆，身份实时向平台查。
+func (t *dianaMemoryTool) forget(ctx context.Context, store StructuredMemoryStore, id, reason string) (string, error) {
+	if id == "" || len(id) > 128 {
+		return "", fmt.Errorf("无效的记忆 ID")
+	}
+	if reason == "" || len([]rune(reason)) > 200 {
+		return "", fmt.Errorf("reason 必须为 1 到 200 字符：写清哪里记错了、怎么核实的")
+	}
+	forgetter, ok := store.(StructuredMemoryForgetStore)
+	if !ok {
+		return "", fmt.Errorf("当前记忆存储不支持删除")
+	}
+	r := t.runtime
+	query := r.memoryQueryForEvent(ctx, t.event, "", 0)
+	query.IDs = []string{id}
+	query.MaxCandidates = 1
+	loadCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	items, err := store.ListStructuredMemories(loadCtx, query)
+	if err != nil {
+		return "", err
+	}
+	if len(items) == 0 || items[0].ID != id {
+		return "", fmt.Errorf("没找到这条记忆：可能已失效，或不在当前会话能访问的范围")
+	}
+	if err := t.authorizeForget(ctx, items[0], query.Session); err != nil {
+		return "", err
+	}
+	forgotten, err := forgetter.ForgetStructuredMemory(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if !forgotten {
+		return "", fmt.Errorf("这条记忆已经不是生效状态")
+	}
+	body, _ := json.Marshal(map[string]any{"ok": true, "id": id, "content": items[0].Content, "note": "已删除，之后不会再注入；同一件事以后有人重新说起，仍可能被重新记下。"})
+	return string(body), nil
+}
+
+func (t *dianaMemoryTool) authorizeForget(ctx context.Context, item StructuredMemoryItem, session string) error {
+	speaker := strings.TrimSpace(t.event.UserID)
+	if subject := strings.TrimSpace(item.SubjectUserID); subject != "" && subject == speaker {
+		return nil
+	}
+	sameSession := strings.TrimSpace(item.SourceSession) == strings.TrimSpace(session)
+	if sameSession && IsGroupRule(item) {
+		return nil
+	}
+	if policy := t.runtime.relationshipPolicy(ctx, t.event); policy.Owner || policy.Admin {
+		return nil
+	}
+	denied := fmt.Errorf("这条记的是别人的事，只有本人、机器人主人，或本群群主、群管理员（限本群记下的记忆）能删；当前发言者不能删，如实告诉对方这条可能记错了即可")
+	if !sameSession || t.event.Kind != EventKindGroup || strings.TrimSpace(t.event.GroupID) == "" {
+		return denied
+	}
+	role, err := t.runtime.liveGroupRole(ctx, t.event, t.event.GroupID, speaker)
+	if err != nil {
+		return fmt.Errorf("无法确认你在本群的身份，暂不删除：%w", err)
+	}
+	if !GroupRoleCanConfigure(role) {
+		return denied
+	}
+	return nil
 }
