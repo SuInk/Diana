@@ -244,6 +244,35 @@ func TestAppendContextSkipsOwnReplySplitIntoMessages(t *testing.T) {
 	}
 }
 
+// 11-22 生产：纯文本平台照 MaiBot 在逗号处断句，「嘿嘿，被拿去炫耀了」发成两条，
+// 按行比对不上，后一条被当新发言追加，模型以为自己说了两遍。没说过的新话照常追加。
+func TestAppendContextSkipsOwnReplySplitAtComma(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 成精了")
+	log := appendTestLog(t, first, "嘿嘿，被拿去炫耀了")
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:02] 甲: ？"}, "", "【当前需要回复的消息】甲: ？")
+	history := []llm.Message{second[1]}
+	history = append(history, agent.HistoryReplyMessages("a", "嘿嘿")...)
+	history = append(history, agent.HistoryReplyMessages("b", "被拿去炫耀了")...)
+	history = append(history, agent.HistoryReplyMessages("c", "嘿嘿，这次是别的事")...)
+	history = append(history, second[2])
+	second[2].CacheBreakpoint = false
+	history[len(history)-1].CacheBreakpoint = true
+	second = append(append([]llm.Message{second[0]}, history...), second[3:]...)
+	continuation := continueFrom(log, second)
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	var appended []string
+	for _, message := range continuation.Append {
+		if llm.IsHistoryReplyMessage(message) && message.Role == llm.RoleAssistant {
+			appended = append(appended, llm.HistoryReplyText(message))
+		}
+	}
+	if strings.Join(appended, "|") != "嘿嘿，这次是别的事" {
+		t.Fatalf("appended own replies %q, want only the new one", appended)
+	}
+}
+
 // 续接时发过的资料不再发：带记忆条目的段（含画像之后那段）按条去重，无标题的固定说明
 // 发过就不发；当前消息连同它的注解照发；带标题的状态段 A、B 交替时照样发回 A。
 func TestAppendContextSendsOnlyNewContent(t *testing.T) {

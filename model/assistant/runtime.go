@@ -9756,10 +9756,16 @@ var maiBotToneMark = regexp.MustCompile(`（）|\(\)|[wW]{2,}|h{2,}|23{2,}`)
 // 自己 ww 还免费洗涤服务」同理：笑声两边的空格挨着字母，按 maiBotKeptSpace 不算
 // 停顿，整句没拆开。
 func maiBotSplitSentences(text string) []maibotreply.Segment {
+	return maiBotSplitSentencesWith(text, maiBotSplitRandom)
+}
+
+// maiBotSplitSentencesWith 是 maiBotSplitSentences，相邻两句合不合由 random 决定；
+// 恒返回 1 时一句也不合，拿到的是所有可能的分界都断开的最细切法。
+func maiBotSplitSentencesWith(text string, random func() float64) []maibotreply.Segment {
 	var segments []maibotreply.Segment
 	pieces := splitAfterToneMarks(text)
 	for index, piece := range pieces {
-		parts := maiBotSplitSentencePiece(piece)
+		parts := maiBotSplitSentencePiece(piece, random)
 		if len(parts) > 0 && index < len(pieces)-1 {
 			parts[len(parts)-1].Separator = maiBotToneMarkCut
 		}
@@ -9802,7 +9808,7 @@ func splitAfterToneMarks(text string) []string {
 }
 
 // maiBotSplitSentencePiece 先把不能切的片段换成单个私用区字符，断完句再换回来。
-func maiBotSplitSentencePiece(text string) []maibotreply.Segment {
+func maiBotSplitSentencePiece(text string, random func() float64) []maibotreply.Segment {
 	var spans []string
 	masked := maiBotProtectedSpan.ReplaceAllStringFunc(text, func(span string) string {
 		spans = append(spans, span)
@@ -9831,7 +9837,7 @@ func maiBotSplitSentencePiece(text string) []maibotreply.Segment {
 		}
 		return restored.String()
 	}
-	segments := maibotreply.SplitSentences(string(runes), maiBotSplitRandom)
+	segments := maibotreply.SplitSentences(string(runes), random)
 	for index := range segments {
 		segments[index].Text = strings.TrimSpace(restore(segments[index].Text))
 		segments[index].Separator = restore(segments[index].Separator)
