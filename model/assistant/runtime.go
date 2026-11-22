@@ -9732,44 +9732,59 @@ func maiBotSplitReply(bubbles []string) []string {
 	return maibotreply.Merge(segments)
 }
 
-// maiBotEmptyParenCut 是空括号「（）」后面断开时的分隔符：括号是模型当语气用的，
-// 留在前一条末尾，分界处不吞任何字符。合并时按句末停顿算（见 maibotreply.cutPenalty）。
-const maiBotEmptyParenCut = ""
+// maiBotToneMarkCut 是句末语气记号（空括号「（）」、笑声「ww」）后面断开时的分隔符：
+// 记号留在前一条末尾，分界处不吞任何字符。合并时按句末停顿算（见 maibotreply.cutPenalty）。
+const maiBotToneMarkCut = ""
 
-// maiBotEmptyParen 认出后面还接着话的空括号。半角「()」前面是字母数字时是函数调用
-// （f()就行），不算。
-var maiBotEmptyParen = regexp.MustCompile(`（）|\(\)`)
+// maiBotToneMark 认出句末语气记号：空括号，以及 ww、hhh、233 这类笑声。半角「()」
+// 前面是字母数字时是函数调用（f()就行），笑声前面是字母数字时是单词的一部分
+// （aww、Ohh），都不算。
+var maiBotToneMark = regexp.MustCompile(`（）|\(\)|[wW]{2,}|h{2,}|23{2,}`)
 
-// maiBotSplitSentences 先在空括号后面断开（括号留在前一句），再逐段断句。11-21 线上
-// 「已经验证过两次了（）这次要是还想要……」整段挤在一个气泡里：空括号是模型的
-// 句末语气，后面另起一句，用户要的是在这里分条、但别删括号。
+// maiBotSplitSentences 先在句末语气记号后面断开（记号留在前一句），再逐段断句。11-21
+// 线上「已经验证过两次了（）这次要是还想要……」整段挤在一个气泡里：空括号是模型的
+// 句末语气，后面另起一句，用户要的是在这里分条、但别删括号。11-22 线上「是不是你
+// 自己 ww 还免费洗涤服务」同理：笑声两边的空格挨着字母，按 maiBotKeptSpace 不算
+// 停顿，整句没拆开。
 func maiBotSplitSentences(text string) []maibotreply.Segment {
 	var segments []maibotreply.Segment
-	pieces := splitAfterEmptyParens(text)
+	pieces := splitAfterToneMarks(text)
 	for index, piece := range pieces {
 		parts := maiBotSplitSentencePiece(piece)
 		if len(parts) > 0 && index < len(pieces)-1 {
-			parts[len(parts)-1].Separator = maiBotEmptyParenCut
+			parts[len(parts)-1].Separator = maiBotToneMarkCut
 		}
 		segments = append(segments, parts...)
 	}
 	return segments
 }
 
-// splitAfterEmptyParens 在后面紧跟着字的空括号处切开，括号留在前一段。后面是标点、
-// 空白或已到结尾的不切：那里本来就有断句点，或者没有下一句。
-func splitAfterEmptyParens(text string) []string {
+// splitAfterToneMarks 在后面还接着话的语气记号处切开，记号留在前一段。空括号要紧跟
+// 着字才切，后面是标点、空白或已到结尾的不切：那里本来就有断句点，或者没有下一句。
+// 笑声习惯两边留空格（「自己 ww 还免费」），隔着空格接字也切；不隔空格时只在后面是
+// 汉字时切，「hh2」这类不动。
+func splitAfterToneMarks(text string) []string {
 	var pieces []string
 	start := 0
-	for _, match := range maiBotEmptyParen.FindAllStringIndex(text, -1) {
-		if text[match[0]] == '(' && match[0] > 0 {
-			if previous, _ := utf8.DecodeLastRuneInString(text[:match[0]]); previous < utf8.RuneSelf && (unicode.IsLetter(previous) || unicode.IsDigit(previous) || previous == '_') {
+	for _, match := range maiBotToneMark.FindAllStringIndex(text, -1) {
+		mark := text[match[0]:match[1]]
+		previous, _ := utf8.DecodeLastRuneInString(text[:match[0]])
+		if mark != "（）" && match[0] > 0 && previous < utf8.RuneSelf && (unicode.IsLetter(previous) || unicode.IsDigit(previous) || previous == '_') {
+			continue
+		}
+		rest := text[match[1]:]
+		next, _ := utf8.DecodeRuneInString(rest)
+		if mark == "（）" || mark == "()" {
+			if rest == "" || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
 				continue
 			}
-		}
-		next, _ := utf8.DecodeRuneInString(text[match[1]:])
-		if match[1] == len(text) || !(unicode.IsLetter(next) || unicode.IsDigit(next)) {
-			continue
+		} else {
+			trimmed := strings.TrimLeft(rest, " \t")
+			after, _ := utf8.DecodeRuneInString(trimmed)
+			spaced := len(trimmed) < len(rest)
+			if trimmed == "" || spaced && !(unicode.IsLetter(after) || unicode.IsDigit(after)) || !spaced && !maiBotCJKLetter(after) {
+				continue
+			}
 		}
 		pieces = append(pieces, text[start:match[1]])
 		start = match[1]

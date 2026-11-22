@@ -158,6 +158,32 @@ func TestMaiBotSplitBreaksAfterEmptyParensKeepingThem(t *testing.T) {
 	}
 }
 
+// 11-22 线上：「ww」两边的空格挨着字母，不算停顿，整句发成了一条。笑声是句末语气，
+// 后面还接着话时在这里分条，笑声留在前一条；单词里的字母、网址、数字不拆。
+func TestMaiBotSplitBreaksAfterLaughter(t *testing.T) {
+	withMaiBotSplit(t)
+	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
+	got := splitEventChatReply("你说的那个朋友是不是你自己 ww 还免费洗涤服务，你这算盘珠子崩我脸上了", cfg, MessageEvent{Kind: EventKindGroup})
+	if len(got) < 2 || got[0] != "你说的那个朋友是不是你自己 ww" {
+		t.Fatalf("should split after ww: %q", got)
+	}
+	for text, want := range map[string]string{
+		"是摩纳哥不是摩洛哥 ww 一字之差":     "是摩纳哥不是摩洛哥 ww| 一字之差",
+		"自己留 issue 求助的类型ww 窝也是": "自己留 issue 求助的类型ww| 窝也是",
+		"笑死hhh你也太菜了":            "笑死hhh|你也太菜了",
+		"2333 这也行":              "2333| 这也行",
+		"aww 好可爱":               "aww 好可爱",
+		"去 www.example.com 看看":  "去 www.example.com 看看",
+		"结尾的笑不用拆 ww":            "结尾的笑不用拆 ww",
+		"后面是标点 ww，照常断":          "后面是标点 ww，照常断",
+		"号码 12333 别记错":          "号码 12333 别记错",
+	} {
+		if got := strings.Join(splitAfterToneMarks(text), "|"); got != want {
+			t.Fatalf("%q: got %q want %q", text, got, want)
+		}
+	}
+}
+
 func TestMaiBotSplitMergesShortLinesToThree(t *testing.T) {
 	withMaiBotSplit(t)
 	cfg := BotConfig{Platform: PlatformOneBotV11}.WithDefaults()
