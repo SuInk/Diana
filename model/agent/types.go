@@ -178,6 +178,20 @@ type Request struct {
 	// 按 Messages 重新组装，而是在上一轮实际发出的请求后面接着发，见 continuation.go。
 	// 对不上就照常用 Messages。
 	Continuation *Continuation
+	// Redo 不为空时，这一版是同一轮的重新生成（对方在上一版发出前又补了话），带着
+	// 上一版已经执行过的工具调用和结果接着答，不用重查，见 ExecutedTools。
+	Redo *ExecutedTools
+}
+
+// ExecutedTools 是一次运行里真正执行过的工具：Messages 是发给模型的那几组「调用 + 结果」
+// 原样（含随结果附带的图片和检索提示），Steps 是对应的运行记录。
+//
+// 同一轮因为补充消息整轮重来时，上一版查到的东西以前全部丢掉：11-22 群里说「GTA6 算是
+// 烂了」，上一版搜了两次、查到 11 月 19 日已经发售，对方又连发三条，重来的那一版没再搜，
+// 凭旧印象说「明年 11 月 19 才上」。重来是同一轮，上一版的结果原样带过去，不截断。
+type ExecutedTools struct {
+	Messages []llm.Message
+	Steps    []Step
 }
 
 // Continuation 是「只追加」续接上一轮所需的东西：上一轮 Response.Transcript、本轮
@@ -207,6 +221,9 @@ type Response struct {
 	// Transcript 是这一轮最后一次实际发给模型的请求，接上模型的回复和收尾调用的结果。
 	// 下一轮把它放进 Continuation.Prefix，新请求就是它的纯追加。
 	Transcript []llm.Message `json:"-"`
+	// Executed 是这一版执行过的工具（含 Request.Redo 带进来的），同一轮再重来时
+	// 交给下一版的 Request.Redo。
+	Executed ExecutedTools `json:"-"`
 	// ConversationKey 是本轮系统提示、契约和工具定义的指纹，续接时用来核对。
 	ConversationKey string `json:"-"`
 	// Continued 表示这一轮是在上一轮的请求后面续接的。

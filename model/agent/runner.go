@@ -257,6 +257,17 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		messages = append(messages, req.Messages...)
 	}
 
+	// executedTools 收集这一版执行过的工具交换，交给同一轮的下一版（Request.Redo）。
+	var executedTools []llm.Message
+	if req.Redo != nil && len(req.Redo.Messages) > 0 {
+		messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: redoExecutedToolsNote})
+		for _, message := range req.Redo.Messages {
+			message.CacheBreakpoint = false
+			messages = append(messages, message)
+			executedTools = append(executedTools, message)
+		}
+	}
+
 	var promptTokens int64
 	for _, message := range messages {
 		promptTokens += llm.EstimateMessageTokens(message)
@@ -268,6 +279,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var lastResponse *llm.GenerateResponse
 	var turnBase, laterInterjections []llm.Message
 	var steps []Step
+	if req.Redo != nil {
+		// 上一版的步骤照样算本轮已做：复核、来源和「本轮工具执行状态」都看得到。
+		// 工具预算不扣，重来的这一版另有一份。
+		steps = append(steps, req.Redo.Steps...)
+	}
 	var lastText string
 	var lastProvider llm.Provider
 	var lastModel string
@@ -349,7 +365,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			FinishReason:    reason,
 			DurationMS:      duration.Milliseconds(),
 			Sources:         responseSources(text, steps),
-			Transcript:      transcriptAfter(append(turnBase, laterInterjections...), lastResponse, lastText),
+			Transcript:      transcriptAfter(withoutRedoTools(append(turnBase, laterInterjections...), req.Redo), lastResponse, lastText),
+			Executed:        ExecutedTools{Messages: executedTools, Steps: steps},
 			ConversationKey: convKey,
 			Continued:       continued,
 			PromptTokens:    promptTokens,
@@ -536,6 +553,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					steps = append(steps, read.record)
 					results[run[i]] = read
 				}
+				exchangeStart := len(messages)
 				messages = append(messages, llm.Message{
 					Role:              llm.RoleAssistant,
 					Content:           lastText,
@@ -563,6 +581,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				if guidance := parallelReadGuidance(reads, steps, r.remainingToolCalls(toolCalls)); guidance != "" {
 					messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
 				}
+				executedTools = append(executedTools, messages[exchangeStart:]...)
 				continue
 			}
 		}
@@ -983,6 +1002,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 			}
 		}
+		exchangeStart := len(messages)
 		if nativeToolCall {
 			assistantMessage := llm.Message{
 				Role:              llm.RoleAssistant,
@@ -1026,6 +1046,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
 			}
 		}
+		executedTools = append(executedTools, messages[exchangeStart:]...)
 	}
 
 	finalApproved = false

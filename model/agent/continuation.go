@@ -15,6 +15,9 @@ import (
 
 const speakerToolPromptMarker = "【当前发言者工具环境】"
 
+// redoExecutedToolsNote 放在 Request.Redo 带进来的那几组工具交换前面。
+const redoExecutedToolsNote = "【这一轮上一版已经执行过的工具】对方在你上一版回复发出前又补充了消息，这一轮要合起来重新回复。下面是上一版已经调用过的工具和结果，仍然有效，直接用，不要重复同样的查询；补充消息需要新的信息再去查。"
+
 // Only omit an unchanged runtime-owned environment block. Compare the latest
 // version, not any historical match: A -> B -> A must restore A explicitly.
 func continuationVolatile(prefix, appended, volatile []llm.Message) []llm.Message {
@@ -185,6 +188,36 @@ func continuationMessages(continuation *Continuation, volatile []llm.Message) ([
 		messages = append(messages, volatile...)
 	}
 	return messages, stable
+}
+
+// withoutRedoTools 从下一轮的前缀里拿掉 Request.Redo 带进来的上一版工具交换和那句说明：
+// 它们和这一轮自己的工具步骤一样只在这一轮有效，不跨轮（见 transcriptAfter）。
+func withoutRedoTools(messages []llm.Message, redo *ExecutedTools) []llm.Message {
+	if redo == nil || len(redo.Messages) == 0 {
+		return messages
+	}
+	carried := make(map[string]int, len(redo.Messages)+1)
+	carried[redoToolsKey(llm.Message{Role: llm.RoleSystem, Content: redoExecutedToolsNote})]++
+	for _, message := range redo.Messages {
+		carried[redoToolsKey(message)]++
+	}
+	out := make([]llm.Message, 0, len(messages))
+	for _, message := range messages {
+		if key := redoToolsKey(message); carried[key] > 0 {
+			carried[key]--
+			continue
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
+func redoToolsKey(message llm.Message) string {
+	ids := make([]string, 0, len(message.ToolCalls))
+	for _, call := range message.ToolCalls {
+		ids = append(ids, call.ID)
+	}
+	return string(message.Role) + "\x00" + message.ToolCallID + "\x00" + strings.Join(ids, ",") + "\x00" + message.Content
 }
 
 // transcriptAfter 是下一轮的前缀：这一轮第一次实际发出的请求（base，含 hooks.prepare

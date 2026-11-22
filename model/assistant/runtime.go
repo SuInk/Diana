@@ -2502,6 +2502,8 @@ func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, te
 		r.sealDirectReply(replyCtx)
 		r.markSenderTurnSideEffect(event)
 	})
+	// 重来的那一版带着上一版执行过的工具接着答，见 reply_redo_tools.go。
+	replyCtx = withReplyRedoTools(replyCtx)
 	var reply string
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -5120,7 +5122,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		var continuation *agent.Continuation
 		var appendDecision appendContextDecision
 		appendKey, appendHeadKey := "", ""
+		var redoTools *replyRedoTools
 		if purpose := llmUsagePurposeFromContext(ctx); purpose == "" || purpose == PurposeReply {
+			redoTools = replyRedoToolsFromContext(ctx)
 			appendKey, appendHeadKey = appendContextKey(event), appendContextHeadKey(messages)
 			previous := r.appendContexts.get(appendKey)
 			continuation, appendDecision = appendContextContinuation(previous, messages)
@@ -5148,7 +5152,11 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			ToolsLoaded:   promptSession.rememberTools,
 			Interjections: interjections,
 			Continuation:  continuation,
+			Redo:          redoTools.previous(),
 		})
+		if err == nil {
+			redoTools.remember(resp.Executed)
+		}
 		stopInterjections()
 		stopProgress()
 		if appendKey != "" {
