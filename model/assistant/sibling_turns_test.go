@@ -89,3 +89,59 @@ func TestCombineInterjectionsSkipsNil(t *testing.T) {
 		t.Fatal("background run got sibling interjections")
 	}
 }
+
+// 2026-11-22：两个人前后脚夸了一句，两轮几乎同时在跑，都在对方真正发出去之前收尾。
+// 前一轮定稿就记「正在发」，后到那条的一轮收尾前看得到；前一轮不看后一轮；真发出去的
+// 那句不再记第二遍；没发出去的定稿随那一轮结束撤掉。
+func TestLaterSiblingSeesEarlierTurnDraftBeforeSend(t *testing.T) {
+	r := NewRuntime(BotConfig{}, nil, NewPluginManager(), nil, nil, nil, nil)
+	earlier := MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20001", SenderName: "Winter", MessageID: "1",
+		Segments: []MessageSegment{{Type: "text", Data: map[string]string{"text": "你是懂篮球的"}}}}
+	later := MessageEvent{Kind: EventKindGroup, GroupID: "10001", UserID: "20002", SenderName: "egan", MessageID: "2",
+		Segments: []MessageSegment{{Type: "at", Data: map[string]string{"qq": "10000"}}}}
+	r.noteSenderTurnArrival(earlier)
+	time.Sleep(2 * time.Millisecond)
+	r.noteSenderTurnArrival(later)
+
+	// 后到的那条先开跑（生产里先到的那条多做了一次话题判断）。
+	laterInterjections := r.startSiblingSendInterjections(withOutboundTurn(context.Background(), "turn-later"), later)
+	earlierInterjections := r.startSiblingSendInterjections(withOutboundTurn(context.Background(), "turn-earlier"), earlier)
+	if laterInterjections.Pending() {
+		t.Fatal("pending before anything was drafted")
+	}
+	r.sessionSends.announce(earlier, "turn-earlier", "嘿嘿收下这个夸奖", time.Now())
+	if !laterInterjections.Pending() {
+		t.Fatal("earlier draft not visible to the later turn before it was sent")
+	}
+	messages := laterInterjections.Take()
+	if len(messages) != 1 || !strings.Contains(messages[0].Content, "嘿嘿收下这个夸奖") || !strings.Contains(messages[0].Content, "正在发") {
+		t.Fatalf("interjection = %+v", messages)
+	}
+
+	// 前一轮不看后一轮。
+	r.sessionSends.announce(later, "turn-later", "嘿嘿被夸了", time.Now())
+	if earlierInterjections.Pending() {
+		t.Fatal("earlier turn sees the later turn's draft")
+	}
+	// 前一轮真发出去的就是定稿那句，不再算一条新的。
+	r.sessionSends.note(earlier, "turn-earlier", OutgoingMessage{Text: "嘿嘿收下这个夸奖"}, time.Now())
+	if laterInterjections.Pending() {
+		t.Fatal("sent draft delivered to the later turn twice")
+	}
+	// 定稿还没发出去不算复读：两轮定稿一样时不能互相拿「正在发」当理由都不发。
+	ctx := withReplyTurnStart(withOutboundTurn(context.Background(), "turn-third"), time.Now().Add(-time.Second))
+	r.sessionSends.announce(later, "turn-later", "这球打得是真的漂亮啊大家", time.Now())
+	if r.sessionSends.repeatsRecentSibling(ctx, later, "这球打得是真的漂亮啊大家", time.Now()) {
+		t.Fatal("unsent draft treated as a sent duplicate")
+	}
+	// 后一轮没发出去，定稿随它结束撤掉；前一轮发出去的留着。
+	r.sessionSends.endTurn(later, "turn-later")
+	r.sessionSends.endTurn(earlier, "turn-earlier")
+	var turns []string
+	for _, record := range r.sessionSends.after(later, time.Time{}, "", time.Time{}) {
+		turns = append(turns, record.turnID)
+	}
+	if strings.Join(turns, ",") != "turn-earlier" {
+		t.Fatalf("records after turn end = %v", turns)
+	}
+}

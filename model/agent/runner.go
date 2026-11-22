@@ -751,6 +751,12 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 				}
 				continue
 			}
+			// 上面的复核要好几秒，期间别的来源（同群前一轮定稿的回复）可能刚到：
+			// 收尾前再看一眼，有就带着它重做这一步。
+			if req.Interjections != nil && interjectionRedos < maxInterjectionRedos && req.Interjections.Pending() {
+				interjectionRedos++
+				continue
+			}
 			return finish(action.Content, "final")
 		}
 		if action.Action != "tool" {

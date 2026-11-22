@@ -2488,6 +2488,8 @@ func unpromptedReplyTurn(ctx context.Context, event MessageEvent) bool {
 
 func (r *Runtime) replyAndRecordTurn(ctx context.Context, event MessageEvent, text string, successOutcome string) (string, error) {
 	defer r.enqueueHistoryImageDescriptions(event)
+	// 没发出去的「正在发」不留给别的轮，见 sibling_turns.go。
+	defer r.sessionSends.endTurn(event, outboundTurnID(ctx))
 	start := time.Now()
 	record := r.decisionEventRecord(event, text, successOutcome)
 	record.At = start
@@ -5157,6 +5159,10 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		})
 		if err == nil {
 			redoTools.remember(resp.Executed)
+			// 定稿就记「正在发」，要在进度注销前：后一轮看不到进度时必须已经看得到这条。
+			if !resp.Silent && outboundTurnFromContext(ctx) != nil {
+				r.sessionSends.announce(event, outboundTurnID(ctx), resp.Text, time.Now())
+			}
 		}
 		stopInterjections()
 		stopProgress()
