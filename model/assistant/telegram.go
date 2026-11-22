@@ -1267,23 +1267,37 @@ func telegramOptionalID(value int64) string {
 }
 
 func (c *TelegramChannel) resolveIncomingMedia(ctx context.Context, event MessageEvent, msg *telegramMessage) MessageEvent {
-	for index, segment := range event.Segments {
+	event.Segments = c.resolveMediaSegments(ctx, event, event.MessageID, event.Segments)
+	// 引用里的媒体也要落成本地文件：Bot API 拿不到历史消息，被引用的那条不在库里时
+	// （机器人自己连发的图文被 Telegram 拆成两条、只记了第一条，或者引用的是入群前的
+	// 消息），这里的 file_id 就是唯一能取到原图的地方。已经收过的媒体按 file_unique_id
+	// 命中缓存，不会重复下载。
+	if event.Quoted != nil && len(event.Quoted.Segments) > 0 {
+		quoted := *event.Quoted
+		quoted.Segments = c.resolveMediaSegments(ctx, event, quoted.MessageID, append([]MessageSegment(nil), quoted.Segments...))
+		event.Quoted = &quoted
+	}
+	return event
+}
+
+func (c *TelegramChannel) resolveMediaSegments(ctx context.Context, event MessageEvent, messageID string, segments []MessageSegment) []MessageSegment {
+	for index, segment := range segments {
 		fileID := strings.TrimSpace(segment.Data["file_id"])
 		if fileID == "" || (segment.Type != "image" && segment.Type != "video" && segment.Type != "record" && segment.Type != "file") {
 			continue
 		}
 		path, err := c.downloadIncomingFile(ctx, event, segment)
 		if err != nil {
-			log.Printf("telegram: download incoming media failed: chat_id=%s message_id=%s type=%s err=%v", event.GroupID, event.MessageID, segment.Type, err)
+			log.Printf("telegram: download incoming media failed: chat_id=%s message_id=%s type=%s err=%v", event.GroupID, messageID, segment.Type, err)
 			continue
 		}
 		data := cloneSegmentData(segment.Data)
 		data["cached_file"] = path
 		data["file"] = path
 		data[imageContentSHA256Key] = filepath.Base(filepath.Dir(path))
-		event.Segments[index].Data = data
+		segments[index].Data = data
 	}
-	return event
+	return segments
 }
 
 func (c *TelegramChannel) downloadIncomingFile(ctx context.Context, event MessageEvent, segment MessageSegment) (string, error) {
