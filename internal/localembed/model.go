@@ -322,16 +322,32 @@ func parallelFor(total, workers int, fn func(from, to int)) {
 		return
 	}
 	chunk := (total + workers - 1) / workers
+	panics := make([]any, (total+chunk-1)/chunk)
 	var wg sync.WaitGroup
-	for from := 0; from < total; from += chunk {
+	for index, from := 0, 0; from < total; index, from = index+1, from+chunk {
 		to := min(total, from+chunk)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer recoverInto(&panics[index])
 			fn(from, to)
 		}()
 	}
 	wg.Wait()
+	// 工作 goroutine 里的 panic 挪回调用方再抛：不能让它带崩进程，也不能吞掉了
+	// 返回一个算了一半的向量。
+	for _, recovered := range panics {
+		if recovered != nil {
+			panic(recovered)
+		}
+	}
+}
+
+// recoverInto 必须被直接 defer：recover() 只在被 defer 的函数里直接调用才生效。
+func recoverInto(dst *any) {
+	if recovered := recover(); recovered != nil {
+		*dst = recovered
+	}
 }
 
 func dot(a, b []float32) float32 {

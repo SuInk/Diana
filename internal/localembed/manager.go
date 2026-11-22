@@ -18,6 +18,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/SuInk/diana/internal/safego"
 )
 
 // 模型权重不打进程序：五个平台的包都会多 95MB，而大多数人不开语义检索。
@@ -115,9 +117,15 @@ func (m *Manager) Ready() bool {
 	}
 	m.state = StateLoading
 	m.err = nil
-	go m.prepare()
+	go func() {
+		defer recoverPanic("localembed.prepare")
+		m.prepare()
+	}()
 	return false
 }
+
+// recoverPanic 必须被直接 defer，见 safego.Recover 的说明。
+func recoverPanic(component string) { safego.Report(component, recover()) }
 
 // Status 返回当前状态的快照。
 func (m *Manager) Status() Status {
@@ -142,7 +150,7 @@ func (m *Manager) Embed(ctx context.Context, texts []string) ([][]float32, error
 }
 
 func (m *Manager) prepare() {
-	model, err := m.loadOrDownload()
+	model, err := m.loadOrDownloadSafely()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err != nil {
@@ -154,6 +162,17 @@ func (m *Manager) prepare() {
 	}
 	m.model = model
 	m.state = StateReady
+}
+
+// loadOrDownloadSafely 把加载里的 panic（比如权重文件被换成了畸形内容）变成
+// 普通的失败：否则状态会一直卡在「加载中」，也不会按时重试。
+func (m *Manager) loadOrDownloadSafely() (model *Model, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("load built-in embedding model: panic: %v", recovered)
+		}
+	}()
+	return m.loadOrDownload()
 }
 
 func (m *Manager) loadOrDownload() (*Model, error) {

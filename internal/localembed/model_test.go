@@ -131,3 +131,18 @@ func TestTokenizerMatchesHuggingFaceOnRealVocab(t *testing.T) {
 		}
 	}
 }
+
+// 工作 goroutine 里的 panic 要回到调用方，由调用方的兜底处理，不能带崩进程。
+func TestParallelForRethrowsWorkerPanicInCaller(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != "boom" {
+			t.Fatalf("recovered = %v, want boom", recovered)
+		}
+	}()
+	parallelFor(8, 4, func(from, _ int) {
+		if from >= 4 {
+			panic("boom")
+		}
+	})
+	t.Fatal("parallelFor should panic")
+}
