@@ -5,10 +5,12 @@ package assistant
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 	"time"
 
+	"github.com/SuInk/diana/internal/localembed"
 	"github.com/SuInk/diana/model/llm"
 )
 
@@ -26,6 +28,17 @@ import (
 //
 // 向量检索在存储层是 Go 暴力余弦扫。万级消息不需要 HNSW:近似索引换来的
 // 是常驻内存和构建维护成本,量级到十万以上再考虑。
+
+// builtinEmbeddingProvider 标记内置本地模型。它不是真的提供商，不走 HTTP，
+// 也不记用量和并发——不花钱，也不占谁的配额。
+const builtinEmbeddingProvider llm.Provider = "builtin"
+
+// LocalEmbedder 是内置向量模型，由 localembed.Manager 实现。
+type LocalEmbedder interface {
+	// Ready 报告能不能马上用；没准备好时在后台开始准备，不阻塞。
+	Ready() bool
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+}
 
 const (
 	semanticIndexQueueSize  = 512
@@ -74,11 +87,14 @@ func (r *Runtime) semanticSearchActive(cfg BotConfig) bool {
 // 分组下的第一个配置档，升级不改变已开语义检索的机器人。选了却找不到对应的
 // 提供商时如实当作没配，不悄悄换成别的模型——向量按模型名存取，换了模型旧向量
 // 就搜不到了。
+//
+// 没选、也没有 embedding 分组时用内置的本地模型，不用另配 API 就能开语义检索。
+// 内置模型第一次用要先下载，下载和加载完成前当作没配，各处照旧只走词面检索。
 func (r *Runtime) embeddingProviderConfig(cfg BotConfig) (llm.ProviderConfig, bool) {
-	if r.llmStore == nil {
-		return llm.ProviderConfig{}, false
+	var set llm.ProfileSet
+	if r.llmStore != nil {
+		set = r.llmStore.Profiles()
 	}
-	set := r.llmStore.Profiles()
 	if role, ok := normalizeModelRoles(cfg.ModelRoles)[llm.GroupEmbedding]; ok && !role.FollowChat {
 		model := mediaSlotModel(role)
 		if role.Disabled || model == "" {
@@ -98,7 +114,30 @@ func (r *Runtime) embeddingProviderConfig(cfg BotConfig) (llm.ProviderConfig, bo
 			return profile.Config, true
 		}
 	}
-	return llm.ProviderConfig{}, false
+	return r.builtinEmbeddingConfig(cfg)
+}
+
+// builtinEmbeddingConfig 在内置模型就绪时返回它；没就绪时让它在后台开始准备。
+// 只在开了语义检索时才算数：别处（比如模型目录）问一句向量模型是谁，不该因此
+// 下载 95 MB。
+func (r *Runtime) builtinEmbeddingConfig(cfg BotConfig) (llm.ProviderConfig, bool) {
+	if !boolValue(cfg.SemanticSearchEnabled, false) {
+		return llm.ProviderConfig{}, false
+	}
+	r.mu.RLock()
+	embedder := r.localEmbedder
+	r.mu.RUnlock()
+	if embedder == nil || !embedder.Ready() {
+		return llm.ProviderConfig{}, false
+	}
+	return llm.ProviderConfig{Provider: builtinEmbeddingProvider, Model: localembed.ModelName}, true
+}
+
+// SetLocalEmbedder 接上内置向量模型。不接时没配 embedding 就没有语义检索。
+func (r *Runtime) SetLocalEmbedder(embedder LocalEmbedder) {
+	r.mu.Lock()
+	r.localEmbedder = embedder
+	r.mu.Unlock()
 }
 
 func (r *Runtime) messageVectorStore() MessageHistoryVectorStore {
@@ -311,6 +350,15 @@ func (r *Runtime) embedTextsFunc() func(context.Context, llm.ProviderConfig, []s
 		return r.embedTexts
 	}
 	return func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error) {
+		if cfg.Provider == builtinEmbeddingProvider {
+			r.mu.RLock()
+			embedder := r.localEmbedder
+			r.mu.RUnlock()
+			if embedder == nil {
+				return nil, errors.New("内置向量模型没有接上")
+			}
+			return embedder.Embed(ctx, texts)
+		}
 		started := time.Now()
 		// embedding 也占着同一份供应商配额，并发计数和下面的用量记账一样要在这里补。
 		release := r.llmConcurrency.begin(string(cfg.Provider), cfg.Model, started)

@@ -1812,6 +1812,7 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   }
   if (path === "/api/llm/config/export") return json(llmConfig);
   if (path === "/api/llm/config" && method === "GET") return json(llmConfig);
+  if (path === "/api/llm/builtin-embedding") return json({ state: "downloading", downloaded: 41_000_000, total: 95_827_648 });
   if (path === "/api/llm/config" && method === "POST") {
     const incoming = body as unknown as LLMConfig;
     const profiles = [...(llmConfig.profiles ?? [])];

@@ -30,6 +30,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/SuInk/diana/internal/dlog"
+	"github.com/SuInk/diana/internal/localembed"
 	"github.com/SuInk/diana/internal/termux"
 	"github.com/SuInk/diana/model/agent"
 	"github.com/SuInk/diana/model/assistant"
@@ -505,6 +506,10 @@ func main() {
 		return sqliteStore.SavePluginStates(ctx, plugins.Snapshot())
 	})
 	botRuntime.SetMessageHistoryStore(sqliteStore)
+	// 内置向量模型放在数据目录下，第一次开语义检索又没配 embedding 时才下载。
+	localEmbedder := localembed.NewManager(filepath.Join(dataDir, "models"), nil)
+	botRuntime.SetLocalEmbedder(localEmbedder)
+	handler.SetBuiltinEmbeddingStatus(localEmbedder.Status)
 	botRuntime.SetInboundEventStore(sqliteStore)
 	botRuntime.SetUserMemoryStore(sqliteStore)
 	botRuntime.SetLLMDowngradeStore(sqliteStore)

@@ -1577,6 +1577,18 @@ export function getConfig(includeSecrets = false): Promise<LLMConfig> {
   return requestJSON<LLMConfig>(`/api/llm/config${suffix}`);
 }
 
+// 内置向量模型（bge-small-zh）的下载状态。只读，不会触发下载。
+export interface BuiltinEmbeddingStatus {
+  state: "idle" | "downloading" | "loading" | "ready" | "failed";
+  downloaded: number;
+  total: number;
+  error?: string;
+}
+
+export function getBuiltinEmbeddingStatus(): Promise<BuiltinEmbeddingStatus> {
+  return requestJSON<BuiltinEmbeddingStatus>("/api/llm/builtin-embedding");
+}
+
 export function exportConfig(): Promise<LLMConfig> {
   return requestJSON<LLMConfig>("/api/llm/config/export");
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/SuInk/diana/internal/localembed"
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
 
@@ -28,6 +29,21 @@ type LLMConfigHandler struct {
 	// 没有它时这一页只能按配置自己的默认模型说话，而机器人多半用的是模型分配里
 	// 另选的模型——同一个页面上写着一个不生效的窗口，比不写更误导。
 	botProfiles BotModelRoleSource
+	// builtinEmbedding 报告内置向量模型的下载状态；只读，不会触发下载。
+	builtinEmbedding func() localembed.Status
+}
+
+// SetBuiltinEmbeddingStatus 注入内置向量模型的状态来源。
+func (h *LLMConfigHandler) SetBuiltinEmbeddingStatus(status func() localembed.Status) {
+	h.builtinEmbedding = status
+}
+
+func (h *LLMConfigHandler) builtinEmbeddingStatus(c *gin.Context) {
+	if h.builtinEmbedding == nil {
+		c.JSON(http.StatusOK, localembed.Status{State: localembed.StateIdle})
+		return
+	}
+	c.JSON(http.StatusOK, h.builtinEmbedding())
 }
 
 // BotModelRoleSource 提供各机器人的模型分配。
@@ -171,6 +187,7 @@ func (h *LLMConfigHandler) Register(router gin.IRouter) {
 	router.POST("/api/llm/reply-filter-assist", h.replyFilterAssist)
 	router.POST("/api/assistant/reply-filter/test", h.replyFilterTest)
 	router.GET("/api/llm/providers", h.providers)
+	router.GET("/api/llm/builtin-embedding", h.builtinEmbeddingStatus)
 	router.POST("/api/llm/providers/models", h.providerModels)
 	router.POST("/api/llm/providers/test", h.providerTest)
 }

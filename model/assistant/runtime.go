@@ -641,6 +641,7 @@ type Runtime struct {
 	semanticIndexQueue  chan semanticIndexItem
 	semanticIndexOnce   sync.Once
 	embedTexts          func(ctx context.Context, cfg llm.ProviderConfig, texts []string) ([][]float32, error)
+	localEmbedder       LocalEmbedder
 	// semanticQueryBreaker 在 embedding 服务连续失败时让查询路径快速跳过，见 semantic_query_breaker.go。
 	semanticQueryBreaker semanticQueryBreaker
 	// semanticIndexBreaker 在 embedding 主机长期下线时对后台向量索引做指数退避，防止队列和日志刷屏。

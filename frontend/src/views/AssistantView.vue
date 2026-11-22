@@ -1959,7 +1959,7 @@
                   <span class="track" aria-hidden="true"></span>
                   <span class="switch-label">语义检索</span>
                 </label>
-                <span class="hint">按意思搜聊天记录，比如搜「有什么吃的推荐」能找到「凤爪味道不错」。每条消息会多调用一次向量模型，模型在<a href="#" @click.prevent="editorTab = 'model'; selectedModelRole = 'embedding'">「模型」标签</a>的「向量嵌入」里选。</span>
+                <span class="hint">按意思搜聊天记录，比如搜「有什么吃的推荐」能找到「凤爪味道不错」。每条消息会多调用一次向量模型，模型在<a href="#" @click.prevent="editorTab = 'model'; selectedModelRole = 'embedding'">「模型」标签</a>的「向量嵌入」里选；没配时用内置的本地模型，第一次开启时自动下载。</span>
               </div>
               <div class="field wide">
                 <label class="switch">
@@ -2523,6 +2523,7 @@ import {
   exportPromptFile,
   importPromptFile,
   getConfig,
+  getBuiltinEmbeddingStatus,
   getBotProfileConfig,
   getModelHealth,
   listAppLogs,
@@ -2539,6 +2540,7 @@ import {
   getNewBotProfileDefaults,
   type MessageRelayPair,
   type LLMConfig,
+  type BuiltinEmbeddingStatus,
   type LLMModelInfo,
   type ModelCandidateCall,
   type ModelCandidateHealth,
@@ -3740,7 +3742,7 @@ function roleModelPlaceholder(role: RoleKey): string {
     if (role === "media_parse") return "跟随视觉理解模型";
     if (isPurposeRole(role)) return `跟随${purposeRoleFallbackLabel(role)}模型`;
     if (isMediaRole(role)) return "未配置，不启用";
-    if (role === "embedding") return "自动选用 embedding 分组";
+    if (role === "embedding") return "自动：embedding 分组优先，没有就用内置模型";
   }
   return roleForm.value[role]?.follow_chat ? "跟随对话模型" : "请选择模型（必填）";
 }
@@ -3869,16 +3871,49 @@ function modelInheritedText(role: RoleKey): string {
   const source = modelRoleSource(role);
   if (source === FOLLOW_VISION) return "跟随视觉理解";
   if (source === UNSPECIFIED) return `跟随${purposeRoleFallbackLabel(role)}`;
-  if (source === AUTO_EMBEDDING) return "自动选用 embedding 分组";
+  if (source === AUTO_EMBEDDING) return "自动选择";
   return "跟随对话";
 }
 
 function modelInheritedHint(role: RoleKey): string {
   if (modelRoleSource(role) === AUTO_EMBEDDING) {
     const profile = llmChannels.value.find((channel) => channel.group?.trim() === "embedding" && channel.model?.trim());
-    return profile ? `当前 ${profile.name || profile.id} · ${profile.model}` : "提供商里还没有这个分组的配置";
+    return profile ? `当前 ${profile.name || profile.id} · ${profile.model}` : builtinEmbeddingHint();
   }
   return roleDefaultsToFollowChat(role) ? `${modelRouteProviderLabel({ model: "", follow_chat: true })} · 不单独配置时默认` : "不单独配置时默认，添加模型后换成独立配置";
+}
+
+// 内置模型：没配 embedding 分组时语义检索用它，第一次用时后台下载。
+const builtinEmbedding = ref<BuiltinEmbeddingStatus | null>(null);
+let builtinEmbeddingTimer: ReturnType<typeof setTimeout> | undefined;
+
+function builtinEmbeddingHint(): string {
+  const status = builtinEmbedding.value;
+  const name = "内置 bge-small-zh 本地模型";
+  switch (status?.state) {
+    case "downloading":
+      return status.total > 0 ? `${name} · 下载中 ${Math.floor((status.downloaded / status.total) * 100)}%` : `${name} · 下载中`;
+    case "loading":
+      return `${name} · 加载中`;
+    case "ready":
+      return `${name} · 已就绪`;
+    case "failed":
+      return `${name} · 下载失败，10 分钟后自动重试${status.error ? `（${status.error}）` : ""}`;
+    default:
+      return `${name} · 开启语义检索后自动下载（约 95 MB），不花钱`;
+  }
+}
+
+async function refreshBuiltinEmbedding() {
+  clearTimeout(builtinEmbeddingTimer);
+  if (selectedModelRole.value !== "embedding" || modelRoleSource("embedding") !== AUTO_EMBEDDING) return;
+  try {
+    builtinEmbedding.value = await getBuiltinEmbeddingStatus();
+  } catch {
+    return;
+  }
+  const state = builtinEmbedding.value?.state;
+  if (state === "downloading" || state === "loading") builtinEmbeddingTimer = setTimeout(() => void refreshBuiltinEmbedding(), 2000);
 }
 
 function modelRoleRoutes(role: RoleKey): { route: RoleRoute; index: number }[] {
@@ -4578,6 +4613,12 @@ const DISABLED = "__disabled__";
 const UNSPECIFIED = "__unspecified__";
 // 向量嵌入的「自动」：不存这一档，后端取 embedding 分组的第一个配置档。
 const AUTO_EMBEDDING = "__auto_embedding__";
+// 放在这些常量和 roleForm 之后：watch 建立时就会求一次值。
+watch(() => selectedModelRole.value === "embedding" && modelRoleSource("embedding") === AUTO_EMBEDDING, (active) => {
+  if (active) void refreshBuiltinEmbedding();
+  else clearTimeout(builtinEmbeddingTimer);
+}, { immediate: true });
+onBeforeUnmount(() => clearTimeout(builtinEmbeddingTimer));
 
 // 没设过就跟随对话的用途：视觉理解、意图识别、图片生成。留空和显式「跟随对话」
 // 是同一个意思，界面上统一显示成后者，保存时也写成后者。
