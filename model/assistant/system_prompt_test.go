@@ -60,6 +60,10 @@ func TestDefaultSystemPromptCarriesNoFormattingRules(t *testing.T) {
 	if !strings.Contains(defaultPromptPlaintextRules, "消息不渲染 Markdown") || !strings.Contains(defaultPromptPlaintextRules, "1. 2. 3.") || strings.Contains(defaultPromptPlaintextRules, "主动使用 Markdown") {
 		t.Fatalf("plaintext rules should still cover Markdown: %q", defaultPromptPlaintextRules)
 	}
+	// 纯文本平台分条靠 ``` 把代码整块留在一条里、发出前才去掉，提示词不能再叫模型别用围栏。
+	if !strings.Contains(defaultPromptPlaintextRules, "```") || strings.Contains(defaultPromptPlaintextRules, "代码围栏") {
+		t.Fatalf("plaintext rules should ask for code fences: %q", defaultPromptPlaintextRules)
+	}
 	// 分条归内置规则，不放在可编辑的文本框里：用户改一次、关一次，或者存着旧版
 	// 默认值，分条就再也不会发生。
 	if strings.Contains(defaultPromptPlaintextRules, notificationSplitMarker) {
