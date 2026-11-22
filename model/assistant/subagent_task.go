@@ -367,12 +367,14 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 			timedOut := errors.Is(ctx.Err(), context.DeadlineExceeded) && rootCtx.Err() == nil
 			if item.task.Kind == "image" {
 				// 生图失败按原因分类并附处理建议，见 image_task_failure.go。
-				r.handleImageTaskFailure(rootCtx, item, err, timedOut, timeout)
+				advice := r.handleImageTaskFailure(rootCtx, item, err, timedOut, timeout)
+				r.recordFailedSubagentTask(item, advice.Reason)
 			} else {
 				reason := publicTaskErrorMessage(err)
 				if timedOut {
 					reason = fmt.Sprintf("超过任务时限（%s），已停止。", formatCodingDuration(timeout))
 				}
+				r.recordFailedSubagentTask(item, reason)
 				message := fmt.Sprintf("后台任务「%s」执行失败：%s", item.task.Name, reason)
 				_ = r.sendDiagnosticFollowup(rootCtx, item.event, subagentTaskPluginID(item), message)
 			}
@@ -417,6 +419,7 @@ func (r *Runtime) runPluginTask(rootCtx context.Context, item reservedSubagentTa
 	}
 	r.recordSubagentTaskLog(context.Background(), item, applog.KindOperation, applog.LevelInfo, "后台任务已完成", "")
 	r.persistSubagentTask(item, "completed", PluginTaskProgress{}, nil, true)
+	r.failedTasks.clearKind(item.event, item.task.Kind)
 	r.rememberCompletedSubagentTask(item)
 	r.removeSubagentTask(item.key, item.id)
 }

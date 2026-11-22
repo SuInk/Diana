@@ -150,8 +150,9 @@ func (r *Runtime) imageFailurePersonaAllowed(event MessageEvent, pluginID string
 	return boolValue(r.effectiveConfigForEvent(event).ErrorPersonaReplyEnabled, false)
 }
 
-// handleImageTaskFailure 记下生图失败的分类和建议，并在开关允许时发进聊天。
-func (r *Runtime) handleImageTaskFailure(ctx context.Context, item reservedSubagentTask, err error, timedOut bool, timeout time.Duration) {
+// handleImageTaskFailure 记下生图失败的分类和建议，并在开关允许时发进聊天；返回分类结果，
+// 调用方据此把失败记进回复尾部。
+func (r *Runtime) handleImageTaskFailure(ctx context.Context, item reservedSubagentTask, err error, timedOut bool, timeout time.Duration) imageFailureAdvice {
 	advice := classifyImageFailure(err, timedOut, timeout)
 	notice := advice.message(item.task.Name)
 	pluginID := subagentTaskPluginID(item)
@@ -227,4 +228,5 @@ func (r *Runtime) handleImageTaskFailure(ctx context.Context, item reservedSubag
 		traceMetadata["provider_label"] = label
 	}
 	r.recordDebugTrace(item.debugTrace, "图片任务失败", traceMetadata)
+	return advice
 }
