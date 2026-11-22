@@ -126,7 +126,7 @@ func TestTranscriptAfterKeepsSendOnlyFinishAsCalls(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			transcript := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
+			transcript := transcriptAfter(request.Messages, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
 			added := transcript[len(request.Messages):]
 			if tc.want == nil {
 				if len(added) != 0 {
@@ -151,16 +151,62 @@ func TestTranscriptAfterKeepsSendOnlyFinishAsCalls(t *testing.T) {
 	}
 }
 
-// 带别的工具的一步照旧配对：供应商拒绝没有结果的调用。
-func TestTranscriptAfterKeepsMixedCallsPaired(t *testing.T) {
+// 和 send 同一步的别的工具调用不进下一轮前缀，那一步的原生输出带着这些调用，一起丢掉。
+func TestTranscriptAfterDropsNonSendCallsInFinishStep(t *testing.T) {
 	request := llm.GenerateRequest{Messages: continuationTestMessages("问题")}
 	calls := []llm.ToolCall{
 		{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
 		{ID: "t1", Name: "web_search", Arguments: map[string]any{"query": "x"}},
 	}
-	added := transcriptAfter(request, &llm.GenerateResponse{ToolCalls: calls}, "")[len(request.Messages):]
-	if len(added) != 3 || len(added[0].ToolCalls) != 2 || added[1].ToolCallID != "s1" || added[2].ToolCallID != "t1" {
-		t.Fatalf("mixed step must keep calls paired with results: %#v", added)
+	added := transcriptAfter(request.Messages, &llm.GenerateResponse{ToolCalls: calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")[len(request.Messages):]
+	if len(added) != 2 || len(added[0].ToolCalls) != 1 || added[0].ToolCalls[0].ID != "s1" || len(added[0].ResponsesOutput) != 0 || added[1].ToolCallID != "s1" {
+		t.Fatalf("only the send call may stay: %#v", added)
+	}
+}
+
+// 上一轮调过工具，下一轮的前缀里只有这一轮开始时的请求和收尾的 send：11-22 续接把
+// 上一轮 relationship 的调用和结果留在前缀里，下一轮被问「详细记录」时照抄旧结果没再查。
+func TestRunnerTranscriptKeepsOnlySendAfterToolSteps(t *testing.T) {
+	search := &recordingSearchTool{output: `{"results":[{"title":"旧结果"}]}`}
+	client := &mixedReplyClient{responses: []*llm.GenerateResponse{
+		{ToolCalls: []llm.ToolCall{{ID: "w1", Name: WebSearchToolName, Arguments: map[string]any{"query": "x"}}}},
+		{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "查到了"}}}},
+	}}
+	runner, err := NewRunner(client, Config{WorkDir: t.TempDir(), MaxSteps: 4, SharedTools: map[string]bool{}}, NewToolRegistry(search))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: continuationTestMessages("查一下")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if search.calls != 1 || len(client.requests) != 2 {
+		t.Fatalf("calls=%d requests=%d", search.calls, len(client.requests))
+	}
+	first := client.requests[0].Messages
+	if len(resp.Transcript) != len(first)+2 {
+		t.Fatalf("transcript = %#v", resp.Transcript)
+	}
+	for index, message := range first {
+		got, want := resp.Transcript[index], message
+		got.CacheBreakpoint, want.CacheBreakpoint = false, false
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("prefix differs from the first request at %d:\n got %#v\nwant %#v", index, got, want)
+		}
+	}
+	for _, message := range resp.Transcript {
+		if strings.Contains(message.Content, "旧结果") {
+			t.Fatalf("tool result leaked into the next prefix: %#v", message)
+		}
+		for _, call := range message.ToolCalls {
+			if call.Name != finalizeToolName {
+				t.Fatalf("tool call leaked into the next prefix: %#v", call)
+			}
+		}
+	}
+	call := resp.Transcript[len(resp.Transcript)-2]
+	if len(call.ToolCalls) != 1 || sendText(call.ToolCalls[0]) != "查到了" || resp.Transcript[len(resp.Transcript)-1].Content != historyReplyResult {
+		t.Fatalf("final send missing: %#v", resp.Transcript[len(resp.Transcript)-2:])
 	}
 }
 

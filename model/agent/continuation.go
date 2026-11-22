@@ -187,57 +187,78 @@ func continuationMessages(continuation *Continuation, volatile []llm.Message) ([
 	return messages, stable
 }
 
-// transcriptAfter 是下一轮的前缀：这一轮最后一次实际发出的请求，接上模型的回复；
-// 回复里的每个工具调用都配一条结果，否则供应商会拒绝不成对的调用。
+// transcriptAfter 是下一轮的前缀：这一轮第一次实际发出的请求（base，含 hooks.prepare
+// 插进去的工具执行状态和输出前检查），加上这一轮中途补进来的同一人发言，再接上收尾的
+// send 调用和「已发送」。
 //
-// 只调了 send 的收尾也原样留下 send 调用和「已发送」，和重新组装时历史里自己的发言
-// 同一个形态（见 llm.HistoryReplyCallIDPrefix）；不说话的一轮什么都不记。
+// 这一轮各步的工具调用、工具结果、工具结果提醒和退回修复都不进前缀，下一轮只看得到
+// 机器人说了什么，和重新组装时历史里自己的发言同一个形态（见 llm.HistoryReplyCallIDPrefix）。
+// 11-22 群里 20:04 调 relationship 只取了最近 10 笔（共 344 笔），20:22 对方问「有没有
+// 什么详细记录」，续接把上一轮的调用和结果原样留在前缀里，swe-2 照抄那 10 笔，没有重新
+// 去查。工具结果只属于查它的那一轮，下一轮要用就重新查。
 //
-// 10-28（#1255）曾把这里还原成普通 assistant 发言：那时 send 刚删掉 silent 字段，不说话
+// 代价：调过工具的一轮，下一轮的前缀和上一轮最后一次请求在第一个工具调用处分叉，那一段
+// 之后的缓存用不上；没调工具的一轮第一次请求就是最后一次请求，前缀照旧逐字接上。
+//
+// 只调了 send 的收尾原样留下 send 调用和「已发送」；不说话的一轮什么都不记。和 send 同一
+// 步的其他工具调用同样不留，那一步的原生输出（ResponsesOutput、推理状态）里带着这些调用，
+// 一起丢掉。
+//
+// 10-28（#1255）曾把收尾还原成普通 assistant 发言：那时 send 刚删掉 silent 字段，不说话
 // 只能留空 text，前缀里的「send + 已发送」让模型把新一轮读成刚说过，同批线上静默样本
 // 16/21，还原后 9～11/21。现在 silent 是单独字段，11-07 把历史发言全部写成调用形态回放
 // 11-06 线上样本：静默样本 swe-2 24/48 → 20/48、terra 17/21 → 17/21，正常回复样本静默
 // swe-2 2/48 → 0/48、terra 26/152 → 30/152（同一批样本两边都静默），没有复现；留成纯文本
 // 反倒让离当前消息最近的那句发言成了模型照着学的纯文本收尾。
-func transcriptAfter(request llm.GenerateRequest, response *llm.GenerateResponse, text string) []llm.Message {
-	if len(request.Messages) == 0 {
+func transcriptAfter(base []llm.Message, response *llm.GenerateResponse, text string) []llm.Message {
+	if len(base) == 0 {
 		return nil
 	}
-	transcript := make([]llm.Message, 0, len(request.Messages)+4)
-	transcript = append(transcript, request.Messages...)
+	transcript := make([]llm.Message, 0, len(base)+4)
+	transcript = append(transcript, base...)
 	for index := range transcript {
 		transcript[index].CacheBreakpoint = false
 	}
 	if response == nil {
 		return transcript
 	}
-	if onlySendCalls(response.ToolCalls) && !anySendSpoke(response.ToolCalls) {
-		return transcript
+	calls := response.ToolCalls
+	if len(calls) > 0 {
+		calls = sendCallsOnly(calls)
+		if !anySendSpoke(calls) {
+			return transcript
+		}
 	}
-	assistant := llm.Message{
-		Role:              llm.RoleAssistant,
-		Content:           text,
-		ToolCalls:         response.ToolCalls,
-		ResponsesOutput:   response.ResponsesOutput,
-		ContinuationScope: response.ContinuationScope,
-		AnthropicThinking: response.AnthropicThinking,
-		ReasoningContent:  response.ReasoningContent,
-	}
-	if len(response.ToolCalls) > 0 {
+	assistant := llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: calls}
+	if len(calls) > 0 {
 		assistant.Content = response.Text
 	}
+	if len(calls) == len(response.ToolCalls) {
+		assistant.ResponsesOutput = response.ResponsesOutput
+		assistant.ContinuationScope = response.ContinuationScope
+		assistant.AnthropicThinking = response.AnthropicThinking
+		assistant.ReasoningContent = response.ReasoningContent
+	}
 	transcript = append(transcript, assistant)
-	for _, call := range response.ToolCalls {
+	for _, call := range calls {
 		result := historyReplyResult
-		switch {
-		case call.Name != finalizeToolName:
-			result = "本次调用没有执行：这一轮已经结束。"
-		case sendText(call) == "":
+		if sendText(call) == "" {
 			result = "没有发出：这一轮不说话。"
 		}
 		transcript = append(transcript, llm.Message{Role: llm.RoleTool, ToolCallID: call.ID, ToolName: call.Name, Content: result})
 	}
 	return transcript
+}
+
+// sendCallsOnly 只留下 send 调用。
+func sendCallsOnly(calls []llm.ToolCall) []llm.ToolCall {
+	var sends []llm.ToolCall
+	for _, call := range calls {
+		if call.Name == finalizeToolName {
+			sends = append(sends, call)
+		}
+	}
+	return sends
 }
 
 // anySendSpoke 报告这一步的 send 里有没有真的带正文发出去的。

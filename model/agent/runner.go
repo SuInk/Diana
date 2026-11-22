@@ -262,10 +262,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		promptTokens += llm.EstimateMessageTokens(message)
 	}
 
-	// lastRequest / lastResponse 是最后一次实际发出的请求和它的回复，收尾时拼成
-	// Response.Transcript 给下一轮续接。
-	var lastRequest llm.GenerateRequest
+	// lastResponse 是最后一次实际发出的请求的回复。turnBase 是这一轮第一次实际发出的
+	// 请求，laterInterjections 是那之后补进来的同一人发言；收尾时和 lastResponse 拼成
+	// Response.Transcript 给下一轮续接，这一轮的工具步骤不进去，见 transcriptAfter。
 	var lastResponse *llm.GenerateResponse
+	var turnBase, laterInterjections []llm.Message
 	var steps []Step
 	var lastText string
 	var lastProvider llm.Provider
@@ -348,7 +349,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			FinishReason:    reason,
 			DurationMS:      duration.Milliseconds(),
 			Sources:         responseSources(text, steps),
-			Transcript:      transcriptAfter(lastRequest, lastResponse, lastText),
+			Transcript:      transcriptAfter(append(turnBase, laterInterjections...), lastResponse, lastText),
 			ConversationKey: convKey,
 			Continued:       continued,
 			PromptTokens:    promptTokens,
@@ -408,7 +409,11 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 每个规划步都带上原生工具定义，包括结构化收尾工具。不支持原生 function
 		// calling 的供应商仍可使用兼容的 JSON 动作协议。
 		if req.Interjections != nil {
-			messages = append(messages, req.Interjections.Take()...)
+			taken := req.Interjections.Take()
+			messages = append(messages, taken...)
+			if turnBase != nil {
+				laterInterjections = append(laterInterjections, taken...)
+			}
 		}
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
@@ -420,7 +425,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		resp, err := r.client.Generate(planningCtx, planningRequest)
 		if err == nil && resp != nil {
-			lastRequest, lastResponse = planningRequest, resp
+			lastResponse = resp
+			if turnBase == nil {
+				turnBase = append([]llm.Message(nil), planningRequest.Messages...)
+			}
 		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
@@ -596,7 +604,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
 		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就当作 send 往下走，
 		// 照常过「说了却没做」复核和发送前审核。见 plain_text_review.go。
-		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(lastRequest.Tools) > 0 {
+		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(planningRequest.Tools) > 0 {
 			if !plainTextRepaired {
 				plainTextRepaired = true
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "普通文本没有发出")
@@ -1049,7 +1057,10 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		}
 		resp, err = r.client.Generate(ctx, prepared)
 		if err == nil && resp != nil {
-			lastRequest, lastResponse = prepared, resp
+			lastResponse = resp
+			if turnBase == nil {
+				turnBase = append([]llm.Message(nil), prepared.Messages...)
+			}
 		}
 		if err == nil && resp != nil && len(resp.ToolCalls) == 0 {
 			err = llm.RejectionNoticeError(resp.Text)
