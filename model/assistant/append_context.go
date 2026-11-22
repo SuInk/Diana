@@ -63,9 +63,10 @@ type appendContextLog struct {
 	pieces map[string]bool
 	// clockSentences 是前缀里实时时钟那条消息按句拆开的每一句，见 unsentClock。
 	clockSentences map[string]bool
-	// sentLines 是已发回复按行拆开的每一行：一次 send 写了几行，发出去拆成几条，
-	// 下一轮历史里就是几句各自的发言，整段比对不上。
-	sentLines map[string]bool
+	// sentClauses 是已发回复按行、再按断句拆开的每一小句：一次 send 写了几行，或者
+	// 纯文本平台照 MaiBot 在逗号、空格处断开，发出去拆成几条，下一轮历史里就是几句
+	// 各自的发言，整段比对不上。
+	sentClauses map[string]bool
 	// answered 是前缀里当作【当前需要回复的消息】或同轮补充答过的聊天消息（历史
 	// 去重键）。续接时它们不再作为历史行追加：追加的东西都排在上一轮回复后面，
 	// 模型读到的就是「答完以后对方又问了一遍」，换个说法再答一次。11-21 生产
@@ -428,20 +429,39 @@ func (log *appendContextLog) answeredKeys() []string {
 	return keys
 }
 
-// alreadySent 报告机器人的这句发言是不是已经在记录里：整句发过，或者它的每一行
-// 都是某次发过的回复里的一行（一次 send 拆成几条发出去的情形）。
+// alreadySent 报告机器人的这句发言是不是已经在记录里：整句发过，或者它的每一小句
+// 都是发过的回复里的一小句（一次 send 拆成几条发出去的情形）。
+//
+// 只按行比对时，MaiBot 断句在逗号处拆出的半句对不上：11-22 生产「嘿嘿，被拿去炫耀
+// 了」发成「嘿嘿」「被拿去炫耀了」两条，下一轮续接把后一条又当新发言追加在整句
+// send 后面，模型以为自己说了两遍，回了一句「手抖发两遍」。当天 413 轮主回复里
+// 247 轮的历史里有这种重复。
 func (log *appendContextLog) alreadySent(text string) bool {
 	key := appendContextSentKey(text)
 	if log.sent[key] {
 		return true
 	}
-	lines := sentReplyLines(key)
-	for _, line := range lines {
-		if !log.sentLines[line] {
+	clauses := sentReplyClauses(key)
+	for _, clause := range clauses {
+		if !log.sentClauses[clause] {
 			return false
 		}
 	}
-	return len(lines) > 0
+	return len(clauses) > 0
+}
+
+// sentReplyClauses 把一段回复按行、再按 MaiBot 的断句点拆成最细的小句。拆条时
+// 气泡的分界只会落在这些断句点上，所以一条气泡的每一小句都在原回复的小句里。
+func sentReplyClauses(text string) []string {
+	var clauses []string
+	for _, line := range sentReplyLines(text) {
+		for _, segment := range maiBotSplitSentencesWith(line, func() float64 { return 1 }) {
+			if clause := strings.TrimSpace(segment.Text); clause != "" {
+				clauses = append(clauses, clause)
+			}
+		}
+	}
+	return clauses
 }
 
 // sentReplyLines 把一段回复拆成去掉首尾空白的非空行，分条标记也算换行。
@@ -456,19 +476,19 @@ func sentReplyLines(text string) []string {
 	return lines
 }
 
-// index 从 prefix 算出 seen、sent、sentLines、latest、memory、pieces、clockSentences 这几张表。它们完全由
+// index 从 prefix 算出 seen、sent、sentClauses、latest、memory、pieces、clockSentences 这几张表。它们完全由
 // prefix 决定，落盘时只存 prefix，读回来再算一遍；answered 不由 prefix 决定，单独落盘。
 func (log *appendContextLog) index() {
 	log.seen, log.sent, log.latest, log.memory, log.pieces = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]bool{}, map[string]bool{}
-	log.sentLines, log.clockSentences = map[string]bool{}, map[string]bool{}
+	log.sentClauses, log.clockSentences = map[string]bool{}, map[string]bool{}
 	if log.answered == nil {
 		log.answered = map[string]bool{}
 	}
 	markSent := func(text string) {
 		key := appendContextSentKey(text)
 		log.sent[key] = true
-		for _, line := range sentReplyLines(key) {
-			log.sentLines[line] = true
+		for _, clause := range sentReplyClauses(key) {
+			log.sentClauses[clause] = true
 		}
 	}
 	for _, message := range log.prefix {

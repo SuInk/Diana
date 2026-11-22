@@ -70,7 +70,7 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
 		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.memory, original.memory) ||
-		!reflect.DeepEqual(loaded.pieces, original.pieces) || !reflect.DeepEqual(loaded.sentLines, original.sentLines) ||
+		!reflect.DeepEqual(loaded.pieces, original.pieces) || !reflect.DeepEqual(loaded.sentClauses, original.sentClauses) ||
 		!reflect.DeepEqual(loaded.answered, original.answered) {
 		t.Fatal("由前缀算出的表和原来不一样")
 	}
