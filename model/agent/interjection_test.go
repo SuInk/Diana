@@ -160,3 +160,53 @@ func (c alwaysInterjectClient) Generate(ctx context.Context, req llm.GenerateReq
 	c.q.push("又补了一句")
 	return c.client.Generate(ctx, req)
 }
+
+// 收尾那一步本身没有补充，复核那几秒里同群前一轮的回复定稿了：收尾前再看一眼，
+// 带着它重做，不把复核前的那一版发出去。
+type reviewInterjectedClient struct {
+	mu       sync.Mutex
+	requests []llm.GenerateRequest
+	onReview func()
+}
+
+func (c *reviewInterjectedClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.mu.Lock()
+	c.requests = append(c.requests, req)
+	n := len(c.requests)
+	c.mu.Unlock()
+	switch n {
+	case 1:
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "嘿嘿被夸了"}}}}, nil
+	case 2:
+		c.onReview()
+		return &llm.GenerateResponse{Text: `{"unfinished":"","missing":""}`}, nil
+	case 3:
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "s2", Name: finalizeToolName, Arguments: map[string]any{"silent": true, "silent_reason": "那边已经回了"}}}}, nil
+	}
+	return &llm.GenerateResponse{Text: `{"unfinished":"","missing":""}`}, nil
+}
+
+func TestRunnerRedoesFinalWhenInterjectionArrivesDuringClaimReview(t *testing.T) {
+	q := &queuedInterjections{}
+	client := &reviewInterjectedClient{onReview: func() {
+		q.push("【你另一条回复刚发到了这里】「嘿嘿收下这个夸奖」（正在发）")
+	}}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true, UnfinishedClaimReview: true}, NewToolRegistry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "你是懂篮球的"}}, Interjections: q})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Silent || len(client.requests) != 3 {
+		t.Fatalf("requests = %d, resp = %#v", len(client.requests), resp)
+	}
+	found := false
+	for _, message := range client.requests[2].Messages {
+		found = found || strings.Contains(message.Content, "嘿嘿收下这个夸奖")
+	}
+	if !found {
+		t.Fatal("redo step did not see the sibling reply")
+	}
+}
