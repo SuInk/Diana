@@ -594,9 +594,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			continue
 		}
 		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
-		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就复核「说了的事做没做」：
-		// 「在画了，画好自动发出来」这种一个工具都没调的空口承诺按静默结束，不发出去；
-		// 其余当作正常 send 往下走，照常过发送前审核。见 plain_text_review.go。
+		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就当作 send 往下走，
+		// 照常过「说了却没做」复核和发送前审核。见 plain_text_review.go。
 		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(lastRequest.Tools) > 0 {
 			if !plainTextRepaired {
 				plainTextRepaired = true
@@ -680,20 +679,21 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 					continue
 				}
 			}
-			// 说了却没做的不发：「我查一下」「在画了」「定好了」这类话，本轮工具记录里要有
+			// 说了却没做的先退回：「我查一下」「在画了」「定好了」这类话，本轮工具记录里要有
 			// 对应的调用。复核让模型判断，不看关键词，见 plain_text_review.go。第一次查出来
-			// 退回去，让它要么真去做、要么照实说；第二次还有就这一轮不说话——空口承诺发出去
-			// 比不说更糟。
+			// 退回去，让它要么真去做、要么照实说；第二次还有就照发，不吞掉。11-22 群里问
+			// 「有没有详细记录」，退回后的草稿仍判说了没做，整轮静默，对方什么都没收到——
+			// 问了不回比回得不完整更糟。
 			if r.cfg.UnfinishedClaimReview && claimReviews < 2 {
 				claimReviews++
 				verdict := r.reviewUnfinishedClaim(ctx, req.Messages, action.Content, steps)
 				if unfinished := verdict.Unfinished; unfinished != "" {
-					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复说了却没做："+unfinished)
 					if claimReviews == 1 {
+						emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复说了却没做："+unfinished)
 						messages = appendToolRepair(messages, resp, lastText, unfinishedClaimRepair(unfinished))
 						continue
 					}
-					return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: unfinishedClaimReason + unfinished}, "unfinished_claim")
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "退回后仍说了却没做，照发："+unfinished)
 				}
 				// 漏答只退回第一次，第二次照发：11-21 问「幸福者退让的来源和含义」只答了来源，
 				// 素材里明明有含义。

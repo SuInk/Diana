@@ -249,8 +249,8 @@ func TestRunnerPlainTextNotSentBouncesOnce(t *testing.T) {
 }
 
 // 退回后还是纯文本就当作 send 收尾，照样过「说了却没做」复核：一个工具没调就说在画，
-// 先退回一次，再这样就按静默结束，原因写进 SilentReason；占位文本的那次修复也算退回过。
-func TestRunnerPlainTextNotSentDropsUnfinishedSecondPlainText(t *testing.T) {
+// 先退回一次，再这样也照发，不让这一轮静默；占位文本的那次修复也算退回过。
+func TestRunnerPlainTextSendsUnfinishedSecondPlainTextAfterBounce(t *testing.T) {
 	for _, first := range []string{"在画了，画好自动发出来", "[搜索 WePlay 参展商名单]"} {
 		client := &mixedReplyClient{responses: []*llm.GenerateResponse{
 			{Text: first}, {Text: "马上就画好"}, {Text: `{"unfinished":"马上就画好"}`},
@@ -264,7 +264,7 @@ func TestRunnerPlainTextNotSentDropsUnfinishedSecondPlainText(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !resp.Silent || resp.Text != "" || resp.FinishReason != "unfinished_claim" || resp.SilentReason != unfinishedClaimReason+"马上就画好" || len(client.requests) != 5 {
+		if resp.Silent || resp.Text != "马上就画好" || len(client.requests) != 5 {
 			t.Fatalf("first=%q requests=%d response=%#v", first, len(client.requests), resp)
 		}
 		review := client.requests[2]
