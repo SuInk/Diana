@@ -680,6 +680,78 @@ func TestSupplementedReplyDoesNotContinueFromDiscardedDraft(t *testing.T) {
 	}
 }
 
+// 11-22 生产：上一版搜到 GTA6 已经发售，对方又连发几条，整轮重来时搜索结果被丢掉，
+// 重来那版没再搜，凭旧印象答错。重来的一版要带着上一版执行过的工具调用和结果。
+func TestSupplementedReplyCarriesExecutedTools(t *testing.T) {
+	disabled := false
+	provider := &auditBlockingProvider{
+		sequenceLLMProvider: &sequenceLLMProvider{replies: []string{
+			`tool_calls:[{"id":"h1","name":"chat_history","arguments":{"limit":5}}]`,
+			`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"只回答第一条的草稿"}}]`,
+			`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"两条一起回答"}}]`,
+		}},
+		auditStarted: make(chan struct{}), releaseAudit: make(chan struct{}),
+	}
+	channel := &recordingChannel{}
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42", BotReplyLoopDetectionEnabled: &disabled},
+		channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) { return provider, nil })
+
+	root := directedGroupMessage("root", "user-1", "GTA6 算是烂了")
+	runtime.noteDirectedInbound(root)
+	runtime.remember(root)
+	done := make(chan error, 1)
+	go func() {
+		_, err := runtime.replyAndRecord(withOutboundTurn(context.Background(), "root-turn"), root, root.RawMessage, "replied")
+		done <- err
+	}()
+	select {
+	case <-provider.auditStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("send audit did not start")
+	}
+	followUp := directedGroupMessage("follow-up", "user-1", "游戏科学将替代 R 星")
+	runtime.noteDirectedInbound(followUp)
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), followUp); handled || outcome != "merged_into_reply" {
+		t.Fatalf("follow-up handled=%v outcome=%q", handled, outcome)
+	}
+	close(provider.releaseAudit)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("merged reply did not finish")
+	}
+	if sent := channel.sentSnapshot(); len(sent) != 1 || sent[0].Text != "两条一起回答" {
+		t.Fatalf("sent=%#v", sent)
+	}
+	var replies []llm.GenerateRequest
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Tools) > 0 {
+			replies = append(replies, request)
+		}
+	}
+	if len(replies) != 3 {
+		t.Fatalf("reply requests = %d, want tool step, draft and regeneration", len(replies))
+	}
+	carriedCall, carriedResult := false, false
+	for _, message := range replies[2].Messages {
+		for _, call := range message.ToolCalls {
+			carriedCall = carriedCall || call.ID == "h1"
+		}
+		carriedResult = carriedResult || (message.Role == llm.RoleTool && message.ToolCallID == "h1")
+		for _, call := range message.ToolCalls {
+			if text, _ := call.Arguments["text"].(string); strings.Contains(text, "只回答第一条的草稿") {
+				t.Fatalf("regeneration still sees the discarded draft call: %#v", call)
+			}
+		}
+	}
+	if !carriedCall || !carriedResult {
+		t.Fatalf("regeneration lacks the first attempt's tool exchange: %#v", replies[2].Messages)
+	}
+}
+
 func appendContextTestEvent() MessageEvent {
 	return MessageEvent{
 		Kind:           EventKindGroup,
