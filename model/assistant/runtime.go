@@ -703,6 +703,8 @@ type Runtime struct {
 	subagentMu          sync.Mutex
 	subagentTasks       map[string]activeSubagentTask
 	subagentRecent      map[string]SubagentTaskStatus
+	// failedTasks 是近期失败的后台任务，进回复尾部，见 subagent_failure_context.go。
+	failedTasks failedSubagentTaskLog
 	// backgroundAgents 是后台长任务每轮的记录，status 查询用；归 subagentMu 管。
 	backgroundStartMu   sync.Mutex
 	backgroundAgents    map[string]*backgroundAgentState

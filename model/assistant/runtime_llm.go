@@ -1147,6 +1147,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	groupStyle := r.groupStylePrompt(event, cfg)
 	appendPromptSection(&tail, groupStyle)
 	appendPromptSection(&tail, r.groupRulesPrompt(event, cfg))
+	appendPromptSection(&tail, r.failedSubagentTasksPrompt(event, cfg))
 	groupVoice := r.groupLengthNormPrompt(event, cfg)
 	appendPromptSection(&tail, groupVoice)
 	// 学群友的段落后面跟一段「这几类不学」，见 group_style_filter.go。
