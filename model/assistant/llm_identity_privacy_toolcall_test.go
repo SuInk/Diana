@@ -131,9 +131,12 @@ func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 		`{"message_id":"1145141919","quoted_message_id":"-810975"}`,
 		// 事件里没登记、只在历史文本里出现过的也要认出来。
 		"<diana-quote id=\"2233445566\"/> 旧消息",
+		// 媒体索引和 history_media 结果里的写法，短号也要认。
+		"- message_id=81097【消息时间：2026-11-22 00:54:06（UTC+08:00）】 Alice · 图片×1",
+		"message_id=-810975 第1张：猫",
 	} {
 		masked := scope.protectText(sample)
-		if strings.Contains(masked, "1145141919") || strings.Contains(masked, "810975") || strings.Contains(masked, "2233445566") {
+		if strings.Contains(masked, "1145141919") || strings.Contains(masked, "810975") || strings.Contains(masked, "2233445566") || strings.Contains(masked, "81097【") {
 			t.Fatalf("message id leaked: %q -> %q", sample, masked)
 		}
 		if !strings.Contains(masked, "im_message_") {
@@ -142,6 +145,26 @@ func TestIdentityPrivacyMasksMessageIDsRoundTrip(t *testing.T) {
 		if restored := scope.restoreText(masked); restored != sample {
 			t.Fatalf("round trip broken: %q -> %q -> %q", sample, masked, restored)
 		}
+	}
+}
+
+// 续接把前几轮的媒体索引原样带进新请求，这一轮的 scope 可能没登记过里面的短号。
+// 不管登记没登记，同一行发出去都得一样，否则前缀从这里断开、后面整段缓存失效。
+func TestIdentityPrivacyMasksCarriedMediaIndexLinesStably(t *testing.T) {
+	line := "【更早的图片与文件索引，已不在下面的聊天记录里】\n- message_id=323568【消息时间：2026-11-22 00:53:58（UTC+08:00）】 Alice · 图片×1"
+	registered := newIdentityPrivacyScopeWithSalt("salt")
+	registered.registerEvent(MessageEvent{Kind: EventKindGroup, GroupID: "123456", UserID: "10001", MessageID: "323568"})
+	fresh := newIdentityPrivacyScopeWithSalt("salt")
+
+	want := registered.protectText(line)
+	if strings.Contains(want, "323568") {
+		t.Fatalf("message id leaked: %q", want)
+	}
+	if got := fresh.protectText(line); got != want {
+		t.Fatalf("carried line masked differently without registration:\n got %q\nwant %q", got, want)
+	}
+	if restored := fresh.restoreText(want); restored != line {
+		t.Fatalf("round trip broken: %q", restored)
 	}
 }
 

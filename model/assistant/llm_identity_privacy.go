@@ -89,6 +89,10 @@ var (
 	// 消息 ID 单独匹配：它允许负号，长度范围也和 QQ 号不同。
 	identityPrivacyMessageIDPattern   = regexp.MustCompile(`(?i)"([a-z0-9_]*message_ids?)"\s*:\s*(?:"(-?[0-9]{4,19})"|(-?[0-9]{4,19}))`)
 	identityPrivacyReplyMarkerPattern = regexp.MustCompile(`<diana-quote id="(-?[0-9]{4,19})"/>|\[回复:(-?[0-9]{4,19})\]`)
+	// 媒体索引、history_media 结果这类行写的是 message_id=<号>。只追加续接会把前几轮
+	// 的这些行原样带着走，短号（Telegram 六位递增 ID）不进全局名单，要是只靠本轮登记，
+	// 同一行这次是别名、下次是真号，前缀从那里断开，真号也发给了上游。
+	identityPrivacyMessageIDLabelPattern = regexp.MustCompile(`message_id=(-?[0-9]{4,19})(?:[^0-9]|$)`)
 	// 提及标记里的 id 也要脱敏。它通常在候选 JSON 里已经登记过，但提示词里
 	// 只出现在标记中的那一个（当前发言者）不该漏网。
 	identityPrivacyMentionMarkerPattern = regexp.MustCompile(`<diana-at id="([1-9][0-9]{4,13})"/>`)
@@ -708,6 +712,9 @@ func (s *identityPrivacyScope) discoverStructuredIDs(text string) {
 	}
 	for _, match := range identityPrivacyReplyMarkerPattern.FindAllStringSubmatch(text, -1) {
 		s.registerMessageID(firstNonEmpty(match[1], match[2]))
+	}
+	for _, match := range identityPrivacyMessageIDLabelPattern.FindAllStringSubmatch(text, -1) {
+		s.registerMessageID(match[1])
 	}
 	for _, match := range identityPrivacyMentionMarkerPattern.FindAllStringSubmatch(text, -1) {
 		s.register(match[1], "user")

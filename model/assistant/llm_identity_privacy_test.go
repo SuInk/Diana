@@ -77,8 +77,11 @@ func TestIdentityPrivacyProviderMasksRequestsAndRestoresReplies(t *testing.T) {
 	if !strings.Contains(protected, llmIdentityPrivacyPrompt) {
 		t.Fatalf("protected request missing privacy instructions: %s", protected)
 	}
-	if !strings.Contains(protected, "20260716") || !strings.Contains(protected, "30003") {
-		t.Fatalf("non-QQ date or message ID was changed: %s", protected)
+	if !strings.Contains(protected, "20260716") {
+		t.Fatalf("non-ID date was changed: %s", protected)
+	}
+	if strings.Contains(protected, "30003") {
+		t.Fatalf("message id leaked: %s", protected)
 	}
 	want := `{"action":"final","content":"[CQ:at,qq=10002] 已处理 20001"}`
 	if response.Text != want {
