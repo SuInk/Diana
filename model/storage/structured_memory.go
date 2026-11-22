@@ -1233,6 +1233,24 @@ WHERE status = 'active'
 	return result.RowsAffected()
 }
 
+// ForgetStructuredMemory 让一条还生效的记忆失效，见 assistant.StructuredMemoryForgetStore。
+// 谁能删由 memory 工具判定，这里只管按 ID 改状态。
+func (s *SQLiteStore) ForgetStructuredMemory(ctx context.Context, id string) (bool, error) {
+	defer s.observeStorage(ctx, "ForgetStructuredMemory", "write")()
+	if s == nil || s.db == nil {
+		return false, nil
+	}
+	if id = strings.TrimSpace(id); id == "" {
+		return false, nil
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE memory_items SET status = 'forgotten', updated_at = ? WHERE id = ? AND status = 'active'`, time.Now().UTC().Unix(), id)
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	return affected > 0, err
+}
+
 // ListStructuredMemoriesBySubject 按人取这个人身上还生效的长期记忆，供控制台人员
 // 页展示。
 //

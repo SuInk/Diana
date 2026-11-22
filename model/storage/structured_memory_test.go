@@ -544,3 +544,35 @@ func TestDeferMemoryJobRefundsAttemptOnlyForRecentJobs(t *testing.T) {
 		t.Fatalf("old job attempts = %d, want 1", got)
 	}
 }
+
+func TestForgetStructuredMemoryByID(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	written, err := store.ApplyMemoryCandidates(ctx, assistant.MemoryWriteRequest{
+		SubjectUserID: "10001", Session: "group:123", EventKind: assistant.EventKindGroup, GroupID: "123",
+		SourceMessageID: "m1", SourceEventTime: time.Unix(100, 0),
+		Candidates: []assistant.MemoryCandidate{{
+			Action: assistant.MemoryActionUpsert, Key: "instruction.issue.permission", Kind: assistant.MemoryKindInstruction,
+			Topic: "Issue 权限", Content: "在 Gitea 官方群 123 中只有 10001 能创建 Issue", Evidence: "只有我可以让它创建issue",
+			SourceType: assistant.MemorySourceExplicit, Confidence: 0.95, Importance: 0.7, Visibility: assistant.MemoryVisibilitySession,
+		}},
+	})
+	if err != nil || len(written) != 1 {
+		t.Fatalf("write = %#v, %v", written, err)
+	}
+	id := written[0].ID
+	if ok, err := store.ForgetStructuredMemory(ctx, id); err != nil || !ok {
+		t.Fatalf("forget = %v, %v", ok, err)
+	}
+	if ok, err := store.ForgetStructuredMemory(ctx, id); err != nil || ok {
+		t.Fatalf("second forget should report not active: %v, %v", ok, err)
+	}
+	items, err := store.ListStructuredMemories(ctx, assistant.StructuredMemoryQuery{SubjectUserID: "10001", Session: "group:123", GroupID: "123", IDs: []string{id}, MaxCandidates: 1})
+	if err != nil || len(items) != 0 {
+		t.Fatalf("forgotten memory still listed: %#v, %v", items, err)
+	}
+}

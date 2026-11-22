@@ -275,3 +275,10 @@ type MemoryJobTimeoutRetrier interface {
 type StructuredMemoryTouchStore interface {
 	TouchStructuredMemories(ctx context.Context, ids []string, at time.Time) error
 }
+
+// StructuredMemoryForgetStore 是可选能力：按 ID 让一条还生效的记忆失效，供 memory
+// 工具的 forget 用。和门控的 forget 一样只改状态不删行，出处还查得到；返回 false
+// 表示这条本来就不是生效状态。
+type StructuredMemoryForgetStore interface {
+	ForgetStructuredMemory(ctx context.Context, id string) (bool, error)
+}
