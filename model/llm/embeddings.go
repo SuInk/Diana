@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/SuInk/diana/model/netguard"
+	"google.golang.org/genai"
 )
 
 // EmbedTextsWithUsage 和 EmbedTexts 一样，另外带回上游报的 token 用量，供用量统计。
@@ -24,6 +25,13 @@ func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string
 	}
 	if len(texts) == 0 {
 		return nil, Usage{}, nil
+	}
+	options := clientOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
+	if cfg.Provider == ProviderGemini {
+		return embedTextsGemini(ctx, cfg, texts, options)
 	}
 	body, err := json.Marshal(map[string]any{"model": cfg.Model, "input": texts})
 	if err != nil {
@@ -50,10 +58,6 @@ func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string
 		req.Header.Set("User-Agent", userAgent)
 	}
 
-	options := clientOptions{}
-	for _, opt := range opts {
-		opt(&options)
-	}
 	client := newTextHTTPClient(httpClientWithRequestLimits(options.httpClient, cfg), cfg)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -89,6 +93,39 @@ func EmbedTextsWithUsage(ctx context.Context, cfg ProviderConfig, texts []string
 		vectors[position] = item.Embedding
 	}
 	return vectors, usageFromPayload(parsed.Usage), nil
+}
+
+// embedTextsGemini 走 Gemini 自己的 batchEmbedContents。
+//
+// 上面那条路只会说 OpenAI 的 /v1/embeddings：Gemini 配置档不填地址时请求被发到
+// api.openai.com，还把 Gemini 的 key 当 Bearer 带过去，回 401，语义检索于是一条
+// 向量都写不进去，只在日志里报错。聊天和生图本来就走 genai SDK，这里用同一个
+// 客户端，key 和地址的处理与它们一致。
+func embedTextsGemini(ctx context.Context, cfg ProviderConfig, texts []string, options clientOptions) ([][]float32, Usage, error) {
+	client, err := newGeminiClient(cfg, newTextHTTPClient(httpClientWithRequestLimits(options.httpClient, cfg), cfg))
+	if err != nil {
+		return nil, Usage{}, err
+	}
+	contents := make([]*genai.Content, len(texts))
+	for index, text := range texts {
+		contents[index] = genai.NewContentFromText(text, genai.RoleUser)
+	}
+	resp, err := client.client.Models.EmbedContent(ctx, cfg.Model, contents, nil)
+	if err != nil {
+		return nil, Usage{}, fmt.Errorf("llm: gemini embeddings: %w", err)
+	}
+	if len(resp.Embeddings) != len(texts) {
+		return nil, Usage{}, fmt.Errorf("llm: embeddings returned %d vectors for %d inputs", len(resp.Embeddings), len(texts))
+	}
+	vectors := make([][]float32, len(resp.Embeddings))
+	for position, item := range resp.Embeddings {
+		if item == nil || len(item.Values) == 0 {
+			return nil, Usage{}, fmt.Errorf("llm: embeddings item %d is empty", position)
+		}
+		vectors[position] = item.Values
+	}
+	// Gemini API 的 batchEmbedContents 不报 token 用量。
+	return vectors, Usage{}, nil
 }
 
 func truncateForError(payload []byte) string {
