@@ -419,6 +419,75 @@ func TestEmbeddingRoleCanBeTurnedOff(t *testing.T) {
 	}
 }
 
+type fakeLocalEmbedder struct {
+	ready      atomic.Bool
+	readyCalls atomic.Int32
+	texts      []string
+}
+
+func (f *fakeLocalEmbedder) Ready() bool {
+	f.readyCalls.Add(1)
+	return f.ready.Load()
+}
+
+func (f *fakeLocalEmbedder) Embed(_ context.Context, texts []string) ([][]float32, error) {
+	f.texts = append(f.texts, texts...)
+	vectors := make([][]float32, len(texts))
+	for index := range vectors {
+		vectors[index] = []float32{0, 1}
+	}
+	return vectors, nil
+}
+
+// 没配 embedding 时用内置模型；没就绪前当作没配，就绪后不走 HTTP 直接本地算。
+// 配了 embedding 分组、或在模型分配里关掉/选了别的，都不该被内置模型顶替。
+func TestEmbeddingProviderConfigFallsBackToBuiltinModel(t *testing.T) {
+	enabled := true
+	cfg := BotConfig{SemanticSearchEnabled: &enabled}
+	runtime := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{}, nil, nil, nil)
+	if _, ok := runtime.embeddingProviderConfig(cfg); ok {
+		t.Fatal("without a local embedder nothing should resolve")
+	}
+
+	local := &fakeLocalEmbedder{}
+	runtime.SetLocalEmbedder(local)
+	if _, ok := runtime.embeddingProviderConfig(BotConfig{}); ok || local.readyCalls.Load() != 0 {
+		t.Fatal("with semantic search off the built-in model must not be used or downloaded")
+	}
+	if runtime.semanticSearchActive(cfg) {
+		t.Fatal("semantic search must wait for the built-in model to be ready")
+	}
+	if local.readyCalls.Load() == 0 {
+		t.Fatal("asking for the embedding config should start preparing the built-in model")
+	}
+	local.ready.Store(true)
+	resolved, ok := runtime.embeddingProviderConfig(cfg)
+	if !ok || resolved.Provider != builtinEmbeddingProvider || resolved.Model != "builtin:bge-small-zh-v1.5" {
+		t.Fatalf("builtin embedding = %+v, %v", resolved, ok)
+	}
+	vectors, err := runtime.embedTextsFunc()(context.Background(), resolved, []string{"凤爪味道不错"})
+	if err != nil || len(vectors) != 1 || strings.Join(local.texts, ",") != "凤爪味道不错" {
+		t.Fatalf("builtin embed = %v, %v, texts %v", vectors, err, local.texts)
+	}
+
+	off := BotConfig{SemanticSearchEnabled: &enabled, ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {Disabled: true}}}
+	if _, ok := runtime.embeddingProviderConfig(off); ok {
+		t.Fatal("turning the embedding role off must not fall back to the built-in model")
+	}
+	missing := BotConfig{SemanticSearchEnabled: &enabled, ModelRoles: map[string]ModelRole{llm.GroupEmbedding: {ProfileID: "gone", Model: "embed-v2"}}}
+	if _, ok := runtime.embeddingProviderConfig(missing); ok {
+		t.Fatal("a chosen but missing provider must not silently become the built-in model")
+	}
+
+	withProfile := NewRuntime(BotConfig{}, nilChannel{}, NewPluginManager(), &stubLLMProfileStore{set: llm.ProfileSet{Profiles: []llm.Profile{
+		{ID: "embed", Name: "embed", Group: llm.GroupEmbedding, Config: llm.ProviderConfig{Provider: llm.ProviderOpenAICompatible, Model: "embed-v1", APIKey: "k"}},
+	}}}, nil, nil, nil)
+	withProfile.SetLocalEmbedder(local)
+	if resolved, ok := withProfile.embeddingProviderConfig(cfg); !ok || resolved.Model != "embed-v1" {
+		t.Fatalf("embedding group should win over the built-in model, got %+v", resolved)
+	}
+}
+
 func TestSemanticIndexBatchEmbedsPerModel(t *testing.T) {
 	store := newSemanticRevisionStore()
 	runtime := newSemanticRuntime(t, true, store, nil)
