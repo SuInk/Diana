@@ -8,6 +8,7 @@ go 1.25.0
 toolchain go1.26.6
 
 require (
+	github.com/MoeForge/moejs v0.1.1
 	github.com/anthropics/anthropic-sdk-go v1.51.1
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327
 	github.com/chromedp/chromedp v0.14.2
@@ -37,6 +38,7 @@ require (
 	cloud.google.com/go v0.116.0 // indirect
 	cloud.google.com/go/auth v0.18.2 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
+	github.com/MoeForge/moego v0.1.0-alpha.3 // indirect
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/bytedance/gopkg v0.1.3 // indirect

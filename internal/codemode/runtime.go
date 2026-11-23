@@ -1,7 +1,7 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
-// Package codemode runs model scripts in an embedded QuickJS/WASM VM and
+// Package codemode runs model scripts in an in-process moejs runtime and
 // bridges their tool calls to capability-scoped Go callbacks.
 package codemode
 
@@ -14,6 +14,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/MoeForge/moejs"
+	"github.com/MoeForge/moejs/engine"
 
 	"github.com/SuInk/diana/internal/safego"
 	"github.com/SuInk/diana/internal/secretmask"
@@ -30,7 +33,7 @@ const (
 type Call func(context.Context, string, json.RawMessage) (any, error)
 
 // Runtime executes scripts in process; the zero value is ready once Prepare
-// has compiled the embedded VM.
+// has compiled the embedded prelude.
 type Runtime struct{}
 
 type Request struct {
@@ -61,11 +64,11 @@ type Result struct {
 	} `json:"error,omitempty"`
 }
 
-// Prepare compiles the embedded QuickJS module once per process. It needs no
-// Node, npm or network.
+// Prepare compiles the embedded prelude once per process. It needs no Node,
+// npm or network.
 func Prepare() (Runtime, error) {
-	if _, err := loadEngine(); err != nil {
-		return Runtime{}, fmt.Errorf("codemode: load QuickJS: %w", err)
+	if _, err := compilePrelude(); err != nil {
+		return Runtime{}, fmt.Errorf("codemode: compile prelude: %w", err)
 	}
 	return Runtime{}, nil
 }
@@ -151,10 +154,11 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 	defer cancel()
 	vmCtx, stopVM := context.WithCancel(ctx)
 	defer stopVM()
-	machine, err := newVM(vmCtx, time.Now().Add(req.Timeout))
+	preludeScript, err := compilePrelude()
 	if err != nil {
 		return Result{}, err
 	}
+	machine := newVM(vmCtx, time.Now().Add(req.Timeout))
 	defer machine.close()
 
 	toolCtx, stopTools := context.WithCancel(ctx)
@@ -221,7 +225,7 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 			}
 		}()
 	}
-	machine.bridge = func(kind string, args []uint32) {
+	machine.bridge = func(kind string, args []moejs.Value) {
 		if finished || stopReason != "" {
 			return
 		}
@@ -231,15 +235,15 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 				stopReason = "malformed bridge call"
 				return
 			}
-			id := int(machine.toNumber(args[0]))
+			id := int(args[0].AsNumber())
 			name := machine.toString(args[1])
 			if id > req.MaxCalls {
 				stopReason = "script tool-call budget exceeded"
-				machine.interrupt = true
+				machine.stop()
 				return
 			}
 			var input string
-			if len(args) > 2 && !machine.isUndefined(args[2]) {
+			if len(args) > 2 && !args[2].IsUndefined() {
 				input = machine.toString(args[2])
 			}
 			trimmed := strings.TrimSpace(input)
@@ -269,11 +273,11 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 				return
 			}
 			finished = true
-			doneOK = machine.call("qjs_get_bool", uint64(args[0])) != 0
-			if doneHasValue = !machine.isUndefined(args[1]); doneHasValue {
+			doneOK = args[0].IsTrue()
+			if doneHasValue = !args[1].IsUndefined(); doneHasValue {
 				donePayload = machine.toString(args[1])
 			}
-			if doneOK && !machine.isUndefined(args[2]) {
+			if doneOK && !args[2].IsUndefined() {
 				doneWrites = machine.toString(args[2])
 			}
 		}
@@ -289,48 +293,51 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 		if stopReason != "" {
 			return failure("host_limit", stopReason), nil
 		}
+		if errors.Is(err, moejs.ErrMemoryLimit) {
+			// QuickJS threw a catchable out-of-memory error here; moejs stops the
+			// script outright, which the model sees as the same script failure.
+			return failure("script", "out of memory: the script exceeded its 32 MiB heap"), nil
+		}
 		if machine.interrupted() {
 			return timeout(), nil
 		}
 		return failure("sandbox", secretmask.Text(err.Error())), nil
 	}
 
-	prelude, exception := machine.eval(preludeSource, "codemode-prelude.js")
-	if machine.err == nil && exception != 0 {
-		machine.err = errors.New("prelude failed: " + machine.toString(exception))
+	undefined := moejs.Undefined()
+	prelude, err := machine.rt.RunScript(preludeScript)
+	if err != nil {
+		return sandboxFailure(fmt.Errorf("prelude failed: %w", err))
 	}
-	bridge := machine.newHostFunction("bridge")
-	toolsArg, globalsArg, storeArg := machine.newString(string(toolsJSON)), machine.newString("[]"), machine.newString(string(storeJSON))
-	api, exception := machine.callFunction(prelude, machine.undefined, bridge, toolsArg, globalsArg, storeArg)
-	if machine.err == nil && exception != 0 {
-		machine.err = errors.New("prelude failed: " + machine.toString(exception))
-	}
-	settle, run, stalled := machine.getProp(api, "settle"), machine.getProp(api, "run"), machine.getProp(api, "stalled")
+	api := machine.call(prelude, undefined, machine.bridgeFunction(), moejs.String(string(toolsJSON)), moejs.String("[]"), moejs.String(string(storeJSON)))
+	settle, run, stalled := machine.get(api, "settle"), machine.get(api, "run"), machine.get(api, "stalled")
 	if machine.err != nil {
 		return sandboxFailure(machine.err)
 	}
 	// The prefix shares the first line with the script so reported line numbers
 	// match the script as written.
-	fn, exception := machine.eval("(async (tools, console) => {"+req.Code+"\n})", "codemode.js")
-	if exception != 0 {
+	if script, err := moejs.CompileScript("codemode.js", "(async (tools, console) => {"+req.Code+"\n})"); err != nil {
 		finished, doneOK, doneHasValue = true, false, true
-		donePayload = describeException(machine, exception)
+		donePayload = describeError(err)
+	} else if fn, err := machine.rt.RunScript(script); err != nil {
+		finished, doneOK, doneHasValue = true, false, true
+		donePayload = describeError(err)
 	} else {
-		machine.callFunction(run, api, fn)
+		machine.call(run, api, fn)
 	}
+	// moejs runs the promise jobs a call queues before the call returns, so
+	// after each step the script is either finished or waiting on a tool.
 	step := func() error {
-		if err := machine.drain(); err != nil {
-			return err
-		}
 		if !finished && stopReason == "" {
-			machine.callFunction(stalled, api)
+			machine.call(stalled, api)
 		}
 		return machine.err
 	}
-	if !finished {
-		if err := step(); err != nil {
-			return sandboxFailure(err)
-		}
+	if err := step(); err != nil {
+		return sandboxFailure(err)
+	}
+	if machine.err != nil {
+		return sandboxFailure(machine.err)
 	}
 	deadline := time.NewTimer(time.Until(machine.deadline))
 	defer deadline.Stop()
@@ -348,12 +355,11 @@ func (r Runtime) Execute(ctx context.Context, req Request, call Call) (Result, e
 			}
 		}
 		delete(pending, reply.id)
-		payload := machine.undefined
+		payload := undefined
 		if reply.payload != nil {
-			payload = machine.newString(*reply.payload)
+			payload = moejs.String(*reply.payload)
 		}
-		ok := machine.bool(reply.ok)
-		machine.callFunction(settle, api, machine.newNumber(float64(reply.id)), ok, payload)
+		machine.call(settle, api, engine.IntValue(reply.id), engine.Bool(reply.ok), payload)
 		if err := step(); err != nil {
 			return sandboxFailure(err)
 		}
@@ -441,9 +447,17 @@ func storeText(store map[string]json.RawMessage) map[string]string {
 	return out
 }
 
-func describeException(machine *vm, exception uint32) string {
-	name := machine.toString(machine.getProp(exception, "name"))
-	message := machine.toString(machine.getProp(exception, "message"))
+// describeError shapes a compile failure like the prelude's script errors.
+func describeError(err error) string {
+	name, message := "Error", err.Error()
+	var syntax *moejs.SyntaxError
+	var exception *moejs.Exception
+	switch {
+	case errors.As(err, &syntax):
+		name, message = "SyntaxError", syntax.Message
+	case errors.As(err, &exception):
+		name, message = exception.Name(), exception.Message()
+	}
 	data, _ := json.Marshal(map[string]string{"name": name, "message": message})
 	return string(data)
 }
