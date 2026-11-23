@@ -180,6 +180,7 @@ func TestRuntimeScriptSemantics(t *testing.T) {
 		{name: "deep recursion is catchable", code: `function f(n){return f(n+1)+1} try { f(0) } catch (e) { return e.name }`, value: `"RangeError"`},
 		{name: "memory is bounded", code: `const a = []; for (;;) a.push("payload".repeat(1000) + a.length)`, kind: "script"},
 		{name: "never settles", code: `await new Promise(() => {})`, kind: "script"},
+		{name: "builtins frozen but overridable", code: `class E extends Error { constructor() { super("m"); this.name = "E" } } Array.prototype.x = 1; return [new E().name, "x" in Array.prototype]`, value: `["E",false]`},
 		{name: "exit", code: `text("x"); exit(); return 2`, output: "x"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
