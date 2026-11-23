@@ -99,12 +99,12 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page 按页续读，加 pdf_page_end 一次读连续多页；每次指定一个文件。相关消息一次传齐；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
 	if t.asksVision() {
-		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page 按页续读，加 pdf_page_end 一次读连续多页，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
-	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page 按页续读，加 pdf_page_end 一次读连续多页，不能把截断当成全文。一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
@@ -112,6 +112,7 @@ func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 		"file_index":    toolIntParam("只读消息内第几个文件（配合 pdf_page 或 start_line），默认 1", 1, 1000),
 		"start_line":    toolIntParam("文件正文续读：从第几行起，按返回的续读说明传", 1, 100000000),
 		"pdf_page":      toolIntParam("读取 PDF 指定页，从 1 起；长文档从第 1 页开始，按返回的 next_page 继续", 1, 100000),
+		"pdf_page_end":  toolIntParam("配合 pdf_page：一次连续读到第几页（含），装不下的页按返回的 next_page 继续；省略只读 pdf_page 这一页", 1, 100000),
 		"page_offset":   toolIntParam("页内字符偏移，从 0 起；同一页未读完时用返回的 next_offset 续读", 0, 100000000),
 		"message_id":    toolStringParam("单条消息 ID，不接受路径或 URL"),
 		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id：画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
@@ -139,16 +140,19 @@ func (t *dianaHistoryImagesTool) Run(ctx context.Context, input map[string]any) 
 	}
 	t.setResultParts(nil)
 	if input["pdf_page"] != nil {
-		for _, key := range []string{"pdf_page", "page_offset", "file_index"} {
-			if value, exists := input[key]; exists {
+		for _, key := range []string{"pdf_page", "pdf_page_end", "page_offset", "file_index"} {
+			if value, exists := input[key]; exists && (key != "pdf_page_end" || value != nil) {
 				n, err := groupToolInteger(value)
 				if err != nil || n < 0 || (key != "page_offset" && n == 0) {
 					return "", fmt.Errorf("%s 不是有效的整数", key)
 				}
 			}
 		}
-	} else if input["page_offset"] != nil {
-		return "", fmt.Errorf("page_offset 必须与 pdf_page 一起使用")
+		if input["pdf_page_end"] != nil && intFromAny(input["pdf_page_end"]) < intFromAny(input["pdf_page"]) {
+			return "", fmt.Errorf("pdf_page_end 不能小于 pdf_page")
+		}
+	} else if input["page_offset"] != nil || input["pdf_page_end"] != nil {
+		return "", fmt.Errorf("page_offset、pdf_page_end 必须与 pdf_page 一起使用")
 	}
 	for _, key := range []string{"file_index", "start_line"} {
 		if value, exists := input[key]; exists && value != nil {
@@ -562,7 +566,13 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 		if option != nil && option["pdf_page"] != nil {
 			page := intFromAny(option["pdf_page"])
 			offset := intFromAny(option["page_offset"])
-			body, err := t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset)
+			var body string
+			var err error
+			if option["pdf_page_end"] != nil {
+				body, err = t.readPDFPages(ctx, parser, channel, *ref, maxBytes, page, offset, intFromAny(option["pdf_page_end"]), budget)
+			} else {
+				body, err = t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset)
+			}
 			if err != nil {
 				body = "读取 PDF 页失败：" + err.Error()
 			}
