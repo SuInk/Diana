@@ -454,7 +454,7 @@ func fileContinuationHint(ref fileRef, window textLineWindow, pdfPages int) stri
 	}
 	target := fmt.Sprintf("用 %s 传 message_id=%s、file_index=%d", dianaHistoryImagesToolName, ref.MessageID, ref.FileIndex)
 	if pdfPages > 0 {
-		return fmt.Sprintf("PDF 共 %d 页，%s、pdf_page=%d 逐页续读。", pdfPages, target, max(window.Start, 1))
+		return fmt.Sprintf("PDF 共 %d 页，%s、pdf_page=%d 续读，一次能连读多页。", pdfPages, target, max(window.Start, 1))
 	}
 	return fmt.Sprintf("%s、start_line=%d 续读。", target, max(window.NextLine(), window.Start))
 }

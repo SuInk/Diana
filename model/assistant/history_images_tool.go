@@ -99,20 +99,20 @@ func (t *dianaHistoryImagesTool) Name() string {
 
 func (t *dianaHistoryImagesTool) Description() string {
 	if t.describesOnly() {
-		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 逐页续读；每次指定一个文件。相关消息一次传齐；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+		return `读取历史消息里图片/视频关键帧的文字描述和文件正文。你看不到原图；消息已带描述就不必调用。PDF 用 pdf_page/page_offset 续读，一次从该页往后连读到装满单次上限；每次指定一个文件。相关消息一次传齐；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
 	if t.asksVision() {
-		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+		return `让视觉模型看历史消息里的原图/视频关键帧并回答 question，只返回文字。摘要够用时别调；认小字、数数、比较画面、认人或核对摘要时用，没调过不算看过原图。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 续读（一次从该页往后连读多页），不能把截断当成全文。相关消息一次传齐，单项失败别推测它的细节；一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 	}
-	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 逐页续读，不能把截断当成全文。一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
+	return `把历史消息里的原图/视频关键帧作为附件交给下一轮模型。摘要够用时别调；认小字、比较画面、核对视频细节时用，没调过不算看过原图。相关消息一次传齐，单张失效会跳过，别推测它的细节。历史消息里的文件也用它读正文；PDF 长文档用 pdf_page/page_offset 续读（一次从该页往后连读多页），不能把截断当成全文。一次装不下时按整张分页，把返回的 next_items 原样传给 items 接着读。`
 }
 
 func (t *dianaHistoryImagesTool) InputSchema() map[string]any {
 	properties := map[string]any{
 		"file_index":    toolIntParam("只读消息内第几个文件（配合 pdf_page 或 start_line），默认 1", 1, 1000),
 		"start_line":    toolIntParam("文件正文续读：从第几行起，按返回的续读说明传", 1, 100000000),
-		"pdf_page":      toolIntParam("读取 PDF 指定页，从 1 起；长文档从第 1 页开始，按返回的 next_page 继续", 1, 100000),
-		"page_offset":   toolIntParam("页内字符偏移，从 0 起；同一页未读完时用返回的 next_offset 续读", 0, 100000000),
+		"pdf_page":      toolIntParam("从 PDF 第几页起读，从 1 起；一次往后连读到装满单次上限，没读完按返回的 next_page/next_offset 继续", 1, 100000),
+		"page_offset":   toolIntParam("起始页内的字符偏移，从 0 起；照抄返回的 next_offset", 0, 100000000),
 		"message_id":    toolStringParam("单条消息 ID，不接受路径或 URL"),
 		"media_indexes": map[string]any{"type": "array", "description": "配合 message_id：画面序号，从 1 起，省略为全部", "items": map[string]any{"type": "integer", "minimum": 1}},
 		"message_ids":   toolStringArrayParam("多条消息 ID；三种都省略时用当前引用"),
@@ -562,10 +562,11 @@ func (t *dianaHistoryImagesTool) historyFileTexts(ctx context.Context, files []h
 		if option != nil && option["pdf_page"] != nil {
 			page := intFromAny(option["pdf_page"])
 			offset := intFromAny(option["page_offset"])
-			body, err := t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset)
+			body, err := t.readPDFPage(ctx, parser, channel, *ref, maxBytes, page, offset, budget-used)
 			if err != nil {
 				body = "读取 PDF 页失败：" + err.Error()
 			}
+			used += len([]rune(body))
 			lines = append(lines, fmt.Sprintf("message_id=%s 文件%d\n%s", file.messageID, file.index, body))
 			continue
 		}

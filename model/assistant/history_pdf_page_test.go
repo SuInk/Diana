@@ -6,59 +6,87 @@ package assistant
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
 
-func TestPDFPageChunkReadsBeyond8000(t *testing.T) {
-	original := strings.Repeat("测", 24956) + "最后测评结果"
+type pdfPageResult struct {
+	StartPage        int    `json:"start_page"`
+	EndPage          int    `json:"end_page"`
+	Text             string `json:"text"`
+	NextPage         int    `json:"next_page"`
+	NextOffset       int    `json:"next_offset"`
+	DocumentComplete bool   `json:"document_complete"`
+}
+
+func decodePDFPageResult(t *testing.T, raw string) pdfPageResult {
+	t.Helper()
+	var result pdfPageResult
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatalf("%v: %s", err, raw)
+	}
+	return result
+}
+
+// 生产上 151 页讲义一次只给一页，模型续读一页就放弃；现在一次连读到装满预算，
+// 按 next_page/next_offset 续读能不重不漏地读到末页。
+func TestReadPDFPageReadsManyPagesPerCall(t *testing.T) {
+	texts := make([]string, 151)
+	for i := range texts {
+		texts[i] = fmt.Sprintf("P%03d", i+1) + strings.Repeat("字", 1500)
+	}
+	texts[40] = strings.Repeat("长", 30000) + "长页尾"
+	parser := NewFileParserPlugin(nil)
+	parser.pdfRenderer = &fakePDFTextRenderer{texts: texts}
+	path := filepath.Join(t.TempDir(), "guide.pdf")
+	if err := os.WriteFile(path, minimalTextPDF(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &dianaHistoryImagesTool{}
+	ref := fileRef{Name: "guide.pdf", LocalPath: path}
+	raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 18, 0, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := decodePDFPageResult(t, raw)
+	if first.StartPage != 18 || first.EndPage < 30 || first.DocumentComplete {
+		t.Fatalf("one call should cover a dozen pages: %+v", first)
+	}
 	var got strings.Builder
-	offset := 0
+	page, offset, calls := 1, 0, 0
 	for {
-		raw, err := pdfPageChunk(original, 2, 3, offset)
+		raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, page, offset, 20000)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var chunk struct {
-			Text             string `json:"text"`
-			NextOffset       int    `json:"next_offset"`
-			NextPage         int    `json:"next_page"`
-			Complete         bool   `json:"page_complete"`
-			DocumentComplete bool   `json:"document_complete"`
-		}
-		if err := json.Unmarshal([]byte(raw), &chunk); err != nil {
-			t.Fatal(err)
-		}
-		got.WriteString(chunk.Text)
-		if chunk.DocumentComplete {
-			t.Fatal("later page still exists")
-		}
-		if chunk.Complete {
-			if chunk.NextPage != 3 || chunk.NextOffset != 0 {
-				t.Fatal(raw)
-			}
+		result := decodePDFPageResult(t, raw)
+		got.WriteString(pdfPageHeaderLine.ReplaceAllString(result.Text, ""))
+		calls++
+		if result.DocumentComplete {
 			break
 		}
-		if chunk.NextOffset <= offset || chunk.NextPage != 2 {
-			t.Fatal(raw)
+		if result.NextPage < page || (result.NextPage == page && result.NextOffset <= offset) {
+			t.Fatalf("no progress: %+v", result)
 		}
-		offset = chunk.NextOffset
+		page, offset = result.NextPage, result.NextOffset
 	}
-	if got.String() != original {
-		t.Fatal("page content lost or duplicated")
+	want := strings.Join(texts, "")
+	if strings.ReplaceAll(got.String(), "\n", "") != want {
+		t.Fatal("content lost or duplicated across calls")
 	}
-	raw, err := pdfPageChunk("末页", 3, 3, 0)
-	if err != nil || !strings.Contains(raw, `"document_complete":true`) {
-		t.Fatalf("%s %v", raw, err)
+	if calls > 15 {
+		t.Fatalf("%d calls for 151 pages", calls)
 	}
-	for _, offset := range []int{-1, 100} {
-		if _, err := pdfPageChunk("内容", 1, 1, offset); err == nil {
-			t.Fatal("invalid offset accepted")
-		}
+	if _, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 2000, 20000); err == nil {
+		t.Fatal("offset beyond page accepted")
 	}
 }
+
+var pdfPageHeaderLine = regexp.MustCompile(`(\n\n)?第 \d+ 页(（接第 \d+ 字）)?：\n`)
 
 func TestReadPDFPageTextAndBounds(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "report.pdf")
@@ -68,16 +96,16 @@ func TestReadPDFPageTextAndBounds(t *testing.T) {
 	parser := NewFileParserPlugin(nil)
 	tool := &dianaHistoryImagesTool{}
 	ref := fileRef{Name: "report.pdf", LocalPath: path}
-	raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 0)
+	raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 0, 20000)
 	if err != nil || !strings.Contains(raw, "Hello PDFium text") || !strings.Contains(raw, `"document_complete":true`) {
 		t.Fatalf("%s %v", raw, err)
 	}
-	if _, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 2, 0); err == nil {
+	if _, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 2, 0, 20000); err == nil {
 		t.Fatal("out of range page accepted")
 	}
 	tool = &dianaHistoryImagesTool{}
 	parser.pdfRenderer = &fakePDFTextRenderer{texts: []string{"目录", strings.Repeat("测", 9000) + "测评结果"}}
-	raw, err = tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 2, 8000)
+	raw, err = tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 2, 8000, 20000)
 	if err != nil || !strings.Contains(raw, "测评结果") || strings.Contains(raw, "目录") {
 		t.Fatalf("%s %v", raw, err)
 	}
@@ -94,7 +122,7 @@ func TestPDFProductionReplay(t *testing.T) {
 	var material string
 	page, offset, total := 1, 0, 0
 	for {
-		raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 20<<20, page, offset)
+		raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 20<<20, page, offset, 4000)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -176,14 +204,33 @@ func TestReadPDFScannedPageUsesVisionAndCachesContinuation(t *testing.T) {
 	parser.pdfRenderer = &fakePDFRenderer{pages: 1}
 	tool := newDianaHistoryImagesTool(runtime, MessageEvent{Kind: EventKindPrivate, UserID: "u"})
 	ref := fileRef{Name: "scan.pdf", LocalPath: path}
-	if _, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 0); err != nil {
+	if _, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 0, 20000); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 4000)
+	raw, err := tool.readPDFPage(context.Background(), parser, nil, ref, 1<<20, 1, 4000, 20000)
 	if err != nil || !strings.Contains(raw, "扫描页尾") {
 		t.Fatalf("%s %v", raw, err)
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("OCR repeated: %d", len(provider.requests))
+	}
+}
+
+// 已经读到正文时停在下一张扫描页前，扫描页留给下一次调用单独做视觉 OCR。
+func TestReadPDFPageStopsBeforeScannedPage(t *testing.T) {
+	parser := NewFileParserPlugin(nil)
+	parser.pdfRenderer = &fakePDFTextRenderer{texts: []string{"第一页文字", "  ", "第三页文字"}}
+	path := filepath.Join(t.TempDir(), "mixed.pdf")
+	if err := os.WriteFile(path, minimalTextPDF(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	tool := &dianaHistoryImagesTool{}
+	raw, err := tool.readPDFPage(context.Background(), parser, nil, fileRef{Name: "mixed.pdf", LocalPath: path}, 1<<20, 1, 0, 20000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := decodePDFPageResult(t, raw)
+	if result.EndPage != 1 || result.NextPage != 2 || result.NextOffset != 0 || result.DocumentComplete || strings.Contains(result.Text, "第三页") {
+		t.Fatalf("%+v", result)
 	}
 }
