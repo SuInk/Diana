@@ -158,7 +158,11 @@ func TestHistoryMediaPDFPageSelection(t *testing.T) {
 	if err != nil || !strings.Contains(raw, "尾部结论") || strings.Contains(raw, "目录") {
 		t.Fatalf("%s %v", raw, err)
 	}
-	for _, input := range []map[string]any{{"pdf_page": 0}, {"pdf_page": 1.5}, {"page_offset": 4}, {"pdf_page": 1, "page_offset": -1}} {
+	raw, err = tool.Run(context.Background(), map[string]any{"message_id": "file", "pdf_page": 1, "pdf_page_end": 2})
+	if err != nil || !strings.Contains(raw, "目录") || !strings.Contains(raw, "尾部结论") {
+		t.Fatalf("%s %v", raw, err)
+	}
+	for _, input := range []map[string]any{{"pdf_page": 0}, {"pdf_page": 1.5}, {"page_offset": 4}, {"pdf_page": 1, "page_offset": -1}, {"pdf_page_end": 2}, {"message_id": "file", "pdf_page": 2, "pdf_page_end": 1}} {
 		if _, err := tool.Run(context.Background(), input); err == nil {
 			t.Fatalf("invalid input accepted: %v", input)
 		}
@@ -185,5 +189,63 @@ func TestReadPDFScannedPageUsesVisionAndCachesContinuation(t *testing.T) {
 	}
 	if len(provider.requests) != 1 {
 		t.Fatalf("OCR repeated: %d", len(provider.requests))
+	}
+}
+
+// 一次读连续多页：按整页装进单次上限，装不下的留给 next_page；第一页自己超出时按
+// next_offset 续读。接起来不丢字、不重复。
+func TestReadPDFPagesPacksWholePagesIntoBudget(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "report.pdf")
+	if err := os.WriteFile(path, minimalTextPDF(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{strings.Repeat("一", 10), strings.Repeat("二", 10), strings.Repeat("三", 25), "四"}
+	parser := NewFileParserPlugin(nil)
+	parser.pdfRenderer = &fakePDFTextRenderer{texts: texts}
+	tool := &dianaHistoryImagesTool{}
+	ref := fileRef{Name: "report.pdf", LocalPath: path}
+	read := func(page, offset, end, budget int) pdfPageRangeResult {
+		t.Helper()
+		raw, err := tool.readPDFPages(context.Background(), parser, nil, ref, 1<<20, page, offset, end, budget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result pdfPageRangeResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	all := read(1, 0, 99, 1000)
+	if len(all.Pages) != 4 || all.TotalPages != 4 || !all.DocumentComplete || all.NextPage != 0 || all.Message != "" {
+		t.Fatalf("all=%#v", all)
+	}
+	head := read(1, 0, 2, 1000)
+	if len(head.Pages) != 2 || head.DocumentComplete || head.NextPage != 3 || head.NextOffset != 0 {
+		t.Fatalf("head=%#v", head)
+	}
+	var got strings.Builder
+	page, offset := 1, 0
+	for calls := 0; ; calls++ {
+		if calls > 10 {
+			t.Fatal("no progress")
+		}
+		result := read(page, offset, 4, 20)
+		for _, item := range result.Pages {
+			got.WriteString(item.Text)
+		}
+		if result.DocumentComplete {
+			break
+		}
+		if result.Message == "" || result.NextPage < page || (result.NextPage == page && result.NextOffset <= offset) {
+			t.Fatalf("result=%#v", result)
+		}
+		page, offset = result.NextPage, result.NextOffset
+	}
+	if got.String() != strings.Join(texts, "") {
+		t.Fatalf("got=%q", got.String())
+	}
+	if _, err := tool.readPDFPages(context.Background(), parser, nil, ref, 1<<20, 5, 0, 6, 100); err == nil {
+		t.Fatal("out of range page accepted")
 	}
 }
