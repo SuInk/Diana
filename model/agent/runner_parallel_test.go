@@ -137,8 +137,9 @@ func TestParallelReadsFallBackToSequentialWithSideEffects(t *testing.T) {
 	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "记一下再查"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if writer.calls != 1 || len(search.order) != 0 {
-		t.Fatalf("mixed batch must run only the first call in order: writes=%d searches=%v", writer.calls, search.order)
+	// 带副作用的调用混在里面时不并行：按模型写的顺序一个一个执行，但都要执行到。
+	if writer.calls != 1 || len(search.order) != 1 || peak.Load() > 1 {
+		t.Fatalf("mixed batch must run every call one by one: writes=%d searches=%v peak=%d", writer.calls, search.order, peak.Load())
 	}
 }
 

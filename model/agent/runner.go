@@ -416,6 +416,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		})
 		return nil, err
 	}
+run:
 	for r.cfg.MaxSteps <= 0 || toolCalls < r.cfg.MaxSteps {
 		finalApproved = false
 		planningCtx, cancel, ok := contextWithFinalizationReserve(ctx, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
@@ -493,43 +494,30 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 		nativeToolCall := len(resp.ToolCalls) > 0
 		var nativeCall llm.ToolCall
 		nativeCallIndex := 0
-		var parallelDropNotice string
+		// callOrder 是这一步要执行的调用在 resp.ToolCalls 里的下标：除了 send 全部按
+		// 顺序执行，和主流 agent 一致。以前只执行第一个，其余的让模型下一步重发，
+		// 读连续几页、发几个文件这类活每个调用都要多花一整轮请求。
+		var callOrder []int
 		if nativeToolCall {
 			nativeProtocol = true
 			// 只调 send 就是收尾；和其他工具一起来时 send 不发，这一步执行真正的工具，
 			// 模型看过结果再 send。
-			selected := 0
 			for index, call := range resp.ToolCalls {
 				if call.Name != finalizeToolName {
-					selected = index
-					break
+					callOrder = append(callOrder, index)
 				}
 			}
-			nativeCall = resp.ToolCalls[selected]
-			nativeCallIndex = selected
-			if nativeCall.Name == finalizeToolName {
+			if len(callOrder) == 0 {
 				// 结构化收尾不是一次工具执行：正文留在信封之外，只解码元数据。
+				nativeCall = resp.ToolCalls[0]
 				action = finalizeAction(resp.ToolCalls, lastText)
 				nativeToolCall = false
 			} else {
+				nativeCallIndex = callOrder[0]
+				nativeCall = resp.ToolCalls[nativeCallIndex]
 				action = llmAction{Action: "tool", Tool: nativeCall.Name, Input: nativeCall.Arguments}
 			}
 			ok = true
-			// 当前实现每个规划步只执行一个工具调用。并行发多个时,静默丢弃
-			// 会让模型以为其余的执行过了(或者得出「一次只能调一个」的错误
-			// 经验),必须在观察里明说,让它下一步接着补发。
-			if len(resp.ToolCalls) > 1 && nativeToolCall {
-				dropped := make([]string, 0, len(resp.ToolCalls)-1)
-				for index, call := range resp.ToolCalls {
-					if index != selected && call.Name != finalizeToolName {
-						dropped = append(dropped, call.Name)
-					}
-				}
-				if len(dropped) > 0 {
-					parallelDropNotice = fmt.Sprintf("\n\n注意:你在这一步并行请求了 %d 个工具调用,当前只执行了 %s,其余(%s)没有执行。请在接下来的规划步里逐个继续调用,不要认为它们已经完成。",
-						len(resp.ToolCalls), nativeCall.Name, strings.Join(dropped, "、"))
-				}
-			}
 		}
 		// 同一步里的几次只读检索并行执行，见 runner_parallel.go。
 		if nativeToolCall && len(resp.ToolCalls) > 1 && !imageTaskQueued {
@@ -773,286 +761,351 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			})
 			continue
 		}
-		// Keep provider history in the original envelope while executing the target
-		// through the ordinary Runner guards and result handling below.
-		var dispatchErr error
-		action, dispatchErr = r.dispatchAction(action)
-		if dispatchErr == nil {
-			action.Input = resolveSearchRefs(action.Tool, action.Input, steps)
+		// 同一步里的调用按顺序执行，各自配一条结果。第一个调用没过校验时整步退回，
+		// 和以前一样；后面的调用没过校验就停在那里，它和它之后的都标成未执行。
+		if !nativeToolCall {
+			callOrder = []int{-1}
 		}
-		if dispatchErr != nil {
-			protocolRepairs++
-			reason := dispatchErr.Error()
-			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: reason, Skipped: true})
-			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, lastText, reason)
-			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-				finishReason = "protocol_repair_exhausted"
-				break
-			}
-			continue
-		}
-		tool, ok := r.registry.Get(action.Tool)
-		if !ok && r.loader != nil && action.Tool == ToolsLoadToolName {
-			tool, ok = r.loader, true
-		}
-		if !ok {
-			protocolRepairs++
-			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: "tool not found", Skipped: true})
-			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "tool not found: "+action.Tool)
-			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-				finishReason = "protocol_repair_exhausted"
-				break
-			}
-			// 工具不存在时把可用工具列表告诉模型，而不是直接失败整个 Agent。
-			// 但「没权限」不是「不存在」：把目录再抄一遍只会让模型换个名字接着猜，
-			// 而换哪个名字都一样没权限。
-			repair := fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions())
-			if r.registry.PolicyDenied(action.Tool) {
-				repair = r.registry.denialError(action.Tool).Error()
-			}
-			messages = append(messages, llm.Message{
-				Role:    llm.RoleUser,
-				Content: repair,
-			})
-			continue
-		}
-		if typed, ok := tool.(ToolInputSchema); ok {
-			action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
-		}
-		explicitRequestKind := explicitUserRequestKind(tool, action.Input)
-		// 被配置关掉的操作不必先要确认码：用户照着打了码也做不成，下面执行前直接拒绝。
-		operationDisabled := r.registry.OperationDisabledError(action.Tool, action.Input)
-		if operationDisabled == nil && explicitRequestKind != "" && !r.extensionMutationConfirmedNow(ctx, req, explicitRequestKind, action.Tool, action.Input) {
-			protocolRepairs++
-			code := extensionMutationConfirmationCode(explicitRequestKind, action.Tool, action.Input)
-			if identity, ok := extensionConfirmationIdentity(ctx); usableForExtensionConfirmation(identity, ok) {
-				rememberExtensionPendingConfirmation(identity, code, time.Now())
-			}
-			guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
-			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
-			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
-			messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
-			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-				finishReason = "protocol_repair_exhausted"
-				break
-			}
-			continue
-		}
-		action.Input = minimalToolInput(action.Tool, action.Input)
-		signature := toolCallSignature(action.Tool, action.Input)
-		if repeatable, ok := tool.(RepeatableTool); ok && repeatable.RepeatableCalls() {
-			signature = ""
-		}
-		if signature != "" && signature == lastToolSignature {
-			protocolRepairs++
-			duplicateErr := "连续重复的相同工具调用已跳过；请使用上一条工具结果、调整参数或直接给出最终回复"
-			steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: duplicateErr, Skipped: true})
-			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, duplicateErr)
-			messages = appendToolRepair(messages, resp, lastText, duplicateErr)
-			if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-				finishReason = "protocol_repair_exhausted"
-				break
-			}
-			continue
-		}
-		if isIntrospectionCall(tool, action.Input) {
-			// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
-			if introspectionCalls >= maxIntrospectionCallsPerAgentRun {
-				protocolRepairs++
-				limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
-				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, lastText, limitErr)
-				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
-					finishReason = "protocol_repair_exhausted"
+		results := make(map[int]stepCallResult, len(callOrder))
+		stopReason, stoppedAt := "", len(callOrder)
+	calls:
+		for callPos, callIndex := range callOrder {
+			if callPos > 0 {
+				if r.remainingToolCalls(toolCalls) == 0 {
 					break
 				}
-				continue
+				nativeCall, nativeCallIndex = resp.ToolCalls[callIndex], callIndex
+				action = llmAction{Action: "tool", Tool: nativeCall.Name, Input: nativeCall.Arguments}
 			}
-			introspectionCalls++
-		} else if action.Tool == ToolsLoadToolName {
-			// 只取 schema，不做外部动作，不占 MaxSteps；用自己的配额兜住空转。
-			if toolLoadCalls >= maxToolLoadCallsPerAgentRun {
+			stoppedAt = callPos
+			// Keep provider history in the original envelope while executing the target
+			// through the ordinary Runner guards and result handling below.
+			var dispatchErr error
+			action, dispatchErr = r.dispatchAction(action)
+			if dispatchErr == nil {
+				action.Input = resolveSearchRefs(action.Tool, action.Input, steps)
+			}
+			if dispatchErr != nil {
 				protocolRepairs++
-				limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
-				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
-				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
-				messages = appendToolRepair(messages, resp, lastText, limitErr)
+				reason := dispatchErr.Error()
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: reason, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
+				if callPos > 0 {
+					stopReason = reason
+					break calls
+				}
+				messages = appendToolRepair(messages, resp, lastText, reason)
 				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 					finishReason = "protocol_repair_exhausted"
-					break
+					break run
 				}
-				continue
+				continue run
 			}
-			toolLoadCalls++
-		} else {
-			toolCalls++
-		}
-		lastToolSignature = signature
-		inputKeys := sortedInputKeys(action.Input)
-		toolMetadata := webSearchRunMetadataFromInput(action.Tool, action.Input)
-		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseToolStarted,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			Tool:         action.Tool,
-			InputKeys:    inputKeys,
-			ToolInput:    cloneToolInput(action.Input),
-			Metadata:     toolMetadata,
-		})
-		outputLimit := ToolOutputMaxChars
-		toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
-		toolCtx, toolCancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
-		toolStartedAt := time.Now()
-		var output string
-		// 被配置关掉的操作（比如安全模式下的写操作）不执行，拒绝理由按工具报错交回
-		// 模型：它照常占一步、照常进运行记录，模型看到的是一次明确失败而不是沉默。
-		// 执行前按最终入参再判一次：上面判的是整理之前的入参。
-		err = operationDisabled
-		if err == nil {
-			err = r.registry.OperationDisabledError(action.Tool, action.Input)
-		}
-		blocked := err != nil
-		if err == nil {
-			err = hooks.before(toolCtx, action.Tool, action.Input)
-			blocked = err != nil
-		}
-		if err == nil {
-			if script, ok := tool.(*codeModeTool); ok {
-				output, err = r.runCodeMode(toolCtx, script, action.Input, req, hooks, traceID, modelTurns, &toolCalls, &introspectionCalls, &toolLoadCalls, &lastToolSignature, &steps)
-				for _, child := range steps {
-					if child.Tool == dianaImageToolName && child.Error == "" && imageToolResultQueued(child.Output) {
-						imageTaskQueued = true
+			tool, ok := r.registry.Get(action.Tool)
+			if !ok && r.loader != nil && action.Tool == ToolsLoadToolName {
+				tool, ok = r.loader, true
+			}
+			if !ok {
+				protocolRepairs++
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: "tool not found", Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "tool not found: "+action.Tool)
+				if callPos > 0 {
+					stopReason = "工具 " + action.Tool + " 不存在或当前不可用"
+					break calls
+				}
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break run
+				}
+				// 工具不存在时把可用工具列表告诉模型，而不是直接失败整个 Agent。
+				// 但「没权限」不是「不存在」：把目录再抄一遍只会让模型换个名字接着猜，
+				// 而换哪个名字都一样没权限。
+				repair := fmt.Sprintf("工具 %q 不存在。可用工具：\n%s", action.Tool, r.registry.Descriptions())
+				if r.registry.PolicyDenied(action.Tool) {
+					repair = r.registry.denialError(action.Tool).Error()
+				}
+				messages = append(messages, llm.Message{
+					Role:    llm.RoleUser,
+					Content: repair,
+				})
+				continue run
+			}
+			if typed, ok := tool.(ToolInputSchema); ok {
+				action.Input = coerceToolInputArrays(typed.InputSchema(), action.Input)
+			}
+			explicitRequestKind := explicitUserRequestKind(tool, action.Input)
+			// 被配置关掉的操作不必先要确认码：用户照着打了码也做不成，下面执行前直接拒绝。
+			operationDisabled := r.registry.OperationDisabledError(action.Tool, action.Input)
+			if operationDisabled == nil && explicitRequestKind != "" && !r.extensionMutationConfirmedNow(ctx, req, explicitRequestKind, action.Tool, action.Input) {
+				protocolRepairs++
+				code := extensionMutationConfirmationCode(explicitRequestKind, action.Tool, action.Input)
+				if identity, ok := extensionConfirmationIdentity(ctx); usableForExtensionConfirmation(identity, ok) {
+					rememberExtensionPendingConfirmation(identity, code, time.Now())
+				}
+				guardErr := "操作被拒绝：当前用户消息里没有确认码 " + code
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: guardErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, guardErr)
+				if callPos > 0 {
+					stopReason = extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input)
+					break calls
+				}
+				messages = appendToolRepair(messages, resp, lastText, extensionMutationConfirmationPrompt(explicitRequestKind, action.Tool, code, action.Input))
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break run
+				}
+				continue run
+			}
+			action.Input = minimalToolInput(action.Tool, action.Input)
+			signature := toolCallSignature(action.Tool, action.Input)
+			if repeatable, ok := tool.(RepeatableTool); ok && repeatable.RepeatableCalls() {
+				signature = ""
+			}
+			if signature != "" && signature == lastToolSignature {
+				protocolRepairs++
+				duplicateErr := "连续重复的相同工具调用已跳过；请使用上一条工具结果、调整参数或直接给出最终回复"
+				steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: duplicateErr, Skipped: true})
+				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, duplicateErr)
+				if callPos > 0 {
+					stopReason = duplicateErr
+					break calls
+				}
+				messages = appendToolRepair(messages, resp, lastText, duplicateErr)
+				if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+					finishReason = "protocol_repair_exhausted"
+					break run
+				}
+				continue run
+			}
+			if isIntrospectionCall(tool, action.Input) {
+				// 只读自省不占 MaxSteps；自己的配额兜住「反复打听」的空转。
+				if introspectionCalls >= maxIntrospectionCallsPerAgentRun {
+					protocolRepairs++
+					limitErr := fmt.Sprintf("本轮查询自身能力和身份的次数已达上限 %d；请用已经问到的信息继续，或直接给出最终回复", maxIntrospectionCallsPerAgentRun)
+					steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+					if callPos > 0 {
+						stopReason = limitErr
+						break calls
 					}
+					messages = appendToolRepair(messages, resp, lastText, limitErr)
+					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+						finishReason = "protocol_repair_exhausted"
+						break run
+					}
+					continue run
 				}
+				introspectionCalls++
+			} else if action.Tool == ToolsLoadToolName {
+				// 只取 schema，不做外部动作，不占 MaxSteps；用自己的配额兜住空转。
+				if toolLoadCalls >= maxToolLoadCallsPerAgentRun {
+					protocolRepairs++
+					limitErr := fmt.Sprintf("本轮 %s 次数已达上限 %d；需要的工具请一次性列全，或直接用已加载的工具继续", ToolsLoadToolName, maxToolLoadCallsPerAgentRun)
+					steps = append(steps, Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Error: limitErr, Skipped: true})
+					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, limitErr)
+					if callPos > 0 {
+						stopReason = limitErr
+						break calls
+					}
+					messages = appendToolRepair(messages, resp, lastText, limitErr)
+					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
+						finishReason = "protocol_repair_exhausted"
+						break run
+					}
+					continue run
+				}
+				toolLoadCalls++
 			} else {
-				output, err = tool.Run(toolCtx, action.Input)
+				toolCalls++
 			}
-		}
-		toolCancel()
-		toolDuration := time.Since(toolStartedAt)
-		toolsDuration += toolDuration
-		record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Skipped: blocked, DurationMS: toolDuration.Milliseconds()}
-		// 检索阶段从未截断的输出提取，避免外层截断损坏 JSON 后误报来源缺失。
-		//
-		// 工具结果和报错原样进模型上下文，也进运行记录（下一轮的 carryover、事件
-		// 记录）。凭据在这里统一遮掉：HTTP 客户端报错带着整条请求地址（查询参数里的
-		// 令牌、userinfo），平台和插件报错回显请求头，命令输出里有继承来的环境变量。
-		// 报错按形态和已登记原文一起遮；正常输出只遮已登记原文和 userinfo，网页里的
-		// 签名链接模型还要接着用。
-		output = secretmask.Output(output)
-		rawOutput := output
-		if err != nil {
-			record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, int(toolTimeout/time.Millisecond)))
-			output = toolExecutionErrorForModel(action.Tool, record.Error)
-		} else {
-			record.Output = truncateToolOutput(output, outputLimit)
-			if action.Tool == ToolsLoadToolName || action.Tool == codeModeToolName {
-				// Loader enforces its own bound atomically; truncating a JSON
-				// contract would mark unseen parameters as loaded. codemode 照 Pi
-				// 有自己的上限，见 codeModeModelOutput。
-				record.Output = output
+			lastToolSignature = signature
+			inputKeys := sortedInputKeys(action.Input)
+			toolMetadata := webSearchRunMetadataFromInput(action.Tool, action.Input)
+			emitRunEvent(ctx, req.Observer, RunEvent{
+				TraceID:      traceID,
+				Phase:        RunPhaseToolStarted,
+				ModelTurn:    modelTurns,
+				ToolCall:     toolCalls,
+				MaxToolCalls: r.cfg.MaxSteps,
+				Tool:         action.Tool,
+				InputKeys:    inputKeys,
+				ToolInput:    cloneToolInput(action.Input),
+				Metadata:     toolMetadata,
+			})
+			outputLimit := ToolOutputMaxChars
+			toolTimeout := time.Duration(r.cfg.ToolTimeoutMS) * time.Millisecond
+			toolCtx, toolCancel := contextWithToolBudget(WithToolOutputBudget(ctx, outputLimit), toolTimeout, time.Duration(r.cfg.FinalizationReserveMS)*time.Millisecond)
+			toolStartedAt := time.Now()
+			var output string
+			// 被配置关掉的操作（比如安全模式下的写操作）不执行，拒绝理由按工具报错交回
+			// 模型：它照常占一步、照常进运行记录，模型看到的是一次明确失败而不是沉默。
+			// 执行前按最终入参再判一次：上面判的是整理之前的入参。
+			err = operationDisabled
+			if err == nil {
+				err = r.registry.OperationDisabledError(action.Tool, action.Input)
 			}
-			output = record.Output
-			if action.Tool == dianaImageToolName && imageToolResultQueued(output) {
-				imageTaskQueued = true
+			blocked := err != nil
+			if err == nil {
+				err = hooks.before(toolCtx, action.Tool, action.Input)
+				blocked = err != nil
 			}
-		}
-		steps = append(steps, record)
-		hooks.after(ctx, record)
-		toolMetadata = mergeRunMetadata(toolMetadata, researchRunMetadataFromOutput(action.Tool, rawOutput, err))
+			if err == nil {
+				if script, ok := tool.(*codeModeTool); ok {
+					output, err = r.runCodeMode(toolCtx, script, action.Input, req, hooks, traceID, modelTurns, &toolCalls, &introspectionCalls, &toolLoadCalls, &lastToolSignature, &steps)
+					for _, child := range steps {
+						if child.Tool == dianaImageToolName && child.Error == "" && imageToolResultQueued(child.Output) {
+							imageTaskQueued = true
+						}
+					}
+				} else {
+					output, err = tool.Run(toolCtx, action.Input)
+				}
+			}
+			toolCancel()
+			toolDuration := time.Since(toolStartedAt)
+			toolsDuration += toolDuration
+			record := Step{Index: len(steps) + 1, Tool: action.Tool, Input: action.Input, Skipped: blocked, DurationMS: toolDuration.Milliseconds()}
+			// 检索阶段从未截断的输出提取，避免外层截断损坏 JSON 后误报来源缺失。
+			//
+			// 工具结果和报错原样进模型上下文，也进运行记录（下一轮的 carryover、事件
+			// 记录）。凭据在这里统一遮掉：HTTP 客户端报错带着整条请求地址（查询参数里的
+			// 令牌、userinfo），平台和插件报错回显请求头，命令输出里有继承来的环境变量。
+			// 报错按形态和已登记原文一起遮；正常输出只遮已登记原文和 userinfo，网页里的
+			// 签名链接模型还要接着用。
+			output = secretmask.Output(output)
+			rawOutput := output
+			if err != nil {
+				record.Error = secretmask.Text(normalizeToolError(err, toolCtx, ctx, int(toolTimeout/time.Millisecond)))
+				output = toolExecutionErrorForModel(action.Tool, record.Error)
+			} else {
+				record.Output = truncateToolOutput(output, outputLimit)
+				if action.Tool == ToolsLoadToolName || action.Tool == codeModeToolName {
+					// Loader enforces its own bound atomically; truncating a JSON
+					// contract would mark unseen parameters as loaded. codemode 照 Pi
+					// 有自己的上限，见 codeModeModelOutput。
+					record.Output = output
+				}
+				output = record.Output
+				if action.Tool == dianaImageToolName && imageToolResultQueued(output) {
+					imageTaskQueued = true
+				}
+			}
+			steps = append(steps, record)
+			hooks.after(ctx, record)
+			toolMetadata = mergeRunMetadata(toolMetadata, researchRunMetadataFromOutput(action.Tool, rawOutput, err))
 
-		emitRunEvent(ctx, req.Observer, RunEvent{
-			TraceID:      traceID,
-			Phase:        RunPhaseToolCompleted,
-			ModelTurn:    modelTurns,
-			ToolCall:     toolCalls,
-			MaxToolCalls: r.cfg.MaxSteps,
-			Tool:         action.Tool,
-			InputKeys:    inputKeys,
-			ToolInput:    cloneToolInput(action.Input),
-			ToolOutput:   record.Output,
-			Metadata:     toolMetadata,
-			OutputChars:  len([]rune(record.Output)),
-			DurationMS:   toolDuration.Milliseconds(),
-			Error:        record.Error,
-		})
-		if err == nil {
-			if terminal, ok := tool.(TerminalResultTool); ok {
-				if text, done := terminal.TerminalResult(output); done {
-					return finish(text, "terminal_tool")
+			emitRunEvent(ctx, req.Observer, RunEvent{
+				TraceID:      traceID,
+				Phase:        RunPhaseToolCompleted,
+				ModelTurn:    modelTurns,
+				ToolCall:     toolCalls,
+				MaxToolCalls: r.cfg.MaxSteps,
+				Tool:         action.Tool,
+				InputKeys:    inputKeys,
+				ToolInput:    cloneToolInput(action.Input),
+				ToolOutput:   record.Output,
+				Metadata:     toolMetadata,
+				OutputChars:  len([]rune(record.Output)),
+				DurationMS:   toolDuration.Milliseconds(),
+				Error:        record.Error,
+			})
+			if err == nil {
+				if terminal, ok := tool.(TerminalResultTool); ok {
+					if text, done := terminal.TerminalResult(output); done {
+						return finish(text, "terminal_tool")
+					}
 				}
 			}
-		}
-		// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
-		modelOutput := output
-		if err == nil && action.Tool == WebSearchToolName {
-			modelOutput = webSearchOutputForModel(output)
-		}
-		observationText := toolObservationMessage(action.Tool, modelOutput, err == nil, r.remainingToolCalls(toolCalls)) + parallelDropNotice
-		observation := llm.Message{Role: llm.RoleUser, Content: observationText}
-		if err == nil {
-			if rich, ok := tool.(ToolResultPartsTool); ok {
-				for _, part := range rich.ToolResultParts(output) {
-					if part.Type != llm.ContentPartImageURL || strings.TrimSpace(part.ImageURL) == "" {
-						continue
+			// 把上一轮 assistant JSON 和工具输出一起回填，模型据此决定下一步或 final。
+			modelOutput := output
+			if err == nil && action.Tool == WebSearchToolName {
+				modelOutput = webSearchOutputForModel(output)
+			}
+			observationText := toolObservationMessage(action.Tool, modelOutput, err == nil, r.remainingToolCalls(toolCalls))
+			observation := llm.Message{Role: llm.RoleUser, Content: observationText}
+			if err == nil {
+				if rich, ok := tool.(ToolResultPartsTool); ok {
+					for _, part := range rich.ToolResultParts(output) {
+						if part.Type != llm.ContentPartImageURL || strings.TrimSpace(part.ImageURL) == "" {
+							continue
+						}
+						if len(observation.Parts) == 0 {
+							observation.Parts = append(observation.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: observationText})
+							observation.Priority = llm.MessagePriorityPlugin
+						}
+						observation.Parts = append(observation.Parts, part)
 					}
-					if len(observation.Parts) == 0 {
-						observation.Parts = append(observation.Parts, llm.ContentPart{Type: llm.ContentPartText, Text: observationText})
-						observation.Priority = llm.MessagePriorityPlugin
-					}
-					observation.Parts = append(observation.Parts, part)
 				}
+			}
+			result := stepCallResult{observation: observation, failed: err != nil}
+			if err == nil {
+				if guidance := researchObservationGuidance(action.Tool, rawOutput, r.remainingToolCalls(toolCalls)); guidance != "" {
+					if output != rawOutput {
+						guidance += " 本轮工具输出另外被截断，未显示的部分不能作证据。"
+					}
+					// 进度放在最后：每步都变，模型最先读到的是自己查到哪了。
+					if note := collectResearchProgress(steps).note(); note != "" {
+						guidance += "\n\n" + note
+					}
+					result.guidance = guidance
+				}
+			}
+			results[callIndex] = result
+			stoppedAt = callPos + 1
+		}
+		if stopReason != "" {
+			for pos := stoppedAt; pos < len(callOrder); pos++ {
+				content := "本次调用未执行：" + stopReason
+				if pos > stoppedAt {
+					content = "本次调用没有执行：同一步里排在前面的调用被拒绝，后面的都没有执行。如仍需要，请在下一步重新调用。"
+				}
+				results[callOrder[pos]] = stepCallResult{observation: llm.Message{Role: llm.RoleUser, Content: content}, failed: true}
 			}
 		}
 		exchangeStart := len(messages)
 		if nativeToolCall {
-			assistantMessage := llm.Message{
+			messages = append(messages, llm.Message{
 				Role:              llm.RoleAssistant,
 				Content:           lastText,
 				ToolCalls:         resp.ToolCalls,
 				ResponsesOutput:   resp.ResponsesOutput,
 				ContinuationScope: resp.ContinuationScope, AnthropicThinking: resp.AnthropicThinking, ReasoningContent: resp.ReasoningContent,
-			}
-			messages = append(messages, assistantMessage)
+			})
 			// Signed thinking and Responses continuation refer to the original
-			// tool batch. Keep every call paired with an honest result, including
-			// the calls skipped by our one-tool-per-step execution policy.
+			// tool batch. Keep every call paired with an honest result.
 			for index, call := range resp.ToolCalls {
-				content := observationText
-				skipped := index != nativeCallIndex
-				if skipped && call.Name == finalizeToolName {
+				result, handled := results[index]
+				content := result.observation.Content
+				switch {
+				case handled:
+				case call.Name == finalizeToolName:
 					content = "这次 send 没有发出：同一步还有其他工具。看过结果后再 send。"
-				} else if skipped {
-					content = "本次调用没有执行：当前规划步只执行了 " + nativeCall.Name + "。如仍需要，请在下一步重新调用。"
+				default:
+					content = "本次调用没有执行：本轮工具步数已用完。"
 				}
-				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: skipped || err != nil, Priority: observation.Priority})
+				messages = append(messages, llm.Message{Role: llm.RoleTool, Content: content, ToolCallID: call.ID, ToolName: call.Name, ToolError: !handled || result.failed, Priority: result.observation.Priority})
 			}
-			if len(observation.Parts) > 0 {
-				messages = append(messages, observation)
+			for _, index := range callOrder {
+				if result := results[index]; len(result.observation.Parts) > 0 {
+					messages = append(messages, result.observation)
+				}
 			}
 		} else {
 			messages = append(messages,
 				llm.Message{Role: llm.RoleAssistant, Content: lastText},
-				observation,
+				results[-1].observation,
 			)
 		}
-		if err == nil {
-			if guidance := researchObservationGuidance(action.Tool, rawOutput, r.remainingToolCalls(toolCalls)); guidance != "" {
-				if output != rawOutput {
-					guidance += " 本轮工具输出另外被截断，未显示的部分不能作证据。"
-				}
-				// 进度放在最后：每步都变，模型最先读到的是自己查到哪了。
-				if note := collectResearchProgress(steps).note(); note != "" {
-					guidance += "\n\n" + note
-				}
+		for _, index := range callOrder {
+			if guidance := results[index].guidance; guidance != "" {
 				messages = append(messages, llm.Message{Role: llm.RoleSystem, Priority: llm.MessagePrioritySystem, Content: guidance})
 			}
 		}
 		executedTools = append(executedTools, messages[exchangeStart:]...)
+		if stopReason != "" && protocolRepairs >= r.cfg.ProtocolRepairLimit {
+			finishReason = "protocol_repair_exhausted"
+			break
+		}
 	}
 
 	finalApproved = false
@@ -1385,7 +1438,7 @@ func (r *Runner) toolRules(hasTool func(string) bool, withBudget bool) []string 
 	// 措辞必须把「规划轮」和「用户消息」区分开:此前只写「每轮最多调用一个
 	// 工具」,模型把「轮」理解成「用户每发一条消息」,于是每调一次工具就收口,
 	// 让用户发「继续」才肯调下一次——多步任务永远走不完。预算写成具体数字。
-	rules := []string{"- 互不依赖的只读检索（web_search、browser_render）可以同时调用，并行执行，包括用 tools_execute 封装的调用；其他工具每步只发一个，看到结果再继续。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
+	rules := []string{"- 互不依赖的调用可以放在同一步一起发：只读检索（web_search、browser_render）并行执行，包括用 tools_execute 封装的调用；其他工具按你写的顺序依次执行，各自返回结果。后一个要用前一个结果的，分两步发。本轮最后一步只调 send。持续执行直到任务完成，不要停下来向用户要求「继续」。"}
 	// 设了上限才写预算；共享模式下上限按发言者可能不同，写进尾部（speakerToolPrompt）。
 	if withBudget && r.cfg.MaxSteps > 0 {
 		rules = append(rules, fmt.Sprintf("本轮最多调用 %d 次工具，并行调用各算一次。", r.cfg.MaxSteps))
@@ -1576,7 +1629,7 @@ func (r *Runner) systemPrompt() string {
 	rules = append(rules, "- 已经足够回答时只调 send，发出回复并结束本轮。")
 	sections := []string{
 		"你是 Diana 的内置 Agent。使用工具完成任务和核实外部事实，观察结果后再给出最终答复。征求你的观点或讨论你的架构，也要先核实其中具体技术的外部事实前提；不能把熟悉的术语自动当成已查证的知识。",
-		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。每个规划步只选择一个工具，观察结果后可以继续选择下一个。",
+		"需要工具时必须使用请求中提供的原生 function calling，不要把工具调用写进正文。互不依赖的调用可以放在同一步，要看结果再决定的分步调用。",
 		"本轮最后一步必须是 send：只调 send 就把消息发出并结束本轮，给用户看的完整正文写进 text，task_state 等元数据按需一并携带，正文不要写成 JSON。工具调用旁边写的正文不会发给任何人。",
 		"这一轮确实不需要说话时，send 填 silent=true、text 留空，本轮就不发任何消息，silent_reason 写一句原因。它不是拒答：要拒绝就正常把话说出来。",
 		"若 Provider 不支持原生 function calling，才可兼容输出 {\"action\":\"final\",\"content\":\"给用户看的自然语言回复\"} 或 {\"action\":\"tool\",\"tool\":\"工具名\",\"input\":{...}}。",
@@ -2034,6 +2087,14 @@ func truncateRunes(value string, limit int) string {
 	}
 	// 按 rune 截断，避免中文或 emoji 被按字节切坏。
 	return string(runes[:limit]) + "\n...truncated..."
+}
+
+// stepCallResult 是一步里一次调用交回模型的结果：observation 的正文进对应的工具消息，
+// 带图片附件时整条另外追加；guidance 是调研类工具结果后面接的提醒。
+type stepCallResult struct {
+	observation llm.Message
+	failed      bool
+	guidance    string
 }
 
 // appendToolRepair preserves every original call ID, including skipped parallel calls,
