@@ -369,6 +369,53 @@ func TestOpenAICompatibleDefaultsToResponsesAPI(t *testing.T) {
 	}
 }
 
+// TestOpenAICompatibleResponsesSendsSystemAsLeadingDeveloper 验证开头的 system 合成 input
+// 第一条 developer 消息、不走顶层 instructions；靠后的 system 仍按原样内联成 user。
+func TestOpenAICompatibleResponsesSendsSystemAsLeadingDeveloper(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("Decode request body error = %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test","object":"response","created_at":1,"model":"gpt-test","output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok","annotations":[]}]}],"usage":{"input_tokens":3,"output_tokens":1,"total_tokens":4},"status":"completed"}`))
+	}))
+	defer server.Close()
+
+	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test-key", BaseURL: server.URL + "/v1", Model: "gpt-test"}, server.Client())
+	_, err := client.Generate(context.Background(), GenerateRequest{Messages: []Message{
+		{Role: RoleSystem, Content: "规则一"},
+		{Role: RoleSystem, Content: "规则二"},
+		{Role: RoleUser, Content: "你好"},
+		{Role: RoleSystem, Content: "尾部提醒"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := gotBody["instructions"]; ok {
+		t.Fatalf("request still sets top-level instructions: %#v", gotBody["instructions"])
+	}
+	data, _ := json.Marshal(gotBody["input"])
+	var input []struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(data, &input); err != nil || len(input) != 3 {
+		t.Fatalf("input = %s, err = %v", data, err)
+	}
+	var developer []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if input[0].Role != "developer" || json.Unmarshal(input[0].Content, &developer) != nil ||
+		len(developer) != 1 || developer[0].Type != "input_text" || developer[0].Text != "规则一\n\n规则二" {
+		t.Fatalf("input[0] = %s %s, want developer input_text with joined system prompt", input[0].Role, input[0].Content)
+	}
+	if input[1].Role != "user" || input[2].Role != "user" || !strings.Contains(string(input[2].Content), "尾部提醒") {
+		t.Fatalf("input = %s", data)
+	}
+}
+
 func TestOpenAICompatibleResponsesNativeToolCall(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

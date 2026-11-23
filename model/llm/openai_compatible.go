@@ -166,8 +166,7 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		return nil, fmt.Errorf("llm: local request validation failed: %w", err)
 	}
 	open := func(req GenerateRequest) (*ssestream.Stream[responses.ResponseStreamEventUnion], error) {
-		system, messages := splitSystemPrompt(req.Messages)
-		input := openAIResponsesInput(messages, req.Tools)
+		input := openAIResponsesRequestInput(req.Messages, req.Tools)
 		if len(input) == 0 {
 			return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
 		}
@@ -177,9 +176,6 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 		}
 		if req.PromptCacheKey != "" {
 			params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
-		}
-		if system != "" {
-			params.Instructions = param.NewOpt(system)
 		}
 		if req.Temperature != nil {
 			params.Temperature = param.NewOpt(*req.Temperature)
@@ -776,12 +772,10 @@ func imageContentTypeForEdit(header string, body []byte) string {
 
 // generateResponse 使用 Responses API 生成回复。
 func (c *openAICompatibleClient) generateResponse(ctx context.Context, req GenerateRequest) (*GenerateResponse, error) {
-	system, messages := splitSystemPrompt(req.Messages)
-	input := openAIResponsesInput(messages, req.Tools)
+	input := openAIResponsesRequestInput(req.Messages, req.Tools)
 	if len(input) == 0 {
 		return nil, fmt.Errorf("llm: Responses input is empty after context budgeting: %w", ErrMissingMessages)
 	}
-	// Responses API 把 system prompt 放到 Instructions，普通对话放 InputItemList。
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(req.Model),
 		Input: responses.ResponseNewParamsInputUnion{
@@ -790,9 +784,6 @@ func (c *openAICompatibleClient) generateResponse(ctx context.Context, req Gener
 	}
 	if req.PromptCacheKey != "" {
 		params.PromptCacheKey = param.NewOpt(req.PromptCacheKey)
-	}
-	if system != "" {
-		params.Instructions = param.NewOpt(system)
 	}
 	if req.Temperature != nil {
 		params.Temperature = param.NewOpt(*req.Temperature)
@@ -2359,6 +2350,23 @@ func responsesFunctionCallID(id string) string {
 	}
 	sum := sha256.Sum256([]byte(id))
 	return fmt.Sprintf("%x", sum[:24])
+}
+
+// openAIResponsesRequestInput 把开头的 system 消息合成一条 developer 消息，放在 input
+// 最前面，不用顶层 instructions。GPT-6.2 起 instructions 被接到 input 后面、每次按未缓存
+// 价计费，追加一轮后整份前缀都对不上；developer 消息留在开头，照常进可缓存前缀。
+// 更早的模型两种写法命中一样。没有对话内容时返回空，由调用方报错。
+func openAIResponsesRequestInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
+	system, chat := splitSystemPrompt(messages)
+	input := openAIResponsesInput(chat, definitions)
+	if system == "" || len(input) == 0 {
+		return input
+	}
+	developer := responses.ResponseInputItemParamOfMessage(
+		responses.ResponseInputMessageContentListParam{responses.ResponseInputContentParamOfInputText(system)},
+		responses.EasyInputMessageRoleDeveloper,
+	)
+	return append(responses.ResponseInputParam{developer}, input...)
 }
 
 func openAIResponsesInput(messages []Message, definitions []ToolDefinition) responses.ResponseInputParam {
