@@ -72,6 +72,14 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 				log.Printf("storage maintenance: deleted %d expired relationship evaluations", count)
 			}
 			stopEval()
+			// 工具调用记录同样每条回复好几条，按普通日志的保留天数清理。
+			callsCtx, stopCalls := context.WithTimeout(ctx, 2*time.Minute)
+			if count, err := store.PruneAgentToolCalls(callsCtx, logRetentionCutoff(now, cfg.LogRetentionDays, 30)); err != nil && ctx.Err() == nil {
+				log.Printf("storage maintenance: prune agent tool calls: %v", err)
+			} else if count > 0 {
+				log.Printf("storage maintenance: deleted %d expired agent tool calls", count)
+			}
+			stopCalls()
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
 				logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7),

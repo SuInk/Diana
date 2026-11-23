@@ -157,6 +157,7 @@ func (r *Runtime) agentRunObserver(event MessageEvent) agent.RunObserver {
 				toolOutput = "ERROR: " + runError
 			}
 			toolInput, toolOutput = r.maskSecretsForTrace(ctx, toolInput, toolOutput)
+			r.recordAgentToolCall(ctx, event, runEvent, toolInput, runError)
 			traceMetadata := map[string]any{
 				"phase":           "agent_" + string(runEvent.Phase),
 				"trace_id":        runEvent.TraceID,

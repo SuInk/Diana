@@ -213,6 +213,7 @@ func (t *dianaVideoTool) enqueue(ctx context.Context, request dianaVideoRequest)
 	task := PluginTask{
 		Kind:    "video",
 		Name:    "视频生成",
+		Request: request.Prompt,
 		Key:     taskKey,
 		Timeout: t.taskTimeout(),
 		// execute 按是否计费结清；这里兜没跑起来、半路被取消的那些。

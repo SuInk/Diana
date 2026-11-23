@@ -40,11 +40,12 @@ func (s *SQLiteStore) SaveInboundEventSubtask(ctx context.Context, item assistan
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO inbound_event_subtasks
-  (event_id, task_id, kind, name, phase, completed, total, detail, error, started_at, updated_at, finished_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  (event_id, task_id, kind, name, request, phase, completed, total, detail, error, started_at, updated_at, finished_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(event_id, task_id) DO UPDATE SET
   kind = excluded.kind,
   name = excluded.name,
+  request = CASE WHEN TRIM(COALESCE(excluded.request, '')) = '' THEN inbound_event_subtasks.request ELSE excluded.request END,
   phase = excluded.phase,
   completed = excluded.completed,
   total = excluded.total,
@@ -53,7 +54,7 @@ ON CONFLICT(event_id, task_id) DO UPDATE SET
   updated_at = excluded.updated_at,
   finished_at = COALESCE(excluded.finished_at, inbound_event_subtasks.finished_at)
 `,
-		eventID, taskID, strings.TrimSpace(item.Kind), strings.TrimSpace(item.Name), strings.TrimSpace(item.Phase),
+		eventID, taskID, strings.TrimSpace(item.Kind), strings.TrimSpace(item.Name), strings.TrimSpace(item.Request), strings.TrimSpace(item.Phase),
 		item.Completed, item.Total, strings.TrimSpace(item.Detail), strings.TrimSpace(item.Error),
 		startedAt.Unix(), updatedAt.Unix(), finishedAt,
 	)
@@ -81,7 +82,7 @@ func (s *SQLiteStore) LoadInboundEventSubtasks(ctx context.Context, eventIDs []s
 		return nil, nil
 	}
 	rows, err := s.eventReader().QueryContext(ctx, `
-SELECT event_id, task_id, kind, name, phase, completed, total,
+SELECT event_id, task_id, kind, name, COALESCE(request, ''), phase, completed, total,
        COALESCE(detail, ''), COALESCE(error, ''), started_at, updated_at, finished_at
 FROM inbound_event_subtasks
 WHERE event_id IN (`+strings.Join(placeholders, ",")+`)
@@ -98,7 +99,7 @@ ORDER BY started_at ASC, task_id ASC
 		var startedAt, updatedAt int64
 		var finishedAt sql.NullInt64
 		if err := rows.Scan(
-			&item.EventID, &item.TaskID, &item.Kind, &item.Name, &item.Phase,
+			&item.EventID, &item.TaskID, &item.Kind, &item.Name, &item.Request, &item.Phase,
 			&item.Completed, &item.Total, &item.Detail, &item.Error,
 			&startedAt, &updatedAt, &finishedAt,
 		); err != nil {

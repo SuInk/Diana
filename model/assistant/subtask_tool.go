@@ -426,7 +426,7 @@ func (t *dianaSubtaskTool) recordTask(ctx context.Context, task subtaskRequest) 
 	if task.Mode == subtaskModeSearch {
 		name = "子任务调研"
 	}
-	item := reservedSubagentTask{id: uuid.NewString(), task: PluginTask{Kind: "subtask", Name: name}, event: t.event}
+	item := reservedSubagentTask{id: uuid.NewString(), task: PluginTask{Kind: "subtask", Name: name, Request: task.Objective}, event: t.event}
 	if turn := outboundTurnFromContext(ctx); turn != nil {
 		item.eventID = turn.id
 	}

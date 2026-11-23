@@ -36,6 +36,7 @@ type InboundEventSubtask struct {
 	TaskID     string     `json:"task_id"`
 	Kind       string     `json:"kind"`
 	Name       string     `json:"name"`
+	Request    string     `json:"request,omitempty"`
 	Phase      string     `json:"phase"`
 	Completed  int        `json:"completed,omitempty"`
 	Total      int        `json:"total,omitempty"`
@@ -56,6 +57,7 @@ type SubagentTaskStatus struct {
 	ID        string    `json:"id"`
 	Kind      string    `json:"kind"`
 	Name      string    `json:"name"`
+	Request   string    `json:"request,omitempty"`
 	Phase     string    `json:"phase"`
 	Completed int       `json:"completed,omitempty"`
 	Total     int       `json:"total,omitempty"`
@@ -173,6 +175,7 @@ func (r *Runtime) reservePluginTasksForTurn(ctx context.Context, event MessageEv
 			ID:        id,
 			Kind:      task.Kind,
 			Name:      task.Name,
+			Request:   task.Request,
 			Phase:     "queued",
 			StartedAt: now,
 			UpdatedAt: now,
@@ -642,6 +645,7 @@ func (r *Runtime) persistSubagentTask(item reservedSubagentTask, phase string, p
 		TaskID:    item.id,
 		Kind:      item.task.Kind,
 		Name:      item.task.Name,
+		Request:   item.task.Request,
 		Phase:     phase,
 		Completed: progress.Completed,
 		Total:     progress.Total,
