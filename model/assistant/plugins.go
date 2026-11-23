@@ -280,7 +280,9 @@ type PluginTask struct {
 	PluginID string
 	Kind     string
 	Name     string
-	Key      string
+	// Request 是这次任务要做什么（生图的操作和提示词、调研目标），落库给 tasks 查。
+	Request string
+	Key     string
 	// SupersedeKey groups tasks where only the newest result remains useful.
 	// Reserving a newer task cancels queued/running older tasks in the group.
 	SupersedeKey string

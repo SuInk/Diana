@@ -515,6 +515,7 @@ func (t *dianaImageTool) enqueue(ctx context.Context, request dianaImageToolRequ
 	task := PluginTask{
 		Kind:    "image",
 		Name:    name,
+		Request: request.Operation + "：" + request.Prompt,
 		Key:     taskKey,
 		Timeout: t.taskTimeout(),
 		// 成功时 execute 已经按实际张数结清，这里只兜没跑起来、半路被取消的那些。

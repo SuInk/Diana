@@ -96,6 +96,7 @@ func (r *Runtime) startBackgroundAgent(ctx context.Context, event MessageEvent, 
 	task := PluginTask{
 		Kind:        backgroundAgentKind,
 		Name:        "后台任务：" + truncateRunes(goal, 24),
+		Request:     goal,
 		Key:         "bg-" + fmt.Sprint(now.UnixNano()),
 		Timeout:     backgroundAgentTimeout,
 		Unthrottled: true,

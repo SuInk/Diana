@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -20,12 +21,61 @@ type dianaTasksTool struct {
 }
 
 type dianaTasksResult struct {
-	OK      bool        `json:"ok"`
-	Action  string      `json:"action"`
-	Scope   string      `json:"scope"`
-	Message string      `json:"message"`
-	Items   []dianaTask `json:"items"`
+	OK      bool   `json:"ok"`
+	Action  string `json:"action"`
+	Scope   string `json:"scope,omitempty"`
+	Message string `json:"message"`
+	// Items 是提醒、事件触发任务和周期订阅；kind 不含 schedule 时不出现。
+	Items []dianaTask `json:"items,omitempty"`
+	// Background 是当前会话的后台任务（生图、视频、子任务、后台调研），新的在前。
+	Background []dianaBackgroundTaskItem `json:"background,omitempty"`
+	// BackgroundBefore 非零表示还有更早的，下一页带 kind=background、before 填它。
+	BackgroundBefore int64 `json:"background_next_before,omitempty"`
+	// ToolCalls 是当前会话之前实际执行过的工具调用，新的在前。
+	ToolCalls       []dianaToolCallItem `json:"tool_calls,omitempty"`
+	ToolCallsBefore int64               `json:"tool_calls_next_before,omitempty"`
 }
+
+type dianaBackgroundTaskItem struct {
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+	Request string `json:"request,omitempty"`
+	Phase   string `json:"phase"`
+	// Active 表示任务此刻还在运行时里排队或运行。落库记录没结束却不 active 的，是
+	// 进程重启或异常中断留下的，不会再完成。
+	Active     bool       `json:"active"`
+	Completed  int        `json:"completed,omitempty"`
+	Total      int        `json:"total,omitempty"`
+	Detail     string     `json:"detail,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	MessageID  string     `json:"message_id,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+type dianaToolCallItem struct {
+	ID   int64  `json:"id"`
+	Tool string `json:"tool"`
+	// Input 是当时的参数；InputHidden 表示这个工具当前发言者用不了，参数不给看。
+	Input       json.RawMessage `json:"input,omitempty"`
+	InputHidden bool            `json:"input_hidden,omitempty"`
+	Failed      bool            `json:"failed,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	MessageID   string          `json:"message_id,omitempty"`
+	UserID      string          `json:"user_id,omitempty"`
+	DurationMS  int64           `json:"duration_ms"`
+	CreatedAt   time.Time       `json:"created_at"`
+}
+
+const (
+	tasksKindAll        = "all"
+	tasksKindSchedule   = "schedule"
+	tasksKindBackground = "background"
+	tasksKindToolCalls  = "tool_calls"
+	tasksDefaultPage    = 20
+	tasksMaxPage        = 100
+)
 
 type dianaTask struct {
 	ID      string `json:"id"`
@@ -96,20 +146,27 @@ func (t *dianaTasksTool) Name() string {
 
 // 「不要分别去查」留着：用户问全部任务时，模型会挨个调 reminder、subscription、
 // event_trigger 的 list，三轮还容易漏掉一类。
+//
+// 后台任务和工具调用 11-23 加进来：工具调用不跨轮，下一轮看不到上一轮调过什么，
+// 「图画好没」「刚才按什么画的」「你搜了什么」只能凭回复正文猜。
 func (t *dianaTasksTool) Description() string {
-	return `一次列出全部一次性提醒、事件触发任务和周期订阅，含状态和额度占用。用户问「我有哪些任务/提醒/订阅」时用它，不要分别去查。`
+	return `查任务和之前做过的事，一次列全：提醒、事件触发任务和周期订阅（含状态和额度占用）；当前会话的后台任务（生图、视频、子任务、后台调研：在跑的、排队的、已结束的，含当时的请求、进度和失败原因）；当前会话之前实际执行过的工具调用（工具名、参数、成败，不含结果）。用户问「我有哪些任务/提醒/订阅」「图画好没」「刚才按什么画的、搜了什么」，或你要接着上一轮的图和查询做、确认上一轮到底调没调时用它，别凭聊天记录猜，也不要分别去查。之前的工具结果不在这里，要现在的数据就重新调。`
 }
 
 func (t *dianaTasksTool) InputSchema() map[string]any {
 	return toolObjectSchema([]string{"operation"}, map[string]any{
 		"operation":      toolEnumParam("固定 list", "list"),
-		"scope":          toolEnumParam("mine 只看自己（默认）；all 所有用户，仅主人", "mine", "all"),
-		"target_user_id": toolStringParam("查指定用户，仅主人"),
+		"kind":           toolEnumParam("all 全部（默认）；schedule 提醒和订阅；background 后台任务；tool_calls 工具调用", tasksKindAll, tasksKindSchedule, tasksKindBackground, tasksKindToolCalls),
+		"scope":          toolEnumParam("提醒和订阅：mine 只看自己（默认）；all 所有用户，仅主人", "mine", "all"),
+		"target_user_id": toolStringParam("提醒和订阅：查指定用户，仅主人"),
+		"tool":           toolStringParam("工具调用：只看这个工具，如 image、web_search"),
+		"limit":          toolIntParam(fmt.Sprintf("后台任务、工具调用每页条数，默认 %d", tasksDefaultPage), 1, tasksMaxPage),
+		"before":         toolIntParam("翻到更早一页：kind 填 background 或 tool_calls，这里填上一页的 background_next_before 或 tool_calls_next_before", 1, math.MaxInt32),
 	})
 }
 
 func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string, error) {
-	if t == nil || t.runtime == nil || t.runtime.reminders == nil {
+	if t == nil || t.runtime == nil {
 		return "", fmt.Errorf("当前未启用任务存储")
 	}
 	operation := strings.ToLower(strings.TrimSpace(configToolString(input, "operation")))
@@ -119,23 +176,81 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 	if operation != "list" {
 		return "", fmt.Errorf("operation 必须是 list")
 	}
+	kind := strings.ToLower(strings.TrimSpace(configToolString(input, "kind")))
+	if kind == "" {
+		kind = tasksKindAll
+	}
+	switch kind {
+	case tasksKindAll, tasksKindSchedule, tasksKindBackground, tasksKindToolCalls:
+	default:
+		return "", fmt.Errorf("kind 必须是 all、schedule、background 或 tool_calls")
+	}
+	before := int64(intFromAny(input["before"]))
+	if before > 0 && kind != tasksKindBackground && kind != tasksKindToolCalls {
+		return "", fmt.Errorf("before 要和 kind=background 或 kind=tool_calls 一起用")
+	}
+	limit := intFromAny(input["limit"])
+	if limit <= 0 {
+		limit = tasksDefaultPage
+	}
+	limit = min(limit, tasksMaxPage)
+	result := dianaTasksResult{OK: true, Action: "listed"}
+	var counts []string
+	// kind=all 时没开提醒存储就跳过这一类，后台任务和工具调用照查。
+	if kind == tasksKindSchedule || (kind == tasksKindAll && t.runtime.reminders != nil) {
+		scope, items, err := t.listSchedules(ctx, input)
+		if err != nil {
+			return "", err
+		}
+		result.Scope, result.Items = scope, items
+		counts = append(counts, fmt.Sprintf("%d 个提醒和订阅", len(items)))
+	}
+	if kind == tasksKindAll || kind == tasksKindBackground {
+		items, next, err := t.listBackground(ctx, before, limit)
+		if err != nil {
+			return "", err
+		}
+		result.Background, result.BackgroundBefore = items, next
+		counts = append(counts, fmt.Sprintf("%d 个后台任务", len(items)))
+	}
+	if kind == tasksKindAll || kind == tasksKindToolCalls {
+		items, next, err := t.listToolCalls(ctx, strings.TrimSpace(configToolString(input, "tool")), before, limit)
+		if err != nil {
+			return "", err
+		}
+		result.ToolCalls, result.ToolCallsBefore = items, next
+		counts = append(counts, fmt.Sprintf("%d 次工具调用", len(items)))
+	}
+	result.Message = "已读取 " + strings.Join(counts, "、") + "。"
+	body, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+// listSchedules 列提醒、事件触发任务和周期订阅。
+func (t *dianaTasksTool) listSchedules(ctx context.Context, input map[string]any) (string, []dianaTask, error) {
+	if t.runtime.reminders == nil {
+		return "", nil, fmt.Errorf("当前未启用任务存储")
+	}
 	scope := strings.ToLower(strings.TrimSpace(configToolString(input, "scope")))
 	if scope == "" {
 		scope = "mine"
 	}
 	if scope != "mine" && scope != "all" {
-		return "", fmt.Errorf("scope 必须是 mine 或 all")
+		return "", nil, fmt.Errorf("scope 必须是 mine 或 all")
 	}
 	requester := t.runtime.relationshipPolicy(ctx, t.event)
 	targetID := normalizeRelationshipUserID(configToolString(input, "target_user_id"))
 	if configToolString(input, "target_user_id") != "" && targetID == "" {
-		return "", fmt.Errorf("target_user_id 必须是有效账号")
+		return "", nil, fmt.Errorf("target_user_id 必须是有效账号")
 	}
 	if scope == "all" && !requester.Owner {
-		return "", fmt.Errorf("只有主人可以查询所有用户的提醒和订阅")
+		return "", nil, fmt.Errorf("只有主人可以查询所有用户的提醒和订阅")
 	}
 	if targetID != "" && targetID != t.event.UserID && !requester.Owner {
-		return "", fmt.Errorf("只有主人可以查询其他用户的提醒和订阅")
+		return "", nil, fmt.Errorf("只有主人可以查询其他用户的提醒和订阅")
 	}
 	if targetID != "" {
 		scope = "target:" + targetID
@@ -171,17 +286,7 @@ func (t *dianaTasksTool) Run(ctx context.Context, input map[string]any) (string,
 		}
 		return items[i].ID < items[j].ID
 	})
-	body, err := json.MarshalIndent(dianaTasksResult{
-		OK:      true,
-		Action:  "listed",
-		Scope:   scope,
-		Message: fmt.Sprintf("已读取 %d 个一次性提醒和周期订阅。", len(items)),
-		Items:   items,
-	}, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(body), nil
+	return scope, items, nil
 }
 
 // taskCanonicalOperation 给提醒和订阅按操作拦截用，和工具自己的换算一致：add 算

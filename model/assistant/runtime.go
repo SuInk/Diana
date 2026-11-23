@@ -5283,6 +5283,9 @@ var replyFeaturedTools = []string{
 	dianaHistoryImagesToolName,
 	dianaImageToolName,
 	dianaChatHistoryToolName,
+	// tasks 也查后台任务和之前的工具调用：工具调用不跨轮，模型要接着上一轮的图或
+	// 查询做时，得在目录里看得到「上一轮调过什么去这里查」。
+	"tasks",
 	"browser_render",
 	"capabilities",
 	dianaPokeToolName,
