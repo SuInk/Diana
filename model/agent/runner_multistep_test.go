@@ -74,40 +74,100 @@ func (c *parallelToolClient) Generate(_ context.Context, req llm.GenerateRequest
 	return &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, nil
 }
 
-// 并行工具调用当前只执行第一个,其余被丢弃——这必须在观察消息里明说,
-// 否则模型以为剩下的执行过了,或者得出「一次只能调一个」的错误经验。
-func TestParallelToolCallsDropIsReportedToModel(t *testing.T) {
+// 一步里的多个调用按顺序全部执行，每个调用配自己的结果，和主流 agent 一致。
+// 以前只执行第一个，其余让模型下一步重发，读连续几页要一页一轮。
+func TestStepRunsEveryToolCallInOrder(t *testing.T) {
 	client := &parallelToolClient{}
 	tool := &countingTool{name: "lookup"}
 	runner, err := NewRunner(client, Config{MaxSteps: 4}, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查三个"}}}); err != nil {
+	response, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查三个"}}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if tool.calls != 1 {
-		t.Fatalf("当前实现应只执行第一个调用,实际 %d", tool.calls)
+	if tool.calls != 3 || len(client.requests) != 2 || len(response.Steps) != 3 {
+		t.Fatalf("calls=%d requests=%d steps=%d", tool.calls, len(client.requests), len(response.Steps))
 	}
-	notified := false
-	for _, req := range client.requests[1:] {
-		for _, msg := range req.Messages {
-			if strings.Contains(msg.Content, "并行请求了 3 个工具调用") && strings.Contains(msg.Content, "没有执行") {
-				notified = true
-			}
+	for index, query := range []string{"one", "two", "three"} {
+		if response.Steps[index].Input["query"] != query {
+			t.Fatalf("steps out of order: %+v", response.Steps)
 		}
 	}
-	if !notified {
-		t.Fatal("被丢弃的并行调用没有告知模型")
+	results := stepToolResults(client.requests[1])
+	if len(results) != 3 || results["call-1"].ToolError || results["call-2"].ToolError || results["call-3"].ToolError {
+		t.Fatalf("every call must get its own result: %+v", results)
 	}
+	if !strings.Contains(results["call-3"].Content, "剩余工具预算 1") {
+		t.Fatalf("budget not counted per call: %s", results["call-3"].Content)
+	}
+}
+
+func stepToolResults(req llm.GenerateRequest) map[string]llm.Message {
 	results := map[string]llm.Message{}
-	for _, msg := range client.requests[1].Messages {
+	for _, msg := range req.Messages {
 		if msg.Role == llm.RoleTool {
 			results[msg.ToolCallID] = msg
 		}
 	}
-	if len(results) != 3 || results["call-1"].ToolError || !results["call-2"].ToolError || !results["call-3"].ToolError {
-		t.Fatalf("tool continuation must close every original call: %+v", results)
+	return results
+}
+
+type scriptedCallsClient struct {
+	calls    []llm.ToolCall
+	requests []llm.GenerateRequest
+}
+
+func (c *scriptedCallsClient) Generate(_ context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	c.requests = append(c.requests, req)
+	if len(c.requests) == 1 {
+		return &llm.GenerateResponse{ToolCalls: c.calls}, nil
+	}
+	return &llm.GenerateResponse{Text: `{"action":"final","content":"done"}`}, nil
+}
+
+// 预算不够时执行到用完为止；后面的调用被拒（这里是连续重复）就停在那里，它和它之后的
+// 都标成未执行；同一步的 send 不发。每个原始调用都有一条结果。
+func TestStepStopsAtBudgetAndRejectedCalls(t *testing.T) {
+	call := func(id, query string) llm.ToolCall {
+		return llm.ToolCall{ID: id, Name: "lookup", Arguments: map[string]any{"query": query}}
+	}
+	for _, tc := range []struct {
+		name     string
+		maxSteps int
+		calls    []llm.ToolCall
+		executed int
+		failed   map[string]string
+	}{
+		{"budget", 2, []llm.ToolCall{call("a", "one"), call("b", "two"), call("c", "three")}, 2, map[string]string{"c": "步数已用完"}},
+		{"rejected", 8, []llm.ToolCall{call("a", "one"), call("b", "one"), call("c", "two")}, 1, map[string]string{"b": "连续重复", "c": "排在前面的调用被拒绝"}},
+		{"send", 8, []llm.ToolCall{call("a", "one"), {ID: "s", Name: finalizeToolName, Arguments: map[string]any{"text": "好了"}}, call("b", "two")}, 2, map[string]string{"s": "send 没有发出"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &scriptedCallsClient{calls: tc.calls}
+			tool := &countingTool{name: "lookup"}
+			runner, err := NewRunner(client, Config{MaxSteps: tc.maxSteps}, NewToolRegistry(tool))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "查"}}}); err != nil {
+				t.Fatal(err)
+			}
+			if tool.calls != tc.executed {
+				t.Fatalf("executed %d, want %d", tool.calls, tc.executed)
+			}
+			results := stepToolResults(client.requests[1])
+			if len(results) != len(tc.calls) {
+				t.Fatalf("results=%+v", results)
+			}
+			for id, result := range results {
+				want, failed := tc.failed[id]
+				if result.ToolError != failed || !strings.Contains(result.Content, want) {
+					t.Fatalf("%s: %+v", id, result)
+				}
+			}
+		})
 	}
 }
 

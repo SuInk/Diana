@@ -475,9 +475,9 @@ func TestDeferredParallelCallsPreserveOriginalBatch(t *testing.T) {
 			if _, err := runner.Run(context.Background(), Request{Messages: []llm.Message{{Role: llm.RoleUser, Content: "test"}}}); err != nil {
 				t.Fatal(err)
 			}
-			// 没先加载也照样执行（参数合法），批里第二个调用依旧按串行规则被拦下。
-			if first.calls != 1 || second.calls != 0 {
-				t.Fatal("parallel execution rule broken")
+			// 没先加载也照样执行（参数合法），批里的两个调用按顺序都执行。
+			if first.calls != 1 || second.calls != 1 {
+				t.Fatal("batch must run every call")
 			}
 			messages := client.requests[len(client.requests)-1].Messages
 			found := false
@@ -486,7 +486,7 @@ func TestDeferredParallelCallsPreserveOriginalBatch(t *testing.T) {
 					found = true
 					for j, call := range batch.ToolCalls {
 						result := messages[i+1+j]
-						if result.ToolCallID != call.ID || result.ToolName != call.Name || (j == 1 && !result.ToolError) {
+						if result.ToolCallID != call.ID || result.ToolName != call.Name || result.ToolError {
 							t.Fatal("batch pairing lost")
 						}
 					}
