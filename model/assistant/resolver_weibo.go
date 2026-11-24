@@ -239,19 +239,19 @@ func weiboContext(status weiboStatus) string {
 			lines = append(lines, "视频："+title)
 		}
 	}
-	if stats := resolverStatsLine(
-		resolverStat{"点赞", status.AttitudesCount},
-		resolverStat{"转发", status.RepostsCount},
-		resolverStat{"评论", status.CommentsCount},
-	); stats != "" {
-		lines = append(lines, stats)
-	}
 	if retweet := status.RetweetedStatus; retweet != nil {
 		line := fmt.Sprintf("转发自 @%s", strings.TrimSpace(retweet.User.ScreenName))
 		if text := weiboPlainText(retweet.Text); text != "" {
 			line += "：" + truncateRunes(text, weiboBodyMaxRunes)
 		}
 		lines = append(lines, line)
+	}
+	if stats := resolverStatsLine(
+		resolverStat{"点赞", status.AttitudesCount},
+		resolverStat{"转发", status.RepostsCount},
+		resolverStat{"评论", status.CommentsCount},
+	); stats != "" {
+		lines = append(lines, stats)
 	}
 	return strings.Join(lines, "\n")
 }

@@ -88,29 +88,38 @@ func TestXiaohongshuSocialContextIncludesInteractCounts(t *testing.T) {
 		"user":         map[string]any{"nickname": "测试作者"},
 		"interactInfo": map[string]any{"likedCount": "1.2万", "collectedCount": "3456", "commentCount": float64(78), "shareCount": "0"},
 	})
-	want := "[小红书] 测试标题\n作者：测试作者\n点赞 1.2万 · 收藏 3456 · 评论 78\n正文"
+	want := "[小红书] 测试标题\n作者：测试作者\n正文\n点赞 1.2万 · 收藏 3456 · 评论 78"
 	if text != want {
 		t.Fatalf("context = %q, want %q", text, want)
 	}
 }
 
-func TestWeiboContextIncludesCounts(t *testing.T) {
-	status, reason := parseWeiboResponse([]byte(`{"ok":1,"data":{"id":"1","text":"正文","user":{"screen_name":"测试博主"},"attitudes_count":"100万+","reposts_count":2345,"comments_count":67}}`))
+func TestWeiboContextEndsWithCounts(t *testing.T) {
+	status, reason := parseWeiboResponse([]byte(`{"ok":1,"data":{"id":"1","text":"正文","user":{"screen_name":"测试博主"},"attitudes_count":"100万+","reposts_count":2345,"comments_count":67,"retweeted_status":{"text":"原微博","user":{"screen_name":"原作者"}}}}`))
 	if reason != "" {
 		t.Fatalf("reason = %q", reason)
 	}
-	if text := weiboContext(status); !strings.Contains(text, "点赞 100万+ · 转发 2345 · 评论 67") {
-		t.Fatalf("context missing stats:\n%s", text)
+	if text := weiboContext(status); !strings.HasSuffix(text, "转发自 @原作者：原微博\n点赞 100万+ · 转发 2345 · 评论 67") {
+		t.Fatalf("stats should follow the retweet:\n%s", text)
 	}
 }
 
-func TestTwitterMetaTextIncludesFxTwitterCounts(t *testing.T) {
+func TestTwitterStatsFollowLastTextNode(t *testing.T) {
 	post, ok := parseTwitterPostResponse([]byte(`{"tweet":{"id":"1","text":"hello","author":{"name":"测试","screen_name":"tester"},"views":1234567,"likes":8901,"retweets":234,"bookmarks":56,"replies":7}}`))
 	if !ok {
 		t.Fatal("parse failed")
 	}
-	text := twitterMetaText("测试", post)
-	if !strings.Contains(text, "浏览 123.4万 · 点赞 8901 · 转推 234 · 收藏 56 · 回复 7") {
-		t.Fatalf("meta text missing stats:\n%s", text)
+	const stats = "浏览 123.4万 · 点赞 8901 · 转推 234 · 收藏 56 · 回复 7"
+	metaText := twitterMetaText("测试", post)
+	if strings.Contains(metaText, stats) {
+		t.Fatalf("stats should not sit between author and body:\n%s", metaText)
+	}
+	nodes := []OutgoingMessage{{Text: metaText}, {Text: "作者补充 1：后续"}}
+	metaText, nodes = appendTwitterStats(metaText+"\n\n作者补充 1：后续", nodes, post)
+	if !strings.HasSuffix(metaText, "作者补充 1：后续\n"+stats) {
+		t.Fatalf("context should end with stats:\n%s", metaText)
+	}
+	if strings.Contains(nodes[0].Text, stats) || !strings.HasSuffix(nodes[1].Text, stats) {
+		t.Fatalf("stats should land on the last text node: %#v", nodes)
 	}
 }

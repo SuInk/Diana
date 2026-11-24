@@ -91,12 +91,13 @@ func (p *ResolverPlugin) resolveBilibili(ctx context.Context, req PluginRequest,
 		videoTitle = "出错，无法获取数据！"
 	}
 	text := fmt.Sprintf("\n%s识别：B站，%s", nickname, videoTitle)
-	if extra := extraBiliInfoText(view); extra != "" {
-		text += "\n" + extra
+	if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
+		text += "\nUP主：" + owner
 	}
 	if description := strings.TrimSpace(view.Data.Desc); description != "" {
 		text += "\n简介：" + description
 	}
+	text = appendResolverStatsLine(text, bilibiliStats(view)...)
 	cover := singleURL(view.Data.Pic)
 	if view.Data.Duration > resolverVideoMaxDuration(ctx) {
 		text += fmt.Sprintf("\n当前视频时长 %d 分钟，超过管理员设置的最长时间 %d 分钟。", view.Data.Duration/60, resolverVideoMaxDuration(ctx)/60)
@@ -248,6 +249,7 @@ func (p *ResolverPlugin) resolveTwitter(ctx context.Context, req PluginRequest, 
 		metaText += "\n\n" + articleText
 		post.Media = append(post.Media, post.Article.Media...)
 	}
+	metaText, nodes = appendTwitterStats(metaText, nodes, post)
 	post.Media = dedupeTwitterMedia(post.Media)
 	if len(post.Media) == 0 {
 		return resolverPlatformResult{Context: metaText, ForwardMessages: nodes}
@@ -318,17 +320,6 @@ func fetchTwitterMediaURL(ctx context.Context, raw string) string {
 func xiaohongshuMetaText(nickname string, note map[string]any) string {
 	user, _ := note["user"].(map[string]any)
 	return fmt.Sprintf("%s识别内容来自：【小红书】\n作者：%s\n标题：%s\n内容：%s", nickname, anyString(user["nickname"]), anyString(note["title"]), anyString(note["desc"]))
-}
-
-func extraBiliInfoText(view bilibiliViewResponse) string {
-	lines := make([]string, 0, 2)
-	if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
-		lines = append(lines, "UP主："+owner)
-	}
-	if stats := resolverStatsLine(bilibiliStats(view)...); stats != "" {
-		lines = append(lines, stats)
-	}
-	return strings.Join(lines, "\n")
 }
 
 func deleteResolverBoringCharacters(text string) string {

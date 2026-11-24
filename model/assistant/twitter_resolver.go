@@ -496,13 +496,21 @@ func twitterMetaText(nickname string, post twitterPost) string {
 	case handle != "":
 		lines = append(lines, "作者：@"+handle)
 	}
-	if stats := resolverStatsLine(post.Stats...); stats != "" {
-		lines = append(lines, stats)
-	}
 	if text := strings.TrimSpace(post.Text); text != "" {
 		lines = append(lines, "文案："+text)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// appendTwitterStats 把互动数接在所有文字的最后：正文后面可能还跟着展开的
+// 长文和作者补充，统计要落在最后一个文字节点上，而不是夹在文案和长文之间。
+func appendTwitterStats(metaText string, nodes []OutgoingMessage, post twitterPost) (string, []OutgoingMessage) {
+	stats := resolverStatsLine(post.Stats...)
+	if stats == "" || len(nodes) == 0 {
+		return metaText, nodes
+	}
+	nodes[len(nodes)-1].Text += "\n" + stats
+	return metaText + "\n" + stats, nodes
 }
 
 type resolverPlatformLevelRule struct {
