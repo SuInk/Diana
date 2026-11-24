@@ -50,7 +50,8 @@ type ttftCollectorKey struct{}
 type textDeltaObserverKey struct{}
 
 type textDeltaObserver interface {
-	// Returns true if text was sent, or delivery cannot be ruled out.
+	// 返回真表示这一轮已经留下了对方会一直看得到的输出（或排除不了），上游据此
+	// 不再换候选重来。Telegram 草稿只是临时预览，不算。
 	ObserveTextDelta(ctx context.Context, text string) bool
 }
 
@@ -152,7 +153,7 @@ func (p *streamingLLMProvider) Generate(ctx context.Context, req llm.GenerateReq
 	if events == nil {
 		return nil, errors.New("diana: llm provider returned a nil stream")
 	}
-	return accumulateChatEvents(ctx, events)
+	return accumulateChatEvents(ctx, req, events)
 }
 
 func (p *streamingLLMProvider) ManagesAttemptTimeout() bool {
@@ -181,7 +182,7 @@ func healthFailureCause(err error) error {
 }
 
 // accumulateChatEvents 把事件流攒成一个完整响应，顺便记下首 token 时刻。
-func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (response *llm.GenerateResponse, err error) {
+func accumulateChatEvents(ctx context.Context, req llm.GenerateRequest, events <-chan llm.ChatEvent) (response *llm.GenerateResponse, err error) {
 	committed := false
 	defer func() {
 		if err != nil && committed {
@@ -189,7 +190,7 @@ func accumulateChatEvents(ctx context.Context, events <-chan llm.ChatEvent) (res
 		}
 	}()
 	collector := ttftCollectorFromContext(ctx)
-	observer := textDeltaObserverFromContext(ctx)
+	preview := newReplyPreviewSource(ctx, req)
 	var text strings.Builder
 	var visible llm.VisibleTextFilter
 	var toolCalls []llm.ToolCall
@@ -218,12 +219,11 @@ readLoop:
 			}
 			collector.observeDelta(time.Now(), false)
 			text.WriteString(event.Text)
-			if observer != nil {
-				committed = observer.ObserveTextDelta(ctx, text.String()) || committed
-			}
+			committed = preview.text(ctx, text.String()) || committed
 		case llm.ChatEventReasoning, llm.ChatEventProgress:
 			// Reasoning never enters visible text. Private replay state arrives on done.
 			collector.observeDelta(time.Now(), true)
+			committed = preview.toolInput(ctx, event.ToolInput) || committed
 		case llm.ChatEventDone:
 			completed = true
 			if event.Response != nil {

@@ -295,7 +295,11 @@ func (c *openAICompatibleClient) streamResponses(ctx context.Context, req Genera
 			case "response.function_call_arguments.delta":
 				call := ensure(event.ItemID)
 				call.arguments += event.Delta
-				if !emit(ChatEvent{Type: ChatEventProgress}) {
+				progress := ChatEvent{Type: ChatEventProgress}
+				if !call.custom && call.name != "" {
+					progress.ToolInput = &ToolInputProgress{ID: event.ItemID, Name: nativeToolName(call.name, req.Tools), Arguments: call.arguments}
+				}
+				if !emit(progress) {
 					return
 				}
 			case "response.custom_tool_call_input.delta":

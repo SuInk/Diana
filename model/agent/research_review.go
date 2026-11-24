@@ -51,7 +51,7 @@ func (r *Runner) reviewUnsupportedDetails(ctx context.Context, history []llm.Mes
 		return ""
 	}
 	question := researchReviewQuestionContext(history)
-	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+	resp, err := r.client.Generate(llm.WithHiddenOutput(ctx), llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: researchReviewPrompt},
 		{Role: llm.RoleUser, Content: "【问题】\n" + question + "\n\n【工具内容】\n" + evidence + "\n\n【草稿】\n" + draft},
 	}})

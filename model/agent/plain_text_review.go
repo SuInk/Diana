@@ -78,7 +78,7 @@ func (r *Runner) reviewUnfinishedClaim(ctx context.Context, history []llm.Messag
 	if draft == "" {
 		return claimVerdict{}
 	}
-	resp, err := r.client.Generate(ctx, llm.GenerateRequest{Messages: []llm.Message{
+	resp, err := r.client.Generate(llm.WithHiddenOutput(ctx), llm.GenerateRequest{Messages: []llm.Message{
 		{Role: llm.RoleSystem, Content: plainTextReviewPrompt},
 		{Role: llm.RoleUser, Content: "【近期对话】\n" + claimReviewRecent(history) + "\n\n【对方的消息】\n" + lastUserMessage(history) + "\n\n【本轮工具记录】\n" + plainTextReviewSteps(steps) + "\n\n【能用的工具】\n" + claimReviewTools(r.registry) + "\n\n【草稿】\n" + draft},
 	}})

@@ -103,15 +103,26 @@ const (
 
 type ChatEvent struct {
 	// Response on done preserves provider identity and private continuation state.
-	Response   *GenerateResponse `json:"-"`
-	Type       ChatEventType     `json:"type"`
-	Text       string            `json:"text,omitempty"`
-	Reasoning  string            `json:"reasoning,omitempty"`
-	ToolCall   *ToolCall         `json:"toolCall,omitempty"`
-	Usage      *Usage            `json:"usage,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	ErrorCode  string            `json:"errorCode,omitempty"`
-	ErrorCause error             `json:"-"`
+	Response  *GenerateResponse `json:"-"`
+	Type      ChatEventType     `json:"type"`
+	Text      string            `json:"text,omitempty"`
+	Reasoning string            `json:"reasoning,omitempty"`
+	ToolCall  *ToolCall         `json:"toolCall,omitempty"`
+	// ToolInput 只出现在工具参数片段的进度事件上，见 ToolInputProgress。
+	ToolInput  *ToolInputProgress `json:"toolInput,omitempty"`
+	Usage      *Usage             `json:"usage,omitempty"`
+	Error      string             `json:"error,omitempty"`
+	ErrorCode  string             `json:"errorCode,omitempty"`
+	ErrorCause error              `json:"-"`
+}
+
+// ToolInputProgress 是一个函数调用到目前为止收到的参数原文，还不是完整 JSON。
+// 预览类观察者靠它在参数收齐前读出要说的话（send 的 text）；调用本身仍以随后的
+// ChatEventToolCall 为准。ID 区分同一步里的多个调用。
+type ToolInputProgress struct {
+	ID        string `json:"id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 type ToolResult struct {
@@ -556,4 +567,18 @@ func (c RegistryClient) Generate(ctx context.Context, req GenerateRequest) (*Gen
 		return nil, err
 	}
 	return &GenerateResponse{Provider: response.Provider, Model: response.Model, ContinuationScope: response.ContinuationScope, AnthropicThinking: response.AnthropicThinking, ReasoningContent: response.ReasoningContent, ResponsesOutput: response.ResponsesOutput, Text: response.Text, ToolCalls: response.ToolCalls, Usage: response.Usage}, nil
+}
+
+type hiddenOutputKey struct{}
+
+// WithHiddenOutput 标记这次调用的输出只给程序读（复核、判断题），不是要说给对方的话。
+// 它和正式回复共用同一个 ctx，预览类观察者见到这个标记就不把输出推成草稿。
+func WithHiddenOutput(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hiddenOutputKey{}, true)
+}
+
+// HiddenOutput 报告 ctx 是否被 WithHiddenOutput 标记过。
+func HiddenOutput(ctx context.Context) bool {
+	hidden, _ := ctx.Value(hiddenOutputKey{}).(bool)
+	return hidden
 }

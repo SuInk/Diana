@@ -204,8 +204,15 @@ func (c *anthropicClient) Stream(ctx context.Context, req GenerateRequest) (stre
 						return
 					}
 				}
-				if event.Delta.PartialJSON != "" && !emit(ChatEvent{Type: ChatEventProgress}) {
-					return
+				if event.Delta.PartialJSON != "" {
+					progress := ChatEvent{Type: ChatEventProgress}
+					if index := int(event.Index); index >= 0 && index < len(message.Content) && message.Content[index].Type == "tool_use" {
+						block := message.Content[index]
+						progress.ToolInput = &ToolInputProgress{ID: block.ID, Name: nativeToolName(block.Name, req.Tools), Arguments: string(block.Input)}
+					}
+					if !emit(progress) {
+						return
+					}
 				}
 			case "message_stop":
 				complete = true

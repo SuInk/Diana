@@ -5,7 +5,6 @@ package assistant
 
 import (
 	"context"
-	"errors"
 	"log"
 	"strings"
 	"sync"
@@ -236,7 +235,13 @@ func (d *replyDraft) clip(text string) string {
 	return text
 }
 
-// sendLocked 推一帧预览；调用方持有 d.mu。返回值表示对方是否已经看得到这一轮的预览。
+// sendLocked 推一帧预览；调用方持有 d.mu。返回值表示这一轮是否已经留下了对方会一直
+// 看得到的输出，为真时上游不再换候选重来。
+//
+// 只有 QQ 流式是这样：帧发出去就是正式消息。Telegram 草稿只是约 30 秒的临时预览，
+// 不会自己变成消息；中途出错换个候选重来，新一版用同一个 draft_id 接着替换掉旧预览，
+// 对方最后收到的仍是一条完整回复。以前这里把草稿也算作已提交，草稿一露出来，后面
+// 的流一断就既不重试也不换候选，预览过期消失、对方什么都收不到。
 func (d *replyDraft) sendLocked(ctx context.Context, text string) bool {
 	text = d.clip(text)
 	msg := d.message
@@ -248,16 +253,10 @@ func (d *replyDraft) sendLocked(ctx context.Context, text string) bool {
 		// Drafts are best effort. A Bot API server that has not implemented
 		// sendMessageDraft must not make the final reply fail.
 		d.disabled = true
-		if d.qqStream {
-			// 帧发过就已经是对方看得到的消息；首帧就失败则照常生成、照常发送。
-			return d.lastText != "" || d.segment > 0
-		}
-		// A definite Bot API rejection did not publish a preview. Transport
-		// failures may happen after delivery, so do not restart generation.
-		var apiErr *telegramAPIError
-		return !errors.As(err, &apiErr) || apiErr.Code < 400 || apiErr.Code >= 500
+		// 帧发过就已经是对方看得到的消息；首帧就失败则照常生成、照常发送。
+		return d.qqStream && (d.lastText != "" || d.segment > 0)
 	}
 	d.lastText = text
 	d.lastSent = time.Now()
-	return true
+	return d.qqStream
 }
