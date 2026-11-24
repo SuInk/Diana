@@ -2723,8 +2723,8 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       user: url.searchParams.get("user") ?? "",
       query: url.searchParams.get("q") ?? "",
       private_chats: [
-        { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram" },
-        { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot" }
+        { user_id: "880024", user_name: "Demo User", events: 46, bot_profile_id: "bot-telegram", avatar_url: demoRelationAvatar(3) },
+        { user_id: "100200711", user_name: "青禾", events: 12, bot_profile_id: "bot-onebot", avatar_url: demoRelationAvatar(5) }
       ],
       // 上下文占比和常驻内容以前在演示里整块缺席：入口那一行永远不出现，
       // 看不出真实排版，也没法点进去看弹窗。

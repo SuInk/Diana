@@ -123,6 +123,14 @@ func TestAssistantEventsEndpointReturnsTelegramSenderAvatarProxy(t *testing.T) {
 	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), "group:-1001", event); err != nil || !inserted {
 		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
 	}
+	private := event
+	private.Kind = assistant.EventKindPrivate
+	private.GroupID = ""
+	private.UserID = "67890"
+	private.MessageID = "telegram-avatar-private"
+	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), "private:67890", private); err != nil || !inserted {
+		t.Fatalf("enqueue private inserted=%v err=%v", inserted, err)
+	}
 
 	pngBody := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4}
 	runtime := &memberAvatarStubRuntime{avatar: assistant.GroupAvatar{Data: pngBody, ContentType: "image/png"}, found: true}
@@ -145,10 +153,19 @@ func TestAssistantEventsEndpointReturnsTelegramSenderAvatarProxy(t *testing.T) {
 	if err := json.Unmarshal(listRecorder.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if len(response.Events) != 1 {
+	if len(response.Events) != 2 {
 		t.Fatalf("events=%+v", response.Events)
 	}
-	avatarURL := response.Events[0].SenderAvatarURL
+	// 会话筛选器里的私聊也要带头像，按私聊所属的机器人拼地址。
+	if len(response.PrivateChats) != 1 || response.PrivateChats[0].AvatarURL != "/api/assistant/avatars/member/67890?bot_profile_id=tg" {
+		t.Fatalf("private chats=%+v", response.PrivateChats)
+	}
+	var avatarURL string
+	for _, item := range response.Events {
+		if item.UserID == "12345" {
+			avatarURL = item.SenderAvatarURL
+		}
+	}
 	if avatarURL != "/api/assistant/avatars/member/12345?bot_profile_id=tg" {
 		t.Fatalf("sender avatar URL=%q", avatarURL)
 	}

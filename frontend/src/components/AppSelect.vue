@@ -111,13 +111,15 @@ const visibleGroups = computed(() => {
   return sections;
 });
 
-// 每次打开都从空关键词开始并聚焦搜索框：留着上次的词会让人以为选项变少了。
+// 每次打开都从空关键词开始：留着上次的词会让人以为选项变少了。
+// 只在有鼠标的设备上自动聚焦搜索框；触屏上一聚焦就弹键盘，可视区被挤掉一半，
+// 菜单跟着翻位，多数时候只想点一项，要搜再点搜索框。
 watch(open, (value) => {
   if (!value) {
     keyword.value = "";
     return;
   }
-  if (props.searchable) void nextTick(() => searchRef.value?.focus());
+  if (props.searchable && !window.matchMedia("(pointer: coarse)").matches) void nextTick(() => searchRef.value?.focus());
 });
 const triggerRef = ref<HTMLElement | null>(null);
 const menuRef = ref<HTMLElement | null>(null);
