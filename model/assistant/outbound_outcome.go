@@ -75,10 +75,14 @@ var errOneBotDisconnectedAwaitingResponse = errors.New("diana: onebot websocket 
 // 一个明确的失败回执，但接入端只是没等到 QQ 的确认，消息常常随后照样出现在群里。
 // 这类按结果不明处理，先确认再说。「发送消息失败」后面带着 result= 的是 QQ 给的
 // 拒收码（120 之类，可能是禁言或风控），仍然是确定失败。
+//
+// SnowLuma 发包后等 QQ 回包超时报的是「send reply N timed out after 15000 ms」：
+// 包已经发出去，QQ 常常照收，几秒后就有自身消息回推。
 var oneBotBridgeSendTimeoutMarkers = []string{
 	"timeout: ntevent",
 	"发送消息超时",
 	"sendmsg timeout",
+	"timed out after",
 }
 
 // classifyOneBotSendFailure 把接入端回来的失败再分一次：断线、接入端自己超时的
