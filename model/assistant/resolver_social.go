@@ -348,6 +348,7 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		metaText += "\n\n" + label
 		post.Media = append(post.Media, reply.Media...)
 	}
+	metaText, nodes = appendTwitterStats(metaText, nodes, post)
 	post.Media = dedupeTwitterMedia(post.Media)
 	if len(post.Media) == 0 {
 		return resolverSocialResult{Handled: true, Context: metaText, ForwardMessages: nodes}
@@ -377,13 +378,13 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 		if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
 			result.Context += "\nUP主：" + owner
 		}
-		result.Context = appendResolverStatsLine(result.Context, bilibiliStats(view)...)
 		if desc := strings.TrimSpace(view.Data.Desc); desc != "" {
 			result.Context += "\n简介：" + truncateRunes(desc, 240)
 		}
 		if conclusion, ok := fetchBilibiliAIConclusion(ctx, raw, view); ok {
 			result.Context += "\n【B站 AI 总结】" + conclusion
 		}
+		result.Context = appendResolverStatsLine(result.Context, bilibiliStats(view)...)
 		result.ImageURLs = singleURL(view.Data.Pic)
 		if view.Data.Duration > resolverVideoMaxDuration(ctx) {
 			result.Context += fmt.Sprintf("\n视频时长超过限制（%d 秒），未下载。", resolverVideoMaxDuration(ctx))
@@ -520,18 +521,18 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 
 func xiaohongshuSocialContext(note map[string]any) string {
 	user, _ := note["user"].(map[string]any)
-	header := fmt.Sprintf("[小红书] %s\n作者：%s",
+	text := fmt.Sprintf("[小红书] %s\n作者：%s\n%s",
 		strings.TrimSpace(anyString(note["title"])),
 		strings.TrimSpace(anyString(user["nickname"])),
+		strings.TrimSpace(anyString(note["desc"])),
 	)
 	interact, _ := note["interactInfo"].(map[string]any)
-	header = appendResolverStatsLine(header,
+	return appendResolverStatsLine(text,
 		resolverStat{"点赞", xiaohongshuCount(interact["likedCount"])},
 		resolverStat{"收藏", xiaohongshuCount(interact["collectedCount"])},
 		resolverStat{"评论", xiaohongshuCount(interact["commentCount"])},
 		resolverStat{"分享", xiaohongshuCount(interact["shareCount"])},
 	)
-	return header + "\n" + strings.TrimSpace(anyString(note["desc"]))
 }
 
 // xiaohongshuCount 读页面状态里的计数：通常是「1.2万」这样的字符串，
@@ -553,13 +554,13 @@ func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginReques
 		if title := strings.TrimSpace(info.Title); title != "" {
 			result.Context = "[" + platform + "] " + title
 		}
+		if desc := strings.TrimSpace(info.Description); desc != "" {
+			result.Context += "\n简介：" + truncateRunes(desc, 240)
+		}
 		result.Context = appendResolverStatsLine(result.Context,
 			resolverStat{"播放", resolverCountFromInt(info.ViewCount)},
 			resolverStat{"点赞", resolverCountFromInt(info.LikeCount)},
 		)
-		if desc := strings.TrimSpace(info.Description); desc != "" {
-			result.Context += "\n简介：" + truncateRunes(desc, 240)
-		}
 		result.ImageURLs = singleURL(info.Thumbnail)
 		if info.Duration > float64(resolverVideoMaxDuration(ctx)) {
 			result.Context += fmt.Sprintf("\n视频时长超过限制（%d 秒），未下载。", resolverVideoMaxDuration(ctx))
