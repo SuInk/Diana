@@ -70,8 +70,8 @@ type assistantEventsResponse struct {
 	Query string `json:"query,omitempty"`
 	// User 是当前筛选的私聊对象，PrivateChats 是这个时间范围内可选的私聊。
 	// 会话筛选器原来只有群，私聊事件在里面完全没有入口。
-	User         string                            `json:"user,omitempty"`
-	PrivateChats []storage.InboundEventPrivateChat `json:"private_chats"`
+	User         string                          `json:"user,omitempty"`
+	PrivateChats []assistantEventPrivateChatItem `json:"private_chats"`
 	// ContextBudget 只在筛了具体某个群时给出：预算是按群算的，全部事件混在
 	// 一起没有一个「这个群的预算」可言。
 	ContextBudget   *assistant.ContextBudgetBreakdown  `json:"context_budget,omitempty"`
@@ -108,6 +108,25 @@ func (h *BotHandler) namedEventGroups(ctx context.Context, profileID string, gro
 			// 按群自己所属的机器人拼：「全部机器人」视图下 profileID 为空，
 			// 会把 Telegram 群号当 QQ 群号去 qlogo 取头像。
 			AvatarURL: h.consoleAvatarURL(avatarKindGroup, firstNonEmptyWebUI(group.BotProfileID, profileID), groupID),
+		})
+	}
+	return items
+}
+
+// assistantEventPrivateChatItem 给筛选器里的私聊补上头像，和群选项一样由后端拼地址。
+type assistantEventPrivateChatItem struct {
+	storage.InboundEventPrivateChat
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+// avatarEventPrivateChats 按私聊自己所属的机器人拼头像：「全部机器人」视图下
+// profileID 为空，拿它拼会把 Telegram 账号当 QQ 号去取头像。
+func (h *BotHandler) avatarEventPrivateChats(profileID string, chats []storage.InboundEventPrivateChat) []assistantEventPrivateChatItem {
+	items := make([]assistantEventPrivateChatItem, 0, len(chats))
+	for _, chat := range chats {
+		items = append(items, assistantEventPrivateChatItem{
+			InboundEventPrivateChat: chat,
+			AvatarURL:               h.consoleAvatarURL(avatarKindMember, firstNonEmptyWebUI(chat.BotProfileID, profileID), strings.TrimSpace(chat.UserID)),
 		})
 	}
 	return items
@@ -436,14 +455,14 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Groups:       []assistantEventGroupItem{},
 		User:         userID,
 		Query:        search,
-		PrivateChats: []storage.InboundEventPrivateChat{},
+		PrivateChats: []assistantEventPrivateChatItem{},
 	}
 	if mode == "list" {
 		response.HasMore = stored.HasMore
 	}
 	if mode != "list" {
 		if chats, err := h.sqlite.ListInboundEventPrivateChats(c.Request.Context(), since, botProfileScope(c)); err == nil {
-			response.PrivateChats = chats
+			response.PrivateChats = h.avatarEventPrivateChats(botProfileScope(c), chats)
 		}
 		if groups, err := h.sqlite.ListInboundEventGroups(c.Request.Context(), since, botProfileScope(c)); err == nil {
 			response.Groups = h.namedEventGroups(c.Request.Context(), botProfileScope(c), groups)

@@ -3303,6 +3303,7 @@ export interface AssistantEventPrivateChat {
   events: number;
   user_name?: string;
   bot_profile_id?: string;
+  avatar_url?: string;
 }
 
 /** 每轮都注入、与当前消息无关的一块上下文。 */

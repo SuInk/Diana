@@ -1301,7 +1301,7 @@ const groupOptions = computed(() => {
     options.push({ ...groupOption(group.group_id, group.events, group.group_name, group.avatar_url), group: "群聊" });
   }
   for (const chat of summaryResponse.value?.private_chats ?? []) {
-    options.push({ ...privateChatOption(chat.user_id, chat.events, chat.user_name), group: "私聊" });
+    options.push({ ...privateChatOption(chat.user_id, chat.events, chat.user_name, chat.avatar_url), group: "私聊" });
   }
   // 选中的会话这一轮可能已经没有事件了（换了更短的时间范围），选项要留着，
   // 否则下拉框显示空白、也没法切回去。
@@ -1381,12 +1381,13 @@ function groupOption(groupID: string, events: number, name?: string, avatar?: st
   };
 }
 
-function privateChatOption(userID: string, events: number, name?: string): AppSelectOption {
+function privateChatOption(userID: string, events: number, name?: string, avatar?: string): AppSelectOption {
   const label = (name ?? "").trim();
   return {
     value: USER_PREFIX + userID,
     label: label || `私聊 ${compactID(userID)}`,
-    hint: label ? `${compactID(userID)} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`
+    hint: label ? `${compactID(userID)} · ${formatNumber(events)} 条` : `${formatNumber(events)} 条`,
+    avatar
   };
 }
 
