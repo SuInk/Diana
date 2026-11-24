@@ -61,6 +61,8 @@ type ytdlpInfo struct {
 	Description      string            `json:"description"`
 	Thumbnail        string            `json:"thumbnail"`
 	Duration         float64           `json:"duration"`
+	ViewCount        int64             `json:"view_count"`
+	LikeCount        int64             `json:"like_count"`
 	RequestedFormats []ytdlpFormat     `json:"requested_formats"`
 	Formats          []ytdlpFormat     `json:"formats"`
 	HTTPHeaders      map[string]string `json:"http_headers"`

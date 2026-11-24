@@ -107,7 +107,11 @@ type weiboStatus struct {
 	Bid       string `json:"bid"`
 	Text      string `json:"text"`
 	CreatedAt string `json:"created_at"`
-	User      struct {
+	// 计数超过阈值时接口给「100万+」这样的字符串。
+	AttitudesCount resolverCount `json:"attitudes_count"`
+	RepostsCount   resolverCount `json:"reposts_count"`
+	CommentsCount  resolverCount `json:"comments_count"`
+	User           struct {
 		ScreenName string `json:"screen_name"`
 	} `json:"user"`
 	Pics []struct {
@@ -234,6 +238,13 @@ func weiboContext(status weiboStatus) string {
 		if title := strings.TrimSpace(status.PageInfo.Title); title != "" && status.videoURL() != "" {
 			lines = append(lines, "视频："+title)
 		}
+	}
+	if stats := resolverStatsLine(
+		resolverStat{"点赞", status.AttitudesCount},
+		resolverStat{"转发", status.RepostsCount},
+		resolverStat{"评论", status.CommentsCount},
+	); stats != "" {
+		lines = append(lines, stats)
 	}
 	if retweet := status.RetweetedStatus; retweet != nil {
 		line := fmt.Sprintf("转发自 @%s", strings.TrimSpace(retweet.User.ScreenName))
