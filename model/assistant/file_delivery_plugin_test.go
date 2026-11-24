@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -182,5 +183,36 @@ func TestFileDeliveryResolvesTelegramTransportWithoutEventPlatform(t *testing.T)
 				t.Fatalf("wrong upload: %+v", got)
 			}
 		})
+	}
+}
+
+// paths 把几个文本文件按顺序接成一个发出，分段写出来的长产出不用让模型重抄全文。
+func TestFileDeliveryJoinsPathsInOrder(t *testing.T) {
+	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
+	r, uploads := newFileDeliveryTestRuntime(t)
+	dir := filepath.Join(AgentWorkspaceDir(), "outputs", "job")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"01.md": "# 第一部分\n正文一\n\n", "02.md": "# 第二部分\n正文二\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	event := MessageEvent{Platform: PlatformTelegram, Kind: EventKindPrivate, UserID: "1"}
+	tool := newDianaFileDeliveryTool(r, event, SettingValues{}, RelationshipPolicy{Owner: true})
+	raw, err := tool.Run(context.Background(), map[string]any{"filename": "all.md", "paths": []any{"outputs/job/01.md", "outputs/job/02.md"}, "preview": false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := decodeFileDeliveryResult(t, raw); !result.OK {
+		t.Fatalf("result: %+v", result)
+	}
+	if len(*uploads) != 1 || (*uploads)[0].body != "# 第一部分\n正文一\n\n# 第二部分\n正文二\n" {
+		t.Fatalf("uploads: %+v", *uploads)
+	}
+	raw, _ = tool.Run(context.Background(), map[string]any{"filename": "all.md", "paths": []any{"outputs/job/01.md"}, "content": "x"})
+	if result := decodeFileDeliveryResult(t, raw); result.OK || !strings.Contains(result.Message, "只能提供一个") {
+		t.Fatalf("mixed sources accepted: %+v", result)
 	}
 }
