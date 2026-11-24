@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -40,10 +41,19 @@ type neteaseSource struct {
 	songURLAPI string
 	outerURL   string
 	accountAPI string
+	// refreshAPI 为空时不续期，测试里直接构造的 source 不会去打线上接口。
+	refreshAPI string
+
+	// credentialMu 串起 MUSIC_U 续期，下面几个字段都归它管，见 netease_credential.go。
+	credentialMu  sync.Mutex
+	renewedCookie string
+	nextRenew     time.Time
+	refreshedFrom string
+	refreshedTo   string
 }
 
 func newNeteaseSource() *neteaseSource {
-	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, songURLAPI: neteaseSongURLAPI, outerURL: neteaseOuterURL, accountAPI: neteaseAccountAPI}
+	return &neteaseSource{detailAPI: neteaseDetailAPI, searchAPI: neteaseSearchAPI, songURLAPI: neteaseSongURLAPI, outerURL: neteaseOuterURL, accountAPI: neteaseAccountAPI, refreshAPI: neteaseRefreshAPI}
 }
 
 func (s *neteaseSource) Key() string     { return "netease" }
@@ -293,6 +303,7 @@ func (s *neteaseSource) SongDetail(ctx context.Context, f *musicFetcher, cfg mus
 }
 
 func (s *neteaseSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig, query string) (song, bool) {
+	cfg = s.freshCredentials(ctx, f, cfg)
 	decode := func(endpoint string, guarded bool) (song, bool) {
 		var payload neteaseSearchResponse
 		if !f.fetchJSON(ctx, cfg, endpoint, guarded, s.headers(cfg), &payload) {
@@ -315,6 +326,7 @@ func (s *neteaseSource) Search(ctx context.Context, f *musicFetcher, cfg musicCo
 }
 
 func (s *neteaseSource) PlayableURL(ctx context.Context, f *musicFetcher, cfg musicConfig, songID string) string {
+	cfg = s.freshCredentials(ctx, f, cfg)
 	if base := cfg.sourceOptions(s.Key()).APIBase; base != "" {
 		endpoint := fmt.Sprintf("%s/song/url?id=%s&br=%d", base, url.QueryEscape(songID), cfg.Bitrate)
 		var payload neteaseSongURLResponse

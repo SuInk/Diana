@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -89,6 +90,41 @@ func defaultMusicSources() []musicSource {
 type musicSourceOptions struct {
 	APIBase string
 	Cookie  string
+}
+
+// mergeCookieValues 把续期换来的新值写回 Cookie 串：已有的键原地替换，保留原来的
+// 顺序和大小写；原串里没有的键按 appendKeys 的顺序追加，不在 appendKeys 里的就不凭空加。
+// updates 的键不分大小写匹配。
+func mergeCookieValues(raw string, updates map[string]string, appendKeys []string) string {
+	byLower := make(map[string]string, len(updates))
+	for key, value := range updates {
+		byLower[strings.ToLower(key)] = value
+	}
+	parts := make([]string, 0, len(updates)+8)
+	written := map[string]bool{}
+	for _, part := range strings.Split(raw, ";") {
+		key, _, ok := strings.Cut(part, "=")
+		key = strings.TrimSpace(key)
+		if !ok || key == "" {
+			continue
+		}
+		lower := strings.ToLower(key)
+		if value, isUpdate := byLower[lower]; isUpdate {
+			parts = append(parts, key+"="+value)
+			written[lower] = true
+			continue
+		}
+		parts = append(parts, strings.TrimSpace(part))
+	}
+	for _, key := range appendKeys {
+		if lower := strings.ToLower(key); !written[lower] {
+			if value, ok := byLower[lower]; ok {
+				parts = append(parts, key+"="+value)
+				written[lower] = true
+			}
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func musicCookieValues(raw string) map[string]string {
@@ -190,7 +226,11 @@ func (f *musicFetcher) httpClient(cfg musicConfig, guarded bool, host string) (*
 }
 
 func (f *musicFetcher) request(ctx context.Context, cfg musicConfig, endpoint string, guarded bool, headers map[string]string) (*http.Response, bool) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	return f.send(ctx, cfg, http.MethodGet, endpoint, nil, guarded, headers)
+}
+
+func (f *musicFetcher) send(ctx context.Context, cfg musicConfig, method, endpoint string, body io.Reader, guarded bool, headers map[string]string) (*http.Response, bool) {
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
 	if err != nil {
 		recordMusicFailure(ctx, "创建请求失败：%v", err)
 		return nil, false
@@ -233,6 +273,19 @@ func (f *musicFetcher) fetchJSON(ctx context.Context, cfg musicConfig, endpoint 
 	if !ok {
 		return false
 	}
+	return decodeMusicJSON(ctx, endpoint, resp, target)
+}
+
+// postJSON 发 POST 并解析 JSON，另外交回响应头：网易云续期的新 MUSIC_U 只在 Set-Cookie 里。
+func (f *musicFetcher) postJSON(ctx context.Context, cfg musicConfig, endpoint string, body []byte, guarded bool, headers map[string]string, target any) (http.Header, bool) {
+	resp, ok := f.send(ctx, cfg, http.MethodPost, endpoint, bytes.NewReader(body), guarded, headers)
+	if !ok {
+		return nil, false
+	}
+	return resp.Header, decodeMusicJSON(ctx, endpoint, resp, target)
+}
+
+func decodeMusicJSON(ctx context.Context, endpoint string, resp *http.Response, target any) bool {
 	defer resp.Body.Close()
 	body, err := netguard.ReadResponseBody(resp, 1<<20)
 	if err != nil || len(body) == 0 {

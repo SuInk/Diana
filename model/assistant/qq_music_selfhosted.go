@@ -139,8 +139,8 @@ func (s *qqSource) playableSelfHosted(ctx context.Context, f *musicFetcher, cfg 
 }
 
 // qqRefreshableCookie 判断 Cookie 是不是 L-1124 版那种能续期的凭据：要有
-// musicid、musickey，还要有 refresh_key 或 refresh_token 之一。官方网页复制的
-// uin/qqmusic_key 没法续期，不碰。
+// musicid、musickey，还要有 refresh_key 或 refresh_token 之一。网页复制的
+// uin/qqmusic_key 走另一条续期路，见 qq_music_web_credential.go。
 func qqRefreshableCookie(raw string) bool {
 	values := musicCookieValues(raw)
 	if values["musicid"] == "" || values["musickey"] == "" {
@@ -149,7 +149,9 @@ func qqRefreshableCookie(raw string) bool {
 	return values["refresh_key"] != "" || values["refresh_token"] != ""
 }
 
-// freshCredentials 在请求自建接口前确认 Cookie 没过期，过期就续期并写回设置。
+// freshCredentials 在请求前确认 Cookie 没过期，该续就续期并写回设置。两种 Cookie 能续：
+// 自建 L-1124 接口导出的 musicid/musickey（问自建接口续），和网页复制的 QQ 登录
+// Cookie（直接问 musicu 续，见 qq_music_web_credential.go）。
 // 返回的 cfg 带着这次请求该用的 Cookie；err 非空表示凭据已过期且续期失败，
 // cfg 里仍是旧 Cookie，调用方要把错误报出去，不能当作一切正常。
 //
@@ -157,10 +159,11 @@ func qqRefreshableCookie(raw string) bool {
 // 两个请求同时拿旧 token 去换，后到的那个一定失败。
 func (s *qqSource) freshCredentials(ctx context.Context, f *musicFetcher, cfg musicConfig) (musicConfig, error) {
 	options := cfg.sourceOptions(s.Key())
-	if options.APIBase == "" || !qqRefreshableCookie(options.Cookie) || s.cachedDialect(options.APIBase) == qqDialectLegacy {
+	cookie := options.Cookie
+	selfHosted := options.APIBase != "" && qqRefreshableCookie(cookie) && s.cachedDialect(options.APIBase) != qqDialectLegacy
+	if !selfHosted && !qqWebRefreshableCookie(cookie) {
 		return cfg, nil
 	}
-	cookie := options.Cookie
 	s.credentialMu.Lock()
 	defer s.credentialMu.Unlock()
 	// 别的请求刚续过期：设置已经写回，但这次请求拿的还是写回前的快照。
@@ -169,17 +172,35 @@ func (s *qqSource) freshCredentials(ctx context.Context, f *musicFetcher, cfg mu
 	}
 	// 刚续失败过的同一份 Cookie 直接报同样的错：再拿作废的 token 去换也是失败，
 	// 而「检查过、没过期」的缓存又会让它被当成好凭据悄悄用下去。
+	// failedErr 为空是网页 Cookie 续期失败但 musickey 还没到期：先照用旧的，过一阵再试。
 	if s.failedCookie == cookie && time.Since(s.failedAt) < qqCredentialRecheckInterval {
+		if s.failedErr == nil {
+			return cfg, nil
+		}
 		recordMusicCredentialProblem(ctx, s.failedErr.Error())
 		return cfg, s.failedErr
 	}
-	if !s.credentialExpired(ctx, f, cfg, options.APIBase, cookie) {
-		return cfg, nil
+	var fresh string
+	var err error
+	if selfHosted {
+		if !s.credentialExpired(ctx, f, cfg, options.APIBase, cookie) {
+			return cfg, nil
+		}
+		fresh, err = s.refreshCredential(ctx, f, cfg, options.APIBase, cookie)
+	} else {
+		if !qqWebCredentialOlder(cookie, qqWebCredentialRenewAge, time.Now()) {
+			return cfg, nil
+		}
+		fresh, err = s.refreshWebCredential(ctx, f, cfg, cookie)
+		if err != nil && !qqWebCredentialOlder(cookie, qqWebCredentialLifetime, time.Now()) {
+			log.Printf("music qq web credential refresh failed, musickey still valid: %v", err)
+			s.failedCookie, s.failedAt, s.failedErr = cookie, time.Now(), nil
+			return cfg, nil
+		}
 	}
-	fresh, err := s.refreshCredential(ctx, f, cfg, options.APIBase, cookie)
 	if err != nil {
 		log.Printf("music qq credential refresh failed: %v", err)
-		problem := fmt.Errorf("QQ 音乐 Cookie 已过期，自建接口续期失败（%v），请重新登录 QQ 音乐后复制 Cookie", err)
+		problem := fmt.Errorf("QQ 音乐 Cookie 已过期，自动续期失败（%v），请重新登录 QQ 音乐后复制 Cookie", err)
 		s.failedCookie, s.failedAt, s.failedErr = cookie, time.Now(), problem
 		recordMusicFailure(ctx, "%v", problem)
 		recordMusicCredentialProblem(ctx, problem.Error())
@@ -302,34 +323,10 @@ func qqMergeRefreshedCookie(raw string, credential qqSelfHostedCredential) strin
 	add("key_expires_in", strconv.FormatInt(max(credential.KeyExpiresIn, credential.CamelExpiresIn), 10))
 	// 官方键只在原 Cookie 里就有时才换，不凭空加：headers 会按 musicid/musickey 补。
 	uin := firstNonEmpty(updates["str_musicid"], musicID)
-	officialKeys := map[string]string{"uin": uin, "qqmusic_uin": uin, "qqmusic_key": updates["musickey"], "qm_keyst": updates["musickey"]}
-
-	parts := make([]string, 0, len(updates)+4)
-	written := map[string]bool{}
-	for _, part := range strings.Split(raw, ";") {
-		key, _, ok := strings.Cut(part, "=")
-		key = strings.TrimSpace(key)
-		if !ok || key == "" {
-			continue
-		}
-		lower := strings.ToLower(key)
-		value, isUpdate := updates[lower]
-		if !isUpdate {
-			value, isUpdate = officialKeys[lower]
-		}
-		if isUpdate {
-			parts = append(parts, key+"="+value)
-			written[lower] = true
-			continue
-		}
-		parts = append(parts, strings.TrimSpace(part))
+	for key, value := range map[string]string{"uin": uin, "qqmusic_uin": uin, "qqmusic_key": updates["musickey"], "qm_keyst": updates["musickey"]} {
+		updates[key] = value
 	}
-	for _, key := range order {
-		if !written[key] {
-			parts = append(parts, key+"="+updates[key])
-		}
-	}
-	return strings.Join(parts, "; ")
+	return mergeCookieValues(raw, updates, order)
 }
 
 // qqOfficialCookie 给只有 musicid/musickey 的 Cookie 补上官方网页认的键。

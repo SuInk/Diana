@@ -271,6 +271,9 @@ func (s *qqSource) Search(ctx context.Context, f *musicFetcher, cfg musicConfig,
 			}
 		}
 	}
+	// 官方搜索也看登录态：musickey 过期时直接回 2001，得先续上再搜。放在自建接口
+	// 之后，那时已经认出方言，老版服务器不会被拿去问续期接口。
+	cfg, _ = s.freshCredentials(ctx, f, cfg)
 	var payload qqSearchResponse
 	request := qqMusicuRequest(map[string]any{"ct": 19, "cv": 1859, "uin": "0"},
 		"music.search.SearchCgiService", "DoSearchForQQMusicLite",
