@@ -178,3 +178,47 @@ func TestGeminiStreamPreservesThoughtSignature(t *testing.T) {
 	}
 	collectProviderEvents(t, events)
 }
+
+// Anthropic 的 input_json_delta 同样随进度事件带上这个 tool_use 到目前为止的参数。
+func TestAnthropicStreamReportsToolInputProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range []string{
+			`{"type":"message_start","message":{"id":"msg","type":"message","role":"assistant","model":"claude-test","content":[],"usage":{"input_tokens":5,"output_tokens":0}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool_a","name":"send","input":{}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"你"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"好\"}"}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}`,
+			`{"type":"message_stop"}`,
+		} {
+			var e map[string]any
+			json.Unmarshal([]byte(event), &e)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", e["type"], event)
+		}
+	}))
+	defer server.Close()
+	registry, sel, err := NewProviderRegistryFromProfiles(NewProfileSet(ProviderConfig{Provider: ProviderAnthropic, APIKey: "key", BaseURL: server.URL, Model: "claude-test"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := RegistryClient{Registry: registry, Selection: sel}.Stream(context.Background(), GenerateRequest{Messages: []Message{{Role: RoleUser, Content: "hi"}}, Tools: []ToolDefinition{{Name: "send", Parameters: map[string]any{"type": "object"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for event := range events {
+		if event.Type == ChatEventError {
+			t.Fatal(event.Error)
+		}
+		if event.Type == ChatEventProgress && event.ToolInput != nil {
+			if event.ToolInput.ID != "tool_a" || event.ToolInput.Name != "send" {
+				t.Fatalf("tool input = %+v", event.ToolInput)
+			}
+			got = append(got, event.ToolInput.Arguments)
+		}
+	}
+	if len(got) != 2 || got[0] != `{"text":"你` || got[1] != `{"text":"你好"}` {
+		t.Fatalf("tool input progress = %q", got)
+	}
+}

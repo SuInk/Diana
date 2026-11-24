@@ -166,9 +166,9 @@ func decodeChatCompletionEvents(ctx context.Context, reader io.Reader, req Gener
 				}
 			}
 			calls, _ := delta["tool_calls"].([]any)
-			if len(calls) > 0 && !emit(ChatEvent{Type: ChatEventProgress}) {
-				return ctx.Err()
-			}
+			// 每个收到参数片段的调用各报一次进度，带上它到目前为止的参数；这一块只有
+			// 工具名、ID 时也报一次，首 token 计时靠它。
+			var inputs []*ToolInputProgress
 			for _, rawCall := range calls {
 				if finished {
 					return fmt.Errorf("llm: tool arguments after finish_reason")
@@ -207,6 +207,17 @@ func decodeChatCompletionEvents(ctx context.Context, reader io.Reader, req Gener
 						return fmt.Errorf("llm: streaming tool arguments exceed limit")
 					}
 					tool.arguments.WriteString(args)
+					if args != "" && tool.name != "" {
+						inputs = append(inputs, &ToolInputProgress{ID: tool.id, Name: nativeToolName(tool.name, req.Tools), Arguments: tool.arguments.String()})
+					}
+				}
+			}
+			if len(calls) > 0 && len(inputs) == 0 && !emit(ChatEvent{Type: ChatEventProgress}) {
+				return ctx.Err()
+			}
+			for _, input := range inputs {
+				if !emit(ChatEvent{Type: ChatEventProgress, ToolInput: input}) {
+					return ctx.Err()
 				}
 			}
 			if finish := stringField(choice, "finish_reason"); finish != "" {

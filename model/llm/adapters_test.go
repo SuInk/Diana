@@ -1263,8 +1263,10 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 	var calls []*ToolCall
 	var usage Usage
 	done := false
-	// 工具调用要等参数齐了才发布，参数片段到达时先报进度，首 token 计时靠它。
+	// 工具调用要等参数齐了才发布，参数片段到达时先报进度（首 token 计时靠它），
+	// 每个调用各报一次、带上到目前为止的参数（草稿预览靠它读 send 的正文）。
 	progressBeforeCalls := 0
+	inputs := map[string]ToolInputProgress{}
 	for event := range events {
 		switch event.Type {
 		case ChatEventError:
@@ -1272,6 +1274,9 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 		case ChatEventProgress:
 			if len(calls) == 0 {
 				progressBeforeCalls++
+			}
+			if event.ToolInput != nil {
+				inputs[event.ToolInput.ID] = *event.ToolInput
 			}
 		case ChatEventToolCall:
 			calls = append(calls, event.ToolCall)
@@ -1284,8 +1289,14 @@ func TestOpenAICompatibleChatStreamPreservesToolCalls(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("tool calls = %#v", calls)
 	}
-	if progressBeforeCalls != 2 {
-		t.Fatalf("progress events before tool calls = %d, want one per streamed chunk", progressBeforeCalls)
+	if progressBeforeCalls != 3 {
+		t.Fatalf("progress events before tool calls = %d, want one per call fragment", progressBeforeCalls)
+	}
+	if got := inputs["call_1"]; got.Name != "diagnostic.echo" || got.Arguments != `{"text":"hello"}` {
+		t.Fatalf("call_1 input progress = %+v", got)
+	}
+	if got := inputs["call_2"]; got.Name != "agent_finalize" || got.Arguments != `{"silent":true}` {
+		t.Fatalf("call_2 input progress = %+v", got)
 	}
 	if calls[0].ID != "call_1" || calls[0].Name != "diagnostic.echo" || calls[0].Arguments["text"] != "hello" || calls[1].ID != "call_2" || calls[1].Name != "agent_finalize" || calls[1].Arguments["silent"] != true {
 		t.Fatalf("tool calls changed: %+v %+v", calls[0], calls[1])
@@ -1333,6 +1344,44 @@ func TestOpenAICompatibleResponsesStreamRecoversFunctionNameFromOutputItem(t *te
 	}
 	if call == nil || call.Name != "agent_finalize" || call.Arguments["content"] != "完成" {
 		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+// 参数片段的进度事件带上调用 ID、工具名和到目前为止的参数，草稿预览据此在 send
+// 收完之前读出正文。
+func TestOpenAICompatibleResponsesStreamReportsToolInputProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, data := range []string{
+			`{"type":"response.output_item.added","output_index":0,"sequence_number":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"send","arguments":"","status":"in_progress"}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"sequence_number":2,"delta":"{\"text\":\"你"}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"fc_1","output_index":0,"sequence_number":3,"delta":"好\"}"}`,
+			`{"type":"response.completed","sequence_number":4,"response":{"id":"resp_1","object":"response","created_at":1,"model":"gpt-test","output":[{"id":"fc_1","type":"function_call","status":"completed","call_id":"call_1","name":"send","arguments":"{\"text\":\"你好\"}"}],"status":"completed","usage":{"input_tokens":3,"output_tokens":4,"total_tokens":7}}}`,
+		} {
+			_, _ = w.Write([]byte("data: " + data + "\n\n"))
+		}
+	}))
+	defer server.Close()
+	client := newOpenAICompatibleClient(ProviderConfig{Provider: ProviderOpenAICompatible, APIKey: "test-key", BaseURL: server.URL + "/v1", Model: "gpt-test"}, server.Client())
+	events, err := client.Stream(context.Background(), GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Content: "hi"}},
+		Tools:    []ToolDefinition{{Name: "send", Parameters: map[string]any{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []ToolInputProgress
+	for event := range events {
+		if event.Type == ChatEventError {
+			t.Fatalf("stream error: %s", event.Error)
+		}
+		if event.Type == ChatEventProgress && event.ToolInput != nil {
+			got = append(got, *event.ToolInput)
+		}
+	}
+	want := []ToolInputProgress{{ID: "fc_1", Name: "send", Arguments: `{"text":"你`}, {ID: "fc_1", Name: "send", Arguments: `{"text":"你好"}`}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("tool input progress = %+v", got)
 	}
 }
 

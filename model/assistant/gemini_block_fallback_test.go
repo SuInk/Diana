@@ -56,7 +56,7 @@ func TestGeminiBlockCodeStopsWithoutRetryOrFailover(t *testing.T) {
 	events := make(chan llm.ChatEvent, 1)
 	events <- llm.ChatEvent{Type: llm.ChatEventError, Error: blocked.Error(), ErrorCause: blocked}
 	close(events)
-	_, err := accumulateChatEvents(context.Background(), events)
+	_, err := accumulateChatEvents(context.Background(), llm.GenerateRequest{}, events)
 	if !errors.Is(err, llm.ErrContentBlocked) {
 		t.Fatal("stream lost typed block code")
 	}

@@ -412,9 +412,11 @@ func TestDraftCommitFeedbackControlsFailover(t *testing.T) {
 		{"blank", " \n", &replyDraft{channel: failingDraftChannel{}}, false},
 		{"metadata", replySingleMarker[:5], &replyDraft{channel: failingDraftChannel{}}, false},
 		{"rejected", "partial", &replyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 400}}}, false},
-		{"sent", "partial", &replyDraft{channel: failingDraftChannel{}}, true},
-		{"uncertain", "partial", &replyDraft{channel: failingDraftChannel{err: errors.New("connection reset")}}, true},
-		{"server-error", "partial", &replyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 500}}}, true},
+		// Telegram 草稿只是临时预览，推出去了也不算提交：流断了照样换候选，新一版
+		// 接着替换预览。只有 QQ 流式（帧就是正式消息）才会提交。
+		{"sent", "partial", &replyDraft{channel: failingDraftChannel{}}, false},
+		{"uncertain", "partial", &replyDraft{channel: failingDraftChannel{err: errors.New("connection reset")}}, false},
+		{"server-error", "partial", &replyDraft{channel: failingDraftChannel{err: &telegramAPIError{Code: 500}}}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			primary := &streamRejectionRegistryAdapter{events: []llm.ChatEvent{textDelta(tc.text), {Type: llm.ChatEventError, Error: "HTTP 401"}}}
@@ -619,7 +621,7 @@ func TestModelRequestTimeoutHTTPHeartbeatFailover(t *testing.T) {
 func TestStreamCancellationDoesNotWaitForChannelClose(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := accumulateChatEvents(ctx, make(chan llm.ChatEvent)); !errors.Is(err, context.Canceled) {
+	if _, err := accumulateChatEvents(ctx, llm.GenerateRequest{}, make(chan llm.ChatEvent)); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }
