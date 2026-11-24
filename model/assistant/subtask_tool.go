@@ -79,6 +79,8 @@ type dianaSubtaskTool struct {
 	// outputs 按任务 id 存这一轮各子任务的完整结果，一次放不下时用 read_id 续读。
 	// 同一轮里 id 重复时后跑的覆盖先跑的。
 	outputs map[string]string
+	// agentRun 留给测试替换子 agent 的执行。
+	agentRun subtaskAgentRunner
 }
 
 func newDianaSubtaskTool(runtime *Runtime, event MessageEvent) *dianaSubtaskTool {
@@ -88,14 +90,14 @@ func newDianaSubtaskTool(runtime *Runtime, event MessageEvent) *dianaSubtaskTool
 func (t *dianaSubtaskTool) Name() string { return dianaSubtaskToolName }
 
 func (t *dianaSubtaskTool) Description() string {
-	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks，由后端并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。旧 question/material 格式继续兼容。`
+	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks，由后端并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。这两种 Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。一轮回复做不完的大活（整份长文档的翻译或改写、批量处理文件、要读很多材料的整理）用 mode=agent：每个任务派一个子 agent，它有你这一套工具、和你共用工作目录，在后台自己做到完；互不依赖的部分拆成几个任务并行，全部结束后按 then 自动收尾并把结果发到会话。子 agent 看不到聊天历史，objective 要写全：材料在哪（文件所在消息的 message_id、页码范围、路径）、做哪一部分、交回什么。派出后这一轮只告诉对方已经开始，不要自己一点点做，也不要说成已经做完。旧 question/material 格式继续兼容。`
 }
 
 func (t *dianaSubtaskTool) InputSchema() map[string]any {
 	maxTasks, maxConcurrency := t.limits()
 	task := toolObjectSchema([]string{"id", "mode", "objective"}, map[string]any{
 		"id":            toolStringParam("本批任务内唯一的短标识。"),
-		"mode":          toolEnumParam("analyze 只分析 material；search 可联网调查。", subtaskModeAnalyze, subtaskModeSearch),
+		"mode":          toolEnumParam("analyze 只分析 material；search 可联网调查；agent 派一个带全套工具的后台子 agent。", subtaskModeAnalyze, subtaskModeSearch, subtaskModeAgent),
 		"objective":     toolStringParam("独立、自足的任务目标。"),
 		"material":      toolStringParam("完成任务必需的背景材料；search 可省略。"),
 		"queries":       toolStringArrayParam("search 可选的起始搜索词，最多 4 个。"),
@@ -103,6 +105,7 @@ func (t *dianaSubtaskTool) InputSchema() map[string]any {
 	})
 	return toolObjectSchema(nil, map[string]any{
 		"tasks":           map[string]any{"type": "array", "description": fmt.Sprintf("一次提交 1–%d 个任务。", maxTasks), "minItems": 1, "maxItems": maxTasks, "items": task},
+		"then":            toolStringParam("agent 任务全部结束后的收尾要做什么，例如按顺序合并成一个文件发出、汇总成一条结论；不填就把各部分结果按顺序交付给对方。"),
 		"max_concurrency": toolIntParam(fmt.Sprintf("本批最大并发数，不填时使用机器人配置（当前 %d）。", maxConcurrency), 1, maxConcurrency),
 		"question":        toolStringParam("旧接口：要回答的自足问题。"),
 		"material":        toolStringParam("旧接口：问题所需的全部材料。"),
@@ -137,7 +140,32 @@ func (t *dianaSubtaskTool) Run(ctx context.Context, input map[string]any) (strin
 	if concurrency > maxConcurrency {
 		concurrency = maxConcurrency
 	}
-	results := t.runBatch(ctx, tasks, concurrency)
+	// agent 任务登记成后台批次马上返回，其余的照旧在这一轮里跑完。
+	var agents, inline []subtaskRequest
+	var agentIndex, inlineIndex []int
+	for index, task := range tasks {
+		if task.Mode == subtaskModeAgent {
+			agents, agentIndex = append(agents, task), append(agentIndex, index)
+		} else {
+			inline, inlineIndex = append(inline, task), append(inlineIndex, index)
+		}
+	}
+	results := make([]subtaskResult, len(tasks))
+	if len(agents) > 0 {
+		then := strings.TrimSpace(configToolString(input, "then"))
+		if utf8.RuneCountInString(then) > subtaskAgentThenRunes {
+			return "", fmt.Errorf("diana subtask: then 超过 %d 字", subtaskAgentThenRunes)
+		}
+		if then == "" {
+			then = subtaskAgentDefaultThen
+		}
+		for position, result := range t.startAgents(ctx, agents, then) {
+			results[agentIndex[position]] = result
+		}
+	}
+	for position, result := range t.runBatch(ctx, inline, concurrency) {
+		results[inlineIndex[position]] = result
+	}
 	for _, result := range results {
 		t.storeOutput(result.ID, result.Output)
 	}
@@ -313,8 +341,8 @@ func parseBatchSubtask(input map[string]any) (subtaskRequest, error) {
 	if task.ID == "" || task.Objective == "" {
 		return subtaskRequest{}, fmt.Errorf("id、mode 和 objective 都不能为空")
 	}
-	if task.Mode != subtaskModeAnalyze && task.Mode != subtaskModeSearch {
-		return subtaskRequest{}, fmt.Errorf("mode 只支持 analyze 或 search")
+	if task.Mode != subtaskModeAnalyze && task.Mode != subtaskModeSearch && task.Mode != subtaskModeAgent {
+		return subtaskRequest{}, fmt.Errorf("mode 只支持 analyze、search 或 agent")
 	}
 	if task.Mode == subtaskModeAnalyze && task.Material == "" {
 		return subtaskRequest{}, fmt.Errorf("analyze 模式的 material 不能为空")

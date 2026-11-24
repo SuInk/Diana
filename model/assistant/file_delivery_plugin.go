@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -138,6 +139,7 @@ func (t *dianaFileDeliveryTool) InputSchema() map[string]any {
 		"filename": toolStringParam("带扩展名的文件名，不含目录，如 main.go"),
 		"content":  toolStringParam("完整文件内容，UTF-8 文本"),
 		"path":     toolStringParam("工作目录内已有文件的路径，文本或二进制均可，与 content 二选一；群成员仅限本群保存的文件"),
+		"paths":    toolStringArrayParam("几个文本文件按顺序接成一个发出，路径规则同 path；与 content、path 三选一"),
 		"preview":  toolBoolParam("先发一张渲染预览图，默认按插件设置"),
 	})
 }
@@ -158,7 +160,7 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 	if err != nil {
 		return t.fail(ctx, "", err.Error())
 	}
-	data, sourceErr := toolFileSource(t.runtime, t.event, t.owner, input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
+	data, sourceErr := t.source(input, t.settings.Bytes(fileDeliverySettingMaxFileBytes, defaultFileDeliveryMaxSize))
 	if sourceErr != nil {
 		return t.fail(ctx, name, sourceErr.Error())
 	}
@@ -180,6 +182,39 @@ func (t *dianaFileDeliveryTool) Run(ctx context.Context, input map[string]any) (
 	result := dianaFileDeliveryResult{OK: true, Message: "文件已经发到会话里了。", Filename: name, Bytes: len(data), Preview: previewStatus}
 	t.record(ctx, result, "")
 	return marshalFileDeliveryResult(result), nil
+}
+
+// source 取要发的内容：content、path 走通用的取法；paths 把几个文本文件按顺序接成
+// 一个，分段写出来的长产出不用再让模型把全文重抄一遍。
+func (t *dianaFileDeliveryTool) source(input map[string]any, limit int64) ([]byte, error) {
+	paths, err := toolStringValues(input["paths"])
+	if err != nil {
+		return nil, fmt.Errorf("paths: %w", err)
+	}
+	if len(paths) == 0 {
+		return toolFileSource(t.runtime, t.event, t.owner, input, limit)
+	}
+	if strings.TrimSpace(configToolString(input, "content")) != "" || strings.TrimSpace(configToolString(input, "path")) != "" {
+		return nil, fmt.Errorf("content、path、paths 只能提供一个")
+	}
+	var joined []byte
+	for index, path := range paths {
+		part, err := toolFileSource(t.runtime, t.event, t.owner, map[string]any{"path": path}, limit)
+		if err != nil {
+			return nil, fmt.Errorf("%s：%w", path, err)
+		}
+		if !utf8.Valid(part) {
+			return nil, fmt.Errorf("%s 不是文本文件，不能和别的文件接在一起", path)
+		}
+		if index > 0 {
+			joined = append(bytes.TrimRight(joined, "\n"), '\n', '\n')
+		}
+		joined = append(joined, part...)
+		if int64(len(joined)) > limit {
+			return nil, fmt.Errorf("合并后超过单个文件的大小上限 %d 字节", limit)
+		}
+	}
+	return joined, nil
 }
 
 // sendPreview 预览失败不拦文件发送，只把原因带回给模型。

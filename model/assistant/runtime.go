@@ -707,8 +707,10 @@ type Runtime struct {
 	// failedTasks 是近期失败的后台任务，进回复尾部，见 subagent_failure_context.go。
 	failedTasks failedSubagentTaskLog
 	// backgroundAgents 是后台长任务每轮的记录，status 查询用；归 subagentMu 管。
-	backgroundStartMu   sync.Mutex
-	backgroundAgents    map[string]*backgroundAgentState
+	backgroundStartMu sync.Mutex
+	backgroundAgents  map[string]*backgroundAgentState
+	// subtaskAgentBatches 是每个会话在跑的子 agent 批次数；归 subagentMu 管。
+	subtaskAgentBatches map[string]int
 	subagentSem         chan struct{}
 	subagentLLMSem      chan struct{}
 	replySuppressMu     sync.Mutex
@@ -5194,6 +5196,9 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			// 模型 send 了空正文，自己选择这一轮不说话。没有正文可整理，也不该被
 			// 下游任何一条兜底文案补上；调用方按「本轮不发送」处理。
 			return "", newModelSilentFinishError(resp.SilentReason)
+		}
+		if subtaskAgentRawResult(ctx) {
+			return text, nil
 		}
 		return r.composeAndPrepareReply(replyerCtx, cfg, event, messages, text)
 	}
