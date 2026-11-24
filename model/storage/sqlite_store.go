@@ -650,6 +650,9 @@ CREATE INDEX IF NOT EXISTS idx_app_logs_trace_target ON app_logs(kind, action, t
 	if err := s.migrateMediaGenerationUsage(); err != nil {
 		return err
 	}
+	if err := s.migrateAdminChat(); err != nil {
+		return err
+	}
 	s.ensureHotPathIndexes()
 	s.historyFTS = ensureMessageHistoryFTS(s.db)
 	s.historyVectors = ensureMessageHistoryVectors(s.db)

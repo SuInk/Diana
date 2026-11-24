@@ -14,7 +14,7 @@ import { ApiError, DianaApi, rejectedCertificates } from './api.ts'
 import { LocalServer } from './local.ts'
 import { loadCookie, loadState, saveCookie, saveState, type StoredState } from './store.ts'
 import { normalizeServer, sameOrigin } from '../shared/server.ts'
-import type { ApiResult, AppInfo, ChatFrame, LoginRequest, Rect, SessionState } from '../shared/types.ts'
+import type { ApiResult, AppInfo, ChatFrame, LoginRequest, ModelOption, Rect, SessionState, TaskStreamFrame } from '../shared/types.ts'
 
 // 界面里的头像和图片走这个协议，由主进程带上登录 Cookie 去取。必须在 ready 前注册。
 const mediaScheme = 'diana-media'
@@ -109,6 +109,27 @@ function registerIpc(): void {
   ipcMain.on('diana:admin-place', (_event, bounds: Rect) => admin.place(bounds))
   ipcMain.on('diana:admin-hide', () => admin.hide())
   ipcMain.on('diana:admin-reload', () => admin.reload())
+  ipcMain.handle('diana:tasks', (_event, profile: string) => wrap(() => requireApi().taskSessions(profile)))
+  ipcMain.handle('diana:task', (_event, profile: string, id?: string) => wrap(() => requireApi().taskSession(profile, id)))
+  ipcMain.handle('diana:task-create', (_event, profile: string) => wrap(() => requireApi().createTask(profile)))
+  ipcMain.handle('diana:task-delete', (_event, id: string) => wrap(async () => (await requireApi().deleteTask(id), null)))
+  ipcMain.handle('diana:task-stop', (_event, id: string) => wrap(async () => (await requireApi().stopTask(id), null)))
+  ipcMain.handle('diana:models', () => wrap(() => requireApi().models()))
+  ipcMain.handle('diana:task-run', (event, requestId: string, id: string, message: string, model?: ModelOption) =>
+    wrap(async () => {
+      const emit = (frame: TaskStreamFrame) => {
+        if (!event.sender.isDestroyed()) event.sender.send('diana:task-frame', frame)
+      }
+      try {
+        await requireApi().runTask(id, message, model, (frame) => emit({ requestId, ...frame }))
+        emit({ requestId, type: 'done' })
+      } catch (error) {
+        emit({ requestId, type: 'done', error: (error as Error).message })
+        throw error
+      }
+      return null
+    }),
+  )
   ipcMain.handle('diana:info', (): AppInfo => ({ version: app.getVersion(), local: local.info }))
   ipcMain.on('diana:reveal-data', () => {
     const dir = local.info?.dataDir

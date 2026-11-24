@@ -3,19 +3,80 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { LayoutDashboard, PanelLeft, RefreshCw, Settings, TriangleAlert } from '@lucide/vue'
-import type { ApiResult, AppCommand, Bot, ChatFrame, ChatInfo, ChatMessage, SessionState } from '../../../shared/types.ts'
-import BotAvatar from './BotAvatar.vue'
+import { LayoutDashboard, MessageCircle, PanelLeft, RefreshCw, Settings, SquarePen, Trash2, TriangleAlert } from '@lucide/vue'
+import type { ApiResult, AppCommand, Bot, ChatFrame, ChatInfo, ChatMessage, ModelOption, SessionState, TaskSummary } from '../../../shared/types.ts'
 import MessageList from './MessageList.vue'
 import Composer from './Composer.vue'
 import SettingsView from './SettingsView.vue'
+import TaskView from './TaskView.vue'
 
 const props = defineProps<{ session: SessionState }>()
 const emit = defineEmits<{ logout: []; expired: []; 'use-remote': []; 'use-local': [] }>()
 
-// 主面板显示什么：和某个机器人的私聊、嵌进来的管理后台，或桌面端自己的设置。
-type View = 'chat' | 'admin' | 'settings'
-const view = ref<View>('chat')
+// 主面板显示什么：任务（默认，交给 Agent 去做的事）、和某个机器人的私聊、嵌进来的管理后台，或桌面端自己的设置。
+type View = 'task' | 'chat' | 'admin' | 'settings'
+const view = ref<View>('task')
+
+// ---------- 任务 ----------
+const tasks = ref<TaskSummary[]>([])
+const taskId = ref('')
+const taskTitle = ref('')
+const models = ref<ModelOption[]>([])
+const taskView = ref<InstanceType<typeof TaskView> | null>(null)
+
+// 空会话（打开过但一句没说）不进列表，正在看的那条除外。
+const visibleTasks = computed(() => tasks.value.filter((t) => t.message_count > 0 || t.session_id === taskId.value))
+const taskGroups = computed(() => {
+  const startOfToday = new Date()
+  startOfToday.setHours(0, 0, 0, 0)
+  const day = 86_400_000
+  const groups: { label: string; items: TaskSummary[] }[] = [
+    { label: '今天', items: [] },
+    { label: '昨天', items: [] },
+    { label: '最近 7 天', items: [] },
+    { label: '更早', items: [] },
+  ]
+  for (const task of visibleTasks.value) {
+    const at = new Date(task.updated_at).getTime()
+    const index = at >= startOfToday.getTime() ? 0 : at >= startOfToday.getTime() - day ? 1 : at >= startOfToday.getTime() - 6 * day ? 2 : 3
+    groups[index].items.push(task)
+  }
+  return groups.filter((group) => group.items.length)
+})
+
+async function loadTasks() {
+  const result = await window.diana.tasks('')
+  const list = check(result)
+  if (list) tasks.value = list
+}
+
+function newTask() {
+  go('task')
+  taskId.value = ''
+  taskTitle.value = ''
+  void nextTick(() => taskView.value?.focus())
+}
+
+function openTask(id: string) {
+  go('task')
+  taskId.value = id
+}
+
+function onTaskCreated(id: string) {
+  taskId.value = id
+  void loadTasks()
+}
+
+async function deleteTask(task: TaskSummary) {
+  if (!window.confirm(`删除「${task.title}」？对话记录会一起删掉，不能恢复。`)) return
+  const result = await window.diana.deleteTask(task.session_id)
+  if (!result.ok) {
+    window.alert(result.error)
+    return
+  }
+  if (taskId.value === task.session_id) newTask()
+  await loadTasks()
+}
 
 interface LocalMessage extends ChatMessage {
   pending?: boolean
@@ -76,9 +137,9 @@ function go(next: View) {
   view.value = next
 }
 
-function openChat(id: string) {
+function openChat() {
   go('chat')
-  void select(id)
+  if (!selectedID.value && bots.value.length) void select(bots.value[0].id)
 }
 
 // 管理后台是主进程叠在窗口上的一层，界面只负责留出位置、量好告诉它。
@@ -112,18 +173,24 @@ function reload() {
   else if (view.value === 'chat') {
     void loadBots()
     if (selectedID.value) void select(selectedID.value)
+  } else if (view.value === 'task') {
+    void loadTasks()
+    taskView.value?.reload()
   }
 }
 
 function onCommand(command: AppCommand) {
   if (command === 'sidebar') setSidebar(!sidebarOpen.value)
   else if (command === 'reload') reload()
+  else if (command === 'new-task') newTask()
+  else if (command === 'chat') openChat()
   else go(command)
 }
 
 const title = computed(() => {
   if (view.value === 'admin') return { name: '管理后台', sub: host.value }
   if (view.value === 'settings') return { name: '设置', sub: '' }
+  if (view.value === 'task') return { name: taskId.value ? taskTitle.value || '任务' : '新任务', sub: '' }
   const bot = selected.value
   if (!bot) return { name: '消息', sub: '' }
   return { name: conversation.value?.info?.bot_name || bot.name, sub: sending.value ? '对方正在输入…' : bot.platform }
@@ -203,6 +270,10 @@ onMounted(() => {
   unsubscribe = window.diana.onFrame(onFrame)
   unsubscribeCommand = window.diana.onCommand(onCommand)
   void loadBots()
+  void loadTasks()
+  void window.diana.models().then((result) => {
+    if (result.ok) models.value = result.value
+  })
 })
 onBeforeUnmount(() => {
   unsubscribe()
@@ -216,47 +287,35 @@ onBeforeUnmount(() => {
   <div class="shell" :class="{ 'sidebar-hidden': !sidebarOpen }">
     <aside v-show="sidebarOpen" class="sidebar" aria-label="导航">
       <div class="sidebar-top" aria-hidden="true" />
-      <div class="identity">
-        <span class="identity-logo" aria-hidden="true">D</span>
-        <span class="identity-text">
-          <strong>Diana</strong>
-          <span class="identity-status muted" :title="session.server"><i class="status-dot" aria-hidden="true" />{{ statusLabel }}</span>
-        </span>
-      </div>
+      <button class="nav-item new-task" :class="{ selected: view === 'task' && !taskId }" type="button" title="新任务（⌘N）" @click="newTask">
+        <SquarePen :size="17" aria-hidden="true" /> 新任务
+      </button>
 
-      <nav class="sidebar-nav">
-        <div class="nav-heading">
-          <span>对话</span>
-          <button class="icon-button small" type="button" title="刷新机器人列表" aria-label="刷新机器人列表" :disabled="botsLoading" @click="loadBots"><RefreshCw :size="13" :class="{ spin: botsLoading }" aria-hidden="true" /></button>
-        </div>
-        <p v-if="botsError" class="list-note error">{{ botsError }}</p>
-        <p v-else-if="!botsLoading && !bots.length" class="list-note muted">这台服务器上还没有机器人</p>
-        <button
-          v-for="bot in bots"
-          :key="bot.id"
-          class="nav-item bot-row"
-          :class="{ selected: view === 'chat' && bot.id === selectedID }"
-          :aria-current="view === 'chat' && bot.id === selectedID ? 'page' : undefined"
-          type="button"
-          @click="openChat(bot.id)"
-        >
-          <BotAvatar :name="bot.name" :src="bot.avatar" :size="26" />
-          <span class="bot-row-text">
-            <span class="bot-name">{{ bot.name }}</span>
-            <span class="bot-meta muted">{{ conversations.get(bot.id)?.requestId ? '正在输入…' : bot.platform || '私聊' }}</span>
-          </span>
-        </button>
-
-        <div class="nav-heading"><span>管理</span></div>
-        <button class="nav-item" :class="{ selected: view === 'admin' }" :aria-current="view === 'admin' ? 'page' : undefined" type="button" @click="go('admin')">
-          <LayoutDashboard :size="17" aria-hidden="true" /> 管理后台
-        </button>
+      <nav class="sidebar-nav" aria-label="任务">
+        <template v-for="group in taskGroups" :key="group.label">
+          <div class="nav-heading"><span>{{ group.label }}</span></div>
+          <div v-for="task in group.items" :key="task.session_id" class="task-row" :class="{ selected: view === 'task' && task.session_id === taskId }">
+            <button class="nav-item" type="button" :aria-current="view === 'task' && task.session_id === taskId ? 'page' : undefined" :title="task.title" @click="openTask(task.session_id)">
+              <span v-if="task.running" class="task-running" aria-label="执行中" />
+              <span class="task-title">{{ task.title }}</span>
+            </button>
+            <button class="icon-button small task-delete" type="button" :title="`删除「${task.title}」`" :aria-label="`删除「${task.title}」`" :disabled="task.running" @click="deleteTask(task)"><Trash2 :size="13" aria-hidden="true" /></button>
+          </div>
+        </template>
+        <p v-if="!visibleTasks.length" class="list-note muted">还没有任务。在右边说一件事，交给 Diana 去做。</p>
       </nav>
 
       <footer class="sidebar-footer">
+        <button class="nav-item" :class="{ selected: view === 'chat' }" :aria-current="view === 'chat' ? 'page' : undefined" type="button" @click="openChat">
+          <MessageCircle :size="17" aria-hidden="true" /> 机器人私聊
+        </button>
+        <button class="nav-item" :class="{ selected: view === 'admin' }" :aria-current="view === 'admin' ? 'page' : undefined" type="button" @click="go('admin')">
+          <LayoutDashboard :size="17" aria-hidden="true" /> 管理后台
+        </button>
         <button class="nav-item" :class="{ selected: view === 'settings' }" :aria-current="view === 'settings' ? 'page' : undefined" type="button" @click="go('settings')">
           <Settings :size="17" aria-hidden="true" /> 设置
         </button>
+        <p class="identity-status muted" :title="session.server"><i class="status-dot" aria-hidden="true" />{{ statusLabel }}</p>
       </footer>
     </aside>
 
@@ -272,15 +331,24 @@ onBeforeUnmount(() => {
         >
           <PanelLeft :size="17" aria-hidden="true" />
         </button>
+        <button v-if="!sidebarOpen && view === 'task'" class="icon-button toolbar-button" type="button" title="新任务" aria-label="新任务" @click="newTask"><SquarePen :size="16" aria-hidden="true" /></button>
         <div class="toolbar-title">
           <h1>{{ title.name }}</h1>
           <span v-if="title.sub" class="muted">{{ title.sub }}</span>
         </div>
         <span class="toolbar-spacer" />
+        <label v-if="view === 'chat' && bots.length > 1" class="model-select toolbar-select">
+          <span class="sr-only">机器人</span>
+          <select :value="selectedID" @change="select(($event.target as HTMLSelectElement).value)">
+            <option v-for="bot in bots" :key="bot.id" :value="bot.id">{{ bot.name }}</option>
+          </select>
+        </label>
         <button v-if="view !== 'settings'" class="icon-button toolbar-button" type="button" title="刷新" aria-label="刷新" @click="reload"><RefreshCw :size="16" aria-hidden="true" /></button>
       </header>
 
-      <template v-if="view === 'chat'">
+      <TaskView v-if="view === 'task'" ref="taskView" :session-id="taskId" :models="models" @created="onTaskCreated" @changed="loadTasks" @expired="emit('expired')" @title="taskTitle = $event" />
+      <template v-else-if="view === 'chat'">
+        <p v-if="botsError" class="chat-error" role="alert">{{ botsError }}</p>
         <section v-if="selected && conversation" class="chat" :aria-label="`和 ${selected.name} 的私聊`">
           <div v-if="conversation.info?.problem" class="banner warn" role="status">
             <TriangleAlert :size="15" aria-hidden="true" />
@@ -292,7 +360,7 @@ onBeforeUnmount(() => {
           <Composer :disabled="Boolean(conversation.info?.problem) || conversation.loading" :busy="sending" :placeholder="`和 ${selected.name} 说点什么…`" @send="send" />
         </section>
         <section v-else class="chat chat-empty">
-          <p class="muted">{{ botsLoading ? '正在加载…' : '选一个机器人开始聊天' }}</p>
+          <p class="muted">{{ botsLoading ? '正在加载…' : '这台服务器上还没有机器人' }}</p>
         </section>
       </template>
       <div v-else-if="view === 'admin'" ref="adminHost" class="admin-host">

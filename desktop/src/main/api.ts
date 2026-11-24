@@ -8,7 +8,7 @@
 import { net, type ClientRequest, type IncomingMessage, type Session } from 'electron'
 import { absoluteURL } from '../shared/server.ts'
 import { LineSplitter } from '../shared/ndjson.ts'
-import type { Bot, ChatHistory, ChatMessage, UntrustedCertificate } from '../shared/types.ts'
+import type { Bot, ChatHistory, ChatMessage, ModelOption, TaskFrame, TaskSession, TaskSummary, UntrustedCertificate } from '../shared/types.ts'
 
 const connectTimeoutMs = 10_000
 // 服务端每 15 秒发一次心跳，一分钟没动静就当连接断了。
@@ -77,18 +77,80 @@ export class DianaApi {
 
   /** 发一句话，回复一条条交给 onMessage。连接中途断了或服务端报错都抛 ApiError。 */
   async send(profile: string, text: string, onMessage: (message: ChatMessage) => void): Promise<void> {
-    const response = await this.open('POST', '/api/assistant/chat', { body: { profile, text } })
-    await this.check(response)
     let done = false
     let failure = ''
-    const handle = (line: string) => {
-      const frame = JSON.parse(line)
-      if (frame.type === 'message' && frame.message) onMessage(this.resolveImages(frame.message))
+    await this.stream('/api/assistant/chat', { profile, text }, (frame) => {
+      if (frame.type === 'message' && frame.message) onMessage(this.resolveImages(frame.message as ChatMessage))
       if (frame.type === 'done') {
         done = true
         if (typeof frame.error === 'string') failure = frame.error
       }
+    })
+    if (!done) throw new ApiError('连接中断了，刷新看看她回了没有')
+    if (failure) throw new ApiError(failure)
+  }
+
+  // ---------- 任务（服务端的管理对话：带全套工具的 Agent，会话落库） ----------
+
+  async taskSessions(profile: string): Promise<TaskSummary[]> {
+    const json = await this.json('GET', '/api/assistant/admin-chat/sessions', { profile })
+    return Array.isArray(json.sessions) ? json.sessions : []
+  }
+
+  /** 读一条会话；不给 id 时服务端接着这个机器人最近的那条，没有就新建。 */
+  async taskSession(profile: string, id = ''): Promise<TaskSession> {
+    const query: Record<string, string> = { profile }
+    if (id) query.session_id = id
+    const json = await this.json('GET', '/api/assistant/admin-chat', query)
+    return { ...json, messages: Array.isArray(json.messages) ? json.messages : [] }
+  }
+
+  async createTask(profile: string): Promise<string> {
+    const json = await this.json('POST', '/api/assistant/admin-chat/sessions', undefined, { profile })
+    return String(json.session_id ?? '')
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await this.json('DELETE', `/api/assistant/admin-chat/sessions/${encodeURIComponent(id)}`)
+  }
+
+  async stopTask(id: string): Promise<void> {
+    await this.json('POST', `/api/assistant/admin-chat/${encodeURIComponent(id)}/stop`)
+  }
+
+  /** 发给任务会话，执行步骤和回复按帧交给 onFrame，直到 done。 */
+  async runTask(id: string, message: string, model: ModelOption | undefined, onFrame: (frame: TaskFrame) => void): Promise<void> {
+    let done = false
+    await this.stream('/api/assistant/admin-chat', { session_id: id, message, provider_id: model?.provider || undefined, model: model?.model || undefined }, (frame) => {
+      if (frame.type === 'done') done = true
+      if (frame.type === 'user' || frame.type === 'message' || frame.type === 'progress') onFrame(frame as TaskFrame)
+    })
+    if (!done) throw new ApiError('连接中断了，刷新看看任务做到哪了')
+  }
+
+  /** 能出文字的模型，给任务选模型用；只列出提供商里登记过的。 */
+  async models(): Promise<ModelOption[]> {
+    const json = await this.json('GET', '/api/llm/config')
+    const out: ModelOption[] = []
+    for (const channel of Array.isArray(json.profiles) ? json.profiles : []) {
+      if (!channel?.id || channel.group === 'image') continue
+      const seen = new Set<string>()
+      for (const model of Array.isArray(channel.models) ? channel.models : []) {
+        const modalities: string[] = model.output_modalities ?? []
+        if (!model.id || (modalities.length && !modalities.includes('text')) || seen.has(model.id)) continue
+        seen.add(model.id)
+        out.push({ provider: channel.id, model: model.id, label: model.name && model.name !== model.id ? model.name : model.id, hint: channel.name || channel.provider || channel.id })
+      }
+      if (channel.model && !seen.has(channel.model)) out.push({ provider: channel.id, model: channel.model, label: channel.model, hint: channel.name || channel.provider || channel.id })
     }
+    return out
+  }
+
+  /** NDJSON 流：每行一帧交给 onFrame，心跳续命，一分钟没动静当断线。 */
+  private async stream(path: string, body: unknown, onFrame: (frame: { type: string; [key: string]: unknown }) => void): Promise<void> {
+    const response = await this.open('POST', path, { body, timeoutMs: 30_000 })
+    await this.check(response)
+    const handle = (line: string) => onFrame(JSON.parse(line))
     const splitter = new LineSplitter()
     await new Promise<void>((resolve, reject) => {
       let idle: NodeJS.Timeout
@@ -123,8 +185,6 @@ export class DianaApi {
         reject(new ApiError(`连接中断了：${error.message}`))
       })
     })
-    if (!done) throw new ApiError('连接中断了，刷新看看她回了没有')
-    if (failure) throw new ApiError(failure)
   }
 
   /** 取服务器上的图片，给界面的 diana-media:// 协议用。 */
@@ -140,8 +200,8 @@ export class DianaApi {
     return message
   }
 
-  private async json(method: string, path: string, query?: Record<string, string>) {
-    const response = await this.open(method, path, { query })
+  private async json(method: string, path: string, query?: Record<string, string>, body?: unknown) {
+    const response = await this.open(method, path, { query, body })
     await this.check(response)
     const text = await readAll(response.message)
     try {
@@ -165,7 +225,7 @@ export class DianaApi {
     throw new ApiError(message || `请求失败：HTTP ${response.status}`, response.status === 401)
   }
 
-  private open(method: string, pathOrURL: string, options: { query?: Record<string, string>; body?: unknown; auth?: boolean } = {}): Promise<Response> {
+  private open(method: string, pathOrURL: string, options: { query?: Record<string, string>; body?: unknown; auth?: boolean; timeoutMs?: number } = {}): Promise<Response> {
     const url = new URL(pathOrURL, `${this.server}/`)
     for (const [key, value] of Object.entries(options.query ?? {})) url.searchParams.set(key, value)
     const host = url.host
@@ -176,7 +236,7 @@ export class DianaApi {
       const timer = setTimeout(() => {
         request.abort()
         reject(new ApiError(`连接 ${host} 超时`))
-      }, connectTimeoutMs)
+      }, options.timeoutMs ?? connectTimeoutMs)
       request.on('response', (message) => {
         clearTimeout(timer)
         resolve({ status: message.statusCode, headers: message.headers, message, request })

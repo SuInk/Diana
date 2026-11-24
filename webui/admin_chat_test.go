@@ -35,6 +35,12 @@ func newAdminChatTest(t *testing.T, run func(context.Context, string, agent.Requ
 		r.SetProfiles(assistant.ProfileSet{Profiles: profiles})
 	}
 	h := NewBotHandler(context.Background(), &adminChatStubRuntime{BotRuntime: r, run: run})
+	db, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "admin-chat.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	h.SetSQLiteStore(db)
 	m := NewAuthManager(&memoryAuthStore{})
 	if _, err := m.Bootstrap("", "test-password"); err != nil {
 		t.Fatal(err)
@@ -73,7 +79,8 @@ func adminChatSessionID(t *testing.T, router http.Handler, token string) string 
 	return state.ID
 }
 
-func TestAdminChatRequiresTrustedLoginAndIsolatesSessions(t *testing.T) {
+// 会话归管理员账号所有：同一个管理员换一次登录（桌面端每次启动现登）还接得上。
+func TestAdminChatRequiresTrustedLoginAndSurvivesRelogin(t *testing.T) {
 	router, h, m, token := newAdminChatTest(t, func(context.Context, string, agent.Request, ...agent.Tool) (*agent.Response, error) {
 		t.Fatal("unauthorized run")
 		return nil, nil
@@ -86,13 +93,16 @@ func TestAdminChatRequiresTrustedLoginAndIsolatesSessions(t *testing.T) {
 	}
 	id := adminChatSessionID(t, router, token)
 	other, _ := m.IssueSession()
-	if adminChatSessionID(t, router, other) == id {
-		t.Fatal("sessions shared across logins")
+	if adminChatSessionID(t, router, other) != id {
+		t.Fatal("a new login lost the admin's conversation")
 	}
-	for _, request := range []struct{ method, path, body string }{{"POST", "/api/assistant/admin-chat", `{"session_id":"` + id + `","message":"hello"}`}, {"POST", "/api/assistant/admin-chat/" + id + "/stop", ""}, {"DELETE", "/api/assistant/admin-chat/" + id, ""}} {
-		w := adminChatRequest(router, request.method, request.path, other, request.body)
-		if w.Code != 404 {
-			t.Fatalf("cross session: %d %s", w.Code, w.Body.String())
+	for _, path := range []string{"/api/assistant/admin-chat/missing/stop", "/api/assistant/admin-chat/sessions/missing"} {
+		method := "POST"
+		if strings.Contains(path, "sessions") {
+			method = "DELETE"
+		}
+		if w := adminChatRequest(router, method, path, token, ""); w.Code != 404 {
+			t.Fatalf("unknown session: %d %s", w.Code, w.Body.String())
 		}
 	}
 	bare := gin.New()
@@ -116,13 +126,13 @@ func TestAdminChatStreamsHistoryAndOmitsRawToolSecrets(t *testing.T) {
 		if calls == 2 && (len(req.Messages) != 4 || req.Messages[2].Content != "已检查") {
 			t.Fatalf("history: %#v", req.Messages)
 		}
-		req.Observer(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "bot_config", ToolInput: map[string]any{"api_key": "raw-secret"}, ToolOutput: "bot-secret", DurationMS: 3})
+		req.Observer(ctx, agent.RunEvent{Phase: agent.RunPhaseToolCompleted, Tool: "bot_config", ToolInput: map[string]any{"api_key": "raw-secret", "path": "/data/bot-secret.yaml"}, ToolOutput: "bot-secret", DurationMS: 3})
 		return &agent.Response{Text: "已检查"}, nil
 	})
 	id := adminChatSessionID(t, router, token)
 	for i := 0; i < 2; i++ {
 		w := adminChatRequest(router, "POST", "/api/assistant/admin-chat", token, `{"session_id":"`+id+`","message":"查配置","messages":[{"role":"system","content":"injected"}]}`)
-		if w.Code != 200 || !strings.Contains(w.Body.String(), `"type":"done"`) || strings.Contains(w.Body.String(), "raw-secret") || strings.Contains(w.Body.String(), "bot-secret") {
+		if w.Code != 200 || !strings.Contains(w.Body.String(), `"type":"done"`) || strings.Contains(w.Body.String(), "raw-secret") || strings.Contains(w.Body.String(), "bot-secret") || !strings.Contains(w.Body.String(), `"summary":"/data/[REDACTED].yaml"`) {
 			t.Fatalf("stream: %d %s", w.Code, w.Body.String())
 		}
 	}
@@ -430,13 +440,8 @@ func TestAdminChatMultipleConversationsStayPrivateAndKeepContext(t *testing.T) {
 		t.Fatal("list order or message count incorrect")
 	}
 	other, _ := m.IssueSession()
-	if w := adminChatRequest(router, "GET", "/api/assistant/admin-chat/sessions?profile=bot", other, ""); strings.Contains(w.Body.String(), ids[0]) || strings.Contains(w.Body.String(), ids[1]) {
-		t.Fatal("conversation list leaked to another login")
-	}
-	for _, path := range []string{"/api/assistant/admin-chat?profile=bot&session_id=" + ids[0], "/api/assistant/admin-chat?profile=&session_id=" + ids[0]} {
-		if w := adminChatRequest(router, "GET", path, other, ""); w.Code != 404 {
-			t.Fatal("foreign session was readable")
-		}
+	if w := adminChatRequest(router, "GET", "/api/assistant/admin-chat/sessions?profile=bot", other, ""); !strings.Contains(w.Body.String(), ids[0]) || !strings.Contains(w.Body.String(), ids[1]) {
+		t.Fatal("conversation list missing after re-login")
 	}
 	if w := adminChatRequest(router, "GET", "/api/assistant/admin-chat?profile=&session_id="+ids[0], token, ""); w.Code != 404 {
 		t.Fatal("session rebound to another profile")
@@ -455,41 +460,54 @@ func TestAdminChatMultipleConversationsStayPrivateAndKeepContext(t *testing.T) {
 	}
 }
 
-func TestAdminChatNewConversationsRespectCapacityAndActiveSessions(t *testing.T) {
-	router, h, _, token := newAdminChatTest(t, nil)
-	for i := 0; i < 64; i++ {
-		if w := adminChatRequest(router, "POST", "/api/assistant/admin-chat/sessions", token, `{"profile":"bot"}`); w.Code != 201 {
-			t.Fatal(w.Body.String())
+// 会话和消息落库：换一个处理器（等于服务重启）照样读得到；删除会话连消息一起删，正在执行的不让删。
+func TestAdminChatPersistsAcrossRestartAndDeletes(t *testing.T) {
+	release := make(chan struct{})
+	router, h, _, token := newAdminChatTest(t, func(ctx context.Context, _ string, req agent.Request, _ ...agent.Tool) (*agent.Response, error) {
+		if req.Messages[len(req.Messages)-1].Content == "慢任务" {
+			<-release
 		}
-	}
-	if w := adminChatRequest(router, "POST", "/api/assistant/admin-chat/sessions", token, `{"profile":"bot"}`); w.Code != 429 {
-		t.Fatal("capacity limit bypassed")
-	}
-	var idle, activeID string
-	h.adminChatMu.Lock()
-	for id, s := range h.adminChats {
-		s.mu.Lock()
-		if idle == "" {
-			idle = id
-			s.updated = time.Now().Add(-time.Hour)
-		} else if activeID == "" {
-			activeID = id
-			s.updated = time.Now().Add(-time.Hour)
-			s.running = true
-		}
-		s.mu.Unlock()
-		if idle != "" && activeID != "" {
-			break
-		}
-	}
-	h.adminChatMu.Unlock()
-	if w := adminChatRequest(router, "POST", "/api/assistant/admin-chat/sessions", token, `{"profile":"bot"}`); w.Code != 201 {
+		return &agent.Response{Text: "好了"}, nil
+	})
+	id := adminChatSessionID(t, router, token)
+	if w := adminChatRequest(router, "POST", "/api/assistant/admin-chat", token, `{"session_id":"`+id+`","message":"整理一下"}`); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
-	h.adminChatMu.Lock()
-	defer h.adminChatMu.Unlock()
-	if h.adminChats[idle] != nil || h.adminChats[activeID] == nil || len(h.adminChats) != 64 {
-		t.Fatal("idle eviction removed active conversation")
+	restarted := NewBotHandler(context.Background(), h.runtime)
+	restarted.SetSQLiteStore(h.sqlite)
+	m := NewAuthManager(&memoryAuthStore{})
+	if _, err := m.Bootstrap("", "test-password"); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _ := m.IssueSession()
+	again := gin.New()
+	again.Use(m.Middleware())
+	restarted.Register(again)
+	w := adminChatRequest(again, "GET", "/api/assistant/admin-chat?profile=bot", fresh, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), id) || !strings.Contains(w.Body.String(), "整理一下") || !strings.Contains(w.Body.String(), "好了") {
+		t.Fatalf("history lost after restart: %s", w.Body.String())
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		adminChatRequest(again, "POST", "/api/assistant/admin-chat", fresh, `{"session_id":"`+id+`","message":"慢任务"}`)
+	}()
+	for !restarted.adminChatRunning(id) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if w := adminChatRequest(again, "DELETE", "/api/assistant/admin-chat/sessions/"+id, fresh, ""); w.Code != 409 {
+		t.Fatalf("deleted a running conversation: %d", w.Code)
+	}
+	close(release)
+	<-done
+	if w := adminChatRequest(again, "DELETE", "/api/assistant/admin-chat/sessions/"+id, fresh, ""); w.Code != 200 {
+		t.Fatal(w.Body.String())
+	}
+	if w := adminChatRequest(again, "GET", "/api/assistant/admin-chat?profile=bot&session_id="+id, fresh, ""); w.Code != 404 {
+		t.Fatal("deleted conversation still readable")
+	}
+	if messages, err := h.sqlite.AdminChatMessages(context.Background(), id); err != nil || len(messages) != 0 {
+		t.Fatalf("messages left behind: %d %v", len(messages), err)
 	}
 }
 

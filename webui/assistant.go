@@ -113,7 +113,7 @@ type rssWatchRuntime interface {
 
 type BotHandler struct {
 	adminChatMu               sync.Mutex
-	adminChats                map[string]*adminChatSession
+	adminChatRuns             map[string]context.CancelFunc
 	eventSummaryMu            sync.Mutex
 	eventSummaryCache         map[string]eventSummaryCacheEntry
 	runtime                   BotRuntime

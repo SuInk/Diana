@@ -89,7 +89,9 @@ export function installMenu(send: (command: AppCommand) => void): void {
     {
       label: '显示',
       submenu: [
-        command('消息', 'CmdOrCtrl+1', 'chat'),
+        command('新任务', 'CmdOrCtrl+N', 'new-task'),
+        { type: 'separator' },
+        command('机器人私聊', 'CmdOrCtrl+1', 'chat'),
         command('管理后台', 'CmdOrCtrl+2', 'admin'),
         command('显示或隐藏侧栏', 'CmdOrCtrl+\\', 'sidebar'),
         { type: 'separator' },

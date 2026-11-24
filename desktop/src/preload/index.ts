@@ -2,7 +2,7 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
-import type { AppCommand, ChatFrame, DianaBridge, Material } from '../shared/types.ts'
+import type { AppCommand, ChatFrame, DianaBridge, Material, TaskStreamFrame } from '../shared/types.ts'
 
 const bridge: DianaBridge = {
   // 界面按平台和窗口底材决定哪里透明、标题栏按钮留多少位置，渲染前就要知道。
@@ -16,6 +16,18 @@ const bridge: DianaBridge = {
   hideAdmin: () => ipcRenderer.send('diana:admin-hide'),
   reloadAdmin: () => ipcRenderer.send('diana:admin-reload'),
   info: () => ipcRenderer.invoke('diana:info'),
+  tasks: (profile) => ipcRenderer.invoke('diana:tasks', profile),
+  task: (profile, id) => ipcRenderer.invoke('diana:task', profile, id),
+  createTask: (profile) => ipcRenderer.invoke('diana:task-create', profile),
+  deleteTask: (id) => ipcRenderer.invoke('diana:task-delete', id),
+  stopTask: (id) => ipcRenderer.invoke('diana:task-stop', id),
+  runTask: (requestId, id, message, model) => ipcRenderer.invoke('diana:task-run', requestId, id, message, model),
+  onTaskFrame: (listener) => {
+    const handler = (_event: IpcRendererEvent, frame: TaskStreamFrame) => listener(frame)
+    ipcRenderer.on('diana:task-frame', handler)
+    return () => ipcRenderer.removeListener('diana:task-frame', handler)
+  },
+  models: () => ipcRenderer.invoke('diana:models'),
   revealData: () => ipcRenderer.send('diana:reveal-data'),
   onCommand: (listener) => {
     const handler = (_event: IpcRendererEvent, command: AppCommand) => listener(command)
