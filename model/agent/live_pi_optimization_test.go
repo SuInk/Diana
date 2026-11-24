@@ -86,7 +86,7 @@ func TestLivePiEnvironmentReplay(t *testing.T) {
 					}
 				}
 			}
-			prefix := transcriptAfter(req.Messages, resp, resp.Text)
+			prefix := transcriptAfter(req.Messages, nil, resp, resp.Text)
 			appended := []llm.Message{{Role: llm.RoleUser, Content: "请用一句话概括你刚才的回答，不执行其他操作。"}}
 			volatile := []llm.Message{env}
 			if optimized {

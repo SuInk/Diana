@@ -224,8 +224,10 @@ func redoToolsKey(message llm.Message) string {
 // 插进去的工具执行状态和输出前检查），加上这一轮中途补进来的同一人发言，再接上收尾的
 // send 调用和「已发送」。
 //
-// 这一轮各步的工具调用、工具结果、工具结果提醒和退回修复都不进前缀，下一轮只看得到
-// 机器人说了什么，和重新组装时历史里自己的发言同一个形态（见 llm.HistoryReplyCallIDPrefix）。
+// 这一轮各步的工具结果、工具结果提醒和退回修复都不进前缀。执行成功的工具调用留下，排在
+// 收尾的 send 前面，结果换成一句占位（见 historyToolResult）：下一轮看得到机器人做过什么、
+// 说了什么，看不到当时查到的内容，和重新组装时历史里的形态一致（见
+// llm.HistoryReplyCallIDPrefix、llm.HistoryToolCallIDPrefix）。
 // 11-22 群里 20:04 调 relationship 只取了最近 10 笔（共 344 笔），20:22 对方问「有没有
 // 什么详细记录」，续接把上一轮的调用和结果原样留在前缀里，swe-2 照抄那 10 笔，没有重新
 // 去查。工具结果只属于查它的那一轮，下一轮要用就重新查。
@@ -233,9 +235,9 @@ func redoToolsKey(message llm.Message) string {
 // 代价：调过工具的一轮，下一轮的前缀和上一轮最后一次请求在第一个工具调用处分叉，那一段
 // 之后的缓存用不上；没调工具的一轮第一次请求就是最后一次请求，前缀照旧逐字接上。
 //
-// 只调了 send 的收尾原样留下 send 调用和「已发送」；不说话的一轮什么都不记。和 send 同一
-// 步的其他工具调用同样不留，那一步的原生输出（ResponsesOutput、推理状态）里带着这些调用，
-// 一起丢掉。
+// 只调了 send 的收尾原样留下 send 调用和「已发送」；不说话的一轮什么都不记，执行过的工具
+// 调用也不记。和 send 同一步的其他工具调用没有执行，不留，那一步的原生输出
+// （ResponsesOutput、推理状态）里带着这些调用，一起丢掉。
 //
 // 10-28（#1255）曾把收尾还原成普通 assistant 发言：那时 send 刚删掉 silent 字段，不说话
 // 只能留空 text，前缀里的「send + 已发送」让模型把新一轮读成刚说过，同批线上静默样本
@@ -243,7 +245,7 @@ func redoToolsKey(message llm.Message) string {
 // 11-06 线上样本：静默样本 swe-2 24/48 → 20/48、terra 17/21 → 17/21，正常回复样本静默
 // swe-2 2/48 → 0/48、terra 26/152 → 30/152（同一批样本两边都静默），没有复现；留成纯文本
 // 反倒让离当前消息最近的那句发言成了模型照着学的纯文本收尾。
-func transcriptAfter(base []llm.Message, response *llm.GenerateResponse, text string) []llm.Message {
+func transcriptAfter(base, executed []llm.Message, response *llm.GenerateResponse, text string) []llm.Message {
 	if len(base) == 0 {
 		return nil
 	}
@@ -261,6 +263,9 @@ func transcriptAfter(base []llm.Message, response *llm.GenerateResponse, text st
 		if !anySendSpoke(calls) {
 			return transcript
 		}
+	}
+	if done := SucceededToolCalls(executed); len(done) > 0 {
+		transcript = append(transcript, HistoryToolMessages(done[0].ID, done)...)
 	}
 	assistant := llm.Message{Role: llm.RoleAssistant, Content: text, ToolCalls: calls}
 	if len(calls) > 0 {

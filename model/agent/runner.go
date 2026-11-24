@@ -365,7 +365,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			FinishReason:    reason,
 			DurationMS:      duration.Milliseconds(),
 			Sources:         responseSources(text, steps),
-			Transcript:      transcriptAfter(withoutRedoTools(append(turnBase, laterInterjections...), req.Redo), lastResponse, lastText),
+			Transcript:      transcriptAfter(withoutRedoTools(append(turnBase, laterInterjections...), req.Redo), executedTools, lastResponse, lastText),
 			Executed:        ExecutedTools{Messages: executedTools, Steps: steps},
 			ConversationKey: convKey,
 			Continued:       continued,

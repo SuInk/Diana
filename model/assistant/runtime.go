@@ -5187,7 +5187,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		promptSession.touchTools(resp.Steps)
 		r.rememberAgentRunProgress(event, resp)
 		r.rememberClaimSources(event, resp.Sources)
-		replyToolTraceFromContext(ctx).add(resp.Steps)
+		replyToolTraceFromContext(ctx).add(resp.Executed.Messages)
 		finalizeStickerFromContext(ctx).set(resp.FinalizeFields[stickerFinalizeFieldName], resp.FinalizeFields[stickerOrderFieldName])
 		finalizeButtonsFromContext(ctx).set(resp.FinalizeFields[buttonsFinalizeFieldName], event.UserID)
 		finalizeQQExtrasFromContext(ctx).set(resp.FinalizeFields)

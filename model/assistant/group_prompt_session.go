@@ -470,12 +470,15 @@ func historyEntryImagePending(entry GroupPromptHistoryEntry) bool {
 // historyReplyMessages 把机器人自己发过的一句话写成 send 调用加「已发送」，不写成
 // assistant 纯文本，原因见 llm.HistoryReplyCallIDPrefix。调用 ID 由这条历史的去重键
 // 算出，逐轮不变，前缀缓存照常命中。
+//
+// 这条发言发出前执行成功的工具调用排在它前面，结果是占位（见 replyHistoryToolMessages）。
 func historyReplyMessages(item MessageEvent, text string) []llm.Message {
 	key := messageHistoryDedupeKey(item)
 	if key == "" {
 		key = strconv.FormatInt(item.Time, 10) + "|" + text
 	}
-	return agent.HistoryReplyMessages(promptCacheHash(key), text)
+	id := promptCacheHash(key)
+	return append(replyHistoryToolMessages(id, item.ToolCalls), agent.HistoryReplyMessages(id, text)...)
 }
 
 func (r *Runtime) renderPromptHistoryEvent(ctx context.Context, current, item MessageEvent, cfg BotConfig, direct bool) []llm.Message {

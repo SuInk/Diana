@@ -126,7 +126,7 @@ func TestTranscriptAfterKeepsSendOnlyFinishAsCalls(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			transcript := transcriptAfter(request.Messages, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
+			transcript := transcriptAfter(request.Messages, nil, &llm.GenerateResponse{ToolCalls: tc.calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")
 			added := transcript[len(request.Messages):]
 			if tc.want == nil {
 				if len(added) != 0 {
@@ -158,15 +158,17 @@ func TestTranscriptAfterDropsNonSendCallsInFinishStep(t *testing.T) {
 		{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "我去查一下"}},
 		{ID: "t1", Name: "web_search", Arguments: map[string]any{"query": "x"}},
 	}
-	added := transcriptAfter(request.Messages, &llm.GenerateResponse{ToolCalls: calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")[len(request.Messages):]
+	added := transcriptAfter(request.Messages, nil, &llm.GenerateResponse{ToolCalls: calls, ResponsesOutput: []json.RawMessage{json.RawMessage(`{"type":"function_call"}`)}}, "")[len(request.Messages):]
 	if len(added) != 2 || len(added[0].ToolCalls) != 1 || added[0].ToolCalls[0].ID != "s1" || len(added[0].ResponsesOutput) != 0 || added[1].ToolCallID != "s1" {
 		t.Fatalf("only the send call may stay: %#v", added)
 	}
 }
 
-// 上一轮调过工具，下一轮的前缀里只有这一轮开始时的请求和收尾的 send：11-22 续接把
-// 上一轮 relationship 的调用和结果留在前缀里，下一轮被问「详细记录」时照抄旧结果没再查。
-func TestRunnerTranscriptKeepsOnlySendAfterToolSteps(t *testing.T) {
+// 上一轮调过工具，下一轮的前缀里是这一轮开始时的请求、执行成功的调用加占位结果、收尾的
+// send。结果不留：11-22 续接把上一轮 relationship 的调用和结果留在前缀里，下一轮被问
+// 「详细记录」时照抄旧结果没再查。调用要留：只剩 send 时模型照着历史只说不做，11-23 线上
+// 5 次回「正在画」却没调 image。
+func TestRunnerTranscriptKeepsToolCallsWithoutResults(t *testing.T) {
 	search := &recordingSearchTool{output: `{"results":[{"title":"旧结果"}]}`}
 	client := &mixedReplyClient{responses: []*llm.GenerateResponse{
 		{ToolCalls: []llm.ToolCall{{ID: "w1", Name: WebSearchToolName, Arguments: map[string]any{"query": "x"}}}},
@@ -184,7 +186,7 @@ func TestRunnerTranscriptKeepsOnlySendAfterToolSteps(t *testing.T) {
 		t.Fatalf("calls=%d requests=%d", search.calls, len(client.requests))
 	}
 	first := client.requests[0].Messages
-	if len(resp.Transcript) != len(first)+2 {
+	if len(resp.Transcript) != len(first)+4 {
 		t.Fatalf("transcript = %#v", resp.Transcript)
 	}
 	for index, message := range first {
@@ -198,11 +200,13 @@ func TestRunnerTranscriptKeepsOnlySendAfterToolSteps(t *testing.T) {
 		if strings.Contains(message.Content, "旧结果") {
 			t.Fatalf("tool result leaked into the next prefix: %#v", message)
 		}
-		for _, call := range message.ToolCalls {
-			if call.Name != finalizeToolName {
-				t.Fatalf("tool call leaked into the next prefix: %#v", call)
-			}
-		}
+	}
+	kept, placeholder := resp.Transcript[len(first)], resp.Transcript[len(first)+1]
+	if !llm.IsHistoryToolMessage(kept) || len(kept.ToolCalls) != 1 || kept.ToolCalls[0].Name != WebSearchToolName || kept.ToolCalls[0].Arguments["query"] != "x" {
+		t.Fatalf("executed call missing from the next prefix: %#v", kept)
+	}
+	if !llm.IsHistoryToolMessage(placeholder) || placeholder.ToolCallID != kept.ToolCalls[0].ID || placeholder.Content != historyToolResult {
+		t.Fatalf("placeholder result not paired: %#v", placeholder)
 	}
 	call := resp.Transcript[len(resp.Transcript)-2]
 	if len(call.ToolCalls) != 1 || sendText(call.ToolCalls[0]) != "查到了" || resp.Transcript[len(resp.Transcript)-1].Content != historyReplyResult {
@@ -347,5 +351,31 @@ func TestContractDeltaReportsAvailabilityOnlyWhenItChanges(t *testing.T) {
 	}
 	if got := deliveredContracts(append(prefix[:2:2], delta...)); got["platform"] != changed.raw {
 		t.Fatalf("latest delivery must win: %q", got["platform"])
+	}
+}
+
+// 没执行的、执行失败的调用和 send 不进历史；成功的按顺序留下，ID 换成历史前缀。
+func TestSucceededToolCallsSkipsFailedAndUnexecuted(t *testing.T) {
+	executed := []llm.Message{
+		{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{
+			{ID: "a", Name: "image", Arguments: map[string]any{"prompt": "猫"}},
+			{ID: "b", Name: WebSearchToolName, Arguments: map[string]any{"query": "x"}},
+			{ID: "c", Name: finalizeToolName, Arguments: map[string]any{"text": "好"}},
+		}},
+		{Role: llm.RoleTool, ToolCallID: "a", Content: "queued"},
+		{Role: llm.RoleTool, ToolCallID: "b", Content: "timeout", ToolError: true},
+		{Role: llm.RoleTool, ToolCallID: "c", Content: "这次 send 没有发出", ToolError: true},
+		{Role: llm.RoleSystem, Content: "提醒"},
+	}
+	calls := SucceededToolCalls(executed)
+	if len(calls) != 1 || calls[0].ID != "a" || calls[0].Name != "image" {
+		t.Fatalf("calls = %#v", calls)
+	}
+	messages := HistoryToolMessages("k", calls)
+	if len(messages) != 2 || !llm.IsHistoryToolMessage(messages[0]) || !llm.IsHistoryToolMessage(messages[1]) || messages[1].Content != historyToolResult || strings.Contains(messages[1].Content, "queued") {
+		t.Fatalf("messages = %#v", messages)
+	}
+	if HistoryToolMessages("k", nil) != nil {
+		t.Fatal("no calls should render nothing")
 	}
 }
