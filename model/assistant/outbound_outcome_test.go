@@ -897,6 +897,8 @@ func TestBridgeSideTimeoutsAndDisconnectsAreAmbiguous(t *testing.T) {
 		ambiguous bool
 	}{
 		{"napcat ntevent timeout", "send_group_msg", &oneBotActionError{retCode: 200, message: "Timeout: NTEvent serviceAndMethod:NodeIKernelMsgService/sendMsg ListenerName:NodeIKernelMsgListener/onMsgInfoListUpdate EventRet: {}"}, true},
+		{"snowluma packet reply timeout", "send_group_msg", &oneBotActionError{retCode: 200, message: "send group message failed: send reply 78528 timed out after 15000 ms"}, true},
+		{"snowluma timeout on a query", "get_group_list", &oneBotActionError{retCode: 200, message: "send reply 78531 timed out after 15000 ms"}, false},
 		{"napcat bare send failure", "send_group_msg", &oneBotActionError{retCode: 200, message: "发送消息失败"}, true},
 		{"qq rejection code", "send_group_msg", &oneBotActionError{retCode: 200, message: "发送消息失败 result=120 errMsg="}, false},
 		{"timeout on a query", "get_group_msg_history", &oneBotActionError{retCode: 200, message: "Timeout: NTEvent getMsgHistory"}, false},
