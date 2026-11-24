@@ -8,6 +8,7 @@
 import { app, safeStorage } from 'electron'
 import { readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import type { ServerMode } from '../shared/types.ts'
 
 export interface WindowBounds {
   x?: number
@@ -18,6 +19,8 @@ export interface WindowBounds {
 }
 
 export interface StoredState {
+  mode: ServerMode
+  /** 连别处的 Diana 时用的地址和用户名，本机模式下保留着，切回去时预填。 */
   server: string
   username: string
   /** host → 用户确认过的证书指纹 */
@@ -25,7 +28,7 @@ export interface StoredState {
   window?: WindowBounds
 }
 
-const empty: StoredState = { server: '', username: '', pins: {} }
+const empty: StoredState = { mode: 'local', server: '', username: '', pins: {} }
 
 function dir(): string {
   const path = app.getPath('userData')

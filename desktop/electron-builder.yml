@@ -8,6 +8,10 @@ directories:
 files:
   - out/**
   - package.json
+# 本机 Diana：先 npm run server -- <os>-<arch> 编好，按目标平台挑对应目录放进 resources/bin。
+extraResources:
+  - from: resources/bin/${os}-${arch}
+    to: bin
 mac:
   category: public.app-category.social-networking
   target:

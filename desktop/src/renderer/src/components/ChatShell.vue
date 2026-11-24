@@ -3,7 +3,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { LogOut, RefreshCw, TriangleAlert } from '@lucide/vue'
+import { ArrowLeftRight, LogOut, RefreshCw, Settings, TriangleAlert } from '@lucide/vue'
 import type { ApiResult, Bot, ChatFrame, ChatInfo, ChatMessage, SessionState } from '../../../shared/types.ts'
 import BotAvatar from './BotAvatar.vue'
 import MessageList from './MessageList.vue'
@@ -35,7 +35,14 @@ const conversations = reactive(new Map<string, Conversation>())
 const selected = computed(() => bots.value.find((bot) => bot.id === selectedID.value))
 const conversation = computed(() => conversations.get(selectedID.value))
 const sending = computed(() => Boolean(conversation.value?.requestId))
-const serverLabel = computed(() => props.session.server.replace(/^https?:\/\//, ''))
+const serverLabel = computed(() => (props.session.mode === 'local' ? '本机 Diana' : `${props.session.username} · ${props.session.server.replace(/^https?:\/\//, '')}`))
+const adminError = ref('')
+
+async function openAdmin() {
+  adminError.value = ''
+  const result = await window.diana.openAdmin()
+  if (!result.ok) adminError.value = result.error
+}
 
 function check<T>(result: ApiResult<T>): T | undefined {
   if (result.ok) return result.value
@@ -123,6 +130,7 @@ onBeforeUnmount(() => unsubscribe())
       <nav class="bot-list">
         <p v-if="botsError" class="list-note error">{{ botsError }}</p>
         <p v-else-if="!botsLoading && !bots.length" class="list-note muted">这台服务器上还没有机器人</p>
+        <p v-if="adminError" class="list-note error">{{ adminError }}</p>
         <button v-for="bot in bots" :key="bot.id" class="bot-row" :class="{ selected: bot.id === selectedID }" :aria-current="bot.id === selectedID ? 'true' : undefined" type="button" @click="select(bot.id)">
           <BotAvatar :name="bot.name" :src="bot.avatar" :size="38" />
           <span class="bot-row-text">
@@ -132,8 +140,10 @@ onBeforeUnmount(() => unsubscribe())
         </button>
       </nav>
       <footer class="sidebar-footer">
-        <span class="server-label muted" :title="session.server">{{ session.username }} · {{ serverLabel }}</span>
-        <button class="icon-button" type="button" title="退出登录" aria-label="退出登录" @click="emit('logout')"><LogOut :size="15" aria-hidden="true" /></button>
+        <span class="server-label muted" :title="session.server">{{ serverLabel }}</span>
+        <button class="icon-button" type="button" title="管理后台" aria-label="管理后台" @click="openAdmin"><Settings :size="15" aria-hidden="true" /></button>
+        <button v-if="session.mode === 'local'" class="icon-button" type="button" title="连接其他服务器" aria-label="连接其他服务器" @click="emit('logout')"><ArrowLeftRight :size="15" aria-hidden="true" /></button>
+        <button v-else class="icon-button" type="button" title="退出登录" aria-label="退出登录" @click="emit('logout')"><LogOut :size="15" aria-hidden="true" /></button>
       </footer>
     </aside>
 
@@ -144,7 +154,7 @@ onBeforeUnmount(() => unsubscribe())
           <span class="muted">{{ sending ? '对方正在输入…' : selected.platform }}</span>
         </div>
       </header>
-      <div v-if="conversation.info?.problem" class="banner warn" role="status"><TriangleAlert :size="15" aria-hidden="true" /> {{ conversation.info.problem }}</div>
+      <div v-if="conversation.info?.problem" class="banner warn" role="status"><TriangleAlert :size="15" aria-hidden="true" /> <span class="banner-text">{{ conversation.info.problem }}</span><button class="button banner-action" type="button" @click="openAdmin">去管理后台设置</button></div>
       <MessageList :messages="conversation.messages" :loading="conversation.loading" :bot="selected" :owner-avatar="conversation.info?.owner_avatar_url" :owner-name="session.username" :typing="sending" />
       <p v-if="conversation.error" class="chat-error" role="alert">{{ conversation.error }}</p>
       <Composer :disabled="Boolean(conversation.info?.problem) || conversation.loading" :busy="sending" :placeholder="`发给 ${selected.name}`" @send="send" />

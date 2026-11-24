@@ -3,11 +3,11 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
-import { LoaderCircle, ShieldAlert } from '@lucide/vue'
+import { ArrowLeft, LoaderCircle, ShieldAlert } from '@lucide/vue'
 import type { SessionState, UntrustedCertificate } from '../../../shared/types.ts'
 
-const props = defineProps<{ session: SessionState }>()
-const emit = defineEmits<{ 'logged-in': [SessionState] }>()
+const props = defineProps<{ session: SessionState; cancellable?: boolean }>()
+const emit = defineEmits<{ 'logged-in': [SessionState]; 'use-local': []; cancel: [] }>()
 
 const server = ref(props.session.server)
 const username = ref(props.session.username)
@@ -44,7 +44,7 @@ async function submit(trustFingerprint?: string) {
         <span class="login-logo" aria-hidden="true">D</span>
         <div>
           <h1>Diana</h1>
-          <p class="muted">用 WebUI 管理员账号登录，就能和机器人私聊</p>
+          <p class="muted">连接其他服务器上的 Diana，用它的 WebUI 管理员账号登录</p>
         </div>
       </div>
       <label class="field">
@@ -65,6 +65,8 @@ async function submit(trustFingerprint?: string) {
         {{ busy ? '正在登录…' : '登录' }}
       </button>
       <p class="login-note muted">密码不保存；登录状态加密存在本机钥匙串里。</p>
+      <button v-if="cancellable" class="button link" type="button" @click="emit('cancel')"><ArrowLeft :size="14" aria-hidden="true" /> 返回</button>
+      <button v-else id="use-local" class="button link" type="button" @click="emit('use-local')">改用本机 Diana</button>
     </form>
 
     <div v-if="certificate" class="dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="cert-title">

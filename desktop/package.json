@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "electron-vite dev",
     "mock": "node scripts/mock-server.mjs",
+    "server": "node scripts/build-server.mjs",
     "test": "node --test \"test/*.test.mjs\"",
     "typecheck": "vue-tsc --noEmit -p tsconfig.json",
     "build": "npm test && npm run typecheck && electron-vite build",

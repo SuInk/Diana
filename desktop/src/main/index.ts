@@ -2,12 +2,14 @@
 // Licensed under the Limited Redistribution License in the repository root.
 
 // 桌面端主进程：一个窗口、一套和服务端说话的 IPC。界面跑在沙箱里，不碰 Node，
-// 网络请求、Cookie 和证书都在这里管。
+// 网络请求、Cookie 和证书都在这里管。默认连自己拉起的本机 Diana（local.ts），
+// 也可以改连别处部署的 Diana。
 
 import { app, BrowserWindow, ipcMain, protocol, session, shell, type Session } from 'electron'
 import { join } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { ApiError, DianaApi, rejectedCertificates } from './api.ts'
+import { LocalServer } from './local.ts'
 import { loadCookie, loadState, saveCookie, saveState, type StoredState } from './store.ts'
 import { normalizeServer, sameOrigin } from '../shared/server.ts'
 import type { ApiResult, ChatFrame, LoginRequest, SessionState } from '../shared/types.ts'
@@ -19,13 +21,37 @@ protocol.registerSchemesAsPrivileged([{ scheme: mediaScheme, privileges: { stand
 // 冒烟测试和多开调试用独立的数据目录，不碰平时的登录状态。
 if (process.env.DIANA_DESKTOP_USER_DATA) app.setPath('userData', process.env.DIANA_DESKTOP_USER_DATA)
 
+// 同一份数据只开一个：第二个实例会和第一个抢本机 Diana 的数据目录，直接把第一个窗口叫到前面。
+if (!app.requestSingleInstanceLock()) app.exit(0)
+app.on('second-instance', () => {
+  if (!window || window.isDestroyed()) return
+  if (window.isMinimized()) window.restore()
+  window.focus()
+})
+
 let state: StoredState
 let api: DianaApi | undefined
 let window: BrowserWindow | undefined
 let appSession: Session
+const local = new LocalServer()
 
 function sessionState(): SessionState {
-  return { server: state.server, username: state.username, loggedIn: Boolean(api?.cookie) }
+  if (state.mode === 'local') return { mode: 'local', server: api?.server ?? '', username: '', loggedIn: Boolean(api?.cookie) }
+  return { mode: 'remote', server: state.server, username: state.username, loggedIn: Boolean(api?.cookie) }
+}
+
+// 本机 Diana 每次都现登：密码在本机数据目录里，Cookie 不用存。
+async function startLocal(): Promise<SessionState> {
+  const credentials = await local.start()
+  const next = new DianaApi(appSession, credentials.server)
+  await next.login(credentials.username, credentials.password)
+  if (state.mode !== 'local') {
+    state.mode = 'local'
+    saveState(state)
+    await saveCookie('')
+  }
+  api = next
+  return sessionState()
 }
 
 async function wrap<T>(run: () => Promise<T>): Promise<ApiResult<T>> {
@@ -58,6 +84,9 @@ function registerIpc(): void {
       const next = new DianaApi(appSession, server)
       await next.login(request.username.trim(), request.password)
       api = next
+      // 改连别处就不再需要本机 Diana，停掉，数据留着，切回来接着用。
+      if (state.mode === 'local') await local.stop()
+      state.mode = 'remote'
       state.server = server
       state.username = request.username.trim()
       saveState(state)
@@ -65,6 +94,8 @@ function registerIpc(): void {
       return sessionState()
     }),
   )
+  ipcMain.handle('diana:start-local', () => wrap(startLocal))
+  ipcMain.handle('diana:open-admin', () => wrap(async () => openAdmin(requireApi())))
   ipcMain.handle('diana:logout', async () => {
     if (api) api.cookie = ''
     await saveCookie('')
@@ -111,6 +142,46 @@ function trustPinnedCertificates(): void {
   })
 }
 
+// 管理后台就是服务端自带的 WebUI。单开一个会话分区，把这边的登录 Cookie 放进去，
+// 打开就是登录状态；窗口只在这台服务器内跳转，外链交给系统浏览器。
+let adminWindow: BrowserWindow | undefined
+async function openAdmin(current: DianaApi): Promise<null> {
+  if (adminWindow && !adminWindow.isDestroyed()) {
+    adminWindow.focus()
+    return null
+  }
+  const adminSession = session.fromPartition('persist:diana-admin')
+  adminSession.setCertificateVerifyProc((request, callback) => {
+    if (request.verificationResult === 'net::OK') return callback(-3)
+    callback(state.pins[request.hostname] === request.certificate.fingerprint ? 0 : -2)
+  })
+  for (const pair of current.cookie.split(';')) {
+    const index = pair.indexOf('=')
+    if (index <= 0) continue
+    await adminSession.cookies.set({ url: current.server, name: pair.slice(0, index).trim(), value: pair.slice(index + 1).trim(), httpOnly: true, sameSite: 'lax' })
+  }
+  const win = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    title: 'Diana 管理后台',
+    webPreferences: { session: adminSession, contextIsolation: true, sandbox: true, nodeIntegration: false },
+  })
+  adminWindow = win
+  win.on('closed', () => (adminWindow = undefined))
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (sameOrigin(current.server, url)) return { action: 'allow' }
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (event, url) => {
+    if (sameOrigin(current.server, url)) return
+    event.preventDefault()
+    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
+  })
+  await win.loadURL(current.server)
+  return null
+}
+
 function createWindow(): void {
   const bounds = state.window ?? { width: 1080, height: 720 }
   window = new BrowserWindow({
@@ -150,29 +221,48 @@ function createWindow(): void {
   if (process.env.DIANA_DESKTOP_SMOKE) runSmoke(window, process.env.DIANA_DESKTOP_SMOKE)
 }
 
-// 冒烟测试：没登录就用环境变量里的账号登录，然后发一句话，等回复出来截图退出。
-// 只在设了 DIANA_DESKTOP_SMOKE（截图路径）时跑，对着 scripts/mock-server.mjs 用。
+// 冒烟测试：等界面进到聊天（本机模式要等本机 Diana 起来），发一句话，等回复出来截图退出。
+// 只在设了 DIANA_DESKTOP_SMOKE（截图路径）时跑。设了 DIANA_DESKTOP_SMOKE_SERVER 就改连那台
+// 服务器（通常是 scripts/mock-server.mjs），用 _USER、_PASSWORD 登录。
 function runSmoke(win: BrowserWindow, output: string): void {
   const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-  const fill = (selector: string, value: string) => `(() => {
+  const run = (code: string) => win.webContents.executeJavaScript(code)
+  const waitFor = async (selector: string, timeoutMs: number) => {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (await run(`Boolean(document.querySelector(${JSON.stringify(selector)}))`)) return
+      await wait(300)
+    }
+    throw new Error(`等不到 ${selector}`)
+  }
+  const fill = (selector: string, value: string) =>
+    run(`(() => {
     const el = document.querySelector(${JSON.stringify(selector)});
-    if (!el) return false;
     el.value = ${JSON.stringify(value)};
     el.dispatchEvent(new Event('input', { bubbles: true }));
-    return true;
-  })()`
+  })()`)
   win.webContents.once('did-finish-load', async () => {
-    const run = (code: string) => win.webContents.executeJavaScript(code)
-    await wait(1200)
-    if (await run(fill('#login-server', process.env.DIANA_DESKTOP_SMOKE_SERVER ?? 'http://127.0.0.1:18333'))) {
-      await run(fill('#login-username', process.env.DIANA_DESKTOP_SMOKE_USER ?? 'admin'))
-      await run(fill('#login-password', process.env.DIANA_DESKTOP_SMOKE_PASSWORD ?? 'demo'))
-      await run(`document.querySelector('form.login-form').requestSubmit()`)
-      await wait(1500)
+    try {
+      const remote = process.env.DIANA_DESKTOP_SMOKE_SERVER
+      if (remote && !sessionState().loggedIn) {
+        await waitFor('#use-remote, #login-server', 90_000)
+        await run(`document.querySelector('#use-remote')?.click()`)
+        await waitFor('#login-server', 5_000)
+        await fill('#login-server', remote)
+        await fill('#login-username', process.env.DIANA_DESKTOP_SMOKE_USER ?? 'admin')
+        await fill('#login-password', process.env.DIANA_DESKTOP_SMOKE_PASSWORD ?? 'demo')
+        await run(`document.querySelector('form.login-form').requestSubmit()`)
+      }
+      await waitFor('textarea.composer-input', 90_000)
+      await wait(800)
+      if (process.env.DIANA_DESKTOP_SMOKE_TEXT !== '' && (await run(`!document.querySelector('textarea.composer-input').disabled`))) {
+        await fill('textarea.composer-input', process.env.DIANA_DESKTOP_SMOKE_TEXT ?? '在吗？帮我看看今天的安排')
+        await run(`document.querySelector('textarea.composer-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`)
+      }
+      await wait(Number(process.env.DIANA_DESKTOP_SMOKE_WAIT ?? 3000))
+    } catch (error) {
+      console.error(`冒烟测试：${(error as Error).message}`)
     }
-    await run(fill('textarea.composer-input', '在吗？帮我看看今天的安排'))
-    await run(`document.querySelector('textarea.composer-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))`)
-    await wait(Number(process.env.DIANA_DESKTOP_SMOKE_WAIT ?? 3000))
     writeFileSync(output, (await win.webContents.capturePage()).toPNG())
     app.quit()
   })
@@ -182,7 +272,7 @@ app.whenReady().then(async () => {
   state = loadState()
   appSession = session.fromPartition('persist:diana')
   const cookie = await loadCookie()
-  if (state.server && cookie) api = new DianaApi(appSession, state.server, cookie)
+  if (state.mode === 'remote' && state.server && cookie) api = new DianaApi(appSession, state.server, cookie)
   trustPinnedCertificates()
   registerMediaProtocol()
   registerIpc()
@@ -190,6 +280,15 @@ app.whenReady().then(async () => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+// 本机 Diana 跟着 App 走：退出前先等它收尾（落库、断开连接），再真正退出。
+let quitting = false
+app.on('before-quit', (event) => {
+  if (quitting || !local.running) return
+  event.preventDefault()
+  quitting = true
+  void local.stop().finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => {

@@ -44,7 +44,11 @@ export interface ChatHistory {
   messages: ChatMessage[]
 }
 
+/** local：桌面端自己带的本机 Diana；remote：连别处部署的 Diana。 */
+export type ServerMode = 'local' | 'remote'
+
 export interface SessionState {
+  mode: ServerMode
   server: string
   username: string
   loggedIn: boolean
@@ -77,6 +81,10 @@ export interface DianaBridge {
   state(): Promise<SessionState>
   login(request: LoginRequest): Promise<ApiResult<SessionState>>
   logout(): Promise<void>
+  /** 拉起本机 Diana 并自动登录，切回本机模式也走这里。 */
+  startLocal(): Promise<ApiResult<SessionState>>
+  /** 在新窗口里打开当前服务器的管理后台（WebUI），沿用这里的登录。 */
+  openAdmin(): Promise<ApiResult<null>>
   bots(): Promise<ApiResult<Bot[]>>
   history(profile: string): Promise<ApiResult<ChatHistory>>
   /** 回复按条从 onFrame 推出来，最后一帧是 done。 */
