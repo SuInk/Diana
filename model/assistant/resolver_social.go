@@ -377,6 +377,7 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 		if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
 			result.Context += "\nUP主：" + owner
 		}
+		result.Context = appendResolverStatsLine(result.Context, bilibiliStats(view)...)
 		if desc := strings.TrimSpace(view.Data.Desc); desc != "" {
 			result.Context += "\n简介：" + truncateRunes(desc, 240)
 		}
@@ -393,6 +394,16 @@ func (p *ResolverPlugin) resolveBilibiliMedia(ctx context.Context, req PluginReq
 		result.Context = "[Bilibili] 已识别链接，但元数据读取失败。"
 	}
 	return p.attachDownloadedVideo(ctx, req, raw, "bilibili", result)
+}
+
+func bilibiliStats(view bilibiliViewResponse) []resolverStat {
+	stat := view.Data.Stat
+	return []resolverStat{
+		{"播放", resolverCountFromInt(int64(stat.View))},
+		{"点赞", resolverCountFromInt(int64(stat.Like))},
+		{"投币", resolverCountFromInt(int64(stat.Coin))},
+		{"收藏", resolverCountFromInt(int64(stat.Favorite))},
+	}
 }
 
 func bilibiliResolverResourceKey(view bilibiliViewResponse) string {
@@ -427,6 +438,7 @@ func (p *ResolverPlugin) resolveDouyinMedia(ctx context.Context, req PluginReque
 	if result.Context == "[抖音] " {
 		result.Context = "[抖音] 已识别内容"
 	}
+	result.Context = appendResolverStatsLine(result.Context, detail.stats()...)
 	if douyinDetailIsImagePost(detail) {
 		result.ImageURLs = limitStrings(douyinMediaImageURLs(detail), maxImages)
 		if len(result.ImageURLs) == 0 {
@@ -508,11 +520,27 @@ func (p *ResolverPlugin) resolveXiaohongshuMedia(ctx context.Context, req Plugin
 
 func xiaohongshuSocialContext(note map[string]any) string {
 	user, _ := note["user"].(map[string]any)
-	return fmt.Sprintf("[小红书] %s\n作者：%s\n%s",
+	header := fmt.Sprintf("[小红书] %s\n作者：%s",
 		strings.TrimSpace(anyString(note["title"])),
 		strings.TrimSpace(anyString(user["nickname"])),
-		strings.TrimSpace(anyString(note["desc"])),
 	)
+	interact, _ := note["interactInfo"].(map[string]any)
+	header = appendResolverStatsLine(header,
+		resolverStat{"点赞", xiaohongshuCount(interact["likedCount"])},
+		resolverStat{"收藏", xiaohongshuCount(interact["collectedCount"])},
+		resolverStat{"评论", xiaohongshuCount(interact["commentCount"])},
+		resolverStat{"分享", xiaohongshuCount(interact["shareCount"])},
+	)
+	return header + "\n" + strings.TrimSpace(anyString(note["desc"]))
+}
+
+// xiaohongshuCount 读页面状态里的计数：通常是「1.2万」这样的字符串，
+// 偶尔是数字。
+func xiaohongshuCount(value any) resolverCount {
+	if number, ok := value.(float64); ok {
+		return resolverCountFromInt(int64(number))
+	}
+	return resolverCountFromString(anyString(value))
 }
 
 func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginRequest, raw, platform string) resolverSocialResult {
@@ -525,6 +553,10 @@ func (p *ResolverPlugin) resolveYTDLPMedia(ctx context.Context, req PluginReques
 		if title := strings.TrimSpace(info.Title); title != "" {
 			result.Context = "[" + platform + "] " + title
 		}
+		result.Context = appendResolverStatsLine(result.Context,
+			resolverStat{"播放", resolverCountFromInt(info.ViewCount)},
+			resolverStat{"点赞", resolverCountFromInt(info.LikeCount)},
+		)
 		if desc := strings.TrimSpace(info.Description); desc != "" {
 			result.Context += "\n简介：" + truncateRunes(desc, 240)
 		}
@@ -578,6 +610,24 @@ type douyinMediaDetail struct {
 	Images []struct {
 		URLList []string `json:"url_list"`
 	} `json:"images"`
+	Statistics struct {
+		PlayCount    resolverCount `json:"play_count"`
+		DiggCount    resolverCount `json:"digg_count"`
+		CollectCount resolverCount `json:"collect_count"`
+		CommentCount resolverCount `json:"comment_count"`
+		ShareCount   resolverCount `json:"share_count"`
+	} `json:"statistics"`
+}
+
+// stats 里的播放数公开接口基本恒为 0，有值时才显示。
+func (d douyinMediaDetail) stats() []resolverStat {
+	return []resolverStat{
+		{"播放", d.Statistics.PlayCount},
+		{"点赞", d.Statistics.DiggCount},
+		{"收藏", d.Statistics.CollectCount},
+		{"评论", d.Statistics.CommentCount},
+		{"分享", d.Statistics.ShareCount},
+	}
 }
 
 func fetchDouyinMediaDetail(ctx context.Context, raw string) (douyinMediaDetail, bool, string) {

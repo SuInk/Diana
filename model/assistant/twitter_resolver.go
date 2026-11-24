@@ -35,6 +35,7 @@ type twitterPost struct {
 	Replies      []twitterPost
 	// Article 是这条推文附带的 X 站内长文（Article）；没有长文时为空值。
 	Article twitterArticle
+	Stats   []resolverStat
 }
 
 type twitterMedia struct {
@@ -76,6 +77,13 @@ type twitterPostPayload struct {
 	Images      []twitterMediaPayload `json:"images"`
 	Videos      []twitterMediaPayload `json:"videos"`
 	GIFs        []twitterMediaPayload `json:"gifs"`
+	// FxTwitter 的互动计数；v1 叫 retweets，v2 改叫 reposts。
+	Views     resolverCount `json:"views"`
+	Likes     resolverCount `json:"likes"`
+	Retweets  resolverCount `json:"retweets"`
+	Reposts   resolverCount `json:"reposts"`
+	Replies   resolverCount `json:"replies"`
+	Bookmarks resolverCount `json:"bookmarks"`
 }
 
 type twitterMediaContainerPayload struct {
@@ -270,6 +278,13 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 			strings.TrimSpace(payload.Content),
 			strings.TrimSpace(payload.Caption),
 		),
+	}
+	post.Stats = []resolverStat{
+		{"浏览", payload.Views},
+		{"点赞", payload.Likes},
+		{"转推", resolverCount(firstNonEmpty(string(payload.Reposts), string(payload.Retweets)))},
+		{"收藏", payload.Bookmarks},
+		{"回复", payload.Replies},
 	}
 	post.AuthorName, post.AuthorHandle = parseTwitterAuthor(firstNonEmptyRawMessage(payload.Author, payload.User))
 	post.Article = parseTwitterArticle(payload.Article)
@@ -480,6 +495,9 @@ func twitterMetaText(nickname string, post twitterPost) string {
 		lines = append(lines, "作者："+name)
 	case handle != "":
 		lines = append(lines, "作者：@"+handle)
+	}
+	if stats := resolverStatsLine(post.Stats...); stats != "" {
+		lines = append(lines, stats)
 	}
 	if text := strings.TrimSpace(post.Text); text != "" {
 		lines = append(lines, "文案："+text)

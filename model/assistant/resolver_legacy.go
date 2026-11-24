@@ -321,25 +321,12 @@ func xiaohongshuMetaText(nickname string, note map[string]any) string {
 }
 
 func extraBiliInfoText(view bilibiliViewResponse) string {
-	lines := make([]string, 0, 3)
+	lines := make([]string, 0, 2)
 	if owner := strings.TrimSpace(view.Data.Owner.Name); owner != "" {
 		lines = append(lines, "UP主："+owner)
 	}
-	stats := make([]string, 0, 4)
-	if view.Data.Stat.View > 0 {
-		stats = append(stats, fmt.Sprintf("播放：%d", view.Data.Stat.View))
-	}
-	if view.Data.Stat.Like > 0 {
-		stats = append(stats, fmt.Sprintf("点赞：%d", view.Data.Stat.Like))
-	}
-	if view.Data.Stat.Coin > 0 {
-		stats = append(stats, fmt.Sprintf("投币：%d", view.Data.Stat.Coin))
-	}
-	if view.Data.Stat.Favorite > 0 {
-		stats = append(stats, fmt.Sprintf("收藏：%d", view.Data.Stat.Favorite))
-	}
-	if len(stats) > 0 {
-		lines = append(lines, strings.Join(stats, "，"))
+	if stats := resolverStatsLine(bilibiliStats(view)...); stats != "" {
+		lines = append(lines, stats)
 	}
 	return strings.Join(lines, "\n")
 }
