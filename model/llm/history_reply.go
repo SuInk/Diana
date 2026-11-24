@@ -19,6 +19,30 @@ import "strings"
 // 直接拒），withDefaults 把它们压回 assistant 纯文本。
 const HistoryReplyCallIDPrefix = "diana_history_reply_"
 
+// HistoryToolCallIDPrefix 标出历史里机器人以前真正执行过的工具调用：只留调用和一句
+// 占位结果，当时查到的内容不带过轮（见 agent.HistoryToolMessages）。
+const HistoryToolCallIDPrefix = "diana_history_tool_"
+
+// IsHistoryToolMessage 报告这条消息是不是历史工具调用的一半：只含历史工具调用的
+// assistant 消息，或者它的占位结果。
+func IsHistoryToolMessage(msg Message) bool {
+	switch msg.Role {
+	case RoleAssistant:
+		if len(msg.ToolCalls) == 0 {
+			return false
+		}
+		for _, call := range msg.ToolCalls {
+			if !strings.HasPrefix(call.ID, HistoryToolCallIDPrefix) {
+				return false
+			}
+		}
+		return true
+	case RoleTool:
+		return strings.HasPrefix(msg.ToolCallID, HistoryToolCallIDPrefix)
+	}
+	return false
+}
+
 // IsHistoryReplyCall 报告这次调用是不是按聊天记录拼出来的发言。
 func IsHistoryReplyCall(call ToolCall) bool {
 	return strings.HasPrefix(call.ID, HistoryReplyCallIDPrefix)
@@ -58,11 +82,21 @@ func HistoryReplyText(msg Message) string {
 	return strings.Join(parts, "\n")
 }
 
-// flattenHistoryReplies 把历史发言调用压回 assistant 纯文本，丢掉配对的「已发送」结果。
+// flattenHistoryReplies 把历史发言调用压回 assistant 纯文本，丢掉配对的「已发送」结果；
+// 历史工具调用连同占位结果整个丢掉，不带工具定义的请求里它们没有意义。
 // 结果上的缓存断点挪到前面那条发言上，免得断点跟着结果一起丢。
 func flattenHistoryReplies(messages []Message) []Message {
 	var out []Message
 	for i, msg := range messages {
+		if IsHistoryToolMessage(msg) {
+			if out == nil {
+				out = append(make([]Message, 0, len(messages)), messages[:i]...)
+			}
+			if msg.CacheBreakpoint && len(out) > 0 {
+				out[len(out)-1].CacheBreakpoint = true
+			}
+			continue
+		}
 		if !IsHistoryReplyMessage(msg) {
 			if out != nil {
 				out = append(out, msg)

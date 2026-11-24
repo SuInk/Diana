@@ -794,3 +794,40 @@ func appendContextTestEvent() MessageEvent {
 		proactiveReply: true,
 	}
 }
+
+// 发言前面的历史工具调用跟着那条发言走：记录里已有的那句连同它的调用都不再追加，新的
+// 那句连同调用和占位结果一起追加，每个调用后面都跟着自己的结果。
+func TestAppendContextKeepsHistoryToolCallsWithTheirReply(t *testing.T) {
+	first := appendTestTurn([]string{"[历史 10:00] 甲: 早"}, "", "【当前需要回复的消息】甲: 画只猫")
+	log := appendTestLog(t, first, "排上了")
+	second := appendTestTurn([]string{"[历史 10:00] 甲: 早", "[历史 10:02] 乙: 再画只狗"}, "", "【当前需要回复的消息】乙: 图呢")
+	call := []llm.ToolCall{{Name: "image", Arguments: map[string]any{"prompt": "猫"}}}
+	old := append(agent.HistoryToolMessages("old", call), agent.HistoryReplyMessages("old", "排上了")...)
+	call[0].Arguments = map[string]any{"prompt": "狗"}
+	fresh := append(agent.HistoryToolMessages("new", call), agent.HistoryReplyMessages("new", "狗也排上了")...)
+	history := append(append([]llm.Message{second[1]}, old...), second[2])
+	history = append(history, fresh...)
+	history[len(history)-1].CacheBreakpoint = true
+	second[2].CacheBreakpoint = false
+	second = append(append([]llm.Message{second[0]}, history...), second[3:]...)
+	continuation := continueFrom(log, second)
+	if continuation == nil {
+		t.Fatal("expected a continuation")
+	}
+	var prompts []string
+	for index, message := range continuation.Append {
+		if !llm.IsHistoryToolMessage(message) || message.Role != llm.RoleAssistant {
+			continue
+		}
+		prompts = append(prompts, message.ToolCalls[0].Arguments["prompt"].(string))
+		if next := continuation.Append[index+1]; next.Role != llm.RoleTool || next.ToolCallID != message.ToolCalls[0].ID {
+			t.Fatalf("call not followed by its result: %#v", continuation.Append)
+		}
+		if reply := continuation.Append[index+2]; llm.HistoryReplyText(reply) != "狗也排上了" {
+			t.Fatalf("tool call not followed by its reply: %#v", reply)
+		}
+	}
+	if len(prompts) != 1 || prompts[0] != "狗" {
+		t.Fatalf("appended tool calls = %q in %#v", prompts, continuation.Append)
+	}
+}

@@ -71,7 +71,7 @@ func replyContextBlock(index, last int, message llm.Message, headEnd int) (name,
 		return "头部（人设、规则）", "prefix"
 	case index == last:
 		return replyContextCurrentName, "changing"
-	case isHistoryLine(content), llm.IsHistoryReplyMessage(message), message.Priority == llm.MessagePriorityHistory:
+	case isHistoryLine(content), llm.IsHistoryReplyMessage(message), llm.IsHistoryToolMessage(message), message.Priority == llm.MessagePriorityHistory:
 		return replyContextHistoryName, "history"
 	}
 	if match := replyContextBlockTitle.FindStringSubmatch(content); match != nil {
