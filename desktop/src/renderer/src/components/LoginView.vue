@@ -39,6 +39,7 @@ async function submit(trustFingerprint?: string) {
 
 <template>
   <main class="login">
+    <div class="titlebar-drag" aria-hidden="true" />
     <form class="login-form" @submit.prevent="submit()">
       <div class="login-brand">
         <span class="login-logo" aria-hidden="true">D</span>

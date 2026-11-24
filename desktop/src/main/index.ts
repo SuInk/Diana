@@ -6,13 +6,15 @@
 // 也可以改连别处部署的 Diana。
 
 import { app, BrowserWindow, ipcMain, protocol, session, shell, type Session } from 'electron'
+import { AdminView } from './admin.ts'
+import { followTheme, installMenu, material, windowChrome } from './window.ts'
 import { join } from 'node:path'
 import { writeFileSync } from 'node:fs'
 import { ApiError, DianaApi, rejectedCertificates } from './api.ts'
 import { LocalServer } from './local.ts'
 import { loadCookie, loadState, saveCookie, saveState, type StoredState } from './store.ts'
 import { normalizeServer, sameOrigin } from '../shared/server.ts'
-import type { ApiResult, ChatFrame, LoginRequest, SessionState } from '../shared/types.ts'
+import type { ApiResult, AppInfo, ChatFrame, LoginRequest, Rect, SessionState } from '../shared/types.ts'
 
 // 界面里的头像和图片走这个协议，由主进程带上登录 Cookie 去取。必须在 ready 前注册。
 const mediaScheme = 'diana-media'
@@ -34,6 +36,7 @@ let api: DianaApi | undefined
 let window: BrowserWindow | undefined
 let appSession: Session
 const local = new LocalServer()
+const admin = new AdminView(() => state.pins)
 
 function sessionState(): SessionState {
   if (state.mode === 'local') return { mode: 'local', server: api?.server ?? '', username: '', loggedIn: Boolean(api?.cookie) }
@@ -50,6 +53,7 @@ async function startLocal(): Promise<SessionState> {
     saveState(state)
     await saveCookie('')
   }
+  if (api?.server !== next.server) admin.destroy(window)
   api = next
   return sessionState()
 }
@@ -83,6 +87,7 @@ function registerIpc(): void {
       if (request.trustFingerprint) state.pins[host] = request.trustFingerprint
       const next = new DianaApi(appSession, server)
       await next.login(request.username.trim(), request.password)
+      admin.destroy(window)
       api = next
       // 改连别处就不再需要本机 Diana，停掉，数据留着，切回来接着用。
       if (state.mode === 'local') await local.stop()
@@ -95,8 +100,25 @@ function registerIpc(): void {
     }),
   )
   ipcMain.handle('diana:start-local', () => wrap(startLocal))
-  ipcMain.handle('diana:open-admin', () => wrap(async () => openAdmin(requireApi())))
+  ipcMain.handle('diana:admin-show', (_event, bounds: Rect) =>
+    wrap(async () => {
+      if (window) await admin.show(window, requireApi(), bounds)
+      return null
+    }),
+  )
+  ipcMain.on('diana:admin-place', (_event, bounds: Rect) => admin.place(bounds))
+  ipcMain.on('diana:admin-hide', () => admin.hide())
+  ipcMain.on('diana:admin-reload', () => admin.reload())
+  ipcMain.handle('diana:info', (): AppInfo => ({ version: app.getVersion(), local: local.info }))
+  ipcMain.on('diana:reveal-data', () => {
+    const dir = local.info?.dataDir
+    if (dir) void shell.openPath(dir)
+  })
+  ipcMain.on('diana:appearance', (event) => {
+    event.returnValue = { platform: { darwin: 'mac', win32: 'win' }[process.platform as string] ?? 'linux', material: material() }
+  })
   ipcMain.handle('diana:logout', async () => {
+    admin.destroy(window)
     if (api) api.cookie = ''
     await saveCookie('')
   })
@@ -142,56 +164,15 @@ function trustPinnedCertificates(): void {
   })
 }
 
-// 管理后台就是服务端自带的 WebUI。单开一个会话分区，把这边的登录 Cookie 放进去，
-// 打开就是登录状态；窗口只在这台服务器内跳转，外链交给系统浏览器。
-let adminWindow: BrowserWindow | undefined
-async function openAdmin(current: DianaApi): Promise<null> {
-  if (adminWindow && !adminWindow.isDestroyed()) {
-    adminWindow.focus()
-    return null
-  }
-  const adminSession = session.fromPartition('persist:diana-admin')
-  adminSession.setCertificateVerifyProc((request, callback) => {
-    if (request.verificationResult === 'net::OK') return callback(-3)
-    callback(state.pins[request.hostname] === request.certificate.fingerprint ? 0 : -2)
-  })
-  for (const pair of current.cookie.split(';')) {
-    const index = pair.indexOf('=')
-    if (index <= 0) continue
-    await adminSession.cookies.set({ url: current.server, name: pair.slice(0, index).trim(), value: pair.slice(index + 1).trim(), httpOnly: true, sameSite: 'lax' })
-  }
-  const win = new BrowserWindow({
-    width: 1280,
-    height: 820,
-    title: 'Diana 管理后台',
-    webPreferences: { session: adminSession, contextIsolation: true, sandbox: true, nodeIntegration: false },
-  })
-  adminWindow = win
-  win.on('closed', () => (adminWindow = undefined))
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    if (sameOrigin(current.server, url)) return { action: 'allow' }
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
-    return { action: 'deny' }
-  })
-  win.webContents.on('will-navigate', (event, url) => {
-    if (sameOrigin(current.server, url)) return
-    event.preventDefault()
-    if (/^https?:\/\//.test(url)) void shell.openExternal(url)
-  })
-  await win.loadURL(current.server)
-  return null
-}
-
 function createWindow(): void {
-  const bounds = state.window ?? { width: 1080, height: 720 }
+  const bounds = state.window ?? { width: 1200, height: 780 }
   window = new BrowserWindow({
     ...bounds,
-    minWidth: 760,
-    minHeight: 500,
+    minWidth: 860,
+    minHeight: 540,
     title: 'Diana',
     show: false,
-    backgroundColor: '#f7f4f5',
-    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    ...windowChrome(),
     webPreferences: {
       preload: join(import.meta.dirname, '../preload/index.cjs'),
       session: appSession,
@@ -201,6 +182,7 @@ function createWindow(): void {
     },
   })
   if (state.window?.maximized) window.maximize()
+  followTheme(window)
   window.once('ready-to-show', () => window?.show())
   // 消息里的链接用系统浏览器开，窗口自己永远只显示界面。
   window.webContents.setWindowOpenHandler(({ url }) => {
@@ -210,6 +192,8 @@ function createWindow(): void {
   window.webContents.on('will-navigate', (event, url) => {
     if (url !== window?.webContents.getURL()) event.preventDefault()
   })
+  // 管理后台那层挂在这个窗口上，窗口没了它也跟着扔掉，下次开窗重建。
+  window.on('closed', () => admin.destroy())
   window.on('close', () => {
     if (!window) return
     const maximized = window.isMaximized()
@@ -276,6 +260,7 @@ app.whenReady().then(async () => {
   trustPinnedCertificates()
   registerMediaProtocol()
   registerIpc()
+  installMenu((command) => window?.webContents.send('diana:command', command))
   createWindow()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -290,6 +275,9 @@ app.on('before-quit', (event) => {
   quitting = true
   void local.stop().finally(() => app.quit())
 })
+
+// 终端里 Ctrl+C、系统发 SIGTERM 时也走正常退出，让本机 Diana 跟着停。
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => app.quit())
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()

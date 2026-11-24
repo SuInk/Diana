@@ -5,5 +5,6 @@ import { createApp } from 'vue'
 import App from './App.vue'
 import './styles.css'
 
-document.documentElement.dataset.platform = navigator.userAgent.includes('Mac') ? 'mac' : 'other'
+document.documentElement.dataset.platform = window.diana.appearance.platform
+document.documentElement.dataset.material = window.diana.appearance.material
 createApp(App).mount('#app')

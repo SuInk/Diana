@@ -10,6 +10,7 @@ const emit = defineEmits<{ retry: []; 'use-remote': [] }>()
 
 <template>
   <main class="login">
+    <div class="titlebar-drag" aria-hidden="true" />
     <div class="login-form" aria-live="polite">
       <div class="login-brand">
         <span class="login-logo" aria-hidden="true">D</span>

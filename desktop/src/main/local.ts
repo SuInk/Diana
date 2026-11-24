@@ -6,9 +6,9 @@
 // 首次启动时随机生成，存在数据目录里，桌面端拿它自动登录，用户不用知道。
 
 import { app } from 'electron'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 
@@ -111,10 +111,55 @@ function writeConfig(dir: string, settings: LocalSettings): string {
   return path
 }
 
+// App 被强杀（崩溃、kill -9）时来不及停子进程，上一次的 Diana 会留在后台占着数据目录
+// 和端口，新的那个起不来。启动前按 pid 文件找它：确认还是这个程序、用的这份配置，再停掉。
+async function stopLeftover(dir: string, binary: string): Promise<void> {
+  const pidPath = join(dir, 'server.pid')
+  let pid = 0
+  try {
+    pid = Number(readFileSync(pidPath, 'utf8').trim())
+  } catch {
+    return
+  }
+  rmSync(pidPath, { force: true })
+  if (!pid || !isOurs(pid, binary)) return
+  try {
+    process.kill(pid)
+  } catch {
+    return
+  }
+  const deadline = Date.now() + stopTimeoutMs
+  while (Date.now() < deadline && alive(pid)) await new Promise((resolve) => setTimeout(resolve, 200))
+  if (alive(pid)) process.kill(pid, 'SIGKILL')
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// pid 可能已经被别的进程复用了，只认命令行里是这个程序的那个。
+function isOurs(pid: number, binary: string): boolean {
+  try {
+    if (process.platform === 'win32') {
+      const row = execFileSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
+      return row.toLowerCase().includes('"diana-webui.exe"')
+    }
+    return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).includes(binary)
+  } catch {
+    return false
+  }
+}
+
 export class LocalServer {
   private child?: ChildProcess
   private starting?: Promise<LocalCredentials>
   private credentials?: LocalCredentials
+  private location?: { port: number; dataDir: string }
 
   /** 已经在跑就直接返回；没跑就拉起来，等到能登录为止。 */
   start(): Promise<LocalCredentials> {
@@ -129,6 +174,7 @@ export class LocalServer {
       throw new Error(app.isPackaged ? `安装包里缺少 Diana 程序（${binary}），重新安装试试` : `还没编译本机 Diana：先在 desktop 目录跑 npm run server（找的是 ${binary}）`)
     }
     const dir = serverDir()
+    await stopLeftover(dir, binary)
     const saved = loadSettings(dir)
     const settings: LocalSettings = {
       port: await choosePort(saved.port),
@@ -144,6 +190,7 @@ export class LocalServer {
     const log = openSync(logPath, 'w')
     const child = spawn(binary, ['--config', config], { cwd: dir, stdio: ['ignore', log, log], windowsHide: true })
     closeSync(log)
+    writeFileSync(join(dir, 'server.pid'), String(child.pid ?? ''))
     this.child = child
     let exited: string | undefined
     child.once('exit', (code, signal) => {
@@ -160,6 +207,7 @@ export class LocalServer {
       if (exited) throw new Error(`本机 Diana 没起来（${exited}）：${tail(logPath)}`)
       if (await reachable(server)) {
         this.credentials = { server, username: settings.username, password: settings.password }
+        this.location = { port: settings.port, dataDir: join(dir, 'data') }
         return this.credentials
       }
       await new Promise((resolve) => setTimeout(resolve, 300))
@@ -183,6 +231,11 @@ export class LocalServer {
 
   get running(): boolean {
     return Boolean(this.child && this.credentials)
+  }
+
+  /** 设置页显示的端口和数据目录；没在跑时为空。 */
+  get info(): { port: number; dataDir: string } | undefined {
+    return this.running ? this.location : undefined
   }
 }
 

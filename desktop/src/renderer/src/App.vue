@@ -49,10 +49,9 @@ function expired() {
 </script>
 
 <template>
-  <div class="titlebar-drag" aria-hidden="true" />
   <template v-if="session">
     <LoginView v-if="choosingRemote || (session.mode === 'remote' && !session.loggedIn)" :session="session" :cancellable="choosingRemote" @logged-in="loggedIn" @use-local="startLocal" @cancel="choosingRemote = false" />
-    <ChatShell v-else-if="session.loggedIn" :session="session" @logout="logout" @expired="expired" />
+    <ChatShell v-else-if="session.loggedIn" :session="session" @logout="logout" @expired="expired" @use-remote="choosingRemote = true" @use-local="startLocal" />
     <StartupView v-else :error="startError" @retry="startLocal" @use-remote="choosingRemote = true" />
   </template>
 </template>

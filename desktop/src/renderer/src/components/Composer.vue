@@ -54,6 +54,7 @@ function onKeydown(event: KeyboardEvent) {
       @keydown="onKeydown"
     />
     <span v-if="length > maxChars - 200" class="composer-count" :class="{ error: length > maxChars }">{{ length }}/{{ maxChars }}</span>
+    <span v-else-if="!text && !disabled" class="composer-hint" aria-hidden="true">Enter 发送 · Shift+Enter 换行</span>
     <button class="send-button" type="submit" :disabled="!canSend" title="发送（回车）" aria-label="发送"><SendHorizontal :size="17" aria-hidden="true" /></button>
   </form>
 </template>
