@@ -90,7 +90,7 @@ func newDianaSubtaskTool(runtime *Runtime, event MessageEvent) *dianaSubtaskTool
 func (t *dianaSubtaskTool) Name() string { return dianaSubtaskToolName }
 
 func (t *dianaSubtaskTool) Description() string {
-	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks，由后端并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。这两种 Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。一轮回复做不完的大活（整份长文档的翻译或改写、批量处理文件、要读很多材料的整理）用 mode=agent：每个任务派一个子 agent，它有你这一套工具、和你共用工作目录，在后台自己做到完；互不依赖的部分拆成几个任务并行，全部结束后按 then 自动收尾并把结果发到会话。子 agent 看不到聊天历史，objective 要写全：材料在哪（文件所在消息的 message_id、页码范围、路径）、做哪一部分、交回什么。派出后这一轮只告诉对方已经开始，不要自己一点点做，也不要说成已经做完。旧 question/material 格式继续兼容。`
+	return `要联网查证的调研和长材料分析默认交给隔离 Worker 去做。调查外部事实用 mode=search，分析材料用 mode=analyze；几个互不依赖的方向放进一次 tasks 并发执行。只查一两个一搜就有答案的简单事实才直接用 web_search。这两种 Worker 看不到聊天历史，也不能写文件、执行命令或发送消息；问题要写得中性、自足并带必要背景；最终结论仍由你综合，保留来源和不确定性。一轮回复做不完的大活（整份长文档翻译、批量处理文件）用 mode=agent：每个任务派一个子 agent 在后台做完，工具和工作目录同你；能拆的拆成几个并行，结束后按 then 自动收尾发回会话。`
 }
 
 func (t *dianaSubtaskTool) InputSchema() map[string]any {
@@ -98,7 +98,7 @@ func (t *dianaSubtaskTool) InputSchema() map[string]any {
 	task := toolObjectSchema([]string{"id", "mode", "objective"}, map[string]any{
 		"id":            toolStringParam("本批任务内唯一的短标识。"),
 		"mode":          toolEnumParam("analyze 只分析 material；search 可联网调查；agent 派一个带全套工具的后台子 agent。", subtaskModeAnalyze, subtaskModeSearch, subtaskModeAgent),
-		"objective":     toolStringParam("独立、自足的任务目标。"),
+		"objective":     toolStringParam("独立、自足的任务目标。agent 看不到聊天历史，要写全材料在哪（文件所在消息的 message_id、页码范围、路径）、做哪一部分、交回什么。"),
 		"material":      toolStringParam("完成任务必需的背景材料；search 可省略。"),
 		"queries":       toolStringArrayParam("search 可选的起始搜索词，最多 4 个。"),
 		"source_policy": toolEnumParam("搜索来源偏好。", "primary", "balanced", "community"),
