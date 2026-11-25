@@ -440,6 +440,9 @@ type Runtime struct {
 	promptCacheProbe promptCacheProbeStore
 	// appendContexts 是只追加模式下每个会话上一轮实际发出的请求，见 append_context.go。
 	appendContexts appendContextStore
+	// appendWarmth 是各模型续接首步「隔了多久、命中多少」的实测，用来判断缓存冷没冷，
+	// 见 append_context_warmth.go。自带锁。
+	appendWarmth cacheWarmth
 	// replyContexts 是设置页柱形图用的每个会话上一轮主回复请求的构成，见 reply_context_breakdown.go。
 	replyContexts replyContextStore
 	// imageEditSources 记录每个会话最近使用的原图，仅用于诊断；不能作为新请求的
@@ -5175,6 +5178,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			messages = append(messages, carryover)
 		}
 		promptSession := r.groupPromptSession(event)
+		runStartedAt := time.Now()
 		// 只追加：主回复在上一轮实际发出的请求后面续接。定时查询、事件触发这些
 		// 后台入口也走这里，它们不接进群聊的记录。
 		var continuation *agent.Continuation
@@ -5187,8 +5191,20 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			previous := r.appendContexts.get(appendKey)
 			continuation, appendDecision = appendContextContinuation(previous, messages)
 			appendDecision.previousKey = ""
+			appendDecision.warmHit = -1
 			if previous != nil {
 				appendDecision.previousKey = previous.key
+				if !previous.at.IsZero() {
+					appendDecision.idle = runStartedAt.Sub(previous.at)
+				}
+			}
+			// 缓存冷了的续接不如整份重新组装：续接请求更长，又大半按未命中计价。
+			if continuation != nil {
+				continued := appendDecision.prefixTokens + appendDecision.appendTokens
+				if hit, cold := r.appendWarmth.cold(previous.model, appendDecision.idle, continued, appendDecision.fullTokens+appendDecision.overhead); cold {
+					continuation = nil
+					appendDecision.reason, appendDecision.warmHit = "cache_cold", hit
+				}
 			}
 		}
 		directInterjections, stopInterjections := r.startDirectReplyInterjections(ctx)
@@ -5229,7 +5245,13 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			if err == nil {
 				r.recordReplyContext(event, cfg, requestRecorder)
 				previous := r.appendContexts.get(appendKey)
+				if resp.Continued && previous != nil {
+					r.appendWarmth.observe(resp.Model, appendDecision.idle, resp.FirstUsage)
+				}
 				written := newAppendContextLog(resp, appendHeadKey, appendDecision.fullTokens, previous, r.replyAnsweredKeys(ctx, event)...)
+				if written != nil {
+					written.at, written.model = runStartedAt, resp.Model
+				}
 				r.appendContexts.put(appendKey, written)
 				appendContextUndoFromContext(ctx).note(appendKey, previous, written)
 			}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -75,6 +76,10 @@ type appendContextLog struct {
 	// overhead 是 Runner 在助手消息之外加的部分（估算 token），在重新组装的那一轮
 	// 由两边之差得出，续接期间沿用。
 	overhead int64
+	// at、model 是写下这份记录的那一轮什么时候发的第一次请求、实际由哪个模型答的：
+	// 下一轮据此估前缀还在不在缓存里，见 append_context_warmth.go。
+	at    time.Time
+	model string
 }
 
 // appendContextVerifyReminder 每轮续接都插在当前消息前面，不参与「和上一版一样就
@@ -663,6 +668,9 @@ type appendContextDecision struct {
 	prefixTokens int64
 	appendTokens int64
 	overhead     int64
+	// idle 是距上一轮第一次请求多久；warmHit 是按同模型相近间隔估的续接命中，没估时为负。
+	idle    time.Duration
+	warmHit float64
 }
 
 // recordAppendContextDecision 在 Runner 跑完后补上 Runner 那一侧的结论：assistant 交了
@@ -677,6 +685,12 @@ func (r *Runtime) recordAppendContextDecision(ctx context.Context, event Message
 		"prefix_tokens":   decision.prefixTokens,
 		"append_tokens":   decision.appendTokens,
 		"overhead_tokens": decision.overhead,
+	}
+	if decision.idle > 0 {
+		metadata["idle_seconds"] = int64(decision.idle / time.Second)
+	}
+	if decision.warmHit >= 0 && decision.reason == "cache_cold" {
+		metadata["estimated_hit"] = math.Round(decision.warmHit*1000) / 1000
 	}
 	switch {
 	case runErr != nil:

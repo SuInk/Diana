@@ -287,7 +287,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var lastText string
 	var lastProvider llm.Provider
 	var lastModel string
-	var usage llm.Usage
+	var usage, firstUsage llm.Usage
 	toolLoadCalls := 0
 	introspectionCalls := 0
 	modelTurns := 0
@@ -358,6 +358,7 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 			Provider:        lastProvider,
 			Model:           lastModel,
 			Usage:           usage,
+			FirstUsage:      firstUsage,
 			TraceID:         traceID,
 			ModelTurns:      modelTurns,
 			FinishReason:    reason,
@@ -471,6 +472,9 @@ run:
 		lastProvider = resp.Provider
 		lastModel = resp.Model
 		usage = addLLMUsage(usage, resp.Usage)
+		if modelTurns == 1 {
+			firstUsage = resp.Usage
+		}
 		lastText = strings.TrimSpace(resp.Text)
 		emitRunEvent(ctx, req.Observer, RunEvent{
 			TraceID:      traceID,

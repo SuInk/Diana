@@ -49,7 +49,8 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 		{Role: llm.RoleTool, Content: "已发送", ToolCallID: "c1", ToolName: "send"},
 		{Role: llm.RoleUser, Parts: []llm.ContentPart{{Type: llm.ContentPartText, Text: "看图"}, {Type: llm.ContentPartImageURL, ImageURL: "data:image/png;base64,AA"}}},
 	}
-	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234, answered: map[string]bool{"group|1|甲|m1": true}}
+	original := &appendContextLog{prefix: prefix, key: "run-key", headKey: "head-key", overhead: 1234, answered: map[string]bool{"group|1|甲|m1": true},
+		at: time.Date(2026, 11, 25, 8, 0, 0, 0, time.UTC), model: "devin/swe-2"}
 	original.index()
 
 	var store appendContextStore
@@ -67,6 +68,9 @@ func TestAppendContextLogRoundTripsThroughDisk(t *testing.T) {
 	}
 	if loaded.key != original.key || loaded.headKey != original.headKey || loaded.overhead != original.overhead {
 		t.Fatalf("键或开销没读回：%q %q %d", loaded.key, loaded.headKey, loaded.overhead)
+	}
+	if !loaded.at.Equal(original.at) || loaded.model != original.model {
+		t.Fatalf("上一轮的时间或模型没读回：%v %q", loaded.at, loaded.model)
 	}
 	if !reflect.DeepEqual(loaded.seen, original.seen) || !reflect.DeepEqual(loaded.sent, original.sent) ||
 		!reflect.DeepEqual(loaded.latest, original.latest) || !reflect.DeepEqual(loaded.memory, original.memory) ||

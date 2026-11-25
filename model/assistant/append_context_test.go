@@ -831,3 +831,55 @@ func TestAppendContextKeepsHistoryToolCallsWithTheirReply(t *testing.T) {
 		t.Fatalf("appended tool calls = %q in %#v", prompts, continuation.Append)
 	}
 }
+
+// 上一轮隔得久、同一模型这个间隔的续接实测命中很低：续接比整份重组还贵，这一轮重新组装，
+// 不接在上一轮后面；记录也换成这次重组的那份。
+func TestReplyTurnRebuildsWhenCacheMeasuredCold(t *testing.T) {
+	channel := &recordingChannel{}
+	provider := &sequenceLLMProvider{replies: []string{
+		`tool_calls:[{"id":"s1","name":"send","arguments":{"text":"在的"}}]`,
+		`tool_calls:[{"id":"s2","name":"send","arguments":{"text":"吃过了"}}]`,
+	}}
+	runtime := NewRuntime(BotConfig{AgentEnabled: true, BotAccount: "42"}, channel, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	first := appendContextTestEvent()
+	first.MessageID, first.RawMessage = "append-1", "在吗"
+	first.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "在吗"}}}
+	if _, err := runtime.replyTo(t.Context(), first, first.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	log := runtime.appendContexts.get(appendContextKey(first))
+	if log == nil || log.at.IsZero() {
+		t.Fatalf("first turn must record when it ran: %#v", log)
+	}
+	log.at = log.at.Add(-45 * time.Minute)
+	runtime.appendWarmth.samples = map[string][]cacheWarmthSample{}
+	for range cacheWarmthMinSamples {
+		runtime.appendWarmth.samples[log.model] = append(runtime.appendWarmth.samples[log.model], cacheWarmthSample{idle: 40 * time.Minute, hit: 0.05})
+	}
+	second := appendContextTestEvent()
+	second.MessageID, second.RawMessage, second.Time = "append-2", "吃了吗", first.Time+2700
+	second.Segments = []MessageSegment{{Type: "text", Data: map[string]string{"text": "吃了吗"}}}
+	if _, err := runtime.replyTo(t.Context(), second, second.RawMessage); err != nil {
+		t.Fatal(err)
+	}
+	var replies []llm.GenerateRequest
+	for _, request := range provider.requestsSnapshot() {
+		if len(request.Tools) > 0 {
+			replies = append(replies, request)
+		}
+	}
+	if len(replies) != 2 {
+		t.Fatalf("reply requests = %d, want 2", len(replies))
+	}
+	before, after := replies[0].Messages, replies[1].Messages
+	if len(after) > len(before) {
+		if reply := after[len(before)]; reply.Role == llm.RoleAssistant && len(reply.ToolCalls) == 1 && reply.ToolCalls[0].Arguments["text"] == "在的" {
+			t.Fatal("cold cache must rebuild instead of continuing after the previous request")
+		}
+	}
+	if rebuilt := runtime.appendContexts.get(appendContextKey(second)); rebuilt == nil || rebuilt == log {
+		t.Fatal("the rebuilt request must replace the old record")
+	}
+}
