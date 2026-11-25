@@ -436,7 +436,7 @@ run:
 		definitions := r.turnDefinitions(imageTaskQueued)
 		markLoopCacheBreakpoint(messages, stableCacheIndex)
 		modelStartedAt := time.Now()
-		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.toolResultReminder(steps)), Tools: definitions})
+		planningRequest, prepareErr := hooks.prepare(planningCtx, llm.GenerateRequest{Messages: withToolResultReminder(messages, r.toolResultReminder(steps), req.Directed), Tools: definitions})
 		if prepareErr != nil {
 			cancel()
 			return fail(prepareErr)
@@ -2124,8 +2124,25 @@ func (r *Runner) toolResultReminder(steps []Step) string {
 	return r.cfg.ToolResultReminder
 }
 
+// toolFailureNoticeText 是上一步有工具失败时接在请求末尾的提示。
+const toolFailureNoticeText = "【工具调用失败】本步有工具未执行或执行失败，错误信息不是查询结果。若仍需这项结果才能回答，请按错误说明修正参数或换用可用方法继续；权限不足或明确不可重试时不要重试。不能把历史中的无关内容当成本次查到的资料，也不能声称已经查到。无法继续时如实说明限制，只回答已有依据的部分。"
+
+// directedToolFailureNoticeText 接在点名请求的失败提示后面。11-26 群主 @ 机器人「保存gif」，
+// 工具连败后模型 send silent=true，对方什么都没收到。静默是「这轮没什么要说」，不是
+// 「做砸了不吭声」。这里在模型做决定之前讲清楚，不在它静默之后退回重来：退回要多跑
+// 一整轮请求，还要模型推翻自己刚做的决定。
+const directedToolFailureNoticeText = "这是对方点名要你做的事：做不成也要 send 一两句照实说明没做成、卡在哪一步，不能静默收尾，也不能说成已经完成。"
+
+func toolFailureNotice(directed bool) string {
+	if directed {
+		return toolFailureNoticeText + directedToolFailureNoticeText
+	}
+	return toolFailureNoticeText
+}
+
 // withToolResultReminder 在上一步刚执行过工具时把提醒接在请求末尾，返回新切片，不改动 messages。
-func withToolResultReminder(messages []llm.Message, reminder string) []llm.Message {
+// directed 表示这一轮是对方点名的请求，失败提示会多一句不许静默。
+func withToolResultReminder(messages []llm.Message, reminder string, directed bool) []llm.Message {
 	if strings.TrimSpace(reminder) == "" {
 		return messages
 	}
@@ -2136,7 +2153,7 @@ func withToolResultReminder(messages []llm.Message, reminder string) []llm.Messa
 			// 跳过纠错，甚至把无关历史当作查询结果。优先提示处理本次失败。
 			for j := i; j >= 0 && messages[j].Role == llm.RoleTool; j-- {
 				if messages[j].ToolError {
-					return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: "【工具调用失败】本步有工具未执行或执行失败，错误信息不是查询结果。若仍需这项结果才能回答，请按错误说明修正参数或换用可用方法继续；权限不足或明确不可重试时不要重试。不能把历史中的无关内容当成本次查到的资料，也不能声称已经查到。无法继续时如实说明限制，只回答已有依据的部分。"})
+					return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: toolFailureNotice(directed)})
 				}
 			}
 			return append(messages[:len(messages):len(messages)], llm.Message{Role: llm.RoleUser, Content: reminder})

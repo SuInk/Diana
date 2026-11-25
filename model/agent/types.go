@@ -181,6 +181,9 @@ type Request struct {
 	// Redo 不为空时，这一版是同一轮的重新生成（对方在上一版发出前又补了话），带着
 	// 上一版已经执行过的工具调用和结果接着答，不用重查，见 ExecutedTools。
 	Redo *ExecutedTools
+	// Directed 表示对方点名要机器人做事（群里 @ 或回复机器人、私聊）。这样的轮次里
+	// 工具失败后的提示会讲明不能静默收尾，见 directedToolFailureNoticeText。
+	Directed bool
 }
 
 // ExecutedTools 是一次运行里真正执行过的工具：Messages 是发给模型的那几组「调用 + 结果」
