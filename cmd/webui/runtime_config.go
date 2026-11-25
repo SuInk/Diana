@@ -40,7 +40,7 @@ func baseRuntimeConfigFields() []runtimeconfig.Field {
 		{Key: "server.frontend_dist", Label: "前端目录", Kind: runtimeconfig.KindString, Hint: "留空使用内嵌前端。", Editable: true, Risky: true},
 		{Key: "storage.db_path", Label: "数据库路径", Kind: runtimeconfig.KindString, Default: "data/diana.db", Hint: "不会搬旧数据：新路径没有库时重启后是一份空数据，要先把旧库文件复制过去。", Editable: true, Risky: true},
 		days("storage.debug_log_retention_days", "调试记录保留天数", "0", "0 用内置默认值，-1 永久保留。"),
-		days("storage.log_retention_days", "操作日志保留天数", "0", "0 用内置默认值，-1 永久保留。"),
+		days("storage.log_retention_days", "操作日志保留天数", "0", "0 用内置默认值（操作与错误日志 365 天；LLM 用量与失败记录长期保留用于统计），-1 永久保留。"),
 		{Key: "storage.download_cache_retention_days", Label: "下载缓存保留天数", Kind: runtimeconfig.KindInt, Default: "0", Hint: "在「下载缓存」页保存过之后以页面为准。"},
 		{Key: "storage.download_cache_max_mb", Label: "下载缓存容量上限（MB）", Kind: runtimeconfig.KindInt, Default: "0", Hint: "在「下载缓存」页保存过之后以页面为准。"},
 		{Key: "storage.history_media_retention_days", Label: "历史媒体保留天数", Kind: runtimeconfig.KindInt, Default: "0", Hint: "在「媒体与文件」页保存过之后以页面为准。"},

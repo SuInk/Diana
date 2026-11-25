@@ -98,6 +98,17 @@ func TestMarkedBotExplicitMentionSkipsJudgment(t *testing.T) {
 	if runtime.requiresTelegramBotMentionJudgment(replyToSelf) {
 		t.Fatal("被标记的账号回复本机时不该再走语义判定")
 	}
+
+	// Telegram 没有 at 段，被点名记在 MentionTargets 里，同样应算显式 @ 本机。
+	tgAtSelf := MessageEvent{
+		Platform: PlatformTelegram, Kind: EventKindGroup, GroupID: "-100200",
+		UserID: "30003", SelfID: "90001", MessageID: "m-tg-at", SenderIsBot: true,
+		MentionTargets: []MessageMention{{UserID: "90001", Username: "diana_bot", Target: "self"}},
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "@diana_bot 在吗"}}},
+	}
+	if !eventExplicitlyMentionsBot(tgAtSelf, cfg) || runtime.requiresTelegramBotMentionJudgment(tgAtSelf) {
+		t.Fatal("Telegram MentionTargets 指向本机时应按显式 @ 直接放行")
+	}
 }
 
 // 没点名本机的普通发言仍旧要判：这条闸是用来挡机器人噪音的，不能顺手拆掉。

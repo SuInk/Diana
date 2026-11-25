@@ -4,7 +4,7 @@
 import type { LLMUsageBreakdown } from "../api";
 import { formatNumber } from "./format.ts";
 
-export type UsageDimension = "purpose" | "model";
+export type UsageDimension = "purpose" | "model" | "provider";
 
 const purposeLabels: Record<string, string> = {
   reply: "聊天回复",
@@ -84,10 +84,26 @@ export function usageModelKey(entry: Pick<LLMUsageBreakdown, "provider" | "model
   return JSON.stringify([entry.provider.trim(), entry.model.trim() || "unknown"]);
 }
 
+const providerLabels: Record<string, string> = {
+  openai_compatible: "OpenAI 兼容",
+  openai_responses: "OpenAI Responses",
+  anthropic: "Anthropic",
+  gemini: "Google Gemini"
+};
+
+export function usageProviderLabel(provider: string): string {
+  const key = provider.trim();
+  if (!key) return "未知提供商";
+  const label = providerLabels[key];
+  return typeof label === "string" ? label : key;
+}
+
 export interface UsageGroup {
   key: string;
   label: string;
   detail: string;
+  raw_model?: string;
+  raw_purpose?: string;
   recorded_calls: number;
   input_tokens: number;
   output_tokens: number;
@@ -96,26 +112,52 @@ export interface UsageGroup {
   missing_usage_calls: number;
   /** 失败的模型请求数，不算在 recorded_calls 里。 */
   failed_calls: number;
+  recovered_calls: number;
+  duration_ms: number;
+  output_tokens_per_second: number;
+  avg_ttft_ms: number;
+  ttft_calls: number;
 }
 
-// 筛选的是另一维度：按用途查看时可选模型，按模型查看时可选用途。
+// 筛选的是另一维度：按用途查看时可选模型，按模型或提供商查看时可选用途。
 // 提供商也在模型键里，同名模型不会把不同提供商的调用混到一行。
 export function groupLLMUsage(entries: readonly LLMUsageBreakdown[], dimension: UsageDimension, filter = ""): UsageGroup[] {
   const groups = new Map<string, UsageGroup>();
+  const ttftSums = new Map<string, number>();
   for (const entry of entries) {
     const purpose = entry.purpose.trim() || "unlabeled";
+    const provider = entry.provider.trim();
+    const model = entry.model.trim() || "unknown";
     const modelKey = usageModelKey(entry);
     if (filter && filter !== (dimension === "purpose" ? modelKey : purpose)) continue;
-    const key = dimension === "purpose" ? purpose : modelKey;
+    const key = dimension === "purpose" ? purpose : dimension === "provider" ? (provider || "unknown") : modelKey;
     let group = groups.get(key);
     if (!group) {
-      const model = entry.model.trim() || "unknown";
       group = {
         key,
-        label: dimension === "purpose" ? usagePurposeLabel(purpose) : (model === "unknown" ? "未知模型" : model),
-        detail: dimension === "model" ? entry.provider.trim() : "",
-        recorded_calls: 0, input_tokens: 0, output_tokens: 0,
-        cached_input_tokens: 0, total_tokens: 0, missing_usage_calls: 0, failed_calls: 0
+        label:
+          dimension === "purpose"
+            ? usagePurposeLabel(purpose)
+            : dimension === "provider"
+              ? usageProviderLabel(provider)
+              : model === "unknown"
+                ? "未知模型"
+                : model,
+        detail: dimension === "model" ? provider : dimension === "provider" ? provider : "",
+        raw_model: dimension === "model" ? model : undefined,
+        raw_purpose: dimension === "purpose" ? purpose : undefined,
+        recorded_calls: 0,
+        input_tokens: 0,
+        output_tokens: 0,
+        cached_input_tokens: 0,
+        total_tokens: 0,
+        missing_usage_calls: 0,
+        failed_calls: 0,
+        recovered_calls: 0,
+        duration_ms: 0,
+        output_tokens_per_second: 0,
+        avg_ttft_ms: 0,
+        ttft_calls: 0
       };
       groups.set(key, group);
     }
@@ -126,8 +168,21 @@ export function groupLLMUsage(entries: readonly LLMUsageBreakdown[], dimension: 
     group.total_tokens += entry.total_tokens;
     group.missing_usage_calls += entry.missing_usage_calls ?? 0;
     group.failed_calls += entry.failed_calls ?? 0;
+    group.recovered_calls += entry.recovered_calls ?? 0;
+    group.duration_ms += entry.duration_ms ?? 0;
+    const ttftCalls = entry.ttft_calls ?? 0;
+    if (ttftCalls > 0 && (entry.avg_ttft_ms ?? 0) > 0) {
+      group.ttft_calls += ttftCalls;
+      ttftSums.set(key, (ttftSums.get(key) ?? 0) + (entry.avg_ttft_ms ?? 0) * ttftCalls);
+    }
+    group.output_tokens_per_second =
+      group.output_tokens > 0 && group.duration_ms > 0
+        ? Math.round(((group.output_tokens * 1000) / group.duration_ms) * 10) / 10
+        : 0;
+    const sumTTFT = ttftSums.get(key) ?? 0;
+    group.avg_ttft_ms = group.ttft_calls > 0 ? Math.round((sumTTFT / group.ttft_calls) * 10) / 10 : 0;
   }
-  return [...groups.values()].sort((a, b) => b.total_tokens - a.total_tokens || b.recorded_calls - a.recorded_calls || a.key.localeCompare(b.key));
+  return [...groups.values()].sort((a, b) => b.total_tokens - a.total_tokens || b.recorded_calls - a.recorded_calls || b.failed_calls - a.failed_calls || a.key.localeCompare(b.key));
 }
 
 export function usageShare(tokens: number, total: number): string {

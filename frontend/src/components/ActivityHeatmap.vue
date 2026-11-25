@@ -4,7 +4,10 @@
 <template>
   <section class="activity-heatmap stack" aria-label="活跃时段">
     <div class="activity-head">
-      <h3>活跃时段</h3>
+      <div class="activity-title-group">
+        <h3>活跃时段</h3>
+        <span v-if="dateSpanText" class="badge activity-date-badge">{{ dateSpanText }}</span>
+      </div>
       <div class="activity-controls">
         <AppSelect v-model="groupID" class="activity-group" :options="groupOptions" aria-label="按群聊筛选" :searchable="groups.length > 8" />
         <div class="segmented" role="radiogroup" aria-label="活跃时段统计窗口">
@@ -25,7 +28,6 @@
 
     <LoadingSkeleton v-if="loading && !data" kind="chart" label="正在读取活跃时段" />
     <p v-else-if="error" class="hint text-err" style="margin: 0">{{ error }}</p>
-    <p v-else-if="!current || current.total === 0" class="hint" style="margin: 0">{{ scopeLabel }}{{ windowLabel }}没有收到消息，画不出活跃时段。</p>
     <template v-else>
       <div class="activity-tiles">
         <div v-for="tile in tiles" :key="tile.label" class="activity-tile" :title="tile.hint">
@@ -36,11 +38,19 @@
       </div>
 
       <div class="activity-grid-wrap">
-        <div class="activity-grid" @mouseleave="pointed = null">
+        <div
+          class="activity-grid"
+          :class="{ 'with-row-dates': selected === '7d' && weekdayDates.length === 7 }"
+          @mouseleave="pointed = null"
+        >
           <span />
-          <span v-for="hour in 24" :key="`h${hour}`" class="activity-hour muted">{{ (hour - 1) % 3 === 0 ? hour - 1 : "" }}</span>
-          <template v-for="(row, day) in current.cells" :key="`d${day}`">
-            <span class="activity-day muted">{{ weekdayShort[day] }}</span>
+          <span v-for="hour in 24" :key="`h${hour}`" class="activity-hour muted">
+            {{ (hour - 1) % 3 === 0 ? `${hour - 1}时` : "" }}
+          </span>
+          <template v-for="(row, day) in cellsMatrix" :key="`d${day}`">
+            <span class="activity-day muted" :title="weekdayDates[day] ? `${weekdayLong[day]}（${weekdayDates[day]}）` : weekdayLong[day]">
+              {{ selected === "7d" && weekdayDates[day] ? `${weekdayShort[day]} ${weekdayDates[day]}` : weekdayShort[day] }}
+            </span>
             <button
               v-for="(count, hour) in row"
               :key="`c${day}-${hour}`"
@@ -56,9 +66,11 @@
           </template>
         </div>
       </div>
+
       <div class="activity-readout">
         <span v-if="pointedText">{{ pointedText }}</span>
-        <span v-else class="muted">指向或点按格子查看具体数字</span>
+        <span v-else-if="totalMessages === 0" class="muted">{{ scopeLabel }}{{ dateSpanText || windowLabel }}内暂无收到消息</span>
+        <span v-else class="muted">指向或点按格子查看具体数字（{{ dateSpanText }}，共 {{ formatNumber(totalMessages) }} 条）</span>
         <span class="activity-legend muted" aria-hidden="true">
           少
           <i v-for="level in legendLevels" :key="level" :style="{ background: activityLevelColor(level) }" />
@@ -90,11 +102,13 @@ const props = defineProps<{
 
 const windowOptions: { id: ActivityWindowID; label: string }[] = [
   { id: "7d", label: "7 天" },
-  { id: "28d", label: "4 周" }
+  { id: "28d", label: "4 周" },
+  { id: "84d", label: "12 周" }
 ];
 const weekdayShort = ["一", "二", "三", "四", "五", "六", "日"];
 const weekdayLong = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
 const legendLevels = [0, 1, 2, 3, 4];
+const emptyMatrix: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
 
 const selected = ref<ActivityWindowID>("28d");
 const groupID = ref("");
@@ -133,10 +147,49 @@ watch(
 );
 
 const current = computed(() => data.value?.windows.find((window) => window.id === selected.value) ?? null);
+const cellsMatrix = computed<number[][]>(() => current.value?.cells ?? emptyMatrix);
+const totalMessages = computed(() => current.value?.total ?? 0);
 const windowLabel = computed(() => `最近 ${windowOptions.find((option) => option.id === selected.value)?.label ?? ""}`);
 const scopeLabel = computed(() => (groupID.value ? `${props.groups.find((group) => group.id === groupID.value)?.name ?? `群 ${groupID.value}`} ` : ""));
 const weeks = computed(() => Math.max(1, current.value?.weeks ?? 1));
-const peak = computed(() => Math.max(0, ...(current.value?.cells.flat() ?? [0])));
+const peak = computed(() => Math.max(0, ...cellsMatrix.value.flat()));
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+function formatYMD(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function formatMD(d: Date): string {
+  return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+}
+
+// 统计窗口对应的起止日期标注（如 2026-10-28 ~ 2026-11-25）。
+const dateSpanText = computed(() => {
+  if (!current.value || !data.value) return "";
+  const start = formatYMD(current.value.since);
+  const end = data.value.today || formatYMD(data.value.until);
+  if (!start || !end) return "";
+  return `${start} ~ ${end}`;
+});
+
+// 选「7 天」时每一行（周一至周日）恰好对应最近 7 天里的唯一一天，直接标出 MM/DD。
+const weekdayDates = computed<string[]>(() => {
+  if (selected.value !== "7d" || !data.value) return [];
+  const end = data.value.until ? new Date(data.value.until) : new Date();
+  if (Number.isNaN(end.getTime())) return [];
+  const map = Array.from({ length: 7 }, () => "");
+  for (let offset = 0; offset < 7; offset++) {
+    const d = new Date(end.getFullYear(), end.getMonth(), end.getDate() - offset);
+    const wd = (d.getDay() + 6) % 7;
+    if (!map[wd]) map[wd] = formatMD(d);
+  }
+  return map;
+});
 
 function cellColor(count: number): string {
   return activityLevelColor(activityLevel(count, peak.value));
@@ -154,32 +207,38 @@ function hourRange(hour: number): string {
 }
 
 function cellText(day: number, hour: number, count: number): string {
+  const datePart = weekdayDates.value[day] ? `（${weekdayDates.value[day]}）` : dateSpanText.value ? `（${dateSpanText.value}）` : "";
   const total = weeks.value > 1 && count > 0 ? `，共 ${formatNumber(count)} 条` : "";
-  return `${weekdayLong[day]} ${hourRange(hour)}：${perWeek(count)}${total}`;
+  return `${weekdayLong[day]}${datePart} ${hourRange(hour)}：${perWeek(count)}${total}`;
 }
 
 const pointedText = computed(() => {
   const cell = pointed.value;
-  if (!cell || !current.value) return "";
-  return cellText(cell.day, cell.hour, current.value.cells[cell.day]?.[cell.hour] ?? 0);
+  if (!cell) return "";
+  return cellText(cell.day, cell.hour, cellsMatrix.value[cell.day]?.[cell.hour] ?? 0);
 });
 
-// 三张小卡回答的是「什么时候人最多、什么时候没人」：最热闹的那一格，以及把七天叠起来
-// 之后一天里最热闹、最冷清的钟点——后者正好是设免打扰或主动搭话时段时要看的。
+// 三张小卡回答的是「什么时候人最多、什么时候没人」；总数为 0 时保持卡片占位不塌陷。
 const tiles = computed(() => {
-  const window = current.value;
-  if (!window) return [];
+  const matrix = cellsMatrix.value;
+  if (totalMessages.value <= 0) {
+    return [
+      { label: "最热闹", value: "—", foot: "暂无消息", hint: "当前窗口内没有收到消息" },
+      { label: "每天最热闹", value: "—", foot: "暂无消息", hint: "当前窗口内没有收到消息" },
+      { label: "每天最冷清", value: "0–24 时", foot: "没有消息", hint: "当前窗口内没有收到消息" }
+    ];
+  }
   let peakDay = 0;
   let peakHour = 0;
-  window.cells.forEach((row, day) =>
+  matrix.forEach((row, day) =>
     row.forEach((count, hour) => {
-      if (count > window.cells[peakDay][peakHour]) {
+      if (count > matrix[peakDay][peakHour]) {
         peakDay = day;
         peakHour = hour;
       }
     })
   );
-  const byHour = Array.from({ length: 24 }, (_, hour) => window.cells.reduce((sum, row) => sum + (row[hour] ?? 0), 0));
+  const byHour = Array.from({ length: 24 }, (_, hour) => matrix.reduce((sum, row) => sum + (row[hour] ?? 0), 0));
   const busiest = byHour.indexOf(Math.max(...byHour));
   const quietest = byHour.indexOf(Math.min(...byHour));
   const perDay = (count: number) => {
@@ -187,11 +246,12 @@ const tiles = computed(() => {
     const average = count / (weeks.value * 7);
     return `平均每天 ${average >= 10 ? formatNumber(Math.round(average)) : average.toFixed(1)} 条`;
   };
+  const peakDateSuffix = weekdayDates.value[peakDay] ? ` (${weekdayDates.value[peakDay]})` : "";
   return [
     {
       label: "最热闹",
-      value: `${weekdayLong[peakDay]} ${peakHour} 时`,
-      foot: perWeek(window.cells[peakDay][peakHour]),
+      value: `${weekdayLong[peakDay]}${peakDateSuffix} ${peakHour} 时`,
+      foot: perWeek(matrix[peakDay][peakHour]),
       hint: "星期几和钟点组合起来，消息最多的那一格"
     },
     { label: "每天最热闹", value: hourRange(busiest), foot: perDay(byHour[busiest]), hint: "七天叠在一起看，消息最多的钟点" },
@@ -224,6 +284,18 @@ const timezoneNote = computed(() => activityTimezoneNote(data.value?.utc_offset,
   font-weight: 600;
 }
 
+.activity-title-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.activity-date-badge {
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+}
+
 .activity-head,
 .activity-controls {
   display: flex;
@@ -231,6 +303,10 @@ const timezoneNote = computed(() => activityTimezoneNote(data.value?.utc_offset,
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.activity-controls .segmented button {
+  white-space: nowrap;
 }
 
 .activity-group {
@@ -269,36 +345,49 @@ const timezoneNote = computed(() => activityTimezoneNote(data.value?.utc_offset,
 
 .activity-grid-wrap {
   overflow-x: auto;
+  scrollbar-width: none;
 }
 
-/* GitHub 式的小方格：格子有上限不随容器拉伸，留白比被拉成长条好读。 */
+.activity-grid-wrap::-webkit-scrollbar {
+  display: none;
+}
+
+/* 与主界面年历一致：24 列等比铺满整行容器宽度（正方形），无数据时也完整画出空方格。 */
 .activity-grid {
   display: grid;
-  grid-template-columns: 18px repeat(24, minmax(8px, 13px));
-  gap: 3px;
-  width: max-content;
-  max-width: 100%;
+  grid-template-columns: 22px repeat(24, minmax(10px, 1fr));
+  gap: 4px;
+  width: 100%;
+  min-width: max-content;
+}
+
+.activity-grid.with-row-dates {
+  grid-template-columns: 52px repeat(24, minmax(10px, 1fr));
 }
 
 .activity-hour {
   width: 0;
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 10.5px;
+  line-height: 15px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .activity-day {
-  font-size: 10px;
+  font-size: 10.5px;
   line-height: 1;
   align-self: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .activity-cell {
+  width: 100%;
   aspect-ratio: 1;
   padding: 0;
   border: none;
-  border-radius: 2px;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.08);
   cursor: pointer;
 }
 
@@ -330,6 +419,7 @@ const timezoneNote = computed(() => activityTimezoneNote(data.value?.utc_offset,
   width: 11px;
   height: 11px;
   border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgba(127, 127, 127, 0.08);
 }
 
 @media (max-width: 560px) {
@@ -347,7 +437,7 @@ const timezoneNote = computed(() => activityTimezoneNote(data.value?.utc_offset,
   }
 
   .activity-grid {
-    gap: 2px;
+    gap: 3px;
   }
 }
 </style>

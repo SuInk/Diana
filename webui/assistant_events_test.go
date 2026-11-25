@@ -645,3 +645,160 @@ func TestListEventsFiltersByGroupAndReportsContextBudget(t *testing.T) {
 		t.Fatal("筛选器缺少可选群列表")
 	}
 }
+
+func TestAssistantEventsEndpointSupportsExtendedAndCustomRanges(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-events-ranges.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	base := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	if _, inserted, err := store.EnqueueInboundEvent(context.Background(), "group:10001", assistant.MessageEvent{
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "10001",
+		UserID:     "20002",
+		MessageID:  "custom-window-hit",
+		Time:       base.Unix(),
+		RawMessage: "窗口命中",
+	}); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{sqlite: store}
+	router.GET("/api/assistant/events", handler.listEvents)
+
+	for _, query := range []string{
+		"?range=today",
+		"?range=12h",
+		"?range=90d",
+		"?range=365d",
+		"?range=custom&since=2026-08-10T00:00:00Z&until=2026-08-11T00:00:00Z",
+	} {
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/events"+query, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query %s status=%d body=%s", query, rec.Code, rec.Body.String())
+		}
+	}
+
+	custom := httptest.NewRecorder()
+	router.ServeHTTP(custom, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=custom&since=2026-08-10T00:00:00Z&until=2026-08-11T00:00:00Z", nil))
+	var resp assistantEventsResponse
+	if err := json.Unmarshal(custom.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp.Total != 1 || len(resp.Events) != 1 || resp.Events[0].MessageID != "custom-window-hit" {
+		t.Fatalf("unexpected custom events response: %+v", resp)
+	}
+}
+
+type recentEventsStubRuntime struct {
+	BotRuntime
+	status assistant.RuntimeStatus
+}
+
+func (r recentEventsStubRuntime) Status() assistant.RuntimeStatus {
+	return r.status
+}
+
+func (r recentEventsStubRuntime) CallOneBotAPI(context.Context, string, map[string]any) (map[string]any, error) {
+	return map[string]any{"data": []any{}}, nil
+}
+
+func TestAssistantEventsPrefersNewestLiveReasonOverStalePlaceholder(t *testing.T) {
+	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "assistant-events-live-reason.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	ctx := context.Background()
+	now := time.Now()
+	event := assistant.MessageEvent{
+		ProfileID:  "bot-qq",
+		Platform:   assistant.PlatformQQOfficial,
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "G-1",
+		UserID:     "U-1",
+		MessageID:  "ROBOT1.0_msg_parked",
+		Time:       now.Unix(),
+		RawMessage: "分享一条链接",
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:G-1", event); err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	item, ok, err := store.ClaimNextInboundEvent(ctx, "events-test", now.Add(time.Minute))
+	if err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, item.ID, "events-test", "merged_into_backlog_turn"); err != nil {
+		t.Fatal(err)
+	}
+	finalReason := "在跟机器人说话：否，只是分享链接，没有点名、@或回复机器人"
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		ProfileID: event.ProfileID,
+		Platform:  event.Platform,
+		Kind:      event.Kind,
+		GroupID:   event.GroupID,
+		UserID:    event.UserID,
+		MessageID: event.MessageID,
+		Outcome:   "ignored",
+		Decision:  "not_replied",
+		Reason:    finalReason,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// RecentEvents 按最新在前排列：下标 0 是评分完成后的真实结论，下标 1 是入队时留下的等待判断占位。
+	runtime := recentEventsStubRuntime{
+		status: assistant.RuntimeStatus{
+			RecentEvents: []assistant.EventRecord{
+				{
+					At:        now.Add(3 * time.Second),
+					ProfileID: event.ProfileID,
+					Platform:  event.Platform,
+					Kind:      event.Kind,
+					GroupID:   event.GroupID,
+					UserID:    event.UserID,
+					MessageID: event.MessageID,
+					Outcome:   "ignored",
+					Decision:  "not_replied",
+					Reason:    finalReason,
+				},
+				{
+					At:        now,
+					ProfileID: event.ProfileID,
+					Platform:  event.Platform,
+					Kind:      event.Kind,
+					GroupID:   event.GroupID,
+					UserID:    event.UserID,
+					MessageID: event.MessageID,
+					Outcome:   "merged_into_backlog_turn",
+					Decision:  "not_replied",
+					Reason:    "排队等接话判断：等群里安静下来，和前后几条一起判断一次要不要接话。评完这里会换成结论",
+				},
+			},
+		},
+	}
+
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	handler := &BotHandler{sqlite: store, runtime: runtime}
+	router.GET("/api/assistant/events", handler.listEvents)
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/assistant/events?range=24h", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp assistantEventsResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Events) != 1 || resp.Events[0].Reason != finalReason {
+		t.Fatalf("event reason = %q, want newest verdict %q", resp.Events[0].Reason, finalReason)
+	}
+}

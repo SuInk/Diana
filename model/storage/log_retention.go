@@ -10,10 +10,11 @@ import (
 )
 
 // PruneLogs deletes expired logs in small transactions. Zero cutoffs disable
-// that category. Usage records remain available for historical token statistics.
+// that category. Usage and failed-call records remain available for historical
+// token and error statistics.
 func (s *SQLiteStore) PruneLogs(ctx context.Context, debugBefore, otherBefore time.Time) (int64, error) {
-	// 用量记录只按新名字 llm_usage 豁免。旧名字的行还没改完名时清理，会把它们当普通
-	// 日志删掉，token 统计就永久少一截。
+	// 用量与失败调用记录按新名字 llm_usage / llm_call_failed 豁免。旧名字的行还没改完名时
+	// 清理，会把它们当普通日志删掉，历史 token 与失败统计就永久少一截。
 	if migrated, err := s.logActionNamesMigrated(ctx); err != nil || !migrated {
 		return 0, err
 	}
@@ -33,7 +34,7 @@ func (s *SQLiteStore) PruneLogs(ctx context.Context, debugBefore, otherBefore ti
 		for {
 			result, err := s.db.ExecContext(ctx, `DELETE FROM app_logs WHERE id IN (
 SELECT id FROM app_logs WHERE `+policy.predicate+` AND created_at < ?
-AND action <> 'llm_usage'
+AND action NOT IN ('llm_usage', 'llm_call_failed')
 ORDER BY created_at LIMIT 500)`, cutoff)
 			if err != nil {
 				return deleted, fmt.Errorf("prune logs: %w", err)

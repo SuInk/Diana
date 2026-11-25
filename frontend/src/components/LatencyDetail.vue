@@ -71,7 +71,16 @@
         <div v-for="list in extremeLists" :key="list.title" class="stack" style="gap: 6px">
           <h3>{{ list.title }}</h3>
           <p v-if="list.items.length === 0" class="hint" style="margin: 0">样本太少，都已列在另一侧。</p>
-          <article v-for="item in list.items" :key="item.event_id" class="latency-sample">
+          <article
+            v-for="item in list.items"
+            :key="item.event_id"
+            class="latency-sample latency-sample-clickable"
+            role="button"
+            tabindex="0"
+            title="点击查看这条回复的事件明细与调试调用链"
+            @click="emit('inspectEvent', item)"
+            @keydown.enter.prevent="emit('inspectEvent', item)"
+          >
             <div class="latency-sample-head">
               <strong>{{ formatDurationMS(item.total_ms) }}</strong>
               <span class="muted latency-sample-where">{{ where(item) }}</span>
@@ -106,10 +115,16 @@ const props = defineProps<{
   groupLabel: (groupID: string) => string;
 }>();
 
+const emit = defineEmits<{
+  inspectEvent: [sample: ReplyLatencySample];
+}>();
+
 const windowOptions: { id: LatencyWindowID; label: string; previous: string }[] = [
   { id: "1h", label: "1 小时", previous: "前 1 小时" },
   { id: "24h", label: "24 小时", previous: "前 24 小时" },
-  { id: "7d", label: "7 天", previous: "前 7 天" }
+  { id: "7d", label: "7 天", previous: "前 7 天" },
+  { id: "30d", label: "30 天", previous: "前 30 天" },
+  { id: "90d", label: "90 天", previous: "前 90 天" }
 ];
 
 const selected = ref<LatencyWindowID>(props.initialWindow);
@@ -315,6 +330,16 @@ function breakdown(sample: ReplyLatencySample): { label: string; value: number }
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: 12px;
+}
+
+.latency-sample-clickable {
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.latency-sample-clickable:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: var(--surface-2);
 }
 
 .latency-sample-head {

@@ -60,6 +60,11 @@ func eventExplicitlyMentionsBot(event MessageEvent, cfg BotConfig) bool {
 	if event.Kind != EventKindGroup {
 		return false
 	}
+	for _, mention := range event.MentionTargets {
+		if mention.Target == "self" {
+			return true
+		}
+	}
 	for _, botID := range []string{event.SelfID, cfg.BotAccount} {
 		botID = strings.TrimSpace(botID)
 		if botID == "" {
@@ -67,6 +72,11 @@ func eventExplicitlyMentionsBot(event MessageEvent, cfg BotConfig) bool {
 		}
 		if hasAt(event.Segments, botID) || strings.Contains(event.RawMessage, "[CQ:at,qq="+botID+"]") {
 			return true
+		}
+		for _, mention := range event.MentionTargets {
+			if strings.TrimSpace(mention.UserID) == botID {
+				return true
+			}
 		}
 	}
 	return false

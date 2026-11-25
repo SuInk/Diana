@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/applog"
 )
 
 func TestInboundActivityBucketsGroupsByQuarterHourProfileAndGroup(t *testing.T) {
@@ -83,5 +85,32 @@ VALUES (?, 'session', 'group', ?, '{}', 0, 'done', ?, ?, ?, ?)
 
 	if _, err := s.InboundActivityBuckets(ctx, until, until, "", ""); err == nil {
 		t.Fatal("empty window should be rejected")
+	}
+
+	// Token 年历聚合：按本地时区归日并支持按机器人过滤。
+	insertLog := func(id string, meta map[string]any, at time.Time) {
+		t.Helper()
+		if err := s.AppendLog(ctx, applog.Entry{
+			ID:        id,
+			Kind:      applog.KindOperation,
+			Level:     applog.LevelInfo,
+			Action:    "llm_usage",
+			Message:   "ok",
+			Metadata:  meta,
+			CreatedAt: at.UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertLog("u1", map[string]any{"profile_id": "bot-a", "group_id": "g1", "total_tokens": 1200}, time.Date(2026, 10, 6, 16, 30, 0, 0, time.UTC)) // UTC+8 -> 2026-10-07
+	insertLog("u2", map[string]any{"profile_id": "bot-a", "group_id": "g2", "input_tokens": 300, "output_tokens": 50}, time.Date(2026, 10, 7, 2, 0, 0, 0, time.UTC))
+	insertLog("u3", map[string]any{"profile_id": "bot-b", "group_id": "g1", "total_tokens": 900}, time.Date(2026, 10, 7, 2, 0, 0, 0, time.UTC))
+
+	tokenDays, err := s.LLMUsageActivityDays(ctx, until.Add(-72*time.Hour), until, 8*3600, "bot-a", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tokenDays) != 1 || tokenDays[0] != (InboundActivityDayCount{Date: "2026-10-07", Count: 1550}) {
+		t.Fatalf("bot-a token days = %+v", tokenDays)
 	}
 }

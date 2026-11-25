@@ -5,8 +5,8 @@
   <!-- 照 GitHub 贡献图的做法：固定近一年，窄了横向滚动并停在最近这头；宽了格子跟着
        放大（始终是正方形），最近一周总贴着卡片右边，不在右边空出一截；
        月份在上，只标一三五；悬停浮出当天读数；底部左边说口径，右边是图例。 -->
-  <section class="activity-calendar" aria-label="每日消息量">
-    <LoadingSkeleton v-if="loading && !data" kind="chart" label="正在读取每日消息量" />
+  <section class="activity-calendar" :aria-label="isTokenMetric ? '每日 Token 用量' : '每日消息量'">
+    <LoadingSkeleton v-if="loading && !data" kind="chart" :label="isTokenMetric ? '正在读取每日 Token 用量' : '正在读取每日消息量'" />
     <p v-else-if="error" class="hint text-err" style="margin: 0">{{ error }}</p>
     <template v-else-if="data">
       <div ref="scroller" class="calendar-scroll">
@@ -55,11 +55,13 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { getStatsActivity, type StatsActivity } from "../api";
 import { activityLevel, activityLevelColor, activityTimezoneNote, buildActivityCalendar } from "../lib/activity";
-import { formatNumber } from "../lib/format";
+import { formatCompactNumber, formatNumber } from "../lib/format";
 import LoadingSkeleton from "./LoadingSkeleton.vue";
 
-const props = defineProps<{ profileId: string }>();
+const props = defineProps<{ profileId: string; metric?: "messages" | "tokens" }>();
 const emit = defineEmits<{ caption: [text: string] }>();
+
+const isTokenMetric = computed(() => props.metric === "tokens");
 
 const weekdayShort = ["一", "二", "三", "四", "五", "六", "日"];
 const weekdayLong = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
@@ -111,13 +113,21 @@ onBeforeUnmount(() => {
   emit("caption", "");
 });
 
-const columns = computed(() => (data.value ? buildActivityCalendar(data.value.today, data.value.days, weeks) : []));
+const activeDays = computed(() => {
+  if (!data.value) return null;
+  return isTokenMetric.value ? (data.value.token_days ?? []) : data.value.days;
+});
+
+const columns = computed(() => (data.value && activeDays.value ? buildActivityCalendar(data.value.today, activeDays.value, weeks) : []));
 const visible = computed(() => columns.value.flatMap((week) => week.days).filter((cell) => cell.count !== null));
 const peak = computed(() => Math.max(0, ...visible.value.map((cell) => cell.count ?? 0)));
 
 function dayText(date: string, count: number): string {
   const [, month, day] = date.split("-").map(Number);
   const weekday = weekdayLong[(new Date(`${date}T00:00:00Z`).getUTCDay() + 6) % 7];
+  if (isTokenMetric.value) {
+    return `${month}月${day}日 ${weekday} · ${count > 0 ? `${formatCompactNumber(count)} Token（${formatNumber(count)}）` : "没有 Token 消耗"}`;
+  }
   return `${month}月${day}日 ${weekday} · ${count > 0 ? `${formatNumber(count)} 条消息` : "没有消息"}`;
 }
 
@@ -131,11 +141,18 @@ function point(event: Event, date: string, count: number): void {
 const caption = computed(() => {
   if (!data.value) return "";
   const total = visible.value.reduce((sum, cell) => sum + (cell.count ?? 0), 0);
+  if (isTokenMetric.value) {
+    return `近一年 ${formatCompactNumber(total)} Token`;
+  }
   return `近一年 ${formatNumber(total)} 条消息`;
 });
 watch(caption, (text) => emit("caption", text), { immediate: true });
 
-const footnote = computed(() => activityTimezoneNote(data.value?.utc_offset, "日期") || "按收到消息的日期统计");
+const footnote = computed(() => {
+  const tz = activityTimezoneNote(data.value?.utc_offset, "日期");
+  if (tz) return tz;
+  return isTokenMetric.value ? "按模型调用的日期统计 Token 用量" : "按收到消息的日期统计";
+});
 </script>
 
 <style scoped>

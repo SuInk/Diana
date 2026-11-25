@@ -152,11 +152,20 @@ func usageCall(meta map[string]any) applog.UsageBreakdown {
 	purpose, _ := meta["purpose"].(string)
 	provider, _ := meta["provider"].(string)
 	model, _ := meta["model"].(string)
-	return applog.UsageBreakdown{
+	durationMS := int64FromAny(meta["duration_ms"])
+	if durationMS < 0 {
+		durationMS = 0
+	}
+	call := applog.UsageBreakdown{
 		Purpose: purpose, Provider: provider, Model: model, Calls: 1,
 		InputTokens: input, OutputTokens: output, TotalTokens: total,
 		CachedInputTokens: int64FromAny(meta["cached_input_tokens"]), MissingUsageCalls: missingCalls,
+		DurationMS: durationMS,
 	}
+	if ttftMS := int64FromAny(meta["ttft_ms"]); ttftMS > 0 {
+		call.SetTTFTSample(ttftMS)
+	}
+	return call
 }
 
 // failedUsageCall 把一条失败记录折算成「失败一次」，token 和成功调用次数都记 0。
@@ -164,17 +173,18 @@ func failedUsageCall(meta map[string]any) applog.UsageBreakdown {
 	purpose, _ := meta["purpose"].(string)
 	provider, _ := meta["provider"].(string)
 	model, _ := meta["model"].(string)
-	return applog.UsageBreakdown{Purpose: purpose, Provider: provider, Model: model, FailedCalls: 1}
+	var recovered int64
+	if flag, _ := meta["recovered"].(bool); flag {
+		recovered = 1
+	}
+	return applog.UsageBreakdown{
+		Purpose: purpose, Provider: provider, Model: model,
+		FailedCalls: 1, RecoveredCalls: recovered,
+	}
 }
 
 func addUsageCall(usage *applog.UsageSummary, call applog.UsageBreakdown) {
-	usage.Calls += call.Calls
-	usage.InputTokens += call.InputTokens
-	usage.OutputTokens += call.OutputTokens
-	usage.TotalTokens += call.TotalTokens
-	usage.CachedInputTokens += call.CachedInputTokens
-	usage.MissingUsageCalls += call.MissingUsageCalls
-	usage.FailedCalls += call.FailedCalls
+	usage.AddCall(call)
 }
 
 // GroupLLMUsageSince 统计某个群在窗口内的模型调用次数，供按群额度判断。

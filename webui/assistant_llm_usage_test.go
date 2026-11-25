@@ -37,13 +37,16 @@ func TestGroupTokenUsageEndpointFiltersAndReportsFailures(t *testing.T) {
 		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/usage"+query, nil))
 		return recorder
 	}
-	if result := request("?profile=bot-a&group_id=g&platform=telegram&hours=168"); result.Code != http.StatusOK {
+	if result := request("?profile=bot-a&group_id=g&platform=telegram&hours=8760"); result.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", result.Code, result.Body.String())
 	}
-	if store.filter != (applog.UsageFilter{ProfileID: "bot-a", GroupID: "g", Platform: "telegram"}) || store.until.Sub(store.since) != 168*time.Hour {
+	if store.filter != (applog.UsageFilter{ProfileID: "bot-a", GroupID: "g", Platform: "telegram"}) || store.until.Sub(store.since) != 8760*time.Hour {
 		t.Fatalf("filter/window=%+v", store)
 	}
-	for _, hours := range []string{"0", "2161", "1.5", "invalid"} {
+	if result := request("?since=2026-08-01T00:00:00Z&until=2026-09-01T00:00:00Z"); result.Code != http.StatusOK {
+		t.Fatalf("custom bounds status=%d body=%s", result.Code, result.Body.String())
+	}
+	for _, hours := range []string{"0", "8761", "1.5", "invalid"} {
 		before := store.calls
 		if result := request("?hours=" + hours); result.Code != http.StatusBadRequest || store.calls != before {
 			t.Fatalf("invalid hours reached storage: %s status=%d", hours, result.Code)

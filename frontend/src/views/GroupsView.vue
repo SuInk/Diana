@@ -188,8 +188,8 @@
             <span v-if="group.shared_with?.length" class="badge warn" :title="sharedBotsTitle(group)">
               同连接 {{ group.shared_with.length + 1 }} 台都在回
             </span>
-            <span v-if="quotaBadge(group)" class="badge" :class="quotaBadge(group)!.tone" :title="quotaBadge(group)!.title">
-              {{ quotaBadge(group)!.text }}
+            <span v-if="quotaBadge(group)" class="badge" :class="quotaBadge(group)?.tone" :title="quotaBadge(group)?.title">
+              {{ quotaBadge(group)?.text }}
             </span>
           </div>
           <p class="group-card-desc">

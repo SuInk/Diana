@@ -80,10 +80,12 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 				log.Printf("storage maintenance: deleted %d expired agent tool calls", count)
 			}
 			stopCalls()
+			// 操作与错误日志默认保留一年，保证总览页切换 90 天、近一年等大跨度筛选并点进日志时
+			// 仍有完整明细可查；调试追踪体量大，继续默认按 7 天清理。
 			runCtx, stop := context.WithTimeout(ctx, 2*time.Minute)
 			count, err := store.PruneLogs(runCtx,
 				logRetentionCutoff(now, cfg.DebugLogRetentionDays, 7),
-				logRetentionCutoff(now, cfg.LogRetentionDays, 30))
+				logRetentionCutoff(now, cfg.LogRetentionDays, defaultAppLogRetentionDays))
 			stop()
 			if err != nil && ctx.Err() == nil {
 				log.Printf("storage maintenance: deleted %d expired logs: %v", count, err)
@@ -122,6 +124,9 @@ func startStorageMaintenance(parent context.Context, store *storage.SQLiteStore,
 // completedMemoryJobRetentionDays 是已完成记忆任务留作入队去重的天数，理由见
 // PruneCompletedMemoryJobs。
 const completedMemoryJobRetentionDays = 7
+
+// defaultAppLogRetentionDays 是普通操作与错误日志的默认保留天数。
+const defaultAppLogRetentionDays = 365
 
 func logRetentionCutoff(now time.Time, days, fallback int) time.Time {
 	if days < 0 {

@@ -2557,10 +2557,6 @@ a.nav-action {
   .topbar-stream-text {
     display: none;
   }
-
-  .topbar-logout .topbar-logout-text {
-    display: none;
-  }
 }
 
 @media (max-width: 420px) {

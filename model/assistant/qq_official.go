@@ -82,8 +82,10 @@ type QQOfficialChannel struct {
 	// groupRoles 是群消息 author.member_role 带来的身份，成员接口没开白名单时靠它核验。
 	groupRoles map[string]qqGroupSeenRole
 	avatarURLs map[string]string
-	mu         sync.RWMutex
-	cfg        QQOfficialConfig
+	// selfName 是网关 READY 返回的机器人昵称，补在入站 @ 自己段上供上下文与事件页展示。
+	selfName string
+	mu       sync.RWMutex
+	cfg      QQOfficialConfig
 	// apiBaseOverride 只给测试指向本地服务。
 	apiBaseOverride string
 	// readTimeoutOverride 只给测试缩短半开连接的判定时限。
@@ -160,6 +162,7 @@ func (c *QQOfficialChannel) SetConfig(cfg QQOfficialConfig) {
 	c.mu.Lock()
 	c.guildChannels = nil
 	c.avatarURLs = nil
+	c.selfName = ""
 	c.cfg = cfg
 	c.mu.Unlock()
 	c.tokens.Invalidate()
@@ -486,6 +489,9 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 			c.connMu.Lock()
 			c.sessionID = ready.SessionID
 			c.connMu.Unlock()
+			c.mu.Lock()
+			c.selfName = strings.TrimSpace(ready.User.Username)
+			c.mu.Unlock()
 			c.setStatus(true, ready.User.ID, "")
 		}
 		return
@@ -506,7 +512,19 @@ func (c *QQOfficialChannel) handleDispatch(ctx context.Context, payload qqGatewa
 		}
 		return
 	}
-	event, ok := qqOfficialEventFromDispatch(payload.T, payload.Data, c.Status().SelfID)
+	c.mu.RLock()
+	selfName := c.selfName
+	extraSelfIDs := make([]string, 0, 1+len(c.groupBotOpenIDs))
+	if appID := strings.TrimSpace(c.cfg.AppID); appID != "" {
+		extraSelfIDs = append(extraSelfIDs, appID)
+	}
+	for _, openID := range c.groupBotOpenIDs {
+		if openID = strings.TrimSpace(openID); openID != "" {
+			extraSelfIDs = append(extraSelfIDs, openID)
+		}
+	}
+	c.mu.RUnlock()
+	event, ok := qqOfficialEventFromDispatchWithSelf(payload.T, payload.Data, c.Status().SelfID, selfName, extraSelfIDs...)
 	if !ok {
 		return
 	}
@@ -1354,44 +1372,48 @@ type qqOfficialMention struct {
 	OpenID       string `json:"openid"`
 	UserOpenID   string `json:"user_openid"`
 	MemberOpenID string `json:"member_openid"`
+	Username     string `json:"username"`
 	// IsYou 是网关给的「这个 @ 指向当前机器人」标记。
 	IsYou bool `json:"is_you"`
 }
 
 // pointsTo 判断这个 @ 是否指向当前机器人：优先认网关给的 is_you，拿不到时再按
-// 各个 id 字段和 selfID 比对。
-func (m qqOfficialMention) pointsTo(selfID string) bool {
+// 各个 id 字段和 selfID、AppID、群内 member_openid 比对。
+func (m qqOfficialMention) pointsTo(selfID string, extraIDs ...string) bool {
 	if m.IsYou {
 		return true
 	}
+	candidates := append([]string{selfID}, extraIDs...)
 	for _, id := range []string{m.ID, m.OpenID, m.UserOpenID, m.MemberOpenID} {
-		if id != "" && id == selfID {
-			return true
-		}
-	}
-	return false
-}
-
-// botMentioned 判断这条全量群消息是否叫了当前机器人。
-func (m *qqOfficialMessage) botMentioned(selfID string) bool {
-	for _, mention := range m.Mentions {
-		if mention.pointsTo(selfID) {
-			return true
-		}
-	}
-	return false
-}
-
-// stripQQBotMentionTokens 去掉 content 里残留的机器人 mention 标记。
-//
-// 文档说 content 已去除 @ 前缀，但标记形如 <@openid>，解析不到位就会把一串十六
-// 进制带进模型上下文，所以按 mentions 里指向自己的条目再剥一次。
-func stripQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID string) string {
-	for _, mention := range mentions {
-		if !mention.pointsTo(selfID) {
+		if id == "" {
 			continue
 		}
-		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID, selfID} {
+		for _, target := range candidates {
+			if target != "" && id == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// botMentionedWithSelf 判断这条消息是否叫了当前机器人，并返回平台附带的机器人昵称。
+func (m *qqOfficialMessage) botMentionedWithSelf(selfID string, extraIDs ...string) (bool, string) {
+	for _, mention := range m.Mentions {
+		if mention.pointsTo(selfID, extraIDs...) {
+			return true, strings.TrimSpace(mention.Username)
+		}
+	}
+	return false, ""
+}
+
+// stripQQBotMentionTokens 去掉 content 里残留的机器人 mention 标记，供 RawMessage 保持纯文本。
+func stripQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID string, extraIDs ...string) string {
+	for _, mention := range mentions {
+		if !mention.pointsTo(selfID, extraIDs...) {
+			continue
+		}
+		for _, id := range append([]string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID, selfID}, extraIDs...) {
 			if id == "" {
 				continue
 			}
@@ -1400,6 +1422,86 @@ func stripQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID s
 		}
 	}
 	return strings.TrimSpace(text)
+}
+
+// rewriteQQBotMentionTokens 把指向当前机器人的 <@member_openid> 统一改写成 <@selfID>，
+// 让 qqOfficialMentionSegments 在原位置拆出指向自己的 at 段，而不是直接抹掉导致模型和事件页看不到 @自己。
+func rewriteQQBotMentionTokens(text string, mentions []qqOfficialMention, selfID string, extraIDs ...string) string {
+	selfID = strings.TrimSpace(selfID)
+	if selfID == "" {
+		return stripQQBotMentionTokens(text, mentions, selfID, extraIDs...)
+	}
+	replacement := "<@" + selfID + ">"
+	for _, mention := range mentions {
+		if !mention.pointsTo(selfID, extraIDs...) {
+			continue
+		}
+		for _, id := range append([]string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID}, extraIDs...) {
+			id = strings.TrimSpace(id)
+			if id == "" || id == selfID {
+				continue
+			}
+			text = strings.ReplaceAll(text, "<@"+id+">", replacement)
+			text = strings.ReplaceAll(text, "<@!"+id+">", replacement)
+		}
+	}
+	return text
+}
+
+func applyQQOfficialMentionNames(segments []MessageSegment, mentions []qqOfficialMention, selfID, selfName string, extraIDs ...string) {
+	if len(segments) == 0 {
+		return
+	}
+	namesByID := make(map[string]string, len(mentions)*2+1)
+	if selfID = strings.TrimSpace(selfID); selfID != "" && strings.TrimSpace(selfName) != "" {
+		namesByID[selfID] = strings.TrimSpace(selfName)
+	}
+	for _, mention := range mentions {
+		name := strings.TrimSpace(mention.Username)
+		if name == "" {
+			continue
+		}
+		if mention.pointsTo(selfID, extraIDs...) && selfID != "" {
+			namesByID[selfID] = name
+		}
+		for _, id := range []string{mention.ID, mention.OpenID, mention.UserOpenID, mention.MemberOpenID} {
+			if id = strings.TrimSpace(id); id != "" {
+				namesByID[id] = name
+			}
+		}
+	}
+	if len(namesByID) == 0 {
+		return
+	}
+	for i := range segments {
+		if segments[i].Type != "at" || segments[i].Data == nil || AtMentionName(segments[i]) != "" {
+			continue
+		}
+		if name := namesByID[strings.TrimSpace(segments[i].Data["qq"])]; name != "" {
+			segments[i].Data["name"] = name
+		}
+	}
+}
+
+func ensureQQOfficialSelfAtSegment(segments []MessageSegment, selfID, selfName string) []MessageSegment {
+	selfID = strings.TrimSpace(selfID)
+	if selfID == "" || hasAt(segments, selfID) {
+		return segments
+	}
+	data := map[string]string{"qq": selfID}
+	if selfName = strings.TrimSpace(selfName); selfName != "" {
+		data["name"] = selfName
+	}
+	atSeg := MessageSegment{Type: "at", Data: data}
+	insertAt := 0
+	if len(segments) > 0 && segments[0].Type == "reply" {
+		insertAt = 1
+	}
+	out := make([]MessageSegment, 0, len(segments)+1)
+	out = append(out, segments[:insertAt]...)
+	out = append(out, atSeg)
+	out = append(out, segments[insertAt:]...)
+	return out
 }
 
 // qqOfficialAttachment 是消息附带的一条富媒体附件。官方只给元信息和下载地址，
@@ -1729,6 +1831,10 @@ func qqMergedForwardLineWithoutURL(line string, urlStart int) string {
 // GROUP_AT_MESSAGE_CREATE 只推「@ 了机器人」的消息，收到即被点名；全量模式下
 // 群里所有消息都会到达，ToMe 必须按 mentions 逐条判断，不能一律当被点名。
 func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID string) (MessageEvent, bool) {
+	return qqOfficialEventFromDispatchWithSelf(eventType, data, selfID, "")
+}
+
+func qqOfficialEventFromDispatchWithSelf(eventType string, data json.RawMessage, selfID, selfName string, extraSelfIDs ...string) (MessageEvent, bool) {
 	var msg qqOfficialMessage
 	if err := json.Unmarshal(data, &msg); err != nil {
 		return MessageEvent{}, false
@@ -1741,18 +1847,23 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	if msg.MessageReference != nil {
 		quoted = msg.MessageReference.MessageID
 	}
-	botMentioned := false
-	if eventType == "GROUP_MESSAGE_CREATE" {
-		botMentioned = msg.botMentioned(selfID)
-		if botMentioned {
-			text = stripQQBotMentionTokens(text, msg.Mentions, selfID)
-		}
+	botMentioned, botMentionName := msg.botMentionedWithSelf(selfID, extraSelfIDs...)
+	if eventType == "GROUP_AT_MESSAGE_CREATE" || eventType == "AT_MESSAGE_CREATE" {
+		botMentioned = true
 	}
 
 	// 合并聊天记录不给 attachments，媒体全压在 content 文本里：拆成消息段，
 	// 同时抹掉正文里的一次性下载地址。
 	text, mergedMedia := qqOfficialMergedForwardMedia(text)
-	text, segments := qqOfficialMentionSegments(text, quoted)
+	rawSource := text
+	segmentSource := text
+	if botMentioned {
+		rawSource = stripQQBotMentionTokens(text, msg.Mentions, selfID, extraSelfIDs...)
+		segmentSource = rewriteQQBotMentionTokens(text, msg.Mentions, selfID, extraSelfIDs...)
+	}
+	rawText, _ := qqOfficialMentionSegments(rawSource, quoted)
+	_, segments := qqOfficialMentionSegments(segmentSource, quoted)
+	applyQQOfficialMentionNames(segments, msg.Mentions, selfID, firstNonEmpty(botMentionName, selfName), extraSelfIDs...)
 	segments = append(segments, mergedMedia...)
 	mediaSegments := qqOfficialMediaSegments(msg.Attachments)
 	// 附件图补上 sub_type=1 才会被 StickerSegmentLabel 认成表情包、收进表情包库，
@@ -1774,7 +1885,7 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 		Time:        platformEventTime(msg.Timestamp),
 		SelfID:      selfID,
 		MessageID:   msg.ID,
-		RawMessage:  text,
+		RawMessage:  rawText,
 		Segments:    segments,
 		SenderName:  firstNonEmpty(msg.Member.Nick, msg.Author.Username),
 		SenderIsBot: msg.Author.Bot,
@@ -1788,7 +1899,7 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	// 但正文还在元素里，引用关系照常交付。引用元素不带 author，发送者只能由
 	// 调用方拿索引反查后回填。
 	if msg.MessageType == qqMessageTypeQuote {
-		quotedText, quotedMedia := qqOfficialQuotedPayload(msg.MsgElements)
+		quotedText, quotedMedia := qqOfficialQuotedPayloadWithSelf(msg.MsgElements, msg.Mentions, selfID, firstNonEmpty(botMentionName, selfName), extraSelfIDs...)
 		refKey := firstNonEmpty(msg.sceneExtValue("ref_msg_idx"), quoted)
 		event.Quoted = &QuotedMessage{
 			MessageID:  refKey,
@@ -1842,6 +1953,13 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 	// 意义，也回不出去，还可能两个机器人互相接话。
 	if msg.Author.Bot && event.Kind == EventKindGroup && event.UserID != selfID {
 		event.ToMe = false
+		event.Segments = withoutBotMentionSegments(event.Segments, selfID)
+		return event, true
+	}
+	// 官方群/频道 @ 机器人时平台常已把开头的 @ 剥掉，补回指向自己的 at 段，
+	// 让主 Agent 上下文、显式 @ 判定和事件明细页都能看到 @机器人。
+	if event.Kind == EventKindGroup && botMentioned && event.UserID != selfID {
+		event.Segments = ensureQQOfficialSelfAtSegment(event.Segments, selfID, firstNonEmpty(botMentionName, selfName))
 	}
 	return event, true
 }
@@ -1851,6 +1969,10 @@ func qqOfficialEventFromDispatch(eventType string, data json.RawMessage, selfID 
 // 正文和媒体按普通消息的规则拆段：文字必须进入 text 段，否则下游读取媒体段时
 // 会跳过 RawMessage 里的配文；聊天记录 content 里的附件也要进入识图 / 抽帧链路。
 func qqOfficialQuotedPayload(elements []qqOfficialMsgElement) (string, []MessageSegment) {
+	return qqOfficialQuotedPayloadWithSelf(elements, nil, "", "")
+}
+
+func qqOfficialQuotedPayloadWithSelf(elements []qqOfficialMsgElement, mentions []qqOfficialMention, selfID, selfName string, extraSelfIDs ...string) (string, []MessageSegment) {
 	var parts []string
 	var media []MessageSegment
 	for _, element := range elements {
@@ -1863,7 +1985,11 @@ func qqOfficialQuotedPayload(elements []qqOfficialMsgElement) (string, []Message
 		media = append(media, qqOfficialMediaSegments(element.Attachments)...)
 	}
 	text := strings.Join(parts, "\n")
+	if selfID != "" || len(extraSelfIDs) > 0 {
+		text = rewriteQQBotMentionTokens(text, mentions, selfID, extraSelfIDs...)
+	}
 	text, segments := qqOfficialMentionSegments(text, "")
+	applyQQOfficialMentionNames(segments, mentions, selfID, selfName, extraSelfIDs...)
 	return text, append(segments, media...)
 }
 

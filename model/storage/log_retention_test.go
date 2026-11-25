@@ -28,8 +28,8 @@ func TestPruneLogs(t *testing.T) {
 		{ID: "error-boundary", Kind: LogKindError, CreatedAt: otherBefore},
 		{ID: "offset-recent", Kind: LogKindError, CreatedAt: now.In(time.FixedZone("UTC+8", 8*3600))},
 	}
-	for _, action := range []string{"assistant.llm_usage", "chatbot.llm_usage", "diana.llm_usage", "llm_usage"} {
-		entries = append(entries, AppLogEntry{ID: action, Action: action, Kind: LogKindDebug, CreatedAt: now.AddDate(-1, 0, 0)})
+	for _, action := range []string{"assistant.llm_usage", "chatbot.llm_usage", "diana.llm_usage", "llm_usage", "llm_call_failed"} {
+		entries = append(entries, AppLogEntry{ID: action, Action: action, Kind: LogKindError, CreatedAt: now.AddDate(-1, 0, 0)})
 	}
 	for _, entry := range entries {
 		if err := s.AppendLog(ctx, entry); err != nil {
@@ -51,7 +51,7 @@ func TestPruneLogs(t *testing.T) {
 		t.Fatalf("deleted=%d err=%v", deleted, err)
 	}
 	logs, err := s.ListLogs(ctx, AppLogFilter{Limit: 100})
-	if err != nil || len(logs) != 9 {
+	if err != nil || len(logs) != 10 {
 		t.Fatalf("remaining=%d err=%v", len(logs), err)
 	}
 	var value string

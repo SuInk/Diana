@@ -54,3 +54,28 @@ func TestPromptNoteOverridesReachSupplementAndImageOnly(t *testing.T) {
 		t.Fatalf("只发多张图的覆盖没有生效：%q", message.Content)
 	}
 }
+
+func TestCurrentPromptTextKeepsSelfNoteWhenMentioningBothSelfAndOther(t *testing.T) {
+	both := MessageEvent{
+		Kind: EventKindGroup, SelfID: "42", GroupID: "g", UserID: "10001",
+		Segments: []MessageSegment{
+			{Type: "at", Data: map[string]string{"qq": "42", "name": "虹夏"}},
+			{Type: "at", Data: map[string]string{"qq": "10002", "name": "Diana"}},
+			{Type: "text", Data: map[string]string{"text": " 禁止讨论什么"}},
+		},
+	}
+	got := currentPromptTextWithSemanticContext(both, "@虹夏（42） @Diana（10002） 禁止讨论什么", semanticReferenceContext{}, promptAnnotation{})
+	if !strings.Contains(got, promptNoteAtSelfSpec.Default) || !strings.Contains(got, promptNoteAtOtherSpec.Default) {
+		t.Fatalf("同时 @ 本机和他人时两条注解都必须保留：\n%s", got)
+	}
+
+	tgSelf := MessageEvent{
+		Platform: PlatformTelegram, Kind: EventKindGroup, SelfID: "42", GroupID: "-1001", UserID: "10001",
+		MentionTargets: []MessageMention{{UserID: "42", Username: "diana_bot", Target: "self"}},
+		Segments:       []MessageSegment{{Type: "text", Data: map[string]string{"text": "@diana_bot 帮我看看"}}},
+	}
+	gotTG := currentPromptTextWithSemanticContext(tgSelf, "@diana_bot 帮我看看", semanticReferenceContext{}, promptAnnotation{})
+	if !strings.Contains(gotTG, promptNoteAtSelfSpec.Default) {
+		t.Fatalf("Telegram MentionTargets @ 本机应附上 at_self 注解：\n%s", gotTG)
+	}
+}

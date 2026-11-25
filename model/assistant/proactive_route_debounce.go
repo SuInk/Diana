@@ -134,6 +134,27 @@ func mergeProactiveRouteCandidates(parked, incoming []proactiveReplyCandidate) [
 	return merged
 }
 
+// evictedProactiveRouteCandidates 找出被等待批条数上限挤掉的旧候选，把它们的占位原因换成结果说明。
+func evictedProactiveRouteCandidates(parked, merged []proactiveReplyCandidate) []proactiveReplyCandidate {
+	if len(parked) == 0 {
+		return nil
+	}
+	kept := make(map[string]bool, len(merged))
+	for _, item := range merged {
+		if id := strings.TrimSpace(item.Event.MessageID); id != "" {
+			kept[id] = true
+		}
+	}
+	var evicted []proactiveReplyCandidate
+	for _, item := range parked {
+		id := strings.TrimSpace(item.Event.MessageID)
+		if id != "" && !kept[id] {
+			evicted = append(evicted, item)
+		}
+	}
+	return evicted
+}
+
 // parkProactiveRoute 把候选登记进会话的等待批。parked 为 false 时调用方当场评分，
 // candidates 是要一起评的整批（等待批里已有的也取出来了）。
 func (r *Runtime) parkProactiveRoute(event MessageEvent, candidates []proactiveReplyCandidate) (bool, []proactiveReplyCandidate) {
@@ -152,13 +173,13 @@ func (r *Runtime) parkProactiveRoute(event MessageEvent, candidates []proactiveR
 		}
 	}
 	r.routeParkMu.Lock()
-	defer r.routeParkMu.Unlock()
 	park := r.routeParks[key]
 	var parked []proactiveReplyCandidate
 	if park != nil {
 		parked = park.items
 	}
 	merged := mergeProactiveRouteCandidates(parked, candidates)
+	evicted := evictedProactiveRouteCandidates(parked, merged)
 	window, maxMessages := proactiveRouteMergeLimits(cfg)
 	// 重试的那条可能已经发出去一半，主人的消息要在自己那一轮生效：都当场评，等着的一起带上。
 	routeNow := debounce <= 0 || !running || runCtx == nil || event.backlogProbe.Attempts > 1 || cfg.IsOwnerEvent(event) ||
@@ -170,6 +191,8 @@ func (r *Runtime) parkProactiveRoute(event MessageEvent, candidates []proactiveR
 			}
 			delete(r.routeParks, key)
 		}
+		r.routeParkMu.Unlock()
+		r.recordProactiveBatchEvicted(evicted)
 		return false, merged
 	}
 	if park == nil {
@@ -189,6 +212,8 @@ func (r *Runtime) parkProactiveRoute(event MessageEvent, candidates []proactiveR
 	park.timer = time.AfterFunc(wait, func() {
 		r.flushProactiveRoutePark(runCtx, key, generation)
 	})
+	r.routeParkMu.Unlock()
+	r.recordProactiveBatchEvicted(evicted)
 	return true, nil
 }
 
@@ -359,6 +384,11 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 	// 评分和疲劳判断都要调模型，这几秒里被直接触发的那一轮接走了就不必再生成。
 	if r.proactiveRouteFlightTaken(flight) {
 		r.record(r.decisionEventRecord(event, text, proactiveRouteTakenOutcome))
+		for _, candidate := range eligible {
+			if candidate.Event.MessageID != event.MessageID {
+				r.record(r.decisionEventRecord(candidate.Event, candidate.Text, proactiveRouteTakenOutcome))
+			}
+		}
 		return
 	}
 	r.recordProactiveBatchRouted(eligible, event)
@@ -374,11 +404,21 @@ func (r *Runtime) flushProactiveRoutePark(ctx context.Context, key string, gener
 				r.incActive(-1)
 			}()
 		case <-ctx.Done():
+			event.routingReason = "主动回复在等待并发名额时被取消：" + ctx.Err().Error()
+			r.record(r.decisionEventRecord(event, text, "ignored"))
 			return
 		}
 	}
 	if _, err := r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, "replied_proactive"); err != nil {
 		log.Printf("diana parked proactive reply failed: %v", err)
+	}
+}
+
+func (r *Runtime) recordProactiveBatchEvicted(evicted []proactiveReplyCandidate) {
+	for _, candidate := range evicted {
+		event := candidate.Event
+		event.routingReason = "等待接话判断期间群消息较多，这条移出等待批，已收入上下文历史"
+		r.record(r.decisionEventRecord(event, candidate.Text, "ignored"))
 	}
 }
 

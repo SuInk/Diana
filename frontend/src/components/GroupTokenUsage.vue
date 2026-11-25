@@ -48,6 +48,8 @@ const ranges = [
   { value: "24", label: "最近24小时" },
   { value: "168", label: "最近7天" },
   { value: "720", label: "最近30天" },
+  { value: "2160", label: "最近90天" },
+  { value: "8760", label: "最近1年" },
 ];
 let generation = 0;
 const number = (value: number) => value.toLocaleString("zh-CN");

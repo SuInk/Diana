@@ -19,6 +19,7 @@ import (
 type stubActivityReader struct {
 	buckets   []storage.InboundActivityBucket
 	days      []storage.InboundActivityDayCount
+	tokenDays []storage.InboundActivityDayCount
 	since     time.Time
 	daysSince time.Time
 	offset    int
@@ -29,6 +30,10 @@ type stubActivityReader struct {
 func (s *stubActivityReader) InboundActivityDays(_ context.Context, since, _ time.Time, offset int, _, _ string) ([]storage.InboundActivityDayCount, error) {
 	s.daysSince, s.offset = since, offset
 	return s.days, nil
+}
+
+func (s *stubActivityReader) LLMUsageActivityDays(_ context.Context, _, _ time.Time, _ int, _, _ string) ([]storage.InboundActivityDayCount, error) {
+	return s.tokenDays, nil
 }
 
 func (s *stubActivityReader) InboundActivityBuckets(_ context.Context, since, _ time.Time, profileID, groupID string) ([]storage.InboundActivityBucket, error) {
@@ -78,7 +83,7 @@ func TestStatsActivityBucketsByLocalWeekdayHourAndDay(t *testing.T) {
 	if reader.profileID != "bot-a" || reader.groupID != "10001" {
 		t.Fatalf("filters = %q / %q", reader.profileID, reader.groupID)
 	}
-	if want := now.Add(-28 * 24 * time.Hour); !reader.since.Equal(want) {
+	if want := now.Add(-84 * 24 * time.Hour); !reader.since.Equal(want) {
 		t.Fatalf("buckets since = %v, want %v", reader.since, want)
 	}
 	if want := time.Date(2026, 10, 7, 0, 0, 0, 0, shanghai).AddDate(0, 0, -(activityCalendarDays - 1)); !reader.daysSince.Equal(want) || reader.offset != 8*3600 {
@@ -87,7 +92,7 @@ func TestStatsActivityBucketsByLocalWeekdayHourAndDay(t *testing.T) {
 	if response.UTCOffset != "+08:00" || response.Today != "2026-10-07" {
 		t.Fatalf("utc_offset = %q, today = %q", response.UTCOffset, response.Today)
 	}
-	if len(response.Windows) != 2 || response.Windows[0].ID != "7d" || response.Windows[1].ID != "28d" {
+	if len(response.Windows) != 3 || response.Windows[0].ID != "7d" || response.Windows[1].ID != "28d" || response.Windows[2].ID != "84d" {
 		t.Fatalf("windows = %+v", response.Windows)
 	}
 

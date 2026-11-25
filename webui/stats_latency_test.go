@@ -130,6 +130,15 @@ func TestStatsLatencySingleWindowReadsOnlyItsSpan(t *testing.T) {
 
 	rec = httptest.NewRecorder()
 	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/latency?window=30d", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("30d window status = %d, want 200", rec.Code)
+	}
+	if want := now.Add(-60 * 24 * time.Hour); !reader.since.Equal(want) {
+		t.Fatalf("30d reader asked since %s, want %s", reader.since, want)
+	}
+
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/latency?window=unknown", nil))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("unknown window status = %d, want 400", rec.Code)
 	}

@@ -36,6 +36,9 @@ func (r *Runtime) isRecallCommand(event MessageEvent, text string) bool {
 		return false
 	}
 	botID := firstNonEmpty(strings.TrimSpace(event.SelfID), strings.TrimSpace(cfg.BotAccount))
+	if mentionsSomeoneElseFor(event, botID) {
+		return false
+	}
 	segments := event.Segments
 	if len(segments) == 0 {
 		segments = CQToSegments(firstNonEmpty(event.RawMessage, text))
@@ -52,7 +55,23 @@ func (r *Runtime) isRecallCommand(event MessageEvent, text string) bool {
 			return false
 		}
 	}
-	return strings.EqualFold(strings.TrimSpace(body.String()), recallCommandText)
+	cleaned := strings.TrimSpace(body.String())
+	for _, mention := range event.MentionTargets {
+		if mention.Target == "self" && strings.TrimSpace(mention.Username) != "" {
+			cleaned = strings.TrimSpace(strings.ReplaceAll(cleaned, "@"+strings.TrimPrefix(strings.TrimSpace(mention.Username), "@"), ""))
+		}
+	}
+	if strings.EqualFold(cleaned, recallCommandText) {
+		return true
+	}
+	for _, mention := range event.MentionTargets {
+		if mention.Target == "self" && strings.TrimSpace(mention.Username) != "" {
+			if strings.EqualFold(strings.TrimSpace(body.String()), recallCommandText+"@"+strings.TrimPrefix(strings.TrimSpace(mention.Username), "@")) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // handleRecallCommand 执行 /recall。成功时不回话：被引用的那条消失就是结果，
