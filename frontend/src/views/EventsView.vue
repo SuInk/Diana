@@ -40,7 +40,7 @@
         <div class="event-filter-lead">
           <div class="segmented event-range" role="radiogroup" aria-label="按时间筛选事件">
             <button
-              v-for="option in rangeOptions"
+              v-for="option in quickRangeOptions"
               :key="option.value"
               type="button"
               :class="{ active: selectedRange === option.value }"
@@ -52,6 +52,22 @@
             </button>
           </div>
           <AppSelect
+            class="event-extra-range"
+            :class="{ 'is-selected': !!extraRangeValue }"
+            aria-label="更多时间范围"
+            placeholder="更多范围"
+            :model-value="extraRangeValue"
+            :options="extraRangeOptions"
+            @update:model-value="onSelectExtraRange"
+          />
+          <DateRangePicker
+            v-if="selectedRange === 'custom'"
+            v-model:from="customFrom"
+            v-model:to="customTo"
+            :open-signal="datePickerSignal"
+            @change="onCustomDateChange"
+          />
+          <AppSelect
             class="event-group-filter"
             :model-value="selectedGroup"
             :options="groupOptions"
@@ -60,19 +76,6 @@
             aria-label="按会话筛选事件"
             @update:model-value="(value) => selectGroup(String(value))"
           />
-          <div class="event-search">
-            <Search :size="14" class="event-search-icon" aria-hidden="true" />
-            <input
-              v-model="searchDraft"
-              type="search"
-              class="input event-search-input"
-              placeholder="搜索消息、回复或消息号"
-              aria-label="搜索事件"
-              @keyup.enter="applySearch"
-              @search="applySearch"
-            />
-          </div>
-
         </div>
         <div class="segmented event-result-filter" role="radiogroup" aria-label="按处理结果筛选事件">
             <button
@@ -87,6 +90,18 @@
               <span>{{ option.label }}</span>
             <span class="event-filter-count"><SkeletonBlock v-if="summaryLoading" width="2ch" inline /><template v-else>{{ summaryResponse ? formatNumber(resultOptionCount(option.value)) : "—" }}</template></span>
           </button>
+        </div>
+        <div class="event-search">
+          <Search :size="14" class="event-search-icon" aria-hidden="true" />
+          <input
+            v-model="searchDraft"
+            type="search"
+            class="input event-search-input"
+            placeholder="搜索消息、回复或消息号"
+            aria-label="搜索事件"
+            @keyup.enter="applySearch"
+            @search="applySearch"
+          />
         </div>
       </section>
 
@@ -701,7 +716,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, inject, nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
 import { botScope } from "../lib/bot-scope";
 import type { Component } from "vue";
 import {
@@ -748,7 +763,7 @@ import { formatClock, formatNumber, formatTime } from "../lib/format";
 import { cacheUtilization, eventPurposeTokens, groupCacheByPurpose } from "../lib/llm-usage";
 import { askConfirm } from "../lib/confirm";
 import { compactID, displayMessageText, displayChatIdentity } from "../lib/message-display";
-import { currentView, navigate } from "../router";
+import { currentView, navigate, viewQuery } from "../router";
 import { recordsActionsHost } from "../lib/records-actions";
 import { onLiveEvent, stream } from "../lib/stream";
 import { createLiveEventSync, hasUnlistedNewest, isSameLiveEvent, type LiveEventRef } from "../lib/live-events";
@@ -757,14 +772,28 @@ import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
+import DateRangePicker from "../components/DateRangePicker.vue";
 
-const rangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
-  { value: "1h", label: "最近 1h" },
+// 常用四档平铺，其余跨度、自定义日期与全部时间收进下拉框，避免窄栏撑出横向滚动条。
+const quickRangeOptions: Array<{ value: AssistantEventRange; label: string }> = [
+  { value: "today", label: "今日" },
   { value: "24h", label: "24h" },
-  { value: "7d", label: "7d" },
-  { value: "30d", label: "30d" },
-  { value: "all", label: "更久" }
+  { value: "7d", label: "7 天" },
+  { value: "30d", label: "30 天" }
 ];
+
+const extraRangeOptions: AppSelectOption[] = [
+  { value: "1h", label: "最近 1 小时" },
+  { value: "12h", label: "最近 12 小时" },
+  { value: "90d", label: "最近 90 天" },
+  { value: "365d", label: "近一年" },
+  { value: "custom", label: "自定义日期" },
+  { value: "all", label: "全部时间" }
+];
+
+const extraRangeSet = new Set<AssistantEventRange>(["1h", "12h", "90d", "365d", "custom", "all"]);
+const validEventRanges = new Set<AssistantEventRange>(["today", "1h", "12h", "24h", "7d", "30d", "90d", "365d", "custom", "all"]);
+const validEventResults = new Set<AssistantEventResultFilter>(["all", "replied", "not_replied", "pending", "error", "notice"]);
 
 const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }> = [
   { value: "all", label: "全部" },
@@ -776,8 +805,15 @@ const resultOptions: Array<{ value: AssistantEventResultFilter; label: string }>
 ];
 
 const selectedRange = ref<AssistantEventRange>("24h");
+const extraRangeValue = computed(() => (extraRangeSet.has(selectedRange.value) ? selectedRange.value : ""));
+const customFrom = ref("");
+const customTo = ref("");
+const datePickerSignal = ref(0);
+const exactSince = ref("");
+const exactUntil = ref("");
 const selectedResult = ref<AssistantEventResultFilter>("all");
 const selectedGroup = ref("");
+const pendingFlashEventID = ref("");
 // 搜索按回车提交，不做输入即查：事件表没有全文索引，每敲一个字就查一次
 // 既慢又会把结果刷得跳来跳去。
 const searchDraft = ref("");
@@ -874,7 +910,24 @@ const summary = computed(() => ({
 }));
 const hasMore = computed(() => response.value?.has_more ?? false);
 const filteredTotal = computed(() => summaryResponse.value?.filtered_total ?? summary.value.total);
-const rangeDescription = computed(() => rangeOptions.find((item) => item.value === selectedRange.value)?.label ?? "当前范围");
+const rangeDescription = computed(() => {
+  if (selectedRange.value === "custom" && (customFrom.value || customTo.value)) {
+    return `${customFrom.value || "起点"} ~ ${customTo.value || "今天"}`;
+  }
+  const labels: Record<AssistantEventRange, string> = {
+    today: "今日",
+    "1h": "最近 1 小时",
+    "12h": "最近 12 小时",
+    "24h": "最近 24 小时",
+    "7d": "最近 7 天",
+    "30d": "最近 30 天",
+    "90d": "最近 90 天",
+    "365d": "近一年",
+    custom: "自定义范围",
+    all: "全部时间"
+  };
+  return labels[selectedRange.value] ?? "当前范围";
+});
 const selectedResultLabel = computed(() => resultOptions.find((item) => item.value === selectedResult.value)?.label ?? "全部");
 const resultCountText = computed(() => {
   const prefix = selectedResult.value === "all" ? "已显示" : selectedResultLabel.value;
@@ -1187,10 +1240,58 @@ function recallActorText(event: AssistantEventDetail): string {
   return `${identity}${role ? `（${role}）` : ""} 撤回了 ${event.sender_name?.trim() || event.user_id || "一名成员"} 的消息`;
 }
 
+function localDayStart(value: string): Date | null {
+  const [year, month, day] = value.split("-").map(Number);
+  return year && month && day ? new Date(year, month - 1, day) : null;
+}
+
+function formatLocalDateInput(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function activeCustomBounds(): { since?: string; until?: string } | undefined {
+  if (selectedRange.value !== "custom") return undefined;
+  if (exactSince.value || exactUntil.value) {
+    return { since: exactSince.value || undefined, until: exactUntil.value || undefined };
+  }
+  const from = localDayStart(customFrom.value);
+  const to = localDayStart(customTo.value);
+  if (to) to.setDate(to.getDate() + 1);
+  if (!from && !to) return undefined;
+  return { since: from?.toISOString(), until: to?.toISOString() };
+}
+
+function onCustomDateChange(): void {
+  exactSince.value = "";
+  exactUntil.value = "";
+  events.value = [];
+  response.value = null;
+  void load(true);
+}
+
+async function scrollToPendingFlashEvent(): Promise<void> {
+  const id = pendingFlashEventID.value;
+  if (!id) return;
+  await nextTick();
+  const el = document.getElementById(`event-${id}`);
+  if (el) {
+    pendingFlashEventID.value = "";
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    flashedEventID.value = id;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      flashedEventID.value = "";
+    }, 2400);
+  }
+}
+
 async function load(reset: boolean): Promise<void> {
   const generation = reset ? ++loadGeneration : loadGeneration;
   const requestedPage = reset ? 1 : page.value;
   const requestedRange = selectedRange.value;
+  const requestedBounds = activeCustomBounds();
   const requestedResult = selectedResult.value;
   const requestedGroup = selectedGroup.value;
   const requestedSearch = searchTerm.value;
@@ -1221,14 +1322,26 @@ async function load(reset: boolean): Promise<void> {
       requestedProfile,
       requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "",
       requestedSearch,
-      "list", signal
+      "list",
+      signal,
+      requestedBounds
     );
     if (generation !== loadGeneration) return;
     response.value = next;
     if (reset) {
-      void getAssistantEvents(requestedRange, requestedResult, 1, EVENT_PAGE_SIZE,
-        requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""), requestedProfile,
-        requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "", requestedSearch, "summary", signal)
+      void getAssistantEvents(
+        requestedRange,
+        requestedResult,
+        1,
+        EVENT_PAGE_SIZE,
+        requestedGroup.startsWith(USER_PREFIX) ? "" : requestedGroup.replace(GROUP_PREFIX, ""),
+        requestedProfile,
+        requestedGroup.startsWith(USER_PREFIX) ? requestedGroup.slice(USER_PREFIX.length) : "",
+        requestedSearch,
+        "summary",
+        signal,
+        requestedBounds
+      )
         .then((stats) => { if (generation === loadGeneration) summaryResponse.value = stats; })
         .catch((error) => { if (generation === loadGeneration) toastError(error instanceof Error ? error.message : "统计加载失败"); })
         .finally(() => { if (generation === loadGeneration) summaryLoading.value = false; });
@@ -1241,6 +1354,7 @@ async function load(reset: boolean): Promise<void> {
       events.value = [...events.value, ...next.events.filter((item) => !seen.has(item.id))];
     }
     page.value = next.has_more ? next.page + 1 : next.page;
+    void scrollToPendingFlashEvent();
   } catch (error) {
     if (generation === loadGeneration) {
       summaryLoading.value = false;
@@ -1255,11 +1369,29 @@ async function load(reset: boolean): Promise<void> {
 }
 
 function selectRange(value: AssistantEventRange): void {
+  if (value === "custom") {
+    if (!customFrom.value && !customTo.value && !exactSince.value && !exactUntil.value) {
+      const now = new Date();
+      const weekAgo = new Date(now.getTime() - 6 * 86_400_000);
+      customFrom.value = formatLocalDateInput(weekAgo.toISOString());
+      customTo.value = formatLocalDateInput(now.toISOString());
+    }
+    datePickerSignal.value++;
+  }
   if (selectedRange.value === value) return;
   selectedRange.value = value;
+  if (value !== "custom") {
+    exactSince.value = "";
+    exactUntil.value = "";
+  }
   events.value = [];
   response.value = null;
   void load(true);
+}
+
+function onSelectExtraRange(value: string): void {
+  if (!value) return;
+  selectRange(value as AssistantEventRange);
 }
 
 function selectResult(value: AssistantEventResultFilter): void {
@@ -2033,14 +2165,16 @@ async function refreshListedEvent(ref: LiveEventRef): Promise<void> {
   const generation = loadGeneration;
   let fresh: AssistantEventsResponse;
   try {
-    fresh = await getAssistantEvents(selectedRange.value, "all", 1, 20, "", botScope.value, "", messageID, "list");
+    fresh = await getAssistantEvents(selectedRange.value, "all", 1, 20, "", botScope.value, "", messageID, "list", undefined, activeCustomBounds());
   } catch {
     return; // 静默补刷，失败了手动刷新还在
   }
   if (generation !== loadGeneration) return;
+  let updatedAny = false;
   for (const item of fresh.events) {
     const index = events.value.findIndex((event) => event.id === item.id);
     if (index < 0) continue;
+    updatedAny = true;
     const previous = events.value[index];
     events.value[index] = { ...item, memories: item.memories ?? previous.memories, temporary_memories: item.temporary_memories ?? previous.temporary_memories };
     if (traceExpanded(events.value[index])) {
@@ -2048,6 +2182,24 @@ async function refreshListedEvent(ref: LiveEventRef): Promise<void> {
     } else {
       traceLoaded.value = { ...traceLoaded.value, [item.id]: false };
     }
+  }
+  if (updatedAny) {
+    // 卡片从「等待处理 / 排队等接话判断」落定后，顶部状态计数和 Token 合计同步跟上。
+    void getAssistantEvents(
+      selectedRange.value,
+      selectedResult.value,
+      1,
+      EVENT_PAGE_SIZE,
+      selectedGroup.value.startsWith(USER_PREFIX) ? "" : selectedGroup.value.replace(GROUP_PREFIX, ""),
+      botScope.value,
+      selectedGroup.value.startsWith(USER_PREFIX) ? selectedGroup.value.slice(USER_PREFIX.length) : "",
+      searchTerm.value,
+      "summary",
+      undefined,
+      activeCustomBounds()
+    )
+      .then((stats) => { if (generation === loadGeneration) summaryResponse.value = stats; })
+      .catch(() => {});
   }
 }
 
@@ -2069,11 +2221,79 @@ async function checkForNewEvents(): Promise<void> {
   if (hasUnlistedNewest(latest.events[0], events.value.map((event) => event.id))) pendingLiveEvents.value = true;
 }
 
+// 支持从总览页带着筛选条件深链跳转（result、range、from/to、since/until、group、user、q、event）。
+function seedQueryFromLocation(): boolean {
+  const params = viewQuery();
+  if (params.size === 0) return false;
+  let changed = false;
+  const nextResult = params.get("result");
+  if (nextResult && validEventResults.has(nextResult as AssistantEventResultFilter)) {
+    selectedResult.value = nextResult as AssistantEventResultFilter;
+    changed = true;
+  }
+  const paramSince = params.get("since") ?? "";
+  const paramUntil = params.get("until") ?? "";
+  const paramFrom = params.get("from") ?? "";
+  const paramTo = params.get("to") ?? "";
+  const nextRange = params.get("range");
+  if (paramSince || paramUntil) {
+    selectedRange.value = "custom";
+    exactSince.value = paramSince;
+    exactUntil.value = paramUntil;
+    customFrom.value = paramFrom || (paramSince ? formatLocalDateInput(paramSince) : "");
+    customTo.value = paramTo || (paramUntil ? formatLocalDateInput(new Date(new Date(paramUntil).getTime() - 1).toISOString()) : "");
+    changed = true;
+  } else if (paramFrom || paramTo) {
+    selectedRange.value = "custom";
+    exactSince.value = "";
+    exactUntil.value = "";
+    customFrom.value = paramFrom;
+    customTo.value = paramTo;
+    changed = true;
+  } else if (nextRange && validEventRanges.has(nextRange as AssistantEventRange)) {
+    selectedRange.value = nextRange as AssistantEventRange;
+    exactSince.value = "";
+    exactUntil.value = "";
+    changed = true;
+  }
+  const paramGroup = (params.get("group") ?? "").trim();
+  const paramUser = (params.get("user") ?? "").trim();
+  if (paramGroup) {
+    selectedGroup.value = paramGroup.startsWith(GROUP_PREFIX) ? paramGroup : GROUP_PREFIX + paramGroup;
+    changed = true;
+  } else if (paramUser) {
+    selectedGroup.value = paramUser.startsWith(USER_PREFIX) ? paramUser : USER_PREFIX + paramUser;
+    changed = true;
+  } else if (params.has("group") || params.has("user")) {
+    selectedGroup.value = "";
+    changed = true;
+  }
+  if (params.has("q")) {
+    const keyword = (params.get("q") ?? "").trim();
+    searchDraft.value = keyword;
+    searchTerm.value = keyword;
+    changed = true;
+  }
+  if (params.has("event")) {
+    pendingFlashEventID.value = (params.get("event") ?? "").trim();
+    changed = true;
+  }
+  return changed;
+}
+
 onMounted(() => {
   document.addEventListener("keydown", onImageKeydown);
+  seedQueryFromLocation();
   void load(true);
 });
 onActivated(() => {
+  const seeded = seedQueryFromLocation();
+  if (seeded) {
+    events.value = [];
+    response.value = null;
+    void load(true);
+    return;
+  }
   if (loading.value && loadGeneration > 0) return;
   const stale = Date.now() - lastLoadedAt >= REACTIVATE_REFRESH_INTERVAL_MS;
   if (events.value.length === 0 || !summaryResponse.value || pendingLiveEvents.value || stale) {
@@ -2121,9 +2341,10 @@ onBeforeUnmount(() => {
    按钮和一个写着「全部会话」的下拉，本来就不需要再标注。 */
 .event-search {
   position: relative;
-  flex: 1 1 160px;
+  width: 100%;
   min-width: 0;
-  max-width: 280px;
+  max-width: 320px;
+  margin-top: 2px;
 }
 
 .event-search-icon {
@@ -2441,8 +2662,19 @@ onBeforeUnmount(() => {
 }
 
 .event-range button {
-  min-width: 74px;
+  min-width: 52px;
   white-space: nowrap;
+}
+
+.event-extra-range {
+  width: 124px;
+  min-width: 116px;
+}
+
+.event-extra-range.is-selected :deep(.app-select-trigger) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  background: var(--accent-soft);
 }
 
 .event-result-filter button {

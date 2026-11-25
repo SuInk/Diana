@@ -114,27 +114,44 @@ const after = (minutes: number) => new Date(now + minutes * 60_000).toISOString(
 
 function demoUsageBreakdown(usage: LLMUsageCounters): LLMUsageBreakdown[] {
   const templates = [
-    { purpose: "reply", model: "gpt-6-sol", share: 0.6 },
-    { purpose: "proactive_reply_router", model: "gpt-5.6-terra", share: 0.24 },
-    { purpose: "memory_extract", model: "gpt-5.6-terra", share: 0.1 },
-    { purpose: "image_generate", model: "gpt-image-2", share: 0.06 }
+    { purpose: "reply", provider: "openai_compatible", model: "gpt-6-sol", share: 0.46, tps: 54.2, ttft: 680 },
+    { purpose: "reply", provider: "anthropic", model: "claude-sonnet-5", share: 0.16, tps: 46.8, ttft: 810 },
+    { purpose: "proactive_reply_router", provider: "openai_compatible", model: "gpt-5.6-terra", share: 0.22, tps: 78.5, ttft: 420 },
+    { purpose: "memory_extract", provider: "openai_compatible", model: "gpt-5.6-terra", share: 0.1, tps: 62.0, ttft: 510 },
+    { purpose: "image_generate", provider: "openai_compatible", model: "gpt-image-2", share: 0.06, tps: 0, ttft: 0 }
   ];
   const remaining = { ...usage };
+  const totalFailed = usage.failed_calls ?? 0;
+  let remainingFailed = totalFailed;
   return templates.map((template, index) => {
     const last = index === templates.length - 1;
     const calls = last ? remaining.calls : Math.floor(usage.calls * template.share);
     const input = last ? remaining.input_tokens : Math.floor(usage.input_tokens * template.share);
     const output = last ? remaining.output_tokens : Math.floor(usage.output_tokens * template.share);
     const cached = last ? remaining.cached_input_tokens : Math.floor(usage.cached_input_tokens * template.share);
+    const failed = last ? remainingFailed : Math.floor(totalFailed * template.share);
     remaining.calls -= calls;
     remaining.input_tokens -= input;
     remaining.output_tokens -= output;
     remaining.cached_input_tokens -= cached;
+    remainingFailed -= failed;
+    const durationMS = template.tps > 0 && output > 0 ? Math.round((output * 1000) / template.tps) : 0;
     return {
-      purpose: template.purpose, provider: "openai_compatible", model: template.model,
-      recorded_calls: calls, input_tokens: input, output_tokens: output,
-      cached_input_tokens: cached, total_tokens: input + output,
-      missing_usage_calls: last ? usage.missing_usage_calls : 0
+      purpose: template.purpose,
+      provider: template.provider,
+      model: template.model,
+      recorded_calls: calls,
+      input_tokens: input,
+      output_tokens: output,
+      cached_input_tokens: cached,
+      total_tokens: input + output,
+      missing_usage_calls: last ? usage.missing_usage_calls : 0,
+      failed_calls: failed,
+      recovered_calls: failed > 0 ? Math.ceil(failed * 0.6) : 0,
+      duration_ms: durationMS,
+      output_tokens_per_second: durationMS > 0 ? template.tps : 0,
+      avg_ttft_ms: template.ttft > 0 && calls > 0 ? template.ttft : 0,
+      ttft_calls: template.ttft > 0 ? calls : 0
     };
   });
 }
@@ -695,8 +712,8 @@ const demoRelationshipEvaluations: RelationshipEvaluation[] = [
 ];
 
 export const demoEvents: AssistantEventDetail[] = [
-  { id: "demo-event-qq-official", at: before(1.5), kind: "group", platform: "qq-official", profile_id: "bot-onebot", group_id: "D7A4E09C3B2F48A1965C0E7B13F2A8D4", group_name: "官方机器人测试群", user_id: "5F1C8E2A9B7D4630A1E2C3D4B5F60718", sender_name: "小满", message_id: "ROBOT1.0_demoXq7Lm2Pz9Rt4Vw8Yb3Nc6Kd1Fg5Hj0Ss.eUoIaQwErTyUiOpAsDfGhJkLzXcVbNm_demoMessageIdFromQQOfficialGateway", text: "@Diana 官方机器人这边也能用吗", reply: "能用的，私聊还会边生成边显示～", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent。", duration_ms: 2100, llm_calls: 1, tool_calls: 0, input_tokens: 1820, output_tokens: 96, total_tokens: 1916, reply_models: ["gpt-5.6-terra"], outbound_message_id: "ROBOT1.0_demoOutboundAb12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90Uv12Wx34Yz56_demoOutboundMessageId!!,ROBOT1.0_demoOutboundZz98Yy76Xx54Ww32Vv10Uu98Tt76Ss54Rr32Qq10Pp98Oo76_demoSecondOutboundId!!" },
-  { id: "demo-event-1", subtasks: [{ task_id: "demo-research-1", kind: "subtask", name: "子任务调研", phase: "completed", detail: "核实今天的发布变更（演示）", started_at: before(2.1), updated_at: before(2.02), finished_at: before(2.02) }], at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "检测到显式 @机器人，直接进入主 Agent；问题需要读取仓库近期变更后回答。", duration_ms: 6800, llm_calls: 2, tool_calls: 1, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.6-terra"], models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
+  { id: "demo-event-qq-official", at: before(1.5), kind: "group", platform: "qq-official", profile_id: "bot-onebot", group_id: "D7A4E09C3B2F48A1965C0E7B13F2A8D4", group_name: "官方机器人测试群", user_id: "5F1C8E2A9B7D4630A1E2C3D4B5F60718", sender_name: "小满", message_id: "ROBOT1.0_demoXq7Lm2Pz9Rt4Vw8Yb3Nc6Kd1Fg5Hj0Ss.eUoIaQwErTyUiOpAsDfGhJkLzXcVbNm_demoMessageIdFromQQOfficialGateway", text: "@Diana 官方机器人这边也能用吗", reply: "能用的，私聊还会边生成边显示～", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "群消息显式提及了机器人", duration_ms: 2100, llm_calls: 1, tool_calls: 0, input_tokens: 1820, output_tokens: 96, total_tokens: 1916, reply_models: ["gpt-5.6-terra"], outbound_message_id: "ROBOT1.0_demoOutboundAb12Cd34Ef56Gh78Ij90Kl12Mn34Op56Qr78St90Uv12Wx34Yz56_demoOutboundMessageId!!,ROBOT1.0_demoOutboundZz98Yy76Xx54Ww32Vv10Uu98Tt76Ss54Rr32Qq10Pp98Oo76_demoSecondOutboundId!!" },
+  { id: "demo-event-1", subtasks: [{ task_id: "demo-research-1", kind: "subtask", name: "子任务调研", phase: "completed", detail: "核实今天的发布变更（演示）", started_at: before(2.1), updated_at: before(2.02), finished_at: before(2.02) }], at: before(2), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7319", text: "@Diana 帮我总结一下今天的发布变更", reply: "今天的更新重点是事件原因审计、仓库动态订阅和多通道会话隔离。引用消息同时 @机器人时也会正确进入主 Agent。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "群消息显式提及了机器人", duration_ms: 6800, llm_calls: 2, tool_calls: 1, input_tokens: 2470, output_tokens: 376, total_tokens: 2846, reply_models: ["gpt-5.6-terra"], models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7319", self_echo_at: before(1) },
   { id: "demo-event-2", at: before(9), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200418", user_id: "100200812", sender_name: "栖迟", message_id: "demo-7298", text: "[图片]", handled: false, status: "ignored", outcome: "bot_message_ignored", decision: "not_replied", reason: "识别为其他机器人发送的自动消息；“识别机器人后不回复”已启用，因此未启动视觉模型和主 Agent。", duration_ms: 42, llm_calls: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0 },
   { id: "demo-event-image-cache", at: before(12), kind: "group", platform: "telegram", profile_id: "bot-telegram", group_id: "-100200620", user_id: "880031", sender_name: "Kana", message_id: "demo-tg-131", text: "分流出口，指 ai 服务代理到 us（", handled: false, status: "ignored", outcome: "ignored", decision: "not_replied", reason: "规则触发：基础概率 15%，本条 14%（对此人回复疲劳 0.05 ×0.96），命中=false，未调用接话评分", duration_ms: 3000, llm_calls: 1, input_tokens: 1594, output_tokens: 739, total_tokens: 2333, cached_input_tokens: 448, models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], purposes: [{ purpose: "image_description_cache", calls: 1, input_tokens: 1594, cached_input_tokens: 448, total_tokens: 2333 }] },
   { id: "demo-event-3", at: before(18), kind: "private", platform: "telegram", profile_id: "bot-telegram", user_id: "880024", sender_name: "Demo User", message_id: "demo-tg-114", text: "Zeabur 最近有什么产品更新？", edited: true, edit_time: before(15), reply: "我检索了官方更新渠道，并按发布时间整理了近期变化；真实服务会在回答中保留来源链接。", handled: true, status: "replied", outcome: "replied", decision: "replied", reason: "此机器人已启用私聊；问题包含时效性要求，Agent 先调用内置联网搜索再组织答案。", duration_ms: 8200, llm_calls: 2, input_tokens: 2844, output_tokens: 387, total_tokens: 3231, reply_models: ["claude-sonnet-5"], models: [{ model: "claude-sonnet-5", provider: "anthropic", calls: 2 }], delivery_stage: "acknowledged", outbound_message_id: "demo-tg-out-114" },
@@ -705,7 +722,8 @@ export const demoEvents: AssistantEventDetail[] = [
   { id: "demo-event-quote-7240", at: before(40), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7240", text: "那 Zeabur 自己的控制台也是这个路子吗", quote: { message_id: "demo-out-7166", user_id: "3129583166", sender_name: "Diana", text: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。" }, handled: false, status: "done", outcome: "not_replied", decision: "not_replied", reason: "引用的是机器人的回复，但只是在和其他群友讨论，主动回复判断认为不必插话。", duration_ms: 1200 },
   // 撤回机器人回复的通知：控制台会把它合进 demo-event-5，不单独占一行。
   { id: "demo-event-recall-7167", at: before(45), kind: "notice", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "3129583166", sender_name: "Diana", message_id: "demo-out-7167", sub_type: "group_recall", original_time: before(47), operator_id: "100201014", operator_name: "白榆", operator_role: "group_admin", text: "", handled: false, status: "done", outcome: "notice_group_recall", decision: "notice", reason: "已记录平台通知" },
-  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, reply_models: ["gpt-5.6-terra"], models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166,demo-out-7167", delivery: { messages: 2, images: 1, media: [{ kind: "image", label: "表情包：懂了" }] }, recalls: [{ message_id: "demo-out-7167", at: before(45), operator_id: "100201014", operator_name: "白榆", operator_role: "group_admin" }] }
+  { id: "demo-event-5", at: before(47), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100201014", sender_name: "白榆", message_id: "demo-7166", text: "Zeabur 风味是什么", reply: "如果是在说产品界面，通常指偏开发者工具的克制布局：高信息密度、明确状态和较少装饰。", handled: true, status: "replied", outcome: "proactive_replied", decision: "replied", reason: "短句虽未显式 @机器人，但包含可回答的产品语境问题；主动回复判断认为应该参与。", duration_ms: 4900, llm_calls: 2, input_tokens: 1671, output_tokens: 237, total_tokens: 1908, reply_models: ["gpt-5.6-terra"], models: [{ model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }, { model: "gpt-5.6-terra", provider: "openai_compatible", calls: 1 }], delivery_stage: "echo_persisted", outbound_message_id: "demo-out-7166,demo-out-7167", delivery: { messages: 2, images: 1, media: [{ kind: "image", label: "表情包：懂了" }] }, recalls: [{ message_id: "demo-out-7167", at: before(45), operator_id: "100201014", operator_name: "白榆", operator_role: "group_admin" }] },
+  { id: "demo-event-err-1", at: before(84), kind: "group", platform: "onebot-v11", profile_id: "bot-onebot", group_id: "100200301", user_id: "100200711", sender_name: "青禾", message_id: "demo-7150", text: "@Diana 帮我跑一遍最近的仓库巡检摘要", handled: false, status: "done", outcome: "processing_error", decision: "error", reason: "消息处理失败：上游网关超时 504 Gateway Timeout（模拟数据）", error: "upstream request timed out: 504 Gateway Timeout（模拟数据）", duration_ms: 15200 }
 ];
 
 const trace: AppLogEntry[] = [
@@ -878,7 +896,7 @@ function demoActivity(groupID: string) {
   const scale = groupID ? 0.25 + (Number(groupID.slice(-2)) % 4) * 0.1 : 1;
   const weekdayCurve = [2, 1, 0, 0, 0, 0, 1, 4, 9, 12, 14, 18, 26, 20, 13, 12, 14, 16, 19, 24, 31, 36, 28, 12];
   const weekendCurve = [9, 5, 2, 1, 0, 0, 0, 1, 3, 6, 11, 17, 21, 22, 23, 22, 20, 21, 24, 29, 34, 37, 33, 20];
-  const window = (id: "7d" | "28d", weeks: number) => {
+  const window = (id: "7d" | "28d" | "84d", weeks: number) => {
     const cells = Array.from({ length: 7 }, (_, day) =>
       Array.from({ length: 24 }, (_, hour) => {
         const base = (day >= 5 ? weekendCurve : weekdayCurve)[(hour + (groupID ? 1 : 0)) % 24];
@@ -899,20 +917,27 @@ function demoActivity(groupID: string) {
   const pad = (value: number) => String(value).padStart(2, "0");
   const dateKey = (date: Date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
   const days: { date: string; count: number }[] = [];
+  const token_days: { date: string; count: number }[] = [];
   for (let offset = 200; offset >= 0; offset--) {
     const date = new Date(until.getFullYear(), until.getMonth(), until.getDate() - offset);
     const weekend = date.getDay() === 0 || date.getDay() === 6;
     const wave = (offset * 37) % 11;
     if (wave === 3) continue;
     const count = Math.round((weekend ? 420 : 260) * (0.4 + wave / 10) * (1 - offset / 400) * scale);
-    if (count > 0) days.push({ date: dateKey(date), count });
+    const key = dateKey(date);
+    if (count > 0) {
+      days.push({ date: key, count });
+      const tokens = Math.round(count * (1_180 + ((offset * 19) % 7) * 140));
+      token_days.push({ date: key, count: tokens });
+    }
   }
   return {
     until: until.toISOString(),
     today: dateKey(until),
     utc_offset: "+08:00",
-    windows: [window("7d", 1), window("28d", 4)],
-    days
+    windows: [window("7d", 1), window("28d", 4), window("84d", 12)],
+    days,
+    token_days
   };
 }
 
@@ -978,7 +1003,13 @@ function demoLatency() {
   };
   return {
     until,
-    windows: [latencyWindow("1h", 60, 1.08, 0.94, 33), latencyWindow("24h", 1440, 1, 1.02, 694), latencyWindow("7d", 10_080, 0.97, 1.21, 4_812)]
+    windows: [
+      latencyWindow("1h", 60, 1.08, 0.94, 33),
+      latencyWindow("24h", 1440, 1, 1.02, 694),
+      latencyWindow("7d", 10_080, 0.97, 1.21, 4_812),
+      latencyWindow("30d", 43_200, 0.95, 1.04, 18_940),
+      latencyWindow("90d", 129_600, 0.93, 1.01, 51_280)
+    ]
   };
 }
 
@@ -1795,9 +1826,190 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     }));
     return json({ until, ranges });
   }
+  if (path === "/api/stats/overview") {
+    const rng = url.searchParams.get("range") ?? "today";
+    const profileId = url.searchParams.get("profile_id") ?? "";
+    const reqGranularity = url.searchParams.get("granularity") ?? "";
+    const botFactor = profileId === "bot-onebot" ? 0.75 : profileId === "bot-telegram" ? 0.25 : profileId ? 0.1 : 1;
+    const spanMinutesMap: Record<string, number> = {
+      today: 960,
+      "1h": 60,
+      "12h": 720,
+      "24h": 1440,
+      "7d": 10_080,
+      "30d": 43_200,
+      "90d": 129_600,
+      "365d": 525_600,
+      custom: 10_080
+    };
+    const rawSince = url.searchParams.get("since") ?? "";
+    const rawUntil = url.searchParams.get("until") ?? "";
+    const parsedSince = rawSince ? new Date(rawSince) : null;
+    const parsedUntil = rawUntil ? new Date(rawUntil) : null;
+    const customMinutes =
+      parsedSince && parsedUntil && !Number.isNaN(parsedSince.getTime()) && !Number.isNaN(parsedUntil.getTime()) && parsedUntil > parsedSince
+        ? Math.max(60, Math.round((parsedUntil.getTime() - parsedSince.getTime()) / 60_000))
+        : 0;
+    const spanMinutes = customMinutes || (spanMinutesMap[rng] ?? 1440);
+    const scale = Math.max(0.05, spanMinutes / 1440) * botFactor;
+    const granularity: "hour" | "day" =
+      reqGranularity === "hour" || reqGranularity === "day"
+        ? reqGranularity
+        : spanMinutes <= 2880
+          ? "hour"
+          : "day";
+    const untilDate = customMinutes && parsedUntil ? parsedUntil : new Date();
+    const sinceDate = customMinutes && parsedSince ? parsedSince : new Date(untilDate.getTime() - spanMinutes * 60_000);
+    const messages = Math.max(1, Math.round(1180 * scale));
+    const handled = Math.max(1, Math.round(312 * scale));
+    const eventErrors = Math.max(0, Math.round(Math.min(18, 2 * Math.sqrt(scale))));
+    const calls = Math.max(1, Math.round(480 * scale));
+    const failedCalls = Math.max(0, Math.round(calls * 0.014));
+    const recoveredCalls = Math.ceil(failedCalls * 0.65);
+    const input = Math.round(1_520_000 * scale);
+    const output = Math.round(118_000 * scale);
+    const cached = Math.round(input * 0.58);
+    const totalTokens = input + output;
+    const appErrors = Math.max(0, Math.round(Math.min(12, 1.5 * Math.sqrt(scale))));
+    const breakdown = demoUsageBreakdown({
+      calls,
+      input_tokens: input,
+      output_tokens: output,
+      cached_input_tokens: cached,
+      total_tokens: totalTokens,
+      missing_usage_calls: 0,
+      failed_calls: failedCalls
+    });
+    const bucketCount = granularity === "day" ? Math.min(90, Math.max(7, Math.round(spanMinutes / 1440))) : Math.min(48, Math.max(6, Math.round(spanMinutes / 60)));
+    const stepMs = granularity === "day" ? 86_400_000 : 3_600_000;
+    const trend = Array.from({ length: bucketCount }, (_, idx) => {
+      const wave = 0.55 + ((idx * 7 + 3) % 9) * 0.1;
+      const bMsg = Math.max(1, Math.round((messages / bucketCount) * wave));
+      const bHandled = Math.max(0, Math.round((handled / bucketCount) * wave));
+      const bCalls = Math.max(1, Math.round((calls / bucketCount) * wave));
+      const bIn = Math.round((input / bucketCount) * wave);
+      const bOut = Math.round((output / bucketCount) * wave);
+      return {
+        start_unix: Math.floor((untilDate.getTime() - (bucketCount - idx) * stepMs) / 1000),
+        messages: bMsg,
+        handled: bHandled,
+        errors: idx === bucketCount - 2 && eventErrors > 0 ? 1 : 0,
+        calls: bCalls,
+        failed_calls: idx % 9 === 4 && failedCalls > 0 ? 1 : 0,
+        app_errors: idx === bucketCount - 4 && appErrors > 0 ? 1 : 0,
+        input_tokens: bIn,
+        output_tokens: bOut,
+        cached_input_tokens: Math.round(bIn * 0.58),
+        total_tokens: bIn + bOut
+      };
+    });
+    const activeGroupSource = profileId === "bot-telegram" ? telegramGroups : groups;
+    const groupStats = activeGroupSource.map((grp, idx) => {
+      const share = Math.max(0.08, 0.45 - idx * 0.11);
+      const gIn = Math.round(input * share);
+      const gOut = Math.round(output * share);
+      return {
+        profile_id: grp.bot_profile_id ?? (profileId || "bot-onebot"),
+        platform: profileId === "bot-telegram" ? "telegram" : "onebot-v11",
+        group_id: grp.group_id,
+        group_name: grp.group_name,
+        messages: Math.max(1, Math.round(messages * share)),
+        handled: Math.max(1, Math.round(handled * share)),
+        errors: idx === 0 && eventErrors > 0 ? 1 : 0,
+        recorded_calls: Math.max(1, Math.round(calls * share)),
+        failed_calls: idx === 0 ? Math.min(failedCalls, 2) : 0,
+        input_tokens: gIn,
+        output_tokens: gOut,
+        cached_input_tokens: Math.round(gIn * 0.58),
+        total_tokens: gIn + gOut
+      };
+    });
+    return json({
+      range: rng,
+      utc_offset: "+08:00",
+      granularity,
+      current: {
+        since: sinceDate.toISOString(),
+        until: untilDate.toISOString(),
+        messages,
+        handled,
+        not_replied: Math.max(0, messages - handled - eventErrors),
+        pending: 0,
+        errors: eventErrors,
+        active_groups: groupStats.length,
+        active_users: Math.max(2, Math.round(28 * Math.min(4, Math.sqrt(scale * 4)))),
+        avg_reply_ms: 5_180,
+        replies_measured: handled,
+        app_error_logs: appErrors,
+        usage: {
+          since: sinceDate.toISOString(),
+          until: untilDate.toISOString(),
+          recorded_calls: calls,
+          input_tokens: input,
+          output_tokens: output,
+          total_tokens: totalTokens,
+          cached_input_tokens: cached,
+          usage_missing_calls: 0,
+          failed_calls: failedCalls,
+          recovered_calls: recoveredCalls,
+          duration_ms: Math.round((output * 1000) / 56.4),
+          output_tokens_per_second: 56.4,
+          avg_ttft_ms: 640,
+          ttft_calls: calls,
+          breakdown
+        }
+      },
+      previous: {
+        since: new Date(sinceDate.getTime() - spanMinutes * 60_000).toISOString(),
+        until: sinceDate.toISOString(),
+        messages: Math.round(messages * 0.91),
+        handled: Math.round(handled * 0.88),
+        errors: Math.max(0, eventErrors - 1),
+        avg_reply_ms: 5_460,
+        replies_measured: Math.round(handled * 0.88),
+        recorded_calls: Math.round(calls * 0.9),
+        failed_calls: Math.max(0, failedCalls - 1),
+        total_tokens: Math.round(totalTokens * 0.89),
+        app_error_logs: appErrors
+      },
+      trend,
+      groups: groupStats,
+      errors: {
+        event_errors: eventErrors,
+        llm_failed_calls: failedCalls,
+        llm_recovered_calls: recoveredCalls,
+        app_error_logs: appErrors,
+        categories: [
+          ...(failedCalls > 0
+            ? [{ source: "llm", key: "llm:gpt-6-sol", label: "模型调用失败 · gpt-6-sol", model: "gpt-6-sol", purpose: "reply", action: "llm_call_failed", count: failedCalls, recovered_count: recoveredCalls, latest_at: before(9), sample: "429 Too Many Requests: rate limit exceeded（模拟数据）" }]
+            : []),
+          ...(eventErrors > 0
+            ? [{ source: "event", key: "event:processing_error", label: "消息处理异常 · 消息处理失败", action: "processing_error", count: eventErrors, latest_at: before(84), sample: "upstream request timed out: 504 Gateway Timeout（模拟数据）" }]
+            : []),
+          ...(appErrors > 0
+            ? [{ source: "log", key: "log:delivery_retry", label: "运行错误 · delivery_retry", action: "delivery_retry", count: appErrors, latest_at: before(240), sample: "原始错误：temporary network failure（模拟数据）" }]
+            : [])
+        ],
+        recent: [
+          ...(failedCalls > 0
+            ? [{ id: "llm-call-004", at: before(9), source: "llm", action: "llm_call_failed", message: "模型「gpt-6-sol」调用失败", detail: "429 Too Many Requests: rate limit exceeded（模拟数据）", model: "gpt-6-sol", provider: "openai_compatible", purpose: "reply", group_id: "100200301", group_name: "周末摸鱼群", recovered: true }]
+            : []),
+          ...(eventErrors > 0
+            ? [{ id: "demo-event-err-1", at: before(84), source: "event", outcome: "processing_error", message: "消息处理失败：upstream request timed out: 504 Gateway Timeout（模拟数据）", detail: "upstream request timed out: 504 Gateway Timeout（模拟数据）", profile_id: "bot-onebot", group_id: "100200301", group_name: "周末摸鱼群", message_id: "demo-7150" }]
+            : []),
+          ...(appErrors > 0
+            ? [{ id: "log-error-1", at: before(240), source: "log", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）" }]
+            : [])
+        ]
+      }
+    });
+  }
   if (path === "/api/stats/latency") return json(demoLatency());
   if (path === "/api/stats/activity") return json(demoActivity(url.searchParams.get("group_id") ?? ""));
 
+  if (path === "/api/assistant/model-health/reset" && method === "POST") {
+    return json({ cleared: 1, health: { checked_at: new Date().toISOString(), candidates: [], calls: [] } });
+  }
   if (path === "/api/assistant/model-health" && method === "GET") {
     return json({
       checked_at: new Date().toISOString(),
@@ -2699,17 +2911,25 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
   if (path === "/api/assistant/events") {
     const result = url.searchParams.get("result") ?? "all";
+    const profile = (url.searchParams.get("profile") ?? "").trim();
+    const groupFilter = (url.searchParams.get("group") ?? "").trim();
+    const userFilter = (url.searchParams.get("user") ?? "").trim();
     const keyword = (url.searchParams.get("q") ?? "").trim().toLowerCase();
-    const events = demoEvents
-      .filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result)
+    const scopedBase = demoEvents
+      .filter((event) => !profile || event.profile_id === profile)
+      .filter((event) => !groupFilter || event.group_id === groupFilter)
+      .filter((event) => !userFilter || (!event.group_id && event.user_id === userFilter))
       // 演示里也让搜索可用，否则输入框看着能用、敲下去却毫无反应。
       .filter((event) => keyword === "" || [event.text, event.reply, event.sender_name, event.message_id].some((field) => (field ?? "").toLowerCase().includes(keyword)));
-    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: keyword ? events.length : 652, filtered_total: keyword ? events.length : (result === "all" ? 652 : result === "replied" ? 50 : result === "not_replied" ? 602 : 0),
-      // 搜索之后各项计数要跟着这批结果走，否则会出现「1 条事件、回复率 5000%」
+    const events = scopedBase
+      .filter((event) => result === "all" || (result === "replied" && event.decision === "replied") || (result === "not_replied" && event.decision === "not_replied") || event.decision === result);
+    const hasScope = Boolean(profile || groupFilter || userFilter || keyword);
+    return json({ range: url.searchParams.get("range") ?? "24h", result, since: before(1440), events, total: hasScope ? scopedBase.length : 653, filtered_total: hasScope ? events.length : (result === "all" ? 653 : result === "replied" ? 50 : result === "not_replied" ? 602 : result === "error" ? 1 : 0),
+      // 搜索或切会话之后各项计数要跟着这批结果走，否则会出现「1 条事件、回复率 5000%」
       // 这种一眼假的数字。
-      replied: keyword ? events.filter((event) => event.decision === "replied").length : 50,
-      not_replied: keyword ? events.filter((event) => event.decision === "not_replied").length : 602,
-      pending: 0, errors: 0, llm_calls: 49, input_tokens: 232_773, output_tokens: 10_732, total_tokens: 243_505, page: 1, limit: 50, has_more: false,
+      replied: hasScope ? scopedBase.filter((event) => event.decision === "replied").length : 50,
+      not_replied: hasScope ? scopedBase.filter((event) => event.decision === "not_replied").length : 602,
+      pending: 0, errors: hasScope ? scopedBase.filter((event) => event.decision === "error").length : 1, llm_calls: hasScope ? scopedBase.reduce((sum, item) => sum + (item.llm_calls ?? 0), 0) : 49, input_tokens: hasScope ? scopedBase.reduce((sum, item) => sum + (item.input_tokens ?? 0), 0) : 232_773, output_tokens: hasScope ? scopedBase.reduce((sum, item) => sum + (item.output_tokens ?? 0), 0) : 10_732, total_tokens: hasScope ? scopedBase.reduce((sum, item) => sum + (item.total_tokens ?? 0), 0) : 243_505, page: 1, limit: 50, has_more: false,
       // 演示里也带上会话筛选器：以前这里没有 groups，下拉框永远只有「全部会话」，
       // 看不出真实排版。
       group: url.searchParams.get("group") ?? "",
@@ -2773,9 +2993,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json(task);
   }
 
-  // 浏览器页的操作记录：按 action 和 profile 筛，和真实后端一致。
-  if (path === "/api/logs" && url.searchParams.get("action")) {
-    const actions = new Set((url.searchParams.get("action") ?? "").split(","));
+  // 浏览器页与模型容灾记录：未带 kind 时按 action 和 profile 筛；带 kind 时走下方统一日志筛选。
+  const failoverLogs: AppLogEntry[] = [
+    { id: "failover-log-1", kind: "error", level: "error", action: "llm_failover", message: "「对话主力 / gpt-6-sol」调用失败，已切到「视觉备用 / gpt-6-sol」；连续失败 2/3 次，下次照样先试它", detail: "429 Too Many Requests（模拟数据）", target: "llm-chat", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-chat", to: "llm-vision", to_model: "gpt-6-sol" }, created_at: before(18) },
+    { id: "failover-log-2", kind: "error", level: "error", action: "llm_failover", message: "「视觉备用 / gpt-6-sol」调用失败，已切到「意图识别 / gpt-5.6-terra」；冷却到 14:32", detail: "502 Bad Gateway（模拟数据）", target: "llm-vision", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-vision", to: "llm-intent", to_model: "gpt-5.6-terra" }, created_at: before(4) }
+  ];
+  if (path === "/api/logs" && url.searchParams.get("action") && !url.searchParams.get("kind")) {
+    const actions = new Set((url.searchParams.get("action") ?? "").split(",").filter(Boolean));
     const profile = url.searchParams.get("profile") ?? "";
     const browserLogs: AppLogEntry[] = [
       { id: "browser-log-1", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里打开网页", actor: "qq:100200711", actor_name: "青禾", target: "https://github.com/SuInk/Diana/releases", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(3) },
@@ -2786,14 +3010,13 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       { id: "browser-log-6", kind: "operation", level: "info", action: "browser_box_start", message: "你打开浏览器页，内置浏览器随之启动", actor: "webui:demo", target: "bot-onebot", metadata: { profile_id: "bot-onebot", source: "box" }, created_at: before(13) },
       { id: "browser-log-7", kind: "operation", level: "info", action: "browser_action", message: "机器人在内置浏览器里截图", actor: "telegram:880024", target: "", metadata: { profile_id: "bot-telegram", source: "box" }, created_at: before(40) }
     ];
-    const failoverLogs: AppLogEntry[] = [
-      { id: "failover-log-1", kind: "error", level: "error", action: "llm_failover", message: "「对话主力 / gpt-6-sol」调用失败，已切到「视觉备用 / gpt-6-sol」；连续失败 2/3 次，下次照样先试它", detail: "429 Too Many Requests（模拟数据）", target: "llm-chat", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-chat", to: "llm-vision", to_model: "gpt-6-sol" }, created_at: before(18) },
-      { id: "failover-log-2", kind: "error", level: "error", action: "llm_failover", message: "「视觉备用 / gpt-6-sol」调用失败，已切到「意图识别 / gpt-5.6-terra」；冷却到 14:32", detail: "502 Bad Gateway（模拟数据）", target: "llm-vision", metadata: { group: "chat", model: "gpt-6-sol", from: "llm-vision", to: "llm-intent", to_model: "gpt-5.6-terra" }, created_at: before(4) }
-    ];
     return json({ logs: [...browserLogs, ...failoverLogs].sort((a, b) => b.created_at.localeCompare(a.created_at)).filter((log) => actions.has(log.action) && (!profile || log.metadata?.profile_id === profile || log.action === "llm_failover")) });
   }
   if (path === "/api/logs") {
-    const errorLogs: AppLogEntry[] = [{ id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", created_at: before(240) }];
+    const errorLogs: AppLogEntry[] = [
+      { id: "log-error-1", kind: "error", level: "error", action: "delivery_retry", message: "一次模拟发送失败，重试后已恢复", detail: "原始错误：temporary network failure（模拟数据）", actor: "bot-telegram", target: "private:880024", metadata: { profile_id: "bot-telegram" }, created_at: before(240) },
+      ...failoverLogs
+    ];
     const kind = url.searchParams.get("kind");
     const llmCalls = demoLLMCallLogs();
     const isLLM = (log: AppLogEntry) => log.action === "llm_usage" || log.action === "llm_call_failed";
@@ -2807,6 +3030,10 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     const until = url.searchParams.get("until");
     if (since) rows = rows.filter((log) => log.created_at >= new Date(since).toISOString());
     if (until) rows = rows.filter((log) => log.created_at < new Date(until).toISOString());
+    const actions = new Set((url.searchParams.get("action") ?? "").split(",").map((item) => item.trim()).filter(Boolean));
+    if (actions.size) rows = rows.filter((log) => actions.has(log.action));
+    const profile = (url.searchParams.get("profile") ?? "").trim();
+    if (profile) rows = rows.filter((log) => log.metadata?.profile_id === profile || log.actor === profile);
     if (kind === "llm") {
       const status = url.searchParams.get("status");
       if (status) rows = rows.filter((log) => (status === "failed") === (log.action === "llm_call_failed"));

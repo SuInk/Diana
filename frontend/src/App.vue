@@ -169,9 +169,8 @@
             />
           </svg>
         </a>
-        <button class="btn ghost small topbar-logout" type="button" title="退出登录" @click="doLogout">
+        <button class="btn ghost small icon-only topbar-logout" type="button" title="退出登录" aria-label="退出登录" @click="doLogout">
           <LogOut :size="15" aria-hidden="true" />
-          <span class="topbar-logout-text">退出登录</span>
         </button>
         </div>
       </header>
@@ -256,6 +255,7 @@ import { formatUptime } from "./lib/format";
 import { checkForUpdate, getBotStatus, getAuthStatus, getBotProfileConfig, getConfig, getHealth, getSystemVersion, logout, type BotProfileConfig, type HealthResponse, type SystemVersion } from "./api";
 import ToastHost from "./components/ToastHost.vue";
 import ConfirmHost from "./components/ConfirmHost.vue";
+import { askConfirm } from "./lib/confirm";
 import { toastSuccess } from "./lib/toast";
 import { channelAccountUnhealthy } from "./lib/channel-status";
 import VersionModal from "./components/VersionModal.vue";
@@ -658,6 +658,13 @@ function bootApp(): void {
 }
 
 async function doLogout(): Promise<void> {
+  const confirmed = await askConfirm({
+    title: "退出登录",
+    message: "确定要退出当前登录状态吗？退出后需要重新验证才能访问控制台。",
+    confirmLabel: "退出登录",
+    danger: true
+  });
+  if (!confirmed) return;
   locked.value = true;
   invalidateSession();
   try {

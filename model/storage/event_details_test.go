@@ -1219,3 +1219,124 @@ VALUES ('edited-detail', 'group:20001', 'group', '20001', '30001', 'message-edit
 		}
 	}
 }
+
+func TestListInboundEventDetailsRestoresQQOfficialSelfMention(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "qq-official-self-at.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+	// 机器人早先的自发回推消息提供机器人的显示名。
+	if err := store.AppendMessageEvent(ctx, "group:G1", assistant.MessageEvent{
+		Platform:   assistant.PlatformQQOfficial,
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "G1",
+		UserID:     "bot-self-id",
+		SenderName: "虹夏",
+		MessageID:  "m-self",
+		RawMessage: "在的",
+		Time:       now.Add(-time.Minute).Unix(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 历史入库的 QQ 官方 @ 消息没有 at 段、只有 ToMe=true。
+	atEvent := assistant.MessageEvent{
+		Platform:   assistant.PlatformQQOfficial,
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "G1",
+		UserID:     "member-1",
+		SelfID:     "bot-self-id",
+		SenderName: "小满",
+		MessageID:  "m-at-self",
+		RawMessage: "帮我查下天气",
+		Segments:   []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "帮我查下天气"}}},
+		ToMe:       true,
+		Time:       now.Unix(),
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:G1", atEvent); err != nil || !inserted {
+		t.Fatalf("enqueue atEvent inserted=%v err=%v", inserted, err)
+	}
+
+	// 纯引用机器人发言（没有 @）虽然 ToMe=true，不应补出假的 @ 前缀。
+	quoteEvent := assistant.MessageEvent{
+		Platform:   assistant.PlatformQQOfficial,
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "G1",
+		UserID:     "member-1",
+		SelfID:     "bot-self-id",
+		SenderName: "小满",
+		MessageID:  "m-quote-self",
+		RawMessage: "那明天呢",
+		Segments:   []assistant.MessageSegment{{Type: "text", Data: map[string]string{"text": "那明天呢"}}},
+		Quoted:     &assistant.QuotedMessage{MessageID: "m-self", UserID: "bot-self-id", RawMessage: "在的"},
+		ToMe:       true,
+		Time:       now.Add(time.Second).Unix(),
+	}
+	if _, inserted, err := store.EnqueueInboundEvent(ctx, "group:G1", quoteEvent); err != nil || !inserted {
+		t.Fatalf("enqueue quoteEvent inserted=%v err=%v", inserted, err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Events) != 2 {
+		t.Fatalf("events = %#v, want 2 events", page.Events)
+	}
+	if page.Events[0].Text != "那明天呢" {
+		t.Fatalf("quote event text = %q, want plain text without synthetic @", page.Events[0].Text)
+	}
+	if page.Events[1].Text != "@虹夏（bot-self-id） 帮我查下天气" {
+		t.Fatalf("at event text = %q, want restored @虹夏（bot-self-id） prefix", page.Events[1].Text)
+	}
+}
+
+func TestListInboundEventDetailsScopesTokensByProfileAndCollisionSafeMessageID(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "scoped-event-tokens.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now()
+	// Telegram 两个不同群里出现相同的短数字 message_id="42"，且属于不同机器人。
+	evA := assistant.MessageEvent{
+		Platform: assistant.PlatformTelegram, ProfileID: "bot-a", Kind: assistant.EventKindGroup,
+		GroupID: "-1001", UserID: "u1", MessageID: "42", RawMessage: "群一消息", Time: now.Unix(),
+	}
+	evB := assistant.MessageEvent{
+		Platform: assistant.PlatformTelegram, ProfileID: "bot-b", Kind: assistant.EventKindGroup,
+		GroupID: "-1002", UserID: "u2", MessageID: "42", RawMessage: "群二消息", Time: now.Add(time.Second).Unix(),
+	}
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:-1001", evA); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.EnqueueInboundEvent(ctx, "group:-1002", evB); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendLog(ctx, AppLogEntry{
+		Action: "llm_usage", Target: "42", CreatedAt: now.UTC(),
+		Metadata: map[string]any{"profile_id": "bot-a", "group_id": "-1001", "user_id": "u1", "message_id": "42", "input_tokens": 100, "output_tokens": 20, "total_tokens": 120, "model": "model-a", "purpose": "reply"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppendLog(ctx, AppLogEntry{
+		Action: "llm_usage", Target: "42", CreatedAt: now.Add(time.Second).UTC(),
+		Metadata: map[string]any{"profile_id": "bot-b", "group_id": "-1002", "user_id": "u2", "message_id": "42", "input_tokens": 500, "output_tokens": 50, "total_tokens": 550, "model": "model-b", "purpose": "reply"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	pageA, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, ProfileID: "bot-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pageA.TotalTokens != 120 || len(pageA.Events) != 1 || pageA.Events[0].TotalTokens != 120 {
+		t.Fatalf("bot-a scoped page = total:%d events:%#v, want 120 tokens isolated from bot-b", pageA.TotalTokens, pageA.Events)
+	}
+}

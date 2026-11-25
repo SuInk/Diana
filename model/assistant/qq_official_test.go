@@ -1097,3 +1097,52 @@ func TestQQOfficialDispatchGroupMessageWithMemberRoleDoesNotDeadlock(t *testing.
 		t.Fatalf("seen role = %q, %v; want admin remembered", role, ok)
 	}
 }
+
+func TestQQOfficialEventFromDispatchPreservesSelfAtSegment(t *testing.T) {
+	// 1. GROUP_AT_MESSAGE_CREATE 平台已剥掉 @ 前缀时补回指向自己的 at 段，显式 @ 判定与展示都能命中。
+	c := &QQOfficialChannel{}
+	c.handleDispatch(context.Background(), qqGatewayPayload{
+		T:    "READY",
+		Data: json.RawMessage(`{"session_id":"s-1","user":{"id":"bot-1","username":"虹夏"}}`),
+	})
+	var gotAT MessageEvent
+	c.handler = func(_ context.Context, event MessageEvent) error {
+		gotAT = event
+		return nil
+	}
+	c.handleDispatch(context.Background(), qqGatewayPayload{
+		T: "GROUP_AT_MESSAGE_CREATE",
+		Data: json.RawMessage(`{
+		  "id":"m-at","content":"官方机器人这边也能用吗","group_openid":"grp-1",
+		  "author":{"member_openid":"member-1"}
+		}`),
+	})
+	if !eventExplicitlyMentionsBot(gotAT, BotConfig{}) {
+		t.Fatalf("GROUP_AT_MESSAGE_CREATE should explicitly mention bot, segments = %+v", gotAT.Segments)
+	}
+	if display := DisplaySegmentsText(gotAT.Segments, nil, nil); display != "@虹夏（bot-1） 官方机器人这边也能用吗" {
+		t.Fatalf("display = %q, want @虹夏（bot-1） prefix", display)
+	}
+
+	// 2. 全量群消息同时 @ 自己和另一台机器人时，保留两处 @ 的相对位置和各自昵称。
+	bothData := json.RawMessage(`{
+	  "id":"m-both",
+	  "content":"<@330F50FCA0ABA93B781CA31A9F9389F6> <@1B777E455F2624EF84066DFE0447C922> 禁止讨论什么",
+	  "group_openid":"grp-1",
+	  "author":{"member_openid":"member-1"},
+	  "mentions":[
+	    {"id":"330F50FCA0ABA93B781CA31A9F9389F6","username":"虹夏","is_you":true},
+	    {"id":"1B777E455F2624EF84066DFE0447C922","username":"Diana"}
+	  ]
+	}`)
+	bothEvent, ok := qqOfficialEventFromDispatch("GROUP_MESSAGE_CREATE", bothData, "bot-1")
+	if !ok {
+		t.Fatal("full-mode multi-mention message was not mapped")
+	}
+	if !bothEvent.ToMe || !eventExplicitlyMentionsBot(bothEvent, BotConfig{}) {
+		t.Fatalf("expected ToMe and explicit mention, event = %+v", bothEvent)
+	}
+	if display := DisplaySegmentsText(bothEvent.Segments, nil, nil); display != "@虹夏（bot-1） @Diana（1B777E455F2624EF84066DFE0447C922） 禁止讨论什么" {
+		t.Fatalf("multi-mention display = %q", display)
+	}
+}

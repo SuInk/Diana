@@ -137,3 +137,46 @@ test("记录页按用途列出 token，同名用途合并、多的在前", () =>
     ["记忆抽取", 2, 0]
   ]);
 });
+
+test("支持按提供商聚合，并汇总吞吐速率、首字时延与后备恢复计数", () => {
+  const sample = [
+    {
+      purpose: "reply",
+      provider: "openai_compatible",
+      model: "gpt-6",
+      recorded_calls: 2,
+      input_tokens: 1000,
+      output_tokens: 200,
+      cached_input_tokens: 600,
+      total_tokens: 1200,
+      missing_usage_calls: 0,
+      failed_calls: 1,
+      recovered_calls: 1,
+      duration_ms: 4000,
+      avg_ttft_ms: 450,
+      ttft_calls: 2
+    },
+    {
+      purpose: "memory_extract",
+      provider: "anthropic",
+      model: "claude-sonnet-5",
+      recorded_calls: 1,
+      input_tokens: 500,
+      output_tokens: 100,
+      cached_input_tokens: 200,
+      total_tokens: 600,
+      missing_usage_calls: 0,
+      failed_calls: 0,
+      duration_ms: 2000,
+      avg_ttft_ms: 600,
+      ttft_calls: 1
+    }
+  ];
+  const providers = groupLLMUsage(sample, "provider");
+  assert.equal(providers.length, 2);
+  assert.equal(providers[0].label, "OpenAI 兼容");
+  assert.equal(providers[0].output_tokens_per_second, 50);
+  assert.equal(providers[0].avg_ttft_ms, 450);
+  assert.equal(providers[0].recovered_calls, 1);
+  assert.equal(providers[1].label, "Anthropic");
+});

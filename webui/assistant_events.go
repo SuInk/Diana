@@ -310,9 +310,9 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 	defer cancel()
 	c.Request = c.Request.WithContext(queryCtx)
 	rangeID := strings.TrimSpace(c.DefaultQuery("range", "24h"))
-	since, ok := assistantEventsSince(rangeID, time.Now())
+	since, until, ok := assistantEventsBounds(rangeID, c.Query("since"), c.Query("until"), time.Now())
 	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 1h、24h、7d、30d、all"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "range 仅支持 today、1h、12h、24h、7d、30d、90d、365d、custom、all"})
 		return
 	}
 	resultFilter, ok := storage.ParseInboundEventResultFilter(c.DefaultQuery("result", string(storage.InboundEventResultAll)))
@@ -340,6 +340,7 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		Lightweight: mode == "list",
 		SummaryOnly: mode == "summary",
 		Since:       since,
+		Until:       until,
 		Limit:       limit,
 		Offset:      (page - 1) * limit,
 		Result:      resultFilter,
@@ -353,11 +354,24 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 		return
 	}
 
-	recent := map[string]assistant.EventRecord{}
+	recentByProfile := map[string]assistant.EventRecord{}
+	recentAnyProfile := map[string]assistant.EventRecord{}
 	if h.runtime != nil {
+		// RecentEvents 按最新在前排列，同键只保留第一条（最新结论），避免同一条消息
+		// 早先记下的「排队等接话判断」占位把后来落库的真实评分原因覆盖回去。
 		for _, event := range h.runtime.Status().RecentEvents {
-			if key := assistantEventKey(string(event.Kind), event.GroupID, event.UserID, event.MessageID); key != "" {
-				recent[key] = event
+			baseKey := assistantEventKey(string(event.Kind), event.GroupID, event.UserID, event.MessageID)
+			if baseKey == "" {
+				continue
+			}
+			if _, exists := recentAnyProfile[baseKey]; !exists {
+				recentAnyProfile[baseKey] = event
+			}
+			if eventProfile := strings.TrimSpace(event.ProfileID); eventProfile != "" {
+				scopedKey := eventProfile + "|" + baseKey
+				if _, exists := recentByProfile[scopedKey]; !exists {
+					recentByProfile[scopedKey] = event
+				}
 			}
 		}
 	}
@@ -398,24 +412,43 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 			Handled:            handled,
 			GroupName:          groupNames[strings.TrimSpace(item.GroupID)],
 		}
-		if live, found := recent[assistantEventKey(item.Kind, item.GroupID, item.UserID, item.MessageID)]; found {
+		baseKey := assistantEventKey(item.Kind, item.GroupID, item.UserID, item.MessageID)
+		var live assistant.EventRecord
+		var found bool
+		if itemProfile := strings.TrimSpace(item.ProfileID); itemProfile != "" {
+			live, found = recentByProfile[itemProfile+"|"+baseKey]
+			if !found {
+				if candidate, ok := recentAnyProfile[baseKey]; ok && strings.TrimSpace(candidate.ProfileID) == "" {
+					live, found = candidate, true
+				}
+			}
+		} else {
+			live, found = recentAnyProfile[baseKey]
+		}
+		if found {
 			if detail.Platform == "" {
 				detail.Platform = live.Platform
 			}
 			if detail.ProfileID == "" {
 				detail.ProfileID = live.ProfileID
 			}
-			detail.Reply = live.Reply
-			if live.Decision != "" && !unconfirmedErrorReply {
-				detail.Decision = live.Decision
-				detail.Reason = live.Reason
-				detail.Handled = live.Handled
-			}
-			if live.Duration > 0 {
-				detail.DurationMS = live.Duration
-			}
-			if live.Error != "" {
-				detail.Error = live.Error
+			staleParkedLive := live.Outcome == "merged_into_backlog_turn" && item.Outcome != "" && item.Outcome != "merged_into_backlog_turn"
+			requeuedPending := item.Status == "pending" && item.Outcome == "" && item.Reason == "" && live.Outcome != "merged_into_backlog_turn"
+			if !staleParkedLive && !requeuedPending {
+				if live.Reply != "" || detail.Reply == "" {
+					detail.Reply = live.Reply
+				}
+				if live.Decision != "" && !unconfirmedErrorReply {
+					detail.Decision = live.Decision
+					detail.Reason = live.Reason
+					detail.Handled = live.Handled
+				}
+				if live.Duration > 0 {
+					detail.DurationMS = live.Duration
+				}
+				if live.Error != "" {
+					detail.Error = live.Error
+				}
 			}
 		}
 		// 头像放在这里算：上面那段可能刚从实时记录里补上 platform，早算会漏掉。
@@ -500,18 +533,59 @@ func (h *BotHandler) listEvents(c *gin.Context) {
 
 func assistantEventsSince(rangeID string, now time.Time) (time.Time, bool) {
 	switch rangeID {
-	case "1h":
-		return now.Add(-time.Hour), true
-	case "24h":
-		return now.Add(-24 * time.Hour), true
-	case "7d":
-		return now.Add(-7 * 24 * time.Hour), true
-	case "30d":
-		return now.Add(-30 * 24 * time.Hour), true
-	case "all":
-		return time.Time{}, true
+	case "1h", "24h", "7d", "30d", "all":
+		since, _, ok := assistantEventsBounds(rangeID, "", "", now)
+		return since, ok
 	default:
 		return time.Time{}, false
+	}
+}
+
+func assistantEventsBounds(rangeID, rawSince, rawUntil string, now time.Time) (time.Time, time.Time, bool) {
+	rawSince = strings.TrimSpace(rawSince)
+	rawUntil = strings.TrimSpace(rawUntil)
+	if rawSince != "" || rawUntil != "" || rangeID == "custom" {
+		var since, until time.Time
+		var err error
+		if rawSince != "" {
+			since, err = time.Parse(time.RFC3339Nano, rawSince)
+			if err != nil {
+				return time.Time{}, time.Time{}, false
+			}
+		}
+		if rawUntil != "" {
+			until, err = time.Parse(time.RFC3339Nano, rawUntil)
+			if err != nil {
+				return time.Time{}, time.Time{}, false
+			}
+		}
+		if !since.IsZero() && !until.IsZero() && !since.Before(until) {
+			return time.Time{}, time.Time{}, false
+		}
+		return since, until, true
+	}
+	switch rangeID {
+	case "today":
+		loc := now.Location()
+		return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc), time.Time{}, true
+	case "1h":
+		return now.Add(-time.Hour), time.Time{}, true
+	case "12h":
+		return now.Add(-12 * time.Hour), time.Time{}, true
+	case "24h":
+		return now.Add(-24 * time.Hour), time.Time{}, true
+	case "7d":
+		return now.Add(-7 * 24 * time.Hour), time.Time{}, true
+	case "30d":
+		return now.Add(-30 * 24 * time.Hour), time.Time{}, true
+	case "90d":
+		return now.Add(-90 * 24 * time.Hour), time.Time{}, true
+	case "365d":
+		return now.AddDate(-1, 0, 0), time.Time{}, true
+	case "all":
+		return time.Time{}, time.Time{}, true
+	default:
+		return time.Time{}, time.Time{}, false
 	}
 }
 

@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"sync"
@@ -386,8 +387,22 @@ type StatsHandler struct {
 	// latency 为空时响应耗时明细接口返回 503，理由同上。
 	latency replyLatencyReader
 	// activity 为空时活跃时段接口返回 503，理由同上。
-	activity inboundActivityReader
-	now      func() time.Time
+	activity   inboundActivityReader
+	overview   dashboardOverviewReader
+	groupNames func(context.Context) map[string]string
+	now        func() time.Time
+}
+
+// WithOverviewReader 注入总览页大跨度综合查询读取器。
+func (h *StatsHandler) WithOverviewReader(reader dashboardOverviewReader) *StatsHandler {
+	h.overview = reader
+	return h
+}
+
+// WithGroupNames 注入实时群名映射，供总览页群排行和错误明细回显群名。
+func (h *StatsHandler) WithGroupNames(lookup func(context.Context) map[string]string) *StatsHandler {
+	h.groupNames = lookup
+	return h
 }
 
 // WithRangeReaders 注入时间窗统计要用的两个读取器：队列事件和用量日志。
@@ -410,6 +425,7 @@ func NewStatsHandler(collector *StatsCollector, runtime statsStatusProvider, sto
 func (h *StatsHandler) Register(router gin.IRouter) {
 	router.GET("/api/stats", h.stats)
 	router.GET("/api/stats/ranges", h.statsRanges)
+	router.GET("/api/stats/overview", h.statsOverview)
 	router.GET("/api/stats/latency", h.statsLatency)
 	router.GET("/api/stats/activity", h.statsActivity)
 }

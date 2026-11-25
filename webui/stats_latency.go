@@ -19,8 +19,7 @@ type replyLatencyReader interface {
 	ReplyLatencySamples(ctx context.Context, since, until time.Time, profileID string) ([]storage.ReplyLatencySample, error)
 }
 
-// latencyWindows 是响应耗时明细里能切的几个窗口。每个窗口都和紧挨着的前一段等长
-// 窗口比，所以一次要读两倍长度的样本。
+// latencyWindows 是不传 window 参数时默认返回的三个窗口。
 var latencyWindows = []struct {
 	ID       string
 	Duration time.Duration
@@ -28,6 +27,18 @@ var latencyWindows = []struct {
 	{ID: "1h", Duration: time.Hour},
 	{ID: "24h", Duration: 24 * time.Hour},
 	{ID: "7d", Duration: 7 * 24 * time.Hour},
+}
+
+// allLatencyWindows 包含按需请求的更长跨度窗口（30 天 / 90 天），避免未传参时每次白扫半年数据。
+var allLatencyWindows = []struct {
+	ID       string
+	Duration time.Duration
+}{
+	{ID: "1h", Duration: time.Hour},
+	{ID: "24h", Duration: 24 * time.Hour},
+	{ID: "7d", Duration: 7 * 24 * time.Hour},
+	{ID: "30d", Duration: 30 * 24 * time.Hour},
+	{ID: "90d", Duration: 90 * 24 * time.Hour},
 }
 
 // latencyExtremes 是每个窗口列出的最慢、最快回复条数。
@@ -70,7 +81,7 @@ func (h *StatsHandler) statsLatency(c *gin.Context) {
 	windows := latencyWindows
 	if id := strings.TrimSpace(c.Query("window")); id != "" {
 		windows = nil
-		for _, window := range latencyWindows {
+		for _, window := range allLatencyWindows {
 			if window.ID == id {
 				windows = append(windows, window)
 			}

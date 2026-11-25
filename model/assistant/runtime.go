@@ -7166,6 +7166,27 @@ func mentionsSomeoneElseFor(event MessageEvent, botID string) bool {
 		}
 		return true
 	}
+	for _, mention := range event.MentionTargets {
+		if mention.Target == "self" {
+			continue
+		}
+		if mention.Target == "other" || (strings.TrimSpace(mention.UserID) != "" && strings.TrimSpace(mention.UserID) != botID) {
+			return true
+		}
+	}
+	return false
+}
+
+func mentionsBotSelfFor(event MessageEvent, botID string) bool {
+	botID = strings.TrimSpace(botID)
+	if botID != "" && hasAt(event.Segments, botID) {
+		return true
+	}
+	for _, mention := range event.MentionTargets {
+		if mention.Target == "self" || (botID != "" && strings.TrimSpace(mention.UserID) == botID) {
+			return true
+		}
+	}
 	return false
 }
 

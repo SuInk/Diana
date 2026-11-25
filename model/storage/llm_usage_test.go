@@ -308,3 +308,54 @@ func TestLLMUsageReportFilterSkipsEmptyMetadata(t *testing.T) {
 		t.Fatalf("filtered report = %+v, %v", filtered.Usage, err)
 	}
 }
+
+func TestLLMUsageThroughputAndFailoverMetrics(t *testing.T) {
+	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "throughput.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	since := time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	records := []applog.Entry{
+		{
+			Action: "llm_usage", CreatedAt: since.Add(time.Minute),
+			Metadata: map[string]any{
+				"purpose": "reply", "provider": "openai_compatible", "model": "gpt-6",
+				"input_tokens": 500, "output_tokens": 120, "total_tokens": 620,
+				"duration_ms": 2000, "ttft_ms": 300,
+			},
+		},
+		{
+			Action: "llm_usage", CreatedAt: since.Add(2 * time.Minute),
+			Metadata: map[string]any{
+				"purpose": "reply", "provider": "openai_compatible", "model": "gpt-6",
+				"input_tokens": 300, "output_tokens": 80, "total_tokens": 380,
+				"duration_ms": 2000, "ttft_ms": 500,
+			},
+		},
+		{
+			Action: "llm_call_failed", Kind: applog.KindError, CreatedAt: since.Add(3 * time.Minute),
+			Metadata: map[string]any{
+				"purpose": "reply", "provider": "openai_compatible", "model": "gpt-6",
+				"recovered": true,
+			},
+		},
+	}
+	for _, entry := range records {
+		if err := s.AppendLog(ctx, entry); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := s.LLMUsageSince(ctx, since, until)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Calls != 2 || got.FailedCalls != 1 || got.RecoveredCalls != 1 || got.DurationMS != 4000 || got.OutputTokensPerSecond != 50 || got.TTFTCalls != 2 || got.AvgTTFTMS != 400 {
+		t.Fatalf("unexpected throughput/failover summary: %+v", got)
+	}
+	if len(got.Breakdown) != 1 || got.Breakdown[0].OutputTokensPerSecond != 50 || got.Breakdown[0].AvgTTFTMS != 400 || got.Breakdown[0].RecoveredCalls != 1 {
+		t.Fatalf("unexpected breakdown: %+v", got.Breakdown)
+	}
+}

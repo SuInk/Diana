@@ -47,7 +47,7 @@
         >
           <span class="qq-room-avatar" aria-hidden="true"><UsersRound :size="20" /></span>
           <span class="qq-contact-text">
-            <span class="qq-contact-top"><strong>{{ room.name }}</strong><time v-if="roomLast[room.id]">{{ shortTime(roomLast[room.id]!.at) }}</time></span>
+            <span class="qq-contact-top"><strong>{{ room.name }}</strong><time v-if="roomLast[room.id]">{{ shortTime(roomLast[room.id]?.at ?? 0) }}</time></span>
             <small>{{ roomPreview(room) }}</small>
           </span>
         </button>
@@ -63,7 +63,7 @@
         >
           <BotAvatar :name="contact.name" :src="contact.avatar" :size="46" />
           <span class="qq-contact-text">
-            <span class="qq-contact-top"><strong>{{ contact.name }}</strong><time v-if="lastOf(contact.id)">{{ shortTime(lastOf(contact.id)!.at) }}</time></span>
+            <span class="qq-contact-top"><strong>{{ contact.name }}</strong><time v-if="lastOf(contact.id)">{{ shortTime(lastOf(contact.id)?.at ?? 0) }}</time></span>
             <small>{{ inFlight[contact.id] ? "正在输入…" : previewOf(contact.id) || contact.platform }}</small>
           </span>
         </button>
@@ -252,6 +252,26 @@
           <button class="qq-send" type="submit" :disabled="!draft.trim() || !!info?.problem || loading">发送</button>
         </form>
       </template>
+      <!-- 首次拉取机器人与群列表期间右栏同步显示对话骨架，避免先闪一下空白占位再跳回会话。 -->
+      <template v-else-if="profilesLoading">
+        <header class="qq-room-head" aria-hidden="true">
+          <div class="qq-room-title" style="display: flex; flex-direction: column; gap: 6px">
+            <SkeletonBlock width="112px" height="17px" />
+            <SkeletonBlock width="76px" height="12px" />
+          </div>
+        </header>
+        <section class="qq-transcript" role="status" aria-label="正在加载会话">
+          <div class="qq-loading" style="gap: 16px">
+            <SkeletonBlock width="42%" height="42px" />
+            <SkeletonBlock width="36%" height="38px" style="align-self: flex-end" />
+            <SkeletonBlock width="54%" height="52px" />
+          </div>
+        </section>
+        <div class="qq-composer" aria-hidden="true">
+          <SkeletonBlock width="100%" height="38px" />
+          <SkeletonBlock width="68px" height="38px" />
+        </div>
+      </template>
       <div v-else class="qq-placeholder"><MessagesSquare :size="40" aria-hidden="true" /><p>选一台机器人开始聊天</p></div>
     </section>
 
@@ -296,7 +316,7 @@ interface Contact {
 
 const selectedKey = "diana:chat-profile";
 const profiles = ref<BotProfileConfig[]>([]);
-const profilesLoading = ref(false);
+const profilesLoading = ref(true);
 const profilesError = ref("");
 const contacts = computed<Contact[]>(() =>
   profiles.value.filter((p) => p.id).map((p) => ({ id: p.id!, name: p.name || p.id!, platform: subscriptionPlatformLabel(p.platform), avatar: p.avatar_url }))

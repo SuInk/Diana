@@ -1129,6 +1129,11 @@ export interface LLMUsageBreakdown {
   total_tokens: number;
   missing_usage_calls: number;
   failed_calls?: number;
+  recovered_calls?: number;
+  duration_ms?: number;
+  output_tokens_per_second?: number;
+  avg_ttft_ms?: number;
+  ttft_calls?: number;
 }
 
 /** 运行中的后台子任务。跑完即从状态里消失，历史记录见事件详情的 subtasks。 */
@@ -2747,6 +2752,7 @@ export interface AppLogQueryOptions {
   before?: string;
   query?: string;
   actions?: string[];
+  profile?: string;
   since?: string;
   until?: string;
   status?: "" | "ok" | "failed";
@@ -2763,7 +2769,7 @@ export function listAppLogs(kind?: AppLogKind | AppLogTab, limit = 100, options:
   const query = options.query?.trim();
   if (query) params.set("q", query);
   if (options.actions?.length) params.set("action", options.actions.join(","));
-  for (const key of ["since", "until", "status", "model", "purpose"] as const) {
+  for (const key of ["profile", "since", "until", "status", "model", "purpose"] as const) {
     const value = options[key];
     if (value) params.set(key, value);
   }
@@ -2925,6 +2931,11 @@ export interface LLMUsageSummary {
   usage_missing_calls?: number;
   /** 窗口内失败的模型请求数，不算在 recorded_calls 里；旧版后端没有这一项。 */
   failed_calls?: number;
+  recovered_calls?: number;
+  duration_ms?: number;
+  output_tokens_per_second?: number;
+  avg_ttft_ms?: number;
+  ttft_calls?: number;
   breakdown?: LLMUsageBreakdown[];
 }
 
@@ -2955,7 +2966,139 @@ export function getStatsRanges(): Promise<StatsRanges> {
   return requestJSON<StatsRanges>("/api/stats/ranges");
 }
 
-export type LatencyWindowID = "1h" | "24h" | "7d";
+export type StatsOverviewRange = "today" | "1h" | "12h" | "24h" | "7d" | "30d" | "90d" | "365d" | "custom";
+export type StatsGranularity = "auto" | "hour" | "day";
+
+export interface StatsOverviewWindowSummary {
+  since: string;
+  until: string;
+  messages: number;
+  handled: number;
+  not_replied: number;
+  pending: number;
+  errors: number;
+  active_groups: number;
+  active_users: number;
+  avg_reply_ms: number;
+  replies_measured: number;
+  app_error_logs: number;
+  usage: LLMUsageSummary;
+}
+
+export interface StatsOverviewPreviousSummary {
+  since: string;
+  until: string;
+  messages: number;
+  handled: number;
+  errors: number;
+  avg_reply_ms: number;
+  replies_measured: number;
+  recorded_calls: number;
+  failed_calls: number;
+  total_tokens: number;
+  app_error_logs: number;
+}
+
+export interface StatsTrendBucket {
+  start_unix: number;
+  messages: number;
+  handled: number;
+  errors: number;
+  calls: number;
+  failed_calls: number;
+  app_errors: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface StatsGroupItem {
+  profile_id?: string;
+  platform?: string;
+  group_id: string;
+  group_name?: string;
+  messages: number;
+  handled: number;
+  errors: number;
+  recorded_calls: number;
+  failed_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  total_tokens: number;
+}
+
+export interface StatsErrorCategory {
+  source: "event" | "llm" | "log";
+  key: string;
+  label: string;
+  model?: string;
+  purpose?: string;
+  action?: string;
+  count: number;
+  recovered_count?: number;
+  latest_at: string;
+  sample?: string;
+}
+
+export interface StatsErrorItem {
+  id: string;
+  at: string;
+  source: "event" | "llm" | "log";
+  action?: string;
+  outcome?: string;
+  message: string;
+  detail?: string;
+  model?: string;
+  provider?: string;
+  purpose?: string;
+  profile_id?: string;
+  group_id?: string;
+  group_name?: string;
+  user_id?: string;
+  message_id?: string;
+  recovered?: boolean;
+}
+
+export interface StatsErrorOverview {
+  event_errors: number;
+  llm_failed_calls: number;
+  llm_recovered_calls: number;
+  app_error_logs: number;
+  categories: StatsErrorCategory[];
+  recent: StatsErrorItem[];
+}
+
+export interface StatsOverviewResponse {
+  range: string;
+  utc_offset: string;
+  granularity: "hour" | "day";
+  current: StatsOverviewWindowSummary;
+  previous: StatsOverviewPreviousSummary;
+  trend: StatsTrendBucket[];
+  groups: StatsGroupItem[];
+  errors: StatsErrorOverview;
+}
+
+export function getStatsOverview(options: {
+  range?: StatsOverviewRange;
+  since?: string;
+  until?: string;
+  granularity?: StatsGranularity;
+  profileId?: string;
+} = {}): Promise<StatsOverviewResponse> {
+  const params = new URLSearchParams();
+  if (options.range) params.set("range", options.range);
+  if (options.since) params.set("since", options.since);
+  if (options.until) params.set("until", options.until);
+  if (options.granularity && options.granularity !== "auto") params.set("granularity", options.granularity);
+  if (options.profileId) params.set("profile_id", options.profileId);
+  const query = params.toString();
+  return requestJSON<StatsOverviewResponse>(`/api/stats/overview${query ? `?${query}` : ""}`);
+}
+
+export type LatencyWindowID = "1h" | "24h" | "7d" | "30d" | "90d";
 
 /** 一组耗时的分布；samples 为 0 时其余字段没有意义，界面显示「—」。 */
 export interface LatencyDistribution {
@@ -3020,7 +3163,7 @@ export function getStatsLatency(profileID = "", window?: LatencyWindowID): Promi
   return requestJSON<StatsLatency>(`/api/stats/latency${query ? `?${query}` : ""}`);
 }
 
-export type ActivityWindowID = "7d" | "28d";
+export type ActivityWindowID = "7d" | "28d" | "84d";
 
 export interface ActivityWindow {
   id: ActivityWindowID;
@@ -3048,6 +3191,8 @@ export interface StatsActivity {
   windows: ActivityWindow[];
   /** 近一年里有消息的日子，按日期升序；没列出的过去日子就是没有消息。 */
   days: ActivityDay[];
+  /** 近一年里有模型 Token 消耗的日子（count 为当日总 Token）。 */
+  token_days?: ActivityDay[];
 }
 
 /** 收到的消息按「星期几 × 几点」的分布和近一年按天的数量；profileID、groupID 为空表示不筛选。 */
@@ -3059,7 +3204,7 @@ export function getStatsActivity(profileID = "", groupID = ""): Promise<StatsAct
   return requestJSON<StatsActivity>(`/api/stats/activity${query ? `?${query}` : ""}`);
 }
 
-export type AssistantEventRange = "1h" | "24h" | "7d" | "30d" | "all";
+export type AssistantEventRange = "today" | "1h" | "12h" | "24h" | "7d" | "30d" | "90d" | "365d" | "custom" | "all";
 export type AssistantEventResultFilter = "all" | "replied" | "not_replied" | "pending" | "error" | "notice";
 
 export interface AssistantEventImage {
@@ -3355,7 +3500,8 @@ export function getAssistantEvents(
   user = "",
   query = "",
   mode: "full" | "list" | "summary" = "full",
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  bounds?: { since?: string; until?: string }
 ): Promise<AssistantEventsResponse> {
   const params = new URLSearchParams({ range, result, page: String(page), limit: String(limit) });
   params.set("mode", mode);
@@ -3363,6 +3509,8 @@ export function getAssistantEvents(
   if (user) params.set("user", user);
   if (query) params.set("q", query);
   if (profile) params.set("profile", profile);
+  if (bounds?.since) params.set("since", bounds.since);
+  if (bounds?.until) params.set("until", bounds.until);
   return requestJSON<AssistantEventsResponse>(`/api/assistant/events?${params.toString()}`, { signal });
 }
 
@@ -4861,9 +5009,11 @@ export interface GroupUsageReport {
   usage: GroupUsageSummary;
   groups: GroupTokenUsage[];
 }
-export function getGroupTokenUsage(profile: string, hours: number): Promise<GroupUsageReport> {
+export function getGroupTokenUsage(profile: string, hours: number, bounds?: { since?: string; until?: string }): Promise<GroupUsageReport> {
   const params = new URLSearchParams({ hours: String(hours) });
   if (profile) params.set("profile", profile);
+  if (bounds?.since) params.set("since", bounds.since);
+  if (bounds?.until) params.set("until", bounds.until);
   return requestJSON(`/api/assistant/llm-usage?${params}`);
 }
 

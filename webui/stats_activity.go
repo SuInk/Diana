@@ -20,6 +20,10 @@ type inboundActivityReader interface {
 	InboundActivityDays(ctx context.Context, since, until time.Time, utcOffsetSeconds int, profileID, groupID string) ([]storage.InboundActivityDayCount, error)
 }
 
+type inboundActivityTokenReader interface {
+	LLMUsageActivityDays(ctx context.Context, since, until time.Time, utcOffsetSeconds int, profileID, groupID string) ([]storage.InboundActivityDayCount, error)
+}
+
 // activityWindows 是「星期 × 钟点」热力图能切的窗口。都是整周：滚动的整周窗口里，
 // 每个「星期几 × 几点」恰好出现同样多次，格子之间才能直接比、才能除出周均。
 var activityWindows = []struct {
@@ -28,6 +32,7 @@ var activityWindows = []struct {
 }{
 	{ID: "7d", Weeks: 1},
 	{ID: "28d", Weeks: 4},
+	{ID: "84d", Weeks: 12},
 }
 
 // activityCalendarDays 是按天日历往回看的天数：53 周，和 GitHub 贡献图一样是近一年。
@@ -63,6 +68,8 @@ type ActivityResponse struct {
 	Windows   []ActivityWindow `json:"windows"`
 	// Days 只列有消息的日子，按日期升序，覆盖近一年；没列出的过去日子就是没有消息。
 	Days []ActivityDay `json:"days"`
+	// TokenDays 列近一年里有模型 Token 消耗的日子（Count 为当日总 Token），供年历切到 Token 口径时使用。
+	TokenDays []ActivityDay `json:"token_days,omitempty"`
 }
 
 // WithActivityReader 注入活跃时段热力图要用的读取器。
@@ -114,6 +121,17 @@ func (h *StatsHandler) statsActivity(c *gin.Context) {
 	response.Days = make([]ActivityDay, 0, len(days))
 	for _, day := range days {
 		response.Days = append(response.Days, ActivityDay{Date: day.Date, Count: day.Count})
+	}
+	if tokenReader, ok := h.activity.(inboundActivityTokenReader); ok {
+		tokenDays, err := tokenReader.LLMUsageActivityDays(ctx, today.AddDate(0, 0, -(activityCalendarDays-1)), now, offsetSeconds, profileID, groupID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "读取每日 Token 用量失败：" + err.Error()})
+			return
+		}
+		response.TokenDays = make([]ActivityDay, 0, len(tokenDays))
+		for _, day := range tokenDays {
+			response.TokenDays = append(response.TokenDays, ActivityDay{Date: day.Date, Count: day.Count})
+		}
 	}
 	c.JSON(http.StatusOK, response)
 }

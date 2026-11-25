@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -118,5 +119,78 @@ ORDER BY day`, args...)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate inbound activity days: %w", err)
 	}
+	return days, nil
+}
+
+// LLMUsageActivityDays 按本地日期汇总 [since, until) 内模型成功调用消耗的总 Token，
+// 只返回 Token 大于 0 的日子，供总览年历热力图切换到「Token」口径时绘制。
+func (s *SQLiteStore) LLMUsageActivityDays(ctx context.Context, since, until time.Time, utcOffsetSeconds int, profileID, groupID string) ([]InboundActivityDayCount, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("inbound activity storage unavailable")
+	}
+	if !since.Before(until) {
+		return nil, fmt.Errorf("invalid activity window")
+	}
+	defer s.observeStorage(ctx, "LLMUsageActivityDays", "read")()
+
+	const seconds = "2006-01-02T15:04:05"
+	query := `
+SELECT
+  COALESCE(CAST(json_extract(metadata, '$.total_tokens') AS INTEGER), 0),
+  COALESCE(CAST(json_extract(metadata, '$.input_tokens') AS INTEGER), 0),
+  COALESCE(CAST(json_extract(metadata, '$.output_tokens') AS INTEGER), 0),
+  created_at
+FROM app_logs
+WHERE created_at >= ? AND created_at < ? AND action = 'llm_usage' AND json_valid(metadata)`
+	args := []any{since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds)}
+	if profileID = strings.TrimSpace(profileID); profileID != "" {
+		query += ` AND trim(json_extract(metadata, '$.profile_id')) = ?`
+		args = append(args, profileID)
+	}
+	if groupID = strings.TrimSpace(groupID); groupID != "" {
+		query += ` AND trim(json_extract(metadata, '$.group_id')) = ?`
+		args = append(args, groupID)
+	}
+
+	rows, err := s.eventReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query llm usage activity days: %w", err)
+	}
+	defer rows.Close()
+
+	offset := time.Duration(utcOffsetSeconds) * time.Second
+	byDate := map[string]int64{}
+	for rows.Next() {
+		var totalTokens, inputTokens, outputTokens int64
+		var rawAt string
+		if err := rows.Scan(&totalTokens, &inputTokens, &outputTokens, &rawAt); err != nil {
+			return nil, fmt.Errorf("scan llm usage activity days: %w", err)
+		}
+		at, err := time.Parse(time.RFC3339Nano, rawAt)
+		if err != nil {
+			continue
+		}
+		if at.Before(since) || !at.Before(until) {
+			continue
+		}
+		tokens := totalTokens
+		if tokens <= 0 && (inputTokens > 0 || outputTokens > 0) {
+			tokens = inputTokens + outputTokens
+		}
+		if tokens <= 0 {
+			continue
+		}
+		dayKey := at.UTC().Add(offset).Format(time.DateOnly)
+		byDate[dayKey] += tokens
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate llm usage activity days: %w", err)
+	}
+
+	days := make([]InboundActivityDayCount, 0, len(byDate))
+	for date, count := range byDate {
+		days = append(days, InboundActivityDayCount{Date: date, Count: count})
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Date < days[j].Date })
 	return days, nil
 }

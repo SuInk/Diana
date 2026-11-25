@@ -48,6 +48,7 @@ func (s *SQLiteStore) RecordInboundEventAudit(ctx context.Context, event assista
 	// 异步写可能晚于真实结果落库。所以占位记录遇到已经有真实结果的行就整行不动，不然
 	// 事件页会出现「结果 ignored、原因却是等待合并」。
 	outcome := strings.TrimSpace(event.Outcome)
+	profileID := strings.TrimSpace(event.ProfileID)
 	_, err := s.db.ExecContext(ctx, `
 UPDATE inbound_events
 SET decision = ?, decision_reason = ?, reply_text = ?, processing_error = ?, duration_ms = ?, delivery_json = ?,
@@ -67,6 +68,7 @@ WHERE id = (
     AND kind = ?
     AND COALESCE(group_id, '') = ?
     AND COALESCE(user_id, '') = ?
+    AND (? = '' OR COALESCE(profile_id, '') IN ('', ?))
   ORDER BY created_at DESC, id DESC
   LIMIT 1
 )
@@ -84,6 +86,7 @@ WHERE id = (
 		strings.TrimSpace(string(event.Kind)),
 		strings.TrimSpace(event.GroupID),
 		strings.TrimSpace(event.UserID),
+		profileID, profileID,
 		outcome,
 	)
 	if err != nil {

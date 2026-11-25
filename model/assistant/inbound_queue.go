@@ -998,7 +998,25 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 			return "", ctx.Err()
 		}
 	}
-	return r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, outcome)
+	replyOutcome, err := r.replyAndRecord(withInboundReplyTurnContext(ctx, event), event, text, outcome)
+	if err == nil && strings.TrimSpace(event.MessageID) != "" &&
+		strings.TrimSpace(item.Event.MessageID) != "" &&
+		strings.TrimSpace(event.MessageID) != strings.TrimSpace(item.Event.MessageID) {
+		// 合并判断挑中了等待批里更早的那条消息去回复；当前 item 的真实去向已由
+		// recordProactiveBatchRouted 写入审计列，收工不能把回复对象的 outcome 盖回当前行。
+		return backlogCandidateOutcomeForItem(event, item.Event.MessageID), nil
+	}
+	return replyOutcome, err
+}
+
+func backlogCandidateOutcomeForItem(routed MessageEvent, currentMessageID string) string {
+	currentMessageID = strings.TrimSpace(currentMessageID)
+	for _, candidate := range routed.backlogTurn {
+		if strings.TrimSpace(candidate.Event.MessageID) == currentMessageID {
+			return "merged_into_backlog_turn"
+		}
+	}
+	return "ignored"
 }
 
 func eventHasVoiceTranscript(event MessageEvent) bool {

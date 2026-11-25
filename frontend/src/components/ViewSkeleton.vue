@@ -2,12 +2,58 @@
      Licensed under the Limited Redistribution License in the repository root. -->
 
 <template>
-  <!-- 整页还没出来时的占位：页面代码首次下载、机器人配置还没读到这两段都用它。
-       以前前者什么都不画，后者是居中转圈，页面出来后再换成页内骨架，一次加载
-       连闪三种样子。这里按当前页套用它自己的列表骨架，接上页内骨架时不跳。 -->
-  <div class="view-skeleton">
-    <!-- 机器人页两种样子的页头都有右侧按钮，编辑页还多一行返回和名字，这里照着画，
-         页面出来时页头不跳。 -->
+  <!-- 聊天页是左右双栏占满一屏的布局（280px 会话列表 + 右侧对话窗），单独画同尺寸双栏骨架，
+       加载完切进真实聊天界面时边框和分栏丝毫不跳。 -->
+  <div v-if="isChatView" class="chat-view-skeleton" role="status" :aria-label="label">
+    <aside class="chat-skel-list" aria-hidden="true">
+      <div class="chat-skel-list-head">
+        <SkeletonBlock width="48px" height="20px" />
+        <div class="chat-skel-icons">
+          <SkeletonBlock width="28px" height="28px" />
+          <SkeletonBlock width="28px" height="28px" />
+        </div>
+      </div>
+      <div class="chat-skel-contacts">
+        <div v-for="n in 4" :key="n" class="chat-skel-contact">
+          <SkeletonBlock class="chat-skel-avatar" width="44px" height="44px" />
+          <div class="chat-skel-contact-lines">
+            <SkeletonBlock :width="n % 2 === 1 ? '62%' : '48%'" height="14px" />
+            <SkeletonBlock :width="n % 2 === 1 ? '82%' : '70%'" height="12px" />
+          </div>
+        </div>
+      </div>
+    </aside>
+    <section class="chat-skel-room" aria-hidden="true">
+      <div class="chat-skel-room-head">
+        <div class="chat-skel-contact-lines" style="gap: 6px">
+          <SkeletonBlock width="116px" height="17px" />
+          <SkeletonBlock width="84px" height="12px" />
+        </div>
+        <SkeletonBlock width="30px" height="30px" />
+      </div>
+      <div class="chat-skel-transcript">
+        <div class="chat-skel-msg">
+          <SkeletonBlock class="chat-skel-avatar" width="38px" height="38px" />
+          <SkeletonBlock width="42%" height="44px" />
+        </div>
+        <div class="chat-skel-msg self">
+          <SkeletonBlock width="34%" height="40px" />
+          <SkeletonBlock class="chat-skel-avatar" width="38px" height="38px" />
+        </div>
+        <div class="chat-skel-msg">
+          <SkeletonBlock class="chat-skel-avatar" width="38px" height="38px" />
+          <SkeletonBlock width="56%" height="58px" />
+        </div>
+      </div>
+      <div class="chat-skel-composer">
+        <SkeletonBlock width="100%" height="38px" />
+        <SkeletonBlock width="68px" height="38px" />
+      </div>
+    </section>
+  </div>
+
+  <!-- 其余页面的整页占位：页面代码首次下载、机器人配置还没读到这两段都用它。 -->
+  <div v-else class="view-skeleton">
     <header class="view-header" aria-hidden="true">
       <div v-if="kind === 'bot-editor'" class="view-title">
         <SkeletonBlock class="back-link" width="104px" height="29px" />
@@ -36,6 +82,8 @@ type SkeletonKind = InstanceType<typeof LoadingSkeleton>["$props"]["kind"];
 
 withDefaults(defineProps<{ label?: string }>(), { label: "正在加载页面" });
 
+const isChatView = computed(() => currentView.value === "chat" || currentView.value === "admin-chat");
+
 const kinds: Partial<Record<ViewID, SkeletonKind>> = {
   dashboard: "chart",
   bot: "bots",
@@ -48,6 +96,7 @@ const kinds: Partial<Record<ViewID, SkeletonKind>> = {
   users: "users",
   notebook: "notebook",
   tasks: "tasks",
+  chat: "sessions",
   "admin-chat": "sessions",
   feed: "feed",
   space: "feed",
@@ -65,3 +114,112 @@ const kind = computed<SkeletonKind>(() => {
 const bare = computed(() => bareKinds.has(kind.value));
 const count = computed(() => (kind.value === "bots" ? 2 : kind.value === "form" || kind.value === "bot-editor" ? 4 : 3));
 </script>
+
+<style scoped>
+.chat-view-skeleton {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  height: calc(100dvh - 86px);
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.chat-skel-list {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface-2) 60%, var(--surface));
+}
+
+.chat-skel-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 12px 10px 16px;
+}
+
+.chat-skel-icons {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.chat-skel-contacts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 10px;
+}
+
+.chat-skel-contact {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+}
+
+.chat-skel-avatar {
+  flex-shrink: 0;
+  border-radius: 999px;
+}
+
+.chat-skel-contact-lines {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.chat-skel-room {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-skel-room-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-skel-transcript {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 20px 18px;
+}
+
+.chat-skel-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.chat-skel-msg.self {
+  justify-content: flex-end;
+}
+
+.chat-skel-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 760px) {
+  .chat-view-skeleton {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-skel-room {
+    display: none;
+  }
+}
+</style>

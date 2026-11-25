@@ -1508,7 +1508,8 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 	text = strings.TrimSpace(text)
 	botID := annotation.botID(event)
 	wakeGuidanceAttached := false
-	hasAtSegment := eventHasSegmentType(event, "at")
+	mentionsSelf := mentionsBotSelfFor(event, botID)
+	mentionsOther := mentionsSomeoneElseFor(event, botID)
 	hasReplySegment := eventHasSegmentType(event, "reply")
 	if text == "" {
 		// 这里曾经又抄了一遍那句「用户只唤醒了你」的字面量，和 cleanInput 用的
@@ -1526,12 +1527,12 @@ func currentPromptTextWithSemanticContext(event MessageEvent, text string, sourc
 		// 唤醒指引已经把「这是一次有效唤醒、该怎么接」说全了，不再补这句泛泛的。
 		text += "\n\n" + annotation.Overrides.text(promptNoteMentionOnlySpec)
 	}
-	if hasAtSegment {
-		if mentionsSomeoneElseFor(event, botID) {
-			text += "\n\n" + annotation.Overrides.text(promptNoteAtOtherSpec)
-		} else {
-			text += "\n\n" + annotation.Overrides.text(promptNoteAtSelfSpec)
-		}
+	// 同时 @ 自己和别人时两条注解都要附：以前互斥导致 @自己 的那句被吞掉，模型误判成只叫了别人。
+	if mentionsSelf {
+		text += "\n\n" + annotation.Overrides.text(promptNoteAtSelfSpec)
+	}
+	if mentionsOther {
+		text += "\n\n" + annotation.Overrides.text(promptNoteAtOtherSpec)
 	}
 	if hasReplySegment {
 		text += "\n\n" + annotation.Overrides.text(promptNoteReplySpec)

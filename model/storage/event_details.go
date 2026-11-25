@@ -236,6 +236,7 @@ type InboundEventQuery struct {
 	Lightweight bool
 	SummaryOnly bool
 	Since       time.Time
+	Until       time.Time
 	Limit       int
 	Offset      int
 	Result      InboundEventResultFilter
@@ -285,6 +286,10 @@ func (s *SQLiteStore) ListInboundEventDetails(ctx context.Context, query Inbound
 	// 下面列的却是一个群，两个数字对不上。
 	groupCondition := ""
 	scopeArgs := []any{sinceUnix}
+	if !query.Until.IsZero() {
+		groupCondition += " AND i.event_time < ?"
+		scopeArgs = append(scopeArgs, query.Until.Unix())
+	}
 	if groupID := strings.TrimSpace(query.GroupID); groupID != "" {
 		groupCondition = " AND i.group_id = ?"
 		scopeArgs = append(scopeArgs, groupID)
@@ -346,7 +351,7 @@ WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 
 	}
 	if query.SummaryOnly {
-		_, usage, err := s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
+		_, usage, err := s.inboundEventTokenUsageScoped(ctx, query, nil)
 		if err != nil {
 			return page, err
 		}
@@ -371,7 +376,7 @@ WHERE i.event_time >= ?`+groupCondition+` AND (`+resultCondition+`)
 	// 是空串，还能继续兜住，不会因为这次修改丢掉老数据的昵称。
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT
-  i.id, i.event_time, i.kind, COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
+  i.id, i.event_time, i.kind, COALESCE(i.profile_id, ''), COALESCE(i.group_id, ''), COALESCE(i.user_id, ''),
   COALESCE(NULLIF(TRIM(m.sender_name), ''), NULLIF(TRIM((
     SELECT u.display_name FROM user_profiles AS u
     WHERE u.user_id = i.user_id AND u.bot_profile_id IN (COALESCE(i.profile_id, ''), '')
@@ -404,7 +409,7 @@ LIMIT ? OFFSET ?
 		var eventTime, replyGeneratedAt, sendAttemptedAt, sendAckedAt, selfEchoAt, createdAt, completedAt int64
 		var deliveryJSON string
 		if err := rows.Scan(
-			&item.ID, &eventTime, &item.Kind, &item.GroupID, &item.UserID,
+			&item.ID, &eventTime, &item.Kind, &item.ProfileID, &item.GroupID, &item.UserID,
 			&item.SenderName, &item.MessageID, &item.Text, &payload, &item.Status,
 			&item.Outcome, &item.Decision, &item.Reason, &item.Reply, &item.Error,
 			&item.DurationMS, &item.DeliveryStage, &item.OutboundMessageID,
@@ -413,6 +418,7 @@ LIMIT ? OFFSET ?
 		); err != nil {
 			return InboundEventDetailPage{}, fmt.Errorf("scan inbound event detail: %w", err)
 		}
+		item.ProfileID = strings.TrimSpace(item.ProfileID)
 		if strings.TrimSpace(deliveryJSON) != "" {
 			// 旧记录没有这一列，解析失败也不该让整页事件查不出来。
 			if err := json.Unmarshal([]byte(deliveryJSON), &item.Delivery); err != nil {
@@ -439,7 +445,9 @@ LIMIT ? OFFSET ?
 		item.SelfEchoAt = unixNanoTimePointer(selfEchoAt)
 		if source, ok := decodeInboundEventMessage(payload, item.Text); ok {
 			item.Platform = strings.TrimSpace(source.Platform)
-			item.ProfileID = strings.TrimSpace(source.ProfileID)
+			if srcProfile := strings.TrimSpace(source.ProfileID); srcProfile != "" {
+				item.ProfileID = srcProfile
+			}
 			item.SubType = strings.TrimSpace(source.SubType)
 			item.OperatorID = strings.TrimSpace(source.OperatorID)
 			item.OperatorName = strings.TrimSpace(source.OperatorName)
@@ -530,9 +538,9 @@ LIMIT ? OFFSET ?
 	var usageByMessage map[string]inboundEventTokenTotals
 	var usage inboundEventTokenTotals
 	if query.Lightweight {
-		usageByMessage, usage, err = s.inboundEventTokenUsageForPage(ctx, query.Since, query.GroupID, page.Events)
+		usageByMessage, usage, err = s.inboundEventTokenUsageScoped(ctx, query, page.Events)
 	} else {
-		usageByMessage, usage, err = s.inboundEventTokenUsage(ctx, query.Since, query.GroupID)
+		usageByMessage, usage, err = s.inboundEventTokenUsageScoped(ctx, query, nil)
 	}
 	if err != nil {
 		return InboundEventDetailPage{}, err
@@ -541,7 +549,7 @@ LIMIT ? OFFSET ?
 		applyEventUsageSummary(&page, usage)
 	}
 	for index := range page.Events {
-		if eventUsage, found := usageByMessage[strings.TrimSpace(page.Events[index].MessageID)]; found {
+		if eventUsage, found := lookupInboundEventUsage(usageByMessage, page.Events[index]); found {
 			page.Events[index].LLMCalls = eventUsage.LLMCalls
 			page.Events[index].InputTokens = eventUsage.InputTokens
 			page.Events[index].OutputTokens = eventUsage.OutputTokens
@@ -564,7 +572,7 @@ LIMIT ? OFFSET ?
 		return InboundEventDetailPage{}, err
 	}
 	for index := range page.Events {
-		page.Events[index].ToolCalls = toolCalls[strings.TrimSpace(page.Events[index].MessageID)]
+		page.Events[index].ToolCalls = lookupInboundEventToolCalls(toolCalls, page.Events[index])
 	}
 	return page, nil
 }
@@ -764,17 +772,45 @@ func decodeInboundEventMessage(payload, fallbackText string) (assistant.MessageE
 }
 
 func inboundEventDisplaySegments(event assistant.MessageEvent, fallbackText string) []assistant.MessageSegment {
+	var segments []assistant.MessageSegment
 	if len(event.Segments) > 0 {
-		return event.Segments
+		segments = event.Segments
+	} else {
+		raw := strings.TrimSpace(event.RawMessage)
+		if raw == "" {
+			raw = strings.TrimSpace(fallbackText)
+		}
+		if raw != "" {
+			segments = assistant.CQToSegments(raw)
+		}
 	}
-	raw := strings.TrimSpace(event.RawMessage)
-	if raw == "" {
-		raw = strings.TrimSpace(fallbackText)
+	// 历史入库的 QQ 官方群 @ 消息当初被剥掉了指向自己的 at 段，只留了 ToMe=true；
+	// 排掉纯引用机器人发言的情况后补回该段，让旧记录在事件明细页也能看到 @自己。
+	selfID := strings.TrimSpace(event.SelfID)
+	quotedSelf := event.Quoted != nil && strings.TrimSpace(event.Quoted.UserID) != "" && strings.TrimSpace(event.Quoted.UserID) == selfID
+	if assistant.NormalizePlatformID(event.Platform) == assistant.PlatformQQOfficial &&
+		event.Kind == assistant.EventKindGroup && event.ToMe && !event.SenderIsBot &&
+		selfID != "" && !quotedSelf && !inboundSegmentsHaveAt(segments, selfID) {
+		insertAt := 0
+		if len(segments) > 0 && segments[0].Type == "reply" {
+			insertAt = 1
+		}
+		withSelf := make([]assistant.MessageSegment, 0, len(segments)+1)
+		withSelf = append(withSelf, segments[:insertAt]...)
+		withSelf = append(withSelf, assistant.MessageSegment{Type: "at", Data: map[string]string{"qq": selfID}})
+		withSelf = append(withSelf, segments[insertAt:]...)
+		return withSelf
 	}
-	if raw == "" {
-		return nil
+	return segments
+}
+
+func inboundSegmentsHaveAt(segments []assistant.MessageSegment, target string) bool {
+	for _, seg := range segments {
+		if seg.Type == "at" && strings.TrimSpace(seg.Data["qq"]) == target {
+			return true
+		}
 	}
-	return assistant.CQToSegments(raw)
+	return false
 }
 
 // pendingMentionText 记住一条事件的 segment，等昵称查回来后再渲染正文。quoted 是
@@ -1034,18 +1070,24 @@ func (t inboundEventTokenTotals) tokensPerSecond() float64 {
 // 否则筛了一个群、token 数还是全站的，那个数就没法用来判断这个群贵不贵。
 // 用量日志的 metadata 里带 group_id，直接按它过滤，不用回表连 inbound_events。
 func (s *SQLiteStore) inboundEventTokenUsage(ctx context.Context, since time.Time, groupID string) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
-	return s.inboundEventTokenUsageForPage(ctx, since, groupID, nil)
+	return s.inboundEventTokenUsageScoped(ctx, InboundEventQuery{Since: since, GroupID: groupID}, nil)
 }
 
-func (s *SQLiteStore) inboundEventTokenUsageForPage(ctx context.Context, since time.Time, groupID string, events []InboundEventDetail) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
+func (s *SQLiteStore) inboundEventTokenUsageScoped(ctx context.Context, query InboundEventQuery, events []InboundEventDetail) (map[string]inboundEventTokenTotals, inboundEventTokenTotals, error) {
 	defer s.observeStorage(ctx, "inboundEventTokenUsageForPage", "read")()
-	groupID = strings.TrimSpace(groupID)
+	groupID := strings.TrimSpace(query.GroupID)
+	userID := strings.TrimSpace(query.UserID)
+	profileID := strings.TrimSpace(query.ProfileID)
 	sinceText := time.Unix(0, 0).UTC().Format(time.RFC3339Nano)
-	if !since.IsZero() {
-		sinceText = since.UTC().Format(time.RFC3339Nano)
+	if !query.Since.IsZero() {
+		sinceText = query.Since.UTC().Format(time.RFC3339Nano)
 	}
 	args := []any{sinceText}
 	targetCondition := ""
+	if !query.Until.IsZero() && events == nil {
+		targetCondition += " AND created_at < ?"
+		args = append(args, query.Until.UTC().Format(time.RFC3339Nano))
+	}
 	if events != nil {
 		if len(events) == 0 {
 			return map[string]inboundEventTokenTotals{}, inboundEventTokenTotals{}, nil
@@ -1055,9 +1097,8 @@ func (s *SQLiteStore) inboundEventTokenUsageForPage(ctx context.Context, since t
 			ids = append(ids, event.MessageID)
 			args = append(args, event.MessageID)
 		}
-		targetCondition = " AND target IN (" + placeholders(len(ids)) + ")"
+		targetCondition += " AND target IN (" + placeholders(len(ids)) + ")"
 	}
-	// 三个名字都要认：动作名改过两轮，少列一个就会让那段时间的用量统计凭空归零。
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT target, metadata
 FROM app_logs
@@ -1071,6 +1112,45 @@ ORDER BY created_at`, args...)
 
 	byMessage := map[string]inboundEventTokenTotals{}
 	var total inboundEventTokenTotals
+	var legacyProfileTargets map[string]bool
+	loadLegacyProfileTargets := func() (map[string]bool, error) {
+		if legacyProfileTargets != nil {
+			return legacyProfileTargets, nil
+		}
+		legacyProfileTargets = map[string]bool{}
+		sinceUnix := int64(0)
+		if !query.Since.IsZero() {
+			sinceUnix = query.Since.Unix()
+		}
+		qArgs := []any{sinceUnix, profileID}
+		cond := ""
+		if !query.Until.IsZero() {
+			cond += " AND event_time < ?"
+			qArgs = append(qArgs, query.Until.Unix())
+		}
+		if groupID != "" {
+			cond += " AND group_id = ?"
+			qArgs = append(qArgs, groupID)
+		} else if userID != "" {
+			cond += " AND COALESCE(TRIM(group_id), '') = '' AND user_id = ?"
+			qArgs = append(qArgs, userID)
+		}
+		mRows, qErr := s.eventReader().QueryContext(ctx, `
+SELECT DISTINCT message_id FROM inbound_events
+WHERE event_time >= ? AND COALESCE(profile_id, '') = ? AND COALESCE(TRIM(message_id), '') != ''`+cond, qArgs...)
+		if qErr != nil {
+			return nil, qErr
+		}
+		defer func() { _ = mRows.Close() }()
+		for mRows.Next() {
+			var mid string
+			if err := mRows.Scan(&mid); err == nil {
+				legacyProfileTargets[strings.TrimSpace(mid)] = true
+			}
+		}
+		return legacyProfileTargets, mRows.Err()
+	}
+
 	for rows.Next() {
 		var target, metadata sql.NullString
 		if err := rows.Scan(&target, &metadata); err != nil {
@@ -1080,8 +1160,39 @@ ORDER BY created_at`, args...)
 		if metadata.Valid && strings.TrimSpace(metadata.String) != "" {
 			_ = json.Unmarshal([]byte(metadata.String), &meta)
 		}
-		if groupID != "" && metadataGroupID(meta) != groupID {
+		messageID := strings.TrimSpace(target.String)
+		if messageID == "" {
+			messageID = metadataStringField(meta, "message_id")
+		}
+		metaGroup := metadataGroupID(meta)
+		metaUser := metadataStringField(meta, "user_id")
+		metaProfile := metadataStringField(meta, "profile_id")
+		if groupID != "" && metaGroup != "" && metaGroup != groupID {
 			continue
+		}
+		if groupID != "" && metaGroup == "" && events == nil {
+			continue
+		}
+		if groupID == "" && userID != "" && (metaGroup != "" || (metaUser != "" && metaUser != userID) || (metaUser == "" && events == nil)) {
+			continue
+		}
+		if profileID != "" {
+			if metaProfile != "" {
+				if metaProfile != profileID {
+					continue
+				}
+			} else if events == nil {
+				if messageID == "" {
+					continue
+				}
+				allowed, lErr := loadLegacyProfileTargets()
+				if lErr != nil {
+					return nil, inboundEventTokenTotals{}, fmt.Errorf("query legacy profile event targets: %w", lErr)
+				}
+				if !allowed[messageID] {
+					continue
+				}
+			}
 		}
 		inputTokens := int64FromAny(meta["input_tokens"])
 		outputTokens := int64FromAny(meta["output_tokens"])
@@ -1102,8 +1213,6 @@ ORDER BY created_at`, args...)
 			current.CacheRateInputTokens = current.InputTokens
 			current.CacheRateCachedInputTokens = current.CachedInputTokens
 		}
-		// ttft_ms 只有流式跑通时才写。没有这个键就不计入样本数——拿它们当 0
-		// 参与平均会把均值稀释成一个假的小数字。
 		if missing, _ := meta["usage_missing"].(bool); missing {
 			current.UsageMissingCalls = 1
 		}
@@ -1112,20 +1221,16 @@ ORDER BY created_at`, args...)
 			current.TTFTCalls = 1
 		}
 		total.add(current)
-		messageID := strings.TrimSpace(target.String)
-		if messageID == "" {
-			messageID, _ = meta["message_id"].(string)
-			messageID = strings.TrimSpace(messageID)
-		}
 		if messageID != "" {
-			item := byMessage[messageID]
+			key := inboundEventLogScopeKey(metaProfile, metaGroup, metaUser, messageID)
+			item := byMessage[key]
 			item.add(current)
 			model, _ := meta["model"].(string)
 			provider, _ := meta["provider"].(string)
 			purpose, _ := meta["purpose"].(string)
 			item.addModel(model, provider, strings.TrimSpace(purpose))
 			item.addPurpose(strings.TrimSpace(purpose), current)
-			byMessage[messageID] = item
+			byMessage[key] = item
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -1179,12 +1284,59 @@ WHERE action = 'agent_run' AND target IN (`+placeholders(count)+`) AND created_a
 		if !found {
 			calls = meta["tool_call"]
 		}
-		byMessage[strings.TrimSpace(target.String)] += int64FromAny(calls)
+		key := inboundEventLogScopeKey(
+			metadataStringField(meta, "profile_id"),
+			metadataGroupID(meta),
+			metadataStringField(meta, "user_id"),
+			strings.TrimSpace(target.String),
+		)
+		byMessage[key] += int64FromAny(calls)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate event tool calls: %w", err)
 	}
 	return byMessage, nil
+}
+
+func metadataStringField(meta map[string]any, field string) string {
+	value, _ := meta[field].(string)
+	return strings.TrimSpace(value)
+}
+
+func inboundEventLogScopeKey(profileID, groupID, userID, messageID string) string {
+	messageID = strings.TrimSpace(messageID)
+	profileID = strings.TrimSpace(profileID)
+	groupID = strings.TrimSpace(groupID)
+	userID = strings.TrimSpace(userID)
+	if profileID == "" && groupID == "" && userID == "" {
+		return messageID
+	}
+	return eventMemoryTraceKey(messageID, profileID, groupID, userID)
+}
+
+func lookupInboundEventUsage(byKey map[string]inboundEventTokenTotals, event InboundEventDetail) (inboundEventTokenTotals, bool) {
+	messageID := strings.TrimSpace(event.MessageID)
+	if messageID == "" || len(byKey) == 0 {
+		return inboundEventTokenTotals{}, false
+	}
+	scoped := inboundEventLogScopeKey(event.ProfileID, event.GroupID, event.UserID, messageID)
+	if item, ok := byKey[scoped]; ok {
+		return item, true
+	}
+	item, ok := byKey[messageID]
+	return item, ok
+}
+
+func lookupInboundEventToolCalls(byKey map[string]int64, event InboundEventDetail) int64 {
+	messageID := strings.TrimSpace(event.MessageID)
+	if messageID == "" || len(byKey) == 0 {
+		return 0
+	}
+	scoped := inboundEventLogScopeKey(event.ProfileID, event.GroupID, event.UserID, messageID)
+	if count, ok := byKey[scoped]; ok {
+		return count
+	}
+	return byKey[messageID]
 }
 
 func (t *inboundEventTokenTotals) add(other inboundEventTokenTotals) {

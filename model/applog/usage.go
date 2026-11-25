@@ -2,6 +2,7 @@ package applog
 
 import (
 	"context"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -19,25 +20,88 @@ type UsageSummary struct {
 	CachedInputTokens int64     `json:"cached_input_tokens"`
 	MissingUsageCalls int64     `json:"usage_missing_calls,omitempty"`
 	// FailedCalls 是窗口内失败的模型请求数，不算在 Calls 里：Calls 只数成功的调用，
-	// 降级链里失败的每一档各算一次。
-	FailedCalls int64            `json:"failed_calls"`
-	Breakdown   []UsageBreakdown `json:"breakdown"`
+	// 降级链里失败的每一档各算一次。RecoveredCalls 是其中最终由后备模型接上的次数。
+	FailedCalls           int64            `json:"failed_calls"`
+	RecoveredCalls        int64            `json:"recovered_calls,omitempty"`
+	DurationMS            int64            `json:"duration_ms,omitempty"`
+	OutputTokensPerSecond float64          `json:"output_tokens_per_second,omitempty"`
+	AvgTTFTMS             float64          `json:"avg_ttft_ms,omitempty"`
+	TTFTCalls             int64            `json:"ttft_calls,omitempty"`
+	Breakdown             []UsageBreakdown `json:"breakdown"`
+	ttftSumMS             int64
+}
+
+// AddCall 把单次调用折算出的度量累加进汇总，并同步刷新吞吐和首 token 均值。
+func (s *UsageSummary) AddCall(call UsageBreakdown) {
+	s.Calls += call.Calls
+	s.InputTokens += call.InputTokens
+	s.OutputTokens += call.OutputTokens
+	s.TotalTokens += call.TotalTokens
+	s.CachedInputTokens += call.CachedInputTokens
+	s.MissingUsageCalls += call.MissingUsageCalls
+	s.FailedCalls += call.FailedCalls
+	s.RecoveredCalls += call.RecoveredCalls
+	s.DurationMS += call.DurationMS
+	s.TTFTCalls += call.TTFTCalls
+	s.ttftSumMS += callTTFTSum(call)
+	s.OutputTokensPerSecond = computeTokensPerSecond(s.OutputTokens, s.DurationMS)
+	s.AvgTTFTMS = computeAvgTTFT(s.ttftSumMS, s.TTFTCalls)
 }
 
 // UsageBreakdown preserves the combination of purpose and actual model so
 // consumers can group by either dimension or inspect their intersection.
 // CachedInputTokens is included in InputTokens, never added to TotalTokens.
 type UsageBreakdown struct {
-	Purpose           string `json:"purpose"`
-	Provider          string `json:"provider"`
-	Model             string `json:"model"`
-	Calls             int64  `json:"recorded_calls"`
-	InputTokens       int64  `json:"input_tokens"`
-	OutputTokens      int64  `json:"output_tokens"`
-	TotalTokens       int64  `json:"total_tokens"`
-	CachedInputTokens int64  `json:"cached_input_tokens"`
-	MissingUsageCalls int64  `json:"missing_usage_calls"`
-	FailedCalls       int64  `json:"failed_calls"`
+	Purpose               string  `json:"purpose"`
+	Provider              string  `json:"provider"`
+	Model                 string  `json:"model"`
+	Calls                 int64   `json:"recorded_calls"`
+	InputTokens           int64   `json:"input_tokens"`
+	OutputTokens          int64   `json:"output_tokens"`
+	TotalTokens           int64   `json:"total_tokens"`
+	CachedInputTokens     int64   `json:"cached_input_tokens"`
+	MissingUsageCalls     int64   `json:"missing_usage_calls"`
+	FailedCalls           int64   `json:"failed_calls"`
+	RecoveredCalls        int64   `json:"recovered_calls,omitempty"`
+	DurationMS            int64   `json:"duration_ms,omitempty"`
+	OutputTokensPerSecond float64 `json:"output_tokens_per_second,omitempty"`
+	AvgTTFTMS             float64 `json:"avg_ttft_ms,omitempty"`
+	TTFTCalls             int64   `json:"ttft_calls,omitempty"`
+	ttftSumMS             int64
+}
+
+// SetTTFTSample 在构造单次调用样本时记录流式首 token 时延（毫秒）。
+func (b *UsageBreakdown) SetTTFTSample(ttftMS int64) {
+	if ttftMS <= 0 {
+		return
+	}
+	b.ttftSumMS = ttftMS
+	b.TTFTCalls = 1
+	b.AvgTTFTMS = float64(ttftMS)
+}
+
+func callTTFTSum(entry UsageBreakdown) int64 {
+	if entry.ttftSumMS > 0 {
+		return entry.ttftSumMS
+	}
+	if entry.TTFTCalls > 0 && entry.AvgTTFTMS > 0 {
+		return int64(math.Round(entry.AvgTTFTMS * float64(entry.TTFTCalls)))
+	}
+	return 0
+}
+
+func computeTokensPerSecond(outputTokens, durationMS int64) float64 {
+	if outputTokens <= 0 || durationMS <= 0 {
+		return 0
+	}
+	return math.Round((float64(outputTokens)*1000/float64(durationMS))*10) / 10
+}
+
+func computeAvgTTFT(sumMS, calls int64) float64 {
+	if calls <= 0 || sumMS <= 0 {
+		return 0
+	}
+	return math.Round((float64(sumMS)/float64(calls))*10) / 10
 }
 
 type usageBreakdownKey struct {
@@ -73,12 +137,19 @@ func (a *UsageBreakdownAccumulator) Add(entry UsageBreakdown) {
 	current.CachedInputTokens += entry.CachedInputTokens
 	current.MissingUsageCalls += entry.MissingUsageCalls
 	current.FailedCalls += entry.FailedCalls
+	current.RecoveredCalls += entry.RecoveredCalls
+	current.DurationMS += entry.DurationMS
+	current.TTFTCalls += entry.TTFTCalls
+	current.ttftSumMS += callTTFTSum(entry)
+	current.OutputTokensPerSecond = computeTokensPerSecond(current.OutputTokens, current.DurationMS)
+	current.AvgTTFTMS = computeAvgTTFT(current.ttftSumMS, current.TTFTCalls)
 	a.entries[key] = current
 }
 
 func (a *UsageBreakdownAccumulator) Snapshot() []UsageBreakdown {
 	entries := make([]UsageBreakdown, 0, len(a.entries))
 	for _, entry := range a.entries {
+		entry.ttftSumMS = 0
 		entries = append(entries, entry)
 	}
 	sort.Slice(entries, func(i, j int) bool {
