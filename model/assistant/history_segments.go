@@ -69,7 +69,12 @@ var promptHistorySegmentSpec = registerPrompt(PromptSpec{
 })
 
 // historySegmentAsync 在后台跑摘要生成；测试换成同步执行。
-var historySegmentAsync = func(run func()) { go run() }
+var historySegmentAsync = func(run func()) {
+	go func() {
+		defer recoverGoroutinePanic("history_segment_summary")
+		run()
+	}()
+}
 
 // historySegmentLayout 是这一轮历史区的分段情况，写进调试轨迹。
 type historySegmentLayout struct {
