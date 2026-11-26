@@ -1,6 +1,7 @@
 # Diana 工作区容器（work box）镜像，照雨夹雪 deploy/box/Dockerfile。
-# 根文件系统只读，运行期工具都装在这里；uv 环境、npm/pip 用户安装落在 /work
-# （HOME=/work/.home），随工作区重置一起清空。Diana 首次使用时用这份文件在本地
+# 根文件系统只读，运行期工具都装在这里；uv 环境、npm/pip 用户安装落在各会话范围
+# 自己的 .home（HOME 等由 Diana 每次 exec 时按范围给），随该范围重置一起清空。
+# /work 归 root、0711：各范围 uid 进得去自己的 0700 目录，列不出别人的。Diana 首次使用时用这份文件在本地
 # docker build，标签带文件内容的哈希，改了这份文件就会重建镜像和容器。
 FROM node:24-trixie-slim@sha256:54f84b4cf8432b21aaffd5d3ce8d41e12cea0d10d33c09d2f3c9879d49d6b446
 
@@ -23,7 +24,7 @@ RUN apt-get update \
 RUN userdel --remove node \
  && useradd --uid 1000 --no-create-home --home-dir /work/.home --shell /bin/bash box \
  && mkdir -p /work \
- && chown 1000:1000 /work
+ && chmod 0711 /work
 
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     UV_CACHE_DIR=/work/.home/.cache/uv \

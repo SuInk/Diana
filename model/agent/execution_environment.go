@@ -74,7 +74,7 @@ func executionEnvironment(ctx context.Context, registry *ToolRegistry) map[strin
 		}
 		result["programs"] = programs
 		result["sandbox"] = map[string]any{"effective": "container", "kind": "work box", "network": BoxConfigFromEnv().Network, "network_scope": "public internet only"}
-		result["work_dir"] = BoxWorkDir
+		result["work_dir"] = BoxWorkDir + "/<本会话范围>（run_command 结果里的 cwd）"
 		return result
 	}
 	programs := make([]map[string]any, 0, 4)

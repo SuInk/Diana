@@ -33,7 +33,7 @@ func toolFileSource(runtime *Runtime, event MessageEvent, owner bool, input map[
 		if strings.TrimSpace(content) != "" {
 			return nil, fmt.Errorf("content 和 path 只能提供一个；已有文件直接用 path，无需 read_file 后复制正文")
 		}
-		// /work/... 是工作区容器里的文件：容器本会话共用，谁都能取。
+		// /work/... 是本会话在工作区容器里的文件：本会话的人共用，谁都能取，别的会话取不到。
 		if isBoxPath(path) && runtime.boxExposed(event, owner) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cancel()

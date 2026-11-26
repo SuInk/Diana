@@ -91,7 +91,7 @@ func (r *Runtime) boxForEvent(event MessageEvent, owner bool) (*agent.WorkBox, e
 	if !r.boxExposed(event, owner) {
 		return nil, errors.New("工作区容器没有打开，或这台机器上 Docker 不可用")
 	}
-	workBox, err := agent.BoxFor(r.boxKey(event))
+	workBox, err := workBoxFor(r.boxKey(event))
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +110,7 @@ func (t *boxCommandTool) Description() string { return agent.BoxCommandDescripti
 
 func (t *boxCommandTool) InputSchema() map[string]any {
 	schema := agent.BoxCommandSchema()
-	schema["properties"].(map[string]any)["inputs"] = toolStringArrayParam(fmt.Sprintf("运行前放进 /work/inbox 的工作目录文件（如 save_to_workspace 存下的聊天附件），最多 %d 个", boxMaxInputs))
+	schema["properties"].(map[string]any)["inputs"] = toolStringArrayParam(fmt.Sprintf("运行前放进本会话工作区 inbox/ 的工作目录文件（如 save_to_workspace 存下的聊天附件），最多 %d 个", boxMaxInputs))
 	return schema
 }
 
@@ -136,7 +136,7 @@ func (t *boxCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	return out, err
 }
 
-// stageInputs 把工作目录文件放进 /work/inbox。群成员只能传本群保存过的文件（核对访问
+// stageInputs 把工作目录文件放进本会话工作区的 inbox/。群成员只能传本群保存过的文件（核对访问
 // 哈希），主人不受这条限制，受保护的运行时配置谁都传不进去。
 func (t *boxCommandTool) stageInputs(ctx context.Context, workBox *agent.WorkBox, paths []string) ([]string, error) {
 	if len(paths) > boxMaxInputs {
@@ -186,7 +186,7 @@ type boxResetTool struct {
 
 func (t *boxResetTool) Name() string { return boxResetToolName }
 func (t *boxResetTool) Description() string {
-	return "被要求或容器坏掉时清空工作区容器（/work 全部删除）。每周一 05:00 也会自动清空。"
+	return "被要求或工作区坏掉时清空本会话的工作区（停掉本会话的命令、删光本会话目录里的文件）。别的会话不受影响。"
 }
 func (t *boxResetTool) InputSchema() map[string]any { return toolObjectSchema(nil, map[string]any{}) }
 
@@ -206,7 +206,7 @@ func (r *Runtime) resetSessionBox(event MessageEvent) error {
 	if !boxAvailable() {
 		return nil
 	}
-	workBox, err := agent.BoxFor(r.boxKey(event))
+	workBox, err := workBoxFor(r.boxKey(event))
 	if err != nil {
 		return err
 	}
@@ -225,9 +225,16 @@ func (r *Runtime) boxFileSource(ctx context.Context, event MessageEvent, owner b
 	return data, err
 }
 
-// runBoxMaintenance 在有机器人打开工作区容器时预构建镜像；每分钟停掉空闲 15 分钟的容器，
-// 每 10 分钟检查一次每周重置。
-// Docker 不可用时 RunWeeklyBoxReset 直接返回。
+// workBoxFor 返回 key 对应的会话范围。范围 uid 登记在工作目录的 .diana/ 里，第一次
+// 用之前先把位置告诉 agent 包。
+func workBoxFor(key string) (*agent.WorkBox, error) {
+	agent.SetBoxStateDir(agent.DianaStateDir(AgentWorkspaceDir()))
+	return agent.BoxFor(key)
+}
+
+// runBoxMaintenance 在有机器人打开工作区容器时预构建镜像；每分钟停掉空闲 15 分钟的共享
+// 容器，并把旧版每会话一个的容器和卷并进共享工作区（搬完就不再检查）。
+// Docker 不可用时这些都直接返回。
 func runBoxMaintenance(ctx context.Context, configs []BotConfig) {
 	enabled := false
 	for _, cfg := range configs {
@@ -239,17 +246,17 @@ func runBoxMaintenance(ctx context.Context, configs []BotConfig) {
 			log.Printf("diana agent: 工作区镜像预构建失败：%v", err)
 		}
 	}
-	// 回收和每周重置不看开关：开关后来才打开、或者关掉之前留下的容器，也按时处理。
+	// 回收和迁移不看开关：开关后来才打开、或者关掉之前留下的容器，也按时处理。
+	agent.SetBoxStateDir(agent.DianaStateDir(AgentWorkspaceDir()))
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
-	lastReset := time.Time{}
+	migrating := true
 	for {
 		now := time.Now()
-		agent.StopIdleBoxes(ctx, now, agent.BoxIdleTimeout)
-		if now.Sub(lastReset) >= agent.BoxResetCheckInterval {
-			agent.RunWeeklyBoxReset(ctx, now)
-			lastReset = now
+		if migrating && boxAvailable() {
+			migrating = agent.MigrateLegacyBoxes(ctx)
 		}
+		agent.StopIdleBoxes(ctx, now, agent.BoxIdleTimeout)
 		select {
 		case <-ctx.Done():
 			return
