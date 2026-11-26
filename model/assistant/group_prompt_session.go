@@ -28,6 +28,8 @@ type GroupPromptSession struct {
 	// loadedTools 按它淘汰久未使用的工具。没有记录的视同很久没用。
 	ToolLastUsed map[string]int64          `json:"tool_last_used,omitempty"`
 	History      []GroupPromptHistoryEntry `json:"history,omitempty"`
+	// Segments 是已经压成摘要的较早历史段，按时间顺序，见 history_segments.go。
+	Segments []GroupPromptHistorySegment `json:"segments,omitempty"`
 }
 
 // promptContextSummary reads the source at assembly time, not the earlier routing
@@ -86,6 +88,8 @@ type groupPromptSession struct {
 	data                GroupPromptSession
 	loaded, invalidated bool
 	historyRevision     uint64
+	// segmentPending 表示这个会话正在后台生成一段历史摘要。
+	segmentPending bool
 }
 
 // The short legacy history still drives background memory extraction. Its
@@ -403,18 +407,55 @@ func (r *Runtime) stableGroupHistory(ctx context.Context, event MessageEvent, cf
 			delete(entries, key)
 		}
 	}
+	segmented := boolValue(cfg.HistorySegmentSummaryEnabled, false) && s != nil
+	var segments []GroupPromptHistorySegment
 	if s != nil {
 		s.mu.Lock()
 		before, _ := json.Marshal(s.data.History)
 		after, _ := json.Marshal(next)
+		changed := false
 		if !s.invalidated && s.historyRevision == revision && string(before) != string(after) {
 			s.data.History = next
+			changed = true
+		}
+		if segmented && !s.invalidated {
+			segments = liveHistorySegments(s.data.Segments, next)
+			if len(segments) != len(s.data.Segments) && s.historyRevision == revision {
+				s.data.Segments = segments
+				changed = true
+			}
+		}
+		if changed {
 			s.saveLocked()
 		}
 		s.mu.Unlock()
 	}
+	pieces := make([]historyPiece, len(next))
+	for i := range next {
+		pieces[i] = historyPiece{entry: &next[i]}
+	}
+	if segmented {
+		var layout historySegmentLayout
+		pieces, layout = applyHistorySegments(next, segments)
+		if candidate := nextHistorySegment(next, segments); candidate != nil {
+			layout.Pending = true
+			r.scheduleHistorySegment(s, event, append([]GroupPromptHistoryEntry(nil), candidate...))
+		}
+		r.recordDebugTrace(debugTraceFromContext(ctx), "历史分段摘要", map[string]any{
+			"phase":         "history_segments",
+			"segments":      layout.Segments,
+			"covered_items": layout.CoveredItems,
+			"saved_chars":   layout.SavedChars,
+			"pending":       layout.Pending,
+		})
+	}
 	var stable []llm.Message
-	for _, entry := range next {
+	for _, piece := range pieces {
+		if piece.summary != nil {
+			stable = append(stable, *piece.summary)
+			continue
+		}
+		entry := piece.entry
 		for _, message := range entry.Messages {
 			message.Priority = llm.MessagePriorityHistory
 			if recent[entry.Key] {

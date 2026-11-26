@@ -52,6 +52,8 @@ func randomRepeatBehavior(key, description, kind string, min, max int, field fun
 var behaviorSettings = []behaviorSetting{
 	boolBehavior("reply_line_split_enabled", "按换行把回复拆成多条发送", false,
 		func(g *GroupConfig) **bool { return &g.ReplyLineSplitEnabled }, func(c *BotConfig) **bool { return &c.ReplyLineSplitEnabled }),
+	boolBehavior("history_segment_summary_enabled", "较早的群聊历史按固定分段压成摘要，近期保留原文（试验，默认关）", false,
+		func(g *GroupConfig) **bool { return &g.HistorySegmentSummaryEnabled }, func(c *BotConfig) **bool { return &c.HistorySegmentSummaryEnabled }),
 	boolBehavior("natural_reply_split_enabled", "长回复按语义自然拆成几个气泡", true,
 		func(g *GroupConfig) **bool { return &g.NaturalReplySplitEnabled }, func(c *BotConfig) **bool { return &c.NaturalReplySplitEnabled }),
 	boolBehavior("typing_delay_enabled", "按字数模拟打字延迟再发出", false,

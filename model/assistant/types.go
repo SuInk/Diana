@@ -892,17 +892,18 @@ type BotConfig struct {
 	ProactiveReplyExtraCriteria string `json:"proactive_reply_extra_criteria,omitempty"`
 	// PromptOverrides 是管理员改过的内置提示词正文，按 PromptSpec.Key 存。只存改过的，
 	// 没出现的键用内置默认值，见 prompt_overrides.go。
-	PromptOverrides            PromptOverrides `json:"prompt_overrides,omitempty"`
-	MaxInputChars              int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars              int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled   *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks    *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	ReplyLineSplitEnabled      *bool           `json:"reply_line_split_enabled,omitempty"`
-	TypingDelayEnabled         *bool           `json:"typing_delay_enabled,omitempty"`
-	TypingDelayPerCharMS       int             `json:"typing_delay_per_char_ms,omitempty"`
-	SocialReplyEnabled         *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles            int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold int             `json:"forward_reply_chunk_threshold,omitempty"`
+	PromptOverrides              PromptOverrides `json:"prompt_overrides,omitempty"`
+	MaxInputChars                int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
+	HistorySegmentSummaryEnabled *bool           `json:"history_segment_summary_enabled,omitempty"`
+	ReplyPreserveLineBreaks      *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled        *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled           *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS         int             `json:"typing_delay_per_char_ms,omitempty"`
+	SocialReplyEnabled           *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
 	// ForwardReplyEnabled 是合并转发卡片的总开关；关掉时两个阈值都不生效。
 	// 两个阈值只描述「超过多少触发」，留空（0）是不按这一项触发，不再兼任开关。
 	ForwardReplyEnabled   *bool           `json:"forward_reply_enabled,omitempty"`
@@ -1426,8 +1427,10 @@ type GroupConfig struct {
 	// 里长回复整条读更省事，一个闲聊群里同样长度得拆开发才不像播报。
 	// 自然分条的 nil 必须保留，发送时才跟随所属机器人的当前值。
 	NaturalReplySplitEnabled *bool `json:"natural_reply_split_enabled,omitempty"`
-	ReplyMaxBubbles          int   `json:"reply_max_bubbles,omitempty"`
-	DirectReplyChunkSize     int   `json:"direct_reply_chunk_size,omitempty"`
+	// HistorySegmentSummaryEnabled 的 nil 跟随所属机器人，见 history_segments.go。
+	HistorySegmentSummaryEnabled *bool `json:"history_segment_summary_enabled,omitempty"`
+	ReplyMaxBubbles              int   `json:"reply_max_bubbles,omitempty"`
+	DirectReplyChunkSize         int   `json:"direct_reply_chunk_size,omitempty"`
 	// 合并转发：ForwardReplyEnabled nil 跟随机器人，false 本群关闭，true 本群单独设置。
 	// 两个阈值 nil 同样跟随机器人。以前阈值是 int，群配置一存下来就把当时的值
 	// （旧群多半是 0）定死，机器人页后来改成 140 也进不了这个群。
@@ -1643,25 +1646,26 @@ type ConfigPayload struct {
 	// NotebookSharedScopeEnabled 让笔记本跟随机器人：群聊私聊共用一本，新条目写进
 	// 这台机器人的全局作用域，所有会话都能查到。默认打开——笔记本记的是这台机器人
 	// 学到的梗和规矩，不是某个群的私产；关掉才按会话隔离。
-	NotebookSharedScopeEnabled  *bool           `json:"notebook_shared_scope_enabled,omitempty"`
-	SlangLearningEnabled        *bool           `json:"slang_learning_enabled,omitempty"`
-	ProactiveReplyExtraCriteria string          `json:"proactive_reply_extra_criteria,omitempty"`
-	PromptOverrides             PromptOverrides `json:"prompt_overrides,omitempty"`
-	MaxInputChars               int             `json:"max_input_chars,omitempty"`
-	MaxReplyChars               int             `json:"max_reply_chars,omitempty"`
-	NaturalReplySplitEnabled    *bool           `json:"natural_reply_split_enabled,omitempty"`
-	ReplyPreserveLineBreaks     *bool           `json:"reply_preserve_line_breaks,omitempty"`
-	ReplyLineSplitEnabled       *bool           `json:"reply_line_split_enabled,omitempty"`
-	TypingDelayEnabled          *bool           `json:"typing_delay_enabled,omitempty"`
-	TypingDelayPerCharMS        int             `json:"typing_delay_per_char_ms,omitempty"`
-	SocialReplyEnabled          *bool           `json:"social_reply_enabled,omitempty"`
-	ReplyMaxBubbles             int             `json:"reply_max_bubbles,omitempty"`
-	ForwardReplyChunkThreshold  int             `json:"forward_reply_chunk_threshold,omitempty"`
-	ForwardReplyEnabled         *bool           `json:"forward_reply_enabled,omitempty"`
-	DirectReplyChunkSize        int             `json:"direct_reply_chunk_size,omitempty"`
-	ForwardReplyThreshold       int             `json:"forward_reply_threshold,omitempty"`
-	RecallReplyMode             RecallReplyMode `json:"recall_reply_mode,omitempty"`
-	RefusalStrategy             RefusalStrategy `json:"refusal_strategy,omitempty"`
+	NotebookSharedScopeEnabled   *bool           `json:"notebook_shared_scope_enabled,omitempty"`
+	SlangLearningEnabled         *bool           `json:"slang_learning_enabled,omitempty"`
+	ProactiveReplyExtraCriteria  string          `json:"proactive_reply_extra_criteria,omitempty"`
+	PromptOverrides              PromptOverrides `json:"prompt_overrides,omitempty"`
+	MaxInputChars                int             `json:"max_input_chars,omitempty"`
+	MaxReplyChars                int             `json:"max_reply_chars,omitempty"`
+	NaturalReplySplitEnabled     *bool           `json:"natural_reply_split_enabled,omitempty"`
+	HistorySegmentSummaryEnabled *bool           `json:"history_segment_summary_enabled,omitempty"`
+	ReplyPreserveLineBreaks      *bool           `json:"reply_preserve_line_breaks,omitempty"`
+	ReplyLineSplitEnabled        *bool           `json:"reply_line_split_enabled,omitempty"`
+	TypingDelayEnabled           *bool           `json:"typing_delay_enabled,omitempty"`
+	TypingDelayPerCharMS         int             `json:"typing_delay_per_char_ms,omitempty"`
+	SocialReplyEnabled           *bool           `json:"social_reply_enabled,omitempty"`
+	ReplyMaxBubbles              int             `json:"reply_max_bubbles,omitempty"`
+	ForwardReplyChunkThreshold   int             `json:"forward_reply_chunk_threshold,omitempty"`
+	ForwardReplyEnabled          *bool           `json:"forward_reply_enabled,omitempty"`
+	DirectReplyChunkSize         int             `json:"direct_reply_chunk_size,omitempty"`
+	ForwardReplyThreshold        int             `json:"forward_reply_threshold,omitempty"`
+	RecallReplyMode              RecallReplyMode `json:"recall_reply_mode,omitempty"`
+	RefusalStrategy              RefusalStrategy `json:"refusal_strategy,omitempty"`
 	// LLMStreamingEnabled 默认开启原生流式调用，分别接收正文、思考与工具。
 	// 工具参数完整后再执行；不支持流式或请求失败时可退回普通调用。
 	// 显式 false 保留用户选择，未配置时使用默认值。
@@ -2999,6 +3003,7 @@ func PayloadFromConfig(cfg BotConfig) ConfigPayload {
 		MaxInputChars:                   cfg.MaxInputChars,
 		MaxReplyChars:                   cfg.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(cfg.NaturalReplySplitEnabled),
+		HistorySegmentSummaryEnabled:    copyBoolPointer(cfg.HistorySegmentSummaryEnabled),
 		ReplyMergeConfidencePercent:     cfg.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(cfg.ReplyPreserveLineBreaks),
 		ReplyLineSplitEnabled:           copyBoolPointer(cfg.ReplyLineSplitEnabled),
@@ -3258,6 +3263,7 @@ func ConfigFromPayload(payload ConfigPayload, existing BotConfig) BotConfig {
 		MaxInputChars:                   payload.MaxInputChars,
 		MaxReplyChars:                   payload.MaxReplyChars,
 		NaturalReplySplitEnabled:        copyBoolPointer(payload.NaturalReplySplitEnabled),
+		HistorySegmentSummaryEnabled:    copyBoolPointer(payload.HistorySegmentSummaryEnabled),
 		ReplyMergeConfidencePercent:     payload.ReplyMergeConfidencePercent,
 		ReplyPreserveLineBreaks:         copyBoolPointer(payload.ReplyPreserveLineBreaks),
 		ReplyLineSplitEnabled:           copyBoolPointer(payload.ReplyLineSplitEnabled),

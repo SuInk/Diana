@@ -1903,6 +1903,9 @@ func (r *Runtime) effectiveConfigForEventLocked(event MessageEvent) BotConfig {
 	if groupCfg.NaturalReplySplitEnabled != nil {
 		cfg.NaturalReplySplitEnabled = copyBoolPointer(groupCfg.NaturalReplySplitEnabled)
 	}
+	if groupCfg.HistorySegmentSummaryEnabled != nil {
+		cfg.HistorySegmentSummaryEnabled = copyBoolPointer(groupCfg.HistorySegmentSummaryEnabled)
+	}
 	if groupCfg.ReplyPreserveLineBreaks != nil {
 		cfg.ReplyPreserveLineBreaks = copyBoolPointer(groupCfg.ReplyPreserveLineBreaks)
 	}
