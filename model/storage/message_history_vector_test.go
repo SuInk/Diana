@@ -5,7 +5,10 @@ package storage
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/SuInk/diana/model/assistant"
@@ -199,5 +202,101 @@ func TestMessageEventVectorCannotReturnAfterKnownEdit(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("first-seen edit should index like an ordinary message: count=%d", count)
+	}
+}
+
+// 第二步分批读 payload：排在最前面的一整批都是已知编辑标记的行时，要接着读下一批
+// 补足 limit，不能因为第一批被滤空就返回空。
+func TestMessageEventVectorSearchSkipsRefreshOnlyAcrossBatches(t *testing.T) {
+	ctx := context.Background()
+	store := vectorStore(t)
+	session := "onebot-main:group:one"
+	total := messageVectorPayloadBatch + 5
+	for index := 0; index < total; index++ {
+		id := fmt.Sprintf("m%02d", index)
+		if err := store.AppendMessageEvent(ctx, session, vectorEvent(50, "one", id, "第"+id+"条")); err != nil {
+			t.Fatal(err)
+		}
+		// 编号越小和查询越接近。
+		if err := store.SaveMessageEventVector(ctx, session, id, "embed-v1", []float32{1, float32(index) / 10}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 最接近的一整批（外加一条）都打上编辑标记。
+	marked := messageVectorPayloadBatch + 1
+	for index := 0; index < marked; index++ {
+		if _, err := store.db.ExecContext(ctx, `UPDATE message_events SET payload = json_set(payload, '$.edit_refresh_only', json('true')) WHERE session = ? AND message_id = ?`, session, fmt.Sprintf("m%02d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.SearchMessageEventsByVector(ctx, assistant.MessageHistoryVectorQuery{
+		Session: session, Vector: []float32{1, 0}, Model: "embed-v1", FromTime: 0, ThroughTime: 100, Limit: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, event := range events {
+		got = append(got, event.MessageID)
+	}
+	want := []string{fmt.Sprintf("m%02d", marked), fmt.Sprintf("m%02d", marked+1), fmt.Sprintf("m%02d", marked+2)}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// 跨会话前缀按字节精确匹配：紧挨着的前缀和大小写不同的会话都不算。
+func TestMessageEventVectorSearchPrefixIsExact(t *testing.T) {
+	ctx := context.Background()
+	store := vectorStore(t)
+	for _, item := range []struct{ session, id string }{
+		{"onebot-main:group:one", "mine"},
+		{"onebot-main:group;x", "adjacent"},
+		{"ONEBOT-MAIN:group:two", "upper"},
+		{"onebot-main:private:u", "private"},
+	} {
+		if err := store.AppendMessageEvent(ctx, item.session, vectorEvent(50, "g", item.id, item.id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.SaveMessageEventVector(ctx, item.session, item.id, "embed-v1", []float32{1, 0}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := store.SearchMessageEventsByVector(ctx, assistant.MessageHistoryVectorQuery{
+		SessionPrefix: "onebot-main:group:", CrossSession: true,
+		Vector: []float32{1, 0}, Model: "embed-v1", FromTime: 0, ThroughTime: 100, Limit: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].MessageID != "mine" {
+		t.Fatalf("prefix scope = %+v", events)
+	}
+}
+
+func TestMessageSessionPrefixUpperBound(t *testing.T) {
+	for _, tc := range []struct {
+		prefix, want string
+		ok           bool
+	}{
+		{"bot:group:", "bot:group;", true},
+		{"a\xff", "b", true},
+		{"\xff\xff", "", false},
+	} {
+		got, ok := messageSessionPrefixUpperBound(tc.prefix)
+		if got != tc.want || ok != tc.ok {
+			t.Fatalf("upper(%q) = %q, %v; want %q, %v", tc.prefix, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// 维度不同（比如同名模型换了输出维度）的向量不参与打分。
+func TestDotMessageVectorBytesRejectsDimensionMismatch(t *testing.T) {
+	blob := encodeMessageVector([]float32{3, 4})
+	if got := dotMessageVectorBytes([]float32{0.6, 0.8}, blob); math.Abs(got-1) > 1e-6 {
+		t.Fatalf("dot = %v, want 1", got)
+	}
+	if got := dotMessageVectorBytes([]float32{1, 0, 0}, blob); got != -1 {
+		t.Fatalf("mismatched dims = %v, want -1", got)
 	}
 }
