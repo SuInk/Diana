@@ -33,6 +33,7 @@ function editor() {
     isGitHubSettings: ref(false), repositoryWatchRef: ref(null), rssWatchRef: ref(null), credentialEditor: ref(null),
     credentialTokenDrafts: ref({}), savingSettings: ref(false), savingSubscription: ref(false),
     openedSnapshot: ref(""), musicTestResults: ref({}), githubSettingsTab: ref(""), stickerSettingsTab: ref(""),
+    mobileSocialTab: ref(""), isMobileSocialSettings: ref(false), mobileSocialPanelRef: ref(null),
     plugins: ref([plugin]), repositoryPublishPluginID: "publish", repositoryWatchPluginID: "watch",
     botScope: ref("synthetic-bot"), viewQuery: () => new URLSearchParams(), navigate() {},
     askConfirm: async () => true, upsert() {},
