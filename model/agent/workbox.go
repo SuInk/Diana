@@ -23,6 +23,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -469,11 +470,28 @@ func (b *boxContainer) inspect(ctx context.Context) boxContainerState {
 	if len(fields) != 9 {
 		return boxContainerState{exists: true}
 	}
+	fields[8] = normalizeBoxCaps(fields[8])
 	return boxContainerState{exists: true, running: fields[0] == "true", image: fields[1], identity: fields[2] + "|" + fields[3], shape: strings.Join(fields[4:], " ")}
 }
 
-// boxCapAddJSON 是 inspect 里 HostConfig.CapAdd 应有的样子，顺序和 boxIsolationArgs 一致。
-const boxCapAddJSON = `["CHOWN","DAC_OVERRIDE","FOWNER"]`
+// boxCapAdd 是容器额外保留的能力，和 boxIsolationArgs 一致，按规范写法排好序。
+const boxCapAdd = "CHOWN,DAC_OVERRIDE,FOWNER"
+
+// normalizeBoxCaps 把 inspect 里的 HostConfig.CapAdd（JSON 数组）规范成 boxCapAdd 的写法：
+// 新版 Docker 会把 CHOWN 存成 CAP_CHOWN，旧版原样存，顺序也不保证。规范不了的原样返回，
+// 对不上就重建。11-27 在 miku（Docker 29）上实测：不规范的话每次使用都判成「配置变了」、
+// 把共享容器删掉重建，别的会话正在跑的命令也被一起打断。
+func normalizeBoxCaps(raw string) string {
+	var caps []string
+	if err := json.Unmarshal([]byte(raw), &caps); err != nil {
+		return raw
+	}
+	for index, capability := range caps {
+		caps[index] = strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(capability)), "CAP_")
+	}
+	slices.Sort(caps)
+	return strings.Join(caps, ",")
+}
 
 // wantShape 是按当前配置起出来的容器在 inspect 里的样子。部署方改了网络开关或资源
 // 上限，旧容器就对不上：尤其是从断网改成联网，旧的 --network none 容器不能带着
@@ -488,7 +506,7 @@ func (b *boxContainer) wantShape() string {
 	if !ok {
 		memoryText = "?"
 	}
-	return strings.Join([]string{network, memoryText, strconv.FormatInt(int64(math.Round(b.cfg.CPUs*1e9)), 10), strconv.Itoa(b.cfg.PIDs), boxCapAddJSON}, " ")
+	return strings.Join([]string{network, memoryText, strconv.FormatInt(int64(math.Round(b.cfg.CPUs*1e9)), 10), strconv.Itoa(b.cfg.PIDs), boxCapAdd}, " ")
 }
 
 // parseBoxMemory 按 docker --memory 的规则解析：数字加可选的 b/k/m/g 单位，1024 进制。

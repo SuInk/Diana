@@ -157,11 +157,11 @@ func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
 }
 
 // testBoxShape 是按 testBoxConfig 起出来的容器在 inspect 里的网络模式、资源上限和额外能力。
-const testBoxShape = "diana-box 1073741824 2000000000 256 " + boxCapAddJSON
+const testBoxShape = "diana-box 1073741824 2000000000 256 " + boxCapAdd
 
 // running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间，再加 testBoxShape。
 func boxInspectReply(image, id, started string) dockerResult {
-	return boxInspectReplyShape(image, id, started, testBoxShape)
+	return boxInspectReplyShape(image, id, started, "diana-box 1073741824 2000000000 256 "+`["CAP_FOWNER","CAP_CHOWN","CAP_DAC_OVERRIDE"]`)
 }
 
 func boxInspectReplyShape(image, id, started, shape string) dockerResult {
@@ -292,14 +292,28 @@ func fakeTestBox(fake *fakeDocker) *WorkBox {
 	return testScope(BoxConfig{Image: "x", Memory: "1g", CPUs: 2, PIDs: 256, Network: true}, fake.run, "k", 10001)
 }
 
+// 能力的写法因 Docker 版本而异（CAP_CHOWN 或 CHOWN，顺序不定），都要认成同一个，
+// 否则每次使用都会重建共享容器。
+func TestNormalizeBoxCaps(t *testing.T) {
+	for _, raw := range []string{`["CHOWN","DAC_OVERRIDE","FOWNER"]`, `["CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_FOWNER"]`, `["cap_fowner","CAP_CHOWN","dac_override"]`} {
+		if got := normalizeBoxCaps(raw); got != boxCapAdd {
+			t.Fatalf("normalize(%s) = %q", raw, got)
+		}
+	}
+	if got := normalizeBoxCaps("null"); got == boxCapAdd {
+		t.Fatal("no caps must not match")
+	}
+}
+
 // 部署方改了网络开关或资源上限：旧容器的网络模式、内存、CPU、进程数对不上，删掉重建。
 // 能力集合对不上（比如还是旧版不带 CHOWN 的容器）也重建。
 func TestBoxEnsureRecreatesOnShapeChange(t *testing.T) {
 	for name, shape := range map[string]string{
-		"offline container, networked config": "none 1073741824 2000000000 256 " + boxCapAddJSON,
-		"memory changed":                      "diana-box 536870912 2000000000 256 " + boxCapAddJSON,
-		"cpus changed":                        "diana-box 1073741824 1000000000 256 " + boxCapAddJSON,
-		"pids changed":                        "diana-box 1073741824 2000000000 64 " + boxCapAddJSON,
+		"offline container, networked config": "none 1073741824 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"memory changed":                      "diana-box 536870912 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"cpus changed":                        "diana-box 1073741824 1000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"pids changed":                        "diana-box 1073741824 2000000000 64 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"caps reduced":                        "diana-box 1073741824 2000000000 256 " + `["CAP_CHOWN"]`,
 		"caps missing":                        "diana-box 1073741824 2000000000 256 null",
 	} {
 		fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
@@ -673,6 +687,7 @@ func TestBoxRealDocker(t *testing.T) {
 	if elapsed := time.Since(quick); elapsed > 10*time.Second {
 		t.Fatalf("a trivial command took %v", elapsed)
 	}
+	firstIdentity := host.identity
 	if res, out := run(`id -u; pwd; echo "$HOME"; touch /etc/x 2>&1 | head -1`, 0); res.ExitCode != 0 || out != "10901\n"+root+"\n"+root+"/.home\ntouch: cannot touch '/etc/x': Read-only file system\n" {
 		t.Fatalf("identity/cwd/readonly: %+v %q", res, out)
 	}
@@ -743,6 +758,10 @@ func TestBoxRealDocker(t *testing.T) {
 		t.Fatalf("output rotation: %q", out)
 	}
 	run(`rm -f /tmp/.run-stillrunning`, 0)
+	// 几十条命令、两个范围跑下来，共享容器还是最开始那个：每次使用都不该重建它。
+	if host.identity != firstIdentity || firstIdentity == "" {
+		t.Fatalf("shared container was recreated between commands: %q → %q", firstIdentity, host.identity)
+	}
 	// 容器被外部重启后网络命名空间是新的：下次使用前必须重写防火墙。
 	if res := docker(ctx, dockerCall{args: []string{"restart", "--time", "1", host.container}, timeout: time.Minute}); res.code != 0 {
 		t.Fatalf("restart: %s", res.stderr)
