@@ -86,30 +86,38 @@ func (r *Runtime) findProactiveNews(ctx context.Context, cfg BotConfig, event Me
 	if event.Kind != EventKindGroup || !proactiveSearchNewsEnabled(proactiveSettings(cfg)) {
 		return proactiveNews{}
 	}
-	search := r.slangSearchTool(event)
-	if search == nil {
-		return proactiveNews{}
-	}
 	lines := proactiveNewsChatLines(r.proactiveRecentHistory(event), proactiveBotID(event, cfg))
 	if len(lines) == 0 {
 		return proactiveNews{}
 	}
+	pooled := r.pickMobileSocialColdStartNews(event, lines)
+	search := r.slangSearchTool(event)
+	if search == nil {
+		return pooled
+	}
 	query, err := r.pickProactiveNewsQuery(ctx, event, lines)
 	if err != nil {
 		log.Printf("diana proactive news topic failed for %s: %v", sessionKey(event), err)
-		return proactiveNews{}
+		return pooled
 	}
 	if query == "" {
-		return proactiveNews{}
+		return pooled
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, proactiveNewsSearchTimeout)
 	results, err := search.Run(searchCtx, map[string]any{"query": query, "recency": float64(proactiveNewsRecencyDays)})
 	cancel()
 	if err != nil {
 		log.Printf("diana proactive news search %q failed: %v", query, err)
+		if pooled.Results != "" {
+			return pooled
+		}
 		return proactiveNews{Query: query}
 	}
-	return proactiveNews{Query: query, Results: truncateRunesFromStart(strings.TrimSpace(results), proactiveNewsResultMaxRunes)}
+	trimmed := truncateRunesFromStart(strings.TrimSpace(results), proactiveNewsResultMaxRunes)
+	if trimmed == "" && pooled.Results != "" {
+		return pooled
+	}
+	return proactiveNews{Query: query, Results: trimmed}
 }
 
 // proactiveNewsChatLines 取最近几十条群友发言，「昵称：内容」一行一条。机器人自己的

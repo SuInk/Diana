@@ -479,6 +479,7 @@ func NewDefaultPluginManager() *PluginManager {
 		NewStickerPlugin(),
 		NewStockPlugin(),
 		NewCallPlugin(),
+		NewMobileSocialPlugin(nil),
 		NewQQJoinApprovalPlugin(),
 		NewFileDeliveryPlugin(),
 		NewCodingAgentPlugin(),

@@ -45,6 +45,12 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 			pluginTools = append(pluginTools, &phoneCallTool{runtime: r, event: event}, &callScreenTool{runtime: r, event: event})
 		}
 	}
+	// 操控主人的安卓/iPhone 手机只给主人，且安全模式下关闭。
+	if relationship.Owner && !cfg.agentSafeMode() && r.plugins != nil {
+		if _, settings, enabled := r.pluginWithSettingsForEvent(mobileSocialPluginID, event); enabled && settings.Bool(mobileSocialSettingAllowAgent, true) {
+			pluginTools = append(pluginTools, &mobileDeviceTool{runtime: r, event: event})
+		}
+	}
 	for index, tool := range pluginTools {
 		pluginTools[index] = capabilityToolForConfig(tool, cfg)
 		if knowledge, ok := pluginTools[index].(*dianaCapabilitiesTool); ok {
@@ -63,7 +69,7 @@ func (r *Runtime) newReplyAgentRegistry(ctx context.Context, cfg BotConfig, even
 		// 「有过这个名字，但这次会话没权限」，取不到时才说得出正确的那句话。
 		var deniedTools []string
 		if !relationship.Owner || cfg.agentSafeMode() {
-			deniedTools = append(deniedTools, hostAccessToolName)
+			deniedTools = append(deniedTools, hostAccessToolName, mobileDeviceToolName)
 		}
 		render := newDianaRenderTool(r, event)
 		extraTools := []agent.Tool{

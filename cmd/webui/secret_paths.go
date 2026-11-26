@@ -61,6 +61,9 @@ func protectRuntimeSecrets(appCfg appConfig, dbPath, dataDir string) {
 		// 与 browserbox.Manager 的 profilesDir / legacyProfileDir 一致。
 		dirs = append(dirs, filepath.Join(dataDir, "browser-box", "profiles"), filepath.Join(dataDir, "browser-box", "profile"))
 	}
+	if dbPath != "" {
+		dirs = append(dirs, filepath.Join(filepath.Dir(dbPath), "mobile-social"))
+	}
 	dirs = append(dirs, assistant.CodingAgentCredentialDirs()...)
 	agent.ProtectRuntimeDirs(dirs...)
 

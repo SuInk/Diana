@@ -52,6 +52,7 @@ import type {
   WorldBookNode,
   RuntimeConfigItem,
   RuntimeConfigSnapshot,
+  MobileSocialStateSnapshot,
 } from "../api";
 
 export const demoMode = import.meta.env.VITE_DEMO_MODE === "true";
@@ -325,7 +326,53 @@ let plugins: PluginState[] = [
   // 演示里故意让它连不上 agent：给人看「插件开着但电话接不起来」时卡片和设置里怎么提示。
   { manifest: { id: "official.call-plugin", name: "通话插件", version: "0.2.0", description: "主人给机器人打语音电话，机器人自动接听并实时对话，人设、记忆和私聊记录与私聊是同一份。需要在 SnowLuma 容器里运行通话插件，并在模型分配里配好语音识别和语音合成。来电都会接起来，接通后对方账号不是主人就立刻挂断；接不起来时机器人会私聊告诉主人原因。", official: true, built_in: true, default_disabled: true, platforms: ["onebot-v11"], platform_notes: { "onebot-v11": "只支持 SnowLuma 容器里的客户端，需要在容器里部署通话插件（call-agent）。" }, permissions: ["network:websocket", "call:voice"], settings: [{ key: "agent_url", label: "通话插件地址", description: "SnowLuma 容器里通话插件的 WebSocket 地址，例如 ws://127.0.0.1:6190/ws；同一个 compose 里写 ws://snowluma:6190/ws。留空不连接。", type: "string", default: "", global_only: true }, { key: "agent_token", label: "通话插件令牌", description: "和容器里的 CALL_AGENT_TOKEN 环境变量一致。", type: "string", default: "", secret: true, global_only: true }, { key: "profile", label: "接电话的机器人", description: "选容器里登录的那个账号对应的机器人。只有一台 OneBot 机器人时不用选。", type: "bot_profile", default: "", global_only: true, profile_platforms: ["onebot-v11"], options: [{ value: "", label: "自动" }, { value: "bot-onebot", label: "Diana OneBot（演示）" }] }, { key: "answer_delay", label: "响铃多久后接听", type: "number", default: 2, min: 0, max: 20, step: 0.5, unit: "秒", global_only: true }, { key: "max_minutes", label: "单次通话最长", type: "number", default: 30, min: 1, max: 180, unit: "分钟", global_only: true }, { key: "barge_in", label: "允许打断", type: "bool", default: true, global_only: true }] }, installed: true, enabled: true, settings: { agent_url: "ws://snowluma:6190/ws" }, secrets_configured: { agent_token: true }, runtime_status: { summary: "有 1 个问题，电话接不起来", problems: ["连不上通话插件（ws://snowluma:6190/ws）：dial tcp: lookup snowluma: no such host。确认 SnowLuma 容器换成了带语音组件的镜像、设了 CALL_AGENT_TOKEN，端口 6190 Diana 访问得到"], recent: "来电「主人」没接：连不上通话插件", recent_at: Math.floor(Date.now() / 1000) - 600 } },
   { manifest: { id: "official.qq-join-approval", name: "QQ 入群自动审批", version: "0.1.0", description: "自动处理 QQ 群的入群申请：按验证消息、问答答案、昵称等规则直接通过或拒绝，也可以管理 QQ 开放平台的白名单 账号策略。机器人需是群管理员；平台不提供申请人等级。", official: true, built_in: true, platforms: ["qq-official"], permissions: ["qq_official:join_approval_strategy", "qq_official:join_request_approve"], settings: [{ key: "mode", label: "审批方式", description: "关闭时申请只记成待办，由主人处理。机器人账号一律拒绝；拿不准的都留给主人。", type: "select", default: "off", options: [{ value: "off", label: "关闭" }, { value: "keywords", label: "按关键词" }, { value: "llm", label: "交给模型判断" }, { value: "keywords_llm", label: "先按关键词，没命中再交给模型" }] }, { key: "approve_keywords", label: "通过关键词", description: "验证消息、问答答案或昵称含其中任一词就通过，每行一个。", type: "text", default: "", rows: 3, show_when: { key: "mode", values: ["keywords", "keywords_llm"] } }, { key: "reject_keywords", label: "拒绝关键词", description: "含其中任一词就拒绝，优先于通过关键词，每行一个。", type: "text", default: "", rows: 2, show_when: { key: "mode", values: ["keywords", "keywords_llm"] } }, { key: "llm_requirement", label: "入群要求", description: "写给模型看的放行标准，例如「只收本校学生，验证消息要写学院和年级；广告号拒绝」。", type: "text", default: "", fallback: demoJoinRequirementFallback, rows: 3, show_when: { key: "mode", values: ["llm", "keywords_llm"] } }, { key: "llm_model", label: "判断用的模型", type: "llm_profile", default: "", show_when: { key: "mode", values: ["llm", "keywords_llm"] } }, { key: "reject_delay_minutes", label: "拒绝前等待", description: "0 表示立即拒绝；期间有人手动处理过就不再动。", type: "number", default: 0, min: 0, max: 1440, step: 1, unit: "分钟", show_when: { key: "mode", values: ["keywords", "llm", "keywords_llm"] } }] }, installed: true, enabled: true },
-  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.1", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认开启，同一会话默认冷却 5 秒。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "cooldown_seconds", label: "冷却时间", description: "同一群或私聊两次状态回复之间的最短间隔；设为 0 可关闭冷却。", type: "number", default: 5, min: 0, max: 3600, step: 1, unit: "秒" }] }, installed: true, enabled: true }
+  { manifest: { id: "official.status-command", name: "状态查询", version: "0.1.1", description: "群里或私聊发一条 #diana（整条消息只有这一个词）就回一张运行状态卡片：版本、平台、已运行时长。不经过模型，回复固定且立刻返回，用来确认机器人还活着。默认开启，同一会话默认冷却 5 秒。", official: true, built_in: true, permissions: ["message:read", "message:send"], settings: [{ key: "cooldown_seconds", label: "冷却时间", description: "同一群或私聊两次状态回复之间的最短间隔；设为 0 可关闭冷却。", type: "number", default: 5, min: 0, max: 3600, step: 1, unit: "秒" }] }, installed: true, enabled: true },
+  {
+    manifest: {
+      id: "official.mobile-social",
+      name: "手机控制与热闻巡检",
+      version: "0.1.0",
+      description: "连接手机或模拟器，定时巡检 X、小红书、小黑盒、Hacker News 与 V2EX 热闻并分享到群聊；支持主人在聊天中操控设备。",
+      official: true,
+      built_in: true,
+      default_disabled: true,
+      permissions: ["device:mobile", "network:https", "message:send", "agent:tool"],
+      settings: [
+        { key: "driver_backend", label: "连接方式", type: "select", default: "auto", global_only: true, options: [{ value: "auto", label: "自动识别" }, { value: "adb", label: "安卓（USB / 无线 / 模拟器）" }, { value: "wda", label: "iPhone（WebDriverAgent）" }, { value: "simctl", label: "macOS iOS 模拟器" }, { value: "mobile_mcp", label: "Mobile MCP" }] },
+        { key: "device_id", label: "指定设备 ID", description: "多台设备同时在线时填写序列号，单台留空。", type: "string", default: "", global_only: true },
+        { key: "vm_name", label: "自动启动模拟器名称", description: "无在线设备时按名称拉起本地模拟器，不用可留空。", type: "string", default: "", global_only: true, show_when: { key: "driver_backend", values: ["auto", "adb", "simctl"] } },
+        { key: "vm_headless", label: "后台无窗口启动模拟器", type: "bool", default: true, global_only: true, show_when: { key: "driver_backend", values: ["auto", "adb"] } },
+        { key: "adb_address", label: "无线或容器地址", description: "如 127.0.0.1:5555；USB 直连留空。", type: "string", default: "", global_only: true, show_when: { key: "driver_backend", values: ["auto", "adb"] } },
+        { key: "unlock_pin", label: "锁屏密码", description: "锁屏时自动点按数字密码解锁，输错一次即停，保存后不回显。", type: "string", default: "", secret: true, global_only: true, show_when: { key: "driver_backend", values: ["auto", "adb"] } },
+        { key: "stay_awake_usb", label: "插电保持常亮", description: "USB 供电时不自动锁屏。", type: "bool", default: false, global_only: true, show_when: { key: "driver_backend", values: ["auto", "adb"] } },
+        { key: "wda_url", label: "WebDriverAgent 地址", description: "如 http://127.0.0.1:8100。", type: "string", default: "", global_only: true, show_when: { key: "driver_backend", values: ["auto", "wda", "simctl"] } },
+        { key: "mcp_command", label: "MCP 启动命令", type: "string", default: "npx -y @mobilenext/mobile-mcp@latest", global_only: true, show_when: { key: "driver_backend", values: ["mobile_mcp"] } },
+        { key: "allow_agent_control", label: "允许主人在聊天中操控手机", description: "仅主人可用，群友无法触发。", type: "bool", default: true, global_only: true },
+        { key: "patrol_enabled", label: "开启定时巡检", type: "bool", default: true, global_only: true },
+        { key: "enabled_sources", label: "巡检平台", description: "前 3 项打开手机 App 读取；Hacker News 与 V2EX 直接走公开接口。", type: "multi_select", default: ["x", "xiaohongshu", "heybox", "hackernews", "v2ex"], global_only: true, options: [{ value: "x", label: "X" }, { value: "xiaohongshu", label: "小红书" }, { value: "heybox", label: "小黑盒" }, { value: "hackernews", label: "Hacker News" }, { value: "v2ex", label: "V2EX" }] },
+        { key: "poll_interval_minutes", label: "巡检间隔", type: "number", default: 30, min: 5, max: 720, step: 5, unit: "分钟", global_only: true },
+        { key: "swipe_screens", label: "每次滑动屏数", type: "number", default: 2, min: 1, max: 5, step: 1, unit: "屏", global_only: true },
+        { key: "vision_fallback", label: "读不到文字时截图识屏", description: "遇到图片帖或特殊排版时交给视觉模型兜底。", type: "bool", default: true, global_only: true },
+        { key: "interest_topics", label: "关注方向", description: "想看哪些话题、过滤哪些内容；留空使用默认方向。", type: "text", default: "", fallback: "AI 与大模型前沿、英伟达/苹果/科技巨头重要动态（如高管回归或变动、重磅新品发布）、Steam 与主机游戏大作资讯、高热数码硬件与有讨论价值的极客趣闻；过滤广告带货、引战骂战、纯情绪宣泄与低质水帖。", rows: 3 },
+        { key: "judge_model", label: "筛选模型", type: "llm_profile", default: "", global_only: true },
+        { key: "target_groups", label: "通知目标", description: "留空时默认发往已启用本插件的活跃群。", type: "string", default: "" },
+        { key: "breaking_push", label: "重磅突发主动发群", description: "高分大新闻直接用机器人语气发到群里。", type: "bool", default: true },
+        { key: "casual_pool", label: "日常热帖留作群聊话题", description: "群友聊到相关内容或冷场时顺带提起。", type: "bool", default: true },
+        { key: "breaking_cooldown_minutes", label: "同群推送冷却", type: "number", default: 90, min: 10, max: 1440, step: 10, unit: "分钟" },
+        { key: "daily_push_limit", label: "每群每日上限", type: "number", default: 3, min: 1, max: 20, step: 1, unit: "条" },
+        { key: "quiet_start", label: "免打扰开始", type: "string", default: "23:00" },
+        { key: "quiet_end", label: "免打扰结束", type: "string", default: "08:00" },
+        { key: "error_notice", label: "发送错误通知", type: "bool", default: true }
+      ]
+    },
+    installed: true,
+    enabled: true,
+    runtime_status: {
+      summary: "已连接 iPhone 16 Pro (ios) · 候选池 4 条",
+      recent: "抓取 18 条（新增 6 条），入选重磅 1 条、候选池 3 条，已主动推送 1 个群",
+      recent_at: Math.floor(Date.now() / 1000) - 420
+    }
+  }
 ];
 
 for (const plugin of plugins) {
@@ -388,6 +435,44 @@ let demoStickers: DemoSticker[] = [
   { hash: demoStickerHash("29"), summary: "好耶", description: "小人举起双手欢呼，庆祝好消息。", tags: ["开心", "庆祝"], category: "二次元", kind: "imported", sessions: 1, last_seen: before(60 * 24 * 5), sent_count: 1, last_sent: before(60 * 24), sources: ["imported"] },
   { hash: demoStickerHash("18"), summary: "摸鱼", description: "Q 版角色趴在桌上，表示在偷懒。", tags: ["摸鱼", "躺平", "可爱"], category: "二次元", kind: "private", user_id: "880031", sessions: 1, last_seen: before(60 * 24 * 3), sent_count: 4, last_sent: before(60 * 24 * 2), sources: ["private"] }
 ];
+
+const demoMobileSocialState: MobileSocialStateSnapshot = {
+  last_summary: "抓取 18 条（新增 6 条），入选重磅 1 条、候选池 3 条，已主动推送 1 个群",
+  last_patrol_at: Math.floor(Date.now() / 1000) - 420,
+  pending_breaking: [],
+  candidates: [
+    {
+      id: "cand-nvda",
+      source: "x",
+      title: "英伟达宣布下一代架构研发核心团队回归并提前流片",
+      summary: "官方账号刚公布核心架构师回归与新一代芯片时间表，推上讨论度飙升。",
+      url: "https://x.com/nvidia/status/1",
+      tier: "breaking",
+      score: 94,
+      created_at: Math.floor(Date.now() / 1000) - 420,
+      shared_groups: { "bot-onebot|onebot-v11:group:100200301": true }
+    },
+    {
+      id: "cand-hn",
+      source: "hackernews",
+      title: "Show HN: 单文件零依赖 SQLite 实时向量检索扩展",
+      summary: "纯 C 实现的小体积向量索引扩展，适合本地嵌入式 Agent 记忆检索。",
+      url: "https://news.ycombinator.com/item?id=1",
+      tier: "casual",
+      score: 81,
+      created_at: Math.floor(Date.now() / 1000) - 900
+    },
+    {
+      id: "cand-heybox",
+      source: "heybox",
+      title: "Steam 春季新史低名单汇总：多款独立佳作首次半价",
+      summary: "小黑盒热榜整理的本周新史低游戏单，合作联机类折扣力度很大。",
+      tier: "casual",
+      score: 76,
+      created_at: Math.floor(Date.now() / 1000) - 1500
+    }
+  ]
+};
 
 function demoFilterStickers(params: URLSearchParams, skip = ""): DemoSticker[] {
   const q = (params.get("q") ?? "").trim();
@@ -2392,6 +2477,135 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       ],
       proxy: demoMusicProxyStatus(String((body.settings as Record<string, unknown> | undefined)?.proxy_mode ?? ""))
     });
+  }
+  if (path === "/api/assistant/plugins/mobile-social/test" && method === "POST") {
+    const mobilePlugin = plugins.find((item) => item.manifest.id === "official.mobile-social");
+    const merged: Record<string, unknown> = { ...(mobilePlugin?.settings ?? {}), ...((body.settings as Record<string, unknown> | undefined) ?? {}) };
+    const backend = String(merged.driver_backend ?? "auto");
+    const adbAddr = String(merged.adb_address ?? "").trim();
+    const wdaURL = String(merged.wda_url ?? "").trim();
+    const vmName = String(merged.vm_name ?? "").trim();
+    const rawSources = Array.isArray(merged.enabled_sources) ? merged.enabled_sources.map(String) : ["x", "xiaohongshu", "heybox", "hackernews", "v2ex"];
+    const needsMobile = Boolean(merged.allow_agent_control ?? true) || rawSources.some((s) => ["x", "xiaohongshu", "heybox"].includes(s));
+
+    const badEndpoint = /invalid|bad|unreachable/i.test(adbAddr) || /invalid|bad|unreachable/i.test(wdaURL);
+    const devices = badEndpoint ? [] : backend === "adb"
+      ? [{
+          id: adbAddr || "127.0.0.1:5555",
+          name: vmName || "Redroid 14",
+          platform: "android",
+          backend: "adb",
+          virtual: true,
+          selected: true,
+          screen_ok: true,
+          elements_count: 22,
+          screen_detail: "控件树可读（22 个可见元素）"
+        }]
+      : backend === "simctl"
+      ? [{
+          id: "SIM-IPHONE-16",
+          name: vmName || "iPhone 16",
+          platform: "ios",
+          backend: "simctl",
+          virtual: true,
+          selected: true,
+          screen_ok: true,
+          screen_detail: "原生截屏正常（1179×2556），将走多模态识屏"
+        }]
+      : [
+          {
+            id: "ios-192.168.1.25",
+            name: "iPhone 16 Pro",
+            platform: "ios",
+            backend: backend === "mobile_mcp" ? "mobile_mcp" : "wda",
+            virtual: false,
+            selected: true,
+            screen_ok: true,
+            elements_count: 19,
+            screen_detail: "控件树可读（19 个可见元素）"
+          },
+          {
+            id: adbAddr || "127.0.0.1:5555",
+            name: "Redroid 14",
+            platform: "android",
+            backend: "adb",
+            virtual: true,
+            selected: false,
+            screen_ok: true
+          }
+        ];
+
+    const mobileOK = !needsMobile || devices.length > 0;
+    const primary = devices[0];
+    const mobileMessage = !needsMobile
+      ? "未启用手机端社媒与手机操控，当前仅使用公开 API 信息源"
+      : mobileOK
+      ? `已连通 ${primary.name}（${primary.screen_detail}）`
+      : `未检测到在线手机或虚拟机：无法连接到 ${adbAddr || wdaURL || "目标地址"}`;
+
+    const hnEnabled = rawSources.includes("hackernews");
+    const v2exEnabled = rawSources.includes("v2ex");
+    const apiSources = [
+      {
+        source: "hackernews",
+        label: "Hacker News",
+        enabled: hnEnabled,
+        ok: true,
+        latency_ms: hnEnabled ? 96 : undefined,
+        item_count: hnEnabled ? 3 : undefined,
+        message: hnEnabled ? "连通正常（96 ms，读到 3 条热榜）" : "当前未勾选此信息源"
+      },
+      {
+        source: "v2ex",
+        label: "V2EX 热议",
+        enabled: v2exEnabled,
+        ok: true,
+        latency_ms: v2exEnabled ? 118 : undefined,
+        item_count: v2exEnabled ? 3 : undefined,
+        message: v2exEnabled ? "连通正常（118 ms，读到 3 条热榜）" : "当前未勾选此信息源"
+      }
+    ];
+
+    const problems = mobileOK ? [] : [mobileMessage];
+    const runtimeStatus = {
+      summary: mobileOK
+        ? (devices.length ? `已连接 ${primary.name} (${primary.platform}${primary.virtual ? " · 虚拟机" : ""}) · 候选池 4 条` : "运行正常 · 候选池 4 条")
+        : "有 1 项提示 · 候选池 4 条",
+      problems,
+      recent: mobilePlugin?.runtime_status?.recent,
+      recent_at: mobilePlugin?.runtime_status?.recent_at
+    };
+    if (mobilePlugin && Object.keys((body.settings as Record<string, unknown> | undefined) ?? {}).length === 0) {
+      mobilePlugin.runtime_status = runtimeStatus;
+    }
+    return json({
+      ok: mobileOK,
+      backend,
+      needs_mobile: needsMobile,
+      mobile_ok: mobileOK,
+      mobile_message: mobileMessage,
+      devices,
+      api_sources: apiSources,
+      runtime_status: runtimeStatus
+    });
+  }
+  if (path === "/api/assistant/plugins/mobile-social/state" && method === "GET") {
+    return json(demoMobileSocialState);
+  }
+  if (path === "/api/assistant/plugins/mobile-social/patrol" && method === "POST") {
+    demoMobileSocialState.last_patrol_at = Math.floor(Date.now() / 1000);
+    demoMobileSocialState.last_summary = "抓取 16 条（新增 2 条），入选重磅 1 条、候选池 3 条";
+    return json({
+      result: { fetched_count: 16, unseen_count: 2, breaking_added: 1, casual_added: 1, pushed_groups: 0 },
+      state: demoMobileSocialState
+    });
+  }
+  const mobileDeleteMatch = path.match(/^\/api\/assistant\/plugins\/mobile-social\/candidates\/([^/]+)$/);
+  if (mobileDeleteMatch && method === "DELETE") {
+    const cid = decodeURIComponent(mobileDeleteMatch[1]);
+    demoMobileSocialState.candidates = demoMobileSocialState.candidates.filter((item) => item.id !== cid);
+    demoMobileSocialState.pending_breaking = demoMobileSocialState.pending_breaking.filter((item) => item.id !== cid);
+    return json(demoMobileSocialState);
   }
   const pluginMatch = path.match(/^\/api\/assistant\/plugins\/([^/]+)\/(install|uninstall|enabled|settings)$/);
   if (pluginMatch) {

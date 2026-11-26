@@ -235,6 +235,7 @@ var AgentSafeModeRules = []AgentSafeModeRule{
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_wait_confirm", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_finish", Reason: "管理主人本机桌面持久任务"},
 	{Category: safeModeCategoryActAsOwner, Tool: "desktop_job_cancel", Reason: "管理主人本机桌面持久任务"},
+	{Category: safeModeCategoryActAsOwner, Tool: mobileDeviceToolName, Reason: "读取和操控主人连接的安卓或 iPhone 手机"},
 	{Category: safeModeCategoryActAsOwner, Tool: dianaGitHubToolName, Field: "operation",
 		Operations: []string{"create", "update", "comment", "review", "close", "reopen", "star", "approve"},
 		Reason:     "以主人配置的 GitHub 身份写入仓库；读仓库、搜 Issue 照常"},

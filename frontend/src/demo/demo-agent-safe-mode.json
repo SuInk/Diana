@@ -235,6 +235,11 @@
       },
       {
         "category": "act_as_owner",
+        "tool": "mobile_device",
+        "reason": "读取和操控主人连接的安卓或 iPhone 手机"
+      },
+      {
+        "category": "act_as_owner",
         "tool": "github",
         "field": "operation",
         "operations": [

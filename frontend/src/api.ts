@@ -2201,6 +2201,40 @@ export function testResolverCredentials(
   });
 }
 
+export interface MobileDeviceProbe {
+  id: string;
+  name: string;
+  platform: string;
+  backend?: string;
+  virtual?: boolean;
+  locked?: boolean;
+  selected?: boolean;
+  screen_ok: boolean;
+  elements_count?: number;
+  screen_detail?: string;
+}
+
+export interface MobileAPISourceProbe {
+  source: string;
+  label: string;
+  enabled: boolean;
+  ok: boolean;
+  latency_ms?: number;
+  item_count?: number;
+  message: string;
+}
+
+export interface MobileSocialConnectionReport {
+  ok: boolean;
+  backend: string;
+  needs_mobile: boolean;
+  mobile_ok: boolean;
+  mobile_message: string;
+  devices?: MobileDeviceProbe[];
+  api_sources?: MobileAPISourceProbe[];
+  runtime_status?: PluginRuntimeStatus;
+}
+
 export function testGitHubCredentials(
   settings: Record<string, unknown>,
   clearSecrets: string[] = [],
@@ -2209,6 +2243,73 @@ export function testGitHubCredentials(
   return requestJSON<{ credentials: CredentialCheck[] }>(`/api/assistant/plugins/github/credentials/test?profile=${encodeURIComponent(profileID)}`, {
     method: "POST",
     body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
+export interface MobileSocialCandidateItem {
+  id: string;
+  source: string;
+  title: string;
+  summary: string;
+  url?: string;
+  tier: "breaking" | "casual" | string;
+  score: number;
+  tags?: string[];
+  angle?: string;
+  created_at: number;
+  shared_groups?: Record<string, boolean>;
+}
+
+export interface MobileSocialStateSnapshot {
+  last_summary?: string;
+  last_patrol_at?: number;
+  last_error?: string;
+  pending_breaking: MobileSocialCandidateItem[];
+  candidates: MobileSocialCandidateItem[];
+}
+
+export interface MobileSocialPatrolResponse {
+  result: {
+    fetched_count: number;
+    unseen_count: number;
+    breaking_added: number;
+    casual_added: number;
+    pushed_groups: number;
+    items?: MobileSocialCandidateItem[];
+    warnings?: string[];
+  };
+  state: MobileSocialStateSnapshot;
+}
+
+export function testMobileSocialConnection(
+  settings: Record<string, unknown> = {},
+  clearSecrets: string[] = [],
+  profileID = ""
+): Promise<MobileSocialConnectionReport> {
+  return requestJSON<MobileSocialConnectionReport>(`/api/assistant/plugins/mobile-social/test?profile=${encodeURIComponent(profileID)}`, {
+    method: "POST",
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
+export function getMobileSocialState(): Promise<MobileSocialStateSnapshot> {
+  return requestJSON<MobileSocialStateSnapshot>("/api/assistant/plugins/mobile-social/state");
+}
+
+export function runMobileSocialPatrol(
+  settings: Record<string, unknown> = {},
+  clearSecrets: string[] = [],
+  profileID = ""
+): Promise<MobileSocialPatrolResponse> {
+  return requestJSON<MobileSocialPatrolResponse>(`/api/assistant/plugins/mobile-social/patrol?profile=${encodeURIComponent(profileID)}`, {
+    method: "POST",
+    body: JSON.stringify({ settings, clear_secrets: clearSecrets })
+  });
+}
+
+export function deleteMobileSocialCandidate(id: string): Promise<MobileSocialStateSnapshot> {
+  return requestJSON<MobileSocialStateSnapshot>(`/api/assistant/plugins/mobile-social/candidates/${encodeURIComponent(id)}`, {
+    method: "DELETE"
   });
 }
 

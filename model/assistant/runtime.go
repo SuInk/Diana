@@ -1260,6 +1260,10 @@ func (r *Runtime) Start(parent context.Context) error {
 			r.runProactiveMessagingLoop(ctx)
 		}()
 		go func() {
+			defer recoverGoroutinePanic("runtime.mobileSocialLoop")
+			r.runMobileSocialLoop(ctx)
+		}()
+		go func() {
 			defer recoverGoroutinePanic("runtime.inboundCoordinator")
 			r.runInboundCoordinator(ctx, leaseOwner, concurrency, releaseStaleLeases, inboundDone)
 		}()
@@ -4480,6 +4484,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		if mobileSocialContext := contextPreload.mobileSocialContext; mobileSocialContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    mobileSocialContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		// 掉出历史窗口的媒体索引只在窗口往前滑时才变，放在历史之前跟着前缀缓存走；
 		// 挂在历史优先级上，预算紧张时跟着旧历史一起让位。
 		var mediaIndexMessage *llm.Message
@@ -7623,6 +7635,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	if !event.webChat && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardChunksWithResult(ctx, event, reply, cfg, decoration.Verbatim)
 		if err == nil {
+			r.markMobileSocialSharedFromReply(event, reply)
 			if messageID == "" {
 				return nil, nil
 			}
@@ -7640,7 +7653,11 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
 	}
-	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
+	ids, err := r.deliverChunks(ctx, event, chunks, cfg, decoration)
+	if err == nil {
+		r.markMobileSocialSharedFromReply(event, reply)
+	}
+	return ids, err
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行

@@ -25,11 +25,12 @@ type promptContextPreload struct {
 	threadStates        []ThreadState
 	memoryContext       string
 	// memoryUsage 是检索记忆层进入全局预算之前的自有账。
-	memoryUsage      contextLayerUsage
-	notebookContext  string
-	worldBookContext string
-	selfNoteContext  string
-	walletContext    string
+	memoryUsage         contextLayerUsage
+	notebookContext     string
+	worldBookContext    string
+	selfNoteContext     string
+	walletContext       string
+	mobileSocialContext string
 	// selfFactContext 是按触发词带上的「关于自己的事实」，纯本地匹配，不需要并发。
 	selfFactContext string
 	// selfNoteUsage 是自述层进入全局预算之前的自有账。
@@ -51,7 +52,7 @@ func (r *Runtime) startPromptContextPreload(
 		selfFactContext: capabilitySelfFactContext(memoryRetrievalText(event, queryText)),
 	}
 
-	preload.wg.Add(7)
+	preload.wg.Add(8)
 	go func() {
 		defer recoverGoroutinePanic("prompt_context_preload.go:48")
 		defer preload.wg.Done()
@@ -86,6 +87,11 @@ func (r *Runtime) startPromptContextPreload(
 		defer recoverGoroutinePanic("prompt_context_preload.go:wallet")
 		defer preload.wg.Done()
 		preload.walletContext = r.walletContext(ctx, event)
+	}()
+	go func() {
+		defer recoverGoroutinePanic("prompt_context_preload.go:mobile_social")
+		defer preload.wg.Done()
+		preload.mobileSocialContext = r.mobileSocialPoolContext(ctx, event, queryText)
 	}()
 	if wantMediaIndex {
 		preload.wg.Add(1)

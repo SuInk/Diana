@@ -251,7 +251,7 @@
     <Modal
       v-if="settingsTarget"
       :title="isGitHubSettings ? 'GitHub 仓库 · 设置' : `${settingsTarget.manifest.name} · 设置`"
-      :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === qqJoinApprovalPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID"
+      :wide="isResolverSettings || settingsTarget.manifest.id === repositoryWatchPluginID || settingsTarget.manifest.id === repositoryPublishPluginID || settingsTarget.manifest.id === rssWatchPluginID || settingsTarget.manifest.id === qqJoinApprovalPluginID || settingsTarget.manifest.id === musicPluginID || settingsTarget.manifest.id === stickerPluginID || settingsTarget.manifest.id === mobileSocialPluginID"
       :fixed-height="isStickerSettings"
       @pointerdown="onSettingsPointerDown"
       @close="closeSettings"
@@ -301,6 +301,11 @@
       <div v-if="isStickerSettings" class="segmented github-settings-tabs sticker-settings-tabs" role="tablist" aria-label="表情包设置">
         <button type="button" role="tab" :aria-selected="stickerSettingsTab === 'config'" :class="{ active: stickerSettingsTab === 'config' }" @click="stickerSettingsTab = 'config'">发送设置</button>
         <button type="button" role="tab" :aria-selected="stickerSettingsTab === 'library'" :class="{ active: stickerSettingsTab === 'library' }" @click="stickerSettingsTab = 'library'">表情包池</button>
+      </div>
+      <div v-if="isMobileSocialSettings" class="segmented github-settings-tabs" role="tablist" aria-label="手机控制与热闻巡检设置">
+        <button type="button" role="tab" :aria-selected="mobileSocialTab === 'device'" :class="{ active: mobileSocialTab === 'device' }" @click="mobileSocialTab = 'device'">设备连接</button>
+        <button type="button" role="tab" :aria-selected="mobileSocialTab === 'patrol'" :class="{ active: mobileSocialTab === 'patrol' }" @click="mobileSocialTab = 'patrol'">巡检推送</button>
+        <button type="button" role="tab" :aria-selected="mobileSocialTab === 'pool'" :class="{ active: mobileSocialTab === 'pool' }" @click="mobileSocialTab = 'pool'">运行记录</button>
       </div>
 
       <template v-if="isGitHubSettings && githubSettingsTab === 'config'">
@@ -546,7 +551,24 @@
           </div>
         </section>
       </template>
-      <div v-if="!isGitHubSettings && !isMusicSettings && !isResolverSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
+      <MobileSocialSettingsPanel
+        v-if="isMobileSocialSettings"
+        ref="mobileSocialPanelRef"
+        v-model:tab="mobileSocialTab"
+        :specs="settingsSpecs"
+        :form="settingsForm"
+        :clear-secrets="clearSecrets"
+        :secret-configured="secretConfigured"
+        :default-profile="botScope"
+        :testing-connection="testingMobileSocial"
+        :connection-report="mobileTestReport"
+        :build-payload="buildSettingsPayload"
+        @toggle-clear="toggleClearSecret"
+        @test-connection="runMobileSocialTest(false)"
+        @open-logs="navigate('logs')"
+        @runtime-updated="reload"
+      />
+      <div v-if="!isGitHubSettings && !isMusicSettings && !isResolverSettings && !isMobileSocialSettings && !(isStickerSettings && stickerSettingsTab === 'library')" class="stack plugin-settings-form">
         <template v-for="spec in visibleSettingsSpecs" :key="spec.key">
           <PlatformLevelRulesField
             v-if="spec.type === 'platform_level_rules'"
@@ -931,6 +953,7 @@ import {
   uninstallPlugin,
   updatePluginSettings,
   testMusicConnections,
+  testMobileSocialConnection,
   testResolverCredentials,
   testGitHubCredentials,
   listPluginDependencies,
@@ -943,6 +966,7 @@ import {
   type BotGroupSummary,
   type MusicConnectionStatus,
   type MusicProxyStatus,
+  type MobileSocialConnectionReport,
   type CredentialCheck,
   type CredentialState
 } from "../api";
@@ -962,6 +986,7 @@ import RepositoryWatchManager from "../components/RepositoryWatchManager.vue";
 import StickerLibrary from "../components/StickerLibrary.vue";
 import RSSWatchManager from "../components/RSSWatchManager.vue";
 import QQJoinStrategyPanel from "../components/QQJoinStrategyPanel.vue";
+import MobileSocialSettingsPanel, { type MobileSocialTab } from "../components/MobileSocialSettingsPanel.vue";
 import PluginDependencyList from "../components/PluginDependencyList.vue";
 import { navigate, viewQuery } from "../router";
 import { botScope } from "../lib/bot-scope";
@@ -984,6 +1009,7 @@ const rssWatchPluginID = "official.rss-watch";
 const qqJoinApprovalPluginID = "official.qq-join-approval";
 const musicPluginID = "official.music";
 const stickerPluginID = "official.sticker-sender";
+const mobileSocialPluginID = "official.mobile-social";
 // 依赖按插件 ID 分组；内置网页渲染的浏览器依赖改在浏览器页展示。
 const dependencyGroups = ref<Record<string, ResolverDependency[]>>({});
 const dependenciesLoading = ref(false);
@@ -1270,6 +1296,39 @@ async function testMusicSettings(quiet = false): Promise<void> {
   }
 }
 
+const isMobileSocialSettings = computed(() => settingsTarget.value?.manifest.id === mobileSocialPluginID);
+const mobileSocialTab = ref<MobileSocialTab>("device");
+const mobileSocialPanelRef = ref<InstanceType<typeof MobileSocialSettingsPanel> | null>(null);
+const testingMobileSocial = ref(false);
+const mobileTestReport = ref<MobileSocialConnectionReport | null>(null);
+
+watch(settingsTarget, (target) => {
+  mobileTestReport.value = null;
+  if (target?.manifest.id === mobileSocialPluginID) {
+    void runMobileSocialTest(true);
+  }
+});
+
+async function runMobileSocialTest(quiet = false): Promise<void> {
+  if (!settingsTarget.value) return;
+  testingMobileSocial.value = true;
+  const target = settingsTarget.value;
+  try {
+    const report = await testMobileSocialConnection(buildSettingsPayload(), clearSecrets.value, botScope.value);
+    if (settingsTarget.value !== target) return;
+    mobileTestReport.value = report;
+    if (report.runtime_status) {
+      target.runtime_status = report.runtime_status;
+    }
+    if (quiet) return;
+    report.ok ? toastSuccess(report.mobile_message || "手机与信息源连接正常") : toastError(report.mobile_message || "部分连接检测未通过，请查看上方详情");
+  } catch (error) {
+    if (!quiet) toastError(error instanceof Error ? error.message : "连接检测失败");
+  } finally {
+    testingMobileSocial.value = false;
+  }
+}
+
 const isResolverSettings = computed(() => settingsTarget.value?.manifest.id === resolverPluginID);
 const resolverGroups = computed(() => groupResolverSettings(settingsSpecs.value));
 const editingResolverPlatform = ref("");
@@ -1454,7 +1513,7 @@ const repositoryPublishStarSpec = computed(() => repositoryPublishSpecs.value.fi
 const repositoryPublishTimeoutSpec = computed(() => repositoryPublishSpecs.value.find((spec) => spec.key === "timeout_seconds"));
 const issueEnabledRepositories = computed(() => String(repositoryPublishForm.value.allowed_repositories ?? "").split(/[,;；\n\r]/).map((item) => item.trim()).filter(Boolean));
 const visibleSettingsSpecs = computed<PluginSettingSpec[]>(() =>
-  isGitHubSettings.value ? [] : settingsSpecs.value.filter(spec => !spec.show_when || spec.show_when.values.includes(String(settingsForm.value[spec.show_when.key] ?? "")))
+  isGitHubSettings.value || isMobileSocialSettings.value ? [] : settingsSpecs.value.filter(spec => !spec.show_when || spec.show_when.values.includes(String(settingsForm.value[spec.show_when.key] ?? "")))
 );
 // 这些键要么由仓库管理和凭据编辑器维护，要么是不该渲染成裸文本框的内部存档。
 const repositoryManagedKeys = new Set([
@@ -1790,6 +1849,7 @@ function openSettings(plugin: PluginState): void {
   resolverChecks.open();
   githubSettingsTab.value = "config";
   stickerSettingsTab.value = "config";
+  mobileSocialTab.value = "device";
   openedSnapshot.value = settingsSnapshot();
   if (isResolverSettings.value) {
     for (const { key } of resolverGroups.value.credentials) {
@@ -2043,6 +2103,9 @@ async function persistSettings(closeAfterSave: boolean): Promise<void> {
   if (isGitHubSettings.value && credentialEditor.value && !credentialEditor.value.commitEditing()) {
     return;
   }
+  if (isMobileSocialSettings.value && mobileSocialPanelRef.value && !mobileSocialPanelRef.value.commitEditing()) {
+    return;
+  }
   if (isGitHubSettings.value && repositoryPublishForm.value.github_star_enabled === true && repositoryPublishTarget.value?.settings?.github_star_enabled !== true) {
     const confirmed = await askConfirm({
       title: "允许机器人为仓库点 Star？",
@@ -2236,4 +2299,12 @@ useConfigurationRefresh(["bot"], reload);
 .resolver-platform-name input { width:15px; height:15px; margin:0; flex:0 0 15px; accent-color:var(--err); cursor:pointer; }
 .resolver-platform-name input:focus-visible { outline:2px solid var(--text-secondary); outline-offset:3px; }
 .resolver-status-legend { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+.mobile-probe-section { display:flex; flex-direction:column; gap:10px; }
+.mobile-probe-head { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.mobile-probe-head .hint { margin-top:4px; }
+.mobile-probe-results { display:flex; flex-direction:column; gap:8px; padding:10px 12px; border-radius:10px; background:var(--surface-subtle, rgba(127,127,127,0.06)); border:1px solid var(--border-subtle, rgba(127,127,127,0.14)); }
+.mobile-probe-row { display:flex; flex-direction:column; gap:6px; }
+.mobile-probe-msg { margin:0; font-size:13px; color:var(--text-secondary); }
+.mobile-device-list { list-style:none; margin:2px 0 0; padding:0; display:flex; flex-direction:column; gap:6px; }
+.mobile-device-item { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; font-size:13px; }
 </style>

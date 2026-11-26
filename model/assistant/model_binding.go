@@ -72,6 +72,8 @@ const (
 	// PurposeCallInvite 读来电窗口的 OCR 文字，判断是私聊还是群通话、哪个群，
 	// 见 call_invite.go。
 	PurposeCallInvite = "call_invite"
+	// PurposeMobileSocialCurate 是手机与社区巡检插件在后台筛选、分级热闻。
+	PurposeMobileSocialCurate = "mobile_social_curate"
 )
 
 // llmPurposeGroup 把用途归到分组。这张表以前是隐式的——某个用途走哪个分组，取决于
@@ -134,7 +136,8 @@ var llmPurposeGroup = map[string]string{
 	PurposeMemorySummary:        llm.GroupBackground,
 	PurposeRSSWatchJudge:        llm.GroupBackground,
 	// 入群审批在申请到达后异步判，没人在等回复，和 RSS 判定一样归后台。
-	PurposeQQJoinReview: llm.GroupBackground,
+	PurposeQQJoinReview:       llm.GroupBackground,
+	PurposeMobileSocialCurate: llm.GroupBackground,
 }
 
 // modelBindingGroups 是所有分组。它们就是「用途的归属地」，缺一个就有一批用途没有
