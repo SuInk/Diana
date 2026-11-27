@@ -2,16 +2,20 @@
 
 # Diana
 
-**An AI agent that lives in your group chats — it chimes in without being @-mentioned, and it can search the web, play song requests, send stickers, and remember what your group agreed on. Self-hosted, single binary, your data never leaves your machine.**
+[简体中文](./README.md) · **English** · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Français](./README.fr.md) · [Deutsch](./README.de.md) · [Nederlands](./README.nl.md)
 
-<sub>OneBot v11 · Telegram · QQ Official Bot · WeChat · iMessage — one instance, all online at once</sub>
+**Talks like a human, works like an agent.**
+
+A self-hosted, single-binary AI agent — knows when to chime in and when to stay quiet without being @-mentioned; handles memory, vision, links, songs, web search, Skills / MCP, and local coding agents while keeping all data and decisions on your machine.
+
+<sub>OneBot v11 · Telegram · QQ Official Bot · WeChat · iMessage · Built-in Console — one instance, all online at once</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=159f6c)](https://github.com/SuInk/Diana/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
-[Website & Docs](https://suink.github.io/Diana/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest) · [中文](./README.md)
+[Website & Docs](https://suink.github.io/Diana/en/) · [Live Demo](https://suink.github.io/Diana/demo/) · [Latest Release](https://github.com/SuInk/Diana/releases/latest)
 
 [![QQ Group 1127671893](https://img.shields.io/badge/QQ%20Group-1127671893-12B7F5?logo=qq&logoColor=white)](https://qm.qq.com/q/4o6zEBs4h2)
 
@@ -21,19 +25,16 @@
 
 <img src="./docs/assets/diana-webui-overview-green.jpg" alt="Diana console overview: channel status, message stats, system resources and live event stream" width="100%" />
 
-The console defaults to **Forest Green**, with light, dark, and system modes. Change the accent in Settings; upgrades preserve the color preference already saved in your browser.
+## Why Diana
 
+Most self-hosted chat bots fall into two extremes: either a toy that stays dead until @-mentioned (or spams the chat the moment proactive replies are enabled), or a tangle of Python/Node runtimes and YAML files that goes silent with zero clue why.
 
-## What is Diana
+Diana packs natural chat presence and real agent capabilities into a single Go binary — connecting major LLMs (OpenAI-compatible APIs, Gemini, Anthropic) to the chat apps you already use, managed through a built-in web console.
 
-You have an AI you want in your group chats: joining the conversation in a QQ group, taking song requests on Telegram, answering questions for your group. Diana is the layer in between — a single Go binary that talks to LLMs on one side (OpenAI-compatible APIs, Gemini, Anthropic) and to five chat platforms on the other, with a web console managing everything in the middle.
-
-It's built for people who want to run their own bot:
-
-- **Works out of the box** — one command to install, a few clicks in the browser to configure. No code required.
-- **Your data stays yours** — configuration, chat memory, and logs all live in a local SQLite database. No cloud dependencies.
-- **Every step is explainable** — why the bot replied, why it stayed quiet, which model it called, how many tokens it spent: all visible in the console's event center.
-- **Batteries included** — web search, link/file parsing, song requests, stickers, OCR, and long-term memory are built in, with switches in the console.
+- **Knows when to speak — and when not to** — chimes into group chats naturally without being @-mentioned, remembers group norms and preferences in layered memory + an editable notebook, and handles images, video links, songs, and stickers.
+- **Gets real work done inside chat** — built-in web search, file parsing, and diagram rendering out of the box, plus an agent loop with Skills, MCP, browser tools, and local Claude Code / Codex coding agents.
+- **Up in minutes, zero guesswork** — one command to install, outbound connections with no public IP needed, browser-based setup, and an event center explaining why every message was answered or skipped and how many tokens it cost.
+- **Your data, clear security boundaries** — config, memory, and logs stay in local SQLite with no cloud dependency; **Safe Mode** isolates host commands, file writes, and coding agents in one switch to guard against prompt injection.
 
 ## Up and running in three minutes
 
@@ -42,6 +43,11 @@ It's built for people who want to run their own bot:
 ```sh
 # Linux / macOS
 curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
+```
+
+```sh
+# Android Termux (ARM64 only; run inside Termux, no root required)
+pkg install -y curl tar coreutils && curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
 
 ```powershell
@@ -56,10 +62,10 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 
 The native installer needs no administrator privileges. **To upgrade, rerun the same command**; if you installed with sudo before, the script picks up that installation automatically. More install options are in the [deployment guide](https://suink.github.io/Diana/en/deploy.html).
 
-**Or install with a prompt.** Copy this into an AI assistant that can run commands on the target machine:
+**Or install with a skill.** Paste this into an AI assistant that can run commands on the target machine; full instructions live in the [install skill](skills/diana-install/SKILL.md) and stay in sync with each release:
 
 ```text
-Help me install the latest stable release of Diana on this machine. First read the README at https://github.com/SuInk/Diana and scripts/install.sh (Linux/macOS) or scripts/install.ps1 (Windows) in that repository. Detect the OS and architecture, then use the official one-click installer. Default to current-user permissions and listen only on 127.0.0.1. If Diana is already installed, preserve its configuration and data and follow the official upgrade procedure. Run diana doctor afterward to check its health, tell me the console URL, administrator username, and password initially generated during installation, and remind me to store them securely. For an existing installation with no newly generated password, explain that the original password still applies and do not reset it automatically. Leave model API keys and bot credentials for me to enter in the console.
+Read https://raw.githubusercontent.com/SuInk/Diana/main/skills/diana-install/SKILL.md and follow it to install the latest stable release of Diana on this machine.
 ```
 
 **Or download it yourself.** If you'd rather not run a script, grab the file for your platform (always the latest stable release):
@@ -91,36 +97,33 @@ That's it. No reply? The event center tells you why; `diana doctor` checks servi
 
 ## Supported platforms
 
-Every enabled bot profile is online at the same time, and replies always go back to the channel the message came from.
+Every enabled bot profile is online at the same time, and replies always go back to the channel the message came from. Home or LAN setups work with no public IP required.
 
 | Platform | Credentials you need | Connection direction |
 | --- | --- | --- |
-| **OneBot v11** (SnowLuma recommended) | Point your OneBot client's reverse WebSocket at Diana and agree on an access token | Client → Diana, no public address needed |
+| **OneBot v11** (SnowLuma recommended) | Supports reverse WS, forward WS, and HTTP API + event push — pick a mode on the Bots page | Depends on mode; works over LAN |
 | **Telegram** | Bot Token from BotFather (a proxy address is often needed from mainland China) | Diana connects outbound, no public address needed |
 | **QQ Official Bot** | AppID + AppSecret from the open platform (sandbox available before listing) | Diana connects outbound, no public address needed |
 | **WeChat** | Nothing to fill in: save the bot, then scan the QR code under Connect (Tencent iLink Bot, private chats only) | Diana connects outbound, no public address needed |
 | **iMessage** | Address and password of BlueBubbles Server on an always-on Mac; see the [iMessage setup guide](docs/imessage.md) (Chinese) | BlueBubbles webhook → Diana, the Mac only needs to reach Diana; optional polling fallback |
+| **Built-in Bot** | Nothing to fill in: chat or start a voice call right inside the console's Chat page | Console-only; zero-friction way to try Diana |
 
-For iMessage, the Bots page shows the exact callback URL to paste into BlueBubbles Server. Platform-specific quirks (e.g. QQ Official Bot only receives @-mentions by default; the group owner has to change the bot's group message scope) are covered in the [configuration docs](https://suink.github.io/Diana/configuration.html).
+For iMessage, the Bots page shows the exact callback URL to paste into BlueBubbles Server. Platform-specific quirks (e.g. QQ Official Bot only receives @-mentions by default; the group owner has to change the bot's group message scope) are covered in the [configuration docs](https://suink.github.io/Diana/en/configuration.html).
 
 ## Built-in abilities
 
-These ship with the binary — toggle and configure them in the console, no plugin installation needed:
+These ship with the single binary — toggle and configure them in the console, no plugin installation needed:
 
-- **Proactive chatting** — it decides on its own when to chime in and when to stay quiet, no @-mention required; every reply-or-not decision is logged in the event center (requires the platform to deliver all group messages — on QQ Official Bot the group owner has to widen the bot's group message scope first).
-- **Web search** — time-sensitive questions get researched before answering; Exa first, Tavily as fallback.
-- **Link parsing** — videos and images from Bilibili / YouTube / X / Xiaohongshu / Douyin are resolved and posted right into the chat.
-- **File parsing** — group files, PDF, Office, and EPUB content is extracted and handed to the model.
-- **Song requests** — NetEase Cloud Music and QQ Music are tried in turn. OneBot QQ sends voice messages. Telegram uploads MP3 files with title and artist metadata for its native music player; no QQ music-card signing service is needed. Unavailable audio or preparation errors are reported as failures. QQ Official Bot currently provides song-page links, not an in-chat player.
-- **Stickers** — picks a fitting sticker from the ones it has seen in the chat.
-- **Image understanding** — vision model + OCR (fully offline local options available), so even text-only models can "see" images.
-- **Rendered images** — tables, flowcharts, and sequence diagrams that plain text mangles get rendered to a picture when the model judges it worth it (Markdown / Mermaid / SVG; needs the browser from the "web rendering" plugin).
+- **Proactive chatting** — decides on its own when to chime in and when to stay quiet, no @-mention required; every reply-or-not decision is logged in the event center (requires full group message delivery).
 - **Memory & notebook** — layered memory keeps token costs down; important things (group rules, dietary restrictions, promises) go into a notebook that's auditable, editable, and recoverable.
-- **Per-group policies** — reply hours, allow/deny lists, persona, and tool permissions, configured per group.
-- **Built-in agent** — a minimal tool loop with file, command, and browser tools; loads Skills and MCP servers on demand.
-- **Coding agent** — hand code changes to a Claude Code / Codex CLI on the host: long-running edits and test runs inside registered repositories, progress on request, a report when it finishes, and jobs that survive a Diana restart. Dangerous steps like pushing or publishing stop and ask you in chat, continuing only once you reply with the code. Owner-only, off by default.
+- **Built-in agent & Safe Mode** — tool loop with file, command, and browser tools plus Skills and MCP servers on demand; toggle **Safe Mode** per bot to disable host commands, file writes, coding agents, and logged-in browsers against prompt injection.
+- **Coding agent** — owner-only, off by default: dispatch long-running code edits and tests to local Claude Code / Codex CLIs across registered repos; jobs survive restarts and pause in chat for confirmation before dangerous actions.
+- **Web search** — time-sensitive questions are researched in parallel via a sandboxed browser by default, with global primary/fallback provider settings (Exa, Tavily, or custom).
+- **Link & file parsing** — resolves Bilibili / YouTube / X / Xiaohongshu / Douyin media and X profiles, plus group files, PDF, Office, and EPUB documents.
+- **Vision, OCR & rendered images** — vision models plus offline OCR let even text-only models "see" images; tables, flowcharts, and sequence diagrams are automatically rendered to images (Markdown / Mermaid / SVG) with on-demand font downloads.
+- **Songs, stickers & group policies** — multi-source song requests (voice on OneBot QQ, native MP3 player on Telegram), contextual sticker replies, and per-group reply hours, allow/deny lists, personas, and tool permissions.
 
-Full documentation for each ability is in the [configuration docs](https://suink.github.io/Diana/configuration.html).
+Full documentation for each ability is in the [configuration docs](https://suink.github.io/Diana/en/configuration.html).
 
 ## Day-to-day management
 

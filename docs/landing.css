@@ -17,7 +17,7 @@
     --nav-bg: #100d13;
     --code-comment: #6f6379;
     --radius: 10px;
-    --font: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font: "Noto Sans SC", "Noto Sans JP", "Noto Sans KR", "Noto Sans", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
     --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;  }
 
   /* 浅色主题只覆盖 token；具体规则一概不重写。
@@ -85,6 +85,27 @@
   /* 语言切换跟其他项一样不带常驻边框：一排无边框的项里只有它有框，
      看起来就像没对齐。 */
   .nav-icon.lang-pill { min-width: 0; }
+  .lang-menu { position: relative; display: inline-flex; align-items: center; }
+  .lang-dropdown {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 80;
+    min-width: 148px; padding: 6px;
+    background: var(--bg-card); border: 1px solid var(--line-strong);
+    border-radius: var(--radius);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.28);
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .lang-dropdown[hidden] { display: none; }
+  .lang-dropdown a {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 7px 10px; border-radius: 7px;
+    font-size: 13.5px; color: var(--text); white-space: nowrap;
+  }
+  .lang-dropdown a:hover { background: var(--accent-soft); color: var(--accent); }
+  .lang-dropdown a[aria-current="page"] {
+    background: var(--accent-soft); color: var(--accent); font-weight: 600;
+  }
+  .lang-dropdown a span { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+  .lang-dropdown a[aria-current="page"] span { color: var(--accent); }
   /* 主题项的文字会在「跟随系统 / 深色 / 浅色」之间变，给个下限免得每次点完
      整排都往左右跳。 */
   /* min-width 是为了让「跟随系统 / 深色 / 浅色」切换时整排不左右跳；

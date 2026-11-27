@@ -4,16 +4,31 @@
 <meta charset="UTF-8" />
 <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Diana — 可自托管的多平台 AI 助手</title>
-<meta name="description" content="Diana 是用 Go 编写的可自托管多平台 AI 助手：OneBot v11、Telegram、QQ 官方机器人、微信与 iMessage 同时在线，单二进制部署，数据留在自己的机器上。" />
+<title>Diana — 像真人一样聊天，像 Agent 一样干活</title>
+<meta name="description" content="Diana 是用 Go 编写的自托管单二进制 AI Agent：常驻 QQ、Telegram、微信、iMessage，群里不用 @ 也能看气氛搭话，内置记忆、搜索、工具与编码代理，数据与每一步决策都留在你的机器上。" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Diana — 像真人一样聊天，像 Agent 一样干活" />
+<meta property="og:description" content="自托管单二进制 AI Agent：不用 @ 也会看气氛搭话，日常能记事、看图、扒链接、点歌，办事能联网、调 Skills / MCP 与本地编码代理，数据不出你的机器。" />
+<meta property="og:url" content="https://suink.github.io/Diana/" />
+<meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Diana — 像真人一样聊天，像 Agent 一样干活" />
+<meta name="twitter:description" content="自托管单二进制 AI Agent：常驻常用聊天软件，懂分寸、能干活、每一步决策有账可查，数据不出本机。" />
+<meta name="twitter:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
-<link rel="alternate" hreflang="zh" href="./" />
-<link rel="alternate" hreflang="en" href="./en" />
+<link rel="alternate" hreflang="zh-CN" href="https://suink.github.io/Diana/" />
+<link rel="alternate" hreflang="en" href="https://suink.github.io/Diana/en/" />
+<link rel="alternate" hreflang="ja" href="https://suink.github.io/Diana/ja/" />
+<link rel="alternate" hreflang="ko" href="https://suink.github.io/Diana/ko/" />
+<link rel="alternate" hreflang="fr" href="https://suink.github.io/Diana/fr/" />
+<link rel="alternate" hreflang="de" href="https://suink.github.io/Diana/de/" />
+<link rel="alternate" hreflang="nl" href="https://suink.github.io/Diana/nl/" />
+<link rel="alternate" hreflang="x-default" href="https://suink.github.io/Diana/" />
 <meta name="theme-color" content="#100d13" />
 <script src="./theme.js?v=20260847"></script>
-<link rel="stylesheet" href="./landing.css?v=20260847" />
+<link rel="stylesheet" href="./landing.css?v=20261124" />
 </head>
 <body>
 
@@ -25,7 +40,18 @@
            在线演示首屏按钮里已经有了。 -->
       <a class="nav-icon" href="./deploy" title="查看文档" aria-label="查看文档"><i data-lucide="book-open" data-size="18"></i>
         <span class="nav-label">文档</span></a>
-      <a class="nav-icon lang-pill" href="./en" title="Switch to English" aria-label="Switch to English"><i data-lucide="languages" data-size="18"></i><span class="nav-label">EN</span></a>
+      <div class="lang-menu">
+        <button class="nav-icon lang-pill" type="button" data-lang-toggle aria-expanded="false" aria-haspopup="menu" title="切换语言" aria-label="切换语言"><i data-lucide="languages" data-size="18"></i><span class="nav-label">中文</span></button>
+        <div class="lang-dropdown" data-lang-dropdown role="menu" hidden>
+          <a href="./" role="menuitem" aria-current="page">简体中文<span>ZH</span></a>
+          <a href="./en/" role="menuitem">English<span>EN</span></a>
+          <a href="./ja/" role="menuitem">日本語<span>JA</span></a>
+          <a href="./ko/" role="menuitem">한국어<span>KO</span></a>
+          <a href="./fr/" role="menuitem">Français<span>FR</span></a>
+          <a href="./de/" role="menuitem">Deutsch<span>DE</span></a>
+          <a href="./nl/" role="menuitem">Nederlands<span>NL</span></a>
+        </div>
+      </div>
       <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub 仓库" aria-label="GitHub 仓库">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="nav-label">GitHub</span></a>
@@ -36,11 +62,10 @@
 
 <header class="hero">
   <div class="wrap">
-    <h1>可自托管的多平台 AI 助手</h1>
+    <h1>像真人一样聊天，像 Agent 一样干活</h1>
     <p class="hero-sub">
-      Diana 用 Go 编写，编译成单个二进制运行。OneBot v11、Telegram、QQ 官方机器人、
-      微信、iMessage 可以同时在线，内置 WebUI、插件系统与 Agent；
-      配置、记忆和日志都存在本机的 SQLite 里，不依赖任何托管服务。
+      把 AI 养在你常用的聊天软件里。群里不用 @ 也会看气氛搭话，日常能记事、看图、扒链接、点歌，
+      办事能联网、调 Skills / MCP 甚至派本机编码代理改代码；单二进制自带控制台，配置、记忆与决策全部留在你机器上。
     </p>
     <div class="hero-cta">
       <!-- 一个明确的主操作（安装）+ 三个次要入口。成熟项目的首屏基本都是这个
@@ -91,54 +116,54 @@
 <section id="features">
   <div class="wrap">
     <div class="sec-head">
-      <h2>特性</h2>
+      <h2>为什么是 Diana</h2>
+      <p>不用在「只会水群的玩具 Bot」和「难配难查的黑盒框架」之间妥协。</p>
     </div>
     <div class="feat-grid">
-      <!-- 自托管排第一：它是选它而不选托管服务的唯一理由。 -->
       <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="hard-drive"></i></div>
-        <h3>完全自托管</h3>
-        <p>编译成单个二进制，配置、记忆、日志全部落在本机的 SQLite；不回传任何数据，也不依赖任何托管服务。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
-        <h3>多通道同时在线</h3>
-        <p>五个平台并行运行，回复、图片和提醒始终回到来源通道；会话上下文固定按机器人隔离。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
-        <h3>模型职责拆分</h3>
-        <p>对话、视觉理解、意图识别、图片生成分别绑定 Provider 与模型，保存前用真实请求验证。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
-        <h3>内置联网搜索</h3>
-        <p>无需安装插件，时效性内容先检索再回答；默认使用隔离浏览器搜索，也可接入 Exa、Tavily 或自定义来源，按机器人配置主备。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
-        <h3>图片文字识别</h3>
-        <p>视觉模型与 OCR 并行工作，对话模型不支持看图也能收到识别后的文字；结果按内容哈希落库，同一张图只识别一次。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="users"></i></div>
-        <h3>群级回复策略</h3>
-        <p>每个群独立设置回复时段、黑白名单、触发词、人设、群等级门槛和工具权限。</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
-        <h3>长期记忆与检索</h3>
-        <p>近期上下文、压缩摘要、结构化事实和超长历史检索分层工作，控制 token 消耗。</p>
+        <div class="feat-icon"><i data-size="20" data-lucide="message-circle"></i></div>
+        <h3>懂分寸的主动搭话</h3>
+        <p>群里不用 @ 也能判断何时插话、何时保持安静，不装死也不刷屏；按群独立配置回复时段、人设、黑白名单与工具权限。</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="bot"></i></div>
-        <h3>内置 Agent</h3>
-        <p>Pi 风格的最小工具循环，可调用文件、命令、浏览器工具，按需装载 Skills 与 MCP 服务。</p>
+        <h3>内置 Agent 与安全模式</h3>
+        <p>内置文件、命令与浏览器工具，按需装载 Skills 与 MCP，并可派活给本机 Claude Code / Codex；开启安全模式一键隔离高危工具，群聊防注入。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="hard-drive"></i></div>
+        <h3>单二进制，完全自托管</h3>
+        <p>不用折腾 Python 或 Node 环境，一条命令跑起服务和内置 WebUI；配置、记忆、日志全部落在本机 SQLite，不依赖任何云端托管。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
+        <h3>多平台同时在线，免公网</h3>
+        <p>QQ、Telegram、微信、iMessage 与内置控制台并行运行，回复始终回到来源通道；家庭宽带或内网出站直连，会话按机器人严格隔离。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
+        <h3>长期记忆与可审笔记本</h3>
+        <p>近期对话、压缩摘要、结构化事实与超长历史分层召回，既记得住群规与约定，又稳控 token 消耗；笔记本随时可审可改。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
+        <h3>联网搜索与链接/文件解析</h3>
+        <p>默认通过沙盒浏览器并行检索时效信息，也可全局切换 Exa、Tavily 等搜索源；B 站、YouTube、X、小红书链接及 PDF/Office 文件直接读懂。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
+        <h3>看图、识字与渲染出图</h3>
+        <p>视觉模型与离线 OCR 协同工作，纯文本模型也能看懂群里的截图；遇到表格、流程图或时序图，自动渲染成清晰图片发回聊天。</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
+        <h3>按职责拆分模型，省钱稳跑</h3>
+        <p>对话、视觉、意图判断、画图各自绑定最合适的模型与供应商，保存前实测连通性，主人还能直接在聊天里切换模型。</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="clipboard-list"></i></div>
-        <h3>完整事件审计</h3>
-        <p>每条消息为什么回复、用了哪些工具、花了多少 token，都能在事件中心查到；操作日志区分操作人。</p>
+        <h3>每一步决策都有账可查</h3>
+        <p>机器人为什么回、为什么没回、用了哪些工具、近 24 小时花了多少 token，事件中心一目了然，彻底告别黑盒排查。</p>
       </div>
     </div>
   </div>
@@ -177,9 +202,9 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
       </div>
     </div>
     <div class="qs-steps">
-      <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>生成的管理员账号和密码会显示在终端，并保存在安装目录的 <code>config.yaml</code>。</p></div>
+      <div class="qs-step"><h4><span>1</span>执行安装命令</h4><p>首次生成的管理员账号和密码只在终端显示一次，请当场保存；忘记密码可随时运行 <code>diana passwd</code> 重置。</p></div>
       <div class="qs-step"><h4><span>2</span>打开控制台</h4><p>访问 <code>127.0.0.1:18080</code>，用终端里显示的管理员账号登录。</p></div>
-      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里按平台填写凭据，五个通道可同时启用，并为各职责绑定模型。</p></div>
+      <div class="qs-step"><h4><span>3</span>接入通道与模型</h4><p>在 WebUI 里配置模型并启用任意通道，也可直接用内置机器人在控制台里开始体验。</p></div>
       <div class="qs-step"><h4><span>4</span>后续升级</h4><p>控制台可直接升级，也可以重复执行安装命令；失败自动恢复。</p></div>
     </div>
   </div>
@@ -226,10 +251,17 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
           <p>通过 Mac 上的 BlueBubbles Server 收发，webhook 回调，可选轮询兜底。</p>
         </div>
       </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="bot"></i></div>
+        <div>
+          <h3>内置机器人</h3>
+          <p>无需任何平台凭据，装完即可在控制台「聊天」页直接私聊或语音通话，零门槛体验全部能力。</p>
+        </div>
+      </div>
     </div>
     <p class="chan-note">
-      前四个平台由本机主动出站连接，家庭或内网部署可以直接用；
-      iMessage 由 Mac 上的 BlueBubbles 推送回调，Mac 能访问到 Diana 即可，不要求公网。
+      前四个外部平台均由本机主动出站连接，家庭或内网部署可以直接用；
+      iMessage 只需 Mac 能访问到 Diana 即可，同样不要求公网。
     </p>
   </div>
 </section>
@@ -276,7 +308,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 </footer>
 
 <script src="./icons.js?v=20261028"></script>
-<script src="./landing.js?v=20260847"></script>
+<script src="./landing.js?v=20261124"></script>
 
 </body>
 </html>
