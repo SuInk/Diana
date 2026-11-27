@@ -1231,13 +1231,11 @@ func (t *BrowserRenderTool) Run(ctx context.Context, input map[string]any) (stri
 	if strings.TrimSpace(rawURL) == "" {
 		return "", errors.New(`browser_render 缺少必填 url。请重新调用，arguments 形如 {"url":"完整的 HTTP(S) 网址","find":"可选页内关键词"}。不要只发工具名，也不要把 url 放进 input 子对象；搜索时使用已编码关键词的搜索引擎网址，读来源时照抄来源 URL。`)
 	}
-	budget := ToolOutputBudget(ctx)
-	if budget <= 0 {
-		budget = ToolOutputMaxChars
-	}
+	budget := readingPageBudget(ctx)
 	ctx = WithRenderEngine(ctx, stringFromInput(input, "engine"))
 	if urls := browserRenderURLs(input); len(urls) > 1 {
-		return t.runBatch(ctx, urls, stringFromInput(input, "find"), budget)
+		// 并行读几页时每页各给一份小页，合计不超过单次结果上限。
+		return t.runBatch(ctx, urls, stringFromInput(input, "find"), min(budget*len(urls), max(ToolOutputBudget(ctx), ToolOutputMaxChars)))
 	}
 	// 同一页刚读过（批量里没等到的那页，或者上一次分页读到一半）就接着用那次的结果，
 	// 续读时页面不重新渲染，offset 也对得上。没读过就照常在调用方的期限里读，读成功

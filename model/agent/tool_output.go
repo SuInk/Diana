@@ -43,3 +43,25 @@ func truncateToolOutput(output string, limit int) string {
 	}
 	return string(runes[:limit]) + fmt.Sprintf("\n...[结果共 %d 字，超出单次上限，只给了前 %d 字，后面 %d 字没有给出。不要把这段当成全文；需要后面的内容就用这个工具的分页、行号或路径参数缩小范围再调一次]", len(runes), limit, len(runes)-limit)
 }
+
+// ReadingPageMaxChars 是搜索、读网页这类工具交给模型的每页上限，比 ToolOutputMaxChars
+// 小得多：以前一页给满 2 万字，大半轮次只用到开头几条命中或几段正文，剩下的整页
+// 跟着历史一直占输入 token、也挤掉缓存。小页里写明 next_offset 和还剩多少，模型
+// 要更多再翻页。
+const ReadingPageMaxChars = 5000
+
+// readingPageBudget 返回搜索、读网页类工具这次的每页上限。模型直接调用时
+// （Runner 给的是 ToolOutputMaxChars）收到 ReadingPageMaxChars；codemode 脚本里的
+// 子调用自带更大的上限（codeModeChildOutputBudget），由脚本自己筛，原样保留；
+// 测试或调用方给了更小的上限就用更小的。
+func readingPageBudget(ctx context.Context) int {
+	budget := ToolOutputBudget(ctx)
+	switch {
+	case budget > ToolOutputMaxChars:
+		return budget
+	case budget <= 0:
+		return ReadingPageMaxChars
+	default:
+		return min(budget, ReadingPageMaxChars)
+	}
+}

@@ -95,8 +95,9 @@ func webSearchPageKey(input map[string]any) string {
 // 至少装一个位置，保证续读往前走。
 //
 // sources、searches、queries、providers、attempts 这些诊断只放第一页：以前每页都带，
-// 十个查询时光这些就近一万字。Runner 先按单次
-// 上限截原始输出、再给模型精简版，所以按原始输出计量，精简版只会更短。
+// 十个查询时光这些就近一万字。Runner 先按单次上限截原始输出、再给模型精简版：
+// 给模型的小页（budget 不超过 ToolOutputMaxChars）按精简版计量，同时保证原始输出
+// 不被截；codemode 子调用拿原始输出，按原始输出计量。
 func webSearchPage(result webSearchResult, args map[string]any, offset, budget int) (string, error) {
 	if budget <= 0 {
 		budget = ToolOutputMaxChars
@@ -147,7 +148,13 @@ func webSearchPage(result webSearchResult, args map[string]any, offset, budget i
 			page.ReadNotice = webSearchReadNotice(len(hits), len(content), webSearchHitsLeft(starts, end), max(0, total-max(end, hitEnd)), args, end)
 		}
 		data, err := json.Marshal(page)
-		return string(data), utf8.RuneCount(data) <= budget, err
+		if err != nil || budget > ToolOutputMaxChars {
+			return string(data), utf8.RuneCount(data) <= budget, err
+		}
+		// 模型看到的是去掉诊断字段的精简版，小页按它计量；原始输出仍要在 Runner 的
+		// 单次上限以内，否则先被硬截、精简版就解析不出来了。
+		fits := utf8.RuneCount(data) <= ToolOutputMaxChars && utf8.RuneCountInString(webSearchOutputForModel(string(data))) <= budget
+		return string(data), fits, nil
 	}
 	var bounds []int
 	for position := offset; position < total; {

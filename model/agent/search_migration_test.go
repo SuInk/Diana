@@ -141,7 +141,7 @@ func TestWebSearchPageReturnsEveryHitAcrossPages(t *testing.T) {
 		if err := json.Unmarshal([]byte(raw), &got); err != nil {
 			t.Fatal(err)
 		}
-		if len([]rune(raw)) > 2000 || got.TotalResults != 32 || got.Status != "ok" {
+		if webSearchModelRunes(raw) > 2000 || got.TotalResults != 32 || got.Status != "ok" {
 			t.Fatalf("invalid page: %s", raw)
 		}
 		for _, hit := range got.Results {
@@ -194,7 +194,7 @@ func TestParallelSearchBudgetPreservesEveryQuery(t *testing.T) {
 		if err = json.Unmarshal([]byte(raw), &got); err != nil {
 			t.Fatal(err)
 		}
-		if len([]rune(raw)) > 8000 || got.Budget.ProviderCalls != 4 {
+		if webSearchModelRunes(raw) > ReadingPageMaxChars || len([]rune(raw)) > ToolOutputMaxChars || got.Budget.ProviderCalls != 4 {
 			t.Fatalf("invalid search page: %s", raw)
 		}
 		for _, hit := range got.Results {
