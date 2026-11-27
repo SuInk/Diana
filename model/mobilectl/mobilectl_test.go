@@ -355,7 +355,11 @@ func TestSimctlAutoBootAndScreenshot(t *testing.T) {
 		"    ;;\n" +
 		"  *\"simctl boot SIM-UUID-1\"*) touch '" + stateFile + "' ;;\n" +
 		"  *\"simctl bootstatus\"*) exit 0 ;;\n" +
-		"  *\"simctl io\"*\"screenshot\"*) printf '%s' '" + pngB64 + "' | base64 -d 2>/dev/null || printf '%s' '" + pngB64 + "' | base64 -D ;;\n" +
+		// 和真实 simctl 一样：截图写进最后一个参数给的文件，标准输出只有提示文字。
+		"  *\"simctl io\"*\"screenshot\"*)\n" +
+		"    for out; do :; done\n" +
+		"    { printf '%s' '" + pngB64 + "' | base64 -d 2>/dev/null || printf '%s' '" + pngB64 + "' | base64 -D; } > \"$out\"\n" +
+		"    echo \"Wrote screenshot to: $out\" ;;\n" +
 		"  *) echo 'ok' ;;\n" +
 		"esac\n"
 	if err := os.WriteFile(fakeXcrun, []byte(script), 0o755); err != nil {

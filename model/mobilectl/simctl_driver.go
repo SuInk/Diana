@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -196,11 +198,21 @@ func (d *SimctlDriver) OpenURL(ctx context.Context, deviceID, rawURL string) err
 	return err
 }
 
-// Screenshot captures a PNG screenshot directly from the simulator framebuffer via `simctl io screenshot`.
+// Screenshot captures a PNG screenshot from the simulator framebuffer via `simctl io screenshot`.
+// 新版 simctl 把 `-` 当成文件名写进当前目录而不是写到标准输出，所以先落到临时文件再读回。
 func (d *SimctlDriver) Screenshot(ctx context.Context, deviceID string) ([]byte, error) {
-	out, err := d.run(ctx, "io", d.targetID(deviceID), "screenshot", "--type=png", "-")
+	dir, err := os.MkdirTemp("", "diana-simctl-shot-")
 	if err != nil {
 		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	path := filepath.Join(dir, "screen.png")
+	if _, err := d.run(ctx, "io", d.targetID(deviceID), "screenshot", "--type=png", path); err != nil {
+		return nil, err
+	}
+	out, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取 simctl 截图失败：%w", err)
 	}
 	magic := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}
 	idx := bytes.Index(out, magic)
