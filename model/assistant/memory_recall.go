@@ -19,12 +19,18 @@ func (r *Runtime) memoryQueryForEvent(ctx context.Context, event MessageEvent, t
 	if strings.TrimSpace(text) != "" {
 		mentioned = r.mentionedSubjectUserIDs(ctx, event, text)
 	}
+	crossGroup := boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup
+	var view crossGroupView
+	if crossGroup {
+		view = r.crossGroupVisibility(ctx, event)
+	}
 	return StructuredMemoryQuery{
+		CrossGroupRestricted: view.restricted, CrossGroupSessions: view.sessions,
 		MentionedSubjectUserIDs: mentioned,
 		SubjectUserID:           event.UserID, LinkedSubjects: r.linkedMemorySubjects(event), Session: sessionKey(event), GroupID: event.GroupID,
 		Text: text, SearchTerms: structuredMemorySearchTerms(text, 48), Now: time.Now(), MaxCandidates: limit,
 		ExcludeKinds:       []MemoryKind{MemoryKindThread},
-		CrossGroup:         boolValue(cfg.CrossGroupMemoryEnabled, false) && event.Kind == EventKindGroup,
+		CrossGroup:         crossGroup,
 		GroupSessionPrefix: groupHistorySessionPrefix(event), CrossPlatformGroupPrefixes: r.crossPlatformMemoryPrefixes(event, cfg),
 	}
 }

@@ -153,6 +153,8 @@ type MessageHistorySearchQuery struct {
 	CrossSession   bool
 	// SenderUserIDs 只留这些账号发的消息。设了它 Text 可以为空：按时间列出这些人的发言。
 	SenderUserIDs []string
+	// Sessions 非空时跨会话检索只在这些会话里找，见 crossGroupVisibility。
+	Sessions []string
 }
 
 // MessageSpeakerQuery 在聊天记录汇总出的发言人名录里找人，见 speaker_directory.go。
@@ -168,6 +170,8 @@ type MessageSpeakerQuery struct {
 	// 默认按最近发言排，发言一来名次就变，只适合取前若干个；要找全的调用方用它一页页取。
 	ByUserID    bool
 	AfterUserID string
+	// Sessions 非空时跨会话只在这些会话的名录里找，见 crossGroupVisibility。
+	Sessions []string
 }
 
 // MessageSpeaker 是名录里的一个账号。Names 是它在范围内用过的昵称，最近的在前。
@@ -182,6 +186,11 @@ type MessageSpeaker struct {
 
 type MessageSpeakerStore interface {
 	ListMessageSpeakers(ctx context.Context, query MessageSpeakerQuery) ([]MessageSpeaker, error)
+}
+
+// SpeakerSessionStore 列出某个账号在名录里出现过的会话（限定前缀）。
+type SpeakerSessionStore interface {
+	ListSpeakerSessions(ctx context.Context, userID string, sessionPrefix string) ([]string, error)
 }
 
 type MessageHistorySearchStore interface {
@@ -617,12 +626,14 @@ type Runtime struct {
 	members                   *memberCache
 	// crossGroupNonMembers 记跨群参考里查过不在本群的作者，见 crossGroupNonMemberTTL。自带锁。
 	crossGroupNonMembers crossGroupNonMembers
-	bodyAccounts         bodyAccountMembership
-	now                  func() time.Time
-	quietNotices         map[string]time.Time
-	resolverDeliveryMu   sync.Mutex
-	resolverDeliverySeq  uint64
-	resolverDeliveries   map[string]resolverDeliveryReservation
+	// crossGroupVisible 记每个发言者能看到的其他群，见 crossGroupVisibility。自带锁。
+	crossGroupVisible   crossGroupVisibilityCache
+	bodyAccounts        bodyAccountMembership
+	now                 func() time.Time
+	quietNotices        map[string]time.Time
+	resolverDeliveryMu  sync.Mutex
+	resolverDeliverySeq uint64
+	resolverDeliveries  map[string]resolverDeliveryReservation
 
 	// sem 控制同时生成回复的 worker 数，history/recent 支撑上下文和状态页展示。
 	sem                 chan struct{}

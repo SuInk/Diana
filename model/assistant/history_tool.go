@@ -645,12 +645,17 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	} else if scope != "current" {
 		return dianaChatHistoryResult{}, fmt.Errorf("scope 必须是 current 或 all_groups")
 	}
+	var view crossGroupView
 	if crossGroup {
 		if err := t.crossGroupSearchError(ctx); err != nil {
 			return dianaChatHistoryResult{}, err
 		}
+		// 检索、按昵称找人和总数都只算提问人自己也在的群：以前只把命中的消息滤掉，
+		// resolved_senders 和 total 照样把群外人的账号、发言条数带了出来。
+		view = t.runtime.crossGroupVisibility(ctx, t.event)
 	}
-	senders, resolvedSenders, senderNote, err := t.resolveSearchSenders(ctx, senderInput, senderName, crossGroup)
+	visibleSessions := view.searchSessions(sessionKey(t.event))
+	senders, resolvedSenders, senderNote, err := t.resolveSearchSenders(ctx, senderInput, senderName, crossGroup, visibleSessions)
 	if err != nil {
 		return dianaChatHistoryResult{}, err
 	}
@@ -692,6 +697,7 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 			Text: query, Terms: structuredMemorySearchTerms(query, 48),
 			FromTime: page.From, ThroughTime: page.Through, Limit: limit,
 			CrossSession: crossGroup, Sort: order, Offset: page.Offset, SenderUserIDs: senders,
+			Sessions: visibleSessions,
 		})
 		cancel()
 		if err != nil {
@@ -743,10 +749,13 @@ func (t *dianaChatHistoryTool) search(ctx context.Context, input map[string]any)
 	}
 	if crossGroup {
 		label = "同一机器人的所有群"
-		if guard := newCrossGroupReadGuard(ctx, t); !guard.owner {
+		if view.restricted {
+			// 关键词检索已限定在可见的群里，这里兜住语义检索混进来的候选。
+			prefix := groupHistorySessionPrefix(t.event)
 			kept := matched[:0:0]
 			for _, event := range matched {
-				if guard.allows(ctx, event.GroupID) {
+				groupID := strings.TrimSpace(event.GroupID)
+				if groupID == "" || groupID == strings.TrimSpace(t.event.GroupID) || view.allowsSession(prefix+groupID) {
 					kept = append(kept, event)
 				}
 			}
@@ -1404,12 +1413,12 @@ func uniqueLowerFields(text string) []string {
 //
 // 模型把昵称误填进 sender_user_id 也很常见（按账号过滤必然查空），名录里该值不是任何
 // 账号、却能对上昵称时按昵称处理，并在结果里说明。
-func (t *dianaChatHistoryTool) resolveSearchSenders(ctx context.Context, senderID, senderName string, crossGroup bool) ([]string, []MessageSpeaker, string, error) {
+func (t *dianaChatHistoryTool) resolveSearchSenders(ctx context.Context, senderID, senderName string, crossGroup bool, sessions []string) ([]string, []MessageSpeaker, string, error) {
 	if senderID != "" {
 		if senderName != "" || t.runtime.speakerStore() == nil {
 			return []string{senderID}, nil, "", nil
 		}
-		speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderID, crossGroup, 50)
+		speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderID, crossGroup, sessions, 50)
 		if err != nil || len(speakers) == 0 {
 			return []string{senderID}, nil, "", nil
 		}
@@ -1428,7 +1437,7 @@ func (t *dianaChatHistoryTool) resolveSearchSenders(ctx context.Context, senderI
 	if t.runtime.speakerStore() == nil {
 		return nil, nil, "", fmt.Errorf("当前历史存储不支持按昵称找人；请改用 sender_user_id，或把昵称放进 query 做全文检索")
 	}
-	speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderName, crossGroup, 50)
+	speakers, err := t.runtime.resolveSpeakers(ctx, t.event, senderName, crossGroup, sessions, 50)
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("按昵称查找发言人失败: %w", err)
 	}
