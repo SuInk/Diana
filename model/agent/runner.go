@@ -1413,7 +1413,7 @@ func finalizationInstruction(reason string) string {
 		prefix = "剩余请求时间已保留给最终答复。"
 	}
 	requirement := "现在禁止再调用任何工具；请仅根据已有工具结果 send 结束本轮"
-	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；联网调研正文附实际来源链接（用户明确禁用链接时除外），不要输出 tool 动作。content 只写面向用户的自然回答；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
+	return prefix + requirement + "。即使信息不完整，也要说明已确认的结果和限制；不要输出 tool 动作。content 只写面向用户的自然回答；用户询问观点是否正确时，应区分可直接判断的逻辑或措辞与需要外部证据的事实，不要因为部分事实未核实而拒绝回答整个问题。"
 }
 
 func addLLMUsage(total llm.Usage, usage llm.Usage) llm.Usage {
