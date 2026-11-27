@@ -6,16 +6,31 @@
 <meta charset="UTF-8" />
 <link rel="icon" href="../favicon.svg" type="image/svg+xml" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Diana — Self-hosted multi-platform AI assistant</title>
-<meta name="description" content="Diana is a self-hosted multi-platform AI assistant written in Go: OneBot v11, Telegram, QQ official bots, WeChat and iMessage online at once, a single binary, and your data stays on your own machine." />
-<link rel="alternate" hreflang="zh" href="../" />
-<link rel="alternate" hreflang="en" href="./" />
+<title>Diana — Talks like a human, works like an agent</title>
+<meta name="description" content="Diana is a self-hosted, single-binary AI agent written in Go: live across QQ, Telegram, WeChat, and iMessage, knows when to chime in in group chats, and runs memory, web search, tools, and local coding agents — with all data on your machine." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Diana — Talks like a human, works like an agent" />
+<meta property="og:description" content="Self-hosted, single-binary AI agent that lives in your chat apps — natural group presence, long-term memory, web search, Skills/MCP, and local coding agents with full local control." />
+<meta property="og:url" content="https://suink.github.io/Diana/en/" />
+<meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Diana — Talks like a human, works like an agent" />
+<meta name="twitter:description" content="Self-hosted, single-binary AI agent for your chat apps — natural presence, real agent tools, and full event auditability on your own machine." />
+<meta name="twitter:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<link rel="alternate" hreflang="zh-CN" href="https://suink.github.io/Diana/" />
+<link rel="alternate" hreflang="en" href="https://suink.github.io/Diana/en/" />
+<link rel="alternate" hreflang="ja" href="https://suink.github.io/Diana/ja/" />
+<link rel="alternate" hreflang="ko" href="https://suink.github.io/Diana/ko/" />
+<link rel="alternate" hreflang="fr" href="https://suink.github.io/Diana/fr/" />
+<link rel="alternate" hreflang="de" href="https://suink.github.io/Diana/de/" />
+<link rel="alternate" hreflang="nl" href="https://suink.github.io/Diana/nl/" />
+<link rel="alternate" hreflang="x-default" href="https://suink.github.io/Diana/" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
 <meta name="theme-color" content="#100d13" />
 <script src="../theme.js?v=20260847"></script>
-<link rel="stylesheet" href="../landing.css?v=20260847" />
+<link rel="stylesheet" href="../landing.css?v=20261124" />
 </head>
 <body>
 
@@ -25,7 +40,18 @@
     <div class="nav-links">
       <a class="nav-icon" href="./deploy" title="Documentation" aria-label="Documentation"><i data-lucide="book-open" data-size="18"></i>
         <span class="nav-label">Docs</span></a>
-      <a class="nav-icon lang-pill" href="../" title="切换到中文" aria-label="切换到中文"><i data-lucide="languages" data-size="18"></i><span class="nav-label">中文</span></a>
+      <div class="lang-menu">
+        <button class="nav-icon lang-pill" type="button" data-lang-toggle aria-expanded="false" aria-haspopup="menu" title="Switch language" aria-label="Switch language"><i data-lucide="languages" data-size="18"></i><span class="nav-label">EN</span></button>
+        <div class="lang-dropdown" data-lang-dropdown role="menu" hidden>
+          <a href="../" role="menuitem">简体中文<span>ZH</span></a>
+          <a href="./" role="menuitem" aria-current="page">English<span>EN</span></a>
+          <a href="../ja/" role="menuitem">日本語<span>JA</span></a>
+          <a href="../ko/" role="menuitem">한국어<span>KO</span></a>
+          <a href="../fr/" role="menuitem">Français<span>FR</span></a>
+          <a href="../de/" role="menuitem">Deutsch<span>DE</span></a>
+          <a href="../nl/" role="menuitem">Nederlands<span>NL</span></a>
+        </div>
+      </div>
       <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub repository" aria-label="GitHub repository">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
         <span class="nav-label">GitHub</span></a>
@@ -36,11 +62,11 @@
 
 <header class="hero">
   <div class="wrap">
-    <h1>A self-hosted multi-platform AI assistant</h1>
+    <h1>Talks like a human, works like an agent</h1>
     <p class="hero-sub">
-      Diana is written in Go and compiles to a single binary. OneBot v11, Telegram, QQ official bots,
-      WeChat and iMessage can all be online at once, with a built-in web console, plugin system
-      and agent. Configuration, memory and logs live in SQLite on your own machine — no hosted service involved.
+      Run your own AI right inside the chat apps you already use. It knows when to chime in and when to stay quiet in groups,
+      remembers what matters, searches the web, parses links and files, and runs Skills, MCP, and local coding agents —
+      all in a single binary with a built-in web console, keeping every piece of data on your machine.
     </p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="#quickstart"><i data-lucide="download" data-size="16"></i>
@@ -87,53 +113,54 @@
 <section id="features">
   <div class="wrap">
     <div class="sec-head">
-      <h2>Features</h2>
+      <h2>Why Diana</h2>
+      <p>No more choosing between a noisy group toy and a black-box framework that takes hours to configure.</p>
     </div>
     <div class="feat-grid">
       <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="message-circle"></i></div>
+        <h3>Natural group presence</h3>
+        <p>Knows when to chime in and when to stay quiet without being @-mentioned — no dead silence, no spam. Reply hours, personas, allow/deny lists, and tool permissions are tuned per group.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="bot"></i></div>
+        <h3>Built-in agent with safe mode</h3>
+        <p>Uses file, shell, and browser tools, loads Skills and MCP servers on demand, and dispatches tasks to local Claude Code / Codex. Toggle safe mode to isolate host tools against prompt injection.</p>
+      </div>
+      <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="hard-drive"></i></div>
-        <h3>Fully self-hosted</h3>
-        <p>A single compiled binary. Configuration, memory and logs all live in SQLite on your machine; nothing is reported home and no hosted service is required.</p>
+        <h3>Single binary, fully self-hosted</h3>
+        <p>No Python or Node runtime to wrangle — one command starts the service and built-in WebUI. Config, memory, and logs live in local SQLite with zero cloud dependency.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
-        <h3>Five platforms at once</h3>
-        <p>All enabled bots run in parallel and replies, images and reminders always return to the channel they came from. Conversation context is always isolated by bot profile.</p>
+        <h3>Multi-platform, no public IP needed</h3>
+        <p>Run QQ, Telegram, WeChat, iMessage, and the built-in console in parallel with strict per-bot context isolation. Connects outbound so home and LAN setups work out of the box.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
+        <h3>Long-term memory &amp; notebook</h3>
+        <p>Recent context, compacted summaries, structured facts, and deep history recall work in layers — remembering preferences and group rules while keeping token spend under control.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
+        <h3>Web search, links &amp; files</h3>
+        <p>Researches time-sensitive questions via a sandboxed browser by default (or global Exa / Tavily providers), and parses Bilibili, YouTube, X, Xiaohongshu links plus PDF and Office files.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
+        <h3>Vision, OCR &amp; rendered visuals</h3>
+        <p>Vision models and offline OCR let even text-only models read screenshots and stickers; tables, flowcharts, and sequence diagrams are rendered into clean images when text falls short.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
         <h3>Per-role model routing</h3>
-        <p>Chat, vision, intent detection and image generation each bind to their own provider and model, verified with a real request before the configuration is saved.</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
-        <h3>Built-in web search</h3>
-        <p>No plugin to install. Time-sensitive questions are researched before they are answered — Exa MCP first, Tavily as the fallback.</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
-        <h3>Text recognition in images</h3>
-        <p>Vision models and OCR work side by side, so even a chat model without image support still receives the recognised text. Results are keyed by content hash, so the same image is only read once.</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="users"></i></div>
-        <h3>Per-group reply policy</h3>
-        <p>Every group gets its own reply window, allow and deny lists, trigger words, persona, member-level threshold and tool permissions.</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
-        <h3>Long-term memory and recall</h3>
-        <p>Recent context, compacted summaries, structured facts and long-history retrieval work in layers to keep token usage in check.</p>
-      </div>
-      <div class="feat">
-        <div class="feat-icon"><i data-size="20" data-lucide="bot"></i></div>
-        <h3>Built-in agent</h3>
-        <p>A minimal Pi-style tool loop with file, shell and browser tools, loading skills and MCP servers on demand.</p>
+        <p>Bind chat, vision, intent detection, and image generation to different providers and models — verified with a real request before saving, and switchable right from chat.</p>
       </div>
       <div class="feat">
         <div class="feat-icon"><i data-size="20" data-lucide="clipboard-list"></i></div>
-        <h3>Full event audit</h3>
-        <p>Why each message was answered, which tools ran and how many tokens it cost are all recorded in the event centre; the operation log identifies who did what.</p>
+        <h3>Every decision explained</h3>
+        <p>See why every message was answered or skipped, which tools ran, and how many tokens were spent in the event center — no more guessing why a bot went silent.</p>
       </div>
     </div>
   </div>
@@ -172,9 +199,9 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
       </div>
     </div>
     <div class="qs-steps">
-      <div class="qs-step"><h4><span>1</span>Run the installer</h4><p>The generated admin username and password are printed to the terminal and saved to <code>config.yaml</code> in the install directory.</p></div>
+      <div class="qs-step"><h4><span>1</span>Run the installer</h4><p>The initial admin username and password are printed once in the terminal — save them right away; reset anytime with <code>diana passwd</code>.</p></div>
       <div class="qs-step"><h4><span>2</span>Open the console</h4><p>Visit <code>127.0.0.1:18080</code> and sign in with the admin account shown in the terminal.</p></div>
-      <div class="qs-step"><h4><span>3</span>Connect channels and models</h4><p>Fill in the credentials for each platform in the web console — all five channels can run at once — and bind a model to each role.</p></div>
+      <div class="qs-step"><h4><span>3</span>Connect channels and models</h4><p>Configure your models and connect any platform in the web console, or start immediately with the built-in bot.</p></div>
       <div class="qs-step"><h4><span>4</span>Upgrading later</h4><p>Upgrade from the console, or simply run the install command again; a failed upgrade restores itself.</p></div>
     </div>
   </div>
@@ -221,10 +248,17 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
           <p>Sent and received through BlueBubbles Server on a Mac, via webhook callbacks with optional polling fallback.</p>
         </div>
       </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="bot"></i></div>
+        <div>
+          <h3>Built-in bot</h3>
+          <p>No platform credentials required — chat or start a voice call right inside the console's Chat page to try everything immediately.</p>
+        </div>
+      </div>
     </div>
     <p class="chan-note">
-      The first four connect outbound from your machine, so a home or internal network works as-is.
-      iMessage is pushed by BlueBubbles on your Mac; the Mac only needs to reach Diana, no public address required.
+      The first four external platforms connect outbound from your machine, so home or LAN setups work as-is;
+      iMessage only needs your Mac to reach Diana — no public address required.
     </p>
   </div>
 </section>
@@ -271,7 +305,7 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh 
 </footer>
 
 <script src="../icons.js?v=20261028"></script>
-<script src="../landing.js?v=20260847"></script>
+<script src="../landing.js?v=20261124"></script>
 
 </body>
 </html>

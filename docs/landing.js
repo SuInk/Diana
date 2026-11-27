@@ -1,8 +1,15 @@
 // Copyright (c) 2025-now SuInk.
 // Licensed under the Limited Redistribution License in the repository root.
 
-// 落地页脚本。中英两版共用，文案按路径切换——/en/ 下是英文。
-const lang = window.location.pathname.includes("/en/") ? "en" : "zh";
+// 落地页脚本。所有语言版本共用，按 <html lang> 或路径识别当前语言。
+const SUPPORTED_LANGS = ["zh", "en", "ja", "ko", "fr", "de", "nl"];
+const detectLang = () => {
+  const htmlLang = (document.documentElement.lang || "").toLowerCase().split("-")[0];
+  if (SUPPORTED_LANGS.includes(htmlLang)) return htmlLang;
+  const match = window.location.pathname.match(/\/(en|ja|ko|fr|de|nl)(\/|$)/);
+  return match ? match[1] : "zh";
+};
+const lang = detectLang();
 const t = {
   zh: {
     themeLabels: { system: "跟随系统", dark: "深色", light: "浅色" },
@@ -16,12 +23,68 @@ const t = {
     copy: "Copy",
     copied: "Copied ✓",
   },
+  ja: {
+    themeLabels: { system: "システム", dark: "ダーク", light: "ライト" },
+    themeTitle: (l) => `テーマ：${l}（クリックで切替）`,
+    copy: "コピー",
+    copied: "コピー済み ✓",
+  },
+  ko: {
+    themeLabels: { system: "시스템", dark: "다크", light: "라이트" },
+    themeTitle: (l) => `테마: ${l} (클릭하여 전환)`,
+    copy: "복사",
+    copied: "복사됨 ✓",
+  },
+  fr: {
+    themeLabels: { system: "Système", dark: "Sombre", light: "Clair" },
+    themeTitle: (l) => `Thème : ${l} (cliquer pour changer)`,
+    copy: "Copier",
+    copied: "Copié ✓",
+  },
+  de: {
+    themeLabels: { system: "System", dark: "Dunkel", light: "Hell" },
+    themeTitle: (l) => `Design: ${l} (zum Wechseln klicken)`,
+    copy: "Kopieren",
+    copied: "Kopiert ✓",
+  },
+  nl: {
+    themeLabels: { system: "Systeem", dark: "Donker", light: "Licht" },
+    themeTitle: (l) => `Thema: ${l} (klik om te wisselen)`,
+    copy: "Kopiëren",
+    copied: "Gekopieerd ✓",
+  },
 }[lang];
 
-// 图片只有一份，放在 docs/assets/；英文页在 docs/en/ 下，要往上一级取。
-const assetBase = lang === "en" ? "../" : "./";
+// 图片只有一份，放在 docs/assets/；非中文首页在 docs/<lang>/ 下，要往上一级取。
+const assetBase = lang === "zh" ? "./" : "../";
 
   window.DianaIcons.render();
+
+  // 语言切换下拉菜单
+  (() => {
+    const toggle = document.querySelector("[data-lang-toggle]");
+    const menu = document.querySelector("[data-lang-dropdown]");
+    if (!toggle || !menu) return;
+    const setOpen = (open) => {
+      menu.hidden = !open;
+      toggle.setAttribute("aria-expanded", String(open));
+    };
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setOpen(menu.hidden);
+    });
+    document.addEventListener("click", (e) => {
+      if (!menu.hidden && !menu.contains(e.target) && !toggle.contains(e.target)) {
+        setOpen(false);
+      }
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && !menu.hidden) {
+        setOpen(false);
+        toggle.focus();
+      }
+    });
+  })();
 
   // 首屏安装命令按访客平台切换
   (() => {

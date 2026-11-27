@@ -2,16 +2,21 @@
 
 # Diana
 
-**住在群聊里、会主动搭话的 AI Agent —— 不用 @ 也能自然插话，还会搜索、点歌、发表情包、记住群里的约定；自托管单二进制，数据不出你的机器。**
+**简体中文** · [English](./README.en.md) · [日本語](./README.ja.md) · [한국어](./README.ko.md) · [Français](./README.fr.md) · [Deutsch](./README.de.md) · [Nederlands](./README.nl.md)
 
-<sub>OneBot v11 · Telegram · QQ 官方机器人 · 微信 · iMessage —— 一个实例，同时在线</sub>
+**像真人一样聊天，像 Agent 一样干活。**<br />
+*Talks like a human, works like an agent.*
+
+自托管单二进制 AI Agent —— 不用 @ 也会看气氛搭话，日常能记事、看图、点歌、扒链接，办事能联网、调 Skills / MCP、派本地编码代理改代码；数据与每一步决策都留在你机器上。
+
+<sub>OneBot v11 · Telegram · QQ 官方机器人 · 微信 · iMessage · 内置控制台 —— 一个实例，同时在线</sub>
 
 [![CI](https://github.com/SuInk/Diana/actions/workflows/ci.yml/badge.svg)](https://github.com/SuInk/Diana/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/SuInk/Diana?color=159f6c)](https://github.com/SuInk/Diana/releases/latest)
 [![Go](https://img.shields.io/badge/Go-1.25%2B-00ADD8)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-Limited%20Redistribution-informational)](./LICENSE)
 
-[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest) · [English](./README.en.md)
+[官网与文档](https://suink.github.io/Diana/) · [在线演示](https://suink.github.io/Diana/demo/) · [下载最新版本](https://github.com/SuInk/Diana/releases/latest)
 
 [![QQ 交流群 1127671893](https://img.shields.io/badge/QQ%20交流群-1127671893-12B7F5?logo=qq&logoColor=white)](https://qm.qq.com/q/4o6zEBs4h2)
 
@@ -21,19 +26,16 @@
 
 <img src="./docs/assets/diana-webui-overview-green.jpg" alt="Diana 控制台总览：通道状态、消息统计、系统资源与实时事件流" width="100%" />
 
-控制台默认主题色为 **松间绿**，支持浅色、深色及跟随系统。在「设置 → 界面主题」中可切换配色；升级不会覆盖浏览器里已保存的配色选择。
+## 为什么是 Diana
 
+市面上的聊天机器人通常只有两个极端：要么不 `@` 就装死、一开主动回复又疯狂刷屏尬聊；要么得配一整套 Python / Node 环境、写满 YAML、坏了还查不出为什么不回。
 
-## Diana 是什么
+Diana 把「群聊活人感」和「真能干活的 Agent」塞进一个 Go 单二进制里：一头接主流大模型（OpenAI 兼容接口、Gemini、Anthropic 都行），另一头同时连上你常用的聊天软件，中间自带网页控制台管好一切。
 
-你有一个想接进群聊的 AI：让它在 QQ 群里搭话、在 Telegram 里点歌、替你回答群友的问题。Diana 就是中间这一层——一个 Go 写成的单二进制服务，一头对接大模型（OpenAI 兼容接口、Gemini、Anthropic 都行），另一头同时对接五种聊天平台，中间有一个网页控制台管理一切。
-
-它为「自己养一个机器人」的人设计：
-
-- **装完就能用** —— 一条命令安装，浏览器里点几下完成配置，不需要写代码。
-- **数据在你手里** —— 配置、聊天记忆、日志全部存在本机 SQLite，没有云端依赖。
-- **每一步都能解释** —— 机器人为什么回、为什么没回、调了哪个模型、花了多少 token，控制台事件中心里都查得到。
-- **能力开箱即备** —— 联网搜索、链接/文件解析、点歌、表情包、OCR、长期记忆都是内置的，开关在控制台里。
+- **像真人一样知进退** —— 群里不用 `@` 也能判断什么时候该插话、什么时候该安静；分层记忆加笔记本记住群里的约定，还会看图、解析视频链接、点歌、发表情包。
+- **聊着聊着就把活干了** —— 联网搜索、文件解析、渲染图表都是开箱即用；内置 Agent 支持 Skills、MCP 和浏览器，甚至能直接给本机 Claude Code / Codex 派编码任务。
+- **装完就能用，坏了查得清** —— 一条命令启动，家庭内网免公网直连，配置全在浏览器点选；每条消息为什么回、为什么没回、调了哪个模型、花了多少 token，事件中心都有完整记录。
+- **数据在手里，权限守边界** —— 配置、记忆、日志全部存在本机 SQLite，没有云端依赖；内置**安全模式**可一键隔离本机命令、写文件与编码代理，放进群聊也不怕提示词注入。
 
 ## 三分钟跑起来
 
@@ -48,8 +50,6 @@ curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh
 # 安卓 Termux（仅 ARM64，在 Termux 终端内运行，无需 root）
 pkg install -y curl tar coreutils && curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh
 ```
-
-Termux 安装的是手机上的 Diana 服务端，不是安卓 App。请在 Android 设置中关闭 Termux 的电池优化；开机自启还需要安装并打开一次 Termux:Boot。
 
 ```powershell
 # Windows PowerShell
@@ -98,11 +98,7 @@ WebUI 已编进程序，不需要装 Node.js。每个文件的 SHA-256 写在同
 
 ## 支持的平台
 
-Telegram 主人账号支持数字 ID、用户名和 `@用户名`，按平台真实发送者信息核验，参见[Telegram 主人账号](docs/telegram-owner.md)。
-
-Telegram 的图片/表情包发送格式及群消息撤回边界，参见[Telegram 媒体与撤回说明](docs/telegram-media.md)。普通群消息删除不会通过 Bot API 实时通知机器人；用户查询撤回记录时，Diana 会按需检查本群最近 24 小时缓存中的有限消息，默认把明确确认已不可访问的完整缓存原文与媒体发回当前会话。
-
-启用的机器人配置会同时在线，回复始终回到消息来的那个通道。
+启用的机器人配置会同时在线，回复始终回到消息来的那个通道；家庭宽带或内网无需公网 IP 即可运行。
 
 | 平台 | 要准备的凭据 | 连接方向 |
 | --- | --- | --- |
@@ -111,51 +107,31 @@ Telegram 的图片/表情包发送格式及群消息撤回边界，参见[Telegr
 | **QQ 官方机器人** | 开放平台的 AppID + AppSecret（未上架可用沙箱） | Diana 主动出站，无需公网 |
 | **微信** | 不用填：保存机器人后在「接入」里扫码登录（腾讯 iLink Bot，只有私聊） | Diana 主动出站，无需公网 |
 | **iMessage** | 常开 Mac 上 BlueBubbles Server 的地址与密码，详见 [iMessage 接入说明](docs/imessage.md) | BlueBubbles webhook → Diana，Mac 能访问到 Diana 即可，可选轮询兜底 |
-| **内置机器人** | 不用填：只在 Diana 里，不接任何聊天平台，在控制台「聊天」页私聊、打电话 | 不连接任何平台；主动提醒、订阅推送发不出去 |
+| **内置机器人** | 不用填：不接任何外部平台，在控制台「聊天」页直接私聊或语音通话 | 仅在控制台内运行，零门槛体验 |
 
-QQ 个人号推荐用 SnowLuma 作 OneBot 接入端，Diana 的群历史、成员信息等接口按它的行为做过适配。
+平台接入细节：
 
-OneBot v11 连接方式：
-
-- **反向 WS（默认）**：接入端连接 `ws://<Diana 主机>:18080/onebot/v11/ws`，双方填写相同的 Access Token；旧配置无需修改。
-- **正向 WS**：在机器人页填写接入端的通用 WS 地址，例如 `ws://127.0.0.1:6700/`（同时提供 API 和事件，不能只填 `/api` 或 `/event`），Diana 主动连接并在断线后重试。
-- **HTTP**：填写接入端 HTTP API 地址，例如 `http://127.0.0.1:5700`；接入端把事件 POST 到 `http://<Diana 主机>:18080/onebot/v11/http`。双方设置相同的 HTTP 事件签名密钥（接入端的 `secret`，HMAC-SHA1），API 的 Access Token 单独配置。Diana 异步处理事件并通过 HTTP API 回复，不使用上报响应中的快速操作。HTTP 状态表示 API 探测结果，仍需确认接入端已配置事件上报。
-
-固定的反向 WS 入口和 HTTP 上报入口各支持一个启用中的配置档（同类取第一个）；正向 WS 可配置多个机器人。Docker 中 `127.0.0.1` 指容器自身，服务地址须按实际网络调整。这里支持的是 OneBot v11 的三种连接方式，不包含 OneBot v12 的不同事件/API 格式。
-
-iMessage 要填到 BlueBubbles Server 的回调地址，机器人页会直接显示出来。各平台功能上的细微差异（比如 QQ 官方机器人默认只收得到 @ 消息，需要群主修改机器人可获取的群聊消息范围）见[配置文档](https://suink.github.io/Diana/configuration.html)。
+- **OneBot v11**：QQ 个人号推荐用 SnowLuma 作接入端（群历史与成员接口已做适配）。反向 WS（默认）接入 `ws://<Diana 主机>:18080/onebot/v11/ws`；正向 WS 可配多个机器人（填同时提供 API 和事件的通用 WS 地址）；HTTP 模式将事件 POST 到 `/onebot/v11/http` 并配对 HMAC-SHA1 `secret`。固定的反向 WS 与 HTTP 上报入口各支持一个启用档，不包含 OneBot v12。
+- **Telegram**：主人账号支持数字 ID、用户名与 `@用户名`（详见[Telegram 主人账号](docs/telegram-owner.md)）；媒体格式与群消息撤回按需核查见[Telegram 媒体与撤回说明](docs/telegram-media.md)。
+- **iMessage & QQ 官方**：iMessage 回调地址在机器人页直接显示；各平台细微差异（如 QQ 官方机器人默认只收 `@` 消息，需群主调整消息范围）见[配置文档](https://suink.github.io/Diana/configuration.html)。
 
 ## 内置能力
 
-这些能力随程序自带，在控制台里按需开关和配置，不需要安装插件：
+这些能力随单二进制自带，在控制台里按需开关，无需折腾额外依赖：
 
-- **主动搭话** —— 不用 @ 也能自己判断什么时候插话、什么时候保持安静，回不回、为什么，事件中心都有记录（依赖平台推送全量群消息：QQ 官方机器人要群主在群聊设置里改成获取群内全部消息）。
-- **联网搜索** —— 时效性问题先检索再回答，默认用沙盒浏览器搜索；多个查询可并行执行，模型选择相关官网页面继续读取。 在「提供商 → 搜索提供商」全局统一设置开关、主备来源、地址与密钥，机器人不再单独覆盖；历史机器人搜索配置不会自动迁移密钥，升级后请检查全局设置。详见 [搜索提供商配置](docs/search-providers.md)。
-- **链接解析** —— B 站 / YouTube / X / 小红书 / 抖音的视频图片直接解析发到群里；X / Twitter 用户主页展示昵称、简介及可见统计，不再误走视频下载。详情见 [Twitter 主页解析](docs/twitter-profiles.md)。
-- **文件解析** —— 群文件、PDF、Office、EPUB 的内容提取后交给模型理解。
-- **点歌** —— 网易云、QQ 音乐多曲库自动切换。OneBot QQ 发语音；Telegram 将歌曲转为带歌名和歌手信息的 MP3 后直接上传，显示原生音乐播放器，无需 QQ 音乐卡片签名服务。音频不可用或准备失败时明确提示失败。QQ 官方机器人目前只提供歌曲来源页链接，并非聊天内播放器。
-- **表情包** —— 从群里见过的表情包中挑一张合适的发出去。
-- **图片识别** —— 视觉模型 + OCR（支持完全离线的本地方案），纯文本模型也能「看」图。 支持关闭图片自动描述、视频自动下载抽帧；默认只把图片描述交给对话模型，要看细节时带着问题问视觉模型，见[媒体预处理](docs/media-preprocessing.md)。
-- **画图出图** —— 表格、流程图、时序图这类纯文本讲不清的东西，模型自己判断该出图时渲染成图片发出来（Markdown / Mermaid / SVG，需要「网页渲染」插件提供的浏览器）。 缺失字体会按实际文字自动下载，支持[多语言出图](docs/fonts.md)。
-- **记忆与笔记本** —— 分层记忆控制 token 消耗；重要的事（群规、忌口、约定）记进笔记本，可审可改可恢复。
-- **随机复读** —— 在机器人「行为 → 随机复读」中开启后，不同群友连续发送相同纯文字时随机跟读。默认两人、30% 概率、60 秒冷却，可按群调整；达到人数后每条新复读都按概率判断，成功后进入冷却，后续消息不重置冷却；不调用模型，不复读 @、引用、指令、媒体或机器人消息。
-- **群级策略** —— 每个群独立的回复时段、黑白名单、人设和工具权限。
-- **内置 Agent** —— 最小工具循环，可用文件、命令、浏览器工具，支持装载 Skills 和 MCP 服务。每台机器人可选标准模式（全部能力）或安全模式（对主人也关掉本机命令、编码代理、MCP、带登录态的浏览器、GitHub 写操作、写文件和改配置，防提示词注入），新建机器人默认标准模式，安全模式由主人按需开启。
-- **编码代理** —— 把改代码的活派给本机的 Claude Code / Codex CLI：在登记过的仓库里长时间改代码、跑测试，期间可以问进度，跑完主动汇报；任务扛得住 Diana 重启。可同时配置多个 CLI 或模型，按名称派活并指定默认代理；WebUI 可安装 CLI、保存 API 密钥、测试连接，Codex 支持设备代码登录；Docker 自动目录随 data 卷持久化；Claude Code 支持在聊天里确认危险操作。只对主人开放，默认关闭，详见[多个编码代理](docs/coding-agents.md)。
+- **主动搭话** —— 不用 `@` 也能判断何时插话、何时保持安静，回不回、为什么，事件中心全有记录（需平台推送全量群消息）。
+- **记忆与笔记本** —— 分层记忆稳控 token 消耗；群规、忌口、约定等重要事实记进笔记本，随时可审、可改、可恢复。
+- **内置 Agent 与安全模式** —— 可调用文件、命令、浏览器工具并按需装载 Skills 与 MCP 服务；支持一键切换**安全模式**，隔离本机命令、写文件、编码代理与带登录态浏览器，防群聊提示词注入。
+- **编码代理** —— 只对主人开放（默认关闭）：在聊天里把改代码、跑测试的长任务派给本机 Claude Code / Codex CLI，扛得住重启，危险操作在聊天里二次确认，详见[多个编码代理](docs/coding-agents.md)。
+- **联网搜索** —— 时效性问题默认通过沙盒浏览器并行检索并细读页面，也可在「提供商 → 搜索提供商」全局切换主备搜索源，详见[搜索提供商配置](docs/search-providers.md)。
+- **链接与文件解析** —— 自动解析 B 站 / YouTube / X / 小红书 / 抖音视频图片与 [X 用户主页](docs/twitter-profiles.md)，以及群文件、PDF、Office、EPUB 内容。
+- **看图与画图出图** —— 视觉模型 + 离线 OCR 让纯文本模型也能「看」图（详见[媒体预处理](docs/media-preprocessing.md)）；表格、流程图、时序图自动渲染成图片发回聊天，缺失字体按需下载（详见[多语言出图](docs/fonts.md)）。
+- **点歌、表情包与随机复读** —— 网易云 / QQ 音乐多曲库自动切换（OneBot 发语音、Telegram 发带元数据的原生 MP3 播放器）；从群聊见过的表情包里挑合适的图；支持按群配置纯文字随机跟读。
+- **群级策略** —— 每个群独立设置回复时段、黑白名单、人设、触发条件与工具权限。
 
 每项能力的完整说明见[配置文档](https://suink.github.io/Diana/configuration.html)。
 
 ## 日常管理
-
-“扩展”页统一管理插件、Skills 和 MCP，定义全局共享、机器人分别启用，详见[扩展管理](docs/extensions.md)。
-
-群查询和管理按平台协议 skill 执行，Diana 回复欲望与冷却使用独立配置工具，见[协议操作与回复设置](docs/bot-protocol.md)。
-
-主人可以在聊天中查询当前实例最近 24 小时的 Token 用量，包含输入、输出和缓存命中，见[用量查询](docs/llm-usage.md)。
-
-运行记录按页加载，范围统计独立请求并短暂缓存，调用链记忆展开时读取，见[记录查询与性能说明](docs/event-record-performance.md)。
-
-主人可通过聊天在已配置供应商之间切换当前机器人的模型用途，详见[聊天切换模型](docs/chat-model-switch.md)。
 
 装好之后 `diana` 命令就在 PATH 里：
 
@@ -167,6 +143,12 @@ diana doctor    # 体检：配置、目录、前端资源、服务健康
 ```
 
 Docker 部署在宿主机用 `docker exec diana diana <命令>`，例如 `docker exec diana diana logs -f`。
+
+控制台与聊天里的常用运维入口：
+
+- **扩展统一管理**：「扩展」页集中管理插件、Skills 与 MCP，全局定义、按机器人启用（[扩展管理](docs/extensions.md)）。
+- **聊天里查用量、切模型**：主人可直接在聊天中查近 24 小时 Token 用量（[用量查询](docs/llm-usage.md)）或切换当前机器人的模型用途（[聊天切换模型](docs/chat-model-switch.md)）。
+- **协议操作与记录性能**：群管理协议与回复欲望设置见[协议操作与回复设置](docs/bot-protocol.md)，事件分页与统计说明见[记录查询与性能说明](docs/event-record-performance.md)。
 
 **忘记密码**：密码只以哈希存在数据库里，任何地方都查不回原密码，只能重置。一键安装（Linux / macOS / Windows）直接执行：
 

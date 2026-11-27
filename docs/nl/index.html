@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="nl">
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Diana — Praat als een mens, werkt als een agent</title>
+<meta name="description" content="Diana is een zelfgehoste single-binary AI-agent geschreven in Go: tegelijk online op QQ, Telegram, WeChat en iMessage, weet wanneer mee te praten in groepen en combineert geheugen, webzoekopdrachten, tools en lokale coding-agents op je eigen machine." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Diana — Praat als een mens, werkt als een agent" />
+<meta property="og:description" content="Zelfgehoste single-binary AI-agent in je chatapps: natuurlijke groepsdeelname, langetermijngeheugen, webzoekopdrachten, Skills / MCP en lokale coding-agents met volledige lokale controle." />
+<meta property="og:url" content="https://suink.github.io/Diana/nl/" />
+<meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Diana — Praat als een mens, werkt als een agent" />
+<meta name="twitter:description" content="Zelfgehoste AI-agent voor je chatapps: natuurlijk gevoel voor timing, echte agenttools en volledige transparantie op je eigen machine." />
+<meta name="twitter:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<link rel="alternate" hreflang="zh-CN" href="https://suink.github.io/Diana/" />
+<link rel="alternate" hreflang="en" href="https://suink.github.io/Diana/en/" />
+<link rel="alternate" hreflang="ja" href="https://suink.github.io/Diana/ja/" />
+<link rel="alternate" hreflang="ko" href="https://suink.github.io/Diana/ko/" />
+<link rel="alternate" hreflang="fr" href="https://suink.github.io/Diana/fr/" />
+<link rel="alternate" hreflang="de" href="https://suink.github.io/Diana/de/" />
+<link rel="alternate" hreflang="nl" href="https://suink.github.io/Diana/nl/" />
+<link rel="alternate" hreflang="x-default" href="https://suink.github.io/Diana/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<meta name="theme-color" content="#100d13" />
+<script src="../theme.js?v=20260847"></script>
+<link rel="stylesheet" href="../landing.css?v=20261124" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="./"><span class="brand-mark">D</span>Diana</a>
+    <div class="nav-links">
+      <a class="nav-icon" href="../en/deploy" title="Documentatie (EN)" aria-label="Documentatie (EN)"><i data-lucide="book-open" data-size="18"></i>
+        <span class="nav-label">Docs</span></a>
+      <div class="lang-menu">
+        <button class="nav-icon lang-pill" type="button" data-lang-toggle aria-expanded="false" aria-haspopup="menu" title="Taal wijzigen" aria-label="Taal wijzigen"><i data-lucide="languages" data-size="18"></i><span class="nav-label">NL</span></button>
+        <div class="lang-dropdown" data-lang-dropdown role="menu" hidden>
+          <a href="../" role="menuitem">简体中文<span>ZH</span></a>
+          <a href="../en/" role="menuitem">English<span>EN</span></a>
+          <a href="../ja/" role="menuitem">日本語<span>JA</span></a>
+          <a href="../ko/" role="menuitem">한국어<span>KO</span></a>
+          <a href="../fr/" role="menuitem">Français<span>FR</span></a>
+          <a href="../de/" role="menuitem">Deutsch<span>DE</span></a>
+          <a href="./" role="menuitem" aria-current="page">Nederlands<span>NL</span></a>
+        </div>
+      </div>
+      <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub-repository" aria-label="GitHub-repository">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="nav-label">GitHub</span></a>
+      <button class="nav-icon theme-item" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span><span class="nav-label" data-theme-text></span></button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>Praat als een mens, werkt als een agent</h1>
+    <p class="hero-sub">
+      Draai je eigen AI rechtstreeks in de chatapps die je elke dag gebruikt. Hij weet wanneer mee te praten en wanneer stil te blijven in groepen,
+      onthoudt wat telt, zoekt op het web, analyseert links en bestanden en draait Skills, MCP en lokale coding-agents —
+      alles in één binary met ingebouwde webconsole, terwijl al je data op je eigen machine blijft.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#quickstart"><i data-lucide="download" data-size="16"></i>
+        Aan de slag</a>
+      <a class="btn btn-ghost" href="../en/deploy"><i data-lucide="book-open" data-size="16"></i>
+        Documentatie</a>
+      <a class="btn btn-ghost" href="../demo"><i data-lucide="circle-play" data-size="16"></i>
+        Live demo</a>
+      <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="install-box">
+      <div class="install-tabs">
+        <button class="install-tab" data-os="sh">Linux / macOS</button>
+        <button class="install-tab" data-os="ps">Windows</button>
+        <button class="install-tab" data-os="docker">Docker</button>
+      </div>
+      <div class="install-line">
+        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
+        <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
+        <code id="install-cmd-docker" data-os="docker" hidden>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json &amp;&amp; docker run -d --name diana --security-opt seccomp="$PWD/chromium-seccomp.json" -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
+        <button class="copy-btn" id="install-copy">Kopiëren</button>
+      </div>
+    </div>
+    <p class="hero-note">Open na installatie <code>http://127.0.0.1:18080</code> voor de eerste configuratie.</p>
+  </div>
+</header>
+
+<div class="wrap shot">
+  <figure>
+    <img
+      id="console-shot"
+      src="../assets/diana-webui-overview.png"
+      alt="Diana-consoleoverzicht: kanaalstatus, berichtstatistieken, systeembronnen en realtime gebeurtenissen"
+      width="1600" height="1000" loading="lazy"
+    />
+    <figcaption>Consoleoverzicht: kanaalstatus, berichtstatistieken, systeembronnen en realtime gebeurtenissen</figcaption>
+  </figure>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Waarom Diana</h2>
+      <p>Geen keuze meer tussen een druk groepsspeeltje en een ondoorzichtig framework dat uren kost om in te richten.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="message-circle"></i></div>
+        <h3>Natuurlijke groepsdeelname</h3>
+        <p>Weet zonder `@` wanneer aan te haken en wanneer stil te blijven — geen doodse stilte, geen spam. Antwoordtijden, persona's, lijsten en toolrechten stel je per groep in.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="bot"></i></div>
+        <h3>Ingebouwde agent &amp; veilige modus</h3>
+        <p>Gebruikt bestands-, commando- en browsertools, laadt Skills en MCP-servers op aanvraag en delegeert aan lokale Claude Code / Codex. De veilige modus schermt hosttools af tegen prompt-injectie.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="hard-drive"></i></div>
+        <h3>Eén binary, volledig zelfgehost</h3>
+        <p>Geen Python- of Node-omgeving nodig — één commando start de service en ingebouwde WebUI. Configuratie, geheugen en logs blijven lokaal in SQLite zonder cloud.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
+        <h3>Meerdere platforms, geen publiek IP</h3>
+        <p>QQ, Telegram, WeChat, iMessage en de ingebouwde console draaien parallel met strikte contextscheiding per bot. Uitgaande verbindingen werken direct in thuisnetwerken.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
+        <h3>Langetermijngeheugen &amp; notitieboek</h3>
+        <p>Recente context, samenvattingen, gestructureerde feiten en geschiedeniszoekopdrachten werken in lagen — afspraken blijven behouden terwijl het tokenverbruik laag blijft.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
+        <h3>Webzoekopdrachten, links &amp; bestanden</h3>
+        <p>Zoekt actuele info standaard via een geïsoleerde browser (of globale Exa / Tavily providers) en leest links van Bilibili, YouTube, X, Xiaohongshu plus PDF- en Office-bestanden.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
+        <h3>Vision, OCR &amp; gerenderde visuals</h3>
+        <p>Visionmodellen en offline OCR laten zelfs tekstmodellen screenshots en stickers lezen; tabellen, stroom- en sequentiediagrammen worden als scherpe afbeelding verstuurd.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
+        <h3>Modelrouting per taak</h3>
+        <p>Koppel chat, vision, intentieherkenning en beeldgeneratie elk aan hun eigen provider en model — getest vóór opslaan en direct vanuit de chat te wisselen.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="clipboard-list"></i></div>
+        <h3>Elke beslissing inzichtelijk</h3>
+        <p>Bekijk in het gebeurteniscentrum waarom elk bericht wel of niet beantwoord is, welke tools draaiden en hoeveel tokens zijn verbruikt.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart" class="qs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Snel starten</h2>
+      <p>De installer herkent OS en architectuur, downloadt de nieuwste stabiele versie en verifieert SHA-256 via latest.json. Upgrades maken eerst een back-up en rollen bij fouten automatisch terug.</p>
+    </div>
+    <div class="qs-grid">
+      <div class="qs-card">
+        <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">Kopiëren</button></div>
+        <pre id="cmd-sh"><span class="c"># hetzelfde commando installeert en upgradet</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Android Termux (ARM64)<button class="copy-btn" data-copy="cmd-termux">Kopiëren</button></div>
+        <pre id="cmd-termux"><span class="c"># uitvoeren in Termux; geen root nodig</span>
+pkg install -y curl tar coreutils &amp;&amp; curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">Kopiëren</button></div>
+        <pre id="cmd-ps"><span class="c"># hetzelfde commando installeert en upgradet</span>
+irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
+      </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">Kopiëren</button></div>
+        <pre id="cmd-docker"><span class="c"># uitvoeren in je datamap (Docker Compose vereist)</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</pre>
+      </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">Installeren via Skill (plak in een AI-assistent die commando's kan uitvoeren)<button class="copy-btn" data-copy="cmd-prompt">Kopiëren</button></div>
+        <pre id="cmd-prompt">Read https://raw.githubusercontent.com/SuInk/Diana/main/skills/diana-install/SKILL.md and follow it to install the latest stable release of Diana on this machine.</pre>
+      </div>
+    </div>
+    <div class="qs-steps">
+      <div class="qs-step"><h4><span>1</span>Installer draaien</h4><p>De eerste beheerdersnaam en het wachtwoord verschijnen eenmalig in de terminal — bewaar ze direct; resetten kan altijd met <code>diana passwd</code>.</p></div>
+      <div class="qs-step"><h4><span>2</span>Console openen</h4><p>Ga naar <code>127.0.0.1:18080</code> en log in met het account uit de terminal.</p></div>
+      <div class="qs-step"><h4><span>3</span>Modellen &amp; kanalen koppelen</h4><p>Stel je modellen en gewenste platforms in via de WebUI, of probeer direct de ingebouwde bot.</p></div>
+      <div class="qs-step"><h4><span>4</span>Later upgraden</h4><p>Upgrade vanuit de console of draai het installatiecommando opnieuw; bij een fout herstelt Diana zichzelf.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="channels">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Ondersteunde platforms</h2>
+    </div>
+    <div class="chan-grid">
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="message-circle"></i></div>
+        <div>
+          <h3>OneBot v11</h3>
+          <p>Werkt met SnowLuma (aanbevolen) en andere OneBot-clients voor groepen, privéberichten en groepsbeleid.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="send"></i></div>
+        <div>
+          <h3>Telegram</h3>
+          <p>Officiële Bot API long polling, uitsluitend uitgaand — geen publiek adres nodig.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="message-square"></i></div>
+        <div>
+          <h3>QQ Official Bot</h3>
+          <p>Uitgaande WebSocket-gateway van het QQ Open Platform zonder publiek IP.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="scan-text"></i></div>
+        <div>
+          <h3>WeChat</h3>
+          <p>Tencent iLink Bot met QR-code login en uitgaande long polling (alleen privéchats).</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="smartphone"></i></div>
+        <div>
+          <h3>iMessage</h3>
+          <p>Via BlueBubbles Server op een Mac met webhooks en optionele polling-fallback.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="bot"></i></div>
+        <div>
+          <h3>Ingebouwde bot</h3>
+          <p>Geen platformgegevens nodig — chat of start direct een spraakoproep op de Chat-pagina in de console.</p>
+        </div>
+      </div>
+    </div>
+    <p class="chan-note">
+      De eerste vier externe platforms verbinden uitgaand vanaf je machine, zodat thuisnetwerken en LAN's direct werken;
+      voor iMessage hoeft alleen je Mac Diana te kunnen bereiken — geen publiek IP vereist.
+    </p>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>Documentatie (EN)</h2>
+    </div>
+    <div class="doc-grid">
+      <a class="doc-card" href="../en/deploy">
+        <h3><i data-size="17" data-lucide="rocket"></i>Installatie</h3>
+        <p>One-line installer, Docker, binaries en alle implementatievormen.</p>
+      </a>
+      <a class="doc-card" href="../en/configuration">
+        <h3><i data-size="17" data-lucide="settings"></i>Configuratie</h3>
+        <p>Kanalen, modellen, groepsbeleid en de volledige config.yaml-referentie.</p>
+      </a>
+      <a class="doc-card" href="../en/operations">
+        <h3><i data-size="17" data-lucide="wrench"></i>Beheer</h3>
+        <p>Upgrades, back-ups, gebeurtenisaudit en dagelijks onderhoud.</p>
+      </a>
+      <a class="doc-card" href="../en/implementation">
+        <h3><i data-size="17" data-lucide="file-code"></i>Architectuur</h3>
+        <p>Interne opzet, pluginsysteem en de agent-tool-loop.</p>
+      </a>
+      <a class="doc-card" href="../en/pipeline">
+        <h3><i data-size="17" data-lucide="git-fork"></i>Pijplijn</h3>
+        <p>Stroomschema's voor triggers, agentruns, browsers en voorcontrole.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>Diana · Limited Redistribution License</span>
+    <div class="foot-links">
+      <a href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/SuInk/Diana/releases/latest" target="_blank" rel="noopener">Releases</a>
+      <a href="../demo">Live demo</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../icons.js?v=20261028"></script>
+<script src="../landing.js?v=20261124"></script>
+
+</body>
+</html>

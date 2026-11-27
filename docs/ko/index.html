@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<!-- Copyright (c) 2025-now SuInk.
+     Licensed under the Limited Redistribution License in the repository root. -->
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<link rel="icon" href="../favicon.svg" type="image/svg+xml" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Diana — 사람처럼 대화하고, 에이전트처럼 일합니다</title>
+<meta name="description" content="Diana는 Go로 작성된 셀프 호스팅 단일 바이너리 AI 에이전트입니다. QQ, Telegram, WeChat, iMessage에 동시 연결되며 멘션 없이도 자연스럽게 대화에 참여하고 기억·웹 검색·도구·로컬 코딩 에이전트를 내 기기에서 실행합니다." />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Diana — 사람처럼 대화하고, 에이전트처럼 일합니다" />
+<meta property="og:description" content="자주 쓰는 메신저에 상주하는 셀프 호스팅 단일 바이너리 AI 에이전트 — 자연스러운 그룹 참여, 장기 기억, 웹 검색, Skills / MCP, 로컬 코딩 에이전트를 내 기기에서 완전하게 제어하세요." />
+<meta property="og:url" content="https://suink.github.io/Diana/ko/" />
+<meta property="og:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="twitter:title" content="Diana — 사람처럼 대화하고, 에이전트처럼 일합니다" />
+<meta name="twitter:description" content="메신저 상주형 셀프 호스팅 AI 에이전트 — 눈치 있는 대화, 실전 에이전트 도구, 모든 판단 기록을 내 기기에." />
+<meta name="twitter:image" content="https://suink.github.io/Diana/assets/diana-webui-overview-green.jpg" />
+<link rel="alternate" hreflang="zh-CN" href="https://suink.github.io/Diana/" />
+<link rel="alternate" hreflang="en" href="https://suink.github.io/Diana/en/" />
+<link rel="alternate" hreflang="ja" href="https://suink.github.io/Diana/ja/" />
+<link rel="alternate" hreflang="ko" href="https://suink.github.io/Diana/ko/" />
+<link rel="alternate" hreflang="fr" href="https://suink.github.io/Diana/fr/" />
+<link rel="alternate" hreflang="de" href="https://suink.github.io/Diana/de/" />
+<link rel="alternate" hreflang="nl" href="https://suink.github.io/Diana/nl/" />
+<link rel="alternate" hreflang="x-default" href="https://suink.github.io/Diana/" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<meta name="theme-color" content="#100d13" />
+<script src="../theme.js?v=20260847"></script>
+<link rel="stylesheet" href="../landing.css?v=20261124" />
+</head>
+<body>
+
+<nav class="nav">
+  <div class="wrap nav-inner">
+    <a class="brand" href="./"><span class="brand-mark">D</span>Diana</a>
+    <div class="nav-links">
+      <a class="nav-icon" href="../en/deploy" title="문서(영문)" aria-label="문서(영문)"><i data-lucide="book-open" data-size="18"></i>
+        <span class="nav-label">문서</span></a>
+      <div class="lang-menu">
+        <button class="nav-icon lang-pill" type="button" data-lang-toggle aria-expanded="false" aria-haspopup="menu" title="언어 전환" aria-label="언어 전환"><i data-lucide="languages" data-size="18"></i><span class="nav-label">한국어</span></button>
+        <div class="lang-dropdown" data-lang-dropdown role="menu" hidden>
+          <a href="../" role="menuitem">简体中文<span>ZH</span></a>
+          <a href="../en/" role="menuitem">English<span>EN</span></a>
+          <a href="../ja/" role="menuitem">日本語<span>JA</span></a>
+          <a href="./" role="menuitem" aria-current="page">한국어<span>KO</span></a>
+          <a href="../fr/" role="menuitem">Français<span>FR</span></a>
+          <a href="../de/" role="menuitem">Deutsch<span>DE</span></a>
+          <a href="../nl/" role="menuitem">Nederlands<span>NL</span></a>
+        </div>
+      </div>
+      <a class="nav-icon" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener" title="GitHub 저장소" aria-label="GitHub 저장소">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        <span class="nav-label">GitHub</span></a>
+      <button class="nav-icon theme-item" type="button" data-theme-toggle><span data-theme-icon aria-hidden="true"></span><span class="nav-label" data-theme-text></span></button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>사람처럼 대화하고, 에이전트처럼 일합니다</h1>
+    <p class="hero-sub">
+      이미 사용 중인 메신저 안에서 나만의 AI를 키워 보세요. 그룹에서는 멘션 없이도 분위기를 보고 발언과 침묵을 스스로 결정하고,
+      기억·웹 검색·링크/파일 분석·Skills / MCP·로컬 코딩 에이전트까지 한 번에 처리합니다.
+      웹 콘솔이 내장된 단일 바이너리로 모든 데이터가 내 기기에만 머뭅니다.
+    </p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#quickstart"><i data-lucide="download" data-size="16"></i>
+        빠른 시작</a>
+      <a class="btn btn-ghost" href="../en/deploy"><i data-lucide="book-open" data-size="16"></i>
+        문서 보기</a>
+      <a class="btn btn-ghost" href="../demo"><i data-lucide="circle-play" data-size="16"></i>
+        라이브 데모</a>
+      <a class="btn btn-ghost" href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </div>
+    <div class="install-box">
+      <div class="install-tabs">
+        <button class="install-tab" data-os="sh">Linux / macOS</button>
+        <button class="install-tab" data-os="ps">Windows</button>
+        <button class="install-tab" data-os="docker">Docker</button>
+      </div>
+      <div class="install-line">
+        <code id="install-cmd-sh" data-os="sh">curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</code>
+        <code id="install-cmd-ps" data-os="ps" hidden>irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</code>
+        <code id="install-cmd-docker" data-os="docker" hidden>curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker/chromium-seccomp.json -o chromium-seccomp.json &amp;&amp; docker run -d --name diana --security-opt seccomp="$PWD/chromium-seccomp.json" -p 18080:18080 -v diana-data:/app/data ghcr.io/suink/diana:latest</code>
+        <button class="copy-btn" id="install-copy">복사</button>
+      </div>
+    </div>
+    <p class="hero-note">설치가 끝나면 <code>http://127.0.0.1:18080</code>을 열어 초기 설정을 진행하세요.</p>
+  </div>
+</header>
+
+<div class="wrap shot">
+  <figure>
+    <img
+      id="console-shot"
+      src="../assets/diana-webui-overview.png"
+      alt="Diana 콘솔 개요: 채널 상태, 메시지 통계, 시스템 리소스 및 실시간 이벤트 피드"
+      width="1600" height="1000" loading="lazy"
+    />
+    <figcaption>콘솔 개요: 채널 상태, 메시지 통계, 시스템 리소스 및 실시간 이벤트 피드</figcaption>
+  </figure>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>왜 Diana인가요</h2>
+      <p>시끄러운 장난감 봇과 설정·디버깅이 막막한 블랙박스 프레임워크 사이에서 타협하지 마세요.</p>
+    </div>
+    <div class="feat-grid">
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="message-circle"></i></div>
+        <h3>눈치 있는 자연스러운 참여</h3>
+        <p>멘션 없이도 대화 흐름을 보고 끼어들 때와 조용히 있을 때를 판단합니다. 그룹별 응답 시간대, 페르소나, 허용/차단 목록, 도구 권한을 세밀하게 제어할 수 있습니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="bot"></i></div>
+        <h3>내장 에이전트 &amp; 안전 모드</h3>
+        <p>파일·명령어·브라우저 도구와 Skills / MCP를 필요할 때 불러오며 로컬 Claude Code / Codex에 작업을 맡길 수 있습니다. 안전 모드로 위험한 호스트 도구를 즉시 차단해 프롬프트 인젝션을 방지합니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="hard-drive"></i></div>
+        <h3>단일 바이너리, 완전한 셀프 호스팅</h3>
+        <p>Python이나 Node 런타임 없이 명령어 한 줄로 서비스와 내장 WebUI가 실행됩니다. 설정·기억·로그 모두 로컬 SQLite에 저장되며 클라우드 의존성이 없습니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="radio"></i></div>
+        <h3>다중 플랫폼 동시 실행, 공인 IP 불필요</h3>
+        <p>QQ, Telegram, WeChat, iMessage와 내장 콘솔을 동시에 운영하고 봇별로 대화 컨텍스트를 격리합니다. 아웃바운드 연결 방식이라 가정용 인터넷과 내부망에서도 바로 동작합니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="brain"></i></div>
+        <h3>장기 기억과 검토 가능한 노트북</h3>
+        <p>최근 대화, 압축 요약, 구조화된 사실, 장기 기록 검색이 계층적으로 동작해 토큰 비용을 아끼면서도 중요한 약속을 기억합니다. 노트북은 언제든 확인·수정할 수 있습니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="globe"></i></div>
+        <h3>웹 검색 및 링크·파일 분석</h3>
+        <p>기본 샌드박스 브라우저로 최신 정보를 병렬 검색하고(전역 Exa / Tavily 설정 지원), Bilibili·YouTube·X·Xiaohongshu 링크와 PDF·Office 문서를 바로 이해합니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="scan-text"></i></div>
+        <h3>이미지 인식, OCR 및 도표 렌더링</h3>
+        <p>비전 모델과 오프라인 OCR 덕분에 텍스트 전용 모델도 스크린샷과 스티커를 읽습니다. 표·플로우차트·시퀀스 다이어그램은 깔끔한 이미지로 렌더링해 전송합니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="git-fork"></i></div>
+        <h3>역할별 모델 라우팅</h3>
+        <p>대화, 시각 이해, 의도 판단, 이미지 생성마다 최적의 공급자와 모델을 따로 연결하고 저장 전 실제 요청으로 검증합니다. 채팅 중 모델 전환도 가능합니다.</p>
+      </div>
+      <div class="feat">
+        <div class="feat-icon"><i data-size="20" data-lucide="clipboard-list"></i></div>
+        <h3>모든 결정 과정을 투명하게 기록</h3>
+        <p>각 메시지에 왜 답했는지, 왜 넘겼는지, 어떤 도구를 실행했고 토큰을 얼마나 썼는지 이벤트 센터에서 한눈에 확인할 수 있습니다.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart" class="qs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>빠른 시작</h2>
+      <p>설치 스크립트가 OS와 아키텍처를 자동 감지해 최신 안정 버전을 내려받고 latest.json의 SHA-256을 검증합니다. 업그레이드 전 자동 백업과 장애 시 자동 롤백을 지원합니다.</p>
+    </div>
+    <div class="qs-grid">
+      <div class="qs-card">
+        <div class="qs-card-head">Linux / macOS<button class="copy-btn" data-copy="cmd-sh">복사</button></div>
+        <pre id="cmd-sh"><span class="c"># 설치와 업그레이드 모두 같은 명령어</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Android Termux (ARM64)<button class="copy-btn" data-copy="cmd-termux">복사</button></div>
+        <pre id="cmd-termux"><span class="c"># Termux 내에서 실행 (루팅 불필요)</span>
+pkg install -y curl tar coreutils &amp;&amp; curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.sh | sh</pre>
+      </div>
+      <div class="qs-card">
+        <div class="qs-card-head">Windows PowerShell<button class="copy-btn" data-copy="cmd-ps">복사</button></div>
+        <pre id="cmd-ps"><span class="c"># 설치와 업그레이드 모두 같은 명령어</span>
+irm https://raw.githubusercontent.com/SuInk/Diana/main/scripts/install.ps1 | iex</pre>
+      </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">Docker<button class="copy-btn" data-copy="cmd-docker">복사</button></div>
+        <pre id="cmd-docker"><span class="c"># 데이터를 저장할 디렉터리에서 실행 (Docker Compose 필요)</span>
+curl -fsSL https://raw.githubusercontent.com/SuInk/Diana/main/scripts/docker.sh | sh</pre>
+      </div>
+      <div class="qs-card qs-card-wide">
+        <div class="qs-card-head">Skill로 설치 (명령을 실행할 수 있는 AI 어시스턴트에 붙여넣기)<button class="copy-btn" data-copy="cmd-prompt">복사</button></div>
+        <pre id="cmd-prompt">Read https://raw.githubusercontent.com/SuInk/Diana/main/skills/diana-install/SKILL.md and follow it to install the latest stable release of Diana on this machine.</pre>
+      </div>
+    </div>
+    <div class="qs-steps">
+      <div class="qs-step"><h4><span>1</span>설치 명령 실행</h4><p>초기 관리자 아이디와 비밀번호는 터미널에 한 번만 표시되므로 즉시 보관하세요. 분실 시 <code>diana passwd</code>로 재설정할 수 있습니다.</p></div>
+      <div class="qs-step"><h4><span>2</span>콘솔 열기</h4><p><code>127.0.0.1:18080</code>에 접속해 터미널에 표시된 관리자 계정으로 로그인합니다.</p></div>
+      <div class="qs-step"><h4><span>3</span>모델과 채널 연결</h4><p>WebUI에서 모델과 원하는 플랫폼을 연결하거나, 별도 설정 없이 내장 봇으로 바로 시작해 보세요.</p></div>
+      <div class="qs-step"><h4><span>4</span>추후 업그레이드</h4><p>콘솔에서 바로 업데이트하거나 설치 명령을 다시 실행하세요. 실패 시 이전 상태로 자동 복구됩니다.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="channels">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>지원 플랫폼</h2>
+    </div>
+    <div class="chan-grid">
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="message-circle"></i></div>
+        <div>
+          <h3>OneBot v11</h3>
+          <p>SnowLuma(권장) 등 OneBot 구현체와 연동하여 그룹·개인 채팅 및 그룹별 정책 제어를 지원합니다.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="send"></i></div>
+        <div>
+          <h3>Telegram</h3>
+          <p>공식 Bot API 롱 폴링 기반 아웃바운드 연결로 공인 IP가 필요 없습니다.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="message-square"></i></div>
+        <div>
+          <h3>QQ 공식 봇</h3>
+          <p>QQ 오픈 플랫폼 WebSocket 게이트웨이 아웃바운드 연결을 지원합니다.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="scan-text"></i></div>
+        <div>
+          <h3>WeChat</h3>
+          <p>Tencent iLink Bot QR 로그인과 아웃바운드 롱 폴링을 지원합니다(1:1 채팅 전용).</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="smartphone"></i></div>
+        <div>
+          <h3>iMessage</h3>
+          <p>Mac의 BlueBubbles Server를 통해 웹훅과 선택적 폴링 보조로 메시지를 주고받습니다.</p>
+        </div>
+      </div>
+      <div class="chan">
+        <div class="chan-logo"><i data-size="20" data-lucide="bot"></i></div>
+        <div>
+          <h3>내장 봇</h3>
+          <p>외부 플랫폼 인증 없이 콘솔 채팅 페이지에서 바로 대화하거나 음성 통화를 시작할 수 있습니다.</p>
+        </div>
+      </div>
+    </div>
+    <p class="chan-note">
+      앞선 4개 외부 플랫폼은 아웃바운드 연결로 가정·내부망에서 그대로 동작하며,
+      iMessage도 Mac이 Diana에 접근할 수 있으면 공인 IP 없이 사용할 수 있습니다.
+    </p>
+  </div>
+</section>
+
+<section id="docs">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>문서 (영문)</h2>
+    </div>
+    <div class="doc-grid">
+      <a class="doc-card" href="../en/deploy">
+        <h3><i data-size="17" data-lucide="rocket"></i>배포</h3>
+        <p>원라인 설치, Docker, 단일 바이너리 및 다양한 배포 방식.</p>
+      </a>
+      <a class="doc-card" href="../en/configuration">
+        <h3><i data-size="17" data-lucide="settings"></i>설정</h3>
+        <p>채널, 모델 라우팅, 그룹 정책 및 config.yaml 전체 참고.</p>
+      </a>
+      <a class="doc-card" href="../en/operations">
+        <h3><i data-size="17" data-lucide="wrench"></i>운영</h3>
+        <p>업그레이드, 백업, 이벤트 감사 및 일상 유지보수.</p>
+      </a>
+      <a class="doc-card" href="../en/implementation">
+        <h3><i data-size="17" data-lucide="file-code"></i>내부 구현</h3>
+        <p>아키텍처, 플러그인 구조 및 에이전트 도구 루프 설계.</p>
+      </a>
+      <a class="doc-card" href="../en/pipeline">
+        <h3><i data-size="17" data-lucide="git-fork"></i>파이프라인</h3>
+        <p>응답 트리거, 에이전트 실행, 브라우저 및 발송 전 검토 흐름도.</p>
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>Diana · Limited Redistribution License</span>
+    <div class="foot-links">
+      <a href="https://github.com/SuInk/Diana" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/SuInk/Diana/releases/latest" target="_blank" rel="noopener">Releases</a>
+      <a href="../demo">라이브 데모</a>
+    </div>
+  </div>
+</footer>
+
+<script src="../icons.js?v=20261028"></script>
+<script src="../landing.js?v=20261124"></script>
+
+</body>
+</html>
