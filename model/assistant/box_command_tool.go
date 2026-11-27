@@ -123,7 +123,13 @@ func (t *boxCommandTool) Run(ctx context.Context, input map[string]any) (string,
 	if err != nil {
 		return "", err
 	}
-	out, err := agent.RunBoxCommand(ctx, workBox, configToolString(input, "command"), time.Duration(intFromAny(input["timeout"]))*time.Second)
+	command := configToolString(input, "command")
+	out, err := agent.RunBoxCommand(ctx, workBox, command, time.Duration(intFromAny(input["timeout"]))*time.Second)
+	if err != nil {
+		if hint := t.runtime.boxWorkspacePathHint(t.event, t.owner, command, err.Error()); hint != "" {
+			err = fmt.Errorf("%w\n%s", err, hint)
+		}
+	}
 	if len(staged) > 0 && err == nil {
 		out = fmt.Sprintf("inputs 已放进：%s\n%s", strings.Join(staged, "、"), out)
 	}

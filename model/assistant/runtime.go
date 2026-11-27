@@ -5158,6 +5158,7 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 			Interjections: interjections,
 			Continuation:  continuation,
 			Redo:          redoTools.previous(),
+			Directed:      event.ToMe || event.Kind == EventKindPrivate,
 		})
 		if err == nil {
 			redoTools.remember(resp.Executed)
