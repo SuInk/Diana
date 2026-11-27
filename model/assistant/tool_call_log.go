@@ -75,7 +75,11 @@ type SessionSubtaskStore interface {
 // toolCallLogSkipped 不落库：send、tool_search、tools_execute 不是「做了什么」，
 // codemode 里每个子调用各自记一条，外面这层脚本不再记。
 func toolCallLogSkipped(tool string) bool {
-	return tool == "" || toolCallMemoryIgnored[tool] || tool == agent.CodeModeToolName
+	switch tool {
+	case "", "agent_finalize", "send", "tools_load", "tool_search", agent.ToolsExecuteToolName, agent.CodeModeToolName:
+		return true
+	}
+	return false
 }
 
 func (r *Runtime) agentToolCallStore() AgentToolCallStore {

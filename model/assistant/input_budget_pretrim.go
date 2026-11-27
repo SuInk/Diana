@@ -293,8 +293,9 @@ func budgetPretrimHistoryUnits(messages []llm.Message, current int) []budgetPret
 	for i := 0; i < current; i++ {
 		message := messages[i]
 		// 机器人自己的历史发言是 send 调用加「已发送」（见 llm.HistoryReplyCallIDPrefix），
-		// 和普通历史行一样可以整轮丢；结果永远并进它前面那条调用，两半一起走。
-		historyReply := llm.IsHistoryReplyMessage(message)
+		// 和普通历史行一样可以整轮丢；结果永远并进它前面那条调用，两半一起走。发言前面的
+		// 历史工具调用和占位结果（llm.HistoryToolCallIDPrefix）同样处理。
+		historyReply := llm.IsHistoryReplyMessage(message) || llm.IsHistoryToolMessage(message)
 		if message.Priority != llm.MessagePriorityHistory || message.Role == llm.RoleSystem || (!historyReply && (message.Role == llm.RoleTool || len(message.ToolCalls) > 0)) || len(message.ResponsesOutput) > 0 || message.Content == budgetPretrimMarker {
 			lastGroup = ""
 			continue

@@ -56,3 +56,33 @@ func TestIsHistoryReplyMessageNeedsEveryCallPrefixed(t *testing.T) {
 		t.Fatalf("text = %q", HistoryReplyText(pair[0]))
 	}
 }
+
+// 不带工具定义的请求里，历史工具调用连同占位结果整个丢掉，占位结果上的缓存断点挪到
+// 前一条消息上；带工具定义时原样保留。
+func TestWithDefaultsDropsHistoryToolCallsWithoutTools(t *testing.T) {
+	callID := HistoryToolCallIDPrefix + "a_0"
+	tools := []Message{
+		{Role: RoleAssistant, ToolCalls: []ToolCall{{ID: callID, Name: "image", Arguments: map[string]any{"prompt": "猫"}}}},
+		{Role: RoleTool, ToolCallID: callID, ToolName: "image", Content: "已执行。", CacheBreakpoint: true},
+	}
+	if !IsHistoryToolMessage(tools[0]) || !IsHistoryToolMessage(tools[1]) || IsHistoryReplyMessage(tools[0]) {
+		t.Fatal("history tool messages must be recognized on their own")
+	}
+	messages := append(append([]Message{{Role: RoleUser, Content: "[历史] 甲: 画只猫"}}, tools...), historyReplyPair("a", "排上了")...)
+	messages = append(messages, Message{Role: RoleUser, Content: "图呢"})
+	cfg := ProviderConfig{Provider: ProviderOpenAICompatible, Model: "m"}
+
+	flat := GenerateRequest{Messages: messages}.withDefaults(cfg).Messages
+	want := []Message{
+		{Role: RoleUser, Content: "[历史] 甲: 画只猫", CacheBreakpoint: true},
+		{Role: RoleAssistant, Content: "排上了", Priority: MessagePriorityHistory},
+		{Role: RoleUser, Content: "图呢"},
+	}
+	if !reflect.DeepEqual(flat, want) {
+		t.Fatalf("flattened:\n got %#v\nwant %#v", flat, want)
+	}
+	kept := GenerateRequest{Messages: messages, Tools: []ToolDefinition{{Name: "send"}}}.withDefaults(cfg).Messages
+	if !reflect.DeepEqual(kept, messages) {
+		t.Fatalf("requests with tools must keep history tool calls: %#v", kept)
+	}
+}

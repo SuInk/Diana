@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -493,6 +494,13 @@ func estimateHistoryContextEventTokens(event MessageEvent, currentTime int64, as
 		text = historyPlainText(event)
 		if note, ok := replyToolTraceNote(event.ToolCalls); ok {
 			text += note.Content
+		}
+		for _, message := range replyHistoryToolMessages("", event.ToolCalls) {
+			text += message.Content
+			for _, call := range message.ToolCalls {
+				arguments, _ := json.Marshal(call.Arguments)
+				text += call.Name + string(arguments)
+			}
 		}
 	} else {
 		text = historyPromptTextAt(event, currentTime)
