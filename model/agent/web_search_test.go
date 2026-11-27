@@ -332,7 +332,8 @@ func TestWebSearchToolDistinguishesTerminalStatuses(t *testing.T) {
 	}
 }
 
-// 搜索源给的长摘要原样交给模型，不再砍到几百字。
+// 搜索源给的长摘要原样交给模型，不再砍到几百字：超过一页时拆到后面的页，按 offset
+// 续读能拼回全文。
 func TestWebSearchToolKeepsLongSnippetWhole(t *testing.T) {
 	longContent := strings.Repeat("evidence ", 1_000)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -347,16 +348,31 @@ func TestWebSearchToolKeepsLongSnippetWhole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	output, err := tool.Run(context.Background(), map[string]any{"query": "whole"})
-	if err != nil {
-		t.Fatal(err)
+	var snippet strings.Builder
+	offset := 0
+	for page := 0; ; page++ {
+		if page > 10 {
+			t.Fatal("paging did not finish")
+		}
+		output, err := tool.Run(context.Background(), map[string]any{"query": "whole", "offset": float64(offset)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result webSearchResult
+		if err := json.Unmarshal([]byte(output), &result); err != nil {
+			t.Fatalf("output is not valid JSON: %v\n%s", err, output)
+		}
+		if result.Status != "ok" || len(result.Results) != 1 || webSearchModelRunes(output) > ReadingPageMaxChars {
+			t.Fatalf("page %d: %d model runes, status %q, %d results", page, webSearchModelRunes(output), result.Status, len(result.Results))
+		}
+		snippet.WriteString(result.Results[0].Snippet)
+		if result.NextOffset == 0 {
+			break
+		}
+		offset = result.NextOffset
 	}
-	var result webSearchResult
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatalf("output is not valid JSON: %v\n%s", err, output)
-	}
-	if result.Status != "ok" || len(result.Results) != 1 || result.Results[0].Snippet != strings.TrimSpace(longContent) || result.NextOffset != 0 {
-		t.Fatalf("result = %#v", result)
+	if snippet.String() != strings.TrimSpace(longContent) {
+		t.Fatalf("snippet reassembled to %d chars, want %d", snippet.Len(), len(strings.TrimSpace(longContent)))
 	}
 }
 
