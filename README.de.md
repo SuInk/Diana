@@ -133,9 +133,35 @@ diana doctor    # Konfiguration, Verzeichnisse und Gesundheit prüfen
 
 Bei Docker auf dem Host `docker exec diana diana <Befehl>` verwenden.
 
-- **Passwort vergessen**: `diana passwd` (nativ) bzw. `docker compose stop diana && docker compose run --rm diana passwd && docker compose start diana` (Docker).
-- **Upgrade**: Installationsbefehl erneut ausführen oder in der Konsole aktualisieren; inklusive automatischem Daten-Backup und Rollback bei fehlgeschlagenem Health-Check.
-- **Deinstallation**: `diana uninstall` entfernt Programm und Dienst und behält die Daten; `diana uninstall --purge` löscht auch alle Daten unwiderruflich.
+**Passwort vergessen**: Das Passwort liegt nur als Hash in der Datenbank und lässt sich daher nirgends auslesen – setzen Sie es stattdessen zurück. Bei einer Ein-Klick-Installation (Linux / macOS / Windows) genügt:
+
+```sh
+diana passwd
+```
+
+Der Befehl stoppt den Dienst, erzeugt ein neues zufälliges Passwort, zeigt es einmalig an und startet den Dienst wieder; alle Browser-Sitzungen werden abgemeldet, Bots, Modelle, Plugins und alle übrigen Daten bleiben unverändert. Vor jeder Änderung wird `y` abgefragt; `-y` überspringt die Abfrage (nötig ohne Terminal, etwa in Skripten). Mit `--username NEUER_NAME` wird das Konto gleichzeitig umbenannt.
+
+Docker kann sich nicht aus dem Container heraus selbst stoppen, deshalb im Deployment-Verzeichnis ausführen:
+
+```sh
+docker compose stop diana
+docker compose run --rm diana passwd
+docker compose start diana
+```
+
+Ein von Hand gestarteter Prozess (`run.sh` oder Doppelklick auf die .exe) bleibt unberührt: Stoppen Sie ihn selbst und führen Sie dann `diana passwd` aus.
+
+**Upgrade**: Vollständige Release-Pakete aktualisieren Sie, indem Sie den Installationsbefehl erneut ausführen oder in der Konsole auf Aktualisieren klicken; beide Wege sichern die Daten, prüfen das Paket und rollen zurück, wenn der Health-Check fehlschlägt. Docker-Deployments laden das Image und erstellen den Container neu, entweder auf dem Host oder über den optionalen Updater. Docker-Image-Updates werden bei fehlgeschlagenem Health-Check nicht automatisch zurückgerollt; stellen Sie bei Bedarf auf dem Host einen bekannten Versions-Tag wieder her.
+
+**Deinstallation**: `diana uninstall` entfernt Dienst und Programm, behält aber Ihre Daten (nach einer Neuinstallation geht es nahtlos weiter); `diana uninstall --purge` löscht auch die Daten – unwiderruflich, mit zweiter Bestätigung.
+
+## Wo die Einstellungen liegen
+
+Eine Faustregel: **Alltägliche Einstellungen ändern Sie in der Web-Konsole; `config.yaml` betrifft nur den Dienst selbst.**
+
+`config.yaml` (im Installationsverzeichnis) regelt die Infrastruktur: Listen-Adresse, Port, Datenpfade – Änderungen erfordern einen Neustart. Im Abschnitt `admin:` lassen sich Benutzername und Passwort des ersten Administrators vorgeben; das gilt nur, solange die Datenbank noch keinen Administrator hat, und der Ein-Klick-Installer entfernt das Klartext-Passwort, sobald Diana gestartet ist. Bot- und Modellkonfiguration liegt in der Datenbank und wirkt sofort, wenn sie in der Konsole geändert wird. Die Abschnitte `bot:` / `llm:` in `config.yaml` werden **einmalig** beim ersten Start mit leerer Datenbank übernommen und danach ignoriert (das Start-Log sagt das ausdrücklich) – sie sind für unbeaufsichtigte Deployments gedacht.
+
+Alle Felder sind in [`config.example.yaml`](./config.example.yaml) dokumentiert.
 
 ## Sicherheitshinweise
 

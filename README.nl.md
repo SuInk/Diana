@@ -133,9 +133,35 @@ diana doctor    # controle van configuratie, mappen en status
 
 Bij Docker voer je op de host `docker exec diana diana <commando>` uit.
 
-- **Wachtwoord vergeten**: `diana passwd` (native) of `docker compose stop diana && docker compose run --rm diana passwd && docker compose start diana` (Docker).
-- **Upgraden**: draai het installatiecommando opnieuw of klik op upgraden in de console; inclusief automatische back-up en rollback bij een mislukte gezondheidscontrole.
-- **Verwijderen**: `diana uninstall` verwijdert programma en service met behoud van data; `diana uninstall --purge` wist ook alle data definitief.
+**Wachtwoord vergeten**: het wachtwoord staat alleen als hash in de database en is dus nergens terug te halen — reset het in plaats daarvan. Bij een installatie met één klik (Linux / macOS / Windows) volstaat:
+
+```sh
+diana passwd
+```
+
+Het commando stopt de service, maakt een nieuw willekeurig wachtwoord aan dat één keer wordt getoond en start de service weer; alle browsersessies worden uitgelogd, bots, modellen, plugins en alle andere data blijven ongemoeid. Voor elke wijziging wordt om `y` gevraagd; `-y` slaat die vraag over (verplicht zonder terminal, bijvoorbeeld in scripts). Voeg `--username NIEUWE_NAAM` toe om het account tegelijk te hernoemen.
+
+Docker kan zichzelf niet van binnen de container stoppen; voer daarom in de deploymentmap uit:
+
+```sh
+docker compose stop diana
+docker compose run --rm diana passwd
+docker compose start diana
+```
+
+Een proces dat je zelf hebt gestart (`run.sh`, of dubbelklikken op de .exe) wordt niet aangeraakt: stop het eerst zelf en voer dan `diana passwd` uit.
+
+**Upgraden**: volledige Release-pakketten werk je bij door het installatiecommando opnieuw te draaien of in de console op upgraden te klikken; beide routes maken een back-up, controleren het pakket en draaien terug als de gezondheidscontrole mislukt. Docker-deployments halen het image op en maken de container opnieuw aan, op de host of via de optionele updater. Een Docker-image-update wordt niet automatisch teruggedraaid als de gezondheidscontrole mislukt; zet zo nodig op de host een bekende versietag terug.
+
+**Verwijderen**: `diana uninstall` verwijdert service en programma maar bewaart je data (na een herinstallatie ga je verder waar je was); `diana uninstall --purge` wist ook de data — onomkeerbaar, met een tweede bevestiging.
+
+## Waar de instellingen staan
+
+Eén vuistregel: **dagelijkse instellingen wijzig je in de webconsole; `config.yaml` gaat alleen over de service zelf.**
+
+`config.yaml` (in de installatiemap) regelt de infrastructuur: luisteradres, poort, datapaden — wijzigingen vereisen een herstart. Met de sectie `admin:` kun je gebruikersnaam en wachtwoord van de eerste beheerder vooraf instellen; dat geldt alleen zolang de database nog geen beheerder heeft, en het installatiescript met één klik verwijdert het wachtwoord in platte tekst zodra Diana is gestart. Bot- en modelconfiguratie staat in de database en werkt direct wanneer je die in de console wijzigt. De secties `bot:` / `llm:` in `config.yaml` worden **één keer** overgenomen, bij de eerste start met een lege database, en daarna genegeerd (het opstartlog vermeldt dat expliciet) — ze zijn bedoeld voor onbemande deployments.
+
+Alle velden staan beschreven in [`config.example.yaml`](./config.example.yaml).
 
 ## Beveiliging
 

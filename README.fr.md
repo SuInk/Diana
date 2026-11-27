@@ -133,9 +133,35 @@ diana doctor    # diagnostic de configuration et santé
 
 Avec Docker, exécutez `docker exec diana diana <commande>` depuis l'hôte.
 
-- **Mot de passe oublié** : `diana passwd` (installation native) ou `docker compose stop diana && docker compose run --rm diana passwd && docker compose start diana` (Docker).
-- **Mise à jour** : relancez la commande d'installation ou mettez à jour depuis la console ; sauvegarde automatique des données et retour arrière en cas d'échec du contrôle de santé.
-- **Désinstallation** : `diana uninstall` retire le service en conservant les données ; `diana uninstall --purge` supprime aussi toutes les données de façon définitive.
+**Mot de passe oublié** : le mot de passe n'est stocké que sous forme de hachage dans la base de données, il est donc impossible de le récupérer — il faut le réinitialiser. Pour une installation en un clic (Linux / macOS / Windows), lancez simplement :
+
+```sh
+diana passwd
+```
+
+La commande arrête le service, génère un nouveau mot de passe aléatoire affiché une seule fois, puis redémarre le service ; toutes les sessions du navigateur sont déconnectées, et les bots, modèles, plugins et autres données restent intacts. Elle demande `y` avant toute modification ; `-y` saute la confirmation (obligatoire sans terminal, par exemple dans un script). Ajoutez `--username NOUVEAU_NOM` pour renommer le compte en même temps.
+
+Docker ne peut pas s'arrêter depuis l'intérieur du conteneur ; exécutez donc dans le répertoire de déploiement :
+
+```sh
+docker compose stop diana
+docker compose run --rm diana passwd
+docker compose start diana
+```
+
+Un processus lancé à la main (`run.sh`, ou double-clic sur le .exe) n'est pas touché : arrêtez-le vous-même, puis lancez `diana passwd`.
+
+**Mise à jour** : pour les paquets Release complets, relancez la commande d'installation ou cliquez sur « mettre à jour » dans la console ; dans les deux cas, les données sont sauvegardées, le paquet est vérifié et un retour arrière a lieu si le contrôle de santé échoue. Les déploiements Docker récupèrent l'image et recréent le conteneur, depuis l'hôte ou via l'outil de mise à jour optionnel. Une mise à jour d'image Docker n'est pas annulée automatiquement si le contrôle de santé échoue ; au besoin, revenez à une étiquette de version connue sur l'hôte.
+
+**Désinstallation** : `diana uninstall` supprime le service et le programme mais conserve vos données (une réinstallation reprend là où vous en étiez) ; `diana uninstall --purge` supprime aussi les données — irréversible, avec une seconde confirmation.
+
+## Où se trouvent les réglages
+
+Une seule règle : **les réglages courants se modifient dans la console web ; `config.yaml` ne concerne que le service lui-même.**
+
+`config.yaml` (dans le répertoire d'installation) gère l'infrastructure : adresse d'écoute, port, chemins des données — toute modification demande un redémarrage. La section `admin:` permet de prédéfinir le nom et le mot de passe du premier administrateur ; elle ne s'applique que tant que la base ne contient aucun administrateur, et l'installateur en un clic supprime le mot de passe en clair une fois Diana démarré. La configuration des bots et des modèles est stockée en base et prend effet immédiatement lorsqu'on la modifie dans la console. Les sections `bot:` / `llm:` de `config.yaml` ne sont importées **qu'une fois**, au premier démarrage avec une base vide, puis ignorées (le journal de démarrage le signale) — elles servent aux déploiements sans intervention.
+
+Tous les champs sont documentés dans [`config.example.yaml`](./config.example.yaml).
 
 ## Sécurité
 
