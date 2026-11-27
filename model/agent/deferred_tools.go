@@ -99,7 +99,8 @@ func (l *deferredToolLoader) catalogLine(name string, tool Tool) string {
 // 这样重复的描述平均每条请求约 1500 字。目录截短过的照旧带完整描述。
 // 名字本身也得在目录里：按工具族成员名加载时，目录列的是族名，成员名不在目录里。
 func (l *deferredToolLoader) catalogShowsFullDescription(name string, tool Tool) bool {
-	if l.core[name] || !slices.Contains(l.registry.PresentedNames(), name) {
+	// 发言者专属目录只列一句用途（见 speakerCatalogPurpose），契约照旧带完整描述。
+	if l.core[name] || !l.isShared(name) || !slices.Contains(l.registry.PresentedNames(), name) {
 		return false
 	}
 	full := strings.Join(strings.Fields(tool.Description()), " ")
@@ -116,10 +117,35 @@ func (l *deferredToolLoader) catalogWhere(shared bool) string {
 		if !ok {
 			continue
 		}
+		if !shared {
+			// 发言者专属目录只列名字和一句用途，参数定义用到时再 tool_search 取，见
+			// speakerCatalogPurpose。
+			builder.WriteString("- " + name + ": " + speakerCatalogPurpose(l.catalogLine(name, tool)) + "\n")
+			continue
+		}
 		builder.WriteString("- " + name + toolSignature(tool) + ": " + l.catalogLine(name, tool) + "\n")
 	}
 	return strings.TrimSpace(builder.String())
 }
+
+// speakerCatalogPurpose 把目录说明截成一句用途。发言者专属目录放在历史之后、每次换人
+// 说话都要重发一份：11-23～25 生产抽 400 条主回复，这一段平均每条请求 5.4K token、命中
+// 只有 60%，占主回复成本 10.5%，主人那一版带着 45 个工具的完整参数签名有 1.25 万字。这些
+// 工具（主人才能用的运维、文件、配置类）一条回复里难得用到一个，用到时先 tool_search
+// 取定义、契约随后留在会话里，下一次直接调。
+func speakerCatalogPurpose(description string) string {
+	description = strings.Join(strings.Fields(description), " ")
+	if index := strings.IndexAny(description, "。；;\n"); index > 0 {
+		description = description[:index]
+	}
+	if runes := []rune(description); len(runes) > speakerCatalogPurposeRunes {
+		description = string(runes[:speakerCatalogPurposeRunes]) + "…"
+	}
+	return description
+}
+
+// speakerCatalogPurposeRunes 是发言者专属目录每个工具用途的字数上限。
+const speakerCatalogPurposeRunes = 48
 
 // filter keeps declarations stable before and after loading any deferred tool.
 func (l *deferredToolLoader) filter(definitions []llm.ToolDefinition) []llm.ToolDefinition {
