@@ -39,7 +39,6 @@ import type {
   NotebookScopeSummary,
   ResolverDependency,
   RSSWatchSource,
-  StatsHourBucket,
   StatsSnapshot,
   UpdateStatus,
   UserFavorabilityChange,
@@ -738,35 +737,19 @@ const trace: AppLogEntry[] = [
   { id: "trace-4", kind: "debug", level: "info", action: "agent_trace", message: "Agent 完成", created_at: before(1), metadata: { phase: "agent_completed", finish_reason: "stop", duration_ms: 6800 } }
 ];
 
-// 演示里两台机器人分掉同一条曲线，切换开关才看得出总览确实跟着变。
-function hourlyBuckets(share: number): StatsHourBucket[] {
-  return demoHourlyTotals.map((total, index) => ({
-    hour_unix: Math.floor((now - (23 - index) * 3_600_000) / 1000),
-    total: Math.round(total * share),
-    handled: Math.round(demoHourlyHandled[index] * share),
-    errors: 0
-  }));
-}
-
-const demoHourlyTotals = [14, 22, 18, 35, 29, 48, 41, 60, 45, 72, 54, 82, 63, 77, 66, 39, 52, 44, 61, 34, 49, 57, 78, 64];
-const demoHourlyHandled = [3, 4, 2, 8, 5, 11, 9, 15, 8, 18, 12, 21, 13, 17, 15, 7, 12, 10, 14, 6, 11, 13, 19, 16];
-
 export const demoStats: StatsSnapshot = {
   started_at: before(3 * 24 * 60 + 8 * 60), uptime_seconds: 288_000, total_events: 12_486, handled_events: 3_218, error_events: 9,
   today_events: 1284, today_handled: 318, today_errors: 0, by_kind: { group: 1108, private: 176 },
-  hourly: hourlyBuckets(1),
   avg_reply_ms: 5820, last_event_at: demoEvents[0].at,
   bot: { running: true, connected: true, self_id: "100000001", active_workers: 2, plugins_enabled: 7, plugins_total: 8 },
   by_profile: {
     "bot-onebot": {
       total_events: 9_642, handled_events: 2_480, error_events: 7,
-      today_events: 968, today_handled: 241, today_errors: 0, by_kind: { group: 862, private: 106 },
-      hourly: hourlyBuckets(0.75), avg_reply_ms: 5_240, last_event_at: demoEvents[0].at
+      today_events: 968, today_handled: 241, today_errors: 0, by_kind: { group: 862, private: 106 }, avg_reply_ms: 5_240, last_event_at: demoEvents[0].at
     },
     "bot-telegram": {
       total_events: 2_844, handled_events: 738, error_events: 2,
-      today_events: 316, today_handled: 77, today_errors: 0, by_kind: { group: 246, private: 70 },
-      hourly: hourlyBuckets(0.25), avg_reply_ms: 7_480, last_event_at: demoEvents[0].at
+      today_events: 316, today_handled: 77, today_errors: 0, by_kind: { group: 246, private: 70 }, avg_reply_ms: 7_480, last_event_at: demoEvents[0].at
     }
   }
 };
@@ -1829,7 +1812,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   if (path === "/api/stats/overview") {
     const rng = url.searchParams.get("range") ?? "today";
     const profileId = url.searchParams.get("profile_id") ?? "";
-    const reqGranularity = url.searchParams.get("granularity") ?? "";
     const botFactor = profileId === "bot-onebot" ? 0.75 : profileId === "bot-telegram" ? 0.25 : profileId ? 0.1 : 1;
     const spanMinutesMap: Record<string, number> = {
       today: 960,
@@ -1852,12 +1834,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         : 0;
     const spanMinutes = customMinutes || (spanMinutesMap[rng] ?? 1440);
     const scale = Math.max(0.05, spanMinutes / 1440) * botFactor;
-    const granularity: "hour" | "day" =
-      reqGranularity === "hour" || reqGranularity === "day"
-        ? reqGranularity
-        : spanMinutes <= 2880
-          ? "hour"
-          : "day";
     const untilDate = customMinutes && parsedUntil ? parsedUntil : new Date();
     const sinceDate = customMinutes && parsedSince ? parsedSince : new Date(untilDate.getTime() - spanMinutes * 60_000);
     const messages = Math.max(1, Math.round(1180 * scale));
@@ -1879,29 +1855,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
       total_tokens: totalTokens,
       missing_usage_calls: 0,
       failed_calls: failedCalls
-    });
-    const bucketCount = granularity === "day" ? Math.min(90, Math.max(7, Math.round(spanMinutes / 1440))) : Math.min(48, Math.max(6, Math.round(spanMinutes / 60)));
-    const stepMs = granularity === "day" ? 86_400_000 : 3_600_000;
-    const trend = Array.from({ length: bucketCount }, (_, idx) => {
-      const wave = 0.55 + ((idx * 7 + 3) % 9) * 0.1;
-      const bMsg = Math.max(1, Math.round((messages / bucketCount) * wave));
-      const bHandled = Math.max(0, Math.round((handled / bucketCount) * wave));
-      const bCalls = Math.max(1, Math.round((calls / bucketCount) * wave));
-      const bIn = Math.round((input / bucketCount) * wave);
-      const bOut = Math.round((output / bucketCount) * wave);
-      return {
-        start_unix: Math.floor((untilDate.getTime() - (bucketCount - idx) * stepMs) / 1000),
-        messages: bMsg,
-        handled: bHandled,
-        errors: idx === bucketCount - 2 && eventErrors > 0 ? 1 : 0,
-        calls: bCalls,
-        failed_calls: idx % 9 === 4 && failedCalls > 0 ? 1 : 0,
-        app_errors: idx === bucketCount - 4 && appErrors > 0 ? 1 : 0,
-        input_tokens: bIn,
-        output_tokens: bOut,
-        cached_input_tokens: Math.round(bIn * 0.58),
-        total_tokens: bIn + bOut
-      };
     });
     const activeGroupSource = profileId === "bot-telegram" ? telegramGroups : groups;
     const groupStats = activeGroupSource.map((grp, idx) => {
@@ -1927,7 +1880,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
     return json({
       range: rng,
       utc_offset: "+08:00",
-      granularity,
       current: {
         since: sinceDate.toISOString(),
         until: untilDate.toISOString(),
@@ -1972,7 +1924,6 @@ async function demoFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
         total_tokens: Math.round(totalTokens * 0.89),
         app_error_logs: appErrors
       },
-      trend,
       groups: groupStats,
       errors: {
         event_errors: eventErrors,

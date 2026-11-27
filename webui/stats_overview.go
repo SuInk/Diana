@@ -40,23 +40,12 @@ func (h *StatsHandler) statsOverview(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的统计时间范围"})
 		return
 	}
-	granularity := strings.TrimSpace(c.DefaultQuery("granularity", "auto"))
-	if granularity != "auto" && granularity != "hour" && granularity != "day" && granularity != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "granularity 仅支持 auto、hour 或 day"})
-		return
-	}
-	if granularity == "auto" {
-		granularity = ""
-	}
-	_, offsetSeconds := now.Zone()
 	ctx := c.Request.Context()
 	data, err := h.overview.DashboardOverview(ctx, storage.DashboardOverviewQuery{
-		Since:            since,
-		Until:            until,
-		ProfileID:        strings.TrimSpace(c.Query("profile_id")),
-		Granularity:      granularity,
-		UTCOffsetSeconds: offsetSeconds,
-		ErrorLimit:       20,
+		Since:      since,
+		Until:      until,
+		ProfileID:  strings.TrimSpace(c.Query("profile_id")),
+		ErrorLimit: 20,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "读取综合统计失败：" + err.Error()})

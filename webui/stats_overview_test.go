@@ -27,11 +27,7 @@ func (s *stubOverviewReader) DashboardOverview(_ context.Context, query storage.
 	if s.err != nil {
 		return storage.DashboardOverviewData{}, s.err
 	}
-	out := s.data
-	if out.Granularity == "" {
-		out.Granularity = "day"
-	}
-	return out, nil
+	return s.data, nil
 }
 
 func TestStatsOverviewSupportsLongRangesCustomBoundsAndGroupNames(t *testing.T) {
@@ -39,9 +35,8 @@ func TestStatsOverviewSupportsLongRangesCustomBoundsAndGroupNames(t *testing.T) 
 	now := time.Date(2026, 10, 12, 15, 30, 0, 0, shanghai)
 	reader := &stubOverviewReader{
 		data: storage.DashboardOverviewData{
-			Granularity: "day",
-			Current:     storage.DashboardWindowSummary{Messages: 120, Handled: 90, Errors: 3},
-			Groups:      []storage.DashboardGroupStat{{GroupID: "10001", TotalTokens: 4200}},
+			Current: storage.DashboardWindowSummary{Messages: 120, Handled: 90, Errors: 3},
+			Groups:  []storage.DashboardGroupStat{{GroupID: "10001", TotalTokens: 4200}},
 			Errors: storage.DashboardErrorOverview{
 				EventErrors: 3,
 				Recent:      []storage.DashboardErrorItem{{ID: "e1", Source: "event", GroupID: "10001", Message: "failed"}},
@@ -64,13 +59,13 @@ func TestStatsOverviewSupportsLongRangesCustomBoundsAndGroupNames(t *testing.T) 
 		if rec.Code != http.StatusOK {
 			t.Fatalf("range %s status = %d, body = %s", rng, rec.Code, rec.Body.String())
 		}
-		if reader.lastQuery.ProfileID != "bot-a" || reader.lastQuery.UTCOffsetSeconds != 8*3600 {
+		if reader.lastQuery.ProfileID != "bot-a" {
 			t.Fatalf("range %s query = %+v", rng, reader.lastQuery)
 		}
 	}
 
 	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/overview?range=custom&since=2026-08-01T00:00:00Z&until=2026-09-01T00:00:00Z&granularity=day", nil))
+	router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/stats/overview?range=custom&since=2026-08-01T00:00:00Z&until=2026-09-01T00:00:00Z", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("custom status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -85,7 +80,6 @@ func TestStatsOverviewSupportsLongRangesCustomBoundsAndGroupNames(t *testing.T) 
 	for _, bad := range []string{
 		"/api/stats/overview?range=invalid",
 		"/api/stats/overview?range=custom&since=2026-09-10T00:00:00Z&until=2026-09-01T00:00:00Z",
-		"/api/stats/overview?range=7d&granularity=week",
 	} {
 		rec = httptest.NewRecorder()
 		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, bad, nil))

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/SuInk/diana/model/assistant"
-	"github.com/SuInk/diana/model/storage"
 
 	"github.com/gin-gonic/gin"
 )
@@ -281,20 +280,6 @@ var groupTestOneBotReadActions = map[string]struct{}{
 	"get_file":              {},
 	"get_image":             {},
 	"get_msg":               {},
-}
-
-func (h *BotHandler) dashboardStats(c *gin.Context) {
-	if h.sqlite == nil {
-		c.JSON(http.StatusOK, storage.DashboardStats{Server: collectDashboardServerStats(time.Now())})
-		return
-	}
-	stats, err := h.sqlite.DashboardStatsForDay(c.Request.Context(), time.Now(), botProfileScope(c))
-	if err != nil {
-		h.writeError(c, http.StatusInternalServerError, "dashboard_stats", err, "dashboard", nil)
-		return
-	}
-	stats.Server = collectDashboardServerStats(time.Now())
-	c.JSON(http.StatusOK, stats)
 }
 
 func (h *BotHandler) listGroupTestFiles(c *gin.Context) {

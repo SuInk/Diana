@@ -2799,13 +2799,6 @@ export function listBrowserActivity(botID?: string, limit = 30): Promise<AppLogs
   return requestJSON<AppLogsResponse>(`/api/logs?${params.toString()}`);
 }
 
-export interface StatsHourBucket {
-  hour_unix: number;
-  total: number;
-  handled: number;
-  errors: number;
-}
-
 export interface StatsBotSummary {
   running: boolean;
   connected: boolean;
@@ -2851,7 +2844,6 @@ export interface StatsProfileCounters {
   today_handled: number;
   today_errors: number;
   by_kind: Record<string, number>;
-  hourly: StatsHourBucket[];
   avg_reply_ms: number;
   last_event_at?: string;
 }
@@ -2866,7 +2858,6 @@ export interface StatsSnapshot {
   today_handled: number;
   today_errors: number;
   by_kind: Record<string, number>;
-  hourly: StatsHourBucket[];
   avg_reply_ms: number;
   last_event_at?: string;
   bot: StatsBotSummary;
@@ -2897,7 +2888,6 @@ export function scopeStatsSnapshot(snapshot: StatsSnapshot | null, profileID: st
     today_handled: 0,
     today_errors: 0,
     by_kind: {},
-    hourly: snapshot.hourly.map((bucket) => ({ ...bucket, total: 0, handled: 0, errors: 0 })),
     avg_reply_ms: 0,
     last_event_at: undefined
   };
@@ -2967,7 +2957,6 @@ export function getStatsRanges(): Promise<StatsRanges> {
 }
 
 export type StatsOverviewRange = "today" | "1h" | "12h" | "24h" | "7d" | "30d" | "90d" | "365d" | "custom";
-export type StatsGranularity = "auto" | "hour" | "day";
 
 export interface StatsOverviewWindowSummary {
   since: string;
@@ -2997,20 +2986,6 @@ export interface StatsOverviewPreviousSummary {
   failed_calls: number;
   total_tokens: number;
   app_error_logs: number;
-}
-
-export interface StatsTrendBucket {
-  start_unix: number;
-  messages: number;
-  handled: number;
-  errors: number;
-  calls: number;
-  failed_calls: number;
-  app_errors: number;
-  input_tokens: number;
-  output_tokens: number;
-  cached_input_tokens: number;
-  total_tokens: number;
 }
 
 export interface StatsGroupItem {
@@ -3073,10 +3048,8 @@ export interface StatsErrorOverview {
 export interface StatsOverviewResponse {
   range: string;
   utc_offset: string;
-  granularity: "hour" | "day";
   current: StatsOverviewWindowSummary;
   previous: StatsOverviewPreviousSummary;
-  trend: StatsTrendBucket[];
   groups: StatsGroupItem[];
   errors: StatsErrorOverview;
 }
@@ -3085,14 +3058,12 @@ export function getStatsOverview(options: {
   range?: StatsOverviewRange;
   since?: string;
   until?: string;
-  granularity?: StatsGranularity;
   profileId?: string;
 } = {}): Promise<StatsOverviewResponse> {
   const params = new URLSearchParams();
   if (options.range) params.set("range", options.range);
   if (options.since) params.set("since", options.since);
   if (options.until) params.set("until", options.until);
-  if (options.granularity && options.granularity !== "auto") params.set("granularity", options.granularity);
   if (options.profileId) params.set("profile_id", options.profileId);
   const query = params.toString();
   return requestJSON<StatsOverviewResponse>(`/api/stats/overview${query ? `?${query}` : ""}`);

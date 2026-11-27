@@ -16,7 +16,7 @@ test("总览支持长跨度与自定义日历筛选、多维用量导出以及�
     assert.ok(dashboard.includes(rng), `Dashboard missing range ${rng}`);
   }
   assert.match(dashboard, /getStatsOverview\(/);
-  assert.match(dashboard, /<DashboardTrendChart/);
+  assert.match(dashboard, /<ActivityCalendar/);
   assert.match(dashboard, /<DateRangePicker/);
   assert.match(datePicker, /date-range-popover/);
 

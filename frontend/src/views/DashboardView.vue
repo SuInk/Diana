@@ -155,45 +155,10 @@
                   Token
                 </button>
               </div>
-              <div class="segmented dashboard-chart-switch" role="radiogroup" aria-label="消息量图表">
-                <button
-                  type="button"
-                  role="radio"
-                  :class="{ active: chartMode === 'trend' }"
-                  :aria-checked="chartMode === 'trend'"
-                  @click="setChartMode('trend')"
-                >
-                  24 小时
-                </button>
-                <button
-                  type="button"
-                  role="radio"
-                  :class="{ active: chartMode === 'calendar' }"
-                  :aria-checked="chartMode === 'calendar'"
-                  @click="setChartMode('calendar')"
-                >
-                  按天
-                </button>
-              </div>
             </div>
           </div>
           <div class="card-body">
-            <ActivityCalendar
-              v-if="chartMode === 'calendar'"
-              :profile-id="botScope"
-              :metric="chartMetric"
-              @caption="calendarCaption = $event"
-            />
-            <LoadingSkeleton v-else-if="cardsLoading && !overview?.trend?.length" kind="chart" label="正在加载趋势统计" />
-            <DashboardTrendChart
-              v-else-if="overview?.trend?.length"
-              :buckets="overview.trend"
-              :granularity="overview.granularity"
-              :metric="chartMetric"
-              @select-bucket="onSelectTrendBucket"
-            />
-            <HourlyBars v-else-if="stats && chartMetric === 'messages'" :buckets="hourlyBuckets" />
-            <EmptyState v-else title="暂无统计数据" hint="机器人处理消息或调用模型后这里会出现趋势走势" />
+            <ActivityCalendar :profile-id="botScope" :metric="chartMetric" @caption="calendarCaption = $event" />
           </div>
         </section>
 
@@ -452,10 +417,8 @@ import {
   type ReplyLatencySample,
   type StatsErrorCategory,
   type StatsErrorItem,
-  type StatsHourBucket,
   type StatsOverviewRange,
-  type StatsOverviewResponse,
-  type StatsTrendBucket
+  type StatsOverviewResponse
 } from "../api";
 import { pushStatsSnapshot, pushStatusSnapshot, scopedStats, stream, type BotEvent } from "../lib/stream";
 import { navigate } from "../router";
@@ -476,7 +439,6 @@ import { toastError, toastSuccess } from "../lib/toast";
 import AppSelect, { type AppSelectOption } from "../components/AppSelect.vue";
 import DateRangePicker from "../components/DateRangePicker.vue";
 import StatCard from "../components/StatCard.vue";
-import HourlyBars from "../components/HourlyBars.vue";
 import EmptyState from "../components/EmptyState.vue";
 import Modal from "../components/Modal.vue";
 import ActivityCalendar from "../components/ActivityCalendar.vue";
@@ -486,7 +448,6 @@ import LoadingSkeleton from "../components/LoadingSkeleton.vue";
 import SkeletonBlock from "../components/SkeletonBlock.vue";
 import TokenUsageBreakdown from "../components/TokenUsageBreakdown.vue";
 import GroupTokenUsage from "../components/GroupTokenUsage.vue";
-import DashboardTrendChart from "../components/DashboardTrendChart.vue";
 import { cacheUsageDisplay, cacheUtilization, splitCacheUsage, type UsageGroup } from "../lib/llm-usage";
 
 const pending = ref(true);
@@ -600,8 +561,6 @@ const rangeLabel = computed(() => {
 // 统计卡左上角标题短促对齐：选了自定义日期时写「所选范围」，具体起止日期已在顶栏日期按钮和弹窗里写清。
 const cardRangeLabel = computed(() => (selectedRange.value === "custom" ? "所选范围" : rangeLabel.value));
 
-const effectiveGranularity = computed<"hour" | "day">(() => overview.value?.granularity ?? (selectedRange.value === "7d" ? "day" : "hour"));
-
 async function loadOverview(): Promise<void> {
   if (selectedRange.value === "custom" && !customFrom.value && !customTo.value) return;
   const seq = ++overviewSeq;
@@ -613,7 +572,6 @@ async function loadOverview(): Promise<void> {
       range: selectedRange.value,
       since: bounds.since,
       until: bounds.until,
-      granularity: "auto",
       profileId: botScope.value
     });
     if (seq === overviewSeq) overview.value = res;
@@ -928,25 +886,6 @@ function inspectLiveEvent(event: BotEvent, errorOnly = false): void {
   });
 }
 
-function onSelectTrendBucket(bucket: StatsTrendBucket): void {
-  const spanSeconds = effectiveGranularity.value === "day" ? 86_400 : 3600;
-  const since = new Date(bucket.start_unix * 1000).toISOString();
-  const until = new Date((bucket.start_unix + spanSeconds) * 1000).toISOString();
-  if (chartMetric.value === "messages") {
-    openEventsWithRange({
-      result: bucket.errors > 0 ? "error" : undefined,
-      since,
-      until
-    });
-    return;
-  }
-  openLogsWithRange({
-    kind: "llm",
-    since,
-    until
-  });
-}
-
 async function onResetModelCandidate(cand: ModelCandidateHealth): Promise<void> {
   const key = `${cand.profile_id}:${cand.model}`;
   resettingCandidateKey.value = key;
@@ -1168,21 +1107,10 @@ function llmSuccessRateHint(usage: UsageDetail | null): string {
   return `请求成功率 ${((ok / (ok + failed)) * 100).toFixed(1)}%；点击直接查看失败调用日志`;
 }
 
-// 图表双维切换：口径（消息 / Token） × 展示（趋势 / 年历），两者正交生效。
+// 图表口径切换：消息 / Token。
 type ChartMetric = "messages" | "tokens";
-type ChartMode = "trend" | "calendar";
 const chartViewKey = "diana.dashboard.chart-view";
 const chartMetricKey = "diana.dashboard.chart-metric";
-
-function readChartMode(): ChartMode {
-  try {
-    const saved = window.localStorage.getItem(chartViewKey);
-    if (saved === "hourly" || saved === "trend") return "trend";
-    return "calendar";
-  } catch {
-    return "calendar";
-  }
-}
 
 function readChartMetric(): ChartMetric {
   try {
@@ -1193,27 +1121,10 @@ function readChartMetric(): ChartMetric {
   }
 }
 
-const chartMode = ref<ChartMode>(readChartMode());
 const chartMetric = ref<ChartMetric>(readChartMetric());
 const calendarCaption = ref("");
 
-const chartHeading = computed(() => {
-  if (chartMode.value === "calendar") {
-    return calendarCaption.value || (chartMetric.value === "tokens" ? "每日 Token 用量" : "每日消息量");
-  }
-  const unit = effectiveGranularity.value === "day" ? "按天" : "按小时";
-  if (chartMetric.value === "tokens") return `${rangeLabel.value} Token 趋势（${unit}）`;
-  return `${rangeLabel.value}消息与回复趋势（${unit}）`;
-});
-
-function setChartMode(value: ChartMode): void {
-  chartMode.value = value;
-  try {
-    window.localStorage.setItem(chartViewKey, value);
-  } catch {
-    // 隐私模式写不进去不影响当次切换。
-  }
-}
+const chartHeading = computed(() => calendarCaption.value || (chartMetric.value === "tokens" ? "每日 Token 用量" : "每日消息量"));
 
 function setChartMetric(value: ChartMetric): void {
   chartMetric.value = value;
@@ -1224,7 +1135,6 @@ function setChartMetric(value: ChartMetric): void {
   }
 }
 
-const hourlyBuckets = computed<StatsHourBucket[]>(() => (stats.value ? [...stats.value.hourly] : []));
 const processMetricsReady = computed(() => {
   const server = stats.value?.server;
   return !!server && !server.process_metrics_unavailable && server.process_cpu_percent !== undefined;
@@ -1343,10 +1253,6 @@ useConfigurationRefresh(["bot", "llm"], refreshAll);
   gap: 8px;
   margin-left: auto;
   flex-shrink: 0;
-}
-
-.dashboard-chart-controls .dashboard-chart-switch {
-  margin-left: 0;
 }
 
 .dashboard-extra-select {

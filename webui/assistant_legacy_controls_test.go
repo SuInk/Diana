@@ -268,22 +268,6 @@ func TestRepositoryWatchCreateRequiresPrivateTarget(t *testing.T) {
 	}
 }
 
-func TestRestoredDashboardStatsAvailableWithoutStore(t *testing.T) {
-	router := botTestRouter(restoredControlHandler(&restoredControlChannel{}))
-	recorder := httptest.NewRecorder()
-	router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/assistant/dashboard-stats", nil))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
-	}
-	var stats storage.DashboardStats
-	if err := json.NewDecoder(recorder.Body).Decode(&stats); err != nil {
-		t.Fatalf("Decode() error = %v", err)
-	}
-	if stats.Server.OS == "" || stats.Server.ProcessID == 0 || stats.Server.CPUCores == 0 {
-		t.Fatalf("server stats = %#v", stats.Server)
-	}
-}
-
 func restoredControlHandler(channel assistant.Channel) *BotHandler {
 	runtime := assistant.NewRuntime(assistant.DefaultBotConfig(), channel, assistant.NewDefaultPluginManager(), nil, nil, nil, nil)
 	handler := NewBotHandlerWithFactory(context.Background(), runtime, func(assistant.BotConfig) assistant.Channel { return channel })

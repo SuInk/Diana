@@ -17,12 +17,10 @@ import (
 
 // DashboardOverviewQuery 是总览页大跨度综合分析的查询条件。
 type DashboardOverviewQuery struct {
-	Since            time.Time
-	Until            time.Time
-	ProfileID        string
-	Granularity      string // "hour" 或 "day"
-	UTCOffsetSeconds int
-	ErrorLimit       int
+	Since      time.Time
+	Until      time.Time
+	ProfileID  string
+	ErrorLimit int
 }
 
 // DashboardWindowSummary 是当前筛选窗口内的完整聚合数据。
@@ -55,21 +53,6 @@ type DashboardPreviousSummary struct {
 	FailedCalls     int64     `json:"failed_calls"`
 	TotalTokens     int64     `json:"total_tokens"`
 	AppErrorLogs    int64     `json:"app_error_logs"`
-}
-
-// DashboardTrendBucket 是按小时或按天对齐后的多维趋势分桶。
-type DashboardTrendBucket struct {
-	StartUnix         int64 `json:"start_unix"`
-	Messages          int64 `json:"messages"`
-	Handled           int64 `json:"handled"`
-	Errors            int64 `json:"errors"`
-	Calls             int64 `json:"calls"`
-	FailedCalls       int64 `json:"failed_calls"`
-	AppErrors         int64 `json:"app_errors"`
-	InputTokens       int64 `json:"input_tokens"`
-	OutputTokens      int64 `json:"output_tokens"`
-	CachedInputTokens int64 `json:"cached_input_tokens"`
-	TotalTokens       int64 `json:"total_tokens"`
 }
 
 // DashboardGroupStat 汇总某个群在当前窗口内的消息处理与 Token 消耗排行。
@@ -135,15 +118,13 @@ type DashboardErrorOverview struct {
 
 // DashboardOverviewData 是总览页大跨度查询接口的持久层返回结果。
 type DashboardOverviewData struct {
-	Granularity string                   `json:"granularity"`
-	Current     DashboardWindowSummary   `json:"current"`
-	Previous    DashboardPreviousSummary `json:"previous"`
-	Trend       []DashboardTrendBucket   `json:"trend"`
-	Groups      []DashboardGroupStat     `json:"groups"`
-	Errors      DashboardErrorOverview   `json:"errors"`
+	Current  DashboardWindowSummary   `json:"current"`
+	Previous DashboardPreviousSummary `json:"previous"`
+	Groups   []DashboardGroupStat     `json:"groups"`
+	Errors   DashboardErrorOverview   `json:"errors"`
 }
 
-// DashboardOverview 按任意时间跨度和机器人作用域聚合消息、回复、Token、趋势分桶、群排行及异常明细。
+// DashboardOverview 按任意时间跨度和机器人作用域聚合消息、回复、Token、群排行及异常明细。
 func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOverviewQuery) (DashboardOverviewData, error) {
 	defer s.observeStorage(ctx, "DashboardOverview", "read")()
 	if s == nil || s.db == nil {
@@ -151,18 +132,6 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 	}
 	if !query.Since.Before(query.Until) {
 		return DashboardOverviewData{}, fmt.Errorf("invalid overview window")
-	}
-	granularity := strings.TrimSpace(query.Granularity)
-	if granularity != "hour" && granularity != "day" {
-		if query.Until.Sub(query.Since) <= 48*time.Hour {
-			granularity = "hour"
-		} else {
-			granularity = "day"
-		}
-	}
-	// 超过 14 天的跨度如果仍按小时切会产生成百上千个柱子，自动收敛为按天分桶以完整覆盖窗口。
-	if granularity == "hour" && query.Until.Sub(query.Since) > 14*24*time.Hour {
-		granularity = "day"
 	}
 	errorLimit := query.ErrorLimit
 	if errorLimit <= 0 {
@@ -177,18 +146,14 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 	prevUntil := query.Since
 
 	out := DashboardOverviewData{
-		Granularity: granularity,
-		Current:     DashboardWindowSummary{Since: query.Since, Until: query.Until},
-		Previous:    DashboardPreviousSummary{Since: prevSince, Until: prevUntil},
-		Groups:      []DashboardGroupStat{},
+		Current:  DashboardWindowSummary{Since: query.Since, Until: query.Until},
+		Previous: DashboardPreviousSummary{Since: prevSince, Until: prevUntil},
+		Groups:   []DashboardGroupStat{},
 		Errors: DashboardErrorOverview{
 			Categories: []DashboardErrorCategory{},
 			Recent:     []DashboardErrorItem{},
 		},
 	}
-
-	loc := time.FixedZone("offset", query.UTCOffsetSeconds)
-	buckets, bucketIndex := initDashboardTrendBuckets(query.Since, query.Until, granularity, loc)
 
 	groupMap := map[string]*DashboardGroupStat{}
 	ensureGroup := func(profile, platform, groupID string) *DashboardGroupStat {
@@ -215,8 +180,8 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 		return item
 	}
 
-	// 1. 当前窗口入站事件统计、群消息统计与趋势分桶
-	if err := s.fillOverviewEvents(ctx, query.Since, query.Until, profileID, granularity, loc, buckets, bucketIndex, ensureGroup, &out.Current); err != nil {
+	// 1. 当前窗口入站事件统计与群消息统计
+	if err := s.fillOverviewEvents(ctx, query.Since, query.Until, profileID, ensureGroup, &out.Current); err != nil {
 		return out, err
 	}
 	// 2. 前一段等长窗口入站事件统计（供环比对照）
@@ -242,10 +207,10 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 		stat.TotalTokens += grp.Usage.TotalTokens
 	}
 
-	// 4. 当前窗口日志趋势（Token 走势、调用失败走势、运行错误走势）与异常聚合
+	// 4. 当前窗口模型调用失败与运行错误聚合
 	categories := map[string]*DashboardErrorCategory{}
 	var recentErrors []DashboardErrorItem
-	if err := s.fillOverviewLogsAndErrors(ctx, query.Since, query.Until, profileID, granularity, loc, buckets, bucketIndex, categories, &recentErrors, errorLimit, &out.Current); err != nil {
+	if err := s.fillOverviewLogsAndErrors(ctx, query.Since, query.Until, profileID, categories, &recentErrors, errorLimit, &out.Current); err != nil {
 		return out, err
 	}
 	// 5. 当前窗口入站事件异常分类与最近样本
@@ -258,7 +223,6 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 		return out, err
 	}
 
-	out.Trend = buckets
 	for _, grp := range groupMap {
 		out.Groups = append(out.Groups, *grp)
 	}
@@ -305,42 +269,10 @@ func (s *SQLiteStore) DashboardOverview(ctx context.Context, query DashboardOver
 	return out, nil
 }
 
-func alignDashboardBucketStart(at time.Time, granularity string, loc *time.Location) time.Time {
-	local := at.In(loc)
-	if granularity == "day" {
-		return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-	}
-	return time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), 0, 0, 0, loc)
-}
-
-func initDashboardTrendBuckets(since, until time.Time, granularity string, loc *time.Location) ([]DashboardTrendBucket, map[int64]int) {
-	cursor := alignDashboardBucketStart(since, granularity, loc)
-	var buckets []DashboardTrendBucket
-	index := map[int64]int{}
-	for cursor.Before(until) {
-		unix := cursor.Unix()
-		index[unix] = len(buckets)
-		buckets = append(buckets, DashboardTrendBucket{StartUnix: unix})
-		if granularity == "day" {
-			cursor = cursor.AddDate(0, 0, 1)
-		} else {
-			cursor = cursor.Add(time.Hour)
-		}
-		// 防御极端大跨度：最多保留 400 个时间桶
-		if len(buckets) >= 400 {
-			break
-		}
-	}
-	return buckets, index
-}
-
 func (s *SQLiteStore) fillOverviewEvents(
 	ctx context.Context,
 	since, until time.Time,
-	profileID, granularity string,
-	loc *time.Location,
-	buckets []DashboardTrendBucket,
-	bucketIndex map[int64]int,
+	profileID string,
 	ensureGroup func(profile, platform, groupID string) *DashboardGroupStat,
 	summary *DashboardWindowSummary,
 ) error {
@@ -388,26 +320,22 @@ WHERE completed_at >= ? AND completed_at < ?`+scope,
 		summary.AvgReplyMS = int64(avg.Float64)
 	}
 
-	// 按群与按时间分桶聚合收到消息（库内按 15 分钟粗聚，避免全量扫逐行）
+	// 按群聚合收到消息
 	msgRows, err := s.eventReader().QueryContext(ctx, `
-SELECT event_time / 900 AS slot, COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), ''), COUNT(*)
+SELECT COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), ''), COUNT(*)
 FROM inbound_events
 WHERE event_time >= ? AND event_time < ?`+scope+`
-GROUP BY slot, COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), '')`,
+GROUP BY COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), '')`,
 		append([]any{sinceSec, untilSec}, scopeArgs...)...)
 	if err != nil {
 		return fmt.Errorf("overview message buckets: %w", err)
 	}
 	defer msgRows.Close()
 	for msgRows.Next() {
-		var slot, count int64
+		var count int64
 		var rowProfile, groupID string
-		if err := msgRows.Scan(&slot, &rowProfile, &groupID, &count); err != nil {
+		if err := msgRows.Scan(&rowProfile, &groupID, &count); err != nil {
 			return err
-		}
-		start := alignDashboardBucketStart(time.Unix(slot*900, 0), granularity, loc).Unix()
-		if idx, ok := bucketIndex[start]; ok {
-			buckets[idx].Messages += count
 		}
 		if grp := ensureGroup(rowProfile, "", groupID); grp != nil {
 			grp.Messages += count
@@ -417,31 +345,25 @@ GROUP BY slot, COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), '')`,
 		return err
 	}
 
-	// 按群与按时间分桶聚合已回复与异常完成数
+	// 按群聚合已回复与异常完成数
 	doneRows, err := s.eventReader().QueryContext(ctx, `
-SELECT (completed_at / 1000000000) / 900 AS slot,
-  COALESCE(TRIM(profile_id), ''),
+SELECT COALESCE(TRIM(profile_id), ''),
   COALESCE(TRIM(group_id), ''),
   COALESCE(SUM(CASE WHEN `+inboundHandledPredicate+` THEN 1 ELSE 0 END), 0),
   COALESCE(SUM(CASE WHEN `+inboundFailedPredicate+` THEN 1 ELSE 0 END), 0)
 FROM inbound_events
 WHERE completed_at >= ? AND completed_at < ?`+scope+`
-GROUP BY slot, COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), '')`,
+GROUP BY COALESCE(TRIM(profile_id), ''), COALESCE(TRIM(group_id), '')`,
 		append([]any{sinceNanos, untilNanos}, scopeArgs...)...)
 	if err != nil {
 		return fmt.Errorf("overview outcome buckets: %w", err)
 	}
 	defer doneRows.Close()
 	for doneRows.Next() {
-		var slot, handled, failed int64
+		var handled, failed int64
 		var rowProfile, groupID string
-		if err := doneRows.Scan(&slot, &rowProfile, &groupID, &handled, &failed); err != nil {
+		if err := doneRows.Scan(&rowProfile, &groupID, &handled, &failed); err != nil {
 			return err
-		}
-		start := alignDashboardBucketStart(time.Unix(slot*900, 0), granularity, loc).Unix()
-		if idx, ok := bucketIndex[start]; ok {
-			buckets[idx].Handled += handled
-			buckets[idx].Errors += failed
 		}
 		if grp := ensureGroup(rowProfile, "", groupID); grp != nil {
 			grp.Handled += handled
@@ -492,10 +414,7 @@ WHERE completed_at >= ? AND completed_at < ?`+scope,
 func (s *SQLiteStore) fillOverviewLogsAndErrors(
 	ctx context.Context,
 	since, until time.Time,
-	profileID, granularity string,
-	loc *time.Location,
-	buckets []DashboardTrendBucket,
-	bucketIndex map[int64]int,
+	profileID string,
 	categories map[string]*DashboardErrorCategory,
 	recentErrors *[]DashboardErrorItem,
 	errorLimit int,
@@ -506,7 +425,7 @@ func (s *SQLiteStore) fillOverviewLogsAndErrors(
 SELECT id, kind, action, message, COALESCE(detail, ''), COALESCE(target, ''), COALESCE(metadata, ''), created_at
 FROM app_logs
 WHERE created_at >= ? AND created_at < ?
-  AND (action IN ('llm_usage', 'llm_call_failed') OR kind = 'error')`
+  AND (action = 'llm_call_failed' OR (kind = 'error' AND action != 'llm_usage'))`
 	args := []any{since.UTC().Format(seconds), until.UTC().Add(time.Second).Format(seconds)}
 	if profileID != "" {
 		query += ` AND json_valid(metadata) AND trim(json_extract(metadata, '$.profile_id')) = ?`
@@ -540,27 +459,8 @@ WHERE created_at >= ? AND created_at < ?
 		if profileID != "" && rowProfile != profileID {
 			continue
 		}
-		bucketStart := alignDashboardBucketStart(at, granularity, loc).Unix()
-		idx, hasBucket := bucketIndex[bucketStart]
-
 		switch action {
-		case "llm_usage":
-			if hasBucket {
-				input, output := int64FromAny(meta["input_tokens"]), int64FromAny(meta["output_tokens"])
-				total := int64FromAny(meta["total_tokens"])
-				if total <= 0 {
-					total = input + output
-				}
-				buckets[idx].Calls++
-				buckets[idx].InputTokens += input
-				buckets[idx].OutputTokens += output
-				buckets[idx].CachedInputTokens += int64FromAny(meta["cached_input_tokens"])
-				buckets[idx].TotalTokens += total
-			}
 		case "llm_call_failed":
-			if hasBucket {
-				buckets[idx].FailedCalls++
-			}
 			model := str("model")
 			if model == "" {
 				model = "unknown"
@@ -615,9 +515,6 @@ WHERE created_at >= ? AND created_at < ?
 				continue
 			}
 			summary.AppErrorLogs++
-			if hasBucket {
-				buckets[idx].AppErrors++
-			}
 			act := strings.TrimSpace(action)
 			if act == "" {
 				act = "system_error"
