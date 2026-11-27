@@ -155,6 +155,7 @@ type rssWatchCreatePayload struct {
 	JudgeModelID       string   `json:"judge_model_id,omitempty"`
 	TranslationModelID string   `json:"translation_model_id,omitempty"`
 	JudgePrompt        string   `json:"judge_prompt"`
+	Delivery           string   `json:"delivery"`
 	IntervalSeconds    int64    `json:"interval_seconds"`
 	ProfileID          string   `json:"profile_id"`
 	Destination        string   `json:"destination"`
@@ -176,6 +177,7 @@ type rssWatchUpdatePayload struct {
 	JudgeModelID        *string                         `json:"judge_model_id,omitempty"`
 	TranslationModelID  *string                         `json:"translation_model_id,omitempty"`
 	JudgePrompt         *string                         `json:"judge_prompt,omitempty"`
+	Delivery            *string                         `json:"delivery,omitempty"`
 	IntervalSeconds     int64                           `json:"interval_seconds,omitempty"`
 }
 
@@ -244,6 +246,8 @@ type botTaskPayload struct {
 	FeedReplyPrompt        *string  `json:"feed_reply_prompt,omitempty"`
 	FeedJudgeModelID       string   `json:"feed_judge_model_id,omitempty"`
 	FeedTranslationModelID string   `json:"feed_translation_model_id,omitempty"`
+	FeedDelivery           string   `json:"feed_delivery,omitempty"`
+	FeedTopicPoolSize      int      `json:"feed_topic_pool_size,omitempty"`
 	// FeedSources 让编辑框读得回多来源订阅的完整名单，只有 feed_url 的话
 	// 一打开就只剩第一个来源，保存等于把其余的人删掉。
 	FeedSources         []rssWatchSourcePayload `json:"feed_sources,omitempty"`
@@ -751,7 +755,7 @@ func (h *BotHandler) createRSSWatch(c *gin.Context) {
 	item, err := manager.CreateRSSWatch(c.Request.Context(), assistant.RSSWatchCreateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyPrompt: payload.ReplyPrompt, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyPrompt: payload.ReplyPrompt, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt, Delivery: payload.Delivery,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second, Platform: profile.Platform, ProfileID: profile.ID,
 		OwnerID: "webui:" + strings.TrimSpace(profile.ID), GroupID: groupID, UserID: userID,
 		ContextNamespace: strings.TrimSpace(profile.ID),
@@ -795,7 +799,7 @@ func (h *BotHandler) updateRSSWatch(c *gin.Context) {
 	item, err := manager.UpdateRSSWatch(c.Request.Context(), ownerID, c.Param("id"), assistant.RSSWatchUpdateInput{
 		NotificationTargets: targets,
 		FeedURL:             payload.FeedURL, TwitterHandle: payload.TwitterHandle,
-		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyPrompt: payload.ReplyPrompt, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt,
+		FeedURLs: payload.FeedURLs, TwitterHandles: payload.TwitterHandles, MediaMode: payload.MediaMode, ReplyPrompt: payload.ReplyPrompt, ReplyMode: payload.ReplyMode, JudgeModelID: payload.JudgeModelID, TranslationModelID: payload.TranslationModelID, MediaFailure: payload.MediaFailure, RuleMode: payload.RuleMode, JudgePrompt: payload.JudgePrompt, Delivery: payload.Delivery,
 		Interval: time.Duration(payload.IntervalSeconds) * time.Second,
 	})
 	if err != nil {
@@ -972,7 +976,7 @@ func botTaskPayloadFromReminder(item assistant.Reminder) botTaskPayload {
 		LastIssueCursor: item.LastIssueCursor, LastReleaseTag: item.LastReleaseTag, LastStarCount: item.LastStarCount, LastNotifiedStarCount: item.LastNotifiedStarCount,
 		CreatedAt: item.CreatedAt, ConsumesQuota: taskConsumesQuota(item),
 		FeedURL: item.FeedURL, FeedSource: item.FeedSource, FeedHandle: item.FeedHandle,
-		FeedMediaMode: item.FeedMediaMode, FeedReplyPrompt: item.FeedReplyPrompt, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
+		FeedMediaMode: item.FeedMediaMode, FeedReplyPrompt: item.FeedReplyPrompt, FeedReplyMode: item.FeedReplyMode, FeedJudgeModelID: item.FeedJudgeModelID, FeedTranslationModelID: item.FeedTranslationModelID, FeedMediaFailure: item.FeedMediaFailure, FeedRuleMode: item.FeedRuleMode, FeedJudgePrompt: item.FeedJudgePrompt, FeedDelivery: item.FeedDelivery, FeedTopicPoolSize: assistant.RSSTopicPoolSize(item, time.Now()), LastFeedItemID: item.LastFeedItemID, LastFeedPublishedAt: item.LastFeedPublishedAt,
 		FeedSources:         rssWatchSourcesForWeb(item),
 		NotificationEnabled: item.NotificationEnabled, NotificationTargets: reminderDeliveryTargetsForWeb(item),
 	}

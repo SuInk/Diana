@@ -32,6 +32,8 @@ type RSSWatchCreateInput struct {
 	ReplyPrompt                                                                                                         *string
 	NotificationTargets                                                                                                 []ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt, RuleMode, MediaMode, MediaFailure, ReplyMode, JudgeModelID, TranslationModelID string
+	// Delivery 是 push（默认，直接推送）或 pool（存进话题池），见 rss_topic_pool.go。
+	Delivery string
 	// FeedURLs / TwitterHandles 是多来源写法，和单数字段合并后共用同一套规则。
 	FeedURLs, TwitterHandles                                        []string
 	Interval                                                        time.Duration
@@ -45,6 +47,7 @@ type RSSWatchUpdateInput struct {
 	NotificationTargets                                                                                                 *[]ReminderDeliveryTarget
 	FeedURL, TwitterHandle, JudgePrompt, RuleMode, MediaMode, MediaFailure, ReplyMode, JudgeModelID, TranslationModelID *string
 	FeedURLs, TwitterHandles                                                                                            *[]string
+	Delivery                                                                                                            *string
 	Interval                                                                                                            time.Duration
 }
 
@@ -78,6 +81,8 @@ type dianaRSSWatch struct {
 	ReplyPrompt        *string   `json:"reply_prompt,omitempty"`
 	JudgeModelID       string    `json:"judge_model_id,omitempty"`
 	TranslationModelID string    `json:"translation_model_id,omitempty"`
+	Delivery           string    `json:"delivery"`
+	TopicPoolSize      int       `json:"topic_pool_size,omitempty"`
 	Interval           string    `json:"interval"`
 	Status             string    `json:"status"`
 	LastError          string    `json:"last_error,omitempty"`
@@ -131,6 +136,7 @@ func (*dianaRSSWatchTool) InputSchema() map[string]any {
 		"media_failure":        toolStringParam("媒体分析失败：retry 重试不推进游标；text 降级文字"),
 		"rule_mode":            toolStringParam("all 全部推送、regex 正则匹配、llm 模型判断；省略时按规则是否为空兼容旧订阅"),
 		"judge_prompt":         toolStringParam("可选；留空直接推送全部新条目，填写则说明通知条件和回复要求，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"delivery":             toolEnumParam(rssDeliveryDescription, rssDeliveryPush, rssDeliveryPool),
 		"id":                   toolStringParam("订阅 ID，可用 list 查"),
 	})
 }
@@ -169,7 +175,7 @@ func (t *dianaRSSWatchTool) Run(ctx context.Context, input map[string]any) (stri
 		item, err := t.runtime.CreateRSSWatch(ctx, RSSWatchCreateInput{
 			FeedURL: configToolString(input, "feed_url"), TwitterHandle: configToolString(input, "twitter_handle"),
 			FeedURLs: append(configToolStringSlice(input, "feed_urls"), configToolStringSlice(input, "bilibili")...), TwitterHandles: configToolStringSlice(input, "twitter_handles"),
-			ReplyPrompt: rssReplyPromptFromTool(input), ReplyMode: configToolString(input, "reply_mode"), JudgeModelID: configToolString(input, "judge_model_id"), TranslationModelID: configToolString(input, "translation_model_id"), MediaMode: configToolString(input, "media_mode"), MediaFailure: configToolString(input, "media_failure"), RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Interval: interval,
+			ReplyPrompt: rssReplyPromptFromTool(input), ReplyMode: configToolString(input, "reply_mode"), JudgeModelID: configToolString(input, "judge_model_id"), TranslationModelID: configToolString(input, "translation_model_id"), MediaMode: configToolString(input, "media_mode"), MediaFailure: configToolString(input, "media_failure"), RuleMode: configToolString(input, "rule_mode"), JudgePrompt: configToolString(input, "judge_prompt"), Delivery: configToolString(input, "delivery"), Interval: interval,
 			Platform: t.event.Platform, ProfileID: t.event.ProfileID, ContextNamespace: t.event.ContextNamespace,
 			OwnerID: targetID, GroupID: t.event.GroupID, UserID: targetID, RequestedBy: t.event.UserID,
 		})
@@ -361,7 +367,11 @@ func (r *Runtime) CreateRSSWatch(ctx context.Context, input RSSWatchCreateInput)
 	if err := r.validateRSSReplyOptions(&replyOptions); err != nil {
 		return Reminder{}, err
 	}
-	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), mode, judge, mediaMode, mediaFailure, replyOptions, interval, sources, input.NotificationTargets...)
+	delivery, ok := normalizeRSSDelivery(input.Delivery)
+	if !ok {
+		return Reminder{}, errRSSDelivery
+	}
+	return r.addRSSWatch(event, firstNonEmpty(strings.TrimSpace(input.OwnerID), event.UserID), mode, judge, mediaMode, mediaFailure, delivery, replyOptions, interval, sources, input.NotificationTargets...)
 }
 
 // resolveRSSWatchSources 把用户填的一堆用户名和 Feed 地址整理成来源列表。
@@ -461,7 +471,7 @@ func rssWatchMessage(sources []ReminderFeedSource) string {
 	return "监控 " + strings.Join(labels, "、")
 }
 
-func (r *Runtime) addRSSWatch(event MessageEvent, owner, mode, judge, mediaMode, mediaFailure string, replyOptions rssReplyOptions, interval time.Duration, sources []ReminderFeedSource, targets ...ReminderDeliveryTarget) (Reminder, error) {
+func (r *Runtime) addRSSWatch(event MessageEvent, owner, mode, judge, mediaMode, mediaFailure, delivery string, replyOptions rssReplyOptions, interval time.Duration, sources []ReminderFeedSource, targets ...ReminderDeliveryTarget) (Reminder, error) {
 	if r.reminders == nil {
 		return Reminder{}, fmt.Errorf("当前未启用定时任务存储")
 	}
@@ -474,7 +484,7 @@ func (r *Runtime) addRSSWatch(event MessageEvent, owner, mode, judge, mediaMode,
 		ContextNamespace: event.ContextNamespace, OwnerID: owner, GroupID: event.GroupID, UserID: event.UserID,
 		RequestedBy:     firstNonEmpty(event.taskRequester, event.UserID),
 		FeedReplyPrompt: replyOptions.Prompt, FeedReplyMode: replyOptions.Mode, FeedJudgeModelID: replyOptions.JudgeModelID, FeedTranslationModelID: replyOptions.TranslationModelID,
-		Message: rssWatchMessage(sources), FeedJudgePrompt: judge, FeedRuleMode: mode, FeedMediaMode: mediaMode, FeedMediaFailure: mediaFailure,
+		Message: rssWatchMessage(sources), FeedJudgePrompt: judge, FeedRuleMode: mode, FeedMediaMode: mediaMode, FeedMediaFailure: mediaFailure, FeedDelivery: delivery,
 		TriggerAt: now.Add(interval), IntervalSeconds: int64(interval / time.Second), CreatedAt: now,
 	}
 	applyRSSWatchSources(&item, sources)
@@ -586,6 +596,14 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 	if err != nil {
 		return Reminder{}, err
 	}
+	delivery := current.FeedDelivery
+	if input.Delivery != nil {
+		delivery = *input.Delivery
+	}
+	delivery, ok = normalizeRSSDelivery(delivery)
+	if !ok {
+		return Reminder{}, errRSSDelivery
+	}
 	interval := time.Duration(current.IntervalSeconds) * time.Second
 	if input.Interval > 0 {
 		interval = input.Interval
@@ -623,6 +641,11 @@ func (r *Runtime) UpdateRSSWatch(ctx context.Context, owner, id string, input RS
 		item.FeedReplyPrompt = replyOptions.Prompt
 		item.FeedReplyMode, item.FeedJudgeModelID, item.FeedTranslationModelID = replyOptions.Mode, replyOptions.JudgeModelID, replyOptions.TranslationModelID
 		item.FeedMediaMode, item.FeedMediaFailure = mediaMode, mediaFailure
+		item.FeedDelivery = delivery
+		if delivery != rssDeliveryPool {
+			// 改回直接推送就不再需要池子，免得留着过期内容。
+			item.FeedTopicPoolJSON = ""
+		}
 		item.IntervalSeconds, item.TriggerAt = int64(interval/time.Second), time.Now().Add(interval)
 		item.PendingDelivery, item.PendingSince, item.LastError, item.ConsecutiveFailures = "", time.Time{}, "", 0
 		item.PendingDeliveryAttempts = 0
@@ -798,6 +821,10 @@ func rssWatchUpdateFromTool(input map[string]any) (RSSWatchUpdateInput, error) {
 		raw := strings.TrimSpace(fmt.Sprint(value))
 		result.JudgePrompt = &raw
 	}
+	if value, present := input["delivery"]; present {
+		raw := strings.TrimSpace(fmt.Sprint(value))
+		result.Delivery = &raw
+	}
 	if raw := strings.TrimSpace(configToolString(input, "interval")); raw != "" {
 		value, err := parseRSSWatchInterval(raw)
 		if err != nil {
@@ -824,7 +851,7 @@ func rssWatchSourceLabels(item Reminder) []string {
 func rssWatchForTool(item Reminder) *dianaRSSWatch {
 	// 订阅地址里的令牌（?token=、?key=）只给模型掩码；原样交回掩码改订阅时由
 	// restoreMaskedFeedURLs 换回原文。
-	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, MediaMode: item.FeedMediaMode, ReplyPrompt: item.FeedReplyPrompt, ReplyMode: item.FeedReplyMode, JudgeModelID: item.FeedJudgeModelID, TranslationModelID: item.FeedTranslationModelID, MediaFailure: item.FeedMediaFailure, RuleMode: item.FeedRuleMode, JudgePrompt: item.FeedJudgePrompt, Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
+	return &dianaRSSWatch{ID: item.ID, OwnerID: item.OwnerID, Sources: rssWatchSourceLabels(item), FeedURL: secretmask.URLs(item.FeedURL), Source: item.FeedSource, TwitterHandle: item.FeedHandle, MediaMode: item.FeedMediaMode, ReplyPrompt: item.FeedReplyPrompt, ReplyMode: item.FeedReplyMode, JudgeModelID: item.FeedJudgeModelID, TranslationModelID: item.FeedTranslationModelID, MediaFailure: item.FeedMediaFailure, RuleMode: item.FeedRuleMode, JudgePrompt: item.FeedJudgePrompt, Delivery: firstNonEmpty(item.FeedDelivery, rssDeliveryPush), TopicPoolSize: RSSTopicPoolSize(item, time.Now()), Interval: formatDurationUnits(time.Duration(item.IntervalSeconds) * time.Second), NextRunAt: item.TriggerAt, LastRunAt: item.LastRunAt, Status: scheduleStatus(item), LastError: secretmask.Text(item.LastError), PendingDelivery: strings.TrimSpace(item.PendingDelivery) != ""}
 }
 
 func marshalDianaRSSWatchResult(result dianaRSSWatchResult) (string, error) {

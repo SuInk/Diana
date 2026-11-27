@@ -4481,6 +4481,14 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
+		if rssTopicContext := contextPreload.rssTopicContext; rssTopicContext != "" {
+			volatile = append(volatile, llm.Message{
+				Role:       llm.RoleUser,
+				Content:    rssTopicContext,
+				Priority:   llm.MessagePriorityMemory,
+				AtomicText: true,
+			})
+		}
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
 		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
@@ -7635,6 +7643,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	if !event.webChat && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardChunksWithResult(ctx, event, reply, cfg, decoration.Verbatim)
 		if err == nil {
+			r.markRSSTopicPoolShared(event, reply)
 			if messageID == "" {
 				return nil, nil
 			}
@@ -7652,7 +7661,11 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
 	}
-	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
+	ids, err := r.deliverChunks(ctx, event, chunks, cfg, decoration)
+	if err == nil {
+		r.markRSSTopicPoolShared(event, reply)
+	}
+	return ids, err
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行
@@ -8957,6 +8970,13 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 				selected = append(selected, entry)
 			}
 		}
+		if rssWatchUsesTopicPool(item) {
+			if err := r.addRSSTopicPoolEntries(item, *source, change.FeedName, selected); err != nil {
+				return "", err
+			}
+			advance()
+			return "", nil
+		}
 		notice, err := r.renderRSSWatchEntries(ctx, item, selected, rssReplyMode(item, mode), plugin, settings)
 		if err != nil {
 			return "", err
@@ -8976,6 +8996,19 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 		return "", err
 	}
 	if !decision.Notify {
+		advance()
+		return "", nil
+	}
+	if rssWatchUsesTopicPool(item) {
+		// 话题池只存条目本身，判断器写的处理后文案用不上；判断结果没列出原文链接
+		// 时整批都算命中。
+		selected := rssReplyMatchedItems(decision.Reply, change.Items)
+		if len(selected) == 0 {
+			selected = change.Items
+		}
+		if err := r.addRSSTopicPoolEntries(item, *source, change.FeedName, selected); err != nil {
+			return "", err
+		}
 		advance()
 		return "", nil
 	}

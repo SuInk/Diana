@@ -171,6 +171,7 @@ func subscriptionKindFields() map[string]any {
 		"media_failure":        toolStringParam("媒体分析失败：retry 重试不推进游标；text 降级文字"),
 		"rule_mode":            toolStringParam("rss：all 全推、regex 正则、llm 模型；省略时空规则全推，否则 LLM"),
 		"judge_prompt":         toolStringParam("rss：regex 填 Go 正则，llm 填通知条件和回复要求，all 留空，最多 " + itoa(maximumRSSJudgeRunes) + " 字"),
+		"delivery":             toolEnumParam("rss："+rssDeliveryDescription, rssDeliveryPush, rssDeliveryPool),
 		"repository":           toolStringParam("github：owner/repo 或仓库链接；create 必填"),
 		"branch":               toolStringParam("github：分支，留空为默认分支"),
 		"watch": toolEnumArrayParam("github：监控类型；create 省略为全部，update 省略不改",
