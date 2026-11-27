@@ -26,8 +26,8 @@ func TestWebSearchPageKeepsMetadataAndWholeSnippets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := len([]rune(raw)); n > 8_000 {
-		t.Fatalf("output runes = %d, want <= 8000", n)
+	if n := webSearchModelRunes(raw); n > 8_000 {
+		t.Fatalf("model view runes = %d, want <= 8000", n)
 	}
 	var got webSearchResult
 	if err := json.Unmarshal([]byte(raw), &got); err != nil {
@@ -72,7 +72,7 @@ func TestWebSearchPageSplitsOversizedHit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := len([]rune(raw)); n > 2_000 {
+		if n := webSearchModelRunes(raw); n > 2_000 {
 			t.Fatalf("page has %d runes", n)
 		}
 		var got webSearchResult

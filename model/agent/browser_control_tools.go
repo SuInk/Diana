@@ -135,7 +135,7 @@ func (t *BrowserExtReadTool) Run(ctx context.Context, input map[string]any) (str
 	}
 	offset := intFromInput(input, "offset", 0)
 	text := []rune(page.Text)
-	return pageByLines(text, offset, ToolOutputBudget(ctx), func(chunk string, end int) any {
+	return pageByLines(text, offset, readingPageBudget(ctx), func(chunk string, end int) any {
 		out := page
 		out.Text, out.Offset, out.TotalChars = chunk, min(max(offset, 0), len(text)), len(text)
 		if end < len(text) {

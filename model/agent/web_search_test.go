@@ -379,8 +379,8 @@ func TestWebSearchPageSplitsEscapedContentWithoutLoss(t *testing.T) {
 				return
 			}
 			var decoded webSearchResult
-			if err := json.Unmarshal([]byte(output), &decoded); err != nil || len([]rune(output)) > 2_000 || decoded.SourceNotice == "" {
-				failure = fmt.Errorf("invalid page (%d runes): %v", len([]rune(output)), err)
+			if err := json.Unmarshal([]byte(output), &decoded); err != nil || webSearchModelRunes(output) > 2_000 || decoded.SourceNotice == "" {
+				failure = fmt.Errorf("invalid page (%d runes): %v", webSearchModelRunes(output), err)
 				return
 			}
 			got.WriteString(decoded.Content)

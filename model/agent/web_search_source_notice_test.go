@@ -38,7 +38,7 @@ func TestSearchSourceNoticeSurvivesContentPaging(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SourceNotice == "" || len([]rune(raw)) > 1000 {
+	if result.SourceNotice == "" || webSearchModelRunes(raw) > 1000 {
 		t.Fatal("notice lost or output budget exceeded")
 	}
 }

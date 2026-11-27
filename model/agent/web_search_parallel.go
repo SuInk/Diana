@@ -46,7 +46,7 @@ func (t *WebSearchTool) Run(ctx context.Context, input map[string]any) (string, 
 		}
 		t.pages.put(key, result)
 	}
-	return webSearchPage(result, webSearchPageArgs(input), offset, ToolOutputBudget(ctx))
+	return webSearchPage(result, webSearchPageArgs(input), offset, readingPageBudget(ctx))
 }
 
 // search executes model-supplied queries independently. Free search engines are
