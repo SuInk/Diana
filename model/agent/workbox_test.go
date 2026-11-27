@@ -70,8 +70,8 @@ func TestBoxRunArgsMatchYujiaxueIsolation(t *testing.T) {
 	c := newBoxContainer(testBoxConfig(), nil)
 	args := strings.Join(c.runArgs(), " ")
 	for _, want := range []string{
-		"--name diana-box ", "--user 1000:1000", "--cap-drop ALL", "--cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER",
-		"--security-opt no-new-privileges", "--read-only", "--network " + boxNetworkName, "--volume diana-work:/work",
+		"--name diana-sandbox ", "--user 1000:1000", "--cap-drop ALL", "--cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER",
+		"--security-opt no-new-privileges", "--read-only", "--network " + boxNetworkName, "--volume diana-sandbox:/work",
 		"--tmpfs /tmp:rw,nosuid,nodev,size=256m", "--memory 1g", "--cpus 2", "--pids-limit 256",
 		"--workdir /work", "--hostname box", "--init", "--label " + boxLayoutLabel + "=" + boxLayoutScopes, c.cfg.Image + " sleep infinity",
 	} {
@@ -81,7 +81,7 @@ func TestBoxRunArgsMatchYujiaxueIsolation(t *testing.T) {
 	}
 	// 容器里不能有机密：不挂宿主目录，容器本身不带环境变量（HOME 等按范围在 exec 时给）。
 	for i, arg := range c.runArgs() {
-		if arg == "--volume" && c.runArgs()[i+1] != "diana-work:/work" {
+		if arg == "--volume" && c.runArgs()[i+1] != "diana-sandbox:/work" {
 			t.Fatalf("box must only mount its named volume, got %q", c.runArgs()[i+1])
 		}
 		if arg == "--env" {
@@ -108,7 +108,7 @@ func TestBoxScopeExecArgs(t *testing.T) {
 	for _, want := range []string{
 		"exec --user 10007:10007 --workdir " + root, "--env HOME=" + root + "/.home", "--env TMPDIR=" + root + "/tmp",
 		"--env UV_CACHE_DIR=" + root + "/.home/.cache/uv", "--env NPM_CONFIG_PREFIX=" + root + "/.home/.npm-global",
-		"--env PATH=" + root + "/.home/.local/bin:", " diana-box",
+		"--env PATH=" + root + "/.home/.local/bin:", " diana-sandbox",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("exec args missing %q:\n%s", want, args)
@@ -157,11 +157,11 @@ func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
 }
 
 // testBoxShape 是按 testBoxConfig 起出来的容器在 inspect 里的网络模式、资源上限和额外能力。
-const testBoxShape = "diana-box 1073741824 2000000000 256 " + boxCapAdd
+const testBoxShape = "diana-sandbox 1073741824 2000000000 256 " + boxCapAdd
 
 // running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间，再加 testBoxShape。
 func boxInspectReply(image, id, started string) dockerResult {
-	return boxInspectReplyShape(image, id, started, "diana-box 1073741824 2000000000 256 "+`["CAP_FOWNER","CAP_CHOWN","CAP_DAC_OVERRIDE"]`)
+	return boxInspectReplyShape(image, id, started, "diana-sandbox 1073741824 2000000000 256 "+`["CAP_FOWNER","CAP_CHOWN","CAP_DAC_OVERRIDE"]`)
 }
 
 func boxInspectReplyShape(image, id, started, shape string) dockerResult {
@@ -310,11 +310,11 @@ func TestNormalizeBoxCaps(t *testing.T) {
 func TestBoxEnsureRecreatesOnShapeChange(t *testing.T) {
 	for name, shape := range map[string]string{
 		"offline container, networked config": "none 1073741824 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
-		"memory changed":                      "diana-box 536870912 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
-		"cpus changed":                        "diana-box 1073741824 1000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
-		"pids changed":                        "diana-box 1073741824 2000000000 64 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
-		"caps reduced":                        "diana-box 1073741824 2000000000 256 " + `["CAP_CHOWN"]`,
-		"caps missing":                        "diana-box 1073741824 2000000000 256 null",
+		"memory changed":                      "diana-sandbox 536870912 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"cpus changed":                        "diana-sandbox 1073741824 1000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"pids changed":                        "diana-sandbox 1073741824 2000000000 64 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"caps reduced":                        "diana-sandbox 1073741824 2000000000 256 " + `["CAP_CHOWN"]`,
+		"caps missing":                        "diana-sandbox 1073741824 2000000000 256 null",
 	} {
 		fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 			if args[0] == "inspect" {
@@ -455,7 +455,7 @@ func TestBoxExecRecreatesVanishedContainerOnce(t *testing.T) {
 			if slices.Contains(args, boxExecScript) {
 				attempts++
 				if attempts == 1 {
-					return dockerResult{code: 1, stderr: "Error response from daemon: No such container: diana-box"}
+					return dockerResult{code: 1, stderr: "Error response from daemon: No such container: diana-sandbox"}
 				}
 			}
 		}
@@ -645,7 +645,7 @@ func TestBoxDaemonPolicy(t *testing.T) {
 }
 
 // TestBoxRealDocker 用真 Docker 跑一遍：联网、挡宿主回环和私网、超时杀进程组、文件进出、
-// 范围之间互相看不到、重置只清自己。容器和卷用测试专用的名字，不碰正在用的 diana-box。
+// 范围之间互相看不到、重置只清自己。容器和卷用测试专用的名字，不碰正在用的 diana-sandbox。
 // 需要本机有 Docker：DIANA_BOX_DOCKER_TEST=1 scripts/test-serial.sh ./model/agent
 func TestBoxRealDocker(t *testing.T) {
 	if os.Getenv("DIANA_BOX_DOCKER_TEST") != "1" {
@@ -1029,7 +1029,7 @@ func TestMigrateLegacyBoxes(t *testing.T) {
 			steps = append(steps, "rm container "+args[len(args)-1])
 		case args[0] == "run" && slices.Contains(args, boxLegacyCopyScript):
 			steps = append(steps, "copy")
-			if !strings.Contains(joined, "--volume "+legacyVolume+":/old:ro") || !strings.Contains(joined, "--volume diana-work:/new") || !strings.Contains(joined, "--network none") {
+			if !strings.Contains(joined, "--volume "+legacyVolume+":/old:ro") || !strings.Contains(joined, "--volume diana-sandbox:/new") || !strings.Contains(joined, "--network none") {
 				t.Errorf("copy container: %s", joined)
 			}
 		}

@@ -30,7 +30,7 @@ func TestBoxWorkspacePathHintNamesSavedFile(t *testing.T) {
 	writeHintWorkspaceFile(t, "downloads/laowu_video.mp4")
 	command := `ffmpeg -y -i /work/downloads/laowu_video.mp4 -vf "fps=15" -loop 0 /work/downloads/laowu.gif`
 	hint := r.boxWorkspacePathHint(event, true, command, boxMissingFFmpeg)
-	for _, want := range []string{`inputs 写 ["downloads/laowu_video.mp4"]`, "/work/inbox/laowu_video.mp4", "不在容器里"} {
+	for _, want := range []string{`inputs 写 ["downloads/laowu_video.mp4"]`, "命令里改用 inbox/laowu_video.mp4", "不在容器里"} {
 		if !strings.Contains(hint, want) {
 			t.Fatalf("hint missing %q: %s", want, hint)
 		}

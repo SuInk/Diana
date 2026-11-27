@@ -58,11 +58,12 @@ const (
 	boxHomeDir   = ".home"
 	boxTmpDir    = "tmp"
 
-	// 共享容器和卷的名字；旧版每会话一个时名字后面带哈希。
-	boxContainerName = "diana-box"
-	boxVolumeName    = "diana-work"
+	// 共享容器、卷和专用网络的名字。旧版每会话一个，叫 diana-box-<哈希>、diana-work-<哈希>，
+	// 见 boxLegacyContainerPrefix。
+	boxContainerName = "diana-sandbox"
+	boxVolumeName    = "diana-sandbox"
 
-	boxNetworkName = "diana-box"
+	boxNetworkName = "diana-sandbox"
 	boxLabel       = "diana.box"
 	// boxLayoutLabel 标出容器和卷是新布局（共享容器、按范围分目录）。
 	boxLayoutLabel  = "diana.box.layout"
@@ -92,7 +93,7 @@ const (
 
 // BoxConfig 是 work box 的部署设置（= 雨夹雪 config.ts 的 sandbox 段）。
 type BoxConfig struct {
-	// Image 留空时用内置 Dockerfile 本地构建的 diana-box:<哈希>；自定义镜像由部署方自己准备。
+	// Image 留空时用内置 Dockerfile 本地构建的 diana-sandbox:<哈希>；自定义镜像由部署方自己准备。
 	Image      string
 	DockerHost string
 	Memory     string
@@ -105,7 +106,7 @@ type BoxConfig struct {
 // 「镜像不一致」重建（雨夹雪靠手动改 tg-box:N）。
 func BuiltinBoxImage() string {
 	sum := sha256.Sum256([]byte(box.Dockerfile))
-	return "diana-box:" + hex.EncodeToString(sum[:])[:12]
+	return "diana-sandbox:" + hex.EncodeToString(sum[:])[:12]
 }
 
 // BoxConfigFromEnv 读部署方的覆盖项，其余照雨夹雪的默认值。
@@ -1432,8 +1433,8 @@ func boxContainerHasRuns(ctx context.Context, docker dockerRunner, name string) 
 
 // boxLegacyPrefix 是旧版每会话一个的容器和卷的名字前缀（diana-box-<哈希>、diana-work-<哈希>）。
 const (
-	boxLegacyContainerPrefix = boxContainerName + "-"
-	boxLegacyVolumePrefix    = boxVolumeName + "-"
+	boxLegacyContainerPrefix = "diana-box-"
+	boxLegacyVolumePrefix    = "diana-work-"
 	// boxLegacyKeyLabel 是旧版卷上记会话 key（十六进制）的标签。
 	boxLegacyKeyLabel = "diana.box.key"
 )
