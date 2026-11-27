@@ -77,7 +77,6 @@ func TestMigrateLogTimestampsRewritesOffsetForm(t *testing.T) {
 
 // 迁移的目的不是把字符串改好看，而是让这些行重新出现在统计里。
 func TestMigrateLogTimestampsRestoresDashboardVisibility(t *testing.T) {
-	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "log-tz-visibility.db")
 	store, err := NewSQLiteStore(path)
 	if err != nil {
@@ -94,12 +93,8 @@ func TestMigrateLogTimestampsRestoresDashboardVisibility(t *testing.T) {
 		noon.Add(-time.Hour).Format(time.RFC3339Nano), `{"input_tokens":7,"output_tokens":3}`)
 
 	// 迁移前：这条日志在统计里是看不见的，这正是要修的故障。
-	before, err := store.DashboardStatsForDay(ctx, noon, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if before.LLMCalls != 0 {
-		t.Fatalf("前提不成立：带偏移的行本不该被统计到，实际 calls=%d", before.LLMCalls)
+	if before := localDayLLMUsage(t, store, noon); before.Calls != 0 {
+		t.Fatalf("前提不成立：带偏移的行本不该被统计到，实际 calls=%d", before.Calls)
 	}
 	if _, err := store.db.Exec(`DELETE FROM app_state WHERE key = ?`, logTimestampUTCMigrationKey); err != nil {
 		t.Fatal(err)
@@ -114,12 +109,8 @@ func TestMigrateLogTimestampsRestoresDashboardVisibility(t *testing.T) {
 	}
 	defer func() { _ = reopened.Close() }()
 
-	after, err := reopened.DashboardStatsForDay(ctx, noon, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if after.LLMCalls != 1 || after.LLMInputTokens != 7 || after.LLMOutputTokens != 3 {
-		t.Fatalf("迁移后仍然统计不到：calls=%d input=%d output=%d，期望 1/7/3", after.LLMCalls, after.LLMInputTokens, after.LLMOutputTokens)
+	if after := localDayLLMUsage(t, reopened, noon); after.Calls != 1 || after.InputTokens != 7 || after.OutputTokens != 3 {
+		t.Fatalf("迁移后仍然统计不到：calls=%d input=%d output=%d，期望 1/7/3", after.Calls, after.InputTokens, after.OutputTokens)
 	}
 }
 

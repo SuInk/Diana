@@ -6454,17 +6454,6 @@ a.nav-action {
   white-space: nowrap;
 }
 
-.dashboard-chart-switch {
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
-/* 柱区拉到和「按天」日历一样高（月份行 + 七行格子 + 图例行），切换视图时卡片不跳。 */
-.dashboard-chart .spark-bars,
-.dashboard-chart .spark-y {
-  height: 111px;
-}
-
 .setup-callout {
   display: flex;
   align-items: center;

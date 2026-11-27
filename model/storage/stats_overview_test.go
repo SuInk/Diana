@@ -12,7 +12,7 @@ import (
 	"github.com/SuInk/diana/model/applog"
 )
 
-func TestDashboardOverviewAggregatesLongSpanTrendsGroupsAndErrors(t *testing.T) {
+func TestDashboardOverviewAggregatesLongSpanGroupsAndErrors(t *testing.T) {
 	s, err := NewSQLiteStore(filepath.Join(t.TempDir(), "overview.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -88,17 +88,15 @@ INSERT INTO inbound_events (
 	}
 
 	got, err := s.DashboardOverview(ctx, DashboardOverviewQuery{
-		Since:            since,
-		Until:            until,
-		ProfileID:        "bot-a",
-		Granularity:      "day",
-		UTCOffsetSeconds: 8 * 3600,
-		ErrorLimit:       10,
+		Since:      since,
+		Until:      until,
+		ProfileID:  "bot-a",
+		ErrorLimit: 10,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Granularity != "day" || got.Current.Messages != 2 || got.Current.Handled != 1 || got.Current.Errors != 1 {
+	if got.Current.Messages != 2 || got.Current.Handled != 1 || got.Current.Errors != 1 {
 		t.Fatalf("unexpected current event summary: %+v", got.Current)
 	}
 	if got.Current.ActiveGroups != 1 || got.Current.ActiveUsers != 2 || got.Current.AppErrorLogs != 1 {
@@ -115,8 +113,5 @@ INSERT INTO inbound_events (
 	}
 	if got.Errors.EventErrors != 1 || got.Errors.LLMFailedCalls != 1 || got.Errors.AppErrorLogs != 1 || len(got.Errors.Categories) != 3 || len(got.Errors.Recent) != 3 {
 		t.Fatalf("unexpected errors overview: %+v", got.Errors)
-	}
-	if len(got.Trend) == 0 {
-		t.Fatal("expected non-empty trend buckets")
 	}
 }

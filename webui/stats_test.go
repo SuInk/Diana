@@ -64,16 +64,8 @@ func TestStatsCollectorObserveAndSnapshot(t *testing.T) {
 	if snapshot.ByKind["group"] != 2 || snapshot.ByKind["private"] != 1 {
 		t.Fatalf("ByKind = %v", snapshot.ByKind)
 	}
-	if len(snapshot.Hourly) != 24 {
-		t.Fatalf("len(Hourly) = %d, want 24", len(snapshot.Hourly))
-	}
-	last := snapshot.Hourly[len(snapshot.Hourly)-1]
-	if last.Total != 2 || last.Handled != 2 {
-		t.Fatalf("current hour bucket = %+v, want total 2 handled 2", last)
-	}
-	prev2 := snapshot.Hourly[len(snapshot.Hourly)-3]
-	if prev2.Total != 1 || prev2.Errors != 1 {
-		t.Fatalf("bucket 2h ago = %+v, want total 1 errors 1", prev2)
+	if snapshot.TodayHandled != 2 || snapshot.TodayErrors != 1 {
+		t.Fatalf("today handled/errors = %d/%d, want 2/1", snapshot.TodayHandled, snapshot.TodayErrors)
 	}
 	if snapshot.UptimeSeconds != 90 {
 		t.Fatalf("UptimeSeconds = %d, want 90", snapshot.UptimeSeconds)
@@ -185,12 +177,9 @@ func TestStatsCollectorMergesLateBaselineIntoLiveCounts(t *testing.T) {
 	if snapshot.LastEventAt == nil || !snapshot.LastEventAt.Equal(now) {
 		t.Fatalf("LastEventAt = %v, want %s", snapshot.LastEventAt, now)
 	}
-	buckets := map[int64]hourBucket{}
-	for _, bucket := range snapshot.Hourly {
-		buckets[bucket.HourUnix] = bucket
-	}
-	if buckets[currentHour].Total != 2 || buckets[currentHour].Handled != 2 || buckets[lastHour].Total != 3 {
-		t.Fatalf("hourly = %#v", snapshot.Hourly)
+	if current, previous := collector.all.buckets[currentHour], collector.all.buckets[lastHour]; current == nil || previous == nil ||
+		current.Total != 2 || current.Handled != 2 || previous.Total != 3 {
+		t.Fatalf("buckets = %#v", collector.all.buckets)
 	}
 	if len(collector.all.buckets) != 2 {
 		t.Fatalf("buckets outside the 48h window were kept: %#v", collector.all.buckets)

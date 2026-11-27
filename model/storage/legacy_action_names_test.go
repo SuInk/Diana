@@ -82,8 +82,8 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 	}
 	defer func() { _ = store.Close() }()
 
-	// 固定在当地午后：DashboardStatsForDay 的窗口是「本地零点 -> now」，用 time.Now()
-	// 会在午夜前后一分钟内把条目甩到前一天去。
+	// 固定在当地午后，统计窗口取「本地零点 -> now」：用 time.Now() 会在午夜前后
+	// 一分钟内把条目甩到前一天去。
 	local := time.Now()
 	now := time.Date(local.Year(), local.Month(), local.Day(), 14, 0, 0, 0, time.Local)
 	for _, action := range []string{"llm_usage", "diana.llm_usage", "chatbot.llm_usage", "assistant.llm_usage"} {
@@ -99,13 +99,10 @@ func TestInboundEventTokenUsageReadsLegacyActionNames(t *testing.T) {
 
 	rerunLogActionNameMigration(t, store)
 
-	stats, err := store.DashboardStatsForDay(ctx, now, "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	usage := localDayLLMUsage(t, store, now)
 	// 四个名字各记一条，一条都不能漏。
-	if stats.LLMCalls != 4 || stats.LLMInputTokens != 40 || stats.LLMOutputTokens != 20 {
-		t.Fatalf("totals = calls:%d input:%d output:%d, want 4/40/20", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
+	if usage.Calls != 4 || usage.InputTokens != 40 || usage.OutputTokens != 20 {
+		t.Fatalf("totals = calls:%d input:%d output:%d, want 4/40/20", usage.Calls, usage.InputTokens, usage.OutputTokens)
 	}
 }
 
@@ -139,12 +136,9 @@ func TestAppendLogNormalizesCreatedAtToUTC(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stats, err := store.DashboardStatsForDay(ctx, noon, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.LLMCalls != 1 || stats.LLMInputTokens != 7 || stats.LLMOutputTokens != 3 {
-		t.Fatalf("带本地时区写入的日志没被统计到：calls=%d input=%d output=%d，期望 1/7/3", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens)
+	usage := localDayLLMUsage(t, store, noon)
+	if usage.Calls != 1 || usage.InputTokens != 7 || usage.OutputTokens != 3 {
+		t.Fatalf("带本地时区写入的日志没被统计到：calls=%d input=%d output=%d，期望 1/7/3", usage.Calls, usage.InputTokens, usage.OutputTokens)
 	}
 
 	// 落库的文本必须是 UTC 形态，否则按字符串排序的查询迟早还会踩坑。
@@ -158,4 +152,15 @@ func TestAppendLogNormalizesCreatedAtToUTC(t *testing.T) {
 	if _, offset := entries[0].CreatedAt.Zone(); offset != 0 {
 		t.Fatalf("created_at 不是 UTC：%s", entries[0].CreatedAt.Format(time.RFC3339Nano))
 	}
+}
+
+// localDayLLMUsage 读 now 所在当地日零点到 now 的 LLM 用量，和仪表盘「今日」口径一致。
+func localDayLLMUsage(t *testing.T, store *SQLiteStore, now time.Time) applog.UsageSummary {
+	t.Helper()
+	since := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	report, err := store.LLMUsageReport(context.Background(), applog.UsageFilter{}, since, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report.Usage
 }

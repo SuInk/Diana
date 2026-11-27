@@ -163,7 +163,7 @@ const footnote = computed(() => {
   min-width: 0;
 }
 
-/* 滚动条藏起来：Windows 上它会占一截高度，卡片就和 24 小时视图对不齐了。触控板和
+/* 滚动条藏起来：Windows 上它会占一截高度，卡片底部会多出一条。触控板和
    手指照样能横向滑动，打开时已经停在最近这头。 */
 .calendar-scroll {
   overflow-x: auto;

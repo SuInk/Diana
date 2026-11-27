@@ -22,12 +22,12 @@ type statsStatusProvider interface {
 	Status() assistant.RuntimeStatus
 }
 
-// hourBucket 按小时聚合事件量；hourUnix 是该小时起点的 Unix 秒。
+// hourBucket 按小时聚合事件量，用来算「今日」计数；HourUnix 是该小时起点的 Unix 秒。
 type hourBucket struct {
-	HourUnix int64 `json:"hour_unix"`
-	Total    int64 `json:"total"`
-	Handled  int64 `json:"handled"`
-	Errors   int64 `json:"errors"`
+	HourUnix int64
+	Total    int64
+	Handled  int64
+	Errors   int64
 }
 
 // statsCounters 是一份计数。控制台可以按机器人切换，所以同一批事件要同时记进
@@ -243,7 +243,6 @@ type StatsProfileCounters struct {
 	TodayHandled  int64            `json:"today_handled"`
 	TodayErrors   int64            `json:"today_errors"`
 	ByKind        map[string]int64 `json:"by_kind"`
-	Hourly        []hourBucket     `json:"hourly"`
 	AvgReplyMS    int64            `json:"avg_reply_ms"`
 	LastEventAt   *time.Time       `json:"last_event_at,omitempty"`
 }
@@ -259,7 +258,6 @@ type StatsSnapshot struct {
 	TodayHandled  int64                           `json:"today_handled"`
 	TodayErrors   int64                           `json:"today_errors"`
 	ByKind        map[string]int64                `json:"by_kind"`
-	Hourly        []hourBucket                    `json:"hourly"`
 	AvgReplyMS    int64                           `json:"avg_reply_ms"`
 	LastEventAt   *time.Time                      `json:"last_event_at,omitempty"`
 	Bot           StatsBotSummary                 `json:"bot"`
@@ -277,7 +275,6 @@ func (s StatsSnapshot) counters() StatsProfileCounters {
 		TodayHandled:  s.TodayHandled,
 		TodayErrors:   s.TodayErrors,
 		ByKind:        s.ByKind,
-		Hourly:        s.Hourly,
 		AvgReplyMS:    s.AvgReplyMS,
 		LastEventAt:   s.LastEventAt,
 	}
@@ -314,9 +311,8 @@ func (s *StatsCollector) Snapshot() StatsSnapshot {
 	return s.SnapshotForProfile("")
 }
 
-// SnapshotForProfile 汇总某台机器人的统计数据，botProfileID 留空表示全部机器人；
-// hourly 覆盖最近 24 小时并按时间升序补零。运行时长这类进程级指标不分机器人，
-// 本来就只有一份。
+// SnapshotForProfile 汇总某台机器人的统计数据，botProfileID 留空表示全部机器人。
+// 运行时长这类进程级指标不分机器人，本来就只有一份。
 func (s *StatsCollector) SnapshotForProfile(botProfileID string) StatsSnapshot {
 	now := s.now()
 
@@ -351,17 +347,6 @@ func (s *StatsCollector) SnapshotForProfile(botProfileID string) StatsSnapshot {
 	if !counters.lastEventAt.IsZero() {
 		last := counters.lastEventAt
 		snapshot.LastEventAt = &last
-	}
-
-	currentHour := now.Truncate(time.Hour).Unix()
-	snapshot.Hourly = make([]hourBucket, 0, 24)
-	for i := 23; i >= 0; i-- {
-		hour := currentHour - int64(i)*3600
-		if bucket, ok := counters.buckets[hour]; ok {
-			snapshot.Hourly = append(snapshot.Hourly, *bucket)
-		} else {
-			snapshot.Hourly = append(snapshot.Hourly, hourBucket{HourUnix: hour})
-		}
 	}
 
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
