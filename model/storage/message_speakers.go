@@ -190,9 +190,16 @@ func (s *SQLiteStore) ListMessageSpeakers(ctx context.Context, query assistant.M
 	}
 	where := `session = ?`
 	args := []any{session}
+	sessions := nonEmptySessions(query.Sessions)
 	if query.CrossSession {
 		where = `session LIKE ? ESCAPE '\'`
 		args = []any{escapeMessageHistoryLike(prefix) + "%"}
+		if len(sessions) > 0 {
+			where += ` AND session IN (` + placeholders(len(sessions)) + `)`
+			for _, item := range sessions {
+				args = append(args, item)
+			}
+		}
 	}
 	name := strings.ToLower(strings.TrimSpace(query.Name))
 	handle := strings.TrimPrefix(name, "@")
@@ -239,6 +246,13 @@ GROUP BY user_id ORDER BY `+order+` LIMIT ?`, append(args, limit)...)
 	if query.CrossSession {
 		scope = `session LIKE ? ESCAPE '\'`
 		scopeArgs = []any{escapeMessageHistoryLike(prefix) + "%"}
+		// 昵称也只取这些会话里用过的：别的群里的群名片同样是那边才看得到的信息。
+		if len(sessions) > 0 {
+			scope += ` AND session IN (` + placeholders(len(sessions)) + `)`
+			for _, item := range sessions {
+				scopeArgs = append(scopeArgs, item)
+			}
+		}
 	}
 	rows, err := s.eventReader().QueryContext(ctx, `
 SELECT user_id, sender_name, username, first_seen, last_seen FROM message_speakers
@@ -301,4 +315,40 @@ func containsString(values []string, target string) bool {
 		}
 	}
 	return false
+}
+
+// ListSpeakerSessions 列出账号在名录里出现过的、以 sessionPrefix 开头的会话。
+// 走 idx_message_speakers_user，只读这个人的几行。
+func (s *SQLiteStore) ListSpeakerSessions(ctx context.Context, userID string, sessionPrefix string) ([]string, error) {
+	defer s.observeStorage(ctx, "ListSpeakerSessions", "read")()
+	userID, sessionPrefix = strings.TrimSpace(userID), strings.TrimSpace(sessionPrefix)
+	if s == nil || s.db == nil || userID == "" || sessionPrefix == "" {
+		return nil, nil
+	}
+	rows, err := s.eventReader().QueryContext(ctx, `
+SELECT DISTINCT session FROM message_speakers WHERE user_id = ? AND session LIKE ? ESCAPE '\'
+ORDER BY session`, userID, escapeMessageHistoryLike(sessionPrefix)+"%")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var sessions []string
+	for rows.Next() {
+		var session string
+		if err := rows.Scan(&session); err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, session)
+	}
+	return sessions, rows.Err()
+}
+
+func nonEmptySessions(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }

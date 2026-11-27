@@ -496,6 +496,12 @@ func (s *SQLiteStore) SearchMessageEvents(ctx context.Context, query assistant.M
 	if query.CrossSession {
 		where += ` AND session LIKE ? ESCAPE '\'`
 		args = append(args, escapeMessageHistoryLike(query.SessionPrefix)+"%")
+		if sessions := nonEmptySessions(query.Sessions); len(sessions) > 0 {
+			where += ` AND session IN (` + placeholders(len(sessions)) + `)`
+			for _, session := range sessions {
+				args = append(args, session)
+			}
+		}
 	} else {
 		where += ` AND session = ?`
 		args = append(args, query.Session)

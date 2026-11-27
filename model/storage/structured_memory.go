@@ -715,13 +715,13 @@ func (s *SQLiteStore) ListStructuredMemories(ctx context.Context, query assistan
 			args = append(args, linkedUserID, escapeMessageHistoryLike(namespace+"group:")+"%", escapeMessageHistoryLike(namespace+"private:")+"%")
 		}
 	}
-	if query.CrossGroup && strings.TrimSpace(query.GroupSessionPrefix) != "" {
+	if sessionClause, sessionArgs, ok := crossGroupMemorySessionClause(query); ok {
 		scopeClause = `(` + scopeClause + ` OR (
 		visibility = 'session' AND sensitive = 0 AND COALESCE(source_group_id, '') != ''
-		AND source_session LIKE ? ESCAPE '\'
+		AND ` + sessionClause + `
 		AND ((subject_user_id = '' AND kind IN ('fact', 'summary')) OR (subject_user_id != '' AND subject_user_id = ?))
 	))`
-		args = append(args, escapeMessageHistoryLike(strings.TrimSpace(query.GroupSessionPrefix))+"%", subjectUserID)
+		args = append(append(args, sessionArgs...), subjectUserID)
 	}
 	kindClause := ""
 	if len(query.CrossPlatformGroupPrefixes) > 0 {

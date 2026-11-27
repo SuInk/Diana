@@ -53,9 +53,9 @@ func (r *Runtime) speakerStore() MessageSpeakerStore {
 	return speakers
 }
 
-// resolveSpeakers 在当前会话（crossGroup 时是同一机器人的全部群）的名录里按昵称、
-// 旧昵称、@用户名或账号找人。精确命中的排前面。
-func (r *Runtime) resolveSpeakers(ctx context.Context, event MessageEvent, name string, crossGroup bool, limit int) ([]MessageSpeaker, error) {
+// resolveSpeakers 在当前会话（crossGroup 时是同一机器人的全部群，sessions 非空时只限
+// 这几个会话）的名录里按昵称、旧昵称、@用户名或账号找人。精确命中的排前面。
+func (r *Runtime) resolveSpeakers(ctx context.Context, event MessageEvent, name string, crossGroup bool, sessions []string, limit int) ([]MessageSpeaker, error) {
 	store := r.speakerStore()
 	name = strings.TrimSpace(name)
 	if store == nil || name == "" {
@@ -65,7 +65,7 @@ func (r *Runtime) resolveSpeakers(ctx context.Context, event MessageEvent, name 
 	defer cancel()
 	query := MessageSpeakerQuery{Session: sessionKey(event), Name: name, Limit: limit}
 	if crossGroup {
-		query.CrossSession, query.SessionPrefix = true, groupHistorySessionPrefix(event)
+		query.CrossSession, query.SessionPrefix, query.Sessions = true, groupHistorySessionPrefix(event), sessions
 	}
 	speakers, err := store.ListMessageSpeakers(ctx, query)
 	return r.dropSelfSpeakers(event, speakers), err

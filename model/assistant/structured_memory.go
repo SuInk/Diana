@@ -185,11 +185,16 @@ type StructuredMemoryQuery struct {
 	ExcludeKinds       []MemoryKind
 	CrossGroup         bool
 	GroupSessionPrefix string
+	// CrossGroupRestricted 为 true 时，其他群的记忆只从 CrossGroupSessions 这几个会话里取
+	// （当前发言者核实过也在的群，见 crossGroupVisibility）；列表为空就一条都不取。
+	CrossGroupRestricted bool
+	CrossGroupSessions   []string
 	// Explicitly opted-in foreign profile namespaces. Only non-personal,
 	// non-sensitive group memories may be selected through these prefixes.
 	CrossPlatformGroupPrefixes []string
 	// SharedPublicOnly reserves candidate space for related facts/summaries
-	// outside the current conversation. It never performs membership checks.
+	// outside the current conversation. Membership is applied through
+	// CrossGroupRestricted/CrossGroupSessions, not here.
 	SharedPublicOnly bool
 	// CurrentSessionOnly 只保留当前会话作用域的记忆，连当前发言者自己的
 	// visibility=user 记忆也一并排除。它与 CrossGroup 是两件事：后者控制的是
