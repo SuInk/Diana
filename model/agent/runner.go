@@ -1567,7 +1567,7 @@ func (r *Runner) speakerToolPrompt() string {
 	}
 	if r.loader != nil {
 		if catalog := r.loader.speakerCatalog(); catalog != "" {
-			sections = append(sections, "【当前发言者另有的按需工具】用法同上面的按需目录，按括号里的签名填参数、用 tools_execute 调用：\n"+catalog)
+			sections = append(sections, "【当前发言者另有的按需工具】这里只列名字和用途，参数定义没随请求带上：参数拿不准就先 "+ToolsLoadToolName+"（names 填这里的名字）取定义，再用 tools_execute 调用；参数填错时会返回完整定义，已加载过契约的直接调用：\n"+catalog)
 		}
 	}
 	shared := r.toolRules(r.sharedToolPredicate(), false)
