@@ -31,8 +31,13 @@ type twitterPost struct {
 	Text         string
 	AuthorName   string
 	AuthorHandle string
-	Media        []twitterMedia
-	Replies      []twitterPost
+	URL          string
+	// RepostedBy 非空表示链接指向一条转推：作者是原作者，这里是转推的人。
+	RepostedBy string
+	// Quote 是被引用的推文，只展开一层，和订阅推送的写法一致。
+	Quote   *twitterPost
+	Media   []twitterMedia
+	Replies []twitterPost
 	// Article 是这条推文附带的 X 站内长文（Article）；没有长文时为空值。
 	Article twitterArticle
 	Stats   []resolverStat
@@ -72,6 +77,7 @@ type twitterPostPayload struct {
 	Author      json.RawMessage       `json:"author"`
 	User        json.RawMessage       `json:"user"`
 	Quote       json.RawMessage       `json:"quote"`
+	RepostedBy  json.RawMessage       `json:"reposted_by"`
 	Article     json.RawMessage       `json:"article"`
 	Media       json.RawMessage       `json:"media"`
 	Images      []twitterMediaPayload `json:"images"`
@@ -269,7 +275,8 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 		return twitterPost{}, false
 	}
 	post := twitterPost{
-		ID: strings.TrimSpace(payload.ID),
+		ID:  strings.TrimSpace(payload.ID),
+		URL: strings.TrimSpace(payload.URL),
 		Text: firstNonEmpty(
 			strings.TrimSpace(payload.Text),
 			strings.TrimSpace(payload.FullText),
@@ -287,6 +294,11 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 		{"回复", payload.Replies},
 	}
 	post.AuthorName, post.AuthorHandle = parseTwitterAuthor(firstNonEmptyRawMessage(payload.Author, payload.User))
+	if name, handle := parseTwitterAuthor(payload.RepostedBy); handle != "" {
+		post.RepostedBy = "@" + handle
+	} else {
+		post.RepostedBy = name
+	}
 	post.Article = parseTwitterArticle(payload.Article)
 	post.Media = parseTwitterMediaContainer(payload.Media)
 	if len(post.Media) == 0 {
@@ -302,6 +314,11 @@ func parseTwitterPostPayloadDepth(data []byte, depth int) (twitterPost, bool) {
 	if depth < 2 && len(payload.Quote) > 0 && string(payload.Quote) != "null" {
 		if quoted, ok := parseTwitterPostPayloadDepth(payload.Quote, depth+1); ok {
 			post.Media = append(post.Media, quoted.Media...)
+			if strings.TrimSpace(quoted.Text) != "" || quoted.URL != "" {
+				quoted.Quote = nil
+				quoted.Replies = nil
+				post.Quote = &quoted
+			}
 			// 转推别人的长文时，长文挂在 quote 上，顶层只有一句评论。
 			if !post.Article.hasContent() {
 				post.Article = quoted.Article
@@ -496,14 +513,34 @@ func twitterMetaText(nickname string, post twitterPost) string {
 	case handle != "":
 		lines = append(lines, "作者：@"+handle)
 	}
+	if post.RepostedBy != "" {
+		lines = append(lines, "转推："+post.RepostedBy)
+	}
 	if text := strings.TrimSpace(post.Text); text != "" {
 		lines = append(lines, "文案："+text)
+	}
+	if quote := post.Quote; quote != nil {
+		lines = append(lines, "", "引用推文 "+twitterQuoteAuthor(*quote))
+		if text := strings.TrimSpace(quote.Text); text != "" {
+			lines = append(lines, text)
+		}
+		if quote.URL != "" {
+			lines = append(lines, quote.URL)
+		}
 	}
 	return strings.Join(lines, "\n")
 }
 
-// appendTwitterStats 把互动数接在所有文字的最后：正文后面可能还跟着展开的
-// 长文和作者补充，统计要落在最后一个文字节点上，而不是夹在文案和长文之间。
+func twitterQuoteAuthor(post twitterPost) string {
+	if handle := strings.TrimSpace(post.AuthorHandle); handle != "" {
+		return "@" + handle
+	}
+	return firstNonEmpty(strings.TrimSpace(post.AuthorName), "原作者")
+}
+
+// appendTwitterStats 把互动数接在当前最后一个文字节点上。调用方要在展开长文之后、
+// 追加作者补充之前调用：互动数只属于第一条帖子，不能夹在文案和长文之间，也不跟在
+// 后面的作者补充下面。
 func appendTwitterStats(metaText string, nodes []OutgoingMessage, post twitterPost) (string, []OutgoingMessage) {
 	stats := resolverStatsLine(post.Stats...)
 	if stats == "" || len(nodes) == 0 {

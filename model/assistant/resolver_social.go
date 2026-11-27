@@ -338,6 +338,7 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		metaText += "\n\n" + articleText
 		post.Media = append(post.Media, post.Article.Media...)
 	}
+	metaText, nodes = appendTwitterStats(metaText, nodes, post)
 	for index, reply := range post.Replies {
 		text := strings.TrimSpace(reply.Text)
 		if text == "" {
@@ -348,7 +349,6 @@ func (p *ResolverPlugin) resolveTwitterMedia(ctx context.Context, req PluginRequ
 		metaText += "\n\n" + label
 		post.Media = append(post.Media, reply.Media...)
 	}
-	metaText, nodes = appendTwitterStats(metaText, nodes, post)
 	post.Media = dedupeTwitterMedia(post.Media)
 	if len(post.Media) == 0 {
 		return resolverSocialResult{Handled: true, Context: metaText, ForwardMessages: nodes}

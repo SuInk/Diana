@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -104,22 +105,27 @@ func TestWeiboContextEndsWithCounts(t *testing.T) {
 	}
 }
 
-func TestTwitterStatsFollowLastTextNode(t *testing.T) {
+func TestTwitterStatsStayOnFirstPost(t *testing.T) {
+	t.Setenv("DIANA_RESOLVER_NICKNAME", "测试")
 	post, ok := parseTwitterPostResponse([]byte(`{"tweet":{"id":"1","text":"hello","author":{"name":"测试","screen_name":"tester"},"views":1234567,"likes":8901,"retweets":234,"bookmarks":56,"replies":7}}`))
 	if !ok {
 		t.Fatal("parse failed")
 	}
+	post.Replies = []twitterPost{{ID: "2", Text: "后续"}}
 	const stats = "浏览 123.4万 · 点赞 8901 · 转推 234 · 收藏 56 · 回复 7"
-	metaText := twitterMetaText("测试", post)
-	if strings.Contains(metaText, stats) {
-		t.Fatalf("stats should not sit between author and body:\n%s", metaText)
+	plugin := NewResolverPlugin(nil)
+	plugin.twitterPostFetcher = func(context.Context, string) (twitterPost, bool) { return post, true }
+	result := plugin.resolveTwitterMedia(context.Background(), PluginRequest{}, "https://x.com/tester/status/1")
+	if len(result.ForwardMessages) != 2 {
+		t.Fatalf("nodes = %#v", result.ForwardMessages)
 	}
-	nodes := []OutgoingMessage{{Text: metaText}, {Text: "作者补充 1：后续"}}
-	metaText, nodes = appendTwitterStats(metaText+"\n\n作者补充 1：后续", nodes, post)
-	if !strings.HasSuffix(metaText, "作者补充 1：后续\n"+stats) {
-		t.Fatalf("context should end with stats:\n%s", metaText)
+	if !strings.HasSuffix(result.ForwardMessages[0].Text, "文案：hello\n"+stats) {
+		t.Fatalf("stats should follow the first post: %q", result.ForwardMessages[0].Text)
 	}
-	if strings.Contains(nodes[0].Text, stats) || !strings.HasSuffix(nodes[1].Text, stats) {
-		t.Fatalf("stats should land on the last text node: %#v", nodes)
+	if strings.Contains(result.ForwardMessages[1].Text, stats) {
+		t.Fatalf("follow-up should not carry stats: %q", result.ForwardMessages[1].Text)
+	}
+	if !strings.Contains(result.Context, stats+"\n\n作者补充 1：后续") || strings.HasSuffix(result.Context, stats) {
+		t.Fatalf("context stats should sit before follow-ups:\n%s", result.Context)
 	}
 }

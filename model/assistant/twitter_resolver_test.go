@@ -410,3 +410,28 @@ func TestTwitterResolverLiveDownloadsPhotoVideoAndGIF(t *testing.T) {
 		})
 	}
 }
+
+func TestTwitterMetaTextShowsRetweetAndQuoteLikeSubscription(t *testing.T) {
+	post, ok := parseTwitterPostResponse([]byte(`{"tweet":{
+		"id":"1","text":"说得对","author":{"name":"原作者","screen_name":"origin"},
+		"reposted_by":{"name":"转推的人","screen_name":"sharer"},
+		"quote":{"id":"0","url":"https://x.com/quoted/status/0","text":"被引用的话","author":{"name":"被引用","screen_name":"quoted"}}
+	}}`))
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	want := "小助手识别：小蓝鸟学习版\n作者：原作者 (@origin)\n转推：@sharer\n文案：说得对\n\n引用推文 @quoted\n被引用的话\nhttps://x.com/quoted/status/0"
+	if got := twitterMetaText("小助手", post); got != want {
+		t.Fatalf("meta text = %q, want %q", got, want)
+	}
+}
+
+func TestTwitterMetaTextWithoutRetweetOrQuoteIsUnchanged(t *testing.T) {
+	post, ok := parseTwitterPostResponse([]byte(`{"tweet":{"id":"1","text":"原创","author":{"name":"A","screen_name":"a"},"reposted_by":null}}`))
+	if !ok {
+		t.Fatal("parse failed")
+	}
+	if got := twitterMetaText("小助手", post); got != "小助手识别：小蓝鸟学习版\n作者：A (@a)\n文案：原创" {
+		t.Fatalf("meta text = %q", got)
+	}
+}
