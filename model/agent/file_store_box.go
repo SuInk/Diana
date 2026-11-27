@@ -115,6 +115,8 @@ func parseBoxStat(out string) (fs.FileInfo, error) {
 	case "regular file", "regular empty file":
 	case "directory":
 		mode = fs.ModeDir
+	case "symbolic link":
+		mode = fs.ModeSymlink
 	default:
 		mode = fs.ModeIrregular
 	}

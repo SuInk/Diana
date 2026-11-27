@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 )
 
@@ -28,6 +27,7 @@ type ExtractArchiveTool struct {
 	protected protectedFiles
 	maxBytes  int64
 	maxFiles  int
+	store     FileStore
 }
 
 func (t *ExtractArchiveTool) Name() string { return "extract_archive" }
@@ -67,46 +67,44 @@ func (t *ExtractArchiveTool) Run(ctx context.Context, input map[string]any) (str
 			return "", err
 		}
 	}
-	archivePath, err := safePath(t.root, archiveRel)
+	store := toolFileStore(t.store, t.root, t.protected)
+	archiveClean, err := store.Resolve(archiveRel)
 	if err != nil {
 		return "", err
 	}
-	destPath, err := safePath(t.root, destRel)
+	destClean, err := store.Resolve(destRel)
 	if err != nil {
 		return "", err
 	}
-	if t.protected.blocked(archivePath) {
+	if store.Blocked(archiveClean) {
 		return "", errProtectedFile(archiveRel)
 	}
-	if t.protected.blocked(destPath) {
+	if store.Blocked(destClean) {
 		return "", errProtectedFile(destRel)
 	}
 	// keep/ 的写入要登记归属和配额，解压绕不过那套账，直接不让落进去。
-	if rel, relErr := filepath.Rel(t.root, destPath); relErr == nil && (rel == WorkspaceKeepDir || strings.HasPrefix(rel, WorkspaceKeepDir+string(filepath.Separator))) {
+	if _, inKeep := keepLocation(destClean); inKeep {
 		return "", errors.New("extract_archive cannot write into keep/; extract to tmp/ or outputs/ first")
 	}
-	work, err := os.OpenRoot(t.root)
-	if err != nil {
-		return "", err
+	if destClean == "." {
+		return "", errNotEmptyDestination
 	}
-	defer work.Close()
-	// os.Root keeps filesystem operations confined even if a path changes after safePath.
-	source, err := work.Open(archiveRel)
-	if err != nil {
-		return "", err
-	}
-	defer source.Close()
-	info, err := source.Stat()
+	info, err := store.Stat(ctx, archiveClean)
 	if err != nil {
 		return "", err
 	}
 	if !info.Mode().IsRegular() {
 		return "", errors.New("archive must be a regular file")
 	}
-	if err := archiveEmptyDestination(work, destRel); err != nil {
+	source, err := store.Open(ctx, archiveClean)
+	if err != nil {
 		return "", err
 	}
-	stage, err := os.MkdirTemp(t.root, ".extract-archive-")
+	defer source.Close()
+	if err := emptyDestination(ctx, store, destClean); err != nil {
+		return "", err
+	}
+	stage, err := os.MkdirTemp(store.stageDir(), ".extract-archive-")
 	if err != nil {
 		return "", err
 	}
@@ -142,13 +140,13 @@ func (t *ExtractArchiveTool) Run(ctx context.Context, input map[string]any) (str
 			return fmt.Errorf("duplicate archive entry %q", name)
 		}
 		seen[clean] = true
-		target, err := safePath(t.root, filepath.Join(destRel, filepath.FromSlash(clean)))
+		target, err := store.Resolve(joinStoreRel(destClean, clean))
 		if err != nil {
 			return err
 		}
-		for current := target; current != filepath.Dir(current); current = filepath.Dir(current) {
-			if t.protected.blocked(current) {
-				return errProtectedFile(relPathForOutput(t.root, current))
+		for current := target; current != "."; current = path.Dir(current) {
+			if store.Blocked(current) {
+				return errProtectedFile(current)
 			}
 		}
 		if mode.IsDir() {
@@ -181,7 +179,12 @@ func (t *ExtractArchiveTool) Run(ctx context.Context, input map[string]any) (str
 	}
 	switch lower := strings.ToLower(archiveRel); {
 	case strings.HasSuffix(lower, ".zip"):
-		zr, err := zip.NewReader(source, info.Size())
+		// 两种后端打开的文件都能随机读：宿主是 *os.File，容器是读进内存的 bytes.Reader。
+		at, ok := source.(io.ReaderAt)
+		if !ok {
+			return "", errors.New("archive cannot be read at random offsets")
+		}
+		zr, err := zip.NewReader(at, info.Size())
 		if err != nil {
 			return "", err
 		}
@@ -244,109 +247,10 @@ func (t *ExtractArchiveTool) Run(ctx context.Context, input map[string]any) (str
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if err := archiveEmptyDestination(work, destRel); err != nil {
+	if err := store.ImportTree(ctx, destClean, stage); err != nil {
 		return "", err
 	}
-	created := []string{}
-	published := false
-	defer func() {
-		if !published {
-			for i := len(created) - 1; i >= 0; i-- {
-				_ = work.Remove(created[i])
-			}
-		}
-	}()
-	mkdir := func(rel string) error {
-		parts := strings.Split(filepath.ToSlash(filepath.Clean(rel)), "/")
-		current := ""
-		for _, part := range parts {
-			current = path.Join(current, part)
-			if err := work.Mkdir(current, 0o755); err == nil {
-				created = append(created, current)
-			} else if !errors.Is(err, fs.ErrExist) {
-				return err
-			}
-			stat, err := work.Lstat(current)
-			if err != nil {
-				return err
-			}
-			if !stat.IsDir() || stat.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("destination component %q is not a directory", current)
-			}
-		}
-		return nil
-	}
-	if err := mkdir(destRel); err != nil {
-		return "", err
-	}
-	err = fs.WalkDir(staged.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if name == "." {
-			return nil
-		}
-		target := filepath.Join(destRel, filepath.FromSlash(name))
-		if entry.IsDir() {
-			return mkdir(target)
-		}
-		if _, err := safePath(t.root, target); err != nil {
-			return err
-		}
-		if t.protected.blocked(filepath.Join(t.root, target)) {
-			return errProtectedFile(target)
-		}
-		in, err := staged.Open(name)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := work.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err != nil {
-			return err
-		}
-		created = append(created, target)
-		_, err = io.Copy(out, &archiveContextReader{ctx: ctx, reader: in})
-		closeErr := out.Close()
-		if err != nil {
-			return err
-		}
-		return closeErr
-	})
-	if err != nil {
-		return "", err
-	}
-	published = true
-	return marshalToolResult(map[string]any{"archive_path": relPathForOutput(t.root, archivePath), "destination": relPathForOutput(t.root, destPath), "files": files, "entries": count, "bytes": total})
-}
-
-func archiveEmptyDestination(root *os.Root, rel string) error {
-	info, err := root.Lstat(rel)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("destination must be a new or empty directory")
-	}
-	dir, err := root.Open(rel)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	names, err := dir.Readdirnames(1)
-	if err != nil && err != io.EOF {
-		return err
-	}
-	if len(names) > 0 {
-		return errors.New("destination must be a new or empty directory")
-	}
-	return nil
+	return marshalToolResult(map[string]any{"archive_path": archiveClean, "destination": destClean, "files": files, "entries": count, "bytes": total})
 }
 
 type archiveBudgetReader struct {
