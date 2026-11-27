@@ -243,7 +243,13 @@ func (s *boxFileStore) ImportTree(ctx context.Context, rel, dir string) error {
 		return err
 	}
 	reader, writer := io.Pipe()
-	go func() { writer.CloseWithError(writeBoxImportTar(writer, dir)) }()
+	go func() {
+		defer recoverGoroutinePanic("box_file_store.importTar")
+		// 先于 recover 运行：打包中途 panic 也要关掉管道，否则 docker exec 一直等 stdin。
+		err := errors.New("工作区解压：打包中断")
+		defer func() { writer.CloseWithError(err) }()
+		err = writeBoxImportTar(writer, dir)
+	}()
 	_, err = s.runWrite(ctx, "import", rel, boxImportScript, reader,
 		s.abs(rel), s.box.Root(), s.limitKiB(), strconv.FormatInt(size, 10))
 	_ = reader.Close()
