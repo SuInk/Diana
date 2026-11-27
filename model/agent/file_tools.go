@@ -306,6 +306,7 @@ func parseFileEdits(raw any) ([]fileEdit, error) {
 type GrepTool struct {
 	root      string
 	protected protectedFiles
+	store     FileStore
 }
 
 func (t *GrepTool) Name() string           { return "grep" }
@@ -343,10 +344,12 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 	if err != nil {
 		return "", fmt.Errorf("pattern 不是有效的正则: %w", err)
 	}
-	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
+	store := toolFileStore(t.store, t.root, t.protected)
+	baseRel, base, release, err := searchTree(ctx, store, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	globPattern := strings.TrimSpace(stringFromInput(input, "glob"))
 	around := intFromInput(input, "context", 0)
 	if around < 0 {
@@ -364,7 +367,7 @@ func (t *GrepTool) Run(ctx context.Context, input map[string]any) (string, error
 	)
 	budget := toolBudget(ctx)
 	err = walkAgentFiles(ctx, base, func(fullPath, rel string, _ fs.FileInfo) error {
-		if t.protected.blocked(fullPath) {
+		if store.Blocked(joinStoreRel(baseRel, rel)) {
 			return nil
 		}
 		if globPattern != "" && !matchGlobPath(globPattern, rel) {
@@ -562,6 +565,7 @@ func pageInput(input map[string]any) (int, int) {
 type FindFilesTool struct {
 	root      string
 	protected protectedFiles
+	store     FileStore
 }
 
 func (t *FindFilesTool) Name() string           { return "find_files" }
@@ -585,10 +589,12 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	if pattern == "" {
 		return "", errors.New("pattern is required")
 	}
-	base, err := safeSearchBase(t.root, stringFromInput(input, "path"))
+	store := toolFileStore(t.store, t.root, t.protected)
+	baseRel, base, release, err := searchTree(ctx, store, stringFromInput(input, "path"))
 	if err != nil {
 		return "", err
 	}
+	defer release()
 	offset, limit := pageInput(input)
 	var (
 		found []string
@@ -597,7 +603,7 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	)
 	budget := toolBudget(ctx)
 	err = walkAgentFiles(ctx, base, func(fullPath, rel string, _ fs.FileInfo) error {
-		if t.protected.blocked(fullPath) || !matchGlobPath(pattern, rel) {
+		if store.Blocked(joinStoreRel(baseRel, rel)) || !matchGlobPath(pattern, rel) {
 			return nil
 		}
 		total++
@@ -625,20 +631,26 @@ func (t *FindFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 
 // ---- 共用 ------------------------------------------------------------------
 
-// safeSearchBase 解析 grep / find_files 的起点目录。起点不存在时 WalkDir 会静默返回空结果，
-// 模型读到「没有匹配」会以为文件真不存在，所以这里先把「目录写错了」单独报出来。
-func safeSearchBase(root, rel string) (string, error) {
-	base, err := safePath(root, rel)
+// searchTree 解析 grep / find_files 的起点目录，返回它在工作区里的相对路径，以及一个可以
+// 在宿主机上遍历的目录（容器后端是拷出来的临时副本，用完调 release）。起点不存在时
+// WalkDir 会静默返回空结果，模型读到「没有匹配」会以为文件真不存在，所以这里先把
+// 「目录写错了」单独报出来。
+func searchTree(ctx context.Context, store FileStore, raw string) (string, string, func(), error) {
+	rel, err := store.Resolve(raw)
 	if err != nil {
-		return "", err
+		return "", "", nil, err
 	}
-	if _, err := os.Stat(base); err != nil {
+	if _, err := store.Stat(ctx, rel); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", fmt.Errorf("工作目录里没有 %s 这个目录（%w）；省略 path 就从工作目录根开始查", strings.TrimSpace(rel), fs.ErrNotExist)
+			return "", "", nil, fmt.Errorf("工作目录里没有 %s 这个目录（%w）；省略 path 就从工作目录根开始查", strings.TrimSpace(raw), fs.ErrNotExist)
 		}
-		return "", err
+		return "", "", nil, err
 	}
-	return base, nil
+	dir, release, err := store.LocalTree(ctx, rel)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return rel, dir, release, nil
 }
 
 // walkAgentFiles 遍历工作目录下的普通文件，回调拿到绝对路径和相对路径。

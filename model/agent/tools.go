@@ -182,12 +182,13 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	protected := agentProtectedFiles(cfg)
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
 	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。
-	registry.Register(&ListFilesTool{root: root, protected: protected})
-	registry.Register(&ReadFileTool{root: root, protected: protected})
+	// 只读工具经由 cfg.Files 读文件：没设时是 root 上的宿主目录。
+	registry.Register(&ListFilesTool{root: root, protected: protected, store: cfg.Files})
+	registry.Register(&ReadFileTool{root: root, protected: protected, store: cfg.Files})
 	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
 	// 没有它们的话，模型定位一个文件只能靠 list_files 一层层翻或者猜路径。
-	registry.Register(&GrepTool{root: root, protected: protected})
-	registry.Register(&FindFilesTool{root: root, protected: protected})
+	registry.Register(&GrepTool{root: root, protected: protected, store: cfg.Files})
+	registry.Register(&FindFilesTool{root: root, protected: protected, store: cfg.Files})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
 		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
@@ -1149,6 +1150,8 @@ func cloneToolAllowlist(values map[string]bool) map[string]bool {
 type ListFilesTool struct {
 	root      string
 	protected protectedFiles
+	// store 不为空时文件经由它读写（比如工作区容器里的会话范围），否则是 root 上的宿主目录。
+	store FileStore
 }
 
 // Name 返回列目录工具名称。
@@ -1178,14 +1181,15 @@ func (t *ListFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	if rel == "" {
 		rel = "."
 	}
-	path, err := safePath(t.root, rel)
+	store := toolFileStore(t.store, t.root, t.protected)
+	storeRel, err := store.Resolve(rel)
 	if err != nil {
 		return "", err
 	}
-	if t.protected.blocked(path) {
+	if store.Blocked(storeRel) {
 		return "", errProtectedFile(rel)
 	}
-	entries, err := os.ReadDir(path)
+	entries, err := store.ReadDir(ctx, storeRel)
 	if err != nil {
 		return "", workspaceNotFound(rel, err)
 	}
@@ -1198,7 +1202,7 @@ func (t *ListFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 	out := []entry{}
 	hidden := 0
 	for _, item := range entries {
-		if t.protected.blocked(filepath.Join(path, item.Name())) {
+		if store.Blocked(joinStoreRel(storeRel, item.Name())) {
 			hidden++
 			continue
 		}
@@ -1207,8 +1211,8 @@ func (t *ListFilesTool) Run(ctx context.Context, input map[string]any) (string, 
 			itemType = "directory"
 		}
 		row := entry{Name: item.Name(), Type: itemType}
-		if info, err := item.Info(); err == nil && !item.IsDir() {
-			row.Size = info.Size()
+		if !item.IsDir() {
+			row.Size = item.Size()
 		}
 		out = append(out, row)
 	}
@@ -1257,6 +1261,7 @@ func nextOffsetIfMore(next, total int) int {
 type ReadFileTool struct {
 	root      string
 	protected protectedFiles
+	store     FileStore
 }
 
 type RunCommandTool struct {
@@ -1540,21 +1545,22 @@ func (t *ReadFileTool) Run(ctx context.Context, input map[string]any) (string, e
 	if rel == "" {
 		return "", errors.New("path is required")
 	}
-	path, err := safePath(t.root, rel)
+	store := toolFileStore(t.store, t.root, t.protected)
+	storeRel, err := store.Resolve(rel)
 	if err != nil {
 		return "", err
 	}
-	if t.protected.blocked(path) {
+	if store.Blocked(storeRel) {
 		return "", errProtectedFile(rel)
 	}
-	info, err := os.Stat(path)
+	info, err := store.Stat(ctx, storeRel)
 	if err != nil {
 		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
 	}
-	file, err := os.Open(path)
+	file, err := store.Open(ctx, storeRel)
 	if err != nil {
 		return "", err
 	}
@@ -1608,7 +1614,7 @@ func (t *ReadFileTool) Run(ctx context.Context, input map[string]any) (string, e
 
 // readFileLineSegment 读第 lineNo 行从第 charOffset 个字起、能装进 budget 的一段，并写明
 // 这一行多长、下一段的 char_offset。整行流式读，不整行放进内存。
-func readFileLineSegment(file *os.File, rel string, lineNo, charOffset, budget int) (string, error) {
+func readFileLineSegment(file io.ReadSeeker, rel string, lineNo, charOffset, budget int) (string, error) {
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
