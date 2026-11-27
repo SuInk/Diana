@@ -1,8 +1,10 @@
 package assistant
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,8 +18,8 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// TestLiveButtonsFinalizeReplay 拿生产 debug-traces 里主回复的第一步请求，在
-// agent_finalize 上补 buttons 字段重放，量模型多常填、填的是什么。默认跳过：
+// TestLiveButtonsFinalizeReplay 拿生产 debug-traces 里主回复的请求（.json 或 .json.gz），在
+// send 上补 buttons 字段重放，量模型多常填、填的是什么。默认跳过：
 //
 //	DIANA_LIVE_LLM=1 DIANA_TEST_LLM_* DIANA_BUTTONS_REPLAY_DIR=<traces> go test ./model/assistant -run TestLiveButtonsFinalizeReplay
 func TestLiveButtonsFinalizeReplay(t *testing.T) {
@@ -31,10 +33,10 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 	}
 	var samples []sample
 	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || !strings.HasSuffix(path, "-reply.json") {
+		if err != nil || entry.IsDir() || !(strings.HasSuffix(path, "-reply.json") || strings.HasSuffix(path, "-reply.json.gz")) {
 			return err
 		}
-		raw, err := os.ReadFile(path)
+		raw, err := readReplayTrace(path)
 		if err != nil {
 			return err
 		}
@@ -47,7 +49,8 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 			return nil
 		}
 		req := envelope.Metadata.Request
-		if len(req.Messages) == 0 || req.Messages[len(req.Messages)-1].Role != llm.RoleUser || !buttonsReplayHasFinalize(req) {
+		// 现在的请求尾部还跟着几条 system（输出前检查等），看的是最后一条非 system 消息。
+		if last, ok := feedbackReplayLastTurn(req); !ok || last.Role != llm.RoleUser || !buttonsReplayHasFinalize(req) {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
@@ -80,11 +83,22 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 	var mu sync.Mutex
 	var results []result
 	var workers sync.WaitGroup
+	// swe-2 这类免费额度和生产共用一个号：DIANA_BUTTONS_REPLAY_GAP 秒控制请求间隔，
+	// DIANA_BUTTONS_REPLAY_STOP_ON_429=1 时碰到一次 429 就不再发后面的请求，也不重试。
+	gap := time.Duration(envInt("DIANA_BUTTONS_REPLAY_GAP", 0)) * time.Second
+	stopOn429 := os.Getenv("DIANA_BUTTONS_REPLAY_STOP_ON_429") == "1"
+	var limited sync.Once
+	stopped := make(chan struct{})
 	for range envInt("DIANA_BUTTONS_REPLAY_CONCURRENCY", 4) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for item := range jobs {
+				select {
+				case <-stopped:
+					continue
+				default:
+				}
 				var response *llm.GenerateResponse
 				var err error
 				for attempt := 0; attempt < 4; attempt++ {
@@ -94,10 +108,14 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 					if err == nil || !(strings.Contains(err.Error(), " 503 ") || strings.Contains(err.Error(), " 429 ")) {
 						break
 					}
+					if stopOn429 && strings.Contains(err.Error(), " 429 ") {
+						limited.Do(func() { close(stopped) })
+						break
+					}
 					time.Sleep(stickerReplayBackoff(err, attempt))
 				}
-				messages := item.sample.request.Messages
-				out := result{ID: item.sample.id, Run: item.run, Last: truncateRunes(messages[len(messages)-1].Content, 400)}
+				last, _ := feedbackReplayLastTurn(item.sample.request)
+				out := result{ID: item.sample.id, Run: item.run, Last: truncateRunesFromStart(last.Content, 400)}
 				if err != nil {
 					out.Error = err.Error()
 				} else {
@@ -118,6 +136,7 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 				mu.Lock()
 				results = append(results, out)
 				mu.Unlock()
+				time.Sleep(gap)
 			}
 		}()
 	}
@@ -153,6 +172,24 @@ func TestLiveButtonsFinalizeReplay(t *testing.T) {
 		}
 	}
 	t.Logf("样本 %d × %d 次：直接收尾 %d，填了按钮 %d，失败 %d", len(samples), runs, finalized, filled, failed)
+}
+
+// readReplayTrace 读一份 debug trace，10-30 起生产写的是 .json.gz。
+func readReplayTrace(path string) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if !strings.HasSuffix(path, ".gz") {
+		return io.ReadAll(file)
+	}
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
 }
 
 func buttonsReplayHasFinalize(req llm.GenerateRequest) bool {
