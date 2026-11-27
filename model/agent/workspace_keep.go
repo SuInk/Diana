@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -129,15 +130,18 @@ func keepLocation(rel string) (botDir string, inKeep bool) {
 	return botDir, true
 }
 
-func keepIndexPath(root, botDir string) string {
-	return filepath.Join(DianaStateDir(root), keepIndexDirName, botDir+".json")
+// keepIndexPath 是一台机器人长期区索引的位置。stateDir 是 FileStore.keepStateDir：
+// 宿主工作目录就是它的 .diana/，容器里的范围各有一份。
+func keepIndexPath(stateDir, botDir string) string {
+	return filepath.Join(stateDir, keepIndexDirName, botDir+".json")
 }
 
-func keepAreaLock(root, botDir string) interface {
+// keepAreaLock 把同一个长期区的「查配额 + 写入」串起来，否则两次各自都没超、合起来超了。
+func keepAreaLock(store FileStore, botDir string) interface {
 	Lock()
 	Unlock()
 } {
-	return extensionPathLock(filepath.Join(root, WorkspaceKeepDir, botDir))
+	return extensionPathLock(store.lockKey(WorkspaceKeepDir + "/" + botDir))
 }
 
 // LoadKeepIndex 读取一台机器人的长期区索引，按保存时间从新到旧排。
@@ -146,11 +150,14 @@ func LoadKeepIndex(root, botID string) ([]KeepEntry, error) {
 	if botDir == "" {
 		return nil, nil
 	}
-	return loadKeepIndexDir(root, botDir)
+	return loadKeepIndexDir(DianaStateDir(root), botDir)
 }
 
-func loadKeepIndexDir(root, botDir string) ([]KeepEntry, error) {
-	data, err := os.ReadFile(keepIndexPath(root, botDir))
+func loadKeepIndexDir(stateDir, botDir string) ([]KeepEntry, error) {
+	if stateDir == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(keepIndexPath(stateDir, botDir))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -175,15 +182,15 @@ func sortKeepEntries(entries []KeepEntry) {
 }
 
 // updateKeepIndex 在锁里读出索引、交给 fn 改、原子写回。
-func updateKeepIndex(root, botDir string, fn func([]KeepEntry) []KeepEntry) error {
-	if botDir == "" {
+func updateKeepIndex(stateDir, botDir string, fn func([]KeepEntry) []KeepEntry) error {
+	if botDir == "" || stateDir == "" {
 		return nil
 	}
-	file := keepIndexPath(root, botDir)
+	file := keepIndexPath(stateDir, botDir)
 	lock := extensionPathLock(file)
 	lock.Lock()
 	defer lock.Unlock()
-	entries, err := loadKeepIndexDir(root, botDir)
+	entries, err := loadKeepIndexDir(stateDir, botDir)
 	if err != nil {
 		// 索引坏了不能挡住文件操作：从空索引重建，坏的那份留个备份。
 		_ = os.Rename(file, file+".broken")
@@ -203,13 +210,13 @@ func updateKeepIndex(root, botDir string, fn func([]KeepEntry) []KeepEntry) erro
 
 // upsertKeepEntry 登记或更新一条。更新时没带的字段保留原值：挪动、改写一个文件
 // 不该把当初存它时记下的说明和来源弄丢。
-func upsertKeepEntry(root string, entry KeepEntry) error {
+func upsertKeepEntry(stateDir string, entry KeepEntry) error {
 	botDir, inKeep := keepLocation(entry.Path)
 	if !inKeep || botDir == "" {
 		return nil
 	}
 	entry.Description = trimKeepDescription(entry.Description)
-	return updateKeepIndex(root, botDir, func(entries []KeepEntry) []KeepEntry {
+	return updateKeepIndex(stateDir, botDir, func(entries []KeepEntry) []KeepEntry {
 		for i := range entries {
 			if entries[i].Path != entry.Path {
 				continue
@@ -246,14 +253,14 @@ func upsertKeepEntry(root string, entry KeepEntry) error {
 }
 
 // removeKeepEntries 去掉 rel 本身和它下面的所有条目，返回被去掉的那些。
-func removeKeepEntries(root, rel string) ([]KeepEntry, error) {
+func removeKeepEntries(stateDir, rel string) ([]KeepEntry, error) {
 	botDir, inKeep := keepLocation(rel)
 	if !inKeep || botDir == "" {
 		return nil, nil
 	}
 	rel = path.Clean(filepath.ToSlash(rel))
 	var removed []KeepEntry
-	err := updateKeepIndex(root, botDir, func(entries []KeepEntry) []KeepEntry {
+	err := updateKeepIndex(stateDir, botDir, func(entries []KeepEntry) []KeepEntry {
 		kept := entries[:0]
 		for _, entry := range entries {
 			if entry.Path == rel || strings.HasPrefix(entry.Path, rel+"/") {
@@ -269,10 +276,10 @@ func removeKeepEntries(root, rel string) ([]KeepEntry, error) {
 
 // moveKeepEntries 让索引跟着一次挪动走：从长期区挪出去的条目去掉，在长期区里改名
 // 的条目换成新路径，从外面挪进长期区的登记一条新的。
-func moveKeepEntries(root, from, to string, meta KeepMeta, size int64, isDir bool, mime string) error {
+func moveKeepEntries(stateDir, from, to string, meta KeepMeta, size int64, isDir bool, mime string) error {
 	from = path.Clean(filepath.ToSlash(from))
 	to = path.Clean(filepath.ToSlash(to))
-	removed, err := removeKeepEntries(root, from)
+	removed, err := removeKeepEntries(stateDir, from)
 	if err != nil {
 		return err
 	}
@@ -284,7 +291,7 @@ func moveKeepEntries(root, from, to string, meta KeepMeta, size int64, isDir boo
 		now = time.Now()
 	}
 	if len(removed) == 0 {
-		return upsertKeepEntry(root, KeepEntry{
+		return upsertKeepEntry(stateDir, KeepEntry{
 			Path: to, Description: meta.Description, SourceMessageID: meta.SourceMessageID, SourceURL: meta.SourceURL,
 			SavedBy: meta.SavedBy, SavedAt: now, Size: size, MIME: mime, IsDir: isDir,
 		})
@@ -295,7 +302,7 @@ func moveKeepEntries(root, from, to string, meta KeepMeta, size int64, isDir boo
 		if entry.Path == to && meta.Description != "" {
 			entry.Description = meta.Description
 		}
-		errs = append(errs, upsertKeepEntry(root, entry))
+		errs = append(errs, upsertKeepEntry(stateDir, entry))
 	}
 	return errors.Join(errs...)
 }
@@ -309,25 +316,10 @@ func trimKeepDescription(value string) string {
 	return value
 }
 
-// keepUsage 统计一台机器人长期区已经占了多少字节。软链接不算：它不占这里的空间。
-func keepUsage(root, botDir string) int64 {
-	var total int64
-	_ = filepath.WalkDir(filepath.Join(root, WorkspaceKeepDir, botDir), func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		if info, err := entry.Info(); err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total
-}
-
 // checkKeepQuota 在往长期区放 adding 字节（其中 replacing 字节是被覆盖掉的旧文件）之前
-// 检查配额。
-func checkKeepQuota(root, botDir string, adding, replacing int64) error {
-	used := keepUsage(root, botDir)
+// 检查配额。已用量按 store 统计，软链接不算：它不占这里的空间。
+func checkKeepQuota(ctx context.Context, store FileStore, botDir string, adding, replacing int64) error {
+	used := store.Usage(ctx, WorkspaceKeepDir+"/"+botDir)
 	if used-replacing+adding <= KeepQuotaBytes {
 		return nil
 	}
@@ -398,26 +390,4 @@ func (s keepScope) checkOwned(clean string) error {
 
 func (s keepScope) meta(now time.Time, description string) KeepMeta {
 	return KeepMeta{BotID: s.botDir, SavedBy: s.actor, Description: description, Now: now}
-}
-
-// pathSize 返回文件大小，目录则是下面所有普通文件的总和。
-func pathSize(target string) (int64, bool) {
-	info, err := os.Lstat(target)
-	if err != nil {
-		return 0, false
-	}
-	if !info.IsDir() {
-		return info.Size(), false
-	}
-	var total int64
-	_ = filepath.WalkDir(target, func(_ string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 {
-			return nil
-		}
-		if info, err := entry.Info(); err == nil {
-			total += info.Size()
-		}
-		return nil
-	})
-	return total, true
 }

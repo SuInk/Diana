@@ -227,7 +227,7 @@ func KeepEntriesIn(root, rel string) map[string]KeepEntry {
 	if !inKeep || botDir == "" {
 		return nil
 	}
-	entries, err := loadKeepIndexDir(root, botDir)
+	entries, err := loadKeepIndexDir(DianaStateDir(root), botDir)
 	if err != nil || len(entries) == 0 {
 		return nil
 	}

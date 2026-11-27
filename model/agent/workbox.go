@@ -996,17 +996,26 @@ func (b *WorkBox) WriteFile(ctx context.Context, p string, data io.Reader) (stri
 		stdin:   data,
 		timeout: boxControlTimeout,
 	})
-	if res.code == boxDiskRefusedExit || (res.code != 0 && strings.Contains(strings.ToLower(res.stderr), "file too large")) {
-		usage := BoxDiskUsage{LimitBytes: limit, Refused: true}
-		if usedKiB, err := strconv.ParseInt(strings.TrimSpace(string(res.stdout)), 10, 64); err == nil {
-			usage.UsedBytes = usedKiB << 10
-		}
-		return "", boxErrorf("%s", usage.Message())
+	if err := boxDiskRefusal(res, limit); err != nil {
+		return "", err
 	}
 	if res.code != 0 {
 		return "", boxErrorf("写入工作区失败：%s", strings.TrimSpace(res.stderr))
 	}
 	return target, nil
+}
+
+// boxDiskRefusal 认出写入脚本因范围目录超限而拒绝（退出 75，stdout 是已用 KiB），
+// 或者写到一半撞上 ulimit -f，返回给模型看的超限说明；别的情况返回 nil。
+func boxDiskRefusal(res dockerResult, limit int64) error {
+	if res.code != boxDiskRefusedExit && (res.code == 0 || !strings.Contains(strings.ToLower(res.stderr), "file too large")) {
+		return nil
+	}
+	usage := BoxDiskUsage{LimitBytes: limit, Refused: true}
+	if usedKiB, err := strconv.ParseInt(strings.TrimSpace(string(res.stdout)), 10, 64); err == nil {
+		usage.UsedBytes = usedKiB << 10
+	}
+	return boxErrorf("%s", usage.Message())
 }
 
 // boxWriteFileScript 写文件前看范围目录（$3）还剩多少，用 ulimit -f 把这次写入限制在
@@ -1309,6 +1318,13 @@ func SetBoxStateDir(dir string) {
 	if boxScopes.dir != dir {
 		boxScopes.dir, boxScopes.loaded = dir, false
 	}
+}
+
+// boxStateDir 是 SetBoxStateDir 设的目录，没设时为空。
+func boxStateDir() string {
+	boxScopes.mu.Lock()
+	defer boxScopes.mu.Unlock()
+	return boxScopes.dir
 }
 
 type boxScopeFile struct {

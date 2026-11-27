@@ -30,6 +30,7 @@ type WriteFileTool struct {
 	maxBytes  int
 	protected protectedFiles
 	keep      keepScope
+	store     FileStore
 }
 
 func (t *WriteFileTool) Name() string { return "write_file" }
@@ -47,7 +48,7 @@ func (t *WriteFileTool) InputSchema() map[string]any {
 	})
 }
 
-func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, error) {
+func (t *WriteFileTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")
@@ -68,56 +69,51 @@ func (t *WriteFileTool) Run(_ context.Context, input map[string]any) (string, er
 	if limit := t.writeLimit(); len(text) > limit {
 		return "", fmt.Errorf("content is %d bytes, over the %d byte limit", len(text), limit)
 	}
-	target, err := safePath(t.root, rel)
+	store := toolFileStore(t.store, t.root, t.protected)
+	clean, err := store.Resolve(rel)
 	if err != nil {
 		return "", err
 	}
-	if t.protected.blocked(target) {
+	if store.Blocked(clean) {
 		return "", errProtectedFile(rel)
 	}
-	keepDir, inKeep := "", false
-	if clean := relPathForOutput(t.root, target); clean != "." {
-		if _, inKeep = keepLocation(clean); inKeep {
-			normalized, err := t.keep.normalizeDest(clean)
-			if err != nil {
-				return "", err
-			}
-			if target, err = safePath(t.root, normalized); err != nil {
-				return "", err
-			}
-			keepDir = t.keep.botDir
-			lock := keepAreaLock(t.root, keepDir)
-			lock.Lock()
-			defer lock.Unlock()
-			var replacing int64
-			if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
-				replacing = info.Size()
-			}
-			if err := checkKeepQuota(t.root, keepDir, int64(len(text)), replacing); err != nil {
-				return "", err
-			}
+	_, inKeep := keepLocation(clean)
+	if inKeep && clean != "." {
+		normalized, err := t.keep.normalizeDest(clean)
+		if err != nil {
+			return "", err
+		}
+		if clean, err = store.Resolve(normalized); err != nil {
+			return "", err
+		}
+		lock := keepAreaLock(store, t.keep.botDir)
+		lock.Lock()
+		defer lock.Unlock()
+		var replacing int64
+		if info, err := store.Lstat(ctx, clean); err == nil && info.Mode().IsRegular() {
+			replacing = info.Size()
+		}
+		if err := checkKeepQuota(ctx, store, t.keep.botDir, int64(len(text)), replacing); err != nil {
+			return "", err
 		}
 	}
 	existed := true
-	if info, statErr := os.Stat(target); statErr != nil {
-		if !os.IsNotExist(statErr) {
+	if info, statErr := store.Stat(ctx, clean); statErr != nil {
+		if !errors.Is(statErr, fs.ErrNotExist) {
 			return "", statErr
 		}
 		existed = false
 	} else if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
 	}
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(target, []byte(text), 0o644); err != nil {
+	if err := store.WriteFile(ctx, clean, []byte(text), false); err != nil {
 		return "", err
 	}
 	if inKeep {
-		_ = upsertKeepEntry(t.root, KeepEntry{Path: relPathForOutput(t.root, target), SavedBy: t.keep.actor, SavedAt: time.Now(), Size: int64(len(text)), MIME: SniffMediaType([]byte(text))})
+		_ = upsertKeepEntry(store.keepStateDir(), KeepEntry{Path: clean, SavedBy: t.keep.actor, SavedAt: time.Now(), Size: int64(len(text)), MIME: SniffMediaType([]byte(text))})
 	}
 	return marshalToolResult(map[string]any{
-		"path":      relPathForOutput(t.root, target),
+		"path":      clean,
 		"bytes":     len(text),
 		"lines":     strings.Count(text, "\n") + 1,
 		"overwrote": existed,
@@ -139,6 +135,7 @@ type EditFileTool struct {
 	maxBytes  int
 	protected protectedFiles
 	keep      keepScope
+	store     FileStore
 }
 
 func (t *EditFileTool) Name() string { return "edit_file" }
@@ -168,7 +165,7 @@ type fileEdit struct {
 	end     int
 }
 
-func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, error) {
+func (t *EditFileTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	rel := stringFromInput(input, "path")
 	if rel == "" {
 		return "", errors.New("path is required")
@@ -177,25 +174,30 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	if err != nil {
 		return "", err
 	}
-	target, err := safePath(t.root, rel)
+	store := toolFileStore(t.store, t.root, t.protected)
+	clean, err := store.Resolve(rel)
 	if err != nil {
 		return "", err
 	}
-	if t.protected.blocked(target) {
+	if store.Blocked(clean) {
 		return "", errProtectedFile(rel)
 	}
-	clean := relPathForOutput(t.root, target)
 	if err := t.keep.checkOwned(clean); err != nil {
 		return "", err
 	}
-	info, err := os.Stat(target)
+	info, err := store.Stat(ctx, clean)
 	if err != nil {
 		return "", workspaceNotFound(rel, err)
 	}
 	if info.IsDir() {
 		return "", fmt.Errorf("%s is a directory", rel)
 	}
-	raw, err := os.ReadFile(target)
+	file, err := store.Open(ctx, clean)
+	if err != nil {
+		return "", err
+	}
+	raw, err := io.ReadAll(file)
+	_ = file.Close()
 	if err != nil {
 		return "", err
 	}
@@ -239,21 +241,22 @@ func (t *EditFileTool) Run(_ context.Context, input map[string]any) (string, err
 	// 但也因此不要在这里做任何「顺手规范化」。
 	keepDir, inKeep := keepLocation(clean)
 	if inKeep {
-		lock := keepAreaLock(t.root, keepDir)
+		lock := keepAreaLock(store, keepDir)
 		lock.Lock()
 		defer lock.Unlock()
-		if err := checkKeepQuota(t.root, keepDir, int64(len(updated)), int64(len(original))); err != nil {
+		if err := checkKeepQuota(ctx, store, keepDir, int64(len(updated)), int64(len(original))); err != nil {
 			return "", err
 		}
 	}
-	if err := os.WriteFile(target, []byte(updated), info.Mode().Perm()); err != nil {
+	// 覆盖已有文件：权限位不变。
+	if err := store.WriteFile(ctx, clean, []byte(updated), false); err != nil {
 		return "", err
 	}
 	if inKeep {
-		_ = upsertKeepEntry(t.root, KeepEntry{Path: clean, Size: int64(len(updated))})
+		_ = upsertKeepEntry(store.keepStateDir(), KeepEntry{Path: clean, Size: int64(len(updated))})
 	}
 	return marshalToolResult(map[string]any{
-		"path":               relPathForOutput(t.root, target),
+		"path":               clean,
 		"edits_applied":      len(edits),
 		"first_changed_line": strings.Count(original[:edits[0].start], "\n") + 1,
 		"bytes_before":       len(original),

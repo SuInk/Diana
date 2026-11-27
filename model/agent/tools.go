@@ -182,7 +182,7 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	protected := agentProtectedFiles(cfg)
 	// 默认工具都绑定到同一个绝对工作目录，后续 safePath 负责防逃逸校验；运行时自己的
 	// 配置文件另外由 protected 拦掉，见 agentProtectedFiles。
-	// 只读工具经由 cfg.Files 读文件：没设时是 root 上的宿主目录。
+	// 文件工具都经由 cfg.Files 读写：没设时是 root 上的宿主目录。
 	registry.Register(&ListFilesTool{root: root, protected: protected, store: cfg.Files})
 	registry.Register(&ReadFileTool{root: root, protected: protected, store: cfg.Files})
 	// 检索和按名字找文件与 read_file 同级：都只读，都锁在工作目录内。
@@ -191,13 +191,13 @@ func NewDefaultToolRegistry(cfg Config) (*ToolRegistry, error) {
 	registry.Register(&FindFilesTool{root: root, protected: protected, store: cfg.Files})
 	// 写入是单独一档：读错文件浪费一次调用，写错文件改的是磁盘。
 	if cfg.FileWriteEnabled {
-		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
-		registry.Register(&ExtractArchiveTool{root: root, protected: protected})
-		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg)})
+		registry.Register(&WriteFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg), store: cfg.Files})
+		registry.Register(&ExtractArchiveTool{root: root, protected: protected, store: cfg.Files})
+		registry.Register(&EditFileTool{root: root, maxBytes: cfg.FileWriteMaxBytes, protected: protected, keep: newKeepScope(cfg), store: cfg.Files})
 	}
 	// stat 只读，跟读工具同级；挪动、复制、删除、建目录跟 write_file 一样要「允许写入
 	// 文件」打开，工具按开关收窄自己的动作列表。
-	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled, keep: newKeepScope(cfg)})
+	registry.Register(&ManageFilesTool{root: root, protected: protected, writeEnabled: cfg.FileWriteEnabled, keep: newKeepScope(cfg), store: cfg.Files})
 	// 宿主机上的 run_command 只给评测程序用，永远断网；Diana 的 run_command 在工作区容器里。
 	if cfg.CommandEnabled {
 		registry.Register(&RunCommandTool{

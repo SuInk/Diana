@@ -5,6 +5,7 @@ package agent
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -294,7 +295,8 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 		}
 		rel, keepDir = normalized, scope.botDir
 		// 配额检查和写入之间不能插进另一次保存，否则两次各自都没超、合起来超了。
-		lock := keepAreaLock(root, keepDir)
+		hostStore := newHostFileStore(root, protected)
+		lock := keepAreaLock(hostStore, keepDir)
 		lock.Lock()
 		defer lock.Unlock()
 		var replacing int64
@@ -303,7 +305,7 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 				replacing = info.Size()
 			}
 		}
-		if err := checkKeepQuota(root, keepDir, int64(len(data)), replacing); err != nil {
+		if err := checkKeepQuota(context.Background(), hostStore, keepDir, int64(len(data)), replacing); err != nil {
 			return "", err
 		}
 	}
@@ -368,7 +370,7 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 			}
 			// 索引是给模型和界面认文件用的，写失败不该让一份已经落盘的文件报「没存上」；
 			// 界面按磁盘上的真实文件列，缺说明的照样看得到。
-			_ = upsertKeepEntry(root, KeepEntry{
+			_ = upsertKeepEntry(DianaStateDir(root), KeepEntry{
 				Path: candidate, Description: opts.Keep.Description, SourceMessageID: opts.Keep.SourceMessageID,
 				SourceURL: opts.Keep.SourceURL, SavedBy: opts.Keep.SavedBy, SavedAt: now,
 				Size: int64(len(data)), MIME: SniffMediaType(data),

@@ -43,6 +43,7 @@ type ManageFilesTool struct {
 	writeEnabled bool
 	keep         keepScope
 	now          func() time.Time
+	store        FileStore
 }
 
 func (t *ManageFilesTool) Name() string { return ManageFilesToolName }
@@ -91,9 +92,10 @@ func (t *ManageFilesTool) Run(ctx context.Context, input map[string]any) (string
 	if rel == "" {
 		return "", errors.New("path is required")
 	}
+	store := toolFileStore(t.store, t.root, t.protected)
 	switch action {
 	case "stat":
-		return t.stat(rel)
+		return t.stat(ctx, store, rel)
 	case "move", "copy", "delete", "mkdir":
 		if !t.writeEnabled {
 			return "", fmt.Errorf("文件写入没有打开（机器人配置里的「允许写入文件」），manage_files 现在只能 stat")
@@ -103,64 +105,53 @@ func (t *ManageFilesTool) Run(ctx context.Context, input map[string]any) (string
 	}
 	switch action {
 	case "mkdir":
-		return t.mkdir(rel)
+		return t.mkdir(ctx, store, rel)
 	case "delete":
-		return t.delete(rel)
+		return t.delete(ctx, store, rel)
 	default:
 		to := stringFromInput(input, "to")
 		if to == "" {
 			return "", fmt.Errorf("%s 需要 to", action)
 		}
-		return t.transfer(action, rel, to, boolFromInput(input, "overwrite", false), stringFromInput(input, "description"))
+		return t.transfer(ctx, store, action, rel, to, boolFromInput(input, "overwrite", false), stringFromInput(input, "description"))
 	}
 }
 
-// resolve 把相对路径过一遍 safePath、凭据名单和回收站检查，返回相对 root 的本地路径。
-func (t *ManageFilesTool) resolve(rel string) (string, string, error) {
-	target, err := safePath(t.root, rel)
+// resolve 把路径过一遍 Resolve、凭据名单和回收站检查，返回工作区内的相对路径。
+func resolveManaged(store FileStore, rel string) (string, error) {
+	clean, err := store.Resolve(rel)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	clean := relPathForOutput(t.root, target)
-	if t.protected.blocked(target) {
-		return "", "", errProtectedFile(rel)
+	if store.Blocked(clean) {
+		return "", errProtectedFile(rel)
 	}
 	if isTrashPath(clean) {
-		return "", "", errTrashPath(clean)
+		return "", errTrashPath(clean)
 	}
-	return target, clean, nil
+	return clean, nil
 }
 
 // guardTree 挡住「整个目录挪走或删掉，顺带把里面的凭据一起带走」：凭据名单只按
 // 路径匹配，目录本身不在名单里，里面的 coding-runtime/auth 却在。
-func (t *ManageFilesTool) guardTree(target, clean string) error {
+func guardTree(store FileStore, clean string) error {
 	if clean == "." {
 		return errors.New("不能对整个工作目录这么做")
 	}
-	if t.protected.containsWithin(target) {
+	if store.BlockedWithin(clean) {
 		return fmt.Errorf("%s 里面有 Diana 的运行时配置或凭据，不能整个挪走或删除", clean)
 	}
 	return nil
 }
 
-func (t *ManageFilesTool) openRoot() (*os.Root, error) {
-	return os.OpenRoot(t.root)
-}
-
-func (t *ManageFilesTool) stat(rel string) (string, error) {
-	target, clean, err := t.resolve(rel)
+func (t *ManageFilesTool) stat(ctx context.Context, store FileStore, rel string) (string, error) {
+	clean, err := resolveManaged(store, rel)
 	if err != nil {
 		return "", err
 	}
-	root, err := t.openRoot()
+	info, err := store.Stat(ctx, clean)
 	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	local := filepath.FromSlash(clean)
-	info, err := root.Stat(local)
-	if err != nil {
-		return "", missingFileError(t.root, clean, err)
+		return "", storeMissingFileError(ctx, store, clean, err)
 	}
 	result := map[string]any{
 		"path":     clean,
@@ -169,7 +160,7 @@ func (t *ManageFilesTool) stat(rel string) (string, error) {
 	}
 	if botDir, inKeep := keepLocation(clean); inKeep && botDir != "" {
 		result["area"] = "长期保存区，不会自动清理"
-		if entries, err := loadKeepIndexDir(t.root, botDir); err == nil {
+		if entries, err := loadKeepIndexDir(store.keepStateDir(), botDir); err == nil {
 			for _, entry := range entries {
 				if entry.Path == clean && entry.Description != "" {
 					result["description"] = entry.Description
@@ -178,19 +169,14 @@ func (t *ManageFilesTool) stat(rel string) (string, error) {
 		}
 	}
 	if info.IsDir() {
-		entries, err := os.ReadDir(target)
+		entries, err := store.ReadDir(ctx, clean)
 		if err == nil {
 			result["entries"] = len(entries)
 		}
 		return marshalToolResult(result)
 	}
 	result["size"] = info.Size()
-	file, err := root.Open(local)
-	if err != nil {
-		return "", err
-	}
-	defer file.Close()
-	head, err := io.ReadAll(io.LimitReader(file, manageFilesStatSniffBytes))
+	head, err := store.Head(ctx, clean, manageFilesStatSniffBytes)
 	if err != nil {
 		return "", err
 	}
@@ -209,8 +195,8 @@ func (t *ManageFilesTool) stat(rel string) (string, error) {
 	return marshalToolResult(result)
 }
 
-func (t *ManageFilesTool) mkdir(rel string) (string, error) {
-	_, clean, err := t.resolve(rel)
+func (t *ManageFilesTool) mkdir(ctx context.Context, store FileStore, rel string) (string, error) {
+	clean, err := resolveManaged(store, rel)
 	if err != nil {
 		return "", err
 	}
@@ -220,31 +206,25 @@ func (t *ManageFilesTool) mkdir(rel string) (string, error) {
 	if clean == "." {
 		return "", errors.New("工作目录本身已经存在")
 	}
-	root, err := t.openRoot()
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	local := filepath.FromSlash(clean)
 	existed := false
-	if info, err := root.Stat(local); err == nil {
+	if info, err := store.Stat(ctx, clean); err == nil {
 		if !info.IsDir() {
 			return "", fmt.Errorf("%s 已经是一个文件", clean)
 		}
 		existed = true
 	}
-	if err := root.MkdirAll(local, 0o755); err != nil {
+	if err := store.MkdirAll(ctx, clean); err != nil {
 		return "", err
 	}
 	return marshalToolResult(map[string]any{"action": "mkdir", "path": clean, "existed": existed})
 }
 
-func (t *ManageFilesTool) delete(rel string) (string, error) {
-	target, clean, err := t.resolve(rel)
+func (t *ManageFilesTool) delete(ctx context.Context, store FileStore, rel string) (string, error) {
+	clean, err := resolveManaged(store, rel)
 	if err != nil {
 		return "", err
 	}
-	if err := t.guardTree(target, clean); err != nil {
+	if err := guardTree(store, clean); err != nil {
 		return "", err
 	}
 	if err := t.keep.checkOwned(clean); err != nil {
@@ -254,7 +234,7 @@ func (t *ManageFilesTool) delete(rel string) (string, error) {
 	if t.now != nil {
 		now = t.now
 	}
-	trashRel, isDir, err := moveToTrash(t.root, clean, now())
+	trashRel, isDir, err := moveToTrash(ctx, store, clean, now())
 	if err != nil {
 		return "", err
 	}
@@ -267,24 +247,18 @@ func (t *ManageFilesTool) delete(rel string) (string, error) {
 	})
 }
 
-// moveToTrash 把工作目录内已经校验过的相对路径 clean 挪进 .trash/<时间戳>/，保留原来的
+// moveToTrash 把工作区内已经校验过的相对路径 clean 挪进 .trash/<时间戳>/，保留原来的
 // 相对路径；落在长期区里的，索引里的条目一并去掉。
-func moveToTrash(workRoot, clean string, now time.Time) (string, bool, error) {
-	return moveToTrashAs(workRoot, clean, clean, now)
+func moveToTrash(ctx context.Context, store FileStore, clean string, now time.Time) (string, bool, error) {
+	return moveToTrashAs(ctx, store, clean, clean, now)
 }
 
 // moveToTrashAs 和 moveToTrash 一样，但回收站里的位置和要清的长期区索引按 label 算：
 // 经别名或大小写不同的写法删除时，label 是它在工作目录里的规范路径。
-func moveToTrashAs(workRoot, clean, label string, now time.Time) (string, bool, error) {
-	root, err := os.OpenRoot(workRoot)
+func moveToTrashAs(ctx context.Context, store FileStore, clean, label string, now time.Time) (string, bool, error) {
+	info, err := store.Lstat(ctx, clean)
 	if err != nil {
-		return "", false, err
-	}
-	defer root.Close()
-	local := filepath.FromSlash(clean)
-	info, err := root.Lstat(local)
-	if err != nil {
-		return "", false, missingFileError(workRoot, clean, err)
+		return "", false, storeMissingFileError(ctx, store, clean, err)
 	}
 	stamp := now.Format(trashTimestampLayout)
 	var trashRel string
@@ -294,20 +268,20 @@ func moveToTrashAs(workRoot, clean, label string, now time.Time) (string, bool, 
 			dir = fmt.Sprintf("%s-%d", stamp, attempt)
 		}
 		trashRel = path.Join(WorkspaceTrashDir, dir, label)
-		if _, err := root.Lstat(filepath.FromSlash(trashRel)); errors.Is(err, fs.ErrNotExist) {
+		if _, err := store.Lstat(ctx, trashRel); errors.Is(err, fs.ErrNotExist) {
 			break
 		}
 		if attempt >= 1000 {
 			return "", false, errors.New("回收站里同一时刻的同名条目太多，稍后再试")
 		}
 	}
-	if err := root.MkdirAll(filepath.Dir(filepath.FromSlash(trashRel)), 0o755); err != nil {
+	if err := store.MkdirAll(ctx, path.Dir(trashRel)); err != nil {
 		return "", false, err
 	}
-	if err := root.Rename(local, filepath.FromSlash(trashRel)); err != nil {
+	if err := store.Rename(ctx, clean, trashRel); err != nil {
 		return "", false, err
 	}
-	_, _ = removeKeepEntries(workRoot, label)
+	_, _ = removeKeepEntries(store.keepStateDir(), label)
 	return trashRel, info.IsDir(), nil
 }
 
@@ -334,7 +308,7 @@ func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
 	}
 	// 回收站里的位置和长期区索引都按规范路径算：经别名或大小写不同的写法删掉的长期区
 	// 文件，索引里不会留着指向已删除文件的条目，回收站里也看得出它原本在哪。
-	trashRel, _, err := moveToTrashAs(root, clean, canonical, now)
+	trashRel, _, err := moveToTrashAs(context.Background(), newHostFileStore(root, protectedFiles{}), clean, canonical, now)
 	if err != nil {
 		return "", adminTrashError(root, clean, err)
 	}
@@ -345,7 +319,7 @@ func TrashWorkspacePath(cfg Config, rel string, now time.Time) (string, error) {
 // 时 os.Root 只说一句 path escapes from parent，页面上原样弹出来没人看得懂。
 func adminTrashError(workRoot, clean string, err error) error {
 	if errors.Is(err, fs.ErrNotExist) {
-		return missingFileError(workRoot, clean, err)
+		return WorkspaceMissingFileError(workRoot, clean)
 	}
 	if strings.Contains(err.Error(), "path escapes from parent") {
 		return fmt.Errorf("%s 经符号链接到了工作目录外面：外面的东西这里只能看和下载，不能删除", clean)
@@ -478,33 +452,27 @@ func actualWorkspaceEntryName(handle *os.Root, dir, name string, last bool) stri
 	return ""
 }
 
-func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, description string) (string, error) {
-	source, sourceClean, err := t.resolve(rel)
+func (t *ManageFilesTool) transfer(ctx context.Context, store FileStore, action, rel, to string, overwrite bool, description string) (string, error) {
+	sourceClean, err := resolveManaged(store, rel)
 	if err != nil {
 		return "", err
 	}
 	if action == "move" {
-		if err := t.guardTree(source, sourceClean); err != nil {
+		if err := guardTree(store, sourceClean); err != nil {
 			return "", err
 		}
 		if err := t.keep.checkOwned(sourceClean); err != nil {
 			return "", err
 		}
 	}
-	root, err := t.openRoot()
+	sourceInfo, err := store.Lstat(ctx, sourceClean)
 	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-	sourceLocal := filepath.FromSlash(sourceClean)
-	sourceInfo, err := root.Lstat(sourceLocal)
-	if err != nil {
-		return "", missingFileError(t.root, sourceClean, err)
+		return "", storeMissingFileError(ctx, store, sourceClean, err)
 	}
 	if action == "copy" && !sourceInfo.Mode().IsRegular() {
 		return "", fmt.Errorf("copy 只复制普通文件，%s 不是", sourceClean)
 	}
-	_, destClean, err := t.resolve(to)
+	destClean, err := resolveManaged(store, to)
 	if err != nil {
 		return "", err
 	}
@@ -512,13 +480,12 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 	if destClean, err = t.keep.normalizeDest(destClean); err != nil {
 		return "", err
 	}
-	if _, destClean, err = t.resolve(destClean); err != nil {
+	if destClean, err = resolveManaged(store, destClean); err != nil {
 		return "", err
 	}
 	// 目标是已有目录：放进去，名字不变。
-	if info, err := root.Stat(filepath.FromSlash(destClean)); err == nil && info.IsDir() {
-		destClean = path.Join(destClean, path.Base(sourceClean))
-		if _, destClean, err = t.resolve(destClean); err != nil {
+	if info, err := store.Stat(ctx, destClean); err == nil && info.IsDir() {
+		if destClean, err = resolveManaged(store, path.Join(destClean, path.Base(sourceClean))); err != nil {
 			return "", err
 		}
 	}
@@ -528,10 +495,9 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 	if sourceInfo.IsDir() && strings.HasPrefix(destClean+"/", sourceClean+"/") {
 		return "", errors.New("不能把目录挪进它自己里面")
 	}
-	destLocal := filepath.FromSlash(destClean)
 	overwrote := false
 	var replacing int64
-	if info, err := root.Lstat(destLocal); err == nil {
+	if info, err := store.Lstat(ctx, destClean); err == nil {
 		if !overwrite {
 			return "", fmt.Errorf("%s 已存在；确认要覆盖就传 overwrite=true，否则换个目标名", destClean)
 		}
@@ -541,22 +507,25 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 		overwrote = true
 		replacing = info.Size()
 	}
-	size, _ := pathSize(source)
+	var size int64
+	if sourceInfo.Mode()&fs.ModeSymlink == 0 {
+		size = store.Usage(ctx, sourceClean)
+	}
 	sourceKeep, sourceInKeep := keepLocation(sourceClean)
 	destKeep, destInKeep := keepLocation(destClean)
 	if destInKeep {
 		// 在自己的长期区里挪来挪去不多占地方；从外面放进来（或复制一份）才算配额。
-		lock := keepAreaLock(t.root, destKeep)
+		lock := keepAreaLock(store, destKeep)
 		lock.Lock()
 		defer lock.Unlock()
 		if action == "copy" || !sourceInKeep || sourceKeep != destKeep {
-			if err := checkKeepQuota(t.root, destKeep, size, replacing); err != nil {
+			if err := checkKeepQuota(ctx, store, destKeep, size, replacing); err != nil {
 				return "", err
 			}
 		}
 	}
-	if parent := filepath.Dir(destLocal); parent != "." {
-		if err := root.MkdirAll(parent, 0o755); err != nil {
+	if parent := path.Dir(destClean); parent != "." {
+		if err := store.MkdirAll(ctx, parent); err != nil {
 			return "", err
 		}
 	}
@@ -565,13 +534,14 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 		now = t.now
 	}
 	meta := t.keep.meta(now(), description)
+	stateDir := store.keepStateDir()
 	result := map[string]any{"action": action, "from": sourceClean, "to": destClean, "overwrote": overwrote}
 	if action == "move" {
-		if err := root.Rename(sourceLocal, destLocal); err != nil {
+		if err := store.Rename(ctx, sourceClean, destClean); err != nil {
 			return "", err
 		}
 		if sourceInKeep || destInKeep {
-			if err := moveKeepEntries(t.root, sourceClean, destClean, meta, size, sourceInfo.IsDir(), t.sniffMIME(destClean, sourceInfo)); err != nil {
+			if err := moveKeepEntries(stateDir, sourceClean, destClean, meta, size, sourceInfo.IsDir(), sniffStoreMIME(ctx, store, destClean, sourceInfo)); err != nil {
 				result["index_warning"] = "文件已挪好，但长期保存区索引没更新：" + err.Error()
 			}
 		}
@@ -583,16 +553,16 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 	if sourceInfo.Size() > manageFilesCopyMaxBytes {
 		return "", fmt.Errorf("%s 有 %d MB，超过复制上限 %d MB", sourceClean, sourceInfo.Size()>>20, manageFilesCopyMaxBytes>>20)
 	}
-	written, err := copyWithinRoot(root, sourceLocal, destLocal, overwrite)
+	written, err := store.CopyFile(ctx, sourceClean, destClean, overwrite, manageFilesCopyMaxBytes)
 	if err != nil {
 		return "", err
 	}
 	result["bytes"] = written
 	if destInKeep {
-		entry := KeepEntry{Path: destClean, Description: description, SavedBy: meta.SavedBy, SavedAt: meta.Now, Size: written, MIME: t.sniffMIME(destClean, sourceInfo)}
+		entry := KeepEntry{Path: destClean, Description: description, SavedBy: meta.SavedBy, SavedAt: meta.Now, Size: written, MIME: sniffStoreMIME(ctx, store, destClean, sourceInfo)}
 		// 从长期区复制出来的副本沿用原件的说明和来源。
 		if sourceInKeep && sourceKeep != "" {
-			if entries, err := loadKeepIndexDir(t.root, sourceKeep); err == nil {
+			if entries, err := loadKeepIndexDir(stateDir, sourceKeep); err == nil {
 				for _, existing := range entries {
 					if existing.Path == sourceClean {
 						entry.SourceMessageID, entry.SourceURL = existing.SourceMessageID, existing.SourceURL
@@ -603,7 +573,7 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 				}
 			}
 		}
-		if err := upsertKeepEntry(t.root, entry); err != nil {
+		if err := upsertKeepEntry(stateDir, entry); err != nil {
 			result["index_warning"] = "文件已复制，但长期保存区索引没更新：" + err.Error()
 		}
 		result["area"] = "长期保存区，不会自动清理"
@@ -611,22 +581,19 @@ func (t *ManageFilesTool) transfer(action, rel, to string, overwrite bool, descr
 	return marshalToolResult(result)
 }
 
-// sniffMIME 读挪好的文件开头认类型，给长期区索引用；目录没有类型。
-func (t *ManageFilesTool) sniffMIME(clean string, info os.FileInfo) string {
+// sniffStoreMIME 读挪好的文件开头认类型，给长期区索引用；目录没有类型。
+func sniffStoreMIME(ctx context.Context, store FileStore, clean string, info fs.FileInfo) string {
 	if info.IsDir() {
 		return ""
 	}
-	file, err := os.Open(filepath.Join(t.root, filepath.FromSlash(clean)))
+	head, err := store.Head(ctx, clean, 512)
 	if err != nil {
 		return ""
 	}
-	defer file.Close()
-	head := make([]byte, 512)
-	n, _ := io.ReadFull(file, head)
-	return SniffMediaType(head[:n])
+	return SniffMediaType(head)
 }
 
-func copyWithinRoot(root *os.Root, sourceLocal, destLocal string, overwrite bool) (int64, error) {
+func copyWithinRoot(root *os.Root, sourceLocal, destLocal string, overwrite bool, maxBytes int64) (int64, error) {
 	in, err := root.Open(sourceLocal)
 	if err != nil {
 		return 0, err
@@ -640,12 +607,12 @@ func copyWithinRoot(root *os.Root, sourceLocal, destLocal string, overwrite bool
 	if err != nil {
 		return 0, err
 	}
-	written, err := io.Copy(out, io.LimitReader(in, manageFilesCopyMaxBytes+1))
+	written, err := io.Copy(out, io.LimitReader(in, maxBytes+1))
 	if closeErr := out.Close(); err == nil {
 		err = closeErr
 	}
-	if err == nil && written > manageFilesCopyMaxBytes {
-		err = fmt.Errorf("文件超过复制上限 %d MB", manageFilesCopyMaxBytes>>20)
+	if err == nil && written > maxBytes {
+		err = fmt.Errorf("文件超过复制上限 %d MB", maxBytes>>20)
 	}
 	if err != nil {
 		_ = root.Remove(destLocal)
@@ -654,23 +621,27 @@ func copyWithinRoot(root *os.Root, sourceLocal, destLocal string, overwrite bool
 	return written, nil
 }
 
-// missingFileError 在找不到文件时顺手列出同名不同扩展名的文件：按内容纠正过扩展名
+// storeMissingFileError 在找不到文件时顺手列出同名不同扩展名的文件：按内容纠正过扩展名
 // 的文件（.jfif 改成 .jpg、.png 其实是 .jpg）最容易被按旧名字找。
-func missingFileError(root, clean string, err error) error {
+func storeMissingFileError(ctx context.Context, store FileStore, clean string, err error) error {
 	if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return WorkspaceMissingFileError(root, clean)
+	return missingInStore(ctx, store, clean)
 }
 
-// WorkspaceMissingFileError 是「工作目录里找不到这个文件」的统一报错，附上同目录下
+// WorkspaceMissingFileError 是「宿主工作目录里找不到这个文件」的统一报错，附上同目录下
 // 主文件名相同、扩展名不同的候选。
 func WorkspaceMissingFileError(root, rel string) error {
+	return missingInStore(context.Background(), newHostFileStore(root, protectedFiles{}), rel)
+}
+
+func missingInStore(ctx context.Context, store FileStore, rel string) error {
 	rel = path.Clean(filepath.ToSlash(rel))
 	dir, base := path.Split(rel)
 	stem := strings.TrimSuffix(base, path.Ext(base))
 	var candidates []string
-	if entries, readErr := os.ReadDir(filepath.Join(root, filepath.FromSlash(dir))); readErr == nil && stem != "" {
+	if entries, readErr := store.ReadDir(ctx, path.Clean("./"+dir)); readErr == nil && stem != "" {
 		for _, entry := range entries {
 			name := entry.Name()
 			if name != base && strings.TrimSuffix(name, path.Ext(name)) == stem {
