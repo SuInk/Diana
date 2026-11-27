@@ -16,7 +16,7 @@ import (
 // run_command 找不到文件时，报错要说到点子上。
 //
 // 工作目录（save_to_workspace、生图存的文件）在宿主机上，容器的 /work 是另一个卷，
-// 两边不互通，文件要靠 inputs 放进 /work/inbox。11-26 群主 @ 机器人「保存gif」：视频
+// 两边不互通，文件要靠 inputs 放进本会话工作区的 inbox/。11-26 群主 @ 机器人「保存gif」：视频
 // 存进了 downloads/，模型照着这个路径跑 ffmpeg -i /work/downloads/…，连试 5 次都只拿到
 // ffmpeg 的「No such file or directory」，在容器里 find 了一圈，最后以「被沙箱隔离挡住」
 // 静默收尾。错误本身没错，但它没说为什么找不到、该怎么改，模型只能瞎猜。
@@ -55,18 +55,18 @@ func (r *Runtime) boxWorkspacePathHint(event MessageEvent, owner bool, command, 
 			found = append(found, rel)
 		}
 	}
-	const separated = "工作目录（save_to_workspace、生图存的文件）在宿主机上，容器的 /work 是另一个卷，两边不互通，容器里没有这些文件。"
+	const separated = "工作目录（save_to_workspace、生图存的文件）在宿主机上，容器里的工作区是另一处，两边不互通，容器里没有这些文件。"
 	if len(found) == 0 {
-		return "提示：" + separated + "要在命令里处理工作目录的文件，把它的 path 写进 run_command 的 inputs，文件会放进 /work/inbox/<文件名>；不知道 path 就先用 find_files 查。"
+		return "提示：" + separated + "要在命令里处理工作目录的文件，把它的 path 写进 run_command 的 inputs，文件会放进当前目录的 inbox/<文件名>；不知道 path 就先用 find_files 查。"
 	}
 	var inputs, inbox []string
 	for _, rel := range found {
 		inputs = append(inputs, `"`+rel+`"`)
-		inbox = append(inbox, path.Join("/work/inbox", path.Base(rel)))
+		inbox = append(inbox, path.Join("inbox", path.Base(rel)))
 	}
 	return "提示：" + strings.Join(found, "、") + " 在工作目录里，不在容器里。" + separated +
 		"重跑时 inputs 写 [" + strings.Join(inputs, ", ") + "]，命令里改用 " + strings.Join(inbox, "、") +
-		"；产物写在 /work 下（例如 /work/out.gif），发送时 send_file 的 path 直接写这个 /work/ 路径。"
+		"；产物写在当前目录（例如 out.gif），发送时 send_file 的 path 写 /work/out.gif。"
 }
 
 func boxFailureIsMissingFile(failure string) bool {

@@ -244,7 +244,7 @@ func (r *Runtime) saveWorkspacePayloadWith(event MessageEvent, payload workspace
 		Path:    saved,
 		Bytes:   len(payload.data),
 		MIME:    mediaType,
-		Message: "已原样存进工作目录；path 以这里返回的为准。出图用 render_media 或 render，原样交付文件用 send_file 的 path（文本、二进制都行），主人也可用 send_attachment。容器（run_command）看不到工作目录，要在命令里处理就把 path 写进 run_command 的 inputs，文件会放进 /work/inbox/。这一步本身没有发送任何东西。",
+		Message: "已原样存进工作目录；path 以这里返回的为准。出图用 render_media 或 render，原样交付文件用 send_file 的 path（文本、二进制都行），主人也可用 send_attachment。容器（run_command）看不到工作目录，要在命令里处理就把 path 写进 run_command 的 inputs，文件会放进容器工作区的 inbox/。这一步本身没有发送任何东西。",
 	}
 	if requested != "" && requested != name {
 		result.ExtensionCorrected = requested + " → " + name

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -60,34 +61,64 @@ func testBoxConfig() BoxConfig {
 	return BoxConfig{Image: BuiltinBoxImage(), Memory: "1g", CPUs: 2, PIDs: 256, Network: true}
 }
 
+// testScope 是挂在一个新共享容器上的会话范围。
+func testScope(cfg BoxConfig, docker dockerRunner, key string, uid int) *WorkBox {
+	return &WorkBox{host: newBoxContainer(cfg, docker), key: key, scope: boxScopeName(key), uid: uid}
+}
+
 func TestBoxRunArgsMatchYujiaxueIsolation(t *testing.T) {
-	b := newWorkBox(testBoxConfig(), nil, "bot\x00group:1")
-	args := strings.Join(b.runArgs(), " ")
+	c := newBoxContainer(testBoxConfig(), nil)
+	args := strings.Join(c.runArgs(), " ")
 	for _, want := range []string{
-		"--user 1000:1000", "--cap-drop ALL", "--security-opt no-new-privileges", "--read-only",
-		"--network " + boxNetworkName, "--env HOME=/work/.home", "--volume " + b.volume + ":/work",
+		"--name diana-sandbox ", "--user 1000:1000", "--cap-drop ALL", "--cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER",
+		"--security-opt no-new-privileges", "--read-only", "--network " + boxNetworkName, "--volume diana-sandbox:/work",
 		"--tmpfs /tmp:rw,nosuid,nodev,size=256m", "--memory 1g", "--cpus 2", "--pids-limit 256",
-		"--workdir /work", "--hostname box", "--init", b.cfg.Image + " sleep infinity",
+		"--workdir /work", "--hostname box", "--init", "--label " + boxLayoutLabel + "=" + boxLayoutScopes, c.cfg.Image + " sleep infinity",
 	} {
 		if !strings.Contains(args, want) {
 			t.Fatalf("run args missing %q:\n%s", want, args)
 		}
 	}
-	// 容器里不能有机密：不挂宿主目录，除 HOME 外不传环境变量。
-	for i, arg := range b.runArgs() {
-		if arg == "--volume" && !strings.HasPrefix(b.runArgs()[i+1], "diana-work-") {
-			t.Fatalf("box must only mount its named volume, got %q", b.runArgs()[i+1])
+	// 容器里不能有机密：不挂宿主目录，容器本身不带环境变量（HOME 等按范围在 exec 时给）。
+	for i, arg := range c.runArgs() {
+		if arg == "--volume" && c.runArgs()[i+1] != "diana-sandbox:/work" {
+			t.Fatalf("box must only mount its named volume, got %q", c.runArgs()[i+1])
 		}
-		if arg == "--env" && !strings.HasPrefix(b.runArgs()[i+1], "HOME=") {
-			t.Fatalf("box must not receive env %q", b.runArgs()[i+1])
+		if arg == "--env" {
+			t.Fatalf("box container must not receive env %q", c.runArgs()[i+1])
 		}
 		if strings.Contains(arg, "docker.sock") {
 			t.Fatal("box must never see a docker socket")
 		}
 	}
-	offline := newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, nil, "k")
+	offline := newBoxContainer(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, nil)
 	if !strings.Contains(strings.Join(offline.runArgs(), " "), "--network none") {
 		t.Fatal("network=false must use --network none")
+	}
+	if got := BoxConfigFromEnv().Memory; os.Getenv(boxMemoryEnv) == "" && got != "2g" {
+		t.Fatalf("default memory = %q, want 2g", got)
+	}
+}
+
+// 命令以范围 uid、在范围目录里跑，HOME/TMPDIR/包缓存都指向范围自己的目录。
+func TestBoxScopeExecArgs(t *testing.T) {
+	b := testScope(testBoxConfig(), nil, "bot\x00group:1", 10007)
+	args := strings.Join(b.execArgs(false), " ")
+	root := "/work/" + boxScopeName("bot\x00group:1")
+	for _, want := range []string{
+		"exec --user 10007:10007 --workdir " + root, "--env HOME=" + root + "/.home", "--env TMPDIR=" + root + "/tmp",
+		"--env UV_CACHE_DIR=" + root + "/.home/.cache/uv", "--env NPM_CONFIG_PREFIX=" + root + "/.home/.npm-global",
+		"--env PATH=" + root + "/.home/.local/bin:", " diana-sandbox",
+	} {
+		if !strings.Contains(args, want) {
+			t.Fatalf("exec args missing %q:\n%s", want, args)
+		}
+	}
+	if b.Root() != root || !strings.HasPrefix(b.scope, "s-") {
+		t.Fatalf("root = %q", b.Root())
+	}
+	if other := testScope(testBoxConfig(), nil, "bot\x00group:2", 10008); other.Root() == b.Root() {
+		t.Fatal("two sessions must not share a scope directory")
 	}
 }
 
@@ -95,7 +126,7 @@ func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
 	previous := boxHostAddresses
 	boxHostAddresses = func() ([]string, []string) { return []string{"203.0.113.7/32"}, []string{"2001:db8::7/128"} }
 	t.Cleanup(func() { boxHostAddresses = previous })
-	b := newWorkBox(testBoxConfig(), nil, "k")
+	b := newBoxContainer(testBoxConfig(), nil)
 	args := b.firewallArgs()
 	v4, v6 := args[len(args)-2], args[len(args)-1]
 	for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "203.0.113.7/32"} {
@@ -125,10 +156,12 @@ func TestBoxFirewallBlocksHostAndPrivateRanges(t *testing.T) {
 	}
 }
 
-// running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间，再加按 testBoxConfig
-// 起出来的网络模式和资源上限。
+// testBoxShape 是按 testBoxConfig 起出来的容器在 inspect 里的网络模式、资源上限和额外能力。
+const testBoxShape = "diana-sandbox 1073741824 2000000000 256 " + boxCapAdd
+
+// running 的容器在 fake inspect 里的样子：运行中、镜像、ID、启动时间，再加 testBoxShape。
 func boxInspectReply(image, id, started string) dockerResult {
-	return boxInspectReplyShape(image, id, started, "diana-box 1073741824 2000000000 256")
+	return boxInspectReplyShape(image, id, started, "diana-sandbox 1073741824 2000000000 256 "+`["CAP_FOWNER","CAP_CHOWN","CAP_DAC_OVERRIDE"]`)
 }
 
 func boxInspectReplyShape(image, id, started, shape string) dockerResult {
@@ -158,16 +191,27 @@ func TestBoxEnsureLifecycle(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(testBoxConfig(), fake.run, "k")
+	b := testScope(testBoxConfig(), fake.run, "k", 10001)
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	// 防火墙在 mkdir 之前写：容器里还没跑过任何东西时出站就已经收紧。
-	want := []string{"inspect", "image inspect", "image inspect", "build", "network inspect", "network create", "volume create", "run", "inspect", "run firewall", "exec"}
+	// 防火墙在任何 exec 之前写：容器里还没跑过任何东西时出站就已经收紧。之后 root 把
+	// /work 收成 0711，再建这个范围的目录、交给范围 uid，最后范围 uid 自己建子目录。
+	want := []string{"inspect", "image inspect", "image inspect", "build", "network inspect", "network create", "volume create", "run", "inspect", "run firewall", "exec", "exec", "exec"}
 	if got := fake.verbs(); !slices.Equal(got, want) {
 		t.Fatalf("first ensure:\n got %v\nwant %v", got, want)
 	}
-	// 同一进程里第二次使用：容器还是写防火墙时那个，只 inspect。
+	calls := fake.calls
+	if init := strings.Join(calls[10], " "); !strings.Contains(init, "--user 0:0") || !strings.Contains(init, boxRootInitScript) {
+		t.Fatalf("root init: %s", init)
+	}
+	if dir := strings.Join(calls[11], " "); !strings.Contains(dir, "--user 0:0") || !strings.HasSuffix(dir, b.scope+" 10001") {
+		t.Fatalf("scope dir: %s", dir)
+	}
+	if skeleton := strings.Join(calls[12], " "); !strings.Contains(skeleton, "--user 10001:10001") || !strings.HasSuffix(skeleton, b.Root()) {
+		t.Fatalf("scope skeleton must run as the scope uid: %s", skeleton)
+	}
+	// 同一进程里第二次使用：容器还是写防火墙时那个，范围也准备过，只 inspect。
 	fake.calls = nil
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
@@ -175,22 +219,31 @@ func TestBoxEnsureLifecycle(t *testing.T) {
 	if got := fake.verbs(); !slices.Equal(got, []string{"inspect"}) {
 		t.Fatalf("warm ensure: %v", got)
 	}
-	// 容器被外部重启（ID 不变、启动时间变了）：网络命名空间是新的，规则要重写。
+	// 同一个容器里的另一个范围：不重建容器，只准备自己的目录。
+	other := &WorkBox{host: b.host, key: "k2", scope: boxScopeName("k2"), uid: 10002}
+	fake.calls = nil
+	if err := other.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "exec", "exec"}) {
+		t.Fatalf("second scope ensure: %v", got)
+	}
+	// 容器被外部重启（ID 不变、启动时间变了）：网络命名空间是新的，规则要重写；范围目录重新核对。
 	started = "2026-11-15T02:00:00Z"
 	fake.calls = nil
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "run firewall"}) {
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "run firewall", "exec", "exec"}) {
 		t.Fatalf("restarted container must get its firewall again: %v", got)
 	}
 	// 新进程接手旧容器：不知道防火墙写没写，重写一遍。
-	fresh := newWorkBox(testBoxConfig(), fake.run, "k")
+	fresh := testScope(testBoxConfig(), fake.run, "k", 10001)
 	fake.calls = nil
 	if err := fresh.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "run firewall"}) {
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "run firewall", "exec", "exec"}) {
 		t.Fatalf("adopted ensure: %v", got)
 	}
 }
@@ -211,7 +264,7 @@ func TestBoxEnsureRemovesContainerWhenFirewallFails(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(testBoxConfig(), fake.run, "k")
+	b := testScope(testBoxConfig(), fake.run, "k", 10001)
 	if err := b.Ensure(context.Background()); err == nil || !strings.Contains(err.Error(), "防火墙") {
 		t.Fatalf("want firewall error, got %v", err)
 	}
@@ -228,35 +281,40 @@ func TestBoxEnsureRecreatesOnImageChange(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(testBoxConfig(), fake.run, "k")
+	b := testScope(testBoxConfig(), fake.run, "k", 10001)
 	_ = b.Ensure(context.Background())
 	if got := fake.verbs(); len(got) < 2 || got[1] != "rm" {
 		t.Fatalf("stale image must be replaced: %v", got)
 	}
 }
 
-func TestBoxResetRemovesContainerAndVolume(t *testing.T) {
-	fake := &fakeDocker{reply: func([]string, []byte) dockerResult { return dockerResult{} }}
-	b := newWorkBox(testBoxConfig(), fake.run, "k")
-	if err := b.Reset(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got := fake.verbs(); !slices.Equal(got, []string{"rm", "volume rm"}) {
-		t.Fatalf("reset: %v", got)
-	}
+func fakeTestBox(fake *fakeDocker) *WorkBox {
+	return testScope(BoxConfig{Image: "x", Memory: "1g", CPUs: 2, PIDs: 256, Network: true}, fake.run, "k", 10001)
 }
 
-func fakeTestBox(fake *fakeDocker) *WorkBox {
-	return newWorkBox(BoxConfig{Image: "x", Memory: "1g", CPUs: 2, PIDs: 256, Network: true}, fake.run, "k")
+// 能力的写法因 Docker 版本而异（CAP_CHOWN 或 CHOWN，顺序不定），都要认成同一个，
+// 否则每次使用都会重建共享容器。
+func TestNormalizeBoxCaps(t *testing.T) {
+	for _, raw := range []string{`["CHOWN","DAC_OVERRIDE","FOWNER"]`, `["CAP_CHOWN","CAP_DAC_OVERRIDE","CAP_FOWNER"]`, `["cap_fowner","CAP_CHOWN","dac_override"]`} {
+		if got := normalizeBoxCaps(raw); got != boxCapAdd {
+			t.Fatalf("normalize(%s) = %q", raw, got)
+		}
+	}
+	if got := normalizeBoxCaps("null"); got == boxCapAdd {
+		t.Fatal("no caps must not match")
+	}
 }
 
 // 部署方改了网络开关或资源上限：旧容器的网络模式、内存、CPU、进程数对不上，删掉重建。
+// 能力集合对不上（比如还是旧版不带 CHOWN 的容器）也重建。
 func TestBoxEnsureRecreatesOnShapeChange(t *testing.T) {
 	for name, shape := range map[string]string{
-		"offline container, networked config": "none 1073741824 2000000000 256",
-		"memory changed":                      "diana-box 536870912 2000000000 256",
-		"cpus changed":                        "diana-box 1073741824 1000000000 256",
-		"pids changed":                        "diana-box 1073741824 2000000000 64",
+		"offline container, networked config": "none 1073741824 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"memory changed":                      "diana-sandbox 536870912 2000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"cpus changed":                        "diana-sandbox 1073741824 1000000000 256 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"pids changed":                        "diana-sandbox 1073741824 2000000000 64 " + `["CHOWN","DAC_OVERRIDE","FOWNER"]`,
+		"caps reduced":                        "diana-sandbox 1073741824 2000000000 256 " + `["CAP_CHOWN"]`,
+		"caps missing":                        "diana-sandbox 1073741824 2000000000 256 null",
 	} {
 		fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 			if args[0] == "inspect" {
@@ -264,14 +322,14 @@ func TestBoxEnsureRecreatesOnShapeChange(t *testing.T) {
 			}
 			return dockerResult{}
 		}}
-		b := newWorkBox(testBoxConfig(), fake.run, "k")
+		b := testScope(testBoxConfig(), fake.run, "k", 10001)
 		_ = b.Ensure(context.Background())
 		if got := fake.verbs(); len(got) < 2 || got[1] != "rm" {
 			t.Fatalf("%s: container must be recreated: %v", name, got)
 		}
 	}
-	if b := newWorkBox(testBoxConfig(), nil, "k"); b.wantShape() != "diana-box 1073741824 2000000000 256" {
-		t.Fatalf("wantShape = %q", b.wantShape())
+	if c := newBoxContainer(testBoxConfig(), nil); c.wantShape() != testBoxShape {
+		t.Fatalf("wantShape = %q", c.wantShape())
 	}
 	for in, want := range map[string]int64{"1g": 1 << 30, "512m": 512 << 20, "1.5g": 3 << 29, "2048k": 2 << 20, "100b": 100, "4096": 4096} {
 		if got, ok := parseBoxMemory(in); !ok || got != want {
@@ -305,12 +363,51 @@ func TestBoxFallsBackToIPv4OnlyWithoutIPv6Tables(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := newWorkBox(testBoxConfig(), fake.run, "k")
+	b := testScope(testBoxConfig(), fake.run, "k", 10001)
 	if err := b.Ensure(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if !boxIPv6Off.Load() || sysctlRuns != 1 || b.firewalledFor == "" {
-		t.Fatalf("ipv6Off=%v sysctlRuns=%d firewalled=%q verbs=%v", boxIPv6Off.Load(), sysctlRuns, b.firewalledFor, fake.verbs())
+	if !boxIPv6Off.Load() || sysctlRuns != 1 || b.host.firewalledFor == "" {
+		t.Fatalf("ipv6Off=%v sysctlRuns=%d firewalled=%q verbs=%v", boxIPv6Off.Load(), sysctlRuns, b.host.firewalledFor, fake.verbs())
+	}
+}
+
+// 重置只清这个范围：以范围 uid 停掉它的进程、删光它的目录，不动共享容器和卷，也不碰别的范围。
+func TestBoxResetClearsOnlyTheScope(t *testing.T) {
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		if args[0] == "inspect" {
+			return boxInspectReply("x", "c1", "s")
+		}
+		return dockerResult{}
+	}}
+	b := fakeTestBox(fake)
+	if err := b.Ensure(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fake.calls = nil
+	if err := b.Reset(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "exec", "exec", "exec"}) {
+		t.Fatalf("reset: %v", got)
+	}
+	for _, call := range fake.calls[1:] {
+		joined := strings.Join(call, " ")
+		if !strings.Contains(joined, "--user 10001:10001") {
+			t.Fatalf("reset must run as the scope uid: %s", joined)
+		}
+	}
+	if kill := fake.calls[2]; !slices.Equal(kill[len(kill)-4:], []string{"pkill", "-KILL", "-U", "10001"}) {
+		t.Fatalf("kill: %v", kill)
+	}
+	if clear := fake.calls[3]; clear[len(clear)-1] != b.Root() || !slices.Contains(clear, boxScopeClearScript) {
+		t.Fatalf("clear: %v", clear)
+	}
+	// 清空后下次使用重建目录骨架。
+	fake.calls = nil
+	_ = b.Ensure(context.Background())
+	if got := fake.verbs(); !slices.Equal(got, []string{"inspect", "exec", "exec"}) {
+		t.Fatalf("ensure after reset: %v", got)
 	}
 }
 
@@ -323,11 +420,15 @@ func TestBoxExecTimeoutCapAndExitCodes(t *testing.T) {
 			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			if slices.Contains(args, boxExecScript) {
-				if got := args[len(args)-6]; args[len(args)-5] == "sleep 9999" && got != "600" {
-					t.Errorf("timeout must be capped at 600s, got %s", got)
+				n := len(args)
+				if args[n-7] == "sleep 9999" && args[n-8] != "600" {
+					t.Errorf("timeout must be capped at 600s, got %s", args[n-8])
 				}
-				if out := args[len(args)-4]; !strings.HasPrefix(out, boxOutputDir+"/") || !strings.HasSuffix(out, ".log") {
-					t.Errorf("full output must stay in the box, got %s", out)
+				if out := args[n-6]; !strings.HasPrefix(out, args[n-2]+"/"+boxOutputDir+"/") || !strings.HasSuffix(out, ".log") {
+					t.Errorf("full output must stay in the scope directory, got %s", out)
+				}
+				if args[n-1] != "128" {
+					t.Errorf("scope process limit = %s, want 128", args[n-1])
 				}
 				return dockerResult{code: code}
 			}
@@ -354,7 +455,7 @@ func TestBoxExecRecreatesVanishedContainerOnce(t *testing.T) {
 			if slices.Contains(args, boxExecScript) {
 				attempts++
 				if attempts == 1 {
-					return dockerResult{code: 1, stderr: "Error response from daemon: No such container: diana-box-x"}
+					return dockerResult{code: 1, stderr: "Error response from daemon: No such container: diana-sandbox"}
 				}
 			}
 		}
@@ -367,36 +468,52 @@ func TestBoxExecRecreatesVanishedContainerOnce(t *testing.T) {
 
 // 输出读回只要尾部窗口：头一行是总字节和总行数，后面是窗口内容，起点按两者推出来。
 func TestBoxOutputTail(t *testing.T) {
+	var gotPath string
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		if args[0] == "exec" && slices.Contains(args, boxOutputTailScript) {
 			if args[len(args)-1] != "8" {
 				t.Errorf("window = %s", args[len(args)-1])
 			}
+			gotPath = args[len(args)-2]
 			return dockerResult{stdout: []byte("100 12\nline-11\n")}
 		}
 		return dockerResult{}
 	}}
-	tail, start, size, lines, err := fakeTestBox(fake).OutputTail(context.Background(), "/work/.output/a.log", 8)
+	b := fakeTestBox(fake)
+	tail, start, size, lines, err := b.OutputTail(context.Background(), ".output/a.log", 8)
 	if err != nil || string(tail) != "line-11\n" || start != 92 || size != 100 || lines != 12 {
 		t.Fatalf("tail=%q start=%d size=%d lines=%d err=%v", tail, start, size, lines, err)
 	}
+	if gotPath != b.Root()+"/.output/a.log" {
+		t.Fatalf("path = %q", gotPath)
+	}
 }
 
-// 同一个 key 并发取 box 只能得到同一个实例，否则两把锁会交错建容器、写防火墙。
-func TestBoxForIsAtomic(t *testing.T) {
+func withFakeBoxRuntime(t *testing.T) {
+	t.Helper()
 	previous := boxProbe
 	boxProbe = func(BoxConfig) (dockerRunner, string) {
 		return func(context.Context, dockerCall) dockerResult { return dockerResult{} }, ""
 	}
-	boxAvailability.mu.Lock()
-	boxAvailability.checked = time.Time{}
-	boxAvailability.mu.Unlock()
-	t.Cleanup(func() {
-		boxProbe = previous
+	resetAvailability := func() {
 		boxAvailability.mu.Lock()
 		boxAvailability.checked = time.Time{}
 		boxAvailability.mu.Unlock()
+	}
+	resetAvailability()
+	t.Cleanup(func() {
+		boxProbe = previous
+		resetAvailability()
+	})
+}
+
+// 同一个 key 并发取 box 只能得到同一个实例；不同 key 拿到不同的范围、不同的 uid，但共用
+// 一个容器。
+func TestBoxForIsAtomic(t *testing.T) {
+	withFakeBoxRuntime(t)
+	t.Cleanup(func() {
 		boxRegistry.Delete("concurrent")
+		boxRegistry.Delete("concurrent-2")
 	})
 	var wg sync.WaitGroup
 	got := make([]*WorkBox, 64)
@@ -417,34 +534,85 @@ func TestBoxForIsAtomic(t *testing.T) {
 			t.Fatal("concurrent BoxFor returned different boxes for one key")
 		}
 	}
+	other, err := BoxFor("concurrent-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.host != got[0].host || other.scope == got[0].scope || other.uid == got[0].uid {
+		t.Fatalf("scopes must share the container but not dir/uid: %+v vs %+v", other, got[0])
+	}
 }
 
-func TestNormalizeBoxPath(t *testing.T) {
-	for in, want := range map[string]string{"a.txt": "/work/a.txt", "/work/x/./y": "/work/x/y", "/work": "/work", "inbox/1.png": "/work/inbox/1.png"} {
-		if got, err := NormalizeBoxPath(in); err != nil || got != want {
+// 范围 uid 落盘、重启后照旧，新范围接着往后分，永不复用；登记表坏了就拒绝，不瞎分。
+func TestBoxScopeUIDsPersist(t *testing.T) {
+	dir := t.TempDir()
+	first := &boxScopeUIDs{dir: dir}
+	a, err := first.uidFor("s-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := first.uidFor("s-b")
+	if again, _ := first.uidFor("s-a"); again != a || a != boxScopeUIDBase || b != boxScopeUIDBase+1 {
+		t.Fatalf("a=%d b=%d again=%d", a, b, again)
+	}
+	reloaded := &boxScopeUIDs{dir: dir}
+	if got, _ := reloaded.uidFor("s-b"); got != b {
+		t.Fatalf("after restart s-b = %d, want %d", got, b)
+	}
+	if got, _ := reloaded.uidFor("s-c"); got != boxScopeUIDBase+2 {
+		t.Fatalf("new scope after restart = %d", got)
+	}
+	if err := os.WriteFile(filepath.Join(dir, boxScopesFile), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&boxScopeUIDs{dir: dir}).uidFor("s-d"); err == nil {
+		t.Fatal("corrupt registry must refuse to hand out uids")
+	}
+}
+
+func TestBoxResolvePath(t *testing.T) {
+	b := testScope(testBoxConfig(), nil, "k", 10001)
+	root := b.Root()
+	for in, want := range map[string]string{
+		"a.txt":                 root + "/a.txt",
+		"inbox/1.png":           root + "/inbox/1.png",
+		root + "/x/./y":         root + "/x/y",
+		"/work/out.gif":         root + "/out.gif",
+		"/work":                 root,
+		"":                      root,
+		"/work/inbox/video.mp4": root + "/inbox/video.mp4",
+	} {
+		if got, err := b.ResolvePath(in); err != nil || got != want {
 			t.Fatalf("%q → %q, %v", in, got, err)
 		}
 	}
-	for _, bad := range []string{"../etc/passwd", "/etc/passwd", "/work/../etc", "/workx/a", "a\nb"} {
-		if _, err := NormalizeBoxPath(bad); err == nil {
+	for _, bad := range []string{"../etc/passwd", "/etc/passwd", "/work/../etc", root + "/../s-other/x", "/workx/a", "a\nb"} {
+		if _, err := b.ResolvePath(bad); err == nil {
 			t.Fatalf("%q must be rejected", bad)
 		}
 	}
 }
 
 func TestBoxCopyOutEnforcesLimit(t *testing.T) {
-	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+	var fake *fakeDocker
+	b := (*WorkBox)(nil)
+	fake = &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
 			return boxInspectReply("x", "c1", "s")
 		case "exec":
-			return dockerResult{stdout: []byte("/work/out.png\nPNGDATA")}
+			if slices.Contains(args, boxCopyOutScript) {
+				if args[len(args)-1] != b.Root() || !strings.Contains(strings.Join(args, " "), "--user 10001:10001") {
+					t.Errorf("copy out must check against the scope root as the scope uid: %v", args)
+				}
+				return dockerResult{stdout: []byte(b.Root() + "/out.png\nPNGDATA")}
+			}
 		}
 		return dockerResult{}
 	}}
-	b := fakeTestBox(fake)
-	real, data, err := b.CopyOut(context.Background(), "out.png", 1024)
-	if err != nil || real != "/work/out.png" || string(data) != "PNGDATA" {
+	b = fakeTestBox(fake)
+	real, data, err := b.CopyOut(context.Background(), "/work/out.png", 1024)
+	if err != nil || real != b.Root()+"/out.png" || string(data) != "PNGDATA" {
 		t.Fatalf("real=%q data=%q err=%v", real, data, err)
 	}
 	if _, _, err := b.CopyOut(context.Background(), "out.png", 3); err == nil {
@@ -476,21 +644,9 @@ func TestBoxDaemonPolicy(t *testing.T) {
 	}
 }
 
-func TestLastWeeklyBoxBoundary(t *testing.T) {
-	loc := time.FixedZone("CST", 8*3600)
-	for now, want := range map[time.Time]time.Time{
-		time.Date(2026, 11, 15, 12, 0, 0, 0, loc): time.Date(2026, 11, 9, 5, 0, 0, 0, loc),  // 周日
-		time.Date(2026, 11, 16, 4, 59, 0, 0, loc): time.Date(2026, 11, 9, 5, 0, 0, 0, loc),  // 周一 05:00 前
-		time.Date(2026, 11, 16, 5, 0, 0, 0, loc):  time.Date(2026, 11, 16, 5, 0, 0, 0, loc), // 周一 05:00
-	} {
-		if got := lastWeeklyBoxBoundary(now); !got.Equal(want) {
-			t.Fatalf("%v → %v, want %v", now, got, want)
-		}
-	}
-}
-
-// TestBoxRealDocker 用真 Docker 跑一遍：联网、挡宿主回环和私网、超时杀进程组、文件进出、重置。
-// 需要本机有 Docker 和构建好的内置镜像：DIANA_BOX_DOCKER_TEST=1 scripts/test-serial.sh ./model/agent
+// TestBoxRealDocker 用真 Docker 跑一遍：联网、挡宿主回环和私网、超时杀进程组、文件进出、
+// 范围之间互相看不到、重置只清自己。容器和卷用测试专用的名字，不碰正在用的 diana-sandbox。
+// 需要本机有 Docker：DIANA_BOX_DOCKER_TEST=1 scripts/test-serial.sh ./model/agent
 func TestBoxRealDocker(t *testing.T) {
 	if os.Getenv("DIANA_BOX_DOCKER_TEST") != "1" {
 		t.Skip("set DIANA_BOX_DOCKER_TEST=1 to run against a real Docker daemon")
@@ -499,29 +655,47 @@ func TestBoxRealDocker(t *testing.T) {
 	if reason != "" {
 		t.Fatal(reason)
 	}
-	b := newWorkBox(testBoxConfig(), docker, "diana-box-test\x00"+t.Name())
+	host := newBoxContainer(testBoxConfig(), docker)
+	host.container, host.volume = "diana-test-box", "diana-test-work"
+	b := &WorkBox{host: host, key: "test-a", scope: boxScopeName("test-a"), uid: 10901}
+	other := &WorkBox{host: host, key: "test-b", scope: boxScopeName("test-b"), uid: 10902}
 	ctx := context.Background()
-	t.Cleanup(func() { _ = b.Reset(context.Background()) })
-	run := func(command string, timeout time.Duration) (BoxExecResult, string) {
+	t.Cleanup(func() {
+		_ = docker(context.Background(), dockerCall{args: []string{"rm", "--force", host.container}, timeout: time.Minute})
+		_ = docker(context.Background(), dockerCall{args: []string{"volume", "rm", "--force", host.volume}, timeout: time.Minute})
+	})
+	runIn := func(w *WorkBox, command string, timeout time.Duration) (BoxExecResult, string) {
 		t.Helper()
-		res, err := b.Exec(ctx, command, timeout)
+		res, err := w.Exec(ctx, command, timeout)
 		if err != nil {
 			t.Fatalf("%s: %v", command, err)
 		}
-		tail, _, _, _, err := b.OutputTail(ctx, res.OutputPath, 1<<20)
+		tail, _, _, _, err := w.OutputTail(ctx, res.OutputPath, 1<<20)
 		if err != nil {
 			t.Fatalf("%s: %v", command, err)
 		}
 		return res, string(tail)
 	}
+	run := func(command string, timeout time.Duration) (BoxExecResult, string) {
+		t.Helper()
+		return runIn(b, command, timeout)
+	}
+	root := b.Root()
 	// 普通命令要马上返回：后台的磁盘检查不能拖住 docker exec。
 	quick := time.Now()
 	run(`true`, 0)
 	if elapsed := time.Since(quick); elapsed > 10*time.Second {
 		t.Fatalf("a trivial command took %v", elapsed)
 	}
-	if res, out := run(`id -u; env | sort | cut -d= -f1 | tr '\n' ' '; touch /etc/x 2>&1 | head -1`, 0); res.ExitCode != 0 || !strings.HasPrefix(out, "1000\n") || !strings.Contains(out, "Read-only") {
-		t.Fatalf("identity/readonly: %+v %q", res, out)
+	firstIdentity := host.identity
+	if res, out := run(`id -u; pwd; echo "$HOME"; touch /etc/x 2>&1 | head -1`, 0); res.ExitCode != 0 || out != "10901\n"+root+"\n"+root+"/.home\ntouch: cannot touch '/etc/x': Read-only file system\n" {
+		t.Fatalf("identity/cwd/readonly: %+v %q", res, out)
+	}
+	// 范围之间：列不出 /work，读不到、写不进别人的目录，也不能在 /work 下直接建文件；
+	// 能力都到不了命令手里。
+	runIn(other, `echo secret > mine.txt`, 0)
+	if _, out := run(`ls /work 2>&1 | head -1; cat `+other.Root()+`/mine.txt 2>&1 | head -1; touch /work/x 2>&1 | head -1; grep CapEff /proc/self/status`, 0); !strings.Contains(out, "Permission denied") || strings.Contains(out, "secret") || !strings.Contains(out, "CapEff:\t0000000000000000") {
+		t.Fatalf("scopes must not see each other: %q", out)
 	}
 	if _, out := run(`curl -s -m 15 -o /dev/null -w '%{http_code}' https://example.com`, 0); out != "200" {
 		t.Fatalf("public network must work, got %q", out)
@@ -554,16 +728,18 @@ func TestBoxRealDocker(t *testing.T) {
 	if _, err := b.WriteFile(ctx, "inbox/hello.txt", strings.NewReader("hi")); err != nil {
 		t.Fatal(err)
 	}
-	if real, data, err := b.CopyOut(ctx, "inbox/hello.txt", 1024); err != nil || real != "/work/inbox/hello.txt" || string(data) != "hi" {
+	if real, data, err := b.CopyOut(ctx, "/work/inbox/hello.txt", 1024); err != nil || real != root+"/inbox/hello.txt" || string(data) != "hi" {
 		t.Fatalf("copy out: %q %q %v", real, data, err)
 	}
-	run(`ln -sf /etc/passwd /work/leak`, 0)
-	if _, _, err := b.CopyOut(ctx, "leak", 1<<20); err == nil {
-		t.Fatal("symlink escaping /work must be rejected")
+	run(`ln -sf /etc/passwd leak; ln -sf `+other.Root()+`/mine.txt peek`, 0)
+	for _, link := range []string{"leak", "peek"} {
+		if _, _, err := b.CopyOut(ctx, link, 1<<20); err == nil {
+			t.Fatalf("symlink %s escaping the scope must be rejected", link)
+		}
 	}
-	// 输出放不下时给尾部整行，完整输出落进 box，模型在容器里按行读。
+	// 输出放不下时给尾部整行，完整输出落进范围目录，模型在容器里按行读。
 	body, err := RunBoxCommand(ctx, b, `seq 1 300000`, 0)
-	if err != nil || !strings.Contains(body, `"truncated": true`) || !strings.Contains(body, "300000") || !strings.Contains(body, "/work/.output/") {
+	if err != nil || !strings.Contains(body, `"truncated": true`) || !strings.Contains(body, "300000") || !strings.Contains(body, root+"/.output/") {
 		t.Fatalf("paged output: err=%v %.400s", err, body)
 	}
 	var paged struct {
@@ -574,16 +750,20 @@ func TestBoxRealDocker(t *testing.T) {
 		t.Fatalf("full output lines in %q = %q", paged.FullOutputPath, out)
 	}
 	// 完整输出只留最新几份；还在跑的命令（/tmp/.run-<runID> 在）的那份不删，哪怕它最旧。
-	run(`touch /tmp/.run-stillrunning && touch -d 2000-01-01 /work/.output/20000101-000000-stillrunning.log`, 0)
+	run(`touch /tmp/.run-stillrunning && touch -d 2000-01-01 .output/20000101-000000-stillrunning.log`, 0)
 	for range boxOutputKeep + 5 {
 		run(`true`, 0)
 	}
-	if _, out := run(`ls /work/.output | wc -l; ls /work/.output/20000101-000000-stillrunning.log`, 0); out != strconv.Itoa(boxOutputKeep+1)+"\n/work/.output/20000101-000000-stillrunning.log\n" {
+	if _, out := run(`ls .output | wc -l; ls .output/20000101-000000-stillrunning.log`, 0); out != strconv.Itoa(boxOutputKeep+1)+"\n.output/20000101-000000-stillrunning.log\n" {
 		t.Fatalf("output rotation: %q", out)
 	}
 	run(`rm -f /tmp/.run-stillrunning`, 0)
+	// 几十条命令、两个范围跑下来，共享容器还是最开始那个：每次使用都不该重建它。
+	if host.identity != firstIdentity || firstIdentity == "" {
+		t.Fatalf("shared container was recreated between commands: %q → %q", firstIdentity, host.identity)
+	}
 	// 容器被外部重启后网络命名空间是新的：下次使用前必须重写防火墙。
-	if res := docker(ctx, dockerCall{args: []string{"restart", "--time", "1", b.container}, timeout: time.Minute}); res.code != 0 {
+	if res := docker(ctx, dockerCall{args: []string{"restart", "--time", "1", host.container}, timeout: time.Minute}); res.code != 0 {
 		t.Fatalf("restart: %s", res.stderr)
 	}
 	if _, out := run(`curl -s -m 5 -o /dev/null -w '%{http_code}' http://host.docker.internal:18080/; echo " $?"`, 0); !strings.HasPrefix(out, "000 ") {
@@ -592,112 +772,123 @@ func TestBoxRealDocker(t *testing.T) {
 	if _, err := RunBoxCommand(ctx, b, `echo boom >&2; exit 3`, 0); err == nil || !strings.Contains(err.Error(), "boom") || !strings.Contains(err.Error(), `"exit_code": 3`) {
 		t.Fatalf("failing command: %v", err)
 	}
-	// 磁盘上限：单个文件被 ulimit -f 截住；几个文件加起来超限时运行中被停掉；之后的
-	// 命令和附件写入都被拒绝，删掉文件就恢复。
+	// 磁盘上限按范围目录算：单个文件被 ulimit -f 截住；几个文件加起来超限时运行中被停掉；
+	// 之后的命令和附件写入都被拒绝，删掉文件就恢复。
 	b.SetDiskLimit(20 << 20)
-	if _, err := b.Exec(ctx, `head -c 30M /dev/zero > /work/big`, 0); err != nil {
+	if _, err := b.Exec(ctx, `head -c 30M /dev/zero > big`, 0); err != nil {
 		t.Fatal(err)
 	}
 	b.SetDiskLimit(0)
-	if _, out := run(`stat -c %s /work/big; rm -f /work/big`, 0); func() bool { n, err := strconv.Atoi(strings.TrimSpace(out)); return err != nil || n > 20<<20 }() {
+	if _, out := run(`stat -c %s big; rm -f big`, 0); func() bool { n, err := strconv.Atoi(strings.TrimSpace(out)); return err != nil || n > 20<<20 }() {
 		t.Fatalf("ulimit -f must cap a single file at the limit, size %q", out)
 	}
 	b.SetDiskLimit(20 << 20)
-	stopped, err := b.Exec(ctx, `for i in 1 2 3; do head -c 9M /dev/zero > /work/f$i; done; sleep 30`, 60*time.Second)
+	stopped, err := b.Exec(ctx, `for i in 1 2 3; do head -c 9M /dev/zero > f$i; done; sleep 30`, 60*time.Second)
 	if err != nil || stopped.DiskFull == nil || stopped.DiskFull.Refused || stopped.Duration > 20*time.Second {
 		t.Fatalf("over-limit command must be stopped mid-run: %+v %v", stopped, err)
 	}
-	refused, err := b.Exec(ctx, `echo should-not-run > /work/ran`, 0)
+	refused, err := b.Exec(ctx, `echo should-not-run > ran`, 0)
 	if err != nil || refused.DiskFull == nil || !refused.DiskFull.Refused {
 		t.Fatalf("command over limit must be refused: %+v %v", refused, err)
 	}
 	if _, err := b.WriteFile(ctx, "inbox/more.txt", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("write over limit: %v", err)
 	}
+	// 另一个范围不受这个范围的上限影响。
+	if res, _ := runIn(other, `head -c 1M /dev/zero > ok`, 0); res.DiskFull != nil {
+		t.Fatalf("other scope hit this scope's limit: %+v", res)
+	}
 	b.SetDiskLimit(0)
-	if _, out := run(`ls /work/ran 2>&1; rm -f /work/f1 /work/f2 /work/f3`, 0); !strings.Contains(out, "No such file") {
+	if _, out := run(`ls ran 2>&1; rm -f f1 f2 f3`, 0); !strings.Contains(out, "No such file") {
 		t.Fatalf("refused command ran: %q", out)
+	}
+	// 重置只清自己：自己的进程停掉、文件删光，别的范围原样。
+	if _, err := b.Exec(ctx, `(sleep 302 &) ; true`, 0); err != nil {
+		t.Fatal(err)
 	}
 	if err := b.Reset(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, out := run(`ls /work/inbox`, 0); strings.TrimSpace(out) != "" {
-		t.Fatalf("reset must wipe the volume, got %q", out)
+	if _, out := run(`ls -A inbox; ps -eo args= | grep -c '[s]leep 302' || true`, 0); strings.TrimSpace(out) != "0" {
+		t.Fatalf("reset must wipe the scope and its processes, got %q", out)
+	}
+	if _, out := runIn(other, `cat mine.txt`, 0); out != "secret\n" {
+		t.Fatalf("reset touched another scope: %q", out)
 	}
 }
 
-// 空闲回收：本进程用过的按最近使用时间，忙着的不动；上一次运行留下的按启动时间，
-// 里面还有命令在跑时不动。回收只删容器，不删卷。
+// 空闲回收：本进程起的共享容器按所有范围的最近使用时间，忙着的不动；上一次运行留下的
+// 按启动时间，里面还有命令在跑时不动。回收只删容器，不删卷。
 func TestStopIdleBoxes(t *testing.T) {
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
-	cfg := BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}
-	fresh := newWorkBox(cfg, nil, "fresh")
-	fresh.lastUsed.Store(now.Add(-time.Minute).UnixNano())
-	idle := newWorkBox(cfg, nil, "idle")
-	idle.lastUsed.Store(now.Add(-20 * time.Minute).UnixNano())
-	busy := newWorkBox(cfg, nil, "busy")
-	busy.lastUsed.Store(now.Add(-time.Hour).UnixNano())
-	busy.running.Add(1)
-	for _, b := range []*WorkBox{fresh, idle, busy} {
-		boxRegistry.Store(b.key, b)
-	}
-	t.Cleanup(func() {
-		for _, k := range []string{"fresh", "idle", "busy"} {
-			boxRegistry.Delete(k)
-		}
-	})
-	orphans := map[string]struct {
-		started time.Time
-		running bool
+	for name, tc := range map[string]struct {
+		registered     bool
+		lastUsed       time.Duration
+		busy           bool
+		started        time.Duration
+		hasRuns        bool
+		wantRemoved    bool
+		wantNotRunning bool
 	}{
-		"diana-box-old":     {now.Add(-time.Hour), false},
-		"diana-box-working": {now.Add(-time.Hour), true},
-		"diana-box-new":     {now.Add(-time.Minute), false},
-	}
-	keys := map[string]string{fresh.container: "fresh", idle.container: "idle", busy.container: "busy", "diana-box-old": "old", "diana-box-working": "working", "diana-box-new": "new"}
-	var removed []string
-	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
-		switch args[0] {
-		case "ps":
-			var names []string
-			for name := range keys {
-				names = append(names, name)
-			}
-			return dockerResult{stdout: []byte(strings.Join(names, "\n"))}
-		case "inspect":
-			name := args[len(args)-1]
-			started := now.Add(-time.Hour)
-			if o, ok := orphans[name]; ok {
-				started = o.started
-			}
-			return dockerResult{stdout: []byte(started.Format(time.RFC3339Nano) + "|" + hex.EncodeToString([]byte(keys[name])))}
-		case "exec":
-			if orphans[args[1]].running {
+		"registered idle":        {registered: true, lastUsed: 20 * time.Minute, wantRemoved: true},
+		"registered fresh":       {registered: true, lastUsed: time.Minute},
+		"registered busy":        {registered: true, lastUsed: time.Hour, busy: true},
+		"orphan old":             {started: time.Hour, wantRemoved: true},
+		"orphan with a command":  {started: time.Hour, hasRuns: true},
+		"orphan recently booted": {started: time.Minute},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var removed []string
+			fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+				switch args[0] {
+				case "ps":
+					return dockerResult{stdout: []byte(boxContainerName + "\n")}
+				case "inspect":
+					return dockerResult{stdout: []byte(now.Add(-tc.started).Format(time.RFC3339Nano))}
+				case "exec":
+					if tc.hasRuns {
+						return dockerResult{}
+					}
+					return dockerResult{code: 2}
+				case "rm":
+					removed = append(removed, args[len(args)-1])
+				case "volume":
+					t.Errorf("idle stop must keep volumes: %v", args)
+				}
 				return dockerResult{}
+			}}
+			sharedBox.mu.Lock()
+			previous := sharedBox.c
+			sharedBox.c = nil
+			var host *boxContainer
+			if tc.registered {
+				host = newBoxContainer(BoxConfig{Image: "x", Memory: "1g", CPUs: 1, PIDs: 64}, fake.run)
+				host.lastUsed.Store(now.Add(-tc.lastUsed).UnixNano())
+				host.firewalledFor = "c1|s"
+				if tc.busy {
+					host.running.Add(1)
+				}
+				sharedBox.c = host
 			}
-			return dockerResult{code: 2}
-		case "rm":
-			removed = append(removed, args[len(args)-1])
-		case "volume":
-			t.Errorf("idle stop must keep volumes: %v", args)
-		}
-		return dockerResult{}
-	}}
-	idle.docker = fake.run
-	stopIdleBoxes(context.Background(), fake.run, now, BoxIdleTimeout)
-	slices.Sort(removed)
-	want := []string{"diana-box-old", idle.container}
-	slices.Sort(want)
-	if !slices.Equal(removed, want) {
-		t.Fatalf("removed %v, want %v", removed, want)
-	}
-	if idle.firewalledFor != "" {
-		t.Fatal("stopped box must re-apply its firewall next time")
+			sharedBox.mu.Unlock()
+			t.Cleanup(func() {
+				sharedBox.mu.Lock()
+				sharedBox.c = previous
+				sharedBox.mu.Unlock()
+			})
+			stopIdleBoxes(context.Background(), fake.run, now, BoxIdleTimeout)
+			if got := len(removed) == 1 && removed[0] == boxContainerName; got != tc.wantRemoved {
+				t.Fatalf("removed %v, want removed=%v", removed, tc.wantRemoved)
+			}
+			if host != nil && tc.wantRemoved && host.firewalledFor != "" {
+				t.Fatal("stopped box must re-apply its firewall next time")
+			}
+		})
 	}
 }
 
-// 回收方在锁外粗筛之后、动手之前，可能有命令刚开始：StopIfIdle / ResetIfIdle 在锁内
-// 再看一遍，忙着或刚用过就不动。
+// 回收方在锁外粗筛之后、动手之前，可能有命令刚开始：StopIfIdle 在锁内再看一遍，
+// 任何范围忙着或刚用过就不动。
 func TestBoxIdleActionsRecheckUnderLock(t *testing.T) {
 	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
 	var calls []string
@@ -706,41 +897,38 @@ func TestBoxIdleActionsRecheckUnderLock(t *testing.T) {
 		return dockerResult{}
 	}}
 	b := fakeTestBox(fake)
-	b.lastUsed.Store(now.Add(-time.Hour).UnixNano())
-	done := b.use() // 粗筛之后有命令开始了
-	if b.StopIfIdle(context.Background(), now, BoxIdleTimeout) {
-		t.Fatal("stopped a box with a running command")
-	}
-	if reset, _ := b.ResetIfIdle(context.Background()); reset {
-		t.Fatal("weekly reset wiped a box with a running command")
+	other := &WorkBox{host: b.host, key: "k2", scope: boxScopeName("k2"), uid: 10002}
+	b.host.lastUsed.Store(now.Add(-time.Hour).UnixNano())
+	done := other.use() // 粗筛之后另一个范围有命令开始了
+	if b.host.StopIfIdle(context.Background(), now, BoxIdleTimeout) {
+		t.Fatal("stopped the shared box while another scope runs a command")
 	}
 	done()
-	if b.StopIfIdle(context.Background(), time.Now(), BoxIdleTimeout) {
+	if b.host.StopIfIdle(context.Background(), time.Now(), BoxIdleTimeout) {
 		t.Fatal("stopped a box that was just used")
 	}
 	if len(calls) != 0 {
 		t.Fatalf("busy box got docker calls: %v", calls)
 	}
-	if !b.StopIfIdle(context.Background(), time.Now().Add(BoxIdleTimeout+time.Minute), BoxIdleTimeout) {
+	if !b.host.StopIfIdle(context.Background(), time.Now().Add(BoxIdleTimeout+time.Minute), BoxIdleTimeout) {
 		t.Fatal("idle box was not stopped")
-	}
-	if reset, err := b.ResetIfIdle(context.Background()); !reset || err != nil {
-		t.Fatalf("idle box was not reset: %v", err)
 	}
 }
 
-// /work 超过磁盘上限：开始前就超的不执行（75 + 标记），运行中超的被停掉（只有标记）；
-// 结果里带上用量和上限。上限按 KiB 传给容器里的脚本。
+// 范围目录超过磁盘上限：开始前就超的不执行（75 + 标记），运行中超的被停掉（只有标记）；
+// 结果里带上用量和上限。上限按 KiB 传给容器里的脚本，du 按范围目录算。
 func TestBoxExecDiskLimit(t *testing.T) {
 	code, marker := boxDiskRefusedExit, "6291456"
+	var b *WorkBox
 	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
 		switch args[0] {
 		case "inspect":
 			return boxInspectReply("x", "c1", "s")
 		case "exec":
 			if slices.Contains(args, boxExecScript) {
-				if got := args[len(args)-2]; got != "5120" {
-					t.Errorf("limit KiB = %s, want 5120", got)
+				n := len(args)
+				if args[n-4] != "5120" || args[n-2] != b.Root() {
+					t.Errorf("limit KiB = %s root = %s, want 5120 %s", args[n-4], args[n-2], b.Root())
 				}
 				return dockerResult{code: code}
 			}
@@ -750,7 +938,7 @@ func TestBoxExecDiskLimit(t *testing.T) {
 		}
 		return dockerResult{}
 	}}
-	b := fakeTestBox(fake)
+	b = fakeTestBox(fake)
 	b.SetDiskLimit(5 << 20)
 	body, err := RunBoxCommand(context.Background(), b, "git clone huge", 0)
 	if err == nil || body != "" || !strings.Contains(err.Error(), `"used": "6.0 GB"`) || !strings.Contains(err.Error(), `"limit": "5 MB"`) || !strings.Contains(err.Error(), "box_reset") {
@@ -786,5 +974,89 @@ func TestBoxWriteFileDiskLimit(t *testing.T) {
 	b.SetDiskLimit(10 << 20)
 	if _, err := b.WriteFile(context.Background(), "inbox/a.bin", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "已用 10 MB") || !strings.Contains(err.Error(), "上限 10 MB") {
 		t.Fatalf("write over limit: %v", err)
+	}
+}
+
+// RunBoxCommand 的结果带上 cwd：一个容器里各会话目录不同，模型要知道自己在哪。
+func TestRunBoxCommandReportsCwd(t *testing.T) {
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		switch args[0] {
+		case "inspect":
+			return boxInspectReply("x", "c1", "s")
+		case "exec":
+			if slices.Contains(args, boxOutputTailScript) {
+				return dockerResult{stdout: []byte("3 1\nok\n")}
+			}
+		}
+		return dockerResult{}
+	}}
+	b := fakeTestBox(fake)
+	body, err := RunBoxCommand(context.Background(), b, "echo ok", 0)
+	if err != nil || !strings.Contains(body, `"cwd": "`+b.Root()+`"`) {
+		t.Fatalf("body=%s err=%v", body, err)
+	}
+}
+
+// 旧版每会话一个的卷：先删旧容器，再在一次性容器里把旧卷并进共享卷对应的范围目录、交给
+// 范围 uid，最后删旧卷。旧容器里还有命令在跑时这一轮不动。
+func TestMigrateLegacyBoxes(t *testing.T) {
+	withFakeBoxRuntime(t)
+	key := "bot\x00group:legacy"
+	t.Cleanup(func() { boxRegistry.Delete(key) })
+	legacySuffix := boxNameFor(key)
+	legacyVolume, legacyContainer := boxLegacyVolumePrefix+legacySuffix, boxLegacyContainerPrefix+legacySuffix
+	hasRuns := true
+	var steps []string
+	fake := &fakeDocker{reply: func(args []string, _ []byte) dockerResult {
+		joined := strings.Join(args, " ")
+		switch {
+		case args[0] == "volume" && args[1] == "ls":
+			return dockerResult{stdout: []byte(boxVolumeName + "\n" + legacyVolume + "\n")}
+		case args[0] == "volume" && args[1] == "inspect":
+			return dockerResult{stdout: []byte(hex.EncodeToString([]byte(key)) + "|\n")}
+		case args[0] == "volume" && args[1] == "rm":
+			steps = append(steps, "rm volume "+args[len(args)-1])
+		case args[0] == "inspect" && args[len(args)-1] == legacyContainer:
+			return dockerResult{stdout: []byte("id\n")}
+		case args[0] == "inspect":
+			return boxInspectReply(BuiltinBoxImage(), "c1", "s")
+		case args[0] == "exec" && args[1] == legacyContainer:
+			if hasRuns {
+				return dockerResult{}
+			}
+			return dockerResult{code: 2}
+		case args[0] == "rm":
+			steps = append(steps, "rm container "+args[len(args)-1])
+		case args[0] == "run" && slices.Contains(args, boxLegacyCopyScript):
+			steps = append(steps, "copy")
+			if !strings.Contains(joined, "--volume "+legacyVolume+":/old:ro") || !strings.Contains(joined, "--volume diana-sandbox:/new") || !strings.Contains(joined, "--network none") {
+				t.Errorf("copy container: %s", joined)
+			}
+		}
+		return dockerResult{}
+	}}
+	previous := sharedBox.c
+	sharedBox.mu.Lock()
+	sharedBox.c = newBoxContainer(testBoxConfig(), fake.run)
+	sharedBox.mu.Unlock()
+	t.Cleanup(func() {
+		sharedBox.mu.Lock()
+		sharedBox.c = previous
+		sharedBox.mu.Unlock()
+	})
+	if !migrateLegacyBoxes(context.Background(), fake.run) || len(steps) != 0 {
+		t.Fatalf("busy legacy box must wait: steps=%v", steps)
+	}
+	hasRuns = false
+	if migrateLegacyBoxes(context.Background(), fake.run) {
+		t.Fatal("migration should be complete")
+	}
+	if want := []string{"rm container " + legacyContainer, "copy", "rm volume " + legacyVolume}; !slices.Equal(steps, want) {
+		t.Fatalf("steps = %v, want %v", steps, want)
+	}
+	copyCall := fake.calls[slices.IndexFunc(fake.calls, func(c []string) bool { return slices.Contains(c, boxLegacyCopyScript) })]
+	b, _ := BoxFor(key)
+	if got := copyCall[len(copyCall)-2:]; got[0] != b.scope || got[1] != strconv.Itoa(b.uid) {
+		t.Fatalf("copy target = %v, want %s %d", got, b.scope, b.uid)
 	}
 }
