@@ -46,17 +46,6 @@ func encodeMessageVector(vector []float32) []byte {
 	return buffer
 }
 
-func decodeMessageVector(buffer []byte) []float32 {
-	if len(buffer) < 4 || len(buffer)%4 != 0 {
-		return nil
-	}
-	vector := make([]float32, len(buffer)/4)
-	for index := range vector {
-		vector[index] = math.Float32frombits(binary.LittleEndian.Uint32(buffer[index*4:]))
-	}
-	return vector
-}
-
 func normalizeMessageVector(vector []float32) []float32 {
 	var sum float64
 	for _, value := range vector {
@@ -73,13 +62,15 @@ func normalizeMessageVector(vector []float32) []float32 {
 	return normalized
 }
 
-func dotMessageVectors(left, right []float32) float64 {
-	if len(left) != len(right) {
+// dotMessageVectorBytes 直接在 float32 小端 BLOB 上算点积，不先解码成切片：跨会话检索
+// 一次要比上万条向量，逐条分配会制造上百 MB 的垃圾。维度对不上返回 -1。
+func dotMessageVectorBytes(query []float32, blob []byte) float64 {
+	if len(blob) != 4*len(query) {
 		return -1
 	}
 	var sum float64
-	for index := range left {
-		sum += float64(left[index]) * float64(right[index])
+	for index, value := range query {
+		sum += float64(value) * float64(math.Float32frombits(binary.LittleEndian.Uint32(blob[index*4:])))
 	}
 	return sum
 }
@@ -132,6 +123,12 @@ WHERE id IN (SELECT id FROM message_events WHERE session = ? AND message_id = ?)
 }
 
 // SearchMessageEventsByVector 按余弦相似度检索历史消息。
+//
+// 分两步，payload 只读排在前面的那几条。以前一条 SQL 把时间窗内每行的 payload
+// 连同 json_extract 一起读出来再打分：跨会话检索一次要扫上万行、一百多 MB，线上
+// 慢日志里 1.5–4 秒、不少直接超时。现在第一步只取 id 和向量打分（向量直接在字节上
+// 算点积，不逐条分配），第二步按分数从高到低分批读 payload，在这里再滤掉已知编辑
+// 标记的行，凑够 limit 就停。11-26 在 miku 上实测跨会话第一步 0.05 秒（原查询 0.64）。
 func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query assistant.MessageHistoryVectorQuery) ([]assistant.MessageEvent, error) {
 	defer s.observeStorage(ctx, "SearchMessageEventsByVector", "read")()
 	if s == nil || s.db == nil || !s.historyVectors {
@@ -147,67 +144,137 @@ func (s *SQLiteStore) SearchMessageEventsByVector(ctx context.Context, query ass
 		return nil, nil
 	}
 	limit := normalizeMessageHistoryLimit(query.Limit)
-	// A known edit marks its row before the best-effort physical vector delete.
-	// Filtering the row here closes the commit/crash and delete-failure windows:
-	// an old vector can remain on disk temporarily, but it cannot be recalled.
+	hits, err := s.scoreMessageEventVectors(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(hits, func(left, right int) bool { return hits[left].score > hits[right].score })
+	return s.loadVectorHitEvents(ctx, hits, limit)
+}
+
+type messageVectorHit struct {
+	id    string
+	score float64
+}
+
+// scoreMessageEventVectors 是第一步：按模型、会话、时间窗收窄候选，只读 id 和向量。
+func (s *SQLiteStore) scoreMessageEventVectors(ctx context.Context, query assistant.MessageHistoryVectorQuery) ([]messageVectorHit, error) {
 	where := `v.model = ?
 AND e.kind != ?
-AND COALESCE(json_extract(e.payload, '$.edit_refresh_only'), 0) = 0
 AND e.event_time BETWEEN ? AND ?`
 	args := []any{query.Model, string(assistant.EventKindNotice), query.FromTime, query.ThroughTime}
+	// 单会话走 session+时间索引，让规划器自己选；跨会话没有能用的会话索引，从向量表
+	// 出发（CROSS JOIN 固定连接顺序），每个向量按主键找一次消息，不扫整张消息表。
+	join := "JOIN"
 	if query.CrossSession {
-		where += ` AND e.session LIKE ? ESCAPE '\'`
-		args = append(args, escapeMessageHistoryLike(query.SessionPrefix)+"%")
+		join = "CROSS JOIN"
+		// 前缀用范围比较而不是 LIKE：LIKE 默认不区分大小写，用不上索引，也会把大小写
+		// 不同的会话错当成同一前缀。
+		where += ` AND e.session >= ?`
+		args = append(args, query.SessionPrefix)
+		if upper, ok := messageSessionPrefixUpperBound(query.SessionPrefix); ok {
+			where += ` AND e.session < ?`
+			args = append(args, upper)
+		}
 	} else {
 		where += ` AND e.session = ?`
 		args = append(args, query.Session)
 	}
-	if strings.TrimSpace(query.ExcludeSession) != "" {
+	if exclude := strings.TrimSpace(query.ExcludeSession); exclude != "" {
 		where += ` AND e.session != ?`
-		args = append(args, strings.TrimSpace(query.ExcludeSession))
+		args = append(args, exclude)
 	}
 	rows, err := s.eventReader().QueryContext(ctx, `
-SELECT e.payload, v.vector
+SELECT v.id, v.vector
 FROM `+messageHistoryVectorTable+` AS v
-JOIN message_events AS e ON e.id = v.id
+`+join+` message_events AS e ON e.id = v.id
 WHERE `+where, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
-
 	queryVector := normalizeMessageVector(query.Vector)
-	type scored struct {
-		payload string
-		score   float64
-	}
-	hits := make([]scored, 0, 64)
+	hits := make([]messageVectorHit, 0, 64)
+	var blob []byte
 	for rows.Next() {
-		var payload string
-		var blob []byte
-		if err := rows.Scan(&payload, &blob); err != nil {
+		var id string
+		if err := rows.Scan(&id, &blob); err != nil {
 			return nil, err
 		}
-		score := dotMessageVectors(queryVector, decodeMessageVector(blob))
+		score := dotMessageVectorBytes(queryVector, blob)
 		if score <= 0 || score < query.MinSimilarity {
 			continue
 		}
-		hits = append(hits, scored{payload: payload, score: score})
+		hits = append(hits, messageVectorHit{id: id, score: score})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	sort.SliceStable(hits, func(left, right int) bool { return hits[left].score > hits[right].score })
-	if len(hits) > limit {
-		hits = hits[:limit]
-	}
-	events := make([]assistant.MessageEvent, 0, len(hits))
-	for _, hit := range hits {
-		var event assistant.MessageEvent
-		if err := json.Unmarshal([]byte(hit.payload), &event); err != nil {
-			continue
+	return hits, rows.Err()
+}
+
+// messageVectorPayloadBatch 是第二步每批读几条 payload。已知编辑标记的行很少（11-26
+// 线上 50 万条里 1300 条），一批通常就够。
+const messageVectorPayloadBatch = 32
+
+// loadVectorHitEvents 是第二步：按分数顺序分批读 payload，滤掉已知编辑标记的行。
+// A known edit marks its row before the best-effort physical vector delete.
+// Filtering the row here closes the commit/crash and delete-failure windows:
+// an old vector can remain on disk temporarily, but it cannot be recalled.
+func (s *SQLiteStore) loadVectorHitEvents(ctx context.Context, hits []messageVectorHit, limit int) ([]assistant.MessageEvent, error) {
+	events := make([]assistant.MessageEvent, 0, min(limit, len(hits)))
+	for start := 0; start < len(hits) && len(events) < limit; start += messageVectorPayloadBatch {
+		batch := hits[start:min(start+messageVectorPayloadBatch, len(hits))]
+		args := make([]any, len(batch))
+		for index, hit := range batch {
+			args[index] = hit.id
 		}
-		events = append(events, event)
+		rows, err := s.eventReader().QueryContext(ctx, `
+SELECT id, payload
+FROM message_events
+WHERE id IN (?`+strings.Repeat(",?", len(batch)-1)+`)
+AND COALESCE(json_extract(payload, '$.edit_refresh_only'), 0) = 0`, args...)
+		if err != nil {
+			return nil, err
+		}
+		payloads := make(map[string]string, len(batch))
+		for rows.Next() {
+			var id, payload string
+			if err := rows.Scan(&id, &payload); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			payloads[id] = payload
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range batch {
+			payload, ok := payloads[hit.id]
+			if !ok {
+				continue
+			}
+			var event assistant.MessageEvent
+			if err := json.Unmarshal([]byte(payload), &event); err != nil {
+				continue
+			}
+			events = append(events, event)
+			if len(events) == limit {
+				break
+			}
+		}
 	}
 	return events, nil
+}
+
+// messageSessionPrefixUpperBound 返回按字节比较时恰好大于所有以 prefix 开头的字符串的
+// 最小上界：最后一个不是 0xFF 的字节加一并截断。全是 0xFF 时没有上界。
+func messageSessionPrefixUpperBound(prefix string) (string, bool) {
+	bound := []byte(prefix)
+	for index := len(bound) - 1; index >= 0; index-- {
+		if bound[index] < 0xFF {
+			bound[index]++
+			return string(bound[:index+1]), true
+		}
+	}
+	return "", false
 }
