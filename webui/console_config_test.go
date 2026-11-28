@@ -9,6 +9,7 @@ import (
 
 	"github.com/SuInk/diana/model/assistant"
 	"github.com/SuInk/diana/model/llm"
+	"github.com/SuInk/diana/model/storage"
 )
 
 func TestConsoleConfigProviderPatchPreservesUnsubmittedSettings(t *testing.T) {
@@ -58,8 +59,8 @@ func TestConsoleConfigBotAdvancedFieldsAndModelRoutes(t *testing.T) {
 }
 
 func TestAdminChatMessagesRedactedWithoutMutatingHistory(t *testing.T) {
-	original := []adminChatMessage{{Role: "user", Content: "密钥: secret-value URL https://private.example"}}
-	out := redactedAdminChatMessages(original, func(s string) string { return strings.ReplaceAll(s, "secret-value", "[REDACTED]") })
+	original := []storage.AdminChatMessage{{Role: "user", Content: "密钥: secret-value URL https://private.example"}}
+	out := decodeAdminChatMessages(original, func(s string) string { return strings.ReplaceAll(s, "secret-value", "[REDACTED]") })
 	if strings.Contains(out[0].Content, "secret-value") || !strings.Contains(original[0].Content, "secret-value") {
 		t.Fatal("redaction mutated source or failed")
 	}

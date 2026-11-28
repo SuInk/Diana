@@ -1,0 +1,37 @@
+{
+  "name": "diana-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Diana 桌面客户端：和机器人私聊",
+  "author": "SuInk",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "main": "out/main/index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "mock": "node scripts/mock-server.mjs",
+    "server": "node scripts/build-server.mjs",
+    "test": "node --test \"test/*.test.mjs\"",
+    "typecheck": "vue-tsc --noEmit -p tsconfig.json",
+    "build": "npm test && npm run typecheck && electron-vite build",
+    "dist": "npm run build && electron-builder --publish never"
+  },
+  "dependencies": {
+    "@lucide/vue": "1.21.0",
+    "vue": "3.5.42"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "@vitejs/plugin-vue": "5.2.1",
+    "electron": "45.2.3",
+    "electron-builder": "26.18.0",
+    "electron-vite": "6.0.0",
+    "typescript": "5.7.2",
+    "vite": "6.0.5",
+    "vue-tsc": "2.2.0"
+  },
+  "allowScripts": {
+    "electron": true,
+    "esbuild": true
+  }
+}

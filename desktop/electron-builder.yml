@@ -1,0 +1,34 @@
+# Copyright (c) 2025-now SuInk.
+# Licensed under the Limited Redistribution License in the repository root.
+appId: com.suink.diana.desktop
+productName: Diana
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - package.json
+# 本机 Diana：先 npm run server -- <os>-<arch> 编好，按目标平台挑对应目录放进 resources/bin。
+extraResources:
+  - from: resources/bin/${os}-${arch}
+    to: bin
+mac:
+  category: public.app-category.social-networking
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  artifactName: diana-desktop-macos-${arch}.${ext}
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: diana-desktop-windows-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+linux:
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+  category: Network
+  artifactName: diana-desktop-linux-${arch}.${ext}
