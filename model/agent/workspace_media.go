@@ -14,7 +14,6 @@ import (
 	_ "image/png"
 	"io/fs"
 	"net/http"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -254,7 +253,7 @@ func looksBinaryContent(head []byte) bool {
 	return !strings.HasPrefix(mediaType, "text/") && mediaType != "image/svg+xml" && mediaType != "application/json"
 }
 
-// WorkspaceWriteOptions 控制 WriteWorkspaceBytes 遇到同名文件时怎么办。
+// WorkspaceWriteOptions 控制 WriteStoreBytes 遇到同名文件时怎么办。
 type WorkspaceWriteOptions struct {
 	// Overwrite 为 true 时覆盖同名文件；否则在文件名后面加 -2、-3……另起一个名字。
 	Overwrite bool
@@ -263,15 +262,11 @@ type WorkspaceWriteOptions struct {
 	Keep *KeepMeta
 }
 
-// WriteWorkspaceBytes 把一份字节写进工作目录内的 rel，返回实际写入的相对路径。
+// WriteStoreBytes 把一份字节写进工作区内的 rel，返回实际写入的相对路径。
 //
-// 路径先过 safePath（不许逃出工作目录、软链接也不行）和凭据名单，再经 os.OpenRoot
-// 落盘：校验和写入之间就算有人换了软链接，写入也出不了工作目录。
-func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWriteOptions) (string, error) {
-	root, err := filepath.Abs(cfg.WorkDir)
-	if err != nil {
-		return "", err
-	}
+// 路径先过 store.Resolve（不许逃出工作区、软链接也不行）和受保护文件名单；写入本身
+// 也经由 store，宿主后端走 os.Root，容器后端在范围目录里以范围 uid 写。
+func WriteStoreBytes(ctx context.Context, store FileStore, rel string, data []byte, opts WorkspaceWriteOptions) (string, error) {
 	rel = filepath.ToSlash(strings.TrimSpace(rel))
 	if rel == "" || strings.HasSuffix(rel, "/") {
 		return "", errors.New("需要一个具体的文件路径")
@@ -279,10 +274,6 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 	if len(data) > WorkspaceMediaMaxBytes {
 		return "", fmt.Errorf("文件 %d 字节，超过 %d MB 上限", len(data), WorkspaceMediaMaxBytes>>20)
 	}
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return "", err
-	}
-	protected := agentProtectedFiles(cfg)
 	keepDir := ""
 	if _, inKeep := keepLocation(rel); inKeep {
 		if opts.Keep == nil || KeepBotDir(opts.Keep.BotID) == "" {
@@ -295,17 +286,16 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 		}
 		rel, keepDir = normalized, scope.botDir
 		// 配额检查和写入之间不能插进另一次保存，否则两次各自都没超、合起来超了。
-		hostStore := newHostFileStore(root, protected)
-		lock := keepAreaLock(hostStore, keepDir)
+		lock := keepAreaLock(store, keepDir)
 		lock.Lock()
 		defer lock.Unlock()
 		var replacing int64
 		if opts.Overwrite {
-			if info, err := os.Lstat(filepath.Join(root, filepath.FromSlash(rel))); err == nil && info.Mode().IsRegular() {
+			if info, err := store.Lstat(ctx, rel); err == nil && info.Mode().IsRegular() {
 				replacing = info.Size()
 			}
 		}
-		if err := checkKeepQuota(context.Background(), hostStore, keepDir, int64(len(data)), replacing); err != nil {
+		if err := checkKeepQuota(ctx, store, keepDir, int64(len(data)), replacing); err != nil {
 			return "", err
 		}
 	}
@@ -313,54 +303,31 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 	base := path.Base(rel)
 	ext := path.Ext(base)
 	stem := strings.TrimSuffix(base, ext)
-	handle, err := os.OpenRoot(root)
-	if err != nil {
-		return "", err
-	}
-	defer handle.Close()
 	for attempt := 1; attempt <= 1000; attempt++ {
 		name := base
 		if attempt > 1 {
 			name = fmt.Sprintf("%s-%d%s", stem, attempt, ext)
 		}
-		candidate := path.Join(dir, name)
-		target, err := safePath(root, candidate)
+		candidate, err := store.Resolve(path.Join(dir, name))
 		if err != nil {
 			return "", err
 		}
-		if protected.blocked(target) {
+		if store.Blocked(candidate) {
 			return "", errProtectedFile(candidate)
 		}
 		if isTrashPath(candidate) {
 			return "", errTrashPath(candidate)
 		}
-		local := filepath.FromSlash(candidate)
-		if parent := filepath.Dir(local); parent != "." {
-			if err := handle.MkdirAll(parent, 0o755); err != nil {
-				return "", err
-			}
-		}
-		flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
 		if opts.Overwrite {
-			if info, statErr := handle.Lstat(local); statErr == nil && !info.Mode().IsRegular() {
+			if info, statErr := store.Lstat(ctx, candidate); statErr == nil && !info.Mode().IsRegular() {
 				return "", fmt.Errorf("%s 已存在且不是普通文件", candidate)
 			}
-			flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
 		}
-		file, err := handle.OpenFile(local, flags, 0o644)
+		err = store.WriteFile(ctx, candidate, data, !opts.Overwrite)
 		if errors.Is(err, fs.ErrExist) && !opts.Overwrite {
 			continue
 		}
 		if err != nil {
-			return "", err
-		}
-		if _, err := file.Write(data); err != nil {
-			_ = file.Close()
-			_ = handle.Remove(local)
-			return "", err
-		}
-		if err := file.Close(); err != nil {
-			_ = handle.Remove(local)
 			return "", err
 		}
 		if keepDir != "" {
@@ -370,7 +337,7 @@ func WriteWorkspaceBytes(cfg Config, rel string, data []byte, opts WorkspaceWrit
 			}
 			// 索引是给模型和界面认文件用的，写失败不该让一份已经落盘的文件报「没存上」；
 			// 界面按磁盘上的真实文件列，缺说明的照样看得到。
-			_ = upsertKeepEntry(DianaStateDir(root), KeepEntry{
+			_ = upsertKeepEntry(store.keepStateDir(), KeepEntry{
 				Path: candidate, Description: opts.Keep.Description, SourceMessageID: opts.Keep.SourceMessageID,
 				SourceURL: opts.Keep.SourceURL, SavedBy: opts.Keep.SavedBy, SavedAt: now,
 				Size: int64(len(data)), MIME: SniffMediaType(data),

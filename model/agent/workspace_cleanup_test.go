@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -133,7 +134,7 @@ func TestSummarizeWorkspaceGroupsAreasAndHidesState(t *testing.T) {
 	writeAgedFile(t, root, "loose.txt", now)
 	writeAgedFile(t, root, ".diana/extension-overrides.json", now)
 	writeAgedFile(t, root, ".mcp.json", now)
-	if _, err := WriteWorkspaceBytes(Config{WorkDir: root}, "keep/p.txt", []byte("hello"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "说明"}}); err != nil {
+	if _, err := WriteStoreBytes(context.Background(), HostFileStore(Config{WorkDir: root}), "keep/p.txt", []byte("hello"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "说明"}}); err != nil {
 		t.Fatal(err)
 	}
 	overview, err := SummarizeWorkspace(root, WorkspaceCleanupOptions{Now: now})
@@ -192,7 +193,7 @@ func TestWorkspaceAreaOf(t *testing.T) {
 
 func TestKeepEntriesIn(t *testing.T) {
 	root := t.TempDir()
-	if _, err := WriteWorkspaceBytes(Config{WorkDir: root}, "keep/poster.png", []byte("png"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
+	if _, err := WriteStoreBytes(context.Background(), HostFileStore(Config{WorkDir: root}), "keep/poster.png", []byte("png"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
 		t.Fatal(err)
 	}
 	entries := KeepEntriesIn(root, "keep/bot-a")

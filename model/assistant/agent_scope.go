@@ -31,6 +31,10 @@ func (r *Runtime) newAgentRegistry(ctx context.Context, cfg BotConfig, event Mes
 	if isAdminChatRun(ctx) {
 		// 管理会话有自己的说明，不带机器人收发平台消息的协议 Skill。
 		agentCfg.BuiltinSkills = nil
+	} else {
+		// 文件工具落在本会话的工作区：容器可用时是容器里的范围目录，否则留空用宿主目录。
+		// WebUI 管理会话照旧看宿主工作目录。
+		agentCfg.Files = r.boxWorkspaceStore(event)
 	}
 	overrides, err := agent.LoadExtensionOverrides(AgentWorkspaceDir(), event.ProfileID)
 	if err != nil {

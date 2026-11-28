@@ -40,7 +40,7 @@ Claude Code 支持结构化进度、会话续跑和聊天审批。ACP 代理支�
 
 ## 内置命令执行与 Node.js
 
-内置 Agent 的 `run_command` 独立于编码代理插件：它在[工作区容器](workbox.md)里用 bash 运行，镜像自带 Node.js、Python、uv、git 等，可联网 `git clone` 和安装依赖，不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。容器看不到宿主工作区；要在宿主机上跑的命令走 `host_access`。
+内置 Agent 的 `run_command` 独立于编码代理插件：它在[工作区容器](workbox.md)里用 bash 运行，镜像自带 Node.js、Python、uv、git 等，可联网 `git clone` 和安装依赖，不需要开启编码代理插件，也不需要安装 Codex 或 Claude Code。容器里本会话的目录就是文件工具用的工作区（见[工作区容器](workbox.md)的「工作区就在容器里」）；要在宿主机上跑的命令走 `host_access`。
 
 创建或修改脚本需要开启文件写入。执行已有脚本由命令沙盒控制。缺 npm 包用 `install_package`，联网由「允许插件脚本和装包联网」控制。
 

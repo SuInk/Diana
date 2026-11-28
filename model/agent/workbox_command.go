@@ -13,10 +13,12 @@ import (
 	"unicode/utf8"
 )
 
-// BoxCommandDescription 是 run_command 在 work box 里的说明，对所有人同一份。
-const BoxCommandDescription = `在工作区容器（Linux，可联网）里用 bash 运行命令：git clone、curl 下载、rg/grep 检索、python3/node 跑脚本、ffmpeg/imagemagick 处理文件都在这里做。` +
-	`命令在本会话自己的工作区目录里执行（结果里的 cwd，持久保存但有大小上限），文件路径写相对路径；别的会话看不到这里。` +
-	`pip/npm/uv 装的包落在 .home；聊天附件用 inputs 放进 inbox/；要发出去的文件交给 send_file 的 path（写结果里给的绝对路径）。` +
+// BoxCommandDescription 是 run_command 在 work box 里的说明，对所有人同一份。工具目录里
+// 只放得下开头一百来字，所以「当前目录就是工作区、存的文件就在这里」写在最前面：模型
+// 常在同一段脚本里先存附件再跑命令，还没看到保存结果就要写路径。
+const BoxCommandDescription = `在本会话的工作区目录里用 bash 运行命令（工作区容器，Linux，可联网）；save_to_workspace、write_file 存的文件就在这里，路径写相对路径（如 downloads/a.mp4）。` +
+	`git clone、curl 下载、rg/grep 检索、python3/node 跑脚本、ffmpeg/imagemagick 处理文件都在这里做；命令产出的文件直接交给 send_file、render_media 的 path。` +
+	`目录持久保存但有大小上限（结果里的 cwd），别的会话看不到；pip/npm/uv 装的包落在 .home。` +
 	`容器连不到本机和内网，只能访问公网；里面没有任何凭据。不用于网页搜索、计时、提醒和后台驻留，这些有专用工具。`
 
 // BoxCommandSchema 是 run_command 的参数，照 Pi bash：command + timeout（秒）。
@@ -34,7 +36,7 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 	if command == "" {
 		return "", errors.New("command is required")
 	}
-	res, err := b.Exec(ctx, command, timeout)
+	res, err := b.Exec(ctx, scopeLegacyWorkPaths(command, b.Root()), timeout)
 	if err != nil {
 		return "", err
 	}
@@ -88,4 +90,51 @@ func RunBoxCommand(ctx context.Context, b *WorkBox, command string, timeout time
 
 func boxDiskFields(u *BoxDiskUsage) map[string]any {
 	return map[string]any{"used": FormatBoxBytes(u.UsedBytes), "limit": FormatBoxBytes(u.LimitBytes), "used_bytes": u.UsedBytes, "limit_bytes": u.LimitBytes}
+}
+
+// scopeLegacyWorkPaths 把命令里的 /work、/work/<路径> 换成本会话的范围目录。以前每个
+// 会话的根就是 /work，模型也习惯写 /work/downloads/a.mp4；现在 /work 下面只有各范围的
+// 目录、而且列不出也进不去别人的，这种写法在命令里只会「找不到文件」。文件工具的 path
+// 早就这样映射（WorkBox.ResolvePath），命令里照做。已经写成 /work/<范围>/… 的不动，
+// 前面紧挨着路径字符的（比如 /home/x/work/a）不是这个 /work，也不动。
+func scopeLegacyWorkPaths(command, root string) string {
+	const prefix = BoxWorkDir
+	var out strings.Builder
+	rest := command
+	for {
+		index := strings.Index(rest, prefix)
+		if index < 0 {
+			out.WriteString(rest)
+			return out.String()
+		}
+		end := index + len(prefix)
+		before := byte(0)
+		if index > 0 {
+			before = rest[index-1]
+		} else if out.Len() > 0 {
+			before = out.String()[out.Len()-1]
+		}
+		after := byte(0)
+		if end < len(rest) {
+			after = rest[end]
+		}
+		standalone := !isBoxPathByte(before) && (after == 0 || after == '/' || !isBoxPathByte(after))
+		scoped := strings.HasPrefix(rest[end:], "/s-")
+		out.WriteString(rest[:index])
+		if standalone && !scoped {
+			out.WriteString(root)
+		} else {
+			out.WriteString(prefix)
+		}
+		rest = rest[end:]
+	}
+}
+
+// isBoxPathByte 报告 c 能不能出现在路径名里（字母数字和 . _ - ~ /）。
+func isBoxPathByte(c byte) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	}
+	return strings.IndexByte("._-~/", c) >= 0
 }

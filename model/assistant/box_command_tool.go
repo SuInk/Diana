@@ -4,14 +4,10 @@
 package assistant
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
-	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -24,7 +20,6 @@ import (
 const (
 	boxCommandToolName = "run_command"
 	boxResetToolName   = "box_reset"
-	boxMaxInputs       = 10
 )
 
 // boxAvailable 判断这台机器能不能起 work box。测试里替换它，免得结果取决于跑测试的
@@ -108,74 +103,14 @@ type boxCommandTool struct {
 func (t *boxCommandTool) Name() string        { return boxCommandToolName }
 func (t *boxCommandTool) Description() string { return agent.BoxCommandDescription }
 
-func (t *boxCommandTool) InputSchema() map[string]any {
-	schema := agent.BoxCommandSchema()
-	schema["properties"].(map[string]any)["inputs"] = toolStringArrayParam(fmt.Sprintf("运行前放进本会话工作区 inbox/ 的工作目录文件（如 save_to_workspace 存下的聊天附件），最多 %d 个", boxMaxInputs))
-	return schema
-}
+func (t *boxCommandTool) InputSchema() map[string]any { return agent.BoxCommandSchema() }
 
 func (t *boxCommandTool) Run(ctx context.Context, input map[string]any) (string, error) {
 	workBox, err := t.runtime.boxForEvent(t.event, t.owner)
 	if err != nil {
 		return "", err
 	}
-	staged, err := t.stageInputs(ctx, workBox, configToolStringSlice(input, "inputs"))
-	if err != nil {
-		return "", err
-	}
-	command := configToolString(input, "command")
-	out, err := agent.RunBoxCommand(ctx, workBox, command, time.Duration(intFromAny(input["timeout"]))*time.Second)
-	if err != nil {
-		if hint := t.runtime.boxWorkspacePathHint(t.event, t.owner, command, err.Error()); hint != "" {
-			err = fmt.Errorf("%w\n%s", err, hint)
-		}
-	}
-	if len(staged) > 0 && err == nil {
-		out = fmt.Sprintf("inputs 已放进：%s\n%s", strings.Join(staged, "、"), out)
-	}
-	return out, err
-}
-
-// stageInputs 把工作目录文件放进本会话工作区的 inbox/。群成员只能传本群保存过的文件（核对访问
-// 哈希），主人不受这条限制，受保护的运行时配置谁都传不进去。
-func (t *boxCommandTool) stageInputs(ctx context.Context, workBox *agent.WorkBox, paths []string) ([]string, error) {
-	if len(paths) > boxMaxInputs {
-		return nil, fmt.Errorf("inputs 一次最多 %d 个文件", boxMaxInputs)
-	}
-	cfg := agent.Config{WorkDir: AgentWorkspaceDir(), MCPConfigPath: t.runtime.effectiveConfigForEvent(t.event).AgentMCPConfigPath}
-	var staged []string
-	for _, raw := range paths {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
-			continue
-		}
-		rel, err := agent.NormalizeWorkspacePath(cfg.WorkDir, raw)
-		if err != nil {
-			return nil, err
-		}
-		if agent.WorkspaceFileProtected(cfg, rel) {
-			return nil, fmt.Errorf("%s 是受保护的运行时配置，不能放进工作区容器", raw)
-		}
-		var grant string
-		if !t.owner {
-			if grant, err = t.runtime.workspaceGroupFileGrant(t.event, rel); err != nil {
-				return nil, err
-			}
-		}
-		data, err := agent.ReadWorkspaceFile(cfg.WorkDir, rel, agent.BoxCopyOutMaxBytes)
-		if err != nil {
-			return nil, err
-		}
-		if !t.owner && workspaceAccessHash(data) != grant {
-			return nil, fmt.Errorf("文件 %s 内容已改变，本群原有访问记录不再适用；请从本群原消息重新保存", raw)
-		}
-		target, err := workBox.WriteFile(ctx, path.Join("inbox", filepath.Base(rel)), bytes.NewReader(data))
-		if err != nil {
-			return nil, err
-		}
-		staged = append(staged, target)
-	}
-	return staged, nil
+	return agent.RunBoxCommand(ctx, workBox, configToolString(input, "command"), time.Duration(intFromAny(input["timeout"]))*time.Second)
 }
 
 type boxResetTool struct {
@@ -213,16 +148,6 @@ func (r *Runtime) resetSessionBox(event MessageEvent) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	return workBox.Reset(ctx)
-}
-
-// boxFileSource 是 send_file 等工具从 box 取文件：路径要以 /work 开头。
-func (r *Runtime) boxFileSource(ctx context.Context, event MessageEvent, owner bool, p string, limit int64) ([]byte, error) {
-	workBox, err := r.boxForEvent(event, owner)
-	if err != nil {
-		return nil, err
-	}
-	_, data, err := workBox.CopyOut(ctx, p, min(limit, agent.BoxCopyOutMaxBytes))
-	return data, err
 }
 
 // workBoxFor 返回 key 对应的会话范围。范围 uid 登记在工作目录的 .diana/ 里，第一次
@@ -263,8 +188,4 @@ func runBoxMaintenance(ctx context.Context, configs []BotConfig) {
 		case <-ticker.C:
 		}
 	}
-}
-
-func isBoxPath(p string) bool {
-	return p == agent.BoxWorkDir || strings.HasPrefix(p, agent.BoxWorkDir+"/")
 }

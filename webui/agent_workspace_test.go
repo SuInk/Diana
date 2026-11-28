@@ -4,6 +4,7 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -245,7 +246,7 @@ func TestAgentWorkspaceShowsRuntimeFilesAndExternalLinks(t *testing.T) {
 // 长期区的条目带上索引里的说明，当前目录带上分区和清理规则。
 func TestAgentWorkspaceListsKeepDescriptionsAndArea(t *testing.T) {
 	root := t.TempDir()
-	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
+	if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(agent.Config{WorkDir: root}), "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "活动海报", SavedBy: "主人"}}); err != nil {
 		t.Fatal(err)
 	}
 	writeWorkspaceTestFile(t, root, "keep/bot-a/plain.txt", "no index")
@@ -342,7 +343,7 @@ func TestAgentWorkspaceOverview(t *testing.T) {
 	writeWorkspaceTestFile(t, root, "downloads/a.txt", "hello")
 	writeWorkspaceTestFile(t, root, ".diana/extension-overrides.json", `{"secret":true}`)
 	writeWorkspaceTestFile(t, root, "loose.txt", "x")
-	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+	if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(agent.Config{WorkDir: root}), "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
 		t.Fatal(err)
 	}
 	router := newAgentWorkspaceTestRouter(t, root)
@@ -375,7 +376,7 @@ func TestAgentWorkspaceOverview(t *testing.T) {
 // 删除挪进回收站，长期区索引跟着清；回收站里的东西不单条删，只能整个清空。
 func TestAgentWorkspaceDeleteMovesToTrashAndEmptyTrash(t *testing.T) {
 	root := t.TempDir()
-	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+	if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(agent.Config{WorkDir: root}), "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
 		t.Fatal(err)
 	}
 	writeWorkspaceTestFile(t, root, "downloads/batch/a.txt", "a")
@@ -438,7 +439,7 @@ func TestAgentWorkspaceDeleteMovesToTrashAndEmptyTrash(t *testing.T) {
 // 别名删掉的长期区文件，索引按真实位置清。
 func TestAgentWorkspaceDeleteGuardsAliasesOfProtectedRoots(t *testing.T) {
 	root := t.TempDir()
-	if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
+	if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(agent.Config{WorkDir: root}), "keep/poster.txt", []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: "海报"}}); err != nil {
 		t.Fatal(err)
 	}
 	writeWorkspaceTestFile(t, root, ".trash/20260901-000000/b.txt", "bye")
@@ -479,7 +480,7 @@ func TestAgentWorkspaceDeleteViaSubdirAliasCleansKeepIndex(t *testing.T) {
 	root := t.TempDir()
 	cfg := agent.Config{WorkDir: root}
 	for _, rel := range []string{"keep/sub/b.txt", "keep/c.txt"} {
-		if _, err := agent.WriteWorkspaceBytes(cfg, rel, []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: rel}}); err != nil {
+		if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(cfg), rel, []byte("keep me"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{BotID: "bot-a", Description: rel}}); err != nil {
 			t.Fatal(err)
 		}
 	}

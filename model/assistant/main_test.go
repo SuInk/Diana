@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/agent"
 )
 
 func TestMain(m *testing.M) {
@@ -23,6 +26,8 @@ func TestMain(m *testing.M) {
 		os.Exit(runFakeACPAgent(os.Stdin, os.Stdout, os.Stderr))
 	}
 	_ = os.Setenv("DIANA_ALLOW_PRIVATE_HTTP_FETCHES", "true")
+	// 工作区容器的范围目录默认不可用：用例不该真去起容器，要用的自己换成假的（见 forceBoxStore）。
+	boxScopeStore = func(string, int64) (agent.FileStore, error) { return nil, errors.New("tests: no box scope store") }
 	// MaiBot 断句对整包关掉，见 maiBotSplitDisabled；随机数固定成 0.5，打开它的用例
 	// 期望值才不会随机跳：十来个字以内的短句合在一起，再长就在每个标点处拆开。
 	maiBotSplitDisabled.Store(true)

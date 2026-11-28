@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -624,6 +623,7 @@ type BrowserScreenshotTool struct {
 	restricted   bool
 	allowedHosts []string
 	protected    protectedFiles
+	store        FileStore
 	mu           sync.Mutex
 	parts        []llm.ContentPart
 }
@@ -662,16 +662,17 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 		return "", errors.New("非主人不能指定截图文件路径")
 	}
 	var path string
+	store := toolFileStore(t.store, t.base.root, t.protected)
 	if !t.restricted {
 		if outPath == "" {
 			outPath = t.base.defaultScreenshotPath()
 		}
 		var err error
-		path, err = safePath(t.base.root, outPath)
+		path, err = store.Resolve(outPath)
 		if err != nil {
 			return "", err
 		}
-		if t.protected.blocked(path) {
+		if store.Blocked(path) {
 			return "", errors.New("截图不能覆盖受保护的配置文件")
 		}
 	}
@@ -779,13 +780,10 @@ func (t *BrowserScreenshotTool) Run(ctx context.Context, input map[string]any) (
 	}
 	// Members receive only these captured bytes, never access to a workspace path.
 	if !t.restricted {
-		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		if err := store.WriteFile(ctx, path, data, false); err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			return "", err
-		}
-		body["path"] = relPathForOutput(t.base.root, path)
+		body["path"] = path
 	}
 	output, err := json.Marshal(body)
 	if err != nil {

@@ -563,7 +563,7 @@ func (r *ToolRegistry) RegisterBrowserTools(root string, cfg Config) {
 		}
 	}
 	if !cfg.BrowserScreenshotDisabled {
-		r.Register(&BrowserScreenshotTool{base: base, restricted: cfg.BrowserScreenshotRestricted, allowedHosts: cfg.BrowserScreenshotHosts, protected: agentProtectedFiles(cfg)})
+		r.Register(&BrowserScreenshotTool{base: base, restricted: cfg.BrowserScreenshotRestricted, allowedHosts: cfg.BrowserScreenshotHosts, protected: agentProtectedFiles(cfg), store: cfg.Files})
 	}
 	family := BrowserToolFamily()
 	if base.sandbox {

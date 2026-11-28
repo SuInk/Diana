@@ -317,11 +317,7 @@ func spillCommandOutputTo(dir string, src *os.File) (string, error) {
 		return "", err
 	}
 	pruneCommandOutputs(dir, time.Now())
-	var suffix [4]byte
-	_, _ = rand.Read(suffix[:])
-	// 时间精确到纳秒放在最前面，按文件名排序就是按写入先后排。
-	name := time.Now().Format("20060102-150405.000000000") + "-" + hex.EncodeToString(suffix[:]) + ".log"
-	target := filepath.Join(dir, name)
+	target := filepath.Join(dir, commandOutputFileName())
 	dst, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", err
@@ -336,6 +332,14 @@ func spillCommandOutputTo(dir string, src *os.File) (string, error) {
 		return "", err
 	}
 	return target, dst.Close()
+}
+
+// commandOutputFileName 是一份完整输出的文件名：时间精确到纳秒放在最前面，按文件名
+// 排序就是按写入先后排。
+func commandOutputFileName() string {
+	var suffix [4]byte
+	_, _ = rand.Read(suffix[:])
+	return time.Now().Format("20060102-150405.000000000") + "-" + hex.EncodeToString(suffix[:]) + ".log"
 }
 
 func pruneCommandOutputs(dir string, now time.Time) {

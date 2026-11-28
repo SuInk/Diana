@@ -33,11 +33,15 @@ func toolFileSource(runtime *Runtime, event MessageEvent, owner bool, input map[
 		if strings.TrimSpace(content) != "" {
 			return nil, fmt.Errorf("content 和 path 只能提供一个；已有文件直接用 path，无需 read_file 后复制正文")
 		}
-		// /work/... 是本会话在工作区容器里的文件：本会话的人共用，谁都能取，别的会话取不到。
-		if isBoxPath(path) && runtime.boxExposed(event, owner) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			return runtime.boxFileSource(ctx, event, owner, path, limit)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		// 工作区在容器里时就是本会话的范围目录：本会话的人共用，谁都能取，别的会话取不到。
+		if store := runtime.boxWorkspaceStore(event); store != nil {
+			_, data, err := agent.ReadStoreFile(ctx, store, path, limit)
+			if err != nil {
+				return nil, err
+			}
+			return data, nil
 		}
 		cfg := agent.Config{WorkDir: AgentWorkspaceDir()}
 		if runtime != nil {
@@ -57,7 +61,7 @@ func toolFileSource(runtime *Runtime, event MessageEvent, owner bool, input map[
 				return nil, err
 			}
 		}
-		data, err := agent.ReadWorkspaceFile(cfg.WorkDir, rel, limit)
+		_, data, err := agent.ReadStoreFile(ctx, agent.HostFileStore(cfg), rel, limit)
 		if err != nil {
 			return nil, err
 		}

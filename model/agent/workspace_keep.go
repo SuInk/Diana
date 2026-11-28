@@ -153,6 +153,32 @@ func LoadKeepIndex(root, botID string) ([]KeepEntry, error) {
 	return loadKeepIndexDir(DianaStateDir(root), botDir)
 }
 
+// LoadStoreKeepIndex 读 store 里这台机器人长期区的索引，只留文件还在的条目：索引可能
+// 落后于磁盘（文件被 WebUI 或 run_command 删掉时索引没跟上），模型不该拿着一条已经
+// 不存在的路径去发文件。
+func LoadStoreKeepIndex(ctx context.Context, store FileStore, botID string) ([]KeepEntry, error) {
+	botDir := KeepBotDir(botID)
+	if botDir == "" {
+		return nil, nil
+	}
+	entries, err := loadKeepIndexDir(store.keepStateDir(), botDir)
+	if err != nil || len(entries) == 0 {
+		return nil, err
+	}
+	rels := make([]string, len(entries))
+	for i, entry := range entries {
+		rels[i] = entry.Path
+	}
+	found := store.existing(ctx, rels)
+	present := entries[:0:0]
+	for _, entry := range entries {
+		if found[entry.Path] {
+			present = append(present, entry)
+		}
+	}
+	return present, nil
+}
+
 func loadKeepIndexDir(stateDir, botDir string) ([]KeepEntry, error) {
 	if stateDir == "" {
 		return nil, nil

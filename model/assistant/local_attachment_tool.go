@@ -3,9 +3,7 @@ package assistant
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,7 +76,8 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 		return "", err
 	}
 	// 先按 read_file 同一套规则整理路径：扩展名校验和附件文件名都要用整理后的形式。
-	path, err := agent.NormalizeWorkspacePath(AgentWorkspaceDir(), configToolString(input, "path"))
+	store := t.runtime.workspaceFiles(t.event)
+	path, err := store.Resolve(configToolString(input, "path"))
 	if err != nil {
 		return "", err
 	}
@@ -99,17 +98,10 @@ func (t *dianaLocalAttachmentTool) Run(ctx context.Context, input map[string]any
 	}
 	// 和 read_file 用同一份凭据名单：工作目录是几台机器人共用的，MCP 配置和编码代理登录态里的令牌
 	// 不能换个工具就当附件发出去。
-	protectedCfg := agent.Config{WorkDir: AgentWorkspaceDir()}
-	if t.runtime != nil {
-		protectedCfg.MCPConfigPath = t.runtime.effectiveConfigForEvent(t.event).AgentMCPConfigPath
-	}
-	if agent.WorkspaceFileProtected(protectedCfg, path) {
+	if store.Blocked(path) {
 		return "", fmt.Errorf("%s 是 Diana 的运行时配置，里面可能有 MCP 或编码代理的访问令牌，不能作为附件发送或查看", path)
 	}
-	data, err := agent.ReadWorkspaceFile(AgentWorkspaceDir(), path, localAttachmentMaxBytes)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", agent.WorkspaceMissingFileError(AgentWorkspaceDir(), path)
-	}
+	_, data, err := agent.ReadStoreFile(ctx, store, path, localAttachmentMaxBytes)
 	if err != nil {
 		return "", err
 	}

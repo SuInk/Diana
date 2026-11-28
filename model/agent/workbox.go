@@ -50,10 +50,8 @@ import (
 
 const (
 	BoxWorkDir = "/work"
-	// 范围目录里的固定子目录：inbox 放聊天附件（= 雨夹雪 tg_download 的 /work/inbox），
-	// .output 存命令的完整输出（结果放不下时模型按行读它），.home 是 HOME（pip/npm/uv
-	// 的用户安装和缓存），tmp 是 TMPDIR。
-	boxInboxDir  = "inbox"
+	// 范围目录里的固定子目录：.output 存命令的完整输出（结果放不下时模型按行读它），
+	// .home 是 HOME（pip/npm/uv 的用户安装和缓存），tmp 是 TMPDIR。
 	boxOutputDir = ".output"
 	boxHomeDir   = ".home"
 	boxTmpDir    = "tmp"
@@ -604,7 +602,7 @@ const boxScopeDirScript = `d="/work/$1"
 mkdir -p -- "$d" && chown "$2:$2" -- "$d" && chmod 0700 -- "$d"`
 
 // boxScopeSkeletonScript 以范围 uid 建范围目录里的固定子目录。
-const boxScopeSkeletonScript = `mkdir -p -- "$1/` + boxHomeDir + `" "$1/` + boxInboxDir + `" "$1/` + boxOutputDir + `" "$1/` + boxTmpDir + `"`
+const boxScopeSkeletonScript = `mkdir -p -- "$1/` + boxHomeDir + `" "$1/` + boxOutputDir + `" "$1/` + boxTmpDir + `"`
 
 // Ensure 确保共享容器在跑，并且这个范围的目录已经建好、归范围 uid。
 func (b *WorkBox) Ensure(ctx context.Context) error {
@@ -980,31 +978,6 @@ func (b *WorkBox) ResolvePath(p string) (string, error) {
 	return normalized, nil
 }
 
-// WriteFile 把字节写进范围目录（附件进 inbox/ 就走这里），返回容器里的绝对路径。
-func (b *WorkBox) WriteFile(ctx context.Context, p string, data io.Reader) (string, error) {
-	target, err := b.ResolvePath(p)
-	if err != nil {
-		return "", err
-	}
-	defer b.use()()
-	if err := b.Ensure(ctx); err != nil {
-		return "", err
-	}
-	limit := b.diskLimitBytes()
-	res := b.host.docker(ctx, dockerCall{
-		args:    append(b.execArgs(true), "/bin/sh", "-c", boxWriteFileScript, "sh", target, strconv.FormatInt(max(limit>>10, 1), 10), b.Root()),
-		stdin:   data,
-		timeout: boxControlTimeout,
-	})
-	if err := boxDiskRefusal(res, limit); err != nil {
-		return "", err
-	}
-	if res.code != 0 {
-		return "", boxErrorf("写入工作区失败：%s", strings.TrimSpace(res.stderr))
-	}
-	return target, nil
-}
-
 // boxDiskRefusal 认出写入脚本因范围目录超限而拒绝（退出 75，stdout 是已用 KiB），
 // 或者写到一半撞上 ulimit -f，返回给模型看的超限说明；别的情况返回 nil。
 func boxDiskRefusal(res dockerResult, limit int64) error {
@@ -1017,14 +990,6 @@ func boxDiskRefusal(res dockerResult, limit int64) error {
 	}
 	return boxErrorf("%s", usage.Message())
 }
-
-// boxWriteFileScript 写文件前看范围目录（$3）还剩多少，用 ulimit -f 把这次写入限制在
-// 剩余空间内；已经超限时打出已用 KiB 并退出 75。
-const boxWriteFileScript = `used=$(du -sxk "$3" 2>/dev/null | cut -f1)
-if [ "${used:-0}" -ge "$2" ]; then echo "$used"; exit 75; fi
-mkdir -p -- "$(dirname -- "$1")" || exit 1
-ulimit -f $(( ($2 - ${used:-0}) * 2 ))
-cat > "$1"`
 
 // Message 是写给模型和用户的超限说明：用了多少、上限多少、怎么清理。
 func (u BoxDiskUsage) Message() string {

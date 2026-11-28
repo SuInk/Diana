@@ -725,7 +725,7 @@ func TestBoxRealDocker(t *testing.T) {
 	if _, out := run(`ps -eo stat=,args= | grep -v '^Z' | grep -c '[s]leep 301' || true`, 0); strings.TrimSpace(out) != "0" {
 		t.Fatalf("cancelled process group must be killed, sleep count %q", out)
 	}
-	if _, err := b.WriteFile(ctx, "inbox/hello.txt", strings.NewReader("hi")); err != nil {
+	if err := NewBoxFileStore(b).WriteFile(ctx, "inbox/hello.txt", []byte("hi"), false); err != nil {
 		t.Fatal(err)
 	}
 	if real, data, err := b.CopyOut(ctx, "/work/inbox/hello.txt", 1024); err != nil || real != root+"/inbox/hello.txt" || string(data) != "hi" {
@@ -791,7 +791,7 @@ func TestBoxRealDocker(t *testing.T) {
 	if err != nil || refused.DiskFull == nil || !refused.DiskFull.Refused {
 		t.Fatalf("command over limit must be refused: %+v %v", refused, err)
 	}
-	if _, err := b.WriteFile(ctx, "inbox/more.txt", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "上限") {
+	if err := NewBoxFileStore(b).WriteFile(ctx, "inbox/more.txt", []byte("x"), false); err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("write over limit: %v", err)
 	}
 	// 另一个范围不受这个范围的上限影响。
@@ -809,7 +809,7 @@ func TestBoxRealDocker(t *testing.T) {
 	if err := b.Reset(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, out := run(`ls -A inbox; ps -eo args= | grep -c '[s]leep 302' || true`, 0); strings.TrimSpace(out) != "0" {
+	if _, out := run(`ls -A tmp; ls | grep -v "^tmp$" || true; ps -eo args= | grep -c '[s]leep 302' || true`, 0); strings.TrimSpace(out) != "0" {
 		t.Fatalf("reset must wipe the scope and its processes, got %q", out)
 	}
 	if _, out := runIn(other, `cat mine.txt`, 0); out != "secret\n" {
@@ -964,7 +964,7 @@ func TestBoxWriteFileDiskLimit(t *testing.T) {
 		case "inspect":
 			return boxInspectReply("x", "c1", "s")
 		case "exec":
-			if slices.Contains(args, boxWriteFileScript) {
+			if slices.Contains(args, boxStoreWriteScript) {
 				return dockerResult{code: boxDiskRefusedExit, stdout: []byte("10240\n")}
 			}
 		}
@@ -972,7 +972,7 @@ func TestBoxWriteFileDiskLimit(t *testing.T) {
 	}}
 	b := fakeTestBox(fake)
 	b.SetDiskLimit(10 << 20)
-	if _, err := b.WriteFile(context.Background(), "inbox/a.bin", strings.NewReader("x")); err == nil || !strings.Contains(err.Error(), "已用 10 MB") || !strings.Contains(err.Error(), "上限 10 MB") {
+	if err := NewBoxFileStore(b).WriteFile(context.Background(), "inbox/a.bin", []byte("x"), false); err == nil || !strings.Contains(err.Error(), "已用 10 MB") || !strings.Contains(err.Error(), "上限 10 MB") {
 		t.Fatalf("write over limit: %v", err)
 	}
 }
@@ -1058,5 +1058,23 @@ func TestMigrateLegacyBoxes(t *testing.T) {
 	b, _ := BoxFor(key)
 	if got := copyCall[len(copyCall)-2:]; got[0] != b.scope || got[1] != strconv.Itoa(b.uid) {
 		t.Fatalf("copy target = %v, want %s %d", got, b.scope, b.uid)
+	}
+}
+
+// 命令里老习惯的 /work、/work/<路径> 落到本会话目录；已经带范围的、别处的 work 目录不动。
+func TestScopeLegacyWorkPaths(t *testing.T) {
+	root := BoxWorkDir + "/s-0123456789abcdef"
+	for in, want := range map[string]string{
+		`ffmpeg -y -i /work/downloads/a.mp4 -loop 0 /work/out.gif`: `ffmpeg -y -i ` + root + `/downloads/a.mp4 -loop 0 ` + root + `/out.gif`,
+		`cd /work && ls`:                               `cd ` + root + ` && ls`,
+		`cat "/work/x.txt" '/work/y'`:                  `cat "` + root + `/x.txt" '` + root + `/y'`,
+		`ls ` + root + `/downloads`:                    `ls ` + root + `/downloads`,
+		`ls /home/u/work/a ./work/b /workspace work/c`: `ls /home/u/work/a ./work/b /workspace work/c`,
+		`x=/work/a.txt; echo $x`:                       `x=` + root + `/a.txt; echo $x`,
+		`ffmpeg -i downloads/a.mp4 out.gif`:            `ffmpeg -i downloads/a.mp4 out.gif`,
+	} {
+		if got := scopeLegacyWorkPaths(in, root); got != want {
+			t.Errorf("scopeLegacyWorkPaths(%q)\n got %q\nwant %q", in, got, want)
+		}
 	}
 }
