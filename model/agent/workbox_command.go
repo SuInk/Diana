@@ -96,7 +96,7 @@ func boxDiskFields(u *BoxDiskUsage) map[string]any {
 // 会话的根就是 /work，模型也习惯写 /work/downloads/a.mp4；现在 /work 下面只有各范围的
 // 目录、而且列不出也进不去别人的，这种写法在命令里只会「找不到文件」。文件工具的 path
 // 早就这样映射（WorkBox.ResolvePath），命令里照做。已经写成 /work/<范围>/… 的不动，
-// 前面紧挨着路径字符的（比如 /home/x/work/a）不是这个 /work，也不动。
+// 前面紧挨着路径字符的（比如 /srv/x/work/a）不是这个 /work，也不动。
 func scopeLegacyWorkPaths(command, root string) string {
 	const prefix = BoxWorkDir
 	var out strings.Builder

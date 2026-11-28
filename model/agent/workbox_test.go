@@ -1066,12 +1066,12 @@ func TestScopeLegacyWorkPaths(t *testing.T) {
 	root := BoxWorkDir + "/s-0123456789abcdef"
 	for in, want := range map[string]string{
 		`ffmpeg -y -i /work/downloads/a.mp4 -loop 0 /work/out.gif`: `ffmpeg -y -i ` + root + `/downloads/a.mp4 -loop 0 ` + root + `/out.gif`,
-		`cd /work && ls`:                               `cd ` + root + ` && ls`,
-		`cat "/work/x.txt" '/work/y'`:                  `cat "` + root + `/x.txt" '` + root + `/y'`,
-		`ls ` + root + `/downloads`:                    `ls ` + root + `/downloads`,
-		`ls /home/u/work/a ./work/b /workspace work/c`: `ls /home/u/work/a ./work/b /workspace work/c`,
-		`x=/work/a.txt; echo $x`:                       `x=` + root + `/a.txt; echo $x`,
-		`ffmpeg -i downloads/a.mp4 out.gif`:            `ffmpeg -i downloads/a.mp4 out.gif`,
+		`cd /work && ls`:                              `cd ` + root + ` && ls`,
+		`cat "/work/x.txt" '/work/y'`:                 `cat "` + root + `/x.txt" '` + root + `/y'`,
+		`ls ` + root + `/downloads`:                   `ls ` + root + `/downloads`,
+		`ls /srv/u/work/a ./work/b /workspace work/c`: `ls /srv/u/work/a ./work/b /workspace work/c`,
+		`x=/work/a.txt; echo $x`:                      `x=` + root + `/a.txt; echo $x`,
+		`ffmpeg -i downloads/a.mp4 out.gif`:           `ffmpeg -i downloads/a.mp4 out.gif`,
 	} {
 		if got := scopeLegacyWorkPaths(in, root); got != want {
 			t.Errorf("scopeLegacyWorkPaths(%q)\n got %q\nwant %q", in, got, want)
