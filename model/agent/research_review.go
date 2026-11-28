@@ -119,9 +119,27 @@ func parseUnsupportedDetails(text string) string {
 	return strings.Join(items, "、")
 }
 
-func unsupportedDetailsRepair(unsupported string) string {
-	return "复核发现正文里这些细节在本轮读到的工具内容里找不到原文：" + unsupported +
-		"。重新 send：能再查就先查；不查的话把它们从正文删掉，或用口语说明只是印象（比如「这个我记得是…，不太确定」）。来源只覆盖一部分（例如单个版本公告、名字相近的另一个项目）时只按它覆盖的范围下结论。查到的部分照常回答，不要因此整条推脱。"
+// unsupportedDetailsRepair 是细节复核查出没有出处时退回给模型的话：哪些细节缺原文、
+// 结论不超出来源覆盖的范围，以及还能用来查的工具。不再提「用口语说明只是印象」：那是
+// 让没有出处的细节换个说法照样发出去的退路。
+func unsupportedDetailsRepair(unsupported string, tools []string) string {
+	repair := "这条没有发出：正文里这些细节在本轮读到的工具内容里找不到原文：" + unsupported +
+		"。来源只覆盖一部分（例如单个版本公告、名字相近的另一个项目）时，结论不超出它覆盖的范围；查到的部分照常回答。"
+	if len(tools) > 0 {
+		repair += "能查原文的工具：" + strings.Join(tools, "、") + "。"
+	}
+	return repair
+}
+
+// researchToolNames 是这一轮能用来查原文的工具，按退回话术里的顺序。
+func (r *Runner) researchToolNames() []string {
+	var names []string
+	for _, name := range []string{WebSearchToolName, "browser_render", subtaskToolName} {
+		if _, ok := r.registry.Get(name); ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 // researchReviewEvidence 把本轮检索和读页的输出压成可读文本。web_search 的 JSON 开头

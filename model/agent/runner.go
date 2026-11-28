@@ -297,9 +297,8 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	var toolsDuration time.Duration
 	protocolRepairs := 0
 	interjectionRedos := 0
-	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
-	plainTextRepaired := false
-	emptySendRepaired := false
+	// formatRejected 是格式退回（纯文本没走 send、空 send）的预算，一轮一次。
+	formatRejected := false
 	// detailReviewed 保证联网收尾的细节复核只跑一次，见 reviewUnsupportedDetails。
 	detailReviewed := false
 	lastToolSignature := ""
@@ -596,31 +595,32 @@ run:
 			}
 			continue
 		}
+		// 纯文本：说话只走 send，带着工具定义的这一步写了纯文本，先退回一次让模型知道这段
+		// 没发出去；没开 PlainTextNotSent 的调用方（子任务等）只为空文本和整段括号动作
+		// （#1189「[搜索 WePlay 参展商名单]」）退回。退回过后，开了 PlainTextNotSent 的再写
+		// 纯文本就当作 send 往下走，走同一条收尾路径；没开的按纯文本结果收尾。
 		// send 带 FinalizeFields（表情包、按钮）时纯文本也照样放行，不为补这些字段打回：
 		// #1274 曾打回一次，生产两天 135 次打回只有 4 次补上了表情包，65 次仍写纯文本，
 		// 每次多一整轮请求（中位 5.5 秒、p90 18 秒），重写的正文还常常偏离原意。
-		if !ok && !looksLikeAgentAction(lastText) && !plainTextRepaired && plainTextNeedsRepair(lastText) {
-			plainTextRepaired = true
-			reason := "本次只返回了普通文本，尚未明确完成任务。请检查用户请求和已有工具结果：如果还有未完成的工作，直接调用工具继续，不要只描述准备执行的动作；如果已经完成，请用 send 发出最终答复。不支持原生工具调用时使用 tool 或 final JSON。不要重复已经成功执行的操作。"
-			emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, reason)
-			messages = appendToolRepair(messages, resp, lastText, reason)
-			continue
-		}
-		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
-		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就当作 send 往下走，
-		// 走同一条收尾路径。
-		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(planningRequest.Tools) > 0 {
-			if !plainTextRepaired {
-				plainTextRepaired = true
+		if !ok && !looksLikeAgentAction(lastText) {
+			sendable := r.cfg.PlainTextNotSent && len(planningRequest.Tools) > 0
+			if !formatRejected && (sendable || plainTextNeedsRepair(lastText)) {
+				formatRejected = true
 				emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "普通文本没有发出")
-				messages = appendToolRepair(messages, resp, lastText, plainTextNotSentPrompt)
+				feedback := plainTextNotSentPrompt
+				if !sendable {
+					feedback = plainTextActionPrompt
+				}
+				messages = appendFinishFeedback(messages, resp, lastText, feedback)
 				continue
 			}
-			if strings.TrimSpace(lastText) == "" {
-				return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
+			if sendable {
+				if strings.TrimSpace(lastText) == "" {
+					return finishSilent(llmAction{Action: "final", Silent: true, SilentReason: plainTextNotSentReason}, "plain_text_not_sent")
+				}
+				action = llmAction{Action: "final", Content: strings.TrimSpace(lastText)}
+				ok = true
 			}
-			action = llmAction{Action: "final", Content: strings.TrimSpace(lastText)}
-			ok = true
 		}
 		if (ok && action.Action == "final") || (!ok && !looksLikeAgentAction(lastText)) {
 			feedback, reviewErr := reviewFinish(action.Content, "candidate", true)
@@ -667,11 +667,10 @@ run:
 				}
 				// 空正文但没填 silent=true：先退回去一次，要么补上正文，要么明确表态不回复。
 				// 只退一次，再空就按不说话收尾，不会来回转圈。
-				if action.emptySend && !emptySendRepaired && !r.deliversFinalizeField(finalizeFields) {
-					emptySendRepaired = true
-					reason := "send 的 text 是空的，空正文不会发出任何消息。要回复就把话写进 text 重新 send；确实不该回复就重新 send，填 silent=true 并在 silent_reason 写一句原因。"
+				if action.emptySend && !formatRejected && !r.deliversFinalizeField(finalizeFields) {
+					formatRejected = true
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "send 正文为空且未填 silent")
-					messages = appendToolRepair(messages, resp, lastText, reason)
+					messages = appendFinishFeedback(messages, resp, lastText, emptySendFeedback)
 					continue
 				}
 				// 模型 send 了空正文，这一轮不说话：没有正文，也就没有排版、证据账本和
@@ -683,8 +682,7 @@ run:
 				if unsupported := r.reviewUnsupportedDetails(ctx, req.Messages, action.Content, steps); unsupported != "" {
 					protocolRepairs++
 					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "联网收尾含工具结果未覆盖的细节")
-					messages = appendAssistantEcho(messages, lastText)
-					messages = append(messages, llm.Message{Role: llm.RoleUser, Content: unsupportedDetailsRepair(unsupported)})
+					messages = appendFinishFeedback(messages, resp, lastText, unsupportedDetailsRepair(unsupported, r.researchToolNames()))
 					if protocolRepairs >= r.cfg.ProtocolRepairLimit {
 						finishReason = "protocol_repair_exhausted"
 						break
@@ -2093,7 +2091,8 @@ func (r *Runner) toolResultReminder(steps []Step) string {
 }
 
 // toolFailureNoticeText 是上一步有工具失败时接在请求末尾的提示。
-const toolFailureNoticeText = "【工具调用失败】本步有工具未执行或执行失败，错误信息不是查询结果。若仍需这项结果才能回答，请按错误说明修正参数或换用可用方法继续；权限不足或明确不可重试时不要重试。不能把历史中的无关内容当成本次查到的资料，也不能声称已经查到。无法继续时如实说明限制，只回答已有依据的部分。"
+// 只说错误原文不是查询结果这个事实，不预先给「无法继续时如实说明限制」的退路。
+const toolFailureNoticeText = "【工具调用失败】上一步有工具没执行成功，结果里的错误原文不是查询结果，不能当作查到的资料，也不能说已经查到。按错误说明修正参数或换可用的工具继续；权限不足或明确不可重试的不要重试。"
 
 // directedToolFailureNoticeText 接在点名请求的失败提示后面。11-26 群主 @ 机器人「保存gif」，
 // 工具连败后模型 send silent=true，对方什么都没收到。静默是「这轮没什么要说」，不是
@@ -2117,6 +2116,11 @@ func withToolResultReminder(messages []llm.Message, reminder string, directed bo
 	for i := len(messages) - 1; i >= 0; i-- {
 		switch messages[i].Role {
 		case llm.RoleTool:
+			// 只有 send 的结果是收尾退回（appendFinishFeedback），不是工具结果：
+			// 不接「写最终回复前」，也不接「工具调用失败」，退回话术本身就是要说的事实。
+			if onlySendResults(messages[:i+1]) {
+				return messages
+			}
 			// 协议修复和执行失败不是查到的素材。此时催模型写最终回复会让它
 			// 跳过纠错，甚至把无关历史当作查询结果。优先提示处理本次失败。
 			for j := i; j >= 0 && messages[j].Role == llm.RoleTool; j-- {

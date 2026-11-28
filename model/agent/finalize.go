@@ -61,7 +61,11 @@ func HistoryReplyMessages(id, text string) []llm.Message {
 // plainTextNotSentPrompt 是 Config.PlainTextNotSent 退回纯文本时接在后面的话。11-07
 // 回放那条「在画了」的生产请求：退回这句后 12/12 真去调了 image；14 条闲聊里退回后
 // 20/24 改用 send 发出。
-const plainTextNotSentPrompt = "这段普通文本没有发出去，对方什么也没看到。只有 send 会把话发给对方；要做事就先调用对应工具（按需工具用 tools_execute），做完再 send。"
+const plainTextNotSentPrompt = "这段普通文本没有发出去，对方什么也没看到。只有 send 会把话发给对方；要用工具就直接调用（按需工具用 tools_execute）。"
+
+// plainTextActionPrompt 是没开 PlainTextNotSent 的调用方（子任务、JSON 动作协议）收到
+// 空文本或整段括号动作时退回的话（#1189 只写了「[搜索 WePlay 2026 参展商名单]」）。
+const plainTextActionPrompt = "这段普通文本没有执行任何操作。要做的事直接调用工具；做完用 send 发出答复，不支持原生工具调用时用 tool 或 final JSON。不要重复已经成功执行的操作。"
 
 // plainTextNotSentReason 是退回后仍写空的纯文本、按静默结束时记下的原因。
 const plainTextNotSentReason = "退回一次后仍只写了普通文本，没有调用 send，没有发出"
