@@ -366,7 +366,7 @@ func (t *dianaFeedTool) loadImage(ctx context.Context, source string) (FeedImage
 		data = payload.data
 	} else {
 		var err error
-		data, err = readFeedWorkspaceImage(source)
+		data, err = readFeedWorkspaceImage(ctx, t.runtime.workspaceFiles(t.event), source)
 		if err != nil {
 			return FeedImageInput{}, err
 		}
@@ -398,23 +398,22 @@ func checkFeedImage(data []byte) (FeedImageInput, error) {
 
 // readFeedWorkspaceImage 只读 outputs/ 下的文件：生图结果和机器人自己发出去的图都落在
 // 这里，downloads/ 是别人发来的和网上下载的，不算它自己的。
-func readFeedWorkspaceImage(raw string) ([]byte, error) {
-	root := AgentWorkspaceDir()
-	rel, err := agent.NormalizeWorkspacePath(root, raw)
+func readFeedWorkspaceImage(ctx context.Context, store agent.FileStore, raw string) ([]byte, error) {
+	rel, err := store.Resolve(raw)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.HasPrefix(rel, agent.WorkspaceOutputsDir+"/") {
 		return nil, fmt.Errorf("配图只能用 %s/ 下你自己生成或发出去的图", agent.WorkspaceOutputsDir)
 	}
-	data, err := agent.ReadWorkspaceFile(root, rel, FeedImageMaxBytes)
+	_, data, err := agent.ReadStoreFile(ctx, store, rel, FeedImageMaxBytes)
 	if err == nil {
 		return data, nil
 	}
 	// 没有扩展名时按生图落盘的几种扩展名再找一遍。
 	if !strings.Contains(baseName(rel), ".") {
 		for _, ext := range feedImageExtensions {
-			if data, retry := agent.ReadWorkspaceFile(root, rel+ext, FeedImageMaxBytes); retry == nil {
+			if _, data, retry := agent.ReadStoreFile(ctx, store, rel+ext, FeedImageMaxBytes); retry == nil {
 				return data, nil
 			}
 		}

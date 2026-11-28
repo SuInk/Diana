@@ -80,19 +80,19 @@ func TestCorrectFileExtension(t *testing.T) {
 	}
 }
 
-func TestWriteWorkspaceBytesUniqueNamesAndGuards(t *testing.T) {
+func TestWriteStoreBytesUniqueNamesAndGuards(t *testing.T) {
 	workDir := t.TempDir()
 	cfg := Config{WorkDir: workDir}
 	data := testPNG(t, 3, 3)
-	first, err := WriteWorkspaceBytes(cfg, "downloads/cat.png", data, WorkspaceWriteOptions{})
+	first, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), "downloads/cat.png", data, WorkspaceWriteOptions{})
 	if err != nil || first != "downloads/cat.png" {
 		t.Fatalf("first write: %q %v", first, err)
 	}
-	second, err := WriteWorkspaceBytes(cfg, "downloads/cat.png", data, WorkspaceWriteOptions{})
+	second, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), "downloads/cat.png", data, WorkspaceWriteOptions{})
 	if err != nil || second != "downloads/cat-2.png" {
 		t.Fatalf("同名不覆盖时应自动加序号: %q %v", second, err)
 	}
-	overwritten, err := WriteWorkspaceBytes(cfg, "downloads/cat.png", []byte("x"), WorkspaceWriteOptions{Overwrite: true})
+	overwritten, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), "downloads/cat.png", []byte("x"), WorkspaceWriteOptions{Overwrite: true})
 	if err != nil || overwritten != "downloads/cat.png" {
 		t.Fatalf("overwrite: %q %v", overwritten, err)
 	}
@@ -100,7 +100,7 @@ func TestWriteWorkspaceBytesUniqueNamesAndGuards(t *testing.T) {
 		t.Fatalf("overwrite 没生效: %q", got)
 	}
 	for _, rel := range []string{"../escape.png", "/abs.png", ".mcp.json", ".trash/x.png", "coding-runtime/auth/token.json"} {
-		if saved, err := WriteWorkspaceBytes(cfg, rel, data, WorkspaceWriteOptions{}); err == nil {
+		if saved, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), rel, data, WorkspaceWriteOptions{}); err == nil {
 			t.Fatalf("%s 应该被拒绝，却写到了 %s", rel, saved)
 		}
 	}

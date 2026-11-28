@@ -64,6 +64,10 @@ type FileStore interface {
 	// 会把里面的凭据一起带走。
 	BlockedWithin(rel string) bool
 
+	// existing 返回 rels 里还存在（含悬空软链接）的那些，一次问完：容器后端逐个问要逐个
+	// docker exec。
+	existing(ctx context.Context, rels []string) map[string]bool
+
 	// lockKey 是 rel 在进程内锁表里的名字：同一个工作区的同一个路径得到同一个名字。
 	lockKey(rel string) string
 	// keepStateDir 是长期区索引所在的宿主目录（索引在它的 keep-index/ 下），空表示
@@ -85,6 +89,18 @@ func toolFileStore(store FileStore, root string, protected protectedFiles) FileS
 type hostFileStore struct {
 	root      string
 	protected protectedFiles
+}
+
+// HostFileStore 是 cfg.WorkDir 上的宿主工作目录，受保护文件名单按 cfg 算（MCP 配置
+// 可能被机器人配置指到别处，名单要跟着它走）。
+func HostFileStore(cfg Config) FileStore {
+	root, err := filepath.Abs(cfg.WorkDir)
+	if err != nil {
+		root = cfg.WorkDir
+	}
+	// 新装还没有工作目录时先建出来：Resolve 要解开工作目录本身的软链接，目录不在就报错。
+	_ = os.MkdirAll(root, 0o755)
+	return newHostFileStore(root, agentProtectedFiles(cfg))
 }
 
 func newHostFileStore(root string, protected protectedFiles) *hostFileStore {
@@ -145,6 +161,19 @@ func (s *hostFileStore) BlockedWithin(rel string) bool {
 }
 
 func (s *hostFileStore) lockKey(rel string) string { return s.full(rel) }
+
+func (s *hostFileStore) existing(_ context.Context, rels []string) map[string]bool {
+	found := map[string]bool{}
+	_ = s.withRoot(func(root *os.Root) error {
+		for _, rel := range rels {
+			if _, err := root.Lstat(filepath.FromSlash(rel)); err == nil {
+				found[rel] = true
+			}
+		}
+		return nil
+	})
+	return found
+}
 
 func (s *hostFileStore) keepStateDir() string { return DianaStateDir(s.root) }
 

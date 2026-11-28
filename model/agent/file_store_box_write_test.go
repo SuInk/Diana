@@ -193,6 +193,16 @@ func TestBoxFileStoreWriteRealDocker(t *testing.T) {
 		t.Fatal("extract escaped via a symlink")
 	}
 
+	// 当初发不出 GIF 的那条命令原样重跑：存进工作区的视频，命令里写 /work/... 也能读到，产物落回同一处。
+	run(b, `mkdir -p downloads && ffmpeg -loglevel error -f lavfi -i testsrc=duration=1:size=64x64:rate=10 -pix_fmt yuv420p downloads/laowu_video.mp4`)
+	out, err := RunBoxCommand(ctx, b, `ffmpeg -y -i /work/downloads/laowu_video.mp4 -vf "fps=15,scale=480:-1:flags=lanczos" -loop 0 /work/downloads/laowu.gif && ls -lh /work/downloads/laowu.gif`, 0)
+	if err != nil || !strings.Contains(out, `"exit_code": 0`) {
+		t.Fatalf("legacy /work command: %s %v", out, err)
+	}
+	if info, err := store.Stat(ctx, "downloads/laowu.gif"); err != nil || info.Size() == 0 {
+		t.Fatalf("gif not in the scope workspace: %v %v", info, err)
+	}
+
 	// 范围目录超限：这次写入整个拒绝，给出超限说明。
 	b.SetDiskLimit(store.Usage(ctx, ".") + 64<<10)
 	_, err = write.Run(ctx, map[string]any{"path": "big.txt", "content": strings.Repeat("x", 256<<10)})

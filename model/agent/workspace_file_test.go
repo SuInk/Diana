@@ -1,17 +1,18 @@
 package agent
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestReadWorkspaceFileBoundaries(t *testing.T) {
+func TestReadStoreFileBoundaries(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "ok.txt"), []byte("hello"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	data, err := ReadWorkspaceFile(root, "ok.txt", 5)
+	_, data, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), "ok.txt", 5)
 	if err != nil || string(data) != "hello" {
 		t.Fatalf("data=%q error=%v", data, err)
 	}
@@ -23,11 +24,11 @@ func TestReadWorkspaceFileBoundaries(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{"../secret", filepath.Join(outside, "secret"), "escape/secret", "."} {
-		if _, err := ReadWorkspaceFile(root, path, 32); err == nil {
+		if _, _, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), path, 32); err == nil {
 			t.Fatalf("accepted %s", path)
 		}
 	}
-	if _, err := ReadWorkspaceFile(root, "ok.txt", 4); err == nil {
+	if _, _, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), "ok.txt", 4); err == nil {
 		t.Fatal("size limit ignored")
 	}
 }

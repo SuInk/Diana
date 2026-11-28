@@ -127,7 +127,12 @@ func (t *dianaSaveToWorkspaceTool) Run(ctx context.Context, input map[string]any
 		if target != "" && (strings.ContainsAny(target, `/\\`) || target == "." || target == "..") {
 			return "", fmt.Errorf("群成员的 path 只能是文件名，保存目录由运行时按群分配")
 		}
-		target = "downloads/groups/" + scope + "/" + target
+		// 工作区在容器里时本身就是本群的范围目录；在宿主上时各群分开放、另记访问权限。
+		if t.runtime.boxWorkspaceStore(t.event) != nil {
+			target = agent.WorkspaceDownloadsDir + "/" + target
+		} else {
+			target = "downloads/groups/" + scope + "/" + target
+		}
 	}
 	var (
 		payload workspaceMediaPayload
@@ -232,11 +237,20 @@ func (r *Runtime) saveWorkspacePayloadWith(event MessageEvent, payload workspace
 	if dir != "" && dir != "." {
 		rel = dir + "/" + name
 	}
-	saved, err := agent.WriteWorkspaceBytes(r.agentWorkspaceConfig(event), rel, payload.data, agent.WorkspaceWriteOptions{Overwrite: overwrite, Keep: keep})
+	box := r.boxWorkspaceStore(event)
+	store := box
+	if store == nil {
+		store = agent.HostFileStore(r.agentWorkspaceConfig(event))
+	}
+	saved, err := agent.WriteStoreBytes(context.Background(), store, rel, payload.data, agent.WorkspaceWriteOptions{Overwrite: overwrite, Keep: keep})
 	if err != nil {
 		return saveToWorkspaceResult{}, err
 	}
-	if err := r.grantWorkspaceGroupFile(event, filepath.Clean(filepath.FromSlash(saved)), payload.data); err != nil {
+	message := "已原样存进工作目录；path 以这里返回的为准。出图用 render_media 或 render，原样交付文件用 send_file 的 path（文本、二进制都行），主人也可用 send_attachment。这一步本身没有发送任何东西。"
+	if box != nil {
+		// 容器里的范围目录只有本会话进得来，用不着另记访问权限。
+		message = "已原样存进本会话的工作区；path 以这里返回的为准，run_command 在同一个目录里，命令里直接写这个相对路径。出图用 render_media 或 render，原样交付文件用 send_file 的 path（文本、二进制都行），主人也可用 send_attachment。这一步本身没有发送任何东西。"
+	} else if err := r.grantWorkspaceGroupFile(event, filepath.Clean(filepath.FromSlash(saved)), payload.data); err != nil {
 		return saveToWorkspaceResult{}, fmt.Errorf("文件已保存，但登记本群访问权限失败：%w", err)
 	}
 	result := saveToWorkspaceResult{
@@ -244,7 +258,7 @@ func (r *Runtime) saveWorkspacePayloadWith(event MessageEvent, payload workspace
 		Path:    saved,
 		Bytes:   len(payload.data),
 		MIME:    mediaType,
-		Message: "已原样存进工作目录；path 以这里返回的为准。出图用 render_media 或 render，原样交付文件用 send_file 的 path（文本、二进制都行），主人也可用 send_attachment。容器（run_command）看不到工作目录，要在命令里处理就把 path 写进 run_command 的 inputs，文件会放进容器工作区的 inbox/。这一步本身没有发送任何东西。",
+		Message: message,
 	}
 	if requested != "" && requested != name {
 		result.ExtensionCorrected = requested + " → " + name

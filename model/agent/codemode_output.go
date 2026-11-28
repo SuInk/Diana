@@ -4,8 +4,10 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"path"
 )
 
 // codemode 结果给模型的上限照 Pi（pi-durable codemode/output.js）：默认 1 万 token，
@@ -65,7 +67,18 @@ func (r *Runner) spillCodeModeOutput(output string) (string, string) {
 		return "", ""
 	}
 	reader, ok := tool.(*ReadFileTool)
-	if !ok || reader.root == "" {
+	if !ok {
+		return "", ""
+	}
+	if reader.store != nil {
+		// 工作区在别处（容器里的会话范围）：存到那里的 tmp/，read_file 才读得回来。
+		rel := path.Join(WorkspaceTmpDir, "command-output", commandOutputFileName())
+		if err := reader.store.WriteFile(context.Background(), rel, []byte(output), true); err != nil {
+			return "", ""
+		}
+		return rel, fmt.Sprintf("用 read_file path=%s 加 offset/limit 按行读，或用 grep 在里面查", rel)
+	}
+	if reader.root == "" {
 		return "", ""
 	}
 	file, err := os.CreateTemp("", "diana-codemode-output-*")

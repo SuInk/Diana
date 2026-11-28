@@ -4,6 +4,7 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ func writeKeepIndexForPrompt(t *testing.T, count int) {
 	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	for i := range count {
 		name := fmt.Sprintf("keep/bot-a/file-%02d.txt", i)
-		if _, err := agent.WriteWorkspaceBytes(agent.Config{WorkDir: root}, name, []byte("x"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{
+		if _, err := agent.WriteStoreBytes(context.Background(), agent.HostFileStore(agent.Config{WorkDir: root}), name, []byte("x"), agent.WorkspaceWriteOptions{Keep: &agent.KeepMeta{
 			BotID: "bot-a", Description: fmt.Sprintf("第 %d 份", i), Now: base.Add(time.Duration(i) * time.Hour),
 		}}); err != nil {
 			t.Fatal(err)
@@ -67,12 +68,12 @@ func writeKeepIndexForPrompt(t *testing.T, count int) {
 func TestKeepIndexPromptIsBoundedAndStable(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "diana.db"))
 	cfg := BotConfig{ID: "bot-a"}
-	if prompt := keepIndexPrompt(cfg, "bot-a"); prompt != "" {
+	if prompt := keepIndexPrompt(cfg, agent.HostFileStore(agent.Config{WorkDir: AgentWorkspaceDir()}), "bot-a"); prompt != "" {
 		t.Fatalf("空长期区也注入了: %q", prompt)
 	}
 	writeKeepIndexForPrompt(t, 23)
-	first := keepIndexPrompt(cfg, "bot-a")
-	if first != keepIndexPrompt(cfg, "bot-a") {
+	first := keepIndexPrompt(cfg, agent.HostFileStore(agent.Config{WorkDir: AgentWorkspaceDir()}), "bot-a")
+	if first != keepIndexPrompt(cfg, agent.HostFileStore(agent.Config{WorkDir: AgentWorkspaceDir()}), "bot-a") {
 		t.Fatal("同一份索引两次渲染不一样")
 	}
 	if !strings.Contains(first, "keep/bot-a/file-22.txt  第 22 份") || strings.Contains(first, "file-02.txt") {
@@ -84,11 +85,11 @@ func TestKeepIndexPromptIsBoundedAndStable(t *testing.T) {
 	if err := os.Remove(filepath.Join(AgentWorkspaceDir(), "keep", "bot-a", "file-22.txt")); err != nil {
 		t.Fatal(err)
 	}
-	if prompt := keepIndexPrompt(cfg, "bot-a"); strings.Contains(prompt, "file-22.txt") || !strings.Contains(prompt, "现有 22 个文件") {
+	if prompt := keepIndexPrompt(cfg, agent.HostFileStore(agent.Config{WorkDir: AgentWorkspaceDir()}), "bot-a"); strings.Contains(prompt, "file-22.txt") || !strings.Contains(prompt, "现有 22 个文件") {
 		t.Fatalf("磁盘上没了的条目还在清单里: %s", prompt)
 	}
 	// 别的机器人看不到这份清单。
-	if prompt := keepIndexPrompt(BotConfig{ID: "bot-b"}, "bot-b"); prompt != "" {
+	if prompt := keepIndexPrompt(BotConfig{ID: "bot-b"}, agent.HostFileStore(agent.Config{WorkDir: AgentWorkspaceDir()}), "bot-b"); prompt != "" {
 		t.Fatalf("bot-b 看到了 bot-a 的清单: %s", prompt)
 	}
 }

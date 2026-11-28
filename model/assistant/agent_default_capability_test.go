@@ -5,7 +5,9 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -122,21 +124,51 @@ func TestBoxKeyPerBotAndSession(t *testing.T) {
 	}
 }
 
-// 群成员只能把本群保存过的文件放进 box；路径以 /work 开头的 send_file 走 box。
-func TestBoxInputsRequireGroupGrant(t *testing.T) {
+// forceBoxStore 让工作区落在「容器」里：每个会话范围是 root 下的一个宿主目录，按
+// boxKey 分开，用例不用真起容器就能看到按范围隔离的效果。
+func forceBoxStore(t *testing.T, root string) {
+	t.Helper()
 	forceBox(t, true)
+	previous := boxScopeStore
+	boxScopeStore = func(key string, _ int64) (agent.FileStore, error) {
+		return agent.HostFileStore(agent.Config{WorkDir: filepath.Join(root, fmt.Sprintf("%x", sha256.Sum256([]byte(key)))[:16])}), nil
+	}
+	t.Cleanup(func() { boxScopeStore = previous })
+}
+
+// 工作区放在哪：容器可用且没关时是本会话的范围目录，群和群、群和私聊各一处；容器关掉
+// （off）或 Docker 不可用时回到宿主工作目录。
+func TestWorkspaceStoreFollowsBox(t *testing.T) {
 	t.Setenv("APP_DB_PATH", filepath.Join(t.TempDir(), "app.db"))
-	r := NewRuntime(BotConfig{OwnerID: "owner", AgentBoxAccess: BoxAccessAll}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
-	event := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "30001", ProfileID: "bot-a"}
-	tool := &boxCommandTool{runtime: r, event: event}
-	if _, err := tool.stageInputs(context.Background(), nil, []string{"private/owner-notes.txt"}); err == nil {
-		t.Fatal("成员把没在本群保存过的文件放进了 box")
+	forceBoxStore(t, t.TempDir())
+	r := NewRuntime(BotConfig{OwnerID: "owner", AgentBoxAccess: BoxAccessOwner}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	group := MessageEvent{Kind: EventKindGroup, GroupID: "20001", UserID: "30001", ProfileID: "bot-a"}
+	other := MessageEvent{Kind: EventKindGroup, GroupID: "20002", UserID: "30001", ProfileID: "bot-a"}
+	ctx := context.Background()
+	store := r.boxWorkspaceStore(group)
+	if store == nil {
+		t.Fatal("box 可用时成员（不能跑命令）的工作区也该在容器里")
 	}
-	if _, err := tool.stageInputs(context.Background(), nil, make([]string, boxMaxInputs+1)); err == nil {
-		t.Fatal("inputs 超过上限没有拒绝")
+	if err := store.WriteFile(ctx, "downloads/a.txt", []byte("group a"), true); err != nil {
+		t.Fatal(err)
 	}
-	if !isBoxPath("/work/out.png") || isBoxPath("/workspace/a") || isBoxPath("out.png") {
-		t.Fatal("isBoxPath 判断错了")
+	if _, err := r.boxWorkspaceStore(other).Stat(ctx, "downloads/a.txt"); err == nil {
+		t.Fatal("另一个群看到了这个群的文件")
+	}
+	data, err := toolFileSource(r, group, false, map[string]any{"path": "downloads/a.txt"}, 1024)
+	if err != nil || string(data) != "group a" {
+		t.Fatalf("本群成员按路径取本群文件：%q %v", data, err)
+	}
+	if _, err := toolFileSource(r, other, false, map[string]any{"path": "downloads/a.txt"}, 1024); err == nil {
+		t.Fatal("别的群按同一路径取到了文件")
+	}
+	off := NewRuntime(BotConfig{OwnerID: "owner", AgentBoxAccess: BoxAccessOff}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
+	if off.boxWorkspaceStore(group) != nil {
+		t.Fatal("容器关掉后工作区应回到宿主")
+	}
+	forceBox(t, false)
+	if r.boxWorkspaceStore(group) != nil {
+		t.Fatal("Docker 不可用时工作区应回到宿主")
 	}
 }
 

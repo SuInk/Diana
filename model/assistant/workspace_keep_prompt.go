@@ -4,11 +4,11 @@
 package assistant
 
 import (
+	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/SuInk/diana/model/agent"
 )
@@ -39,25 +39,16 @@ var promptWorkspaceKeepIndexSpec = registerPrompt(PromptSpec{
 
 // keepIndexPrompt 渲染这台机器人长期区的清单；长期区为空或读不到索引时返回空串，
 // 不注入任何东西。
-func keepIndexPrompt(cfg BotConfig, botID string) string {
+func keepIndexPrompt(cfg BotConfig, store agent.FileStore, botID string) string {
 	area := agent.KeepAreaPath(botID)
 	if area == "" {
 		return ""
 	}
-	root := AgentWorkspaceDir()
-	entries, err := agent.LoadKeepIndex(root, botID)
-	if err != nil || len(entries) == 0 {
-		return ""
-	}
-	// 索引可能落后于磁盘：文件被 WebUI 或命令删掉时索引没跟上。只列还在的，免得模型
-	// 拿着一条已经不存在的路径去发文件。
-	present := entries[:0:0]
-	for _, entry := range entries {
-		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(entry.Path))); err == nil {
-			present = append(present, entry)
-		}
-	}
-	if len(present) == 0 {
+	// 只列文件还在的：索引可能落后于磁盘，模型不该拿着已经不存在的路径去发文件。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	present, err := agent.LoadStoreKeepIndex(ctx, store, botID)
+	if err != nil || len(present) == 0 {
 		return ""
 	}
 	lines := make([]string, 0, keepIndexPromptLimit+1)

@@ -79,8 +79,8 @@ type Config struct {
 	// FileWriteEnabled 打开 write_file / edit_file 和 manage_files 的写操作。默认关闭：读错文件浪费一次
 	// 调用，写错文件改的是磁盘，这一档该由部署方显式点头。
 	FileWriteEnabled bool
-	// Files 不为空时，只读文件工具（list_files、read_file、grep、find_files）经由它读，
-	// 比如工作区容器里的会话范围（NewBoxFileStore）；为空时读 WorkDir 上的宿主目录。
+	// Files 不为空时，文件工具（读写、整理、解压、截图落盘、代码模式的完整输出）都经由
+	// 它，比如工作区容器里的会话范围（NewBoxFileStore）；为空时用 WorkDir 上的宿主目录。
 	Files FileStore
 	// FileWriteMaxBytes 是单次写入的字节上限，留空按 DefaultFileWriteMaxBytes。
 	FileWriteMaxBytes int

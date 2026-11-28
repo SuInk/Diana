@@ -184,24 +184,24 @@ func TestReadFileToolAcceptsModelPathForms(t *testing.T) {
 	}
 }
 
-// TestReadWorkspaceFileAcceptsModelPathForms ReadWorkspaceFile 是看图、发附件的入口，
+// TestReadStoreFileAcceptsModelPathForms ReadStoreFile 是看图、发附件的入口，
 // 写法要和 read_file 一致，同时仍挡住逃逸和指向外面的软链接。
-func TestReadWorkspaceFileAcceptsModelPathForms(t *testing.T) {
+func TestReadStoreFileAcceptsModelPathForms(t *testing.T) {
 	root := t.TempDir()
 	writeWorkspaceTestFile(t, root, "outputs/a.png", "png")
 	for _, in := range []string{"outputs/a.png", "/workspace/outputs/a.png", "workspace/outputs/a.png", filepath.Join(root, "outputs", "a.png")} {
-		data, err := ReadWorkspaceFile(root, in, 16)
+		_, data, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), in, 16)
 		if err != nil || string(data) != "png" {
-			t.Fatalf("ReadWorkspaceFile(%q) = %q, %v", in, data, err)
+			t.Fatalf("ReadStoreFile(%q) = %q, %v", in, data, err)
 		}
 	}
-	if _, err := ReadWorkspaceFile(root, "outputs/b.png", 16); !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "find_files") {
+	if _, _, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), "outputs/b.png", 16); !errors.Is(err, fs.ErrNotExist) || !strings.Contains(err.Error(), "find_files") {
 		t.Fatalf("missing file error = %v", err)
 	}
-	if _, err := ReadWorkspaceFile(root, "outputs", 16); err == nil || !strings.Contains(err.Error(), "是目录") {
+	if _, _, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), "outputs", 16); err == nil || !strings.Contains(err.Error(), "是目录") {
 		t.Fatalf("directory error = %v", err)
 	}
-	if _, err := ReadWorkspaceFile(root, "", 16); !errors.Is(err, ErrWorkspacePath) {
+	if _, _, err := ReadStoreFile(context.Background(), HostFileStore(Config{WorkDir: root}), "", 16); !errors.Is(err, ErrWorkspacePath) {
 		t.Fatalf("empty path error = %v", err)
 	}
 }

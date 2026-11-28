@@ -977,7 +977,7 @@ func (r *Runtime) systemPromptPartsWithRelationshipAndAgentTools(event MessageEv
 	}
 	// 长期保存区清单随机器人、随存了什么而变，进尾部；长期区没变时逐字不变。
 	if agentEnabled && tools.Owner && hasAnyTool(dianaSaveToWorkspaceToolName, agent.ManageFilesToolName, "read_file") {
-		if prompt := keepIndexPrompt(cfg, firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
+		if prompt := keepIndexPrompt(cfg, r.workspaceFiles(event), firstNonEmpty(event.ProfileID, cfg.ID)); prompt != "" {
 			tail.WriteString("\n" + prompt)
 		}
 	}

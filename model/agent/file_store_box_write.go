@@ -294,6 +294,37 @@ func writeBoxImportTar(w io.Writer, dir string) error {
 	return archive.Close()
 }
 
+// boxExistingScript：$1 范围目录，其余参数是相对路径；还在的打出来，NUL 结尾。
+const boxExistingScript = `R=$1
+shift
+for p; do
+  if [ -e "$R/$p" ] || [ -L "$R/$p" ]; then printf '%s\0' "$p"; fi
+done`
+
+func (s *boxFileStore) existing(ctx context.Context, rels []string) map[string]bool {
+	found := map[string]bool{}
+	if len(rels) == 0 {
+		return found
+	}
+	var safe []string
+	for _, rel := range rels {
+		// 只问规整的相对路径：索引是自己写的，这里防的是索引文件被改坏。
+		if clean := path.Clean(rel); clean == rel && filepath.IsLocal(rel) {
+			safe = append(safe, rel)
+		}
+	}
+	res, err := s.runWrite(ctx, "stat", ".", boxExistingScript, nil, append([]string{s.box.Root()}, safe...)...)
+	if err != nil {
+		return found
+	}
+	for _, rel := range strings.Split(string(res.stdout), "\x00") {
+		if rel != "" {
+			found[rel] = true
+		}
+	}
+	return found
+}
+
 func (s *boxFileStore) BlockedWithin(string) bool { return false }
 
 func (s *boxFileStore) lockKey(rel string) string {

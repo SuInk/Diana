@@ -157,23 +157,23 @@ func TestKeepQuotaRefusesInsteadOfEvicting(t *testing.T) {
 	if _, err := write.Run(context.Background(), map[string]any{"path": "keep/note.md", "content": "hello"}); err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("write_file 超配额没拒: %v", err)
 	}
-	_, err = WriteWorkspaceBytes(Config{WorkDir: root}, "keep/pic.bin", []byte("abc"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a"}})
+	_, err = WriteStoreBytes(context.Background(), HostFileStore(Config{WorkDir: root}), "keep/pic.bin", []byte("abc"), WorkspaceWriteOptions{Keep: &KeepMeta{BotID: "bot-a"}})
 	if err == nil || !strings.Contains(err.Error(), "上限") {
-		t.Fatalf("WriteWorkspaceBytes 超配额没拒: %v", err)
+		t.Fatalf("WriteStoreBytes 超配额没拒: %v", err)
 	}
 	// 在长期区里改名不多占地方，不受配额影响。
 	runManageFiles(t, tool.(*ManageFilesTool), map[string]any{"action": "move", "path": "keep/bot-a/big.bin", "to": "keep/bot-a/archive/big.bin"})
 }
 
-// 二进制文件经 WriteWorkspaceBytes 存进长期区时记下来源；没带长期区信息就不许写进 keep/。
-func TestWriteWorkspaceBytesRecordsKeepIndex(t *testing.T) {
+// 二进制文件经 WriteStoreBytes 存进长期区时记下来源；没带长期区信息就不许写进 keep/。
+func TestWriteStoreBytesRecordsKeepIndex(t *testing.T) {
 	root := t.TempDir()
 	cfg := Config{WorkDir: root}
-	if _, err := WriteWorkspaceBytes(cfg, "keep/x.jpg", testJPEG(t, 4, 4), WorkspaceWriteOptions{}); err == nil {
+	if _, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), "keep/x.jpg", testJPEG(t, 4, 4), WorkspaceWriteOptions{}); err == nil {
 		t.Fatal("没带长期区信息也写进了 keep/")
 	}
 	now := time.Date(2026, 9, 1, 8, 0, 0, 0, time.UTC)
-	saved, err := WriteWorkspaceBytes(cfg, "keep/cat.jpg", testJPEG(t, 4, 4), WorkspaceWriteOptions{Keep: &KeepMeta{
+	saved, err := WriteStoreBytes(context.Background(), HostFileStore(cfg), "keep/cat.jpg", testJPEG(t, 4, 4), WorkspaceWriteOptions{Keep: &KeepMeta{
 		BotID: "bot-a", Description: "猫", SourceMessageID: "m1", SavedBy: "u1", Now: now,
 	}})
 	if err != nil {
