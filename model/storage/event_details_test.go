@@ -1340,3 +1340,88 @@ func TestListInboundEventDetailsScopesTokensByProfileAndCollisionSafeMessageID(t
 		t.Fatalf("bot-a scoped page = total:%d events:%#v, want 120 tokens isolated from bot-b", pageA.TotalTokens, pageA.Events)
 	}
 }
+
+func TestListInboundEventDetailsCountsParkedProactiveGeneratingAsPending(t *testing.T) {
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "parked-pending.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+
+	now := time.Now().Truncate(time.Second)
+	event := assistant.MessageEvent{
+		Kind:       assistant.EventKindGroup,
+		GroupID:    "g1",
+		UserID:     "u1",
+		MessageID:  "m-parked",
+		SenderName: "群友",
+		RawMessage: "这条刚评中正在生成",
+		Time:       now.Unix(),
+	}
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:g1", event)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", now.Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, id, "worker-1", parkedProactiveRouteOutcome); err != nil {
+		t.Fatal(err)
+	}
+	// 防抖批评中目标、进入 Agent 生成前记为 decision=pending。
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind:      assistant.EventKindGroup,
+		GroupID:   "g1",
+		UserID:    "u1",
+		MessageID: "m-parked",
+		Outcome:   parkedProactiveRouteOutcome,
+		Decision:  "pending",
+		Reason:    "已通过接话评分，正在生成回复",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || page.Pending != 1 || page.NotReplied != 0 || page.Replied != 0 {
+		t.Fatalf("counts during generation = %+v, want total/pending/not/replied 1/1/0/0", page)
+	}
+	pendingPage, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Result: InboundEventResultPending})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendingPage.Events) != 1 || pendingPage.Events[0].MessageID != "m-parked" || pendingPage.Events[0].Decision != "pending" {
+		t.Fatalf("pending filter events = %#v", pendingPage.Events)
+	}
+	notRepliedPage, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10, Result: InboundEventResultNotReplied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notRepliedPage.Events) != 0 {
+		t.Fatalf("generating proactive event must not appear in not_replied filter: %#v", notRepliedPage.Events)
+	}
+
+	// 最终回复落库后应正常覆写为已回复。
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind:      assistant.EventKindGroup,
+		GroupID:   "g1",
+		UserID:    "u1",
+		MessageID: "m-parked",
+		Outcome:   "replied_proactive",
+		Decision:  "replied",
+		Handled:   true,
+		Reply:     "来了",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := store.ListInboundEventDetails(ctx, InboundEventQuery{Since: now.Add(-time.Hour), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Total != 1 || after.Replied != 1 || after.Pending != 0 || after.NotReplied != 0 {
+		t.Fatalf("counts after reply = %+v, want total/replied/pending/not 1/1/0/0", after)
+	}
+}

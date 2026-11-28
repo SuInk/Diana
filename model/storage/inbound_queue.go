@@ -798,6 +798,19 @@ WHERE status = ?`
 	if err != nil {
 		return fmt.Errorf("release inbound leases for %q: %w", leaseOwner, err)
 	}
+	// 启动全量恢复时，清理上次进程意外退出前停在「接话评分通过、正在生成回复」的
+	// 内存防抖批次行：它们不会在重启后补发，不应永久挂在「处理中」。
+	if leaseOwner == "" {
+		if _, err := s.db.ExecContext(ctx, `
+UPDATE inbound_events
+SET decision = 'not_replied',
+    decision_reason = '主动回复生成期间进程重启，本轮未发出',
+    updated_at = ?
+WHERE status = ? AND outcome = ? AND decision = 'pending'
+`, now, inboundStatusDone, parkedProactiveRouteOutcome); err != nil {
+			return fmt.Errorf("settle interrupted proactive replies: %w", err)
+		}
+	}
 	return nil
 }
 

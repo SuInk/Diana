@@ -322,7 +322,7 @@ func (r *Runtime) replyAsOwner(ctx context.Context, event MessageEvent, text str
 	ctx = withContextBudgetCap(ctx, r.effectiveConfigForEvent(event).MaxContextTokens)
 	r.noteDirectedInbound(event)
 	r.noteSenderTurnArrival(event)
-	prepared, routedText, handled, outcome := r.prepareMessageEvent(ctx, event)
+	ctx, prepared, routedText, handled, outcome := r.prepareMessageEventWithContext(ctx, event)
 	if !handled {
 		r.finishSenderTurn(event)
 		return nil

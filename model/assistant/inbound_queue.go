@@ -979,7 +979,7 @@ func (r *Runtime) processInboundQueueItem(ctx context.Context, item InboundQueue
 		// event so later semantic references can reuse its transcript directly.
 		r.persistMessageEvent(event)
 	}
-	event, text, handled, outcome := r.prepareMessageEvent(ctx, event)
+	ctx, event, text, handled, outcome := r.prepareMessageEventWithContext(ctx, event)
 	if !handled {
 		return outcome, nil
 	}

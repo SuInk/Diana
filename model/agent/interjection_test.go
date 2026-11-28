@@ -161,7 +161,7 @@ func (c alwaysInterjectClient) Generate(ctx context.Context, req llm.GenerateReq
 	return c.client.Generate(ctx, req)
 }
 
-// 收尾那一步本身没有补充，复核那几秒里同群前一轮的回复定稿了：收尾前再看一眼，
+// 收尾那一步本身没有补充，联网细节复核那几秒里同群前一轮的回复定稿了：收尾前再看一眼，
 // 带着它重做，不把复核前的那一版发出去。
 type reviewInterjectedClient struct {
 	mu       sync.Mutex
@@ -176,22 +176,25 @@ func (c *reviewInterjectedClient) Generate(_ context.Context, req llm.GenerateRe
 	c.mu.Unlock()
 	switch n {
 	case 1:
-		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "嘿嘿被夸了"}}}}, nil
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "w1", Name: WebSearchToolName, Arguments: map[string]any{"query": "篮球"}}}}, nil
 	case 2:
-		c.onReview()
-		return &llm.GenerateResponse{Text: `{"unfinished":"","missing":""}`}, nil
+		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "s1", Name: finalizeToolName, Arguments: map[string]any{"text": "嘿嘿被夸了"}}}}, nil
 	case 3:
+		c.onReview()
+		return &llm.GenerateResponse{Text: `{"unsupported":[]}`}, nil
+	case 4:
 		return &llm.GenerateResponse{ToolCalls: []llm.ToolCall{{ID: "s2", Name: finalizeToolName, Arguments: map[string]any{"silent": true, "silent_reason": "那边已经回了"}}}}, nil
 	}
-	return &llm.GenerateResponse{Text: `{"unfinished":"","missing":""}`}, nil
+	return &llm.GenerateResponse{Text: `{"unsupported":[]}`}, nil
 }
 
-func TestRunnerRedoesFinalWhenInterjectionArrivesDuringClaimReview(t *testing.T) {
+func TestRunnerRedoesFinalWhenInterjectionArrivesDuringResearchReview(t *testing.T) {
 	q := &queuedInterjections{}
 	client := &reviewInterjectedClient{onReview: func() {
 		q.push("【你另一条回复刚发到了这里】「嘿嘿收下这个夸奖」（正在发）")
 	}}
-	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true, UnfinishedClaimReview: true}, NewToolRegistry())
+	tool := &recordingSearchTool{output: `{"status":"ok","results":[{"title":"篮球","snippet":"篮球资讯"}]}`}
+	runner, err := NewRunner(client, Config{MaxSteps: 4, PlainTextNotSent: true, ResearchDetailReview: true}, NewToolRegistry(tool))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,11 +202,11 @@ func TestRunnerRedoesFinalWhenInterjectionArrivesDuringClaimReview(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !resp.Silent || len(client.requests) != 3 {
+	if !resp.Silent || len(client.requests) != 4 {
 		t.Fatalf("requests = %d, resp = %#v", len(client.requests), resp)
 	}
 	found := false
-	for _, message := range client.requests[2].Messages {
+	for _, message := range client.requests[3].Messages {
 		found = found || strings.Contains(message.Content, "嘿嘿收下这个夸奖")
 	}
 	if !found {

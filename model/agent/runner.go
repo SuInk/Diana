@@ -296,8 +296,6 @@ func (r *Runner) Run(ctx context.Context, req Request) (*Response, error) {
 	// 加起来就是这一轮花在工具上的时间，控制台的响应耗时分解用它。
 	var toolsDuration time.Duration
 	protocolRepairs := 0
-	// claimReviews 数这一轮做过几次「说了却没做」复核：第一次查出来退回去，第二次还有就不发。
-	claimReviews := 0
 	interjectionRedos := 0
 	// 普通文本可能只是中间说明（例如「[搜索参展商名单]」），每轮给一次继续机会。
 	plainTextRepaired := false
@@ -610,7 +608,7 @@ run:
 		}
 		// 说话只走 send：带着工具定义的这一步写了纯文本，先退回一次，让模型知道这段
 		// 没发出去；上面那条修复已经退过一次的也算。再写纯文本就当作 send 往下走，
-		// 照常过「说了却没做」复核和发送前审核。见 plain_text_review.go。
+		// 走同一条收尾路径。
 		if !ok && !looksLikeAgentAction(lastText) && r.cfg.PlainTextNotSent && len(planningRequest.Tools) > 0 {
 			if !plainTextRepaired {
 				plainTextRepaired = true
@@ -694,36 +692,6 @@ run:
 					continue
 				}
 			}
-			// 说了却没做的先退回：「我查一下」「在画了」「定好了」这类话，本轮工具记录里要有
-			// 对应的调用。复核让模型判断，不看关键词，见 plain_text_review.go。第一次查出来
-			// 退回去，让它要么真去做、要么照实说；第二次还有就照发，不吞掉。11-22 群里问
-			// 「有没有详细记录」，退回后的草稿仍判说了没做，整轮静默，对方什么都没收到——
-			// 问了不回比回得不完整更糟。
-			if r.cfg.UnfinishedClaimReview && claimReviews < 2 {
-				claimReviews++
-				verdict := r.reviewUnfinishedClaim(ctx, req.Messages, action.Content, steps)
-				if unfinished := verdict.Unfinished; unfinished != "" {
-					if claimReviews == 1 {
-						emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复说了却没做："+unfinished)
-						messages = appendToolRepair(messages, resp, lastText, unfinishedClaimRepair(unfinished))
-						continue
-					}
-					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "退回后仍说了却没做，照发："+unfinished)
-				}
-				// 漏答只退回第一次，第二次照发：11-21 问「幸福者退让的来源和含义」只答了来源，
-				// 素材里明明有含义。
-				if verdict.Missing != "" && claimReviews == 1 {
-					emitProtocolRepair(ctx, req.Observer, traceID, modelTurns, toolCalls, r.cfg.MaxSteps, "回复漏答："+verdict.Missing)
-					messages = appendToolRepair(messages, resp, lastText, missingAnswerRepair(verdict.Missing))
-					continue
-				}
-			}
-			// 以前这里还会用两条正则扫正文，找「接下来我会调用/搜索/查询」这类句子，命中就
-			// 当作模型在承诺下一步调工具却没调，退回去修一轮。那是拿关键词判断语义意图：
-			// 正则只认得测试里那两句的形状，「让我查查」「我这就去搜」全漏，「接下来我会读取
-			// 你这段话里的情绪」反而误中，每次误中都白烧一次修复预算。「预算没用完就别停下来
-			// 要求继续」这条规则已经写进系统提示词，模型仍然停下来是提示词的问题，不该
-			// 由代码回头猜正文。
 			// 空收尾是协议错误：既没有 content，工具调用之外也没有正文。直接按
 			// final 结束会让下游把空回复兜底成无意义文案发出去，必须让模型重试。
 			// 图片任务 pending 的空收尾除外——运行时会用图片开场白兜底。
@@ -739,7 +707,7 @@ run:
 				}
 				continue
 			}
-			// 上面的复核要好几秒，期间别的来源（同群前一轮定稿的回复）可能刚到：
+			// 上面的联网细节复核可能耗时几秒，期间别的来源（同群前一轮定稿的回复）可能刚到：
 			// 收尾前再看一眼，有就带着它重做这一步。
 			if req.Interjections != nil && interjectionRedos < maxInterjectionRedos && req.Interjections.Pending() {
 				interjectionRedos++

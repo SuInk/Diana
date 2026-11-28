@@ -51,7 +51,7 @@ func participationDecisionSpec(overrides PromptOverrides, burst int) *llm.Decisi
 			Key:           fmt.Sprintf("burst_%d", k),
 			Kind:          llm.DecisionNoul,
 			Label:         fmt.Sprintf("burst=\"%d\" 那条在跟本人说话", k),
-			Instructions:  fmt.Sprintf("只看对话稿里 burst=\"%d\" 的那一条，判断它是不是明确在跟本人说话；不看当前消息和其它连发。标了 bot_replied=\"true\" 的填否。\n", k) + overrides.text(promptParticipationRelevanceIntroSpec),
+			Instructions:  fmt.Sprintf("只看对话稿里 burst=\"%d\" 的那一条，判断它是不是明确在跟当前角色本人说话；不看当前消息和其它连发。@ 或回复别人（只标了 at/reply_to 而没有 at_self/reply_self）是在找别人，哪怕对方昵称和本人别名相同也填否；标了 bot_replied=\"true\" 的填否。\n", k) + overrides.text(promptParticipationRelevanceIntroSpec),
 			TrueCriteria:  overrides.text(promptParticipationRelevanceTrueSpec),
 			FalseCriteria: overrides.text(promptParticipationRelevanceFalseSpec),
 			Path:          fmt.Sprintf("burst_%d.directed", k),
