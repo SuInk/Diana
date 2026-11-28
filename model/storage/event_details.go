@@ -188,7 +188,8 @@ const (
 	inboundEventRepliedCondition    = `(i.status = 'done' AND ((COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.outcome, '') != 'error_replied' AND (COALESCE(i.decision, '') = 'replied' OR (COALESCE(i.decision, '') = '' AND (COALESCE(i.outcome, '') = 'replied' OR COALESCE(i.outcome, '') LIKE 'replied_%'))))))`
 	inboundEventErrorCondition      = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND (COALESCE(i.decision, '') = 'error' OR COALESCE(i.outcome, '') IN ('error_send_unconfirmed', 'processing_error', 'dropped_outbound_delivery', 'dropped_outbound_unconfirmed', 'dropped_send_rejected', 'dropped_retries_exhausted') OR (COALESCE(i.outcome, '') = 'error_replied' AND COALESCE(i.delivery_stage, '') NOT IN ('acknowledged', 'echo_persisted')) OR (COALESCE(i.decision, '') = '' AND (NULLIF(TRIM(i.processing_error), '') IS NOT NULL OR NULLIF(TRIM(i.last_error), '') IS NOT NULL))))`
 	inboundEventNoticeCondition     = `(i.status = 'done' AND COALESCE(i.decision, '') = 'notice')`
-	inboundEventNotRepliedCondition = `(i.status = 'done' AND NOT ` + inboundEventRepliedCondition + ` AND NOT ` + inboundEventErrorCondition + ` AND NOT ` + inboundEventNoticeCondition + `)`
+	inboundEventPendingCondition    = `(i.status != 'done' OR (i.status = 'done' AND COALESCE(i.decision, '') = 'pending'))`
+	inboundEventNotRepliedCondition = `(i.status = 'done' AND COALESCE(i.decision, '') != 'pending' AND NOT ` + inboundEventRepliedCondition + ` AND NOT ` + inboundEventErrorCondition + ` AND NOT ` + inboundEventNoticeCondition + `)`
 )
 
 // ParseInboundEventResultFilter accepts only the stable result categories
@@ -215,7 +216,7 @@ func inboundEventResultCondition(filter InboundEventResultFilter) (string, bool)
 	case InboundEventResultNotReplied:
 		return inboundEventNotRepliedCondition, true
 	case InboundEventResultPending:
-		return `i.status != 'done'`, true
+		return inboundEventPendingCondition, true
 	case InboundEventResultError:
 		return inboundEventErrorCondition, true
 	case InboundEventResultNotice:
@@ -330,7 +331,7 @@ SELECT
   COUNT(*),
 	COALESCE(SUM(CASE WHEN `+inboundEventRepliedCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN `+inboundEventNotRepliedCondition+` THEN 1 ELSE 0 END), 0),
-	COALESCE(SUM(CASE WHEN i.status != 'done' THEN 1 ELSE 0 END), 0),
+	COALESCE(SUM(CASE WHEN `+inboundEventPendingCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN `+inboundEventErrorCondition+` THEN 1 ELSE 0 END), 0),
 	COALESCE(SUM(CASE WHEN `+inboundEventNoticeCondition+` THEN 1 ELSE 0 END), 0)
 FROM inbound_events AS i

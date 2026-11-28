@@ -41,6 +41,48 @@ func (r *Runtime) withDebugTraceContext(ctx context.Context, event MessageEvent)
 	return context.WithValue(ctx, debugTraceContextKey{}, state)
 }
 
+// rebindDebugTraceContext 在合并评分或积压批次把回复对象切到更早的消息后，把调试轨迹、
+// 时间线和 SSE 进度推送一并切到真正要回复的消息上，避免整轮 Agent 调用链和模型请求
+// 继续写进批尾那条未回复消息的轨迹里。
+func (r *Runtime) rebindDebugTraceContext(ctx context.Context, from, to MessageEvent) context.Context {
+	if ctx == nil || strings.TrimSpace(to.MessageID) == "" || strings.TrimSpace(to.MessageID) == strings.TrimSpace(from.MessageID) {
+		return ctx
+	}
+	if !debugModeEnabled(r.effectiveConfigForEvent(to)) {
+		return context.WithValue(ctx, debugTraceContextKey{}, (*debugTraceState)(nil))
+	}
+	received := time.Now()
+	old := debugTraceFromContext(ctx)
+	if old != nil {
+		root := old
+		for root.parent != nil {
+			root = root.parent
+		}
+		if root.timeline != nil && !root.timeline.received.IsZero() {
+			received = root.timeline.received
+		}
+	}
+	state := &debugTraceState{event: to, timeline: newReplyTimeline(received)}
+	if old != nil {
+		fromID := strings.TrimSpace(from.MessageID)
+		phase := "backlog_route_selected"
+		message := "积压合并选中本消息"
+		if to.proactiveReply || to.chatInReply {
+			phase = "proactive_route_selected"
+			message = "合并接话评分选中本消息"
+		}
+		if fromID != "" {
+			message = fmt.Sprintf("%s（批次消息 %s）", message, fromID)
+		}
+		r.recordDebugTrace(state, message, map[string]any{
+			"phase":          phase,
+			"routed_from":    fromID,
+			"routing_reason": strings.TrimSpace(to.routingReason),
+		})
+	}
+	return context.WithValue(ctx, debugTraceContextKey{}, state)
+}
+
 func debugTraceFromContext(ctx context.Context) *debugTraceState {
 	if ctx == nil {
 		return nil

@@ -100,7 +100,7 @@ func proactiveReplyTranscript(payload proactiveReplyPayload) string {
 	now := int64(0)
 	lines = append(lines, taggedMessage(&now, payload.CurrentSender, false, payload.Addressing, payload.CurrentText, payload.CurrentImages, []string{taggedAttr("current", "true")}, quote, botName))
 	if n := len(burst); n > 0 {
-		lines = append(lines, fmt.Sprintf("（burst=\"1\" 到 burst=\"%d\" 和当前消息是几秒内接连发出的，合并成一次评分，但话题可能不同，要逐条分开判断：relevance 和 chat_in 只评 current 那条；每条 burst=\"k\" 另外输出 burst_k: {\"directed\": true 或 false, \"reason\": \"…\"}，按同样的判据只看这一条自己在跟谁说话，不要被前后几条带偏。标了 bot_replied=\"true\" 的已经回过，directed 填 false）", n))
+		lines = append(lines, fmt.Sprintf("（burst=\"1\" 到 burst=\"%d\" 和当前消息是几秒内接连发出的，合并成一次评分，但话题可能不同，要逐条分开判断：relevance 和 chat_in 只评 current 那条；每条 burst=\"k\" 必须另外输出字段 burst_k: {\"reason\": \"先写明 burst=k 这条谁在跟谁说话、是否在接本人（%s）的话\", \"directed\": true 或 false}，按与 relevance 相同的判据独立判断 burst=\"k\" 这一条本身是不是在跟本人（%s）说话，不要被 current 或前后几条带偏：即使没 @ 没点名，只要是在回答本人（self=\"true\"）刚才的追问、承接本人的调侃或延续与本人的对话，directed 填 true；若只标了 at/reply_to 而没标 at_self/reply_self，则是在找别人，哪怕对方名字像本人别名，directed 也填 false；标了 bot_replied=\"true\" 的已经回过，directed 填 false）", n, botName, botName))
 	}
 	if payload.LastBotAddressedCurrentSender && !payload.OthersSpokeAfterLastBot {
 		lines = append(lines, "（"+botName+"最近一条发言是冲着当前发送者说的）")

@@ -14,7 +14,7 @@ import (
 
 // finalizeToolName 是模型说话的唯一出口。一步里只有 send 时这几条就是本轮的
 // 回复，本轮结束；和别的工具同一步发来时不发，模型看过工具结果再 send。一轮只在
-// 做完以后说一次，不再有中途发言（为什么见 plain_text_review.go）。silent=true、正文
+// 做完以后说一次，不再有中途发言（见 docs/reply-send.md）。silent=true、正文
 // 留空就是这一轮不说话。
 //
 // 以前说话分成 say（中途一句）和 agent_finalize（收尾，带 silent/silent_reason）。
@@ -34,8 +34,7 @@ const legacyFinalizeToolName = "agent_finalize"
 // legacyInterimToolName 是并进 send 之前的中途发言工具，只用来认出老历史里的调用。
 //
 // 11-07 试过把它拆回来（send 去掉 continue、say 常驻）：线上原本有回复的闲聊静默从
-// 9/84 涨到 25/84，「在画了」空口承诺也回来了。11-20 把中途发言整个去掉，空口承诺改由
-// 收尾前的复核挡，见 plain_text_review.go。
+// 9/84 涨到 25/84，「在画了」空口承诺也回来了。11-20 起把中途发言整个去掉。
 const legacyInterimToolName = "say"
 
 // FinalizeToolName 供调用方引用：CoreTools 只填它，就是「除收尾外全部按需加载」。

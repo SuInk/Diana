@@ -138,10 +138,6 @@ type Config struct {
 	// 告诉模型这段没发出去、只有 send 会发；再写纯文本就当作 send 收尾。只给主回复开：
 	// 子任务和别的调用方要的正是 Runner 交回的那段文本。见 plainTextNotSentPrompt。
 	PlainTextNotSent bool `json:"-"`
-	// UnfinishedClaimReview 让每次要发出去的收尾先复核一次「说了却没做」：正文说在做、
-	// 做完了或会自动完成的事，本轮工具记录里要有对应的调用。查出来先退回一次，再有就
-	// 这一轮不说话（见 plain_text_review.go）。只给主回复开。
-	UnfinishedClaimReview bool `json:"-"`
 	// FinalizeFields 给 send 追加可选的字符串字段，模型在收尾时顺手填写，
 	// 值原样出现在 Response.FinalizeFields 里，由调用方决定怎么用（例如按关键词配一张
 	// 表情包）。让模型「多填一个字段」比让它先加载、再调用一个工具容易得多。

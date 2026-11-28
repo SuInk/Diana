@@ -245,7 +245,7 @@ func TestBodyAccountUnrepliedGroupMessageNeverQueriesPlatform(t *testing.T) {
 	runtime := newBodyAccountRuntime(cfg, channel)
 	event := bodyAccountEvent("70007 今天没来")
 
-	_, _, handled, _ := runtime.routeMessageEvent(context.Background(), event)
+	_, _, _, handled, _ := runtime.routeMessageEvent(context.Background(), event)
 	if handled {
 		t.Fatal("没有点名机器人的群消息不应进入回复")
 	}

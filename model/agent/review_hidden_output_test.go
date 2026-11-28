@@ -23,9 +23,8 @@ func TestReviewCallsMarkOutputHidden(t *testing.T) {
 	runner := &Runner{client: client, registry: NewToolRegistry()}
 	history := []llm.Message{{Role: llm.RoleUser, Content: "查一下"}}
 	steps := []Step{{Tool: "lookup", Output: "工具原文"}}
-	runner.reviewUnfinishedClaim(context.Background(), history, "查到了", steps)
 	runner.reviewUnsupportedDetails(context.Background(), history, "查到了", steps)
-	if len(client.hidden) != 2 || !client.hidden[0] || !client.hidden[1] {
+	if len(client.hidden) != 1 || !client.hidden[0] {
 		t.Fatalf("review calls hidden = %v", client.hidden)
 	}
 }

@@ -1567,3 +1567,55 @@ func TestExtendInboundLeaseOnlyByHolderAndNeverShortens(t *testing.T) {
 		t.Fatalf("extended lease was reclaimed ok=%v err=%v", ok, err)
 	}
 }
+
+func TestReleaseInboundLeasesSettlesInterruptedParkedProactiveReplies(t *testing.T) {
+	ctx := context.Background()
+	store := openInboundTestStore(t, filepath.Join(t.TempDir(), "interrupted-proactive.db"))
+	defer func() { _ = store.Close() }()
+
+	event := inboundTestEvent("m-interrupted", "刚评中就重启", time.Now().Unix())
+	id, inserted, err := store.EnqueueInboundEvent(ctx, "group:100", event)
+	if err != nil || !inserted {
+		t.Fatalf("enqueue inserted=%v err=%v", inserted, err)
+	}
+	if _, ok, err := store.ClaimNextInboundEvent(ctx, "worker-1", time.Now().Add(time.Minute)); err != nil || !ok {
+		t.Fatalf("claim ok=%v err=%v", ok, err)
+	}
+	if err := store.CompleteInboundEvent(ctx, id, "worker-1", parkedProactiveRouteOutcome); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordInboundEventAudit(ctx, assistant.EventRecord{
+		Kind:      event.Kind,
+		GroupID:   event.GroupID,
+		UserID:    event.UserID,
+		MessageID: event.MessageID,
+		Outcome:   parkedProactiveRouteOutcome,
+		Decision:  "pending",
+		Reason:    "已通过接话评分，正在生成回复",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 单个 worker 退出释放自己的租约时，不应影响别的防抖协程正在生成的主动回复。
+	if err := store.ReleaseInboundLeases(ctx, "worker-1"); err != nil {
+		t.Fatal(err)
+	}
+	var decision, reason string
+	if err := store.db.QueryRowContext(ctx, `SELECT decision, decision_reason FROM inbound_events WHERE id = ?`, id).Scan(&decision, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if decision != "pending" {
+		t.Fatalf("worker-scoped release altered decision = %q, want pending", decision)
+	}
+
+	// 启动全量恢复（leaseOwner == ""）时，应把上次进程退出前挂在「处理中」的防抖主动回复结清。
+	if err := store.ReleaseInboundLeases(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT decision, decision_reason FROM inbound_events WHERE id = ?`, id).Scan(&decision, &reason); err != nil {
+		t.Fatal(err)
+	}
+	if decision != "not_replied" || !strings.Contains(reason, "进程重启") {
+		t.Fatalf("startup recovery = decision:%q reason:%q, want not_replied with restart reason", decision, reason)
+	}
+}

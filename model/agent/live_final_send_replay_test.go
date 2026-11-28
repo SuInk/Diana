@@ -16,8 +16,8 @@ import (
 	"github.com/SuInk/diana/model/llm"
 )
 
-// TestLiveFinalSendReplay 重放生产 debug-traces 里的主回复首步，看「send 只能收尾 +
-// 收尾前复核说了却没做」下模型怎么走：直接调工具、正常回复、静默，还是说了没做被退回。
+// TestLiveFinalSendReplay 重放生产 debug-traces 里的主回复首步，看「send 只能收尾」下
+// 模型怎么走：直接调工具、正常回复还是静默。
 // 默认跳过：
 //
 //	DIANA_LIVE_LLM=1 DIANA_TEST_LLM_* DIANA_FINAL_SEND_REPLAY_DIR=<放 *-reply.json 的目录> \
@@ -33,7 +33,6 @@ func TestLiveFinalSendReplay(t *testing.T) {
 	paths, _ := filepath.Glob(filepath.Join(dir, "*-reply.json"))
 	sort.Strings(paths)
 	client := liveAgentClient(t)
-	runner := &Runner{client: client}
 	describe := func(resp *llm.GenerateResponse) string {
 		var calls []string
 		for _, call := range resp.ToolCalls {
@@ -89,29 +88,7 @@ func TestLiveFinalSendReplay(t *testing.T) {
 			}
 			continue
 		}
-		line := name + " | 第一步 " + describe(first)
-		if onlySendCalls(first.ToolCalls) {
-			action := finalizeAction(first.ToolCalls, first.Text)
-			if !action.Silent {
-				unfinished := runner.reviewUnfinishedClaim(context.Background(), req.Messages, action.Content, nil).Unfinished
-				line += " | 复核「" + unfinished + "」"
-				if unfinished != "" {
-					req.Messages = appendToolRepair(req.Messages, first, first.Text, unfinishedClaimRepair(unfinished))
-					second, err := client.Generate(context.Background(), req)
-					if err != nil {
-						line += " | 第二步 ERROR " + err.Error()
-					} else {
-						line += " | 第二步 " + describe(second)
-						if onlySendCalls(second.ToolCalls) {
-							if again := finalizeAction(second.ToolCalls, second.Text); !again.Silent {
-								line += " | 再复核「" + runner.reviewUnfinishedClaim(context.Background(), req.Messages, again.Content, nil).Unfinished + "」"
-							}
-						}
-					}
-				}
-			}
-		}
-		t.Log(line)
+		t.Log(name + " | 第一步 " + describe(first))
 	}
 }
 

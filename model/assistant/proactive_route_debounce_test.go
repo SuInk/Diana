@@ -7,8 +7,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/SuInk/diana/model/llm"
 )
 
 func debounceTestEvent(id, user, text string, at time.Time) MessageEvent {
@@ -40,11 +43,16 @@ func TestProactiveReplyTranscriptNumbersBurst(t *testing.T) {
 		`<msg age="12秒前" from="Alice" burst="1" bot_replied="true">我给你举个例子</msg>`,
 		`<msg age="8秒前" from="Bob" burst="2">那你帮我看看</msg>` + "\n",
 		`<msg age="刚刚" from="Carol" current="true">重启试试</msg>`,
-		"burst_k",
+		`burst_k: {"reason":`,
+		`是不是在跟本人（嘉然）说话`,
+		`若只标了 at/reply_to 而没标 at_self/reply_self`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("对话稿缺 %q：\n%s", want, got)
 		}
+	}
+	if strings.Index(got, `burst_k: {"reason":`) > strings.Index(got, `"directed": true 或 false}`) {
+		t.Fatalf("burst_k 格式示例应把 reason 放在 directed 之前，避免非思考模型先拍板再圆场：\n%s", got)
 	}
 	payload.Candidates = nil
 	if strings.Contains(proactiveReplyTranscript(payload), "连发") {
@@ -70,8 +78,8 @@ func TestParticipationRatingsBurstVerdicts(t *testing.T) {
 	}
 }
 
-// 两个话题一轮回、分开发：判为在叫机器人的连发跟着当前消息这一轮，判否的不跟；回复请求
-// 要求按话题分条发送、各自引用原消息。
+// 不同发送者在同一批都被判为在叫机器人时拆成各自独立的回复目标（burstPeers），避免单轮手写拆条回错人；
+// 同一发送者的多条连发仍合并成同一轮（burstTargets）；判否的不跟进来。
 func TestSplitBurstRepliesSendsTopicsSeparately(t *testing.T) {
 	runtime := NewRuntime(BotConfig{BotAccount: "42"}, nilChannel{}, NewPluginManager(), nil, nil, nil, nil)
 	now := time.Now()
@@ -87,23 +95,40 @@ func TestSplitBurstRepliesSendsTopicsSeparately(t *testing.T) {
 	if !allowed || primary.MessageID != "m3" || !primary.burstSplit {
 		t.Fatalf("primary=%s allowed=%v split=%v", primary.MessageID, allowed, primary.burstSplit)
 	}
-	if len(primary.burstTargets) != 1 || primary.burstTargets[0].Event.MessageID != "m1" {
-		t.Fatalf("跟着这一轮的应只有判为在叫的 m1：%#v", primary.burstTargets)
+	if len(primary.burstTargets) != 0 {
+		t.Fatalf("不同发送者的 m1 不应并进 m3 的同轮 burstTargets：%#v", primary.burstTargets)
 	}
-	request := backlogReplyRequestText("嘉然你觉得呢", primary, primary.burstTargets)
-	for _, want := range []string{"按话题分开发送", notificationSplitMarker, replyMarkerPrefix, "攻击面管理"} {
+	if len(primary.burstPeers) != 1 || primary.burstPeers[0].Event.MessageID != "m1" || !primary.burstPeers[0].Event.routingDirected {
+		t.Fatalf("不同发送者判为在叫的 m1 应拆为独立回复目标 burstPeers：%#v", primary.burstPeers)
+	}
+
+	// 同一发送者连发两条都判为在叫机器人（中间夹了别人）：合并成同发送者的一轮，最新那条作主对象。
+	sameSenderBurst := []proactiveReplyCandidate{
+		{Event: debounceTestEvent("s1", "u1", "我给你举个例子", now.Add(-2*time.Second)), Text: "我给你举个例子"},
+		{Event: debounceTestEvent("s2", "u2", "哈哈", now.Add(-time.Second)), Text: "哈哈"},
+	}
+	sameSenderCurrent := debounceTestEvent("s3", "u1", "攻击面管理", now)
+	primary, _, _, allowed = runtime.splitBurstReplies(sameSenderCurrent, "攻击面管理", sameSenderBurst, ratings, true)
+	if !allowed || primary.MessageID != "s3" || len(primary.burstPeers) != 0 {
+		t.Fatalf("同发送者合并 primary=%s allowed=%v peers=%#v", primary.MessageID, allowed, primary.burstPeers)
+	}
+	if len(primary.burstTargets) != 1 || primary.burstTargets[0].Event.MessageID != "s1" {
+		t.Fatalf("同发送者前一条应放进 burstTargets：%#v", primary.burstTargets)
+	}
+	request := backlogReplyRequestText("攻击面管理", primary, primary.burstTargets)
+	for _, want := range []string{"同一发言者几秒内连发的前置消息", "我给你举个例子"} {
 		if !strings.Contains(request, want) {
 			t.Fatalf("回复请求缺 %q：%s", want, request)
 		}
 	}
-	if strings.Contains(request, "晚上吃啥") {
+	if strings.Contains(request, "哈哈") {
 		t.Fatal("判否的连发不该跟进这一轮")
 	}
 
 	// 当前消息不放行时，判为在叫的连发自己当回复对象。
 	primary, _, _, allowed = runtime.splitBurstReplies(current, "嘉然你觉得呢", burst, ratings, false)
-	if !allowed || primary.MessageID != "m1" || !primary.routingDirected || len(primary.burstTargets) != 0 {
-		t.Fatalf("primary=%s allowed=%v directed=%v", primary.MessageID, allowed, primary.routingDirected)
+	if !allowed || primary.MessageID != "m1" || !primary.routingDirected || len(primary.burstTargets) != 0 || len(primary.burstPeers) != 0 {
+		t.Fatalf("primary=%s allowed=%v directed=%v peers=%#v", primary.MessageID, allowed, primary.routingDirected, primary.burstPeers)
 	}
 
 	_, _, _, allowed = runtime.splitBurstReplies(current, "嘉然你觉得呢", burst[1:], participationRatings{Burst: map[int]participationRelevance{1: {Directed: &no, Reason: "问别人"}}}, false)
@@ -253,16 +278,20 @@ func TestProactiveRouteParkMaxMessagesRoutesImmediately(t *testing.T) {
 	}
 }
 
-// @ 机器人的消息不等，进来时把等着的候选并进自己那一轮，等待批不再另评。
+// @ 机器人的消息不等，进来时只接走同一发送者的等待候选；其他群友的等待候选留在原批里照常评分。
 func TestProactiveRouteParkTakenByDirectMessage(t *testing.T) {
 	runtime, provider, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8}, legacyQuietRoute)
 	runtime.proactiveRouteDebounce = 200 * time.Millisecond
 	now := time.Now()
-	first := enqueueParkTestEvent(t, store, debounceTestEvent("message-1", "user-1", "有人知道怎么配代理吗", now))
-	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), first); outcome != "merged_into_backlog_turn" {
-		t.Fatalf("outcome=%q", outcome)
+	sameUser := enqueueParkTestEvent(t, store, debounceTestEvent("message-1", "user-1", "有人知道怎么配代理吗", now))
+	otherUser := enqueueParkTestEvent(t, store, debounceTestEvent("message-other", "user-2", "另一位群友的提问", now))
+	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), sameUser); outcome != "merged_into_backlog_turn" {
+		t.Fatalf("sameUser outcome=%q", outcome)
 	}
-	direct := debounceTestEvent("message-2", "user-2", "看看这个", now)
+	if _, _, _, outcome := runtime.prepareMessageEvent(context.Background(), otherUser); outcome != "merged_into_backlog_turn" {
+		t.Fatalf("otherUser outcome=%q", outcome)
+	}
+	direct := debounceTestEvent("message-2", "user-1", "看看这个", now)
 	direct.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, direct.Segments...)
 	direct = enqueueParkTestEvent(t, store, direct)
 	started := time.Now()
@@ -274,16 +303,21 @@ func TestProactiveRouteParkTakenByDirectMessage(t *testing.T) {
 		t.Fatalf("@ 消息不该等，实际 %s", elapsed)
 	}
 	if len(event.backlogTurn) != 1 || event.backlogTurn[0].Event.MessageID != "message-1" {
-		t.Fatalf("等着的候选应该并进这一轮：%+v", event.backlogTurn)
+		t.Fatalf("同一发送者等着的候选应该并进这一轮，不能把其他人的也抢走：%+v", event.backlogTurn)
 	}
 	if record := latestEventRecord(runtime, "message-1"); !strings.Contains(record.Reason, "message-2") || strings.Contains(record.Reason, "排队等接话判断") {
 		t.Fatalf("接走的候选应该指向 @ 那条，不能还挂着占位：%+v", record)
 	}
-	time.Sleep(400 * time.Millisecond)
-	for i := range provider.requestsSnapshot() {
-		if strings.Contains(routerInput(provider, i), "有人知道怎么配代理吗") && strings.Contains(routerInput(provider, i), "本批群消息") {
-			t.Fatal("已经并进 @ 那一轮，不该再单独评分")
-		}
+	// 其他发送者的 message-other 留在等待批里，防抖到期后应单独走一次接话评分，不漏判。
+	if got := waitRouterCalls(provider, 1, 2*time.Second); got != 1 {
+		t.Fatalf("其他群友的等待消息应照常评分一次，实际 router calls=%d", got)
+	}
+	input := routerInput(provider, 0)
+	if !strings.Contains(input, "另一位群友的提问") {
+		t.Fatalf("评分输入应包含留下的其他群友消息：%q", input)
+	}
+	if strings.Contains(input, "有人知道怎么配代理吗") && strings.Contains(input, `burst="1"`) {
+		t.Fatalf("已经被同一发送者 @ 那轮接走的消息不该再次进入评分候选：%q", input)
 	}
 }
 
@@ -430,5 +464,432 @@ func TestProactiveRouteFlightCommittedIsNotTaken(t *testing.T) {
 	runtime.routeParkMu.Unlock()
 	if left != 0 {
 		t.Fatalf("结束后不该残留评分中的批次：%d", left)
+	}
+}
+
+// 合并评分把回复对象切到批里更早的 burst 消息时，防抖协程必须把调试轨迹、SSE 进度推送、
+// LLM 用量归属和出站幂等账本都切到真正要回复的那条消息上，并在进入生成前把事件状态更新为 pending。
+func TestFlushProactiveRouteParkRebindsTraceProgressOutboundAndPendingOnBurstTarget(t *testing.T) {
+	cfg := BotConfig{
+		BotAccount:              "42",
+		DebugModeEnabled:        boolPointer(true),
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{
+			Desire:             25,
+			CooldownSeconds:    30,
+			ChatLevel:          "minimal",
+			RelevanceLevel:     "on",
+			MergeWindowSeconds: 1,
+		},
+	}
+	routerReply := `{"relevance":{"directed":false,"reason":"批尾消息不是在问机器人"},"chat_in":{"score":0.05,"reason":"不插嘴"},"burst_1":{"reason":"在向机器人追问","directed":true}}`
+	agentReply := "好的，我来回答 m1"
+	runtime, provider, store := parkTestRuntime(t, cfg, routerReply, agentReply)
+	runtime.proactiveRouteDebounce = 40 * time.Millisecond
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+
+	var progressMu = make(chan EventProgress, 64)
+	runtime.SetEventProgressListener(func(p EventProgress) {
+		select {
+		case progressMu <- p:
+		default:
+		}
+	})
+	var recordsMu = make(chan EventRecord, 64)
+	runtime.SetEventListener(func(rec EventRecord) {
+		select {
+		case recordsMu <- rec:
+		default:
+		}
+	})
+
+	now := time.Now()
+	m1 := enqueueParkTestEvent(t, store, debounceTestEvent("m1", "user-1", "嘉然怎么回事", now.Add(-2*time.Second)))
+	m2 := enqueueParkTestEvent(t, store, debounceTestEvent("m2", "user-2", "旁边路过一句", now))
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m1); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m1 handled=%v outcome=%q", handled, outcome)
+	}
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m2); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m2 handled=%v outcome=%q", handled, outcome)
+	}
+
+	// 等待评分 + 回复两次模型调用完成，并等到 m1 最终结果落库。
+	if got := waitRouterCalls(provider, 2, 5*time.Second); got < 2 {
+		t.Fatalf("llm calls = %d, want >= 2 (router + reply)", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	var m1Records []EventRecord
+	for time.Now().Before(deadline) {
+		for {
+			select {
+			case rec := <-recordsMu:
+				if rec.MessageID == "m1" {
+					m1Records = append(m1Records, rec)
+				}
+			default:
+				goto drained
+			}
+		}
+	drained:
+		if len(m1Records) > 0 && m1Records[len(m1Records)-1].Outcome == "replied_proactive" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if len(m1Records) == 0 || m1Records[len(m1Records)-1].Outcome != "replied_proactive" {
+		t.Fatalf("m1 records = %#v, want final replied_proactive", m1Records)
+	}
+	sawPending := false
+	for _, rec := range m1Records {
+		if rec.Outcome == "merged_into_backlog_turn" && rec.Decision == "pending" && strings.Contains(rec.Reason, "正在生成回复") {
+			sawPending = true
+			break
+		}
+	}
+	if !sawPending {
+		t.Fatalf("m1 should emit pending progress record before final reply, got: %#v", m1Records)
+	}
+
+	// 检查调试轨迹：批尾 m2 只记录自己的收件与路由器调用；真正回复的 m1 必须拿到切换节点和 reply 模型轨迹，不能漏到 m2 名下。
+	var m1Phases, m2Phases []string
+	m1SawReplyModel := false
+	m2SawReplyModel := false
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action != "debug_trace" {
+			continue
+		}
+		phase, _ := entry.Metadata["phase"].(string)
+		purpose, _ := entry.Metadata["purpose"].(string)
+		switch entry.Target {
+		case "m1":
+			m1Phases = append(m1Phases, phase+":"+purpose)
+			if phase == "model_request" && purpose != "proactive_reply_router" {
+				m1SawReplyModel = true
+			}
+		case "m2":
+			m2Phases = append(m2Phases, phase+":"+purpose)
+			if phase == "model_request" && purpose != "proactive_reply_router" {
+				m2SawReplyModel = true
+			}
+		}
+	}
+	if !m1SawReplyModel {
+		t.Fatalf("m1 trace missing reply model call; m1=%v m2=%v", m1Phases, m2Phases)
+	}
+	if m2SawReplyModel {
+		t.Fatalf("m2 trace leaked reply model call belonging to m1; m1=%v m2=%v", m1Phases, m2Phases)
+	}
+	sawSelected := false
+	for _, p := range m1Phases {
+		if strings.HasPrefix(p, "proactive_route_selected:") {
+			sawSelected = true
+			break
+		}
+	}
+	if !sawSelected {
+		t.Fatalf("m1 trace missing proactive_route_selected marker: %v", m1Phases)
+	}
+
+	// 检查 SSE 进度推送：切目标后的进度必须推给 m1。
+	close(progressMu)
+	m1Progress := 0
+	for p := range progressMu {
+		if p.MessageID == "m1" {
+			m1Progress++
+		}
+	}
+	if m1Progress < 2 {
+		t.Fatalf("m1 progress events = %d, want >= 2 (selected + reply steps)", m1Progress)
+	}
+}
+
+// 攒满条数上限在当前 worker 当场评分、并把回复目标切到批里更早的消息时，返回的 context
+// 也必须把调试轨迹、LLM 用量归属和出站账本切到新目标上。
+func TestPrepareMessageEventWithContextRebindsOnImmediateBurstRoute(t *testing.T) {
+	cfg := BotConfig{
+		BotAccount:              "42",
+		DebugModeEnabled:        boolPointer(true),
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{
+			Desire:             25,
+			CooldownSeconds:    30,
+			ChatLevel:          "minimal",
+			RelevanceLevel:     "on",
+			MergeWindowSeconds: 60,
+			MergeMaxMessages:   2,
+		},
+	}
+	routerReply := `{"relevance":{"directed":false,"reason":"批尾没问机器人"},"chat_in":{"score":0.05,"reason":"不接"},"burst_1":{"reason":"明确在问机器人","directed":true}}`
+	runtime, _, store := parkTestRuntime(t, cfg, routerReply)
+	runtime.proactiveRouteDebounce = time.Second
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+
+	now := time.Now()
+	m1 := enqueueParkTestEvent(t, store, debounceTestEvent("m1", "user-1", "帮我看下这个", now.Add(-time.Second)))
+	m2 := enqueueParkTestEvent(t, store, debounceTestEvent("m2", "user-2", "路过", now))
+
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m1); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m1 handled=%v outcome=%q", handled, outcome)
+	}
+	ctx := withLLMUsageContext(context.Background(), m2)
+	ctx = runtime.withDebugTraceContext(ctx, m2)
+	ctx = withOutboundTurn(ctx, m2.backlogProbe.ID)
+
+	reboundCtx, routed, _, handled, outcome := runtime.prepareMessageEventWithContext(ctx, m2)
+	if !handled || outcome != "replied_proactive" || routed.MessageID != "m1" {
+		t.Fatalf("routed=%s handled=%v outcome=%q", routed.MessageID, handled, outcome)
+	}
+	if state := debugTraceFromContext(reboundCtx); state == nil || state.event.MessageID != "m1" {
+		t.Fatalf("debugTrace state = %#v, want bound to m1", state)
+	}
+	if turn := outboundTurnID(reboundCtx); turn != m1.backlogProbe.ID {
+		t.Fatalf("outboundTurnID = %q, want m1 probe ID %q (not m2 %q)", turn, m1.backlogProbe.ID, m2.backlogProbe.ID)
+	}
+	if usage := llmUsageFromContext(reboundCtx); usage == nil || usage.event.MessageID != "m1" {
+		t.Fatalf("llmUsageFromContext = %#v, want m1", usage)
+	}
+}
+
+type proactivePurposeLLMProvider struct {
+	mu          sync.Mutex
+	routerReply string
+	replyCalls  map[string]int
+}
+
+func (p *proactivePurposeLLMProvider) Generate(ctx context.Context, req llm.GenerateRequest) (*llm.GenerateResponse, error) {
+	purpose := llmUsagePurposeFromContext(ctx)
+	msgID := ""
+	if usage := llmUsageFromContext(ctx); usage != nil {
+		msgID = strings.TrimSpace(usage.event.MessageID)
+	}
+	for _, msg := range req.Messages {
+		if strings.Contains(msg.Content, "发送前审核器") {
+			return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"审核放行"}`}, nil
+		}
+	}
+	if purpose == "proactive_reply_router" {
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: p.routerReply}, nil
+	}
+	if purpose == PurposeReply {
+		p.mu.Lock()
+		if p.replyCalls == nil {
+			p.replyCalls = map[string]int{}
+		}
+		p.replyCalls[msgID]++
+		p.mu.Unlock()
+		return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: "独立回复给消息 " + msgID}, nil
+	}
+	return &llm.GenerateResponse{Provider: llm.ProviderOpenAICompatible, Model: "test", Text: `{"send_confidence":0.99,"reason":"默认通过"}`}, nil
+}
+
+// 同一防抖批里多个不同发送者都被判为在跟机器人说话时，按发送者各自独立发起回复轮次，
+// 各自拥有独立的回复正文、调试轨迹、SSE 进度推送与最终事件记录，不靠单轮手写拆条。
+func TestFlushProactiveRouteParkRepliesCrossSenderTargetsIndependently(t *testing.T) {
+	cfg := BotConfig{
+		BotAccount:              "42",
+		DebugModeEnabled:        boolPointer(true),
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{
+			Desire:             25,
+			CooldownSeconds:    30,
+			ChatLevel:          "minimal",
+			RelevanceLevel:     "on",
+			MergeWindowSeconds: 1,
+		},
+	}
+	provider := &proactivePurposeLLMProvider{
+		routerReply: `{"relevance":{"directed":true,"reason":"user-2 在问机器人"},"chat_in":{"score":0.10,"reason":"不需要闲聊"},"burst_1":{"reason":"user-1 也在问机器人","directed":true}}`,
+	}
+	runtime := NewRuntime(cfg, nilChannel{}, NewPluginManager(), nil, nil, nil, func() (LLMProvider, error) {
+		return provider, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		cancel()
+		runtime.clearProactiveRouteParks()
+	})
+	runtime.mu.Lock()
+	runtime.running = true
+	runtime.runCtx = ctx
+	runtime.mu.Unlock()
+	store := newMemoryInboundEventStore()
+	runtime.SetInboundEventStore(store)
+	runtime.proactiveRouteDebounce = 40 * time.Millisecond
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+
+	recordsCh := make(chan EventRecord, 64)
+	runtime.SetEventListener(func(rec EventRecord) {
+		select {
+		case recordsCh <- rec:
+		default:
+		}
+	})
+
+	now := time.Now()
+	m1 := enqueueParkTestEvent(t, store, debounceTestEvent("m1", "user-1", "嘉然帮我看下问题一", now.Add(-time.Second)))
+	m2 := enqueueParkTestEvent(t, store, debounceTestEvent("m2", "user-2", "嘉然也帮我看下问题二", now))
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m1); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m1 handled=%v outcome=%q", handled, outcome)
+	}
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m2); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m2 handled=%v outcome=%q", handled, outcome)
+	}
+
+	deadline := time.Now().Add(4 * time.Second)
+	finalByID := map[string]EventRecord{}
+	for time.Now().Before(deadline) {
+		for {
+			select {
+			case rec := <-recordsCh:
+				if rec.Outcome == "replied_proactive" {
+					finalByID[rec.MessageID] = rec
+				}
+			default:
+				goto checked
+			}
+		}
+	checked:
+		if finalByID["m1"].Outcome == "replied_proactive" && finalByID["m2"].Outcome == "replied_proactive" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if finalByID["m1"].Outcome != "replied_proactive" || finalByID["m2"].Outcome != "replied_proactive" {
+		t.Fatalf("both m1 and m2 should finish with replied_proactive, got: %#v", finalByID)
+	}
+	if !strings.Contains(finalByID["m1"].Reply, "m1") || !strings.Contains(finalByID["m2"].Reply, "m2") {
+		t.Fatalf("each target must receive its own independent reply: m1=%q m2=%q", finalByID["m1"].Reply, finalByID["m2"].Reply)
+	}
+
+	replyTraceCount := map[string]int{}
+	sawM1Selected := false
+	for _, entry := range logs.entriesSnapshot() {
+		if entry.Action != "debug_trace" {
+			continue
+		}
+		phase, _ := entry.Metadata["phase"].(string)
+		purpose, _ := entry.Metadata["purpose"].(string)
+		if entry.Target == "m1" && phase == "proactive_route_selected" {
+			sawM1Selected = true
+		}
+		if phase == "model_request" && purpose == PurposeReply {
+			replyTraceCount[entry.Target]++
+		}
+	}
+	if !sawM1Selected {
+		t.Fatal("m1 trace missing proactive_route_selected marker")
+	}
+	if replyTraceCount["m1"] < 1 || replyTraceCount["m2"] < 1 {
+		t.Fatalf("each independent target must record its own reply model trace, got: %#v", replyTraceCount)
+	}
+}
+
+// 攒满条数上限当场评分且命中多个不同发送者时，主目标返回给当前 worker，其余发送者各自起独立回复。
+func TestPrepareMessageEventWithContextLaunchesCrossSenderPeerIndependently(t *testing.T) {
+	cfg := BotConfig{
+		BotAccount:              "42",
+		DebugModeEnabled:        boolPointer(true),
+		ProactiveReplyChance:    1,
+		ProactiveReplyThreshold: 0.8,
+		Participation: &ParticipationPreferences{
+			Desire:             25,
+			CooldownSeconds:    30,
+			ChatLevel:          "minimal",
+			RelevanceLevel:     "on",
+			MergeWindowSeconds: 60,
+			MergeMaxMessages:   2,
+		},
+	}
+	routerReply := `{"relevance":{"directed":true,"reason":"user-2 在问机器人"},"chat_in":{"score":0.10,"reason":"不闲聊"},"burst_1":{"reason":"user-1 也在问机器人","directed":true}}`
+	runtime, provider, store := parkTestRuntime(t, cfg, routerReply, "单独回给 user-1")
+	runtime.proactiveRouteDebounce = time.Second
+	logs := &captureAppLogs{}
+	runtime.SetAppLogWriter(logs)
+
+	recordsCh := make(chan EventRecord, 32)
+	runtime.SetEventListener(func(rec EventRecord) {
+		select {
+		case recordsCh <- rec:
+		default:
+		}
+	})
+
+	now := time.Now()
+	m1 := enqueueParkTestEvent(t, store, debounceTestEvent("m1", "user-1", "嘉然帮我看下", now.Add(-time.Second)))
+	m2 := enqueueParkTestEvent(t, store, debounceTestEvent("m2", "user-2", "嘉然也回我一下", now))
+	if _, _, handled, outcome := runtime.prepareMessageEvent(context.Background(), m1); handled || outcome != "merged_into_backlog_turn" {
+		t.Fatalf("m1 handled=%v outcome=%q", handled, outcome)
+	}
+	ctx := runtime.withDebugTraceContext(withLLMUsageContext(context.Background(), m2), m2)
+	_, routed, _, handled, outcome := runtime.prepareMessageEventWithContext(ctx, m2)
+	if !handled || outcome != "replied_proactive" || routed.MessageID != "m2" {
+		t.Fatalf("primary routed=%s handled=%v outcome=%q", routed.MessageID, handled, outcome)
+	}
+	if len(routed.backlogTurn) != 0 || len(routed.burstPeers) != 0 {
+		t.Fatalf("m2 不应夹带 m1（m1 已独立发起回复）：backlogTurn=%#v burstPeers=%#v", routed.backlogTurn, routed.burstPeers)
+	}
+	if got := waitRouterCalls(provider, 2, 5*time.Second); got < 2 {
+		t.Fatalf("expected peer m1 to run independent reply, llm calls=%d", got)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	m1Replied := false
+	for time.Now().Before(deadline) && !m1Replied {
+		select {
+		case rec := <-recordsCh:
+			if rec.MessageID == "m1" && rec.Outcome == "replied_proactive" {
+				m1Replied = true
+			}
+		case <-time.After(15 * time.Millisecond):
+		}
+	}
+	if !m1Replied {
+		t.Fatal("independent peer m1 did not complete with replied_proactive")
+	}
+}
+
+// 评分中的跨人批次：user-1 发直接触发消息只接走并取消 user-1 自己的目标，不影响同批里 user-2 的独立发送。
+func TestProactiveRouteFlightCrossSenderDirectDoesNotCancelOtherUser(t *testing.T) {
+	runtime, _, store := parkTestRuntime(t, BotConfig{BotAccount: "42", ProactiveReplyChance: 1, ProactiveReplyThreshold: 0.8})
+	now := time.Now()
+	m1 := debounceTestEvent("m1", "user-1", "转发一条消息", now.Add(-time.Second))
+	m2 := debounceTestEvent("m2", "user-2", "另一个人的追问", now)
+	key := proactiveRouteParkKey(m1)
+	runtime.routeParkMu.Lock()
+	flight := runtime.beginProactiveRouteFlightLocked(key, []proactiveReplyCandidate{
+		{Event: m1, Text: "转发一条消息"},
+		{Event: m2, Text: "另一个人的追问"},
+	})
+	runtime.routeParkMu.Unlock()
+	defer runtime.endProactiveRouteFlight(key, flight)
+
+	direct := debounceTestEvent("m3", "user-1", "你干的", now.Add(time.Second))
+	direct.Segments = append([]MessageSegment{{Type: "at", Data: map[string]string{"qq": "42"}}}, direct.Segments...)
+	direct = enqueueParkTestEvent(t, store, direct)
+	event, _, handled, _ := runtime.prepareMessageEvent(context.Background(), direct)
+	if !handled {
+		t.Fatal("@ 机器人应该直接进回复")
+	}
+	if len(event.backlogTurn) != 1 || event.backlogTurn[0].Event.MessageID != "m1" {
+		t.Fatalf("user-1 的直接触发应只接走 m1，不应接走 user-2 的 m2：%+v", event.backlogTurn)
+	}
+	if !runtime.proactiveRouteFlightTakenFor(flight, m1) {
+		t.Fatal("user-1 的 m1 应标记为已被接走")
+	}
+	if runtime.proactiveRouteFlightTakenFor(flight, m2) {
+		t.Fatal("user-2 的 m2 不应被 user-1 的直接触发取消")
+	}
+	ctxM1 := context.WithValue(context.Background(), proactiveRouteFlightContextKey{}, proactiveRouteFlightTarget{flight: flight, messageIDs: []string{"m1"}})
+	ctxM2 := context.WithValue(context.Background(), proactiveRouteFlightContextKey{}, proactiveRouteFlightTarget{flight: flight, messageIDs: []string{"m2"}})
+	if !runtime.proactiveRouteTakenBeforeSend(ctxM1) {
+		t.Fatal("m1 在发送闸门处应放弃")
+	}
+	if runtime.proactiveRouteTakenBeforeSend(ctxM2) {
+		t.Fatal("m2 在发送闸门处应照常发送")
 	}
 }

@@ -55,7 +55,7 @@ func TestProactiveReplyBatchRoutesOnceAndSelectsTarget(t *testing.T) {
 		t.Fatalf("batch payload leaked candidate identities: %s", requestText)
 	}
 	routePrompt := provider.requests[0].Messages[0].Content
-	for _, want := range []string{"只评估 current=\"true\" 的那一条", "前面的对话供理解上下文", "不选择其他消息作为回复目标", "同一内容已经回答"} {
+	for _, want := range []string{"relevance 和 chat_in 只评估 current=\"true\" 的那一条", "标了 burst=\"k\" 的连发消息", "其余未标记的历史消息仅作上下文，不作为回复目标", "同一内容已经回答"} {
 		if !strings.Contains(routePrompt, want) {
 			t.Fatalf("batch route prompt missing %q: %s", want, routePrompt)
 		}

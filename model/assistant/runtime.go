@@ -2085,15 +2085,20 @@ func (r *Runtime) recordNoticeEvent(event MessageEvent) {
 }
 
 func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+	_, prepared, text, handled, outcome := r.prepareMessageEventWithContext(ctx, event)
+	return prepared, text, handled, outcome
+}
+
+func (r *Runtime) prepareMessageEventWithContext(ctx context.Context, event MessageEvent) (context.Context, MessageEvent, string, bool, string) {
 	// 已入队的私聊也按当前准入配置检查，关闭后不再预处理积压消息。
 	if event.Kind == EventKindPrivate && !r.privateAdmissionAllows(event) {
 		const outcome = "ignored_private_admission"
 		record := r.decisionEventRecord(event, "[私聊准入]", outcome)
 		record.Reason = "私聊准入模式限制，该用户的私聊被静默忽略"
 		r.record(record)
-		return event, "", false, outcome
+		return ctx, event, "", false, outcome
 	}
-	event, text, handled, outcome := r.routeMessageEvent(ctx, event)
+	ctx, event, text, handled, outcome := r.routeMessageEvent(ctx, event)
 	if handled && event.mutedJudgeOnly != "" {
 		// 被禁言但照常做了回复判断，判断认为该回：到这里为止，不生成也不发送。
 		event.routingReason = event.mutedJudgeOnly + "；回复判断认为这条该回，暂停期间不生成也不发送"
@@ -2101,13 +2106,13 @@ func (r *Runtime) prepareMessageEvent(ctx context.Context, event MessageEvent) (
 		if !event.mutedSkipImages {
 			r.enqueueHistoryImageDescriptions(event)
 		}
-		return event, text, false, "ignored_bot_muted_judged"
+		return ctx, event, text, false, "ignored_bot_muted_judged"
 	}
-	return event, text, handled, outcome
+	return ctx, event, text, handled, outcome
 }
 
 // routeMessageEvent 做入站预处理和回复判断，决定这条消息要不要回复。
-func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (MessageEvent, string, bool, string) {
+func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (context.Context, MessageEvent, string, bool, string) {
 	ctx = r.withAutomaticMediaPolicy(r.withFileParserVideoLimit(ctx, event), event)
 	r.beginHistoryImageDescriptionForeground()
 	defer r.endHistoryImageDescriptionForeground()
@@ -2117,7 +2122,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			text = event.RawMessage
 		}
 		r.record(r.decisionEventRecord(event, text, "ignored_unavailable_group"))
-		return event, text, false, "ignored_unavailable_group"
+		return ctx, event, text, false, "ignored_unavailable_group"
 	}
 	event.Segments = promoteTextQQImageURLs(event.Segments)
 	event = r.enrichReplyReference(ctx, event)
@@ -2159,13 +2164,13 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	if event.Platform == PlatformQQOfficial && event.Kind == EventKindGroup && event.SenderIsBot && !r.isSelfMessage(event) {
 		event.routingReason = "QQ 官方群消息来自其他机器人，仅保留上下文"
 		r.record(r.decisionEventRecord(event, text, "ignored_bot_message"))
-		return event, text, false, "ignored_bot_message"
+		return ctx, event, text, false, "ignored_bot_message"
 	}
 	// 语音转写、图片和文件解析、转发展开都在上面做完了：从这一刻起它才能被同一个人
 	// 后到的消息接走（见 sender_burst.go）。
 	r.noteSenderTurnReady(event)
 	if r.governanceBlocked(event, text) {
-		return event, text, false, "governance_blocked"
+		return ctx, event, text, false, "governance_blocked"
 	}
 	// 表达学习看的是全部群消息，不只被回复的那些：群的口癖长在日常闲聊里。
 	// 群被这台机器人关掉、或不在准入名单（黑/白名单）里时，它永远不会在这个群里回复——
@@ -2188,7 +2193,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		}
 		r.record(r.decisionEventRecord(event, text, outcome))
 		// 这里刻意不走 finishWithoutReply：那条会补历史识图，而识图正是要省掉的模型调用之一。
-		return event, text, false, outcome
+		return ctx, event, text, false, outcome
 	}
 	// 风格学习要花一次后台模型调用，放在关群判断之后：不回复的群用不着学怎么说话。
 	r.observeGroupStyle(event)
@@ -2212,7 +2217,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			}
 			event.routingReason = reason
 			r.record(r.decisionEventRecord(event, text, "ignored_bot_muted"))
-			return event, text, false, "ignored_bot_muted"
+			return ctx, event, text, false, "ignored_bot_muted"
 		}
 	}
 	// 群额度用完：和「这个群没开放」走同一条路——消息照样进历史、进长期记忆和用户
@@ -2228,7 +2233,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			event.routingReason = fmt.Sprintf("本群模型额度已用完（近 %s 的%s），到点自动恢复", groupModelQuotaWindow, verdict.Reason)
 			r.recordGroupModelQuotaExceeded(ctx, event, verdict)
 			r.record(r.decisionEventRecord(event, text, "ignored_model_quota"))
-			return event, text, false, "ignored_model_quota"
+			return ctx, event, text, false, "ignored_model_quota"
 		}
 	}
 	// 事件触发任务在这里匹配：群准入、屏蔽和额度都已经过了，而回复判断还没开始——
@@ -2237,7 +2242,7 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	r.dispatchEventTriggers(ctx, event, text, event.mutedJudgeOnly == "")
 	// 已授权的本地重置无需走语义路由，也不能被积压消息合并吞掉。
 	if (r.isOwnerContextResetCommand(event, text) || r.isRecallCommand(event, text)) && r.admits(r.effectiveConfigForEvent(event), event) {
-		return event, text, true, "replied"
+		return ctx, event, text, true, "replied"
 	}
 	// 队列积压：消息已经 remember 进历史、做过表达学习，这里补上长期记忆和用户画像，登记进
 	// 积压包后就收住，跳过后面所有花模型 token 的环节，由同会话后面那条一起接话。
@@ -2253,12 +2258,14 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		r.holdBacklogMessage(event, text, blocked, now)
 		event.routingReason = "消息在队列里积压，已补入上下文历史，交给同会话后面的消息合并成一轮回复"
 		r.record(r.decisionEventRecord(event, text, "merged_into_backlog_turn"))
-		return event, text, false, "merged_into_backlog_turn"
+		return ctx, event, text, false, "merged_into_backlog_turn"
 	}
 	// 前面积压下来的消息在这里和当前这条合并。有直接触发的，回复对象可能换成积压包里
 	// 最新那条触发消息，后面的等级、响应限制等检查都对换过之后的回复对象做。
 	if held := r.takeBacklogMessages(event, now); len(held) > 0 {
+		prev := event
 		event, text = r.mergeBacklogMessages(event, text, held)
+		ctx = r.rebindProactiveRoutedContext(ctx, prev, event, nil)
 		restriction, blocked = r.activeReplySuppression(event, now)
 	}
 	statusCommand := r.statusCommandActive(event, text)
@@ -2269,11 +2276,11 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 	event.replyHistory = history
 	event.replyHistoryLoaded = true
 	ctx = r.withIdentityPrivacyContext(ctx, event, history)
-	finishWithoutReply := func(outcome string) (MessageEvent, string, bool, string) {
+	finishWithoutReply := func(outcome string) (context.Context, MessageEvent, string, bool, string) {
 		if !event.mutedSkipImages {
 			r.enqueueHistoryImageDescriptions(event)
 		}
-		return event, text, false, outcome
+		return ctx, event, text, false, outcome
 	}
 	if ignored, decision := r.shouldIgnoreGroupReplyByMemberLevel(ctx, event); ignored {
 		r.recordGroupReplyLevelIgnored(ctx, event, decision)
@@ -2363,7 +2370,12 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 		routed, routedText, allowed := r.resolveProactiveRoute(ctx, event, proactiveCandidates)
 		// 当场评的这一批里可能有之前登记进等待批、挂着占位的，结论要一起落下去。
 		if allowed {
-			r.recordProactiveBatchRouted(proactiveCandidates, routed)
+			allTargets := proactiveRoutedTargets(routed, routedText)
+			r.recordProactiveBatchRoutedTargets(proactiveCandidates, allTargets)
+			extraTargets := routed.burstPeers
+			routed.burstPeers = nil
+			r.launchExtraProactiveRouteTargets(ctx, event, extraTargets, history)
+			ctx = r.rebindProactiveRoutedContext(ctx, event, routed, history)
 			event, text, handled = routed, routedText, true
 			successOutcome = "replied_proactive"
 			markReplyStage(ctx, replyStageDecided, time.Now())
@@ -2407,35 +2419,67 @@ func (r *Runtime) routeMessageEvent(ctx context.Context, event MessageEvent) (Me
 			return finishWithoutReply("ignored_reply_fatigue")
 		}
 	}
-	return event, text, true, successOutcome
+	return ctx, event, text, true, successOutcome
 }
 
 // resolveProactiveRoute 跑一次接话评分并做放行后的检查。放行时返回的回复对象已经带好
-// 这一轮要一起回的消息（backlogTurn）。
+// 这一轮要一起回的消息（backlogTurn）；若合并评分同时选中了多个不同发送者的目标，
+// 其余发送者的独立目标挂在 burstPeers 上，由调用方各自独立发起回复。
 func (r *Runtime) resolveProactiveRoute(ctx context.Context, current MessageEvent, candidates []proactiveReplyCandidate) (MessageEvent, string, bool) {
 	routed, routedText, turn, allowed := r.routeProactiveReplyBatch(ctx, candidates)
-	if allowed && routed.MessageID != current.MessageID {
-		// 路由挑中的是积压包里的消息，它进积压包时还没做过响应限制检查。
-		if routedRestriction, routedBlocked := r.activeReplySuppression(routed, time.Now()); routedBlocked {
-			r.recordReplySuppressionBlocked(routed, routedRestriction)
-			allowed = false
-			routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+	if !allowed {
+		return routed, routedText, false
+	}
+	if !routed.burstSplit {
+		if routed.MessageID != current.MessageID {
+			// 路由挑中的是积压包里的消息，它进积压包时还没做过响应限制检查。
+			if routedRestriction, routedBlocked := r.activeReplySuppression(routed, time.Now()); routedBlocked {
+				r.recordReplySuppressionBlocked(routed, routedRestriction)
+				routed.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+				return routed, routedText, false
+			}
 		}
-	}
-	// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
-	// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
-	if allowed && proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
-		allowed = false
-		routed.routingReason = triggeredDeliverySkipReason
-	}
-	if allowed {
-		if routed.burstSplit {
-			routed.backlogTurn = routed.burstTargets
-		} else if len(candidates) > 1 {
+		// 提醒或事件触发任务刚找过这个人，随口一句的主动接话多半是把同一件事再说一遍。
+		// 评分判定他就是在跟机器人说话的照常回，见 triggered_delivery.go。
+		if proactiveReplyCoveredByTrigger(routed) && r.recentTriggeredDeliveryFor(routed) {
+			routed.routingReason = triggeredDeliverySkipReason
+			return routed, routedText, false
+		}
+		if len(candidates) > 1 {
 			routed.backlogTurn = backlogRoutedTurn(candidates, turn, routed.MessageID)
 		}
+		return routed, routedText, true
 	}
-	return routed, routedText, allowed
+
+	allTargets := proactiveRoutedTargets(routed, routedText)
+	kept := make([]proactiveReplyCandidate, 0, len(allTargets))
+	var lastBlocked proactiveReplyCandidate
+	for _, target := range allTargets {
+		if target.Event.MessageID != current.MessageID {
+			if routedRestriction, routedBlocked := r.activeReplySuppression(target.Event, time.Now()); routedBlocked {
+				r.recordReplySuppressionBlocked(target.Event, routedRestriction)
+				target.Event.routingReason = "主动回复路由挑中的积压消息发送者正处于响应限制中"
+				lastBlocked = target
+				continue
+			}
+		}
+		if proactiveReplyCoveredByTrigger(target.Event) && r.recentTriggeredDeliveryFor(target.Event) {
+			target.Event.routingReason = triggeredDeliverySkipReason
+			lastBlocked = target
+			continue
+		}
+		target.Event.backlogTurn = target.Event.burstTargets
+		kept = append(kept, target)
+	}
+	if len(kept) == 0 {
+		if strings.TrimSpace(lastBlocked.Event.MessageID) != "" {
+			return lastBlocked.Event, lastBlocked.Text, false
+		}
+		return routed, routedText, false
+	}
+	primary := kept[len(kept)-1]
+	primary.Event.burstPeers = kept[:len(kept)-1]
+	return primary.Event, primary.Text, true
 }
 
 func (r *Runtime) startReplyWorker(ctx context.Context, event MessageEvent, text string, outcome string) error {
@@ -5072,10 +5116,8 @@ func (r *Runtime) generateReply(ctx context.Context, cfg BotConfig, event Messag
 		}
 		agentCfg = restrictAgentConfigForMode(cfg, agentCfg)
 		// 说话只走 send：纯文本退回一次，再写纯文本就当 send 收尾（见 agent.Config.PlainTextNotSent）。
-		// 一轮只在做完以后说一次，发出去之前复核说了的事做没做，空口承诺不发
-		// （见 agent.Config.UnfinishedClaimReview）。
+		// 一轮只在做完以后说一次，send 作为终结步骤直接收尾，不再多跑一次全量草稿复核。
 		agentCfg.PlainTextNotSent = true
-		agentCfg.UnfinishedClaimReview = !unfinishedClaimReviewDisabled.Load()
 		registry := preparedRegistry
 		ownsRegistry := false
 		if registry == nil {
@@ -8630,6 +8672,9 @@ func withoutReplyRuntimeState(event MessageEvent) MessageEvent {
 	event.backlogProbe = nil
 	event.backlogTurn = nil
 	event.backlogProactive = nil
+	event.burstSplit = false
+	event.burstTargets = nil
+	event.burstPeers = nil
 	event.backlogHeld = false
 	return event
 }
@@ -9757,10 +9802,6 @@ func chatSplitLimitsFrom(cfg BotConfig) chatSplitLimits {
 
 // maiBotSplitRandom 决定 MaiBot 断句时相邻两句合不合，测试换成固定值。
 var maiBotSplitRandom = rand.Float64
-
-// unfinishedClaimReviewDisabled 整包测试关掉收尾前的「说了却没做」复核：复核要多调一次
-// 模型，按脚本回复的假模型会被它吃掉一条。复核本身在 model/agent 里测。
-var unfinishedClaimReviewDisabled atomic.Bool
 
 // maiBotSplitDisabled 整包测试关掉 MaiBot 断句：大量用例按整句比对发出的文本，和分条
 // 无关。测分条的用例自己打开，见 withMaiBotSplit。
