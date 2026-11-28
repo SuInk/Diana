@@ -4508,6 +4508,8 @@ export interface AssistantTask {
   feed_sources?: RSSWatchSource[];
   feed_judge_prompt?: string;
   feed_rule_mode?: string;
+  feed_delivery?: RSSDelivery;
+  feed_topic_pool_size?: number;
   feed_media_mode?: string;
   feed_reply_prompt?: string;
   feed_reply_mode?: string;
@@ -4586,6 +4588,8 @@ export interface RSSWatchInput {
   translation_model_id?: string;
   media_failure?: string;
   judge_prompt: string;
+  /** push 直接推送（默认）；pool 存进话题池，群里冷场主动开口时再提。 */
+  delivery?: RSSDelivery;
   interval_seconds: number;
   profile_id?: string;
   destination?: "private" | "group";
@@ -4623,11 +4627,13 @@ export function deleteRepositoryWatch(id: string): Promise<void> {
   return requestJSON<void>(`/api/assistant/tasks/repository-watches/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
+export type RSSDelivery = "push" | "pool";
+
 export function createRSSWatch(input: RSSWatchInput): Promise<AssistantTask> {
   return requestJSON<AssistantTask>("/api/assistant/tasks/rss-watches", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "media_mode" | "reply_prompt" | "reply_mode" | "judge_model_id" | "translation_model_id" | "media_failure" | "interval_seconds">>): Promise<AssistantTask> {
+export function updateRSSWatch(id: string, input: Partial<Pick<RSSWatchInput, "feed_url" | "twitter_handle" | "feed_urls" | "twitter_handles" | "judge_prompt" | "rule_mode" | "delivery" | "media_mode" | "reply_prompt" | "reply_mode" | "judge_model_id" | "translation_model_id" | "media_failure" | "interval_seconds">>): Promise<AssistantTask> {
   return requestJSON<AssistantTask>(`/api/assistant/tasks/rss-watches/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(input) });
 }
 

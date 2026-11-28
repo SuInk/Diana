@@ -8957,6 +8957,13 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 				selected = append(selected, entry)
 			}
 		}
+		if rssWatchUsesTopicPool(item) {
+			if err := r.addRSSTopicPoolEntries(item, *source, change.FeedName, selected); err != nil {
+				return "", err
+			}
+			advance()
+			return "", nil
+		}
 		notice, err := r.renderRSSWatchEntries(ctx, item, selected, rssReplyMode(item, mode), plugin, settings)
 		if err != nil {
 			return "", err
@@ -8976,6 +8983,19 @@ func (r *Runtime) checkRSSWatchSource(ctx context.Context, item Reminder, source
 		return "", err
 	}
 	if !decision.Notify {
+		advance()
+		return "", nil
+	}
+	if rssWatchUsesTopicPool(item) {
+		// 话题池只存条目本身，判断器写的处理后文案用不上；判断结果没列出原文链接
+		// 时整批都算命中。
+		selected := rssReplyMatchedItems(decision.Reply, change.Items)
+		if len(selected) == 0 {
+			selected = change.Items
+		}
+		if err := r.addRSSTopicPoolEntries(item, *source, change.FeedName, selected); err != nil {
+			return "", err
+		}
 		advance()
 		return "", nil
 	}

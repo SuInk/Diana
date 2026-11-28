@@ -79,6 +79,14 @@
           <span class="hint">可设置 5 分钟至 365 天；默认 15 分钟。</span>
         </div>
         <div class="field wide"><label>通知目标</label><SubscriptionTargetsEditor v-model="form.notification_targets" :profiles="profiles" :default-profile="form.profile_id" :plugin-ids='["official.rss-watch"]' /></div>
+        <div class="field wide">
+          <label>送达方式</label>
+          <div class="segmented repository-watch-destination" role="radiogroup" aria-label="送达方式">
+            <button type="button" role="radio" :aria-checked="form.topic_delivery === 'push'" :class="{ active: form.topic_delivery === 'push' }" @click="form.topic_delivery = 'push'">直接推送</button>
+            <button type="button" role="radio" :aria-checked="form.topic_delivery === 'pool'" :class="{ active: form.topic_delivery === 'pool' }" @click="form.topic_delivery = 'pool'">放进话题池</button>
+          </div>
+          <span class="hint">{{ form.topic_delivery === "pool" ? "命中的条目不发群，留在话题池里 48 小时，等群里冷场、机器人主动开口时拿最新的几条找话题；每个群提过一次就不再提。需要该群开着主动开口，以及其中的「群里冷场时联网找新鲜事聊」，私聊目标不使用话题池。" : "命中的条目立即发到通知目标。" }}</span>
+        </div>
       </div>
       <div class="repository-watch-editor-actions">
         <button class="btn small" type="button" :disabled="saving" @click="stopEditing">取消</button>
@@ -90,7 +98,7 @@
     <div v-else-if="watches.length" class="repository-watch-manager-list">
       <article v-for="task in watches" :key="task.id" class="repository-watch-manager-item">
         <div class="repository-watch-manager-main">
-          <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
+          <div class="cluster"><strong>{{ watchTitle(task) }}</strong><span v-if="sourceCount(task) > 1" class="badge">{{ sourceCount(task) }} 个来源</span><span v-if="task.feed_delivery === 'pool'" class="badge">话题池 {{ task.feed_topic_pool_size ?? 0 }} 条</span><span class="badge" :class="statusTone(task.status)">{{ statusLabel(task.status) }}</span></div>
           <p class="rss-watch-rule-summary">{{ task.feed_rule_mode === "regex" ? "正则匹配 · " + task.feed_judge_prompt : task.feed_judge_prompt || "全部新条目 · 不筛选" }}</p>
           <div class="task-facts"><span>每 {{ formatInterval(task.interval_seconds || defaultIntervalSeconds) }}</span><SubscriptionDestination v-for="(target, index) in task.notification_targets?.length ? task.notification_targets : [{ profile_id: task.profile_id, platform: task.platform, group_id: task.group_id, user_id: task.user_id }]" :key="index" :platform="target.platform || profiles.find(p => p.id === target.profile_id)?.platform" :profile-id="target.profile_id" :profile-name="profiles.find(p => p.id === target.profile_id)?.name" :group-id="target.group_id" :user-id="target.user_id" /><a v-for="source in taskSources(task)" :key="source.feed_url" :href="sourceHref(source)" target="_blank" rel="noreferrer" style="overflow-wrap: anywhere; max-width: 100%">{{ sourceLabel(source) }}</a></div>
           <p v-if="task.last_error" class="repository-watch-manager-error">{{ task.last_error }}</p>
@@ -137,7 +145,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { CircleX, LoaderCircle, Pencil, Plus, Sparkles, Trash2 } from "@lucide/vue";
-import { assistRSSRule, cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, getConfig, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type LLMConfig, type RSSWatchSource } from "../api";
+import { assistRSSRule, cancelRSSWatch, createRSSWatch, deleteRSSWatch, getAssistantTasks, getBotProfileConfig, getConfig, updateRSSWatch, type AssistantTask, type AssistantTaskStatus, type BotProfileConfig, type LLMConfig, type RSSDelivery, type RSSWatchSource } from "../api";
 import { askConfirm } from "../lib/confirm";
 import { toastError, toastSuccess } from "../lib/toast";
 import AppSelect, { type AppSelectOption } from "./AppSelect.vue";
@@ -153,7 +161,7 @@ const defaultIntervalSeconds = 15 * 60;
 // 和后端 maximumRSSWatchSources 保持一致：再多就该拆成两条订阅。
 const maximumSources = 10;
 const deliveryModeOptions = [{ value: "all", label: "全部推送" }, { value: "regex", label: "正则匹配" }, { value: "llm", label: "LLM 判断" }];
-const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as SourceKind, twitter_handles: [""], feed_urls: [""], bilibili: [""], delivery_mode: "llm", judge_prompt: "", judge_model_id: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
+const emptyForm = () => ({ notification_targets: [] as import("../api").RepositoryWatchTarget[], source: "twitter" as SourceKind, twitter_handles: [""], feed_urls: [""], bilibili: [""], delivery_mode: "llm", topic_delivery: "push" as RSSDelivery, judge_prompt: "", judge_model_id: "", interval_seconds: defaultIntervalSeconds, profile_id: "" });
 const watches = ref<AssistantTask[]>([]);
 const profiles = ref<BotProfileConfig[]>([]);
 const llmChannels = ref<LLMConfig[]>([]);
@@ -305,7 +313,7 @@ function startEdit(task: AssistantTask): void {
   const handles = sources.filter((source) => source.source === "twitter").map((source) => source.handle ?? "");
   const urls = sources.filter((source) => source.source !== "twitter" && !isBilibiliSource(source.source)).map((source) => source.feed_url);
   const bilibili = sources.filter((source) => isBilibiliSource(source.source)).map(bilibiliInputValue);
-  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], bilibili: bilibili.length ? bilibili : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), judge_prompt: task.feed_judge_prompt ?? "", judge_model_id: task.feed_judge_model_id ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
+  form.value = { notification_targets: task.notification_targets?.length ? task.notification_targets.map(t => ({ ...t, profile_id: t.profile_id || task.profile_id })) : [{ profile_id: task.profile_id, destination: task.group_id ? "group" : "private", group_id: task.group_id, user_id: task.user_id }], source: kind, twitter_handles: handles.length ? handles : [""], feed_urls: urls.length ? urls : [""], bilibili: bilibili.length ? bilibili : [""], delivery_mode: task.feed_rule_mode || (task.feed_judge_prompt?.trim() ? "llm" : "all"), topic_delivery: task.feed_delivery === "pool" ? "pool" : "push", judge_prompt: task.feed_judge_prompt ?? "", judge_model_id: task.feed_judge_model_id ?? "", interval_seconds: task.interval_seconds || defaultIntervalSeconds, profile_id: task.profile_id ?? "" };
   editing.value = true;
   markEditorClean();
 }
@@ -332,7 +340,7 @@ async function saveEditor(): Promise<boolean> {
   try {
     await props.prepareAccess?.();
     const source = form.value.source === "twitter" ? { twitter_handles: handles, feed_urls: [] } : { feed_urls: form.value.source === "bilibili" ? bilibili : urls, twitter_handles: [] };
-    const common = { notification_targets: form.value.notification_targets, ...source, reply_mode: "decision", judge_model_id: form.value.delivery_mode === "llm" ? form.value.judge_model_id : "", media_mode: "video_audio", media_failure: "text", rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, interval_seconds: form.value.interval_seconds };
+    const common = { notification_targets: form.value.notification_targets, ...source, reply_mode: "decision", judge_model_id: form.value.delivery_mode === "llm" ? form.value.judge_model_id : "", media_mode: "video_audio", media_failure: "text", rule_mode: form.value.delivery_mode, judge_prompt: form.value.delivery_mode === "all" ? "" : form.value.judge_prompt, delivery: form.value.topic_delivery, interval_seconds: form.value.interval_seconds };
     if (editingTask.value) await updateRSSWatch(editingTask.value.id, common); else await createRSSWatch({ ...common, profile_id: form.value.notification_targets[0]?.profile_id });
     toastSuccess(editingTask.value ? "RSS 订阅已更新" : "RSS 订阅已创建，当前内容已作为基线"); editing.value = false; editingTask.value = null; await load();
     return true;

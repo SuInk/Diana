@@ -661,7 +661,9 @@ func (r *Runtime) runProactiveInitiative(parent context.Context, target proactiv
 	text, err := r.runTaskQueryWithSlot(ctx, func(ctx context.Context) (string, error) {
 		return r.generateProactiveMessage(ctx, cfg, event, plan, news)
 	})
-	if news.Query != "" {
+	if news.fromTopicPool() {
+		record.Text += " · 取自订阅话题池"
+	} else if news.Query != "" {
 		record.Text += " · 搜索「" + news.Query + "」"
 		if news.Results == "" {
 			record.Text += "（没搜到）"
@@ -699,6 +701,7 @@ func (r *Runtime) runProactiveInitiative(parent context.Context, target proactiv
 		finish("initiative_failed", "主动开口的消息没发出去", err)
 		return
 	}
+	r.markRSSTopicPoolShared(event, news.topicPool)
 	record.Handled = true
 	record.Decision = "replied"
 	reason := "群里冷场了一阵，机器人主动开口"
