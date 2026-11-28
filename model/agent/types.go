@@ -234,6 +234,10 @@ type Response struct {
 	// 提示、已加载契约和尾部工具段。调用方只看得到自己组装的那部分，续接时拿它
 	// 判断请求比完整组装长了多少。
 	PromptTokens int64 `json:"-"`
+	// FirstUsage 是这一轮第一次模型请求的用量。续接时只有第一次请求接在上一轮后面，
+	// 它的缓存命中才说明上一轮的前缀隔了这么久还在不在缓存里（见 assistant 的
+	// cacheWarmth）；后面几步接的是本轮自己刚发的请求，命中总是高的。
+	FirstUsage llm.Usage `json:"-"`
 	// FinalizeFields 是模型在 send 上填的 Config.FinalizeFields 字段，没填的不出现。
 	// Silent 时同样会带：调用方可以据此「不说话、只做字段表达的事」。
 	FinalizeFields map[string]string `json:"finalize_fields,omitempty"`

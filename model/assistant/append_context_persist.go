@@ -57,6 +57,9 @@ type appendContextFile struct {
 	Prefix   []appendContextMessage `json:"prefix"`
 	// Answered 见 appendContextLog.answered。老文件没有这一项，读回后照旧续接。
 	Answered []string `json:"answered,omitempty"`
+	// StartedAt、Model 见 appendContextLog.at、model。老文件没有，读回后照旧续接、不估缓存冷热。
+	StartedAt time.Time `json:"started_at,omitempty"`
+	Model     string    `json:"model,omitempty"`
 }
 
 type appendContextMessage struct {
@@ -181,7 +184,8 @@ func writeAppendContextFile(dir, key string, record *appendContextLog) error {
 		return nil
 	}
 	file := appendContextFile{Version: appendContextFileVersion, Key: key, SavedAt: time.Now().UTC(), RunKey: record.key,
-		HeadKey: record.headKey, Overhead: record.overhead, Prefix: make([]appendContextMessage, len(record.prefix)), Answered: record.answeredKeys()}
+		HeadKey: record.headKey, Overhead: record.overhead, Prefix: make([]appendContextMessage, len(record.prefix)), Answered: record.answeredKeys(),
+		StartedAt: record.at, Model: record.model}
 	for index, message := range record.prefix {
 		file.Prefix[index] = appendContextMessageFrom(message)
 	}
@@ -241,7 +245,8 @@ func (d *appendContextDisk) load(key string) *appendContextLog {
 		time.Since(stored.SavedAt) > appendContextFileMaxAge {
 		return nil
 	}
-	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix)), answered: map[string]bool{}}
+	record := &appendContextLog{key: stored.RunKey, headKey: stored.HeadKey, overhead: stored.Overhead, prefix: make([]llm.Message, len(stored.Prefix)), answered: map[string]bool{},
+		at: stored.StartedAt, model: stored.Model}
 	for _, key := range stored.Answered {
 		record.answered[key] = true
 	}
