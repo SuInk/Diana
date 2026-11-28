@@ -36,8 +36,12 @@ func TestResearchDetailReviewSendsDraftBackOnce(t *testing.T) {
 	if !strings.Contains(review, "王维上线") || !strings.Contains(review, "还加了传送花") {
 		t.Fatalf("review request lacks evidence or draft:\n%s", review)
 	}
-	if repair := requestContent(client.requests[3]); !strings.Contains(repair, "找不到原文：传送花") {
-		t.Fatalf("repair missing listed detail:\n%s", repair)
+	repair := requestContent(client.requests[3])
+	if !strings.Contains(repair, "找不到原文：传送花") || !strings.Contains(repair, "能查原文的工具："+WebSearchToolName) {
+		t.Fatalf("repair missing listed detail or tools:\n%s", repair)
+	}
+	if retry := client.requests[3].Messages; strings.Contains(retry[len(retry)-1].Content, "印象") {
+		t.Fatalf("repair still offers to pass it off as an impression:\n%s", repair)
 	}
 }
 
