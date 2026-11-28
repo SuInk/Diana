@@ -85,7 +85,7 @@
             <button type="button" role="radio" :aria-checked="form.topic_delivery === 'push'" :class="{ active: form.topic_delivery === 'push' }" @click="form.topic_delivery = 'push'">直接推送</button>
             <button type="button" role="radio" :aria-checked="form.topic_delivery === 'pool'" :class="{ active: form.topic_delivery === 'pool' }" @click="form.topic_delivery = 'pool'">放进话题池</button>
           </div>
-          <span class="hint">{{ form.topic_delivery === "pool" ? "命中的条目不发群，留在话题池里 48 小时：群里聊到相关话题时机器人顺嘴提一句，冷场主动开口时拿来找话题；每个群提过一次就不再提。私聊目标不使用话题池。" : "命中的条目立即发到通知目标。" }}</span>
+          <span class="hint">{{ form.topic_delivery === "pool" ? "命中的条目不发群，留在话题池里 48 小时，等群里冷场、机器人主动开口时拿最新的几条找话题；每个群提过一次就不再提。需要该群开着主动开口，以及其中的「群里冷场时联网找新鲜事聊」，私聊目标不使用话题池。" : "命中的条目立即发到通知目标。" }}</span>
         </div>
       </div>
       <div class="repository-watch-editor-actions">

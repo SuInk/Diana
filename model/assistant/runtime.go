@@ -4481,14 +4481,6 @@ func (r *Runtime) replyTo(ctx context.Context, event MessageEvent, text string) 
 				AtomicText: true,
 			})
 		}
-		if rssTopicContext := contextPreload.rssTopicContext; rssTopicContext != "" {
-			volatile = append(volatile, llm.Message{
-				Role:       llm.RoleUser,
-				Content:    rssTopicContext,
-				Priority:   llm.MessagePriorityMemory,
-				AtomicText: true,
-			})
-		}
 		// 笔记本和长期记忆同级：两者都是「理解这条消息所需的背景」，预算紧张时该
 		// 一起让位给当前消息，而不是互相挤。
 		if notebookContext := contextPreload.notebookContext; notebookContext != "" {
@@ -7643,7 +7635,6 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 	if !event.webChat && IsOneBotPlatform(platform) && !chatSplitLimitsForEvent(cfg, event).SingleMessage && shouldUseForwardReplyFor(cfg, reply, chunks) {
 		messageID, err := r.sendForwardChunksWithResult(ctx, event, reply, cfg, decoration.Verbatim)
 		if err == nil {
-			r.markRSSTopicPoolShared(event, reply)
 			if messageID == "" {
 				return nil, nil
 			}
@@ -7661,11 +7652,7 @@ func (r *Runtime) sendDecorated(ctx context.Context, event MessageEvent, reply s
 		// Some OneBot implementations do not support merged forwards. Continue
 		// through the normal chunk path so long replies are still delivered.
 	}
-	ids, err := r.deliverChunks(ctx, event, chunks, cfg, decoration)
-	if err == nil {
-		r.markRSSTopicPoolShared(event, reply)
-	}
-	return ids, err
+	return r.deliverChunks(ctx, event, chunks, cfg, decoration)
 }
 
 // sendNotification 投递结构化通知（仓库订阅这类事实卡片）。它和聊天发言不同：空行

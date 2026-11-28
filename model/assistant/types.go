@@ -555,7 +555,7 @@ type Reminder struct {
 	FeedJudgeModelID       string  `json:"feed_judge_model_id,omitempty"`
 	FeedTranslationModelID string  `json:"feed_translation_model_id,omitempty"`
 	// FeedDelivery 是命中条目怎么送到群里：空或 push 直接推送，pool 存进话题池，
-	// 等群里聊到或冷场时再提，见 rss_topic_pool.go。
+	// 等群里冷场、主动开口时再提，见 rss_topic_pool.go。
 	FeedDelivery string `json:"feed_delivery,omitempty"`
 	// FeedTopicPoolJSON 是话题池里的条目，只在 FeedDelivery 为 pool 时有内容。
 	FeedTopicPoolJSON   string    `json:"feed_topic_pool,omitempty"`

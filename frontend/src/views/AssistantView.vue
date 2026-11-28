@@ -1325,7 +1325,7 @@
                     <span class="track" aria-hidden="true"></span>
                     <span class="switch-label">群里冷场时联网找新鲜事聊</span>
                   </label>
-                  <span class="hint">开口时搜一条群友可能感兴趣的新闻来聊，需要开着联网搜索插件。</span>
+                  <span class="hint">开口时搜一条群友可能感兴趣的新闻来聊，需要开着联网搜索插件；群里订了 RSS 话题池时先用池里的条目，不再搜索。</span>
                 </div>
                 <div class="field">
                   <label for="bot-proactive-group-idle">群里冷场多久后开口（分钟）</label>

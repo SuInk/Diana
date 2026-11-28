@@ -94,45 +94,77 @@ func TestRSSTopicPoolKeepsOnlyJudgedEntries(t *testing.T) {
 	}
 }
 
-// 聊到相关话题才带进上下文；只带给订阅目标群；提过之后对这个群不再带。
-func TestRSSTopicPoolContextMatchesTargetGroupAndMarksShared(t *testing.T) {
-	now := time.Now()
-	pool := []rssTopicPoolItem{
-		{ID: "a", Source: "Tech", Title: "OpenAI 发布新模型", Summary: "推理能力大幅提升", CreatedAt: now.Unix()},
+func rssTopicPoolSample(now time.Time) []rssTopicPoolItem {
+	return []rssTopicPoolItem{
+		{ID: "a", Source: "Tech", Title: "OpenAI 发布新模型", Summary: "推理能力大幅提升", CreatedAt: now.Unix() - 120},
 		{ID: "b", Source: "Tech", Title: "Steam 秋季特卖开始", CreatedAt: now.Unix()},
+		{ID: "c", Source: "Tech", Title: "某显卡降价", CreatedAt: now.Unix() - 60},
 		{ID: "stale", Source: "Tech", Title: "OpenAI 旧闻", CreatedAt: now.Add(-rssTopicPoolTTL - time.Hour).Unix()},
 	}
-	tasks := &stubReminderStore{items: []Reminder{rssTopicPoolWatch(pool)}}
-	r := NewRuntime(BotConfig{ID: "qq", Platform: PlatformOneBotV11}, &recordingChannel{}, NewDefaultPluginManager(), nil, tasks, nil, nil)
+}
+
+func rssTopicPoolRuntime(tasks *stubReminderStore) *Runtime {
+	return NewRuntime(BotConfig{ID: "qq", Platform: PlatformOneBotV11}, &recordingChannel{}, NewDefaultPluginManager(), nil, tasks, nil, nil)
+}
+
+// 冷场找话题：只给这个群还没提过的最新两条，过期的不给，不是订阅目标的群不给；
+// 标记已提只对这个群生效，标过的下次不再给。
+func TestRSSTopicPoolColdStartOffersNewestUnshared(t *testing.T) {
+	tasks := &stubReminderStore{items: []Reminder{rssTopicPoolWatch(rssTopicPoolSample(time.Now()))}}
+	r := rssTopicPoolRuntime(tasks)
 	group := rssTopicPoolGroupEvent("100")
 
-	got := r.rssTopicPoolContext(group, "你们看到 openai 新模型了吗")
-	if !strings.HasPrefix(got, rssTopicPoolContextHeader) || !strings.Contains(got, "OpenAI 发布新模型") || strings.Contains(got, "Steam") || strings.Contains(got, "旧闻") {
-		t.Fatalf("context = %q", got)
+	news := r.rssTopicPoolNews(group)
+	if !news.fromTopicPool() || news.Results != "[Tech] Steam 秋季特卖开始\n[Tech] 某显卡降价" {
+		t.Fatalf("news = %#v", news)
 	}
-	if got := r.rssTopicPoolContext(group, "今天天气不错"); got != "" {
-		t.Fatalf("unrelated chat got pool context: %q", got)
+	if other := r.rssTopicPoolNews(rssTopicPoolGroupEvent("200")); other.Results != "" {
+		t.Fatalf("non-target group got pool news: %#v", other)
 	}
-	if got := r.rssTopicPoolContext(rssTopicPoolGroupEvent("200"), "你们看到 openai 新模型了吗"); got != "" {
-		t.Fatalf("non-target group got pool context: %q", got)
+	r.markRSSTopicPoolShared(group, news.topicPool)
+	if next := r.rssTopicPoolNews(group); next.Results != "[Tech] OpenAI 发布新模型（推理能力大幅提升）" {
+		t.Fatalf("after marking, news = %#v", next)
 	}
+	for _, item := range decodeRSSTopicPool(tasks.Reminders()[0].FeedTopicPoolJSON) {
+		if want := item.ID == "b" || item.ID == "c"; item.sharedWith(messageEventDeliveryKey(group)) != want {
+			t.Fatalf("shared marks = %#v", item)
+		}
+	}
+}
 
-	r.markRSSTopicPoolShared(group, "刚看到 OpenAI 发布新模型，说是推理强了不少")
-	if got := r.rssTopicPoolContext(group, "你们看到 openai 新模型了吗"); got != "" {
-		t.Fatalf("shared item still offered: %q", got)
-	}
-	saved := decodeRSSTopicPool(tasks.Reminders()[0].FeedTopicPoolJSON)
-	if !saved[0].sharedWith(messageEventDeliveryKey(group)) || saved[1].sharedWith(messageEventDeliveryKey(group)) {
-		t.Fatalf("shared marks = %#v", saved)
-	}
-
-	// 冷场找话题时没有沾边的也按新旧挑剩下的。
-	news := r.rssTopicPoolNews(group, []string{"甲：在吗"})
-	if !news.FromTopicPool || !strings.Contains(news.Results, "Steam 秋季特卖开始") || strings.Contains(news.Results, "OpenAI") {
-		t.Fatalf("cold start news = %#v", news)
-	}
-	if news := r.rssTopicPoolNews(rssTopicPoolGroupEvent("200"), []string{"甲：在吗"}); news.Results != "" {
-		t.Fatalf("non-target group got cold start news: %#v", news)
+// 冷场开口真发出去才标记已提；模型选择不开口时池子不动，下次还能用。
+func TestRSSTopicPoolMarkedOnlyAfterInitiativeSent(t *testing.T) {
+	for _, tc := range []struct {
+		reply      string
+		wantShared bool
+	}{{"[SKIP]", false}, {"Steam 秋季特卖开始了，有人要剁手吗", true}} {
+		runtime, channel, stub := newProactiveRuntime(t, tc.reply)
+		now := time.Now()
+		rememberWarmGroup(runtime, now)
+		event := MessageEvent{Kind: EventKindGroup, MessageType: "group", GroupID: "10001", Time: now.Unix()}
+		watch := rssTopicPoolWatch(rssTopicPoolSample(now))
+		watch.NotificationTargetsJSON = encodeReminderDeliveryTargets([]ReminderDeliveryTarget{{Platform: event.Platform, ProfileID: event.ProfileID, GroupID: event.GroupID}})
+		tasks := &stubReminderStore{items: []Reminder{watch}}
+		runtime.reminders = tasks
+		target := proactiveTarget{event: event, rules: groupRules()}
+		plan, ok := runtime.proactivePlanFor(target, now)
+		if !ok {
+			t.Fatal("should be due")
+		}
+		runtime.runProactiveInitiative(context.Background(), target, plan)
+		if dump := welcomeRequestDump(stub.lastRequest()); !strings.Contains(dump, "Steam 秋季特卖开始") || !strings.Contains(dump, "你订阅的信息源") {
+			t.Fatalf("pool material missing from request:\n%s", dump)
+		}
+		if tc.wantShared != (len(channel.sent) == 1) {
+			t.Fatalf("reply %q sent = %#v", tc.reply, channel.sent)
+		}
+		key := messageEventDeliveryKey(event)
+		for _, item := range decodeRSSTopicPool(tasks.Reminders()[0].FeedTopicPoolJSON) {
+			want := tc.wantShared && (item.ID == "b" || item.ID == "c")
+			if item.sharedWith(key) != want {
+				t.Fatalf("reply %q: shared marks = %#v", tc.reply, item)
+			}
+		}
 	}
 }
 
@@ -144,9 +176,9 @@ func TestRSSTopicPoolIgnoresPushAndCancelledWatches(t *testing.T) {
 	cancelled := rssTopicPoolWatch(pool)
 	cancelled.ID, cancelled.CancelledAt = "cancelled", time.Now()
 	tasks := &stubReminderStore{items: []Reminder{push, cancelled}}
-	r := NewRuntime(BotConfig{ID: "qq", Platform: PlatformOneBotV11}, &recordingChannel{}, NewDefaultPluginManager(), nil, tasks, nil, nil)
-	if got := r.rssTopicPoolContext(rssTopicPoolGroupEvent("100"), "openai 新模型"); got != "" {
-		t.Fatalf("context = %q", got)
+	r := rssTopicPoolRuntime(tasks)
+	if got := r.rssTopicPoolCandidates(rssTopicPoolGroupEvent("100")); len(got) != 0 {
+		t.Fatalf("candidates = %#v", got)
 	}
 }
 

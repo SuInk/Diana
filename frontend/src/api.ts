@@ -4588,7 +4588,7 @@ export interface RSSWatchInput {
   translation_model_id?: string;
   media_failure?: string;
   judge_prompt: string;
-  /** push 直接推送（默认）；pool 存进话题池，群里聊到或冷场时再提。 */
+  /** push 直接推送（默认）；pool 存进话题池，群里冷场主动开口时再提。 */
   delivery?: RSSDelivery;
   interval_seconds: number;
   profile_id?: string;
