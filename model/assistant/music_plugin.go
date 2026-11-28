@@ -66,6 +66,9 @@ type MusicPlugin struct {
 	mu      sync.RWMutex
 	sharer  LocalMediaSharer
 	runtime *Runtime
+	// renewSettings 和 renewTimer 管后台续期，见 music_credential_renew.go。
+	renewSettings SettingValues
+	renewTimer    *time.Timer
 }
 
 // MusicConnectionStatus is safe to return to the settings page. It reports
@@ -262,7 +265,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 	return PluginManifest{
 		ID:          musicPluginID,
 		Name:        "音乐增强",
-		Version:     "0.3.4",
+		Version:     "0.3.5",
 		Description: "支持网易云和 QQ 音乐点歌及链接解析。OneBot QQ 和 QQ 官方机器人发送语音，Telegram 上传歌曲并使用原生音乐播放器，其他平台发送歌曲来源链接。",
 		Official:    true,
 		BuiltIn:     true,
@@ -299,7 +302,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
-				Description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。",
+				Description: "登录 Cookie 里的 MUSIC_U，用于会员音质和受限曲目。每天自动续期一次并写回这里。",
 			},
 			{
 				Key:         musicSourceAPIBaseSetting("qq"),
@@ -314,7 +317,7 @@ func (p *MusicPlugin) Manifest() PluginManifest {
 				Type:        PluginSettingTypeString,
 				Default:     "",
 				Secret:      true,
-				Description: "完整的 Cookie 串，用于会员和独家曲目。网页复制的 uin/qqmusic_key 和 QQMusicApi 的 musicid/musickey 都可以；后者带 refresh_key 时会经自建接口自动续期。",
+				Description: "完整的 Cookie 串，用于会员和独家曲目。在 y.qq.com 用 QQ 登录后复制的整串 Cookie 会自动续期并写回这里；QQMusicApi 的 musicid/musickey 带 refresh_key 时经自建接口续期。",
 			},
 			{
 				Key:     musicSettingProxyMode,
